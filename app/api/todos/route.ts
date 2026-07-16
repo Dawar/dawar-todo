@@ -1,0 +1,46 @@
+import { createTodo, listTodos } from "../../../db/todos";
+
+export async function GET() {
+  const startedAt = Date.now();
+  try {
+    const todos = await listTodos();
+    console.info("[todo-api] list", { count: todos.length, durationMs: Date.now() - startedAt });
+    return Response.json({ todos });
+  } catch (error) {
+    console.error("[todo-api] list failed", error);
+    return Response.json({ error: "Your tasks could not be loaded." }, { status: 500 });
+  }
+}
+
+export async function POST(request: Request) {
+  try {
+    const payload = (await request.json()) as {
+      title?: string;
+      notes?: string;
+      priority?: number;
+      dueDate?: string | null;
+      project?: string | null;
+      context?: string | null;
+    };
+    const title = payload.title?.trim() ?? "";
+    if (!title) return Response.json({ error: "A task title is required." }, { status: 400 });
+    if (title.length > 500) return Response.json({ error: "Keep the title under 500 characters." }, { status: 400 });
+
+    const priority = Number.isInteger(payload.priority) && Number(payload.priority) >= 1 && Number(payload.priority) <= 4
+      ? Number(payload.priority)
+      : 3;
+    const todo = await createTodo({
+      title,
+      notes: payload.notes?.trim(),
+      priority,
+      dueDate: payload.dueDate || null,
+      project: payload.project?.trim() || null,
+      context: payload.context?.trim() || null,
+    });
+    console.info("[todo-api] created", { id: todo.id, priority: todo.priority, titleLength: title.length });
+    return Response.json({ todo }, { status: 201 });
+  } catch (error) {
+    console.error("[todo-api] create failed", error);
+    return Response.json({ error: "The task could not be added." }, { status: 500 });
+  }
+}
