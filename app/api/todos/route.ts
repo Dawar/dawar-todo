@@ -24,7 +24,7 @@ export async function POST(request: Request) {
     };
     const title = payload.title?.trim() ?? "";
     if (!title) return Response.json({ error: "A task title is required." }, { status: 400 });
-    if (title.length > 500) return Response.json({ error: "Keep the title under 500 characters." }, { status: 400 });
+    if (title.length > 2000) return Response.json({ error: "Keep the task under 2,000 characters." }, { status: 400 });
 
     const priority = Number.isInteger(payload.priority) && Number(payload.priority) >= 1 && Number(payload.priority) <= 4
       ? Number(payload.priority)

@@ -12,11 +12,15 @@ test("ships the complete todo product surface", async () => {
   ]);
   assert.match(layout, /title: "Dawar Todo"/);
   assert.match(layout, /\/og\.png/);
-  assert.match(page, /Capture what needs doing/);
   assert.match(page, /Add a task/);
   assert.match(page, /Search tasks/);
   assert.match(page, /All projects/);
   assert.match(page, /Smart sort/);
+  assert.match(page, /Snoozed/);
+  assert.match(page, /Archived/);
+  assert.match(page, /Select visible/);
+  assert.match(page, /Swipe left: done \/ snooze/);
+  assert.doesNotMatch(page, /Capture what needs doing\. Then move/);
   assert.match(hosting, /"d1": "DB"/);
   await access(new URL("public/og.png", root));
 });

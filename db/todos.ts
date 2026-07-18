@@ -2,6 +2,7 @@ import { env } from "cloudflare:workers";
 import { importedTodos } from "./imported-todos";
 
 export type TodoStatus = "open" | "completed" | "archived";
+export type BulkTodoAction = "complete" | "archive" | "snooze" | "unsnooze" | "delete";
 
 type TodoRow = {
   id: number;
@@ -15,6 +16,7 @@ type TodoRow = {
   source_kind: string | null;
   source_id: number | null;
   completed_at: string | null;
+  snoozed_until: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -31,13 +33,19 @@ export type Todo = {
   sourceKind: string | null;
   sourceId: number | null;
   completedAt: string | null;
+  snoozedUntil: string | null;
   createdAt: string;
   updatedAt: string;
 };
 
 export type TodoUpdate = Partial<
-  Pick<Todo, "title" | "notes" | "status" | "priority" | "dueDate" | "project" | "context">
+  Pick<Todo, "title" | "notes" | "status" | "priority" | "dueDate" | "project" | "context" | "snoozedUntil">
 >;
+
+export type TodoSettings = {
+  snoozeTimeZone: string;
+  snoozeWakeHour: number;
+};
 
 let initialization: Promise<void> | null = null;
 
@@ -59,6 +67,7 @@ function mapTodo(row: TodoRow): Todo {
     sourceKind: row.source_kind,
     sourceId: row.source_id,
     completedAt: row.completed_at,
+    snoozedUntil: row.snoozed_until,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -83,6 +92,7 @@ export async function ensureTodoDatabase() {
           source_kind TEXT,
           source_id INTEGER,
           completed_at TEXT,
+          snoozed_until TEXT,
           created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
           updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
         )
@@ -91,35 +101,70 @@ export async function ensureTodoDatabase() {
       db.prepare("CREATE INDEX IF NOT EXISTS todos_project_idx ON todos(project)"),
       db.prepare("CREATE INDEX IF NOT EXISTS todos_due_date_idx ON todos(due_date)"),
       db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS todos_source_idx ON todos(source_kind, source_id)"),
+      db.prepare(`
+        CREATE TABLE IF NOT EXISTS app_settings (
+          key TEXT PRIMARY KEY NOT NULL,
+          value TEXT NOT NULL,
+          updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+        )
+      `),
     ]);
 
-    const seed = db.prepare(`
-      INSERT OR IGNORE INTO todos (
-        title, notes, status, priority, due_date, project, context,
-        source_kind, source_id, completed_at, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-    const results = await db.batch(
-      importedTodos.map((todo) =>
-        seed.bind(
-          todo.title,
-          todo.notes,
-          todo.status,
-          todo.priority,
-          todo.dueDate,
-          todo.project || null,
-          todo.context || null,
-          todo.sourceKind,
-          todo.sourceId,
-          todo.completedAt,
-          todo.createdAt,
-          todo.updatedAt,
-        ),
-      ),
-    );
-    const inserted = results.reduce((total, result) => total + Number(result.meta.changes ?? 0), 0);
+    const columns = await db.prepare("PRAGMA table_info(todos)").all<{ name: string }>();
+    if (!columns.results.some((column) => column.name === "snoozed_until")) {
+      await db.prepare("ALTER TABLE todos ADD COLUMN snoozed_until TEXT").run();
+      console.info("[todo-db] added snoozed_until compatibility column");
+    }
+    await db.prepare("CREATE INDEX IF NOT EXISTS todos_snoozed_until_idx ON todos(snoozed_until)").run();
+
+    await db.batch([
+      db.prepare("INSERT OR IGNORE INTO app_settings (key, value) VALUES ('snooze_timezone', 'America/Toronto')"),
+      db.prepare("INSERT OR IGNORE INTO app_settings (key, value) VALUES ('snooze_wake_hour', '8')"),
+    ]);
+
     const total = await db.prepare("SELECT COUNT(*) AS count FROM todos").first<{ count: number }>();
-    console.info("[todo-db] ready", { inserted, total: total?.count ?? 0, imported: importedTodos.length });
+    const existingTotal = Number(total?.count ?? 0);
+    const seedVersion = await db
+      .prepare("SELECT value FROM app_settings WHERE key = 'seed_version'")
+      .first<{ value: string }>();
+    let inserted = 0;
+    if (!seedVersion && existingTotal === 0) {
+      const seed = db.prepare(`
+        INSERT OR IGNORE INTO todos (
+          title, notes, status, priority, due_date, project, context,
+          source_kind, source_id, completed_at, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      const results = await db.batch(
+        importedTodos.map((todo) =>
+          seed.bind(
+            todo.title,
+            todo.notes,
+            todo.status,
+            todo.priority,
+            todo.dueDate,
+            todo.project || null,
+            todo.context || null,
+            todo.sourceKind,
+            todo.sourceId,
+            todo.completedAt,
+            todo.createdAt,
+            todo.updatedAt,
+          ),
+        ),
+      );
+      inserted = results.reduce((sum, result) => sum + Number(result.meta.changes ?? 0), 0);
+    }
+    if (!seedVersion) {
+      await db.prepare("INSERT INTO app_settings (key, value) VALUES ('seed_version', '1')").run();
+    }
+
+    console.info("[todo-db] ready", {
+      inserted,
+      total: existingTotal + inserted,
+      imported: importedTodos.length,
+      seedSkipped: Boolean(seedVersion) || existingTotal > 0,
+    });
   })().catch((error) => {
     initialization = null;
     throw error;
@@ -174,6 +219,7 @@ export async function updateTodo(id: number, update: TodoUpdate): Promise<Todo |
     dueDate: "due_date",
     project: "project",
     context: "context",
+    snoozedUntil: "snoozed_until",
   };
   const entries = (Object.entries(update) as [keyof TodoUpdate, TodoUpdate[keyof TodoUpdate]][])
     .filter(([, value]) => value !== undefined);
@@ -182,9 +228,11 @@ export async function updateTodo(id: number, update: TodoUpdate): Promise<Todo |
   const values = entries.map(([, value]) => value);
   const setters = entries.map(([field]) => `${columnByField[field]} = ?`);
   if (update.status === "completed") {
-    setters.push("completed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')");
+    setters.push("completed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')", "snoozed_until = NULL");
   } else if (update.status === "open") {
     setters.push("completed_at = NULL");
+  } else if (update.status === "archived") {
+    setters.push("snoozed_until = NULL");
   }
   setters.push("updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')");
 
@@ -199,4 +247,184 @@ export async function getTodo(id: number): Promise<Todo | null> {
   await ensureTodoDatabase();
   const row = await database().prepare("SELECT * FROM todos WHERE id = ?").bind(id).first<TodoRow>();
   return row ? mapTodo(row) : null;
+}
+
+function placeholders(count: number) {
+  return Array.from({ length: count }, () => "?").join(", ");
+}
+
+function normalizedIds(ids: number[]) {
+  const unique = [...new Set(ids.filter((id) => Number.isInteger(id) && id > 0))];
+  if (!unique.length) throw new Error("Choose at least one task.");
+  if (unique.length > 200) throw new Error("Bulk actions are limited to 200 tasks at a time.");
+  return unique;
+}
+
+function zonedParts(date: Date, timeZone: string) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(date);
+  return Object.fromEntries(parts.map((part) => [part.type, part.value])) as Record<string, string>;
+}
+
+function zonedDateToUtc(year: number, month: number, day: number, hour: number, timeZone: string) {
+  const guess = Date.UTC(year, month - 1, day, hour, 0, 0);
+  const offsetAt = (timestamp: number) => {
+    const values = zonedParts(new Date(timestamp), timeZone);
+    return Date.UTC(
+      Number(values.year),
+      Number(values.month) - 1,
+      Number(values.day),
+      Number(values.hour),
+      Number(values.minute),
+      Number(values.second),
+    ) - timestamp;
+  };
+  let result = guess - offsetAt(guess);
+  result = guess - offsetAt(result);
+  return new Date(result);
+}
+
+export async function getTodoSettings(): Promise<TodoSettings> {
+  await ensureTodoDatabase();
+  const result = await database()
+    .prepare("SELECT key, value FROM app_settings WHERE key IN ('snooze_timezone', 'snooze_wake_hour')")
+    .all<{ key: string; value: string }>();
+  const values = Object.fromEntries(result.results.map((row) => [row.key, row.value]));
+  return {
+    snoozeTimeZone: values.snooze_timezone || "America/Toronto",
+    snoozeWakeHour: Number(values.snooze_wake_hour ?? 8),
+  };
+}
+
+export async function updateTodoSettings(settings: TodoSettings): Promise<TodoSettings> {
+  await ensureTodoDatabase();
+  const db = database();
+  await db.batch([
+    db.prepare(`
+      INSERT INTO app_settings (key, value, updated_at)
+      VALUES ('snooze_timezone', ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+    `).bind(settings.snoozeTimeZone),
+    db.prepare(`
+      INSERT INTO app_settings (key, value, updated_at)
+      VALUES ('snooze_wake_hour', ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+    `).bind(String(settings.snoozeWakeHour)),
+  ]);
+  console.info("[todo-db] settings updated", settings);
+  return settings;
+}
+
+export async function nextSnoozeUntil() {
+  const settings = await getTodoSettings();
+  const today = zonedParts(new Date(), settings.snoozeTimeZone);
+  const nextDate = new Date(Date.UTC(
+    Number(today.year),
+    Number(today.month) - 1,
+    Number(today.day) + 1,
+  ));
+  return zonedDateToUtc(
+    nextDate.getUTCFullYear(),
+    nextDate.getUTCMonth() + 1,
+    nextDate.getUTCDate(),
+    settings.snoozeWakeHour,
+    settings.snoozeTimeZone,
+  ).toISOString();
+}
+
+export async function bulkUpdateTodos(inputIds: number[], action: BulkTodoAction) {
+  await ensureTodoDatabase();
+  const ids = normalizedIds(inputIds);
+  const db = database();
+  const inClause = placeholders(ids.length);
+  let sql: string;
+  let values: Array<string | number> = ids;
+
+  if (action === "complete") {
+    sql = `UPDATE todos SET status = 'completed', completed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), snoozed_until = NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id IN (${inClause})`;
+  } else if (action === "archive") {
+    sql = `UPDATE todos SET status = 'archived', snoozed_until = NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id IN (${inClause})`;
+  } else if (action === "snooze") {
+    const until = await nextSnoozeUntil();
+    sql = `UPDATE todos SET status = 'open', completed_at = NULL, snoozed_until = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id IN (${inClause})`;
+    values = [until, ...ids];
+  } else if (action === "unsnooze") {
+    sql = `UPDATE todos SET status = 'open', completed_at = NULL, snoozed_until = NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id IN (${inClause})`;
+  } else {
+    sql = `DELETE FROM todos WHERE id IN (${inClause})`;
+  }
+
+  const result = await db.prepare(sql).bind(...values).run();
+  if (action === "delete") {
+    console.info("[todo-db] bulk delete", { requested: ids.length, changed: result.meta.changes });
+    return { ids, todos: [], snoozedUntil: null };
+  }
+  const updated = await db.prepare(`SELECT * FROM todos WHERE id IN (${inClause})`).bind(...ids).all<TodoRow>();
+  const todos = updated.results.map(mapTodo);
+  console.info("[todo-db] bulk action", {
+    action,
+    requested: ids.length,
+    changed: result.meta.changes,
+    snoozedUntil: action === "snooze" ? todos[0]?.snoozedUntil : null,
+  });
+  return { ids, todos, snoozedUntil: action === "snooze" ? todos[0]?.snoozedUntil ?? null : null };
+}
+
+export async function mergeTodos(inputIds: number[]) {
+  await ensureTodoDatabase();
+  const ids = normalizedIds(inputIds);
+  if (ids.length < 2) throw new Error("Choose at least two tasks to merge.");
+  const db = database();
+  const inClause = placeholders(ids.length);
+  const result = await db.prepare(`SELECT * FROM todos WHERE id IN (${inClause})`).bind(...ids).all<TodoRow>();
+  const byId = new Map(result.results.map((row) => [row.id, row]));
+  const rows = ids.map((id) => byId.get(id)).filter((row): row is TodoRow => Boolean(row));
+  if (rows.length < 2) throw new Error("At least two selected tasks must still exist.");
+
+  const shared = (field: "project" | "context") => {
+    const first = rows[0][field];
+    return rows.every((row) => row[field] === first) ? first : null;
+  };
+  const dueDates = rows.map((row) => row.due_date).filter((value): value is string => Boolean(value)).sort();
+  const mergedNotes = [
+    `Merged from ${rows.length} tasks:`,
+    "",
+    ...rows.flatMap((row) => [
+      `• ${row.title}`,
+      ...(row.notes ? row.notes.split("\n").map((line) => `  ${line}`) : []),
+      "",
+    ]),
+  ].join("\n").trim();
+
+  const results = await db.batch([
+    db.prepare(`
+      INSERT INTO todos (title, notes, status, priority, due_date, project, context, source_kind)
+      VALUES (?, ?, 'open', ?, ?, ?, ?, 'merge')
+      RETURNING *
+    `).bind(
+      rows[0].title,
+      mergedNotes,
+      Math.min(...rows.map((row) => row.priority)),
+      dueDates[0] ?? null,
+      shared("project"),
+      shared("context"),
+    ),
+    db.prepare(`
+      UPDATE todos
+      SET status = 'archived', snoozed_until = NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+      WHERE id IN (${inClause})
+    `).bind(...ids),
+  ]);
+  const inserted = (results[0].results as TodoRow[])[0];
+  if (!inserted) throw new Error("The merged task could not be created.");
+  console.info("[todo-db] merged", { sourceIds: ids, mergedId: inserted.id, sourceCount: rows.length });
+  return { todo: mapTodo(inserted), ids };
 }

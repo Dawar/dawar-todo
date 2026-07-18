@@ -15,6 +15,7 @@ export const todos = sqliteTable(
     sourceKind: text("source_kind"),
     sourceId: integer("source_id"),
     completedAt: text("completed_at"),
+    snoozedUntil: text("snoozed_until"),
     createdAt: text("created_at")
       .notNull()
       .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`),
@@ -26,6 +27,15 @@ export const todos = sqliteTable(
     index("todos_status_idx").on(table.status),
     index("todos_project_idx").on(table.project),
     index("todos_due_date_idx").on(table.dueDate),
+    index("todos_snoozed_until_idx").on(table.snoozedUntil),
     uniqueIndex("todos_source_idx").on(table.sourceKind, table.sourceId),
   ],
 );
+
+export const appSettings = sqliteTable("app_settings", {
+  key: text("key").primaryKey(),
+  value: text("value").notNull(),
+  updatedAt: text("updated_at")
+    .notNull()
+    .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`),
+});
