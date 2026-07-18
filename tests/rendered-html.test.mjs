@@ -5,12 +5,13 @@ import test from "node:test";
 const root = new URL("../", import.meta.url);
 
 test("ships the complete todo product surface", async () => {
-  const [page, layout, hosting, database, bulkRoute] = await Promise.all([
+  const [page, layout, hosting, database, bulkRoute, actionIcons] = await Promise.all([
     readFile(new URL("app/page.tsx", root), "utf8"),
     readFile(new URL("app/layout.tsx", root), "utf8"),
     readFile(new URL(".openai/hosting.json", root), "utf8"),
     readFile(new URL("db/todos.ts", root), "utf8"),
     readFile(new URL("app/api/todos/bulk/route.ts", root), "utf8"),
+    readFile(new URL("app/action-icon.tsx", root), "utf8"),
   ]);
   assert.match(layout, /title: "Dawar Todo"/);
   assert.match(layout, /\/og\.png/);
@@ -41,6 +42,10 @@ test("ships the complete todo product surface", async () => {
   assert.match(database, /archived_project_backfill_v1/);
   assert.match(database, /Choose or create a project before archiving/);
   assert.match(bulkRoute, /"reproject"/);
+  assert.match(page, /title=\{label\}/);
+  assert.match(page, /grid h-9 w-9 place-items-center/);
+  assert.match(page, /<ActionIcon name="undo"/);
+  assert.match(actionIcons, /Record<ActionIconName/);
   assert.doesNotMatch(page, /Capture what needs doing\. Then move/);
   assert.match(hosting, /"d1": "DB"/);
   await access(new URL("public/og.png", root));
@@ -53,5 +58,6 @@ test("removes starter preview dependencies", async () => {
     readFile(new URL("app/layout.tsx", root), "utf8"),
   ]);
   const combined = `${packageJson}\n${page}\n${layout}`;
+  assert.match(packageJson, /lucide-react/);
   assert.doesNotMatch(combined, /react-loading-skeleton|codex-preview|Your site is taking shape|Starter Project/i);
 });

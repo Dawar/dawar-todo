@@ -8,6 +8,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { ActionIcon, type ActionIconName } from "./action-icon";
 import { SiteHeader } from "./site-header";
 
 type TodoStatus = "open" | "completed" | "archived";
@@ -134,6 +135,17 @@ function classNames(...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(" ");
 }
 
+function todoActionIcon(action: TodoAction | "move", label: string): ActionIconName {
+  if (action === "complete") return "done";
+  if (action === "snooze") return "snooze";
+  if (action === "archive") return "archive";
+  if (action === "delete") return "delete";
+  if (action === "move") return "move";
+  if (label === "Wake") return "wake";
+  if (label === "Open") return "open";
+  return "restore";
+}
+
 function TaskRow({
   todo,
   selected,
@@ -159,16 +171,19 @@ function TaskRow({
   const suppressOpenRef = useRef(false);
   const pending = todo.id < 0;
   const snoozed = isSnoozed(todo, now);
-  const primaryAction: { action: TodoAction; label: string } = snoozed
-    ? { action: "unsnooze", label: "Wake" }
+  const primaryAction: { action: TodoAction; label: string; icon: ActionIconName } = snoozed
+    ? { action: "unsnooze", label: "Wake", icon: "wake" }
     : todo.status === "open"
-      ? { action: "complete", label: "Done" }
-      : { action: "unsnooze", label: "Open" };
+      ? { action: "complete", label: "Done", icon: "done" }
+      : { action: "unsnooze", label: "Open", icon: "open" };
   const swipeRatio = Math.abs(offset) / swipeWidth;
   const longSwipe = swipeRatio >= 0.5;
   const revealAction = offset < 0
     ? (longSwipe ? "Snooze" : primaryAction.label)
     : (longSwipe ? "Delete" : todo.status === "archived" ? "Move" : "Archive");
+  const revealIcon: ActionIconName = offset < 0
+    ? (longSwipe ? "snooze" : primaryAction.icon)
+    : (longSwipe ? "delete" : todo.status === "archived" ? "move" : "archive");
   const revealClass = offset < 0
     ? longSwipe ? "bg-amber-500" : "bg-[#216e4e]"
     : longSwipe ? "bg-red-600" : "bg-slate-500";
@@ -234,20 +249,20 @@ function TaskRow({
     setOffset(0);
   }
 
-  const hoverActions: Array<{ action: TodoAction | "move"; label: string }> = [
+  const hoverActions: Array<{ action: TodoAction | "move"; label: string; icon: ActionIconName }> = [
     primaryAction,
-    ...(!snoozed && todo.status === "open" ? [{ action: "snooze" as const, label: "Snooze" }] : []),
+    ...(!snoozed && todo.status === "open" ? [{ action: "snooze" as const, label: "Snooze", icon: "snooze" as const }] : []),
     ...(todo.status === "archived"
-      ? [{ action: "move" as const, label: "Move" }]
-      : [{ action: "archive" as const, label: "Archive" }]),
-    { action: "delete", label: "Delete" },
+      ? [{ action: "move" as const, label: "Move", icon: "move" as const }]
+      : [{ action: "archive" as const, label: "Archive", icon: "archive" as const }]),
+    { action: "delete", label: "Delete", icon: "delete" },
   ];
 
   return (
     <li className={classNames("group relative overflow-hidden", selected && "ring-1 ring-inset ring-[#216e4e]/30")}>
       <div className={classNames("absolute inset-0 flex items-center justify-between px-5 text-sm font-semibold text-white md:hidden", revealClass)} aria-hidden="true">
-        <span className={classNames("transition-opacity", offset > 0 ? "opacity-100" : "opacity-0")}>{revealAction}</span>
-        <span className={classNames("transition-opacity", offset < 0 ? "opacity-100" : "opacity-0")}>{revealAction}</span>
+        <span className={classNames("inline-flex items-center gap-2 transition-opacity", offset > 0 ? "opacity-100" : "opacity-0")}><ActionIcon name={revealIcon} />{revealAction}</span>
+        <span className={classNames("inline-flex items-center gap-2 transition-opacity", offset < 0 ? "opacity-100" : "opacity-0")}><ActionIcon name={revealIcon} />{revealAction}</span>
       </div>
       <div
         onPointerDown={pointerDown}
@@ -297,19 +312,23 @@ function TaskRow({
         </button>
         {!pending && (
           <div className="hidden shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 md:flex">
-            {hoverActions.map(({ action, label }) => (
+            {hoverActions.map(({ action, label, icon }) => (
               <button
                 key={action}
                 type="button"
                 data-row-action
                 onClick={() => action === "move" ? onProject(todo, "hover") : onAction(todo, action, "hover")}
                 aria-label={`${label}: ${todo.title}`}
+                title={label}
                 className={classNames(
-                  "rounded-lg px-2 py-1.5 text-xs font-medium text-[#69716c] transition hover:bg-[#eef0ed] hover:text-[#252a27] focus-visible:outline-2 focus-visible:outline-[#216e4e]",
+                  "grid h-9 w-9 place-items-center rounded-lg text-[#69716c] transition hover:bg-[#eef0ed] hover:text-[#252a27] focus-visible:outline-2 focus-visible:outline-[#216e4e]",
+                  (action === "complete" || action === "unsnooze") && "hover:bg-emerald-50 hover:text-emerald-700",
+                  action === "snooze" && "hover:bg-amber-50 hover:text-amber-700",
                   action === "delete" && "hover:bg-red-50 hover:text-red-700",
                 )}
               >
-                {label}
+                <ActionIcon name={icon} className="h-[18px] w-[18px]" />
+                <span className="sr-only">{label}</span>
               </button>
             ))}
           </div>
@@ -794,7 +813,7 @@ export default function Home() {
       <div className="mx-auto max-w-5xl px-4 pb-28 pt-5 sm:px-6 sm:pt-7">
         <form onSubmit={addTodo} className="mb-5 flex items-end gap-2 rounded-2xl border border-black/[0.07] bg-white p-2 shadow-[0_10px_35px_rgba(30,45,36,0.07)] sm:p-3">
           <div className="flex min-w-0 flex-1 items-start gap-3 px-2 py-2 sm:px-3">
-            <span className="mt-0.5 text-xl text-[#216e4e]" aria-hidden="true">＋</span>
+            <ActionIcon name="add" className="mt-1 h-5 w-5 shrink-0 text-[#216e4e]" />
             <textarea
               ref={captureRef}
               value={newTitle}
@@ -817,8 +836,9 @@ export default function Home() {
             <button
               type="submit"
               disabled={!newTitle.trim() || adding}
-              className="h-11 rounded-xl bg-[#216e4e] px-4 text-sm font-semibold text-white transition hover:bg-[#195d41] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#216e4e] disabled:cursor-not-allowed disabled:opacity-40 sm:px-6"
+              className="inline-flex h-11 items-center gap-2 rounded-xl bg-[#216e4e] px-4 text-sm font-semibold text-white transition hover:bg-[#195d41] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#216e4e] disabled:cursor-not-allowed disabled:opacity-40 sm:px-6"
             >
+              <ActionIcon name="add" />
               {adding ? "Adding…" : "Add"}
             </button>
           </div>
@@ -843,7 +863,7 @@ export default function Home() {
 
           <div className="mb-3 grid grid-cols-[minmax(0,1fr)_auto] gap-2 sm:grid-cols-[minmax(220px,1fr)_auto_auto_auto]">
             <label className="flex h-10 items-center gap-2 rounded-xl border border-black/[0.08] bg-white px-3 shadow-sm focus-within:border-[#216e4e]/50 focus-within:ring-3 focus-within:ring-[#216e4e]/10">
-              <span className="text-[#7c847f]" aria-hidden="true">⌕</span>
+              <ActionIcon name="search" className="h-4 w-4 shrink-0 text-[#7c847f]" />
               <input
                 ref={searchRef}
                 value={query}
@@ -863,7 +883,7 @@ export default function Home() {
               )}
               aria-label={`Filters${mobileFilterCount ? `, ${mobileFilterCount} active` : ""}`}
             >
-              <span aria-hidden="true">≡</span>
+              <ActionIcon name="filters" className="h-4 w-4" />
               <span>Filters</span>
               {mobileFilterCount > 0 && <span className="grid h-5 min-w-5 place-items-center rounded-full bg-[#216e4e] px-1 text-[10px] text-white">{mobileFilterCount}</span>}
             </button>
@@ -899,7 +919,7 @@ export default function Home() {
                     <h3 id="mobile-filters-title" className="text-lg font-semibold text-[#202522]">Filters & sorting</h3>
                     <p className="mt-0.5 text-xs text-[#7c847f]">Narrow the list without losing workspace.</p>
                   </div>
-                  <button type="button" onClick={() => setFiltersOpen(false)} className="grid h-9 w-9 place-items-center rounded-full bg-[#f1f2f0] text-lg text-[#4f5752]" aria-label="Close filters">×</button>
+                  <button type="button" onClick={() => setFiltersOpen(false)} className="grid h-9 w-9 place-items-center rounded-full bg-[#f1f2f0] text-[#4f5752]" aria-label="Close filters" title="Close"><ActionIcon name="close" /></button>
                 </div>
 
                 <div className="space-y-4">
@@ -935,8 +955,8 @@ export default function Home() {
                 </div>
 
                 <div className="mt-6 grid grid-cols-2 gap-2">
-                  <button type="button" onClick={() => { setProject(""); setPriority(""); setSort("smart"); }} className="h-11 rounded-xl border border-black/[0.08] text-sm font-semibold text-[#4f5752]">Reset</button>
-                  <button type="button" onClick={() => setFiltersOpen(false)} className="h-11 rounded-xl bg-[#216e4e] text-sm font-semibold text-white">Show {filtered.length} {filtered.length === 1 ? "task" : "tasks"}</button>
+                  <button type="button" onClick={() => { setProject(""); setPriority(""); setSort("smart"); }} className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-black/[0.08] text-sm font-semibold text-[#4f5752]"><ActionIcon name="restore" />Reset</button>
+                  <button type="button" onClick={() => setFiltersOpen(false)} className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-[#216e4e] text-sm font-semibold text-white"><ActionIcon name="done" />Show {filtered.length} {filtered.length === 1 ? "task" : "tasks"}</button>
                 </div>
               </div>
             </div>
@@ -973,11 +993,11 @@ export default function Home() {
           <div className="mb-2 flex items-center justify-between px-1">
             <div className="flex items-center gap-3">
               <h2 id="tasks-heading" className="text-sm font-semibold text-[#373d39]">{view === "archived" ? "Archived notes" : `${viewLabels[view]} tasks`}</h2>
-              {filtered.length > 0 && <button onClick={toggleVisible} className="text-xs font-medium text-[#216e4e] hover:underline">{allVisibleSelected ? "Clear selection" : "Select visible"}</button>}
+              {filtered.length > 0 && <button onClick={toggleVisible} className="inline-flex items-center gap-1.5 text-xs font-medium text-[#216e4e] hover:underline"><ActionIcon name={allVisibleSelected ? "cancel" : "select"} className="h-3.5 w-3.5" />{allVisibleSelected ? "Clear selection" : "Select visible"}</button>}
             </div>
             <div className="flex items-center gap-3 text-xs text-[#7c847f]">
               <span>{syncing ? "Saving…" : `${filtered.length} ${filtered.length === 1 ? "item" : "items"}`}</span>
-              {filtersActive && <button onClick={() => { setQuery(""); setProject(""); setPriority(""); setSort("smart"); }} className="font-medium text-[#216e4e] hover:underline">Clear filters</button>}
+              {filtersActive && <button onClick={() => { setQuery(""); setProject(""); setPriority(""); setSort("smart"); }} className="inline-flex items-center gap-1 font-medium text-[#216e4e] hover:underline"><ActionIcon name="cancel" className="h-3.5 w-3.5" />Clear filters</button>}
             </div>
           </div>
 
@@ -1027,13 +1047,13 @@ export default function Home() {
         >
           <div className="pointer-events-auto flex items-center gap-1.5 overflow-x-auto rounded-2xl border border-[#216e4e]/20 bg-[#eaf3ed]/95 p-2 shadow-[0_16px_50px_rgba(23,61,42,0.2)] backdrop-blur-xl sm:gap-2">
             <span className="min-w-max px-2 text-sm font-semibold text-[#195d41]">{selectedIds.length} selected</span>
-            <button type="button" onClick={() => bulkAction("complete")} disabled={syncing} className="min-w-max rounded-lg bg-white px-3 py-2 text-xs font-semibold text-[#216e4e] shadow-sm hover:bg-[#f8fbf9] disabled:opacity-50">Done</button>
-            <button type="button" onClick={() => bulkAction("snooze")} disabled={syncing} className="min-w-max rounded-lg bg-white px-3 py-2 text-xs font-semibold text-amber-700 shadow-sm hover:bg-amber-50 disabled:opacity-50">Snooze</button>
-            <button type="button" onClick={() => bulkAction("unsnooze")} disabled={syncing} className="min-w-max rounded-lg bg-white px-3 py-2 text-xs font-semibold text-[#4f5752] shadow-sm hover:bg-[#f8f9f8] disabled:opacity-50">{view === "completed" ? "Open" : "Restore"}</button>
-            <button type="button" onClick={() => bulkAction("archive")} disabled={syncing} className="min-w-max rounded-lg bg-white px-3 py-2 text-xs font-semibold text-slate-600 shadow-sm hover:bg-slate-50 disabled:opacity-50">{view === "archived" ? "Move" : "Archive"}</button>
-            <button type="button" onClick={() => bulkAction("merge")} disabled={syncing || selectedIds.length < 2} className="min-w-max rounded-lg bg-white px-3 py-2 text-xs font-semibold text-violet-700 shadow-sm hover:bg-violet-50 disabled:opacity-40">Merge</button>
-            <button type="button" onClick={() => bulkAction("delete")} disabled={syncing} className="min-w-max rounded-lg bg-white px-3 py-2 text-xs font-semibold text-red-700 shadow-sm hover:bg-red-50 disabled:opacity-50">Delete</button>
-            <button type="button" onClick={() => setSelected(new Set())} className="ml-auto min-w-max rounded-lg px-3 py-2 text-xs font-semibold text-[#69716c] hover:bg-black/[0.04]">Cancel</button>
+            <button type="button" onClick={() => bulkAction("complete")} disabled={syncing} className="inline-flex min-w-max items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-[#216e4e] shadow-sm hover:bg-[#f8fbf9] disabled:opacity-50"><ActionIcon name="done" />Done</button>
+            <button type="button" onClick={() => bulkAction("snooze")} disabled={syncing} className="inline-flex min-w-max items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-amber-700 shadow-sm hover:bg-amber-50 disabled:opacity-50"><ActionIcon name="snooze" />Snooze</button>
+            <button type="button" onClick={() => bulkAction("unsnooze")} disabled={syncing} className="inline-flex min-w-max items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-[#4f5752] shadow-sm hover:bg-[#f8f9f8] disabled:opacity-50"><ActionIcon name={view === "completed" ? "open" : "restore"} />{view === "completed" ? "Open" : "Restore"}</button>
+            <button type="button" onClick={() => bulkAction("archive")} disabled={syncing} className="inline-flex min-w-max items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-slate-600 shadow-sm hover:bg-slate-50 disabled:opacity-50"><ActionIcon name={view === "archived" ? "move" : "archive"} />{view === "archived" ? "Move" : "Archive"}</button>
+            <button type="button" onClick={() => bulkAction("merge")} disabled={syncing || selectedIds.length < 2} className="inline-flex min-w-max items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-violet-700 shadow-sm hover:bg-violet-50 disabled:opacity-40"><ActionIcon name="merge" />Merge</button>
+            <button type="button" onClick={() => bulkAction("delete")} disabled={syncing} className="inline-flex min-w-max items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-red-700 shadow-sm hover:bg-red-50 disabled:opacity-50"><ActionIcon name="delete" />Delete</button>
+            <button type="button" onClick={() => setSelected(new Set())} className="ml-auto inline-flex min-w-max items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold text-[#69716c] hover:bg-black/[0.04]"><ActionIcon name="cancel" />Cancel</button>
           </div>
         </div>
       )}
@@ -1053,7 +1073,7 @@ export default function Home() {
                     : `Reassign ${projectDialog.ids.length === 1 ? "this note" : `these ${projectDialog.ids.length} notes`} or leave ${projectDialog.ids.length === 1 ? "it" : "them"} unassigned.`}
                 </p>
               </div>
-              <button type="button" onClick={closeProjectAssignment} disabled={savingProject} className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#f1f2f0] text-lg text-[#4f5752] hover:bg-[#e8eae7] disabled:opacity-50" aria-label="Close project assignment">×</button>
+              <button type="button" onClick={closeProjectAssignment} disabled={savingProject} className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#f1f2f0] text-[#4f5752] hover:bg-[#e8eae7] disabled:opacity-50" aria-label="Close project assignment" title="Close"><ActionIcon name="close" /></button>
             </div>
 
             <label className="mt-5 block min-w-0">
@@ -1093,8 +1113,9 @@ export default function Home() {
             {projectDialogError && <p role="alert" className="mt-3 text-sm font-medium text-red-700">{projectDialogError}</p>}
 
             <div className="mt-6 flex items-center justify-end gap-2">
-              <button type="button" onClick={closeProjectAssignment} disabled={savingProject} className="h-11 rounded-xl px-4 text-sm font-semibold text-[#69716c] hover:bg-[#f3f4f2] disabled:opacity-50">Cancel</button>
-              <button type="submit" disabled={savingProject} className="h-11 rounded-xl bg-[#216e4e] px-5 text-sm font-semibold text-white hover:bg-[#195d41] disabled:opacity-50">
+              <button type="button" onClick={closeProjectAssignment} disabled={savingProject} className="inline-flex h-11 items-center gap-2 rounded-xl px-4 text-sm font-semibold text-[#69716c] hover:bg-[#f3f4f2] disabled:opacity-50"><ActionIcon name="cancel" />Cancel</button>
+              <button type="submit" disabled={savingProject} className="inline-flex h-11 items-center gap-2 rounded-xl bg-[#216e4e] px-5 text-sm font-semibold text-white hover:bg-[#195d41] disabled:opacity-50">
+                <ActionIcon name={projectDialog.mode === "archive" ? "archive" : "move"} />
                 {savingProject ? "Saving…" : projectDialog.mode === "archive" ? "Archive into project" : "Move notes"}
               </button>
             </div>
@@ -1108,7 +1129,7 @@ export default function Home() {
           <form onSubmit={saveTaskDetails} className="relative flex max-h-[92dvh] w-full max-w-full flex-col overflow-hidden overflow-x-hidden rounded-t-3xl bg-white shadow-2xl sm:max-w-2xl sm:rounded-3xl">
             <div className="flex min-w-0 items-center justify-between border-b border-black/[0.07] px-5 py-4 sm:px-6">
               <h3 id="task-details-title" className="min-w-0 text-lg font-semibold text-[#202522]">Task details</h3>
-              <button type="button" onClick={closeTaskDetails} className="grid h-9 w-9 place-items-center rounded-full bg-[#f1f2f0] text-lg text-[#4f5752] hover:bg-[#e8eae7]" aria-label="Close task details">×</button>
+              <button type="button" onClick={closeTaskDetails} className="grid h-9 w-9 place-items-center rounded-full bg-[#f1f2f0] text-[#4f5752] hover:bg-[#e8eae7]" aria-label="Close task details" title="Close"><ActionIcon name="close" /></button>
             </div>
 
             <div className="min-h-0 min-w-0 overflow-x-hidden overflow-y-auto px-5 py-5 sm:px-6">
@@ -1165,26 +1186,26 @@ export default function Home() {
                 <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-[#69716c]">Quick actions</p>
                 <div className="flex min-w-0 flex-wrap gap-2">
                   {isSnoozed(editingTodo, now) ? (
-                    <button type="button" onClick={() => detailAction("unsnooze")} disabled={syncing || savingEdit} className="min-w-max rounded-xl bg-[#eaf3ed] px-3 py-2.5 text-sm font-semibold text-[#195d41] disabled:opacity-50">Wake</button>
+                    <button type="button" onClick={() => detailAction("unsnooze")} disabled={syncing || savingEdit} className="inline-flex min-w-max items-center gap-2 rounded-xl bg-[#eaf3ed] px-3 py-2.5 text-sm font-semibold text-[#195d41] disabled:opacity-50"><ActionIcon name={todoActionIcon("unsnooze", "Wake")} />Wake</button>
                   ) : editingTodo.status === "completed" ? (
-                    <button type="button" onClick={() => detailAction("unsnooze")} disabled={syncing || savingEdit} className="min-w-max rounded-xl bg-[#eaf3ed] px-3 py-2.5 text-sm font-semibold text-[#195d41] disabled:opacity-50">Open</button>
+                    <button type="button" onClick={() => detailAction("unsnooze")} disabled={syncing || savingEdit} className="inline-flex min-w-max items-center gap-2 rounded-xl bg-[#eaf3ed] px-3 py-2.5 text-sm font-semibold text-[#195d41] disabled:opacity-50"><ActionIcon name={todoActionIcon("unsnooze", "Open")} />Open</button>
                   ) : (
-                    <button type="button" onClick={() => detailAction("complete")} disabled={syncing || savingEdit} className="min-w-max rounded-xl bg-[#eaf3ed] px-3 py-2.5 text-sm font-semibold text-[#195d41] disabled:opacity-50">Done</button>
+                    <button type="button" onClick={() => detailAction("complete")} disabled={syncing || savingEdit} className="inline-flex min-w-max items-center gap-2 rounded-xl bg-[#eaf3ed] px-3 py-2.5 text-sm font-semibold text-[#195d41] disabled:opacity-50"><ActionIcon name={todoActionIcon("complete", "Done")} />Done</button>
                   )}
-                  {!isSnoozed(editingTodo, now) && <button type="button" onClick={() => detailAction("snooze")} disabled={syncing || savingEdit} className="min-w-max rounded-xl bg-amber-50 px-3 py-2.5 text-sm font-semibold text-amber-700 disabled:opacity-50">Snooze</button>}
+                  {!isSnoozed(editingTodo, now) && <button type="button" onClick={() => detailAction("snooze")} disabled={syncing || savingEdit} className="inline-flex min-w-max items-center gap-2 rounded-xl bg-amber-50 px-3 py-2.5 text-sm font-semibold text-amber-700 disabled:opacity-50"><ActionIcon name={todoActionIcon("snooze", "Snooze")} />Snooze</button>}
                   {editingTodo.status === "archived" ? (
-                    <button type="button" onClick={() => detailAction("unsnooze")} disabled={syncing || savingEdit} className="min-w-max rounded-xl bg-slate-100 px-3 py-2.5 text-sm font-semibold text-slate-700 disabled:opacity-50">Unarchive</button>
+                    <button type="button" onClick={() => detailAction("unsnooze")} disabled={syncing || savingEdit} className="inline-flex min-w-max items-center gap-2 rounded-xl bg-slate-100 px-3 py-2.5 text-sm font-semibold text-slate-700 disabled:opacity-50"><ActionIcon name={todoActionIcon("unsnooze", "Unarchive")} />Unarchive</button>
                   ) : (
-                    <button type="button" onClick={() => detailAction("archive")} disabled={syncing || savingEdit} className="min-w-max rounded-xl bg-slate-100 px-3 py-2.5 text-sm font-semibold text-slate-700 disabled:opacity-50">Archive</button>
+                    <button type="button" onClick={() => detailAction("archive")} disabled={syncing || savingEdit} className="inline-flex min-w-max items-center gap-2 rounded-xl bg-slate-100 px-3 py-2.5 text-sm font-semibold text-slate-700 disabled:opacity-50"><ActionIcon name={todoActionIcon("archive", "Archive")} />Archive</button>
                   )}
-                  <button type="button" onClick={() => detailAction("delete")} disabled={syncing || savingEdit} className="min-w-max rounded-xl bg-red-50 px-3 py-2.5 text-sm font-semibold text-red-700 disabled:opacity-50">Delete</button>
+                  <button type="button" onClick={() => detailAction("delete")} disabled={syncing || savingEdit} className="inline-flex min-w-max items-center gap-2 rounded-xl bg-red-50 px-3 py-2.5 text-sm font-semibold text-red-700 disabled:opacity-50"><ActionIcon name={todoActionIcon("delete", "Delete")} />Delete</button>
                 </div>
               </div>
             </div>
 
             <div className="flex items-center justify-end gap-2 border-t border-black/[0.07] bg-white px-5 py-3 sm:px-6">
-              <button type="button" onClick={closeTaskDetails} disabled={savingEdit} className="h-11 rounded-xl px-4 text-sm font-semibold text-[#69716c] hover:bg-[#f3f4f2] disabled:opacity-50">Cancel</button>
-              <button type="submit" disabled={savingEdit || !editDraft.title.trim()} className="h-11 rounded-xl bg-[#216e4e] px-5 text-sm font-semibold text-white hover:bg-[#195d41] disabled:opacity-50">{savingEdit ? "Saving…" : "Save changes"}</button>
+              <button type="button" onClick={closeTaskDetails} disabled={savingEdit} className="inline-flex h-11 items-center gap-2 rounded-xl px-4 text-sm font-semibold text-[#69716c] hover:bg-[#f3f4f2] disabled:opacity-50"><ActionIcon name="cancel" />Cancel</button>
+              <button type="submit" disabled={savingEdit || !editDraft.title.trim()} className="inline-flex h-11 items-center gap-2 rounded-xl bg-[#216e4e] px-5 text-sm font-semibold text-white hover:bg-[#195d41] disabled:opacity-50"><ActionIcon name="save" />{savingEdit ? "Saving…" : "Save changes"}</button>
             </div>
           </form>
         </div>
@@ -1208,12 +1229,13 @@ export default function Home() {
                 type="button"
                 onClick={() => { setNotice(null); void undoAction(notice.undoToken as string); }}
                 disabled={undoing}
-                className="rounded-lg px-2 py-1.5 font-semibold text-[#8ee0b5] transition hover:bg-white/10 focus-visible:outline-2 focus-visible:outline-white disabled:opacity-50"
+                className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1.5 font-semibold text-[#8ee0b5] transition hover:bg-white/10 focus-visible:outline-2 focus-visible:outline-white disabled:opacity-50"
               >
+                <ActionIcon name="undo" />
                 {undoing ? "Undoing…" : "Undo"}
               </button>
             )}
-            <button type="button" onClick={() => setNotice(null)} aria-label="Dismiss notification" className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-lg text-white/65 hover:bg-white/10 hover:text-white">×</button>
+            <button type="button" onClick={() => setNotice(null)} aria-label="Dismiss notification" title="Dismiss" className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-white/65 hover:bg-white/10 hover:text-white"><ActionIcon name="close" /></button>
           </div>
         </div>
       )}
