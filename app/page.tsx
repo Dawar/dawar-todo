@@ -33,6 +33,12 @@ type Todo = {
   updatedAt: string;
 };
 
+type TodoDraft = Pick<Todo, "title" | "notes" | "priority"> & {
+  dueDate: string;
+  project: string;
+  context: string;
+};
+
 const viewLabels: Record<View, string> = {
   open: "Open",
   today: "Today",
@@ -92,6 +98,10 @@ function snoozeLabel(value: string) {
   return `Wakes ${new Intl.DateTimeFormat(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" }).format(wake)}`;
 }
 
+function dateInputValue(value: string | null) {
+  return value?.match(/^\d{4}-\d{2}-\d{2}/)?.[0] ?? "";
+}
+
 function compareSmart(a: Todo, b: Todo) {
   const aDue = a.dueDate ? new Date(a.dueDate).valueOf() : Number.POSITIVE_INFINITY;
   const bDue = b.dueDate ? new Date(b.dueDate).valueOf() : Number.POSITIVE_INFINITY;
@@ -120,18 +130,21 @@ function TaskRow({
   now,
   onSelect,
   onAction,
+  onOpen,
 }: {
   todo: Todo;
   selected: boolean;
   now: number;
   onSelect: (todo: Todo) => void;
   onAction: (todo: Todo, action: TodoAction, source: "hover" | "swipe") => void;
+  onOpen: (todo: Todo) => void;
 }) {
   const [offset, setOffset] = useState(0);
   const [swipeWidth, setSwipeWidth] = useState(1);
   const [dragging, setDragging] = useState(false);
   const gesture = useRef<{ startX: number; startY: number; width: number } | null>(null);
   const offsetRef = useRef(0);
+  const suppressOpenRef = useRef(false);
   const pending = todo.id < 0;
   const snoozed = isSnoozed(todo, now);
   const primaryAction: { action: TodoAction; label: string } = snoozed
@@ -148,7 +161,8 @@ function TaskRow({
 
   function pointerDown(event: ReactPointerEvent<HTMLDivElement>) {
     if (pending || event.pointerType !== "touch") return;
-    if ((event.target as HTMLElement).closest("button, input, a, select, textarea")) return;
+    if ((event.target as HTMLElement).closest("input, [data-row-action], a, select, textarea")) return;
+    suppressOpenRef.current = false;
     const width = event.currentTarget.getBoundingClientRect().width;
     gesture.current = {
       startX: event.clientX,
@@ -173,6 +187,7 @@ function TaskRow({
       return;
     }
     const limit = active.width * 0.62;
+    if (Math.abs(deltaX) > 8) suppressOpenRef.current = true;
     const nextOffset = Math.max(-limit, Math.min(limit, deltaX));
     offsetRef.current = nextOffset;
     setOffset(nextOffset);
@@ -236,7 +251,19 @@ function TaskRow({
           aria-label={`Select: ${todo.title}`}
           className={classNames("mt-0.5 h-5 w-5 shrink-0 cursor-pointer rounded border-[#9da6a0] accent-[#216e4e] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#216e4e]", pending && "animate-pulse")}
         />
-        <div className="min-w-0 flex-1">
+        <button
+          type="button"
+          onClick={() => {
+            if (suppressOpenRef.current) {
+              suppressOpenRef.current = false;
+              return;
+            }
+            onOpen(todo);
+          }}
+          disabled={pending}
+          aria-label={`Open details: ${todo.title}`}
+          className="min-w-0 flex-1 rounded-lg text-left focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#216e4e] disabled:cursor-default"
+        >
           <p className={classNames("whitespace-pre-wrap text-[15px] leading-5 text-[#202522]", todo.status === "completed" && "text-[#8b928e] line-through")}>{todo.title}</p>
           {todo.notes && <p className="mt-1 line-clamp-2 whitespace-pre-wrap text-xs leading-5 text-[#7c847f]">{todo.notes}</p>}
           {(todo.project || todo.context || todo.dueDate || todo.priority <= 2 || snoozed || todo.status === "archived") && (
@@ -249,12 +276,14 @@ function TaskRow({
               {todo.status === "archived" && <span className="font-medium text-slate-600">Archived</span>}
             </div>
           )}
-        </div>
+        </button>
         {!pending && (
           <div className="hidden shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 md:flex">
             {hoverActions.map(({ action, label }) => (
               <button
                 key={action}
+                type="button"
+                data-row-action
                 onClick={() => onAction(todo, action, "hover")}
                 aria-label={`${label}: ${todo.title}`}
                 className={classNames(
@@ -286,6 +315,9 @@ export default function Home() {
   const [undoing, setUndoing] = useState(false);
   const [notice, setNotice] = useState<Notice>(null);
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editDraft, setEditDraft] = useState<TodoDraft | null>(null);
+  const [savingEdit, setSavingEdit] = useState(false);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [now, setNow] = useState(() => Date.now());
   const captureRef = useRef<HTMLTextAreaElement>(null);
@@ -332,7 +364,10 @@ export default function Home() {
         event.preventDefault();
         captureRef.current?.focus();
       }
-      if (event.key === "Escape" && target === searchRef.current) {
+      if (event.key === "Escape" && editingId !== null) {
+        setEditingId(null);
+        setEditDraft(null);
+      } else if (event.key === "Escape" && target === searchRef.current) {
         setQuery("");
         searchRef.current?.blur();
       } else if (event.key === "Escape" && filtersOpen) {
@@ -341,7 +376,21 @@ export default function Home() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [filtersOpen]);
+  }, [editingId, filtersOpen]);
+
+  useEffect(() => {
+    if (editingId === null) return;
+    const body = document.body;
+    const previousOverflow = body.style.overflow;
+    const previousPaddingRight = body.style.paddingRight;
+    const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth;
+    body.style.overflow = "hidden";
+    if (scrollbarWidth > 0) body.style.paddingRight = `${scrollbarWidth}px`;
+    return () => {
+      body.style.overflow = previousOverflow;
+      body.style.paddingRight = previousPaddingRight;
+    };
+  }, [editingId]);
 
   const projects = useMemo(
     () => [...new Set(todos.map((todo) => todo.project).filter((value): value is string => Boolean(value)))].sort(),
@@ -380,6 +429,7 @@ export default function Home() {
   const allVisibleSelected = filtered.length > 0 && filtered.every((todo) => selected.has(todo.id));
   const filtersActive = Boolean(query || project || priority || sort !== "smart");
   const mobileFilterCount = Number(Boolean(project)) + Number(Boolean(priority)) + Number(sort !== "smart");
+  const editingTodo = editingId === null ? null : todos.find((todo) => todo.id === editingId) ?? null;
 
   function resizeCapture(textarea: HTMLTextAreaElement) {
     textarea.style.height = "auto";
@@ -436,13 +486,13 @@ export default function Home() {
     }
   }
 
-  function applyOptimisticAction(current: Todo[], ids: number[], action: TodoAction) {
+  function applyOptimisticAction(current: Todo[], ids: number[], action: TodoAction, actionAt: string) {
     const idSet = new Set(ids);
     if (action === "delete") return current.filter((todo) => !idSet.has(todo.id));
-    const temporarySnooze = new Date(Date.now() + 36 * 60 * 60 * 1000).toISOString();
+    const temporarySnooze = new Date(new Date(actionAt).valueOf() + 36 * 60 * 60 * 1000).toISOString();
     return current.map((todo) => {
       if (!idSet.has(todo.id)) return todo;
-      if (action === "complete") return { ...todo, status: "completed" as const, completedAt: new Date().toISOString(), snoozedUntil: null };
+      if (action === "complete") return { ...todo, status: "completed" as const, completedAt: actionAt, snoozedUntil: null };
       if (action === "archive") return { ...todo, status: "archived" as const, snoozedUntil: null };
       if (action === "snooze") return { ...todo, status: "open" as const, completedAt: null, snoozedUntil: temporarySnooze };
       return { ...todo, status: "open" as const, completedAt: null, snoozedUntil: null };
@@ -452,9 +502,10 @@ export default function Home() {
   async function performAction(ids: number[], action: TodoAction | "merge") {
     if (!ids.length || syncing) return;
     const previous = todos;
+    const actionAt = new Date().toISOString();
     setSyncing(true);
     setNotice(null);
-    if (action !== "merge") setTodos((current) => applyOptimisticAction(current, ids, action));
+    if (action !== "merge") setTodos((current) => applyOptimisticAction(current, ids, action, actionAt));
     try {
       if (action === "merge") {
         const result = await request<{ todo: Todo; ids: number[]; undoToken: string }>("/api/todos/bulk", {
@@ -516,9 +567,73 @@ export default function Home() {
     }
   }
 
-  function taskAction(todo: Todo, action: TodoAction, source: "hover" | "swipe") {
+  function openTaskDetails(todo: Todo) {
+    if (todo.id < 1) return;
+    setEditingId(todo.id);
+    setEditDraft({
+      title: todo.title,
+      notes: todo.notes,
+      priority: todo.priority,
+      dueDate: dateInputValue(todo.dueDate),
+      project: todo.project ?? "",
+      context: todo.context ?? "",
+    });
+    console.info("[todo-ui] task details opened", { id: todo.id, status: todo.status });
+  }
+
+  function closeTaskDetails() {
+    setEditingId(null);
+    setEditDraft(null);
+  }
+
+  async function saveTaskDetails(event: FormEvent) {
+    event.preventDefault();
+    if (!editingTodo || !editDraft || savingEdit) return;
+    const title = editDraft.title.trim();
+    if (!title) {
+      setNotice({ tone: "error", text: "A task title is required." });
+      return;
+    }
+    setSavingEdit(true);
+    setNotice(null);
+    try {
+      const result = await request<{ todo: Todo; undoToken: string }>(`/api/todos/${editingTodo.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          title,
+          notes: editDraft.notes,
+          priority: editDraft.priority,
+          dueDate: editDraft.dueDate || null,
+          project: editDraft.project || null,
+          context: editDraft.context || null,
+        }),
+      });
+      setTodos((current) => current.map((todo) => todo.id === result.todo.id ? result.todo : todo));
+      closeTaskDetails();
+      setNotice({ tone: "success", text: "Task details saved.", undoToken: result.undoToken });
+      console.info("[todo-ui] task details saved", {
+        id: result.todo.id,
+        titleLength: result.todo.title.length,
+        notesLength: result.todo.notes.length,
+      });
+    } catch (error) {
+      setNotice({ tone: "error", text: error instanceof Error ? error.message : "The task details could not be saved." });
+      console.error("[todo-ui] task details save failed", { id: editingTodo.id, error });
+    } finally {
+      setSavingEdit(false);
+    }
+  }
+
+  function taskAction(todo: Todo, action: TodoAction, source: "hover" | "swipe" | "details") {
     console.info("[todo-ui] task action requested", { id: todo.id, action, source });
     void performAction([todo.id], action);
+  }
+
+  function detailAction(action: TodoAction) {
+    if (!editingTodo) return;
+    const todo = editingTodo;
+    closeTaskDetails();
+    taskAction(todo, action, "details");
   }
 
   function bulkAction(action: TodoAction | "merge") {
@@ -555,7 +670,7 @@ export default function Home() {
   return (
     <main className="min-h-screen bg-[#f6f7f5] text-[#1d211f]">
       <SiteHeader current="todos" />
-      <div className="mx-auto max-w-5xl px-4 pb-16 pt-5 sm:px-6 sm:pt-7">
+      <div className="mx-auto max-w-5xl px-4 pb-28 pt-5 sm:px-6 sm:pt-7">
         <form onSubmit={addTodo} className="mb-5 flex items-end gap-2 rounded-2xl border border-black/[0.07] bg-white p-2 shadow-[0_10px_35px_rgba(30,45,36,0.07)] sm:p-3">
           <div className="flex min-w-0 flex-1 items-start gap-3 px-2 py-2 sm:px-3">
             <span className="mt-0.5 text-xl text-[#216e4e]" aria-hidden="true">＋</span>
@@ -704,19 +819,6 @@ export default function Home() {
             </div>
           )}
 
-          {selectedIds.length > 0 && (
-            <div className="sticky top-[62px] z-20 mb-3 flex items-center gap-2 overflow-x-auto rounded-xl border border-[#216e4e]/20 bg-[#eaf3ed]/95 p-2 shadow-lg shadow-[#173d2a]/10 backdrop-blur">
-              <span className="min-w-max px-2 text-sm font-semibold text-[#195d41]">{selectedIds.length} selected</span>
-              <button onClick={() => bulkAction("complete")} disabled={syncing} className="min-w-max rounded-lg bg-white px-3 py-2 text-xs font-semibold text-[#216e4e] shadow-sm hover:bg-[#f8fbf9] disabled:opacity-50">Done</button>
-              <button onClick={() => bulkAction("snooze")} disabled={syncing} className="min-w-max rounded-lg bg-white px-3 py-2 text-xs font-semibold text-amber-700 shadow-sm hover:bg-amber-50 disabled:opacity-50">Snooze</button>
-              <button onClick={() => bulkAction("unsnooze")} disabled={syncing} className="min-w-max rounded-lg bg-white px-3 py-2 text-xs font-semibold text-[#4f5752] shadow-sm hover:bg-[#f8f9f8] disabled:opacity-50">{view === "completed" ? "Open" : "Restore"}</button>
-              <button onClick={() => bulkAction("archive")} disabled={syncing} className="min-w-max rounded-lg bg-white px-3 py-2 text-xs font-semibold text-slate-600 shadow-sm hover:bg-slate-50 disabled:opacity-50">Archive</button>
-              <button onClick={() => bulkAction("merge")} disabled={syncing || selectedIds.length < 2} className="min-w-max rounded-lg bg-white px-3 py-2 text-xs font-semibold text-violet-700 shadow-sm hover:bg-violet-50 disabled:opacity-40">Merge</button>
-              <button onClick={() => bulkAction("delete")} disabled={syncing} className="min-w-max rounded-lg bg-white px-3 py-2 text-xs font-semibold text-red-700 shadow-sm hover:bg-red-50 disabled:opacity-50">Delete</button>
-              <button onClick={() => setSelected(new Set())} className="ml-auto min-w-max rounded-lg px-3 py-2 text-xs font-semibold text-[#69716c] hover:bg-black/[0.04]">Cancel</button>
-            </div>
-          )}
-
           <div className="mb-2 flex items-center justify-between px-1">
             <div className="flex items-center gap-3">
               <h2 id="tasks-heading" className="text-sm font-semibold text-[#373d39]">{viewLabels[view]} tasks</h2>
@@ -745,6 +847,7 @@ export default function Home() {
                     now={now}
                     onSelect={toggleSelected}
                     onAction={taskAction}
+                    onOpen={openTaskDetails}
                   />
                 ))}
               </ul>
@@ -764,8 +867,120 @@ export default function Home() {
         </footer>
       </div>
 
+      {selectedIds.length > 0 && (
+        <div
+          className="pointer-events-none fixed inset-x-0 z-40 mx-auto w-[calc(100%-1rem)] max-w-4xl sm:w-[calc(100%-2rem)]"
+          style={{ bottom: "max(0.5rem, env(safe-area-inset-bottom))" }}
+          aria-label="Bulk task actions"
+        >
+          <div className="pointer-events-auto flex items-center gap-1.5 overflow-x-auto rounded-2xl border border-[#216e4e]/20 bg-[#eaf3ed]/95 p-2 shadow-[0_16px_50px_rgba(23,61,42,0.2)] backdrop-blur-xl sm:gap-2">
+            <span className="min-w-max px-2 text-sm font-semibold text-[#195d41]">{selectedIds.length} selected</span>
+            <button type="button" onClick={() => bulkAction("complete")} disabled={syncing} className="min-w-max rounded-lg bg-white px-3 py-2 text-xs font-semibold text-[#216e4e] shadow-sm hover:bg-[#f8fbf9] disabled:opacity-50">Done</button>
+            <button type="button" onClick={() => bulkAction("snooze")} disabled={syncing} className="min-w-max rounded-lg bg-white px-3 py-2 text-xs font-semibold text-amber-700 shadow-sm hover:bg-amber-50 disabled:opacity-50">Snooze</button>
+            <button type="button" onClick={() => bulkAction("unsnooze")} disabled={syncing} className="min-w-max rounded-lg bg-white px-3 py-2 text-xs font-semibold text-[#4f5752] shadow-sm hover:bg-[#f8f9f8] disabled:opacity-50">{view === "completed" ? "Open" : "Restore"}</button>
+            <button type="button" onClick={() => bulkAction("archive")} disabled={syncing} className="min-w-max rounded-lg bg-white px-3 py-2 text-xs font-semibold text-slate-600 shadow-sm hover:bg-slate-50 disabled:opacity-50">Archive</button>
+            <button type="button" onClick={() => bulkAction("merge")} disabled={syncing || selectedIds.length < 2} className="min-w-max rounded-lg bg-white px-3 py-2 text-xs font-semibold text-violet-700 shadow-sm hover:bg-violet-50 disabled:opacity-40">Merge</button>
+            <button type="button" onClick={() => bulkAction("delete")} disabled={syncing} className="min-w-max rounded-lg bg-white px-3 py-2 text-xs font-semibold text-red-700 shadow-sm hover:bg-red-50 disabled:opacity-50">Delete</button>
+            <button type="button" onClick={() => setSelected(new Set())} className="ml-auto min-w-max rounded-lg px-3 py-2 text-xs font-semibold text-[#69716c] hover:bg-black/[0.04]">Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {editingTodo && editDraft && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center sm:p-5" role="dialog" aria-modal="true" aria-labelledby="task-details-title">
+          <button type="button" aria-label="Close task details" onClick={closeTaskDetails} className="absolute inset-0 bg-black/35 backdrop-blur-[2px]" />
+          <form onSubmit={saveTaskDetails} className="relative flex max-h-[92dvh] w-full flex-col overflow-hidden rounded-t-3xl bg-white shadow-2xl sm:max-w-2xl sm:rounded-3xl">
+            <div className="flex items-start justify-between border-b border-black/[0.07] px-5 py-4 sm:px-6">
+              <div>
+                <h3 id="task-details-title" className="text-lg font-semibold text-[#202522]">Task details</h3>
+                <p className="mt-0.5 text-xs text-[#7c847f]">Edit the full task without leaving your place.</p>
+              </div>
+              <button type="button" onClick={closeTaskDetails} className="grid h-9 w-9 place-items-center rounded-full bg-[#f1f2f0] text-lg text-[#4f5752] hover:bg-[#e8eae7]" aria-label="Close task details">×</button>
+            </div>
+
+            <div className="overflow-y-auto px-5 py-5 sm:px-6">
+              <label className="block">
+                <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-[#69716c]">Task</span>
+                <textarea
+                  autoFocus
+                  value={editDraft.title}
+                  onChange={(event) => setEditDraft((current) => current ? { ...current, title: event.target.value } : current)}
+                  rows={4}
+                  maxLength={2000}
+                  className="min-h-28 w-full resize-y rounded-xl border border-black/[0.1] bg-white px-3 py-2.5 text-[16px] leading-6 text-[#202522] outline-none focus:border-[#216e4e]/50 focus:ring-3 focus:ring-[#216e4e]/10"
+                />
+              </label>
+
+              <label className="mt-4 block">
+                <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-[#69716c]">Notes</span>
+                <textarea
+                  value={editDraft.notes}
+                  onChange={(event) => setEditDraft((current) => current ? { ...current, notes: event.target.value } : current)}
+                  rows={5}
+                  placeholder="Add context, links, or next steps…"
+                  maxLength={10000}
+                  className="min-h-28 w-full resize-y rounded-xl border border-black/[0.1] bg-white px-3 py-2.5 text-sm leading-6 text-[#303632] outline-none placeholder:text-[#a0a6a2] focus:border-[#216e4e]/50 focus:ring-3 focus:ring-[#216e4e]/10"
+                />
+              </label>
+
+              <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <label className="block">
+                  <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-[#69716c]">Project</span>
+                  <input value={editDraft.project} onChange={(event) => setEditDraft((current) => current ? { ...current, project: event.target.value } : current)} placeholder="No project" className="h-11 w-full rounded-xl border border-black/[0.1] px-3 text-sm outline-none focus:border-[#216e4e]/50 focus:ring-3 focus:ring-[#216e4e]/10" />
+                </label>
+                <label className="block">
+                  <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-[#69716c]">Context</span>
+                  <input value={editDraft.context} onChange={(event) => setEditDraft((current) => current ? { ...current, context: event.target.value } : current)} placeholder="No context" className="h-11 w-full rounded-xl border border-black/[0.1] px-3 text-sm outline-none focus:border-[#216e4e]/50 focus:ring-3 focus:ring-[#216e4e]/10" />
+                </label>
+                <label className="block">
+                  <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-[#69716c]">Priority</span>
+                  <select value={editDraft.priority} onChange={(event) => setEditDraft((current) => current ? { ...current, priority: Number(event.target.value) } : current)} className="h-11 w-full rounded-xl border border-black/[0.1] bg-white px-3 text-sm outline-none focus:border-[#216e4e]/50 focus:ring-3 focus:ring-[#216e4e]/10">
+                    <option value="1">Urgent</option>
+                    <option value="2">High</option>
+                    <option value="3">Normal</option>
+                    <option value="4">Low</option>
+                  </select>
+                </label>
+                <label className="block">
+                  <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-[#69716c]">Due date</span>
+                  <input type="date" value={editDraft.dueDate} onChange={(event) => setEditDraft((current) => current ? { ...current, dueDate: event.target.value } : current)} className="h-11 w-full rounded-xl border border-black/[0.1] bg-white px-3 text-sm outline-none focus:border-[#216e4e]/50 focus:ring-3 focus:ring-[#216e4e]/10" />
+                </label>
+              </div>
+
+              <div className="mt-5 border-t border-black/[0.07] pt-4">
+                <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-[#69716c]">Quick actions</p>
+                <div className="flex gap-2 overflow-x-auto pb-1">
+                  {isSnoozed(editingTodo, now) ? (
+                    <button type="button" onClick={() => detailAction("unsnooze")} disabled={syncing || savingEdit} className="min-w-max rounded-xl bg-[#eaf3ed] px-3 py-2.5 text-sm font-semibold text-[#195d41] disabled:opacity-50">Wake</button>
+                  ) : editingTodo.status === "completed" ? (
+                    <button type="button" onClick={() => detailAction("unsnooze")} disabled={syncing || savingEdit} className="min-w-max rounded-xl bg-[#eaf3ed] px-3 py-2.5 text-sm font-semibold text-[#195d41] disabled:opacity-50">Open</button>
+                  ) : (
+                    <button type="button" onClick={() => detailAction("complete")} disabled={syncing || savingEdit} className="min-w-max rounded-xl bg-[#eaf3ed] px-3 py-2.5 text-sm font-semibold text-[#195d41] disabled:opacity-50">Done</button>
+                  )}
+                  {!isSnoozed(editingTodo, now) && <button type="button" onClick={() => detailAction("snooze")} disabled={syncing || savingEdit} className="min-w-max rounded-xl bg-amber-50 px-3 py-2.5 text-sm font-semibold text-amber-700 disabled:opacity-50">Snooze</button>}
+                  {editingTodo.status === "archived" ? (
+                    <button type="button" onClick={() => detailAction("unsnooze")} disabled={syncing || savingEdit} className="min-w-max rounded-xl bg-slate-100 px-3 py-2.5 text-sm font-semibold text-slate-700 disabled:opacity-50">Unarchive</button>
+                  ) : (
+                    <button type="button" onClick={() => detailAction("archive")} disabled={syncing || savingEdit} className="min-w-max rounded-xl bg-slate-100 px-3 py-2.5 text-sm font-semibold text-slate-700 disabled:opacity-50">Archive</button>
+                  )}
+                  <button type="button" onClick={() => detailAction("delete")} disabled={syncing || savingEdit} className="min-w-max rounded-xl bg-red-50 px-3 py-2.5 text-sm font-semibold text-red-700 disabled:opacity-50">Delete</button>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 border-t border-black/[0.07] bg-white px-5 py-3 sm:px-6">
+              <button type="button" onClick={closeTaskDetails} disabled={savingEdit} className="h-11 rounded-xl px-4 text-sm font-semibold text-[#69716c] hover:bg-[#f3f4f2] disabled:opacity-50">Cancel</button>
+              <button type="submit" disabled={savingEdit || !editDraft.title.trim()} className="h-11 rounded-xl bg-[#216e4e] px-5 text-sm font-semibold text-white hover:bg-[#195d41] disabled:opacity-50">{savingEdit ? "Saving…" : "Save changes"}</button>
+            </div>
+          </form>
+        </div>
+      )}
+
       {notice && (
-        <div className="pointer-events-none fixed inset-x-0 z-[60] mx-auto w-[calc(100%-2rem)] max-w-md" style={{ bottom: "max(1rem, env(safe-area-inset-bottom))" }}>
+        <div
+          className="pointer-events-none fixed inset-x-0 z-[60] mx-auto w-[calc(100%-2rem)] max-w-md transition-[bottom] duration-200"
+          style={{ bottom: selectedIds.length > 0 ? "max(5.25rem, calc(env(safe-area-inset-bottom) + 5rem))" : "max(1rem, env(safe-area-inset-bottom))" }}
+        >
           <div
             role={notice.tone === "error" ? "alert" : "status"}
             className={classNames(

@@ -34,10 +34,15 @@ export async function PATCH(
     if (payload.project !== undefined) update.project = payload.project?.trim() || null;
     if (payload.context !== undefined) update.context = payload.context?.trim() || null;
 
-    const todo = await updateTodo(id, update);
-    if (!todo) return Response.json({ error: "Task not found." }, { status: 404 });
-    console.info("[todo-api] updated", { id, fields: Object.keys(update), status: todo.status });
-    return Response.json({ todo });
+    const result = await updateTodo(id, update);
+    if (!result) return Response.json({ error: "Task not found." }, { status: 404 });
+    console.info("[todo-api] updated", {
+      id,
+      fields: Object.keys(update),
+      status: result.todo.status,
+      undoable: Boolean(result.undoToken),
+    });
+    return Response.json(result);
   } catch (error) {
     console.error("[todo-api] update failed", { id, error });
     return Response.json({ error: "The task could not be updated." }, { status: 500 });

@@ -222,7 +222,7 @@ export async function createTodo(input: {
   return mapTodo(row);
 }
 
-export async function updateTodo(id: number, update: TodoUpdate): Promise<Todo | null> {
+export async function updateTodo(id: number, update: TodoUpdate): Promise<{ todo: Todo; undoToken: string | null } | null> {
   await ensureTodoDatabase();
   const columnByField: Record<keyof TodoUpdate, string> = {
     title: "title",
@@ -236,7 +236,15 @@ export async function updateTodo(id: number, update: TodoUpdate): Promise<Todo |
   };
   const entries = (Object.entries(update) as [keyof TodoUpdate, TodoUpdate[keyof TodoUpdate]][])
     .filter(([, value]) => value !== undefined);
-  if (!entries.length) return getTodo(id);
+  if (!entries.length) {
+    const todo = await getTodo(id);
+    return todo ? { todo, undoToken: null } : null;
+  }
+
+  const db = database();
+  const before = await db.prepare("SELECT * FROM todos WHERE id = ?").bind(id).first<TodoRow>();
+  if (!before) return null;
+  const undoToken = crypto.randomUUID();
 
   const values = entries.map(([, value]) => value);
   const setters = entries.map(([field]) => `${columnByField[field]} = ?`);
@@ -249,11 +257,20 @@ export async function updateTodo(id: number, update: TodoUpdate): Promise<Todo |
   }
   setters.push("updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')");
 
-  const row = await database()
-    .prepare(`UPDATE todos SET ${setters.join(", ")} WHERE id = ? RETURNING *`)
-    .bind(...values, id)
-    .first<TodoRow>();
-  return row ? mapTodo(row) : null;
+  await db.batch([
+    db.prepare("DELETE FROM todo_action_history WHERE created_at < strftime('%Y-%m-%dT%H:%M:%fZ','now','-7 days')"),
+    db.prepare("INSERT INTO todo_action_history (id, snapshot) VALUES (?, ?)")
+      .bind(undoToken, JSON.stringify({ todos: [before] } satisfies UndoSnapshot)),
+    db.prepare(`UPDATE todos SET ${setters.join(", ")} WHERE id = ?`).bind(...values, id),
+  ]);
+  const todo = await getTodo(id);
+  if (!todo) throw new Error("The updated task could not be loaded.");
+  console.info("[todo-db] task details updated", {
+    id,
+    fields: entries.map(([field]) => field),
+    undoToken,
+  });
+  return { todo, undoToken };
 }
 
 export async function getTodo(id: number): Promise<Todo | null> {
