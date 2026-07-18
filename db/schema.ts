@@ -40,6 +40,17 @@ export const appSettings = sqliteTable("app_settings", {
     .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`),
 });
 
+export const todoProjects = sqliteTable("todo_projects", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  name: text("name").notNull().unique(),
+  createdAt: text("created_at")
+    .notNull()
+    .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`),
+  updatedAt: text("updated_at")
+    .notNull()
+    .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`),
+});
+
 export const todoActionHistory = sqliteTable(
   "todo_action_history",
   {

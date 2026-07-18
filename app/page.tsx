@@ -47,6 +47,12 @@ type ProjectDialogState = {
   newProject: string;
 };
 
+type ProjectDeleteDialogState = {
+  name: string;
+  mode: "reassign" | "delete";
+  targetProject: string;
+};
+
 const CREATE_PROJECT = "__create_project__";
 const UNASSIGNED_PROJECT = "__unassigned_project__";
 
@@ -342,6 +348,8 @@ export default function Home() {
   const [todos, setTodos] = useState<Todo[]>([]);
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState<View>("open");
+  const [archiveProject, setArchiveProject] = useState<string | null>(null);
+  const [registeredProjects, setRegisteredProjects] = useState<string[]>([]);
   const [query, setQuery] = useState("");
   const [project, setProject] = useState("");
   const [priority, setPriority] = useState("");
@@ -358,20 +366,32 @@ export default function Home() {
   const [projectDialog, setProjectDialog] = useState<ProjectDialogState | null>(null);
   const [projectDialogError, setProjectDialogError] = useState("");
   const [savingProject, setSavingProject] = useState(false);
+  const [newProjectOpen, setNewProjectOpen] = useState(false);
+  const [newProjectName, setNewProjectName] = useState("");
+  const [newProjectError, setNewProjectError] = useState("");
+  const [creatingProject, setCreatingProject] = useState(false);
+  const [projectDeleteDialog, setProjectDeleteDialog] = useState<ProjectDeleteDialogState | null>(null);
+  const [projectDeleteError, setProjectDeleteError] = useState("");
+  const [deletingProject, setDeletingProject] = useState(false);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [now, setNow] = useState(() => Date.now());
   const captureRef = useRef<HTMLTextAreaElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
-  const overlayOpen = editingId !== null || projectDialog !== null || filtersOpen;
+  const overlayOpen = editingId !== null || projectDialog !== null || newProjectOpen || projectDeleteDialog !== null || filtersOpen;
 
   useEffect(() => {
     let active = true;
-    request<{ todos: Todo[] }>("/api/todos")
-      .then(({ todos: loaded }) => {
+    Promise.all([
+      request<{ todos: Todo[] }>("/api/todos"),
+      request<{ projects: string[] }>("/api/projects"),
+    ])
+      .then(([{ todos: loaded }, { projects: loadedProjects }]) => {
         if (!active) return;
         setTodos(loaded);
+        setRegisteredProjects(loadedProjects);
         console.info("[todo-ui] loaded", {
           count: loaded.length,
+          projects: loadedProjects.length,
           open: loaded.filter((todo) => todo.status === "open").length,
           archived: loaded.filter((todo) => todo.status === "archived").length,
           snoozed: loaded.filter((todo) => isSnoozed(todo, Date.now())).length,
@@ -405,7 +425,14 @@ export default function Home() {
         event.preventDefault();
         captureRef.current?.focus();
       }
-      if (event.key === "Escape" && projectDialog !== null) {
+      if (event.key === "Escape" && projectDeleteDialog !== null) {
+        setProjectDeleteDialog(null);
+        setProjectDeleteError("");
+      } else if (event.key === "Escape" && newProjectOpen) {
+        setNewProjectOpen(false);
+        setNewProjectName("");
+        setNewProjectError("");
+      } else if (event.key === "Escape" && projectDialog !== null) {
         setProjectDialog(null);
         setProjectDialogError("");
       } else if (event.key === "Escape" && editingId !== null) {
@@ -420,7 +447,7 @@ export default function Home() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [editingId, filtersOpen, projectDialog]);
+  }, [editingId, filtersOpen, newProjectOpen, projectDeleteDialog, projectDialog]);
 
   useEffect(() => {
     if (!overlayOpen) return;
@@ -437,12 +464,15 @@ export default function Home() {
   }, [overlayOpen]);
 
   const projects = useMemo(
-    () => [...new Set(todos.map((todo) => todo.project).filter((value): value is string => Boolean(value)))].sort(),
-    [todos],
+    () => [...new Set([
+      ...registeredProjects,
+      ...todos.map((todo) => todo.project).filter((value): value is string => Boolean(value)),
+    ])].sort((a, b) => a.localeCompare(b)),
+    [registeredProjects, todos],
   );
 
   const archivedProjectOptions = useMemo(() => {
-    const projectCounts = new Map<string, number>();
+    const projectCounts = new Map<string, number>(registeredProjects.map((name) => [name, 0]));
     todos.filter((todo) => todo.status === "archived").forEach((todo) => {
       const key = todo.project || UNASSIGNED_PROJECT;
       projectCounts.set(key, (projectCounts.get(key) ?? 0) + 1);
@@ -452,7 +482,7 @@ export default function Home() {
       if (b === UNASSIGNED_PROJECT) return -1;
       return a.localeCompare(b);
     });
-  }, [todos]);
+  }, [registeredProjects, todos]);
 
   const counts = useMemo(() => ({
     open: todos.filter((todo) => matchesView(todo, "open", now)).length,
@@ -469,6 +499,7 @@ export default function Home() {
       const searchable = [todo.title, todo.notes, todo.project, todo.context].filter(Boolean).join(" ").toLowerCase();
       return matchesView(todo, view, now)
         && (!needle || searchable.includes(needle))
+        && (view !== "archived" || archiveProject === null || (archiveProject === UNASSIGNED_PROJECT ? !todo.project : todo.project === archiveProject))
         && (!project || (project === UNASSIGNED_PROJECT ? !todo.project : todo.project === project))
         && (!priority || todo.priority === Number(priority));
     });
@@ -480,13 +511,15 @@ export default function Home() {
       if (sort === "az") return a.title.localeCompare(b.title);
       return compareSmart(a, b);
     });
-  }, [todos, view, query, project, priority, sort, now]);
+  }, [todos, view, archiveProject, query, project, priority, sort, now]);
 
   const selectedIds = useMemo(() => [...selected], [selected]);
   const allVisibleSelected = filtered.length > 0 && filtered.every((todo) => selected.has(todo.id));
   const filtersActive = Boolean(query || project || priority || sort !== "smart");
-  const mobileFilterCount = Number(Boolean(project)) + Number(Boolean(priority)) + Number(sort !== "smart");
+  const mobileFilterCount = Number(Boolean(project) && view !== "archived") + Number(Boolean(priority)) + Number(sort !== "smart");
   const editingTodo = editingId === null ? null : todos.find((todo) => todo.id === editingId) ?? null;
+  const archiveAtRoot = view === "archived" && archiveProject === null;
+  const canCapture = !archiveAtRoot && archiveProject !== UNASSIGNED_PROJECT;
 
   function resizeCapture(textarea: HTMLTextAreaElement) {
     textarea.style.height = "auto";
@@ -498,15 +531,17 @@ export default function Home() {
     event.preventDefault();
     const title = newTitle.trim();
     if (!title || adding) return;
+    const capturingArchive = view === "archived" && archiveProject !== null && archiveProject !== UNASSIGNED_PROJECT;
+    const destinationProject = capturingArchive ? archiveProject : null;
     const temporaryId = -Date.now();
     const optimistic: Todo = {
       id: temporaryId,
       title,
       notes: "",
-      status: "open",
+      status: capturingArchive ? "archived" : "open",
       priority: 3,
       dueDate: null,
-      project: null,
+      project: destinationProject,
       context: null,
       sourceKind: "site",
       sourceId: null,
@@ -516,7 +551,7 @@ export default function Home() {
       updatedAt: new Date().toISOString(),
     };
     setNewTitle("");
-    setView("open");
+    if (!capturingArchive) setView("open");
     setTodos((current) => [optimistic, ...current]);
     setAdding(true);
     setSyncing(true);
@@ -528,10 +563,16 @@ export default function Home() {
     try {
       const { todo } = await request<{ todo: Todo }>("/api/todos", {
         method: "POST",
-        body: JSON.stringify({ title }),
+        body: JSON.stringify({ title, status: capturingArchive ? "archived" : "open", project: destinationProject }),
       });
       setTodos((current) => current.map((item) => item.id === temporaryId ? todo : item));
-      console.info("[todo-ui] created", { id: todo.id, titleLength: title.length, lines: title.split("\n").length });
+      console.info("[todo-ui] created", {
+        id: todo.id,
+        status: todo.status,
+        project: todo.project,
+        titleLength: title.length,
+        lines: title.split("\n").length,
+      });
     } catch (error) {
       setTodos((current) => current.filter((item) => item.id !== temporaryId));
       setNewTitle(title);
@@ -613,6 +654,8 @@ export default function Home() {
         body: JSON.stringify({ undoToken }),
       });
       setTodos(result.todos);
+      const { projects: refreshedProjects } = await request<{ projects: string[] }>("/api/projects");
+      setRegisteredProjects(refreshedProjects);
       setSelected(new Set());
       setNotice({ tone: "success", text: `Undone: ${result.restored} ${result.restored === 1 ? "task" : "tasks"} restored.` });
       console.info("[todo-ui] action undone", { restored: result.restored });
@@ -670,6 +713,9 @@ export default function Home() {
       });
       const updates = new Map(result.todos.map((todo) => [todo.id, todo]));
       setTodos((current) => current.map((todo) => updates.get(todo.id) ?? todo));
+      if (projectName) {
+        setRegisteredProjects((current) => [...new Set([...current, projectName])].sort((a, b) => a.localeCompare(b)));
+      }
       setSelected((current) => {
         const next = new Set(current);
         ids.forEach((id) => next.delete(id));
@@ -736,6 +782,9 @@ export default function Home() {
         }),
       });
       setTodos((current) => current.map((todo) => todo.id === result.todo.id ? result.todo : todo));
+      if (result.todo.project) {
+        setRegisteredProjects((current) => [...new Set([...current, result.todo.project as string])].sort((a, b) => a.localeCompare(b)));
+      }
       closeTaskDetails();
       setNotice({ tone: "success", text: "Task details saved.", undoToken: result.undoToken });
       console.info("[todo-ui] task details saved", {
@@ -803,15 +852,152 @@ export default function Home() {
 
   function chooseView(next: View) {
     setView(next);
-    if (next !== "archived" && project === UNASSIGNED_PROJECT) setProject("");
+    setArchiveProject(null);
+    setProject("");
+    if (next === "archived") {
+      setQuery("");
+      setPriority("");
+      setSort("smart");
+    }
     setSelected(new Set());
+  }
+
+  function openArchiveProject(name: string) {
+    setArchiveProject(name);
+    setProject("");
+    setQuery("");
+    setPriority("");
+    setSort("smart");
+    setSelected(new Set());
+    console.info("[todo-ui] archive project opened", { project: name });
+  }
+
+  function returnToArchiveProjects() {
+    setArchiveProject(null);
+    setProject("");
+    setQuery("");
+    setPriority("");
+    setSort("smart");
+    setSelected(new Set());
+    console.info("[todo-ui] returned to archive projects");
+  }
+
+  function openNewProjectDialog() {
+    setNewProjectName("");
+    setNewProjectError("");
+    setNewProjectOpen(true);
+    console.info("[todo-ui] new project dialog opened");
+  }
+
+  function closeNewProjectDialog() {
+    if (creatingProject) return;
+    setNewProjectOpen(false);
+    setNewProjectName("");
+    setNewProjectError("");
+  }
+
+  async function createProject(event: FormEvent) {
+    event.preventDefault();
+    if (creatingProject) return;
+    const name = newProjectName.trim();
+    if (!name) {
+      setNewProjectError("A project name is required.");
+      return;
+    }
+    setCreatingProject(true);
+    setNewProjectError("");
+    try {
+      const result = await request<{ project: string }>("/api/projects", {
+        method: "POST",
+        body: JSON.stringify({ name }),
+      });
+      setRegisteredProjects((current) => [...new Set([...current, result.project])].sort((a, b) => a.localeCompare(b)));
+      setNewProjectOpen(false);
+      setNewProjectName("");
+      openArchiveProject(result.project);
+      setNotice({ tone: "success", text: `${result.project} created.` });
+      console.info("[todo-ui] archive project created", { project: result.project });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "The project could not be created.";
+      setNewProjectError(message);
+      console.error("[todo-ui] archive project create failed", { name, error });
+    } finally {
+      setCreatingProject(false);
+    }
+  }
+
+  function openProjectDeleteDialog(name: string) {
+    const alternatives = registeredProjects.filter((projectName) => projectName !== name);
+    setProjectDeleteDialog({ name, mode: alternatives.length ? "reassign" : "delete", targetProject: alternatives[0] ?? "" });
+    setProjectDeleteError("");
+    console.info("[todo-ui] project delete dialog opened", {
+      project: name,
+      archivedNotes: todos.filter((todo) => todo.status === "archived" && todo.project === name).length,
+      reassignTargets: alternatives.length,
+    });
+  }
+
+  function closeProjectDeleteDialog() {
+    if (deletingProject) return;
+    setProjectDeleteDialog(null);
+    setProjectDeleteError("");
+  }
+
+  async function deleteProject(event: FormEvent) {
+    event.preventDefault();
+    if (!projectDeleteDialog || deletingProject) return;
+    if (projectDeleteDialog.mode === "reassign" && !projectDeleteDialog.targetProject) {
+      setProjectDeleteError("Choose a destination project.");
+      return;
+    }
+    const dialog = projectDeleteDialog;
+    setDeletingProject(true);
+    setProjectDeleteError("");
+    try {
+      const result = await request<{
+        project: string;
+        mode: "reassign" | "delete";
+        targetProject: string | null;
+        affected: number;
+        undoToken: string | null;
+      }>("/api/projects", {
+        method: "DELETE",
+        body: JSON.stringify({
+          name: dialog.name,
+          mode: dialog.mode,
+          targetProject: dialog.mode === "reassign" ? dialog.targetProject : null,
+        }),
+      });
+      setRegisteredProjects((current) => current.filter((name) => name !== result.project));
+      setTodos((current) => result.mode === "delete"
+        ? current.filter((todo) => !(todo.status === "archived" && todo.project === result.project))
+        : current.map((todo) => todo.status === "archived" && todo.project === result.project
+          ? { ...todo, project: result.targetProject, updatedAt: new Date().toISOString() }
+          : todo));
+      setProjectDeleteDialog(null);
+      returnToArchiveProjects();
+      setNotice({
+        tone: "success",
+        text: result.mode === "delete"
+          ? `${result.project} and ${result.affected} ${result.affected === 1 ? "note" : "notes"} deleted.`
+          : `${result.project} deleted; ${result.affected} ${result.affected === 1 ? "note" : "notes"} moved to ${result.targetProject}.`,
+        undoToken: result.undoToken ?? undefined,
+      });
+      console.info("[todo-ui] archive project deleted", result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "The project could not be deleted.";
+      setProjectDeleteError(message);
+      console.error("[todo-ui] archive project delete failed", { dialog, error });
+    } finally {
+      setDeletingProject(false);
+    }
   }
 
   return (
     <main className="min-h-screen bg-[#f6f7f5] text-[#1d211f]">
       <SiteHeader current="todos" />
       <div className="mx-auto max-w-5xl px-4 pb-28 pt-5 sm:px-6 sm:pt-7">
-        <form onSubmit={addTodo} className="mb-5 flex items-end gap-2 rounded-2xl border border-black/[0.07] bg-white p-2 shadow-[0_10px_35px_rgba(30,45,36,0.07)] sm:p-3">
+        {canCapture && <form onSubmit={addTodo} className="mb-5 flex items-end gap-2 rounded-2xl border border-black/[0.07] bg-white p-2 shadow-[0_10px_35px_rgba(30,45,36,0.07)] sm:p-3">
           <div className="flex min-w-0 flex-1 items-start gap-3 px-2 py-2 sm:px-3">
             <ActionIcon name="add" className="mt-1 h-5 w-5 shrink-0 text-[#216e4e]" />
             <textarea
@@ -825,8 +1011,8 @@ export default function Home() {
                 }
               }}
               rows={1}
-              placeholder="Add a task…"
-              aria-label="Add a task"
+              placeholder={view === "archived" && archiveProject ? `Add to ${archiveProject}…` : "Add a task…"}
+              aria-label={view === "archived" && archiveProject ? `Add to ${archiveProject}` : "Add a task"}
               maxLength={2000}
               className="min-h-6 max-h-[120px] min-w-0 flex-1 resize-none overflow-hidden bg-transparent text-[16px] leading-6 text-[#151816] outline-none placeholder:text-[#929994]"
             />
@@ -842,7 +1028,7 @@ export default function Home() {
               {adding ? "Adding…" : "Add"}
             </button>
           </div>
-        </form>
+        </form>}
 
         <section aria-labelledby="tasks-heading">
           <div className="mb-3 flex gap-1 overflow-x-auto rounded-xl border border-black/[0.06] bg-white p-1 shadow-sm">
@@ -861,7 +1047,88 @@ export default function Home() {
             ))}
           </div>
 
-          <div className="mb-3 grid grid-cols-[minmax(0,1fr)_auto] gap-2 sm:grid-cols-[minmax(220px,1fr)_auto_auto_auto]">
+          {archiveAtRoot ? (
+            <div>
+              <div className="mb-4 flex items-center justify-between gap-3 px-1">
+                <div>
+                  <h2 id="tasks-heading" className="text-lg font-semibold text-[#202522]">Archive projects</h2>
+                  <p className="mt-0.5 text-sm text-[#7c847f]">Persistent notes organized into folders.</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={openNewProjectDialog}
+                  className="inline-flex h-10 shrink-0 items-center gap-2 rounded-xl bg-[#216e4e] px-3.5 text-sm font-semibold text-white shadow-sm transition hover:bg-[#195d41] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#216e4e]"
+                >
+                  <ActionIcon name="create-project" />
+                  <span>New project</span>
+                </button>
+              </div>
+
+              {loading ? (
+                <div role="status" aria-label="Loading archive projects" className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                  {[0, 1, 2].map((item) => <div key={item} className="h-32 animate-pulse rounded-2xl bg-white shadow-sm" />)}
+                </div>
+              ) : archivedProjectOptions.length ? (
+                <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                  {archivedProjectOptions.map(([name, count]) => {
+                    const unassigned = name === UNASSIGNED_PROJECT;
+                    return (
+                      <li key={name} className="group relative overflow-hidden rounded-2xl border border-black/[0.07] bg-white shadow-[0_8px_28px_rgba(30,45,36,0.05)] transition hover:-translate-y-0.5 hover:border-[#216e4e]/20 hover:shadow-[0_12px_34px_rgba(30,45,36,0.09)]">
+                        <button
+                          type="button"
+                          onClick={() => openArchiveProject(name)}
+                          className="flex min-h-32 w-full items-start gap-3 p-5 pr-14 text-left focus-visible:outline-2 focus-visible:outline-inset focus-visible:outline-[#216e4e]"
+                          aria-label={`Open ${unassigned ? "Unassigned" : name}, ${count} ${count === 1 ? "note" : "notes"}`}
+                        >
+                          <span className={classNames("grid h-11 w-11 shrink-0 place-items-center rounded-xl", unassigned ? "bg-slate-100 text-slate-600" : "bg-[#eaf3ed] text-[#216e4e]")}>
+                            <ActionIcon name="folder" className="h-6 w-6" />
+                          </span>
+                          <span className="min-w-0 pt-0.5">
+                            <span className="block break-words text-[15px] font-semibold text-[#252a27]">{unassigned ? "Unassigned" : name}</span>
+                            <span className="mt-1 block text-xs text-[#7c847f]">{count} {count === 1 ? "note" : "notes"}</span>
+                          </span>
+                        </button>
+                        {!unassigned && (
+                          <button
+                            type="button"
+                            onClick={() => openProjectDeleteDialog(name)}
+                            aria-label={`Delete project: ${name}`}
+                            title="Delete project"
+                            className="absolute right-3 top-3 grid h-9 w-9 place-items-center rounded-lg text-[#8a918d] opacity-70 transition hover:bg-red-50 hover:text-red-700 focus:opacity-100 focus-visible:outline-2 focus-visible:outline-red-600 group-hover:opacity-100"
+                          >
+                            <ActionIcon name="delete" />
+                          </button>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              ) : (
+                <div className="rounded-2xl border border-dashed border-black/[0.12] bg-white px-6 py-14 text-center">
+                  <span className="mx-auto grid h-12 w-12 place-items-center rounded-full bg-[#eaf3ed] text-[#216e4e]"><ActionIcon name="folder" className="h-6 w-6" /></span>
+                  <p className="mt-4 font-medium text-[#303632]">No archive projects yet.</p>
+                  <p className="mt-1 text-sm text-[#7c847f]">Create a folder for the notes you want to keep.</p>
+                </div>
+              )}
+            </div>
+          ) : (
+          <>
+          {view === "archived" && archiveProject !== null && (
+            <div className="mb-3 flex min-w-0 items-center justify-between gap-3 px-1">
+              <div className="flex min-w-0 items-center gap-3">
+                <button type="button" onClick={returnToArchiveProjects} className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-white text-[#4f5752] shadow-sm transition hover:bg-[#eef0ed] focus-visible:outline-2 focus-visible:outline-[#216e4e]" aria-label="Back to archive projects" title="Back to projects"><ActionIcon name="back" /></button>
+                <div className="min-w-0">
+                  <p className="text-xs font-medium text-[#7c847f]">Archive project</p>
+                  <h2 className="truncate text-base font-semibold text-[#202522]">{archiveProject === UNASSIGNED_PROJECT ? "Unassigned" : archiveProject}</h2>
+                </div>
+              </div>
+              {archiveProject !== UNASSIGNED_PROJECT && (
+                <button type="button" onClick={() => openProjectDeleteDialog(archiveProject)} className="inline-flex h-10 shrink-0 items-center gap-2 rounded-xl px-3 text-sm font-semibold text-red-700 transition hover:bg-red-50 focus-visible:outline-2 focus-visible:outline-red-600"><ActionIcon name="delete" /><span className="hidden sm:inline">Delete project</span></button>
+              )}
+            </div>
+          )}
+
+          <div className={classNames("mb-3 grid grid-cols-[minmax(0,1fr)_auto] gap-2", view === "archived" ? "sm:grid-cols-[minmax(220px,1fr)_auto_auto]" : "sm:grid-cols-[minmax(220px,1fr)_auto_auto_auto]")}>
             <label className="flex h-10 items-center gap-2 rounded-xl border border-black/[0.08] bg-white px-3 shadow-sm focus-within:border-[#216e4e]/50 focus-within:ring-3 focus-within:ring-[#216e4e]/10">
               <ActionIcon name="search" className="h-4 w-4 shrink-0 text-[#7c847f]" />
               <input
@@ -887,11 +1154,10 @@ export default function Home() {
               <span>Filters</span>
               {mobileFilterCount > 0 && <span className="grid h-5 min-w-5 place-items-center rounded-full bg-[#216e4e] px-1 text-[10px] text-white">{mobileFilterCount}</span>}
             </button>
-            <select value={project} onChange={(event) => setProject(event.target.value)} aria-label="Filter by project" className="hidden h-10 rounded-xl border border-black/[0.08] bg-white px-3 text-sm text-[#4f5752] shadow-sm outline-none focus:border-[#216e4e]/50 sm:block">
+            {view !== "archived" && <select value={project} onChange={(event) => setProject(event.target.value)} aria-label="Filter by project" className="hidden h-10 rounded-xl border border-black/[0.08] bg-white px-3 text-sm text-[#4f5752] shadow-sm outline-none focus:border-[#216e4e]/50 sm:block">
               <option value="">All projects</option>
               {projects.map((name) => <option key={name}>{name}</option>)}
-              {view === "archived" && <option value={UNASSIGNED_PROJECT}>Unassigned</option>}
-            </select>
+            </select>}
             <select value={priority} onChange={(event) => setPriority(event.target.value)} aria-label="Filter by priority" className="hidden h-10 rounded-xl border border-black/[0.08] bg-white px-3 text-sm text-[#4f5752] shadow-sm outline-none focus:border-[#216e4e]/50 sm:block">
               <option value="">All priorities</option>
               <option value="1">Urgent</option>
@@ -923,14 +1189,13 @@ export default function Home() {
                 </div>
 
                 <div className="space-y-4">
-                  <label className="block">
+                  {view !== "archived" && <label className="block">
                     <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-[#69716c]">Project</span>
                     <select value={project} onChange={(event) => setProject(event.target.value)} className="h-12 w-full rounded-xl border border-black/[0.1] bg-white px-3 text-sm text-[#303632] outline-none focus:border-[#216e4e]/50">
                       <option value="">All projects</option>
                       {projects.map((name) => <option key={name}>{name}</option>)}
-                      {view === "archived" && <option value={UNASSIGNED_PROJECT}>Unassigned</option>}
                     </select>
-                  </label>
+                  </label>}
                   <label className="block">
                     <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-[#69716c]">Priority</span>
                     <select value={priority} onChange={(event) => setPriority(event.target.value)} className="h-12 w-full rounded-xl border border-black/[0.1] bg-white px-3 text-sm text-[#303632] outline-none focus:border-[#216e4e]/50">
@@ -962,37 +1227,9 @@ export default function Home() {
             </div>
           )}
 
-          {view === "archived" && archivedProjectOptions.length > 0 && (
-            <nav aria-label="Filter archived notes by project" className="mb-3 flex max-w-full gap-2 overflow-x-auto pb-0.5">
-              <button
-                type="button"
-                onClick={() => setProject("")}
-                className={classNames(
-                  "min-w-max rounded-full border px-3 py-1.5 text-xs font-semibold transition",
-                  !project ? "border-[#216e4e]/25 bg-[#eaf3ed] text-[#195d41]" : "border-black/[0.08] bg-white text-[#69716c] hover:bg-[#f1f2f0]",
-                )}
-              >
-                All projects <span className="ml-1 opacity-65">{counts.archived}</span>
-              </button>
-              {archivedProjectOptions.map(([name, count]) => (
-                <button
-                  key={name}
-                  type="button"
-                  onClick={() => setProject(name)}
-                  className={classNames(
-                    "min-w-max rounded-full border px-3 py-1.5 text-xs font-semibold transition",
-                    project === name ? "border-[#216e4e]/25 bg-[#eaf3ed] text-[#195d41]" : "border-black/[0.08] bg-white text-[#69716c] hover:bg-[#f1f2f0]",
-                  )}
-                >
-                  {name === UNASSIGNED_PROJECT ? "Unassigned" : name} <span className="ml-1 opacity-65">{count}</span>
-                </button>
-              ))}
-            </nav>
-          )}
-
           <div className="mb-2 flex items-center justify-between px-1">
             <div className="flex items-center gap-3">
-              <h2 id="tasks-heading" className="text-sm font-semibold text-[#373d39]">{view === "archived" ? "Archived notes" : `${viewLabels[view]} tasks`}</h2>
+              <h2 id="tasks-heading" className="text-sm font-semibold text-[#373d39]">{view === "archived" ? `${archiveProject === UNASSIGNED_PROJECT ? "Unassigned" : archiveProject} notes` : `${viewLabels[view]} tasks`}</h2>
               {filtered.length > 0 && <button onClick={toggleVisible} className="inline-flex items-center gap-1.5 text-xs font-medium text-[#216e4e] hover:underline"><ActionIcon name={allVisibleSelected ? "cancel" : "select"} className="h-3.5 w-3.5" />{allVisibleSelected ? "Clear selection" : "Select visible"}</button>}
             </div>
             <div className="flex items-center gap-3 text-xs text-[#7c847f]">
@@ -1031,6 +1268,8 @@ export default function Home() {
               </div>
             )}
           </div>
+          </>
+          )}
         </section>
 
         <footer className="mt-5 flex flex-wrap items-center justify-between gap-2 px-1 text-xs text-[#858c87]">
@@ -1057,6 +1296,106 @@ export default function Home() {
           </div>
         </div>
       )}
+
+      {newProjectOpen && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center overflow-x-hidden sm:items-center sm:p-5" role="dialog" aria-modal="true" aria-labelledby="new-project-title">
+          <button type="button" aria-label="Close new project dialog" onClick={closeNewProjectDialog} className="absolute inset-0 bg-black/35 backdrop-blur-[2px]" />
+          <form onSubmit={createProject} className="relative w-full max-w-full overflow-x-hidden rounded-t-3xl bg-white px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-5 shadow-2xl sm:max-w-md sm:rounded-3xl sm:p-6">
+            <div className="flex min-w-0 items-start justify-between gap-4">
+              <div className="min-w-0">
+                <span className="mb-3 grid h-11 w-11 place-items-center rounded-xl bg-[#eaf3ed] text-[#216e4e]"><ActionIcon name="create-project" className="h-6 w-6" /></span>
+                <h3 id="new-project-title" className="text-lg font-semibold text-[#202522]">Create archive project</h3>
+                <p className="mt-1 text-sm leading-5 text-[#7c847f]">Make a folder for persistent notes and reference material.</p>
+              </div>
+              <button type="button" onClick={closeNewProjectDialog} disabled={creatingProject} className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#f1f2f0] text-[#4f5752] hover:bg-[#e8eae7] disabled:opacity-50" aria-label="Close new project dialog" title="Close"><ActionIcon name="close" /></button>
+            </div>
+            <label className="mt-5 block min-w-0">
+              <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-[#69716c]">Project name</span>
+              <input
+                autoFocus
+                value={newProjectName}
+                onChange={(event) => { setNewProjectName(event.target.value); setNewProjectError(""); }}
+                placeholder="e.g. Reference, Home, Work"
+                maxLength={120}
+                className="h-12 w-full min-w-0 max-w-full rounded-xl border border-black/[0.1] px-3 text-[16px] outline-none focus:border-[#216e4e]/50 focus:ring-3 focus:ring-[#216e4e]/10"
+              />
+            </label>
+            {newProjectError && <p role="alert" className="mt-3 text-sm font-medium text-red-700">{newProjectError}</p>}
+            <div className="mt-6 flex items-center justify-end gap-2">
+              <button type="button" onClick={closeNewProjectDialog} disabled={creatingProject} className="inline-flex h-11 items-center gap-2 rounded-xl px-4 text-sm font-semibold text-[#69716c] hover:bg-[#f3f4f2] disabled:opacity-50"><ActionIcon name="cancel" />Cancel</button>
+              <button type="submit" disabled={creatingProject || !newProjectName.trim()} className="inline-flex h-11 items-center gap-2 rounded-xl bg-[#216e4e] px-5 text-sm font-semibold text-white hover:bg-[#195d41] disabled:opacity-50"><ActionIcon name="create-project" />{creatingProject ? "Creating…" : "Create project"}</button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {projectDeleteDialog && (() => {
+        const noteCount = todos.filter((todo) => todo.status === "archived" && todo.project === projectDeleteDialog.name).length;
+        const alternatives = registeredProjects.filter((name) => name !== projectDeleteDialog.name);
+        return (
+          <div className="fixed inset-0 z-50 flex items-end justify-center overflow-x-hidden sm:items-center sm:p-5" role="dialog" aria-modal="true" aria-labelledby="delete-project-title">
+            <button type="button" aria-label="Close delete project dialog" onClick={closeProjectDeleteDialog} className="absolute inset-0 bg-black/35 backdrop-blur-[2px]" />
+            <form onSubmit={deleteProject} className="relative max-h-[92dvh] w-full max-w-full overflow-x-hidden overflow-y-auto rounded-t-3xl bg-white px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-5 shadow-2xl sm:max-w-md sm:rounded-3xl sm:p-6">
+              <div className="flex min-w-0 items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <span className="mb-3 grid h-11 w-11 place-items-center rounded-xl bg-red-50 text-red-700"><ActionIcon name="delete" className="h-5 w-5" /></span>
+                  <h3 id="delete-project-title" className="break-words text-lg font-semibold text-[#202522]">Delete {projectDeleteDialog.name}?</h3>
+                  <p className="mt-1 text-sm leading-5 text-[#7c847f]">{noteCount ? `This project contains ${noteCount} archived ${noteCount === 1 ? "note" : "notes"}. Choose what happens to them.` : "This project is empty and can be safely removed."}</p>
+                </div>
+                <button type="button" onClick={closeProjectDeleteDialog} disabled={deletingProject} className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#f1f2f0] text-[#4f5752] hover:bg-[#e8eae7] disabled:opacity-50" aria-label="Close delete project dialog" title="Close"><ActionIcon name="close" /></button>
+              </div>
+
+              {noteCount > 0 && (
+                <fieldset className="mt-5 space-y-2">
+                  <legend className="sr-only">Choose what happens to project notes</legend>
+                  <label className={classNames("block rounded-2xl border p-4 transition", projectDeleteDialog.mode === "reassign" ? "border-[#216e4e]/35 bg-[#f3f8f5]" : "border-black/[0.09]") }>
+                    <span className="flex items-start gap-3">
+                      <input
+                        type="radio"
+                        name="delete-project-mode"
+                        checked={projectDeleteDialog.mode === "reassign"}
+                        disabled={!alternatives.length}
+                        onChange={() => setProjectDeleteDialog((current) => current ? { ...current, mode: "reassign", targetProject: current.targetProject || alternatives[0] || "" } : current)}
+                        className="mt-0.5 h-4 w-4 accent-[#216e4e]"
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-sm font-semibold text-[#303632]">Move notes to another project</span>
+                        <span className="mt-0.5 block text-xs leading-5 text-[#7c847f]">Keep every note and reassign it before removing this folder.</span>
+                      </span>
+                    </span>
+                    {projectDeleteDialog.mode === "reassign" && alternatives.length > 0 && (
+                      <select
+                        autoFocus
+                        value={projectDeleteDialog.targetProject}
+                        onChange={(event) => { setProjectDeleteDialog((current) => current ? { ...current, targetProject: event.target.value } : current); setProjectDeleteError(""); }}
+                        className="mt-3 h-11 w-full rounded-xl border border-black/[0.1] bg-white px-3 text-sm text-[#303632] outline-none focus:border-[#216e4e]/50"
+                        aria-label="Destination project"
+                      >
+                        {alternatives.map((name) => <option key={name} value={name}>{name}</option>)}
+                      </select>
+                    )}
+                    {!alternatives.length && <span className="mt-2 block pl-7 text-xs text-[#8a918d]">Create another project first to use this option.</span>}
+                  </label>
+
+                  <label className={classNames("flex items-start gap-3 rounded-2xl border p-4 transition", projectDeleteDialog.mode === "delete" ? "border-red-300 bg-red-50" : "border-black/[0.09]")}>
+                    <input type="radio" name="delete-project-mode" checked={projectDeleteDialog.mode === "delete"} onChange={() => setProjectDeleteDialog((current) => current ? { ...current, mode: "delete" } : current)} className="mt-0.5 h-4 w-4 accent-red-700" />
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-sm font-semibold text-red-800">Delete the notes too</span>
+                      <span className="mt-0.5 block text-xs leading-5 text-red-700/75">Remove the folder and all {noteCount} archived {noteCount === 1 ? "note" : "notes"} inside it.</span>
+                    </span>
+                  </label>
+                </fieldset>
+              )}
+
+              {projectDeleteError && <p role="alert" className="mt-3 text-sm font-medium text-red-700">{projectDeleteError}</p>}
+              <div className="mt-6 flex items-center justify-end gap-2">
+                <button type="button" onClick={closeProjectDeleteDialog} disabled={deletingProject} className="inline-flex h-11 items-center gap-2 rounded-xl px-4 text-sm font-semibold text-[#69716c] hover:bg-[#f3f4f2] disabled:opacity-50"><ActionIcon name="cancel" />Cancel</button>
+                <button type="submit" disabled={deletingProject || (noteCount > 0 && projectDeleteDialog.mode === "reassign" && !projectDeleteDialog.targetProject)} className="inline-flex h-11 items-center gap-2 rounded-xl bg-red-700 px-5 text-sm font-semibold text-white hover:bg-red-800 disabled:opacity-50"><ActionIcon name="delete" />{deletingProject ? "Deleting…" : projectDeleteDialog.mode === "delete" && noteCount > 0 ? "Delete project & notes" : "Delete project"}</button>
+              </div>
+            </form>
+          </div>
+        );
+      })()}
 
       {projectDialog && (
         <div className="fixed inset-0 z-50 flex items-end justify-center overflow-x-hidden sm:items-center sm:p-5" role="dialog" aria-modal="true" aria-labelledby="project-dialog-title">
