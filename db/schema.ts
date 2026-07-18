@@ -39,3 +39,15 @@ export const appSettings = sqliteTable("app_settings", {
     .notNull()
     .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`),
 });
+
+export const todoActionHistory = sqliteTable(
+  "todo_action_history",
+  {
+    id: text("id").primaryKey(),
+    snapshot: text("snapshot").notNull(),
+    createdAt: text("created_at")
+      .notNull()
+      .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`),
+  },
+  (table) => [index("todo_action_history_created_at_idx").on(table.createdAt)],
+);

@@ -19,7 +19,10 @@ test("ships the complete todo product surface", async () => {
   assert.match(page, /Snoozed/);
   assert.match(page, /Archived/);
   assert.match(page, /Select visible/);
-  assert.match(page, /Swipe left: done \/ snooze/);
+  assert.match(page, /Swipe left:.*"open".*"done".*snooze/);
+  assert.match(page, />Filters</);
+  assert.match(page, /"Undoing…" : "Undo"/);
+  assert.match(page, /\/api\/todos\/undo/);
   assert.doesNotMatch(page, /Capture what needs doing\. Then move/);
   assert.match(hosting, /"d1": "DB"/);
   await access(new URL("public/og.png", root));

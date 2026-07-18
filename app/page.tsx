@@ -14,7 +14,7 @@ type TodoStatus = "open" | "completed" | "archived";
 type View = "open" | "today" | "snoozed" | "completed" | "archived" | "all";
 type Sort = "smart" | "priority" | "due" | "newest" | "oldest" | "az";
 type TodoAction = "complete" | "archive" | "snooze" | "unsnooze" | "delete";
-type Notice = { tone: "success" | "error"; text: string } | null;
+type Notice = { tone: "success" | "error"; text: string; undoToken?: string } | null;
 
 type Todo = {
   id: number;
@@ -134,9 +134,14 @@ function TaskRow({
   const offsetRef = useRef(0);
   const pending = todo.id < 0;
   const snoozed = isSnoozed(todo, now);
+  const primaryAction: { action: TodoAction; label: string } = snoozed
+    ? { action: "unsnooze", label: "Wake" }
+    : todo.status === "open"
+      ? { action: "complete", label: "Done" }
+      : { action: "unsnooze", label: "Open" };
   const swipeRatio = Math.abs(offset) / swipeWidth;
   const longSwipe = swipeRatio >= 0.5;
-  const revealAction = offset < 0 ? (longSwipe ? "Snooze" : "Done") : (longSwipe ? "Delete" : "Archive");
+  const revealAction = offset < 0 ? (longSwipe ? "Snooze" : primaryAction.label) : (longSwipe ? "Delete" : "Archive");
   const revealClass = offset < 0
     ? longSwipe ? "bg-amber-500" : "bg-[#216e4e]"
     : longSwipe ? "bg-red-600" : "bg-slate-500";
@@ -187,7 +192,7 @@ function TaskRow({
     offsetRef.current = 0;
     setOffset(0);
     if (ratio < 0.18 || direction === 0) return;
-    if (direction < 0) onAction(todo, ratio >= 0.5 ? "snooze" : "complete", "swipe");
+    if (direction < 0) onAction(todo, ratio >= 0.5 ? "snooze" : primaryAction.action, "swipe");
     else onAction(todo, ratio >= 0.5 ? "delete" : "archive", "swipe");
   }
 
@@ -198,11 +203,6 @@ function TaskRow({
     setOffset(0);
   }
 
-  const primaryAction: { action: TodoAction; label: string } = snoozed
-    ? { action: "unsnooze", label: "Wake" }
-    : todo.status === "open"
-      ? { action: "complete", label: "Done" }
-      : { action: "unsnooze", label: "Restore" };
   const hoverActions: Array<{ action: TodoAction; label: string }> = [
     primaryAction,
     ...(!snoozed && todo.status === "open" ? [{ action: "snooze" as const, label: "Snooze" }] : []),
@@ -283,7 +283,9 @@ export default function Home() {
   const [newTitle, setNewTitle] = useState("");
   const [adding, setAdding] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [undoing, setUndoing] = useState(false);
   const [notice, setNotice] = useState<Notice>(null);
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [now, setNow] = useState(() => Date.now());
   const captureRef = useRef<HTMLTextAreaElement>(null);
@@ -313,6 +315,12 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNotice(null), notice.undoToken ? 8_000 : 5_000);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
+
+  useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement;
       const typing = target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable;
@@ -327,11 +335,13 @@ export default function Home() {
       if (event.key === "Escape" && target === searchRef.current) {
         setQuery("");
         searchRef.current?.blur();
+      } else if (event.key === "Escape" && filtersOpen) {
+        setFiltersOpen(false);
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
+  }, [filtersOpen]);
 
   const projects = useMemo(
     () => [...new Set(todos.map((todo) => todo.project).filter((value): value is string => Boolean(value)))].sort(),
@@ -369,6 +379,7 @@ export default function Home() {
   const selectedIds = useMemo(() => [...selected], [selected]);
   const allVisibleSelected = filtered.length > 0 && filtered.every((todo) => selected.has(todo.id));
   const filtersActive = Boolean(query || project || priority || sort !== "smart");
+  const mobileFilterCount = Number(Boolean(project)) + Number(Boolean(priority)) + Number(sort !== "smart");
 
   function resizeCapture(textarea: HTMLTextAreaElement) {
     textarea.style.height = "auto";
@@ -446,7 +457,7 @@ export default function Home() {
     if (action !== "merge") setTodos((current) => applyOptimisticAction(current, ids, action));
     try {
       if (action === "merge") {
-        const result = await request<{ todo: Todo; ids: number[] }>("/api/todos/bulk", {
+        const result = await request<{ todo: Todo; ids: number[]; undoToken: string }>("/api/todos/bulk", {
           method: "POST",
           body: JSON.stringify({ ids, action }),
         });
@@ -455,10 +466,10 @@ export default function Home() {
           result.todo,
           ...current.map((todo) => sourceIds.has(todo.id) ? { ...todo, status: "archived" as const, snoozedUntil: null } : todo),
         ]);
-        setNotice({ tone: "success", text: `Merged ${result.ids.length} tasks. The originals are in Archived.` });
+        setNotice({ tone: "success", text: `Merged ${result.ids.length} tasks.`, undoToken: result.undoToken });
         console.info("[todo-ui] merged", { sourceIds: result.ids, mergedId: result.todo.id });
       } else {
-        const result = await request<{ todos: Todo[]; ids: number[]; snoozedUntil: string | null }>("/api/todos/bulk", {
+        const result = await request<{ todos: Todo[]; ids: number[]; snoozedUntil: string | null; undoToken: string }>("/api/todos/bulk", {
           method: "POST",
           body: JSON.stringify({ ids, action }),
         });
@@ -466,8 +477,9 @@ export default function Home() {
           const updates = new Map(result.todos.map((todo) => [todo.id, todo]));
           setTodos((current) => current.map((todo) => updates.get(todo.id) ?? todo));
         }
-        const label = action === "complete" ? "Done" : action === "archive" ? "Archived" : action === "snooze" ? "Snoozed until tomorrow" : action === "unsnooze" ? "Restored to Open" : "Deleted";
-        setNotice({ tone: "success", text: `${label}: ${ids.length} ${ids.length === 1 ? "task" : "tasks"}.` });
+        const openedCompleted = action === "unsnooze" && ids.every((id) => previous.find((todo) => todo.id === id)?.status === "completed");
+        const label = action === "complete" ? "Done" : action === "archive" ? "Archived" : action === "snooze" ? "Snoozed until tomorrow" : action === "unsnooze" ? openedCompleted ? "Opened" : "Restored to Open" : "Deleted";
+        setNotice({ tone: "success", text: `${label}: ${ids.length} ${ids.length === 1 ? "task" : "tasks"}.`, undoToken: result.undoToken });
         console.info("[todo-ui] action completed", { action, ids, snoozedUntil: result.snoozedUntil });
       }
       setSelected((current) => {
@@ -484,8 +496,28 @@ export default function Home() {
     }
   }
 
+  async function undoAction(undoToken: string) {
+    if (undoing) return;
+    setUndoing(true);
+    try {
+      const result = await request<{ todos: Todo[]; restored: number }>("/api/todos/undo", {
+        method: "POST",
+        body: JSON.stringify({ undoToken }),
+      });
+      setTodos(result.todos);
+      setSelected(new Set());
+      setNotice({ tone: "success", text: `Undone: ${result.restored} ${result.restored === 1 ? "task" : "tasks"} restored.` });
+      console.info("[todo-ui] action undone", { restored: result.restored });
+    } catch (error) {
+      setNotice({ tone: "error", text: error instanceof Error ? error.message : "That action could not be undone." });
+      console.error("[todo-ui] undo failed", error);
+    } finally {
+      setUndoing(false);
+    }
+  }
+
   function taskAction(todo: Todo, action: TodoAction, source: "hover" | "swipe") {
-    if (action === "delete" && source !== "swipe" && !window.confirm(`Delete “${todo.title}”? This cannot be undone.`)) return;
+    console.info("[todo-ui] task action requested", { id: todo.id, action, source });
     void performAction([todo.id], action);
   }
 
@@ -494,7 +526,6 @@ export default function Home() {
       setNotice({ tone: "error", text: "Select at least two tasks to merge." });
       return;
     }
-    if (action === "delete" && !window.confirm(`Delete ${selectedIds.length} selected tasks? This cannot be undone.`)) return;
     void performAction(selectedIds, action);
   }
 
@@ -557,13 +588,6 @@ export default function Home() {
           </div>
         </form>
 
-        {notice && (
-          <div role={notice.tone === "error" ? "alert" : "status"} className={classNames("mb-4 flex items-center justify-between rounded-xl border px-4 py-3 text-sm", notice.tone === "error" ? "border-red-200 bg-red-50 text-red-700" : "border-emerald-200 bg-emerald-50 text-emerald-800")}>
-            <span>{notice.text}</span>
-            <button onClick={() => setNotice(null)} className="rounded px-2 py-1 font-medium hover:bg-black/[0.04]">Dismiss</button>
-          </div>
-        )}
-
         <section aria-labelledby="tasks-heading">
           <div className="mb-3 flex gap-1 overflow-x-auto rounded-xl border border-black/[0.06] bg-white p-1 shadow-sm">
             {(Object.keys(viewLabels) as View[]).map((item) => (
@@ -581,7 +605,7 @@ export default function Home() {
             ))}
           </div>
 
-          <div className="mb-3 grid gap-2 sm:grid-cols-[minmax(220px,1fr)_auto_auto_auto]">
+          <div className="mb-3 grid grid-cols-[minmax(0,1fr)_auto] gap-2 sm:grid-cols-[minmax(220px,1fr)_auto_auto_auto]">
             <label className="flex h-10 items-center gap-2 rounded-xl border border-black/[0.08] bg-white px-3 shadow-sm focus-within:border-[#216e4e]/50 focus-within:ring-3 focus-within:ring-[#216e4e]/10">
               <span className="text-[#7c847f]" aria-hidden="true">⌕</span>
               <input
@@ -594,18 +618,31 @@ export default function Home() {
               />
               <kbd className="hidden rounded border border-black/10 bg-[#f6f7f5] px-1.5 py-0.5 text-[10px] text-[#7c847f] sm:block">/</kbd>
             </label>
-            <select value={project} onChange={(event) => setProject(event.target.value)} aria-label="Filter by project" className="h-10 rounded-xl border border-black/[0.08] bg-white px-3 text-sm text-[#4f5752] shadow-sm outline-none focus:border-[#216e4e]/50">
+            <button
+              type="button"
+              onClick={() => setFiltersOpen(true)}
+              className={classNames(
+                "flex h-10 items-center gap-2 rounded-xl border bg-white px-3 text-sm font-medium shadow-sm transition focus-visible:outline-2 focus-visible:outline-[#216e4e] sm:hidden",
+                mobileFilterCount ? "border-[#216e4e]/30 text-[#195d41]" : "border-black/[0.08] text-[#4f5752]",
+              )}
+              aria-label={`Filters${mobileFilterCount ? `, ${mobileFilterCount} active` : ""}`}
+            >
+              <span aria-hidden="true">≡</span>
+              <span>Filters</span>
+              {mobileFilterCount > 0 && <span className="grid h-5 min-w-5 place-items-center rounded-full bg-[#216e4e] px-1 text-[10px] text-white">{mobileFilterCount}</span>}
+            </button>
+            <select value={project} onChange={(event) => setProject(event.target.value)} aria-label="Filter by project" className="hidden h-10 rounded-xl border border-black/[0.08] bg-white px-3 text-sm text-[#4f5752] shadow-sm outline-none focus:border-[#216e4e]/50 sm:block">
               <option value="">All projects</option>
               {projects.map((name) => <option key={name}>{name}</option>)}
             </select>
-            <select value={priority} onChange={(event) => setPriority(event.target.value)} aria-label="Filter by priority" className="h-10 rounded-xl border border-black/[0.08] bg-white px-3 text-sm text-[#4f5752] shadow-sm outline-none focus:border-[#216e4e]/50">
+            <select value={priority} onChange={(event) => setPriority(event.target.value)} aria-label="Filter by priority" className="hidden h-10 rounded-xl border border-black/[0.08] bg-white px-3 text-sm text-[#4f5752] shadow-sm outline-none focus:border-[#216e4e]/50 sm:block">
               <option value="">All priorities</option>
               <option value="1">Urgent</option>
               <option value="2">High</option>
               <option value="3">Normal</option>
               <option value="4">Low</option>
             </select>
-            <select value={sort} onChange={(event) => setSort(event.target.value as Sort)} aria-label="Sort tasks" className="h-10 rounded-xl border border-black/[0.08] bg-white px-3 text-sm text-[#4f5752] shadow-sm outline-none focus:border-[#216e4e]/50">
+            <select value={sort} onChange={(event) => setSort(event.target.value as Sort)} aria-label="Sort tasks" className="hidden h-10 rounded-xl border border-black/[0.08] bg-white px-3 text-sm text-[#4f5752] shadow-sm outline-none focus:border-[#216e4e]/50 sm:block">
               <option value="smart">Smart sort</option>
               <option value="priority">Priority</option>
               <option value="due">Due date</option>
@@ -615,12 +652,64 @@ export default function Home() {
             </select>
           </div>
 
+          {filtersOpen && (
+            <div className="fixed inset-0 z-50 sm:hidden" role="dialog" aria-modal="true" aria-labelledby="mobile-filters-title">
+              <button type="button" aria-label="Close filters" onClick={() => setFiltersOpen(false)} className="absolute inset-0 bg-black/30 backdrop-blur-[2px]" />
+              <div className="absolute inset-x-0 bottom-0 rounded-t-3xl bg-white px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-4 shadow-2xl">
+                <div className="mx-auto mb-4 h-1 w-10 rounded-full bg-black/15" aria-hidden="true" />
+                <div className="mb-5 flex items-center justify-between">
+                  <div>
+                    <h3 id="mobile-filters-title" className="text-lg font-semibold text-[#202522]">Filters & sorting</h3>
+                    <p className="mt-0.5 text-xs text-[#7c847f]">Narrow the list without losing workspace.</p>
+                  </div>
+                  <button type="button" onClick={() => setFiltersOpen(false)} className="grid h-9 w-9 place-items-center rounded-full bg-[#f1f2f0] text-lg text-[#4f5752]" aria-label="Close filters">×</button>
+                </div>
+
+                <div className="space-y-4">
+                  <label className="block">
+                    <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-[#69716c]">Project</span>
+                    <select value={project} onChange={(event) => setProject(event.target.value)} className="h-12 w-full rounded-xl border border-black/[0.1] bg-white px-3 text-sm text-[#303632] outline-none focus:border-[#216e4e]/50">
+                      <option value="">All projects</option>
+                      {projects.map((name) => <option key={name}>{name}</option>)}
+                    </select>
+                  </label>
+                  <label className="block">
+                    <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-[#69716c]">Priority</span>
+                    <select value={priority} onChange={(event) => setPriority(event.target.value)} className="h-12 w-full rounded-xl border border-black/[0.1] bg-white px-3 text-sm text-[#303632] outline-none focus:border-[#216e4e]/50">
+                      <option value="">All priorities</option>
+                      <option value="1">Urgent</option>
+                      <option value="2">High</option>
+                      <option value="3">Normal</option>
+                      <option value="4">Low</option>
+                    </select>
+                  </label>
+                  <label className="block">
+                    <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-[#69716c]">Sort</span>
+                    <select value={sort} onChange={(event) => setSort(event.target.value as Sort)} className="h-12 w-full rounded-xl border border-black/[0.1] bg-white px-3 text-sm text-[#303632] outline-none focus:border-[#216e4e]/50">
+                      <option value="smart">Smart sort</option>
+                      <option value="priority">Priority</option>
+                      <option value="due">Due date</option>
+                      <option value="newest">Newest</option>
+                      <option value="oldest">Oldest</option>
+                      <option value="az">A–Z</option>
+                    </select>
+                  </label>
+                </div>
+
+                <div className="mt-6 grid grid-cols-2 gap-2">
+                  <button type="button" onClick={() => { setProject(""); setPriority(""); setSort("smart"); }} className="h-11 rounded-xl border border-black/[0.08] text-sm font-semibold text-[#4f5752]">Reset</button>
+                  <button type="button" onClick={() => setFiltersOpen(false)} className="h-11 rounded-xl bg-[#216e4e] text-sm font-semibold text-white">Show {filtered.length} {filtered.length === 1 ? "task" : "tasks"}</button>
+                </div>
+              </div>
+            </div>
+          )}
+
           {selectedIds.length > 0 && (
             <div className="sticky top-[62px] z-20 mb-3 flex items-center gap-2 overflow-x-auto rounded-xl border border-[#216e4e]/20 bg-[#eaf3ed]/95 p-2 shadow-lg shadow-[#173d2a]/10 backdrop-blur">
               <span className="min-w-max px-2 text-sm font-semibold text-[#195d41]">{selectedIds.length} selected</span>
               <button onClick={() => bulkAction("complete")} disabled={syncing} className="min-w-max rounded-lg bg-white px-3 py-2 text-xs font-semibold text-[#216e4e] shadow-sm hover:bg-[#f8fbf9] disabled:opacity-50">Done</button>
               <button onClick={() => bulkAction("snooze")} disabled={syncing} className="min-w-max rounded-lg bg-white px-3 py-2 text-xs font-semibold text-amber-700 shadow-sm hover:bg-amber-50 disabled:opacity-50">Snooze</button>
-              <button onClick={() => bulkAction("unsnooze")} disabled={syncing} className="min-w-max rounded-lg bg-white px-3 py-2 text-xs font-semibold text-[#4f5752] shadow-sm hover:bg-[#f8f9f8] disabled:opacity-50">Restore</button>
+              <button onClick={() => bulkAction("unsnooze")} disabled={syncing} className="min-w-max rounded-lg bg-white px-3 py-2 text-xs font-semibold text-[#4f5752] shadow-sm hover:bg-[#f8f9f8] disabled:opacity-50">{view === "completed" ? "Open" : "Restore"}</button>
               <button onClick={() => bulkAction("archive")} disabled={syncing} className="min-w-max rounded-lg bg-white px-3 py-2 text-xs font-semibold text-slate-600 shadow-sm hover:bg-slate-50 disabled:opacity-50">Archive</button>
               <button onClick={() => bulkAction("merge")} disabled={syncing || selectedIds.length < 2} className="min-w-max rounded-lg bg-white px-3 py-2 text-xs font-semibold text-violet-700 shadow-sm hover:bg-violet-50 disabled:opacity-40">Merge</button>
               <button onClick={() => bulkAction("delete")} disabled={syncing} className="min-w-max rounded-lg bg-white px-3 py-2 text-xs font-semibold text-red-700 shadow-sm hover:bg-red-50 disabled:opacity-50">Delete</button>
@@ -639,7 +728,7 @@ export default function Home() {
             </div>
           </div>
 
-          <p className="mb-2 px-1 text-[11px] text-[#8a918d] md:hidden">Swipe left: done / snooze · Swipe right: archive / delete</p>
+          <p className="mb-2 px-1 text-[11px] text-[#8a918d] md:hidden">Swipe left: {view === "completed" ? "open" : "done"} / snooze · Swipe right: archive / delete</p>
 
           <div className="overflow-hidden rounded-2xl border border-black/[0.07] bg-white shadow-[0_8px_30px_rgba(30,45,36,0.05)]">
             {loading ? (
@@ -674,6 +763,31 @@ export default function Home() {
           <span className="hidden sm:inline"><kbd className="rounded border border-black/10 bg-white px-1.5 py-0.5">N</kbd> new task &nbsp; <kbd className="rounded border border-black/10 bg-white px-1.5 py-0.5">/</kbd> search</span>
         </footer>
       </div>
+
+      {notice && (
+        <div className="pointer-events-none fixed inset-x-0 z-[60] mx-auto w-[calc(100%-2rem)] max-w-md" style={{ bottom: "max(1rem, env(safe-area-inset-bottom))" }}>
+          <div
+            role={notice.tone === "error" ? "alert" : "status"}
+            className={classNames(
+              "pointer-events-auto flex min-h-14 items-center gap-3 rounded-2xl px-4 py-3 text-sm text-white shadow-[0_16px_50px_rgba(0,0,0,0.24)]",
+              notice.tone === "error" ? "bg-red-700" : "bg-[#202522]",
+            )}
+          >
+            <span className="min-w-0 flex-1 font-medium">{notice.text}</span>
+            {notice.undoToken && (
+              <button
+                type="button"
+                onClick={() => { setNotice(null); void undoAction(notice.undoToken as string); }}
+                disabled={undoing}
+                className="rounded-lg px-2 py-1.5 font-semibold text-[#8ee0b5] transition hover:bg-white/10 focus-visible:outline-2 focus-visible:outline-white disabled:opacity-50"
+              >
+                {undoing ? "Undoing…" : "Undo"}
+              </button>
+            )}
+            <button type="button" onClick={() => setNotice(null)} aria-label="Dismiss notification" className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-lg text-white/65 hover:bg-white/10 hover:text-white">×</button>
+          </div>
+        </div>
+      )}
     </main>
   );
 }
