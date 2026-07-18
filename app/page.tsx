@@ -39,6 +39,16 @@ type TodoDraft = Pick<Todo, "title" | "notes" | "priority"> & {
   context: string;
 };
 
+type ProjectDialogState = {
+  ids: number[];
+  mode: "archive" | "move";
+  selection: string;
+  newProject: string;
+};
+
+const CREATE_PROJECT = "__create_project__";
+const UNASSIGNED_PROJECT = "__unassigned_project__";
+
 const viewLabels: Record<View, string> = {
   open: "Open",
   today: "Today",
@@ -130,6 +140,7 @@ function TaskRow({
   now,
   onSelect,
   onAction,
+  onProject,
   onOpen,
 }: {
   todo: Todo;
@@ -137,6 +148,7 @@ function TaskRow({
   now: number;
   onSelect: (todo: Todo) => void;
   onAction: (todo: Todo, action: TodoAction, source: "hover" | "swipe") => void;
+  onProject: (todo: Todo, source: "hover" | "swipe") => void;
   onOpen: (todo: Todo) => void;
 }) {
   const [offset, setOffset] = useState(0);
@@ -154,7 +166,9 @@ function TaskRow({
       : { action: "unsnooze", label: "Open" };
   const swipeRatio = Math.abs(offset) / swipeWidth;
   const longSwipe = swipeRatio >= 0.5;
-  const revealAction = offset < 0 ? (longSwipe ? "Snooze" : primaryAction.label) : (longSwipe ? "Delete" : "Archive");
+  const revealAction = offset < 0
+    ? (longSwipe ? "Snooze" : primaryAction.label)
+    : (longSwipe ? "Delete" : todo.status === "archived" ? "Move" : "Archive");
   const revealClass = offset < 0
     ? longSwipe ? "bg-amber-500" : "bg-[#216e4e]"
     : longSwipe ? "bg-red-600" : "bg-slate-500";
@@ -208,7 +222,9 @@ function TaskRow({
     setOffset(0);
     if (ratio < 0.18 || direction === 0) return;
     if (direction < 0) onAction(todo, ratio >= 0.5 ? "snooze" : primaryAction.action, "swipe");
-    else onAction(todo, ratio >= 0.5 ? "delete" : "archive", "swipe");
+    else if (ratio >= 0.5) onAction(todo, "delete", "swipe");
+    else if (todo.status === "archived") onProject(todo, "swipe");
+    else onAction(todo, "archive", "swipe");
   }
 
   function cancelSwipe() {
@@ -218,10 +234,12 @@ function TaskRow({
     setOffset(0);
   }
 
-  const hoverActions: Array<{ action: TodoAction; label: string }> = [
+  const hoverActions: Array<{ action: TodoAction | "move"; label: string }> = [
     primaryAction,
     ...(!snoozed && todo.status === "open" ? [{ action: "snooze" as const, label: "Snooze" }] : []),
-    ...(todo.status !== "archived" ? [{ action: "archive" as const, label: "Archive" }] : []),
+    ...(todo.status === "archived"
+      ? [{ action: "move" as const, label: "Move" }]
+      : [{ action: "archive" as const, label: "Archive" }]),
     { action: "delete", label: "Delete" },
   ];
 
@@ -284,7 +302,7 @@ function TaskRow({
                 key={action}
                 type="button"
                 data-row-action
-                onClick={() => onAction(todo, action, "hover")}
+                onClick={() => action === "move" ? onProject(todo, "hover") : onAction(todo, action, "hover")}
                 aria-label={`${label}: ${todo.title}`}
                 className={classNames(
                   "rounded-lg px-2 py-1.5 text-xs font-medium text-[#69716c] transition hover:bg-[#eef0ed] hover:text-[#252a27] focus-visible:outline-2 focus-visible:outline-[#216e4e]",
@@ -318,10 +336,14 @@ export default function Home() {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editDraft, setEditDraft] = useState<TodoDraft | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
+  const [projectDialog, setProjectDialog] = useState<ProjectDialogState | null>(null);
+  const [projectDialogError, setProjectDialogError] = useState("");
+  const [savingProject, setSavingProject] = useState(false);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [now, setNow] = useState(() => Date.now());
   const captureRef = useRef<HTMLTextAreaElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
+  const overlayOpen = editingId !== null || projectDialog !== null || filtersOpen;
 
   useEffect(() => {
     let active = true;
@@ -364,7 +386,10 @@ export default function Home() {
         event.preventDefault();
         captureRef.current?.focus();
       }
-      if (event.key === "Escape" && editingId !== null) {
+      if (event.key === "Escape" && projectDialog !== null) {
+        setProjectDialog(null);
+        setProjectDialogError("");
+      } else if (event.key === "Escape" && editingId !== null) {
         setEditingId(null);
         setEditDraft(null);
       } else if (event.key === "Escape" && target === searchRef.current) {
@@ -376,10 +401,10 @@ export default function Home() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [editingId, filtersOpen]);
+  }, [editingId, filtersOpen, projectDialog]);
 
   useEffect(() => {
-    if (editingId === null) return;
+    if (!overlayOpen) return;
     const body = document.body;
     const previousOverflow = body.style.overflow;
     const previousPaddingRight = body.style.paddingRight;
@@ -390,12 +415,25 @@ export default function Home() {
       body.style.overflow = previousOverflow;
       body.style.paddingRight = previousPaddingRight;
     };
-  }, [editingId]);
+  }, [overlayOpen]);
 
   const projects = useMemo(
     () => [...new Set(todos.map((todo) => todo.project).filter((value): value is string => Boolean(value)))].sort(),
     [todos],
   );
+
+  const archivedProjectOptions = useMemo(() => {
+    const projectCounts = new Map<string, number>();
+    todos.filter((todo) => todo.status === "archived").forEach((todo) => {
+      const key = todo.project || UNASSIGNED_PROJECT;
+      projectCounts.set(key, (projectCounts.get(key) ?? 0) + 1);
+    });
+    return [...projectCounts.entries()].sort(([a], [b]) => {
+      if (a === UNASSIGNED_PROJECT) return 1;
+      if (b === UNASSIGNED_PROJECT) return -1;
+      return a.localeCompare(b);
+    });
+  }, [todos]);
 
   const counts = useMemo(() => ({
     open: todos.filter((todo) => matchesView(todo, "open", now)).length,
@@ -412,7 +450,7 @@ export default function Home() {
       const searchable = [todo.title, todo.notes, todo.project, todo.context].filter(Boolean).join(" ").toLowerCase();
       return matchesView(todo, view, now)
         && (!needle || searchable.includes(needle))
-        && (!project || todo.project === project)
+        && (!project || (project === UNASSIGNED_PROJECT ? !todo.project : todo.project === project))
         && (!priority || todo.priority === Number(priority));
     });
     return [...rows].sort((a, b) => {
@@ -515,7 +553,7 @@ export default function Home() {
         const sourceIds = new Set(result.ids);
         setTodos((current) => [
           result.todo,
-          ...current.map((todo) => sourceIds.has(todo.id) ? { ...todo, status: "archived" as const, snoozedUntil: null } : todo),
+          ...current.map((todo) => sourceIds.has(todo.id) ? { ...todo, status: "archived" as const, project: todo.project || "Misc.", snoozedUntil: null } : todo),
         ]);
         setNotice({ tone: "success", text: `Merged ${result.ids.length} tasks.`, undoToken: result.undoToken });
         console.info("[todo-ui] merged", { sourceIds: result.ids, mergedId: result.todo.id });
@@ -564,6 +602,76 @@ export default function Home() {
       console.error("[todo-ui] undo failed", error);
     } finally {
       setUndoing(false);
+    }
+  }
+
+  function openProjectAssignment(ids: number[], mode: "archive" | "move", source: "bulk" | "hover" | "swipe" | "details") {
+    const taskProjects = todos
+      .filter((todo) => ids.includes(todo.id))
+      .map((todo) => todo.project || UNASSIGNED_PROJECT);
+    const sharedProject = new Set(taskProjects).size === 1 ? taskProjects[0] : "";
+    const selection = mode === "archive" && sharedProject === UNASSIGNED_PROJECT ? "" : sharedProject;
+    setProjectDialog({ ids, mode, selection, newProject: "" });
+    setProjectDialogError("");
+    console.info("[todo-ui] project assignment opened", { ids, mode, source, sharedProject: sharedProject || null });
+  }
+
+  function closeProjectAssignment() {
+    if (savingProject) return;
+    setProjectDialog(null);
+    setProjectDialogError("");
+  }
+
+  async function saveProjectAssignment(event: FormEvent) {
+    event.preventDefault();
+    if (!projectDialog || savingProject) return;
+    const projectName = projectDialog.selection === CREATE_PROJECT
+      ? projectDialog.newProject.trim()
+      : projectDialog.selection === UNASSIGNED_PROJECT
+        ? null
+        : projectDialog.selection.trim() || null;
+    if (projectDialog.mode === "archive" && !projectName) {
+      setProjectDialogError("Choose an existing project or create a new one.");
+      return;
+    }
+    if (projectName && projectName.length > 120) {
+      setProjectDialogError("Project names are limited to 120 characters.");
+      return;
+    }
+
+    const { ids, mode } = projectDialog;
+    setSavingProject(true);
+    setProjectDialogError("");
+    setNotice(null);
+    try {
+      const action = mode === "archive" ? "archive" : "reproject";
+      const result = await request<{ todos: Todo[]; ids: number[]; undoToken: string }>("/api/todos/bulk", {
+        method: "POST",
+        body: JSON.stringify({ ids, action, project: projectName }),
+      });
+      const updates = new Map(result.todos.map((todo) => [todo.id, todo]));
+      setTodos((current) => current.map((todo) => updates.get(todo.id) ?? todo));
+      setSelected((current) => {
+        const next = new Set(current);
+        ids.forEach((id) => next.delete(id));
+        return next;
+      });
+      setProjectDialog(null);
+      const location = projectName || "Unassigned";
+      setNotice({
+        tone: "success",
+        text: mode === "archive"
+          ? `Archived into ${location}: ${ids.length} ${ids.length === 1 ? "note" : "notes"}.`
+          : `Moved to ${location}: ${ids.length} ${ids.length === 1 ? "note" : "notes"}.`,
+        undoToken: result.undoToken,
+      });
+      console.info("[todo-ui] project assignment saved", { ids, mode, project: projectName });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "The project could not be assigned.";
+      setProjectDialogError(message);
+      console.error("[todo-ui] project assignment failed", { ids, mode, project: projectName, error });
+    } finally {
+      setSavingProject(false);
     }
   }
 
@@ -626,7 +734,15 @@ export default function Home() {
 
   function taskAction(todo: Todo, action: TodoAction, source: "hover" | "swipe" | "details") {
     console.info("[todo-ui] task action requested", { id: todo.id, action, source });
+    if (action === "archive") {
+      openProjectAssignment([todo.id], "archive", source);
+      return;
+    }
     void performAction([todo.id], action);
+  }
+
+  function moveArchivedTask(todo: Todo, source: "hover" | "swipe") {
+    openProjectAssignment([todo.id], "move", source);
   }
 
   function detailAction(action: TodoAction) {
@@ -639,6 +755,10 @@ export default function Home() {
   function bulkAction(action: TodoAction | "merge") {
     if (action === "merge" && selectedIds.length < 2) {
       setNotice({ tone: "error", text: "Select at least two tasks to merge." });
+      return;
+    }
+    if (action === "archive") {
+      openProjectAssignment(selectedIds, view === "archived" ? "move" : "archive", "bulk");
       return;
     }
     void performAction(selectedIds, action);
@@ -664,6 +784,7 @@ export default function Home() {
 
   function chooseView(next: View) {
     setView(next);
+    if (next !== "archived" && project === UNASSIGNED_PROJECT) setProject("");
     setSelected(new Set());
   }
 
@@ -749,6 +870,7 @@ export default function Home() {
             <select value={project} onChange={(event) => setProject(event.target.value)} aria-label="Filter by project" className="hidden h-10 rounded-xl border border-black/[0.08] bg-white px-3 text-sm text-[#4f5752] shadow-sm outline-none focus:border-[#216e4e]/50 sm:block">
               <option value="">All projects</option>
               {projects.map((name) => <option key={name}>{name}</option>)}
+              {view === "archived" && <option value={UNASSIGNED_PROJECT}>Unassigned</option>}
             </select>
             <select value={priority} onChange={(event) => setPriority(event.target.value)} aria-label="Filter by priority" className="hidden h-10 rounded-xl border border-black/[0.08] bg-white px-3 text-sm text-[#4f5752] shadow-sm outline-none focus:border-[#216e4e]/50 sm:block">
               <option value="">All priorities</option>
@@ -786,6 +908,7 @@ export default function Home() {
                     <select value={project} onChange={(event) => setProject(event.target.value)} className="h-12 w-full rounded-xl border border-black/[0.1] bg-white px-3 text-sm text-[#303632] outline-none focus:border-[#216e4e]/50">
                       <option value="">All projects</option>
                       {projects.map((name) => <option key={name}>{name}</option>)}
+                      {view === "archived" && <option value={UNASSIGNED_PROJECT}>Unassigned</option>}
                     </select>
                   </label>
                   <label className="block">
@@ -819,9 +942,37 @@ export default function Home() {
             </div>
           )}
 
+          {view === "archived" && archivedProjectOptions.length > 0 && (
+            <nav aria-label="Filter archived notes by project" className="mb-3 flex max-w-full gap-2 overflow-x-auto pb-0.5">
+              <button
+                type="button"
+                onClick={() => setProject("")}
+                className={classNames(
+                  "min-w-max rounded-full border px-3 py-1.5 text-xs font-semibold transition",
+                  !project ? "border-[#216e4e]/25 bg-[#eaf3ed] text-[#195d41]" : "border-black/[0.08] bg-white text-[#69716c] hover:bg-[#f1f2f0]",
+                )}
+              >
+                All projects <span className="ml-1 opacity-65">{counts.archived}</span>
+              </button>
+              {archivedProjectOptions.map(([name, count]) => (
+                <button
+                  key={name}
+                  type="button"
+                  onClick={() => setProject(name)}
+                  className={classNames(
+                    "min-w-max rounded-full border px-3 py-1.5 text-xs font-semibold transition",
+                    project === name ? "border-[#216e4e]/25 bg-[#eaf3ed] text-[#195d41]" : "border-black/[0.08] bg-white text-[#69716c] hover:bg-[#f1f2f0]",
+                  )}
+                >
+                  {name === UNASSIGNED_PROJECT ? "Unassigned" : name} <span className="ml-1 opacity-65">{count}</span>
+                </button>
+              ))}
+            </nav>
+          )}
+
           <div className="mb-2 flex items-center justify-between px-1">
             <div className="flex items-center gap-3">
-              <h2 id="tasks-heading" className="text-sm font-semibold text-[#373d39]">{viewLabels[view]} tasks</h2>
+              <h2 id="tasks-heading" className="text-sm font-semibold text-[#373d39]">{view === "archived" ? "Archived notes" : `${viewLabels[view]} tasks`}</h2>
               {filtered.length > 0 && <button onClick={toggleVisible} className="text-xs font-medium text-[#216e4e] hover:underline">{allVisibleSelected ? "Clear selection" : "Select visible"}</button>}
             </div>
             <div className="flex items-center gap-3 text-xs text-[#7c847f]">
@@ -830,7 +981,7 @@ export default function Home() {
             </div>
           </div>
 
-          <p className="mb-2 px-1 text-[11px] text-[#8a918d] md:hidden">Swipe left: {view === "completed" ? "open" : "done"} / snooze · Swipe right: archive / delete</p>
+          <p className="mb-2 px-1 text-[11px] text-[#8a918d] md:hidden">Swipe left: {view === "completed" || view === "archived" ? "open" : "done"} / snooze · Swipe right: {view === "archived" ? "move" : "archive"} / delete</p>
 
           <div className="overflow-hidden rounded-2xl border border-black/[0.07] bg-white shadow-[0_8px_30px_rgba(30,45,36,0.05)]">
             {loading ? (
@@ -847,6 +998,7 @@ export default function Home() {
                     now={now}
                     onSelect={toggleSelected}
                     onAction={taskAction}
+                    onProject={moveArchivedTask}
                     onOpen={openTaskDetails}
                   />
                 ))}
@@ -878,7 +1030,7 @@ export default function Home() {
             <button type="button" onClick={() => bulkAction("complete")} disabled={syncing} className="min-w-max rounded-lg bg-white px-3 py-2 text-xs font-semibold text-[#216e4e] shadow-sm hover:bg-[#f8fbf9] disabled:opacity-50">Done</button>
             <button type="button" onClick={() => bulkAction("snooze")} disabled={syncing} className="min-w-max rounded-lg bg-white px-3 py-2 text-xs font-semibold text-amber-700 shadow-sm hover:bg-amber-50 disabled:opacity-50">Snooze</button>
             <button type="button" onClick={() => bulkAction("unsnooze")} disabled={syncing} className="min-w-max rounded-lg bg-white px-3 py-2 text-xs font-semibold text-[#4f5752] shadow-sm hover:bg-[#f8f9f8] disabled:opacity-50">{view === "completed" ? "Open" : "Restore"}</button>
-            <button type="button" onClick={() => bulkAction("archive")} disabled={syncing} className="min-w-max rounded-lg bg-white px-3 py-2 text-xs font-semibold text-slate-600 shadow-sm hover:bg-slate-50 disabled:opacity-50">Archive</button>
+            <button type="button" onClick={() => bulkAction("archive")} disabled={syncing} className="min-w-max rounded-lg bg-white px-3 py-2 text-xs font-semibold text-slate-600 shadow-sm hover:bg-slate-50 disabled:opacity-50">{view === "archived" ? "Move" : "Archive"}</button>
             <button type="button" onClick={() => bulkAction("merge")} disabled={syncing || selectedIds.length < 2} className="min-w-max rounded-lg bg-white px-3 py-2 text-xs font-semibold text-violet-700 shadow-sm hover:bg-violet-50 disabled:opacity-40">Merge</button>
             <button type="button" onClick={() => bulkAction("delete")} disabled={syncing} className="min-w-max rounded-lg bg-white px-3 py-2 text-xs font-semibold text-red-700 shadow-sm hover:bg-red-50 disabled:opacity-50">Delete</button>
             <button type="button" onClick={() => setSelected(new Set())} className="ml-auto min-w-max rounded-lg px-3 py-2 text-xs font-semibold text-[#69716c] hover:bg-black/[0.04]">Cancel</button>
@@ -886,20 +1038,81 @@ export default function Home() {
         </div>
       )}
 
-      {editingTodo && editDraft && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center sm:p-5" role="dialog" aria-modal="true" aria-labelledby="task-details-title">
-          <button type="button" aria-label="Close task details" onClick={closeTaskDetails} className="absolute inset-0 bg-black/35 backdrop-blur-[2px]" />
-          <form onSubmit={saveTaskDetails} className="relative flex max-h-[92dvh] w-full flex-col overflow-hidden rounded-t-3xl bg-white shadow-2xl sm:max-w-2xl sm:rounded-3xl">
-            <div className="flex items-start justify-between border-b border-black/[0.07] px-5 py-4 sm:px-6">
-              <div>
-                <h3 id="task-details-title" className="text-lg font-semibold text-[#202522]">Task details</h3>
-                <p className="mt-0.5 text-xs text-[#7c847f]">Edit the full task without leaving your place.</p>
+      {projectDialog && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center overflow-x-hidden sm:items-center sm:p-5" role="dialog" aria-modal="true" aria-labelledby="project-dialog-title">
+          <button type="button" aria-label="Close project assignment" onClick={closeProjectAssignment} className="absolute inset-0 bg-black/35 backdrop-blur-[2px]" />
+          <form onSubmit={saveProjectAssignment} className="relative max-h-[92dvh] w-full max-w-full overflow-x-hidden overflow-y-auto rounded-t-3xl bg-white px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-5 shadow-2xl sm:max-w-md sm:rounded-3xl sm:p-6">
+            <div className="flex min-w-0 items-start justify-between gap-4">
+              <div className="min-w-0">
+                <h3 id="project-dialog-title" className="text-lg font-semibold text-[#202522]">
+                  {projectDialog.mode === "archive" ? "Archive into a project" : "Move archived notes"}
+                </h3>
+                <p className="mt-1 text-sm leading-5 text-[#7c847f]">
+                  {projectDialog.mode === "archive"
+                    ? `Choose where ${projectDialog.ids.length === 1 ? "this persistent note" : `these ${projectDialog.ids.length} persistent notes`} should live.`
+                    : `Reassign ${projectDialog.ids.length === 1 ? "this note" : `these ${projectDialog.ids.length} notes`} or leave ${projectDialog.ids.length === 1 ? "it" : "them"} unassigned.`}
+                </p>
               </div>
+              <button type="button" onClick={closeProjectAssignment} disabled={savingProject} className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#f1f2f0] text-lg text-[#4f5752] hover:bg-[#e8eae7] disabled:opacity-50" aria-label="Close project assignment">×</button>
+            </div>
+
+            <label className="mt-5 block min-w-0">
+              <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-[#69716c]">Project</span>
+              <select
+                autoFocus
+                value={projectDialog.selection}
+                onChange={(event) => {
+                  setProjectDialog((current) => current ? { ...current, selection: event.target.value } : current);
+                  setProjectDialogError("");
+                }}
+                className="h-12 w-full min-w-0 max-w-full rounded-xl border border-black/[0.1] bg-white px-3 text-sm text-[#303632] outline-none focus:border-[#216e4e]/50 focus:ring-3 focus:ring-[#216e4e]/10"
+              >
+                <option value="">Choose a project…</option>
+                {projects.map((name) => <option key={name} value={name}>{name}</option>)}
+                {projectDialog.mode === "move" && <option value={UNASSIGNED_PROJECT}>Unassigned</option>}
+                <option value={CREATE_PROJECT}>Create a new project…</option>
+              </select>
+            </label>
+
+            {projectDialog.selection === CREATE_PROJECT && (
+              <label className="mt-3 block min-w-0">
+                <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-[#69716c]">New project name</span>
+                <input
+                  value={projectDialog.newProject}
+                  onChange={(event) => {
+                    setProjectDialog((current) => current ? { ...current, newProject: event.target.value } : current);
+                    setProjectDialogError("");
+                  }}
+                  placeholder="e.g. Reference, Home, Work"
+                  maxLength={120}
+                  className="h-12 w-full min-w-0 max-w-full rounded-xl border border-black/[0.1] px-3 text-[16px] outline-none focus:border-[#216e4e]/50 focus:ring-3 focus:ring-[#216e4e]/10"
+                />
+              </label>
+            )}
+
+            {projectDialogError && <p role="alert" className="mt-3 text-sm font-medium text-red-700">{projectDialogError}</p>}
+
+            <div className="mt-6 flex items-center justify-end gap-2">
+              <button type="button" onClick={closeProjectAssignment} disabled={savingProject} className="h-11 rounded-xl px-4 text-sm font-semibold text-[#69716c] hover:bg-[#f3f4f2] disabled:opacity-50">Cancel</button>
+              <button type="submit" disabled={savingProject} className="h-11 rounded-xl bg-[#216e4e] px-5 text-sm font-semibold text-white hover:bg-[#195d41] disabled:opacity-50">
+                {savingProject ? "Saving…" : projectDialog.mode === "archive" ? "Archive into project" : "Move notes"}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {editingTodo && editDraft && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center overflow-x-hidden sm:items-center sm:p-5" role="dialog" aria-modal="true" aria-labelledby="task-details-title">
+          <button type="button" aria-label="Close task details" onClick={closeTaskDetails} className="absolute inset-0 bg-black/35 backdrop-blur-[2px]" />
+          <form onSubmit={saveTaskDetails} className="relative flex max-h-[92dvh] w-full max-w-full flex-col overflow-hidden overflow-x-hidden rounded-t-3xl bg-white shadow-2xl sm:max-w-2xl sm:rounded-3xl">
+            <div className="flex min-w-0 items-center justify-between border-b border-black/[0.07] px-5 py-4 sm:px-6">
+              <h3 id="task-details-title" className="min-w-0 text-lg font-semibold text-[#202522]">Task details</h3>
               <button type="button" onClick={closeTaskDetails} className="grid h-9 w-9 place-items-center rounded-full bg-[#f1f2f0] text-lg text-[#4f5752] hover:bg-[#e8eae7]" aria-label="Close task details">×</button>
             </div>
 
-            <div className="overflow-y-auto px-5 py-5 sm:px-6">
-              <label className="block">
+            <div className="min-h-0 min-w-0 overflow-x-hidden overflow-y-auto px-5 py-5 sm:px-6">
+              <label className="block min-w-0">
                 <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-[#69716c]">Task</span>
                 <textarea
                   autoFocus
@@ -907,11 +1120,11 @@ export default function Home() {
                   onChange={(event) => setEditDraft((current) => current ? { ...current, title: event.target.value } : current)}
                   rows={4}
                   maxLength={2000}
-                  className="min-h-28 w-full resize-y rounded-xl border border-black/[0.1] bg-white px-3 py-2.5 text-[16px] leading-6 text-[#202522] outline-none focus:border-[#216e4e]/50 focus:ring-3 focus:ring-[#216e4e]/10"
+                  className="min-h-28 w-full min-w-0 max-w-full resize-y rounded-xl border border-black/[0.1] bg-white px-3 py-2.5 text-[16px] leading-6 text-[#202522] outline-none focus:border-[#216e4e]/50 focus:ring-3 focus:ring-[#216e4e]/10"
                 />
               </label>
 
-              <label className="mt-4 block">
+              <label className="mt-4 block min-w-0">
                 <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-[#69716c]">Notes</span>
                 <textarea
                   value={editDraft.notes}
@@ -919,37 +1132,38 @@ export default function Home() {
                   rows={5}
                   placeholder="Add context, links, or next steps…"
                   maxLength={10000}
-                  className="min-h-28 w-full resize-y rounded-xl border border-black/[0.1] bg-white px-3 py-2.5 text-sm leading-6 text-[#303632] outline-none placeholder:text-[#a0a6a2] focus:border-[#216e4e]/50 focus:ring-3 focus:ring-[#216e4e]/10"
+                  className="min-h-28 w-full min-w-0 max-w-full resize-y rounded-xl border border-black/[0.1] bg-white px-3 py-2.5 text-sm leading-6 text-[#303632] outline-none placeholder:text-[#a0a6a2] focus:border-[#216e4e]/50 focus:ring-3 focus:ring-[#216e4e]/10"
                 />
               </label>
 
-              <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
-                <label className="block">
+              <div className="mt-4 grid min-w-0 grid-cols-1 gap-4 sm:grid-cols-2">
+                <label className="block min-w-0">
                   <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-[#69716c]">Project</span>
-                  <input value={editDraft.project} onChange={(event) => setEditDraft((current) => current ? { ...current, project: event.target.value } : current)} placeholder="No project" className="h-11 w-full rounded-xl border border-black/[0.1] px-3 text-sm outline-none focus:border-[#216e4e]/50 focus:ring-3 focus:ring-[#216e4e]/10" />
+                  <input list="task-project-options" value={editDraft.project} onChange={(event) => setEditDraft((current) => current ? { ...current, project: event.target.value } : current)} placeholder="Choose or create a project" maxLength={120} className="h-11 w-full min-w-0 max-w-full rounded-xl border border-black/[0.1] px-3 text-sm outline-none focus:border-[#216e4e]/50 focus:ring-3 focus:ring-[#216e4e]/10" />
+                  <datalist id="task-project-options">{projects.map((name) => <option key={name} value={name} />)}</datalist>
                 </label>
-                <label className="block">
+                <label className="block min-w-0">
                   <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-[#69716c]">Context</span>
-                  <input value={editDraft.context} onChange={(event) => setEditDraft((current) => current ? { ...current, context: event.target.value } : current)} placeholder="No context" className="h-11 w-full rounded-xl border border-black/[0.1] px-3 text-sm outline-none focus:border-[#216e4e]/50 focus:ring-3 focus:ring-[#216e4e]/10" />
+                  <input value={editDraft.context} onChange={(event) => setEditDraft((current) => current ? { ...current, context: event.target.value } : current)} placeholder="No context" className="h-11 w-full min-w-0 max-w-full rounded-xl border border-black/[0.1] px-3 text-sm outline-none focus:border-[#216e4e]/50 focus:ring-3 focus:ring-[#216e4e]/10" />
                 </label>
-                <label className="block">
+                <label className="block min-w-0">
                   <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-[#69716c]">Priority</span>
-                  <select value={editDraft.priority} onChange={(event) => setEditDraft((current) => current ? { ...current, priority: Number(event.target.value) } : current)} className="h-11 w-full rounded-xl border border-black/[0.1] bg-white px-3 text-sm outline-none focus:border-[#216e4e]/50 focus:ring-3 focus:ring-[#216e4e]/10">
+                  <select value={editDraft.priority} onChange={(event) => setEditDraft((current) => current ? { ...current, priority: Number(event.target.value) } : current)} className="h-11 w-full min-w-0 max-w-full rounded-xl border border-black/[0.1] bg-white px-3 text-sm outline-none focus:border-[#216e4e]/50 focus:ring-3 focus:ring-[#216e4e]/10">
                     <option value="1">Urgent</option>
                     <option value="2">High</option>
                     <option value="3">Normal</option>
                     <option value="4">Low</option>
                   </select>
                 </label>
-                <label className="block">
+                <label className="block min-w-0">
                   <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-[#69716c]">Due date</span>
-                  <input type="date" value={editDraft.dueDate} onChange={(event) => setEditDraft((current) => current ? { ...current, dueDate: event.target.value } : current)} className="h-11 w-full rounded-xl border border-black/[0.1] bg-white px-3 text-sm outline-none focus:border-[#216e4e]/50 focus:ring-3 focus:ring-[#216e4e]/10" />
+                  <input type="date" value={editDraft.dueDate} onChange={(event) => setEditDraft((current) => current ? { ...current, dueDate: event.target.value } : current)} className="h-11 w-full min-w-0 max-w-full rounded-xl border border-black/[0.1] bg-white px-3 text-sm outline-none focus:border-[#216e4e]/50 focus:ring-3 focus:ring-[#216e4e]/10" />
                 </label>
               </div>
 
               <div className="mt-5 border-t border-black/[0.07] pt-4">
                 <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-[#69716c]">Quick actions</p>
-                <div className="flex gap-2 overflow-x-auto pb-1">
+                <div className="flex min-w-0 flex-wrap gap-2">
                   {isSnoozed(editingTodo, now) ? (
                     <button type="button" onClick={() => detailAction("unsnooze")} disabled={syncing || savingEdit} className="min-w-max rounded-xl bg-[#eaf3ed] px-3 py-2.5 text-sm font-semibold text-[#195d41] disabled:opacity-50">Wake</button>
                   ) : editingTodo.status === "completed" ? (

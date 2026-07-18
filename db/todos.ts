@@ -2,7 +2,7 @@ import { env } from "cloudflare:workers";
 import { importedTodos } from "./imported-todos";
 
 export type TodoStatus = "open" | "completed" | "archived";
-export type BulkTodoAction = "complete" | "archive" | "snooze" | "unsnooze" | "delete";
+export type BulkTodoAction = "complete" | "archive" | "snooze" | "unsnooze" | "reproject" | "delete";
 
 type TodoRow = {
   id: number;
@@ -172,11 +172,25 @@ export async function ensureTodoDatabase() {
       await db.prepare("INSERT INTO app_settings (key, value) VALUES ('seed_version', '1')").run();
     }
 
+    const archiveProjectVersion = await db
+      .prepare("SELECT value FROM app_settings WHERE key = 'archived_project_backfill_v1'")
+      .first<{ value: string }>();
+    let archiveProjectBackfilled = 0;
+    if (!archiveProjectVersion) {
+      const results = await db.batch([
+        db.prepare("UPDATE todos SET project = 'Misc.', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE status = 'archived' AND (project IS NULL OR trim(project) = '')"),
+        db.prepare("INSERT INTO app_settings (key, value) VALUES ('archived_project_backfill_v1', '1')"),
+      ]);
+      archiveProjectBackfilled = Number(results[0].meta.changes ?? 0);
+      console.info("[todo-db] archived notes assigned to Misc.", { changed: archiveProjectBackfilled });
+    }
+
     console.info("[todo-db] ready", {
       inserted,
       total: existingTotal + inserted,
       imported: importedTodos.length,
       seedSkipped: Boolean(seedVersion) || existingTotal > 0,
+      archiveProjectBackfilled,
     });
   })().catch((error) => {
     initialization = null;
@@ -244,6 +258,10 @@ export async function updateTodo(id: number, update: TodoUpdate): Promise<{ todo
   const db = database();
   const before = await db.prepare("SELECT * FROM todos WHERE id = ?").bind(id).first<TodoRow>();
   if (!before) return null;
+  if (update.status === "archived") {
+    const archiveProject = update.project === undefined ? before.project : update.project;
+    if (!archiveProject?.trim()) throw new Error("Choose or create a project before archiving.");
+  }
   const undoToken = crypto.randomUUID();
 
   const values = entries.map(([, value]) => value);
@@ -370,7 +388,11 @@ export async function nextSnoozeUntil() {
   ).toISOString();
 }
 
-export async function bulkUpdateTodos(inputIds: number[], action: BulkTodoAction) {
+export async function bulkUpdateTodos(
+  inputIds: number[],
+  action: BulkTodoAction,
+  options: { project?: string | null } = {},
+) {
   await ensureTodoDatabase();
   const ids = normalizedIds(inputIds);
   const db = database();
@@ -380,13 +402,20 @@ export async function bulkUpdateTodos(inputIds: number[], action: BulkTodoAction
   const before = ids.map((id) => beforeById.get(id)).filter((row): row is TodoRow => Boolean(row));
   if (!before.length) throw new Error("The selected tasks no longer exist.");
   const undoToken = crypto.randomUUID();
+  const project = typeof options.project === "string" ? options.project.trim() || null : null;
+  if (project && project.length > 120) throw new Error("Project names are limited to 120 characters.");
   let sql: string;
-  let values: Array<string | number> = ids;
+  let values: Array<string | number | null> = ids;
 
   if (action === "complete") {
     sql = `UPDATE todos SET status = 'completed', completed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), snoozed_until = NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id IN (${inClause})`;
   } else if (action === "archive") {
-    sql = `UPDATE todos SET status = 'archived', snoozed_until = NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id IN (${inClause})`;
+    if (!project) throw new Error("Choose or create a project before archiving.");
+    sql = `UPDATE todos SET status = 'archived', project = ?, snoozed_until = NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id IN (${inClause})`;
+    values = [project, ...ids];
+  } else if (action === "reproject") {
+    sql = `UPDATE todos SET project = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id IN (${inClause})`;
+    values = [project, ...ids];
   } else if (action === "snooze") {
     const until = await nextSnoozeUntil();
     sql = `UPDATE todos SET status = 'open', completed_at = NULL, snoozed_until = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id IN (${inClause})`;
@@ -414,6 +443,7 @@ export async function bulkUpdateTodos(inputIds: number[], action: BulkTodoAction
     action,
     requested: ids.length,
     changed: result.meta.changes,
+    project: action === "archive" || action === "reproject" ? project : undefined,
     snoozedUntil: action === "snooze" ? todos[0]?.snoozedUntil : null,
     undoToken,
   });
@@ -467,7 +497,10 @@ export async function mergeTodos(inputIds: number[]) {
     ),
     db.prepare(`
       UPDATE todos
-      SET status = 'archived', snoozed_until = NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+      SET status = 'archived',
+          project = CASE WHEN project IS NULL OR trim(project) = '' THEN 'Misc.' ELSE project END,
+          snoozed_until = NULL,
+          updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
       WHERE id IN (${inClause})
     `).bind(...ids),
   ]);

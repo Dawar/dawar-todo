@@ -5,10 +5,12 @@ import test from "node:test";
 const root = new URL("../", import.meta.url);
 
 test("ships the complete todo product surface", async () => {
-  const [page, layout, hosting] = await Promise.all([
+  const [page, layout, hosting, database, bulkRoute] = await Promise.all([
     readFile(new URL("app/page.tsx", root), "utf8"),
     readFile(new URL("app/layout.tsx", root), "utf8"),
     readFile(new URL(".openai/hosting.json", root), "utf8"),
+    readFile(new URL("db/todos.ts", root), "utf8"),
+    readFile(new URL("app/api/todos/bulk/route.ts", root), "utf8"),
   ]);
   assert.match(layout, /title: "Dawar Todo"/);
   assert.match(layout, /\/og\.png/);
@@ -29,6 +31,16 @@ test("ships the complete todo product surface", async () => {
   assert.match(page, /\/api\/todos\/\$\{editingTodo\.id\}/);
   assert.match(page, /fixed inset-x-0 z-40/);
   assert.doesNotMatch(page, /sticky top-\[62px\]/);
+  assert.match(page, /Archive into a project/);
+  assert.match(page, /Filter archived notes by project/);
+  assert.match(page, /reproject/);
+  assert.match(page, /task-project-options/);
+  assert.match(page, /overflow-x-hidden overflow-y-auto/);
+  assert.match(page, /flex min-w-0 flex-wrap gap-2/);
+  assert.doesNotMatch(page, /Edit the full task without leaving your place/);
+  assert.match(database, /archived_project_backfill_v1/);
+  assert.match(database, /Choose or create a project before archiving/);
+  assert.match(bulkRoute, /"reproject"/);
   assert.doesNotMatch(page, /Capture what needs doing\. Then move/);
   assert.match(hosting, /"d1": "DB"/);
   await access(new URL("public/og.png", root));

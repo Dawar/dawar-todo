@@ -31,7 +31,11 @@ export async function PATCH(
       update.priority = priority;
     }
     if (payload.dueDate !== undefined) update.dueDate = payload.dueDate || null;
-    if (payload.project !== undefined) update.project = payload.project?.trim() || null;
+    if (payload.project !== undefined) {
+      const project = String(payload.project ?? "").trim();
+      if (project.length > 120) return Response.json({ error: "Project names are limited to 120 characters." }, { status: 400 });
+      update.project = project || null;
+    }
     if (payload.context !== undefined) update.context = payload.context?.trim() || null;
 
     const result = await updateTodo(id, update);
@@ -44,7 +48,9 @@ export async function PATCH(
     });
     return Response.json(result);
   } catch (error) {
+    const message = error instanceof Error ? error.message : "The task could not be updated.";
+    const inputError = /project|required|invalid|limited/i.test(message);
     console.error("[todo-api] update failed", { id, error });
-    return Response.json({ error: "The task could not be updated." }, { status: 500 });
+    return Response.json({ error: message }, { status: inputError ? 400 : 500 });
   }
 }
