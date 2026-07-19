@@ -86,12 +86,21 @@ function storageConfig() {
   const endpointRegion = endpointUrl.hostname.endsWith(".digitaloceanspaces.com")
     ? endpointUrl.hostname.split(".")[0]
     : "us-east-1";
+  // DigitalOcean's JavaScript S3 guidance uses the AWS-compatible signing
+  // region while the physical Spaces region remains encoded in the endpoint.
+  const signingRegion = endpointUrl.hostname.endsWith(".digitaloceanspaces.com")
+    ? "us-east-1"
+    : endpointRegion;
   cachedStorageConfig = {
     bucket: current.S3_BUCKET,
     endpoint: endpointUrl,
-    region: endpointRegion,
+    region: signingRegion,
   };
-  console.info("[todo-attachments] private storage configured", { region: endpointRegion, virtualHosted: true });
+  console.info("[todo-attachments] private storage configured", {
+    endpointRegion,
+    signingRegion,
+    virtualHosted: true,
+  });
   return cachedStorageConfig;
 }
 

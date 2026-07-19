@@ -30,7 +30,9 @@ test("stores private task images with optimized variants and recovery metadata",
   assert.match(attachments, /S3_ENDPOINT_URL/);
   assert.match(attachments, /endpointUrl\.hostname\.startsWith\(bucketPrefix\)/);
   assert.match(attachments, /endpointUrl\.hostname\.endsWith\("\.digitaloceanspaces\.com"\)/);
-  assert.match(attachments, /region: endpointRegion/);
+  assert.match(attachments, /signingRegion = endpointUrl\.hostname\.endsWith/);
+  assert.match(attachments, /\? "us-east-1"/);
+  assert.match(attachments, /region: signingRegion/);
   assert.match(attachments, /url\.hostname = `\$\{bucket\}\.\$\{url\.hostname\}`/);
   assert.match(attachments, /signedQueryUrl/);
   assert.match(attachments, /canonicalRequest/);
