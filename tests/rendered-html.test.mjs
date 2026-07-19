@@ -50,7 +50,10 @@ test("ships the complete todo product surface", async () => {
   assert.match(page, /archiveState=\{view === "archived"/);
   assert.match(page, /performAction\(\[todo\.id\], "restore_archive"\)/);
   assert.match(page, /reproject/);
-  assert.match(page, /task-project-options/);
+  assert.match(page, /<select[\s\S]*aria-label="Project"/);
+  assert.match(page, /Create a new project…/);
+  assert.match(page, /project created from task details/);
+  assert.doesNotMatch(page, /<datalist/);
   assert.match(page, /overflow-x-hidden overflow-y-auto/);
   assert.match(page, /flex min-w-0 flex-wrap gap-2/);
   assert.doesNotMatch(page, /Edit the full task without leaving your place/);

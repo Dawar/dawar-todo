@@ -374,6 +374,8 @@ export default function Home() {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editDraft, setEditDraft] = useState<TodoDraft | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
+  const [taskNewProjectName, setTaskNewProjectName] = useState("");
+  const [taskProjectError, setTaskProjectError] = useState("");
   const [projectDialog, setProjectDialog] = useState<ProjectDialogState | null>(null);
   const [projectDialogError, setProjectDialogError] = useState("");
   const [savingProject, setSavingProject] = useState(false);
@@ -782,12 +784,16 @@ export default function Home() {
       project: todo.project ?? "",
       context: todo.context ?? "",
     });
+    setTaskNewProjectName("");
+    setTaskProjectError("");
     console.info("[todo-ui] task details opened", { id: todo.id, status: todo.status });
   }
 
   function closeTaskDetails() {
     setEditingId(null);
     setEditDraft(null);
+    setTaskNewProjectName("");
+    setTaskProjectError("");
   }
 
   async function saveTaskDetails(event: FormEvent) {
@@ -798,9 +804,32 @@ export default function Home() {
       setNotice({ tone: "error", text: "A task title is required." });
       return;
     }
+    const creatingProjectFromTask = editDraft.project === CREATE_PROJECT;
+    const requestedProjectName = taskNewProjectName.trim();
+    if (creatingProjectFromTask && !requestedProjectName) {
+      setTaskProjectError("Enter a name for the new project.");
+      return;
+    }
+    if (requestedProjectName.length > 120) {
+      setTaskProjectError("Project names are limited to 120 characters.");
+      return;
+    }
     setSavingEdit(true);
+    setTaskProjectError("");
     setNotice(null);
     try {
+      let projectName = editDraft.project || null;
+      if (creatingProjectFromTask) {
+        const created = await request<{ project: string }>("/api/projects", {
+          method: "POST",
+          body: JSON.stringify({ name: requestedProjectName }),
+        });
+        projectName = created.project;
+        setRegisteredProjects((current) => [...new Set([...current, created.project])].sort((a, b) => a.localeCompare(b)));
+        setEditDraft((current) => current ? { ...current, project: created.project } : current);
+        setTaskNewProjectName("");
+        console.info("[todo-ui] project created from task details", { project: created.project, taskId: editingTodo.id });
+      }
       const result = await request<{ todo: Todo; undoToken: string }>(`/api/todos/${editingTodo.id}`, {
         method: "PATCH",
         body: JSON.stringify({
@@ -808,7 +837,7 @@ export default function Home() {
           notes: editDraft.notes,
           priority: editDraft.priority,
           dueDate: editDraft.dueDate || null,
-          project: editDraft.project || null,
+          project: projectName,
           context: editDraft.context || null,
         }),
       });
@@ -824,7 +853,9 @@ export default function Home() {
         notesLength: result.todo.notes.length,
       });
     } catch (error) {
-      setNotice({ tone: "error", text: error instanceof Error ? error.message : "The task details could not be saved." });
+      const message = error instanceof Error ? error.message : "The task details could not be saved.";
+      if (creatingProjectFromTask) setTaskProjectError(message);
+      else setNotice({ tone: "error", text: message });
       console.error("[todo-ui] task details save failed", { id: editingTodo.id, error });
     } finally {
       setSavingEdit(false);
@@ -1572,11 +1603,37 @@ export default function Home() {
               </label>
 
               <div className="mt-4 grid min-w-0 grid-cols-1 gap-4 sm:grid-cols-2">
-                <label className="block min-w-0">
+                <div className="block min-w-0">
                   <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-[#69716c]">Project</span>
-                  <input list="task-project-options" value={editDraft.project} onChange={(event) => setEditDraft((current) => current ? { ...current, project: event.target.value } : current)} placeholder="Choose or create a project" maxLength={120} className="h-11 w-full min-w-0 max-w-full rounded-xl border border-black/[0.1] px-3 text-sm outline-none focus:border-[#216e4e]/50 focus:ring-3 focus:ring-[#216e4e]/10" />
-                  <datalist id="task-project-options">{projects.map((name) => <option key={name} value={name} />)}</datalist>
-                </label>
+                  <select
+                    value={editDraft.project}
+                    onChange={(event) => {
+                      setEditDraft((current) => current ? { ...current, project: event.target.value } : current);
+                      setTaskNewProjectName("");
+                      setTaskProjectError("");
+                    }}
+                    disabled={savingEdit}
+                    aria-label="Project"
+                    className="h-11 w-full min-w-0 max-w-full rounded-xl border border-black/[0.1] bg-white px-3 text-[16px] text-[#303632] outline-none focus:border-[#216e4e]/50 focus:ring-3 focus:ring-[#216e4e]/10 disabled:opacity-60"
+                  >
+                    <option value="">No project</option>
+                    {projects.map((name) => <option key={name} value={name}>{name}</option>)}
+                    <option value={CREATE_PROJECT}>Create a new project…</option>
+                  </select>
+                  {editDraft.project === CREATE_PROJECT && (
+                    <input
+                      autoFocus
+                      value={taskNewProjectName}
+                      onChange={(event) => { setTaskNewProjectName(event.target.value); setTaskProjectError(""); }}
+                      placeholder="New project name"
+                      maxLength={120}
+                      disabled={savingEdit}
+                      aria-label="New project name"
+                      className="mt-2 h-11 w-full min-w-0 max-w-full rounded-xl border border-black/[0.1] px-3 text-[16px] outline-none focus:border-[#216e4e]/50 focus:ring-3 focus:ring-[#216e4e]/10 disabled:opacity-60"
+                    />
+                  )}
+                  {taskProjectError && <p role="alert" className="mt-2 text-xs font-medium text-red-700">{taskProjectError}</p>}
+                </div>
                 <label className="block min-w-0">
                   <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-[#69716c]">Context</span>
                   <input value={editDraft.context} onChange={(event) => setEditDraft((current) => current ? { ...current, context: event.target.value } : current)} placeholder="No context" className="h-11 w-full min-w-0 max-w-full rounded-xl border border-black/[0.1] px-3 text-sm outline-none focus:border-[#216e4e]/50 focus:ring-3 focus:ring-[#216e4e]/10" />
@@ -1621,7 +1678,7 @@ export default function Home() {
 
             <div className="flex items-center justify-end gap-2 border-t border-black/[0.07] bg-white px-5 py-3 sm:px-6">
               <button type="button" onClick={closeTaskDetails} disabled={savingEdit} className="inline-flex h-11 items-center gap-2 rounded-xl px-4 text-sm font-semibold text-[#69716c] hover:bg-[#f3f4f2] disabled:opacity-50"><ActionIcon name="cancel" />Cancel</button>
-              <button type="submit" disabled={savingEdit || !editDraft.title.trim()} className="inline-flex h-11 items-center gap-2 rounded-xl bg-[#216e4e] px-5 text-sm font-semibold text-white hover:bg-[#195d41] disabled:opacity-50"><ActionIcon name="save" />{savingEdit ? "Saving…" : "Save changes"}</button>
+              <button type="submit" disabled={savingEdit || !editDraft.title.trim() || (editDraft.project === CREATE_PROJECT && !taskNewProjectName.trim())} className="inline-flex h-11 items-center gap-2 rounded-xl bg-[#216e4e] px-5 text-sm font-semibold text-white hover:bg-[#195d41] disabled:opacity-50"><ActionIcon name="save" />{savingEdit ? "Saving…" : "Save changes"}</button>
             </div>
           </form>
         </div>
