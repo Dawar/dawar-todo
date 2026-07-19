@@ -25,6 +25,10 @@ test("ships the complete todo product surface", async () => {
   assert.match(page, /Archived/);
   assert.match(page, /Select visible/);
   assert.match(page, /Swipe left:.*"open".*"done".*snooze/);
+  assert.match(page, /leftSecondaryAction.*snoozed/s);
+  assert.match(page, /\? \{ action: "unsnooze", label: "Wake", icon: "wake" \}/);
+  assert.match(page, /view === "snoozed" \? \(/);
+  assert.match(page, /wokeSnoozed/);
   assert.match(page, />Filters</);
   assert.match(page, /"Undoing…" : "Undo"/);
   assert.match(page, /\/api\/todos\/undo/);

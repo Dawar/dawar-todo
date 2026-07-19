@@ -186,21 +186,22 @@ function TaskRow({
     ? { action: "complete", label: "Done", icon: "done" }
     : archiveState === "done"
       ? { action: "unsnooze", label: "Open", icon: "open" }
-      : snoozed
-        ? { action: "unsnooze", label: "Wake", icon: "wake" }
-        : todo.status === "open"
-          ? { action: "complete", label: "Done", icon: "done" }
-          : { action: "unsnooze", label: "Open", icon: "open" };
+      : todo.status === "open"
+        ? { action: "complete", label: "Done", icon: "done" }
+        : { action: "unsnooze", label: "Open", icon: "open" };
+  const leftSecondaryAction: { action: TodoAction; label: string; icon: ActionIconName } = snoozed
+    ? { action: "unsnooze", label: "Wake", icon: "wake" }
+    : { action: "snooze", label: "Snooze", icon: "snooze" };
   const swipeRatio = Math.abs(offset) / swipeWidth;
   const longSwipe = swipeRatio >= 0.5;
   const revealAction = offset < 0
-    ? (longSwipe ? "Snooze" : primaryAction.label)
+    ? (longSwipe ? leftSecondaryAction.label : primaryAction.label)
     : (longSwipe ? "Delete" : inArchiveProject || todo.status === "archived" ? "Move" : "Archive");
   const revealIcon: ActionIconName = offset < 0
-    ? (longSwipe ? "snooze" : primaryAction.icon)
+    ? (longSwipe ? leftSecondaryAction.icon : primaryAction.icon)
     : (longSwipe ? "delete" : inArchiveProject || todo.status === "archived" ? "move" : "archive");
   const revealClass = offset < 0
-    ? longSwipe ? "bg-amber-500" : "bg-[#216e4e]"
+    ? longSwipe && !snoozed ? "bg-amber-500" : "bg-[#216e4e]"
     : longSwipe ? "bg-red-600" : "bg-slate-500";
 
   function pointerDown(event: ReactPointerEvent<HTMLDivElement>) {
@@ -251,7 +252,7 @@ function TaskRow({
     offsetRef.current = 0;
     setOffset(0);
     if (ratio < 0.18 || direction === 0) return;
-    if (direction < 0) onAction(todo, ratio >= 0.5 ? "snooze" : primaryAction.action, "swipe");
+    if (direction < 0) onAction(todo, ratio >= 0.5 ? leftSecondaryAction.action : primaryAction.action, "swipe");
     else if (ratio >= 0.5) onAction(todo, "delete", "swipe");
     else if (inArchiveProject || todo.status === "archived") onProject(todo, "swipe");
     else onAction(todo, "archive", "swipe");
@@ -266,7 +267,7 @@ function TaskRow({
 
   const hoverActions: Array<{ action: TodoAction | "move"; label: string; icon: ActionIconName }> = [
     primaryAction,
-    ...(!snoozed && todo.status === "open" ? [{ action: "snooze" as const, label: "Snooze", icon: "snooze" as const }] : []),
+    ...(todo.status === "open" ? [leftSecondaryAction] : []),
     ...(inArchiveProject || todo.status === "archived"
       ? [{ action: "move" as const, label: "Move", icon: "move" as const }]
       : [{ action: "archive" as const, label: "Archive", icon: "archive" as const }]),
@@ -653,7 +654,11 @@ export default function Home() {
           setTodos((current) => current.map((todo) => updates.get(todo.id) ?? todo));
         }
         const openedCompleted = action === "unsnooze" && ids.every((id) => previous.find((todo) => todo.id === id)?.status === "completed");
-        const label = action === "complete" ? "Done" : action === "archive" ? "Archived" : action === "restore_archive" ? "Opened in project" : action === "snooze" ? "Snoozed until tomorrow" : action === "unsnooze" ? openedCompleted ? "Opened" : "Restored to Open" : "Deleted";
+        const wokeSnoozed = action === "unsnooze" && ids.every((id) => {
+          const todo = previous.find((item) => item.id === id);
+          return todo ? isSnoozed(todo, new Date(actionAt).valueOf()) : false;
+        });
+        const label = action === "complete" ? "Done" : action === "archive" ? "Archived" : action === "restore_archive" ? "Opened in project" : action === "snooze" ? "Snoozed until tomorrow" : action === "unsnooze" ? openedCompleted ? "Opened" : wokeSnoozed ? "Woke" : "Restored to Open" : "Deleted";
         setNotice({ tone: "success", text: `${label}: ${ids.length} ${ids.length === 1 ? "task" : "tasks"}.`, undoToken: result.undoToken });
         console.info("[todo-ui] action completed", { action, ids, snoozedUntil: result.snoozedUntil });
       }
@@ -1303,7 +1308,7 @@ export default function Home() {
             </div>
           </div>
 
-          <p className="mb-2 px-1 text-[11px] text-[#8a918d] md:hidden">Swipe left: {view === "archived" ? archiveNoteState === "done" ? "open" : "done" : view === "completed" ? "open" : "done"} / snooze · Swipe right: {view === "archived" ? "move" : "archive"} / delete</p>
+          <p className="mb-2 px-1 text-[11px] text-[#8a918d] md:hidden">Swipe left: {view === "archived" ? archiveNoteState === "done" ? "open" : "done" : view === "completed" ? "open" : "done"} / {view === "snoozed" ? "wake" : "snooze"} · Swipe right: {view === "archived" ? "move" : "archive"} / delete</p>
 
           <div className="overflow-hidden rounded-2xl border border-black/[0.07] bg-white shadow-[0_8px_30px_rgba(30,45,36,0.05)]">
             {loading ? (
@@ -1353,8 +1358,12 @@ export default function Home() {
           <div className="pointer-events-auto flex items-center gap-1.5 overflow-x-auto rounded-2xl border border-[#216e4e]/20 bg-[#eaf3ed]/95 p-2 shadow-[0_16px_50px_rgba(23,61,42,0.2)] backdrop-blur-xl sm:gap-2">
             <span className="min-w-max px-2 text-sm font-semibold text-[#195d41]">{selectedIds.length} selected</span>
             {!(view === "archived" && archiveNoteState === "done") && <button type="button" onClick={() => bulkAction("complete")} disabled={syncing} className="inline-flex min-w-max items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-[#216e4e] shadow-sm hover:bg-[#f8fbf9] disabled:opacity-50"><ActionIcon name="done" />Done</button>}
-            <button type="button" onClick={() => bulkAction("snooze")} disabled={syncing} className="inline-flex min-w-max items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-amber-700 shadow-sm hover:bg-amber-50 disabled:opacity-50"><ActionIcon name="snooze" />Snooze</button>
-            {(view !== "archived" || archiveNoteState === "done") && <button type="button" onClick={() => bulkAction("unsnooze")} disabled={syncing} className="inline-flex min-w-max items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-[#4f5752] shadow-sm hover:bg-[#f8f9f8] disabled:opacity-50"><ActionIcon name={view === "completed" || view === "archived" ? "open" : "restore"} />{view === "completed" || view === "archived" ? "Open" : "Restore"}</button>}
+            {view === "snoozed" ? (
+              <button type="button" onClick={() => bulkAction("unsnooze")} disabled={syncing} className="inline-flex min-w-max items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-[#216e4e] shadow-sm hover:bg-[#f8fbf9] disabled:opacity-50"><ActionIcon name="wake" />Wake</button>
+            ) : (
+              <button type="button" onClick={() => bulkAction("snooze")} disabled={syncing} className="inline-flex min-w-max items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-amber-700 shadow-sm hover:bg-amber-50 disabled:opacity-50"><ActionIcon name="snooze" />Snooze</button>
+            )}
+            {view !== "snoozed" && (view !== "archived" || archiveNoteState === "done") && <button type="button" onClick={() => bulkAction("unsnooze")} disabled={syncing} className="inline-flex min-w-max items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-[#4f5752] shadow-sm hover:bg-[#f8f9f8] disabled:opacity-50"><ActionIcon name={view === "completed" || view === "archived" ? "open" : "restore"} />{view === "completed" || view === "archived" ? "Open" : "Restore"}</button>}
             <button type="button" onClick={() => bulkAction("archive")} disabled={syncing} className="inline-flex min-w-max items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-slate-600 shadow-sm hover:bg-slate-50 disabled:opacity-50"><ActionIcon name={view === "archived" ? "move" : "archive"} />{view === "archived" ? "Move" : "Archive"}</button>
             <button type="button" onClick={() => bulkAction("merge")} disabled={syncing || selectedIds.length < 2} className="inline-flex min-w-max items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-violet-700 shadow-sm hover:bg-violet-50 disabled:opacity-40"><ActionIcon name="merge" />Merge</button>
             <button type="button" onClick={() => bulkAction("delete")} disabled={syncing} className="inline-flex min-w-max items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-red-700 shadow-sm hover:bg-red-50 disabled:opacity-50"><ActionIcon name="delete" />Delete</button>
@@ -1590,14 +1599,16 @@ export default function Home() {
               <div className="mt-5 border-t border-black/[0.07] pt-4">
                 <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-[#69716c]">Quick actions</p>
                 <div className="flex min-w-0 flex-wrap gap-2">
-                  {isSnoozed(editingTodo, now) ? (
-                    <button type="button" onClick={() => detailAction("unsnooze")} disabled={syncing || savingEdit} className="inline-flex min-w-max items-center gap-2 rounded-xl bg-[#eaf3ed] px-3 py-2.5 text-sm font-semibold text-[#195d41] disabled:opacity-50"><ActionIcon name={todoActionIcon("unsnooze", "Wake")} />Wake</button>
-                  ) : editingTodo.status === "completed" ? (
+                  {editingTodo.status === "completed" ? (
                     <button type="button" onClick={() => detailAction("unsnooze")} disabled={syncing || savingEdit} className="inline-flex min-w-max items-center gap-2 rounded-xl bg-[#eaf3ed] px-3 py-2.5 text-sm font-semibold text-[#195d41] disabled:opacity-50"><ActionIcon name={todoActionIcon("unsnooze", "Open")} />Open</button>
                   ) : (
                     <button type="button" onClick={() => detailAction("complete")} disabled={syncing || savingEdit} className="inline-flex min-w-max items-center gap-2 rounded-xl bg-[#eaf3ed] px-3 py-2.5 text-sm font-semibold text-[#195d41] disabled:opacity-50"><ActionIcon name={todoActionIcon("complete", "Done")} />Done</button>
                   )}
-                  {!isSnoozed(editingTodo, now) && <button type="button" onClick={() => detailAction("snooze")} disabled={syncing || savingEdit} className="inline-flex min-w-max items-center gap-2 rounded-xl bg-amber-50 px-3 py-2.5 text-sm font-semibold text-amber-700 disabled:opacity-50"><ActionIcon name={todoActionIcon("snooze", "Snooze")} />Snooze</button>}
+                  {isSnoozed(editingTodo, now) ? (
+                    <button type="button" onClick={() => detailAction("unsnooze")} disabled={syncing || savingEdit} className="inline-flex min-w-max items-center gap-2 rounded-xl bg-[#eaf3ed] px-3 py-2.5 text-sm font-semibold text-[#195d41] disabled:opacity-50"><ActionIcon name={todoActionIcon("unsnooze", "Wake")} />Wake</button>
+                  ) : (
+                    <button type="button" onClick={() => detailAction("snooze")} disabled={syncing || savingEdit} className="inline-flex min-w-max items-center gap-2 rounded-xl bg-amber-50 px-3 py-2.5 text-sm font-semibold text-amber-700 disabled:opacity-50"><ActionIcon name={todoActionIcon("snooze", "Snooze")} />Snooze</button>
+                  )}
                   {editingTodo.status === "archived" ? (
                     <button type="button" onClick={() => detailAction("unsnooze")} disabled={syncing || savingEdit} className="inline-flex min-w-max items-center gap-2 rounded-xl bg-slate-100 px-3 py-2.5 text-sm font-semibold text-slate-700 disabled:opacity-50"><ActionIcon name={todoActionIcon("unsnooze", "Unarchive")} />Unarchive</button>
                   ) : (
