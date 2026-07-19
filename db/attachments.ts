@@ -17,17 +17,8 @@ type RuntimeEnv = {
 };
 
 type StorageConfig = { bucket: string; endpoint: URL; client: AwsClient };
-type CorsRule = {
-  ID?: string;
-  AllowedHeaders?: string[];
-  AllowedMethods: string[];
-  AllowedOrigins: string[];
-  ExposeHeaders?: string[];
-  MaxAgeSeconds?: number;
-};
 
 let cachedStorageConfig: StorageConfig | null = null;
-let uploadCorsReady: Promise<void> | null = null;
 
 export type AttachmentRow = {
   id: string;
@@ -221,85 +212,6 @@ function extensionForMimeType(mimeType: string) {
   return mimeType === "image/jpeg" ? "jpg" : mimeType.replace("image/", "");
 }
 
-function xmlText(value: string) {
-  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&apos;");
-}
-
-function decodedXmlText(value: string) {
-  return value.replaceAll("&apos;", "'").replaceAll("&quot;", '"').replaceAll("&gt;", ">").replaceAll("&lt;", "<").replaceAll("&amp;", "&");
-}
-
-function xmlValues(block: string, tag: string) {
-  return [...block.matchAll(new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`, "gi"))]
-    .map((match) => decodedXmlText(match[1].trim()));
-}
-
-function parseCorsRules(xml: string): CorsRule[] {
-  return [...xml.matchAll(/<CORSRule>([\s\S]*?)<\/CORSRule>/gi)].map((match) => {
-    const block = match[1];
-    const maxAge = Number(xmlValues(block, "MaxAgeSeconds")[0]);
-    return {
-      ID: xmlValues(block, "ID")[0],
-      AllowedHeaders: xmlValues(block, "AllowedHeader"),
-      AllowedMethods: xmlValues(block, "AllowedMethod"),
-      AllowedOrigins: xmlValues(block, "AllowedOrigin"),
-      ExposeHeaders: xmlValues(block, "ExposeHeader"),
-      ...(Number.isInteger(maxAge) ? { MaxAgeSeconds: maxAge } : {}),
-    };
-  });
-}
-
-function corsXml(rules: CorsRule[]) {
-  const tags = (name: string, values?: string[]) => (values ?? []).map((value) => `<${name}>${xmlText(value)}</${name}>`).join("");
-  return `<?xml version="1.0" encoding="UTF-8"?><CORSConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/">${rules.map((rule) => `<CORSRule>${rule.ID ? `<ID>${xmlText(rule.ID)}</ID>` : ""}${tags("AllowedOrigin", rule.AllowedOrigins)}${tags("AllowedMethod", rule.AllowedMethods)}${tags("AllowedHeader", rule.AllowedHeaders)}${tags("ExposeHeader", rule.ExposeHeaders)}${rule.MaxAgeSeconds === undefined ? "" : `<MaxAgeSeconds>${rule.MaxAgeSeconds}</MaxAgeSeconds>`}</CORSRule>`).join("")}</CORSConfiguration>`;
-}
-
-async function ensureUploadCors(origin: string) {
-  if (uploadCorsReady) return uploadCorsReady;
-  uploadCorsReady = (async () => {
-    const { client } = storageConfig();
-    const allowedOrigins = new Set([
-      "https://dawar-todo.dawar185924.chatgpt.site",
-      "https://work.dawar.ca",
-      ...(origin.startsWith("https://") ? [origin] : []),
-    ]);
-    const corsUrl = storageUrl(undefined, { cors: "" });
-    const current = await client.fetch(corsUrl, { method: "GET" });
-    let rules: CorsRule[];
-    if (current.ok) rules = parseCorsRules(await current.text());
-    else if (current.status === 404) rules = [];
-    else throw await storageResponseError("Image storage CORS lookup", current);
-    const ruleId = "dawar-todo-private-upload";
-    const existing = rules.find((rule) => rule.ID === ruleId);
-    const desiredOrigins = [...new Set([...(existing?.AllowedOrigins ?? []), ...allowedOrigins])];
-    const alreadyConfigured = existing
-      && desiredOrigins.every((value) => existing.AllowedOrigins?.includes(value))
-      && existing.AllowedMethods?.includes("PUT")
-      && existing.AllowedHeaders?.includes("*");
-    if (!alreadyConfigured) {
-      const nextRule = {
-        ID: ruleId,
-        AllowedOrigins: desiredOrigins,
-        AllowedMethods: ["PUT"],
-        AllowedHeaders: ["*"],
-        ExposeHeaders: ["ETag"],
-        MaxAgeSeconds: 3600,
-      };
-      const response = await client.fetch(corsUrl, {
-        method: "PUT",
-        headers: { "Content-Type": "application/xml" },
-        body: corsXml([...rules.filter((rule) => rule.ID !== ruleId), nextRule]),
-      });
-      if (!response.ok) throw await storageResponseError("Image storage CORS update", response);
-      console.info("[todo-attachments] upload CORS configured", { origins: desiredOrigins.length });
-    }
-  })().catch((error) => {
-    uploadCorsReady = null;
-    throw error;
-  });
-  return uploadCorsReady;
-}
-
 function targetValues(target: UploadTarget) {
   const isDraft = "draftToken" in target;
   return {
@@ -309,20 +221,58 @@ function targetValues(target: UploadTarget) {
   };
 }
 
-async function signedPutUrl(key: string, contentType: string) {
-  const url = storageUrl(key, { "X-Amz-Expires": String(15 * 60) });
-  const request = await storageConfig().client.sign(url, {
-    method: "PUT",
-    headers: { "Content-Type": contentType },
-    aws: { signQuery: true, allHeaders: true },
-  });
-  return request.url;
+function hmac(key: string | ArrayBuffer, value: string) {
+  const bytes = typeof key === "string" ? new TextEncoder().encode(key) : key;
+  return crypto.subtle.importKey("raw", bytes, { name: "HMAC", hash: "SHA-256" }, false, ["sign"])
+    .then((cryptoKey) => crypto.subtle.sign("HMAC", cryptoKey, new TextEncoder().encode(value)));
+}
+
+function hex(value: ArrayBuffer) {
+  return [...new Uint8Array(value)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function signedPostTarget(key: string, contentType: string, maximumBytes: number) {
+  const current = runtime();
+  const { bucket, endpoint, client } = storageConfig();
+  const now = new Date();
+  const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, "");
+  const date = amzDate.slice(0, 8);
+  const region = client.region ?? "us-east-1";
+  const credential = `${current.S3_ACCESS_KEY_ID}/${date}/${region}/s3/aws4_request`;
+  const fields = {
+    key,
+    "Content-Type": contentType,
+    success_action_status: "204",
+    "x-amz-algorithm": "AWS4-HMAC-SHA256",
+    "x-amz-credential": credential,
+    "x-amz-date": amzDate,
+  };
+  const policy = btoa(JSON.stringify({
+    expiration: new Date(now.valueOf() + 15 * 60 * 1000).toISOString(),
+    conditions: [
+      { bucket },
+      { key },
+      { "Content-Type": contentType },
+      { success_action_status: "204" },
+      { "x-amz-algorithm": fields["x-amz-algorithm"] },
+      { "x-amz-credential": credential },
+      { "x-amz-date": amzDate },
+      ["content-length-range", 1, maximumBytes],
+    ],
+  }));
+  const dateKey = await hmac(`AWS4${current.S3_ACCESS_KEY}`, date);
+  const regionKey = await hmac(dateKey, region);
+  const serviceKey = await hmac(regionKey, "s3");
+  const signingKey = await hmac(serviceKey, "aws4_request");
+  return {
+    url: new URL(`https://${bucket}.${endpoint.hostname}/`).toString(),
+    fields: { ...fields, policy, "x-amz-signature": hex(await hmac(signingKey, policy)) },
+  };
 }
 
 export async function prepareTodoAttachmentUpload(
   input: PrepareUploadInput,
   target: UploadTarget,
-  origin: string,
 ) {
   const startedAt = Date.now();
   const byteSize = Number(input.byteSize);
@@ -343,7 +293,6 @@ export async function prepareTodoAttachmentUpload(
     throw new Error(`Tasks are limited to ${MAX_ATTACHMENTS_PER_TASK} images.`);
   }
 
-  await ensureUploadCors(origin);
   const id = crypto.randomUUID();
   const base = `todo-images/${id}`;
   const originalKey = `${base}/original.${extensionForMimeType(mimeType)}`;
@@ -372,10 +321,10 @@ export async function prepareTodoAttachmentUpload(
       expiresAt,
     ).first<AttachmentRow>();
     if (!row) throw new Error("The image upload could not be prepared.");
-    const [originalUrl, displayUrl, thumbnailUrl] = await Promise.all([
-      signedPutUrl(originalKey, mimeType),
-      signedPutUrl(displayKey, "image/webp"),
-      signedPutUrl(thumbnailKey, "image/webp"),
+    const [originalUpload, displayUpload, thumbnailUpload] = await Promise.all([
+      signedPostTarget(originalKey, mimeType, byteSize),
+      signedPostTarget(displayKey, "image/webp", 8 * 1024 * 1024),
+      signedPostTarget(thumbnailKey, "image/webp", 2 * 1024 * 1024),
     ]);
     console.info("[todo-attachments] direct upload prepared", {
       attachmentId: id,
@@ -384,7 +333,7 @@ export async function prepareTodoAttachmentUpload(
       bytes: byteSize,
       durationMs: Date.now() - startedAt,
     });
-    return { uploadId: id, putUrls: { original: originalUrl, display: displayUrl, thumbnail: thumbnailUrl } };
+    return { uploadId: id, uploads: { original: originalUpload, display: displayUpload, thumbnail: thumbnailUpload } };
   } catch (error) {
     await db.prepare("DELETE FROM todo_attachments WHERE id = ? AND upload_state = 'uploading'").bind(id).run().catch(() => undefined);
     console.error("[todo-attachments] upload preparation failed", {
@@ -499,6 +448,7 @@ export async function finalizeTodoAttachmentUpload(
     if (originalSize < 1 || originalSize > MAX_ATTACHMENT_BYTES || displaySize < 1 || displaySize > 8 * 1024 * 1024 || thumbnailSize < 1 || thumbnailSize > 2 * 1024 * 1024) {
       throw new Error("One or more uploaded image files has an invalid size.");
     }
+    if (originalSize !== row.byte_size) throw new Error("The original image upload is incomplete.");
     const expected = normalizedFormat(row.mime_type);
     const originalFormat = detectedImageFormat(originalBytes);
     if (!originalFormat || (expected !== originalFormat && !(expected === "heif" && originalFormat === "heic") && !(expected === "heic" && originalFormat === "heif"))) {

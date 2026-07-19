@@ -24,7 +24,7 @@ export async function POST(request: Request) {
       fileName: String(payload.fileName ?? ""),
       mimeType: String(payload.mimeType ?? ""),
       byteSize: Number(payload.byteSize),
-    }, { draftToken: String(payload.draftToken ?? "") }, new URL(request.url).origin);
+    }, { draftToken: String(payload.draftToken ?? "") });
     await scheduleAttachmentCleanup();
     console.info("[todo-api] draft attachment upload prepared", {
       uploadId: prepared.uploadId,

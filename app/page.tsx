@@ -118,8 +118,14 @@ const MAX_IMAGE_PIXELS = 100_000_000;
 
 type PreparedAttachmentUpload = {
   uploadId: string;
-  putUrls: { original: string; display: string; thumbnail: string };
+  uploads: {
+    original: PrivatePostTarget;
+    display: PrivatePostTarget;
+    thumbnail: PrivatePostTarget;
+  };
 };
+
+type PrivatePostTarget = { url: string; fields: Record<string, string> };
 
 function uploadMimeType(file: File) {
   const supplied = file.type.toLowerCase().trim();
@@ -203,9 +209,12 @@ async function imageVariants(file: File) {
   }
 }
 
-async function putPrivateVariant(url: string, body: Blob, contentType: string) {
-  const response = await fetch(url, { method: "PUT", headers: { "Content-Type": contentType }, body });
-  if (!response.ok) throw new Error(`Image storage rejected an upload (${response.status}).`);
+async function postPrivateVariant(target: PrivatePostTarget, body: Blob) {
+  const form = new FormData();
+  Object.entries(target.fields).forEach(([name, value]) => form.append(name, value));
+  form.append("file", body, "upload");
+  const response = await fetch(target.url, { method: "POST", mode: "no-cors", body: form });
+  if (response.type !== "opaque" && !response.ok) throw new Error(`Image storage rejected an upload (${response.status}).`);
 }
 
 async function uploadPrivateImage(
@@ -223,9 +232,9 @@ async function uploadPrivateImage(
   });
   try {
     const uploads = await Promise.allSettled([
-      putPrivateVariant(prepared.putUrls.original, file, mimeType),
-      putPrivateVariant(prepared.putUrls.display, variants.display, "image/webp"),
-      putPrivateVariant(prepared.putUrls.thumbnail, variants.thumbnail, "image/webp"),
+      postPrivateVariant(prepared.uploads.original, file),
+      postPrivateVariant(prepared.uploads.display, variants.display),
+      postPrivateVariant(prepared.uploads.thumbnail, variants.thumbnail),
     ]);
     const failed = uploads.find((result): result is PromiseRejectedResult => result.status === "rejected");
     if (failed) throw failed.reason;

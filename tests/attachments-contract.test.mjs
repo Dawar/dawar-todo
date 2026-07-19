@@ -36,8 +36,10 @@ test("stores private task images with optimized variants and recovery metadata",
   assert.match(attachments, /url\.hostname = `\$\{bucket\}\.\$\{url\.hostname\}`/);
   assert.match(attachments, /client\.sign/);
   assert.match(attachments, /signQuery: true/);
-  assert.match(attachments, /parseCorsRules/);
-  assert.match(attachments, /corsXml/);
+  assert.match(attachments, /signedPostTarget/);
+  assert.match(attachments, /AWS4-HMAC-SHA256/);
+  assert.match(attachments, /content-length-range/);
+  assert.match(attachments, /originalSize !== row\.byte_size/);
   assert.match(attachments, /storageFetch/);
   assert.match(attachments, /storageResponseError/);
   assert.match(attachments, /prepareTodoAttachmentUpload/);
@@ -84,9 +86,10 @@ test("exposes capture, mobile camera, paste, gallery, and viewer contracts", asy
   assert.match(page, /canvasWebp\(source, width, height, 2048, 0\.82\)/);
   assert.match(page, /canvasWebp\(source, width, height, 480, 0\.75\)/);
   assert.match(page, /Promise\.allSettled/);
-  assert.match(page, /method: "PUT"/);
+  assert.match(page, /method: "POST", mode: "no-cors"/);
+  assert.match(page, /postPrivateVariant/);
   assert.match(page, /uploadPrivateImage/);
-  assert.doesNotMatch(page, /new FormData\(\)/);
+  assert.match(page, /new FormData\(\)/);
   assert.match(page, /captureAttachments\.some\(\(item\) => item\.status !== "ready"\)/);
   assert.match(page, /attachmentCount/);
   assert.match(page, /Task details/);
