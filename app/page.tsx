@@ -114,6 +114,132 @@ function request<T>(path: string, options?: RequestInit): Promise<T> {
 const IMAGE_ACCEPT = "image/jpeg,image/png,image/webp,image/gif,image/heic,image/heif,.heic,.heif";
 const MAX_ATTACHMENTS = 12;
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
+const MAX_IMAGE_PIXELS = 100_000_000;
+
+type PreparedAttachmentUpload = {
+  uploadId: string;
+  putUrls: { original: string; display: string; thumbnail: string };
+};
+
+function uploadMimeType(file: File) {
+  const supplied = file.type.toLowerCase().trim();
+  const extension = file.name.toLowerCase().match(/\.([a-z0-9]+)$/)?.[1];
+  if (["image/jpeg", "image/png", "image/webp", "image/gif", "image/heic", "image/heif"].includes(supplied)) return supplied;
+  if (extension === "jpg" || extension === "jpeg") return "image/jpeg";
+  if (extension && ["png", "webp", "gif", "heic", "heif"].includes(extension)) return `image/${extension}`;
+  return null;
+}
+
+async function decodedImage(file: File) {
+  if (typeof createImageBitmap === "function") {
+    try {
+      const bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
+      return {
+        source: bitmap as CanvasImageSource,
+        width: bitmap.width,
+        height: bitmap.height,
+        cleanup: () => bitmap.close(),
+      };
+    } catch {
+      // Safari's native image element can decode HEIC even where createImageBitmap cannot.
+    }
+  }
+  const objectUrl = URL.createObjectURL(file);
+  const image = new Image();
+  image.decoding = "async";
+  image.src = objectUrl;
+  try {
+    await image.decode();
+    return {
+      source: image as CanvasImageSource,
+      width: image.naturalWidth,
+      height: image.naturalHeight,
+      cleanup: () => URL.revokeObjectURL(objectUrl),
+    };
+  } catch (error) {
+    URL.revokeObjectURL(objectUrl);
+    throw error;
+  }
+}
+
+function canvasWebp(source: CanvasImageSource, width: number, height: number, maxDimension: number, quality: number) {
+  const scale = Math.min(1, maxDimension / Math.max(width, height));
+  const outputWidth = Math.max(1, Math.round(width * scale));
+  const outputHeight = Math.max(1, Math.round(height * scale));
+  const canvas = document.createElement("canvas");
+  canvas.width = outputWidth;
+  canvas.height = outputHeight;
+  const context = canvas.getContext("2d", { alpha: true });
+  if (!context) throw new Error("This browser cannot process images.");
+  context.drawImage(source, 0, 0, outputWidth, outputHeight);
+  return new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error("This browser could not optimize the image.")), "image/webp", quality);
+  });
+}
+
+async function imageVariants(file: File) {
+  const decoded = await decodedImage(file).catch(() => {
+    throw new Error("This image format cannot be read on this device.");
+  });
+  try {
+    const { width, height, source } = decoded;
+    if (!width || !height || width * height > MAX_IMAGE_PIXELS) throw new Error("That image is too large to process.");
+    const startedAt = performance.now();
+    const [display, thumbnail] = await Promise.all([
+      canvasWebp(source, width, height, 2048, 0.82),
+      canvasWebp(source, width, height, 480, 0.75),
+    ]);
+    console.info("[todo-ui] image variants prepared", {
+      inputBytes: file.size,
+      displayBytes: display.size,
+      thumbnailBytes: thumbnail.size,
+      width,
+      height,
+      durationMs: Math.round(performance.now() - startedAt),
+    });
+    return { display, thumbnail, width, height };
+  } finally {
+    decoded.cleanup();
+  }
+}
+
+async function putPrivateVariant(url: string, body: Blob, contentType: string) {
+  const response = await fetch(url, { method: "PUT", headers: { "Content-Type": contentType }, body });
+  if (!response.ok) throw new Error(`Image storage rejected an upload (${response.status}).`);
+}
+
+async function uploadPrivateImage(
+  file: File,
+  endpoint: string,
+  target: Record<string, string>,
+  discard: (uploadId: string) => Promise<unknown>,
+) {
+  const mimeType = uploadMimeType(file);
+  if (!mimeType) throw new Error("Choose a JPEG, PNG, WebP, GIF, HEIC, or HEIF image.");
+  const variants = await imageVariants(file);
+  const prepared = await request<PreparedAttachmentUpload>(endpoint, {
+    method: "POST",
+    body: JSON.stringify({ ...target, fileName: file.name || "image", mimeType, byteSize: file.size }),
+  });
+  try {
+    const uploads = await Promise.allSettled([
+      putPrivateVariant(prepared.putUrls.original, file, mimeType),
+      putPrivateVariant(prepared.putUrls.display, variants.display, "image/webp"),
+      putPrivateVariant(prepared.putUrls.thumbnail, variants.thumbnail, "image/webp"),
+    ]);
+    const failed = uploads.find((result): result is PromiseRejectedResult => result.status === "rejected");
+    if (failed) throw failed.reason;
+    return await request<{ attachment: TodoAttachment }>(endpoint, {
+      method: "PATCH",
+      body: JSON.stringify({ ...target, uploadId: prepared.uploadId, width: variants.width, height: variants.height }),
+    });
+  } catch (error) {
+    await discard(prepared.uploadId).catch((discardError) => {
+      console.error("[todo-ui] incomplete image cleanup failed", { uploadId: prepared.uploadId, discardError });
+    });
+    throw error;
+  }
+}
 
 function AttachmentPicker({
   disabled,
@@ -671,7 +797,7 @@ export default function Home() {
         setNotice({ tone: "error", text: `${file.name || "An image"} is larger than 20 MB.` });
         return false;
       }
-      if (!file.type.startsWith("image/") && !/\.(heic|heif)$/i.test(file.name)) {
+      if (!uploadMimeType(file)) {
         setNotice({ tone: "error", text: "Choose JPEG, PNG, WebP, GIF, HEIC, or HEIF images." });
         return false;
       }
@@ -682,11 +808,11 @@ export default function Home() {
   }
 
   async function uploadCaptureAttachment(localId: string, file: File, draftToken: string) {
-    const body = new FormData();
-    body.append("file", file);
-    body.append("draftToken", draftToken);
     try {
-      const { attachment } = await request<{ attachment: TodoAttachment }>("/api/attachments/drafts", { method: "POST", body });
+      const { attachment } = await uploadPrivateImage(file, "/api/attachments/drafts", { draftToken }, (uploadId) => request(`/api/attachments/drafts/${uploadId}`, {
+        method: "DELETE",
+        body: JSON.stringify({ draftToken }),
+      }));
       setCaptureAttachments((current) => current.map((item) => item.localId === localId
         ? { ...item, status: "ready", attachment, error: "" }
         : item));
@@ -759,10 +885,9 @@ export default function Home() {
   }
 
   async function uploadDetailAttachment(todoId: number, item: PendingAttachment) {
-    const body = new FormData();
-    body.append("file", item.file);
     try {
-      const { attachment } = await request<{ attachment: TodoAttachment }>(`/api/todos/${todoId}/attachments`, { method: "POST", body });
+      const endpoint = `/api/todos/${todoId}/attachments`;
+      const { attachment } = await uploadPrivateImage(item.file, endpoint, {}, (uploadId) => request(`${endpoint}/${uploadId}?discard=1`, { method: "DELETE" }));
       setDetailUploads((current) => {
         const found = current.find((candidate) => candidate.localId === item.localId);
         if (found) URL.revokeObjectURL(found.previewUrl);

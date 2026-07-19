@@ -1,8 +1,12 @@
 import {
   DeleteObjectsCommand,
+  GetBucketCorsCommand,
   GetObjectCommand,
+  HeadObjectCommand,
+  PutBucketCorsCommand,
   PutObjectCommand,
   S3Client,
+  type CORSRule,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { env, waitUntil } from "cloudflare:workers";
@@ -14,31 +18,16 @@ const DRAFT_LIFETIME_HOURS = 24;
 const DELETED_RETENTION_DAYS = 7;
 const SIGNED_URL_SECONDS = 60 * 60;
 
-type ImageInfo = {
-  format: string;
-  fileSize: number;
-  width: number;
-  height: number;
-};
-
 type RuntimeEnv = {
   DB: D1Database;
   S3_ACCESS_KEY: string;
   S3_ACCESS_KEY_ID: string;
   S3_BUCKET: string;
-  S3_CDN_URL: string;
   S3_ENDPOINT_URL: string;
-  IMAGES: {
-    info(stream: ReadableStream): Promise<ImageInfo>;
-    input(stream: ReadableStream): {
-      transform(options: Record<string, unknown>): {
-        output(options: { format: string; quality: number; anim?: boolean }): Promise<{ response(): Response }>;
-      };
-    };
-  };
 };
 
-let cachedStorageConfig: { bucket: string; cdnHost: string | null; client: S3Client } | null = null;
+let cachedStorageConfig: { bucket: string; client: S3Client } | null = null;
+let uploadCorsReady: Promise<void> | null = null;
 
 export type AttachmentRow = {
   id: string;
@@ -52,6 +41,7 @@ export type AttachmentRow = {
   byte_size: number;
   width: number;
   height: number;
+  upload_state: "uploading" | "ready";
   sort_order: number;
   expires_at: string | null;
   deleted_at: string | null;
@@ -94,14 +84,19 @@ function storageConfig() {
     "S3_ENDPOINT_URL",
   ].filter((key) => !current[key as keyof RuntimeEnv]);
   if (missing.length) throw new Error(`Image storage is missing ${missing.join(", ")}.`);
-  const endpoint = /^https?:\/\//i.test(current.S3_ENDPOINT_URL)
+  const endpointValue = /^https?:\/\//i.test(current.S3_ENDPOINT_URL)
     ? current.S3_ENDPOINT_URL
     : `https://${current.S3_ENDPOINT_URL}`;
+  const endpointUrl = new URL(endpointValue);
+  const bucketPrefix = `${current.S3_BUCKET}.`;
+  if (endpointUrl.hostname.startsWith(bucketPrefix)) endpointUrl.hostname = endpointUrl.hostname.slice(bucketPrefix.length);
+  endpointUrl.pathname = "/";
+  endpointUrl.search = "";
+  endpointUrl.hash = "";
   cachedStorageConfig = {
     bucket: current.S3_BUCKET,
-    cdnHost: current.S3_CDN_URL?.replace(/^https?:\/\//i, "").replace(/\/$/, "") || null,
     client: new S3Client({
-      endpoint,
+      endpoint: endpointUrl.toString(),
       region: "us-east-1",
       forcePathStyle: false,
       credentials: {
@@ -113,27 +108,10 @@ function storageConfig() {
   return cachedStorageConfig;
 }
 
-function streamFor(bytes: Uint8Array) {
-  return new Blob([bytes.slice().buffer as ArrayBuffer]).stream();
-}
-
 function normalizedFormat(value: string) {
   const format = value.toLowerCase().replace(/^image\//, "");
   if (format === "jpg") return "jpeg";
   return format;
-}
-
-function mimeForFormat(format: string) {
-  const normalized = normalizedFormat(format);
-  if (normalized === "jpeg") return "image/jpeg";
-  if (normalized === "heic") return "image/heic";
-  if (normalized === "heif") return "image/heif";
-  return `image/${normalized}`;
-}
-
-function extensionForFormat(format: string) {
-  const normalized = normalizedFormat(format);
-  return normalized === "jpeg" ? "jpg" : normalized;
 }
 
 function cleanFileName(value: string) {
@@ -146,14 +124,6 @@ function validateDraftToken(value: string) {
   return value;
 }
 
-async function transform(bytes: Uint8Array, width: number, quality: number) {
-  const result = await runtime().IMAGES
-    .input(streamFor(bytes))
-    .transform({ width, height: width, fit: "scale-down" })
-    .output({ format: "image/webp", quality, anim: false });
-  return new Uint8Array(await result.response().arrayBuffer());
-}
-
 async function deleteKeys(keys: string[]) {
   if (!keys.length) return;
   const { bucket, client } = storageConfig();
@@ -164,18 +134,14 @@ async function deleteKeys(keys: string[]) {
 }
 
 async function signedObjectUrl(key: string, downloadName?: string) {
-  const { bucket, cdnHost, client } = storageConfig();
-  const signed = await getSignedUrl(client, new GetObjectCommand({
+  const { bucket, client } = storageConfig();
+  return getSignedUrl(client, new GetObjectCommand({
     Bucket: bucket,
     Key: key,
     ...(downloadName
       ? { ResponseContentDisposition: `attachment; filename*=UTF-8''${encodeURIComponent(downloadName)}` }
       : {}),
   }), { expiresIn: SIGNED_URL_SECONDS });
-  if (!cdnHost) return signed;
-  const url = new URL(signed);
-  url.hostname = cdnHost.startsWith(`${bucket}.`) ? cdnHost : `${bucket}.${cdnHost}`;
-  return url.toString();
 }
 
 async function mapAttachment(row: AttachmentRow): Promise<TodoAttachment> {
@@ -200,62 +166,131 @@ async function mapAttachment(row: AttachmentRow): Promise<TodoAttachment> {
   };
 }
 
-export async function uploadTodoAttachment(
-  file: File,
-  target: { todoId: number } | { draftToken: string },
+type UploadTarget = { todoId: number } | { draftToken: string };
+
+type PrepareUploadInput = {
+  fileName: string;
+  mimeType: string;
+  byteSize: number;
+};
+
+type FinalizeUploadInput = {
+  width: number;
+  height: number;
+};
+
+function normalizedMimeType(value: string, fileName: string) {
+  const supplied = value.toLowerCase().trim();
+  const extension = fileName.toLowerCase().match(/\.([a-z0-9]+)$/)?.[1];
+  const inferred = extension === "jpg" || extension === "jpeg" ? "image/jpeg"
+    : extension && ["png", "webp", "gif", "heic", "heif"].includes(extension) ? `image/${extension}`
+      : "";
+  const mimeType = supplied || inferred;
+  const allowed = new Set(["image/jpeg", "image/png", "image/webp", "image/gif", "image/heic", "image/heif"]);
+  if (!allowed.has(mimeType)) throw new Error("Use a JPEG, PNG, WebP, GIF, HEIC, or HEIF image.");
+  return mimeType;
+}
+
+function extensionForMimeType(mimeType: string) {
+  return mimeType === "image/jpeg" ? "jpg" : mimeType.replace("image/", "");
+}
+
+async function ensureUploadCors(origin: string) {
+  if (uploadCorsReady) return uploadCorsReady;
+  uploadCorsReady = (async () => {
+    const { bucket, client } = storageConfig();
+    const allowedOrigins = new Set([
+      "https://dawar-todo.dawar185924.chatgpt.site",
+      "https://work.dawar.ca",
+      ...(origin.startsWith("https://") ? [origin] : []),
+    ]);
+    let rules: CORSRule[] = [];
+    try {
+      const current = await client.send(new GetBucketCorsCommand({ Bucket: bucket }));
+      rules = current.CORSRules ?? [];
+    } catch (error) {
+      const name = error instanceof Error ? error.name : "";
+      if (!/NoSuchCORS|NoSuchCORSConfiguration|NotFound/i.test(name)) throw error;
+    }
+    const ruleId = "dawar-todo-private-upload";
+    const existing = rules.find((rule) => rule.ID === ruleId);
+    const desiredOrigins = [...new Set([...(existing?.AllowedOrigins ?? []), ...allowedOrigins])];
+    const alreadyConfigured = existing
+      && desiredOrigins.every((value) => existing.AllowedOrigins?.includes(value))
+      && existing.AllowedMethods?.includes("PUT")
+      && existing.AllowedHeaders?.includes("*");
+    if (!alreadyConfigured) {
+      const nextRule = {
+        ID: ruleId,
+        AllowedOrigins: desiredOrigins,
+        AllowedMethods: ["PUT"],
+        AllowedHeaders: ["*"],
+        ExposeHeaders: ["ETag"],
+        MaxAgeSeconds: 3600,
+      };
+      await client.send(new PutBucketCorsCommand({
+        Bucket: bucket,
+        CORSConfiguration: {
+          CORSRules: [...rules.filter((rule) => rule.ID !== ruleId), nextRule],
+        },
+      }));
+      console.info("[todo-attachments] upload CORS configured", { origins: desiredOrigins.length });
+    }
+  })().catch((error) => {
+    uploadCorsReady = null;
+    throw error;
+  });
+  return uploadCorsReady;
+}
+
+function targetValues(target: UploadTarget) {
+  const isDraft = "draftToken" in target;
+  return {
+    isDraft,
+    draftToken: isDraft ? validateDraftToken(target.draftToken) : null,
+    todoId: isDraft ? null : target.todoId,
+  };
+}
+
+export async function prepareTodoAttachmentUpload(
+  input: PrepareUploadInput,
+  target: UploadTarget,
+  origin: string,
 ) {
   const startedAt = Date.now();
-  if (!(file instanceof File)) throw new Error("Choose an image to upload.");
-  if (file.size < 1) throw new Error("That image is empty.");
-  if (file.size > MAX_ATTACHMENT_BYTES) throw new Error("Images are limited to 20 MB each.");
+  const byteSize = Number(input.byteSize);
+  if (!Number.isInteger(byteSize) || byteSize < 1) throw new Error("That image is empty.");
+  if (byteSize > MAX_ATTACHMENT_BYTES) throw new Error("Images are limited to 20 MB each.");
+  const fileName = cleanFileName(input.fileName);
+  const mimeType = normalizedMimeType(input.mimeType, fileName);
   const db = database();
-  const isDraft = "draftToken" in target;
-  const draftToken = isDraft ? validateDraftToken(target.draftToken) : null;
-  const todoId = isDraft ? null : target.todoId;
+  const { isDraft, draftToken, todoId } = targetValues(target);
   if (todoId !== null) {
     const todo = await db.prepare("SELECT id FROM todos WHERE id = ?").bind(todoId).first<{ id: number }>();
     if (!todo) throw new Error("Task not found.");
   }
   const count = todoId === null
-    ? await db.prepare("SELECT COUNT(*) AS count FROM todo_attachments WHERE draft_token = ? AND deleted_at IS NULL").bind(draftToken).first<{ count: number }>()
-    : await db.prepare("SELECT COUNT(*) AS count FROM todo_attachments WHERE todo_id = ? AND deleted_at IS NULL").bind(todoId).first<{ count: number }>();
+    ? await db.prepare("SELECT COUNT(*) AS count FROM todo_attachments WHERE draft_token = ? AND upload_state = 'ready' AND deleted_at IS NULL").bind(draftToken).first<{ count: number }>()
+    : await db.prepare("SELECT COUNT(*) AS count FROM todo_attachments WHERE todo_id = ? AND upload_state = 'ready' AND deleted_at IS NULL").bind(todoId).first<{ count: number }>();
   if (Number(count?.count ?? 0) >= MAX_ATTACHMENTS_PER_TASK) {
     throw new Error(`Tasks are limited to ${MAX_ATTACHMENTS_PER_TASK} images.`);
   }
 
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  const info = await runtime().IMAGES.info(streamFor(bytes));
-  const format = normalizedFormat(info.format);
-  const allowed = new Set(["jpeg", "png", "webp", "gif", "heic", "heif"]);
-  if (!allowed.has(format)) throw new Error("Use a JPEG, PNG, WebP, GIF, HEIC, or HEIF image.");
-  if (!Number.isFinite(info.width) || !Number.isFinite(info.height) || info.width * info.height > MAX_IMAGE_PIXELS) {
-    throw new Error("That image is too large to process.");
-  }
-
-  const [display, thumbnail] = await Promise.all([
-    transform(bytes, 2048, 82),
-    transform(bytes, 480, 75),
-  ]);
+  await ensureUploadCors(origin);
   const id = crypto.randomUUID();
   const base = `todo-images/${id}`;
-  const originalKey = `${base}/original.${extensionForFormat(format)}`;
+  const originalKey = `${base}/original.${extensionForMimeType(mimeType)}`;
   const displayKey = `${base}/display.webp`;
   const thumbnailKey = `${base}/thumb.webp`;
-  const keys = [originalKey, displayKey, thumbnailKey];
   const { bucket, client } = storageConfig();
   try {
-    await Promise.all([
-      client.send(new PutObjectCommand({ Bucket: bucket, Key: originalKey, Body: bytes, ContentType: mimeForFormat(format) })),
-      client.send(new PutObjectCommand({ Bucket: bucket, Key: displayKey, Body: display, ContentType: "image/webp" })),
-      client.send(new PutObjectCommand({ Bucket: bucket, Key: thumbnailKey, Body: thumbnail, ContentType: "image/webp" })),
-    ]);
     const nextOrder = Number(count?.count ?? 0);
-    const expiresAt = isDraft ? new Date(Date.now() + DRAFT_LIFETIME_HOURS * 60 * 60 * 1000).toISOString() : null;
+    const expiresAt = new Date(Date.now() + DRAFT_LIFETIME_HOURS * 60 * 60 * 1000).toISOString();
     const row = await db.prepare(`
       INSERT INTO todo_attachments (
         id, todo_id, draft_token, original_key, display_key, thumbnail_key,
-        file_name, mime_type, byte_size, width, height, sort_order, expires_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        file_name, mime_type, byte_size, width, height, upload_state, sort_order, expires_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 'uploading', ?, ?)
       RETURNING *
     `).bind(
       id,
@@ -264,37 +299,33 @@ export async function uploadTodoAttachment(
       originalKey,
       displayKey,
       thumbnailKey,
-      cleanFileName(file.name),
-      mimeForFormat(format),
-      file.size,
-      info.width,
-      info.height,
+      fileName,
+      mimeType,
+      byteSize,
       nextOrder,
       expiresAt,
     ).first<AttachmentRow>();
-    if (!row) throw new Error("The uploaded image could not be saved.");
-    console.info("[todo-attachments] uploaded", {
+    if (!row) throw new Error("The image upload could not be prepared.");
+    const [originalUrl, displayUrl, thumbnailUrl] = await Promise.all([
+      getSignedUrl(client, new PutObjectCommand({ Bucket: bucket, Key: originalKey, ContentType: mimeType }), { expiresIn: 15 * 60 }),
+      getSignedUrl(client, new PutObjectCommand({ Bucket: bucket, Key: displayKey, ContentType: "image/webp" }), { expiresIn: 15 * 60 }),
+      getSignedUrl(client, new PutObjectCommand({ Bucket: bucket, Key: thumbnailKey, ContentType: "image/webp" }), { expiresIn: 15 * 60 }),
+    ]);
+    console.info("[todo-attachments] direct upload prepared", {
       attachmentId: id,
       todoId,
       draft: isDraft,
-      bytes: file.size,
-      width: info.width,
-      height: info.height,
-      format,
+      bytes: byteSize,
       durationMs: Date.now() - startedAt,
     });
-    return mapAttachment(row);
+    return { uploadId: id, putUrls: { original: originalUrl, display: displayUrl, thumbnail: thumbnailUrl } };
   } catch (error) {
-    try {
-      await deleteKeys(keys);
-    } catch (cleanupError) {
-      console.error("[todo-attachments] partial upload cleanup failed", { attachmentId: id, cleanupError });
-    }
-    console.error("[todo-attachments] upload failed", {
+    await db.prepare("DELETE FROM todo_attachments WHERE id = ? AND upload_state = 'uploading'").bind(id).run().catch(() => undefined);
+    console.error("[todo-attachments] upload preparation failed", {
       attachmentId: id,
       todoId,
       draft: isDraft,
-      bytes: file.size,
+      bytes: byteSize,
       durationMs: Date.now() - startedAt,
       error,
     });
@@ -302,10 +333,170 @@ export async function uploadTodoAttachment(
   }
 }
 
+function detectedImageFormat(bytes: Uint8Array) {
+  if (bytes.length >= 12 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "jpeg";
+  if (bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) return "png";
+  const ascii = (start: number, length: number) => String.fromCharCode(...bytes.slice(start, start + length));
+  if (bytes.length >= 6 && ["GIF87a", "GIF89a"].includes(ascii(0, 6))) return "gif";
+  if (bytes.length >= 12 && ascii(0, 4) === "RIFF" && ascii(8, 4) === "WEBP") return "webp";
+  if (bytes.length >= 12 && ascii(4, 4) === "ftyp") {
+    const brand = ascii(8, 4).toLowerCase();
+    if (["heic", "heix", "hevc", "hevx", "heim", "heis"].includes(brand)) return "heic";
+    if (["heif", "mif1", "msf1"].includes(brand)) return "heif";
+  }
+  return null;
+}
+
+async function firstBytes(key: string) {
+  const { bucket, client } = storageConfig();
+  const result = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key, Range: "bytes=0-65535" }));
+  if (!result.Body) throw new Error("An uploaded image could not be read.");
+  return new Uint8Array(await result.Body.transformToByteArray());
+}
+
+function inspectedImageDimensions(bytes: Uint8Array, format: string) {
+  const big16 = (offset: number) => (bytes[offset] << 8) | bytes[offset + 1];
+  const little16 = (offset: number) => bytes[offset] | (bytes[offset + 1] << 8);
+  const big32 = (offset: number) => ((bytes[offset] << 24) | (bytes[offset + 1] << 16) | (bytes[offset + 2] << 8) | bytes[offset + 3]) >>> 0;
+  if (format === "png" && bytes.length >= 24) return { width: big32(16), height: big32(20) };
+  if (format === "gif" && bytes.length >= 10) return { width: little16(6), height: little16(8) };
+  if (format === "webp" && bytes.length >= 30) {
+    const chunk = String.fromCharCode(...bytes.slice(12, 16));
+    if (chunk === "VP8X") {
+      const width = 1 + bytes[24] + (bytes[25] << 8) + (bytes[26] << 16);
+      const height = 1 + bytes[27] + (bytes[28] << 8) + (bytes[29] << 16);
+      return { width, height };
+    }
+    if (chunk === "VP8L" && bytes[20] === 0x2f) {
+      const width = 1 + bytes[21] + ((bytes[22] & 0x3f) << 8);
+      const height = 1 + (bytes[22] >> 6) + (bytes[23] << 2) + ((bytes[24] & 0x0f) << 10);
+      return { width, height };
+    }
+    if (chunk === "VP8 " && bytes[23] === 0x9d && bytes[24] === 0x01 && bytes[25] === 0x2a) {
+      return { width: little16(26) & 0x3fff, height: little16(28) & 0x3fff };
+    }
+  }
+  if (format === "jpeg") {
+    const sizeMarkers = new Set([0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf]);
+    let offset = 2;
+    while (offset + 8 < bytes.length) {
+      if (bytes[offset] !== 0xff) { offset += 1; continue; }
+      while (bytes[offset] === 0xff) offset += 1;
+      const marker = bytes[offset];
+      if (sizeMarkers.has(marker)) return { width: big16(offset + 6), height: big16(offset + 4) };
+      if (marker === 0xd8 || marker === 0xd9 || (marker >= 0xd0 && marker <= 0xd7)) { offset += 1; continue; }
+      if (offset + 2 >= bytes.length) break;
+      const length = big16(offset + 1);
+      if (length < 2) break;
+      offset += length + 1;
+    }
+  }
+  return null;
+}
+
+export async function finalizeTodoAttachmentUpload(
+  id: string,
+  input: FinalizeUploadInput,
+  target: UploadTarget,
+) {
+  const startedAt = Date.now();
+  if (!/^[0-9a-f-]{36}$/i.test(id)) throw new Error("That image upload is invalid.");
+  const width = Number(input.width);
+  const height = Number(input.height);
+  if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1 || width * height > MAX_IMAGE_PIXELS) {
+    throw new Error("That image is too large to process.");
+  }
+  const db = database();
+  const { draftToken, todoId } = targetValues(target);
+  const row = todoId === null
+    ? await db.prepare("SELECT * FROM todo_attachments WHERE id = ? AND draft_token = ? AND todo_id IS NULL AND deleted_at IS NULL").bind(id, draftToken).first<AttachmentRow>()
+    : await db.prepare("SELECT * FROM todo_attachments WHERE id = ? AND todo_id = ? AND deleted_at IS NULL").bind(id, todoId).first<AttachmentRow>();
+  if (!row) throw new Error("That image upload is no longer available.");
+  if (row.upload_state === "ready") return mapAttachment(row);
+  const readyCount = todoId === null
+    ? await db.prepare("SELECT COUNT(*) AS count FROM todo_attachments WHERE draft_token = ? AND upload_state = 'ready' AND deleted_at IS NULL").bind(draftToken).first<{ count: number }>()
+    : await db.prepare("SELECT COUNT(*) AS count FROM todo_attachments WHERE todo_id = ? AND upload_state = 'ready' AND deleted_at IS NULL").bind(todoId).first<{ count: number }>();
+  if (Number(readyCount?.count ?? 0) >= MAX_ATTACHMENTS_PER_TASK) {
+    throw new Error(`Tasks are limited to ${MAX_ATTACHMENTS_PER_TASK} images.`);
+  }
+  const keys = [row.original_key, row.display_key, row.thumbnail_key];
+  try {
+    const { bucket, client } = storageConfig();
+    const [originalHead, displayHead, thumbnailHead, originalBytes, displayBytes, thumbnailBytes] = await Promise.all([
+      client.send(new HeadObjectCommand({ Bucket: bucket, Key: row.original_key })),
+      client.send(new HeadObjectCommand({ Bucket: bucket, Key: row.display_key })),
+      client.send(new HeadObjectCommand({ Bucket: bucket, Key: row.thumbnail_key })),
+      firstBytes(row.original_key),
+      firstBytes(row.display_key),
+      firstBytes(row.thumbnail_key),
+    ]);
+    const originalSize = Number(originalHead.ContentLength ?? 0);
+    const displaySize = Number(displayHead.ContentLength ?? 0);
+    const thumbnailSize = Number(thumbnailHead.ContentLength ?? 0);
+    if (originalSize < 1 || originalSize > MAX_ATTACHMENT_BYTES || displaySize < 1 || displaySize > 8 * 1024 * 1024 || thumbnailSize < 1 || thumbnailSize > 2 * 1024 * 1024) {
+      throw new Error("One or more uploaded image files has an invalid size.");
+    }
+    const expected = normalizedFormat(row.mime_type);
+    const originalFormat = detectedImageFormat(originalBytes);
+    if (!originalFormat || (expected !== originalFormat && !(expected === "heif" && originalFormat === "heic") && !(expected === "heic" && originalFormat === "heif"))) {
+      throw new Error("The uploaded file is not the expected image type.");
+    }
+    if (detectedImageFormat(displayBytes) !== "webp" || detectedImageFormat(thumbnailBytes) !== "webp") {
+      throw new Error("The optimized image files are invalid.");
+    }
+    const originalDimensions = inspectedImageDimensions(originalBytes, originalFormat);
+    const displayDimensions = inspectedImageDimensions(displayBytes, "webp");
+    const thumbnailDimensions = inspectedImageDimensions(thumbnailBytes, "webp");
+    const reportedDimensionsMatch = !originalDimensions
+      || (originalDimensions.width === width && originalDimensions.height === height)
+      || (originalDimensions.width === height && originalDimensions.height === width);
+    if (!reportedDimensionsMatch) throw new Error("The uploaded image dimensions do not match the source.");
+    if (!displayDimensions || Math.max(displayDimensions.width, displayDimensions.height) > 2048) {
+      throw new Error("The viewer image has invalid dimensions.");
+    }
+    if (!thumbnailDimensions || Math.max(thumbnailDimensions.width, thumbnailDimensions.height) > 480) {
+      throw new Error("The thumbnail image has invalid dimensions.");
+    }
+    const finalized = await db.prepare(`
+      UPDATE todo_attachments
+      SET width = ?, height = ?, byte_size = ?, upload_state = 'ready',
+          expires_at = CASE WHEN todo_id IS NULL THEN expires_at ELSE NULL END,
+          updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+      WHERE id = ? AND upload_state = 'uploading'
+      RETURNING *
+    `).bind(width, height, originalSize, id).first<AttachmentRow>();
+    if (!finalized) throw new Error("The uploaded image could not be finalized.");
+    console.info("[todo-attachments] direct upload finalized", {
+      attachmentId: id,
+      todoId,
+      bytes: originalSize,
+      displayBytes: displaySize,
+      thumbnailBytes: thumbnailSize,
+      width,
+      height,
+      displayWidth: displayDimensions.width,
+      displayHeight: displayDimensions.height,
+      thumbnailWidth: thumbnailDimensions.width,
+      thumbnailHeight: thumbnailDimensions.height,
+      durationMs: Date.now() - startedAt,
+    });
+    return mapAttachment(finalized);
+  } catch (error) {
+    try {
+      await deleteKeys(keys);
+      await db.prepare("DELETE FROM todo_attachments WHERE id = ? AND upload_state = 'uploading'").bind(id).run();
+    } catch (cleanupError) {
+      console.error("[todo-attachments] invalid direct upload cleanup failed", { attachmentId: id, cleanupError });
+    }
+    console.error("[todo-attachments] direct upload finalize failed", { attachmentId: id, todoId, durationMs: Date.now() - startedAt, error });
+    throw error;
+  }
+}
+
 export async function listTodoAttachments(todoId: number) {
   const result = await database().prepare(`
     SELECT * FROM todo_attachments
-    WHERE todo_id = ? AND deleted_at IS NULL
+    WHERE todo_id = ? AND upload_state = 'ready' AND deleted_at IS NULL
     ORDER BY sort_order ASC, created_at ASC
   `).bind(todoId).all<AttachmentRow>();
   return Promise.all(result.results.map(mapAttachment));
@@ -325,11 +516,24 @@ export async function deleteDraftAttachment(id: string, draftToken: string) {
   return true;
 }
 
+export async function discardTodoAttachmentUpload(todoId: number, id: string) {
+  const db = database();
+  const row = await db.prepare(`
+    SELECT * FROM todo_attachments
+    WHERE id = ? AND todo_id = ? AND upload_state = 'uploading' AND deleted_at IS NULL
+  `).bind(id, todoId).first<AttachmentRow>();
+  if (!row) return false;
+  await deleteKeys([row.original_key, row.display_key, row.thumbnail_key]);
+  await db.prepare("DELETE FROM todo_attachments WHERE id = ? AND upload_state = 'uploading'").bind(id).run();
+  console.info("[todo-attachments] incomplete task upload discarded", { attachmentId: id, todoId });
+  return true;
+}
+
 export async function deleteTodoAttachment(todoId: number, id: string) {
   const db = database();
   const row = await db.prepare(`
     SELECT * FROM todo_attachments
-    WHERE id = ? AND todo_id = ? AND deleted_at IS NULL
+    WHERE id = ? AND todo_id = ? AND upload_state = 'ready' AND deleted_at IS NULL
   `).bind(id, todoId).first<AttachmentRow>();
   if (!row) return null;
   const undoToken = crypto.randomUUID();
@@ -353,14 +557,16 @@ export async function claimDraftAttachments(todoId: number, draftToken: string |
   const result = await db.prepare(`
     SELECT id FROM todo_attachments
     WHERE id IN (${placeholders}) AND draft_token = ? AND todo_id IS NULL
-      AND deleted_at IS NULL AND expires_at > strftime('%Y-%m-%dT%H:%M:%fZ','now')
+      AND upload_state = 'ready' AND deleted_at IS NULL
+      AND expires_at > strftime('%Y-%m-%dT%H:%M:%fZ','now')
   `).bind(...ids, token).all<{ id: string }>();
   if (result.results.length !== ids.length) throw new Error("One or more attached images are no longer available.");
   const statements = ids.map((id, sortOrder) => db.prepare(`
     UPDATE todo_attachments
     SET todo_id = ?, draft_token = NULL, expires_at = NULL, sort_order = ?,
         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-    WHERE id = ? AND draft_token = ? AND todo_id IS NULL AND deleted_at IS NULL
+    WHERE id = ? AND draft_token = ? AND todo_id IS NULL
+      AND upload_state = 'ready' AND deleted_at IS NULL
   `).bind(todoId, sortOrder, id, token));
   const updates = await db.batch(statements);
   if (updates.some((update) => Number(update.meta.changes ?? 0) !== 1)) {
@@ -380,7 +586,7 @@ export async function attachmentSnapshotsForTodos(todoIds: number[]) {
   const placeholders = todoIds.map(() => "?").join(", ");
   const result = await database().prepare(`
     SELECT * FROM todo_attachments
-    WHERE todo_id IN (${placeholders}) AND deleted_at IS NULL
+    WHERE todo_id IN (${placeholders}) AND upload_state = 'ready' AND deleted_at IS NULL
     ORDER BY todo_id, sort_order, created_at
   `).bind(...todoIds).all<AttachmentRow>();
   return result.results;
@@ -390,12 +596,13 @@ export function restoreAttachmentStatements(db: D1Database, rows: AttachmentRow[
   const restore = db.prepare(`
     INSERT INTO todo_attachments (
       id, todo_id, draft_token, original_key, display_key, thumbnail_key,
-      file_name, mime_type, byte_size, width, height, sort_order,
+      file_name, mime_type, byte_size, width, height, upload_state, sort_order,
       expires_at, deleted_at, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       todo_id = excluded.todo_id,
       draft_token = excluded.draft_token,
+      upload_state = excluded.upload_state,
       sort_order = excluded.sort_order,
       expires_at = excluded.expires_at,
       deleted_at = excluded.deleted_at,
@@ -413,6 +620,7 @@ export function restoreAttachmentStatements(db: D1Database, rows: AttachmentRow[
     row.byte_size,
     row.width,
     row.height,
+    row.upload_state ?? "ready",
     row.sort_order,
     row.expires_at,
     row.deleted_at,
@@ -425,7 +633,8 @@ async function cleanupExpiredAttachments() {
   const db = database();
   const result = await db.prepare(`
     SELECT * FROM todo_attachments
-    WHERE (todo_id IS NULL AND expires_at IS NOT NULL AND expires_at <= strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    WHERE (expires_at IS NOT NULL AND expires_at <= strftime('%Y-%m-%dT%H:%M:%fZ','now')
+           AND (todo_id IS NULL OR upload_state = 'uploading'))
        OR (deleted_at IS NOT NULL AND deleted_at <= strftime('%Y-%m-%dT%H:%M:%fZ','now','-${DELETED_RETENTION_DAYS} days'))
     ORDER BY COALESCE(deleted_at, expires_at) ASC
     LIMIT 100

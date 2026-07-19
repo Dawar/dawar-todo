@@ -1,10 +1,24 @@
-import { listTodoAttachments, scheduleAttachmentCleanup, uploadTodoAttachment } from "../../../../../db/attachments";
+import {
+  finalizeTodoAttachmentUpload,
+  listTodoAttachments,
+  prepareTodoAttachmentUpload,
+  scheduleAttachmentCleanup,
+} from "../../../../../db/attachments";
 import { ensureTodoDatabase, getTodo } from "../../../../../db/todos";
 
 function todoId(value: string) {
   const id = Number(value);
   return Number.isInteger(id) && id > 0 ? id : null;
 }
+
+type TaskUploadPayload = {
+  uploadId?: string;
+  fileName?: string;
+  mimeType?: string;
+  byteSize?: number;
+  width?: number;
+  height?: number;
+};
 
 export async function GET(
   _request: Request,
@@ -36,21 +50,52 @@ export async function POST(
   const startedAt = Date.now();
   try {
     await ensureTodoDatabase();
-    const form = await request.formData();
-    const file = form.get("file");
-    if (!(file instanceof File)) return Response.json({ error: "Choose an image to upload." }, { status: 400 });
-    const attachment = await uploadTodoAttachment(file, { todoId: id });
-    console.info("[todo-api] task attachment uploaded", {
+    const payload = await request.json() as TaskUploadPayload;
+    const prepared = await prepareTodoAttachmentUpload({
+      fileName: String(payload.fileName ?? ""),
+      mimeType: String(payload.mimeType ?? ""),
+      byteSize: Number(payload.byteSize),
+    }, { todoId: id }, new URL(request.url).origin);
+    console.info("[todo-api] task attachment upload prepared", {
       todoId: id,
-      attachmentId: attachment.id,
-      bytes: attachment.byteSize,
+      uploadId: prepared.uploadId,
+      bytes: Number(payload.byteSize),
       durationMs: Date.now() - startedAt,
     });
-    return Response.json({ attachment }, { status: 201 });
+    return Response.json(prepared, { status: 201 });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "The image could not be uploaded.";
+    const message = error instanceof Error ? error.message : "The image upload could not be prepared.";
     const status = /not found/i.test(message) ? 404 : /choose|image|limited|large/i.test(message) ? 400 : 500;
-    console.error("[todo-api] task attachment upload failed", { todoId: id, durationMs: Date.now() - startedAt, error });
+    console.error("[todo-api] task attachment preparation failed", { todoId: id, durationMs: Date.now() - startedAt, error });
+    return Response.json({ error: message }, { status });
+  }
+}
+
+export async function PATCH(
+  request: Request,
+  context: { params: Promise<{ id: string }> },
+) {
+  const { id: value } = await context.params;
+  const id = todoId(value);
+  if (!id) return Response.json({ error: "Invalid task." }, { status: 400 });
+  const startedAt = Date.now();
+  try {
+    await ensureTodoDatabase();
+    const payload = await request.json() as TaskUploadPayload;
+    const attachment = await finalizeTodoAttachmentUpload(String(payload.uploadId ?? ""), {
+      width: Number(payload.width),
+      height: Number(payload.height),
+    }, { todoId: id });
+    console.info("[todo-api] task attachment finalized", {
+      todoId: id,
+      attachmentId: attachment.id,
+      durationMs: Date.now() - startedAt,
+    });
+    return Response.json({ attachment });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "The image upload could not be finalized.";
+    const status = /not found|available/i.test(message) ? 404 : /image|limited|invalid|large|expected/i.test(message) ? 400 : 500;
+    console.error("[todo-api] task attachment finalization failed", { todoId: id, durationMs: Date.now() - startedAt, error });
     return Response.json({ error: message }, { status });
   }
 }

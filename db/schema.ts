@@ -77,6 +77,7 @@ export const todoAttachments = sqliteTable(
     byteSize: integer("byte_size").notNull(),
     width: integer("width").notNull(),
     height: integer("height").notNull(),
+    uploadState: text("upload_state").notNull().default("ready"),
     sortOrder: integer("sort_order").notNull().default(0),
     expiresAt: text("expires_at"),
     deletedAt: text("deleted_at"),

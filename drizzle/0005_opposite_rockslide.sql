@@ -1,0 +1,1 @@
+ALTER TABLE `todo_attachments` ADD `upload_state` text DEFAULT 'ready' NOT NULL;

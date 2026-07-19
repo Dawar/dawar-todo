@@ -153,6 +153,7 @@ export async function ensureTodoDatabase() {
           byte_size INTEGER NOT NULL,
           width INTEGER NOT NULL,
           height INTEGER NOT NULL,
+          upload_state TEXT NOT NULL DEFAULT 'ready',
           sort_order INTEGER NOT NULL DEFAULT 0,
           expires_at TEXT,
           deleted_at TEXT,
@@ -169,6 +170,11 @@ export async function ensureTodoDatabase() {
     }
     await db.prepare("CREATE INDEX IF NOT EXISTS todos_snoozed_until_idx ON todos(snoozed_until)").run();
     await db.prepare("CREATE INDEX IF NOT EXISTS todo_action_history_created_at_idx ON todo_action_history(created_at)").run();
+    const attachmentColumns = await db.prepare("PRAGMA table_info(todo_attachments)").all<{ name: string }>();
+    if (!attachmentColumns.results.some((column) => column.name === "upload_state")) {
+      await db.prepare("ALTER TABLE todo_attachments ADD COLUMN upload_state TEXT NOT NULL DEFAULT 'ready'").run();
+      console.info("[todo-db] added attachment upload state compatibility column");
+    }
     await db.batch([
       db.prepare("CREATE INDEX IF NOT EXISTS todo_attachments_todo_id_idx ON todo_attachments(todo_id)"),
       db.prepare("CREATE INDEX IF NOT EXISTS todo_attachments_draft_token_idx ON todo_attachments(draft_token)"),
@@ -274,7 +280,9 @@ export async function listTodos(): Promise<Todo[]> {
     .prepare(`
       SELECT todos.*,
         (SELECT COUNT(*) FROM todo_attachments
-         WHERE todo_attachments.todo_id = todos.id AND todo_attachments.deleted_at IS NULL) AS attachment_count
+         WHERE todo_attachments.todo_id = todos.id
+           AND todo_attachments.upload_state = 'ready'
+           AND todo_attachments.deleted_at IS NULL) AS attachment_count
       FROM todos
       ORDER BY updated_at DESC, id DESC
     `)
@@ -467,7 +475,9 @@ export async function getTodo(id: number): Promise<Todo | null> {
   const row = await database().prepare(`
     SELECT todos.*,
       (SELECT COUNT(*) FROM todo_attachments
-       WHERE todo_attachments.todo_id = todos.id AND todo_attachments.deleted_at IS NULL) AS attachment_count
+       WHERE todo_attachments.todo_id = todos.id
+         AND todo_attachments.upload_state = 'ready'
+         AND todo_attachments.deleted_at IS NULL) AS attachment_count
     FROM todos WHERE todos.id = ?
   `).bind(id).first<TodoRow>();
   return row ? mapTodo(row) : null;
@@ -622,7 +632,9 @@ export async function bulkUpdateTodos(
   const updated = await db.prepare(`
     SELECT todos.*,
       (SELECT COUNT(*) FROM todo_attachments
-       WHERE todo_attachments.todo_id = todos.id AND todo_attachments.deleted_at IS NULL) AS attachment_count
+       WHERE todo_attachments.todo_id = todos.id
+         AND todo_attachments.upload_state = 'ready'
+         AND todo_attachments.deleted_at IS NULL) AS attachment_count
     FROM todos WHERE todos.id IN (${inClause})
   `).bind(...ids).all<TodoRow>();
   const todos = updated.results.map(mapTodo);

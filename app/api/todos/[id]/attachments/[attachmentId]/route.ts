@@ -1,8 +1,8 @@
-import { deleteTodoAttachment } from "../../../../../../db/attachments";
+import { deleteTodoAttachment, discardTodoAttachmentUpload } from "../../../../../../db/attachments";
 import { ensureTodoDatabase } from "../../../../../../db/todos";
 
 export async function DELETE(
-  _request: Request,
+  request: Request,
   context: { params: Promise<{ id: string; attachmentId: string }> },
 ) {
   const { id: todoValue, attachmentId } = await context.params;
@@ -10,6 +10,12 @@ export async function DELETE(
   if (!Number.isInteger(todoId) || todoId < 1) return Response.json({ error: "Invalid task." }, { status: 400 });
   try {
     await ensureTodoDatabase();
+    if (new URL(request.url).searchParams.get("discard") === "1") {
+      const discarded = await discardTodoAttachmentUpload(todoId, attachmentId);
+      return discarded
+        ? Response.json({ attachmentId, discarded: true })
+        : Response.json({ error: "Image upload not found." }, { status: 404 });
+    }
     const result = await deleteTodoAttachment(todoId, attachmentId);
     if (!result) return Response.json({ error: "Image not found." }, { status: 404 });
     return Response.json(result);

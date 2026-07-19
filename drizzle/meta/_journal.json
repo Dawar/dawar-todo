@@ -36,6 +36,13 @@
       "when": 1784438090878,
       "tag": "0004_abnormal_onslaught",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1784439238138,
+      "tag": "0005_opposite_rockslide",
+      "breakpoints": true
     }
   ]
 }
