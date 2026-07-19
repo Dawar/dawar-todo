@@ -135,8 +135,8 @@ async function signedStorageResponse(url: URL, init?: RequestInit) {
   const serverUrl = new URL(url);
   serverUrl.hostname = endpoint.hostname;
   serverUrl.pathname = `/${encodeURIComponent(bucket)}${url.pathname}`;
-  const signedUrl = await signedQueryUrl(serverUrl, method, 300);
-  return fetch(signedUrl, { ...init, method });
+  const request = await signedHeaderRequest(serverUrl, method, init?.headers);
+  return fetch(request);
 }
 
 async function storageFetch(url: URL, init?: RequestInit) {
@@ -250,6 +250,50 @@ function signatureKey(date: string, region: string) {
     .then((dateKey) => hmac(dateKey, region))
     .then((regionKey) => hmac(regionKey, "s3"))
     .then((serviceKey) => hmac(serviceKey, "aws4_request"));
+}
+
+async function sha256Hex(value: string) {
+  return hex(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)));
+}
+
+async function signedHeaderRequest(input: URL, method: string, inputHeaders?: HeadersInit) {
+  const current = runtime();
+  const { region } = storageConfig();
+  const url = new URL(input);
+  const amzDate = new Date().toISOString().replace(/[:-]|\.\d{3}/g, "");
+  const date = amzDate.slice(0, 8);
+  const scope = `${date}/${region}/s3/aws4_request`;
+  const payloadHash = await sha256Hex("");
+  const headers = new Headers(inputHeaders);
+  headers.set("x-amz-content-sha256", payloadHash);
+  headers.set("x-amz-date", amzDate);
+  const canonicalPath = url.pathname.split("/").map((segment) => {
+    try { return awsEncode(decodeURIComponent(segment)); } catch { return awsEncode(segment); }
+  }).join("/");
+  const canonicalQuery = [...url.searchParams]
+    .map(([name, value]) => [awsEncode(name), awsEncode(value)] as const)
+    .sort(([nameA, valueA], [nameB, valueB]) => nameA < nameB ? -1 : nameA > nameB ? 1 : valueA < valueB ? -1 : valueA > valueB ? 1 : 0)
+    .map(([name, value]) => `${name}=${value}`)
+    .join("&");
+  const signedHeaders = "host;x-amz-content-sha256;x-amz-date";
+  const canonicalHeaders = [
+    `host:${url.host}`,
+    `x-amz-content-sha256:${payloadHash}`,
+    `x-amz-date:${amzDate}`,
+    "",
+  ].join("\n");
+  const canonicalRequest = [
+    method.toUpperCase(),
+    canonicalPath,
+    canonicalQuery,
+    canonicalHeaders,
+    signedHeaders,
+    payloadHash,
+  ].join("\n");
+  const stringToSign = ["AWS4-HMAC-SHA256", amzDate, scope, await sha256Hex(canonicalRequest)].join("\n");
+  const signature = hex(await hmac(await signatureKey(date, region), stringToSign));
+  headers.set("Authorization", `AWS4-HMAC-SHA256 Credential=${current.S3_ACCESS_KEY_ID}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}`);
+  return new Request(url, { method, headers });
 }
 
 async function signedQueryUrl(input: URL, method: string, expires: number) {
