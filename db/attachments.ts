@@ -1,14 +1,4 @@
-import {
-  DeleteObjectsCommand,
-  GetBucketCorsCommand,
-  GetObjectCommand,
-  HeadObjectCommand,
-  PutBucketCorsCommand,
-  PutObjectCommand,
-  S3Client,
-  type CORSRule,
-} from "@aws-sdk/client-s3";
-import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { AwsClient } from "aws4fetch";
 import { env, waitUntil } from "cloudflare:workers";
 
 export const MAX_ATTACHMENTS_PER_TASK = 12;
@@ -26,7 +16,17 @@ type RuntimeEnv = {
   S3_ENDPOINT_URL: string;
 };
 
-let cachedStorageConfig: { bucket: string; client: S3Client } | null = null;
+type StorageConfig = { bucket: string; endpoint: URL; client: AwsClient };
+type CorsRule = {
+  ID?: string;
+  AllowedHeaders?: string[];
+  AllowedMethods: string[];
+  AllowedOrigins: string[];
+  ExposeHeaders?: string[];
+  MaxAgeSeconds?: number;
+};
+
+let cachedStorageConfig: StorageConfig | null = null;
 let uploadCorsReady: Promise<void> | null = null;
 
 export type AttachmentRow = {
@@ -95,14 +95,13 @@ function storageConfig() {
   endpointUrl.hash = "";
   cachedStorageConfig = {
     bucket: current.S3_BUCKET,
-    client: new S3Client({
-      endpoint: endpointUrl.toString(),
+    endpoint: endpointUrl,
+    client: new AwsClient({
+      service: "s3",
       region: "us-east-1",
-      forcePathStyle: false,
-      credentials: {
-        accessKeyId: current.S3_ACCESS_KEY_ID,
-        secretAccessKey: current.S3_ACCESS_KEY,
-      },
+      retries: 2,
+      accessKeyId: current.S3_ACCESS_KEY_ID,
+      secretAccessKey: current.S3_ACCESS_KEY,
     }),
   };
   return cachedStorageConfig;
@@ -124,24 +123,35 @@ function validateDraftToken(value: string) {
   return value;
 }
 
+function storageUrl(key?: string, query?: Record<string, string>) {
+  const { bucket, endpoint } = storageConfig();
+  const url = new URL(endpoint);
+  url.hostname = `${bucket}.${url.hostname}`;
+  url.pathname = key ? `/${key.split("/").map(encodeURIComponent).join("/")}` : "/";
+  Object.entries(query ?? {}).forEach(([name, value]) => url.searchParams.set(name, value));
+  return url;
+}
+
+async function storageFetch(url: URL, init?: RequestInit) {
+  const response = await storageConfig().client.fetch(url, init);
+  if (!response.ok) throw new Error(`Private image storage returned ${response.status}.`);
+  return response;
+}
+
 async function deleteKeys(keys: string[]) {
-  if (!keys.length) return;
-  const { bucket, client } = storageConfig();
-  await client.send(new DeleteObjectsCommand({
-    Bucket: bucket,
-    Delete: { Objects: keys.map((Key) => ({ Key })), Quiet: true },
+  await Promise.all(keys.map(async (key) => {
+    const response = await storageConfig().client.fetch(storageUrl(key), { method: "DELETE" });
+    if (!response.ok && response.status !== 404) throw new Error(`Private image cleanup returned ${response.status}.`);
   }));
 }
 
 async function signedObjectUrl(key: string, downloadName?: string) {
-  const { bucket, client } = storageConfig();
-  return getSignedUrl(client, new GetObjectCommand({
-    Bucket: bucket,
-    Key: key,
-    ...(downloadName
-      ? { ResponseContentDisposition: `attachment; filename*=UTF-8''${encodeURIComponent(downloadName)}` }
-      : {}),
-  }), { expiresIn: SIGNED_URL_SECONDS });
+  const url = storageUrl(key, {
+    "X-Amz-Expires": String(SIGNED_URL_SECONDS),
+    ...(downloadName ? { "response-content-disposition": `attachment; filename*=UTF-8''${encodeURIComponent(downloadName)}` } : {}),
+  });
+  const signed = await storageConfig().client.sign(url, { method: "GET", aws: { signQuery: true } });
+  return signed.url;
 }
 
 async function mapAttachment(row: AttachmentRow): Promise<TodoAttachment> {
@@ -195,23 +205,51 @@ function extensionForMimeType(mimeType: string) {
   return mimeType === "image/jpeg" ? "jpg" : mimeType.replace("image/", "");
 }
 
+function xmlText(value: string) {
+  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&apos;");
+}
+
+function decodedXmlText(value: string) {
+  return value.replaceAll("&apos;", "'").replaceAll("&quot;", '"').replaceAll("&gt;", ">").replaceAll("&lt;", "<").replaceAll("&amp;", "&");
+}
+
+function xmlValues(block: string, tag: string) {
+  return [...block.matchAll(new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`, "gi"))]
+    .map((match) => decodedXmlText(match[1].trim()));
+}
+
+function parseCorsRules(xml: string): CorsRule[] {
+  return [...xml.matchAll(/<CORSRule>([\s\S]*?)<\/CORSRule>/gi)].map((match) => {
+    const block = match[1];
+    const maxAge = Number(xmlValues(block, "MaxAgeSeconds")[0]);
+    return {
+      ID: xmlValues(block, "ID")[0],
+      AllowedHeaders: xmlValues(block, "AllowedHeader"),
+      AllowedMethods: xmlValues(block, "AllowedMethod"),
+      AllowedOrigins: xmlValues(block, "AllowedOrigin"),
+      ExposeHeaders: xmlValues(block, "ExposeHeader"),
+      ...(Number.isInteger(maxAge) ? { MaxAgeSeconds: maxAge } : {}),
+    };
+  });
+}
+
+function corsXml(rules: CorsRule[]) {
+  const tags = (name: string, values?: string[]) => (values ?? []).map((value) => `<${name}>${xmlText(value)}</${name}>`).join("");
+  return `<?xml version="1.0" encoding="UTF-8"?><CORSConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/">${rules.map((rule) => `<CORSRule>${rule.ID ? `<ID>${xmlText(rule.ID)}</ID>` : ""}${tags("AllowedOrigin", rule.AllowedOrigins)}${tags("AllowedMethod", rule.AllowedMethods)}${tags("AllowedHeader", rule.AllowedHeaders)}${tags("ExposeHeader", rule.ExposeHeaders)}${rule.MaxAgeSeconds === undefined ? "" : `<MaxAgeSeconds>${rule.MaxAgeSeconds}</MaxAgeSeconds>`}</CORSRule>`).join("")}</CORSConfiguration>`;
+}
+
 async function ensureUploadCors(origin: string) {
   if (uploadCorsReady) return uploadCorsReady;
   uploadCorsReady = (async () => {
-    const { bucket, client } = storageConfig();
+    const { client } = storageConfig();
     const allowedOrigins = new Set([
       "https://dawar-todo.dawar185924.chatgpt.site",
       "https://work.dawar.ca",
       ...(origin.startsWith("https://") ? [origin] : []),
     ]);
-    let rules: CORSRule[] = [];
-    try {
-      const current = await client.send(new GetBucketCorsCommand({ Bucket: bucket }));
-      rules = current.CORSRules ?? [];
-    } catch (error) {
-      const name = error instanceof Error ? error.name : "";
-      if (!/NoSuchCORS|NoSuchCORSConfiguration|NotFound/i.test(name)) throw error;
-    }
+    const corsUrl = storageUrl(undefined, { cors: "" });
+    const current = await client.fetch(corsUrl, { method: "GET" });
+    const rules = current.ok ? parseCorsRules(await current.text()) : current.status === 404 ? [] : (() => { throw new Error(`Image storage CORS lookup returned ${current.status}.`); })();
     const ruleId = "dawar-todo-private-upload";
     const existing = rules.find((rule) => rule.ID === ruleId);
     const desiredOrigins = [...new Set([...(existing?.AllowedOrigins ?? []), ...allowedOrigins])];
@@ -228,12 +266,12 @@ async function ensureUploadCors(origin: string) {
         ExposeHeaders: ["ETag"],
         MaxAgeSeconds: 3600,
       };
-      await client.send(new PutBucketCorsCommand({
-        Bucket: bucket,
-        CORSConfiguration: {
-          CORSRules: [...rules.filter((rule) => rule.ID !== ruleId), nextRule],
-        },
-      }));
+      const response = await client.fetch(corsUrl, {
+        method: "PUT",
+        headers: { "Content-Type": "application/xml" },
+        body: corsXml([...rules.filter((rule) => rule.ID !== ruleId), nextRule]),
+      });
+      if (!response.ok) throw new Error(`Image storage CORS update returned ${response.status}.`);
       console.info("[todo-attachments] upload CORS configured", { origins: desiredOrigins.length });
     }
   })().catch((error) => {
@@ -250,6 +288,16 @@ function targetValues(target: UploadTarget) {
     draftToken: isDraft ? validateDraftToken(target.draftToken) : null,
     todoId: isDraft ? null : target.todoId,
   };
+}
+
+async function signedPutUrl(key: string, contentType: string) {
+  const url = storageUrl(key, { "X-Amz-Expires": String(15 * 60) });
+  const request = await storageConfig().client.sign(url, {
+    method: "PUT",
+    headers: { "Content-Type": contentType },
+    aws: { signQuery: true, allHeaders: true },
+  });
+  return request.url;
 }
 
 export async function prepareTodoAttachmentUpload(
@@ -282,7 +330,6 @@ export async function prepareTodoAttachmentUpload(
   const originalKey = `${base}/original.${extensionForMimeType(mimeType)}`;
   const displayKey = `${base}/display.webp`;
   const thumbnailKey = `${base}/thumb.webp`;
-  const { bucket, client } = storageConfig();
   try {
     const nextOrder = Number(count?.count ?? 0);
     const expiresAt = new Date(Date.now() + DRAFT_LIFETIME_HOURS * 60 * 60 * 1000).toISOString();
@@ -307,9 +354,9 @@ export async function prepareTodoAttachmentUpload(
     ).first<AttachmentRow>();
     if (!row) throw new Error("The image upload could not be prepared.");
     const [originalUrl, displayUrl, thumbnailUrl] = await Promise.all([
-      getSignedUrl(client, new PutObjectCommand({ Bucket: bucket, Key: originalKey, ContentType: mimeType }), { expiresIn: 15 * 60 }),
-      getSignedUrl(client, new PutObjectCommand({ Bucket: bucket, Key: displayKey, ContentType: "image/webp" }), { expiresIn: 15 * 60 }),
-      getSignedUrl(client, new PutObjectCommand({ Bucket: bucket, Key: thumbnailKey, ContentType: "image/webp" }), { expiresIn: 15 * 60 }),
+      signedPutUrl(originalKey, mimeType),
+      signedPutUrl(displayKey, "image/webp"),
+      signedPutUrl(thumbnailKey, "image/webp"),
     ]);
     console.info("[todo-attachments] direct upload prepared", {
       attachmentId: id,
@@ -348,10 +395,8 @@ function detectedImageFormat(bytes: Uint8Array) {
 }
 
 async function firstBytes(key: string) {
-  const { bucket, client } = storageConfig();
-  const result = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key, Range: "bytes=0-65535" }));
-  if (!result.Body) throw new Error("An uploaded image could not be read.");
-  return new Uint8Array(await result.Body.transformToByteArray());
+  const response = await storageFetch(storageUrl(key), { method: "GET", headers: { Range: "bytes=0-65535" } });
+  return new Uint8Array(await response.arrayBuffer());
 }
 
 function inspectedImageDimensions(bytes: Uint8Array, format: string) {
@@ -421,18 +466,17 @@ export async function finalizeTodoAttachmentUpload(
   }
   const keys = [row.original_key, row.display_key, row.thumbnail_key];
   try {
-    const { bucket, client } = storageConfig();
     const [originalHead, displayHead, thumbnailHead, originalBytes, displayBytes, thumbnailBytes] = await Promise.all([
-      client.send(new HeadObjectCommand({ Bucket: bucket, Key: row.original_key })),
-      client.send(new HeadObjectCommand({ Bucket: bucket, Key: row.display_key })),
-      client.send(new HeadObjectCommand({ Bucket: bucket, Key: row.thumbnail_key })),
+      storageFetch(storageUrl(row.original_key), { method: "HEAD" }),
+      storageFetch(storageUrl(row.display_key), { method: "HEAD" }),
+      storageFetch(storageUrl(row.thumbnail_key), { method: "HEAD" }),
       firstBytes(row.original_key),
       firstBytes(row.display_key),
       firstBytes(row.thumbnail_key),
     ]);
-    const originalSize = Number(originalHead.ContentLength ?? 0);
-    const displaySize = Number(displayHead.ContentLength ?? 0);
-    const thumbnailSize = Number(thumbnailHead.ContentLength ?? 0);
+    const originalSize = Number(originalHead.headers.get("content-length") ?? 0);
+    const displaySize = Number(displayHead.headers.get("content-length") ?? 0);
+    const thumbnailSize = Number(thumbnailHead.headers.get("content-length") ?? 0);
     if (originalSize < 1 || originalSize > MAX_ATTACHMENT_BYTES || displaySize < 1 || displaySize > 8 * 1024 * 1024 || thumbnailSize < 1 || thumbnailSize > 2 * 1024 * 1024) {
       throw new Error("One or more uploaded image files has an invalid size.");
     }
