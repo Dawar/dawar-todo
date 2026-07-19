@@ -6,12 +6,15 @@ import {
   FolderInput,
   Folder,
   FolderPlus,
+  List,
   ListChecks,
+  ListTodo,
   Merge,
   Plus,
   RotateCcw,
   Save,
   Search,
+  Settings2,
   SlidersHorizontal,
   Trash2,
   Undo2,
@@ -34,9 +37,12 @@ export type ActionIconName =
   | "restore"
   | "save"
   | "search"
+  | "settings"
   | "select"
   | "snooze"
   | "undo"
+  | "view-all"
+  | "view-open"
   | "wake";
 
 const icons: Record<ActionIconName, ComponentType<LucideProps>> = {
@@ -54,9 +60,12 @@ const icons: Record<ActionIconName, ComponentType<LucideProps>> = {
   restore: RotateCcw,
   save: Save,
   search: Search,
+  settings: Settings2,
   select: ListChecks,
   snooze: Clock3,
   undo: Undo2,
+  "view-all": List,
+  "view-open": ListTodo,
   wake: AlarmClock,
 };
 

@@ -12,7 +12,8 @@ import { ActionIcon, type ActionIconName } from "./action-icon";
 import { SiteHeader } from "./site-header";
 
 type TodoStatus = "open" | "completed";
-type View = "inbox" | "open" | "projects" | "snoozed" | "all";
+type View = "open" | "snoozed" | "all" | "projects";
+type TaskListView = Exclude<View, "projects">;
 type Sort = "smart" | "priority" | "due" | "newest" | "oldest" | "az";
 type TodoAction = "complete" | "snooze" | "unsnooze" | "delete";
 type ExecutableTodoAction = TodoAction;
@@ -58,11 +59,10 @@ const CREATE_PROJECT = "__create_project__";
 const UNASSIGNED_PROJECT = "__unassigned_project__";
 
 const viewLabels: Record<View, string> = {
-  inbox: "Inbox",
   open: "Open",
-  projects: "Projects",
   snoozed: "Snoozed",
   all: "All",
+  projects: "Projects",
 };
 
 const priorityLabels: Record<number, string> = {
@@ -129,7 +129,6 @@ function compareSmart(a: Todo, b: Todo) {
 
 function matchesView(todo: Todo, view: View, now: number) {
   const snoozed = isSnoozed(todo, now);
-  if (view === "inbox") return todo.status === "open" && !snoozed && !todo.project;
   if (view === "open") return todo.status === "open" && !snoozed;
   if (view === "snoozed") return snoozed;
   if (view === "all") return todo.status === "open" || todo.status === "completed";
@@ -344,7 +343,7 @@ function TaskRow({
 export default function Home() {
   const [todos, setTodos] = useState<Todo[]>([]);
   const [loading, setLoading] = useState(true);
-  const [view, setView] = useState<View>("inbox");
+  const [view, setView] = useState<View>("open");
   const [registeredProjects, setRegisteredProjects] = useState<string[]>([]);
   const [query, setQuery] = useState("");
   const [project, setProject] = useState("");
@@ -483,11 +482,10 @@ export default function Home() {
   }, [registeredProjects, todos, now]);
 
   const counts = useMemo(() => ({
-    inbox: todos.filter((todo) => matchesView(todo, "inbox", now)).length,
     open: todos.filter((todo) => matchesView(todo, "open", now)).length,
-    projects: projectOptions.length,
     snoozed: todos.filter((todo) => matchesView(todo, "snoozed", now)).length,
     all: todos.filter((todo) => matchesView(todo, "all", now)).length,
+    projects: projectOptions.length,
   }), [projectOptions.length, todos, now]);
 
   const filtered = useMemo(() => {
@@ -546,7 +544,11 @@ export default function Home() {
       updatedAt: new Date().toISOString(),
     };
     setNewTitle("");
-    setView("inbox");
+    setProject("");
+    setView("open");
+    console.info("[todo-ui] quick add routed to unfiltered open view", {
+      previousProjectFilter: project || null,
+    });
     setTodos((current) => [optimistic, ...current]);
     setAdding(true);
     setSyncing(true);
@@ -861,11 +863,16 @@ export default function Home() {
     console.info("[todo-ui] view changed", { view: next, retainedProjectFilter: project || null });
   }
 
-  function openProjectTasks(name: string) {
+  function openProjectTasks(name: string, destinationView: TaskListView = "open", source: "card" | "shortcut" = "card") {
     setProject(name);
-    setView("open");
+    setView(destinationView);
     setSelected(new Set());
-    console.info("[todo-ui] project opened as filtered task list", { project: name, destinationView: "open" });
+    setFiltersOpen(false);
+    console.info("[todo-ui] project opened as filtered task list", {
+      project: name,
+      destinationView,
+      source,
+    });
   }
 
   function openNewProjectDialog() {
@@ -1061,7 +1068,7 @@ export default function Home() {
                         <button
                           type="button"
                           onClick={() => openProjectTasks(name)}
-                          className="flex min-h-32 w-full items-start gap-3 p-5 pr-14 text-left focus-visible:outline-2 focus-visible:outline-inset focus-visible:outline-[#216e4e]"
+                          className="flex min-h-32 w-full items-start gap-3 p-5 pr-40 text-left focus-visible:outline-2 focus-visible:outline-inset focus-visible:outline-[#216e4e]"
                           aria-label={`Open ${name}, ${count} ${count === 1 ? "task" : "tasks"}`}
                         >
                           <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-[#eaf3ed] text-[#216e4e]">
@@ -1072,15 +1079,33 @@ export default function Home() {
                             <span className="mt-1 block text-xs text-[#7c847f]">{projectCounts.open} open · {projectCounts.snoozed} snoozed · {projectCounts.done} done</span>
                           </span>
                         </button>
-                        <button
-                          type="button"
-                          onClick={() => openProjectDeleteDialog(name)}
-                          aria-label={`Delete project: ${name}`}
-                          title="Delete project"
-                          className="absolute right-3 top-3 grid h-9 w-9 place-items-center rounded-lg text-[#8a918d] opacity-70 transition hover:bg-red-50 hover:text-red-700 focus:opacity-100 focus-visible:outline-2 focus-visible:outline-red-600 group-hover:opacity-100"
-                        >
-                          <ActionIcon name="delete" />
-                        </button>
+                        <div className="absolute right-3 top-3 flex items-center gap-0.5 rounded-xl bg-white/95 p-0.5 shadow-sm ring-1 ring-black/[0.05]">
+                          {([
+                            ["open", "view-open", `View open tasks in ${name}`],
+                            ["snoozed", "snooze", `View snoozed tasks in ${name}`],
+                            ["all", "view-all", `View all tasks in ${name}`],
+                          ] as const).map(([destinationView, icon, label]) => (
+                            <button
+                              key={destinationView}
+                              type="button"
+                              onClick={() => openProjectTasks(name, destinationView, "shortcut")}
+                              aria-label={label}
+                              title={label}
+                              className="grid h-8 w-8 place-items-center rounded-lg text-[#65706a] transition hover:bg-[#eaf3ed] hover:text-[#216e4e] focus-visible:outline-2 focus-visible:outline-[#216e4e]"
+                            >
+                              <ActionIcon name={icon} />
+                            </button>
+                          ))}
+                          <button
+                            type="button"
+                            onClick={() => openProjectDeleteDialog(name)}
+                            aria-label={`Delete project: ${name}`}
+                            title="Delete project"
+                            className="grid h-8 w-8 place-items-center rounded-lg text-[#8a918d] transition hover:bg-red-50 hover:text-red-700 focus-visible:outline-2 focus-visible:outline-red-600"
+                          >
+                            <ActionIcon name="delete" />
+                          </button>
+                        </div>
                       </li>
                     );
                   })}
@@ -1232,7 +1257,7 @@ export default function Home() {
             ) : (
               <div className="px-6 py-14 text-center">
                 <div className="mx-auto mb-4 grid h-12 w-12 place-items-center rounded-full bg-[#eaf3ed] text-xl text-[#216e4e]">✓</div>
-                <p className="font-medium text-[#303632]">{filtersActive ? "No tasks match those filters." : view === "snoozed" ? "Nothing is snoozed." : view === "inbox" ? "Inbox zero." : "You’re clear."}</p>
+                <p className="font-medium text-[#303632]">{filtersActive ? "No tasks match those filters." : view === "snoozed" ? "Nothing is snoozed." : "You’re clear."}</p>
                 <p className="mt-1 text-sm text-[#7c847f]">{filtersActive ? "Try clearing a filter or changing the search." : view === "snoozed" ? "Snoozed tasks return here until their wake time." : "Add the next thing when it appears."}</p>
               </div>
             )}

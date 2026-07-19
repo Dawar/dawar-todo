@@ -5,7 +5,7 @@ import test from "node:test";
 const root = new URL("../", import.meta.url);
 
 test("ships the simplified todo and project surface", async () => {
-  const [page, layout, hosting, database, schema, todosRoute, todoRoute, bulkRoute, projectsRoute, actionIcons] = await Promise.all([
+  const [page, layout, hosting, database, schema, todosRoute, todoRoute, bulkRoute, projectsRoute, actionIcons, siteHeader] = await Promise.all([
     readFile(new URL("app/page.tsx", root), "utf8"),
     readFile(new URL("app/layout.tsx", root), "utf8"),
     readFile(new URL(".openai/hosting.json", root), "utf8"),
@@ -16,6 +16,7 @@ test("ships the simplified todo and project surface", async () => {
     readFile(new URL("app/api/todos/bulk/route.ts", root), "utf8"),
     readFile(new URL("app/api/projects/route.ts", root), "utf8"),
     readFile(new URL("app/action-icon.tsx", root), "utf8"),
+    readFile(new URL("app/site-header.tsx", root), "utf8"),
   ]);
   assert.match(layout, /title: "Dawar Todo"/);
   assert.match(layout, /\/og\.png/);
@@ -25,11 +26,10 @@ test("ships the simplified todo and project surface", async () => {
   assert.match(page, /Unassigned/);
   assert.match(page, /Smart sort/);
   assert.match(page, /Snoozed/);
-  assert.match(page, /type View = "inbox" \| "open" \| "projects" \| "snoozed" \| "all"/);
-  assert.match(page, /inbox: "Inbox",\s+open: "Open",\s+projects: "Projects",\s+snoozed: "Snoozed",\s+all: "All"/);
-  assert.doesNotMatch(page, /today: "Today"|archived: "Archived"|completed: "Done"/);
-  assert.match(page, /useState<View>\("inbox"\)/);
-  assert.match(page, /view === "inbox".*todo\.status === "open".*!snoozed.*!todo\.project/);
+  assert.match(page, /type View = "open" \| "snoozed" \| "all" \| "projects"/);
+  assert.match(page, /open: "Open",\s+snoozed: "Snoozed",\s+all: "All",\s+projects: "Projects"/);
+  assert.doesNotMatch(page, /inbox: "Inbox"|today: "Today"|archived: "Archived"|completed: "Done"/);
+  assert.match(page, /useState<View>\("open"\)/);
   assert.match(page, /view === "all".*todo\.status === "open" \|\| todo\.status === "completed"/);
   assert.match(page, /projectFilterApplies = view === "open" \|\| view === "snoozed" \|\| view === "all"/);
   assert.match(page, /Select visible/);
@@ -54,13 +54,16 @@ test("ships the simplified todo and project surface", async () => {
   assert.match(page, /preservedTaskState/);
   assert.match(page, />Projects</);
   assert.match(page, /New project/);
-  assert.match(page, /setView\("inbox"\)/);
+  assert.match(page, /setProject\(""\);\s+setView\("open"\)/);
   assert.match(page, /body: JSON\.stringify\(\{ title, status: "open", project: null \}\)/);
   assert.match(page, /\/api\/projects/);
   assert.match(page, /Move tasks to another project/);
   assert.match(page, /Delete the tasks too/);
   assert.match(page, /openProjectTasks/);
-  assert.match(page, /setProject\(name\);\s+setView\("open"\)/);
+  assert.match(page, /setProject\(name\);\s+setView\(destinationView\)/);
+  assert.match(page, /View open tasks in \$\{name\}/);
+  assert.match(page, /View snoozed tasks in \$\{name\}/);
+  assert.match(page, /View all tasks in \$\{name\}/);
   assert.doesNotMatch(page, /archiveProject|archiveNoteState|restore_archive/);
   assert.match(page, /reproject/);
   assert.match(page, /aria-label=\{`Assign project\. Current project:/);
@@ -91,6 +94,10 @@ test("ships the simplified todo and project surface", async () => {
   assert.match(page, /<ActionIcon name="undo"/);
   assert.match(actionIcons, /Record<ActionIconName/);
   assert.match(actionIcons, /FolderPlus/);
+  assert.match(actionIcons, /Settings2/);
+  assert.match(actionIcons, /ListTodo/);
+  assert.match(siteHeader, /aria-label="Settings"/);
+  assert.match(siteHeader, /<ActionIcon name="settings"/);
   assert.doesNotMatch(actionIcons, /Archive|"archive"/);
   assert.doesNotMatch(page, /Capture what needs doing\. Then move/);
   assert.match(hosting, /"d1": "DB"/);
