@@ -421,7 +421,6 @@ export async function prepareTodoAttachmentUpload(
       signedPostTarget(displayKey, "image/webp", 8 * 1024 * 1024),
       signedPostTarget(thumbnailKey, "image/webp", 2 * 1024 * 1024),
     ]);
-    const verificationUrl = await signedQueryUrl(storageUrl(originalKey), "GET", 300);
     console.info("[todo-attachments] direct upload prepared", {
       attachmentId: id,
       todoId,
@@ -432,7 +431,6 @@ export async function prepareTodoAttachmentUpload(
     return {
       uploadId: id,
       uploads: { original: originalUpload, display: displayUpload, thumbnail: thumbnailUpload },
-      verificationUrl,
     };
   } catch (error) {
     await db.prepare("DELETE FROM todo_attachments WHERE id = ? AND upload_state = 'uploading'").bind(id).run().catch(() => undefined);
