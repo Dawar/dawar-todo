@@ -11,6 +11,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { createPortal } from "react-dom";
 import { ActionIcon, type ActionIconName } from "./action-icon";
 import { copyTextToClipboard } from "./copy-to-clipboard";
 import { SiteHeader } from "./site-header";
@@ -406,14 +407,37 @@ function AttachmentPicker({
 }) {
   const [open, setOpen] = useState(false);
   const libraryRef = useRef<HTMLInputElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const [desktopPosition, setDesktopPosition] = useState<{ left: number; top: number } | null>(null);
 
   useEffect(() => {
     if (!open) return;
+    const positionMenu = () => {
+      const trigger = triggerRef.current;
+      if (!trigger) return;
+      const bounds = trigger.getBoundingClientRect();
+      const menuWidth = 224;
+      const menuHeight = 116;
+      const gutter = 12;
+      const left = Math.max(gutter, Math.min(bounds.left, window.innerWidth - menuWidth - gutter));
+      const below = bounds.bottom + 8;
+      const top = below + menuHeight <= window.innerHeight - gutter
+        ? below
+        : Math.max(gutter, bounds.top - menuHeight - 8);
+      setDesktopPosition({ left, top });
+    };
     const keyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") setOpen(false);
     };
+    positionMenu();
     window.addEventListener("keydown", keyDown);
-    return () => window.removeEventListener("keydown", keyDown);
+    window.addEventListener("resize", positionMenu);
+    window.addEventListener("scroll", positionMenu, true);
+    return () => {
+      window.removeEventListener("keydown", keyDown);
+      window.removeEventListener("resize", positionMenu);
+      window.removeEventListener("scroll", positionMenu, true);
+    };
   }, [open]);
 
   function selected(input: HTMLInputElement) {
@@ -426,6 +450,7 @@ function AttachmentPicker({
   return (
     <div className="relative shrink-0">
       <button
+        ref={triggerRef}
         type="button"
         disabled={disabled}
         onClick={() => setOpen((current) => !current)}
@@ -442,17 +467,17 @@ function AttachmentPicker({
         {showLabel && <span>Add attachment</span>}
       </button>
 
-      {open && (
+      {open && typeof document !== "undefined" && createPortal(
         <>
           <button type="button" aria-label="Close attachment menu" onClick={() => setOpen(false)} className="fixed inset-0 z-[65] hidden cursor-default sm:block" />
-          <div role="menu" className="absolute left-0 top-full z-[70] mt-2 hidden w-56 rounded-xl border border-black/[0.08] bg-white p-1.5 shadow-xl sm:block">
+          {desktopPosition && <div role="menu" style={{ left: desktopPosition.left, top: desktopPosition.top }} className="fixed z-[70] hidden w-56 rounded-xl border border-black/[0.08] bg-white p-1.5 shadow-xl sm:block">
             <button type="button" role="menuitem" onClick={() => libraryRef.current?.click()} className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left text-sm font-semibold text-[#303632] hover:bg-[#f2f5f2]">
               <ActionIcon name="image" />Choose photos or videos
             </button>
             <button type="button" role="menuitem" onClick={() => { setOpen(false); onRecord(); }} className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left text-sm font-semibold text-[#303632] hover:bg-[#f2f5f2]">
               <ActionIcon name="mic" />Record voice memo
             </button>
-          </div>
+          </div>}
 
           <div className="fixed inset-0 z-[70] flex items-end sm:hidden">
             <button type="button" aria-label="Close attachment menu" onClick={() => setOpen(false)} className="absolute inset-0 bg-black/35" />
@@ -467,7 +492,8 @@ function AttachmentPicker({
               <button type="button" onClick={() => setOpen(false)} className="mt-2 h-12 w-full rounded-xl bg-[#f1f2f0] text-[16px] font-semibold text-[#59615c]">Cancel</button>
             </div>
           </div>
-        </>
+        </>,
+        document.body,
       )}
 
       <input ref={libraryRef} type="file" accept={MEDIA_ACCEPT} multiple className="sr-only" tabIndex={-1} onChange={(event) => selected(event.currentTarget)} />
