@@ -12,6 +12,7 @@ import {
   useState,
 } from "react";
 import { ActionIcon, type ActionIconName } from "./action-icon";
+import { copyTextToClipboard } from "./copy-to-clipboard";
 import { SiteHeader } from "./site-header";
 import {
   deleteOfflineTodo,
@@ -1921,6 +1922,19 @@ export default function Home() {
     taskAction(todo, action, "details");
   }
 
+  async function copyTaskDetails() {
+    if (!editDraft) return;
+    const text = [editDraft.title.trim(), editDraft.notes.trim()].filter(Boolean).join("\n\n");
+    try {
+      await copyTextToClipboard(text);
+      setNotice({ tone: "success", text: "Task title and notes copied." });
+      console.info("[todo-ui] task details copied", { titleLength: editDraft.title.trim().length, notesLength: editDraft.notes.trim().length });
+    } catch (error) {
+      console.error("[todo-ui] task details copy failed", { error });
+      setNotice({ tone: "error", text: error instanceof Error ? error.message : "The task could not be copied." });
+    }
+  }
+
   function bulkAction(action: TodoAction | "merge" | "assign") {
     if (action === "merge" && selectedIds.length < 2) {
       setNotice({ tone: "error", text: "Select at least two tasks to merge." });
@@ -2600,7 +2614,10 @@ export default function Home() {
           <form onSubmit={saveTaskDetails} className="relative flex max-h-[92dvh] w-full max-w-full flex-col overflow-hidden overflow-x-hidden rounded-t-3xl bg-white shadow-2xl sm:max-w-2xl sm:rounded-3xl">
             <div className="flex min-w-0 items-center justify-between border-b border-black/[0.07] px-5 py-4 sm:px-6">
               <h3 id="task-details-title" className="min-w-0 text-lg font-semibold text-[#202522]">Task details</h3>
-              <button type="button" onClick={closeTaskDetails} className="grid h-9 w-9 place-items-center rounded-full bg-[#f1f2f0] text-[#4f5752] hover:bg-[#e8eae7]" aria-label="Close task details" title="Close"><ActionIcon name="close" /></button>
+              <div className="flex shrink-0 items-center gap-1">
+                <button type="button" onClick={() => void copyTaskDetails()} className="grid h-9 w-9 place-items-center rounded-full bg-[#f1f2f0] text-[#4f5752] hover:bg-[#e8eae7]" aria-label="Copy task title and notes" title="Copy task"><ActionIcon name="copy" /></button>
+                <button type="button" onClick={closeTaskDetails} className="grid h-9 w-9 place-items-center rounded-full bg-[#f1f2f0] text-[#4f5752] hover:bg-[#e8eae7]" aria-label="Close task details" title="Close"><ActionIcon name="close" /></button>
+              </div>
             </div>
 
             <div className="min-h-0 min-w-0 overflow-x-hidden overflow-y-auto px-5 py-5 sm:px-6">

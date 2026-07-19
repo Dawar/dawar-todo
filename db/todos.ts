@@ -145,6 +145,16 @@ export async function ensureTodoDatabase() {
         )
       `),
       db.prepare(`
+        CREATE TABLE IF NOT EXISTS todo_calendar_feeds (
+          id TEXT PRIMARY KEY NOT NULL,
+          name TEXT NOT NULL,
+          token TEXT NOT NULL,
+          created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+          updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+          revoked_at TEXT
+        )
+      `),
+      db.prepare(`
         CREATE TABLE IF NOT EXISTS todo_attachments (
           id TEXT PRIMARY KEY NOT NULL,
           todo_id INTEGER,
@@ -176,6 +186,10 @@ export async function ensureTodoDatabase() {
     }
     await db.prepare("CREATE INDEX IF NOT EXISTS todos_snoozed_until_idx ON todos(snoozed_until)").run();
     await db.prepare("CREATE INDEX IF NOT EXISTS todo_action_history_created_at_idx ON todo_action_history(created_at)").run();
+    await db.batch([
+      db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS todo_calendar_feeds_token_idx ON todo_calendar_feeds(token)"),
+      db.prepare("CREATE INDEX IF NOT EXISTS todo_calendar_feeds_revoked_at_idx ON todo_calendar_feeds(revoked_at)"),
+    ]);
     const attachmentColumns = await db.prepare("PRAGMA table_info(todo_attachments)").all<{ name: string }>();
     if (!attachmentColumns.results.some((column) => column.name === "upload_state")) {
       await db.prepare("ALTER TABLE todo_attachments ADD COLUMN upload_state TEXT NOT NULL DEFAULT 'ready'").run();

@@ -65,6 +65,26 @@ export const todoActionHistory = sqliteTable(
   (table) => [index("todo_action_history_created_at_idx").on(table.createdAt)],
 );
 
+export const todoCalendarFeeds = sqliteTable(
+  "todo_calendar_feeds",
+  {
+    id: text("id").primaryKey(),
+    name: text("name").notNull(),
+    token: text("token").notNull(),
+    createdAt: text("created_at")
+      .notNull()
+      .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`),
+    updatedAt: text("updated_at")
+      .notNull()
+      .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`),
+    revokedAt: text("revoked_at"),
+  },
+  (table) => [
+    uniqueIndex("todo_calendar_feeds_token_idx").on(table.token),
+    index("todo_calendar_feeds_revoked_at_idx").on(table.revokedAt),
+  ],
+);
+
 export const todoAttachments = sqliteTable(
   "todo_attachments",
   {

@@ -1,11 +1,13 @@
 import type { ComponentType } from "react";
 import {
   AlarmClock,
+  CalendarDays,
   Camera,
   ChevronLeft,
   ChevronRight,
   CircleCheckBig,
   Clock3,
+  Copy,
   Download,
   FolderInput,
   Folder,
@@ -13,6 +15,7 @@ import {
   List,
   ListChecks,
   ListTodo,
+  Link2,
   Merge,
   ImagePlus,
   Mic,
@@ -35,7 +38,9 @@ export type ActionIconName =
   | "add"
   | "cancel"
   | "camera"
+  | "calendar"
   | "close"
+  | "copy"
   | "delete"
   | "done"
   | "download"
@@ -45,6 +50,7 @@ export type ActionIconName =
   | "merge"
   | "move"
   | "image"
+  | "link"
   | "attachment"
   | "mic"
   | "next"
@@ -67,7 +73,9 @@ const icons: Record<ActionIconName, ComponentType<LucideProps>> = {
   add: Plus,
   cancel: X,
   camera: Camera,
+  calendar: CalendarDays,
   close: X,
+  copy: Copy,
   delete: Trash2,
   done: CircleCheckBig,
   download: Download,
@@ -77,6 +85,7 @@ const icons: Record<ActionIconName, ComponentType<LucideProps>> = {
   merge: Merge,
   move: FolderInput,
   image: ImagePlus,
+  link: Link2,
   attachment: Paperclip,
   mic: Mic,
   next: ChevronRight,
