@@ -8,7 +8,7 @@ export async function GET() {
     return Response.json({ projects });
   } catch (error) {
     console.error("[todo-api] project list failed", error);
-    return Response.json({ error: "Your archive projects could not be loaded." }, { status: 500 });
+    return Response.json({ error: "Your projects could not be loaded." }, { status: 500 });
   }
 }
 

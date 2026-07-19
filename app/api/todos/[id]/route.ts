@@ -1,6 +1,6 @@
-import { TodoStatus, TodoUpdate, updateTodo } from "../../../../db/todos";
+import { TodoUpdate, updateTodo } from "../../../../db/todos";
 
-const statuses = new Set<TodoStatus>(["open", "completed", "archived"]);
+const statuses = new Set(["open", "completed"]);
 
 export async function PATCH(
   request: Request,

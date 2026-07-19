@@ -4,13 +4,15 @@ import test from "node:test";
 
 const root = new URL("../", import.meta.url);
 
-test("ships the complete todo product surface", async () => {
-  const [page, layout, hosting, database, schema, bulkRoute, projectsRoute, actionIcons] = await Promise.all([
+test("ships the simplified todo and project surface", async () => {
+  const [page, layout, hosting, database, schema, todosRoute, todoRoute, bulkRoute, projectsRoute, actionIcons] = await Promise.all([
     readFile(new URL("app/page.tsx", root), "utf8"),
     readFile(new URL("app/layout.tsx", root), "utf8"),
     readFile(new URL(".openai/hosting.json", root), "utf8"),
     readFile(new URL("db/todos.ts", root), "utf8"),
     readFile(new URL("db/schema.ts", root), "utf8"),
+    readFile(new URL("app/api/todos/route.ts", root), "utf8"),
+    readFile(new URL("app/api/todos/[id]/route.ts", root), "utf8"),
     readFile(new URL("app/api/todos/bulk/route.ts", root), "utf8"),
     readFile(new URL("app/api/projects/route.ts", root), "utf8"),
     readFile(new URL("app/action-icon.tsx", root), "utf8"),
@@ -20,14 +22,21 @@ test("ships the complete todo product surface", async () => {
   assert.match(page, /Add a task/);
   assert.match(page, /Search tasks/);
   assert.match(page, /All projects/);
+  assert.match(page, /Unassigned/);
   assert.match(page, /Smart sort/);
   assert.match(page, /Snoozed/);
-  assert.match(page, /Archived/);
+  assert.match(page, /type View = "inbox" \| "open" \| "projects" \| "snoozed" \| "all"/);
+  assert.match(page, /inbox: "Inbox",\s+open: "Open",\s+projects: "Projects",\s+snoozed: "Snoozed",\s+all: "All"/);
+  assert.doesNotMatch(page, /today: "Today"|archived: "Archived"|completed: "Done"/);
+  assert.match(page, /useState<View>\("inbox"\)/);
+  assert.match(page, /view === "inbox".*todo\.status === "open".*!snoozed.*!todo\.project/);
+  assert.match(page, /view === "all".*todo\.status === "open" \|\| todo\.status === "completed"/);
+  assert.match(page, /projectFilterApplies = view === "open" \|\| view === "snoozed" \|\| view === "all"/);
   assert.match(page, /Select visible/);
-  assert.match(page, /Swipe left:.*"open".*"done".*snooze/);
+  assert.match(page, /Swipe left: done\/open.*Swipe right: assign project \/ delete/);
   assert.match(page, /leftSecondaryAction.*snoozed/s);
   assert.match(page, /\? \{ action: "unsnooze", label: "Wake", icon: "wake" \}/);
-  assert.match(page, /view === "snoozed" \? \(/);
+  assert.match(page, /view === "snoozed".*bulkAction\("unsnooze"\)/s);
   assert.match(page, /wokeSnoozed/);
   assert.match(page, />Filters</);
   assert.match(page, /"Undoing…" : "Undo"/);
@@ -38,33 +47,43 @@ test("ships the complete todo product surface", async () => {
   assert.match(page, /\/api\/todos\/\$\{editingTodo\.id\}/);
   assert.match(page, /fixed inset-x-0 z-40/);
   assert.doesNotMatch(page, /sticky top-\[62px\]/);
-  assert.match(page, /Archive into a project/);
-  assert.match(page, /Archive projects/);
+  assert.match(page, /Assign project/);
+  assert.match(page, /openedFromDetails/);
+  assert.match(page, /setEditDraft\(\(current\) => current \? \{ \.\.\.current, project: projectName \?\? "" \}/);
+  assert.match(page, /openProjectAssignment\(\[editingTodo\.id\], "details"\)/);
+  assert.match(page, /preservedTaskState/);
+  assert.match(page, />Projects</);
   assert.match(page, /New project/);
-  assert.match(page, /`Add to \$\{archiveProject\}…`/);
+  assert.match(page, /setView\("inbox"\)/);
+  assert.match(page, /body: JSON\.stringify\(\{ title, status: "open", project: null \}\)/);
   assert.match(page, /\/api\/projects/);
-  assert.match(page, /Move notes to another project/);
-  assert.match(page, /Delete the notes too/);
-  assert.match(page, /Filter project notes by state/);
-  assert.match(page, /archiveNoteState === "open"/);
-  assert.match(page, /archiveState=\{view === "archived"/);
-  assert.match(page, /performAction\(\[todo\.id\], "restore_archive"\)/);
+  assert.match(page, /Move tasks to another project/);
+  assert.match(page, /Delete the tasks too/);
+  assert.match(page, /openProjectTasks/);
+  assert.match(page, /setProject\(name\);\s+setView\("open"\)/);
+  assert.doesNotMatch(page, /archiveProject|archiveNoteState|restore_archive/);
   assert.match(page, /reproject/);
-  assert.match(page, /<select[\s\S]*aria-label="Project"/);
+  assert.match(page, /aria-label=\{`Assign project\. Current project:/);
   assert.match(page, /Create a new project…/);
-  assert.match(page, /project created from task details/);
   assert.doesNotMatch(page, /<datalist/);
   assert.match(page, /overflow-x-hidden overflow-y-auto/);
   assert.match(page, /flex min-w-0 flex-wrap gap-2/);
   assert.doesNotMatch(page, /Edit the full task without leaving your place/);
-  assert.match(database, /archived_project_backfill_v1/);
+  assert.match(database, /archive_status_to_open_v1/);
+  assert.match(database, /legacy archives converted to open tasks/);
+  assert.match(database, /SET status = 'open',[\s\S]*WHERE status = 'archived'/);
   assert.match(database, /CREATE TABLE IF NOT EXISTS todo_projects/);
   assert.match(schema, /todoProjects/);
-  assert.match(database, /Choose or create a project before archiving/);
-  assert.match(database, /action === "restore_archive"/);
-  assert.match(database, /status IN \('archived', 'completed'\) AND project/);
+  assert.match(database, /SELECT DISTINCT trim\(project\)[\s\S]*WHERE project IS NOT NULL/);
+  assert.match(database, /SELECT \* FROM todos WHERE project = \? ORDER BY id/);
+  assert.match(database, /DELETE FROM todos WHERE id IN/);
+  assert.match(database, /normalizedLegacyArchives/);
+  assert.doesNotMatch(database, /action === "archive"|action === "restore_archive"/);
+  assert.match(todosRoute, /New tasks must be open/);
+  assert.doesNotMatch(todosRoute, /open or archived/);
+  assert.match(todoRoute, /new Set\(\["open", "completed"\]\)/);
   assert.match(bulkRoute, /"reproject"/);
-  assert.match(bulkRoute, /"restore_archive"/);
+  assert.doesNotMatch(bulkRoute, /"archive"|"restore_archive"/);
   assert.match(projectsRoute, /export async function DELETE/);
   assert.match(projectsRoute, /deleteTodoProject/);
   assert.match(page, /title=\{label\}/);
@@ -72,6 +91,7 @@ test("ships the complete todo product surface", async () => {
   assert.match(page, /<ActionIcon name="undo"/);
   assert.match(actionIcons, /Record<ActionIconName/);
   assert.match(actionIcons, /FolderPlus/);
+  assert.doesNotMatch(actionIcons, /Archive|"archive"/);
   assert.doesNotMatch(page, /Capture what needs doing\. Then move/);
   assert.match(hosting, /"d1": "DB"/);
   await access(new URL("public/og.png", root));

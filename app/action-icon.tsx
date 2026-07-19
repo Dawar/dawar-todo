@@ -1,9 +1,6 @@
 import type { ComponentType } from "react";
 import {
   AlarmClock,
-  ArrowLeft,
-  Archive,
-  ArchiveRestore,
   CircleCheckBig,
   Clock3,
   FolderInput,
@@ -24,8 +21,6 @@ import {
 
 export type ActionIconName =
   | "add"
-  | "archive"
-  | "back"
   | "cancel"
   | "close"
   | "delete"
@@ -46,8 +41,6 @@ export type ActionIconName =
 
 const icons: Record<ActionIconName, ComponentType<LucideProps>> = {
   add: Plus,
-  archive: Archive,
-  back: ArrowLeft,
   cancel: X,
   close: X,
   delete: Trash2,
@@ -58,7 +51,7 @@ const icons: Record<ActionIconName, ComponentType<LucideProps>> = {
   merge: Merge,
   move: FolderInput,
   open: RotateCcw,
-  restore: ArchiveRestore,
+  restore: RotateCcw,
   save: Save,
   search: Search,
   select: ListChecks,

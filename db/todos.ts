@@ -1,15 +1,16 @@
 import { env } from "cloudflare:workers";
 import { importedTodos } from "./imported-todos";
 
-export type TodoStatus = "open" | "completed" | "archived";
-export type BulkTodoAction = "complete" | "archive" | "snooze" | "unsnooze" | "restore_archive" | "reproject" | "delete";
+type StoredTodoStatus = "open" | "completed" | "archived";
+export type TodoStatus = "open" | "completed";
+export type BulkTodoAction = "complete" | "snooze" | "unsnooze" | "reproject" | "delete";
 export type ProjectDeleteMode = "reassign" | "delete";
 
 type TodoRow = {
   id: number;
   title: string;
   notes: string;
-  status: TodoStatus;
+  status: StoredTodoStatus;
   priority: number;
   due_date: string | null;
   project: string | null;
@@ -45,8 +46,8 @@ export type Todo = {
 };
 
 export type TodoUpdate = Partial<
-  Pick<Todo, "title" | "notes" | "status" | "priority" | "dueDate" | "project" | "context" | "snoozedUntil">
->;
+  Pick<Todo, "title" | "notes" | "priority" | "dueDate" | "project" | "context" | "snoozedUntil">
+> & { status?: TodoStatus };
 
 export type TodoSettings = {
   snoozeTimeZone: string;
@@ -65,7 +66,7 @@ function mapTodo(row: TodoRow): Todo {
     id: row.id,
     title: row.title,
     notes: row.notes,
-    status: row.status,
+    status: row.status === "archived" ? "open" : row.status,
     priority: row.priority,
     dueDate: row.due_date,
     project: row.project,
@@ -181,24 +182,34 @@ export async function ensureTodoDatabase() {
       await db.prepare("INSERT INTO app_settings (key, value) VALUES ('seed_version', '1')").run();
     }
 
-    const archiveProjectVersion = await db
-      .prepare("SELECT value FROM app_settings WHERE key = 'archived_project_backfill_v1'")
+    const archiveStatusVersion = await db
+      .prepare("SELECT value FROM app_settings WHERE key = 'archive_status_to_open_v1'")
       .first<{ value: string }>();
-    let archiveProjectBackfilled = 0;
-    if (!archiveProjectVersion) {
+    let archivedConverted = 0;
+    if (!archiveStatusVersion) {
       const results = await db.batch([
-        db.prepare("UPDATE todos SET project = 'Misc.', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE status = 'archived' AND (project IS NULL OR trim(project) = '')"),
-        db.prepare("INSERT INTO app_settings (key, value) VALUES ('archived_project_backfill_v1', '1')"),
+        db.prepare(`
+          UPDATE todos
+          SET status = 'open',
+              completed_at = NULL,
+              snoozed_until = NULL,
+              updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+          WHERE status = 'archived'
+        `),
+        db.prepare("INSERT INTO app_settings (key, value) VALUES ('archive_status_to_open_v1', '1')"),
       ]);
-      archiveProjectBackfilled = Number(results[0].meta.changes ?? 0);
-      console.info("[todo-db] archived notes assigned to Misc.", { changed: archiveProjectBackfilled });
+      archivedConverted = Number(results[0].meta.changes ?? 0);
+      console.info("[todo-db] legacy archives converted to open tasks", {
+        changed: archivedConverted,
+        retainedProjectAssignments: true,
+      });
     }
 
     const projectBackfill = await db.prepare(`
       INSERT OR IGNORE INTO todo_projects (name)
       SELECT DISTINCT trim(project)
       FROM todos
-      WHERE status = 'archived' AND project IS NOT NULL AND trim(project) <> ''
+      WHERE project IS NOT NULL AND trim(project) <> ''
     `).run();
     const registeredProjects = await db.prepare("SELECT COUNT(*) AS count FROM todo_projects").first<{ count: number }>();
     console.info("[todo-db] project registry ready", {
@@ -211,7 +222,7 @@ export async function ensureTodoDatabase() {
       total: existingTotal + inserted,
       imported: importedTodos.length,
       seedSkipped: Boolean(seedVersion) || existingTotal > 0,
-      archiveProjectBackfilled,
+      archivedConverted,
     });
   })().catch((error) => {
     initialization = null;
@@ -273,7 +284,7 @@ export async function deleteTodoProject(
   }
 
   const beforeResult = await db
-    .prepare("SELECT * FROM todos WHERE status IN ('archived', 'completed') AND project = ? ORDER BY id")
+    .prepare("SELECT * FROM todos WHERE project = ? ORDER BY id")
     .bind(name)
     .all<TodoRow>();
   const before = beforeResult.results;
@@ -285,8 +296,8 @@ export async function deleteTodoProject(
         .bind(undoToken, JSON.stringify({ todos: before } satisfies UndoSnapshot))]
       : []),
     mode === "reassign"
-      ? db.prepare("UPDATE todos SET project = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE status IN ('archived', 'completed') AND project = ?").bind(targetProject, name)
-      : db.prepare("DELETE FROM todos WHERE status IN ('archived', 'completed') AND project = ?").bind(name),
+      ? db.prepare("UPDATE todos SET project = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE project = ?").bind(targetProject, name)
+      : db.prepare("DELETE FROM todos WHERE project = ?").bind(name),
     db.prepare("DELETE FROM todo_projects WHERE name = ?").bind(name),
   ];
   await db.batch(statements);
@@ -302,7 +313,6 @@ export async function deleteTodoProject(
 
 export async function createTodo(input: {
   title: string;
-  status?: "open" | "archived";
   notes?: string;
   priority?: number;
   dueDate?: string | null;
@@ -310,9 +320,7 @@ export async function createTodo(input: {
   context?: string | null;
 }): Promise<Todo> {
   await ensureTodoDatabase();
-  const status = input.status ?? "open";
   const project = input.project?.trim() || null;
-  if (status === "archived" && !project) throw new Error("Choose a project before adding an archived note.");
   if (project?.length && project.length > 120) throw new Error("Project names are limited to 120 characters.");
   const db = database();
   if (project) {
@@ -327,7 +335,7 @@ export async function createTodo(input: {
     .bind(
       input.title,
       input.notes ?? "",
-      status,
+      "open",
       input.priority ?? 3,
       input.dueDate ?? null,
       project,
@@ -360,10 +368,6 @@ export async function updateTodo(id: number, update: TodoUpdate): Promise<{ todo
   const db = database();
   const before = await db.prepare("SELECT * FROM todos WHERE id = ?").bind(id).first<TodoRow>();
   if (!before) return null;
-  if (update.status === "archived") {
-    const archiveProject = update.project === undefined ? before.project : update.project;
-    if (!archiveProject?.trim()) throw new Error("Choose or create a project before archiving.");
-  }
   const undoToken = crypto.randomUUID();
 
   const values = entries.map(([, value]) => value);
@@ -372,8 +376,6 @@ export async function updateTodo(id: number, update: TodoUpdate): Promise<{ todo
     setters.push("completed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')", "snoozed_until = NULL");
   } else if (update.status === "open") {
     setters.push("completed_at = NULL");
-  } else if (update.status === "archived") {
-    setters.push("snoozed_until = NULL");
   }
   setters.push("updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')");
 
@@ -515,16 +517,9 @@ export async function bulkUpdateTodos(
 
   if (action === "complete") {
     sql = `UPDATE todos SET status = 'completed', completed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), snoozed_until = NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id IN (${inClause})`;
-  } else if (action === "archive") {
-    if (!project) throw new Error("Choose or create a project before archiving.");
-    sql = `UPDATE todos SET status = 'archived', project = ?, snoozed_until = NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id IN (${inClause})`;
-    values = [project, ...ids];
   } else if (action === "reproject") {
     sql = `UPDATE todos SET project = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id IN (${inClause})`;
     values = [project, ...ids];
-  } else if (action === "restore_archive") {
-    if (before.some((todo) => !todo.project?.trim())) throw new Error("Done notes need a project before they can be reopened in Archives.");
-    sql = `UPDATE todos SET status = 'archived', completed_at = NULL, snoozed_until = NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id IN (${inClause})`;
   } else if (action === "snooze") {
     const until = await nextSnoozeUntil();
     sql = `UPDATE todos SET status = 'open', completed_at = NULL, snoozed_until = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id IN (${inClause})`;
@@ -539,7 +534,7 @@ export async function bulkUpdateTodos(
     db.prepare("DELETE FROM todo_action_history WHERE created_at < strftime('%Y-%m-%dT%H:%M:%fZ','now','-7 days')"),
     db.prepare("INSERT INTO todo_action_history (id, snapshot) VALUES (?, ?)")
       .bind(undoToken, JSON.stringify({ todos: before } satisfies UndoSnapshot)),
-    ...(project && (action === "archive" || action === "reproject")
+    ...(project && action === "reproject"
       ? [db.prepare("INSERT OR IGNORE INTO todo_projects (name) VALUES (?)").bind(project)]
       : []),
     db.prepare(sql).bind(...values),
@@ -556,7 +551,7 @@ export async function bulkUpdateTodos(
     action,
     requested: ids.length,
     changed: result.meta.changes,
-    project: action === "archive" || action === "reproject" ? project : undefined,
+    project: action === "reproject" ? project : undefined,
     snoozedUntil: action === "snooze" ? todos[0]?.snoozedUntil : null,
     undoToken,
   });
@@ -608,14 +603,7 @@ export async function mergeTodos(inputIds: number[]) {
       shared("context"),
       createdSourceKind,
     ),
-    db.prepare(`
-      UPDATE todos
-      SET status = 'archived',
-          project = CASE WHEN project IS NULL OR trim(project) = '' THEN 'Misc.' ELSE project END,
-          snoozed_until = NULL,
-          updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-      WHERE id IN (${inClause})
-    `).bind(...ids),
+    db.prepare(`DELETE FROM todos WHERE id IN (${inClause})`).bind(...ids),
   ]);
   const inserted = (results[2].results as TodoRow[])[0];
   if (!inserted) throw new Error("The merged task could not be created.");
@@ -657,13 +645,16 @@ export async function undoTodoAction(undoToken: string) {
       created_at = excluded.created_at,
       updated_at = excluded.updated_at
   `);
+  const normalizedTodos = snapshot.todos.map((row) => row.status === "archived"
+    ? { ...row, status: "open" as const, completed_at: null, snoozed_until: null }
+    : row);
   const statements = [
     ...(snapshot.createdSourceKind
       ? [db.prepare("DELETE FROM todos WHERE source_kind = ?").bind(snapshot.createdSourceKind)]
       : []),
-    ...[...new Set(snapshot.todos.map((row) => row.project).filter((project): project is string => Boolean(project?.trim())))]
+    ...[...new Set(normalizedTodos.map((row) => row.project).filter((project): project is string => Boolean(project?.trim())))]
       .map((project) => db.prepare("INSERT OR IGNORE INTO todo_projects (name) VALUES (?)").bind(project)),
-    ...snapshot.todos.map((row) => restore.bind(
+    ...normalizedTodos.map((row) => restore.bind(
       row.id,
       row.title,
       row.notes,
@@ -685,8 +676,9 @@ export async function undoTodoAction(undoToken: string) {
   const todos = await listTodos();
   console.info("[todo-db] action undone", {
     undoToken,
-    restored: snapshot.todos.length,
+    restored: normalizedTodos.length,
     removedCreatedTask: Boolean(snapshot.createdSourceKind),
+    normalizedLegacyArchives: snapshot.todos.filter((row) => row.status === "archived").length,
   });
-  return { todos, restored: snapshot.todos.length };
+  return { todos, restored: normalizedTodos.length };
 }

@@ -11,12 +11,11 @@ import {
 import { ActionIcon, type ActionIconName } from "./action-icon";
 import { SiteHeader } from "./site-header";
 
-type TodoStatus = "open" | "completed" | "archived";
-type View = "open" | "today" | "snoozed" | "completed" | "archived" | "all";
+type TodoStatus = "open" | "completed";
+type View = "inbox" | "open" | "projects" | "snoozed" | "all";
 type Sort = "smart" | "priority" | "due" | "newest" | "oldest" | "az";
-type ArchiveNoteState = "open" | "done";
-type TodoAction = "complete" | "archive" | "snooze" | "unsnooze" | "delete";
-type ExecutableTodoAction = TodoAction | "restore_archive";
+type TodoAction = "complete" | "snooze" | "unsnooze" | "delete";
+type ExecutableTodoAction = TodoAction;
 type Notice = { tone: "success" | "error"; text: string; undoToken?: string } | null;
 
 type Todo = {
@@ -44,9 +43,9 @@ type TodoDraft = Pick<Todo, "title" | "notes" | "priority"> & {
 
 type ProjectDialogState = {
   ids: number[];
-  mode: "archive" | "move";
   selection: string;
   newProject: string;
+  openedFromDetails: boolean;
 };
 
 type ProjectDeleteDialogState = {
@@ -59,11 +58,10 @@ const CREATE_PROJECT = "__create_project__";
 const UNASSIGNED_PROJECT = "__unassigned_project__";
 
 const viewLabels: Record<View, string> = {
+  inbox: "Inbox",
   open: "Open",
-  today: "Today",
+  projects: "Projects",
   snoozed: "Snoozed",
-  completed: "Done",
-  archived: "Archived",
   all: "All",
 };
 
@@ -131,24 +129,22 @@ function compareSmart(a: Todo, b: Todo) {
 
 function matchesView(todo: Todo, view: View, now: number) {
   const snoozed = isSnoozed(todo, now);
+  if (view === "inbox") return todo.status === "open" && !snoozed && !todo.project;
   if (view === "open") return todo.status === "open" && !snoozed;
-  if (view === "today") return todo.status === "open" && !snoozed && isTodayOrOverdue(todo.dueDate);
   if (view === "snoozed") return snoozed;
-  if (view === "completed") return todo.status === "completed";
-  if (view === "archived") return todo.status === "archived";
-  return true;
+  if (view === "all") return todo.status === "open" || todo.status === "completed";
+  return false;
 }
 
 function classNames(...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(" ");
 }
 
-function todoActionIcon(action: TodoAction | "move", label: string): ActionIconName {
+function todoActionIcon(action: TodoAction | "assign", label: string): ActionIconName {
   if (action === "complete") return "done";
   if (action === "snooze") return "snooze";
-  if (action === "archive") return "archive";
   if (action === "delete") return "delete";
-  if (action === "move") return "move";
+  if (action === "assign") return "move";
   if (label === "Wake") return "wake";
   if (label === "Open") return "open";
   return "restore";
@@ -162,7 +158,6 @@ function TaskRow({
   onAction,
   onProject,
   onOpen,
-  archiveState,
 }: {
   todo: Todo;
   selected: boolean;
@@ -171,7 +166,6 @@ function TaskRow({
   onAction: (todo: Todo, action: TodoAction, source: "hover" | "swipe") => void;
   onProject: (todo: Todo, source: "hover" | "swipe") => void;
   onOpen: (todo: Todo) => void;
-  archiveState?: ArchiveNoteState;
 }) {
   const [offset, setOffset] = useState(0);
   const [swipeWidth, setSwipeWidth] = useState(1);
@@ -181,27 +175,24 @@ function TaskRow({
   const suppressOpenRef = useRef(false);
   const pending = todo.id < 0;
   const snoozed = isSnoozed(todo, now);
-  const inArchiveProject = archiveState !== undefined;
-  const primaryAction: { action: TodoAction; label: string; icon: ActionIconName } = archiveState === "open"
+  const primaryAction: { action: TodoAction; label: string; icon: ActionIconName } = todo.status === "open"
     ? { action: "complete", label: "Done", icon: "done" }
-    : archiveState === "done"
-      ? { action: "unsnooze", label: "Open", icon: "open" }
-      : todo.status === "open"
-        ? { action: "complete", label: "Done", icon: "done" }
-        : { action: "unsnooze", label: "Open", icon: "open" };
-  const leftSecondaryAction: { action: TodoAction; label: string; icon: ActionIconName } = snoozed
-    ? { action: "unsnooze", label: "Wake", icon: "wake" }
-    : { action: "snooze", label: "Snooze", icon: "snooze" };
+    : { action: "unsnooze", label: "Open", icon: "open" };
+  const leftSecondaryAction: { action: TodoAction; label: string; icon: ActionIconName } = todo.status === "completed"
+    ? primaryAction
+    : snoozed
+      ? { action: "unsnooze", label: "Wake", icon: "wake" }
+      : { action: "snooze", label: "Snooze", icon: "snooze" };
   const swipeRatio = Math.abs(offset) / swipeWidth;
   const longSwipe = swipeRatio >= 0.5;
   const revealAction = offset < 0
     ? (longSwipe ? leftSecondaryAction.label : primaryAction.label)
-    : (longSwipe ? "Delete" : inArchiveProject || todo.status === "archived" ? "Move" : "Archive");
+    : (longSwipe ? "Delete" : "Assign project");
   const revealIcon: ActionIconName = offset < 0
     ? (longSwipe ? leftSecondaryAction.icon : primaryAction.icon)
-    : (longSwipe ? "delete" : inArchiveProject || todo.status === "archived" ? "move" : "archive");
+    : (longSwipe ? "delete" : "move");
   const revealClass = offset < 0
-    ? longSwipe && !snoozed ? "bg-amber-500" : "bg-[#216e4e]"
+    ? longSwipe && leftSecondaryAction.action === "snooze" ? "bg-amber-500" : "bg-[#216e4e]"
     : longSwipe ? "bg-red-600" : "bg-slate-500";
 
   function pointerDown(event: ReactPointerEvent<HTMLDivElement>) {
@@ -254,8 +245,7 @@ function TaskRow({
     if (ratio < 0.18 || direction === 0) return;
     if (direction < 0) onAction(todo, ratio >= 0.5 ? leftSecondaryAction.action : primaryAction.action, "swipe");
     else if (ratio >= 0.5) onAction(todo, "delete", "swipe");
-    else if (inArchiveProject || todo.status === "archived") onProject(todo, "swipe");
-    else onAction(todo, "archive", "swipe");
+    else onProject(todo, "swipe");
   }
 
   function cancelSwipe() {
@@ -265,12 +255,10 @@ function TaskRow({
     setOffset(0);
   }
 
-  const hoverActions: Array<{ action: TodoAction | "move"; label: string; icon: ActionIconName }> = [
+  const hoverActions: Array<{ action: TodoAction | "assign"; label: string; icon: ActionIconName }> = [
     primaryAction,
     ...(todo.status === "open" ? [leftSecondaryAction] : []),
-    ...(inArchiveProject || todo.status === "archived"
-      ? [{ action: "move" as const, label: "Move", icon: "move" as const }]
-      : [{ action: "archive" as const, label: "Archive", icon: "archive" as const }]),
+    { action: "assign", label: "Assign project", icon: "move" },
     { action: "delete", label: "Delete", icon: "delete" },
   ];
 
@@ -315,14 +303,13 @@ function TaskRow({
         >
           <p className={classNames("whitespace-pre-wrap text-[15px] leading-5 text-[#202522]", todo.status === "completed" && "text-[#8b928e] line-through")}>{todo.title}</p>
           {todo.notes && <p className="mt-1 line-clamp-2 whitespace-pre-wrap text-xs leading-5 text-[#7c847f]">{todo.notes}</p>}
-          {(todo.project || todo.context || todo.dueDate || todo.priority <= 2 || snoozed || todo.status === "archived") && (
+          {(todo.project || todo.context || todo.dueDate || todo.priority <= 2 || snoozed) && (
             <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-[#747c77]">
               {todo.priority <= 2 && <span className={classNames("rounded-full px-2 py-0.5 font-medium", todo.priority === 1 ? "bg-red-50 text-red-700" : "bg-amber-50 text-amber-700")}>{priorityLabels[todo.priority]}</span>}
               {todo.project && <span className="rounded-full bg-[#f0f2ef] px-2 py-0.5">{todo.project}</span>}
               {todo.context && <span>{todo.context}</span>}
               {todo.dueDate && <span className={classNames(isTodayOrOverdue(todo.dueDate) && todo.status === "open" && !snoozed && "font-medium text-red-600")}>{dueLabel(todo.dueDate)}</span>}
               {snoozed && todo.snoozedUntil && <span className="font-medium text-amber-700">{snoozeLabel(todo.snoozedUntil)}</span>}
-              {todo.status === "archived" && <span className="font-medium text-slate-600">Archived</span>}
             </div>
           )}
         </button>
@@ -333,7 +320,7 @@ function TaskRow({
                 key={action}
                 type="button"
                 data-row-action
-                onClick={() => action === "move" ? onProject(todo, "hover") : onAction(todo, action, "hover")}
+                onClick={() => action === "assign" ? onProject(todo, "hover") : onAction(todo, action, "hover")}
                 aria-label={`${label}: ${todo.title}`}
                 title={label}
                 className={classNames(
@@ -357,9 +344,7 @@ function TaskRow({
 export default function Home() {
   const [todos, setTodos] = useState<Todo[]>([]);
   const [loading, setLoading] = useState(true);
-  const [view, setView] = useState<View>("open");
-  const [archiveProject, setArchiveProject] = useState<string | null>(null);
-  const [archiveNoteState, setArchiveNoteState] = useState<ArchiveNoteState>("open");
+  const [view, setView] = useState<View>("inbox");
   const [registeredProjects, setRegisteredProjects] = useState<string[]>([]);
   const [query, setQuery] = useState("");
   const [project, setProject] = useState("");
@@ -374,8 +359,6 @@ export default function Home() {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editDraft, setEditDraft] = useState<TodoDraft | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
-  const [taskNewProjectName, setTaskNewProjectName] = useState("");
-  const [taskProjectError, setTaskProjectError] = useState("");
   const [projectDialog, setProjectDialog] = useState<ProjectDialogState | null>(null);
   const [projectDialogError, setProjectDialogError] = useState("");
   const [savingProject, setSavingProject] = useState(false);
@@ -406,7 +389,7 @@ export default function Home() {
           count: loaded.length,
           projects: loadedProjects.length,
           open: loaded.filter((todo) => todo.status === "open").length,
-          archived: loaded.filter((todo) => todo.status === "archived").length,
+          completed: loaded.filter((todo) => todo.status === "completed").length,
           snoozed: loaded.filter((todo) => isSnoozed(todo, Date.now())).length,
         });
       })
@@ -484,49 +467,37 @@ export default function Home() {
     [registeredProjects, todos],
   );
 
-  const archivedProjectOptions = useMemo(() => {
-    const projectCounts = new Map<string, { open: number; done: number }>(
-      registeredProjects.map((name) => [name, { open: 0, done: 0 }]),
+  const projectOptions = useMemo(() => {
+    const projectCounts = new Map<string, { open: number; snoozed: number; done: number }>(
+      registeredProjects.map((name) => [name, { open: 0, snoozed: 0, done: 0 }]),
     );
     todos.forEach((todo) => {
-      if (todo.status === "archived") {
-        const key = todo.project || UNASSIGNED_PROJECT;
-        const counts = projectCounts.get(key) ?? { open: 0, done: 0 };
-        projectCounts.set(key, { ...counts, open: counts.open + 1 });
-      } else if (todo.status === "completed" && todo.project && projectCounts.has(todo.project)) {
-        const counts = projectCounts.get(todo.project) as { open: number; done: number };
-        projectCounts.set(todo.project, { ...counts, done: counts.done + 1 });
-      }
+      if (!todo.project) return;
+      const counts = projectCounts.get(todo.project) ?? { open: 0, snoozed: 0, done: 0 };
+      if (todo.status === "completed") counts.done += 1;
+      else if (isSnoozed(todo, now)) counts.snoozed += 1;
+      else counts.open += 1;
+      projectCounts.set(todo.project, counts);
     });
-    return [...projectCounts.entries()].sort(([a], [b]) => {
-      if (a === UNASSIGNED_PROJECT) return 1;
-      if (b === UNASSIGNED_PROJECT) return -1;
-      return a.localeCompare(b);
-    });
-  }, [registeredProjects, todos]);
+    return [...projectCounts.entries()].sort(([a], [b]) => a.localeCompare(b));
+  }, [registeredProjects, todos, now]);
 
   const counts = useMemo(() => ({
+    inbox: todos.filter((todo) => matchesView(todo, "inbox", now)).length,
     open: todos.filter((todo) => matchesView(todo, "open", now)).length,
-    today: todos.filter((todo) => matchesView(todo, "today", now)).length,
+    projects: projectOptions.length,
     snoozed: todos.filter((todo) => matchesView(todo, "snoozed", now)).length,
-    completed: todos.filter((todo) => matchesView(todo, "completed", now)).length,
-    archived: todos.filter((todo) => todo.status === "archived" || (todo.status === "completed" && Boolean(todo.project) && registeredProjects.includes(todo.project as string))).length,
-    all: todos.length,
-  }), [registeredProjects, todos, now]);
+    all: todos.filter((todo) => matchesView(todo, "all", now)).length,
+  }), [projectOptions.length, todos, now]);
 
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
+    const projectFilterApplies = view === "open" || view === "snoozed" || view === "all";
     const rows = todos.filter((todo) => {
       const searchable = [todo.title, todo.notes, todo.project, todo.context].filter(Boolean).join(" ").toLowerCase();
-      const archiveProjectMatches = archiveProject === UNASSIGNED_PROJECT ? !todo.project : todo.project === archiveProject;
-      const viewMatches = view !== "archived"
-        ? matchesView(todo, view, now)
-        : archiveProject === null
-          ? todo.status === "archived" || (todo.status === "completed" && Boolean(todo.project) && registeredProjects.includes(todo.project as string))
-          : archiveProjectMatches && (archiveNoteState === "open" ? todo.status === "archived" : todo.status === "completed");
-      return viewMatches
+      return matchesView(todo, view, now)
         && (!needle || searchable.includes(needle))
-        && (!project || (project === UNASSIGNED_PROJECT ? !todo.project : todo.project === project))
+        && (!projectFilterApplies || !project || (project === UNASSIGNED_PROJECT ? !todo.project : todo.project === project))
         && (!priority || todo.priority === Number(priority));
     });
     return [...rows].sort((a, b) => {
@@ -537,16 +508,15 @@ export default function Home() {
       if (sort === "az") return a.title.localeCompare(b.title);
       return compareSmart(a, b);
     });
-  }, [todos, view, archiveProject, archiveNoteState, registeredProjects, query, project, priority, sort, now]);
+  }, [todos, view, query, project, priority, sort, now]);
 
   const selectedIds = useMemo(() => [...selected], [selected]);
+  const selectedTodos = useMemo(() => todos.filter((todo) => selected.has(todo.id)), [selected, todos]);
   const allVisibleSelected = filtered.length > 0 && filtered.every((todo) => selected.has(todo.id));
-  const filtersActive = Boolean(query || project || priority || sort !== "smart");
-  const mobileFilterCount = Number(Boolean(project) && view !== "archived") + Number(Boolean(priority)) + Number(sort !== "smart");
+  const projectFilterApplies = view === "open" || view === "snoozed" || view === "all";
+  const filtersActive = Boolean(query || (projectFilterApplies && project) || priority || sort !== "smart");
+  const mobileFilterCount = Number(Boolean(project) && projectFilterApplies) + Number(Boolean(priority)) + Number(sort !== "smart");
   const editingTodo = editingId === null ? null : todos.find((todo) => todo.id === editingId) ?? null;
-  const archiveAtRoot = view === "archived" && archiveProject === null;
-  const canCapture = !archiveAtRoot && archiveProject !== UNASSIGNED_PROJECT;
-  const currentArchiveProjectCounts = archivedProjectOptions.find(([name]) => name === archiveProject)?.[1] ?? { open: 0, done: 0 };
 
   function resizeCapture(textarea: HTMLTextAreaElement) {
     textarea.style.height = "auto";
@@ -558,17 +528,15 @@ export default function Home() {
     event.preventDefault();
     const title = newTitle.trim();
     if (!title || adding) return;
-    const capturingArchive = view === "archived" && archiveProject !== null && archiveProject !== UNASSIGNED_PROJECT;
-    const destinationProject = capturingArchive ? archiveProject : null;
     const temporaryId = -Date.now();
     const optimistic: Todo = {
       id: temporaryId,
       title,
       notes: "",
-      status: capturingArchive ? "archived" : "open",
+      status: "open",
       priority: 3,
       dueDate: null,
-      project: destinationProject,
+      project: null,
       context: null,
       sourceKind: "site",
       sourceId: null,
@@ -578,8 +546,7 @@ export default function Home() {
       updatedAt: new Date().toISOString(),
     };
     setNewTitle("");
-    if (capturingArchive) setArchiveNoteState("open");
-    else setView("open");
+    setView("inbox");
     setTodos((current) => [optimistic, ...current]);
     setAdding(true);
     setSyncing(true);
@@ -591,7 +558,7 @@ export default function Home() {
     try {
       const { todo } = await request<{ todo: Todo }>("/api/todos", {
         method: "POST",
-        body: JSON.stringify({ title, status: capturingArchive ? "archived" : "open", project: destinationProject }),
+        body: JSON.stringify({ title, status: "open", project: null }),
       });
       setTodos((current) => current.map((item) => item.id === temporaryId ? todo : item));
       console.info("[todo-ui] created", {
@@ -619,8 +586,6 @@ export default function Home() {
     return current.map((todo) => {
       if (!idSet.has(todo.id)) return todo;
       if (action === "complete") return { ...todo, status: "completed" as const, completedAt: actionAt, snoozedUntil: null };
-      if (action === "archive") return { ...todo, status: "archived" as const, snoozedUntil: null };
-      if (action === "restore_archive") return { ...todo, status: "archived" as const, completedAt: null, snoozedUntil: null };
       if (action === "snooze") return { ...todo, status: "open" as const, completedAt: null, snoozedUntil: temporarySnooze };
       return { ...todo, status: "open" as const, completedAt: null, snoozedUntil: null };
     });
@@ -642,7 +607,7 @@ export default function Home() {
         const sourceIds = new Set(result.ids);
         setTodos((current) => [
           result.todo,
-          ...current.map((todo) => sourceIds.has(todo.id) ? { ...todo, status: "archived" as const, project: todo.project || "Misc.", snoozedUntil: null } : todo),
+          ...current.filter((todo) => !sourceIds.has(todo.id)),
         ]);
         setNotice({ tone: "success", text: `Merged ${result.ids.length} tasks.`, undoToken: result.undoToken });
         console.info("[todo-ui] merged", { sourceIds: result.ids, mergedId: result.todo.id });
@@ -660,7 +625,7 @@ export default function Home() {
           const todo = previous.find((item) => item.id === id);
           return todo ? isSnoozed(todo, new Date(actionAt).valueOf()) : false;
         });
-        const label = action === "complete" ? "Done" : action === "archive" ? "Archived" : action === "restore_archive" ? "Opened in project" : action === "snooze" ? "Snoozed until tomorrow" : action === "unsnooze" ? openedCompleted ? "Opened" : wokeSnoozed ? "Woke" : "Restored to Open" : "Deleted";
+        const label = action === "complete" ? "Done" : action === "snooze" ? "Snoozed until tomorrow" : action === "unsnooze" ? openedCompleted ? "Opened" : wokeSnoozed ? "Woke" : "Restored to Open" : "Deleted";
         setNotice({ tone: "success", text: `${label}: ${ids.length} ${ids.length === 1 ? "task" : "tasks"}.`, undoToken: result.undoToken });
         console.info("[todo-ui] action completed", { action, ids, snoozedUntil: result.snoozedUntil });
       }
@@ -700,15 +665,14 @@ export default function Home() {
     }
   }
 
-  function openProjectAssignment(ids: number[], mode: "archive" | "move", source: "bulk" | "hover" | "swipe" | "details") {
+  function openProjectAssignment(ids: number[], source: "bulk" | "hover" | "swipe" | "details") {
     const taskProjects = todos
       .filter((todo) => ids.includes(todo.id))
       .map((todo) => todo.project || UNASSIGNED_PROJECT);
     const sharedProject = new Set(taskProjects).size === 1 ? taskProjects[0] : "";
-    const selection = mode === "archive" && sharedProject === UNASSIGNED_PROJECT ? "" : sharedProject;
-    setProjectDialog({ ids, mode, selection, newProject: "" });
+    setProjectDialog({ ids, selection: sharedProject, newProject: "", openedFromDetails: source === "details" });
     setProjectDialogError("");
-    console.info("[todo-ui] project assignment opened", { ids, mode, source, sharedProject: sharedProject || null });
+    console.info("[todo-ui] project assignment opened", { ids, source, sharedProject: sharedProject || null });
   }
 
   function closeProjectAssignment() {
@@ -720,13 +684,17 @@ export default function Home() {
   async function saveProjectAssignment(event: FormEvent) {
     event.preventDefault();
     if (!projectDialog || savingProject) return;
+    if (!projectDialog.selection) {
+      setProjectDialogError("Choose a project or select Unassigned.");
+      return;
+    }
     const projectName = projectDialog.selection === CREATE_PROJECT
       ? projectDialog.newProject.trim()
       : projectDialog.selection === UNASSIGNED_PROJECT
         ? null
         : projectDialog.selection.trim() || null;
-    if (projectDialog.mode === "archive" && !projectName) {
-      setProjectDialogError("Choose an existing project or create a new one.");
+    if (projectDialog.selection === CREATE_PROJECT && !projectName) {
+      setProjectDialogError("Enter a name for the new project.");
       return;
     }
     if (projectName && projectName.length > 120) {
@@ -734,20 +702,22 @@ export default function Home() {
       return;
     }
 
-    const { ids, mode } = projectDialog;
+    const { ids, openedFromDetails } = projectDialog;
     setSavingProject(true);
     setProjectDialogError("");
     setNotice(null);
     try {
-      const action = mode === "archive" ? "archive" : "reproject";
       const result = await request<{ todos: Todo[]; ids: number[]; undoToken: string }>("/api/todos/bulk", {
         method: "POST",
-        body: JSON.stringify({ ids, action, project: projectName }),
+        body: JSON.stringify({ ids, action: "reproject", project: projectName }),
       });
       const updates = new Map(result.todos.map((todo) => [todo.id, todo]));
       setTodos((current) => current.map((todo) => updates.get(todo.id) ?? todo));
       if (projectName) {
         setRegisteredProjects((current) => [...new Set([...current, projectName])].sort((a, b) => a.localeCompare(b)));
+      }
+      if (openedFromDetails && ids.length === 1) {
+        setEditDraft((current) => current ? { ...current, project: projectName ?? "" } : current);
       }
       setSelected((current) => {
         const next = new Set(current);
@@ -758,16 +728,19 @@ export default function Home() {
       const location = projectName || "Unassigned";
       setNotice({
         tone: "success",
-        text: mode === "archive"
-          ? `Archived into ${location}: ${ids.length} ${ids.length === 1 ? "note" : "notes"}.`
-          : `Moved to ${location}: ${ids.length} ${ids.length === 1 ? "note" : "notes"}.`,
+        text: `Assigned to ${location}: ${ids.length} ${ids.length === 1 ? "task" : "tasks"}.`,
         undoToken: result.undoToken,
       });
-      console.info("[todo-ui] project assignment saved", { ids, mode, project: projectName });
+      console.info("[todo-ui] project assignment saved", {
+        ids,
+        project: projectName,
+        preservedTaskState: result.todos.map((todo) => ({ id: todo.id, status: todo.status, snoozedUntil: todo.snoozedUntil })),
+        returnedToDetails: openedFromDetails,
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : "The project could not be assigned.";
       setProjectDialogError(message);
-      console.error("[todo-ui] project assignment failed", { ids, mode, project: projectName, error });
+      console.error("[todo-ui] project assignment failed", { ids, project: projectName, error });
     } finally {
       setSavingProject(false);
     }
@@ -784,16 +757,12 @@ export default function Home() {
       project: todo.project ?? "",
       context: todo.context ?? "",
     });
-    setTaskNewProjectName("");
-    setTaskProjectError("");
     console.info("[todo-ui] task details opened", { id: todo.id, status: todo.status });
   }
 
   function closeTaskDetails() {
     setEditingId(null);
     setEditDraft(null);
-    setTaskNewProjectName("");
-    setTaskProjectError("");
   }
 
   async function saveTaskDetails(event: FormEvent) {
@@ -804,32 +773,9 @@ export default function Home() {
       setNotice({ tone: "error", text: "A task title is required." });
       return;
     }
-    const creatingProjectFromTask = editDraft.project === CREATE_PROJECT;
-    const requestedProjectName = taskNewProjectName.trim();
-    if (creatingProjectFromTask && !requestedProjectName) {
-      setTaskProjectError("Enter a name for the new project.");
-      return;
-    }
-    if (requestedProjectName.length > 120) {
-      setTaskProjectError("Project names are limited to 120 characters.");
-      return;
-    }
     setSavingEdit(true);
-    setTaskProjectError("");
     setNotice(null);
     try {
-      let projectName = editDraft.project || null;
-      if (creatingProjectFromTask) {
-        const created = await request<{ project: string }>("/api/projects", {
-          method: "POST",
-          body: JSON.stringify({ name: requestedProjectName }),
-        });
-        projectName = created.project;
-        setRegisteredProjects((current) => [...new Set([...current, created.project])].sort((a, b) => a.localeCompare(b)));
-        setEditDraft((current) => current ? { ...current, project: created.project } : current);
-        setTaskNewProjectName("");
-        console.info("[todo-ui] project created from task details", { project: created.project, taskId: editingTodo.id });
-      }
       const result = await request<{ todo: Todo; undoToken: string }>(`/api/todos/${editingTodo.id}`, {
         method: "PATCH",
         body: JSON.stringify({
@@ -837,14 +783,10 @@ export default function Home() {
           notes: editDraft.notes,
           priority: editDraft.priority,
           dueDate: editDraft.dueDate || null,
-          project: projectName,
           context: editDraft.context || null,
         }),
       });
       setTodos((current) => current.map((todo) => todo.id === result.todo.id ? result.todo : todo));
-      if (result.todo.project) {
-        setRegisteredProjects((current) => [...new Set([...current, result.todo.project as string])].sort((a, b) => a.localeCompare(b)));
-      }
       closeTaskDetails();
       setNotice({ tone: "success", text: "Task details saved.", undoToken: result.undoToken });
       console.info("[todo-ui] task details saved", {
@@ -854,8 +796,7 @@ export default function Home() {
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : "The task details could not be saved.";
-      if (creatingProjectFromTask) setTaskProjectError(message);
-      else setNotice({ tone: "error", text: message });
+      setNotice({ tone: "error", text: message });
       console.error("[todo-ui] task details save failed", { id: editingTodo.id, error });
     } finally {
       setSavingEdit(false);
@@ -864,19 +805,11 @@ export default function Home() {
 
   function taskAction(todo: Todo, action: TodoAction, source: "hover" | "swipe" | "details") {
     console.info("[todo-ui] task action requested", { id: todo.id, action, source });
-    if (action === "archive") {
-      openProjectAssignment([todo.id], "archive", source);
-      return;
-    }
-    if (action === "unsnooze" && view === "archived" && archiveProject !== null && archiveNoteState === "done" && todo.status === "completed") {
-      void performAction([todo.id], "restore_archive");
-      return;
-    }
     void performAction([todo.id], action);
   }
 
-  function moveArchivedTask(todo: Todo, source: "hover" | "swipe") {
-    openProjectAssignment([todo.id], "move", source);
+  function assignTaskProject(todo: Todo, source: "hover" | "swipe") {
+    openProjectAssignment([todo.id], source);
   }
 
   function detailAction(action: TodoAction) {
@@ -886,20 +819,21 @@ export default function Home() {
     taskAction(todo, action, "details");
   }
 
-  function bulkAction(action: TodoAction | "merge") {
+  function bulkAction(action: TodoAction | "merge" | "assign") {
     if (action === "merge" && selectedIds.length < 2) {
       setNotice({ tone: "error", text: "Select at least two tasks to merge." });
       return;
     }
-    if (action === "archive") {
-      openProjectAssignment(selectedIds, view === "archived" ? "move" : "archive", "bulk");
+    if (action === "assign") {
+      openProjectAssignment(selectedIds, "bulk");
       return;
     }
-    if (action === "unsnooze" && view === "archived" && archiveProject !== null && archiveNoteState === "done") {
-      void performAction(selectedIds, "restore_archive");
-      return;
-    }
-    void performAction(selectedIds, action);
+    const targetIds = action === "complete" || action === "snooze"
+      ? selectedTodos.filter((todo) => todo.status === "open").map((todo) => todo.id)
+      : action === "unsnooze"
+        ? selectedTodos.filter((todo) => todo.status === "completed" || isSnoozed(todo, now)).map((todo) => todo.id)
+        : selectedIds;
+    void performAction(targetIds, action);
   }
 
   function toggleSelected(todo: Todo) {
@@ -922,43 +856,16 @@ export default function Home() {
 
   function chooseView(next: View) {
     setView(next);
-    setArchiveProject(null);
-    setArchiveNoteState("open");
-    setProject("");
-    if (next === "archived") {
-      setQuery("");
-      setPriority("");
-      setSort("smart");
-    }
     setSelected(new Set());
+    setFiltersOpen(false);
+    console.info("[todo-ui] view changed", { view: next, retainedProjectFilter: project || null });
   }
 
-  function openArchiveProject(name: string) {
-    setArchiveProject(name);
-    setArchiveNoteState("open");
-    setProject("");
-    setQuery("");
-    setPriority("");
-    setSort("smart");
+  function openProjectTasks(name: string) {
+    setProject(name);
+    setView("open");
     setSelected(new Set());
-    console.info("[todo-ui] archive project opened", { project: name });
-  }
-
-  function chooseArchiveNoteState(next: ArchiveNoteState) {
-    setArchiveNoteState(next);
-    setSelected(new Set());
-    console.info("[todo-ui] archive note state changed", { project: archiveProject, state: next });
-  }
-
-  function returnToArchiveProjects() {
-    setArchiveProject(null);
-    setArchiveNoteState("open");
-    setProject("");
-    setQuery("");
-    setPriority("");
-    setSort("smart");
-    setSelected(new Set());
-    console.info("[todo-ui] returned to archive projects");
+    console.info("[todo-ui] project opened as filtered task list", { project: name, destinationView: "open" });
   }
 
   function openNewProjectDialog() {
@@ -993,13 +900,12 @@ export default function Home() {
       setRegisteredProjects((current) => [...new Set([...current, result.project])].sort((a, b) => a.localeCompare(b)));
       setNewProjectOpen(false);
       setNewProjectName("");
-      openArchiveProject(result.project);
       setNotice({ tone: "success", text: `${result.project} created.` });
-      console.info("[todo-ui] archive project created", { project: result.project });
+      console.info("[todo-ui] project created", { project: result.project, remainedOnProjectsView: true });
     } catch (error) {
       const message = error instanceof Error ? error.message : "The project could not be created.";
       setNewProjectError(message);
-      console.error("[todo-ui] archive project create failed", { name, error });
+      console.error("[todo-ui] project create failed", { name, error });
     } finally {
       setCreatingProject(false);
     }
@@ -1011,7 +917,7 @@ export default function Home() {
     setProjectDeleteError("");
     console.info("[todo-ui] project delete dialog opened", {
       project: name,
-      projectNotes: todos.filter((todo) => (todo.status === "archived" || todo.status === "completed") && todo.project === name).length,
+      projectTasks: todos.filter((todo) => todo.project === name).length,
       reassignTargets: alternatives.length,
     });
   }
@@ -1049,24 +955,23 @@ export default function Home() {
       });
       setRegisteredProjects((current) => current.filter((name) => name !== result.project));
       setTodos((current) => result.mode === "delete"
-        ? current.filter((todo) => !((todo.status === "archived" || todo.status === "completed") && todo.project === result.project))
-        : current.map((todo) => (todo.status === "archived" || todo.status === "completed") && todo.project === result.project
+        ? current.filter((todo) => todo.project !== result.project)
+        : current.map((todo) => todo.project === result.project
           ? { ...todo, project: result.targetProject, updatedAt: new Date().toISOString() }
           : todo));
       setProjectDeleteDialog(null);
-      returnToArchiveProjects();
       setNotice({
         tone: "success",
         text: result.mode === "delete"
-          ? `${result.project} and ${result.affected} ${result.affected === 1 ? "note" : "notes"} deleted.`
-          : `${result.project} deleted; ${result.affected} ${result.affected === 1 ? "note" : "notes"} moved to ${result.targetProject}.`,
+          ? `${result.project} and ${result.affected} ${result.affected === 1 ? "task" : "tasks"} deleted.`
+          : `${result.project} deleted; ${result.affected} ${result.affected === 1 ? "task" : "tasks"} moved to ${result.targetProject}.`,
         undoToken: result.undoToken ?? undefined,
       });
-      console.info("[todo-ui] archive project deleted", result);
+      console.info("[todo-ui] project deleted", { ...result, affectedAllTaskStates: true });
     } catch (error) {
       const message = error instanceof Error ? error.message : "The project could not be deleted.";
       setProjectDeleteError(message);
-      console.error("[todo-ui] archive project delete failed", { dialog, error });
+      console.error("[todo-ui] project delete failed", { dialog, error });
     } finally {
       setDeletingProject(false);
     }
@@ -1076,7 +981,7 @@ export default function Home() {
     <main className="min-h-screen bg-[#f6f7f5] text-[#1d211f]">
       <SiteHeader current="todos" />
       <div className="mx-auto max-w-5xl px-4 pb-28 pt-5 sm:px-6 sm:pt-7">
-        {canCapture && <form onSubmit={addTodo} className="mb-5 flex items-end gap-2 rounded-2xl border border-black/[0.07] bg-white p-2 shadow-[0_10px_35px_rgba(30,45,36,0.07)] sm:p-3">
+        <form onSubmit={addTodo} className="mb-5 flex items-end gap-2 rounded-2xl border border-black/[0.07] bg-white p-2 shadow-[0_10px_35px_rgba(30,45,36,0.07)] sm:p-3">
           <div className="flex min-w-0 flex-1 items-start gap-3 px-2 py-2 sm:px-3">
             <ActionIcon name="add" className="mt-1 h-5 w-5 shrink-0 text-[#216e4e]" />
             <textarea
@@ -1090,8 +995,8 @@ export default function Home() {
                 }
               }}
               rows={1}
-              placeholder={view === "archived" && archiveProject ? `Add to ${archiveProject}…` : "Add a task…"}
-              aria-label={view === "archived" && archiveProject ? `Add to ${archiveProject}` : "Add a task"}
+              placeholder="Add a task…"
+              aria-label="Add a task"
               maxLength={2000}
               className="min-h-6 max-h-[120px] min-w-0 flex-1 resize-none overflow-hidden bg-transparent text-[16px] leading-6 text-[#151816] outline-none placeholder:text-[#929994]"
             />
@@ -1107,7 +1012,7 @@ export default function Home() {
               {adding ? "Adding…" : "Add"}
             </button>
           </div>
-        </form>}
+        </form>
 
         <section aria-labelledby="tasks-heading">
           <div className="mb-3 flex gap-1 overflow-x-auto rounded-xl border border-black/[0.06] bg-white p-1 shadow-sm">
@@ -1126,12 +1031,12 @@ export default function Home() {
             ))}
           </div>
 
-          {archiveAtRoot ? (
+          {view === "projects" ? (
             <div>
               <div className="mb-4 flex items-center justify-between gap-3 px-1">
                 <div>
-                  <h2 id="tasks-heading" className="text-lg font-semibold text-[#202522]">Archive projects</h2>
-                  <p className="mt-0.5 text-sm text-[#7c847f]">Persistent notes organized into folders.</p>
+                  <h2 id="tasks-heading" className="text-lg font-semibold text-[#202522]">Projects</h2>
+                  <p className="mt-0.5 text-sm text-[#7c847f]">Open a project to see its active tasks.</p>
                 </div>
                 <button
                   type="button"
@@ -1144,41 +1049,38 @@ export default function Home() {
               </div>
 
               {loading ? (
-                <div role="status" aria-label="Loading archive projects" className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                <div role="status" aria-label="Loading projects" className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                   {[0, 1, 2].map((item) => <div key={item} className="h-32 animate-pulse rounded-2xl bg-white shadow-sm" />)}
                 </div>
-              ) : archivedProjectOptions.length ? (
+              ) : projectOptions.length ? (
                 <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                  {archivedProjectOptions.map(([name, projectCounts]) => {
-                    const unassigned = name === UNASSIGNED_PROJECT;
-                    const count = projectCounts.open + projectCounts.done;
+                  {projectOptions.map(([name, projectCounts]) => {
+                    const count = projectCounts.open + projectCounts.snoozed + projectCounts.done;
                     return (
                       <li key={name} className="group relative overflow-hidden rounded-2xl border border-black/[0.07] bg-white shadow-[0_8px_28px_rgba(30,45,36,0.05)] transition hover:-translate-y-0.5 hover:border-[#216e4e]/20 hover:shadow-[0_12px_34px_rgba(30,45,36,0.09)]">
                         <button
                           type="button"
-                          onClick={() => openArchiveProject(name)}
+                          onClick={() => openProjectTasks(name)}
                           className="flex min-h-32 w-full items-start gap-3 p-5 pr-14 text-left focus-visible:outline-2 focus-visible:outline-inset focus-visible:outline-[#216e4e]"
-                          aria-label={`Open ${unassigned ? "Unassigned" : name}, ${count} ${count === 1 ? "note" : "notes"}`}
+                          aria-label={`Open ${name}, ${count} ${count === 1 ? "task" : "tasks"}`}
                         >
-                          <span className={classNames("grid h-11 w-11 shrink-0 place-items-center rounded-xl", unassigned ? "bg-slate-100 text-slate-600" : "bg-[#eaf3ed] text-[#216e4e]")}>
+                          <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-[#eaf3ed] text-[#216e4e]">
                             <ActionIcon name="folder" className="h-6 w-6" />
                           </span>
                           <span className="min-w-0 pt-0.5">
-                            <span className="block break-words text-[15px] font-semibold text-[#252a27]">{unassigned ? "Unassigned" : name}</span>
-                            <span className="mt-1 block text-xs text-[#7c847f]">{projectCounts.open} open · {projectCounts.done} done</span>
+                            <span className="block break-words text-[15px] font-semibold text-[#252a27]">{name}</span>
+                            <span className="mt-1 block text-xs text-[#7c847f]">{projectCounts.open} open · {projectCounts.snoozed} snoozed · {projectCounts.done} done</span>
                           </span>
                         </button>
-                        {!unassigned && (
-                          <button
-                            type="button"
-                            onClick={() => openProjectDeleteDialog(name)}
-                            aria-label={`Delete project: ${name}`}
-                            title="Delete project"
-                            className="absolute right-3 top-3 grid h-9 w-9 place-items-center rounded-lg text-[#8a918d] opacity-70 transition hover:bg-red-50 hover:text-red-700 focus:opacity-100 focus-visible:outline-2 focus-visible:outline-red-600 group-hover:opacity-100"
-                          >
-                            <ActionIcon name="delete" />
-                          </button>
-                        )}
+                        <button
+                          type="button"
+                          onClick={() => openProjectDeleteDialog(name)}
+                          aria-label={`Delete project: ${name}`}
+                          title="Delete project"
+                          className="absolute right-3 top-3 grid h-9 w-9 place-items-center rounded-lg text-[#8a918d] opacity-70 transition hover:bg-red-50 hover:text-red-700 focus:opacity-100 focus-visible:outline-2 focus-visible:outline-red-600 group-hover:opacity-100"
+                        >
+                          <ActionIcon name="delete" />
+                        </button>
                       </li>
                     );
                   })}
@@ -1186,50 +1088,14 @@ export default function Home() {
               ) : (
                 <div className="rounded-2xl border border-dashed border-black/[0.12] bg-white px-6 py-14 text-center">
                   <span className="mx-auto grid h-12 w-12 place-items-center rounded-full bg-[#eaf3ed] text-[#216e4e]"><ActionIcon name="folder" className="h-6 w-6" /></span>
-                  <p className="mt-4 font-medium text-[#303632]">No archive projects yet.</p>
-                  <p className="mt-1 text-sm text-[#7c847f]">Create a folder for the notes you want to keep.</p>
+                  <p className="mt-4 font-medium text-[#303632]">No projects yet.</p>
+                  <p className="mt-1 text-sm text-[#7c847f]">Create a project, then assign tasks whenever useful.</p>
                 </div>
               )}
             </div>
           ) : (
           <>
-          {view === "archived" && archiveProject !== null && (
-            <div className="mb-3 flex min-w-0 items-center justify-between gap-3 px-1">
-              <div className="flex min-w-0 items-center gap-3">
-                <button type="button" onClick={returnToArchiveProjects} className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-white text-[#4f5752] shadow-sm transition hover:bg-[#eef0ed] focus-visible:outline-2 focus-visible:outline-[#216e4e]" aria-label="Back to archive projects" title="Back to projects"><ActionIcon name="back" /></button>
-                <div className="min-w-0">
-                  <p className="text-xs font-medium text-[#7c847f]">Archive project</p>
-                  <h2 className="truncate text-base font-semibold text-[#202522]">{archiveProject === UNASSIGNED_PROJECT ? "Unassigned" : archiveProject}</h2>
-                </div>
-              </div>
-              {archiveProject !== UNASSIGNED_PROJECT && (
-                <button type="button" onClick={() => openProjectDeleteDialog(archiveProject)} className="inline-flex h-10 shrink-0 items-center gap-2 rounded-xl px-3 text-sm font-semibold text-red-700 transition hover:bg-red-50 focus-visible:outline-2 focus-visible:outline-red-600"><ActionIcon name="delete" /><span className="hidden sm:inline">Delete project</span></button>
-              )}
-            </div>
-          )}
-
-          {view === "archived" && archiveProject !== null && (
-            <div className="mb-3 grid grid-cols-2 gap-1 rounded-xl border border-black/[0.06] bg-white p-1 shadow-sm" role="group" aria-label="Filter project notes by state">
-              {(["open", "done"] as ArchiveNoteState[]).map((state) => (
-                <button
-                  key={state}
-                  type="button"
-                  onClick={() => chooseArchiveNoteState(state)}
-                  aria-pressed={archiveNoteState === state}
-                  className={classNames(
-                    "inline-flex h-10 items-center justify-center gap-2 rounded-lg px-3 text-sm font-semibold capitalize transition focus-visible:outline-2 focus-visible:outline-[#216e4e]",
-                    archiveNoteState === state ? "bg-[#eaf3ed] text-[#195d41]" : "text-[#69716c] hover:bg-[#f6f7f5] hover:text-[#303632]",
-                  )}
-                >
-                  <ActionIcon name={state === "open" ? "open" : "done"} />
-                  {state}
-                  <span className={classNames("rounded-full px-1.5 py-0.5 text-[11px]", archiveNoteState === state ? "bg-white/80" : "bg-[#f1f2f0]")}>{currentArchiveProjectCounts[state]}</span>
-                </button>
-              ))}
-            </div>
-          )}
-
-          <div className={classNames("mb-3 grid grid-cols-[minmax(0,1fr)_auto] gap-2", view === "archived" ? "sm:grid-cols-[minmax(220px,1fr)_auto_auto]" : "sm:grid-cols-[minmax(220px,1fr)_auto_auto_auto]")}>
+          <div className={classNames("mb-3 grid grid-cols-[minmax(0,1fr)_auto] gap-2", projectFilterApplies ? "sm:grid-cols-[minmax(220px,1fr)_auto_auto_auto]" : "sm:grid-cols-[minmax(220px,1fr)_auto_auto]")}>
             <label className="flex h-10 items-center gap-2 rounded-xl border border-black/[0.08] bg-white px-3 shadow-sm focus-within:border-[#216e4e]/50 focus-within:ring-3 focus-within:ring-[#216e4e]/10">
               <ActionIcon name="search" className="h-4 w-4 shrink-0 text-[#7c847f]" />
               <input
@@ -1255,8 +1121,9 @@ export default function Home() {
               <span>Filters</span>
               {mobileFilterCount > 0 && <span className="grid h-5 min-w-5 place-items-center rounded-full bg-[#216e4e] px-1 text-[10px] text-white">{mobileFilterCount}</span>}
             </button>
-            {view !== "archived" && <select value={project} onChange={(event) => setProject(event.target.value)} aria-label="Filter by project" className="hidden h-10 rounded-xl border border-black/[0.08] bg-white px-3 text-sm text-[#4f5752] shadow-sm outline-none focus:border-[#216e4e]/50 sm:block">
+            {projectFilterApplies && <select value={project} onChange={(event) => setProject(event.target.value)} aria-label="Filter by project" className="hidden h-10 rounded-xl border border-black/[0.08] bg-white px-3 text-sm text-[#4f5752] shadow-sm outline-none focus:border-[#216e4e]/50 sm:block">
               <option value="">All projects</option>
+              <option value={UNASSIGNED_PROJECT}>Unassigned</option>
               {projects.map((name) => <option key={name}>{name}</option>)}
             </select>}
             <select value={priority} onChange={(event) => setPriority(event.target.value)} aria-label="Filter by priority" className="hidden h-10 rounded-xl border border-black/[0.08] bg-white px-3 text-sm text-[#4f5752] shadow-sm outline-none focus:border-[#216e4e]/50 sm:block">
@@ -1290,10 +1157,11 @@ export default function Home() {
                 </div>
 
                 <div className="space-y-4">
-                  {view !== "archived" && <label className="block">
+                  {projectFilterApplies && <label className="block">
                     <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-[#69716c]">Project</span>
                     <select value={project} onChange={(event) => setProject(event.target.value)} className="h-12 w-full rounded-xl border border-black/[0.1] bg-white px-3 text-sm text-[#303632] outline-none focus:border-[#216e4e]/50">
                       <option value="">All projects</option>
+                      <option value={UNASSIGNED_PROJECT}>Unassigned</option>
                       {projects.map((name) => <option key={name}>{name}</option>)}
                     </select>
                   </label>}
@@ -1321,7 +1189,7 @@ export default function Home() {
                 </div>
 
                 <div className="mt-6 grid grid-cols-2 gap-2">
-                  <button type="button" onClick={() => { setProject(""); setPriority(""); setSort("smart"); }} className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-black/[0.08] text-sm font-semibold text-[#4f5752]"><ActionIcon name="restore" />Reset</button>
+                  <button type="button" onClick={() => { if (projectFilterApplies) setProject(""); setPriority(""); setSort("smart"); }} className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-black/[0.08] text-sm font-semibold text-[#4f5752]"><ActionIcon name="restore" />Reset</button>
                   <button type="button" onClick={() => setFiltersOpen(false)} className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-[#216e4e] text-sm font-semibold text-white"><ActionIcon name="done" />Show {filtered.length} {filtered.length === 1 ? "task" : "tasks"}</button>
                 </div>
               </div>
@@ -1330,16 +1198,16 @@ export default function Home() {
 
           <div className="mb-2 flex items-center justify-between px-1">
             <div className="flex items-center gap-3">
-              <h2 id="tasks-heading" className="text-sm font-semibold text-[#373d39]">{view === "archived" ? `${archiveNoteState === "open" ? "Open" : "Done"} notes` : `${viewLabels[view]} tasks`}</h2>
+              <h2 id="tasks-heading" className="text-sm font-semibold text-[#373d39]">{viewLabels[view]} tasks</h2>
               {filtered.length > 0 && <button onClick={toggleVisible} className="inline-flex items-center gap-1.5 text-xs font-medium text-[#216e4e] hover:underline"><ActionIcon name={allVisibleSelected ? "cancel" : "select"} className="h-3.5 w-3.5" />{allVisibleSelected ? "Clear selection" : "Select visible"}</button>}
             </div>
             <div className="flex items-center gap-3 text-xs text-[#7c847f]">
               <span>{syncing ? "Saving…" : `${filtered.length} ${filtered.length === 1 ? "item" : "items"}`}</span>
-              {filtersActive && <button onClick={() => { setQuery(""); setProject(""); setPriority(""); setSort("smart"); }} className="inline-flex items-center gap-1 font-medium text-[#216e4e] hover:underline"><ActionIcon name="cancel" className="h-3.5 w-3.5" />Clear filters</button>}
+              {filtersActive && <button onClick={() => { setQuery(""); if (projectFilterApplies) setProject(""); setPriority(""); setSort("smart"); }} className="inline-flex items-center gap-1 font-medium text-[#216e4e] hover:underline"><ActionIcon name="cancel" className="h-3.5 w-3.5" />Clear filters</button>}
             </div>
           </div>
 
-          <p className="mb-2 px-1 text-[11px] text-[#8a918d] md:hidden">Swipe left: {view === "archived" ? archiveNoteState === "done" ? "open" : "done" : view === "completed" ? "open" : "done"} / {view === "snoozed" ? "wake" : "snooze"} · Swipe right: {view === "archived" ? "move" : "archive"} / delete</p>
+          <p className="mb-2 px-1 text-[11px] text-[#8a918d] md:hidden">Swipe left: done/open · keep swiping to snooze/wake · Swipe right: assign project / delete</p>
 
           <div className="overflow-hidden rounded-2xl border border-black/[0.07] bg-white shadow-[0_8px_30px_rgba(30,45,36,0.05)]">
             {loading ? (
@@ -1356,16 +1224,15 @@ export default function Home() {
                     now={now}
                     onSelect={toggleSelected}
                     onAction={taskAction}
-                    onProject={moveArchivedTask}
+                    onProject={assignTaskProject}
                     onOpen={openTaskDetails}
-                    archiveState={view === "archived" && archiveProject !== null ? archiveNoteState : undefined}
                   />
                 ))}
               </ul>
             ) : (
               <div className="px-6 py-14 text-center">
                 <div className="mx-auto mb-4 grid h-12 w-12 place-items-center rounded-full bg-[#eaf3ed] text-xl text-[#216e4e]">✓</div>
-                <p className="font-medium text-[#303632]">{filtersActive ? "No tasks match those filters." : view === "snoozed" ? "Nothing is snoozed." : view === "archived" ? `No ${archiveNoteState} notes in this project.` : view === "completed" ? "Nothing completed yet." : "You’re clear."}</p>
+                <p className="font-medium text-[#303632]">{filtersActive ? "No tasks match those filters." : view === "snoozed" ? "Nothing is snoozed." : view === "inbox" ? "Inbox zero." : "You’re clear."}</p>
                 <p className="mt-1 text-sm text-[#7c847f]">{filtersActive ? "Try clearing a filter or changing the search." : view === "snoozed" ? "Snoozed tasks return here until their wake time." : "Add the next thing when it appears."}</p>
               </div>
             )}
@@ -1388,14 +1255,14 @@ export default function Home() {
         >
           <div className="pointer-events-auto flex items-center gap-1.5 overflow-x-auto rounded-2xl border border-[#216e4e]/20 bg-[#eaf3ed]/95 p-2 shadow-[0_16px_50px_rgba(23,61,42,0.2)] backdrop-blur-xl sm:gap-2">
             <span className="min-w-max px-2 text-sm font-semibold text-[#195d41]">{selectedIds.length} selected</span>
-            {!(view === "archived" && archiveNoteState === "done") && <button type="button" onClick={() => bulkAction("complete")} disabled={syncing} className="inline-flex min-w-max items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-[#216e4e] shadow-sm hover:bg-[#f8fbf9] disabled:opacity-50"><ActionIcon name="done" />Done</button>}
-            {view === "snoozed" ? (
+            {selectedTodos.some((todo) => todo.status === "open") && <button type="button" onClick={() => bulkAction("complete")} disabled={syncing} className="inline-flex min-w-max items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-[#216e4e] shadow-sm hover:bg-[#f8fbf9] disabled:opacity-50"><ActionIcon name="done" />Done</button>}
+            {view === "snoozed" && selectedTodos.some((todo) => todo.status === "open") ? (
               <button type="button" onClick={() => bulkAction("unsnooze")} disabled={syncing} className="inline-flex min-w-max items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-[#216e4e] shadow-sm hover:bg-[#f8fbf9] disabled:opacity-50"><ActionIcon name="wake" />Wake</button>
-            ) : (
+            ) : selectedTodos.some((todo) => todo.status === "open") ? (
               <button type="button" onClick={() => bulkAction("snooze")} disabled={syncing} className="inline-flex min-w-max items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-amber-700 shadow-sm hover:bg-amber-50 disabled:opacity-50"><ActionIcon name="snooze" />Snooze</button>
-            )}
-            {view !== "snoozed" && (view !== "archived" || archiveNoteState === "done") && <button type="button" onClick={() => bulkAction("unsnooze")} disabled={syncing} className="inline-flex min-w-max items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-[#4f5752] shadow-sm hover:bg-[#f8f9f8] disabled:opacity-50"><ActionIcon name={view === "completed" || view === "archived" ? "open" : "restore"} />{view === "completed" || view === "archived" ? "Open" : "Restore"}</button>}
-            <button type="button" onClick={() => bulkAction("archive")} disabled={syncing} className="inline-flex min-w-max items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-slate-600 shadow-sm hover:bg-slate-50 disabled:opacity-50"><ActionIcon name={view === "archived" ? "move" : "archive"} />{view === "archived" ? "Move" : "Archive"}</button>
+            ) : null}
+            {selectedTodos.some((todo) => todo.status === "completed") && <button type="button" onClick={() => bulkAction("unsnooze")} disabled={syncing} className="inline-flex min-w-max items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-[#4f5752] shadow-sm hover:bg-[#f8f9f8] disabled:opacity-50"><ActionIcon name="open" />Open</button>}
+            <button type="button" onClick={() => bulkAction("assign")} disabled={syncing} className="inline-flex min-w-max items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-slate-600 shadow-sm hover:bg-slate-50 disabled:opacity-50"><ActionIcon name="move" />Assign project</button>
             <button type="button" onClick={() => bulkAction("merge")} disabled={syncing || selectedIds.length < 2} className="inline-flex min-w-max items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-violet-700 shadow-sm hover:bg-violet-50 disabled:opacity-40"><ActionIcon name="merge" />Merge</button>
             <button type="button" onClick={() => bulkAction("delete")} disabled={syncing} className="inline-flex min-w-max items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-red-700 shadow-sm hover:bg-red-50 disabled:opacity-50"><ActionIcon name="delete" />Delete</button>
             <button type="button" onClick={() => setSelected(new Set())} className="ml-auto inline-flex min-w-max items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold text-[#69716c] hover:bg-black/[0.04]"><ActionIcon name="cancel" />Cancel</button>
@@ -1410,8 +1277,8 @@ export default function Home() {
             <div className="flex min-w-0 items-start justify-between gap-4">
               <div className="min-w-0">
                 <span className="mb-3 grid h-11 w-11 place-items-center rounded-xl bg-[#eaf3ed] text-[#216e4e]"><ActionIcon name="create-project" className="h-6 w-6" /></span>
-                <h3 id="new-project-title" className="text-lg font-semibold text-[#202522]">Create archive project</h3>
-                <p className="mt-1 text-sm leading-5 text-[#7c847f]">Make a folder for persistent notes and reference material.</p>
+                <h3 id="new-project-title" className="text-lg font-semibold text-[#202522]">Create project</h3>
+                <p className="mt-1 text-sm leading-5 text-[#7c847f]">Add a project you can assign tasks to and filter by.</p>
               </div>
               <button type="button" onClick={closeNewProjectDialog} disabled={creatingProject} className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#f1f2f0] text-[#4f5752] hover:bg-[#e8eae7] disabled:opacity-50" aria-label="Close new project dialog" title="Close"><ActionIcon name="close" /></button>
             </div>
@@ -1436,7 +1303,7 @@ export default function Home() {
       )}
 
       {projectDeleteDialog && (() => {
-        const noteCount = todos.filter((todo) => (todo.status === "archived" || todo.status === "completed") && todo.project === projectDeleteDialog.name).length;
+        const noteCount = todos.filter((todo) => todo.project === projectDeleteDialog.name).length;
         const alternatives = registeredProjects.filter((name) => name !== projectDeleteDialog.name);
         return (
           <div className="fixed inset-0 z-50 flex items-end justify-center overflow-x-hidden sm:items-center sm:p-5" role="dialog" aria-modal="true" aria-labelledby="delete-project-title">
@@ -1446,14 +1313,14 @@ export default function Home() {
                 <div className="min-w-0">
                   <span className="mb-3 grid h-11 w-11 place-items-center rounded-xl bg-red-50 text-red-700"><ActionIcon name="delete" className="h-5 w-5" /></span>
                   <h3 id="delete-project-title" className="break-words text-lg font-semibold text-[#202522]">Delete {projectDeleteDialog.name}?</h3>
-                  <p className="mt-1 text-sm leading-5 text-[#7c847f]">{noteCount ? `This project contains ${noteCount} ${noteCount === 1 ? "note" : "notes"}. Choose what happens to them.` : "This project is empty and can be safely removed."}</p>
+                  <p className="mt-1 text-sm leading-5 text-[#7c847f]">{noteCount ? `This project contains ${noteCount} ${noteCount === 1 ? "task" : "tasks"}. Choose what happens to them.` : "This project is empty and can be safely removed."}</p>
                 </div>
                 <button type="button" onClick={closeProjectDeleteDialog} disabled={deletingProject} className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#f1f2f0] text-[#4f5752] hover:bg-[#e8eae7] disabled:opacity-50" aria-label="Close delete project dialog" title="Close"><ActionIcon name="close" /></button>
               </div>
 
               {noteCount > 0 && (
                 <fieldset className="mt-5 space-y-2">
-                  <legend className="sr-only">Choose what happens to project notes</legend>
+                  <legend className="sr-only">Choose what happens to project tasks</legend>
                   <label className={classNames("block rounded-2xl border p-4 transition", projectDeleteDialog.mode === "reassign" ? "border-[#216e4e]/35 bg-[#f3f8f5]" : "border-black/[0.09]") }>
                     <span className="flex items-start gap-3">
                       <input
@@ -1465,8 +1332,8 @@ export default function Home() {
                         className="mt-0.5 h-4 w-4 accent-[#216e4e]"
                       />
                       <span className="min-w-0 flex-1">
-                        <span className="block text-sm font-semibold text-[#303632]">Move notes to another project</span>
-                        <span className="mt-0.5 block text-xs leading-5 text-[#7c847f]">Keep every note and reassign it before removing this folder.</span>
+                        <span className="block text-sm font-semibold text-[#303632]">Move tasks to another project</span>
+                        <span className="mt-0.5 block text-xs leading-5 text-[#7c847f]">Keep every task and reassign it before removing this project.</span>
                       </span>
                     </span>
                     {projectDeleteDialog.mode === "reassign" && alternatives.length > 0 && (
@@ -1486,8 +1353,8 @@ export default function Home() {
                   <label className={classNames("flex items-start gap-3 rounded-2xl border p-4 transition", projectDeleteDialog.mode === "delete" ? "border-red-300 bg-red-50" : "border-black/[0.09]")}>
                     <input type="radio" name="delete-project-mode" checked={projectDeleteDialog.mode === "delete"} onChange={() => setProjectDeleteDialog((current) => current ? { ...current, mode: "delete" } : current)} className="mt-0.5 h-4 w-4 accent-red-700" />
                     <span className="min-w-0 flex-1">
-                      <span className="block text-sm font-semibold text-red-800">Delete the notes too</span>
-                      <span className="mt-0.5 block text-xs leading-5 text-red-700/75">Remove the folder and all {noteCount} {noteCount === 1 ? "note" : "notes"} inside it.</span>
+                      <span className="block text-sm font-semibold text-red-800">Delete the tasks too</span>
+                      <span className="mt-0.5 block text-xs leading-5 text-red-700/75">Remove the project and all {noteCount} {noteCount === 1 ? "task" : "tasks"} assigned to it.</span>
                     </span>
                   </label>
                 </fieldset>
@@ -1496,7 +1363,7 @@ export default function Home() {
               {projectDeleteError && <p role="alert" className="mt-3 text-sm font-medium text-red-700">{projectDeleteError}</p>}
               <div className="mt-6 flex items-center justify-end gap-2">
                 <button type="button" onClick={closeProjectDeleteDialog} disabled={deletingProject} className="inline-flex h-11 items-center gap-2 rounded-xl px-4 text-sm font-semibold text-[#69716c] hover:bg-[#f3f4f2] disabled:opacity-50"><ActionIcon name="cancel" />Cancel</button>
-                <button type="submit" disabled={deletingProject || (noteCount > 0 && projectDeleteDialog.mode === "reassign" && !projectDeleteDialog.targetProject)} className="inline-flex h-11 items-center gap-2 rounded-xl bg-red-700 px-5 text-sm font-semibold text-white hover:bg-red-800 disabled:opacity-50"><ActionIcon name="delete" />{deletingProject ? "Deleting…" : projectDeleteDialog.mode === "delete" && noteCount > 0 ? "Delete project & notes" : "Delete project"}</button>
+                <button type="submit" disabled={deletingProject || (noteCount > 0 && projectDeleteDialog.mode === "reassign" && !projectDeleteDialog.targetProject)} className="inline-flex h-11 items-center gap-2 rounded-xl bg-red-700 px-5 text-sm font-semibold text-white hover:bg-red-800 disabled:opacity-50"><ActionIcon name="delete" />{deletingProject ? "Deleting…" : projectDeleteDialog.mode === "delete" && noteCount > 0 ? "Delete project & tasks" : "Delete project"}</button>
               </div>
             </form>
           </div>
@@ -1504,18 +1371,14 @@ export default function Home() {
       })()}
 
       {projectDialog && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center overflow-x-hidden sm:items-center sm:p-5" role="dialog" aria-modal="true" aria-labelledby="project-dialog-title">
+        <div className="fixed inset-0 z-[60] flex items-end justify-center overflow-x-hidden sm:items-center sm:p-5" role="dialog" aria-modal="true" aria-labelledby="project-dialog-title">
           <button type="button" aria-label="Close project assignment" onClick={closeProjectAssignment} className="absolute inset-0 bg-black/35 backdrop-blur-[2px]" />
           <form onSubmit={saveProjectAssignment} className="relative max-h-[92dvh] w-full max-w-full overflow-x-hidden overflow-y-auto rounded-t-3xl bg-white px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-5 shadow-2xl sm:max-w-md sm:rounded-3xl sm:p-6">
             <div className="flex min-w-0 items-start justify-between gap-4">
               <div className="min-w-0">
-                <h3 id="project-dialog-title" className="text-lg font-semibold text-[#202522]">
-                  {projectDialog.mode === "archive" ? "Archive into a project" : "Move archived notes"}
-                </h3>
+                <h3 id="project-dialog-title" className="text-lg font-semibold text-[#202522]">Assign project</h3>
                 <p className="mt-1 text-sm leading-5 text-[#7c847f]">
-                  {projectDialog.mode === "archive"
-                    ? `Choose where ${projectDialog.ids.length === 1 ? "this persistent note" : `these ${projectDialog.ids.length} persistent notes`} should live.`
-                    : `Reassign ${projectDialog.ids.length === 1 ? "this note" : `these ${projectDialog.ids.length} notes`} or leave ${projectDialog.ids.length === 1 ? "it" : "them"} unassigned.`}
+                  Assign {projectDialog.ids.length === 1 ? "this task" : `these ${projectDialog.ids.length} tasks`} to an existing or new project, or leave {projectDialog.ids.length === 1 ? "it" : "them"} unassigned.
                 </p>
               </div>
               <button type="button" onClick={closeProjectAssignment} disabled={savingProject} className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#f1f2f0] text-[#4f5752] hover:bg-[#e8eae7] disabled:opacity-50" aria-label="Close project assignment" title="Close"><ActionIcon name="close" /></button>
@@ -1533,8 +1396,8 @@ export default function Home() {
                 className="h-12 w-full min-w-0 max-w-full rounded-xl border border-black/[0.1] bg-white px-3 text-sm text-[#303632] outline-none focus:border-[#216e4e]/50 focus:ring-3 focus:ring-[#216e4e]/10"
               >
                 <option value="">Choose a project…</option>
+                <option value={UNASSIGNED_PROJECT}>Unassigned</option>
                 {projects.map((name) => <option key={name} value={name}>{name}</option>)}
-                {projectDialog.mode === "move" && <option value={UNASSIGNED_PROJECT}>Unassigned</option>}
                 <option value={CREATE_PROJECT}>Create a new project…</option>
               </select>
             </label>
@@ -1559,9 +1422,9 @@ export default function Home() {
 
             <div className="mt-6 flex items-center justify-end gap-2">
               <button type="button" onClick={closeProjectAssignment} disabled={savingProject} className="inline-flex h-11 items-center gap-2 rounded-xl px-4 text-sm font-semibold text-[#69716c] hover:bg-[#f3f4f2] disabled:opacity-50"><ActionIcon name="cancel" />Cancel</button>
-              <button type="submit" disabled={savingProject} className="inline-flex h-11 items-center gap-2 rounded-xl bg-[#216e4e] px-5 text-sm font-semibold text-white hover:bg-[#195d41] disabled:opacity-50">
-                <ActionIcon name={projectDialog.mode === "archive" ? "archive" : "move"} />
-                {savingProject ? "Saving…" : projectDialog.mode === "archive" ? "Archive into project" : "Move notes"}
+              <button type="submit" disabled={savingProject || !projectDialog.selection || (projectDialog.selection === CREATE_PROJECT && !projectDialog.newProject.trim())} className="inline-flex h-11 items-center gap-2 rounded-xl bg-[#216e4e] px-5 text-sm font-semibold text-white hover:bg-[#195d41] disabled:opacity-50">
+                <ActionIcon name="move" />
+                {savingProject ? "Saving…" : "Assign project"}
               </button>
             </div>
           </form>
@@ -1605,34 +1468,16 @@ export default function Home() {
               <div className="mt-4 grid min-w-0 grid-cols-1 gap-4 sm:grid-cols-2">
                 <div className="block min-w-0">
                   <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-[#69716c]">Project</span>
-                  <select
-                    value={editDraft.project}
-                    onChange={(event) => {
-                      setEditDraft((current) => current ? { ...current, project: event.target.value } : current);
-                      setTaskNewProjectName("");
-                      setTaskProjectError("");
-                    }}
+                  <button
+                    type="button"
+                    onClick={() => openProjectAssignment([editingTodo.id], "details")}
                     disabled={savingEdit}
-                    aria-label="Project"
-                    className="h-11 w-full min-w-0 max-w-full rounded-xl border border-black/[0.1] bg-white px-3 text-[16px] text-[#303632] outline-none focus:border-[#216e4e]/50 focus:ring-3 focus:ring-[#216e4e]/10 disabled:opacity-60"
+                    aria-label={`Assign project. Current project: ${editDraft.project || "Unassigned"}`}
+                    className="flex h-11 w-full min-w-0 max-w-full items-center justify-between gap-3 rounded-xl border border-black/[0.1] bg-white px-3 text-left text-[16px] text-[#303632] outline-none hover:bg-[#fafbf9] focus:border-[#216e4e]/50 focus:ring-3 focus:ring-[#216e4e]/10 disabled:opacity-60"
                   >
-                    <option value="">No project</option>
-                    {projects.map((name) => <option key={name} value={name}>{name}</option>)}
-                    <option value={CREATE_PROJECT}>Create a new project…</option>
-                  </select>
-                  {editDraft.project === CREATE_PROJECT && (
-                    <input
-                      autoFocus
-                      value={taskNewProjectName}
-                      onChange={(event) => { setTaskNewProjectName(event.target.value); setTaskProjectError(""); }}
-                      placeholder="New project name"
-                      maxLength={120}
-                      disabled={savingEdit}
-                      aria-label="New project name"
-                      className="mt-2 h-11 w-full min-w-0 max-w-full rounded-xl border border-black/[0.1] px-3 text-[16px] outline-none focus:border-[#216e4e]/50 focus:ring-3 focus:ring-[#216e4e]/10 disabled:opacity-60"
-                    />
-                  )}
-                  {taskProjectError && <p role="alert" className="mt-2 text-xs font-medium text-red-700">{taskProjectError}</p>}
+                    <span className="min-w-0 truncate">{editDraft.project || "Unassigned"}</span>
+                    <span className="inline-flex shrink-0 items-center gap-1.5 text-xs font-semibold text-[#216e4e]"><ActionIcon name="move" />Change</span>
+                  </button>
                 </div>
                 <label className="block min-w-0">
                   <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-[#69716c]">Context</span>
@@ -1661,16 +1506,12 @@ export default function Home() {
                   ) : (
                     <button type="button" onClick={() => detailAction("complete")} disabled={syncing || savingEdit} className="inline-flex min-w-max items-center gap-2 rounded-xl bg-[#eaf3ed] px-3 py-2.5 text-sm font-semibold text-[#195d41] disabled:opacity-50"><ActionIcon name={todoActionIcon("complete", "Done")} />Done</button>
                   )}
-                  {isSnoozed(editingTodo, now) ? (
+                  {editingTodo.status === "open" && (isSnoozed(editingTodo, now) ? (
                     <button type="button" onClick={() => detailAction("unsnooze")} disabled={syncing || savingEdit} className="inline-flex min-w-max items-center gap-2 rounded-xl bg-[#eaf3ed] px-3 py-2.5 text-sm font-semibold text-[#195d41] disabled:opacity-50"><ActionIcon name={todoActionIcon("unsnooze", "Wake")} />Wake</button>
                   ) : (
                     <button type="button" onClick={() => detailAction("snooze")} disabled={syncing || savingEdit} className="inline-flex min-w-max items-center gap-2 rounded-xl bg-amber-50 px-3 py-2.5 text-sm font-semibold text-amber-700 disabled:opacity-50"><ActionIcon name={todoActionIcon("snooze", "Snooze")} />Snooze</button>
-                  )}
-                  {editingTodo.status === "archived" ? (
-                    <button type="button" onClick={() => detailAction("unsnooze")} disabled={syncing || savingEdit} className="inline-flex min-w-max items-center gap-2 rounded-xl bg-slate-100 px-3 py-2.5 text-sm font-semibold text-slate-700 disabled:opacity-50"><ActionIcon name={todoActionIcon("unsnooze", "Unarchive")} />Unarchive</button>
-                  ) : (
-                    <button type="button" onClick={() => detailAction("archive")} disabled={syncing || savingEdit} className="inline-flex min-w-max items-center gap-2 rounded-xl bg-slate-100 px-3 py-2.5 text-sm font-semibold text-slate-700 disabled:opacity-50"><ActionIcon name={todoActionIcon("archive", "Archive")} />Archive</button>
-                  )}
+                  ))}
+                  <button type="button" onClick={() => openProjectAssignment([editingTodo.id], "details")} disabled={syncing || savingEdit} className="inline-flex min-w-max items-center gap-2 rounded-xl bg-slate-100 px-3 py-2.5 text-sm font-semibold text-slate-700 disabled:opacity-50"><ActionIcon name={todoActionIcon("assign", "Assign project")} />Assign project</button>
                   <button type="button" onClick={() => detailAction("delete")} disabled={syncing || savingEdit} className="inline-flex min-w-max items-center gap-2 rounded-xl bg-red-50 px-3 py-2.5 text-sm font-semibold text-red-700 disabled:opacity-50"><ActionIcon name={todoActionIcon("delete", "Delete")} />Delete</button>
                 </div>
               </div>
@@ -1678,7 +1519,7 @@ export default function Home() {
 
             <div className="flex items-center justify-end gap-2 border-t border-black/[0.07] bg-white px-5 py-3 sm:px-6">
               <button type="button" onClick={closeTaskDetails} disabled={savingEdit} className="inline-flex h-11 items-center gap-2 rounded-xl px-4 text-sm font-semibold text-[#69716c] hover:bg-[#f3f4f2] disabled:opacity-50"><ActionIcon name="cancel" />Cancel</button>
-              <button type="submit" disabled={savingEdit || !editDraft.title.trim() || (editDraft.project === CREATE_PROJECT && !taskNewProjectName.trim())} className="inline-flex h-11 items-center gap-2 rounded-xl bg-[#216e4e] px-5 text-sm font-semibold text-white hover:bg-[#195d41] disabled:opacity-50"><ActionIcon name="save" />{savingEdit ? "Saving…" : "Save changes"}</button>
+              <button type="submit" disabled={savingEdit || !editDraft.title.trim()} className="inline-flex h-11 items-center gap-2 rounded-xl bg-[#216e4e] px-5 text-sm font-semibold text-white hover:bg-[#195d41] disabled:opacity-50"><ActionIcon name="save" />{savingEdit ? "Saving…" : "Save changes"}</button>
             </div>
           </form>
         </div>
