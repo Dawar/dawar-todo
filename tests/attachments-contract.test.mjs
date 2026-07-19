@@ -30,6 +30,8 @@ test("stores private task images with optimized variants and recovery metadata",
   assert.match(attachments, /S3_BUCKET/);
   assert.match(attachments, /S3_ENDPOINT_URL/);
   assert.match(attachments, /endpointUrl\.hostname\.startsWith\(bucketPrefix\)/);
+  assert.match(attachments, /endpointUrl\.hostname\.endsWith\("\.digitaloceanspaces\.com"\)/);
+  assert.match(attachments, /region: endpointRegion/);
   assert.match(attachments, /new AwsClient/);
   assert.match(attachments, /url\.hostname = `\$\{bucket\}\.\$\{url\.hostname\}`/);
   assert.match(attachments, /client\.sign/);
@@ -37,6 +39,7 @@ test("stores private task images with optimized variants and recovery metadata",
   assert.match(attachments, /parseCorsRules/);
   assert.match(attachments, /corsXml/);
   assert.match(attachments, /storageFetch/);
+  assert.match(attachments, /storageResponseError/);
   assert.match(attachments, /prepareTodoAttachmentUpload/);
   assert.match(attachments, /finalizeTodoAttachmentUpload/);
   assert.match(attachments, /SIGNED_URL_SECONDS = 60 \* 60/);

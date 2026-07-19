@@ -93,17 +93,21 @@ function storageConfig() {
   endpointUrl.pathname = "/";
   endpointUrl.search = "";
   endpointUrl.hash = "";
+  const endpointRegion = endpointUrl.hostname.endsWith(".digitaloceanspaces.com")
+    ? endpointUrl.hostname.split(".")[0]
+    : "us-east-1";
   cachedStorageConfig = {
     bucket: current.S3_BUCKET,
     endpoint: endpointUrl,
     client: new AwsClient({
       service: "s3",
-      region: "us-east-1",
+      region: endpointRegion,
       retries: 2,
       accessKeyId: current.S3_ACCESS_KEY_ID,
       secretAccessKey: current.S3_ACCESS_KEY,
     }),
   };
+  console.info("[todo-attachments] private storage configured", { region: endpointRegion, virtualHosted: true });
   return cachedStorageConfig;
 }
 
@@ -134,14 +138,26 @@ function storageUrl(key?: string, query?: Record<string, string>) {
 
 async function storageFetch(url: URL, init?: RequestInit) {
   const response = await storageConfig().client.fetch(url, init);
-  if (!response.ok) throw new Error(`Private image storage returned ${response.status}.`);
+  if (!response.ok) throw await storageResponseError("Private image storage", response);
   return response;
+}
+
+async function storageResponseError(stage: string, response: Response) {
+  const body = await response.text().catch(() => "");
+  const code = body.match(/<Code>([^<]+)<\/Code>/i)?.[1] ?? null;
+  console.error("[todo-attachments] storage request failed", {
+    stage,
+    status: response.status,
+    code,
+    requestId: response.headers.get("x-amz-request-id"),
+  });
+  return new Error(`${stage} returned ${response.status}${code ? ` (${code})` : ""}.`);
 }
 
 async function deleteKeys(keys: string[]) {
   await Promise.all(keys.map(async (key) => {
     const response = await storageConfig().client.fetch(storageUrl(key), { method: "DELETE" });
-    if (!response.ok && response.status !== 404) throw new Error(`Private image cleanup returned ${response.status}.`);
+    if (!response.ok && response.status !== 404) throw await storageResponseError("Private image cleanup", response);
   }));
 }
 
@@ -249,7 +265,10 @@ async function ensureUploadCors(origin: string) {
     ]);
     const corsUrl = storageUrl(undefined, { cors: "" });
     const current = await client.fetch(corsUrl, { method: "GET" });
-    const rules = current.ok ? parseCorsRules(await current.text()) : current.status === 404 ? [] : (() => { throw new Error(`Image storage CORS lookup returned ${current.status}.`); })();
+    let rules: CorsRule[];
+    if (current.ok) rules = parseCorsRules(await current.text());
+    else if (current.status === 404) rules = [];
+    else throw await storageResponseError("Image storage CORS lookup", current);
     const ruleId = "dawar-todo-private-upload";
     const existing = rules.find((rule) => rule.ID === ruleId);
     const desiredOrigins = [...new Set([...(existing?.AllowedOrigins ?? []), ...allowedOrigins])];
@@ -271,7 +290,7 @@ async function ensureUploadCors(origin: string) {
         headers: { "Content-Type": "application/xml" },
         body: corsXml([...rules.filter((rule) => rule.ID !== ruleId), nextRule]),
       });
-      if (!response.ok) throw new Error(`Image storage CORS update returned ${response.status}.`);
+      if (!response.ok) throw await storageResponseError("Image storage CORS update", response);
       console.info("[todo-attachments] upload CORS configured", { origins: desiredOrigins.length });
     }
   })().catch((error) => {
