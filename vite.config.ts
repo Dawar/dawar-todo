@@ -1,5 +1,6 @@
 import vinext from "vinext";
 import { defineConfig } from "vite";
+import { fileURLToPath } from "node:url";
 import hostingConfig from "./.openai/hosting.json";
 import { sites } from "./build/sites-vite-plugin";
 
@@ -47,6 +48,15 @@ export default defineConfig(async () => {
   const { cloudflare } = await import("@cloudflare/vite-plugin");
 
   return {
+    // Vinext otherwise resolves the S3 client and its core helpers under
+    // different export conditions. Keep the pair on the same Worker-compatible
+    // implementation so client construction does not receive node-only sentinels.
+    resolve: {
+      alias: {
+        "@aws-sdk/core/client": fileURLToPath(new URL("./node_modules/@aws-sdk/core/dist-es/submodules/client/index.js", import.meta.url)),
+      },
+      mainFields: ["browser", "module", "jsnext:main", "jsnext"],
+    },
     server: isCodexSeatbeltSandbox
       ? { watch: { useFsEvents: false, usePolling: true } }
       : undefined,

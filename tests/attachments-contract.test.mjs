@@ -5,13 +5,14 @@ import test from "node:test";
 const root = new URL("../", import.meta.url);
 
 test("stores private task images with optimized variants and recovery metadata", async () => {
-  const [attachments, todos, schema, migration, uploadMigration, hosting] = await Promise.all([
+  const [attachments, todos, schema, migration, uploadMigration, hosting, vite] = await Promise.all([
     readFile(new URL("db/attachments.ts", root), "utf8"),
     readFile(new URL("db/todos.ts", root), "utf8"),
     readFile(new URL("db/schema.ts", root), "utf8"),
     readFile(new URL("drizzle/0004_abnormal_onslaught.sql", root), "utf8"),
     readFile(new URL("drizzle/0005_opposite_rockslide.sql", root), "utf8"),
     readFile(new URL(".openai/hosting.json", root), "utf8"),
+    readFile(new URL("vite.config.ts", root), "utf8"),
   ]);
 
   assert.match(schema, /todoAttachments = sqliteTable/);
@@ -22,6 +23,8 @@ test("stores private task images with optimized variants and recovery metadata",
   assert.match(migration, /todo_attachments_deleted_at_idx/);
   assert.match(uploadMigration, /ADD `upload_state` text DEFAULT 'ready' NOT NULL/);
   assert.match(hosting, /"r2": null/);
+  assert.match(vite, /"@aws-sdk\/core\/client"/);
+  assert.match(vite, /dist-es\/submodules\/client\/index\.js/);
   assert.match(attachments, /S3_ACCESS_KEY/);
   assert.match(attachments, /S3_ACCESS_KEY_ID/);
   assert.match(attachments, /S3_BUCKET/);
