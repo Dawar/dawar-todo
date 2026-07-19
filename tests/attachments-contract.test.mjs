@@ -189,6 +189,7 @@ test("installs an offline-capable PWA with idempotent queued task syncing", asyn
   assert.match(page, /window\.addEventListener\("online"/);
   assert.match(page, /clientId: record\.clientId/);
   assert.match(page, /Saved offline\. It will sync automatically/);
+  assert.match(page, /leftSecondaryAction\.icon === "snooze" \|\| leftSecondaryAction\.icon === "wake"/);
   assert.match(serviceWorker, /request\.mode === "navigate"/);
   assert.match(serviceWorker, /url\.pathname\.startsWith\("\/api\/"\)/);
   assert.match(serviceWorker, /caches\.match/);

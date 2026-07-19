@@ -729,7 +729,7 @@ function TaskRow({
     ? (longSwipe ? leftSecondaryAction.icon : primaryAction.icon)
     : (longSwipe ? "delete" : "move");
   const revealClass = offset < 0
-    ? longSwipe && leftSecondaryAction.action === "snooze" ? "bg-amber-500" : "bg-[#216e4e]"
+    ? longSwipe && (leftSecondaryAction.icon === "snooze" || leftSecondaryAction.icon === "wake") ? "bg-amber-500" : "bg-[#216e4e]"
     : longSwipe ? "bg-red-600" : "bg-slate-500";
 
   function pointerDown(event: ReactPointerEvent<HTMLDivElement>) {
