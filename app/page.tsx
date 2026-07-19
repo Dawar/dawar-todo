@@ -2744,10 +2744,21 @@ export default function Home() {
                     <option value="4">Low</option>
                   </select>
                 </label>
-                <label className="block min-w-0">
-                  <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-[#69716c]">Due date</span>
-                  <input type="date" value={editDraft.dueDate} onChange={(event) => setEditDraft((current) => current ? { ...current, dueDate: event.target.value } : current)} className="h-11 w-full min-w-0 max-w-full rounded-xl border border-black/[0.1] bg-white px-3 text-sm outline-none focus:border-[#216e4e]/50 focus:ring-3 focus:ring-[#216e4e]/10" />
-                </label>
+                <div className="block min-w-0">
+                  <div className="mb-1.5 flex h-6 items-center justify-between gap-2">
+                    <label htmlFor={`task-due-date-${editingTodo.id}`} className="text-xs font-semibold uppercase tracking-wide text-[#69716c]">Due date</label>
+                    <button
+                      type="button"
+                      onClick={() => setEditDraft((current) => current ? { ...current, dueDate: "" } : current)}
+                      disabled={!editDraft.dueDate}
+                      aria-label="Clear due date"
+                      className="inline-flex h-6 items-center gap-1 rounded-md px-1.5 text-xs font-semibold text-[#216e4e] hover:bg-[#eaf3ed] disabled:invisible"
+                    >
+                      <ActionIcon name="close" className="h-3 w-3" />Clear
+                    </button>
+                  </div>
+                  <input id={`task-due-date-${editingTodo.id}`} type="date" value={editDraft.dueDate} onChange={(event) => setEditDraft((current) => current ? { ...current, dueDate: event.target.value } : current)} className="h-11 w-full min-w-0 max-w-full rounded-xl border border-black/[0.1] bg-white px-3 text-sm outline-none focus:border-[#216e4e]/50 focus:ring-3 focus:ring-[#216e4e]/10" />
+                </div>
               </div>
 
               <div className="mt-5 border-t border-black/[0.07] pt-4">

@@ -44,6 +44,9 @@ test("ships the simplified todo and project surface", async () => {
   assert.match(page, /Task details/);
   assert.match(page, /Quick actions/);
   assert.match(page, /Save changes/);
+  assert.match(page, /aria-label="Clear due date"/);
+  assert.match(page, /dueDate: ""/);
+  assert.match(page, /disabled:invisible/);
   assert.match(page, /\/api\/todos\/\$\{editingTodo\.id\}/);
   assert.match(page, /fixed inset-x-0 z-40/);
   assert.doesNotMatch(page, /sticky top-\[62px\]/);
