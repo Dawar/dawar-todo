@@ -14,7 +14,9 @@ import { SiteHeader } from "./site-header";
 type TodoStatus = "open" | "completed" | "archived";
 type View = "open" | "today" | "snoozed" | "completed" | "archived" | "all";
 type Sort = "smart" | "priority" | "due" | "newest" | "oldest" | "az";
+type ArchiveNoteState = "open" | "done";
 type TodoAction = "complete" | "archive" | "snooze" | "unsnooze" | "delete";
+type ExecutableTodoAction = TodoAction | "restore_archive";
 type Notice = { tone: "success" | "error"; text: string; undoToken?: string } | null;
 
 type Todo = {
@@ -160,6 +162,7 @@ function TaskRow({
   onAction,
   onProject,
   onOpen,
+  archiveState,
 }: {
   todo: Todo;
   selected: boolean;
@@ -168,6 +171,7 @@ function TaskRow({
   onAction: (todo: Todo, action: TodoAction, source: "hover" | "swipe") => void;
   onProject: (todo: Todo, source: "hover" | "swipe") => void;
   onOpen: (todo: Todo) => void;
+  archiveState?: ArchiveNoteState;
 }) {
   const [offset, setOffset] = useState(0);
   const [swipeWidth, setSwipeWidth] = useState(1);
@@ -177,19 +181,24 @@ function TaskRow({
   const suppressOpenRef = useRef(false);
   const pending = todo.id < 0;
   const snoozed = isSnoozed(todo, now);
-  const primaryAction: { action: TodoAction; label: string; icon: ActionIconName } = snoozed
-    ? { action: "unsnooze", label: "Wake", icon: "wake" }
-    : todo.status === "open"
-      ? { action: "complete", label: "Done", icon: "done" }
-      : { action: "unsnooze", label: "Open", icon: "open" };
+  const inArchiveProject = archiveState !== undefined;
+  const primaryAction: { action: TodoAction; label: string; icon: ActionIconName } = archiveState === "open"
+    ? { action: "complete", label: "Done", icon: "done" }
+    : archiveState === "done"
+      ? { action: "unsnooze", label: "Open", icon: "open" }
+      : snoozed
+        ? { action: "unsnooze", label: "Wake", icon: "wake" }
+        : todo.status === "open"
+          ? { action: "complete", label: "Done", icon: "done" }
+          : { action: "unsnooze", label: "Open", icon: "open" };
   const swipeRatio = Math.abs(offset) / swipeWidth;
   const longSwipe = swipeRatio >= 0.5;
   const revealAction = offset < 0
     ? (longSwipe ? "Snooze" : primaryAction.label)
-    : (longSwipe ? "Delete" : todo.status === "archived" ? "Move" : "Archive");
+    : (longSwipe ? "Delete" : inArchiveProject || todo.status === "archived" ? "Move" : "Archive");
   const revealIcon: ActionIconName = offset < 0
     ? (longSwipe ? "snooze" : primaryAction.icon)
-    : (longSwipe ? "delete" : todo.status === "archived" ? "move" : "archive");
+    : (longSwipe ? "delete" : inArchiveProject || todo.status === "archived" ? "move" : "archive");
   const revealClass = offset < 0
     ? longSwipe ? "bg-amber-500" : "bg-[#216e4e]"
     : longSwipe ? "bg-red-600" : "bg-slate-500";
@@ -244,7 +253,7 @@ function TaskRow({
     if (ratio < 0.18 || direction === 0) return;
     if (direction < 0) onAction(todo, ratio >= 0.5 ? "snooze" : primaryAction.action, "swipe");
     else if (ratio >= 0.5) onAction(todo, "delete", "swipe");
-    else if (todo.status === "archived") onProject(todo, "swipe");
+    else if (inArchiveProject || todo.status === "archived") onProject(todo, "swipe");
     else onAction(todo, "archive", "swipe");
   }
 
@@ -258,7 +267,7 @@ function TaskRow({
   const hoverActions: Array<{ action: TodoAction | "move"; label: string; icon: ActionIconName }> = [
     primaryAction,
     ...(!snoozed && todo.status === "open" ? [{ action: "snooze" as const, label: "Snooze", icon: "snooze" as const }] : []),
-    ...(todo.status === "archived"
+    ...(inArchiveProject || todo.status === "archived"
       ? [{ action: "move" as const, label: "Move", icon: "move" as const }]
       : [{ action: "archive" as const, label: "Archive", icon: "archive" as const }]),
     { action: "delete", label: "Delete", icon: "delete" },
@@ -349,6 +358,7 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState<View>("open");
   const [archiveProject, setArchiveProject] = useState<string | null>(null);
+  const [archiveNoteState, setArchiveNoteState] = useState<ArchiveNoteState>("open");
   const [registeredProjects, setRegisteredProjects] = useState<string[]>([]);
   const [query, setQuery] = useState("");
   const [project, setProject] = useState("");
@@ -472,10 +482,18 @@ export default function Home() {
   );
 
   const archivedProjectOptions = useMemo(() => {
-    const projectCounts = new Map<string, number>(registeredProjects.map((name) => [name, 0]));
-    todos.filter((todo) => todo.status === "archived").forEach((todo) => {
-      const key = todo.project || UNASSIGNED_PROJECT;
-      projectCounts.set(key, (projectCounts.get(key) ?? 0) + 1);
+    const projectCounts = new Map<string, { open: number; done: number }>(
+      registeredProjects.map((name) => [name, { open: 0, done: 0 }]),
+    );
+    todos.forEach((todo) => {
+      if (todo.status === "archived") {
+        const key = todo.project || UNASSIGNED_PROJECT;
+        const counts = projectCounts.get(key) ?? { open: 0, done: 0 };
+        projectCounts.set(key, { ...counts, open: counts.open + 1 });
+      } else if (todo.status === "completed" && todo.project && projectCounts.has(todo.project)) {
+        const counts = projectCounts.get(todo.project) as { open: number; done: number };
+        projectCounts.set(todo.project, { ...counts, done: counts.done + 1 });
+      }
     });
     return [...projectCounts.entries()].sort(([a], [b]) => {
       if (a === UNASSIGNED_PROJECT) return 1;
@@ -489,17 +507,22 @@ export default function Home() {
     today: todos.filter((todo) => matchesView(todo, "today", now)).length,
     snoozed: todos.filter((todo) => matchesView(todo, "snoozed", now)).length,
     completed: todos.filter((todo) => matchesView(todo, "completed", now)).length,
-    archived: todos.filter((todo) => matchesView(todo, "archived", now)).length,
+    archived: todos.filter((todo) => todo.status === "archived" || (todo.status === "completed" && Boolean(todo.project) && registeredProjects.includes(todo.project as string))).length,
     all: todos.length,
-  }), [todos, now]);
+  }), [registeredProjects, todos, now]);
 
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
     const rows = todos.filter((todo) => {
       const searchable = [todo.title, todo.notes, todo.project, todo.context].filter(Boolean).join(" ").toLowerCase();
-      return matchesView(todo, view, now)
+      const archiveProjectMatches = archiveProject === UNASSIGNED_PROJECT ? !todo.project : todo.project === archiveProject;
+      const viewMatches = view !== "archived"
+        ? matchesView(todo, view, now)
+        : archiveProject === null
+          ? todo.status === "archived" || (todo.status === "completed" && Boolean(todo.project) && registeredProjects.includes(todo.project as string))
+          : archiveProjectMatches && (archiveNoteState === "open" ? todo.status === "archived" : todo.status === "completed");
+      return viewMatches
         && (!needle || searchable.includes(needle))
-        && (view !== "archived" || archiveProject === null || (archiveProject === UNASSIGNED_PROJECT ? !todo.project : todo.project === archiveProject))
         && (!project || (project === UNASSIGNED_PROJECT ? !todo.project : todo.project === project))
         && (!priority || todo.priority === Number(priority));
     });
@@ -511,7 +534,7 @@ export default function Home() {
       if (sort === "az") return a.title.localeCompare(b.title);
       return compareSmart(a, b);
     });
-  }, [todos, view, archiveProject, query, project, priority, sort, now]);
+  }, [todos, view, archiveProject, archiveNoteState, registeredProjects, query, project, priority, sort, now]);
 
   const selectedIds = useMemo(() => [...selected], [selected]);
   const allVisibleSelected = filtered.length > 0 && filtered.every((todo) => selected.has(todo.id));
@@ -520,6 +543,7 @@ export default function Home() {
   const editingTodo = editingId === null ? null : todos.find((todo) => todo.id === editingId) ?? null;
   const archiveAtRoot = view === "archived" && archiveProject === null;
   const canCapture = !archiveAtRoot && archiveProject !== UNASSIGNED_PROJECT;
+  const currentArchiveProjectCounts = archivedProjectOptions.find(([name]) => name === archiveProject)?.[1] ?? { open: 0, done: 0 };
 
   function resizeCapture(textarea: HTMLTextAreaElement) {
     textarea.style.height = "auto";
@@ -551,7 +575,8 @@ export default function Home() {
       updatedAt: new Date().toISOString(),
     };
     setNewTitle("");
-    if (!capturingArchive) setView("open");
+    if (capturingArchive) setArchiveNoteState("open");
+    else setView("open");
     setTodos((current) => [optimistic, ...current]);
     setAdding(true);
     setSyncing(true);
@@ -584,7 +609,7 @@ export default function Home() {
     }
   }
 
-  function applyOptimisticAction(current: Todo[], ids: number[], action: TodoAction, actionAt: string) {
+  function applyOptimisticAction(current: Todo[], ids: number[], action: ExecutableTodoAction, actionAt: string) {
     const idSet = new Set(ids);
     if (action === "delete") return current.filter((todo) => !idSet.has(todo.id));
     const temporarySnooze = new Date(new Date(actionAt).valueOf() + 36 * 60 * 60 * 1000).toISOString();
@@ -592,12 +617,13 @@ export default function Home() {
       if (!idSet.has(todo.id)) return todo;
       if (action === "complete") return { ...todo, status: "completed" as const, completedAt: actionAt, snoozedUntil: null };
       if (action === "archive") return { ...todo, status: "archived" as const, snoozedUntil: null };
+      if (action === "restore_archive") return { ...todo, status: "archived" as const, completedAt: null, snoozedUntil: null };
       if (action === "snooze") return { ...todo, status: "open" as const, completedAt: null, snoozedUntil: temporarySnooze };
       return { ...todo, status: "open" as const, completedAt: null, snoozedUntil: null };
     });
   }
 
-  async function performAction(ids: number[], action: TodoAction | "merge") {
+  async function performAction(ids: number[], action: ExecutableTodoAction | "merge") {
     if (!ids.length || syncing) return;
     const previous = todos;
     const actionAt = new Date().toISOString();
@@ -627,7 +653,7 @@ export default function Home() {
           setTodos((current) => current.map((todo) => updates.get(todo.id) ?? todo));
         }
         const openedCompleted = action === "unsnooze" && ids.every((id) => previous.find((todo) => todo.id === id)?.status === "completed");
-        const label = action === "complete" ? "Done" : action === "archive" ? "Archived" : action === "snooze" ? "Snoozed until tomorrow" : action === "unsnooze" ? openedCompleted ? "Opened" : "Restored to Open" : "Deleted";
+        const label = action === "complete" ? "Done" : action === "archive" ? "Archived" : action === "restore_archive" ? "Opened in project" : action === "snooze" ? "Snoozed until tomorrow" : action === "unsnooze" ? openedCompleted ? "Opened" : "Restored to Open" : "Deleted";
         setNotice({ tone: "success", text: `${label}: ${ids.length} ${ids.length === 1 ? "task" : "tasks"}.`, undoToken: result.undoToken });
         console.info("[todo-ui] action completed", { action, ids, snoozedUntil: result.snoozedUntil });
       }
@@ -806,6 +832,10 @@ export default function Home() {
       openProjectAssignment([todo.id], "archive", source);
       return;
     }
+    if (action === "unsnooze" && view === "archived" && archiveProject !== null && archiveNoteState === "done" && todo.status === "completed") {
+      void performAction([todo.id], "restore_archive");
+      return;
+    }
     void performAction([todo.id], action);
   }
 
@@ -827,6 +857,10 @@ export default function Home() {
     }
     if (action === "archive") {
       openProjectAssignment(selectedIds, view === "archived" ? "move" : "archive", "bulk");
+      return;
+    }
+    if (action === "unsnooze" && view === "archived" && archiveProject !== null && archiveNoteState === "done") {
+      void performAction(selectedIds, "restore_archive");
       return;
     }
     void performAction(selectedIds, action);
@@ -853,6 +887,7 @@ export default function Home() {
   function chooseView(next: View) {
     setView(next);
     setArchiveProject(null);
+    setArchiveNoteState("open");
     setProject("");
     if (next === "archived") {
       setQuery("");
@@ -864,6 +899,7 @@ export default function Home() {
 
   function openArchiveProject(name: string) {
     setArchiveProject(name);
+    setArchiveNoteState("open");
     setProject("");
     setQuery("");
     setPriority("");
@@ -872,8 +908,15 @@ export default function Home() {
     console.info("[todo-ui] archive project opened", { project: name });
   }
 
+  function chooseArchiveNoteState(next: ArchiveNoteState) {
+    setArchiveNoteState(next);
+    setSelected(new Set());
+    console.info("[todo-ui] archive note state changed", { project: archiveProject, state: next });
+  }
+
   function returnToArchiveProjects() {
     setArchiveProject(null);
+    setArchiveNoteState("open");
     setProject("");
     setQuery("");
     setPriority("");
@@ -932,7 +975,7 @@ export default function Home() {
     setProjectDeleteError("");
     console.info("[todo-ui] project delete dialog opened", {
       project: name,
-      archivedNotes: todos.filter((todo) => todo.status === "archived" && todo.project === name).length,
+      projectNotes: todos.filter((todo) => (todo.status === "archived" || todo.status === "completed") && todo.project === name).length,
       reassignTargets: alternatives.length,
     });
   }
@@ -970,8 +1013,8 @@ export default function Home() {
       });
       setRegisteredProjects((current) => current.filter((name) => name !== result.project));
       setTodos((current) => result.mode === "delete"
-        ? current.filter((todo) => !(todo.status === "archived" && todo.project === result.project))
-        : current.map((todo) => todo.status === "archived" && todo.project === result.project
+        ? current.filter((todo) => !((todo.status === "archived" || todo.status === "completed") && todo.project === result.project))
+        : current.map((todo) => (todo.status === "archived" || todo.status === "completed") && todo.project === result.project
           ? { ...todo, project: result.targetProject, updatedAt: new Date().toISOString() }
           : todo));
       setProjectDeleteDialog(null);
@@ -1070,8 +1113,9 @@ export default function Home() {
                 </div>
               ) : archivedProjectOptions.length ? (
                 <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                  {archivedProjectOptions.map(([name, count]) => {
+                  {archivedProjectOptions.map(([name, projectCounts]) => {
                     const unassigned = name === UNASSIGNED_PROJECT;
+                    const count = projectCounts.open + projectCounts.done;
                     return (
                       <li key={name} className="group relative overflow-hidden rounded-2xl border border-black/[0.07] bg-white shadow-[0_8px_28px_rgba(30,45,36,0.05)] transition hover:-translate-y-0.5 hover:border-[#216e4e]/20 hover:shadow-[0_12px_34px_rgba(30,45,36,0.09)]">
                         <button
@@ -1085,7 +1129,7 @@ export default function Home() {
                           </span>
                           <span className="min-w-0 pt-0.5">
                             <span className="block break-words text-[15px] font-semibold text-[#252a27]">{unassigned ? "Unassigned" : name}</span>
-                            <span className="mt-1 block text-xs text-[#7c847f]">{count} {count === 1 ? "note" : "notes"}</span>
+                            <span className="mt-1 block text-xs text-[#7c847f]">{projectCounts.open} open · {projectCounts.done} done</span>
                           </span>
                         </button>
                         {!unassigned && (
@@ -1125,6 +1169,27 @@ export default function Home() {
               {archiveProject !== UNASSIGNED_PROJECT && (
                 <button type="button" onClick={() => openProjectDeleteDialog(archiveProject)} className="inline-flex h-10 shrink-0 items-center gap-2 rounded-xl px-3 text-sm font-semibold text-red-700 transition hover:bg-red-50 focus-visible:outline-2 focus-visible:outline-red-600"><ActionIcon name="delete" /><span className="hidden sm:inline">Delete project</span></button>
               )}
+            </div>
+          )}
+
+          {view === "archived" && archiveProject !== null && (
+            <div className="mb-3 grid grid-cols-2 gap-1 rounded-xl border border-black/[0.06] bg-white p-1 shadow-sm" role="group" aria-label="Filter project notes by state">
+              {(["open", "done"] as ArchiveNoteState[]).map((state) => (
+                <button
+                  key={state}
+                  type="button"
+                  onClick={() => chooseArchiveNoteState(state)}
+                  aria-pressed={archiveNoteState === state}
+                  className={classNames(
+                    "inline-flex h-10 items-center justify-center gap-2 rounded-lg px-3 text-sm font-semibold capitalize transition focus-visible:outline-2 focus-visible:outline-[#216e4e]",
+                    archiveNoteState === state ? "bg-[#eaf3ed] text-[#195d41]" : "text-[#69716c] hover:bg-[#f6f7f5] hover:text-[#303632]",
+                  )}
+                >
+                  <ActionIcon name={state === "open" ? "open" : "done"} />
+                  {state}
+                  <span className={classNames("rounded-full px-1.5 py-0.5 text-[11px]", archiveNoteState === state ? "bg-white/80" : "bg-[#f1f2f0]")}>{currentArchiveProjectCounts[state]}</span>
+                </button>
+              ))}
             </div>
           )}
 
@@ -1229,7 +1294,7 @@ export default function Home() {
 
           <div className="mb-2 flex items-center justify-between px-1">
             <div className="flex items-center gap-3">
-              <h2 id="tasks-heading" className="text-sm font-semibold text-[#373d39]">{view === "archived" ? `${archiveProject === UNASSIGNED_PROJECT ? "Unassigned" : archiveProject} notes` : `${viewLabels[view]} tasks`}</h2>
+              <h2 id="tasks-heading" className="text-sm font-semibold text-[#373d39]">{view === "archived" ? `${archiveNoteState === "open" ? "Open" : "Done"} notes` : `${viewLabels[view]} tasks`}</h2>
               {filtered.length > 0 && <button onClick={toggleVisible} className="inline-flex items-center gap-1.5 text-xs font-medium text-[#216e4e] hover:underline"><ActionIcon name={allVisibleSelected ? "cancel" : "select"} className="h-3.5 w-3.5" />{allVisibleSelected ? "Clear selection" : "Select visible"}</button>}
             </div>
             <div className="flex items-center gap-3 text-xs text-[#7c847f]">
@@ -1238,7 +1303,7 @@ export default function Home() {
             </div>
           </div>
 
-          <p className="mb-2 px-1 text-[11px] text-[#8a918d] md:hidden">Swipe left: {view === "completed" || view === "archived" ? "open" : "done"} / snooze · Swipe right: {view === "archived" ? "move" : "archive"} / delete</p>
+          <p className="mb-2 px-1 text-[11px] text-[#8a918d] md:hidden">Swipe left: {view === "archived" ? archiveNoteState === "done" ? "open" : "done" : view === "completed" ? "open" : "done"} / snooze · Swipe right: {view === "archived" ? "move" : "archive"} / delete</p>
 
           <div className="overflow-hidden rounded-2xl border border-black/[0.07] bg-white shadow-[0_8px_30px_rgba(30,45,36,0.05)]">
             {loading ? (
@@ -1257,13 +1322,14 @@ export default function Home() {
                     onAction={taskAction}
                     onProject={moveArchivedTask}
                     onOpen={openTaskDetails}
+                    archiveState={view === "archived" && archiveProject !== null ? archiveNoteState : undefined}
                   />
                 ))}
               </ul>
             ) : (
               <div className="px-6 py-14 text-center">
                 <div className="mx-auto mb-4 grid h-12 w-12 place-items-center rounded-full bg-[#eaf3ed] text-xl text-[#216e4e]">✓</div>
-                <p className="font-medium text-[#303632]">{filtersActive ? "No tasks match those filters." : view === "snoozed" ? "Nothing is snoozed." : view === "archived" ? "Nothing is archived." : view === "completed" ? "Nothing completed yet." : "You’re clear."}</p>
+                <p className="font-medium text-[#303632]">{filtersActive ? "No tasks match those filters." : view === "snoozed" ? "Nothing is snoozed." : view === "archived" ? `No ${archiveNoteState} notes in this project.` : view === "completed" ? "Nothing completed yet." : "You’re clear."}</p>
                 <p className="mt-1 text-sm text-[#7c847f]">{filtersActive ? "Try clearing a filter or changing the search." : view === "snoozed" ? "Snoozed tasks return here until their wake time." : "Add the next thing when it appears."}</p>
               </div>
             )}
@@ -1286,9 +1352,9 @@ export default function Home() {
         >
           <div className="pointer-events-auto flex items-center gap-1.5 overflow-x-auto rounded-2xl border border-[#216e4e]/20 bg-[#eaf3ed]/95 p-2 shadow-[0_16px_50px_rgba(23,61,42,0.2)] backdrop-blur-xl sm:gap-2">
             <span className="min-w-max px-2 text-sm font-semibold text-[#195d41]">{selectedIds.length} selected</span>
-            <button type="button" onClick={() => bulkAction("complete")} disabled={syncing} className="inline-flex min-w-max items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-[#216e4e] shadow-sm hover:bg-[#f8fbf9] disabled:opacity-50"><ActionIcon name="done" />Done</button>
+            {!(view === "archived" && archiveNoteState === "done") && <button type="button" onClick={() => bulkAction("complete")} disabled={syncing} className="inline-flex min-w-max items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-[#216e4e] shadow-sm hover:bg-[#f8fbf9] disabled:opacity-50"><ActionIcon name="done" />Done</button>}
             <button type="button" onClick={() => bulkAction("snooze")} disabled={syncing} className="inline-flex min-w-max items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-amber-700 shadow-sm hover:bg-amber-50 disabled:opacity-50"><ActionIcon name="snooze" />Snooze</button>
-            <button type="button" onClick={() => bulkAction("unsnooze")} disabled={syncing} className="inline-flex min-w-max items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-[#4f5752] shadow-sm hover:bg-[#f8f9f8] disabled:opacity-50"><ActionIcon name={view === "completed" ? "open" : "restore"} />{view === "completed" ? "Open" : "Restore"}</button>
+            {(view !== "archived" || archiveNoteState === "done") && <button type="button" onClick={() => bulkAction("unsnooze")} disabled={syncing} className="inline-flex min-w-max items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-[#4f5752] shadow-sm hover:bg-[#f8f9f8] disabled:opacity-50"><ActionIcon name={view === "completed" || view === "archived" ? "open" : "restore"} />{view === "completed" || view === "archived" ? "Open" : "Restore"}</button>}
             <button type="button" onClick={() => bulkAction("archive")} disabled={syncing} className="inline-flex min-w-max items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-slate-600 shadow-sm hover:bg-slate-50 disabled:opacity-50"><ActionIcon name={view === "archived" ? "move" : "archive"} />{view === "archived" ? "Move" : "Archive"}</button>
             <button type="button" onClick={() => bulkAction("merge")} disabled={syncing || selectedIds.length < 2} className="inline-flex min-w-max items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-violet-700 shadow-sm hover:bg-violet-50 disabled:opacity-40"><ActionIcon name="merge" />Merge</button>
             <button type="button" onClick={() => bulkAction("delete")} disabled={syncing} className="inline-flex min-w-max items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-red-700 shadow-sm hover:bg-red-50 disabled:opacity-50"><ActionIcon name="delete" />Delete</button>
@@ -1330,7 +1396,7 @@ export default function Home() {
       )}
 
       {projectDeleteDialog && (() => {
-        const noteCount = todos.filter((todo) => todo.status === "archived" && todo.project === projectDeleteDialog.name).length;
+        const noteCount = todos.filter((todo) => (todo.status === "archived" || todo.status === "completed") && todo.project === projectDeleteDialog.name).length;
         const alternatives = registeredProjects.filter((name) => name !== projectDeleteDialog.name);
         return (
           <div className="fixed inset-0 z-50 flex items-end justify-center overflow-x-hidden sm:items-center sm:p-5" role="dialog" aria-modal="true" aria-labelledby="delete-project-title">
@@ -1340,7 +1406,7 @@ export default function Home() {
                 <div className="min-w-0">
                   <span className="mb-3 grid h-11 w-11 place-items-center rounded-xl bg-red-50 text-red-700"><ActionIcon name="delete" className="h-5 w-5" /></span>
                   <h3 id="delete-project-title" className="break-words text-lg font-semibold text-[#202522]">Delete {projectDeleteDialog.name}?</h3>
-                  <p className="mt-1 text-sm leading-5 text-[#7c847f]">{noteCount ? `This project contains ${noteCount} archived ${noteCount === 1 ? "note" : "notes"}. Choose what happens to them.` : "This project is empty and can be safely removed."}</p>
+                  <p className="mt-1 text-sm leading-5 text-[#7c847f]">{noteCount ? `This project contains ${noteCount} ${noteCount === 1 ? "note" : "notes"}. Choose what happens to them.` : "This project is empty and can be safely removed."}</p>
                 </div>
                 <button type="button" onClick={closeProjectDeleteDialog} disabled={deletingProject} className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#f1f2f0] text-[#4f5752] hover:bg-[#e8eae7] disabled:opacity-50" aria-label="Close delete project dialog" title="Close"><ActionIcon name="close" /></button>
               </div>
@@ -1381,7 +1447,7 @@ export default function Home() {
                     <input type="radio" name="delete-project-mode" checked={projectDeleteDialog.mode === "delete"} onChange={() => setProjectDeleteDialog((current) => current ? { ...current, mode: "delete" } : current)} className="mt-0.5 h-4 w-4 accent-red-700" />
                     <span className="min-w-0 flex-1">
                       <span className="block text-sm font-semibold text-red-800">Delete the notes too</span>
-                      <span className="mt-0.5 block text-xs leading-5 text-red-700/75">Remove the folder and all {noteCount} archived {noteCount === 1 ? "note" : "notes"} inside it.</span>
+                      <span className="mt-0.5 block text-xs leading-5 text-red-700/75">Remove the folder and all {noteCount} {noteCount === 1 ? "note" : "notes"} inside it.</span>
                     </span>
                   </label>
                 </fieldset>

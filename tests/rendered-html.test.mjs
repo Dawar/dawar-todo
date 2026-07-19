@@ -41,6 +41,10 @@ test("ships the complete todo product surface", async () => {
   assert.match(page, /\/api\/projects/);
   assert.match(page, /Move notes to another project/);
   assert.match(page, /Delete the notes too/);
+  assert.match(page, /Filter project notes by state/);
+  assert.match(page, /archiveNoteState === "open"/);
+  assert.match(page, /archiveState=\{view === "archived"/);
+  assert.match(page, /performAction\(\[todo\.id\], "restore_archive"\)/);
   assert.match(page, /reproject/);
   assert.match(page, /task-project-options/);
   assert.match(page, /overflow-x-hidden overflow-y-auto/);
@@ -50,7 +54,10 @@ test("ships the complete todo product surface", async () => {
   assert.match(database, /CREATE TABLE IF NOT EXISTS todo_projects/);
   assert.match(schema, /todoProjects/);
   assert.match(database, /Choose or create a project before archiving/);
+  assert.match(database, /action === "restore_archive"/);
+  assert.match(database, /status IN \('archived', 'completed'\) AND project/);
   assert.match(bulkRoute, /"reproject"/);
+  assert.match(bulkRoute, /"restore_archive"/);
   assert.match(projectsRoute, /export async function DELETE/);
   assert.match(projectsRoute, /deleteTodoProject/);
   assert.match(page, /title=\{label\}/);

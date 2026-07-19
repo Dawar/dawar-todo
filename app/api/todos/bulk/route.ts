@@ -1,6 +1,6 @@
 import { BulkTodoAction, bulkUpdateTodos, mergeTodos } from "../../../../db/todos";
 
-const actions = new Set<BulkTodoAction>(["complete", "archive", "snooze", "unsnooze", "reproject", "delete"]);
+const actions = new Set<BulkTodoAction>(["complete", "archive", "snooze", "unsnooze", "restore_archive", "reproject", "delete"]);
 
 export async function POST(request: Request) {
   const startedAt = Date.now();

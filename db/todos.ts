@@ -2,7 +2,7 @@ import { env } from "cloudflare:workers";
 import { importedTodos } from "./imported-todos";
 
 export type TodoStatus = "open" | "completed" | "archived";
-export type BulkTodoAction = "complete" | "archive" | "snooze" | "unsnooze" | "reproject" | "delete";
+export type BulkTodoAction = "complete" | "archive" | "snooze" | "unsnooze" | "restore_archive" | "reproject" | "delete";
 export type ProjectDeleteMode = "reassign" | "delete";
 
 type TodoRow = {
@@ -273,7 +273,7 @@ export async function deleteTodoProject(
   }
 
   const beforeResult = await db
-    .prepare("SELECT * FROM todos WHERE status = 'archived' AND project = ? ORDER BY id")
+    .prepare("SELECT * FROM todos WHERE status IN ('archived', 'completed') AND project = ? ORDER BY id")
     .bind(name)
     .all<TodoRow>();
   const before = beforeResult.results;
@@ -285,8 +285,8 @@ export async function deleteTodoProject(
         .bind(undoToken, JSON.stringify({ todos: before } satisfies UndoSnapshot))]
       : []),
     mode === "reassign"
-      ? db.prepare("UPDATE todos SET project = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE status = 'archived' AND project = ?").bind(targetProject, name)
-      : db.prepare("DELETE FROM todos WHERE status = 'archived' AND project = ?").bind(name),
+      ? db.prepare("UPDATE todos SET project = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE status IN ('archived', 'completed') AND project = ?").bind(targetProject, name)
+      : db.prepare("DELETE FROM todos WHERE status IN ('archived', 'completed') AND project = ?").bind(name),
     db.prepare("DELETE FROM todo_projects WHERE name = ?").bind(name),
   ];
   await db.batch(statements);
@@ -522,6 +522,9 @@ export async function bulkUpdateTodos(
   } else if (action === "reproject") {
     sql = `UPDATE todos SET project = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id IN (${inClause})`;
     values = [project, ...ids];
+  } else if (action === "restore_archive") {
+    if (before.some((todo) => !todo.project?.trim())) throw new Error("Done notes need a project before they can be reopened in Archives.");
+    sql = `UPDATE todos SET status = 'archived', completed_at = NULL, snoozed_until = NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id IN (${inClause})`;
   } else if (action === "snooze") {
     const until = await nextSnoozeUntil();
     sql = `UPDATE todos SET status = 'open', completed_at = NULL, snoozed_until = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id IN (${inClause})`;
