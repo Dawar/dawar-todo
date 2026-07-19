@@ -41,6 +41,8 @@ test("stores private task images with optimized variants and recovery metadata",
   assert.match(attachments, /content-length-range/);
   assert.match(attachments, /originalSize !== row\.byte_size/);
   assert.match(attachments, /storageFetch/);
+  assert.match(attachments, /signedStorageResponse/);
+  assert.match(attachments, /signedUrl\.searchParams\.set\("X-Amz-Expires", "300"\)/);
   assert.match(attachments, /storageResponseError/);
   assert.match(attachments, /prepareTodoAttachmentUpload/);
   assert.match(attachments, /finalizeTodoAttachmentUpload/);

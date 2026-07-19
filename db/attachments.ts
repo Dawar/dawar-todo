@@ -127,8 +127,15 @@ function storageUrl(key?: string, query?: Record<string, string>) {
   return url;
 }
 
+async function signedStorageResponse(url: URL, init?: RequestInit) {
+  const signedUrl = new URL(url);
+  signedUrl.searchParams.set("X-Amz-Expires", "300");
+  const request = await storageConfig().client.sign(signedUrl, { ...init, aws: { signQuery: true } });
+  return fetch(request);
+}
+
 async function storageFetch(url: URL, init?: RequestInit) {
-  const response = await storageConfig().client.fetch(url, init);
+  const response = await signedStorageResponse(url, init);
   if (!response.ok) throw await storageResponseError("Private image storage", response);
   return response;
 }
@@ -147,7 +154,7 @@ async function storageResponseError(stage: string, response: Response) {
 
 async function deleteKeys(keys: string[]) {
   await Promise.all(keys.map(async (key) => {
-    const response = await storageConfig().client.fetch(storageUrl(key), { method: "DELETE" });
+    const response = await signedStorageResponse(storageUrl(key), { method: "DELETE" });
     if (!response.ok && response.status !== 404) throw await storageResponseError("Private image cleanup", response);
   }));
 }
