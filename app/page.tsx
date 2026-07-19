@@ -1,6 +1,8 @@
+/* eslint-disable @next/next/no-img-element */
 "use client";
 
 import {
+  ClipboardEvent as ReactClipboardEvent,
   FormEvent,
   PointerEvent as ReactPointerEvent,
   useEffect,
@@ -34,6 +36,31 @@ type Todo = {
   snoozedUntil: string | null;
   createdAt: string;
   updatedAt: string;
+  attachmentCount: number;
+};
+
+type TodoAttachment = {
+  id: string;
+  todoId: number | null;
+  fileName: string;
+  mimeType: string;
+  byteSize: number;
+  width: number;
+  height: number;
+  sortOrder: number;
+  thumbnailUrl: string;
+  displayUrl: string;
+  originalUrl: string;
+  createdAt: string;
+};
+
+type PendingAttachment = {
+  localId: string;
+  file: File;
+  previewUrl: string;
+  status: "uploading" | "ready" | "error";
+  attachment: TodoAttachment | null;
+  error: string;
 };
 
 type TodoDraft = Pick<Todo, "title" | "notes" | "priority"> & {
@@ -73,14 +100,100 @@ const priorityLabels: Record<number, string> = {
 };
 
 function request<T>(path: string, options?: RequestInit): Promise<T> {
+  const formData = typeof FormData !== "undefined" && options?.body instanceof FormData;
   return fetch(path, {
     ...options,
-    headers: options?.body ? { "Content-Type": "application/json", ...(options.headers ?? {}) } : options?.headers,
+    headers: options?.body && !formData ? { "Content-Type": "application/json", ...(options.headers ?? {}) } : options?.headers,
   }).then(async (response) => {
     const payload = (await response.json().catch(() => ({}))) as T & { error?: string };
     if (!response.ok) throw new Error(payload.error || "Something went wrong.");
     return payload;
   });
+}
+
+const IMAGE_ACCEPT = "image/jpeg,image/png,image/webp,image/gif,image/heic,image/heif,.heic,.heif";
+const MAX_ATTACHMENTS = 12;
+const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
+
+function AttachmentPicker({
+  disabled,
+  onFiles,
+  label,
+  showLabel = false,
+}: {
+  disabled?: boolean;
+  onFiles: (files: File[]) => void;
+  label: string;
+  showLabel?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const libraryRef = useRef<HTMLInputElement>(null);
+  const cameraRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const keyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("keydown", keyDown);
+    return () => window.removeEventListener("keydown", keyDown);
+  }, [open]);
+
+  function selected(input: HTMLInputElement) {
+    const files = [...(input.files ?? [])];
+    input.value = "";
+    setOpen(false);
+    if (files.length) onFiles(files);
+  }
+
+  return (
+    <div className="relative shrink-0">
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => setOpen((current) => !current)}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label={label}
+        title={label}
+        className={classNames(
+          "inline-flex h-10 items-center justify-center gap-2 rounded-xl text-[#216e4e] transition hover:bg-[#eaf3ed] focus-visible:outline-2 focus-visible:outline-[#216e4e] disabled:opacity-40",
+          showLabel ? "px-3 text-sm font-semibold" : "w-10",
+        )}
+      >
+        <ActionIcon name={showLabel ? "image" : "add"} className="h-5 w-5" />
+        {showLabel && <span>Add images</span>}
+      </button>
+
+      {open && (
+        <>
+          <button type="button" aria-label="Close image menu" onClick={() => setOpen(false)} className="fixed inset-0 z-[65] hidden cursor-default sm:block" />
+          <div role="menu" className="absolute left-0 top-full z-[70] mt-2 hidden w-48 rounded-xl border border-black/[0.08] bg-white p-1.5 shadow-xl sm:block">
+            <button type="button" role="menuitem" onClick={() => libraryRef.current?.click()} className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left text-sm font-semibold text-[#303632] hover:bg-[#f2f5f2]">
+              <ActionIcon name="image" />Choose images
+            </button>
+          </div>
+
+          <div className="fixed inset-0 z-[70] flex items-end sm:hidden">
+            <button type="button" aria-label="Close image menu" onClick={() => setOpen(false)} className="absolute inset-0 bg-black/35" />
+            <div role="menu" className="relative w-full rounded-t-3xl bg-white px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-4 shadow-2xl">
+              <p className="mb-3 px-1 text-sm font-semibold text-[#303632]">Attach an image</p>
+              <button type="button" role="menuitem" onClick={() => libraryRef.current?.click()} className="flex h-12 w-full items-center gap-3 rounded-xl px-3 text-left text-[16px] font-semibold text-[#303632] hover:bg-[#f2f5f2]">
+                <ActionIcon name="image" className="h-5 w-5 text-[#216e4e]" />Photo library
+              </button>
+              <button type="button" role="menuitem" onClick={() => cameraRef.current?.click()} className="flex h-12 w-full items-center gap-3 rounded-xl px-3 text-left text-[16px] font-semibold text-[#303632] hover:bg-[#f2f5f2]">
+                <ActionIcon name="camera" className="h-5 w-5 text-[#216e4e]" />Take photo
+              </button>
+              <button type="button" onClick={() => setOpen(false)} className="mt-2 h-12 w-full rounded-xl bg-[#f1f2f0] text-[16px] font-semibold text-[#59615c]">Cancel</button>
+            </div>
+          </div>
+        </>
+      )}
+
+      <input ref={libraryRef} type="file" accept={IMAGE_ACCEPT} multiple className="sr-only" tabIndex={-1} onChange={(event) => selected(event.currentTarget)} />
+      <input ref={cameraRef} type="file" accept="image/*" capture="environment" className="sr-only" tabIndex={-1} onChange={(event) => selected(event.currentTarget)} />
+    </div>
+  );
 }
 
 function isTodayOrOverdue(value: string | null) {
@@ -300,7 +413,10 @@ function TaskRow({
           aria-label={`Open details: ${todo.title}`}
           className="min-w-0 flex-1 rounded-lg text-left focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#216e4e] disabled:cursor-default"
         >
-          <p className={classNames("whitespace-pre-wrap text-[15px] leading-5 text-[#202522]", todo.status === "completed" && "text-[#8b928e] line-through")}>{todo.title}</p>
+          <div className="flex min-w-0 items-start gap-2">
+            <p className={classNames("min-w-0 flex-1 whitespace-pre-wrap text-[15px] leading-5 text-[#202522]", todo.status === "completed" && "text-[#8b928e] line-through")}>{todo.title}</p>
+            {todo.attachmentCount > 0 && <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-[#eef2ef] px-1.5 py-0.5 text-[10px] font-medium text-[#68716b]"><ActionIcon name="image" className="h-3 w-3" />{todo.attachmentCount}</span>}
+          </div>
           {todo.notes && <p className="mt-1 line-clamp-2 whitespace-pre-wrap text-xs leading-5 text-[#7c847f]">{todo.notes}</p>}
           {(todo.project || todo.context || todo.dueDate || todo.priority <= 2 || snoozed) && (
             <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-[#747c77]">
@@ -350,6 +466,8 @@ export default function Home() {
   const [priority, setPriority] = useState("");
   const [sort, setSort] = useState<Sort>("smart");
   const [newTitle, setNewTitle] = useState("");
+  const [captureDraftToken, setCaptureDraftToken] = useState(() => crypto.randomUUID());
+  const [captureAttachments, setCaptureAttachments] = useState<PendingAttachment[]>([]);
   const [adding, setAdding] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [undoing, setUndoing] = useState(false);
@@ -358,6 +476,11 @@ export default function Home() {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editDraft, setEditDraft] = useState<TodoDraft | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
+  const [detailAttachments, setDetailAttachments] = useState<TodoAttachment[]>([]);
+  const [detailUploads, setDetailUploads] = useState<PendingAttachment[]>([]);
+  const [loadingAttachments, setLoadingAttachments] = useState(false);
+  const [attachmentError, setAttachmentError] = useState("");
+  const [viewerIndex, setViewerIndex] = useState<number | null>(null);
   const [projectDialog, setProjectDialog] = useState<ProjectDialogState | null>(null);
   const [projectDialogError, setProjectDialogError] = useState("");
   const [savingProject, setSavingProject] = useState(false);
@@ -372,7 +495,8 @@ export default function Home() {
   const [now, setNow] = useState(() => Date.now());
   const captureRef = useRef<HTMLTextAreaElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
-  const overlayOpen = editingId !== null || projectDialog !== null || newProjectOpen || projectDeleteDialog !== null || filtersOpen;
+  const viewerGesture = useRef<number | null>(null);
+  const overlayOpen = editingId !== null || projectDialog !== null || newProjectOpen || projectDeleteDialog !== null || filtersOpen || viewerIndex !== null;
 
   useEffect(() => {
     let active = true;
@@ -420,7 +544,13 @@ export default function Home() {
         event.preventDefault();
         captureRef.current?.focus();
       }
-      if (event.key === "Escape" && projectDeleteDialog !== null) {
+      if (event.key === "Escape" && viewerIndex !== null) {
+        setViewerIndex(null);
+      } else if (event.key === "ArrowLeft" && viewerIndex !== null && detailAttachments.length > 1) {
+        setViewerIndex((current) => current === null ? null : (current - 1 + detailAttachments.length) % detailAttachments.length);
+      } else if (event.key === "ArrowRight" && viewerIndex !== null && detailAttachments.length > 1) {
+        setViewerIndex((current) => current === null ? null : (current + 1) % detailAttachments.length);
+      } else if (event.key === "Escape" && projectDeleteDialog !== null) {
         setProjectDeleteDialog(null);
         setProjectDeleteError("");
       } else if (event.key === "Escape" && newProjectOpen) {
@@ -442,7 +572,7 @@ export default function Home() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [editingId, filtersOpen, newProjectOpen, projectDeleteDialog, projectDialog]);
+  }, [detailAttachments.length, editingId, filtersOpen, newProjectOpen, projectDeleteDialog, projectDialog, viewerIndex]);
 
   useEffect(() => {
     if (!overlayOpen) return;
@@ -515,6 +645,7 @@ export default function Home() {
   const filtersActive = Boolean(query || (projectFilterApplies && project) || priority || sort !== "smart");
   const mobileFilterCount = Number(Boolean(project) && projectFilterApplies) + Number(Boolean(priority)) + Number(sort !== "smart");
   const editingTodo = editingId === null ? null : todos.find((todo) => todo.id === editingId) ?? null;
+  const viewerAttachment = viewerIndex === null ? null : detailAttachments[viewerIndex] ?? null;
 
   function resizeCapture(textarea: HTMLTextAreaElement) {
     textarea.style.height = "auto";
@@ -522,10 +653,189 @@ export default function Home() {
     textarea.style.overflowY = textarea.scrollHeight > 120 ? "auto" : "hidden";
   }
 
+  function clipboardImages(event: ReactClipboardEvent<HTMLTextAreaElement>) {
+    return [...event.clipboardData.items]
+      .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+      .map((item) => item.getAsFile())
+      .filter((file): file is File => Boolean(file));
+  }
+
+  function validateSelectedImages(files: File[], existingCount: number) {
+    const slots = Math.max(0, MAX_ATTACHMENTS - existingCount);
+    if (!slots) {
+      setNotice({ tone: "error", text: `Tasks are limited to ${MAX_ATTACHMENTS} images.` });
+      return [];
+    }
+    const accepted = files.slice(0, slots).filter((file) => {
+      if (file.size > MAX_IMAGE_BYTES) {
+        setNotice({ tone: "error", text: `${file.name || "An image"} is larger than 20 MB.` });
+        return false;
+      }
+      if (!file.type.startsWith("image/") && !/\.(heic|heif)$/i.test(file.name)) {
+        setNotice({ tone: "error", text: "Choose JPEG, PNG, WebP, GIF, HEIC, or HEIF images." });
+        return false;
+      }
+      return true;
+    });
+    if (files.length > slots) setNotice({ tone: "error", text: `Only ${MAX_ATTACHMENTS} images can be attached to a task.` });
+    return accepted;
+  }
+
+  async function uploadCaptureAttachment(localId: string, file: File, draftToken: string) {
+    const body = new FormData();
+    body.append("file", file);
+    body.append("draftToken", draftToken);
+    try {
+      const { attachment } = await request<{ attachment: TodoAttachment }>("/api/attachments/drafts", { method: "POST", body });
+      setCaptureAttachments((current) => current.map((item) => item.localId === localId
+        ? { ...item, status: "ready", attachment, error: "" }
+        : item));
+      console.info("[todo-ui] draft image uploaded", { attachmentId: attachment.id, bytes: attachment.byteSize });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "The image could not be uploaded.";
+      setCaptureAttachments((current) => current.map((item) => item.localId === localId
+        ? { ...item, status: "error", error: message }
+        : item));
+      console.error("[todo-ui] draft image upload failed", { localId, bytes: file.size, error });
+    }
+  }
+
+  function queueCaptureImages(inputFiles: File[]) {
+    const files = validateSelectedImages(inputFiles, captureAttachments.length);
+    if (!files.length) return;
+    const items = files.map((file): PendingAttachment => ({
+      localId: crypto.randomUUID(),
+      file,
+      previewUrl: URL.createObjectURL(file),
+      status: "uploading",
+      attachment: null,
+      error: "",
+    }));
+    setCaptureAttachments((current) => [...current, ...items]);
+    console.info("[todo-ui] capture images queued", { count: items.length, totalBytes: files.reduce((sum, file) => sum + file.size, 0) });
+    void (async () => {
+      for (const item of items) await uploadCaptureAttachment(item.localId, item.file, captureDraftToken);
+    })();
+  }
+
+  function retryCaptureImage(item: PendingAttachment) {
+    setCaptureAttachments((current) => current.map((candidate) => candidate.localId === item.localId
+      ? { ...candidate, status: "uploading", error: "" }
+      : candidate));
+    void uploadCaptureAttachment(item.localId, item.file, captureDraftToken);
+  }
+
+  async function removeCaptureImage(item: PendingAttachment) {
+    if (item.status === "uploading") return;
+    if (item.attachment) {
+      try {
+        await request(`/api/attachments/drafts/${item.attachment.id}`, {
+          method: "DELETE",
+          body: JSON.stringify({ draftToken: captureDraftToken }),
+        });
+      } catch (error) {
+        setNotice({ tone: "error", text: error instanceof Error ? error.message : "The image could not be removed." });
+        return;
+      }
+    }
+    URL.revokeObjectURL(item.previewUrl);
+    setCaptureAttachments((current) => current.filter((candidate) => candidate.localId !== item.localId));
+  }
+
+  async function loadTaskAttachments(todoId: number) {
+    setLoadingAttachments(true);
+    setAttachmentError("");
+    try {
+      const { attachments } = await request<{ attachments: TodoAttachment[] }>(`/api/todos/${todoId}/attachments`);
+      setDetailAttachments(attachments);
+      console.info("[todo-ui] task gallery loaded", { todoId, count: attachments.length });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "The images could not be loaded.";
+      setAttachmentError(message);
+      console.error("[todo-ui] task gallery load failed", { todoId, error });
+    } finally {
+      setLoadingAttachments(false);
+    }
+  }
+
+  async function uploadDetailAttachment(todoId: number, item: PendingAttachment) {
+    const body = new FormData();
+    body.append("file", item.file);
+    try {
+      const { attachment } = await request<{ attachment: TodoAttachment }>(`/api/todos/${todoId}/attachments`, { method: "POST", body });
+      setDetailUploads((current) => {
+        const found = current.find((candidate) => candidate.localId === item.localId);
+        if (found) URL.revokeObjectURL(found.previewUrl);
+        return current.filter((candidate) => candidate.localId !== item.localId);
+      });
+      setDetailAttachments((current) => [...current, attachment]);
+      setTodos((current) => current.map((todo) => todo.id === todoId ? { ...todo, attachmentCount: todo.attachmentCount + 1 } : todo));
+      console.info("[todo-ui] task image uploaded", { todoId, attachmentId: attachment.id, bytes: attachment.byteSize });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "The image could not be uploaded.";
+      setDetailUploads((current) => current.map((candidate) => candidate.localId === item.localId
+        ? { ...candidate, status: "error", error: message }
+        : candidate));
+      console.error("[todo-ui] task image upload failed", { todoId, localId: item.localId, bytes: item.file.size, error });
+    }
+  }
+
+  function queueDetailImages(inputFiles: File[]) {
+    if (!editingTodo) return;
+    const files = validateSelectedImages(inputFiles, detailAttachments.length + detailUploads.length);
+    if (!files.length) return;
+    const items = files.map((file): PendingAttachment => ({
+      localId: crypto.randomUUID(),
+      file,
+      previewUrl: URL.createObjectURL(file),
+      status: "uploading",
+      attachment: null,
+      error: "",
+    }));
+    setDetailUploads((current) => [...current, ...items]);
+    const todoId = editingTodo.id;
+    void (async () => {
+      for (const item of items) await uploadDetailAttachment(todoId, item);
+    })();
+  }
+
+  function retryDetailImage(item: PendingAttachment) {
+    if (!editingTodo) return;
+    setDetailUploads((current) => current.map((candidate) => candidate.localId === item.localId
+      ? { ...candidate, status: "uploading", error: "" }
+      : candidate));
+    void uploadDetailAttachment(editingTodo.id, { ...item, status: "uploading", error: "" });
+  }
+
+  function removeDetailUpload(item: PendingAttachment) {
+    if (item.status === "uploading") return;
+    URL.revokeObjectURL(item.previewUrl);
+    setDetailUploads((current) => current.filter((candidate) => candidate.localId !== item.localId));
+  }
+
+  async function deleteDetailImage(attachment: TodoAttachment) {
+    if (!editingTodo || syncing) return;
+    setSyncing(true);
+    try {
+      const result = await request<{ attachmentId: string; undoToken: string }>(`/api/todos/${editingTodo.id}/attachments/${attachment.id}`, { method: "DELETE" });
+      setDetailAttachments((current) => current.filter((item) => item.id !== attachment.id));
+      setTodos((current) => current.map((todo) => todo.id === editingTodo.id
+        ? { ...todo, attachmentCount: Math.max(0, todo.attachmentCount - 1) }
+        : todo));
+      setViewerIndex(null);
+      setNotice({ tone: "success", text: "Image deleted.", undoToken: result.undoToken });
+    } catch (error) {
+      setNotice({ tone: "error", text: error instanceof Error ? error.message : "The image could not be deleted." });
+    } finally {
+      setSyncing(false);
+    }
+  }
+
   async function addTodo(event: FormEvent) {
     event.preventDefault();
     const title = newTitle.trim();
-    if (!title || adding) return;
+    const attachmentsReady = captureAttachments.every((item) => item.status === "ready" && item.attachment);
+    if (!title || adding || !attachmentsReady) return;
     const temporaryId = -Date.now();
     const optimistic: Todo = {
       id: temporaryId,
@@ -542,8 +852,8 @@ export default function Home() {
       snoozedUntil: null,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
+      attachmentCount: captureAttachments.length,
     };
-    setNewTitle("");
     setProject("");
     setView("open");
     console.info("[todo-ui] quick add routed to unfiltered open view", {
@@ -553,26 +863,36 @@ export default function Home() {
     setAdding(true);
     setSyncing(true);
     setNotice(null);
-    if (captureRef.current) {
-      captureRef.current.style.height = "auto";
-      captureRef.current.style.overflowY = "hidden";
-    }
     try {
       const { todo } = await request<{ todo: Todo }>("/api/todos", {
         method: "POST",
-        body: JSON.stringify({ title, status: "open", project: null }),
+        body: JSON.stringify({
+          title,
+          status: "open",
+          project: null,
+          draftToken: captureAttachments.length ? captureDraftToken : undefined,
+          attachmentIds: captureAttachments.map((item) => item.attachment?.id).filter(Boolean),
+        }),
       });
       setTodos((current) => current.map((item) => item.id === temporaryId ? todo : item));
+      setNewTitle("");
+      captureAttachments.forEach((item) => URL.revokeObjectURL(item.previewUrl));
+      setCaptureAttachments([]);
+      setCaptureDraftToken(crypto.randomUUID());
+      if (captureRef.current) {
+        captureRef.current.style.height = "auto";
+        captureRef.current.style.overflowY = "hidden";
+      }
       console.info("[todo-ui] created", {
         id: todo.id,
         status: todo.status,
         project: todo.project,
         titleLength: title.length,
         lines: title.split("\n").length,
+        attachmentCount: todo.attachmentCount,
       });
     } catch (error) {
       setTodos((current) => current.filter((item) => item.id !== temporaryId));
-      setNewTitle(title);
       setNotice({ tone: "error", text: error instanceof Error ? error.message : "The task could not be added." });
     } finally {
       setAdding(false);
@@ -649,7 +969,7 @@ export default function Home() {
     if (undoing) return;
     setUndoing(true);
     try {
-      const result = await request<{ todos: Todo[]; restored: number }>("/api/todos/undo", {
+      const result = await request<{ todos: Todo[]; restored: number; restoredAttachments?: number }>("/api/todos/undo", {
         method: "POST",
         body: JSON.stringify({ undoToken }),
       });
@@ -657,8 +977,12 @@ export default function Home() {
       const { projects: refreshedProjects } = await request<{ projects: string[] }>("/api/projects");
       setRegisteredProjects(refreshedProjects);
       setSelected(new Set());
-      setNotice({ tone: "success", text: `Undone: ${result.restored} ${result.restored === 1 ? "task" : "tasks"} restored.` });
-      console.info("[todo-ui] action undone", { restored: result.restored });
+      if (editingId !== null) void loadTaskAttachments(editingId);
+      const restoredLabel = result.restored > 0
+        ? `${result.restored} ${result.restored === 1 ? "task" : "tasks"} restored`
+        : `${result.restoredAttachments ?? 0} ${(result.restoredAttachments ?? 0) === 1 ? "image" : "images"} restored`;
+      setNotice({ tone: "success", text: `Undone: ${restoredLabel}.` });
+      console.info("[todo-ui] action undone", { restored: result.restored, restoredAttachments: result.restoredAttachments ?? 0 });
     } catch (error) {
       setNotice({ tone: "error", text: error instanceof Error ? error.message : "That action could not be undone." });
       console.error("[todo-ui] undo failed", error);
@@ -759,12 +1083,20 @@ export default function Home() {
       project: todo.project ?? "",
       context: todo.context ?? "",
     });
-    console.info("[todo-ui] task details opened", { id: todo.id, status: todo.status });
+    setDetailAttachments([]);
+    setDetailUploads([]);
+    setViewerIndex(null);
+    void loadTaskAttachments(todo.id);
+    console.info("[todo-ui] task details opened", { id: todo.id, status: todo.status, attachmentCount: todo.attachmentCount });
   }
 
   function closeTaskDetails() {
     setEditingId(null);
     setEditDraft(null);
+    setViewerIndex(null);
+    setAttachmentError("");
+    detailUploads.forEach((item) => URL.revokeObjectURL(item.previewUrl));
+    setDetailUploads([]);
   }
 
   async function saveTaskDetails(event: FormEvent) {
@@ -988,37 +1320,61 @@ export default function Home() {
     <main className="min-h-screen bg-[#f6f7f5] text-[#1d211f]">
       <SiteHeader current="todos" />
       <div className="mx-auto max-w-5xl px-4 pb-28 pt-5 sm:px-6 sm:pt-7">
-        <form onSubmit={addTodo} className="mb-5 flex items-end gap-2 rounded-2xl border border-black/[0.07] bg-white p-2 shadow-[0_10px_35px_rgba(30,45,36,0.07)] sm:p-3">
-          <div className="flex min-w-0 flex-1 items-start gap-3 px-2 py-2 sm:px-3">
-            <ActionIcon name="add" className="mt-1 h-5 w-5 shrink-0 text-[#216e4e]" />
-            <textarea
-              ref={captureRef}
-              value={newTitle}
-              onChange={(event) => { setNewTitle(event.target.value); resizeCapture(event.currentTarget); }}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
-                  event.preventDefault();
-                  event.currentTarget.form?.requestSubmit();
-                }
-              }}
-              rows={1}
-              placeholder="Add a task…"
-              aria-label="Add a task"
-              maxLength={2000}
-              className="min-h-6 max-h-[120px] min-w-0 flex-1 resize-none overflow-hidden bg-transparent text-[16px] leading-6 text-[#151816] outline-none placeholder:text-[#929994]"
-            />
+        <form onSubmit={addTodo} className="mb-5 rounded-2xl border border-black/[0.07] bg-white p-2 shadow-[0_10px_35px_rgba(30,45,36,0.07)] sm:p-3">
+          <div className="flex items-end gap-2">
+            <div className="flex min-w-0 flex-1 items-start gap-2 px-1 py-2 sm:px-2">
+              <AttachmentPicker label="Attach images" onFiles={queueCaptureImages} disabled={captureAttachments.length >= MAX_ATTACHMENTS} />
+              <textarea
+                ref={captureRef}
+                value={newTitle}
+                onChange={(event) => { setNewTitle(event.target.value); resizeCapture(event.currentTarget); }}
+                onPaste={(event) => {
+                  const files = clipboardImages(event);
+                  if (files.length) queueCaptureImages(files);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+                    event.preventDefault();
+                    event.currentTarget.form?.requestSubmit();
+                  }
+                }}
+                rows={1}
+                placeholder="Add a task…"
+                aria-label="Add a task"
+                maxLength={2000}
+                className="min-h-10 max-h-[120px] min-w-0 flex-1 resize-none overflow-hidden bg-transparent py-2 text-[16px] leading-6 text-[#151816] outline-none placeholder:text-[#929994]"
+              />
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              <span className="hidden text-[10px] text-[#929994] sm:block">⌘↵ add</span>
+              <button
+                type="submit"
+                disabled={!newTitle.trim() || adding || captureAttachments.some((item) => item.status !== "ready")}
+                className="inline-flex h-11 items-center gap-2 rounded-xl bg-[#216e4e] px-4 text-sm font-semibold text-white transition hover:bg-[#195d41] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#216e4e] disabled:cursor-not-allowed disabled:opacity-40 sm:px-6"
+              >
+                <ActionIcon name="add" />
+                {adding ? "Adding…" : "Add"}
+              </button>
+            </div>
           </div>
-          <div className="flex shrink-0 items-center gap-2">
-            <span className="hidden text-[10px] text-[#929994] sm:block">⌘↵ add</span>
-            <button
-              type="submit"
-              disabled={!newTitle.trim() || adding}
-              className="inline-flex h-11 items-center gap-2 rounded-xl bg-[#216e4e] px-4 text-sm font-semibold text-white transition hover:bg-[#195d41] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#216e4e] disabled:cursor-not-allowed disabled:opacity-40 sm:px-6"
-            >
-              <ActionIcon name="add" />
-              {adding ? "Adding…" : "Add"}
-            </button>
-          </div>
+
+          {captureAttachments.length > 0 && (
+            <div className="flex gap-2 overflow-x-auto border-t border-black/[0.06] px-2 pb-1 pt-2 sm:px-3" aria-label="Images to attach">
+              {captureAttachments.map((item) => (
+                <div key={item.localId} className="relative h-16 w-16 shrink-0 overflow-hidden rounded-xl bg-[#eef0ed] ring-1 ring-black/[0.06]" title={item.error || item.file.name}>
+                  <img src={item.previewUrl} alt="" className="h-full w-full object-cover" />
+                  {item.status === "uploading" && <span className="absolute inset-0 grid place-items-center bg-black/40 text-[10px] font-semibold text-white">Uploading…</span>}
+                  {item.status === "error" && (
+                    <button type="button" onClick={() => retryCaptureImage(item)} aria-label={`Retry ${item.file.name}`} title="Retry upload" className="absolute inset-0 grid place-items-center bg-red-900/65 text-white"><ActionIcon name="retry" /></button>
+                  )}
+                  {item.status !== "uploading" && (
+                    <button type="button" onClick={() => void removeCaptureImage(item)} aria-label={`Remove ${item.file.name}`} title="Remove image" className="absolute right-1 top-1 grid h-6 w-6 place-items-center rounded-full bg-black/65 text-white hover:bg-red-700"><ActionIcon name="close" className="h-3.5 w-3.5" /></button>
+                  )}
+                </div>
+              ))}
+              <span className="self-center whitespace-nowrap px-1 text-[11px] text-[#7c847f]">{captureAttachments.length}/{MAX_ATTACHMENTS}</span>
+            </div>
+          )}
         </form>
 
         <section aria-labelledby="tasks-heading">
@@ -1472,6 +1828,10 @@ export default function Home() {
                   autoFocus
                   value={editDraft.title}
                   onChange={(event) => setEditDraft((current) => current ? { ...current, title: event.target.value } : current)}
+                  onPaste={(event) => {
+                    const files = clipboardImages(event);
+                    if (files.length) queueDetailImages(files);
+                  }}
                   rows={4}
                   maxLength={2000}
                   className="min-h-28 w-full min-w-0 max-w-full resize-y rounded-xl border border-black/[0.1] bg-white px-3 py-2.5 text-[16px] leading-6 text-[#202522] outline-none focus:border-[#216e4e]/50 focus:ring-3 focus:ring-[#216e4e]/10"
@@ -1483,12 +1843,70 @@ export default function Home() {
                 <textarea
                   value={editDraft.notes}
                   onChange={(event) => setEditDraft((current) => current ? { ...current, notes: event.target.value } : current)}
+                  onPaste={(event) => {
+                    const files = clipboardImages(event);
+                    if (files.length) queueDetailImages(files);
+                  }}
                   rows={5}
                   placeholder="Add context, links, or next steps…"
                   maxLength={10000}
                   className="min-h-28 w-full min-w-0 max-w-full resize-y rounded-xl border border-black/[0.1] bg-white px-3 py-2.5 text-sm leading-6 text-[#303632] outline-none placeholder:text-[#a0a6a2] focus:border-[#216e4e]/50 focus:ring-3 focus:ring-[#216e4e]/10"
                 />
               </label>
+
+              <section className="mt-4 min-w-0" aria-labelledby="task-images-heading">
+                <div className="mb-2 flex min-w-0 items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <h4 id="task-images-heading" className="text-xs font-semibold uppercase tracking-wide text-[#69716c]">Images</h4>
+                    <p className="mt-0.5 text-xs text-[#929994]">{detailAttachments.length + detailUploads.length}/{MAX_ATTACHMENTS} attached</p>
+                  </div>
+                  <AttachmentPicker
+                    label="Add images to task"
+                    showLabel
+                    onFiles={queueDetailImages}
+                    disabled={detailAttachments.length + detailUploads.length >= MAX_ATTACHMENTS}
+                  />
+                </div>
+
+                {loadingAttachments ? (
+                  <div role="status" aria-label="Loading images" className="grid grid-cols-3 gap-2 sm:grid-cols-4">
+                    {[0, 1, 2].map((item) => <div key={item} className="aspect-square animate-pulse rounded-xl bg-[#eef0ed]" />)}
+                  </div>
+                ) : attachmentError ? (
+                  <div className="flex items-center justify-between gap-3 rounded-xl bg-red-50 px-3 py-2.5 text-sm text-red-700">
+                    <span>{attachmentError}</span>
+                    <button type="button" onClick={() => void loadTaskAttachments(editingTodo.id)} className="inline-flex items-center gap-1.5 font-semibold"><ActionIcon name="retry" />Retry</button>
+                  </div>
+                ) : detailAttachments.length || detailUploads.length ? (
+                  <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
+                    {detailAttachments.map((attachment, index) => (
+                      <div key={attachment.id} className="group/image relative aspect-square min-w-0 overflow-hidden rounded-xl bg-[#eef0ed] ring-1 ring-black/[0.06]">
+                        <button type="button" onClick={() => setViewerIndex(index)} className="h-full w-full focus-visible:outline-2 focus-visible:outline-inset focus-visible:outline-[#216e4e]" aria-label={`View image ${index + 1}: ${attachment.fileName}`}>
+                          <img src={attachment.thumbnailUrl} alt={attachment.fileName} className="h-full w-full object-cover" />
+                        </button>
+                        <button type="button" onClick={() => void deleteDetailImage(attachment)} disabled={syncing} aria-label={`Delete image: ${attachment.fileName}`} title="Delete image" className="absolute right-1.5 top-1.5 grid h-7 w-7 place-items-center rounded-full bg-black/65 text-white opacity-100 hover:bg-red-700 focus-visible:outline-2 focus-visible:outline-white disabled:opacity-50 sm:opacity-0 sm:group-hover/image:opacity-100 sm:group-focus-within/image:opacity-100">
+                          <ActionIcon name="delete" className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    ))}
+                    {detailUploads.map((item) => (
+                      <div key={item.localId} className="relative aspect-square min-w-0 overflow-hidden rounded-xl bg-[#eef0ed] ring-1 ring-black/[0.06]" title={item.error || item.file.name}>
+                        <img src={item.previewUrl} alt="" className="h-full w-full object-cover" />
+                        {item.status === "uploading" ? (
+                          <span className="absolute inset-0 grid place-items-center bg-black/45 text-xs font-semibold text-white">Uploading…</span>
+                        ) : (
+                          <>
+                            <button type="button" onClick={() => retryDetailImage(item)} aria-label={`Retry ${item.file.name}`} className="absolute inset-0 grid place-items-center bg-red-900/65 text-white"><ActionIcon name="retry" className="h-5 w-5" /></button>
+                            <button type="button" onClick={() => removeDetailUpload(item)} aria-label={`Remove ${item.file.name}`} title="Remove failed upload" className="absolute right-1.5 top-1.5 grid h-7 w-7 place-items-center rounded-full bg-black/65 text-white hover:bg-red-700"><ActionIcon name="close" className="h-3.5 w-3.5" /></button>
+                          </>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="rounded-xl border border-dashed border-black/[0.1] px-4 py-5 text-center text-sm text-[#8a918d]">No images attached.</div>
+                )}
+              </section>
 
               <div className="mt-4 grid min-w-0 grid-cols-1 gap-4 sm:grid-cols-2">
                 <div className="block min-w-0">
@@ -1547,6 +1965,46 @@ export default function Home() {
               <button type="submit" disabled={savingEdit || !editDraft.title.trim()} className="inline-flex h-11 items-center gap-2 rounded-xl bg-[#216e4e] px-5 text-sm font-semibold text-white hover:bg-[#195d41] disabled:opacity-50"><ActionIcon name="save" />{savingEdit ? "Saving…" : "Save changes"}</button>
             </div>
           </form>
+        </div>
+      )}
+
+      {viewerAttachment && viewerIndex !== null && (
+        <div
+          className="fixed inset-0 z-[80] flex touch-pan-y items-center justify-center overflow-hidden bg-black/92 p-3 sm:p-8"
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Image viewer: ${viewerAttachment.fileName}`}
+          onPointerDown={(event) => { if (event.pointerType === "touch") viewerGesture.current = event.clientX; }}
+          onPointerUp={(event) => {
+            const start = viewerGesture.current;
+            viewerGesture.current = null;
+            if (start === null || detailAttachments.length < 2) return;
+            const delta = event.clientX - start;
+            if (Math.abs(delta) < 50) return;
+            setViewerIndex((current) => current === null ? null : delta < 0
+              ? (current + 1) % detailAttachments.length
+              : (current - 1 + detailAttachments.length) % detailAttachments.length);
+          }}
+        >
+          <button type="button" onClick={() => setViewerIndex(null)} aria-label="Close image viewer" className="absolute inset-0 cursor-zoom-out" />
+          <div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex items-center justify-between gap-3 bg-gradient-to-b from-black/70 to-transparent px-4 pb-8 pt-[max(1rem,env(safe-area-inset-top))] sm:px-6">
+            <span className="min-w-0 truncate text-sm font-medium text-white/85">{viewerAttachment.fileName}</span>
+            <div className="pointer-events-auto flex shrink-0 items-center gap-1">
+              <a href={viewerAttachment.originalUrl} download={viewerAttachment.fileName} className="grid h-10 w-10 place-items-center rounded-full bg-white/10 text-white hover:bg-white/20" aria-label="Download original" title="Download original"><ActionIcon name="download" className="h-5 w-5" /></a>
+              <button type="button" onClick={() => void deleteDetailImage(viewerAttachment)} className="grid h-10 w-10 place-items-center rounded-full bg-white/10 text-white hover:bg-red-600" aria-label="Delete image" title="Delete image"><ActionIcon name="delete" className="h-5 w-5" /></button>
+              <button type="button" onClick={() => setViewerIndex(null)} className="grid h-10 w-10 place-items-center rounded-full bg-white/10 text-white hover:bg-white/20" aria-label="Close image viewer" title="Close"><ActionIcon name="close" className="h-5 w-5" /></button>
+            </div>
+          </div>
+
+          <img src={viewerAttachment.displayUrl} alt={viewerAttachment.fileName} className="pointer-events-none relative max-h-full max-w-full object-contain" />
+
+          {detailAttachments.length > 1 && (
+            <>
+              <button type="button" onClick={() => setViewerIndex((viewerIndex - 1 + detailAttachments.length) % detailAttachments.length)} aria-label="Previous image" className="absolute left-3 top-1/2 hidden h-12 w-12 -translate-y-1/2 place-items-center rounded-full bg-black/45 text-white hover:bg-black/70 sm:grid"><ActionIcon name="previous" className="h-6 w-6" /></button>
+              <button type="button" onClick={() => setViewerIndex((viewerIndex + 1) % detailAttachments.length)} aria-label="Next image" className="absolute right-3 top-1/2 hidden h-12 w-12 -translate-y-1/2 place-items-center rounded-full bg-black/45 text-white hover:bg-black/70 sm:grid"><ActionIcon name="next" className="h-6 w-6" /></button>
+              <span className="absolute bottom-[max(1rem,env(safe-area-inset-bottom))] rounded-full bg-black/55 px-3 py-1.5 text-xs font-semibold text-white/90">{viewerIndex + 1} / {detailAttachments.length}</span>
+            </>
+          )}
         </div>
       )}
 

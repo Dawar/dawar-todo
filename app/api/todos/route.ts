@@ -1,9 +1,11 @@
 import { createTodo, listTodos } from "../../../db/todos";
+import { scheduleAttachmentCleanup } from "../../../db/attachments";
 
 export async function GET() {
   const startedAt = Date.now();
   try {
     const todos = await listTodos();
+    await scheduleAttachmentCleanup();
     console.info("[todo-api] list", { count: todos.length, durationMs: Date.now() - startedAt });
     return Response.json({ todos });
   } catch (error) {
@@ -22,6 +24,8 @@ export async function POST(request: Request) {
       project?: string | null;
       context?: string | null;
       status?: unknown;
+      draftToken?: string;
+      attachmentIds?: string[];
     };
     const title = payload.title?.trim() ?? "";
     if (!title) return Response.json({ error: "A task title is required." }, { status: 400 });
@@ -41,6 +45,8 @@ export async function POST(request: Request) {
       dueDate: payload.dueDate || null,
       project,
       context: payload.context?.trim() || null,
+      draftToken: payload.draftToken,
+      attachmentIds: Array.isArray(payload.attachmentIds) ? payload.attachmentIds.map(String) : undefined,
     });
     console.info("[todo-api] created", {
       id: todo.id,
@@ -48,10 +54,13 @@ export async function POST(request: Request) {
       project: todo.project,
       priority: todo.priority,
       titleLength: title.length,
+      attachmentCount: todo.attachmentCount,
     });
     return Response.json({ todo }, { status: 201 });
   } catch (error) {
+    const message = error instanceof Error ? error.message : "The task could not be added.";
+    const inputError = /task|attached|image|limited|invalid|available|required/i.test(message);
     console.error("[todo-api] create failed", error);
-    return Response.json({ error: "The task could not be added." }, { status: 500 });
+    return Response.json({ error: message }, { status: inputError ? 400 : 500 });
   }
 }

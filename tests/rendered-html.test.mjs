@@ -55,7 +55,7 @@ test("ships the simplified todo and project surface", async () => {
   assert.match(page, />Projects</);
   assert.match(page, /New project/);
   assert.match(page, /setProject\(""\);\s+setView\("open"\)/);
-  assert.match(page, /body: JSON\.stringify\(\{ title, status: "open", project: null \}\)/);
+  assert.match(page, /body: JSON\.stringify\(\{[\s\S]*title,[\s\S]*status: "open",[\s\S]*project: null,[\s\S]*draftToken:[\s\S]*attachmentIds:/);
   assert.match(page, /\/api\/projects/);
   assert.match(page, /Move tasks to another project/);
   assert.match(page, /Delete the tasks too/);

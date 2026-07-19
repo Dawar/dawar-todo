@@ -1,5 +1,11 @@
 import { env } from "cloudflare:workers";
 import { importedTodos } from "./imported-todos";
+import {
+  type AttachmentRow,
+  attachmentSnapshotsForTodos,
+  claimDraftAttachments,
+  restoreAttachmentStatements,
+} from "./attachments";
 
 type StoredTodoStatus = "open" | "completed" | "archived";
 export type TodoStatus = "open" | "completed";
@@ -21,10 +27,12 @@ type TodoRow = {
   snoozed_until: string | null;
   created_at: string;
   updated_at: string;
+  attachment_count?: number;
 };
 
 type UndoSnapshot = {
   todos: TodoRow[];
+  attachments?: AttachmentRow[];
   createdSourceKind?: string;
 };
 
@@ -43,6 +51,7 @@ export type Todo = {
   snoozedUntil: string | null;
   createdAt: string;
   updatedAt: string;
+  attachmentCount: number;
 };
 
 export type TodoUpdate = Partial<
@@ -77,6 +86,7 @@ function mapTodo(row: TodoRow): Todo {
     snoozedUntil: row.snoozed_until,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    attachmentCount: Number(row.attachment_count ?? 0),
   };
 }
 
@@ -130,6 +140,26 @@ export async function ensureTodoDatabase() {
           updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
         )
       `),
+      db.prepare(`
+        CREATE TABLE IF NOT EXISTS todo_attachments (
+          id TEXT PRIMARY KEY NOT NULL,
+          todo_id INTEGER,
+          draft_token TEXT,
+          original_key TEXT NOT NULL UNIQUE,
+          display_key TEXT NOT NULL UNIQUE,
+          thumbnail_key TEXT NOT NULL UNIQUE,
+          file_name TEXT NOT NULL,
+          mime_type TEXT NOT NULL,
+          byte_size INTEGER NOT NULL,
+          width INTEGER NOT NULL,
+          height INTEGER NOT NULL,
+          sort_order INTEGER NOT NULL DEFAULT 0,
+          expires_at TEXT,
+          deleted_at TEXT,
+          created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+          updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+        )
+      `),
     ]);
 
     const columns = await db.prepare("PRAGMA table_info(todos)").all<{ name: string }>();
@@ -139,6 +169,12 @@ export async function ensureTodoDatabase() {
     }
     await db.prepare("CREATE INDEX IF NOT EXISTS todos_snoozed_until_idx ON todos(snoozed_until)").run();
     await db.prepare("CREATE INDEX IF NOT EXISTS todo_action_history_created_at_idx ON todo_action_history(created_at)").run();
+    await db.batch([
+      db.prepare("CREATE INDEX IF NOT EXISTS todo_attachments_todo_id_idx ON todo_attachments(todo_id)"),
+      db.prepare("CREATE INDEX IF NOT EXISTS todo_attachments_draft_token_idx ON todo_attachments(draft_token)"),
+      db.prepare("CREATE INDEX IF NOT EXISTS todo_attachments_expires_at_idx ON todo_attachments(expires_at)"),
+      db.prepare("CREATE INDEX IF NOT EXISTS todo_attachments_deleted_at_idx ON todo_attachments(deleted_at)"),
+    ]);
 
     await db.batch([
       db.prepare("INSERT OR IGNORE INTO app_settings (key, value) VALUES ('snooze_timezone', 'America/Toronto')"),
@@ -235,7 +271,13 @@ export async function ensureTodoDatabase() {
 export async function listTodos(): Promise<Todo[]> {
   await ensureTodoDatabase();
   const result = await database()
-    .prepare("SELECT * FROM todos ORDER BY updated_at DESC, id DESC")
+    .prepare(`
+      SELECT todos.*,
+        (SELECT COUNT(*) FROM todo_attachments
+         WHERE todo_attachments.todo_id = todos.id AND todo_attachments.deleted_at IS NULL) AS attachment_count
+      FROM todos
+      ORDER BY updated_at DESC, id DESC
+    `)
     .all<TodoRow>();
   return result.results.map(mapTodo);
 }
@@ -288,12 +330,22 @@ export async function deleteTodoProject(
     .bind(name)
     .all<TodoRow>();
   const before = beforeResult.results;
+  const attachmentBefore = mode === "delete"
+    ? await attachmentSnapshotsForTodos(before.map((todo) => todo.id))
+    : [];
   const undoToken = before.length > 0 && before.length <= 200 ? crypto.randomUUID() : null;
   const statements = [
     db.prepare("DELETE FROM todo_action_history WHERE created_at < strftime('%Y-%m-%dT%H:%M:%fZ','now','-7 days')"),
     ...(undoToken
       ? [db.prepare("INSERT INTO todo_action_history (id, snapshot) VALUES (?, ?)")
-        .bind(undoToken, JSON.stringify({ todos: before } satisfies UndoSnapshot))]
+        .bind(undoToken, JSON.stringify({ todos: before, attachments: attachmentBefore } satisfies UndoSnapshot))]
+      : []),
+    ...(mode === "delete" && before.length
+      ? [db.prepare(`
+        UPDATE todo_attachments
+        SET deleted_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+        WHERE todo_id IN (${placeholders(before.length)}) AND deleted_at IS NULL
+      `).bind(...before.map((todo) => todo.id))]
       : []),
     mode === "reassign"
       ? db.prepare("UPDATE todos SET project = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE project = ?").bind(targetProject, name)
@@ -306,6 +358,7 @@ export async function deleteTodoProject(
     mode,
     targetProject,
     affected: before.length,
+    attachmentsAffected: attachmentBefore.length,
     undoAvailable: Boolean(undoToken),
   });
   return { project: name, mode, targetProject, affected: before.length, undoToken };
@@ -318,6 +371,8 @@ export async function createTodo(input: {
   dueDate?: string | null;
   project?: string | null;
   context?: string | null;
+  draftToken?: string;
+  attachmentIds?: string[];
 }): Promise<Todo> {
   await ensureTodoDatabase();
   const project = input.project?.trim() || null;
@@ -343,7 +398,15 @@ export async function createTodo(input: {
     )
     .first<TodoRow>();
   if (!row) throw new Error("The task could not be created.");
-  return mapTodo(row);
+  try {
+    const attachmentCount = await claimDraftAttachments(row.id, input.draftToken, input.attachmentIds);
+    console.info("[todo-db] task created", { id: row.id, attachmentCount });
+    return mapTodo({ ...row, attachment_count: attachmentCount });
+  } catch (error) {
+    await db.prepare("DELETE FROM todos WHERE id = ?").bind(row.id).run();
+    console.error("[todo-db] task attachment claim failed; task rolled back", { id: row.id, error });
+    throw error;
+  }
 }
 
 export async function updateTodo(id: number, update: TodoUpdate): Promise<{ todo: Todo; undoToken: string | null } | null> {
@@ -401,7 +464,12 @@ export async function updateTodo(id: number, update: TodoUpdate): Promise<{ todo
 
 export async function getTodo(id: number): Promise<Todo | null> {
   await ensureTodoDatabase();
-  const row = await database().prepare("SELECT * FROM todos WHERE id = ?").bind(id).first<TodoRow>();
+  const row = await database().prepare(`
+    SELECT todos.*,
+      (SELECT COUNT(*) FROM todo_attachments
+       WHERE todo_attachments.todo_id = todos.id AND todo_attachments.deleted_at IS NULL) AS attachment_count
+    FROM todos WHERE todos.id = ?
+  `).bind(id).first<TodoRow>();
   return row ? mapTodo(row) : null;
 }
 
@@ -510,6 +578,7 @@ export async function bulkUpdateTodos(
   const before = ids.map((id) => beforeById.get(id)).filter((row): row is TodoRow => Boolean(row));
   if (!before.length) throw new Error("The selected tasks no longer exist.");
   const undoToken = crypto.randomUUID();
+  const attachmentBefore = action === "delete" ? await attachmentSnapshotsForTodos(ids) : [];
   const project = typeof options.project === "string" ? options.project.trim() || null : null;
   if (project && project.length > 120) throw new Error("Project names are limited to 120 characters.");
   let sql: string;
@@ -533,19 +602,29 @@ export async function bulkUpdateTodos(
   const statements = [
     db.prepare("DELETE FROM todo_action_history WHERE created_at < strftime('%Y-%m-%dT%H:%M:%fZ','now','-7 days')"),
     db.prepare("INSERT INTO todo_action_history (id, snapshot) VALUES (?, ?)")
-      .bind(undoToken, JSON.stringify({ todos: before } satisfies UndoSnapshot)),
+      .bind(undoToken, JSON.stringify({ todos: before, attachments: attachmentBefore } satisfies UndoSnapshot)),
     ...(project && action === "reproject"
       ? [db.prepare("INSERT OR IGNORE INTO todo_projects (name) VALUES (?)").bind(project)]
       : []),
+    ...(action === "delete" ? [db.prepare(`
+      UPDATE todo_attachments
+      SET deleted_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+      WHERE todo_id IN (${inClause}) AND deleted_at IS NULL
+    `).bind(...ids)] : []),
     db.prepare(sql).bind(...values),
   ];
   const results = await db.batch(statements);
   const result = results.at(-1)!;
   if (action === "delete") {
-    console.info("[todo-db] bulk delete", { requested: ids.length, changed: result.meta.changes, undoToken });
+    console.info("[todo-db] bulk delete", { requested: ids.length, changed: result.meta.changes, attachments: attachmentBefore.length, undoToken });
     return { ids, todos: [], snoozedUntil: null, undoToken };
   }
-  const updated = await db.prepare(`SELECT * FROM todos WHERE id IN (${inClause})`).bind(...ids).all<TodoRow>();
+  const updated = await db.prepare(`
+    SELECT todos.*,
+      (SELECT COUNT(*) FROM todo_attachments
+       WHERE todo_attachments.todo_id = todos.id AND todo_attachments.deleted_at IS NULL) AS attachment_count
+    FROM todos WHERE todos.id IN (${inClause})
+  `).bind(...ids).all<TodoRow>();
   const todos = updated.results.map(mapTodo);
   console.info("[todo-db] bulk action", {
     action,
@@ -568,6 +647,7 @@ export async function mergeTodos(inputIds: number[]) {
   const byId = new Map(result.results.map((row) => [row.id, row]));
   const rows = ids.map((id) => byId.get(id)).filter((row): row is TodoRow => Boolean(row));
   if (rows.length < 2) throw new Error("At least two selected tasks must still exist.");
+  const attachmentBefore = await attachmentSnapshotsForTodos(ids);
 
   const shared = (field: "project" | "context") => {
     const first = rows[0][field];
@@ -586,11 +666,7 @@ export async function mergeTodos(inputIds: number[]) {
     ]),
   ].join("\n").trim();
 
-  const results = await db.batch([
-    db.prepare("DELETE FROM todo_action_history WHERE created_at < strftime('%Y-%m-%dT%H:%M:%fZ','now','-7 days')"),
-    db.prepare("INSERT INTO todo_action_history (id, snapshot) VALUES (?, ?)")
-      .bind(undoToken, JSON.stringify({ todos: rows, createdSourceKind } satisfies UndoSnapshot)),
-    db.prepare(`
+  const inserted = await db.prepare(`
       INSERT INTO todos (title, notes, status, priority, due_date, project, context, source_kind)
       VALUES (?, ?, 'open', ?, ?, ?, ?, ?)
       RETURNING *
@@ -602,13 +678,33 @@ export async function mergeTodos(inputIds: number[]) {
       shared("project"),
       shared("context"),
       createdSourceKind,
-    ),
-    db.prepare(`DELETE FROM todos WHERE id IN (${inClause})`).bind(...ids),
-  ]);
-  const inserted = (results[2].results as TodoRow[])[0];
+    ).first<TodoRow>();
   if (!inserted) throw new Error("The merged task could not be created.");
-  console.info("[todo-db] merged", { sourceIds: ids, mergedId: inserted.id, sourceCount: rows.length, undoToken });
-  return { todo: mapTodo(inserted), ids, undoToken };
+  try {
+    await db.batch([
+      db.prepare("DELETE FROM todo_action_history WHERE created_at < strftime('%Y-%m-%dT%H:%M:%fZ','now','-7 days')"),
+      db.prepare("INSERT INTO todo_action_history (id, snapshot) VALUES (?, ?)")
+        .bind(undoToken, JSON.stringify({ todos: rows, attachments: attachmentBefore, createdSourceKind } satisfies UndoSnapshot)),
+      ...attachmentBefore.map((attachment, sortOrder) => db.prepare(`
+        UPDATE todo_attachments
+        SET todo_id = ?, sort_order = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+        WHERE id = ? AND deleted_at IS NULL
+      `).bind(inserted.id, sortOrder, attachment.id)),
+      db.prepare(`DELETE FROM todos WHERE id IN (${inClause})`).bind(...ids),
+    ]);
+  } catch (error) {
+    await db.prepare("DELETE FROM todos WHERE id = ?").bind(inserted.id).run();
+    console.error("[todo-db] merge failed after insert", { sourceIds: ids, mergedId: inserted.id, error });
+    throw error;
+  }
+  console.info("[todo-db] merged", {
+    sourceIds: ids,
+    mergedId: inserted.id,
+    sourceCount: rows.length,
+    attachmentsMoved: attachmentBefore.length,
+    undoToken,
+  });
+  return { todo: mapTodo({ ...inserted, attachment_count: attachmentBefore.length }), ids, undoToken };
 }
 
 export async function undoTodoAction(undoToken: string) {
@@ -616,13 +712,14 @@ export async function undoTodoAction(undoToken: string) {
   if (!/^[0-9a-f-]{36}$/i.test(undoToken)) throw new Error("That undo action is invalid.");
   const db = database();
   const history = await db
-    .prepare("SELECT snapshot FROM todo_action_history WHERE id = ?")
+    .prepare("SELECT snapshot FROM todo_action_history WHERE id = ? AND created_at > strftime('%Y-%m-%dT%H:%M:%fZ','now','-7 days')")
     .bind(undoToken)
     .first<{ snapshot: string }>();
   if (!history) throw new Error("That undo action has expired or was already used.");
 
   const snapshot = JSON.parse(history.snapshot) as UndoSnapshot;
-  if (!Array.isArray(snapshot.todos) || !snapshot.todos.length || snapshot.todos.length > 200) {
+  const attachmentSnapshot = Array.isArray(snapshot.attachments) ? snapshot.attachments : [];
+  if (!Array.isArray(snapshot.todos) || snapshot.todos.length > 200 || attachmentSnapshot.length > 2_400 || (!snapshot.todos.length && !attachmentSnapshot.length)) {
     throw new Error("That undo action could not be restored safely.");
   }
   const restore = db.prepare(`
@@ -650,7 +747,14 @@ export async function undoTodoAction(undoToken: string) {
     : row);
   const statements = [
     ...(snapshot.createdSourceKind
-      ? [db.prepare("DELETE FROM todos WHERE source_kind = ?").bind(snapshot.createdSourceKind)]
+      ? [
+        db.prepare(`
+          UPDATE todo_attachments
+          SET deleted_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+          WHERE todo_id IN (SELECT id FROM todos WHERE source_kind = ?) AND deleted_at IS NULL
+        `).bind(snapshot.createdSourceKind),
+        db.prepare("DELETE FROM todos WHERE source_kind = ?").bind(snapshot.createdSourceKind),
+      ]
       : []),
     ...[...new Set(normalizedTodos.map((row) => row.project).filter((project): project is string => Boolean(project?.trim())))]
       .map((project) => db.prepare("INSERT OR IGNORE INTO todo_projects (name) VALUES (?)").bind(project)),
@@ -670,6 +774,7 @@ export async function undoTodoAction(undoToken: string) {
       row.created_at,
       row.updated_at,
     )),
+    ...restoreAttachmentStatements(db, attachmentSnapshot),
     db.prepare("DELETE FROM todo_action_history WHERE id = ?").bind(undoToken),
   ];
   await db.batch(statements);
@@ -677,8 +782,9 @@ export async function undoTodoAction(undoToken: string) {
   console.info("[todo-db] action undone", {
     undoToken,
     restored: normalizedTodos.length,
+    restoredAttachments: attachmentSnapshot.length,
     removedCreatedTask: Boolean(snapshot.createdSourceKind),
     normalizedLegacyArchives: snapshot.todos.filter((row) => row.status === "archived").length,
   });
-  return { todos, restored: normalizedTodos.length };
+  return { todos, restored: normalizedTodos.length, restoredAttachments: attachmentSnapshot.length };
 }

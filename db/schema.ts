@@ -62,3 +62,35 @@ export const todoActionHistory = sqliteTable(
   },
   (table) => [index("todo_action_history_created_at_idx").on(table.createdAt)],
 );
+
+export const todoAttachments = sqliteTable(
+  "todo_attachments",
+  {
+    id: text("id").primaryKey(),
+    todoId: integer("todo_id"),
+    draftToken: text("draft_token"),
+    originalKey: text("original_key").notNull().unique(),
+    displayKey: text("display_key").notNull().unique(),
+    thumbnailKey: text("thumbnail_key").notNull().unique(),
+    fileName: text("file_name").notNull(),
+    mimeType: text("mime_type").notNull(),
+    byteSize: integer("byte_size").notNull(),
+    width: integer("width").notNull(),
+    height: integer("height").notNull(),
+    sortOrder: integer("sort_order").notNull().default(0),
+    expiresAt: text("expires_at"),
+    deletedAt: text("deleted_at"),
+    createdAt: text("created_at")
+      .notNull()
+      .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`),
+    updatedAt: text("updated_at")
+      .notNull()
+      .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`),
+  },
+  (table) => [
+    index("todo_attachments_todo_id_idx").on(table.todoId),
+    index("todo_attachments_draft_token_idx").on(table.draftToken),
+    index("todo_attachments_expires_at_idx").on(table.expiresAt),
+    index("todo_attachments_deleted_at_idx").on(table.deletedAt),
+  ],
+);

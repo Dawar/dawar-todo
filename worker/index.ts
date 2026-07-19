@@ -5,6 +5,11 @@ import handler from "vinext/server/app-router-entry";
 interface Env {
   ASSETS: Fetcher;
   DB: D1Database;
+  S3_ACCESS_KEY: string;
+  S3_ACCESS_KEY_ID: string;
+  S3_BUCKET: string;
+  S3_CDN_URL: string;
+  S3_ENDPOINT_URL: string;
   IMAGES: {
     input(stream: ReadableStream): {
       transform(options: Record<string, unknown>): {
