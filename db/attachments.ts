@@ -1,4 +1,3 @@
-import { AwsClient } from "aws4fetch";
 import { env, waitUntil } from "cloudflare:workers";
 
 export const MAX_ATTACHMENTS_PER_TASK = 12;
@@ -16,7 +15,7 @@ type RuntimeEnv = {
   S3_ENDPOINT_URL: string;
 };
 
-type StorageConfig = { bucket: string; endpoint: URL; client: AwsClient };
+type StorageConfig = { bucket: string; endpoint: URL; region: string };
 
 let cachedStorageConfig: StorageConfig | null = null;
 
@@ -90,13 +89,7 @@ function storageConfig() {
   cachedStorageConfig = {
     bucket: current.S3_BUCKET,
     endpoint: endpointUrl,
-    client: new AwsClient({
-      service: "s3",
-      region: endpointRegion,
-      retries: 2,
-      accessKeyId: current.S3_ACCESS_KEY_ID,
-      secretAccessKey: current.S3_ACCESS_KEY,
-    }),
+    region: endpointRegion,
   };
   console.info("[todo-attachments] private storage configured", { region: endpointRegion, virtualHosted: true });
   return cachedStorageConfig;
@@ -128,10 +121,9 @@ function storageUrl(key?: string, query?: Record<string, string>) {
 }
 
 async function signedStorageResponse(url: URL, init?: RequestInit) {
-  const signedUrl = new URL(url);
-  signedUrl.searchParams.set("X-Amz-Expires", "300");
-  const request = await storageConfig().client.sign(signedUrl, { ...init, aws: { signQuery: true } });
-  return fetch(request);
+  const method = init?.method ?? "GET";
+  const signedUrl = await signedQueryUrl(url, method, 300);
+  return fetch(signedUrl, { ...init, method });
 }
 
 async function storageFetch(url: URL, init?: RequestInit) {
@@ -161,11 +153,9 @@ async function deleteKeys(keys: string[]) {
 
 async function signedObjectUrl(key: string, downloadName?: string) {
   const url = storageUrl(key, {
-    "X-Amz-Expires": String(SIGNED_URL_SECONDS),
     ...(downloadName ? { "response-content-disposition": `attachment; filename*=UTF-8''${encodeURIComponent(downloadName)}` } : {}),
   });
-  const signed = await storageConfig().client.sign(url, { method: "GET", aws: { signQuery: true } });
-  return signed.url;
+  return signedQueryUrl(url, "GET", SIGNED_URL_SECONDS);
 }
 
 async function mapAttachment(row: AttachmentRow): Promise<TodoAttachment> {
@@ -238,13 +228,57 @@ function hex(value: ArrayBuffer) {
   return [...new Uint8Array(value)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+function awsEncode(value: string) {
+  return encodeURIComponent(value).replace(/[!'()*]/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`);
+}
+
+function signatureKey(date: string, region: string) {
+  return hmac(`AWS4${runtime().S3_ACCESS_KEY}`, date)
+    .then((dateKey) => hmac(dateKey, region))
+    .then((regionKey) => hmac(regionKey, "s3"))
+    .then((serviceKey) => hmac(serviceKey, "aws4_request"));
+}
+
+async function signedQueryUrl(input: URL, method: string, expires: number) {
+  const current = runtime();
+  const { region } = storageConfig();
+  const url = new URL(input);
+  const amzDate = new Date().toISOString().replace(/[:-]|\.\d{3}/g, "");
+  const date = amzDate.slice(0, 8);
+  const scope = `${date}/${region}/s3/aws4_request`;
+  url.searchParams.set("X-Amz-Algorithm", "AWS4-HMAC-SHA256");
+  url.searchParams.set("X-Amz-Credential", `${current.S3_ACCESS_KEY_ID}/${scope}`);
+  url.searchParams.set("X-Amz-Date", amzDate);
+  url.searchParams.set("X-Amz-Expires", String(expires));
+  url.searchParams.set("X-Amz-SignedHeaders", "host");
+  const canonicalPath = url.pathname.split("/").map((segment) => {
+    try { return awsEncode(decodeURIComponent(segment)); } catch { return awsEncode(segment); }
+  }).join("/");
+  const canonicalQuery = [...url.searchParams]
+    .map(([name, value]) => [awsEncode(name), awsEncode(value)] as const)
+    .sort(([nameA, valueA], [nameB, valueB]) => nameA < nameB ? -1 : nameA > nameB ? 1 : valueA < valueB ? -1 : valueA > valueB ? 1 : 0)
+    .map(([name, value]) => `${name}=${value}`)
+    .join("&");
+  const canonicalRequest = [
+    method.toUpperCase(),
+    canonicalPath,
+    canonicalQuery,
+    `host:${url.host}\n`,
+    "host",
+    "UNSIGNED-PAYLOAD",
+  ].join("\n");
+  const requestHash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonicalRequest));
+  const stringToSign = ["AWS4-HMAC-SHA256", amzDate, scope, hex(requestHash)].join("\n");
+  url.searchParams.set("X-Amz-Signature", hex(await hmac(await signatureKey(date, region), stringToSign)));
+  return url.toString().replaceAll("+", "%20");
+}
+
 async function signedPostTarget(key: string, contentType: string, maximumBytes: number) {
   const current = runtime();
-  const { bucket, endpoint, client } = storageConfig();
+  const { bucket, endpoint, region } = storageConfig();
   const now = new Date();
   const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, "");
   const date = amzDate.slice(0, 8);
-  const region = client.region ?? "us-east-1";
   const credential = `${current.S3_ACCESS_KEY_ID}/${date}/${region}/s3/aws4_request`;
   const fields = {
     key,
@@ -267,10 +301,7 @@ async function signedPostTarget(key: string, contentType: string, maximumBytes: 
       ["content-length-range", 1, maximumBytes],
     ],
   }));
-  const dateKey = await hmac(`AWS4${current.S3_ACCESS_KEY}`, date);
-  const regionKey = await hmac(dateKey, region);
-  const serviceKey = await hmac(regionKey, "s3");
-  const signingKey = await hmac(serviceKey, "aws4_request");
+  const signingKey = await signatureKey(date, region);
   return {
     url: new URL(`https://${bucket}.${endpoint.hostname}/`).toString(),
     fields: { ...fields, policy, "x-amz-signature": hex(await hmac(signingKey, policy)) },
@@ -441,13 +472,17 @@ export async function finalizeTodoAttachmentUpload(
   }
   const keys = [row.original_key, row.display_key, row.thumbnail_key];
   try {
-    const [originalHead, displayHead, thumbnailHead, originalBytes, displayBytes, thumbnailBytes] = await Promise.all([
-      storageFetch(storageUrl(row.original_key), { method: "HEAD" }),
-      storageFetch(storageUrl(row.display_key), { method: "HEAD" }),
-      storageFetch(storageUrl(row.thumbnail_key), { method: "HEAD" }),
+    // Read probes run first because Spaces returns a useful XML error body for GET,
+    // while a failing HEAD response is bodyless and much harder to diagnose.
+    const [originalBytes, displayBytes, thumbnailBytes] = await Promise.all([
       firstBytes(row.original_key),
       firstBytes(row.display_key),
       firstBytes(row.thumbnail_key),
+    ]);
+    const [originalHead, displayHead, thumbnailHead] = await Promise.all([
+      storageFetch(storageUrl(row.original_key), { method: "HEAD" }),
+      storageFetch(storageUrl(row.display_key), { method: "HEAD" }),
+      storageFetch(storageUrl(row.thumbnail_key), { method: "HEAD" }),
     ]);
     const originalSize = Number(originalHead.headers.get("content-length") ?? 0);
     const displaySize = Number(displayHead.headers.get("content-length") ?? 0);
