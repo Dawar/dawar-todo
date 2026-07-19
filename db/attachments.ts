@@ -131,7 +131,11 @@ function storageUrl(key?: string, query?: Record<string, string>) {
 
 async function signedStorageResponse(url: URL, init?: RequestInit) {
   const method = init?.method ?? "GET";
-  const signedUrl = await signedQueryUrl(url, method, 300);
+  const { bucket, endpoint } = storageConfig();
+  const serverUrl = new URL(url);
+  serverUrl.hostname = endpoint.hostname;
+  serverUrl.pathname = `/${encodeURIComponent(bucket)}${url.pathname}`;
+  const signedUrl = await signedQueryUrl(serverUrl, method, 300);
   return fetch(signedUrl, { ...init, method });
 }
 

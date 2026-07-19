@@ -35,6 +35,8 @@ test("stores private task images with optimized variants and recovery metadata",
   assert.match(attachments, /region: signingRegion/);
   assert.match(attachments, /url\.hostname = `\$\{bucket\}\.\$\{url\.hostname\}`/);
   assert.match(attachments, /signedQueryUrl/);
+  assert.match(attachments, /serverUrl\.hostname = endpoint\.hostname/);
+  assert.match(attachments, /serverUrl\.pathname = `\/\$\{encodeURIComponent\(bucket\)\}\$\{url\.pathname\}`/);
   assert.match(attachments, /canonicalRequest/);
   assert.match(attachments, /UNSIGNED-PAYLOAD/);
   assert.match(attachments, /signedPostTarget/);
@@ -43,7 +45,7 @@ test("stores private task images with optimized variants and recovery metadata",
   assert.match(attachments, /originalSize !== row\.byte_size/);
   assert.match(attachments, /storageFetch/);
   assert.match(attachments, /signedStorageResponse/);
-  assert.match(attachments, /signedQueryUrl\(url, method, 300\)/);
+  assert.match(attachments, /signedQueryUrl\(serverUrl, method, 300\)/);
   assert.match(attachments, /url\.searchParams\.set\("X-Amz-Expires", String\(expires\)\)/);
   assert.match(attachments, /storageResponseError/);
   assert.match(attachments, /prepareTodoAttachmentUpload/);
