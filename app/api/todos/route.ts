@@ -26,6 +26,7 @@ export async function POST(request: Request) {
       status?: unknown;
       draftToken?: string;
       attachmentIds?: string[];
+      clientId?: string;
     };
     const title = payload.title?.trim() ?? "";
     if (!title) return Response.json({ error: "A task title is required." }, { status: 400 });
@@ -47,6 +48,7 @@ export async function POST(request: Request) {
       context: payload.context?.trim() || null,
       draftToken: payload.draftToken,
       attachmentIds: Array.isArray(payload.attachmentIds) ? payload.attachmentIds.map(String) : undefined,
+      clientId: payload.clientId,
     });
     console.info("[todo-api] created", {
       id: todo.id,
@@ -55,11 +57,12 @@ export async function POST(request: Request) {
       priority: todo.priority,
       titleLength: title.length,
       attachmentCount: todo.attachmentCount,
+      clientId: todo.clientId,
     });
     return Response.json({ todo }, { status: 201 });
   } catch (error) {
     const message = error instanceof Error ? error.message : "The task could not be added.";
-    const inputError = /task|attached|image|limited|invalid|available|required/i.test(message);
+    const inputError = /task|attached|attachment|image|audio|video|media|limited|invalid|available|required/i.test(message);
     console.error("[todo-api] create failed", error);
     return Response.json({ error: message }, { status: inputError ? 400 : 500 });
   }

@@ -23,6 +23,7 @@ type TodoRow = {
   context: string | null;
   source_kind: string | null;
   source_id: number | null;
+  client_id: string | null;
   completed_at: string | null;
   snoozed_until: string | null;
   created_at: string;
@@ -47,6 +48,7 @@ export type Todo = {
   context: string | null;
   sourceKind: string | null;
   sourceId: number | null;
+  clientId: string | null;
   completedAt: string | null;
   snoozedUntil: string | null;
   createdAt: string;
@@ -82,6 +84,7 @@ function mapTodo(row: TodoRow): Todo {
     context: row.context,
     sourceKind: row.source_kind,
     sourceId: row.source_id,
+    clientId: row.client_id,
     completedAt: row.completed_at,
     snoozedUntil: row.snoozed_until,
     createdAt: row.created_at,
@@ -108,6 +111,7 @@ export async function ensureTodoDatabase() {
           context TEXT,
           source_kind TEXT,
           source_id INTEGER,
+          client_id TEXT,
           completed_at TEXT,
           snoozed_until TEXT,
           created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
@@ -153,6 +157,8 @@ export async function ensureTodoDatabase() {
           byte_size INTEGER NOT NULL,
           width INTEGER NOT NULL,
           height INTEGER NOT NULL,
+          kind TEXT NOT NULL DEFAULT 'image',
+          duration_ms INTEGER NOT NULL DEFAULT 0,
           upload_state TEXT NOT NULL DEFAULT 'ready',
           sort_order INTEGER NOT NULL DEFAULT 0,
           expires_at TEXT,
@@ -175,6 +181,20 @@ export async function ensureTodoDatabase() {
       await db.prepare("ALTER TABLE todo_attachments ADD COLUMN upload_state TEXT NOT NULL DEFAULT 'ready'").run();
       console.info("[todo-db] added attachment upload state compatibility column");
     }
+    if (!attachmentColumns.results.some((column) => column.name === "kind")) {
+      await db.prepare("ALTER TABLE todo_attachments ADD COLUMN kind TEXT NOT NULL DEFAULT 'image'").run();
+      console.info("[todo-db] added attachment kind compatibility column");
+    }
+    if (!attachmentColumns.results.some((column) => column.name === "duration_ms")) {
+      await db.prepare("ALTER TABLE todo_attachments ADD COLUMN duration_ms INTEGER NOT NULL DEFAULT 0").run();
+      console.info("[todo-db] added attachment duration compatibility column");
+    }
+    const todoColumns = await db.prepare("PRAGMA table_info(todos)").all<{ name: string }>();
+    if (!todoColumns.results.some((column) => column.name === "client_id")) {
+      await db.prepare("ALTER TABLE todos ADD COLUMN client_id TEXT").run();
+      console.info("[todo-db] added offline sync client id compatibility column");
+    }
+    await db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS todos_client_id_idx ON todos(client_id)").run();
     await db.batch([
       db.prepare("CREATE INDEX IF NOT EXISTS todo_attachments_todo_id_idx ON todo_attachments(todo_id)"),
       db.prepare("CREATE INDEX IF NOT EXISTS todo_attachments_draft_token_idx ON todo_attachments(draft_token)"),
@@ -381,18 +401,35 @@ export async function createTodo(input: {
   context?: string | null;
   draftToken?: string;
   attachmentIds?: string[];
+  clientId?: string;
 }): Promise<Todo> {
   await ensureTodoDatabase();
+  const clientId = input.clientId?.trim() || null;
+  if (clientId && !/^[0-9a-f-]{36}$/i.test(clientId)) throw new Error("That offline task identifier is invalid.");
   const project = input.project?.trim() || null;
   if (project?.length && project.length > 120) throw new Error("Project names are limited to 120 characters.");
   const db = database();
+  if (clientId) {
+    const existing = await db.prepare(`
+      SELECT todos.*,
+        (SELECT COUNT(*) FROM todo_attachments
+         WHERE todo_attachments.todo_id = todos.id
+           AND todo_attachments.upload_state = 'ready'
+           AND todo_attachments.deleted_at IS NULL) AS attachment_count
+      FROM todos WHERE client_id = ?
+    `).bind(clientId).first<TodoRow>();
+    if (existing) {
+      console.info("[todo-db] idempotent offline create replay resolved", { clientId, id: existing.id, attachmentCount: Number(existing.attachment_count ?? 0) });
+      return mapTodo(existing);
+    }
+  }
   if (project) {
     await db.prepare("INSERT OR IGNORE INTO todo_projects (name) VALUES (?)").bind(project).run();
   }
   const row = await db
     .prepare(`
-      INSERT INTO todos (title, notes, status, priority, due_date, project, context, source_kind)
-      VALUES (?, ?, ?, ?, ?, ?, ?, 'site')
+      ${clientId ? "INSERT OR IGNORE" : "INSERT"} INTO todos (title, notes, status, priority, due_date, project, context, source_kind, client_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 'site', ?)
       RETURNING *
     `)
     .bind(
@@ -403,12 +440,27 @@ export async function createTodo(input: {
       input.dueDate ?? null,
       project,
       input.context ?? null,
+      clientId,
     )
     .first<TodoRow>();
+  if (!row && clientId) {
+    const replay = await db.prepare(`
+      SELECT todos.*,
+        (SELECT COUNT(*) FROM todo_attachments
+         WHERE todo_attachments.todo_id = todos.id
+           AND todo_attachments.upload_state = 'ready'
+           AND todo_attachments.deleted_at IS NULL) AS attachment_count
+      FROM todos WHERE client_id = ?
+    `).bind(clientId).first<TodoRow>();
+    if (replay) {
+      console.info("[todo-db] concurrent offline create replay resolved", { clientId, id: replay.id, attachmentCount: Number(replay.attachment_count ?? 0) });
+      return mapTodo(replay);
+    }
+  }
   if (!row) throw new Error("The task could not be created.");
   try {
     const attachmentCount = await claimDraftAttachments(row.id, input.draftToken, input.attachmentIds);
-    console.info("[todo-db] task created", { id: row.id, attachmentCount });
+    console.info("[todo-db] task created", { id: row.id, clientId, attachmentCount });
     return mapTodo({ ...row, attachment_count: attachmentCount });
   } catch (error) {
     await db.prepare("DELETE FROM todos WHERE id = ?").bind(row.id).run();
@@ -737,8 +789,8 @@ export async function undoTodoAction(undoToken: string) {
   const restore = db.prepare(`
     INSERT INTO todos (
       id, title, notes, status, priority, due_date, project, context,
-      source_kind, source_id, completed_at, snoozed_until, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      source_kind, source_id, client_id, completed_at, snoozed_until, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       title = excluded.title,
       notes = excluded.notes,
@@ -749,6 +801,7 @@ export async function undoTodoAction(undoToken: string) {
       context = excluded.context,
       source_kind = excluded.source_kind,
       source_id = excluded.source_id,
+      client_id = excluded.client_id,
       completed_at = excluded.completed_at,
       snoozed_until = excluded.snoozed_until,
       created_at = excluded.created_at,
@@ -781,6 +834,7 @@ export async function undoTodoAction(undoToken: string) {
       row.context,
       row.source_kind,
       row.source_id,
+      row.client_id ?? null,
       row.completed_at,
       row.snoozed_until,
       row.created_at,

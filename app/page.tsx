@@ -13,6 +13,16 @@ import {
 } from "react";
 import { ActionIcon, type ActionIconName } from "./action-icon";
 import { SiteHeader } from "./site-header";
+import {
+  deleteOfflineTodo,
+  loadCachedServerState,
+  listOfflineTodos,
+  persistOfflineStorage,
+  saveOfflineTodo,
+  saveCachedServerState,
+  type OfflineAttachmentKind,
+  type OfflineTodoRecord,
+} from "./offline-store";
 
 type TodoStatus = "open" | "completed";
 type View = "open" | "snoozed" | "all" | "projects";
@@ -38,6 +48,8 @@ type Todo = {
   createdAt: string;
   updatedAt: string;
   attachmentCount: number;
+  clientId: string | null;
+  offline?: boolean;
 };
 
 type TodoAttachment = {
@@ -48,10 +60,14 @@ type TodoAttachment = {
   byteSize: number;
   width: number;
   height: number;
+  kind: OfflineAttachmentKind;
+  durationMs: number;
   sortOrder: number;
   thumbnailUrl: string;
   displayUrl: string;
   originalUrl: string;
+  audioUrl: string;
+  videoUrl: string;
   createdAt: string;
 };
 
@@ -59,7 +75,9 @@ type PendingAttachment = {
   localId: string;
   file: File;
   previewUrl: string;
-  status: "uploading" | "ready" | "error";
+  kind: OfflineAttachmentKind;
+  durationMs: number;
+  status: "uploading" | "ready" | "error" | "offline";
   attachment: TodoAttachment | null;
   error: string;
 };
@@ -113,8 +131,14 @@ function request<T>(path: string, options?: RequestInit): Promise<T> {
 }
 
 const IMAGE_ACCEPT = "image/jpeg,image/png,image/webp,image/gif,image/heic,image/heif,.heic,.heif";
+const VIDEO_ACCEPT = "video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm";
+const MEDIA_ACCEPT = `${IMAGE_ACCEPT},${VIDEO_ACCEPT}`;
 const MAX_ATTACHMENTS = 12;
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
+const MAX_AUDIO_BYTES = 50 * 1024 * 1024;
+const MAX_VIDEO_BYTES = 250 * 1024 * 1024;
+const MAX_AUDIO_DURATION_MS = 30 * 60 * 1000;
+const MAX_VIDEO_DURATION_MS = 60 * 60 * 1000;
 const MAX_IMAGE_PIXELS = 100_000_000;
 
 type PreparedAttachmentUpload = {
@@ -124,6 +148,11 @@ type PreparedAttachmentUpload = {
     display: PrivatePostTarget;
     thumbnail: PrivatePostTarget;
   };
+};
+
+type PreparedMediaUpload = {
+  uploadId: string;
+  uploads: { original: PrivatePostTarget };
 };
 
 type PrivatePostTarget = { url: string; fields: Record<string, string> };
@@ -243,7 +272,82 @@ async function postPrivateVariant(target: PrivatePostTarget, body: Blob) {
   Object.entries(target.fields).forEach(([name, value]) => form.append(name, value));
   form.append("file", body, "upload");
   const response = await fetch(target.url, { method: "POST", mode: "no-cors", body: form });
-  if (response.type !== "opaque" && !response.ok) throw new Error(`Image storage rejected an upload (${response.status}).`);
+  if (response.type !== "opaque" && !response.ok) throw new Error(`Private storage rejected an upload (${response.status}).`);
+}
+
+function normalizedMediaMimeType(file: File, kind: "audio" | "video") {
+  const supplied = file.type.toLowerCase().split(";", 1)[0].trim();
+  const extension = file.name.toLowerCase().match(/\.([a-z0-9]+)$/)?.[1];
+  if (kind === "audio") {
+    if (supplied === "audio/x-wav") return "audio/wav";
+    if (["audio/mp4", "audio/webm", "audio/ogg", "audio/mpeg", "audio/wav"].includes(supplied)) return supplied;
+    if (extension === "m4a") return "audio/mp4";
+    if (extension === "mp3") return "audio/mpeg";
+    if (extension && ["webm", "ogg", "wav"].includes(extension)) return `audio/${extension}`;
+    throw new Error("Voice memos must be MP4, WebM, Ogg, MP3, or WAV audio.");
+  }
+  if (["video/mp4", "video/quicktime", "video/webm"].includes(supplied)) return supplied;
+  if (extension === "mov") return "video/quicktime";
+  if (extension && ["mp4", "webm"].includes(extension)) return `video/${extension}`;
+  throw new Error("Videos must be MP4, MOV, or WebM files.");
+}
+
+function mediaDuration(file: File, kind: "audio" | "video") {
+  return new Promise<number>((resolve, reject) => {
+    const media = document.createElement(kind);
+    const objectUrl = URL.createObjectURL(file);
+    const cleanup = () => {
+      media.removeAttribute("src");
+      media.load();
+      URL.revokeObjectURL(objectUrl);
+    };
+    const finish = () => {
+      const durationMs = Math.round(media.duration * 1000);
+      cleanup();
+      if (!Number.isFinite(durationMs) || durationMs < 1) reject(new Error(`This ${kind} file's duration could not be read.`));
+      else resolve(durationMs);
+    };
+    media.preload = "metadata";
+    media.onloadedmetadata = finish;
+    media.onerror = () => {
+      cleanup();
+      reject(new Error(`This ${kind} file cannot be read on this device.`));
+    };
+    media.src = objectUrl;
+  });
+}
+
+async function uploadPrivateMedia(
+  file: File,
+  kind: "audio" | "video",
+  durationMs: number,
+  endpoint: string,
+  target: Record<string, string>,
+  discard: (uploadId: string) => Promise<unknown>,
+) {
+  const mimeType = normalizedMediaMimeType(file, kind);
+  const prepared = await request<PreparedMediaUpload>(endpoint, {
+    method: "POST",
+    body: JSON.stringify({
+      ...target,
+      kind,
+      fileName: file.name || (kind === "audio" ? "Voice memo" : "Video"),
+      mimeType,
+      byteSize: file.size,
+    }),
+  });
+  try {
+    await postPrivateVariant(prepared.uploads.original, file);
+    return await request<{ attachment: TodoAttachment }>(endpoint, {
+      method: "PATCH",
+      body: JSON.stringify({ ...target, kind, uploadId: prepared.uploadId, durationMs }),
+    });
+  } catch (error) {
+    await discard(prepared.uploadId).catch((discardError) => {
+      console.error("[todo-ui] incomplete media cleanup failed", { uploadId: prepared.uploadId, kind, discardError });
+    });
+    throw error;
+  }
 }
 
 async function uploadPrivateImage(
@@ -289,11 +393,13 @@ async function uploadPrivateImage(
 function AttachmentPicker({
   disabled,
   onFiles,
+  onRecord,
   label,
   showLabel = false,
 }: {
   disabled?: boolean;
   onFiles: (files: File[]) => void;
+  onRecord: () => void;
   label: string;
   showLabel?: boolean;
 }) {
@@ -331,25 +437,31 @@ function AttachmentPicker({
           showLabel ? "px-3 text-sm font-semibold" : "w-10",
         )}
       >
-        <ActionIcon name={showLabel ? "image" : "add"} className="h-5 w-5" />
-        {showLabel && <span>Add images</span>}
+        <ActionIcon name={showLabel ? "attachment" : "add"} className="h-5 w-5" />
+        {showLabel && <span>Add attachment</span>}
       </button>
 
       {open && (
         <>
-          <button type="button" aria-label="Close image menu" onClick={() => setOpen(false)} className="fixed inset-0 z-[65] hidden cursor-default sm:block" />
-          <div role="menu" className="absolute left-0 top-full z-[70] mt-2 hidden w-48 rounded-xl border border-black/[0.08] bg-white p-1.5 shadow-xl sm:block">
+          <button type="button" aria-label="Close attachment menu" onClick={() => setOpen(false)} className="fixed inset-0 z-[65] hidden cursor-default sm:block" />
+          <div role="menu" className="absolute left-0 top-full z-[70] mt-2 hidden w-56 rounded-xl border border-black/[0.08] bg-white p-1.5 shadow-xl sm:block">
             <button type="button" role="menuitem" onClick={() => libraryRef.current?.click()} className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left text-sm font-semibold text-[#303632] hover:bg-[#f2f5f2]">
-              <ActionIcon name="image" />Choose images
+              <ActionIcon name="image" />Choose photos or videos
+            </button>
+            <button type="button" role="menuitem" onClick={() => { setOpen(false); onRecord(); }} className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left text-sm font-semibold text-[#303632] hover:bg-[#f2f5f2]">
+              <ActionIcon name="mic" />Record voice memo
             </button>
           </div>
 
           <div className="fixed inset-0 z-[70] flex items-end sm:hidden">
-            <button type="button" aria-label="Close image menu" onClick={() => setOpen(false)} className="absolute inset-0 bg-black/35" />
+            <button type="button" aria-label="Close attachment menu" onClick={() => setOpen(false)} className="absolute inset-0 bg-black/35" />
             <div role="menu" className="relative w-full rounded-t-3xl bg-white px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-4 shadow-2xl">
-              <p className="mb-3 px-1 text-sm font-semibold text-[#303632]">Attach an image</p>
+              <p className="mb-3 px-1 text-sm font-semibold text-[#303632]">Add an attachment</p>
               <button type="button" role="menuitem" onClick={() => libraryRef.current?.click()} className="flex h-12 w-full items-center gap-3 rounded-xl px-3 text-left text-[16px] font-semibold text-[#303632] hover:bg-[#f2f5f2]">
-                <ActionIcon name="image" className="h-5 w-5 text-[#216e4e]" />Choose photos
+                <ActionIcon name="image" className="h-5 w-5 text-[#216e4e]" />Choose photos or videos
+              </button>
+              <button type="button" role="menuitem" onClick={() => { setOpen(false); onRecord(); }} className="flex h-12 w-full items-center gap-3 rounded-xl px-3 text-left text-[16px] font-semibold text-[#303632] hover:bg-[#f2f5f2]">
+                <ActionIcon name="mic" className="h-5 w-5 text-[#216e4e]" />Record voice memo
               </button>
               <button type="button" onClick={() => setOpen(false)} className="mt-2 h-12 w-full rounded-xl bg-[#f1f2f0] text-[16px] font-semibold text-[#59615c]">Cancel</button>
             </div>
@@ -357,7 +469,132 @@ function AttachmentPicker({
         </>
       )}
 
-      <input ref={libraryRef} type="file" accept={IMAGE_ACCEPT} multiple className="sr-only" tabIndex={-1} onChange={(event) => selected(event.currentTarget)} />
+      <input ref={libraryRef} type="file" accept={MEDIA_ACCEPT} multiple className="sr-only" tabIndex={-1} onChange={(event) => selected(event.currentTarget)} />
+    </div>
+  );
+}
+
+function formatDuration(durationMs: number) {
+  const totalSeconds = Math.max(0, Math.round(durationMs / 1000));
+  return `${Math.floor(totalSeconds / 60)}:${String(totalSeconds % 60).padStart(2, "0")}`;
+}
+
+function VoiceMemoRecorder({ onClose, onAttach }: { onClose: () => void; onAttach: (file: File, durationMs: number) => void }) {
+  const [phase, setPhase] = useState<"idle" | "recording" | "review">("idle");
+  const [elapsed, setElapsed] = useState(0);
+  const [error, setError] = useState("");
+  const [recording, setRecording] = useState<{ file: File; url: string; durationMs: number } | null>(null);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const startedAtRef = useRef(0);
+  const cancelledRef = useRef(false);
+  const recordingUrlRef = useRef<string | null>(null);
+
+  function releaseStream() {
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+    streamRef.current = null;
+  }
+
+  useEffect(() => {
+    if (phase !== "recording") return;
+    const timer = window.setInterval(() => setElapsed(Date.now() - startedAtRef.current), 250);
+    return () => window.clearInterval(timer);
+  }, [phase]);
+
+  useEffect(() => () => {
+    cancelledRef.current = true;
+    if (recorderRef.current?.state === "recording") recorderRef.current.stop();
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+    if (recordingUrlRef.current) URL.revokeObjectURL(recordingUrlRef.current);
+  }, []);
+
+  async function start() {
+    setError("");
+    if (!("MediaRecorder" in window) || !navigator.mediaDevices?.getUserMedia) {
+      setError("Voice recording is not supported by this browser.");
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+      const candidates = ["audio/mp4", "audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus"];
+      const mimeType = candidates.find((candidate) => MediaRecorder.isTypeSupported(candidate));
+      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+      chunksRef.current = [];
+      streamRef.current = stream;
+      recorderRef.current = recorder;
+      recorder.ondataavailable = (event) => { if (event.data.size) chunksRef.current.push(event.data); };
+      recorder.onstop = () => {
+        if (cancelledRef.current) {
+          releaseStream();
+          return;
+        }
+        const durationMs = Math.max(1, Date.now() - startedAtRef.current);
+        const recordedType = recorder.mimeType.split(";", 1)[0] || "audio/webm";
+        const extension = recordedType === "audio/mp4" ? "m4a" : recordedType === "audio/ogg" ? "ogg" : "webm";
+        const blob = new Blob(chunksRef.current, { type: recordedType });
+        const file = new File([blob], `Voice memo ${new Date().toISOString().replace(/[:.]/g, "-")}.${extension}`, { type: recordedType });
+        const url = URL.createObjectURL(file);
+        recordingUrlRef.current = url;
+        setRecording({ file, url, durationMs });
+        setElapsed(durationMs);
+        setPhase("review");
+        releaseStream();
+        console.info("[todo-ui] voice memo recorded", { bytes: file.size, mimeType: recordedType, durationMs });
+      };
+      recorder.start(1000);
+      startedAtRef.current = Date.now();
+      setElapsed(0);
+      setPhase("recording");
+      console.info("[todo-ui] voice recording started", { mimeType: recorder.mimeType });
+    } catch (cause) {
+      releaseStream();
+      setError(cause instanceof DOMException && cause.name === "NotAllowedError" ? "Microphone access was not allowed." : "The microphone could not be started.");
+      console.error("[todo-ui] voice recording start failed", cause);
+    }
+  }
+
+  function stop() {
+    if (recorderRef.current?.state === "recording") recorderRef.current.stop();
+  }
+
+  function rerecord() {
+    if (recording) URL.revokeObjectURL(recording.url);
+    recordingUrlRef.current = null;
+    setRecording(null);
+    setElapsed(0);
+    setPhase("idle");
+    void start();
+  }
+
+  return (
+    <div className="fixed inset-0 z-[90] flex items-end justify-center sm:items-center sm:p-5" role="dialog" aria-modal="true" aria-labelledby="voice-recorder-title">
+      <button type="button" onClick={onClose} aria-label="Close voice recorder" className="absolute inset-0 bg-black/40 backdrop-blur-[2px]" />
+      <div className="relative w-full rounded-t-3xl bg-white p-5 shadow-2xl sm:max-w-md sm:rounded-3xl sm:p-6">
+        <div className="flex items-center justify-between">
+          <h3 id="voice-recorder-title" className="text-lg font-semibold text-[#202522]">Voice memo</h3>
+          <button type="button" onClick={onClose} className="grid h-9 w-9 place-items-center rounded-full bg-[#f1f2f0] text-[#4f5752]" aria-label="Close"><ActionIcon name="close" /></button>
+        </div>
+        <div className="my-7 text-center">
+          <div className={classNames("mx-auto mb-4 grid h-20 w-20 place-items-center rounded-full", phase === "recording" ? "animate-pulse bg-red-100 text-red-700" : "bg-[#eaf3ed] text-[#216e4e]")}>
+            <ActionIcon name={phase === "recording" ? "stop" : "mic"} className="h-9 w-9" />
+          </div>
+          <p className="font-mono text-3xl font-semibold tabular-nums text-[#202522]">{formatDuration(elapsed)}</p>
+          <p className="mt-2 text-sm text-[#7b837e]">{phase === "idle" ? "Ready when you are" : phase === "recording" ? "Recording…" : "Review before attaching"}</p>
+        </div>
+        {recording && <audio controls src={recording.url} className="mb-5 w-full" preload="metadata" />}
+        {error && <p role="alert" className="mb-4 rounded-xl bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
+        {phase === "idle" ? (
+          <button type="button" onClick={() => void start()} className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-[#216e4e] text-sm font-semibold text-white"><ActionIcon name="mic" />Start recording</button>
+        ) : phase === "recording" ? (
+          <button type="button" onClick={stop} className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-red-700 text-sm font-semibold text-white"><ActionIcon name="stop" />Finish recording</button>
+        ) : (
+          <div className="flex gap-2">
+            <button type="button" onClick={rerecord} className="h-12 flex-1 rounded-xl bg-[#f1f2f0] text-sm font-semibold text-[#59615c]">Re-record</button>
+            <button type="button" onClick={() => { if (recording) onAttach(recording.file, recording.durationMs); }} disabled={!recording || recording.file.size > MAX_AUDIO_BYTES || recording.durationMs > MAX_AUDIO_DURATION_MS} className="inline-flex h-12 flex-1 items-center justify-center gap-2 rounded-xl bg-[#216e4e] text-sm font-semibold text-white disabled:opacity-50"><ActionIcon name="attachment" />Attach</button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -416,6 +653,28 @@ function matchesView(todo: Todo, view: View, now: number) {
 
 function classNames(...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(" ");
+}
+
+function offlineRecordTodo(record: OfflineTodoRecord): Todo {
+  return {
+    id: record.localId,
+    clientId: record.clientId,
+    title: record.title,
+    notes: record.notes,
+    status: "open",
+    priority: 3,
+    dueDate: null,
+    project: null,
+    context: null,
+    sourceKind: "offline",
+    sourceId: null,
+    completedAt: null,
+    snoozedUntil: null,
+    createdAt: record.createdAt,
+    updatedAt: record.createdAt,
+    attachmentCount: record.attachments.length,
+    offline: true,
+  };
 }
 
 function todoActionIcon(action: TodoAction | "assign", label: string): ActionIconName {
@@ -562,7 +821,7 @@ function TaskRow({
           type="checkbox"
           checked={selected}
           onChange={() => onSelect(todo)}
-          disabled={pending}
+          disabled={pending || todo.offline}
           aria-label={`Select: ${todo.title}`}
           className={classNames("mt-0.5 h-5 w-5 shrink-0 cursor-pointer rounded border-[#9da6a0] accent-[#216e4e] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#216e4e]", pending && "animate-pulse")}
         />
@@ -581,20 +840,21 @@ function TaskRow({
         >
           <div className="flex min-w-0 items-start gap-2">
             <p className={classNames("min-w-0 flex-1 whitespace-pre-wrap text-[15px] leading-5 text-[#202522]", todo.status === "completed" && "text-[#8b928e] line-through")}>{todo.title}</p>
-            {todo.attachmentCount > 0 && <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-[#eef2ef] px-1.5 py-0.5 text-[10px] font-medium text-[#68716b]"><ActionIcon name="image" className="h-3 w-3" />{todo.attachmentCount}</span>}
+            {todo.attachmentCount > 0 && <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-[#eef2ef] px-1.5 py-0.5 text-[10px] font-medium text-[#68716b]"><ActionIcon name="attachment" className="h-3 w-3" />{todo.attachmentCount}</span>}
           </div>
           {todo.notes && <p className="mt-1 line-clamp-2 whitespace-pre-wrap text-xs leading-5 text-[#7c847f]">{todo.notes}</p>}
-          {(todo.project || todo.context || todo.dueDate || todo.priority <= 2 || snoozed) && (
+          {(todo.project || todo.context || todo.dueDate || todo.priority <= 2 || snoozed || todo.offline) && (
             <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-[#747c77]">
               {todo.priority <= 2 && <span className={classNames("rounded-full px-2 py-0.5 font-medium", todo.priority === 1 ? "bg-red-50 text-red-700" : "bg-amber-50 text-amber-700")}>{priorityLabels[todo.priority]}</span>}
               {todo.project && <span className="rounded-full bg-[#f0f2ef] px-2 py-0.5">{todo.project}</span>}
               {todo.context && <span>{todo.context}</span>}
               {todo.dueDate && <span className={classNames(isTodayOrOverdue(todo.dueDate) && todo.status === "open" && !snoozed && "font-medium text-red-600")}>{dueLabel(todo.dueDate)}</span>}
               {snoozed && todo.snoozedUntil && <span className="font-medium text-amber-700">{snoozeLabel(todo.snoozedUntil)}</span>}
+              {todo.offline && <span className="inline-flex items-center gap-1 font-medium text-amber-700"><ActionIcon name="retry" className="h-3 w-3" />Waiting to sync</span>}
             </div>
           )}
         </button>
-        {!pending && (
+        {!pending && !todo.offline && (
           <div className="hidden shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 md:flex">
             {hoverActions.map(({ action, label, icon }) => (
               <button
@@ -644,6 +904,9 @@ export default function Home() {
   const [savingEdit, setSavingEdit] = useState(false);
   const [detailAttachments, setDetailAttachments] = useState<TodoAttachment[]>([]);
   const [detailUploads, setDetailUploads] = useState<PendingAttachment[]>([]);
+  const [voiceTarget, setVoiceTarget] = useState<"capture" | "detail" | null>(null);
+  const [online, setOnline] = useState(true);
+  const [offlineCount, setOfflineCount] = useState(0);
   const [imageDropActive, setImageDropActive] = useState(false);
   const [loadingAttachments, setLoadingAttachments] = useState(false);
   const [attachmentError, setAttachmentError] = useState("");
@@ -664,16 +927,17 @@ export default function Home() {
   const searchRef = useRef<HTMLInputElement>(null);
   const viewerGesture = useRef<number | null>(null);
   const imageDropDepth = useRef(0);
-  const overlayOpen = editingId !== null || projectDialog !== null || newProjectOpen || projectDeleteDialog !== null || filtersOpen || viewerIndex !== null;
+  const syncingOfflineRef = useRef(false);
+  const overlayOpen = editingId !== null || projectDialog !== null || newProjectOpen || projectDeleteDialog !== null || filtersOpen || viewerIndex !== null || voiceTarget !== null;
 
-  const routeDroppedImages = useEffectEvent((files: File[]) => {
+  const routeDroppedAttachments = useEffectEvent((files: File[]) => {
     const destination = editingId !== null ? "task" : "quick-add";
-    if (editingId !== null) queueDetailImages(files);
+    if (editingId !== null) void queueDetailAttachments(files);
     else {
-      queueCaptureImages(files);
+      void queueCaptureAttachments(files);
       captureRef.current?.focus();
     }
-    console.info("[todo-ui] dropped images routed", {
+    console.info("[todo-ui] dropped attachments routed", {
       destination,
       count: files.length,
       totalBytes: files.reduce((sum, file) => sum + file.size, 0),
@@ -682,26 +946,80 @@ export default function Home() {
 
   useEffect(() => {
     let active = true;
-    Promise.all([
-      request<{ todos: Todo[] }>("/api/todos"),
-      request<{ projects: string[] }>("/api/projects"),
-    ])
-      .then(([{ todos: loaded }, { projects: loadedProjects }]) => {
-        if (!active) return;
-        setTodos(loaded);
-        setRegisteredProjects(loadedProjects);
-        console.info("[todo-ui] loaded", {
-          count: loaded.length,
-          projects: loadedProjects.length,
-          open: loaded.filter((todo) => todo.status === "open").length,
-          completed: loaded.filter((todo) => todo.status === "completed").length,
-          snoozed: loaded.filter((todo) => isSnoozed(todo, Date.now())).length,
-        });
-      })
+    const load = async () => {
+      const [offlineRecords, cachedState] = await Promise.all([
+        listOfflineTodos().catch((error) => {
+          console.error("[todo-offline] queue load failed", error);
+          return [];
+        }),
+        loadCachedServerState<Todo>().catch((error) => {
+          console.error("[todo-offline] cached state load failed", error);
+          return null;
+        }),
+      ]);
+      const server = await Promise.all([
+        request<{ todos: Todo[] }>("/api/todos"),
+        request<{ projects: string[] }>("/api/projects"),
+      ]).catch((error) => {
+        console.warn("[todo-ui] server load unavailable", { online: navigator.onLine, error });
+        return null;
+      });
+      if (!active) return;
+      const loaded = server?.[0].todos ?? cachedState?.todos ?? [];
+      const loadedProjects = server?.[1].projects ?? cachedState?.projects ?? [];
+      const serverClientIds = new Set(loaded.map((todo) => todo.clientId).filter(Boolean));
+      const pendingRecords = offlineRecords.filter((record) => !serverClientIds.has(record.clientId));
+      const alreadySynced = offlineRecords.filter((record) => serverClientIds.has(record.clientId));
+      await Promise.all(alreadySynced.map((record) => deleteOfflineTodo(record.clientId))).catch((error) => {
+        console.error("[todo-offline] reconciled queue cleanup failed", error);
+      });
+      if (!active) return;
+      setTodos([...pendingRecords.map(offlineRecordTodo), ...loaded]);
+      setOfflineCount(pendingRecords.length);
+      setRegisteredProjects(loadedProjects);
+      if (server) void saveCachedServerState(loaded, loadedProjects);
+      if (!server) setNotice({ tone: "success", text: pendingRecords.length ? "Offline — showing tasks waiting to sync." : "Offline — new tasks will sync when you reconnect." });
+      console.info("[todo-ui] loaded", {
+        count: loaded.length,
+        offlinePending: pendingRecords.length,
+        reconciled: alreadySynced.length,
+        projects: loadedProjects.length,
+        open: loaded.filter((todo) => todo.status === "open").length,
+        completed: loaded.filter((todo) => todo.status === "completed").length,
+        snoozed: loaded.filter((todo) => isSnoozed(todo, Date.now())).length,
+      });
+    };
+    void load()
       .catch((error: Error) => active && setNotice({ tone: "error", text: error.message }))
       .finally(() => active && setLoading(false));
+    void persistOfflineStorage();
     return () => { active = false; };
   }, []);
+
+  useEffect(() => {
+    if (online && offlineCount > 0) void syncOfflineQueue();
+  }, [online, offlineCount]);
+
+  useEffect(() => {
+    const updateConnection = () => {
+      const next = navigator.onLine;
+      setOnline(next);
+      console.info("[todo-offline] connection changed", { online: next });
+    };
+    updateConnection();
+    window.addEventListener("online", updateConnection);
+    window.addEventListener("offline", updateConnection);
+    return () => {
+      window.removeEventListener("online", updateConnection);
+      window.removeEventListener("offline", updateConnection);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!loading) void saveCachedServerState(todos.filter((todo) => !todo.offline), registeredProjects).catch((error) => {
+      console.error("[todo-offline] server snapshot update failed", error);
+    });
+  }, [loading, registeredProjects, todos]);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 60_000);
@@ -718,6 +1036,7 @@ export default function Home() {
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement;
       const typing = target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable;
+      const imageCount = detailAttachments.filter((attachment) => attachment.kind === "image").length;
       if (event.key === "/" && !typing) {
         event.preventDefault();
         searchRef.current?.focus();
@@ -726,12 +1045,14 @@ export default function Home() {
         event.preventDefault();
         captureRef.current?.focus();
       }
-      if (event.key === "Escape" && viewerIndex !== null) {
+      if (event.key === "Escape" && voiceTarget !== null) {
+        setVoiceTarget(null);
+      } else if (event.key === "Escape" && viewerIndex !== null) {
         setViewerIndex(null);
-      } else if (event.key === "ArrowLeft" && viewerIndex !== null && detailAttachments.length > 1) {
-        setViewerIndex((current) => current === null ? null : (current - 1 + detailAttachments.length) % detailAttachments.length);
-      } else if (event.key === "ArrowRight" && viewerIndex !== null && detailAttachments.length > 1) {
-        setViewerIndex((current) => current === null ? null : (current + 1) % detailAttachments.length);
+      } else if (event.key === "ArrowLeft" && viewerIndex !== null && imageCount > 1) {
+        setViewerIndex((current) => current === null ? null : (current - 1 + imageCount) % imageCount);
+      } else if (event.key === "ArrowRight" && viewerIndex !== null && imageCount > 1) {
+        setViewerIndex((current) => current === null ? null : (current + 1) % imageCount);
       } else if (event.key === "Escape" && projectDeleteDialog !== null) {
         setProjectDeleteDialog(null);
         setProjectDeleteError("");
@@ -754,7 +1075,7 @@ export default function Home() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [detailAttachments.length, editingId, filtersOpen, newProjectOpen, projectDeleteDialog, projectDialog, viewerIndex]);
+  }, [detailAttachments, editingId, filtersOpen, newProjectOpen, projectDeleteDialog, projectDialog, viewerIndex, voiceTarget]);
 
   useEffect(() => {
     if (!overlayOpen) return;
@@ -798,7 +1119,7 @@ export default function Home() {
       const files = [...(event.dataTransfer?.files ?? [])];
       resetDrag();
       if (!files.length) return;
-      routeDroppedImages(files);
+      routeDroppedAttachments(files);
     };
     window.addEventListener("dragenter", dragEnter);
     window.addEventListener("dragover", dragOver);
@@ -871,7 +1192,8 @@ export default function Home() {
   const filtersActive = Boolean(query || (projectFilterApplies && project) || priority || sort !== "smart");
   const mobileFilterCount = Number(Boolean(project) && projectFilterApplies) + Number(Boolean(priority)) + Number(sort !== "smart");
   const editingTodo = editingId === null ? null : todos.find((todo) => todo.id === editingId) ?? null;
-  const viewerAttachment = viewerIndex === null ? null : detailAttachments[viewerIndex] ?? null;
+  const imageAttachments = detailAttachments.filter((attachment) => attachment.kind === "image");
+  const viewerAttachment = viewerIndex === null ? null : imageAttachments[viewerIndex] ?? null;
 
   function resizeCapture(textarea: HTMLTextAreaElement) {
     textarea.style.height = "auto";
@@ -886,72 +1208,138 @@ export default function Home() {
       .filter((file): file is File => Boolean(file));
   }
 
-  function validateSelectedImages(files: File[], existingCount: number) {
+  function selectedAttachmentKind(file: File): "image" | "video" | null {
+    if (uploadMimeType(file)) return "image";
+    try {
+      normalizedMediaMimeType(file, "video");
+      return "video";
+    } catch {
+      return null;
+    }
+  }
+
+  function validateSelectedAttachments(files: File[], existingCount: number) {
     const slots = Math.max(0, MAX_ATTACHMENTS - existingCount);
     if (!slots) {
-      setNotice({ tone: "error", text: `Tasks are limited to ${MAX_ATTACHMENTS} images.` });
+      setNotice({ tone: "error", text: `Tasks are limited to ${MAX_ATTACHMENTS} attachments.` });
       return [];
     }
     const accepted = files.slice(0, slots).filter((file) => {
-      if (file.size > MAX_IMAGE_BYTES) {
-        setNotice({ tone: "error", text: `${file.name || "An image"} is larger than 20 MB.` });
+      const kind = selectedAttachmentKind(file);
+      if (!kind) {
+        setNotice({ tone: "error", text: "Choose a supported photo or video." });
         return false;
       }
-      if (!uploadMimeType(file)) {
-        setNotice({ tone: "error", text: "Choose JPEG, PNG, WebP, GIF, HEIC, or HEIF images." });
+      const maximumBytes = kind === "image" ? MAX_IMAGE_BYTES : MAX_VIDEO_BYTES;
+      if (file.size > maximumBytes) {
+        setNotice({ tone: "error", text: `${file.name || `A ${kind}`} is larger than ${kind === "image" ? "20 MB" : "250 MB"}.` });
         return false;
       }
       return true;
     });
-    if (files.length > slots) setNotice({ tone: "error", text: `Only ${MAX_ATTACHMENTS} images can be attached to a task.` });
+    if (files.length > slots) setNotice({ tone: "error", text: `Only ${MAX_ATTACHMENTS} attachments can be added to a task.` });
     return accepted;
   }
 
-  async function uploadCaptureAttachment(localId: string, file: File, draftToken: string) {
+  async function pendingAttachments(files: File[]) {
+    const items: PendingAttachment[] = [];
+    for (const file of files) {
+      const kind = selectedAttachmentKind(file);
+      if (!kind) continue;
+      let durationMs = 0;
+      if (kind === "video") {
+        try {
+          durationMs = await mediaDuration(file, "video");
+        } catch (error) {
+          setNotice({ tone: "error", text: error instanceof Error ? error.message : "That video could not be read." });
+          console.error("[todo-ui] selected video metadata failed", { bytes: file.size, mimeType: file.type, error });
+          continue;
+        }
+      }
+      if (kind === "video" && durationMs > MAX_VIDEO_DURATION_MS) {
+        setNotice({ tone: "error", text: `${file.name || "That video"} is longer than 60 minutes.` });
+        continue;
+      }
+      items.push({
+        localId: crypto.randomUUID(),
+        file,
+        previewUrl: URL.createObjectURL(file),
+        kind,
+        durationMs,
+        status: navigator.onLine ? "uploading" : "offline",
+        attachment: null,
+        error: "",
+      });
+    }
+    return items;
+  }
+
+  async function uploadCaptureAttachment(item: PendingAttachment, draftToken: string) {
     try {
-      const { attachment } = await uploadPrivateImage(file, "/api/attachments/drafts", { draftToken }, (uploadId) => request(`/api/attachments/drafts/${uploadId}?discard=1`, {
+      const endpoint = "/api/attachments/drafts";
+      const discard = (uploadId: string) => request(`/api/attachments/drafts/${uploadId}?discard=1`, {
         method: "DELETE",
         body: JSON.stringify({ draftToken }),
-      }));
-      setCaptureAttachments((current) => current.map((item) => item.localId === localId
-        ? { ...item, status: "ready", attachment, error: "" }
-        : item));
-      console.info("[todo-ui] draft image uploaded", { attachmentId: attachment.id, bytes: attachment.byteSize });
+      });
+      const { attachment } = item.kind === "image"
+        ? await uploadPrivateImage(item.file, endpoint, { draftToken }, discard)
+        : await uploadPrivateMedia(item.file, item.kind, item.durationMs, endpoint, { draftToken }, discard);
+      setCaptureAttachments((current) => current.map((candidate) => candidate.localId === item.localId
+        ? { ...candidate, status: "ready", attachment, error: "" }
+        : candidate));
+      console.info("[todo-ui] draft attachment uploaded", { attachmentId: attachment.id, kind: item.kind, bytes: attachment.byteSize });
     } catch (error) {
-      const message = error instanceof Error ? error.message : "The image could not be uploaded.";
-      setCaptureAttachments((current) => current.map((item) => item.localId === localId
-        ? { ...item, status: "error", error: message }
-        : item));
-      console.error("[todo-ui] draft image upload failed", { localId, bytes: file.size, error });
+      const wentOffline = !navigator.onLine;
+      const message = error instanceof Error ? error.message : "The attachment could not be uploaded.";
+      setCaptureAttachments((current) => current.map((candidate) => candidate.localId === item.localId
+        ? { ...candidate, status: wentOffline ? "offline" : "error", error: wentOffline ? "Waiting for a connection" : message }
+        : candidate));
+      console.error("[todo-ui] draft attachment upload failed", { localId: item.localId, kind: item.kind, bytes: item.file.size, wentOffline, error });
     }
   }
 
-  function queueCaptureImages(inputFiles: File[]) {
-    const files = validateSelectedImages(inputFiles, captureAttachments.length);
+  async function queueCaptureAttachments(inputFiles: File[]) {
+    const files = validateSelectedAttachments(inputFiles, captureAttachments.length);
     if (!files.length) return;
-    const items = files.map((file): PendingAttachment => ({
-      localId: crypto.randomUUID(),
-      file,
-      previewUrl: URL.createObjectURL(file),
-      status: "uploading",
-      attachment: null,
-      error: "",
-    }));
+    const items = await pendingAttachments(files);
+    if (!items.length) return;
     setCaptureAttachments((current) => [...current, ...items]);
-    console.info("[todo-ui] capture images queued", { count: items.length, totalBytes: files.reduce((sum, file) => sum + file.size, 0) });
+    console.info("[todo-ui] capture attachments queued", { count: items.length, online: navigator.onLine, kinds: items.map((item) => item.kind), totalBytes: files.reduce((sum, file) => sum + file.size, 0) });
+    if (!navigator.onLine) return;
     void (async () => {
-      for (const item of items) await uploadCaptureAttachment(item.localId, item.file, captureDraftToken);
+      for (const item of items) await uploadCaptureAttachment(item, captureDraftToken);
     })();
   }
 
-  function retryCaptureImage(item: PendingAttachment) {
+  function queueCaptureVoice(file: File, durationMs: number) {
+    if (captureAttachments.length >= MAX_ATTACHMENTS) {
+      setNotice({ tone: "error", text: `Tasks are limited to ${MAX_ATTACHMENTS} attachments.` });
+      return;
+    }
+    const item: PendingAttachment = {
+      localId: crypto.randomUUID(),
+      file,
+      previewUrl: URL.createObjectURL(file),
+      kind: "audio",
+      durationMs,
+      status: navigator.onLine ? "uploading" : "offline",
+      attachment: null,
+      error: "",
+    };
+    setCaptureAttachments((current) => [...current, item]);
+    setVoiceTarget(null);
+    if (navigator.onLine) void uploadCaptureAttachment(item, captureDraftToken);
+    console.info("[todo-ui] voice memo queued", { destination: "quick-add", bytes: file.size, durationMs, online: navigator.onLine });
+  }
+
+  function retryCaptureAttachment(item: PendingAttachment) {
     setCaptureAttachments((current) => current.map((candidate) => candidate.localId === item.localId
       ? { ...candidate, status: "uploading", error: "" }
       : candidate));
-    void uploadCaptureAttachment(item.localId, item.file, captureDraftToken);
+    void uploadCaptureAttachment({ ...item, status: "uploading", error: "" }, captureDraftToken);
   }
 
-  async function removeCaptureImage(item: PendingAttachment) {
+  async function removeCaptureAttachment(item: PendingAttachment) {
     if (item.status === "uploading") return;
     if (item.attachment) {
       try {
@@ -960,7 +1348,7 @@ export default function Home() {
           body: JSON.stringify({ draftToken: captureDraftToken }),
         });
       } catch (error) {
-        setNotice({ tone: "error", text: error instanceof Error ? error.message : "The image could not be removed." });
+        setNotice({ tone: "error", text: error instanceof Error ? error.message : "The attachment could not be removed." });
         return;
       }
     }
@@ -976,7 +1364,7 @@ export default function Home() {
       setDetailAttachments(attachments);
       console.info("[todo-ui] task gallery loaded", { todoId, count: attachments.length });
     } catch (error) {
-      const message = error instanceof Error ? error.message : "The images could not be loaded.";
+      const message = error instanceof Error ? error.message : "The attachments could not be loaded.";
       setAttachmentError(message);
       console.error("[todo-ui] task gallery load failed", { todoId, error });
     } finally {
@@ -987,7 +1375,10 @@ export default function Home() {
   async function uploadDetailAttachment(todoId: number, item: PendingAttachment) {
     try {
       const endpoint = `/api/todos/${todoId}/attachments`;
-      const { attachment } = await uploadPrivateImage(item.file, endpoint, {}, (uploadId) => request(`${endpoint}/${uploadId}?discard=1`, { method: "DELETE" }));
+      const discard = (uploadId: string) => request(`${endpoint}/${uploadId}?discard=1`, { method: "DELETE" });
+      const { attachment } = item.kind === "image"
+        ? await uploadPrivateImage(item.file, endpoint, {}, discard)
+        : await uploadPrivateMedia(item.file, item.kind, item.durationMs, endpoint, {}, discard);
       setDetailUploads((current) => {
         const found = current.find((candidate) => candidate.localId === item.localId);
         if (found) URL.revokeObjectURL(found.previewUrl);
@@ -995,28 +1386,25 @@ export default function Home() {
       });
       setDetailAttachments((current) => [...current, attachment]);
       setTodos((current) => current.map((todo) => todo.id === todoId ? { ...todo, attachmentCount: todo.attachmentCount + 1 } : todo));
-      console.info("[todo-ui] task image uploaded", { todoId, attachmentId: attachment.id, bytes: attachment.byteSize });
+      console.info("[todo-ui] task attachment uploaded", { todoId, attachmentId: attachment.id, kind: item.kind, bytes: attachment.byteSize });
     } catch (error) {
-      const message = error instanceof Error ? error.message : "The image could not be uploaded.";
+      const message = error instanceof Error ? error.message : "The attachment could not be uploaded.";
       setDetailUploads((current) => current.map((candidate) => candidate.localId === item.localId
         ? { ...candidate, status: "error", error: message }
         : candidate));
-      console.error("[todo-ui] task image upload failed", { todoId, localId: item.localId, bytes: item.file.size, error });
+      console.error("[todo-ui] task attachment upload failed", { todoId, localId: item.localId, kind: item.kind, bytes: item.file.size, error });
     }
   }
 
-  function queueDetailImages(inputFiles: File[]) {
+  async function queueDetailAttachments(inputFiles: File[]) {
     if (!editingTodo) return;
-    const files = validateSelectedImages(inputFiles, detailAttachments.length + detailUploads.length);
+    if (!navigator.onLine) {
+      setNotice({ tone: "error", text: "Attachments can be added to a new offline task. Existing tasks need a connection." });
+      return;
+    }
+    const files = validateSelectedAttachments(inputFiles, detailAttachments.length + detailUploads.length);
     if (!files.length) return;
-    const items = files.map((file): PendingAttachment => ({
-      localId: crypto.randomUUID(),
-      file,
-      previewUrl: URL.createObjectURL(file),
-      status: "uploading",
-      attachment: null,
-      error: "",
-    }));
+    const items = await pendingAttachments(files);
     setDetailUploads((current) => [...current, ...items]);
     const todoId = editingTodo.id;
     void (async () => {
@@ -1024,7 +1412,30 @@ export default function Home() {
     })();
   }
 
-  function retryDetailImage(item: PendingAttachment) {
+  function queueDetailVoice(file: File, durationMs: number) {
+    if (!editingTodo) return;
+    if (!navigator.onLine) {
+      setVoiceTarget(null);
+      setNotice({ tone: "error", text: "Attachments can be added to a new offline task. Existing tasks need a connection." });
+      return;
+    }
+    const item: PendingAttachment = {
+      localId: crypto.randomUUID(),
+      file,
+      previewUrl: URL.createObjectURL(file),
+      kind: "audio",
+      durationMs,
+      status: "uploading",
+      attachment: null,
+      error: "",
+    };
+    setDetailUploads((current) => [...current, item]);
+    setVoiceTarget(null);
+    void uploadDetailAttachment(editingTodo.id, item);
+    console.info("[todo-ui] voice memo queued", { destination: "task", todoId: editingTodo.id, bytes: file.size, durationMs });
+  }
+
+  function retryDetailAttachment(item: PendingAttachment) {
     if (!editingTodo) return;
     setDetailUploads((current) => current.map((candidate) => candidate.localId === item.localId
       ? { ...candidate, status: "uploading", error: "" }
@@ -1038,7 +1449,7 @@ export default function Home() {
     setDetailUploads((current) => current.filter((candidate) => candidate.localId !== item.localId));
   }
 
-  async function deleteDetailImage(attachment: TodoAttachment) {
+  async function deleteDetailAttachment(attachment: TodoAttachment) {
     if (!editingTodo || syncing) return;
     setSyncing(true);
     try {
@@ -1048,22 +1459,103 @@ export default function Home() {
         ? { ...todo, attachmentCount: Math.max(0, todo.attachmentCount - 1) }
         : todo));
       setViewerIndex(null);
-      setNotice({ tone: "success", text: "Image deleted.", undoToken: result.undoToken });
+      setNotice({ tone: "success", text: `${attachment.kind === "audio" ? "Voice memo" : attachment.kind === "video" ? "Video" : "Image"} deleted.`, undoToken: result.undoToken });
     } catch (error) {
-      setNotice({ tone: "error", text: error instanceof Error ? error.message : "The image could not be deleted." });
+      setNotice({ tone: "error", text: error instanceof Error ? error.message : "The attachment could not be deleted." });
     } finally {
       setSyncing(false);
+    }
+  }
+
+  function resetCapture() {
+    setNewTitle("");
+    captureAttachments.forEach((item) => URL.revokeObjectURL(item.previewUrl));
+    setCaptureAttachments([]);
+    setCaptureDraftToken(crypto.randomUUID());
+    if (captureRef.current) {
+      captureRef.current.style.height = "auto";
+      captureRef.current.style.overflowY = "hidden";
+    }
+  }
+
+  async function syncOfflineQueue() {
+    if (syncingOfflineRef.current || !navigator.onLine) return;
+    syncingOfflineRef.current = true;
+    const startedAt = Date.now();
+    try {
+      const records = await listOfflineTodos();
+      if (!records.length) {
+        setOfflineCount(0);
+        return;
+      }
+      console.info("[todo-offline] sync started", { count: records.length });
+      const { todos: currentServerTodos } = await request<{ todos: Todo[] }>("/api/todos");
+      const byClientId = new Map(currentServerTodos.map((todo) => [todo.clientId, todo]));
+      let synced = 0;
+      for (const record of records) {
+        try {
+          let todo = byClientId.get(record.clientId);
+          if (!todo) {
+            const draftToken = crypto.randomUUID();
+            const attachmentIds: string[] = [];
+            for (const stored of record.attachments) {
+              const file = new File([stored.blob], stored.fileName, { type: stored.mimeType, lastModified: new Date(record.createdAt).valueOf() });
+              const endpoint = "/api/attachments/drafts";
+              const discard = (uploadId: string) => request(`/api/attachments/drafts/${uploadId}?discard=1`, {
+                method: "DELETE",
+                body: JSON.stringify({ draftToken }),
+              });
+              const uploaded = stored.kind === "image"
+                ? await uploadPrivateImage(file, endpoint, { draftToken }, discard)
+                : await uploadPrivateMedia(file, stored.kind, stored.durationMs, endpoint, { draftToken }, discard);
+              attachmentIds.push(uploaded.attachment.id);
+              console.info("[todo-offline] attachment synchronized", { clientId: record.clientId, kind: stored.kind, attachmentId: uploaded.attachment.id, bytes: stored.blob.size });
+            }
+            const created = await request<{ todo: Todo }>("/api/todos", {
+              method: "POST",
+              body: JSON.stringify({
+                clientId: record.clientId,
+                title: record.title,
+                notes: record.notes,
+                status: "open",
+                project: null,
+                draftToken: attachmentIds.length ? draftToken : undefined,
+                attachmentIds,
+              }),
+            });
+            todo = created.todo;
+          }
+          await deleteOfflineTodo(record.clientId);
+          setTodos((current) => [todo as Todo, ...current.filter((item) => item.clientId !== record.clientId && item.id !== todo?.id)]);
+          synced += 1;
+          setOfflineCount(Math.max(0, records.length - synced));
+          console.info("[todo-offline] task synchronized", { clientId: record.clientId, id: todo.id, attachments: record.attachments.length });
+        } catch (error) {
+          console.error("[todo-offline] task sync failed", { clientId: record.clientId, online: navigator.onLine, error });
+          if (!navigator.onLine) setOnline(false);
+          break;
+        }
+      }
+      if (synced > 0) setNotice({ tone: "success", text: `${synced} offline ${synced === 1 ? "task" : "tasks"} synced.` });
+      console.info("[todo-offline] sync finished", { requested: records.length, synced, durationMs: Date.now() - startedAt });
+    } catch (error) {
+      console.error("[todo-offline] sync pass failed", { durationMs: Date.now() - startedAt, error });
+    } finally {
+      syncingOfflineRef.current = false;
     }
   }
 
   async function addTodo(event: FormEvent) {
     event.preventDefault();
     const title = newTitle.trim();
-    const attachmentsReady = captureAttachments.every((item) => item.status === "ready" && item.attachment);
+    const attachmentsReady = captureAttachments.every((item) => (item.status === "ready" && item.attachment) || item.status === "offline");
     if (!title || adding || !attachmentsReady) return;
     const temporaryId = -Date.now();
+    const clientId = crypto.randomUUID();
+    const createdAt = new Date().toISOString();
     const optimistic: Todo = {
       id: temporaryId,
+      clientId,
       title,
       notes: "",
       status: "open",
@@ -1075,9 +1567,10 @@ export default function Home() {
       sourceId: null,
       completedAt: null,
       snoozedUntil: null,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
+      createdAt,
+      updatedAt: createdAt,
       attachmentCount: captureAttachments.length,
+      offline: !navigator.onLine || captureAttachments.some((item) => item.status === "offline"),
     };
     setProject("");
     setView("open");
@@ -1089,9 +1582,32 @@ export default function Home() {
     setSyncing(true);
     setNotice(null);
     try {
+      if (optimistic.offline) {
+        await saveOfflineTodo({
+          clientId,
+          localId: temporaryId,
+          title,
+          notes: "",
+          createdAt,
+          attachments: captureAttachments.map((item) => ({
+            localId: item.localId,
+            kind: item.kind,
+            fileName: item.file.name,
+            mimeType: item.file.type,
+            durationMs: item.durationMs,
+            blob: item.file,
+          })),
+        });
+        setOfflineCount((count) => count + 1);
+        resetCapture();
+        setNotice({ tone: "success", text: "Saved offline. It will sync automatically when you reconnect." });
+        console.info("[todo-offline] quick add completed locally", { clientId, localId: temporaryId, attachments: captureAttachments.length });
+        return;
+      }
       const { todo } = await request<{ todo: Todo }>("/api/todos", {
         method: "POST",
         body: JSON.stringify({
+          clientId,
           title,
           status: "open",
           project: null,
@@ -1100,14 +1616,7 @@ export default function Home() {
         }),
       });
       setTodos((current) => current.map((item) => item.id === temporaryId ? todo : item));
-      setNewTitle("");
-      captureAttachments.forEach((item) => URL.revokeObjectURL(item.previewUrl));
-      setCaptureAttachments([]);
-      setCaptureDraftToken(crypto.randomUUID());
-      if (captureRef.current) {
-        captureRef.current.style.height = "auto";
-        captureRef.current.style.overflowY = "hidden";
-      }
+      resetCapture();
       console.info("[todo-ui] created", {
         id: todo.id,
         status: todo.status,
@@ -1117,6 +1626,33 @@ export default function Home() {
         attachmentCount: todo.attachmentCount,
       });
     } catch (error) {
+      if (!navigator.onLine || error instanceof TypeError) {
+        try {
+          await saveOfflineTodo({
+            clientId,
+            localId: temporaryId,
+            title,
+            notes: "",
+            createdAt,
+            attachments: captureAttachments.map((item) => ({
+              localId: item.localId,
+              kind: item.kind,
+              fileName: item.file.name,
+              mimeType: item.file.type,
+              durationMs: item.durationMs,
+              blob: item.file,
+            })),
+          });
+          setTodos((current) => current.map((item) => item.id === temporaryId ? { ...item, offline: true, sourceKind: "offline" } : item));
+          setOfflineCount((count) => count + 1);
+          resetCapture();
+          setNotice({ tone: "success", text: "The connection dropped, so this task was saved offline." });
+          console.warn("[todo-offline] online create fell back to local queue", { clientId, localId: temporaryId, attachments: captureAttachments.length, error });
+          return;
+        } catch (offlineError) {
+          console.error("[todo-offline] create fallback storage failed", { clientId, offlineError });
+        }
+      }
       setTodos((current) => current.filter((item) => item.id !== temporaryId));
       setNotice({ tone: "error", text: error instanceof Error ? error.message : "The task could not be added." });
     } finally {
@@ -1140,6 +1676,10 @@ export default function Home() {
 
   async function performAction(ids: number[], action: ExecutableTodoAction | "merge") {
     if (!ids.length || syncing) return;
+    if (ids.some((id) => id < 1)) {
+      setNotice({ tone: "error", text: "That offline task will be actionable as soon as it syncs." });
+      return;
+    }
     const previous = todos;
     const actionAt = new Date().toISOString();
     setSyncing(true);
@@ -1298,7 +1838,10 @@ export default function Home() {
   }
 
   function openTaskDetails(todo: Todo) {
-    if (todo.id < 1) return;
+    if (todo.id < 1 || todo.offline) {
+      setNotice({ tone: "success", text: "That task is saved offline and will be editable after it syncs." });
+      return;
+    }
     setEditingId(todo.id);
     setEditDraft({
       title: todo.title,
@@ -1544,11 +2087,16 @@ export default function Home() {
   return (
     <main className="min-h-screen bg-[#f6f7f5] text-[#1d211f]">
       <SiteHeader current="todos" />
+      {(!online || offlineCount > 0) && (
+        <div className="pointer-events-none fixed right-3 top-[4.25rem] z-40 rounded-full bg-[#202522] px-3 py-1.5 text-xs font-semibold text-white shadow-lg" role="status" aria-live="polite">
+          {!online ? `Offline${offlineCount ? ` · ${offlineCount} queued` : ""}` : `${offlineCount} waiting to sync`}
+        </div>
+      )}
       {imageDropActive && (
         <div className="pointer-events-none fixed inset-0 z-[100] grid place-items-center bg-[#153d2d]/25 p-5 backdrop-blur-[2px]" role="status" aria-live="polite">
           <div className="flex max-w-sm items-center gap-3 rounded-2xl border border-[#216e4e]/25 bg-white px-5 py-4 text-base font-semibold text-[#216e4e] shadow-2xl">
-            <ActionIcon name="image" className="h-6 w-6" />
-            Drop images to attach to {editingTodo ? "this task" : "the new task"}
+            <ActionIcon name="attachment" className="h-6 w-6" />
+            Drop photos or videos to attach to {editingTodo ? "this task" : "the new task"}
           </div>
         </div>
       )}
@@ -1556,14 +2104,14 @@ export default function Home() {
         <form onSubmit={addTodo} className="mb-5 rounded-2xl border border-black/[0.07] bg-white p-2 shadow-[0_10px_35px_rgba(30,45,36,0.07)] sm:p-3">
           <div className="flex items-end gap-2">
             <div className="flex min-w-0 flex-1 items-start gap-2 px-1 py-2 sm:px-2">
-              <AttachmentPicker label="Attach images" onFiles={queueCaptureImages} disabled={captureAttachments.length >= MAX_ATTACHMENTS} />
+              <AttachmentPicker label="Add attachment" onFiles={(files) => void queueCaptureAttachments(files)} onRecord={() => setVoiceTarget("capture")} disabled={captureAttachments.length >= MAX_ATTACHMENTS} />
               <textarea
                 ref={captureRef}
                 value={newTitle}
                 onChange={(event) => { setNewTitle(event.target.value); resizeCapture(event.currentTarget); }}
                 onPaste={(event) => {
                   const files = clipboardImages(event);
-                  if (files.length) queueCaptureImages(files);
+                  if (files.length) void queueCaptureAttachments(files);
                 }}
                 onKeyDown={(event) => {
                   if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
@@ -1582,7 +2130,7 @@ export default function Home() {
               <span className="hidden text-[10px] text-[#929994] sm:block">⌘↵ add</span>
               <button
                 type="submit"
-                disabled={!newTitle.trim() || adding || captureAttachments.some((item) => item.status !== "ready")}
+                disabled={!newTitle.trim() || adding || captureAttachments.some((item) => item.status === "uploading" || item.status === "error")}
                 className="inline-flex h-11 items-center gap-2 rounded-xl bg-[#216e4e] px-4 text-sm font-semibold text-white transition hover:bg-[#195d41] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#216e4e] disabled:cursor-not-allowed disabled:opacity-40 sm:px-6"
               >
                 <ActionIcon name="add" />
@@ -1592,16 +2140,17 @@ export default function Home() {
           </div>
 
           {captureAttachments.length > 0 && (
-            <div className="flex gap-2 overflow-x-auto border-t border-black/[0.06] px-2 pb-1 pt-2 sm:px-3" aria-label="Images to attach">
+            <div className="flex gap-2 overflow-x-auto border-t border-black/[0.06] px-2 pb-1 pt-2 sm:px-3" aria-label="Attachments to add">
               {captureAttachments.map((item) => (
-                <div key={item.localId} className="relative h-16 w-16 shrink-0 overflow-hidden rounded-xl bg-[#eef0ed] ring-1 ring-black/[0.06]" title={item.error || item.file.name}>
-                  <img src={item.previewUrl} alt="" className="h-full w-full object-cover" />
+                <div key={item.localId} className={classNames("relative h-16 shrink-0 overflow-hidden rounded-xl bg-[#eef0ed] ring-1 ring-black/[0.06]", item.kind === "audio" ? "w-44" : "w-16")} title={item.error || item.file.name}>
+                  {item.kind === "image" ? <img src={item.previewUrl} alt="" className="h-full w-full object-cover" /> : item.kind === "video" ? <video src={item.previewUrl} muted className="h-full w-full object-cover" /> : <div className="flex h-full items-center gap-2 px-3 text-xs font-semibold text-[#455049]"><ActionIcon name="mic" className="h-5 w-5 text-[#216e4e]" /><span>Voice memo<br /><span className="font-normal text-[#7b837e]">{formatDuration(item.durationMs)}</span></span></div>}
                   {item.status === "uploading" && <span className="absolute inset-0 grid place-items-center bg-black/40 text-[10px] font-semibold text-white">Uploading…</span>}
+                  {item.status === "offline" && <span className="absolute inset-x-0 bottom-0 bg-amber-700/90 px-1 py-0.5 text-center text-[9px] font-semibold text-white">Saved offline</span>}
                   {item.status === "error" && (
-                    <button type="button" onClick={() => retryCaptureImage(item)} aria-label={`Retry ${item.file.name}`} title="Retry upload" className="absolute inset-0 grid place-items-center bg-red-900/65 text-white"><ActionIcon name="retry" /></button>
+                    <button type="button" onClick={() => retryCaptureAttachment(item)} aria-label={`Retry ${item.file.name}`} title="Retry upload" className="absolute inset-0 grid place-items-center bg-red-900/65 text-white"><ActionIcon name="retry" /></button>
                   )}
                   {item.status !== "uploading" && (
-                    <button type="button" onClick={() => void removeCaptureImage(item)} aria-label={`Remove ${item.file.name}`} title="Remove image" className="absolute right-1 top-1 grid h-6 w-6 place-items-center rounded-full bg-black/65 text-white hover:bg-red-700"><ActionIcon name="close" className="h-3.5 w-3.5" /></button>
+                    <button type="button" onClick={() => void removeCaptureAttachment(item)} aria-label={`Remove ${item.file.name}`} title="Remove attachment" className="absolute right-1 top-1 grid h-6 w-6 place-items-center rounded-full bg-black/65 text-white hover:bg-red-700"><ActionIcon name="close" className="h-3.5 w-3.5" /></button>
                   )}
                 </div>
               ))}
@@ -2063,7 +2612,7 @@ export default function Home() {
                   onChange={(event) => setEditDraft((current) => current ? { ...current, title: event.target.value } : current)}
                   onPaste={(event) => {
                     const files = clipboardImages(event);
-                    if (files.length) queueDetailImages(files);
+                    if (files.length) void queueDetailAttachments(files);
                   }}
                   rows={4}
                   maxLength={2000}
@@ -2078,7 +2627,7 @@ export default function Home() {
                   onChange={(event) => setEditDraft((current) => current ? { ...current, notes: event.target.value } : current)}
                   onPaste={(event) => {
                     const files = clipboardImages(event);
-                    if (files.length) queueDetailImages(files);
+                    if (files.length) void queueDetailAttachments(files);
                   }}
                   rows={5}
                   placeholder="Add context, links, or next steps…"
@@ -2087,22 +2636,23 @@ export default function Home() {
                 />
               </label>
 
-              <section className="mt-4 min-w-0" aria-labelledby="task-images-heading">
+              <section className="mt-4 min-w-0" aria-labelledby="task-attachments-heading">
                 <div className="mb-2 flex min-w-0 items-center justify-between gap-3">
                   <div className="min-w-0">
-                    <h4 id="task-images-heading" className="text-xs font-semibold uppercase tracking-wide text-[#69716c]">Images</h4>
+                    <h4 id="task-attachments-heading" className="text-xs font-semibold uppercase tracking-wide text-[#69716c]">Attachments</h4>
                     <p className="mt-0.5 text-xs text-[#929994]">{detailAttachments.length + detailUploads.length}/{MAX_ATTACHMENTS} attached</p>
                   </div>
                   <AttachmentPicker
-                    label="Add images to task"
+                    label="Add attachment to task"
                     showLabel
-                    onFiles={queueDetailImages}
+                    onFiles={(files) => void queueDetailAttachments(files)}
+                    onRecord={() => setVoiceTarget("detail")}
                     disabled={detailAttachments.length + detailUploads.length >= MAX_ATTACHMENTS}
                   />
                 </div>
 
                 {loadingAttachments ? (
-                  <div role="status" aria-label="Loading images" className="grid grid-cols-3 gap-2 sm:grid-cols-4">
+                  <div role="status" aria-label="Loading attachments" className="grid grid-cols-3 gap-2 sm:grid-cols-4">
                     {[0, 1, 2].map((item) => <div key={item} className="aspect-square animate-pulse rounded-xl bg-[#eef0ed]" />)}
                   </div>
                 ) : attachmentError ? (
@@ -2112,24 +2662,33 @@ export default function Home() {
                   </div>
                 ) : detailAttachments.length || detailUploads.length ? (
                   <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
-                    {detailAttachments.map((attachment, index) => (
-                      <div key={attachment.id} className="group/image relative aspect-square min-w-0 overflow-hidden rounded-xl bg-[#eef0ed] ring-1 ring-black/[0.06]">
-                        <button type="button" onClick={() => setViewerIndex(index)} className="h-full w-full focus-visible:outline-2 focus-visible:outline-inset focus-visible:outline-[#216e4e]" aria-label={`View image ${index + 1}: ${attachment.fileName}`}>
-                          <img src={attachment.thumbnailUrl} alt={attachment.fileName} className="h-full w-full object-cover" />
-                        </button>
-                        <button type="button" onClick={() => void deleteDetailImage(attachment)} disabled={syncing} aria-label={`Delete image: ${attachment.fileName}`} title="Delete image" className="absolute right-1.5 top-1.5 grid h-7 w-7 place-items-center rounded-full bg-black/65 text-white opacity-100 hover:bg-red-700 focus-visible:outline-2 focus-visible:outline-white disabled:opacity-50 sm:opacity-0 sm:group-hover/image:opacity-100 sm:group-focus-within/image:opacity-100">
+                    {detailAttachments.map((attachment) => attachment.kind === "audio" ? (
+                      <div key={attachment.id} className="group/media col-span-full flex min-w-0 items-center gap-3 rounded-xl bg-[#f3f5f2] p-3 ring-1 ring-black/[0.06]">
+                        <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-[#e3efe7] text-[#216e4e]"><ActionIcon name="mic" className="h-5 w-5" /></span>
+                        <div className="min-w-0 flex-1"><p className="mb-1 truncate text-xs font-semibold text-[#4d5650]">{attachment.fileName} · {formatDuration(attachment.durationMs)}</p><audio controls preload="metadata" src={attachment.audioUrl} className="h-9 w-full" /></div>
+                        <a href={attachment.originalUrl} download={attachment.fileName} className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-[#69716c] hover:bg-white" aria-label={`Download ${attachment.fileName}`}><ActionIcon name="download" /></a>
+                        <button type="button" onClick={() => void deleteDetailAttachment(attachment)} disabled={syncing} className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-[#69716c] hover:bg-red-50 hover:text-red-700" aria-label={`Delete ${attachment.fileName}`}><ActionIcon name="delete" /></button>
+                      </div>
+                    ) : (
+                      <div key={attachment.id} className="group/media relative aspect-square min-w-0 overflow-hidden rounded-xl bg-[#eef0ed] ring-1 ring-black/[0.06]">
+                        {attachment.kind === "image" ? (
+                          <button type="button" onClick={() => setViewerIndex(imageAttachments.findIndex((image) => image.id === attachment.id))} className="h-full w-full focus-visible:outline-2 focus-visible:outline-inset focus-visible:outline-[#216e4e]" aria-label={`View image: ${attachment.fileName}`}>
+                            <img src={attachment.thumbnailUrl} alt={attachment.fileName} className="h-full w-full object-cover" />
+                          </button>
+                        ) : <video controls preload="metadata" src={attachment.videoUrl} className="h-full w-full object-cover" />}
+                        <button type="button" onClick={() => void deleteDetailAttachment(attachment)} disabled={syncing} aria-label={`Delete ${attachment.kind}: ${attachment.fileName}`} title={`Delete ${attachment.kind}`} className="absolute right-1.5 top-1.5 grid h-7 w-7 place-items-center rounded-full bg-black/65 text-white opacity-100 hover:bg-red-700 focus-visible:outline-2 focus-visible:outline-white disabled:opacity-50 sm:opacity-0 sm:group-hover/media:opacity-100 sm:group-focus-within/media:opacity-100">
                           <ActionIcon name="delete" className="h-3.5 w-3.5" />
                         </button>
                       </div>
                     ))}
                     {detailUploads.map((item) => (
-                      <div key={item.localId} className="relative aspect-square min-w-0 overflow-hidden rounded-xl bg-[#eef0ed] ring-1 ring-black/[0.06]" title={item.error || item.file.name}>
-                        <img src={item.previewUrl} alt="" className="h-full w-full object-cover" />
+                      <div key={item.localId} className={classNames("relative min-w-0 overflow-hidden rounded-xl bg-[#eef0ed] ring-1 ring-black/[0.06]", item.kind === "audio" ? "col-span-full h-16" : "aspect-square")} title={item.error || item.file.name}>
+                        {item.kind === "image" ? <img src={item.previewUrl} alt="" className="h-full w-full object-cover" /> : item.kind === "video" ? <video src={item.previewUrl} muted className="h-full w-full object-cover" /> : <div className="flex h-full items-center gap-2 px-4 text-sm font-semibold text-[#455049]"><ActionIcon name="mic" className="text-[#216e4e]" />Voice memo · {formatDuration(item.durationMs)}</div>}
                         {item.status === "uploading" ? (
                           <span className="absolute inset-0 grid place-items-center bg-black/45 text-xs font-semibold text-white">Uploading…</span>
                         ) : (
                           <>
-                            <button type="button" onClick={() => retryDetailImage(item)} aria-label={`Retry ${item.file.name}`} className="absolute inset-0 grid place-items-center bg-red-900/65 text-white"><ActionIcon name="retry" className="h-5 w-5" /></button>
+                            <button type="button" onClick={() => retryDetailAttachment(item)} aria-label={`Retry ${item.file.name}`} className="absolute inset-0 grid place-items-center bg-red-900/65 text-white"><ActionIcon name="retry" className="h-5 w-5" /></button>
                             <button type="button" onClick={() => removeDetailUpload(item)} aria-label={`Remove ${item.file.name}`} title="Remove failed upload" className="absolute right-1.5 top-1.5 grid h-7 w-7 place-items-center rounded-full bg-black/65 text-white hover:bg-red-700"><ActionIcon name="close" className="h-3.5 w-3.5" /></button>
                           </>
                         )}
@@ -2137,7 +2696,7 @@ export default function Home() {
                     ))}
                   </div>
                 ) : (
-                  <div className="rounded-xl border border-dashed border-black/[0.1] px-4 py-5 text-center text-sm text-[#8a918d]">No images attached.</div>
+                  <div className="rounded-xl border border-dashed border-black/[0.1] px-4 py-5 text-center text-sm text-[#8a918d]">No attachments yet.</div>
                 )}
               </section>
 
@@ -2201,6 +2760,13 @@ export default function Home() {
         </div>
       )}
 
+      {voiceTarget && (
+        <VoiceMemoRecorder
+          onClose={() => setVoiceTarget(null)}
+          onAttach={(file, durationMs) => voiceTarget === "detail" ? queueDetailVoice(file, durationMs) : queueCaptureVoice(file, durationMs)}
+        />
+      )}
+
       {viewerAttachment && viewerIndex !== null && (
         <div
           className="fixed inset-0 z-[80] flex touch-pan-y items-center justify-center overflow-hidden bg-black/92 p-3 sm:p-8"
@@ -2211,12 +2777,12 @@ export default function Home() {
           onPointerUp={(event) => {
             const start = viewerGesture.current;
             viewerGesture.current = null;
-            if (start === null || detailAttachments.length < 2) return;
+            if (start === null || imageAttachments.length < 2) return;
             const delta = event.clientX - start;
             if (Math.abs(delta) < 50) return;
             setViewerIndex((current) => current === null ? null : delta < 0
-              ? (current + 1) % detailAttachments.length
-              : (current - 1 + detailAttachments.length) % detailAttachments.length);
+              ? (current + 1) % imageAttachments.length
+              : (current - 1 + imageAttachments.length) % imageAttachments.length);
           }}
         >
           <button type="button" onClick={() => setViewerIndex(null)} aria-label="Close image viewer" className="absolute inset-0 cursor-zoom-out" />
@@ -2224,18 +2790,18 @@ export default function Home() {
             <span className="min-w-0 truncate text-sm font-medium text-white/85">{viewerAttachment.fileName}</span>
             <div className="pointer-events-auto flex shrink-0 items-center gap-1">
               <a href={viewerAttachment.originalUrl} download={viewerAttachment.fileName} className="grid h-10 w-10 place-items-center rounded-full bg-white/10 text-white hover:bg-white/20" aria-label="Download original" title="Download original"><ActionIcon name="download" className="h-5 w-5" /></a>
-              <button type="button" onClick={() => void deleteDetailImage(viewerAttachment)} className="grid h-10 w-10 place-items-center rounded-full bg-white/10 text-white hover:bg-red-600" aria-label="Delete image" title="Delete image"><ActionIcon name="delete" className="h-5 w-5" /></button>
+              <button type="button" onClick={() => void deleteDetailAttachment(viewerAttachment)} className="grid h-10 w-10 place-items-center rounded-full bg-white/10 text-white hover:bg-red-600" aria-label="Delete image" title="Delete image"><ActionIcon name="delete" className="h-5 w-5" /></button>
               <button type="button" onClick={() => setViewerIndex(null)} className="grid h-10 w-10 place-items-center rounded-full bg-white/10 text-white hover:bg-white/20" aria-label="Close image viewer" title="Close"><ActionIcon name="close" className="h-5 w-5" /></button>
             </div>
           </div>
 
           <img src={viewerAttachment.displayUrl} alt={viewerAttachment.fileName} className="pointer-events-none relative max-h-full max-w-full object-contain" />
 
-          {detailAttachments.length > 1 && (
+          {imageAttachments.length > 1 && (
             <>
-              <button type="button" onClick={() => setViewerIndex((viewerIndex - 1 + detailAttachments.length) % detailAttachments.length)} aria-label="Previous image" className="absolute left-3 top-1/2 hidden h-12 w-12 -translate-y-1/2 place-items-center rounded-full bg-black/45 text-white hover:bg-black/70 sm:grid"><ActionIcon name="previous" className="h-6 w-6" /></button>
-              <button type="button" onClick={() => setViewerIndex((viewerIndex + 1) % detailAttachments.length)} aria-label="Next image" className="absolute right-3 top-1/2 hidden h-12 w-12 -translate-y-1/2 place-items-center rounded-full bg-black/45 text-white hover:bg-black/70 sm:grid"><ActionIcon name="next" className="h-6 w-6" /></button>
-              <span className="absolute bottom-[max(1rem,env(safe-area-inset-bottom))] rounded-full bg-black/55 px-3 py-1.5 text-xs font-semibold text-white/90">{viewerIndex + 1} / {detailAttachments.length}</span>
+              <button type="button" onClick={() => setViewerIndex((viewerIndex - 1 + imageAttachments.length) % imageAttachments.length)} aria-label="Previous image" className="absolute left-3 top-1/2 hidden h-12 w-12 -translate-y-1/2 place-items-center rounded-full bg-black/45 text-white hover:bg-black/70 sm:grid"><ActionIcon name="previous" className="h-6 w-6" /></button>
+              <button type="button" onClick={() => setViewerIndex((viewerIndex + 1) % imageAttachments.length)} aria-label="Next image" className="absolute right-3 top-1/2 hidden h-12 w-12 -translate-y-1/2 place-items-center rounded-full bg-black/45 text-white hover:bg-black/70 sm:grid"><ActionIcon name="next" className="h-6 w-6" /></button>
+              <span className="absolute bottom-[max(1rem,env(safe-area-inset-bottom))] rounded-full bg-black/55 px-3 py-1.5 text-xs font-semibold text-white/90">{viewerIndex + 1} / {imageAttachments.length}</span>
             </>
           )}
         </div>

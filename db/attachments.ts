@@ -2,6 +2,10 @@ import { env, waitUntil } from "cloudflare:workers";
 
 export const MAX_ATTACHMENTS_PER_TASK = 12;
 export const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
+export const MAX_AUDIO_ATTACHMENT_BYTES = 50 * 1024 * 1024;
+export const MAX_AUDIO_DURATION_MS = 30 * 60 * 1000;
+export const MAX_VIDEO_ATTACHMENT_BYTES = 250 * 1024 * 1024;
+export const MAX_VIDEO_DURATION_MS = 60 * 60 * 1000;
 const MAX_IMAGE_PIXELS = 100_000_000;
 const DRAFT_LIFETIME_HOURS = 24;
 const DELETED_RETENTION_DAYS = 7;
@@ -31,6 +35,8 @@ export type AttachmentRow = {
   byte_size: number;
   width: number;
   height: number;
+  kind: "image" | "audio" | "video";
+  duration_ms: number;
   upload_state: "uploading" | "ready";
   sort_order: number;
   expires_at: string | null;
@@ -47,10 +53,14 @@ export type TodoAttachment = {
   byteSize: number;
   width: number;
   height: number;
+  kind: "image" | "audio" | "video";
+  durationMs: number;
   sortOrder: number;
   thumbnailUrl: string;
   displayUrl: string;
   originalUrl: string;
+  audioUrl: string;
+  videoUrl: string;
   createdAt: string;
 };
 
@@ -116,7 +126,7 @@ function cleanFileName(value: string) {
 }
 
 function validateDraftToken(value: string) {
-  if (!/^[0-9a-f-]{36}$/i.test(value)) throw new Error("That image draft is invalid.");
+  if (!/^[0-9a-f-]{36}$/i.test(value)) throw new Error("That attachment draft is invalid.");
   return value;
 }
 
@@ -158,7 +168,7 @@ async function storageResponseError(stage: string, response: Response) {
 }
 
 async function deleteKeys(keys: string[]) {
-  await Promise.all(keys.map(async (key) => {
+  await Promise.all([...new Set(keys.filter(Boolean))].map(async (key) => {
     const response = await signedStorageResponse(storageUrl(key), { method: "DELETE" });
     if (!response.ok && response.status !== 404) throw await storageResponseError("Private image cleanup", response);
   }));
@@ -172,11 +182,17 @@ async function signedObjectUrl(key: string, downloadName?: string) {
 }
 
 async function mapAttachment(row: AttachmentRow): Promise<TodoAttachment> {
-  const [thumbnailUrl, displayUrl, originalUrl] = await Promise.all([
-    signedObjectUrl(row.thumbnail_key),
-    signedObjectUrl(row.display_key),
+  const kind = row.kind ?? "image";
+  const [originalUrl, inlineOriginalUrl] = await Promise.all([
     signedObjectUrl(row.original_key, row.file_name),
+    kind === "image" ? Promise.resolve("") : signedObjectUrl(row.original_key),
   ]);
+  const [thumbnailUrl, displayUrl] = kind === "image"
+    ? await Promise.all([
+        signedObjectUrl(row.thumbnail_key),
+        signedObjectUrl(row.display_key),
+      ])
+    : ["", ""];
   return {
     id: row.id,
     todoId: row.todo_id,
@@ -185,10 +201,14 @@ async function mapAttachment(row: AttachmentRow): Promise<TodoAttachment> {
     byteSize: row.byte_size,
     width: row.width,
     height: row.height,
+    kind,
+    durationMs: Number(row.duration_ms ?? 0),
     sortOrder: row.sort_order,
     thumbnailUrl,
     displayUrl,
     originalUrl,
+    audioUrl: kind === "audio" ? inlineOriginalUrl : "",
+    videoUrl: kind === "video" ? inlineOriginalUrl : "",
     createdAt: row.created_at,
   };
 }
@@ -206,6 +226,17 @@ type PrepareUploadInput = {
 type FinalizeUploadInput = {
   width: number;
   height: number;
+};
+
+type PrepareMediaUploadInput = {
+  kind: "audio" | "video";
+  fileName: string;
+  mimeType: string;
+  byteSize: number;
+};
+
+type FinalizeMediaUploadInput = {
+  durationMs: number;
 };
 
 function normalizedMimeType(value: string, fileName: string) {
@@ -236,6 +267,47 @@ function derivativeFormatForKey(key: string) {
   if (/\.webp$/i.test(key)) return "webp";
   if (/\.(?:jpe?g)$/i.test(key)) return "jpeg";
   return null;
+}
+
+function normalizedAudioMimeType(value: string) {
+  const supplied = value.toLowerCase().split(";", 1)[0].trim();
+  if (supplied === "audio/x-wav") return "audio/wav";
+  if (["audio/mp4", "audio/webm", "audio/ogg", "audio/mpeg", "audio/wav"].includes(supplied)) return supplied;
+  throw new Error("Voice memos must be MP4, WebM, Ogg, MP3, or WAV audio.");
+}
+
+function audioExtension(mimeType: string) {
+  if (mimeType === "audio/mp4") return "m4a";
+  if (mimeType === "audio/mpeg") return "mp3";
+  return mimeType.replace("audio/", "");
+}
+
+function expectedAudioFormat(mimeType: string) {
+  if (mimeType === "audio/mp4") return "mp4";
+  if (mimeType === "audio/mpeg") return "mpeg";
+  return mimeType.replace("audio/", "");
+}
+
+function normalizedVideoMimeType(value: string) {
+  const supplied = value.toLowerCase().split(";", 1)[0].trim();
+  if (["video/mp4", "video/quicktime", "video/webm"].includes(supplied)) return supplied;
+  throw new Error("Videos must be MP4, MOV, or WebM files.");
+}
+
+function videoExtension(mimeType: string) {
+  if (mimeType === "video/quicktime") return "mov";
+  return mimeType.replace("video/", "");
+}
+
+function expectedVideoFormat(mimeType: string) {
+  if (mimeType === "video/quicktime" || mimeType === "video/mp4") return "mp4";
+  return "webm";
+}
+
+function attachmentObjectKeys(row: AttachmentRow) {
+  return (row.kind ?? "image") === "image"
+    ? [row.original_key, row.display_key, row.thumbnail_key]
+    : [row.original_key];
 }
 
 function targetValues(target: UploadTarget) {
@@ -400,10 +472,10 @@ export async function prepareTodoAttachmentUpload(
     if (!todo) throw new Error("Task not found.");
   }
   const count = todoId === null
-    ? await db.prepare("SELECT COUNT(*) AS count FROM todo_attachments WHERE draft_token = ? AND upload_state = 'ready' AND deleted_at IS NULL").bind(draftToken).first<{ count: number }>()
-    : await db.prepare("SELECT COUNT(*) AS count FROM todo_attachments WHERE todo_id = ? AND upload_state = 'ready' AND deleted_at IS NULL").bind(todoId).first<{ count: number }>();
+    ? await db.prepare("SELECT COUNT(*) AS count FROM todo_attachments WHERE draft_token = ? AND deleted_at IS NULL").bind(draftToken).first<{ count: number }>()
+    : await db.prepare("SELECT COUNT(*) AS count FROM todo_attachments WHERE todo_id = ? AND deleted_at IS NULL").bind(todoId).first<{ count: number }>();
   if (Number(count?.count ?? 0) >= MAX_ATTACHMENTS_PER_TASK) {
-    throw new Error(`Tasks are limited to ${MAX_ATTACHMENTS_PER_TASK} images.`);
+    throw new Error(`Tasks are limited to ${MAX_ATTACHMENTS_PER_TASK} attachments.`);
   }
 
   const id = crypto.randomUUID();
@@ -634,6 +706,138 @@ export async function finalizeTodoAttachmentUpload(
   }
 }
 
+function detectedMediaFormat(bytes: Uint8Array) {
+  const ascii = (start: number, length: number) => String.fromCharCode(...bytes.slice(start, start + length));
+  if (bytes.length >= 12 && ascii(4, 4) === "ftyp") return "mp4";
+  if (bytes.length >= 4 && bytes[0] === 0x1a && bytes[1] === 0x45 && bytes[2] === 0xdf && bytes[3] === 0xa3) return "webm";
+  if (bytes.length >= 4 && ascii(0, 4) === "OggS") return "ogg";
+  if (bytes.length >= 12 && ascii(0, 4) === "RIFF" && ascii(8, 4) === "WAVE") return "wav";
+  if (bytes.length >= 3 && ascii(0, 3) === "ID3") return "mpeg";
+  if (bytes.length >= 2 && bytes[0] === 0xff && (bytes[1] & 0xe0) === 0xe0) return "mpeg";
+  return null;
+}
+
+export async function prepareTodoMediaAttachmentUpload(
+  input: PrepareMediaUploadInput,
+  target: UploadTarget,
+) {
+  const startedAt = Date.now();
+  const byteSize = Number(input.byteSize);
+  const kind = input.kind;
+  const maximumBytes = kind === "audio" ? MAX_AUDIO_ATTACHMENT_BYTES : MAX_VIDEO_ATTACHMENT_BYTES;
+  if (!Number.isInteger(byteSize) || byteSize < 1) throw new Error(`That ${kind} file is empty.`);
+  if (byteSize > maximumBytes) throw new Error(kind === "audio" ? "Voice memos are limited to 50 MB." : "Videos are limited to 250 MB.");
+  const fileName = cleanFileName(input.fileName || (kind === "audio" ? "voice memo" : "video"));
+  const mimeType = kind === "audio" ? normalizedAudioMimeType(input.mimeType) : normalizedVideoMimeType(input.mimeType);
+  const db = database();
+  const { isDraft, draftToken, todoId } = targetValues(target);
+  if (todoId !== null) {
+    const todo = await db.prepare("SELECT id FROM todos WHERE id = ?").bind(todoId).first<{ id: number }>();
+    if (!todo) throw new Error("Task not found.");
+  }
+  const count = todoId === null
+    ? await db.prepare("SELECT COUNT(*) AS count FROM todo_attachments WHERE draft_token = ? AND deleted_at IS NULL").bind(draftToken).first<{ count: number }>()
+    : await db.prepare("SELECT COUNT(*) AS count FROM todo_attachments WHERE todo_id = ? AND deleted_at IS NULL").bind(todoId).first<{ count: number }>();
+  if (Number(count?.count ?? 0) >= MAX_ATTACHMENTS_PER_TASK) throw new Error(`Tasks are limited to ${MAX_ATTACHMENTS_PER_TASK} attachments.`);
+
+  const id = crypto.randomUUID();
+  const extension = kind === "audio" ? audioExtension(mimeType) : videoExtension(mimeType);
+  const base = `todo-media/${id}`;
+  const originalKey = `${base}/original.${extension}`;
+  const displayKey = `${base}/no-display`;
+  const thumbnailKey = `${base}/no-thumbnail`;
+  const expiresAt = new Date(Date.now() + DRAFT_LIFETIME_HOURS * 60 * 60 * 1000).toISOString();
+  try {
+    const row = await db.prepare(`
+      INSERT INTO todo_attachments (
+        id, todo_id, draft_token, original_key, display_key, thumbnail_key,
+        file_name, mime_type, byte_size, width, height, kind, duration_ms,
+        upload_state, sort_order, expires_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, 0, 'uploading', ?, ?)
+      RETURNING *
+    `).bind(
+      id, todoId, draftToken, originalKey, displayKey, thumbnailKey,
+      fileName, mimeType, byteSize, kind, Number(count?.count ?? 0), expiresAt,
+    ).first<AttachmentRow>();
+    if (!row) throw new Error(`The ${kind} upload could not be prepared.`);
+    const originalUpload = await signedPostTarget(originalKey, mimeType, maximumBytes);
+    console.info("[todo-attachments] media upload prepared", {
+      attachmentId: id,
+      todoId,
+      draft: isDraft,
+      kind,
+      mimeType,
+      bytes: byteSize,
+      durationMs: Date.now() - startedAt,
+    });
+    return { uploadId: id, uploads: { original: originalUpload } };
+  } catch (error) {
+    await db.prepare("DELETE FROM todo_attachments WHERE id = ? AND upload_state = 'uploading'").bind(id).run().catch(() => undefined);
+    console.error("[todo-attachments] media upload preparation failed", { attachmentId: id, todoId, kind, bytes: byteSize, error });
+    throw error;
+  }
+}
+
+export async function finalizeTodoMediaAttachmentUpload(
+  id: string,
+  input: FinalizeMediaUploadInput,
+  target: UploadTarget,
+) {
+  const startedAt = Date.now();
+  if (!/^[0-9a-f-]{36}$/i.test(id)) throw new Error("That media upload is invalid.");
+  const durationMs = Math.round(Number(input.durationMs));
+  if (!Number.isInteger(durationMs) || durationMs < 1) throw new Error("The media duration could not be read.");
+  const db = database();
+  const { draftToken, todoId } = targetValues(target);
+  const row = todoId === null
+    ? await db.prepare("SELECT * FROM todo_attachments WHERE id = ? AND draft_token = ? AND todo_id IS NULL AND deleted_at IS NULL").bind(id, draftToken).first<AttachmentRow>()
+    : await db.prepare("SELECT * FROM todo_attachments WHERE id = ? AND todo_id = ? AND deleted_at IS NULL").bind(id, todoId).first<AttachmentRow>();
+  if (!row || (row.kind !== "audio" && row.kind !== "video")) throw new Error("That media upload is no longer available.");
+  if (row.upload_state === "ready") return mapAttachment(row);
+  const maximumBytes = row.kind === "audio" ? MAX_AUDIO_ATTACHMENT_BYTES : MAX_VIDEO_ATTACHMENT_BYTES;
+  const maximumDuration = row.kind === "audio" ? MAX_AUDIO_DURATION_MS : MAX_VIDEO_DURATION_MS;
+  if (durationMs > maximumDuration) throw new Error(row.kind === "audio" ? "Voice memos are limited to 30 minutes." : "Videos are limited to 60 minutes.");
+  try {
+    const [bytes, head] = await Promise.all([
+      firstBytes(row.original_key),
+      storageFetch(storageUrl(row.original_key), { method: "HEAD" }),
+    ]);
+    const actualBytes = Number(head.headers.get("content-length") ?? 0);
+    if (actualBytes < 1 || actualBytes > maximumBytes || actualBytes !== row.byte_size) throw new Error("The media upload is incomplete.");
+    const actualFormat = detectedMediaFormat(bytes);
+    const expectedFormat = row.kind === "audio" ? expectedAudioFormat(row.mime_type) : expectedVideoFormat(row.mime_type);
+    if (!actualFormat || actualFormat !== expectedFormat) throw new Error(`The uploaded file is not the expected ${row.kind} type.`);
+    const finalized = await db.prepare(`
+      UPDATE todo_attachments
+      SET duration_ms = ?, byte_size = ?, upload_state = 'ready',
+          expires_at = CASE WHEN todo_id IS NULL THEN expires_at ELSE NULL END,
+          updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+      WHERE id = ? AND upload_state = 'uploading'
+      RETURNING *
+    `).bind(durationMs, actualBytes, id).first<AttachmentRow>();
+    if (!finalized) throw new Error("The media upload could not be finalized.");
+    console.info("[todo-attachments] media upload finalized", {
+      attachmentId: id,
+      todoId,
+      kind: row.kind,
+      mimeType: row.mime_type,
+      bytes: actualBytes,
+      mediaDurationMs: durationMs,
+      durationMs: Date.now() - startedAt,
+    });
+    return mapAttachment(finalized);
+  } catch (error) {
+    try {
+      await deleteKeys(attachmentObjectKeys(row));
+      await db.prepare("DELETE FROM todo_attachments WHERE id = ? AND upload_state = 'uploading'").bind(id).run();
+    } catch (cleanupError) {
+      console.error("[todo-attachments] invalid media cleanup failed", { attachmentId: id, cleanupError });
+    }
+    console.error("[todo-attachments] media upload finalize failed", { attachmentId: id, todoId, kind: row.kind, durationMs: Date.now() - startedAt, error });
+    throw error;
+  }
+}
+
 export async function listTodoAttachments(todoId: number) {
   const result = await database().prepare(`
     SELECT * FROM todo_attachments
@@ -651,7 +855,7 @@ export async function deleteDraftAttachment(id: string, draftToken: string) {
     WHERE id = ? AND draft_token = ? AND todo_id IS NULL AND deleted_at IS NULL
   `).bind(id, draftToken).first<AttachmentRow>();
   if (!row) return false;
-  await deleteKeys([row.original_key, row.display_key, row.thumbnail_key]);
+  await deleteKeys(attachmentObjectKeys(row));
   await db.prepare("DELETE FROM todo_attachments WHERE id = ?").bind(id).run();
   console.info("[todo-attachments] draft removed", { attachmentId: id });
   return true;
@@ -664,7 +868,7 @@ export async function discardTodoAttachmentUpload(todoId: number, id: string) {
     WHERE id = ? AND todo_id = ? AND upload_state = 'uploading' AND deleted_at IS NULL
   `).bind(id, todoId).first<AttachmentRow>();
   if (!row) return false;
-  await deleteKeys([row.original_key, row.display_key, row.thumbnail_key]);
+  await deleteKeys(attachmentObjectKeys(row));
   await db.prepare("DELETE FROM todo_attachments WHERE id = ? AND upload_state = 'uploading'").bind(id).run();
   console.info("[todo-attachments] incomplete task upload discarded", { attachmentId: id, todoId });
   return true;
@@ -691,7 +895,7 @@ export async function deleteTodoAttachment(todoId: number, id: string) {
 export async function claimDraftAttachments(todoId: number, draftToken: string | undefined, inputIds: string[] | undefined) {
   const ids = [...new Set((inputIds ?? []).filter((id) => /^[0-9a-f-]{36}$/i.test(id)))];
   if (!ids.length) return 0;
-  if (ids.length > MAX_ATTACHMENTS_PER_TASK) throw new Error(`Tasks are limited to ${MAX_ATTACHMENTS_PER_TASK} images.`);
+  if (ids.length > MAX_ATTACHMENTS_PER_TASK) throw new Error(`Tasks are limited to ${MAX_ATTACHMENTS_PER_TASK} attachments.`);
   const token = validateDraftToken(draftToken ?? "");
   const db = database();
   const placeholders = ids.map(() => "?").join(", ");
@@ -701,7 +905,7 @@ export async function claimDraftAttachments(todoId: number, draftToken: string |
       AND upload_state = 'ready' AND deleted_at IS NULL
       AND expires_at > strftime('%Y-%m-%dT%H:%M:%fZ','now')
   `).bind(...ids, token).all<{ id: string }>();
-  if (result.results.length !== ids.length) throw new Error("One or more attached images are no longer available.");
+  if (result.results.length !== ids.length) throw new Error("One or more attachments are no longer available.");
   const statements = ids.map((id, sortOrder) => db.prepare(`
     UPDATE todo_attachments
     SET todo_id = ?, draft_token = NULL, expires_at = NULL, sort_order = ?,
@@ -716,7 +920,7 @@ export async function claimDraftAttachments(todoId: number, draftToken: string |
       SET todo_id = NULL, draft_token = ?, expires_at = strftime('%Y-%m-%dT%H:%M:%fZ','now','+24 hours'), sort_order = ?
       WHERE id = ? AND todo_id = ?
     `).bind(token, sortOrder, id, todoId)));
-    throw new Error("The attached images could not be linked to the task.");
+    throw new Error("The attachments could not be linked to the task.");
   }
   console.info("[todo-attachments] draft claimed", { todoId, attachmentIds: ids, count: ids.length });
   return ids.length;
@@ -737,12 +941,14 @@ export function restoreAttachmentStatements(db: D1Database, rows: AttachmentRow[
   const restore = db.prepare(`
     INSERT INTO todo_attachments (
       id, todo_id, draft_token, original_key, display_key, thumbnail_key,
-      file_name, mime_type, byte_size, width, height, upload_state, sort_order,
-      expires_at, deleted_at, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      file_name, mime_type, byte_size, width, height, kind, duration_ms,
+      upload_state, sort_order, expires_at, deleted_at, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       todo_id = excluded.todo_id,
       draft_token = excluded.draft_token,
+      kind = excluded.kind,
+      duration_ms = excluded.duration_ms,
       upload_state = excluded.upload_state,
       sort_order = excluded.sort_order,
       expires_at = excluded.expires_at,
@@ -761,6 +967,8 @@ export function restoreAttachmentStatements(db: D1Database, rows: AttachmentRow[
     row.byte_size,
     row.width,
     row.height,
+    row.kind ?? "image",
+    row.duration_ms ?? 0,
     row.upload_state ?? "ready",
     row.sort_order,
     row.expires_at,
@@ -783,7 +991,7 @@ async function cleanupExpiredAttachments() {
   let removed = 0;
   for (const row of result.results) {
     try {
-      await deleteKeys([row.original_key, row.display_key, row.thumbnail_key]);
+      await deleteKeys(attachmentObjectKeys(row));
       await db.prepare("DELETE FROM todo_attachments WHERE id = ?").bind(row.id).run();
       removed += 1;
     } catch (error) {

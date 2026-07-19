@@ -15,12 +15,15 @@ import {
   ListTodo,
   Merge,
   ImagePlus,
+  Mic,
+  Paperclip,
   Plus,
   RotateCcw,
   RefreshCw,
   Save,
   Search,
   Settings2,
+  Square,
   SlidersHorizontal,
   Trash2,
   Undo2,
@@ -42,6 +45,8 @@ export type ActionIconName =
   | "merge"
   | "move"
   | "image"
+  | "attachment"
+  | "mic"
   | "next"
   | "open"
   | "restore"
@@ -49,6 +54,7 @@ export type ActionIconName =
   | "save"
   | "search"
   | "settings"
+  | "stop"
   | "select"
   | "snooze"
   | "undo"
@@ -71,6 +77,8 @@ const icons: Record<ActionIconName, ComponentType<LucideProps>> = {
   merge: Merge,
   move: FolderInput,
   image: ImagePlus,
+  attachment: Paperclip,
+  mic: Mic,
   next: ChevronRight,
   open: RotateCcw,
   restore: RotateCcw,
@@ -78,6 +86,7 @@ const icons: Record<ActionIconName, ComponentType<LucideProps>> = {
   save: Save,
   search: Search,
   settings: Settings2,
+  stop: Square,
   select: ListChecks,
   snooze: Clock3,
   undo: Undo2,

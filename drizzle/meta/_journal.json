@@ -43,6 +43,13 @@
       "when": 1784439238138,
       "tag": "0005_opposite_rockslide",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1784471863707,
+      "tag": "0006_square_kang",
+      "breakpoints": true
     }
   ]
 }

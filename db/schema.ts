@@ -14,6 +14,7 @@ export const todos = sqliteTable(
     context: text("context"),
     sourceKind: text("source_kind"),
     sourceId: integer("source_id"),
+    clientId: text("client_id"),
     completedAt: text("completed_at"),
     snoozedUntil: text("snoozed_until"),
     createdAt: text("created_at")
@@ -29,6 +30,7 @@ export const todos = sqliteTable(
     index("todos_due_date_idx").on(table.dueDate),
     index("todos_snoozed_until_idx").on(table.snoozedUntil),
     uniqueIndex("todos_source_idx").on(table.sourceKind, table.sourceId),
+    uniqueIndex("todos_client_id_idx").on(table.clientId),
   ],
 );
 
@@ -77,6 +79,8 @@ export const todoAttachments = sqliteTable(
     byteSize: integer("byte_size").notNull(),
     width: integer("width").notNull(),
     height: integer("height").notNull(),
+    kind: text("kind").notNull().default("image"),
+    durationMs: integer("duration_ms").notNull().default(0),
     uploadState: text("upload_state").notNull().default("ready"),
     sortOrder: integer("sort_order").notNull().default(0),
     expiresAt: text("expires_at"),
