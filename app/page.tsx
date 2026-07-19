@@ -6,6 +6,7 @@ import {
   FormEvent,
   PointerEvent as ReactPointerEvent,
   useEffect,
+  useEffectEvent,
   useMemo,
   useRef,
   useState,
@@ -126,6 +127,7 @@ type PreparedAttachmentUpload = {
 };
 
 type PrivatePostTarget = { url: string; fields: Record<string, string> };
+type OptimizedImage = { blob: Blob; mimeType: "image/webp" | "image/jpeg"; format: "webp" | "jpeg" };
 
 function uploadMimeType(file: File) {
   const supplied = file.type.toLowerCase().trim();
@@ -168,7 +170,21 @@ async function decodedImage(file: File) {
   }
 }
 
-function canvasWebp(source: CanvasImageSource, width: number, height: number, maxDimension: number, quality: number) {
+async function encodedImageFormat(blob: Blob) {
+  const bytes = new Uint8Array(await blob.slice(0, 12).arrayBuffer());
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "jpeg" as const;
+  const ascii = (start: number, length: number) => String.fromCharCode(...bytes.slice(start, start + length));
+  if (bytes.length >= 12 && ascii(0, 4) === "RIFF" && ascii(8, 4) === "WEBP") return "webp" as const;
+  return null;
+}
+
+function canvasBlob(canvas: HTMLCanvasElement, mimeType: string, quality: number) {
+  return new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error("This browser could not optimize the image.")), mimeType, quality);
+  });
+}
+
+async function canvasOptimizedImage(source: CanvasImageSource, width: number, height: number, maxDimension: number, quality: number): Promise<OptimizedImage> {
   const scale = Math.min(1, maxDimension / Math.max(width, height));
   const outputWidth = Math.max(1, Math.round(width * scale));
   const outputHeight = Math.max(1, Math.round(height * scale));
@@ -178,9 +194,20 @@ function canvasWebp(source: CanvasImageSource, width: number, height: number, ma
   const context = canvas.getContext("2d", { alpha: true });
   if (!context) throw new Error("This browser cannot process images.");
   context.drawImage(source, 0, 0, outputWidth, outputHeight);
-  return new Promise<Blob>((resolve, reject) => {
-    canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error("This browser could not optimize the image.")), "image/webp", quality);
-  });
+  const webp = await canvasBlob(canvas, "image/webp", quality);
+  if (await encodedImageFormat(webp) === "webp") {
+    return { blob: webp, mimeType: "image/webp", format: "webp" };
+  }
+
+  // Safari may return PNG bytes when WebP was requested. JPEG canvas output is
+  // universal, so flatten transparency onto white and use it as the optimized fallback.
+  context.globalCompositeOperation = "destination-over";
+  context.fillStyle = "#ffffff";
+  context.fillRect(0, 0, outputWidth, outputHeight);
+  context.globalCompositeOperation = "source-over";
+  const jpeg = await canvasBlob(canvas, "image/jpeg", quality);
+  if (await encodedImageFormat(jpeg) !== "jpeg") throw new Error("This browser could not create a compatible optimized image.");
+  return { blob: jpeg, mimeType: "image/jpeg", format: "jpeg" };
 }
 
 async function imageVariants(file: File) {
@@ -192,13 +219,15 @@ async function imageVariants(file: File) {
     if (!width || !height || width * height > MAX_IMAGE_PIXELS) throw new Error("That image is too large to process.");
     const startedAt = performance.now();
     const [display, thumbnail] = await Promise.all([
-      canvasWebp(source, width, height, 2048, 0.82),
-      canvasWebp(source, width, height, 480, 0.75),
+      canvasOptimizedImage(source, width, height, 2048, 0.82),
+      canvasOptimizedImage(source, width, height, 480, 0.75),
     ]);
     console.info("[todo-ui] image variants prepared", {
       inputBytes: file.size,
-      displayBytes: display.size,
-      thumbnailBytes: thumbnail.size,
+      displayBytes: display.blob.size,
+      thumbnailBytes: thumbnail.blob.size,
+      displayFormat: display.format,
+      thumbnailFormat: thumbnail.format,
       width,
       height,
       durationMs: Math.round(performance.now() - startedAt),
@@ -228,13 +257,20 @@ async function uploadPrivateImage(
   const variants = await imageVariants(file);
   const prepared = await request<PreparedAttachmentUpload>(endpoint, {
     method: "POST",
-    body: JSON.stringify({ ...target, fileName: file.name || "image", mimeType, byteSize: file.size }),
+    body: JSON.stringify({
+      ...target,
+      fileName: file.name || "image",
+      mimeType,
+      byteSize: file.size,
+      displayMimeType: variants.display.mimeType,
+      thumbnailMimeType: variants.thumbnail.mimeType,
+    }),
   });
   try {
     const uploads = await Promise.allSettled([
       postPrivateVariant(prepared.uploads.original, file),
-      postPrivateVariant(prepared.uploads.display, variants.display),
-      postPrivateVariant(prepared.uploads.thumbnail, variants.thumbnail),
+      postPrivateVariant(prepared.uploads.display, variants.display.blob),
+      postPrivateVariant(prepared.uploads.thumbnail, variants.thumbnail.blob),
     ]);
     const failed = uploads.find((result): result is PromiseRejectedResult => result.status === "rejected");
     if (failed) throw failed.reason;
@@ -263,7 +299,6 @@ function AttachmentPicker({
 }) {
   const [open, setOpen] = useState(false);
   const libraryRef = useRef<HTMLInputElement>(null);
-  const cameraRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -314,10 +349,7 @@ function AttachmentPicker({
             <div role="menu" className="relative w-full rounded-t-3xl bg-white px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-4 shadow-2xl">
               <p className="mb-3 px-1 text-sm font-semibold text-[#303632]">Attach an image</p>
               <button type="button" role="menuitem" onClick={() => libraryRef.current?.click()} className="flex h-12 w-full items-center gap-3 rounded-xl px-3 text-left text-[16px] font-semibold text-[#303632] hover:bg-[#f2f5f2]">
-                <ActionIcon name="image" className="h-5 w-5 text-[#216e4e]" />Photo library
-              </button>
-              <button type="button" role="menuitem" onClick={() => cameraRef.current?.click()} className="flex h-12 w-full items-center gap-3 rounded-xl px-3 text-left text-[16px] font-semibold text-[#303632] hover:bg-[#f2f5f2]">
-                <ActionIcon name="camera" className="h-5 w-5 text-[#216e4e]" />Take photo
+                <ActionIcon name="image" className="h-5 w-5 text-[#216e4e]" />Choose photos
               </button>
               <button type="button" onClick={() => setOpen(false)} className="mt-2 h-12 w-full rounded-xl bg-[#f1f2f0] text-[16px] font-semibold text-[#59615c]">Cancel</button>
             </div>
@@ -326,7 +358,6 @@ function AttachmentPicker({
       )}
 
       <input ref={libraryRef} type="file" accept={IMAGE_ACCEPT} multiple className="sr-only" tabIndex={-1} onChange={(event) => selected(event.currentTarget)} />
-      <input ref={cameraRef} type="file" accept="image/*" capture="environment" className="sr-only" tabIndex={-1} onChange={(event) => selected(event.currentTarget)} />
     </div>
   );
 }
@@ -613,6 +644,7 @@ export default function Home() {
   const [savingEdit, setSavingEdit] = useState(false);
   const [detailAttachments, setDetailAttachments] = useState<TodoAttachment[]>([]);
   const [detailUploads, setDetailUploads] = useState<PendingAttachment[]>([]);
+  const [imageDropActive, setImageDropActive] = useState(false);
   const [loadingAttachments, setLoadingAttachments] = useState(false);
   const [attachmentError, setAttachmentError] = useState("");
   const [viewerIndex, setViewerIndex] = useState<number | null>(null);
@@ -631,7 +663,22 @@ export default function Home() {
   const captureRef = useRef<HTMLTextAreaElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const viewerGesture = useRef<number | null>(null);
+  const imageDropDepth = useRef(0);
   const overlayOpen = editingId !== null || projectDialog !== null || newProjectOpen || projectDeleteDialog !== null || filtersOpen || viewerIndex !== null;
+
+  const routeDroppedImages = useEffectEvent((files: File[]) => {
+    const destination = editingId !== null ? "task" : "quick-add";
+    if (editingId !== null) queueDetailImages(files);
+    else {
+      queueCaptureImages(files);
+      captureRef.current?.focus();
+    }
+    console.info("[todo-ui] dropped images routed", {
+      destination,
+      count: files.length,
+      totalBytes: files.reduce((sum, file) => sum + file.size, 0),
+    });
+  });
 
   useEffect(() => {
     let active = true;
@@ -722,6 +769,50 @@ export default function Home() {
       body.style.paddingRight = previousPaddingRight;
     };
   }, [overlayOpen]);
+
+  useEffect(() => {
+    const includesFiles = (event: DragEvent) => Array.from(event.dataTransfer?.types ?? []).includes("Files");
+    const dragEnter = (event: DragEvent) => {
+      if (!includesFiles(event)) return;
+      event.preventDefault();
+      imageDropDepth.current += 1;
+      setImageDropActive(true);
+    };
+    const dragOver = (event: DragEvent) => {
+      if (!includesFiles(event)) return;
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+    };
+    const dragLeave = () => {
+      if (imageDropDepth.current === 0) return;
+      imageDropDepth.current = Math.max(0, imageDropDepth.current - 1);
+      if (imageDropDepth.current === 0) setImageDropActive(false);
+    };
+    const resetDrag = () => {
+      imageDropDepth.current = 0;
+      setImageDropActive(false);
+    };
+    const drop = (event: DragEvent) => {
+      if (!includesFiles(event)) return;
+      event.preventDefault();
+      const files = [...(event.dataTransfer?.files ?? [])];
+      resetDrag();
+      if (!files.length) return;
+      routeDroppedImages(files);
+    };
+    window.addEventListener("dragenter", dragEnter);
+    window.addEventListener("dragover", dragOver);
+    window.addEventListener("dragleave", dragLeave);
+    window.addEventListener("drop", drop);
+    window.addEventListener("dragend", resetDrag);
+    return () => {
+      window.removeEventListener("dragenter", dragEnter);
+      window.removeEventListener("dragover", dragOver);
+      window.removeEventListener("dragleave", dragLeave);
+      window.removeEventListener("drop", drop);
+      window.removeEventListener("dragend", resetDrag);
+    };
+  }, []);
 
   const projects = useMemo(
     () => [...new Set([
@@ -818,7 +909,7 @@ export default function Home() {
 
   async function uploadCaptureAttachment(localId: string, file: File, draftToken: string) {
     try {
-      const { attachment } = await uploadPrivateImage(file, "/api/attachments/drafts", { draftToken }, (uploadId) => request(`/api/attachments/drafts/${uploadId}`, {
+      const { attachment } = await uploadPrivateImage(file, "/api/attachments/drafts", { draftToken }, (uploadId) => request(`/api/attachments/drafts/${uploadId}?discard=1`, {
         method: "DELETE",
         body: JSON.stringify({ draftToken }),
       }));
@@ -1453,6 +1544,14 @@ export default function Home() {
   return (
     <main className="min-h-screen bg-[#f6f7f5] text-[#1d211f]">
       <SiteHeader current="todos" />
+      {imageDropActive && (
+        <div className="pointer-events-none fixed inset-0 z-[100] grid place-items-center bg-[#153d2d]/25 p-5 backdrop-blur-[2px]" role="status" aria-live="polite">
+          <div className="flex max-w-sm items-center gap-3 rounded-2xl border border-[#216e4e]/25 bg-white px-5 py-4 text-base font-semibold text-[#216e4e] shadow-2xl">
+            <ActionIcon name="image" className="h-6 w-6" />
+            Drop images to attach to {editingTodo ? "this task" : "the new task"}
+          </div>
+        </div>
+      )}
       <div className="mx-auto max-w-5xl px-4 pb-28 pt-5 sm:px-6 sm:pt-7">
         <form onSubmit={addTodo} className="mb-5 rounded-2xl border border-black/[0.07] bg-white p-2 shadow-[0_10px_35px_rgba(30,45,36,0.07)] sm:p-3">
           <div className="flex items-end gap-2">

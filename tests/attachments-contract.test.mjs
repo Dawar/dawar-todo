@@ -64,6 +64,12 @@ test("stores private task images with optimized variants and recovery metadata",
   assert.match(attachments, /upload_state = 'ready'/);
   assert.match(attachments, /detectedImageFormat/);
   assert.match(attachments, /inspectedImageDimensions/);
+  assert.match(attachments, /normalizedDerivativeMimeType/);
+  assert.match(attachments, /Optimized images must be WebP or JPEG/);
+  assert.match(attachments, /display\.\$\{extensionForMimeType\(displayMimeType\)\}/);
+  assert.match(attachments, /thumb\.\$\{extensionForMimeType\(thumbnailMimeType\)\}/);
+  assert.match(attachments, /displayFormat !== expectedDisplayFormat/);
+  assert.match(attachments, /thumbnailFormat !== expectedThumbnailFormat/);
   assert.match(attachments, /Math\.max\(displayDimensions\.width, displayDimensions\.height\) > 2048/);
   assert.match(attachments, /Math\.max\(thumbnailDimensions\.width, thumbnailDimensions\.height\) > 480/);
   assert.match(attachments, /invalid direct upload cleanup failed/);
@@ -75,7 +81,7 @@ test("stores private task images with optimized variants and recovery metadata",
   assert.match(todos, /restoredAttachments/);
 });
 
-test("exposes capture, mobile camera, paste, gallery, and viewer contracts", async () => {
+test("exposes capture, Safari-safe optimization, drop, gallery, and viewer contracts", async () => {
   const [page, actionIcons, draftRoute, taskAttachmentsRoute, attachmentRoute, todosRoute] = await Promise.all([
     readFile(new URL("app/page.tsx", root), "utf8"),
     readFile(new URL("app/action-icon.tsx", root), "utf8"),
@@ -86,15 +92,24 @@ test("exposes capture, mobile camera, paste, gallery, and viewer contracts", asy
   ]);
 
   assert.match(page, /function AttachmentPicker/);
-  assert.match(page, /Photo library/);
-  assert.match(page, /Take photo/);
-  assert.match(page, /capture="environment"/);
+  assert.match(page, /Choose photos/);
+  assert.doesNotMatch(page, /Take photo/);
+  assert.doesNotMatch(page, /capture="environment"/);
   assert.match(page, /multiple className="sr-only"/);
   assert.match(page, /onPaste=\{\(event\) =>/);
   assert.match(page, /queueCaptureImages\(files\)/);
   assert.match(page, /queueDetailImages\(files\)/);
-  assert.match(page, /canvasWebp\(source, width, height, 2048, 0\.82\)/);
-  assert.match(page, /canvasWebp\(source, width, height, 480, 0\.75\)/);
+  assert.match(page, /canvasOptimizedImage\(source, width, height, 2048, 0\.82\)/);
+  assert.match(page, /canvasOptimizedImage\(source, width, height, 480, 0\.75\)/);
+  assert.match(page, /encodedImageFormat\(webp\) === "webp"/);
+  assert.match(page, /canvasBlob\(canvas, "image\/jpeg", quality\)/);
+  assert.match(page, /displayMimeType: variants\.display\.mimeType/);
+  assert.match(page, /thumbnailMimeType: variants\.thumbnail\.mimeType/);
+  assert.match(page, /window\.addEventListener\("dragenter", dragEnter\)/);
+  assert.match(page, /window\.addEventListener\("drop", drop\)/);
+  assert.match(page, /Drop images to attach to/);
+  assert.match(page, /routeDroppedImages = useEffectEvent/);
+  assert.match(page, /if \(editingId !== null\) queueDetailImages\(files\)/);
   assert.match(page, /Promise\.allSettled/);
   assert.match(page, /method: "POST", mode: "no-cors"/);
   assert.match(page, /postPrivateVariant/);
@@ -112,13 +127,18 @@ test("exposes capture, mobile camera, paste, gallery, and viewer contracts", asy
   assert.match(actionIcons, /Download/);
   assert.match(draftRoute, /prepareTodoAttachmentUpload/);
   assert.match(draftRoute, /finalizeTodoAttachmentUpload/);
+  assert.match(draftRoute, /displayMimeType: payload\.displayMimeType/);
+  assert.match(draftRoute, /thumbnailMimeType: payload\.thumbnailMimeType/);
   assert.doesNotMatch(draftRoute, /formData\(\)/);
   assert.match(taskAttachmentsRoute, /listTodoAttachments/);
   assert.match(taskAttachmentsRoute, /prepareTodoAttachmentUpload/);
   assert.match(taskAttachmentsRoute, /finalizeTodoAttachmentUpload/);
+  assert.match(taskAttachmentsRoute, /displayMimeType: payload\.displayMimeType/);
+  assert.match(taskAttachmentsRoute, /thumbnailMimeType: payload\.thumbnailMimeType/);
   assert.doesNotMatch(taskAttachmentsRoute, /formData\(\)/);
   assert.match(attachmentRoute, /deleteTodoAttachment/);
   assert.match(attachmentRoute, /discardTodoAttachmentUpload/);
+  assert.match(attachmentRoute, /Response\.json\(\{ attachmentId, discarded \}\)/);
   assert.match(todosRoute, /draftToken/);
   assert.match(todosRoute, /attachmentIds/);
 });

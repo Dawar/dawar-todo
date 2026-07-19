@@ -199,6 +199,8 @@ type PrepareUploadInput = {
   fileName: string;
   mimeType: string;
   byteSize: number;
+  displayMimeType?: string;
+  thumbnailMimeType?: string;
 };
 
 type FinalizeUploadInput = {
@@ -220,6 +222,20 @@ function normalizedMimeType(value: string, fileName: string) {
 
 function extensionForMimeType(mimeType: string) {
   return mimeType === "image/jpeg" ? "jpg" : mimeType.replace("image/", "");
+}
+
+function normalizedDerivativeMimeType(value: string | undefined) {
+  const mimeType = value?.toLowerCase().trim() || "image/webp";
+  if (mimeType !== "image/webp" && mimeType !== "image/jpeg") {
+    throw new Error("Optimized images must be WebP or JPEG.");
+  }
+  return mimeType;
+}
+
+function derivativeFormatForKey(key: string) {
+  if (/\.webp$/i.test(key)) return "webp";
+  if (/\.(?:jpe?g)$/i.test(key)) return "jpeg";
+  return null;
 }
 
 function targetValues(target: UploadTarget) {
@@ -375,6 +391,8 @@ export async function prepareTodoAttachmentUpload(
   if (byteSize > MAX_ATTACHMENT_BYTES) throw new Error("Images are limited to 20 MB each.");
   const fileName = cleanFileName(input.fileName);
   const mimeType = normalizedMimeType(input.mimeType, fileName);
+  const displayMimeType = normalizedDerivativeMimeType(input.displayMimeType);
+  const thumbnailMimeType = normalizedDerivativeMimeType(input.thumbnailMimeType);
   const db = database();
   const { isDraft, draftToken, todoId } = targetValues(target);
   if (todoId !== null) {
@@ -391,8 +409,8 @@ export async function prepareTodoAttachmentUpload(
   const id = crypto.randomUUID();
   const base = `todo-images/${id}`;
   const originalKey = `${base}/original.${extensionForMimeType(mimeType)}`;
-  const displayKey = `${base}/display.webp`;
-  const thumbnailKey = `${base}/thumb.webp`;
+  const displayKey = `${base}/display.${extensionForMimeType(displayMimeType)}`;
+  const thumbnailKey = `${base}/thumb.${extensionForMimeType(thumbnailMimeType)}`;
   try {
     const nextOrder = Number(count?.count ?? 0);
     const expiresAt = new Date(Date.now() + DRAFT_LIFETIME_HOURS * 60 * 60 * 1000).toISOString();
@@ -418,14 +436,16 @@ export async function prepareTodoAttachmentUpload(
     if (!row) throw new Error("The image upload could not be prepared.");
     const [originalUpload, displayUpload, thumbnailUpload] = await Promise.all([
       signedPostTarget(originalKey, mimeType, byteSize),
-      signedPostTarget(displayKey, "image/webp", 8 * 1024 * 1024),
-      signedPostTarget(thumbnailKey, "image/webp", 2 * 1024 * 1024),
+      signedPostTarget(displayKey, displayMimeType, 8 * 1024 * 1024),
+      signedPostTarget(thumbnailKey, thumbnailMimeType, 2 * 1024 * 1024),
     ]);
     console.info("[todo-attachments] direct upload prepared", {
       attachmentId: id,
       todoId,
       draft: isDraft,
       bytes: byteSize,
+      displayMimeType,
+      thumbnailMimeType,
       durationMs: Date.now() - startedAt,
     });
     return {
@@ -556,12 +576,16 @@ export async function finalizeTodoAttachmentUpload(
     if (!originalFormat || (expected !== originalFormat && !(expected === "heif" && originalFormat === "heic") && !(expected === "heic" && originalFormat === "heif"))) {
       throw new Error("The uploaded file is not the expected image type.");
     }
-    if (detectedImageFormat(displayBytes) !== "webp" || detectedImageFormat(thumbnailBytes) !== "webp") {
+    const expectedDisplayFormat = derivativeFormatForKey(row.display_key);
+    const expectedThumbnailFormat = derivativeFormatForKey(row.thumbnail_key);
+    const displayFormat = detectedImageFormat(displayBytes);
+    const thumbnailFormat = detectedImageFormat(thumbnailBytes);
+    if (!expectedDisplayFormat || !expectedThumbnailFormat || displayFormat !== expectedDisplayFormat || thumbnailFormat !== expectedThumbnailFormat) {
       throw new Error("The optimized image files are invalid.");
     }
     const originalDimensions = inspectedImageDimensions(originalBytes, originalFormat);
-    const displayDimensions = inspectedImageDimensions(displayBytes, "webp");
-    const thumbnailDimensions = inspectedImageDimensions(thumbnailBytes, "webp");
+    const displayDimensions = inspectedImageDimensions(displayBytes, displayFormat);
+    const thumbnailDimensions = inspectedImageDimensions(thumbnailBytes, thumbnailFormat);
     const reportedDimensionsMatch = !originalDimensions
       || (originalDimensions.width === width && originalDimensions.height === height)
       || (originalDimensions.width === height && originalDimensions.height === width);
@@ -587,6 +611,8 @@ export async function finalizeTodoAttachmentUpload(
       bytes: originalSize,
       displayBytes: displaySize,
       thumbnailBytes: thumbnailSize,
+      displayFormat,
+      thumbnailFormat,
       width,
       height,
       displayWidth: displayDimensions.width,

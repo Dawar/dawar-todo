@@ -16,6 +16,8 @@ type TaskUploadPayload = {
   fileName?: string;
   mimeType?: string;
   byteSize?: number;
+  displayMimeType?: string;
+  thumbnailMimeType?: string;
   width?: number;
   height?: number;
 };
@@ -55,6 +57,8 @@ export async function POST(
       fileName: String(payload.fileName ?? ""),
       mimeType: String(payload.mimeType ?? ""),
       byteSize: Number(payload.byteSize),
+      displayMimeType: payload.displayMimeType,
+      thumbnailMimeType: payload.thumbnailMimeType,
     }, { todoId: id });
     console.info("[todo-api] task attachment upload prepared", {
       todoId: id,

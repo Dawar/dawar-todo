@@ -10,6 +10,9 @@ export async function DELETE(
     await ensureTodoDatabase();
     const payload = (await request.json().catch(() => ({}))) as { draftToken?: string };
     const removed = await deleteDraftAttachment(id, payload.draftToken ?? "");
+    if (new URL(request.url).searchParams.get("discard") === "1") {
+      return Response.json({ attachmentId: id, discarded: removed });
+    }
     if (!removed) return Response.json({ error: "Image not found." }, { status: 404 });
     return Response.json({ attachmentId: id });
   } catch (error) {

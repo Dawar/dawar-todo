@@ -11,6 +11,8 @@ type DraftUploadPayload = {
   fileName?: string;
   mimeType?: string;
   byteSize?: number;
+  displayMimeType?: string;
+  thumbnailMimeType?: string;
   width?: number;
   height?: number;
 };
@@ -24,6 +26,8 @@ export async function POST(request: Request) {
       fileName: String(payload.fileName ?? ""),
       mimeType: String(payload.mimeType ?? ""),
       byteSize: Number(payload.byteSize),
+      displayMimeType: payload.displayMimeType,
+      thumbnailMimeType: payload.thumbnailMimeType,
     }, { draftToken: String(payload.draftToken ?? "") });
     await scheduleAttachmentCleanup();
     console.info("[todo-api] draft attachment upload prepared", {

@@ -12,9 +12,7 @@ export async function DELETE(
     await ensureTodoDatabase();
     if (new URL(request.url).searchParams.get("discard") === "1") {
       const discarded = await discardTodoAttachmentUpload(todoId, attachmentId);
-      return discarded
-        ? Response.json({ attachmentId, discarded: true })
-        : Response.json({ error: "Image upload not found." }, { status: 404 });
+      return Response.json({ attachmentId, discarded });
     }
     const result = await deleteTodoAttachment(todoId, attachmentId);
     if (!result) return Response.json({ error: "Image not found." }, { status: 404 });
