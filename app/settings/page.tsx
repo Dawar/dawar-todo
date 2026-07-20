@@ -37,6 +37,8 @@ const timeZones = [
   ["UTC", "UTC"],
 ];
 
+const compactOutlineActionClass = "inline-flex h-10 appearance-none items-center gap-2 rounded-xl border-0 bg-white px-3.5 text-sm font-semibold text-[#216e4e] ring-1 ring-black/[0.06] transition hover:bg-[#edf5f0] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#216e4e]";
+
 function hourLabel(hour: number) {
   if (hour === 0) return "12:00 AM";
   if (hour < 12) return `${hour}:00 AM`;
@@ -374,8 +376,8 @@ export default function SettingsPage() {
             <p className="text-sm font-semibold text-[#303632]">Agent documentation</p>
             <p className="mt-1 text-xs leading-5 text-[#7c847f]">Use the public OpenAPI 3.1 specification to discover request bodies, responses, and Bearer authentication.</p>
             <div className="mt-3 flex flex-wrap gap-2">
-              <a href="/openapi.json" target="_blank" rel="noreferrer" className="inline-flex h-9 appearance-none items-center gap-1.5 rounded-lg border-0 bg-white px-3 font-[inherit] text-xs font-semibold text-[#216e4e] ring-1 ring-black/[0.06] hover:bg-[#edf5f0]"><ActionIcon name="link" />Open specification</a>
-              <button type="button" onClick={() => void copyOpenApiUrl()} className="inline-flex h-9 appearance-none items-center gap-1.5 rounded-lg border-0 bg-white px-3 font-[inherit] text-xs font-semibold text-[#216e4e] ring-1 ring-black/[0.06] hover:bg-[#edf5f0]"><ActionIcon name="copy" />Copy OpenAPI URL</button>
+              <a href="/openapi.json" target="_blank" rel="noreferrer" className={compactOutlineActionClass}><ActionIcon name="link" />Open specification</a>
+              <button type="button" onClick={() => void copyOpenApiUrl()} className={compactOutlineActionClass}><ActionIcon name="copy" />Copy OpenAPI URL</button>
             </div>
           </div>
 

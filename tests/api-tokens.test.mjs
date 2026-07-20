@@ -57,12 +57,13 @@ test("accepts valid Bearer tokens and rejects invalid or privileged token reques
 });
 
 test("ships hashed revocable API tokens and a public agent specification", async () => {
-  const [schema, database, tokens, appAccess, settings, tokenRoute, revokeRoute, migration, encryptionMigration, scrubMigration, openApiText] = await Promise.all([
+  const [schema, database, tokens, appAccess, settings, globals, tokenRoute, revokeRoute, migration, encryptionMigration, scrubMigration, openApiText] = await Promise.all([
     readFile(new URL("db/schema.ts", root), "utf8"),
     readFile(new URL("db/todos.ts", root), "utf8"),
     readFile(new URL("db/api-tokens.ts", root), "utf8"),
     readFile(new URL("worker/access.ts", root), "utf8"),
     readFile(new URL("app/settings/page.tsx", root), "utf8"),
+    readFile(new URL("app/globals.css", root), "utf8"),
     readFile(new URL("app/api/api-tokens/route.ts", root), "utf8"),
     readFile(new URL("app/api/api-tokens/[id]/route.ts", root), "utf8"),
     readFile(new URL("drizzle/0008_military_proudstar.sql", root), "utf8"),
@@ -91,6 +92,10 @@ test("ships hashed revocable API tokens and a public agent specification", async
   assert.match(settings, /API access/);
   assert.match(settings, /Generate token/);
   assert.match(settings, /Copy OpenAPI URL/);
+  assert.match(settings, /const compactOutlineActionClass/);
+  assert.match(settings, /className=\{compactOutlineActionClass\}[^]*className=\{compactOutlineActionClass\}/);
+  assert.match(globals, /font-family: inherit/);
+  assert.doesNotMatch(globals, /font:\s*inherit/);
   assert.match(settings, /Copy Skill/);
   assert.match(settings, /SKILL\.md copied/);
   assert.match(settings, /createdToken\.skill/);
