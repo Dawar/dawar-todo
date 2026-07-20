@@ -154,3 +154,26 @@ test("removes starter preview dependencies", async () => {
   assert.match(packageJson, /lucide-react/);
   assert.doesNotMatch(combined, /react-loading-skeleton|codex-preview|Your site is taking shape|Starter Project/i);
 });
+
+test("supports a deliberate mobile pull gesture that fully reloads the app", async () => {
+  const [layout, pullToRefresh] = await Promise.all([
+    readFile(new URL("app/layout.tsx", root), "utf8"),
+    readFile(new URL("app/pull-to-refresh.tsx", root), "utf8"),
+  ]);
+
+  assert.match(layout, /<PullToRefresh \/>/);
+  assert.match(layout, /className="overscroll-y-none"/);
+  assert.match(pullToRefresh, /\(max-width: 767px\)/);
+  assert.match(pullToRefresh, /\(pointer: coarse\)/);
+  assert.match(pullToRefresh, /window\.scrollY <= 0/);
+  assert.match(pullToRefresh, /Math\.abs\(deltaX\) >= deltaY/);
+  assert.match(pullToRefresh, /addEventListener\("touchmove", onTouchMove, \{ passive: false \}\)/);
+  assert.match(pullToRefresh, /event\.cancelable\) event\.preventDefault\(\)/);
+  assert.match(pullToRefresh, /window\.location\.reload\(\)/);
+  assert.match(pullToRefresh, /Pull to refresh/);
+  assert.match(pullToRefresh, /Release to refresh/);
+  assert.match(pullToRefresh, /Refreshing…/);
+  assert.match(pullToRefresh, /\[todo-pwa\] pull refresh triggered/);
+  assert.match(pullToRefresh, /\[role='dialog'\], input, textarea, select/);
+  assert.match(pullToRefresh, /pointer-events-none fixed inset-x-0/);
+});

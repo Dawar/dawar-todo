@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { headers } from "next/headers";
 import "./globals.css";
 import { PwaRegister } from "./pwa-register";
+import { PullToRefresh } from "./pull-to-refresh";
 
 export async function generateMetadata(): Promise<Metadata> {
   const requestHeaders = await headers();
@@ -51,7 +52,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body><PwaRegister />{children}</body>
+      <body className="overscroll-y-none"><PwaRegister /><PullToRefresh />{children}</body>
     </html>
   );
 }
