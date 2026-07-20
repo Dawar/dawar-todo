@@ -2593,8 +2593,6 @@ export default function Home() {
             </div>
           </div>
 
-          <p className="mb-2 px-1 text-[11px] text-[#8a918d] md:hidden">Swipe left: done/open · keep swiping to snooze/wake · Swipe right: assign project / delete</p>
-
           <div className="overflow-hidden rounded-2xl border border-black/[0.07] bg-white shadow-[0_8px_30px_rgba(30,45,36,0.05)]">
             {loading ? (
               <div role="status" className="space-y-1 p-2" aria-label="Loading tasks">
@@ -2655,10 +2653,6 @@ export default function Home() {
           )}
         </section>
 
-        <footer className="mt-5 flex flex-wrap items-center justify-between gap-2 px-1 text-xs text-[#858c87]">
-          <span>Private · saved automatically</span>
-          <span className="hidden sm:inline"><kbd className="rounded border border-black/10 bg-white px-1.5 py-0.5">N</kbd> new task &nbsp; <kbd className="rounded border border-black/10 bg-white px-1.5 py-0.5">/</kbd> search</span>
-        </footer>
       </div>
 
       {selectedIds.length > 0 && (

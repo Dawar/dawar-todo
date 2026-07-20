@@ -34,7 +34,7 @@ test("ships the simplified todo and project surface", async () => {
   assert.match(page, /view === "all".*todo\.status === "open" \|\| todo\.status === "completed"/);
   assert.match(page, /projectFilterApplies = view === "open" \|\| view === "snoozed" \|\| view === "all"/);
   assert.match(page, /Select visible/);
-  assert.match(page, /Swipe left: done\/open.*Swipe right: assign project \/ delete/);
+  assert.doesNotMatch(page, /Swipe left:|Swipe right:/);
   assert.match(page, /leftSecondaryAction.*snoozed/s);
   assert.match(page, /\? \{ action: "unsnooze", label: "Wake", icon: "wake" \}/);
   assert.match(page, /view === "snoozed".*bulkAction\("unsnooze"\)/s);
@@ -137,6 +137,7 @@ test("ships the simplified todo and project surface", async () => {
   assert.match(siteHeader, /<ActionIcon name="settings"/);
   assert.doesNotMatch(actionIcons, /Archive|"archive"/);
   assert.doesNotMatch(page, /Capture what needs doing\. Then move/);
+  assert.doesNotMatch(page, /Private · saved automatically|new task &nbsp;|<footer/);
   assert.match(hosting, /"d1": "DB"/);
   assert.match(schema, /pinned: integer\("pinned"/);
   assert.match(schema, /todos_pinned_idx/);
