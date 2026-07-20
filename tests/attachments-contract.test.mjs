@@ -183,6 +183,7 @@ test("installs an offline-capable PWA with idempotent queued task syncing", asyn
   assert.match(offlineStore, /indexedDB\.open/);
   assert.match(offlineStore, /pending-todos/);
   assert.match(offlineStore, /blob: Blob/);
+  assert.match(offlineStore, /project: string \| null/);
   assert.match(offlineStore, /navigator\.storage\.persist/);
   assert.match(page, /saveOfflineTodo/);
   assert.match(page, /syncOfflineQueue/);
@@ -192,6 +193,7 @@ test("installs an offline-capable PWA with idempotent queued task syncing", asyn
   assert.match(page, /window\.addEventListener\("scroll", positionMenu, true\)/);
   assert.match(page, /className="fixed z-\[70\] hidden w-56/);
   assert.match(page, /clientId: record\.clientId/);
+  assert.match(page, /project: record\.project \?\? null/);
   assert.match(page, /Saved offline\. It will sync automatically/);
   assert.match(page, /leftSecondaryAction\.icon === "snooze" \|\| leftSecondaryAction\.icon === "wake"/);
   assert.match(serviceWorker, /request\.mode === "navigate"/);

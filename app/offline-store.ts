@@ -16,6 +16,7 @@ export type OfflineTodoRecord = {
   localId: number;
   title: string;
   notes: string;
+  project: string | null;
   createdAt: string;
   attachments: OfflineStoredAttachment[];
 };
@@ -79,6 +80,7 @@ export async function saveOfflineTodo(record: OfflineTodoRecord) {
     console.info("[todo-offline] task stored", {
       clientId: record.clientId,
       localId: record.localId,
+      project: record.project,
       attachments: record.attachments.length,
       bytes: record.attachments.reduce((total, attachment) => total + attachment.blob.size, 0),
     });

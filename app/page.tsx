@@ -32,7 +32,14 @@ type TaskListView = Exclude<View, "projects">;
 type Sort = "smart" | "priority" | "due" | "newest" | "oldest" | "az";
 type TodoAction = "complete" | "snooze" | "unsnooze" | "delete";
 type ExecutableTodoAction = TodoAction;
-type Notice = { tone: "success" | "error"; text: string; undoToken?: string } | null;
+type SnoozePreset = "15m" | "30m" | "1h" | "2h" | "8pm";
+type Notice = {
+  tone: "success" | "error";
+  text: string;
+  undoToken?: string;
+  snoozeIds?: number[];
+  snoozedUntil?: string;
+} | null;
 
 type Todo = {
   id: number;
@@ -95,6 +102,7 @@ type ProjectDialogState = {
   selection: string;
   newProject: string;
   openedFromDetails: boolean;
+  captureDraft: boolean;
 };
 
 type ProjectDeleteDialogState = {
@@ -119,6 +127,14 @@ const priorityLabels: Record<number, string> = {
   3: "Normal",
   4: "Low",
 };
+
+const snoozeAdjustments: Array<{ value: SnoozePreset; label: string }> = [
+  { value: "15m", label: "15 minutes" },
+  { value: "30m", label: "30 minutes" },
+  { value: "1h", label: "1 hour" },
+  { value: "2h", label: "2 hours" },
+  { value: "8pm", label: "8pm" },
+];
 
 function request<T>(path: string, options?: RequestInit): Promise<T> {
   const formData = typeof FormData !== "undefined" && options?.body instanceof FormData;
@@ -396,12 +412,14 @@ function AttachmentPicker({
   disabled,
   onFiles,
   onRecord,
+  onAssignProject,
   label,
   showLabel = false,
 }: {
   disabled?: boolean;
   onFiles: (files: File[]) => void;
   onRecord: () => void;
+  onAssignProject?: () => void;
   label: string;
   showLabel?: boolean;
 }) {
@@ -409,6 +427,7 @@ function AttachmentPicker({
   const libraryRef = useRef<HTMLInputElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const [desktopPosition, setDesktopPosition] = useState<{ left: number; top: number } | null>(null);
+  const hasProjectAction = Boolean(onAssignProject);
 
   useEffect(() => {
     if (!open) return;
@@ -417,7 +436,7 @@ function AttachmentPicker({
       if (!trigger) return;
       const bounds = trigger.getBoundingClientRect();
       const menuWidth = 224;
-      const menuHeight = 116;
+      const menuHeight = hasProjectAction ? 160 : 116;
       const gutter = 12;
       const left = Math.max(gutter, Math.min(bounds.left, window.innerWidth - menuWidth - gutter));
       const below = bounds.bottom + 8;
@@ -438,7 +457,7 @@ function AttachmentPicker({
       window.removeEventListener("resize", positionMenu);
       window.removeEventListener("scroll", positionMenu, true);
     };
-  }, [open]);
+  }, [hasProjectAction, open]);
 
   function selected(input: HTMLInputElement) {
     const files = [...(input.files ?? [])];
@@ -477,6 +496,11 @@ function AttachmentPicker({
             <button type="button" role="menuitem" onClick={() => { setOpen(false); onRecord(); }} className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left text-sm font-semibold text-[#303632] hover:bg-[#f2f5f2]">
               <ActionIcon name="mic" />Record voice memo
             </button>
+            {onAssignProject && (
+              <button type="button" role="menuitem" onClick={() => { setOpen(false); onAssignProject(); }} className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left text-sm font-semibold text-[#303632] hover:bg-[#f2f5f2]">
+                <ActionIcon name="move" />Assign project
+              </button>
+            )}
           </div>}
 
           <div className="fixed inset-0 z-[70] flex items-end sm:hidden">
@@ -489,6 +513,11 @@ function AttachmentPicker({
               <button type="button" role="menuitem" onClick={() => { setOpen(false); onRecord(); }} className="flex h-12 w-full items-center gap-3 rounded-xl px-3 text-left text-[16px] font-semibold text-[#303632] hover:bg-[#f2f5f2]">
                 <ActionIcon name="mic" className="h-5 w-5 text-[#216e4e]" />Record voice memo
               </button>
+              {onAssignProject && (
+                <button type="button" role="menuitem" onClick={() => { setOpen(false); onAssignProject(); }} className="flex h-12 w-full items-center gap-3 rounded-xl px-3 text-left text-[16px] font-semibold text-[#303632] hover:bg-[#f2f5f2]">
+                  <ActionIcon name="move" className="h-5 w-5 text-[#216e4e]" />Assign project
+                </button>
+              )}
               <button type="button" onClick={() => setOpen(false)} className="mt-2 h-12 w-full rounded-xl bg-[#f1f2f0] text-[16px] font-semibold text-[#59615c]">Cancel</button>
             </div>
           </div>
@@ -691,7 +720,7 @@ function offlineRecordTodo(record: OfflineTodoRecord): Todo {
     status: "open",
     priority: 3,
     dueDate: null,
-    project: null,
+    project: record.project ?? null,
     context: null,
     sourceKind: "offline",
     sourceId: null,
@@ -919,11 +948,13 @@ export default function Home() {
   const [priority, setPriority] = useState("");
   const [sort, setSort] = useState<Sort>("smart");
   const [newTitle, setNewTitle] = useState("");
+  const [captureProject, setCaptureProject] = useState("");
   const [captureDraftToken, setCaptureDraftToken] = useState(() => crypto.randomUUID());
   const [captureAttachments, setCaptureAttachments] = useState<PendingAttachment[]>([]);
   const [adding, setAdding] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [undoing, setUndoing] = useState(false);
+  const [adjustingSnooze, setAdjustingSnooze] = useState<SnoozePreset | null>(null);
   const [notice, setNotice] = useState<Notice>(null);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -1055,7 +1086,7 @@ export default function Home() {
 
   useEffect(() => {
     if (!notice) return;
-    const timer = window.setTimeout(() => setNotice(null), notice.undoToken ? 8_000 : 5_000);
+    const timer = window.setTimeout(() => setNotice(null), notice.snoozeIds?.length ? 15_000 : notice.undoToken ? 8_000 : 5_000);
     return () => window.clearTimeout(timer);
   }, [notice]);
 
@@ -1496,6 +1527,7 @@ export default function Home() {
 
   function resetCapture() {
     setNewTitle("");
+    setCaptureProject("");
     captureAttachments.forEach((item) => URL.revokeObjectURL(item.previewUrl));
     setCaptureAttachments([]);
     setCaptureDraftToken(crypto.randomUUID());
@@ -1545,7 +1577,7 @@ export default function Home() {
                 title: record.title,
                 notes: record.notes,
                 status: "open",
-                project: null,
+                project: record.project ?? null,
                 draftToken: attachmentIds.length ? draftToken : undefined,
                 attachmentIds,
               }),
@@ -1588,7 +1620,7 @@ export default function Home() {
       status: "open",
       priority: 3,
       dueDate: null,
-      project: null,
+      project: captureProject || null,
       context: null,
       sourceKind: "site",
       sourceId: null,
@@ -1603,6 +1635,7 @@ export default function Home() {
     setView("open");
     console.info("[todo-ui] quick add routed to unfiltered open view", {
       previousProjectFilter: project || null,
+      assignedProject: captureProject || null,
     });
     setTodos((current) => [optimistic, ...current]);
     setAdding(true);
@@ -1615,6 +1648,7 @@ export default function Home() {
           localId: temporaryId,
           title,
           notes: "",
+          project: captureProject || null,
           createdAt,
           attachments: captureAttachments.map((item) => ({
             localId: item.localId,
@@ -1637,7 +1671,7 @@ export default function Home() {
           clientId,
           title,
           status: "open",
-          project: null,
+          project: captureProject || null,
           draftToken: captureAttachments.length ? captureDraftToken : undefined,
           attachmentIds: captureAttachments.map((item) => item.attachment?.id).filter(Boolean),
         }),
@@ -1660,6 +1694,7 @@ export default function Home() {
             localId: temporaryId,
             title,
             notes: "",
+            project: captureProject || null,
             createdAt,
             attachments: captureAttachments.map((item) => ({
               localId: item.localId,
@@ -1740,7 +1775,13 @@ export default function Home() {
           return todo ? isSnoozed(todo, new Date(actionAt).valueOf()) : false;
         });
         const label = action === "complete" ? "Done" : action === "snooze" ? "Snoozed until tomorrow" : action === "unsnooze" ? openedCompleted ? "Opened" : wokeSnoozed ? "Woke" : "Restored to Open" : "Deleted";
-        setNotice({ tone: "success", text: `${label}: ${ids.length} ${ids.length === 1 ? "task" : "tasks"}.`, undoToken: result.undoToken });
+        setNotice({
+          tone: "success",
+          text: `${label}: ${ids.length} ${ids.length === 1 ? "task" : "tasks"}.`,
+          undoToken: result.undoToken,
+          snoozeIds: action === "snooze" ? result.ids : undefined,
+          snoozedUntil: action === "snooze" ? result.snoozedUntil ?? undefined : undefined,
+        });
         console.info("[todo-ui] action completed", { action, ids, snoozedUntil: result.snoozedUntil });
       }
       setSelected((current) => {
@@ -1754,6 +1795,46 @@ export default function Home() {
       console.error("[todo-ui] action failed", { action, ids, error });
     } finally {
       setSyncing(false);
+    }
+  }
+
+  async function adjustSnooze(ids: number[], preset: SnoozePreset) {
+    if (!ids.length || adjustingSnooze) return;
+    setAdjustingSnooze(preset);
+    try {
+      const result = await request<{ todos: Todo[]; ids: number[]; snoozedUntil: string }>("/api/todos/bulk", {
+        method: "POST",
+        body: JSON.stringify({ ids, action: "adjust_snooze", snoozePreset: preset }),
+      });
+      const updates = new Map(result.todos.map((todo) => [todo.id, todo]));
+      setTodos((current) => current.map((todo) => updates.get(todo.id) ?? todo));
+      setNow(Date.now());
+      setNotice((current) => ({
+        tone: "success",
+        text: `${snoozeLabel(result.snoozedUntil)}: ${result.ids.length} ${result.ids.length === 1 ? "task" : "tasks"}.`,
+        undoToken: current?.undoToken,
+        snoozeIds: result.ids,
+        snoozedUntil: result.snoozedUntil,
+      }));
+      console.info("[todo-ui] snooze adjusted", {
+        preset,
+        requestedIds: ids,
+        changedIds: result.ids,
+        snoozedUntil: result.snoozedUntil,
+        retainedUndo: Boolean(notice?.undoToken),
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "The snooze time could not be adjusted.";
+      setNotice((current) => ({
+        tone: "error",
+        text: message,
+        undoToken: current?.undoToken,
+        snoozeIds: current?.snoozeIds ?? ids,
+        snoozedUntil: current?.snoozedUntil,
+      }));
+      console.error("[todo-ui] snooze adjustment failed", { preset, ids, error });
+    } finally {
+      setAdjustingSnooze(null);
     }
   }
 
@@ -1788,9 +1869,25 @@ export default function Home() {
       .filter((todo) => ids.includes(todo.id))
       .map((todo) => todo.project || UNASSIGNED_PROJECT);
     const sharedProject = new Set(taskProjects).size === 1 ? taskProjects[0] : "";
-    setProjectDialog({ ids, selection: sharedProject, newProject: "", openedFromDetails: source === "details" });
+    setProjectDialog({ ids, selection: sharedProject, newProject: "", openedFromDetails: source === "details", captureDraft: false });
     setProjectDialogError("");
     console.info("[todo-ui] project assignment opened", { ids, source, sharedProject: sharedProject || null });
+  }
+
+  function openCaptureProjectAssignment() {
+    setProjectDialog({
+      ids: [],
+      selection: captureProject || UNASSIGNED_PROJECT,
+      newProject: "",
+      openedFromDetails: false,
+      captureDraft: true,
+    });
+    setProjectDialogError("");
+    console.info("[todo-ui] quick add project assignment opened", {
+      currentProject: captureProject || null,
+      hasTitle: Boolean(newTitle.trim()),
+      attachments: captureAttachments.length,
+    });
   }
 
   function closeProjectAssignment() {
@@ -1820,11 +1917,38 @@ export default function Home() {
       return;
     }
 
-    const { ids, openedFromDetails } = projectDialog;
+    const { ids, openedFromDetails, captureDraft } = projectDialog;
     setSavingProject(true);
     setProjectDialogError("");
     setNotice(null);
     try {
+      if (captureDraft) {
+        let stagedProject = projectName;
+        if (projectDialog.selection === CREATE_PROJECT && projectName && online) {
+          const created = await request<{ project: string }>("/api/projects", {
+            method: "POST",
+            body: JSON.stringify({ name: projectName }),
+          });
+          stagedProject = created.project;
+        }
+        setCaptureProject(stagedProject ?? "");
+        if (stagedProject) {
+          setRegisteredProjects((current) => [...new Set([...current, stagedProject as string])].sort((a, b) => a.localeCompare(b)));
+        }
+        setProjectDialog(null);
+        setNotice({
+          tone: "success",
+          text: stagedProject ? `New task will be assigned to ${stagedProject}.` : "New task will be unassigned.",
+        });
+        console.info("[todo-ui] quick add project staged", {
+          project: stagedProject,
+          createdProject: projectDialog.selection === CREATE_PROJECT,
+          online,
+          preservedTitleLength: newTitle.length,
+          preservedAttachments: captureAttachments.length,
+        });
+        return;
+      }
       const result = await request<{ todos: Todo[]; ids: number[]; undoToken: string }>("/api/todos/bulk", {
         method: "POST",
         body: JSON.stringify({ ids, action: "reproject", project: projectName }),
@@ -2144,7 +2268,12 @@ export default function Home() {
         <form onSubmit={addTodo} className="mb-5 rounded-2xl border border-black/[0.07] bg-white p-2 shadow-[0_10px_35px_rgba(30,45,36,0.07)] sm:p-3">
           <div className="flex items-end gap-2">
             <div className="flex min-w-0 flex-1 items-start gap-2 px-1 py-2 sm:px-2">
-              <AttachmentPicker label="Add attachment" onFiles={(files) => void queueCaptureAttachments(files)} onRecord={() => setVoiceTarget("capture")} disabled={captureAttachments.length >= MAX_ATTACHMENTS} />
+              <AttachmentPicker
+                label="Add attachment or assign project"
+                onFiles={(files) => void queueCaptureAttachments(files)}
+                onRecord={() => setVoiceTarget("capture")}
+                onAssignProject={openCaptureProjectAssignment}
+              />
               <textarea
                 ref={captureRef}
                 value={newTitle}
@@ -2178,6 +2307,16 @@ export default function Home() {
               </button>
             </div>
           </div>
+
+          {captureProject && (
+            <div className="flex border-t border-black/[0.06] px-2 pb-1 pt-2 sm:px-3">
+              <span className="inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-full bg-[#eaf3ed] px-2.5 py-1 text-xs font-semibold text-[#216e4e]">
+                <ActionIcon name="folder" className="h-4 w-4 shrink-0" />
+                <button type="button" onClick={openCaptureProjectAssignment} className="min-w-0 truncate" title={`Change project from ${captureProject}`}>{captureProject}</button>
+                <button type="button" onClick={() => { setCaptureProject(""); console.info("[todo-ui] quick add project removed"); }} aria-label={`Remove ${captureProject} from new task`} title="Remove project" className="grid h-5 w-5 shrink-0 place-items-center rounded-full hover:bg-[#d8e9de]"><ActionIcon name="close" className="h-3.5 w-3.5" /></button>
+              </span>
+            </div>
+          )}
 
           {captureAttachments.length > 0 && (
             <div className="flex gap-2 overflow-x-auto border-t border-black/[0.06] px-2 pb-1 pt-2 sm:px-3" aria-label="Attachments to add">
@@ -2581,7 +2720,9 @@ export default function Home() {
               <div className="min-w-0">
                 <h3 id="project-dialog-title" className="text-lg font-semibold text-[#202522]">Assign project</h3>
                 <p className="mt-1 text-sm leading-5 text-[#7c847f]">
-                  Assign {projectDialog.ids.length === 1 ? "this task" : `these ${projectDialog.ids.length} tasks`} to an existing or new project, or leave {projectDialog.ids.length === 1 ? "it" : "them"} unassigned.
+                  {projectDialog.captureDraft
+                    ? "Choose a project for this new task before adding it, or leave it unassigned."
+                    : <>Assign {projectDialog.ids.length === 1 ? "this task" : `these ${projectDialog.ids.length} tasks`} to an existing or new project, or leave {projectDialog.ids.length === 1 ? "it" : "them"} unassigned.</>}
                 </p>
               </div>
               <button type="button" onClick={closeProjectAssignment} disabled={savingProject} className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#f1f2f0] text-[#4f5752] hover:bg-[#e8eae7] disabled:opacity-50" aria-label="Close project assignment" title="Close"><ActionIcon name="close" /></button>
@@ -2627,7 +2768,7 @@ export default function Home() {
               <button type="button" onClick={closeProjectAssignment} disabled={savingProject} className="inline-flex h-11 items-center gap-2 rounded-xl px-4 text-sm font-semibold text-[#69716c] hover:bg-[#f3f4f2] disabled:opacity-50"><ActionIcon name="cancel" />Cancel</button>
               <button type="submit" disabled={savingProject || !projectDialog.selection || (projectDialog.selection === CREATE_PROJECT && !projectDialog.newProject.trim())} className="inline-flex h-11 items-center gap-2 rounded-xl bg-[#216e4e] px-5 text-sm font-semibold text-white hover:bg-[#195d41] disabled:opacity-50">
                 <ActionIcon name="move" />
-                {savingProject ? "Saving…" : "Assign project"}
+                {savingProject ? "Saving…" : projectDialog.captureDraft ? "Use project" : "Assign project"}
               </button>
             </div>
           </form>
@@ -2863,29 +3004,46 @@ export default function Home() {
 
       {notice && (
         <div
-          className="pointer-events-none fixed inset-x-0 z-[60] mx-auto w-[calc(100%-2rem)] max-w-md transition-[bottom] duration-200"
+          className="pointer-events-none fixed inset-x-0 z-[60] mx-auto w-[calc(100%-2rem)] max-w-lg transition-[bottom] duration-200"
           style={{ bottom: selectedIds.length > 0 ? "max(5.25rem, calc(env(safe-area-inset-bottom) + 5rem))" : "max(1rem, env(safe-area-inset-bottom))" }}
         >
           <div
             role={notice.tone === "error" ? "alert" : "status"}
             className={classNames(
-              "pointer-events-auto flex min-h-14 items-center gap-3 rounded-2xl px-4 py-3 text-sm text-white shadow-[0_16px_50px_rgba(0,0,0,0.24)]",
+              "pointer-events-auto min-h-14 rounded-2xl px-4 py-3 text-sm text-white shadow-[0_16px_50px_rgba(0,0,0,0.24)]",
               notice.tone === "error" ? "bg-red-700" : "bg-[#202522]",
             )}
           >
-            <span className="min-w-0 flex-1 font-medium">{notice.text}</span>
-            {notice.undoToken && (
-              <button
-                type="button"
-                onClick={() => { setNotice(null); void undoAction(notice.undoToken as string); }}
-                disabled={undoing}
-                className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1.5 font-semibold text-[#8ee0b5] transition hover:bg-white/10 focus-visible:outline-2 focus-visible:outline-white disabled:opacity-50"
-              >
-                <ActionIcon name="undo" />
-                {undoing ? "Undoing…" : "Undo"}
-              </button>
+            <div className="flex items-center gap-3">
+              <span className="min-w-0 flex-1 font-medium">{notice.text}</span>
+              {notice.undoToken && (
+                <button
+                  type="button"
+                  onClick={() => { setNotice(null); void undoAction(notice.undoToken as string); }}
+                  disabled={undoing}
+                  className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1.5 font-semibold text-[#8ee0b5] transition hover:bg-white/10 focus-visible:outline-2 focus-visible:outline-white disabled:opacity-50"
+                >
+                  <ActionIcon name="undo" />
+                  {undoing ? "Undoing…" : "Undo"}
+                </button>
+              )}
+              <button type="button" onClick={() => setNotice(null)} aria-label="Dismiss notification" title="Dismiss" className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-white/65 hover:bg-white/10 hover:text-white"><ActionIcon name="close" /></button>
+            </div>
+            {notice.snoozeIds && notice.snoozeIds.length > 0 && (
+              <div className="mt-2 flex gap-1.5 overflow-x-auto pb-0.5" aria-label="Adjust snooze time">
+                {snoozeAdjustments.map((adjustment) => (
+                  <button
+                    key={adjustment.value}
+                    type="button"
+                    onClick={() => void adjustSnooze(notice.snoozeIds as number[], adjustment.value)}
+                    disabled={adjustingSnooze !== null}
+                    className="min-w-max rounded-lg bg-white/10 px-2.5 py-1.5 text-xs font-semibold text-white transition hover:bg-white/20 focus-visible:outline-2 focus-visible:outline-white disabled:opacity-50"
+                  >
+                    {adjustment.label}
+                  </button>
+                ))}
+              </div>
             )}
-            <button type="button" onClick={() => setNotice(null)} aria-label="Dismiss notification" title="Dismiss" className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-white/65 hover:bg-white/10 hover:text-white"><ActionIcon name="close" /></button>
           </div>
         </div>
       )}

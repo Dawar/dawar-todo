@@ -10,6 +10,7 @@ import {
 type StoredTodoStatus = "open" | "completed" | "archived";
 export type TodoStatus = "open" | "completed";
 export type BulkTodoAction = "complete" | "snooze" | "unsnooze" | "reproject" | "delete";
+export type SnoozePreset = "15m" | "30m" | "1h" | "2h" | "8pm";
 export type ProjectDeleteMode = "reassign" | "delete";
 
 type TodoRow = {
@@ -638,6 +639,69 @@ export async function nextSnoozeUntil() {
     settings.snoozeWakeHour,
     settings.snoozeTimeZone,
   ).toISOString();
+}
+
+export async function snoozeUntilForPreset(preset: SnoozePreset, now = new Date()) {
+  const durations: Partial<Record<SnoozePreset, number>> = {
+    "15m": 15 * 60 * 1000,
+    "30m": 30 * 60 * 1000,
+    "1h": 60 * 60 * 1000,
+    "2h": 2 * 60 * 60 * 1000,
+  };
+  const duration = durations[preset];
+  if (duration) return new Date(now.valueOf() + duration).toISOString();
+  if (preset !== "8pm") throw new Error("Choose a valid snooze adjustment.");
+
+  const settings = await getTodoSettings();
+  const local = zonedParts(now, settings.snoozeTimeZone);
+  const todayAtEight = zonedDateToUtc(
+    Number(local.year),
+    Number(local.month),
+    Number(local.day),
+    20,
+    settings.snoozeTimeZone,
+  );
+  if (todayAtEight.valueOf() > now.valueOf()) return todayAtEight.toISOString();
+  const tomorrow = new Date(Date.UTC(Number(local.year), Number(local.month) - 1, Number(local.day) + 1));
+  return zonedDateToUtc(
+    tomorrow.getUTCFullYear(),
+    tomorrow.getUTCMonth() + 1,
+    tomorrow.getUTCDate(),
+    20,
+    settings.snoozeTimeZone,
+  ).toISOString();
+}
+
+export async function adjustSnoozedTodos(inputIds: number[], preset: SnoozePreset) {
+  await ensureTodoDatabase();
+  const ids = normalizedIds(inputIds);
+  const until = await snoozeUntilForPreset(preset);
+  const db = database();
+  const inClause = placeholders(ids.length);
+  const result = await db.prepare(`
+    UPDATE todos
+    SET snoozed_until = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+    WHERE id IN (${inClause}) AND status = 'open' AND snoozed_until IS NOT NULL
+  `).bind(until, ...ids).run();
+  const updated = await db.prepare(`
+    SELECT todos.*,
+      (SELECT COUNT(*) FROM todo_attachments
+       WHERE todo_attachments.todo_id = todos.id
+         AND todo_attachments.upload_state = 'ready'
+         AND todo_attachments.deleted_at IS NULL) AS attachment_count
+    FROM todos
+    WHERE todos.id IN (${inClause}) AND todos.status = 'open' AND todos.snoozed_until = ?
+  `).bind(...ids, until).all<TodoRow>();
+  const todos = updated.results.map(mapTodo);
+  const changedIds = todos.map((todo) => todo.id);
+  console.info("[todo-db] snooze adjusted", {
+    preset,
+    requested: ids.length,
+    changed: result.meta.changes,
+    changedIds,
+    snoozedUntil: until,
+  });
+  return { ids: changedIds, todos, snoozedUntil: until };
 }
 
 export async function bulkUpdateTodos(
