@@ -142,7 +142,12 @@ test("generates a ready-to-use SKILL.md only from the one-time raw token", async
   assert.match(skill, /GET \/api\/todos/);
   assert.match(skill, /adjust_snooze/);
   assert.match(skill, /pinned.*Pinned group in the Open view/);
-  assert.match(skill, /Do not send the Dawar Todo Bearer token to storage URLs/);
+  assert.match(skill, /preferred agent path/);
+  assert.match(skill, /-F 'file=@\/absolute\/path\/report\.pdf'/);
+  assert.match(skill, /JPEG, PNG, WebP, GIF, HEIC, or HEIF images/);
+  assert.match(skill, /-F 'kind=audio'/);
+  assert.match(skill, /\.attachments\[0\]\.originalUrl/);
+  assert.match(skill, /Never send the Dawar Todo Bearer token to a returned storage URL/);
   assert.match(skill, /Never manage API tokens through this credential/);
   assert.match(skill, /shown only once at creation/);
   assert.ok(skill.split("\n").length < 500);

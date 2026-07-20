@@ -32,7 +32,7 @@ Set or retain this credential privately:
 DAWAR_TODO_API_TOKEN=${token}
 \`\`\`
 
-Send it on every API request:
+Send it on every Dawar Todo API request. Add \`Content-Type: application/json\` only for JSON bodies; let the HTTP client set the multipart boundary for file uploads:
 
 \`\`\`http
 Authorization: Bearer ${token}
@@ -103,14 +103,52 @@ Project deletion affects open, snoozed, and completed tasks. Inspect those tasks
 
 ### Attachments
 
-- \`GET /api/todos/{id}/attachments\`: list metadata and temporary signed viewing/download URLs.
-- \`POST /api/todos/{id}/attachments\`: prepare a private upload.
-- Upload each returned target as multipart form data using its exact \`fields\`, followed by the binary \`file\` field. Do not send the Dawar Todo Bearer token to storage URLs.
+- \`POST /api/todos/{id}/attachments\` with multipart form data is the preferred agent path: send one \`file\` and receive a ready attachment in one request. The server creates image thumbnails/viewer renditions automatically. It stores voice memos and generic files as supplied.
+- \`kind\` is normally inferred. Set \`kind=audio\` and include \`durationMs\` for a voice memo when the client does not provide a useful audio MIME type. Use the optional \`mimeType\` field when the upload would otherwise be \`application/octet-stream\`.
+- \`GET /api/todos/{id}/attachments\`: list metadata and fresh one-hour viewing/download URLs. Download any kind from \`originalUrl\`; use \`displayUrl\` for optimized images and \`audioUrl\` or \`videoUrl\` for inline playback.
+- Never send the Dawar Todo Bearer token to a returned storage URL. The signed URL already authorizes that one download.
 - \`PATCH /api/todos/{id}/attachments\`: finalize after every required storage upload succeeds.
 - \`DELETE /api/todos/{id}/attachments/{attachmentId}\`: soft-delete an attachment and retain its Undo token.
 - Use \`/api/attachments/drafts\` with a UUID \`draftToken\` to upload before task creation, then pass that token and ordered attachment IDs to \`POST /api/todos\`.
 
-Images require original, optimized display, and thumbnail uploads. Audio, video, and generic files require the original upload. Generic files support common PDF, Office, OpenDocument, text, calendar, ZIP, and 7z formats. Use the OpenAPI schemas for required MIME, dimensions, duration, and size fields.
+Create a task and attach a local file in two commands:
+
+\`\`\`bash
+TASK_ID=$(curl --fail-with-body -sS \\
+  -H 'Authorization: Bearer ${token}' \\
+  -H 'Content-Type: application/json' \\
+  -d '{"title":"Review attached report"}' \\
+  '${API_BASE_URL}/todos' | jq -r '.todo.id')
+
+curl --fail-with-body -sS \\
+  -H 'Authorization: Bearer ${token}' \\
+  -F 'file=@/absolute/path/report.pdf' \\
+  "${API_BASE_URL}/todos/$TASK_ID/attachments"
+\`\`\`
+
+Use the same multipart command for JPEG, PNG, WebP, GIF, HEIC, or HEIF images; no dimensions or derivative files are needed.
+
+For a voice memo:
+
+\`\`\`bash
+curl --fail-with-body -sS \\
+  -H 'Authorization: Bearer ${token}' \\
+  -F 'file=@/absolute/path/memo.m4a' \\
+  -F 'kind=audio' \\
+  -F 'durationMs=42000' \\
+  "${API_BASE_URL}/todos/$TASK_ID/attachments"
+\`\`\`
+
+Retrieve metadata and download the original without forwarding the API token:
+
+\`\`\`bash
+DOWNLOAD_URL=$(curl --fail-with-body -sS \\
+  -H 'Authorization: Bearer ${token}' \\
+  "${API_BASE_URL}/todos/$TASK_ID/attachments" | jq -r '.attachments[0].originalUrl')
+curl --fail-with-body -L "$DOWNLOAD_URL" -o attachment
+\`\`\`
+
+Each multipart request accepts one file; repeat it to attach more files, up to 12 per task. Images are limited to 20 MB, voice memos to 50 MB and 30 minutes, videos to 250 MB and 60 minutes, and generic files to 100 MB. Generic files support PDF, Office, OpenDocument, text, calendar, ZIP, and 7z formats. The lower-level JSON prepare/upload/finalize flow remains available for browser clients; agents should normally use multipart.
 
 ### Settings and calendars
 

@@ -33,6 +33,7 @@ test("stores private task images with optimized variants and recovery metadata",
   assert.match(attachments, /S3_ACCESS_KEY_ID/);
   assert.match(attachments, /S3_BUCKET/);
   assert.match(attachments, /S3_ENDPOINT_URL/);
+  assert.match(attachments, /IMAGES: ImagesBinding/);
   assert.match(attachments, /endpointUrl\.hostname\.startsWith\(bucketPrefix\)/);
   assert.match(attachments, /endpointUrl\.hostname\.endsWith\("\.digitaloceanspaces\.com"\)/);
   assert.match(attachments, /signingRegion = endpointUrl\.hostname\.endsWith/);
@@ -61,6 +62,15 @@ test("stores private task images with optimized variants and recovery metadata",
   assert.match(attachments, /finalizeTodoAttachmentUpload/);
   assert.match(attachments, /prepareTodoMediaAttachmentUpload/);
   assert.match(attachments, /finalizeTodoMediaAttachmentUpload/);
+  assert.match(attachments, /uploadTodoAttachmentDirect/);
+  assert.match(attachments, /direct API upload requested/);
+  assert.match(attachments, /direct API upload completed/);
+  assert.match(attachments, /images\.info\(source\.stream\(\)\)/);
+  assert.match(attachments, /expectedFormat !== inspectedFormat/);
+  assert.match(attachments, /optimizedImageBlob\(source, 2048, 82\)/);
+  assert.match(attachments, /optimizedImageBlob\(source, 480, 75\)/);
+  assert.match(attachments, /output\(\{ format: "image\/webp", quality \}\)/);
+  assert.match(attachments, /uploadPreparedStorageTarget/);
   assert.match(attachments, /MAX_AUDIO_ATTACHMENT_BYTES = 50 \* 1024 \* 1024/);
   assert.match(attachments, /MAX_VIDEO_ATTACHMENT_BYTES = 250 \* 1024 \* 1024/);
   assert.match(attachments, /MAX_FILE_ATTACHMENT_BYTES = 100 \* 1024 \* 1024/);
@@ -97,14 +107,16 @@ test("stores private task images with optimized variants and recovery metadata",
 });
 
 test("exposes capture, Safari-safe optimization, drop, gallery, and viewer contracts", async () => {
-  const [page, actionIcons, draftRoute, taskAttachmentsRoute, attachmentRoute, todosRoute] = await Promise.all([
+  const [page, actionIcons, draftRoute, taskAttachmentsRoute, attachmentRoute, todosRoute, openApiText] = await Promise.all([
     readFile(new URL("app/page.tsx", root), "utf8"),
     readFile(new URL("app/action-icon.tsx", root), "utf8"),
     readFile(new URL("app/api/attachments/drafts/route.ts", root), "utf8"),
     readFile(new URL("app/api/todos/[id]/attachments/route.ts", root), "utf8"),
     readFile(new URL("app/api/todos/[id]/attachments/[attachmentId]/route.ts", root), "utf8"),
     readFile(new URL("app/api/todos/route.ts", root), "utf8"),
+    readFile(new URL("public/openapi.json", root), "utf8"),
   ]);
+  const openApi = JSON.parse(openApiText);
 
   assert.match(page, /function AttachmentPicker/);
   assert.match(page, /Choose photos or videos/);
@@ -169,13 +181,24 @@ test("exposes capture, Safari-safe optimization, drop, gallery, and viewer contr
   assert.match(taskAttachmentsRoute, /finalizeTodoMediaAttachmentUpload/);
   assert.match(taskAttachmentsRoute, /displayMimeType: payload\.displayMimeType/);
   assert.match(taskAttachmentsRoute, /thumbnailMimeType: payload\.thumbnailMimeType/);
-  assert.doesNotMatch(taskAttachmentsRoute, /formData\(\)/);
+  assert.match(taskAttachmentsRoute, /multipart\/form-data/);
+  assert.match(taskAttachmentsRoute, /request\.formData\(\)/);
+  assert.match(taskAttachmentsRoute, /uploadTodoAttachmentDirect/);
+  assert.match(taskAttachmentsRoute, /direct task attachment uploaded/);
+  assert.match(taskAttachmentsRoute, /"Cache-Control": "no-store"/);
+  assert.match(taskAttachmentsRoute, /const serviceError = \/temporarily unavailable/);
   assert.match(attachmentRoute, /deleteTodoAttachment/);
   assert.match(attachmentRoute, /discardTodoAttachmentUpload/);
   assert.match(attachmentRoute, /Response\.json\(\{ attachmentId, discarded \}\)/);
   assert.match(todosRoute, /draftToken/);
   assert.match(todosRoute, /attachmentIds/);
   assert.match(todosRoute, /clientId/);
+  const uploadOperation = openApi.paths["/api/todos/{id}/attachments"].post;
+  assert.equal(uploadOperation.operationId, "uploadTodoAttachment");
+  assert.ok(uploadOperation.requestBody.content["multipart/form-data"]);
+  assert.equal(openApi.components.schemas.DirectAttachmentUpload.properties.file.format, "binary");
+  assert.match(uploadOperation.description, /single-request private upload/);
+  assert.match(openApi.paths["/api/todos/{id}/attachments"].get.description, /one-hour originalUrl/);
 });
 
 test("accepts common document and archive types through a shared allowlist", async () => {

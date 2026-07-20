@@ -19,6 +19,7 @@ type RuntimeEnv = {
   S3_ACCESS_KEY_ID: string;
   S3_BUCKET: string;
   S3_ENDPOINT_URL: string;
+  IMAGES: ImagesBinding;
 };
 
 type StorageConfig = { bucket: string; endpoint: URL; region: string };
@@ -237,6 +238,14 @@ type PrepareMediaUploadInput = {
   byteSize: number;
 };
 
+export type DirectAttachmentUploadInput = {
+  fileName: string;
+  mimeType: string;
+  file: Blob;
+  kind?: "image" | "audio" | "video" | "file";
+  durationMs?: number;
+};
+
 type FinalizeMediaUploadInput = {
   durationMs: number;
 };
@@ -271,8 +280,14 @@ function derivativeFormatForKey(key: string) {
   return null;
 }
 
-function normalizedAudioMimeType(value: string) {
+function normalizedAudioMimeType(value: string, fileName = "") {
   const supplied = value.toLowerCase().split(";", 1)[0].trim();
+  const extension = fileName.toLowerCase().match(/\.([a-z0-9]+)$/)?.[1];
+  const inferred = extension === "m4a" || extension === "mp4" ? "audio/mp4"
+    : extension === "mp3" ? "audio/mpeg"
+      : extension && ["webm", "ogg", "wav"].includes(extension) ? `audio/${extension}`
+        : "";
+  if ((!supplied || supplied === "application/octet-stream") && inferred) return inferred;
   if (supplied === "audio/x-wav") return "audio/wav";
   if (["audio/mp4", "audio/webm", "audio/ogg", "audio/mpeg", "audio/wav"].includes(supplied)) return supplied;
   throw new Error("Voice memos must be MP4, WebM, Ogg, MP3, or WAV audio.");
@@ -290,8 +305,13 @@ function expectedAudioFormat(mimeType: string) {
   return mimeType.replace("audio/", "");
 }
 
-function normalizedVideoMimeType(value: string) {
+function normalizedVideoMimeType(value: string, fileName = "") {
   const supplied = value.toLowerCase().split(";", 1)[0].trim();
+  const extension = fileName.toLowerCase().match(/\.([a-z0-9]+)$/)?.[1];
+  const inferred = extension === "mov" ? "video/quicktime"
+    : extension && ["mp4", "webm"].includes(extension) ? `video/${extension}`
+      : "";
+  if ((!supplied || supplied === "application/octet-stream") && inferred) return inferred;
   if (["video/mp4", "video/quicktime", "video/webm"].includes(supplied)) return supplied;
   throw new Error("Videos must be MP4, MOV, or WebM files.");
 }
@@ -756,7 +776,7 @@ export async function prepareTodoMediaAttachmentUpload(
   if (!Number.isInteger(byteSize) || byteSize < 1) throw new Error(`That ${kind} file is empty.`);
   if (byteSize > maximumBytes) throw new Error(kind === "audio" ? "Voice memos are limited to 50 MB." : kind === "video" ? "Videos are limited to 250 MB." : "Files are limited to 100 MB.");
   const fileName = cleanFileName(input.fileName || (kind === "audio" ? "voice memo" : kind === "video" ? "video" : "file"));
-  const mimeType = kind === "audio" ? normalizedAudioMimeType(input.mimeType) : kind === "video" ? normalizedVideoMimeType(input.mimeType) : normalizedFileMimeType(input.mimeType, fileName);
+  const mimeType = kind === "audio" ? normalizedAudioMimeType(input.mimeType, fileName) : kind === "video" ? normalizedVideoMimeType(input.mimeType, fileName) : normalizedFileMimeType(input.mimeType, fileName);
   const db = database();
   const { isDraft, draftToken, todoId } = targetValues(target);
   if (todoId !== null) {
@@ -863,6 +883,154 @@ export async function finalizeTodoMediaAttachmentUpload(
       console.error("[todo-attachments] invalid media cleanup failed", { attachmentId: id, cleanupError });
     }
     console.error("[todo-attachments] original attachment upload finalize failed", { attachmentId: id, todoId, kind: row.kind, durationMs: Date.now() - startedAt, error });
+    throw error;
+  }
+}
+
+type PreparedStorageTarget = {
+  url: string;
+  fields: Record<string, string>;
+};
+
+function directAttachmentKind(input: DirectAttachmentUploadInput) {
+  if (input.kind) return input.kind;
+  const mimeType = input.mimeType.toLowerCase().split(";", 1)[0].trim();
+  if (mimeType.startsWith("image/")) return "image" as const;
+  if (mimeType.startsWith("audio/")) return "audio" as const;
+  if (mimeType.startsWith("video/")) return "video" as const;
+  return "file" as const;
+}
+
+function attachmentBlob(bytes: ArrayBuffer, mimeType: string) {
+  return new Blob([bytes], { type: mimeType });
+}
+
+async function uploadPreparedStorageTarget(target: PreparedStorageTarget, body: Blob) {
+  const form = new FormData();
+  Object.entries(target.fields).forEach(([name, value]) => form.append(name, value));
+  form.append("file", body, "upload");
+  const response = await fetch(target.url, { method: "POST", body: form });
+  if (!response.ok) throw await storageResponseError("Private attachment upload", response);
+}
+
+async function optimizedImageBlob(source: Blob, width: number, quality: number) {
+  const images = runtime().IMAGES;
+  if (!images) throw new Error("Image processing is temporarily unavailable.");
+  const output = await images
+    .input(source.stream())
+    .transform({ width, fit: "scale-down" })
+    .output({ format: "image/webp", quality });
+  const response = output.response();
+  if (!response.ok) throw new Error("The image could not be optimized.");
+  const bytes = await response.arrayBuffer();
+  if (!bytes.byteLength) throw new Error("The optimized image is empty.");
+  return attachmentBlob(bytes, "image/webp");
+}
+
+/**
+ * Agent-oriented single-request upload. The browser keeps using the presigned
+ * prepare/upload/finalize flow so large payloads bypass the Worker, while API
+ * clients can send one multipart file and let the server do every storage step.
+ */
+export async function uploadTodoAttachmentDirect(todoId: number, input: DirectAttachmentUploadInput) {
+  const startedAt = Date.now();
+  const kind = directAttachmentKind(input);
+  const fileName = cleanFileName(input.fileName);
+  const byteSize = input.file.size;
+  console.info("[todo-attachments] direct API upload requested", {
+    todoId,
+    kind,
+    bytes: byteSize,
+    suppliedMimeType: input.mimeType.toLowerCase().split(";", 1)[0],
+  });
+
+  if (kind === "image") {
+    if (byteSize < 1) throw new Error("That image is empty.");
+    if (byteSize > MAX_ATTACHMENT_BYTES) throw new Error("Images are limited to 20 MB each.");
+    const mimeType = normalizedMimeType(input.mimeType, fileName);
+    const source = input.file.type === mimeType ? input.file : new Blob([input.file], { type: mimeType });
+    const images = runtime().IMAGES;
+    if (!images) throw new Error("Image processing is temporarily unavailable.");
+    const info = await images.info(source.stream());
+    if (!("width" in info) || !Number.isInteger(info.width) || !Number.isInteger(info.height) || info.width < 1 || info.height < 1 || info.width * info.height > MAX_IMAGE_PIXELS) {
+      throw new Error("That image is too large to process.");
+    }
+    const expectedFormat = normalizedFormat(mimeType);
+    const inspectedFormat = normalizedFormat(info.format);
+    if (expectedFormat !== inspectedFormat && !(expectedFormat === "heif" && inspectedFormat === "heic") && !(expectedFormat === "heic" && inspectedFormat === "heif")) {
+      throw new Error("The uploaded file is not the expected image type.");
+    }
+    const [display, thumbnail] = await Promise.all([
+      optimizedImageBlob(source, 2048, 82),
+      optimizedImageBlob(source, 480, 75),
+    ]);
+    const prepared = await prepareTodoAttachmentUpload({
+      fileName,
+      mimeType,
+      byteSize,
+      displayMimeType: "image/webp",
+      thumbnailMimeType: "image/webp",
+    }, { todoId });
+    try {
+      await Promise.all([
+        uploadPreparedStorageTarget(prepared.uploads.original, source),
+        uploadPreparedStorageTarget(prepared.uploads.display, display),
+        uploadPreparedStorageTarget(prepared.uploads.thumbnail, thumbnail),
+      ]);
+      const attachment = await finalizeTodoAttachmentUpload(prepared.uploadId, {
+        width: info.width,
+        height: info.height,
+      }, { todoId });
+      console.info("[todo-attachments] direct API upload completed", {
+        todoId,
+        attachmentId: attachment.id,
+        kind,
+        bytes: byteSize,
+        displayBytes: display.size,
+        thumbnailBytes: thumbnail.size,
+        width: info.width,
+        height: info.height,
+        durationMs: Date.now() - startedAt,
+      });
+      return attachment;
+    } catch (error) {
+      await discardTodoAttachmentUpload(todoId, prepared.uploadId).catch((cleanupError) => {
+        console.error("[todo-attachments] direct API image cleanup failed", { todoId, attachmentId: prepared.uploadId, cleanupError });
+      });
+      console.error("[todo-attachments] direct API upload failed", { todoId, attachmentId: prepared.uploadId, kind, bytes: byteSize, durationMs: Date.now() - startedAt, error });
+      throw error;
+    }
+  }
+
+  const prepared = await prepareTodoMediaAttachmentUpload({
+    kind,
+    fileName,
+    mimeType: input.mimeType,
+    byteSize,
+  }, { todoId });
+  try {
+    const normalizedMime = kind === "audio" ? normalizedAudioMimeType(input.mimeType, fileName)
+      : kind === "video" ? normalizedVideoMimeType(input.mimeType, fileName)
+        : normalizedFileMimeType(input.mimeType, fileName);
+    const source = input.file.type === normalizedMime ? input.file : new Blob([input.file], { type: normalizedMime });
+    await uploadPreparedStorageTarget(prepared.uploads.original, source);
+    const attachment = await finalizeTodoMediaAttachmentUpload(prepared.uploadId, {
+      durationMs: kind === "file" ? 0 : Number(input.durationMs),
+    }, { todoId });
+    console.info("[todo-attachments] direct API upload completed", {
+      todoId,
+      attachmentId: attachment.id,
+      kind,
+      bytes: byteSize,
+      mediaDurationMs: attachment.durationMs,
+      durationMs: Date.now() - startedAt,
+    });
+    return attachment;
+  } catch (error) {
+    await discardTodoAttachmentUpload(todoId, prepared.uploadId).catch((cleanupError) => {
+      console.error("[todo-attachments] direct API attachment cleanup failed", { todoId, attachmentId: prepared.uploadId, kind, cleanupError });
+    });
+    console.error("[todo-attachments] direct API upload failed", { todoId, attachmentId: prepared.uploadId, kind, bytes: byteSize, durationMs: Date.now() - startedAt, error });
     throw error;
   }
 }

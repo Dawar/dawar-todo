@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Dawar Todo API",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "description": "Programmatic access to the same tasks, projects, snooze, completion, merge, undo, settings, calendar-sharing, and attachment operations used by the Dawar Todo UI. Create a personal token in Settings, then send it as `Authorization: Bearer dt_live_...`. Tokens have full read/write access and should be treated as passwords. Token creation and revocation intentionally require an interactive ChatGPT session and are not exposed here."
   },
   "servers": [
@@ -225,6 +225,7 @@
         "tags": ["Attachments"],
         "operationId": "listTodoAttachments",
         "summary": "List a task's attachments with temporary signed URLs",
+        "description": "Each result includes a one-hour originalUrl that downloads the original bytes without forwarding the Dawar Todo Bearer token. Images also include thumbnailUrl and displayUrl; audio and video include inline playback URLs.",
         "responses": {
           "200": { "description": "Attachments", "content": { "application/json": { "schema": { "type": "object", "required": ["attachments"], "properties": { "attachments": { "type": "array", "items": { "$ref": "#/components/schemas/Attachment" } } } } } } },
           "401": { "$ref": "#/components/responses/Unauthorized" },
@@ -233,12 +234,18 @@
       },
       "post": {
         "tags": ["Attachments"],
-        "operationId": "prepareTodoAttachmentUpload",
-        "summary": "Prepare a direct private-storage upload",
-        "description": "For images, upload the original, display, and thumbnail blobs to the returned POST targets. For audio, video, or generic files, upload the original. Then call PATCH on this path to finalize. Generic files support common PDF, Office, OpenDocument, text, calendar, ZIP, and 7z formats up to 100 MB.",
-        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PrepareAttachment" } } } },
+        "operationId": "uploadTodoAttachment",
+        "summary": "Upload one attachment directly or prepare a browser upload",
+        "description": "API agents should send multipart/form-data with one file for a single-request private upload. The server inspects and optimizes images, stores voice memos and files, and returns ready attachment metadata. kind is inferred from content type when omitted; supply durationMs for audio or video. The application/json form preserves the lower-level presigned prepare/upload/finalize workflow used by the web app.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": { "schema": { "$ref": "#/components/schemas/DirectAttachmentUpload" } },
+            "application/json": { "schema": { "$ref": "#/components/schemas/PrepareAttachment" } }
+          }
+        },
         "responses": {
-          "201": { "description": "Presigned upload targets", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PreparedUpload" } } } },
+          "201": { "description": "Ready attachment for multipart requests, or presigned targets for JSON requests", "content": { "application/json": { "schema": { "oneOf": [{ "$ref": "#/components/schemas/AttachmentResponse" }, { "$ref": "#/components/schemas/PreparedUpload" }] } } } },
           "400": { "$ref": "#/components/responses/BadRequest" },
           "401": { "$ref": "#/components/responses/Unauthorized" }
         }
@@ -432,12 +439,27 @@
           "kind": { "type": "string", "enum": ["image", "audio", "video", "file"] },
           "durationMs": { "type": "integer" },
           "sortOrder": { "type": "integer" },
-          "thumbnailUrl": { "type": "string", "format": "uri" },
-          "displayUrl": { "type": "string", "format": "uri" },
-          "originalUrl": { "type": "string", "format": "uri" },
-          "audioUrl": { "type": "string", "format": "uri" },
-          "videoUrl": { "type": "string", "format": "uri" },
+          "thumbnailUrl": { "type": "string", "description": "One-hour image thumbnail URL, or an empty string when not applicable." },
+          "displayUrl": { "type": "string", "description": "One-hour optimized image URL, or an empty string when not applicable." },
+          "originalUrl": { "type": "string", "format": "uri", "description": "One-hour download URL for the original bytes. Do not forward the API Authorization header to this storage URL." },
+          "audioUrl": { "type": "string", "description": "One-hour inline audio URL, or an empty string when not applicable." },
+          "videoUrl": { "type": "string", "description": "One-hour inline video URL, or an empty string when not applicable." },
           "createdAt": { "type": "string", "format": "date-time" }
+        }
+      },
+      "AttachmentResponse": {
+        "type": "object",
+        "required": ["attachment"],
+        "properties": { "attachment": { "$ref": "#/components/schemas/Attachment" } }
+      },
+      "DirectAttachmentUpload": {
+        "type": "object",
+        "required": ["file"],
+        "properties": {
+          "file": { "type": "string", "format": "binary", "description": "One image, voice memo, video, document, or archive." },
+          "kind": { "type": "string", "enum": ["image", "audio", "video", "file"], "description": "Optional override; normally inferred from MIME type." },
+          "mimeType": { "type": "string", "description": "Optional MIME override for clients that upload application/octet-stream." },
+          "durationMs": { "type": "integer", "minimum": 1, "description": "Required for audio and video; ignored for images and generic files." }
         }
       },
       "PrepareAttachment": {

@@ -5,6 +5,7 @@ import {
   prepareTodoAttachmentUpload,
   prepareTodoMediaAttachmentUpload,
   scheduleAttachmentCleanup,
+  uploadTodoAttachmentDirect,
 } from "../../../../../db/attachments";
 import { ensureTodoDatabase, getTodo } from "../../../../../db/todos";
 
@@ -39,7 +40,7 @@ export async function GET(
     const attachments = await listTodoAttachments(id);
     await scheduleAttachmentCleanup();
     console.info("[todo-api] attachments listed", { todoId: id, count: attachments.length });
-    return Response.json({ attachments });
+    return Response.json({ attachments }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     console.error("[todo-api] attachment list failed", { todoId: id, error });
     return Response.json({ error: "The attachments could not be loaded." }, { status: 500 });
@@ -56,6 +57,31 @@ export async function POST(
   const startedAt = Date.now();
   try {
     await ensureTodoDatabase();
+    if (request.headers.get("content-type")?.toLowerCase().includes("multipart/form-data")) {
+      const form = await request.formData();
+      const file = form.get("file");
+      if (!(file instanceof File)) throw new Error("Choose one attachment file to upload.");
+      const kindValue = String(form.get("kind") ?? "").trim();
+      if (kindValue && !(["image", "audio", "video", "file"] as const).includes(kindValue as "image" | "audio" | "video" | "file")) {
+        throw new Error("That attachment type is invalid.");
+      }
+      const attachment = await uploadTodoAttachmentDirect(id, {
+        fileName: file.name,
+        mimeType: String(form.get("mimeType") ?? file.type ?? ""),
+        file,
+        kind: kindValue ? kindValue as "image" | "audio" | "video" | "file" : undefined,
+        durationMs: form.get("durationMs") === null ? undefined : Number(form.get("durationMs")),
+      });
+      await scheduleAttachmentCleanup();
+      console.info("[todo-api] direct task attachment uploaded", {
+        todoId: id,
+        attachmentId: attachment.id,
+        kind: attachment.kind,
+        bytes: attachment.byteSize,
+        durationMs: Date.now() - startedAt,
+      });
+      return Response.json({ attachment }, { status: 201, headers: { "Cache-Control": "no-store" } });
+    }
     const payload = await request.json() as TaskUploadPayload;
     const kind = payload.kind ?? "image";
     if (!(["image", "audio", "video", "file"] as const).includes(kind)) throw new Error("That attachment type is invalid.");
@@ -81,10 +107,11 @@ export async function POST(
       kind,
       durationMs: Date.now() - startedAt,
     });
-    return Response.json(prepared, { status: 201 });
+    return Response.json(prepared, { status: 201, headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     const message = error instanceof Error ? error.message : "The image upload could not be prepared.";
-    const status = /not found/i.test(message) ? 404 : /choose|image|audio|video|media|voice|file|document|archive|limited|large|duration|match/i.test(message) ? 400 : 500;
+    const serviceError = /temporarily unavailable|storage request|could not be optimized|could not be prepared/i.test(message);
+    const status = /not found/i.test(message) ? 404 : !serviceError && /choose|image|audio|video|media|voice|file|document|archive|limited|large|duration|match|expected/i.test(message) ? 400 : 500;
     console.error("[todo-api] task attachment preparation failed", { todoId: id, durationMs: Date.now() - startedAt, error });
     return Response.json({ error: message }, { status });
   }
