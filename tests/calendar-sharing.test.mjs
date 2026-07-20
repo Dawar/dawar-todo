@@ -6,22 +6,23 @@ import { appAccessResponse } from "../worker/access.ts";
 
 const root = new URL("../", import.meta.url);
 
-test("protects the app while leaving tokenized calendars public", () => {
-  const blockedApi = appAccessResponse(new Request("https://work.dawar.ca/api/todos"));
+test("protects the app while leaving tokenized calendars and OpenAPI public", async () => {
+  const blockedApi = await appAccessResponse(new Request("https://work.dawar.ca/api/todos"));
   assert.equal(blockedApi?.status, 401);
   assert.equal(blockedApi?.headers.get("cache-control"), "no-store");
 
-  const blockedPage = appAccessResponse(new Request("https://work.dawar.ca/settings"));
+  const blockedPage = await appAccessResponse(new Request("https://work.dawar.ca/settings"));
   assert.equal(blockedPage?.status, 303);
   assert.equal(blockedPage?.headers.get("location"), "https://work.dawar.ca/signin-with-chatgpt?return_to=%2Fsettings");
 
-  const signedIn = appAccessResponse(new Request("https://work.dawar.ca/api/todos", {
+  const signedIn = await appAccessResponse(new Request("https://work.dawar.ca/api/todos", {
     headers: { "oai-authenticated-user-email": "owner@example.com" },
   }));
   assert.equal(signedIn, null);
-  assert.equal(appAccessResponse(new Request(`https://work.dawar.ca/calendar/${"a".repeat(43)}.ics`)), null);
-  assert.equal(appAccessResponse(new Request("https://work.dawar.ca/assets/index.js")), null);
-  assert.equal(appAccessResponse(new Request("http://localhost:3000/api/todos")), null);
+  assert.equal(await appAccessResponse(new Request(`https://work.dawar.ca/calendar/${"a".repeat(43)}.ics`)), null);
+  assert.equal(await appAccessResponse(new Request("https://work.dawar.ca/openapi.json")), null);
+  assert.equal(await appAccessResponse(new Request("https://work.dawar.ca/assets/index.js")), null);
+  assert.equal(await appAccessResponse(new Request("http://localhost:3000/api/todos")), null);
 });
 
 test("renders dated tasks as escaped, folded all-day iCal events", () => {
@@ -104,6 +105,6 @@ test("ships revocable calendar controls and copyable task details", async () => 
   assert.match(publicRoute, /text\/calendar; charset=utf-8/);
   assert.match(publicRoute, /"Cache-Control": "no-store"/);
   assert.match(publicRoute, /findCalendarFeedByToken/);
-  assert.match(worker, /appAccessResponse\(request\)/);
+  assert.match(worker, /await appAccessResponse\(request, env, ctx\)/);
   assert.match(serviceWorker, /url\.pathname\.startsWith\("\/calendar\/"\)/);
 });

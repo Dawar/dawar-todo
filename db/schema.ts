@@ -85,6 +85,28 @@ export const todoCalendarFeeds = sqliteTable(
   ],
 );
 
+export const todoApiTokens = sqliteTable(
+  "todo_api_tokens",
+  {
+    id: text("id").primaryKey(),
+    name: text("name").notNull(),
+    tokenPrefix: text("token_prefix").notNull(),
+    tokenHash: text("token_hash").notNull(),
+    createdByEmail: text("created_by_email"),
+    createdAt: text("created_at")
+      .notNull()
+      .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`),
+    lastUsedAt: text("last_used_at"),
+    expiresAt: text("expires_at"),
+    revokedAt: text("revoked_at"),
+  },
+  (table) => [
+    uniqueIndex("todo_api_tokens_hash_idx").on(table.tokenHash),
+    index("todo_api_tokens_revoked_at_idx").on(table.revokedAt),
+    index("todo_api_tokens_expires_at_idx").on(table.expiresAt),
+  ],
+);
+
 export const todoAttachments = sqliteTable(
   "todo_attachments",
   {

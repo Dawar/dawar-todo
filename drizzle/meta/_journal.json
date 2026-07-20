@@ -57,6 +57,13 @@
       "when": 1784477255311,
       "tag": "0007_dazzling_shinobi_shaw",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1784552057491,
+      "tag": "0008_military_proudstar",
+      "breakpoints": true
     }
   ]
 }

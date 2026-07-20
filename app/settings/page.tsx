@@ -18,6 +18,15 @@ type CalendarFeed = {
   updatedAt: string;
 };
 
+type ApiToken = {
+  id: string;
+  name: string;
+  tokenPrefix: string;
+  createdAt: string;
+  lastUsedAt: string | null;
+  expiresAt: string | null;
+};
+
 const timeZones = [
   ["America/Toronto", "Eastern · Toronto"],
   ["America/New_York", "Eastern · New York"],
@@ -56,6 +65,13 @@ export default function SettingsPage() {
   const [feedsLoading, setFeedsLoading] = useState(true);
   const [creatingFeed, setCreatingFeed] = useState(false);
   const [busyFeedId, setBusyFeedId] = useState<string | null>(null);
+  const [apiTokens, setApiTokens] = useState<ApiToken[]>([]);
+  const [tokenName, setTokenName] = useState("Agent access");
+  const [tokenExpiration, setTokenExpiration] = useState("90");
+  const [tokensLoading, setTokensLoading] = useState(true);
+  const [creatingToken, setCreatingToken] = useState(false);
+  const [busyTokenId, setBusyTokenId] = useState<string | null>(null);
+  const [createdToken, setCreatedToken] = useState<{ apiToken: ApiToken; token: string } | null>(null);
   const [shareNotice, setShareNotice] = useState<{ tone: "success" | "error"; text: string } | null>(null);
 
   useEffect(() => {
@@ -74,6 +90,14 @@ export default function SettingsPage() {
       })
       .catch((error: Error) => setShareNotice({ tone: "error", text: error.message }))
       .finally(() => setFeedsLoading(false));
+
+    request<{ apiTokens: ApiToken[] }>("/api/api-tokens")
+      .then(({ apiTokens: loadedTokens }) => {
+        setApiTokens(loadedTokens);
+        console.info("[todo-ui] API tokens loaded", { count: loadedTokens.length });
+      })
+      .catch((error: Error) => setShareNotice({ tone: "error", text: error.message }))
+      .finally(() => setTokensLoading(false));
   }, []);
 
   useEffect(() => {
@@ -166,6 +190,70 @@ export default function SettingsPage() {
     }
   }
 
+  async function createToken(event: FormEvent) {
+    event.preventDefault();
+    const name = tokenName.trim();
+    if (!name) return;
+    setCreatingToken(true);
+    setShareNotice(null);
+    try {
+      const result = await request<{ apiToken: ApiToken; token: string }>("/api/api-tokens", {
+        method: "POST",
+        body: JSON.stringify({
+          name,
+          expiresInDays: tokenExpiration === "never" ? null : Number(tokenExpiration),
+        }),
+      });
+      setApiTokens((current) => [result.apiToken, ...current]);
+      setCreatedToken(result);
+      setTokenName("Agent access");
+      setShareNotice({ tone: "success", text: "API token generated. Copy it now." });
+      console.info("[todo-ui] API token generated", { tokenId: result.apiToken.id, expiresAt: result.apiToken.expiresAt });
+    } catch (error) {
+      setShareNotice({ tone: "error", text: error instanceof Error ? error.message : "The API token could not be generated." });
+    } finally {
+      setCreatingToken(false);
+    }
+  }
+
+  async function copyApiToken() {
+    if (!createdToken) return;
+    try {
+      await copyTextToClipboard(createdToken.token);
+      setShareNotice({ tone: "success", text: "API token copied." });
+      console.info("[todo-ui] API token copied", { tokenId: createdToken.apiToken.id });
+    } catch (error) {
+      setShareNotice({ tone: "error", text: error instanceof Error ? error.message : "The API token could not be copied." });
+    }
+  }
+
+  async function copyOpenApiUrl() {
+    try {
+      await copyTextToClipboard(`${window.location.origin}/openapi.json`);
+      setShareNotice({ tone: "success", text: "OpenAPI URL copied." });
+      console.info("[todo-ui] OpenAPI URL copied");
+    } catch (error) {
+      setShareNotice({ tone: "error", text: error instanceof Error ? error.message : "The OpenAPI URL could not be copied." });
+    }
+  }
+
+  async function revokeToken(apiToken: ApiToken) {
+    if (!window.confirm(`Revoke ${apiToken.name}? Any agent using it will lose access immediately.`)) return;
+    setBusyTokenId(apiToken.id);
+    setShareNotice(null);
+    try {
+      await request<{ id: string; revoked: true }>(`/api/api-tokens/${apiToken.id}`, { method: "DELETE" });
+      setApiTokens((current) => current.filter((item) => item.id !== apiToken.id));
+      if (createdToken?.apiToken.id === apiToken.id) setCreatedToken(null);
+      setShareNotice({ tone: "success", text: `${apiToken.name} revoked.` });
+      console.info("[todo-ui] API token revoked", { tokenId: apiToken.id });
+    } catch (error) {
+      setShareNotice({ tone: "error", text: error instanceof Error ? error.message : "The API token could not be revoked." });
+    } finally {
+      setBusyTokenId(null);
+    }
+  }
+
   return (
     <main className="min-h-screen bg-[#f6f7f5] text-[#1d211f]">
       <SiteHeader current="settings" />
@@ -214,6 +302,96 @@ export default function SettingsPage() {
             {saved && <span role="status" className="text-sm font-medium text-[#216e4e]">Saved</span>}
           </div>
         </form>
+
+        <section aria-labelledby="api-access-title" className="mt-6 rounded-2xl border border-black/[0.07] bg-white p-5 shadow-[0_10px_35px_rgba(30,45,36,0.06)] sm:p-7">
+          <div className="flex items-start gap-3">
+            <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-[#eaf3ed] text-[#216e4e]"><ActionIcon name="link" className="h-5 w-5" /></span>
+            <div className="min-w-0">
+              <h2 id="api-access-title" className="text-lg font-semibold tracking-[-0.02em] text-[#202522]">API access</h2>
+              <p className="mt-1 text-sm leading-6 text-[#69716c]">Create a personal Bearer token for agents and automations to manage your tasks, projects, attachments, and settings.</p>
+            </div>
+          </div>
+
+          <div className="mt-4 rounded-xl bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900">
+            Tokens have full access to this todo database. Treat them like passwords. A generated token is shown only once and can be revoked at any time.
+          </div>
+
+          <form onSubmit={createToken} className="mt-5 grid min-w-0 gap-2 sm:grid-cols-[minmax(0,1fr)_auto_auto]">
+            <label className="min-w-0">
+              <span className="sr-only">Token name</span>
+              <input
+                value={tokenName}
+                onChange={(event) => setTokenName(event.target.value)}
+                maxLength={80}
+                placeholder="Token name"
+                className="h-11 w-full min-w-0 rounded-xl border border-black/[0.1] px-3 text-[16px] outline-none focus:border-[#216e4e]/50 focus:ring-3 focus:ring-[#216e4e]/10"
+              />
+            </label>
+            <label>
+              <span className="sr-only">Token expiration</span>
+              <select value={tokenExpiration} onChange={(event) => setTokenExpiration(event.target.value)} className="h-11 w-full rounded-xl border border-black/[0.1] bg-white px-3 text-sm outline-none focus:border-[#216e4e]/50 focus:ring-3 focus:ring-[#216e4e]/10 sm:w-auto">
+                <option value="30">30 days</option>
+                <option value="90">90 days</option>
+                <option value="365">1 year</option>
+                <option value="never">Never expires</option>
+              </select>
+            </label>
+            <button type="submit" disabled={creatingToken || !tokenName.trim()} className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-[#216e4e] px-4 text-sm font-semibold text-white hover:bg-[#195d41] disabled:opacity-50">
+              <ActionIcon name="add" />
+              {creatingToken ? "Generating…" : "Generate token"}
+            </button>
+          </form>
+
+          {createdToken && (
+            <div className="mt-4 rounded-xl border border-[#216e4e]/20 bg-[#f1f7f3] p-3.5">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold text-[#24553f]">Copy this token now</p>
+                  <p className="mt-0.5 text-xs leading-5 text-[#607169]">It cannot be displayed again after you dismiss it.</p>
+                </div>
+                <button type="button" onClick={() => setCreatedToken(null)} aria-label="Dismiss generated token" title="Dismiss" className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-[#607169] hover:bg-black/[0.05]"><ActionIcon name="close" /></button>
+              </div>
+              <textarea readOnly value={createdToken.token} onFocus={(event) => event.currentTarget.select()} aria-label="Generated API token" rows={2} className="mt-3 w-full resize-none break-all rounded-lg border border-[#216e4e]/15 bg-white p-3 font-mono text-xs leading-5 text-[#303632] outline-none focus:border-[#216e4e]/50" />
+              <button type="button" onClick={() => void copyApiToken()} className="mt-2 inline-flex h-9 items-center gap-1.5 rounded-lg bg-white px-3 text-xs font-semibold text-[#216e4e] ring-1 ring-black/[0.06] hover:bg-[#edf5f0]"><ActionIcon name="copy" />Copy token</button>
+            </div>
+          )}
+
+          <div className="mt-5 rounded-xl border border-black/[0.07] bg-[#fafbf9] p-3.5">
+            <p className="text-sm font-semibold text-[#303632]">Agent documentation</p>
+            <p className="mt-1 text-xs leading-5 text-[#7c847f]">Use the public OpenAPI 3.1 specification to discover request bodies, responses, and Bearer authentication.</p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <a href="/openapi.json" target="_blank" rel="noreferrer" className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-white px-3 text-xs font-semibold text-[#216e4e] ring-1 ring-black/[0.06] hover:bg-[#edf5f0]"><ActionIcon name="link" />Open specification</a>
+              <button type="button" onClick={() => void copyOpenApiUrl()} className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-white px-3 text-xs font-semibold text-[#59615c] ring-1 ring-black/[0.06] hover:bg-[#f1f3f0]"><ActionIcon name="copy" />Copy OpenAPI URL</button>
+            </div>
+          </div>
+
+          <div className="mt-5 border-t border-black/[0.07] pt-5">
+            <h3 className="text-xs font-semibold uppercase tracking-wide text-[#69716c]">Active tokens</h3>
+            {tokensLoading ? (
+              <div role="status" aria-label="Loading API tokens" className="mt-3 space-y-3">
+                {[0, 1].map((item) => <div key={item} className="h-24 animate-pulse rounded-xl bg-[#f1f3f0]" />)}
+              </div>
+            ) : apiTokens.length ? (
+              <ul className="mt-3 space-y-3">
+                {apiTokens.map((apiToken) => (
+                  <li key={apiToken.id} className="flex min-w-0 items-start justify-between gap-3 rounded-xl border border-black/[0.07] bg-[#fafbf9] p-3.5">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold text-[#303632]">{apiToken.name}</p>
+                      <p className="mt-1 font-mono text-xs text-[#69716c]">{apiToken.tokenPrefix}</p>
+                      <p className="mt-1 text-xs leading-5 text-[#8a918d]">
+                        {apiToken.lastUsedAt ? `Last used ${new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(apiToken.lastUsedAt))}` : "Never used"}
+                        {apiToken.expiresAt ? ` · Expires ${new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(new Date(apiToken.expiresAt))}` : " · Never expires"}
+                      </p>
+                    </div>
+                    <button type="button" onClick={() => void revokeToken(apiToken)} disabled={busyTokenId === apiToken.id} className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg bg-white px-3 text-xs font-semibold text-red-700 ring-1 ring-black/[0.06] hover:bg-red-50 disabled:opacity-50"><ActionIcon name="delete" />Revoke</button>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="mt-3 rounded-xl border border-dashed border-black/[0.1] px-4 py-5 text-center text-sm text-[#8a918d]">No active API tokens.</p>
+            )}
+          </div>
+        </section>
 
         <section aria-labelledby="calendar-sharing-title" className="mt-6 rounded-2xl border border-black/[0.07] bg-white p-5 shadow-[0_10px_35px_rgba(30,45,36,0.06)] sm:p-7">
           <div className="flex items-start gap-3">

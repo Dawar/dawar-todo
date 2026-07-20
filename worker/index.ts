@@ -35,7 +35,7 @@ const worker = {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
 
-    const accessResponse = appAccessResponse(request);
+    const accessResponse = await appAccessResponse(request, env, ctx);
     if (accessResponse) return accessResponse;
 
     if (url.pathname === "/_vinext/image") {
