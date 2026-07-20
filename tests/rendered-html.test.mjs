@@ -166,6 +166,7 @@ test("supports a deliberate mobile pull gesture that fully reloads the app", asy
   assert.match(layout, /className="overscroll-y-none"/);
   assert.match(pullToRefresh, /\(max-width: 767px\)/);
   assert.match(pullToRefresh, /\(pointer: coarse\)/);
+  assert.match(pullToRefresh, /REFRESH_TRIGGER_DISTANCE = 160/);
   assert.match(pullToRefresh, /window\.scrollY <= 0/);
   assert.match(pullToRefresh, /Math\.abs\(deltaX\) >= deltaY/);
   assert.match(pullToRefresh, /addEventListener\("touchmove", onTouchMove, \{ passive: false \}\)/);

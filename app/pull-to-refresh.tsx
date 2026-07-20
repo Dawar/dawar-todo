@@ -4,8 +4,8 @@ import { useEffect, useRef, useState } from "react";
 import { ActionIcon } from "./action-icon";
 
 const INTENT_DISTANCE = 8;
-const REFRESH_TRIGGER_DISTANCE = 80;
-const MAX_INDICATOR_DISTANCE = 64;
+const REFRESH_TRIGGER_DISTANCE = 160;
+const MAX_INDICATOR_DISTANCE = 72;
 const RELOAD_DELAY_MS = 180;
 
 type PullGesture = {
@@ -100,7 +100,7 @@ export function PullToRefresh() {
       const nextReady = rawDistance >= REFRESH_TRIGGER_DISTANCE;
       rawDistanceRef.current = rawDistance;
       setReady(nextReady);
-      setPullDistance(Math.min(MAX_INDICATOR_DISTANCE, rawDistance * 0.5));
+      setPullDistance(Math.min(MAX_INDICATOR_DISTANCE, rawDistance * 0.42));
     };
 
     const finishGesture = (cancelled = false) => {
