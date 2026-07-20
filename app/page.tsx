@@ -14,6 +14,7 @@ import {
 import { createPortal } from "react-dom";
 import { ActionIcon, type ActionIconName } from "./action-icon";
 import { copyTextToClipboard } from "./copy-to-clipboard";
+import { dueDateSortValue, formatDueDate, isDueTodayOrOverdue } from "./date-only";
 import { SiteHeader } from "./site-header";
 import {
   deleteOfflineTodo,
@@ -655,30 +656,8 @@ function VoiceMemoRecorder({ onClose, onAttach }: { onClose: () => void; onAttac
   );
 }
 
-function isTodayOrOverdue(value: string | null) {
-  if (!value) return false;
-  const due = new Date(value);
-  if (Number.isNaN(due.valueOf())) return false;
-  const end = new Date();
-  end.setHours(23, 59, 59, 999);
-  return due <= end;
-}
-
 function isSnoozed(todo: Todo, now: number) {
   return todo.status === "open" && Boolean(todo.snoozedUntil) && new Date(todo.snoozedUntil as string).valueOf() > now;
-}
-
-function dueLabel(value: string) {
-  const due = new Date(value);
-  if (Number.isNaN(due.valueOf())) return value;
-  const now = new Date();
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).valueOf();
-  const date = new Date(due.getFullYear(), due.getMonth(), due.getDate()).valueOf();
-  const day = 86_400_000;
-  if (date < today) return `Overdue · ${new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(due)}`;
-  if (date === today) return "Due today";
-  if (date === today + day) return "Due tomorrow";
-  return `Due ${new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(due)}`;
 }
 
 function snoozeLabel(value: string) {
@@ -692,8 +671,8 @@ function dateInputValue(value: string | null) {
 }
 
 function compareSmart(a: Todo, b: Todo) {
-  const aDue = a.dueDate ? new Date(a.dueDate).valueOf() : Number.POSITIVE_INFINITY;
-  const bDue = b.dueDate ? new Date(b.dueDate).valueOf() : Number.POSITIVE_INFINITY;
+  const aDue = dueDateSortValue(a.dueDate);
+  const bDue = dueDateSortValue(b.dueDate);
   if (aDue !== bDue) return aDue - bDue;
   if (a.priority !== b.priority) return a.priority - b.priority;
   return new Date(b.updatedAt).valueOf() - new Date(a.updatedAt).valueOf();
@@ -904,7 +883,7 @@ function TaskRow({
               {todo.priority <= 2 && <span className={classNames("rounded-full px-2 py-0.5 font-medium", todo.priority === 1 ? "bg-red-50 text-red-700" : "bg-amber-50 text-amber-700")}>{priorityLabels[todo.priority]}</span>}
               {todo.project && <span className="rounded-full bg-[#f0f2ef] px-2 py-0.5">{todo.project}</span>}
               {todo.context && <span>{todo.context}</span>}
-              {todo.dueDate && <span className={classNames(isTodayOrOverdue(todo.dueDate) && todo.status === "open" && !snoozed && "font-medium text-red-600")}>{dueLabel(todo.dueDate)}</span>}
+              {todo.dueDate && <span className={classNames(isDueTodayOrOverdue(todo.dueDate) && todo.status === "open" && !snoozed && "font-medium text-red-600")}>{formatDueDate(todo.dueDate)}</span>}
               {snoozed && todo.snoozedUntil && <span className="font-medium text-amber-700">{snoozeLabel(todo.snoozedUntil)}</span>}
               {todo.offline && <span className="inline-flex items-center gap-1 font-medium text-amber-700"><ActionIcon name="retry" className="h-3 w-3" />Waiting to sync</span>}
             </div>
@@ -1235,7 +1214,7 @@ export default function Home() {
     });
     return [...rows].sort((a, b) => {
       if (sort === "priority") return a.priority - b.priority || compareSmart(a, b);
-      if (sort === "due") return (a.dueDate ? new Date(a.dueDate).valueOf() : Infinity) - (b.dueDate ? new Date(b.dueDate).valueOf() : Infinity);
+      if (sort === "due") return dueDateSortValue(a.dueDate) - dueDateSortValue(b.dueDate);
       if (sort === "newest") return new Date(b.createdAt).valueOf() - new Date(a.createdAt).valueOf();
       if (sort === "oldest") return new Date(a.createdAt).valueOf() - new Date(b.createdAt).valueOf();
       if (sort === "az") return a.title.localeCompare(b.title);
