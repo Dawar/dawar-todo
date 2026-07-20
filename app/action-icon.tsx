@@ -21,6 +21,8 @@ import {
   ImagePlus,
   Mic,
   Paperclip,
+  Pin,
+  PinOff,
   Plus,
   RotateCcw,
   RefreshCw,
@@ -67,6 +69,8 @@ export type ActionIconName =
   | "snooze"
   | "undo"
   | "previous"
+  | "pin"
+  | "unpin"
   | "view-all"
   | "view-open"
   | "wake";
@@ -103,6 +107,8 @@ const icons: Record<ActionIconName, ComponentType<LucideProps>> = {
   snooze: Clock3,
   undo: Undo2,
   previous: ChevronLeft,
+  pin: Pin,
+  unpin: PinOff,
   "view-all": List,
   "view-open": ListTodo,
   wake: AlarmClock,

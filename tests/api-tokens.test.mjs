@@ -110,6 +110,9 @@ test("ships hashed revocable API tokens and a public agent specification", async
   assert.ok(openApi.paths["/api/projects"]);
   assert.ok(openApi.paths["/api/todos/{id}/attachments"]);
   assert.equal(openApi.paths["/api/api-tokens"], undefined);
+  assert.equal(openApi.components.schemas.Todo.properties.pinned.type, "boolean");
+  assert.ok(openApi.components.schemas.Todo.required.includes("pinned"));
+  assert.equal(openApi.components.schemas.UpdateTodo.properties.pinned.type, "boolean");
 });
 
 test("parses only Bearer authorization values and hashes deterministically", async () => {
@@ -138,6 +141,7 @@ test("generates a ready-to-use SKILL.md only from the one-time raw token", async
   assert.match(skill, new RegExp(token));
   assert.match(skill, /GET \/api\/todos/);
   assert.match(skill, /adjust_snooze/);
+  assert.match(skill, /pinned.*Pinned group in the Open view/);
   assert.match(skill, /Do not send the Dawar Todo Bearer token to storage URLs/);
   assert.match(skill, /Never manage API tokens through this credential/);
   assert.match(skill, /shown only once at creation/);

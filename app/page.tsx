@@ -56,6 +56,7 @@ type Todo = {
   sourceId: number | null;
   completedAt: string | null;
   snoozedUntil: string | null;
+  pinned: boolean;
   createdAt: string;
   updatedAt: string;
   attachmentCount: number;
@@ -725,6 +726,7 @@ function offlineRecordTodo(record: OfflineTodoRecord): Todo {
     sourceId: null,
     completedAt: null,
     snoozedUntil: null,
+    pinned: false,
     createdAt: record.createdAt,
     updatedAt: record.createdAt,
     attachmentCount: record.attachments.length,
@@ -749,7 +751,9 @@ function TaskRow({
   onSelect,
   onAction,
   onProject,
+  onPin,
   onOpen,
+  showPin,
 }: {
   todo: Todo;
   selected: boolean;
@@ -757,7 +761,9 @@ function TaskRow({
   onSelect: (todo: Todo) => void;
   onAction: (todo: Todo, action: TodoAction, source: "hover" | "swipe") => void;
   onProject: (todo: Todo, source: "hover" | "swipe") => void;
+  onPin: (todo: Todo) => void;
   onOpen: (todo: Todo) => void;
+  showPin: boolean;
 }) {
   const [offset, setOffset] = useState(0);
   const [swipeWidth, setSwipeWidth] = useState(1);
@@ -847,7 +853,8 @@ function TaskRow({
     setOffset(0);
   }
 
-  const hoverActions: Array<{ action: TodoAction | "assign"; label: string; icon: ActionIconName }> = [
+  const hoverActions: Array<{ action: TodoAction | "assign" | "pin"; label: string; icon: ActionIconName }> = [
+    ...(showPin ? [{ action: "pin" as const, label: todo.pinned ? "Unpin" : "Pin", icon: todo.pinned ? "unpin" as const : "pin" as const }] : []),
     primaryAction,
     ...(todo.status === "open" ? [leftSecondaryAction] : []),
     { action: "assign", label: "Assign project", icon: "move" },
@@ -895,6 +902,7 @@ function TaskRow({
         >
           <div className="flex min-w-0 items-start gap-2">
             <p className={classNames("min-w-0 flex-1 whitespace-pre-wrap text-[15px] leading-5 text-[#202522]", todo.status === "completed" && "text-[#8b928e] line-through")}>{todo.title}</p>
+            {showPin && todo.pinned && <span className="inline-flex shrink-0 text-[#216e4e]" title="Pinned"><ActionIcon name="pin" className="h-3.5 w-3.5" /></span>}
             {todo.attachmentCount > 0 && <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-[#eef2ef] px-1.5 py-0.5 text-[10px] font-medium text-[#68716b]"><ActionIcon name="attachment" className="h-3 w-3" />{todo.attachmentCount}</span>}
           </div>
           {todo.notes && <p className="mt-1 line-clamp-2 whitespace-pre-wrap text-xs leading-5 text-[#7c847f]">{todo.notes}</p>}
@@ -909,6 +917,11 @@ function TaskRow({
             </div>
           )}
         </button>
+        {showPin && !pending && !todo.offline && (
+          <button type="button" data-row-action onClick={() => onPin(todo)} aria-label={`${todo.pinned ? "Unpin" : "Pin"}: ${todo.title}`} title={todo.pinned ? "Unpin" : "Pin"} className={classNames("grid h-9 w-9 shrink-0 place-items-center rounded-lg transition focus-visible:outline-2 focus-visible:outline-[#216e4e] md:hidden", todo.pinned ? "bg-[#eaf3ed] text-[#216e4e]" : "text-[#69716c] hover:bg-[#eef0ed]")}>
+            <ActionIcon name={todo.pinned ? "unpin" : "pin"} className="h-[18px] w-[18px]" />
+          </button>
+        )}
         {!pending && !todo.offline && (
           <div className="hidden shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 md:flex">
             {hoverActions.map(({ action, label, icon }) => (
@@ -916,13 +929,14 @@ function TaskRow({
                 key={action}
                 type="button"
                 data-row-action
-                onClick={() => action === "assign" ? onProject(todo, "hover") : onAction(todo, action, "hover")}
+                onClick={() => action === "assign" ? onProject(todo, "hover") : action === "pin" ? onPin(todo) : onAction(todo, action, "hover")}
                 aria-label={`${label}: ${todo.title}`}
                 title={label}
                 className={classNames(
                   "grid h-9 w-9 place-items-center rounded-lg text-[#69716c] transition hover:bg-[#eef0ed] hover:text-[#252a27] focus-visible:outline-2 focus-visible:outline-[#216e4e]",
                   (action === "complete" || action === "unsnooze") && "hover:bg-emerald-50 hover:text-emerald-700",
                   action === "snooze" && "hover:bg-amber-50 hover:text-amber-700",
+                  action === "pin" && "hover:bg-[#eaf3ed] hover:text-[#216e4e]",
                   action === "delete" && "hover:bg-red-50 hover:text-red-700",
                 )}
               >
@@ -1241,6 +1255,9 @@ export default function Home() {
       return compareSmart(a, b);
     });
   }, [todos, view, query, project, priority, sort, now]);
+
+  const pinnedOpenTodos = view === "open" ? filtered.filter((todo) => todo.pinned) : [];
+  const regularOpenTodos = view === "open" ? filtered.filter((todo) => !todo.pinned) : filtered;
 
   const selectedIds = useMemo(() => [...selected], [selected]);
   const selectedTodos = useMemo(() => todos.filter((todo) => selected.has(todo.id)), [selected, todos]);
@@ -1630,6 +1647,7 @@ export default function Home() {
       sourceId: null,
       completedAt: null,
       snoozedUntil: null,
+      pinned: false,
       createdAt,
       updatedAt: createdAt,
       attachmentCount: captureAttachments.length,
@@ -2063,6 +2081,29 @@ export default function Home() {
   function taskAction(todo: Todo, action: TodoAction, source: "hover" | "swipe" | "details") {
     console.info("[todo-ui] task action requested", { id: todo.id, action, source });
     void performAction([todo.id], action);
+  }
+
+  async function togglePin(todo: Todo) {
+    if (view !== "open" || todo.id < 1 || todo.offline || syncing) return;
+    const pinned = !todo.pinned;
+    const previous = todos;
+    setSyncing(true);
+    setTodos((current) => current.map((item) => item.id === todo.id ? { ...item, pinned } : item));
+    try {
+      const result = await request<{ todo: Todo; undoToken: string }>(`/api/todos/${todo.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ pinned }),
+      });
+      setTodos((current) => current.map((item) => item.id === result.todo.id ? result.todo : item));
+      setNotice({ tone: "success", text: pinned ? "Task pinned." : "Task unpinned.", undoToken: result.undoToken });
+      console.info("[todo-ui] task pin changed", { id: todo.id, pinned, view });
+    } catch (error) {
+      setTodos(previous);
+      setNotice({ tone: "error", text: error instanceof Error ? error.message : "The pin could not be changed." });
+      console.error("[todo-ui] task pin change failed", { id: todo.id, pinned, error });
+    } finally {
+      setSyncing(false);
+    }
   }
 
   function assignTaskProject(todo: Todo, source: "hover" | "swipe") {
@@ -2562,7 +2603,13 @@ export default function Home() {
               </div>
             ) : filtered.length ? (
               <ul className="divide-y divide-black/[0.055]">
-                {filtered.map((todo) => (
+                {pinnedOpenTodos.length > 0 && (
+                  <li className="flex items-center justify-between bg-[#f1f7f3] px-4 py-2 text-[11px] font-semibold uppercase tracking-wide text-[#216e4e] sm:px-5">
+                    <span className="inline-flex items-center gap-1.5"><ActionIcon name="pin" className="h-3.5 w-3.5" />Pinned</span>
+                    <span>{pinnedOpenTodos.length}</span>
+                  </li>
+                )}
+                {pinnedOpenTodos.map((todo) => (
                   <TaskRow
                     key={todo.id}
                     todo={todo}
@@ -2571,7 +2618,29 @@ export default function Home() {
                     onSelect={toggleSelected}
                     onAction={taskAction}
                     onProject={assignTaskProject}
+                    onPin={togglePin}
                     onOpen={openTaskDetails}
+                    showPin
+                  />
+                ))}
+                {pinnedOpenTodos.length > 0 && regularOpenTodos.length > 0 && (
+                  <li className="flex items-center justify-between bg-[#f8f9f7] px-4 py-2 text-[11px] font-semibold uppercase tracking-wide text-[#747c77] sm:px-5">
+                    <span>Open</span>
+                    <span>{regularOpenTodos.length}</span>
+                  </li>
+                )}
+                {regularOpenTodos.map((todo) => (
+                  <TaskRow
+                    key={todo.id}
+                    todo={todo}
+                    selected={selected.has(todo.id)}
+                    now={now}
+                    onSelect={toggleSelected}
+                    onAction={taskAction}
+                    onProject={assignTaskProject}
+                    onPin={togglePin}
+                    onOpen={openTaskDetails}
+                    showPin={view === "open"}
                   />
                 ))}
               </ul>
@@ -2952,6 +3021,7 @@ export default function Home() {
                   ) : (
                     <button type="button" onClick={() => detailAction("snooze")} disabled={syncing || savingEdit} className="inline-flex min-w-max items-center gap-2 rounded-xl bg-amber-50 px-3 py-2.5 text-sm font-semibold text-amber-700 disabled:opacity-50"><ActionIcon name={todoActionIcon("snooze", "Snooze")} />Snooze</button>
                   ))}
+                  {view === "open" && <button type="button" onClick={() => void togglePin(editingTodo)} disabled={syncing || savingEdit} className="inline-flex min-w-max items-center gap-2 rounded-xl bg-[#eef3ff] px-3 py-2.5 text-sm font-semibold text-[#445a8a] disabled:opacity-50"><ActionIcon name={editingTodo.pinned ? "unpin" : "pin"} />{editingTodo.pinned ? "Unpin" : "Pin"}</button>}
                   <button type="button" onClick={() => openProjectAssignment([editingTodo.id], "details")} disabled={syncing || savingEdit} className="inline-flex min-w-max items-center gap-2 rounded-xl bg-slate-100 px-3 py-2.5 text-sm font-semibold text-slate-700 disabled:opacity-50"><ActionIcon name={todoActionIcon("assign", "Assign project")} />Assign project</button>
                   <button type="button" onClick={() => detailAction("delete")} disabled={syncing || savingEdit} className="inline-flex min-w-max items-center gap-2 rounded-xl bg-red-50 px-3 py-2.5 text-sm font-semibold text-red-700 disabled:opacity-50"><ActionIcon name={todoActionIcon("delete", "Delete")} />Delete</button>
                 </div>

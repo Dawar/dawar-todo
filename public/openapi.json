@@ -332,7 +332,7 @@
       "Error": { "type": "object", "required": ["error"], "properties": { "error": { "type": "string" } } },
       "Todo": {
         "type": "object",
-        "required": ["id", "title", "notes", "status", "priority", "createdAt", "updatedAt", "attachmentCount"],
+        "required": ["id", "title", "notes", "status", "priority", "pinned", "createdAt", "updatedAt", "attachmentCount"],
         "properties": {
           "id": { "type": "integer" },
           "title": { "type": "string", "maxLength": 2000 },
@@ -347,6 +347,7 @@
           "clientId": { "type": ["string", "null"] },
           "completedAt": { "type": ["string", "null"], "format": "date-time" },
           "snoozedUntil": { "type": ["string", "null"], "format": "date-time" },
+          "pinned": { "type": "boolean", "description": "Hoists the task into the Pinned group in the Open view. The value persists but is not rendered in other views." },
           "createdAt": { "type": "string", "format": "date-time" },
           "updatedAt": { "type": "string", "format": "date-time" },
           "attachmentCount": { "type": "integer", "minimum": 0 }
@@ -378,7 +379,8 @@
           "priority": { "type": "integer", "minimum": 1, "maximum": 4 },
           "dueDate": { "type": ["string", "null"], "format": "date" },
           "project": { "type": ["string", "null"], "maxLength": 120 },
-          "context": { "type": ["string", "null"] }
+          "context": { "type": ["string", "null"] },
+          "pinned": { "type": "boolean", "description": "Pin or unpin the task in the Open view without changing task state." }
         }
       },
       "TodoMutation": {

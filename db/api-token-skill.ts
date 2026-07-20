@@ -66,6 +66,7 @@ curl --fail-with-body \\
 - \`priority\`: 1 urgent, 2 high, 3 normal, 4 low.
 - \`dueDate\`: \`YYYY-MM-DD\` or null.
 - \`project\`: a registered project name or null for unassigned.
+- \`pinned\`: when true, the task is hoisted into the Pinned group in the Open view. It has no effect on task state or other views.
 - \`attachmentCount\`: count only; load attachment metadata separately.
 - New tasks must have non-empty text and start open.
 - Use a UUID \`clientId\` when retries might repeat a create request.
@@ -76,7 +77,7 @@ curl --fail-with-body \\
 
 - \`GET /api/todos\`: list all open, snoozed, and completed tasks.
 - \`POST /api/todos\`: create an open task. Supports title, notes, priority, dueDate, project, context, clientId, draftToken, and attachmentIds.
-- \`PATCH /api/todos/{id}\`: edit title, notes, status, priority, dueDate, project, or context. Set nullable fields to null to clear them.
+- \`PATCH /api/todos/{id}\`: edit title, notes, status, priority, dueDate, project, context, or pinned. Set nullable fields to null to clear them.
 - \`POST /api/todos/bulk\`: perform state and multi-task operations.
 - \`POST /api/todos/undo\`: consume a returned Undo token.
 

@@ -37,6 +37,10 @@ export async function PATCH(
       update.project = project || null;
     }
     if (payload.context !== undefined) update.context = payload.context?.trim() || null;
+    if (payload.pinned !== undefined) {
+      if (typeof payload.pinned !== "boolean") return Response.json({ error: "Pinned must be true or false." }, { status: 400 });
+      update.pinned = payload.pinned;
+    }
 
     const result = await updateTodo(id, update);
     if (!result) return Response.json({ error: "Task not found." }, { status: 404 });

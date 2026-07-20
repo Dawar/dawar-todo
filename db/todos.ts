@@ -27,6 +27,7 @@ type TodoRow = {
   client_id: string | null;
   completed_at: string | null;
   snoozed_until: string | null;
+  pinned: number;
   created_at: string;
   updated_at: string;
   attachment_count?: number;
@@ -52,13 +53,14 @@ export type Todo = {
   clientId: string | null;
   completedAt: string | null;
   snoozedUntil: string | null;
+  pinned: boolean;
   createdAt: string;
   updatedAt: string;
   attachmentCount: number;
 };
 
 export type TodoUpdate = Partial<
-  Pick<Todo, "title" | "notes" | "priority" | "dueDate" | "project" | "context" | "snoozedUntil">
+  Pick<Todo, "title" | "notes" | "priority" | "dueDate" | "project" | "context" | "snoozedUntil" | "pinned">
 > & { status?: TodoStatus };
 
 export type TodoSettings = {
@@ -88,6 +90,7 @@ function mapTodo(row: TodoRow): Todo {
     clientId: row.client_id,
     completedAt: row.completed_at,
     snoozedUntil: row.snoozed_until,
+    pinned: Boolean(row.pinned),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     attachmentCount: Number(row.attachment_count ?? 0),
@@ -115,6 +118,7 @@ export async function ensureTodoDatabase() {
           client_id TEXT,
           completed_at TEXT,
           snoozed_until TEXT,
+          pinned INTEGER NOT NULL DEFAULT 0,
           created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
           updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
         )
@@ -199,7 +203,12 @@ export async function ensureTodoDatabase() {
       await db.prepare("ALTER TABLE todos ADD COLUMN snoozed_until TEXT").run();
       console.info("[todo-db] added snoozed_until compatibility column");
     }
+    if (!columns.results.some((column) => column.name === "pinned")) {
+      await db.prepare("ALTER TABLE todos ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0").run();
+      console.info("[todo-db] added pinned compatibility column");
+    }
     await db.prepare("CREATE INDEX IF NOT EXISTS todos_snoozed_until_idx ON todos(snoozed_until)").run();
+    await db.prepare("CREATE INDEX IF NOT EXISTS todos_pinned_idx ON todos(pinned)").run();
     await db.prepare("CREATE INDEX IF NOT EXISTS todo_action_history_created_at_idx ON todo_action_history(created_at)").run();
     await db.batch([
       db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS todo_calendar_feeds_token_idx ON todo_calendar_feeds(token)"),
@@ -517,6 +526,7 @@ export async function updateTodo(id: number, update: TodoUpdate): Promise<{ todo
     project: "project",
     context: "context",
     snoozedUntil: "snoozed_until",
+    pinned: "pinned",
   };
   const entries = (Object.entries(update) as [keyof TodoUpdate, TodoUpdate[keyof TodoUpdate]][])
     .filter(([, value]) => value !== undefined);
@@ -530,7 +540,7 @@ export async function updateTodo(id: number, update: TodoUpdate): Promise<{ todo
   if (!before) return null;
   const undoToken = crypto.randomUUID();
 
-  const values = entries.map(([, value]) => value);
+  const values = entries.map(([field, value]) => field === "pinned" ? value ? 1 : 0 : value);
   const setters = entries.map(([field]) => `${columnByField[field]} = ?`);
   if (update.status === "completed") {
     setters.push("completed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')", "snoozed_until = NULL");
@@ -889,8 +899,8 @@ export async function undoTodoAction(undoToken: string) {
   const restore = db.prepare(`
     INSERT INTO todos (
       id, title, notes, status, priority, due_date, project, context,
-      source_kind, source_id, client_id, completed_at, snoozed_until, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      source_kind, source_id, client_id, completed_at, snoozed_until, pinned, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       title = excluded.title,
       notes = excluded.notes,
@@ -904,6 +914,7 @@ export async function undoTodoAction(undoToken: string) {
       client_id = excluded.client_id,
       completed_at = excluded.completed_at,
       snoozed_until = excluded.snoozed_until,
+      pinned = excluded.pinned,
       created_at = excluded.created_at,
       updated_at = excluded.updated_at
   `);
@@ -937,6 +948,7 @@ export async function undoTodoAction(undoToken: string) {
       row.client_id ?? null,
       row.completed_at,
       row.snoozed_until,
+      row.pinned ?? 0,
       row.created_at,
       row.updated_at,
     )),
