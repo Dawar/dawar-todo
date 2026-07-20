@@ -17,7 +17,7 @@ type DraftUploadPayload = {
   thumbnailMimeType?: string;
   width?: number;
   height?: number;
-  kind?: "image" | "audio" | "video";
+  kind?: "image" | "audio" | "video" | "file";
   durationMs?: number;
 };
 
@@ -27,7 +27,7 @@ export async function POST(request: Request) {
     await ensureTodoDatabase();
     const payload = await request.json() as DraftUploadPayload;
     const kind = payload.kind ?? "image";
-    if (!(["image", "audio", "video"] as const).includes(kind)) throw new Error("That attachment type is invalid.");
+    if (!(["image", "audio", "video", "file"] as const).includes(kind)) throw new Error("That attachment type is invalid.");
     const target = { draftToken: String(payload.draftToken ?? "") };
     const prepared = kind === "image"
       ? await prepareTodoAttachmentUpload({
@@ -53,7 +53,7 @@ export async function POST(request: Request) {
     return Response.json(prepared, { status: 201 });
   } catch (error) {
     const message = error instanceof Error ? error.message : "The image upload could not be prepared.";
-    const inputError = /choose|image|audio|video|media|voice|limited|invalid|large|available|duration/i.test(message);
+    const inputError = /choose|image|audio|video|media|voice|file|document|archive|limited|invalid|large|available|duration|match/i.test(message);
     console.error("[todo-api] draft attachment preparation failed", { durationMs: Date.now() - startedAt, error });
     return Response.json({ error: message }, { status: inputError ? 400 : 500 });
   }
@@ -65,7 +65,7 @@ export async function PATCH(request: Request) {
     await ensureTodoDatabase();
     const payload = await request.json() as DraftUploadPayload;
     const kind = payload.kind ?? "image";
-    if (!(["image", "audio", "video"] as const).includes(kind)) throw new Error("That attachment type is invalid.");
+    if (!(["image", "audio", "video", "file"] as const).includes(kind)) throw new Error("That attachment type is invalid.");
     const target = { draftToken: String(payload.draftToken ?? "") };
     const attachment = kind === "image"
       ? await finalizeTodoAttachmentUpload(String(payload.uploadId ?? ""), {
@@ -83,7 +83,7 @@ export async function PATCH(request: Request) {
     return Response.json({ attachment });
   } catch (error) {
     const message = error instanceof Error ? error.message : "The image upload could not be finalized.";
-    const inputError = /image|audio|video|media|voice|limited|invalid|large|available|expected|duration/i.test(message);
+    const inputError = /image|audio|video|media|voice|file|document|archive|limited|invalid|large|available|expected|duration|match/i.test(message);
     console.error("[todo-api] draft attachment finalization failed", { durationMs: Date.now() - startedAt, error });
     return Response.json({ error: message }, { status: inputError ? 400 : 500 });
   }

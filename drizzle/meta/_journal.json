@@ -71,6 +71,13 @@
       "when": 1784552766739,
       "tag": "0009_small_tenebrous",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1784554344053,
+      "tag": "0010_scrub_api_token_secrets",
+      "breakpoints": true
     }
   ]
 }

@@ -1,4 +1,5 @@
 import { env, waitUntil } from "cloudflare:workers";
+import { attachmentFileExtension, attachmentFileMimeType } from "../lib/attachment-files";
 
 export const MAX_ATTACHMENTS_PER_TASK = 12;
 export const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
@@ -6,6 +7,7 @@ export const MAX_AUDIO_ATTACHMENT_BYTES = 50 * 1024 * 1024;
 export const MAX_AUDIO_DURATION_MS = 30 * 60 * 1000;
 export const MAX_VIDEO_ATTACHMENT_BYTES = 250 * 1024 * 1024;
 export const MAX_VIDEO_DURATION_MS = 60 * 60 * 1000;
+export const MAX_FILE_ATTACHMENT_BYTES = 100 * 1024 * 1024;
 const MAX_IMAGE_PIXELS = 100_000_000;
 const DRAFT_LIFETIME_HOURS = 24;
 const DELETED_RETENTION_DAYS = 7;
@@ -35,7 +37,7 @@ export type AttachmentRow = {
   byte_size: number;
   width: number;
   height: number;
-  kind: "image" | "audio" | "video";
+  kind: "image" | "audio" | "video" | "file";
   duration_ms: number;
   upload_state: "uploading" | "ready";
   sort_order: number;
@@ -53,7 +55,7 @@ export type TodoAttachment = {
   byteSize: number;
   width: number;
   height: number;
-  kind: "image" | "audio" | "video";
+  kind: "image" | "audio" | "video" | "file";
   durationMs: number;
   sortOrder: number;
   thumbnailUrl: string;
@@ -185,7 +187,7 @@ async function mapAttachment(row: AttachmentRow): Promise<TodoAttachment> {
   const kind = row.kind ?? "image";
   const [originalUrl, inlineOriginalUrl] = await Promise.all([
     signedObjectUrl(row.original_key, row.file_name),
-    kind === "image" ? Promise.resolve("") : signedObjectUrl(row.original_key),
+    kind === "audio" || kind === "video" ? signedObjectUrl(row.original_key) : Promise.resolve(""),
   ]);
   const [thumbnailUrl, displayUrl] = kind === "image"
     ? await Promise.all([
@@ -229,7 +231,7 @@ type FinalizeUploadInput = {
 };
 
 type PrepareMediaUploadInput = {
-  kind: "audio" | "video";
+  kind: "audio" | "video" | "file";
   fileName: string;
   mimeType: string;
   byteSize: number;
@@ -302,6 +304,20 @@ function videoExtension(mimeType: string) {
 function expectedVideoFormat(mimeType: string) {
   if (mimeType === "video/quicktime" || mimeType === "video/mp4") return "mp4";
   return "webm";
+}
+
+function normalizedFileMimeType(value: string, fileName: string) {
+  return attachmentFileMimeType(fileName, value);
+}
+
+function expectedFileFormat(fileName: string) {
+  const extension = attachmentFileExtension(fileName);
+  if (extension === "pdf") return "pdf";
+  if (["docx", "xlsx", "pptx", "odt", "ods", "odp", "zip"].includes(extension)) return "zip";
+  if (["doc", "xls", "ppt"].includes(extension)) return "compound";
+  if (extension === "7z") return "7z";
+  if (extension === "rtf") return "rtf";
+  return "text";
 }
 
 function attachmentObjectKeys(row: AttachmentRow) {
@@ -717,6 +733,18 @@ function detectedMediaFormat(bytes: Uint8Array) {
   return null;
 }
 
+function detectedFileFormat(bytes: Uint8Array) {
+  const ascii = (start: number, length: number) => String.fromCharCode(...bytes.slice(start, start + length));
+  if (bytes.length >= 5 && ascii(0, 5) === "%PDF-") return "pdf";
+  if (bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4b && [0x03, 0x05, 0x07].includes(bytes[2]) && [0x04, 0x06, 0x08].includes(bytes[3])) return "zip";
+  if (bytes.length >= 8 && [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1].every((byte, index) => bytes[index] === byte)) return "compound";
+  if (bytes.length >= 6 && [0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c].every((byte, index) => bytes[index] === byte)) return "7z";
+  const text = new TextDecoder("utf-8", { fatal: false }).decode(bytes.slice(0, 128)).replace(/^\uFEFF/, "").trimStart();
+  if (/^\{\\rtf/i.test(text)) return "rtf";
+  if (!bytes.slice(0, Math.min(bytes.length, 4096)).includes(0)) return "text";
+  return null;
+}
+
 export async function prepareTodoMediaAttachmentUpload(
   input: PrepareMediaUploadInput,
   target: UploadTarget,
@@ -724,11 +752,11 @@ export async function prepareTodoMediaAttachmentUpload(
   const startedAt = Date.now();
   const byteSize = Number(input.byteSize);
   const kind = input.kind;
-  const maximumBytes = kind === "audio" ? MAX_AUDIO_ATTACHMENT_BYTES : MAX_VIDEO_ATTACHMENT_BYTES;
+  const maximumBytes = kind === "audio" ? MAX_AUDIO_ATTACHMENT_BYTES : kind === "video" ? MAX_VIDEO_ATTACHMENT_BYTES : MAX_FILE_ATTACHMENT_BYTES;
   if (!Number.isInteger(byteSize) || byteSize < 1) throw new Error(`That ${kind} file is empty.`);
-  if (byteSize > maximumBytes) throw new Error(kind === "audio" ? "Voice memos are limited to 50 MB." : "Videos are limited to 250 MB.");
-  const fileName = cleanFileName(input.fileName || (kind === "audio" ? "voice memo" : "video"));
-  const mimeType = kind === "audio" ? normalizedAudioMimeType(input.mimeType) : normalizedVideoMimeType(input.mimeType);
+  if (byteSize > maximumBytes) throw new Error(kind === "audio" ? "Voice memos are limited to 50 MB." : kind === "video" ? "Videos are limited to 250 MB." : "Files are limited to 100 MB.");
+  const fileName = cleanFileName(input.fileName || (kind === "audio" ? "voice memo" : kind === "video" ? "video" : "file"));
+  const mimeType = kind === "audio" ? normalizedAudioMimeType(input.mimeType) : kind === "video" ? normalizedVideoMimeType(input.mimeType) : normalizedFileMimeType(input.mimeType, fileName);
   const db = database();
   const { isDraft, draftToken, todoId } = targetValues(target);
   if (todoId !== null) {
@@ -741,8 +769,8 @@ export async function prepareTodoMediaAttachmentUpload(
   if (Number(count?.count ?? 0) >= MAX_ATTACHMENTS_PER_TASK) throw new Error(`Tasks are limited to ${MAX_ATTACHMENTS_PER_TASK} attachments.`);
 
   const id = crypto.randomUUID();
-  const extension = kind === "audio" ? audioExtension(mimeType) : videoExtension(mimeType);
-  const base = `todo-media/${id}`;
+  const extension = kind === "audio" ? audioExtension(mimeType) : kind === "video" ? videoExtension(mimeType) : attachmentFileExtension(fileName);
+  const base = kind === "file" ? `todo-files/${id}` : `todo-media/${id}`;
   const originalKey = `${base}/original.${extension}`;
   const displayKey = `${base}/no-display`;
   const thumbnailKey = `${base}/no-thumbnail`;
@@ -761,7 +789,7 @@ export async function prepareTodoMediaAttachmentUpload(
     ).first<AttachmentRow>();
     if (!row) throw new Error(`The ${kind} upload could not be prepared.`);
     const originalUpload = await signedPostTarget(originalKey, mimeType, maximumBytes);
-    console.info("[todo-attachments] media upload prepared", {
+    console.info("[todo-attachments] original attachment upload prepared", {
       attachmentId: id,
       todoId,
       draft: isDraft,
@@ -773,7 +801,7 @@ export async function prepareTodoMediaAttachmentUpload(
     return { uploadId: id, uploads: { original: originalUpload } };
   } catch (error) {
     await db.prepare("DELETE FROM todo_attachments WHERE id = ? AND upload_state = 'uploading'").bind(id).run().catch(() => undefined);
-    console.error("[todo-attachments] media upload preparation failed", { attachmentId: id, todoId, kind, bytes: byteSize, error });
+    console.error("[todo-attachments] original attachment upload preparation failed", { attachmentId: id, todoId, kind, bytes: byteSize, error });
     throw error;
   }
 }
@@ -785,18 +813,19 @@ export async function finalizeTodoMediaAttachmentUpload(
 ) {
   const startedAt = Date.now();
   if (!/^[0-9a-f-]{36}$/i.test(id)) throw new Error("That media upload is invalid.");
-  const durationMs = Math.round(Number(input.durationMs));
-  if (!Number.isInteger(durationMs) || durationMs < 1) throw new Error("The media duration could not be read.");
+  const requestedDurationMs = Math.round(Number(input.durationMs));
   const db = database();
   const { draftToken, todoId } = targetValues(target);
   const row = todoId === null
     ? await db.prepare("SELECT * FROM todo_attachments WHERE id = ? AND draft_token = ? AND todo_id IS NULL AND deleted_at IS NULL").bind(id, draftToken).first<AttachmentRow>()
     : await db.prepare("SELECT * FROM todo_attachments WHERE id = ? AND todo_id = ? AND deleted_at IS NULL").bind(id, todoId).first<AttachmentRow>();
-  if (!row || (row.kind !== "audio" && row.kind !== "video")) throw new Error("That media upload is no longer available.");
+  if (!row || !(["audio", "video", "file"] as const).includes(row.kind as "audio" | "video" | "file")) throw new Error("That attachment upload is no longer available.");
   if (row.upload_state === "ready") return mapAttachment(row);
-  const maximumBytes = row.kind === "audio" ? MAX_AUDIO_ATTACHMENT_BYTES : MAX_VIDEO_ATTACHMENT_BYTES;
+  const durationMs = row.kind === "file" ? 0 : requestedDurationMs;
+  if (row.kind !== "file" && (!Number.isInteger(durationMs) || durationMs < 1)) throw new Error("The media duration could not be read.");
+  const maximumBytes = row.kind === "audio" ? MAX_AUDIO_ATTACHMENT_BYTES : row.kind === "video" ? MAX_VIDEO_ATTACHMENT_BYTES : MAX_FILE_ATTACHMENT_BYTES;
   const maximumDuration = row.kind === "audio" ? MAX_AUDIO_DURATION_MS : MAX_VIDEO_DURATION_MS;
-  if (durationMs > maximumDuration) throw new Error(row.kind === "audio" ? "Voice memos are limited to 30 minutes." : "Videos are limited to 60 minutes.");
+  if (row.kind !== "file" && durationMs > maximumDuration) throw new Error(row.kind === "audio" ? "Voice memos are limited to 30 minutes." : "Videos are limited to 60 minutes.");
   try {
     const [bytes, head] = await Promise.all([
       firstBytes(row.original_key),
@@ -804,8 +833,8 @@ export async function finalizeTodoMediaAttachmentUpload(
     ]);
     const actualBytes = Number(head.headers.get("content-length") ?? 0);
     if (actualBytes < 1 || actualBytes > maximumBytes || actualBytes !== row.byte_size) throw new Error("The media upload is incomplete.");
-    const actualFormat = detectedMediaFormat(bytes);
-    const expectedFormat = row.kind === "audio" ? expectedAudioFormat(row.mime_type) : expectedVideoFormat(row.mime_type);
+    const actualFormat = row.kind === "file" ? detectedFileFormat(bytes) : detectedMediaFormat(bytes);
+    const expectedFormat = row.kind === "audio" ? expectedAudioFormat(row.mime_type) : row.kind === "video" ? expectedVideoFormat(row.mime_type) : expectedFileFormat(row.file_name);
     if (!actualFormat || actualFormat !== expectedFormat) throw new Error(`The uploaded file is not the expected ${row.kind} type.`);
     const finalized = await db.prepare(`
       UPDATE todo_attachments
@@ -816,7 +845,7 @@ export async function finalizeTodoMediaAttachmentUpload(
       RETURNING *
     `).bind(durationMs, actualBytes, id).first<AttachmentRow>();
     if (!finalized) throw new Error("The media upload could not be finalized.");
-    console.info("[todo-attachments] media upload finalized", {
+    console.info("[todo-attachments] original attachment upload finalized", {
       attachmentId: id,
       todoId,
       kind: row.kind,
@@ -833,7 +862,7 @@ export async function finalizeTodoMediaAttachmentUpload(
     } catch (cleanupError) {
       console.error("[todo-attachments] invalid media cleanup failed", { attachmentId: id, cleanupError });
     }
-    console.error("[todo-attachments] media upload finalize failed", { attachmentId: id, todoId, kind: row.kind, durationMs: Date.now() - startedAt, error });
+    console.error("[todo-attachments] original attachment upload finalize failed", { attachmentId: id, todoId, kind: row.kind, durationMs: Date.now() - startedAt, error });
     throw error;
   }
 }

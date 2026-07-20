@@ -12,6 +12,7 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
+import { attachmentFileMimeType, GENERIC_FILE_ACCEPT } from "../lib/attachment-files";
 import { ActionIcon, type ActionIconName } from "./action-icon";
 import { copyTextToClipboard } from "./copy-to-clipboard";
 import { dueDateSortValue, formatDueDate, isDueTodayOrOverdue } from "./date-only";
@@ -156,6 +157,7 @@ const MAX_ATTACHMENTS = 12;
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 const MAX_AUDIO_BYTES = 50 * 1024 * 1024;
 const MAX_VIDEO_BYTES = 250 * 1024 * 1024;
+const MAX_FILE_BYTES = 100 * 1024 * 1024;
 const MAX_AUDIO_DURATION_MS = 30 * 60 * 1000;
 const MAX_VIDEO_DURATION_MS = 60 * 60 * 1000;
 const MAX_IMAGE_PIXELS = 100_000_000;
@@ -311,6 +313,10 @@ function normalizedMediaMimeType(file: File, kind: "audio" | "video") {
   throw new Error("Videos must be MP4, MOV, or WebM files.");
 }
 
+function normalizedFileMimeType(file: File) {
+  return attachmentFileMimeType(file.name, file.type);
+}
+
 function mediaDuration(file: File, kind: "audio" | "video") {
   return new Promise<number>((resolve, reject) => {
     const media = document.createElement(kind);
@@ -338,19 +344,19 @@ function mediaDuration(file: File, kind: "audio" | "video") {
 
 async function uploadPrivateMedia(
   file: File,
-  kind: "audio" | "video",
+  kind: "audio" | "video" | "file",
   durationMs: number,
   endpoint: string,
   target: Record<string, string>,
   discard: (uploadId: string) => Promise<unknown>,
 ) {
-  const mimeType = normalizedMediaMimeType(file, kind);
+  const mimeType = kind === "file" ? normalizedFileMimeType(file) : normalizedMediaMimeType(file, kind);
   const prepared = await request<PreparedMediaUpload>(endpoint, {
     method: "POST",
     body: JSON.stringify({
       ...target,
       kind,
-      fileName: file.name || (kind === "audio" ? "Voice memo" : "Video"),
+      fileName: file.name || (kind === "audio" ? "Voice memo" : kind === "video" ? "Video" : "File"),
       mimeType,
       byteSize: file.size,
     }),
@@ -359,7 +365,7 @@ async function uploadPrivateMedia(
     await postPrivateVariant(prepared.uploads.original, file);
     return await request<{ attachment: TodoAttachment }>(endpoint, {
       method: "PATCH",
-      body: JSON.stringify({ ...target, kind, uploadId: prepared.uploadId, durationMs }),
+      body: JSON.stringify({ ...target, kind, uploadId: prepared.uploadId, durationMs: kind === "file" ? 0 : durationMs }),
     });
   } catch (error) {
     await discard(prepared.uploadId).catch((discardError) => {
@@ -426,6 +432,7 @@ function AttachmentPicker({
 }) {
   const [open, setOpen] = useState(false);
   const libraryRef = useRef<HTMLInputElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const [desktopPosition, setDesktopPosition] = useState<{ left: number; top: number } | null>(null);
   const hasProjectAction = Boolean(onAssignProject);
@@ -437,7 +444,7 @@ function AttachmentPicker({
       if (!trigger) return;
       const bounds = trigger.getBoundingClientRect();
       const menuWidth = 224;
-      const menuHeight = hasProjectAction ? 160 : 116;
+      const menuHeight = hasProjectAction ? 204 : 160;
       const gutter = 12;
       const left = Math.max(gutter, Math.min(bounds.left, window.innerWidth - menuWidth - gutter));
       const below = bounds.bottom + 8;
@@ -494,6 +501,9 @@ function AttachmentPicker({
             <button type="button" role="menuitem" onClick={() => libraryRef.current?.click()} className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left text-sm font-semibold text-[#303632] hover:bg-[#f2f5f2]">
               <ActionIcon name="image" />Choose photos or videos
             </button>
+            <button type="button" role="menuitem" onClick={() => fileRef.current?.click()} className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left text-sm font-semibold text-[#303632] hover:bg-[#f2f5f2]">
+              <ActionIcon name="file" />Choose files
+            </button>
             <button type="button" role="menuitem" onClick={() => { setOpen(false); onRecord(); }} className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left text-sm font-semibold text-[#303632] hover:bg-[#f2f5f2]">
               <ActionIcon name="mic" />Record voice memo
             </button>
@@ -511,6 +521,9 @@ function AttachmentPicker({
               <button type="button" role="menuitem" onClick={() => libraryRef.current?.click()} className="flex h-12 w-full items-center gap-3 rounded-xl px-3 text-left text-[16px] font-semibold text-[#303632] hover:bg-[#f2f5f2]">
                 <ActionIcon name="image" className="h-5 w-5 text-[#216e4e]" />Choose photos or videos
               </button>
+              <button type="button" role="menuitem" onClick={() => fileRef.current?.click()} className="flex h-12 w-full items-center gap-3 rounded-xl px-3 text-left text-[16px] font-semibold text-[#303632] hover:bg-[#f2f5f2]">
+                <ActionIcon name="file" className="h-5 w-5 text-[#216e4e]" />Choose files
+              </button>
               <button type="button" role="menuitem" onClick={() => { setOpen(false); onRecord(); }} className="flex h-12 w-full items-center gap-3 rounded-xl px-3 text-left text-[16px] font-semibold text-[#303632] hover:bg-[#f2f5f2]">
                 <ActionIcon name="mic" className="h-5 w-5 text-[#216e4e]" />Record voice memo
               </button>
@@ -527,6 +540,7 @@ function AttachmentPicker({
       )}
 
       <input ref={libraryRef} type="file" accept={MEDIA_ACCEPT} multiple className="sr-only" tabIndex={-1} onChange={(event) => selected(event.currentTarget)} />
+      <input ref={fileRef} type="file" accept={GENERIC_FILE_ACCEPT} multiple className="sr-only" tabIndex={-1} onChange={(event) => selected(event.currentTarget)} />
     </div>
   );
 }
@@ -534,6 +548,12 @@ function AttachmentPicker({
 function formatDuration(durationMs: number) {
   const totalSeconds = Math.max(0, Math.round(durationMs / 1000));
   return `${Math.floor(totalSeconds / 60)}:${String(totalSeconds % 60).padStart(2, "0")}`;
+}
+
+function formatFileSize(byteSize: number) {
+  if (byteSize < 1024) return `${byteSize} B`;
+  if (byteSize < 1024 * 1024) return `${Math.round(byteSize / 1024)} KB`;
+  return `${(byteSize / (1024 * 1024)).toFixed(byteSize < 10 * 1024 * 1024 ? 1 : 0)} MB`;
 }
 
 function VoiceMemoRecorder({ onClose, onAttach }: { onClose: () => void; onAttach: (file: File, durationMs: number) => void }) {
@@ -1238,20 +1258,25 @@ export default function Home() {
     textarea.style.overflowY = textarea.scrollHeight > 120 ? "auto" : "hidden";
   }
 
-  function clipboardImages(event: ReactClipboardEvent<HTMLTextAreaElement>) {
+  function clipboardAttachments(event: ReactClipboardEvent<HTMLTextAreaElement>) {
     return [...event.clipboardData.items]
-      .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+      .filter((item) => item.kind === "file")
       .map((item) => item.getAsFile())
       .filter((file): file is File => Boolean(file));
   }
 
-  function selectedAttachmentKind(file: File): "image" | "video" | null {
+  function selectedAttachmentKind(file: File): "image" | "video" | "file" | null {
     if (uploadMimeType(file)) return "image";
     try {
       normalizedMediaMimeType(file, "video");
       return "video";
     } catch {
-      return null;
+      try {
+        normalizedFileMimeType(file);
+        return "file";
+      } catch {
+        return null;
+      }
     }
   }
 
@@ -1264,12 +1289,12 @@ export default function Home() {
     const accepted = files.slice(0, slots).filter((file) => {
       const kind = selectedAttachmentKind(file);
       if (!kind) {
-        setNotice({ tone: "error", text: "Choose a supported photo or video." });
+        setNotice({ tone: "error", text: "Choose a supported photo, video, document, text file, or archive." });
         return false;
       }
-      const maximumBytes = kind === "image" ? MAX_IMAGE_BYTES : MAX_VIDEO_BYTES;
+      const maximumBytes = kind === "image" ? MAX_IMAGE_BYTES : kind === "video" ? MAX_VIDEO_BYTES : MAX_FILE_BYTES;
       if (file.size > maximumBytes) {
-        setNotice({ tone: "error", text: `${file.name || `A ${kind}`} is larger than ${kind === "image" ? "20 MB" : "250 MB"}.` });
+        setNotice({ tone: "error", text: `${file.name || `A ${kind}`} is larger than ${kind === "image" ? "20 MB" : kind === "video" ? "250 MB" : "100 MB"}.` });
         return false;
       }
       return true;
@@ -1496,7 +1521,7 @@ export default function Home() {
         ? { ...todo, attachmentCount: Math.max(0, todo.attachmentCount - 1) }
         : todo));
       setViewerIndex(null);
-      setNotice({ tone: "success", text: `${attachment.kind === "audio" ? "Voice memo" : attachment.kind === "video" ? "Video" : "Image"} deleted.`, undoToken: result.undoToken });
+      setNotice({ tone: "success", text: `${attachment.kind === "audio" ? "Voice memo" : attachment.kind === "video" ? "Video" : attachment.kind === "file" ? "File" : "Image"} deleted.`, undoToken: result.undoToken });
     } catch (error) {
       setNotice({ tone: "error", text: error instanceof Error ? error.message : "The attachment could not be deleted." });
     } finally {
@@ -2239,7 +2264,7 @@ export default function Home() {
         <div className="pointer-events-none fixed inset-0 z-[100] grid place-items-center bg-[#153d2d]/25 p-5 backdrop-blur-[2px]" role="status" aria-live="polite">
           <div className="flex max-w-sm items-center gap-3 rounded-2xl border border-[#216e4e]/25 bg-white px-5 py-4 text-base font-semibold text-[#216e4e] shadow-2xl">
             <ActionIcon name="attachment" className="h-6 w-6" />
-            Drop photos or videos to attach to {editingTodo ? "this task" : "the new task"}
+            Drop attachments to add to {editingTodo ? "this task" : "the new task"}
           </div>
         </div>
       )}
@@ -2258,7 +2283,7 @@ export default function Home() {
                 value={newTitle}
                 onChange={(event) => { setNewTitle(event.target.value); resizeCapture(event.currentTarget); }}
                 onPaste={(event) => {
-                  const files = clipboardImages(event);
+                  const files = clipboardAttachments(event);
                   if (files.length) void queueCaptureAttachments(files);
                 }}
                 onKeyDown={(event) => {
@@ -2300,8 +2325,8 @@ export default function Home() {
           {captureAttachments.length > 0 && (
             <div className="flex gap-2 overflow-x-auto border-t border-black/[0.06] px-2 pb-1 pt-2 sm:px-3" aria-label="Attachments to add">
               {captureAttachments.map((item) => (
-                <div key={item.localId} className={classNames("relative h-16 shrink-0 overflow-hidden rounded-xl bg-[#eef0ed] ring-1 ring-black/[0.06]", item.kind === "audio" ? "w-44" : "w-16")} title={item.error || item.file.name}>
-                  {item.kind === "image" ? <img src={item.previewUrl} alt="" className="h-full w-full object-cover" /> : item.kind === "video" ? <video src={item.previewUrl} muted className="h-full w-full object-cover" /> : <div className="flex h-full items-center gap-2 px-3 text-xs font-semibold text-[#455049]"><ActionIcon name="mic" className="h-5 w-5 text-[#216e4e]" /><span>Voice memo<br /><span className="font-normal text-[#7b837e]">{formatDuration(item.durationMs)}</span></span></div>}
+                <div key={item.localId} className={classNames("relative h-16 shrink-0 overflow-hidden rounded-xl bg-[#eef0ed] ring-1 ring-black/[0.06]", item.kind === "audio" || item.kind === "file" ? "w-44" : "w-16")} title={item.error || item.file.name}>
+                  {item.kind === "image" ? <img src={item.previewUrl} alt="" className="h-full w-full object-cover" /> : item.kind === "video" ? <video src={item.previewUrl} muted className="h-full w-full object-cover" /> : item.kind === "file" ? <div className="flex h-full items-center gap-2 px-3 text-xs font-semibold text-[#455049]"><ActionIcon name="file" className="h-5 w-5 shrink-0 text-[#216e4e]" /><span className="min-w-0"><span className="block truncate">{item.file.name}</span><span className="font-normal text-[#7b837e]">{formatFileSize(item.file.size)}</span></span></div> : <div className="flex h-full items-center gap-2 px-3 text-xs font-semibold text-[#455049]"><ActionIcon name="mic" className="h-5 w-5 text-[#216e4e]" /><span>Voice memo<br /><span className="font-normal text-[#7b837e]">{formatDuration(item.durationMs)}</span></span></div>}
                   {item.status === "uploading" && <span className="absolute inset-0 grid place-items-center bg-black/40 text-[10px] font-semibold text-white">Uploading…</span>}
                   {item.status === "offline" && <span className="absolute inset-x-0 bottom-0 bg-amber-700/90 px-1 py-0.5 text-center text-[9px] font-semibold text-white">Saved offline</span>}
                   {item.status === "error" && (
@@ -2774,7 +2799,7 @@ export default function Home() {
                   value={editDraft.title}
                   onChange={(event) => setEditDraft((current) => current ? { ...current, title: event.target.value } : current)}
                   onPaste={(event) => {
-                    const files = clipboardImages(event);
+                    const files = clipboardAttachments(event);
                     if (files.length) void queueDetailAttachments(files);
                   }}
                   rows={4}
@@ -2789,7 +2814,7 @@ export default function Home() {
                   value={editDraft.notes}
                   onChange={(event) => setEditDraft((current) => current ? { ...current, notes: event.target.value } : current)}
                   onPaste={(event) => {
-                    const files = clipboardImages(event);
+                    const files = clipboardAttachments(event);
                     if (files.length) void queueDetailAttachments(files);
                   }}
                   rows={5}
@@ -2832,6 +2857,13 @@ export default function Home() {
                         <a href={attachment.originalUrl} download={attachment.fileName} className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-[#69716c] hover:bg-white" aria-label={`Download ${attachment.fileName}`}><ActionIcon name="download" /></a>
                         <button type="button" onClick={() => void deleteDetailAttachment(attachment)} disabled={syncing} className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-[#69716c] hover:bg-red-50 hover:text-red-700" aria-label={`Delete ${attachment.fileName}`}><ActionIcon name="delete" /></button>
                       </div>
+                    ) : attachment.kind === "file" ? (
+                      <div key={attachment.id} className="group/media col-span-full flex min-w-0 items-center gap-3 rounded-xl bg-[#f3f5f2] p-3 ring-1 ring-black/[0.06]">
+                        <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-[#e3efe7] text-[#216e4e]"><ActionIcon name="file" className="h-5 w-5" /></span>
+                        <div className="min-w-0 flex-1"><p className="truncate text-sm font-semibold text-[#4d5650]">{attachment.fileName}</p><p className="mt-0.5 text-xs text-[#7b837e]">{formatFileSize(attachment.byteSize)}</p></div>
+                        <a href={attachment.originalUrl} download={attachment.fileName} className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-[#69716c] hover:bg-white" aria-label={`Download ${attachment.fileName}`}><ActionIcon name="download" /></a>
+                        <button type="button" onClick={() => void deleteDetailAttachment(attachment)} disabled={syncing} className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-[#69716c] hover:bg-red-50 hover:text-red-700" aria-label={`Delete ${attachment.fileName}`}><ActionIcon name="delete" /></button>
+                      </div>
                     ) : (
                       <div key={attachment.id} className="group/media relative aspect-square min-w-0 overflow-hidden rounded-xl bg-[#eef0ed] ring-1 ring-black/[0.06]">
                         {attachment.kind === "image" ? (
@@ -2845,8 +2877,8 @@ export default function Home() {
                       </div>
                     ))}
                     {detailUploads.map((item) => (
-                      <div key={item.localId} className={classNames("relative min-w-0 overflow-hidden rounded-xl bg-[#eef0ed] ring-1 ring-black/[0.06]", item.kind === "audio" ? "col-span-full h-16" : "aspect-square")} title={item.error || item.file.name}>
-                        {item.kind === "image" ? <img src={item.previewUrl} alt="" className="h-full w-full object-cover" /> : item.kind === "video" ? <video src={item.previewUrl} muted className="h-full w-full object-cover" /> : <div className="flex h-full items-center gap-2 px-4 text-sm font-semibold text-[#455049]"><ActionIcon name="mic" className="text-[#216e4e]" />Voice memo · {formatDuration(item.durationMs)}</div>}
+                      <div key={item.localId} className={classNames("relative min-w-0 overflow-hidden rounded-xl bg-[#eef0ed] ring-1 ring-black/[0.06]", item.kind === "audio" || item.kind === "file" ? "col-span-full h-16" : "aspect-square")} title={item.error || item.file.name}>
+                        {item.kind === "image" ? <img src={item.previewUrl} alt="" className="h-full w-full object-cover" /> : item.kind === "video" ? <video src={item.previewUrl} muted className="h-full w-full object-cover" /> : item.kind === "file" ? <div className="flex h-full items-center gap-3 px-4 text-sm font-semibold text-[#455049]"><ActionIcon name="file" className="shrink-0 text-[#216e4e]" /><span className="min-w-0"><span className="block truncate">{item.file.name}</span><span className="text-xs font-normal text-[#7b837e]">{formatFileSize(item.file.size)}</span></span></div> : <div className="flex h-full items-center gap-2 px-4 text-sm font-semibold text-[#455049]"><ActionIcon name="mic" className="text-[#216e4e]" />Voice memo · {formatDuration(item.durationMs)}</div>}
                         {item.status === "uploading" ? (
                           <span className="absolute inset-0 grid place-items-center bg-black/45 text-xs font-semibold text-white">Uploading…</span>
                         ) : (

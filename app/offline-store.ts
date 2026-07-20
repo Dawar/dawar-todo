@@ -1,6 +1,6 @@
 "use client";
 
-export type OfflineAttachmentKind = "image" | "audio" | "video";
+export type OfflineAttachmentKind = "image" | "audio" | "video" | "file";
 
 export type OfflineStoredAttachment = {
   localId: string;

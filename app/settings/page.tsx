@@ -71,8 +71,7 @@ export default function SettingsPage() {
   const [tokensLoading, setTokensLoading] = useState(true);
   const [creatingToken, setCreatingToken] = useState(false);
   const [busyTokenId, setBusyTokenId] = useState<string | null>(null);
-  const [copyingSkillId, setCopyingSkillId] = useState<string | null>(null);
-  const [createdToken, setCreatedToken] = useState<{ apiToken: ApiToken; token: string } | null>(null);
+  const [createdToken, setCreatedToken] = useState<{ apiToken: ApiToken; token: string; skill: string } | null>(null);
   const [shareNotice, setShareNotice] = useState<{ tone: "success" | "error"; text: string } | null>(null);
 
   useEffect(() => {
@@ -198,7 +197,7 @@ export default function SettingsPage() {
     setCreatingToken(true);
     setShareNotice(null);
     try {
-      const result = await request<{ apiToken: ApiToken; token: string }>("/api/api-tokens", {
+      const result = await request<{ apiToken: ApiToken; token: string; skill: string }>("/api/api-tokens", {
         method: "POST",
         body: JSON.stringify({
           name,
@@ -228,6 +227,17 @@ export default function SettingsPage() {
     }
   }
 
+  async function copyCreatedTokenSkill() {
+    if (!createdToken) return;
+    try {
+      await copyTextToClipboard(createdToken.skill);
+      setShareNotice({ tone: "success", text: "SKILL.md copied." });
+      console.info("[todo-ui] one-time API token skill copied", { tokenId: createdToken.apiToken.id, skillLength: createdToken.skill.length });
+    } catch (error) {
+      setShareNotice({ tone: "error", text: error instanceof Error ? error.message : "The API skill could not be copied." });
+    }
+  }
+
   async function copyOpenApiUrl() {
     try {
       await copyTextToClipboard(`${window.location.origin}/openapi.json`);
@@ -235,26 +245,6 @@ export default function SettingsPage() {
       console.info("[todo-ui] OpenAPI URL copied");
     } catch (error) {
       setShareNotice({ tone: "error", text: error instanceof Error ? error.message : "The OpenAPI URL could not be copied." });
-    }
-  }
-
-  async function copyTokenSkill(apiToken: ApiToken) {
-    setCopyingSkillId(apiToken.id);
-    setShareNotice(null);
-    try {
-      const response = await fetch(`/api/api-tokens/${apiToken.id}/skill`, { headers: { Accept: "text/markdown" } });
-      if (!response.ok) {
-        const payload = await response.json().catch(() => ({})) as { error?: string };
-        throw new Error(payload.error || "The API skill could not be generated.");
-      }
-      const skill = await response.text();
-      await copyTextToClipboard(skill);
-      setShareNotice({ tone: "success", text: `${apiToken.name} SKILL.md copied.` });
-      console.info("[todo-ui] API token skill copied", { tokenId: apiToken.id, skillLength: skill.length });
-    } catch (error) {
-      setShareNotice({ tone: "error", text: error instanceof Error ? error.message : "The API skill could not be copied." });
-    } finally {
-      setCopyingSkillId(null);
     }
   }
 
@@ -334,7 +324,7 @@ export default function SettingsPage() {
           </div>
 
           <div className="mt-4 rounded-xl bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900">
-            Tokens have full access to this todo database. Treat them like passwords. Token secrets are stored encrypted so Copy Skill can create a ready-to-use credentialed SKILL.md, and every token can be revoked at any time.
+            Tokens have full access to this todo database. Treat them like passwords. The token and its credentialed SKILL.md are available only when created, and every token can be revoked at any time.
           </div>
 
           <form onSubmit={createToken} className="mt-5 grid min-w-0 gap-2 sm:grid-cols-[minmax(0,1fr)_auto_auto]">
@@ -368,12 +358,15 @@ export default function SettingsPage() {
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <p className="text-sm font-semibold text-[#24553f]">Copy this token now</p>
-                  <p className="mt-0.5 text-xs leading-5 text-[#607169]">The raw value is shown here once. You can later copy it only as part of its protected SKILL.md.</p>
+                  <p className="mt-0.5 text-xs leading-5 text-[#607169]">The raw token and credentialed SKILL.md are available only until you dismiss this panel.</p>
                 </div>
                 <button type="button" onClick={() => setCreatedToken(null)} aria-label="Dismiss generated token" title="Dismiss" className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-[#607169] hover:bg-black/[0.05]"><ActionIcon name="close" /></button>
               </div>
               <textarea readOnly value={createdToken.token} onFocus={(event) => event.currentTarget.select()} aria-label="Generated API token" rows={2} className="mt-3 w-full resize-none break-all rounded-lg border border-[#216e4e]/15 bg-white p-3 font-mono text-xs leading-5 text-[#303632] outline-none focus:border-[#216e4e]/50" />
-              <button type="button" onClick={() => void copyApiToken()} className="mt-2 inline-flex h-9 items-center gap-1.5 rounded-lg bg-white px-3 text-xs font-semibold text-[#216e4e] ring-1 ring-black/[0.06] hover:bg-[#edf5f0]"><ActionIcon name="copy" />Copy token</button>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <button type="button" onClick={() => void copyApiToken()} className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-white px-3 text-xs font-semibold text-[#216e4e] ring-1 ring-black/[0.06] hover:bg-[#edf5f0]"><ActionIcon name="copy" />Copy token</button>
+                <button type="button" onClick={() => void copyCreatedTokenSkill()} className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-white px-3 text-xs font-semibold text-[#216e4e] ring-1 ring-black/[0.06] hover:bg-[#edf5f0]"><ActionIcon name="copy" />Copy Skill</button>
+              </div>
             </div>
           )}
 
@@ -381,8 +374,8 @@ export default function SettingsPage() {
             <p className="text-sm font-semibold text-[#303632]">Agent documentation</p>
             <p className="mt-1 text-xs leading-5 text-[#7c847f]">Use the public OpenAPI 3.1 specification to discover request bodies, responses, and Bearer authentication.</p>
             <div className="mt-3 flex flex-wrap gap-2">
-              <a href="/openapi.json" target="_blank" rel="noreferrer" className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-white px-3 text-xs font-semibold text-[#216e4e] ring-1 ring-black/[0.06] hover:bg-[#edf5f0]"><ActionIcon name="link" />Open specification</a>
-              <button type="button" onClick={() => void copyOpenApiUrl()} className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-white px-3 text-xs font-semibold text-[#59615c] ring-1 ring-black/[0.06] hover:bg-[#f1f3f0]"><ActionIcon name="copy" />Copy OpenAPI URL</button>
+              <a href="/openapi.json" target="_blank" rel="noreferrer" className="inline-flex h-9 appearance-none items-center gap-1.5 rounded-lg border-0 bg-white px-3 font-[inherit] text-xs font-semibold text-[#216e4e] ring-1 ring-black/[0.06] hover:bg-[#edf5f0]"><ActionIcon name="link" />Open specification</a>
+              <button type="button" onClick={() => void copyOpenApiUrl()} className="inline-flex h-9 appearance-none items-center gap-1.5 rounded-lg border-0 bg-white px-3 font-[inherit] text-xs font-semibold text-[#216e4e] ring-1 ring-black/[0.06] hover:bg-[#edf5f0]"><ActionIcon name="copy" />Copy OpenAPI URL</button>
             </div>
           </div>
 
@@ -404,10 +397,7 @@ export default function SettingsPage() {
                         {apiToken.expiresAt ? ` · Expires ${new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(new Date(apiToken.expiresAt))}` : " · Never expires"}
                       </p>
                     </div>
-                    <div className="flex shrink-0 flex-col gap-2 sm:flex-row">
-                      <button type="button" onClick={() => void copyTokenSkill(apiToken)} disabled={copyingSkillId === apiToken.id || busyTokenId === apiToken.id} className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg bg-white px-3 text-xs font-semibold text-[#216e4e] ring-1 ring-black/[0.06] hover:bg-[#edf5f0] disabled:opacity-50"><ActionIcon name="copy" />{copyingSkillId === apiToken.id ? "Copying…" : "Copy Skill"}</button>
-                      <button type="button" onClick={() => void revokeToken(apiToken)} disabled={busyTokenId === apiToken.id || copyingSkillId === apiToken.id} className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg bg-white px-3 text-xs font-semibold text-red-700 ring-1 ring-black/[0.06] hover:bg-red-50 disabled:opacity-50"><ActionIcon name="delete" />Revoke</button>
-                    </div>
+                    <button type="button" onClick={() => void revokeToken(apiToken)} disabled={busyTokenId === apiToken.id} className="inline-flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-lg bg-white px-3 text-xs font-semibold text-red-700 ring-1 ring-black/[0.06] hover:bg-red-50 disabled:opacity-50"><ActionIcon name="delete" />Revoke</button>
                   </li>
                 ))}
               </ul>

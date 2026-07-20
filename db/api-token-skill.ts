@@ -109,7 +109,7 @@ Project deletion affects open, snoozed, and completed tasks. Inspect those tasks
 - \`DELETE /api/todos/{id}/attachments/{attachmentId}\`: soft-delete an attachment and retain its Undo token.
 - Use \`/api/attachments/drafts\` with a UUID \`draftToken\` to upload before task creation, then pass that token and ordered attachment IDs to \`POST /api/todos\`.
 
-Images require original, optimized display, and thumbnail uploads. Audio and video require the original upload. Use the OpenAPI schemas for required MIME, dimensions, duration, and size fields.
+Images require original, optimized display, and thumbnail uploads. Audio, video, and generic files require the original upload. Generic files support common PDF, Office, OpenDocument, text, calendar, ZIP, and 7z formats. Use the OpenAPI schemas for required MIME, dimensions, duration, and size fields.
 
 ### Settings and calendars
 
@@ -130,6 +130,6 @@ Images require original, optimized display, and thumbnail uploads. Audio and vid
 - On 401, stop and ask for a fresh skill/token. Do not retry repeatedly.
 - On 409 from Undo, report that the token expired or was already used.
 - On partial failure, re-read affected records before retrying.
-- Never manage API tokens through this credential; token creation, recovery, and revocation require the owner's ChatGPT-authenticated Settings screen.
+- Never manage API tokens through this credential; token creation and revocation require the owner's ChatGPT-authenticated Settings screen. The token and credentialed SKILL.md are shown only once at creation.
 `;
 }

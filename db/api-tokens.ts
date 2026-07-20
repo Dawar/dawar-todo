@@ -6,7 +6,6 @@ type ApiTokenRow = {
   id: string;
   name: string;
   token_prefix: string;
-  encrypted_token?: string | null;
   created_by_email: string | null;
   created_at: string;
   last_used_at: string | null;
@@ -38,56 +37,6 @@ function mapApiToken(row: ApiTokenRow): ApiToken {
 function randomSecret() {
   const bytes = crypto.getRandomValues(new Uint8Array(32));
   return btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
-}
-
-function base64Url(bytes: Uint8Array) {
-  return btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
-}
-
-function base64UrlBytes(value: string) {
-  const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
-  const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
-  return Uint8Array.from(atob(padded), (character) => character.charCodeAt(0));
-}
-
-async function tokenEncryptionKey(secret: string, usage: KeyUsage[]) {
-  const keyBytes = base64UrlBytes(secret.trim());
-  if (keyBytes.length !== 32) throw new Error("API token encryption is not configured correctly.");
-  return crypto.subtle.importKey("raw", keyBytes, { name: "AES-GCM" }, false, usage);
-}
-
-export async function encryptApiToken(token: string, encryptionSecret: string) {
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const key = await tokenEncryptionKey(encryptionSecret, ["encrypt"]);
-  const encrypted = await crypto.subtle.encrypt(
-    { name: "AES-GCM", iv, additionalData: new TextEncoder().encode("dawar-todo-api-token:v1") },
-    key,
-    new TextEncoder().encode(token),
-  );
-  return `v1.${base64Url(iv)}.${base64Url(new Uint8Array(encrypted))}`;
-}
-
-export async function decryptApiToken(value: string, encryptionSecret: string) {
-  const [version, ivValue, encryptedValue] = value.split(".");
-  if (version !== "v1" || !ivValue || !encryptedValue) throw new Error("That API token cannot be recovered.");
-  const key = await tokenEncryptionKey(encryptionSecret, ["decrypt"]);
-  try {
-    const decrypted = await crypto.subtle.decrypt(
-      {
-        name: "AES-GCM",
-        iv: base64UrlBytes(ivValue),
-        additionalData: new TextEncoder().encode("dawar-todo-api-token:v1"),
-      },
-      key,
-      base64UrlBytes(encryptedValue),
-    );
-    const token = new TextDecoder().decode(decrypted);
-    if (!API_TOKEN_PATTERN.test(token)) throw new Error("That API token cannot be recovered.");
-    return token;
-  } catch (error) {
-    console.error("[todo-auth] encrypted API token recovery failed", { error });
-    throw new Error("That API token cannot be recovered.");
-  }
 }
 
 export async function hashApiToken(token: string) {
@@ -140,7 +89,7 @@ export async function listApiTokens(db: D1Database): Promise<ApiToken[]> {
 
 export async function createApiToken(
   db: D1Database,
-  input: { name: string; expiresInDays: number | null; createdByEmail: string; encryptionSecret: string },
+  input: { name: string; expiresInDays: number | null; createdByEmail: string },
 ) {
   const name = input.name.trim();
   if (!name) throw new Error("A token name is required.");
@@ -162,7 +111,6 @@ export async function createApiToken(
     const id = crypto.randomUUID();
     const token = `dt_live_${randomSecret()}`;
     const tokenHash = await hashApiToken(token);
-    const encryptedToken = await encryptApiToken(token, input.encryptionSecret);
     const tokenPrefix = `${token.slice(0, 16)}…`;
     const expiresAt = input.expiresInDays === null
       ? null
@@ -170,10 +118,10 @@ export async function createApiToken(
     try {
       const row = await db.prepare(`
         INSERT INTO todo_api_tokens (
-          id, name, token_prefix, token_hash, encrypted_token, created_by_email, expires_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+          id, name, token_prefix, token_hash, created_by_email, expires_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
         RETURNING id, name, token_prefix, created_by_email, created_at, last_used_at, expires_at
-      `).bind(id, name, tokenPrefix, tokenHash, encryptedToken, input.createdByEmail, expiresAt).first<ApiTokenRow>();
+      `).bind(id, name, tokenPrefix, tokenHash, input.createdByEmail, expiresAt).first<ApiTokenRow>();
       if (!row) throw new Error("The API token could not be created.");
       console.info("[todo-db] API token created", {
         tokenId: id,
@@ -188,22 +136,6 @@ export async function createApiToken(
     }
   }
   throw new Error("The API token could not be created.");
-}
-
-export async function recoverApiToken(db: D1Database, id: string, encryptionSecret: string) {
-  if (!/^[0-9a-f-]{36}$/i.test(id)) throw new Error("That API token is invalid.");
-  const row = await db.prepare(`
-    SELECT id, name, token_prefix, encrypted_token, created_by_email, created_at, last_used_at, expires_at
-    FROM todo_api_tokens
-    WHERE id = ?
-      AND revoked_at IS NULL
-      AND (expires_at IS NULL OR expires_at > strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-  `).bind(id).first<ApiTokenRow>();
-  if (!row) return null;
-  if (!row.encrypted_token) throw new Error("That token predates Copy Skill support. Create a replacement token.");
-  const token = await decryptApiToken(row.encrypted_token, encryptionSecret);
-  console.info("[todo-db] API token recovered for skill", { tokenId: id, tokenPrefix: row.token_prefix });
-  return { apiToken: mapApiToken(row), token };
 }
 
 export async function revokeApiToken(db: D1Database, id: string) {

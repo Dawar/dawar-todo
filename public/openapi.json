@@ -235,7 +235,7 @@
         "tags": ["Attachments"],
         "operationId": "prepareTodoAttachmentUpload",
         "summary": "Prepare a direct private-storage upload",
-        "description": "For images, upload the original, display, and thumbnail blobs to the returned POST targets. For audio or video, upload the original. Then call PATCH on this path to finalize.",
+        "description": "For images, upload the original, display, and thumbnail blobs to the returned POST targets. For audio, video, or generic files, upload the original. Then call PATCH on this path to finalize. Generic files support common PDF, Office, OpenDocument, text, calendar, ZIP, and 7z formats up to 100 MB.",
         "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PrepareAttachment" } } } },
         "responses": {
           "201": { "description": "Presigned upload targets", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PreparedUpload" } } } },
@@ -427,7 +427,7 @@
           "byteSize": { "type": "integer" },
           "width": { "type": "integer" },
           "height": { "type": "integer" },
-          "kind": { "type": "string", "enum": ["image", "audio", "video"] },
+          "kind": { "type": "string", "enum": ["image", "audio", "video", "file"] },
           "durationMs": { "type": "integer" },
           "sortOrder": { "type": "integer" },
           "thumbnailUrl": { "type": "string", "format": "uri" },
@@ -445,7 +445,7 @@
           "fileName": { "type": "string" },
           "mimeType": { "type": "string" },
           "byteSize": { "type": "integer", "minimum": 1 },
-          "kind": { "type": "string", "enum": ["image", "audio", "video"], "default": "image" },
+          "kind": { "type": "string", "enum": ["image", "audio", "video", "file"], "default": "image" },
           "displayMimeType": { "type": "string", "description": "Required for an optimized image display rendition." },
           "thumbnailMimeType": { "type": "string", "description": "Required for an optimized image thumbnail rendition." }
         }
@@ -455,7 +455,7 @@
         "required": ["uploadId"],
         "properties": {
           "uploadId": { "type": "string", "format": "uuid" },
-          "kind": { "type": "string", "enum": ["image", "audio", "video"], "default": "image" },
+          "kind": { "type": "string", "enum": ["image", "audio", "video", "file"], "default": "image" },
           "width": { "type": "integer", "minimum": 1, "description": "Required for images." },
           "height": { "type": "integer", "minimum": 1, "description": "Required for images." },
           "durationMs": { "type": "integer", "minimum": 0, "description": "Required for audio and video." }

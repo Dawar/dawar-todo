@@ -1,5 +1,6 @@
 import { env } from "cloudflare:workers";
 import { createApiToken, listApiTokens } from "../../../db/api-tokens";
+import { apiTokenSkill } from "../../../db/api-token-skill";
 import { ensureTodoDatabase } from "../../../db/todos";
 
 const USER_EMAIL_HEADER = "oai-authenticated-user-email";
@@ -42,14 +43,13 @@ export async function POST(request: Request) {
       name: String(payload.name ?? ""),
       expiresInDays,
       createdByEmail: email,
-      encryptionSecret: env.API_TOKEN_ENCRYPTION_KEY,
     });
     console.info("[todo-api] API token generated", {
       tokenId: result.apiToken.id,
       expiresAt: result.apiToken.expiresAt,
       durationMs: Date.now() - startedAt,
     });
-    return Response.json(result, { status: 201, headers: { "Cache-Control": "no-store" } });
+    return Response.json({ ...result, skill: apiTokenSkill(result.apiToken, result.token) }, { status: 201, headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     const message = error instanceof Error ? error.message : "The API token could not be generated.";
     const inputError = /required|limited|valid|active API tokens/i.test(message);

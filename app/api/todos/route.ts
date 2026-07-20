@@ -62,7 +62,7 @@ export async function POST(request: Request) {
     return Response.json({ todo }, { status: 201 });
   } catch (error) {
     const message = error instanceof Error ? error.message : "The task could not be added.";
-    const inputError = /task|attached|attachment|image|audio|video|media|limited|invalid|available|required/i.test(message);
+    const inputError = /task|attached|attachment|image|audio|video|media|file|document|archive|limited|invalid|available|required/i.test(message);
     console.error("[todo-api] create failed", error);
     return Response.json({ error: message }, { status: inputError ? 400 : 500 });
   }

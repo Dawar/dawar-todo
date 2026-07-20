@@ -63,6 +63,9 @@ test("stores private task images with optimized variants and recovery metadata",
   assert.match(attachments, /finalizeTodoMediaAttachmentUpload/);
   assert.match(attachments, /MAX_AUDIO_ATTACHMENT_BYTES = 50 \* 1024 \* 1024/);
   assert.match(attachments, /MAX_VIDEO_ATTACHMENT_BYTES = 250 \* 1024 \* 1024/);
+  assert.match(attachments, /MAX_FILE_ATTACHMENT_BYTES = 100 \* 1024 \* 1024/);
+  assert.match(attachments, /detectedFileFormat/);
+  assert.match(attachments, /todo-files\/\$\{id\}/);
   assert.match(attachments, /detectedMediaFormat/);
   assert.match(attachments, /SIGNED_URL_SECONDS = 60 \* 60/);
   assert.doesNotMatch(attachments, /public-read|ACL:/);
@@ -105,6 +108,9 @@ test("exposes capture, Safari-safe optimization, drop, gallery, and viewer contr
 
   assert.match(page, /function AttachmentPicker/);
   assert.match(page, /Choose photos or videos/);
+  assert.match(page, /Choose files/);
+  assert.match(page, /GENERIC_FILE_ACCEPT/);
+  assert.match(page, /MAX_FILE_BYTES = 100 \* 1024 \* 1024/);
   assert.match(page, /Record voice memo/);
   assert.doesNotMatch(page, /Take photo/);
   assert.doesNotMatch(page, /capture="environment"/);
@@ -120,7 +126,7 @@ test("exposes capture, Safari-safe optimization, drop, gallery, and viewer contr
   assert.match(page, /thumbnailMimeType: variants\.thumbnail\.mimeType/);
   assert.match(page, /window\.addEventListener\("dragenter", dragEnter\)/);
   assert.match(page, /window\.addEventListener\("drop", drop\)/);
-  assert.match(page, /Drop photos or videos to attach to/);
+  assert.match(page, /Drop attachments to add to/);
   assert.match(page, /routeDroppedAttachments = useEffectEvent/);
   assert.match(page, /if \(editingId !== null\) void queueDetailAttachments\(files\)/);
   assert.match(page, /Promise\.allSettled/);
@@ -138,6 +144,8 @@ test("exposes capture, Safari-safe optimization, drop, gallery, and viewer contr
   assert.match(page, /task-attachments-heading/);
   assert.match(page, /<audio controls/);
   assert.match(page, /<video controls/);
+  assert.match(page, /attachment\.kind === "file"/);
+  assert.match(page, /formatFileSize/);
   assert.match(page, /Image viewer:/);
   assert.match(page, /Download original/);
   assert.match(page, /viewerGesture/);
@@ -146,6 +154,7 @@ test("exposes capture, Safari-safe optimization, drop, gallery, and viewer contr
   assert.match(actionIcons, /Download/);
   assert.match(actionIcons, /Mic/);
   assert.match(actionIcons, /Paperclip/);
+  assert.match(actionIcons, /FileText/);
   assert.match(draftRoute, /prepareTodoAttachmentUpload/);
   assert.match(draftRoute, /finalizeTodoAttachmentUpload/);
   assert.match(draftRoute, /prepareTodoMediaAttachmentUpload/);
@@ -167,6 +176,21 @@ test("exposes capture, Safari-safe optimization, drop, gallery, and viewer contr
   assert.match(todosRoute, /draftToken/);
   assert.match(todosRoute, /attachmentIds/);
   assert.match(todosRoute, /clientId/);
+});
+
+test("accepts common document and archive types through a shared allowlist", async () => {
+  const { attachmentFileMimeType, GENERIC_FILE_ACCEPT } = await import("../lib/attachment-files.ts");
+  assert.equal(attachmentFileMimeType("brief.pdf", "application/pdf"), "application/pdf");
+  assert.equal(attachmentFileMimeType("report.xlsx", "application/octet-stream"), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  assert.equal(attachmentFileMimeType("notes.docx", ""), "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+  assert.equal(attachmentFileMimeType("notes.docx", "application/zip"), "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+  assert.equal(attachmentFileMimeType("bundle.zip", "application/x-zip-compressed"), "application/zip");
+  assert.match(GENERIC_FILE_ACCEPT, /\.pdf/);
+  assert.match(GENERIC_FILE_ACCEPT, /\.xlsx/);
+  assert.match(GENERIC_FILE_ACCEPT, /\.docx/);
+  assert.match(GENERIC_FILE_ACCEPT, /\.zip/);
+  assert.throws(() => attachmentFileMimeType("payload.exe", "application/octet-stream"), /Choose a PDF/);
+  assert.throws(() => attachmentFileMimeType("fake.pdf", "text\/html"), /do not match/);
 });
 
 test("installs an offline-capable PWA with idempotent queued task syncing", async () => {

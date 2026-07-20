@@ -22,7 +22,7 @@ type TaskUploadPayload = {
   thumbnailMimeType?: string;
   width?: number;
   height?: number;
-  kind?: "image" | "audio" | "video";
+  kind?: "image" | "audio" | "video" | "file";
   durationMs?: number;
 };
 
@@ -58,7 +58,7 @@ export async function POST(
     await ensureTodoDatabase();
     const payload = await request.json() as TaskUploadPayload;
     const kind = payload.kind ?? "image";
-    if (!(["image", "audio", "video"] as const).includes(kind)) throw new Error("That attachment type is invalid.");
+    if (!(["image", "audio", "video", "file"] as const).includes(kind)) throw new Error("That attachment type is invalid.");
     const target = { todoId: id };
     const prepared = kind === "image"
       ? await prepareTodoAttachmentUpload({
@@ -84,7 +84,7 @@ export async function POST(
     return Response.json(prepared, { status: 201 });
   } catch (error) {
     const message = error instanceof Error ? error.message : "The image upload could not be prepared.";
-    const status = /not found/i.test(message) ? 404 : /choose|image|audio|video|media|voice|limited|large|duration/i.test(message) ? 400 : 500;
+    const status = /not found/i.test(message) ? 404 : /choose|image|audio|video|media|voice|file|document|archive|limited|large|duration|match/i.test(message) ? 400 : 500;
     console.error("[todo-api] task attachment preparation failed", { todoId: id, durationMs: Date.now() - startedAt, error });
     return Response.json({ error: message }, { status });
   }
@@ -102,7 +102,7 @@ export async function PATCH(
     await ensureTodoDatabase();
     const payload = await request.json() as TaskUploadPayload;
     const kind = payload.kind ?? "image";
-    if (!(["image", "audio", "video"] as const).includes(kind)) throw new Error("That attachment type is invalid.");
+    if (!(["image", "audio", "video", "file"] as const).includes(kind)) throw new Error("That attachment type is invalid.");
     const target = { todoId: id };
     const attachment = kind === "image"
       ? await finalizeTodoAttachmentUpload(String(payload.uploadId ?? ""), {
@@ -121,7 +121,7 @@ export async function PATCH(
     return Response.json({ attachment });
   } catch (error) {
     const message = error instanceof Error ? error.message : "The image upload could not be finalized.";
-    const status = /not found|available/i.test(message) ? 404 : /image|audio|video|media|voice|limited|invalid|large|expected|duration/i.test(message) ? 400 : 500;
+    const status = /not found|available/i.test(message) ? 404 : /image|audio|video|media|voice|file|document|archive|limited|invalid|large|expected|duration|match/i.test(message) ? 400 : 500;
     console.error("[todo-api] task attachment finalization failed", { todoId: id, durationMs: Date.now() - startedAt, error });
     return Response.json({ error: message }, { status });
   }

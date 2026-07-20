@@ -12,6 +12,7 @@ import {
   FolderInput,
   Folder,
   FolderPlus,
+  FileText,
   List,
   ListChecks,
   ListTodo,
@@ -45,6 +46,7 @@ export type ActionIconName =
   | "done"
   | "download"
   | "filters"
+  | "file"
   | "folder"
   | "create-project"
   | "merge"
@@ -80,6 +82,7 @@ const icons: Record<ActionIconName, ComponentType<LucideProps>> = {
   done: CircleCheckBig,
   download: Download,
   filters: SlidersHorizontal,
+  file: FileText,
   folder: Folder,
   "create-project": FolderPlus,
   merge: Merge,

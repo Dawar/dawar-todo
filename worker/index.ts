@@ -6,7 +6,6 @@ import { appAccessResponse } from "./access";
 interface Env {
   ASSETS: Fetcher;
   DB: D1Database;
-  API_TOKEN_ENCRYPTION_KEY: string;
   S3_ACCESS_KEY: string;
   S3_ACCESS_KEY_ID: string;
   S3_BUCKET: string;
