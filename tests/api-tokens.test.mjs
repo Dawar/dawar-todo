@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { apiTokenFromAuthorization, hashApiToken } from "../db/api-tokens.ts";
+import { apiTokenSkill } from "../db/api-token-skill.ts";
+import { apiTokenFromAuthorization, decryptApiToken, encryptApiToken, hashApiToken } from "../db/api-tokens.ts";
 import { appAccessResponse } from "../worker/access.ts";
 
 const root = new URL("../", import.meta.url);
@@ -56,7 +57,7 @@ test("accepts valid Bearer tokens and rejects invalid or privileged token reques
 });
 
 test("ships hashed revocable API tokens and a public agent specification", async () => {
-  const [schema, database, tokens, access, settings, tokenRoute, revokeRoute, migration, openApiText] = await Promise.all([
+  const [schema, database, tokens, access, settings, tokenRoute, revokeRoute, skillRoute, migration, encryptionMigration, openApiText] = await Promise.all([
     readFile(new URL("db/schema.ts", root), "utf8"),
     readFile(new URL("db/todos.ts", root), "utf8"),
     readFile(new URL("db/api-tokens.ts", root), "utf8"),
@@ -64,7 +65,9 @@ test("ships hashed revocable API tokens and a public agent specification", async
     readFile(new URL("app/settings/page.tsx", root), "utf8"),
     readFile(new URL("app/api/api-tokens/route.ts", root), "utf8"),
     readFile(new URL("app/api/api-tokens/[id]/route.ts", root), "utf8"),
+    readFile(new URL("app/api/api-tokens/[id]/skill/route.ts", root), "utf8"),
     readFile(new URL("drizzle/0008_military_proudstar.sql", root), "utf8"),
+    readFile(new URL("drizzle/0009_small_tenebrous.sql", root), "utf8"),
     readFile(new URL("public/openapi.json", root), "utf8"),
   ]);
   const openApi = JSON.parse(openApiText);
@@ -72,7 +75,9 @@ test("ships hashed revocable API tokens and a public agent specification", async
   assert.match(schema, /todoApiTokens/);
   assert.match(database, /CREATE TABLE IF NOT EXISTS todo_api_tokens/);
   assert.match(migration, /CREATE TABLE `todo_api_tokens`/);
+  assert.match(encryptionMigration, /ADD `encrypted_token` text/);
   assert.match(tokens, /crypto\.subtle\.digest\("SHA-256"/);
+  assert.match(tokens, /AES-GCM/);
   assert.match(tokens, /dt_live_/);
   assert.doesNotMatch(migration, /`token` text/);
   assert.match(tokens, /revoked_at IS NULL/);
@@ -85,10 +90,14 @@ test("ships hashed revocable API tokens and a public agent specification", async
   assert.match(settings, /API access/);
   assert.match(settings, /Generate token/);
   assert.match(settings, /Copy OpenAPI URL/);
-  assert.match(settings, /shown only once/);
+  assert.match(settings, /Copy Skill/);
+  assert.match(settings, /SKILL\.md copied/);
   assert.match(tokenRoute, /Cache-Control/);
   assert.match(tokenRoute, /createdByEmail: email/);
   assert.match(revokeRoute, /revokeApiToken/);
+  assert.match(skillRoute, /text\/markdown; charset=utf-8/);
+  assert.match(skillRoute, /Content-Disposition/);
+  assert.match(skillRoute, /Cache-Control/);
 
   assert.equal(openApi.openapi, "3.1.0");
   assert.deepEqual(openApi.security, [{ bearerAuth: [] }]);
@@ -108,4 +117,33 @@ test("parses only Bearer authorization values and hashes deterministically", asy
   assert.equal(apiTokenFromAuthorization(null), null);
   assert.equal(await hashApiToken(token), await hashApiToken(token));
   assert.notEqual(await hashApiToken(token), await hashApiToken(`${token}x`));
+});
+
+test("encrypts recoverable token secrets and generates a ready-to-use SKILL.md", async () => {
+  const token = `dt_live_${"C".repeat(43)}`;
+  const keyBytes = new Uint8Array(32);
+  crypto.getRandomValues(keyBytes);
+  const encryptionSecret = Buffer.from(keyBytes).toString("base64url");
+  const encrypted = await encryptApiToken(token, encryptionSecret);
+  assert.match(encrypted, /^v1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
+  assert.doesNotMatch(encrypted, /dt_live_/);
+  assert.equal(await decryptApiToken(encrypted, encryptionSecret), token);
+
+  const skill = apiTokenSkill({
+    id: "22222222-2222-4222-8222-222222222222",
+    name: "Primary agent",
+    tokenPrefix: "dt_live_CCCCCCCC…",
+    createdAt: "2026-07-20T12:00:00.000Z",
+    lastUsedAt: null,
+    expiresAt: null,
+  }, token);
+  assert.match(skill, /^---\nname: dawar-todo\ndescription: [^\n]+\n---\n/);
+  assert.match(skill, /https:\/\/work\.dawar\.ca\/api/);
+  assert.match(skill, /https:\/\/work\.dawar\.ca\/openapi\.json/);
+  assert.match(skill, new RegExp(token));
+  assert.match(skill, /GET \/api\/todos/);
+  assert.match(skill, /adjust_snooze/);
+  assert.match(skill, /Do not send the Dawar Todo Bearer token to storage URLs/);
+  assert.match(skill, /Never manage API tokens through this credential/);
+  assert.ok(skill.split("\n").length < 500);
 });

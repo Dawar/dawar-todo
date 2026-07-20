@@ -92,6 +92,7 @@ export const todoApiTokens = sqliteTable(
     name: text("name").notNull(),
     tokenPrefix: text("token_prefix").notNull(),
     tokenHash: text("token_hash").notNull(),
+    encryptedToken: text("encrypted_token"),
     createdByEmail: text("created_by_email"),
     createdAt: text("created_at")
       .notNull()

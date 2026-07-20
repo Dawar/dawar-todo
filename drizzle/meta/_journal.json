@@ -64,6 +64,13 @@
       "when": 1784552057491,
       "tag": "0008_military_proudstar",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1784552766739,
+      "tag": "0009_small_tenebrous",
+      "breakpoints": true
     }
   ]
 }

@@ -1,6 +1,7 @@
 declare namespace Cloudflare {
   interface Env {
     DB: D1Database;
+    API_TOKEN_ENCRYPTION_KEY: string;
     S3_ACCESS_KEY: string;
     S3_ACCESS_KEY_ID: string;
     S3_BUCKET: string;

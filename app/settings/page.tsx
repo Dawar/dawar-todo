@@ -71,6 +71,7 @@ export default function SettingsPage() {
   const [tokensLoading, setTokensLoading] = useState(true);
   const [creatingToken, setCreatingToken] = useState(false);
   const [busyTokenId, setBusyTokenId] = useState<string | null>(null);
+  const [copyingSkillId, setCopyingSkillId] = useState<string | null>(null);
   const [createdToken, setCreatedToken] = useState<{ apiToken: ApiToken; token: string } | null>(null);
   const [shareNotice, setShareNotice] = useState<{ tone: "success" | "error"; text: string } | null>(null);
 
@@ -237,6 +238,26 @@ export default function SettingsPage() {
     }
   }
 
+  async function copyTokenSkill(apiToken: ApiToken) {
+    setCopyingSkillId(apiToken.id);
+    setShareNotice(null);
+    try {
+      const response = await fetch(`/api/api-tokens/${apiToken.id}/skill`, { headers: { Accept: "text/markdown" } });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({})) as { error?: string };
+        throw new Error(payload.error || "The API skill could not be generated.");
+      }
+      const skill = await response.text();
+      await copyTextToClipboard(skill);
+      setShareNotice({ tone: "success", text: `${apiToken.name} SKILL.md copied.` });
+      console.info("[todo-ui] API token skill copied", { tokenId: apiToken.id, skillLength: skill.length });
+    } catch (error) {
+      setShareNotice({ tone: "error", text: error instanceof Error ? error.message : "The API skill could not be copied." });
+    } finally {
+      setCopyingSkillId(null);
+    }
+  }
+
   async function revokeToken(apiToken: ApiToken) {
     if (!window.confirm(`Revoke ${apiToken.name}? Any agent using it will lose access immediately.`)) return;
     setBusyTokenId(apiToken.id);
@@ -313,7 +334,7 @@ export default function SettingsPage() {
           </div>
 
           <div className="mt-4 rounded-xl bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900">
-            Tokens have full access to this todo database. Treat them like passwords. A generated token is shown only once and can be revoked at any time.
+            Tokens have full access to this todo database. Treat them like passwords. Token secrets are stored encrypted so Copy Skill can create a ready-to-use credentialed SKILL.md, and every token can be revoked at any time.
           </div>
 
           <form onSubmit={createToken} className="mt-5 grid min-w-0 gap-2 sm:grid-cols-[minmax(0,1fr)_auto_auto]">
@@ -347,7 +368,7 @@ export default function SettingsPage() {
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <p className="text-sm font-semibold text-[#24553f]">Copy this token now</p>
-                  <p className="mt-0.5 text-xs leading-5 text-[#607169]">It cannot be displayed again after you dismiss it.</p>
+                  <p className="mt-0.5 text-xs leading-5 text-[#607169]">The raw value is shown here once. You can later copy it only as part of its protected SKILL.md.</p>
                 </div>
                 <button type="button" onClick={() => setCreatedToken(null)} aria-label="Dismiss generated token" title="Dismiss" className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-[#607169] hover:bg-black/[0.05]"><ActionIcon name="close" /></button>
               </div>
@@ -383,7 +404,10 @@ export default function SettingsPage() {
                         {apiToken.expiresAt ? ` · Expires ${new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(new Date(apiToken.expiresAt))}` : " · Never expires"}
                       </p>
                     </div>
-                    <button type="button" onClick={() => void revokeToken(apiToken)} disabled={busyTokenId === apiToken.id} className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg bg-white px-3 text-xs font-semibold text-red-700 ring-1 ring-black/[0.06] hover:bg-red-50 disabled:opacity-50"><ActionIcon name="delete" />Revoke</button>
+                    <div className="flex shrink-0 flex-col gap-2 sm:flex-row">
+                      <button type="button" onClick={() => void copyTokenSkill(apiToken)} disabled={copyingSkillId === apiToken.id || busyTokenId === apiToken.id} className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg bg-white px-3 text-xs font-semibold text-[#216e4e] ring-1 ring-black/[0.06] hover:bg-[#edf5f0] disabled:opacity-50"><ActionIcon name="copy" />{copyingSkillId === apiToken.id ? "Copying…" : "Copy Skill"}</button>
+                      <button type="button" onClick={() => void revokeToken(apiToken)} disabled={busyTokenId === apiToken.id || copyingSkillId === apiToken.id} className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg bg-white px-3 text-xs font-semibold text-red-700 ring-1 ring-black/[0.06] hover:bg-red-50 disabled:opacity-50"><ActionIcon name="delete" />Revoke</button>
+                    </div>
                   </li>
                 ))}
               </ul>

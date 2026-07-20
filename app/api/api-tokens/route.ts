@@ -42,6 +42,7 @@ export async function POST(request: Request) {
       name: String(payload.name ?? ""),
       expiresInDays,
       createdByEmail: email,
+      encryptionSecret: env.API_TOKEN_ENCRYPTION_KEY,
     });
     console.info("[todo-api] API token generated", {
       tokenId: result.apiToken.id,

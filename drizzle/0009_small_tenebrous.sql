@@ -1,0 +1,1 @@
+ALTER TABLE `todo_api_tokens` ADD `encrypted_token` text;

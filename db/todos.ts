@@ -161,6 +161,7 @@ export async function ensureTodoDatabase() {
           name TEXT NOT NULL,
           token_prefix TEXT NOT NULL,
           token_hash TEXT NOT NULL,
+          encrypted_token TEXT,
           created_by_email TEXT,
           created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
           last_used_at TEXT,
@@ -207,6 +208,11 @@ export async function ensureTodoDatabase() {
       db.prepare("CREATE INDEX IF NOT EXISTS todo_api_tokens_revoked_at_idx ON todo_api_tokens(revoked_at)"),
       db.prepare("CREATE INDEX IF NOT EXISTS todo_api_tokens_expires_at_idx ON todo_api_tokens(expires_at)"),
     ]);
+    const apiTokenColumns = await db.prepare("PRAGMA table_info(todo_api_tokens)").all<{ name: string }>();
+    if (!apiTokenColumns.results.some((column) => column.name === "encrypted_token")) {
+      await db.prepare("ALTER TABLE todo_api_tokens ADD COLUMN encrypted_token TEXT").run();
+      console.info("[todo-db] added encrypted API token compatibility column");
+    }
     const attachmentColumns = await db.prepare("PRAGMA table_info(todo_attachments)").all<{ name: string }>();
     if (!attachmentColumns.results.some((column) => column.name === "upload_state")) {
       await db.prepare("ALTER TABLE todo_attachments ADD COLUMN upload_state TEXT NOT NULL DEFAULT 'ready'").run();
