@@ -58,6 +58,7 @@ test("ships the simplified todo and project surface", async () => {
   assert.match(page, /body: JSON\.stringify\(\{ pinned \}\)/);
   assert.match(page, /Task pinned\./);
   assert.match(page, /task pin changed/);
+  assert.doesNotMatch(page, /title="Pinned"/);
   assert.match(page, /fixed inset-x-0 z-40/);
   assert.doesNotMatch(page, /sticky top-\[62px\]/);
   assert.match(page, /Assign project/);

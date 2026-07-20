@@ -902,7 +902,6 @@ function TaskRow({
         >
           <div className="flex min-w-0 items-start gap-2">
             <p className={classNames("min-w-0 flex-1 whitespace-pre-wrap text-[15px] leading-5 text-[#202522]", todo.status === "completed" && "text-[#8b928e] line-through")}>{todo.title}</p>
-            {showPin && todo.pinned && <span className="inline-flex shrink-0 text-[#216e4e]" title="Pinned"><ActionIcon name="pin" className="h-3.5 w-3.5" /></span>}
             {todo.attachmentCount > 0 && <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-[#eef2ef] px-1.5 py-0.5 text-[10px] font-medium text-[#68716b]"><ActionIcon name="attachment" className="h-3 w-3" />{todo.attachmentCount}</span>}
           </div>
           {todo.notes && <p className="mt-1 line-clamp-2 whitespace-pre-wrap text-xs leading-5 text-[#7c847f]">{todo.notes}</p>}
