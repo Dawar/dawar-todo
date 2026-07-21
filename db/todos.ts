@@ -6,6 +6,7 @@ import {
   claimDraftAttachments,
   restoreAttachmentStatements,
 } from "./attachments";
+import { normalizeCronExpression } from "../lib/cron";
 
 type StoredTodoStatus = "open" | "completed" | "archived";
 export type TodoStatus = "open" | "completed";
@@ -27,6 +28,8 @@ type TodoRow = {
   client_id: string | null;
   completed_at: string | null;
   snoozed_until: string | null;
+  recurrence_cron: string | null;
+  recurrence_last_fired_at: string | null;
   pinned: number;
   created_at: string;
   updated_at: string;
@@ -53,6 +56,8 @@ export type Todo = {
   clientId: string | null;
   completedAt: string | null;
   snoozedUntil: string | null;
+  recurrenceCron: string | null;
+  recurrenceLastFiredAt: string | null;
   pinned: boolean;
   createdAt: string;
   updatedAt: string;
@@ -60,7 +65,7 @@ export type Todo = {
 };
 
 export type TodoUpdate = Partial<
-  Pick<Todo, "title" | "notes" | "priority" | "dueDate" | "project" | "context" | "snoozedUntil" | "pinned">
+  Pick<Todo, "title" | "notes" | "priority" | "dueDate" | "project" | "context" | "snoozedUntil" | "recurrenceCron" | "pinned">
 > & { status?: TodoStatus };
 
 export type TodoSettings = {
@@ -90,6 +95,8 @@ function mapTodo(row: TodoRow): Todo {
     clientId: row.client_id,
     completedAt: row.completed_at,
     snoozedUntil: row.snoozed_until,
+    recurrenceCron: row.recurrence_cron,
+    recurrenceLastFiredAt: row.recurrence_last_fired_at,
     pinned: Boolean(row.pinned),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -118,6 +125,8 @@ export async function ensureTodoDatabase() {
           client_id TEXT,
           completed_at TEXT,
           snoozed_until TEXT,
+          recurrence_cron TEXT,
+          recurrence_last_fired_at TEXT,
           pinned INTEGER NOT NULL DEFAULT 0,
           created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
           updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
@@ -207,7 +216,16 @@ export async function ensureTodoDatabase() {
       await db.prepare("ALTER TABLE todos ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0").run();
       console.info("[todo-db] added pinned compatibility column");
     }
+    if (!columns.results.some((column) => column.name === "recurrence_cron")) {
+      await db.prepare("ALTER TABLE todos ADD COLUMN recurrence_cron TEXT").run();
+      console.info("[todo-db] added recurrence cron compatibility column");
+    }
+    if (!columns.results.some((column) => column.name === "recurrence_last_fired_at")) {
+      await db.prepare("ALTER TABLE todos ADD COLUMN recurrence_last_fired_at TEXT").run();
+      console.info("[todo-db] added recurrence last-fired compatibility column");
+    }
     await db.prepare("CREATE INDEX IF NOT EXISTS todos_snoozed_until_idx ON todos(snoozed_until)").run();
+    await db.prepare("CREATE INDEX IF NOT EXISTS todos_recurrence_cron_idx ON todos(recurrence_cron)").run();
     await db.prepare("CREATE INDEX IF NOT EXISTS todos_pinned_idx ON todos(pinned)").run();
     await db.prepare("CREATE INDEX IF NOT EXISTS todo_action_history_created_at_idx ON todo_action_history(created_at)").run();
     await db.batch([
@@ -445,6 +463,7 @@ export async function createTodo(input: {
   dueDate?: string | null;
   project?: string | null;
   context?: string | null;
+  recurrenceCron?: string | null;
   draftToken?: string;
   attachmentIds?: string[];
   clientId?: string;
@@ -453,6 +472,7 @@ export async function createTodo(input: {
   const clientId = input.clientId?.trim() || null;
   if (clientId && !/^[0-9a-f-]{36}$/i.test(clientId)) throw new Error("That offline task identifier is invalid.");
   const project = input.project?.trim() || null;
+  const recurrenceCron = normalizeCronExpression(input.recurrenceCron);
   if (project?.length && project.length > 120) throw new Error("Project names are limited to 120 characters.");
   const db = database();
   if (clientId) {
@@ -474,8 +494,8 @@ export async function createTodo(input: {
   }
   const row = await db
     .prepare(`
-      ${clientId ? "INSERT OR IGNORE" : "INSERT"} INTO todos (title, notes, status, priority, due_date, project, context, source_kind, client_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, 'site', ?)
+      ${clientId ? "INSERT OR IGNORE" : "INSERT"} INTO todos (title, notes, status, priority, due_date, project, context, recurrence_cron, source_kind, client_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'site', ?)
       RETURNING *
     `)
     .bind(
@@ -486,6 +506,7 @@ export async function createTodo(input: {
       input.dueDate ?? null,
       project,
       input.context ?? null,
+      recurrenceCron,
       clientId,
     )
     .first<TodoRow>();
@@ -517,6 +538,8 @@ export async function createTodo(input: {
 
 export async function updateTodo(id: number, update: TodoUpdate): Promise<{ todo: Todo; undoToken: string | null } | null> {
   await ensureTodoDatabase();
+  const normalizedUpdate = { ...update };
+  if (normalizedUpdate.recurrenceCron !== undefined) normalizedUpdate.recurrenceCron = normalizeCronExpression(normalizedUpdate.recurrenceCron);
   const columnByField: Record<keyof TodoUpdate, string> = {
     title: "title",
     notes: "notes",
@@ -526,9 +549,10 @@ export async function updateTodo(id: number, update: TodoUpdate): Promise<{ todo
     project: "project",
     context: "context",
     snoozedUntil: "snoozed_until",
+    recurrenceCron: "recurrence_cron",
     pinned: "pinned",
   };
-  const entries = (Object.entries(update) as [keyof TodoUpdate, TodoUpdate[keyof TodoUpdate]][])
+  const entries = (Object.entries(normalizedUpdate) as [keyof TodoUpdate, TodoUpdate[keyof TodoUpdate]][])
     .filter(([, value]) => value !== undefined);
   if (!entries.length) {
     const todo = await getTodo(id);
@@ -538,14 +562,21 @@ export async function updateTodo(id: number, update: TodoUpdate): Promise<{ todo
   const db = database();
   const before = await db.prepare("SELECT * FROM todos WHERE id = ?").bind(id).first<TodoRow>();
   if (!before) return null;
+  if (normalizedUpdate.snoozedUntil && (before.recurrence_cron || normalizedUpdate.recurrenceCron)) {
+    throw new Error("Recurring tasks cannot be snoozed.");
+  }
   const undoToken = crypto.randomUUID();
 
   const values = entries.map(([field, value]) => field === "pinned" ? value ? 1 : 0 : value);
   const setters = entries.map(([field]) => `${columnByField[field]} = ?`);
-  if (update.status === "completed") {
+  if (normalizedUpdate.status === "completed") {
     setters.push("completed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')", "snoozed_until = NULL");
-  } else if (update.status === "open") {
+  } else if (normalizedUpdate.status === "open") {
     setters.push("completed_at = NULL");
+  }
+  if (normalizedUpdate.recurrenceCron !== undefined) {
+    setters.push("recurrence_last_fired_at = NULL");
+    if (normalizedUpdate.recurrenceCron) setters.push("snoozed_until = NULL");
   }
   setters.push("updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')");
 
@@ -553,8 +584,8 @@ export async function updateTodo(id: number, update: TodoUpdate): Promise<{ todo
     db.prepare("DELETE FROM todo_action_history WHERE created_at < strftime('%Y-%m-%dT%H:%M:%fZ','now','-7 days')"),
     db.prepare("INSERT INTO todo_action_history (id, snapshot) VALUES (?, ?)")
       .bind(undoToken, JSON.stringify({ todos: [before] } satisfies UndoSnapshot)),
-    ...(typeof update.project === "string" && update.project.trim()
-      ? [db.prepare("INSERT OR IGNORE INTO todo_projects (name) VALUES (?)").bind(update.project.trim())]
+    ...(typeof normalizedUpdate.project === "string" && normalizedUpdate.project.trim()
+      ? [db.prepare("INSERT OR IGNORE INTO todo_projects (name) VALUES (?)").bind(normalizedUpdate.project.trim())]
       : []),
     db.prepare(`UPDATE todos SET ${setters.join(", ")} WHERE id = ?`).bind(...values, id),
   ];
@@ -713,7 +744,7 @@ export async function adjustSnoozedTodos(inputIds: number[], preset: SnoozePrese
   const result = await db.prepare(`
     UPDATE todos
     SET snoozed_until = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-    WHERE id IN (${inClause}) AND status = 'open' AND snoozed_until IS NOT NULL
+    WHERE id IN (${inClause}) AND status = 'open' AND snoozed_until IS NOT NULL AND recurrence_cron IS NULL
   `).bind(until, ...ids).run();
   const updated = await db.prepare(`
     SELECT todos.*,
@@ -722,7 +753,7 @@ export async function adjustSnoozedTodos(inputIds: number[], preset: SnoozePrese
          AND todo_attachments.upload_state = 'ready'
          AND todo_attachments.deleted_at IS NULL) AS attachment_count
     FROM todos
-    WHERE todos.id IN (${inClause}) AND todos.status = 'open' AND todos.snoozed_until = ?
+    WHERE todos.id IN (${inClause}) AND todos.status = 'open' AND todos.snoozed_until = ? AND todos.recurrence_cron IS NULL
   `).bind(...ids, until).all<TodoRow>();
   const todos = updated.results.map(mapTodo);
   const changedIds = todos.map((todo) => todo.id);
@@ -749,6 +780,14 @@ export async function bulkUpdateTodos(
   const beforeById = new Map(beforeResult.results.map((row) => [row.id, row]));
   const before = ids.map((id) => beforeById.get(id)).filter((row): row is TodoRow => Boolean(row));
   if (!before.length) throw new Error("The selected tasks no longer exist.");
+  if (action === "snooze" && before.some((todo) => Boolean(todo.recurrence_cron))) {
+    const recurringIds = before.filter((todo) => Boolean(todo.recurrence_cron)).map((todo) => todo.id);
+    console.warn("[todo-db] recurring task snooze rejected", {
+      requested: ids.length,
+      recurringIds,
+    });
+    throw new Error("Recurring tasks cannot be snoozed.");
+  }
   const undoToken = crypto.randomUUID();
   const attachmentBefore = action === "delete" ? await attachmentSnapshotsForTodos(ids) : [];
   const project = typeof options.project === "string" ? options.project.trim() || null : null;
@@ -899,8 +938,9 @@ export async function undoTodoAction(undoToken: string) {
   const restore = db.prepare(`
     INSERT INTO todos (
       id, title, notes, status, priority, due_date, project, context,
-      source_kind, source_id, client_id, completed_at, snoozed_until, pinned, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      source_kind, source_id, client_id, completed_at, snoozed_until,
+      recurrence_cron, recurrence_last_fired_at, pinned, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       title = excluded.title,
       notes = excluded.notes,
@@ -914,6 +954,8 @@ export async function undoTodoAction(undoToken: string) {
       client_id = excluded.client_id,
       completed_at = excluded.completed_at,
       snoozed_until = excluded.snoozed_until,
+      recurrence_cron = excluded.recurrence_cron,
+      recurrence_last_fired_at = excluded.recurrence_last_fired_at,
       pinned = excluded.pinned,
       created_at = excluded.created_at,
       updated_at = excluded.updated_at
@@ -948,6 +990,8 @@ export async function undoTodoAction(undoToken: string) {
       row.client_id ?? null,
       row.completed_at,
       row.snoozed_until,
+      row.recurrence_cron ?? null,
+      row.recurrence_last_fired_at ?? null,
       row.pinned ?? 0,
       row.created_at,
       row.updated_at,

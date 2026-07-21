@@ -274,7 +274,7 @@ export default function SettingsPage() {
         <div className="mb-7">
           <p className="text-sm font-medium text-[#216e4e]">Profile</p>
           <h1 className="mt-1 text-3xl font-semibold tracking-[-0.04em] text-[#151816]">Daily review</h1>
-          <p className="mt-2 text-sm leading-6 text-[#69716c]">Choose when snoozed tasks return to your open list.</p>
+          <p className="mt-2 text-sm leading-6 text-[#69716c]">Choose the timezone for snoozing and recurring task schedules.</p>
         </div>
 
         <form onSubmit={save} className="rounded-2xl border border-black/[0.07] bg-white p-5 shadow-[0_10px_35px_rgba(30,45,36,0.06)] sm:p-7">
@@ -303,7 +303,7 @@ export default function SettingsPage() {
           </fieldset>
 
           <div className="mt-6 rounded-xl bg-[#f1f6f3] px-4 py-3 text-sm leading-6 text-[#4f6257]">
-            Snoozing hides a task until {hourLabel(settings.snoozeWakeHour)} on the next calendar day in {timeZones.find(([zone]) => zone === settings.snoozeTimeZone)?.[1] ?? settings.snoozeTimeZone}.
+            Snoozing hides a task until {hourLabel(settings.snoozeWakeHour)} on the next calendar day. Recurring cron schedules are also evaluated in {timeZones.find(([zone]) => zone === settings.snoozeTimeZone)?.[1] ?? settings.snoozeTimeZone}.
           </div>
 
           {message && <p role="alert" className="mt-4 text-sm text-red-700">{message}</p>}

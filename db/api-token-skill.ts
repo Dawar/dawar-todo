@@ -12,7 +12,7 @@ export function apiTokenSkill(apiToken: ApiToken, token: string) {
   const tokenName = markdownText(apiToken.name);
   return `---
 name: dawar-todo
-description: Manage the owner's Dawar Todo system through its authenticated API. Use when asked to inspect, create, edit, complete, reopen, snooze, merge, reassign, or delete tasks; manage projects and attachments; change snooze settings; or manage public calendar feeds.
+description: Manage the owner's Dawar Todo system through its authenticated API. Use when asked to inspect, create, edit, complete, reopen, schedule, snooze, merge, reassign, or delete tasks; manage projects and attachments; change settings; or manage public calendar feeds.
 ---
 
 # Dawar Todo
@@ -63,6 +63,7 @@ curl --fail-with-body \\
 
 - \`status\`: \`open\` or \`completed\`.
 - A snoozed task remains \`open\` and has a future \`snoozedUntil\` timestamp.
+- \`recurrenceCron\`: an optional five-field cron expression (minute, hour, day, month, weekday) evaluated in the user's configured \`snoozeTimeZone\`. At each matching interval, a completed task reopens. Recurring tasks cannot be snoozed.
 - \`priority\`: 1 urgent, 2 high, 3 normal, 4 low.
 - \`dueDate\`: \`YYYY-MM-DD\` or null.
 - \`project\`: a registered project name or null for unassigned.
@@ -76,8 +77,8 @@ curl --fail-with-body \\
 ### Todos
 
 - \`GET /api/todos\`: list all open, snoozed, and completed tasks.
-- \`POST /api/todos\`: create an open task. Supports title, notes, priority, dueDate, project, context, clientId, draftToken, and attachmentIds.
-- \`PATCH /api/todos/{id}\`: edit title, notes, status, priority, dueDate, project, context, or pinned. Set nullable fields to null to clear them.
+- \`POST /api/todos\`: create an open task. Supports title, notes, priority, dueDate, project, context, recurrenceCron, clientId, draftToken, and attachmentIds.
+- \`PATCH /api/todos/{id}\`: edit title, notes, status, priority, dueDate, project, context, recurrenceCron, or pinned. Set nullable fields to null to clear them.
 - \`POST /api/todos/bulk\`: perform state and multi-task operations.
 - \`POST /api/todos/undo\`: consume a returned Undo token.
 
@@ -85,7 +86,7 @@ Bulk actions:
 
 - \`complete\`: mark IDs completed and clear snooze.
 - \`unsnooze\`: wake snoozed IDs or reopen completed IDs.
-- \`snooze\`: snooze IDs until the configured next-day wake time.
+- \`snooze\`: snooze non-recurring IDs until the configured next-day wake time. The API rejects recurring tasks.
 - \`adjust_snooze\`: change already-snoozed IDs using \`snoozePreset\`: \`15m\`, \`30m\`, \`1h\`, \`2h\`, or \`8pm\`.
 - \`reproject\`: set \`project\` to a name or null without changing status or snooze.
 - \`merge\`: create one merged task and delete the source IDs.
@@ -152,7 +153,7 @@ Each multipart request accepts one file; repeat it to attach more files, up to 1
 
 ### Settings and calendars
 
-- \`GET /api/settings\` and \`PATCH /api/settings\`: read or change snooze timezone and next-day wake hour.
+- \`GET /api/settings\` and \`PATCH /api/settings\`: read or change the timezone used by snooze and recurring schedules, plus the next-day wake hour.
 - \`GET /api/calendar-feeds\`: list active public iCal feeds.
 - \`POST /api/calendar-feeds\`: create a feed.
 - \`PATCH /api/calendar-feeds/{id}\`: regenerate its public token and invalidate the old URL.
@@ -165,6 +166,7 @@ Each multipart request accepts one file; repeat it to attach more files, up to 1
 - Do not infer completion solely from age; preserve user intent.
 - Use project null to remove assignment, not an invented "Unassigned" project.
 - Use dueDate null to clear a due date.
+- Validate recurrenceCron before writing it, and never attempt to snooze a task while recurrenceCron is set.
 - Treat signed attachment URLs as temporary secrets.
 - On 401, stop and ask for a fresh skill/token. Do not retry repeatedly.
 - On 409 from Undo, report that the token expired or was already used.

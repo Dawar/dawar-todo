@@ -34,6 +34,9 @@ const localBindingConfig = {
   images: {
     binding: "IMAGES",
   },
+  triggers: {
+    crons: ["* * * * *"],
+  },
 };
 
 export default defineConfig(async () => {

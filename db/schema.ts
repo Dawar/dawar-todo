@@ -17,6 +17,8 @@ export const todos = sqliteTable(
     clientId: text("client_id"),
     completedAt: text("completed_at"),
     snoozedUntil: text("snoozed_until"),
+    recurrenceCron: text("recurrence_cron"),
+    recurrenceLastFiredAt: text("recurrence_last_fired_at"),
     pinned: integer("pinned", { mode: "boolean" }).notNull().default(false),
     createdAt: text("created_at")
       .notNull()
@@ -30,6 +32,7 @@ export const todos = sqliteTable(
     index("todos_project_idx").on(table.project),
     index("todos_due_date_idx").on(table.dueDate),
     index("todos_snoozed_until_idx").on(table.snoozedUntil),
+    index("todos_recurrence_cron_idx").on(table.recurrenceCron),
     index("todos_pinned_idx").on(table.pinned),
     uniqueIndex("todos_source_idx").on(table.sourceKind, table.sourceId),
     uniqueIndex("todos_client_id_idx").on(table.clientId),

@@ -16,6 +16,7 @@ import { attachmentFileMimeType, GENERIC_FILE_ACCEPT } from "../lib/attachment-f
 import { ActionIcon, type ActionIconName } from "./action-icon";
 import { copyTextToClipboard } from "./copy-to-clipboard";
 import { dueDateSortValue, formatDueDate, isDueTodayOrOverdue } from "./date-only";
+import { cronValidationError } from "../lib/cron";
 import { SiteHeader } from "./site-header";
 import {
   deleteOfflineTodo,
@@ -56,6 +57,8 @@ type Todo = {
   sourceId: number | null;
   completedAt: string | null;
   snoozedUntil: string | null;
+  recurrenceCron: string | null;
+  recurrenceLastFiredAt: string | null;
   pinned: boolean;
   createdAt: string;
   updatedAt: string;
@@ -98,6 +101,7 @@ type TodoDraft = Pick<Todo, "title" | "notes" | "priority"> & {
   dueDate: string;
   project: string;
   context: string;
+  recurrenceCron: string;
 };
 
 type ProjectDialogState = {
@@ -727,6 +731,8 @@ function offlineRecordTodo(record: OfflineTodoRecord): Todo {
     sourceId: null,
     completedAt: null,
     snoozedUntil: null,
+    recurrenceCron: null,
+    recurrenceLastFiredAt: null,
     pinned: false,
     createdAt: record.createdAt,
     updatedAt: record.createdAt,
@@ -774,6 +780,7 @@ function TaskRow({
   const suppressOpenRef = useRef(false);
   const pending = todo.id < 0;
   const snoozed = isSnoozed(todo, now);
+  const recurring = Boolean(todo.recurrenceCron);
   const primaryAction: { action: TodoAction; label: string; icon: ActionIconName } = todo.status === "open"
     ? { action: "complete", label: "Done", icon: "done" }
     : { action: "unsnooze", label: "Open", icon: "open" };
@@ -781,7 +788,9 @@ function TaskRow({
     ? primaryAction
     : snoozed
       ? { action: "unsnooze", label: "Wake", icon: "wake" }
-      : { action: "snooze", label: "Snooze", icon: "snooze" };
+      : recurring
+        ? primaryAction
+        : { action: "snooze", label: "Snooze", icon: "snooze" };
   const swipeRatio = Math.abs(offset) / swipeWidth;
   const longSwipe = swipeRatio >= 0.5;
   const revealAction = offset < 0
@@ -857,7 +866,7 @@ function TaskRow({
   const hoverActions: Array<{ action: TodoAction | "assign" | "pin"; label: string; icon: ActionIconName }> = [
     ...(showPin ? [{ action: "pin" as const, label: todo.pinned ? "Unpin" : "Pin", icon: todo.pinned ? "unpin" as const : "pin" as const }] : []),
     primaryAction,
-    ...(todo.status === "open" ? [leftSecondaryAction] : []),
+    ...(todo.status === "open" && leftSecondaryAction.action !== primaryAction.action ? [leftSecondaryAction] : []),
     { action: "assign", label: "Assign project", icon: "move" },
     { action: "delete", label: "Delete", icon: "delete" },
   ];
@@ -906,13 +915,14 @@ function TaskRow({
             {todo.attachmentCount > 0 && <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-[#eef2ef] px-1.5 py-0.5 text-[10px] font-medium text-[#68716b]"><ActionIcon name="attachment" className="h-3 w-3" />{todo.attachmentCount}</span>}
           </div>
           {todo.notes && <p className="mt-1 line-clamp-2 whitespace-pre-wrap text-xs leading-5 text-[#7c847f]">{todo.notes}</p>}
-          {(todo.project || todo.context || todo.dueDate || todo.priority <= 2 || snoozed || todo.offline) && (
+          {(todo.project || todo.context || todo.dueDate || todo.priority <= 2 || snoozed || recurring || todo.offline) && (
             <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-[#747c77]">
               {todo.priority <= 2 && <span className={classNames("rounded-full px-2 py-0.5 font-medium", todo.priority === 1 ? "bg-red-50 text-red-700" : "bg-amber-50 text-amber-700")}>{priorityLabels[todo.priority]}</span>}
               {todo.project && <span className="rounded-full bg-[#f0f2ef] px-2 py-0.5">{todo.project}</span>}
               {todo.context && <span>{todo.context}</span>}
               {todo.dueDate && <span className={classNames(isDueTodayOrOverdue(todo.dueDate) && todo.status === "open" && !snoozed && "font-medium text-red-600")}>{formatDueDate(todo.dueDate)}</span>}
               {snoozed && todo.snoozedUntil && <span className="font-medium text-amber-700">{snoozeLabel(todo.snoozedUntil)}</span>}
+              {todo.recurrenceCron && <span className="inline-flex items-center gap-1 font-medium text-violet-700"><ActionIcon name="repeat" className="h-3 w-3" />{todo.recurrenceCron}</span>}
               {todo.offline && <span className="inline-flex items-center gap-1 font-medium text-amber-700"><ActionIcon name="retry" className="h-3 w-3" />Waiting to sync</span>}
             </div>
           )}
@@ -956,6 +966,7 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState<View>("open");
   const [registeredProjects, setRegisteredProjects] = useState<string[]>([]);
+  const [scheduleTimeZone, setScheduleTimeZone] = useState("America/Toronto");
   const [query, setQuery] = useState("");
   const [project, setProject] = useState("");
   const [priority, setPriority] = useState("");
@@ -1032,6 +1043,7 @@ export default function Home() {
       const server = await Promise.all([
         request<{ todos: Todo[] }>("/api/todos"),
         request<{ projects: string[] }>("/api/projects"),
+        request<{ settings: { snoozeTimeZone: string } }>("/api/settings"),
       ]).catch((error) => {
         console.warn("[todo-ui] server load unavailable", { online: navigator.onLine, error });
         return null;
@@ -1049,6 +1061,7 @@ export default function Home() {
       setTodos([...pendingRecords.map(offlineRecordTodo), ...loaded]);
       setOfflineCount(pendingRecords.length);
       setRegisteredProjects(loadedProjects);
+      if (server?.[2].settings.snoozeTimeZone) setScheduleTimeZone(server[2].settings.snoozeTimeZone);
       if (server) void saveCachedServerState(loaded, loadedProjects);
       if (!server) setNotice({ tone: "success", text: pendingRecords.length ? "Offline — showing tasks waiting to sync." : "Offline — new tasks will sync when you reconnect." });
       console.info("[todo-ui] loaded", {
@@ -1284,6 +1297,7 @@ export default function Home() {
   const editingTodo = editingId === null ? null : todos.find((todo) => todo.id === editingId) ?? null;
   const imageAttachments = detailAttachments.filter((attachment) => attachment.kind === "image");
   const viewerAttachment = viewerIndex === null ? null : imageAttachments[viewerIndex] ?? null;
+  const recurrenceError = cronValidationError(editDraft?.recurrenceCron);
 
   function resizeCapture(textarea: HTMLTextAreaElement) {
     textarea.style.height = "auto";
@@ -1663,6 +1677,8 @@ export default function Home() {
       sourceId: null,
       completedAt: null,
       snoozedUntil: null,
+      recurrenceCron: null,
+      recurrenceLastFiredAt: null,
       pinned: false,
       createdAt,
       updatedAt: createdAt,
@@ -2039,6 +2055,7 @@ export default function Home() {
       dueDate: dateInputValue(todo.dueDate),
       project: todo.project ?? "",
       context: todo.context ?? "",
+      recurrenceCron: todo.recurrenceCron ?? "",
     });
     setDetailAttachments([]);
     setDetailUploads([]);
@@ -2064,6 +2081,10 @@ export default function Home() {
       setNotice({ tone: "error", text: "A task title is required." });
       return;
     }
+    if (recurrenceError) {
+      setNotice({ tone: "error", text: recurrenceError });
+      return;
+    }
     setSavingEdit(true);
     setNotice(null);
     try {
@@ -2075,6 +2096,7 @@ export default function Home() {
           priority: editDraft.priority,
           dueDate: editDraft.dueDate || null,
           context: editDraft.context || null,
+          recurrenceCron: editDraft.recurrenceCron || null,
         }),
       });
       setTodos((current) => current.map((todo) => todo.id === result.todo.id ? result.todo : todo));
@@ -2084,6 +2106,7 @@ export default function Home() {
         id: result.todo.id,
         titleLength: result.todo.title.length,
         notesLength: result.todo.notes.length,
+        recurrenceCron: result.todo.recurrenceCron,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : "The task details could not be saved.";
@@ -2095,6 +2118,11 @@ export default function Home() {
   }
 
   function taskAction(todo: Todo, action: TodoAction, source: "hover" | "swipe" | "details") {
+    if (action === "snooze" && todo.recurrenceCron) {
+      setNotice({ tone: "error", text: "Recurring tasks cannot be snoozed." });
+      console.warn("[todo-ui] recurring task snooze blocked", { id: todo.id, source, recurrenceCron: todo.recurrenceCron });
+      return;
+    }
     console.info("[todo-ui] task action requested", { id: todo.id, action, source });
     void performAction([todo.id], action);
   }
@@ -2156,7 +2184,7 @@ export default function Home() {
       return;
     }
     const targetIds = action === "complete" || action === "snooze"
-      ? selectedTodos.filter((todo) => todo.status === "open").map((todo) => todo.id)
+      ? selectedTodos.filter((todo) => todo.status === "open" && (action !== "snooze" || !todo.recurrenceCron)).map((todo) => todo.id)
       : action === "unsnooze"
         ? selectedTodos.filter((todo) => todo.status === "completed" || isSnoozed(todo, now)).map((todo) => todo.id)
         : selectedIds;
@@ -2620,7 +2648,7 @@ export default function Home() {
             {selectedTodos.some((todo) => todo.status === "open") && <button type="button" onClick={() => bulkAction("complete")} disabled={syncing} className="inline-flex min-w-max items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-[#216e4e] shadow-sm hover:bg-[#f8fbf9] disabled:opacity-50"><ActionIcon name="done" />Done</button>}
             {view === "snoozed" && selectedTodos.some((todo) => todo.status === "open") ? (
               <button type="button" onClick={() => bulkAction("unsnooze")} disabled={syncing} className="inline-flex min-w-max items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-[#216e4e] shadow-sm hover:bg-[#f8fbf9] disabled:opacity-50"><ActionIcon name="wake" />Wake</button>
-            ) : selectedTodos.some((todo) => todo.status === "open") ? (
+            ) : selectedTodos.some((todo) => todo.status === "open" && !todo.recurrenceCron) ? (
               <button type="button" onClick={() => bulkAction("snooze")} disabled={syncing} className="inline-flex min-w-max items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-amber-700 shadow-sm hover:bg-amber-50 disabled:opacity-50"><ActionIcon name="snooze" />Snooze</button>
             ) : null}
             {selectedTodos.some((todo) => todo.status === "completed") && <button type="button" onClick={() => bulkAction("unsnooze")} disabled={syncing} className="inline-flex min-w-max items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-[#4f5752] shadow-sm hover:bg-[#f8f9f8] disabled:opacity-50"><ActionIcon name="open" />Open</button>}
@@ -3021,6 +3049,21 @@ export default function Home() {
                   </div>
                   <input id={`task-due-date-${editingTodo.id}`} type="date" value={editDraft.dueDate} onChange={(event) => setEditDraft((current) => current ? { ...current, dueDate: event.target.value } : current)} className="h-11 w-full min-w-0 max-w-full rounded-xl border border-black/[0.1] bg-white px-3 text-sm outline-none focus:border-[#216e4e]/50 focus:ring-3 focus:ring-[#216e4e]/10" />
                 </div>
+                <label className="block min-w-0 sm:col-span-2">
+                  <span className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-[#69716c]"><ActionIcon name="repeat" className="h-3.5 w-3.5" />Recurring schedule</span>
+                  <input
+                    value={editDraft.recurrenceCron}
+                    onChange={(event) => setEditDraft((current) => current ? { ...current, recurrenceCron: event.target.value } : current)}
+                    placeholder="0 9 * * 1-5"
+                    autoCapitalize="off"
+                    autoCorrect="off"
+                    spellCheck={false}
+                    aria-invalid={Boolean(recurrenceError)}
+                    aria-describedby={`task-recurrence-help-${editingTodo.id}`}
+                    className={classNames("h-11 w-full min-w-0 max-w-full rounded-xl border bg-white px-3 font-mono text-sm outline-none focus:ring-3", recurrenceError ? "border-red-400 focus:border-red-500 focus:ring-red-500/10" : "border-black/[0.1] focus:border-[#216e4e]/50 focus:ring-[#216e4e]/10")}
+                  />
+                  <p id={`task-recurrence-help-${editingTodo.id}`} className={classNames("mt-1.5 text-xs leading-5", recurrenceError ? "font-medium text-red-600" : "text-[#7c847f]")}>{recurrenceError ?? `Five-field cron in ${scheduleTimeZone}. Recurring tasks cannot be snoozed.`}</p>
+                </label>
               </div>
 
               <div className="mt-5 border-t border-black/[0.07] pt-4">
@@ -3031,7 +3074,7 @@ export default function Home() {
                   ) : (
                     <button type="button" onClick={() => detailAction("complete")} disabled={syncing || savingEdit} className="inline-flex min-w-max items-center gap-2 rounded-xl bg-[#eaf3ed] px-3 py-2.5 text-sm font-semibold text-[#195d41] disabled:opacity-50"><ActionIcon name={todoActionIcon("complete", "Done")} />Done</button>
                   )}
-                  {editingTodo.status === "open" && (isSnoozed(editingTodo, now) ? (
+                  {editingTodo.status === "open" && !editDraft.recurrenceCron.trim() && (isSnoozed(editingTodo, now) ? (
                     <button type="button" onClick={() => detailAction("unsnooze")} disabled={syncing || savingEdit} className="inline-flex min-w-max items-center gap-2 rounded-xl bg-[#eaf3ed] px-3 py-2.5 text-sm font-semibold text-[#195d41] disabled:opacity-50"><ActionIcon name={todoActionIcon("unsnooze", "Wake")} />Wake</button>
                   ) : (
                     <button type="button" onClick={() => detailAction("snooze")} disabled={syncing || savingEdit} className="inline-flex min-w-max items-center gap-2 rounded-xl bg-amber-50 px-3 py-2.5 text-sm font-semibold text-amber-700 disabled:opacity-50"><ActionIcon name={todoActionIcon("snooze", "Snooze")} />Snooze</button>
@@ -3045,7 +3088,7 @@ export default function Home() {
 
             <div className="flex items-center justify-end gap-2 border-t border-black/[0.07] bg-white px-5 py-3 sm:px-6">
               <button type="button" onClick={closeTaskDetails} disabled={savingEdit} className="inline-flex h-11 items-center gap-2 rounded-xl px-4 text-sm font-semibold text-[#69716c] hover:bg-[#f3f4f2] disabled:opacity-50"><ActionIcon name="cancel" />Cancel</button>
-              <button type="submit" disabled={savingEdit || !editDraft.title.trim()} className="inline-flex h-11 items-center gap-2 rounded-xl bg-[#216e4e] px-5 text-sm font-semibold text-white hover:bg-[#195d41] disabled:opacity-50"><ActionIcon name="save" />{savingEdit ? "Saving…" : "Save changes"}</button>
+              <button type="submit" disabled={savingEdit || !editDraft.title.trim() || Boolean(recurrenceError)} className="inline-flex h-11 items-center gap-2 rounded-xl bg-[#216e4e] px-5 text-sm font-semibold text-white hover:bg-[#195d41] disabled:opacity-50"><ActionIcon name="save" />{savingEdit ? "Saving…" : "Save changes"}</button>
             </div>
           </form>
         </div>

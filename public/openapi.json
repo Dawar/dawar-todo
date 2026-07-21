@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Dawar Todo API",
-    "version": "1.1.0",
-    "description": "Programmatic access to the same tasks, projects, snooze, completion, merge, undo, settings, calendar-sharing, and attachment operations used by the Dawar Todo UI. Create a personal token in Settings, then send it as `Authorization: Bearer dt_live_...`. Tokens have full read/write access and should be treated as passwords. Token creation and revocation intentionally require an interactive ChatGPT session and are not exposed here."
+    "version": "1.2.0",
+    "description": "Programmatic access to the same tasks, projects, recurrence, snooze, completion, merge, undo, settings, calendar-sharing, and attachment operations used by the Dawar Todo UI. Create a personal token in Settings, then send it as `Authorization: Bearer dt_live_...`. Tokens have full read/write access and should be treated as passwords. Token creation and revocation intentionally require an interactive ChatGPT session and are not exposed here."
   },
   "servers": [
     {
@@ -82,7 +82,7 @@
         "tags": ["Todos"],
         "operationId": "bulkUpdateTodos",
         "summary": "Complete, snooze, wake, reassign, merge, or delete tasks",
-        "description": "Use `reproject` with `project: null` to remove assignment. Use `unsnooze` to wake a snoozed task or reopen a completed task. `snooze` uses the configured next-day wake time. `adjust_snooze` requires `snoozePreset`. Merge deletes the sources after creating the merged task. Mutation responses include an Undo token except for `adjust_snooze`, which deliberately preserves the preceding snooze Undo token.",
+        "description": "Use `reproject` with `project: null` to remove assignment. Use `unsnooze` to wake a snoozed task or reopen a completed task. `snooze` uses the configured next-day wake time and rejects tasks with a recurring schedule. `adjust_snooze` requires `snoozePreset`. Merge deletes the sources after creating the merged task. Mutation responses include an Undo token except for `adjust_snooze`, which deliberately preserves the preceding snooze Undo token.",
         "requestBody": {
           "required": true,
           "content": { "application/json": { "schema": { "$ref": "#/components/schemas/BulkTodoRequest" } } }
@@ -354,6 +354,8 @@
           "clientId": { "type": ["string", "null"] },
           "completedAt": { "type": ["string", "null"], "format": "date-time" },
           "snoozedUntil": { "type": ["string", "null"], "format": "date-time" },
+          "recurrenceCron": { "type": ["string", "null"], "description": "Five-field cron expression evaluated in the configured snoozeTimeZone. Recurring tasks cannot be snoozed." },
+          "recurrenceLastFiredAt": { "type": ["string", "null"], "format": "date-time", "readOnly": true, "description": "Last scheduled minute processed for this task." },
           "pinned": { "type": "boolean", "description": "Hoists the task into the Pinned group in the Open view. The value persists but is not rendered in other views." },
           "createdAt": { "type": "string", "format": "date-time" },
           "updatedAt": { "type": "string", "format": "date-time" },
@@ -371,6 +373,7 @@
           "dueDate": { "type": ["string", "null"], "format": "date" },
           "project": { "type": ["string", "null"], "maxLength": 120 },
           "context": { "type": ["string", "null"] },
+          "recurrenceCron": { "type": ["string", "null"], "description": "Optional five-field cron expression evaluated in the configured snoozeTimeZone." },
           "clientId": { "type": "string", "format": "uuid", "description": "Optional idempotency key for offline or retried creation." },
           "draftToken": { "type": "string", "format": "uuid" },
           "attachmentIds": { "type": "array", "maxItems": 12, "items": { "type": "string", "format": "uuid" } }
@@ -387,6 +390,7 @@
           "dueDate": { "type": ["string", "null"], "format": "date" },
           "project": { "type": ["string", "null"], "maxLength": 120 },
           "context": { "type": ["string", "null"] },
+          "recurrenceCron": { "type": ["string", "null"], "description": "Set a five-field cron schedule or null to stop recurrence. Assigning a schedule clears any snooze." },
           "pinned": { "type": "boolean", "description": "Pin or unpin the task in the Open view without changing task state." }
         }
       },
@@ -418,7 +422,7 @@
       "Settings": {
         "type": "object",
         "required": ["snoozeTimeZone", "snoozeWakeHour"],
-        "properties": { "snoozeTimeZone": { "type": "string", "example": "America/Toronto" }, "snoozeWakeHour": { "type": "integer", "minimum": 0, "maximum": 23 } }
+        "properties": { "snoozeTimeZone": { "type": "string", "example": "America/Toronto", "description": "IANA timezone used for both snooze wake times and recurring cron schedules." }, "snoozeWakeHour": { "type": "integer", "minimum": 0, "maximum": 23 } }
       },
       "CalendarFeed": {
         "type": "object",

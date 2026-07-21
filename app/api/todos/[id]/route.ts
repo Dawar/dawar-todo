@@ -37,6 +37,7 @@ export async function PATCH(
       update.project = project || null;
     }
     if (payload.context !== undefined) update.context = payload.context?.trim() || null;
+    if (payload.recurrenceCron !== undefined) update.recurrenceCron = payload.recurrenceCron == null ? null : String(payload.recurrenceCron);
     if (payload.pinned !== undefined) {
       if (typeof payload.pinned !== "boolean") return Response.json({ error: "Pinned must be true or false." }, { status: 400 });
       update.pinned = payload.pinned;
@@ -48,12 +49,13 @@ export async function PATCH(
       id,
       fields: Object.keys(update),
       status: result.todo.status,
+      recurrenceCron: result.todo.recurrenceCron,
       undoable: Boolean(result.undoToken),
     });
     return Response.json(result);
   } catch (error) {
     const message = error instanceof Error ? error.message : "The task could not be updated.";
-    const inputError = /project|required|invalid|limited/i.test(message);
+    const inputError = /project|required|invalid|limited|cron|minute|hour|month|weekday|recurring|snooz/i.test(message);
     console.error("[todo-api] update failed", { id, error });
     return Response.json({ error: message }, { status: inputError ? 400 : 500 });
   }

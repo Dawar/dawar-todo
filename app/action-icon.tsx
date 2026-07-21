@@ -26,6 +26,7 @@ import {
   Plus,
   RotateCcw,
   RefreshCw,
+  Repeat2,
   Save,
   Search,
   Settings2,
@@ -61,6 +62,7 @@ export type ActionIconName =
   | "open"
   | "restore"
   | "retry"
+  | "repeat"
   | "save"
   | "search"
   | "settings"
@@ -99,6 +101,7 @@ const icons: Record<ActionIconName, ComponentType<LucideProps>> = {
   open: RotateCcw,
   restore: RotateCcw,
   retry: RefreshCw,
+  repeat: Repeat2,
   save: Save,
   search: Search,
   settings: Settings2,

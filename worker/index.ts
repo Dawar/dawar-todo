@@ -2,6 +2,7 @@
 import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } from "vinext/server/image-optimization";
 import handler from "vinext/server/app-router-entry";
 import { appAccessResponse } from "./access";
+import { processRecurringTodos } from "./recurring";
 
 interface Env {
   ASSETS: Fetcher;
@@ -50,6 +51,13 @@ const worker = {
     }
 
     return handler.fetch(request, env, ctx);
+  },
+  async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext) {
+    console.info("[todo-recurring] scheduled event received", {
+      cron: controller.cron,
+      scheduledTime: new Date(controller.scheduledTime).toISOString(),
+    });
+    ctx.waitUntil(processRecurringTodos(env.DB, new Date(controller.scheduledTime)));
   },
 };
 
