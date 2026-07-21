@@ -205,6 +205,7 @@ test("animates task additions, removals, and list moves without overriding reduc
   assert.match(page, /flushSync/);
   assert.match(page, /viewTransitionName: taskViewTransitionName\(todo\.id\)/);
   assert.match(page, /prefers-reduced-motion: reduce/);
+  assert.match(page, /document\.querySelector\("\[role='dialog'\]\[aria-modal='true'\], \[data-task-notice\]"\)/);
   assert.match(page, /\[todo-motion\] list transition started/);
   assert.match(styles, /@keyframes todo-row-enter/);
   assert.match(styles, /@keyframes todo-row-exit/);
@@ -212,13 +213,22 @@ test("animates task additions, removals, and list moves without overriding reduc
   assert.match(styles, /@media \(prefers-reduced-motion: reduce\)/);
 });
 
-test("shows immediate task-aware snackbars and closes adjusted snooze feedback promptly", async () => {
+test("keeps optimistic task feedback stable, concurrent Done available, and closes adjusted snooze feedback promptly", async () => {
   const page = await readFile(new URL("app/page.tsx", root), "utf8");
 
   assert.match(page, /taskPreview\?: string/);
   assert.match(page, /dismissAt\?: number/);
   assert.match(page, /optimistic action snackbar shown/);
   assert.match(page, /setNotice\(\{[\s\S]*text: `\$\{optimisticLabel\}/);
+  assert.match(page, /operationId\?: string/);
+  assert.match(page, /pendingUndo\?: boolean/);
+  assert.match(page, /current\?\.operationId === operationId/);
+  assert.match(page, /const concurrentDone = action === "complete"/);
+  assert.match(page, /pendingCompletionIdsRef/);
+  assert.match(page, /notice\.pendingUndo \|\| notice\.undoToken/);
+  assert.match(page, /if \(notice\.pendingUndo\) return/);
+  assert.match(page, /data-task-notice/);
+  assert.match(page, /invisible inline-flex items-center/);
   assert.match(page, /const dismissAt = Date\.now\(\) \+ 1_500/);
   assert.match(page, /Math\.max\(0, notice\.dismissAt - Date\.now\(\)\)/);
   assert.match(page, /notice\.taskPreview && <p className="mt-0\.5 truncate text-xs text-white\/55"/);

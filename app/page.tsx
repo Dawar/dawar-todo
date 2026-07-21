@@ -47,6 +47,8 @@ type Notice = {
   tone: "success" | "error";
   text: string;
   taskPreview?: string;
+  operationId?: string;
+  pendingUndo?: boolean;
   undoToken?: string;
   snoozeIds?: number[];
   snoozedUntil?: string;
@@ -850,6 +852,7 @@ function useAnimatedTodoState(enabled: boolean): [Todo[], Dispatch<SetStateActio
       || !motionReadyRef.current
       || reducedMotion
       || document.visibilityState === "hidden"
+      || document.querySelector("[role='dialog'][aria-modal='true'], [data-task-notice]")
       || !transitionDocument.startViewTransition
       || transitionActiveRef.current
     ) {
@@ -1173,6 +1176,7 @@ export default function Home() {
   const persistTaskDraftRef = useRef<PersistTaskDraft | null>(null);
   const closeTaskDetailsRef = useRef<() => void>(() => undefined);
   const pendingTodoPatchesRef = useRef<Map<number, Record<string, unknown>>>(new Map());
+  const pendingCompletionIdsRef = useRef<Set<number>>(new Set());
   const liveSyncRunningRef = useRef(false);
   const lastLiveSnapshotRef = useRef("");
   const lastAppBadgeCountRef = useRef<number | null>(null);
@@ -1457,6 +1461,7 @@ export default function Home() {
 
   useEffect(() => {
     if (!notice) return;
+    if (notice.pendingUndo) return;
     const defaultDuration = notice.snoozeIds?.length ? 15_000 : notice.undoToken ? 8_000 : 5_000;
     const duration = notice.dismissAt === undefined ? defaultDuration : Math.max(0, notice.dismissAt - Date.now());
     const timer = window.setTimeout(() => setNotice(null), duration);
@@ -2212,14 +2217,18 @@ export default function Home() {
   }
 
   async function performAction(ids: number[], action: ExecutableTodoAction | "merge") {
-    if (!ids.length || syncing) return;
+    const concurrentDone = action === "complete";
+    if (!ids.length || (!concurrentDone && syncing)) return;
+    if (ids.some((id) => pendingCompletionIdsRef.current.has(id))) return;
     const previous = todos;
+    const previousById = new Map(previous.filter((todo) => ids.includes(todo.id)).map((todo) => [todo.id, todo]));
     const taskPreview = ids.length === 1 ? previous.find((todo) => todo.id === ids[0])?.title : undefined;
     if (ids.some((id) => id < 1)) {
       setNotice({ tone: "error", text: "That offline task will be actionable as soon as it syncs.", taskPreview });
       return;
     }
     const actionAt = new Date().toISOString();
+    const operationId = crypto.randomUUID();
     const openedCompleted = action === "unsnooze" && ids.every((id) => previous.find((todo) => todo.id === id)?.status === "completed");
     const wokeSnoozed = action === "unsnooze" && ids.every((id) => {
       const todo = previous.find((item) => item.id === id);
@@ -2234,13 +2243,16 @@ export default function Home() {
           : action === "unsnooze"
             ? openedCompleted ? "Opened" : wokeSnoozed ? "Woke" : "Restored to Open"
             : "Deleted";
-    setSyncing(true);
+    if (concurrentDone) ids.forEach((id) => pendingCompletionIdsRef.current.add(id));
+    else setSyncing(true);
     setNotice({
       tone: "success",
       text: `${optimisticLabel}: ${ids.length} ${ids.length === 1 ? "task" : "tasks"}${action === "merge" ? "…" : "."}`,
       taskPreview,
+      operationId,
+      pendingUndo: true,
     });
-    console.info("[todo-ui] optimistic action snackbar shown", { action, ids, taskPreview: Boolean(taskPreview) });
+    console.info("[todo-ui] optimistic action snackbar shown", { action, ids, operationId, taskPreview: Boolean(taskPreview), concurrentDone });
     if (action !== "merge") setTodos((current) => applyOptimisticAction(current, ids, action, actionAt));
     try {
       if (action === "merge") {
@@ -2253,7 +2265,12 @@ export default function Home() {
           result.todo,
           ...current.filter((todo) => !sourceIds.has(todo.id)),
         ]);
-        setNotice({ tone: "success", text: `Merged ${result.ids.length} tasks.`, undoToken: result.undoToken, taskPreview });
+        setNotice((current) => current?.operationId === operationId ? {
+          ...current,
+          text: `Merged ${result.ids.length} tasks.`,
+          pendingUndo: false,
+          undoToken: result.undoToken,
+        } : current);
         console.info("[todo-ui] merged", { sourceIds: result.ids, mergedId: result.todo.id });
       } else {
         const result = await request<{ todos: Todo[]; ids: number[]; snoozedUntil: string | null; undoToken: string }>("/api/todos/bulk", {
@@ -2265,15 +2282,15 @@ export default function Home() {
           setTodos((current) => current.map((todo) => updates.get(todo.id) ?? todo));
         }
         const label = action === "complete" ? "Done" : action === "snooze" ? "Snoozed until tomorrow" : action === "unsnooze" ? openedCompleted ? "Opened" : wokeSnoozed ? "Woke" : "Restored to Open" : "Deleted";
-        setNotice({
-          tone: "success",
+        setNotice((current) => current?.operationId === operationId ? {
+          ...current,
           text: `${label}: ${ids.length} ${ids.length === 1 ? "task" : "tasks"}.`,
-          taskPreview,
+          pendingUndo: false,
           undoToken: result.undoToken,
           snoozeIds: action === "snooze" ? result.ids : undefined,
           snoozedUntil: action === "snooze" ? result.snoozedUntil ?? undefined : undefined,
-        });
-        console.info("[todo-ui] action completed", { action, ids, snoozedUntil: result.snoozedUntil });
+        } : current);
+        console.info("[todo-ui] action completed", { action, ids, operationId, snoozedUntil: result.snoozedUntil });
       }
       setSelected((current) => {
         const next = new Set(current);
@@ -2281,11 +2298,21 @@ export default function Home() {
         return next;
       });
     } catch (error) {
-      setTodos(previous);
-      setNotice({ tone: "error", text: error instanceof Error ? error.message : "The action could not be completed.", taskPreview });
-      console.error("[todo-ui] action failed", { action, ids, error });
+      if (concurrentDone) {
+        setTodos((current) => current.map((todo) => previousById.get(todo.id) ?? todo));
+      } else {
+        setTodos(previous);
+      }
+      setNotice((current) => current?.operationId === operationId ? {
+        ...current,
+        tone: "error",
+        text: error instanceof Error ? error.message : "The action could not be completed.",
+        pendingUndo: false,
+      } : current);
+      console.error("[todo-ui] action failed", { action, ids, operationId, concurrentDone, error });
     } finally {
-      setSyncing(false);
+      if (concurrentDone) ids.forEach((id) => pendingCompletionIdsRef.current.delete(id));
+      else setSyncing(false);
     }
   }
 
@@ -2666,9 +2693,10 @@ export default function Home() {
   async function togglePin(todo: Todo) {
     if (view !== "open" || todo.id < 1 || todo.offline || syncing) return;
     const pinned = !todo.pinned;
+    const operationId = crypto.randomUUID();
     const previous = todos;
     setSyncing(true);
-    setNotice({ tone: "success", text: pinned ? "Task pinned." : "Task unpinned.", taskPreview: todo.title });
+    setNotice({ tone: "success", text: pinned ? "Task pinned." : "Task unpinned.", taskPreview: todo.title, operationId, pendingUndo: true });
     setTodos((current) => current.map((item) => item.id === todo.id ? { ...item, pinned } : item));
     try {
       const result = await request<{ todo: Todo; undoToken: string }>(`/api/todos/${todo.id}`, {
@@ -2676,11 +2704,11 @@ export default function Home() {
         body: JSON.stringify({ pinned }),
       });
       setTodos((current) => current.map((item) => item.id === result.todo.id ? result.todo : item));
-      setNotice({ tone: "success", text: pinned ? "Task pinned." : "Task unpinned.", taskPreview: todo.title, undoToken: result.undoToken });
-      console.info("[todo-ui] task pin changed", { id: todo.id, pinned, view });
+      setNotice((current) => current?.operationId === operationId ? { ...current, pendingUndo: false, undoToken: result.undoToken } : current);
+      console.info("[todo-ui] task pin changed", { id: todo.id, pinned, view, operationId });
     } catch (error) {
       setTodos(previous);
-      setNotice({ tone: "error", text: error instanceof Error ? error.message : "The pin could not be changed.", taskPreview: todo.title });
+      setNotice((current) => current?.operationId === operationId ? { ...current, tone: "error", text: error instanceof Error ? error.message : "The pin could not be changed.", pendingUndo: false } : current);
       console.error("[todo-ui] task pin change failed", { id: todo.id, pinned, error });
     } finally {
       setSyncing(false);
@@ -3688,6 +3716,7 @@ export default function Home() {
 
       {notice && (
         <div
+          data-task-notice
           className="pointer-events-none fixed inset-x-0 z-[60] mx-auto w-[calc(100%-2rem)] max-w-lg transition-[bottom] duration-200"
           style={{ bottom: selectedIds.length > 0 ? "max(5.25rem, calc(env(safe-area-inset-bottom) + 5rem))" : "max(1rem, env(safe-area-inset-bottom))" }}
         >
@@ -3703,16 +3732,22 @@ export default function Home() {
                 <p className="font-medium">{notice.text}</p>
                 {notice.taskPreview && <p className="mt-0.5 truncate text-xs text-white/55" title={notice.taskPreview}>{notice.taskPreview}</p>}
               </div>
-              {notice.undoToken && (
-                <button
-                  type="button"
-                  onClick={() => { setNotice(null); void undoAction(notice.undoToken as string); }}
-                  disabled={undoing}
-                  className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1.5 font-semibold text-[#8ee0b5] transition hover:bg-white/10 focus-visible:outline-2 focus-visible:outline-white disabled:opacity-50"
-                >
-                  <ActionIcon name="undo" />
-                  {undoing ? "Undoing…" : "Undo"}
-                </button>
+              {(notice.pendingUndo || notice.undoToken) && (
+                <span className="inline-flex min-w-[4.75rem] shrink-0 justify-end">
+                  {notice.undoToken ? (
+                    <button
+                      type="button"
+                      onClick={() => { setNotice(null); void undoAction(notice.undoToken as string); }}
+                      disabled={undoing}
+                      className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1.5 font-semibold text-[#8ee0b5] transition hover:bg-white/10 focus-visible:outline-2 focus-visible:outline-white disabled:opacity-50"
+                    >
+                      <ActionIcon name="undo" />
+                      {undoing ? "Undoing…" : "Undo"}
+                    </button>
+                  ) : (
+                    <span aria-hidden="true" className="invisible inline-flex items-center gap-1.5 px-2 py-1.5 font-semibold"><ActionIcon name="undo" />Undo</span>
+                  )}
+                </span>
               )}
               <button type="button" onClick={() => setNotice(null)} aria-label="Dismiss notification" title="Dismiss" className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-white/65 hover:bg-white/10 hover:text-white"><ActionIcon name="close" /></button>
             </div>
