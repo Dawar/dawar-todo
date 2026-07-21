@@ -235,3 +235,15 @@ test("shows fully optimistic Undo and snooze controls while preserving concurren
   assert.match(page, /notice\.taskPreview && <p className="mt-0\.5 truncate text-xs text-white\/55"/);
   assert.ok(page.indexOf("notice.taskPreview &&") < page.indexOf("notice.snoozeIds &&"));
 });
+
+test("keeps fixed action surfaces above the iPhone standalone safe area", async () => {
+  const [page, layout] = await Promise.all([
+    readFile(new URL("app/page.tsx", root), "utf8"),
+    readFile(new URL("app/layout.tsx", root), "utf8"),
+  ]);
+  assert.match(layout, /viewportFit:\s*"cover"/);
+  assert.match(page, /data-bulk-actions/);
+  assert.match(page, /calc\(env\(safe-area-inset-bottom, 0px\) \+ 0\.75rem\)/);
+  assert.match(page, /calc\(env\(safe-area-inset-bottom, 0px\) \+ 1rem\)/);
+  assert.match(page, /calc\(env\(safe-area-inset-bottom, 0px\) \+ 5rem\)/);
+});

@@ -3388,8 +3388,9 @@ export default function Home() {
 
       {selectedIds.length > 0 && (
         <div
+          data-bulk-actions
           className="pointer-events-none fixed inset-x-0 z-40 mx-auto w-[calc(100%-1rem)] max-w-4xl sm:w-[calc(100%-2rem)]"
-          style={{ bottom: "max(0.5rem, env(safe-area-inset-bottom))" }}
+          style={{ bottom: "calc(env(safe-area-inset-bottom, 0px) + 0.75rem)" }}
           aria-label="Bulk task actions"
         >
           <div className="pointer-events-auto flex items-center gap-1.5 overflow-x-auto rounded-2xl border border-[#216e4e]/20 bg-[#eaf3ed]/95 p-2 shadow-[0_16px_50px_rgba(23,61,42,0.2)] backdrop-blur-xl sm:gap-2">
@@ -3902,7 +3903,7 @@ export default function Home() {
         <div
           data-task-notice
           className="pointer-events-none fixed inset-x-0 z-[60] mx-auto w-[calc(100%-2rem)] max-w-lg transition-[bottom] duration-200"
-          style={{ bottom: selectedIds.length > 0 ? "max(5.25rem, calc(env(safe-area-inset-bottom) + 5rem))" : "max(1rem, env(safe-area-inset-bottom))" }}
+          style={{ bottom: selectedIds.length > 0 ? "calc(env(safe-area-inset-bottom, 0px) + 5rem)" : "calc(env(safe-area-inset-bottom, 0px) + 1rem)" }}
         >
           <div
             role={notice.tone === "error" ? "alert" : "status"}
