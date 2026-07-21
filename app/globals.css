@@ -36,6 +36,15 @@ textarea {
   font-family: inherit;
 }
 
+/* iOS zooms the entire viewport when a focused form control is below 16px. */
+@media (max-width: 767px) {
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+  }
+}
+
 ::selection {
   background: #cfe6d8;
   color: #123d2b;
