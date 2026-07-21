@@ -102,6 +102,7 @@ function cronDateParts(date: Date, timeZone: string) {
   const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
   const weekdays: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
   return {
+    year: Number(values.year),
     minute: Number(values.minute),
     hour: Number(values.hour),
     dayOfMonth: Number(values.day),
@@ -110,14 +111,83 @@ function cronDateParts(date: Date, timeZone: string) {
   };
 }
 
+function zonedDateTimeToUtc(
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+  minute: number,
+  timeZone: string,
+) {
+  const target = Date.UTC(year, month - 1, day, hour, minute, 0);
+  const offsetAt = (timestamp: number) => {
+    const current = cronDateParts(new Date(timestamp), timeZone);
+    return Date.UTC(current.year, current.month - 1, current.dayOfMonth, current.hour, current.minute, 0) - timestamp;
+  };
+  let result = target - offsetAt(target);
+  result = target - offsetAt(result);
+  return new Date(result);
+}
+
+function cronDayMatches(parsed: ParsedCron, month: number, dayOfMonth: number, dayOfWeek: number) {
+  const [, , cronDayOfMonth, cronMonth, cronDayOfWeek] = parsed.fields;
+  if (!cronMonth.values.has(month)) return false;
+  const dayOfMonthMatches = cronDayOfMonth.values.has(dayOfMonth);
+  const dayOfWeekMatches = cronDayOfWeek.values.has(dayOfWeek);
+  if (!cronDayOfMonth.wildcard && !cronDayOfWeek.wildcard) return dayOfMonthMatches || dayOfWeekMatches;
+  return dayOfMonthMatches && dayOfWeekMatches;
+}
+
 export function cronMatchesDate(expression: string, date: Date, timeZone: string) {
   const parsed = parseCronExpression(expression);
   const current = cronDateParts(date, timeZone);
-  const [minute, hour, dayOfMonth, month, dayOfWeek] = parsed.fields;
+  const [minute, hour, , month] = parsed.fields;
   if (!minute.values.has(current.minute) || !hour.values.has(current.hour) || !month.values.has(current.month)) return false;
 
-  const dayOfMonthMatches = dayOfMonth.values.has(current.dayOfMonth);
-  const dayOfWeekMatches = dayOfWeek.values.has(current.dayOfWeek);
-  if (!dayOfMonth.wildcard && !dayOfWeek.wildcard) return dayOfMonthMatches || dayOfWeekMatches;
-  return dayOfMonthMatches && dayOfWeekMatches;
+  return cronDayMatches(parsed, current.month, current.dayOfMonth, current.dayOfWeek);
+}
+
+export function latestCronOccurrence(
+  expression: string,
+  at: Date,
+  timeZone: string,
+  after?: Date | null,
+) {
+  const parsed = parseCronExpression(expression);
+  const atMinute = new Date(Math.floor(at.valueOf() / 60_000) * 60_000);
+  const current = cronDateParts(atMinute, timeZone);
+  const hours = [...parsed.fields[1].values].sort((a, b) => b - a);
+  const minutes = [...parsed.fields[0].values].sort((a, b) => b - a);
+  const afterValue = after?.valueOf() ?? atMinute.valueOf() - 5 * 366 * 24 * 60 * 60 * 1000;
+  const afterLocal = cronDateParts(new Date(afterValue), timeZone);
+  const earliestCalendarDay = Date.UTC(afterLocal.year, afterLocal.month - 1, afterLocal.dayOfMonth);
+  let calendarDay = Date.UTC(current.year, current.month - 1, current.dayOfMonth);
+
+  // Calendar-day iteration avoids an expensive minute-by-minute catch-up scan
+  // while still handling local timezone and daylight-saving transitions.
+  for (let daysChecked = 0; daysChecked <= 5 * 366 && calendarDay >= earliestCalendarDay; daysChecked += 1) {
+    const calendar = new Date(calendarDay);
+    const year = calendar.getUTCFullYear();
+    const month = calendar.getUTCMonth() + 1;
+    const dayOfMonth = calendar.getUTCDate();
+    const dayOfWeek = calendar.getUTCDay();
+    if (cronDayMatches(parsed, month, dayOfMonth, dayOfWeek)) {
+      for (const hour of hours) {
+        for (const minute of minutes) {
+          const candidate = zonedDateTimeToUtc(year, month, dayOfMonth, hour, minute, timeZone);
+          const candidateParts = cronDateParts(candidate, timeZone);
+          const isExactLocalTime = candidateParts.year === year
+            && candidateParts.month === month
+            && candidateParts.dayOfMonth === dayOfMonth
+            && candidateParts.hour === hour
+            && candidateParts.minute === minute;
+          if (isExactLocalTime && candidate.valueOf() <= atMinute.valueOf() && candidate.valueOf() > afterValue) {
+            return candidate;
+          }
+        }
+      }
+    }
+    calendarDay -= 24 * 60 * 60 * 1000;
+  }
+  return null;
 }

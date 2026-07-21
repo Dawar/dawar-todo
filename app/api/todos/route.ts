@@ -1,12 +1,31 @@
-import { createTodo, listTodos } from "../../../db/todos";
+import { env } from "cloudflare:workers";
+import { createTodo, ensureTodoDatabase, listTodos } from "../../../db/todos";
 import { scheduleAttachmentCleanup } from "../../../db/attachments";
+import { processRecurringTodos } from "../../../worker/recurring";
+
+let lastRecurrenceSyncMinute = "";
 
 export async function GET() {
   const startedAt = Date.now();
   try {
+    await ensureTodoDatabase();
+    const now = new Date();
+    const recurrenceMinute = new Date(Math.floor(now.valueOf() / 60_000) * 60_000).toISOString();
+    const recurrence = recurrenceMinute === lastRecurrenceSyncMinute
+      ? null
+      : await processRecurringTodos(env.DB, now, {
+        catchUp: true,
+        source: "todo-list-sync",
+      });
+    lastRecurrenceSyncMinute = recurrenceMinute;
     const todos = await listTodos();
     await scheduleAttachmentCleanup();
-    console.info("[todo-api] list", { count: todos.length, durationMs: Date.now() - startedAt });
+    console.info("[todo-api] list", {
+      count: todos.length,
+      recurringReopened: recurrence?.reopened ?? 0,
+      recurrenceSkipped: recurrence === null || Boolean("skipped" in recurrence && recurrence.skipped),
+      durationMs: Date.now() - startedAt,
+    });
     return Response.json({ todos, serverTime: new Date().toISOString() }, {
       headers: { "Cache-Control": "private, no-store, max-age=0" },
     });

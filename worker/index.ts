@@ -57,7 +57,7 @@ const worker = {
       cron: controller.cron,
       scheduledTime: new Date(controller.scheduledTime).toISOString(),
     });
-    ctx.waitUntil(processRecurringTodos(env.DB, new Date(controller.scheduledTime)));
+    ctx.waitUntil(processRecurringTodos(env.DB, new Date(controller.scheduledTime), { source: "scheduled" }));
   },
 };
 
