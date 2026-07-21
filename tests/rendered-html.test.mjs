@@ -193,3 +193,21 @@ test("supports a deliberate mobile pull gesture that fully reloads the app", asy
   assert.match(pullToRefresh, /\[role='dialog'\], input, textarea, select/);
   assert.match(pullToRefresh, /pointer-events-none fixed inset-x-0/);
 });
+
+test("animates task additions, removals, and list moves without overriding reduced motion", async () => {
+  const [page, styles] = await Promise.all([
+    readFile(new URL("app/page.tsx", root), "utf8"),
+    readFile(new URL("app/globals.css", root), "utf8"),
+  ]);
+
+  assert.match(page, /useAnimatedTodoState/);
+  assert.match(page, /startViewTransition/);
+  assert.match(page, /flushSync/);
+  assert.match(page, /viewTransitionName: taskViewTransitionName\(todo\.id\)/);
+  assert.match(page, /prefers-reduced-motion: reduce/);
+  assert.match(page, /\[todo-motion\] list transition started/);
+  assert.match(styles, /@keyframes todo-row-enter/);
+  assert.match(styles, /@keyframes todo-row-exit/);
+  assert.match(styles, /::view-transition-group\(\*\)/);
+  assert.match(styles, /@media \(prefers-reduced-motion: reduce\)/);
+});

@@ -3,15 +3,18 @@
 
 import {
   ClipboardEvent as ReactClipboardEvent,
+  type Dispatch,
   FormEvent,
   PointerEvent as ReactPointerEvent,
+  type SetStateAction,
+  useCallback,
   useEffect,
   useEffectEvent,
   useMemo,
   useRef,
   useState,
 } from "react";
-import { createPortal } from "react-dom";
+import { createPortal, flushSync } from "react-dom";
 import { attachmentFileMimeType, GENERIC_FILE_ACCEPT } from "../lib/attachment-files";
 import { ActionIcon, type ActionIconName } from "./action-icon";
 import { copyTextToClipboard } from "./copy-to-clipboard";
@@ -801,6 +804,86 @@ function offlineRecordTodo(record: OfflineTodoRecord): Todo {
   };
 }
 
+type TaskViewTransition = { finished: Promise<void> };
+type TaskViewTransitionDocument = Document & {
+  startViewTransition?: (update: () => void) => TaskViewTransition;
+};
+
+function taskViewTransitionName(id: number) {
+  return `todo-row-${id < 0 ? `offline-${Math.abs(id)}` : id}`;
+}
+
+function useAnimatedTodoState(enabled: boolean): [Todo[], Dispatch<SetStateAction<Todo[]>>] {
+  const [state, setState] = useState<Todo[]>([]);
+  const stateRef = useRef(state);
+  const enabledRef = useRef(enabled);
+  const motionReadyRef = useRef(false);
+  const transitionActiveRef = useRef(false);
+
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
+
+  useEffect(() => {
+    enabledRef.current = enabled;
+    motionReadyRef.current = false;
+    if (!enabled) return;
+    const frame = window.requestAnimationFrame(() => {
+      motionReadyRef.current = true;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [enabled]);
+
+  const updateState = useCallback<Dispatch<SetStateAction<Todo[]>>>((action) => {
+    const previous = stateRef.current;
+    const next = typeof action === "function" ? action(previous) : action;
+    if (Object.is(previous, next)) return;
+    stateRef.current = next;
+
+    const transitionDocument = document as TaskViewTransitionDocument;
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (
+      !enabledRef.current
+      || !motionReadyRef.current
+      || reducedMotion
+      || document.visibilityState === "hidden"
+      || !transitionDocument.startViewTransition
+      || transitionActiveRef.current
+    ) {
+      setState(next);
+      return;
+    }
+
+    const previousIds = new Set(previous.map((todo) => todo.id));
+    const nextIds = new Set(next.map((todo) => todo.id));
+    const added = next.filter((todo) => !previousIds.has(todo.id)).length;
+    const removed = previous.filter((todo) => !nextIds.has(todo.id)).length;
+    const changed = next.filter((todo) => {
+      const before = previous.find((candidate) => candidate.id === todo.id);
+      return before && before !== todo;
+    }).length;
+
+    try {
+      transitionActiveRef.current = true;
+      const transition = transitionDocument.startViewTransition(() => {
+        flushSync(() => setState(stateRef.current));
+      });
+      void transition.finished
+        .catch((error) => console.warn("[todo-motion] list transition interrupted", { error }))
+        .finally(() => {
+          transitionActiveRef.current = false;
+        });
+      console.info("[todo-motion] list transition started", { added, removed, changed });
+    } catch (error) {
+      transitionActiveRef.current = false;
+      setState(stateRef.current);
+      console.warn("[todo-motion] list transition unavailable", { error });
+    }
+  }, []);
+
+  return [state, updateState];
+}
+
 function todoActionIcon(action: TodoAction | "assign", label: string): ActionIconName {
   if (action === "complete") return "done";
   if (action === "snooze") return "snooze";
@@ -932,7 +1015,10 @@ function TaskRow({
   ];
 
   return (
-    <li className={classNames("group relative overflow-hidden", selected && "ring-1 ring-inset ring-[#216e4e]/30")}>
+    <li
+      style={{ viewTransitionName: taskViewTransitionName(todo.id) }}
+      className={classNames("todo-motion-row group relative overflow-hidden", selected && "ring-1 ring-inset ring-[#216e4e]/30")}
+    >
       <div className={classNames("absolute inset-0 flex items-center justify-between px-5 text-sm font-semibold text-white md:hidden", revealClass)} aria-hidden="true">
         <span className={classNames("inline-flex items-center gap-2 transition-opacity", offset > 0 ? "opacity-100" : "opacity-0")}><ActionIcon name={revealIcon} />{revealAction}</span>
         <span className={classNames("inline-flex items-center gap-2 transition-opacity", offset < 0 ? "opacity-100" : "opacity-0")}><ActionIcon name={revealIcon} />{revealAction}</span>
@@ -1022,8 +1108,8 @@ function TaskRow({
 }
 
 export default function Home() {
-  const [todos, setTodos] = useState<Todo[]>([]);
   const [loading, setLoading] = useState(true);
+  const [todos, setTodos] = useAnimatedTodoState(!loading);
   const [view, setView] = useState<View>("open");
   const [registeredProjects, setRegisteredProjects] = useState<string[]>([]);
   const [scheduleTimeZone, setScheduleTimeZone] = useState("America/Toronto");
@@ -1080,6 +1166,7 @@ export default function Home() {
   const autosaveTimerRef = useRef<number | null>(null);
   const autosaveInFlightRef = useRef(false);
   const queuedAutosaveRef = useRef<{ todoId: number; draft: TodoDraft; baseline: TodoDraft } | null>(null);
+  const syncOfflineQueueRef = useRef<(() => Promise<void>) | null>(null);
   const persistTaskDraftRef = useRef<PersistTaskDraft | null>(null);
   const closeTaskDetailsRef = useRef<() => void>(() => undefined);
   const pendingTodoPatchesRef = useRef<Map<number, Record<string, unknown>>>(new Map());
@@ -1261,10 +1348,10 @@ export default function Home() {
       .finally(() => active && setLoading(false));
     void persistOfflineStorage();
     return () => { active = false; };
-  }, []);
+  }, [setTodos]);
 
   useEffect(() => {
-    if (online && (offlineCount > 0 || offlineEditCount > 0)) void syncOfflineQueue();
+    if (online && (offlineCount > 0 || offlineEditCount > 0)) void syncOfflineQueueRef.current?.();
   }, [online, offlineCount, offlineEditCount]);
 
   useEffect(() => {
@@ -1968,6 +2055,8 @@ export default function Home() {
       syncingOfflineRef.current = false;
     }
   }
+
+  syncOfflineQueueRef.current = syncOfflineQueue;
 
   async function addTodo(event: FormEvent) {
     event.preventDefault();
