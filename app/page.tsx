@@ -3,18 +3,16 @@
 
 import {
   ClipboardEvent as ReactClipboardEvent,
-  type Dispatch,
   FormEvent,
   PointerEvent as ReactPointerEvent,
-  type SetStateAction,
-  useCallback,
   useEffect,
   useEffectEvent,
   useMemo,
   useRef,
   useState,
 } from "react";
-import { createPortal, flushSync } from "react-dom";
+import { createPortal } from "react-dom";
+import { useAutoAnimate } from "@formkit/auto-animate/react";
 import { attachmentFileMimeType, GENERIC_FILE_ACCEPT } from "../lib/attachment-files";
 import { ActionIcon, type ActionIconName } from "./action-icon";
 import { currentOpenTaskCount, updateNativeAppBadge } from "./app-badge";
@@ -809,87 +807,6 @@ function offlineRecordTodo(record: OfflineTodoRecord): Todo {
   };
 }
 
-type TaskViewTransition = { finished: Promise<void> };
-type TaskViewTransitionDocument = Document & {
-  startViewTransition?: (update: () => void) => TaskViewTransition;
-};
-
-function taskViewTransitionName(id: number) {
-  return `todo-row-${id < 0 ? `offline-${Math.abs(id)}` : id}`;
-}
-
-function useAnimatedTodoState(enabled: boolean): [Todo[], Dispatch<SetStateAction<Todo[]>>] {
-  const [state, setState] = useState<Todo[]>([]);
-  const stateRef = useRef(state);
-  const enabledRef = useRef(enabled);
-  const motionReadyRef = useRef(false);
-  const transitionActiveRef = useRef(false);
-
-  useEffect(() => {
-    stateRef.current = state;
-  }, [state]);
-
-  useEffect(() => {
-    enabledRef.current = enabled;
-    motionReadyRef.current = false;
-    if (!enabled) return;
-    const frame = window.requestAnimationFrame(() => {
-      motionReadyRef.current = true;
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [enabled]);
-
-  const updateState = useCallback<Dispatch<SetStateAction<Todo[]>>>((action) => {
-    const previous = stateRef.current;
-    const next = typeof action === "function" ? action(previous) : action;
-    if (Object.is(previous, next)) return;
-    stateRef.current = next;
-
-    const transitionDocument = document as TaskViewTransitionDocument;
-    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    if (
-      !enabledRef.current
-      || !motionReadyRef.current
-      || reducedMotion
-      || document.visibilityState === "hidden"
-      || document.querySelector("[role='dialog'][aria-modal='true'], [data-task-notice]")
-      || !transitionDocument.startViewTransition
-      || transitionActiveRef.current
-    ) {
-      setState(next);
-      return;
-    }
-
-    const previousIds = new Set(previous.map((todo) => todo.id));
-    const nextIds = new Set(next.map((todo) => todo.id));
-    const added = next.filter((todo) => !previousIds.has(todo.id)).length;
-    const removed = previous.filter((todo) => !nextIds.has(todo.id)).length;
-    const changed = next.filter((todo) => {
-      const before = previous.find((candidate) => candidate.id === todo.id);
-      return before && before !== todo;
-    }).length;
-
-    try {
-      transitionActiveRef.current = true;
-      const transition = transitionDocument.startViewTransition(() => {
-        flushSync(() => setState(stateRef.current));
-      });
-      void transition.finished
-        .catch((error) => console.warn("[todo-motion] list transition interrupted", { error }))
-        .finally(() => {
-          transitionActiveRef.current = false;
-        });
-      console.info("[todo-motion] list transition started", { added, removed, changed });
-    } catch (error) {
-      transitionActiveRef.current = false;
-      setState(stateRef.current);
-      console.warn("[todo-motion] list transition unavailable", { error });
-    }
-  }, []);
-
-  return [state, updateState];
-}
-
 function todoActionIcon(action: TodoAction | "assign", label: string): ActionIconName {
   if (action === "complete") return "done";
   if (action === "snooze") return "snooze";
@@ -1022,8 +939,7 @@ function TaskRow({
 
   return (
     <li
-      style={{ viewTransitionName: taskViewTransitionName(todo.id) }}
-      className={classNames("todo-motion-row group relative overflow-hidden", selected && "ring-1 ring-inset ring-[#216e4e]/30")}
+      className={classNames("group relative overflow-hidden", selected && "ring-1 ring-inset ring-[#216e4e]/30")}
     >
       <div className={classNames("absolute inset-0 flex items-center justify-between px-5 text-sm font-semibold text-white md:hidden", revealClass)} aria-hidden="true">
         <span className={classNames("inline-flex items-center gap-2 transition-opacity", offset > 0 ? "opacity-100" : "opacity-0")}><ActionIcon name={revealIcon} />{revealAction}</span>
@@ -1115,7 +1031,11 @@ function TaskRow({
 
 export default function Home() {
   const [loading, setLoading] = useState(true);
-  const [todos, setTodos] = useAnimatedTodoState(!loading);
+  const [todos, setTodos] = useState<Todo[]>([]);
+  const [taskListAnimationRef] = useAutoAnimate<HTMLUListElement>({
+    duration: 180,
+    easing: "cubic-bezier(0.2, 0.75, 0.25, 1)",
+  });
   const [view, setView] = useState<View>("open");
   const [registeredProjects, setRegisteredProjects] = useState<string[]>([]);
   const [scheduleTimeZone, setScheduleTimeZone] = useState("America/Toronto");
@@ -3148,7 +3068,7 @@ export default function Home() {
                 {[0, 1, 2, 3, 4].map((item) => <div key={item} className="h-[72px] animate-pulse rounded-xl bg-[#f3f4f2]" />)}
               </div>
             ) : filtered.length ? (
-              <ul className="divide-y divide-black/[0.055]">
+              <ul ref={taskListAnimationRef} className="divide-y divide-black/[0.055]">
                 {pinnedOpenTodos.length > 0 && (
                   <li className="flex items-center justify-between bg-[#f1f7f3] px-4 py-2 text-[11px] font-semibold uppercase tracking-wide text-[#216e4e] sm:px-5">
                     <span className="inline-flex items-center gap-1.5"><ActionIcon name="pin" className="h-3.5 w-3.5" />Pinned</span>
