@@ -268,3 +268,30 @@ test("installs an offline-capable PWA with idempotent queued task syncing", asyn
     access(new URL("public/icons/apple-touch-icon.png", root)),
   ]);
 });
+
+test("keeps the installed app badge aligned with the current Open task count", async () => {
+  const [page, settings, badgeSource, actionIcons, badgeModule] = await Promise.all([
+    readFile(new URL("app/page.tsx", root), "utf8"),
+    readFile(new URL("app/settings/page.tsx", root), "utf8"),
+    readFile(new URL("app/app-badge.ts", root), "utf8"),
+    readFile(new URL("app/action-icon.tsx", root), "utf8"),
+    import("../app/app-badge.ts"),
+  ]);
+  const now = new Date("2026-07-21T14:00:00.000Z").valueOf();
+
+  assert.equal(badgeModule.currentOpenTaskCount([
+    { status: "open", snoozedUntil: null },
+    { status: "open", snoozedUntil: "2026-07-21T13:00:00.000Z" },
+    { status: "open", snoozedUntil: "2026-07-21T15:00:00.000Z" },
+    { status: "completed", snoozedUntil: null },
+  ], now), 2);
+  assert.match(badgeSource, /setAppBadge/);
+  assert.match(badgeSource, /clearAppBadge/);
+  assert.match(badgeSource, /appleMobileBadgeRequiresNotificationPermission/);
+  assert.match(page, /updateNativeAppBadge\(openCount, "task-state"\)/);
+  assert.match(page, /currentOpenTaskCount\(todos, now\)/);
+  assert.match(settings, /App icon badge/);
+  assert.match(settings, /Notification\.requestPermission\(\)/);
+  assert.match(settings, /Dawar Todo will not send notification alerts/);
+  assert.match(actionIcons, /badge: BellDot/);
+});

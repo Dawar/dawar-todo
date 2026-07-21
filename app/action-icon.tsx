@@ -1,6 +1,7 @@
 import type { ComponentType } from "react";
 import {
   AlarmClock,
+  BellDot,
   CalendarDays,
   Camera,
   ChevronLeft,
@@ -57,6 +58,7 @@ export type ActionIconName =
   | "image"
   | "link"
   | "attachment"
+  | "badge"
   | "mic"
   | "next"
   | "open"
@@ -96,6 +98,7 @@ const icons: Record<ActionIconName, ComponentType<LucideProps>> = {
   image: ImagePlus,
   link: Link2,
   attachment: Paperclip,
+  badge: BellDot,
   mic: Mic,
   next: ChevronRight,
   open: RotateCcw,

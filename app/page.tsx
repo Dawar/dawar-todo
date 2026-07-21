@@ -17,6 +17,7 @@ import {
 import { createPortal, flushSync } from "react-dom";
 import { attachmentFileMimeType, GENERIC_FILE_ACCEPT } from "../lib/attachment-files";
 import { ActionIcon, type ActionIconName } from "./action-icon";
+import { currentOpenTaskCount, updateNativeAppBadge } from "./app-badge";
 import { copyTextToClipboard } from "./copy-to-clipboard";
 import { dueDateSortValue, formatDueDate, isDueTodayOrOverdue } from "./date-only";
 import { cronValidationError } from "../lib/cron";
@@ -1172,6 +1173,7 @@ export default function Home() {
   const pendingTodoPatchesRef = useRef<Map<number, Record<string, unknown>>>(new Map());
   const liveSyncRunningRef = useRef(false);
   const lastLiveSnapshotRef = useRef("");
+  const lastAppBadgeCountRef = useRef<number | null>(null);
   const overlayOpen = editingId !== null || projectSelectorOpen || projectDialog !== null || newProjectOpen || projectDeleteDialog !== null || filtersOpen || viewerIndex !== null || voiceTarget !== null;
 
   const routeDroppedAttachments = useEffectEvent((files: File[]) => {
@@ -1438,6 +1440,18 @@ export default function Home() {
     const timer = window.setInterval(() => setNow(Date.now()), 60_000);
     return () => window.clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    if (loading) return;
+    const openCount = currentOpenTaskCount(todos, now);
+    if (lastAppBadgeCountRef.current === openCount) return;
+    lastAppBadgeCountRef.current = openCount;
+    void updateNativeAppBadge(openCount, "task-state").then((result) => {
+      if (result.supported && !result.updated && lastAppBadgeCountRef.current === openCount) {
+        lastAppBadgeCountRef.current = null;
+      }
+    });
+  }, [loading, now, todos]);
 
   useEffect(() => {
     if (!notice) return;

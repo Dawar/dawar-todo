@@ -2,6 +2,12 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import { ActionIcon } from "../action-icon";
+import {
+  appleMobileBadgeRequiresNotificationPermission,
+  currentOpenTaskCount,
+  supportsNativeAppBadge,
+  updateNativeAppBadge,
+} from "../app-badge";
 import { copyTextToClipboard } from "../copy-to-clipboard";
 import { SiteHeader } from "../site-header";
 
@@ -26,6 +32,9 @@ type ApiToken = {
   lastUsedAt: string | null;
   expiresAt: string | null;
 };
+
+type BadgePermission = NotificationPermission | "not-required" | "unavailable";
+type BadgeTodo = { status: "open" | "completed"; snoozedUntil: string | null };
 
 const timeZones = [
   ["America/Toronto", "Eastern · Toronto"],
@@ -75,6 +84,10 @@ export default function SettingsPage() {
   const [busyTokenId, setBusyTokenId] = useState<string | null>(null);
   const [createdToken, setCreatedToken] = useState<{ apiToken: ApiToken; token: string; skill: string } | null>(null);
   const [shareNotice, setShareNotice] = useState<{ tone: "success" | "error"; text: string } | null>(null);
+  const [badgeSupported, setBadgeSupported] = useState<boolean | null>(null);
+  const [badgeRequiresPermission, setBadgeRequiresPermission] = useState(false);
+  const [badgePermission, setBadgePermission] = useState<BadgePermission>("unavailable");
+  const [updatingBadge, setUpdatingBadge] = useState(false);
 
   useEffect(() => {
     request<{ settings: Settings }>("/api/settings")
@@ -100,6 +113,20 @@ export default function SettingsPage() {
       })
       .catch((error: Error) => setShareNotice({ tone: "error", text: error.message }))
       .finally(() => setTokensLoading(false));
+
+    const badgeCheck = window.setTimeout(() => {
+      const supportsBadge = supportsNativeAppBadge();
+      const requiresPermission = supportsBadge && appleMobileBadgeRequiresNotificationPermission();
+      setBadgeSupported(supportsBadge);
+      setBadgeRequiresPermission(requiresPermission);
+      setBadgePermission(requiresPermission && "Notification" in window ? Notification.permission : supportsBadge ? "not-required" : "unavailable");
+      console.info("[todo-pwa] app badge capability checked", {
+        supported: supportsBadge,
+        requiresNotificationPermission: requiresPermission,
+        notificationPermission: requiresPermission && "Notification" in window ? Notification.permission : "not-required",
+      });
+    }, 0);
+    return () => window.clearTimeout(badgeCheck);
   }, []);
 
   useEffect(() => {
@@ -267,6 +294,38 @@ export default function SettingsPage() {
     }
   }
 
+  async function enableAppBadge() {
+    if (!badgeSupported || updatingBadge) return;
+    setUpdatingBadge(true);
+    setShareNotice(null);
+    try {
+      if (badgeRequiresPermission) {
+        if (!("Notification" in window)) throw new Error("Notification permission is unavailable on this device.");
+        const permission = Notification.permission === "default"
+          ? await Notification.requestPermission()
+          : Notification.permission;
+        setBadgePermission(permission);
+        if (permission !== "granted") {
+          throw new Error(permission === "denied"
+            ? "Badge permission is blocked. Allow notifications for Dawar Todo in device settings; the app will not send alerts."
+            : "Badge permission was not enabled.");
+        }
+      }
+
+      const { todos } = await request<{ todos: BadgeTodo[] }>("/api/todos");
+      const count = currentOpenTaskCount(todos);
+      const result = await updateNativeAppBadge(count, "settings");
+      if (!result.updated) throw new Error("The app badge could not be updated on this device.");
+      setShareNotice({ tone: "success", text: `App badge enabled with ${count} open ${count === 1 ? "task" : "tasks"}.` });
+      console.info("[todo-pwa] app badge enabled from settings", { count, badgeRequiresPermission });
+    } catch (error) {
+      setShareNotice({ tone: "error", text: error instanceof Error ? error.message : "The app badge could not be enabled." });
+      console.error("[todo-pwa] app badge enable failed", { badgeRequiresPermission, error });
+    } finally {
+      setUpdatingBadge(false);
+    }
+  }
+
   return (
     <main className="min-h-screen bg-[#f6f7f5] text-[#1d211f]">
       <SiteHeader current="settings" />
@@ -315,6 +374,40 @@ export default function SettingsPage() {
             {saved && <span role="status" className="text-sm font-medium text-[#216e4e]">Saved</span>}
           </div>
         </form>
+
+        <section aria-labelledby="app-badge-title" className="mt-6 rounded-2xl border border-black/[0.07] bg-white p-5 shadow-[0_10px_35px_rgba(30,45,36,0.06)] sm:p-7">
+          <div className="flex items-start gap-3">
+            <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-[#eaf3ed] text-[#216e4e]"><ActionIcon name="badge" className="h-5 w-5" /></span>
+            <div className="min-w-0 flex-1">
+              <h2 id="app-badge-title" className="text-lg font-semibold tracking-[-0.02em] text-[#202522]">App icon badge</h2>
+              <p className="mt-1 text-sm leading-6 text-[#69716c]">Show the current Open-task count on the installed app icon. The badge updates whenever the app loads, syncs, or changes tasks.</p>
+            </div>
+          </div>
+
+          <div className="mt-4 rounded-xl bg-[#f1f6f3] px-4 py-3 text-sm leading-6 text-[#4f6257]">
+            {badgeSupported === null
+              ? "Checking badge support…"
+              : !badgeSupported
+                ? "Native badges are not available in this browser. On iPhone and iPad, open Dawar Todo from its Home Screen icon."
+                : badgeRequiresPermission
+                  ? badgePermission === "granted"
+                    ? "Badge permission is enabled. Dawar Todo does not send notification alerts."
+                    : badgePermission === "denied"
+                      ? "Badge permission is blocked in device notification settings."
+                      : "iPhone and iPad require notification permission to display an icon badge. Dawar Todo will not send notification alerts."
+                  : "This installed browser supports native app-icon badges. No additional permission is required."}
+          </div>
+
+          <button
+            type="button"
+            onClick={() => void enableAppBadge()}
+            disabled={!badgeSupported || updatingBadge || (badgeRequiresPermission && badgePermission === "denied")}
+            className="mt-4 inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-[#216e4e] px-4 text-sm font-semibold text-white transition hover:bg-[#195d41] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#216e4e] disabled:cursor-not-allowed disabled:opacity-45"
+          >
+            <ActionIcon name="badge" />
+            {updatingBadge ? "Updating…" : badgeRequiresPermission && badgePermission === "denied" ? "Permission blocked" : badgeRequiresPermission && badgePermission !== "granted" ? "Enable app badge" : "Refresh app badge"}
+          </button>
+        </section>
 
         <section aria-labelledby="api-access-title" className="mt-6 rounded-2xl border border-black/[0.07] bg-white p-5 shadow-[0_10px_35px_rgba(30,45,36,0.06)] sm:p-7">
           <div className="flex items-start gap-3">
