@@ -3,6 +3,8 @@
 :root {
   --background: #f6f7f5;
   --foreground: #1d211f;
+  --mobile-action-bottom: max(3rem, calc(env(safe-area-inset-bottom, 0px) + 1.5rem));
+  --mobile-notice-above-actions: max(7.75rem, calc(env(safe-area-inset-bottom, 0px) + 6.25rem));
 }
 
 @theme inline {
@@ -42,6 +44,36 @@ textarea {
   select,
   textarea {
     font-size: 16px;
+  }
+}
+
+.bulk-actions-safe-bottom,
+.task-notice-safe-bottom {
+  bottom: var(--mobile-action-bottom);
+}
+
+.task-notice-safe-bottom[data-bulk-actions-visible="true"] {
+  bottom: var(--mobile-notice-above-actions);
+}
+
+@media (display-mode: standalone) and (max-width: 639px) {
+  :root {
+    --mobile-action-bottom: max(4rem, calc(env(safe-area-inset-bottom, 0px) + 2rem));
+    --mobile-notice-above-actions: max(8.75rem, calc(env(safe-area-inset-bottom, 0px) + 6.75rem));
+  }
+}
+
+@media (min-width: 640px) {
+  .bulk-actions-safe-bottom {
+    bottom: 0.5rem;
+  }
+
+  .task-notice-safe-bottom {
+    bottom: 1rem;
+  }
+
+  .task-notice-safe-bottom[data-bulk-actions-visible="true"] {
+    bottom: 5.25rem;
   }
 }
 

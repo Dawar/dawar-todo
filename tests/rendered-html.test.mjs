@@ -237,13 +237,18 @@ test("shows fully optimistic Undo and snooze controls while preserving concurren
 });
 
 test("keeps fixed action surfaces above the iPhone standalone safe area", async () => {
-  const [page, layout] = await Promise.all([
+  const [page, layout, styles] = await Promise.all([
     readFile(new URL("app/page.tsx", root), "utf8"),
     readFile(new URL("app/layout.tsx", root), "utf8"),
+    readFile(new URL("app/globals.css", root), "utf8"),
   ]);
   assert.match(layout, /viewportFit:\s*"cover"/);
   assert.match(page, /data-bulk-actions/);
-  assert.match(page, /calc\(env\(safe-area-inset-bottom, 0px\) \+ 0\.75rem\)/);
-  assert.match(page, /calc\(env\(safe-area-inset-bottom, 0px\) \+ 1rem\)/);
-  assert.match(page, /calc\(env\(safe-area-inset-bottom, 0px\) \+ 5rem\)/);
+  assert.match(page, /bulk-actions-safe-bottom/);
+  assert.match(page, /task-notice-safe-bottom/);
+  assert.match(page, /data-bulk-actions-visible=\{selectedIds\.length > 0\}/);
+  assert.match(styles, /--mobile-action-bottom:\s*max\(3rem, calc\(env\(safe-area-inset-bottom, 0px\) \+ 1\.5rem\)\)/);
+  assert.match(styles, /--mobile-notice-above-actions:\s*max\(7\.75rem, calc\(env\(safe-area-inset-bottom, 0px\) \+ 6\.25rem\)\)/);
+  assert.match(styles, /@media \(display-mode: standalone\) and \(max-width: 639px\)/);
+  assert.match(styles, /--mobile-action-bottom:\s*max\(4rem, calc\(env\(safe-area-inset-bottom, 0px\) \+ 2rem\)\)/);
 });
