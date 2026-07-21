@@ -47,6 +47,7 @@ type Notice = {
   taskPreview?: string;
   operationId?: string;
   pendingUndo?: boolean;
+  undoRequested?: boolean;
   undoToken?: string;
   snoozeIds?: number[];
   snoozedUntil?: string;
@@ -74,6 +75,16 @@ type Todo = {
   attachmentCount: number;
   clientId: string | null;
   offline?: boolean;
+};
+
+type OptimisticOperation = {
+  ids: number[];
+  previous: Todo[];
+  action: ExecutableTodoAction | "merge" | "pin";
+  undoRequested: boolean;
+  settled: boolean;
+  undoToken?: string;
+  snoozePreset?: SnoozePreset;
 };
 
 type TodoAttachment = {
@@ -757,6 +768,36 @@ function snoozeLabel(value: string) {
   return `Wakes ${new Intl.DateTimeFormat(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" }).format(wake)}`;
 }
 
+function optimisticSnoozeUntil(preset: SnoozePreset, now = new Date()) {
+  const durations: Partial<Record<SnoozePreset, number>> = {
+    "15m": 15 * 60 * 1000,
+    "30m": 30 * 60 * 1000,
+    "1h": 60 * 60 * 1000,
+    "2h": 2 * 60 * 60 * 1000,
+  };
+  const duration = durations[preset];
+  if (duration) return new Date(now.valueOf() + duration).toISOString();
+  const eightPm = new Date(now);
+  eightPm.setHours(20, 0, 0, 0);
+  if (eightPm.valueOf() <= now.valueOf()) eightPm.setDate(eightPm.getDate() + 1);
+  return eightPm.toISOString();
+}
+
+function restoreOptimisticTasks(current: Todo[], previous: Todo[], ids: number[]) {
+  const restoreIds = new Set(ids);
+  const currentById = new Map(current.map((todo) => [todo.id, todo]));
+  const previousIds = new Set(previous.map((todo) => todo.id));
+  const restored = previous.flatMap((todo) => {
+    if (restoreIds.has(todo.id)) return [todo];
+    const latest = currentById.get(todo.id);
+    return latest ? [latest] : [];
+  });
+  current.forEach((todo) => {
+    if (!previousIds.has(todo.id)) restored.push(todo);
+  });
+  return restored;
+}
+
 function dateInputValue(value: string | null) {
   return value?.match(/^\d{4}-\d{2}-\d{2}/)?.[0] ?? "";
 }
@@ -1097,6 +1138,7 @@ export default function Home() {
   const closeTaskDetailsRef = useRef<() => void>(() => undefined);
   const pendingTodoPatchesRef = useRef<Map<number, Record<string, unknown>>>(new Map());
   const pendingCompletionIdsRef = useRef<Set<number>>(new Set());
+  const optimisticOperationsRef = useRef<Map<string, OptimisticOperation>>(new Map());
   const liveSyncRunningRef = useRef(false);
   const lastLiveSnapshotRef = useRef("");
   const lastAppBadgeCountRef = useRef<number | null>(null);
@@ -1381,7 +1423,6 @@ export default function Home() {
 
   useEffect(() => {
     if (!notice) return;
-    if (notice.pendingUndo) return;
     const defaultDuration = notice.snoozeIds?.length ? 15_000 : notice.undoToken ? 8_000 : 5_000;
     const duration = notice.dismissAt === undefined ? defaultDuration : Math.max(0, notice.dismissAt - Date.now());
     const timer = window.setTimeout(() => setNotice(null), duration);
@@ -2141,7 +2182,6 @@ export default function Home() {
     if (!ids.length || (!concurrentDone && syncing)) return;
     if (ids.some((id) => pendingCompletionIdsRef.current.has(id))) return;
     const previous = todos;
-    const previousById = new Map(previous.filter((todo) => ids.includes(todo.id)).map((todo) => [todo.id, todo]));
     const taskPreview = ids.length === 1 ? previous.find((todo) => todo.id === ids[0])?.title : undefined;
     if (ids.some((id) => id < 1)) {
       setNotice({ tone: "error", text: "That offline task will be actionable as soon as it syncs.", taskPreview });
@@ -2165,12 +2205,22 @@ export default function Home() {
             : "Deleted";
     if (concurrentDone) ids.forEach((id) => pendingCompletionIdsRef.current.add(id));
     else setSyncing(true);
+    optimisticOperationsRef.current.set(operationId, {
+      ids,
+      previous,
+      action,
+      undoRequested: false,
+      settled: false,
+    });
     setNotice({
       tone: "success",
       text: `${optimisticLabel}: ${ids.length} ${ids.length === 1 ? "task" : "tasks"}${action === "merge" ? "…" : "."}`,
       taskPreview,
       operationId,
       pendingUndo: true,
+      snoozeIds: action === "snooze" ? ids : undefined,
+      snoozedUntil: action === "snooze" ? new Date(new Date(actionAt).valueOf() + 36 * 60 * 60 * 1000).toISOString() : undefined,
+      dismissAt: Date.now() + (action === "snooze" ? 15_000 : 8_000),
     });
     console.info("[todo-ui] optimistic action snackbar shown", { action, ids, operationId, taskPreview: Boolean(taskPreview), concurrentDone });
     if (action !== "merge") setTodos((current) => applyOptimisticAction(current, ids, action, actionAt));
@@ -2181,6 +2231,16 @@ export default function Home() {
           body: JSON.stringify({ ids, action }),
         });
         const sourceIds = new Set(result.ids);
+        const operation = optimisticOperationsRef.current.get(operationId);
+        if (operation) {
+          operation.settled = true;
+          operation.undoToken = result.undoToken;
+        }
+        if (operation?.undoRequested) {
+          setNotice((current) => current?.operationId === operationId ? null : current);
+          await undoAction(result.undoToken);
+          return;
+        }
         setTodos((current) => [
           result.todo,
           ...current.filter((todo) => !sourceIds.has(todo.id)),
@@ -2197,12 +2257,34 @@ export default function Home() {
           method: "POST",
           body: JSON.stringify({ ids, action }),
         });
-        if (action !== "delete") {
+        const operation = optimisticOperationsRef.current.get(operationId);
+        if (operation) {
+          operation.settled = true;
+          operation.undoToken = result.undoToken;
+        }
+        if (operation?.undoRequested) {
+          setNotice((current) => current?.operationId === operationId ? null : current);
+          await undoAction(result.undoToken);
+          return;
+        }
+        if (action === "snooze" && operation?.snoozePreset) {
+          setNotice((current) => current?.operationId === operationId ? {
+            ...current,
+            pendingUndo: false,
+            undoToken: result.undoToken,
+          } : current);
+          await persistSnoozeAdjustment(result.ids, operation.snoozePreset, operationId, result.undoToken, result.todos);
+          if (operation.undoRequested) {
+            setNotice((current) => current?.operationId === operationId ? null : current);
+            await undoAction(result.undoToken);
+            return;
+          }
+        } else if (action !== "delete") {
           const updates = new Map(result.todos.map((todo) => [todo.id, todo]));
           setTodos((current) => current.map((todo) => updates.get(todo.id) ?? todo));
         }
         const label = action === "complete" ? "Done" : action === "snooze" ? "Snoozed until tomorrow" : action === "unsnooze" ? openedCompleted ? "Opened" : wokeSnoozed ? "Woke" : "Restored to Open" : "Deleted";
-        setNotice((current) => current?.operationId === operationId ? {
+        if (!(action === "snooze" && operation?.snoozePreset)) setNotice((current) => current?.operationId === operationId ? {
           ...current,
           text: `${label}: ${ids.length} ${ids.length === 1 ? "task" : "tasks"}.`,
           pendingUndo: false,
@@ -2218,11 +2300,7 @@ export default function Home() {
         return next;
       });
     } catch (error) {
-      if (concurrentDone) {
-        setTodos((current) => current.map((todo) => previousById.get(todo.id) ?? todo));
-      } else {
-        setTodos(previous);
-      }
+      setTodos((current) => restoreOptimisticTasks(current, previous, ids));
       setNotice((current) => current?.operationId === operationId ? {
         ...current,
         tone: "error",
@@ -2231,53 +2309,125 @@ export default function Home() {
       } : current);
       console.error("[todo-ui] action failed", { action, ids, operationId, concurrentDone, error });
     } finally {
+      optimisticOperationsRef.current.delete(operationId);
       if (concurrentDone) ids.forEach((id) => pendingCompletionIdsRef.current.delete(id));
       else setSyncing(false);
     }
   }
 
-  async function adjustSnooze(ids: number[], preset: SnoozePreset) {
-    if (!ids.length || adjustingSnooze) return;
-    const dismissAt = Date.now() + 1_500;
-    setAdjustingSnooze(preset);
-    setNotice((current) => current ? { ...current, dismissAt } : current);
+  async function persistSnoozeAdjustment(
+    ids: number[],
+    preset: SnoozePreset,
+    operationId: string | undefined,
+    undoToken: string | undefined,
+    rollbackTodos: Todo[],
+  ) {
     try {
       const result = await request<{ todos: Todo[]; ids: number[]; snoozedUntil: string }>("/api/todos/bulk", {
         method: "POST",
         body: JSON.stringify({ ids, action: "adjust_snooze", snoozePreset: preset }),
       });
+      const operation = operationId ? optimisticOperationsRef.current.get(operationId) : undefined;
+      if (operation?.undoRequested) {
+        console.info("[todo-ui] snooze adjustment response deferred to queued undo", { preset, ids, operationId });
+        return;
+      }
       const updates = new Map(result.todos.map((todo) => [todo.id, todo]));
       setTodos((current) => current.map((todo) => updates.get(todo.id) ?? todo));
       setNow(Date.now());
-      setNotice((current) => current ? {
-        tone: "success",
-        text: `${snoozeLabel(result.snoozedUntil)}: ${result.ids.length} ${result.ids.length === 1 ? "task" : "tasks"}.`,
-        taskPreview: current.taskPreview,
-        undoToken: current.undoToken,
-        snoozeIds: result.ids,
-        snoozedUntil: result.snoozedUntil,
-        dismissAt,
-      } : current);
-      console.info("[todo-ui] snooze adjusted", {
+      setNotice((current) => {
+        if (!current || (operationId && current.operationId !== operationId)) return current;
+        return {
+          ...current,
+          tone: "success",
+          text: `${snoozeLabel(result.snoozedUntil)}: ${result.ids.length} ${result.ids.length === 1 ? "task" : "tasks"}.`,
+          pendingUndo: false,
+          undoToken: undoToken ?? current.undoToken,
+          snoozeIds: result.ids,
+          snoozedUntil: result.snoozedUntil,
+        };
+      });
+      console.info("[todo-ui] snooze adjustment reconciled", {
         preset,
         requestedIds: ids,
         changedIds: result.ids,
         snoozedUntil: result.snoozedUntil,
-        retainedUndo: Boolean(notice?.undoToken),
+        operationId: operationId ?? null,
+        retainedUndo: Boolean(undoToken),
       });
     } catch (error) {
+      const rollback = new Map(rollbackTodos.map((todo) => [todo.id, todo]));
+      setTodos((current) => current.map((todo) => rollback.get(todo.id) ?? todo));
       const message = error instanceof Error ? error.message : "The snooze time could not be adjusted.";
-      setNotice((current) => ({
-        tone: "error",
-        text: message,
-        taskPreview: current?.taskPreview,
-        undoToken: current?.undoToken,
-        snoozeIds: current?.snoozeIds ?? ids,
-        snoozedUntil: current?.snoozedUntil,
-      }));
-      console.error("[todo-ui] snooze adjustment failed", { preset, ids, error });
+      setNotice((current) => {
+        if (operationId && current?.operationId !== operationId) return current;
+        return {
+          tone: "error",
+          text: message,
+          taskPreview: current?.taskPreview,
+          operationId: current?.operationId,
+          undoToken: undoToken ?? current?.undoToken,
+          snoozeIds: current?.snoozeIds ?? ids,
+          snoozedUntil: current?.snoozedUntil,
+        };
+      });
+      console.error("[todo-ui] snooze adjustment failed", { preset, ids, operationId: operationId ?? null, error });
     } finally {
       setAdjustingSnooze(null);
+    }
+  }
+
+  async function adjustSnooze(ids: number[], preset: SnoozePreset, operationId?: string) {
+    if (!ids.length || adjustingSnooze) return;
+    const dismissAt = Date.now() + 1_500;
+    const optimisticUntil = optimisticSnoozeUntil(preset);
+    const rollbackTodos = todos.filter((todo) => ids.includes(todo.id));
+    setAdjustingSnooze(preset);
+    setTodos((current) => current.map((todo) => ids.includes(todo.id) ? { ...todo, snoozedUntil: optimisticUntil } : todo));
+    setNow(Date.now());
+    setNotice((current) => current ? {
+      ...current,
+      text: `${snoozeLabel(optimisticUntil)}: ${ids.length} ${ids.length === 1 ? "task" : "tasks"}.`,
+      snoozeIds: ids,
+      snoozedUntil: optimisticUntil,
+      dismissAt,
+    } : current);
+
+    const operation = operationId ? optimisticOperationsRef.current.get(operationId) : undefined;
+    if (operation && !operation.settled) {
+      operation.snoozePreset = preset;
+      setAdjustingSnooze(null);
+      console.info("[todo-ui] snooze adjustment queued during optimistic action", { preset, ids, operationId });
+      return;
+    }
+    await persistSnoozeAdjustment(ids, preset, operationId, notice?.undoToken, rollbackTodos);
+  }
+
+  function requestNoticeUndo(currentNotice: NonNullable<Notice>) {
+    if (undoing || currentNotice.undoRequested) return;
+    const operation = currentNotice.operationId
+      ? optimisticOperationsRef.current.get(currentNotice.operationId)
+      : undefined;
+    if (operation) {
+      operation.undoRequested = true;
+      setTodos((current) => restoreOptimisticTasks(current, operation.previous, operation.ids));
+      setNotice((current) => current?.operationId === currentNotice.operationId ? {
+        ...current,
+        text: "Undoing…",
+        undoRequested: true,
+        dismissAt: Date.now() + 8_000,
+      } : current);
+      console.info("[todo-ui] optimistic undo queued", {
+        operationId: currentNotice.operationId,
+        action: operation.action,
+        ids: operation.ids,
+        tokenReady: Boolean(operation.undoToken),
+      });
+      return;
+    }
+    if (currentNotice.undoToken) {
+      setNotice(null);
+      void undoAction(currentNotice.undoToken);
     }
   }
 
@@ -2301,7 +2451,17 @@ export default function Home() {
       console.info("[todo-ui] action undone", { restored: result.restored, restoredAttachments: result.restoredAttachments ?? 0 });
     } catch (error) {
       setNotice({ tone: "error", text: error instanceof Error ? error.message : "That action could not be undone." });
-      console.error("[todo-ui] undo failed", error);
+      try {
+        const { todos: remoteTodos } = await request<{ todos: Todo[]; serverTime: string }>(`/api/todos?undo-reconcile=${Date.now()}`, { cache: "no-store" });
+        const pendingPatches = pendingTodoPatchesRef.current;
+        setTodos((current) => [
+          ...current.filter((todo) => todo.offline),
+          ...remoteTodos.map((todo) => patchTodo(todo, pendingPatches.get(todo.id) ?? {})),
+        ]);
+        console.warn("[todo-ui] failed undo reconciled from server", { remote: remoteTodos.length, error });
+      } catch (reconcileError) {
+        console.error("[todo-ui] undo and reconciliation failed", { error, reconcileError });
+      }
     } finally {
       setUndoing(false);
     }
@@ -2616,21 +2776,33 @@ export default function Home() {
     const operationId = crypto.randomUUID();
     const previous = todos;
     setSyncing(true);
-    setNotice({ tone: "success", text: pinned ? "Task pinned." : "Task unpinned.", taskPreview: todo.title, operationId, pendingUndo: true });
+    optimisticOperationsRef.current.set(operationId, { ids: [todo.id], previous, action: "pin", undoRequested: false, settled: false });
+    setNotice({ tone: "success", text: pinned ? "Task pinned." : "Task unpinned.", taskPreview: todo.title, operationId, pendingUndo: true, dismissAt: Date.now() + 8_000 });
     setTodos((current) => current.map((item) => item.id === todo.id ? { ...item, pinned } : item));
     try {
       const result = await request<{ todo: Todo; undoToken: string }>(`/api/todos/${todo.id}`, {
         method: "PATCH",
         body: JSON.stringify({ pinned }),
       });
+      const operation = optimisticOperationsRef.current.get(operationId);
+      if (operation) {
+        operation.settled = true;
+        operation.undoToken = result.undoToken;
+      }
+      if (operation?.undoRequested) {
+        setNotice((current) => current?.operationId === operationId ? null : current);
+        await undoAction(result.undoToken);
+        return;
+      }
       setTodos((current) => current.map((item) => item.id === result.todo.id ? result.todo : item));
       setNotice((current) => current?.operationId === operationId ? { ...current, pendingUndo: false, undoToken: result.undoToken } : current);
       console.info("[todo-ui] task pin changed", { id: todo.id, pinned, view, operationId });
     } catch (error) {
-      setTodos(previous);
+      setTodos((current) => restoreOptimisticTasks(current, previous, [todo.id]));
       setNotice((current) => current?.operationId === operationId ? { ...current, tone: "error", text: error instanceof Error ? error.message : "The pin could not be changed.", pendingUndo: false } : current);
       console.error("[todo-ui] task pin change failed", { id: todo.id, pinned, error });
     } finally {
+      optimisticOperationsRef.current.delete(operationId);
       setSyncing(false);
     }
   }
@@ -3652,21 +3824,17 @@ export default function Home() {
                 <p className="font-medium">{notice.text}</p>
                 {notice.taskPreview && <p className="mt-0.5 truncate text-xs text-white/55" title={notice.taskPreview}>{notice.taskPreview}</p>}
               </div>
-              {(notice.pendingUndo || notice.undoToken) && (
+              {(notice.operationId || notice.undoToken) && (
                 <span className="inline-flex min-w-[4.75rem] shrink-0 justify-end">
-                  {notice.undoToken ? (
-                    <button
-                      type="button"
-                      onClick={() => { setNotice(null); void undoAction(notice.undoToken as string); }}
-                      disabled={undoing}
-                      className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1.5 font-semibold text-[#8ee0b5] transition hover:bg-white/10 focus-visible:outline-2 focus-visible:outline-white disabled:opacity-50"
-                    >
-                      <ActionIcon name="undo" />
-                      {undoing ? "Undoing…" : "Undo"}
-                    </button>
-                  ) : (
-                    <span aria-hidden="true" className="invisible inline-flex items-center gap-1.5 px-2 py-1.5 font-semibold"><ActionIcon name="undo" />Undo</span>
-                  )}
+                  <button
+                    type="button"
+                    onClick={() => requestNoticeUndo(notice)}
+                    disabled={undoing || notice.undoRequested}
+                    className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1.5 font-semibold text-[#8ee0b5] transition hover:bg-white/10 focus-visible:outline-2 focus-visible:outline-white disabled:opacity-50"
+                  >
+                    <ActionIcon name="undo" />
+                    {undoing || notice.undoRequested ? "Undoing…" : "Undo"}
+                  </button>
                 </span>
               )}
               <button type="button" onClick={() => setNotice(null)} aria-label="Dismiss notification" title="Dismiss" className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-white/65 hover:bg-white/10 hover:text-white"><ActionIcon name="close" /></button>
@@ -3677,7 +3845,7 @@ export default function Home() {
                   <button
                     key={adjustment.value}
                     type="button"
-                    onClick={() => void adjustSnooze(notice.snoozeIds as number[], adjustment.value)}
+                    onClick={() => void adjustSnooze(notice.snoozeIds as number[], adjustment.value, notice.operationId)}
                     disabled={adjustingSnooze !== null}
                     className="min-w-max rounded-lg bg-white/10 px-2.5 py-1.5 text-xs font-semibold text-white transition hover:bg-white/20 focus-visible:outline-2 focus-visible:outline-white disabled:opacity-50"
                   >

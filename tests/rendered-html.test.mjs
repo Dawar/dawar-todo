@@ -208,7 +208,7 @@ test("animates task additions, removals, and moves inside the list stacking cont
   assert.doesNotMatch(styles, /::view-transition|todo-motion-row/);
 });
 
-test("keeps optimistic task feedback stable, concurrent Done available, and closes adjusted snooze feedback promptly", async () => {
+test("shows fully optimistic Undo and snooze controls while preserving concurrent Done", async () => {
   const page = await readFile(new URL("app/page.tsx", root), "utf8");
 
   assert.match(page, /taskPreview\?: string/);
@@ -217,13 +217,19 @@ test("keeps optimistic task feedback stable, concurrent Done available, and clos
   assert.match(page, /setNotice\(\{[\s\S]*text: `\$\{optimisticLabel\}/);
   assert.match(page, /operationId\?: string/);
   assert.match(page, /pendingUndo\?: boolean/);
+  assert.match(page, /undoRequested\?: boolean/);
   assert.match(page, /current\?\.operationId === operationId/);
   assert.match(page, /const concurrentDone = action === "complete"/);
   assert.match(page, /pendingCompletionIdsRef/);
-  assert.match(page, /notice\.pendingUndo \|\| notice\.undoToken/);
-  assert.match(page, /if \(notice\.pendingUndo\) return/);
+  assert.match(page, /optimisticOperationsRef/);
+  assert.match(page, /snoozeIds: action === "snooze" \? ids : undefined/);
+  assert.match(page, /notice\.operationId \|\| notice\.undoToken/);
+  assert.match(page, /requestNoticeUndo\(notice\)/);
+  assert.match(page, /operation\.snoozePreset = preset/);
+  assert.match(page, /snooze adjustment queued during optimistic action/);
+  assert.doesNotMatch(page, /if \(notice\.pendingUndo\) return/);
   assert.match(page, /data-task-notice/);
-  assert.match(page, /invisible inline-flex items-center/);
+  assert.doesNotMatch(page, /invisible inline-flex items-center/);
   assert.match(page, /const dismissAt = Date\.now\(\) \+ 1_500/);
   assert.match(page, /Math\.max\(0, notice\.dismissAt - Date\.now\(\)\)/);
   assert.match(page, /notice\.taskPreview && <p className="mt-0\.5 truncate text-xs text-white\/55"/);
