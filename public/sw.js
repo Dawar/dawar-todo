@@ -1,4 +1,4 @@
-const CACHE_NAME = "dawar-todo-shell-v2";
+const CACHE_NAME = "dawar-todo-shell-v3";
 const SHELL = [
   "/",
   "/manifest.webmanifest",

@@ -1,4 +1,4 @@
-import { TodoUpdate, updateTodo } from "../../../../db/todos";
+import { TodoUpdate, updateTodo, type TodoMutationMetadata } from "../../../../db/todos";
 
 const statuses = new Set(["open", "completed"]);
 
@@ -11,7 +11,10 @@ export async function PATCH(
   if (!Number.isInteger(id) || id < 1) return Response.json({ error: "Invalid task." }, { status: 400 });
 
   try {
-    const payload = (await request.json()) as TodoUpdate;
+    const payload = (await request.json()) as TodoUpdate & {
+      mutation?: { mutationId?: unknown; fieldTimestamps?: unknown };
+      autosave?: unknown;
+    };
     const update: TodoUpdate = {};
     if (payload.title !== undefined) {
       const title = String(payload.title).trim();
@@ -43,19 +46,40 @@ export async function PATCH(
       update.pinned = payload.pinned;
     }
 
-    const result = await updateTodo(id, update);
+    const mutation: TodoMutationMetadata = {
+      recordUndo: payload.autosave !== true,
+    };
+    if (payload.mutation !== undefined) {
+      if (!payload.mutation || typeof payload.mutation !== "object") {
+        return Response.json({ error: "Sync mutation metadata is invalid." }, { status: 400 });
+      }
+      if (typeof payload.mutation.mutationId !== "string") {
+        return Response.json({ error: "A sync mutation identifier is required." }, { status: 400 });
+      }
+      if (!payload.mutation.fieldTimestamps || typeof payload.mutation.fieldTimestamps !== "object" || Array.isArray(payload.mutation.fieldTimestamps)) {
+        return Response.json({ error: "Sync field timestamps are required." }, { status: 400 });
+      }
+      mutation.mutationId = payload.mutation.mutationId;
+      mutation.fieldTimestamps = Object.fromEntries(
+        Object.entries(payload.mutation.fieldTimestamps).map(([field, timestamp]) => [field, String(timestamp)]),
+      ) as TodoMutationMetadata["fieldTimestamps"];
+    }
+
+    const result = await updateTodo(id, update, mutation);
     if (!result) return Response.json({ error: "Task not found." }, { status: 404 });
     console.info("[todo-api] updated", {
       id,
       fields: Object.keys(update),
       status: result.todo.status,
       recurrenceCron: result.todo.recurrenceCron,
+      appliedFields: result.appliedFields,
+      autosave: payload.autosave === true,
       undoable: Boolean(result.undoToken),
     });
     return Response.json(result);
   } catch (error) {
     const message = error instanceof Error ? error.message : "The task could not be updated.";
-    const inputError = /project|required|invalid|limited|cron|minute|hour|month|weekday|recurring|snooz/i.test(message);
+    const inputError = /project|required|invalid|limited|cron|minute|hour|month|weekday|recurring|snooz|sync|timestamp|future/i.test(message);
     console.error("[todo-api] update failed", { id, error });
     return Response.json({ error: message }, { status: inputError ? 400 : 500 });
   }

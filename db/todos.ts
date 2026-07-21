@@ -68,6 +68,12 @@ export type TodoUpdate = Partial<
   Pick<Todo, "title" | "notes" | "priority" | "dueDate" | "project" | "context" | "snoozedUntil" | "recurrenceCron" | "pinned">
 > & { status?: TodoStatus };
 
+export type TodoMutationMetadata = {
+  mutationId?: string;
+  fieldTimestamps?: Partial<Record<keyof TodoUpdate, string>>;
+  recordUndo?: boolean;
+};
+
 export type TodoSettings = {
   snoozeTimeZone: string;
   snoozeWakeHour: number;
@@ -151,6 +157,16 @@ export async function ensureTodoDatabase() {
         )
       `),
       db.prepare(`
+        CREATE TABLE IF NOT EXISTS todo_field_versions (
+          todo_id INTEGER NOT NULL,
+          field TEXT NOT NULL,
+          version TEXT NOT NULL,
+          mutation_id TEXT NOT NULL,
+          updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+          PRIMARY KEY (todo_id, field)
+        )
+      `),
+      db.prepare(`
         CREATE TABLE IF NOT EXISTS todo_projects (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           name TEXT NOT NULL UNIQUE,
@@ -228,6 +244,7 @@ export async function ensureTodoDatabase() {
     await db.prepare("CREATE INDEX IF NOT EXISTS todos_recurrence_cron_idx ON todos(recurrence_cron)").run();
     await db.prepare("CREATE INDEX IF NOT EXISTS todos_pinned_idx ON todos(pinned)").run();
     await db.prepare("CREATE INDEX IF NOT EXISTS todo_action_history_created_at_idx ON todo_action_history(created_at)").run();
+    await db.prepare("CREATE INDEX IF NOT EXISTS todo_field_versions_mutation_idx ON todo_field_versions(mutation_id)").run();
     await db.batch([
       db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS todo_calendar_feeds_token_idx ON todo_calendar_feeds(token)"),
       db.prepare("CREATE INDEX IF NOT EXISTS todo_calendar_feeds_revoked_at_idx ON todo_calendar_feeds(revoked_at)"),
@@ -536,7 +553,25 @@ export async function createTodo(input: {
   }
 }
 
-export async function updateTodo(id: number, update: TodoUpdate): Promise<{ todo: Todo; undoToken: string | null } | null> {
+const TODO_MUTATION_FIELDS = new Set<keyof TodoUpdate>([
+  "title", "notes", "status", "priority", "dueDate", "project", "context", "snoozedUntil", "recurrenceCron", "pinned",
+]);
+
+function normalizedMutationTimestamp(input: string | undefined, receivedAt: Date) {
+  if (!input) return receivedAt.toISOString();
+  const timestamp = new Date(input);
+  if (Number.isNaN(timestamp.valueOf())) throw new Error("A sync field timestamp is invalid.");
+  if (timestamp.valueOf() > receivedAt.valueOf() + 5 * 60 * 1000) {
+    throw new Error("A sync field timestamp is too far in the future.");
+  }
+  return timestamp.toISOString();
+}
+
+export async function updateTodo(
+  id: number,
+  update: TodoUpdate,
+  metadata: TodoMutationMetadata = {},
+): Promise<{ todo: Todo; undoToken: string | null; appliedFields: string[] } | null> {
   await ensureTodoDatabase();
   const normalizedUpdate = { ...update };
   if (normalizedUpdate.recurrenceCron !== undefined) normalizedUpdate.recurrenceCron = normalizeCronExpression(normalizedUpdate.recurrenceCron);
@@ -556,7 +591,7 @@ export async function updateTodo(id: number, update: TodoUpdate): Promise<{ todo
     .filter(([, value]) => value !== undefined);
   if (!entries.length) {
     const todo = await getTodo(id);
-    return todo ? { todo, undoToken: null } : null;
+    return todo ? { todo, undoToken: null, appliedFields: [] } : null;
   }
 
   const db = database();
@@ -565,39 +600,93 @@ export async function updateTodo(id: number, update: TodoUpdate): Promise<{ todo
   if (normalizedUpdate.snoozedUntil && (before.recurrence_cron || normalizedUpdate.recurrenceCron)) {
     throw new Error("Recurring tasks cannot be snoozed.");
   }
-  const undoToken = crypto.randomUUID();
-
-  const values = entries.map(([field, value]) => field === "pinned" ? value ? 1 : 0 : value);
-  const setters = entries.map(([field]) => `${columnByField[field]} = ?`);
-  if (normalizedUpdate.status === "completed") {
-    setters.push("completed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')", "snoozed_until = NULL");
-  } else if (normalizedUpdate.status === "open") {
-    setters.push("completed_at = NULL");
+  const receivedAt = new Date();
+  const mutationId = metadata.mutationId?.trim() || crypto.randomUUID();
+  if (!/^[0-9a-f-]{36}$/i.test(mutationId)) throw new Error("A sync mutation identifier is invalid.");
+  const fieldTimestamps = metadata.fieldTimestamps ?? {};
+  for (const field of Object.keys(fieldTimestamps) as Array<keyof TodoUpdate>) {
+    if (!TODO_MUTATION_FIELDS.has(field)) throw new Error("A sync field name is invalid.");
   }
-  if (normalizedUpdate.recurrenceCron !== undefined) {
-    setters.push("recurrence_last_fired_at = NULL");
-    if (normalizedUpdate.recurrenceCron) setters.push("snoozed_until = NULL");
+  const versions = new Map<keyof TodoUpdate, string>();
+  for (const [field] of entries) {
+    const timestamp = normalizedMutationTimestamp(fieldTimestamps[field], receivedAt);
+    versions.set(field, `${timestamp}|${mutationId}`);
   }
-  setters.push("updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')");
+  const recordUndo = metadata.recordUndo !== false;
+  const undoToken = recordUndo ? crypto.randomUUID() : null;
 
-  const statements = [
-    db.prepare("DELETE FROM todo_action_history WHERE created_at < strftime('%Y-%m-%dT%H:%M:%fZ','now','-7 days')"),
-    db.prepare("INSERT INTO todo_action_history (id, snapshot) VALUES (?, ?)")
-      .bind(undoToken, JSON.stringify({ todos: [before] } satisfies UndoSnapshot)),
+  const statements: D1PreparedStatement[] = [
+    ...(recordUndo ? [
+      db.prepare("DELETE FROM todo_action_history WHERE created_at < strftime('%Y-%m-%dT%H:%M:%fZ','now','-7 days')"),
+      db.prepare("INSERT INTO todo_action_history (id, snapshot) VALUES (?, ?)")
+        .bind(undoToken, JSON.stringify({ todos: [before] } satisfies UndoSnapshot)),
+    ] : []),
     ...(typeof normalizedUpdate.project === "string" && normalizedUpdate.project.trim()
       ? [db.prepare("INSERT OR IGNORE INTO todo_projects (name) VALUES (?)").bind(normalizedUpdate.project.trim())]
       : []),
-    db.prepare(`UPDATE todos SET ${setters.join(", ")} WHERE id = ?`).bind(...values, id),
   ];
+
+  for (const [field, rawValue] of entries) {
+    const version = versions.get(field)!;
+    const value = field === "pinned" ? rawValue ? 1 : 0 : rawValue;
+    statements.push(db.prepare(`
+      INSERT INTO todo_field_versions (todo_id, field, version, mutation_id, updated_at)
+      VALUES (?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+      ON CONFLICT(todo_id, field) DO UPDATE SET
+        version = excluded.version,
+        mutation_id = excluded.mutation_id,
+        updated_at = excluded.updated_at
+      WHERE excluded.version > todo_field_versions.version
+    `).bind(id, field, version, mutationId));
+
+    const currentVersion = "EXISTS (SELECT 1 FROM todo_field_versions WHERE todo_id = ? AND field = ? AND version = ? AND mutation_id = ?)";
+    if (field === "status") {
+      statements.push(db.prepare(`
+        UPDATE todos
+        SET status = ?,
+            completed_at = CASE WHEN ? = 'completed' THEN strftime('%Y-%m-%dT%H:%M:%fZ','now') ELSE NULL END,
+            snoozed_until = CASE WHEN ? = 'completed' THEN NULL ELSE snoozed_until END,
+            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+        WHERE id = ? AND ${currentVersion}
+      `).bind(value, value, value, id, id, field, version, mutationId));
+    } else if (field === "recurrenceCron") {
+      statements.push(db.prepare(`
+        UPDATE todos
+        SET recurrence_cron = ?,
+            recurrence_last_fired_at = NULL,
+            snoozed_until = CASE WHEN ? IS NOT NULL THEN NULL ELSE snoozed_until END,
+            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+        WHERE id = ? AND ${currentVersion}
+      `).bind(value, value, id, id, field, version, mutationId));
+    } else {
+      statements.push(db.prepare(`
+        UPDATE todos
+        SET ${columnByField[field]} = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+        WHERE id = ? AND ${currentVersion}
+      `).bind(value, id, id, field, version, mutationId));
+    }
+  }
   await db.batch(statements);
   const todo = await getTodo(id);
   if (!todo) throw new Error("The updated task could not be loaded.");
+  const versionRows = await db.prepare(`
+    SELECT field, version, mutation_id
+    FROM todo_field_versions
+    WHERE todo_id = ? AND field IN (${placeholders(entries.length)})
+  `).bind(id, ...entries.map(([field]) => field)).all<{ field: keyof TodoUpdate; version: string; mutation_id: string }>();
+  const appliedFields = versionRows.results
+    .filter((row) => row.mutation_id === mutationId && versions.get(row.field) === row.version)
+    .map((row) => row.field);
   console.info("[todo-db] task details updated", {
     id,
     fields: entries.map(([field]) => field),
+    appliedFields,
+    conflictFields: entries.map(([field]) => field).filter((field) => !appliedFields.includes(field)),
+    mutationId,
+    autosave: !recordUndo,
     undoToken,
   });
-  return { todo, undoToken };
+  return { todo, undoToken, appliedFields };
 }
 
 export async function getTodo(id: number): Promise<Todo | null> {

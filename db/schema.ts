@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { index, integer, primaryKey, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 export const todos = sqliteTable(
   "todos",
@@ -46,6 +46,23 @@ export const appSettings = sqliteTable("app_settings", {
     .notNull()
     .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`),
 });
+
+export const todoFieldVersions = sqliteTable(
+  "todo_field_versions",
+  {
+    todoId: integer("todo_id").notNull(),
+    field: text("field").notNull(),
+    version: text("version").notNull(),
+    mutationId: text("mutation_id").notNull(),
+    updatedAt: text("updated_at")
+      .notNull()
+      .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`),
+  },
+  (table) => [
+    primaryKey({ columns: [table.todoId, table.field] }),
+    index("todo_field_versions_mutation_idx").on(table.mutationId),
+  ],
+);
 
 export const todoProjects = sqliteTable("todo_projects", {
   id: integer("id").primaryKey({ autoIncrement: true }),

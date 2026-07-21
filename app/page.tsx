@@ -20,10 +20,13 @@ import { cronValidationError } from "../lib/cron";
 import { SiteHeader } from "./site-header";
 import {
   deleteOfflineTodo,
+  deleteOfflineTodoMutation,
   loadCachedServerState,
   listOfflineTodos,
+  listOfflineTodoMutations,
   persistOfflineStorage,
   saveOfflineTodo,
+  saveOfflineTodoMutation,
   saveCachedServerState,
   type OfflineAttachmentKind,
   type OfflineTodoRecord,
@@ -104,6 +107,16 @@ type TodoDraft = Pick<Todo, "title" | "notes" | "priority"> & {
   recurrenceCron: string;
 };
 
+type AutosaveField = "title" | "notes" | "priority" | "dueDate" | "context" | "recurrenceCron";
+type AutosavePatch = Partial<Record<AutosaveField, string | number | null>>;
+type EditSaveState = "saved" | "saving" | "offline" | "error";
+type PersistTaskDraft = (
+  todoId: number,
+  draft: TodoDraft,
+  source: "debounce" | "close" | "retry",
+  baselineOverride?: TodoDraft,
+) => Promise<void>;
+
 type ProjectDialogState = {
   ids: number[];
   selection: string;
@@ -150,9 +163,56 @@ function request<T>(path: string, options?: RequestInit): Promise<T> {
     headers: options?.body && !formData ? { "Content-Type": "application/json", ...(options.headers ?? {}) } : options?.headers,
   }).then(async (response) => {
     const payload = (await response.json().catch(() => ({}))) as T & { error?: string };
-    if (!response.ok) throw new Error(payload.error || "Something went wrong.");
+    if (!response.ok) {
+      const error = new Error(payload.error || "Something went wrong.") as Error & { status?: number };
+      error.status = response.status;
+      throw error;
+    }
     return payload;
   });
+}
+
+const AUTOSAVE_FIELDS: AutosaveField[] = ["title", "notes", "priority", "dueDate", "context", "recurrenceCron"];
+
+function todoDraft(todo: Todo): TodoDraft {
+  return {
+    title: todo.title,
+    notes: todo.notes,
+    priority: todo.priority,
+    dueDate: dateInputValue(todo.dueDate),
+    project: todo.project ?? "",
+    context: todo.context ?? "",
+    recurrenceCron: todo.recurrenceCron ?? "",
+  };
+}
+
+function normalizedDraftField(draft: TodoDraft, field: AutosaveField) {
+  if (field === "title" || field === "notes") return draft[field].trim();
+  if (field === "priority") return draft.priority;
+  if (field === "dueDate") return draft.dueDate || null;
+  if (field === "context") return draft.context.trim() || null;
+  return draft.recurrenceCron.trim() || null;
+}
+
+function changedDraftPatch(draft: TodoDraft, baseline: TodoDraft) {
+  const patch: AutosavePatch = {};
+  for (const field of AUTOSAVE_FIELDS) {
+    const current = normalizedDraftField(draft, field);
+    if (current !== normalizedDraftField(baseline, field)) patch[field] = current;
+  }
+  return patch;
+}
+
+function patchTodo(todo: Todo, patch: Record<string, unknown>) {
+  return {
+    ...todo,
+    ...(patch.title !== undefined ? { title: String(patch.title) } : {}),
+    ...(patch.notes !== undefined ? { notes: String(patch.notes) } : {}),
+    ...(patch.priority !== undefined ? { priority: Number(patch.priority) } : {}),
+    ...(patch.dueDate !== undefined ? { dueDate: patch.dueDate ? String(patch.dueDate) : null } : {}),
+    ...(patch.context !== undefined ? { context: patch.context ? String(patch.context) : null } : {}),
+    ...(patch.recurrenceCron !== undefined ? { recurrenceCron: patch.recurrenceCron ? String(patch.recurrenceCron) : null, snoozedUntil: patch.recurrenceCron ? null : todo.snoozedUntil } : {}),
+  };
 }
 
 const IMAGE_ACCEPT = "image/jpeg,image/png,image/webp,image/gif,image/heic,image/heif,.heic,.heif";
@@ -984,11 +1044,14 @@ export default function Home() {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editDraft, setEditDraft] = useState<TodoDraft | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
+  const [editSaveState, setEditSaveState] = useState<EditSaveState>("saved");
+  const [editSaveMessage, setEditSaveMessage] = useState("Saved automatically");
   const [detailAttachments, setDetailAttachments] = useState<TodoAttachment[]>([]);
   const [detailUploads, setDetailUploads] = useState<PendingAttachment[]>([]);
   const [voiceTarget, setVoiceTarget] = useState<"capture" | "detail" | null>(null);
   const [online, setOnline] = useState(true);
   const [offlineCount, setOfflineCount] = useState(0);
+  const [offlineEditCount, setOfflineEditCount] = useState(0);
   const [imageDropActive, setImageDropActive] = useState(false);
   const [loadingAttachments, setLoadingAttachments] = useState(false);
   const [attachmentError, setAttachmentError] = useState("");
@@ -1011,6 +1074,17 @@ export default function Home() {
   const viewerGesture = useRef<number | null>(null);
   const imageDropDepth = useRef(0);
   const syncingOfflineRef = useRef(false);
+  const editingIdRef = useRef<number | null>(null);
+  const editDraftRef = useRef<TodoDraft | null>(null);
+  const editBaselineRef = useRef<TodoDraft | null>(null);
+  const autosaveTimerRef = useRef<number | null>(null);
+  const autosaveInFlightRef = useRef(false);
+  const queuedAutosaveRef = useRef<{ todoId: number; draft: TodoDraft; baseline: TodoDraft } | null>(null);
+  const persistTaskDraftRef = useRef<PersistTaskDraft | null>(null);
+  const closeTaskDetailsRef = useRef<() => void>(() => undefined);
+  const pendingTodoPatchesRef = useRef<Map<number, Record<string, unknown>>>(new Map());
+  const liveSyncRunningRef = useRef(false);
+  const lastLiveSnapshotRef = useRef("");
   const overlayOpen = editingId !== null || projectSelectorOpen || projectDialog !== null || newProjectOpen || projectDeleteDialog !== null || filtersOpen || viewerIndex !== null || voiceTarget !== null;
 
   const routeDroppedAttachments = useEffectEvent((files: File[]) => {
@@ -1027,12 +1101,116 @@ export default function Home() {
     });
   });
 
+  const applyLiveSnapshot = useEffectEvent((remoteTodos: Todo[], source: "initial" | "poll" | "reconnect") => {
+    const pendingPatches = pendingTodoPatchesRef.current;
+    const resolved = remoteTodos.map((todo) => patchTodo(todo, pendingPatches.get(todo.id) ?? {}));
+    setTodos((current) => {
+      const offlineTodos = current.filter((todo) => todo.id < 0 || todo.offline);
+      const next = [...offlineTodos, ...resolved];
+      const unchanged = next.length === current.length && next.every((todo, index) => {
+        const previous = current[index];
+        return previous?.id === todo.id
+          && previous.updatedAt === todo.updatedAt
+          && previous.status === todo.status
+          && previous.snoozedUntil === todo.snoozedUntil
+          && previous.attachmentCount === todo.attachmentCount
+          && previous.title === todo.title
+          && previous.notes === todo.notes
+          && previous.priority === todo.priority
+          && previous.dueDate === todo.dueDate
+          && previous.project === todo.project
+          && previous.context === todo.context
+          && previous.recurrenceCron === todo.recurrenceCron
+          && previous.pinned === todo.pinned;
+      });
+      return unchanged ? current : next;
+    });
+
+    const activeId = editingIdRef.current;
+    const currentDraft = editDraftRef.current;
+    const baseline = editBaselineRef.current;
+    const remoteTodo = activeId === null ? null : resolved.find((todo) => todo.id === activeId) ?? null;
+    if (remoteTodo && currentDraft && baseline) {
+      const remoteDraft = todoDraft(remoteTodo);
+      const nextDraft = { ...currentDraft };
+      const nextBaseline = { ...baseline };
+      for (const field of [...AUTOSAVE_FIELDS, "project" as const]) {
+        if (currentDraft[field] === baseline[field]) nextDraft[field] = remoteDraft[field] as never;
+        if (currentDraft[field] === baseline[field]) nextBaseline[field] = remoteDraft[field] as never;
+      }
+      editBaselineRef.current = nextBaseline;
+      editDraftRef.current = nextDraft;
+      if (JSON.stringify(nextDraft) !== JSON.stringify(currentDraft)) setEditDraft(nextDraft);
+    } else if (activeId !== null && !remoteTodo && !pendingPatches.has(activeId)) {
+      if (autosaveTimerRef.current !== null) window.clearTimeout(autosaveTimerRef.current);
+      autosaveTimerRef.current = null;
+      setEditingId(null);
+      setEditDraft(null);
+      editingIdRef.current = null;
+      editDraftRef.current = null;
+      editBaselineRef.current = null;
+      detailUploads.forEach((item) => URL.revokeObjectURL(item.previewUrl));
+      setDetailUploads([]);
+      setNotice({ tone: "error", text: "This task was deleted on another device." });
+      console.warn("[todo-sync] open task removed by remote snapshot", { todoId: activeId, source });
+    }
+    const signature = resolved.map((todo) => `${todo.id}:${todo.updatedAt}:${todo.attachmentCount}`).join("|");
+    const changed = signature !== lastLiveSnapshotRef.current;
+    lastLiveSnapshotRef.current = signature;
+    if (source !== "poll" || changed) {
+      console.info("[todo-sync] server snapshot applied", {
+        source,
+        remote: remoteTodos.length,
+        pendingEdits: pendingPatches.size,
+        editingId: activeId,
+      });
+    }
+  });
+
+  const refreshLiveData = useEffectEvent(async (source: "poll" | "reconnect") => {
+    if (liveSyncRunningRef.current || !navigator.onLine || document.visibilityState === "hidden") return;
+    liveSyncRunningRef.current = true;
+    const startedAt = Date.now();
+    try {
+      const [{ todos: remoteTodos }, { projects: remoteProjects }] = await Promise.all([
+        request<{ todos: Todo[]; serverTime: string }>(`/api/todos?sync=${Date.now()}`, { cache: "no-store" }),
+        request<{ projects: string[] }>("/api/projects", { cache: "no-store" }),
+      ]);
+      applyLiveSnapshot(remoteTodos, source);
+      setRegisteredProjects((current) => (
+        current.length === remoteProjects.length && current.every((name, index) => name === remoteProjects[index])
+          ? current
+          : remoteProjects
+      ));
+      if (source === "reconnect") {
+        console.info("[todo-sync] reconnect refresh completed", {
+          todos: remoteTodos.length,
+          projects: remoteProjects.length,
+          durationMs: Date.now() - startedAt,
+        });
+      }
+    } catch (error) {
+      console.warn("[todo-sync] live refresh deferred", {
+        source,
+        browserOnline: navigator.onLine,
+        durationMs: Date.now() - startedAt,
+        error,
+      });
+    } finally {
+      liveSyncRunningRef.current = false;
+    }
+  });
+
   useEffect(() => {
     let active = true;
     const load = async () => {
-      const [offlineRecords, cachedState] = await Promise.all([
+      const [offlineRecords, offlineMutations, cachedState] = await Promise.all([
         listOfflineTodos().catch((error) => {
           console.error("[todo-offline] queue load failed", error);
+          return [];
+        }),
+        listOfflineTodoMutations().catch((error) => {
+          console.error("[todo-offline] edit queue load failed", error);
           return [];
         }),
         loadCachedServerState<Todo>().catch((error) => {
@@ -1058,8 +1236,11 @@ export default function Home() {
         console.error("[todo-offline] reconciled queue cleanup failed", error);
       });
       if (!active) return;
-      setTodos([...pendingRecords.map(offlineRecordTodo), ...loaded]);
+      pendingTodoPatchesRef.current = new Map(offlineMutations.map((mutation) => [mutation.todoId, mutation.patch]));
+      const loadedWithPendingEdits = loaded.map((todo) => patchTodo(todo, pendingTodoPatchesRef.current.get(todo.id) ?? {}));
+      setTodos([...pendingRecords.map(offlineRecordTodo), ...loadedWithPendingEdits]);
       setOfflineCount(pendingRecords.length);
+      setOfflineEditCount(offlineMutations.length);
       setRegisteredProjects(loadedProjects);
       if (server?.[2].settings.snoozeTimeZone) setScheduleTimeZone(server[2].settings.snoozeTimeZone);
       if (server) void saveCachedServerState(loaded, loadedProjects);
@@ -1067,6 +1248,7 @@ export default function Home() {
       console.info("[todo-ui] loaded", {
         count: loaded.length,
         offlinePending: pendingRecords.length,
+        offlineEdits: offlineMutations.length,
         reconciled: alreadySynced.length,
         projects: loadedProjects.length,
         open: loaded.filter((todo) => todo.status === "open").length,
@@ -1082,8 +1264,67 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    if (online && offlineCount > 0) void syncOfflineQueue();
-  }, [online, offlineCount]);
+    if (online && (offlineCount > 0 || offlineEditCount > 0)) void syncOfflineQueue();
+  }, [online, offlineCount, offlineEditCount]);
+
+  useEffect(() => {
+    editingIdRef.current = editingId;
+  }, [editingId]);
+
+  useEffect(() => {
+    editDraftRef.current = editDraft;
+  }, [editDraft]);
+
+  useEffect(() => {
+    if (loading) return;
+    const timer = window.setInterval(() => void refreshLiveData("poll"), 3_000);
+    const refresh = () => {
+      if (document.visibilityState === "visible") void refreshLiveData("reconnect");
+    };
+    window.addEventListener("focus", refresh);
+    window.addEventListener("online", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", refresh);
+      window.removeEventListener("online", refresh);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+  }, [loading]);
+
+  useEffect(() => {
+    if (autosaveTimerRef.current !== null) window.clearTimeout(autosaveTimerRef.current);
+    if (editingId === null || !editDraft || !editBaselineRef.current) return;
+    const patch = changedDraftPatch(editDraft, editBaselineRef.current);
+    if (!Object.keys(patch).length) {
+      if (!autosaveInFlightRef.current) {
+        setEditSaveState("saved");
+        setEditSaveMessage("Saved automatically");
+      }
+      return;
+    }
+    if (patch.title !== undefined && !String(patch.title).trim()) {
+      setEditSaveState("error");
+      setEditSaveMessage("A task title is required.");
+      return;
+    }
+    const pendingRecurrenceError = patch.recurrenceCron !== undefined ? cronValidationError(editDraft.recurrenceCron) : null;
+    if (pendingRecurrenceError) {
+      setEditSaveState("error");
+      setEditSaveMessage(pendingRecurrenceError);
+      return;
+    }
+    setEditSaveState("saving");
+    setEditSaveMessage("Saving changes…");
+    autosaveTimerRef.current = window.setTimeout(() => {
+      autosaveTimerRef.current = null;
+      void persistTaskDraftRef.current?.(editingId, editDraft, "debounce");
+    }, 700);
+    return () => {
+      if (autosaveTimerRef.current !== null) window.clearTimeout(autosaveTimerRef.current);
+      autosaveTimerRef.current = null;
+    };
+  }, [editDraft, editingId]);
 
   useEffect(() => {
     const updateConnection = () => {
@@ -1152,8 +1393,7 @@ export default function Home() {
         setProjectDialog(null);
         setProjectDialogError("");
       } else if (event.key === "Escape" && editingId !== null) {
-        setEditingId(null);
-        setEditDraft(null);
+        closeTaskDetailsRef.current();
       } else if (event.key === "Escape" && target === searchRef.current) {
         setQuery("");
         searchRef.current?.blur();
@@ -1593,15 +1833,17 @@ export default function Home() {
     syncingOfflineRef.current = true;
     const startedAt = Date.now();
     try {
-      const records = await listOfflineTodos();
-      if (!records.length) {
+      const [records, mutations] = await Promise.all([listOfflineTodos(), listOfflineTodoMutations()]);
+      if (!records.length && !mutations.length) {
         setOfflineCount(0);
+        setOfflineEditCount(0);
         return;
       }
-      console.info("[todo-offline] sync started", { count: records.length });
-      const { todos: currentServerTodos } = await request<{ todos: Todo[] }>("/api/todos");
+      console.info("[todo-offline] sync started", { newTasks: records.length, edits: mutations.length });
+      const { todos: currentServerTodos } = await request<{ todos: Todo[] }>("/api/todos", { cache: "no-store" });
       const byClientId = new Map(currentServerTodos.map((todo) => [todo.clientId, todo]));
-      let synced = 0;
+      let syncedTasks = 0;
+      let syncedEdits = 0;
       for (const record of records) {
         try {
           let todo = byClientId.get(record.clientId);
@@ -1637,8 +1879,8 @@ export default function Home() {
           }
           await deleteOfflineTodo(record.clientId);
           setTodos((current) => [todo as Todo, ...current.filter((item) => item.clientId !== record.clientId && item.id !== todo?.id)]);
-          synced += 1;
-          setOfflineCount(Math.max(0, records.length - synced));
+          syncedTasks += 1;
+          setOfflineCount(Math.max(0, records.length - syncedTasks));
           console.info("[todo-offline] task synchronized", { clientId: record.clientId, id: todo.id, attachments: record.attachments.length });
         } catch (error) {
           console.error("[todo-offline] task sync failed", { clientId: record.clientId, online: navigator.onLine, error });
@@ -1646,8 +1888,80 @@ export default function Home() {
           break;
         }
       }
-      if (synced > 0) setNotice({ tone: "success", text: `${synced} offline ${synced === 1 ? "task" : "tasks"} synced.` });
-      console.info("[todo-offline] sync finished", { requested: records.length, synced, durationMs: Date.now() - startedAt });
+
+      for (const mutation of mutations) {
+        try {
+          const result = await request<{ todo: Todo; appliedFields: string[] }>(`/api/todos/${mutation.todoId}`, {
+            method: "PATCH",
+            body: JSON.stringify({
+              ...mutation.patch,
+              autosave: true,
+              mutation: {
+                mutationId: mutation.mutationId,
+                fieldTimestamps: mutation.fieldTimestamps,
+              },
+            }),
+          });
+          await deleteOfflineTodoMutation(mutation.todoId);
+          pendingTodoPatchesRef.current.delete(mutation.todoId);
+          setTodos((current) => current.map((todo) => todo.id === result.todo.id ? result.todo : todo));
+          if (editingIdRef.current === mutation.todoId && editDraftRef.current) {
+            const serverDraft = todoDraft(result.todo);
+            const currentDraft = editDraftRef.current;
+            const previousBaseline = editBaselineRef.current ?? serverDraft;
+            const nextDraft = { ...currentDraft };
+            for (const field of AUTOSAVE_FIELDS) {
+              const queuedValue = mutation.patch[field];
+              const hasQueuedValue = Object.prototype.hasOwnProperty.call(mutation.patch, field);
+              const changedAfterQueue = hasQueuedValue
+                ? normalizedDraftField(currentDraft, field) !== queuedValue
+                : normalizedDraftField(currentDraft, field) !== normalizedDraftField(previousBaseline, field);
+              if (!changedAfterQueue) nextDraft[field] = serverDraft[field] as never;
+            }
+            editBaselineRef.current = serverDraft;
+            editDraftRef.current = nextDraft;
+            setEditDraft(nextDraft);
+            setEditSaveState("saved");
+            setEditSaveMessage(result.appliedFields.length < Object.keys(mutation.patch).length ? "Synced · newer remote changes kept" : "Saved automatically");
+          }
+          syncedEdits += 1;
+          setOfflineEditCount(Math.max(0, mutations.length - syncedEdits));
+          console.info("[todo-offline] queued edit synchronized", {
+            todoId: mutation.todoId,
+            mutationId: mutation.mutationId,
+            requestedFields: Object.keys(mutation.patch),
+            appliedFields: result.appliedFields,
+          });
+        } catch (error) {
+          const status = (error as Error & { status?: number }).status;
+          if (status === 404) {
+            await deleteOfflineTodoMutation(mutation.todoId);
+            pendingTodoPatchesRef.current.delete(mutation.todoId);
+            syncedEdits += 1;
+            console.warn("[todo-offline] queued edit discarded because task was deleted remotely", { todoId: mutation.todoId, mutationId: mutation.mutationId });
+            continue;
+          }
+          console.error("[todo-offline] queued edit sync failed", { todoId: mutation.todoId, mutationId: mutation.mutationId, online: navigator.onLine, status, error });
+          if (!navigator.onLine) setOnline(false);
+          break;
+        }
+      }
+
+      const [remainingTasks, remainingEdits] = await Promise.all([listOfflineTodos(), listOfflineTodoMutations()]);
+      setOfflineCount(remainingTasks.length);
+      setOfflineEditCount(remainingEdits.length);
+      if (syncedTasks + syncedEdits > 0) {
+        setNotice({ tone: "success", text: `${syncedTasks + syncedEdits} offline ${syncedTasks + syncedEdits === 1 ? "change" : "changes"} synced.` });
+      }
+      console.info("[todo-offline] sync finished", {
+        requestedTasks: records.length,
+        requestedEdits: mutations.length,
+        syncedTasks,
+        syncedEdits,
+        remainingTasks: remainingTasks.length,
+        remainingEdits: remainingEdits.length,
+        durationMs: Date.now() - startedAt,
+      });
     } catch (error) {
       console.error("[todo-offline] sync pass failed", { durationMs: Date.now() - startedAt, error });
     } finally {
@@ -2014,6 +2328,8 @@ export default function Home() {
       }
       if (openedFromDetails && ids.length === 1) {
         setEditDraft((current) => current ? { ...current, project: projectName ?? "" } : current);
+        if (editDraftRef.current) editDraftRef.current = { ...editDraftRef.current, project: projectName ?? "" };
+        if (editBaselineRef.current) editBaselineRef.current = { ...editBaselineRef.current, project: projectName ?? "" };
       }
       setSelected((current) => {
         const next = new Set(current);
@@ -2047,16 +2363,14 @@ export default function Home() {
       setNotice({ tone: "success", text: "That task is saved offline and will be editable after it syncs." });
       return;
     }
+    const draft = todoDraft(todo);
+    editingIdRef.current = todo.id;
+    editDraftRef.current = draft;
+    editBaselineRef.current = draft;
     setEditingId(todo.id);
-    setEditDraft({
-      title: todo.title,
-      notes: todo.notes,
-      priority: todo.priority,
-      dueDate: dateInputValue(todo.dueDate),
-      project: todo.project ?? "",
-      context: todo.context ?? "",
-      recurrenceCron: todo.recurrenceCron ?? "",
-    });
+    setEditDraft(draft);
+    setEditSaveState("saved");
+    setEditSaveMessage("Saved automatically");
     setDetailAttachments([]);
     setDetailUploads([]);
     setViewerIndex(null);
@@ -2065,57 +2379,150 @@ export default function Home() {
   }
 
   function closeTaskDetails() {
+    if (autosaveTimerRef.current !== null) {
+      window.clearTimeout(autosaveTimerRef.current);
+      autosaveTimerRef.current = null;
+    }
+    const activeId = editingIdRef.current;
+    const draft = editDraftRef.current;
+    const baseline = editBaselineRef.current;
+    if (activeId !== null && draft && baseline) void persistTaskDraft(activeId, draft, "close", baseline);
     setEditingId(null);
     setEditDraft(null);
+    editingIdRef.current = null;
+    editDraftRef.current = null;
+    editBaselineRef.current = null;
     setViewerIndex(null);
     setAttachmentError("");
     detailUploads.forEach((item) => URL.revokeObjectURL(item.previewUrl));
     setDetailUploads([]);
   }
 
-  async function saveTaskDetails(event: FormEvent) {
-    event.preventDefault();
-    if (!editingTodo || !editDraft || savingEdit) return;
-    const title = editDraft.title.trim();
-    if (!title) {
-      setNotice({ tone: "error", text: "A task title is required." });
+  async function persistTaskDraft(
+    todoId: number,
+    draft: TodoDraft,
+    source: "debounce" | "close" | "retry",
+    baselineOverride?: TodoDraft,
+  ) {
+    const baseline = baselineOverride ?? editBaselineRef.current;
+    if (!baseline) return;
+    const patch = changedDraftPatch(draft, baseline);
+    if (!Object.keys(patch).length) return;
+    if (patch.title !== undefined && !String(patch.title).trim()) {
+      if (editingIdRef.current === todoId) {
+        setEditSaveState("error");
+        setEditSaveMessage("A task title is required.");
+      }
       return;
     }
-    if (recurrenceError) {
-      setNotice({ tone: "error", text: recurrenceError });
+    const scheduleError = patch.recurrenceCron !== undefined ? cronValidationError(String(patch.recurrenceCron ?? "")) : null;
+    if (scheduleError) {
+      if (editingIdRef.current === todoId) {
+        setEditSaveState("error");
+        setEditSaveMessage(scheduleError);
+      }
       return;
     }
+
+    const existingPending = pendingTodoPatchesRef.current.get(todoId) ?? {};
+    pendingTodoPatchesRef.current.set(todoId, { ...existingPending, ...patch });
+    setTodos((current) => current.map((todo) => todo.id === todoId ? patchTodo(todo, patch) : todo));
+    if (autosaveInFlightRef.current) {
+      queuedAutosaveRef.current = { todoId, draft: { ...draft }, baseline: { ...baseline } };
+      console.info("[todo-sync] autosave coalesced behind active request", { todoId, source, fields: Object.keys(patch) });
+      return;
+    }
+
+    autosaveInFlightRef.current = true;
     setSavingEdit(true);
-    setNotice(null);
+    if (editingIdRef.current === todoId) {
+      setEditSaveState(navigator.onLine ? "saving" : "offline");
+      setEditSaveMessage(navigator.onLine ? "Saving changes…" : "Saved offline · waiting to sync");
+    }
+    const mutationId = crypto.randomUUID();
+    const timestamp = new Date().toISOString();
+    const fieldTimestamps = Object.fromEntries(Object.keys(patch).map((field) => [field, timestamp]));
+    const startedAt = Date.now();
+
     try {
-      const result = await request<{ todo: Todo; undoToken: string }>(`/api/todos/${editingTodo.id}`, {
+      if (!navigator.onLine) throw new TypeError("Offline");
+      const result = await request<{ todo: Todo; appliedFields: string[] }>(`/api/todos/${todoId}`, {
         method: "PATCH",
         body: JSON.stringify({
-          title,
-          notes: editDraft.notes,
-          priority: editDraft.priority,
-          dueDate: editDraft.dueDate || null,
-          context: editDraft.context || null,
-          recurrenceCron: editDraft.recurrenceCron || null,
+          ...patch,
+          autosave: true,
+          mutation: { mutationId, fieldTimestamps },
         }),
       });
-      setTodos((current) => current.map((todo) => todo.id === result.todo.id ? result.todo : todo));
-      closeTaskDetails();
-      setNotice({ tone: "success", text: "Task details saved.", undoToken: result.undoToken });
-      console.info("[todo-ui] task details saved", {
-        id: result.todo.id,
-        titleLength: result.todo.title.length,
-        notesLength: result.todo.notes.length,
-        recurrenceCron: result.todo.recurrenceCron,
+      const pending = { ...(pendingTodoPatchesRef.current.get(todoId) ?? {}) };
+      for (const [field, value] of Object.entries(patch)) {
+        if (pending[field] === value) delete pending[field];
+      }
+      if (Object.keys(pending).length) pendingTodoPatchesRef.current.set(todoId, pending);
+      else pendingTodoPatchesRef.current.delete(todoId);
+      setTodos((current) => current.map((todo) => todo.id === result.todo.id ? patchTodo(result.todo, pending) : todo));
+
+      if (editingIdRef.current === todoId && editDraftRef.current) {
+        const serverDraft = todoDraft(result.todo);
+        const currentDraft = editDraftRef.current;
+        const nextDraft = { ...currentDraft };
+        for (const field of AUTOSAVE_FIELDS) {
+          if (normalizedDraftField(currentDraft, field) === normalizedDraftField(draft, field)) {
+            nextDraft[field] = serverDraft[field] as never;
+          }
+        }
+        editBaselineRef.current = serverDraft;
+        editDraftRef.current = nextDraft;
+        setEditDraft(nextDraft);
+        setEditSaveState("saved");
+        setEditSaveMessage(result.appliedFields.length < Object.keys(patch).length ? "Synced · newer remote changes kept" : "Saved automatically");
+      }
+      console.info("[todo-sync] autosave synchronized", {
+        todoId,
+        source,
+        mutationId,
+        requestedFields: Object.keys(patch),
+        appliedFields: result.appliedFields,
+        conflictFields: Object.keys(patch).filter((field) => !result.appliedFields.includes(field)),
+        durationMs: Date.now() - startedAt,
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : "The task details could not be saved.";
-      setNotice({ tone: "error", text: message });
-      console.error("[todo-ui] task details save failed", { id: editingTodo.id, error });
+      const status = (error as Error & { status?: number }).status;
+      if (!navigator.onLine || error instanceof TypeError || status === undefined) {
+        const record = await saveOfflineTodoMutation(todoId, patch, fieldTimestamps);
+        pendingTodoPatchesRef.current.set(todoId, record.patch);
+        setOfflineEditCount((await listOfflineTodoMutations()).length);
+        if (editingIdRef.current === todoId) {
+          editBaselineRef.current = { ...draft };
+          setEditSaveState("offline");
+          setEditSaveMessage("Saved offline · waiting to sync");
+        }
+        console.warn("[todo-sync] autosave queued offline", {
+          todoId,
+          source,
+          fields: Object.keys(patch),
+          browserOnline: navigator.onLine,
+          durationMs: Date.now() - startedAt,
+          error,
+        });
+      } else {
+        if (editingIdRef.current === todoId) {
+          setEditSaveState("error");
+          setEditSaveMessage(error instanceof Error ? error.message : "Changes could not be saved.");
+        }
+        console.error("[todo-sync] autosave rejected", { todoId, source, fields: Object.keys(patch), status, error });
+      }
     } finally {
+      autosaveInFlightRef.current = false;
       setSavingEdit(false);
+      const queued = queuedAutosaveRef.current;
+      queuedAutosaveRef.current = null;
+      if (queued) void persistTaskDraft(queued.todoId, queued.draft, "retry", editBaselineRef.current ?? queued.baseline);
     }
   }
+
+  persistTaskDraftRef.current = persistTaskDraft;
+  closeTaskDetailsRef.current = closeTaskDetails;
 
   function taskAction(todo: Todo, action: TodoAction, source: "hover" | "swipe" | "details") {
     if (action === "snooze" && todo.recurrenceCron) {
@@ -2374,9 +2781,9 @@ export default function Home() {
         projectLabel={project === UNASSIGNED_PROJECT ? "Unassigned" : project || "Dawar Todo"}
         onProjectClick={openProjectSelector}
       />
-      {(!online || offlineCount > 0) && (
+      {(!online || offlineCount + offlineEditCount > 0) && (
         <div className="pointer-events-none fixed right-3 top-[4.25rem] z-40 rounded-full bg-[#202522] px-3 py-1.5 text-xs font-semibold text-white shadow-lg" role="status" aria-live="polite">
-          {!online ? `Offline${offlineCount ? ` · ${offlineCount} queued` : ""}` : `${offlineCount} waiting to sync`}
+          {!online ? `Offline${offlineCount + offlineEditCount ? ` · ${offlineCount + offlineEditCount} queued` : ""}` : `${offlineCount + offlineEditCount} waiting to sync`}
         </div>
       )}
       {imageDropActive && (
@@ -2894,7 +3301,7 @@ export default function Home() {
       {editingTodo && editDraft && (
         <div className="fixed inset-0 z-50 flex items-end justify-center overflow-x-hidden sm:items-center sm:p-5" role="dialog" aria-modal="true" aria-labelledby="task-details-title">
           <button type="button" aria-label="Close task details" onClick={closeTaskDetails} className="absolute inset-0 bg-black/35 backdrop-blur-[2px]" />
-          <form onSubmit={saveTaskDetails} className="relative flex max-h-[92dvh] w-full max-w-full flex-col overflow-hidden overflow-x-hidden rounded-t-3xl bg-white shadow-2xl sm:max-w-2xl sm:rounded-3xl">
+          <form onSubmit={(event) => event.preventDefault()} className="relative flex max-h-[92dvh] w-full max-w-full flex-col overflow-hidden overflow-x-hidden rounded-t-3xl bg-white shadow-2xl sm:max-w-2xl sm:rounded-3xl">
             <div className="flex min-w-0 items-center justify-between border-b border-black/[0.07] px-5 py-4 sm:px-6">
               <h3 id="task-details-title" className="min-w-0 text-lg font-semibold text-[#202522]">Task details</h3>
               <div className="flex shrink-0 items-center gap-1">
@@ -3086,9 +3493,17 @@ export default function Home() {
               </div>
             </div>
 
-            <div className="flex items-center justify-end gap-2 border-t border-black/[0.07] bg-white px-5 py-3 sm:px-6">
-              <button type="button" onClick={closeTaskDetails} disabled={savingEdit} className="inline-flex h-11 items-center gap-2 rounded-xl px-4 text-sm font-semibold text-[#69716c] hover:bg-[#f3f4f2] disabled:opacity-50"><ActionIcon name="cancel" />Cancel</button>
-              <button type="submit" disabled={savingEdit || !editDraft.title.trim() || Boolean(recurrenceError)} className="inline-flex h-11 items-center gap-2 rounded-xl bg-[#216e4e] px-5 text-sm font-semibold text-white hover:bg-[#195d41] disabled:opacity-50"><ActionIcon name="save" />{savingEdit ? "Saving…" : "Save changes"}</button>
+            <div className="flex min-h-14 items-center justify-between gap-3 border-t border-black/[0.07] bg-white px-5 py-3 sm:px-6" aria-live="polite">
+              <span className={classNames(
+                "inline-flex min-w-0 items-center gap-2 text-sm font-medium",
+                editSaveState === "error" ? "text-red-700" : editSaveState === "offline" ? "text-amber-700" : "text-[#69716c]",
+              )}>
+                <span className={classNames("h-2 w-2 shrink-0 rounded-full", editSaveState === "saving" ? "animate-pulse bg-[#216e4e]" : editSaveState === "error" ? "bg-red-600" : editSaveState === "offline" ? "bg-amber-500" : "bg-emerald-600")} />
+                <span className="truncate">{editSaveMessage}</span>
+              </span>
+              {editSaveState === "error" && (
+                <button type="button" onClick={() => { if (editingIdRef.current && editDraftRef.current && editBaselineRef.current) void persistTaskDraft(editingIdRef.current, editDraftRef.current, "retry", editBaselineRef.current); }} className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg px-3 text-xs font-semibold text-red-700 hover:bg-red-50"><ActionIcon name="retry" />Retry</button>
+              )}
             </div>
           </form>
         </div>

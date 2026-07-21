@@ -21,10 +21,19 @@ export type OfflineTodoRecord = {
   attachments: OfflineStoredAttachment[];
 };
 
+export type OfflineTodoMutation = {
+  todoId: number;
+  mutationId: string;
+  patch: Record<string, unknown>;
+  fieldTimestamps: Record<string, string>;
+  createdAt: string;
+};
+
 const DATABASE_NAME = "dawar-todo-offline";
-const DATABASE_VERSION = 2;
+const DATABASE_VERSION = 3;
 const TODO_STORE = "pending-todos";
 const CACHE_STORE = "cached-state";
+const MUTATION_STORE = "pending-mutations";
 
 export type CachedServerState<T> = {
   key: "server";
@@ -47,6 +56,10 @@ function openDatabase() {
         store.createIndex("createdAt", "createdAt");
       }
       if (!database.objectStoreNames.contains(CACHE_STORE)) database.createObjectStore(CACHE_STORE, { keyPath: "key" });
+      if (!database.objectStoreNames.contains(MUTATION_STORE)) {
+        const store = database.createObjectStore(MUTATION_STORE, { keyPath: "todoId" });
+        store.createIndex("createdAt", "createdAt");
+      }
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error ?? new Error("Offline storage could not be opened."));
@@ -101,6 +114,48 @@ export async function listOfflineTodos() {
 export async function deleteOfflineTodo(clientId: string) {
   await runRequest(TODO_STORE, "readwrite", (store) => store.delete(clientId));
   console.info("[todo-offline] synced task removed", { clientId });
+}
+
+export async function saveOfflineTodoMutation(
+  todoId: number,
+  patch: Record<string, unknown>,
+  fieldTimestamps: Record<string, string>,
+) {
+  const previous = await runRequest<OfflineTodoMutation | undefined>(MUTATION_STORE, "readonly", (store) => store.get(todoId));
+  const mergedPatch = { ...(previous?.patch ?? {}) };
+  const mergedTimestamps = { ...(previous?.fieldTimestamps ?? {}) };
+  for (const [field, value] of Object.entries(patch)) {
+    const timestamp = fieldTimestamps[field];
+    if (!timestamp) continue;
+    if (!mergedTimestamps[field] || timestamp >= mergedTimestamps[field]) {
+      mergedPatch[field] = value;
+      mergedTimestamps[field] = timestamp;
+    }
+  }
+  const record: OfflineTodoMutation = {
+    todoId,
+    mutationId: crypto.randomUUID(),
+    patch: mergedPatch,
+    fieldTimestamps: mergedTimestamps,
+    createdAt: previous?.createdAt ?? new Date().toISOString(),
+  };
+  await runRequest(MUTATION_STORE, "readwrite", (store) => store.put(record));
+  console.info("[todo-offline] task edit queued", {
+    todoId,
+    mutationId: record.mutationId,
+    fields: Object.keys(record.patch),
+  });
+  return record;
+}
+
+export async function listOfflineTodoMutations() {
+  const records = await runRequest<OfflineTodoMutation[]>(MUTATION_STORE, "readonly", (store) => store.getAll());
+  return records.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+}
+
+export async function deleteOfflineTodoMutation(todoId: number) {
+  await runRequest(MUTATION_STORE, "readwrite", (store) => store.delete(todoId));
+  console.info("[todo-offline] synchronized task edit removed", { todoId });
 }
 
 export async function saveCachedServerState<T>(todos: T[], projects: string[]) {

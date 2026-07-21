@@ -92,6 +92,13 @@
       "when": 1784603609096,
       "tag": "0012_sweet_wolf_cub",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "6",
+      "when": 1784638886891,
+      "tag": "0013_tough_maverick",
+      "breakpoints": true
     }
   ]
 }

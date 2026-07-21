@@ -78,7 +78,7 @@ curl --fail-with-body \\
 
 - \`GET /api/todos\`: list all open, snoozed, and completed tasks.
 - \`POST /api/todos\`: create an open task. Supports title, notes, priority, dueDate, project, context, recurrenceCron, clientId, draftToken, and attachmentIds.
-- \`PATCH /api/todos/{id}\`: edit title, notes, status, priority, dueDate, project, context, recurrenceCron, or pinned. Set nullable fields to null to clear them.
+- \`PATCH /api/todos/{id}\`: edit title, notes, status, priority, dueDate, project, context, recurrenceCron, or pinned. Set nullable fields to null to clear them. For offline or concurrent clients, include a UUID \`mutation.mutationId\` and per-field ISO timestamps in \`mutation.fieldTimestamps\`; independent fields merge and same-field conflicts resolve deterministically.
 - \`POST /api/todos/bulk\`: perform state and multi-task operations.
 - \`POST /api/todos/undo\`: consume a returned Undo token.
 
@@ -167,6 +167,7 @@ Each multipart request accepts one file; repeat it to attach more files, up to 1
 - Use project null to remove assignment, not an invented "Unassigned" project.
 - Use dueDate null to clear a due date.
 - Validate recurrenceCron before writing it, and never attempt to snooze a task while recurrenceCron is set.
+- When replaying offline edits, retain the original field timestamps and mutation ID. Inspect \`appliedFields\` to see which values won conflict resolution, then re-read the task.
 - Treat signed attachment URLs as temporary secrets.
 - On 401, stop and ask for a fresh skill/token. Do not retry repeatedly.
 - On 409 from Undo, report that the token expired or was already used.

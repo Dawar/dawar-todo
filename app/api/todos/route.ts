@@ -7,7 +7,9 @@ export async function GET() {
     const todos = await listTodos();
     await scheduleAttachmentCleanup();
     console.info("[todo-api] list", { count: todos.length, durationMs: Date.now() - startedAt });
-    return Response.json({ todos });
+    return Response.json({ todos, serverTime: new Date().toISOString() }, {
+      headers: { "Cache-Control": "private, no-store, max-age=0" },
+    });
   } catch (error) {
     console.error("[todo-api] list failed", error);
     return Response.json({ error: "Your tasks could not be loaded." }, { status: 500 });

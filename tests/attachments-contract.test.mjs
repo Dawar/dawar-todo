@@ -229,6 +229,7 @@ test("installs an offline-capable PWA with idempotent queued task syncing", asyn
 
   assert.match(offlineStore, /indexedDB\.open/);
   assert.match(offlineStore, /pending-todos/);
+  assert.match(offlineStore, /pending-mutations/);
   assert.match(offlineStore, /blob: Blob/);
   assert.match(offlineStore, /project: string \| null/);
   assert.match(offlineStore, /navigator\.storage\.persist/);
@@ -246,7 +247,7 @@ test("installs an offline-capable PWA with idempotent queued task syncing", asyn
   assert.match(serviceWorker, /request\.mode === "navigate"/);
   assert.match(serviceWorker, /url\.pathname\.startsWith\("\/api\/"\)/);
   assert.match(serviceWorker, /caches\.match/);
-  assert.match(serviceWorker, /dawar-todo-shell-v2/);
+  assert.match(serviceWorker, /dawar-todo-shell-v3/);
   assert.match(serviceWorker, /function shellAssetUrls/);
   assert.match(serviceWorker, /function discoveredAssetUrls/);
   assert.match(serviceWorker, /function cacheAssetGraph/);

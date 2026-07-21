@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Dawar Todo API",
-    "version": "1.2.0",
-    "description": "Programmatic access to the same tasks, projects, recurrence, snooze, completion, merge, undo, settings, calendar-sharing, and attachment operations used by the Dawar Todo UI. Create a personal token in Settings, then send it as `Authorization: Bearer dt_live_...`. Tokens have full read/write access and should be treated as passwords. Token creation and revocation intentionally require an interactive ChatGPT session and are not exposed here."
+    "version": "1.3.0",
+    "description": "Programmatic access to the same tasks, projects, recurrence, snooze, completion, conflict-free field synchronization, merge, undo, settings, calendar-sharing, and attachment operations used by the Dawar Todo UI. Create a personal token in Settings, then send it as `Authorization: Bearer dt_live_...`. Tokens have full read/write access and should be treated as passwords. Token creation and revocation intentionally require an interactive ChatGPT session and are not exposed here."
   },
   "servers": [
     {
@@ -391,13 +391,28 @@
           "project": { "type": ["string", "null"], "maxLength": 120 },
           "context": { "type": ["string", "null"] },
           "recurrenceCron": { "type": ["string", "null"], "description": "Set a five-field cron schedule or null to stop recurrence. Assigning a schedule clears any snooze." },
-          "pinned": { "type": "boolean", "description": "Pin or unpin the task in the Open view without changing task state." }
+          "pinned": { "type": "boolean", "description": "Pin or unpin the task in the Open view without changing task state." },
+          "autosave": { "type": "boolean", "description": "When true, suppresses the per-edit Undo snapshot used by interactive autosave." },
+          "mutation": { "$ref": "#/components/schemas/SyncMutation" }
+        }
+      },
+      "SyncMutation": {
+        "type": "object",
+        "required": ["mutationId", "fieldTimestamps"],
+        "description": "Optional idempotent field-level last-writer-wins metadata for offline or concurrent editing. Independent fields merge; same-field conflicts resolve deterministically by timestamp and mutation ID.",
+        "properties": {
+          "mutationId": { "type": "string", "format": "uuid" },
+          "fieldTimestamps": {
+            "type": "object",
+            "additionalProperties": { "type": "string", "format": "date-time" },
+            "description": "Timestamp for each field present in this update. Client clocks more than five minutes ahead are rejected."
+          }
         }
       },
       "TodoMutation": {
         "type": "object",
         "required": ["todo", "undoToken"],
-        "properties": { "todo": { "$ref": "#/components/schemas/Todo" }, "undoToken": { "type": "string", "format": "uuid" } }
+        "properties": { "todo": { "$ref": "#/components/schemas/Todo" }, "undoToken": { "type": ["string", "null"], "format": "uuid" }, "appliedFields": { "type": "array", "items": { "type": "string" }, "description": "Fields accepted after conflict resolution." } }
       },
       "BulkTodoRequest": {
         "type": "object",
