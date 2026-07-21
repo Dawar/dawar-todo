@@ -77,6 +77,35 @@ type Todo = {
   offline?: boolean;
 };
 
+type TodoSettings = {
+  snoozeTimeZone: string;
+  snoozeWakeHour: number;
+};
+
+type BootstrapResponse = {
+  todos: Todo[];
+  projects: string[];
+  settings: TodoSettings;
+  revision: number;
+  serverTime: string;
+};
+
+type SyncResponse = ({
+  reset: false;
+  revision: number;
+  todos: Todo[];
+  deletedIds: number[];
+  projects?: string[];
+  settings?: TodoSettings;
+} | {
+  reset: true;
+  reason: string;
+  revision: number;
+  todos: Todo[];
+  projects: string[];
+  settings: TodoSettings;
+}) & { serverTime: string };
+
 type OptimisticOperation = {
   ids: number[];
   previous: Todo[];
@@ -1140,6 +1169,7 @@ export default function Home() {
   const pendingCompletionIdsRef = useRef<Set<number>>(new Set());
   const optimisticOperationsRef = useRef<Map<string, OptimisticOperation>>(new Map());
   const liveSyncRunningRef = useRef(false);
+  const syncRevisionRef = useRef(0);
   const lastLiveSnapshotRef = useRef("");
   const lastAppBadgeCountRef = useRef<number | null>(null);
   const overlayOpen = editingId !== null || projectSelectorOpen || projectDialog !== null || newProjectOpen || projectDeleteDialog !== null || filtersOpen || viewerIndex !== null || voiceTarget !== null;
@@ -1224,25 +1254,89 @@ export default function Home() {
     }
   });
 
+  const applyLiveDelta = useEffectEvent((remoteTodos: Todo[], deletedIds: number[], source: "poll" | "reconnect") => {
+    const pendingPatches = pendingTodoPatchesRef.current;
+    const discardedPendingIds = deletedIds.filter((id) => pendingPatches.delete(id));
+    if (discardedPendingIds.length) {
+      setOfflineEditCount((current) => Math.max(0, current - discardedPendingIds.length));
+      for (const id of discardedPendingIds) {
+        void deleteOfflineTodoMutation(id).catch((error) => {
+          console.error("[todo-sync] deleted task mutation cleanup failed", { todoId: id, error });
+        });
+      }
+      console.warn("[todo-sync] remote deletion superseded queued edits", { ids: discardedPendingIds });
+    }
+    const changed = remoteTodos.map((todo) => patchTodo(todo, pendingPatches.get(todo.id) ?? {}));
+    const changedById = new Map(changed.map((todo) => [todo.id, todo]));
+    const deleted = new Set(deletedIds);
+    setTodos((current) => {
+      const next = current
+        .filter((todo) => todo.offline || todo.id < 0 || !deleted.has(todo.id))
+        .map((todo) => changedById.get(todo.id) ?? todo);
+      const existingIds = new Set(next.map((todo) => todo.id));
+      const inserted = changed.filter((todo) => !existingIds.has(todo.id));
+      return inserted.length ? [...inserted, ...next] : next;
+    });
+
+    const activeId = editingIdRef.current;
+    const currentDraft = editDraftRef.current;
+    const baseline = editBaselineRef.current;
+    const remoteTodo = activeId === null ? null : changedById.get(activeId) ?? null;
+    if (remoteTodo && currentDraft && baseline) {
+      const remoteDraft = todoDraft(remoteTodo);
+      const nextDraft = { ...currentDraft };
+      const nextBaseline = { ...baseline };
+      for (const field of [...AUTOSAVE_FIELDS, "project" as const]) {
+        if (currentDraft[field] === baseline[field]) nextDraft[field] = remoteDraft[field] as never;
+        if (currentDraft[field] === baseline[field]) nextBaseline[field] = remoteDraft[field] as never;
+      }
+      editBaselineRef.current = nextBaseline;
+      editDraftRef.current = nextDraft;
+      if (JSON.stringify(nextDraft) !== JSON.stringify(currentDraft)) setEditDraft(nextDraft);
+    } else if (activeId !== null && deleted.has(activeId) && !pendingPatches.has(activeId)) {
+      if (autosaveTimerRef.current !== null) window.clearTimeout(autosaveTimerRef.current);
+      autosaveTimerRef.current = null;
+      setEditingId(null);
+      setEditDraft(null);
+      editingIdRef.current = null;
+      editDraftRef.current = null;
+      editBaselineRef.current = null;
+      detailUploads.forEach((item) => URL.revokeObjectURL(item.previewUrl));
+      setDetailUploads([]);
+      setNotice({ tone: "error", text: "This task was deleted on another device." });
+      console.warn("[todo-sync] open task removed by remote delta", { todoId: activeId, source });
+    }
+  });
+
   const refreshLiveData = useEffectEvent(async (source: "poll" | "reconnect") => {
     if (liveSyncRunningRef.current || !navigator.onLine || document.visibilityState === "hidden") return;
     liveSyncRunningRef.current = true;
     const startedAt = Date.now();
     try {
-      const [{ todos: remoteTodos }, { projects: remoteProjects }] = await Promise.all([
-        request<{ todos: Todo[]; serverTime: string }>(`/api/todos?sync=${Date.now()}`, { cache: "no-store" }),
-        request<{ projects: string[] }>("/api/projects", { cache: "no-store" }),
-      ]);
-      applyLiveSnapshot(remoteTodos, source);
-      setRegisteredProjects((current) => (
-        current.length === remoteProjects.length && current.every((name, index) => name === remoteProjects[index])
-          ? current
-          : remoteProjects
-      ));
-      if (source === "reconnect") {
-        console.info("[todo-sync] reconnect refresh completed", {
-          todos: remoteTodos.length,
-          projects: remoteProjects.length,
+      const after = syncRevisionRef.current;
+      const result = await request<SyncResponse>(`/api/sync?after=${after}`, { cache: "no-store" });
+      if (result.reset) applyLiveSnapshot(result.todos, source);
+      else if (result.todos.length || result.deletedIds.length) applyLiveDelta(result.todos, result.deletedIds, source);
+      if (result.projects) {
+        setRegisteredProjects((current) => (
+          current.length === result.projects.length && current.every((name, index) => name === result.projects[index])
+            ? current
+            : result.projects
+        ));
+      }
+      if (result.settings?.snoozeTimeZone) setScheduleTimeZone(result.settings.snoozeTimeZone);
+      syncRevisionRef.current = result.revision;
+      const changedTodos = result.todos.length + (result.reset ? 0 : result.deletedIds.length);
+      if (source === "reconnect" || result.reset || changedTodos > 0 || result.projects || result.settings) {
+        console.info("[todo-sync] delta applied", {
+          source,
+          after,
+          revision: result.revision,
+          reset: result.reset,
+          resetReason: result.reset ? result.reason : null,
+          changedTodos,
+          projectsIncluded: Boolean(result.projects),
+          settingsIncluded: Boolean(result.settings),
           durationMs: Date.now() - startedAt,
         });
       }
@@ -1275,17 +1369,13 @@ export default function Home() {
           return null;
         }),
       ]);
-      const server = await Promise.all([
-        request<{ todos: Todo[] }>("/api/todos"),
-        request<{ projects: string[] }>("/api/projects"),
-        request<{ settings: { snoozeTimeZone: string } }>("/api/settings"),
-      ]).catch((error) => {
+      const server = await request<BootstrapResponse>("/api/bootstrap", { cache: "no-store" }).catch((error) => {
         console.warn("[todo-ui] server load unavailable", { online: navigator.onLine, error });
         return null;
       });
       if (!active) return;
-      const loaded = server?.[0].todos ?? cachedState?.todos ?? [];
-      const loadedProjects = server?.[1].projects ?? cachedState?.projects ?? [];
+      const loaded = server?.todos ?? cachedState?.todos ?? [];
+      const loadedProjects = server?.projects ?? cachedState?.projects ?? [];
       const serverClientIds = new Set(loaded.map((todo) => todo.clientId).filter(Boolean));
       const pendingRecords = offlineRecords.filter((record) => !serverClientIds.has(record.clientId));
       const alreadySynced = offlineRecords.filter((record) => serverClientIds.has(record.clientId));
@@ -1299,8 +1389,9 @@ export default function Home() {
       setOfflineCount(pendingRecords.length);
       setOfflineEditCount(offlineMutations.length);
       setRegisteredProjects(loadedProjects);
-      if (server?.[2].settings.snoozeTimeZone) setScheduleTimeZone(server[2].settings.snoozeTimeZone);
-      if (server) void saveCachedServerState(loaded, loadedProjects);
+      syncRevisionRef.current = server?.revision ?? cachedState?.revision ?? 0;
+      if (server?.settings.snoozeTimeZone) setScheduleTimeZone(server.settings.snoozeTimeZone);
+      if (server) void saveCachedServerState(loaded, loadedProjects, server.revision);
       if (!server) setNotice({ tone: "success", text: pendingRecords.length ? "Offline — showing tasks waiting to sync." : "Offline — new tasks will sync when you reconnect." });
       console.info("[todo-ui] loaded", {
         count: loaded.length,
@@ -1308,6 +1399,7 @@ export default function Home() {
         offlineEdits: offlineMutations.length,
         reconciled: alreadySynced.length,
         projects: loadedProjects.length,
+        revision: syncRevisionRef.current,
         open: loaded.filter((todo) => todo.status === "open").length,
         completed: loaded.filter((todo) => todo.status === "completed").length,
         snoozed: loaded.filter((todo) => isSnoozed(todo, Date.now())).length,
@@ -1399,7 +1491,7 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    if (!loading) void saveCachedServerState(todos.filter((todo) => !todo.offline), registeredProjects).catch((error) => {
+    if (!loading) void saveCachedServerState(todos.filter((todo) => !todo.offline), registeredProjects, syncRevisionRef.current).catch((error) => {
       console.error("[todo-offline] server snapshot update failed", error);
     });
   }, [loading, registeredProjects, todos]);

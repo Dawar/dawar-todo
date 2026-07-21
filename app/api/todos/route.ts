@@ -1,25 +1,11 @@
-import { env } from "cloudflare:workers";
-import { createTodo, ensureTodoDatabase, listTodos } from "../../../db/todos";
-import { scheduleAttachmentCleanup } from "../../../db/attachments";
-import { processRecurringTodos } from "../../../worker/recurring";
-
-let lastRecurrenceSyncMinute = "";
+import { createTodo, listTodos } from "../../../db/todos";
+import { runTodoReadMaintenance } from "../../../db/maintenance";
 
 export async function GET() {
   const startedAt = Date.now();
   try {
-    await ensureTodoDatabase();
-    const now = new Date();
-    const recurrenceMinute = new Date(Math.floor(now.valueOf() / 60_000) * 60_000).toISOString();
-    const recurrence = recurrenceMinute === lastRecurrenceSyncMinute
-      ? null
-      : await processRecurringTodos(env.DB, now, {
-        catchUp: true,
-        source: "todo-list-sync",
-      });
-    lastRecurrenceSyncMinute = recurrenceMinute;
+    const recurrence = await runTodoReadMaintenance("legacy-list");
     const todos = await listTodos();
-    await scheduleAttachmentCleanup();
     console.info("[todo-api] list", {
       count: todos.length,
       recurringReopened: recurrence?.reopened ?? 0,

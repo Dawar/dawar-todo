@@ -17,19 +17,6 @@ type RecurrenceOptions = {
   source?: RecurrenceSource;
 };
 
-async function ensureRecurringColumns(db: D1Database) {
-  const columns = await db.prepare("PRAGMA table_info(todos)").all<{ name: string }>();
-  if (!columns.results.some((column) => column.name === "recurrence_cron")) {
-    await db.prepare("ALTER TABLE todos ADD COLUMN recurrence_cron TEXT").run();
-    console.info("[todo-recurring] added recurrence_cron compatibility column");
-  }
-  if (!columns.results.some((column) => column.name === "recurrence_last_fired_at")) {
-    await db.prepare("ALTER TABLE todos ADD COLUMN recurrence_last_fired_at TEXT").run();
-    console.info("[todo-recurring] added recurrence_last_fired_at compatibility column");
-  }
-  await db.prepare("CREATE INDEX IF NOT EXISTS todos_recurrence_cron_idx ON todos(recurrence_cron)").run();
-}
-
 export async function processRecurringTodos(
   db: D1Database,
   scheduledAt = new Date(),
@@ -53,7 +40,6 @@ export async function processRecurringTodos(
         return { checked: 0, due: 0, changed: 0, reopened: 0, alreadyFired: 0, invalid: 0, firedAt, timeZone: null, skipped: true };
       }
     }
-    await ensureRecurringColumns(db);
     const setting = await db
       .prepare("SELECT value FROM app_settings WHERE key = 'snooze_timezone'")
       .first<{ value: string }>();

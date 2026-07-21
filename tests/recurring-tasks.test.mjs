@@ -149,12 +149,14 @@ test("todo-list sync catches up a missed occurrence once per minute", async () =
 });
 
 test("ships recurrence storage, snooze protection, and a once-per-minute Worker trigger", async () => {
-  const [schema, database, page, worker, todoRoute, generatedConfig, openApiText, skillSource, migration] = await Promise.all([
+  const [schema, database, page, worker, todoRoute, maintenance, recurring, generatedConfig, openApiText, skillSource, migration] = await Promise.all([
     readFile(new URL("db/schema.ts", root), "utf8"),
     readFile(new URL("db/todos.ts", root), "utf8"),
     readFile(new URL("app/page.tsx", root), "utf8"),
     readFile(new URL("worker/index.ts", root), "utf8"),
     readFile(new URL("app/api/todos/route.ts", root), "utf8"),
+    readFile(new URL("db/maintenance.ts", root), "utf8"),
+    readFile(new URL("worker/recurring.ts", root), "utf8"),
     readFile(new URL("dist/server/wrangler.json", root), "utf8"),
     readFile(new URL("public/openapi.json", root), "utf8"),
     readFile(new URL("db/api-token-skill.ts", root), "utf8"),
@@ -168,7 +170,9 @@ test("ships recurrence storage, snooze protection, and a once-per-minute Worker 
   assert.match(database, /Recurring tasks cannot be snoozed/);
   assert.match(page, /Recurring tasks cannot be snoozed/);
   assert.match(worker, /processRecurringTodos/);
-  assert.match(todoRoute, /catchUp:\s*true/);
+  assert.match(todoRoute, /runTodoReadMaintenance/);
+  assert.match(maintenance, /catchUp:\s*true/);
+  assert.doesNotMatch(recurring, /PRAGMA table_info/);
   assert.deepEqual(generated.triggers.crons, ["* * * * *"]);
   assert.ok(openApi.components.schemas.Todo.properties.recurrenceCron);
   assert.ok(openApi.components.schemas.UpdateTodo.properties.recurrenceCron);

@@ -12,6 +12,7 @@ const MAX_IMAGE_PIXELS = 100_000_000;
 const DRAFT_LIFETIME_HOURS = 24;
 const DELETED_RETENTION_DAYS = 7;
 const SIGNED_URL_SECONDS = 60 * 60;
+const CLEANUP_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 type RuntimeEnv = {
   DB: D1Database;
@@ -25,6 +26,7 @@ type RuntimeEnv = {
 type StorageConfig = { bucket: string; endpoint: URL; region: string };
 
 let cachedStorageConfig: StorageConfig | null = null;
+let nextCleanupCheckAt = 0;
 
 export type AttachmentRow = {
   id: string;
@@ -1199,15 +1201,22 @@ async function cleanupExpiredAttachments() {
 }
 
 export async function scheduleAttachmentCleanup() {
+  if (Date.now() < nextCleanupCheckAt) return;
+  nextCleanupCheckAt = Date.now() + CLEANUP_CHECK_INTERVAL_MS;
   const db = database();
-  const setting = await db.prepare("SELECT value FROM app_settings WHERE key = 'attachment_cleanup_at'").first<{ value: string }>();
-  const lastRun = setting?.value ? new Date(setting.value).valueOf() : 0;
-  if (Number.isFinite(lastRun) && Date.now() - lastRun < 24 * 60 * 60 * 1000) return;
-  await db.prepare(`
+  const now = new Date();
+  const cutoff = new Date(now.valueOf() - 24 * 60 * 60 * 1000).toISOString();
+  const guard = await db.prepare(`
     INSERT INTO app_settings (key, value, updated_at)
     VALUES ('attachment_cleanup_at', ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
-  `).bind(new Date().toISOString()).run();
+    WHERE app_settings.value <= ?
+  `).bind(now.toISOString(), cutoff).run();
+  if (!Number(guard.meta.changes ?? 0)) return;
+  console.info("[todo-attachments] cleanup lease acquired", {
+    cutoff,
+    nextIsolateCheckAt: new Date(nextCleanupCheckAt).toISOString(),
+  });
   waitUntil(cleanupExpiredAttachments().catch((error) => {
     console.error("[todo-attachments] cleanup failed", error);
   }));

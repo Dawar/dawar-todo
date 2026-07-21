@@ -79,7 +79,31 @@ export type TodoSettings = {
   snoozeWakeHour: number;
 };
 
+export type TodoBootstrapSnapshot = {
+  todos: Todo[];
+  projects: string[];
+  settings: TodoSettings;
+  revision: number;
+};
+
+export type TodoSyncDelta = {
+  reset: false;
+  revision: number;
+  todos: Todo[];
+  deletedIds: number[];
+  projects?: string[];
+  settings?: TodoSettings;
+} | ({ reset: true; reason: string } & TodoBootstrapSnapshot);
+
+type TodoSyncChangeRow = {
+  revision: number;
+  entity_type: "todo" | "project" | "settings";
+  entity_key: string;
+  operation: string;
+};
+
 let initialization: Promise<void> | null = null;
+const CURRENT_SCHEMA_VERSION = "14";
 
 function database() {
   if (!env.DB) throw new Error("The todo database is unavailable.");
@@ -110,11 +134,110 @@ function mapTodo(row: TodoRow): Todo {
   };
 }
 
+function mapTodoSettings(rows: Array<{ key: string; value: string }>): TodoSettings {
+  const values = Object.fromEntries(rows.map((row) => [row.key, row.value]));
+  return {
+    snoozeTimeZone: values.snooze_timezone || "America/Toronto",
+    snoozeWakeHour: Number(values.snooze_wake_hour ?? 8),
+  };
+}
+
+const todoListSql = `
+  SELECT todos.*,
+    (SELECT COUNT(*) FROM todo_attachments
+     WHERE todo_attachments.todo_id = todos.id
+       AND todo_attachments.upload_state = 'ready'
+       AND todo_attachments.deleted_at IS NULL) AS attachment_count
+  FROM todos
+`;
+
+async function ensureTodoSyncSchema(db: D1Database) {
+  await db.batch([
+    db.prepare(`
+      CREATE TABLE IF NOT EXISTS todo_sync_changes (
+        revision INTEGER PRIMARY KEY AUTOINCREMENT,
+        entity_type TEXT NOT NULL,
+        entity_key TEXT NOT NULL,
+        operation TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+      )
+    `),
+    db.prepare("CREATE INDEX IF NOT EXISTS todo_sync_changes_created_at_idx ON todo_sync_changes(created_at)"),
+    db.prepare("CREATE INDEX IF NOT EXISTS todo_sync_changes_entity_idx ON todo_sync_changes(entity_type, entity_key, revision)"),
+    db.prepare(`CREATE TRIGGER IF NOT EXISTS todo_sync_todos_insert AFTER INSERT ON todos BEGIN
+      INSERT INTO todo_sync_changes (entity_type, entity_key, operation) VALUES ('todo', CAST(NEW.id AS TEXT), 'upsert');
+    END`),
+    db.prepare(`CREATE TRIGGER IF NOT EXISTS todo_sync_todos_update AFTER UPDATE ON todos BEGIN
+      INSERT INTO todo_sync_changes (entity_type, entity_key, operation) VALUES ('todo', CAST(NEW.id AS TEXT), 'upsert');
+    END`),
+    db.prepare(`CREATE TRIGGER IF NOT EXISTS todo_sync_todos_delete AFTER DELETE ON todos BEGIN
+      INSERT INTO todo_sync_changes (entity_type, entity_key, operation) VALUES ('todo', CAST(OLD.id AS TEXT), 'delete');
+    END`),
+    db.prepare(`CREATE TRIGGER IF NOT EXISTS todo_sync_projects_insert AFTER INSERT ON todo_projects BEGIN
+      INSERT INTO todo_sync_changes (entity_type, entity_key, operation) VALUES ('project', NEW.name, 'changed');
+    END`),
+    db.prepare(`CREATE TRIGGER IF NOT EXISTS todo_sync_projects_update AFTER UPDATE ON todo_projects BEGIN
+      INSERT INTO todo_sync_changes (entity_type, entity_key, operation) VALUES ('project', NEW.name, 'changed');
+    END`),
+    db.prepare(`CREATE TRIGGER IF NOT EXISTS todo_sync_projects_delete AFTER DELETE ON todo_projects BEGIN
+      INSERT INTO todo_sync_changes (entity_type, entity_key, operation) VALUES ('project', OLD.name, 'changed');
+    END`),
+    db.prepare(`CREATE TRIGGER IF NOT EXISTS todo_sync_settings_insert AFTER INSERT ON app_settings
+      WHEN NEW.key IN ('snooze_timezone', 'snooze_wake_hour') BEGIN
+      INSERT INTO todo_sync_changes (entity_type, entity_key, operation) VALUES ('settings', NEW.key, 'changed');
+    END`),
+    db.prepare(`CREATE TRIGGER IF NOT EXISTS todo_sync_settings_update AFTER UPDATE ON app_settings
+      WHEN NEW.key IN ('snooze_timezone', 'snooze_wake_hour') BEGIN
+      INSERT INTO todo_sync_changes (entity_type, entity_key, operation) VALUES ('settings', NEW.key, 'changed');
+    END`),
+    db.prepare(`CREATE TRIGGER IF NOT EXISTS todo_sync_attachments_insert AFTER INSERT ON todo_attachments
+      WHEN NEW.todo_id IS NOT NULL BEGIN
+      INSERT INTO todo_sync_changes (entity_type, entity_key, operation) VALUES ('todo', CAST(NEW.todo_id AS TEXT), 'upsert');
+    END`),
+    db.prepare(`CREATE TRIGGER IF NOT EXISTS todo_sync_attachments_update AFTER UPDATE ON todo_attachments
+      WHEN OLD.todo_id IS NOT NEW.todo_id OR OLD.upload_state IS NOT NEW.upload_state OR OLD.deleted_at IS NOT NEW.deleted_at BEGIN
+      INSERT INTO todo_sync_changes (entity_type, entity_key, operation)
+        SELECT 'todo', CAST(OLD.todo_id AS TEXT), 'upsert' WHERE OLD.todo_id IS NOT NULL;
+      INSERT INTO todo_sync_changes (entity_type, entity_key, operation)
+        SELECT 'todo', CAST(NEW.todo_id AS TEXT), 'upsert' WHERE NEW.todo_id IS NOT NULL;
+    END`),
+    db.prepare(`CREATE TRIGGER IF NOT EXISTS todo_sync_attachments_delete AFTER DELETE ON todo_attachments
+      WHEN OLD.todo_id IS NOT NULL BEGIN
+      INSERT INTO todo_sync_changes (entity_type, entity_key, operation) VALUES ('todo', CAST(OLD.todo_id AS TEXT), 'upsert');
+    END`),
+    db.prepare(`
+      INSERT INTO app_settings (key, value, updated_at)
+      VALUES ('schema_version', ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+    `).bind(CURRENT_SCHEMA_VERSION),
+  ]);
+}
+
 export async function ensureTodoDatabase() {
   if (initialization) return initialization;
 
   initialization = (async () => {
     const db = database();
+    const fastPathStartedAt = Date.now();
+    try {
+      const schemaVersion = await db
+        .prepare("SELECT value FROM app_settings WHERE key = 'schema_version'")
+        .first<{ value: string }>();
+      if (schemaVersion?.value === CURRENT_SCHEMA_VERSION) {
+        console.info("[todo-db] production schema fast path", {
+          schemaVersion: schemaVersion.value,
+          durationMs: Date.now() - fastPathStartedAt,
+        });
+        return;
+      }
+      console.warn("[todo-db] compatibility initialization required", {
+        schemaVersion: schemaVersion?.value ?? null,
+      });
+    } catch (error) {
+      console.warn("[todo-db] schema marker unavailable; running compatibility initialization", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
     await db.batch([
       db.prepare(`
         CREATE TABLE IF NOT EXISTS todos (
@@ -360,12 +483,15 @@ export async function ensureTodoDatabase() {
       total: Number(registeredProjects?.count ?? 0),
     });
 
+    await ensureTodoSyncSchema(db);
+
     console.info("[todo-db] ready", {
       inserted,
       total: existingTotal + inserted,
       imported: importedTodos.length,
       seedSkipped: Boolean(seedVersion) || existingTotal > 0,
       archivedConverted,
+      schemaVersion: CURRENT_SCHEMA_VERSION,
     });
   })().catch((error) => {
     initialization = null;
@@ -378,17 +504,92 @@ export async function ensureTodoDatabase() {
 export async function listTodos(): Promise<Todo[]> {
   await ensureTodoDatabase();
   const result = await database()
-    .prepare(`
-      SELECT todos.*,
-        (SELECT COUNT(*) FROM todo_attachments
-         WHERE todo_attachments.todo_id = todos.id
-           AND todo_attachments.upload_state = 'ready'
-           AND todo_attachments.deleted_at IS NULL) AS attachment_count
-      FROM todos
-      ORDER BY updated_at DESC, id DESC
-    `)
+    .prepare(`${todoListSql} ORDER BY updated_at DESC, id DESC`)
     .all<TodoRow>();
   return result.results.map(mapTodo);
+}
+
+export async function readTodoBootstrap(): Promise<TodoBootstrapSnapshot> {
+  await ensureTodoDatabase();
+  const db = database();
+  const [todoResult, projectResult, settingResult, revisionResult] = await db.batch([
+    db.prepare(`${todoListSql} ORDER BY updated_at DESC, id DESC`),
+    db.prepare("SELECT name FROM todo_projects ORDER BY name COLLATE NOCASE ASC"),
+    db.prepare("SELECT key, value FROM app_settings WHERE key IN ('snooze_timezone', 'snooze_wake_hour')"),
+    db.prepare("SELECT COALESCE(MAX(revision), 0) AS revision FROM todo_sync_changes"),
+  ]) as [
+    D1Result<TodoRow>,
+    D1Result<{ name: string }>,
+    D1Result<{ key: string; value: string }>,
+    D1Result<{ revision: number }>,
+  ];
+  return {
+    todos: todoResult.results.map(mapTodo),
+    projects: projectResult.results.map((row) => row.name),
+    settings: mapTodoSettings(settingResult.results),
+    revision: Number(revisionResult.results[0]?.revision ?? 0),
+  };
+}
+
+async function listTodosByIds(db: D1Database, ids: number[]) {
+  if (!ids.length) return [];
+  const chunks: number[][] = [];
+  for (let index = 0; index < ids.length; index += 90) chunks.push(ids.slice(index, index + 90));
+  const results = await db.batch(chunks.map((chunk) => db
+    .prepare(`${todoListSql} WHERE todos.id IN (${placeholders(chunk.length)})`)
+    .bind(...chunk))) as D1Result<TodoRow>[];
+  return results.flatMap((result) => result.results.map(mapTodo));
+}
+
+export async function readTodoSyncDelta(afterRevision: number): Promise<TodoSyncDelta> {
+  await ensureTodoDatabase();
+  const db = database();
+  const [changeResult, boundResult] = await db.batch([
+    db.prepare(`
+      SELECT revision, entity_type, entity_key, operation
+      FROM todo_sync_changes
+      WHERE revision > ?
+      ORDER BY revision ASC
+      LIMIT 501
+    `).bind(afterRevision),
+    db.prepare("SELECT MIN(revision) AS first_revision, MAX(revision) AS last_revision FROM todo_sync_changes"),
+  ]) as [D1Result<TodoSyncChangeRow>, D1Result<{ first_revision: number | null; last_revision: number | null }>];
+  const firstRevision = Number(boundResult.results[0]?.first_revision ?? 0);
+  const lastRevision = Number(boundResult.results[0]?.last_revision ?? 0);
+  const resetReason = afterRevision > lastRevision
+    ? "client-revision-ahead"
+    : firstRevision > 0 && afterRevision < firstRevision - 1
+      ? "revision-expired"
+      : changeResult.results.length > 500
+        ? "change-window-exceeded"
+        : null;
+  if (resetReason) return { reset: true, reason: resetReason, ...await readTodoBootstrap() };
+
+  const changes = changeResult.results;
+  if (!changes.length) {
+    return { reset: false, revision: lastRevision, todos: [], deletedIds: [] };
+  }
+  const todoIds = [...new Set(changes
+    .filter((change) => change.entity_type === "todo")
+    .map((change) => Number(change.entity_key))
+    .filter((id) => Number.isInteger(id) && id > 0))];
+  const todos = await listTodosByIds(db, todoIds);
+  const liveIds = new Set(todos.map((todo) => todo.id));
+  const deletedIds = todoIds.filter((id) => !liveIds.has(id));
+  const projectsChanged = changes.some((change) => change.entity_type === "project");
+  const settingsChanged = changes.some((change) => change.entity_type === "settings");
+  const [projects, settings] = await Promise.all([
+    projectsChanged ? listTodoProjects() : Promise.resolve(undefined),
+    settingsChanged ? getTodoSettings() : Promise.resolve(undefined),
+  ]);
+  return {
+    reset: false,
+    revision: Math.max(lastRevision, Number(changes.at(-1)?.revision ?? afterRevision)),
+    todos,
+    deletedIds,
+    ...(projects ? { projects } : {}),
+    ...(settings ? { settings } : {}),
+  };
 }
 
 export async function listTodoProjects(): Promise<string[]> {
@@ -750,11 +951,7 @@ export async function getTodoSettings(): Promise<TodoSettings> {
   const result = await database()
     .prepare("SELECT key, value FROM app_settings WHERE key IN ('snooze_timezone', 'snooze_wake_hour')")
     .all<{ key: string; value: string }>();
-  const values = Object.fromEntries(result.results.map((row) => [row.key, row.value]));
-  return {
-    snoozeTimeZone: values.snooze_timezone || "America/Toronto",
-    snoozeWakeHour: Number(values.snooze_wake_hour ?? 8),
-  };
+  return mapTodoSettings(result.results);
 }
 
 export async function updateTodoSettings(settings: TodoSettings): Promise<TodoSettings> {

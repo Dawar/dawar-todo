@@ -164,3 +164,20 @@ export const todoAttachments = sqliteTable(
     index("todo_attachments_deleted_at_idx").on(table.deletedAt),
   ],
 );
+
+export const todoSyncChanges = sqliteTable(
+  "todo_sync_changes",
+  {
+    revision: integer("revision").primaryKey({ autoIncrement: true }),
+    entityType: text("entity_type").notNull(),
+    entityKey: text("entity_key").notNull(),
+    operation: text("operation").notNull(),
+    createdAt: text("created_at")
+      .notNull()
+      .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`),
+  },
+  (table) => [
+    index("todo_sync_changes_created_at_idx").on(table.createdAt),
+    index("todo_sync_changes_entity_idx").on(table.entityType, table.entityKey, table.revision),
+  ],
+);

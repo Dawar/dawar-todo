@@ -39,6 +39,7 @@ export type CachedServerState<T> = {
   key: "server";
   todos: T[];
   projects: string[];
+  revision?: number;
   savedAt: string;
 };
 
@@ -158,10 +159,10 @@ export async function deleteOfflineTodoMutation(todoId: number) {
   console.info("[todo-offline] synchronized task edit removed", { todoId });
 }
 
-export async function saveCachedServerState<T>(todos: T[], projects: string[]) {
-  const state: CachedServerState<T> = { key: "server", todos, projects, savedAt: new Date().toISOString() };
+export async function saveCachedServerState<T>(todos: T[], projects: string[], revision?: number) {
+  const state: CachedServerState<T> = { key: "server", todos, projects, revision, savedAt: new Date().toISOString() };
   await runRequest(CACHE_STORE, "readwrite", (store) => store.put(state));
-  console.info("[todo-offline] server snapshot cached", { todos: todos.length, projects: projects.length });
+  console.info("[todo-offline] server snapshot cached", { todos: todos.length, projects: projects.length, revision });
 }
 
 export async function loadCachedServerState<T>() {
