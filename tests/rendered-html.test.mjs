@@ -211,3 +211,16 @@ test("animates task additions, removals, and list moves without overriding reduc
   assert.match(styles, /::view-transition-group\(\*\)/);
   assert.match(styles, /@media \(prefers-reduced-motion: reduce\)/);
 });
+
+test("shows immediate task-aware snackbars and closes adjusted snooze feedback promptly", async () => {
+  const page = await readFile(new URL("app/page.tsx", root), "utf8");
+
+  assert.match(page, /taskPreview\?: string/);
+  assert.match(page, /dismissAt\?: number/);
+  assert.match(page, /optimistic action snackbar shown/);
+  assert.match(page, /setNotice\(\{[\s\S]*text: `\$\{optimisticLabel\}/);
+  assert.match(page, /const dismissAt = Date\.now\(\) \+ 1_500/);
+  assert.match(page, /Math\.max\(0, notice\.dismissAt - Date\.now\(\)\)/);
+  assert.match(page, /notice\.taskPreview && <p className="mt-0\.5 truncate text-xs text-white\/55"/);
+  assert.ok(page.indexOf("notice.taskPreview &&") < page.indexOf("notice.snoozeIds &&"));
+});

@@ -46,9 +46,11 @@ type SnoozePreset = "15m" | "30m" | "1h" | "2h" | "8pm";
 type Notice = {
   tone: "success" | "error";
   text: string;
+  taskPreview?: string;
   undoToken?: string;
   snoozeIds?: number[];
   snoozedUntil?: string;
+  dismissAt?: number;
 } | null;
 
 type Todo = {
@@ -1455,7 +1457,9 @@ export default function Home() {
 
   useEffect(() => {
     if (!notice) return;
-    const timer = window.setTimeout(() => setNotice(null), notice.snoozeIds?.length ? 15_000 : notice.undoToken ? 8_000 : 5_000);
+    const defaultDuration = notice.snoozeIds?.length ? 15_000 : notice.undoToken ? 8_000 : 5_000;
+    const duration = notice.dismissAt === undefined ? defaultDuration : Math.max(0, notice.dismissAt - Date.now());
+    const timer = window.setTimeout(() => setNotice(null), duration);
     return () => window.clearTimeout(timer);
   }, [notice]);
 
@@ -2209,14 +2213,34 @@ export default function Home() {
 
   async function performAction(ids: number[], action: ExecutableTodoAction | "merge") {
     if (!ids.length || syncing) return;
+    const previous = todos;
+    const taskPreview = ids.length === 1 ? previous.find((todo) => todo.id === ids[0])?.title : undefined;
     if (ids.some((id) => id < 1)) {
-      setNotice({ tone: "error", text: "That offline task will be actionable as soon as it syncs." });
+      setNotice({ tone: "error", text: "That offline task will be actionable as soon as it syncs.", taskPreview });
       return;
     }
-    const previous = todos;
     const actionAt = new Date().toISOString();
+    const openedCompleted = action === "unsnooze" && ids.every((id) => previous.find((todo) => todo.id === id)?.status === "completed");
+    const wokeSnoozed = action === "unsnooze" && ids.every((id) => {
+      const todo = previous.find((item) => item.id === id);
+      return todo ? isSnoozed(todo, new Date(actionAt).valueOf()) : false;
+    });
+    const optimisticLabel = action === "merge"
+      ? "Merging"
+      : action === "complete"
+        ? "Done"
+        : action === "snooze"
+          ? "Snoozed until tomorrow"
+          : action === "unsnooze"
+            ? openedCompleted ? "Opened" : wokeSnoozed ? "Woke" : "Restored to Open"
+            : "Deleted";
     setSyncing(true);
-    setNotice(null);
+    setNotice({
+      tone: "success",
+      text: `${optimisticLabel}: ${ids.length} ${ids.length === 1 ? "task" : "tasks"}${action === "merge" ? "…" : "."}`,
+      taskPreview,
+    });
+    console.info("[todo-ui] optimistic action snackbar shown", { action, ids, taskPreview: Boolean(taskPreview) });
     if (action !== "merge") setTodos((current) => applyOptimisticAction(current, ids, action, actionAt));
     try {
       if (action === "merge") {
@@ -2229,7 +2253,7 @@ export default function Home() {
           result.todo,
           ...current.filter((todo) => !sourceIds.has(todo.id)),
         ]);
-        setNotice({ tone: "success", text: `Merged ${result.ids.length} tasks.`, undoToken: result.undoToken });
+        setNotice({ tone: "success", text: `Merged ${result.ids.length} tasks.`, undoToken: result.undoToken, taskPreview });
         console.info("[todo-ui] merged", { sourceIds: result.ids, mergedId: result.todo.id });
       } else {
         const result = await request<{ todos: Todo[]; ids: number[]; snoozedUntil: string | null; undoToken: string }>("/api/todos/bulk", {
@@ -2240,15 +2264,11 @@ export default function Home() {
           const updates = new Map(result.todos.map((todo) => [todo.id, todo]));
           setTodos((current) => current.map((todo) => updates.get(todo.id) ?? todo));
         }
-        const openedCompleted = action === "unsnooze" && ids.every((id) => previous.find((todo) => todo.id === id)?.status === "completed");
-        const wokeSnoozed = action === "unsnooze" && ids.every((id) => {
-          const todo = previous.find((item) => item.id === id);
-          return todo ? isSnoozed(todo, new Date(actionAt).valueOf()) : false;
-        });
         const label = action === "complete" ? "Done" : action === "snooze" ? "Snoozed until tomorrow" : action === "unsnooze" ? openedCompleted ? "Opened" : wokeSnoozed ? "Woke" : "Restored to Open" : "Deleted";
         setNotice({
           tone: "success",
           text: `${label}: ${ids.length} ${ids.length === 1 ? "task" : "tasks"}.`,
+          taskPreview,
           undoToken: result.undoToken,
           snoozeIds: action === "snooze" ? result.ids : undefined,
           snoozedUntil: action === "snooze" ? result.snoozedUntil ?? undefined : undefined,
@@ -2262,7 +2282,7 @@ export default function Home() {
       });
     } catch (error) {
       setTodos(previous);
-      setNotice({ tone: "error", text: error instanceof Error ? error.message : "The action could not be completed." });
+      setNotice({ tone: "error", text: error instanceof Error ? error.message : "The action could not be completed.", taskPreview });
       console.error("[todo-ui] action failed", { action, ids, error });
     } finally {
       setSyncing(false);
@@ -2271,7 +2291,9 @@ export default function Home() {
 
   async function adjustSnooze(ids: number[], preset: SnoozePreset) {
     if (!ids.length || adjustingSnooze) return;
+    const dismissAt = Date.now() + 1_500;
     setAdjustingSnooze(preset);
+    setNotice((current) => current ? { ...current, dismissAt } : current);
     try {
       const result = await request<{ todos: Todo[]; ids: number[]; snoozedUntil: string }>("/api/todos/bulk", {
         method: "POST",
@@ -2280,13 +2302,15 @@ export default function Home() {
       const updates = new Map(result.todos.map((todo) => [todo.id, todo]));
       setTodos((current) => current.map((todo) => updates.get(todo.id) ?? todo));
       setNow(Date.now());
-      setNotice((current) => ({
+      setNotice((current) => current ? {
         tone: "success",
         text: `${snoozeLabel(result.snoozedUntil)}: ${result.ids.length} ${result.ids.length === 1 ? "task" : "tasks"}.`,
-        undoToken: current?.undoToken,
+        taskPreview: current.taskPreview,
+        undoToken: current.undoToken,
         snoozeIds: result.ids,
         snoozedUntil: result.snoozedUntil,
-      }));
+        dismissAt,
+      } : current);
       console.info("[todo-ui] snooze adjusted", {
         preset,
         requestedIds: ids,
@@ -2299,6 +2323,7 @@ export default function Home() {
       setNotice((current) => ({
         tone: "error",
         text: message,
+        taskPreview: current?.taskPreview,
         undoToken: current?.undoToken,
         snoozeIds: current?.snoozeIds ?? ids,
         snoozedUntil: current?.snoozedUntil,
@@ -2444,6 +2469,7 @@ export default function Home() {
       setNotice({
         tone: "success",
         text: `Assigned to ${location}: ${ids.length} ${ids.length === 1 ? "task" : "tasks"}.`,
+        taskPreview: ids.length === 1 ? todos.find((todo) => todo.id === ids[0])?.title : undefined,
         undoToken: result.undoToken,
       });
       console.info("[todo-ui] project assignment saved", {
@@ -2629,7 +2655,7 @@ export default function Home() {
 
   function taskAction(todo: Todo, action: TodoAction, source: "hover" | "swipe" | "details") {
     if (action === "snooze" && todo.recurrenceCron) {
-      setNotice({ tone: "error", text: "Recurring tasks cannot be snoozed." });
+      setNotice({ tone: "error", text: "Recurring tasks cannot be snoozed.", taskPreview: todo.title });
       console.warn("[todo-ui] recurring task snooze blocked", { id: todo.id, source, recurrenceCron: todo.recurrenceCron });
       return;
     }
@@ -2642,6 +2668,7 @@ export default function Home() {
     const pinned = !todo.pinned;
     const previous = todos;
     setSyncing(true);
+    setNotice({ tone: "success", text: pinned ? "Task pinned." : "Task unpinned.", taskPreview: todo.title });
     setTodos((current) => current.map((item) => item.id === todo.id ? { ...item, pinned } : item));
     try {
       const result = await request<{ todo: Todo; undoToken: string }>(`/api/todos/${todo.id}`, {
@@ -2649,11 +2676,11 @@ export default function Home() {
         body: JSON.stringify({ pinned }),
       });
       setTodos((current) => current.map((item) => item.id === result.todo.id ? result.todo : item));
-      setNotice({ tone: "success", text: pinned ? "Task pinned." : "Task unpinned.", undoToken: result.undoToken });
+      setNotice({ tone: "success", text: pinned ? "Task pinned." : "Task unpinned.", taskPreview: todo.title, undoToken: result.undoToken });
       console.info("[todo-ui] task pin changed", { id: todo.id, pinned, view });
     } catch (error) {
       setTodos(previous);
-      setNotice({ tone: "error", text: error instanceof Error ? error.message : "The pin could not be changed." });
+      setNotice({ tone: "error", text: error instanceof Error ? error.message : "The pin could not be changed.", taskPreview: todo.title });
       console.error("[todo-ui] task pin change failed", { id: todo.id, pinned, error });
     } finally {
       setSyncing(false);
@@ -3671,8 +3698,11 @@ export default function Home() {
               notice.tone === "error" ? "bg-red-700" : "bg-[#202522]",
             )}
           >
-            <div className="flex items-center gap-3">
-              <span className="min-w-0 flex-1 font-medium">{notice.text}</span>
+            <div className="flex items-start gap-3">
+              <div className="min-w-0 flex-1">
+                <p className="font-medium">{notice.text}</p>
+                {notice.taskPreview && <p className="mt-0.5 truncate text-xs text-white/55" title={notice.taskPreview}>{notice.taskPreview}</p>}
+              </div>
               {notice.undoToken && (
                 <button
                   type="button"
