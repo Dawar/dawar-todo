@@ -191,3 +191,38 @@ export function latestCronOccurrence(
   }
   return null;
 }
+
+export function nextCronOccurrence(expression: string, after: Date, timeZone: string) {
+  const parsed = parseCronExpression(expression);
+  const current = cronDateParts(after, timeZone);
+  const hours = [...parsed.fields[1].values].sort((a, b) => a - b);
+  const minutes = [...parsed.fields[0].values].sort((a, b) => a - b);
+  let calendarDay = Date.UTC(current.year, current.month - 1, current.dayOfMonth);
+
+  // Search calendar days in the user's timezone so DST changes do not shift
+  // the displayed recurrence time. Five years covers the parser's full
+  // practical scheduling horizon while keeping malformed edge cases bounded.
+  for (let daysChecked = 0; daysChecked <= 5 * 366; daysChecked += 1) {
+    const calendar = new Date(calendarDay);
+    const year = calendar.getUTCFullYear();
+    const month = calendar.getUTCMonth() + 1;
+    const dayOfMonth = calendar.getUTCDate();
+    const dayOfWeek = calendar.getUTCDay();
+    if (cronDayMatches(parsed, month, dayOfMonth, dayOfWeek)) {
+      for (const hour of hours) {
+        for (const minute of minutes) {
+          const candidate = zonedDateTimeToUtc(year, month, dayOfMonth, hour, minute, timeZone);
+          const candidateParts = cronDateParts(candidate, timeZone);
+          const isExactLocalTime = candidateParts.year === year
+            && candidateParts.month === month
+            && candidateParts.dayOfMonth === dayOfMonth
+            && candidateParts.hour === hour
+            && candidateParts.minute === minute;
+          if (isExactLocalTime && candidate.valueOf() > after.valueOf()) return candidate;
+        }
+      }
+    }
+    calendarDay += 24 * 60 * 60 * 1000;
+  }
+  return null;
+}

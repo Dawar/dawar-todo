@@ -18,7 +18,7 @@ import { ActionIcon, type ActionIconName } from "./action-icon";
 import { currentOpenTaskCount, updateNativeAppBadge } from "./app-badge";
 import { copyTextToClipboard } from "./copy-to-clipboard";
 import { dueDateSortValue, formatDueDate, isDueTodayOrOverdue } from "./date-only";
-import { cronValidationError } from "../lib/cron";
+import { cronValidationError, nextCronOccurrence } from "../lib/cron";
 import { zonedDateTimeInputValue, zonedLocalDateTimeToUtc } from "../lib/zoned-date-time";
 import { SiteHeader } from "./site-header";
 import {
@@ -805,6 +805,24 @@ function snoozeLabel(value: string) {
   return `Wakes ${new Intl.DateTimeFormat(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" }).format(wake)}`;
 }
 
+function recurrenceLabel(expression: string, status: TodoStatus, now: number, timeZone: string) {
+  try {
+    const next = nextCronOccurrence(expression, new Date(now), timeZone);
+    if (!next) return status === "completed" ? "Scheduled to return" : "Recurring";
+    const formatted = new Intl.DateTimeFormat(undefined, {
+      timeZone,
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    }).format(next);
+    return `${status === "completed" ? "Returns" : "Next"} ${formatted}`;
+  } catch {
+    return status === "completed" ? "Scheduled to return" : "Recurring";
+  }
+}
+
 function optimisticSnoozeUntil(preset: SnoozePreset, now = new Date()) {
   const durations: Record<SnoozePreset, number> = {
     "15m": 15 * 60 * 1000,
@@ -964,6 +982,7 @@ function TaskRow({
   todo,
   selected,
   now,
+  timeZone,
   onSelect,
   onAction,
   onProject,
@@ -976,6 +995,7 @@ function TaskRow({
   todo: Todo;
   selected: boolean;
   now: number;
+  timeZone: string;
   onSelect: (todo: Todo) => void;
   onAction: (todo: Todo, action: TodoAction, source: "hover" | "swipe") => void;
   onProject: (todo: Todo, source: "hover" | "swipe") => void;
@@ -1146,7 +1166,7 @@ function TaskRow({
               {todo.context && <span>{todo.context}</span>}
               {todo.dueDate && <span className={classNames(isDueTodayOrOverdue(todo.dueDate) && todo.status === "open" && !snoozed && "font-medium text-red-600")}>{formatDueDate(todo.dueDate)}</span>}
               {snoozed && todo.snoozedUntil && <span className="font-medium text-amber-700">{snoozeLabel(todo.snoozedUntil)}</span>}
-              {todo.recurrenceCron && <span className="inline-flex items-center gap-1 font-medium text-violet-700"><ActionIcon name="repeat" className="h-3 w-3" />{todo.recurrenceCron}</span>}
+              {todo.recurrenceCron && <span className="inline-flex items-center gap-1 font-medium text-violet-700"><ActionIcon name="repeat" className="h-3 w-3" />{recurrenceLabel(todo.recurrenceCron, todo.status, now, timeZone)}</span>}
               {todo.offline && <span className="inline-flex items-center gap-1 font-medium text-amber-700"><ActionIcon name="retry" className="h-3 w-3" />Waiting to sync</span>}
             </div>
           )}
@@ -3700,6 +3720,7 @@ export default function Home() {
                     todo={todo}
                     selected={selected.has(todo.id)}
                     now={now}
+                    timeZone={scheduleTimeZone}
                     onSelect={toggleSelected}
                     onAction={taskAction}
                     onProject={assignTaskProject}
@@ -3722,6 +3743,7 @@ export default function Home() {
                     todo={todo}
                     selected={selected.has(todo.id)}
                     now={now}
+                    timeZone={scheduleTimeZone}
                     onSelect={toggleSelected}
                     onAction={taskAction}
                     onProject={assignTaskProject}

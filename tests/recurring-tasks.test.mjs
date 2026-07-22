@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { cronMatchesDate, cronValidationError, latestCronOccurrence, normalizeCronExpression } from "../lib/cron.ts";
+import { cronMatchesDate, cronValidationError, latestCronOccurrence, nextCronOccurrence, normalizeCronExpression } from "../lib/cron.ts";
 import { processRecurringTodos } from "../worker/recurring.ts";
 
 const root = new URL("../", import.meta.url);
@@ -30,6 +30,21 @@ test("finds a missed local-time occurrence without replaying a schedule complete
   assert.equal(
     latestCronOccurrence("30 7 1 * *", new Date("2026-07-21T16:00:00.000Z"), "America/Toronto", new Date("2026-06-30T16:00:00.000Z"))?.toISOString(),
     "2026-07-01T11:30:00.000Z",
+  );
+});
+
+test("finds the next recurrence in the user's timezone across days and DST", () => {
+  assert.equal(
+    nextCronOccurrence("0 9 * * 1-5", new Date("2026-07-22T17:00:00.000Z"), "America/Toronto")?.toISOString(),
+    "2026-07-23T13:00:00.000Z",
+  );
+  assert.equal(
+    nextCronOccurrence("30 7 1 * *", new Date("2026-07-22T17:00:00.000Z"), "America/Toronto")?.toISOString(),
+    "2026-08-01T11:30:00.000Z",
+  );
+  assert.equal(
+    nextCronOccurrence("0 9 * * *", new Date("2026-10-31T18:00:00.000Z"), "America/Toronto")?.toISOString(),
+    "2026-11-01T14:00:00.000Z",
   );
 });
 
@@ -169,6 +184,7 @@ test("ships recurrence storage, snooze protection, and a once-per-minute Worker 
   assert.match(migration, /ADD `recurrence_cron` text/);
   assert.match(database, /Recurring tasks cannot be snoozed/);
   assert.match(page, /Recurring tasks cannot be snoozed/);
+  assert.match(page, /recurrenceLabel\(todo\.recurrenceCron, todo\.status, now, timeZone\)/);
   assert.match(worker, /processRecurringTodos/);
   assert.match(todoRoute, /runTodoReadMaintenance/);
   assert.match(maintenance, /catchUp:\s*true/);
