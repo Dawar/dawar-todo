@@ -252,3 +252,25 @@ test("keeps fixed action surfaces above the iPhone standalone safe area", async 
   assert.match(styles, /@media \(display-mode: standalone\) and \(max-width: 639px\)/);
   assert.match(styles, /--mobile-action-bottom:\s*max\(4rem, calc\(env\(safe-area-inset-bottom, 0px\) \+ 2rem\)\)/);
 });
+
+test("ships desktop task keyboard navigation, direct actions, view switching, and an accessible keymap", async () => {
+  const [page, header, icons] = await Promise.all([
+    readFile(new URL("app/page.tsx", root), "utf8"),
+    readFile(new URL("app/site-header.tsx", root), "utf8"),
+    readFile(new URL("app/action-icon.tsx", root), "utf8"),
+  ]);
+  assert.match(page, /data-keyboard-task-id=\{todo\.id\}/);
+  assert.match(page, /data-keyboard-action-index="0"/);
+  assert.match(page, /data-keyboard-action-index=\{index \+ 1\}/);
+  assert.match(page, /key === "ArrowDown" \|\| lowerKey === "j"/);
+  assert.match(page, /key === "ArrowUp" \|\| lowerKey === "k"/);
+  assert.match(page, /key === "ArrowLeft" \|\| key === "ArrowRight"/);
+  assert.match(page, /const numberedView = \/\^\[1-4\]\$\//);
+  assert.match(page, /lowerKey === "d" && event\.shiftKey/);
+  assert.match(page, /lowerKey === "a" && usable/);
+  assert.match(page, /function KeyboardShortcutsDialog/);
+  assert.match(page, /aria-labelledby="keyboard-shortcuts-title"/);
+  assert.match(header, /onKeyboardHelp/);
+  assert.match(header, /Keyboard shortcuts \(\?\)/);
+  assert.match(icons, /keyboard:\s*Keyboard/);
+});

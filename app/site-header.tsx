@@ -7,10 +7,12 @@ export function SiteHeader({
   current,
   projectLabel = "Dawar Todo",
   onProjectClick,
+  onKeyboardHelp,
 }: {
   current: "todos" | "settings";
   projectLabel?: string;
   onProjectClick?: () => void;
+  onKeyboardHelp?: () => void;
 }) {
   const brand = (
     <>
@@ -40,14 +42,27 @@ export function SiteHeader({
         )}
         <div className="flex items-center gap-2">
           {current === "todos" ? (
-            <Link
-              href="/settings"
-              aria-label="Settings"
-              title="Settings"
-              className="grid h-10 w-10 place-items-center rounded-xl text-[#69716c] transition hover:bg-black/[0.04] hover:text-[#252a27] focus-visible:outline-2 focus-visible:outline-[#216e4e]"
-            >
-              <ActionIcon name="settings" className="h-5 w-5" />
-            </Link>
+            <>
+              {onKeyboardHelp && (
+                <button
+                  type="button"
+                  onClick={onKeyboardHelp}
+                  aria-label="Keyboard shortcuts"
+                  title="Keyboard shortcuts (?)"
+                  className="hidden h-10 w-10 place-items-center rounded-xl text-[#69716c] transition hover:bg-black/[0.04] hover:text-[#252a27] focus-visible:outline-2 focus-visible:outline-[#216e4e] md:grid"
+                >
+                  <ActionIcon name="keyboard" className="h-5 w-5" />
+                </button>
+              )}
+              <Link
+                href="/settings"
+                aria-label="Settings"
+                title="Settings"
+                className="grid h-10 w-10 place-items-center rounded-xl text-[#69716c] transition hover:bg-black/[0.04] hover:text-[#252a27] focus-visible:outline-2 focus-visible:outline-[#216e4e]"
+              >
+                <ActionIcon name="settings" className="h-5 w-5" />
+              </Link>
+            </>
           ) : (
             <Link href="/" className="rounded-lg px-3 py-2 text-sm font-medium text-[#216e4e] transition hover:bg-[#eaf3ed] focus-visible:outline-2 focus-visible:outline-[#216e4e]">
               Back to tasks

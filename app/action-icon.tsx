@@ -20,6 +20,7 @@ import {
   Link2,
   Merge,
   ImagePlus,
+  Keyboard,
   Mic,
   Paperclip,
   Pin,
@@ -56,6 +57,7 @@ export type ActionIconName =
   | "merge"
   | "move"
   | "image"
+  | "keyboard"
   | "link"
   | "attachment"
   | "badge"
@@ -96,6 +98,7 @@ const icons: Record<ActionIconName, ComponentType<LucideProps>> = {
   merge: Merge,
   move: FolderInput,
   image: ImagePlus,
+  keyboard: Keyboard,
   link: Link2,
   attachment: Paperclip,
   badge: BellDot,
