@@ -916,6 +916,7 @@ const keyboardShortcutGroups = [
       { keys: ["[", "]"], label: "Previous or next view" },
       { keys: ["/"], label: "Search" },
       { keys: ["N"], label: "New task" },
+      { keys: ["⌘/Ctrl", "Z"], label: "Undo last task action" },
       { keys: ["?"], label: "Show this guide" },
       { keys: ["Esc"], label: "Close or clear focus" },
     ],
@@ -1612,8 +1613,21 @@ export default function Home() {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement;
-      const typing = target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT" || target.isContentEditable;
+      const typing = Boolean(target.closest("input, textarea, select, [contenteditable='true']"));
       const imageCount = detailAttachments.filter((attachment) => attachment.kind === "image").length;
+      const undoShortcut = (event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "z";
+      if (undoShortcut && !typing) {
+        if (notice && (notice.operationId || notice.undoToken) && !undoing && !notice.undoRequested) {
+          event.preventDefault();
+          requestNoticeUndo(notice);
+          console.info("[todo-keyboard] undo requested", {
+            source: event.metaKey ? "command-z" : "control-z",
+            optimistic: Boolean(notice.operationId),
+            tokenReady: Boolean(notice.undoToken),
+          });
+        }
+        return;
+      }
       if (event.key === "?" && !typing && window.matchMedia("(min-width: 768px)").matches) {
         event.preventDefault();
         setShortcutsOpen((current) => {
@@ -1666,7 +1680,7 @@ export default function Home() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [detailAttachments, editingId, filtersOpen, newProjectOpen, project, projectDeleteDialog, projectDialog, projectSelectorOpen, shortcutsOpen, viewerIndex, voiceTarget]);
+  }, [detailAttachments, editingId, filtersOpen, newProjectOpen, notice, project, projectDeleteDialog, projectDialog, projectSelectorOpen, shortcutsOpen, undoing, viewerIndex, voiceTarget]);
 
   useEffect(() => {
     if (!overlayOpen) return;

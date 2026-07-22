@@ -268,6 +268,10 @@ test("ships desktop task keyboard navigation, direct actions, view switching, an
   assert.match(page, /const numberedView = \/\^\[1-4\]\$\//);
   assert.match(page, /lowerKey === "d" && event\.shiftKey/);
   assert.match(page, /lowerKey === "a" && usable/);
+  assert.match(page, /const undoShortcut = \(event\.metaKey \|\| event\.ctrlKey\)/);
+  assert.match(page, /requestNoticeUndo\(notice\)/);
+  assert.match(page, /keys: \["⌘\/Ctrl", "Z"\], label: "Undo last task action"/);
+  assert.match(page, /target\.closest\("input, textarea, select, \[contenteditable='true'\]"\)/);
   assert.match(page, /function KeyboardShortcutsDialog/);
   assert.match(page, /aria-labelledby="keyboard-shortcuts-title"/);
   assert.match(header, /onKeyboardHelp/);
