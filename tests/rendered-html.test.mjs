@@ -127,9 +127,14 @@ test("ships the simplified todo and project surface", async () => {
   assert.match(page, /30 minutes/);
   assert.match(page, /1 hour/);
   assert.match(page, /2 hours/);
-  assert.match(page, /8pm/);
+  assert.doesNotMatch(page, /8pm/);
+  assert.match(page, />Custom/);
+  assert.match(page, /type="datetime-local"/);
+  assert.match(page, /zonedLocalDateTimeToUtc/);
+  assert.match(bulkRoute, /snoozedLocal/);
   assert.match(page, /snoozeIds: action === "snooze" \? result\.ids : undefined/);
   assert.match(database, /export async function adjustSnoozedTodos/);
+  assert.match(database, /export async function adjustSnoozedTodosToLocalDateTime/);
   assert.match(database, /status = 'open' AND snoozed_until IS NOT NULL/);
   assert.match(database, /snooze adjusted/);
   assert.doesNotMatch(bulkRoute, /"archive"|"restore_archive"/);
@@ -225,7 +230,7 @@ test("shows fully optimistic Undo and snooze controls while preserving concurren
   assert.match(page, /snoozeIds: action === "snooze" \? ids : undefined/);
   assert.match(page, /notice\.operationId \|\| notice\.undoToken/);
   assert.match(page, /requestNoticeUndo\(notice\)/);
-  assert.match(page, /operation\.snoozePreset = preset/);
+  assert.match(page, /operation\.snoozeAdjustment = adjustment/);
   assert.match(page, /snooze adjustment queued during optimistic action/);
   assert.doesNotMatch(page, /if \(notice\.pendingUndo\) return/);
   assert.match(page, /data-task-notice/);

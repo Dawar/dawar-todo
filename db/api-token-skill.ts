@@ -87,7 +87,7 @@ Bulk actions:
 - \`complete\`: mark IDs completed and clear snooze.
 - \`unsnooze\`: wake snoozed IDs or reopen completed IDs.
 - \`snooze\`: snooze non-recurring IDs until the configured next-day wake time. The API rejects recurring tasks.
-- \`adjust_snooze\`: change already-snoozed IDs using \`snoozePreset\`: \`15m\`, \`30m\`, \`1h\`, \`2h\`, or \`8pm\`.
+- \`adjust_snooze\`: change already-snoozed IDs with either \`snoozePreset\` (\`15m\`, \`30m\`, \`1h\`, or \`2h\`) or \`snoozedLocal\` in \`YYYY-MM-DDTHH:mm\` form. Custom local times are interpreted in the user's configured timezone. The legacy \`8pm\` preset remains accepted for backward compatibility.
 - \`reproject\`: set \`project\` to a name or null without changing status or snooze.
 - \`merge\`: create one merged task and delete the source IDs.
 - \`delete\`: delete selected IDs.

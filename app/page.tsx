@@ -19,6 +19,7 @@ import { currentOpenTaskCount, updateNativeAppBadge } from "./app-badge";
 import { copyTextToClipboard } from "./copy-to-clipboard";
 import { dueDateSortValue, formatDueDate, isDueTodayOrOverdue } from "./date-only";
 import { cronValidationError } from "../lib/cron";
+import { zonedDateTimeInputValue, zonedLocalDateTimeToUtc } from "../lib/zoned-date-time";
 import { SiteHeader } from "./site-header";
 import {
   deleteOfflineTodo,
@@ -40,7 +41,8 @@ type TaskListView = View;
 type Sort = "smart" | "priority" | "due" | "newest" | "oldest" | "az";
 type TodoAction = "complete" | "snooze" | "unsnooze" | "delete";
 type ExecutableTodoAction = TodoAction;
-type SnoozePreset = "15m" | "30m" | "1h" | "2h" | "8pm";
+type SnoozePreset = "15m" | "30m" | "1h" | "2h";
+type SnoozeAdjustment = { preset: SnoozePreset } | { localDateTime: string };
 type Notice = {
   tone: "success" | "error";
   text: string;
@@ -113,7 +115,7 @@ type OptimisticOperation = {
   undoRequested: boolean;
   settled: boolean;
   undoToken?: string;
-  snoozePreset?: SnoozePreset;
+  snoozeAdjustment?: SnoozeAdjustment;
 };
 
 type TodoAttachment = {
@@ -177,6 +179,13 @@ type ProjectDeleteDialogState = {
   targetProject: string;
 };
 
+type CustomSnoozeDialogState = {
+  ids: number[];
+  operationId?: string;
+  localDateTime: string;
+  error: string;
+};
+
 const CREATE_PROJECT = "__create_project__";
 const UNASSIGNED_PROJECT = "__unassigned_project__";
 
@@ -199,7 +208,6 @@ const snoozeAdjustments: Array<{ value: SnoozePreset; label: string }> = [
   { value: "30m", label: "30 minutes" },
   { value: "1h", label: "1 hour" },
   { value: "2h", label: "2 hours" },
-  { value: "8pm", label: "8pm" },
 ];
 
 function request<T>(path: string, options?: RequestInit): Promise<T> {
@@ -798,18 +806,13 @@ function snoozeLabel(value: string) {
 }
 
 function optimisticSnoozeUntil(preset: SnoozePreset, now = new Date()) {
-  const durations: Partial<Record<SnoozePreset, number>> = {
+  const durations: Record<SnoozePreset, number> = {
     "15m": 15 * 60 * 1000,
     "30m": 30 * 60 * 1000,
     "1h": 60 * 60 * 1000,
     "2h": 2 * 60 * 60 * 1000,
   };
-  const duration = durations[preset];
-  if (duration) return new Date(now.valueOf() + duration).toISOString();
-  const eightPm = new Date(now);
-  eightPm.setHours(20, 0, 0, 0);
-  if (eightPm.valueOf() <= now.valueOf()) eightPm.setDate(eightPm.getDate() + 1);
-  return eightPm.toISOString();
+  return new Date(now.valueOf() + durations[preset]).toISOString();
 }
 
 function restoreOptimisticTasks(current: Todo[], previous: Todo[], ids: number[]) {
@@ -1205,7 +1208,8 @@ export default function Home() {
   const [adding, setAdding] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [undoing, setUndoing] = useState(false);
-  const [adjustingSnooze, setAdjustingSnooze] = useState<SnoozePreset | null>(null);
+  const [adjustingSnooze, setAdjustingSnooze] = useState<SnoozePreset | "custom" | null>(null);
+  const [customSnoozeDialog, setCustomSnoozeDialog] = useState<CustomSnoozeDialogState | null>(null);
   const [notice, setNotice] = useState<Notice>(null);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -1261,7 +1265,7 @@ export default function Home() {
   const lastLiveSnapshotRef = useRef("");
   const lastAppBadgeCountRef = useRef<number | null>(null);
   const keyboardPreferredIndexRef = useRef(0);
-  const overlayOpen = editingId !== null || projectSelectorOpen || projectDialog !== null || newProjectOpen || projectDeleteDialog !== null || filtersOpen || viewerIndex !== null || voiceTarget !== null || shortcutsOpen;
+  const overlayOpen = editingId !== null || projectSelectorOpen || projectDialog !== null || newProjectOpen || projectDeleteDialog !== null || filtersOpen || viewerIndex !== null || voiceTarget !== null || shortcutsOpen || customSnoozeDialog !== null;
 
   const routeDroppedAttachments = useEffectEvent((files: File[]) => {
     const destination = editingId !== null ? "task" : "quick-add";
@@ -1603,12 +1607,12 @@ export default function Home() {
   }, [loading, now, todos]);
 
   useEffect(() => {
-    if (!notice) return;
+    if (!notice || customSnoozeDialog) return;
     const defaultDuration = notice.snoozeIds?.length ? 15_000 : notice.undoToken ? 8_000 : 5_000;
     const duration = notice.dismissAt === undefined ? defaultDuration : Math.max(0, notice.dismissAt - Date.now());
     const timer = window.setTimeout(() => setNotice(null), duration);
     return () => window.clearTimeout(timer);
-  }, [notice]);
+  }, [customSnoozeDialog, notice]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -1645,7 +1649,10 @@ export default function Home() {
         event.preventDefault();
         captureRef.current?.focus();
       }
-      if (event.key === "Escape" && shortcutsOpen) {
+      if (event.key === "Escape" && customSnoozeDialog !== null) {
+        setCustomSnoozeDialog(null);
+        console.info("[todo-ui] custom snooze dialog closed", { source: "escape" });
+      } else if (event.key === "Escape" && shortcutsOpen) {
         setShortcutsOpen(false);
         console.info("[todo-keyboard] shortcut guide closed", { source: "escape" });
       } else if (event.key === "Escape" && voiceTarget !== null) {
@@ -1680,7 +1687,7 @@ export default function Home() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [detailAttachments, editingId, filtersOpen, newProjectOpen, notice, project, projectDeleteDialog, projectDialog, projectSelectorOpen, shortcutsOpen, undoing, viewerIndex, voiceTarget]);
+  }, [customSnoozeDialog, detailAttachments, editingId, filtersOpen, newProjectOpen, notice, project, projectDeleteDialog, projectDialog, projectSelectorOpen, shortcutsOpen, undoing, viewerIndex, voiceTarget]);
 
   useEffect(() => {
     if (!overlayOpen) return;
@@ -2613,13 +2620,13 @@ export default function Home() {
           await undoAction(result.undoToken);
           return;
         }
-        if (action === "snooze" && operation?.snoozePreset) {
+        if (action === "snooze" && operation?.snoozeAdjustment) {
           setNotice((current) => current?.operationId === operationId ? {
             ...current,
             pendingUndo: false,
             undoToken: result.undoToken,
           } : current);
-          await persistSnoozeAdjustment(result.ids, operation.snoozePreset, operationId, result.undoToken, result.todos);
+          await persistSnoozeAdjustment(result.ids, operation.snoozeAdjustment, operationId, result.undoToken, result.todos);
           if (operation.undoRequested) {
             setNotice((current) => current?.operationId === operationId ? null : current);
             await undoAction(result.undoToken);
@@ -2630,7 +2637,7 @@ export default function Home() {
           setTodos((current) => current.map((todo) => updates.get(todo.id) ?? todo));
         }
         const label = action === "complete" ? "Done" : action === "snooze" ? "Snoozed until tomorrow" : action === "unsnooze" ? openedCompleted ? "Opened" : wokeSnoozed ? "Woke" : "Restored to Open" : "Deleted";
-        if (!(action === "snooze" && operation?.snoozePreset)) setNotice((current) => current?.operationId === operationId ? {
+        if (!(action === "snooze" && operation?.snoozeAdjustment)) setNotice((current) => current?.operationId === operationId ? {
           ...current,
           text: `${label}: ${ids.length} ${ids.length === 1 ? "task" : "tasks"}.`,
           pendingUndo: false,
@@ -2663,7 +2670,7 @@ export default function Home() {
 
   async function persistSnoozeAdjustment(
     ids: number[],
-    preset: SnoozePreset,
+    adjustment: SnoozeAdjustment,
     operationId: string | undefined,
     undoToken: string | undefined,
     rollbackTodos: Todo[],
@@ -2671,11 +2678,17 @@ export default function Home() {
     try {
       const result = await request<{ todos: Todo[]; ids: number[]; snoozedUntil: string }>("/api/todos/bulk", {
         method: "POST",
-        body: JSON.stringify({ ids, action: "adjust_snooze", snoozePreset: preset }),
+        body: JSON.stringify({
+          ids,
+          action: "adjust_snooze",
+          ...("preset" in adjustment
+            ? { snoozePreset: adjustment.preset }
+            : { snoozedLocal: adjustment.localDateTime }),
+        }),
       });
       const operation = operationId ? optimisticOperationsRef.current.get(operationId) : undefined;
       if (operation?.undoRequested) {
-        console.info("[todo-ui] snooze adjustment response deferred to queued undo", { preset, ids, operationId });
+        console.info("[todo-ui] snooze adjustment response deferred to queued undo", { adjustment, ids, operationId });
         return;
       }
       const updates = new Map(result.todos.map((todo) => [todo.id, todo]));
@@ -2694,7 +2707,7 @@ export default function Home() {
         };
       });
       console.info("[todo-ui] snooze adjustment reconciled", {
-        preset,
+        adjustment,
         requestedIds: ids,
         changedIds: result.ids,
         snoozedUntil: result.snoozedUntil,
@@ -2717,7 +2730,7 @@ export default function Home() {
           snoozedUntil: current?.snoozedUntil,
         };
       });
-      console.error("[todo-ui] snooze adjustment failed", { preset, ids, operationId: operationId ?? null, error });
+      console.error("[todo-ui] snooze adjustment failed", { adjustment, ids, operationId: operationId ?? null, error });
     } finally {
       setAdjustingSnooze(null);
     }
@@ -2725,6 +2738,7 @@ export default function Home() {
 
   async function adjustSnooze(ids: number[], preset: SnoozePreset, operationId?: string) {
     if (!ids.length || adjustingSnooze) return;
+    const adjustment: SnoozeAdjustment = { preset };
     const dismissAt = Date.now() + 1_500;
     const optimisticUntil = optimisticSnoozeUntil(preset);
     const rollbackTodos = todos.filter((todo) => ids.includes(todo.id));
@@ -2741,12 +2755,95 @@ export default function Home() {
 
     const operation = operationId ? optimisticOperationsRef.current.get(operationId) : undefined;
     if (operation && !operation.settled) {
-      operation.snoozePreset = preset;
+      operation.snoozeAdjustment = adjustment;
       setAdjustingSnooze(null);
       console.info("[todo-ui] snooze adjustment queued during optimistic action", { preset, ids, operationId });
       return;
     }
-    await persistSnoozeAdjustment(ids, preset, operationId, notice?.undoToken, rollbackTodos);
+    await persistSnoozeAdjustment(ids, adjustment, operationId, notice?.undoToken, rollbackTodos);
+  }
+
+  function openCustomSnooze(ids: number[], operationId?: string) {
+    if (!ids.length || adjustingSnooze) return;
+    const suggestedWake = new Date(Date.now() + 60 * 60 * 1000);
+    suggestedWake.setUTCMinutes(Math.ceil(suggestedWake.getUTCMinutes() / 15) * 15, 0, 0);
+    const localDateTime = zonedDateTimeInputValue(suggestedWake, scheduleTimeZone);
+    setCustomSnoozeDialog({ ids, operationId, localDateTime, error: "" });
+    setNotice((current) => current ? { ...current, dismissAt: undefined } : current);
+    console.info("[todo-ui] custom snooze dialog opened", {
+      ids,
+      operationId: operationId ?? null,
+      timeZone: scheduleTimeZone,
+      suggestedLocalDateTime: localDateTime,
+    });
+  }
+
+  function closeCustomSnooze(source: "backdrop" | "button" | "cancel") {
+    if (!customSnoozeDialog) return;
+    console.info("[todo-ui] custom snooze dialog closed", {
+      source,
+      count: customSnoozeDialog.ids.length,
+      operationId: customSnoozeDialog.operationId ?? null,
+    });
+    setCustomSnoozeDialog(null);
+  }
+
+  async function saveCustomSnooze(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!customSnoozeDialog || adjustingSnooze) return;
+    let optimisticUntil: string;
+    try {
+      const wake = zonedLocalDateTimeToUtc(customSnoozeDialog.localDateTime, scheduleTimeZone);
+      if (wake.valueOf() <= Date.now()) throw new Error("Choose a future date and time.");
+      optimisticUntil = wake.toISOString();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Choose a valid date and time.";
+      setCustomSnoozeDialog((current) => current ? { ...current, error: message } : current);
+      console.warn("[todo-ui] custom snooze validation rejected", {
+        localDateTime: customSnoozeDialog.localDateTime,
+        timeZone: scheduleTimeZone,
+        error: message,
+      });
+      return;
+    }
+
+    const { ids, operationId, localDateTime } = customSnoozeDialog;
+    const adjustment: SnoozeAdjustment = { localDateTime };
+    const rollbackTodos = todos.filter((todo) => ids.includes(todo.id));
+    const dismissAt = Date.now() + 1_500;
+    setCustomSnoozeDialog(null);
+    setAdjustingSnooze("custom");
+    setTodos((current) => current.map((todo) => ids.includes(todo.id) ? { ...todo, snoozedUntil: optimisticUntil } : todo));
+    setNow(Date.now());
+    setNotice((current) => current ? {
+      ...current,
+      text: `${snoozeLabel(optimisticUntil)}: ${ids.length} ${ids.length === 1 ? "task" : "tasks"}.`,
+      snoozeIds: ids,
+      snoozedUntil: optimisticUntil,
+      dismissAt,
+    } : current);
+
+    const operation = operationId ? optimisticOperationsRef.current.get(operationId) : undefined;
+    if (operation && !operation.settled) {
+      operation.snoozeAdjustment = adjustment;
+      setAdjustingSnooze(null);
+      console.info("[todo-ui] custom snooze adjustment queued during optimistic action", {
+        ids,
+        operationId,
+        localDateTime,
+        optimisticUntil,
+        timeZone: scheduleTimeZone,
+      });
+      return;
+    }
+    console.info("[todo-ui] custom snooze adjustment submitted", {
+      ids,
+      operationId: operationId ?? null,
+      localDateTime,
+      optimisticUntil,
+      timeZone: scheduleTimeZone,
+    });
+    await persistSnoozeAdjustment(ids, adjustment, operationId, notice?.undoToken, rollbackTodos);
   }
 
   function requestNoticeUndo(currentNotice: NonNullable<Notice>) {
@@ -3671,6 +3768,39 @@ export default function Home() {
         </div>
       )}
 
+      {customSnoozeDialog && (
+        <div className="fixed inset-0 z-[70] flex items-end justify-center overflow-x-hidden sm:items-center sm:p-5" role="dialog" aria-modal="true" aria-labelledby="custom-snooze-title">
+          <button type="button" aria-label="Close custom snooze dialog" onClick={() => closeCustomSnooze("backdrop")} className="absolute inset-0 bg-black/35 backdrop-blur-[2px]" />
+          <form onSubmit={saveCustomSnooze} className="relative w-full max-w-full overflow-x-hidden rounded-t-3xl bg-white px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-5 shadow-2xl sm:max-w-md sm:rounded-3xl sm:p-6">
+            <div className="flex min-w-0 items-start justify-between gap-4">
+              <div className="min-w-0">
+                <span className="mb-3 grid h-11 w-11 place-items-center rounded-xl bg-amber-50 text-amber-700"><ActionIcon name="calendar" className="h-5 w-5" /></span>
+                <h2 id="custom-snooze-title" className="text-lg font-semibold text-[#202522]">Custom snooze</h2>
+                <p className="mt-1 text-sm text-[#7c847f]">Choose when {customSnoozeDialog.ids.length === 1 ? "this task" : `these ${customSnoozeDialog.ids.length} tasks`} should return.</p>
+              </div>
+              <button type="button" onClick={() => closeCustomSnooze("button")} className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-[#f1f2f0] text-[#4f5752] hover:bg-[#e8eae7]" aria-label="Close" title="Close"><ActionIcon name="close" /></button>
+            </div>
+            <label className="mt-5 block">
+              <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-[#69716c]">Date and time</span>
+              <input
+                type="datetime-local"
+                value={customSnoozeDialog.localDateTime}
+                onChange={(event) => setCustomSnoozeDialog((current) => current ? { ...current, localDateTime: event.target.value, error: "" } : current)}
+                required
+                aria-invalid={Boolean(customSnoozeDialog.error)}
+                aria-describedby="custom-snooze-help"
+                className={classNames("h-12 w-full rounded-xl border bg-white px-3 text-base outline-none focus:ring-3", customSnoozeDialog.error ? "border-red-400 focus:border-red-500 focus:ring-red-500/10" : "border-black/[0.1] focus:border-[#216e4e]/50 focus:ring-[#216e4e]/10")}
+              />
+            </label>
+            <p id="custom-snooze-help" className={classNames("mt-2 text-xs leading-5", customSnoozeDialog.error ? "font-medium text-red-600" : "text-[#7c847f]")}>{customSnoozeDialog.error || `Time in ${scheduleTimeZone}`}</p>
+            <div className="mt-6 flex gap-2">
+              <button type="button" onClick={() => closeCustomSnooze("cancel")} className="h-11 flex-1 rounded-xl bg-[#f1f2f0] px-4 text-sm font-semibold text-[#59615c] hover:bg-[#e8eae7]">Cancel</button>
+              <button type="submit" disabled={adjustingSnooze !== null || !customSnoozeDialog.localDateTime} className="inline-flex h-11 flex-1 items-center justify-center gap-2 rounded-xl bg-[#216e4e] px-4 text-sm font-semibold text-white hover:bg-[#195d41] disabled:opacity-50"><ActionIcon name="snooze" />Snooze</button>
+            </div>
+          </form>
+        </div>
+      )}
+
       {shortcutsOpen && <KeyboardShortcutsDialog onClose={() => {
         setShortcutsOpen(false);
         console.info("[todo-keyboard] shortcut guide closed", { source: "button" });
@@ -4211,6 +4341,14 @@ export default function Home() {
                     {adjustment.label}
                   </button>
                 ))}
+                <button
+                  type="button"
+                  onClick={() => openCustomSnooze(notice.snoozeIds as number[], notice.operationId)}
+                  disabled={adjustingSnooze !== null}
+                  className="inline-flex min-w-max items-center gap-1.5 rounded-lg bg-white/10 px-2.5 py-1.5 text-xs font-semibold text-white transition hover:bg-white/20 focus-visible:outline-2 focus-visible:outline-white disabled:opacity-50"
+                >
+                  <ActionIcon name="calendar" className="h-3.5 w-3.5" />Custom
+                </button>
               </div>
             )}
           </div>

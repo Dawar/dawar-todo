@@ -7,6 +7,7 @@ import {
   restoreAttachmentStatements,
 } from "./attachments";
 import { normalizeCronExpression } from "../lib/cron";
+import { zonedLocalDateTimeToUtc } from "../lib/zoned-date-time";
 
 type StoredTodoStatus = "open" | "completed" | "archived";
 export type TodoStatus = "open" | "completed";
@@ -1021,10 +1022,20 @@ export async function snoozeUntilForPreset(preset: SnoozePreset, now = new Date(
   ).toISOString();
 }
 
-export async function adjustSnoozedTodos(inputIds: number[], preset: SnoozePreset) {
+export async function snoozeUntilForLocalDateTime(localDateTime: string, now = new Date()) {
+  const settings = await getTodoSettings();
+  const until = zonedLocalDateTimeToUtc(localDateTime, settings.snoozeTimeZone);
+  if (until.valueOf() <= now.valueOf()) throw new Error("Choose a future date and time.");
+  return { snoozedUntil: until.toISOString(), timeZone: settings.snoozeTimeZone };
+}
+
+async function adjustSnoozedTodosUntil(
+  inputIds: number[],
+  until: string,
+  adjustment: { preset?: SnoozePreset; localDateTime?: string; timeZone?: string },
+) {
   await ensureTodoDatabase();
   const ids = normalizedIds(inputIds);
-  const until = await snoozeUntilForPreset(preset);
   const db = database();
   const inClause = placeholders(ids.length);
   const result = await db.prepare(`
@@ -1044,13 +1055,23 @@ export async function adjustSnoozedTodos(inputIds: number[], preset: SnoozePrese
   const todos = updated.results.map(mapTodo);
   const changedIds = todos.map((todo) => todo.id);
   console.info("[todo-db] snooze adjusted", {
-    preset,
+    ...adjustment,
     requested: ids.length,
     changed: result.meta.changes,
     changedIds,
     snoozedUntil: until,
   });
   return { ids: changedIds, todos, snoozedUntil: until };
+}
+
+export async function adjustSnoozedTodos(inputIds: number[], preset: SnoozePreset) {
+  const until = await snoozeUntilForPreset(preset);
+  return adjustSnoozedTodosUntil(inputIds, until, { preset });
+}
+
+export async function adjustSnoozedTodosToLocalDateTime(inputIds: number[], localDateTime: string) {
+  const { snoozedUntil, timeZone } = await snoozeUntilForLocalDateTime(localDateTime);
+  return adjustSnoozedTodosUntil(inputIds, snoozedUntil, { localDateTime, timeZone });
 }
 
 export async function bulkUpdateTodos(

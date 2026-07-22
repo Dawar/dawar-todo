@@ -82,7 +82,7 @@
         "tags": ["Todos"],
         "operationId": "bulkUpdateTodos",
         "summary": "Complete, snooze, wake, reassign, merge, or delete tasks",
-        "description": "Use `reproject` with `project: null` to remove assignment. Use `unsnooze` to wake a snoozed task or reopen a completed task. `snooze` uses the configured next-day wake time and rejects tasks with a recurring schedule. `adjust_snooze` requires `snoozePreset`. Merge deletes the sources after creating the merged task. Mutation responses include an Undo token except for `adjust_snooze`, which deliberately preserves the preceding snooze Undo token.",
+        "description": "Use `reproject` with `project: null` to remove assignment. Use `unsnooze` to wake a snoozed task or reopen a completed task. `snooze` uses the configured next-day wake time and rejects tasks with a recurring schedule. `adjust_snooze` requires either `snoozePreset` or a `snoozedLocal` date and time interpreted in the user's configured timezone. Merge deletes the sources after creating the merged task. Mutation responses include an Undo token except for `adjust_snooze`, which deliberately preserves the preceding snooze Undo token.",
         "requestBody": {
           "required": true,
           "content": { "application/json": { "schema": { "$ref": "#/components/schemas/BulkTodoRequest" } } }
@@ -421,7 +421,8 @@
           "ids": { "type": "array", "minItems": 1, "maxItems": 200, "uniqueItems": true, "items": { "type": "integer", "minimum": 1 } },
           "action": { "type": "string", "enum": ["complete", "snooze", "unsnooze", "reproject", "delete", "merge", "adjust_snooze"] },
           "project": { "type": ["string", "null"], "maxLength": 120 },
-          "snoozePreset": { "type": "string", "enum": ["15m", "30m", "1h", "2h", "8pm"] }
+          "snoozePreset": { "type": "string", "enum": ["15m", "30m", "1h", "2h", "8pm"], "description": "Relative snooze adjustment. `8pm` is retained for backward compatibility; current clients use `snoozedLocal` for exact times." },
+          "snoozedLocal": { "type": "string", "example": "2026-07-23T14:30", "description": "Future local date and time in YYYY-MM-DDTHH:mm form, interpreted in the user's configured timezone. Use instead of snoozePreset for a custom wake time." }
         }
       },
       "BulkTodoResponse": {
