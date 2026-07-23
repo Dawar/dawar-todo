@@ -353,7 +353,7 @@
           "sourceId": { "type": ["integer", "null"] },
           "clientId": { "type": ["string", "null"] },
           "completedAt": { "type": ["string", "null"], "format": "date-time" },
-          "snoozedUntil": { "type": ["string", "null"], "format": "date-time" },
+          "snoozedUntil": { "type": ["string", "null"], "format": "date-time", "description": "Future wake timestamp for a snoozed open task. Normal list and sync reads clear an expired timestamp and return the task to Open." },
           "recurrenceCron": { "type": ["string", "null"], "description": "Five-field cron expression evaluated in the configured snoozeTimeZone. Recurring tasks cannot be snoozed." },
           "recurrenceLastFiredAt": { "type": ["string", "null"], "format": "date-time", "readOnly": true, "description": "Last scheduled minute processed for this task." },
           "pinned": { "type": "boolean", "description": "Hoists the task into the Pinned group in the Open view. The value persists but is not rendered in other views." },

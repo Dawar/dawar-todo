@@ -1,7 +1,7 @@
 import { env, waitUntil } from "cloudflare:workers";
 import { processRecurringTodos } from "../worker/recurring";
 import { scheduleAttachmentCleanup } from "./attachments";
-import { ensureTodoDatabase } from "./todos";
+import { ensureTodoDatabase, wakeExpiredSnoozedTodos } from "./todos";
 
 let lastRecurrenceAttemptMinute = "";
 
@@ -12,6 +12,7 @@ export async function runTodoReadMaintenance(source: "bootstrap" | "sync" | "leg
   const recurrenceMinute = new Date(Math.floor(now.valueOf() / 60_000) * 60_000).toISOString();
   const shouldCheckRecurrence = recurrenceMinute !== lastRecurrenceAttemptMinute;
   if (shouldCheckRecurrence) lastRecurrenceAttemptMinute = recurrenceMinute;
+  const wokenSnoozeIds = await wakeExpiredSnoozedTodos(now);
 
   if (source === "sync") {
     if (shouldCheckRecurrence) {
@@ -24,6 +25,14 @@ export async function runTodoReadMaintenance(source: "bootstrap" | "sync" | "leg
       console.info("[todo-maintenance] background recurrence check scheduled", {
         source,
         recurrenceMinute,
+        snoozedWoken: wokenSnoozeIds.length,
+        durationMs: Date.now() - startedAt,
+      });
+    } else if (wokenSnoozeIds.length) {
+      console.info("[todo-maintenance] expired snoozes reconciled", {
+        source,
+        recurrenceMinute,
+        snoozedWoken: wokenSnoozeIds.length,
         durationMs: Date.now() - startedAt,
       });
     }
@@ -42,6 +51,7 @@ export async function runTodoReadMaintenance(source: "bootstrap" | "sync" | "leg
       recurrenceMinute,
       recurrenceSkippedInIsolate: !shouldCheckRecurrence,
       recurringReopened: recurrence?.reopened ?? 0,
+      snoozedWoken: wokenSnoozeIds.length,
       durationMs: Date.now() - startedAt,
     });
   }

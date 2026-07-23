@@ -20,6 +20,11 @@ import { copyTextToClipboard } from "./copy-to-clipboard";
 import { dueDateSortValue, formatDueDate, isDueTodayOrOverdue } from "./date-only";
 import { cronValidationError, nextCronOccurrence } from "../lib/cron";
 import {
+  expiredSnoozeIds,
+  isActivelySnoozed,
+  nextSnoozeWakeAt,
+} from "../lib/snooze-clock";
+import {
   DEFAULT_QUICK_SNOOZE_PRESETS,
   quickSnoozeDurationMs,
   quickSnoozeLabel,
@@ -814,7 +819,7 @@ function VoiceMemoRecorder({ onClose, onAttach }: { onClose: () => void; onAttac
 }
 
 function isSnoozed(todo: Todo, now: number) {
-  return todo.status === "open" && Boolean(todo.snoozedUntil) && new Date(todo.snoozedUntil as string).valueOf() > now;
+  return isActivelySnoozed(todo, now);
 }
 
 function snoozeLabel(value: string) {
@@ -1361,7 +1366,7 @@ export default function Home() {
     });
   });
 
-  const applyLiveSnapshot = useEffectEvent((remoteTodos: Todo[], source: "initial" | "poll" | "reconnect") => {
+  const applyLiveSnapshot = useEffectEvent((remoteTodos: Todo[], source: "initial" | "poll" | "reconnect" | "snooze-wake") => {
     const pendingPatches = pendingTodoPatchesRef.current;
     const resolved = remoteTodos.map((todo) => patchTodo(todo, pendingPatches.get(todo.id) ?? {}));
     setTodos((current) => {
@@ -1430,7 +1435,7 @@ export default function Home() {
     }
   });
 
-  const applyLiveDelta = useEffectEvent((remoteTodos: Todo[], deletedIds: number[], source: "poll" | "reconnect") => {
+  const applyLiveDelta = useEffectEvent((remoteTodos: Todo[], deletedIds: number[], source: "poll" | "reconnect" | "snooze-wake") => {
     const pendingPatches = pendingTodoPatchesRef.current;
     const discardedPendingIds = deletedIds.filter((id) => pendingPatches.delete(id));
     if (discardedPendingIds.length) {
@@ -1487,7 +1492,7 @@ export default function Home() {
     }
   });
 
-  const refreshLiveData = useEffectEvent(async (source: "poll" | "reconnect") => {
+  const refreshLiveData = useEffectEvent(async (source: "poll" | "reconnect" | "snooze-wake") => {
     if (liveSyncRunningRef.current || !navigator.onLine || document.visibilityState === "hidden") return;
     liveSyncRunningRef.current = true;
     const startedAt = Date.now();
@@ -1512,7 +1517,7 @@ export default function Home() {
       }
       syncRevisionRef.current = result.revision;
       const changedTodos = result.todos.length + (result.reset ? 0 : result.deletedIds.length);
-      if (source === "reconnect" || result.reset || changedTodos > 0 || result.projects || result.settings || Object.prototype.hasOwnProperty.call(result, "captureDraft")) {
+      if (source !== "poll" || result.reset || changedTodos > 0 || result.projects || result.settings || Object.prototype.hasOwnProperty.call(result, "captureDraft")) {
         console.info("[todo-sync] delta applied", {
           source,
           after,
@@ -1536,6 +1541,17 @@ export default function Home() {
     } finally {
       liveSyncRunningRef.current = false;
     }
+  });
+
+  const reconcileTaskClock = useEffectEvent((source: "focus" | "visibility" | "online") => {
+    const reconciledAt = Date.now();
+    const expiredIds = expiredSnoozeIds(todos, reconciledAt);
+    setNow(reconciledAt);
+    console.info("[todo-snooze] task clock reconciled", {
+      source,
+      reconciledAt: new Date(reconciledAt).toISOString(),
+      expiredIds,
+    });
   });
 
   useEffect(() => {
@@ -1647,8 +1663,12 @@ export default function Home() {
   useEffect(() => {
     if (loading) return;
     const timer = window.setInterval(() => void refreshLiveData("poll"), 3_000);
-    const refresh = () => {
-      if (document.visibilityState === "visible") void refreshLiveData("reconnect");
+    const refresh = (event: Event) => {
+      if (document.visibilityState === "visible") {
+        const source = event.type === "visibilitychange" ? "visibility" : event.type === "online" ? "online" : "focus";
+        reconcileTaskClock(source);
+        void refreshLiveData("reconnect");
+      }
     };
     window.addEventListener("focus", refresh);
     window.addEventListener("online", refresh);
@@ -1825,6 +1845,41 @@ export default function Home() {
     const timer = window.setInterval(() => setNow(Date.now()), 60_000);
     return () => window.clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    if (loading) return;
+    let active = true;
+    let timer: number | null = null;
+    const scheduleNextWake = () => {
+      if (!active) return;
+      const scheduledAt = Date.now();
+      const wakeAt = nextSnoozeWakeAt(todos, scheduledAt);
+      if (wakeAt === null) return;
+      const delayMs = Math.min(Math.max(0, wakeAt - scheduledAt) + 50, 2_147_000_000);
+      console.info("[todo-snooze] next live wake scheduled", {
+        wakeAt: new Date(wakeAt).toISOString(),
+        delayMs,
+      });
+      timer = window.setTimeout(() => {
+        const firedAt = Date.now();
+        const expiredIds = expiredSnoozeIds(todos, firedAt);
+        setNow(firedAt);
+        void refreshLiveData("snooze-wake");
+        console.info("[todo-snooze] live wake fired", {
+          scheduledWakeAt: new Date(wakeAt).toISOString(),
+          firedAt: new Date(firedAt).toISOString(),
+          driftMs: firedAt - wakeAt,
+          expiredIds,
+        });
+        scheduleNextWake();
+      }, delayMs);
+    };
+    scheduleNextWake();
+    return () => {
+      active = false;
+      if (timer !== null) window.clearTimeout(timer);
+    };
+  }, [loading, todos]);
 
   useEffect(() => {
     if (loading) return;
@@ -3653,10 +3708,16 @@ export default function Home() {
   }
 
   function chooseView(next: View) {
+    const changedAt = Date.now();
+    setNow(changedAt);
     setView(next);
     setSelected(new Set());
     setFiltersOpen(false);
-    console.info("[todo-ui] view changed", { view: next, retainedProjectFilter: project || null });
+    console.info("[todo-ui] view changed", {
+      view: next,
+      retainedProjectFilter: project || null,
+      expiredSnoozes: expiredSnoozeIds(todos, changedAt),
+    });
   }
 
   function openProjectSelector() {

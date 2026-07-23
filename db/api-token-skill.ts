@@ -62,7 +62,7 @@ curl --fail-with-body \\
 ## Task model
 
 - \`status\`: \`open\` or \`completed\`.
-- A snoozed task remains \`open\` and has a future \`snoozedUntil\` timestamp.
+- A snoozed task remains \`open\` and has a future \`snoozedUntil\` timestamp. Once that time passes, normal list/sync reads automatically clear the snooze and return the task to Open.
 - \`recurrenceCron\`: an optional five-field cron expression (minute, hour, day, month, weekday) evaluated in the user's configured \`snoozeTimeZone\`. At each matching interval, a completed task reopens. Recurring tasks cannot be snoozed.
 - \`priority\`: 1 urgent, 2 high, 3 normal, 4 low.
 - \`dueDate\`: \`YYYY-MM-DD\` or null.

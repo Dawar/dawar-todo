@@ -573,6 +573,28 @@ export async function listTodos(): Promise<Todo[]> {
   return result.results.map(mapTodo);
 }
 
+export async function wakeExpiredSnoozedTodos(now = new Date()) {
+  await ensureTodoDatabase();
+  const result = await database().prepare(`
+    UPDATE todos
+    SET snoozed_until = NULL,
+        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+    WHERE status = 'open'
+      AND snoozed_until IS NOT NULL
+      AND snoozed_until <= ?
+    RETURNING id
+  `).bind(now.toISOString()).all<{ id: number }>();
+  const ids = result.results.map((row) => Number(row.id)).filter(Number.isInteger);
+  if (ids.length) {
+    console.info("[todo-snooze] expired tasks returned to Open", {
+      checkedAt: now.toISOString(),
+      count: ids.length,
+      ids,
+    });
+  }
+  return ids;
+}
+
 export async function readTodoBootstrap(): Promise<TodoBootstrapSnapshot> {
   await ensureTodoDatabase();
   const db = database();
