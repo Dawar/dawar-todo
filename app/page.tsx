@@ -890,6 +890,22 @@ function classNames(...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(" ");
 }
 
+const DIALOG_FOCUSABLE_SELECTOR = [
+  "a[href]",
+  "button:not([disabled])",
+  "input:not([disabled]):not([type='hidden'])",
+  "select:not([disabled])",
+  "textarea:not([disabled])",
+  "audio[controls]",
+  "video[controls]",
+  "[tabindex]:not([tabindex='-1'])",
+].join(",");
+
+function dialogFocusableElements(container: HTMLElement) {
+  return [...container.querySelectorAll<HTMLElement>(DIALOG_FOCUSABLE_SELECTOR)]
+    .filter((element) => element.getAttribute("aria-hidden") !== "true" && element.getClientRects().length > 0);
+}
+
 function offlineRecordTodo(record: OfflineTodoRecord): Todo {
   return {
     id: record.localId,
@@ -1302,6 +1318,8 @@ export default function Home() {
   const editDraftRef = useRef<TodoDraft | null>(null);
   const editBaselineRef = useRef<TodoDraft | null>(null);
   const taskDialogRef = useRef<HTMLFormElement>(null);
+  const taskDialogReturnFocusRef = useRef<HTMLElement | null>(null);
+  const taskDialogReturnTodoIdRef = useRef<number | null>(null);
   const taskDialogScrollRef = useRef<HTMLDivElement>(null);
   const taskDialogGestureRef = useRef<TaskDialogPullGesture | null>(null);
   const taskDialogRawPullRef = useRef(0);
@@ -1319,6 +1337,7 @@ export default function Home() {
   const lastLiveSnapshotRef = useRef("");
   const lastAppBadgeCountRef = useRef<number | null>(null);
   const keyboardPreferredIndexRef = useRef(0);
+  const taskDialogNestedOverlayOpen = projectDialog !== null || viewerIndex !== null || voiceTarget !== null || customSnoozeDialog !== null;
   const overlayOpen = editingId !== null || projectSelectorOpen || projectDialog !== null || newProjectOpen || projectDeleteDialog !== null || filtersOpen || viewerIndex !== null || voiceTarget !== null || shortcutsOpen || customSnoozeDialog !== null;
 
   function applyRemoteCaptureDraft(remoteDraft: CaptureDraft | null, source: "bootstrap" | "poll" | "reconnect" | "mutation") {
@@ -1821,6 +1840,77 @@ export default function Home() {
   }, [editingId]);
 
   useEffect(() => {
+    if (editingId === null) return;
+    const dialog = taskDialogRef.current;
+    if (!dialog) return;
+    const openedTodoId = editingId;
+    const origin = taskDialogReturnFocusRef.current;
+    const focusFrame = window.requestAnimationFrame(() => {
+      dialog.focus({ preventScroll: true });
+      console.info("[todo-keyboard] task dialog focused", {
+        todoId: openedTodoId,
+        target: "dialog",
+        avoidedInputFocus: true,
+      });
+    });
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      const fallbackTodoId = taskDialogReturnTodoIdRef.current ?? openedTodoId;
+      taskDialogReturnFocusRef.current = null;
+      taskDialogReturnTodoIdRef.current = null;
+      window.requestAnimationFrame(() => {
+        const fallback = document.querySelector<HTMLElement>(
+          `[data-keyboard-task-id="${fallbackTodoId}"] [data-keyboard-action-index="0"]`,
+        );
+        const target = origin?.isConnected ? origin : fallback;
+        target?.focus({ preventScroll: true });
+        console.info("[todo-keyboard] task dialog focus restored", {
+          todoId: fallbackTodoId,
+          restored: Boolean(target),
+          usedFallback: target === fallback,
+        });
+      });
+    };
+  }, [editingId]);
+
+  useEffect(() => {
+    if (editingId === null || taskDialogNestedOverlayOpen) return;
+    const dialog = taskDialogRef.current;
+    if (!dialog) return;
+    const focusFrame = window.requestAnimationFrame(() => {
+      if (!dialog.contains(document.activeElement)) dialog.focus({ preventScroll: true });
+    });
+    const trapFocus = (event: KeyboardEvent) => {
+      if (event.key !== "Tab" || event.defaultPrevented) return;
+      const focusable = dialogFocusableElements(dialog);
+      if (!focusable.length) {
+        event.preventDefault();
+        dialog.focus({ preventScroll: true });
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active = document.activeElement;
+      if (event.shiftKey && (active === dialog || active === first || !dialog.contains(active))) {
+        event.preventDefault();
+        last.focus({ preventScroll: true });
+      } else if (!event.shiftKey && (active === last || !dialog.contains(active))) {
+        event.preventDefault();
+        first.focus({ preventScroll: true });
+      }
+    };
+    document.addEventListener("keydown", trapFocus, true);
+    console.info("[todo-keyboard] task dialog focus trap enabled", {
+      todoId: editingId,
+      focusableCount: dialogFocusableElements(dialog).length,
+    });
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      document.removeEventListener("keydown", trapFocus, true);
+    };
+  }, [editingId, taskDialogNestedOverlayOpen]);
+
+  useEffect(() => {
     const updateConnection = () => {
       const next = navigator.onLine;
       setOnline(next);
@@ -1919,7 +2009,7 @@ export default function Home() {
         }
         return;
       }
-      if (event.key === "?" && !typing && window.matchMedia("(min-width: 768px)").matches) {
+      if (event.key === "?" && !typing && !overlayOpen && window.matchMedia("(min-width: 768px)").matches) {
         event.preventDefault();
         setShortcutsOpen((current) => {
           console.info("[todo-keyboard] shortcut guide toggled", { open: !current, source: "question-mark" });
@@ -1928,11 +2018,11 @@ export default function Home() {
         return;
       }
       if (shortcutsOpen && event.key !== "Escape") return;
-      if (event.key === "/" && !typing) {
+      if (event.key === "/" && !typing && !overlayOpen) {
         event.preventDefault();
         searchRef.current?.focus();
       }
-      if (event.key.toLowerCase() === "n" && !typing) {
+      if (event.key.toLowerCase() === "n" && !typing && !overlayOpen) {
         event.preventDefault();
         captureRef.current?.focus();
       }
@@ -1974,7 +2064,7 @@ export default function Home() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [customSnoozeDialog, detailAttachments, editingId, filtersOpen, newProjectOpen, notice, project, projectDeleteDialog, projectDialog, projectSelectorOpen, shortcutsOpen, undoing, viewerIndex, voiceTarget]);
+  }, [customSnoozeDialog, detailAttachments, editingId, filtersOpen, newProjectOpen, notice, overlayOpen, project, projectDeleteDialog, projectDialog, projectSelectorOpen, shortcutsOpen, undoing, viewerIndex, voiceTarget]);
 
   useEffect(() => {
     if (!overlayOpen) return;
@@ -3432,6 +3522,14 @@ export default function Home() {
       setNotice({ tone: "success", text: "That task is saved offline and will be editable after it syncs." });
       return;
     }
+    const activeElement = document.activeElement instanceof HTMLElement && document.activeElement !== document.body
+      ? document.activeElement
+      : null;
+    const rowFallback = document.querySelector<HTMLElement>(
+      `[data-keyboard-task-id="${todo.id}"] [data-keyboard-action-index="0"]`,
+    );
+    taskDialogReturnFocusRef.current = activeElement ?? rowFallback;
+    taskDialogReturnTodoIdRef.current = todo.id;
     const draft = todoDraft(todo);
     editingIdRef.current = todo.id;
     editDraftRef.current = draft;
@@ -3447,7 +3545,12 @@ export default function Home() {
     setTaskDialogPullReady(false);
     setTaskDialogPulling(false);
     void loadTaskAttachments(todo.id);
-    console.info("[todo-ui] task details opened", { id: todo.id, status: todo.status, attachmentCount: todo.attachmentCount });
+    console.info("[todo-ui] task details opened", {
+      id: todo.id,
+      status: todo.status,
+      attachmentCount: todo.attachmentCount,
+      focusOrigin: activeElement?.getAttribute("aria-label") ?? (rowFallback ? "task-row-fallback" : "none"),
+    });
   }
 
   function closeTaskDetails() {
@@ -4445,7 +4548,7 @@ export default function Home() {
       )}
 
       {editingTodo && editDraft && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center overflow-x-hidden sm:items-center sm:p-5" role="dialog" aria-modal="true" aria-labelledby="task-details-title">
+        <div className="fixed inset-0 z-50 flex items-end justify-center overflow-x-hidden sm:items-center sm:p-5">
           <button type="button" aria-label="Close task details" onClick={closeTaskDetails} className="absolute inset-0 bg-black/35 backdrop-blur-[2px]" />
           <div
             data-no-pull-refresh
@@ -4465,6 +4568,9 @@ export default function Home() {
           <form
             ref={taskDialogRef}
             tabIndex={-1}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="task-details-title"
             onSubmit={(event) => event.preventDefault()}
             className={classNames(
               "relative flex max-h-[92dvh] w-full max-w-full flex-col overflow-hidden overflow-x-hidden rounded-t-3xl bg-white shadow-2xl outline-none sm:max-w-2xl sm:rounded-3xl",
