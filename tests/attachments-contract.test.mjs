@@ -159,6 +159,12 @@ test("exposes capture, Safari-safe optimization, drop, gallery, and viewer contr
   assert.match(page, /attachment\.kind === "file"/);
   assert.match(page, /formatFileSize/);
   assert.match(page, /Image viewer:/);
+  assert.match(page, /copyImageToClipboard/);
+  assert.match(page, /new ClipboardItem\(\{ "image\/png": png \}\)/);
+  assert.match(page, /aria-label="Copy image"/);
+  assert.match(page, /Use right-click → Copy Image/);
+  assert.match(page, /<img src=\{viewerAttachment\.displayUrl\} alt=\{viewerAttachment\.fileName\} className="relative max-h-full max-w-full object-contain"/);
+  assert.doesNotMatch(page, /<img src=\{viewerAttachment\.displayUrl\}[^>]*pointer-events-none/);
   assert.match(page, /Download original/);
   assert.match(page, /viewerGesture/);
   assert.match(actionIcons, /ImagePlus/);

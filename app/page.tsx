@@ -330,7 +330,7 @@ function uploadMimeType(file: File) {
   return null;
 }
 
-async function decodedImage(file: File) {
+async function decodedImage(file: Blob) {
   if (typeof createImageBitmap === "function") {
     try {
       const bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
@@ -360,6 +360,35 @@ async function decodedImage(file: File) {
     URL.revokeObjectURL(objectUrl);
     throw error;
   }
+}
+
+async function clipboardPng(imageUrl: string) {
+  const response = await fetch(imageUrl, { cache: "no-store" });
+  if (!response.ok) throw new Error(`The image could not be loaded (${response.status}).`);
+  const blob = await response.blob();
+  if (blob.type === "image/png") return blob;
+  const decoded = await decodedImage(blob).catch(() => {
+    throw new Error("This image cannot be copied by this browser.");
+  });
+  try {
+    const canvas = document.createElement("canvas");
+    canvas.width = decoded.width;
+    canvas.height = decoded.height;
+    const context = canvas.getContext("2d", { alpha: true });
+    if (!context) throw new Error("This browser cannot prepare the image clipboard.");
+    context.drawImage(decoded.source, 0, 0, decoded.width, decoded.height);
+    return await canvasBlob(canvas, "image/png", 1);
+  } finally {
+    decoded.cleanup();
+  }
+}
+
+async function copyImageToClipboard(imageUrl: string) {
+  if (!window.isSecureContext || !navigator.clipboard?.write || typeof ClipboardItem === "undefined") {
+    throw new Error("Image clipboard access is unavailable.");
+  }
+  const png = clipboardPng(imageUrl);
+  await navigator.clipboard.write([new ClipboardItem({ "image/png": png })]);
 }
 
 async function encodedImageFormat(blob: Blob) {
@@ -1281,6 +1310,7 @@ export default function Home() {
   const [loadingAttachments, setLoadingAttachments] = useState(false);
   const [attachmentError, setAttachmentError] = useState("");
   const [viewerIndex, setViewerIndex] = useState<number | null>(null);
+  const [viewerCopyState, setViewerCopyState] = useState<"idle" | "copying" | "copied" | "error">("idle");
   const [projectSelectorOpen, setProjectSelectorOpen] = useState(false);
   const [projectDialog, setProjectDialog] = useState<ProjectDialogState | null>(null);
   const [projectDialogError, setProjectDialogError] = useState("");
@@ -2202,6 +2232,10 @@ export default function Home() {
   const imageAttachments = detailAttachments.filter((attachment) => attachment.kind === "image");
   const viewerAttachment = viewerIndex === null ? null : imageAttachments[viewerIndex] ?? null;
   const recurrenceError = cronValidationError(editDraft?.recurrenceCron);
+
+  useEffect(() => {
+    setViewerCopyState("idle");
+  }, [viewerAttachment?.id]);
 
   useEffect(() => {
     setKeyboardTodoId((current) => {
@@ -3775,6 +3809,30 @@ export default function Home() {
     }
   }
 
+  async function copyViewerImage() {
+    if (!viewerAttachment || viewerCopyState === "copying") return;
+    const startedAt = Date.now();
+    setViewerCopyState("copying");
+    try {
+      await copyImageToClipboard(viewerAttachment.displayUrl);
+      setViewerCopyState("copied");
+      console.info("[todo-ui] lightbox image copied", {
+        attachmentId: viewerAttachment.id,
+        sourceMimeType: viewerAttachment.mimeType,
+        width: viewerAttachment.width,
+        height: viewerAttachment.height,
+        durationMs: Date.now() - startedAt,
+      });
+    } catch (error) {
+      setViewerCopyState("error");
+      console.warn("[todo-ui] lightbox clipboard copy unavailable; native copy remains available", {
+        attachmentId: viewerAttachment.id,
+        durationMs: Date.now() - startedAt,
+        error,
+      });
+    }
+  }
+
   function bulkAction(action: TodoAction | "merge" | "assign") {
     if (action === "merge" && selectedIds.length < 2) {
       setNotice({ tone: "error", text: "Select at least two tasks to merge." });
@@ -4812,15 +4870,23 @@ export default function Home() {
         >
           <button type="button" onClick={() => setViewerIndex(null)} aria-label="Close image viewer" className="absolute inset-0 cursor-zoom-out" />
           <div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex items-center justify-between gap-3 bg-gradient-to-b from-black/70 to-transparent px-4 pb-8 pt-[max(1rem,env(safe-area-inset-top))] sm:px-6">
-            <span className="min-w-0 truncate text-sm font-medium text-white/85">{viewerAttachment.fileName}</span>
+            <div className="min-w-0">
+              <span className="block truncate text-sm font-medium text-white/85">{viewerAttachment.fileName}</span>
+              {viewerCopyState !== "idle" && (
+                <span className={classNames("mt-0.5 block truncate text-xs", viewerCopyState === "error" ? "text-amber-200" : "text-white/65")} role="status" aria-live="polite">
+                  {viewerCopyState === "copying" ? "Copying image…" : viewerCopyState === "copied" ? "Copied to clipboard" : "Use right-click → Copy Image"}
+                </span>
+              )}
+            </div>
             <div className="pointer-events-auto flex shrink-0 items-center gap-1">
+              <button type="button" onClick={() => void copyViewerImage()} disabled={viewerCopyState === "copying"} className="grid h-10 w-10 place-items-center rounded-full bg-white/10 text-white hover:bg-white/20 disabled:opacity-50" aria-label="Copy image" title="Copy image"><ActionIcon name="copy" className="h-5 w-5" /></button>
               <a href={viewerAttachment.originalUrl} download={viewerAttachment.fileName} className="grid h-10 w-10 place-items-center rounded-full bg-white/10 text-white hover:bg-white/20" aria-label="Download original" title="Download original"><ActionIcon name="download" className="h-5 w-5" /></a>
               <button type="button" onClick={() => void deleteDetailAttachment(viewerAttachment)} className="grid h-10 w-10 place-items-center rounded-full bg-white/10 text-white hover:bg-red-600" aria-label="Delete image" title="Delete image"><ActionIcon name="delete" className="h-5 w-5" /></button>
               <button type="button" onClick={() => setViewerIndex(null)} className="grid h-10 w-10 place-items-center rounded-full bg-white/10 text-white hover:bg-white/20" aria-label="Close image viewer" title="Close"><ActionIcon name="close" className="h-5 w-5" /></button>
             </div>
           </div>
 
-          <img src={viewerAttachment.displayUrl} alt={viewerAttachment.fileName} className="pointer-events-none relative max-h-full max-w-full object-contain" />
+          <img src={viewerAttachment.displayUrl} alt={viewerAttachment.fileName} className="relative max-h-full max-w-full object-contain" />
 
           {imageAttachments.length > 1 && (
             <>
