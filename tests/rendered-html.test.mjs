@@ -5,8 +5,10 @@ import test from "node:test";
 const root = new URL("../", import.meta.url);
 
 test("ships the simplified todo and project surface", async () => {
-  const [page, layout, hosting, database, schema, todosRoute, todoRoute, bulkRoute, projectsRoute, actionIcons, siteHeader, pinMigration] = await Promise.all([
+  const [page, settingsPage, snoozePresets, layout, hosting, database, schema, todosRoute, todoRoute, bulkRoute, projectsRoute, actionIcons, siteHeader, pinMigration] = await Promise.all([
     readFile(new URL("app/page.tsx", root), "utf8"),
+    readFile(new URL("app/settings/page.tsx", root), "utf8"),
+    readFile(new URL("lib/snooze-presets.ts", root), "utf8"),
     readFile(new URL("app/layout.tsx", root), "utf8"),
     readFile(new URL(".openai/hosting.json", root), "utf8"),
     readFile(new URL("db/todos.ts", root), "utf8"),
@@ -127,11 +129,17 @@ test("ships the simplified todo and project surface", async () => {
   assert.match(todoRoute, /update\.pinned = payload\.pinned/);
   assert.match(bulkRoute, /"reproject"/);
   assert.match(bulkRoute, /"adjust_snooze"/);
-  assert.match(bulkRoute, /"15m", "30m", "1h", "2h", "8pm"/);
-  assert.match(page, /15 minutes/);
-  assert.match(page, /30 minutes/);
-  assert.match(page, /1 hour/);
-  assert.match(page, /2 hours/);
+  assert.match(bulkRoute, /isQuickSnoozePreset/);
+  assert.match(snoozePresets, /15 minutes/);
+  assert.match(snoozePresets, /45 minutes/);
+  assert.match(snoozePresets, /12 hours/);
+  assert.match(snoozePresets, /parseQuickSnoozePresets/);
+  assert.match(page, /quickSnoozePresets\.map/);
+  assert.match(page, /quickSnoozeLabel\(preset\)/);
+  assert.match(settingsPage, /Quick Snooze buttons/);
+  assert.match(settingsPage, /QUICK_SNOOZE_OPTIONS\.map/);
+  assert.match(settingsPage, /sortQuickSnoozePresets/);
+  assert.match(settingsPage, /Custom remains available/);
   assert.doesNotMatch(page, /8pm/);
   assert.match(page, />Custom/);
   assert.match(page, /type="datetime-local"/);

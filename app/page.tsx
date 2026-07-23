@@ -19,6 +19,12 @@ import { currentOpenTaskCount, updateNativeAppBadge } from "./app-badge";
 import { copyTextToClipboard } from "./copy-to-clipboard";
 import { dueDateSortValue, formatDueDate, isDueTodayOrOverdue } from "./date-only";
 import { cronValidationError, nextCronOccurrence } from "../lib/cron";
+import {
+  DEFAULT_QUICK_SNOOZE_PRESETS,
+  quickSnoozeDurationMs,
+  quickSnoozeLabel,
+  type QuickSnoozePreset,
+} from "../lib/snooze-presets";
 import { zonedDateTimeInputValue, zonedLocalDateTimeToUtc } from "../lib/zoned-date-time";
 import { SiteHeader } from "./site-header";
 import { PullGesturePill } from "./pull-to-refresh";
@@ -45,7 +51,7 @@ type TaskListView = View;
 type Sort = "smart" | "priority" | "due" | "newest" | "oldest" | "az";
 type TodoAction = "complete" | "snooze" | "unsnooze" | "delete";
 type ExecutableTodoAction = TodoAction;
-type SnoozePreset = "15m" | "30m" | "1h" | "2h";
+type SnoozePreset = QuickSnoozePreset;
 type SnoozeAdjustment = { preset: SnoozePreset } | { localDateTime: string };
 type Notice = {
   tone: "success" | "error";
@@ -86,6 +92,7 @@ type Todo = {
 type TodoSettings = {
   snoozeTimeZone: string;
   snoozeWakeHour: number;
+  snoozeQuickPresets: QuickSnoozePreset[];
 };
 
 type CaptureDraft = Omit<OfflineCaptureDraft, "key">;
@@ -218,13 +225,6 @@ const priorityLabels: Record<number, string> = {
   3: "Normal",
   4: "Low",
 };
-
-const snoozeAdjustments: Array<{ value: SnoozePreset; label: string }> = [
-  { value: "15m", label: "15 minutes" },
-  { value: "30m", label: "30 minutes" },
-  { value: "1h", label: "1 hour" },
-  { value: "2h", label: "2 hours" },
-];
 
 function request<T>(path: string, options?: RequestInit): Promise<T> {
   const formData = typeof FormData !== "undefined" && options?.body instanceof FormData;
@@ -842,13 +842,7 @@ function recurrenceLabel(expression: string, status: TodoStatus, now: number, ti
 }
 
 function optimisticSnoozeUntil(preset: SnoozePreset, now = new Date()) {
-  const durations: Record<SnoozePreset, number> = {
-    "15m": 15 * 60 * 1000,
-    "30m": 30 * 60 * 1000,
-    "1h": 60 * 60 * 1000,
-    "2h": 2 * 60 * 60 * 1000,
-  };
-  return new Date(now.valueOf() + durations[preset]).toISOString();
+  return new Date(now.valueOf() + quickSnoozeDurationMs(preset)).toISOString();
 }
 
 function restoreOptimisticTasks(current: Todo[], previous: Todo[], ids: number[]) {
@@ -1235,6 +1229,7 @@ export default function Home() {
   const [view, setView] = useState<View>("open");
   const [registeredProjects, setRegisteredProjects] = useState<string[]>([]);
   const [scheduleTimeZone, setScheduleTimeZone] = useState("America/Toronto");
+  const [quickSnoozePresets, setQuickSnoozePresets] = useState<QuickSnoozePreset[]>(DEFAULT_QUICK_SNOOZE_PRESETS);
   const [query, setQuery] = useState("");
   const [project, setProject] = useState("");
   const [priority, setPriority] = useState("");
@@ -1508,7 +1503,10 @@ export default function Home() {
             : result.projects
         ));
       }
-      if (result.settings?.snoozeTimeZone) setScheduleTimeZone(result.settings.snoozeTimeZone);
+      if (result.settings) {
+        setScheduleTimeZone(result.settings.snoozeTimeZone);
+        setQuickSnoozePresets(result.settings.snoozeQuickPresets ?? DEFAULT_QUICK_SNOOZE_PRESETS);
+      }
       if (Object.prototype.hasOwnProperty.call(result, "captureDraft")) {
         applyRemoteCaptureDraft(result.captureDraft ?? null, source);
       }
@@ -1582,7 +1580,10 @@ export default function Home() {
       setOfflineEditCount(offlineMutations.length);
       setRegisteredProjects(loadedProjects);
       syncRevisionRef.current = server?.revision ?? cachedState?.revision ?? 0;
-      if (server?.settings.snoozeTimeZone) setScheduleTimeZone(server.settings.snoozeTimeZone);
+      if (server?.settings) {
+        setScheduleTimeZone(server.settings.snoozeTimeZone);
+        setQuickSnoozePresets(server.settings.snoozeQuickPresets ?? DEFAULT_QUICK_SNOOZE_PRESETS);
+      }
       const serverCaptureDraft = server?.captureDraft ?? null;
       const chosenCaptureDraft = offlineCaptureDraft && (!serverCaptureDraft || offlineCaptureDraft.version > serverCaptureDraft.version)
         ? offlineCaptureDraft
@@ -4699,15 +4700,15 @@ export default function Home() {
             </div>
             {notice.snoozeIds && notice.snoozeIds.length > 0 && (
               <div className="mt-2 flex gap-1.5 overflow-x-auto pb-0.5" aria-label="Adjust snooze time">
-                {snoozeAdjustments.map((adjustment) => (
+                {quickSnoozePresets.map((preset) => (
                   <button
-                    key={adjustment.value}
+                    key={preset}
                     type="button"
-                    onClick={() => void adjustSnooze(notice.snoozeIds as number[], adjustment.value, notice.operationId)}
+                    onClick={() => void adjustSnooze(notice.snoozeIds as number[], preset, notice.operationId)}
                     disabled={adjustingSnooze !== null}
                     className="min-w-max rounded-lg bg-white/10 px-2.5 py-1.5 text-xs font-semibold text-white transition hover:bg-white/20 focus-visible:outline-2 focus-visible:outline-white disabled:opacity-50"
                   >
-                    {adjustment.label}
+                    {quickSnoozeLabel(preset)}
                   </button>
                 ))}
                 <button

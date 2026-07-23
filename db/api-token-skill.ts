@@ -87,7 +87,7 @@ Bulk actions:
 - \`complete\`: mark IDs completed and clear snooze.
 - \`unsnooze\`: wake snoozed IDs or reopen completed IDs.
 - \`snooze\`: snooze non-recurring IDs until the configured next-day wake time. The API rejects recurring tasks.
-- \`adjust_snooze\`: change already-snoozed IDs with either \`snoozePreset\` (\`15m\`, \`30m\`, \`1h\`, or \`2h\`) or \`snoozedLocal\` in \`YYYY-MM-DDTHH:mm\` form. Custom local times are interpreted in the user's configured timezone. The legacy \`8pm\` preset remains accepted for backward compatibility.
+- \`adjust_snooze\`: change already-snoozed IDs with either \`snoozePreset\` (\`15m\`, \`30m\`, \`45m\`, \`1h\`, \`90m\`, \`2h\`, \`3h\`, \`4h\`, \`6h\`, \`8h\`, or \`12h\`) or \`snoozedLocal\` in \`YYYY-MM-DDTHH:mm\` form. Custom local times are interpreted in the user's configured timezone. The legacy \`8pm\` preset remains accepted for backward compatibility.
 - \`reproject\`: set \`project\` to a name or null without changing status or snooze.
 - \`merge\`: create one merged task and delete the source IDs.
 - \`delete\`: delete selected IDs.
@@ -153,7 +153,7 @@ Each multipart request accepts one file; repeat it to attach more files, up to 1
 
 ### Settings and calendars
 
-- \`GET /api/settings\` and \`PATCH /api/settings\`: read or change the timezone used by snooze and recurring schedules, plus the next-day wake hour.
+- \`GET /api/settings\` and \`PATCH /api/settings\`: read or change the timezone used by snooze and recurring schedules, the next-day wake hour, and exactly four distinct \`snoozeQuickPresets\`. Quick presets are returned shortest-to-longest.
 - \`GET /api/calendar-feeds\`: list active public iCal feeds.
 - \`POST /api/calendar-feeds\`: create a feed.
 - \`PATCH /api/calendar-feeds/{id}\`: regenerate its public token and invalidate the old URL.

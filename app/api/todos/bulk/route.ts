@@ -1,7 +1,7 @@
 import { adjustSnoozedTodos, adjustSnoozedTodosToLocalDateTime, BulkTodoAction, bulkUpdateTodos, mergeTodos, type SnoozePreset } from "../../../../db/todos";
+import { isQuickSnoozePreset } from "../../../../lib/snooze-presets";
 
 const actions = new Set<BulkTodoAction>(["complete", "snooze", "unsnooze", "reproject", "delete"]);
-const snoozePresets = new Set<SnoozePreset>(["15m", "30m", "1h", "2h", "8pm"]);
 
 export async function POST(request: Request) {
   const startedAt = Date.now();
@@ -29,7 +29,9 @@ export async function POST(request: Request) {
     if (payload.action === "adjust_snooze") {
       const snoozePreset = String(payload.snoozePreset ?? "") as SnoozePreset;
       const snoozedLocal = String(payload.snoozedLocal ?? "").trim();
-      if (!snoozePresets.has(snoozePreset) && !snoozedLocal) return Response.json({ error: "Choose a valid snooze adjustment." }, { status: 400 });
+      if (!isQuickSnoozePreset(snoozePreset) && snoozePreset !== "8pm" && !snoozedLocal) {
+        return Response.json({ error: "Choose a valid snooze adjustment." }, { status: 400 });
+      }
       const result = snoozedLocal
         ? await adjustSnoozedTodosToLocalDateTime(ids, snoozedLocal)
         : await adjustSnoozedTodos(ids, snoozePreset);

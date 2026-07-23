@@ -7,12 +7,19 @@ import {
   restoreAttachmentStatements,
 } from "./attachments";
 import { normalizeCronExpression } from "../lib/cron";
+import {
+  DEFAULT_QUICK_SNOOZE_PRESETS,
+  isQuickSnoozePreset,
+  parseQuickSnoozePresets,
+  quickSnoozeDurationMs,
+  type QuickSnoozePreset,
+} from "../lib/snooze-presets";
 import { zonedLocalDateTimeToUtc } from "../lib/zoned-date-time";
 
 type StoredTodoStatus = "open" | "completed" | "archived";
 export type TodoStatus = "open" | "completed";
 export type BulkTodoAction = "complete" | "snooze" | "unsnooze" | "reproject" | "delete";
-export type SnoozePreset = "15m" | "30m" | "1h" | "2h" | "8pm";
+export type SnoozePreset = QuickSnoozePreset | "8pm";
 export type ProjectDeleteMode = "reassign" | "delete";
 
 type TodoRow = {
@@ -78,6 +85,7 @@ export type TodoMutationMetadata = {
 export type TodoSettings = {
   snoozeTimeZone: string;
   snoozeWakeHour: number;
+  snoozeQuickPresets: QuickSnoozePreset[];
 };
 
 export type TodoCaptureDraft = {
@@ -113,7 +121,7 @@ type TodoSyncChangeRow = {
 };
 
 let initialization: Promise<void> | null = null;
-const CURRENT_SCHEMA_VERSION = "15";
+const CURRENT_SCHEMA_VERSION = "16";
 
 function database() {
   if (!env.DB) throw new Error("The todo database is unavailable.");
@@ -167,9 +175,17 @@ function mapTodoCaptureDraft(value: string | null | undefined): TodoCaptureDraft
 
 function mapTodoSettings(rows: Array<{ key: string; value: string }>): TodoSettings {
   const values = Object.fromEntries(rows.map((row) => [row.key, row.value]));
+  let snoozeQuickPresets = DEFAULT_QUICK_SNOOZE_PRESETS;
+  try {
+    snoozeQuickPresets = parseQuickSnoozePresets(JSON.parse(values.snooze_quick_presets ?? "null"))
+      ?? DEFAULT_QUICK_SNOOZE_PRESETS;
+  } catch {
+    snoozeQuickPresets = DEFAULT_QUICK_SNOOZE_PRESETS;
+  }
   return {
     snoozeTimeZone: values.snooze_timezone || "America/Toronto",
     snoozeWakeHour: Number(values.snooze_wake_hour ?? 8),
+    snoozeQuickPresets: [...snoozeQuickPresets],
   };
 }
 
@@ -219,6 +235,14 @@ async function ensureTodoSyncSchema(db: D1Database) {
     END`),
     db.prepare(`CREATE TRIGGER IF NOT EXISTS todo_sync_settings_update AFTER UPDATE ON app_settings
       WHEN NEW.key IN ('snooze_timezone', 'snooze_wake_hour') BEGIN
+      INSERT INTO todo_sync_changes (entity_type, entity_key, operation) VALUES ('settings', NEW.key, 'changed');
+    END`),
+    db.prepare(`CREATE TRIGGER IF NOT EXISTS todo_sync_quick_snooze_insert AFTER INSERT ON app_settings
+      WHEN NEW.key = 'snooze_quick_presets' BEGIN
+      INSERT INTO todo_sync_changes (entity_type, entity_key, operation) VALUES ('settings', NEW.key, 'changed');
+    END`),
+    db.prepare(`CREATE TRIGGER IF NOT EXISTS todo_sync_quick_snooze_update AFTER UPDATE ON app_settings
+      WHEN NEW.key = 'snooze_quick_presets' BEGIN
       INSERT INTO todo_sync_changes (entity_type, entity_key, operation) VALUES ('settings', NEW.key, 'changed');
     END`),
     db.prepare(`CREATE TRIGGER IF NOT EXISTS todo_sync_capture_draft_insert AFTER INSERT ON app_settings
@@ -448,6 +472,7 @@ export async function ensureTodoDatabase() {
     await db.batch([
       db.prepare("INSERT OR IGNORE INTO app_settings (key, value) VALUES ('snooze_timezone', 'America/Toronto')"),
       db.prepare("INSERT OR IGNORE INTO app_settings (key, value) VALUES ('snooze_wake_hour', '8')"),
+      db.prepare("INSERT OR IGNORE INTO app_settings (key, value) VALUES ('snooze_quick_presets', '[\"15m\",\"30m\",\"1h\",\"2h\"]')"),
     ]);
 
     const total = await db.prepare("SELECT COUNT(*) AS count FROM todos").first<{ count: number }>();
@@ -554,7 +579,7 @@ export async function readTodoBootstrap(): Promise<TodoBootstrapSnapshot> {
   const [todoResult, projectResult, settingResult, captureDraftResult, revisionResult] = await db.batch([
     db.prepare(`${todoListSql} ORDER BY updated_at DESC, id DESC`),
     db.prepare("SELECT name FROM todo_projects ORDER BY name COLLATE NOCASE ASC"),
-    db.prepare("SELECT key, value FROM app_settings WHERE key IN ('snooze_timezone', 'snooze_wake_hour')"),
+    db.prepare("SELECT key, value FROM app_settings WHERE key IN ('snooze_timezone', 'snooze_wake_hour', 'snooze_quick_presets')"),
     db.prepare("SELECT value FROM app_settings WHERE key = 'capture_draft'"),
     db.prepare("SELECT COALESCE(MAX(revision), 0) AS revision FROM todo_sync_changes"),
   ]) as [
@@ -994,7 +1019,7 @@ function zonedDateToUtc(year: number, month: number, day: number, hour: number, 
 export async function getTodoSettings(): Promise<TodoSettings> {
   await ensureTodoDatabase();
   const result = await database()
-    .prepare("SELECT key, value FROM app_settings WHERE key IN ('snooze_timezone', 'snooze_wake_hour')")
+    .prepare("SELECT key, value FROM app_settings WHERE key IN ('snooze_timezone', 'snooze_wake_hour', 'snooze_quick_presets')")
     .all<{ key: string; value: string }>();
   return mapTodoSettings(result.results);
 }
@@ -1013,6 +1038,11 @@ export async function updateTodoSettings(settings: TodoSettings): Promise<TodoSe
       VALUES ('snooze_wake_hour', ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
     `).bind(String(settings.snoozeWakeHour)),
+    db.prepare(`
+      INSERT INTO app_settings (key, value, updated_at)
+      VALUES ('snooze_quick_presets', ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+    `).bind(JSON.stringify(settings.snoozeQuickPresets)),
   ]);
   console.info("[todo-db] settings updated", settings);
   return settings;
@@ -1081,14 +1111,9 @@ export async function nextSnoozeUntil() {
 }
 
 export async function snoozeUntilForPreset(preset: SnoozePreset, now = new Date()) {
-  const durations: Partial<Record<SnoozePreset, number>> = {
-    "15m": 15 * 60 * 1000,
-    "30m": 30 * 60 * 1000,
-    "1h": 60 * 60 * 1000,
-    "2h": 2 * 60 * 60 * 1000,
-  };
-  const duration = durations[preset];
-  if (duration) return new Date(now.valueOf() + duration).toISOString();
+  if (isQuickSnoozePreset(preset)) {
+    return new Date(now.valueOf() + quickSnoozeDurationMs(preset)).toISOString();
+  }
   if (preset !== "8pm") throw new Error("Choose a valid snooze adjustment.");
 
   const settings = await getTodoSettings();

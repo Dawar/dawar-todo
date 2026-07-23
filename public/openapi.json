@@ -421,7 +421,7 @@
           "ids": { "type": "array", "minItems": 1, "maxItems": 200, "uniqueItems": true, "items": { "type": "integer", "minimum": 1 } },
           "action": { "type": "string", "enum": ["complete", "snooze", "unsnooze", "reproject", "delete", "merge", "adjust_snooze"] },
           "project": { "type": ["string", "null"], "maxLength": 120 },
-          "snoozePreset": { "type": "string", "enum": ["15m", "30m", "1h", "2h", "8pm"], "description": "Relative snooze adjustment. `8pm` is retained for backward compatibility; current clients use `snoozedLocal` for exact times." },
+          "snoozePreset": { "type": "string", "enum": ["15m", "30m", "45m", "1h", "90m", "2h", "3h", "4h", "6h", "8h", "12h", "8pm"], "description": "Relative snooze adjustment from 15 minutes through 12 hours. `8pm` is retained for backward compatibility; current clients use `snoozedLocal` for exact times." },
           "snoozedLocal": { "type": "string", "example": "2026-07-23T14:30", "description": "Future local date and time in YYYY-MM-DDTHH:mm form, interpreted in the user's configured timezone. Use instead of snoozePreset for a custom wake time." }
         }
       },
@@ -437,8 +437,8 @@
       },
       "Settings": {
         "type": "object",
-        "required": ["snoozeTimeZone", "snoozeWakeHour"],
-        "properties": { "snoozeTimeZone": { "type": "string", "example": "America/Toronto", "description": "IANA timezone used for both snooze wake times and recurring cron schedules." }, "snoozeWakeHour": { "type": "integer", "minimum": 0, "maximum": 23 } }
+        "required": ["snoozeTimeZone", "snoozeWakeHour", "snoozeQuickPresets"],
+        "properties": { "snoozeTimeZone": { "type": "string", "example": "America/Toronto", "description": "IANA timezone used for both snooze wake times and recurring cron schedules." }, "snoozeWakeHour": { "type": "integer", "minimum": 0, "maximum": 23 }, "snoozeQuickPresets": { "type": "array", "minItems": 4, "maxItems": 4, "uniqueItems": true, "items": { "type": "string", "enum": ["15m", "30m", "45m", "1h", "90m", "2h", "3h", "4h", "6h", "8h", "12h"] }, "description": "Four distinct Quick Snooze buttons. The server normalizes them shortest-to-longest." } }
       },
       "CalendarFeed": {
         "type": "object",

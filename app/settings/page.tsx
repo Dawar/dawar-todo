@@ -10,10 +10,17 @@ import {
 } from "../app-badge";
 import { copyTextToClipboard } from "../copy-to-clipboard";
 import { SiteHeader } from "../site-header";
+import {
+  DEFAULT_QUICK_SNOOZE_PRESETS,
+  QUICK_SNOOZE_OPTIONS,
+  sortQuickSnoozePresets,
+  type QuickSnoozePreset,
+} from "../../lib/snooze-presets";
 
 type Settings = {
   snoozeTimeZone: string;
   snoozeWakeHour: number;
+  snoozeQuickPresets: QuickSnoozePreset[];
 };
 
 type CalendarFeed = {
@@ -66,7 +73,11 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 }
 
 export default function SettingsPage() {
-  const [settings, setSettings] = useState<Settings>({ snoozeTimeZone: "America/Toronto", snoozeWakeHour: 8 });
+  const [settings, setSettings] = useState<Settings>({
+    snoozeTimeZone: "America/Toronto",
+    snoozeWakeHour: 8,
+    snoozeQuickPresets: DEFAULT_QUICK_SNOOZE_PRESETS,
+  });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
@@ -92,7 +103,10 @@ export default function SettingsPage() {
   useEffect(() => {
     request<{ settings: Settings }>("/api/settings")
       .then(({ settings: loaded }) => {
-        setSettings(loaded);
+        setSettings({
+          ...loaded,
+          snoozeQuickPresets: loaded.snoozeQuickPresets ?? DEFAULT_QUICK_SNOOZE_PRESETS,
+        });
         console.info("[todo-ui] settings loaded", loaded);
       })
       .catch((error: Error) => setMessage(error.message))
@@ -153,6 +167,21 @@ export default function SettingsPage() {
     } finally {
       setSaving(false);
     }
+  }
+
+  function updateQuickSnoozePreset(index: number, value: QuickSnoozePreset) {
+    setSettings((current) => {
+      const next = [...current.snoozeQuickPresets];
+      next[index] = value;
+      const snoozeQuickPresets = sortQuickSnoozePresets(next);
+      console.info("[todo-ui] Quick Snooze preference changed", {
+        changedSlot: index,
+        selected: value,
+        sortedPresets: snoozeQuickPresets,
+      });
+      return { ...current, snoozeQuickPresets };
+    });
+    setSaved(false);
   }
 
   async function createFeed(event: FormEvent) {
@@ -359,6 +388,34 @@ export default function SettingsPage() {
                 {Array.from({ length: 24 }, (_, hour) => <option key={hour} value={hour}>{hourLabel(hour)}</option>)}
               </select>
             </label>
+
+            <div>
+              <span className="block text-sm font-semibold text-[#303632]">Quick Snooze buttons</span>
+              <p className="mt-1 text-sm leading-6 text-[#69716c]">Choose four different times. They always appear shortest-to-longest; Custom remains available for an exact date and time.</p>
+              <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+                {settings.snoozeQuickPresets.map((preset, index) => (
+                  <label key={`${index}-${preset}`} className="block">
+                    <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-[#7a827d]">Slot {index + 1}</span>
+                    <select
+                      value={preset}
+                      onChange={(event) => updateQuickSnoozePreset(index, event.target.value as QuickSnoozePreset)}
+                      aria-label={`Quick Snooze slot ${index + 1}`}
+                      className="h-12 w-full rounded-xl border border-black/[0.1] bg-white px-3 text-[16px] outline-none transition focus:border-[#216e4e]/60 focus:ring-3 focus:ring-[#216e4e]/10"
+                    >
+                      {QUICK_SNOOZE_OPTIONS.map((option) => (
+                        <option
+                          key={option.value}
+                          value={option.value}
+                          disabled={settings.snoozeQuickPresets.some((selected, selectedIndex) => selectedIndex !== index && selected === option.value)}
+                        >
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ))}
+              </div>
+            </div>
           </fieldset>
 
           <div className="mt-6 rounded-xl bg-[#f1f6f3] px-4 py-3 text-sm leading-6 text-[#4f6257]">
