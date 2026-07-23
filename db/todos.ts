@@ -80,10 +80,18 @@ export type TodoSettings = {
   snoozeWakeHour: number;
 };
 
+export type TodoCaptureDraft = {
+  text: string;
+  updatedAt: string;
+  clientId: string;
+  version: string;
+};
+
 export type TodoBootstrapSnapshot = {
   todos: Todo[];
   projects: string[];
   settings: TodoSettings;
+  captureDraft: TodoCaptureDraft | null;
   revision: number;
 };
 
@@ -94,17 +102,18 @@ export type TodoSyncDelta = {
   deletedIds: number[];
   projects?: string[];
   settings?: TodoSettings;
+  captureDraft?: TodoCaptureDraft | null;
 } | ({ reset: true; reason: string } & TodoBootstrapSnapshot);
 
 type TodoSyncChangeRow = {
   revision: number;
-  entity_type: "todo" | "project" | "settings";
+  entity_type: "todo" | "project" | "settings" | "capture_draft";
   entity_key: string;
   operation: string;
 };
 
 let initialization: Promise<void> | null = null;
-const CURRENT_SCHEMA_VERSION = "14";
+const CURRENT_SCHEMA_VERSION = "15";
 
 function database() {
   if (!env.DB) throw new Error("The todo database is unavailable.");
@@ -133,6 +142,27 @@ function mapTodo(row: TodoRow): Todo {
     updatedAt: row.updated_at,
     attachmentCount: Number(row.attachment_count ?? 0),
   };
+}
+
+function mapTodoCaptureDraft(value: string | null | undefined): TodoCaptureDraft | null {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value) as Partial<TodoCaptureDraft>;
+    if (
+      typeof parsed.text !== "string"
+      || typeof parsed.updatedAt !== "string"
+      || typeof parsed.clientId !== "string"
+      || typeof parsed.version !== "string"
+    ) return null;
+    return {
+      text: parsed.text,
+      updatedAt: parsed.updatedAt,
+      clientId: parsed.clientId,
+      version: parsed.version,
+    };
+  } catch {
+    return null;
+  }
 }
 
 function mapTodoSettings(rows: Array<{ key: string; value: string }>): TodoSettings {
@@ -190,6 +220,14 @@ async function ensureTodoSyncSchema(db: D1Database) {
     db.prepare(`CREATE TRIGGER IF NOT EXISTS todo_sync_settings_update AFTER UPDATE ON app_settings
       WHEN NEW.key IN ('snooze_timezone', 'snooze_wake_hour') BEGIN
       INSERT INTO todo_sync_changes (entity_type, entity_key, operation) VALUES ('settings', NEW.key, 'changed');
+    END`),
+    db.prepare(`CREATE TRIGGER IF NOT EXISTS todo_sync_capture_draft_insert AFTER INSERT ON app_settings
+      WHEN NEW.key = 'capture_draft' BEGIN
+      INSERT INTO todo_sync_changes (entity_type, entity_key, operation) VALUES ('capture_draft', NEW.key, 'changed');
+    END`),
+    db.prepare(`CREATE TRIGGER IF NOT EXISTS todo_sync_capture_draft_update AFTER UPDATE ON app_settings
+      WHEN NEW.key = 'capture_draft' BEGIN
+      INSERT INTO todo_sync_changes (entity_type, entity_key, operation) VALUES ('capture_draft', NEW.key, 'changed');
     END`),
     db.prepare(`CREATE TRIGGER IF NOT EXISTS todo_sync_attachments_insert AFTER INSERT ON todo_attachments
       WHEN NEW.todo_id IS NOT NULL BEGIN
@@ -513,21 +551,24 @@ export async function listTodos(): Promise<Todo[]> {
 export async function readTodoBootstrap(): Promise<TodoBootstrapSnapshot> {
   await ensureTodoDatabase();
   const db = database();
-  const [todoResult, projectResult, settingResult, revisionResult] = await db.batch([
+  const [todoResult, projectResult, settingResult, captureDraftResult, revisionResult] = await db.batch([
     db.prepare(`${todoListSql} ORDER BY updated_at DESC, id DESC`),
     db.prepare("SELECT name FROM todo_projects ORDER BY name COLLATE NOCASE ASC"),
     db.prepare("SELECT key, value FROM app_settings WHERE key IN ('snooze_timezone', 'snooze_wake_hour')"),
+    db.prepare("SELECT value FROM app_settings WHERE key = 'capture_draft'"),
     db.prepare("SELECT COALESCE(MAX(revision), 0) AS revision FROM todo_sync_changes"),
   ]) as [
     D1Result<TodoRow>,
     D1Result<{ name: string }>,
     D1Result<{ key: string; value: string }>,
+    D1Result<{ value: string }>,
     D1Result<{ revision: number }>,
   ];
   return {
     todos: todoResult.results.map(mapTodo),
     projects: projectResult.results.map((row) => row.name),
     settings: mapTodoSettings(settingResult.results),
+    captureDraft: mapTodoCaptureDraft(captureDraftResult.results[0]?.value),
     revision: Number(revisionResult.results[0]?.revision ?? 0),
   };
 }
@@ -579,9 +620,11 @@ export async function readTodoSyncDelta(afterRevision: number): Promise<TodoSync
   const deletedIds = todoIds.filter((id) => !liveIds.has(id));
   const projectsChanged = changes.some((change) => change.entity_type === "project");
   const settingsChanged = changes.some((change) => change.entity_type === "settings");
-  const [projects, settings] = await Promise.all([
+  const captureDraftChanged = changes.some((change) => change.entity_type === "capture_draft");
+  const [projects, settings, captureDraft] = await Promise.all([
     projectsChanged ? listTodoProjects() : Promise.resolve(undefined),
     settingsChanged ? getTodoSettings() : Promise.resolve(undefined),
+    captureDraftChanged ? getTodoCaptureDraft() : Promise.resolve(undefined),
   ]);
   return {
     reset: false,
@@ -590,6 +633,7 @@ export async function readTodoSyncDelta(afterRevision: number): Promise<TodoSync
     deletedIds,
     ...(projects ? { projects } : {}),
     ...(settings ? { settings } : {}),
+    ...(captureDraftChanged ? { captureDraft: captureDraft ?? null } : {}),
   };
 }
 
@@ -972,6 +1016,51 @@ export async function updateTodoSettings(settings: TodoSettings): Promise<TodoSe
   ]);
   console.info("[todo-db] settings updated", settings);
   return settings;
+}
+
+export async function getTodoCaptureDraft(): Promise<TodoCaptureDraft | null> {
+  await ensureTodoDatabase();
+  const row = await database()
+    .prepare("SELECT value FROM app_settings WHERE key = 'capture_draft'")
+    .first<{ value: string }>();
+  return mapTodoCaptureDraft(row?.value);
+}
+
+export async function updateTodoCaptureDraft(input: {
+  text: string;
+  updatedAt?: string;
+  clientId: string;
+}): Promise<{ captureDraft: TodoCaptureDraft; applied: boolean }> {
+  await ensureTodoDatabase();
+  if (input.text.length > 2000) throw new Error("Quick Add drafts are limited to 2,000 characters.");
+  const clientId = input.clientId.trim();
+  if (!/^[0-9a-f-]{36}$/i.test(clientId)) throw new Error("A capture draft client identifier is invalid.");
+  const updatedAt = normalizedMutationTimestamp(input.updatedAt, new Date());
+  const candidate: TodoCaptureDraft = {
+    text: input.text,
+    updatedAt,
+    clientId,
+    version: `${updatedAt}|${clientId}`,
+  };
+  const db = database();
+  const applied = await db.prepare(`
+    INSERT INTO app_settings (key, value, updated_at)
+    VALUES ('capture_draft', ?, ?)
+    ON CONFLICT(key) DO UPDATE SET
+      value = excluded.value,
+      updated_at = excluded.updated_at
+    WHERE json_extract(excluded.value, '$.version') > COALESCE(json_extract(app_settings.value, '$.version'), '')
+    RETURNING value
+  `).bind(JSON.stringify(candidate), updatedAt).first<{ value: string }>();
+  const captureDraft = mapTodoCaptureDraft(applied?.value) ?? await getTodoCaptureDraft() ?? candidate;
+  console.info("[todo-db] capture draft synchronized", {
+    applied: Boolean(applied),
+    textLength: input.text.length,
+    returnedTextLength: captureDraft.text.length,
+    clientIdPrefix: `${clientId.slice(0, 8)}…`,
+    version: captureDraft.version,
+  });
+  return { captureDraft, applied: Boolean(applied) };
 }
 
 export async function nextSnoozeUntil() {

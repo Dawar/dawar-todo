@@ -9,6 +9,8 @@ export async function GET() {
     console.info("[todo-sync] bootstrap served", {
       todos: snapshot.todos.length,
       projects: snapshot.projects.length,
+      captureDraftLength: snapshot.captureDraft?.text.length ?? 0,
+      captureDraftVersion: snapshot.captureDraft?.version ?? null,
       revision: snapshot.revision,
       recurringReopened: recurrence?.reopened ?? 0,
       durationMs: Date.now() - startedAt,

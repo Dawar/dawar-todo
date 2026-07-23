@@ -106,6 +106,13 @@
       "when": 1784649180882,
       "tag": "0014_redundant_red_shift",
       "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "6",
+      "when": 1784782882044,
+      "tag": "0015_capture_draft_sync",
+      "breakpoints": true
     }
   ]
 }

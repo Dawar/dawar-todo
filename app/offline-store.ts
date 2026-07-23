@@ -29,11 +29,20 @@ export type OfflineTodoMutation = {
   createdAt: string;
 };
 
+export type OfflineCaptureDraft = {
+  key: "quick-add";
+  text: string;
+  updatedAt: string;
+  clientId: string;
+  version: string;
+};
+
 const DATABASE_NAME = "dawar-todo-offline";
-const DATABASE_VERSION = 3;
+const DATABASE_VERSION = 4;
 const TODO_STORE = "pending-todos";
 const CACHE_STORE = "cached-state";
 const MUTATION_STORE = "pending-mutations";
+const CAPTURE_DRAFT_STORE = "capture-draft";
 
 export type CachedServerState<T> = {
   key: "server";
@@ -60,6 +69,9 @@ function openDatabase() {
       if (!database.objectStoreNames.contains(MUTATION_STORE)) {
         const store = database.createObjectStore(MUTATION_STORE, { keyPath: "todoId" });
         store.createIndex("createdAt", "createdAt");
+      }
+      if (!database.objectStoreNames.contains(CAPTURE_DRAFT_STORE)) {
+        database.createObjectStore(CAPTURE_DRAFT_STORE, { keyPath: "key" });
       }
     };
     request.onsuccess = () => resolve(request.result);
@@ -157,6 +169,19 @@ export async function listOfflineTodoMutations() {
 export async function deleteOfflineTodoMutation(todoId: number) {
   await runRequest(MUTATION_STORE, "readwrite", (store) => store.delete(todoId));
   console.info("[todo-offline] synchronized task edit removed", { todoId });
+}
+
+export async function saveOfflineCaptureDraft(draft: OfflineCaptureDraft) {
+  await runRequest(CAPTURE_DRAFT_STORE, "readwrite", (store) => store.put(draft));
+}
+
+export async function loadOfflineCaptureDraft() {
+  const draft = await runRequest<OfflineCaptureDraft | undefined>(
+    CAPTURE_DRAFT_STORE,
+    "readonly",
+    (store) => store.get("quick-add"),
+  );
+  return draft ?? null;
 }
 
 export async function saveCachedServerState<T>(todos: T[], projects: string[], revision?: number) {

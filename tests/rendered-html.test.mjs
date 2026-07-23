@@ -50,8 +50,13 @@ test("ships the simplified todo and project surface", async () => {
   assert.match(page, /Saved automatically/);
   assert.match(page, /persistTaskDraft/);
   assert.match(page, /autosave: true/);
+  assert.doesNotMatch(page, /<textarea\s+autoFocus\s+value=\{editDraft\.title\}/);
+  assert.match(page, /task dialog pull-to-close triggered/);
+  assert.match(page, /triggerDistance = 150/);
+  assert.match(page, /Release to close/);
+  assert.match(page, /ref=\{taskDialogScrollRef\}/);
   assert.match(page, /aria-label="Clear due date"/);
-  assert.match(page, /dueDate: ""/);
+  assert.match(page, /updateEditDraftField\("dueDate", ""\)/);
   assert.match(page, /disabled:invisible/);
   assert.match(page, /\/api\/todos\/\$\{editingTodo\.id\}/);
   assert.match(page, /const pinnedOpenTodos = view === "open" \? filtered\.filter\(\(todo\) => todo\.pinned\) : \[\]/);

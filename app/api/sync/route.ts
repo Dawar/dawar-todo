@@ -20,6 +20,7 @@ export async function GET(request: Request) {
       deletedTodos: delta.reset ? 0 : delta.deletedIds.length,
       projectsIncluded: delta.reset || Boolean(delta.projects),
       settingsIncluded: delta.reset || Boolean(delta.settings),
+      captureDraftIncluded: delta.reset || Object.prototype.hasOwnProperty.call(delta, "captureDraft"),
       recurringReopened: recurrence?.reopened ?? 0,
       durationMs: Date.now() - startedAt,
     });

@@ -21,17 +21,21 @@ import { dueDateSortValue, formatDueDate, isDueTodayOrOverdue } from "./date-onl
 import { cronValidationError, nextCronOccurrence } from "../lib/cron";
 import { zonedDateTimeInputValue, zonedLocalDateTimeToUtc } from "../lib/zoned-date-time";
 import { SiteHeader } from "./site-header";
+import { PullGesturePill } from "./pull-to-refresh";
 import {
   deleteOfflineTodo,
   deleteOfflineTodoMutation,
   loadCachedServerState,
+  loadOfflineCaptureDraft,
   listOfflineTodos,
   listOfflineTodoMutations,
   persistOfflineStorage,
+  saveOfflineCaptureDraft,
   saveOfflineTodo,
   saveOfflineTodoMutation,
   saveCachedServerState,
   type OfflineAttachmentKind,
+  type OfflineCaptureDraft,
   type OfflineTodoRecord,
 } from "./offline-store";
 
@@ -84,10 +88,13 @@ type TodoSettings = {
   snoozeWakeHour: number;
 };
 
+type CaptureDraft = Omit<OfflineCaptureDraft, "key">;
+
 type BootstrapResponse = {
   todos: Todo[];
   projects: string[];
   settings: TodoSettings;
+  captureDraft: CaptureDraft | null;
   revision: number;
   serverTime: string;
 };
@@ -99,6 +106,7 @@ type SyncResponse = ({
   deletedIds: number[];
   projects?: string[];
   settings?: TodoSettings;
+  captureDraft?: CaptureDraft | null;
 } | {
   reset: true;
   reason: string;
@@ -106,6 +114,7 @@ type SyncResponse = ({
   todos: Todo[];
   projects: string[];
   settings: TodoSettings;
+  captureDraft: CaptureDraft | null;
 }) & { serverTime: string };
 
 type OptimisticOperation = {
@@ -186,6 +195,13 @@ type CustomSnoozeDialogState = {
   error: string;
 };
 
+type TaskDialogPullGesture = {
+  startX: number;
+  startY: number;
+  active: boolean;
+  startedInScrollArea: boolean;
+};
+
 const CREATE_PROJECT = "__create_project__";
 const UNASSIGNED_PROJECT = "__unassigned_project__";
 
@@ -241,7 +257,9 @@ function todoDraft(todo: Todo): TodoDraft {
 }
 
 function normalizedDraftField(draft: TodoDraft, field: AutosaveField) {
-  if (field === "title" || field === "notes") return draft[field].trim();
+  // Preserve the exact textarea value while autosaving. Trimming here made a
+  // server round-trip erase a just-typed trailing space or newline.
+  if (field === "title" || field === "notes") return draft[field];
   if (field === "priority") return draft.priority;
   if (field === "dueDate") return draft.dueDate || null;
   if (field === "context") return draft.context.trim() || null;
@@ -1262,8 +1280,20 @@ export default function Home() {
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [keyboardTodoId, setKeyboardTodoId] = useState<number | null>(null);
   const [keyboardActionIndex, setKeyboardActionIndex] = useState(0);
+  const [taskDialogPullDistance, setTaskDialogPullDistance] = useState(0);
+  const [taskDialogPullReady, setTaskDialogPullReady] = useState(false);
+  const [taskDialogPulling, setTaskDialogPulling] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const captureRef = useRef<HTMLTextAreaElement>(null);
+  const newTitleRef = useRef("");
+  const captureDraftClientIdRef = useRef(crypto.randomUUID());
+  const captureDraftRef = useRef<CaptureDraft | null>(null);
+  const captureDraftSaveTimerRef = useRef<number | null>(null);
+  const captureDraftInFlightRef = useRef(false);
+  const queuedCaptureDraftRef = useRef<CaptureDraft | null>(null);
+  const pendingRemoteCaptureDraftRef = useRef<CaptureDraft | null>(null);
+  const captureDraftClockRef = useRef(0);
+  const persistCaptureDraftRef = useRef<((draft: CaptureDraft, source: string) => Promise<void>) | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const viewerGesture = useRef<number | null>(null);
   const imageDropDepth = useRef(0);
@@ -1271,6 +1301,10 @@ export default function Home() {
   const editingIdRef = useRef<number | null>(null);
   const editDraftRef = useRef<TodoDraft | null>(null);
   const editBaselineRef = useRef<TodoDraft | null>(null);
+  const taskDialogRef = useRef<HTMLFormElement>(null);
+  const taskDialogScrollRef = useRef<HTMLDivElement>(null);
+  const taskDialogGestureRef = useRef<TaskDialogPullGesture | null>(null);
+  const taskDialogRawPullRef = useRef(0);
   const autosaveTimerRef = useRef<number | null>(null);
   const autosaveInFlightRef = useRef(false);
   const queuedAutosaveRef = useRef<{ todoId: number; draft: TodoDraft; baseline: TodoDraft } | null>(null);
@@ -1286,6 +1320,37 @@ export default function Home() {
   const lastAppBadgeCountRef = useRef<number | null>(null);
   const keyboardPreferredIndexRef = useRef(0);
   const overlayOpen = editingId !== null || projectSelectorOpen || projectDialog !== null || newProjectOpen || projectDeleteDialog !== null || filtersOpen || viewerIndex !== null || voiceTarget !== null || shortcutsOpen || customSnoozeDialog !== null;
+
+  function applyRemoteCaptureDraft(remoteDraft: CaptureDraft | null, source: "bootstrap" | "poll" | "reconnect" | "mutation") {
+    if (!remoteDraft) return;
+    const localDraft = captureDraftRef.current;
+    if (localDraft && remoteDraft.version <= localDraft.version) return;
+    if (document.activeElement === captureRef.current) {
+      pendingRemoteCaptureDraftRef.current = remoteDraft;
+      console.info("[todo-sync] remote Quick Add draft deferred during active typing", {
+        source,
+        remoteVersion: remoteDraft.version,
+        localVersion: localDraft?.version ?? null,
+        remoteTextLength: remoteDraft.text.length,
+        localTextLength: localDraft?.text.length ?? newTitleRef.current.length,
+      });
+      return;
+    }
+    captureDraftRef.current = remoteDraft;
+    newTitleRef.current = remoteDraft.text;
+    setNewTitle(remoteDraft.text);
+    void saveOfflineCaptureDraft({ key: "quick-add", ...remoteDraft }).catch((error) => {
+      console.error("[todo-offline] remote Quick Add draft cache failed", { source, error });
+    });
+    window.requestAnimationFrame(() => {
+      if (captureRef.current) resizeCapture(captureRef.current);
+    });
+    console.info("[todo-sync] remote Quick Add draft applied", {
+      source,
+      version: remoteDraft.version,
+      textLength: remoteDraft.text.length,
+    });
+  }
 
   const routeDroppedAttachments = useEffectEvent((files: File[]) => {
     const destination = editingId !== null ? "task" : "quick-add";
@@ -1335,8 +1400,11 @@ export default function Home() {
       const nextDraft = { ...currentDraft };
       const nextBaseline = { ...baseline };
       for (const field of [...AUTOSAVE_FIELDS, "project" as const]) {
-        if (currentDraft[field] === baseline[field]) nextDraft[field] = remoteDraft[field] as never;
-        if (currentDraft[field] === baseline[field]) nextBaseline[field] = remoteDraft[field] as never;
+        const locallyUnchanged = currentDraft[field] === baseline[field];
+        if (locallyUnchanged) {
+          nextDraft[field] = remoteDraft[field] as never;
+          nextBaseline[field] = remoteDraft[field] as never;
+        }
       }
       editBaselineRef.current = nextBaseline;
       editDraftRef.current = nextDraft;
@@ -1400,8 +1468,11 @@ export default function Home() {
       const nextDraft = { ...currentDraft };
       const nextBaseline = { ...baseline };
       for (const field of [...AUTOSAVE_FIELDS, "project" as const]) {
-        if (currentDraft[field] === baseline[field]) nextDraft[field] = remoteDraft[field] as never;
-        if (currentDraft[field] === baseline[field]) nextBaseline[field] = remoteDraft[field] as never;
+        const locallyUnchanged = currentDraft[field] === baseline[field];
+        if (locallyUnchanged) {
+          nextDraft[field] = remoteDraft[field] as never;
+          nextBaseline[field] = remoteDraft[field] as never;
+        }
       }
       editBaselineRef.current = nextBaseline;
       editDraftRef.current = nextDraft;
@@ -1438,9 +1509,12 @@ export default function Home() {
         ));
       }
       if (result.settings?.snoozeTimeZone) setScheduleTimeZone(result.settings.snoozeTimeZone);
+      if (Object.prototype.hasOwnProperty.call(result, "captureDraft")) {
+        applyRemoteCaptureDraft(result.captureDraft ?? null, source);
+      }
       syncRevisionRef.current = result.revision;
       const changedTodos = result.todos.length + (result.reset ? 0 : result.deletedIds.length);
-      if (source === "reconnect" || result.reset || changedTodos > 0 || result.projects || result.settings) {
+      if (source === "reconnect" || result.reset || changedTodos > 0 || result.projects || result.settings || Object.prototype.hasOwnProperty.call(result, "captureDraft")) {
         console.info("[todo-sync] delta applied", {
           source,
           after,
@@ -1450,6 +1524,7 @@ export default function Home() {
           changedTodos,
           projectsIncluded: Boolean(result.projects),
           settingsIncluded: Boolean(result.settings),
+          captureDraftIncluded: Object.prototype.hasOwnProperty.call(result, "captureDraft"),
           durationMs: Date.now() - startedAt,
         });
       }
@@ -1468,7 +1543,7 @@ export default function Home() {
   useEffect(() => {
     let active = true;
     const load = async () => {
-      const [offlineRecords, offlineMutations, cachedState] = await Promise.all([
+      const [offlineRecords, offlineMutations, cachedState, offlineCaptureDraft] = await Promise.all([
         listOfflineTodos().catch((error) => {
           console.error("[todo-offline] queue load failed", error);
           return [];
@@ -1479,6 +1554,10 @@ export default function Home() {
         }),
         loadCachedServerState<Todo>().catch((error) => {
           console.error("[todo-offline] cached state load failed", error);
+          return null;
+        }),
+        loadOfflineCaptureDraft().catch((error) => {
+          console.error("[todo-offline] Quick Add draft load failed", error);
           return null;
         }),
       ]);
@@ -1504,6 +1583,26 @@ export default function Home() {
       setRegisteredProjects(loadedProjects);
       syncRevisionRef.current = server?.revision ?? cachedState?.revision ?? 0;
       if (server?.settings.snoozeTimeZone) setScheduleTimeZone(server.settings.snoozeTimeZone);
+      const serverCaptureDraft = server?.captureDraft ?? null;
+      const chosenCaptureDraft = offlineCaptureDraft && (!serverCaptureDraft || offlineCaptureDraft.version > serverCaptureDraft.version)
+        ? offlineCaptureDraft
+        : serverCaptureDraft;
+      if (chosenCaptureDraft) {
+        captureDraftRef.current = chosenCaptureDraft;
+        newTitleRef.current = chosenCaptureDraft.text;
+        captureDraftClockRef.current = Math.max(captureDraftClockRef.current, new Date(chosenCaptureDraft.updatedAt).valueOf() || 0);
+        setNewTitle(chosenCaptureDraft.text);
+        window.requestAnimationFrame(() => {
+          if (captureRef.current) resizeCapture(captureRef.current);
+        });
+        if (offlineCaptureDraft && chosenCaptureDraft.version === offlineCaptureDraft.version && (!serverCaptureDraft || offlineCaptureDraft.version > serverCaptureDraft.version)) {
+          void persistCaptureDraftRef.current?.(offlineCaptureDraft, "offline-recovery");
+        } else {
+          void saveOfflineCaptureDraft({ key: "quick-add", ...chosenCaptureDraft }).catch((error) => {
+            console.error("[todo-offline] bootstrap Quick Add draft cache failed", error);
+          });
+        }
+      }
       if (server) void saveCachedServerState(loaded, loadedProjects, server.revision);
       if (!server) setNotice({ tone: "success", text: pendingRecords.length ? "Offline — showing tasks waiting to sync." : "Offline — new tasks will sync when you reconnect." });
       console.info("[todo-ui] loaded", {
@@ -1513,6 +1612,8 @@ export default function Home() {
         reconciled: alreadySynced.length,
         projects: loadedProjects.length,
         revision: syncRevisionRef.current,
+        captureDraftSource: chosenCaptureDraft === offlineCaptureDraft ? "offline" : chosenCaptureDraft ? "server" : "empty",
+        captureDraftLength: chosenCaptureDraft?.text.length ?? 0,
         open: loaded.filter((todo) => todo.status === "open").length,
         completed: loaded.filter((todo) => todo.status === "completed").length,
         snoozed: loaded.filter((todo) => isSnoozed(todo, Date.now())).length,
@@ -1527,7 +1628,12 @@ export default function Home() {
 
   useEffect(() => {
     if (online && (offlineCount > 0 || offlineEditCount > 0)) void syncOfflineQueueRef.current?.();
+    if (online && captureDraftRef.current) void persistCaptureDraftRef.current?.(captureDraftRef.current, "reconnect");
   }, [online, offlineCount, offlineEditCount]);
+
+  useEffect(() => () => {
+    if (captureDraftSaveTimerRef.current !== null) window.clearTimeout(captureDraftSaveTimerRef.current);
+  }, []);
 
   useEffect(() => {
     editingIdRef.current = editingId;
@@ -1587,6 +1693,111 @@ export default function Home() {
       autosaveTimerRef.current = null;
     };
   }, [editDraft, editingId]);
+
+  useEffect(() => {
+    if (editingId === null) return;
+    const dialog = taskDialogRef.current;
+    if (!dialog) return;
+    const narrowViewport = window.matchMedia("(max-width: 767px)");
+    const coarsePointer = window.matchMedia("(pointer: coarse)");
+    const enabled = () => narrowViewport.matches && coarsePointer.matches;
+    const triggerDistance = 150;
+    const intentDistance = 8;
+    const maxDialogOffset = 88;
+
+    const resetGesture = () => {
+      taskDialogGestureRef.current = null;
+      taskDialogRawPullRef.current = 0;
+      setTaskDialogPulling(false);
+      setTaskDialogPullReady(false);
+      setTaskDialogPullDistance(0);
+    };
+
+    const onTouchStart = (event: TouchEvent) => {
+      if (!enabled() || event.touches.length !== 1) return;
+      const target = event.target instanceof Element ? event.target : null;
+      if (target?.closest("input, textarea, select, button, a, audio, video, [contenteditable='true'], [data-no-dialog-pull]")) return;
+      const scrollArea = taskDialogScrollRef.current;
+      const startedInScrollArea = Boolean(scrollArea && target && scrollArea.contains(target));
+      if (startedInScrollArea && (scrollArea?.scrollTop ?? 0) > 0) return;
+      const touch = event.touches[0];
+      taskDialogGestureRef.current = {
+        startX: touch.clientX,
+        startY: touch.clientY,
+        active: false,
+        startedInScrollArea,
+      };
+      taskDialogRawPullRef.current = 0;
+    };
+
+    const onTouchMove = (event: TouchEvent) => {
+      const gesture = taskDialogGestureRef.current;
+      if (!gesture || event.touches.length !== 1) return;
+      const touch = event.touches[0];
+      const deltaX = touch.clientX - gesture.startX;
+      const deltaY = touch.clientY - gesture.startY;
+      if (!gesture.active) {
+        if (Math.max(Math.abs(deltaX), Math.abs(deltaY)) < intentDistance) return;
+        if (deltaY <= 0 || Math.abs(deltaX) >= deltaY || (gesture.startedInScrollArea && (taskDialogScrollRef.current?.scrollTop ?? 0) > 0)) {
+          resetGesture();
+          return;
+        }
+        gesture.active = true;
+        setTaskDialogPulling(true);
+        console.info("[todo-ui] task dialog pull-to-close started", { todoId: editingId });
+      }
+      if (gesture.startedInScrollArea && (taskDialogScrollRef.current?.scrollTop ?? 0) > 0) {
+        resetGesture();
+        return;
+      }
+      if (event.cancelable) event.preventDefault();
+      const rawDistance = Math.max(0, deltaY);
+      taskDialogRawPullRef.current = rawDistance;
+      setTaskDialogPullReady(rawDistance >= triggerDistance);
+      setTaskDialogPullDistance(Math.min(maxDialogOffset, rawDistance * 0.42));
+    };
+
+    const finishGesture = (cancelled: boolean) => {
+      const gesture = taskDialogGestureRef.current;
+      const rawDistance = taskDialogRawPullRef.current;
+      if (!gesture?.active || cancelled || rawDistance < triggerDistance) {
+        if (gesture?.active) {
+          console.info("[todo-ui] task dialog pull-to-close cancelled", {
+            todoId: editingId,
+            pullDistance: Math.round(rawDistance),
+            reason: cancelled ? "touch-cancelled" : "below-threshold",
+          });
+        }
+        resetGesture();
+        return;
+      }
+      console.info("[todo-ui] task dialog pull-to-close triggered", {
+        todoId: editingId,
+        pullDistance: Math.round(rawDistance),
+      });
+      resetGesture();
+      closeTaskDetailsRef.current();
+    };
+
+    const onTouchEnd = () => finishGesture(false);
+    const onTouchCancel = () => finishGesture(true);
+    dialog.addEventListener("touchstart", onTouchStart, { passive: true });
+    dialog.addEventListener("touchmove", onTouchMove, { passive: false });
+    dialog.addEventListener("touchend", onTouchEnd, { passive: true });
+    dialog.addEventListener("touchcancel", onTouchCancel, { passive: true });
+    console.info("[todo-ui] task dialog pull-to-close ready", {
+      todoId: editingId,
+      enabled: enabled(),
+      triggerDistance,
+    });
+    return () => {
+      dialog.removeEventListener("touchstart", onTouchStart);
+      dialog.removeEventListener("touchmove", onTouchMove);
+      dialog.removeEventListener("touchend", onTouchEnd);
+      dialog.removeEventListener("touchcancel", onTouchCancel);
+      resetGesture();
+    };
+  }, [editingId]);
 
   useEffect(() => {
     const updateConnection = () => {
@@ -1989,6 +2200,109 @@ export default function Home() {
     textarea.style.overflowY = textarea.scrollHeight > 120 ? "auto" : "hidden";
   }
 
+  async function persistCaptureDraft(draft: CaptureDraft, source: string) {
+    if (!navigator.onLine) {
+      console.info("[todo-offline] Quick Add draft retained locally", {
+        source,
+        version: draft.version,
+        textLength: draft.text.length,
+      });
+      return;
+    }
+    if (captureDraftInFlightRef.current) {
+      if (!queuedCaptureDraftRef.current || draft.version > queuedCaptureDraftRef.current.version) {
+        queuedCaptureDraftRef.current = draft;
+      }
+      return;
+    }
+    captureDraftInFlightRef.current = true;
+    const startedAt = Date.now();
+    try {
+      const result = await request<{ captureDraft: CaptureDraft; applied: boolean }>("/api/capture-draft", {
+        method: "PATCH",
+        body: JSON.stringify({
+          text: draft.text,
+          updatedAt: draft.updatedAt,
+          clientId: draft.clientId,
+        }),
+      });
+      if (result.captureDraft.version > (captureDraftRef.current?.version ?? "")) {
+        applyRemoteCaptureDraft(result.captureDraft, "mutation");
+      }
+      console.info("[todo-sync] Quick Add draft synchronized", {
+        source,
+        applied: result.applied,
+        requestedVersion: draft.version,
+        returnedVersion: result.captureDraft.version,
+        textLength: draft.text.length,
+        durationMs: Date.now() - startedAt,
+      });
+    } catch (error) {
+      console.warn("[todo-sync] Quick Add draft synchronization deferred", {
+        source,
+        version: draft.version,
+        textLength: draft.text.length,
+        browserOnline: navigator.onLine,
+        durationMs: Date.now() - startedAt,
+        error,
+      });
+    } finally {
+      captureDraftInFlightRef.current = false;
+      const queued = queuedCaptureDraftRef.current;
+      queuedCaptureDraftRef.current = null;
+      if (queued && queued.version > draft.version) void persistCaptureDraft(queued, "coalesced");
+    }
+  }
+
+  persistCaptureDraftRef.current = persistCaptureDraft;
+
+  function updateCaptureTitle(text: string, source: "typing" | "task-created") {
+    const nextClock = Math.max(Date.now(), captureDraftClockRef.current + 1);
+    captureDraftClockRef.current = nextClock;
+    const updatedAt = new Date(nextClock).toISOString();
+    const clientId = captureDraftClientIdRef.current;
+    const draft: CaptureDraft = {
+      text,
+      updatedAt,
+      clientId,
+      version: `${updatedAt}|${clientId}`,
+    };
+    newTitleRef.current = text;
+    captureDraftRef.current = draft;
+    pendingRemoteCaptureDraftRef.current = null;
+    setNewTitle(text);
+    void saveOfflineCaptureDraft({ key: "quick-add", ...draft }).catch((error) => {
+      console.error("[todo-offline] Quick Add draft save failed", { source, textLength: text.length, error });
+    });
+    if (captureDraftSaveTimerRef.current !== null) window.clearTimeout(captureDraftSaveTimerRef.current);
+    captureDraftSaveTimerRef.current = window.setTimeout(() => {
+      captureDraftSaveTimerRef.current = null;
+      void persistCaptureDraft(draft, source);
+    }, source === "task-created" ? 0 : 500);
+  }
+
+  function flushCaptureDraft() {
+    if (captureDraftSaveTimerRef.current !== null) {
+      window.clearTimeout(captureDraftSaveTimerRef.current);
+      captureDraftSaveTimerRef.current = null;
+    }
+    const localDraft = captureDraftRef.current;
+    if (localDraft) void persistCaptureDraft(localDraft, "blur");
+    const pendingRemote = pendingRemoteCaptureDraftRef.current;
+    pendingRemoteCaptureDraftRef.current = null;
+    if (pendingRemote) {
+      window.setTimeout(() => applyRemoteCaptureDraft(pendingRemote, "poll"), 0);
+    }
+  }
+
+  function updateEditDraftField<K extends keyof TodoDraft>(field: K, value: TodoDraft[K]) {
+    const current = editDraftRef.current;
+    if (!current) return;
+    const next = { ...current, [field]: value };
+    editDraftRef.current = next;
+    setEditDraft(next);
+  }
+
   function clipboardAttachments(event: ReactClipboardEvent<HTMLTextAreaElement>) {
     return [...event.clipboardData.items]
       .filter((item) => item.kind === "file")
@@ -2261,7 +2575,7 @@ export default function Home() {
   }
 
   function resetCapture() {
-    setNewTitle("");
+    updateCaptureTitle("", "task-created");
     setCaptureProject("");
     captureAttachments.forEach((item) => URL.revokeObjectURL(item.previewUrl));
     setCaptureAttachments([]);
@@ -3073,6 +3387,9 @@ export default function Home() {
     setDetailAttachments([]);
     setDetailUploads([]);
     setViewerIndex(null);
+    setTaskDialogPullDistance(0);
+    setTaskDialogPullReady(false);
+    setTaskDialogPulling(false);
     void loadTaskAttachments(todo.id);
     console.info("[todo-ui] task details opened", { id: todo.id, status: todo.status, attachmentCount: todo.attachmentCount });
   }
@@ -3091,6 +3408,11 @@ export default function Home() {
     editingIdRef.current = null;
     editDraftRef.current = null;
     editBaselineRef.current = null;
+    taskDialogGestureRef.current = null;
+    taskDialogRawPullRef.current = 0;
+    setTaskDialogPullDistance(0);
+    setTaskDialogPullReady(false);
+    setTaskDialogPulling(false);
     setViewerIndex(null);
     setAttachmentError("");
     detailUploads.forEach((item) => URL.revokeObjectURL(item.previewUrl));
@@ -3524,7 +3846,8 @@ export default function Home() {
               <textarea
                 ref={captureRef}
                 value={newTitle}
-                onChange={(event) => { setNewTitle(event.target.value); resizeCapture(event.currentTarget); }}
+                onChange={(event) => { updateCaptureTitle(event.target.value, "typing"); resizeCapture(event.currentTarget); }}
+                onBlur={flushCaptureDraft}
                 onPaste={(event) => {
                   const files = clipboardAttachments(event);
                   if (files.length) void queueCaptureAttachments(files);
@@ -4062,8 +4385,33 @@ export default function Home() {
       {editingTodo && editDraft && (
         <div className="fixed inset-0 z-50 flex items-end justify-center overflow-x-hidden sm:items-center sm:p-5" role="dialog" aria-modal="true" aria-labelledby="task-details-title">
           <button type="button" aria-label="Close task details" onClick={closeTaskDetails} className="absolute inset-0 bg-black/35 backdrop-blur-[2px]" />
-          <form onSubmit={(event) => event.preventDefault()} className="relative flex max-h-[92dvh] w-full max-w-full flex-col overflow-hidden overflow-x-hidden rounded-t-3xl bg-white shadow-2xl sm:max-w-2xl sm:rounded-3xl">
-            <div className="flex min-w-0 items-center justify-between border-b border-black/[0.07] px-5 py-4 sm:px-6">
+          <div
+            data-no-pull-refresh
+            aria-hidden={taskDialogPullDistance <= 0}
+            className="pointer-events-none absolute inset-x-0 top-[calc(env(safe-area-inset-top)+0.5rem)] z-[60] flex justify-center md:hidden"
+            style={{
+              opacity: taskDialogPullDistance > 0 ? Math.min(1, taskDialogPullDistance / 18) : 0,
+              transform: `translate3d(0, ${Math.min(16, taskDialogPullDistance - 44)}px, 0)`,
+            }}
+          >
+            <PullGesturePill
+              label={taskDialogPullReady ? "Release to close" : "Pull to close"}
+              icon="down"
+              rotation={taskDialogPullReady ? 180 : 0}
+            />
+          </div>
+          <form
+            ref={taskDialogRef}
+            tabIndex={-1}
+            onSubmit={(event) => event.preventDefault()}
+            className={classNames(
+              "relative flex max-h-[92dvh] w-full max-w-full flex-col overflow-hidden overflow-x-hidden rounded-t-3xl bg-white shadow-2xl outline-none sm:max-w-2xl sm:rounded-3xl",
+              taskDialogPulling ? "transition-none" : "transition-transform duration-150 ease-out motion-reduce:transition-none",
+            )}
+            style={{ transform: `translate3d(0, ${taskDialogPullDistance}px, 0)` }}
+          >
+            <div className="relative flex min-w-0 items-center justify-between border-b border-black/[0.07] px-5 pb-4 pt-5 sm:px-6 sm:py-4">
+              <span className="absolute left-1/2 top-2 h-1 w-10 -translate-x-1/2 rounded-full bg-black/15 sm:hidden" aria-hidden="true" />
               <h3 id="task-details-title" className="min-w-0 text-lg font-semibold text-[#202522]">Task details</h3>
               <div className="flex shrink-0 items-center gap-1">
                 <button type="button" onClick={() => void copyTaskDetails()} className="grid h-9 w-9 place-items-center rounded-full bg-[#f1f2f0] text-[#4f5752] hover:bg-[#e8eae7]" aria-label="Copy task title and notes" title="Copy task"><ActionIcon name="copy" /></button>
@@ -4071,13 +4419,12 @@ export default function Home() {
               </div>
             </div>
 
-            <div className="min-h-0 min-w-0 overflow-x-hidden overflow-y-auto px-5 py-5 sm:px-6">
+            <div ref={taskDialogScrollRef} className="min-h-0 min-w-0 overflow-x-hidden overflow-y-auto px-5 py-5 sm:px-6">
               <label className="block min-w-0">
                 <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-[#69716c]">Task</span>
                 <textarea
-                  autoFocus
                   value={editDraft.title}
-                  onChange={(event) => setEditDraft((current) => current ? { ...current, title: event.target.value } : current)}
+                  onChange={(event) => updateEditDraftField("title", event.target.value)}
                   onPaste={(event) => {
                     const files = clipboardAttachments(event);
                     if (files.length) void queueDetailAttachments(files);
@@ -4092,7 +4439,7 @@ export default function Home() {
                 <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-[#69716c]">Notes</span>
                 <textarea
                   value={editDraft.notes}
-                  onChange={(event) => setEditDraft((current) => current ? { ...current, notes: event.target.value } : current)}
+                  onChange={(event) => updateEditDraftField("notes", event.target.value)}
                   onPaste={(event) => {
                     const files = clipboardAttachments(event);
                     if (files.length) void queueDetailAttachments(files);
@@ -4191,11 +4538,11 @@ export default function Home() {
                 </div>
                 <label className="block min-w-0">
                   <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-[#69716c]">Context</span>
-                  <input value={editDraft.context} onChange={(event) => setEditDraft((current) => current ? { ...current, context: event.target.value } : current)} placeholder="No context" className="h-11 w-full min-w-0 max-w-full rounded-xl border border-black/[0.1] px-3 text-sm outline-none focus:border-[#216e4e]/50 focus:ring-3 focus:ring-[#216e4e]/10" />
+                  <input value={editDraft.context} onChange={(event) => updateEditDraftField("context", event.target.value)} placeholder="No context" className="h-11 w-full min-w-0 max-w-full rounded-xl border border-black/[0.1] px-3 text-[16px] outline-none focus:border-[#216e4e]/50 focus:ring-3 focus:ring-[#216e4e]/10" />
                 </label>
                 <label className="block min-w-0">
                   <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-[#69716c]">Priority</span>
-                  <select value={editDraft.priority} onChange={(event) => setEditDraft((current) => current ? { ...current, priority: Number(event.target.value) } : current)} className="h-11 w-full min-w-0 max-w-full rounded-xl border border-black/[0.1] bg-white px-3 text-sm outline-none focus:border-[#216e4e]/50 focus:ring-3 focus:ring-[#216e4e]/10">
+                  <select value={editDraft.priority} onChange={(event) => updateEditDraftField("priority", Number(event.target.value))} className="h-11 w-full min-w-0 max-w-full rounded-xl border border-black/[0.1] bg-white px-3 text-[16px] outline-none focus:border-[#216e4e]/50 focus:ring-3 focus:ring-[#216e4e]/10">
                     <option value="1">Urgent</option>
                     <option value="2">High</option>
                     <option value="3">Normal</option>
@@ -4207,7 +4554,7 @@ export default function Home() {
                     <label htmlFor={`task-due-date-${editingTodo.id}`} className="text-xs font-semibold uppercase tracking-wide text-[#69716c]">Due date</label>
                     <button
                       type="button"
-                      onClick={() => setEditDraft((current) => current ? { ...current, dueDate: "" } : current)}
+                      onClick={() => updateEditDraftField("dueDate", "")}
                       disabled={!editDraft.dueDate}
                       aria-label="Clear due date"
                       className="inline-flex h-6 items-center gap-1 rounded-md px-1.5 text-xs font-semibold text-[#216e4e] hover:bg-[#eaf3ed] disabled:invisible"
@@ -4215,13 +4562,13 @@ export default function Home() {
                       <ActionIcon name="close" className="h-3 w-3" />Clear
                     </button>
                   </div>
-                  <input id={`task-due-date-${editingTodo.id}`} type="date" value={editDraft.dueDate} onChange={(event) => setEditDraft((current) => current ? { ...current, dueDate: event.target.value } : current)} className="h-11 w-full min-w-0 max-w-full rounded-xl border border-black/[0.1] bg-white px-3 text-sm outline-none focus:border-[#216e4e]/50 focus:ring-3 focus:ring-[#216e4e]/10" />
+                  <input id={`task-due-date-${editingTodo.id}`} type="date" value={editDraft.dueDate} onChange={(event) => updateEditDraftField("dueDate", event.target.value)} className="h-11 w-full min-w-0 max-w-full rounded-xl border border-black/[0.1] bg-white px-3 text-[16px] outline-none focus:border-[#216e4e]/50 focus:ring-3 focus:ring-[#216e4e]/10" />
                 </div>
                 <label className="block min-w-0 sm:col-span-2">
                   <span className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-[#69716c]"><ActionIcon name="repeat" className="h-3.5 w-3.5" />Recurring schedule</span>
                   <input
                     value={editDraft.recurrenceCron}
-                    onChange={(event) => setEditDraft((current) => current ? { ...current, recurrenceCron: event.target.value } : current)}
+                    onChange={(event) => updateEditDraftField("recurrenceCron", event.target.value)}
                     placeholder="0 9 * * 1-5"
                     autoCapitalize="off"
                     autoCorrect="off"

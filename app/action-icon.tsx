@@ -4,6 +4,7 @@ import {
   BellDot,
   CalendarDays,
   Camera,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   CircleCheckBig,
@@ -50,6 +51,7 @@ export type ActionIconName =
   | "delete"
   | "done"
   | "download"
+  | "down"
   | "filters"
   | "file"
   | "folder"
@@ -91,6 +93,7 @@ const icons: Record<ActionIconName, ComponentType<LucideProps>> = {
   delete: Trash2,
   done: CircleCheckBig,
   download: Download,
+  down: ChevronDown,
   filters: SlidersHorizontal,
   file: FileText,
   folder: Folder,

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { ActionIcon } from "./action-icon";
+import { ActionIcon, type ActionIconName } from "./action-icon";
 
 const INTENT_DISTANCE = 8;
 const REFRESH_TRIGGER_DISTANCE = 160;
@@ -13,6 +13,29 @@ type PullGesture = {
   startY: number;
   active: boolean;
 };
+
+export function PullGesturePill({
+  label,
+  icon,
+  spinning = false,
+  rotation = 0,
+}: {
+  label: string;
+  icon: ActionIconName;
+  spinning?: boolean;
+  rotation?: number;
+}) {
+  return (
+    <div className="inline-flex items-center gap-2 rounded-full border border-black/10 bg-white px-3 py-2 text-xs font-semibold text-[#216e4e] shadow-lg">
+      <ActionIcon
+        name={icon}
+        className={`h-4 w-4 ${spinning ? "animate-spin motion-reduce:animate-none" : ""}`}
+        style={spinning ? undefined : { transform: `rotate(${rotation}deg)` }}
+      />
+      {label}
+    </div>
+  );
+}
 
 function isAtPageTop() {
   return window.scrollY <= 0 && (document.scrollingElement?.scrollTop ?? 0) <= 0;
@@ -178,14 +201,12 @@ export function PullToRefresh() {
         transform: `translate3d(0, ${indicatorOffset}px, 0)`,
       }}
     >
-      <div className="inline-flex items-center gap-2 rounded-full border border-black/10 bg-white px-3 py-2 text-xs font-semibold text-[#216e4e] shadow-lg">
-        <ActionIcon
-          name="retry"
-          className={`h-4 w-4 ${refreshing ? "animate-spin motion-reduce:animate-none" : ""}`}
-          style={refreshing ? undefined : { transform: `rotate(${Math.min(300, pullDistance * 4.5)}deg)` }}
-        />
-        {label}
-      </div>
+      <PullGesturePill
+        label={label}
+        icon="retry"
+        spinning={refreshing}
+        rotation={Math.min(300, pullDistance * 4.5)}
+      />
     </div>
   );
 }

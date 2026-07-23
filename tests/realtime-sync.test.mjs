@@ -46,8 +46,50 @@ test("field versions merge independent device edits and reject stale same-field 
   });
 });
 
+test("Quick Add draft versions converge deterministically without trimming text", () => {
+  const database = new DatabaseSync(":memory:");
+  database.exec(`
+    CREATE TABLE app_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE TABLE todo_sync_changes (
+      revision INTEGER PRIMARY KEY AUTOINCREMENT,
+      entity_type TEXT NOT NULL,
+      entity_key TEXT NOT NULL,
+      operation TEXT NOT NULL
+    );
+  `);
+  const write = (text, updatedAt, clientId) => {
+    const version = `${updatedAt}|${clientId}`;
+    const applied = database.prepare(`
+      INSERT INTO app_settings (key, value, updated_at)
+      VALUES ('capture_draft', ?, ?)
+      ON CONFLICT(key) DO UPDATE SET
+        value = excluded.value,
+        updated_at = excluded.updated_at
+      WHERE json_extract(excluded.value, '$.version') > COALESCE(json_extract(app_settings.value, '$.version'), '')
+      RETURNING value
+    `).get(JSON.stringify({ text, updatedAt, clientId, version }), updatedAt);
+    if (applied) {
+      database.prepare(`
+        INSERT INTO todo_sync_changes (entity_type, entity_key, operation)
+        VALUES ('capture_draft', 'capture_draft', 'changed')
+      `).run();
+    }
+  };
+
+  write("Keep this trailing space ", "2026-07-23T12:00:00.000Z", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+  write("Older device value", "2026-07-23T11:59:59.000Z", "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
+  write("Later device value\n", "2026-07-23T12:00:01.000Z", "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
+  const stored = JSON.parse(database.prepare("SELECT value FROM app_settings WHERE key = 'capture_draft'").get().value);
+  assert.equal(stored.text, "Later device value\n");
+  assert.equal(database.prepare("SELECT COUNT(*) AS count FROM todo_sync_changes").get().count, 2);
+});
+
 test("ships automatic saving, queued offline edits, incremental polling, and conflict metadata", async () => {
-  const [page, offlineStore, database, schema, route, migration, syncMigration, bootstrapRoute, syncRoute, maintenance, attachments, recurring, openApiText, skill] = await Promise.all([
+  const [page, offlineStore, database, schema, route, migration, syncMigration, bootstrapRoute, syncRoute, captureDraftRoute, maintenance, attachments, recurring, openApiText, skill] = await Promise.all([
     readFile(new URL("app/page.tsx", root), "utf8"),
     readFile(new URL("app/offline-store.ts", root), "utf8"),
     readFile(new URL("db/todos.ts", root), "utf8"),
@@ -57,6 +99,7 @@ test("ships automatic saving, queued offline edits, incremental polling, and con
     readFile(new URL("drizzle/0014_redundant_red_shift.sql", root), "utf8"),
     readFile(new URL("app/api/bootstrap/route.ts", root), "utf8"),
     readFile(new URL("app/api/sync/route.ts", root), "utf8"),
+    readFile(new URL("app/api/capture-draft/route.ts", root), "utf8"),
     readFile(new URL("db/maintenance.ts", root), "utf8"),
     readFile(new URL("db/attachments.ts", root), "utf8"),
     readFile(new URL("worker/recurring.ts", root), "utf8"),
@@ -76,7 +119,19 @@ test("ships automatic saving, queued offline edits, incremental polling, and con
   assert.doesNotMatch(page, /Promise\.all\(\[\s*request<\{ todos: Todo\[\] \}>\("\/api\/todos"/);
   assert.match(page, /saveOfflineTodoMutation/);
   assert.match(page, /listOfflineTodoMutations/);
-  assert.match(offlineStore, /DATABASE_VERSION = 3/);
+  assert.match(offlineStore, /DATABASE_VERSION = 4/);
+  assert.match(offlineStore, /CAPTURE_DRAFT_STORE = "capture-draft"/);
+  assert.match(page, /updateCaptureTitle\(event\.target\.value, "typing"\)/);
+  assert.match(page, /updateEditDraftField/);
+  assert.match(page, /editDraftRef\.current = next/);
+  assert.match(page, /if \(field === "title" \|\| field === "notes"\) return draft\[field\]/);
+  assert.match(database, /updateTodoCaptureDraft/);
+  assert.match(database, /entity_type === "capture_draft"/);
+  assert.match(database, /todo_sync_capture_draft_insert/);
+  assert.match(database, /todo_sync_capture_draft_update/);
+  assert.match(database, /CURRENT_SCHEMA_VERSION = "15"/);
+  assert.match(captureDraftRoute, /updateTodoCaptureDraft/);
+  assert.match(captureDraftRoute, /Cache-Control/);
   assert.match(offlineStore, /pending-mutations/);
   assert.match(offlineStore, /fieldTimestamps/);
   assert.match(schema, /todoFieldVersions/);
@@ -99,6 +154,8 @@ test("ships automatic saving, queued offline edits, incremental polling, and con
   assert.match(database, /appliedFields/);
   assert.match(route, /mutationId/);
   assert.match(route, /recordUndo: payload\.autosave !== true/);
+  assert.match(route, /if \(!title\.trim\(\)\)/);
+  assert.match(route, /update\.notes = String\(payload\.notes\)/);
   assert.ok(openApi.components.schemas.SyncMutation);
   assert.match(skill, /independent fields merge/);
 });
@@ -123,4 +180,34 @@ test("sync triggers produce monotonic task, project, settings, and attachment re
   const changes = database.prepare("SELECT revision, entity_type, entity_key FROM todo_sync_changes ORDER BY revision").all();
   assert.deepEqual(changes.map((row) => Number(row.revision)), [1, 2, 3, 4, 5]);
   assert.deepEqual(changes.map((row) => row.entity_type), ["todo", "todo", "project", "settings", "todo"]);
+});
+
+test("capture draft migration emits revisions only for the shared Quick Add record", async () => {
+  const migration = await readFile(new URL("drizzle/0015_capture_draft_sync.sql", root), "utf8");
+  const database = new DatabaseSync(":memory:");
+  database.exec(`
+    CREATE TABLE app_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    );
+    CREATE TABLE todo_sync_changes (
+      revision INTEGER PRIMARY KEY AUTOINCREMENT,
+      entity_type TEXT NOT NULL,
+      entity_key TEXT NOT NULL,
+      operation TEXT NOT NULL
+    );
+  `);
+  for (const statement of migration.split("--> statement-breakpoint").map((value) => value.trim()).filter(Boolean)) {
+    database.exec(statement);
+  }
+  database.prepare("INSERT INTO app_settings (key, value) VALUES ('capture_draft', '{}')").run();
+  database.prepare("UPDATE app_settings SET value = ? WHERE key = 'capture_draft'").run('{"text":"draft"}');
+  database.prepare("INSERT INTO app_settings (key, value) VALUES ('unrelated', 'value')").run();
+  const changes = database.prepare("SELECT entity_type, entity_key FROM todo_sync_changes ORDER BY revision").all();
+  assert.deepEqual(changes.map((row) => ({ ...row })), [
+    { entity_type: "capture_draft", entity_key: "capture_draft" },
+    { entity_type: "capture_draft", entity_key: "capture_draft" },
+  ]);
+  assert.equal(database.prepare("SELECT value FROM app_settings WHERE key = 'schema_version'").get().value, "15");
 });
