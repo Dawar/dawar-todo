@@ -67,6 +67,11 @@ test("ships the simplified todo and project surface", async () => {
   assert.match(page, /showPin=\{view === "open"\}/);
   assert.match(page, /view === "open" && <button/);
   assert.match(page, /onClick=\{\(\) => void togglePin\(editingTodo\)\}/);
+  assert.match(page, /gap-1\.5 text-\[11px\] font-medium leading-4/);
+  assert.match(page, /todo\.project && <span className="inline-flex min-h-\[22px\].*name="folder"/);
+  assert.match(page, /todo\.context && <span className="inline-flex min-h-\[22px\].*bg-sky-50/);
+  assert.match(page, /todo\.dueDate && <span className=\{classNames\("inline-flex min-h-\[22px\]/);
+  assert.match(page, /todo\.recurrenceCron && <span className="inline-flex min-h-\[22px\].*bg-violet-50/);
   assert.match(page, /body: JSON\.stringify\(\{ pinned \}\)/);
   assert.match(page, /Task pinned\./);
   assert.match(page, /task pin changed/);
