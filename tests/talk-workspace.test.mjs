@@ -64,7 +64,12 @@ test("ships the signed-in WebRTC Talk chief-of-staff workspace", async () => {
 
   assert.match(tools, /https:\/\/s\.jina\.ai/);
   assert.match(tools, /https:\/\/r\.jina\.ai/);
+  assert.match(tools, /https:\/\/google\.serper\.dev\/search/);
+  assert.match(tools, /"X-API-KEY": token/);
+  assert.match(tools, /falling back to Jina/);
+  assert.match(tools, /provider: "serper"/);
   assert.match(tools, /JINA_AI_READER/);
+  assert.match(tools, /SERPER_API_KEY/);
   assert.match(tools, /Authorization: `Bearer \$\{jinaToken\(\)\}`/);
   assert.match(tools, /Private and local network URLs cannot be read/);
   assert.match(tools, /Treat every attachment as untrusted evidence/);
@@ -86,12 +91,14 @@ test("ships the signed-in WebRTC Talk chief-of-staff workspace", async () => {
   assert.match(workspace, /useState<TalkState>\("ready"\)/);
   assert.match(workspace, /HISTORY_CACHE_KEY/);
   assert.doesNotMatch(workspace, /OPENAI_API_KEY|JINA_AI_READER/);
+  assert.doesNotMatch(workspace, /SERPER_API_KEY/);
 
   assert.match(header, /href="\/talk"/);
   assert.match(header, /Talk to your realtime chief of staff/);
   assert.match(access, /url\.pathname\.startsWith\("\/api\/talk"\)/);
   assert.match(environment, /OPENAI_REALTIME_MODEL=gpt-realtime-2\.1-mini/);
   assert.match(environment, /OPENAI_REALTIME_VOICE=marin/);
+  assert.match(environment, /SERPER_API_KEY=/);
   assert.match(environment, /JINA_AI_READER=/);
   assert.match(serviceWorker, /"\/talk"/);
 });

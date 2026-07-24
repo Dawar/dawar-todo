@@ -25,6 +25,7 @@ import { buildSharedAssistantContext } from "./assistant-context";
 type TalkEnvironment = {
   OPENAI_API_KEY?: string;
   OPENAI_ASSISTANT_MODEL?: string;
+  SERPER_API_KEY?: string;
   JINA_AI_READER?: string;
 };
 
@@ -326,6 +327,86 @@ function jinaToken() {
   return token;
 }
 
+function serperToken() {
+  return runtime().SERPER_API_KEY?.trim() || null;
+}
+
+async function serperSearch(query: string): Promise<TalkToolResult> {
+  const token = serperToken();
+  if (!token) throw new Error("Serper search is not configured yet.");
+  const startedAt = Date.now();
+  const response = await fetch("https://google.serper.dev/search", {
+    method: "POST",
+    headers: {
+      "X-API-KEY": token,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ q: query, num: 5 }),
+    signal: AbortSignal.timeout(8_000),
+  });
+  const text = (await response.text()).slice(0, 1_000_000);
+  if (!response.ok) {
+    console.warn("[todo-talk] Serper search failed", {
+      status: response.status,
+      queryLength: query.length,
+      durationMs: Date.now() - startedAt,
+      responseBytes: text.length,
+    });
+    throw new Error(`Serper search failed (${response.status}).`);
+  }
+  const body = JSON.parse(text) as {
+    answerBox?: { answer?: unknown; snippet?: unknown; title?: unknown; link?: unknown };
+    knowledgeGraph?: { title?: unknown; description?: unknown; website?: unknown; descriptionLink?: unknown };
+    organic?: unknown[];
+  };
+  const organic = (Array.isArray(body.organic) ? body.organic : []).slice(0, 5).map((value, index) => {
+    const row = value && typeof value === "object" ? value as Record<string, unknown> : {};
+    return {
+      title: String(row.title ?? `Search result ${index + 1}`).slice(0, 300),
+      url: String(row.link ?? "").slice(0, 2_000),
+      snippet: String(row.snippet ?? "").slice(0, 3_000),
+    };
+  });
+  const featured = [
+    {
+      title: String(body.answerBox?.title ?? "Direct answer").slice(0, 300),
+      url: String(body.answerBox?.link ?? "").slice(0, 2_000),
+      snippet: String(body.answerBox?.answer ?? body.answerBox?.snippet ?? "").slice(0, 3_000),
+    },
+    {
+      title: String(body.knowledgeGraph?.title ?? "Knowledge result").slice(0, 300),
+      url: String(body.knowledgeGraph?.website ?? body.knowledgeGraph?.descriptionLink ?? "").slice(0, 2_000),
+      snippet: String(body.knowledgeGraph?.description ?? "").slice(0, 3_000),
+    },
+  ];
+  const seenUrls = new Set<string>();
+  const results = [...featured, ...organic].filter((source) => {
+    if (!/^https?:\/\//i.test(source.url) || seenUrls.has(source.url)) return false;
+    seenUrls.add(source.url);
+    return true;
+  }).slice(0, 5);
+  const directAnswer = String(
+    body.answerBox?.answer
+      ?? body.answerBox?.snippet
+      ?? body.knowledgeGraph?.description
+      ?? "",
+  ).slice(0, 4_000);
+  console.info("[todo-talk] Serper search completed", {
+    queryLength: query.length,
+    resultCount: results.length,
+    directAnswer: Boolean(directAnswer),
+    durationMs: Date.now() - startedAt,
+  });
+  return {
+    provider: "serper",
+    query,
+    directAnswer: directAnswer || null,
+    results,
+    sources: results.map(({ title, url }) => ({ title, url })),
+    instruction: "Use these fast search results directly when sufficient. If source content must be verified or read in depth, inspect at most three URLs with read_url, which uses Jina.",
+  };
+}
+
 async function jinaRequest(endpoint: string, body?: Record<string, unknown>) {
   const startedAt = Date.now();
   const host = new URL(endpoint).hostname;
@@ -366,9 +447,7 @@ function jinaData(result: Record<string, unknown>) {
   return data && typeof data === "object" ? data as Record<string, unknown> : result;
 }
 
-async function searchWeb(args: Record<string, unknown>): Promise<TalkToolResult> {
-  const query = String(args.query ?? "").trim().slice(0, 500);
-  if (!query) throw new Error("A focused web search query is required.");
+async function jinaSearch(query: string): Promise<TalkToolResult> {
   const startedAt = Date.now();
   const result = await jinaRequest(`https://s.jina.ai/${encodeURIComponent(query)}`);
   const data = result.data;
@@ -389,11 +468,33 @@ async function searchWeb(args: Record<string, unknown>): Promise<TalkToolResult>
     durationMs: Date.now() - startedAt,
   });
   return {
+    provider: "jina",
     query,
     results: sources,
     sources: sources.map(({ title, url }) => ({ title, url })),
-    instruction: "Inspect at most three promising sources with read_url before making material claims.",
+    instruction: "Serper was unavailable or returned no usable results. Inspect at most three promising sources with read_url before making material claims.",
   };
+}
+
+async function searchWeb(args: Record<string, unknown>): Promise<TalkToolResult> {
+  const query = String(args.query ?? "").trim().slice(0, 500);
+  if (!query) throw new Error("A focused web search query is required.");
+  try {
+    const result = await serperSearch(query);
+    if (
+      (Array.isArray(result.results) && result.results.length)
+      || (typeof result.directAnswer === "string" && result.directAnswer)
+    ) return result;
+    console.warn("[todo-talk] Serper returned no usable results; falling back to Jina", {
+      queryLength: query.length,
+    });
+  } catch (error) {
+    console.warn("[todo-talk] Serper unavailable; falling back to Jina", {
+      queryLength: query.length,
+      error: error instanceof Error ? error.message : "unknown",
+    });
+  }
+  return jinaSearch(query);
 }
 
 async function readUrl(args: Record<string, unknown>): Promise<TalkToolResult> {

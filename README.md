@@ -28,5 +28,7 @@ npm run db:generate
 
 Copy `.env.example` to your local runtime configuration when testing integrations. Talk uses
 `OPENAI_API_KEY`, defaults to `gpt-realtime-2.1-mini` with the `marin` voice, and reads
-`JINA_AI_READER` only in server-side requests to Jina Reader and Search. Keep both provider
-keys secret; browser clients receive only a short-lived OpenAI Realtime client secret.
+`SERPER_API_KEY` and `JINA_AI_READER` only in server-side search and reading requests. Talk
+prefers Serper for fast search results, then uses Jina when a page or PDF must be read in
+depth. Keep all provider keys secret; browser clients receive only a short-lived OpenAI
+Realtime client secret.
