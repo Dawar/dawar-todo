@@ -432,7 +432,9 @@ async function canvasOptimizedImage(source: CanvasImageSource, width: number, he
   return { blob: jpeg, mimeType: "image/jpeg", format: "jpeg" };
 }
 
-async function imageVariants(file: File) {
+const imageVariantPromises = new WeakMap<File, ReturnType<typeof prepareImageVariants>>();
+
+async function prepareImageVariants(file: File) {
   const decoded = await decodedImage(file).catch(() => {
     throw new Error("This image format cannot be read on this device.");
   });
@@ -458,6 +460,17 @@ async function imageVariants(file: File) {
   } finally {
     decoded.cleanup();
   }
+}
+
+function imageVariants(file: File) {
+  const existing = imageVariantPromises.get(file);
+  if (existing) return existing;
+  const prepared = prepareImageVariants(file).catch((error) => {
+    imageVariantPromises.delete(file);
+    throw error;
+  });
+  imageVariantPromises.set(file, prepared);
+  return prepared;
 }
 
 async function postPrivateVariant(target: PrivatePostTarget, body: Blob) {
@@ -1289,6 +1302,7 @@ export default function Home() {
   const [captureProject, setCaptureProject] = useState("");
   const [captureDraftToken, setCaptureDraftToken] = useState(() => crypto.randomUUID());
   const [captureAttachments, setCaptureAttachments] = useState<PendingAttachment[]>([]);
+  const [recognizingCaptureTitle, setRecognizingCaptureTitle] = useState(false);
   const [adding, setAdding] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [undoing, setUndoing] = useState(false);
@@ -1340,6 +1354,8 @@ export default function Home() {
   const queuedCaptureDraftRef = useRef<CaptureDraft | null>(null);
   const pendingRemoteCaptureDraftRef = useRef<CaptureDraft | null>(null);
   const captureDraftClockRef = useRef(0);
+  const captureTitleRecognitionRef = useRef<{ requestId: number; localId: string } | null>(null);
+  const captureTitleRecognitionSequenceRef = useRef(0);
   const persistCaptureDraftRef = useRef<((draft: CaptureDraft, source: string) => Promise<void>) | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const viewerGesture = useRef<number | null>(null);
@@ -2437,7 +2453,7 @@ export default function Home() {
 
   persistCaptureDraftRef.current = persistCaptureDraft;
 
-  function updateCaptureTitle(text: string, source: "typing" | "task-created") {
+  function updateCaptureTitle(text: string, source: "typing" | "task-created" | "image-recognition") {
     const nextClock = Math.max(Date.now(), captureDraftClockRef.current + 1);
     captureDraftClockRef.current = nextClock;
     const updatedAt = new Date(nextClock).toISOString();
@@ -2586,6 +2602,63 @@ export default function Home() {
     }
   }
 
+  async function recognizeCaptureImage(item: PendingAttachment) {
+    if (item.kind !== "image" || newTitleRef.current.trim() || !navigator.onLine || captureTitleRecognitionRef.current) return;
+    const requestId = ++captureTitleRecognitionSequenceRef.current;
+    captureTitleRecognitionRef.current = { requestId, localId: item.localId };
+    setRecognizingCaptureTitle(true);
+    const startedAt = performance.now();
+    console.info("[todo-ui] quick add image recognition started", {
+      requestId,
+      inputBytes: item.file.size,
+      mimeType: item.file.type,
+    });
+    try {
+      const variants = await imageVariants(item.file);
+      if (captureTitleRecognitionRef.current?.requestId !== requestId) return;
+      const form = new FormData();
+      form.append(
+        "image",
+        variants.thumbnail.blob,
+        `quick-add.${variants.thumbnail.format === "jpeg" ? "jpg" : "webp"}`,
+      );
+      const result = await request<{ title: string }>("/api/assistant/capture-title", {
+        method: "POST",
+        body: form,
+      });
+      if (captureTitleRecognitionRef.current?.requestId !== requestId) return;
+      if (newTitleRef.current.trim()) {
+        console.info("[todo-ui] quick add image title skipped after user input", {
+          requestId,
+          suggestedLength: result.title.length,
+          durationMs: Math.round(performance.now() - startedAt),
+        });
+        return;
+      }
+      updateCaptureTitle(result.title, "image-recognition");
+      window.requestAnimationFrame(() => {
+        if (captureRef.current) resizeCapture(captureRef.current);
+      });
+      console.info("[todo-ui] quick add image title applied", {
+        requestId,
+        outputLength: result.title.length,
+        durationMs: Math.round(performance.now() - startedAt),
+      });
+    } catch (error) {
+      console.warn("[todo-ui] quick add image recognition unavailable", {
+        requestId,
+        inputBytes: item.file.size,
+        durationMs: Math.round(performance.now() - startedAt),
+        error,
+      });
+    } finally {
+      if (captureTitleRecognitionRef.current?.requestId === requestId) {
+        captureTitleRecognitionRef.current = null;
+        setRecognizingCaptureTitle(false);
+      }
+    }
+  }
+
   async function queueCaptureAttachments(inputFiles: File[]) {
     const files = validateSelectedAttachments(inputFiles, captureAttachments.length);
     if (!files.length) return;
@@ -2594,6 +2667,8 @@ export default function Home() {
     setCaptureAttachments((current) => [...current, ...items]);
     console.info("[todo-ui] capture attachments queued", { count: items.length, online: navigator.onLine, kinds: items.map((item) => item.kind), totalBytes: files.reduce((sum, file) => sum + file.size, 0) });
     if (!navigator.onLine) return;
+    const recognitionTarget = items.find((item) => item.kind === "image");
+    if (recognitionTarget && !newTitleRef.current.trim()) void recognizeCaptureImage(recognitionTarget);
     void (async () => {
       for (const item of items) await uploadCaptureAttachment(item, captureDraftToken);
     })();
@@ -2639,6 +2714,12 @@ export default function Home() {
         setNotice({ tone: "error", text: error instanceof Error ? error.message : "The attachment could not be removed." });
         return;
       }
+    }
+    if (captureTitleRecognitionRef.current?.localId === item.localId) {
+      captureTitleRecognitionSequenceRef.current += 1;
+      captureTitleRecognitionRef.current = null;
+      setRecognizingCaptureTitle(false);
+      console.info("[todo-ui] quick add image recognition cancelled", { localId: item.localId });
     }
     URL.revokeObjectURL(item.previewUrl);
     setCaptureAttachments((current) => current.filter((candidate) => candidate.localId !== item.localId));
@@ -2764,6 +2845,9 @@ export default function Home() {
   }
 
   function resetCapture() {
+    captureTitleRecognitionSequenceRef.current += 1;
+    captureTitleRecognitionRef.current = null;
+    setRecognizingCaptureTitle(false);
     updateCaptureTitle("", "task-created");
     setCaptureProject("");
     captureAttachments.forEach((item) => URL.revokeObjectURL(item.previewUrl));
@@ -4091,8 +4175,9 @@ export default function Home() {
                   }
                 }}
                 rows={1}
-                placeholder="Add a task…"
+                placeholder={recognizingCaptureTitle ? "Reading image…" : "Add a task…"}
                 aria-label="Add a task"
+                aria-busy={recognizingCaptureTitle}
                 maxLength={2000}
                 className="min-h-10 max-h-[120px] min-w-0 flex-1 resize-none overflow-hidden bg-transparent py-2 text-[16px] leading-6 text-[#151816] outline-none placeholder:text-[#929994]"
               />
