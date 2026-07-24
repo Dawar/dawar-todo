@@ -3,6 +3,8 @@ import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } fr
 import handler from "vinext/server/app-router-entry";
 import { appAccessResponse } from "./access";
 import { processRecurringTodos } from "./recurring";
+import { ensureTodoDatabase, wakeExpiredSnoozedTodosInDatabase } from "../db/todos";
+import { dispatchTodoPushNotifications } from "../db/push-notifications";
 
 interface Env {
   ASSETS: Fetcher;
@@ -19,6 +21,9 @@ interface Env {
       };
     };
   };
+  VAPID_SUBJECT?: string;
+  VAPID_PUBLIC_KEY?: string;
+  VAPID_PRIVATE_KEY?: string;
 }
 
 interface ExecutionContext {
@@ -53,11 +58,38 @@ const worker = {
     return handler.fetch(request, env, ctx);
   },
   async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext) {
+    const scheduledAt = new Date(controller.scheduledTime);
     console.info("[todo-recurring] scheduled event received", {
       cron: controller.cron,
-      scheduledTime: new Date(controller.scheduledTime).toISOString(),
+      scheduledTime: scheduledAt.toISOString(),
     });
-    ctx.waitUntil(processRecurringTodos(env.DB, new Date(controller.scheduledTime), { source: "scheduled" }));
+    ctx.waitUntil((async () => {
+      await ensureTodoDatabase();
+      try {
+        await processRecurringTodos(env.DB, scheduledAt, { source: "scheduled" });
+      } catch (error) {
+        console.error("[todo-recurring] scheduled processing failed; continuing maintenance", { error });
+      }
+      try {
+        const wokenIds = await wakeExpiredSnoozedTodosInDatabase(env.DB, scheduledAt);
+        if (wokenIds.length) {
+          console.info("[todo-push] scheduled snooze wake queued", {
+            count: wokenIds.length,
+            scheduledTime: scheduledAt.toISOString(),
+          });
+        }
+      } catch (error) {
+        console.error("[todo-push] scheduled snooze wake failed", { error });
+      }
+      try {
+        await dispatchTodoPushNotifications(env.DB, env, scheduledAt);
+      } catch (error) {
+        console.error("[todo-push] scheduled batch dispatch failed", {
+          scheduledTime: scheduledAt.toISOString(),
+          error,
+        });
+      }
+    })());
   },
 };
 

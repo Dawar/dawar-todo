@@ -50,9 +50,9 @@ test("finds the next recurrence in the user's timezone across days and DST", () 
 
 test("scheduled recurrence reopens completed matches and records open matches once", async () => {
   const rows = [
-    { id: 1, status: "completed", recurrence_cron: "0 9 * * 1-5", recurrence_last_fired_at: null },
-    { id: 2, status: "open", recurrence_cron: "0 9 * * *", recurrence_last_fired_at: null },
-    { id: 3, status: "completed", recurrence_cron: "bad schedule", recurrence_last_fired_at: null },
+    { id: 1, title: "Weekday review", status: "completed", recurrence_cron: "0 9 * * 1-5", recurrence_last_fired_at: null },
+    { id: 2, title: "Daily review", status: "open", recurrence_cron: "0 9 * * *", recurrence_last_fired_at: null },
+    { id: 3, title: "Invalid", status: "completed", recurrence_cron: "bad schedule", recurrence_last_fired_at: null },
   ];
   const updateBindings = [];
   const database = {
@@ -66,15 +66,17 @@ test("scheduled recurrence reopens completed matches and records open matches on
         },
         async all() {
           if (sql.includes("PRAGMA table_info")) return { results: [{ name: "recurrence_cron" }, { name: "recurrence_last_fired_at" }] };
-          if (sql.includes("SELECT id, status")) return { results: rows };
+          if (sql.includes("SELECT id, title, status")) return { results: rows };
           throw new Error(`Unexpected all: ${sql}`);
         },
         async first() {
           if (sql.includes("snooze_timezone")) return { value: "America/Toronto" };
+          if (sql.includes("SELECT title FROM todos")) return { title: rows.find((row) => row.id === this.values[0])?.title };
           throw new Error(`Unexpected first: ${sql}`);
         },
         async run() {
           if (sql.includes("CREATE INDEX")) return { meta: { changes: 0 } };
+          if (sql.includes("INSERT OR IGNORE INTO todo_push_events")) return { meta: { changes: 1 } };
           throw new Error(`Unexpected run: ${sql}`);
         },
       };
@@ -96,6 +98,7 @@ test("scheduled recurrence reopens completed matches and records open matches on
   });
   assert.equal(result.timeZone, "America/Toronto");
   assert.equal(result.firedAt, "2026-07-20T13:00:00.000Z");
+  assert.equal(result.pushEventsQueued, 1);
   assert.deepEqual(updateBindings.map((values) => values[1]), [1, 2]);
 });
 
@@ -103,6 +106,7 @@ test("todo-list sync catches up a missed occurrence once per minute", async () =
   const rows = [
     {
       id: 11,
+      title: "Weekday review",
       status: "completed",
       recurrence_cron: "0 9 * * 1-5",
       recurrence_last_fired_at: null,
@@ -112,6 +116,7 @@ test("todo-list sync catches up a missed occurrence once per minute", async () =
     },
     {
       id: 12,
+      title: "Already completed after occurrence",
       status: "completed",
       recurrence_cron: "0 9 * * 1-5",
       recurrence_last_fired_at: null,
@@ -132,16 +137,18 @@ test("todo-list sync catches up a missed occurrence once per minute", async () =
         },
         async all() {
           if (sql.includes("PRAGMA table_info")) return { results: [{ name: "recurrence_cron" }, { name: "recurrence_last_fired_at" }] };
-          if (sql.includes("SELECT id, status")) return { results: rows };
+          if (sql.includes("SELECT id, title, status")) return { results: rows };
           throw new Error(`Unexpected all: ${sql}`);
         },
         async first() {
           if (sql.includes("snooze_timezone")) return { value: "America/Toronto" };
+          if (sql.includes("SELECT title FROM todos")) return { title: rows.find((row) => row.id === this.values[0])?.title };
           throw new Error(`Unexpected first: ${sql}`);
         },
         async run() {
           if (sql.includes("recurrence_sync_minute")) return { meta: { changes: 1 } };
           if (sql.includes("CREATE INDEX")) return { meta: { changes: 0 } };
+          if (sql.includes("INSERT OR IGNORE INTO todo_push_events")) return { meta: { changes: 1 } };
           throw new Error(`Unexpected run: ${sql}`);
         },
       };
@@ -159,6 +166,7 @@ test("todo-list sync catches up a missed occurrence once per minute", async () =
   });
   assert.equal(result.due, 1);
   assert.equal(result.reopened, 1);
+  assert.equal(result.pushEventsQueued, 1);
   assert.equal(updateBindings[0][0], "2026-07-21T13:00:00.000Z");
   assert.equal(updateBindings[0][1], 11);
 });

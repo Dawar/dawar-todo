@@ -58,10 +58,12 @@ export async function appAccessResponse(
   const apiRequest = url.pathname.startsWith("/api/");
   const bearerToken = apiRequest ? apiTokenFromAuthorization(request.headers.get("Authorization")) : null;
   if (apiRequest && bearerToken) {
-    if (url.pathname.startsWith("/api/api-tokens")) {
+    if (url.pathname.startsWith("/api/api-tokens") || url.pathname.startsWith("/api/push")) {
       console.warn("[todo-auth] API token management rejected for bearer authentication", { path: url.pathname });
       return Response.json(
-        { error: "API tokens can only be managed in Settings after signing in with ChatGPT." },
+        { error: url.pathname.startsWith("/api/push")
+          ? "Push notification devices can only be managed in Settings after signing in with ChatGPT."
+          : "API tokens can only be managed in Settings after signing in with ChatGPT." },
         { status: 403, headers: { "Cache-Control": "no-store" } },
       );
     }

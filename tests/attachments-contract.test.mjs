@@ -258,7 +258,7 @@ test("installs an offline-capable PWA with idempotent queued task syncing", asyn
   assert.match(serviceWorker, /request\.mode === "navigate"/);
   assert.match(serviceWorker, /url\.pathname\.startsWith\("\/api\/"\)/);
   assert.match(serviceWorker, /caches\.match/);
-  assert.match(serviceWorker, /dawar-todo-shell-v5/);
+  assert.match(serviceWorker, /dawar-todo-shell-v6/);
   assert.match(serviceWorker, /function shellAssetUrls/);
   assert.match(serviceWorker, /function discoveredAssetUrls/);
   assert.match(serviceWorker, /function cacheAssetGraph/);
@@ -303,6 +303,7 @@ test("keeps the installed app badge aligned with the current Open task count", a
   assert.match(page, /currentOpenTaskCount\(todos, now\)/);
   assert.match(settings, /App icon badge/);
   assert.match(settings, /Notification\.requestPermission\(\)/);
-  assert.match(settings, /Dawar Todo will not send notification alerts/);
+  assert.match(settings, /Push notifications/);
+  assert.match(settings, /Tasks that wake together are combined into one alert within a minute/);
   assert.match(actionIcons, /badge: BellDot/);
 });

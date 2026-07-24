@@ -165,6 +165,51 @@ export const todoAttachments = sqliteTable(
   ],
 );
 
+export const todoPushSubscriptions = sqliteTable(
+  "todo_push_subscriptions",
+  {
+    id: text("id").primaryKey(),
+    endpoint: text("endpoint").notNull(),
+    p256dh: text("p256dh").notNull(),
+    auth: text("auth").notNull(),
+    deviceId: text("device_id").notNull(),
+    failureCount: integer("failure_count").notNull().default(0),
+    lastSuccessAt: text("last_success_at"),
+    disabledAt: text("disabled_at"),
+    createdAt: text("created_at")
+      .notNull()
+      .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`),
+    updatedAt: text("updated_at")
+      .notNull()
+      .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`),
+  },
+  (table) => [
+    uniqueIndex("todo_push_subscriptions_endpoint_idx").on(table.endpoint),
+    index("todo_push_subscriptions_device_idx").on(table.deviceId),
+    index("todo_push_subscriptions_disabled_idx").on(table.disabledAt),
+  ],
+);
+
+export const todoPushEvents = sqliteTable(
+  "todo_push_events",
+  {
+    id: text("id").primaryKey(),
+    eventType: text("event_type").notNull(),
+    todoId: integer("todo_id").notNull(),
+    todoTitle: text("todo_title").notNull(),
+    originDeviceId: text("origin_device_id"),
+    createdAt: text("created_at")
+      .notNull()
+      .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`),
+    deliverAfter: text("deliver_after").notNull(),
+    deliveredAt: text("delivered_at"),
+  },
+  (table) => [
+    index("todo_push_events_delivery_idx").on(table.deliveredAt, table.deliverAfter),
+    index("todo_push_events_todo_idx").on(table.todoId),
+  ],
+);
+
 export const todoSyncChanges = sqliteTable(
   "todo_sync_changes",
   {

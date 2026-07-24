@@ -1,4 +1,4 @@
-const CACHE_NAME = "dawar-todo-shell-v5";
+const CACHE_NAME = "dawar-todo-shell-v6";
 const SHELL = [
   "/",
   "/assistant",
@@ -145,4 +145,53 @@ self.addEventListener("fetch", (event) => {
 
 self.addEventListener("message", (event) => {
   if (event.data?.type === "SKIP_WAITING") self.skipWaiting();
+});
+
+self.addEventListener("push", (event) => {
+  let payload = {};
+  try {
+    payload = event.data?.json() ?? {};
+  } catch (error) {
+    payload = { title: "Dawar Todo", body: event.data?.text() || "Tasks are ready." };
+    console.warn("[todo-push] notification payload was not JSON", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+  const title = typeof payload.title === "string" && payload.title ? payload.title : "Dawar Todo";
+  const options = {
+    body: typeof payload.body === "string" ? payload.body : "Tasks are ready.",
+    tag: typeof payload.tag === "string" ? payload.tag : "dawar-todo-open-items",
+    renotify: true,
+    icon: "/icons/icon-192.png",
+    badge: "/icons/icon-192.png",
+    data: {
+      url: typeof payload.url === "string" ? payload.url : "/",
+    },
+  };
+  event.waitUntil((async () => {
+    await self.registration.showNotification(title, options);
+    const openCount = Number(payload.openCount);
+    if (Number.isFinite(openCount) && typeof self.navigator?.setAppBadge === "function") {
+      if (openCount > 0) await self.navigator.setAppBadge(Math.floor(openCount));
+      else if (typeof self.navigator.clearAppBadge === "function") await self.navigator.clearAppBadge();
+    }
+    console.info("[todo-push] notification displayed", {
+      tag: options.tag,
+      hasOpenCount: Number.isFinite(openCount),
+    });
+  })());
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const target = new URL(event.notification.data?.url || "/", self.location.origin).href;
+  event.waitUntil((async () => {
+    const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    const existing = windows.find((client) => new URL(client.url).origin === self.location.origin);
+    if (existing) {
+      if ("navigate" in existing && existing.url !== target) await existing.navigate(target);
+      return existing.focus();
+    }
+    return self.clients.openWindow(target);
+  })());
 });

@@ -1,7 +1,9 @@
 import { cronMatchesDate, latestCronOccurrence } from "../lib/cron.ts";
+import { queueTodoPushEvent } from "../db/push-notifications.ts";
 
 type RecurringTodoRow = {
   id: number;
+  title: string;
   status: "open" | "completed" | "archived";
   recurrence_cron: string;
   recurrence_last_fired_at: string | null;
@@ -45,7 +47,7 @@ export async function processRecurringTodos(
       .first<{ value: string }>();
     const timeZone = setting?.value || "America/Toronto";
     const result = await db.prepare(`
-      SELECT id, status, recurrence_cron, recurrence_last_fired_at, completed_at, created_at, updated_at
+      SELECT id, title, status, recurrence_cron, recurrence_last_fired_at, completed_at, created_at, updated_at
       FROM todos
       WHERE recurrence_cron IS NOT NULL AND trim(recurrence_cron) <> ''
       ORDER BY id
@@ -102,6 +104,28 @@ export async function processRecurringTodos(
     const reopened = due.reduce((total, { todo }, index) => (
       total + (todo.status === "completed" && Number(updateResults[index]?.meta.changes ?? 0) > 0 ? 1 : 0)
     ), 0);
+    const reopenedEvents = due.filter(({ todo }, index) => (
+      todo.status === "completed" && Number(updateResults[index]?.meta.changes ?? 0) > 0
+    ));
+    let pushEventsQueued = 0;
+    for (const { todo, occurrence } of reopenedEvents) {
+      try {
+        const queued = await queueTodoPushEvent(db, {
+          type: "recurrence_reopened",
+          todoId: todo.id,
+          title: todo.title || "Recurring task",
+          eventId: `recurrence:${todo.id}:${occurrence}`,
+          createdAt: scheduledAt,
+        });
+        if (queued) pushEventsQueued += 1;
+      } catch (error) {
+        console.error("[todo-push] recurring task notification could not be queued", {
+          todoId: todo.id,
+          occurrence,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
 
     console.info("[todo-recurring] interval processed", {
       scheduledAt: scheduledAt.toISOString(),
@@ -116,9 +140,10 @@ export async function processRecurringTodos(
       alreadyOpen: Math.max(0, changed - reopened),
       alreadyFired,
       invalid,
+      pushEventsQueued,
       durationMs: Date.now() - startedAt,
     });
-    return { checked: result.results.length, due: due.length, changed, reopened, alreadyFired, invalid, firedAt, timeZone };
+    return { checked: result.results.length, due: due.length, changed, reopened, alreadyFired, invalid, firedAt, timeZone, pushEventsQueued };
   } catch (error) {
     console.error("[todo-recurring] interval failed", {
       scheduledAt: scheduledAt.toISOString(),

@@ -7,6 +7,7 @@ import {
   restoreAttachmentStatements,
 } from "./attachments";
 import { normalizeCronExpression } from "../lib/cron";
+import { queueTodoPushEvent } from "./push-notifications";
 import {
   DEFAULT_QUICK_SNOOZE_PRESETS,
   isQuickSnoozePreset,
@@ -121,7 +122,7 @@ type TodoSyncChangeRow = {
 };
 
 let initialization: Promise<void> | null = null;
-const CURRENT_SCHEMA_VERSION = "19";
+const CURRENT_SCHEMA_VERSION = "20";
 
 function database() {
   if (!env.DB) throw new Error("The todo database is unavailable.");
@@ -408,6 +409,32 @@ export async function ensureTodoDatabase() {
         )
       `),
       db.prepare(`
+        CREATE TABLE IF NOT EXISTS todo_push_subscriptions (
+          id TEXT PRIMARY KEY NOT NULL,
+          endpoint TEXT NOT NULL,
+          p256dh TEXT NOT NULL,
+          auth TEXT NOT NULL,
+          device_id TEXT NOT NULL,
+          failure_count INTEGER NOT NULL DEFAULT 0,
+          last_success_at TEXT,
+          disabled_at TEXT,
+          created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+          updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+        )
+      `),
+      db.prepare(`
+        CREATE TABLE IF NOT EXISTS todo_push_events (
+          id TEXT PRIMARY KEY NOT NULL,
+          event_type TEXT NOT NULL,
+          todo_id INTEGER NOT NULL,
+          todo_title TEXT NOT NULL,
+          origin_device_id TEXT,
+          created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+          deliver_after TEXT NOT NULL,
+          delivered_at TEXT
+        )
+      `),
+      db.prepare(`
         CREATE TABLE IF NOT EXISTS todo_assistant_workspaces (
           user_key TEXT PRIMARY KEY NOT NULL,
           selected_todo_id INTEGER,
@@ -570,6 +597,11 @@ export async function ensureTodoDatabase() {
       db.prepare("CREATE INDEX IF NOT EXISTS todo_attachments_draft_token_idx ON todo_attachments(draft_token)"),
       db.prepare("CREATE INDEX IF NOT EXISTS todo_attachments_expires_at_idx ON todo_attachments(expires_at)"),
       db.prepare("CREATE INDEX IF NOT EXISTS todo_attachments_deleted_at_idx ON todo_attachments(deleted_at)"),
+      db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS todo_push_subscriptions_endpoint_idx ON todo_push_subscriptions(endpoint)"),
+      db.prepare("CREATE INDEX IF NOT EXISTS todo_push_subscriptions_device_idx ON todo_push_subscriptions(device_id)"),
+      db.prepare("CREATE INDEX IF NOT EXISTS todo_push_subscriptions_disabled_idx ON todo_push_subscriptions(disabled_at)"),
+      db.prepare("CREATE INDEX IF NOT EXISTS todo_push_events_delivery_idx ON todo_push_events(delivered_at, deliver_after)"),
+      db.prepare("CREATE INDEX IF NOT EXISTS todo_push_events_todo_idx ON todo_push_events(todo_id)"),
       db.prepare("CREATE INDEX IF NOT EXISTS todo_assistant_threads_todo_idx ON todo_assistant_threads(todo_id)"),
       db.prepare("CREATE INDEX IF NOT EXISTS todo_assistant_threads_updated_idx ON todo_assistant_threads(updated_at)"),
       db.prepare("CREATE INDEX IF NOT EXISTS todo_assistant_messages_thread_idx ON todo_assistant_messages(user_key, todo_id, created_at)"),
@@ -692,9 +724,26 @@ export async function listTodos(): Promise<Todo[]> {
   return result.results.map(mapTodo);
 }
 
-export async function wakeExpiredSnoozedTodos(now = new Date()) {
-  await ensureTodoDatabase();
-  const result = await database().prepare(`
+export async function wakeExpiredSnoozedTodosInDatabase(db: D1Database, now = new Date()) {
+  const deliverAfter = new Date(Math.ceil(now.valueOf() / 60_000) * 60_000).toISOString();
+  const [queued, result] = await db.batch([
+    db.prepare(`
+      INSERT OR IGNORE INTO todo_push_events (
+        id, event_type, todo_id, todo_title, created_at, deliver_after
+      )
+      SELECT
+        'snooze:' || id || ':' || snoozed_until,
+        'snooze_expired',
+        id,
+        title,
+        ?,
+        ?
+      FROM todos
+      WHERE status = 'open'
+        AND snoozed_until IS NOT NULL
+        AND snoozed_until <= ?
+    `).bind(now.toISOString(), deliverAfter, now.toISOString()),
+    db.prepare(`
     UPDATE todos
     SET snoozed_until = NULL,
         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
@@ -702,16 +751,24 @@ export async function wakeExpiredSnoozedTodos(now = new Date()) {
       AND snoozed_until IS NOT NULL
       AND snoozed_until <= ?
     RETURNING id
-  `).bind(now.toISOString()).all<{ id: number }>();
+    `).bind(now.toISOString()),
+  ]) as [D1Result, D1Result<{ id: number }>];
   const ids = result.results.map((row) => Number(row.id)).filter(Number.isInteger);
   if (ids.length) {
     console.info("[todo-snooze] expired tasks returned to Open", {
       checkedAt: now.toISOString(),
       count: ids.length,
       ids,
+      pushEventsQueued: Number(queued.meta.changes ?? 0),
+      pushDeliverAfter: deliverAfter,
     });
   }
   return ids;
+}
+
+export async function wakeExpiredSnoozedTodos(now = new Date()) {
+  await ensureTodoDatabase();
+  return wakeExpiredSnoozedTodosInDatabase(database(), now);
 }
 
 export async function readTodoBootstrap(): Promise<TodoBootstrapSnapshot> {
@@ -896,6 +953,7 @@ export async function createTodo(input: {
   draftToken?: string;
   attachmentIds?: string[];
   clientId?: string;
+  originDeviceId?: string | null;
 }): Promise<Todo> {
   await ensureTodoDatabase();
   const clientId = input.clientId?.trim() || null;
@@ -956,7 +1014,22 @@ export async function createTodo(input: {
   if (!row) throw new Error("The task could not be created.");
   try {
     const attachmentCount = await claimDraftAttachments(row.id, input.draftToken, input.attachmentIds);
-    console.info("[todo-db] task created", { id: row.id, clientId, attachmentCount });
+    let pushQueued = false;
+    try {
+      pushQueued = await queueTodoPushEvent(db, {
+        type: "task_created",
+        todoId: row.id,
+        title: row.title,
+        originDeviceId: input.originDeviceId,
+        eventId: clientId ? `create:${clientId}` : undefined,
+      });
+    } catch (pushError) {
+      console.error("[todo-push] created task notification could not be queued", {
+        todoId: row.id,
+        error: pushError instanceof Error ? pushError.message : String(pushError),
+      });
+    }
+    console.info("[todo-db] task created", { id: row.id, clientId, attachmentCount, pushQueued });
     return mapTodo({ ...row, attachment_count: attachmentCount });
   } catch (error) {
     await db.prepare("DELETE FROM todos WHERE id = ?").bind(row.id).run();

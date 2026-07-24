@@ -20,6 +20,7 @@ import { currentOpenTaskCount, updateNativeAppBadge } from "./app-badge";
 import { copyTextToClipboard } from "./copy-to-clipboard";
 import { dueDateSortValue, formatDueDate, isDueTodayOrOverdue } from "./date-only";
 import { cronValidationError, nextCronOccurrence } from "../lib/cron";
+import { headersWithDeviceId } from "./device-id";
 import {
   expiredSnoozeIds,
   isActivelySnoozed,
@@ -234,9 +235,12 @@ const priorityLabels: Record<number, string> = {
 
 function request<T>(path: string, options?: RequestInit): Promise<T> {
   const formData = typeof FormData !== "undefined" && options?.body instanceof FormData;
+  const headers = options?.body && !formData
+    ? { "Content-Type": "application/json", ...(options.headers ?? {}) }
+    : options?.headers;
   return fetch(path, {
     ...options,
-    headers: options?.body && !formData ? { "Content-Type": "application/json", ...(options.headers ?? {}) } : options?.headers,
+    headers: options?.method && options.method !== "GET" ? headersWithDeviceId(headers) : headers,
   }).then(async (response) => {
     const payload = (await response.json().catch(() => ({}))) as T & { error?: string };
     if (!response.ok) {

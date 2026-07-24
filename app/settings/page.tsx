@@ -9,6 +9,7 @@ import {
   updateNativeAppBadge,
 } from "../app-badge";
 import { copyTextToClipboard } from "../copy-to-clipboard";
+import { getOrCreateDeviceId, headersWithDeviceId } from "../device-id";
 import { SiteHeader } from "../site-header";
 import {
   DEFAULT_QUICK_SNOOZE_PRESETS,
@@ -42,6 +43,7 @@ type ApiToken = {
 
 type BadgePermission = NotificationPermission | "not-required" | "unavailable";
 type BadgeTodo = { status: "open" | "completed"; snoozedUntil: string | null };
+type PushState = "checking" | "unsupported" | "unconfigured" | "blocked" | "disabled" | "enabled";
 
 const timeZones = [
   ["America/Toronto", "Eastern · Toronto"],
@@ -62,10 +64,21 @@ function hourLabel(hour: number) {
   return `${hour - 12}:00 PM`;
 }
 
+function pushCapabilityAvailable() {
+  return "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+}
+
+function pushApplicationServerKey(value: string) {
+  const padding = "=".repeat((4 - (value.length % 4)) % 4);
+  const decoded = window.atob((value + padding).replace(/-/g, "+").replace(/_/g, "/"));
+  return Uint8Array.from(decoded, (character) => character.charCodeAt(0));
+}
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
+  const headers = options?.body ? { "Content-Type": "application/json", ...(options.headers ?? {}) } : options?.headers;
   const response = await fetch(path, {
     ...options,
-    headers: options?.body ? { "Content-Type": "application/json", ...(options.headers ?? {}) } : options?.headers,
+    headers: headersWithDeviceId(headers),
   });
   const payload = (await response.json().catch(() => ({}))) as T & { error?: string };
   if (!response.ok) throw new Error(payload.error || "Something went wrong.");
@@ -99,6 +112,9 @@ export default function SettingsPage() {
   const [badgeRequiresPermission, setBadgeRequiresPermission] = useState(false);
   const [badgePermission, setBadgePermission] = useState<BadgePermission>("unavailable");
   const [updatingBadge, setUpdatingBadge] = useState(false);
+  const [pushState, setPushState] = useState<PushState>("checking");
+  const [pushPublicKey, setPushPublicKey] = useState("");
+  const [updatingPush, setUpdatingPush] = useState(false);
 
   useEffect(() => {
     request<{ settings: Settings }>("/api/settings")
@@ -140,7 +156,51 @@ export default function SettingsPage() {
         notificationPermission: requiresPermission && "Notification" in window ? Notification.permission : "not-required",
       });
     }, 0);
-    return () => window.clearTimeout(badgeCheck);
+    const pushCheck = window.setTimeout(() => {
+      void (async () => {
+        if (!pushCapabilityAvailable()) {
+          setPushState("unsupported");
+          console.info("[todo-push] browser push capability unavailable");
+          return;
+        }
+        try {
+          const config = await request<{ configured: boolean; publicKey: string | null; subscribed: boolean }>("/api/push", {
+            cache: "no-store",
+          });
+          if (!config.configured || !config.publicKey) {
+            setPushState("unconfigured");
+            return;
+          }
+          setPushPublicKey(config.publicKey);
+          if (Notification.permission === "denied") {
+            setPushState("blocked");
+            return;
+          }
+          const registration = await navigator.serviceWorker.ready;
+          const subscription = await registration.pushManager.getSubscription();
+          if (subscription && !config.subscribed) {
+            await request("/api/push", {
+              method: "POST",
+              body: JSON.stringify({ ...subscription.toJSON(), deviceId: getOrCreateDeviceId() }),
+            });
+            console.info("[todo-push] existing browser subscription restored on server");
+          }
+          setPushState(subscription ? "enabled" : "disabled");
+          console.info("[todo-push] settings state loaded", {
+            browserSubscribed: Boolean(subscription),
+            serverSubscribed: config.subscribed,
+            permission: Notification.permission,
+          });
+        } catch (error) {
+          setPushState("disabled");
+          console.error("[todo-push] settings state failed", { error });
+        }
+      })();
+    }, 0);
+    return () => {
+      window.clearTimeout(badgeCheck);
+      window.clearTimeout(pushCheck);
+    };
   }, []);
 
   useEffect(() => {
@@ -336,7 +396,7 @@ export default function SettingsPage() {
         setBadgePermission(permission);
         if (permission !== "granted") {
           throw new Error(permission === "denied"
-            ? "Badge permission is blocked. Allow notifications for Dawar Todo in device settings; the app will not send alerts."
+            ? "Badge permission is blocked. Allow notifications for Dawar Todo in device settings."
             : "Badge permission was not enabled.");
         }
       }
@@ -352,6 +412,77 @@ export default function SettingsPage() {
       console.error("[todo-pwa] app badge enable failed", { badgeRequiresPermission, error });
     } finally {
       setUpdatingBadge(false);
+    }
+  }
+
+  async function enablePushNotifications() {
+    if (updatingPush || !pushCapabilityAvailable()) return;
+    setUpdatingPush(true);
+    setShareNotice(null);
+    try {
+      const permission = Notification.permission === "default"
+        ? await Notification.requestPermission()
+        : Notification.permission;
+      setBadgePermission(permission);
+      if (permission !== "granted") {
+        setPushState(permission === "denied" ? "blocked" : "disabled");
+        throw new Error(permission === "denied"
+          ? "Notifications are blocked. Allow Dawar Todo in device notification settings."
+          : "Notification permission was not enabled.");
+      }
+      let publicKey = pushPublicKey;
+      if (!publicKey) {
+        const config = await request<{ configured: boolean; publicKey: string | null }>("/api/push", { cache: "no-store" });
+        if (!config.configured || !config.publicKey) throw new Error("Push notifications are not configured yet.");
+        publicKey = config.publicKey;
+        setPushPublicKey(publicKey);
+      }
+      const registration = await navigator.serviceWorker.ready;
+      const existing = await registration.pushManager.getSubscription();
+      const subscription = existing ?? await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: pushApplicationServerKey(publicKey),
+      });
+      await request("/api/push", {
+        method: "POST",
+        body: JSON.stringify({ ...subscription.toJSON(), deviceId: getOrCreateDeviceId() }),
+      });
+      setPushState("enabled");
+      setShareNotice({ tone: "success", text: "Push notifications enabled on this device." });
+      console.info("[todo-push] notifications enabled", {
+        reusedBrowserSubscription: Boolean(existing),
+        permission,
+      });
+      const { todos } = await request<{ todos: BadgeTodo[] }>("/api/todos");
+      await updateNativeAppBadge(currentOpenTaskCount(todos), "push-enabled");
+    } catch (error) {
+      setShareNotice({ tone: "error", text: error instanceof Error ? error.message : "Push notifications could not be enabled." });
+      console.error("[todo-push] notification enable failed", { error });
+    } finally {
+      setUpdatingPush(false);
+    }
+  }
+
+  async function disablePushNotifications() {
+    if (updatingPush || !pushCapabilityAvailable()) return;
+    setUpdatingPush(true);
+    setShareNotice(null);
+    try {
+      const registration = await navigator.serviceWorker.ready;
+      const subscription = await registration.pushManager.getSubscription();
+      await request("/api/push", {
+        method: "DELETE",
+        body: JSON.stringify({ endpoint: subscription?.endpoint ?? null, deviceId: getOrCreateDeviceId() }),
+      });
+      if (subscription) await subscription.unsubscribe();
+      setPushState("disabled");
+      setShareNotice({ tone: "success", text: "Push notifications disabled on this device." });
+      console.info("[todo-push] notifications disabled", { hadBrowserSubscription: Boolean(subscription) });
+    } catch (error) {
+      setShareNotice({ tone: "error", text: error instanceof Error ? error.message : "Push notifications could not be disabled." });
+      console.error("[todo-push] notification disable failed", { error });
+    } finally {
+      setUpdatingPush(false);
     }
   }
 
@@ -432,6 +563,52 @@ export default function SettingsPage() {
           </div>
         </form>
 
+        <section aria-labelledby="push-notifications-title" className="mt-6 rounded-2xl border border-black/[0.07] bg-white p-5 shadow-[0_10px_35px_rgba(30,45,36,0.06)] sm:p-7">
+          <div className="flex items-start gap-3">
+            <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-[#eaf3ed] text-[#216e4e]"><ActionIcon name="badge" className="h-5 w-5" /></span>
+            <div className="min-w-0 flex-1">
+              <h2 id="push-notifications-title" className="text-lg font-semibold tracking-[-0.02em] text-[#202522]">Push notifications</h2>
+              <p className="mt-1 text-sm leading-6 text-[#69716c]">Get one batched alert when tasks wake from snooze, recur, or are added from another device or agent.</p>
+            </div>
+          </div>
+
+          <div className="mt-4 rounded-xl bg-[#f1f6f3] px-4 py-3 text-sm leading-6 text-[#4f6257]">
+            {pushState === "checking"
+              ? "Checking notification support…"
+              : pushState === "unsupported"
+                ? "Push is unavailable here. On iPhone or iPad, add Dawar Todo to the Home Screen and open the installed app."
+                : pushState === "unconfigured"
+                  ? "Push delivery is not configured on the server yet."
+                  : pushState === "blocked"
+                    ? "Notifications are blocked for Dawar Todo in this device’s settings."
+                    : pushState === "enabled"
+                      ? "Enabled on this device. Tasks that wake together are combined into one alert within a minute."
+                      : "Disabled on this device."}
+          </div>
+
+          {pushState === "enabled" ? (
+            <button
+              type="button"
+              onClick={() => void disablePushNotifications()}
+              disabled={updatingPush}
+              className="mt-4 inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-white px-4 text-sm font-semibold text-[#4f5c55] ring-1 ring-black/[0.1] transition hover:bg-[#f4f6f4] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#216e4e] disabled:opacity-45"
+            >
+              <ActionIcon name="badge" />
+              {updatingPush ? "Disabling…" : "Disable notifications"}
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => void enablePushNotifications()}
+              disabled={updatingPush || pushState === "checking" || pushState === "unsupported" || pushState === "unconfigured" || pushState === "blocked"}
+              className="mt-4 inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-[#216e4e] px-4 text-sm font-semibold text-white transition hover:bg-[#195d41] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#216e4e] disabled:cursor-not-allowed disabled:opacity-45"
+            >
+              <ActionIcon name="badge" />
+              {updatingPush ? "Enabling…" : pushState === "blocked" ? "Permission blocked" : "Enable notifications"}
+            </button>
+          )}
+        </section>
+
         <section aria-labelledby="app-badge-title" className="mt-6 rounded-2xl border border-black/[0.07] bg-white p-5 shadow-[0_10px_35px_rgba(30,45,36,0.06)] sm:p-7">
           <div className="flex items-start gap-3">
             <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-[#eaf3ed] text-[#216e4e]"><ActionIcon name="badge" className="h-5 w-5" /></span>
@@ -448,10 +625,10 @@ export default function SettingsPage() {
                 ? "Native badges are not available in this browser. On iPhone and iPad, open Dawar Todo from its Home Screen icon."
                 : badgeRequiresPermission
                   ? badgePermission === "granted"
-                    ? "Badge permission is enabled. Dawar Todo does not send notification alerts."
+                    ? "Badge permission is enabled."
                     : badgePermission === "denied"
                       ? "Badge permission is blocked in device notification settings."
-                      : "iPhone and iPad require notification permission to display an icon badge. Dawar Todo will not send notification alerts."
+                      : "iPhone and iPad require notification permission to display an icon badge."
                   : "This installed browser supports native app-icon badges. No additional permission is required."}
           </div>
 

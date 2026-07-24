@@ -47,6 +47,7 @@ export async function POST(request: Request) {
       return Response.json({ error: "New tasks must be open." }, { status: 400 });
     }
     const project = payload.project?.trim() || null;
+    const originDeviceId = request.headers.get("X-Dawar-Device-Id")?.trim() || null;
     const todo = await createTodo({
       title,
       notes: payload.notes?.trim(),
@@ -58,6 +59,7 @@ export async function POST(request: Request) {
       draftToken: payload.draftToken,
       attachmentIds: Array.isArray(payload.attachmentIds) ? payload.attachmentIds.map(String) : undefined,
       clientId: payload.clientId,
+      originDeviceId,
     });
     console.info("[todo-api] created", {
       id: todo.id,
@@ -68,6 +70,7 @@ export async function POST(request: Request) {
       attachmentCount: todo.attachmentCount,
       clientId: todo.clientId,
       recurrenceCron: todo.recurrenceCron,
+      originSuppressionAvailable: Boolean(originDeviceId),
     });
     return Response.json({ todo }, { status: 201 });
   } catch (error) {

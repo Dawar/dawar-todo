@@ -6,5 +6,8 @@ declare namespace Cloudflare {
     S3_BUCKET: string;
     S3_CDN_URL: string;
     S3_ENDPOINT_URL: string;
+    VAPID_SUBJECT?: string;
+    VAPID_PUBLIC_KEY?: string;
+    VAPID_PRIVATE_KEY?: string;
   }
 }
