@@ -93,6 +93,11 @@ test("ships the signed-in WebRTC Talk chief-of-staff workspace", async () => {
   assert.match(workspace, /aria-label=\{sessionId \? "End Talk" : "Start Talk"\}/);
   assert.match(workspace, /bottom-\[calc\(0\.75rem\+env\(safe-area-inset-bottom\)\)\]/);
   assert.match(workspace, /aria-label=\{muted \? "Unmute Talk" : "Mute Talk"\}/);
+  assert.match(workspace, /name=\{muted \? "mic-off" : "mic"\}/);
+  assert.match(workspace, /tool response batch completed/);
+  assert.match(workspace, /Promise\.all\(toolCalls\.map/);
+  assert.match(workspace, /active response in progress/);
+  assert.match(workspace, /pendingResponseRef/);
   assert.match(workspace, /useState<TalkState>\("ready"\)/);
   assert.match(workspace, /HISTORY_CACHE_KEY/);
   assert.match(workspace, /grid-rows-2/);

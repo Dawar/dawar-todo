@@ -52,6 +52,7 @@ type StartResponse = {
 
 type RealtimeEvent = {
   type?: string;
+  event_id?: string;
   item_id?: string;
   transcript?: string;
   delta?: string;
@@ -68,7 +69,7 @@ type RealtimeEvent = {
       content?: Array<{ type?: string; transcript?: string; text?: string }>;
     }>;
   };
-  error?: { message?: string };
+  error?: { code?: string; message?: string };
 };
 
 const HISTORY_CACHE_KEY = "dawar-todo-talk-history-v1";
@@ -148,6 +149,8 @@ export function TalkWorkspace() {
   const reconnectingRef = useRef(false);
   const mountedRef = useRef(true);
   const connectRef = useRef<(stream?: MediaStream | null) => Promise<void>>(async () => undefined);
+  const responseActiveRef = useRef(false);
+  const pendingResponseRef = useRef<Record<string, unknown> | null>(null);
 
   useEffect(() => {
     sessionIdRef.current = sessionId;
@@ -206,6 +209,32 @@ export function TalkWorkspace() {
     const channel = channelRef.current;
     if (channel?.readyState === "open") channel.send(JSON.stringify(event));
   }, []);
+
+  const requestRealtimeResponse = useCallback((response?: Record<string, unknown>) => {
+    const channel = channelRef.current;
+    if (channel?.readyState !== "open") return false;
+    if (responseActiveRef.current) {
+      pendingResponseRef.current = response ?? pendingResponseRef.current ?? {};
+      console.info("[todo-talk-ui] response request queued behind active response", {
+        hasOverrides: Boolean(response),
+      });
+      return false;
+    }
+    const effectiveResponse = response ?? pendingResponseRef.current;
+    const eventId = `todo-response-${crypto.randomUUID()}`;
+    responseActiveRef.current = true;
+    pendingResponseRef.current = null;
+    sendEvent({
+      event_id: eventId,
+      type: "response.create",
+      ...(effectiveResponse && Object.keys(effectiveResponse).length ? { response: effectiveResponse } : {}),
+    });
+    console.info("[todo-talk-ui] response requested", {
+      eventId,
+      hasOverrides: Boolean(effectiveResponse && Object.keys(effectiveResponse).length),
+    });
+    return true;
+  }, [sendEvent]);
 
   const runTool = useCallback(async (call: {
     name: string;
@@ -272,7 +301,6 @@ export function TalkWorkspace() {
           output: JSON.stringify(result),
         },
       });
-      sendEvent({ type: "response.create" });
     } catch (toolError) {
       const message = toolError instanceof Error ? toolError.message : "That action did not complete.";
       setActivities((current) => current.map((item) => item.id === activityId ? {
@@ -288,7 +316,6 @@ export function TalkWorkspace() {
           output: JSON.stringify({ error: message }),
         },
       });
-      sendEvent({ type: "response.create" });
     }
   }, [persistFinal, sendEvent]);
 
@@ -319,6 +346,7 @@ export function TalkWorkspace() {
       return;
     }
     if (type === "response.created") {
+      responseActiveRef.current = true;
       setState("thinking");
       return;
     }
@@ -339,31 +367,59 @@ export function TalkWorkspace() {
       return;
     }
     if (type === "response.done") {
+      responseActiveRef.current = false;
       const output = event.response?.output ?? [];
-      for (const item of output) {
-        if (item.type === "function_call" && item.name && item.call_id) {
-          void runTool({ name: item.name, call_id: item.call_id, arguments: item.arguments });
-        }
-      }
+      const toolCalls = output
+        .filter((item) => item.type === "function_call" && item.name && item.call_id)
+        .map((item) => ({ name: item.name!, call_id: item.call_id!, arguments: item.arguments }));
       const transcript = transcriptFromOutput(output);
       const messageItem = output.find((item) => item.type === "message");
       if (transcript && messageItem?.id) {
         lastAddressedSpeechAtRef.current = Date.now();
         void persistFinal("assistant", messageItem.id, transcript);
       }
-      if (!output.some((item) => item.type === "function_call")) {
+      if (!toolCalls.length) {
         setState(muted ? "muted" : "listening");
         setLiveAssistant("");
+        const pending = pendingResponseRef.current;
+        if (pending) requestRealtimeResponse(Object.keys(pending).length ? pending : undefined);
+      } else {
+        console.info("[todo-talk-ui] tool response batch started", {
+          responseId: event.response?.id ?? null,
+          toolCount: toolCalls.length,
+        });
+        void Promise.all(toolCalls.map((call) => runTool(call)))
+          .then(() => {
+            console.info("[todo-talk-ui] tool response batch completed", {
+              responseId: event.response?.id ?? null,
+              toolCount: toolCalls.length,
+            });
+            requestRealtimeResponse();
+          });
       }
       return;
     }
     if (type === "error") {
-      setError(event.error?.message || "The voice session reported an error.");
+      const message = event.error?.message || "The voice session reported an error.";
+      if (/active response in progress|wait until the response is finished/i.test(message)) {
+        responseActiveRef.current = true;
+        pendingResponseRef.current ??= {};
+        setState("thinking");
+        console.info("[todo-talk-ui] overlapping response request deferred", {
+          eventId: event.event_id ?? null,
+          code: event.error?.code ?? null,
+        });
+        return;
+      }
+      responseActiveRef.current = false;
+      setError(message);
       setState("error");
     }
-  }, [muted, persistFinal, runTool]);
+  }, [muted, persistFinal, requestRealtimeResponse, runTool]);
 
   const closeConnection = useCallback((stopMedia: boolean) => {
+    responseActiveRef.current = false;
+    pendingResponseRef.current = null;
     channelRef.current?.close();
     channelRef.current = null;
     pcRef.current?.close();
@@ -451,11 +507,8 @@ export function TalkWorkspace() {
     });
     channel.addEventListener("open", () => {
       setState(muted ? "muted" : "listening");
-      sendEvent({
-        type: "response.create",
-        response: {
-          instructions: "Begin immediately. If a task is focused, ask one terse, high-value question to move it forward. Otherwise name the highest-value open task and ask one terse question. No greeting, setup, capability explanation, or recap.",
-        },
+      requestRealtimeResponse({
+        instructions: "Begin immediately. If a task is focused, ask one terse, high-value question to move it forward. Otherwise name the highest-value open task and ask one terse question. No greeting, setup, capability explanation, or recap.",
       });
     });
     pc.addEventListener("connectionstatechange", () => {
@@ -494,7 +547,7 @@ export function TalkWorkspace() {
     });
     if (!sdp.ok) throw new Error("The realtime audio connection could not be established.");
     await pc.setRemoteDescription({ type: "answer", sdp: await sdp.text() });
-  }, [endSession, handleRealtimeEvent, muted, sendEvent]);
+  }, [endSession, handleRealtimeEvent, muted, requestRealtimeResponse]);
 
   useEffect(() => {
     connectRef.current = connect;
@@ -691,7 +744,7 @@ export function TalkWorkspace() {
                 muted ? "border-[#e9c5c2] bg-[#fff0ef]/95 text-[#a3302c]" : "border-black/[0.08] bg-white/95 text-[#3f4743] hover:bg-[#f3f5f3]"
               }`}
             >
-              <ActionIcon name="mic" className="h-5 w-5" />
+              <ActionIcon name={muted ? "mic-off" : "mic"} className="h-5 w-5" />
             </button>
           )}
           <button

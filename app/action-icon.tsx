@@ -23,6 +23,7 @@ import {
   ImagePlus,
   Keyboard,
   Mic,
+  MicOff,
   Paperclip,
   Pin,
   PinOff,
@@ -65,6 +66,7 @@ export type ActionIconName =
   | "attachment"
   | "badge"
   | "mic"
+  | "mic-off"
   | "next"
   | "open"
   | "restore"
@@ -108,6 +110,7 @@ const icons: Record<ActionIconName, ComponentType<LucideProps>> = {
   attachment: Paperclip,
   badge: BellDot,
   mic: Mic,
+  "mic-off": MicOff,
   next: ChevronRight,
   open: RotateCcw,
   restore: RotateCcw,
