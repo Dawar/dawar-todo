@@ -1,5 +1,6 @@
 import { env } from "cloudflare:workers";
 import { listTodoAttachments, type TodoAttachment } from "../db/attachments";
+import { listAssistantMemories, type AssistantMemory } from "../db/talk";
 import {
   type AssistantProposal,
   type AssistantQuestion,
@@ -167,6 +168,7 @@ function assistantInstructions(input: {
   relatedTasks: Todo[];
   skippedQuestionKeys: string[];
   attachmentSummary: Array<Pick<TodoAttachment, "id" | "fileName" | "mimeType" | "kind" | "byteSize">>;
+  memories: AssistantMemory[];
   timeZone: string;
 }) {
   return `You are the calm, fast chief-of-staff assistant inside Dawar Todo.
@@ -221,6 +223,16 @@ ${JSON.stringify(input.relatedTasks.map((todo) => ({
 
 TASK ATTACHMENTS
 ${JSON.stringify(input.attachmentSummary)}
+
+RELEVANT SHARED MEMORIES
+${JSON.stringify(input.memories.map((memory) => ({
+    id: memory.id,
+    scope: memory.scope,
+    todoId: memory.todoId,
+    kind: memory.kind,
+    content: memory.content,
+    provenance: memory.provenance,
+  })))}
 
 SKIPPED QUESTION KEYS
 ${JSON.stringify(input.skippedQuestionKeys)}`;
@@ -333,6 +345,7 @@ async function transcribeAudio(attachment: TodoAttachment, apiKey: string) {
 }
 
 export async function generateAssistantTurn(input: {
+  userKey: string;
   todo: Todo;
   thread: AssistantThread;
   currentMessageId: string;
@@ -345,10 +358,11 @@ export async function generateAssistantTurn(input: {
   const apiKey = configuration.OPENAI_API_KEY?.trim();
   if (!apiKey) throw new Error("The AI assistant is not configured yet.");
   const model = configuration.OPENAI_ASSISTANT_MODEL?.trim() || ASSISTANT_MODEL;
-  const [allTodos, projects, taskAttachments] = await Promise.all([
+  const [allTodos, projects, taskAttachments, memories] = await Promise.all([
     listTodos(),
     listTodoProjects(),
     listTodoAttachments(input.todo.id),
+    listAssistantMemories(input.userKey, { todoId: input.todo.id, limit: 30 }),
   ]);
   const selectedIds = new Set(input.attachmentIds);
   const selectedAttachments = taskAttachments.filter((attachment) => selectedIds.has(attachment.id)).slice(0, 6);
@@ -385,6 +399,7 @@ export async function generateAssistantTurn(input: {
       relatedTasks: allTodos.filter((todo) => todo.id !== input.todo.id).slice(0, 80),
       skippedQuestionKeys: input.thread.skippedQuestionKeys,
       attachmentSummary: taskAttachments.map(({ id, fileName, mimeType, kind, byteSize }) => ({ id, fileName, mimeType, kind, byteSize })),
+      memories,
       timeZone: input.timeZone,
     }),
     input: responseInput(input.thread, input.currentMessageId, content),
@@ -410,6 +425,7 @@ export async function generateAssistantTurn(input: {
     selectedAttachmentCount: selectedAttachments.length,
     selectedAttachmentKinds: selectedAttachments.map((attachment) => attachment.kind),
     researchRequested,
+    memoryCount: memories.length,
   });
   const response = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",

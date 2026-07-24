@@ -48,6 +48,7 @@ export async function POST(request: Request) {
     }
     const settings = await getTodoSettings();
     const turn = await generateAssistantTurn({
+      userKey,
       todo,
       thread,
       currentMessageId: saved.message.id,

@@ -239,3 +239,108 @@ export const todoAssistantMessages = sqliteTable(
     uniqueIndex("todo_assistant_messages_client_idx").on(table.userKey, table.clientId),
   ],
 );
+
+export const todoTalkWorkspaces = sqliteTable("todo_talk_workspaces", {
+  userKey: text("user_key").primaryKey(),
+  activeSessionId: text("active_session_id"),
+  lastFocusedTodoId: integer("last_focused_todo_id"),
+  summary: text("summary").notNull().default(""),
+  updatedAt: text("updated_at")
+    .notNull()
+    .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`),
+});
+
+export const todoTalkSessions = sqliteTable(
+  "todo_talk_sessions",
+  {
+    id: text("id").primaryKey(),
+    userKey: text("user_key").notNull(),
+    model: text("model").notNull(),
+    voice: text("voice").notNull(),
+    status: text("status").notNull().default("active"),
+    lastActivityAt: text("last_activity_at")
+      .notNull()
+      .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`),
+    startedAt: text("started_at")
+      .notNull()
+      .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`),
+    endedAt: text("ended_at"),
+    endReason: text("end_reason"),
+  },
+  (table) => [
+    index("todo_talk_sessions_user_idx").on(table.userKey, table.startedAt),
+    index("todo_talk_sessions_status_idx").on(table.status, table.lastActivityAt),
+  ],
+);
+
+export const todoTalkMessages = sqliteTable(
+  "todo_talk_messages",
+  {
+    id: text("id").primaryKey(),
+    sessionId: text("session_id").notNull(),
+    userKey: text("user_key").notNull(),
+    realtimeItemId: text("realtime_item_id").notNull(),
+    role: text("role").notNull(),
+    content: text("content").notNull(),
+    focusedTodoId: integer("focused_todo_id"),
+    metadataJson: text("metadata_json").notNull().default("{}"),
+    createdAt: text("created_at")
+      .notNull()
+      .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`),
+  },
+  (table) => [
+    uniqueIndex("todo_talk_messages_realtime_idx").on(table.userKey, table.realtimeItemId),
+    index("todo_talk_messages_session_idx").on(table.sessionId, table.createdAt),
+    index("todo_talk_messages_user_idx").on(table.userKey, table.createdAt),
+    index("todo_talk_messages_task_idx").on(table.focusedTodoId, table.createdAt),
+  ],
+);
+
+export const todoTalkToolCalls = sqliteTable(
+  "todo_talk_tool_calls",
+  {
+    callId: text("call_id").primaryKey(),
+    sessionId: text("session_id").notNull(),
+    userKey: text("user_key").notNull(),
+    name: text("name").notNull(),
+    argumentsJson: text("arguments_json").notNull(),
+    status: text("status").notNull().default("running"),
+    resultJson: text("result_json"),
+    undoToken: text("undo_token"),
+    createdAt: text("created_at")
+      .notNull()
+      .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`),
+    completedAt: text("completed_at"),
+  },
+  (table) => [
+    index("todo_talk_tool_calls_session_idx").on(table.sessionId, table.createdAt),
+    index("todo_talk_tool_calls_user_idx").on(table.userKey, table.createdAt),
+  ],
+);
+
+export const todoAssistantMemories = sqliteTable(
+  "todo_assistant_memories",
+  {
+    id: text("id").primaryKey(),
+    userKey: text("user_key").notNull(),
+    scope: text("scope").notNull(),
+    todoId: integer("todo_id"),
+    kind: text("kind").notNull().default("fact"),
+    content: text("content").notNull(),
+    provenanceJson: text("provenance_json").notNull().default("{}"),
+    dedupeKey: text("dedupe_key").notNull(),
+    createdAt: text("created_at")
+      .notNull()
+      .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`),
+    updatedAt: text("updated_at")
+      .notNull()
+      .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`),
+    forgottenAt: text("forgotten_at"),
+  },
+  (table) => [
+    uniqueIndex("todo_assistant_memories_dedupe_idx").on(table.userKey, table.dedupeKey),
+    index("todo_assistant_memories_user_idx").on(table.userKey, table.updatedAt),
+    index("todo_assistant_memories_task_idx").on(table.userKey, table.todoId, table.updatedAt),
+    index("todo_assistant_memories_forgotten_idx").on(table.forgottenAt),
+  ],
+);

@@ -65,10 +65,10 @@ export async function appAccessResponse(
         { status: 403, headers: { "Cache-Control": "no-store" } },
       );
     }
-    if (url.pathname.startsWith("/api/assistant")) {
-      console.warn("[todo-auth] AI assistant rejected for bearer authentication", { path: url.pathname });
+    if (url.pathname.startsWith("/api/assistant") || url.pathname.startsWith("/api/talk")) {
+      console.warn("[todo-auth] signed-in AI workspace rejected for bearer authentication", { path: url.pathname });
       return Response.json(
-        { error: "The AI assistant is available only in the signed-in Dawar Todo interface." },
+        { error: "The AI assistant and Talk are available only in the signed-in Dawar Todo interface." },
         { status: 403, headers: { "Cache-Control": "no-store" } },
       );
     }

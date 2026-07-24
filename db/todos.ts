@@ -18,7 +18,7 @@ import { zonedLocalDateTimeToUtc } from "../lib/zoned-date-time";
 
 type StoredTodoStatus = "open" | "completed" | "archived";
 export type TodoStatus = "open" | "completed";
-export type BulkTodoAction = "complete" | "snooze" | "unsnooze" | "reproject" | "delete";
+export type BulkTodoAction = "complete" | "reopen" | "snooze" | "unsnooze" | "reproject" | "delete";
 export type SnoozePreset = QuickSnoozePreset | "8pm";
 export type ProjectDeleteMode = "reassign" | "delete";
 
@@ -121,7 +121,7 @@ type TodoSyncChangeRow = {
 };
 
 let initialization: Promise<void> | null = null;
-const CURRENT_SCHEMA_VERSION = "18";
+const CURRENT_SCHEMA_VERSION = "19";
 
 function database() {
   if (!env.DB) throw new Error("The todo database is unavailable.");
@@ -446,6 +446,70 @@ export async function ensureTodoDatabase() {
           created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
         )
       `),
+      db.prepare(`
+        CREATE TABLE IF NOT EXISTS todo_talk_workspaces (
+          user_key TEXT PRIMARY KEY NOT NULL,
+          active_session_id TEXT,
+          last_focused_todo_id INTEGER,
+          summary TEXT NOT NULL DEFAULT '',
+          updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+        )
+      `),
+      db.prepare(`
+        CREATE TABLE IF NOT EXISTS todo_talk_sessions (
+          id TEXT PRIMARY KEY NOT NULL,
+          user_key TEXT NOT NULL,
+          model TEXT NOT NULL,
+          voice TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'active',
+          last_activity_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+          started_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+          ended_at TEXT,
+          end_reason TEXT
+        )
+      `),
+      db.prepare(`
+        CREATE TABLE IF NOT EXISTS todo_talk_messages (
+          id TEXT PRIMARY KEY NOT NULL,
+          session_id TEXT NOT NULL,
+          user_key TEXT NOT NULL,
+          realtime_item_id TEXT NOT NULL,
+          role TEXT NOT NULL,
+          content TEXT NOT NULL,
+          focused_todo_id INTEGER,
+          metadata_json TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+        )
+      `),
+      db.prepare(`
+        CREATE TABLE IF NOT EXISTS todo_talk_tool_calls (
+          call_id TEXT PRIMARY KEY NOT NULL,
+          session_id TEXT NOT NULL,
+          user_key TEXT NOT NULL,
+          name TEXT NOT NULL,
+          arguments_json TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'running',
+          result_json TEXT,
+          undo_token TEXT,
+          created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+          completed_at TEXT
+        )
+      `),
+      db.prepare(`
+        CREATE TABLE IF NOT EXISTS todo_assistant_memories (
+          id TEXT PRIMARY KEY NOT NULL,
+          user_key TEXT NOT NULL,
+          scope TEXT NOT NULL,
+          todo_id INTEGER,
+          kind TEXT NOT NULL DEFAULT 'fact',
+          content TEXT NOT NULL,
+          provenance_json TEXT NOT NULL DEFAULT '{}',
+          dedupe_key TEXT NOT NULL,
+          created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+          updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+          forgotten_at TEXT
+        )
+      `),
     ]);
 
     const columns = await db.prepare("PRAGMA table_info(todos)").all<{ name: string }>();
@@ -510,6 +574,18 @@ export async function ensureTodoDatabase() {
       db.prepare("CREATE INDEX IF NOT EXISTS todo_assistant_threads_updated_idx ON todo_assistant_threads(updated_at)"),
       db.prepare("CREATE INDEX IF NOT EXISTS todo_assistant_messages_thread_idx ON todo_assistant_messages(user_key, todo_id, created_at)"),
       db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS todo_assistant_messages_client_idx ON todo_assistant_messages(user_key, client_id)"),
+      db.prepare("CREATE INDEX IF NOT EXISTS todo_talk_sessions_user_idx ON todo_talk_sessions(user_key, started_at)"),
+      db.prepare("CREATE INDEX IF NOT EXISTS todo_talk_sessions_status_idx ON todo_talk_sessions(status, last_activity_at)"),
+      db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS todo_talk_messages_realtime_idx ON todo_talk_messages(user_key, realtime_item_id)"),
+      db.prepare("CREATE INDEX IF NOT EXISTS todo_talk_messages_session_idx ON todo_talk_messages(session_id, created_at)"),
+      db.prepare("CREATE INDEX IF NOT EXISTS todo_talk_messages_user_idx ON todo_talk_messages(user_key, created_at)"),
+      db.prepare("CREATE INDEX IF NOT EXISTS todo_talk_messages_task_idx ON todo_talk_messages(focused_todo_id, created_at)"),
+      db.prepare("CREATE INDEX IF NOT EXISTS todo_talk_tool_calls_session_idx ON todo_talk_tool_calls(session_id, created_at)"),
+      db.prepare("CREATE INDEX IF NOT EXISTS todo_talk_tool_calls_user_idx ON todo_talk_tool_calls(user_key, created_at)"),
+      db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS todo_assistant_memories_dedupe_idx ON todo_assistant_memories(user_key, dedupe_key)"),
+      db.prepare("CREATE INDEX IF NOT EXISTS todo_assistant_memories_user_idx ON todo_assistant_memories(user_key, updated_at)"),
+      db.prepare("CREATE INDEX IF NOT EXISTS todo_assistant_memories_task_idx ON todo_assistant_memories(user_key, todo_id, updated_at)"),
+      db.prepare("CREATE INDEX IF NOT EXISTS todo_assistant_memories_forgotten_idx ON todo_assistant_memories(forgotten_at)"),
     ]);
 
     await db.batch([
@@ -1256,7 +1332,7 @@ export async function adjustSnoozedTodosToLocalDateTime(inputIds: number[], loca
 export async function bulkUpdateTodos(
   inputIds: number[],
   action: BulkTodoAction,
-  options: { project?: string | null } = {},
+  options: { project?: string | null; snoozedUntil?: string | null } = {},
 ) {
   await ensureTodoDatabase();
   const ids = normalizedIds(inputIds);
@@ -1283,11 +1359,17 @@ export async function bulkUpdateTodos(
 
   if (action === "complete") {
     sql = `UPDATE todos SET status = 'completed', completed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), snoozed_until = NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id IN (${inClause})`;
+  } else if (action === "reopen") {
+    sql = `UPDATE todos SET status = 'open', completed_at = NULL, snoozed_until = NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id IN (${inClause})`;
   } else if (action === "reproject") {
     sql = `UPDATE todos SET project = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id IN (${inClause})`;
     values = [project, ...ids];
   } else if (action === "snooze") {
-    const until = await nextSnoozeUntil();
+    const customUntil = options.snoozedUntil ? new Date(options.snoozedUntil) : null;
+    if (customUntil && (Number.isNaN(customUntil.valueOf()) || customUntil.valueOf() <= Date.now())) {
+      throw new Error("Choose a snooze time in the future.");
+    }
+    const until = customUntil?.toISOString() ?? await nextSnoozeUntil();
     sql = `UPDATE todos SET status = 'open', completed_at = NULL, snoozed_until = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id IN (${inClause})`;
     values = [until, ...ids];
   } else if (action === "unsnooze") {

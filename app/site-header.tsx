@@ -9,7 +9,7 @@ export function SiteHeader({
   onProjectClick,
   onKeyboardHelp,
 }: {
-  current: "todos" | "settings" | "assistant";
+  current: "todos" | "settings" | "assistant" | "talk";
   projectLabel?: string;
   onProjectClick?: () => void;
   onKeyboardHelp?: () => void;
@@ -20,6 +20,22 @@ export function SiteHeader({
       <span className="min-w-0 truncate text-[15px] font-semibold tracking-[-0.02em]">{projectLabel}</span>
       {onProjectClick && <ActionIcon name="next" className="h-3.5 w-3.5 shrink-0 rotate-90 text-[#7c847f]" />}
     </>
+  );
+  const talkLink = (
+    <Link
+      href="/talk"
+      aria-label="Talk to your realtime chief of staff"
+      aria-current={current === "talk" ? "page" : undefined}
+      title="Talk"
+      className={`inline-flex h-10 items-center gap-1.5 rounded-xl px-2.5 text-sm font-medium transition focus-visible:outline-2 focus-visible:outline-[#216e4e] ${
+        current === "talk"
+          ? "bg-[#eaf3ed] text-[#216e4e]"
+          : "text-[#69716c] hover:bg-[#eaf3ed] hover:text-[#216e4e]"
+      }`}
+    >
+      <ActionIcon name="mic" className="h-4.5 w-4.5" />
+      <span>Talk</span>
+    </Link>
   );
 
   return (
@@ -54,6 +70,7 @@ export function SiteHeader({
                   <ActionIcon name="keyboard" className="h-5 w-5" />
                 </button>
               )}
+              {talkLink}
               <Link
                 href="/assistant"
                 aria-label="AI task assistant"
@@ -73,6 +90,7 @@ export function SiteHeader({
             </>
           ) : current === "assistant" ? (
             <>
+              {talkLink}
               <Link
                 href="/assistant"
                 aria-label="AI task assistant"
@@ -86,8 +104,24 @@ export function SiteHeader({
                 Tasks
               </Link>
             </>
+          ) : current === "talk" ? (
+            <>
+              {talkLink}
+              <Link
+                href="/assistant"
+                aria-label="AI task assistant"
+                title="AI task assistant"
+                className="grid h-10 w-10 place-items-center rounded-xl text-[#69716c] transition hover:bg-[#eaf3ed] hover:text-[#216e4e] focus-visible:outline-2 focus-visible:outline-[#216e4e]"
+              >
+                <ActionIcon name="assistant" className="h-5 w-5" />
+              </Link>
+              <Link href="/" className="rounded-lg px-2.5 py-2 text-sm font-medium text-[#216e4e] transition hover:bg-[#eaf3ed] focus-visible:outline-2 focus-visible:outline-[#216e4e]">
+                Tasks
+              </Link>
+            </>
           ) : (
             <>
+              {talkLink}
               <Link
                 href="/assistant"
                 aria-label="AI task assistant"

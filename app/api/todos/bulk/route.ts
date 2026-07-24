@@ -1,7 +1,7 @@
 import { adjustSnoozedTodos, adjustSnoozedTodosToLocalDateTime, BulkTodoAction, bulkUpdateTodos, mergeTodos, type SnoozePreset } from "../../../../db/todos";
 import { isQuickSnoozePreset } from "../../../../lib/snooze-presets";
 
-const actions = new Set<BulkTodoAction>(["complete", "snooze", "unsnooze", "reproject", "delete"]);
+const actions = new Set<BulkTodoAction>(["complete", "reopen", "snooze", "unsnooze", "reproject", "delete"]);
 
 export async function POST(request: Request) {
   const startedAt = Date.now();

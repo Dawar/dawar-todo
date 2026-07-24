@@ -253,7 +253,7 @@ test("installs an offline-capable PWA with idempotent queued task syncing", asyn
   assert.match(serviceWorker, /request\.mode === "navigate"/);
   assert.match(serviceWorker, /url\.pathname\.startsWith\("\/api\/"\)/);
   assert.match(serviceWorker, /caches\.match/);
-  assert.match(serviceWorker, /dawar-todo-shell-v4/);
+  assert.match(serviceWorker, /dawar-todo-shell-v5/);
   assert.match(serviceWorker, /function shellAssetUrls/);
   assert.match(serviceWorker, /function discoveredAssetUrls/);
   assert.match(serviceWorker, /function cacheAssetGraph/);
