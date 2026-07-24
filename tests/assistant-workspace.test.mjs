@@ -12,6 +12,7 @@ test("ships a persistent source-aware task assistant workspace", async () => {
     assistantDb,
     runtime,
     workspace,
+    attachmentClient,
     offline,
     header,
     migration,
@@ -23,6 +24,7 @@ test("ships a persistent source-aware task assistant workspace", async () => {
     readFile(new URL("db/assistant.ts", root), "utf8"),
     readFile(new URL("lib/assistant-runtime.ts", root), "utf8"),
     readFile(new URL("app/assistant/workspace.tsx", root), "utf8"),
+    readFile(new URL("app/attachment-upload-client.ts", root), "utf8"),
     readFile(new URL("app/offline-store.ts", root), "utf8"),
     readFile(new URL("app/site-header.tsx", root), "utf8"),
     readFile(new URL("drizzle/0017_famous_praxagora.sql", root), "utf8"),
@@ -67,6 +69,12 @@ test("ships a persistent source-aware task assistant workspace", async () => {
   assert.match(workspace, /onPaste/);
   assert.match(workspace, /onDrop=\{drop\}/);
   assert.match(workspace, /Tasks can have up to 12 attachments/);
+  assert.match(workspace, /uploadTaskAttachment/);
+  assert.doesNotMatch(workspace, /form\.set\("file", staged\.file\)/);
+  assert.match(attachmentClient, /image variants prepared/);
+  assert.match(attachmentClient, /mode: "no-cors"/);
+  assert.match(attachmentClient, /method: "PATCH"/);
+  assert.match(attachmentClient, /discard\(prepared\.uploadId\)/);
   assert.match(offline, /assistant-queue/);
   assert.match(offline, /assistant-draft/);
   assert.match(header, /AI task assistant/);

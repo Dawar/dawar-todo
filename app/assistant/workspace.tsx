@@ -18,6 +18,7 @@ import {
   saveOfflineAssistantMessage,
   type OfflineAssistantAttachment,
 } from "../offline-store";
+import { uploadTaskAttachment } from "../attachment-upload-client";
 import { SiteHeader } from "../site-header";
 import type {
   AssistantMessage,
@@ -360,23 +361,26 @@ export function AssistantWorkspace() {
 
   const uploadFile = useCallback(async (taskId: number, staged: StagedFile) => {
     setStagedFiles((files) => files.map((file) => file.localId === staged.localId ? { ...file, status: "uploading", error: undefined } : file));
-    const form = new FormData();
-    form.set("file", staged.file);
-    form.set("kind", staged.kind);
-    form.set("mimeType", staged.file.type);
-    if (staged.durationMs) form.set("durationMs", String(staged.durationMs));
+    const endpoint = `/api/todos/${taskId}/attachments`;
     try {
-      const payload = await api<{ attachment: TodoAttachment }>(`/api/todos/${taskId}/attachments`, { method: "POST", body: form });
+      const attachment = await uploadTaskAttachment({
+        file: staged.file,
+        kind: staged.kind,
+        durationMs: staged.durationMs,
+        endpoint,
+        request: api,
+        discard: (uploadId) => api(`${endpoint}/${uploadId}?discard=1`, { method: "DELETE" }),
+      });
       setStagedFiles((files) => files.filter((file) => file.localId !== staged.localId));
-      setAttachments((current) => [...current, payload.attachment]);
-      setSelectedAttachmentIds((current) => [...new Set([...current, payload.attachment.id])]);
+      setAttachments((current) => [...current, attachment]);
+      setSelectedAttachmentIds((current) => [...new Set([...current, attachment.id])]);
       console.info("[todo-assistant-ui] attachment uploaded", {
         taskId,
-        attachmentId: payload.attachment.id,
-        kind: payload.attachment.kind,
-        bytes: payload.attachment.byteSize,
+        attachmentId: attachment.id,
+        kind: attachment.kind,
+        bytes: attachment.byteSize,
       });
-      return payload.attachment.id;
+      return attachment.id;
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : "Upload failed.";
       setStagedFiles((files) => files.map((file) => file.localId === staged.localId ? { ...file, status: "failed", error: message } : file));
@@ -415,13 +419,16 @@ export function AssistantWorkspace() {
         const uploadedIds = [...message.attachmentIds];
         for (const attachment of message.attachments) {
           const file = new File([attachment.blob], attachment.fileName, { type: attachment.mimeType });
-          const form = new FormData();
-          form.set("file", file);
-          form.set("kind", attachment.kind);
-          form.set("mimeType", attachment.mimeType);
-          if (attachment.durationMs) form.set("durationMs", String(attachment.durationMs));
-          const uploaded = await api<{ attachment: TodoAttachment }>(`/api/todos/${message.todoId}/attachments`, { method: "POST", body: form });
-          uploadedIds.push(uploaded.attachment.id);
+          const endpoint = `/api/todos/${message.todoId}/attachments`;
+          const uploaded = await uploadTaskAttachment({
+            file,
+            kind: attachment.kind,
+            durationMs: attachment.durationMs,
+            endpoint,
+            request: api,
+            discard: (uploadId) => api(`${endpoint}/${uploadId}?discard=1`, { method: "DELETE" }),
+          });
+          uploadedIds.push(uploaded.id);
         }
         await api("/api/assistant/messages", {
           method: "POST",
