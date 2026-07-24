@@ -37,12 +37,32 @@ export type OfflineCaptureDraft = {
   version: string;
 };
 
+export type OfflineAssistantAttachment = OfflineStoredAttachment;
+
+export type OfflineAssistantMessage = {
+  clientId: string;
+  todoId: number;
+  text: string;
+  attachmentIds: string[];
+  attachments: OfflineAssistantAttachment[];
+  createdAt: string;
+};
+
+export type OfflineAssistantDraft = {
+  key: string;
+  todoId: number;
+  text: string;
+  updatedAt: string;
+};
+
 const DATABASE_NAME = "dawar-todo-offline";
-const DATABASE_VERSION = 4;
+const DATABASE_VERSION = 5;
 const TODO_STORE = "pending-todos";
 const CACHE_STORE = "cached-state";
 const MUTATION_STORE = "pending-mutations";
 const CAPTURE_DRAFT_STORE = "capture-draft";
+const ASSISTANT_QUEUE_STORE = "assistant-queue";
+const ASSISTANT_DRAFT_STORE = "assistant-draft";
 
 export type CachedServerState<T> = {
   key: "server";
@@ -72,6 +92,13 @@ function openDatabase() {
       }
       if (!database.objectStoreNames.contains(CAPTURE_DRAFT_STORE)) {
         database.createObjectStore(CAPTURE_DRAFT_STORE, { keyPath: "key" });
+      }
+      if (!database.objectStoreNames.contains(ASSISTANT_QUEUE_STORE)) {
+        const store = database.createObjectStore(ASSISTANT_QUEUE_STORE, { keyPath: "clientId" });
+        store.createIndex("createdAt", "createdAt");
+      }
+      if (!database.objectStoreNames.contains(ASSISTANT_DRAFT_STORE)) {
+        database.createObjectStore(ASSISTANT_DRAFT_STORE, { keyPath: "key" });
       }
     };
     request.onsuccess = () => resolve(request.result);
@@ -193,4 +220,57 @@ export async function saveCachedServerState<T>(todos: T[], projects: string[], r
 export async function loadCachedServerState<T>() {
   const state = await runRequest<CachedServerState<T> | undefined>(CACHE_STORE, "readonly", (store) => store.get("server"));
   return state ?? null;
+}
+
+export async function saveOfflineAssistantMessage(record: OfflineAssistantMessage) {
+  try {
+    await runRequest(ASSISTANT_QUEUE_STORE, "readwrite", (store) => store.put(record));
+    console.info("[todo-offline] assistant message queued", {
+      clientId: record.clientId,
+      todoId: record.todoId,
+      textLength: record.text.length,
+      existingAttachmentCount: record.attachmentIds.length,
+      stagedAttachmentCount: record.attachments.length,
+      stagedBytes: record.attachments.reduce((total, attachment) => total + attachment.blob.size, 0),
+    });
+  } catch (error) {
+    console.error("[todo-offline] assistant message queue failed", {
+      clientId: record.clientId,
+      todoId: record.todoId,
+      error,
+    });
+    if (error instanceof DOMException && error.name === "QuotaExceededError") {
+      throw new Error("This device does not have enough offline storage for those assistant attachments.");
+    }
+    throw error;
+  }
+}
+
+export async function listOfflineAssistantMessages() {
+  const records = await runRequest<OfflineAssistantMessage[]>(ASSISTANT_QUEUE_STORE, "readonly", (store) => store.getAll());
+  return records.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+}
+
+export async function deleteOfflineAssistantMessage(clientId: string) {
+  await runRequest(ASSISTANT_QUEUE_STORE, "readwrite", (store) => store.delete(clientId));
+  console.info("[todo-offline] synchronized assistant message removed", { clientId });
+}
+
+export async function saveOfflineAssistantDraft(todoId: number, text: string) {
+  const draft: OfflineAssistantDraft = {
+    key: `task:${todoId}`,
+    todoId,
+    text,
+    updatedAt: new Date().toISOString(),
+  };
+  await runRequest(ASSISTANT_DRAFT_STORE, "readwrite", (store) => store.put(draft));
+}
+
+export async function loadOfflineAssistantDraft(todoId: number) {
+  const draft = await runRequest<OfflineAssistantDraft | undefined>(
+    ASSISTANT_DRAFT_STORE,
+    "readonly",
+    (store) => store.get(`task:${todoId}`),
+  );
+  return draft ?? null;
 }

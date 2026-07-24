@@ -1,0 +1,1 @@
+ALTER TABLE `todo_assistant_threads` ADD `draft_attachment_ids_json` text DEFAULT '[]' NOT NULL;

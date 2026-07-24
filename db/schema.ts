@@ -181,3 +181,61 @@ export const todoSyncChanges = sqliteTable(
     index("todo_sync_changes_entity_idx").on(table.entityType, table.entityKey, table.revision),
   ],
 );
+
+export const todoAssistantWorkspaces = sqliteTable("todo_assistant_workspaces", {
+  userKey: text("user_key").primaryKey(),
+  selectedTodoId: integer("selected_todo_id"),
+  navigatorView: text("navigator_view").notNull().default("open"),
+  updatedAt: text("updated_at")
+    .notNull()
+    .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`),
+});
+
+export const todoAssistantThreads = sqliteTable(
+  "todo_assistant_threads",
+  {
+    userKey: text("user_key").notNull(),
+    todoId: integer("todo_id").notNull(),
+    paused: integer("paused", { mode: "boolean" }).notNull().default(false),
+    draftText: text("draft_text").notNull().default(""),
+    draftAttachmentIdsJson: text("draft_attachment_ids_json").notNull().default("[]"),
+    currentQuestionJson: text("current_question_json"),
+    skippedQuestionKeysJson: text("skipped_question_keys_json").notNull().default("[]"),
+    understandingJson: text("understanding_json"),
+    createdAt: text("created_at")
+      .notNull()
+      .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`),
+    updatedAt: text("updated_at")
+      .notNull()
+      .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`),
+  },
+  (table) => [
+    primaryKey({ columns: [table.userKey, table.todoId] }),
+    index("todo_assistant_threads_todo_idx").on(table.todoId),
+    index("todo_assistant_threads_updated_idx").on(table.updatedAt),
+  ],
+);
+
+export const todoAssistantMessages = sqliteTable(
+  "todo_assistant_messages",
+  {
+    id: text("id").primaryKey(),
+    userKey: text("user_key").notNull(),
+    todoId: integer("todo_id").notNull(),
+    role: text("role").notNull(),
+    kind: text("kind").notNull().default("message"),
+    content: text("content").notNull(),
+    questionJson: text("question_json"),
+    proposalJson: text("proposal_json"),
+    sourcesJson: text("sources_json"),
+    attachmentIdsJson: text("attachment_ids_json").notNull().default("[]"),
+    clientId: text("client_id"),
+    createdAt: text("created_at")
+      .notNull()
+      .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`),
+  },
+  (table) => [
+    index("todo_assistant_messages_thread_idx").on(table.userKey, table.todoId, table.createdAt),
+    uniqueIndex("todo_assistant_messages_client_idx").on(table.userKey, table.clientId),
+  ],
+);

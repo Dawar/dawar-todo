@@ -121,7 +121,7 @@ type TodoSyncChangeRow = {
 };
 
 let initialization: Promise<void> | null = null;
-const CURRENT_SCHEMA_VERSION = "16";
+const CURRENT_SCHEMA_VERSION = "18";
 
 function database() {
   if (!env.DB) throw new Error("The todo database is unavailable.");
@@ -407,6 +407,45 @@ export async function ensureTodoDatabase() {
           updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
         )
       `),
+      db.prepare(`
+        CREATE TABLE IF NOT EXISTS todo_assistant_workspaces (
+          user_key TEXT PRIMARY KEY NOT NULL,
+          selected_todo_id INTEGER,
+          navigator_view TEXT NOT NULL DEFAULT 'open',
+          updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+        )
+      `),
+      db.prepare(`
+        CREATE TABLE IF NOT EXISTS todo_assistant_threads (
+          user_key TEXT NOT NULL,
+          todo_id INTEGER NOT NULL,
+          paused INTEGER NOT NULL DEFAULT 0,
+          draft_text TEXT NOT NULL DEFAULT '',
+          draft_attachment_ids_json TEXT NOT NULL DEFAULT '[]',
+          current_question_json TEXT,
+          skipped_question_keys_json TEXT NOT NULL DEFAULT '[]',
+          understanding_json TEXT,
+          created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+          updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+          PRIMARY KEY (user_key, todo_id)
+        )
+      `),
+      db.prepare(`
+        CREATE TABLE IF NOT EXISTS todo_assistant_messages (
+          id TEXT PRIMARY KEY NOT NULL,
+          user_key TEXT NOT NULL,
+          todo_id INTEGER NOT NULL,
+          role TEXT NOT NULL,
+          kind TEXT NOT NULL DEFAULT 'message',
+          content TEXT NOT NULL,
+          question_json TEXT,
+          proposal_json TEXT,
+          sources_json TEXT,
+          attachment_ids_json TEXT NOT NULL DEFAULT '[]',
+          client_id TEXT,
+          created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+        )
+      `),
     ]);
 
     const columns = await db.prepare("PRAGMA table_info(todos)").all<{ name: string }>();
@@ -467,6 +506,10 @@ export async function ensureTodoDatabase() {
       db.prepare("CREATE INDEX IF NOT EXISTS todo_attachments_draft_token_idx ON todo_attachments(draft_token)"),
       db.prepare("CREATE INDEX IF NOT EXISTS todo_attachments_expires_at_idx ON todo_attachments(expires_at)"),
       db.prepare("CREATE INDEX IF NOT EXISTS todo_attachments_deleted_at_idx ON todo_attachments(deleted_at)"),
+      db.prepare("CREATE INDEX IF NOT EXISTS todo_assistant_threads_todo_idx ON todo_assistant_threads(todo_id)"),
+      db.prepare("CREATE INDEX IF NOT EXISTS todo_assistant_threads_updated_idx ON todo_assistant_threads(updated_at)"),
+      db.prepare("CREATE INDEX IF NOT EXISTS todo_assistant_messages_thread_idx ON todo_assistant_messages(user_key, todo_id, created_at)"),
+      db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS todo_assistant_messages_client_idx ON todo_assistant_messages(user_key, client_id)"),
     ]);
 
     await db.batch([

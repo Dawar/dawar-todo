@@ -119,7 +119,7 @@ test("ships automatic saving, queued offline edits, incremental polling, and con
   assert.doesNotMatch(page, /Promise\.all\(\[\s*request<\{ todos: Todo\[\] \}>\("\/api\/todos"/);
   assert.match(page, /saveOfflineTodoMutation/);
   assert.match(page, /listOfflineTodoMutations/);
-  assert.match(offlineStore, /DATABASE_VERSION = 4/);
+  assert.match(offlineStore, /DATABASE_VERSION = 5/);
   assert.match(offlineStore, /CAPTURE_DRAFT_STORE = "capture-draft"/);
   assert.match(page, /updateCaptureTitle\(event\.target\.value, "typing"\)/);
   assert.match(page, /updateEditDraftField/);
@@ -129,7 +129,7 @@ test("ships automatic saving, queued offline edits, incremental polling, and con
   assert.match(database, /entity_type === "capture_draft"/);
   assert.match(database, /todo_sync_capture_draft_insert/);
   assert.match(database, /todo_sync_capture_draft_update/);
-  assert.match(database, /CURRENT_SCHEMA_VERSION = "16"/);
+  assert.match(database, /CURRENT_SCHEMA_VERSION = "18"/);
   assert.match(captureDraftRoute, /updateTodoCaptureDraft/);
   assert.match(captureDraftRoute, /Cache-Control/);
   assert.match(offlineStore, /pending-mutations/);

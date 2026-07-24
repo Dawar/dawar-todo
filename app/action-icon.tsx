@@ -33,6 +33,7 @@ import {
   Save,
   Search,
   Settings2,
+  Sparkles,
   Square,
   SlidersHorizontal,
   Trash2,
@@ -72,6 +73,7 @@ export type ActionIconName =
   | "save"
   | "search"
   | "settings"
+  | "assistant"
   | "stop"
   | "select"
   | "snooze"
@@ -114,6 +116,7 @@ const icons: Record<ActionIconName, ComponentType<LucideProps>> = {
   save: Save,
   search: Search,
   settings: Settings2,
+  assistant: Sparkles,
   stop: Square,
   select: ListChecks,
   snooze: Clock3,

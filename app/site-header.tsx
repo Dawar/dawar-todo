@@ -9,7 +9,7 @@ export function SiteHeader({
   onProjectClick,
   onKeyboardHelp,
 }: {
-  current: "todos" | "settings";
+  current: "todos" | "settings" | "assistant";
   projectLabel?: string;
   onProjectClick?: () => void;
   onKeyboardHelp?: () => void;
@@ -55,6 +55,14 @@ export function SiteHeader({
                 </button>
               )}
               <Link
+                href="/assistant"
+                aria-label="AI task assistant"
+                title="AI task assistant"
+                className="grid h-10 w-10 place-items-center rounded-xl text-[#69716c] transition hover:bg-[#eaf3ed] hover:text-[#216e4e] focus-visible:outline-2 focus-visible:outline-[#216e4e]"
+              >
+                <ActionIcon name="assistant" className="h-5 w-5" />
+              </Link>
+              <Link
                 href="/settings"
                 aria-label="Settings"
                 title="Settings"
@@ -63,10 +71,35 @@ export function SiteHeader({
                 <ActionIcon name="settings" className="h-5 w-5" />
               </Link>
             </>
+          ) : current === "assistant" ? (
+            <>
+              <Link
+                href="/assistant"
+                aria-label="AI task assistant"
+                aria-current="page"
+                title="AI task assistant"
+                className="grid h-10 w-10 place-items-center rounded-xl bg-[#eaf3ed] text-[#216e4e] focus-visible:outline-2 focus-visible:outline-[#216e4e]"
+              >
+                <ActionIcon name="assistant" className="h-5 w-5" />
+              </Link>
+              <Link href="/" className="rounded-lg px-3 py-2 text-sm font-medium text-[#216e4e] transition hover:bg-[#eaf3ed] focus-visible:outline-2 focus-visible:outline-[#216e4e]">
+                Tasks
+              </Link>
+            </>
           ) : (
-            <Link href="/" className="rounded-lg px-3 py-2 text-sm font-medium text-[#216e4e] transition hover:bg-[#eaf3ed] focus-visible:outline-2 focus-visible:outline-[#216e4e]">
-              Back to tasks
-            </Link>
+            <>
+              <Link
+                href="/assistant"
+                aria-label="AI task assistant"
+                title="AI task assistant"
+                className="grid h-10 w-10 place-items-center rounded-xl text-[#69716c] transition hover:bg-[#eaf3ed] hover:text-[#216e4e] focus-visible:outline-2 focus-visible:outline-[#216e4e]"
+              >
+                <ActionIcon name="assistant" className="h-5 w-5" />
+              </Link>
+              <Link href="/" className="rounded-lg px-3 py-2 text-sm font-medium text-[#216e4e] transition hover:bg-[#eaf3ed] focus-visible:outline-2 focus-visible:outline-[#216e4e]">
+                Back to tasks
+              </Link>
+            </>
           )}
         </div>
       </div>
