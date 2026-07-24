@@ -59,6 +59,17 @@ test("ships the signed-in WebRTC Talk chief-of-staff workspace", async () => {
   assert.match(runtime, /Be terse, direct, and information-dense/);
   assert.match(runtime, /Skip greetings, courtesies/);
   assert.match(runtime, /Action acknowledgements should usually be one to five words/);
+  assert.match(runtime, /Own the assistant role completely/);
+  assert.match(runtime, /Act first and acknowledge only after tools confirm/);
+  assert.match(runtime, /Never ask whether the user wants you to perform an obvious task action/);
+  assert.match(runtime, /Undo is a safety net, not a permission gate/);
+  assert.match(runtime, /done, finished, handled, sent, resolved/);
+  assert.match(runtime, /treat that as a snooze instruction/);
+  assert.match(runtime, /if it is a new reminder, create the task and then snooze it/);
+  assert.match(runtime, /capture it as a task without asking/);
+  assert.match(runtime, /write it into the relevant task or memory before moving on/);
+  assert.match(runtime, /correct the arguments and retry once/);
+  assert.match(runtime, /do not ask for confirmation when intent is clear/);
   assert.match(runtime, /\/v1\/realtime\/client_secrets/);
   assert.match(runtime, /OpenAI-Safety-Identifier/);
   assert.match(runtime, /prepare_destructive_action/);
