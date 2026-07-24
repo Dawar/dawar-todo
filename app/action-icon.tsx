@@ -25,6 +25,7 @@ import {
   Mic,
   MicOff,
   Paperclip,
+  PhoneCall,
   Pin,
   PinOff,
   Plus,
@@ -69,6 +70,7 @@ export type ActionIconName =
   | "mic-off"
   | "next"
   | "open"
+  | "phone"
   | "restore"
   | "retry"
   | "repeat"
@@ -113,6 +115,7 @@ const icons: Record<ActionIconName, ComponentType<LucideProps>> = {
   "mic-off": MicOff,
   next: ChevronRight,
   open: RotateCcw,
+  phone: PhoneCall,
   restore: RotateCcw,
   retry: RefreshCw,
   repeat: Repeat2,

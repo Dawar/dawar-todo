@@ -41,6 +41,17 @@ type ApiToken = {
   expiresAt: string | null;
 };
 
+type TalkPhoneProfile = {
+  configured: boolean;
+  webhookUrl: string | null;
+  providerConfiguredAt: string | null;
+  pinUpdatedAt: string | null;
+  lastAuthenticatedAt: string | null;
+  updatedAt: string | null;
+  providerReady: boolean;
+  phoneNumber: string;
+};
+
 type BadgePermission = NotificationPermission | "not-required" | "unavailable";
 type BadgeTodo = { status: "open" | "completed"; snoozedUntil: string | null };
 type PushState = "checking" | "unsupported" | "unconfigured" | "blocked" | "disabled" | "enabled";
@@ -115,6 +126,11 @@ export default function SettingsPage() {
   const [pushState, setPushState] = useState<PushState>("checking");
   const [pushPublicKey, setPushPublicKey] = useState("");
   const [updatingPush, setUpdatingPush] = useState(false);
+  const [talkPhoneProfile, setTalkPhoneProfile] = useState<TalkPhoneProfile | null>(null);
+  const [talkPhonePin, setTalkPhonePin] = useState("");
+  const [talkPhoneLoading, setTalkPhoneLoading] = useState(true);
+  const [talkPhoneSaving, setTalkPhoneSaving] = useState(false);
+  const [talkPhoneMessage, setTalkPhoneMessage] = useState("");
 
   useEffect(() => {
     request<{ settings: Settings }>("/api/settings")
@@ -143,6 +159,18 @@ export default function SettingsPage() {
       })
       .catch((error: Error) => setShareNotice({ tone: "error", text: error.message }))
       .finally(() => setTokensLoading(false));
+
+    request<{ profile: TalkPhoneProfile }>("/api/talk/phone/profile", { cache: "no-store" })
+      .then(({ profile }) => {
+        setTalkPhoneProfile(profile);
+        console.info("[todo-talk-phone-ui] phone profile loaded", {
+          configured: profile.configured,
+          providerReady: profile.providerReady,
+          providerConfigured: Boolean(profile.providerConfiguredAt),
+        });
+      })
+      .catch((error: Error) => setTalkPhoneMessage(error.message))
+      .finally(() => setTalkPhoneLoading(false));
 
     const badgeCheck = window.setTimeout(() => {
       const supportsBadge = supportsNativeAppBadge();
@@ -486,6 +514,71 @@ export default function SettingsPage() {
     }
   }
 
+  async function saveTalkPhonePin(event: FormEvent) {
+    event.preventDefault();
+    if (!/^\d{6,8}$/.test(talkPhonePin)) {
+      setTalkPhoneMessage("Choose a 6 to 8 digit PIN.");
+      return;
+    }
+    setTalkPhoneSaving(true);
+    setTalkPhoneMessage("");
+    try {
+      const { profile } = await request<{ profile: TalkPhoneProfile }>("/api/talk/phone/profile", {
+        method: "PUT",
+        body: JSON.stringify({ pin: talkPhonePin }),
+      });
+      setTalkPhoneProfile(profile);
+      setTalkPhonePin("");
+      setTalkPhoneMessage(`Phone access enabled. Call ${profile.phoneNumber}.`);
+      console.info("[todo-talk-phone-ui] phone PIN saved and provider connected", {
+        providerConfigured: Boolean(profile.providerConfiguredAt),
+      });
+    } catch (error) {
+      setTalkPhoneMessage(error instanceof Error ? error.message : "Phone access could not be configured.");
+      console.error("[todo-talk-phone-ui] phone setup failed", { error });
+    } finally {
+      setTalkPhoneSaving(false);
+    }
+  }
+
+  async function reconnectTalkPhone() {
+    setTalkPhoneSaving(true);
+    setTalkPhoneMessage("");
+    try {
+      const { profile } = await request<{ profile: TalkPhoneProfile }>("/api/talk/phone/profile", {
+        method: "POST",
+      });
+      setTalkPhoneProfile(profile);
+      setTalkPhoneMessage("Twilio number connected.");
+      console.info("[todo-talk-phone-ui] provider webhook refreshed");
+    } catch (error) {
+      setTalkPhoneMessage(error instanceof Error ? error.message : "The Twilio number could not be connected.");
+      console.error("[todo-talk-phone-ui] provider refresh failed", { error });
+    } finally {
+      setTalkPhoneSaving(false);
+    }
+  }
+
+  async function disableTalkPhone() {
+    if (!window.confirm("Disable PIN access to the Talk phone number?")) return;
+    setTalkPhoneSaving(true);
+    setTalkPhoneMessage("");
+    try {
+      const { profile } = await request<{ profile: TalkPhoneProfile }>("/api/talk/phone/profile", {
+        method: "DELETE",
+      });
+      setTalkPhoneProfile(profile);
+      setTalkPhonePin("");
+      setTalkPhoneMessage("Phone access disabled.");
+      console.info("[todo-talk-phone-ui] phone access disabled");
+    } catch (error) {
+      setTalkPhoneMessage(error instanceof Error ? error.message : "Phone access could not be disabled.");
+      console.error("[todo-talk-phone-ui] phone disable failed", { error });
+    } finally {
+      setTalkPhoneSaving(false);
+    }
+  }
+
   return (
     <main className="min-h-screen bg-[#f6f7f5] text-[#1d211f]">
       <SiteHeader current="settings" />
@@ -562,6 +655,88 @@ export default function SettingsPage() {
             {saved && <span role="status" className="text-sm font-medium text-[#216e4e]">Saved</span>}
           </div>
         </form>
+
+        <section aria-labelledby="talk-phone-title" className="mt-6 rounded-2xl border border-black/[0.07] bg-white p-5 shadow-[0_10px_35px_rgba(30,45,36,0.06)] sm:p-7">
+          <div className="flex items-start gap-3">
+            <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-[#eaf3ed] text-[#216e4e]"><ActionIcon name="phone" className="h-5 w-5" /></span>
+            <div className="min-w-0 flex-1">
+              <h2 id="talk-phone-title" className="text-lg font-semibold tracking-[-0.02em] text-[#202522]">Call Talk</h2>
+              <p className="mt-1 text-sm leading-6 text-[#69716c]">Call the same realtime chief-of-staff assistant from any phone. Enter your private PIN before the assistant can read or change tasks.</p>
+            </div>
+          </div>
+
+          {talkPhoneLoading ? (
+            <div role="status" aria-label="Loading phone access" className="mt-5 h-28 animate-pulse rounded-xl bg-[#f1f3f0]" />
+          ) : (
+            <>
+              <div className="mt-4 rounded-xl bg-[#f1f6f3] px-4 py-3 text-sm leading-6 text-[#4f6257]">
+                {!talkPhoneProfile?.providerReady
+                  ? "Twilio credentials are not configured on this site."
+                  : talkPhoneProfile.configured
+                    ? <>Enabled. Call <a className="font-semibold text-[#216e4e] underline decoration-[#216e4e]/30 underline-offset-2" href={`tel:${talkPhoneProfile.phoneNumber}`}>{talkPhoneProfile.phoneNumber}</a> and enter your PIN. Starting a phone call takes over any active browser Talk session.</>
+                    : "Set a 6 to 8 digit PIN to connect the configured Twilio number."}
+              </div>
+
+              <form onSubmit={saveTalkPhonePin} className="mt-5 flex min-w-0 flex-col gap-2 sm:flex-row">
+                <label className="min-w-0 flex-1">
+                  <span className="sr-only">{talkPhoneProfile?.configured ? "New phone PIN" : "Phone PIN"}</span>
+                  <input
+                    value={talkPhonePin}
+                    onChange={(event) => setTalkPhonePin(event.target.value.replace(/\D/g, "").slice(0, 8))}
+                    type="password"
+                    inputMode="numeric"
+                    pattern="[0-9]{6,8}"
+                    minLength={6}
+                    maxLength={8}
+                    autoComplete="new-password"
+                    placeholder={talkPhoneProfile?.configured ? "New 6–8 digit PIN" : "6–8 digit PIN"}
+                    className="h-11 w-full min-w-0 rounded-xl border border-black/[0.1] px-3 text-[16px] outline-none focus:border-[#216e4e]/50 focus:ring-3 focus:ring-[#216e4e]/10"
+                  />
+                </label>
+                <button
+                  type="submit"
+                  disabled={talkPhoneSaving || !talkPhoneProfile?.providerReady || !/^\d{6,8}$/.test(talkPhonePin)}
+                  className="inline-flex h-11 shrink-0 items-center justify-center gap-2 rounded-xl bg-[#216e4e] px-4 text-sm font-semibold text-white hover:bg-[#195d41] disabled:opacity-50"
+                >
+                  <ActionIcon name="phone" />
+                  {talkPhoneSaving ? "Connecting…" : talkPhoneProfile?.configured ? "Change PIN" : "Enable phone access"}
+                </button>
+              </form>
+
+              {talkPhoneProfile?.configured && (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void reconnectTalkPhone()}
+                    disabled={talkPhoneSaving}
+                    className={compactOutlineActionClass}
+                  >
+                    <ActionIcon name="retry" />
+                    Reconnect number
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void disableTalkPhone()}
+                    disabled={talkPhoneSaving}
+                    className="inline-flex h-10 appearance-none items-center gap-2 rounded-xl border-0 bg-white px-3.5 text-sm font-semibold text-red-700 ring-1 ring-black/[0.06] transition hover:bg-red-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-700 disabled:opacity-50"
+                  >
+                    <ActionIcon name="delete" />
+                    Disable
+                  </button>
+                </div>
+              )}
+
+              {talkPhoneProfile?.lastAuthenticatedAt && (
+                <p className="mt-3 text-xs leading-5 text-[#8a918d]">
+                  Last authenticated call {new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(talkPhoneProfile.lastAuthenticatedAt))}
+                </p>
+              )}
+              {talkPhoneMessage && (
+                <p role="status" className={`mt-3 text-sm ${/could not|not configured|choose/i.test(talkPhoneMessage) ? "text-red-700" : "text-[#216e4e]"}`}>{talkPhoneMessage}</p>
+              )}
+            </>
+          )}
+        </section>
 
         <section aria-labelledby="push-notifications-title" className="mt-6 rounded-2xl border border-black/[0.07] bg-white p-5 shadow-[0_10px_35px_rgba(30,45,36,0.06)] sm:p-7">
           <div className="flex items-start gap-3">

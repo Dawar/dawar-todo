@@ -3,6 +3,7 @@ import type { SharedAssistantContext } from "./assistant-context";
 
 type TalkEnvironment = {
   OPENAI_API_KEY?: string;
+  OPENAI_PROJECT_ID?: string;
   OPENAI_REALTIME_MODEL?: string;
   OPENAI_REALTIME_VOICE?: string;
 };
@@ -356,6 +357,9 @@ export async function mintRealtimeClientSecret(input: {
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
       "OpenAI-Safety-Identifier": input.safetyIdentifier,
+      ...(current.OPENAI_PROJECT_ID?.trim()
+        ? { "OpenAI-Project": current.OPENAI_PROJECT_ID.trim() }
+        : {}),
     },
     body: JSON.stringify({
       session: {

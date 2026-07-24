@@ -5,6 +5,7 @@ import { appAccessResponse } from "./access";
 import { processRecurringTodos } from "./recurring";
 import { ensureTodoDatabase, wakeExpiredSnoozedTodosInDatabase } from "../db/todos";
 import { dispatchTodoPushNotifications } from "../db/push-notifications";
+import { handleTalkPhoneStream } from "./talk-phone-stream";
 
 interface Env {
   ASSETS: Fetcher;
@@ -24,6 +25,13 @@ interface Env {
   VAPID_SUBJECT?: string;
   VAPID_PUBLIC_KEY?: string;
   VAPID_PRIVATE_KEY?: string;
+  OPENAI_API_KEY?: string;
+  OPENAI_PROJECT_ID?: string;
+  OPENAI_REALTIME_MODEL?: string;
+  OPENAI_REALTIME_VOICE?: string;
+  TWILIO_ACCOUNT_SID?: string;
+  TWILIO_AUTH_TOKEN?: string;
+  TWILIO_PHONE_NUMBER?: string;
 }
 
 interface ExecutionContext {
@@ -40,6 +48,9 @@ interface ExecutionContext {
 const worker = {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
+
+    const phoneStreamResponse = await handleTalkPhoneStream(request, env);
+    if (phoneStreamResponse) return phoneStreamResponse;
 
     const accessResponse = await appAccessResponse(request, env, ctx);
     if (accessResponse) return accessResponse;

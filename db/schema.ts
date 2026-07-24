@@ -363,6 +363,52 @@ export const todoTalkToolCalls = sqliteTable(
   ],
 );
 
+export const todoTalkPhoneProfiles = sqliteTable("todo_talk_phone_profiles", {
+  userKey: text("user_key").primaryKey(),
+  pinHash: text("pin_hash").notNull(),
+  pinSalt: text("pin_salt").notNull(),
+  pinIterations: integer("pin_iterations").notNull(),
+  enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+  webhookUrl: text("webhook_url"),
+  providerConfiguredAt: text("provider_configured_at"),
+  pinUpdatedAt: text("pin_updated_at")
+    .notNull()
+    .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`),
+  lastAuthenticatedAt: text("last_authenticated_at"),
+  updatedAt: text("updated_at")
+    .notNull()
+    .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`),
+});
+
+export const todoTalkPhoneCalls = sqliteTable(
+  "todo_talk_phone_calls",
+  {
+    callSid: text("call_sid").primaryKey(),
+    userKey: text("user_key"),
+    fromNumberHash: text("from_number_hash").notNull(),
+    toNumber: text("to_number").notNull(),
+    status: text("status").notNull().default("pin_pending"),
+    attemptCount: integer("attempt_count").notNull().default(0),
+    streamTokenHash: text("stream_token_hash"),
+    streamTokenExpiresAt: text("stream_token_expires_at"),
+    streamTokenConsumedAt: text("stream_token_consumed_at"),
+    talkSessionId: text("talk_session_id"),
+    startedAt: text("started_at")
+      .notNull()
+      .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`),
+    authenticatedAt: text("authenticated_at"),
+    connectedAt: text("connected_at"),
+    endedAt: text("ended_at"),
+    failureReason: text("failure_reason"),
+  },
+  (table) => [
+    index("todo_talk_phone_calls_user_idx").on(table.userKey, table.startedAt),
+    index("todo_talk_phone_calls_source_idx").on(table.fromNumberHash, table.startedAt),
+    index("todo_talk_phone_calls_status_idx").on(table.status, table.startedAt),
+    index("todo_talk_phone_calls_stream_idx").on(table.streamTokenHash),
+  ],
+);
+
 export const todoAssistantMemories = sqliteTable(
   "todo_assistant_memories",
   {

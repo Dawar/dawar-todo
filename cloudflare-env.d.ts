@@ -9,5 +9,12 @@ declare namespace Cloudflare {
     VAPID_SUBJECT?: string;
     VAPID_PUBLIC_KEY?: string;
     VAPID_PRIVATE_KEY?: string;
+    OPENAI_API_KEY?: string;
+    OPENAI_PROJECT_ID?: string;
+    OPENAI_REALTIME_MODEL?: string;
+    OPENAI_REALTIME_VOICE?: string;
+    TWILIO_ACCOUNT_SID?: string;
+    TWILIO_AUTH_TOKEN?: string;
+    TWILIO_PHONE_NUMBER?: string;
   }
 }

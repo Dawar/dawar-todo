@@ -38,7 +38,7 @@ test("ships the signed-in WebRTC Talk chief-of-staff workspace", async () => {
   assert.match(schema, /todoTalkMessages/);
   assert.match(schema, /todoTalkToolCalls/);
   assert.match(schema, /todoAssistantMemories/);
-  assert.match(database, /CURRENT_SCHEMA_VERSION = "20"/);
+  assert.match(database, /CURRENT_SCHEMA_VERSION = "21"/);
   assert.match(database, /CREATE TABLE IF NOT EXISTS todo_talk_workspaces/);
   assert.match(database, /CREATE TABLE IF NOT EXISTS todo_assistant_memories/);
   assert.match(migration, /CREATE TABLE `todo_talk_sessions`/);
@@ -72,6 +72,7 @@ test("ships the signed-in WebRTC Talk chief-of-staff workspace", async () => {
   assert.match(runtime, /do not ask for confirmation when intent is clear/);
   assert.match(runtime, /\/v1\/realtime\/client_secrets/);
   assert.match(runtime, /OpenAI-Safety-Identifier/);
+  assert.match(runtime, /OpenAI-Project/);
   assert.match(runtime, /prepare_destructive_action/);
   assert.match(runtime, /execute_destructive_action/);
   assert.match(runtime, /Never send messages, submit forms, purchase, book, publish/);

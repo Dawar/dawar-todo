@@ -122,7 +122,7 @@ type TodoSyncChangeRow = {
 };
 
 let initialization: Promise<void> | null = null;
-const CURRENT_SCHEMA_VERSION = "20";
+const CURRENT_SCHEMA_VERSION = "21";
 
 function database() {
   if (!env.DB) throw new Error("The todo database is unavailable.");
@@ -523,6 +523,39 @@ export async function ensureTodoDatabase() {
         )
       `),
       db.prepare(`
+        CREATE TABLE IF NOT EXISTS todo_talk_phone_profiles (
+          user_key TEXT PRIMARY KEY NOT NULL,
+          pin_hash TEXT NOT NULL,
+          pin_salt TEXT NOT NULL,
+          pin_iterations INTEGER NOT NULL,
+          enabled INTEGER NOT NULL DEFAULT 1,
+          webhook_url TEXT,
+          provider_configured_at TEXT,
+          pin_updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+          last_authenticated_at TEXT,
+          updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+        )
+      `),
+      db.prepare(`
+        CREATE TABLE IF NOT EXISTS todo_talk_phone_calls (
+          call_sid TEXT PRIMARY KEY NOT NULL,
+          user_key TEXT,
+          from_number_hash TEXT NOT NULL,
+          to_number TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'pin_pending',
+          attempt_count INTEGER NOT NULL DEFAULT 0,
+          stream_token_hash TEXT,
+          stream_token_expires_at TEXT,
+          stream_token_consumed_at TEXT,
+          talk_session_id TEXT,
+          started_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+          authenticated_at TEXT,
+          connected_at TEXT,
+          ended_at TEXT,
+          failure_reason TEXT
+        )
+      `),
+      db.prepare(`
         CREATE TABLE IF NOT EXISTS todo_assistant_memories (
           id TEXT PRIMARY KEY NOT NULL,
           user_key TEXT NOT NULL,
@@ -614,6 +647,10 @@ export async function ensureTodoDatabase() {
       db.prepare("CREATE INDEX IF NOT EXISTS todo_talk_messages_task_idx ON todo_talk_messages(focused_todo_id, created_at)"),
       db.prepare("CREATE INDEX IF NOT EXISTS todo_talk_tool_calls_session_idx ON todo_talk_tool_calls(session_id, created_at)"),
       db.prepare("CREATE INDEX IF NOT EXISTS todo_talk_tool_calls_user_idx ON todo_talk_tool_calls(user_key, created_at)"),
+      db.prepare("CREATE INDEX IF NOT EXISTS todo_talk_phone_calls_user_idx ON todo_talk_phone_calls(user_key, started_at)"),
+      db.prepare("CREATE INDEX IF NOT EXISTS todo_talk_phone_calls_source_idx ON todo_talk_phone_calls(from_number_hash, started_at)"),
+      db.prepare("CREATE INDEX IF NOT EXISTS todo_talk_phone_calls_status_idx ON todo_talk_phone_calls(status, started_at)"),
+      db.prepare("CREATE INDEX IF NOT EXISTS todo_talk_phone_calls_stream_idx ON todo_talk_phone_calls(stream_token_hash)"),
       db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS todo_assistant_memories_dedupe_idx ON todo_assistant_memories(user_key, dedupe_key)"),
       db.prepare("CREATE INDEX IF NOT EXISTS todo_assistant_memories_user_idx ON todo_assistant_memories(user_key, updated_at)"),
       db.prepare("CREATE INDEX IF NOT EXISTS todo_assistant_memories_task_idx ON todo_assistant_memories(user_key, todo_id, updated_at)"),
