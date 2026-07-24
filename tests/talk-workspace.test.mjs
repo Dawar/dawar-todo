@@ -56,6 +56,9 @@ test("ships the signed-in WebRTC Talk chief-of-staff workspace", async () => {
   assert.match(runtime, /semantic_vad/);
   assert.match(runtime, /interrupt_response: true/);
   assert.match(runtime, /reasoning: \{ effort: "low" \}/);
+  assert.match(runtime, /Be terse, direct, and information-dense/);
+  assert.match(runtime, /Skip greetings, courtesies/);
+  assert.match(runtime, /Action acknowledgements should usually be one to five words/);
   assert.match(runtime, /\/v1\/realtime\/client_secrets/);
   assert.match(runtime, /OpenAI-Safety-Identifier/);
   assert.match(runtime, /prepare_destructive_action/);
@@ -87,9 +90,15 @@ test("ships the signed-in WebRTC Talk chief-of-staff workspace", async () => {
   assert.match(workspace, /This Talk session moved to a newer device/);
   assert.match(workspace, /Mute/);
   assert.match(workspace, /Undo/);
-  assert.match(workspace, /Start Talk/);
+  assert.match(workspace, /aria-label=\{sessionId \? "End Talk" : "Start Talk"\}/);
+  assert.match(workspace, /bottom-\[calc\(0\.75rem\+env\(safe-area-inset-bottom\)\)\]/);
+  assert.match(workspace, /aria-label=\{muted \? "Unmute Talk" : "Mute Talk"\}/);
   assert.match(workspace, /useState<TalkState>\("ready"\)/);
   assert.match(workspace, /HISTORY_CACHE_KEY/);
+  assert.match(workspace, /grid-rows-2/);
+  assert.match(workspace, /landscape:grid-cols-2 landscape:grid-rows-1/);
+  assert.match(workspace, /min-h-0 flex-1 overflow-y-auto/);
+  assert.doesNotMatch(workspace, /Realtime chief of staff|Hands-free controls|A continuous working conversation/);
   assert.doesNotMatch(workspace, /OPENAI_API_KEY|JINA_AI_READER/);
   assert.doesNotMatch(workspace, /SERPER_API_KEY/);
 

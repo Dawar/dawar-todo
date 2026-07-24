@@ -76,18 +76,6 @@ const HEARTBEAT_MS = 5_000;
 const IDLE_END_MS = 15 * 60 * 1_000;
 const ROLLOVER_MS = 55 * 60 * 1_000;
 
-function statusLabel(state: TalkState) {
-  if (state === "connecting") return "Connecting";
-  if (state === "listening") return "Listening";
-  if (state === "thinking") return "Thinking";
-  if (state === "speaking") return "Speaking";
-  if (state === "muted") return "Muted";
-  if (state === "offline") return "Offline";
-  if (state === "ended") return "Ended";
-  if (state === "error") return "Needs attention";
-  return "Ready";
-}
-
 function activityLabel(name: string) {
   return ({
     search_tasks: "Searching tasks",
@@ -466,7 +454,7 @@ export function TalkWorkspace() {
       sendEvent({
         type: "response.create",
         response: {
-          instructions: "Start the session now. Briefly greet me, name the current task if one is focused, and ask the single most useful question to move it forward. If no task is focused, suggest the highest-value open task.",
+          instructions: "Begin immediately. If a task is focused, ask one terse, high-value question to move it forward. Otherwise name the highest-value open task and ask one terse question. No greeting, setup, capability explanation, or recap.",
         },
       });
     });
@@ -640,42 +628,16 @@ export function TalkWorkspace() {
   const canStart = !sessionId && state !== "connecting" && state !== "offline";
 
   return (
-    <main className="min-h-screen bg-[#f6f7f5] text-[#252a27]">
+    <main className="h-[100dvh] overflow-hidden bg-[#f6f7f5] text-[#252a27]">
       <SiteHeader current="talk" />
-      <div className="mx-auto grid max-w-5xl gap-5 px-4 py-5 sm:px-6 md:grid-cols-[minmax(0,1fr)_320px] md:py-8">
-        <section className="flex min-h-[calc(100dvh-7rem)] flex-col overflow-hidden rounded-[28px] border border-black/[0.07] bg-white shadow-[0_18px_60px_rgba(31,45,37,0.08)]">
-          <div className="border-b border-black/[0.06] px-5 py-5 sm:px-7">
-            <div className="flex flex-wrap items-center justify-between gap-4">
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[#216e4e]">Realtime chief of staff</p>
-                <h1 className="mt-1 text-2xl font-semibold tracking-[-0.03em]">Talk</h1>
-                <p className="mt-1 text-sm text-[#7a837e]">
-                  {focusedTodo ? <>Working on <span className="font-medium text-[#3d4641]">{focusedTodo.title}</span></> : "Ready to review your task system"}
-                </p>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-sm font-medium ${
-                  state === "speaking" ? "bg-[#eaf3ed] text-[#216e4e]"
-                    : state === "error" || state === "offline" ? "bg-[#fff0ef] text-[#a3302c]"
-                      : "bg-[#f1f3f1] text-[#5f6863]"
-                }`}>
-                  <span className={`h-2 w-2 rounded-full ${
-                    ["listening", "thinking", "speaking"].includes(state) ? "animate-pulse bg-[#218257]" : "bg-current opacity-50"
-                  }`} />
-                  {statusLabel(state)}
-                </span>
-              </div>
-            </div>
-          </div>
-
-          <div className="flex-1 space-y-4 overflow-y-auto px-5 py-5 sm:px-7" aria-live="polite">
+      <div className="mx-auto grid h-[calc(100dvh-3.5rem)] max-w-6xl grid-rows-2 gap-3 overflow-hidden px-3 py-3 sm:px-4 sm:py-4 landscape:grid-cols-2 landscape:grid-rows-1 landscape:gap-4">
+        <section className="relative flex h-full min-h-0 flex-col overflow-hidden rounded-[24px] border border-black/[0.07] bg-white shadow-[0_14px_44px_rgba(31,45,37,0.07)]">
+          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4 pb-24 sm:px-6 sm:pb-24" aria-live="polite">
             {!messages.length && !liveUser && !liveAssistant && (
-              <div className="mx-auto flex max-w-md flex-col items-center py-16 text-center">
-                <span className="grid h-20 w-20 place-items-center rounded-full bg-[#eaf3ed] text-[#216e4e]">
-                  <ActionIcon name="mic" className="h-9 w-9" strokeWidth={1.7} />
+              <div className="grid h-full min-h-32 place-items-center">
+                <span className="grid h-14 w-14 place-items-center rounded-full bg-[#eaf3ed] text-[#216e4e]">
+                  <ActionIcon name="mic" className="h-6 w-6" strokeWidth={1.7} />
                 </span>
-                <h2 className="mt-5 text-xl font-semibold tracking-[-0.02em]">A continuous working conversation</h2>
-                <p className="mt-2 text-sm leading-6 text-[#7a837e]">Talk through priorities, update tasks, research questions, preserve useful memories, and undo changes without touching the screen.</p>
               </div>
             )}
             {messages.map((message) => (
@@ -709,53 +671,54 @@ export function TalkWorkspace() {
             )}
           </div>
 
-          <div className="border-t border-black/[0.06] bg-white/95 px-4 pb-[calc(1rem+env(safe-area-inset-bottom))] pt-4 sm:px-7">
-            {error && <p className="mb-3 rounded-xl bg-[#fff0ef] px-3 py-2 text-sm text-[#9b302c]">{error}</p>}
-            <div className="flex items-center justify-center gap-3">
-              {canStart ? (
-                <button
-                  type="button"
-                  onClick={() => void startTalk()}
-                  className="inline-flex min-h-12 items-center gap-2 rounded-2xl bg-[#216e4e] px-6 py-3 font-semibold text-white shadow-sm transition hover:bg-[#195b40] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#216e4e]"
-                >
-                  <ActionIcon name="mic" className="h-5 w-5" />
-                  Start Talk
-                </button>
-              ) : sessionId ? (
-                <>
-                  <button
-                    type="button"
-                    onClick={toggleMute}
-                    className={`inline-flex min-h-12 items-center gap-2 rounded-2xl border px-5 py-3 font-semibold transition focus-visible:outline-2 focus-visible:outline-[#216e4e] ${
-                      muted ? "border-[#e9c5c2] bg-[#fff0ef] text-[#a3302c]" : "border-black/[0.08] bg-white text-[#3f4743] hover:bg-[#f3f5f3]"
-                    }`}
-                  >
-                    <ActionIcon name="mic" className="h-5 w-5" />
-                    {muted ? "Unmute" : "Mute"}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void endSession("user-ended")}
-                    className="inline-flex min-h-12 items-center gap-2 rounded-2xl bg-[#242a26] px-5 py-3 font-semibold text-white transition hover:bg-black focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#242a26]"
-                  >
-                    <ActionIcon name="stop" className="h-4 w-4" />
-                    End
-                  </button>
-                </>
-              ) : (
-                <p className="text-sm text-[#7a837e]">{state === "offline" ? "Talk needs an internet connection. Prior transcript remains available." : "Connecting to Talk…"}</p>
-              )}
-            </div>
-          </div>
+          {error && (
+            <p role="alert" className="absolute bottom-[calc(5.25rem+env(safe-area-inset-bottom))] left-3 right-3 z-10 rounded-xl bg-[#fff0ef]/95 px-3 py-2 text-sm text-[#9b302c] shadow-sm backdrop-blur sm:right-20">
+              {error}
+            </p>
+          )}
+          {!error && !sessionId && (state === "offline" || state === "connecting") && (
+            <p className="absolute bottom-[calc(1.5rem+env(safe-area-inset-bottom))] left-4 z-10 text-xs font-medium text-[#7a837e]">
+              {state === "offline" ? "Offline" : "Connecting…"}
+            </p>
+          )}
+          {sessionId && (
+            <button
+              type="button"
+              onClick={toggleMute}
+              aria-label={muted ? "Unmute Talk" : "Mute Talk"}
+              title={muted ? "Unmute" : "Mute"}
+              className={`absolute bottom-[calc(1rem+env(safe-area-inset-bottom))] right-20 z-20 grid h-11 w-11 place-items-center rounded-full border shadow-md backdrop-blur transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#216e4e] ${
+                muted ? "border-[#e9c5c2] bg-[#fff0ef]/95 text-[#a3302c]" : "border-black/[0.08] bg-white/95 text-[#3f4743] hover:bg-[#f3f5f3]"
+              }`}
+            >
+              <ActionIcon name="mic" className="h-5 w-5" />
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => sessionId ? void endSession("user-ended") : void startTalk()}
+            disabled={!sessionId && !canStart}
+            aria-label={sessionId ? "End Talk" : "Start Talk"}
+            title={sessionId ? "End Talk" : "Start Talk"}
+            className={`absolute bottom-[calc(0.75rem+env(safe-area-inset-bottom))] right-3 z-20 grid h-14 w-14 place-items-center rounded-full text-white shadow-[0_8px_28px_rgba(24,52,38,0.28)] transition focus-visible:outline-2 focus-visible:outline-offset-2 disabled:cursor-not-allowed disabled:opacity-45 ${
+              sessionId ? "bg-[#242a26] hover:bg-black focus-visible:outline-[#242a26]" : "bg-[#216e4e] hover:bg-[#195b40] focus-visible:outline-[#216e4e]"
+            }`}
+          >
+            <ActionIcon name={sessionId ? "stop" : "mic"} className={sessionId ? "h-5 w-5" : "h-6 w-6"} />
+          </button>
         </section>
 
-        <aside className="space-y-4">
-          <section className="rounded-3xl border border-black/[0.07] bg-white p-5 shadow-[0_12px_38px_rgba(31,45,37,0.05)]">
-            <h2 className="text-sm font-semibold">Live activity</h2>
-            {!groupedActivities.length ? (
-              <p className="mt-2 text-sm leading-6 text-[#858d88]">Task changes, research sources, attachment inspection, and Undo will appear here.</p>
-            ) : (
-              <div className="mt-3 space-y-3">
+        <aside className="h-full min-h-0 overflow-hidden rounded-[24px] border border-black/[0.07] bg-white shadow-[0_14px_44px_rgba(31,45,37,0.05)]">
+          <section className="flex h-full min-h-0 flex-col">
+            <div className="flex items-center justify-between border-b border-black/[0.06] px-4 py-2.5 sm:px-5">
+              <h2 className="text-xs font-semibold uppercase tracking-[0.12em] text-[#69716c]">Activity</h2>
+              {groupedActivities.length > 0 && <span className="text-xs tabular-nums text-[#8a928d]">{groupedActivities.length}</span>}
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto p-3 sm:p-4">
+              {!groupedActivities.length ? (
+                <p className="text-sm text-[#8a928d]">No activity yet.</p>
+              ) : (
+                <div className="space-y-3">
                 {groupedActivities.map((activity) => (
                   <div key={activity.id} className="rounded-2xl bg-[#f5f6f4] p-3">
                     <div className="flex items-start justify-between gap-3">
@@ -795,12 +758,9 @@ export function TalkWorkspace() {
                     ) : null}
                   </div>
                 ))}
-              </div>
-            )}
-          </section>
-          <section className="rounded-3xl border border-black/[0.07] bg-[#eaf3ed] p-5 text-[#285b43]">
-            <p className="text-sm font-semibold">Hands-free controls</p>
-            <p className="mt-2 text-sm leading-6">Interrupt naturally, ask “what do you remember?”, say “forget that,” or ask Talk to undo the last change.</p>
+                </div>
+              )}
+            </div>
           </section>
         </aside>
       </div>
