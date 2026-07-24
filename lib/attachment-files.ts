@@ -45,3 +45,18 @@ export function attachmentFileMimeType(fileName: string, suppliedValue = "") {
   if (supplied && !aliases.has(supplied)) throw new Error("The file extension and content type do not match.");
   return canonical;
 }
+
+export function detectAttachmentFileFormat(bytes: Uint8Array) {
+  const pdfHeader = [0x25, 0x50, 0x44, 0x46, 0x2d];
+  const pdfSearchLimit = Math.min(bytes.length - pdfHeader.length, 1024);
+  for (let offset = 0; offset <= pdfSearchLimit; offset += 1) {
+    if (pdfHeader.every((byte, index) => bytes[offset + index] === byte)) return "pdf";
+  }
+  if (bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4b && [0x03, 0x05, 0x07].includes(bytes[2]) && [0x04, 0x06, 0x08].includes(bytes[3])) return "zip";
+  if (bytes.length >= 8 && [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1].every((byte, index) => bytes[index] === byte)) return "compound";
+  if (bytes.length >= 6 && [0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c].every((byte, index) => bytes[index] === byte)) return "7z";
+  const text = new TextDecoder("utf-8", { fatal: false }).decode(bytes.slice(0, 128)).replace(/^\uFEFF/, "").trimStart();
+  if (/^\{\\rtf/i.test(text)) return "rtf";
+  if (!bytes.slice(0, Math.min(bytes.length, 4096)).includes(0)) return "text";
+  return null;
+}

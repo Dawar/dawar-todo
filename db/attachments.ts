@@ -1,5 +1,5 @@
 import { env, waitUntil } from "cloudflare:workers";
-import { attachmentFileExtension, attachmentFileMimeType } from "../lib/attachment-files";
+import { attachmentFileExtension, attachmentFileMimeType, detectAttachmentFileFormat } from "../lib/attachment-files";
 
 export const MAX_ATTACHMENTS_PER_TASK = 12;
 export const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
@@ -755,18 +755,6 @@ function detectedMediaFormat(bytes: Uint8Array) {
   return null;
 }
 
-function detectedFileFormat(bytes: Uint8Array) {
-  const ascii = (start: number, length: number) => String.fromCharCode(...bytes.slice(start, start + length));
-  if (bytes.length >= 5 && ascii(0, 5) === "%PDF-") return "pdf";
-  if (bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4b && [0x03, 0x05, 0x07].includes(bytes[2]) && [0x04, 0x06, 0x08].includes(bytes[3])) return "zip";
-  if (bytes.length >= 8 && [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1].every((byte, index) => bytes[index] === byte)) return "compound";
-  if (bytes.length >= 6 && [0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c].every((byte, index) => bytes[index] === byte)) return "7z";
-  const text = new TextDecoder("utf-8", { fatal: false }).decode(bytes.slice(0, 128)).replace(/^\uFEFF/, "").trimStart();
-  if (/^\{\\rtf/i.test(text)) return "rtf";
-  if (!bytes.slice(0, Math.min(bytes.length, 4096)).includes(0)) return "text";
-  return null;
-}
-
 export async function prepareTodoMediaAttachmentUpload(
   input: PrepareMediaUploadInput,
   target: UploadTarget,
@@ -792,7 +780,11 @@ export async function prepareTodoMediaAttachmentUpload(
 
   const id = crypto.randomUUID();
   const extension = kind === "audio" ? audioExtension(mimeType) : kind === "video" ? videoExtension(mimeType) : attachmentFileExtension(fileName);
-  const base = kind === "file" ? `todo-files/${id}` : `todo-media/${id}`;
+  // Keep every non-image object in the established media prefix. The private
+  // Spaces credential is already exercised there by audio and video uploads;
+  // a separate todo-files prefix caused browser-prepared file objects to be
+  // rejected or become unreadable during finalization in production.
+  const base = `todo-media/${id}`;
   const originalKey = `${base}/original.${extension}`;
   const displayKey = `${base}/no-display`;
   const thumbnailKey = `${base}/no-thumbnail`;
@@ -855,7 +847,7 @@ export async function finalizeTodoMediaAttachmentUpload(
     ]);
     const actualBytes = Number(head.headers.get("content-length") ?? 0);
     if (actualBytes < 1 || actualBytes > maximumBytes || actualBytes !== row.byte_size) throw new Error("The media upload is incomplete.");
-    const actualFormat = row.kind === "file" ? detectedFileFormat(bytes) : detectedMediaFormat(bytes);
+    const actualFormat = row.kind === "file" ? detectAttachmentFileFormat(bytes) : detectedMediaFormat(bytes);
     const expectedFormat = row.kind === "audio" ? expectedAudioFormat(row.mime_type) : row.kind === "video" ? expectedVideoFormat(row.mime_type) : expectedFileFormat(row.file_name);
     if (!actualFormat || actualFormat !== expectedFormat) throw new Error(`The uploaded file is not the expected ${row.kind} type.`);
     const finalized = await db.prepare(`
@@ -884,7 +876,14 @@ export async function finalizeTodoMediaAttachmentUpload(
     } catch (cleanupError) {
       console.error("[todo-attachments] invalid media cleanup failed", { attachmentId: id, cleanupError });
     }
-    console.error("[todo-attachments] original attachment upload finalize failed", { attachmentId: id, todoId, kind: row.kind, durationMs: Date.now() - startedAt, error });
+    console.error("[todo-attachments] original attachment upload finalize failed", {
+      attachmentId: id,
+      todoId,
+      kind: row.kind,
+      durationMs: Date.now() - startedAt,
+      errorMessage: error instanceof Error ? error.message : String(error),
+      error,
+    });
     throw error;
   }
 }

@@ -338,3 +338,54 @@ export async function uploadTaskAttachment(input: {
     throw error;
   }
 }
+
+export async function uploadTaskAttachmentMultipart(input: {
+  file: File;
+  kind: BrowserAttachmentKind;
+  durationMs?: number;
+  endpoint: string;
+  request: JsonRequest;
+}) {
+  const startedAt = performance.now();
+  const mimeType = input.kind === "file"
+    ? attachmentFileMimeType(input.file.name, input.file.type)
+    : input.kind === "image"
+      ? imageMimeType(input.file)
+      : mediaMimeType(input.file, input.kind);
+  if (!mimeType) throw new Error("That attachment type is invalid.");
+  const form = new FormData();
+  form.set("file", input.file);
+  form.set("kind", input.kind);
+  form.set("mimeType", mimeType);
+  if (input.durationMs) form.set("durationMs", String(input.durationMs));
+  console.info("[todo-attachment-client] authenticated multipart upload started", {
+    endpoint: input.endpoint,
+    kind: input.kind,
+    bytes: input.file.size,
+    suppliedMimeType: input.file.type,
+    normalizedMimeType: mimeType,
+  });
+  try {
+    const payload = await input.request<{ attachment: TodoAttachment }>(input.endpoint, {
+      method: "POST",
+      body: form,
+    });
+    console.info("[todo-attachment-client] authenticated multipart upload completed", {
+      endpoint: input.endpoint,
+      attachmentId: payload.attachment.id,
+      kind: payload.attachment.kind,
+      bytes: payload.attachment.byteSize,
+      durationMs: Math.round(performance.now() - startedAt),
+    });
+    return payload.attachment;
+  } catch (error) {
+    console.error("[todo-attachment-client] authenticated multipart upload failed", {
+      endpoint: input.endpoint,
+      kind: input.kind,
+      bytes: input.file.size,
+      durationMs: Math.round(performance.now() - startedAt),
+      error,
+    });
+    throw error;
+  }
+}

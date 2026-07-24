@@ -14,6 +14,7 @@ import {
 import { createPortal } from "react-dom";
 import { useAutoAnimate } from "@formkit/auto-animate/react";
 import { attachmentFileMimeType, GENERIC_FILE_ACCEPT } from "../lib/attachment-files";
+import { uploadTaskAttachmentMultipart } from "./attachment-upload-client";
 import { ActionIcon, type ActionIconName } from "./action-icon";
 import { currentOpenTaskCount, updateNativeAppBadge } from "./app-badge";
 import { copyTextToClipboard } from "./copy-to-clipboard";
@@ -2663,9 +2664,17 @@ export default function Home() {
     try {
       const endpoint = `/api/todos/${todoId}/attachments`;
       const discard = (uploadId: string) => request(`${endpoint}/${uploadId}?discard=1`, { method: "DELETE" });
-      const { attachment } = item.kind === "image"
-        ? await uploadPrivateImage(item.file, endpoint, {}, discard)
-        : await uploadPrivateMedia(item.file, item.kind, item.durationMs, endpoint, {}, discard);
+      const attachment = item.kind === "file"
+        ? await uploadTaskAttachmentMultipart({
+            file: item.file,
+            kind: item.kind,
+            durationMs: item.durationMs,
+            endpoint,
+            request,
+          })
+        : (item.kind === "image"
+            ? await uploadPrivateImage(item.file, endpoint, {}, discard)
+            : await uploadPrivateMedia(item.file, item.kind, item.durationMs, endpoint, {}, discard)).attachment;
       setDetailUploads((current) => {
         const found = current.find((candidate) => candidate.localId === item.localId);
         if (found) URL.revokeObjectURL(found.previewUrl);
@@ -4736,7 +4745,10 @@ export default function Home() {
                           <span className="absolute inset-0 grid place-items-center bg-black/45 text-xs font-semibold text-white">Uploading…</span>
                         ) : (
                           <>
-                            <button type="button" onClick={() => retryDetailAttachment(item)} aria-label={`Retry ${item.file.name}`} className="absolute inset-0 grid place-items-center bg-red-900/65 text-white"><ActionIcon name="retry" className="h-5 w-5" /></button>
+                            <button type="button" onClick={() => retryDetailAttachment(item)} aria-label={`Retry ${item.file.name}: ${item.error}`} className="absolute inset-0 flex flex-col items-center justify-center gap-1 bg-red-900/70 px-10 text-center text-white">
+                              <ActionIcon name="retry" className="h-5 w-5 shrink-0" />
+                              <span className="line-clamp-2 text-[11px] font-medium leading-4">{item.error || "Upload failed. Retry."}</span>
+                            </button>
                             <button type="button" onClick={() => removeDetailUpload(item)} aria-label={`Remove ${item.file.name}`} title="Remove failed upload" className="absolute right-1.5 top-1.5 grid h-7 w-7 place-items-center rounded-full bg-black/65 text-white hover:bg-red-700"><ActionIcon name="close" className="h-3.5 w-3.5" /></button>
                           </>
                         )}

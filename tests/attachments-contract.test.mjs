@@ -74,8 +74,8 @@ test("stores private task images with optimized variants and recovery metadata",
   assert.match(attachments, /MAX_AUDIO_ATTACHMENT_BYTES = 50 \* 1024 \* 1024/);
   assert.match(attachments, /MAX_VIDEO_ATTACHMENT_BYTES = 250 \* 1024 \* 1024/);
   assert.match(attachments, /MAX_FILE_ATTACHMENT_BYTES = 100 \* 1024 \* 1024/);
-  assert.match(attachments, /detectedFileFormat/);
-  assert.match(attachments, /todo-files\/\$\{id\}/);
+  assert.match(attachments, /detectAttachmentFileFormat/);
+  assert.match(attachments, /const base = `todo-media\/\$\{id\}`/);
   assert.match(attachments, /detectedMediaFormat/);
   assert.match(attachments, /SIGNED_URL_SECONDS = 60 \* 60/);
   assert.doesNotMatch(attachments, /public-read|ACL:/);
@@ -146,6 +146,9 @@ test("exposes capture, Safari-safe optimization, drop, gallery, and viewer contr
   assert.match(page, /postPrivateVariant/);
   assert.match(page, /uploadPrivateImage/);
   assert.match(page, /uploadPrivateMedia/);
+  assert.match(page, /uploadTaskAttachmentMultipart/);
+  assert.match(page, /item\.kind === "file"/);
+  assert.match(page, /Upload failed\. Retry\./);
   assert.match(page, /function VoiceMemoRecorder/);
   assert.match(page, /MediaRecorder\.isTypeSupported/);
   assert.match(page, /audio\/mp4/);
@@ -208,7 +211,7 @@ test("exposes capture, Safari-safe optimization, drop, gallery, and viewer contr
 });
 
 test("accepts common document and archive types through a shared allowlist", async () => {
-  const { attachmentFileMimeType, GENERIC_FILE_ACCEPT } = await import("../lib/attachment-files.ts");
+  const { attachmentFileMimeType, detectAttachmentFileFormat, GENERIC_FILE_ACCEPT } = await import("../lib/attachment-files.ts");
   assert.equal(attachmentFileMimeType("brief.pdf", "application/pdf"), "application/pdf");
   assert.equal(attachmentFileMimeType("report.xlsx", "application/octet-stream"), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
   assert.equal(attachmentFileMimeType("notes.docx", ""), "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
@@ -218,6 +221,8 @@ test("accepts common document and archive types through a shared allowlist", asy
   assert.match(GENERIC_FILE_ACCEPT, /\.xlsx/);
   assert.match(GENERIC_FILE_ACCEPT, /\.docx/);
   assert.match(GENERIC_FILE_ACCEPT, /\.zip/);
+  assert.equal(detectAttachmentFileFormat(new TextEncoder().encode("%PDF-1.7\n")), "pdf");
+  assert.equal(detectAttachmentFileFormat(new TextEncoder().encode("\n\n%PDF-1.7\n")), "pdf");
   assert.throws(() => attachmentFileMimeType("payload.exe", "application/octet-stream"), /Choose a PDF/);
   assert.throws(() => attachmentFileMimeType("fake.pdf", "text\/html"), /do not match/);
 });
