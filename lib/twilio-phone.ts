@@ -4,6 +4,7 @@ export type TwilioPhoneEnvironment = {
   TWILIO_ACCOUNT_SID?: string;
   TWILIO_AUTH_TOKEN?: string;
   TWILIO_PHONE_NUMBER?: string;
+  TWILIO_MEDIA_STREAM_URL?: string;
 };
 
 type IncomingPhoneNumber = {
@@ -93,6 +94,26 @@ export function phoneStreamTwiml(input: { streamUrl: string; token: string }) {
       + `<Parameter name="token" value="${xmlEscape(input.token)}"/>`
       + "</Stream></Connect>",
   );
+}
+
+export function talkPhoneMediaStreamUrl(
+  requestUrl: string,
+  environment?: TwilioPhoneEnvironment,
+) {
+  const configured = runtime(environment).TWILIO_MEDIA_STREAM_URL?.trim();
+  const streamUrl = configured
+    ? new URL(configured)
+    : new URL("/api/talk/phone/stream", requestUrl);
+  if (!configured) {
+    streamUrl.protocol = streamUrl.protocol === "http:" ? "ws:" : "wss:";
+  }
+  if (streamUrl.protocol !== "wss:" && streamUrl.protocol !== "ws:") {
+    throw new Error("The Twilio media stream URL must use WebSocket transport.");
+  }
+  if (streamUrl.protocol === "ws:" && !["localhost", "127.0.0.1", "::1"].includes(streamUrl.hostname)) {
+    throw new Error("The Twilio media stream URL must use secure WebSocket transport.");
+  }
+  return streamUrl.toString();
 }
 
 function bytesToBase64(bytes: Uint8Array) {

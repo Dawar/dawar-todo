@@ -34,7 +34,8 @@ function isDispatchAuthPath(pathname: string) {
 function isPublicTalkPhoneTransport(pathname: string) {
   return pathname === "/api/talk/phone/incoming"
     || pathname === "/api/talk/phone/verify"
-    || pathname === "/api/talk/phone/stream";
+    || pathname === "/api/talk/phone/stream"
+    || pathname.startsWith("/api/talk/phone/bridge/");
 }
 
 function unauthorizedApi(message = "Sign in with ChatGPT or use a valid API token to use Dawar Todo.") {

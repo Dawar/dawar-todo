@@ -8,6 +8,7 @@ import {
   phonePinPromptTwiml,
   phoneRejectedTwiml,
   phoneStreamTwiml,
+  talkPhoneMediaStreamUrl,
   twilioDocumentResponse,
   twilioPhoneConfig,
   validateTwilioRequest,
@@ -49,15 +50,15 @@ export async function POST(request: Request) {
       }));
     }
     const token = await authenticateTalkPhoneCall(callSid, userKey);
-    const streamUrl = new URL("/api/talk/phone/stream", request.url);
-    streamUrl.protocol = streamUrl.protocol === "http:" ? "ws:" : "wss:";
+    const streamUrl = talkPhoneMediaStreamUrl(request.url);
     console.info("[todo-talk-phone-api] authenticated stream response returned", {
       callSid,
       userKey,
+      streamHost: new URL(streamUrl).host,
       durationMs: Date.now() - startedAt,
     });
     return twilioDocumentResponse(phoneStreamTwiml({
-      streamUrl: streamUrl.toString(),
+      streamUrl,
       token: token.rawToken,
     }));
   } catch (error) {

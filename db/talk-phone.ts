@@ -8,6 +8,7 @@ const PIN_ITERATIONS = 100_000;
 const MAX_SUPPORTED_PIN_ITERATIONS = 100_000;
 const MAX_PIN_ATTEMPTS = 3;
 const STREAM_TOKEN_TTL_MS = 5 * 60 * 1_000;
+const PHONE_BRIDGE_SESSION_TTL_MS = 70 * 60 * 1_000;
 
 type PhoneProfileRow = {
   user_key: string;
@@ -354,9 +355,48 @@ export async function consumeTalkPhoneStream(
       AND stream_token_consumed_at IS NULL
       AND stream_token_expires_at > strftime('%Y-%m-%dT%H:%M:%fZ','now')
   `).bind(input.callSid, tokenHash).run();
-  if (!Number(result.meta.changes ?? 0)) return null;
+  const claimed = Boolean(Number(result.meta.changes ?? 0));
   const call = await readTalkPhoneCall(input.callSid, db);
-  return call?.user_key ? { userKey: call.user_key } : null;
+  if (
+    !call?.user_key
+    || call.stream_token_hash !== tokenHash
+    || call.status !== "connected"
+    || !call.connected_at
+    || Date.now() - new Date(call.connected_at).valueOf() > PHONE_BRIDGE_SESSION_TTL_MS
+  ) {
+    return null;
+  }
+  return {
+    userKey: call.user_key,
+    talkSessionId: call.talk_session_id,
+    replayed: !claimed,
+  };
+}
+
+export async function authenticateTalkPhoneBridge(
+  input: { callSid: string; rawToken: string },
+  db?: D1Database,
+) {
+  if (!validTwilioCallSid(input.callSid) || input.rawToken.length < 32) return null;
+  await ensureTodoDatabase();
+  const tokenHash = await sha256(input.rawToken);
+  const call = await database(db).prepare(`
+    SELECT call_sid, user_key, from_number_hash, to_number, status, attempt_count,
+           stream_token_hash, stream_token_expires_at, stream_token_consumed_at,
+           talk_session_id, started_at, authenticated_at, connected_at, ended_at,
+           failure_reason
+    FROM todo_talk_phone_calls
+    WHERE call_sid = ?
+      AND status = 'connected'
+      AND stream_token_hash = ?
+      AND stream_token_consumed_at IS NOT NULL
+      AND connected_at > strftime('%Y-%m-%dT%H:%M:%fZ','now','-70 minutes')
+  `).bind(input.callSid, tokenHash).first<PhoneCallRow>();
+  if (!call?.user_key || !call.talk_session_id) return null;
+  return {
+    userKey: call.user_key,
+    talkSessionId: call.talk_session_id,
+  };
 }
 
 export async function attachTalkSessionToPhoneCall(
@@ -394,4 +434,5 @@ export const talkPhoneSecurity = {
   maxPinAttempts: MAX_PIN_ATTEMPTS,
   pinIterations: PIN_ITERATIONS,
   streamTokenTtlMs: STREAM_TOKEN_TTL_MS,
+  bridgeSessionTtlMs: PHONE_BRIDGE_SESSION_TTL_MS,
 };

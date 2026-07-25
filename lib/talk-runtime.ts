@@ -345,6 +345,7 @@ ${JSON.stringify(compactContext(context))}`;
 export async function mintRealtimeClientSecret(input: {
   safetyIdentifier: string;
   instructions: string;
+  audioFormat?: "g711_ulaw";
 }) {
   const current = runtime();
   const apiKey = current.OPENAI_API_KEY?.trim();
@@ -370,6 +371,7 @@ export async function mintRealtimeClientSecret(input: {
         reasoning: { effort: "low" },
         audio: {
           input: {
+            ...(input.audioFormat ? { format: input.audioFormat } : {}),
             transcription: { model: "gpt-4o-mini-transcribe", language: "en" },
             turn_detection: {
               type: "semantic_vad",
@@ -378,7 +380,10 @@ export async function mintRealtimeClientSecret(input: {
               interrupt_response: true,
             },
           },
-          output: { voice },
+          output: {
+            ...(input.audioFormat ? { format: input.audioFormat } : {}),
+            voice,
+          },
         },
         tools: talkToolDefinitions,
         tool_choice: "auto",
