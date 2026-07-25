@@ -122,7 +122,7 @@ type TodoSyncChangeRow = {
 };
 
 let initialization: Promise<void> | null = null;
-const CURRENT_SCHEMA_VERSION = "21";
+const CURRENT_SCHEMA_VERSION = "22";
 
 function database() {
   if (!env.DB) throw new Error("The todo database is unavailable.");
@@ -547,6 +547,8 @@ export async function ensureTodoDatabase() {
           stream_token_hash TEXT,
           stream_token_expires_at TEXT,
           stream_token_consumed_at TEXT,
+          transport TEXT NOT NULL DEFAULT 'media',
+          provider_call_id TEXT,
           talk_session_id TEXT,
           started_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
           authenticated_at TEXT,
@@ -619,6 +621,15 @@ export async function ensureTodoDatabase() {
       await db.prepare("ALTER TABLE todo_attachments ADD COLUMN duration_ms INTEGER NOT NULL DEFAULT 0").run();
       console.info("[todo-db] added attachment duration compatibility column");
     }
+    const phoneCallColumns = await db.prepare("PRAGMA table_info(todo_talk_phone_calls)").all<{ name: string }>();
+    if (!phoneCallColumns.results.some((column) => column.name === "transport")) {
+      await db.prepare("ALTER TABLE todo_talk_phone_calls ADD COLUMN transport TEXT NOT NULL DEFAULT 'media'").run();
+      console.info("[todo-db] added Talk phone transport compatibility column");
+    }
+    if (!phoneCallColumns.results.some((column) => column.name === "provider_call_id")) {
+      await db.prepare("ALTER TABLE todo_talk_phone_calls ADD COLUMN provider_call_id TEXT").run();
+      console.info("[todo-db] added Talk phone provider call compatibility column");
+    }
     const todoColumns = await db.prepare("PRAGMA table_info(todos)").all<{ name: string }>();
     if (!todoColumns.results.some((column) => column.name === "client_id")) {
       await db.prepare("ALTER TABLE todos ADD COLUMN client_id TEXT").run();
@@ -651,6 +662,7 @@ export async function ensureTodoDatabase() {
       db.prepare("CREATE INDEX IF NOT EXISTS todo_talk_phone_calls_source_idx ON todo_talk_phone_calls(from_number_hash, started_at)"),
       db.prepare("CREATE INDEX IF NOT EXISTS todo_talk_phone_calls_status_idx ON todo_talk_phone_calls(status, started_at)"),
       db.prepare("CREATE INDEX IF NOT EXISTS todo_talk_phone_calls_stream_idx ON todo_talk_phone_calls(stream_token_hash)"),
+      db.prepare("CREATE INDEX IF NOT EXISTS todo_talk_phone_calls_provider_idx ON todo_talk_phone_calls(provider_call_id)"),
       db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS todo_assistant_memories_dedupe_idx ON todo_assistant_memories(user_key, dedupe_key)"),
       db.prepare("CREATE INDEX IF NOT EXISTS todo_assistant_memories_user_idx ON todo_assistant_memories(user_key, updated_at)"),
       db.prepare("CREATE INDEX IF NOT EXISTS todo_assistant_memories_task_idx ON todo_assistant_memories(user_key, todo_id, updated_at)"),

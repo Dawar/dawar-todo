@@ -7,12 +7,15 @@ import {
 import {
   phonePinPromptTwiml,
   phoneRejectedTwiml,
+  phoneSipTwiml,
   phoneStreamTwiml,
+  talkPhoneTransport,
   talkPhoneMediaStreamUrl,
   twilioDocumentResponse,
   twilioPhoneConfig,
   validateTwilioRequest,
 } from "../../../../../lib/twilio-phone";
+import { env } from "cloudflare:workers";
 
 export async function POST(request: Request) {
   const startedAt = Date.now();
@@ -50,6 +53,21 @@ export async function POST(request: Request) {
       }));
     }
     const token = await authenticateTalkPhoneCall(callSid, userKey);
+    const transport = talkPhoneTransport();
+    if (transport === "sip") {
+      const projectId = String((env as unknown as { OPENAI_PROJECT_ID?: string }).OPENAI_PROJECT_ID ?? "").trim();
+      console.info("[todo-talk-phone-api] authenticated direct SIP response returned", {
+        callSid,
+        userKey,
+        projectIdSuffix: projectId.slice(-8),
+        durationMs: Date.now() - startedAt,
+      });
+      return twilioDocumentResponse(phoneSipTwiml({
+        projectId,
+        callSid,
+        token: token.rawToken,
+      }));
+    }
     const streamUrl = talkPhoneMediaStreamUrl(request.url);
     console.info("[todo-talk-phone-api] authenticated stream response returned", {
       callSid,

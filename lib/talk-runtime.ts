@@ -23,6 +23,43 @@ export function talkRuntimeConfig() {
   };
 }
 
+export function realtimeSessionConfig(input: {
+  instructions: string;
+  audioFormat?: "pcmu";
+}) {
+  const { model, voice } = talkRuntimeConfig();
+  return {
+    type: "realtime",
+    model,
+    output_modalities: ["audio"],
+    instructions: input.instructions,
+    reasoning: { effort: "low" },
+    audio: {
+      input: {
+        ...(input.audioFormat === "pcmu"
+          ? { format: { type: "audio/pcmu" } }
+          : {}),
+        transcription: { model: "gpt-4o-mini-transcribe", language: "en" },
+        turn_detection: {
+          type: "semantic_vad",
+          eagerness: "auto",
+          create_response: true,
+          interrupt_response: true,
+        },
+      },
+      output: {
+        ...(input.audioFormat === "pcmu"
+          ? { format: { type: "audio/pcmu" } }
+          : {}),
+        voice,
+      },
+    },
+    tools: talkToolDefinitions,
+    tool_choice: "auto",
+    truncation: "auto",
+  };
+}
+
 export const talkToolDefinitions = [
   {
     type: "function",
@@ -351,6 +388,10 @@ export async function mintRealtimeClientSecret(input: {
   const apiKey = current.OPENAI_API_KEY?.trim();
   if (!apiKey) throw new Error("Talk is not configured yet.");
   const { model, voice } = talkRuntimeConfig();
+  const session = realtimeSessionConfig({
+    instructions: input.instructions,
+    audioFormat: input.audioFormat,
+  });
   const startedAt = Date.now();
   const response = await fetch("https://api.openai.com/v1/realtime/client_secrets", {
     method: "POST",
@@ -363,36 +404,7 @@ export async function mintRealtimeClientSecret(input: {
         : {}),
     },
     body: JSON.stringify({
-      session: {
-        type: "realtime",
-        model,
-        output_modalities: ["audio"],
-        instructions: input.instructions,
-        reasoning: { effort: "low" },
-        audio: {
-          input: {
-            ...(input.audioFormat === "pcmu"
-              ? { format: { type: "audio/pcmu" } }
-              : {}),
-            transcription: { model: "gpt-4o-mini-transcribe", language: "en" },
-            turn_detection: {
-              type: "semantic_vad",
-              eagerness: "auto",
-              create_response: true,
-              interrupt_response: true,
-            },
-          },
-          output: {
-            ...(input.audioFormat === "pcmu"
-              ? { format: { type: "audio/pcmu" } }
-              : {}),
-            voice,
-          },
-        },
-        tools: talkToolDefinitions,
-        tool_choice: "auto",
-        truncation: "auto",
-      },
+      session,
     }),
     signal: AbortSignal.timeout(20_000),
   });

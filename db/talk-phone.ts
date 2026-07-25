@@ -33,6 +33,8 @@ type PhoneCallRow = {
   stream_token_hash: string | null;
   stream_token_expires_at: string | null;
   stream_token_consumed_at: string | null;
+  transport: string;
+  provider_call_id: string | null;
   talk_session_id: string | null;
   started_at: string;
   authenticated_at: string | null;
@@ -276,7 +278,8 @@ export async function readTalkPhoneCall(callSid: string, db?: D1Database) {
   return database(db).prepare(`
     SELECT call_sid, user_key, from_number_hash, to_number, status, attempt_count,
            stream_token_hash, stream_token_expires_at, stream_token_consumed_at,
-           talk_session_id, started_at, authenticated_at, connected_at, ended_at,
+           transport, provider_call_id, talk_session_id, started_at,
+           authenticated_at, connected_at, ended_at,
            failure_reason
     FROM todo_talk_phone_calls
     WHERE call_sid = ?
@@ -373,6 +376,67 @@ export async function consumeTalkPhoneStream(
   };
 }
 
+export async function connectTalkPhoneSip(
+  input: { callSid: string; rawToken: string; providerCallId: string },
+  db?: D1Database,
+) {
+  if (
+    !validTwilioCallSid(input.callSid)
+    || input.rawToken.length < 32
+    || !/^rtc_[A-Za-z0-9_-]{8,200}$/.test(input.providerCallId)
+  ) return null;
+  await ensureTodoDatabase();
+  const selected = database(db);
+  const tokenHash = await sha256(input.rawToken);
+  const previous = await readTalkPhoneCall(input.callSid, db);
+  const replayed = previous?.status === "connected"
+    && previous.transport === "sip"
+    && previous.provider_call_id === input.providerCallId;
+  const result = await selected.prepare(`
+    UPDATE todo_talk_phone_calls
+    SET status = 'connected',
+        transport = 'sip',
+        provider_call_id = ?,
+        stream_token_consumed_at = COALESCE(
+          stream_token_consumed_at,
+          strftime('%Y-%m-%dT%H:%M:%fZ','now')
+        ),
+        connected_at = COALESCE(
+          connected_at,
+          strftime('%Y-%m-%dT%H:%M:%fZ','now')
+        )
+    WHERE call_sid = ?
+      AND status IN ('authenticated', 'connected')
+      AND stream_token_hash = ?
+      AND (
+        stream_token_consumed_at IS NULL
+        OR provider_call_id = ?
+      )
+      AND (
+        stream_token_expires_at > strftime('%Y-%m-%dT%H:%M:%fZ','now')
+        OR connected_at > strftime('%Y-%m-%dT%H:%M:%fZ','now','-70 minutes')
+      )
+  `).bind(input.providerCallId, input.callSid, tokenHash, input.providerCallId).run();
+  const call = await readTalkPhoneCall(input.callSid, db);
+  if (
+    !Number(result.meta.changes ?? 0)
+    || !call?.user_key
+    || call.transport !== "sip"
+    || call.provider_call_id !== input.providerCallId
+  ) {
+    return null;
+  }
+  console.info("[todo-talk-phone] direct SIP call connected", {
+    callSid: input.callSid,
+    providerCallId: input.providerCallId,
+    replayed,
+  });
+  return {
+    userKey: call.user_key,
+    talkSessionId: call.talk_session_id,
+  };
+}
+
 export async function authenticateTalkPhoneBridge(
   input: { callSid: string; rawToken: string },
   db?: D1Database,
@@ -383,7 +447,8 @@ export async function authenticateTalkPhoneBridge(
   const call = await database(db).prepare(`
     SELECT call_sid, user_key, from_number_hash, to_number, status, attempt_count,
            stream_token_hash, stream_token_expires_at, stream_token_consumed_at,
-           talk_session_id, started_at, authenticated_at, connected_at, ended_at,
+           transport, provider_call_id, talk_session_id, started_at,
+           authenticated_at, connected_at, ended_at,
            failure_reason
     FROM todo_talk_phone_calls
     WHERE call_sid = ?

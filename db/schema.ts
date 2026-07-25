@@ -392,6 +392,8 @@ export const todoTalkPhoneCalls = sqliteTable(
     streamTokenHash: text("stream_token_hash"),
     streamTokenExpiresAt: text("stream_token_expires_at"),
     streamTokenConsumedAt: text("stream_token_consumed_at"),
+    transport: text("transport").notNull().default("media"),
+    providerCallId: text("provider_call_id"),
     talkSessionId: text("talk_session_id"),
     startedAt: text("started_at")
       .notNull()
@@ -406,6 +408,7 @@ export const todoTalkPhoneCalls = sqliteTable(
     index("todo_talk_phone_calls_source_idx").on(table.fromNumberHash, table.startedAt),
     index("todo_talk_phone_calls_status_idx").on(table.status, table.startedAt),
     index("todo_talk_phone_calls_stream_idx").on(table.streamTokenHash),
+    index("todo_talk_phone_calls_provider_idx").on(table.providerCallId),
   ],
 );
 

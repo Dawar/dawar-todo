@@ -5,6 +5,8 @@ export type TwilioPhoneEnvironment = {
   TWILIO_AUTH_TOKEN?: string;
   TWILIO_PHONE_NUMBER?: string;
   TWILIO_MEDIA_STREAM_URL?: string;
+  TWILIO_PHONE_TRANSPORT?: string;
+  OPENAI_PROJECT_ID?: string;
 };
 
 type IncomingPhoneNumber = {
@@ -93,6 +95,40 @@ export function phoneStreamTwiml(input: { streamUrl: string; token: string }) {
     `<Connect><Stream url="${xmlEscape(input.streamUrl)}">`
       + `<Parameter name="token" value="${xmlEscape(input.token)}"/>`
       + "</Stream></Connect>",
+  );
+}
+
+export function talkPhoneTransport(environment?: TwilioPhoneEnvironment) {
+  const current = runtime(environment);
+  const requested = current.TWILIO_PHONE_TRANSPORT?.trim().toLowerCase();
+  if (!requested || requested === "media") return "media" as const;
+  if (requested !== "sip") {
+    throw new Error("TWILIO_PHONE_TRANSPORT must be either media or sip.");
+  }
+  if (!/^proj_[A-Za-z0-9_-]+$/.test(current.OPENAI_PROJECT_ID?.trim() ?? "")) {
+    throw new Error("Direct SIP requires a valid OPENAI_PROJECT_ID.");
+  }
+  return "sip" as const;
+}
+
+export function phoneSipTwiml(input: {
+  projectId: string;
+  callSid: string;
+  token: string;
+}) {
+  if (!/^proj_[A-Za-z0-9_-]+$/.test(input.projectId)) {
+    throw new Error("The OpenAI project identifier is invalid.");
+  }
+  if (!/^CA[0-9a-f]{32}$/i.test(input.callSid) || input.token.length < 32) {
+    throw new Error("The authenticated SIP call metadata is invalid.");
+  }
+  const query = new URLSearchParams({
+    "x-dawar-call-sid": input.callSid,
+    "x-dawar-token": input.token,
+  });
+  const sipUri = `sip:${input.projectId}@sip.api.openai.com;transport=tls?${query.toString()}`;
+  return twiml(
+    `<Dial answerOnBridge="true" timeout="20"><Sip>${xmlEscape(sipUri)}</Sip></Dial>`,
   );
 }
 

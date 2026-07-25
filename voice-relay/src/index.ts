@@ -1,6 +1,10 @@
-interface Env {
-  SITE_BASE_URL: string;
-}
+import {
+  handleOpenAISipWebhook,
+  SipCallController,
+  type SipRelayEnvironment,
+} from "./sip-controller";
+
+type Env = SipRelayEnvironment;
 
 interface ExecutionContext {
   waitUntil(promise: Promise<unknown>): void;
@@ -550,9 +554,17 @@ const worker = {
         ok: true,
         service: "dawar-todo-voice-relay",
         siteHost: baseUrl(environment).host,
+        directSip: {
+          controllerBound: Boolean(environment.SIP_CONTROLLERS),
+          openAIConfigured: Boolean(environment.OPENAI_API_KEY?.trim()),
+          projectConfigured: Boolean(environment.OPENAI_PROJECT_ID?.trim()),
+        },
       }, {
         headers: { "Cache-Control": "no-store" },
       });
+    }
+    if (url.pathname === "/openai/webhook") {
+      return handleOpenAISipWebhook(request, environment, context);
     }
     if (url.pathname !== "/stream") return new Response("Not found.", { status: 404 });
     if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
@@ -578,4 +590,5 @@ const worker = {
   },
 };
 
+export { SipCallController };
 export default worker;

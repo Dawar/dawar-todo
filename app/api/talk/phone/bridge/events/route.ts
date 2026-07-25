@@ -33,6 +33,7 @@ type BridgePayload = {
   arguments?: unknown;
   status?: unknown;
   reason?: unknown;
+  transport?: unknown;
 };
 
 function resultSummary(result: TalkToolResult, fallback: string) {
@@ -62,6 +63,9 @@ export async function POST(request: Request) {
     if (!authenticated) throw new Error("The phone relay authorization is invalid or expired.");
     const { userKey, talkSessionId } = authenticated;
     const focusedTodoId = optionalFocusedTodoId(payload.focusedTodoId);
+    const transport = payload.transport === "twilio-openai-sip"
+      ? "twilio-openai-sip"
+      : "twilio-phone-relay";
 
     if (action === "heartbeat") {
       const result = await heartbeatTalkSession(userKey, talkSessionId, focusedTodoId);
@@ -81,7 +85,7 @@ export async function POST(request: Request) {
         content: String(payload.content ?? ""),
         focusedTodoId: focusedTodoId ?? null,
         metadata: {
-          transport: "twilio-phone-relay",
+          transport,
           ...(payload.metadata && typeof payload.metadata === "object" && !Array.isArray(payload.metadata)
             ? payload.metadata as Record<string, unknown>
             : {}),
@@ -138,7 +142,7 @@ export async function POST(request: Request) {
             ? result.focusedTodoId
             : focusedTodoId ?? null,
           metadata: {
-            transport: "twilio-phone-relay",
+            transport,
             tool: toolName,
             undoToken: result.undoToken ?? null,
             sources: result.sources ?? [],

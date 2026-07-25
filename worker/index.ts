@@ -33,6 +33,7 @@ interface Env {
   TWILIO_AUTH_TOKEN?: string;
   TWILIO_PHONE_NUMBER?: string;
   TWILIO_MEDIA_STREAM_URL?: string;
+  TWILIO_PHONE_TRANSPORT?: string;
 }
 
 interface ExecutionContext {
