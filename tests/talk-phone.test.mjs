@@ -73,6 +73,10 @@ test("ships a PIN-gated Twilio bridge into the shared Talk runtime", async () =>
   assert.match(stream, /appendTalkMessage/);
   assert.match(stream, /PHONE_IDLE_LIMIT_MS = 15 \* 60 \* 1_000/);
   assert.match(stream, /REALTIME_ROLLOVER_MS = 50 \* 60 \* 1_000/);
+  assert.match(stream, /TWILIO_START_TIMEOUT_MS = 15_000/);
+  assert.match(stream, /deferring to one-time token/);
+  assert.match(stream, /consumeTalkPhoneStream/);
+  assert.doesNotMatch(stream, /stream signature rejected[\s\S]{0,160}return new Response\("Forbidden"/);
   assert.doesNotMatch(stream, /console\.(?:info|warn|error)\([^;]*\{\s*(?:audio|transcript|rawToken)\s*:/);
   assert.match(worker, /handleTalkPhoneStream/);
 

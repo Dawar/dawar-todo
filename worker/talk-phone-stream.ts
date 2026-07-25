@@ -91,6 +91,7 @@ type WorkerResponse = Response & { webSocket?: WebSocket };
 
 const PHONE_IDLE_LIMIT_MS = 15 * 60 * 1_000;
 const REALTIME_ROLLOVER_MS = 50 * 60 * 1_000;
+const TWILIO_START_TIMEOUT_MS = 15_000;
 const MAX_BUFFERED_TWILIO_FRAMES = 250;
 
 function openSocket(socket: WebSocket | null | undefined) {
@@ -166,11 +167,21 @@ export async function handleTalkPhoneStream(
       headers: { "Cache-Control": "no-store" },
     });
   }
-  if (!await validateTwilioRequest(request, null, environment)) {
-    console.warn("[todo-talk-phone] stream signature rejected");
-    return new Response("Forbidden", {
-      status: 403,
-      headers: { "Cache-Control": "no-store" },
+  // Proxies can normalize the incoming WebSocket URL differently from the
+  // exact wss:// URL Twilio signs. The 256-bit, single-use, five-minute stream
+  // token remains the authoritative authentication gate in initialize().
+  // Retain signature validation as useful transport telemetry without letting
+  // URL normalization terminate a correctly authenticated phone call.
+  const signaturePresent = Boolean(request.headers.get("x-twilio-signature")?.trim());
+  const signatureValid = await validateTwilioRequest(request, null, environment)
+    .catch((error) => {
+      console.warn("[todo-talk-phone] stream signature validation errored", { error });
+      return false;
+    });
+  if (!signatureValid) {
+    console.warn("[todo-talk-phone] stream signature did not match; deferring to one-time token", {
+      signaturePresent,
+      host: url.host,
     });
   }
 
@@ -194,6 +205,7 @@ export async function handleTalkPhoneStream(
   let bufferedMedia: string[] = [];
   let toolQueue = Promise.resolve();
   let rolloverTimer: ReturnType<typeof setTimeout> | null = null;
+  let startupTimer: ReturnType<typeof setTimeout> | null = null;
   const startedAt = Date.now();
 
   const heartbeat = async () => {
@@ -229,6 +241,7 @@ export async function handleTalkPhoneStream(
   const finish = async (status: "completed" | "failed", reason: string) => {
     if (ending) return;
     ending = true;
+    if (startupTimer) clearTimeout(startupTimer);
     if (rolloverTimer) clearTimeout(rolloverTimer);
     webSocketClose(openAI, status === "completed" ? 1000 : 1011, reason);
     webSocketClose(twilio, status === "completed" ? 1000 : 1011, reason);
@@ -516,6 +529,10 @@ export async function handleTalkPhoneStream(
       const context = await buildSharedAssistantContext(userKey, focusedTodoId);
       await configureOpenAI(talkInstructions(context));
       initialized = true;
+      if (startupTimer) {
+        clearTimeout(startupTimer);
+        startupTimer = null;
+      }
       await heartbeat();
       const pending = bufferedMedia;
       bufferedMedia = [];
@@ -534,6 +551,7 @@ export async function handleTalkPhoneStream(
         focusedTodoId,
         bufferedFrames: pending.length,
         replacedSession: Boolean(session.replacedSessionId),
+        signatureValid,
         startupMs: Date.now() - startedAt,
       });
     } catch (error) {
@@ -585,6 +603,24 @@ export async function handleTalkPhoneStream(
   });
   twilio.addEventListener("error", () => {
     if (!ending) void finish("failed", "twilio-connection-error");
+  });
+  startupTimer = setTimeout(() => {
+    if (!initialized && !ending) {
+      console.error("[todo-talk-phone] media bridge start timed out", {
+        callSid: callSid || null,
+        streamSid: streamSid || null,
+        signaturePresent,
+        signatureValid,
+        durationMs: Date.now() - startedAt,
+      });
+      void finish("failed", "twilio-start-timeout");
+    }
+  }, TWILIO_START_TIMEOUT_MS);
+
+  console.info("[todo-talk-phone] media stream WebSocket accepted", {
+    signaturePresent,
+    signatureValid,
+    host: url.host,
   });
 
   return new Response(null, {
