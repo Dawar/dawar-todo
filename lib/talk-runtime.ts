@@ -345,7 +345,7 @@ ${JSON.stringify(compactContext(context))}`;
 export async function mintRealtimeClientSecret(input: {
   safetyIdentifier: string;
   instructions: string;
-  audioFormat?: "g711_ulaw";
+  audioFormat?: "pcmu";
 }) {
   const current = runtime();
   const apiKey = current.OPENAI_API_KEY?.trim();
@@ -371,7 +371,9 @@ export async function mintRealtimeClientSecret(input: {
         reasoning: { effort: "low" },
         audio: {
           input: {
-            ...(input.audioFormat ? { format: input.audioFormat } : {}),
+            ...(input.audioFormat === "pcmu"
+              ? { format: { type: "audio/pcmu" } }
+              : {}),
             transcription: { model: "gpt-4o-mini-transcribe", language: "en" },
             turn_detection: {
               type: "semantic_vad",
@@ -381,7 +383,9 @@ export async function mintRealtimeClientSecret(input: {
             },
           },
           output: {
-            ...(input.audioFormat ? { format: input.audioFormat } : {}),
+            ...(input.audioFormat === "pcmu"
+              ? { format: { type: "audio/pcmu" } }
+              : {}),
             voice,
           },
         },
@@ -395,7 +399,7 @@ export async function mintRealtimeClientSecret(input: {
   const body = await response.json() as {
     value?: string;
     expires_at?: number;
-    error?: { message?: string };
+    error?: { code?: string; message?: string; param?: string; type?: string };
   };
   if (!response.ok || !body.value) {
     console.error("[todo-talk] realtime client secret mint failed", {
@@ -403,6 +407,9 @@ export async function mintRealtimeClientSecret(input: {
       status: response.status,
       durationMs: Date.now() - startedAt,
       errorType: body.error ? "openai-error" : "unexpected-response",
+      errorCode: body.error?.code ?? null,
+      errorParam: body.error?.param ?? null,
+      errorMessage: body.error?.message?.slice(0, 500) ?? null,
     });
     throw new Error(body.error?.message || "Talk could not start a voice session.");
   }

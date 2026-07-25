@@ -85,7 +85,7 @@ export async function POST(request: Request) {
     const secret = await mintRealtimeClientSecret({
       safetyIdentifier,
       instructions: talkInstructions(context),
-      audioFormat: "g711_ulaw",
+      audioFormat: "pcmu",
     });
     console.info("[todo-talk-phone-bridge] relay session started", {
       callSid,

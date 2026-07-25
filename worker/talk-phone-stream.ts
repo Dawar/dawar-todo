@@ -444,7 +444,7 @@ export async function handleTalkPhoneStream(
         reasoning: { effort: "low" },
         audio: {
           input: {
-            format: "g711_ulaw",
+            format: { type: "audio/pcmu" },
             transcription: { model: "gpt-4o-mini-transcribe", language: "en" },
             turn_detection: {
               type: "semantic_vad",
@@ -453,7 +453,7 @@ export async function handleTalkPhoneStream(
               interrupt_response: true,
             },
           },
-          output: { format: "g711_ulaw", voice },
+          output: { format: { type: "audio/pcmu" }, voice },
         },
         tools: talkToolDefinitions,
         tool_choice: "auto",

@@ -183,7 +183,7 @@ export async function POST(request: Request) {
       const secret = await mintRealtimeClientSecret({
         safetyIdentifier,
         instructions: `${talkInstructions(context)}\n\nRECENT PHONE CONVERSATION\n${recent}`,
-        audioFormat: "g711_ulaw",
+        audioFormat: "pcmu",
       });
       console.info("[todo-talk-phone-bridge] realtime credential rolled over", {
         callSid,

@@ -76,7 +76,7 @@ test("ships a PIN-gated Twilio bridge into the shared Talk runtime", async () =>
   assert.match(stream, /\/v1\/realtime/);
   assert.match(stream, /OpenAI-Project/);
   assert.match(stream, /OpenAI-Safety-Identifier/);
-  assert.match(stream, /format: "g711_ulaw"/);
+  assert.match(stream, /format: \{ type: "audio\/pcmu" \}/);
   assert.match(stream, /response\.output_audio\.delta/);
   assert.match(stream, /input_audio_buffer\.append/);
   assert.match(stream, /event: "clear"/);
@@ -105,7 +105,12 @@ test("ships a PIN-gated Twilio bridge into the shared Talk runtime", async () =>
   assert.match(verifyRoute, /talkPhoneMediaStreamUrl/);
   assert.match(bridgeStartRoute, /consumeTalkPhoneStream/);
   assert.match(bridgeStartRoute, /mintRealtimeClientSecret/);
-  assert.match(bridgeStartRoute, /audioFormat: "g711_ulaw"/);
+  assert.match(bridgeStartRoute, /audioFormat: "pcmu"/);
+  assert.match(bridgeEventsRoute, /audioFormat: "pcmu"/);
+  assert.match(
+    await readFile(new URL("lib/talk-runtime.ts", root), "utf8"),
+    /format: \{ type: "audio\/pcmu" \}/,
+  );
   assert.match(bridgeEventsRoute, /dispatchTalkTool/);
   assert.match(bridgeEventsRoute, /appendTalkMessage/);
   assert.match(bridgeEventsRoute, /action === "rollover"/);
