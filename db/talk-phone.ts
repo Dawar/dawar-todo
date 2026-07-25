@@ -1,7 +1,11 @@
 import { env } from "cloudflare:workers";
 import { ensureTodoDatabase } from "./todos";
 
-const PIN_ITERATIONS = 210_000;
+// Cloudflare Workers' Web Crypto PBKDF2 implementation caps iteration counts
+// at 100,000. Keep the stored value explicit so verification remains
+// deterministic across browser, test, and production runtimes.
+const PIN_ITERATIONS = 100_000;
+const MAX_SUPPORTED_PIN_ITERATIONS = 100_000;
 const MAX_PIN_ATTEMPTS = 3;
 const STREAM_TOKEN_TTL_MS = 5 * 60 * 1_000;
 
@@ -55,6 +59,13 @@ function base64UrlToBytes(value: string) {
 }
 
 async function derivePinHash(pin: string, salt: Uint8Array, iterations: number) {
+  if (!Number.isInteger(iterations) || iterations < 1 || iterations > MAX_SUPPORTED_PIN_ITERATIONS) {
+    console.warn("[todo-talk-phone] unsupported PIN hash iteration count", {
+      iterations,
+      maximum: MAX_SUPPORTED_PIN_ITERATIONS,
+    });
+    throw new Error("This phone PIN uses an unsupported hash format. Reset it in Settings.");
+  }
   const key = await crypto.subtle.importKey(
     "raw",
     new TextEncoder().encode(pin),
@@ -196,6 +207,14 @@ export async function findTalkPhoneUserByPin(pin: string, db?: D1Database) {
   `).all<PhoneProfileRow>();
   let matchedUserKey: string | null = null;
   for (const row of result.results) {
+    if (row.pin_iterations > MAX_SUPPORTED_PIN_ITERATIONS) {
+      console.warn("[todo-talk-phone] skipped legacy PIN hash that must be reset", {
+        userKey: row.user_key,
+        iterations: row.pin_iterations,
+        maximum: MAX_SUPPORTED_PIN_ITERATIONS,
+      });
+      continue;
+    }
     const derived = await derivePinHash(pin, base64UrlToBytes(row.pin_salt), row.pin_iterations);
     const stored = base64UrlToBytes(row.pin_hash);
     if (constantTimeEqual(derived, stored) && !matchedUserKey) matchedUserKey = row.user_key;

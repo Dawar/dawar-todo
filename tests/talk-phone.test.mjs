@@ -43,7 +43,9 @@ test("ships a PIN-gated Twilio bridge into the shared Talk runtime", async () =>
 
   assert.match(phoneDb, /PBKDF2/);
   assert.match(phoneDb, /SHA-256/);
-  assert.match(phoneDb, /PIN_ITERATIONS = 210_000/);
+  assert.match(phoneDb, /PIN_ITERATIONS = 100_000/);
+  assert.match(phoneDb, /MAX_SUPPORTED_PIN_ITERATIONS = 100_000/);
+  assert.match(phoneDb, /unsupported PIN hash iteration count/);
   assert.match(phoneDb, /MAX_PIN_ATTEMPTS = 3/);
   assert.match(phoneDb, /stream_token_consumed_at IS NULL/);
   assert.doesNotMatch(phoneDb, /console\.(?:info|warn|error)\([^)]*pin_hash/);
