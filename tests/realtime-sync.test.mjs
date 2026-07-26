@@ -140,6 +140,9 @@ test("ships automatic saving, queued offline edits, incremental polling, and con
   assert.match(page, /task action committed to durable outbox/);
   assert.match(page, /timeoutMs: 5_000/);
   assert.match(page, /connectionQuality === "degraded"/);
+  assert.match(page, /SYNC_STATUS_DELAY_MS = 5_000/);
+  assert.match(page, /setShowPendingSyncStatus\(true\)/);
+  assert.match(page, /connectionQuality !== "online" \|\| showPendingSyncStatus/);
   assert.match(schema, /todoFieldVersions/);
   assert.match(schema, /todoSyncChanges/);
   assert.match(migration, /CREATE TABLE `todo_field_versions`/);

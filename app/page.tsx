@@ -360,6 +360,7 @@ const MAX_FILE_BYTES = 100 * 1024 * 1024;
 const MAX_AUDIO_DURATION_MS = 30 * 60 * 1000;
 const MAX_VIDEO_DURATION_MS = 60 * 60 * 1000;
 const MAX_IMAGE_PIXELS = 100_000_000;
+const SYNC_STATUS_DELAY_MS = 5_000;
 
 type PreparedAttachmentUpload = {
   uploadId: string;
@@ -1398,6 +1399,7 @@ export default function Home() {
   const [offlineCount, setOfflineCount] = useState(0);
   const [offlineEditCount, setOfflineEditCount] = useState(0);
   const [offlineActionCount, setOfflineActionCount] = useState(0);
+  const [showPendingSyncStatus, setShowPendingSyncStatus] = useState(false);
   const [imageDropActive, setImageDropActive] = useState(false);
   const [loadingAttachments, setLoadingAttachments] = useState(false);
   const [attachmentError, setAttachmentError] = useState("");
@@ -2125,6 +2127,23 @@ export default function Home() {
       window.removeEventListener("offline", updateConnection);
     };
   }, []);
+
+  const pendingSyncCount = offlineCount + offlineEditCount + offlineActionCount;
+  const hasPendingSync = pendingSyncCount > 0;
+
+  useEffect(() => {
+    if (connectionQuality !== "online" || !hasPendingSync) {
+      setShowPendingSyncStatus(false);
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      setShowPendingSyncStatus(true);
+      console.info("[todo-offline] pending synchronization indicator shown", {
+        delayMs: SYNC_STATUS_DELAY_MS,
+      });
+    }, SYNC_STATUS_DELAY_MS);
+    return () => window.clearTimeout(timer);
+  }, [connectionQuality, hasPendingSync]);
 
   useEffect(() => {
     if (!loading) void saveCachedServerState(todos.filter((todo) => !todo.offline), registeredProjects, syncRevisionRef.current).catch((error) => {
@@ -4553,13 +4572,13 @@ export default function Home() {
           console.info("[todo-keyboard] shortcut guide opened", { source: "header" });
         }}
       />
-      {(connectionQuality !== "online" || offlineCount + offlineEditCount + offlineActionCount > 0) && (
+      {(connectionQuality !== "online" || showPendingSyncStatus) && (
         <div className="pointer-events-none fixed right-3 top-[4.25rem] z-40 rounded-full bg-[#202522] px-3 py-1.5 text-xs font-semibold text-white shadow-lg" role="status" aria-live="polite">
           {connectionQuality === "offline"
-            ? `Offline${offlineCount + offlineEditCount + offlineActionCount ? ` · ${offlineCount + offlineEditCount + offlineActionCount} queued` : ""}`
+            ? `Offline${pendingSyncCount ? ` · ${pendingSyncCount} queued` : ""}`
             : connectionQuality === "degraded"
-              ? `Slow connection${offlineCount + offlineEditCount + offlineActionCount ? ` · ${offlineCount + offlineEditCount + offlineActionCount} queued` : ""}`
-              : `${offlineCount + offlineEditCount + offlineActionCount} waiting to sync`}
+              ? `Slow connection${pendingSyncCount ? ` · ${pendingSyncCount} queued` : ""}`
+              : `${pendingSyncCount} waiting to sync`}
         </div>
       )}
       {imageDropActive && (
