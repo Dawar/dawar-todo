@@ -1,4 +1,4 @@
-const CACHE_NAME = "dawar-todo-shell-v6";
+const CACHE_NAME = "dawar-todo-shell-v7";
 const SHELL = [
   "/",
   "/assistant",
@@ -122,12 +122,24 @@ self.addEventListener("fetch", (event) => {
 
   if (request.mode === "navigate") {
     event.respondWith(
-      fetch(request)
-        .then((response) => {
-          if (response.ok) event.waitUntil(refreshDocumentShell(response.clone(), url.pathname));
-          return response;
-        })
-        .catch(() => caches.match(url.pathname).then((cached) => cached || caches.match("/"))),
+      (async () => {
+        const cached = await caches.match(url.pathname) || await caches.match("/");
+        const network = fetch(request)
+          .then((response) => {
+            if (response.ok) event.waitUntil(refreshDocumentShell(response.clone(), url.pathname));
+            return response;
+          });
+        if (cached) {
+          event.waitUntil(network.catch((error) => {
+            console.warn("[todo-pwa] background shell refresh deferred", {
+              path: url.pathname,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }));
+          return cached;
+        }
+        return network.catch(() => caches.match("/"));
+      })(),
     );
     return;
   }

@@ -72,9 +72,10 @@ test("ships the simplified todo and project surface", async () => {
   assert.match(page, /todo\.context && <span className="inline-flex min-h-\[22px\].*bg-sky-50/);
   assert.match(page, /todo\.dueDate && <span className=\{classNames\("inline-flex min-h-\[22px\]/);
   assert.match(page, /todo\.recurrenceCron && <span className="inline-flex min-h-\[22px\].*bg-violet-50/);
-  assert.match(page, /body: JSON\.stringify\(\{ pinned \}\)/);
+  assert.match(page, /body: \{ pinned \}/);
+  assert.match(page, /optimisticPatches: \{ \[String\(todo\.id\)\]: \{ pinned \} \}/);
   assert.match(page, /Task pinned\./);
-  assert.match(page, /task pin changed/);
+  assert.match(page, /task pin committed locally/);
   assert.doesNotMatch(page, /title="Pinned"/);
   assert.match(page, /fixed inset-x-0 z-40/);
   assert.doesNotMatch(page, /sticky top-\[62px\]/);
@@ -82,7 +83,7 @@ test("ships the simplified todo and project surface", async () => {
   assert.match(page, /openedFromDetails/);
   assert.match(page, /setEditDraft\(\(current\) => current \? \{ \.\.\.current, project: projectName \?\? "" \}/);
   assert.match(page, /openProjectAssignment\(\[editingTodo\.id\], "details"\)/);
-  assert.match(page, /preservedTaskState/);
+  assert.match(page, /project assignment committed locally/);
   assert.match(page, /Choose a project/);
   assert.match(page, /projectSelectorOpen/);
   assert.match(page, /projectLabel=\{project === UNASSIGNED_PROJECT \? "Unassigned" : project \|\| "Dawar Todo"\}/);
@@ -90,7 +91,8 @@ test("ships the simplified todo and project surface", async () => {
   assert.doesNotMatch(page, /aria-label="Filter by project"/);
   assert.match(page, /New project/);
   assert.match(page, /setProject\(""\);\s+setView\("open"\)/);
-  assert.match(page, /body: JSON\.stringify\(\{[\s\S]*title,[\s\S]*status: "open",[\s\S]*project: captureProject \|\| null,[\s\S]*draftToken:[\s\S]*attachmentIds:/);
+  assert.match(page, /await saveOfflineTodo\(\{[\s\S]*title,[\s\S]*status: "open",[\s\S]*project: captureProject \|\| null,[\s\S]*draftToken: captureDraftToken/);
+  assert.match(page, /clientId: record\.clientId,[\s\S]*status: record\.status \?\? "open"[\s\S]*attachmentIds/);
   assert.match(page, /onAssignProject=\{openCaptureProjectAssignment\}/);
   assert.match(page, /quick add project staged/);
   assert.match(page, /captureDraft: true/);
@@ -150,7 +152,7 @@ test("ships the simplified todo and project surface", async () => {
   assert.match(page, /type="datetime-local"/);
   assert.match(page, /zonedLocalDateTimeToUtc/);
   assert.match(bulkRoute, /snoozedLocal/);
-  assert.match(page, /snoozeIds: action === "snooze" \? result\.ids : undefined/);
+  assert.match(page, /snoozeIds: action === "snooze" \? ids : undefined/);
   assert.match(database, /export async function adjustSnoozedTodos/);
   assert.match(database, /export async function adjustSnoozedTodosToLocalDateTime/);
   assert.match(database, /status = 'open' AND snoozed_until IS NOT NULL/);
@@ -236,20 +238,20 @@ test("shows fully optimistic Undo and snooze controls while preserving concurren
 
   assert.match(page, /taskPreview\?: string/);
   assert.match(page, /dismissAt\?: number/);
-  assert.match(page, /optimistic action snackbar shown/);
+  assert.match(page, /local-first action applied/);
   assert.match(page, /setNotice\(\{[\s\S]*text: `\$\{optimisticLabel\}/);
   assert.match(page, /operationId\?: string/);
   assert.match(page, /pendingUndo\?: boolean/);
   assert.match(page, /undoRequested\?: boolean/);
   assert.match(page, /current\?\.operationId === operationId/);
-  assert.match(page, /const concurrentDone = action === "complete"/);
+  assert.match(page, /if \(action === "complete"\) ids\.forEach/);
   assert.match(page, /pendingCompletionIdsRef/);
   assert.match(page, /optimisticOperationsRef/);
   assert.match(page, /snoozeIds: action === "snooze" \? ids : undefined/);
   assert.match(page, /notice\.operationId \|\| notice\.undoToken/);
   assert.match(page, /requestNoticeUndo\(notice\)/);
   assert.match(page, /operation\.snoozeAdjustment = adjustment/);
-  assert.match(page, /snooze adjustment queued during optimistic action/);
+  assert.match(page, /snooze adjustment chained behind optimistic action/);
   assert.doesNotMatch(page, /if \(notice\.pendingUndo\) return/);
   assert.match(page, /data-task-notice/);
   assert.doesNotMatch(page, /invisible inline-flex items-center/);

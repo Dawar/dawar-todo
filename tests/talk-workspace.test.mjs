@@ -38,7 +38,7 @@ test("ships the signed-in WebRTC Talk chief-of-staff workspace", async () => {
   assert.match(schema, /todoTalkMessages/);
   assert.match(schema, /todoTalkToolCalls/);
   assert.match(schema, /todoAssistantMemories/);
-  assert.match(database, /CURRENT_SCHEMA_VERSION = "22"/);
+  assert.match(database, /CURRENT_SCHEMA_VERSION = "23"/);
   assert.match(database, /CREATE TABLE IF NOT EXISTS todo_talk_workspaces/);
   assert.match(database, /CREATE TABLE IF NOT EXISTS todo_assistant_memories/);
   assert.match(migration, /CREATE TABLE `todo_talk_sessions`/);

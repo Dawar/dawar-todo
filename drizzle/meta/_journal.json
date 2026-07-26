@@ -162,6 +162,13 @@
       "when": 1784952824707,
       "tag": "0022_rich_madame_hydra",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "6",
+      "when": 1785099837598,
+      "tag": "0023_deep_pretty_boy",
+      "breakpoints": true
     }
   ]
 }

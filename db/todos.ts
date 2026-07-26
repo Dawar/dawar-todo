@@ -122,7 +122,7 @@ type TodoSyncChangeRow = {
 };
 
 let initialization: Promise<void> | null = null;
-const CURRENT_SCHEMA_VERSION = "22";
+const CURRENT_SCHEMA_VERSION = "23";
 
 function database() {
   if (!env.DB) throw new Error("The todo database is unavailable.");
@@ -212,6 +212,16 @@ async function ensureTodoSyncSchema(db: D1Database) {
     `),
     db.prepare("CREATE INDEX IF NOT EXISTS todo_sync_changes_created_at_idx ON todo_sync_changes(created_at)"),
     db.prepare("CREATE INDEX IF NOT EXISTS todo_sync_changes_entity_idx ON todo_sync_changes(entity_type, entity_key, revision)"),
+    db.prepare(`
+      CREATE TABLE IF NOT EXISTS todo_mutation_receipts (
+        operation_id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL,
+        response_json TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+      )
+    `),
+    db.prepare("CREATE INDEX IF NOT EXISTS todo_mutation_receipts_created_at_idx ON todo_mutation_receipts(created_at)"),
+    db.prepare("DELETE FROM todo_mutation_receipts WHERE created_at < strftime('%Y-%m-%dT%H:%M:%fZ','now','-7 days')"),
     db.prepare(`CREATE TRIGGER IF NOT EXISTS todo_sync_todos_insert AFTER INSERT ON todos BEGIN
       INSERT INTO todo_sync_changes (entity_type, entity_key, operation) VALUES ('todo', CAST(NEW.id AS TEXT), 'upsert');
     END`),
@@ -1234,6 +1244,40 @@ export async function getTodo(id: number): Promise<Todo | null> {
     FROM todos WHERE todos.id = ?
   `).bind(id).first<TodoRow>();
   return row ? mapTodo(row) : null;
+}
+
+export async function readTodoMutationReceipt<T>(operationId: string, kind: string): Promise<T | null> {
+  await ensureTodoDatabase();
+  if (!/^[0-9a-f-]{36}$/i.test(operationId)) throw new Error("A mutation operation identifier is invalid.");
+  const receipt = await database().prepare(`
+    SELECT response_json
+    FROM todo_mutation_receipts
+    WHERE operation_id = ? AND kind = ?
+  `).bind(operationId, kind).first<{ response_json: string }>();
+  if (!receipt) return null;
+  console.info("[todo-db] idempotent mutation receipt replayed", { operationId, kind });
+  return JSON.parse(receipt.response_json) as T;
+}
+
+export async function saveTodoMutationReceipt<T>(operationId: string, kind: string, response: T): Promise<T> {
+  await ensureTodoDatabase();
+  if (!/^[0-9a-f-]{36}$/i.test(operationId)) throw new Error("A mutation operation identifier is invalid.");
+  const responseJson = JSON.stringify(response);
+  await database().batch([
+    database().prepare(`
+      INSERT OR IGNORE INTO todo_mutation_receipts (operation_id, kind, response_json)
+      VALUES (?, ?, ?)
+    `).bind(operationId, kind, responseJson),
+    database().prepare("DELETE FROM todo_mutation_receipts WHERE created_at < strftime('%Y-%m-%dT%H:%M:%fZ','now','-7 days')"),
+  ]);
+  const stored = await database().prepare(`
+    SELECT response_json
+    FROM todo_mutation_receipts
+    WHERE operation_id = ? AND kind = ?
+  `).bind(operationId, kind).first<{ response_json: string }>();
+  if (!stored) throw new Error("The mutation receipt could not be stored.");
+  console.info("[todo-db] mutation receipt stored", { operationId, kind, bytes: responseJson.length });
+  return JSON.parse(stored.response_json) as T;
 }
 
 function placeholders(count: number) {

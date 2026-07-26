@@ -227,6 +227,21 @@ export const todoSyncChanges = sqliteTable(
   ],
 );
 
+export const todoMutationReceipts = sqliteTable(
+  "todo_mutation_receipts",
+  {
+    operationId: text("operation_id").primaryKey(),
+    kind: text("kind").notNull(),
+    responseJson: text("response_json").notNull(),
+    createdAt: text("created_at")
+      .notNull()
+      .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`),
+  },
+  (table) => [
+    index("todo_mutation_receipts_created_at_idx").on(table.createdAt),
+  ],
+);
+
 export const todoAssistantWorkspaces = sqliteTable("todo_assistant_workspaces", {
   userKey: text("user_key").primaryKey(),
   selectedTodoId: integer("selected_todo_id"),

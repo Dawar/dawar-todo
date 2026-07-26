@@ -241,6 +241,7 @@ test("installs an offline-capable PWA with idempotent queued task syncing", asyn
   assert.match(offlineStore, /indexedDB\.open/);
   assert.match(offlineStore, /pending-todos/);
   assert.match(offlineStore, /pending-mutations/);
+  assert.match(offlineStore, /pending-actions/);
   assert.match(offlineStore, /blob: Blob/);
   assert.match(offlineStore, /project: string \| null/);
   assert.match(offlineStore, /navigator\.storage\.persist/);
@@ -253,12 +254,13 @@ test("installs an offline-capable PWA with idempotent queued task syncing", asyn
   assert.match(page, /className="fixed z-\[70\] hidden w-56/);
   assert.match(page, /clientId: record\.clientId/);
   assert.match(page, /project: record\.project \?\? null/);
-  assert.match(page, /Saved offline\. It will sync automatically/);
+  assert.match(page, /quick add committed locally/);
+  assert.match(page, /void syncOfflineQueueRef\.current\?\.\(\)/);
   assert.match(page, /leftSecondaryAction\.icon === "snooze" \|\| leftSecondaryAction\.icon === "wake"/);
   assert.match(serviceWorker, /request\.mode === "navigate"/);
   assert.match(serviceWorker, /url\.pathname\.startsWith\("\/api\/"\)/);
   assert.match(serviceWorker, /caches\.match/);
-  assert.match(serviceWorker, /dawar-todo-shell-v6/);
+  assert.match(serviceWorker, /dawar-todo-shell-v7/);
   assert.match(serviceWorker, /function shellAssetUrls/);
   assert.match(serviceWorker, /function discoveredAssetUrls/);
   assert.match(serviceWorker, /function cacheAssetGraph/);
@@ -266,6 +268,7 @@ test("installs an offline-capable PWA with idempotent queued task syncing", asyn
   assert.match(serviceWorker, /text\.matchAll/);
   assert.match(serviceWorker, /precacheAppShell\(\)/);
   assert.match(serviceWorker, /refreshDocumentShell/);
+  assert.match(serviceWorker, /background shell refresh deferred/);
   assert.match(serviceWorker, /new Request\(url, \{ cache: "reload", credentials: "same-origin" \}\)/);
   assert.match(manifest, /"display": "standalone"/);
   assert.match(manifest, /icon-maskable-512\.png/);

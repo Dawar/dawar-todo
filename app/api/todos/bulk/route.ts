@@ -1,4 +1,13 @@
-import { adjustSnoozedTodos, adjustSnoozedTodosToLocalDateTime, BulkTodoAction, bulkUpdateTodos, mergeTodos, type SnoozePreset } from "../../../../db/todos";
+import {
+  adjustSnoozedTodos,
+  adjustSnoozedTodosToLocalDateTime,
+  BulkTodoAction,
+  bulkUpdateTodos,
+  mergeTodos,
+  readTodoMutationReceipt,
+  saveTodoMutationReceipt,
+  type SnoozePreset,
+} from "../../../../db/todos";
 import { isQuickSnoozePreset } from "../../../../lib/snooze-presets";
 
 const actions = new Set<BulkTodoAction>(["complete", "reopen", "snooze", "unsnooze", "reproject", "delete"]);
@@ -12,11 +21,29 @@ export async function POST(request: Request) {
       project?: unknown;
       snoozePreset?: unknown;
       snoozedLocal?: unknown;
+      operationId?: unknown;
     };
     if (!Array.isArray(payload.ids)) {
       return Response.json({ error: "Choose one or more tasks." }, { status: 400 });
     }
     const ids = payload.ids.map(Number);
+    const operationId = typeof payload.operationId === "string" ? payload.operationId.trim() : "";
+    if (operationId && !/^[0-9a-f-]{36}$/i.test(operationId)) {
+      return Response.json({ error: "A valid mutation operation identifier is required." }, { status: 400 });
+    }
+    const receiptKind = `bulk:${String(payload.action ?? "unknown")}`;
+    if (operationId) {
+      const replay = await readTodoMutationReceipt<Record<string, unknown>>(operationId, receiptKind);
+      if (replay) {
+        console.info("[todo-api] bulk mutation replayed", {
+          operationId,
+          action: payload.action ?? null,
+          requested: ids.length,
+          durationMs: Date.now() - startedAt,
+        });
+        return Response.json(replay);
+      }
+    }
     if (payload.action === "merge") {
       const result = await mergeTodos(ids);
       console.info("[todo-api] bulk merged", {
@@ -24,7 +51,9 @@ export async function POST(request: Request) {
         mergedId: result.todo.id,
         durationMs: Date.now() - startedAt,
       });
-      return Response.json(result);
+      return Response.json(operationId
+        ? await saveTodoMutationReceipt(operationId, receiptKind, result)
+        : result);
     }
     if (payload.action === "adjust_snooze") {
       const snoozePreset = String(payload.snoozePreset ?? "") as SnoozePreset;
@@ -44,7 +73,9 @@ export async function POST(request: Request) {
         snoozedUntil: result.snoozedUntil,
         durationMs: Date.now() - startedAt,
       });
-      return Response.json(result);
+      return Response.json(operationId
+        ? await saveTodoMutationReceipt(operationId, receiptKind, result)
+        : result);
     }
     if (!payload.action || !actions.has(payload.action)) {
       return Response.json({ error: "Choose a valid bulk action." }, { status: 400 });
@@ -59,7 +90,9 @@ export async function POST(request: Request) {
       count: result.ids.length,
       durationMs: Date.now() - startedAt,
     });
-    return Response.json(result);
+    return Response.json(operationId
+      ? await saveTodoMutationReceipt(operationId, receiptKind, result)
+      : result);
   } catch (error) {
     const message = error instanceof Error ? error.message : "The bulk action could not be completed.";
     const inputError = /Choose|limited|selected tasks|project|snooze|date|time|future|daylight/i.test(message);

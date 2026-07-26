@@ -36,19 +36,31 @@ import { zonedDateTimeInputValue, zonedLocalDateTimeToUtc } from "../lib/zoned-d
 import { SiteHeader } from "./site-header";
 import { PullGesturePill } from "./pull-to-refresh";
 import {
+  appendOfflineTodoAttachments,
+  deferOfflineTaskAction,
   deleteOfflineTodo,
+  deleteOfflineTodoAttachment,
+  deleteOfflineTodoByLocalId,
   deleteOfflineTodoMutation,
+  deleteOfflineTaskAction,
+  getOfflineTodoByLocalId,
   loadCachedServerState,
   loadOfflineCaptureDraft,
   listOfflineTodos,
+  listOfflineTaskActions,
   listOfflineTodoMutations,
+  markOfflineTodoAttachmentUploaded,
+  markOfflineTaskActionUndo,
   persistOfflineStorage,
   saveOfflineCaptureDraft,
+  saveOfflineTaskAction,
   saveOfflineTodo,
   saveOfflineTodoMutation,
   saveCachedServerState,
+  updateOfflineTodo,
   type OfflineAttachmentKind,
   type OfflineCaptureDraft,
+  type OfflineTaskAction,
   type OfflineTodoRecord,
 } from "./offline-store";
 
@@ -134,7 +146,7 @@ type SyncResponse = ({
 type OptimisticOperation = {
   ids: number[];
   previous: Todo[];
-  action: ExecutableTodoAction | "merge" | "pin";
+  action: ExecutableTodoAction | "merge" | "pin" | "project";
   undoRequested: boolean;
   settled: boolean;
   undoToken?: string;
@@ -166,7 +178,7 @@ type PendingAttachment = {
   previewUrl: string;
   kind: OfflineAttachmentKind;
   durationMs: number;
-  status: "uploading" | "ready" | "error" | "offline";
+  status: "staged" | "uploading" | "ready" | "error" | "offline";
   attachment: TodoAttachment | null;
   error: string;
 };
@@ -181,6 +193,7 @@ type TodoDraft = Pick<Todo, "title" | "notes" | "priority"> & {
 type AutosaveField = "title" | "notes" | "priority" | "dueDate" | "context" | "recurrenceCron";
 type AutosavePatch = Partial<Record<AutosaveField, string | number | null>>;
 type EditSaveState = "saved" | "saving" | "offline" | "error";
+type ConnectionQuality = "online" | "degraded" | "offline";
 type PersistTaskDraft = (
   todoId: number,
   draft: TodoDraft,
@@ -233,23 +246,62 @@ const priorityLabels: Record<number, string> = {
   4: "Low",
 };
 
-function request<T>(path: string, options?: RequestInit): Promise<T> {
+type RequestOptions = RequestInit & { timeoutMs?: number };
+
+function request<T>(path: string, options?: RequestOptions): Promise<T> {
   const formData = typeof FormData !== "undefined" && options?.body instanceof FormData;
   const headers = options?.body && !formData
     ? { "Content-Type": "application/json", ...(options.headers ?? {}) }
     : options?.headers;
+  const controller = new AbortController();
+  const timeoutMs = options?.timeoutMs ?? (formData ? 60_000 : 8_000);
+  let timedOut = false;
+  const timeout = window.setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+  const upstreamAbort = () => controller.abort();
+  options?.signal?.addEventListener("abort", upstreamAbort, { once: true });
   return fetch(path, {
     ...options,
+    signal: controller.signal,
     headers: options?.method && options.method !== "GET" ? headersWithDeviceId(headers) : headers,
-  }).then(async (response) => {
-    const payload = (await response.json().catch(() => ({}))) as T & { error?: string };
-    if (!response.ok) {
-      const error = new Error(payload.error || "Something went wrong.") as Error & { status?: number };
-      error.status = response.status;
-      throw error;
-    }
-    return payload;
-  });
+  })
+    .then(async (response) => {
+      const payload = (await response.json().catch(() => ({}))) as T & { error?: string };
+      if (!response.ok) {
+        const error = new Error(payload.error || "Something went wrong.") as Error & { status?: number };
+        error.status = response.status;
+        throw error;
+      }
+      return payload;
+    })
+    .catch((error) => {
+      if (!timedOut) throw error;
+      const timeoutError = new Error(`The connection did not respond within ${Math.round(timeoutMs / 1000)} seconds.`) as Error & {
+        timeout?: boolean;
+      };
+      timeoutError.name = "TimeoutError";
+      timeoutError.timeout = true;
+      throw timeoutError;
+    })
+    .finally(() => {
+      window.clearTimeout(timeout);
+      options?.signal?.removeEventListener("abort", upstreamAbort);
+    });
+}
+
+function retryableNetworkError(error: unknown) {
+  const status = (error as Error & { status?: number }).status;
+  return error instanceof TypeError
+    || (error as Error & { timeout?: boolean }).timeout === true
+    || (typeof status === "number" && (status === 408 || status === 425 || status === 429 || status >= 500))
+    || status === undefined;
+}
+
+function syncRetryDelay(attempts: number) {
+  const base = Math.min(60_000, 1_000 * (2 ** Math.min(attempts, 6)));
+  return base + Math.floor(Math.random() * Math.min(2_000, Math.round(base * 0.2)));
 }
 
 const AUTOSAVE_FIELDS: AutosaveField[] = ["title", "notes", "priority", "dueDate", "context", "recurrenceCron"];
@@ -959,23 +1011,42 @@ function offlineRecordTodo(record: OfflineTodoRecord): Todo {
     clientId: record.clientId,
     title: record.title,
     notes: record.notes,
-    status: "open",
-    priority: 3,
-    dueDate: null,
+    status: record.status ?? "open",
+    priority: record.priority ?? 3,
+    dueDate: record.dueDate ?? null,
     project: record.project ?? null,
-    context: null,
-    sourceKind: "offline",
-    sourceId: null,
-    completedAt: null,
-    snoozedUntil: null,
-    recurrenceCron: null,
-    recurrenceLastFiredAt: null,
-    pinned: false,
+    context: record.context ?? null,
+    sourceKind: record.sourceKind ?? "offline",
+    sourceId: record.sourceId ?? null,
+    completedAt: record.completedAt ?? null,
+    snoozedUntil: record.snoozedUntil ?? null,
+    recurrenceCron: record.recurrenceCron ?? null,
+    recurrenceLastFiredAt: record.recurrenceLastFiredAt ?? null,
+    pinned: record.pinned ?? false,
     createdAt: record.createdAt,
-    updatedAt: record.createdAt,
+    updatedAt: record.updatedAt ?? record.createdAt,
     attachmentCount: record.attachments.length,
     offline: true,
   };
+}
+
+function offlineTaskPatch(todo: Todo) {
+  return {
+    title: todo.title,
+    notes: todo.notes,
+    status: todo.status,
+    priority: todo.priority,
+    dueDate: todo.dueDate,
+    project: todo.project,
+    context: todo.context,
+    completedAt: todo.completedAt,
+    snoozedUntil: todo.snoozedUntil,
+    recurrenceCron: todo.recurrenceCron,
+    recurrenceLastFiredAt: todo.recurrenceLastFiredAt,
+    pinned: todo.pinned,
+    sourceKind: todo.sourceKind,
+    sourceId: todo.sourceId,
+  } satisfies Partial<OfflineTodoRecord>;
 }
 
 function todoActionIcon(action: TodoAction | "assign", label: string): ActionIconName {
@@ -1323,8 +1394,10 @@ export default function Home() {
   const [detailUploads, setDetailUploads] = useState<PendingAttachment[]>([]);
   const [voiceTarget, setVoiceTarget] = useState<"capture" | "detail" | null>(null);
   const [online, setOnline] = useState(true);
+  const [connectionQuality, setConnectionQuality] = useState<ConnectionQuality>("online");
   const [offlineCount, setOfflineCount] = useState(0);
   const [offlineEditCount, setOfflineEditCount] = useState(0);
+  const [offlineActionCount, setOfflineActionCount] = useState(0);
   const [imageDropActive, setImageDropActive] = useState(false);
   const [loadingAttachments, setLoadingAttachments] = useState(false);
   const [attachmentError, setAttachmentError] = useState("");
@@ -1381,15 +1454,47 @@ export default function Home() {
   const persistTaskDraftRef = useRef<PersistTaskDraft | null>(null);
   const closeTaskDetailsRef = useRef<() => void>(() => undefined);
   const pendingTodoPatchesRef = useRef<Map<number, Record<string, unknown>>>(new Map());
+  const pendingActionPatchesRef = useRef<Map<number, Record<string, unknown>>>(new Map());
+  const pendingDeletedIdsRef = useRef<Set<number>>(new Set());
   const pendingCompletionIdsRef = useRef<Set<number>>(new Set());
   const optimisticOperationsRef = useRef<Map<string, OptimisticOperation>>(new Map());
   const liveSyncRunningRef = useRef(false);
   const syncRevisionRef = useRef(0);
   const lastLiveSnapshotRef = useRef("");
+  const syncRetryTimerRef = useRef<number | null>(null);
+  const syncBackoffAttemptsRef = useRef(0);
+  const syncNextAttemptAtRef = useRef(0);
   const lastAppBadgeCountRef = useRef<number | null>(null);
   const keyboardPreferredIndexRef = useRef(0);
   const taskDialogNestedOverlayOpen = projectDialog !== null || viewerIndex !== null || voiceTarget !== null || customSnoozeDialog !== null;
   const overlayOpen = editingId !== null || projectSelectorOpen || projectDialog !== null || newProjectOpen || projectDeleteDialog !== null || filtersOpen || viewerIndex !== null || voiceTarget !== null || shortcutsOpen || customSnoozeDialog !== null;
+
+  function rebuildPendingActionState(actions: OfflineTaskAction[]) {
+    const patches = new Map<number, Record<string, unknown>>();
+    const deletedIds = new Set<number>();
+    for (const action of actions) {
+      if (action.undoRequested) continue;
+      for (const [rawId, patch] of Object.entries(action.optimisticPatches ?? {})) {
+        const id = Number(rawId);
+        patches.set(id, { ...(patches.get(id) ?? {}), ...patch });
+      }
+      for (const id of action.optimisticDeletedIds ?? []) deletedIds.add(id);
+    }
+    pendingActionPatchesRef.current = patches;
+    pendingDeletedIdsRef.current = deletedIds;
+    console.info("[todo-offline] optimistic action overlay rebuilt", {
+      queuedActions: actions.length,
+      patchedTasks: patches.size,
+      deletedTasks: deletedIds.size,
+    });
+  }
+
+  function applyPendingOverlays(todo: Todo) {
+    return patchTodo(
+      patchTodo(todo, pendingTodoPatchesRef.current.get(todo.id) ?? {}),
+      pendingActionPatchesRef.current.get(todo.id) ?? {},
+    );
+  }
 
   function applyRemoteCaptureDraft(remoteDraft: CaptureDraft | null, source: "bootstrap" | "poll" | "reconnect" | "mutation") {
     if (!remoteDraft) return;
@@ -1438,7 +1543,9 @@ export default function Home() {
 
   const applyLiveSnapshot = useEffectEvent((remoteTodos: Todo[], source: "initial" | "poll" | "reconnect" | "snooze-wake") => {
     const pendingPatches = pendingTodoPatchesRef.current;
-    const resolved = remoteTodos.map((todo) => patchTodo(todo, pendingPatches.get(todo.id) ?? {}));
+    const resolved = remoteTodos
+      .filter((todo) => !pendingDeletedIdsRef.current.has(todo.id))
+      .map(applyPendingOverlays);
     setTodos((current) => {
       const offlineTodos = current.filter((todo) => todo.id < 0 || todo.offline);
       const next = [...offlineTodos, ...resolved];
@@ -1517,12 +1624,14 @@ export default function Home() {
       }
       console.warn("[todo-sync] remote deletion superseded queued edits", { ids: discardedPendingIds });
     }
-    const changed = remoteTodos.map((todo) => patchTodo(todo, pendingPatches.get(todo.id) ?? {}));
+    const changed = remoteTodos
+      .filter((todo) => !pendingDeletedIdsRef.current.has(todo.id))
+      .map(applyPendingOverlays);
     const changedById = new Map(changed.map((todo) => [todo.id, todo]));
     const deleted = new Set(deletedIds);
     setTodos((current) => {
       const next = current
-        .filter((todo) => todo.offline || todo.id < 0 || !deleted.has(todo.id))
+        .filter((todo) => (todo.offline || todo.id < 0 || !deleted.has(todo.id)) && !pendingDeletedIdsRef.current.has(todo.id))
         .map((todo) => changedById.get(todo.id) ?? todo);
       const existingIds = new Set(next.map((todo) => todo.id));
       const inserted = changed.filter((todo) => !existingIds.has(todo.id));
@@ -1563,7 +1672,7 @@ export default function Home() {
   });
 
   const refreshLiveData = useEffectEvent(async (source: "poll" | "reconnect" | "snooze-wake") => {
-    if (liveSyncRunningRef.current || !navigator.onLine || document.visibilityState === "hidden") return;
+    if (liveSyncRunningRef.current || document.visibilityState === "hidden") return;
     liveSyncRunningRef.current = true;
     const startedAt = Date.now();
     try {
@@ -1586,6 +1695,8 @@ export default function Home() {
         applyRemoteCaptureDraft(result.captureDraft ?? null, source);
       }
       syncRevisionRef.current = result.revision;
+      setOnline(true);
+      setConnectionQuality("online");
       const changedTodos = result.todos.length + (result.reset ? 0 : result.deletedIds.length);
       if (source !== "poll" || result.reset || changedTodos > 0 || result.projects || result.settings || Object.prototype.hasOwnProperty.call(result, "captureDraft")) {
         console.info("[todo-sync] delta applied", {
@@ -1602,9 +1713,13 @@ export default function Home() {
         });
       }
     } catch (error) {
+      const quality = navigator.onLine ? "degraded" : "offline";
+      setOnline(navigator.onLine);
+      setConnectionQuality(quality);
       console.warn("[todo-sync] live refresh deferred", {
         source,
         browserOnline: navigator.onLine,
+        quality,
         durationMs: Date.now() - startedAt,
         error,
       });
@@ -1627,13 +1742,17 @@ export default function Home() {
   useEffect(() => {
     let active = true;
     const load = async () => {
-      const [offlineRecords, offlineMutations, cachedState, offlineCaptureDraft] = await Promise.all([
+      const [offlineRecords, offlineMutations, offlineActions, cachedState, offlineCaptureDraft] = await Promise.all([
         listOfflineTodos().catch((error) => {
           console.error("[todo-offline] queue load failed", error);
           return [];
         }),
         listOfflineTodoMutations().catch((error) => {
           console.error("[todo-offline] edit queue load failed", error);
+          return [];
+        }),
+        listOfflineTaskActions().catch((error) => {
+          console.error("[todo-offline] action queue load failed", error);
           return [];
         }),
         loadCachedServerState<Todo>().catch((error) => {
@@ -1645,66 +1764,81 @@ export default function Home() {
           return null;
         }),
       ]);
-      const server = await request<BootstrapResponse>("/api/bootstrap", { cache: "no-store" }).catch((error) => {
-        console.warn("[todo-ui] server load unavailable", { online: navigator.onLine, error });
+      if (!active) return;
+      pendingTodoPatchesRef.current = new Map(offlineMutations.map((mutation) => [mutation.todoId, mutation.patch]));
+      rebuildPendingActionState(offlineActions);
+      const cachedTodos = (cachedState?.todos ?? [])
+        .filter((todo) => !pendingDeletedIdsRef.current.has(todo.id))
+        .map(applyPendingOverlays);
+      setTodos([...offlineRecords.map(offlineRecordTodo), ...cachedTodos]);
+      setOfflineCount(offlineRecords.length);
+      setOfflineEditCount(offlineMutations.length);
+      setOfflineActionCount(offlineActions.length);
+      setRegisteredProjects(cachedState?.projects ?? []);
+      syncRevisionRef.current = cachedState?.revision ?? 0;
+      if (offlineCaptureDraft) {
+        captureDraftRef.current = offlineCaptureDraft;
+        newTitleRef.current = offlineCaptureDraft.text;
+        captureDraftClockRef.current = Math.max(captureDraftClockRef.current, new Date(offlineCaptureDraft.updatedAt).valueOf() || 0);
+        setNewTitle(offlineCaptureDraft.text);
+        window.requestAnimationFrame(() => {
+          if (captureRef.current) resizeCapture(captureRef.current);
+        });
+      }
+      setLoading(false);
+      console.info("[todo-ui] local-first shell hydrated", {
+        cached: cachedTodos.length,
+        offlinePending: offlineRecords.length,
+        offlineEdits: offlineMutations.length,
+        offlineActions: offlineActions.length,
+        projects: cachedState?.projects.length ?? 0,
+        revision: syncRevisionRef.current,
+        captureDraftLength: offlineCaptureDraft?.text.length ?? 0,
+      });
+
+      const server = await request<BootstrapResponse>("/api/bootstrap", {
+        cache: "no-store",
+        timeoutMs: 5_000,
+      }).catch((error) => {
+        const quality = navigator.onLine ? "degraded" : "offline";
+        setConnectionQuality(quality);
+        setOnline(navigator.onLine);
+        console.warn("[todo-ui] background bootstrap unavailable", { quality, browserOnline: navigator.onLine, error });
         return null;
       });
-      if (!active) return;
-      const loaded = server?.todos ?? cachedState?.todos ?? [];
-      const loadedProjects = server?.projects ?? cachedState?.projects ?? [];
-      const serverClientIds = new Set(loaded.map((todo) => todo.clientId).filter(Boolean));
+      if (!active || !server) return;
+
+      const serverClientIds = new Set(server.todos.map((todo) => todo.clientId).filter(Boolean));
       const pendingRecords = offlineRecords.filter((record) => !serverClientIds.has(record.clientId));
       const alreadySynced = offlineRecords.filter((record) => serverClientIds.has(record.clientId));
       await Promise.all(alreadySynced.map((record) => deleteOfflineTodo(record.clientId))).catch((error) => {
         console.error("[todo-offline] reconciled queue cleanup failed", error);
       });
       if (!active) return;
-      pendingTodoPatchesRef.current = new Map(offlineMutations.map((mutation) => [mutation.todoId, mutation.patch]));
-      const loadedWithPendingEdits = loaded.map((todo) => patchTodo(todo, pendingTodoPatchesRef.current.get(todo.id) ?? {}));
-      setTodos([...pendingRecords.map(offlineRecordTodo), ...loadedWithPendingEdits]);
+      const remoteTodos = server.todos
+        .filter((todo) => !pendingDeletedIdsRef.current.has(todo.id))
+        .map(applyPendingOverlays);
+      setTodos([...pendingRecords.map(offlineRecordTodo), ...remoteTodos]);
       setOfflineCount(pendingRecords.length);
-      setOfflineEditCount(offlineMutations.length);
-      setRegisteredProjects(loadedProjects);
-      syncRevisionRef.current = server?.revision ?? cachedState?.revision ?? 0;
-      if (server?.settings) {
-        setScheduleTimeZone(server.settings.snoozeTimeZone);
-        setQuickSnoozePresets(server.settings.snoozeQuickPresets ?? DEFAULT_QUICK_SNOOZE_PRESETS);
-      }
-      const serverCaptureDraft = server?.captureDraft ?? null;
-      const chosenCaptureDraft = offlineCaptureDraft && (!serverCaptureDraft || offlineCaptureDraft.version > serverCaptureDraft.version)
-        ? offlineCaptureDraft
-        : serverCaptureDraft;
-      if (chosenCaptureDraft) {
-        captureDraftRef.current = chosenCaptureDraft;
-        newTitleRef.current = chosenCaptureDraft.text;
-        captureDraftClockRef.current = Math.max(captureDraftClockRef.current, new Date(chosenCaptureDraft.updatedAt).valueOf() || 0);
-        setNewTitle(chosenCaptureDraft.text);
-        window.requestAnimationFrame(() => {
-          if (captureRef.current) resizeCapture(captureRef.current);
-        });
-        if (offlineCaptureDraft && chosenCaptureDraft.version === offlineCaptureDraft.version && (!serverCaptureDraft || offlineCaptureDraft.version > serverCaptureDraft.version)) {
-          void persistCaptureDraftRef.current?.(offlineCaptureDraft, "offline-recovery");
-        } else {
-          void saveOfflineCaptureDraft({ key: "quick-add", ...chosenCaptureDraft }).catch((error) => {
-            console.error("[todo-offline] bootstrap Quick Add draft cache failed", error);
-          });
-        }
-      }
-      if (server) void saveCachedServerState(loaded, loadedProjects, server.revision);
-      if (!server) setNotice({ tone: "success", text: pendingRecords.length ? "Offline — showing tasks waiting to sync." : "Offline — new tasks will sync when you reconnect." });
-      console.info("[todo-ui] loaded", {
-        count: loaded.length,
-        offlinePending: pendingRecords.length,
-        offlineEdits: offlineMutations.length,
-        reconciled: alreadySynced.length,
-        projects: loadedProjects.length,
-        revision: syncRevisionRef.current,
-        captureDraftSource: chosenCaptureDraft === offlineCaptureDraft ? "offline" : chosenCaptureDraft ? "server" : "empty",
-        captureDraftLength: chosenCaptureDraft?.text.length ?? 0,
-        open: loaded.filter((todo) => todo.status === "open").length,
-        completed: loaded.filter((todo) => todo.status === "completed").length,
-        snoozed: loaded.filter((todo) => isSnoozed(todo, Date.now())).length,
+      setRegisteredProjects(server.projects);
+      syncRevisionRef.current = server.revision;
+      setScheduleTimeZone(server.settings.snoozeTimeZone);
+      setQuickSnoozePresets(server.settings.snoozeQuickPresets ?? DEFAULT_QUICK_SNOOZE_PRESETS);
+      if (server.captureDraft) applyRemoteCaptureDraft(server.captureDraft, "bootstrap");
+      setOnline(true);
+      setConnectionQuality("online");
+      void saveCachedServerState(server.todos, server.projects, server.revision);
+      console.info("[todo-ui] background bootstrap reconciled", {
+        remote: server.todos.length,
+        pendingCreates: pendingRecords.length,
+        reconciledCreates: alreadySynced.length,
+        pendingEdits: offlineMutations.length,
+        pendingActions: offlineActions.length,
+        revision: server.revision,
       });
+      if (pendingRecords.length || offlineMutations.length || offlineActions.length) {
+        void syncOfflineQueueRef.current?.();
+      }
     };
     void load()
       .catch((error: Error) => active && setNotice({ tone: "error", text: error.message }))
@@ -1714,9 +1848,23 @@ export default function Home() {
   }, [setTodos]);
 
   useEffect(() => {
-    if (online && (offlineCount > 0 || offlineEditCount > 0)) void syncOfflineQueueRef.current?.();
+    if (offlineCount > 0 || offlineEditCount > 0 || offlineActionCount > 0) {
+      void syncOfflineQueueRef.current?.();
+    }
     if (online && captureDraftRef.current) void persistCaptureDraftRef.current?.(captureDraftRef.current, "reconnect");
-  }, [online, offlineCount, offlineEditCount]);
+  }, [online, offlineCount, offlineEditCount, offlineActionCount]);
+
+  useEffect(() => {
+    if (loading || offlineCount + offlineEditCount + offlineActionCount === 0) return;
+    const retry = () => {
+      if (document.visibilityState === "visible") void syncOfflineQueueRef.current?.();
+    };
+    syncRetryTimerRef.current = window.setInterval(retry, 2_500);
+    return () => {
+      if (syncRetryTimerRef.current !== null) window.clearInterval(syncRetryTimerRef.current);
+      syncRetryTimerRef.current = null;
+    };
+  }, [loading, offlineActionCount, offlineCount, offlineEditCount]);
 
   useEffect(() => () => {
     if (captureDraftSaveTimerRef.current !== null) window.clearTimeout(captureDraftSaveTimerRef.current);
@@ -1965,7 +2113,9 @@ export default function Home() {
     const updateConnection = () => {
       const next = navigator.onLine;
       setOnline(next);
-      console.info("[todo-offline] connection changed", { online: next });
+      setConnectionQuality(next ? "degraded" : "offline");
+      if (next) void syncOfflineQueueRef.current?.();
+      console.info("[todo-offline] browser connection hint changed", { onlineHint: next });
     };
     updateConnection();
     window.addEventListener("online", updateConnection);
@@ -2574,7 +2724,7 @@ export default function Home() {
         previewUrl: URL.createObjectURL(file),
         kind,
         durationMs,
-        status: navigator.onLine ? "uploading" : "offline",
+        status: "staged",
         attachment: null,
         error: "",
       });
@@ -2669,13 +2819,9 @@ export default function Home() {
     const items = await pendingAttachments(files);
     if (!items.length) return;
     setCaptureAttachments((current) => [...current, ...items]);
-    console.info("[todo-ui] capture attachments queued", { count: items.length, online: navigator.onLine, kinds: items.map((item) => item.kind), totalBytes: files.reduce((sum, file) => sum + file.size, 0) });
-    if (!navigator.onLine) return;
+    console.info("[todo-offline] capture attachments staged locally", { count: items.length, browserOnlineHint: navigator.onLine, kinds: items.map((item) => item.kind), totalBytes: files.reduce((sum, file) => sum + file.size, 0) });
     const recognitionTarget = items.find((item) => item.kind === "image");
     if (recognitionTarget && !newTitleRef.current.trim()) void recognizeCaptureImage(recognitionTarget);
-    void (async () => {
-      for (const item of items) await uploadCaptureAttachment(item, captureDraftToken);
-    })();
   }
 
   function queueCaptureVoice(file: File, durationMs: number) {
@@ -2689,14 +2835,13 @@ export default function Home() {
       previewUrl: URL.createObjectURL(file),
       kind: "audio",
       durationMs,
-      status: navigator.onLine ? "uploading" : "offline",
+      status: "staged",
       attachment: null,
       error: "",
     };
     setCaptureAttachments((current) => [...current, item]);
     setVoiceTarget(null);
-    if (navigator.onLine) void uploadCaptureAttachment(item, captureDraftToken);
-    console.info("[todo-ui] voice memo queued", { destination: "quick-add", bytes: file.size, durationMs, online: navigator.onLine });
+    console.info("[todo-offline] voice memo staged locally", { destination: "quick-add", bytes: file.size, durationMs, browserOnlineHint: navigator.onLine });
   }
 
   function retryCaptureAttachment(item: PendingAttachment) {
@@ -2734,12 +2879,59 @@ export default function Home() {
     setAttachmentError("");
     try {
       const { attachments } = await request<{ attachments: TodoAttachment[] }>(`/api/todos/${todoId}/attachments`);
-      setDetailAttachments(attachments);
+      setDetailAttachments((current) => {
+        current
+          .filter((attachment) => attachment.id.startsWith("local:"))
+          .forEach((attachment) => URL.revokeObjectURL(attachment.originalUrl));
+        return attachments;
+      });
       console.info("[todo-ui] task gallery loaded", { todoId, count: attachments.length });
     } catch (error) {
       const message = error instanceof Error ? error.message : "The attachments could not be loaded.";
       setAttachmentError(message);
       console.error("[todo-ui] task gallery load failed", { todoId, error });
+    } finally {
+      setLoadingAttachments(false);
+    }
+  }
+
+  async function loadLocalTaskAttachments(todoId: number) {
+    setLoadingAttachments(true);
+    setAttachmentError("");
+    try {
+      const record = await getOfflineTodoByLocalId(todoId);
+      const attachments = (record?.attachments ?? []).map((attachment, index) => {
+        const objectUrl = URL.createObjectURL(attachment.blob);
+        return {
+          id: `local:${attachment.localId}`,
+          todoId,
+          fileName: attachment.fileName,
+          mimeType: attachment.mimeType,
+          byteSize: attachment.blob.size,
+          width: 0,
+          height: 0,
+          kind: attachment.kind,
+          durationMs: attachment.durationMs,
+          sortOrder: index,
+          thumbnailUrl: objectUrl,
+          displayUrl: objectUrl,
+          originalUrl: objectUrl,
+          audioUrl: objectUrl,
+          videoUrl: objectUrl,
+          createdAt: record?.createdAt ?? new Date().toISOString(),
+        } satisfies TodoAttachment;
+      });
+      setDetailAttachments((current) => {
+        current
+          .filter((attachment) => attachment.id.startsWith("local:"))
+          .forEach((attachment) => URL.revokeObjectURL(attachment.originalUrl));
+        return attachments;
+      });
+      console.info("[todo-offline] local task gallery loaded", { todoId, count: attachments.length });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "The local attachments could not be loaded.";
+      setAttachmentError(message);
+      console.error("[todo-offline] local task gallery load failed", { todoId, error });
     } finally {
       setLoadingAttachments(false);
     }
@@ -2779,13 +2971,34 @@ export default function Home() {
 
   async function queueDetailAttachments(inputFiles: File[]) {
     if (!editingTodo) return;
-    if (!navigator.onLine) {
+    if (!navigator.onLine && editingTodo.id > 0) {
       setNotice({ tone: "error", text: "Attachments can be added to a new offline task. Existing tasks need a connection." });
       return;
     }
     const files = validateSelectedAttachments(inputFiles, detailAttachments.length + detailUploads.length);
     if (!files.length) return;
     const items = await pendingAttachments(files);
+    if (editingTodo.id < 1) {
+      await appendOfflineTodoAttachments(editingTodo.id, items.map((item) => ({
+        localId: item.localId,
+        kind: item.kind,
+        fileName: item.file.name,
+        mimeType: item.file.type,
+        durationMs: item.durationMs,
+        blob: item.file,
+      })));
+      items.forEach((item) => URL.revokeObjectURL(item.previewUrl));
+      setTodos((current) => current.map((todo) => todo.id === editingTodo.id
+        ? { ...todo, attachmentCount: todo.attachmentCount + items.length }
+        : todo));
+      void loadLocalTaskAttachments(editingTodo.id);
+      console.info("[todo-offline] attachments added to local task", {
+        todoId: editingTodo.id,
+        count: items.length,
+        totalBytes: items.reduce((sum, item) => sum + item.file.size, 0),
+      });
+      return;
+    }
     setDetailUploads((current) => [...current, ...items]);
     const todoId = editingTodo.id;
     void (async () => {
@@ -2795,6 +3008,25 @@ export default function Home() {
 
   function queueDetailVoice(file: File, durationMs: number) {
     if (!editingTodo) return;
+    if (editingTodo.id < 1) {
+      const localId = crypto.randomUUID();
+      void appendOfflineTodoAttachments(editingTodo.id, [{
+        localId,
+        kind: "audio",
+        fileName: file.name,
+        mimeType: file.type,
+        durationMs,
+        blob: file,
+      }]).then(() => {
+        setTodos((current) => current.map((todo) => todo.id === editingTodo.id
+          ? { ...todo, attachmentCount: todo.attachmentCount + 1 }
+          : todo));
+        void loadLocalTaskAttachments(editingTodo.id);
+      });
+      setVoiceTarget(null);
+      console.info("[todo-offline] voice memo added to local task", { todoId: editingTodo.id, bytes: file.size, durationMs });
+      return;
+    }
     if (!navigator.onLine) {
       setVoiceTarget(null);
       setNotice({ tone: "error", text: "Attachments can be added to a new offline task. Existing tasks need a connection." });
@@ -2832,6 +3064,18 @@ export default function Home() {
 
   async function deleteDetailAttachment(attachment: TodoAttachment) {
     if (!editingTodo || syncing) return;
+    if (editingTodo.id < 1 && attachment.id.startsWith("local:")) {
+      const localAttachmentId = attachment.id.slice("local:".length);
+      await deleteOfflineTodoAttachment(editingTodo.id, localAttachmentId);
+      URL.revokeObjectURL(attachment.originalUrl);
+      setDetailAttachments((current) => current.filter((item) => item.id !== attachment.id));
+      setTodos((current) => current.map((todo) => todo.id === editingTodo.id
+        ? { ...todo, attachmentCount: Math.max(0, todo.attachmentCount - 1) }
+        : todo));
+      setViewerIndex(null);
+      setNotice({ tone: "success", text: "Attachment removed from local task." });
+      return;
+    }
     setSyncing(true);
     try {
       const result = await request<{ attachmentId: string; undoToken: string }>(`/api/todos/${editingTodo.id}/attachments/${attachment.id}`, { method: "DELETE" });
@@ -2864,28 +3108,55 @@ export default function Home() {
   }
 
   async function syncOfflineQueue() {
-    if (syncingOfflineRef.current || !navigator.onLine) return;
+    if (syncingOfflineRef.current || Date.now() < syncNextAttemptAtRef.current) return;
     syncingOfflineRef.current = true;
     const startedAt = Date.now();
+    const deferPass = (stage: string, error: unknown) => {
+      syncBackoffAttemptsRef.current += 1;
+      const delayMs = syncRetryDelay(syncBackoffAttemptsRef.current);
+      syncNextAttemptAtRef.current = Date.now() + delayMs;
+      const quality = navigator.onLine ? "degraded" : "offline";
+      setOnline(navigator.onLine);
+      setConnectionQuality(quality);
+      console.warn("[todo-offline] synchronization pass backed off", {
+        stage,
+        attempts: syncBackoffAttemptsRef.current,
+        delayMs,
+        quality,
+        error,
+      });
+    };
     try {
-      const [records, mutations] = await Promise.all([listOfflineTodos(), listOfflineTodoMutations()]);
-      if (!records.length && !mutations.length) {
+      const [records, mutations, actions] = await Promise.all([
+        listOfflineTodos(),
+        listOfflineTodoMutations(),
+        listOfflineTaskActions(),
+      ]);
+      if (!records.length && !mutations.length && !actions.length) {
         setOfflineCount(0);
         setOfflineEditCount(0);
+        setOfflineActionCount(0);
         return;
       }
-      console.info("[todo-offline] sync started", { newTasks: records.length, edits: mutations.length });
-      const { todos: currentServerTodos } = await request<{ todos: Todo[] }>("/api/todos", { cache: "no-store" });
-      const byClientId = new Map(currentServerTodos.map((todo) => [todo.clientId, todo]));
+      console.info("[todo-offline] sync started", {
+        newTasks: records.length,
+        edits: mutations.length,
+        actions: actions.length,
+        browserOnlineHint: navigator.onLine,
+      });
       let syncedTasks = 0;
       let syncedEdits = 0;
+      let syncedActions = 0;
       for (const record of records) {
         try {
-          let todo = byClientId.get(record.clientId);
-          if (!todo) {
-            const draftToken = crypto.randomUUID();
-            const attachmentIds: string[] = [];
-            for (const stored of record.attachments) {
+          const draftToken = record.draftToken ?? crypto.randomUUID();
+          const attachmentIds: string[] = [];
+          for (const stored of record.attachments) {
+            if (stored.remoteAttachmentId) {
+              attachmentIds.push(stored.remoteAttachmentId);
+              continue;
+            }
+            {
               const file = new File([stored.blob], stored.fileName, { type: stored.mimeType, lastModified: new Date(record.createdAt).valueOf() });
               const endpoint = "/api/attachments/drafts";
               const discard = (uploadId: string) => request(`/api/attachments/drafts/${uploadId}?discard=1`, {
@@ -2896,31 +3167,92 @@ export default function Home() {
                 ? await uploadPrivateImage(file, endpoint, { draftToken }, discard)
                 : await uploadPrivateMedia(file, stored.kind, stored.durationMs, endpoint, { draftToken }, discard);
               attachmentIds.push(uploaded.attachment.id);
+              await markOfflineTodoAttachmentUploaded(
+                record.localId,
+                stored.localId,
+                uploaded.attachment.id,
+                draftToken,
+              );
               console.info("[todo-offline] attachment synchronized", { clientId: record.clientId, kind: stored.kind, attachmentId: uploaded.attachment.id, bytes: stored.blob.size });
             }
-            const created = await request<{ todo: Todo }>("/api/todos", {
+          }
+          const created = await request<{ todo: Todo }>("/api/todos", {
+            method: "POST",
+            body: JSON.stringify({
+              clientId: record.clientId,
+              title: record.title,
+              notes: record.notes,
+              status: "open",
+              priority: record.priority ?? 3,
+              dueDate: record.dueDate ?? null,
+              project: record.project ?? null,
+              context: record.context ?? null,
+              completedAt: record.completedAt ?? null,
+              snoozedUntil: record.snoozedUntil ?? null,
+              recurrenceCron: record.recurrenceCron ?? null,
+              pinned: record.pinned ?? false,
+              draftToken: attachmentIds.length ? draftToken : undefined,
+              attachmentIds,
+            }),
+          });
+          let todo = created.todo;
+          if (record.status === "completed") {
+            const completed = await request<{ todos: Todo[] }>("/api/todos/bulk", {
               method: "POST",
               body: JSON.stringify({
-                clientId: record.clientId,
-                title: record.title,
-                notes: record.notes,
-                status: "open",
-                project: record.project ?? null,
-                draftToken: attachmentIds.length ? draftToken : undefined,
-                attachmentIds,
+                ids: [todo.id],
+                action: "complete",
+                operationId: crypto.randomUUID(),
               }),
             });
-            todo = created.todo;
+            todo = completed.todos[0] ?? todo;
+          } else if (record.snoozedUntil && new Date(record.snoozedUntil).valueOf() > Date.now()) {
+            await request("/api/todos/bulk", {
+              method: "POST",
+              body: JSON.stringify({
+                ids: [todo.id],
+                action: "snooze",
+                operationId: crypto.randomUUID(),
+              }),
+            });
+            const adjusted = await request<{ todos: Todo[] }>("/api/todos/bulk", {
+              method: "POST",
+              body: JSON.stringify({
+                ids: [todo.id],
+                action: "adjust_snooze",
+                snoozedLocal: zonedDateTimeInputValue(new Date(record.snoozedUntil), scheduleTimeZone),
+                operationId: crypto.randomUUID(),
+              }),
+            });
+            todo = adjusted.todos[0] ?? todo;
+          }
+          if (record.pinned) {
+            const pinnedResult = await request<{ todo: Todo }>(`/api/todos/${todo.id}`, {
+              method: "PATCH",
+              body: JSON.stringify({ pinned: true }),
+            });
+            todo = pinnedResult.todo;
           }
           await deleteOfflineTodo(record.clientId);
-          setTodos((current) => [todo as Todo, ...current.filter((item) => item.clientId !== record.clientId && item.id !== todo?.id)]);
+          setTodos((current) => [applyPendingOverlays(todo), ...current.filter((item) => item.clientId !== record.clientId && item.id !== todo.id)]);
+          if (editingIdRef.current === record.localId) {
+            editingIdRef.current = todo.id;
+            setEditingId(todo.id);
+            void loadTaskAttachments(todo.id);
+            console.info("[todo-offline] open local task dialog promoted to server task", {
+              clientId: record.clientId,
+              localId: record.localId,
+              todoId: todo.id,
+            });
+          }
           syncedTasks += 1;
           setOfflineCount(Math.max(0, records.length - syncedTasks));
+          setOnline(true);
+          setConnectionQuality("online");
           console.info("[todo-offline] task synchronized", { clientId: record.clientId, id: todo.id, attachments: record.attachments.length });
         } catch (error) {
-          console.error("[todo-offline] task sync failed", { clientId: record.clientId, online: navigator.onLine, error });
-          if (!navigator.onLine) setOnline(false);
-          break;
+          deferPass("task-create", error);
+          return;
         }
       }
 
@@ -2939,7 +3271,7 @@ export default function Home() {
           });
           await deleteOfflineTodoMutation(mutation.todoId);
           pendingTodoPatchesRef.current.delete(mutation.todoId);
-          setTodos((current) => current.map((todo) => todo.id === result.todo.id ? result.todo : todo));
+          setTodos((current) => current.map((todo) => todo.id === result.todo.id ? applyPendingOverlays(result.todo) : todo));
           if (editingIdRef.current === mutation.todoId && editDraftRef.current) {
             const serverDraft = todoDraft(result.todo);
             const currentDraft = editDraftRef.current;
@@ -2961,6 +3293,8 @@ export default function Home() {
           }
           syncedEdits += 1;
           setOfflineEditCount(Math.max(0, mutations.length - syncedEdits));
+          setOnline(true);
+          setConnectionQuality("online");
           console.info("[todo-offline] queued edit synchronized", {
             todoId: mutation.todoId,
             mutationId: mutation.mutationId,
@@ -2976,25 +3310,123 @@ export default function Home() {
             console.warn("[todo-offline] queued edit discarded because task was deleted remotely", { todoId: mutation.todoId, mutationId: mutation.mutationId });
             continue;
           }
-          console.error("[todo-offline] queued edit sync failed", { todoId: mutation.todoId, mutationId: mutation.mutationId, online: navigator.onLine, status, error });
-          if (!navigator.onLine) setOnline(false);
-          break;
+          deferPass("task-edit", error);
+          return;
         }
       }
 
-      const [remainingTasks, remainingEdits] = await Promise.all([listOfflineTodos(), listOfflineTodoMutations()]);
+      for (const action of actions) {
+        if (new Date(action.nextAttemptAt).valueOf() > Date.now()) continue;
+        try {
+          const result = await request<{
+            todo?: Todo;
+            todos?: Todo[];
+            ids?: number[];
+            undoToken?: string;
+            snoozedUntil?: string | null;
+          }>(action.path, {
+            method: action.method,
+            body: JSON.stringify({ ...action.body, operationId: action.operationId }),
+          });
+          if (action.undoRequested && result.undoToken) {
+            await request("/api/todos/undo", {
+              method: "POST",
+              body: JSON.stringify({ undoToken: result.undoToken }),
+            });
+            console.info("[todo-offline] queued action and queued undo synchronized", {
+              operationId: action.operationId,
+              taskIds: action.taskIds,
+            });
+          } else if (result.todo) {
+            const sourceIds = new Set(result.ids ?? []);
+            setTodos((current) => [
+              applyPendingOverlays(result.todo as Todo),
+              ...current.filter((todo) => !sourceIds.has(todo.id) && todo.id !== result.todo?.id),
+            ]);
+          } else if (result.todos?.length) {
+            const updates = new Map(result.todos.map((todo) => [todo.id, todo]));
+            setTodos((current) => current.map((todo) => updates.has(todo.id) ? applyPendingOverlays(updates.get(todo.id) as Todo) : todo));
+          }
+          await deleteOfflineTaskAction(action.operationId);
+          syncedActions += 1;
+          const operation = optimisticOperationsRef.current.get(action.operationId);
+          if (operation) {
+            operation.settled = true;
+            operation.undoToken = result.undoToken;
+          }
+          if (!action.undoRequested) {
+            setNotice((current) => current?.operationId === action.operationId ? {
+              ...current,
+              pendingUndo: false,
+              undoToken: result.undoToken,
+              snoozedUntil: result.snoozedUntil ?? current.snoozedUntil,
+            } : current);
+          }
+          optimisticOperationsRef.current.delete(action.operationId);
+          action.taskIds.forEach((id) => pendingCompletionIdsRef.current.delete(id));
+          setOnline(true);
+          setConnectionQuality("online");
+          console.info("[todo-offline] queued task action synchronized", {
+            operationId: action.operationId,
+            kind: action.kind,
+            taskIds: action.taskIds,
+            undoRequested: Boolean(action.undoRequested),
+          });
+        } catch (error) {
+          const status = (error as Error & { status?: number }).status;
+          if (retryableNetworkError(error)) {
+            const attempts = action.attempts + 1;
+            const delayMs = syncRetryDelay(attempts);
+            await deferOfflineTaskAction(action.operationId, attempts, delayMs);
+            const quality = navigator.onLine ? "degraded" : "offline";
+            setOnline(navigator.onLine);
+            setConnectionQuality(quality);
+            console.warn("[todo-offline] queued task action deferred", {
+              operationId: action.operationId,
+              attempts,
+              delayMs,
+              quality,
+              error,
+            });
+            deferPass("task-action", error);
+            return;
+          }
+          await deleteOfflineTaskAction(action.operationId);
+          optimisticOperationsRef.current.delete(action.operationId);
+          action.taskIds.forEach((id) => pendingCompletionIdsRef.current.delete(id));
+          setNotice({
+            tone: "error",
+            text: error instanceof Error ? error.message : "A queued task action was rejected.",
+          });
+          console.error("[todo-offline] queued task action rejected", {
+            operationId: action.operationId,
+            status,
+            error,
+          });
+        }
+      }
+
+      const [remainingTasks, remainingEdits, remainingActions] = await Promise.all([
+        listOfflineTodos(),
+        listOfflineTodoMutations(),
+        listOfflineTaskActions(),
+      ]);
+      rebuildPendingActionState(remainingActions);
       setOfflineCount(remainingTasks.length);
       setOfflineEditCount(remainingEdits.length);
-      if (syncedTasks + syncedEdits > 0) {
-        setNotice({ tone: "success", text: `${syncedTasks + syncedEdits} offline ${syncedTasks + syncedEdits === 1 ? "change" : "changes"} synced.` });
-      }
+      setOfflineActionCount(remainingActions.length);
+      syncBackoffAttemptsRef.current = 0;
+      syncNextAttemptAtRef.current = 0;
       console.info("[todo-offline] sync finished", {
         requestedTasks: records.length,
         requestedEdits: mutations.length,
+        requestedActions: actions.length,
         syncedTasks,
         syncedEdits,
+        syncedActions,
         remainingTasks: remainingTasks.length,
         remainingEdits: remainingEdits.length,
+        remainingActions: remainingActions.length,
         durationMs: Date.now() - startedAt,
       });
     } catch (error) {
@@ -3009,7 +3441,7 @@ export default function Home() {
   async function addTodo(event: FormEvent) {
     event.preventDefault();
     const title = newTitle.trim();
-    const attachmentsReady = captureAttachments.every((item) => (item.status === "ready" && item.attachment) || item.status === "offline");
+    const attachmentsReady = captureAttachments.every((item) => item.status === "staged" || (item.status === "ready" && item.attachment) || item.status === "offline");
     if (!title || adding || !attachmentsReady) return;
     const temporaryId = -Date.now();
     const clientId = crypto.randomUUID();
@@ -3034,7 +3466,7 @@ export default function Home() {
       createdAt,
       updatedAt: createdAt,
       attachmentCount: captureAttachments.length,
-      offline: !navigator.onLine || captureAttachments.some((item) => item.status === "offline"),
+      offline: true,
     };
     setProject("");
     setView("open");
@@ -3044,87 +3476,57 @@ export default function Home() {
     });
     setTodos((current) => [optimistic, ...current]);
     setAdding(true);
-    setSyncing(true);
     setNotice(null);
     try {
-      if (optimistic.offline) {
-        await saveOfflineTodo({
-          clientId,
-          localId: temporaryId,
-          title,
-          notes: "",
-          project: captureProject || null,
-          createdAt,
-          attachments: captureAttachments.map((item) => ({
-            localId: item.localId,
-            kind: item.kind,
-            fileName: item.file.name,
-            mimeType: item.file.type,
-            durationMs: item.durationMs,
-            blob: item.file,
-          })),
-        });
-        setOfflineCount((count) => count + 1);
-        resetCapture();
-        setNotice({ tone: "success", text: "Saved offline. It will sync automatically when you reconnect." });
-        console.info("[todo-offline] quick add completed locally", { clientId, localId: temporaryId, attachments: captureAttachments.length });
-        return;
-      }
-      const { todo } = await request<{ todo: Todo }>("/api/todos", {
-        method: "POST",
-        body: JSON.stringify({
-          clientId,
-          title,
-          status: "open",
-          project: captureProject || null,
-          draftToken: captureAttachments.length ? captureDraftToken : undefined,
-          attachmentIds: captureAttachments.map((item) => item.attachment?.id).filter(Boolean),
-        }),
+      await saveOfflineTodo({
+        clientId,
+        localId: temporaryId,
+        title,
+        notes: "",
+        status: "open",
+        priority: 3,
+        dueDate: null,
+        project: captureProject || null,
+        context: null,
+        completedAt: null,
+        snoozedUntil: null,
+        recurrenceCron: null,
+        recurrenceLastFiredAt: null,
+        pinned: false,
+        sourceKind: "site",
+        sourceId: null,
+        createdAt,
+        updatedAt: createdAt,
+        draftToken: captureDraftToken,
+        attachments: captureAttachments.map((item) => ({
+          localId: item.localId,
+          kind: item.kind,
+          fileName: item.file.name,
+          mimeType: item.file.type,
+          durationMs: item.durationMs,
+          blob: item.file,
+          remoteAttachmentId: item.attachment?.id,
+        })),
       });
-      setTodos((current) => current.map((item) => item.id === temporaryId ? todo : item));
+      setOfflineCount((count) => count + 1);
       resetCapture();
-      console.info("[todo-ui] created", {
-        id: todo.id,
-        status: todo.status,
-        project: todo.project,
+      setNotice({ tone: "success", text: "Added.", taskPreview: title });
+      console.info("[todo-offline] quick add committed locally", {
+        clientId,
+        localId: temporaryId,
+        project: captureProject || null,
         titleLength: title.length,
         lines: title.split("\n").length,
-        attachmentCount: todo.attachmentCount,
+        attachments: captureAttachments.length,
+        alreadyUploadedAttachments: captureAttachments.filter((item) => item.attachment).length,
       });
+      void syncOfflineQueueRef.current?.();
     } catch (error) {
-      if (!navigator.onLine || error instanceof TypeError) {
-        try {
-          await saveOfflineTodo({
-            clientId,
-            localId: temporaryId,
-            title,
-            notes: "",
-            project: captureProject || null,
-            createdAt,
-            attachments: captureAttachments.map((item) => ({
-              localId: item.localId,
-              kind: item.kind,
-              fileName: item.file.name,
-              mimeType: item.file.type,
-              durationMs: item.durationMs,
-              blob: item.file,
-            })),
-          });
-          setTodos((current) => current.map((item) => item.id === temporaryId ? { ...item, offline: true, sourceKind: "offline" } : item));
-          setOfflineCount((count) => count + 1);
-          resetCapture();
-          setNotice({ tone: "success", text: "The connection dropped, so this task was saved offline." });
-          console.warn("[todo-offline] online create fell back to local queue", { clientId, localId: temporaryId, attachments: captureAttachments.length, error });
-          return;
-        } catch (offlineError) {
-          console.error("[todo-offline] create fallback storage failed", { clientId, offlineError });
-        }
-      }
       setTodos((current) => current.filter((item) => item.id !== temporaryId));
-      setNotice({ tone: "error", text: error instanceof Error ? error.message : "The task could not be added." });
+      setNotice({ tone: "error", text: error instanceof Error ? error.message : "This device could not save the task." });
+      console.error("[todo-offline] quick add local commit failed", { clientId, localId: temporaryId, error });
     } finally {
       setAdding(false);
-      setSyncing(false);
       captureRef.current?.focus();
     }
   }
@@ -3142,17 +3544,18 @@ export default function Home() {
   }
 
   async function performAction(ids: number[], action: ExecutableTodoAction | "merge") {
-    const concurrentDone = action === "complete";
-    if (!ids.length || (!concurrentDone && syncing)) return;
+    if (!ids.length) return;
     if (ids.some((id) => pendingCompletionIdsRef.current.has(id))) return;
     const previous = todos;
     const taskPreview = ids.length === 1 ? previous.find((todo) => todo.id === ids[0])?.title : undefined;
-    if (ids.some((id) => id < 1)) {
-      setNotice({ tone: "error", text: "That offline task will be actionable as soon as it syncs.", taskPreview });
+    if (action === "merge" && ids.some((id) => id < 1)) {
+      setNotice({ tone: "error", text: "New offline tasks must sync before they can be merged.", taskPreview });
       return;
     }
     const actionAt = new Date().toISOString();
     const operationId = crypto.randomUUID();
+    const localIds = ids.filter((id) => id < 1);
+    const remoteIds = ids.filter((id) => id > 0);
     const openedCompleted = action === "unsnooze" && ids.every((id) => previous.find((todo) => todo.id === id)?.status === "completed");
     const wokeSnoozed = action === "unsnooze" && ids.every((id) => {
       const todo = previous.find((item) => item.id === id);
@@ -3167,8 +3570,7 @@ export default function Home() {
           : action === "unsnooze"
             ? openedCompleted ? "Opened" : wokeSnoozed ? "Woke" : "Restored to Open"
             : "Deleted";
-    if (concurrentDone) ids.forEach((id) => pendingCompletionIdsRef.current.add(id));
-    else setSyncing(true);
+    if (action === "complete") ids.forEach((id) => pendingCompletionIdsRef.current.add(id));
     optimisticOperationsRef.current.set(operationId, {
       ids,
       previous,
@@ -3181,82 +3583,80 @@ export default function Home() {
       text: `${optimisticLabel}: ${ids.length} ${ids.length === 1 ? "task" : "tasks"}${action === "merge" ? "…" : "."}`,
       taskPreview,
       operationId,
-      pendingUndo: true,
+      pendingUndo: remoteIds.length > 0,
       snoozeIds: action === "snooze" ? ids : undefined,
       snoozedUntil: action === "snooze" ? new Date(new Date(actionAt).valueOf() + 36 * 60 * 60 * 1000).toISOString() : undefined,
       dismissAt: Date.now() + (action === "snooze" ? 15_000 : 8_000),
     });
-    console.info("[todo-ui] optimistic action snackbar shown", { action, ids, operationId, taskPreview: Boolean(taskPreview), concurrentDone });
+    console.info("[todo-ui] local-first action applied", {
+      action,
+      ids,
+      localIds,
+      remoteIds,
+      operationId,
+      taskPreview: Boolean(taskPreview),
+    });
     if (action !== "merge") setTodos((current) => applyOptimisticAction(current, ids, action, actionAt));
+
     try {
-      if (action === "merge") {
-        const result = await request<{ todo: Todo; ids: number[]; undoToken: string }>("/api/todos/bulk", {
-          method: "POST",
-          body: JSON.stringify({ ids, action }),
-        });
-        const sourceIds = new Set(result.ids);
-        const operation = optimisticOperationsRef.current.get(operationId);
-        if (operation) {
-          operation.settled = true;
-          operation.undoToken = result.undoToken;
-        }
-        if (operation?.undoRequested) {
-          setNotice((current) => current?.operationId === operationId ? null : current);
-          await undoAction(result.undoToken);
-          return;
-        }
-        setTodos((current) => [
-          result.todo,
-          ...current.filter((todo) => !sourceIds.has(todo.id)),
-        ]);
-        setNotice((current) => current?.operationId === operationId ? {
-          ...current,
-          text: `Merged ${result.ids.length} tasks.`,
-          pendingUndo: false,
-          undoToken: result.undoToken,
-        } : current);
-        console.info("[todo-ui] merged", { sourceIds: result.ids, mergedId: result.todo.id });
-      } else {
-        const result = await request<{ todos: Todo[]; ids: number[]; snoozedUntil: string | null; undoToken: string }>("/api/todos/bulk", {
-          method: "POST",
-          body: JSON.stringify({ ids, action }),
-        });
-        const operation = optimisticOperationsRef.current.get(operationId);
-        if (operation) {
-          operation.settled = true;
-          operation.undoToken = result.undoToken;
-        }
-        if (operation?.undoRequested) {
-          setNotice((current) => current?.operationId === operationId ? null : current);
-          await undoAction(result.undoToken);
-          return;
-        }
-        if (action === "snooze" && operation?.snoozeAdjustment) {
-          setNotice((current) => current?.operationId === operationId ? {
-            ...current,
-            pendingUndo: false,
-            undoToken: result.undoToken,
-          } : current);
-          await persistSnoozeAdjustment(result.ids, operation.snoozeAdjustment, operationId, result.undoToken, result.todos);
-          if (operation.undoRequested) {
-            setNotice((current) => current?.operationId === operationId ? null : current);
-            await undoAction(result.undoToken);
-            return;
+      if (localIds.length && action !== "merge") {
+        const optimisticById = new Map(
+          applyOptimisticAction(previous, localIds, action, actionAt).map((todo) => [todo.id, todo]),
+        );
+        for (const id of localIds) {
+          if (action === "delete") {
+            await deleteOfflineTodoByLocalId(id);
+          } else {
+            const optimisticTodo = optimisticById.get(id);
+            if (optimisticTodo) await updateOfflineTodo(id, offlineTaskPatch(optimisticTodo));
           }
-        } else if (action !== "delete") {
-          const updates = new Map(result.todos.map((todo) => [todo.id, todo]));
-          setTodos((current) => current.map((todo) => updates.get(todo.id) ?? todo));
         }
-        const label = action === "complete" ? "Done" : action === "snooze" ? "Snoozed until tomorrow" : action === "unsnooze" ? openedCompleted ? "Opened" : wokeSnoozed ? "Woke" : "Restored to Open" : "Deleted";
-        if (!(action === "snooze" && operation?.snoozeAdjustment)) setNotice((current) => current?.operationId === operationId ? {
-          ...current,
-          text: `${label}: ${ids.length} ${ids.length === 1 ? "task" : "tasks"}.`,
-          pendingUndo: false,
-          undoToken: result.undoToken,
-          snoozeIds: action === "snooze" ? result.ids : undefined,
-          snoozedUntil: action === "snooze" ? result.snoozedUntil ?? undefined : undefined,
-        } : current);
-        console.info("[todo-ui] action completed", { action, ids, operationId, snoozedUntil: result.snoozedUntil });
+        setOfflineCount((await listOfflineTodos()).length);
+      }
+
+      if (remoteIds.length) {
+        const optimisticPatches: Record<string, Record<string, unknown>> = {};
+        if (action !== "merge" && action !== "delete") {
+          const optimisticById = new Map(
+            applyOptimisticAction(previous, remoteIds, action, actionAt).map((todo) => [todo.id, todo]),
+          );
+          for (const id of remoteIds) {
+            const optimisticTodo = optimisticById.get(id);
+            if (!optimisticTodo) continue;
+            optimisticPatches[String(id)] = {
+              status: optimisticTodo.status,
+              completedAt: optimisticTodo.completedAt,
+              snoozedUntil: optimisticTodo.snoozedUntil,
+              updatedAt: actionAt,
+            };
+          }
+        }
+        const queued = await saveOfflineTaskAction({
+          operationId,
+          path: "/api/todos/bulk",
+          method: "POST",
+          body: { ids: remoteIds, action },
+          taskIds: remoteIds,
+          kind: "bulk",
+          optimisticPatches,
+          optimisticDeletedIds: action === "delete" ? remoteIds : [],
+          createdAt: actionAt,
+        });
+        const queuedActions = await listOfflineTaskActions();
+        rebuildPendingActionState(queuedActions);
+        setOfflineActionCount(queuedActions.length);
+        console.info("[todo-offline] task action committed to durable outbox", {
+          operationId,
+          action,
+          taskIds: remoteIds,
+          queueAttempts: queued.attempts,
+        });
+        void syncOfflineQueueRef.current?.();
+      } else {
+        const operation = optimisticOperationsRef.current.get(operationId);
+        if (operation) operation.settled = true;
+        optimisticOperationsRef.current.delete(operationId);
+        ids.forEach((id) => pendingCompletionIdsRef.current.delete(id));
       }
       setSelected((current) => {
         const next = new Set(current);
@@ -3271,11 +3671,10 @@ export default function Home() {
         text: error instanceof Error ? error.message : "The action could not be completed.",
         pendingUndo: false,
       } : current);
-      console.error("[todo-ui] action failed", { action, ids, operationId, concurrentDone, error });
-    } finally {
+      await deleteOfflineTaskAction(operationId).catch(() => undefined);
       optimisticOperationsRef.current.delete(operationId);
-      if (concurrentDone) ids.forEach((id) => pendingCompletionIdsRef.current.delete(id));
-      else setSyncing(false);
+      ids.forEach((id) => pendingCompletionIdsRef.current.delete(id));
+      console.error("[todo-offline] task action local commit failed", { action, ids, operationId, error });
     }
   }
 
@@ -3287,41 +3686,46 @@ export default function Home() {
     rollbackTodos: Todo[],
   ) {
     try {
-      const result = await request<{ todos: Todo[]; ids: number[]; snoozedUntil: string }>("/api/todos/bulk", {
-        method: "POST",
-        body: JSON.stringify({
-          ids,
-          action: "adjust_snooze",
-          ...("preset" in adjustment
-            ? { snoozePreset: adjustment.preset }
-            : { snoozedLocal: adjustment.localDateTime }),
-        }),
-      });
-      const operation = operationId ? optimisticOperationsRef.current.get(operationId) : undefined;
-      if (operation?.undoRequested) {
-        console.info("[todo-ui] snooze adjustment response deferred to queued undo", { adjustment, ids, operationId });
-        return;
+      const localIds = ids.filter((id) => id < 1);
+      const remoteIds = ids.filter((id) => id > 0);
+      const optimisticById = new Map(todos.filter((todo) => ids.includes(todo.id)).map((todo) => [todo.id, todo]));
+      for (const id of localIds) {
+        const todo = optimisticById.get(id);
+        if (todo) await updateOfflineTodo(id, offlineTaskPatch(todo));
       }
-      const updates = new Map(result.todos.map((todo) => [todo.id, todo]));
-      setTodos((current) => current.map((todo) => updates.get(todo.id) ?? todo));
+      if (remoteIds.length) {
+        const adjustmentOperationId = crypto.randomUUID();
+        const optimisticPatches = Object.fromEntries(remoteIds.map((id) => [
+          String(id),
+          { snoozedUntil: optimisticById.get(id)?.snoozedUntil ?? null },
+        ]));
+        await saveOfflineTaskAction({
+          operationId: adjustmentOperationId,
+          path: "/api/todos/bulk",
+          method: "POST",
+          body: {
+            ids: remoteIds,
+            action: "adjust_snooze",
+            ...("preset" in adjustment
+              ? { snoozePreset: adjustment.preset }
+              : { snoozedLocal: adjustment.localDateTime }),
+          },
+          taskIds: remoteIds,
+          kind: "bulk",
+          optimisticPatches,
+          createdAt: new Date().toISOString(),
+        });
+        const actions = await listOfflineTaskActions();
+        rebuildPendingActionState(actions);
+        setOfflineActionCount(actions.length);
+        void syncOfflineQueueRef.current?.();
+      }
       setNow(Date.now());
-      setNotice((current) => {
-        if (!current || (operationId && current.operationId !== operationId)) return current;
-        return {
-          ...current,
-          tone: "success",
-          text: `${snoozeLabel(result.snoozedUntil)}: ${result.ids.length} ${result.ids.length === 1 ? "task" : "tasks"}.`,
-          pendingUndo: false,
-          undoToken: undoToken ?? current.undoToken,
-          snoozeIds: result.ids,
-          snoozedUntil: result.snoozedUntil,
-        };
-      });
-      console.info("[todo-ui] snooze adjustment reconciled", {
+      console.info("[todo-offline] snooze adjustment committed locally", {
         adjustment,
         requestedIds: ids,
-        changedIds: result.ids,
-        snoozedUntil: result.snoozedUntil,
+        localIds,
+        remoteIds,
         operationId: operationId ?? null,
         retainedUndo: Boolean(undoToken),
       });
@@ -3341,7 +3745,7 @@ export default function Home() {
           snoozedUntil: current?.snoozedUntil,
         };
       });
-      console.error("[todo-ui] snooze adjustment failed", { adjustment, ids, operationId: operationId ?? null, error });
+      console.error("[todo-offline] snooze adjustment local commit failed", { adjustment, ids, operationId: operationId ?? null, error });
     } finally {
       setAdjustingSnooze(null);
     }
@@ -3367,9 +3771,7 @@ export default function Home() {
     const operation = operationId ? optimisticOperationsRef.current.get(operationId) : undefined;
     if (operation && !operation.settled) {
       operation.snoozeAdjustment = adjustment;
-      setAdjustingSnooze(null);
-      console.info("[todo-ui] snooze adjustment queued during optimistic action", { preset, ids, operationId });
-      return;
+      console.info("[todo-ui] snooze adjustment chained behind optimistic action", { preset, ids, operationId });
     }
     await persistSnoozeAdjustment(ids, adjustment, operationId, notice?.undoToken, rollbackTodos);
   }
@@ -3437,15 +3839,13 @@ export default function Home() {
     const operation = operationId ? optimisticOperationsRef.current.get(operationId) : undefined;
     if (operation && !operation.settled) {
       operation.snoozeAdjustment = adjustment;
-      setAdjustingSnooze(null);
-      console.info("[todo-ui] custom snooze adjustment queued during optimistic action", {
+      console.info("[todo-ui] custom snooze adjustment chained behind optimistic action", {
         ids,
         operationId,
         localDateTime,
         optimisticUntil,
         timeZone: scheduleTimeZone,
       });
-      return;
     }
     console.info("[todo-ui] custom snooze adjustment submitted", {
       ids,
@@ -3464,10 +3864,27 @@ export default function Home() {
       : undefined;
     if (operation) {
       operation.undoRequested = true;
-      setTodos((current) => restoreOptimisticTasks(current, operation.previous, operation.ids));
+      const restorableIds = operation.ids.filter((id) => id > 0);
+      setTodos((current) => restoreOptimisticTasks(current, operation.previous, restorableIds));
+      if (currentNotice.operationId) {
+        void markOfflineTaskActionUndo(currentNotice.operationId)
+          .then(async (queued) => {
+            if (!queued) return;
+            const actions = await listOfflineTaskActions();
+            rebuildPendingActionState(actions);
+            setOfflineActionCount(actions.length);
+            void syncOfflineQueueRef.current?.();
+          })
+          .catch((error) => {
+            console.error("[todo-offline] queued undo persistence failed", {
+              operationId: currentNotice.operationId,
+              error,
+            });
+          });
+      }
       setNotice((current) => current?.operationId === currentNotice.operationId ? {
         ...current,
-        text: "Undoing…",
+        text: "Undone locally · syncing",
         undoRequested: true,
         dismissAt: Date.now() + 8_000,
       } : current);
@@ -3580,14 +3997,7 @@ export default function Home() {
     setNotice(null);
     try {
       if (captureDraft) {
-        let stagedProject = projectName;
-        if (projectDialog.selection === CREATE_PROJECT && projectName && online) {
-          const created = await request<{ project: string }>("/api/projects", {
-            method: "POST",
-            body: JSON.stringify({ name: projectName }),
-          });
-          stagedProject = created.project;
-        }
+        const stagedProject = projectName;
         setCaptureProject(stagedProject ?? "");
         if (stagedProject) {
           setRegisteredProjects((current) => [...new Set([...current, stagedProject as string])].sort((a, b) => a.localeCompare(b)));
@@ -3606,12 +4016,38 @@ export default function Home() {
         });
         return;
       }
-      const result = await request<{ todos: Todo[]; ids: number[]; undoToken: string }>("/api/todos/bulk", {
-        method: "POST",
-        body: JSON.stringify({ ids, action: "reproject", project: projectName }),
-      });
-      const updates = new Map(result.todos.map((todo) => [todo.id, todo]));
-      setTodos((current) => current.map((todo) => updates.get(todo.id) ?? todo));
+      const operationId = crypto.randomUUID();
+      const previous = todos;
+      const localIds = ids.filter((id) => id < 1);
+      const remoteIds = ids.filter((id) => id > 0);
+      setTodos((current) => current.map((todo) => ids.includes(todo.id) ? { ...todo, project: projectName } : todo));
+      for (const id of localIds) {
+        await updateOfflineTodo(id, { project: projectName });
+      }
+      if (remoteIds.length) {
+        optimisticOperationsRef.current.set(operationId, {
+          ids: remoteIds,
+          previous,
+          action: "project",
+          undoRequested: false,
+          settled: false,
+        });
+        const optimisticPatches = Object.fromEntries(remoteIds.map((id) => [String(id), { project: projectName }]));
+        await saveOfflineTaskAction({
+          operationId,
+          path: "/api/todos/bulk",
+          method: "POST",
+          body: { ids: remoteIds, action: "reproject", project: projectName },
+          taskIds: remoteIds,
+          kind: "bulk",
+          optimisticPatches,
+          createdAt: new Date().toISOString(),
+        });
+        const actions = await listOfflineTaskActions();
+        rebuildPendingActionState(actions);
+        setOfflineActionCount(actions.length);
+        void syncOfflineQueueRef.current?.();
+      }
       if (projectName) {
         setRegisteredProjects((current) => [...new Set([...current, projectName])].sort((a, b) => a.localeCompare(b)));
       }
@@ -3631,12 +4067,14 @@ export default function Home() {
         tone: "success",
         text: `Assigned to ${location}: ${ids.length} ${ids.length === 1 ? "task" : "tasks"}.`,
         taskPreview: ids.length === 1 ? todos.find((todo) => todo.id === ids[0])?.title : undefined,
-        undoToken: result.undoToken,
+        operationId: remoteIds.length ? operationId : undefined,
+        pendingUndo: remoteIds.length > 0,
       });
-      console.info("[todo-ui] project assignment saved", {
+      console.info("[todo-offline] project assignment committed locally", {
         ids,
+        localIds,
+        remoteIds,
         project: projectName,
-        preservedTaskState: result.todos.map((todo) => ({ id: todo.id, status: todo.status, snoozedUntil: todo.snoozedUntil })),
         returnedToDetails: openedFromDetails,
       });
     } catch (error) {
@@ -3649,10 +4087,6 @@ export default function Home() {
   }
 
   function openTaskDetails(todo: Todo) {
-    if (todo.id < 1 || todo.offline) {
-      setNotice({ tone: "success", text: "That task is saved offline and will be editable after it syncs." });
-      return;
-    }
     const activeElement = document.activeElement instanceof HTMLElement && document.activeElement !== document.body
       ? document.activeElement
       : null;
@@ -3675,11 +4109,13 @@ export default function Home() {
     setTaskDialogPullDistance(0);
     setTaskDialogPullReady(false);
     setTaskDialogPulling(false);
-    void loadTaskAttachments(todo.id);
+    if (todo.id > 0) void loadTaskAttachments(todo.id);
+    else void loadLocalTaskAttachments(todo.id);
     console.info("[todo-ui] task details opened", {
       id: todo.id,
       status: todo.status,
       attachmentCount: todo.attachmentCount,
+      localOnly: todo.id < 1 || Boolean(todo.offline),
       focusOrigin: activeElement?.getAttribute("aria-label") ?? (rowFallback ? "task-row-fallback" : "none"),
     });
   }
@@ -3705,6 +4141,10 @@ export default function Home() {
     setTaskDialogPulling(false);
     setViewerIndex(null);
     setAttachmentError("");
+    detailAttachments
+      .filter((attachment) => attachment.id.startsWith("local:"))
+      .forEach((attachment) => URL.revokeObjectURL(attachment.originalUrl));
+    setDetailAttachments([]);
     detailUploads.forEach((item) => URL.revokeObjectURL(item.previewUrl));
     setDetailUploads([]);
   }
@@ -3747,82 +4187,54 @@ export default function Home() {
     autosaveInFlightRef.current = true;
     setSavingEdit(true);
     if (editingIdRef.current === todoId) {
-      setEditSaveState(navigator.onLine ? "saving" : "offline");
-      setEditSaveMessage(navigator.onLine ? "Saving changes…" : "Saved offline · waiting to sync");
+      setEditSaveState("saving");
+      setEditSaveMessage("Saving locally…");
     }
-    const mutationId = crypto.randomUUID();
     const timestamp = new Date().toISOString();
     const fieldTimestamps = Object.fromEntries(Object.keys(patch).map((field) => [field, timestamp]));
     const startedAt = Date.now();
 
     try {
-      if (!navigator.onLine) throw new TypeError("Offline");
-      const result = await request<{ todo: Todo; appliedFields: string[] }>(`/api/todos/${todoId}`, {
-        method: "PATCH",
-        body: JSON.stringify({
-          ...patch,
-          autosave: true,
-          mutation: { mutationId, fieldTimestamps },
-        }),
-      });
-      const pending = { ...(pendingTodoPatchesRef.current.get(todoId) ?? {}) };
-      for (const [field, value] of Object.entries(patch)) {
-        if (pending[field] === value) delete pending[field];
-      }
-      if (Object.keys(pending).length) pendingTodoPatchesRef.current.set(todoId, pending);
-      else pendingTodoPatchesRef.current.delete(todoId);
-      setTodos((current) => current.map((todo) => todo.id === result.todo.id ? patchTodo(result.todo, pending) : todo));
-
-      if (editingIdRef.current === todoId && editDraftRef.current) {
-        const serverDraft = todoDraft(result.todo);
-        const currentDraft = editDraftRef.current;
-        const nextDraft = { ...currentDraft };
-        for (const field of AUTOSAVE_FIELDS) {
-          if (normalizedDraftField(currentDraft, field) === normalizedDraftField(draft, field)) {
-            nextDraft[field] = serverDraft[field] as never;
-          }
+      if (todoId < 1) {
+        const updated = await updateOfflineTodo(todoId, patch as Partial<OfflineTodoRecord>);
+        if (!updated) throw new Error("The local task could not be found.");
+        pendingTodoPatchesRef.current.delete(todoId);
+        if (editingIdRef.current === todoId) {
+          editBaselineRef.current = { ...draft };
+          setEditSaveState("offline");
+          setEditSaveMessage("Saved on this device · syncing task");
         }
-        editBaselineRef.current = serverDraft;
-        editDraftRef.current = nextDraft;
-        setEditDraft(nextDraft);
-        setEditSaveState("saved");
-        setEditSaveMessage(result.appliedFields.length < Object.keys(patch).length ? "Synced · newer remote changes kept" : "Saved automatically");
-      }
-      console.info("[todo-sync] autosave synchronized", {
-        todoId,
-        source,
-        mutationId,
-        requestedFields: Object.keys(patch),
-        appliedFields: result.appliedFields,
-        conflictFields: Object.keys(patch).filter((field) => !result.appliedFields.includes(field)),
-        durationMs: Date.now() - startedAt,
-      });
-    } catch (error) {
-      const status = (error as Error & { status?: number }).status;
-      if (!navigator.onLine || error instanceof TypeError || status === undefined) {
+        console.info("[todo-offline] local task details updated", {
+          todoId,
+          source,
+          fields: Object.keys(patch),
+          durationMs: Date.now() - startedAt,
+        });
+      } else {
         const record = await saveOfflineTodoMutation(todoId, patch, fieldTimestamps);
         pendingTodoPatchesRef.current.set(todoId, record.patch);
         setOfflineEditCount((await listOfflineTodoMutations()).length);
         if (editingIdRef.current === todoId) {
           editBaselineRef.current = { ...draft };
-          setEditSaveState("offline");
-          setEditSaveMessage("Saved offline · waiting to sync");
+          setEditSaveState(connectionQuality === "online" ? "saving" : "offline");
+          setEditSaveMessage(connectionQuality === "online" ? "Saved locally · syncing" : "Saved locally · waiting to sync");
         }
-        console.warn("[todo-sync] autosave queued offline", {
+        console.info("[todo-offline] autosave committed to durable outbox", {
           todoId,
           source,
+          mutationId: record.mutationId,
           fields: Object.keys(patch),
-          browserOnline: navigator.onLine,
+          connectionQuality,
           durationMs: Date.now() - startedAt,
-          error,
         });
-      } else {
-        if (editingIdRef.current === todoId) {
-          setEditSaveState("error");
-          setEditSaveMessage(error instanceof Error ? error.message : "Changes could not be saved.");
-        }
-        console.error("[todo-sync] autosave rejected", { todoId, source, fields: Object.keys(patch), status, error });
+        void syncOfflineQueueRef.current?.();
       }
+    } catch (error) {
+      if (editingIdRef.current === todoId) {
+        setEditSaveState("error");
+        setEditSaveMessage(error instanceof Error ? error.message : "Changes could not be saved locally.");
+      }
+      console.error("[todo-offline] autosave local commit failed", { todoId, source, fields: Object.keys(patch), error });
     } finally {
       autosaveInFlightRef.current = false;
       setSavingEdit(false);
@@ -3846,39 +4258,40 @@ export default function Home() {
   }
 
   async function togglePin(todo: Todo) {
-    if (view !== "open" || todo.id < 1 || todo.offline || syncing) return;
+    if (view !== "open") return;
     const pinned = !todo.pinned;
     const operationId = crypto.randomUUID();
     const previous = todos;
-    setSyncing(true);
     optimisticOperationsRef.current.set(operationId, { ids: [todo.id], previous, action: "pin", undoRequested: false, settled: false });
-    setNotice({ tone: "success", text: pinned ? "Task pinned." : "Task unpinned.", taskPreview: todo.title, operationId, pendingUndo: true, dismissAt: Date.now() + 8_000 });
+    setNotice({ tone: "success", text: pinned ? "Task pinned." : "Task unpinned.", taskPreview: todo.title, operationId, pendingUndo: todo.id > 0, dismissAt: Date.now() + 8_000 });
     setTodos((current) => current.map((item) => item.id === todo.id ? { ...item, pinned } : item));
     try {
-      const result = await request<{ todo: Todo; undoToken: string }>(`/api/todos/${todo.id}`, {
-        method: "PATCH",
-        body: JSON.stringify({ pinned }),
-      });
-      const operation = optimisticOperationsRef.current.get(operationId);
-      if (operation) {
-        operation.settled = true;
-        operation.undoToken = result.undoToken;
+      if (todo.id < 1) {
+        await updateOfflineTodo(todo.id, { pinned });
+        optimisticOperationsRef.current.delete(operationId);
+        setNotice((current) => current?.operationId === operationId ? { ...current, pendingUndo: false } : current);
+      } else {
+        await saveOfflineTaskAction({
+          operationId,
+          path: `/api/todos/${todo.id}`,
+          method: "PATCH",
+          body: { pinned },
+          taskIds: [todo.id],
+          kind: "task-patch",
+          optimisticPatches: { [String(todo.id)]: { pinned } },
+          createdAt: new Date().toISOString(),
+        });
+        const actions = await listOfflineTaskActions();
+        rebuildPendingActionState(actions);
+        setOfflineActionCount(actions.length);
+        void syncOfflineQueueRef.current?.();
       }
-      if (operation?.undoRequested) {
-        setNotice((current) => current?.operationId === operationId ? null : current);
-        await undoAction(result.undoToken);
-        return;
-      }
-      setTodos((current) => current.map((item) => item.id === result.todo.id ? result.todo : item));
-      setNotice((current) => current?.operationId === operationId ? { ...current, pendingUndo: false, undoToken: result.undoToken } : current);
-      console.info("[todo-ui] task pin changed", { id: todo.id, pinned, view, operationId });
+      console.info("[todo-offline] task pin committed locally", { id: todo.id, pinned, view, operationId });
     } catch (error) {
       setTodos((current) => restoreOptimisticTasks(current, previous, [todo.id]));
       setNotice((current) => current?.operationId === operationId ? { ...current, tone: "error", text: error instanceof Error ? error.message : "The pin could not be changed.", pendingUndo: false } : current);
-      console.error("[todo-ui] task pin change failed", { id: todo.id, pinned, error });
-    } finally {
       optimisticOperationsRef.current.delete(operationId);
-      setSyncing(false);
+      console.error("[todo-offline] task pin local commit failed", { id: todo.id, pinned, error });
     }
   }
 
@@ -4140,9 +4553,13 @@ export default function Home() {
           console.info("[todo-keyboard] shortcut guide opened", { source: "header" });
         }}
       />
-      {(!online || offlineCount + offlineEditCount > 0) && (
+      {(connectionQuality !== "online" || offlineCount + offlineEditCount + offlineActionCount > 0) && (
         <div className="pointer-events-none fixed right-3 top-[4.25rem] z-40 rounded-full bg-[#202522] px-3 py-1.5 text-xs font-semibold text-white shadow-lg" role="status" aria-live="polite">
-          {!online ? `Offline${offlineCount + offlineEditCount ? ` · ${offlineCount + offlineEditCount} queued` : ""}` : `${offlineCount + offlineEditCount} waiting to sync`}
+          {connectionQuality === "offline"
+            ? `Offline${offlineCount + offlineEditCount + offlineActionCount ? ` · ${offlineCount + offlineEditCount + offlineActionCount} queued` : ""}`
+            : connectionQuality === "degraded"
+              ? `Slow connection${offlineCount + offlineEditCount + offlineActionCount ? ` · ${offlineCount + offlineEditCount + offlineActionCount} queued` : ""}`
+              : `${offlineCount + offlineEditCount + offlineActionCount} waiting to sync`}
         </div>
       )}
       {imageDropActive && (

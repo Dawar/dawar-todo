@@ -119,7 +119,7 @@ test("ships automatic saving, queued offline edits, incremental polling, and con
   assert.doesNotMatch(page, /Promise\.all\(\[\s*request<\{ todos: Todo\[\] \}>\("\/api\/todos"/);
   assert.match(page, /saveOfflineTodoMutation/);
   assert.match(page, /listOfflineTodoMutations/);
-  assert.match(offlineStore, /DATABASE_VERSION = 5/);
+  assert.match(offlineStore, /DATABASE_VERSION = 6/);
   assert.match(offlineStore, /CAPTURE_DRAFT_STORE = "capture-draft"/);
   assert.match(page, /updateCaptureTitle\(event\.target\.value, "typing"\)/);
   assert.match(page, /updateEditDraftField/);
@@ -129,11 +129,17 @@ test("ships automatic saving, queued offline edits, incremental polling, and con
   assert.match(database, /entity_type === "capture_draft"/);
   assert.match(database, /todo_sync_capture_draft_insert/);
   assert.match(database, /todo_sync_capture_draft_update/);
-  assert.match(database, /CURRENT_SCHEMA_VERSION = "22"/);
+  assert.match(database, /CURRENT_SCHEMA_VERSION = "23"/);
   assert.match(captureDraftRoute, /updateTodoCaptureDraft/);
   assert.match(captureDraftRoute, /Cache-Control/);
   assert.match(offlineStore, /pending-mutations/);
+  assert.match(offlineStore, /pending-actions/);
+  assert.match(offlineStore, /saveOfflineTaskAction/);
   assert.match(offlineStore, /fieldTimestamps/);
+  assert.match(page, /local-first shell hydrated/);
+  assert.match(page, /task action committed to durable outbox/);
+  assert.match(page, /timeoutMs: 5_000/);
+  assert.match(page, /connectionQuality === "degraded"/);
   assert.match(schema, /todoFieldVersions/);
   assert.match(schema, /todoSyncChanges/);
   assert.match(migration, /CREATE TABLE `todo_field_versions`/);
