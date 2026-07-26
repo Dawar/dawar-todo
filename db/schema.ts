@@ -210,6 +210,21 @@ export const todoPushEvents = sqliteTable(
   ],
 );
 
+export const todoPushDeliveries = sqliteTable(
+  "todo_push_deliveries",
+  {
+    eventId: text("event_id").notNull(),
+    subscriptionId: text("subscription_id").notNull(),
+    deliveredAt: text("delivered_at")
+      .notNull()
+      .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`),
+  },
+  (table) => [
+    primaryKey({ columns: [table.eventId, table.subscriptionId] }),
+    index("todo_push_deliveries_subscription_idx").on(table.subscriptionId),
+  ],
+);
+
 export const todoSyncChanges = sqliteTable(
   "todo_sync_changes",
   {

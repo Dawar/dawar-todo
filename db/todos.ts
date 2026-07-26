@@ -122,7 +122,7 @@ type TodoSyncChangeRow = {
 };
 
 let initialization: Promise<void> | null = null;
-const CURRENT_SCHEMA_VERSION = "23";
+const CURRENT_SCHEMA_VERSION = "24";
 
 function database() {
   if (!env.DB) throw new Error("The todo database is unavailable.");
@@ -445,6 +445,14 @@ export async function ensureTodoDatabase() {
         )
       `),
       db.prepare(`
+        CREATE TABLE IF NOT EXISTS todo_push_deliveries (
+          event_id TEXT NOT NULL,
+          subscription_id TEXT NOT NULL,
+          delivered_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+          PRIMARY KEY (event_id, subscription_id)
+        )
+      `),
+      db.prepare(`
         CREATE TABLE IF NOT EXISTS todo_assistant_workspaces (
           user_key TEXT PRIMARY KEY NOT NULL,
           selected_todo_id INTEGER,
@@ -656,6 +664,7 @@ export async function ensureTodoDatabase() {
       db.prepare("CREATE INDEX IF NOT EXISTS todo_push_subscriptions_disabled_idx ON todo_push_subscriptions(disabled_at)"),
       db.prepare("CREATE INDEX IF NOT EXISTS todo_push_events_delivery_idx ON todo_push_events(delivered_at, deliver_after)"),
       db.prepare("CREATE INDEX IF NOT EXISTS todo_push_events_todo_idx ON todo_push_events(todo_id)"),
+      db.prepare("CREATE INDEX IF NOT EXISTS todo_push_deliveries_subscription_idx ON todo_push_deliveries(subscription_id)"),
       db.prepare("CREATE INDEX IF NOT EXISTS todo_assistant_threads_todo_idx ON todo_assistant_threads(todo_id)"),
       db.prepare("CREATE INDEX IF NOT EXISTS todo_assistant_threads_updated_idx ON todo_assistant_threads(updated_at)"),
       db.prepare("CREATE INDEX IF NOT EXISTS todo_assistant_messages_thread_idx ON todo_assistant_messages(user_key, todo_id, created_at)"),

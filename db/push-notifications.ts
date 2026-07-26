@@ -38,7 +38,7 @@ export type PushSubscriptionInput = {
 };
 
 const DEVICE_ID_PATTERN = /^[0-9a-f-]{36}$/i;
-const MAX_BATCH_EVENTS = 250;
+const MAX_BATCH_EVENTS = 90;
 const generatePushRequest = webPush.generateRequestDetails as unknown as (
   subscription: PushSubscription,
   payload: string,
@@ -53,6 +53,20 @@ const generatePushRequest = webPush.generateRequestDetails as unknown as (
 function isoMinuteCeiling(date: Date) {
   const time = date.valueOf();
   return new Date(Math.ceil(time / 60_000) * 60_000).toISOString();
+}
+
+function eventDeliveryTime(type: TodoPushEventType, createdAt: Date) {
+  return type === "snooze_expired" ? isoMinuteCeiling(createdAt) : createdAt.toISOString();
+}
+
+function deliveryKey(eventId: string, subscriptionId: string) {
+  return `${eventId}:${subscriptionId}`;
+}
+
+function suppressesOriginDevice(event: TodoPushEventRow, subscription: TodoPushSubscriptionRow) {
+  return event.event_type === "task_created"
+    && Boolean(event.origin_device_id)
+    && event.origin_device_id === subscription.device_id;
 }
 
 function normalizedPushEndpoint(value: string) {
@@ -150,6 +164,7 @@ export async function queueTodoPushEvent(
   const originDeviceId = event.originDeviceId && DEVICE_ID_PATTERN.test(event.originDeviceId)
     ? event.originDeviceId
     : null;
+  const deliverAfter = eventDeliveryTime(event.type, createdAt);
   const result = await db.prepare(`
     INSERT OR IGNORE INTO todo_push_events (
       id, event_type, todo_id, todo_title, origin_device_id, created_at, deliver_after
@@ -161,16 +176,28 @@ export async function queueTodoPushEvent(
     event.title.slice(0, 2_000),
     originDeviceId,
     createdAt.toISOString(),
-    isoMinuteCeiling(createdAt),
+    deliverAfter,
   ).run();
   console.info("[todo-push] task event queued", {
     type: event.type,
     todoId: event.todoId,
     originSuppressionAvailable: Boolean(originDeviceId),
     queued: Number(result.meta.changes ?? 0),
-    deliverAfter: isoMinuteCeiling(createdAt),
+    deliverAfter,
   });
   return Number(result.meta.changes ?? 0) > 0;
+}
+
+async function recordSuccessfulDeliveries(
+  db: D1Database,
+  subscriptionId: string,
+  events: TodoPushEventRow[],
+) {
+  if (!events.length) return;
+  await db.batch(events.map((event) => db.prepare(`
+    INSERT OR IGNORE INTO todo_push_deliveries (event_id, subscription_id)
+    VALUES (?, ?)
+  `).bind(event.id, subscriptionId)));
 }
 
 function notificationPayload(events: TodoPushEventRow[], openCount: number) {
@@ -260,24 +287,34 @@ export async function dispatchTodoPushNotifications(
   const events = eventResult.results;
   const subscriptions = subscriptionResult.results;
   if (!events.length) return { events: 0, subscriptions: subscriptions.length, sent: 0, suppressed: 0, failed: 0, skipped: false };
+  const placeholders = events.map(() => "?").join(",");
+  const priorDeliveryResult = await db.prepare(`
+    SELECT event_id, subscription_id
+    FROM todo_push_deliveries
+    WHERE event_id IN (${placeholders})
+  `).bind(...events.map((event) => event.id)).all<{ event_id: string; subscription_id: string }>();
+  const settledDeliveries = new Set(
+    priorDeliveryResult.results.map((delivery) => deliveryKey(delivery.event_id, delivery.subscription_id)),
+  );
 
   console.info("[todo-push] due batch delivery started", {
     events: events.length,
     subscriptions: subscriptions.length,
+    priorDeliveries: settledDeliveries.size,
     oldestEventAt: events[0]?.created_at,
   });
   let sent = 0;
   let suppressed = 0;
   let failed = 0;
   let expired = 0;
+  const expiredSubscriptionIds = new Set<string>();
   for (const subscription of subscriptions) {
-    const eligibleEvents = events.filter((event) => !(
-      event.event_type === "task_created"
-      && event.origin_device_id
-      && event.origin_device_id === subscription.device_id
+    const eligibleEvents = events.filter((event) => (
+      !suppressesOriginDevice(event, subscription)
+      && !settledDeliveries.has(deliveryKey(event.id, subscription.id))
     ));
     if (!eligibleEvents.length) {
-      suppressed += 1;
+      suppressed += events.some((event) => suppressesOriginDevice(event, subscription)) ? 1 : 0;
       continue;
     }
     const pushSubscription: PushSubscription = {
@@ -310,8 +347,14 @@ export async function dispatchTodoPushNotifications(
         body: requestBody.buffer,
       });
       const outcome = await markSubscriptionDelivery(db, subscription, response);
-      if (outcome === "sent") sent += 1;
-      else if (outcome === "expired") expired += 1;
+      if (outcome === "sent") {
+        sent += 1;
+        await recordSuccessfulDeliveries(db, subscription.id, eligibleEvents);
+        for (const event of eligibleEvents) settledDeliveries.add(deliveryKey(event.id, subscription.id));
+      } else if (outcome === "expired") {
+        expired += 1;
+        expiredSubscriptionIds.add(subscription.id);
+      }
       else failed += 1;
       console.info("[todo-push] device batch delivery completed", {
         subscriptionId: subscription.id,
@@ -329,18 +372,34 @@ export async function dispatchTodoPushNotifications(
       });
     }
   }
-  const placeholders = events.map(() => "?").join(",");
-  await db.prepare(`
-    UPDATE todo_push_events
-    SET delivered_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-    WHERE id IN (${placeholders})
-  `).bind(...events.map((event) => event.id)).run();
+  const completedEventIds = events.filter((event) => subscriptions.every((subscription) => (
+    suppressesOriginDevice(event, subscription)
+    || expiredSubscriptionIds.has(subscription.id)
+    || settledDeliveries.has(deliveryKey(event.id, subscription.id))
+  ))).map((event) => event.id);
+  if (completedEventIds.length) {
+    const completedPlaceholders = completedEventIds.map(() => "?").join(",");
+    await db.prepare(`
+      UPDATE todo_push_events
+      SET delivered_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+      WHERE id IN (${completedPlaceholders})
+    `).bind(...completedEventIds).run();
+  }
   await db.prepare(`
     DELETE FROM todo_push_events
     WHERE delivered_at IS NOT NULL AND delivered_at < datetime('now', '-7 days')
   `).run();
+  await db.prepare(`
+    DELETE FROM todo_push_deliveries
+    WHERE NOT EXISTS (
+      SELECT 1 FROM todo_push_events
+      WHERE todo_push_events.id = todo_push_deliveries.event_id
+    )
+  `).run();
   console.info("[todo-push] due batch delivery finished", {
     events: events.length,
+    completedEvents: completedEventIds.length,
+    pendingRetryEvents: events.length - completedEventIds.length,
     subscriptions: subscriptions.length,
     sent,
     suppressed,
@@ -348,5 +407,15 @@ export async function dispatchTodoPushNotifications(
     expired,
     durationMs: Date.now() - startedAt,
   });
-  return { events: events.length, subscriptions: subscriptions.length, sent, suppressed, failed, expired, skipped: false };
+  return {
+    events: events.length,
+    completedEvents: completedEventIds.length,
+    pendingRetryEvents: events.length - completedEventIds.length,
+    subscriptions: subscriptions.length,
+    sent,
+    suppressed,
+    failed,
+    expired,
+    skipped: false,
+  };
 }

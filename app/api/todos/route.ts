@@ -1,5 +1,7 @@
+import { env, waitUntil } from "cloudflare:workers";
 import { createTodo, listTodos } from "../../../db/todos";
 import { runTodoReadMaintenance } from "../../../db/maintenance";
+import { dispatchTodoPushNotifications } from "../../../db/push-notifications";
 
 export async function GET() {
   const startedAt = Date.now();
@@ -72,6 +74,12 @@ export async function POST(request: Request) {
       recurrenceCron: todo.recurrenceCron,
       originSuppressionAvailable: Boolean(originDeviceId),
     });
+    waitUntil(dispatchTodoPushNotifications(env.DB, env, new Date()).catch((pushError) => {
+      console.error("[todo-push] immediate created-task delivery failed; scheduled retry retained", {
+        todoId: todo.id,
+        error: pushError instanceof Error ? pushError.message : String(pushError),
+      });
+    }));
     return Response.json({ todo }, { status: 201 });
   } catch (error) {
     const message = error instanceof Error ? error.message : "The task could not be added.";

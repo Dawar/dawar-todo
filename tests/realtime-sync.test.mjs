@@ -129,7 +129,7 @@ test("ships automatic saving, queued offline edits, incremental polling, and con
   assert.match(database, /entity_type === "capture_draft"/);
   assert.match(database, /todo_sync_capture_draft_insert/);
   assert.match(database, /todo_sync_capture_draft_update/);
-  assert.match(database, /CURRENT_SCHEMA_VERSION = "23"/);
+  assert.match(database, /CURRENT_SCHEMA_VERSION = "24"/);
   assert.match(captureDraftRoute, /updateTodoCaptureDraft/);
   assert.match(captureDraftRoute, /Cache-Control/);
   assert.match(offlineStore, /pending-mutations/);

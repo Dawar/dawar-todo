@@ -14,12 +14,14 @@ test("wires device push subscriptions, minute batching, origin suppression, and 
     pushDatabase,
     pushRoute,
     todoRoute,
+    pwaRegistration,
     worker,
     recurring,
     settings,
     page,
     access,
     migration,
+    deliveryMigration,
     environment,
   ] = await Promise.all([
     readFile(new URL("db/schema.ts", root), "utf8"),
@@ -27,26 +29,34 @@ test("wires device push subscriptions, minute batching, origin suppression, and 
     readFile(new URL("db/push-notifications.ts", root), "utf8"),
     readFile(new URL("app/api/push/route.ts", root), "utf8"),
     readFile(new URL("app/api/todos/route.ts", root), "utf8"),
+    readFile(new URL("app/pwa-register.tsx", root), "utf8"),
     readFile(new URL("worker/index.ts", root), "utf8"),
     readFile(new URL("worker/recurring.ts", root), "utf8"),
     readFile(new URL("app/settings/page.tsx", root), "utf8"),
     readFile(new URL("app/page.tsx", root), "utf8"),
     readFile(new URL("worker/access.ts", root), "utf8"),
     readFile(new URL("drizzle/0020_acoustic_bushwacker.sql", root), "utf8"),
+    readFile(new URL("drizzle/0024_white_shooting_star.sql", root), "utf8"),
     readFile(new URL(".env.example", root), "utf8"),
   ]);
 
   assert.match(schema, /todoPushSubscriptions/);
   assert.match(schema, /todoPushEvents/);
+  assert.match(schema, /todoPushDeliveries/);
   assert.match(migration, /CREATE TABLE `todo_push_subscriptions`/);
   assert.match(migration, /CREATE TABLE `todo_push_events`/);
-  assert.match(database, /CURRENT_SCHEMA_VERSION = "23"/);
+  assert.match(deliveryMigration, /CREATE TABLE `todo_push_deliveries`/);
+  assert.match(database, /CURRENT_SCHEMA_VERSION = "24"/);
+  assert.match(database, /CREATE TABLE IF NOT EXISTS todo_push_deliveries/);
   assert.match(database, /wakeExpiredSnoozedTodosInDatabase/);
   assert.match(database, /'snooze:' \|\| id \|\| ':' \|\| snoozed_until/);
   assert.match(database, /queueTodoPushEvent\(db, \{[\s\S]*type: "task_created"/);
   assert.match(database, /originDeviceId: input\.originDeviceId/);
   assert.match(pushDatabase, /Math\.ceil\(time \/ 60_000\) \* 60_000/);
+  assert.match(pushDatabase, /type === "snooze_expired" \? isoMinuteCeiling\(createdAt\) : createdAt\.toISOString\(\)/);
   assert.match(pushDatabase, /event\.event_type === "task_created"[\s\S]*event\.origin_device_id === subscription\.device_id/);
+  assert.match(pushDatabase, /INSERT OR IGNORE INTO todo_push_deliveries/);
+  assert.match(pushDatabase, /pendingRetryEvents: events\.length - completedEventIds\.length/);
   assert.match(pushDatabase, /`\$\{events\.length\} tasks are ready`/);
   assert.match(pushDatabase, /generateRequestDetails/);
   assert.match(pushDatabase, /contentEncoding: "aes128gcm"/);
@@ -55,7 +65,10 @@ test("wires device push subscriptions, minute batching, origin suppression, and 
   assert.match(pushRoute, /export async function POST/);
   assert.match(pushRoute, /export async function DELETE/);
   assert.match(todoRoute, /request\.headers\.get\("X-Dawar-Device-Id"\)/);
+  assert.match(todoRoute, /waitUntil\(dispatchTodoPushNotifications/);
   assert.match(page, /headersWithDeviceId/);
+  assert.match(pwaRegistration, /refreshExistingPushSubscription/);
+  assert.match(pwaRegistration, /active device subscription refreshed on app launch/);
   assert.match(worker, /wakeExpiredSnoozedTodosInDatabase/);
   assert.match(worker, /dispatchTodoPushNotifications/);
   assert.match(recurring, /type: "recurrence_reopened"/);
