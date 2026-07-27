@@ -14,7 +14,8 @@ import {
   consumeTalkPhoneStream,
   endTalkPhoneCall,
 } from "../db/talk-phone";
-import { listTodos } from "../db/todos";
+import { getTodoSettings, listTodos } from "../db/todos";
+import type { RealtimeVoice } from "../lib/ai-preferences";
 import { buildSharedAssistantContext } from "../lib/assistant-context";
 import {
   hashedSafetyIdentifier,
@@ -195,6 +196,7 @@ export async function handleTalkPhoneStream(
   let userKey = "";
   let talkSessionId = "";
   let focusedTodoId: number | null = null;
+  let realtimeVoice: RealtimeVoice | null = null;
   let openAI: WebSocket | null = null;
   let initialized = false;
   let initializing = false;
@@ -422,7 +424,7 @@ export async function handleTalkPhoneStream(
   };
 
   const configureOpenAI = async (instructions: string, rollover = false) => {
-    const { model, voice } = talkRuntimeConfig();
+    const { model, voice } = talkRuntimeConfig(realtimeVoice);
     const safetyIdentifier = await hashedSafetyIdentifier(userKey);
     const next = await openOpenAIRealtimeSocket(environment, { model, safetyIdentifier });
     next.addEventListener("message", (message) => handleOpenAIEvent(message.data));
@@ -520,9 +522,14 @@ export async function handleTalkPhoneStream(
       const authenticated = await consumeTalkPhoneStream({ callSid, rawToken: token }, environment.DB);
       if (!authenticated) throw new Error("The phone stream token is invalid or expired.");
       userKey = authenticated.userKey;
-      const [todos, workspace] = await Promise.all([listTodos(), readTalkWorkspace(userKey)]);
+      const [todos, workspace, settings] = await Promise.all([
+        listTodos(),
+        readTalkWorkspace(userKey),
+        getTodoSettings(),
+      ]);
       focusedTodoId = chooseTalkFocus(todos, workspace.lastFocusedTodoId);
-      const { model, voice } = talkRuntimeConfig();
+      realtimeVoice = settings.realtimeVoice;
+      const { model, voice } = talkRuntimeConfig(realtimeVoice);
       const session = await startTalkSession({ userKey, model, voice, focusedTodoId });
       talkSessionId = session.id;
       await attachTalkSessionToPhoneCall(callSid, talkSessionId, environment.DB);

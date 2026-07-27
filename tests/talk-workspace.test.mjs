@@ -12,6 +12,7 @@ test("ships the signed-in WebRTC Talk chief-of-staff workspace", async () => {
     database,
     talkDb,
     runtime,
+    aiPreferences,
     tools,
     workspace,
     header,
@@ -24,6 +25,7 @@ test("ships the signed-in WebRTC Talk chief-of-staff workspace", async () => {
     readFile(new URL("db/todos.ts", root), "utf8"),
     readFile(new URL("db/talk.ts", root), "utf8"),
     readFile(new URL("lib/talk-runtime.ts", root), "utf8"),
+    readFile(new URL("lib/ai-preferences.ts", root), "utf8"),
     readFile(new URL("lib/talk-tools.ts", root), "utf8"),
     readFile(new URL("app/talk/workspace.tsx", root), "utf8"),
     readFile(new URL("app/site-header.tsx", root), "utf8"),
@@ -52,7 +54,8 @@ test("ships the signed-in WebRTC Talk chief-of-staff workspace", async () => {
   assert.match(talkDb, /finalized transcript stored/);
 
   assert.match(runtime, /gpt-realtime-2\.1-mini/);
-  assert.match(runtime, /DEFAULT_REALTIME_VOICE = "marin"/);
+  assert.match(aiPreferences, /DEFAULT_REALTIME_VOICE: RealtimeVoice = "marin"/);
+  assert.match(runtime, /preferredVoice \?\? environmentVoice \?\? DEFAULT_REALTIME_VOICE/);
   assert.match(runtime, /semantic_vad/);
   assert.match(runtime, /interrupt_response: true/);
   assert.match(runtime, /reasoning: \{ effort: "low" \}/);

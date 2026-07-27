@@ -156,7 +156,7 @@
       "get": {
         "tags": ["Settings"],
         "operationId": "getSettings",
-        "summary": "Read snooze settings",
+        "summary": "Read user preferences",
         "responses": {
           "200": { "description": "Settings", "content": { "application/json": { "schema": { "type": "object", "required": ["settings"], "properties": { "settings": { "$ref": "#/components/schemas/Settings" } } } } } },
           "401": { "$ref": "#/components/responses/Unauthorized" }
@@ -165,7 +165,7 @@
       "patch": {
         "tags": ["Settings"],
         "operationId": "updateSettings",
-        "summary": "Update snooze settings",
+        "summary": "Update user preferences",
         "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Settings" } } } },
         "responses": {
           "200": { "description": "Updated settings", "content": { "application/json": { "schema": { "type": "object", "required": ["settings"], "properties": { "settings": { "$ref": "#/components/schemas/Settings" } } } } } },
@@ -437,8 +437,8 @@
       },
       "Settings": {
         "type": "object",
-        "required": ["snoozeTimeZone", "snoozeWakeHour", "snoozeQuickPresets"],
-        "properties": { "snoozeTimeZone": { "type": "string", "example": "America/Toronto", "description": "IANA timezone used for both snooze wake times and recurring cron schedules." }, "snoozeWakeHour": { "type": "integer", "minimum": 0, "maximum": 23 }, "snoozeQuickPresets": { "type": "array", "minItems": 4, "maxItems": 4, "uniqueItems": true, "items": { "type": "string", "enum": ["15m", "30m", "45m", "1h", "90m", "2h", "3h", "4h", "6h", "8h", "12h"] }, "description": "Four distinct Quick Snooze buttons. The server normalizes them shortest-to-longest." } }
+        "required": ["snoozeTimeZone", "snoozeWakeHour", "snoozeQuickPresets", "realtimeVoice"],
+        "properties": { "snoozeTimeZone": { "type": "string", "example": "America/Toronto", "description": "IANA timezone used for both snooze wake times and recurring cron schedules." }, "snoozeWakeHour": { "type": "integer", "minimum": 0, "maximum": 23 }, "snoozeQuickPresets": { "type": "array", "minItems": 4, "maxItems": 4, "uniqueItems": true, "items": { "type": "string", "enum": ["15m", "30m", "45m", "1h", "90m", "2h", "3h", "4h", "6h", "8h", "12h"] }, "description": "Four distinct Quick Snooze buttons. The server normalizes them shortest-to-longest." }, "realtimeVoice": { "type": "string", "enum": ["marin", "cedar", "alloy", "ash", "ballad", "coral", "echo", "sage", "shimmer", "verse"], "description": "Voice used when starting new browser or phone Talk sessions." } }
       },
       "CalendarFeed": {
         "type": "object",

@@ -15,6 +15,11 @@ import {
   quickSnoozeDurationMs,
   type QuickSnoozePreset,
 } from "../lib/snooze-presets";
+import {
+  DEFAULT_REALTIME_VOICE,
+  normalizeRealtimeVoice,
+  type RealtimeVoice,
+} from "../lib/ai-preferences";
 import { zonedLocalDateTimeToUtc } from "../lib/zoned-date-time";
 
 type StoredTodoStatus = "open" | "completed" | "archived";
@@ -87,6 +92,7 @@ export type TodoSettings = {
   snoozeTimeZone: string;
   snoozeWakeHour: number;
   snoozeQuickPresets: QuickSnoozePreset[];
+  realtimeVoice: RealtimeVoice;
 };
 
 export type TodoCaptureDraft = {
@@ -187,6 +193,7 @@ function mapTodoSettings(rows: Array<{ key: string; value: string }>): TodoSetti
     snoozeTimeZone: values.snooze_timezone || "America/Toronto",
     snoozeWakeHour: Number(values.snooze_wake_hour ?? 8),
     snoozeQuickPresets: [...snoozeQuickPresets],
+    realtimeVoice: normalizeRealtimeVoice(values.ai_realtime_voice) ?? DEFAULT_REALTIME_VOICE,
   };
 }
 
@@ -845,7 +852,7 @@ export async function readTodoBootstrap(): Promise<TodoBootstrapSnapshot> {
   const [todoResult, projectResult, settingResult, captureDraftResult, revisionResult] = await db.batch([
     db.prepare(`${todoListSql} ORDER BY updated_at DESC, id DESC`),
     db.prepare("SELECT name FROM todo_projects ORDER BY name COLLATE NOCASE ASC"),
-    db.prepare("SELECT key, value FROM app_settings WHERE key IN ('snooze_timezone', 'snooze_wake_hour', 'snooze_quick_presets')"),
+    db.prepare("SELECT key, value FROM app_settings WHERE key IN ('snooze_timezone', 'snooze_wake_hour', 'snooze_quick_presets', 'ai_realtime_voice')"),
     db.prepare("SELECT value FROM app_settings WHERE key = 'capture_draft'"),
     db.prepare("SELECT COALESCE(MAX(revision), 0) AS revision FROM todo_sync_changes"),
   ]) as [
@@ -1335,7 +1342,7 @@ function zonedDateToUtc(year: number, month: number, day: number, hour: number, 
 export async function getTodoSettings(): Promise<TodoSettings> {
   await ensureTodoDatabase();
   const result = await database()
-    .prepare("SELECT key, value FROM app_settings WHERE key IN ('snooze_timezone', 'snooze_wake_hour', 'snooze_quick_presets')")
+    .prepare("SELECT key, value FROM app_settings WHERE key IN ('snooze_timezone', 'snooze_wake_hour', 'snooze_quick_presets', 'ai_realtime_voice')")
     .all<{ key: string; value: string }>();
   return mapTodoSettings(result.results);
 }
@@ -1359,8 +1366,18 @@ export async function updateTodoSettings(settings: TodoSettings): Promise<TodoSe
       VALUES ('snooze_quick_presets', ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
     `).bind(JSON.stringify(settings.snoozeQuickPresets)),
+    db.prepare(`
+      INSERT INTO app_settings (key, value, updated_at)
+      VALUES ('ai_realtime_voice', ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+    `).bind(settings.realtimeVoice),
   ]);
-  console.info("[todo-db] settings updated", settings);
+  console.info("[todo-db] settings updated", {
+    snoozeTimeZone: settings.snoozeTimeZone,
+    snoozeWakeHour: settings.snoozeWakeHour,
+    quickSnoozeCount: settings.snoozeQuickPresets.length,
+    realtimeVoice: settings.realtimeVoice,
+  });
   return settings;
 }
 

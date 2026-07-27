@@ -32,6 +32,7 @@ import {
   quickSnoozeLabel,
   type QuickSnoozePreset,
 } from "../lib/snooze-presets";
+import type { RealtimeVoice } from "../lib/ai-preferences";
 import { snoozeLabel } from "../lib/snooze-label";
 import { zonedDateTimeInputValue, zonedLocalDateTimeToUtc } from "../lib/zoned-date-time";
 import { SiteHeader } from "./site-header";
@@ -113,6 +114,7 @@ type TodoSettings = {
   snoozeTimeZone: string;
   snoozeWakeHour: number;
   snoozeQuickPresets: QuickSnoozePreset[];
+  realtimeVoice: RealtimeVoice;
 };
 
 type CaptureDraft = Omit<OfflineCaptureDraft, "key">;

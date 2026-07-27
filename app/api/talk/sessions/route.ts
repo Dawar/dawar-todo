@@ -5,7 +5,7 @@ import {
   readTalkWorkspace,
   startTalkSession,
 } from "../../../../db/talk";
-import { listTodos } from "../../../../db/todos";
+import { getTodoSettings, listTodos } from "../../../../db/todos";
 import { buildSharedAssistantContext } from "../../../../lib/assistant-context";
 import { noStoreHeaders, talkErrorResponse, talkUserKey } from "../../../../lib/talk-http";
 import {
@@ -21,9 +21,13 @@ export async function POST(request: Request) {
   let sessionId: string | null = null;
   try {
     userKey = talkUserKey(request);
-    const [todos, workspace] = await Promise.all([listTodos(), readTalkWorkspace(userKey)]);
+    const [todos, workspace, settings] = await Promise.all([
+      listTodos(),
+      readTalkWorkspace(userKey),
+      getTodoSettings(),
+    ]);
     const focusedTodoId = chooseTalkFocus(todos, workspace.lastFocusedTodoId);
-    const { model, voice } = talkRuntimeConfig();
+    const { model, voice } = talkRuntimeConfig(settings.realtimeVoice);
     const session = await startTalkSession({ userKey, model, voice, focusedTodoId });
     sessionId = session.id;
     const [context, history, safetyIdentifier] = await Promise.all([
@@ -34,6 +38,7 @@ export async function POST(request: Request) {
     const secret = await mintRealtimeClientSecret({
       safetyIdentifier,
       instructions: talkInstructions(context),
+      voice,
     });
     console.info("[todo-talk-api] session started", {
       sessionId,

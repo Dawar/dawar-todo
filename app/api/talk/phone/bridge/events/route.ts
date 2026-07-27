@@ -7,6 +7,7 @@ import {
   listTalkHistory,
 } from "../../../../../../db/talk";
 import { endTalkPhoneCall } from "../../../../../../db/talk-phone";
+import { getTodoSettings } from "../../../../../../db/todos";
 import { buildSharedAssistantContext } from "../../../../../../lib/assistant-context";
 import {
   authenticatePhoneBridgeRequest,
@@ -175,10 +176,11 @@ export async function POST(request: Request) {
 
     if (action === "rollover") {
       await heartbeatTalkSession(userKey, talkSessionId, focusedTodoId);
-      const [context, history, safetyIdentifier] = await Promise.all([
+      const [context, history, safetyIdentifier, settings] = await Promise.all([
         buildSharedAssistantContext(userKey, focusedTodoId ?? null),
         listTalkHistory(userKey, { limit: 40 }),
         hashedSafetyIdentifier(userKey),
+        getTodoSettings(),
       ]);
       const recent = history.messages
         .slice(-20)
@@ -188,6 +190,7 @@ export async function POST(request: Request) {
         safetyIdentifier,
         instructions: `${talkInstructions(context)}\n\nRECENT PHONE CONVERSATION\n${recent}`,
         audioFormat: "pcmu",
+        voice: settings.realtimeVoice,
       });
       console.info("[todo-talk-phone-bridge] realtime credential rolled over", {
         callSid,

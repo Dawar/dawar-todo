@@ -1,4 +1,4 @@
-const CACHE_NAME = "dawar-todo-shell-v10";
+const CACHE_NAME = "dawar-todo-shell-v11";
 const SHELL = [
   "/",
   "/assistant",

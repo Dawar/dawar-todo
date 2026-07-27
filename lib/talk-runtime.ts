@@ -1,5 +1,10 @@
 import { env } from "cloudflare:workers";
 import type { SharedAssistantContext } from "./assistant-context";
+import {
+  DEFAULT_REALTIME_VOICE,
+  normalizeRealtimeVoice,
+  type RealtimeVoice,
+} from "./ai-preferences";
 
 type TalkEnvironment = {
   OPENAI_API_KEY?: string;
@@ -9,25 +14,26 @@ type TalkEnvironment = {
 };
 
 export const DEFAULT_REALTIME_MODEL = "gpt-realtime-2.1-mini";
-export const DEFAULT_REALTIME_VOICE = "marin";
 
 function runtime() {
   return env as unknown as TalkEnvironment;
 }
 
-export function talkRuntimeConfig() {
+export function talkRuntimeConfig(preferredVoice?: RealtimeVoice | null) {
   const current = runtime();
+  const environmentVoice = normalizeRealtimeVoice(current.OPENAI_REALTIME_VOICE);
   return {
     model: current.OPENAI_REALTIME_MODEL?.trim() || DEFAULT_REALTIME_MODEL,
-    voice: current.OPENAI_REALTIME_VOICE?.trim() || DEFAULT_REALTIME_VOICE,
+    voice: preferredVoice ?? environmentVoice ?? DEFAULT_REALTIME_VOICE,
   };
 }
 
 export function realtimeSessionConfig(input: {
   instructions: string;
   audioFormat?: "pcmu";
+  voice?: RealtimeVoice;
 }) {
-  const { model, voice } = talkRuntimeConfig();
+  const { model, voice } = talkRuntimeConfig(input.voice);
   return {
     type: "realtime",
     model,
@@ -383,14 +389,16 @@ export async function mintRealtimeClientSecret(input: {
   safetyIdentifier: string;
   instructions: string;
   audioFormat?: "pcmu";
+  voice?: RealtimeVoice;
 }) {
   const current = runtime();
   const apiKey = current.OPENAI_API_KEY?.trim();
   if (!apiKey) throw new Error("Talk is not configured yet.");
-  const { model, voice } = talkRuntimeConfig();
+  const { model, voice } = talkRuntimeConfig(input.voice);
   const session = realtimeSessionConfig({
     instructions: input.instructions,
     audioFormat: input.audioFormat,
+    voice,
   });
   const startedAt = Date.now();
   const response = await fetch("https://api.openai.com/v1/realtime/client_secrets", {

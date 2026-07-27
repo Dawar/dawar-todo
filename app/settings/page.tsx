@@ -17,11 +17,17 @@ import {
   sortQuickSnoozePresets,
   type QuickSnoozePreset,
 } from "../../lib/snooze-presets";
+import {
+  DEFAULT_REALTIME_VOICE,
+  REALTIME_VOICE_OPTIONS,
+  type RealtimeVoice,
+} from "../../lib/ai-preferences";
 
 type Settings = {
   snoozeTimeZone: string;
   snoozeWakeHour: number;
   snoozeQuickPresets: QuickSnoozePreset[];
+  realtimeVoice: RealtimeVoice;
 };
 
 type CalendarFeed = {
@@ -101,6 +107,7 @@ export default function SettingsPage() {
     snoozeTimeZone: "America/Toronto",
     snoozeWakeHour: 8,
     snoozeQuickPresets: DEFAULT_QUICK_SNOOZE_PRESETS,
+    realtimeVoice: DEFAULT_REALTIME_VOICE,
   });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -138,6 +145,7 @@ export default function SettingsPage() {
         setSettings({
           ...loaded,
           snoozeQuickPresets: loaded.snoozeQuickPresets ?? DEFAULT_QUICK_SNOOZE_PRESETS,
+          realtimeVoice: loaded.realtimeVoice ?? DEFAULT_REALTIME_VOICE,
         });
         console.info("[todo-ui] settings loaded", loaded);
       })
@@ -585,12 +593,17 @@ export default function SettingsPage() {
       <div className="mx-auto max-w-2xl px-4 py-8 sm:px-6 sm:py-12">
         <div className="mb-7">
           <p className="text-sm font-medium text-[#216e4e]">Profile</p>
-          <h1 className="mt-1 text-3xl font-semibold tracking-[-0.04em] text-[#151816]">Daily review</h1>
-          <p className="mt-2 text-sm leading-6 text-[#69716c]">Choose the timezone for snoozing and recurring task schedules.</p>
+          <h1 className="mt-1 text-3xl font-semibold tracking-[-0.04em] text-[#151816]">Preferences</h1>
+          <p className="mt-2 text-sm leading-6 text-[#69716c]">Control task timing, AI behavior, and device features.</p>
         </div>
 
         <form onSubmit={save} className="rounded-2xl border border-black/[0.07] bg-white p-5 shadow-[0_10px_35px_rgba(30,45,36,0.06)] sm:p-7">
           <fieldset disabled={loading || saving} className="space-y-5 disabled:opacity-60">
+            <div>
+              <h2 className="text-lg font-semibold tracking-[-0.02em] text-[#202522]">Daily review</h2>
+              <p className="mt-1 text-sm leading-6 text-[#69716c]">Choose the timezone for snoozing and recurring task schedules.</p>
+            </div>
+
             <label className="block">
               <span className="mb-2 block text-sm font-semibold text-[#303632]">Time zone</span>
               <select
@@ -640,6 +653,37 @@ export default function SettingsPage() {
                 ))}
               </div>
             </div>
+
+            <section aria-labelledby="ai-preferences-title" className="border-t border-black/[0.07] pt-5">
+              <div className="flex items-start gap-3">
+                <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-[#eaf3ed] text-[#216e4e]"><ActionIcon name="assistant" className="h-5 w-5" /></span>
+                <div className="min-w-0 flex-1">
+                  <h2 id="ai-preferences-title" className="text-lg font-semibold tracking-[-0.02em] text-[#202522]">AI preferences</h2>
+                  <p className="mt-1 text-sm leading-6 text-[#69716c]">These preferences apply to the text assistant, browser Talk, and phone Talk when relevant.</p>
+                </div>
+              </div>
+
+              <label className="mt-5 block">
+                <span className="mb-2 block text-sm font-semibold text-[#303632]">Realtime voice</span>
+                <select
+                  value={settings.realtimeVoice}
+                  onChange={(event) => {
+                    const realtimeVoice = event.target.value as RealtimeVoice;
+                    setSettings((current) => ({ ...current, realtimeVoice }));
+                    setSaved(false);
+                    console.info("[todo-ai-preferences] Realtime voice preference changed", { realtimeVoice });
+                  }}
+                  className="h-12 w-full rounded-xl border border-black/[0.1] bg-white px-3 text-[16px] outline-none transition focus:border-[#216e4e]/60 focus:ring-3 focus:ring-[#216e4e]/10"
+                >
+                  {REALTIME_VOICE_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}{option.recommended ? " · recommended" : ""}
+                    </option>
+                  ))}
+                </select>
+                <p className="mt-1.5 text-xs leading-5 text-[#7c847f]">Used for new browser and phone Talk sessions. An active conversation keeps its current voice until the next session.</p>
+              </label>
+            </section>
           </fieldset>
 
           <div className="mt-6 rounded-xl bg-[#f1f6f3] px-4 py-3 text-sm leading-6 text-[#4f6257]">
@@ -650,7 +694,7 @@ export default function SettingsPage() {
 
           <div className="mt-6 flex items-center gap-3">
             <button type="submit" disabled={loading || saving} className="rounded-xl bg-[#216e4e] px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-[#195d41] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#216e4e] disabled:opacity-50">
-              {saving ? "Saving…" : "Save settings"}
+              {saving ? "Saving…" : "Save preferences"}
             </button>
             {saved && <span role="status" className="text-sm font-medium text-[#216e4e]">Saved</span>}
           </div>

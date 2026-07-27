@@ -153,7 +153,7 @@ Each multipart request accepts one file; repeat it to attach more files, up to 1
 
 ### Settings and calendars
 
-- \`GET /api/settings\` and \`PATCH /api/settings\`: read or change the timezone used by snooze and recurring schedules, the next-day wake hour, and exactly four distinct \`snoozeQuickPresets\`. Quick presets are returned shortest-to-longest.
+- \`GET /api/settings\` and \`PATCH /api/settings\`: read or change user preferences, including the timezone used by snooze and recurring schedules, the next-day wake hour, exactly four distinct \`snoozeQuickPresets\`, and the \`realtimeVoice\` used by new browser and phone Talk sessions. Quick presets are returned shortest-to-longest.
 - \`GET /api/calendar-feeds\`: list active public iCal feeds.
 - \`POST /api/calendar-feeds\`: create a feed.
 - \`PATCH /api/calendar-feeds/{id}\`: regenerate its public token and invalidate the old URL.

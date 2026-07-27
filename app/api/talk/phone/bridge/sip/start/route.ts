@@ -8,7 +8,7 @@ import {
   readTalkWorkspace,
   startTalkSession,
 } from "../../../../../../../db/talk";
-import { listTodos } from "../../../../../../../db/todos";
+import { getTodoSettings, listTodos } from "../../../../../../../db/todos";
 import { buildSharedAssistantContext } from "../../../../../../../lib/assistant-context";
 import {
   phoneBridgeError,
@@ -46,12 +46,13 @@ export async function POST(request: Request) {
     });
     if (!authenticated) throw new Error("The direct SIP call token is invalid or expired.");
     const userKey = authenticated.userKey;
-    const [todos, workspace] = await Promise.all([
+    const [todos, workspace, settings] = await Promise.all([
       listTodos(),
       readTalkWorkspace(userKey),
+      getTodoSettings(),
     ]);
     const focusedTodoId = chooseTalkFocus(todos, workspace.lastFocusedTodoId);
-    const { model, voice } = talkRuntimeConfig();
+    const { model, voice } = talkRuntimeConfig(settings.realtimeVoice);
 
     if (authenticated.talkSessionId) {
       try {
@@ -73,6 +74,7 @@ export async function POST(request: Request) {
     ]);
     const session = realtimeSessionConfig({
       instructions: talkInstructions(context),
+      voice,
     });
     console.info("[todo-talk-phone-bridge] direct SIP session prepared", {
       callSid,
