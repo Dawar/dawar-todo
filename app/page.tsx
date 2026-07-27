@@ -32,6 +32,7 @@ import {
   quickSnoozeLabel,
   type QuickSnoozePreset,
 } from "../lib/snooze-presets";
+import { snoozeLabel } from "../lib/snooze-label";
 import { zonedDateTimeInputValue, zonedLocalDateTimeToUtc } from "../lib/zoned-date-time";
 import { SiteHeader } from "./site-header";
 import { PullGesturePill } from "./pull-to-refresh";
@@ -922,12 +923,6 @@ function isSnoozed(todo: Todo, now: number) {
   return isActivelySnoozed(todo, now);
 }
 
-function snoozeLabel(value: string) {
-  const wake = new Date(value);
-  if (Number.isNaN(wake.valueOf())) return "Snoozed";
-  return `Wakes ${new Intl.DateTimeFormat(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" }).format(wake)}`;
-}
-
 function recurrenceLabel(expression: string, status: TodoStatus, now: number, timeZone: string) {
   try {
     const next = nextCronOccurrence(expression, new Date(now), timeZone);
@@ -1004,6 +999,15 @@ const DIALOG_FOCUSABLE_SELECTOR = [
 function dialogFocusableElements(container: HTMLElement) {
   return [...container.querySelectorAll<HTMLElement>(DIALOG_FOCUSABLE_SELECTOR)]
     .filter((element) => element.getAttribute("aria-hidden") !== "true" && element.getClientRects().length > 0);
+}
+
+function SnoozeStatusBadge({ value, now, timeZone }: { value: string; now: number; timeZone: string }) {
+  return (
+    <span className="inline-flex min-h-[22px] items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-amber-700 ring-1 ring-inset ring-amber-200/70">
+      <ActionIcon name="snooze" className="h-3 w-3" />
+      {snoozeLabel(value, now, timeZone)}
+    </span>
+  );
 }
 
 function offlineRecordTodo(record: OfflineTodoRecord): Todo {
@@ -1317,7 +1321,7 @@ function TaskRow({
               {todo.project && <span className="inline-flex min-h-[22px] items-center gap-1 rounded-full bg-[#eef2ef] px-2 py-0.5 text-[#55615a] ring-1 ring-inset ring-[#dfe5e1]"><ActionIcon name="folder" className="h-3 w-3" />{todo.project}</span>}
               {todo.context && <span className="inline-flex min-h-[22px] items-center rounded-full bg-sky-50 px-2 py-0.5 text-sky-700 ring-1 ring-inset ring-sky-200/70">{todo.context}</span>}
               {todo.dueDate && <span className={classNames("inline-flex min-h-[22px] items-center gap-1 rounded-full px-2 py-0.5 ring-1 ring-inset", isDueTodayOrOverdue(todo.dueDate) && todo.status === "open" && !snoozed ? "bg-red-50 text-red-700 ring-red-200/70" : "bg-slate-50 text-slate-600 ring-slate-200/80")}><ActionIcon name="calendar" className="h-3 w-3" />{formatDueDate(todo.dueDate)}</span>}
-              {snoozed && todo.snoozedUntil && <span className="inline-flex min-h-[22px] items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-amber-700 ring-1 ring-inset ring-amber-200/70"><ActionIcon name="snooze" className="h-3 w-3" />{snoozeLabel(todo.snoozedUntil)}</span>}
+              {snoozed && todo.snoozedUntil && <SnoozeStatusBadge value={todo.snoozedUntil} now={now} timeZone={timeZone} />}
               {todo.recurrenceCron && <span className="inline-flex min-h-[22px] items-center gap-1 rounded-full bg-violet-50 px-2 py-0.5 text-violet-700 ring-1 ring-inset ring-violet-200/70"><ActionIcon name="repeat" className="h-3 w-3" />{recurrenceLabel(todo.recurrenceCron, todo.status, now, timeZone)}</span>}
               {todo.offline && <span className="inline-flex min-h-[22px] items-center gap-1 rounded-full bg-orange-50 px-2 py-0.5 text-orange-700 ring-1 ring-inset ring-orange-200/70"><ActionIcon name="retry" className="h-3 w-3" />Waiting to sync</span>}
             </div>
@@ -3781,7 +3785,7 @@ export default function Home() {
     setNow(Date.now());
     setNotice((current) => current ? {
       ...current,
-      text: `${snoozeLabel(optimisticUntil)}: ${ids.length} ${ids.length === 1 ? "task" : "tasks"}.`,
+      text: `${snoozeLabel(optimisticUntil, Date.now(), scheduleTimeZone)}: ${ids.length} ${ids.length === 1 ? "task" : "tasks"}.`,
       snoozeIds: ids,
       snoozedUntil: optimisticUntil,
       dismissAt,
@@ -3849,7 +3853,7 @@ export default function Home() {
     setNow(Date.now());
     setNotice((current) => current ? {
       ...current,
-      text: `${snoozeLabel(optimisticUntil)}: ${ids.length} ${ids.length === 1 ? "task" : "tasks"}.`,
+      text: `${snoozeLabel(optimisticUntil, Date.now(), scheduleTimeZone)}: ${ids.length} ${ids.length === 1 ? "task" : "tasks"}.`,
       snoozeIds: ids,
       snoozedUntil: optimisticUntil,
       dismissAt,
@@ -5180,6 +5184,11 @@ export default function Home() {
             </div>
 
             <div ref={taskDialogScrollRef} className="min-h-0 min-w-0 overflow-x-hidden overflow-y-auto px-5 py-5 sm:px-6">
+              {isSnoozed(editingTodo, now) && editingTodo.snoozedUntil && (
+                <div className="mb-4">
+                  <SnoozeStatusBadge value={editingTodo.snoozedUntil} now={now} timeZone={scheduleTimeZone} />
+                </div>
+              )}
               <label className="block min-w-0">
                 <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-[#69716c]">Task</span>
                 <textarea

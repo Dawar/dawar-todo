@@ -7,6 +7,7 @@ import {
   isActivelySnoozed,
   nextSnoozeWakeAt,
 } from "../lib/snooze-clock.ts";
+import { snoozeLabel } from "../lib/snooze-label.ts";
 
 const root = new URL("../", import.meta.url);
 
@@ -24,6 +25,24 @@ test("the client clock identifies active, next, and expired snoozes exactly", ()
   assert.equal(isActivelySnoozed(todos[2], now), true);
   assert.equal(nextSnoozeWakeAt(todos, now), Date.parse("2026-07-23T14:05:00.000Z"));
   assert.deepEqual(expiredSnoozeIds(todos, now), [1]);
+});
+
+test("wake labels omit the date only inside the current local week", () => {
+  const now = Date.parse("2026-07-26T16:00:00.000Z");
+  const timeZone = "America/New_York";
+
+  assert.equal(
+    snoozeLabel("2026-07-29T17:30:00.000Z", now, timeZone, "en-US"),
+    "Wakes Wed 1:30 PM",
+  );
+  assert.equal(
+    snoozeLabel("2026-08-19T17:30:00.000Z", now, timeZone, "en-US"),
+    "Wakes Wed, Aug 19 at 1:30 PM",
+  );
+  assert.equal(
+    snoozeLabel("2027-01-06T18:30:00.000Z", now, timeZone, "en-US"),
+    "Wakes Wed, Jan 6, 2027 at 1:30 PM",
+  );
 });
 
 test("normal sync clears expired snoozes and the app schedules their exact return", async () => {
@@ -66,6 +85,7 @@ test("normal sync clears expired snoozes and the app schedules their exact retur
   assert.match(page, /next live wake scheduled/);
   assert.match(page, /refreshLiveData\("snooze-wake"\)/);
   assert.match(page, /reconcileTaskClock/);
+  assert.match(page, /isSnoozed\(editingTodo, now\)[\s\S]*SnoozeStatusBadge/);
   assert.match(openApi.components.schemas.Todo.properties.snoozedUntil.description, /clear an expired timestamp/);
   assert.match(skill, /automatically clear the snooze/);
 });
