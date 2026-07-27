@@ -28,6 +28,21 @@ export function talkRuntimeConfig(preferredVoice?: RealtimeVoice | null) {
   };
 }
 
+export function withRecentTalkHistory(
+  instructions: string,
+  messages: Array<{ role: string; content: string }>,
+) {
+  const recent = messages
+    .filter((message) => message.role === "user" || message.role === "assistant")
+    .slice(-30)
+    .map((message) => `${message.role}: ${message.content.replace(/\s+/g, " ").slice(0, 700)}`)
+    .join("\n")
+    .slice(-12_000);
+  return recent
+    ? `${instructions}\n\nRECENT THREAD MESSAGES\n${recent}\nContinue naturally from this exact conversation. Do not recap it unless asked.`
+    : instructions;
+}
+
 export function realtimeSessionConfig(input: {
   instructions: string;
   audioFormat?: "pcmu";

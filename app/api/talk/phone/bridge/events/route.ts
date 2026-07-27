@@ -5,6 +5,7 @@ import {
   endTalkSession,
   heartbeatTalkSession,
   listTalkHistory,
+  resolveSystemTalkThread,
 } from "../../../../../../db/talk";
 import { endTalkPhoneCall } from "../../../../../../db/talk-phone";
 import { getTodoSettings } from "../../../../../../db/todos";
@@ -149,7 +150,7 @@ export async function POST(request: Request) {
             sources: result.sources ?? [],
           },
         });
-        if (result.focusedTodoId !== undefined) {
+        if (typeof result.focusedTodoId === "number" || result.focusedTodoId === null) {
           await heartbeatTalkSession(userKey, talkSessionId, result.focusedTodoId);
         }
         console.info("[todo-talk-phone-bridge] tool completed", {
@@ -176,9 +177,10 @@ export async function POST(request: Request) {
 
     if (action === "rollover") {
       await heartbeatTalkSession(userKey, talkSessionId, focusedTodoId);
+      const phoneThread = await resolveSystemTalkThread(userKey, "phone");
       const [context, history, safetyIdentifier, settings] = await Promise.all([
-        buildSharedAssistantContext(userKey, focusedTodoId ?? null),
-        listTalkHistory(userKey, { limit: 40 }),
+        buildSharedAssistantContext(userKey, focusedTodoId ?? phoneThread.focusedTodoId, phoneThread.summary),
+        listTalkHistory(userKey, { limit: 40, threadId: phoneThread.id }),
         hashedSafetyIdentifier(userKey),
         getTodoSettings(),
       ]);

@@ -1,5 +1,5 @@
-import { AssistantWorkspace } from "./workspace";
+import { redirect } from "next/navigation";
 
 export default function AssistantPage() {
-  return <AssistantWorkspace />;
+  redirect("/talk");
 }

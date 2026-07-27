@@ -69,7 +69,7 @@ test("cold install recursively precaches every generated client bundle", async (
   const missing = expectedBundles.filter((name) => !cached.has(`/assets/${name}`));
   assert.deepEqual(missing, []);
   assert.ok(cached.has("/"));
-  assert.ok(cached.has("/assistant"));
+  assert.equal(cached.has("/assistant"), false);
   assert.ok(cached.has("/talk"));
   assert.ok(cached.has("/manifest.webmanifest"));
   assert.ok(cached.has("/icons/apple-touch-icon.png"));

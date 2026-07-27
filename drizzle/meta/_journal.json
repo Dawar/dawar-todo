@@ -176,6 +176,13 @@
       "when": 1785100974681,
       "tag": "0024_white_shooting_star",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "6",
+      "when": 1785121231020,
+      "tag": "0025_aberrant_red_skull",
+      "breakpoints": true
     }
   ]
 }

@@ -19,12 +19,14 @@ import {
   ListChecks,
   ListTodo,
   Link2,
+  Menu,
   Merge,
   ImagePlus,
   Keyboard,
   Mic,
   MicOff,
   Paperclip,
+  Pencil,
   PhoneCall,
   Pin,
   PinOff,
@@ -61,9 +63,11 @@ export type ActionIconName =
   | "create-project"
   | "merge"
   | "move"
+  | "edit"
   | "image"
   | "keyboard"
   | "link"
+  | "menu"
   | "attachment"
   | "badge"
   | "mic"
@@ -106,9 +110,11 @@ const icons: Record<ActionIconName, ComponentType<LucideProps>> = {
   "create-project": FolderPlus,
   merge: Merge,
   move: FolderInput,
+  edit: Pencil,
   image: ImagePlus,
   keyboard: Keyboard,
   link: Link2,
+  menu: Menu,
   attachment: Paperclip,
   badge: BellDot,
   mic: Mic,

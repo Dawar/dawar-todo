@@ -1,7 +1,6 @@
-const CACHE_NAME = "dawar-todo-shell-v11";
+const CACHE_NAME = "dawar-todo-shell-v12";
 const SHELL = [
   "/",
-  "/assistant",
   "/talk",
   "/manifest.webmanifest",
   "/icons/icon-192.png",

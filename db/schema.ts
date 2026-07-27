@@ -325,11 +325,43 @@ export const todoTalkWorkspaces = sqliteTable("todo_talk_workspaces", {
     .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`),
 });
 
+export const todoTalkThreads = sqliteTable(
+  "todo_talk_threads",
+  {
+    id: text("id").primaryKey(),
+    userKey: text("user_key").notNull(),
+    kind: text("kind").notNull().default("custom"),
+    systemKey: text("system_key"),
+    title: text("title").notNull(),
+    focusedTodoId: integer("focused_todo_id"),
+    summary: text("summary").notNull().default(""),
+    draftText: text("draft_text").notNull().default(""),
+    deleteToken: text("delete_token"),
+    deletedAt: text("deleted_at"),
+    purgeAfter: text("purge_after"),
+    lastMessageAt: text("last_message_at"),
+    createdAt: text("created_at")
+      .notNull()
+      .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`),
+    updatedAt: text("updated_at")
+      .notNull()
+      .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`),
+  },
+  (table) => [
+    uniqueIndex("todo_talk_threads_system_idx").on(table.userKey, table.systemKey),
+    index("todo_talk_threads_user_idx").on(table.userKey, table.deletedAt, table.lastMessageAt),
+    index("todo_talk_threads_delete_idx").on(table.deleteToken),
+    index("todo_talk_threads_purge_idx").on(table.purgeAfter),
+  ],
+);
+
 export const todoTalkSessions = sqliteTable(
   "todo_talk_sessions",
   {
     id: text("id").primaryKey(),
     userKey: text("user_key").notNull(),
+    threadId: text("thread_id"),
+    transport: text("transport").notNull().default("browser"),
     model: text("model").notNull(),
     voice: text("voice").notNull(),
     status: text("status").notNull().default("active"),
@@ -354,6 +386,7 @@ export const todoTalkMessages = sqliteTable(
     id: text("id").primaryKey(),
     sessionId: text("session_id").notNull(),
     userKey: text("user_key").notNull(),
+    threadId: text("thread_id"),
     realtimeItemId: text("realtime_item_id").notNull(),
     role: text("role").notNull(),
     content: text("content").notNull(),
@@ -367,6 +400,7 @@ export const todoTalkMessages = sqliteTable(
     uniqueIndex("todo_talk_messages_realtime_idx").on(table.userKey, table.realtimeItemId),
     index("todo_talk_messages_session_idx").on(table.sessionId, table.createdAt),
     index("todo_talk_messages_user_idx").on(table.userKey, table.createdAt),
+    index("todo_talk_messages_thread_idx").on(table.threadId, table.createdAt),
     index("todo_talk_messages_task_idx").on(table.focusedTodoId, table.createdAt),
   ],
 );
@@ -377,6 +411,7 @@ export const todoTalkToolCalls = sqliteTable(
     callId: text("call_id").primaryKey(),
     sessionId: text("session_id").notNull(),
     userKey: text("user_key").notNull(),
+    threadId: text("thread_id"),
     name: text("name").notNull(),
     argumentsJson: text("arguments_json").notNull(),
     status: text("status").notNull().default("running"),
@@ -390,6 +425,7 @@ export const todoTalkToolCalls = sqliteTable(
   (table) => [
     index("todo_talk_tool_calls_session_idx").on(table.sessionId, table.createdAt),
     index("todo_talk_tool_calls_user_idx").on(table.userKey, table.createdAt),
+    index("todo_talk_tool_calls_thread_idx").on(table.threadId, table.createdAt),
   ],
 );
 

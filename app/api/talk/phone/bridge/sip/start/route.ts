@@ -5,7 +5,9 @@ import {
 import {
   chooseTalkFocus,
   heartbeatTalkSession,
+  listTalkHistory,
   readTalkWorkspace,
+  resolveSystemTalkThread,
   startTalkSession,
 } from "../../../../../../../db/talk";
 import { getTodoSettings, listTodos } from "../../../../../../../db/todos";
@@ -20,6 +22,7 @@ import {
   realtimeSessionConfig,
   talkInstructions,
   talkRuntimeConfig,
+  withRecentTalkHistory,
 } from "../../../../../../../lib/talk-runtime";
 
 type StartPayload = {
@@ -51,7 +54,11 @@ export async function POST(request: Request) {
       readTalkWorkspace(userKey),
       getTodoSettings(),
     ]);
-    const focusedTodoId = chooseTalkFocus(todos, workspace.lastFocusedTodoId);
+    const phoneThread = await resolveSystemTalkThread(userKey, "phone");
+    const focusedTodoId = chooseTalkFocus(
+      todos,
+      phoneThread.focusedTodoId ?? workspace.lastFocusedTodoId,
+    );
     const { model, voice } = talkRuntimeConfig(settings.realtimeVoice);
 
     if (authenticated.talkSessionId) {
@@ -63,23 +70,32 @@ export async function POST(request: Request) {
       }
     }
     if (!talkSessionId) {
-      const session = await startTalkSession({ userKey, model, voice, focusedTodoId });
+      const session = await startTalkSession({
+        userKey,
+        model,
+        voice,
+        focusedTodoId,
+        threadId: phoneThread.id,
+        transport: "phone-sip",
+      });
       talkSessionId = session.id;
       await attachTalkSessionToPhoneCall(callSid, talkSessionId);
     }
 
-    const [context, safetyIdentifier] = await Promise.all([
-      buildSharedAssistantContext(userKey, focusedTodoId),
+    const [context, history, safetyIdentifier] = await Promise.all([
+      buildSharedAssistantContext(userKey, focusedTodoId, phoneThread.summary),
+      listTalkHistory(userKey, { threadId: phoneThread.id, limit: 40 }),
       hashedSafetyIdentifier(userKey),
     ]);
     const session = realtimeSessionConfig({
-      instructions: talkInstructions(context),
+      instructions: withRecentTalkHistory(talkInstructions(context), history.messages),
       voice,
     });
     console.info("[todo-talk-phone-bridge] direct SIP session prepared", {
       callSid,
       providerCallId,
       talkSessionId,
+      threadId: phoneThread.id,
       focusedTodoId,
       model,
       voice,

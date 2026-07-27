@@ -18,6 +18,7 @@ test("ships a persistent source-aware task assistant workspace", async () => {
     migration,
     draftMigration,
     serviceWorker,
+    assistantPage,
   ] = await Promise.all([
     readFile(new URL("db/schema.ts", root), "utf8"),
     readFile(new URL("db/todos.ts", root), "utf8"),
@@ -30,6 +31,7 @@ test("ships a persistent source-aware task assistant workspace", async () => {
     readFile(new URL("drizzle/0017_famous_praxagora.sql", root), "utf8"),
     readFile(new URL("drizzle/0018_parched_human_fly.sql", root), "utf8"),
     readFile(new URL("public/sw.js", root), "utf8"),
+    readFile(new URL("app/assistant/page.tsx", root), "utf8"),
   ]);
 
   assert.match(schema, /todoAssistantWorkspaces/);
@@ -77,8 +79,9 @@ test("ships a persistent source-aware task assistant workspace", async () => {
   assert.match(attachmentClient, /discard\(prepared\.uploadId\)/);
   assert.match(offline, /assistant-queue/);
   assert.match(offline, /assistant-draft/);
-  assert.match(header, /AI task assistant/);
-  assert.match(serviceWorker, /"\/assistant"/);
+  assert.doesNotMatch(header, /AI task assistant|href="\/assistant"/);
+  assert.match(assistantPage, /redirect\("\/talk"\)/);
+  assert.doesNotMatch(serviceWorker, /"\/assistant"/);
 });
 
 test("does not permit API bearer tokens to spend assistant model capacity", async () => {

@@ -69,6 +69,23 @@ export type OfflineAssistantDraft = {
   updatedAt: string;
 };
 
+export type OfflineTalkMessage = {
+  clientId: string;
+  threadId: string;
+  todoId: number | null;
+  text: string;
+  attachmentIds: string[];
+  attachments: OfflineAssistantAttachment[];
+  createdAt: string;
+};
+
+export type OfflineTalkDraft = {
+  key: string;
+  threadId: string;
+  text: string;
+  updatedAt: string;
+};
+
 export type OfflineTaskAction = {
   operationId: string;
   path: string;
@@ -85,7 +102,7 @@ export type OfflineTaskAction = {
 };
 
 const DATABASE_NAME = "dawar-todo-offline";
-const DATABASE_VERSION = 6;
+const DATABASE_VERSION = 7;
 const TODO_STORE = "pending-todos";
 const CACHE_STORE = "cached-state";
 const MUTATION_STORE = "pending-mutations";
@@ -93,6 +110,8 @@ const ACTION_STORE = "pending-actions";
 const CAPTURE_DRAFT_STORE = "capture-draft";
 const ASSISTANT_QUEUE_STORE = "assistant-queue";
 const ASSISTANT_DRAFT_STORE = "assistant-draft";
+const TALK_QUEUE_STORE = "talk-queue";
+const TALK_DRAFT_STORE = "talk-draft";
 
 export type CachedServerState<T> = {
   key: "server";
@@ -134,6 +153,14 @@ function openDatabase() {
       }
       if (!database.objectStoreNames.contains(ASSISTANT_DRAFT_STORE)) {
         database.createObjectStore(ASSISTANT_DRAFT_STORE, { keyPath: "key" });
+      }
+      if (!database.objectStoreNames.contains(TALK_QUEUE_STORE)) {
+        const store = database.createObjectStore(TALK_QUEUE_STORE, { keyPath: "clientId" });
+        store.createIndex("createdAt", "createdAt");
+        store.createIndex("threadId", "threadId");
+      }
+      if (!database.objectStoreNames.contains(TALK_DRAFT_STORE)) {
+        database.createObjectStore(TALK_DRAFT_STORE, { keyPath: "key" });
       }
     };
     request.onsuccess = () => resolve(request.result);
@@ -482,6 +509,61 @@ export async function loadOfflineAssistantDraft(todoId: number) {
     ASSISTANT_DRAFT_STORE,
     "readonly",
     (store) => store.get(`task:${todoId}`),
+  );
+  return draft ?? null;
+}
+
+export async function saveOfflineTalkMessage(record: OfflineTalkMessage) {
+  try {
+    await runRequest(TALK_QUEUE_STORE, "readwrite", (store) => store.put(record));
+    console.info("[todo-offline] Talk message queued", {
+      clientId: record.clientId,
+      threadId: record.threadId,
+      todoId: record.todoId,
+      textLength: record.text.length,
+      attachmentCount: record.attachmentIds.length + record.attachments.length,
+      stagedBytes: record.attachments.reduce((total, attachment) => total + attachment.blob.size, 0),
+    });
+  } catch (error) {
+    console.error("[todo-offline] Talk message queue failed", {
+      clientId: record.clientId,
+      threadId: record.threadId,
+      error,
+    });
+    if (error instanceof DOMException && error.name === "QuotaExceededError") {
+      throw new Error("This device does not have enough offline storage for those assistant attachments.");
+    }
+    throw error;
+  }
+}
+
+export async function listOfflineTalkMessages(threadId?: string) {
+  const records = await runRequest<OfflineTalkMessage[]>(TALK_QUEUE_STORE, "readonly", (store) => store.getAll());
+  return records
+    .filter((record) => !threadId || record.threadId === threadId)
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+}
+
+export async function deleteOfflineTalkMessage(clientId: string) {
+  await runRequest(TALK_QUEUE_STORE, "readwrite", (store) => store.delete(clientId));
+  console.info("[todo-offline] synchronized Talk message removed", { clientId });
+}
+
+export async function saveOfflineTalkDraft(threadId: string, text: string) {
+  const draft: OfflineTalkDraft = {
+    key: `thread:${threadId}`,
+    threadId,
+    text,
+    updatedAt: new Date().toISOString(),
+  };
+  await runRequest(TALK_DRAFT_STORE, "readwrite", (store) => store.put(draft));
+}
+
+export async function loadOfflineTalkDraft(threadId: string) {
+  const draft = await runRequest<OfflineTalkDraft | undefined>(
+    TALK_DRAFT_STORE,
+    "readonly",
+    (store) => store.get(`thread:${threadId}`),
   );
   return draft ?? null;
 }

@@ -2,6 +2,7 @@ import {
   chooseTalkFocus,
   endTalkSession,
   listTalkHistory,
+  readTalkThread,
   readTalkWorkspace,
   startTalkSession,
 } from "../../../../db/talk";
@@ -13,6 +14,7 @@ import {
   mintRealtimeClientSecret,
   talkInstructions,
   talkRuntimeConfig,
+  withRecentTalkHistory,
 } from "../../../../lib/talk-runtime";
 
 export async function POST(request: Request) {
@@ -21,27 +23,40 @@ export async function POST(request: Request) {
   let sessionId: string | null = null;
   try {
     userKey = talkUserKey(request);
+    const payload = await request.json().catch(() => ({})) as { threadId?: unknown };
+    const requestedThreadId = String(payload.threadId ?? "").trim();
     const [todos, workspace, settings] = await Promise.all([
       listTodos(),
       readTalkWorkspace(userKey),
       getTodoSettings(),
     ]);
-    const focusedTodoId = chooseTalkFocus(todos, workspace.lastFocusedTodoId);
+    const thread = requestedThreadId ? await readTalkThread(userKey, requestedThreadId) : null;
+    const focusedTodoId = thread
+      ? thread.focusedTodoId
+      : chooseTalkFocus(todos, workspace.lastFocusedTodoId);
     const { model, voice } = talkRuntimeConfig(settings.realtimeVoice);
-    const session = await startTalkSession({ userKey, model, voice, focusedTodoId });
+    const session = await startTalkSession({
+      userKey,
+      model,
+      voice,
+      focusedTodoId,
+      threadId: thread?.id ?? null,
+      transport: "browser",
+    });
     sessionId = session.id;
     const [context, history, safetyIdentifier] = await Promise.all([
-      buildSharedAssistantContext(userKey, focusedTodoId),
-      listTalkHistory(userKey, { limit: 80 }),
+      buildSharedAssistantContext(userKey, focusedTodoId, thread?.summary),
+      listTalkHistory(userKey, { limit: 100, threadId: session.threadId }),
       hashedSafetyIdentifier(userKey),
     ]);
     const secret = await mintRealtimeClientSecret({
       safetyIdentifier,
-      instructions: talkInstructions(context),
+      instructions: withRecentTalkHistory(talkInstructions(context), history.messages),
       voice,
     });
     console.info("[todo-talk-api] session started", {
       sessionId,
+      threadId: session.threadId,
       focusedTodoId,
       model: secret.model,
       voice: secret.voice,
@@ -53,6 +68,7 @@ export async function POST(request: Request) {
     });
     return Response.json({
       sessionId,
+      threadId: session.threadId,
       clientSecret: secret.value,
       expiresAt: secret.expiresAt,
       model: secret.model,

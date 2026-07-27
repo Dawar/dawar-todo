@@ -128,7 +128,7 @@ type TodoSyncChangeRow = {
 };
 
 let initialization: Promise<void> | null = null;
-const CURRENT_SCHEMA_VERSION = "24";
+const CURRENT_SCHEMA_VERSION = "25";
 
 function database() {
   if (!env.DB) throw new Error("The todo database is unavailable.");
@@ -508,9 +508,29 @@ export async function ensureTodoDatabase() {
         )
       `),
       db.prepare(`
+        CREATE TABLE IF NOT EXISTS todo_talk_threads (
+          id TEXT PRIMARY KEY NOT NULL,
+          user_key TEXT NOT NULL,
+          kind TEXT NOT NULL DEFAULT 'custom',
+          system_key TEXT,
+          title TEXT NOT NULL,
+          focused_todo_id INTEGER,
+          summary TEXT NOT NULL DEFAULT '',
+          draft_text TEXT NOT NULL DEFAULT '',
+          delete_token TEXT,
+          deleted_at TEXT,
+          purge_after TEXT,
+          last_message_at TEXT,
+          created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+          updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+        )
+      `),
+      db.prepare(`
         CREATE TABLE IF NOT EXISTS todo_talk_sessions (
           id TEXT PRIMARY KEY NOT NULL,
           user_key TEXT NOT NULL,
+          thread_id TEXT,
+          transport TEXT NOT NULL DEFAULT 'browser',
           model TEXT NOT NULL,
           voice TEXT NOT NULL,
           status TEXT NOT NULL DEFAULT 'active',
@@ -525,6 +545,7 @@ export async function ensureTodoDatabase() {
           id TEXT PRIMARY KEY NOT NULL,
           session_id TEXT NOT NULL,
           user_key TEXT NOT NULL,
+          thread_id TEXT,
           realtime_item_id TEXT NOT NULL,
           role TEXT NOT NULL,
           content TEXT NOT NULL,
@@ -538,6 +559,7 @@ export async function ensureTodoDatabase() {
           call_id TEXT PRIMARY KEY NOT NULL,
           session_id TEXT NOT NULL,
           user_key TEXT NOT NULL,
+          thread_id TEXT,
           name TEXT NOT NULL,
           arguments_json TEXT NOT NULL,
           status TEXT NOT NULL DEFAULT 'running',
@@ -655,6 +677,25 @@ export async function ensureTodoDatabase() {
       await db.prepare("ALTER TABLE todo_talk_phone_calls ADD COLUMN provider_call_id TEXT").run();
       console.info("[todo-db] added Talk phone provider call compatibility column");
     }
+    const talkSessionColumns = await db.prepare("PRAGMA table_info(todo_talk_sessions)").all<{ name: string }>();
+    if (!talkSessionColumns.results.some((column) => column.name === "thread_id")) {
+      await db.prepare("ALTER TABLE todo_talk_sessions ADD COLUMN thread_id TEXT").run();
+      console.info("[todo-db] added Talk session thread compatibility column");
+    }
+    if (!talkSessionColumns.results.some((column) => column.name === "transport")) {
+      await db.prepare("ALTER TABLE todo_talk_sessions ADD COLUMN transport TEXT NOT NULL DEFAULT 'browser'").run();
+      console.info("[todo-db] added Talk session transport compatibility column");
+    }
+    const talkMessageColumns = await db.prepare("PRAGMA table_info(todo_talk_messages)").all<{ name: string }>();
+    if (!talkMessageColumns.results.some((column) => column.name === "thread_id")) {
+      await db.prepare("ALTER TABLE todo_talk_messages ADD COLUMN thread_id TEXT").run();
+      console.info("[todo-db] added Talk message thread compatibility column");
+    }
+    const talkToolColumns = await db.prepare("PRAGMA table_info(todo_talk_tool_calls)").all<{ name: string }>();
+    if (!talkToolColumns.results.some((column) => column.name === "thread_id")) {
+      await db.prepare("ALTER TABLE todo_talk_tool_calls ADD COLUMN thread_id TEXT").run();
+      console.info("[todo-db] added Talk tool thread compatibility column");
+    }
     const todoColumns = await db.prepare("PRAGMA table_info(todos)").all<{ name: string }>();
     if (!todoColumns.results.some((column) => column.name === "client_id")) {
       await db.prepare("ALTER TABLE todos ADD COLUMN client_id TEXT").run();
@@ -678,12 +719,18 @@ export async function ensureTodoDatabase() {
       db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS todo_assistant_messages_client_idx ON todo_assistant_messages(user_key, client_id)"),
       db.prepare("CREATE INDEX IF NOT EXISTS todo_talk_sessions_user_idx ON todo_talk_sessions(user_key, started_at)"),
       db.prepare("CREATE INDEX IF NOT EXISTS todo_talk_sessions_status_idx ON todo_talk_sessions(status, last_activity_at)"),
+      db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS todo_talk_threads_system_idx ON todo_talk_threads(user_key, system_key)"),
+      db.prepare("CREATE INDEX IF NOT EXISTS todo_talk_threads_user_idx ON todo_talk_threads(user_key, deleted_at, last_message_at)"),
+      db.prepare("CREATE INDEX IF NOT EXISTS todo_talk_threads_delete_idx ON todo_talk_threads(delete_token)"),
+      db.prepare("CREATE INDEX IF NOT EXISTS todo_talk_threads_purge_idx ON todo_talk_threads(purge_after)"),
       db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS todo_talk_messages_realtime_idx ON todo_talk_messages(user_key, realtime_item_id)"),
       db.prepare("CREATE INDEX IF NOT EXISTS todo_talk_messages_session_idx ON todo_talk_messages(session_id, created_at)"),
       db.prepare("CREATE INDEX IF NOT EXISTS todo_talk_messages_user_idx ON todo_talk_messages(user_key, created_at)"),
+      db.prepare("CREATE INDEX IF NOT EXISTS todo_talk_messages_thread_idx ON todo_talk_messages(thread_id, created_at)"),
       db.prepare("CREATE INDEX IF NOT EXISTS todo_talk_messages_task_idx ON todo_talk_messages(focused_todo_id, created_at)"),
       db.prepare("CREATE INDEX IF NOT EXISTS todo_talk_tool_calls_session_idx ON todo_talk_tool_calls(session_id, created_at)"),
       db.prepare("CREATE INDEX IF NOT EXISTS todo_talk_tool_calls_user_idx ON todo_talk_tool_calls(user_key, created_at)"),
+      db.prepare("CREATE INDEX IF NOT EXISTS todo_talk_tool_calls_thread_idx ON todo_talk_tool_calls(thread_id, created_at)"),
       db.prepare("CREATE INDEX IF NOT EXISTS todo_talk_phone_calls_user_idx ON todo_talk_phone_calls(user_key, started_at)"),
       db.prepare("CREATE INDEX IF NOT EXISTS todo_talk_phone_calls_source_idx ON todo_talk_phone_calls(from_number_hash, started_at)"),
       db.prepare("CREATE INDEX IF NOT EXISTS todo_talk_phone_calls_status_idx ON todo_talk_phone_calls(status, started_at)"),

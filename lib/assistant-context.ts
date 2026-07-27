@@ -54,6 +54,7 @@ export type SharedAssistantContext = {
 export async function buildSharedAssistantContext(
   userKey: string,
   focusedTodoId?: number | null,
+  previousSummary?: string,
 ): Promise<SharedAssistantContext> {
   const [todos, projects, settings, workspace] = await Promise.all([
     listTodos(),
@@ -61,7 +62,7 @@ export async function buildSharedAssistantContext(
     getTodoSettings(),
     readTalkWorkspace(userKey),
   ]);
-  const selectedId = focusedTodoId ?? workspace.lastFocusedTodoId;
+  const selectedId = focusedTodoId === undefined ? workspace.lastFocusedTodoId : focusedTodoId;
   const focusedTodo = selectedId ? await getTodo(selectedId) : null;
   const [focusedThread, focusedAttachments, memories] = await Promise.all([
     focusedTodo ? readAssistantThread(userKey, focusedTodo.id) : Promise.resolve(null),
@@ -106,6 +107,6 @@ export async function buildSharedAssistantContext(
       content: memory.content,
       provenance: memory.provenance,
     })),
-    previousSummary: workspace.summary,
+    previousSummary: previousSummary ?? workspace.summary,
   };
 }

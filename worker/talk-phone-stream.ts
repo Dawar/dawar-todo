@@ -7,6 +7,7 @@ import {
   heartbeatTalkSession,
   listTalkHistory,
   readTalkWorkspace,
+  resolveSystemTalkThread,
   startTalkSession,
 } from "../db/talk";
 import {
@@ -22,6 +23,7 @@ import {
   talkInstructions,
   talkRuntimeConfig,
   talkToolDefinitions,
+  withRecentTalkHistory,
 } from "../lib/talk-runtime";
 import { dispatchTalkTool, type TalkToolResult } from "../lib/talk-tools";
 import { validateTwilioRequest } from "../lib/twilio-phone";
@@ -527,14 +529,28 @@ export async function handleTalkPhoneStream(
         readTalkWorkspace(userKey),
         getTodoSettings(),
       ]);
-      focusedTodoId = chooseTalkFocus(todos, workspace.lastFocusedTodoId);
+      const phoneThread = await resolveSystemTalkThread(userKey, "phone");
+      focusedTodoId = chooseTalkFocus(
+        todos,
+        phoneThread.focusedTodoId ?? workspace.lastFocusedTodoId,
+      );
       realtimeVoice = settings.realtimeVoice;
       const { model, voice } = talkRuntimeConfig(realtimeVoice);
-      const session = await startTalkSession({ userKey, model, voice, focusedTodoId });
+      const session = await startTalkSession({
+        userKey,
+        model,
+        voice,
+        focusedTodoId,
+        threadId: phoneThread.id,
+        transport: "phone-relay",
+      });
       talkSessionId = session.id;
       await attachTalkSessionToPhoneCall(callSid, talkSessionId, environment.DB);
-      const context = await buildSharedAssistantContext(userKey, focusedTodoId);
-      await configureOpenAI(talkInstructions(context));
+      const [context, history] = await Promise.all([
+        buildSharedAssistantContext(userKey, focusedTodoId, phoneThread.summary),
+        listTalkHistory(userKey, { threadId: phoneThread.id, limit: 40 }),
+      ]);
+      await configureOpenAI(withRecentTalkHistory(talkInstructions(context), history.messages));
       initialized = true;
       if (startupTimer) {
         clearTimeout(startupTimer);
