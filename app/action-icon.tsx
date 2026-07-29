@@ -11,6 +11,7 @@ import {
   Clock3,
   Copy,
   Download,
+  Eye,
   FolderInput,
   Folder,
   FolderPlus,
@@ -75,6 +76,7 @@ export type ActionIconName =
   | "next"
   | "open"
   | "phone"
+  | "preview"
   | "restore"
   | "retry"
   | "repeat"
@@ -122,6 +124,7 @@ const icons: Record<ActionIconName, ComponentType<LucideProps>> = {
   next: ChevronRight,
   open: RotateCcw,
   phone: PhoneCall,
+  preview: Eye,
   restore: RotateCcw,
   retry: RefreshCw,
   repeat: Repeat2,

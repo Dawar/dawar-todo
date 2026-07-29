@@ -6,6 +6,10 @@ import { processRecurringTodos } from "./recurring";
 import { ensureTodoDatabase, wakeExpiredSnoozedTodosInDatabase } from "../db/todos";
 import { dispatchTodoPushNotifications } from "../db/push-notifications";
 import { handleTalkPhoneStream } from "./talk-phone-stream";
+import {
+  cleanupTalkPhoneRecordingSources,
+  processTalkPhoneRecordingQueue,
+} from "../db/talk-phone-recordings";
 
 interface Env {
   ASSETS: Fetcher;
@@ -29,6 +33,8 @@ interface Env {
   OPENAI_PROJECT_ID?: string;
   OPENAI_REALTIME_MODEL?: string;
   OPENAI_REALTIME_VOICE?: string;
+  OPENAI_ASSISTANT_MODEL?: string;
+  OPENAI_CALL_SUMMARY_MODEL?: string;
   TWILIO_ACCOUNT_SID?: string;
   TWILIO_AUTH_TOKEN?: string;
   TWILIO_PHONE_NUMBER?: string;
@@ -98,6 +104,22 @@ const worker = {
         await dispatchTodoPushNotifications(env.DB, env, scheduledAt);
       } catch (error) {
         console.error("[todo-push] scheduled batch dispatch failed", {
+          scheduledTime: scheduledAt.toISOString(),
+          error,
+        });
+      }
+      try {
+        await processTalkPhoneRecordingQueue(scheduledAt);
+      } catch (error) {
+        console.error("[todo-talk-phone-recording] scheduled processing failed", {
+          scheduledTime: scheduledAt.toISOString(),
+          error,
+        });
+      }
+      try {
+        await cleanupTalkPhoneRecordingSources();
+      } catch (error) {
+        console.error("[todo-talk-phone-recording] scheduled source cleanup failed", {
           scheduledTime: scheduledAt.toISOString(),
           error,
         });

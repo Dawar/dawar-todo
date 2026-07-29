@@ -21,6 +21,7 @@ import {
   type TodoUpdate,
 } from "../db/todos";
 import { buildSharedAssistantContext } from "./assistant-context";
+import { MAX_TASK_DESCRIPTION_LENGTH } from "./task-description";
 
 type TalkEnvironment = {
   OPENAI_API_KEY?: string;
@@ -179,7 +180,7 @@ async function createTask(args: Record<string, unknown>): Promise<TalkToolResult
   if (!Number.isInteger(priority) || priority < 1 || priority > 4) throw new Error("Priority must be between 1 and 4.");
   const todo = await createTodo({
     title,
-    notes: optionalString(args.notes, 20_000) ?? "",
+    notes: optionalString(args.notes, MAX_TASK_DESCRIPTION_LENGTH) ?? "",
     project: optionalString(args.project, 120),
     context: optionalString(args.context, 500),
     priority,
@@ -203,7 +204,7 @@ async function updateTask(args: Record<string, unknown>): Promise<TalkToolResult
     if (!title || title.length > 2_000) throw new Error("Task titles must contain between 1 and 2,000 characters.");
     patch.title = title;
   }
-  if (args.notes !== undefined) patch.notes = optionalString(args.notes, 20_000) ?? "";
+  if (args.notes !== undefined) patch.notes = optionalString(args.notes, MAX_TASK_DESCRIPTION_LENGTH) ?? "";
   if (args.status !== undefined) {
     if (!["open", "completed"].includes(String(args.status))) throw new Error("Task status is invalid.");
     patch.status = String(args.status) as "open" | "completed";

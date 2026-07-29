@@ -9,6 +9,7 @@ import {
   type AssistantUnderstanding,
 } from "../db/assistant";
 import { listTodos, listTodoProjects, type Todo } from "../db/todos";
+import { MAX_TASK_DESCRIPTION_LENGTH } from "./task-description";
 
 type RuntimeEnvironment = {
   OPENAI_API_KEY?: string;
@@ -147,7 +148,7 @@ export const assistantTurnJsonSchema = {
                     type: "string",
                     enum: ["title", "notes", "project", "context", "priority", "dueDate", "pinned", "recurrenceCron", "status", "snoozedUntil"],
                   },
-                  value: { type: "string", maxLength: 20_000 },
+                  value: { type: "string", maxLength: MAX_TASK_DESCRIPTION_LENGTH },
                 },
               },
             },
@@ -290,7 +291,7 @@ export function normalizeAssistantProposal(value: ResponseTurn["proposal"]): Ass
     if (change.field === "title") {
       if (raw) patch.title = raw.slice(0, 10_000);
     } else if (change.field === "notes") {
-      patch.notes = change.value.slice(0, 20_000);
+      patch.notes = change.value.slice(0, MAX_TASK_DESCRIPTION_LENGTH);
     } else if (change.field === "project" || change.field === "context" || change.field === "dueDate" || change.field === "recurrenceCron" || change.field === "snoozedUntil") {
       patch[change.field] = raw === "null" ? null : raw;
     } else if (change.field === "priority") {

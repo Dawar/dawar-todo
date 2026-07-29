@@ -129,7 +129,7 @@ test("ships automatic saving, queued offline edits, incremental polling, and con
   assert.match(database, /entity_type === "capture_draft"/);
   assert.match(database, /todo_sync_capture_draft_insert/);
   assert.match(database, /todo_sync_capture_draft_update/);
-  assert.match(database, /CURRENT_SCHEMA_VERSION = "25"/);
+  assert.match(database, /CURRENT_SCHEMA_VERSION = "26"/);
   assert.match(captureDraftRoute, /updateTodoCaptureDraft/);
   assert.match(captureDraftRoute, /Cache-Control/);
   assert.match(offlineStore, /pending-mutations/);
@@ -164,7 +164,7 @@ test("ships automatic saving, queued offline edits, incremental polling, and con
   assert.match(route, /mutationId/);
   assert.match(route, /recordUndo: payload\.autosave !== true/);
   assert.match(route, /if \(!title\.trim\(\)\)/);
-  assert.match(route, /update\.notes = String\(payload\.notes\)/);
+  assert.match(route, /update\.notes = validateTaskDescription\(String\(payload\.notes\)\)/);
   assert.ok(openApi.components.schemas.SyncMutation);
   assert.match(skill, /independent fields merge/);
 });

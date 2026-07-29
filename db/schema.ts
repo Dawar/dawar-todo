@@ -455,6 +455,8 @@ export const todoTalkPhoneCalls = sqliteTable(
     toNumber: text("to_number").notNull(),
     status: text("status").notNull().default("pin_pending"),
     attemptCount: integer("attempt_count").notNull().default(0),
+    mode: text("mode"),
+    modeAttemptCount: integer("mode_attempt_count").notNull().default(0),
     streamTokenHash: text("stream_token_hash"),
     streamTokenExpiresAt: text("stream_token_expires_at"),
     streamTokenConsumedAt: text("stream_token_consumed_at"),
@@ -475,6 +477,62 @@ export const todoTalkPhoneCalls = sqliteTable(
     index("todo_talk_phone_calls_status_idx").on(table.status, table.startedAt),
     index("todo_talk_phone_calls_stream_idx").on(table.streamTokenHash),
     index("todo_talk_phone_calls_provider_idx").on(table.providerCallId),
+  ],
+);
+
+export const todoTalkPhoneRecordings = sqliteTable(
+  "todo_talk_phone_recordings",
+  {
+    callSid: text("call_sid").primaryKey(),
+    userKey: text("user_key").notNull(),
+    status: text("status").notNull().default("recording"),
+    expectedSegments: integer("expected_segments"),
+    taskId: integer("task_id"),
+    taskClientId: text("task_client_id").notNull(),
+    totalDurationMs: integer("total_duration_ms").notNull().default(0),
+    processingAttempts: integer("processing_attempts").notNull().default(0),
+    processingStartedAt: text("processing_started_at"),
+    nextRetryAt: text("next_retry_at"),
+    completedAt: text("completed_at"),
+    errorCode: text("error_code"),
+    createdAt: text("created_at")
+      .notNull()
+      .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`),
+    updatedAt: text("updated_at")
+      .notNull()
+      .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`),
+  },
+  (table) => [
+    index("todo_talk_phone_recordings_status_idx").on(table.status, table.nextRetryAt),
+    index("todo_talk_phone_recordings_user_idx").on(table.userKey, table.createdAt),
+    uniqueIndex("todo_talk_phone_recordings_client_idx").on(table.taskClientId),
+  ],
+);
+
+export const todoTalkPhoneRecordingSegments = sqliteTable(
+  "todo_talk_phone_recording_segments",
+  {
+    recordingSid: text("recording_sid").primaryKey(),
+    callSid: text("call_sid").notNull(),
+    segmentIndex: integer("segment_index").notNull(),
+    status: text("status").notNull().default("pending"),
+    durationMs: integer("duration_ms").notNull().default(0),
+    byteSize: integer("byte_size").notNull().default(0),
+    attachmentId: text("attachment_id"),
+    transcriptText: text("transcript_text"),
+    twilioDeletedAt: text("twilio_deleted_at"),
+    errorCode: text("error_code"),
+    createdAt: text("created_at")
+      .notNull()
+      .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`),
+    updatedAt: text("updated_at")
+      .notNull()
+      .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`),
+  },
+  (table) => [
+    uniqueIndex("todo_talk_phone_recording_segments_order_idx").on(table.callSid, table.segmentIndex),
+    index("todo_talk_phone_recording_segments_status_idx").on(table.callSid, table.status),
+    index("todo_talk_phone_recording_segments_cleanup_idx").on(table.twilioDeletedAt, table.updatedAt),
   ],
 );
 

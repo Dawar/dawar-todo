@@ -37,6 +37,8 @@ import { snoozeLabel } from "../lib/snooze-label";
 import { zonedDateTimeInputValue, zonedLocalDateTimeToUtc } from "../lib/zoned-date-time";
 import { SiteHeader } from "./site-header";
 import { PullGesturePill } from "./pull-to-refresh";
+import { MarkdownPreview } from "./markdown-preview";
+import { MAX_TASK_DESCRIPTION_LENGTH } from "../lib/task-description";
 import {
   appendOfflineTodoAttachments,
   deferOfflineTaskAction,
@@ -1397,6 +1399,7 @@ export default function Home() {
   const [savingEdit, setSavingEdit] = useState(false);
   const [editSaveState, setEditSaveState] = useState<EditSaveState>("saved");
   const [editSaveMessage, setEditSaveMessage] = useState("Saved automatically");
+  const [descriptionPreview, setDescriptionPreview] = useState(false);
   const [detailAttachments, setDetailAttachments] = useState<TodoAttachment[]>([]);
   const [detailUploads, setDetailUploads] = useState<PendingAttachment[]>([]);
   const [voiceTarget, setVoiceTarget] = useState<"capture" | "detail" | null>(null);
@@ -4128,6 +4131,7 @@ export default function Home() {
     setEditDraft(draft);
     setEditSaveState("saved");
     setEditSaveMessage("Saved automatically");
+    setDescriptionPreview(false);
     setDetailAttachments([]);
     setDetailUploads([]);
     setViewerIndex(null);
@@ -4156,6 +4160,7 @@ export default function Home() {
     if (activeId !== null && draft && baseline) void persistTaskDraft(activeId, draft, "close", baseline);
     setEditingId(null);
     setEditDraft(null);
+    setDescriptionPreview(false);
     editingIdRef.current = null;
     editDraftRef.current = null;
     editBaselineRef.current = null;
@@ -5180,7 +5185,7 @@ export default function Home() {
               <span className="absolute left-1/2 top-2 h-1 w-10 -translate-x-1/2 rounded-full bg-black/15 sm:hidden" aria-hidden="true" />
               <h3 id="task-details-title" className="min-w-0 text-lg font-semibold text-[#202522]">Task details</h3>
               <div className="flex shrink-0 items-center gap-1">
-                <button type="button" onClick={() => void copyTaskDetails()} className="grid h-9 w-9 place-items-center rounded-full bg-[#f1f2f0] text-[#4f5752] hover:bg-[#e8eae7]" aria-label="Copy task title and notes" title="Copy task"><ActionIcon name="copy" /></button>
+                <button type="button" onClick={() => void copyTaskDetails()} className="grid h-9 w-9 place-items-center rounded-full bg-[#f1f2f0] text-[#4f5752] hover:bg-[#e8eae7]" aria-label="Copy task title and description" title="Copy task"><ActionIcon name="copy" /></button>
                 <button type="button" onClick={closeTaskDetails} className="grid h-9 w-9 place-items-center rounded-full bg-[#f1f2f0] text-[#4f5752] hover:bg-[#e8eae7]" aria-label="Close task details" title="Close"><ActionIcon name="close" /></button>
               </div>
             </div>
@@ -5206,21 +5211,37 @@ export default function Home() {
                 />
               </label>
 
-              <label className="mt-4 block min-w-0">
-                <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-[#69716c]">Notes</span>
-                <textarea
-                  value={editDraft.notes}
-                  onChange={(event) => updateEditDraftField("notes", event.target.value)}
-                  onPaste={(event) => {
-                    const files = clipboardAttachments(event);
-                    if (files.length) void queueDetailAttachments(files);
-                  }}
-                  rows={5}
-                  placeholder="Add context, links, or next steps…"
-                  maxLength={10000}
-                  className="min-h-28 w-full min-w-0 max-w-full resize-y rounded-xl border border-black/[0.1] bg-white px-3 py-2.5 text-sm leading-6 text-[#303632] outline-none placeholder:text-[#a0a6a2] focus:border-[#216e4e]/50 focus:ring-3 focus:ring-[#216e4e]/10"
-                />
-              </label>
+              <div className="mt-4 block min-w-0">
+                <div className="mb-1.5 flex items-center justify-between gap-3">
+                  <span className="text-xs font-semibold uppercase tracking-wide text-[#69716c]">Description</span>
+                  <button
+                    type="button"
+                    onClick={() => setDescriptionPreview((current) => !current)}
+                    aria-pressed={descriptionPreview}
+                    className="inline-flex h-7 items-center gap-1.5 rounded-lg px-2 text-xs font-semibold text-[#216e4e] hover:bg-[#eaf3ed]"
+                  >
+                    <ActionIcon name={descriptionPreview ? "edit" : "preview"} className="h-3.5 w-3.5" />
+                    {descriptionPreview ? "Edit" : "Preview"}
+                  </button>
+                </div>
+                {descriptionPreview ? (
+                  <MarkdownPreview value={editDraft.notes} />
+                ) : (
+                  <textarea
+                    aria-label="Description"
+                    value={editDraft.notes}
+                    onChange={(event) => updateEditDraftField("notes", event.target.value)}
+                    onPaste={(event) => {
+                      const files = clipboardAttachments(event);
+                      if (files.length) void queueDetailAttachments(files);
+                    }}
+                    rows={5}
+                    placeholder="Add context, links, next steps, or Markdown…"
+                    maxLength={MAX_TASK_DESCRIPTION_LENGTH}
+                    className="min-h-28 w-full min-w-0 max-w-full resize-y rounded-xl border border-black/[0.1] bg-white px-3 py-2.5 text-sm leading-6 text-[#303632] outline-none placeholder:text-[#a0a6a2] focus:border-[#216e4e]/50 focus:ring-3 focus:ring-[#216e4e]/10"
+                  />
+                )}
+              </div>
 
               <section className="mt-4 min-w-0" aria-labelledby="task-attachments-heading">
                 <div className="mb-2 flex min-w-0 items-center justify-between gap-3">

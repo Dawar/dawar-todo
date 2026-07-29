@@ -77,8 +77,8 @@ curl --fail-with-body \\
 ### Todos
 
 - \`GET /api/todos\`: list all open, snoozed, and completed tasks.
-- \`POST /api/todos\`: create an open task. Supports title, notes, priority, dueDate, project, context, recurrenceCron, clientId, draftToken, and attachmentIds.
-- \`PATCH /api/todos/{id}\`: edit title, notes, status, priority, dueDate, project, context, recurrenceCron, or pinned. Set nullable fields to null to clear them. For offline or concurrent clients, include a UUID \`mutation.mutationId\` and per-field ISO timestamps in \`mutation.fieldTimestamps\`; independent fields merge and same-field conflicts resolve deterministically.
+- \`POST /api/todos\`: create an open task. Supports title, notes, priority, dueDate, project, context, recurrenceCron, clientId, draftToken, and attachmentIds. The \`notes\` field is a Markdown description of up to 500,000 characters.
+- \`PATCH /api/todos/{id}\`: edit title, Markdown notes/description, status, priority, dueDate, project, context, recurrenceCron, or pinned. Set nullable fields to null to clear them. For offline or concurrent clients, include a UUID \`mutation.mutationId\` and per-field ISO timestamps in \`mutation.fieldTimestamps\`; independent fields merge and same-field conflicts resolve deterministically.
 - \`POST /api/todos/bulk\`: perform state and multi-task operations.
 - \`POST /api/todos/undo\`: consume a returned Undo token.
 

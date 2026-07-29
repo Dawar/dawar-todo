@@ -21,6 +21,7 @@ import {
   type RealtimeVoice,
 } from "../lib/ai-preferences";
 import { zonedLocalDateTimeToUtc } from "../lib/zoned-date-time";
+import { validateTaskDescription } from "../lib/task-description";
 
 type StoredTodoStatus = "open" | "completed" | "archived";
 export type TodoStatus = "open" | "completed";
@@ -128,7 +129,7 @@ type TodoSyncChangeRow = {
 };
 
 let initialization: Promise<void> | null = null;
-const CURRENT_SCHEMA_VERSION = "25";
+const CURRENT_SCHEMA_VERSION = "26";
 
 function database() {
   if (!env.DB) throw new Error("The todo database is unavailable.");
@@ -591,6 +592,8 @@ export async function ensureTodoDatabase() {
           to_number TEXT NOT NULL,
           status TEXT NOT NULL DEFAULT 'pin_pending',
           attempt_count INTEGER NOT NULL DEFAULT 0,
+          mode TEXT,
+          mode_attempt_count INTEGER NOT NULL DEFAULT 0,
           stream_token_hash TEXT,
           stream_token_expires_at TEXT,
           stream_token_consumed_at TEXT,
@@ -602,6 +605,40 @@ export async function ensureTodoDatabase() {
           connected_at TEXT,
           ended_at TEXT,
           failure_reason TEXT
+        )
+      `),
+      db.prepare(`
+        CREATE TABLE IF NOT EXISTS todo_talk_phone_recordings (
+          call_sid TEXT PRIMARY KEY NOT NULL,
+          user_key TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'recording',
+          expected_segments INTEGER,
+          task_id INTEGER,
+          task_client_id TEXT NOT NULL UNIQUE,
+          total_duration_ms INTEGER NOT NULL DEFAULT 0,
+          processing_attempts INTEGER NOT NULL DEFAULT 0,
+          processing_started_at TEXT,
+          next_retry_at TEXT,
+          completed_at TEXT,
+          error_code TEXT,
+          created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+          updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+        )
+      `),
+      db.prepare(`
+        CREATE TABLE IF NOT EXISTS todo_talk_phone_recording_segments (
+          recording_sid TEXT PRIMARY KEY NOT NULL,
+          call_sid TEXT NOT NULL,
+          segment_index INTEGER NOT NULL,
+          status TEXT NOT NULL DEFAULT 'pending',
+          duration_ms INTEGER NOT NULL DEFAULT 0,
+          byte_size INTEGER NOT NULL DEFAULT 0,
+          attachment_id TEXT,
+          transcript_text TEXT,
+          twilio_deleted_at TEXT,
+          error_code TEXT,
+          created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+          updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
         )
       `),
       db.prepare(`
@@ -677,6 +714,14 @@ export async function ensureTodoDatabase() {
       await db.prepare("ALTER TABLE todo_talk_phone_calls ADD COLUMN provider_call_id TEXT").run();
       console.info("[todo-db] added Talk phone provider call compatibility column");
     }
+    if (!phoneCallColumns.results.some((column) => column.name === "mode")) {
+      await db.prepare("ALTER TABLE todo_talk_phone_calls ADD COLUMN mode TEXT").run();
+      console.info("[todo-db] added Talk phone mode compatibility column");
+    }
+    if (!phoneCallColumns.results.some((column) => column.name === "mode_attempt_count")) {
+      await db.prepare("ALTER TABLE todo_talk_phone_calls ADD COLUMN mode_attempt_count INTEGER NOT NULL DEFAULT 0").run();
+      console.info("[todo-db] added Talk phone mode attempt compatibility column");
+    }
     const talkSessionColumns = await db.prepare("PRAGMA table_info(todo_talk_sessions)").all<{ name: string }>();
     if (!talkSessionColumns.results.some((column) => column.name === "thread_id")) {
       await db.prepare("ALTER TABLE todo_talk_sessions ADD COLUMN thread_id TEXT").run();
@@ -736,6 +781,12 @@ export async function ensureTodoDatabase() {
       db.prepare("CREATE INDEX IF NOT EXISTS todo_talk_phone_calls_status_idx ON todo_talk_phone_calls(status, started_at)"),
       db.prepare("CREATE INDEX IF NOT EXISTS todo_talk_phone_calls_stream_idx ON todo_talk_phone_calls(stream_token_hash)"),
       db.prepare("CREATE INDEX IF NOT EXISTS todo_talk_phone_calls_provider_idx ON todo_talk_phone_calls(provider_call_id)"),
+      db.prepare("CREATE INDEX IF NOT EXISTS todo_talk_phone_recordings_status_idx ON todo_talk_phone_recordings(status, next_retry_at)"),
+      db.prepare("CREATE INDEX IF NOT EXISTS todo_talk_phone_recordings_user_idx ON todo_talk_phone_recordings(user_key, created_at)"),
+      db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS todo_talk_phone_recordings_client_idx ON todo_talk_phone_recordings(task_client_id)"),
+      db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS todo_talk_phone_recording_segments_order_idx ON todo_talk_phone_recording_segments(call_sid, segment_index)"),
+      db.prepare("CREATE INDEX IF NOT EXISTS todo_talk_phone_recording_segments_status_idx ON todo_talk_phone_recording_segments(call_sid, status)"),
+      db.prepare("CREATE INDEX IF NOT EXISTS todo_talk_phone_recording_segments_cleanup_idx ON todo_talk_phone_recording_segments(twilio_deleted_at, updated_at)"),
       db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS todo_assistant_memories_dedupe_idx ON todo_assistant_memories(user_key, dedupe_key)"),
       db.prepare("CREATE INDEX IF NOT EXISTS todo_assistant_memories_user_idx ON todo_assistant_memories(user_key, updated_at)"),
       db.prepare("CREATE INDEX IF NOT EXISTS todo_assistant_memories_task_idx ON todo_assistant_memories(user_key, todo_id, updated_at)"),
@@ -1076,12 +1127,16 @@ export async function createTodo(input: {
   attachmentIds?: string[];
   clientId?: string;
   originDeviceId?: string | null;
+  sourceKind?: string;
 }): Promise<Todo> {
   await ensureTodoDatabase();
+  const notes = validateTaskDescription(input.notes ?? "");
   const clientId = input.clientId?.trim() || null;
   if (clientId && !/^[0-9a-f-]{36}$/i.test(clientId)) throw new Error("That offline task identifier is invalid.");
   const project = input.project?.trim() || null;
   const recurrenceCron = normalizeCronExpression(input.recurrenceCron);
+  const sourceKind = input.sourceKind?.trim() || "site";
+  if (!/^[a-z0-9-]{1,40}$/i.test(sourceKind)) throw new Error("That task source is invalid.");
   if (project?.length && project.length > 120) throw new Error("Project names are limited to 120 characters.");
   const db = database();
   if (clientId) {
@@ -1104,18 +1159,19 @@ export async function createTodo(input: {
   const row = await db
     .prepare(`
       ${clientId ? "INSERT OR IGNORE" : "INSERT"} INTO todos (title, notes, status, priority, due_date, project, context, recurrence_cron, source_kind, client_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'site', ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       RETURNING *
     `)
     .bind(
       input.title,
-      input.notes ?? "",
+      notes,
       "open",
       input.priority ?? 3,
       input.dueDate ?? null,
       project,
       input.context ?? null,
       recurrenceCron,
+      sourceKind,
       clientId,
     )
     .first<TodoRow>();
@@ -1181,6 +1237,7 @@ export async function updateTodo(
 ): Promise<{ todo: Todo; undoToken: string | null; appliedFields: string[] } | null> {
   await ensureTodoDatabase();
   const normalizedUpdate = { ...update };
+  if (normalizedUpdate.notes !== undefined) normalizedUpdate.notes = validateTaskDescription(normalizedUpdate.notes);
   if (normalizedUpdate.recurrenceCron !== undefined) normalizedUpdate.recurrenceCron = normalizeCronExpression(normalizedUpdate.recurrenceCron);
   const columnByField: Record<keyof TodoUpdate, string> = {
     title: "title",

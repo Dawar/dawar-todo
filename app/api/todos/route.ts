@@ -2,6 +2,7 @@ import { env, waitUntil } from "cloudflare:workers";
 import { createTodo, listTodos } from "../../../db/todos";
 import { runTodoReadMaintenance } from "../../../db/maintenance";
 import { dispatchTodoPushNotifications } from "../../../db/push-notifications";
+import { validateTaskDescription } from "../../../lib/task-description";
 
 export async function GET() {
   const startedAt = Date.now();
@@ -41,6 +42,7 @@ export async function POST(request: Request) {
     const title = payload.title?.trim() ?? "";
     if (!title) return Response.json({ error: "A task title is required." }, { status: 400 });
     if (title.length > 2000) return Response.json({ error: "Keep the task under 2,000 characters." }, { status: 400 });
+    const notes = validateTaskDescription(String(payload.notes ?? ""));
 
     const priority = Number.isInteger(payload.priority) && Number(payload.priority) >= 1 && Number(payload.priority) <= 4
       ? Number(payload.priority)
@@ -52,7 +54,7 @@ export async function POST(request: Request) {
     const originDeviceId = request.headers.get("X-Dawar-Device-Id")?.trim() || null;
     const todo = await createTodo({
       title,
-      notes: payload.notes?.trim(),
+      notes,
       priority,
       dueDate: payload.dueDate || null,
       project,

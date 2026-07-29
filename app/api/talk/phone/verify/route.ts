@@ -1,21 +1,17 @@
 import {
-  authenticateTalkPhoneCall,
   findTalkPhoneUserByPin,
   readTalkPhoneCall,
   recordFailedTalkPhonePin,
+  verifyTalkPhoneCallPin,
 } from "../../../../../db/talk-phone";
 import {
+  phoneModePromptTwiml,
   phonePinPromptTwiml,
   phoneRejectedTwiml,
-  phoneSipTwiml,
-  phoneStreamTwiml,
-  talkPhoneTransport,
-  talkPhoneMediaStreamUrl,
   twilioDocumentResponse,
   twilioPhoneConfig,
   validateTwilioRequest,
 } from "../../../../../lib/twilio-phone";
-import { env } from "cloudflare:workers";
 
 export async function POST(request: Request) {
   const startedAt = Date.now();
@@ -52,33 +48,14 @@ export async function POST(request: Request) {
         message: `PIN not accepted. ${failed.remainingAttempts} ${failed.remainingAttempts === 1 ? "try" : "tries"} remaining. Enter your PIN, then press pound.`,
       }));
     }
-    const token = await authenticateTalkPhoneCall(callSid, userKey);
-    const transport = talkPhoneTransport();
-    if (transport === "sip") {
-      const projectId = String((env as unknown as { OPENAI_PROJECT_ID?: string }).OPENAI_PROJECT_ID ?? "").trim();
-      console.info("[todo-talk-phone-api] authenticated direct SIP response returned", {
-        callSid,
-        userKey,
-        projectIdSuffix: projectId.slice(-8),
-        durationMs: Date.now() - startedAt,
-      });
-      return twilioDocumentResponse(phoneSipTwiml({
-        projectId,
-        callSid,
-        token: token.rawToken,
-      }));
-    }
-    const streamUrl = talkPhoneMediaStreamUrl(request.url);
-    console.info("[todo-talk-phone-api] authenticated stream response returned", {
+    await verifyTalkPhoneCallPin(callSid, userKey);
+    const modeUrl = new URL("/api/talk/phone/mode", request.url).toString();
+    console.info("[todo-talk-phone-api] PIN accepted and mode prompt returned", {
       callSid,
       userKey,
-      streamHost: new URL(streamUrl).host,
       durationMs: Date.now() - startedAt,
     });
-    return twilioDocumentResponse(phoneStreamTwiml({
-      streamUrl,
-      token: token.rawToken,
-    }));
+    return twilioDocumentResponse(phoneModePromptTwiml({ actionUrl: modeUrl }));
   } catch (error) {
     console.error("[todo-talk-phone-api] PIN verification failed", {
       callSid,

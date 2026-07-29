@@ -30,6 +30,8 @@ type PhoneCallRow = {
   to_number: string;
   status: string;
   attempt_count: number;
+  mode: string | null;
+  mode_attempt_count: number;
   stream_token_hash: string | null;
   stream_token_expires_at: string | null;
   stream_token_consumed_at: string | null;
@@ -277,6 +279,7 @@ export async function readTalkPhoneCall(callSid: string, db?: D1Database) {
   await ensureTodoDatabase();
   return database(db).prepare(`
     SELECT call_sid, user_key, from_number_hash, to_number, status, attempt_count,
+           mode, mode_attempt_count,
            stream_token_hash, stream_token_expires_at, stream_token_consumed_at,
            transport, provider_call_id, talk_session_id, started_at,
            authenticated_at, connected_at, ended_at,
@@ -317,12 +320,13 @@ export async function authenticateTalkPhoneCall(callSid: string, userKey: string
       UPDATE todo_talk_phone_calls
       SET user_key = ?,
           status = 'authenticated',
+          mode = 'talk',
           stream_token_hash = ?,
           stream_token_expires_at = ?,
           authenticated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
           failure_reason = NULL
-      WHERE call_sid = ? AND status = 'pin_pending' AND attempt_count < ?
-    `).bind(userKey, tokenHash, expiresAt, callSid, MAX_PIN_ATTEMPTS),
+      WHERE call_sid = ? AND user_key = ? AND status = 'mode_pending' AND mode_attempt_count < ?
+    `).bind(userKey, tokenHash, expiresAt, callSid, userKey, MAX_PIN_ATTEMPTS),
     selected.prepare(`
       UPDATE todo_talk_phone_profiles
       SET last_authenticated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
@@ -337,6 +341,50 @@ export async function authenticateTalkPhoneCall(callSid: string, userKey: string
     expiresAt,
   });
   return { rawToken, expiresAt };
+}
+
+export async function verifyTalkPhoneCallPin(callSid: string, userKey: string, db?: D1Database) {
+  await ensureTodoDatabase();
+  const selected = database(db);
+  const [callResult] = await selected.batch([
+    selected.prepare(`
+      UPDATE todo_talk_phone_calls
+      SET user_key = ?,
+          status = 'mode_pending',
+          authenticated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+          failure_reason = NULL
+      WHERE call_sid = ? AND status = 'pin_pending' AND attempt_count < ?
+    `).bind(userKey, callSid, MAX_PIN_ATTEMPTS),
+    selected.prepare(`
+      UPDATE todo_talk_phone_profiles
+      SET last_authenticated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+          updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+      WHERE user_key = ? AND enabled = 1
+    `).bind(userKey),
+  ]);
+  if (!Number(callResult.meta.changes ?? 0)) throw new Error("That call can no longer be authenticated.");
+  console.info("[todo-talk-phone] PIN accepted; waiting for call mode", { callSid, userKey });
+  return readTalkPhoneCall(callSid, db);
+}
+
+export async function recordFailedTalkPhoneMode(callSid: string, db?: D1Database) {
+  await ensureTodoDatabase();
+  const selected = database(db);
+  await selected.prepare(`
+    UPDATE todo_talk_phone_calls
+    SET mode_attempt_count = mode_attempt_count + 1,
+        status = CASE WHEN mode_attempt_count + 1 >= ? THEN 'rejected' ELSE 'mode_pending' END,
+        failure_reason = CASE WHEN mode_attempt_count + 1 >= ? THEN 'mode-attempt-limit' ELSE 'mode-mismatch' END
+    WHERE call_sid = ? AND status = 'mode_pending'
+  `).bind(MAX_PIN_ATTEMPTS, MAX_PIN_ATTEMPTS, callSid).run();
+  const call = await readTalkPhoneCall(callSid, db);
+  const attempts = Number(call?.mode_attempt_count ?? MAX_PIN_ATTEMPTS);
+  console.warn("[todo-talk-phone] call mode rejected", {
+    callSid,
+    attempts,
+    remainingAttempts: Math.max(0, MAX_PIN_ATTEMPTS - attempts),
+  });
+  return { attempts, remainingAttempts: Math.max(0, MAX_PIN_ATTEMPTS - attempts) };
 }
 
 export async function consumeTalkPhoneStream(
@@ -446,6 +494,7 @@ export async function authenticateTalkPhoneBridge(
   const tokenHash = await sha256(input.rawToken);
   const call = await database(db).prepare(`
     SELECT call_sid, user_key, from_number_hash, to_number, status, attempt_count,
+           mode, mode_attempt_count,
            stream_token_hash, stream_token_expires_at, stream_token_consumed_at,
            transport, provider_call_id, talk_session_id, started_at,
            authenticated_at, connected_at, ended_at,

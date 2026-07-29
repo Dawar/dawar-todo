@@ -34,7 +34,9 @@ function isDispatchAuthPath(pathname: string) {
 function isPublicTalkPhoneTransport(pathname: string) {
   return pathname === "/api/talk/phone/incoming"
     || pathname === "/api/talk/phone/verify"
+    || pathname === "/api/talk/phone/mode"
     || pathname === "/api/talk/phone/stream"
+    || pathname.startsWith("/api/talk/phone/record/")
     || pathname.startsWith("/api/talk/phone/bridge/");
 }
 

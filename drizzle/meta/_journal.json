@@ -183,6 +183,13 @@
       "when": 1785121231020,
       "tag": "0025_aberrant_red_skull",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "6",
+      "when": 1785350405376,
+      "tag": "0026_yielding_vindicator",
+      "breakpoints": true
     }
   ]
 }

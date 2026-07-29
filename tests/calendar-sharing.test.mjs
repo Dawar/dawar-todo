@@ -89,7 +89,7 @@ test("ships revocable calendar controls and copyable task details", async () => 
   assert.match(settings, />Regenerate</);
   assert.match(settings, />Revoke</);
   assert.match(settings, /copyTextToClipboard\(feed\.url\)/);
-  assert.match(page, /Copy task title and notes/);
+  assert.match(page, /Copy task title and description/);
   assert.match(page, /copyTextToClipboard\(text\)/);
   assert.match(copy, /navigator\.clipboard\?\.writeText/);
   assert.match(copy, /document\.execCommand\("copy"\)/);

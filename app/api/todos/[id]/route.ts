@@ -1,4 +1,5 @@
 import { TodoUpdate, updateTodo, type TodoMutationMetadata } from "../../../../db/todos";
+import { validateTaskDescription } from "../../../../lib/task-description";
 
 const statuses = new Set(["open", "completed"]);
 
@@ -21,7 +22,7 @@ export async function PATCH(
       if (!title.trim()) return Response.json({ error: "A task title is required." }, { status: 400 });
       update.title = title;
     }
-    if (payload.notes !== undefined) update.notes = String(payload.notes);
+    if (payload.notes !== undefined) update.notes = validateTaskDescription(String(payload.notes));
     if (payload.status !== undefined) {
       if (!statuses.has(payload.status)) return Response.json({ error: "Invalid status." }, { status: 400 });
       update.status = payload.status;

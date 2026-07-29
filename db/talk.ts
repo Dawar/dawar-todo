@@ -825,6 +825,59 @@ export async function appendTalkMessage(input: {
   return { message: mapMessage(row!), replayed: !Number(result.meta.changes ?? 0) };
 }
 
+export async function appendTalkSystemReceipt(input: {
+  userKey: string;
+  systemKey: "phone" | "general";
+  eventId: string;
+  content: string;
+  focusedTodoId?: number | null;
+  metadata?: Record<string, unknown>;
+}) {
+  await ensureTodoDatabase();
+  const thread = await resolveSystemTalkThread(input.userKey, input.systemKey);
+  const content = input.content.trim().slice(0, 40_000);
+  const eventId = input.eventId.trim().slice(0, 200);
+  if (!content || !eventId) throw new Error("That system receipt is invalid.");
+  const db = database();
+  const id = crypto.randomUUID();
+  const result = await db.prepare(`
+    INSERT OR IGNORE INTO todo_talk_messages (
+      id, session_id, user_key, thread_id, realtime_item_id, role, content,
+      focused_todo_id, metadata_json
+    ) VALUES (?, ?, ?, ?, ?, 'assistant', ?, ?, ?)
+  `).bind(
+    id,
+    `system-${input.systemKey}`,
+    input.userKey,
+    thread.id,
+    eventId,
+    content,
+    input.focusedTodoId ?? null,
+    JSON.stringify(input.metadata ?? {}),
+  ).run();
+  const row = await db.prepare(`
+    SELECT id, session_id, thread_id, realtime_item_id, role, content,
+           focused_todo_id, metadata_json, created_at
+    FROM todo_talk_messages
+    WHERE user_key = ? AND realtime_item_id = ?
+  `).bind(input.userKey, eventId).first<MessageRow>();
+  if (row && Number(result.meta.changes ?? 0)) {
+    await db.prepare(`
+      UPDATE todo_talk_threads
+      SET last_message_at = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+      WHERE id = ? AND user_key = ?
+    `).bind(row.created_at, thread.id, input.userKey).run();
+  }
+  console.info("[todo-talk] system receipt stored", {
+    userKey: input.userKey,
+    systemKey: input.systemKey,
+    eventId,
+    focusedTodoId: input.focusedTodoId ?? null,
+    replayed: !Number(result.meta.changes ?? 0),
+  });
+  return { message: row ? mapMessage(row) : null, replayed: !Number(result.meta.changes ?? 0) };
+}
+
 export async function listTalkHistory(
   userKey: string,
   input: { before?: string | null; limit?: number; threadId?: string | null } = {},

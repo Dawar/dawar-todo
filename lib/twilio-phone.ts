@@ -82,6 +82,32 @@ export function phonePinPromptTwiml(input: {
   );
 }
 
+export function phoneModePromptTwiml(input: {
+  actionUrl: string;
+  message?: string;
+}) {
+  const prompt = input.message?.trim()
+    || "Press 1 to talk with your assistant. Press 2 to record a call.";
+  return twiml(
+    `<Gather input="dtmf" action="${xmlEscape(input.actionUrl)}" method="POST" `
+      + `numDigits="1" timeout="10" actionOnEmptyResult="true">`
+      + `<Say>${xmlEscape(prompt)}</Say></Gather><Redirect method="POST">${xmlEscape(input.actionUrl)}</Redirect>`,
+  );
+}
+
+export function phoneRecordingTwiml(input: {
+  actionUrl: string;
+  statusUrl: string;
+  playBeep: boolean;
+}) {
+  return twiml(
+    `<Record action="${xmlEscape(input.actionUrl)}" method="POST" `
+      + `recordingStatusCallback="${xmlEscape(input.statusUrl)}" recordingStatusCallbackMethod="POST" `
+      + `recordingStatusCallbackEvent="completed absent" maxLength="1800" timeout="0" `
+      + `finishOnKey="" playBeep="${input.playBeep ? "true" : "false"}" trim="do-not-trim"/>`,
+  );
+}
+
 export function phoneRejectedTwiml(message = "Access denied.") {
   return twiml(`<Say>${xmlEscape(message)}</Say><Hangup/>`);
 }
@@ -227,6 +253,56 @@ export async function validateTwilioRequest(
 
 function twilioAuthorization(accountSid: string, authToken: string) {
   return `Basic ${btoa(`${accountSid}:${authToken}`)}`;
+}
+
+export function validTwilioRecordingSid(recordingSid: string) {
+  return /^RE[0-9a-f]{32}$/i.test(recordingSid);
+}
+
+export async function downloadTwilioRecording(
+  recordingSid: string,
+  environment?: TwilioPhoneEnvironment,
+) {
+  if (!validTwilioRecordingSid(recordingSid)) throw new Error("That Twilio recording identifier is invalid.");
+  const config = twilioPhoneConfig(environment);
+  if (!config.accountSid || !config.authToken) throw new Error("Twilio recording access is not configured.");
+  const response = await fetch(
+    `https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(config.accountSid)}/Recordings/${encodeURIComponent(recordingSid)}.mp3`,
+    {
+      headers: { Authorization: twilioAuthorization(config.accountSid, config.authToken) },
+      signal: AbortSignal.timeout(30_000),
+    },
+  );
+  if (!response.ok) throw new Error(`Twilio recording download failed (${response.status}).`);
+  const contentType = response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() || "audio/mpeg";
+  if (contentType !== "audio/mpeg" && contentType !== "audio/mp3" && contentType !== "application/octet-stream") {
+    throw new Error("Twilio returned an unexpected recording format.");
+  }
+  const bytes = await response.arrayBuffer();
+  if (!bytes.byteLength || bytes.byteLength > 50 * 1024 * 1024) {
+    throw new Error("The Twilio recording has an invalid size.");
+  }
+  return { bytes, mimeType: "audio/mpeg" as const };
+}
+
+export async function deleteTwilioRecording(
+  recordingSid: string,
+  environment?: TwilioPhoneEnvironment,
+) {
+  if (!validTwilioRecordingSid(recordingSid)) throw new Error("That Twilio recording identifier is invalid.");
+  const config = twilioPhoneConfig(environment);
+  if (!config.accountSid || !config.authToken) throw new Error("Twilio recording cleanup is not configured.");
+  const response = await fetch(
+    `https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(config.accountSid)}/Recordings/${encodeURIComponent(recordingSid)}.json`,
+    {
+      method: "DELETE",
+      headers: { Authorization: twilioAuthorization(config.accountSid, config.authToken) },
+      signal: AbortSignal.timeout(15_000),
+    },
+  );
+  if (!response.ok && response.status !== 404) {
+    throw new Error(`Twilio recording cleanup failed (${response.status}).`);
+  }
 }
 
 async function fetchTwilioPhoneNumber(environment?: TwilioPhoneEnvironment) {

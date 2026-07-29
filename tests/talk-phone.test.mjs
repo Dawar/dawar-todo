@@ -19,6 +19,10 @@ test("ships a PIN-gated Twilio bridge into the shared Talk runtime", async () =>
     profileRoute,
     incomingRoute,
     verifyRoute,
+    modeRoute,
+    recordActionRoute,
+    recordStatusRoute,
+    recordingProcessor,
     bridgeStartRoute,
     sipBridgeStartRoute,
     bridgeEventsRoute,
@@ -39,6 +43,10 @@ test("ships a PIN-gated Twilio bridge into the shared Talk runtime", async () =>
     readFile(new URL("app/api/talk/phone/profile/route.ts", root), "utf8"),
     readFile(new URL("app/api/talk/phone/incoming/route.ts", root), "utf8"),
     readFile(new URL("app/api/talk/phone/verify/route.ts", root), "utf8"),
+    readFile(new URL("app/api/talk/phone/mode/route.ts", root), "utf8"),
+    readFile(new URL("app/api/talk/phone/record/action/route.ts", root), "utf8"),
+    readFile(new URL("app/api/talk/phone/record/status/route.ts", root), "utf8"),
+    readFile(new URL("db/talk-phone-recordings.ts", root), "utf8"),
     readFile(new URL("app/api/talk/phone/bridge/start/route.ts", root), "utf8"),
     readFile(new URL("app/api/talk/phone/bridge/sip/start/route.ts", root), "utf8"),
     readFile(new URL("app/api/talk/phone/bridge/events/route.ts", root), "utf8"),
@@ -51,9 +59,13 @@ test("ships a PIN-gated Twilio bridge into the shared Talk runtime", async () =>
 
   assert.match(schema, /todoTalkPhoneProfiles/);
   assert.match(schema, /todoTalkPhoneCalls/);
-  assert.match(database, /CURRENT_SCHEMA_VERSION = "25"/);
+  assert.match(schema, /todoTalkPhoneRecordings/);
+  assert.match(schema, /todoTalkPhoneRecordingSegments/);
+  assert.match(database, /CURRENT_SCHEMA_VERSION = "26"/);
   assert.match(database, /CREATE TABLE IF NOT EXISTS todo_talk_phone_profiles/);
   assert.match(database, /CREATE TABLE IF NOT EXISTS todo_talk_phone_calls/);
+  assert.match(database, /CREATE TABLE IF NOT EXISTS todo_talk_phone_recordings/);
+  assert.match(database, /CREATE TABLE IF NOT EXISTS todo_talk_phone_recording_segments/);
 
   assert.match(phoneDb, /PBKDF2/);
   assert.match(phoneDb, /SHA-256/);
@@ -61,6 +73,8 @@ test("ships a PIN-gated Twilio bridge into the shared Talk runtime", async () =>
   assert.match(phoneDb, /MAX_SUPPORTED_PIN_ITERATIONS = 100_000/);
   assert.match(phoneDb, /unsupported PIN hash iteration count/);
   assert.match(phoneDb, /MAX_PIN_ATTEMPTS = 3/);
+  assert.match(phoneDb, /verifyTalkPhoneCallPin/);
+  assert.match(phoneDb, /mode_attempt_count/);
   assert.match(phoneDb, /stream_token_consumed_at IS NULL/);
   assert.match(phoneDb, /connectTalkPhoneSip/);
   assert.match(phoneDb, /provider_call_id/);
@@ -72,6 +86,10 @@ test("ships a PIN-gated Twilio bridge into the shared Talk runtime", async () =>
   assert.match(twilio, /HMAC/);
   assert.match(twilio, /SHA-1/);
   assert.match(twilio, /<Gather input="dtmf"/);
+  assert.match(twilio, /Press 1 to talk with your assistant\. Press 2 to record a call\./);
+  assert.match(twilio, /<Record action=/);
+  assert.match(twilio, /maxLength="1800"/);
+  assert.match(twilio, /playBeep=/);
   assert.match(twilio, /<Connect><Stream/);
   assert.match(twilio, /<Dial answerOnBridge="true" timeout="20"><Sip>/);
   assert.match(twilio, /sip\.api\.openai\.com;transport=tls/);
@@ -106,15 +124,30 @@ test("ships a PIN-gated Twilio bridge into the shared Talk runtime", async () =>
 
   assert.match(access, /\/api\/talk\/phone\/incoming/);
   assert.match(access, /\/api\/talk\/phone\/verify/);
+  assert.match(access, /\/api\/talk\/phone\/mode/);
+  assert.match(access, /\/api\/talk\/phone\/record\//);
   assert.match(access, /\/api\/talk\/phone\/stream/);
   assert.match(access, /\/api\/talk\/phone\/bridge\//);
   assert.match(profileRoute, /talkUserKey/);
   assert.match(profileRoute, /configureTwilioVoiceWebhook/);
   assert.match(incomingRoute, /validateTwilioRequest/);
   assert.match(verifyRoute, /findTalkPhoneUserByPin/);
-  assert.match(verifyRoute, /talkPhoneMediaStreamUrl/);
-  assert.match(verifyRoute, /phoneSipTwiml/);
-  assert.match(verifyRoute, /talkPhoneTransport/);
+  assert.match(verifyRoute, /verifyTalkPhoneCallPin/);
+  assert.match(verifyRoute, /phoneModePromptTwiml/);
+  assert.match(modeRoute, /beginTalkPhoneRecording/);
+  assert.match(modeRoute, /talkPhoneMediaStreamUrl/);
+  assert.match(modeRoute, /phoneSipTwiml/);
+  assert.match(modeRoute, /talkPhoneTransport/);
+  assert.match(recordActionRoute, /recordTalkPhoneSegmentAction/);
+  assert.match(recordStatusRoute, /recordTalkPhoneSegmentStatus/);
+  assert.match(recordingProcessor, /gpt-4o-transcribe-diarize/);
+  assert.match(recordingProcessor, /response_format", "diarized_json"/);
+  assert.match(recordingProcessor, /chunking_strategy", "auto"/);
+  assert.match(recordingProcessor, /uploadTodoAttachmentDirect/);
+  assert.match(recordingProcessor, /appendTalkSystemReceipt/);
+  assert.match(recordingProcessor, /MAX_RECORDING_SEGMENTS = 8/);
+  assert.match(recordingProcessor, /MAX_PROCESSING_ATTEMPTS = 5/);
+  assert.doesNotMatch(recordingProcessor, /console\.(?:info|warn|error)\([^;]*\{\s*(?:transcript|recordingUrl|apiKey)\s*:/);
   assert.match(bridgeStartRoute, /consumeTalkPhoneStream/);
   assert.match(bridgeStartRoute, /mintRealtimeClientSecret/);
   assert.match(bridgeStartRoute, /audioFormat: "pcmu"/);
@@ -217,6 +250,9 @@ test("only Twilio transport webhooks are public; phone profile remains signed-in
   for (const path of [
     "/api/talk/phone/incoming",
     "/api/talk/phone/verify",
+    "/api/talk/phone/mode",
+    "/api/talk/phone/record/action",
+    "/api/talk/phone/record/status",
     "/api/talk/phone/stream",
     "/api/talk/phone/bridge/start",
     "/api/talk/phone/bridge/events",
@@ -229,4 +265,37 @@ test("only Twilio transport webhooks are public; phone profile remains signed-in
   }), { DB: {} });
   assert.equal(profileResponse?.status, 403);
   assert.match(await profileResponse.text(), /signed-in Dawar Todo interface/);
+});
+
+test("recording-mode migration preserves calls and adds durable processing state", async () => {
+  const initial = await readFile(new URL("drizzle/0021_mature_zemo.sql", root), "utf8");
+  const sip = await readFile(new URL("drizzle/0022_rich_madame_hydra.sql", root), "utf8");
+  const migration = await readFile(new URL("drizzle/0026_yielding_vindicator.sql", root), "utf8");
+  const database = new DatabaseSync(":memory:");
+  for (const sql of [initial, sip, migration]) {
+    for (const statement of sql.split("--> statement-breakpoint").map((value) => value.trim()).filter(Boolean)) {
+      database.exec(statement);
+    }
+  }
+  const callSid = `CA${"b".repeat(32)}`;
+  database.prepare(`
+    INSERT INTO todo_talk_phone_calls (call_sid, from_number_hash, to_number)
+    VALUES (?, ?, ?)
+  `).run(callSid, "caller-hash", "+15555550100");
+  const call = database.prepare(`
+    SELECT mode, mode_attempt_count FROM todo_talk_phone_calls WHERE call_sid = ?
+  `).get(callSid);
+  assert.equal(call.mode, null);
+  assert.equal(call.mode_attempt_count, 0);
+  for (const table of ["todo_talk_phone_recordings", "todo_talk_phone_recording_segments"]) {
+    assert.equal(database.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = ?").get(table).count, 1);
+  }
+  for (const index of [
+    "todo_talk_phone_recordings_status_idx",
+    "todo_talk_phone_recordings_client_idx",
+    "todo_talk_phone_recording_segments_order_idx",
+    "todo_talk_phone_recording_segments_cleanup_idx",
+  ]) {
+    assert.equal(database.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'index' AND name = ?").get(index).count, 1);
+  }
 });

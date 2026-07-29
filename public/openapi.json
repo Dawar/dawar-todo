@@ -343,7 +343,7 @@
         "properties": {
           "id": { "type": "integer" },
           "title": { "type": "string", "maxLength": 2000 },
-          "notes": { "type": "string" },
+          "notes": { "type": "string", "maxLength": 500000, "description": "Markdown task description." },
           "status": { "type": "string", "enum": ["open", "completed"] },
           "priority": { "type": "integer", "minimum": 1, "maximum": 4, "description": "1 urgent, 2 high, 3 normal, 4 low" },
           "dueDate": { "type": ["string", "null"], "format": "date" },
@@ -367,7 +367,7 @@
         "required": ["title"],
         "properties": {
           "title": { "type": "string", "minLength": 1, "maxLength": 2000 },
-          "notes": { "type": "string" },
+          "notes": { "type": "string", "maxLength": 500000, "description": "Markdown task description." },
           "status": { "const": "open" },
           "priority": { "type": "integer", "minimum": 1, "maximum": 4, "default": 3 },
           "dueDate": { "type": ["string", "null"], "format": "date" },
@@ -384,7 +384,7 @@
         "minProperties": 1,
         "properties": {
           "title": { "type": "string", "minLength": 1, "maxLength": 2000 },
-          "notes": { "type": "string" },
+          "notes": { "type": "string", "maxLength": 500000, "description": "Markdown task description." },
           "status": { "type": "string", "enum": ["open", "completed"] },
           "priority": { "type": "integer", "minimum": 1, "maximum": 4 },
           "dueDate": { "type": ["string", "null"], "format": "date" },
