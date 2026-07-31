@@ -40,6 +40,10 @@ function isPublicTalkPhoneTransport(pathname: string) {
     || pathname.startsWith("/api/talk/phone/bridge/");
 }
 
+function isPublicInternalTransport(pathname: string) {
+  return pathname === "/api/internal/minute";
+}
+
 function unauthorizedApi(message = "Sign in with ChatGPT or use a valid API token to use Dawar Todo.") {
   return Response.json(
     { error: message },
@@ -63,6 +67,7 @@ export async function appAccessResponse(
   if (url.pathname.startsWith("/calendar/")) return null;
   if (isPublicStaticPath(url.pathname) || isDispatchAuthPath(url.pathname)) return null;
   if (isPublicTalkPhoneTransport(url.pathname)) return null;
+  if (isPublicInternalTransport(url.pathname)) return null;
   if (request.headers.get(AUTHENTICATED_USER_HEADER)?.trim()) return null;
 
   const apiRequest = url.pathname.startsWith("/api/");

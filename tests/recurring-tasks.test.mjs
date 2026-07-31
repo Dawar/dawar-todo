@@ -193,7 +193,7 @@ test("ships recurrence storage, snooze protection, and a once-per-minute Worker 
   assert.match(database, /Recurring tasks cannot be snoozed/);
   assert.match(page, /Recurring tasks cannot be snoozed/);
   assert.match(page, /recurrenceLabel\(todo\.recurrenceCron, todo\.status, now, timeZone\)/);
-  assert.match(worker, /processRecurringTodos/);
+  assert.match(worker, /runTodoMinuteMaintenance/);
   assert.match(todoRoute, /runTodoReadMaintenance/);
   assert.match(maintenance, /catchUp:\s*true/);
   assert.doesNotMatch(recurring, /PRAGMA table_info/);

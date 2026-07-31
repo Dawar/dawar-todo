@@ -1,9 +1,11 @@
 import { env, waitUntil } from "cloudflare:workers";
 import { processRecurringTodos } from "../worker/recurring";
 import { scheduleAttachmentCleanup } from "./attachments";
+import { dispatchTodoPushNotifications } from "./push-notifications";
 import { ensureTodoDatabase, wakeExpiredSnoozedTodos } from "./todos";
 
 let lastRecurrenceAttemptMinute = "";
+let lastPushDispatchAttemptMinute = "";
 
 export async function runTodoReadMaintenance(source: "bootstrap" | "sync" | "legacy-list") {
   await ensureTodoDatabase();
@@ -11,10 +13,20 @@ export async function runTodoReadMaintenance(source: "bootstrap" | "sync" | "leg
   const now = new Date();
   const recurrenceMinute = new Date(Math.floor(now.valueOf() / 60_000) * 60_000).toISOString();
   const shouldCheckRecurrence = recurrenceMinute !== lastRecurrenceAttemptMinute;
+  const shouldDispatchPush = recurrenceMinute !== lastPushDispatchAttemptMinute;
   if (shouldCheckRecurrence) lastRecurrenceAttemptMinute = recurrenceMinute;
+  if (shouldDispatchPush) lastPushDispatchAttemptMinute = recurrenceMinute;
   const wokenSnoozeIds = await wakeExpiredSnoozedTodos(now);
 
   if (source === "sync") {
+    if (shouldDispatchPush) {
+      waitUntil(dispatchTodoPushNotifications(env.DB, env, now).catch((error) => {
+        console.error("[todo-maintenance] background push dispatch failed", {
+          recurrenceMinute,
+          error,
+        });
+      }));
+    }
     if (shouldCheckRecurrence) {
       waitUntil(processRecurringTodos(env.DB, now, { catchUp: true, source: "todo-list-sync" }).catch((error) => {
         console.error("[todo-maintenance] background recurrence check failed", {
@@ -26,6 +38,7 @@ export async function runTodoReadMaintenance(source: "bootstrap" | "sync" | "leg
         source,
         recurrenceMinute,
         snoozedWoken: wokenSnoozeIds.length,
+        pushDispatchScheduled: shouldDispatchPush,
         durationMs: Date.now() - startedAt,
       });
     } else if (wokenSnoozeIds.length) {
@@ -52,6 +65,7 @@ export async function runTodoReadMaintenance(source: "bootstrap" | "sync" | "leg
       recurrenceSkippedInIsolate: !shouldCheckRecurrence,
       recurringReopened: recurrence?.reopened ?? 0,
       snoozedWoken: wokenSnoozeIds.length,
+      pushDispatchScheduled: shouldDispatchPush,
       durationMs: Date.now() - startedAt,
     });
   }

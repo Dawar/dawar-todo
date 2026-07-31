@@ -175,6 +175,8 @@ export const todoPushSubscriptions = sqliteTable(
     deviceId: text("device_id").notNull(),
     failureCount: integer("failure_count").notNull().default(0),
     lastSuccessAt: text("last_success_at"),
+    lastFailureStatus: integer("last_failure_status"),
+    lastFailureAt: text("last_failure_at"),
     disabledAt: text("disabled_at"),
     createdAt: text("created_at")
       .notNull()

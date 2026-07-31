@@ -22,7 +22,13 @@ test("wires device push subscriptions, minute batching, origin suppression, and 
     access,
     migration,
     deliveryMigration,
+    healthMigration,
     environment,
+    minuteMaintenance,
+    internalMinuteRoute,
+    pushClient,
+    voiceRelay,
+    voiceRelayConfig,
   ] = await Promise.all([
     readFile(new URL("db/schema.ts", root), "utf8"),
     readFile(new URL("db/todos.ts", root), "utf8"),
@@ -37,7 +43,13 @@ test("wires device push subscriptions, minute batching, origin suppression, and 
     readFile(new URL("worker/access.ts", root), "utf8"),
     readFile(new URL("drizzle/0020_acoustic_bushwacker.sql", root), "utf8"),
     readFile(new URL("drizzle/0024_white_shooting_star.sql", root), "utf8"),
+    readFile(new URL("drizzle/0027_charming_preak.sql", root), "utf8"),
     readFile(new URL(".env.example", root), "utf8"),
+    readFile(new URL("db/minute-maintenance.ts", root), "utf8"),
+    readFile(new URL("app/api/internal/minute/route.ts", root), "utf8"),
+    readFile(new URL("app/push-client.ts", root), "utf8"),
+    readFile(new URL("voice-relay/src/index.ts", root), "utf8"),
+    readFile(new URL("voice-relay/wrangler.jsonc", root), "utf8"),
   ]);
 
   assert.match(schema, /todoPushSubscriptions/);
@@ -46,7 +58,9 @@ test("wires device push subscriptions, minute batching, origin suppression, and 
   assert.match(migration, /CREATE TABLE `todo_push_subscriptions`/);
   assert.match(migration, /CREATE TABLE `todo_push_events`/);
   assert.match(deliveryMigration, /CREATE TABLE `todo_push_deliveries`/);
-  assert.match(database, /CURRENT_SCHEMA_VERSION = "26"/);
+  assert.match(healthMigration, /ADD `last_failure_status` integer/);
+  assert.match(healthMigration, /ADD `last_failure_at` text/);
+  assert.match(database, /CURRENT_SCHEMA_VERSION = "27"/);
   assert.match(database, /CREATE TABLE IF NOT EXISTS todo_push_deliveries/);
   assert.match(database, /wakeExpiredSnoozedTodosInDatabase/);
   assert.match(database, /'snooze:' \|\| id \|\| ':' \|\| snoozed_until/);
@@ -60,7 +74,11 @@ test("wires device push subscriptions, minute batching, origin suppression, and 
   assert.match(pushDatabase, /`\$\{events\.length\} tasks are ready`/);
   assert.match(pushDatabase, /generateRequestDetails/);
   assert.match(pushDatabase, /contentEncoding: "aes128gcm"/);
-  assert.match(pushDatabase, /response\?\.status === 404 \|\| response\?\.status === 410/);
+  assert.match(pushDatabase, /\[400, 401, 403, 404, 410\]\.includes/);
+  assert.match(pushDatabase, /TTL: 86_400/);
+  assert.match(pushDatabase, /subscriptions\.length \? events\.filter/);
+  assert.match(pushDatabase, /push_dispatch_lease/);
+  assert.match(pushDatabase, /sendTestPushNotification/);
   assert.match(pushRoute, /export async function GET/);
   assert.match(pushRoute, /export async function POST/);
   assert.match(pushRoute, /export async function DELETE/);
@@ -69,17 +87,27 @@ test("wires device push subscriptions, minute batching, origin suppression, and 
   assert.match(page, /headersWithDeviceId/);
   assert.match(pwaRegistration, /refreshExistingPushSubscription/);
   assert.match(pwaRegistration, /active device subscription refreshed on app launch/);
-  assert.match(worker, /wakeExpiredSnoozedTodosInDatabase/);
-  assert.match(worker, /dispatchTodoPushNotifications/);
+  assert.match(pwaRegistration, /ensureCurrentPushSubscription/);
+  assert.match(pushClient, /pushSubscriptionUsesKey/);
+  assert.match(pushClient, /applicationServerKey/);
+  assert.match(worker, /runTodoMinuteMaintenance/);
   assert.match(recurring, /type: "recurrence_reopened"/);
   assert.match(settings, /Push notifications/);
-  assert.match(settings, /pushManager\.subscribe/);
+  assert.match(settings, /ensureCurrentPushSubscription/);
   assert.match(settings, /Enable notifications/);
   assert.match(settings, /Disable notifications/);
   assert.match(access, /url\.pathname\.startsWith\("\/api\/push"\)/);
+  assert.match(access, /pathname === "\/api\/internal\/minute"/);
+  assert.match(minuteMaintenance, /dispatchTodoPushNotifications/);
+  assert.match(internalMinuteRoute, /TODO_MAINTENANCE_SECRET/);
+  assert.match(internalMinuteRoute, /runTodoMinuteMaintenance/);
+  assert.match(voiceRelayConfig, /"crons": \["\* \* \* \* \*"\]/);
+  assert.match(voiceRelay, /\/api\/internal\/minute/);
+  assert.match(voiceRelay, /TODO_MAINTENANCE_SECRET/);
   assert.match(environment, /VAPID_SUBJECT=https:\/\/work\.dawar\.ca/);
   assert.match(environment, /VAPID_PUBLIC_KEY=/);
   assert.match(environment, /VAPID_PRIVATE_KEY=/);
+  assert.match(environment, /TODO_MAINTENANCE_SECRET=/);
 });
 
 test("service worker displays push alerts, updates the app badge, and reopens the app", async () => {

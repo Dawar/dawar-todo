@@ -129,7 +129,7 @@ type TodoSyncChangeRow = {
 };
 
 let initialization: Promise<void> | null = null;
-const CURRENT_SCHEMA_VERSION = "26";
+const CURRENT_SCHEMA_VERSION = "27";
 
 function database() {
   if (!env.DB) throw new Error("The todo database is unavailable.");
@@ -435,6 +435,8 @@ export async function ensureTodoDatabase() {
           device_id TEXT NOT NULL,
           failure_count INTEGER NOT NULL DEFAULT 0,
           last_success_at TEXT,
+          last_failure_status INTEGER,
+          last_failure_at TEXT,
           disabled_at TEXT,
           created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
           updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
@@ -704,6 +706,15 @@ export async function ensureTodoDatabase() {
     if (!attachmentColumns.results.some((column) => column.name === "duration_ms")) {
       await db.prepare("ALTER TABLE todo_attachments ADD COLUMN duration_ms INTEGER NOT NULL DEFAULT 0").run();
       console.info("[todo-db] added attachment duration compatibility column");
+    }
+    const pushSubscriptionColumns = await db.prepare("PRAGMA table_info(todo_push_subscriptions)").all<{ name: string }>();
+    if (!pushSubscriptionColumns.results.some((column) => column.name === "last_failure_status")) {
+      await db.prepare("ALTER TABLE todo_push_subscriptions ADD COLUMN last_failure_status INTEGER").run();
+      console.info("[todo-db] added push failure status compatibility column");
+    }
+    if (!pushSubscriptionColumns.results.some((column) => column.name === "last_failure_at")) {
+      await db.prepare("ALTER TABLE todo_push_subscriptions ADD COLUMN last_failure_at TEXT").run();
+      console.info("[todo-db] added push failure timestamp compatibility column");
     }
     const phoneCallColumns = await db.prepare("PRAGMA table_info(todo_talk_phone_calls)").all<{ name: string }>();
     if (!phoneCallColumns.results.some((column) => column.name === "transport")) {

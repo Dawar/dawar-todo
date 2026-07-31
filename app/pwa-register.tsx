@@ -2,11 +2,34 @@
 
 import { useEffect } from "react";
 import { getOrCreateDeviceId, headersWithDeviceId } from "./device-id";
+import { ensureCurrentPushSubscription } from "./push-client";
 
 async function refreshExistingPushSubscription(registration: ServiceWorkerRegistration) {
   if (!("Notification" in window) || Notification.permission !== "granted" || !registration.pushManager) return;
-  const subscription = await registration.pushManager.getSubscription();
-  if (!subscription) return;
+  const configResponse = await fetch("/api/push", {
+    headers: headersWithDeviceId(),
+    cache: "no-store",
+  });
+  if (!configResponse.ok) return;
+  const config = await configResponse.json() as {
+    configured: boolean;
+    publicKey: string | null;
+    subscription?: {
+      active: boolean;
+      failureCount: number;
+      lastFailureStatus: number | null;
+    } | null;
+  };
+  if (!config.configured || !config.publicKey) return;
+  const unhealthy = Boolean(
+    config.subscription
+    && (!config.subscription.active || config.subscription.failureCount > 0),
+  );
+  const { subscription, renewed } = await ensureCurrentPushSubscription(
+    registration,
+    config.publicKey,
+    { forceRenew: unhealthy },
+  );
   const response = await fetch("/api/push", {
     method: "POST",
     headers: headersWithDeviceId({ "Content-Type": "application/json" }),
@@ -16,7 +39,10 @@ async function refreshExistingPushSubscription(registration: ServiceWorkerRegist
     const payload = await response.json().catch(() => ({})) as { error?: string };
     throw new Error(payload.error || "Push subscription refresh failed.");
   }
-  console.info("[todo-push] active device subscription refreshed on app launch");
+  console.info("[todo-push] active device subscription refreshed on app launch", {
+    renewed,
+    repairedServerFailure: unhealthy,
+  });
 }
 
 export function PwaRegister() {

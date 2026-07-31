@@ -8,6 +8,9 @@
   "vars": {
     "SITE_BASE_URL": "https://work.dawar.ca"
   },
+  "triggers": {
+    "crons": ["* * * * *"]
+  },
   "durable_objects": {
     "bindings": [
       {

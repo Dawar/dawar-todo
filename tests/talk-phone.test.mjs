@@ -61,7 +61,7 @@ test("ships a PIN-gated Twilio bridge into the shared Talk runtime", async () =>
   assert.match(schema, /todoTalkPhoneCalls/);
   assert.match(schema, /todoTalkPhoneRecordings/);
   assert.match(schema, /todoTalkPhoneRecordingSegments/);
-  assert.match(database, /CURRENT_SCHEMA_VERSION = "26"/);
+  assert.match(database, /CURRENT_SCHEMA_VERSION = "27"/);
   assert.match(database, /CREATE TABLE IF NOT EXISTS todo_talk_phone_profiles/);
   assert.match(database, /CREATE TABLE IF NOT EXISTS todo_talk_phone_calls/);
   assert.match(database, /CREATE TABLE IF NOT EXISTS todo_talk_phone_recordings/);

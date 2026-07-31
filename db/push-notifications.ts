@@ -19,6 +19,10 @@ type TodoPushSubscriptionRow = {
   auth: string;
   device_id: string;
   failure_count: number;
+  last_success_at?: string | null;
+  last_failure_status?: number | null;
+  last_failure_at?: string | null;
+  disabled_at?: string | null;
 };
 
 export type PushEnvironment = {
@@ -39,6 +43,8 @@ export type PushSubscriptionInput = {
 
 const DEVICE_ID_PATTERN = /^[0-9a-f-]{36}$/i;
 const MAX_BATCH_EVENTS = 90;
+const PUSH_LEASE_KEY = "push_dispatch_lease";
+const PUSH_LEASE_MS = 45_000;
 const generatePushRequest = webPush.generateRequestDetails as unknown as (
   subscription: PushSubscription,
   payload: string,
@@ -111,9 +117,17 @@ export async function upsertPushSubscription(db: D1Database, input: PushSubscrip
       auth = excluded.auth,
       device_id = excluded.device_id,
       failure_count = 0,
+      last_failure_status = NULL,
+      last_failure_at = NULL,
       disabled_at = NULL,
       updated_at = excluded.updated_at
   `).bind(id, normalized.endpoint, normalized.p256dh, normalized.auth, normalized.deviceId).run();
+  await db.prepare(`
+    UPDATE todo_push_subscriptions
+    SET disabled_at = COALESCE(disabled_at, strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+    WHERE device_id = ? AND endpoint <> ? AND disabled_at IS NULL
+  `).bind(normalized.deviceId, normalized.endpoint).run();
   console.info("[todo-push] device subscription registered", {
     deviceIdSuffix: normalized.deviceId.slice(-6),
     endpointOrigin: new URL(normalized.endpoint).origin,
@@ -147,6 +161,33 @@ export async function hasPushSubscription(db: D1Database, deviceId: string) {
     LIMIT 1
   `).bind(deviceId).first<{ subscribed: number }>();
   return Boolean(row?.subscribed);
+}
+
+export async function readPushSubscriptionState(db: D1Database, deviceId: string) {
+  if (!DEVICE_ID_PATTERN.test(deviceId)) return null;
+  const row = await db.prepare(`
+    SELECT failure_count, last_success_at, last_failure_status, last_failure_at, disabled_at, updated_at
+    FROM todo_push_subscriptions
+    WHERE device_id = ?
+    ORDER BY CASE WHEN disabled_at IS NULL THEN 0 ELSE 1 END, updated_at DESC
+    LIMIT 1
+  `).bind(deviceId).first<{
+    failure_count: number;
+    last_success_at: string | null;
+    last_failure_status: number | null;
+    last_failure_at: string | null;
+    disabled_at: string | null;
+    updated_at: string;
+  }>();
+  if (!row) return null;
+  return {
+    active: row.disabled_at === null,
+    failureCount: Number(row.failure_count ?? 0),
+    lastSuccessAt: row.last_success_at,
+    lastFailureStatus: row.last_failure_status === null ? null : Number(row.last_failure_status),
+    lastFailureAt: row.last_failure_at,
+    updatedAt: row.updated_at,
+  };
 }
 
 export async function queueTodoPushEvent(
@@ -221,6 +262,36 @@ function notificationPayload(events: TodoPushEventRow[], openCount: number) {
   };
 }
 
+async function sendPushGatewayRequest(
+  subscription: TodoPushSubscriptionRow,
+  payload: Record<string, unknown>,
+  environment: Required<Pick<PushEnvironment, "VAPID_SUBJECT" | "VAPID_PUBLIC_KEY" | "VAPID_PRIVATE_KEY">>,
+) {
+  const pushSubscription: PushSubscription = {
+    endpoint: subscription.endpoint,
+    expirationTime: null,
+    keys: { p256dh: subscription.p256dh, auth: subscription.auth },
+  };
+  const request = generatePushRequest(pushSubscription, JSON.stringify(payload), {
+    TTL: 86_400,
+    urgency: "normal",
+    topic: "dawar-todo-open-items",
+    contentEncoding: "aes128gcm",
+    vapidDetails: {
+      subject: environment.VAPID_SUBJECT,
+      publicKey: environment.VAPID_PUBLIC_KEY,
+      privateKey: environment.VAPID_PRIVATE_KEY,
+    },
+  });
+  const requestBody = new Uint8Array(request.body.byteLength);
+  requestBody.set(request.body);
+  return fetch(request.endpoint, {
+    method: request.method,
+    headers: request.headers,
+    body: requestBody.buffer,
+  });
+}
+
 async function markSubscriptionDelivery(
   db: D1Database,
   subscription: TodoPushSubscriptionRow,
@@ -231,20 +302,50 @@ async function markSubscriptionDelivery(
       UPDATE todo_push_subscriptions
       SET failure_count = 0,
           last_success_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+          last_failure_status = NULL,
+          last_failure_at = NULL,
           updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
       WHERE id = ?
     `).bind(subscription.id).run();
     return "sent" as const;
   }
-  const expired = response?.status === 404 || response?.status === 410;
+  const invalid = response
+    ? [400, 401, 403, 404, 410].includes(response.status)
+    : false;
   await db.prepare(`
     UPDATE todo_push_subscriptions
     SET failure_count = failure_count + 1,
+        last_failure_status = ?,
+        last_failure_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
         disabled_at = CASE WHEN ? THEN strftime('%Y-%m-%dT%H:%M:%fZ','now') ELSE disabled_at END,
         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
     WHERE id = ?
-  `).bind(expired ? 1 : 0, subscription.id).run();
-  return expired ? "expired" as const : "failed" as const;
+  `).bind(response?.status ?? null, invalid ? 1 : 0, subscription.id).run();
+  return invalid ? "invalid" as const : "failed" as const;
+}
+
+async function acquirePushDispatchLease(db: D1Database, now: Date) {
+  const token = crypto.randomUUID();
+  const expiresAt = new Date(now.valueOf() + PUSH_LEASE_MS).toISOString();
+  await db.prepare(`
+    INSERT OR IGNORE INTO app_settings (key, value)
+    VALUES (?, '')
+  `).bind(PUSH_LEASE_KEY).run();
+  const row = await db.prepare(`
+    UPDATE app_settings
+    SET value = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+    WHERE key = ? AND (value = '' OR value <= ?)
+    RETURNING value
+  `).bind(`${expiresAt}:${token}`, PUSH_LEASE_KEY, now.toISOString()).first<{ value: string }>();
+  return row?.value === `${expiresAt}:${token}` ? row.value : null;
+}
+
+async function releasePushDispatchLease(db: D1Database, lease: string) {
+  await db.prepare(`
+    UPDATE app_settings
+    SET value = '', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+    WHERE key = ? AND value = ?
+  `).bind(PUSH_LEASE_KEY, lease).run();
 }
 
 export async function dispatchTodoPushNotifications(
@@ -260,6 +361,12 @@ export async function dispatchTodoPushNotifications(
     console.warn("[todo-push] delivery skipped because VAPID is not configured");
     return { events: 0, subscriptions: 0, sent: 0, suppressed: 0, failed: 0, skipped: true };
   }
+  const lease = await acquirePushDispatchLease(db, now);
+  if (!lease) {
+    console.info("[todo-push] delivery deferred because another dispatcher holds the lease");
+    return { events: 0, subscriptions: 0, sent: 0, suppressed: 0, failed: 0, skipped: true, busy: true };
+  }
+  try {
   const [eventResult, subscriptionResult, openCountRow] = await db.batch([
     db.prepare(`
       SELECT id, event_type, todo_id, todo_title, origin_device_id, created_at, deliver_after
@@ -269,7 +376,8 @@ export async function dispatchTodoPushNotifications(
       LIMIT ?
     `).bind(now.toISOString(), MAX_BATCH_EVENTS),
     db.prepare(`
-      SELECT id, endpoint, p256dh, auth, device_id, failure_count
+      SELECT id, endpoint, p256dh, auth, device_id, failure_count,
+             last_success_at, last_failure_status, last_failure_at, disabled_at
       FROM todo_push_subscriptions
       WHERE disabled_at IS NULL
       ORDER BY created_at
@@ -317,41 +425,23 @@ export async function dispatchTodoPushNotifications(
       suppressed += events.some((event) => suppressesOriginDevice(event, subscription)) ? 1 : 0;
       continue;
     }
-    const pushSubscription: PushSubscription = {
-      endpoint: subscription.endpoint,
-      expirationTime: null,
-      keys: { p256dh: subscription.p256dh, auth: subscription.auth },
-    };
     let response: Response | null = null;
     try {
-      const payload = JSON.stringify(notificationPayload(
+      const payload = notificationPayload(
         eligibleEvents,
         Number(openCountRow.results[0]?.count ?? 0),
-      ));
-      const request = generatePushRequest(pushSubscription, payload, {
-        TTL: 300,
-        urgency: "normal",
-        topic: "dawar-todo-open-items",
-        contentEncoding: "aes128gcm",
-        vapidDetails: {
-          subject: vapidSubject,
-          publicKey: vapidPublicKey,
-          privateKey: vapidPrivateKey,
-        },
-      });
-      const requestBody = new Uint8Array(request.body.byteLength);
-      requestBody.set(request.body);
-      response = await fetch(request.endpoint, {
-        method: request.method,
-        headers: request.headers,
-        body: requestBody.buffer,
+      );
+      response = await sendPushGatewayRequest(subscription, payload, {
+        VAPID_SUBJECT: vapidSubject,
+        VAPID_PUBLIC_KEY: vapidPublicKey,
+        VAPID_PRIVATE_KEY: vapidPrivateKey,
       });
       const outcome = await markSubscriptionDelivery(db, subscription, response);
       if (outcome === "sent") {
         sent += 1;
         await recordSuccessfulDeliveries(db, subscription.id, eligibleEvents);
         for (const event of eligibleEvents) settledDeliveries.add(deliveryKey(event.id, subscription.id));
-      } else if (outcome === "expired") {
+      } else if (outcome === "invalid") {
         expired += 1;
         expiredSubscriptionIds.add(subscription.id);
       }
@@ -372,11 +462,11 @@ export async function dispatchTodoPushNotifications(
       });
     }
   }
-  const completedEventIds = events.filter((event) => subscriptions.every((subscription) => (
+  const completedEventIds = subscriptions.length ? events.filter((event) => subscriptions.every((subscription) => (
     suppressesOriginDevice(event, subscription)
     || expiredSubscriptionIds.has(subscription.id)
     || settledDeliveries.has(deliveryKey(event.id, subscription.id))
-  ))).map((event) => event.id);
+  ))).map((event) => event.id) : [];
   if (completedEventIds.length) {
     const completedPlaceholders = completedEventIds.map(() => "?").join(",");
     await db.prepare(`
@@ -418,4 +508,70 @@ export async function dispatchTodoPushNotifications(
     expired,
     skipped: false,
   };
+  } finally {
+    await releasePushDispatchLease(db, lease);
+  }
+}
+
+export async function sendTestPushNotification(
+  db: D1Database,
+  environment: PushEnvironment,
+  deviceId: string,
+) {
+  if (!DEVICE_ID_PATTERN.test(deviceId)) throw new Error("A valid device is required.");
+  const vapidSubject = environment.VAPID_SUBJECT?.trim();
+  const vapidPublicKey = environment.VAPID_PUBLIC_KEY?.trim();
+  const vapidPrivateKey = environment.VAPID_PRIVATE_KEY?.trim();
+  if (!vapidSubject || !vapidPublicKey || !vapidPrivateKey) {
+    throw new Error("Push notifications are not configured yet.");
+  }
+  const [subscription, countRow] = await db.batch([
+    db.prepare(`
+      SELECT id, endpoint, p256dh, auth, device_id, failure_count,
+             last_success_at, last_failure_status, last_failure_at, disabled_at
+      FROM todo_push_subscriptions
+      WHERE device_id = ? AND disabled_at IS NULL
+      ORDER BY updated_at DESC
+      LIMIT 1
+    `).bind(deviceId),
+    db.prepare(`
+      SELECT COUNT(*) AS count
+      FROM todos
+      WHERE status = 'open' AND (snoozed_until IS NULL OR snoozed_until <= ?)
+    `).bind(new Date().toISOString()),
+  ]) as [D1Result<TodoPushSubscriptionRow>, D1Result<{ count: number }>];
+  const target = subscription.results[0];
+  if (!target) throw new Error("This device does not have an active push subscription.");
+  let response: Response | null = null;
+  try {
+    response = await sendPushGatewayRequest(target, {
+      title: "Push notifications are working",
+      body: "Dawar Todo can alert this device when tasks are ready.",
+      tag: `dawar-todo-test-${Date.now()}`,
+      url: "/settings",
+      openCount: Number(countRow.results[0]?.count ?? 0),
+    }, {
+      VAPID_SUBJECT: vapidSubject,
+      VAPID_PUBLIC_KEY: vapidPublicKey,
+      VAPID_PRIVATE_KEY: vapidPrivateKey,
+    });
+    const outcome = await markSubscriptionDelivery(db, target, response);
+    console.info("[todo-push] device test completed", {
+      deviceIdSuffix: deviceId.slice(-6),
+      status: response.status,
+      outcome,
+    });
+    if (outcome !== "sent") {
+      throw new Error(`The push service rejected this device (${response.status}). Re-enable notifications and try again.`);
+    }
+    return { sent: true, status: response.status };
+  } catch (error) {
+    if (!response) await markSubscriptionDelivery(db, target, null);
+    console.error("[todo-push] device test failed", {
+      deviceIdSuffix: deviceId.slice(-6),
+      status: response?.status ?? null,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
+  }
 }

@@ -1,5 +1,6 @@
 export interface SipRelayEnvironment {
   SITE_BASE_URL: string;
+  TODO_MAINTENANCE_SECRET?: string;
   OPENAI_API_KEY?: string;
   OPENAI_PROJECT_ID?: string;
   SIP_CONTROLLERS: DurableObjectNamespace;

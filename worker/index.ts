@@ -2,14 +2,8 @@
 import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } from "vinext/server/image-optimization";
 import handler from "vinext/server/app-router-entry";
 import { appAccessResponse } from "./access";
-import { processRecurringTodos } from "./recurring";
-import { ensureTodoDatabase, wakeExpiredSnoozedTodosInDatabase } from "../db/todos";
-import { dispatchTodoPushNotifications } from "../db/push-notifications";
+import { runTodoMinuteMaintenance } from "../db/minute-maintenance";
 import { handleTalkPhoneStream } from "./talk-phone-stream";
-import {
-  cleanupTalkPhoneRecordingSources,
-  processTalkPhoneRecordingQueue,
-} from "../db/talk-phone-recordings";
 
 interface Env {
   ASSETS: Fetcher;
@@ -78,53 +72,11 @@ const worker = {
   },
   async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext) {
     const scheduledAt = new Date(controller.scheduledTime);
-    console.info("[todo-recurring] scheduled event received", {
+    console.info("[todo-maintenance] native scheduled event received", {
       cron: controller.cron,
       scheduledTime: scheduledAt.toISOString(),
     });
-    ctx.waitUntil((async () => {
-      await ensureTodoDatabase();
-      try {
-        await processRecurringTodos(env.DB, scheduledAt, { source: "scheduled" });
-      } catch (error) {
-        console.error("[todo-recurring] scheduled processing failed; continuing maintenance", { error });
-      }
-      try {
-        const wokenIds = await wakeExpiredSnoozedTodosInDatabase(env.DB, scheduledAt);
-        if (wokenIds.length) {
-          console.info("[todo-push] scheduled snooze wake queued", {
-            count: wokenIds.length,
-            scheduledTime: scheduledAt.toISOString(),
-          });
-        }
-      } catch (error) {
-        console.error("[todo-push] scheduled snooze wake failed", { error });
-      }
-      try {
-        await dispatchTodoPushNotifications(env.DB, env, scheduledAt);
-      } catch (error) {
-        console.error("[todo-push] scheduled batch dispatch failed", {
-          scheduledTime: scheduledAt.toISOString(),
-          error,
-        });
-      }
-      try {
-        await processTalkPhoneRecordingQueue(scheduledAt);
-      } catch (error) {
-        console.error("[todo-talk-phone-recording] scheduled processing failed", {
-          scheduledTime: scheduledAt.toISOString(),
-          error,
-        });
-      }
-      try {
-        await cleanupTalkPhoneRecordingSources();
-      } catch (error) {
-        console.error("[todo-talk-phone-recording] scheduled source cleanup failed", {
-          scheduledTime: scheduledAt.toISOString(),
-          error,
-        });
-      }
-    })());
+    ctx.waitUntil(runTodoMinuteMaintenance(env, scheduledAt, "native-sites-cron"));
   },
 };
 

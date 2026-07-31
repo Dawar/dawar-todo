@@ -588,6 +588,49 @@ const worker = {
       webSocket: client,
     } as ResponseInit & { webSocket: WebSocket }) as WorkerResponse;
   },
+  async scheduled(controller: ScheduledController, environment: Env, context: ExecutionContext) {
+    const secret = environment.TODO_MAINTENANCE_SECRET?.trim();
+    if (!secret) {
+      console.error("[todo-maintenance-relay] scheduled trigger skipped because the shared secret is missing");
+      return;
+    }
+    const scheduledAt = new Date(controller.scheduledTime);
+    context.waitUntil((async () => {
+      const url = new URL("/api/internal/minute", baseUrl(environment));
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${secret}`,
+          "Content-Type": "application/json",
+          "User-Agent": "DawarTodoMaintenance/1.0",
+        },
+        body: JSON.stringify({ scheduledAt: scheduledAt.toISOString() }),
+        signal: AbortSignal.timeout(50_000),
+      });
+      const payload = await response.json().catch(() => ({})) as {
+        error?: string;
+        snoozedWoken?: number;
+        push?: { events?: number; sent?: number; failed?: number };
+      };
+      if (!response.ok) {
+        throw new Error(payload.error || `Sites maintenance failed (${response.status}).`);
+      }
+      console.info("[todo-maintenance-relay] scheduled minute completed", {
+        cron: controller.cron,
+        scheduledAt: scheduledAt.toISOString(),
+        snoozedWoken: payload.snoozedWoken ?? 0,
+        pushEvents: payload.push?.events ?? 0,
+        pushSent: payload.push?.sent ?? 0,
+        pushFailed: payload.push?.failed ?? 0,
+      });
+    })().catch((error) => {
+      console.error("[todo-maintenance-relay] scheduled minute failed", {
+        cron: controller.cron,
+        scheduledAt: scheduledAt.toISOString(),
+        error,
+      });
+    }));
+  },
 };
 
 export { SipCallController };

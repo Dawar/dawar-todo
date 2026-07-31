@@ -10,6 +10,7 @@ import {
 } from "../app-badge";
 import { copyTextToClipboard } from "../copy-to-clipboard";
 import { getOrCreateDeviceId, headersWithDeviceId } from "../device-id";
+import { ensureCurrentPushSubscription } from "../push-client";
 import { SiteHeader } from "../site-header";
 import {
   DEFAULT_QUICK_SNOOZE_PRESETS,
@@ -85,12 +86,6 @@ function pushCapabilityAvailable() {
   return "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
 }
 
-function pushApplicationServerKey(value: string) {
-  const padding = "=".repeat((4 - (value.length % 4)) % 4);
-  const decoded = window.atob((value + padding).replace(/-/g, "+").replace(/_/g, "/"));
-  return Uint8Array.from(decoded, (character) => character.charCodeAt(0));
-}
-
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const headers = options?.body ? { "Content-Type": "application/json", ...(options.headers ?? {}) } : options?.headers;
   const response = await fetch(path, {
@@ -133,6 +128,7 @@ export default function SettingsPage() {
   const [pushState, setPushState] = useState<PushState>("checking");
   const [pushPublicKey, setPushPublicKey] = useState("");
   const [updatingPush, setUpdatingPush] = useState(false);
+  const [testingPush, setTestingPush] = useState(false);
   const [talkPhoneProfile, setTalkPhoneProfile] = useState<TalkPhoneProfile | null>(null);
   const [talkPhonePin, setTalkPhonePin] = useState("");
   const [talkPhoneLoading, setTalkPhoneLoading] = useState(true);
@@ -200,7 +196,17 @@ export default function SettingsPage() {
           return;
         }
         try {
-          const config = await request<{ configured: boolean; publicKey: string | null; subscribed: boolean }>("/api/push", {
+          const config = await request<{
+            configured: boolean;
+            publicKey: string | null;
+            subscribed: boolean;
+            subscription?: {
+              active: boolean;
+              failureCount: number;
+              lastSuccessAt: string | null;
+              lastFailureStatus: number | null;
+            } | null;
+          }>("/api/push", {
             cache: "no-store",
           });
           if (!config.configured || !config.publicKey) {
@@ -213,13 +219,27 @@ export default function SettingsPage() {
             return;
           }
           const registration = await navigator.serviceWorker.ready;
-          const subscription = await registration.pushManager.getSubscription();
-          if (subscription && !config.subscribed) {
+          let subscription = await registration.pushManager.getSubscription();
+          const unhealthy = Boolean(
+            config.subscription
+            && (!config.subscription.active || config.subscription.failureCount > 0),
+          );
+          if (subscription && unhealthy) {
+            const repaired = await ensureCurrentPushSubscription(registration, config.publicKey, { forceRenew: true });
+            subscription = repaired.subscription;
+          }
+          if (!subscription && Notification.permission === "granted") {
+            const restored = await ensureCurrentPushSubscription(registration, config.publicKey);
+            subscription = restored.subscription;
+          }
+          if (subscription && (!config.subscribed || unhealthy)) {
             await request("/api/push", {
               method: "POST",
               body: JSON.stringify({ ...subscription.toJSON(), deviceId: getOrCreateDeviceId() }),
             });
-            console.info("[todo-push] existing browser subscription restored on server");
+            console.info("[todo-push] browser subscription restored on server", {
+              repairedServerFailure: unhealthy,
+            });
           }
           setPushState(subscription ? "enabled" : "disabled");
           console.info("[todo-push] settings state loaded", {
@@ -436,6 +456,25 @@ export default function SettingsPage() {
             : "Badge permission was not enabled.");
         }
       }
+      if (pushCapabilityAvailable() && Notification.permission === "granted") {
+        let publicKey = pushPublicKey;
+        if (!publicKey) {
+          const config = await request<{ configured: boolean; publicKey: string | null }>("/api/push", { cache: "no-store" });
+          if (config.configured && config.publicKey) {
+            publicKey = config.publicKey;
+            setPushPublicKey(publicKey);
+          }
+        }
+        if (publicKey) {
+          const registration = await navigator.serviceWorker.ready;
+          const { subscription } = await ensureCurrentPushSubscription(registration, publicKey);
+          await request("/api/push", {
+            method: "POST",
+            body: JSON.stringify({ ...subscription.toJSON(), deviceId: getOrCreateDeviceId() }),
+          });
+          setPushState("enabled");
+        }
+      }
 
       const { todos } = await request<{ todos: BadgeTodo[] }>("/api/todos");
       const count = currentOpenTaskCount(todos);
@@ -474,11 +513,15 @@ export default function SettingsPage() {
         setPushPublicKey(publicKey);
       }
       const registration = await navigator.serviceWorker.ready;
-      const existing = await registration.pushManager.getSubscription();
-      const subscription = existing ?? await registration.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: pushApplicationServerKey(publicKey),
-      });
+      const health = await request<{
+        subscription?: { active: boolean; failureCount: number } | null;
+      }>("/api/push", { cache: "no-store" });
+      const unhealthy = Boolean(health.subscription && (!health.subscription.active || health.subscription.failureCount > 0));
+      const { subscription, reused, renewed } = await ensureCurrentPushSubscription(
+        registration,
+        publicKey,
+        { forceRenew: unhealthy },
+      );
       await request("/api/push", {
         method: "POST",
         body: JSON.stringify({ ...subscription.toJSON(), deviceId: getOrCreateDeviceId() }),
@@ -486,7 +529,9 @@ export default function SettingsPage() {
       setPushState("enabled");
       setShareNotice({ tone: "success", text: "Push notifications enabled on this device." });
       console.info("[todo-push] notifications enabled", {
-        reusedBrowserSubscription: Boolean(existing),
+        reusedBrowserSubscription: reused,
+        renewedBrowserSubscription: renewed,
+        repairedServerFailure: unhealthy,
         permission,
       });
       const { todos } = await request<{ todos: BadgeTodo[] }>("/api/todos");
@@ -519,6 +564,24 @@ export default function SettingsPage() {
       console.error("[todo-push] notification disable failed", { error });
     } finally {
       setUpdatingPush(false);
+    }
+  }
+
+  async function testPushNotifications() {
+    if (testingPush || pushState !== "enabled") return;
+    setTestingPush(true);
+    setShareNotice(null);
+    try {
+      await request<{ sent: true; status: number }>("/api/push", { method: "PATCH" });
+      setShareNotice({ tone: "success", text: "Test notification sent to this device." });
+    } catch (error) {
+      setPushState("disabled");
+      setShareNotice({
+        tone: "error",
+        text: `${error instanceof Error ? error.message : "The test notification failed."} Enable notifications again to repair this device.`,
+      });
+    } finally {
+      setTestingPush(false);
     }
   }
 
@@ -806,15 +869,26 @@ export default function SettingsPage() {
           </div>
 
           {pushState === "enabled" ? (
-            <button
-              type="button"
-              onClick={() => void disablePushNotifications()}
-              disabled={updatingPush}
-              className="mt-4 inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-white px-4 text-sm font-semibold text-[#4f5c55] ring-1 ring-black/[0.1] transition hover:bg-[#f4f6f4] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#216e4e] disabled:opacity-45"
-            >
-              <ActionIcon name="badge" />
-              {updatingPush ? "Disabling…" : "Disable notifications"}
-            </button>
+            <div className="mt-4 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => void testPushNotifications()}
+                disabled={testingPush || updatingPush}
+                className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-[#216e4e] px-4 text-sm font-semibold text-white transition hover:bg-[#195d41] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#216e4e] disabled:opacity-45"
+              >
+                <ActionIcon name="badge" />
+                {testingPush ? "Sending…" : "Send test"}
+              </button>
+              <button
+                type="button"
+                onClick={() => void disablePushNotifications()}
+                disabled={updatingPush || testingPush}
+                className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-white px-4 text-sm font-semibold text-[#4f5c55] ring-1 ring-black/[0.1] transition hover:bg-[#f4f6f4] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#216e4e] disabled:opacity-45"
+              >
+                <ActionIcon name="badge" />
+                {updatingPush ? "Disabling…" : "Disable notifications"}
+              </button>
+            </div>
           ) : (
             <button
               type="button"

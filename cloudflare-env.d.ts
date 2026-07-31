@@ -9,6 +9,7 @@ declare namespace Cloudflare {
     VAPID_SUBJECT?: string;
     VAPID_PUBLIC_KEY?: string;
     VAPID_PRIVATE_KEY?: string;
+    TODO_MAINTENANCE_SECRET?: string;
     OPENAI_API_KEY?: string;
     OPENAI_PROJECT_ID?: string;
     OPENAI_REALTIME_MODEL?: string;
