@@ -7,6 +7,7 @@ import {
   PointerEvent as ReactPointerEvent,
   useEffect,
   useEffectEvent,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -1081,11 +1082,11 @@ const keyboardShortcutGroups = [
   {
     title: "Act on focused task",
     shortcuts: [
-      { keys: ["E"], label: "Edit task details" },
+      { keys: ["Enter"], label: "Edit task title" },
+      { keys: ["E"], label: "Edit description and details" },
       { keys: ["Space"], label: "Select or deselect" },
       { keys: ["D"], label: "Done or reopen" },
       { keys: ["S"], label: "Snooze or wake" },
-      { keys: ["A"], label: "Assign project" },
       { keys: ["P"], label: "Pin or unpin in Open" },
       { keys: ["Shift", "D"], label: "Delete with Undo" },
     ],
@@ -1145,9 +1146,11 @@ function TaskRow({
   timeZone,
   onSelect,
   onAction,
-  onProject,
+  onEdit,
   onPin,
-  onOpen,
+  onTitleChange,
+  onTitleBlur,
+  onTitleFocus,
   showPin,
   keyboardFocused,
   keyboardActionIndex,
@@ -1158,9 +1161,11 @@ function TaskRow({
   timeZone: string;
   onSelect: (todo: Todo) => void;
   onAction: (todo: Todo, action: TodoAction, source: "hover" | "swipe") => void;
-  onProject: (todo: Todo, source: "hover" | "swipe") => void;
+  onEdit: (todo: Todo, source: "hover" | "swipe") => void;
   onPin: (todo: Todo) => void;
-  onOpen: (todo: Todo) => void;
+  onTitleChange: (todo: Todo, title: string) => void;
+  onTitleBlur: (todo: Todo, title: string) => void;
+  onTitleFocus: (todo: Todo) => void;
   showPin: boolean;
   keyboardFocused: boolean;
   keyboardActionIndex: number;
@@ -1170,7 +1175,8 @@ function TaskRow({
   const [dragging, setDragging] = useState(false);
   const gesture = useRef<{ startX: number; startY: number; width: number } | null>(null);
   const offsetRef = useRef(0);
-  const suppressOpenRef = useRef(false);
+  const suppressTitleClickRef = useRef(false);
+  const titleRef = useRef<HTMLTextAreaElement | null>(null);
   const pending = todo.id < 0;
   const snoozed = isSnoozed(todo, now);
   const recurring = Boolean(todo.recurrenceCron);
@@ -1188,18 +1194,18 @@ function TaskRow({
   const longSwipe = swipeRatio >= 0.5;
   const revealAction = offset < 0
     ? (longSwipe ? leftSecondaryAction.label : primaryAction.label)
-    : (longSwipe ? "Delete" : "Assign project");
+    : (longSwipe ? "Delete" : "Edit");
   const revealIcon: ActionIconName = offset < 0
     ? (longSwipe ? leftSecondaryAction.icon : primaryAction.icon)
-    : (longSwipe ? "delete" : "move");
+    : (longSwipe ? "delete" : "edit");
   const revealClass = offset < 0
     ? longSwipe && (leftSecondaryAction.icon === "snooze" || leftSecondaryAction.icon === "wake") ? "bg-amber-500" : "bg-[#216e4e]"
     : longSwipe ? "bg-red-600" : "bg-slate-500";
 
   function pointerDown(event: ReactPointerEvent<HTMLDivElement>) {
     if (pending || event.pointerType !== "touch") return;
-    if ((event.target as HTMLElement).closest("input, [data-row-action], a, select, textarea")) return;
-    suppressOpenRef.current = false;
+    if ((event.target as HTMLElement).closest("input:not([data-inline-title]), [data-row-action], a, select, textarea:not([data-inline-title])")) return;
+    suppressTitleClickRef.current = false;
     const width = event.currentTarget.getBoundingClientRect().width;
     gesture.current = {
       startX: event.clientX,
@@ -1208,7 +1214,6 @@ function TaskRow({
     };
     setSwipeWidth(width);
     setDragging(true);
-    event.currentTarget.setPointerCapture(event.pointerId);
   }
 
   function pointerMove(event: ReactPointerEvent<HTMLDivElement>) {
@@ -1224,7 +1229,12 @@ function TaskRow({
       return;
     }
     const limit = active.width * 0.62;
-    if (Math.abs(deltaX) > 8) suppressOpenRef.current = true;
+    if (Math.abs(deltaX) > 8) {
+      suppressTitleClickRef.current = true;
+      if (!event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.setPointerCapture(event.pointerId);
+      }
+    }
     const nextOffset = Math.max(-limit, Math.min(limit, deltaX));
     offsetRef.current = nextOffset;
     setOffset(nextOffset);
@@ -1243,10 +1253,15 @@ function TaskRow({
     const direction = Math.sign(completedOffset);
     offsetRef.current = 0;
     setOffset(0);
+    if (suppressTitleClickRef.current) {
+      window.setTimeout(() => {
+        suppressTitleClickRef.current = false;
+      }, 0);
+    }
     if (ratio < 0.18 || direction === 0) return;
     if (direction < 0) onAction(todo, ratio >= 0.5 ? leftSecondaryAction.action : primaryAction.action, "swipe");
     else if (ratio >= 0.5) onAction(todo, "delete", "swipe");
-    else onProject(todo, "swipe");
+    else onEdit(todo, "swipe");
   }
 
   function cancelSwipe() {
@@ -1256,13 +1271,24 @@ function TaskRow({
     setOffset(0);
   }
 
-  const hoverActions: Array<{ action: TodoAction | "assign" | "pin"; label: string; icon: ActionIconName }> = [
+  const hoverActions: Array<{ action: TodoAction | "edit" | "pin"; label: string; icon: ActionIconName }> = [
     ...(showPin ? [{ action: "pin" as const, label: todo.pinned ? "Unpin" : "Pin", icon: todo.pinned ? "unpin" as const : "pin" as const }] : []),
     primaryAction,
     ...(todo.status === "open" && leftSecondaryAction.action !== primaryAction.action ? [leftSecondaryAction] : []),
-    { action: "assign", label: "Assign project", icon: "move" },
+    { action: "edit", label: "Edit", icon: "edit" },
     { action: "delete", label: "Delete", icon: "delete" },
   ];
+
+  function resizeTitle() {
+    const textarea = titleRef.current;
+    if (!textarea) return;
+    textarea.style.height = "auto";
+    textarea.style.height = `${textarea.scrollHeight}px`;
+  }
+
+  useLayoutEffect(() => {
+    resizeTitle();
+  }, [todo.title]);
 
   return (
     <li
@@ -1297,25 +1323,53 @@ function TaskRow({
           aria-label={`Select: ${todo.title}`}
           className={classNames("mt-0.5 h-5 w-5 shrink-0 cursor-pointer rounded border-[#9da6a0] accent-[#216e4e] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#216e4e]", pending && "animate-pulse")}
         />
-        <button
-          type="button"
-          data-keyboard-action-index="0"
-          onClick={() => {
-            if (suppressOpenRef.current) {
-              suppressOpenRef.current = false;
+        <div
+          onClick={(event) => {
+            if (suppressTitleClickRef.current) {
+              suppressTitleClickRef.current = false;
+              event.preventDefault();
+              titleRef.current?.blur();
               return;
             }
-            onOpen(todo);
+            if (event.target !== titleRef.current) {
+              titleRef.current?.focus();
+              titleRef.current?.setSelectionRange(todo.title.length, todo.title.length);
+            }
           }}
-          disabled={pending}
-          aria-label={`Open details: ${todo.title}`}
           className={classNames(
-            "min-w-0 flex-1 rounded-lg text-left transition-colors focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#216e4e] disabled:cursor-default",
+            "min-w-0 flex-1 rounded-lg text-left transition-colors",
             keyboardFocused && keyboardActionIndex === 0 && "bg-[#eaf3ed] text-[#195d41] ring-2 ring-[#216e4e]/20",
           )}
         >
           <div className="flex min-w-0 items-start gap-2">
-            <p className={classNames("min-w-0 flex-1 whitespace-pre-wrap text-[15px] leading-5 text-[#202522]", todo.status === "completed" && "text-[#8b928e] line-through")}>{todo.title}</p>
+            <textarea
+              ref={titleRef}
+              data-inline-title
+              data-keyboard-action-index="0"
+              value={todo.title}
+              onChange={(event) => {
+                onTitleChange(todo, event.target.value);
+                resizeTitle();
+              }}
+              onFocus={() => onTitleFocus(todo)}
+              onBlur={(event) => onTitleBlur(todo, event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  event.currentTarget.blur();
+                } else if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+                  event.preventDefault();
+                  event.currentTarget.blur();
+                }
+              }}
+              rows={1}
+              maxLength={2000}
+              aria-label={`Edit title: ${todo.title}`}
+              className={classNames(
+                "block min-h-5 min-w-0 flex-1 resize-none overflow-hidden border-0 bg-transparent p-0 text-[16px] leading-5 text-[#202522] outline-none placeholder:text-[#929994] focus:ring-0 sm:text-[15px]",
+                todo.status === "completed" && "text-[#8b928e] line-through",
+              )}
+            />
             {todo.attachmentCount > 0 && <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-[#eef2ef] px-1.5 py-0.5 text-[10px] font-medium text-[#68716b]"><ActionIcon name="attachment" className="h-3 w-3" />{todo.attachmentCount}</span>}
           </div>
           {todo.notes && <p className="mt-1 line-clamp-2 whitespace-pre-wrap text-xs leading-5 text-[#7c847f]">{todo.notes}</p>}
@@ -1330,7 +1384,7 @@ function TaskRow({
               {todo.offline && <span className="inline-flex min-h-[22px] items-center gap-1 rounded-full bg-orange-50 px-2 py-0.5 text-orange-700 ring-1 ring-inset ring-orange-200/70"><ActionIcon name="retry" className="h-3 w-3" />Waiting to sync</span>}
             </div>
           )}
-        </button>
+        </div>
         {showPin && !pending && !todo.offline && (
           <button type="button" data-row-action onClick={() => onPin(todo)} aria-label={`${todo.pinned ? "Unpin" : "Pin"}: ${todo.title}`} title={todo.pinned ? "Unpin" : "Pin"} className={classNames("grid h-9 w-9 shrink-0 place-items-center rounded-lg transition focus-visible:outline-2 focus-visible:outline-[#216e4e] md:hidden", todo.pinned ? "bg-[#eaf3ed] text-[#216e4e]" : "text-[#69716c] hover:bg-[#eef0ed]")}>
             <ActionIcon name={todo.pinned ? "unpin" : "pin"} className="h-[18px] w-[18px]" />
@@ -1344,7 +1398,7 @@ function TaskRow({
                 type="button"
                 data-row-action
                 data-keyboard-action-index={index + 1}
-                onClick={() => action === "assign" ? onProject(todo, "hover") : action === "pin" ? onPin(todo) : onAction(todo, action, "hover")}
+                onClick={() => action === "edit" ? onEdit(todo, "hover") : action === "pin" ? onPin(todo) : onAction(todo, action, "hover")}
                 aria-label={`${label}: ${todo.title}`}
                 title={label}
                 className={classNames(
@@ -1429,6 +1483,8 @@ export default function Home() {
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [keyboardTodoId, setKeyboardTodoId] = useState<number | null>(null);
   const [keyboardActionIndex, setKeyboardActionIndex] = useState(0);
+  const [inlineEditingId, setInlineEditingId] = useState<number | null>(null);
+  const [inlineEditingOrder, setInlineEditingOrder] = useState<number[] | null>(null);
   const [taskDialogPullDistance, setTaskDialogPullDistance] = useState(0);
   const [taskDialogPullReady, setTaskDialogPullReady] = useState(false);
   const [taskDialogPulling, setTaskDialogPulling] = useState(false);
@@ -1465,6 +1521,8 @@ export default function Home() {
   const persistTaskDraftRef = useRef<PersistTaskDraft | null>(null);
   const closeTaskDetailsRef = useRef<() => void>(() => undefined);
   const pendingTodoPatchesRef = useRef<Map<number, Record<string, unknown>>>(new Map());
+  const inlineTitleTimersRef = useRef<Map<number, number>>(new Map());
+  const inlineTitleLastValidRef = useRef<Map<number, string>>(new Map());
   const pendingActionPatchesRef = useRef<Map<number, Record<string, unknown>>>(new Map());
   const pendingDeletedIdsRef = useRef<Set<number>>(new Set());
   const pendingCompletionIdsRef = useRef<Set<number>>(new Set());
@@ -1479,6 +1537,11 @@ export default function Home() {
   const keyboardPreferredIndexRef = useRef(0);
   const taskDialogNestedOverlayOpen = projectDialog !== null || viewerIndex !== null || voiceTarget !== null || customSnoozeDialog !== null;
   const overlayOpen = editingId !== null || projectSelectorOpen || projectDialog !== null || newProjectOpen || projectDeleteDialog !== null || filtersOpen || viewerIndex !== null || voiceTarget !== null || shortcutsOpen || customSnoozeDialog !== null;
+
+  useEffect(() => () => {
+    inlineTitleTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+    inlineTitleTimersRef.current.clear();
+  }, []);
 
   function rebuildPendingActionState(actions: OfflineTaskAction[]) {
     const patches = new Map<number, Record<string, unknown>>();
@@ -2402,11 +2465,19 @@ export default function Home() {
     const rows = todos.filter((todo) => {
       const searchable = [todo.title, todo.notes, todo.project, todo.context].filter(Boolean).join(" ").toLowerCase();
       return matchesView(todo, view, now)
-        && (!needle || searchable.includes(needle))
+        && (!needle || todo.id === inlineEditingId || searchable.includes(needle))
         && (!project || (project === UNASSIGNED_PROJECT ? !todo.project : todo.project === project))
         && (!priority || todo.priority === Number(priority));
     });
+    const stableOrder = inlineEditingOrder ? new Map(inlineEditingOrder.map((id, index) => [id, index])) : null;
     return [...rows].sort((a, b) => {
+      if (stableOrder) {
+        const aIndex = stableOrder.get(a.id);
+        const bIndex = stableOrder.get(b.id);
+        if (aIndex !== undefined && bIndex !== undefined) return aIndex - bIndex;
+        if (aIndex !== undefined) return -1;
+        if (bIndex !== undefined) return 1;
+      }
       if (sort === "priority") return a.priority - b.priority || compareSmart(a, b);
       if (sort === "due") return dueDateSortValue(a.dueDate) - dueDateSortValue(b.dueDate);
       if (sort === "newest") return new Date(b.createdAt).valueOf() - new Date(a.createdAt).valueOf();
@@ -2414,7 +2485,7 @@ export default function Home() {
       if (sort === "az") return a.title.localeCompare(b.title);
       return compareSmart(a, b);
     });
-  }, [todos, view, query, project, priority, sort, now]);
+  }, [todos, view, query, project, priority, sort, now, inlineEditingId, inlineEditingOrder]);
 
   const pinnedOpenTodos = view === "open" ? filtered.filter((todo) => todo.pinned) : [];
   const regularOpenTodos = view === "open" ? filtered.filter((todo) => !todo.pinned) : filtered;
@@ -2534,8 +2605,9 @@ export default function Home() {
       const usable = todo.id > 0 && !todo.offline;
       if (key === "Enter") {
         event.preventDefault();
-        const action = document.querySelector<HTMLButtonElement>(`[data-keyboard-task-id="${todo.id}"] [data-keyboard-action-index="${keyboardActionIndex}"]`);
-        action?.click();
+        const action = document.querySelector<HTMLElement>(`[data-keyboard-task-id="${todo.id}"] [data-keyboard-action-index="${keyboardActionIndex}"]`);
+        if (action instanceof HTMLTextAreaElement) action.focus({ preventScroll: true });
+        else action?.click();
         console.info("[todo-keyboard] highlighted action executed", { id: todo.id, actionIndex: keyboardActionIndex, label: action?.getAttribute("aria-label") ?? null });
       } else if (lowerKey === "e") {
         event.preventDefault();
@@ -2559,10 +2631,6 @@ export default function Home() {
         const action: TodoAction = isSnoozed(todo, now) ? "unsnooze" : "snooze";
         taskAction(todo, action, "hover");
         console.info("[todo-keyboard] quick action executed", { id: todo.id, action });
-      } else if (lowerKey === "a" && usable) {
-        event.preventDefault();
-        assignTaskProject(todo, "hover");
-        console.info("[todo-keyboard] quick action executed", { id: todo.id, action: "assign" });
       } else if (lowerKey === "p" && usable && view === "open") {
         event.preventDefault();
         void togglePin(todo);
@@ -3297,8 +3365,13 @@ export default function Home() {
               },
             }),
           });
-          await deleteOfflineTodoMutation(mutation.todoId);
-          pendingTodoPatchesRef.current.delete(mutation.todoId);
+          const removedQueuedMutation = await deleteOfflineTodoMutation(mutation.todoId, mutation.mutationId);
+          if (removedQueuedMutation) {
+            pendingTodoPatchesRef.current.delete(mutation.todoId);
+          } else {
+            const newerMutation = (await listOfflineTodoMutations()).find((candidate) => candidate.todoId === mutation.todoId);
+            if (newerMutation) pendingTodoPatchesRef.current.set(mutation.todoId, newerMutation.patch);
+          }
           setTodos((current) => current.map((todo) => todo.id === result.todo.id ? applyPendingOverlays(result.todo) : todo));
           if (editingIdRef.current === mutation.todoId && editDraftRef.current) {
             const serverDraft = todoDraft(result.todo);
@@ -3320,7 +3393,7 @@ export default function Home() {
             setEditSaveMessage(result.appliedFields.length < Object.keys(mutation.patch).length ? "Synced · newer remote changes kept" : "Saved automatically");
           }
           syncedEdits += 1;
-          setOfflineEditCount(Math.max(0, mutations.length - syncedEdits));
+          setOfflineEditCount((await listOfflineTodoMutations()).length);
           setOnline(true);
           setConnectionQuality("online");
           console.info("[todo-offline] queued edit synchronized", {
@@ -3328,6 +3401,7 @@ export default function Home() {
             mutationId: mutation.mutationId,
             requestedFields: Object.keys(mutation.patch),
             appliedFields: result.appliedFields,
+            newerMutationPreserved: !removedQueuedMutation,
           });
         } catch (error) {
           const status = (error as Error & { status?: number }).status;
@@ -4274,6 +4348,116 @@ export default function Home() {
     }
   }
 
+  async function persistInlineTitle(todoId: number, title: string, source: "debounce" | "blur" | "restore") {
+    if (!title.trim()) return;
+    const startedAt = Date.now();
+    try {
+      if (todoId < 1) {
+        const updated = await updateOfflineTodo(todoId, { title });
+        if (!updated) throw new Error("The local task could not be found.");
+        console.info("[todo-inline-edit] local title saved", {
+          todoId,
+          source,
+          titleLength: title.length,
+          durationMs: Date.now() - startedAt,
+        });
+        return;
+      }
+      const timestamp = new Date().toISOString();
+      const record = await saveOfflineTodoMutation(todoId, { title }, { title: timestamp });
+      pendingTodoPatchesRef.current.set(todoId, record.patch);
+      const mutations = await listOfflineTodoMutations();
+      setOfflineEditCount(mutations.length);
+      void syncOfflineQueueRef.current?.();
+      console.info("[todo-inline-edit] title committed to durable outbox", {
+        todoId,
+        source,
+        mutationId: record.mutationId,
+        titleLength: title.length,
+        connectionQuality,
+        queuedEdits: mutations.length,
+        durationMs: Date.now() - startedAt,
+      });
+    } catch (error) {
+      setNotice({
+        tone: "error",
+        text: error instanceof Error ? error.message : "The task title could not be saved locally.",
+        taskPreview: title,
+      });
+      console.error("[todo-inline-edit] title local commit failed", {
+        todoId,
+        source,
+        titleLength: title.length,
+        durationMs: Date.now() - startedAt,
+        error,
+      });
+    }
+  }
+
+  function scheduleInlineTitleSave(todo: Todo, title: string) {
+    const existingTimer = inlineTitleTimersRef.current.get(todo.id);
+    if (existingTimer !== undefined) window.clearTimeout(existingTimer);
+    inlineTitleTimersRef.current.delete(todo.id);
+    if (!title.trim()) return;
+    const timer = window.setTimeout(() => {
+      inlineTitleTimersRef.current.delete(todo.id);
+      void persistInlineTitle(todo.id, title, "debounce");
+    }, 700);
+    inlineTitleTimersRef.current.set(todo.id, timer);
+  }
+
+  function updateInlineTitle(todo: Todo, title: string) {
+    if (!inlineTitleLastValidRef.current.has(todo.id) && todo.title.trim()) {
+      inlineTitleLastValidRef.current.set(todo.id, todo.title);
+    }
+    if (title.trim()) inlineTitleLastValidRef.current.set(todo.id, title);
+    if (todo.id > 0) {
+      const pending = pendingTodoPatchesRef.current.get(todo.id) ?? {};
+      pendingTodoPatchesRef.current.set(todo.id, { ...pending, title });
+    }
+    setTodos((current) => current.map((item) => item.id === todo.id ? { ...item, title } : item));
+    scheduleInlineTitleSave(todo, title);
+  }
+
+  function focusInlineTitle(todo: Todo) {
+    if (todo.title.trim()) inlineTitleLastValidRef.current.set(todo.id, todo.title);
+    setInlineEditingId(todo.id);
+    setInlineEditingOrder(displayedTodos.map((item) => item.id));
+    setKeyboardTodoId(todo.id);
+    setKeyboardActionIndex(0);
+    console.info("[todo-inline-edit] title editing started", {
+      todoId: todo.id,
+      titleLength: todo.title.length,
+      localOnly: todo.id < 1 || Boolean(todo.offline),
+      view,
+    });
+  }
+
+  function blurInlineTitle(todo: Todo, title: string) {
+    const existingTimer = inlineTitleTimersRef.current.get(todo.id);
+    if (existingTimer !== undefined) window.clearTimeout(existingTimer);
+    inlineTitleTimersRef.current.delete(todo.id);
+    if (!title.trim()) {
+      const restoredTitle = inlineTitleLastValidRef.current.get(todo.id) || "Untitled task";
+      if (todo.id > 0) {
+        const pending = pendingTodoPatchesRef.current.get(todo.id) ?? {};
+        pendingTodoPatchesRef.current.set(todo.id, { ...pending, title: restoredTitle });
+      }
+      setTodos((current) => current.map((item) => item.id === todo.id ? { ...item, title: restoredTitle } : item));
+      setNotice({ tone: "error", text: "A task title is required.", taskPreview: restoredTitle });
+      void persistInlineTitle(todo.id, restoredTitle, "restore");
+      console.warn("[todo-inline-edit] empty title restored", {
+        todoId: todo.id,
+        restoredLength: restoredTitle.length,
+      });
+    } else {
+      void persistInlineTitle(todo.id, title, "blur");
+    }
+    inlineTitleLastValidRef.current.delete(todo.id);
+    setInlineEditingId(null);
+    setInlineEditingOrder(null);
+  }
+
   persistTaskDraftRef.current = persistTaskDraft;
   closeTaskDetailsRef.current = closeTaskDetails;
 
@@ -4325,8 +4509,9 @@ export default function Home() {
     }
   }
 
-  function assignTaskProject(todo: Todo, source: "hover" | "swipe") {
-    openProjectAssignment([todo.id], source);
+  function editTaskDetails(todo: Todo, source: "hover" | "swipe") {
+    console.info("[todo-ui] task edit requested", { id: todo.id, source });
+    openTaskDetails(todo);
   }
 
   function detailAction(action: TodoAction) {
@@ -4814,9 +4999,11 @@ export default function Home() {
                     timeZone={scheduleTimeZone}
                     onSelect={toggleSelected}
                     onAction={taskAction}
-                    onProject={assignTaskProject}
+                    onEdit={editTaskDetails}
                     onPin={togglePin}
-                    onOpen={openTaskDetails}
+                    onTitleChange={updateInlineTitle}
+                    onTitleBlur={blurInlineTitle}
+                    onTitleFocus={focusInlineTitle}
                     showPin
                     keyboardFocused={keyboardTodoId === todo.id}
                     keyboardActionIndex={keyboardTodoId === todo.id ? keyboardActionIndex : 0}
@@ -4837,9 +5024,11 @@ export default function Home() {
                     timeZone={scheduleTimeZone}
                     onSelect={toggleSelected}
                     onAction={taskAction}
-                    onProject={assignTaskProject}
+                    onEdit={editTaskDetails}
                     onPin={togglePin}
-                    onOpen={openTaskDetails}
+                    onTitleChange={updateInlineTitle}
+                    onTitleBlur={blurInlineTitle}
+                    onTitleFocus={focusInlineTitle}
                     showPin={view === "open"}
                     keyboardFocused={keyboardTodoId === todo.id}
                     keyboardActionIndex={keyboardTodoId === todo.id ? keyboardActionIndex : 0}
@@ -5196,22 +5385,7 @@ export default function Home() {
                   <SnoozeStatusBadge value={editingTodo.snoozedUntil} now={now} timeZone={scheduleTimeZone} />
                 </div>
               )}
-              <label className="block min-w-0">
-                <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-[#69716c]">Task</span>
-                <textarea
-                  value={editDraft.title}
-                  onChange={(event) => updateEditDraftField("title", event.target.value)}
-                  onPaste={(event) => {
-                    const files = clipboardAttachments(event);
-                    if (files.length) void queueDetailAttachments(files);
-                  }}
-                  rows={4}
-                  maxLength={2000}
-                  className="min-h-28 w-full min-w-0 max-w-full resize-y rounded-xl border border-black/[0.1] bg-white px-3 py-2.5 text-[16px] leading-6 text-[#202522] outline-none focus:border-[#216e4e]/50 focus:ring-3 focus:ring-[#216e4e]/10"
-                />
-              </label>
-
-              <div className="mt-4 block min-w-0">
+              <div className="block min-w-0">
                 <div className="mb-1.5 flex items-center justify-between gap-3">
                   <span className="text-xs font-semibold uppercase tracking-wide text-[#69716c]">Description</span>
                   <button

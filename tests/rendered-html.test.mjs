@@ -292,7 +292,9 @@ test("ships desktop task keyboard navigation, direct actions, view switching, an
   assert.match(page, /key === "ArrowLeft" \|\| key === "ArrowRight"/);
   assert.match(page, /const numberedView = \/\^\[1-4\]\$\//);
   assert.match(page, /lowerKey === "d" && event\.shiftKey/);
-  assert.match(page, /lowerKey === "a" && usable/);
+  assert.match(page, /lowerKey === "e"/);
+  assert.match(page, /action instanceof HTMLTextAreaElement\) action\.focus/);
+  assert.doesNotMatch(page, /lowerKey === "a" && usable/);
   assert.match(page, /const undoShortcut = \(event\.metaKey \|\| event\.ctrlKey\)/);
   assert.match(page, /requestNoticeUndo\(notice\)/);
   assert.match(page, /keys: \["⌘\/Ctrl", "Z"\], label: "Undo last task action"/);

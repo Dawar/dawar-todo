@@ -360,9 +360,41 @@ export async function listOfflineTodoMutations() {
   return records.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 }
 
-export async function deleteOfflineTodoMutation(todoId: number) {
-  await runRequest(MUTATION_STORE, "readwrite", (store) => store.delete(todoId));
-  console.info("[todo-offline] synchronized task edit removed", { todoId });
+export async function deleteOfflineTodoMutation(todoId: number, expectedMutationId?: string) {
+  if (!expectedMutationId) {
+    await runRequest(MUTATION_STORE, "readwrite", (store) => store.delete(todoId));
+    console.info("[todo-offline] synchronized task edit removed", { todoId, conditional: false });
+    return true;
+  }
+  const removed = await openDatabase().then((database) => new Promise<boolean>((resolve, reject) => {
+    const transaction = database.transaction(MUTATION_STORE, "readwrite");
+    const store = transaction.objectStore(MUTATION_STORE);
+    const read = store.get(todoId);
+    let matched = false;
+    read.onsuccess = () => {
+      const current = read.result as OfflineTodoMutation | undefined;
+      if (current?.mutationId === expectedMutationId) {
+        matched = true;
+        store.delete(todoId);
+      }
+    };
+    read.onerror = () => reject(read.error ?? new Error("Offline task edit could not be inspected."));
+    transaction.oncomplete = () => {
+      database.close();
+      resolve(matched);
+    };
+    transaction.onerror = () => {
+      database.close();
+      reject(transaction.error ?? new Error("Offline task edit cleanup failed."));
+    };
+  }));
+  console.info("[todo-offline] synchronized task edit cleanup checked", {
+    todoId,
+    expectedMutationId,
+    removed,
+    newerMutationPreserved: !removed,
+  });
+  return removed;
 }
 
 export async function saveOfflineTaskAction(
