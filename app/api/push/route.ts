@@ -82,7 +82,7 @@ export async function PATCH(request: Request) {
   } catch (error) {
     const message = error instanceof Error ? error.message : "The test notification could not be sent.";
     return Response.json({ error: message }, {
-      status: /valid|active|configured|re-enable|rejected/i.test(message) ? 400 : 500,
+      status: /valid|active|configured|re-enable/i.test(message) ? 400 : 502,
       headers: { "Cache-Control": "private, no-store" },
     });
   }

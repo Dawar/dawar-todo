@@ -575,10 +575,19 @@ export default function SettingsPage() {
       await request<{ sent: true; status: number }>("/api/push", { method: "PATCH" });
       setShareNotice({ tone: "success", text: "Test notification sent to this device." });
     } catch (error) {
-      setPushState("disabled");
+      const health = await request<{
+        subscribed: boolean;
+        subscription?: { active: boolean } | null;
+      }>("/api/push", { cache: "no-store" }).catch(() => null);
+      const stillEnabled = Boolean(health?.subscribed && health.subscription?.active);
+      setPushState(stillEnabled ? "enabled" : "disabled");
       setShareNotice({
         tone: "error",
-        text: `${error instanceof Error ? error.message : "The test notification failed."} Enable notifications again to repair this device.`,
+        text: error instanceof Error ? error.message : "The test notification failed.",
+      });
+      console.error("[todo-push] test notification failed", {
+        browserSubscriptionStillEnabled: stillEnabled,
+        error: error instanceof Error ? error.message : String(error),
       });
     } finally {
       setTestingPush(false);

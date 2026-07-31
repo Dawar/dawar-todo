@@ -74,7 +74,11 @@ test("wires device push subscriptions, minute batching, origin suppression, and 
   assert.match(pushDatabase, /`\$\{events\.length\} tasks are ready`/);
   assert.match(pushDatabase, /generateRequestDetails/);
   assert.match(pushDatabase, /contentEncoding: "aes128gcm"/);
-  assert.match(pushDatabase, /\[400, 401, 403, 404, 410\]\.includes/);
+  assert.match(pushDatabase, /status === 404 \|\| status === 410/);
+  assert.match(pushDatabase, /INVALID_SUBSCRIPTION_REASONS/);
+  assert.match(pushDatabase, /isApplePushEndpoint/);
+  assert.match(pushDatabase, /if \(!appleEndpoint\)/);
+  assert.match(pushDatabase, /readPushProviderReason/);
   assert.match(pushDatabase, /TTL: 86_400/);
   assert.match(pushDatabase, /subscriptions\.length \? events\.filter/);
   assert.match(pushDatabase, /push_dispatch_lease/);

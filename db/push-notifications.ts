@@ -45,6 +45,12 @@ const DEVICE_ID_PATTERN = /^[0-9a-f-]{36}$/i;
 const MAX_BATCH_EVENTS = 90;
 const PUSH_LEASE_KEY = "push_dispatch_lease";
 const PUSH_LEASE_MS = 45_000;
+const INVALID_SUBSCRIPTION_REASONS = new Set([
+  "baddevicetoken",
+  "expiredtoken",
+  "invalidsubscription",
+  "unregistered",
+]);
 const generatePushRequest = webPush.generateRequestDetails as unknown as (
   subscription: PushSubscription,
   payload: string,
@@ -55,6 +61,36 @@ const generatePushRequest = webPush.generateRequestDetails as unknown as (
   headers: Record<string, string>;
   body: Uint8Array;
 };
+
+function isApplePushEndpoint(endpoint: string) {
+  const hostname = new URL(endpoint).hostname.toLowerCase();
+  return hostname === "web.push.apple.com" || hostname.endsWith(".push.apple.com");
+}
+
+function sanitizedPushProviderReason(value: unknown) {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().replace(/[^a-z0-9_.-]/gi, "").slice(0, 80);
+  return normalized || null;
+}
+
+async function readPushProviderReason(response: Response) {
+  if (response.ok) return null;
+  try {
+    const text = await response.clone().text();
+    if (!text || text.length > 4_096) return null;
+    const payload = JSON.parse(text) as { reason?: unknown; error?: unknown; code?: unknown };
+    return sanitizedPushProviderReason(payload.reason)
+      ?? sanitizedPushProviderReason(payload.error)
+      ?? sanitizedPushProviderReason(payload.code);
+  } catch {
+    return null;
+  }
+}
+
+function responseInvalidatesSubscription(status: number, providerReason: string | null) {
+  if (status === 404 || status === 410) return true;
+  return providerReason ? INVALID_SUBSCRIPTION_REASONS.has(providerReason.toLowerCase()) : false;
+}
 
 function isoMinuteCeiling(date: Date) {
   const time = date.valueOf();
@@ -272,19 +308,29 @@ async function sendPushGatewayRequest(
     expirationTime: null,
     keys: { p256dh: subscription.p256dh, auth: subscription.auth },
   };
-  const request = generatePushRequest(pushSubscription, JSON.stringify(payload), {
+  const appleEndpoint = isApplePushEndpoint(subscription.endpoint);
+  const requestOptions: RequestOptions = {
     TTL: 86_400,
-    urgency: "normal",
-    topic: "dawar-todo-open-items",
     contentEncoding: "aes128gcm",
     vapidDetails: {
       subject: environment.VAPID_SUBJECT,
       publicKey: environment.VAPID_PUBLIC_KEY,
       privateKey: environment.VAPID_PRIVATE_KEY,
     },
-  });
+  };
+  if (!appleEndpoint) {
+    requestOptions.urgency = "normal";
+    requestOptions.topic = "dawar-todo-open-items";
+  }
+  const request = generatePushRequest(pushSubscription, JSON.stringify(payload), requestOptions);
   const requestBody = new Uint8Array(request.body.byteLength);
   requestBody.set(request.body);
+  console.info("[todo-push] encrypted gateway request prepared", {
+    provider: appleEndpoint ? "apple-web-push" : "web-push",
+    contentEncoding: request.headers["Content-Encoding"] ?? request.headers["content-encoding"] ?? null,
+    payloadBytes: requestBody.byteLength,
+    optionalDeliveryHeaders: !appleEndpoint,
+  });
   return fetch(request.endpoint, {
     method: request.method,
     headers: request.headers,
@@ -296,6 +342,7 @@ async function markSubscriptionDelivery(
   db: D1Database,
   subscription: TodoPushSubscriptionRow,
   response: Response | null,
+  providerReason: string | null = null,
 ) {
   if (response?.ok) {
     await db.prepare(`
@@ -310,7 +357,7 @@ async function markSubscriptionDelivery(
     return "sent" as const;
   }
   const invalid = response
-    ? [400, 401, 403, 404, 410].includes(response.status)
+    ? responseInvalidatesSubscription(response.status, providerReason)
     : false;
   await db.prepare(`
     UPDATE todo_push_subscriptions
@@ -426,6 +473,7 @@ export async function dispatchTodoPushNotifications(
       continue;
     }
     let response: Response | null = null;
+    let providerReason: string | null = null;
     try {
       const payload = notificationPayload(
         eligibleEvents,
@@ -436,7 +484,8 @@ export async function dispatchTodoPushNotifications(
         VAPID_PUBLIC_KEY: vapidPublicKey,
         VAPID_PRIVATE_KEY: vapidPrivateKey,
       });
-      const outcome = await markSubscriptionDelivery(db, subscription, response);
+      providerReason = await readPushProviderReason(response);
+      const outcome = await markSubscriptionDelivery(db, subscription, response, providerReason);
       if (outcome === "sent") {
         sent += 1;
         await recordSuccessfulDeliveries(db, subscription.id, eligibleEvents);
@@ -451,13 +500,15 @@ export async function dispatchTodoPushNotifications(
         eligibleEvents: eligibleEvents.length,
         status: response.status,
         outcome,
+        providerReason,
       });
     } catch (error) {
       failed += 1;
-      await markSubscriptionDelivery(db, subscription, response);
+      await markSubscriptionDelivery(db, subscription, response, providerReason);
       console.error("[todo-push] device batch delivery failed", {
         subscriptionId: subscription.id,
         eligibleEvents: eligibleEvents.length,
+        providerReason,
         error: error instanceof Error ? error.message : String(error),
       });
     }
@@ -543,6 +594,7 @@ export async function sendTestPushNotification(
   const target = subscription.results[0];
   if (!target) throw new Error("This device does not have an active push subscription.");
   let response: Response | null = null;
+  let providerReason: string | null = null;
   try {
     response = await sendPushGatewayRequest(target, {
       title: "Push notifications are working",
@@ -555,14 +607,20 @@ export async function sendTestPushNotification(
       VAPID_PUBLIC_KEY: vapidPublicKey,
       VAPID_PRIVATE_KEY: vapidPrivateKey,
     });
-    const outcome = await markSubscriptionDelivery(db, target, response);
+    providerReason = await readPushProviderReason(response);
+    const outcome = await markSubscriptionDelivery(db, target, response, providerReason);
     console.info("[todo-push] device test completed", {
       deviceIdSuffix: deviceId.slice(-6),
       status: response.status,
       outcome,
+      providerReason,
     });
     if (outcome !== "sent") {
-      throw new Error(`The push service rejected this device (${response.status}). Re-enable notifications and try again.`);
+      const reason = providerReason ? `: ${providerReason}` : "";
+      const repair = outcome === "invalid"
+        ? " Re-enable notifications to renew this device."
+        : " The browser subscription is still enabled; this is a server delivery problem.";
+      throw new Error(`The push service rejected the delivery (${response.status}${reason}).${repair}`);
     }
     return { sent: true, status: response.status };
   } catch (error) {
@@ -570,6 +628,7 @@ export async function sendTestPushNotification(
     console.error("[todo-push] device test failed", {
       deviceIdSuffix: deviceId.slice(-6),
       status: response?.status ?? null,
+      providerReason,
       error: error instanceof Error ? error.message : String(error),
     });
     throw error;
