@@ -66,8 +66,9 @@ test("wires device push subscriptions, minute batching, origin suppression, and 
   assert.match(database, /'snooze:' \|\| id \|\| ':' \|\| snoozed_until/);
   assert.match(database, /queueTodoPushEvent\(db, \{[\s\S]*type: "task_created"/);
   assert.match(database, /originDeviceId: input\.originDeviceId/);
-  assert.match(pushDatabase, /Math\.ceil\(time \/ 60_000\) \* 60_000/);
-  assert.match(pushDatabase, /type === "snooze_expired" \? isoMinuteCeiling\(createdAt\) : createdAt\.toISOString\(\)/);
+  assert.match(pushDatabase, /const deliverAfter = createdAt\.toISOString\(\)/);
+  assert.doesNotMatch(pushDatabase, /isoMinuteCeiling|eventDeliveryTime/);
+  assert.match(database, /const deliverAfter = now\.toISOString\(\)/);
   assert.match(pushDatabase, /event\.event_type === "task_created"[\s\S]*event\.origin_device_id === subscription\.device_id/);
   assert.match(pushDatabase, /INSERT OR IGNORE INTO todo_push_deliveries/);
   assert.match(pushDatabase, /pendingRetryEvents: events\.length - completedEventIds\.length/);

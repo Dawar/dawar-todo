@@ -92,15 +92,6 @@ function responseInvalidatesSubscription(status: number, providerReason: string 
   return providerReason ? INVALID_SUBSCRIPTION_REASONS.has(providerReason.toLowerCase()) : false;
 }
 
-function isoMinuteCeiling(date: Date) {
-  const time = date.valueOf();
-  return new Date(Math.ceil(time / 60_000) * 60_000).toISOString();
-}
-
-function eventDeliveryTime(type: TodoPushEventType, createdAt: Date) {
-  return type === "snooze_expired" ? isoMinuteCeiling(createdAt) : createdAt.toISOString();
-}
-
 function deliveryKey(eventId: string, subscriptionId: string) {
   return `${eventId}:${subscriptionId}`;
 }
@@ -241,7 +232,7 @@ export async function queueTodoPushEvent(
   const originDeviceId = event.originDeviceId && DEVICE_ID_PATTERN.test(event.originDeviceId)
     ? event.originDeviceId
     : null;
-  const deliverAfter = eventDeliveryTime(event.type, createdAt);
+  const deliverAfter = createdAt.toISOString();
   const result = await db.prepare(`
     INSERT OR IGNORE INTO todo_push_events (
       id, event_type, todo_id, todo_title, origin_device_id, created_at, deliver_after

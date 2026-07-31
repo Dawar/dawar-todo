@@ -909,7 +909,10 @@ export async function listTodos(): Promise<Todo[]> {
 }
 
 export async function wakeExpiredSnoozedTodosInDatabase(db: D1Database, now = new Date()) {
-  const deliverAfter = new Date(Math.ceil(now.valueOf() / 60_000) * 60_000).toISOString();
+  // This query already collects every snooze due in the current maintenance run.
+  // Make the resulting batch immediately dispatchable rather than holding it for
+  // a second minute-worker invocation.
+  const deliverAfter = now.toISOString();
   const [queued, result] = await db.batch([
     db.prepare(`
       INSERT OR IGNORE INTO todo_push_events (
