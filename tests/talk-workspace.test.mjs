@@ -115,6 +115,9 @@ test("ships the signed-in WebRTC Talk chief-of-staff workspace", async () => {
   assert.match(workspace, /RTCPeerConnection/);
   assert.match(workspace, /addTransceiver\("audio", \{ direction: "sendrecv" \}\)/);
   assert.match(workspace, /conversation\.item\.create/);
+  assert.match(workspace, /realtimeConversationItemId\(clientId\)/);
+  assert.doesNotMatch(workspace, /item:\s*\{\s*id: clientId,/);
+  assert.match(workspace, /text conversation item sent/);
   assert.match(workspace, /output_modalities: \["text"\]/);
   assert.match(workspace, /replaceTrack\(track\)/);
   assert.match(workspace, /Text session active/);

@@ -28,6 +28,7 @@ import {
 } from "../assistant-attachment-controls";
 import { ActionIcon } from "../action-icon";
 import { SiteHeader } from "../site-header";
+import { realtimeConversationItemId } from "../../lib/realtime-item-id";
 
 type TalkState =
   | "ready"
@@ -944,15 +945,23 @@ export function TalkWorkspace() {
     const attachmentInstruction = attachmentIds.length
       ? `\n\nThe user attached task attachment IDs: ${attachmentIds.join(", ")}. Inspect them when relevant.`
       : "";
-    sendEvent({
-      event_id: `todo-input-${clientId}`,
+    const realtimeItemId = realtimeConversationItemId(clientId);
+    const sent = sendEvent({
+      event_id: `todo-input-${realtimeItemId}`,
       type: "conversation.item.create",
       item: {
-        id: clientId,
+        id: realtimeItemId,
         type: "message",
         role: "user",
         content: [{ type: "input_text", text: `${text || "Review the attached items."}${attachmentInstruction}` }],
       },
+    });
+    if (!sent) throw new Error("The realtime session is not ready. Try sending again.");
+    console.info("[todo-talk-ui] text conversation item sent", {
+      threadId: selectedThreadIdRef.current,
+      clientIdSuffix: clientId.slice(-8),
+      realtimeItemIdLength: realtimeItemId.length,
+      attachmentCount: attachmentIds.length,
     });
     await persistFinal("user", clientId, text || "Shared attachments", {
       channel: "text",
