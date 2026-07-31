@@ -80,6 +80,7 @@ test("ships the signed-in WebRTC Talk chief-of-staff workspace", async () => {
   assert.match(runtime, /Action acknowledgements should usually be one to five words/);
   assert.match(runtime, /Own the assistant role completely/);
   assert.match(runtime, /Act first and acknowledge only after tools confirm/);
+  assert.match(runtime, /Treat task focus as your internal working context, not a user-controlled setting/);
   assert.match(runtime, /Never ask whether the user wants you to perform an obvious task action/);
   assert.match(runtime, /Undo is a safety net, not a permission gate/);
   assert.match(runtime, /done, finished, handled, sent, resolved/);
@@ -129,7 +130,11 @@ test("ships the signed-in WebRTC Talk chief-of-staff workspace", async () => {
   assert.match(workspace, /Waiting to sync/);
   assert.match(workspace, /talk-queue|saveOfflineTalkMessage/);
   assert.match(workspace, /AssistantAttachmentMenu/);
-  assert.match(workspace, /Focus this conversation/);
+  assert.doesNotMatch(workspace, /Focus this conversation|Choose focused task|Focus task/);
+  assert.match(workspace, /typed message rendered optimistically/);
+  assert.match(workspace, /progressLabel/);
+  assert.match(workspace, /Thinking/);
+  assert.match(workspace, /Searching tasks/);
   assert.match(workspace, /grid-cols-\[300px_minmax\(0,1fr\)\]/);
   assert.match(workspace, /getUserMedia/);
   assert.match(workspace, /\/v1\/realtime\/calls/);
@@ -153,8 +158,10 @@ test("ships the signed-in WebRTC Talk chief-of-staff workspace", async () => {
   assert.doesNotMatch(workspace, /OPENAI_API_KEY|JINA_AI_READER/);
   assert.doesNotMatch(workspace, /SERPER_API_KEY/);
 
-  assert.match(header, /href="\/talk"/);
-  assert.match(header, /Talk to your realtime chief of staff/);
+  assert.match(header, /href: "\/talk", label: "Chat", icon: "assistant"/);
+  assert.match(header, /href: "\/", label: "Tasks", icon: "view-open"/);
+  assert.match(header, /href: "\/settings", label: "Settings", icon: "settings"/);
+  assert.match(header, /aria-label="Primary"/);
   assert.doesNotMatch(header, /href="\/assistant"/);
   assert.match(assistantPage, /redirect\("\/talk"\)/);
   assert.match(access, /url\.pathname\.startsWith\("\/api\/talk"\)/);

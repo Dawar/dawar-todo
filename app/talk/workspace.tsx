@@ -179,7 +179,7 @@ function cacheWorkspace(payload: WorkspacePayload) {
       todos: payload.todos,
     }));
   } catch {
-    // This cache only keeps the thread rail and focused-task picker available offline.
+    // This cache only keeps the thread rail and internally inferred task context available offline.
   }
 }
 
@@ -233,14 +233,11 @@ export function TalkWorkspace() {
   const [notice, setNotice] = useState("");
   const [loading, setLoading] = useState(true);
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [focusPickerOpen, setFocusPickerOpen] = useState(false);
-  const [focusSearch, setFocusSearch] = useState("");
   const [recording, setRecording] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [audioEnabled, setAudioEnabled] = useState(false);
   const [muted, setMuted] = useState(false);
   const [deleteUndo, setDeleteUndo] = useState<{ token: string; title: string } | null>(null);
-  const [currentTime, setCurrentTime] = useState(0);
 
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const senderRef = useRef<RTCRtpSender | null>(null);
@@ -290,16 +287,6 @@ export function TalkWorkspace() {
   useEffect(() => {
     focusedTodoRef.current = focusedTodo?.id ?? null;
   }, [focusedTodo]);
-
-  useEffect(() => {
-    const update = () => setCurrentTime(Date.now());
-    const initial = window.setTimeout(update, 0);
-    const interval = window.setInterval(update, 60_000);
-    return () => {
-      window.clearTimeout(initial);
-      window.clearInterval(interval);
-    };
-  }, []);
 
   useEffect(() => {
     threadsRef.current = threads;
@@ -907,8 +894,7 @@ export function TalkWorkspace() {
 
   const addFiles = useCallback((files: File[], durationMs = 0) => {
     if (!focusedTodo) {
-      setFocusPickerOpen(true);
-      setNotice("Choose the task these attachments belong to.");
+      setNotice("Mention the relevant task first so the assistant can identify it before attaching files.");
       return;
     }
     const available = Math.max(0, 12 - attachments.length - stagedFiles.length);
@@ -989,6 +975,30 @@ export function TalkWorkspace() {
       return;
     }
     const clientId = crypto.randomUUID();
+    const optimisticContent = text || "Shared attachments";
+    const optimisticCreatedAt = new Date().toISOString();
+    mergeMessage({
+      id: `optimistic-${clientId}`,
+      sessionId: sessionIdRef.current ?? "connecting",
+      threadId,
+      realtimeItemId: clientId,
+      role: "user",
+      content: optimisticContent,
+      focusedTodoId: focusedTodoRef.current,
+      metadata: {
+        channel: "text",
+        attachmentIds,
+        sending: navigator.onLine,
+      },
+      createdAt: optimisticCreatedAt,
+    });
+    setState(sessionIdRef.current ? "thinking" : "connecting");
+    console.info("[todo-talk-ui] typed message rendered optimistically", {
+      threadId,
+      clientIdSuffix: clientId.slice(-8),
+      attachmentCount: attachmentIds.length,
+      online: navigator.onLine,
+    });
     setDraft("");
     draftDirtyRef.current = false;
     setDraftDirty(false);
@@ -1030,10 +1040,10 @@ export function TalkWorkspace() {
         threadId,
         realtimeItemId: clientId,
         role: "user",
-        content: text || "Shared attachments",
+        content: optimisticContent,
         focusedTodoId: focusedTodoRef.current,
         metadata: { channel: "text", attachmentIds, waitingToSync: true },
-        createdAt: new Date().toISOString(),
+        createdAt: optimisticCreatedAt,
       });
       setStagedFiles([]);
       setSelectedAttachmentIds([]);
@@ -1045,6 +1055,11 @@ export function TalkWorkspace() {
       setStagedFiles([]);
       setSelectedAttachmentIds([]);
     } catch (cause) {
+      setMessages((current) => {
+        const next = current.filter((message) => message.realtimeItemId !== clientId);
+        cacheHistory(threadId, next);
+        return next;
+      });
       setDraft(text);
       draftDirtyRef.current = true;
       setDraftDirty(true);
@@ -1164,49 +1179,6 @@ export function TalkWorkspace() {
       setError(cause instanceof Error ? cause.message : "The conversation could not be restored.");
     }
   }, [deleteUndo, selectThread]);
-
-  const setThreadFocus = useCallback(async (todo: Todo | null) => {
-    const threadId = selectedThreadIdRef.current;
-    if (!threadId) return;
-    try {
-      const result = await api<{ thread: TalkThread }>(`/api/talk/threads/${threadId}`, {
-        method: "PATCH",
-        body: JSON.stringify({ focusedTodoId: todo?.id ?? null }),
-      });
-      setFocusedTodo(todo);
-      focusedTodoRef.current = todo?.id ?? null;
-      setThreads((current) => current.map((thread) => thread.id === threadId ? result.thread : thread));
-      setFocusPickerOpen(false);
-      setFocusSearch("");
-      await loadAttachments(todo?.id ?? null);
-      const activeSessionId = sessionIdRef.current;
-      if (activeSessionId) {
-        await api(`/api/talk/sessions/${activeSessionId}`, {
-          method: "PATCH",
-          body: JSON.stringify({ action: "heartbeat", focusedTodoId: todo?.id ?? null }),
-        });
-        sendEvent({
-          type: "conversation.item.create",
-          item: {
-            type: "message",
-            role: "system",
-            content: [{
-              type: "input_text",
-              text: todo
-                ? `The user changed this conversation's focused task to task ${todo.id}: ${todo.title}.`
-                : "The user cleared this conversation's focused task.",
-            }],
-          },
-        });
-      }
-      console.info("[todo-talk-ui] conversation focus selected", {
-        threadId,
-        todoId: todo?.id ?? null,
-      });
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Task focus could not be changed.");
-    }
-  }, [loadAttachments, sendEvent]);
 
   const undoAction = useCallback(async (message: TalkMessage) => {
     const token = typeof message.metadata.undoToken === "string" ? message.metadata.undoToken : "";
@@ -1371,17 +1343,11 @@ export function TalkWorkspace() {
     if (files.length) addFiles(files);
   }
 
-  const visibleFocusTasks = useMemo(() => {
-    const query = focusSearch.trim().toLowerCase();
-    return todos
-      .filter((todo) => !query || `${todo.title}\n${todo.project ?? ""}\n${todo.context ?? ""}`.toLowerCase().includes(query))
-      .sort((a, b) => {
-        if (a.status !== b.status) return a.status === "open" ? -1 : 1;
-        if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
-        return b.updatedAt.localeCompare(a.updatedAt);
-      })
-      .slice(0, 80);
-  }, [focusSearch, todos]);
+  const activeProgress = [...activities].reverse().find((activity) => activity.status === "working");
+  const progressLabel = activeProgress?.label
+    ?? (!liveAssistant && state === "connecting" ? "Connecting"
+      : !liveAssistant && state === "thinking" ? "Thinking"
+        : null);
 
   if (loading) {
     return (
@@ -1449,15 +1415,6 @@ export function TalkWorkspace() {
                   {sessionId ? (audioEnabled ? (muted ? "Muted" : state === "speaking" ? "Speaking" : state === "thinking" ? "Thinking" : "Listening") : "Text session active") : state === "offline" ? "Offline" : "Ready"}
                 </p>
               </div>
-              <button
-                type="button"
-                onClick={() => setFocusPickerOpen(true)}
-                className={`inline-flex h-9 min-w-0 max-w-[45vw] items-center gap-1.5 rounded-xl px-2.5 text-xs font-semibold transition ${focusedTodo ? "bg-[#eaf3ed] text-[#216e4e]" : "bg-[#f1f2f0] text-[#6a726d]"}`}
-                aria-label={focusedTodo ? `Change focused task from ${focusedTodo.title}` : "Choose focused task"}
-              >
-                <ActionIcon name={focusedTodo ? "view-open" : "add"} className="h-3.5 w-3.5 shrink-0" />
-                <span className="truncate">{focusedTodo?.title ?? "Focus task"}</span>
-              </button>
               {sessionId && (
                 <button type="button" onClick={() => void endSession("user-ended")} className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-[#626b66] hover:bg-[#f1f2f0]" aria-label="End realtime session" title="End session"><ActionIcon name="stop" className="h-4 w-4" /></button>
               )}
@@ -1516,17 +1473,12 @@ export function TalkWorkspace() {
                     </article>
                   );
                 })}
-                {activities.map((activity) => (
-                  <article key={activity.id} className="max-w-[94%] rounded-2xl border border-[#d8e5dc] bg-[#f4f8f5] px-3.5 py-3">
-                    <div className="flex items-center gap-2.5">
-                      <span className={`h-2 w-2 rounded-full ${activity.status === "working" ? "animate-pulse bg-[#c27b16]" : "bg-red-600"}`} />
-                      <div className="min-w-0">
-                        <p className="text-sm font-medium">{activity.label}</p>
-                        {activity.detail && <p className="mt-0.5 text-xs text-[#7a837e]">{activity.detail}</p>}
-                      </div>
-                    </div>
-                  </article>
-                ))}
+                {progressLabel && (
+                  <div role="status" aria-live="polite" className="flex items-center gap-2 px-1 py-0.5 text-xs font-medium text-[#7a837e]">
+                    <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#c27b16]" />
+                    <span>{progressLabel}…</span>
+                  </div>
+                )}
                 {liveUser && (
                   <article className="ml-auto max-w-[88%] rounded-2xl rounded-br-md bg-[#216e4e]/85 px-4 py-3 text-sm leading-6 text-white">
                     <p>{liveUser}</p>
@@ -1580,8 +1532,7 @@ export function TalkWorkspace() {
                     onRecord={() => setRecording(true)}
                     onNeedsTask={() => {
                       if (focusedTodo) return false;
-                      setFocusPickerOpen(true);
-                      setNotice("Choose the task these attachments belong to.");
+                      setNotice("Mention the relevant task first so the assistant can identify it before attaching files.");
                       return true;
                     }}
                   />
@@ -1616,33 +1567,6 @@ export function TalkWorkspace() {
         </div>
       </main>
 
-      {focusPickerOpen && (
-        <div className="fixed inset-0 z-[80] flex items-end justify-center sm:items-center sm:p-5" role="dialog" aria-modal="true" aria-label="Choose focused task">
-          <button type="button" className="absolute inset-0 bg-black/35 backdrop-blur-[2px]" onClick={() => setFocusPickerOpen(false)} aria-label="Close task selector" />
-          <div className="relative flex max-h-[82dvh] w-full flex-col rounded-t-3xl bg-white shadow-2xl sm:max-w-lg sm:rounded-3xl">
-            <div className="flex items-center gap-2 border-b border-black/[0.06] p-4">
-              <div className="min-w-0 flex-1"><h2 className="font-semibold">Focus this conversation</h2><p className="text-xs text-[#7b837e]">Attachments will be stored on the focused task.</p></div>
-              <button type="button" onClick={() => setFocusPickerOpen(false)} className="grid h-9 w-9 place-items-center rounded-full bg-[#f1f2f0]" aria-label="Close"><ActionIcon name="close" /></button>
-            </div>
-            <div className="p-3">
-              <label className="flex h-11 items-center gap-2 rounded-xl border border-black/[0.08] px-3 focus-within:border-[#7fb49b]">
-                <ActionIcon name="search" className="h-4 w-4 text-[#8a928d]" />
-                <input value={focusSearch} onChange={(event) => setFocusSearch(event.target.value)} placeholder="Search tasks" className="min-w-0 flex-1 bg-transparent text-base outline-none sm:text-sm" />
-              </label>
-            </div>
-            <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
-              <button type="button" onClick={() => void setThreadFocus(null)} className="mb-1 flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left hover:bg-[#f3f5f3]"><span className="grid h-9 w-9 place-items-center rounded-xl bg-[#f1f2f0]"><ActionIcon name="cancel" /></span><span><span className="block text-sm font-semibold">No focused task</span><span className="block text-xs text-[#7b837e]">Keep the conversation global</span></span></button>
-              {visibleFocusTasks.map((todo) => (
-                <button key={todo.id} type="button" onClick={() => void setThreadFocus(todo)} className={`mb-1 flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left hover:bg-[#f3f5f3] ${focusedTodo?.id === todo.id ? "bg-[#eaf3ed]" : ""}`}>
-                  <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${todo.status === "completed" ? "bg-[#a8afab]" : todo.snoozedUntil && new Date(todo.snoozedUntil).valueOf() > currentTime ? "bg-[#c98231]" : "bg-[#27815b]"}`} />
-                  <span className="min-w-0 flex-1"><span className="block truncate text-sm font-semibold">{todo.title}</span><span className="block truncate text-xs text-[#7b837e]">{todo.project || (todo.status === "completed" ? "Done" : "Open")}</span></span>
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-
       {deleteUndo && (
         <div className="fixed bottom-[calc(1rem+env(safe-area-inset-bottom))] left-1/2 z-[85] flex w-[min(92vw,480px)] -translate-x-1/2 items-center gap-3 rounded-2xl bg-[#202622] px-4 py-3 text-white shadow-2xl">
           <p className="min-w-0 flex-1 truncate text-sm">Deleted “{deleteUndo.title}”</p>
@@ -1653,7 +1577,7 @@ export function TalkWorkspace() {
 
       {dragging && (
         <div className="pointer-events-none fixed inset-3 z-[90] grid place-items-center rounded-3xl border-2 border-dashed border-[#4a9870] bg-[#eaf3ed]/90 backdrop-blur-sm">
-          <div className="text-center text-[#216e4e]"><ActionIcon name="attachment" className="mx-auto mb-3 h-9 w-9" /><p className="font-semibold">{focusedTodo ? `Attach to ${focusedTodo.title}` : "Choose a focused task first"}</p><p className="mt-1 text-sm">Drop photos, videos, voice memos, or files</p></div>
+          <div className="text-center text-[#216e4e]"><ActionIcon name="attachment" className="mx-auto mb-3 h-9 w-9" /><p className="font-semibold">{focusedTodo ? `Attach to ${focusedTodo.title}` : "Mention the relevant task first"}</p><p className="mt-1 text-sm">Drop photos, videos, voice memos, or files</p></div>
         </div>
       )}
       {recording && <AssistantVoiceRecorder onClose={() => setRecording(false)} onRecorded={(file, durationMs) => { setRecording(false); addFiles([file], durationMs); }} />}

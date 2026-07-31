@@ -169,8 +169,12 @@ test("ships the simplified todo and project surface", async () => {
   assert.match(actionIcons, /ListTodo/);
   assert.match(actionIcons, /PinOff/);
   assert.match(actionIcons, /pin: Pin/);
-  assert.match(siteHeader, /aria-label="Settings"/);
-  assert.match(siteHeader, /<ActionIcon name="settings"/);
+  assert.match(siteHeader, /label: "Settings", icon: "settings"/);
+  assert.match(siteHeader, /<ActionIcon name=\{item\.icon\}/);
+  assert.match(siteHeader, /aria-label="Primary"/);
+  assert.match(siteHeader, /label: "Tasks"/);
+  assert.match(siteHeader, /label: "Chat"/);
+  assert.match(siteHeader, /label: "Settings"/);
   assert.match(siteHeader, /Choose project\. Current selection:/);
   assert.match(siteHeader, /projectLabel/);
   assert.doesNotMatch(actionIcons, /Archive|"archive"/);
@@ -279,10 +283,11 @@ test("keeps fixed action surfaces above the iPhone standalone safe area", async 
 });
 
 test("ships desktop task keyboard navigation, direct actions, view switching, and an accessible keymap", async () => {
-  const [page, header, icons] = await Promise.all([
+  const [page, header, icons, shortcutGuide] = await Promise.all([
     readFile(new URL("app/page.tsx", root), "utf8"),
     readFile(new URL("app/site-header.tsx", root), "utf8"),
     readFile(new URL("app/action-icon.tsx", root), "utf8"),
+    readFile(new URL("app/keyboard-shortcuts-dialog.tsx", root), "utf8"),
   ]);
   assert.match(page, /data-keyboard-task-id=\{todo\.id\}/);
   assert.match(page, /data-keyboard-action-index="0"/);
@@ -297,10 +302,10 @@ test("ships desktop task keyboard navigation, direct actions, view switching, an
   assert.doesNotMatch(page, /lowerKey === "a" && usable/);
   assert.match(page, /const undoShortcut = \(event\.metaKey \|\| event\.ctrlKey\)/);
   assert.match(page, /requestNoticeUndo\(notice\)/);
-  assert.match(page, /keys: \["⌘\/Ctrl", "Z"\], label: "Undo last task action"/);
+  assert.match(shortcutGuide, /keys: \["⌘\/Ctrl", "Z"\], label: "Undo last task action"/);
   assert.match(page, /target\.closest\("input, textarea, select, \[contenteditable='true'\]"\)/);
-  assert.match(page, /function KeyboardShortcutsDialog/);
-  assert.match(page, /aria-labelledby="keyboard-shortcuts-title"/);
+  assert.match(shortcutGuide, /function KeyboardShortcutsDialog/);
+  assert.match(shortcutGuide, /aria-labelledby="keyboard-shortcuts-title"/);
   assert.match(header, /onKeyboardHelp/);
   assert.match(header, /Keyboard shortcuts \(\?\)/);
   assert.match(icons, /keyboard:\s*Keyboard/);

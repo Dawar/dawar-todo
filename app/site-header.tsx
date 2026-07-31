@@ -1,7 +1,9 @@
 "use client";
 
 import Link from "next/link";
+import { useState } from "react";
 import { ActionIcon } from "./action-icon";
+import { KeyboardShortcutsDialog } from "./keyboard-shortcuts-dialog";
 
 export function SiteHeader({
   current,
@@ -14,6 +16,7 @@ export function SiteHeader({
   onProjectClick?: () => void;
   onKeyboardHelp?: () => void;
 }) {
+  const [shortcutGuideOpen, setShortcutGuideOpen] = useState(false);
   const brand = (
     <>
       <span className="grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-[#216e4e] text-base font-semibold text-white shadow-sm" aria-hidden="true">✓</span>
@@ -21,82 +24,63 @@ export function SiteHeader({
       {onProjectClick && <ActionIcon name="next" className="h-3.5 w-3.5 shrink-0 rotate-90 text-[#7c847f]" />}
     </>
   );
-  const talkLink = (
-    <Link
-      href="/talk"
-      aria-label="Talk to your realtime chief of staff"
-      aria-current={current === "talk" ? "page" : undefined}
-      title="Talk"
-      className={`inline-flex h-10 items-center gap-1.5 rounded-xl px-2.5 text-sm font-medium transition focus-visible:outline-2 focus-visible:outline-[#216e4e] ${
-        current === "talk"
-          ? "bg-[#eaf3ed] text-[#216e4e]"
-          : "text-[#69716c] hover:bg-[#eaf3ed] hover:text-[#216e4e]"
-      }`}
-    >
-      <ActionIcon name="mic" className="h-4.5 w-4.5" />
-      <span>Talk</span>
-    </Link>
-  );
+  const navigation = [
+    { href: "/", label: "Tasks", icon: "view-open" as const, active: current === "todos" },
+    { href: "/talk", label: "Chat", icon: "assistant" as const, active: current === "talk" || current === "assistant" },
+    { href: "/settings", label: "Settings", icon: "settings" as const, active: current === "settings" },
+  ];
 
   return (
     <header className="sticky top-0 z-30 border-b border-black/[0.06] bg-[#f6f7f5]/92 backdrop-blur-xl">
-      <div className="mx-auto flex h-14 max-w-5xl items-center justify-between px-4 sm:px-6">
+      <div className="mx-auto flex h-14 max-w-5xl items-center justify-between gap-2 px-3 sm:px-6">
         {onProjectClick ? (
           <button
             type="button"
             onClick={onProjectClick}
             aria-label={`Choose project. Current selection: ${projectLabel}`}
             title="Choose project"
-            className="flex min-w-0 max-w-[70vw] items-center gap-2.5 rounded-lg text-left transition hover:text-[#216e4e] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#216e4e] sm:max-w-md"
+            className="flex min-w-0 max-w-[38vw] items-center gap-2 rounded-lg text-left transition hover:text-[#216e4e] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#216e4e] sm:max-w-md sm:gap-2.5"
           >
             {brand}
           </button>
         ) : (
-          <Link href="/" className="flex min-w-0 items-center gap-2.5 rounded-lg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#216e4e]">
+          <Link href="/" className="flex min-w-0 max-w-[38vw] items-center gap-2 rounded-lg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#216e4e] sm:gap-2.5">
             {brand}
           </Link>
         )}
-        <div className="flex items-center gap-2">
-          {current === "todos" ? (
-            <>
-              {onKeyboardHelp && (
-                <button
-                  type="button"
-                  onClick={onKeyboardHelp}
-                  aria-label="Keyboard shortcuts"
-                  title="Keyboard shortcuts (?)"
-                  className="hidden h-10 w-10 place-items-center rounded-xl text-[#69716c] transition hover:bg-black/[0.04] hover:text-[#252a27] focus-visible:outline-2 focus-visible:outline-[#216e4e] md:grid"
-                >
-                  <ActionIcon name="keyboard" className="h-5 w-5" />
-                </button>
-              )}
-              {talkLink}
-              <Link
-                href="/settings"
-                aria-label="Settings"
-                title="Settings"
-                className="grid h-10 w-10 place-items-center rounded-xl text-[#69716c] transition hover:bg-black/[0.04] hover:text-[#252a27] focus-visible:outline-2 focus-visible:outline-[#216e4e]"
-              >
-                <ActionIcon name="settings" className="h-5 w-5" />
-              </Link>
-            </>
-          ) : current === "talk" ? (
-            <>
-              {talkLink}
-              <Link href="/" className="rounded-lg px-2.5 py-2 text-sm font-medium text-[#216e4e] transition hover:bg-[#eaf3ed] focus-visible:outline-2 focus-visible:outline-[#216e4e]">
-                Tasks
-              </Link>
-            </>
-          ) : (
-            <>
-              {talkLink}
-              <Link href="/" className="rounded-lg px-3 py-2 text-sm font-medium text-[#216e4e] transition hover:bg-[#eaf3ed] focus-visible:outline-2 focus-visible:outline-[#216e4e]">
-                Back to tasks
-              </Link>
-            </>
-          )}
-        </div>
+        <nav className="flex shrink-0 items-center gap-0.5 sm:gap-1" aria-label="Primary">
+          <button
+            type="button"
+            onClick={() => {
+              if (onKeyboardHelp) onKeyboardHelp();
+              else setShortcutGuideOpen(true);
+            }}
+            aria-label="Keyboard shortcuts"
+            title="Keyboard shortcuts (?)"
+            className="mr-0.5 hidden h-9 w-9 place-items-center rounded-xl text-[#69716c] transition hover:bg-black/[0.04] hover:text-[#252a27] focus-visible:outline-2 focus-visible:outline-[#216e4e] md:grid"
+          >
+            <ActionIcon name="keyboard" className="h-4.5 w-4.5" />
+          </button>
+          {navigation.map((item) => (
+            <Link
+              key={item.href}
+              href={item.href}
+              aria-label={item.label}
+              aria-current={item.active ? "page" : undefined}
+              title={item.label}
+              className={`inline-flex h-9 items-center gap-1 rounded-xl px-1.5 text-xs font-semibold transition focus-visible:outline-2 focus-visible:outline-[#216e4e] sm:gap-1.5 sm:px-2.5 sm:text-sm ${
+                item.active
+                  ? "bg-[#eaf3ed] text-[#216e4e]"
+                  : "text-[#69716c] hover:bg-[#eaf3ed] hover:text-[#216e4e]"
+              }`}
+            >
+              <ActionIcon name={item.icon} className="h-4 w-4 shrink-0" />
+              <span>{item.label}</span>
+            </Link>
+          ))}
+        </nav>
       </div>
+      {shortcutGuideOpen && <KeyboardShortcutsDialog onClose={() => setShortcutGuideOpen(false)} />}
     </header>
   );
 }
