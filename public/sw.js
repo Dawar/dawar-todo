@@ -1,4 +1,5 @@
-const CACHE_NAME = "dawar-todo-shell-v14";
+const CACHE_PREFIX = "dawar-todo-shell-";
+const CACHE_NAME = `${CACHE_PREFIX}v15`;
 const SHELL = [
   "/",
   "/talk",
@@ -107,9 +108,26 @@ async function refreshDocumentShell(response, cacheKey) {
 
 self.addEventListener("activate", (event) => {
   event.waitUntil(
-    caches.keys()
-      .then((keys) => Promise.all(keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key))))
-      .then(() => self.clients.claim()),
+    (async () => {
+      const keys = await caches.keys();
+      const staleShellCaches = keys.filter((key) => key.startsWith(CACHE_PREFIX) && key !== CACHE_NAME);
+      await Promise.all(staleShellCaches.map((key) => caches.delete(key)));
+      await self.clients.claim();
+      if (!staleShellCaches.length) return;
+
+      const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+      const refreshResults = await Promise.allSettled(windows.map((client) => (
+        "navigate" in client ? client.navigate(client.url) : null
+      )));
+      const refreshedClients = refreshResults.filter((result) => result.status === "fulfilled" && result.value).length;
+      console.info("[todo-pwa] app shell upgrade activated", {
+        cache: CACHE_NAME,
+        replacedCaches: staleShellCaches,
+        openClients: windows.length,
+        refreshedClients,
+        failedRefreshes: refreshResults.filter((result) => result.status === "rejected").length,
+      });
+    })(),
   );
 });
 

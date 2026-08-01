@@ -17,6 +17,11 @@ test("canonical task ordering is persistent and replaces client sort modes", asy
 
   assert.doesNotMatch(page, /type Sort =/);
   assert.doesNotMatch(page, /aria-label="Sort tasks"/);
+  assert.doesNotMatch(page, /-new Date\(todo\.updatedAt\)\.valueOf\(\)/);
+  assert.match(page, /Number\.MAX_SAFE_INTEGER/);
+  assert.match(page, /record\.sortOrder \?\? -new Date\(record\.createdAt\)\.valueOf\(\)/);
+  assert.match(page, /legacy cached tasks loaded without canonical order/);
+  assert.match(page, /remote snapshot contained tasks without canonical order/);
   assert.match(page, /return \[\.\.\.rows\]\.sort\(compareCanonicalOrder\)/);
   assert.match(page, /ActionIcon name="reorder"/);
   assert.match(page, /onPointerMove=\{onReorderMove\}/);

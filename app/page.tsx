@@ -975,7 +975,7 @@ function dateInputValue(value: string | null) {
 function canonicalSortOrder(todo: Todo) {
   return Number.isFinite(todo.sortOrder)
     ? todo.sortOrder
-    : -new Date(todo.updatedAt).valueOf();
+    : Number.MAX_SAFE_INTEGER;
 }
 
 function compareCanonicalOrder(a: Todo, b: Todo) {
@@ -1064,7 +1064,7 @@ function offlineRecordTodo(record: OfflineTodoRecord): Todo {
     recurrenceCron: record.recurrenceCron ?? null,
     recurrenceLastFiredAt: record.recurrenceLastFiredAt ?? null,
     pinned: record.pinned ?? false,
-    sortOrder: record.sortOrder ?? -new Date(record.updatedAt ?? record.createdAt).valueOf(),
+    sortOrder: record.sortOrder ?? -new Date(record.createdAt).valueOf(),
     createdAt: record.createdAt,
     updatedAt: record.updatedAt ?? record.createdAt,
     attachmentCount: record.attachments.length,
@@ -1664,6 +1664,16 @@ export default function Home() {
 
   const applyLiveSnapshot = useEffectEvent((remoteTodos: Todo[], source: "initial" | "poll" | "reconnect" | "snooze-wake") => {
     const pendingPatches = pendingTodoPatchesRef.current;
+    const missingOrderIds = remoteTodos
+      .filter((todo) => !Number.isFinite(todo.sortOrder))
+      .map((todo) => todo.id);
+    if (missingOrderIds.length) {
+      console.warn("[todo-order] remote snapshot contained tasks without canonical order", {
+        source,
+        count: missingOrderIds.length,
+        ids: missingOrderIds.slice(0, 20),
+      });
+    }
     const resolved = remoteTodos
       .filter((todo) => !pendingDeletedIdsRef.current.has(todo.id))
       .map(applyPendingOverlays);
@@ -1722,6 +1732,16 @@ export default function Home() {
 
   const applyLiveDelta = useEffectEvent((remoteTodos: Todo[], deletedIds: number[], source: "poll" | "reconnect" | "snooze-wake") => {
     const pendingPatches = pendingTodoPatchesRef.current;
+    const missingOrderIds = remoteTodos
+      .filter((todo) => !Number.isFinite(todo.sortOrder))
+      .map((todo) => todo.id);
+    if (missingOrderIds.length) {
+      console.warn("[todo-order] remote delta contained tasks without canonical order", {
+        source,
+        count: missingOrderIds.length,
+        ids: missingOrderIds.slice(0, 20),
+      });
+    }
     const discardedPendingIds = deletedIds.filter((id) => pendingPatches.delete(id));
     if (discardedPendingIds.length) {
       setOfflineEditCount((current) => Math.max(0, current - discardedPendingIds.length));
@@ -1864,6 +1884,16 @@ export default function Home() {
       const cachedTodos = (cachedState?.todos ?? [])
         .filter((todo) => !pendingDeletedIdsRef.current.has(todo.id))
         .map(applyPendingOverlays);
+      const legacyCachedIds = cachedTodos
+        .filter((todo) => !Number.isFinite(todo.sortOrder))
+        .map((todo) => todo.id);
+      if (legacyCachedIds.length) {
+        console.warn("[todo-order] legacy cached tasks loaded without canonical order", {
+          count: legacyCachedIds.length,
+          ids: legacyCachedIds.slice(0, 20),
+          fallback: "stable-id",
+        });
+      }
       setTodos([...offlineRecords.map(offlineRecordTodo), ...cachedTodos]);
       setOfflineCount(offlineRecords.length);
       setOfflineEditCount(offlineMutations.length);
