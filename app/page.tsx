@@ -1195,6 +1195,7 @@ function TaskRow({
     console.info("[todo-gesture] mobile task swipe started from side rail", {
       todoId: todo.id,
       rail: railSide,
+      source: (event.target as HTMLElement).closest("[data-row-action]") ? "control" : "rail",
       width,
     });
   }
@@ -1438,17 +1439,33 @@ function TaskRow({
             </div>
           )}
         </div>
-        <div aria-hidden="true" className="relative w-10 shrink-0 self-stretch md:hidden">
-          <div
-            data-swipe-rail="right"
-            className="absolute inset-x-0 -bottom-4 -top-4 touch-pan-y"
-          />
+        <div
+          data-swipe-rail="right"
+          className="-mr-4 flex shrink-0 self-stretch touch-pan-y pr-4 sm:-mr-5 sm:pr-5 md:hidden"
+        >
+          <div aria-hidden="true" className="relative w-10 shrink-0 self-stretch">
+            <div className="absolute inset-x-0 -bottom-4 -top-4" />
+          </div>
+          {showPin && !pending && !todo.offline && (
+            <button
+              type="button"
+              data-row-action
+              onClick={(event) => {
+                if (suppressTitleClickRef.current) {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  return;
+                }
+                onPin(todo);
+              }}
+              aria-label={`${todo.pinned ? "Unpin" : "Pin"}: ${todo.title}`}
+              title={todo.pinned ? "Unpin" : "Pin"}
+              className={classNames("grid h-9 w-9 shrink-0 place-items-center rounded-lg transition focus-visible:outline-2 focus-visible:outline-[#216e4e]", todo.pinned ? "bg-[#eaf3ed] text-[#216e4e]" : "text-[#69716c] hover:bg-[#eef0ed]")}
+            >
+              <ActionIcon name={todo.pinned ? "unpin" : "pin"} className="h-[18px] w-[18px]" />
+            </button>
+          )}
         </div>
-        {showPin && !pending && !todo.offline && (
-          <button type="button" data-row-action onClick={() => onPin(todo)} aria-label={`${todo.pinned ? "Unpin" : "Pin"}: ${todo.title}`} title={todo.pinned ? "Unpin" : "Pin"} className={classNames("grid h-9 w-9 shrink-0 place-items-center rounded-lg transition focus-visible:outline-2 focus-visible:outline-[#216e4e] md:hidden", todo.pinned ? "bg-[#eaf3ed] text-[#216e4e]" : "text-[#69716c] hover:bg-[#eef0ed]")}>
-            <ActionIcon name={todo.pinned ? "unpin" : "pin"} className="h-[18px] w-[18px]" />
-          </button>
-        )}
         {!pending && !todo.offline && (
           <div className="hidden shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 md:ml-3 md:flex">
             {hoverActions.map(({ action, label, icon }) => (
