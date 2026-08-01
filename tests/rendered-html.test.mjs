@@ -283,6 +283,14 @@ test("keeps fixed action surfaces above the iPhone standalone safe area", async 
   assert.match(styles, /--mobile-action-bottom:\s*max\(4rem, calc\(env\(safe-area-inset-bottom, 0px\) \+ 2rem\)\)/);
 });
 
+test("uses an edge-to-edge task list surface on mobile while preserving desktop gutters", async () => {
+  const page = await readFile(new URL("app/page.tsx", root), "utf8");
+
+  assert.match(page, /data-task-list-surface/);
+  assert.match(page, /-mx-4 overflow-hidden border-y/);
+  assert.match(page, /sm:mx-0 sm:rounded-2xl sm:border/);
+});
+
 test("moves between inline title editors at text boundaries without row keyboard highlighting", async () => {
   const [page, header, icons, shortcutGuide] = await Promise.all([
     readFile(new URL("app/page.tsx", root), "utf8"),

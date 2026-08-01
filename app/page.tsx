@@ -5131,7 +5131,10 @@ export default function Home() {
             </div>
           </div>
 
-          <div className="overflow-hidden rounded-2xl border border-black/[0.07] bg-white shadow-[0_8px_30px_rgba(30,45,36,0.05)]">
+          <div
+            data-task-list-surface
+            className="-mx-4 overflow-hidden border-y border-black/[0.07] bg-white shadow-[0_8px_30px_rgba(30,45,36,0.05)] sm:mx-0 sm:rounded-2xl sm:border"
+          >
             {loading ? (
               <div role="status" className="space-y-1 p-2" aria-label="Loading tasks">
                 {[0, 1, 2, 3, 4].map((item) => <div key={item} className="h-[72px] animate-pulse rounded-xl bg-[#f3f4f2]" />)}

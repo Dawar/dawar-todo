@@ -261,7 +261,7 @@ test("installs an offline-capable PWA with idempotent queued task syncing", asyn
   assert.match(serviceWorker, /url\.pathname\.startsWith\("\/api\/"\)/);
   assert.match(serviceWorker, /caches\.match/);
   assert.match(serviceWorker, /const CACHE_PREFIX = "dawar-todo-shell-"/);
-  assert.match(serviceWorker, /`\$\{CACHE_PREFIX\}v16`/);
+  assert.match(serviceWorker, /`\$\{CACHE_PREFIX\}v17`/);
   assert.match(serviceWorker, /staleShellCaches/);
   assert.match(serviceWorker, /client\.navigate\(client\.url\)/);
   assert.match(serviceWorker, /app shell upgrade activated/);
