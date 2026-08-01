@@ -16,6 +16,7 @@ import {
   Folder,
   FolderPlus,
   FileText,
+  GripVertical,
   List,
   ListChecks,
   ListTodo,
@@ -80,6 +81,7 @@ export type ActionIconName =
   | "restore"
   | "retry"
   | "repeat"
+  | "reorder"
   | "save"
   | "search"
   | "settings"
@@ -128,6 +130,7 @@ const icons: Record<ActionIconName, ComponentType<LucideProps>> = {
   restore: RotateCcw,
   retry: RefreshCw,
   repeat: Repeat2,
+  reorder: GripVertical,
   save: Save,
   search: Search,
   settings: Settings2,

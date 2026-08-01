@@ -29,7 +29,7 @@
         "tags": ["Todos"],
         "operationId": "listTodos",
         "summary": "List every non-deleted task",
-        "description": "Returns open, snoozed, and completed tasks. Filtering and sorting can be performed by the client using the returned fields.",
+        "description": "Returns open, snoozed, and completed tasks in their persistent canonical order.",
         "responses": {
           "200": {
             "description": "All tasks",
@@ -91,6 +91,26 @@
           "200": {
             "description": "Bulk result",
             "content": { "application/json": { "schema": { "$ref": "#/components/schemas/BulkTodoResponse" } } }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/api/todos/reorder": {
+      "patch": {
+        "tags": ["Todos"],
+        "operationId": "reorderTodos",
+        "summary": "Persist the canonical task order",
+        "description": "Send the task IDs in the desired order. Tasks created by another client and absent from this snapshot retain their relative slots.",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "type": "object", "required": ["orderedIds", "operationId"], "properties": { "orderedIds": { "type": "array", "minItems": 1, "maxItems": 2000, "uniqueItems": true, "items": { "type": "integer", "minimum": 1 } }, "operationId": { "type": "string", "format": "uuid" } } } } }
+        },
+        "responses": {
+          "200": {
+            "description": "Current tasks in canonical order",
+            "content": { "application/json": { "schema": { "type": "object", "required": ["todos", "changedIds"], "properties": { "todos": { "type": "array", "items": { "$ref": "#/components/schemas/Todo" } }, "changedIds": { "type": "array", "items": { "type": "integer" } } } } } }
           },
           "400": { "$ref": "#/components/responses/BadRequest" },
           "401": { "$ref": "#/components/responses/Unauthorized" }
@@ -339,7 +359,7 @@
       "Error": { "type": "object", "required": ["error"], "properties": { "error": { "type": "string" } } },
       "Todo": {
         "type": "object",
-        "required": ["id", "title", "notes", "status", "priority", "pinned", "createdAt", "updatedAt", "attachmentCount"],
+        "required": ["id", "title", "notes", "status", "priority", "pinned", "sortOrder", "createdAt", "updatedAt", "attachmentCount"],
         "properties": {
           "id": { "type": "integer" },
           "title": { "type": "string", "maxLength": 2000 },
@@ -357,6 +377,7 @@
           "recurrenceCron": { "type": ["string", "null"], "description": "Five-field cron expression evaluated in the configured snoozeTimeZone. Recurring tasks cannot be snoozed." },
           "recurrenceLastFiredAt": { "type": ["string", "null"], "format": "date-time", "readOnly": true, "description": "Last scheduled minute processed for this task." },
           "pinned": { "type": "boolean", "description": "Hoists the task into the Pinned group in the Open view. The value persists but is not rendered in other views." },
+          "sortOrder": { "type": "integer", "readOnly": true, "description": "Persistent canonical list position. Use the reorder endpoint to change it." },
           "createdAt": { "type": "string", "format": "date-time" },
           "updatedAt": { "type": "string", "format": "date-time" },
           "attachmentCount": { "type": "integer", "minimum": 0 }

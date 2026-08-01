@@ -27,7 +27,8 @@ test("ships the simplified todo and project surface", async () => {
   assert.match(page, /Search tasks/);
   assert.match(page, /All projects/);
   assert.match(page, /Unassigned/);
-  assert.match(page, /Smart sort/);
+  assert.doesNotMatch(page, /Smart sort|aria-label="Sort tasks"/);
+  assert.match(page, /compareCanonicalOrder/);
   assert.match(page, /Snoozed/);
   assert.match(page, /type View = "open" \| "snoozed" \| "done" \| "all"/);
   assert.match(page, /open: "Open",\s+snoozed: "Snoozed",\s+done: "Done",\s+all: "All"/);

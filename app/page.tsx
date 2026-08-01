@@ -19,7 +19,7 @@ import { uploadTaskAttachmentMultipart } from "./attachment-upload-client";
 import { ActionIcon, type ActionIconName } from "./action-icon";
 import { currentOpenTaskCount, updateNativeAppBadge } from "./app-badge";
 import { copyTextToClipboard } from "./copy-to-clipboard";
-import { dueDateSortValue, formatDueDate, isDueTodayOrOverdue } from "./date-only";
+import { formatDueDate, isDueTodayOrOverdue } from "./date-only";
 import { cronValidationError, nextCronOccurrence } from "../lib/cron";
 import { headersWithDeviceId } from "./device-id";
 import {
@@ -73,7 +73,6 @@ import {
 type TodoStatus = "open" | "completed";
 type View = "open" | "snoozed" | "done" | "all";
 type TaskListView = View;
-type Sort = "smart" | "priority" | "due" | "newest" | "oldest" | "az";
 type TodoAction = "complete" | "snooze" | "unsnooze" | "delete";
 type ExecutableTodoAction = TodoAction;
 type SnoozePreset = QuickSnoozePreset;
@@ -107,6 +106,7 @@ type Todo = {
   recurrenceCron: string | null;
   recurrenceLastFiredAt: string | null;
   pinned: boolean;
+  sortOrder: number;
   createdAt: string;
   updatedAt: string;
   attachmentCount: number;
@@ -353,6 +353,7 @@ function patchTodo(todo: Todo, patch: Record<string, unknown>) {
     ...(patch.dueDate !== undefined ? { dueDate: patch.dueDate ? String(patch.dueDate) : null } : {}),
     ...(patch.context !== undefined ? { context: patch.context ? String(patch.context) : null } : {}),
     ...(patch.recurrenceCron !== undefined ? { recurrenceCron: patch.recurrenceCron ? String(patch.recurrenceCron) : null, snoozedUntil: patch.recurrenceCron ? null : todo.snoozedUntil } : {}),
+    ...(patch.sortOrder !== undefined ? { sortOrder: Number(patch.sortOrder) } : {}),
   };
 }
 
@@ -368,6 +369,7 @@ const MAX_AUDIO_DURATION_MS = 30 * 60 * 1000;
 const MAX_VIDEO_DURATION_MS = 60 * 60 * 1000;
 const MAX_IMAGE_PIXELS = 100_000_000;
 const SYNC_STATUS_DELAY_MS = 5_000;
+const TASK_SORT_ORDER_STEP = 1024;
 
 type PreparedAttachmentUpload = {
   uploadId: string;
@@ -970,12 +972,40 @@ function dateInputValue(value: string | null) {
   return value?.match(/^\d{4}-\d{2}-\d{2}/)?.[0] ?? "";
 }
 
-function compareSmart(a: Todo, b: Todo) {
-  const aDue = dueDateSortValue(a.dueDate);
-  const bDue = dueDateSortValue(b.dueDate);
-  if (aDue !== bDue) return aDue - bDue;
-  if (a.priority !== b.priority) return a.priority - b.priority;
-  return new Date(b.updatedAt).valueOf() - new Date(a.updatedAt).valueOf();
+function canonicalSortOrder(todo: Todo) {
+  return Number.isFinite(todo.sortOrder)
+    ? todo.sortOrder
+    : -new Date(todo.updatedAt).valueOf();
+}
+
+function compareCanonicalOrder(a: Todo, b: Todo) {
+  return canonicalSortOrder(a) - canonicalSortOrder(b) || b.id - a.id;
+}
+
+function reorderCanonicalTodos(
+  current: Todo[],
+  movedId: number,
+  targetId: number,
+  placement: "before" | "after",
+) {
+  const ordered = [...current].sort(compareCanonicalOrder);
+  const movedIndex = ordered.findIndex((todo) => todo.id === movedId);
+  if (movedIndex < 0 || movedId === targetId) return current;
+  const [moved] = ordered.splice(movedIndex, 1);
+  const targetIndex = ordered.findIndex((todo) => todo.id === targetId);
+  if (targetIndex < 0) return current;
+  ordered.splice(targetIndex + (placement === "after" ? 1 : 0), 0, moved);
+  let serverIndex = 0;
+  const orderById = new Map<number, number>();
+  for (const todo of ordered) {
+    if (todo.id < 1 || todo.offline) continue;
+    orderById.set(todo.id, serverIndex * TASK_SORT_ORDER_STEP);
+    serverIndex += 1;
+  }
+  return current.map((todo) => {
+    const sortOrder = orderById.get(todo.id);
+    return sortOrder === undefined || sortOrder === todo.sortOrder ? todo : { ...todo, sortOrder };
+  });
 }
 
 function matchesView(todo: Todo, view: View, now: number) {
@@ -1034,6 +1064,7 @@ function offlineRecordTodo(record: OfflineTodoRecord): Todo {
     recurrenceCron: record.recurrenceCron ?? null,
     recurrenceLastFiredAt: record.recurrenceLastFiredAt ?? null,
     pinned: record.pinned ?? false,
+    sortOrder: record.sortOrder ?? -new Date(record.updatedAt ?? record.createdAt).valueOf(),
     createdAt: record.createdAt,
     updatedAt: record.updatedAt ?? record.createdAt,
     attachmentCount: record.attachments.length,
@@ -1055,6 +1086,7 @@ function offlineTaskPatch(todo: Todo) {
     recurrenceCron: todo.recurrenceCron,
     recurrenceLastFiredAt: todo.recurrenceLastFiredAt,
     pinned: todo.pinned,
+    sortOrder: todo.sortOrder,
     sourceKind: todo.sourceKind,
     sourceId: todo.sourceId,
   } satisfies Partial<OfflineTodoRecord>;
@@ -1082,9 +1114,15 @@ function TaskRow({
   onTitleChange,
   onTitleBlur,
   onTitleFocus,
+  onReorderStart,
+  onReorderMove,
+  onReorderEnd,
+  onReorderByKeyboard,
   showPin,
   keyboardFocused,
   keyboardActionIndex,
+  reordering,
+  reorderTarget,
 }: {
   todo: Todo;
   selected: boolean;
@@ -1097,13 +1135,21 @@ function TaskRow({
   onTitleChange: (todo: Todo, title: string) => void;
   onTitleBlur: (todo: Todo, title: string) => void;
   onTitleFocus: (todo: Todo) => void;
+  onReorderStart: (todo: Todo, event: ReactPointerEvent<HTMLButtonElement>) => void;
+  onReorderMove: (event: ReactPointerEvent<HTMLButtonElement>) => void;
+  onReorderEnd: (event: ReactPointerEvent<HTMLButtonElement>, cancelled: boolean) => void;
+  onReorderByKeyboard: (todo: Todo, direction: "up" | "down") => void;
   showPin: boolean;
   keyboardFocused: boolean;
   keyboardActionIndex: number;
+  reordering: boolean;
+  reorderTarget: boolean;
 }) {
   const [offset, setOffset] = useState(0);
   const [swipeWidth, setSwipeWidth] = useState(1);
   const [dragging, setDragging] = useState(false);
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState(todo.title);
   const gesture = useRef<{ startX: number; startY: number; width: number } | null>(null);
   const offsetRef = useRef(0);
   const suppressTitleClickRef = useRef(false);
@@ -1219,15 +1265,18 @@ function TaskRow({
 
   useLayoutEffect(() => {
     resizeTitle();
-  }, [todo.title]);
+  }, [editingTitle, titleDraft, todo.title]);
 
   return (
     <li
       data-keyboard-task-id={todo.id}
+      data-task-row-id={todo.id}
       className={classNames(
         "group relative scroll-m-24 overflow-hidden",
-        selected && "ring-1 ring-inset ring-[#216e4e]/30",
-        keyboardFocused && "z-10 ring-2 ring-inset ring-[#216e4e]/55",
+        selected && !editingTitle && "ring-1 ring-inset ring-[#216e4e]/30",
+        keyboardFocused && !editingTitle && "z-10 ring-2 ring-inset ring-[#216e4e]/55",
+        reordering && "z-20 opacity-70 shadow-lg",
+        reorderTarget && "ring-2 ring-inset ring-[#216e4e]/45",
       )}
     >
       <div className={classNames("absolute inset-0 flex items-center justify-between px-5 text-sm font-semibold text-white md:hidden", revealClass)} aria-hidden="true">
@@ -1243,17 +1292,39 @@ function TaskRow({
         className={classNames(
           "relative flex min-h-[72px] touch-pan-y items-start gap-3 bg-white px-4 py-4 hover:bg-[#fafbf9] sm:px-5",
           !dragging && "transition-transform duration-200 ease-out",
-          selected && "bg-[#f3f8f5] hover:bg-[#f3f8f5]",
+          selected && !editingTitle && "bg-[#f3f8f5] hover:bg-[#f3f8f5]",
         )}
       >
-        <input
-          type="checkbox"
-          checked={selected}
-          onChange={() => onSelect(todo)}
-          disabled={pending || todo.offline}
-          aria-label={`Select: ${todo.title}`}
-          className={classNames("mt-0.5 h-5 w-5 shrink-0 cursor-pointer rounded border-[#9da6a0] accent-[#216e4e] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#216e4e]", pending && "animate-pulse")}
-        />
+        <div className="flex w-5 shrink-0 flex-col items-center gap-1">
+          <input
+            type="checkbox"
+            checked={selected}
+            onChange={() => onSelect(todo)}
+            disabled={pending || todo.offline}
+            aria-label={`Select: ${todo.title}`}
+            className={classNames("mt-0.5 h-5 w-5 shrink-0 cursor-pointer rounded border-[#9da6a0] accent-[#216e4e] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#216e4e]", pending && "animate-pulse")}
+          />
+          <button
+            type="button"
+            data-row-action
+            aria-label={`Reorder: ${todo.title}. Use arrow keys or drag.`}
+            title="Drag to reorder"
+            disabled={pending || todo.offline || editingTitle}
+            onPointerDown={(event) => onReorderStart(todo, event)}
+            onPointerMove={onReorderMove}
+            onPointerUp={(event) => onReorderEnd(event, false)}
+            onPointerCancel={(event) => onReorderEnd(event, true)}
+            onKeyDown={(event) => {
+              if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+                event.preventDefault();
+                onReorderByKeyboard(todo, event.key === "ArrowUp" ? "up" : "down");
+              }
+            }}
+            className="grid h-6 w-6 touch-none place-items-center rounded-md text-[#9aa19d] transition hover:bg-[#eef0ed] hover:text-[#4f5752] focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[#216e4e] disabled:cursor-not-allowed disabled:opacity-25"
+          >
+            <ActionIcon name="reorder" className="h-4 w-4" />
+          </button>
+        </div>
         <div
           onClick={(event) => {
             if (suppressTitleClickRef.current) {
@@ -1269,7 +1340,7 @@ function TaskRow({
           }}
           className={classNames(
             "min-w-0 flex-1 rounded-lg text-left transition-colors",
-            keyboardFocused && keyboardActionIndex === 0 && "bg-[#eaf3ed] text-[#195d41] ring-2 ring-[#216e4e]/20",
+            keyboardFocused && keyboardActionIndex === 0 && !editingTitle && "bg-[#eaf3ed] text-[#195d41] ring-2 ring-[#216e4e]/20",
           )}
         >
           <div className="flex min-w-0 items-start gap-2">
@@ -1277,13 +1348,21 @@ function TaskRow({
               ref={titleRef}
               data-inline-title
               data-keyboard-action-index="0"
-              value={todo.title}
+              value={editingTitle ? titleDraft : todo.title}
               onChange={(event) => {
+                setTitleDraft(event.target.value);
                 onTitleChange(todo, event.target.value);
                 resizeTitle();
               }}
-              onFocus={() => onTitleFocus(todo)}
-              onBlur={(event) => onTitleBlur(todo, event.target.value)}
+              onFocus={() => {
+                setTitleDraft(todo.title);
+                setEditingTitle(true);
+                onTitleFocus(todo);
+              }}
+              onBlur={(event) => {
+                setEditingTitle(false);
+                onTitleBlur(todo, event.target.value);
+              }}
               onKeyDown={(event) => {
                 if (event.key === "Escape") {
                   event.preventDefault();
@@ -1322,7 +1401,7 @@ function TaskRow({
           </button>
         )}
         {!pending && !todo.offline && (
-          <div className={classNames("hidden shrink-0 items-center gap-1 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 md:flex", keyboardFocused ? "opacity-100" : "opacity-0")}>
+          <div className={classNames("hidden shrink-0 items-center gap-1 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 md:flex", keyboardFocused && !editingTitle ? "opacity-100" : "opacity-0")}>
             {hoverActions.map(({ action, label, icon }, index) => (
               <button
                 key={action}
@@ -1338,7 +1417,7 @@ function TaskRow({
                   action === "snooze" && "hover:bg-amber-50 hover:text-amber-700",
                   action === "pin" && "hover:bg-[#eaf3ed] hover:text-[#216e4e]",
                   action === "delete" && "hover:bg-red-50 hover:text-red-700",
-                  keyboardFocused && keyboardActionIndex === index + 1 && "bg-[#eaf3ed] text-[#195d41] ring-2 ring-inset ring-[#216e4e]/35",
+                  keyboardFocused && !editingTitle && keyboardActionIndex === index + 1 && "bg-[#eaf3ed] text-[#195d41] ring-2 ring-inset ring-[#216e4e]/35",
                 )}
               >
                 <ActionIcon name={icon} className="h-[18px] w-[18px]" />
@@ -1366,7 +1445,6 @@ export default function Home() {
   const [query, setQuery] = useState("");
   const [project, setProject] = useState("");
   const [priority, setPriority] = useState("");
-  const [sort, setSort] = useState<Sort>("smart");
   const [newTitle, setNewTitle] = useState("");
   const [captureProject, setCaptureProject] = useState("");
   const [captureDraftToken, setCaptureDraftToken] = useState(() => crypto.randomUUID());
@@ -1415,7 +1493,8 @@ export default function Home() {
   const [keyboardTodoId, setKeyboardTodoId] = useState<number | null>(null);
   const [keyboardActionIndex, setKeyboardActionIndex] = useState(0);
   const [inlineEditingId, setInlineEditingId] = useState<number | null>(null);
-  const [inlineEditingOrder, setInlineEditingOrder] = useState<number[] | null>(null);
+  const [reorderingId, setReorderingId] = useState<number | null>(null);
+  const [reorderTargetId, setReorderTargetId] = useState<number | null>(null);
   const [taskDialogPullDistance, setTaskDialogPullDistance] = useState(0);
   const [taskDialogPullReady, setTaskDialogPullReady] = useState(false);
   const [taskDialogPulling, setTaskDialogPulling] = useState(false);
@@ -1448,6 +1527,9 @@ export default function Home() {
   const autosaveTimerRef = useRef<number | null>(null);
   const autosaveInFlightRef = useRef(false);
   const queuedAutosaveRef = useRef<{ todoId: number; draft: TodoDraft; baseline: TodoDraft } | null>(null);
+  const activeEditFieldRef = useRef<AutosaveField | null>(null);
+  const activeEditFocusValueRef = useRef<string | number | null>(null);
+  const deferredRemoteEditFieldsRef = useRef<Map<AutosaveField, TodoDraft[AutosaveField]>>(new Map());
   const syncOfflineQueueRef = useRef<(() => Promise<void>) | null>(null);
   const persistTaskDraftRef = useRef<PersistTaskDraft | null>(null);
   const closeTaskDetailsRef = useRef<() => void>(() => undefined);
@@ -1462,8 +1544,19 @@ export default function Home() {
   const syncRevisionRef = useRef(0);
   const lastLiveSnapshotRef = useRef("");
   const syncRetryTimerRef = useRef<number | null>(null);
+  const syncWakeTimerRef = useRef<number | null>(null);
+  const syncWakeAtRef = useRef(0);
+  const syncRequestedRef = useRef(false);
   const syncBackoffAttemptsRef = useRef(0);
   const syncNextAttemptAtRef = useRef(0);
+  const reorderGestureRef = useRef<{
+    todoId: number;
+    allowedIds: Set<number>;
+    initialTodos: Todo[];
+    targetId: number | null;
+    placement: "before" | "after";
+  } | null>(null);
+  const reorderPreviewRef = useRef<Todo[] | null>(null);
   const lastAppBadgeCountRef = useRef<number | null>(null);
   const keyboardPreferredIndexRef = useRef(0);
   const taskDialogNestedOverlayOpen = projectDialog !== null || viewerIndex !== null || voiceTarget !== null || customSnoozeDialog !== null;
@@ -1472,6 +1565,9 @@ export default function Home() {
   useEffect(() => () => {
     inlineTitleTimersRef.current.forEach((timer) => window.clearTimeout(timer));
     inlineTitleTimersRef.current.clear();
+    if (syncWakeTimerRef.current !== null) window.clearTimeout(syncWakeTimerRef.current);
+    syncWakeTimerRef.current = null;
+    syncWakeAtRef.current = 0;
   }, []);
 
   function rebuildPendingActionState(actions: OfflineTaskAction[]) {
@@ -1499,6 +1595,34 @@ export default function Home() {
       patchTodo(todo, pendingTodoPatchesRef.current.get(todo.id) ?? {}),
       pendingActionPatchesRef.current.get(todo.id) ?? {},
     );
+  }
+
+  function reconcileRemoteEditDraft(remoteTodo: Todo, source: string) {
+    const currentDraft = editDraftRef.current;
+    const baseline = editBaselineRef.current;
+    if (!currentDraft || !baseline || editingIdRef.current !== remoteTodo.id) return;
+    const remoteDraft = todoDraft(remoteTodo);
+    const nextDraft = { ...currentDraft };
+    const nextBaseline = { ...baseline };
+    let changed = false;
+    for (const field of [...AUTOSAVE_FIELDS, "project" as const]) {
+      if (currentDraft[field] !== baseline[field]) continue;
+      if (field === activeEditFieldRef.current) {
+        deferredRemoteEditFieldsRef.current.set(field, remoteDraft[field]);
+        console.info("[todo-sync] remote field deferred during active editing", {
+          todoId: remoteTodo.id,
+          field,
+          source,
+        });
+        continue;
+      }
+      nextDraft[field] = remoteDraft[field] as never;
+      nextBaseline[field] = remoteDraft[field] as never;
+      if (nextDraft[field] !== currentDraft[field]) changed = true;
+    }
+    editBaselineRef.current = nextBaseline;
+    editDraftRef.current = nextDraft;
+    if (changed) setEditDraft(nextDraft);
   }
 
   function applyRemoteCaptureDraft(remoteDraft: CaptureDraft | null, source: "bootstrap" | "poll" | "reconnect" | "mutation") {
@@ -1568,29 +1692,16 @@ export default function Home() {
           && previous.project === todo.project
           && previous.context === todo.context
           && previous.recurrenceCron === todo.recurrenceCron
-          && previous.pinned === todo.pinned;
+          && previous.pinned === todo.pinned
+          && previous.sortOrder === todo.sortOrder;
       });
       return unchanged ? current : next;
     });
 
     const activeId = editingIdRef.current;
-    const currentDraft = editDraftRef.current;
-    const baseline = editBaselineRef.current;
     const remoteTodo = activeId === null ? null : resolved.find((todo) => todo.id === activeId) ?? null;
-    if (remoteTodo && currentDraft && baseline) {
-      const remoteDraft = todoDraft(remoteTodo);
-      const nextDraft = { ...currentDraft };
-      const nextBaseline = { ...baseline };
-      for (const field of [...AUTOSAVE_FIELDS, "project" as const]) {
-        const locallyUnchanged = currentDraft[field] === baseline[field];
-        if (locallyUnchanged) {
-          nextDraft[field] = remoteDraft[field] as never;
-          nextBaseline[field] = remoteDraft[field] as never;
-        }
-      }
-      editBaselineRef.current = nextBaseline;
-      editDraftRef.current = nextDraft;
-      if (JSON.stringify(nextDraft) !== JSON.stringify(currentDraft)) setEditDraft(nextDraft);
+    if (remoteTodo) {
+      reconcileRemoteEditDraft(remoteTodo, source);
     } else if (activeId !== null && !remoteTodo && !pendingPatches.has(activeId)) {
       if (autosaveTimerRef.current !== null) window.clearTimeout(autosaveTimerRef.current);
       autosaveTimerRef.current = null;
@@ -1604,7 +1715,7 @@ export default function Home() {
       setNotice({ tone: "error", text: "This task was deleted on another device." });
       console.warn("[todo-sync] open task removed by remote snapshot", { todoId: activeId, source });
     }
-    const signature = resolved.map((todo) => `${todo.id}:${todo.updatedAt}:${todo.attachmentCount}`).join("|");
+    const signature = resolved.map((todo) => `${todo.id}:${todo.updatedAt}:${todo.attachmentCount}:${todo.sortOrder}`).join("|");
     const changed = signature !== lastLiveSnapshotRef.current;
     lastLiveSnapshotRef.current = signature;
     if (source !== "poll" || changed) {
@@ -1644,23 +1755,9 @@ export default function Home() {
     });
 
     const activeId = editingIdRef.current;
-    const currentDraft = editDraftRef.current;
-    const baseline = editBaselineRef.current;
     const remoteTodo = activeId === null ? null : changedById.get(activeId) ?? null;
-    if (remoteTodo && currentDraft && baseline) {
-      const remoteDraft = todoDraft(remoteTodo);
-      const nextDraft = { ...currentDraft };
-      const nextBaseline = { ...baseline };
-      for (const field of [...AUTOSAVE_FIELDS, "project" as const]) {
-        const locallyUnchanged = currentDraft[field] === baseline[field];
-        if (locallyUnchanged) {
-          nextDraft[field] = remoteDraft[field] as never;
-          nextBaseline[field] = remoteDraft[field] as never;
-        }
-      }
-      editBaselineRef.current = nextBaseline;
-      editDraftRef.current = nextDraft;
-      if (JSON.stringify(nextDraft) !== JSON.stringify(currentDraft)) setEditDraft(nextDraft);
+    if (remoteTodo) {
+      reconcileRemoteEditDraft(remoteTodo, source);
     } else if (activeId !== null && deleted.has(activeId) && !pendingPatches.has(activeId)) {
       if (autosaveTimerRef.current !== null) window.clearTimeout(autosaveTimerRef.current);
       autosaveTimerRef.current = null;
@@ -2400,23 +2497,8 @@ export default function Home() {
         && (!project || (project === UNASSIGNED_PROJECT ? !todo.project : todo.project === project))
         && (!priority || todo.priority === Number(priority));
     });
-    const stableOrder = inlineEditingOrder ? new Map(inlineEditingOrder.map((id, index) => [id, index])) : null;
-    return [...rows].sort((a, b) => {
-      if (stableOrder) {
-        const aIndex = stableOrder.get(a.id);
-        const bIndex = stableOrder.get(b.id);
-        if (aIndex !== undefined && bIndex !== undefined) return aIndex - bIndex;
-        if (aIndex !== undefined) return -1;
-        if (bIndex !== undefined) return 1;
-      }
-      if (sort === "priority") return a.priority - b.priority || compareSmart(a, b);
-      if (sort === "due") return dueDateSortValue(a.dueDate) - dueDateSortValue(b.dueDate);
-      if (sort === "newest") return new Date(b.createdAt).valueOf() - new Date(a.createdAt).valueOf();
-      if (sort === "oldest") return new Date(a.createdAt).valueOf() - new Date(b.createdAt).valueOf();
-      if (sort === "az") return a.title.localeCompare(b.title);
-      return compareSmart(a, b);
-    });
-  }, [todos, view, query, project, priority, sort, now, inlineEditingId, inlineEditingOrder]);
+    return [...rows].sort(compareCanonicalOrder);
+  }, [todos, view, query, project, priority, now, inlineEditingId]);
 
   const pinnedOpenTodos = view === "open" ? filtered.filter((todo) => todo.pinned) : [];
   const regularOpenTodos = view === "open" ? filtered.filter((todo) => !todo.pinned) : filtered;
@@ -2427,8 +2509,8 @@ export default function Home() {
   const selectedIds = useMemo(() => [...selected], [selected]);
   const selectedTodos = useMemo(() => todos.filter((todo) => selected.has(todo.id)), [selected, todos]);
   const allVisibleSelected = filtered.length > 0 && filtered.every((todo) => selected.has(todo.id));
-  const filtersActive = Boolean(query || priority || sort !== "smart");
-  const mobileFilterCount = Number(Boolean(priority)) + Number(sort !== "smart");
+  const filtersActive = Boolean(query || priority);
+  const mobileFilterCount = Number(Boolean(priority));
   const editingTodo = editingId === null ? null : todos.find((todo) => todo.id === editingId) ?? null;
   const imageAttachments = detailAttachments.filter((attachment) => attachment.kind === "image");
   const viewerAttachment = viewerIndex === null ? null : imageAttachments[viewerIndex] ?? null;
@@ -2679,6 +2761,47 @@ export default function Home() {
     const next = { ...current, [field]: value };
     editDraftRef.current = next;
     setEditDraft(next);
+  }
+
+  function focusEditDraftField(field: AutosaveField) {
+    const draft = editDraftRef.current;
+    if (!draft) return;
+    activeEditFieldRef.current = field;
+    activeEditFocusValueRef.current = normalizedDraftField(draft, field);
+    deferredRemoteEditFieldsRef.current.delete(field);
+    console.info("[todo-inline-edit] details field editing started", {
+      todoId: editingIdRef.current,
+      field,
+    });
+  }
+
+  function blurEditDraftField(field: AutosaveField) {
+    if (activeEditFieldRef.current !== field) return;
+    const draft = editDraftRef.current;
+    const baseline = editBaselineRef.current;
+    const deferredRemoteValue = deferredRemoteEditFieldsRef.current.get(field);
+    const hadDeferredRemote = deferredRemoteEditFieldsRef.current.has(field);
+    const focusValue = activeEditFocusValueRef.current;
+    activeEditFieldRef.current = null;
+    activeEditFocusValueRef.current = null;
+    deferredRemoteEditFieldsRef.current.delete(field);
+    if (!draft || !baseline || !hadDeferredRemote) return;
+
+    const userChanged = normalizedDraftField(draft, field) !== focusValue;
+    const nextBaseline = { ...baseline, [field]: deferredRemoteValue };
+    editBaselineRef.current = nextBaseline;
+    if (!userChanged) {
+      const nextDraft = { ...draft, [field]: deferredRemoteValue };
+      editDraftRef.current = nextDraft;
+      setEditDraft(nextDraft);
+    } else if (editingIdRef.current !== null) {
+      void persistTaskDraftRef.current?.(editingIdRef.current, draft, "retry", nextBaseline);
+    }
+    console.info("[todo-sync] deferred remote field resolved after editing", {
+      todoId: editingIdRef.current,
+      field,
+      resolution: userChanged ? "local-edit-kept" : "remote-edit-applied",
+    });
   }
 
   function clipboardAttachments(event: ReactClipboardEvent<HTMLTextAreaElement>) {
@@ -3134,14 +3257,41 @@ export default function Home() {
     }
   }
 
+  function scheduleOfflineQueueSync(source: string, delayMs = 0) {
+    const wakeAt = Math.max(Date.now() + Math.max(0, delayMs), syncNextAttemptAtRef.current);
+    if (syncWakeTimerRef.current !== null && syncWakeAtRef.current <= wakeAt) return;
+    if (syncWakeTimerRef.current !== null) window.clearTimeout(syncWakeTimerRef.current);
+    syncWakeAtRef.current = wakeAt;
+    syncWakeTimerRef.current = window.setTimeout(() => {
+      syncWakeTimerRef.current = null;
+      syncWakeAtRef.current = 0;
+      void syncOfflineQueueRef.current?.();
+    }, Math.max(0, wakeAt - Date.now()));
+    console.info("[todo-offline] synchronization wake scheduled", {
+      source,
+      wakeAt: new Date(wakeAt).toISOString(),
+      delayMs: Math.max(0, wakeAt - Date.now()),
+    });
+  }
+
   async function syncOfflineQueue() {
-    if (syncingOfflineRef.current || Date.now() < syncNextAttemptAtRef.current) return;
+    if (syncingOfflineRef.current) {
+      syncRequestedRef.current = true;
+      console.info("[todo-offline] follow-up synchronization requested during active pass");
+      return;
+    }
+    if (Date.now() < syncNextAttemptAtRef.current) {
+      scheduleOfflineQueueSync("backoff-gate");
+      return;
+    }
     syncingOfflineRef.current = true;
+    syncRequestedRef.current = false;
     const startedAt = Date.now();
     const deferPass = (stage: string, error: unknown) => {
       syncBackoffAttemptsRef.current += 1;
       const delayMs = syncRetryDelay(syncBackoffAttemptsRef.current);
       syncNextAttemptAtRef.current = Date.now() + delayMs;
+      scheduleOfflineQueueSync(`backoff:${stage}`, delayMs);
       const quality = navigator.onLine ? "degraded" : "offline";
       setOnline(navigator.onLine);
       setConnectionQuality(quality);
@@ -3163,6 +3313,8 @@ export default function Home() {
         setOfflineCount(0);
         setOfflineEditCount(0);
         setOfflineActionCount(0);
+        syncBackoffAttemptsRef.current = 0;
+        syncNextAttemptAtRef.current = 0;
         return;
       }
       console.info("[todo-offline] sync started", {
@@ -3309,7 +3461,13 @@ export default function Home() {
             const currentDraft = editDraftRef.current;
             const previousBaseline = editBaselineRef.current ?? serverDraft;
             const nextDraft = { ...currentDraft };
+            const nextBaseline = { ...serverDraft };
             for (const field of AUTOSAVE_FIELDS) {
+              if (field === activeEditFieldRef.current) {
+                deferredRemoteEditFieldsRef.current.set(field, serverDraft[field]);
+                nextBaseline[field] = previousBaseline[field] as never;
+                continue;
+              }
               const queuedValue = mutation.patch[field];
               const hasQueuedValue = Object.prototype.hasOwnProperty.call(mutation.patch, field);
               const changedAfterQueue = hasQueuedValue
@@ -3317,9 +3475,9 @@ export default function Home() {
                 : normalizedDraftField(currentDraft, field) !== normalizedDraftField(previousBaseline, field);
               if (!changedAfterQueue) nextDraft[field] = serverDraft[field] as never;
             }
-            editBaselineRef.current = serverDraft;
+            editBaselineRef.current = nextBaseline;
             editDraftRef.current = nextDraft;
-            setEditDraft(nextDraft);
+            if (JSON.stringify(nextDraft) !== JSON.stringify(currentDraft)) setEditDraft(nextDraft);
             setEditSaveState("saved");
             setEditSaveMessage(result.appliedFields.length < Object.keys(mutation.patch).length ? "Synced · newer remote changes kept" : "Saved automatically");
           }
@@ -3450,6 +3608,13 @@ export default function Home() {
       setOfflineActionCount(remainingActions.length);
       syncBackoffAttemptsRef.current = 0;
       syncNextAttemptAtRef.current = 0;
+      const nextDeferredActionAt = remainingActions.reduce((earliest, action) => {
+        const value = new Date(action.nextAttemptAt).valueOf();
+        return Number.isFinite(value) ? Math.min(earliest, value) : earliest;
+      }, Number.POSITIVE_INFINITY);
+      if (Number.isFinite(nextDeferredActionAt)) {
+        scheduleOfflineQueueSync("deferred-action", Math.max(0, nextDeferredActionAt - Date.now()));
+      }
       console.info("[todo-offline] sync finished", {
         requestedTasks: records.length,
         requestedEdits: mutations.length,
@@ -3464,8 +3629,13 @@ export default function Home() {
       });
     } catch (error) {
       console.error("[todo-offline] sync pass failed", { durationMs: Date.now() - startedAt, error });
+      scheduleOfflineQueueSync("unexpected-pass-failure", 2_500);
     } finally {
       syncingOfflineRef.current = false;
+      if (syncRequestedRef.current) {
+        syncRequestedRef.current = false;
+        scheduleOfflineQueueSync("follow-up-request");
+      }
     }
   }
 
@@ -3479,6 +3649,7 @@ export default function Home() {
     const temporaryId = -Date.now();
     const clientId = crypto.randomUUID();
     const createdAt = new Date().toISOString();
+    const sortOrder = Math.min(0, ...todos.map(canonicalSortOrder)) - TASK_SORT_ORDER_STEP;
     const optimistic: Todo = {
       id: temporaryId,
       clientId,
@@ -3496,6 +3667,7 @@ export default function Home() {
       recurrenceCron: null,
       recurrenceLastFiredAt: null,
       pinned: false,
+      sortOrder,
       createdAt,
       updatedAt: createdAt,
       attachmentCount: captureAttachments.length,
@@ -3526,6 +3698,7 @@ export default function Home() {
         recurrenceCron: null,
         recurrenceLastFiredAt: null,
         pinned: false,
+        sortOrder,
         sourceKind: "site",
         sourceId: null,
         createdAt,
@@ -4132,6 +4305,9 @@ export default function Home() {
     editingIdRef.current = todo.id;
     editDraftRef.current = draft;
     editBaselineRef.current = draft;
+    activeEditFieldRef.current = null;
+    activeEditFocusValueRef.current = null;
+    deferredRemoteEditFieldsRef.current.clear();
     setEditingId(todo.id);
     setEditDraft(draft);
     setEditSaveState("saved");
@@ -4169,6 +4345,9 @@ export default function Home() {
     editingIdRef.current = null;
     editDraftRef.current = null;
     editBaselineRef.current = null;
+    activeEditFieldRef.current = null;
+    activeEditFocusValueRef.current = null;
+    deferredRemoteEditFieldsRef.current.clear();
     taskDialogGestureRef.current = null;
     taskDialogRawPullRef.current = 0;
     setTaskDialogPullDistance(0);
@@ -4353,7 +4532,6 @@ export default function Home() {
   function focusInlineTitle(todo: Todo) {
     if (todo.title.trim()) inlineTitleLastValidRef.current.set(todo.id, todo.title);
     setInlineEditingId(todo.id);
-    setInlineEditingOrder(displayedTodos.map((item) => item.id));
     setKeyboardTodoId(todo.id);
     setKeyboardActionIndex(0);
     console.info("[todo-inline-edit] title editing started", {
@@ -4386,7 +4564,139 @@ export default function Home() {
     }
     inlineTitleLastValidRef.current.delete(todo.id);
     setInlineEditingId(null);
-    setInlineEditingOrder(null);
+  }
+
+  function reorderScope(todo: Todo) {
+    const scope = view === "open" && todo.pinned ? pinnedOpenTodos : regularOpenTodos;
+    return scope.filter((item) => item.id > 0 && !item.offline);
+  }
+
+  async function persistCanonicalTaskOrder(
+    nextTodos: Todo[],
+    movedTodoId: number,
+    source: "drag" | "keyboard",
+    rollback: Todo[],
+  ) {
+    const ordered = [...nextTodos].filter((todo) => todo.id > 0).sort(compareCanonicalOrder);
+    const orderedIds = ordered.map((todo) => todo.id);
+    const operationId = crypto.randomUUID();
+    try {
+      await saveOfflineTaskAction({
+        operationId,
+        path: "/api/todos/reorder",
+        method: "PATCH",
+        body: { orderedIds },
+        taskIds: [movedTodoId],
+        kind: "reorder",
+        optimisticPatches: Object.fromEntries(
+          ordered.map((todo) => [String(todo.id), { sortOrder: todo.sortOrder }]),
+        ),
+        createdAt: new Date().toISOString(),
+      });
+      const actions = await listOfflineTaskActions();
+      rebuildPendingActionState(actions);
+      setOfflineActionCount(actions.length);
+      void syncOfflineQueueRef.current?.();
+      console.info("[todo-order] reorder committed to durable outbox", {
+        operationId,
+        movedTodoId,
+        source,
+        orderedTasks: orderedIds.length,
+        queuedActions: actions.length,
+        connectionQuality,
+      });
+    } catch (error) {
+      setTodos(rollback);
+      setNotice({
+        tone: "error",
+        text: error instanceof Error ? error.message : "The task order could not be saved locally.",
+      });
+      console.error("[todo-order] reorder local commit failed", {
+        movedTodoId,
+        source,
+        orderedTasks: orderedIds.length,
+        error,
+      });
+    }
+  }
+
+  function startTaskReorder(todo: Todo, event: ReactPointerEvent<HTMLButtonElement>) {
+    if (todo.id < 1 || todo.offline) return;
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    const scope = reorderScope(todo);
+    reorderGestureRef.current = {
+      todoId: todo.id,
+      allowedIds: new Set(scope.map((item) => item.id)),
+      initialTodos: todos,
+      targetId: null,
+      placement: "before",
+    };
+    reorderPreviewRef.current = todos;
+    setReorderingId(todo.id);
+    setReorderTargetId(null);
+    console.info("[todo-order] drag started", {
+      todoId: todo.id,
+      view,
+      scopedTasks: scope.length,
+      pointerType: event.pointerType,
+    });
+  }
+
+  function moveTaskReorder(event: ReactPointerEvent<HTMLButtonElement>) {
+    const gesture = reorderGestureRef.current;
+    if (!gesture) return;
+    event.preventDefault();
+    const row = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>("[data-task-row-id]");
+    const targetId = Number(row?.dataset.taskRowId);
+    if (!Number.isInteger(targetId) || targetId === gesture.todoId || !gesture.allowedIds.has(targetId) || !row) return;
+    const bounds = row.getBoundingClientRect();
+    const placement = event.clientY < bounds.top + bounds.height / 2 ? "before" : "after";
+    if (gesture.targetId === targetId && gesture.placement === placement) return;
+    gesture.targetId = targetId;
+    gesture.placement = placement;
+    setReorderTargetId(targetId);
+    setTodos((current) => {
+      const next = reorderCanonicalTodos(current, gesture.todoId, targetId, placement);
+      reorderPreviewRef.current = next;
+      return next;
+    });
+  }
+
+  function finishTaskReorder(event: ReactPointerEvent<HTMLButtonElement>, cancelled: boolean) {
+    const gesture = reorderGestureRef.current;
+    if (!gesture) return;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    const preview = reorderPreviewRef.current ?? gesture.initialTodos;
+    reorderGestureRef.current = null;
+    reorderPreviewRef.current = null;
+    setReorderingId(null);
+    setReorderTargetId(null);
+    if (cancelled || gesture.targetId === null) {
+      if (cancelled) setTodos(gesture.initialTodos);
+      console.info("[todo-order] drag finished without reorder", {
+        todoId: gesture.todoId,
+        cancelled,
+      });
+      return;
+    }
+    void persistCanonicalTaskOrder(preview, gesture.todoId, "drag", gesture.initialTodos);
+  }
+
+  function reorderTaskByKeyboard(todo: Todo, direction: "up" | "down") {
+    const scope = reorderScope(todo);
+    const index = scope.findIndex((item) => item.id === todo.id);
+    const target = scope[index + (direction === "up" ? -1 : 1)];
+    if (!target) return;
+    const next = reorderCanonicalTodos(todos, todo.id, target.id, direction === "up" ? "before" : "after");
+    setTodos(next);
+    void persistCanonicalTaskOrder(next, todo.id, "keyboard", todos);
+    console.info("[todo-order] keyboard reorder requested", {
+      todoId: todo.id,
+      targetId: target.id,
+      direction,
+      view,
+    });
   }
 
   persistTaskDraftRef.current = persistTaskDraft;
@@ -4809,7 +5119,7 @@ export default function Home() {
             ))}
           </div>
 
-          <div className="mb-3 grid grid-cols-[minmax(0,1fr)_auto] gap-2 sm:grid-cols-[minmax(220px,1fr)_auto_auto]">
+          <div className="mb-3 grid grid-cols-[minmax(0,1fr)_auto] gap-2 sm:grid-cols-[minmax(220px,1fr)_auto]">
             <label className="flex h-10 items-center gap-2 rounded-xl border border-black/[0.08] bg-white px-3 shadow-sm focus-within:border-[#216e4e]/50 focus-within:ring-3 focus-within:ring-[#216e4e]/10">
               <ActionIcon name="search" className="h-4 w-4 shrink-0 text-[#7c847f]" />
               <input
@@ -4842,14 +5152,6 @@ export default function Home() {
               <option value="3">Normal</option>
               <option value="4">Low</option>
             </select>
-            <select value={sort} onChange={(event) => setSort(event.target.value as Sort)} aria-label="Sort tasks" className="hidden h-10 rounded-xl border border-black/[0.08] bg-white px-3 text-sm text-[#4f5752] shadow-sm outline-none focus:border-[#216e4e]/50 sm:block">
-              <option value="smart">Smart sort</option>
-              <option value="priority">Priority</option>
-              <option value="due">Due date</option>
-              <option value="newest">Newest</option>
-              <option value="oldest">Oldest</option>
-              <option value="az">A–Z</option>
-            </select>
           </div>
 
           {filtersOpen && (
@@ -4859,7 +5161,7 @@ export default function Home() {
                 <div className="mx-auto mb-4 h-1 w-10 rounded-full bg-black/15" aria-hidden="true" />
                 <div className="mb-5 flex items-center justify-between">
                   <div>
-                    <h3 id="mobile-filters-title" className="text-lg font-semibold text-[#202522]">Filters & sorting</h3>
+                    <h3 id="mobile-filters-title" className="text-lg font-semibold text-[#202522]">Filters</h3>
                     <p className="mt-0.5 text-xs text-[#7c847f]">Narrow the list without losing workspace.</p>
                   </div>
                   <button type="button" onClick={() => setFiltersOpen(false)} className="grid h-9 w-9 place-items-center rounded-full bg-[#f1f2f0] text-[#4f5752]" aria-label="Close filters" title="Close"><ActionIcon name="close" /></button>
@@ -4876,21 +5178,10 @@ export default function Home() {
                       <option value="4">Low</option>
                     </select>
                   </label>
-                  <label className="block">
-                    <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-[#69716c]">Sort</span>
-                    <select value={sort} onChange={(event) => setSort(event.target.value as Sort)} className="h-12 w-full rounded-xl border border-black/[0.1] bg-white px-3 text-sm text-[#303632] outline-none focus:border-[#216e4e]/50">
-                      <option value="smart">Smart sort</option>
-                      <option value="priority">Priority</option>
-                      <option value="due">Due date</option>
-                      <option value="newest">Newest</option>
-                      <option value="oldest">Oldest</option>
-                      <option value="az">A–Z</option>
-                    </select>
-                  </label>
                 </div>
 
                 <div className="mt-6 grid grid-cols-2 gap-2">
-                  <button type="button" onClick={() => { setPriority(""); setSort("smart"); }} className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-black/[0.08] text-sm font-semibold text-[#4f5752]"><ActionIcon name="restore" />Reset</button>
+                  <button type="button" onClick={() => setPriority("")} className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-black/[0.08] text-sm font-semibold text-[#4f5752]"><ActionIcon name="restore" />Reset</button>
                   <button type="button" onClick={() => setFiltersOpen(false)} className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-[#216e4e] text-sm font-semibold text-white"><ActionIcon name="done" />Show {filtered.length} {filtered.length === 1 ? "task" : "tasks"}</button>
                 </div>
               </div>
@@ -4904,7 +5195,7 @@ export default function Home() {
             </div>
             <div className="flex items-center gap-3 text-xs text-[#7c847f]">
               <span>{syncing ? "Saving…" : `${filtered.length} ${filtered.length === 1 ? "item" : "items"}`}</span>
-              {filtersActive && <button onClick={() => { setQuery(""); setPriority(""); setSort("smart"); }} className="inline-flex items-center gap-1 font-medium text-[#216e4e] hover:underline"><ActionIcon name="cancel" className="h-3.5 w-3.5" />Clear filters</button>}
+              {filtersActive && <button onClick={() => { setQuery(""); setPriority(""); }} className="inline-flex items-center gap-1 font-medium text-[#216e4e] hover:underline"><ActionIcon name="cancel" className="h-3.5 w-3.5" />Clear filters</button>}
             </div>
           </div>
 
@@ -4935,9 +5226,15 @@ export default function Home() {
                     onTitleChange={updateInlineTitle}
                     onTitleBlur={blurInlineTitle}
                     onTitleFocus={focusInlineTitle}
+                    onReorderStart={startTaskReorder}
+                    onReorderMove={moveTaskReorder}
+                    onReorderEnd={finishTaskReorder}
+                    onReorderByKeyboard={reorderTaskByKeyboard}
                     showPin
                     keyboardFocused={keyboardTodoId === todo.id}
                     keyboardActionIndex={keyboardTodoId === todo.id ? keyboardActionIndex : 0}
+                    reordering={reorderingId === todo.id}
+                    reorderTarget={reorderTargetId === todo.id}
                   />
                 ))}
                 {pinnedOpenTodos.length > 0 && regularOpenTodos.length > 0 && (
@@ -4960,9 +5257,15 @@ export default function Home() {
                     onTitleChange={updateInlineTitle}
                     onTitleBlur={blurInlineTitle}
                     onTitleFocus={focusInlineTitle}
+                    onReorderStart={startTaskReorder}
+                    onReorderMove={moveTaskReorder}
+                    onReorderEnd={finishTaskReorder}
+                    onReorderByKeyboard={reorderTaskByKeyboard}
                     showPin={view === "open"}
                     keyboardFocused={keyboardTodoId === todo.id}
                     keyboardActionIndex={keyboardTodoId === todo.id ? keyboardActionIndex : 0}
+                    reordering={reorderingId === todo.id}
+                    reorderTarget={reorderTargetId === todo.id}
                   />
                 ))}
               </ul>
@@ -5336,6 +5639,8 @@ export default function Home() {
                     aria-label="Description"
                     value={editDraft.notes}
                     onChange={(event) => updateEditDraftField("notes", event.target.value)}
+                    onFocus={() => focusEditDraftField("notes")}
+                    onBlur={() => blurEditDraftField("notes")}
                     onPaste={(event) => {
                       const files = clipboardAttachments(event);
                       if (files.length) void queueDetailAttachments(files);

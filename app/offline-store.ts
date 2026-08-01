@@ -27,6 +27,7 @@ export type OfflineTodoRecord = {
   recurrenceCron?: string | null;
   recurrenceLastFiredAt?: string | null;
   pinned?: boolean;
+  sortOrder?: number;
   sourceKind?: string | null;
   sourceId?: number | null;
   createdAt: string;
@@ -92,7 +93,7 @@ export type OfflineTaskAction = {
   method: "POST" | "PATCH" | "DELETE";
   body: Record<string, unknown>;
   taskIds: number[];
-  kind: "bulk" | "task-patch" | "undo";
+  kind: "bulk" | "task-patch" | "undo" | "reorder";
   optimisticPatches?: Record<string, Record<string, unknown>>;
   optimisticDeletedIds?: number[];
   createdAt: string;

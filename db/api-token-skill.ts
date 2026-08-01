@@ -68,6 +68,7 @@ curl --fail-with-body \\
 - \`dueDate\`: \`YYYY-MM-DD\` or null.
 - \`project\`: a registered project name or null for unassigned.
 - \`pinned\`: when true, the task is hoisted into the Pinned group in the Open view. It has no effect on task state or other views.
+- \`sortOrder\`: the persistent canonical task position. Use the reorder endpoint instead of patching this field.
 - \`attachmentCount\`: count only; load attachment metadata separately.
 - New tasks must have non-empty text and start open.
 - Use a UUID \`clientId\` when retries might repeat a create request.
@@ -79,6 +80,7 @@ curl --fail-with-body \\
 - \`GET /api/todos\`: list all open, snoozed, and completed tasks.
 - \`POST /api/todos\`: create an open task. Supports title, notes, priority, dueDate, project, context, recurrenceCron, clientId, draftToken, and attachmentIds. The \`notes\` field is a Markdown description of up to 500,000 characters.
 - \`PATCH /api/todos/{id}\`: edit title, Markdown notes/description, status, priority, dueDate, project, context, recurrenceCron, or pinned. Set nullable fields to null to clear them. For offline or concurrent clients, include a UUID \`mutation.mutationId\` and per-field ISO timestamps in \`mutation.fieldTimestamps\`; independent fields merge and same-field conflicts resolve deterministically.
+- \`PATCH /api/todos/reorder\`: persist canonical ordering with unique positive \`orderedIds\` and a UUID \`operationId\`. IDs missing because another client created them retain their relative slots.
 - \`POST /api/todos/bulk\`: perform state and multi-task operations.
 - \`POST /api/todos/undo\`: consume a returned Undo token.
 

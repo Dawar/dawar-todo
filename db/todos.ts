@@ -46,6 +46,7 @@ type TodoRow = {
   recurrence_cron: string | null;
   recurrence_last_fired_at: string | null;
   pinned: number;
+  sort_order: number;
   created_at: string;
   updated_at: string;
   attachment_count?: number;
@@ -74,6 +75,7 @@ export type Todo = {
   recurrenceCron: string | null;
   recurrenceLastFiredAt: string | null;
   pinned: boolean;
+  sortOrder: number;
   createdAt: string;
   updatedAt: string;
   attachmentCount: number;
@@ -129,7 +131,7 @@ type TodoSyncChangeRow = {
 };
 
 let initialization: Promise<void> | null = null;
-const CURRENT_SCHEMA_VERSION = "27";
+const CURRENT_SCHEMA_VERSION = "28";
 
 function database() {
   if (!env.DB) throw new Error("The todo database is unavailable.");
@@ -154,6 +156,7 @@ function mapTodo(row: TodoRow): Todo {
     recurrenceCron: row.recurrence_cron,
     recurrenceLastFiredAt: row.recurrence_last_fired_at,
     pinned: Boolean(row.pinned),
+    sortOrder: Number(row.sort_order),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     attachmentCount: Number(row.attachment_count ?? 0),
@@ -339,6 +342,7 @@ export async function ensureTodoDatabase() {
           recurrence_cron TEXT,
           recurrence_last_fired_at TEXT,
           pinned INTEGER NOT NULL DEFAULT 0,
+          sort_order INTEGER NOT NULL DEFAULT 0,
           created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
           updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
         )
@@ -757,7 +761,13 @@ export async function ensureTodoDatabase() {
       await db.prepare("ALTER TABLE todos ADD COLUMN client_id TEXT").run();
       console.info("[todo-db] added offline sync client id compatibility column");
     }
+    const sortOrderAdded = !todoColumns.results.some((column) => column.name === "sort_order");
+    if (sortOrderAdded) {
+      await db.prepare("ALTER TABLE todos ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0").run();
+      console.info("[todo-db] added canonical task sort order compatibility column");
+    }
     await db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS todos_client_id_idx ON todos(client_id)").run();
+    await db.prepare("CREATE INDEX IF NOT EXISTS todos_sort_order_idx ON todos(sort_order)").run();
     await db.batch([
       db.prepare("CREATE INDEX IF NOT EXISTS todo_attachments_todo_id_idx ON todo_attachments(todo_id)"),
       db.prepare("CREATE INDEX IF NOT EXISTS todo_attachments_draft_token_idx ON todo_attachments(draft_token)"),
@@ -847,6 +857,27 @@ export async function ensureTodoDatabase() {
       await db.prepare("INSERT INTO app_settings (key, value) VALUES ('seed_version', '1')").run();
     }
 
+    const taskSortOrderVersion = await db
+      .prepare("SELECT value FROM app_settings WHERE key = 'todo_sort_order_v1'")
+      .first<{ value: string }>();
+    if (!taskSortOrderVersion) {
+      const [backfilled] = await db.batch([
+        db.prepare(`
+          WITH ranked AS (
+            SELECT id, (ROW_NUMBER() OVER (ORDER BY updated_at DESC, id DESC) - 1) * 1024 AS next_sort_order
+            FROM todos
+          )
+          UPDATE todos
+          SET sort_order = (SELECT next_sort_order FROM ranked WHERE ranked.id = todos.id)
+        `),
+        db.prepare("INSERT INTO app_settings (key, value) VALUES ('todo_sort_order_v1', '1')"),
+      ]);
+      console.info("[todo-db] canonical task order initialized", {
+        changed: Number(backfilled.meta.changes ?? 0),
+        source: sortOrderAdded ? "compatibility-column" : "existing-schema",
+      });
+    }
+
     const archiveStatusVersion = await db
       .prepare("SELECT value FROM app_settings WHERE key = 'archive_status_to_open_v1'")
       .first<{ value: string }>();
@@ -903,7 +934,7 @@ export async function ensureTodoDatabase() {
 export async function listTodos(): Promise<Todo[]> {
   await ensureTodoDatabase();
   const result = await database()
-    .prepare(`${todoListSql} ORDER BY updated_at DESC, id DESC`)
+    .prepare(`${todoListSql} ORDER BY sort_order ASC, id DESC`)
     .all<TodoRow>();
   return result.results.map(mapTodo);
 }
@@ -962,7 +993,7 @@ export async function readTodoBootstrap(): Promise<TodoBootstrapSnapshot> {
   await ensureTodoDatabase();
   const db = database();
   const [todoResult, projectResult, settingResult, captureDraftResult, revisionResult] = await db.batch([
-    db.prepare(`${todoListSql} ORDER BY updated_at DESC, id DESC`),
+    db.prepare(`${todoListSql} ORDER BY sort_order ASC, id DESC`),
     db.prepare("SELECT name FROM todo_projects ORDER BY name COLLATE NOCASE ASC"),
     db.prepare("SELECT key, value FROM app_settings WHERE key IN ('snooze_timezone', 'snooze_wake_hour', 'snooze_quick_presets', 'ai_realtime_voice')"),
     db.prepare("SELECT value FROM app_settings WHERE key = 'capture_draft'"),
@@ -1172,8 +1203,8 @@ export async function createTodo(input: {
   }
   const row = await db
     .prepare(`
-      ${clientId ? "INSERT OR IGNORE" : "INSERT"} INTO todos (title, notes, status, priority, due_date, project, context, recurrence_cron, source_kind, client_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ${clientId ? "INSERT OR IGNORE" : "INSERT"} INTO todos (title, notes, status, priority, due_date, project, context, recurrence_cron, source_kind, client_id, sort_order)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MIN(sort_order), 0) - 1024 FROM todos))
       RETURNING *
     `)
     .bind(
@@ -1228,6 +1259,56 @@ export async function createTodo(input: {
     console.error("[todo-db] task attachment claim failed; task rolled back", { id: row.id, error });
     throw error;
   }
+}
+
+export async function reorderTodos(inputIds: number[]): Promise<{ todos: Todo[]; changedIds: number[] }> {
+  await ensureTodoDatabase();
+  const orderedIds = [...new Set(inputIds.filter((id) => Number.isInteger(id) && id > 0))];
+  if (!orderedIds.length) throw new Error("Choose at least one task to reorder.");
+  if (orderedIds.length !== inputIds.length) throw new Error("The task order contains invalid or duplicate tasks.");
+  if (orderedIds.length > 2_000) throw new Error("Task ordering is limited to 2,000 tasks at a time.");
+
+  const db = database();
+  const currentResult = await db.prepare("SELECT id, sort_order FROM todos ORDER BY sort_order ASC, id DESC")
+    .all<{ id: number; sort_order: number }>();
+  const current = currentResult.results;
+  const currentIds = new Set(current.map((row) => row.id));
+  const desiredKnownIds = orderedIds.filter((id) => currentIds.has(id));
+  if (!desiredKnownIds.length) throw new Error("Those tasks no longer exist.");
+
+  // A client may reorder from a slightly stale snapshot. Replace only the slots
+  // occupied by IDs it knew about so newly-created remote tasks keep their place.
+  const desiredIterator = desiredKnownIds[Symbol.iterator]();
+  const requested = new Set(desiredKnownIds);
+  const finalIds = current.map((row) => requested.has(row.id) ? desiredIterator.next().value as number : row.id);
+  const currentOrderById = new Map(current.map((row) => [row.id, row.sort_order]));
+  const changed = finalIds
+    .map((id, index) => ({ id, sortOrder: index * 1024 }))
+    .filter(({ id, sortOrder }) => currentOrderById.get(id) !== sortOrder);
+
+  const statements: D1PreparedStatement[] = [];
+  for (let index = 0; index < changed.length; index += 80) {
+    const chunk = changed.slice(index, index + 80);
+    const cases = chunk.map(() => "WHEN ? THEN ?").join(" ");
+    statements.push(db.prepare(`
+      UPDATE todos
+      SET sort_order = CASE id ${cases} ELSE sort_order END
+      WHERE id IN (${placeholders(chunk.length)})
+    `).bind(
+      ...chunk.flatMap(({ id, sortOrder }) => [id, sortOrder]),
+      ...chunk.map(({ id }) => id),
+    ));
+  }
+  if (statements.length) await db.batch(statements);
+  const todos = await listTodos();
+  console.info("[todo-db] canonical task order persisted", {
+    requested: inputIds.length,
+    known: desiredKnownIds.length,
+    remoteOnlyRetained: current.length - desiredKnownIds.length,
+    changed: changed.length,
+    movedIds: changed.map(({ id }) => id),
+  });
+  return { todos, changedIds: changed.map(({ id }) => id) };
 }
 
 const TODO_MUTATION_FIELDS = new Set<keyof TodoUpdate>([

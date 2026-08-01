@@ -7,7 +7,9 @@ const root = new URL("../", import.meta.url);
 test("task titles are seamless autogrowing inline editors", async () => {
   const page = await readFile(new URL("app/page.tsx", root), "utf8");
 
-  assert.match(page, /<textarea[^]*data-inline-title[^]*value=\{todo\.title\}/);
+  assert.match(page, /<textarea[^]*data-inline-title[^]*value=\{editingTitle \? titleDraft : todo\.title\}/);
+  assert.match(page, /setTitleDraft\(event\.target\.value\)/);
+  assert.match(page, /selected && !editingTitle/);
   assert.match(page, /textarea\.style\.height = "auto"/);
   assert.match(page, /textarea\.style\.height = `\$\{textarea\.scrollHeight\}px`/);
   assert.match(page, /resize-none overflow-hidden border-0 bg-transparent p-0/);
@@ -48,4 +50,6 @@ test("sync cleanup preserves a newer edit queued while an older mutation is in f
   assert.match(store, /newerMutationPreserved: !removed/);
   assert.match(page, /deleteOfflineTodoMutation\(mutation\.todoId, mutation\.mutationId\)/);
   assert.match(page, /newerMutationPreserved: !removedQueuedMutation/);
+  assert.match(page, /if \(JSON\.stringify\(nextDraft\) !== JSON\.stringify\(currentDraft\)\) setEditDraft\(nextDraft\)/);
+  assert.match(page, /remote field deferred during active editing/);
 });

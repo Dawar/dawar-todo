@@ -60,7 +60,7 @@ test("wires device push subscriptions, minute batching, origin suppression, and 
   assert.match(deliveryMigration, /CREATE TABLE `todo_push_deliveries`/);
   assert.match(healthMigration, /ADD `last_failure_status` integer/);
   assert.match(healthMigration, /ADD `last_failure_at` text/);
-  assert.match(database, /CURRENT_SCHEMA_VERSION = "27"/);
+  assert.match(database, /CURRENT_SCHEMA_VERSION = "28"/);
   assert.match(database, /CREATE TABLE IF NOT EXISTS todo_push_deliveries/);
   assert.match(database, /wakeExpiredSnoozedTodosInDatabase/);
   assert.match(database, /'snooze:' \|\| id \|\| ':' \|\| snoozed_until/);
