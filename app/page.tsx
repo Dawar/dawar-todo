@@ -1114,13 +1114,11 @@ function TaskRow({
   onTitleChange,
   onTitleBlur,
   onTitleFocus,
+  onTitleArrowNavigate,
   onReorderStart,
   onReorderMove,
   onReorderEnd,
-  onReorderByKeyboard,
   showPin,
-  keyboardFocused,
-  keyboardActionIndex,
   reordering,
   reorderTarget,
 }: {
@@ -1135,13 +1133,11 @@ function TaskRow({
   onTitleChange: (todo: Todo, title: string) => void;
   onTitleBlur: (todo: Todo, title: string) => void;
   onTitleFocus: (todo: Todo) => void;
+  onTitleArrowNavigate: (todo: Todo, direction: "previous" | "next") => boolean;
   onReorderStart: (todo: Todo, event: ReactPointerEvent<HTMLButtonElement>) => void;
   onReorderMove: (event: ReactPointerEvent<HTMLButtonElement>) => void;
   onReorderEnd: (event: ReactPointerEvent<HTMLButtonElement>, cancelled: boolean) => void;
-  onReorderByKeyboard: (todo: Todo, direction: "up" | "down") => void;
   showPin: boolean;
-  keyboardFocused: boolean;
-  keyboardActionIndex: number;
   reordering: boolean;
   reorderTarget: boolean;
 }) {
@@ -1269,12 +1265,10 @@ function TaskRow({
 
   return (
     <li
-      data-keyboard-task-id={todo.id}
       data-task-row-id={todo.id}
       className={classNames(
         "group relative scroll-m-24 overflow-hidden",
         selected && !editingTitle && "ring-1 ring-inset ring-[#216e4e]/30",
-        keyboardFocused && !editingTitle && "z-10 ring-2 ring-inset ring-[#216e4e]/55",
         reordering && "z-20 opacity-70 shadow-lg",
         reorderTarget && "ring-2 ring-inset ring-[#216e4e]/45",
       )}
@@ -1307,19 +1301,13 @@ function TaskRow({
           <button
             type="button"
             data-row-action
-            aria-label={`Reorder: ${todo.title}. Use arrow keys or drag.`}
+            aria-label={`Drag to reorder: ${todo.title}`}
             title="Drag to reorder"
             disabled={pending || todo.offline || editingTitle}
             onPointerDown={(event) => onReorderStart(todo, event)}
             onPointerMove={onReorderMove}
             onPointerUp={(event) => onReorderEnd(event, false)}
             onPointerCancel={(event) => onReorderEnd(event, true)}
-            onKeyDown={(event) => {
-              if (event.key === "ArrowUp" || event.key === "ArrowDown") {
-                event.preventDefault();
-                onReorderByKeyboard(todo, event.key === "ArrowUp" ? "up" : "down");
-              }
-            }}
             className="grid h-6 w-6 touch-none place-items-center rounded-md text-[#9aa19d] transition hover:bg-[#eef0ed] hover:text-[#4f5752] focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[#216e4e] disabled:cursor-not-allowed disabled:opacity-25"
           >
             <ActionIcon name="reorder" className="h-4 w-4" />
@@ -1338,16 +1326,12 @@ function TaskRow({
               titleRef.current?.setSelectionRange(todo.title.length, todo.title.length);
             }
           }}
-          className={classNames(
-            "min-w-0 flex-1 rounded-lg text-left transition-colors",
-            keyboardFocused && keyboardActionIndex === 0 && !editingTitle && "bg-[#eaf3ed] text-[#195d41] ring-2 ring-[#216e4e]/20",
-          )}
+          className="min-w-0 flex-1 rounded-lg text-left transition-colors"
         >
           <div className="flex min-w-0 items-start gap-2">
             <textarea
               ref={titleRef}
               data-inline-title
-              data-keyboard-action-index="0"
               value={editingTitle ? titleDraft : todo.title}
               onChange={(event) => {
                 setTitleDraft(event.target.value);
@@ -1370,6 +1354,19 @@ function TaskRow({
                 } else if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
                   event.preventDefault();
                   event.currentTarget.blur();
+                } else if (
+                  !event.shiftKey
+                  && !event.metaKey
+                  && !event.ctrlKey
+                  && !event.altKey
+                  && event.currentTarget.selectionStart === event.currentTarget.selectionEnd
+                  && (
+                    (event.key === "ArrowDown" && event.currentTarget.selectionEnd === event.currentTarget.value.length)
+                    || (event.key === "ArrowUp" && event.currentTarget.selectionStart === 0)
+                  )
+                ) {
+                  const direction = event.key === "ArrowDown" ? "next" : "previous";
+                  if (onTitleArrowNavigate(todo, direction)) event.preventDefault();
                 }
               }}
               rows={1}
@@ -1401,13 +1398,12 @@ function TaskRow({
           </button>
         )}
         {!pending && !todo.offline && (
-          <div className={classNames("hidden shrink-0 items-center gap-1 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 md:flex", keyboardFocused && !editingTitle ? "opacity-100" : "opacity-0")}>
-            {hoverActions.map(({ action, label, icon }, index) => (
+          <div className="hidden shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 md:flex">
+            {hoverActions.map(({ action, label, icon }) => (
               <button
                 key={action}
                 type="button"
                 data-row-action
-                data-keyboard-action-index={index + 1}
                 onClick={() => action === "edit" ? onEdit(todo, "hover") : action === "pin" ? onPin(todo) : onAction(todo, action, "hover")}
                 aria-label={`${label}: ${todo.title}`}
                 title={label}
@@ -1417,7 +1413,6 @@ function TaskRow({
                   action === "snooze" && "hover:bg-amber-50 hover:text-amber-700",
                   action === "pin" && "hover:bg-[#eaf3ed] hover:text-[#216e4e]",
                   action === "delete" && "hover:bg-red-50 hover:text-red-700",
-                  keyboardFocused && !editingTitle && keyboardActionIndex === index + 1 && "bg-[#eaf3ed] text-[#195d41] ring-2 ring-inset ring-[#216e4e]/35",
                 )}
               >
                 <ActionIcon name={icon} className="h-[18px] w-[18px]" />
@@ -1490,8 +1485,6 @@ export default function Home() {
   const [deletingProject, setDeletingProject] = useState(false);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
-  const [keyboardTodoId, setKeyboardTodoId] = useState<number | null>(null);
-  const [keyboardActionIndex, setKeyboardActionIndex] = useState(0);
   const [inlineEditingId, setInlineEditingId] = useState<number | null>(null);
   const [reorderingId, setReorderingId] = useState<number | null>(null);
   const [reorderTargetId, setReorderTargetId] = useState<number | null>(null);
@@ -1558,7 +1551,6 @@ export default function Home() {
   } | null>(null);
   const reorderPreviewRef = useRef<Todo[] | null>(null);
   const lastAppBadgeCountRef = useRef<number | null>(null);
-  const keyboardPreferredIndexRef = useRef(0);
   const taskDialogNestedOverlayOpen = projectDialog !== null || viewerIndex !== null || voiceTarget !== null || customSnoozeDialog !== null;
   const overlayOpen = editingId !== null || projectSelectorOpen || projectDialog !== null || newProjectOpen || projectDeleteDialog !== null || filtersOpen || viewerIndex !== null || voiceTarget !== null || shortcutsOpen || customSnoozeDialog !== null;
 
@@ -2148,7 +2140,7 @@ export default function Home() {
     const origin = taskDialogReturnFocusRef.current;
     const focusFrame = window.requestAnimationFrame(() => {
       dialog.focus({ preventScroll: true });
-      console.info("[todo-keyboard] task dialog focused", {
+      console.info("[todo-dialog-focus] task dialog focused", {
         todoId: openedTodoId,
         target: "dialog",
         avoidedInputFocus: true,
@@ -2161,11 +2153,11 @@ export default function Home() {
       taskDialogReturnTodoIdRef.current = null;
       window.requestAnimationFrame(() => {
         const fallback = document.querySelector<HTMLElement>(
-          `[data-keyboard-task-id="${fallbackTodoId}"] [data-keyboard-action-index="0"]`,
+          `[data-task-row-id="${fallbackTodoId}"] textarea[data-inline-title]`,
         );
         const target = origin?.isConnected ? origin : fallback;
         target?.focus({ preventScroll: true });
-        console.info("[todo-keyboard] task dialog focus restored", {
+        console.info("[todo-dialog-focus] task dialog focus restored", {
           todoId: fallbackTodoId,
           restored: Boolean(target),
           usedFallback: target === fallback,
@@ -2201,7 +2193,7 @@ export default function Home() {
       }
     };
     document.addEventListener("keydown", trapFocus, true);
-    console.info("[todo-keyboard] task dialog focus trap enabled", {
+    console.info("[todo-dialog-focus] task dialog focus trap enabled", {
       todoId: editingId,
       focusableCount: dialogFocusableElements(dialog).length,
     });
@@ -2321,7 +2313,7 @@ export default function Home() {
         if (notice && (notice.operationId || notice.undoToken) && !undoing && !notice.undoRequested) {
           event.preventDefault();
           requestNoticeUndo(notice);
-          console.info("[todo-keyboard] undo requested", {
+          console.info("[todo-shortcuts] undo requested", {
             source: event.metaKey ? "command-z" : "control-z",
             optimistic: Boolean(notice.operationId),
             tokenReady: Boolean(notice.undoToken),
@@ -2332,7 +2324,7 @@ export default function Home() {
       if (event.key === "?" && !typing && !overlayOpen && window.matchMedia("(min-width: 768px)").matches) {
         event.preventDefault();
         setShortcutsOpen((current) => {
-          console.info("[todo-keyboard] shortcut guide toggled", { open: !current, source: "question-mark" });
+          console.info("[todo-shortcuts] shortcut guide toggled", { open: !current, source: "question-mark" });
           return !current;
         });
         return;
@@ -2351,7 +2343,7 @@ export default function Home() {
         console.info("[todo-ui] custom snooze dialog closed", { source: "escape" });
       } else if (event.key === "Escape" && shortcutsOpen) {
         setShortcutsOpen(false);
-        console.info("[todo-keyboard] shortcut guide closed", { source: "escape" });
+        console.info("[todo-shortcuts] shortcut guide closed", { source: "escape" });
       } else if (event.key === "Escape" && voiceTarget !== null) {
         setVoiceTarget(null);
       } else if (event.key === "Escape" && viewerIndex !== null) {
@@ -2503,8 +2495,6 @@ export default function Home() {
   const pinnedOpenTodos = view === "open" ? filtered.filter((todo) => todo.pinned) : [];
   const regularOpenTodos = view === "open" ? filtered.filter((todo) => !todo.pinned) : filtered;
   const displayedTodos = view === "open" ? [...pinnedOpenTodos, ...regularOpenTodos] : regularOpenTodos;
-  const displayedTodoIds = displayedTodos.map((todo) => todo.id).join(",");
-  const displayedTodoKeyboardSignature = displayedTodos.map((todo) => `${todo.id}:${todo.status}:${todo.snoozedUntil ?? ""}:${todo.pinned}:${todo.recurrenceCron ?? ""}`).join("|");
 
   const selectedIds = useMemo(() => [...selected], [selected]);
   const selectedTodos = useMemo(() => todos.filter((todo) => selected.has(todo.id)), [selected, todos]);
@@ -2519,140 +2509,6 @@ export default function Home() {
   useEffect(() => {
     setViewerCopyState("idle");
   }, [viewerAttachment?.id]);
-
-  useEffect(() => {
-    setKeyboardTodoId((current) => {
-      if (current === null || displayedTodos.some((todo) => todo.id === current)) return current;
-      const next = displayedTodos[Math.min(keyboardPreferredIndexRef.current, Math.max(0, displayedTodos.length - 1))] ?? null;
-      setKeyboardActionIndex(0);
-      if (next) console.info("[todo-keyboard] focus recovered after list change", { previousId: current, nextId: next.id, view });
-      return next?.id ?? null;
-    });
-  }, [displayedTodoIds, view]);
-
-  useEffect(() => {
-    if (keyboardTodoId === null) return;
-    document.querySelector<HTMLElement>(`[data-keyboard-task-id="${keyboardTodoId}"]`)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
-  }, [keyboardTodoId]);
-
-  useEffect(() => {
-    const onTaskKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || overlayOpen || !window.matchMedia("(min-width: 768px)").matches) return;
-      const target = event.target as HTMLElement;
-      if (target.closest("input, textarea, select, [contenteditable='true']")) return;
-      if (event.metaKey || event.ctrlKey || event.altKey) return;
-
-      const key = event.key;
-      const lowerKey = key.toLowerCase();
-      const views = Object.keys(viewLabels) as View[];
-      const numberedView = /^[1-4]$/.test(key) ? views[Number(key) - 1] : null;
-      if (numberedView) {
-        event.preventDefault();
-        chooseView(numberedView);
-        setKeyboardTodoId(null);
-        setKeyboardActionIndex(0);
-        keyboardPreferredIndexRef.current = 0;
-        console.info("[todo-keyboard] view changed", { source: "number", view: numberedView });
-        return;
-      }
-      if (key === "[" || key === "]") {
-        event.preventDefault();
-        const currentIndex = views.indexOf(view);
-        const direction = key === "]" ? 1 : -1;
-        const nextView = views[(currentIndex + direction + views.length) % views.length];
-        chooseView(nextView);
-        setKeyboardTodoId(null);
-        setKeyboardActionIndex(0);
-        keyboardPreferredIndexRef.current = 0;
-        console.info("[todo-keyboard] view changed", { source: "bracket", view: nextView });
-        return;
-      }
-
-      const movingDown = key === "ArrowDown" || lowerKey === "j";
-      const movingUp = key === "ArrowUp" || lowerKey === "k";
-      if (movingDown || movingUp) {
-        event.preventDefault();
-        if (!displayedTodos.length) return;
-        const currentIndex = displayedTodos.findIndex((todo) => todo.id === keyboardTodoId);
-        const nextIndex = currentIndex < 0
-          ? (movingDown ? 0 : displayedTodos.length - 1)
-          : Math.max(0, Math.min(displayedTodos.length - 1, currentIndex + (movingDown ? 1 : -1)));
-        const nextTodo = displayedTodos[nextIndex];
-        keyboardPreferredIndexRef.current = nextIndex;
-        setKeyboardTodoId(nextTodo.id);
-        setKeyboardActionIndex(0);
-        console.info("[todo-keyboard] task focus moved", { id: nextTodo.id, index: nextIndex, view, direction: movingDown ? "next" : "previous" });
-        return;
-      }
-
-      if (key === "ArrowLeft" || key === "ArrowRight") {
-        event.preventDefault();
-        const todo = displayedTodos.find((item) => item.id === keyboardTodoId) ?? displayedTodos[0];
-        if (!todo) return;
-        if (keyboardTodoId === null) {
-          keyboardPreferredIndexRef.current = 0;
-          setKeyboardTodoId(todo.id);
-          setKeyboardActionIndex(0);
-          return;
-        }
-        const row = document.querySelector<HTMLElement>(`[data-keyboard-task-id="${todo.id}"]`);
-        const actionCount = row?.querySelectorAll("[data-keyboard-action-index]").length ?? 1;
-        const direction = key === "ArrowRight" ? 1 : -1;
-        const nextActionIndex = (keyboardActionIndex + direction + actionCount) % actionCount;
-        setKeyboardActionIndex(nextActionIndex);
-        const label = row?.querySelector<HTMLElement>(`[data-keyboard-action-index="${nextActionIndex}"]`)?.getAttribute("aria-label") ?? "Task details";
-        console.info("[todo-keyboard] row action highlighted", { id: todo.id, actionIndex: nextActionIndex, label });
-        return;
-      }
-
-      if (key === "Escape" && keyboardTodoId !== null) {
-        event.preventDefault();
-        setKeyboardTodoId(null);
-        setKeyboardActionIndex(0);
-        console.info("[todo-keyboard] task focus cleared", { source: "escape" });
-        return;
-      }
-
-      const todo = displayedTodos.find((item) => item.id === keyboardTodoId);
-      if (!todo) return;
-      const usable = todo.id > 0 && !todo.offline;
-      if (key === "Enter") {
-        event.preventDefault();
-        const action = document.querySelector<HTMLElement>(`[data-keyboard-task-id="${todo.id}"] [data-keyboard-action-index="${keyboardActionIndex}"]`);
-        if (action instanceof HTMLTextAreaElement) action.focus({ preventScroll: true });
-        else action?.click();
-        console.info("[todo-keyboard] highlighted action executed", { id: todo.id, actionIndex: keyboardActionIndex, label: action?.getAttribute("aria-label") ?? null });
-      } else if (lowerKey === "e") {
-        event.preventDefault();
-        openTaskDetails(todo);
-        console.info("[todo-keyboard] quick action executed", { id: todo.id, action: "details" });
-      } else if (key === " " && usable) {
-        event.preventDefault();
-        toggleSelected(todo);
-        console.info("[todo-keyboard] quick action executed", { id: todo.id, action: "select" });
-      } else if (lowerKey === "d" && event.shiftKey && usable) {
-        event.preventDefault();
-        taskAction(todo, "delete", "hover");
-        console.info("[todo-keyboard] quick action executed", { id: todo.id, action: "delete" });
-      } else if (lowerKey === "d" && usable) {
-        event.preventDefault();
-        const action: TodoAction = todo.status === "completed" ? "unsnooze" : "complete";
-        taskAction(todo, action, "hover");
-        console.info("[todo-keyboard] quick action executed", { id: todo.id, action });
-      } else if (lowerKey === "s" && usable && todo.status === "open") {
-        event.preventDefault();
-        const action: TodoAction = isSnoozed(todo, now) ? "unsnooze" : "snooze";
-        taskAction(todo, action, "hover");
-        console.info("[todo-keyboard] quick action executed", { id: todo.id, action });
-      } else if (lowerKey === "p" && usable && view === "open") {
-        event.preventDefault();
-        void togglePin(todo);
-        console.info("[todo-keyboard] quick action executed", { id: todo.id, action: todo.pinned ? "unpin" : "pin" });
-      }
-    };
-    window.addEventListener("keydown", onTaskKeyDown);
-    return () => window.removeEventListener("keydown", onTaskKeyDown);
-  }, [displayedTodoKeyboardSignature, keyboardActionIndex, keyboardTodoId, now, overlayOpen, view]);
 
   function resizeCapture(textarea: HTMLTextAreaElement) {
     textarea.style.height = "auto";
@@ -4297,7 +4153,7 @@ export default function Home() {
       ? document.activeElement
       : null;
     const rowFallback = document.querySelector<HTMLElement>(
-      `[data-keyboard-task-id="${todo.id}"] [data-keyboard-action-index="0"]`,
+      `[data-task-row-id="${todo.id}"] textarea[data-inline-title]`,
     );
     taskDialogReturnFocusRef.current = activeElement ?? rowFallback;
     taskDialogReturnTodoIdRef.current = todo.id;
@@ -4532,14 +4388,55 @@ export default function Home() {
   function focusInlineTitle(todo: Todo) {
     if (todo.title.trim()) inlineTitleLastValidRef.current.set(todo.id, todo.title);
     setInlineEditingId(todo.id);
-    setKeyboardTodoId(todo.id);
-    setKeyboardActionIndex(0);
     console.info("[todo-inline-edit] title editing started", {
       todoId: todo.id,
       titleLength: todo.title.length,
       localOnly: todo.id < 1 || Boolean(todo.offline),
       view,
     });
+  }
+
+  function navigateInlineTitle(todo: Todo, direction: "previous" | "next") {
+    const currentIndex = displayedTodos.findIndex((item) => item.id === todo.id);
+    const targetIndex = currentIndex + (direction === "next" ? 1 : -1);
+    const targetTodo = currentIndex < 0 ? null : displayedTodos[targetIndex] ?? null;
+    if (!targetTodo) {
+      console.info("[todo-inline-edit] title boundary has no adjacent task", {
+        todoId: todo.id,
+        direction,
+        view,
+        visibleTasks: displayedTodos.length,
+      });
+      return false;
+    }
+
+    const target = document.querySelector<HTMLTextAreaElement>(
+      `[data-task-row-id="${targetTodo.id}"] textarea[data-inline-title]`,
+    );
+    if (!target) {
+      console.warn("[todo-inline-edit] adjacent title textarea was not found", {
+        todoId: todo.id,
+        targetTodoId: targetTodo.id,
+        direction,
+        view,
+      });
+      return false;
+    }
+
+    target.focus({ preventScroll: true });
+    const cursor = direction === "next" ? 0 : target.value.length;
+    target.setSelectionRange(cursor, cursor);
+    target.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    console.info("[todo-inline-edit] cursor moved to adjacent task", {
+      todoId: todo.id,
+      targetTodoId: targetTodo.id,
+      direction,
+      targetIndex,
+      cursor,
+      targetTitleLength: target.value.length,
+      view,
+    });
+    return true;
   }
 
   function blurInlineTitle(todo: Todo, title: string) {
@@ -4574,7 +4471,7 @@ export default function Home() {
   async function persistCanonicalTaskOrder(
     nextTodos: Todo[],
     movedTodoId: number,
-    source: "drag" | "keyboard",
+    source: "drag",
     rollback: Todo[],
   ) {
     const ordered = [...nextTodos].filter((todo) => todo.id > 0).sort(compareCanonicalOrder);
@@ -4681,22 +4578,6 @@ export default function Home() {
       return;
     }
     void persistCanonicalTaskOrder(preview, gesture.todoId, "drag", gesture.initialTodos);
-  }
-
-  function reorderTaskByKeyboard(todo: Todo, direction: "up" | "down") {
-    const scope = reorderScope(todo);
-    const index = scope.findIndex((item) => item.id === todo.id);
-    const target = scope[index + (direction === "up" ? -1 : 1)];
-    if (!target) return;
-    const next = reorderCanonicalTodos(todos, todo.id, target.id, direction === "up" ? "before" : "after");
-    setTodos(next);
-    void persistCanonicalTaskOrder(next, todo.id, "keyboard", todos);
-    console.info("[todo-order] keyboard reorder requested", {
-      todoId: todo.id,
-      targetId: target.id,
-      direction,
-      view,
-    });
   }
 
   persistTaskDraftRef.current = persistTaskDraft;
@@ -5006,7 +4887,7 @@ export default function Home() {
         onProjectClick={openProjectSelector}
         onKeyboardHelp={() => {
           setShortcutsOpen(true);
-          console.info("[todo-keyboard] shortcut guide opened", { source: "header" });
+          console.info("[todo-shortcuts] shortcut guide opened", { source: "header" });
         }}
       />
       {(connectionQuality !== "online" || showPendingSyncStatus) && (
@@ -5226,13 +5107,11 @@ export default function Home() {
                     onTitleChange={updateInlineTitle}
                     onTitleBlur={blurInlineTitle}
                     onTitleFocus={focusInlineTitle}
+                    onTitleArrowNavigate={navigateInlineTitle}
                     onReorderStart={startTaskReorder}
                     onReorderMove={moveTaskReorder}
                     onReorderEnd={finishTaskReorder}
-                    onReorderByKeyboard={reorderTaskByKeyboard}
                     showPin
-                    keyboardFocused={keyboardTodoId === todo.id}
-                    keyboardActionIndex={keyboardTodoId === todo.id ? keyboardActionIndex : 0}
                     reordering={reorderingId === todo.id}
                     reorderTarget={reorderTargetId === todo.id}
                   />
@@ -5257,13 +5136,11 @@ export default function Home() {
                     onTitleChange={updateInlineTitle}
                     onTitleBlur={blurInlineTitle}
                     onTitleFocus={focusInlineTitle}
+                    onTitleArrowNavigate={navigateInlineTitle}
                     onReorderStart={startTaskReorder}
                     onReorderMove={moveTaskReorder}
                     onReorderEnd={finishTaskReorder}
-                    onReorderByKeyboard={reorderTaskByKeyboard}
                     showPin={view === "open"}
-                    keyboardFocused={keyboardTodoId === todo.id}
-                    keyboardActionIndex={keyboardTodoId === todo.id ? keyboardActionIndex : 0}
                     reordering={reorderingId === todo.id}
                     reorderTarget={reorderTargetId === todo.id}
                   />
@@ -5339,7 +5216,7 @@ export default function Home() {
 
       {shortcutsOpen && <KeyboardShortcutsDialog onClose={() => {
         setShortcutsOpen(false);
-        console.info("[todo-keyboard] shortcut guide closed", { source: "button" });
+        console.info("[todo-shortcuts] shortcut guide closed", { source: "button" });
       }} />}
 
       {projectSelectorOpen && (

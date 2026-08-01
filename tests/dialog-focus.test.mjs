@@ -14,7 +14,7 @@ test("task details owns focus, traps tabbing, and restores the originating task"
   assert.match(page, /active === dialog \|\| active === first/);
   assert.match(page, /active === last/);
   assert.match(page, /task dialog focus restored/);
-  assert.match(page, /data-keyboard-action-index="0"/);
+  assert.match(page, /\[data-task-row-id="\$\{fallbackTodoId\}"\] textarea\[data-inline-title\]/);
   assert.match(page, /role="dialog"[^]*aria-modal="true"[^]*aria-labelledby="task-details-title"/);
   assert.ok(page.includes('event.key === "?" && !typing && !overlayOpen'));
   assert.ok(page.includes('event.key === "/" && !typing && !overlayOpen'));

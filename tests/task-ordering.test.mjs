@@ -20,7 +20,9 @@ test("canonical task ordering is persistent and replaces client sort modes", asy
   assert.match(page, /return \[\.\.\.rows\]\.sort\(compareCanonicalOrder\)/);
   assert.match(page, /ActionIcon name="reorder"/);
   assert.match(page, /onPointerMove=\{onReorderMove\}/);
-  assert.match(page, /onReorderByKeyboard/);
+  assert.match(page, /aria-label=\{`Drag to reorder:/);
+  assert.doesNotMatch(page, /onReorderByKeyboard/);
+  assert.doesNotMatch(page, /keyboard reorder requested/);
   assert.match(page, /path: "\/api\/todos\/reorder"/);
   assert.match(page, /kind: "reorder"/);
   assert.match(page, /reorder committed to durable outbox/);

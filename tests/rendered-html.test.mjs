@@ -283,28 +283,32 @@ test("keeps fixed action surfaces above the iPhone standalone safe area", async 
   assert.match(styles, /--mobile-action-bottom:\s*max\(4rem, calc\(env\(safe-area-inset-bottom, 0px\) \+ 2rem\)\)/);
 });
 
-test("ships desktop task keyboard navigation, direct actions, view switching, and an accessible keymap", async () => {
+test("moves between inline title editors at text boundaries without row keyboard highlighting", async () => {
   const [page, header, icons, shortcutGuide] = await Promise.all([
     readFile(new URL("app/page.tsx", root), "utf8"),
     readFile(new URL("app/site-header.tsx", root), "utf8"),
     readFile(new URL("app/action-icon.tsx", root), "utf8"),
     readFile(new URL("app/keyboard-shortcuts-dialog.tsx", root), "utf8"),
   ]);
-  assert.match(page, /data-keyboard-task-id=\{todo\.id\}/);
-  assert.match(page, /data-keyboard-action-index="0"/);
-  assert.match(page, /data-keyboard-action-index=\{index \+ 1\}/);
-  assert.match(page, /key === "ArrowDown" \|\| lowerKey === "j"/);
-  assert.match(page, /key === "ArrowUp" \|\| lowerKey === "k"/);
-  assert.match(page, /key === "ArrowLeft" \|\| key === "ArrowRight"/);
-  assert.match(page, /const numberedView = \/\^\[1-4\]\$\//);
-  assert.match(page, /lowerKey === "d" && event\.shiftKey/);
-  assert.match(page, /lowerKey === "e"/);
-  assert.match(page, /action instanceof HTMLTextAreaElement\) action\.focus/);
-  assert.doesNotMatch(page, /lowerKey === "a" && usable/);
+  assert.doesNotMatch(page, /data-keyboard-task-id/);
+  assert.doesNotMatch(page, /data-keyboard-action-index/);
+  assert.doesNotMatch(page, /keyboardTodoId/);
+  assert.doesNotMatch(page, /keyboardActionIndex/);
+  assert.doesNotMatch(page, /keyboardFocused/);
+  assert.doesNotMatch(page, /row action highlighted/);
+  assert.doesNotMatch(page, /const numberedView =/);
+  assert.match(page, /event\.key === "ArrowDown" && event\.currentTarget\.selectionEnd === event\.currentTarget\.value\.length/);
+  assert.match(page, /event\.key === "ArrowUp" && event\.currentTarget\.selectionStart === 0/);
+  assert.match(page, /onTitleArrowNavigate\(todo, direction\)/);
+  assert.match(page, /target\.focus\(\{ preventScroll: true \}\)/);
+  assert.match(page, /target\.setSelectionRange\(cursor, cursor\)/);
   assert.match(page, /const undoShortcut = \(event\.metaKey \|\| event\.ctrlKey\)/);
   assert.match(page, /requestNoticeUndo\(notice\)/);
   assert.match(shortcutGuide, /keys: \["⌘\/Ctrl", "Z"\], label: "Undo last task action"/);
-  assert.match(page, /target\.closest\("input, textarea, select, \[contenteditable='true'\]"\)/);
+  assert.match(shortcutGuide, /keys: \["↑"\], label: "At text start: previous task"/);
+  assert.match(shortcutGuide, /keys: \["↓"\], label: "At text end: next task"/);
+  assert.doesNotMatch(shortcutGuide, /Navigate tasks/);
+  assert.doesNotMatch(shortcutGuide, /Act on focused task/);
   assert.match(shortcutGuide, /function KeyboardShortcutsDialog/);
   assert.match(shortcutGuide, /aria-labelledby="keyboard-shortcuts-title"/);
   assert.match(header, /onKeyboardHelp/);

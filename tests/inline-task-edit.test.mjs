@@ -15,6 +15,13 @@ test("task titles are seamless autogrowing inline editors", async () => {
   assert.match(page, /resize-none overflow-hidden border-0 bg-transparent p-0/);
   assert.match(page, /onTitleChange\(todo, event\.target\.value\)/);
   assert.match(page, /onTitleBlur\(todo, event\.target\.value\)/);
+  assert.match(page, /event\.currentTarget\.selectionStart === event\.currentTarget\.selectionEnd/);
+  assert.match(page, /event\.key === "ArrowDown" && event\.currentTarget\.selectionEnd === event\.currentTarget\.value\.length/);
+  assert.match(page, /event\.key === "ArrowUp" && event\.currentTarget\.selectionStart === 0/);
+  assert.match(page, /onTitleArrowNavigate\(todo, direction\)/);
+  assert.match(page, /const cursor = direction === "next" \? 0 : target\.value\.length/);
+  assert.match(page, /target\.setSelectionRange\(cursor, cursor\)/);
+  assert.match(page, /cursor moved to adjacent task/);
   assert.match(page, /window\.setTimeout\(\(\) => \{[^]*persistInlineTitle\(todo\.id, title, "debounce"\)[^]*\}, 700\)/);
   assert.match(page, /title committed to durable outbox/);
   assert.match(page, /empty title restored/);
