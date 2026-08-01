@@ -38,6 +38,26 @@ test("row project action is replaced by Edit while assignment remains in details
   assert.match(page, /bulkAction\("assign"\)/);
 });
 
+test("mobile task swipes start only from directional rails outside the title textarea", async () => {
+  const page = await readFile(new URL("app/page.tsx", root), "utf8");
+  const row = page.slice(page.indexOf("function TaskRow("), page.indexOf("export default function Home()"));
+
+  assert.match(page, /closest<HTMLElement>\("\[data-swipe-rail\]"\)/);
+  assert.match(page, /data-swipe-rail="left"/);
+  assert.match(page, /data-swipe-rail="right"/);
+  assert.match(page, /railSide !== "left" && railSide !== "right"/);
+  assert.match(page, /active\.rail === "left"[^]*Math\.max\(0, deltaX\)[^]*Math\.min\(0, deltaX\)/);
+  assert.match(page, /mobile task swipe started from side rail/);
+  assert.doesNotMatch(page, /touch-pan-y items-start/);
+  assert.match(page, /className="w-5 shrink-0 self-stretch touch-pan-y md:hidden"/);
+  assert.ok(row.indexOf('type="checkbox"') < row.indexOf('data-swipe-rail="left"'));
+  assert.ok(row.indexOf('data-swipe-rail="left"') < row.indexOf("data-inline-title"));
+  assert.ok(row.indexOf("data-inline-title") < row.indexOf('data-swipe-rail="right"'));
+  assert.ok(row.indexOf('data-swipe-rail="right"') < row.lastIndexOf("data-row-action"));
+  assert.match(row, /onPointerDown=\{\(event\) => onReorderStart\(todo, event\)\}/);
+  assert.match(row, /onClick=\{\(\) => onPin\(todo\)\}/);
+});
+
 test("task details edits description and metadata without a second title textarea", async () => {
   const page = await readFile(new URL("app/page.tsx", root), "utf8");
   const details = page.slice(page.indexOf("{editingTodo && editDraft && ("), page.indexOf("{voiceTarget && ("));

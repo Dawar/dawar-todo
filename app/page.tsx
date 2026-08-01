@@ -1146,7 +1146,7 @@ function TaskRow({
   const [dragging, setDragging] = useState(false);
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState(todo.title);
-  const gesture = useRef<{ startX: number; startY: number; width: number } | null>(null);
+  const gesture = useRef<{ startX: number; startY: number; width: number; rail: "left" | "right" } | null>(null);
   const offsetRef = useRef(0);
   const suppressTitleClickRef = useRef(false);
   const titleRef = useRef<HTMLTextAreaElement | null>(null);
@@ -1177,16 +1177,24 @@ function TaskRow({
 
   function pointerDown(event: ReactPointerEvent<HTMLDivElement>) {
     if (pending || event.pointerType !== "touch") return;
-    if ((event.target as HTMLElement).closest("input:not([data-inline-title]), [data-row-action], a, select, textarea:not([data-inline-title])")) return;
+    const rail = (event.target as HTMLElement).closest<HTMLElement>("[data-swipe-rail]");
+    const railSide = rail?.dataset.swipeRail;
+    if (railSide !== "left" && railSide !== "right") return;
     suppressTitleClickRef.current = false;
     const width = event.currentTarget.getBoundingClientRect().width;
     gesture.current = {
       startX: event.clientX,
       startY: event.clientY,
       width,
+      rail: railSide,
     };
     setSwipeWidth(width);
     setDragging(true);
+    console.info("[todo-gesture] mobile task swipe started from side rail", {
+      todoId: todo.id,
+      rail: railSide,
+      width,
+    });
   }
 
   function pointerMove(event: ReactPointerEvent<HTMLDivElement>) {
@@ -1201,14 +1209,17 @@ function TaskRow({
       setOffset(0);
       return;
     }
+    const allowedDeltaX = active.rail === "left"
+      ? Math.max(0, deltaX)
+      : Math.min(0, deltaX);
     const limit = active.width * 0.62;
-    if (Math.abs(deltaX) > 8) {
+    if (Math.abs(allowedDeltaX) > 8) {
       suppressTitleClickRef.current = true;
       if (!event.currentTarget.hasPointerCapture(event.pointerId)) {
         event.currentTarget.setPointerCapture(event.pointerId);
       }
     }
-    const nextOffset = Math.max(-limit, Math.min(limit, deltaX));
+    const nextOffset = Math.max(-limit, Math.min(limit, allowedDeltaX));
     offsetRef.current = nextOffset;
     setOffset(nextOffset);
   }
@@ -1284,12 +1295,12 @@ function TaskRow({
         onPointerCancel={cancelSwipe}
         style={{ transform: `translateX(${offset}px)` }}
         className={classNames(
-          "relative flex min-h-[72px] touch-pan-y items-start gap-3 bg-white px-4 py-4 hover:bg-[#fafbf9] sm:px-5",
+          "relative flex min-h-[72px] items-start gap-0 bg-white px-4 py-4 hover:bg-[#fafbf9] sm:px-5",
           !dragging && "transition-transform duration-200 ease-out",
           selected && !editingTitle && "bg-[#f3f8f5] hover:bg-[#f3f8f5]",
         )}
       >
-        <div className="flex w-5 shrink-0 flex-col items-center gap-1">
+        <div className="flex w-5 shrink-0 flex-col items-center gap-1 md:mr-3">
           <input
             type="checkbox"
             checked={selected}
@@ -1313,6 +1324,11 @@ function TaskRow({
             <ActionIcon name="reorder" className="h-4 w-4" />
           </button>
         </div>
+        <div
+          data-swipe-rail="left"
+          aria-hidden="true"
+          className="w-5 shrink-0 self-stretch touch-pan-y md:hidden"
+        />
         <div
           onClick={(event) => {
             if (suppressTitleClickRef.current) {
@@ -1392,13 +1408,18 @@ function TaskRow({
             </div>
           )}
         </div>
+        <div
+          data-swipe-rail="right"
+          aria-hidden="true"
+          className="w-5 shrink-0 self-stretch touch-pan-y md:hidden"
+        />
         {showPin && !pending && !todo.offline && (
           <button type="button" data-row-action onClick={() => onPin(todo)} aria-label={`${todo.pinned ? "Unpin" : "Pin"}: ${todo.title}`} title={todo.pinned ? "Unpin" : "Pin"} className={classNames("grid h-9 w-9 shrink-0 place-items-center rounded-lg transition focus-visible:outline-2 focus-visible:outline-[#216e4e] md:hidden", todo.pinned ? "bg-[#eaf3ed] text-[#216e4e]" : "text-[#69716c] hover:bg-[#eef0ed]")}>
             <ActionIcon name={todo.pinned ? "unpin" : "pin"} className="h-[18px] w-[18px]" />
           </button>
         )}
         {!pending && !todo.offline && (
-          <div className="hidden shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 md:flex">
+          <div className="hidden shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 md:ml-3 md:flex">
             {hoverActions.map(({ action, label, icon }) => (
               <button
                 key={action}
