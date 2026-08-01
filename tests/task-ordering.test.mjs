@@ -31,6 +31,15 @@ test("canonical task ordering is persistent and replaces client sort modes", asy
   assert.match(page, /path: "\/api\/todos\/reorder"/);
   assert.match(page, /kind: "reorder"/);
   assert.match(page, /reorder committed to durable outbox/);
+  assert.match(page, /\[taskListAnimationRef, setTaskListAnimations\]/);
+  assert.match(page, /setTaskListAnimations\(false\)/);
+  assert.match(page, /cloneNode\(true\)/);
+  assert.match(page, /transform: "translate3d\(0, 0, 0\)"/);
+  assert.match(page, /previewElement\.style\.transform = `translate3d\(0, \$\{deltaY\}px, 0\)`/);
+  assert.match(page, /window\.requestAnimationFrame/);
+  assert.match(page, /TASK_REORDER_EDGE_SCROLL_ZONE_PX/);
+  assert.match(page, /drag edge auto-scroll started/);
+  assert.match(page, /drag preview committed/);
   assert.match(store, /"reorder"/);
   assert.match(schema, /sortOrder: integer\("sort_order"\)/);
   assert.match(database, /ORDER BY sort_order ASC, id DESC/);

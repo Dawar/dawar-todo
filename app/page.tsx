@@ -370,6 +370,8 @@ const MAX_VIDEO_DURATION_MS = 60 * 60 * 1000;
 const MAX_IMAGE_PIXELS = 100_000_000;
 const SYNC_STATUS_DELAY_MS = 5_000;
 const TASK_SORT_ORDER_STEP = 1024;
+const TASK_REORDER_EDGE_SCROLL_ZONE_PX = 88;
+const TASK_REORDER_MAX_SCROLL_PX = 18;
 const SWIPE_ACTION_THRESHOLD = 0.14;
 const SWIPE_LONG_ACTION_THRESHOLD = 0.5;
 
@@ -1349,7 +1351,7 @@ function TaskRow({
             onPointerMove={onReorderMove}
             onPointerUp={(event) => onReorderEnd(event, false)}
             onPointerCancel={(event) => onReorderEnd(event, true)}
-            className="grid h-6 w-6 touch-none place-items-center rounded-md text-[#9aa19d] transition hover:bg-[#eef0ed] hover:text-[#4f5752] focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[#216e4e] disabled:cursor-not-allowed disabled:opacity-25"
+            className="grid h-6 w-6 touch-none select-none place-items-center rounded-md text-[#9aa19d] transition hover:bg-[#eef0ed] hover:text-[#4f5752] active:scale-95 active:cursor-grabbing focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[#216e4e] disabled:cursor-not-allowed disabled:opacity-25 md:cursor-grab"
           >
             <ActionIcon name="reorder" className="h-4 w-4" />
           </button>
@@ -1498,7 +1500,7 @@ function TaskRow({
 export default function Home() {
   const [loading, setLoading] = useState(true);
   const [todos, setTodos] = useState<Todo[]>([]);
-  const [taskListAnimationRef] = useAutoAnimate<HTMLUListElement>({
+  const [taskListAnimationRef, setTaskListAnimations] = useAutoAnimate<HTMLUListElement>({
     duration: 180,
     easing: "cubic-bezier(0.2, 0.75, 0.25, 1)",
   });
@@ -1617,8 +1619,20 @@ export default function Home() {
     initialTodos: Todo[];
     targetId: number | null;
     placement: "before" | "after";
+    startClientY: number;
+    latestClientX: number;
+    latestClientY: number;
+    previewElement: HTMLElement;
+    sourceRowElement: HTMLElement;
+    animationFrameId: number | null;
+    startedAt: number;
+    moveEvents: number;
+    targetChanges: number;
+    autoScrollFrames: number;
+    autoScrollActive: boolean;
   } | null>(null);
   const reorderPreviewRef = useRef<Todo[] | null>(null);
+  const reorderAnimationRestoreFrameRef = useRef<number | null>(null);
   const lastAppBadgeCountRef = useRef<number | null>(null);
   const taskDialogNestedOverlayOpen = projectDialog !== null || viewerIndex !== null || voiceTarget !== null || customSnoozeDialog !== null;
   const overlayOpen = editingId !== null || projectSelectorOpen || projectDialog !== null || newProjectOpen || projectDeleteDialog !== null || filtersOpen || viewerIndex !== null || voiceTarget !== null || shortcutsOpen || customSnoozeDialog !== null;
@@ -1629,6 +1643,12 @@ export default function Home() {
     if (syncWakeTimerRef.current !== null) window.clearTimeout(syncWakeTimerRef.current);
     syncWakeTimerRef.current = null;
     syncWakeAtRef.current = 0;
+    const reorderGesture = reorderGestureRef.current;
+    if (reorderGesture?.animationFrameId !== null) window.cancelAnimationFrame(reorderGesture.animationFrameId);
+    reorderGesture?.previewElement.remove();
+    if (reorderGesture?.sourceRowElement) reorderGesture.sourceRowElement.style.opacity = "";
+    if (reorderAnimationRestoreFrameRef.current !== null) window.cancelAnimationFrame(reorderAnimationRestoreFrameRef.current);
+    reorderAnimationRestoreFrameRef.current = null;
   }, []);
 
   function rebuildPendingActionState(actions: OfflineTaskAction[]) {
@@ -4618,15 +4638,72 @@ export default function Home() {
 
   function startTaskReorder(todo: Todo, event: ReactPointerEvent<HTMLButtonElement>) {
     if (todo.id < 1 || todo.offline) return;
+    if (reorderGestureRef.current) {
+      console.warn("[todo-order] concurrent drag start ignored", {
+        activeTodoId: reorderGestureRef.current.todoId,
+        requestedTodoId: todo.id,
+        pointerType: event.pointerType,
+      });
+      return;
+    }
     event.preventDefault();
+    const sourceRow = event.currentTarget.closest<HTMLElement>("[data-task-row-id]");
+    if (!sourceRow) {
+      console.warn("[todo-order] drag start skipped because the source row was unavailable", {
+        todoId: todo.id,
+        pointerType: event.pointerType,
+      });
+      return;
+    }
     event.currentTarget.setPointerCapture(event.pointerId);
     const scope = reorderScope(todo);
+    const sourceBounds = sourceRow.getBoundingClientRect();
+    const previewElement = sourceRow.cloneNode(true) as HTMLElement;
+    previewElement.removeAttribute("data-task-row-id");
+    previewElement.querySelectorAll("[id]").forEach((element) => element.removeAttribute("id"));
+    previewElement.setAttribute("aria-hidden", "true");
+    Object.assign(previewElement.style, {
+      position: "fixed",
+      left: `${sourceBounds.left}px`,
+      top: `${sourceBounds.top}px`,
+      width: `${sourceBounds.width}px`,
+      height: `${sourceBounds.height}px`,
+      zIndex: "200",
+      pointerEvents: "none",
+      margin: "0",
+      overflow: "hidden",
+      borderRadius: "12px",
+      opacity: "0.98",
+      boxShadow: "0 18px 45px rgba(25, 55, 38, 0.22)",
+      transform: "translate3d(0, 0, 0)",
+      transition: "none",
+      willChange: "transform",
+      contain: "layout paint",
+    });
+    document.body.appendChild(previewElement);
+    sourceRow.style.opacity = "0.12";
+    if (reorderAnimationRestoreFrameRef.current !== null) {
+      window.cancelAnimationFrame(reorderAnimationRestoreFrameRef.current);
+      reorderAnimationRestoreFrameRef.current = null;
+    }
+    setTaskListAnimations(false);
     reorderGestureRef.current = {
       todoId: todo.id,
       allowedIds: new Set(scope.map((item) => item.id)),
       initialTodos: todos,
       targetId: null,
       placement: "before",
+      startClientY: event.clientY,
+      latestClientX: event.clientX,
+      latestClientY: event.clientY,
+      previewElement,
+      sourceRowElement: sourceRow,
+      animationFrameId: null,
+      startedAt: performance.now(),
+      moveEvents: 0,
+      targetChanges: 0,
+      autoScrollFrames: 0,
+      autoScrollActive: false,
     };
     reorderPreviewRef.current = todos;
     setReorderingId(todo.id);
@@ -4636,6 +4713,90 @@ export default function Home() {
       view,
       scopedTasks: scope.length,
       pointerType: event.pointerType,
+      previewWidth: Math.round(sourceBounds.width),
+      previewHeight: Math.round(sourceBounds.height),
+      listAnimationsPaused: true,
+    });
+  }
+
+  function updateTaskReorderTarget(
+    gesture: NonNullable<typeof reorderGestureRef.current>,
+    clientX: number,
+    clientY: number,
+    source: "pointer" | "auto-scroll",
+  ) {
+    const row = document.elementFromPoint(clientX, clientY)?.closest<HTMLElement>("[data-task-row-id]");
+    const targetId = Number(row?.dataset.taskRowId);
+    if (!Number.isInteger(targetId) || targetId === gesture.todoId || !gesture.allowedIds.has(targetId) || !row) return;
+    const bounds = row.getBoundingClientRect();
+    const placement = clientY < bounds.top + bounds.height / 2 ? "before" : "after";
+    if (gesture.targetId === targetId && gesture.placement === placement) return;
+    gesture.targetId = targetId;
+    gesture.placement = placement;
+    gesture.targetChanges += 1;
+    setReorderTargetId(targetId);
+    setTodos((current) => {
+      const next = reorderCanonicalTodos(current, gesture.todoId, targetId, placement);
+      reorderPreviewRef.current = next;
+      return next;
+    });
+    console.debug("[todo-order] drag target changed", {
+      todoId: gesture.todoId,
+      targetId,
+      placement,
+      source,
+      targetChanges: gesture.targetChanges,
+    });
+  }
+
+  function taskReorderScrollSpeed(clientY: number) {
+    const viewportHeight = window.innerHeight;
+    const zone = Math.min(TASK_REORDER_EDGE_SCROLL_ZONE_PX, viewportHeight * 0.18);
+    if (clientY < zone) {
+      return -Math.ceil(((zone - Math.max(0, clientY)) / zone) * TASK_REORDER_MAX_SCROLL_PX);
+    }
+    if (clientY > viewportHeight - zone) {
+      return Math.ceil(((Math.min(viewportHeight, clientY) - (viewportHeight - zone)) / zone) * TASK_REORDER_MAX_SCROLL_PX);
+    }
+    return 0;
+  }
+
+  function scheduleTaskReorderFrame() {
+    const gesture = reorderGestureRef.current;
+    if (!gesture || gesture.animationFrameId !== null) return;
+    gesture.animationFrameId = window.requestAnimationFrame(() => {
+      const active = reorderGestureRef.current;
+      if (!active) return;
+      active.animationFrameId = null;
+      const deltaY = active.latestClientY - active.startClientY;
+      active.previewElement.style.transform = `translate3d(0, ${deltaY}px, 0)`;
+      const scrollSpeed = taskReorderScrollSpeed(active.latestClientY);
+      if (scrollSpeed !== 0) {
+        const previousScrollY = window.scrollY;
+        window.scrollBy(0, scrollSpeed);
+        const scrolled = window.scrollY - previousScrollY;
+        if (scrolled !== 0) {
+          active.autoScrollFrames += 1;
+          if (!active.autoScrollActive) {
+            active.autoScrollActive = true;
+            console.info("[todo-order] drag edge auto-scroll started", {
+              todoId: active.todoId,
+              direction: scrolled < 0 ? "up" : "down",
+              pointerY: Math.round(active.latestClientY),
+            });
+          }
+          updateTaskReorderTarget(active, active.latestClientX, active.latestClientY, "auto-scroll");
+          scheduleTaskReorderFrame();
+          return;
+        }
+      }
+      if (active.autoScrollActive) {
+        active.autoScrollActive = false;
+        console.info("[todo-order] drag edge auto-scroll stopped", {
+          todoId: active.todoId,
+          frames: active.autoScrollFrames,
+        });
+      }
     });
   }
 
@@ -4643,20 +4804,11 @@ export default function Home() {
     const gesture = reorderGestureRef.current;
     if (!gesture) return;
     event.preventDefault();
-    const row = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>("[data-task-row-id]");
-    const targetId = Number(row?.dataset.taskRowId);
-    if (!Number.isInteger(targetId) || targetId === gesture.todoId || !gesture.allowedIds.has(targetId) || !row) return;
-    const bounds = row.getBoundingClientRect();
-    const placement = event.clientY < bounds.top + bounds.height / 2 ? "before" : "after";
-    if (gesture.targetId === targetId && gesture.placement === placement) return;
-    gesture.targetId = targetId;
-    gesture.placement = placement;
-    setReorderTargetId(targetId);
-    setTodos((current) => {
-      const next = reorderCanonicalTodos(current, gesture.todoId, targetId, placement);
-      reorderPreviewRef.current = next;
-      return next;
-    });
+    gesture.latestClientX = event.clientX;
+    gesture.latestClientY = event.clientY;
+    gesture.moveEvents += 1;
+    scheduleTaskReorderFrame();
+    updateTaskReorderTarget(gesture, event.clientX, event.clientY, "pointer");
   }
 
   function finishTaskReorder(event: ReactPointerEvent<HTMLButtonElement>, cancelled: boolean) {
@@ -4664,18 +4816,41 @@ export default function Home() {
     if (!gesture) return;
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
     const preview = reorderPreviewRef.current ?? gesture.initialTodos;
+    if (gesture.animationFrameId !== null) window.cancelAnimationFrame(gesture.animationFrameId);
+    gesture.previewElement.remove();
+    gesture.sourceRowElement.style.opacity = "";
     reorderGestureRef.current = null;
     reorderPreviewRef.current = null;
     setReorderingId(null);
     setReorderTargetId(null);
+    reorderAnimationRestoreFrameRef.current = window.requestAnimationFrame(() => {
+      reorderAnimationRestoreFrameRef.current = null;
+      setTaskListAnimations(true);
+    });
+    const durationMs = Math.round(performance.now() - gesture.startedAt);
     if (cancelled || gesture.targetId === null) {
       if (cancelled) setTodos(gesture.initialTodos);
       console.info("[todo-order] drag finished without reorder", {
         todoId: gesture.todoId,
         cancelled,
+        durationMs,
+        moveEvents: gesture.moveEvents,
+        targetChanges: gesture.targetChanges,
+        autoScrollFrames: gesture.autoScrollFrames,
+        listAnimationsRestoring: true,
       });
       return;
     }
+    console.info("[todo-order] drag preview committed", {
+      todoId: gesture.todoId,
+      targetId: gesture.targetId,
+      placement: gesture.placement,
+      durationMs,
+      moveEvents: gesture.moveEvents,
+      targetChanges: gesture.targetChanges,
+      autoScrollFrames: gesture.autoScrollFrames,
+      listAnimationsRestoring: true,
+    });
     void persistCanonicalTaskOrder(preview, gesture.todoId, "drag", gesture.initialTodos);
   }
 
