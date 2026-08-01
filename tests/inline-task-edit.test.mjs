@@ -48,8 +48,12 @@ test("mobile task swipes start only from directional rails outside the title tex
   assert.match(page, /railSide !== "left" && railSide !== "right"/);
   assert.match(page, /active\.rail === "left"[^]*Math\.max\(0, deltaX\)[^]*Math\.min\(0, deltaX\)/);
   assert.match(page, /mobile task swipe started from side rail/);
+  assert.match(page, /mobile task swipe cancelled for vertical movement/);
+  assert.match(page, /mobile task swipe finished/);
   assert.doesNotMatch(page, /touch-pan-y items-start/);
-  assert.match(page, /className="w-5 shrink-0 self-stretch touch-pan-y md:hidden"/);
+  assert.equal(row.match(/className="relative w-10 shrink-0 self-stretch md:hidden"/g)?.length, 2);
+  assert.equal(row.match(/className="absolute inset-x-0 -bottom-4 -top-4 touch-pan-y"/g)?.length, 2);
+  assert.match(page, /const SWIPE_ACTION_THRESHOLD = 0\.14/);
   assert.ok(row.indexOf('type="checkbox"') < row.indexOf('data-swipe-rail="left"'));
   assert.ok(row.indexOf('data-swipe-rail="left"') < row.indexOf("data-inline-title"));
   assert.ok(row.indexOf("data-inline-title") < row.indexOf('data-swipe-rail="right"'));

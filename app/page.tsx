@@ -370,6 +370,8 @@ const MAX_VIDEO_DURATION_MS = 60 * 60 * 1000;
 const MAX_IMAGE_PIXELS = 100_000_000;
 const SYNC_STATUS_DELAY_MS = 5_000;
 const TASK_SORT_ORDER_STEP = 1024;
+const SWIPE_ACTION_THRESHOLD = 0.14;
+const SWIPE_LONG_ACTION_THRESHOLD = 0.5;
 
 type PreparedAttachmentUpload = {
   uploadId: string;
@@ -1164,7 +1166,7 @@ function TaskRow({
         ? primaryAction
         : { action: "snooze", label: "Snooze", icon: "snooze" };
   const swipeRatio = Math.abs(offset) / swipeWidth;
-  const longSwipe = swipeRatio >= 0.5;
+  const longSwipe = swipeRatio >= SWIPE_LONG_ACTION_THRESHOLD;
   const revealAction = offset < 0
     ? (longSwipe ? leftSecondaryAction.label : primaryAction.label)
     : (longSwipe ? "Delete" : "Edit");
@@ -1203,6 +1205,12 @@ function TaskRow({
     const deltaX = event.clientX - active.startX;
     const deltaY = event.clientY - active.startY;
     if (Math.abs(deltaY) > Math.abs(deltaX) && Math.abs(deltaY) > 10) {
+      console.info("[todo-gesture] mobile task swipe cancelled for vertical movement", {
+        todoId: todo.id,
+        rail: active.rail,
+        deltaX: Math.round(deltaX),
+        deltaY: Math.round(deltaY),
+      });
       gesture.current = null;
       setDragging(false);
       offsetRef.current = 0;
@@ -1242,13 +1250,34 @@ function TaskRow({
         suppressTitleClickRef.current = false;
       }, 0);
     }
-    if (ratio < 0.18 || direction === 0) return;
-    if (direction < 0) onAction(todo, ratio >= 0.5 ? leftSecondaryAction.action : primaryAction.action, "swipe");
-    else if (ratio >= 0.5) onAction(todo, "delete", "swipe");
+    const action = direction < 0
+      ? (ratio >= SWIPE_LONG_ACTION_THRESHOLD ? leftSecondaryAction.action : primaryAction.action)
+      : (ratio >= SWIPE_LONG_ACTION_THRESHOLD ? "delete" : "edit");
+    const activated = ratio >= SWIPE_ACTION_THRESHOLD && direction !== 0;
+    console.info("[todo-gesture] mobile task swipe finished", {
+      todoId: todo.id,
+      rail: active.rail,
+      direction: direction < 0 ? "left" : direction > 0 ? "right" : "none",
+      distance: Math.round(Math.abs(completedOffset)),
+      ratio: Number(ratio.toFixed(3)),
+      activated,
+      action: activated ? action : null,
+    });
+    if (!activated) return;
+    if (direction < 0) onAction(todo, action as TodoAction, "swipe");
+    else if (action === "delete") onAction(todo, "delete", "swipe");
     else onEdit(todo, "swipe");
   }
 
   function cancelSwipe() {
+    const active = gesture.current;
+    if (active) {
+      console.info("[todo-gesture] mobile task swipe cancelled by pointer", {
+        todoId: todo.id,
+        rail: active.rail,
+        distance: Math.round(Math.abs(offsetRef.current)),
+      });
+    }
     gesture.current = null;
     offsetRef.current = 0;
     setDragging(false);
@@ -1324,11 +1353,12 @@ function TaskRow({
             <ActionIcon name="reorder" className="h-4 w-4" />
           </button>
         </div>
-        <div
-          data-swipe-rail="left"
-          aria-hidden="true"
-          className="w-5 shrink-0 self-stretch touch-pan-y md:hidden"
-        />
+        <div aria-hidden="true" className="relative w-10 shrink-0 self-stretch md:hidden">
+          <div
+            data-swipe-rail="left"
+            className="absolute inset-x-0 -bottom-4 -top-4 touch-pan-y"
+          />
+        </div>
         <div
           onClick={(event) => {
             if (suppressTitleClickRef.current) {
@@ -1408,11 +1438,12 @@ function TaskRow({
             </div>
           )}
         </div>
-        <div
-          data-swipe-rail="right"
-          aria-hidden="true"
-          className="w-5 shrink-0 self-stretch touch-pan-y md:hidden"
-        />
+        <div aria-hidden="true" className="relative w-10 shrink-0 self-stretch md:hidden">
+          <div
+            data-swipe-rail="right"
+            className="absolute inset-x-0 -bottom-4 -top-4 touch-pan-y"
+          />
+        </div>
         {showPin && !pending && !todo.offline && (
           <button type="button" data-row-action onClick={() => onPin(todo)} aria-label={`${todo.pinned ? "Unpin" : "Pin"}: ${todo.title}`} title={todo.pinned ? "Unpin" : "Pin"} className={classNames("grid h-9 w-9 shrink-0 place-items-center rounded-lg transition focus-visible:outline-2 focus-visible:outline-[#216e4e] md:hidden", todo.pinned ? "bg-[#eaf3ed] text-[#216e4e]" : "text-[#69716c] hover:bg-[#eef0ed]")}>
             <ActionIcon name={todo.pinned ? "unpin" : "pin"} className="h-[18px] w-[18px]" />
