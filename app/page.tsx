@@ -298,12 +298,19 @@ function request<T>(path: string, options?: RequestOptions): Promise<T> {
     });
 }
 
-function retryableNetworkError(error: unknown) {
+function retryableSyncError(error: unknown) {
   const status = (error as Error & { status?: number }).status;
   return error instanceof TypeError
     || (error as Error & { timeout?: boolean }).timeout === true
     || (typeof status === "number" && (status === 408 || status === 425 || status === 429 || status >= 500))
     || status === undefined;
+}
+
+function syncFailureKind(error: unknown): "transport" | "server" | "local" {
+  const status = (error as Error & { status?: number }).status;
+  if (error instanceof TypeError || (error as Error & { timeout?: boolean }).timeout === true) return "transport";
+  if (typeof status === "number") return "server";
+  return "local";
 }
 
 function syncRetryDelay(attempts: number) {
@@ -3267,13 +3274,16 @@ export default function Home() {
       const delayMs = syncRetryDelay(syncBackoffAttemptsRef.current);
       syncNextAttemptAtRef.current = Date.now() + delayMs;
       scheduleOfflineQueueSync(`backoff:${stage}`, delayMs);
-      const quality = navigator.onLine ? "degraded" : "offline";
+      const failureKind = syncFailureKind(error);
+      const quality = !navigator.onLine ? "offline" : failureKind === "transport" ? "degraded" : "online";
       setOnline(navigator.onLine);
       setConnectionQuality(quality);
       console.warn("[todo-offline] synchronization pass backed off", {
         stage,
         attempts: syncBackoffAttemptsRef.current,
         delayMs,
+        failureKind,
+        status: (error as Error & { status?: number }).status ?? null,
         quality,
         error,
       });
@@ -3301,6 +3311,7 @@ export default function Home() {
       let syncedTasks = 0;
       let syncedEdits = 0;
       let syncedActions = 0;
+      let deferredActions = 0;
       for (const record of records) {
         try {
           const draftToken = record.draftToken ?? crypto.randomUUID();
@@ -3540,20 +3551,35 @@ export default function Home() {
           });
         } catch (error) {
           const status = (error as Error & { status?: number }).status;
-          if (retryableNetworkError(error)) {
+          if (retryableSyncError(error)) {
             const attempts = action.attempts + 1;
             const delayMs = syncRetryDelay(attempts);
             await deferOfflineTaskAction(action.operationId, attempts, delayMs);
-            const quality = navigator.onLine ? "degraded" : "offline";
+            deferredActions += 1;
+            const failureKind = syncFailureKind(error);
+            const status = (error as Error & { status?: number }).status;
+            const quality = !navigator.onLine ? "offline" : failureKind === "transport" ? "degraded" : "online";
             setOnline(navigator.onLine);
             setConnectionQuality(quality);
             console.warn("[todo-offline] queued task action deferred", {
               operationId: action.operationId,
+              kind: action.kind,
               attempts,
               delayMs,
+              failureKind,
+              status: status ?? null,
               quality,
               error,
             });
+            if (failureKind === "server" && typeof status === "number" && status >= 500) {
+              console.warn("[todo-offline] queue continuing after isolated server failure", {
+                operationId: action.operationId,
+                kind: action.kind,
+                status,
+                remainingActions: Math.max(0, actions.length - syncedActions - deferredActions),
+              });
+              continue;
+            }
             deferPass("task-action", error);
             return;
           }
@@ -3597,6 +3623,7 @@ export default function Home() {
         syncedTasks,
         syncedEdits,
         syncedActions,
+        deferredActions,
         remainingTasks: remainingTasks.length,
         remainingEdits: remainingEdits.length,
         remainingActions: remainingActions.length,

@@ -1261,6 +1261,8 @@ export async function createTodo(input: {
   }
 }
 
+const TODO_REORDER_ROWS_PER_STATEMENT = 32;
+
 export async function reorderTodos(inputIds: number[]): Promise<{ todos: Todo[]; changedIds: number[] }> {
   await ensureTodoDatabase();
   const orderedIds = [...new Set(inputIds.filter((id) => Number.isInteger(id) && id > 0))];
@@ -1287,8 +1289,8 @@ export async function reorderTodos(inputIds: number[]): Promise<{ todos: Todo[];
     .filter(({ id, sortOrder }) => currentOrderById.get(id) !== sortOrder);
 
   const statements: D1PreparedStatement[] = [];
-  for (let index = 0; index < changed.length; index += 80) {
-    const chunk = changed.slice(index, index + 80);
+  for (let index = 0; index < changed.length; index += TODO_REORDER_ROWS_PER_STATEMENT) {
+    const chunk = changed.slice(index, index + TODO_REORDER_ROWS_PER_STATEMENT);
     const cases = chunk.map(() => "WHEN ? THEN ?").join(" ");
     statements.push(db.prepare(`
       UPDATE todos
@@ -1299,6 +1301,14 @@ export async function reorderTodos(inputIds: number[]): Promise<{ todos: Todo[];
       ...chunk.map(({ id }) => id),
     ));
   }
+  console.info("[todo-db] canonical task order write prepared", {
+    requested: inputIds.length,
+    known: desiredKnownIds.length,
+    changed: changed.length,
+    statements: statements.length,
+    rowsPerStatement: TODO_REORDER_ROWS_PER_STATEMENT,
+    maxBoundParameters: Math.min(changed.length, TODO_REORDER_ROWS_PER_STATEMENT) * 3,
+  });
   if (statements.length) await db.batch(statements);
   const todos = await listTodos();
   console.info("[todo-db] canonical task order persisted", {

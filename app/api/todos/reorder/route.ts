@@ -8,15 +8,18 @@ const RECEIPT_KIND = "reorder";
 
 export async function PATCH(request: Request) {
   const startedAt = Date.now();
+  let requested = 0;
+  let operationId: string | null = null;
   try {
     const payload = (await request.json()) as {
       orderedIds?: unknown;
       operationId?: unknown;
     };
+    requested = Array.isArray(payload.orderedIds) ? payload.orderedIds.length : 0;
     if (!Array.isArray(payload.orderedIds)) {
       return Response.json({ error: "A complete task order is required." }, { status: 400 });
     }
-    const operationId = typeof payload.operationId === "string" ? payload.operationId.trim() : "";
+    operationId = typeof payload.operationId === "string" ? payload.operationId.trim() : "";
     if (!/^[0-9a-f-]{36}$/i.test(operationId)) {
       return Response.json({ error: "A valid reorder operation identifier is required." }, { status: 400 });
     }
@@ -44,9 +47,14 @@ export async function PATCH(request: Request) {
     const message = error instanceof Error ? error.message : "The task order could not be saved.";
     const inputError = /task|order|invalid|duplicate|limited|exist|required|choose/i.test(message);
     console.error("[todo-api] task reorder failed", {
+      requested,
+      operationId,
       durationMs: Date.now() - startedAt,
-      error,
+      errorName: error instanceof Error ? error.name : typeof error,
+      errorMessage: message,
     });
-    return Response.json({ error: message }, { status: inputError ? 400 : 500 });
+    return Response.json({
+      error: inputError ? message : "The task order could not be saved.",
+    }, { status: inputError ? 400 : 500 });
   }
 }
