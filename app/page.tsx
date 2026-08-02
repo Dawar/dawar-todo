@@ -40,6 +40,7 @@ import { SiteHeader } from "./site-header";
 import { KeyboardShortcutsDialog } from "./keyboard-shortcuts-dialog";
 import { PullGesturePill } from "./pull-to-refresh";
 import { MarkdownPreview } from "./markdown-preview";
+import { recordSyncDiagnostic } from "./sync-diagnostics";
 import { MAX_TASK_DESCRIPTION_LENGTH } from "../lib/task-description";
 import {
   appendOfflineTodoAttachments,
@@ -3254,12 +3255,17 @@ export default function Home() {
       wakeAt: new Date(wakeAt).toISOString(),
       delayMs: Math.max(0, wakeAt - Date.now()),
     });
+    recordSyncDiagnostic("wake-scheduled", {
+      source,
+      delayMs: Math.max(0, wakeAt - Date.now()),
+    });
   }
 
   async function syncOfflineQueue() {
     if (syncingOfflineRef.current) {
       syncRequestedRef.current = true;
       console.info("[todo-offline] follow-up synchronization requested during active pass");
+      recordSyncDiagnostic("follow-up-requested");
       return;
     }
     if (Date.now() < syncNextAttemptAtRef.current) {
@@ -3287,6 +3293,14 @@ export default function Home() {
         quality,
         error,
       });
+      recordSyncDiagnostic("sync-backed-off", {
+        stage,
+        attempts: syncBackoffAttemptsRef.current,
+        delayMs,
+        failureKind,
+        status: (error as Error & { status?: number }).status ?? null,
+        quality,
+      });
     };
     try {
       const [records, mutations, actions] = await Promise.all([
@@ -3307,6 +3321,12 @@ export default function Home() {
         edits: mutations.length,
         actions: actions.length,
         browserOnlineHint: navigator.onLine,
+      });
+      recordSyncDiagnostic("sync-started", {
+        creates: records.length,
+        edits: mutations.length,
+        actions: actions.length,
+        onlineHint: navigator.onLine,
       });
       let syncedTasks = 0;
       let syncedEdits = 0;
@@ -3415,6 +3435,9 @@ export default function Home() {
           setOnline(true);
           setConnectionQuality("online");
           console.info("[todo-offline] task synchronized", { clientId: record.clientId, id: todo.id, attachments: record.attachments.length });
+          recordSyncDiagnostic("create-synced", {
+            attachmentCount: record.attachments.length,
+          });
         } catch (error) {
           deferPass("task-create", error);
           return;
@@ -3476,6 +3499,11 @@ export default function Home() {
             mutationId: mutation.mutationId,
             requestedFields: Object.keys(mutation.patch),
             appliedFields: result.appliedFields,
+            newerMutationPreserved: !removedQueuedMutation,
+          });
+          recordSyncDiagnostic("edit-synced", {
+            requestedFieldCount: Object.keys(mutation.patch).length,
+            appliedFieldCount: result.appliedFields.length,
             newerMutationPreserved: !removedQueuedMutation,
           });
         } catch (error) {
@@ -3549,6 +3577,11 @@ export default function Home() {
             taskIds: action.taskIds,
             undoRequested: Boolean(action.undoRequested),
           });
+          recordSyncDiagnostic("action-synced", {
+            kind: action.kind,
+            taskCount: action.taskIds.length,
+            undoRequested: Boolean(action.undoRequested),
+          });
         } catch (error) {
           const status = (error as Error & { status?: number }).status;
           if (retryableSyncError(error)) {
@@ -3570,6 +3603,15 @@ export default function Home() {
               status: status ?? null,
               quality,
               error,
+            });
+            recordSyncDiagnostic("action-deferred", {
+              kind: action.kind,
+              taskCount: action.taskIds.length,
+              attempts,
+              delayMs,
+              failureKind,
+              status: status ?? null,
+              quality,
             });
             if (failureKind === "server" && typeof status === "number" && status >= 500) {
               console.warn("[todo-offline] queue continuing after isolated server failure", {
@@ -3594,6 +3636,11 @@ export default function Home() {
             operationId: action.operationId,
             status,
             error,
+          });
+          recordSyncDiagnostic("action-rejected", {
+            kind: action.kind,
+            taskCount: action.taskIds.length,
+            status: status ?? null,
           });
         }
       }
@@ -3629,8 +3676,24 @@ export default function Home() {
         remainingActions: remainingActions.length,
         durationMs: Date.now() - startedAt,
       });
+      recordSyncDiagnostic("sync-finished", {
+        syncedCreates: syncedTasks,
+        syncedEdits,
+        syncedActions,
+        deferredActions,
+        remainingCreates: remainingTasks.length,
+        remainingEdits: remainingEdits.length,
+        remainingActions: remainingActions.length,
+        durationMs: Date.now() - startedAt,
+      });
     } catch (error) {
       console.error("[todo-offline] sync pass failed", { durationMs: Date.now() - startedAt, error });
+      recordSyncDiagnostic("sync-pass-failed", {
+        durationMs: Date.now() - startedAt,
+        failureKind: syncFailureKind(error),
+        status: (error as Error & { status?: number }).status ?? null,
+        onlineHint: navigator.onLine,
+      });
       scheduleOfflineQueueSync("unexpected-pass-failure", 2_500);
     } finally {
       syncingOfflineRef.current = false;

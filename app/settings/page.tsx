@@ -12,6 +12,7 @@ import { copyTextToClipboard } from "../copy-to-clipboard";
 import { getOrCreateDeviceId, headersWithDeviceId } from "../device-id";
 import { ensureCurrentPushSubscription } from "../push-client";
 import { SiteHeader } from "../site-header";
+import { buildSyncDiagnosticsReport } from "../sync-diagnostics";
 import {
   DEFAULT_QUICK_SNOOZE_PRESETS,
   QUICK_SNOOZE_OPTIONS,
@@ -134,6 +135,8 @@ export default function SettingsPage() {
   const [talkPhoneLoading, setTalkPhoneLoading] = useState(true);
   const [talkPhoneSaving, setTalkPhoneSaving] = useState(false);
   const [talkPhoneMessage, setTalkPhoneMessage] = useState("");
+  const [copyingDiagnostics, setCopyingDiagnostics] = useState(false);
+  const [diagnosticMessage, setDiagnosticMessage] = useState("");
 
   useEffect(() => {
     request<{ settings: Settings }>("/api/settings")
@@ -659,6 +662,33 @@ export default function SettingsPage() {
     }
   }
 
+  async function copySyncDiagnostics() {
+    if (copyingDiagnostics) return;
+    setCopyingDiagnostics(true);
+    setDiagnosticMessage("");
+    const startedAt = Date.now();
+    try {
+      const report = await buildSyncDiagnosticsReport("settings");
+      await copyTextToClipboard(report);
+      setDiagnosticMessage("Diagnostics copied. Paste them into our chat while an item is stuck.");
+      console.info("[todo-diagnostics] privacy-safe sync diagnostics copied", {
+        reportLength: report.length,
+        durationMs: Date.now() - startedAt,
+        browserOnlineHint: navigator.onLine,
+      });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Diagnostics could not be copied.";
+      setDiagnosticMessage(errorMessage);
+      console.error("[todo-diagnostics] sync diagnostics copy failed", {
+        durationMs: Date.now() - startedAt,
+        browserOnlineHint: navigator.onLine,
+        error,
+      });
+    } finally {
+      setCopyingDiagnostics(false);
+    }
+  }
+
   return (
     <main className="min-h-screen bg-[#f6f7f5] text-[#1d211f]">
       <SiteHeader current="settings" />
@@ -668,6 +698,29 @@ export default function SettingsPage() {
           <h1 className="mt-1 text-3xl font-semibold tracking-[-0.04em] text-[#151816]">Preferences</h1>
           <p className="mt-2 text-sm leading-6 text-[#69716c]">Control task timing, AI behavior, and device features.</p>
         </div>
+
+        <section aria-labelledby="sync-diagnostics-title" className="mb-6 rounded-2xl border border-black/[0.07] bg-white p-5 shadow-[0_10px_35px_rgba(30,45,36,0.06)] sm:p-7">
+          <div className="flex items-start gap-3">
+            <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-[#eaf3ed] text-[#216e4e]"><ActionIcon name="retry" className="h-5 w-5" /></span>
+            <div className="min-w-0 flex-1">
+              <h2 id="sync-diagnostics-title" className="text-lg font-semibold tracking-[-0.02em] text-[#202522]">Sync diagnostics</h2>
+              <p className="mt-1 text-sm leading-6 text-[#69716c]">If a task is delayed or stuck, copy this report before refreshing. It captures queue counts, retry timing, browser storage, service worker state, a server reachability check, and recent sync events.</p>
+            </div>
+          </div>
+          <p className="mt-4 rounded-xl bg-[#f1f6f3] px-4 py-3 text-xs leading-5 text-[#4f6257]">The report omits task text, notes, task and operation IDs, attachment names, API tokens, credentials, and device IDs.</p>
+          <div className="mt-4 flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              onClick={() => void copySyncDiagnostics()}
+              disabled={copyingDiagnostics}
+              className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-[#216e4e] px-4 text-sm font-semibold text-white transition hover:bg-[#195d41] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#216e4e] disabled:opacity-50"
+            >
+              <ActionIcon name="copy" />
+              {copyingDiagnostics ? "Collecting…" : "Copy sync diagnostics"}
+            </button>
+            {diagnosticMessage && <p role="status" className="text-sm leading-6 text-[#4f6257]">{diagnosticMessage}</p>}
+          </div>
+        </section>
 
         <form onSubmit={save} className="rounded-2xl border border-black/[0.07] bg-white p-5 shadow-[0_10px_35px_rgba(30,45,36,0.06)] sm:p-7">
           <fieldset disabled={loading || saving} className="space-y-5 disabled:opacity-60">

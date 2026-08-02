@@ -1,5 +1,5 @@
 const CACHE_PREFIX = "dawar-todo-shell-";
-const CACHE_NAME = `${CACHE_PREFIX}v21`;
+const CACHE_NAME = `${CACHE_PREFIX}v22`;
 const SHELL = [
   "/",
   "/talk",
@@ -140,7 +140,7 @@ self.addEventListener("fetch", (event) => {
   if (request.mode === "navigate") {
     event.respondWith(
       (async () => {
-        const cached = await caches.match(url.pathname) || await caches.match("/");
+        const cached = await caches.match(url.pathname);
         const network = fetch(request)
           .then((response) => {
             if (response.ok) event.waitUntil(refreshDocumentShell(response.clone(), url.pathname));
@@ -155,7 +155,16 @@ self.addEventListener("fetch", (event) => {
           }));
           return cached;
         }
-        return network.catch(() => caches.match("/"));
+        console.info("[todo-pwa] uncached route requested from network", {
+          path: url.pathname,
+        });
+        return network.catch(async (error) => {
+          console.warn("[todo-pwa] uncached route unavailable; using offline task shell", {
+            path: url.pathname,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          return caches.match("/");
+        });
       })(),
     );
     return;

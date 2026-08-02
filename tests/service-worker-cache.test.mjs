@@ -74,3 +74,71 @@ test("cold install recursively precaches every generated client bundle", async (
   assert.ok(cached.has("/manifest.webmanifest"));
   assert.ok(cached.has("/icons/apple-touch-icon.png"));
 });
+
+test("an uncached route uses its network document instead of the cached task shell", async () => {
+  const workerSource = await readFile(new URL("public/sw.js", root), "utf8");
+  const listeners = new Map();
+  const cached = new Map([["/", "cached tasks document"]]);
+  const fetchedPaths = [];
+  const cache = {
+    put: async (key, response) => {
+      const pathname = new URL(typeof key === "string" ? key : key.url, origin).pathname;
+      cached.set(pathname, await response.text());
+    },
+  };
+  const match = async (key) => {
+    const pathname = new URL(typeof key === "string" ? key : key.url, origin).pathname;
+    const value = cached.get(pathname);
+    return value === undefined ? undefined : new Response(value);
+  };
+  const fetchLocal = async (request) => {
+    const pathname = new URL(request.url, origin).pathname;
+    fetchedPaths.push(pathname);
+    return new Response(pathname === "/settings" ? "network settings document" : "network response");
+  };
+
+  vm.runInNewContext(workerSource, {
+    self: {
+      location: { origin },
+      clients: { claim: async () => undefined },
+      skipWaiting: async () => undefined,
+      addEventListener: (name, handler) => listeners.set(name, handler),
+    },
+    caches: {
+      open: async () => cache,
+      keys: async () => [],
+      delete: async () => true,
+      match,
+    },
+    fetch: fetchLocal,
+    Request,
+    Response,
+    URL,
+    Set,
+    Promise,
+    Error,
+    console,
+  });
+
+  let responsePromise;
+  const background = [];
+  listeners.get("fetch")({
+    request: {
+      method: "GET",
+      mode: "navigate",
+      url: `${origin}/settings`,
+    },
+    respondWith: (promise) => {
+      responsePromise = promise;
+    },
+    waitUntil: (promise) => {
+      background.push(promise);
+    },
+  });
+
+  const response = await responsePromise;
+  assert.equal(await response.text(), "network settings document");
+  assert.deepEqual(fetchedPaths, ["/settings"]);
+  await Promise.all(background);
+  assert.equal(cached.get("/settings"), "network settings document");
+});
