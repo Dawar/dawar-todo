@@ -1,9 +1,34 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { type MouseEvent, useState } from "react";
 import { ActionIcon } from "./action-icon";
 import { KeyboardShortcutsDialog } from "./keyboard-shortcuts-dialog";
+
+type StandaloneNavigator = Navigator & { standalone?: boolean };
+
+function handleStandaloneDocumentNavigation(event: MouseEvent<HTMLAnchorElement>, href: string) {
+  if (
+    event.defaultPrevented
+    || event.button !== 0
+    || event.metaKey
+    || event.ctrlKey
+    || event.shiftKey
+    || event.altKey
+    || href !== "/settings"
+  ) return;
+  const standalone = window.matchMedia("(display-mode: standalone)").matches
+    || Boolean((navigator as StandaloneNavigator).standalone);
+  if (!standalone) return;
+  event.preventDefault();
+  console.info("[todo-pwa] standalone Settings document navigation requested", {
+    from: window.location.pathname,
+    to: href,
+    displayModeStandalone: window.matchMedia("(display-mode: standalone)").matches,
+    navigatorStandalone: Boolean((navigator as StandaloneNavigator).standalone),
+  });
+  window.location.assign(href);
+}
 
 export function SiteHeader({
   current,
@@ -65,6 +90,8 @@ export function SiteHeader({
             <Link
               key={item.href}
               href={item.href}
+              prefetch={item.href === "/settings" ? false : undefined}
+              onClick={(event) => handleStandaloneDocumentNavigation(event, item.href)}
               aria-label={item.label}
               aria-current={item.active ? "page" : undefined}
               title={item.label}

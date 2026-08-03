@@ -1,7 +1,8 @@
 const CACHE_PREFIX = "dawar-todo-shell-";
-const CACHE_NAME = `${CACHE_PREFIX}v22`;
+const CACHE_NAME = `${CACHE_PREFIX}v23`;
 const SHELL = [
   "/",
+  "/settings",
   "/talk",
   "/manifest.webmanifest",
   "/icons/icon-192.png",
