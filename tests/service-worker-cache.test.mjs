@@ -81,16 +81,17 @@ test("an uncached route uses its network document instead of the cached task she
   const listeners = new Map();
   const cached = new Map([["/", "cached tasks document"]]);
   const fetchedPaths = [];
+  const match = async (key) => {
+    const pathname = new URL(typeof key === "string" ? key : key.url, origin).pathname;
+    const value = cached.get(pathname);
+    return value === undefined ? undefined : new Response(value);
+  };
   const cache = {
     put: async (key, response) => {
       const pathname = new URL(typeof key === "string" ? key : key.url, origin).pathname;
       cached.set(pathname, await response.text());
     },
-  };
-  const match = async (key) => {
-    const pathname = new URL(typeof key === "string" ? key : key.url, origin).pathname;
-    const value = cached.get(pathname);
-    return value === undefined ? undefined : new Response(value);
+    match,
   };
   const fetchLocal = async (request) => {
     const pathname = new URL(request.url, origin).pathname;
@@ -142,4 +143,70 @@ test("an uncached route uses its network document instead of the cached task she
   assert.deepEqual(fetchedPaths, ["/settings"]);
   await Promise.all(background);
   assert.equal(cached.get("/settings"), "network settings document");
+});
+
+test("activation preserves the previous app shell without navigating open PWA windows", async () => {
+  const workerSource = await readFile(new URL("public/sw.js", root), "utf8");
+  const listeners = new Map();
+  const deleted = [];
+  let claimed = false;
+  let navigations = 0;
+
+  vm.runInNewContext(workerSource, {
+    self: {
+      location: { origin },
+      clients: {
+        claim: async () => {
+          claimed = true;
+        },
+        matchAll: async () => [{
+          url: `${origin}/talk`,
+          navigate: async () => {
+            navigations += 1;
+          },
+        }],
+      },
+      skipWaiting: async () => undefined,
+      addEventListener: (name, handler) => listeners.set(name, handler),
+    },
+    caches: {
+      open: async () => ({ match: async () => undefined, put: async () => undefined }),
+      keys: async () => [
+        "dawar-todo-shell-v21",
+        "dawar-todo-shell-v22",
+        "dawar-todo-shell-v23",
+        "dawar-todo-shell-v24",
+        "unrelated-cache",
+      ],
+      delete: async (key) => {
+        deleted.push(key);
+        return true;
+      },
+      match: async () => undefined,
+    },
+    fetch: async () => new Response("ok"),
+    Request,
+    Response,
+    URL,
+    Set,
+    Promise,
+    Error,
+    Number,
+    console,
+  });
+
+  let activation;
+  listeners.get("activate")({
+    waitUntil: (promise) => {
+      activation = promise;
+    },
+  });
+  await activation;
+
+  assert.equal(claimed, true);
+  assert.equal(navigations, 0);
+  assert.deepEqual(deleted, [
+    "dawar-todo-shell-v22",
+    "dawar-todo-shell-v21",
+  ]);
 });

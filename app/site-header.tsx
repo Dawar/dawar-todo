@@ -15,13 +15,12 @@ function handleStandaloneDocumentNavigation(event: MouseEvent<HTMLAnchorElement>
     || event.ctrlKey
     || event.shiftKey
     || event.altKey
-    || href !== "/settings"
   ) return;
   const standalone = window.matchMedia("(display-mode: standalone)").matches
     || Boolean((navigator as StandaloneNavigator).standalone);
   if (!standalone) return;
   event.preventDefault();
-  console.info("[todo-pwa] standalone Settings document navigation requested", {
+  console.info("[todo-pwa] standalone document navigation requested", {
     from: window.location.pathname,
     to: href,
     displayModeStandalone: window.matchMedia("(display-mode: standalone)").matches,
@@ -69,7 +68,12 @@ export function SiteHeader({
             {brand}
           </button>
         ) : (
-          <Link href="/" className="flex min-w-0 max-w-[38vw] items-center gap-2 rounded-lg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#216e4e] sm:gap-2.5">
+          <Link
+            href="/"
+            prefetch={false}
+            onClick={(event) => handleStandaloneDocumentNavigation(event, "/")}
+            className="flex min-w-0 max-w-[38vw] items-center gap-2 rounded-lg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#216e4e] sm:gap-2.5"
+          >
             {brand}
           </Link>
         )}
@@ -90,7 +94,7 @@ export function SiteHeader({
             <Link
               key={item.href}
               href={item.href}
-              prefetch={item.href === "/settings" ? false : undefined}
+              prefetch={false}
               onClick={(event) => handleStandaloneDocumentNavigation(event, item.href)}
               aria-label={item.label}
               aria-current={item.active ? "page" : undefined}

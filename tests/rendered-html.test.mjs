@@ -173,7 +173,8 @@ test("ships the simplified todo and project surface", async () => {
   assert.match(siteHeader, /label: "Settings", icon: "settings"/);
   assert.match(siteHeader, /display-mode: standalone/);
   assert.match(siteHeader, /window\.location\.assign\(href\)/);
-  assert.match(siteHeader, /prefetch=\{item\.href === "\/settings" \? false : undefined\}/);
+  assert.match(siteHeader, /prefetch=\{false\}/);
+  assert.doesNotMatch(siteHeader, /href !== "\/settings"/);
   assert.match(siteHeader, /<ActionIcon name=\{item\.icon\}/);
   assert.match(siteHeader, /aria-label="Primary"/);
   assert.match(siteHeader, /label: "Tasks"/);

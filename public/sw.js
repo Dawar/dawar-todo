@@ -1,5 +1,5 @@
 const CACHE_PREFIX = "dawar-todo-shell-";
-const CACHE_NAME = `${CACHE_PREFIX}v23`;
+const CACHE_NAME = `${CACHE_PREFIX}v24`;
 const SHELL = [
   "/",
   "/settings",
@@ -112,21 +112,23 @@ self.addEventListener("activate", (event) => {
     (async () => {
       const keys = await caches.keys();
       const staleShellCaches = keys.filter((key) => key.startsWith(CACHE_PREFIX) && key !== CACHE_NAME);
-      await Promise.all(staleShellCaches.map((key) => caches.delete(key)));
+      const retainedShellCaches = staleShellCaches
+        .sort((a, b) => {
+          const aVersion = Number(a.slice(CACHE_PREFIX.length).replace(/^v/, "")) || 0;
+          const bVersion = Number(b.slice(CACHE_PREFIX.length).replace(/^v/, "")) || 0;
+          return bVersion - aVersion;
+        })
+        .slice(0, 1);
+      const removedShellCaches = staleShellCaches.filter((key) => !retainedShellCaches.includes(key));
+      await Promise.all(removedShellCaches.map((key) => caches.delete(key)));
       await self.clients.claim();
-      if (!staleShellCaches.length) return;
-
       const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
-      const refreshResults = await Promise.allSettled(windows.map((client) => (
-        "navigate" in client ? client.navigate(client.url) : null
-      )));
-      const refreshedClients = refreshResults.filter((result) => result.status === "fulfilled" && result.value).length;
       console.info("[todo-pwa] app shell upgrade activated", {
         cache: CACHE_NAME,
-        replacedCaches: staleShellCaches,
+        retainedShellCaches,
+        removedShellCaches,
         openClients: windows.length,
-        refreshedClients,
-        failedRefreshes: refreshResults.filter((result) => result.status === "rejected").length,
+        forcedNavigations: 0,
       });
     })(),
   );
@@ -141,7 +143,8 @@ self.addEventListener("fetch", (event) => {
   if (request.mode === "navigate") {
     event.respondWith(
       (async () => {
-        const cached = await caches.match(url.pathname);
+        const currentShell = await caches.open(CACHE_NAME);
+        const cached = await currentShell.match(url.pathname);
         const network = fetch(request)
           .then((response) => {
             if (response.ok) event.waitUntil(refreshDocumentShell(response.clone(), url.pathname));
@@ -164,7 +167,7 @@ self.addEventListener("fetch", (event) => {
             path: url.pathname,
             error: error instanceof Error ? error.message : String(error),
           });
-          return caches.match("/");
+          return (await currentShell.match("/")) || caches.match("/");
         });
       })(),
     );
