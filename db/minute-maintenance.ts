@@ -8,8 +8,9 @@ import {
   processTalkPhoneRecordingQueue,
 } from "./talk-phone-recordings";
 import { processRecurringTodos } from "../worker/recurring";
+import { processUrgentAlertQueue, type UrgentAlertEnvironment } from "./urgent-alerts";
 
-export type MinuteMaintenanceEnvironment = PushEnvironment & {
+export type MinuteMaintenanceEnvironment = PushEnvironment & UrgentAlertEnvironment & {
   DB: D1Database;
 };
 
@@ -27,6 +28,7 @@ export async function runTodoMinuteMaintenance(
     push: null as Awaited<ReturnType<typeof dispatchTodoPushNotifications>> | null,
     recordings: null as Awaited<ReturnType<typeof processTalkPhoneRecordingQueue>> | null,
     recordingCleanupCompleted: false,
+    urgentAlerts: null as Awaited<ReturnType<typeof processUrgentAlertQueue>> | null,
   };
 
   try {
@@ -57,6 +59,12 @@ export async function runTodoMinuteMaintenance(
   }
 
   try {
+    result.urgentAlerts = await processUrgentAlertQueue(scheduledAt, environment);
+  } catch (error) {
+    console.error("[todo-maintenance] urgent alert processing failed", { source, error });
+  }
+
+  try {
     await cleanupTalkPhoneRecordingSources();
     result.recordingCleanupCompleted = true;
   } catch (error) {
@@ -69,6 +77,8 @@ export async function runTodoMinuteMaintenance(
     snoozedWoken: result.snoozedWoken,
     pushEvents: result.push?.events ?? 0,
     pushSent: result.push?.sent ?? 0,
+    urgentAlertDue: result.urgentAlerts?.due ?? 0,
+    urgentAlertSent: result.urgentAlerts?.sent ?? 0,
     durationMs: Date.now() - startedAt,
   });
   return result;

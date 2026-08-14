@@ -450,6 +450,108 @@ export const todoTalkPhoneProfiles = sqliteTable("todo_talk_phone_profiles", {
     .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`),
 });
 
+export const todoProfileContacts = sqliteTable(
+  "todo_profile_contacts",
+  {
+    userKey: text("user_key").primaryKey(),
+    phoneCiphertext: text("phone_ciphertext"),
+    phoneIv: text("phone_iv"),
+    phoneHash: text("phone_hash"),
+    phoneSuffix: text("phone_suffix"),
+    phoneVerifiedAt: text("phone_verified_at"),
+    urgentAlertsEnabled: integer("urgent_alerts_enabled", { mode: "boolean" }).notNull().default(false),
+    callWindowStart: integer("call_window_start").notNull().default(8),
+    callWindowEnd: integer("call_window_end").notNull().default(22),
+    updatedAt: text("updated_at")
+      .notNull()
+      .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`),
+  },
+  (table) => [index("todo_profile_contacts_phone_hash_idx").on(table.phoneHash)],
+);
+
+export const todoProfilePhoneVerifications = sqliteTable(
+  "todo_profile_phone_verifications",
+  {
+    id: text("id").primaryKey(),
+    userKey: text("user_key").notNull(),
+    phoneCiphertext: text("phone_ciphertext").notNull(),
+    phoneIv: text("phone_iv").notNull(),
+    phoneHash: text("phone_hash").notNull(),
+    phoneSuffix: text("phone_suffix").notNull(),
+    codeHash: text("code_hash").notNull(),
+    attemptCount: integer("attempt_count").notNull().default(0),
+    expiresAt: text("expires_at").notNull(),
+    consumedAt: text("consumed_at"),
+    createdAt: text("created_at")
+      .notNull()
+      .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`),
+  },
+  (table) => [
+    index("todo_profile_phone_verifications_user_idx").on(table.userKey, table.createdAt),
+    index("todo_profile_phone_verifications_expiry_idx").on(table.expiresAt),
+  ],
+);
+
+export const todoUrgentEscalations = sqliteTable(
+  "todo_urgent_escalations",
+  {
+    id: text("id").primaryKey(),
+    todoId: integer("todo_id").notNull(),
+    userKey: text("user_key").notNull(),
+    sourceTokenId: text("source_token_id"),
+    sourceAgentName: text("source_agent_name").notNull(),
+    replyCode: text("reply_code").notNull(),
+    state: text("state").notNull().default("pending"),
+    waveIndex: integer("wave_index").notNull().default(0),
+    nextAttemptAt: text("next_attempt_at").notNull(),
+    leaseToken: text("lease_token"),
+    leaseExpiresAt: text("lease_expires_at"),
+    lastAttemptAt: text("last_attempt_at"),
+    acknowledgedAt: text("acknowledged_at"),
+    acknowledgementChannel: text("acknowledgement_channel"),
+    stoppedReason: text("stopped_reason"),
+    createdAt: text("created_at")
+      .notNull()
+      .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`),
+    updatedAt: text("updated_at")
+      .notNull()
+      .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`),
+  },
+  (table) => [
+    uniqueIndex("todo_urgent_escalations_todo_idx").on(table.todoId),
+    uniqueIndex("todo_urgent_escalations_reply_idx").on(table.replyCode),
+    index("todo_urgent_escalations_due_idx").on(table.state, table.nextAttemptAt),
+    index("todo_urgent_escalations_user_idx").on(table.userKey, table.createdAt),
+    index("todo_urgent_escalations_lease_idx").on(table.leaseExpiresAt),
+  ],
+);
+
+export const todoUrgentAttempts = sqliteTable(
+  "todo_urgent_attempts",
+  {
+    id: text("id").primaryKey(),
+    escalationId: text("escalation_id").notNull(),
+    waveIndex: integer("wave_index").notNull(),
+    channel: text("channel").notNull(),
+    providerSid: text("provider_sid"),
+    status: text("status").notNull().default("prepared"),
+    submittedAt: text("submitted_at"),
+    deliveredAt: text("delivered_at"),
+    errorCode: text("error_code"),
+    createdAt: text("created_at")
+      .notNull()
+      .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`),
+    updatedAt: text("updated_at")
+      .notNull()
+      .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`),
+  },
+  (table) => [
+    uniqueIndex("todo_urgent_attempts_wave_channel_idx").on(table.escalationId, table.waveIndex, table.channel),
+    index("todo_urgent_attempts_provider_idx").on(table.providerSid),
+    index("todo_urgent_attempts_status_idx").on(table.status, table.updatedAt),
+  ],
+);
+
 export const todoTalkPhoneCalls = sqliteTable(
   "todo_talk_phone_calls",
   {

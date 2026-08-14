@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Dawar Todo API",
-    "version": "1.3.0",
-    "description": "Programmatic access to the same tasks, projects, recurrence, snooze, completion, conflict-free field synchronization, merge, undo, settings, calendar-sharing, and attachment operations used by the Dawar Todo UI. Create a personal token in Settings, then send it as `Authorization: Bearer dt_live_...`. Tokens have full read/write access and should be treated as passwords. Token creation and revocation intentionally require an interactive ChatGPT session and are not exposed here."
+    "version": "1.4.0",
+    "description": "Programmatic access to the same tasks, projects, recurrence, snooze, completion, conflict-free field synchronization, merge, undo, settings, calendar-sharing, and attachment operations used by the Dawar Todo UI. A newly created priority-1 task automatically starts the owner's urgent call-and-text escalation. Create a personal token in Settings, then send it as `Authorization: Bearer dt_live_...`. Tokens have full read/write access and should be treated as passwords. Token creation, revocation, profile-phone management, and alert acknowledgement intentionally require an interactive ChatGPT session and are not exposed here."
   },
   "servers": [
     {
@@ -49,7 +49,7 @@
         "responses": {
           "201": {
             "description": "Task created",
-            "content": { "application/json": { "schema": { "type": "object", "required": ["todo"], "properties": { "todo": { "$ref": "#/components/schemas/Todo" } } } } }
+            "content": { "application/json": { "schema": { "type": "object", "required": ["todo"], "properties": { "todo": { "$ref": "#/components/schemas/Todo" }, "urgentAlert": { "$ref": "#/components/schemas/UrgentAlert" } } } } }
           },
           "400": { "$ref": "#/components/responses/BadRequest" },
           "401": { "$ref": "#/components/responses/Unauthorized" }
@@ -357,6 +357,19 @@
     },
     "schemas": {
       "Error": { "type": "object", "required": ["error"], "properties": { "error": { "type": "string" } } },
+      "UrgentAlert": {
+        "type": "object",
+        "readOnly": true,
+        "required": ["id", "state", "channels", "attemptNumber", "nextAttemptAt"],
+        "description": "Present when this API-token request created a priority-1 task. Calls and texts continue until the owner acknowledges or durably acts on the task.",
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "state": { "type": "string", "enum": ["pending", "awaiting_ack", "blocked_configuration", "acknowledged", "cancelled"] },
+          "channels": { "type": "array", "items": { "type": "string", "enum": ["sms", "voice"] } },
+          "attemptNumber": { "type": "integer", "minimum": 1 },
+          "nextAttemptAt": { "type": ["string", "null"], "format": "date-time" }
+        }
+      },
       "Todo": {
         "type": "object",
         "required": ["id", "title", "notes", "status", "priority", "pinned", "sortOrder", "createdAt", "updatedAt", "attachmentCount"],
@@ -390,7 +403,7 @@
           "title": { "type": "string", "minLength": 1, "maxLength": 2000 },
           "notes": { "type": "string", "maxLength": 500000, "description": "Markdown task description." },
           "status": { "const": "open" },
-          "priority": { "type": "integer", "minimum": 1, "maximum": 4, "default": 3 },
+          "priority": { "type": "integer", "minimum": 1, "maximum": 4, "default": 3, "description": "1 urgent, 2 high, 3 normal, 4 low. Creating a priority-1 task with this Bearer token immediately starts the owner's urgent call-and-text escalation." },
           "dueDate": { "type": ["string", "null"], "format": "date" },
           "project": { "type": ["string", "null"], "maxLength": 120 },
           "context": { "type": ["string", "null"] },

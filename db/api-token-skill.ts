@@ -65,6 +65,7 @@ curl --fail-with-body \\
 - A snoozed task remains \`open\` and has a future \`snoozedUntil\` timestamp. Once that time passes, normal list/sync reads automatically clear the snooze and return the task to Open.
 - \`recurrenceCron\`: an optional five-field cron expression (minute, hour, day, month, weekday) evaluated in the user's configured \`snoozeTimeZone\`. At each matching interval, a completed task reopens. Recurring tasks cannot be snoozed.
 - \`priority\`: 1 urgent, 2 high, 3 normal, 4 low.
+- Creating a new priority-1 task through this token immediately starts repeated calls and texts to the owner's verified profile phone. Use priority 1 only when the user truly intends an interruptive urgent escalation. Promoting an existing task to priority 1 does not start one.
 - \`dueDate\`: \`YYYY-MM-DD\` or null.
 - \`project\`: a registered project name or null for unassigned.
 - \`pinned\`: when true, the task is hoisted into the Pinned group in the Open view. It has no effect on task state or other views.
@@ -78,7 +79,7 @@ curl --fail-with-body \\
 ### Todos
 
 - \`GET /api/todos\`: list all open, snoozed, and completed tasks.
-- \`POST /api/todos\`: create an open task. Supports title, notes, priority, dueDate, project, context, recurrenceCron, clientId, draftToken, and attachmentIds. The \`notes\` field is a Markdown description of up to 500,000 characters.
+- \`POST /api/todos\`: create an open task. Supports title, notes, priority, dueDate, project, context, recurrenceCron, clientId, draftToken, and attachmentIds. The \`notes\` field is a Markdown description of up to 500,000 characters. A priority-1 response includes \`urgentAlert\`; calls and texts begin automatically and continue until acknowledged or the task is pinned, snoozed, completed, deleted, or lowered from urgent.
 - \`PATCH /api/todos/{id}\`: edit title, Markdown notes/description, status, priority, dueDate, project, context, recurrenceCron, or pinned. Set nullable fields to null to clear them. For offline or concurrent clients, include a UUID \`mutation.mutationId\` and per-field ISO timestamps in \`mutation.fieldTimestamps\`; independent fields merge and same-field conflicts resolve deterministically.
 - \`PATCH /api/todos/reorder\`: persist canonical ordering with unique positive \`orderedIds\` and a UUID \`operationId\`. IDs missing because another client created them retain their relative slots.
 - \`POST /api/todos/bulk\`: perform state and multi-task operations.

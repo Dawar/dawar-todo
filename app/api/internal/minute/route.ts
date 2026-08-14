@@ -41,6 +41,7 @@ export async function POST(request: Request) {
     scheduledAt: scheduledAt.toISOString(),
     snoozedWoken: result.snoozedWoken,
     push: result.push,
+    urgentAlerts: result.urgentAlerts,
   }, {
     headers: { "Cache-Control": "no-store" },
   });

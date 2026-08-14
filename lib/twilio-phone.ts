@@ -14,6 +14,16 @@ type IncomingPhoneNumber = {
   phone_number?: string;
   voice_url?: string;
   voice_method?: string;
+  sms_url?: string;
+  sms_method?: string;
+  capabilities?: { voice?: boolean; sms?: boolean; mms?: boolean };
+};
+
+type TwilioApiResponse = {
+  sid?: string;
+  status?: string;
+  message?: string;
+  error_code?: number | null;
 };
 
 function runtime(environment?: TwilioPhoneEnvironment) {
@@ -42,13 +52,90 @@ export function displayPhoneNumber(value: string) {
   return value;
 }
 
-function xmlEscape(value: string) {
+export function xmlEscape(value: string) {
   return value
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&apos;");
+}
+
+async function twilioApiRequest(
+  path: string,
+  payload: URLSearchParams,
+  environment?: TwilioPhoneEnvironment,
+) {
+  const config = twilioPhoneConfig(environment);
+  if (!config.accountSid || !config.authToken || !config.phoneNumber) {
+    throw new Error("Twilio phone credentials are incomplete.");
+  }
+  const response = await fetch(
+    `https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(config.accountSid)}/${path}`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: twilioAuthorization(config.accountSid, config.authToken),
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: payload,
+      signal: AbortSignal.timeout(15_000),
+    },
+  );
+  const body = await response.json().catch(() => ({})) as TwilioApiResponse;
+  if (!response.ok || !body.sid) {
+    throw new Error(body.message || `Twilio request failed (${response.status}).`);
+  }
+  return body;
+}
+
+export async function sendTwilioSms(
+  input: { to: string; body: string; statusCallbackUrl?: string },
+  environment?: TwilioPhoneEnvironment,
+) {
+  const config = twilioPhoneConfig(environment);
+  const payload = new URLSearchParams({
+    To: input.to,
+    From: config.phoneNumber,
+    Body: input.body,
+  });
+  if (input.statusCallbackUrl) payload.set("StatusCallback", input.statusCallbackUrl);
+  const result = await twilioApiRequest("Messages.json", payload, environment);
+  console.info("[todo-profile-phone] Twilio SMS accepted", {
+    providerStatus: result.status ?? "queued",
+    destinationSuffix: input.to.replace(/\D/g, "").slice(-4),
+    bodyLength: input.body.length,
+  });
+  return { sid: result.sid!, status: result.status ?? "queued" };
+}
+
+export async function createTwilioOutboundCall(
+  input: {
+    to: string;
+    instructionUrl: string;
+    statusCallbackUrl: string;
+  },
+  environment?: TwilioPhoneEnvironment,
+) {
+  const config = twilioPhoneConfig(environment);
+  const payload = new URLSearchParams({
+    To: input.to,
+    From: config.phoneNumber,
+    Url: input.instructionUrl,
+    Method: "POST",
+    StatusCallback: input.statusCallbackUrl,
+    StatusCallbackMethod: "POST",
+    MachineDetection: "DetectMessageEnd",
+  });
+  for (const event of ["initiated", "ringing", "answered", "completed"]) {
+    payload.append("StatusCallbackEvent", event);
+  }
+  const result = await twilioApiRequest("Calls.json", payload, environment);
+  console.info("[todo-urgent-alert] Twilio voice call accepted", {
+    providerStatus: result.status ?? "queued",
+    destinationSuffix: input.to.replace(/\D/g, "").slice(-4),
+  });
+  return { sid: result.sid!, status: result.status ?? "queued" };
 }
 
 function twiml(contents: string) {
@@ -360,5 +447,45 @@ export async function configureTwilioVoiceWebhook(
     phoneNumber: config.phoneNumber,
     webhookUrl: body.voice_url ?? webhookUrl,
     voiceMethod: body.voice_method ?? "POST",
+  };
+}
+
+export async function configureTwilioMessagingWebhook(
+  webhookUrl: string,
+  environment?: TwilioPhoneEnvironment,
+) {
+  const startedAt = Date.now();
+  const { config, number } = await fetchTwilioPhoneNumber(environment);
+  if (number.capabilities && number.capabilities.sms === false) {
+    throw new Error("The configured Twilio number does not support SMS.");
+  }
+  const payload = new URLSearchParams({
+    SmsUrl: webhookUrl,
+    SmsMethod: "POST",
+  });
+  const response = await fetch(
+    `https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(config.accountSid)}/IncomingPhoneNumbers/${encodeURIComponent(number.sid!)}.json`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: twilioAuthorization(config.accountSid, config.authToken),
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: payload,
+      signal: AbortSignal.timeout(15_000),
+    },
+  );
+  const body = await response.json().catch(() => ({})) as IncomingPhoneNumber & { message?: string };
+  if (!response.ok) throw new Error(body.message || `Twilio messaging setup failed (${response.status}).`);
+  console.info("[todo-profile-phone] Twilio messaging webhook configured", {
+    phoneNumberSuffix: config.phoneNumber.replace(/\D/g, "").slice(-4),
+    webhookHost: new URL(webhookUrl).host,
+    durationMs: Date.now() - startedAt,
+  });
+  return {
+    phoneNumber: config.phoneNumber,
+    webhookUrl: body.sms_url ?? webhookUrl,
+    smsMethod: body.sms_method ?? "POST",
+    smsCapable: number.capabilities?.sms !== false,
   };
 }

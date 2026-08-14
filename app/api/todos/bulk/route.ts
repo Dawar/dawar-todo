@@ -9,6 +9,7 @@ import {
   type SnoozePreset,
 } from "../../../../db/todos";
 import { isQuickSnoozePreset } from "../../../../lib/snooze-presets";
+import { stopUrgentAlertForTodo } from "../../../../db/urgent-alerts";
 
 const actions = new Set<BulkTodoAction>(["complete", "reopen", "snooze", "unsnooze", "reproject", "delete"]);
 
@@ -46,6 +47,7 @@ export async function POST(request: Request) {
     }
     if (payload.action === "merge") {
       const result = await mergeTodos(ids);
+      await Promise.all(result.ids.map((id) => stopUrgentAlertForTodo(id, "merged")));
       console.info("[todo-api] bulk merged", {
         sourceCount: result.ids.length,
         mergedId: result.todo.id,

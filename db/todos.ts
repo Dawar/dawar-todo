@@ -131,7 +131,7 @@ type TodoSyncChangeRow = {
 };
 
 let initialization: Promise<void> | null = null;
-const CURRENT_SCHEMA_VERSION = "28";
+const CURRENT_SCHEMA_VERSION = "29";
 
 function database() {
   if (!env.DB) throw new Error("The todo database is unavailable.");
@@ -591,6 +591,72 @@ export async function ensureTodoDatabase() {
         )
       `),
       db.prepare(`
+        CREATE TABLE IF NOT EXISTS todo_profile_contacts (
+          user_key TEXT PRIMARY KEY NOT NULL,
+          phone_ciphertext TEXT,
+          phone_iv TEXT,
+          phone_hash TEXT,
+          phone_suffix TEXT,
+          phone_verified_at TEXT,
+          urgent_alerts_enabled INTEGER NOT NULL DEFAULT 0,
+          call_window_start INTEGER NOT NULL DEFAULT 8,
+          call_window_end INTEGER NOT NULL DEFAULT 22,
+          updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+        )
+      `),
+      db.prepare(`
+        CREATE TABLE IF NOT EXISTS todo_profile_phone_verifications (
+          id TEXT PRIMARY KEY NOT NULL,
+          user_key TEXT NOT NULL,
+          phone_ciphertext TEXT NOT NULL,
+          phone_iv TEXT NOT NULL,
+          phone_hash TEXT NOT NULL,
+          phone_suffix TEXT NOT NULL,
+          code_hash TEXT NOT NULL,
+          attempt_count INTEGER NOT NULL DEFAULT 0,
+          expires_at TEXT NOT NULL,
+          consumed_at TEXT,
+          created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+        )
+      `),
+      db.prepare(`
+        CREATE TABLE IF NOT EXISTS todo_urgent_escalations (
+          id TEXT PRIMARY KEY NOT NULL,
+          todo_id INTEGER NOT NULL UNIQUE,
+          user_key TEXT NOT NULL,
+          source_token_id TEXT,
+          source_agent_name TEXT NOT NULL,
+          reply_code TEXT NOT NULL UNIQUE,
+          state TEXT NOT NULL DEFAULT 'pending',
+          wave_index INTEGER NOT NULL DEFAULT 0,
+          next_attempt_at TEXT NOT NULL,
+          lease_token TEXT,
+          lease_expires_at TEXT,
+          last_attempt_at TEXT,
+          acknowledged_at TEXT,
+          acknowledgement_channel TEXT,
+          stopped_reason TEXT,
+          created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+          updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+        )
+      `),
+      db.prepare(`
+        CREATE TABLE IF NOT EXISTS todo_urgent_attempts (
+          id TEXT PRIMARY KEY NOT NULL,
+          escalation_id TEXT NOT NULL,
+          wave_index INTEGER NOT NULL,
+          channel TEXT NOT NULL,
+          provider_sid TEXT,
+          status TEXT NOT NULL DEFAULT 'prepared',
+          submitted_at TEXT,
+          delivered_at TEXT,
+          error_code TEXT,
+          created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+          updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+          UNIQUE(escalation_id, wave_index, channel)
+        )
+      `),
+      db.prepare(`
         CREATE TABLE IF NOT EXISTS todo_talk_phone_calls (
           call_sid TEXT PRIMARY KEY NOT NULL,
           user_key TEXT,
@@ -802,6 +868,17 @@ export async function ensureTodoDatabase() {
       db.prepare("CREATE INDEX IF NOT EXISTS todo_talk_phone_calls_status_idx ON todo_talk_phone_calls(status, started_at)"),
       db.prepare("CREATE INDEX IF NOT EXISTS todo_talk_phone_calls_stream_idx ON todo_talk_phone_calls(stream_token_hash)"),
       db.prepare("CREATE INDEX IF NOT EXISTS todo_talk_phone_calls_provider_idx ON todo_talk_phone_calls(provider_call_id)"),
+      db.prepare("CREATE INDEX IF NOT EXISTS todo_profile_contacts_phone_hash_idx ON todo_profile_contacts(phone_hash)"),
+      db.prepare("CREATE INDEX IF NOT EXISTS todo_profile_phone_verifications_user_idx ON todo_profile_phone_verifications(user_key, created_at)"),
+      db.prepare("CREATE INDEX IF NOT EXISTS todo_profile_phone_verifications_expiry_idx ON todo_profile_phone_verifications(expires_at)"),
+      db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS todo_urgent_escalations_todo_idx ON todo_urgent_escalations(todo_id)"),
+      db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS todo_urgent_escalations_reply_idx ON todo_urgent_escalations(reply_code)"),
+      db.prepare("CREATE INDEX IF NOT EXISTS todo_urgent_escalations_due_idx ON todo_urgent_escalations(state, next_attempt_at)"),
+      db.prepare("CREATE INDEX IF NOT EXISTS todo_urgent_escalations_user_idx ON todo_urgent_escalations(user_key, created_at)"),
+      db.prepare("CREATE INDEX IF NOT EXISTS todo_urgent_escalations_lease_idx ON todo_urgent_escalations(lease_expires_at)"),
+      db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS todo_urgent_attempts_wave_channel_idx ON todo_urgent_attempts(escalation_id, wave_index, channel)"),
+      db.prepare("CREATE INDEX IF NOT EXISTS todo_urgent_attempts_provider_idx ON todo_urgent_attempts(provider_sid)"),
+      db.prepare("CREATE INDEX IF NOT EXISTS todo_urgent_attempts_status_idx ON todo_urgent_attempts(status, updated_at)"),
       db.prepare("CREATE INDEX IF NOT EXISTS todo_talk_phone_recordings_status_idx ON todo_talk_phone_recordings(status, next_retry_at)"),
       db.prepare("CREATE INDEX IF NOT EXISTS todo_talk_phone_recordings_user_idx ON todo_talk_phone_recordings(user_key, created_at)"),
       db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS todo_talk_phone_recordings_client_idx ON todo_talk_phone_recordings(task_client_id)"),
@@ -914,6 +991,7 @@ export async function ensureTodoDatabase() {
     });
 
     await ensureTodoSyncSchema(db);
+    await db.prepare("PRAGMA optimize").run();
 
     console.info("[todo-db] ready", {
       inserted,
@@ -1141,6 +1219,12 @@ export async function deleteTodoProject(
         UPDATE todo_attachments
         SET deleted_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
         WHERE todo_id IN (${placeholders(before.length)}) AND deleted_at IS NULL
+      `).bind(...before.map((todo) => todo.id)), db.prepare(`
+        UPDATE todo_urgent_escalations
+        SET state = 'cancelled', stopped_reason = 'deleted', lease_token = NULL, lease_expires_at = NULL,
+            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+        WHERE todo_id IN (${placeholders(before.length)})
+          AND state IN ('pending','awaiting_ack','blocked_configuration')
       `).bind(...before.map((todo) => todo.id))]
       : []),
     mode === "reassign"
@@ -1160,6 +1244,55 @@ export async function deleteTodoProject(
   return { project: name, mode, targetProject, affected: before.length, undoToken };
 }
 
+type TodoUrgentAlertOrigin = {
+  userKey: string;
+  sourceTokenId: string;
+  sourceAgentName: string;
+};
+
+function urgentReplyCode() {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  const bytes = crypto.getRandomValues(new Uint8Array(6));
+  return [...bytes].map((byte) => alphabet[byte % alphabet.length]).join("");
+}
+
+async function ensureUrgentCampaignForTodo(todoId: number, origin: TodoUrgentAlertOrigin) {
+  const db = database();
+  const existing = await db.prepare("SELECT id FROM todo_urgent_escalations WHERE todo_id = ?")
+    .bind(todoId).first<{ id: string }>();
+  if (existing) return existing.id;
+  for (let attempt = 1; attempt <= 4; attempt += 1) {
+    const campaignId = crypto.randomUUID();
+    try {
+      await db.prepare(`
+        INSERT INTO todo_urgent_escalations (
+          id, todo_id, user_key, source_token_id, source_agent_name,
+          reply_code, state, wave_index, next_attempt_at
+        ) VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+      `).bind(
+        campaignId,
+        todoId,
+        origin.userKey.toLowerCase(),
+        origin.sourceTokenId,
+        origin.sourceAgentName.trim().slice(0, 80) || "API agent",
+        urgentReplyCode(),
+      ).run();
+      console.info("[todo-urgent-alert] missing idempotent campaign repaired", {
+        escalationId: campaignId,
+        todoId,
+        sourceTokenId: origin.sourceTokenId,
+      });
+      return campaignId;
+    } catch (error) {
+      const replay = await db.prepare("SELECT id FROM todo_urgent_escalations WHERE todo_id = ?")
+        .bind(todoId).first<{ id: string }>();
+      if (replay) return replay.id;
+      if (attempt === 4) throw error;
+    }
+  }
+  throw new Error("The urgent alert campaign could not be queued.");
+}
+
 export async function createTodo(input: {
   title: string;
   notes?: string;
@@ -1173,10 +1306,12 @@ export async function createTodo(input: {
   clientId?: string;
   originDeviceId?: string | null;
   sourceKind?: string;
+  urgentAlert?: TodoUrgentAlertOrigin;
 }): Promise<Todo> {
   await ensureTodoDatabase();
   const notes = validateTaskDescription(input.notes ?? "");
-  const clientId = input.clientId?.trim() || null;
+  const requestedClientId = input.clientId?.trim() || null;
+  const clientId = requestedClientId ?? (input.urgentAlert ? crypto.randomUUID() : null);
   if (clientId && !/^[0-9a-f-]{36}$/i.test(clientId)) throw new Error("That offline task identifier is invalid.");
   const project = input.project?.trim() || null;
   const recurrenceCron = normalizeCronExpression(input.recurrenceCron);
@@ -1194,6 +1329,9 @@ export async function createTodo(input: {
       FROM todos WHERE client_id = ?
     `).bind(clientId).first<TodoRow>();
     if (existing) {
+      if (input.urgentAlert && existing.priority === 1 && existing.source_kind === "api-token") {
+        await ensureUrgentCampaignForTodo(existing.id, input.urgentAlert);
+      }
       console.info("[todo-db] idempotent offline create replay resolved", { clientId, id: existing.id, attachmentCount: Number(existing.attachment_count ?? 0) });
       return mapTodo(existing);
     }
@@ -1201,25 +1339,83 @@ export async function createTodo(input: {
   if (project) {
     await db.prepare("INSERT OR IGNORE INTO todo_projects (name) VALUES (?)").bind(project).run();
   }
-  const row = await db
-    .prepare(`
-      ${clientId ? "INSERT OR IGNORE" : "INSERT"} INTO todos (title, notes, status, priority, due_date, project, context, recurrence_cron, source_kind, client_id, sort_order)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MIN(sort_order), 0) - 1024 FROM todos))
-      RETURNING *
-    `)
-    .bind(
-      input.title,
-      notes,
-      "open",
-      input.priority ?? 3,
-      input.dueDate ?? null,
-      project,
-      input.context ?? null,
-      recurrenceCron,
-      sourceKind,
-      clientId,
-    )
-    .first<TodoRow>();
+  const todoInsert = db.prepare(`
+    ${clientId ? "INSERT OR IGNORE" : "INSERT"} INTO todos (title, notes, status, priority, due_date, project, context, recurrence_cron, source_kind, client_id, sort_order)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MIN(sort_order), 0) - 1024 FROM todos))
+    ${input.urgentAlert ? "" : "RETURNING *"}
+  `).bind(
+    input.title,
+    notes,
+    "open",
+    input.priority ?? 3,
+    input.dueDate ?? null,
+    project,
+    input.context ?? null,
+    recurrenceCron,
+    sourceKind,
+    clientId,
+  );
+  let row: TodoRow | null = null;
+  let newlyCreated = true;
+  if (input.urgentAlert) {
+    const origin = input.urgentAlert;
+    let lastError: unknown = null;
+    for (let attempt = 1; attempt <= 4 && !row; attempt += 1) {
+      const campaignId = crypto.randomUUID();
+      try {
+        const [todoResult] = await db.batch([
+          todoInsert,
+          db.prepare(`
+            INSERT INTO todo_urgent_escalations (
+              id, todo_id, user_key, source_token_id, source_agent_name,
+              reply_code, state, wave_index, next_attempt_at
+            )
+            SELECT ?, id, ?, ?, ?, ?, 'pending', 0, strftime('%Y-%m-%dT%H:%M:%fZ','now')
+            FROM todos WHERE client_id = ? AND priority = 1 AND source_kind = 'api-token'
+          `).bind(
+            campaignId,
+            origin.userKey.toLowerCase(),
+            origin.sourceTokenId,
+            origin.sourceAgentName.trim().slice(0, 80) || "API agent",
+            urgentReplyCode(),
+            clientId,
+          ),
+        ]);
+        newlyCreated = Number(todoResult.meta.changes ?? 0) > 0;
+        row = await db.prepare("SELECT * FROM todos WHERE client_id = ?").bind(clientId).first<TodoRow>();
+        if (!row) throw new Error("The urgent task could not be loaded after its campaign was queued.");
+        const campaign = await db.prepare("SELECT id FROM todo_urgent_escalations WHERE todo_id = ?")
+          .bind(row.id).first<{ id: string }>();
+        if (!campaign && newlyCreated) throw new Error("The urgent alert campaign was not created atomically with its task.");
+        console.info(campaign
+          ? "[todo-urgent-alert] task and campaign committed atomically"
+          : "[todo-urgent-alert] idempotent task replay did not qualify for a campaign", {
+          escalationId: campaign?.id ?? null,
+          todoId: row.id,
+          sourceTokenId: origin.sourceTokenId,
+          clientId,
+          newlyCreated,
+        });
+      } catch (error) {
+        lastError = error;
+        const replay = await db.prepare(`
+          SELECT todos.*
+          FROM todos
+          INNER JOIN todo_urgent_escalations ON todo_urgent_escalations.todo_id = todos.id
+          WHERE todos.client_id = ?
+        `).bind(clientId).first<TodoRow>();
+        if (replay) {
+          row = replay;
+          newlyCreated = false;
+          break;
+        }
+        if (attempt === 4) throw error;
+      }
+    }
+    if (!row) throw lastError ?? new Error("The urgent task and campaign could not be created.");
+  } else {
+    row = await todoInsert.first<TodoRow>();
+  }
   if (!row && clientId) {
     const replay = await db.prepare(`
       SELECT todos.*,
@@ -1230,11 +1426,20 @@ export async function createTodo(input: {
       FROM todos WHERE client_id = ?
     `).bind(clientId).first<TodoRow>();
     if (replay) {
+      if (input.urgentAlert && replay.priority === 1 && replay.source_kind === "api-token") {
+        await ensureUrgentCampaignForTodo(replay.id, input.urgentAlert);
+      }
       console.info("[todo-db] concurrent offline create replay resolved", { clientId, id: replay.id, attachmentCount: Number(replay.attachment_count ?? 0) });
       return mapTodo(replay);
     }
   }
   if (!row) throw new Error("The task could not be created.");
+  if (!newlyCreated) {
+    const replay = await getTodo(row.id);
+    if (!replay) throw new Error("The task could not be loaded.");
+    console.info("[todo-db] concurrent urgent create replay resolved", { clientId, id: row.id });
+    return replay;
+  }
   try {
     const attachmentCount = await claimDraftAttachments(row.id, input.draftToken, input.attachmentIds);
     let pushQueued = false;
@@ -1255,7 +1460,10 @@ export async function createTodo(input: {
     console.info("[todo-db] task created", { id: row.id, clientId, attachmentCount, pushQueued });
     return mapTodo({ ...row, attachment_count: attachmentCount });
   } catch (error) {
-    await db.prepare("DELETE FROM todos WHERE id = ?").bind(row.id).run();
+    await db.batch([
+      db.prepare("DELETE FROM todo_urgent_escalations WHERE todo_id = ?").bind(row.id),
+      db.prepare("DELETE FROM todos WHERE id = ?").bind(row.id),
+    ]);
     console.error("[todo-db] task attachment claim failed; task rolled back", { id: row.id, error });
     throw error;
   }
@@ -1446,6 +1654,10 @@ export async function updateTodo(
   const appliedFields = versionRows.results
     .filter((row) => row.mutation_id === mutationId && versions.get(row.field) === row.version)
     .map((row) => row.field);
+  if (appliedFields.some((field) => field === "status" || field === "priority" || field === "pinned" || field === "snoozedUntil")) {
+    const { stopUrgentAlertForTaskState } = await import("./urgent-alerts");
+    await stopUrgentAlertForTaskState(todo);
+  }
   console.info("[todo-db] task details updated", {
     id,
     fields: entries.map(([field]) => field),
@@ -1790,12 +2002,20 @@ export async function bulkUpdateTodos(
       UPDATE todo_attachments
       SET deleted_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
       WHERE todo_id IN (${inClause}) AND deleted_at IS NULL
+    `).bind(...ids), db.prepare(`
+      UPDATE todo_urgent_escalations
+      SET state = 'cancelled', stopped_reason = 'deleted', lease_token = NULL, lease_expires_at = NULL,
+          updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+      WHERE todo_id IN (${inClause})
+        AND state IN ('pending','awaiting_ack','blocked_configuration')
     `).bind(...ids)] : []),
     db.prepare(sql).bind(...values),
   ];
   const results = await db.batch(statements);
   const result = results.at(-1)!;
   if (action === "delete") {
+    const { stopUrgentAlertForTodo } = await import("./urgent-alerts");
+    await Promise.all(ids.map((id) => stopUrgentAlertForTodo(id, "deleted")));
     console.info("[todo-db] bulk delete", { requested: ids.length, changed: result.meta.changes, attachments: attachmentBefore.length, undoToken });
     return { ids, todos: [], snoozedUntil: null, undoToken };
   }
@@ -1808,6 +2028,10 @@ export async function bulkUpdateTodos(
     FROM todos WHERE todos.id IN (${inClause})
   `).bind(...ids).all<TodoRow>();
   const todos = updated.results.map(mapTodo);
+  if (action === "complete" || action === "snooze") {
+    const { stopUrgentAlertForTaskState } = await import("./urgent-alerts");
+    await Promise.all(todos.map((todo) => stopUrgentAlertForTaskState(todo)));
+  }
   console.info("[todo-db] bulk action", {
     action,
     requested: ids.length,
@@ -1872,6 +2096,13 @@ export async function mergeTodos(inputIds: number[]) {
         SET todo_id = ?, sort_order = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
         WHERE id = ? AND deleted_at IS NULL
       `).bind(inserted.id, sortOrder, attachment.id)),
+      db.prepare(`
+        UPDATE todo_urgent_escalations
+        SET state = 'cancelled', stopped_reason = 'merged', lease_token = NULL, lease_expires_at = NULL,
+            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+        WHERE todo_id IN (${inClause})
+          AND state IN ('pending','awaiting_ack','blocked_configuration')
+      `).bind(...ids),
       db.prepare(`DELETE FROM todos WHERE id IN (${inClause})`).bind(...ids),
     ]);
   } catch (error) {

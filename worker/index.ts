@@ -34,6 +34,8 @@ interface Env {
   TWILIO_PHONE_NUMBER?: string;
   TWILIO_MEDIA_STREAM_URL?: string;
   TWILIO_PHONE_TRANSPORT?: string;
+  TODO_PUBLIC_URL?: string;
+  TODO_PROFILE_PHONE_KEY?: string;
 }
 
 interface ExecutionContext {

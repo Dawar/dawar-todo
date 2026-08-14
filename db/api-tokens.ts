@@ -21,7 +21,9 @@ export type ApiToken = {
   expiresAt: string | null;
 };
 
-export type ApiTokenIdentity = Pick<ApiToken, "id" | "name" | "tokenPrefix">;
+export type ApiTokenIdentity = Pick<ApiToken, "id" | "name" | "tokenPrefix"> & {
+  createdByEmail: string;
+};
 
 function mapApiToken(row: ApiTokenRow): ApiToken {
   return {
@@ -60,7 +62,12 @@ export async function authenticateApiToken(db: D1Database, token: string): Promi
       AND revoked_at IS NULL
       AND (expires_at IS NULL OR expires_at > strftime('%Y-%m-%dT%H:%M:%fZ','now'))
   `).bind(tokenHash).first<ApiTokenRow>();
-  return row ? { id: row.id, name: row.name, tokenPrefix: row.token_prefix } : null;
+  return row?.created_by_email ? {
+    id: row.id,
+    name: row.name,
+    tokenPrefix: row.token_prefix,
+    createdByEmail: row.created_by_email.trim().toLowerCase(),
+  } : null;
 }
 
 export async function recordApiTokenUse(db: D1Database, id: string) {

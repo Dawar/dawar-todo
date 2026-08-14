@@ -1123,6 +1123,7 @@ function TaskRow({
   onAction,
   onEdit,
   onPin,
+  onAcknowledgeUrgent,
   onTitleChange,
   onTitleBlur,
   onTitleFocus,
@@ -1142,6 +1143,7 @@ function TaskRow({
   onAction: (todo: Todo, action: TodoAction, source: "hover" | "swipe") => void;
   onEdit: (todo: Todo, source: "hover" | "swipe") => void;
   onPin: (todo: Todo) => void;
+  onAcknowledgeUrgent: (todo: Todo) => void;
   onTitleChange: (todo: Todo, title: string) => void;
   onTitleBlur: (todo: Todo, title: string) => void;
   onTitleFocus: (todo: Todo) => void;
@@ -1165,6 +1167,7 @@ function TaskRow({
   const pending = todo.id < 0;
   const snoozed = isSnoozed(todo, now);
   const recurring = Boolean(todo.recurrenceCron);
+  const agentUrgent = todo.status === "open" && todo.priority === 1 && todo.sourceKind === "api-token";
   const primaryAction: { action: TodoAction; label: string; icon: ActionIconName } = todo.status === "open"
     ? { action: "complete", label: "Done", icon: "done" }
     : { action: "unsnooze", label: "Open", icon: "open" };
@@ -1475,9 +1478,35 @@ function TaskRow({
               <ActionIcon name={todo.pinned ? "unpin" : "pin"} className="h-[18px] w-[18px]" />
             </button>
           )}
+          {agentUrgent && !pending && !todo.offline && (
+            <button
+              type="button"
+              data-row-action
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={() => onAcknowledgeUrgent(todo)}
+              aria-label={`Acknowledge urgent alert: ${todo.title}`}
+              title="Acknowledge urgent alert"
+              className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-red-700 transition hover:bg-red-50 focus-visible:outline-2 focus-visible:outline-[#216e4e]"
+            >
+              <ActionIcon name="phone" className="h-[18px] w-[18px]" />
+            </button>
+          )}
         </div>
         {!pending && !todo.offline && (
           <div className="hidden shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 md:ml-3 md:flex">
+            {agentUrgent && (
+              <button
+                type="button"
+                data-row-action
+                onClick={() => onAcknowledgeUrgent(todo)}
+                aria-label={`Acknowledge urgent alert: ${todo.title}`}
+                title="Acknowledge urgent alert"
+                className="grid h-9 w-9 place-items-center rounded-lg text-red-700 transition hover:bg-red-50 focus-visible:outline-2 focus-visible:outline-[#216e4e]"
+              >
+                <ActionIcon name="phone" className="h-[18px] w-[18px]" />
+                <span className="sr-only">Acknowledge urgent alert</span>
+              </button>
+            )}
             {hoverActions.map(({ action, label, icon }) => (
               <button
                 key={action}
@@ -1642,6 +1671,7 @@ export default function Home() {
   const reorderPreviewRef = useRef<Todo[] | null>(null);
   const reorderAnimationRestoreFrameRef = useRef<number | null>(null);
   const lastAppBadgeCountRef = useRef<number | null>(null);
+  const deepLinkedTaskOpenedRef = useRef(false);
   const taskDialogNestedOverlayOpen = projectDialog !== null || viewerIndex !== null || voiceTarget !== null || customSnoozeDialog !== null;
   const overlayOpen = editingId !== null || projectSelectorOpen || projectDialog !== null || newProjectOpen || projectDeleteDialog !== null || filtersOpen || viewerIndex !== null || voiceTarget !== null || shortcutsOpen || customSnoozeDialog !== null;
 
@@ -2629,6 +2659,24 @@ export default function Home() {
   const filtersActive = Boolean(query || priority);
   const mobileFilterCount = Number(Boolean(priority));
   const editingTodo = editingId === null ? null : todos.find((todo) => todo.id === editingId) ?? null;
+
+  useEffect(() => {
+    if (deepLinkedTaskOpenedRef.current || todos.length === 0) return;
+    const rawTaskId = new URLSearchParams(window.location.search).get("task");
+    if (!rawTaskId) {
+      deepLinkedTaskOpenedRef.current = true;
+      return;
+    }
+    const taskId = Number(rawTaskId);
+    const linkedTask = Number.isInteger(taskId) ? todos.find((todo) => todo.id === taskId) : null;
+    if (!linkedTask) return;
+    deepLinkedTaskOpenedRef.current = true;
+    openTaskDetails(linkedTask);
+    const cleanUrl = new URL(window.location.href);
+    cleanUrl.searchParams.delete("task");
+    window.history.replaceState(window.history.state, "", `${cleanUrl.pathname}${cleanUrl.search}${cleanUrl.hash}`);
+    console.info("[todo-ui] urgent task link opened", { todoId: linkedTask.id });
+  }, [todos]);
   const imageAttachments = detailAttachments.filter((attachment) => attachment.kind === "image");
   const viewerAttachment = viewerIndex === null ? null : imageAttachments[viewerIndex] ?? null;
   const recurrenceError = cronValidationError(editDraft?.recurrenceCron);
@@ -4995,6 +5043,34 @@ export default function Home() {
     }
   }
 
+  async function acknowledgeUrgentAlert(todo: Todo) {
+    if (todo.id < 1 || todo.offline) return;
+    try {
+      const response = await fetch(`/api/todos/${todo.id}/urgent-alert/ack`, {
+        method: "POST",
+        headers: headersWithDeviceId(),
+      });
+      const payload = await response.json().catch(() => ({})) as { acknowledged?: boolean; error?: string };
+      if (!response.ok) throw new Error(payload.error || "The urgent alert could not be acknowledged.");
+      setNotice({
+        tone: "success",
+        text: payload.acknowledged ? "Urgent calls and texts acknowledged." : "This urgent alert was already handled.",
+        taskPreview: todo.title,
+        dismissAt: Date.now() + 5_000,
+      });
+      console.info("[todo-urgent-alert-ui] in-app acknowledgement processed", {
+        todoId: todo.id,
+        acknowledged: Boolean(payload.acknowledged),
+      });
+    } catch (error) {
+      setNotice({
+        tone: "error",
+        text: error instanceof Error ? error.message : "The urgent alert could not be acknowledged.",
+        taskPreview: todo.title,
+      });
+    }
+  }
+
   function editTaskDetails(todo: Todo, source: "hover" | "swipe") {
     console.info("[todo-ui] task edit requested", { id: todo.id, source });
     openTaskDetails(todo);
@@ -5471,6 +5547,7 @@ export default function Home() {
                     onAction={taskAction}
                     onEdit={editTaskDetails}
                     onPin={togglePin}
+                    onAcknowledgeUrgent={acknowledgeUrgentAlert}
                     onTitleChange={updateInlineTitle}
                     onTitleBlur={blurInlineTitle}
                     onTitleFocus={focusInlineTitle}
@@ -5500,6 +5577,7 @@ export default function Home() {
                     onAction={taskAction}
                     onEdit={editTaskDetails}
                     onPin={togglePin}
+                    onAcknowledgeUrgent={acknowledgeUrgentAlert}
                     onTitleChange={updateInlineTitle}
                     onTitleBlur={blurInlineTitle}
                     onTitleFocus={focusInlineTitle}

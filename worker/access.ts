@@ -1,4 +1,11 @@
 import { apiTokenFromAuthorization, authenticateApiToken, recordApiTokenUse } from "../db/api-tokens.ts";
+import {
+  INTERNAL_ACTOR_HEADERS,
+  INTERNAL_ACTOR_ID_HEADER,
+  INTERNAL_ACTOR_KIND_HEADER,
+  INTERNAL_ACTOR_NAME_HEADER,
+  INTERNAL_ACTOR_USER_KEY_HEADER,
+} from "../lib/request-actor.ts";
 
 const AUTHENTICATED_USER_HEADER = "oai-authenticated-user-email";
 
@@ -37,7 +44,8 @@ function isPublicTalkPhoneTransport(pathname: string) {
     || pathname === "/api/talk/phone/mode"
     || pathname === "/api/talk/phone/stream"
     || pathname.startsWith("/api/talk/phone/record/")
-    || pathname.startsWith("/api/talk/phone/bridge/");
+    || pathname.startsWith("/api/talk/phone/bridge/")
+    || pathname.startsWith("/api/talk/phone/urgent/provider/");
 }
 
 function isPublicInternalTransport(pathname: string) {
@@ -63,6 +71,7 @@ export async function appAccessResponse(
   context?: AccessContext,
 ): Promise<Response | null> {
   const url = new URL(request.url);
+  for (const header of INTERNAL_ACTOR_HEADERS) request.headers.delete(header);
   if (isLocalHost(url.hostname)) return null;
   if (url.pathname.startsWith("/calendar/")) return null;
   if (isPublicStaticPath(url.pathname) || isDispatchAuthPath(url.pathname)) return null;
@@ -89,6 +98,13 @@ export async function appAccessResponse(
         { status: 403, headers: { "Cache-Control": "no-store" } },
       );
     }
+    if (/^\/api\/todos\/\d+\/urgent-alert\/ack$/.test(url.pathname)) {
+      console.warn("[todo-auth] owner-only urgent acknowledgement rejected for bearer authentication", { path: url.pathname });
+      return Response.json(
+        { error: "Urgent alerts can only be acknowledged by the signed-in owner or verified phone." },
+        { status: 403, headers: { "Cache-Control": "no-store" } },
+      );
+    }
     if (!environment?.DB) {
       console.error("[todo-auth] API token validation unavailable", { path: url.pathname, reason: "missing-database-binding" });
       return Response.json(
@@ -99,6 +115,10 @@ export async function appAccessResponse(
     try {
       const identity = await authenticateApiToken(environment.DB, bearerToken);
       if (identity) {
+        request.headers.set(INTERNAL_ACTOR_KIND_HEADER, "api-token");
+        request.headers.set(INTERNAL_ACTOR_ID_HEADER, identity.id);
+        request.headers.set(INTERNAL_ACTOR_NAME_HEADER, encodeURIComponent(identity.name));
+        request.headers.set(INTERNAL_ACTOR_USER_KEY_HEADER, identity.createdByEmail);
         const recordUse = recordApiTokenUse(environment.DB, identity.id);
         if (context) context.waitUntil(recordUse);
         else void recordUse;

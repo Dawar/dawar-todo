@@ -2,6 +2,8 @@ import { env, waitUntil } from "cloudflare:workers";
 import { createTodo, listTodos } from "../../../db/todos";
 import { runTodoReadMaintenance } from "../../../db/maintenance";
 import { dispatchTodoPushNotifications } from "../../../db/push-notifications";
+import { createUrgentAlertCampaign, processUrgentAlertQueue } from "../../../db/urgent-alerts";
+import { apiTokenActorFromRequest } from "../../../lib/request-actor";
 import { validateTaskDescription } from "../../../lib/task-description";
 
 export async function GET() {
@@ -52,6 +54,7 @@ export async function POST(request: Request) {
     }
     const project = payload.project?.trim() || null;
     const originDeviceId = request.headers.get("X-Dawar-Device-Id")?.trim() || null;
+    const apiActor = apiTokenActorFromRequest(request);
     const todo = await createTodo({
       title,
       notes,
@@ -64,7 +67,21 @@ export async function POST(request: Request) {
       attachmentIds: Array.isArray(payload.attachmentIds) ? payload.attachmentIds.map(String) : undefined,
       clientId: payload.clientId,
       originDeviceId,
+      sourceKind: apiActor ? "api-token" : "site",
+      urgentAlert: apiActor && priority === 1 ? {
+        userKey: apiActor.userKey,
+        sourceTokenId: apiActor.id,
+        sourceAgentName: apiActor.name,
+      } : undefined,
     });
+    const urgentAlert = apiActor && todo.priority === 1 && todo.sourceKind === "api-token"
+      ? await createUrgentAlertCampaign({
+        todoId: todo.id,
+        userKey: apiActor.userKey,
+        sourceTokenId: apiActor.id,
+        sourceAgentName: apiActor.name,
+      })
+      : null;
     console.info("[todo-api] created", {
       id: todo.id,
       status: todo.status,
@@ -75,6 +92,8 @@ export async function POST(request: Request) {
       clientId: todo.clientId,
       recurrenceCron: todo.recurrenceCron,
       originSuppressionAvailable: Boolean(originDeviceId),
+      actorKind: apiActor?.kind ?? "owner",
+      urgentAlertId: urgentAlert?.id ?? null,
     });
     waitUntil(dispatchTodoPushNotifications(env.DB, env, new Date()).catch((pushError) => {
       console.error("[todo-push] immediate created-task delivery failed; scheduled retry retained", {
@@ -82,7 +101,16 @@ export async function POST(request: Request) {
         error: pushError instanceof Error ? pushError.message : String(pushError),
       });
     }));
-    return Response.json({ todo }, { status: 201 });
+    if (urgentAlert) {
+      waitUntil(processUrgentAlertQueue(new Date(), undefined, [urgentAlert.id]).catch((urgentError) => {
+        console.error("[todo-urgent-alert] immediate dispatch failed; scheduled retry retained", {
+          escalationId: urgentAlert.id,
+          todoId: todo.id,
+          error: urgentError instanceof Error ? urgentError.message : String(urgentError),
+        });
+      }));
+    }
+    return Response.json({ todo, ...(urgentAlert ? { urgentAlert } : {}) }, { status: 201 });
   } catch (error) {
     const message = error instanceof Error ? error.message : "The task could not be added.";
     const inputError = /task|attached|attachment|image|audio|video|media|file|document|archive|limited|invalid|available|required|cron|minute|hour|month|weekday/i.test(message);

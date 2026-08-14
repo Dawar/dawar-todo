@@ -60,6 +60,19 @@ type TalkPhoneProfile = {
   phoneNumber: string;
 };
 
+type ProfilePhone = {
+  configured: boolean;
+  maskedPhoneNumber: string | null;
+  phoneVerifiedAt: string | null;
+  urgentAlertsEnabled: boolean;
+  callWindowStart: number;
+  callWindowEnd: number;
+  providerReady: boolean;
+  voiceReady: boolean;
+  smsReady: boolean;
+  updatedAt: string | null;
+};
+
 type BadgePermission = NotificationPermission | "not-required" | "unavailable";
 type BadgeTodo = { status: "open" | "completed"; snoozedUntil: string | null };
 type PushState = "checking" | "unsupported" | "unconfigured" | "blocked" | "disabled" | "enabled";
@@ -135,6 +148,14 @@ export default function SettingsPage() {
   const [talkPhoneLoading, setTalkPhoneLoading] = useState(true);
   const [talkPhoneSaving, setTalkPhoneSaving] = useState(false);
   const [talkPhoneMessage, setTalkPhoneMessage] = useState("");
+  const [profilePhone, setProfilePhone] = useState<ProfilePhone | null>(null);
+  const [profilePhoneInput, setProfilePhoneInput] = useState("");
+  const [profilePhoneChallenge, setProfilePhoneChallenge] = useState<{ challengeId: string; maskedPhoneNumber: string; expiresAt: string } | null>(null);
+  const [profilePhoneCode, setProfilePhoneCode] = useState("");
+  const [profilePhoneLoading, setProfilePhoneLoading] = useState(true);
+  const [profilePhoneSaving, setProfilePhoneSaving] = useState(false);
+  const [profilePhoneTesting, setProfilePhoneTesting] = useState(false);
+  const [profilePhoneMessage, setProfilePhoneMessage] = useState("");
   const [copyingDiagnostics, setCopyingDiagnostics] = useState(false);
   const [diagnosticMessage, setDiagnosticMessage] = useState("");
 
@@ -178,6 +199,18 @@ export default function SettingsPage() {
       })
       .catch((error: Error) => setTalkPhoneMessage(error.message))
       .finally(() => setTalkPhoneLoading(false));
+
+    request<{ profilePhone: ProfilePhone }>("/api/talk/phone/profile-number", { cache: "no-store" })
+      .then(({ profilePhone: loadedProfilePhone }) => {
+        setProfilePhone(loadedProfilePhone);
+        console.info("[todo-profile-phone-ui] profile phone loaded", {
+          configured: loadedProfilePhone.configured,
+          urgentAlertsEnabled: loadedProfilePhone.urgentAlertsEnabled,
+          providerReady: loadedProfilePhone.providerReady,
+        });
+      })
+      .catch((error: Error) => setProfilePhoneMessage(error.message))
+      .finally(() => setProfilePhoneLoading(false));
 
     const badgeCheck = window.setTimeout(() => {
       const supportsBadge = supportsNativeAppBadge();
@@ -662,6 +695,120 @@ export default function SettingsPage() {
     }
   }
 
+  async function requestProfilePhoneVerification(event: FormEvent) {
+    event.preventDefault();
+    if (!profilePhoneInput.trim()) return;
+    setProfilePhoneSaving(true);
+    setProfilePhoneMessage("");
+    try {
+      const { verification } = await request<{ verification: { challengeId: string; maskedPhoneNumber: string; expiresAt: string } }>("/api/talk/phone/profile-number/verification", {
+        method: "POST",
+        body: JSON.stringify({ phoneNumber: profilePhoneInput }),
+      });
+      setProfilePhoneChallenge(verification);
+      setProfilePhoneCode("");
+      setProfilePhoneMessage(`Verification code sent to ${verification.maskedPhoneNumber}.`);
+      console.info("[todo-profile-phone-ui] verification requested", {
+        challengeId: verification.challengeId,
+        expiresAt: verification.expiresAt,
+      });
+    } catch (error) {
+      setProfilePhoneMessage(error instanceof Error ? error.message : "The verification text could not be sent.");
+    } finally {
+      setProfilePhoneSaving(false);
+    }
+  }
+
+  async function confirmProfilePhone(event: FormEvent) {
+    event.preventDefault();
+    if (!profilePhoneChallenge || !/^\d{6}$/.test(profilePhoneCode)) return;
+    setProfilePhoneSaving(true);
+    setProfilePhoneMessage("");
+    try {
+      const { profilePhone: verified } = await request<{ profilePhone: ProfilePhone }>("/api/talk/phone/profile-number/verification", {
+        method: "PUT",
+        body: JSON.stringify({ challengeId: profilePhoneChallenge.challengeId, code: profilePhoneCode }),
+      });
+      setProfilePhone(verified);
+      setProfilePhoneChallenge(null);
+      setProfilePhoneInput("");
+      setProfilePhoneCode("");
+      setProfilePhoneMessage("Profile phone verified. Urgent agent calls and texts are enabled.");
+      console.info("[todo-profile-phone-ui] profile phone verified", {
+        urgentAlertsEnabled: verified.urgentAlertsEnabled,
+        callWindowStart: verified.callWindowStart,
+        callWindowEnd: verified.callWindowEnd,
+      });
+    } catch (error) {
+      setProfilePhoneMessage(error instanceof Error ? error.message : "The profile phone could not be verified.");
+    } finally {
+      setProfilePhoneSaving(false);
+    }
+  }
+
+  async function saveProfilePhonePreferences(next?: Partial<Pick<ProfilePhone, "urgentAlertsEnabled" | "callWindowStart" | "callWindowEnd">>) {
+    if (!profilePhone) return;
+    setProfilePhoneSaving(true);
+    setProfilePhoneMessage("");
+    const desired = { ...profilePhone, ...next };
+    try {
+      const { profilePhone: persisted } = await request<{ profilePhone: ProfilePhone }>("/api/talk/phone/profile-number", {
+        method: "PATCH",
+        body: JSON.stringify({
+          urgentAlertsEnabled: desired.urgentAlertsEnabled,
+          callWindowStart: desired.callWindowStart,
+          callWindowEnd: desired.callWindowEnd,
+        }),
+      });
+      setProfilePhone(persisted);
+      setProfilePhoneMessage(persisted.urgentAlertsEnabled ? "Urgent alert preferences saved." : "Urgent agent calls and texts disabled.");
+    } catch (error) {
+      setProfilePhoneMessage(error instanceof Error ? error.message : "Profile phone preferences could not be saved.");
+    } finally {
+      setProfilePhoneSaving(false);
+    }
+  }
+
+  async function removeProfilePhone() {
+    if (!window.confirm("Remove your verified profile phone? This also stops every active urgent alert.")) return;
+    setProfilePhoneSaving(true);
+    setProfilePhoneMessage("");
+    try {
+      const { profilePhone: cleared } = await request<{ profilePhone: ProfilePhone }>("/api/talk/phone/profile-number", { method: "DELETE" });
+      setProfilePhone(cleared);
+      setProfilePhoneChallenge(null);
+      setProfilePhoneMessage("Profile phone removed.");
+    } catch (error) {
+      setProfilePhoneMessage(error instanceof Error ? error.message : "The profile phone could not be removed.");
+    } finally {
+      setProfilePhoneSaving(false);
+    }
+  }
+
+  async function testProfilePhone() {
+    setProfilePhoneTesting(true);
+    setProfilePhoneMessage("");
+    try {
+      await request("/api/talk/phone/profile-number/test", { method: "POST" });
+      setProfilePhoneMessage("Test call and text sent.");
+    } catch (error) {
+      setProfilePhoneMessage(error instanceof Error ? error.message : "The test call and text could not be sent.");
+    } finally {
+      setProfilePhoneTesting(false);
+    }
+  }
+
+  async function copyUrgentAlertDiagnostics() {
+    try {
+      const diagnostics = await request<Record<string, unknown>>("/api/talk/phone/profile-number/diagnostics", { cache: "no-store" });
+      await copyTextToClipboard(JSON.stringify(diagnostics, null, 2));
+      setProfilePhoneMessage("Privacy-safe urgent alert diagnostics copied.");
+      console.info("[todo-urgent-alert-ui] diagnostics copied", { length: JSON.stringify(diagnostics).length });
+    } catch (error) {
+      setProfilePhoneMessage(error instanceof Error ? error.message : "Urgent alert diagnostics could not be copied.");
+    }
+  }
+
   async function copySyncDiagnostics() {
     if (copyingDiagnostics) return;
     setCopyingDiagnostics(true);
@@ -824,6 +971,112 @@ export default function SettingsPage() {
             {saved && <span role="status" className="text-sm font-medium text-[#216e4e]">Saved</span>}
           </div>
         </form>
+
+        <section aria-labelledby="profile-phone-title" className="mt-6 rounded-2xl border border-black/[0.07] bg-white p-5 shadow-[0_10px_35px_rgba(30,45,36,0.06)] sm:p-7">
+          <div className="flex items-start gap-3">
+            <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-[#eaf3ed] text-[#216e4e]"><ActionIcon name="phone" className="h-5 w-5" /></span>
+            <div className="min-w-0 flex-1">
+              <h2 id="profile-phone-title" className="text-lg font-semibold tracking-[-0.02em] text-[#202522]">Profile phone</h2>
+              <p className="mt-1 text-sm leading-6 text-[#69716c]">Save one verified phone number for your profile. Dawar Todo uses it for urgent tasks created by your API agents, and it can support other profile features later.</p>
+            </div>
+          </div>
+
+          {profilePhoneLoading ? (
+            <div role="status" aria-label="Loading profile phone" className="mt-5 h-32 animate-pulse rounded-xl bg-[#f1f3f0]" />
+          ) : !profilePhone?.configured ? (
+            <>
+              <div className="mt-4 rounded-xl bg-[#f1f6f3] px-4 py-3 text-sm leading-6 text-[#4f6257]">
+                {!profilePhone?.providerReady
+                  ? "Twilio delivery and profile-phone encryption must be configured before a number can be verified."
+                  : "Your number is encrypted after verification. Only its final four digits appear in Settings, logs, and diagnostics."}
+              </div>
+              {!profilePhoneChallenge ? (
+                <form onSubmit={requestProfilePhoneVerification} className="mt-5 flex min-w-0 flex-col gap-2 sm:flex-row">
+                  <label className="min-w-0 flex-1">
+                    <span className="sr-only">Profile phone number</span>
+                    <input
+                      value={profilePhoneInput}
+                      onChange={(event) => setProfilePhoneInput(event.target.value)}
+                      type="tel"
+                      inputMode="tel"
+                      autoComplete="tel"
+                      placeholder="+1 416 555 0123"
+                      className="h-11 w-full min-w-0 rounded-xl border border-black/[0.1] px-3 text-[16px] outline-none focus:border-[#216e4e]/50 focus:ring-3 focus:ring-[#216e4e]/10"
+                    />
+                  </label>
+                  <button type="submit" disabled={profilePhoneSaving || !profilePhone?.providerReady || !profilePhoneInput.trim()} className="inline-flex h-11 shrink-0 items-center justify-center gap-2 rounded-xl bg-[#216e4e] px-4 text-sm font-semibold text-white hover:bg-[#195d41] disabled:opacity-50">
+                    <ActionIcon name="phone" />
+                    {profilePhoneSaving ? "Sending…" : "Text verification code"}
+                  </button>
+                </form>
+              ) : (
+                <form onSubmit={confirmProfilePhone} className="mt-5">
+                  <p className="text-sm leading-6 text-[#4f6257]">Enter the code sent to {profilePhoneChallenge.maskedPhoneNumber}.</p>
+                  <div className="mt-2 flex min-w-0 flex-col gap-2 sm:flex-row">
+                    <label className="min-w-0 flex-1">
+                      <span className="sr-only">Verification code</span>
+                      <input
+                        value={profilePhoneCode}
+                        onChange={(event) => setProfilePhoneCode(event.target.value.replace(/\D/g, "").slice(0, 6))}
+                        inputMode="numeric"
+                        autoComplete="one-time-code"
+                        pattern="[0-9]{6}"
+                        placeholder="6-digit code"
+                        className="h-11 w-full min-w-0 rounded-xl border border-black/[0.1] px-3 text-[16px] tracking-[0.2em] outline-none focus:border-[#216e4e]/50 focus:ring-3 focus:ring-[#216e4e]/10"
+                      />
+                    </label>
+                    <button type="submit" disabled={profilePhoneSaving || !/^\d{6}$/.test(profilePhoneCode)} className="inline-flex h-11 shrink-0 items-center justify-center gap-2 rounded-xl bg-[#216e4e] px-4 text-sm font-semibold text-white hover:bg-[#195d41] disabled:opacity-50">
+                      <ActionIcon name="done" />
+                      {profilePhoneSaving ? "Verifying…" : "Verify number"}
+                    </button>
+                    <button type="button" onClick={() => setProfilePhoneChallenge(null)} disabled={profilePhoneSaving} className={compactOutlineActionClass}>Change number</button>
+                  </div>
+                </form>
+              )}
+            </>
+          ) : (
+            <>
+              <div className="mt-4 rounded-xl bg-[#f1f6f3] px-4 py-3 text-sm leading-6 text-[#4f6257]">
+                Verified profile phone <span className="font-semibold text-[#303632]">{profilePhone.maskedPhoneNumber}</span>. Every new priority-1 task created with an API token starts a call-and-text escalation.
+              </div>
+              <label className="mt-5 flex items-center justify-between gap-4 rounded-xl border border-black/[0.07] bg-[#fafbf9] px-4 py-3">
+                <span>
+                  <span className="block text-sm font-semibold text-[#303632]">Urgent agent calls and texts</span>
+                  <span className="mt-0.5 block text-xs leading-5 text-[#7c847f]">Disabling this stops every active campaign. Re-enabling applies to future tasks.</span>
+                </span>
+                <input
+                  type="checkbox"
+                  checked={profilePhone.urgentAlertsEnabled}
+                  disabled={profilePhoneSaving}
+                  onChange={(event) => void saveProfilePhonePreferences({ urgentAlertsEnabled: event.target.checked })}
+                  className="h-5 w-5 shrink-0 accent-[#216e4e]"
+                />
+              </label>
+              <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                <label>
+                  <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-[#7a827d]">Later-call window starts</span>
+                  <select value={profilePhone.callWindowStart} onChange={(event) => setProfilePhone((current) => current ? { ...current, callWindowStart: Number(event.target.value) } : current)} className="h-11 w-full rounded-xl border border-black/[0.1] bg-white px-3 text-[16px] outline-none focus:border-[#216e4e]/50">
+                    {Array.from({ length: 22 }, (_, hour) => hour).map((hour) => <option key={hour} value={hour}>{hourLabel(hour)}</option>)}
+                  </select>
+                </label>
+                <label>
+                  <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-[#7a827d]">Later-call window ends</span>
+                  <select value={profilePhone.callWindowEnd} onChange={(event) => setProfilePhone((current) => current ? { ...current, callWindowEnd: Number(event.target.value) } : current)} className="h-11 w-full rounded-xl border border-black/[0.1] bg-white px-3 text-[16px] outline-none focus:border-[#216e4e]/50">
+                    {Array.from({ length: 23 }, (_, index) => index + 1).map((hour) => <option key={hour} value={hour}>{hour === 24 ? "12:00 AM" : hourLabel(hour)}</option>)}
+                  </select>
+                </label>
+              </div>
+              <p className="mt-2 text-xs leading-5 text-[#7c847f]">The first hour of an urgent campaign bypasses this window. Later calls and texts wait for the window in your task timezone.</p>
+              <div className="mt-4 flex flex-wrap gap-2">
+                <button type="button" onClick={() => void saveProfilePhonePreferences()} disabled={profilePhoneSaving || profilePhone.callWindowStart >= profilePhone.callWindowEnd} className="inline-flex h-10 items-center gap-2 rounded-xl bg-[#216e4e] px-3.5 text-sm font-semibold text-white hover:bg-[#195d41] disabled:opacity-50"><ActionIcon name="done" />Save alert window</button>
+                <button type="button" onClick={() => void testProfilePhone()} disabled={profilePhoneTesting || profilePhoneSaving} className={compactOutlineActionClass}><ActionIcon name="phone" />{profilePhoneTesting ? "Sending…" : "Send test call + text"}</button>
+                <button type="button" onClick={() => void copyUrgentAlertDiagnostics()} className={compactOutlineActionClass}><ActionIcon name="copy" />Copy alert diagnostics</button>
+                <button type="button" onClick={() => void removeProfilePhone()} disabled={profilePhoneSaving} className="inline-flex h-10 appearance-none items-center gap-2 rounded-xl border-0 bg-white px-3.5 text-sm font-semibold text-red-700 ring-1 ring-black/[0.06] transition hover:bg-red-50 disabled:opacity-50"><ActionIcon name="delete" />Remove number</button>
+              </div>
+            </>
+          )}
+          {profilePhoneMessage && <p role="status" className={`mt-3 text-sm ${/could not|invalid|incorrect|expired|too many|not configured|choose/i.test(profilePhoneMessage) ? "text-red-700" : "text-[#216e4e]"}`}>{profilePhoneMessage}</p>}
+        </section>
 
         <section aria-labelledby="talk-phone-title" className="mt-6 rounded-2xl border border-black/[0.07] bg-white p-5 shadow-[0_10px_35px_rgba(30,45,36,0.06)] sm:p-7">
           <div className="flex items-start gap-3">
