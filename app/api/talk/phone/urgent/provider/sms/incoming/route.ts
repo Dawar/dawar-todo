@@ -71,6 +71,9 @@ export async function POST(request: Request) {
       durationMs: Date.now() - startedAt,
     });
     if (!result.applied) {
+      if ("reason" in result && result.reason === "pin-limit") {
+        return messageResponse("Five tasks are already pinned. Unpin one, or reply ACK CODE, SNOOZE CODE 1H, or DONE CODE.");
+      }
       return messageResponse("reason" in result && result.reason === "code-required"
         ? "More than one urgent alert is active. Include the 6-character code from the alert."
         : "That urgent alert is already handled or the code is invalid.");

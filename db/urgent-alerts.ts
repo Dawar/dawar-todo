@@ -1,6 +1,7 @@
 import { env } from "cloudflare:workers";
 import { createTwilioOutboundCall, sendTwilioSms, twilioPhoneConfigured } from "../lib/twilio-phone";
 import { nextUrgentAttemptAt } from "../lib/urgent-alert-schedule";
+import { MAX_PINNED_TASKS } from "../lib/task-pins";
 import { readVerifiedProfilePhone } from "./profile-phone";
 import { ensureTodoDatabase } from "./todos";
 
@@ -585,24 +586,29 @@ export async function applyUrgentAlertAction(
   }
   const stopReason = input.action === "pin" ? "pinned" : input.action === "snooze" ? "snoozed" : "completed";
   const taskStatement = input.action === "pin"
-    ? current.DB.prepare("UPDATE todos SET pinned = 1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ? AND status = 'open'").bind(campaign.todo_id)
+    ? current.DB.prepare(`
+      UPDATE todos
+      SET pinned = 1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+      WHERE id = ? AND status = 'open'
+        AND (pinned = 1 OR (SELECT COUNT(*) FROM todos WHERE pinned = 1) < ?)
+    `).bind(campaign.todo_id, MAX_PINNED_TASKS)
     : input.action === "snooze"
-      ? current.DB.prepare("UPDATE todos SET snoozed_until = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ? AND status = 'open'")
+      ? current.DB.prepare("UPDATE todos SET snoozed_until = ?, pinned = 0, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ? AND status = 'open'")
         .bind(new Date(Date.now() + 60 * 60 * 1_000).toISOString(), campaign.todo_id)
-      : current.DB.prepare("UPDATE todos SET status = 'completed', completed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), snoozed_until = NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?")
+      : current.DB.prepare("UPDATE todos SET status = 'completed', completed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), snoozed_until = NULL, pinned = 0, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?")
         .bind(campaign.todo_id);
-  const [taskResult] = await current.DB.batch([
-    taskStatement,
-    current.DB.prepare(`
+  const taskResult = await taskStatement.run();
+  const applied = Number(taskResult.meta.changes ?? 0) > 0;
+  if (applied) {
+    await current.DB.prepare(`
       UPDATE todo_urgent_escalations
       SET state = 'cancelled', stopped_reason = ?, acknowledgement_channel = ?,
           acknowledged_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
           lease_token = NULL, lease_expires_at = NULL,
           updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
       WHERE id = ? AND state IN ('pending','awaiting_ack','blocked_configuration')
-    `).bind(stopReason, input.channel, campaign.id),
-  ]);
-  const applied = Number(taskResult.meta.changes ?? 0) > 0;
+    `).bind(stopReason, input.channel, campaign.id).run();
+  }
   console.info("[todo-urgent-alert] task action applied", {
     escalationId: campaign.id,
     todoId: campaign.todo_id,
@@ -610,7 +616,12 @@ export async function applyUrgentAlertAction(
     channel: input.channel,
     applied,
   });
-  return { applied, action: input.action, todoId: campaign.todo_id };
+  return {
+    applied,
+    action: input.action,
+    todoId: campaign.todo_id,
+    ...(!applied && input.action === "pin" ? { reason: "pin-limit" as const } : {}),
+  };
 }
 
 export async function applyUrgentAlertReply(

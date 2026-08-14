@@ -21,7 +21,9 @@ export async function POST(request: Request) {
     const action = digit === "1" ? "ack" : digit === "2" ? "pin" : digit === "3" ? "snooze" : digit === "4" ? "done" : null;
     if (!action) return twilioXmlResponse("<Say>That option is invalid.</Say><Hangup/>");
     const result = await applyUrgentAlertAction({ escalationId: context.escalation_id, action, channel: "voice" });
-    const message = result.applied
+    const message = !result.applied && "reason" in result && result.reason === "pin-limit"
+      ? "Five tasks are already pinned. Use Dawar Todo, or choose another action from the text message."
+      : result.applied
       ? action === "ack" ? "Urgent alert acknowledged." : action === "pin" ? "Task pinned." : action === "snooze" ? "Task snoozed for one hour." : "Task marked done."
       : "This urgent task was already handled.";
     return twilioXmlResponse(`<Say>${xmlEscape(message)}</Say><Hangup/>`);

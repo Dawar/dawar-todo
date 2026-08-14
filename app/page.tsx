@@ -42,6 +42,7 @@ import { PullGesturePill } from "./pull-to-refresh";
 import { MarkdownPreview } from "./markdown-preview";
 import { recordSyncDiagnostic } from "./sync-diagnostics";
 import { MAX_TASK_DESCRIPTION_LENGTH } from "../lib/task-description";
+import { MAX_PINNED_TASKS, PIN_LIST_PREFERENCE_KEY } from "../lib/task-pins";
 import {
   appendOfflineTodoAttachments,
   deferOfflineTaskAction,
@@ -1560,6 +1561,7 @@ export default function Home() {
   const [customSnoozeDialog, setCustomSnoozeDialog] = useState<CustomSnoozeDialogState | null>(null);
   const [notice, setNotice] = useState<Notice>(null);
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const [pinListEnabled, setPinListEnabled] = useState(true);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editDraft, setEditDraft] = useState<TodoDraft | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
@@ -1687,6 +1689,19 @@ export default function Home() {
     if (reorderGesture?.sourceRowElement) reorderGesture.sourceRowElement.style.opacity = "";
     if (reorderAnimationRestoreFrameRef.current !== null) window.cancelAnimationFrame(reorderAnimationRestoreFrameRef.current);
     reorderAnimationRestoreFrameRef.current = null;
+  }, []);
+
+  useEffect(() => {
+    try {
+      const stored = window.localStorage.getItem(PIN_LIST_PREFERENCE_KEY);
+      if (stored === "off") setPinListEnabled(false);
+      console.info("[todo-ui] pin list preference loaded", {
+        enabled: stored !== "off",
+        stored: stored ?? "default",
+      });
+    } catch (error) {
+      console.warn("[todo-ui] pin list preference unavailable", { error });
+    }
   }, []);
 
   function rebuildPendingActionState(actions: OfflineTaskAction[]) {
@@ -2649,9 +2664,10 @@ export default function Home() {
     return [...rows].sort(compareCanonicalOrder);
   }, [todos, view, query, project, priority, now, inlineEditingId]);
 
-  const pinnedOpenTodos = view === "open" ? filtered.filter((todo) => todo.pinned) : [];
-  const regularOpenTodos = view === "open" ? filtered.filter((todo) => !todo.pinned) : filtered;
-  const displayedTodos = view === "open" ? [...pinnedOpenTodos, ...regularOpenTodos] : regularOpenTodos;
+  const pinnedTaskCount = todos.filter((todo) => todo.pinned).length;
+  const pinnedOpenTodos = view === "open" && pinListEnabled ? filtered.filter((todo) => todo.pinned) : [];
+  const regularOpenTodos = view === "open" && pinListEnabled ? filtered.filter((todo) => !todo.pinned) : filtered;
+  const displayedTodos = view === "open" && pinListEnabled ? [...pinnedOpenTodos, ...regularOpenTodos] : filtered;
 
   const selectedIds = useMemo(() => [...selected], [selected]);
   const selectedTodos = useMemo(() => todos.filter((todo) => selected.has(todo.id)), [selected, todos]);
@@ -3459,7 +3475,7 @@ export default function Home() {
             });
             todo = adjusted.todos[0] ?? todo;
           }
-          if (record.pinned) {
+          if (record.pinned && !todo.snoozedUntil && todo.status === "open") {
             const pinnedResult = await request<{ todo: Todo }>(`/api/todos/${todo.id}`, {
               method: "PATCH",
               body: JSON.stringify({ pinned: true }),
@@ -3674,6 +3690,10 @@ export default function Home() {
             return;
           }
           await deleteOfflineTaskAction(action.operationId);
+          const rejectedOperation = optimisticOperationsRef.current.get(action.operationId);
+          if (rejectedOperation) {
+            setTodos((current) => restoreOptimisticTasks(current, rejectedOperation.previous, rejectedOperation.ids));
+          }
           optimisticOperationsRef.current.delete(action.operationId);
           action.taskIds.forEach((id) => pendingCompletionIdsRef.current.delete(id));
           setNotice({
@@ -3856,8 +3876,8 @@ export default function Home() {
     const temporarySnooze = new Date(new Date(actionAt).valueOf() + 36 * 60 * 60 * 1000).toISOString();
     return current.map((todo) => {
       if (!idSet.has(todo.id)) return todo;
-      if (action === "complete") return { ...todo, status: "completed" as const, completedAt: actionAt, snoozedUntil: null };
-      if (action === "snooze") return { ...todo, status: "open" as const, completedAt: null, snoozedUntil: temporarySnooze };
+      if (action === "complete") return { ...todo, status: "completed" as const, completedAt: actionAt, snoozedUntil: null, pinned: false };
+      if (action === "snooze") return { ...todo, status: "open" as const, completedAt: null, snoozedUntil: temporarySnooze, pinned: false };
       return { ...todo, status: "open" as const, completedAt: null, snoozedUntil: null };
     });
   }
@@ -3946,6 +3966,7 @@ export default function Home() {
               status: optimisticTodo.status,
               completedAt: optimisticTodo.completedAt,
               snoozedUntil: optimisticTodo.snoozedUntil,
+              pinned: optimisticTodo.pinned,
               updatedAt: actionAt,
             };
           }
@@ -4077,7 +4098,7 @@ export default function Home() {
     const optimisticUntil = optimisticSnoozeUntil(preset);
     const rollbackTodos = todos.filter((todo) => ids.includes(todo.id));
     setAdjustingSnooze(preset);
-    setTodos((current) => current.map((todo) => ids.includes(todo.id) ? { ...todo, snoozedUntil: optimisticUntil } : todo));
+    setTodos((current) => current.map((todo) => ids.includes(todo.id) ? { ...todo, snoozedUntil: optimisticUntil, pinned: false } : todo));
     setNow(Date.now());
     setNotice((current) => current ? {
       ...current,
@@ -4145,7 +4166,7 @@ export default function Home() {
     const dismissAt = Date.now() + 1_500;
     setCustomSnoozeDialog(null);
     setAdjustingSnooze("custom");
-    setTodos((current) => current.map((todo) => ids.includes(todo.id) ? { ...todo, snoozedUntil: optimisticUntil } : todo));
+    setTodos((current) => current.map((todo) => ids.includes(todo.id) ? { ...todo, snoozedUntil: optimisticUntil, pinned: false } : todo));
     setNow(Date.now());
     setNotice((current) => current ? {
       ...current,
@@ -4721,7 +4742,9 @@ export default function Home() {
   }
 
   function reorderScope(todo: Todo) {
-    const scope = view === "open" && todo.pinned ? pinnedOpenTodos : regularOpenTodos;
+    const scope = view === "open" && pinListEnabled
+      ? todo.pinned ? pinnedOpenTodos : regularOpenTodos
+      : filtered;
     return scope.filter((item) => item.id > 0 && !item.offline);
   }
 
@@ -5008,6 +5031,20 @@ export default function Home() {
   async function togglePin(todo: Todo) {
     if (view !== "open") return;
     const pinned = !todo.pinned;
+    if (pinned && pinnedTaskCount >= MAX_PINNED_TASKS) {
+      setNotice({
+        tone: "error",
+        text: `You can pin up to ${MAX_PINNED_TASKS} tasks. Unpin one first.`,
+        taskPreview: todo.title,
+        dismissAt: Date.now() + 6_000,
+      });
+      console.warn("[todo-ui] pin limit blocked", {
+        todoId: todo.id,
+        pinnedTasks: pinnedTaskCount,
+        maximumPinnedTasks: MAX_PINNED_TASKS,
+      });
+      return;
+    }
     const operationId = crypto.randomUUID();
     const previous = todos;
     optimisticOperationsRef.current.set(operationId, { ids: [todo.id], previous, action: "pin", undoRequested: false, settled: false });
@@ -5041,6 +5078,23 @@ export default function Home() {
       optimisticOperationsRef.current.delete(operationId);
       console.error("[todo-offline] task pin local commit failed", { id: todo.id, pinned, error });
     }
+  }
+
+  function togglePinList() {
+    setPinListEnabled((current) => {
+      const enabled = !current;
+      try {
+        window.localStorage.setItem(PIN_LIST_PREFERENCE_KEY, enabled ? "on" : "off");
+      } catch (error) {
+        console.warn("[todo-ui] pin list preference could not be saved", { enabled, error });
+      }
+      console.info("[todo-ui] pin list toggled", {
+        enabled,
+        pinnedTasks: pinnedTaskCount,
+        behavior: enabled ? "dedicated-section" : "canonical-order",
+      });
+      return enabled;
+    });
   }
 
   async function acknowledgeUrgentAlert(todo: Todo) {
@@ -5440,7 +5494,7 @@ export default function Home() {
             ))}
           </div>
 
-          <div className="mb-3 grid grid-cols-[minmax(0,1fr)_auto] gap-2 sm:grid-cols-[minmax(220px,1fr)_auto]">
+          <div className="mb-3 grid grid-cols-[minmax(0,1fr)_auto_auto] gap-2 sm:grid-cols-[minmax(220px,1fr)_auto_auto]">
             <label className="flex h-10 items-center gap-2 rounded-xl border border-black/[0.08] bg-white px-3 shadow-sm focus-within:border-[#216e4e]/50 focus-within:ring-3 focus-within:ring-[#216e4e]/10">
               <ActionIcon name="search" className="h-4 w-4 shrink-0 text-[#7c847f]" />
               <input
@@ -5453,6 +5507,23 @@ export default function Home() {
               />
               <kbd className="hidden rounded border border-black/10 bg-[#f6f7f5] px-1.5 py-0.5 text-[10px] text-[#7c847f] sm:block">/</kbd>
             </label>
+            {view === "open" && (
+              <button
+                type="button"
+                onClick={togglePinList}
+                aria-pressed={pinListEnabled}
+                aria-label={pinListEnabled ? "Turn off the separate pinned list" : "Turn on the separate pinned list"}
+                title={pinListEnabled ? "Mix pinned tasks into their natural order" : "Show pinned tasks in a separate list"}
+                className={classNames(
+                  "flex h-10 items-center gap-2 rounded-xl border px-3 text-sm font-medium shadow-sm transition focus-visible:outline-2 focus-visible:outline-[#216e4e]",
+                  pinListEnabled ? "border-[#216e4e]/25 bg-[#eaf3ed] text-[#195d41]" : "border-black/[0.08] bg-white text-[#69716c] hover:bg-[#f6f7f5]",
+                )}
+              >
+                <ActionIcon name="pin" className="h-4 w-4" />
+                <span className="hidden sm:inline">Pins</span>
+                <span className={classNames("grid h-5 min-w-5 place-items-center rounded-full px-1 text-[10px]", pinListEnabled ? "bg-white/85 text-[#195d41]" : "bg-[#f1f2f0] text-[#69716c]")}>{pinnedTaskCount}/{MAX_PINNED_TASKS}</span>
+              </button>
+            )}
             <button
               type="button"
               onClick={() => setFiltersOpen(true)}

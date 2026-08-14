@@ -62,8 +62,9 @@ test("ships the simplified todo and project surface", async () => {
   assert.match(page, /updateEditDraftField\("dueDate", ""\)/);
   assert.match(page, /disabled:invisible/);
   assert.match(page, /\/api\/todos\/\$\{editingTodo\.id\}/);
-  assert.match(page, /const pinnedOpenTodos = view === "open" \? filtered\.filter\(\(todo\) => todo\.pinned\) : \[\]/);
-  assert.match(page, /const regularOpenTodos = view === "open" \? filtered\.filter\(\(todo\) => !todo\.pinned\) : filtered/);
+  assert.match(page, /const pinnedOpenTodos = view === "open" && pinListEnabled \? filtered\.filter\(\(todo\) => todo\.pinned\) : \[\]/);
+  assert.match(page, /const regularOpenTodos = view === "open" && pinListEnabled \? filtered\.filter\(\(todo\) => !todo\.pinned\) : filtered/);
+  assert.match(page, /aria-pressed=\{pinListEnabled\}/);
   assert.match(page, />Pinned</);
   assert.match(page, /showPin=\{view === "open"\}/);
   assert.match(page, /view === "open" && <button/);

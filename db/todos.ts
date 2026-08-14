@@ -22,6 +22,7 @@ import {
 } from "../lib/ai-preferences";
 import { zonedLocalDateTimeToUtc } from "../lib/zoned-date-time";
 import { validateTaskDescription } from "../lib/task-description";
+import { MAX_PINNED_TASKS } from "../lib/task-pins";
 
 type StoredTodoStatus = "open" | "completed" | "archived";
 export type TodoStatus = "open" | "completed";
@@ -897,6 +898,23 @@ export async function ensureTodoDatabase() {
       db.prepare("INSERT OR IGNORE INTO app_settings (key, value) VALUES ('snooze_quick_presets', '[\"15m\",\"30m\",\"1h\",\"2h\"]')"),
     ]);
 
+    const pinPolicyVersion = await db.prepare("SELECT value FROM app_settings WHERE key = 'todo_pin_policy_v1'")
+      .first<{ value: string }>();
+    if (!pinPolicyVersion) {
+      const [reset] = await db.batch([
+        db.prepare(`
+          UPDATE todos
+          SET pinned = 0, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+          WHERE pinned <> 0
+        `),
+        db.prepare("INSERT OR IGNORE INTO app_settings (key, value) VALUES ('todo_pin_policy_v1', '1')"),
+      ]);
+      console.info("[todo-db] five-item pin policy initialized", {
+        unpinnedTasks: Number(reset.meta.changes ?? 0),
+        maximumPinnedTasks: MAX_PINNED_TASKS,
+      });
+    }
+
     const total = await db.prepare("SELECT COUNT(*) AS count FROM todos").first<{ count: number }>();
     const existingTotal = Number(total?.count ?? 0);
     const seedVersion = await db
@@ -1574,6 +1592,26 @@ export async function updateTodo(
   const db = database();
   const before = await db.prepare("SELECT * FROM todos WHERE id = ?").bind(id).first<TodoRow>();
   if (!before) return null;
+  if (normalizedUpdate.pinned === true && (
+    before.status !== "open"
+    || Boolean(before.snoozed_until)
+    || normalizedUpdate.status === "completed"
+    || Boolean(normalizedUpdate.snoozedUntil)
+  )) {
+    throw new Error("Only active open tasks can be pinned.");
+  }
+  if (normalizedUpdate.pinned === true && !before.pinned) {
+    const pinned = await db.prepare("SELECT COUNT(*) AS count FROM todos WHERE pinned = 1")
+      .first<{ count: number }>();
+    if (Number(pinned?.count ?? 0) >= MAX_PINNED_TASKS) {
+      console.warn("[todo-db] pin limit rejected", {
+        todoId: id,
+        pinnedTasks: Number(pinned?.count ?? 0),
+        maximumPinnedTasks: MAX_PINNED_TASKS,
+      });
+      throw new Error(`You can pin up to ${MAX_PINNED_TASKS} tasks.`);
+    }
+  }
   if (normalizedUpdate.snoozedUntil && (before.recurrence_cron || normalizedUpdate.recurrenceCron)) {
     throw new Error("Recurring tasks cannot be snoozed.");
   }
@@ -1606,15 +1644,32 @@ export async function updateTodo(
   for (const [field, rawValue] of entries) {
     const version = versions.get(field)!;
     const value = field === "pinned" ? rawValue ? 1 : 0 : rawValue;
-    statements.push(db.prepare(`
-      INSERT INTO todo_field_versions (todo_id, field, version, mutation_id, updated_at)
-      VALUES (?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-      ON CONFLICT(todo_id, field) DO UPDATE SET
-        version = excluded.version,
-        mutation_id = excluded.mutation_id,
-        updated_at = excluded.updated_at
-      WHERE excluded.version > todo_field_versions.version
-    `).bind(id, field, version, mutationId));
+    statements.push(field === "pinned"
+      ? db.prepare(`
+        INSERT INTO todo_field_versions (todo_id, field, version, mutation_id, updated_at)
+        SELECT ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now')
+        WHERE ? = 0 OR (
+          EXISTS (SELECT 1 FROM todos WHERE id = ? AND status = 'open' AND snoozed_until IS NULL)
+          AND (
+            EXISTS (SELECT 1 FROM todos WHERE id = ? AND pinned = 1)
+            OR (SELECT COUNT(*) FROM todos WHERE pinned = 1) < ?
+          )
+        )
+        ON CONFLICT(todo_id, field) DO UPDATE SET
+          version = excluded.version,
+          mutation_id = excluded.mutation_id,
+          updated_at = excluded.updated_at
+        WHERE excluded.version > todo_field_versions.version
+      `).bind(id, field, version, mutationId, value, id, id, MAX_PINNED_TASKS)
+      : db.prepare(`
+        INSERT INTO todo_field_versions (todo_id, field, version, mutation_id, updated_at)
+        VALUES (?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+        ON CONFLICT(todo_id, field) DO UPDATE SET
+          version = excluded.version,
+          mutation_id = excluded.mutation_id,
+          updated_at = excluded.updated_at
+        WHERE excluded.version > todo_field_versions.version
+      `).bind(id, field, version, mutationId));
 
     const currentVersion = "EXISTS (SELECT 1 FROM todo_field_versions WHERE todo_id = ? AND field = ? AND version = ? AND mutation_id = ?)";
     if (field === "status") {
@@ -1623,9 +1678,10 @@ export async function updateTodo(
         SET status = ?,
             completed_at = CASE WHEN ? = 'completed' THEN strftime('%Y-%m-%dT%H:%M:%fZ','now') ELSE NULL END,
             snoozed_until = CASE WHEN ? = 'completed' THEN NULL ELSE snoozed_until END,
+            pinned = CASE WHEN ? = 'completed' THEN 0 ELSE pinned END,
             updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
         WHERE id = ? AND ${currentVersion}
-      `).bind(value, value, value, id, id, field, version, mutationId));
+      `).bind(value, value, value, value, id, id, field, version, mutationId));
     } else if (field === "recurrenceCron") {
       statements.push(db.prepare(`
         UPDATE todos
@@ -1635,6 +1691,21 @@ export async function updateTodo(
             updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
         WHERE id = ? AND ${currentVersion}
       `).bind(value, value, id, id, field, version, mutationId));
+    } else if (field === "snoozedUntil") {
+      statements.push(db.prepare(`
+        UPDATE todos
+        SET snoozed_until = ?,
+            pinned = CASE WHEN ? IS NOT NULL THEN 0 ELSE pinned END,
+            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+        WHERE id = ? AND ${currentVersion}
+      `).bind(value, value, id, id, field, version, mutationId));
+    } else if (field === "pinned") {
+      statements.push(db.prepare(`
+        UPDATE todos
+        SET pinned = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+        WHERE id = ? AND (? = 0 OR (status = 'open' AND snoozed_until IS NULL))
+          AND ${currentVersion}
+      `).bind(value, id, value, id, field, version, mutationId));
     } else {
       statements.push(db.prepare(`
         UPDATE todos
@@ -1654,6 +1725,14 @@ export async function updateTodo(
   const appliedFields = versionRows.results
     .filter((row) => row.mutation_id === mutationId && versions.get(row.field) === row.version)
     .map((row) => row.field);
+  if (normalizedUpdate.pinned === true && !before.pinned && !todo.pinned) {
+    console.warn("[todo-db] concurrent pin limit rejected", {
+      todoId: id,
+      maximumPinnedTasks: MAX_PINNED_TASKS,
+      mutationId,
+    });
+    throw new Error(`You can pin up to ${MAX_PINNED_TASKS} tasks.`);
+  }
   if (appliedFields.some((field) => field === "status" || field === "priority" || field === "pinned" || field === "snoozedUntil")) {
     const { stopUrgentAlertForTaskState } = await import("./urgent-alerts");
     await stopUrgentAlertForTaskState(todo);
@@ -1908,7 +1987,7 @@ async function adjustSnoozedTodosUntil(
   const inClause = placeholders(ids.length);
   const result = await db.prepare(`
     UPDATE todos
-    SET snoozed_until = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+    SET snoozed_until = ?, pinned = 0, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
     WHERE id IN (${inClause}) AND status = 'open' AND snoozed_until IS NOT NULL AND recurrence_cron IS NULL
   `).bind(until, ...ids).run();
   const updated = await db.prepare(`
@@ -1971,7 +2050,7 @@ export async function bulkUpdateTodos(
   let values: Array<string | number | null> = ids;
 
   if (action === "complete") {
-    sql = `UPDATE todos SET status = 'completed', completed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), snoozed_until = NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id IN (${inClause})`;
+    sql = `UPDATE todos SET status = 'completed', completed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), snoozed_until = NULL, pinned = 0, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id IN (${inClause})`;
   } else if (action === "reopen") {
     sql = `UPDATE todos SET status = 'open', completed_at = NULL, snoozed_until = NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id IN (${inClause})`;
   } else if (action === "reproject") {
@@ -1983,7 +2062,7 @@ export async function bulkUpdateTodos(
       throw new Error("Choose a snooze time in the future.");
     }
     const until = customUntil?.toISOString() ?? await nextSnoozeUntil();
-    sql = `UPDATE todos SET status = 'open', completed_at = NULL, snoozed_until = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id IN (${inClause})`;
+    sql = `UPDATE todos SET status = 'open', completed_at = NULL, snoozed_until = ?, pinned = 0, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id IN (${inClause})`;
     values = [until, ...ids];
   } else if (action === "unsnooze") {
     sql = `UPDATE todos SET status = 'open', completed_at = NULL, snoozed_until = NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id IN (${inClause})`;
@@ -2160,9 +2239,21 @@ export async function undoTodoAction(undoToken: string) {
       created_at = excluded.created_at,
       updated_at = excluded.updated_at
   `);
+  const restoredIds = snapshot.todos.map((row) => row.id);
+  const existingPinned = restoredIds.length
+    ? await db.prepare(`SELECT COUNT(*) AS count FROM todos WHERE pinned = 1 AND id NOT IN (${placeholders(restoredIds.length)})`)
+      .bind(...restoredIds).first<{ count: number }>()
+    : await db.prepare("SELECT COUNT(*) AS count FROM todos WHERE pinned = 1").first<{ count: number }>();
+  let remainingPinSlots = Math.max(0, MAX_PINNED_TASKS - Number(existingPinned?.count ?? 0));
+  let pinsClearedByPolicy = 0;
   const normalizedTodos = snapshot.todos.map((row) => row.status === "archived"
     ? { ...row, status: "open" as const, completed_at: null, snoozed_until: null }
-    : row);
+    : row).map((row) => {
+      const canRestorePin = Boolean(row.pinned) && row.status === "open" && !row.snoozed_until && remainingPinSlots > 0;
+      if (canRestorePin) remainingPinSlots -= 1;
+      if (row.pinned && !canRestorePin) pinsClearedByPolicy += 1;
+      return { ...row, pinned: canRestorePin ? 1 : 0 };
+    });
   const statements = [
     ...(snapshot.createdSourceKind
       ? [
@@ -2207,6 +2298,8 @@ export async function undoTodoAction(undoToken: string) {
     restoredAttachments: attachmentSnapshot.length,
     removedCreatedTask: Boolean(snapshot.createdSourceKind),
     normalizedLegacyArchives: snapshot.todos.filter((row) => row.status === "archived").length,
+    pinsClearedByPolicy,
+    maximumPinnedTasks: MAX_PINNED_TASKS,
   });
   return { todos, restored: normalizedTodos.length, restoredAttachments: attachmentSnapshot.length };
 }

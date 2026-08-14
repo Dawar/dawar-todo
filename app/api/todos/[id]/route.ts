@@ -80,7 +80,7 @@ export async function PATCH(
     return Response.json(result);
   } catch (error) {
     const message = error instanceof Error ? error.message : "The task could not be updated.";
-    const inputError = /project|required|invalid|limited|cron|minute|hour|month|weekday|recurring|snooz|sync|timestamp|future/i.test(message);
+    const inputError = /project|required|invalid|limited|cron|minute|hour|month|weekday|recurring|snooz|pin|sync|timestamp|future/i.test(message);
     console.error("[todo-api] update failed", { id, error });
     return Response.json({ error: message }, { status: inputError ? 400 : 500 });
   }
