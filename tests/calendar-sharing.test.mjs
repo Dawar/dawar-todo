@@ -105,6 +105,7 @@ test("ships revocable calendar controls and copyable task details", async () => 
   assert.match(publicRoute, /text\/calendar; charset=utf-8/);
   assert.match(publicRoute, /"Cache-Control": "no-store"/);
   assert.match(publicRoute, /findCalendarFeedByToken/);
-  assert.match(worker, /await appAccessResponse\(request, env, ctx\)/);
+  assert.match(worker, /new Request\(request, \{ headers: new Headers\(request\.headers\) \}\)/);
+  assert.match(worker, /await appAccessResponse\(routedRequest, env, ctx\)/);
   assert.match(serviceWorker, /url\.pathname\.startsWith\("\/calendar\/"\)/);
 });

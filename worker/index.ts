@@ -51,18 +51,22 @@ interface ExecutionContext {
 
 const worker = {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-    const url = new URL(request.url);
+    // Requests received from the Cloudflare runtime expose immutable headers.
+    // Access control strips spoofable actor headers and, for API tokens, adds a
+    // trusted actor identity, so give that layer a mutable request copy.
+    const routedRequest = new Request(request, { headers: new Headers(request.headers) });
+    const url = new URL(routedRequest.url);
 
-    const phoneStreamResponse = await handleTalkPhoneStream(request, env);
+    const phoneStreamResponse = await handleTalkPhoneStream(routedRequest, env);
     if (phoneStreamResponse) return phoneStreamResponse;
 
-    const accessResponse = await appAccessResponse(request, env, ctx);
+    const accessResponse = await appAccessResponse(routedRequest, env, ctx);
     if (accessResponse) return accessResponse;
 
     if (url.pathname === "/_vinext/image") {
       const allowedWidths = [...DEFAULT_DEVICE_SIZES, ...DEFAULT_IMAGE_SIZES];
-      return handleImageOptimization(request, {
-        fetchAsset: (path) => env.ASSETS.fetch(new Request(new URL(path, request.url))),
+      return handleImageOptimization(routedRequest, {
+        fetchAsset: (path) => env.ASSETS.fetch(new Request(new URL(path, routedRequest.url))),
         transformImage: async (body, { width, format, quality }) => {
           const result = await env.IMAGES.input(body).transform(width > 0 ? { width } : {}).output({ format, quality });
           return result.response();
@@ -70,7 +74,7 @@ const worker = {
       }, allowedWidths);
     }
 
-    return handler.fetch(request, env, ctx);
+    return handler.fetch(routedRequest, env, ctx);
   },
   async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext) {
     const scheduledAt = new Date(controller.scheduledTime);
