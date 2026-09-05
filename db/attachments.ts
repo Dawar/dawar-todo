@@ -221,6 +221,7 @@ async function mapAttachment(row: AttachmentRow): Promise<TodoAttachment> {
 type UploadTarget = { todoId: number } | { draftToken: string };
 
 type PrepareUploadInput = {
+  clientUploadId?: string;
   fileName: string;
   mimeType: string;
   byteSize: number;
@@ -234,6 +235,7 @@ type FinalizeUploadInput = {
 };
 
 type PrepareMediaUploadInput = {
+  clientUploadId?: string;
   kind: "audio" | "video" | "file";
   fileName: string;
   mimeType: string;
@@ -241,6 +243,7 @@ type PrepareMediaUploadInput = {
 };
 
 export type DirectAttachmentUploadInput = {
+  clientUploadId?: string;
   fileName: string;
   mimeType: string;
   file: Blob;
@@ -491,6 +494,17 @@ async function signedPostTarget(key: string, contentType: string, maximumBytes: 
   };
 }
 
+function uploadIdentity(inputId?: string) {
+  if (inputId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(inputId)) throw new Error("That file upload identifier is invalid.");
+  return inputId || crypto.randomUUID();
+}
+function validateUploadReplay(row: AttachmentRow, target: UploadTarget, fileName: string, mimeType: string, byteSize: number, kind: string) {
+  const { todoId, draftToken } = targetValues(target);
+  if (row.todo_id !== todoId || row.draft_token !== draftToken || row.deleted_at || row.file_name !== fileName || row.mime_type !== mimeType || Number(row.byte_size) !== byteSize || row.kind !== kind) {
+    throw new Error("That file upload identifier is already used or the attachment was removed.");
+  }
+}
+
 export async function prepareTodoAttachmentUpload(
   input: PrepareUploadInput,
   target: UploadTarget,
@@ -509,14 +523,16 @@ export async function prepareTodoAttachmentUpload(
     const todo = await db.prepare("SELECT id FROM todos WHERE id = ?").bind(todoId).first<{ id: number }>();
     if (!todo) throw new Error("Task not found.");
   }
+  const id = uploadIdentity(input.clientUploadId);
+  const existing = input.clientUploadId ? await db.prepare("SELECT * FROM todo_attachments WHERE id = ?").bind(id).first<AttachmentRow>() : null;
+  if (existing) validateUploadReplay(existing, target, fileName, mimeType, byteSize, "image");
   const count = todoId === null
     ? await db.prepare("SELECT COUNT(*) AS count FROM todo_attachments WHERE draft_token = ? AND deleted_at IS NULL").bind(draftToken).first<{ count: number }>()
     : await db.prepare("SELECT COUNT(*) AS count FROM todo_attachments WHERE todo_id = ? AND deleted_at IS NULL").bind(todoId).first<{ count: number }>();
-  if (Number(count?.count ?? 0) >= MAX_ATTACHMENTS_PER_TASK) {
+  if (!existing && Number(count?.count ?? 0) >= MAX_ATTACHMENTS_PER_TASK) {
     throw new Error(`Tasks are limited to ${MAX_ATTACHMENTS_PER_TASK} attachments.`);
   }
 
-  const id = crypto.randomUUID();
   const base = `todo-images/${id}`;
   const originalKey = `${base}/original.${extensionForMimeType(mimeType)}`;
   const displayKey = `${base}/display.${extensionForMimeType(displayMimeType)}`;
@@ -524,8 +540,8 @@ export async function prepareTodoAttachmentUpload(
   try {
     const nextOrder = Number(count?.count ?? 0);
     const expiresAt = new Date(Date.now() + DRAFT_LIFETIME_HOURS * 60 * 60 * 1000).toISOString();
-    const row = await db.prepare(`
-      INSERT INTO todo_attachments (
+    const inserted = await db.prepare(`
+      INSERT OR IGNORE INTO todo_attachments (
         id, todo_id, draft_token, original_key, display_key, thumbnail_key,
         file_name, mime_type, byte_size, width, height, upload_state, sort_order, expires_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 'uploading', ?, ?)
@@ -543,6 +559,8 @@ export async function prepareTodoAttachmentUpload(
       nextOrder,
       expiresAt,
     ).first<AttachmentRow>();
+    const row = inserted ?? await db.prepare("SELECT * FROM todo_attachments WHERE id = ?").bind(id).first<AttachmentRow>();
+    if (row) validateUploadReplay(row, target, fileName, mimeType, byteSize, "image");
     if (!row) throw new Error("The image upload could not be prepared.");
     const [originalUpload, displayUpload, thumbnailUpload] = await Promise.all([
       signedPostTarget(originalKey, mimeType, byteSize),
@@ -563,7 +581,7 @@ export async function prepareTodoAttachmentUpload(
       uploads: { original: originalUpload, display: displayUpload, thumbnail: thumbnailUpload },
     };
   } catch (error) {
-    await db.prepare("DELETE FROM todo_attachments WHERE id = ? AND upload_state = 'uploading'").bind(id).run().catch(() => undefined);
+    if (!input.clientUploadId) await db.prepare("DELETE FROM todo_attachments WHERE id = ? AND upload_state = 'uploading'").bind(id).run().catch(() => undefined);
     console.error("[todo-attachments] upload preparation failed", {
       attachmentId: id,
       todoId,
@@ -773,12 +791,14 @@ export async function prepareTodoMediaAttachmentUpload(
     const todo = await db.prepare("SELECT id FROM todos WHERE id = ?").bind(todoId).first<{ id: number }>();
     if (!todo) throw new Error("Task not found.");
   }
+  const id = uploadIdentity(input.clientUploadId);
+  const existing = input.clientUploadId ? await db.prepare("SELECT * FROM todo_attachments WHERE id = ?").bind(id).first<AttachmentRow>() : null;
+  if (existing) validateUploadReplay(existing, target, fileName, mimeType, byteSize, kind);
   const count = todoId === null
     ? await db.prepare("SELECT COUNT(*) AS count FROM todo_attachments WHERE draft_token = ? AND deleted_at IS NULL").bind(draftToken).first<{ count: number }>()
     : await db.prepare("SELECT COUNT(*) AS count FROM todo_attachments WHERE todo_id = ? AND deleted_at IS NULL").bind(todoId).first<{ count: number }>();
-  if (Number(count?.count ?? 0) >= MAX_ATTACHMENTS_PER_TASK) throw new Error(`Tasks are limited to ${MAX_ATTACHMENTS_PER_TASK} attachments.`);
+  if (!existing && Number(count?.count ?? 0) >= MAX_ATTACHMENTS_PER_TASK) throw new Error(`Tasks are limited to ${MAX_ATTACHMENTS_PER_TASK} attachments.`);
 
-  const id = crypto.randomUUID();
   const extension = kind === "audio" ? audioExtension(mimeType) : kind === "video" ? videoExtension(mimeType) : attachmentFileExtension(fileName);
   // Keep every non-image object in the established media prefix. The private
   // Spaces credential is already exercised there by audio and video uploads;
@@ -790,8 +810,8 @@ export async function prepareTodoMediaAttachmentUpload(
   const thumbnailKey = `${base}/no-thumbnail`;
   const expiresAt = new Date(Date.now() + DRAFT_LIFETIME_HOURS * 60 * 60 * 1000).toISOString();
   try {
-    const row = await db.prepare(`
-      INSERT INTO todo_attachments (
+    const inserted = await db.prepare(`
+      INSERT OR IGNORE INTO todo_attachments (
         id, todo_id, draft_token, original_key, display_key, thumbnail_key,
         file_name, mime_type, byte_size, width, height, kind, duration_ms,
         upload_state, sort_order, expires_at
@@ -801,6 +821,8 @@ export async function prepareTodoMediaAttachmentUpload(
       id, todoId, draftToken, originalKey, displayKey, thumbnailKey,
       fileName, mimeType, byteSize, kind, Number(count?.count ?? 0), expiresAt,
     ).first<AttachmentRow>();
+    const row = inserted ?? await db.prepare("SELECT * FROM todo_attachments WHERE id = ?").bind(id).first<AttachmentRow>();
+    if (row) validateUploadReplay(row, target, fileName, mimeType, byteSize, kind);
     if (!row) throw new Error(`The ${kind} upload could not be prepared.`);
     const originalUpload = await signedPostTarget(originalKey, mimeType, maximumBytes);
     console.info("[todo-attachments] original attachment upload prepared", {
@@ -814,7 +836,7 @@ export async function prepareTodoMediaAttachmentUpload(
     });
     return { uploadId: id, uploads: { original: originalUpload } };
   } catch (error) {
-    await db.prepare("DELETE FROM todo_attachments WHERE id = ? AND upload_state = 'uploading'").bind(id).run().catch(() => undefined);
+    if (!input.clientUploadId) await db.prepare("DELETE FROM todo_attachments WHERE id = ? AND upload_state = 'uploading'").bind(id).run().catch(() => undefined);
     console.error("[todo-attachments] original attachment upload preparation failed", { attachmentId: id, todoId, kind, bytes: byteSize, error });
     throw error;
   }
@@ -945,6 +967,16 @@ export async function uploadTodoAttachmentDirect(todoId: number, input: DirectAt
     suppliedMimeType: input.mimeType.toLowerCase().split(";", 1)[0],
   });
 
+  if (input.clientUploadId) {
+    const id = uploadIdentity(input.clientUploadId);
+    const existing = await database().prepare("SELECT * FROM todo_attachments WHERE id = ?").bind(id).first<AttachmentRow>();
+    if (existing) {
+      const mime = kind === "image" ? normalizedMimeType(input.mimeType, fileName) : kind === "audio" ? normalizedAudioMimeType(input.mimeType, fileName) : kind === "video" ? normalizedVideoMimeType(input.mimeType, fileName) : normalizedFileMimeType(input.mimeType, fileName);
+      validateUploadReplay(existing, { todoId }, fileName, mime, byteSize, kind);
+      if (existing.upload_state === "ready") return mapAttachment(existing);
+    }
+  }
+
   if (kind === "image") {
     if (byteSize < 1) throw new Error("That image is empty.");
     if (byteSize > MAX_ATTACHMENT_BYTES) throw new Error("Images are limited to 20 MB each.");
@@ -966,6 +998,7 @@ export async function uploadTodoAttachmentDirect(todoId: number, input: DirectAt
       optimizedImageBlob(source, 480, 75),
     ]);
     const prepared = await prepareTodoAttachmentUpload({
+      clientUploadId: input.clientUploadId,
       fileName,
       mimeType,
       byteSize,
@@ -995,7 +1028,7 @@ export async function uploadTodoAttachmentDirect(todoId: number, input: DirectAt
       });
       return attachment;
     } catch (error) {
-      await discardTodoAttachmentUpload(todoId, prepared.uploadId).catch((cleanupError) => {
+      await (!input.clientUploadId ? discardTodoAttachmentUpload(todoId, prepared.uploadId) : Promise.resolve()).catch((cleanupError) => {
         console.error("[todo-attachments] direct API image cleanup failed", { todoId, attachmentId: prepared.uploadId, cleanupError });
       });
       console.error("[todo-attachments] direct API upload failed", { todoId, attachmentId: prepared.uploadId, kind, bytes: byteSize, durationMs: Date.now() - startedAt, error });
@@ -1004,6 +1037,7 @@ export async function uploadTodoAttachmentDirect(todoId: number, input: DirectAt
   }
 
   const prepared = await prepareTodoMediaAttachmentUpload({
+    clientUploadId: input.clientUploadId,
     kind,
     fileName,
     mimeType: input.mimeType,
@@ -1028,7 +1062,7 @@ export async function uploadTodoAttachmentDirect(todoId: number, input: DirectAt
     });
     return attachment;
   } catch (error) {
-    await discardTodoAttachmentUpload(todoId, prepared.uploadId).catch((cleanupError) => {
+    await (!input.clientUploadId ? discardTodoAttachmentUpload(todoId, prepared.uploadId) : Promise.resolve()).catch((cleanupError) => {
       console.error("[todo-attachments] direct API attachment cleanup failed", { todoId, attachmentId: prepared.uploadId, kind, cleanupError });
     });
     console.error("[todo-attachments] direct API upload failed", { todoId, attachmentId: prepared.uploadId, kind, bytes: byteSize, durationMs: Date.now() - startedAt, error });
@@ -1097,30 +1131,22 @@ export async function claimDraftAttachments(todoId: number, draftToken: string |
   const token = validateDraftToken(draftToken ?? "");
   const db = database();
   const placeholders = ids.map(() => "?").join(", ");
-  const result = await db.prepare(`
-    SELECT id FROM todo_attachments
-    WHERE id IN (${placeholders}) AND draft_token = ? AND todo_id IS NULL
-      AND upload_state = 'ready' AND deleted_at IS NULL
-      AND expires_at > strftime('%Y-%m-%dT%H:%M:%fZ','now')
-  `).bind(...ids, token).all<{ id: string }>();
-  if (result.results.length !== ids.length) throw new Error("One or more attachments are no longer available.");
-  const statements = ids.map((id, sortOrder) => db.prepare(`
-    UPDATE todo_attachments
-    SET todo_id = ?, draft_token = NULL, expires_at = NULL, sort_order = ?,
-        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-    WHERE id = ? AND draft_token = ? AND todo_id IS NULL
-      AND upload_state = 'ready' AND deleted_at IS NULL
-  `).bind(todoId, sortOrder, id, token));
-  const updates = await db.batch(statements);
-  if (updates.some((update) => Number(update.meta.changes ?? 0) !== 1)) {
-    await db.batch(ids.map((id, sortOrder) => db.prepare(`
-      UPDATE todo_attachments
-      SET todo_id = NULL, draft_token = ?, expires_at = strftime('%Y-%m-%dT%H:%M:%fZ','now','+24 hours'), sort_order = ?
-      WHERE id = ? AND todo_id = ?
-    `).bind(token, sortOrder, id, todoId)));
-    throw new Error("The attachments could not be linked to the task.");
-  }
-  console.info("[todo-attachments] draft claimed", { todoId, attachmentIds: ids, count: ids.length });
+  const available = await db.prepare(`
+    SELECT id, todo_id FROM todo_attachments
+    WHERE id IN (${placeholders}) AND upload_state = 'ready' AND deleted_at IS NULL
+      AND (todo_id = ? OR (draft_token = ? AND todo_id IS NULL AND expires_at > strftime('%Y-%m-%dT%H:%M:%fZ','now')))
+  `).bind(...ids, todoId, token).all<{ id: string; todo_id: number | null }>();
+  if (available.results.length !== ids.length) throw new Error("One or more attachments are no longer available.");
+  const unclaimed = available.results.filter((row) => row.todo_id === null);
+  if (!unclaimed.length) return ids.length;
+  const count = await db.prepare("SELECT COUNT(*) AS count FROM todo_attachments WHERE todo_id = ? AND deleted_at IS NULL").bind(todoId).first<{ count: number }>();
+  if (Number(count?.count ?? 0) + unclaimed.length > MAX_ATTACHMENTS_PER_TASK) throw new Error(`Tasks are limited to ${MAX_ATTACHMENTS_PER_TASK} attachments.`);
+  await db.batch(unclaimed.map((row, index) => db.prepare(`
+    UPDATE todo_attachments SET todo_id = ?, draft_token = NULL, expires_at = NULL, sort_order = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+    WHERE id = ? AND draft_token = ? AND todo_id IS NULL AND upload_state = 'ready' AND deleted_at IS NULL
+  `).bind(todoId, Number(count?.count ?? 0) + index, row.id, token)));
+  const linked = await db.prepare(`SELECT COUNT(*) AS count FROM todo_attachments WHERE id IN (${placeholders}) AND todo_id = ? AND deleted_at IS NULL`).bind(...ids, todoId).first<{ count: number }>();
+  if (Number(linked?.count ?? 0) !== ids.length) throw new Error("The attachments could not be linked to the task.");
   return ids.length;
 }
 

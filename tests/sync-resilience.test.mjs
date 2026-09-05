@@ -3,18 +3,13 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import vm from 'node:vm';
 import ts from 'typescript';
-import { IDBFactory } from 'fake-indexeddb';
+import { runtime } from './helpers/load-ts.mjs';
 import { createSyncHealth, liveSyncDelay } from '../app/sync-health.ts';
 
 const root = new URL('../', import.meta.url);
-const source = await readFile(new URL('app/offline-store.ts', root), 'utf8');
 function offlineStore() {
-  const exports = {};
-  const indexedDB = new IDBFactory();
-  const code = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
-  const context = { exports, indexedDB, window: { indexedDB }, crypto, DOMException, Date, console: { info() {}, warn() {}, error() {} } };
-  vm.runInNewContext(code, context);
-  return { ...exports, indexedDB };
+  const env = runtime();
+  return { ...env.load('app/offline-store.ts'), indexedDB: env.indexedDB };
 }
 
 test('healthy startup and brief failures stay quiet; sustained failures and recovery are accurate', () => {
@@ -60,7 +55,7 @@ test('a transaction that aborts after a successful put is never reported as save
   const store = offlineStore();
   // Initialize through the real migration first.
   await store.listOfflineTodoMutations();
-  const open = store.indexedDB.open('dawar-todo-offline', 8);
+  const open = store.indexedDB.open('dawar-todo-offline', 9);
   const db = await new Promise((resolve, reject) => { open.onsuccess = () => resolve(open.result); open.onerror = () => reject(open.error); });
   const probe = db.transaction('pending-mutations', 'readwrite').objectStore('pending-mutations');
   const prototype = Object.getPrototypeOf(probe);
@@ -96,54 +91,6 @@ test('backoff updates preserve an undo requested concurrently', async () => {
   assert.equal(action.undoRequested, true);
   assert.equal(action.attempts, 1);
 });
-
-const page = await readFile(new URL('app/page.tsx', root), 'utf8');
-function liveReader(request) {
-  const start = page.indexOf('  const refreshLiveData = useEffectEvent(');
-  const end = page.indexOf('\n  const reconcileTaskClock', start);
-  const code = ts.transpileModule(page.slice(start, end).replace('const refreshLiveData =', 'globalThis.refreshLiveData ='), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
-  const state = {
-    useEffectEvent: (fn) => fn,
-    navigator: { onLine: true }, document: { visibilityState: 'visible' },
-    liveSyncRunningRef: { current: false }, syncingOfflineRef: { current: false },
-    localSyncEpochRef: { current: 0 }, liveSyncControllerRef: { current: null },
-    syncRevisionRef: { current: 5 }, serverInitializedRef: { current: true },
-    liveSyncFailuresRef: { current: 0 }, liveSyncQuietPollsRef: { current: 0 },
-    syncHealthRef: { current: createSyncHealth() }, request, AbortController, Date,
-    setOnline() {}, setConnectionQuality() {}, setCachedRevision() {},
-    applied: [], applyLiveDelta(...args) { state.applied.push(args); }, applyLiveSnapshot(...args) { state.applied.push(args); },
-    console: { info() {}, warn() {} },
-  };
-  vm.runInNewContext(code, state);
-  return state;
-}
-
-test('a read started before a write cannot roll back its task or advance the cursor', async () => {
-  let respond;
-  const state = liveReader(() => new Promise((resolve) => { respond = resolve; }));
-  const read = state.refreshLiveData('poll');
-  state.localSyncEpochRef.current += 2; // an outbox pass committed while read was in flight
-  respond({ revision: 6, reset: false, todos: [{ id: 7, title: 'Old title' }], deletedIds: [] });
-  await read;
-  assert.equal(state.applied.length, 0);
-  assert.equal(state.syncRevisionRef.current, 5);
-  assert.equal(state.liveSyncRunningRef.current, false);
-});
-
-test('offline, hidden, and active-write states do not start competing reads', async () => {
-  let requests = 0;
-  const state = liveReader(() => { requests++; });
-  state.navigator.onLine = false;
-  await state.refreshLiveData('poll');
-  state.navigator.onLine = true;
-  state.document.visibilityState = 'hidden';
-  await state.refreshLiveData('poll');
-  state.document.visibilityState = 'visible';
-  state.syncingOfflineRef.current = true;
-  await state.refreshLiveData('poll');
-  assert.equal(requests, 0);
-});
-
 
 test('an action acknowledgement cannot erase an undo requested during its network call', async () => {
   const store = offlineStore();

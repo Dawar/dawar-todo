@@ -40,6 +40,11 @@ export async function PATCH(
       if (project.length > 120) return Response.json({ error: "Project names are limited to 120 characters." }, { status: 400 });
       update.project = project || null;
     }
+    if (payload.snoozedUntil !== undefined) {
+      const value = payload.snoozedUntil;
+      if (value !== null && (typeof value !== "string" || !Number.isFinite(Date.parse(value)))) return Response.json({ error: "Invalid snooze time." }, { status: 400 });
+      update.snoozedUntil = value ? new Date(value).toISOString() : null;
+    }
     if (payload.context !== undefined) update.context = payload.context?.trim() || null;
     if (payload.recurrenceCron !== undefined) update.recurrenceCron = payload.recurrenceCron == null ? null : String(payload.recurrenceCron);
     if (payload.pinned !== undefined) {

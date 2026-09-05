@@ -175,7 +175,7 @@ test("activation preserves the previous app shell without navigating open PWA wi
         "dawar-todo-shell-v21",
         "dawar-todo-shell-v22",
         "dawar-todo-shell-v23",
-        "dawar-todo-shell-v26",
+        `dawar-todo-shell-v${workerSource.match(/CACHE_PREFIX\}v(\d+)/)[1]}`,
         "unrelated-cache",
       ],
       delete: async (key) => {

@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { headers } from "next/headers";
 import "./globals.css";
+import { AppShell } from "./app-shell";
 import { PwaRegister } from "./pwa-register";
 import { PullToRefresh } from "./pull-to-refresh";
 
@@ -61,7 +62,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className="overscroll-y-none"><PwaRegister /><PullToRefresh />{children}</body>
+      <body className="overscroll-y-none"><PwaRegister /><PullToRefresh /><AppShell>{children}</AppShell></body>
     </html>
   );
 }

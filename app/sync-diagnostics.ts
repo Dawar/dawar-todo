@@ -196,6 +196,7 @@ export async function buildSyncDiagnosticsReport(
     },
     apiProbe: settledValue(apiProbeResult, {
       reachable: false,
+      durationMs: 0,
       error: settledError(apiProbeResult) ?? "Probe unavailable.",
     }),
     serviceWorker: {

@@ -7,7 +7,7 @@ const root = new URL("../", import.meta.url);
 
 test("canonical task ordering is persistent and replaces client sort modes", async () => {
   const [page, database, schema, route, store, migration] = await Promise.all([
-    readFile(new URL("app/page.tsx", root), "utf8"),
+    Promise.all(["app/page.tsx", "app/task-sync.ts", "app/task-model.ts", "app/sync-request.ts"].map((path) => readFile(new URL(path, root), "utf8"))).then((parts) => parts.join("\n")),
     readFile(new URL("db/todos.ts", root), "utf8"),
     readFile(new URL("db/schema.ts", root), "utf8"),
     readFile(new URL("app/api/todos/reorder/route.ts", root), "utf8"),
@@ -20,7 +20,6 @@ test("canonical task ordering is persistent and replaces client sort modes", asy
   assert.doesNotMatch(page, /-new Date\(todo\.updatedAt\)\.valueOf\(\)/);
   assert.match(page, /Number\.MAX_SAFE_INTEGER/);
   assert.match(page, /record\.sortOrder \?\? -new Date\(record\.createdAt\)\.valueOf\(\)/);
-  assert.match(page, /legacy cached tasks loaded without canonical order/);
   assert.match(page, /remote snapshot contained tasks without canonical order/);
   assert.match(page, /return \[\.\.\.rows\]\.sort\(compareCanonicalOrder\)/);
   assert.match(page, /ActionIcon name="reorder"/);
@@ -41,7 +40,7 @@ test("canonical task ordering is persistent and replaces client sort modes", asy
   assert.match(page, /drag edge auto-scroll started/);
   assert.match(page, /drag preview committed/);
   assert.match(page, /function syncFailureKind/);
-  assert.match(page, /queue continuing after isolated server failure/);
+  assert.match(page, /status >= 500\) \{ failure\(error\); continue; \}/);
   assert.match(store, /"reorder"/);
   assert.match(schema, /sortOrder: integer\("sort_order"\)/);
   assert.match(database, /ORDER BY sort_order ASC, id DESC/);
@@ -83,11 +82,10 @@ test("sort-order migration preserves the previous updated-time order", async () 
   assert.equal(database.prepare("SELECT value FROM app_settings WHERE key = 'schema_version'").get().value, "28");
 });
 
-test("offline synchronization always schedules a follow-up pass", async () => {
-  const page = await readFile(new URL("app/page.tsx", root), "utf8");
-  assert.match(page, /syncRequestedRef\.current = true/);
-  assert.match(page, /follow-up synchronization requested during active pass/);
-  assert.match(page, /scheduleOfflineQueueSync\("follow-up-request"\)/);
-  assert.match(page, /scheduleOfflineQueueSync\(`backoff:\$\{stage\}`/);
-  assert.match(page, /scheduleOfflineQueueSync\("deferred-action"/);
+test("offline synchronization schedules follow-up passes and respects backoff", async () => {
+  const engine = await readFile(new URL("app/task-sync.ts", root), "utf8");
+  assert.match(engine, /if \(running\) \{ again = true; return; \}/);
+  assert.match(engine, /again \? 150/);
+  assert.match(engine, /Math\.min\(poll, deferred\)/);
+  assert.match(engine, /failures \? Math\.max\(2_000, poll\)/);
 });

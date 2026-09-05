@@ -1,4 +1,5 @@
 "use client";
+import { taskSync } from "../task-sync";
 
 import {
   useCallback,
@@ -18,7 +19,7 @@ import {
   saveOfflineAssistantMessage,
   type OfflineAssistantAttachment,
 } from "../offline-store";
-import { uploadTaskAttachment } from "../attachment-upload-client";
+import { uploadTaskAttachment, uploadTaskAttachmentMultipart } from "../attachment-upload-client";
 import { SiteHeader } from "../site-header";
 import type {
   AssistantMessage,
@@ -411,25 +412,28 @@ export function AssistantWorkspace() {
     }
   }, [attachments.length, selectedId, stagedFiles.length, uploadFile]);
 
-  const syncOfflineMessages = useCallback(async () => {
+  const syncOfflineMessages = useCallback(async (signal?: AbortSignal) => {
     if (!navigator.onLine) return;
     const queued = await listOfflineAssistantMessages();
+    if (!queued.length) return;
     for (const message of queued) {
+      if (signal?.aborted) return;
       try {
         const uploadedIds = [...message.attachmentIds];
         for (const attachment of message.attachments) {
           const file = new File([attachment.blob], attachment.fileName, { type: attachment.mimeType });
           const endpoint = `/api/todos/${message.todoId}/attachments`;
-          const uploaded = await uploadTaskAttachment({
+          const uploaded = await uploadTaskAttachmentMultipart({
+            clientUploadId: attachment.localId,
             file,
             kind: attachment.kind,
             durationMs: attachment.durationMs,
             endpoint,
             request: api,
-            discard: (uploadId) => api(`${endpoint}/${uploadId}?discard=1`, { method: "DELETE" }),
           });
           uploadedIds.push(uploaded.id);
         }
+        if (signal?.aborted) return;
         await api("/api/assistant/messages", {
           method: "POST",
           body: JSON.stringify({
@@ -451,7 +455,7 @@ export function AssistantWorkspace() {
           taskId: message.todoId,
           cause,
         });
-        break;
+        throw cause;
       }
     }
     if (selectedId) {
@@ -460,15 +464,7 @@ export function AssistantWorkspace() {
     }
   }, [loadAttachments, refresh, selectedId]);
 
-  useEffect(() => {
-    const online = () => void syncOfflineMessages();
-    window.addEventListener("online", online);
-    const timer = navigator.onLine ? window.setTimeout(() => void syncOfflineMessages(), 0) : null;
-    return () => {
-      window.removeEventListener("online", online);
-      if (timer !== null) window.clearTimeout(timer);
-    };
-  }, [syncOfflineMessages]);
+  useEffect(() => taskSync.registerLane("assistant", syncOfflineMessages), [syncOfflineMessages]);
 
   async function selectTask(todoId: number) {
     setSelectedId(todoId);

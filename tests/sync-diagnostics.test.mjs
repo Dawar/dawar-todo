@@ -9,7 +9,7 @@ test("settings exposes privacy-safe queue diagnostics and a crash fallback", asy
     readFile(new URL("app/settings/page.tsx", root), "utf8"),
     readFile(new URL("app/sync-diagnostics.ts", root), "utf8"),
     readFile(new URL("app/settings/error.tsx", root), "utf8"),
-    readFile(new URL("app/page.tsx", root), "utf8"),
+    Promise.all(["app/page.tsx", "app/task-sync.ts", "app/task-model.ts", "app/sync-request.ts"].map((path) => readFile(new URL(path, root), "utf8"))).then((parts) => parts.join("\n")),
   ]);
 
   assert.match(settings, /Copy sync diagnostics/);

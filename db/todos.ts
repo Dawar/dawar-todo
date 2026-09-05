@@ -1350,6 +1350,10 @@ export async function createTodo(input: {
       if (input.urgentAlert && existing.priority === 1 && existing.source_kind === "api-token") {
         await ensureUrgentCampaignForTodo(existing.id, input.urgentAlert);
       }
+      if (input.attachmentIds?.length) {
+        await claimDraftAttachments(existing.id, input.draftToken, input.attachmentIds);
+        return (await getTodo(existing.id))!;
+      }
       console.info("[todo-db] idempotent offline create replay resolved", { clientId, id: existing.id, attachmentCount: Number(existing.attachment_count ?? 0) });
       return mapTodo(existing);
     }

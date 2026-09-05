@@ -15,6 +15,7 @@ function todoId(value: string) {
 }
 
 type TaskUploadPayload = {
+  clientUploadId?: string;
   uploadId?: string;
   fileName?: string;
   mimeType?: string;
@@ -66,6 +67,7 @@ export async function POST(
         throw new Error("That attachment type is invalid.");
       }
       const attachment = await uploadTodoAttachmentDirect(id, {
+        clientUploadId: form.get("clientUploadId") ? String(form.get("clientUploadId")) : undefined,
         fileName: file.name,
         mimeType: String(form.get("mimeType") ?? file.type ?? ""),
         file,
@@ -88,6 +90,7 @@ export async function POST(
     const target = { todoId: id };
     const prepared = kind === "image"
       ? await prepareTodoAttachmentUpload({
+          clientUploadId: payload.clientUploadId,
           fileName: String(payload.fileName ?? ""),
           mimeType: String(payload.mimeType ?? ""),
           byteSize: Number(payload.byteSize),
@@ -96,6 +99,7 @@ export async function POST(
         }, target)
       : await prepareTodoMediaAttachmentUpload({
           kind,
+          clientUploadId: payload.clientUploadId,
           fileName: String(payload.fileName ?? ""),
           mimeType: String(payload.mimeType ?? ""),
           byteSize: Number(payload.byteSize),

@@ -417,6 +417,7 @@
         "type": "object",
         "minProperties": 1,
         "properties": {
+          "snoozedUntil": { "type": ["string", "null"], "format": "date-time", "description": "UTC snooze wake time, or null to clear it. Used by offline synchronization." },
           "title": { "type": "string", "minLength": 1, "maxLength": 2000 },
           "notes": { "type": "string", "maxLength": 500000, "description": "Markdown task description." },
           "status": { "type": "string", "enum": ["open", "completed"] },
@@ -510,6 +511,7 @@
         "type": "object",
         "required": ["file"],
         "properties": {
+          "clientUploadId": { "type": "string", "format": "uuid", "description": "Stable identifier for retries of the same file and task." },
           "file": { "type": "string", "format": "binary", "description": "One image, voice memo, video, document, or archive." },
           "kind": { "type": "string", "enum": ["image", "audio", "video", "file"], "description": "Optional override; normally inferred from MIME type." },
           "mimeType": { "type": "string", "description": "Optional MIME override for clients that upload application/octet-stream." },
@@ -520,6 +522,7 @@
         "type": "object",
         "required": ["fileName", "mimeType", "byteSize"],
         "properties": {
+          "clientUploadId": { "type": "string", "format": "uuid", "description": "Stable identifier for retries of the same file and task." },
           "fileName": { "type": "string" },
           "mimeType": { "type": "string" },
           "byteSize": { "type": "integer", "minimum": 1 },
