@@ -40,6 +40,7 @@ import { SiteHeader } from "./site-header";
 import { KeyboardShortcutsDialog } from "./keyboard-shortcuts-dialog";
 import { PullGesturePill } from "./pull-to-refresh";
 import { MarkdownPreview } from "./markdown-preview";
+import { createSyncHealth, liveSyncDelay, type ConnectionQuality } from "./sync-health";
 import { recordSyncDiagnostic } from "./sync-diagnostics";
 import { MAX_TASK_DESCRIPTION_LENGTH } from "../lib/task-description";
 import { MAX_PINNED_TASKS, PIN_LIST_PREFERENCE_KEY } from "../lib/task-pins";
@@ -202,7 +203,6 @@ type TodoDraft = Pick<Todo, "title" | "notes" | "priority"> & {
 type AutosaveField = "title" | "notes" | "priority" | "dueDate" | "context" | "recurrenceCron";
 type AutosavePatch = Partial<Record<AutosaveField, string | number | null>>;
 type EditSaveState = "saved" | "saving" | "offline" | "error";
-type ConnectionQuality = "online" | "degraded" | "offline";
 type PersistTaskDraft = (
   todoId: number,
   draft: TodoDraft,
@@ -270,6 +270,8 @@ function request<T>(path: string, options?: RequestOptions): Promise<T> {
     controller.abort();
   }, timeoutMs);
   const upstreamAbort = () => controller.abort();
+  const requestStartedAt = Date.now();
+  if (options?.signal?.aborted) controller.abort();
   options?.signal?.addEventListener("abort", upstreamAbort, { once: true });
   return fetch(path, {
     ...options,
@@ -277,7 +279,13 @@ function request<T>(path: string, options?: RequestOptions): Promise<T> {
     headers: options?.method && options.method !== "GET" ? headersWithDeviceId(headers) : headers,
   })
     .then(async (response) => {
-      const payload = (await response.json().catch(() => ({}))) as T & { error?: string };
+      const jsonResponse = response.headers.get("content-type")?.includes("application/json");
+      const payload = (jsonResponse ? await response.json() : {}) as T & { error?: string };
+      if (response.ok && !jsonResponse) {
+        const error = new Error("Please sign in again to continue syncing.") as Error & { status?: number };
+        error.status = response.redirected ? 401 : 502;
+        throw error;
+      }
       if (!response.ok) {
         const error = new Error(payload.error || "Something went wrong.") as Error & { status?: number };
         error.status = response.status;
@@ -286,12 +294,16 @@ function request<T>(path: string, options?: RequestOptions): Promise<T> {
       return payload;
     })
     .catch((error) => {
-      if (!timedOut) throw error;
+      if (!timedOut) {
+        if (error instanceof Error) Object.assign(error, { requestStartedAt });
+        throw error;
+      }
       const timeoutError = new Error(`The connection did not respond within ${Math.round(timeoutMs / 1000)} seconds.`) as Error & {
         timeout?: boolean;
       };
       timeoutError.name = "TimeoutError";
       timeoutError.timeout = true;
+      Object.assign(timeoutError, { requestStartedAt });
       throw timeoutError;
     })
     .finally(() => {
@@ -302,7 +314,8 @@ function request<T>(path: string, options?: RequestOptions): Promise<T> {
 
 function retryableSyncError(error: unknown) {
   const status = (error as Error & { status?: number }).status;
-  return error instanceof TypeError
+  return status === 401 || status === 403
+    || error instanceof TypeError
     || (error as Error & { timeout?: boolean }).timeout === true
     || (typeof status === "number" && (status === 408 || status === 425 || status === 429 || status >= 500))
     || status === undefined;
@@ -1644,9 +1657,15 @@ export default function Home() {
   const pendingCompletionIdsRef = useRef<Set<number>>(new Set());
   const optimisticOperationsRef = useRef<Map<string, OptimisticOperation>>(new Map());
   const liveSyncRunningRef = useRef(false);
+  const syncHealthRef = useRef(createSyncHealth());
+  const serverInitializedRef = useRef(false);
+  const localSyncEpochRef = useRef(0);
+  const liveSyncControllerRef = useRef<AbortController | null>(null);
+  const liveSyncFailuresRef = useRef(0);
+  const liveSyncQuietPollsRef = useRef(0);
+  const [cachedRevision, setCachedRevision] = useState(0);
   const syncRevisionRef = useRef(0);
   const lastLiveSnapshotRef = useRef("");
-  const syncRetryTimerRef = useRef<number | null>(null);
   const syncWakeTimerRef = useRef<number | null>(null);
   const syncWakeAtRef = useRef(0);
   const syncRequestedRef = useRef(false);
@@ -1684,7 +1703,7 @@ export default function Home() {
     syncWakeTimerRef.current = null;
     syncWakeAtRef.current = 0;
     const reorderGesture = reorderGestureRef.current;
-    if (reorderGesture?.animationFrameId !== null) window.cancelAnimationFrame(reorderGesture.animationFrameId);
+    if (reorderGesture && reorderGesture.animationFrameId !== null) window.cancelAnimationFrame(reorderGesture.animationFrameId);
     reorderGesture?.previewElement.remove();
     if (reorderGesture?.sourceRowElement) reorderGesture.sourceRowElement.style.opacity = "";
     if (reorderAnimationRestoreFrameRef.current !== null) window.cancelAnimationFrame(reorderAnimationRestoreFrameRef.current);
@@ -1821,7 +1840,8 @@ export default function Home() {
       .map(applyPendingOverlays);
     setTodos((current) => {
       const offlineTodos = current.filter((todo) => todo.id < 0 || todo.offline);
-      const next = [...offlineTodos, ...resolved];
+      const localClientIds = new Set(offlineTodos.map((todo) => todo.clientId).filter(Boolean));
+      const next = [...offlineTodos, ...resolved.filter((todo) => !todo.clientId || !localClientIds.has(todo.clientId))];
       const unchanged = next.length === current.length && next.every((todo, index) => {
         const previous = current[index];
         return previous?.id === todo.id
@@ -1846,7 +1866,7 @@ export default function Home() {
     const remoteTodo = activeId === null ? null : resolved.find((todo) => todo.id === activeId) ?? null;
     if (remoteTodo) {
       reconcileRemoteEditDraft(remoteTodo, source);
-    } else if (activeId !== null && !remoteTodo && !pendingPatches.has(activeId)) {
+    } else if (activeId !== null && activeId > 0 && !remoteTodo && !pendingPatches.has(activeId)) {
       if (autosaveTimerRef.current !== null) window.clearTimeout(autosaveTimerRef.current);
       autosaveTimerRef.current = null;
       setEditingId(null);
@@ -1928,19 +1948,36 @@ export default function Home() {
   });
 
   const refreshLiveData = useEffectEvent(async (source: "poll" | "reconnect" | "snooze-wake") => {
-    if (liveSyncRunningRef.current || document.visibilityState === "hidden") return;
+    if (liveSyncRunningRef.current || syncingOfflineRef.current || !navigator.onLine || document.visibilityState === "hidden") return;
+    const epoch = localSyncEpochRef.current;
+    const controller = new AbortController();
+    liveSyncControllerRef.current = controller;
     liveSyncRunningRef.current = true;
     const startedAt = Date.now();
     try {
       const after = syncRevisionRef.current;
-      const result = await request<SyncResponse>(`/api/sync?after=${after}`, { cache: "no-store" });
+      const needsBootstrap = !serverInitializedRef.current;
+      const result: SyncResponse = needsBootstrap
+        ? { ...await request<BootstrapResponse>("/api/bootstrap", { cache: "no-store", timeoutMs: 15_000, signal: controller.signal }), reset: true, reason: "initial" }
+        : await request<SyncResponse>(`/api/sync?after=${after}`, { cache: "no-store", timeoutMs: 15_000, signal: controller.signal });
+      if (controller.signal.aborted) return;
+      setOnline(true);
+      setConnectionQuality(syncHealthRef.current.success());
+      liveSyncFailuresRef.current = 0;
+      // A write acknowledged after this read began can be newer than its snapshot.
+      // Leave the cursor untouched and fetch again after the outbox has settled.
+      if (epoch !== localSyncEpochRef.current || syncingOfflineRef.current) return;
+      serverInitializedRef.current = true;
+      liveSyncQuietPollsRef.current = result.todos.length || (!result.reset && result.deletedIds.length)
+        ? 0 : liveSyncQuietPollsRef.current + 1;
       if (result.reset) applyLiveSnapshot(result.todos, source);
       else if (result.todos.length || result.deletedIds.length) applyLiveDelta(result.todos, result.deletedIds, source);
       if (result.projects) {
+        const projects = result.projects;
         setRegisteredProjects((current) => (
-          current.length === result.projects.length && current.every((name, index) => name === result.projects[index])
+          current.length === projects.length && current.every((name, index) => name === projects[index])
             ? current
-            : result.projects
+            : projects
         ));
       }
       if (result.settings) {
@@ -1948,11 +1985,10 @@ export default function Home() {
         setQuickSnoozePresets(result.settings.snoozeQuickPresets ?? DEFAULT_QUICK_SNOOZE_PRESETS);
       }
       if (Object.prototype.hasOwnProperty.call(result, "captureDraft")) {
-        applyRemoteCaptureDraft(result.captureDraft ?? null, source);
+        applyRemoteCaptureDraft(result.captureDraft ?? null, source === "snooze-wake" ? "poll" : source);
       }
       syncRevisionRef.current = result.revision;
-      setOnline(true);
-      setConnectionQuality("online");
+      setCachedRevision(result.revision);
       const changedTodos = result.todos.length + (result.reset ? 0 : result.deletedIds.length);
       if (source !== "poll" || result.reset || changedTodos > 0 || result.projects || result.settings || Object.prototype.hasOwnProperty.call(result, "captureDraft")) {
         console.info("[todo-sync] delta applied", {
@@ -1969,7 +2005,9 @@ export default function Home() {
         });
       }
     } catch (error) {
-      const quality = navigator.onLine ? "degraded" : "offline";
+      if (controller.signal.aborted) return;
+      liveSyncFailuresRef.current += 1;
+      const quality = syncHealthRef.current.failure(error, navigator.onLine);
       setOnline(navigator.onLine);
       setConnectionQuality(quality);
       console.warn("[todo-sync] live refresh deferred", {
@@ -1981,6 +2019,7 @@ export default function Home() {
       });
     } finally {
       liveSyncRunningRef.current = false;
+      if (liveSyncControllerRef.current === controller) liveSyncControllerRef.current = null;
     }
   });
 
@@ -2042,6 +2081,7 @@ export default function Home() {
       setOfflineActionCount(offlineActions.length);
       setRegisteredProjects(cachedState?.projects ?? []);
       syncRevisionRef.current = cachedState?.revision ?? 0;
+      setCachedRevision(syncRevisionRef.current);
       if (offlineCaptureDraft) {
         captureDraftRef.current = offlineCaptureDraft;
         newTitleRef.current = offlineCaptureDraft.text;
@@ -2062,49 +2102,9 @@ export default function Home() {
         captureDraftLength: offlineCaptureDraft?.text.length ?? 0,
       });
 
-      const server = await request<BootstrapResponse>("/api/bootstrap", {
-        cache: "no-store",
-        timeoutMs: 5_000,
-      }).catch((error) => {
-        const quality = navigator.onLine ? "degraded" : "offline";
-        setConnectionQuality(quality);
-        setOnline(navigator.onLine);
-        console.warn("[todo-ui] background bootstrap unavailable", { quality, browserOnline: navigator.onLine, error });
-        return null;
-      });
-      if (!active || !server) return;
+      // The single live reader performs bootstrap after hydration. Outbox writes
+      // and later polls cannot race a separate startup snapshot.
 
-      const serverClientIds = new Set(server.todos.map((todo) => todo.clientId).filter(Boolean));
-      const pendingRecords = offlineRecords.filter((record) => !serverClientIds.has(record.clientId));
-      const alreadySynced = offlineRecords.filter((record) => serverClientIds.has(record.clientId));
-      await Promise.all(alreadySynced.map((record) => deleteOfflineTodo(record.clientId))).catch((error) => {
-        console.error("[todo-offline] reconciled queue cleanup failed", error);
-      });
-      if (!active) return;
-      const remoteTodos = server.todos
-        .filter((todo) => !pendingDeletedIdsRef.current.has(todo.id))
-        .map(applyPendingOverlays);
-      setTodos([...pendingRecords.map(offlineRecordTodo), ...remoteTodos]);
-      setOfflineCount(pendingRecords.length);
-      setRegisteredProjects(server.projects);
-      syncRevisionRef.current = server.revision;
-      setScheduleTimeZone(server.settings.snoozeTimeZone);
-      setQuickSnoozePresets(server.settings.snoozeQuickPresets ?? DEFAULT_QUICK_SNOOZE_PRESETS);
-      if (server.captureDraft) applyRemoteCaptureDraft(server.captureDraft, "bootstrap");
-      setOnline(true);
-      setConnectionQuality("online");
-      void saveCachedServerState(server.todos, server.projects, server.revision);
-      console.info("[todo-ui] background bootstrap reconciled", {
-        remote: server.todos.length,
-        pendingCreates: pendingRecords.length,
-        reconciledCreates: alreadySynced.length,
-        pendingEdits: offlineMutations.length,
-        pendingActions: offlineActions.length,
-        revision: server.revision,
-      });
-      if (pendingRecords.length || offlineMutations.length || offlineActions.length) {
-        void syncOfflineQueueRef.current?.();
-      }
     };
     void load()
       .catch((error: Error) => active && setNotice({ tone: "error", text: error.message }))
@@ -2114,23 +2114,13 @@ export default function Home() {
   }, [setTodos]);
 
   useEffect(() => {
+    if (loading) return;
     if (offlineCount > 0 || offlineEditCount > 0 || offlineActionCount > 0) {
       void syncOfflineQueueRef.current?.();
     }
     if (online && captureDraftRef.current) void persistCaptureDraftRef.current?.(captureDraftRef.current, "reconnect");
-  }, [online, offlineCount, offlineEditCount, offlineActionCount]);
+  }, [loading, online, offlineCount, offlineEditCount, offlineActionCount]);
 
-  useEffect(() => {
-    if (loading || offlineCount + offlineEditCount + offlineActionCount === 0) return;
-    const retry = () => {
-      if (document.visibilityState === "visible") void syncOfflineQueueRef.current?.();
-    };
-    syncRetryTimerRef.current = window.setInterval(retry, 2_500);
-    return () => {
-      if (syncRetryTimerRef.current !== null) window.clearInterval(syncRetryTimerRef.current);
-      syncRetryTimerRef.current = null;
-    };
-  }, [loading, offlineActionCount, offlineCount, offlineEditCount]);
 
   useEffect(() => () => {
     if (captureDraftSaveTimerRef.current !== null) window.clearTimeout(captureDraftSaveTimerRef.current);
@@ -2146,21 +2136,51 @@ export default function Home() {
 
   useEffect(() => {
     if (loading) return;
-    const timer = window.setInterval(() => void refreshLiveData("poll"), 3_000);
-    const refresh = (event: Event) => {
-      if (document.visibilityState === "visible") {
-        const source = event.type === "visibilitychange" ? "visibility" : event.type === "online" ? "online" : "focus";
-        reconcileTaskClock(source);
-        void refreshLiveData("reconnect");
+    let stopped = false;
+    let running = false;
+    let wakeRequested = false;
+    let timer: number | null = null;
+    const schedule = (delay: number) => {
+      if (timer !== null) window.clearTimeout(timer);
+      timer = null;
+      if (!stopped && navigator.onLine && document.visibilityState === "visible") timer = window.setTimeout(tick, delay);
+    };
+    const tick = async () => {
+      if (running) { wakeRequested = true; return; }
+      running = true;
+      try { await refreshLiveData("poll"); }
+      finally {
+        running = false;
+        schedule(wakeRequested ? 0 : liveSyncDelay(liveSyncFailuresRef.current, liveSyncQuietPollsRef.current));
+        wakeRequested = false;
       }
     };
+    const refresh = (event: Event) => {
+      if (!navigator.onLine || document.visibilityState !== "visible") {
+        if (timer !== null) window.clearTimeout(timer);
+        timer = null;
+        liveSyncControllerRef.current?.abort();
+        return;
+      }
+      const source = event.type === "visibilitychange" ? "visibility" : event.type === "online" ? "online" : "focus";
+      reconcileTaskClock(source);
+      liveSyncFailuresRef.current = 0;
+      liveSyncQuietPollsRef.current = 0;
+      void syncOfflineQueueRef.current?.();
+      schedule(100);
+    };
+    schedule(0);
     window.addEventListener("focus", refresh);
     window.addEventListener("online", refresh);
+    window.addEventListener("offline", refresh);
     document.addEventListener("visibilitychange", refresh);
     return () => {
-      window.clearInterval(timer);
+      stopped = true;
+      if (timer !== null) window.clearTimeout(timer);
+      liveSyncControllerRef.current?.abort();
       window.removeEventListener("focus", refresh);
       window.removeEventListener("online", refresh);
+      window.removeEventListener("offline", refresh);
       document.removeEventListener("visibilitychange", refresh);
     };
   }, [loading]);
@@ -2379,8 +2399,12 @@ export default function Home() {
     const updateConnection = () => {
       const next = navigator.onLine;
       setOnline(next);
-      setConnectionQuality(next ? "degraded" : "offline");
-      if (next) void syncOfflineQueueRef.current?.();
+      setConnectionQuality(syncHealthRef.current.browser(next));
+      if (next) {
+        syncNextAttemptAtRef.current = 0;
+        syncBackoffAttemptsRef.current = 0;
+        void syncOfflineQueueRef.current?.();
+      }
       console.info("[todo-offline] browser connection hint changed", { onlineHint: next });
     };
     updateConnection();
@@ -2410,10 +2434,16 @@ export default function Home() {
   }, [connectionQuality, hasPendingSync]);
 
   useEffect(() => {
-    if (!loading) void saveCachedServerState(todos.filter((todo) => !todo.offline), registeredProjects, syncRevisionRef.current).catch((error) => {
+    if (loading) return;
+    // Coalesce list changes while retaining the revision paired with this render.
+    const persist = () => void saveCachedServerState(todos.filter((todo) => !todo.offline && todo.id > 0), registeredProjects, cachedRevision).catch((error) => {
       console.error("[todo-offline] server snapshot update failed", error);
     });
-  }, [loading, registeredProjects, todos]);
+    const timer = window.setTimeout(persist, 300);
+    const flush = () => { if (document.visibilityState === "hidden") persist(); };
+    document.addEventListener("visibilitychange", flush);
+    return () => { window.clearTimeout(timer); document.removeEventListener("visibilitychange", flush); };
+  }, [loading, registeredProjects, todos, cachedRevision]);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 60_000);
@@ -3326,6 +3356,7 @@ export default function Home() {
   }
 
   async function syncOfflineQueue() {
+    if (loading || !navigator.onLine) return;
     if (syncingOfflineRef.current) {
       syncRequestedRef.current = true;
       console.info("[todo-offline] follow-up synchronization requested during active pass");
@@ -3337,6 +3368,7 @@ export default function Home() {
       return;
     }
     syncingOfflineRef.current = true;
+    localSyncEpochRef.current += 1;
     syncRequestedRef.current = false;
     const startedAt = Date.now();
     const deferPass = (stage: string, error: unknown) => {
@@ -3345,7 +3377,7 @@ export default function Home() {
       syncNextAttemptAtRef.current = Date.now() + delayMs;
       scheduleOfflineQueueSync(`backoff:${stage}`, delayMs);
       const failureKind = syncFailureKind(error);
-      const quality = !navigator.onLine ? "offline" : failureKind === "transport" ? "degraded" : "online";
+      const quality = syncHealthRef.current.failure(error, navigator.onLine);
       setOnline(navigator.onLine);
       setConnectionQuality(quality);
       console.warn("[todo-offline] synchronization pass backed off", {
@@ -3396,6 +3428,225 @@ export default function Home() {
       let syncedEdits = 0;
       let syncedActions = 0;
       let deferredActions = 0;
+
+      for (const mutation of mutations) {
+        try {
+          const result = await request<{ todo: Todo; appliedFields: string[] }>(`/api/todos/${mutation.todoId}`, {
+            method: "PATCH",
+            body: JSON.stringify({
+              ...mutation.patch,
+              autosave: true,
+              mutation: {
+                mutationId: mutation.mutationId,
+                fieldTimestamps: mutation.fieldTimestamps,
+              },
+            }),
+          });
+          const removedQueuedMutation = await deleteOfflineTodoMutation(mutation.todoId, mutation.mutationId);
+          if (removedQueuedMutation) {
+            pendingTodoPatchesRef.current.delete(mutation.todoId);
+          } else {
+            const newerMutation = (await listOfflineTodoMutations()).find((candidate) => candidate.todoId === mutation.todoId);
+            if (newerMutation) pendingTodoPatchesRef.current.set(mutation.todoId, newerMutation.patch);
+          }
+          setTodos((current) => current.map((todo) => todo.id === result.todo.id ? applyPendingOverlays(result.todo) : todo));
+          if (editingIdRef.current === mutation.todoId && editDraftRef.current) {
+            const serverDraft = todoDraft(result.todo);
+            const currentDraft = editDraftRef.current;
+            const previousBaseline = editBaselineRef.current ?? serverDraft;
+            const nextDraft = { ...currentDraft };
+            const nextBaseline = { ...serverDraft };
+            for (const field of AUTOSAVE_FIELDS) {
+              if (field === activeEditFieldRef.current) {
+                deferredRemoteEditFieldsRef.current.set(field, serverDraft[field]);
+                nextBaseline[field] = previousBaseline[field] as never;
+                continue;
+              }
+              const queuedValue = mutation.patch[field];
+              const hasQueuedValue = Object.prototype.hasOwnProperty.call(mutation.patch, field);
+              const changedAfterQueue = hasQueuedValue
+                ? normalizedDraftField(currentDraft, field) !== queuedValue
+                : normalizedDraftField(currentDraft, field) !== normalizedDraftField(previousBaseline, field);
+              if (!changedAfterQueue) nextDraft[field] = serverDraft[field] as never;
+            }
+            editBaselineRef.current = nextBaseline;
+            editDraftRef.current = nextDraft;
+            if (JSON.stringify(nextDraft) !== JSON.stringify(currentDraft)) setEditDraft(nextDraft);
+            setEditSaveState("saved");
+            setEditSaveMessage(result.appliedFields.length < Object.keys(mutation.patch).length ? "Synced · newer remote changes kept" : "Saved automatically");
+          }
+          syncedEdits += 1;
+          setOfflineEditCount((await listOfflineTodoMutations()).length);
+          setOnline(true);
+          setConnectionQuality(syncHealthRef.current.success());
+          console.info("[todo-offline] queued edit synchronized", {
+            todoId: mutation.todoId,
+            mutationId: mutation.mutationId,
+            requestedFields: Object.keys(mutation.patch),
+            appliedFields: result.appliedFields,
+            newerMutationPreserved: !removedQueuedMutation,
+          });
+          recordSyncDiagnostic("edit-synced", {
+            requestedFieldCount: Object.keys(mutation.patch).length,
+            appliedFieldCount: result.appliedFields.length,
+            newerMutationPreserved: !removedQueuedMutation,
+          });
+        } catch (error) {
+          const status = (error as Error & { status?: number }).status;
+          if (status === 404) {
+            await deleteOfflineTodoMutation(mutation.todoId);
+            pendingTodoPatchesRef.current.delete(mutation.todoId);
+            syncedEdits += 1;
+            console.warn("[todo-offline] queued edit discarded because task was deleted remotely", { todoId: mutation.todoId, mutationId: mutation.mutationId });
+            continue;
+          }
+          deferPass("task-edit", error);
+          return;
+        }
+      }
+
+      const blockedActionTaskIds = new Set<number>();
+      for (const action of actions) {
+        if (action.taskIds.some((id) => blockedActionTaskIds.has(id)) || new Date(action.nextAttemptAt).valueOf() > Date.now()) {
+          action.taskIds.forEach((id) => blockedActionTaskIds.add(id));
+          continue;
+        }
+        try {
+          const result = await request<{
+            todo?: Todo;
+            todos?: Todo[];
+            ids?: number[];
+            undoToken?: string;
+            snoozedUntil?: string | null;
+          }>(action.path, {
+            method: action.method,
+            body: JSON.stringify({ ...action.body, operationId: action.operationId }),
+          });
+          if (action.undoRequested && result.undoToken) {
+            await request("/api/todos/undo", {
+              method: "POST",
+              body: JSON.stringify({ undoToken: result.undoToken }),
+            });
+            console.info("[todo-offline] queued action and queued undo synchronized", {
+              operationId: action.operationId,
+              taskIds: action.taskIds,
+            });
+          }
+          const acknowledged = await deleteOfflineTaskAction(action.operationId, Boolean(action.undoRequested));
+          if (!acknowledged) {
+            // Undo was requested while the action was in flight. Replay the
+            // idempotent action with the latest intent on the next pass.
+            syncRequestedRef.current = true;
+            action.taskIds.forEach((id) => blockedActionTaskIds.add(id));
+            continue;
+          }
+          if (!action.undoRequested && result.todo) {
+            const sourceIds = new Set(result.ids ?? []);
+            setTodos((current) => [
+              applyPendingOverlays(result.todo as Todo),
+              ...current.filter((todo) => !sourceIds.has(todo.id) && todo.id !== result.todo?.id),
+            ]);
+          } else if (!action.undoRequested && result.todos?.length) {
+            const updates = new Map(result.todos.map((todo) => [todo.id, todo]));
+            setTodos((current) => current.map((todo) => updates.has(todo.id) ? applyPendingOverlays(updates.get(todo.id) as Todo) : todo));
+          }
+          syncedActions += 1;
+          const operation = optimisticOperationsRef.current.get(action.operationId);
+          if (operation) {
+            operation.settled = true;
+            operation.undoToken = result.undoToken;
+          }
+          if (!action.undoRequested) {
+            setNotice((current) => current?.operationId === action.operationId ? {
+              ...current,
+              pendingUndo: false,
+              undoToken: result.undoToken,
+              snoozedUntil: result.snoozedUntil ?? current.snoozedUntil,
+            } : current);
+          }
+          optimisticOperationsRef.current.delete(action.operationId);
+          action.taskIds.forEach((id) => pendingCompletionIdsRef.current.delete(id));
+          setOnline(true);
+          setConnectionQuality(syncHealthRef.current.success());
+          console.info("[todo-offline] queued task action synchronized", {
+            operationId: action.operationId,
+            kind: action.kind,
+            taskIds: action.taskIds,
+            undoRequested: Boolean(action.undoRequested),
+          });
+          recordSyncDiagnostic("action-synced", {
+            kind: action.kind,
+            taskCount: action.taskIds.length,
+            undoRequested: Boolean(action.undoRequested),
+          });
+        } catch (error) {
+          const status = (error as Error & { status?: number }).status;
+          if (retryableSyncError(error)) {
+            const attempts = action.attempts + 1;
+            const delayMs = syncRetryDelay(attempts);
+            await deferOfflineTaskAction(action.operationId, attempts, delayMs);
+            deferredActions += 1;
+            action.taskIds.forEach((id) => blockedActionTaskIds.add(id));
+            const failureKind = syncFailureKind(error);
+            const status = (error as Error & { status?: number }).status;
+            const quality = syncHealthRef.current.failure(error, navigator.onLine);
+            setOnline(navigator.onLine);
+            setConnectionQuality(quality);
+            console.warn("[todo-offline] queued task action deferred", {
+              operationId: action.operationId,
+              kind: action.kind,
+              attempts,
+              delayMs,
+              failureKind,
+              status: status ?? null,
+              quality,
+              error,
+            });
+            recordSyncDiagnostic("action-deferred", {
+              kind: action.kind,
+              taskCount: action.taskIds.length,
+              attempts,
+              delayMs,
+              failureKind,
+              status: status ?? null,
+              quality,
+            });
+            if (failureKind === "server" && typeof status === "number" && status >= 500) {
+              console.warn("[todo-offline] queue continuing after isolated server failure", {
+                operationId: action.operationId,
+                kind: action.kind,
+                status,
+                remainingActions: Math.max(0, actions.length - syncedActions - deferredActions),
+              });
+              continue;
+            }
+            deferPass("task-action", error);
+            return;
+          }
+          await deleteOfflineTaskAction(action.operationId);
+          const rejectedOperation = optimisticOperationsRef.current.get(action.operationId);
+          if (rejectedOperation) {
+            setTodos((current) => restoreOptimisticTasks(current, rejectedOperation.previous, rejectedOperation.ids));
+          }
+          optimisticOperationsRef.current.delete(action.operationId);
+          action.taskIds.forEach((id) => pendingCompletionIdsRef.current.delete(id));
+          setNotice({
+            tone: "error",
+            text: error instanceof Error ? error.message : "A queued task action was rejected.",
+          });
+          console.error("[todo-offline] queued task action rejected", {
+            operationId: action.operationId,
+            status,
+            error,
+          });
+          recordSyncDiagnostic("action-rejected", {
+            kind: action.kind,
+            taskCount: action.taskIds.length,
+            status: status ?? null,
+          });
+        }
+      }
+
       for (const record of records) {
         try {
           const draftToken = record.draftToken ?? crypto.randomUUID();
@@ -3497,7 +3748,7 @@ export default function Home() {
           syncedTasks += 1;
           setOfflineCount(Math.max(0, records.length - syncedTasks));
           setOnline(true);
-          setConnectionQuality("online");
+          setConnectionQuality(syncHealthRef.current.success());
           console.info("[todo-offline] task synchronized", { clientId: record.clientId, id: todo.id, attachments: record.attachments.length });
           recordSyncDiagnostic("create-synced", {
             attachmentCount: record.attachments.length,
@@ -3508,210 +3759,6 @@ export default function Home() {
         }
       }
 
-      for (const mutation of mutations) {
-        try {
-          const result = await request<{ todo: Todo; appliedFields: string[] }>(`/api/todos/${mutation.todoId}`, {
-            method: "PATCH",
-            body: JSON.stringify({
-              ...mutation.patch,
-              autosave: true,
-              mutation: {
-                mutationId: mutation.mutationId,
-                fieldTimestamps: mutation.fieldTimestamps,
-              },
-            }),
-          });
-          const removedQueuedMutation = await deleteOfflineTodoMutation(mutation.todoId, mutation.mutationId);
-          if (removedQueuedMutation) {
-            pendingTodoPatchesRef.current.delete(mutation.todoId);
-          } else {
-            const newerMutation = (await listOfflineTodoMutations()).find((candidate) => candidate.todoId === mutation.todoId);
-            if (newerMutation) pendingTodoPatchesRef.current.set(mutation.todoId, newerMutation.patch);
-          }
-          setTodos((current) => current.map((todo) => todo.id === result.todo.id ? applyPendingOverlays(result.todo) : todo));
-          if (editingIdRef.current === mutation.todoId && editDraftRef.current) {
-            const serverDraft = todoDraft(result.todo);
-            const currentDraft = editDraftRef.current;
-            const previousBaseline = editBaselineRef.current ?? serverDraft;
-            const nextDraft = { ...currentDraft };
-            const nextBaseline = { ...serverDraft };
-            for (const field of AUTOSAVE_FIELDS) {
-              if (field === activeEditFieldRef.current) {
-                deferredRemoteEditFieldsRef.current.set(field, serverDraft[field]);
-                nextBaseline[field] = previousBaseline[field] as never;
-                continue;
-              }
-              const queuedValue = mutation.patch[field];
-              const hasQueuedValue = Object.prototype.hasOwnProperty.call(mutation.patch, field);
-              const changedAfterQueue = hasQueuedValue
-                ? normalizedDraftField(currentDraft, field) !== queuedValue
-                : normalizedDraftField(currentDraft, field) !== normalizedDraftField(previousBaseline, field);
-              if (!changedAfterQueue) nextDraft[field] = serverDraft[field] as never;
-            }
-            editBaselineRef.current = nextBaseline;
-            editDraftRef.current = nextDraft;
-            if (JSON.stringify(nextDraft) !== JSON.stringify(currentDraft)) setEditDraft(nextDraft);
-            setEditSaveState("saved");
-            setEditSaveMessage(result.appliedFields.length < Object.keys(mutation.patch).length ? "Synced · newer remote changes kept" : "Saved automatically");
-          }
-          syncedEdits += 1;
-          setOfflineEditCount((await listOfflineTodoMutations()).length);
-          setOnline(true);
-          setConnectionQuality("online");
-          console.info("[todo-offline] queued edit synchronized", {
-            todoId: mutation.todoId,
-            mutationId: mutation.mutationId,
-            requestedFields: Object.keys(mutation.patch),
-            appliedFields: result.appliedFields,
-            newerMutationPreserved: !removedQueuedMutation,
-          });
-          recordSyncDiagnostic("edit-synced", {
-            requestedFieldCount: Object.keys(mutation.patch).length,
-            appliedFieldCount: result.appliedFields.length,
-            newerMutationPreserved: !removedQueuedMutation,
-          });
-        } catch (error) {
-          const status = (error as Error & { status?: number }).status;
-          if (status === 404) {
-            await deleteOfflineTodoMutation(mutation.todoId);
-            pendingTodoPatchesRef.current.delete(mutation.todoId);
-            syncedEdits += 1;
-            console.warn("[todo-offline] queued edit discarded because task was deleted remotely", { todoId: mutation.todoId, mutationId: mutation.mutationId });
-            continue;
-          }
-          deferPass("task-edit", error);
-          return;
-        }
-      }
-
-      for (const action of actions) {
-        if (new Date(action.nextAttemptAt).valueOf() > Date.now()) continue;
-        try {
-          const result = await request<{
-            todo?: Todo;
-            todos?: Todo[];
-            ids?: number[];
-            undoToken?: string;
-            snoozedUntil?: string | null;
-          }>(action.path, {
-            method: action.method,
-            body: JSON.stringify({ ...action.body, operationId: action.operationId }),
-          });
-          if (action.undoRequested && result.undoToken) {
-            await request("/api/todos/undo", {
-              method: "POST",
-              body: JSON.stringify({ undoToken: result.undoToken }),
-            });
-            console.info("[todo-offline] queued action and queued undo synchronized", {
-              operationId: action.operationId,
-              taskIds: action.taskIds,
-            });
-          } else if (result.todo) {
-            const sourceIds = new Set(result.ids ?? []);
-            setTodos((current) => [
-              applyPendingOverlays(result.todo as Todo),
-              ...current.filter((todo) => !sourceIds.has(todo.id) && todo.id !== result.todo?.id),
-            ]);
-          } else if (result.todos?.length) {
-            const updates = new Map(result.todos.map((todo) => [todo.id, todo]));
-            setTodos((current) => current.map((todo) => updates.has(todo.id) ? applyPendingOverlays(updates.get(todo.id) as Todo) : todo));
-          }
-          await deleteOfflineTaskAction(action.operationId);
-          syncedActions += 1;
-          const operation = optimisticOperationsRef.current.get(action.operationId);
-          if (operation) {
-            operation.settled = true;
-            operation.undoToken = result.undoToken;
-          }
-          if (!action.undoRequested) {
-            setNotice((current) => current?.operationId === action.operationId ? {
-              ...current,
-              pendingUndo: false,
-              undoToken: result.undoToken,
-              snoozedUntil: result.snoozedUntil ?? current.snoozedUntil,
-            } : current);
-          }
-          optimisticOperationsRef.current.delete(action.operationId);
-          action.taskIds.forEach((id) => pendingCompletionIdsRef.current.delete(id));
-          setOnline(true);
-          setConnectionQuality("online");
-          console.info("[todo-offline] queued task action synchronized", {
-            operationId: action.operationId,
-            kind: action.kind,
-            taskIds: action.taskIds,
-            undoRequested: Boolean(action.undoRequested),
-          });
-          recordSyncDiagnostic("action-synced", {
-            kind: action.kind,
-            taskCount: action.taskIds.length,
-            undoRequested: Boolean(action.undoRequested),
-          });
-        } catch (error) {
-          const status = (error as Error & { status?: number }).status;
-          if (retryableSyncError(error)) {
-            const attempts = action.attempts + 1;
-            const delayMs = syncRetryDelay(attempts);
-            await deferOfflineTaskAction(action.operationId, attempts, delayMs);
-            deferredActions += 1;
-            const failureKind = syncFailureKind(error);
-            const status = (error as Error & { status?: number }).status;
-            const quality = !navigator.onLine ? "offline" : failureKind === "transport" ? "degraded" : "online";
-            setOnline(navigator.onLine);
-            setConnectionQuality(quality);
-            console.warn("[todo-offline] queued task action deferred", {
-              operationId: action.operationId,
-              kind: action.kind,
-              attempts,
-              delayMs,
-              failureKind,
-              status: status ?? null,
-              quality,
-              error,
-            });
-            recordSyncDiagnostic("action-deferred", {
-              kind: action.kind,
-              taskCount: action.taskIds.length,
-              attempts,
-              delayMs,
-              failureKind,
-              status: status ?? null,
-              quality,
-            });
-            if (failureKind === "server" && typeof status === "number" && status >= 500) {
-              console.warn("[todo-offline] queue continuing after isolated server failure", {
-                operationId: action.operationId,
-                kind: action.kind,
-                status,
-                remainingActions: Math.max(0, actions.length - syncedActions - deferredActions),
-              });
-              continue;
-            }
-            deferPass("task-action", error);
-            return;
-          }
-          await deleteOfflineTaskAction(action.operationId);
-          const rejectedOperation = optimisticOperationsRef.current.get(action.operationId);
-          if (rejectedOperation) {
-            setTodos((current) => restoreOptimisticTasks(current, rejectedOperation.previous, rejectedOperation.ids));
-          }
-          optimisticOperationsRef.current.delete(action.operationId);
-          action.taskIds.forEach((id) => pendingCompletionIdsRef.current.delete(id));
-          setNotice({
-            tone: "error",
-            text: error instanceof Error ? error.message : "A queued task action was rejected.",
-          });
-          console.error("[todo-offline] queued task action rejected", {
-            operationId: action.operationId,
-            status,
-            error,
-          });
-          recordSyncDiagnostic("action-rejected", {
-            kind: action.kind,
-            taskCount: action.taskIds.length,
-            status: status ?? null,
-          });
-        }
-      }
 
       const [remainingTasks, remainingEdits, remainingActions] = await Promise.all([
         listOfflineTodos(),
@@ -3724,7 +3771,10 @@ export default function Home() {
       setOfflineActionCount(remainingActions.length);
       syncBackoffAttemptsRef.current = 0;
       syncNextAttemptAtRef.current = 0;
+      const scheduledTaskIds = new Set<number>();
       const nextDeferredActionAt = remainingActions.reduce((earliest, action) => {
+        if (action.taskIds.some((id) => scheduledTaskIds.has(id))) return earliest;
+        action.taskIds.forEach((id) => scheduledTaskIds.add(id));
         const value = new Date(action.nextAttemptAt).valueOf();
         return Number.isFinite(value) ? Math.min(earliest, value) : earliest;
       }, Number.POSITIVE_INFINITY);
@@ -3765,6 +3815,7 @@ export default function Home() {
       scheduleOfflineQueueSync("unexpected-pass-failure", 2_500);
     } finally {
       syncingOfflineRef.current = false;
+      localSyncEpochRef.current += 1;
       if (syncRequestedRef.current) {
         syncRequestedRef.current = false;
         scheduleOfflineQueueSync("follow-up-request");
@@ -4222,7 +4273,7 @@ export default function Home() {
             });
           });
       }
-      setNotice((current) => current?.operationId === currentNotice.operationId ? {
+      setNotice((current) => current && current.operationId === currentNotice.operationId ? {
         ...current,
         text: "Undone locally · syncing",
         undoRequested: true,
@@ -5389,7 +5440,9 @@ export default function Home() {
           {connectionQuality === "offline"
             ? `Offline${pendingSyncCount ? ` · ${pendingSyncCount} queued` : ""}`
             : connectionQuality === "degraded"
-              ? `Slow connection${pendingSyncCount ? ` · ${pendingSyncCount} queued` : ""}`
+              ? `Reconnecting${pendingSyncCount ? ` · ${pendingSyncCount} saved on this device` : ""}`
+              : connectionQuality === "auth" ? "Sign in again to sync · changes stay on this device"
+              : connectionQuality === "unavailable" ? "Sync temporarily unavailable · retrying"
               : `${pendingSyncCount} waiting to sync`}
         </div>
       )}

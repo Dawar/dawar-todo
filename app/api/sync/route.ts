@@ -1,3 +1,4 @@
+import { waitUntil } from "cloudflare:workers";
 import { readTodoSyncDelta } from "../../../db/todos";
 import { runTodoReadMaintenance } from "../../../db/maintenance";
 
@@ -9,7 +10,9 @@ export async function GET(request: Request) {
     return Response.json({ error: "Use a non-negative sync revision." }, { status: 400 });
   }
   try {
-    const recurrence = await runTodoReadMaintenance("sync");
+    waitUntil(runTodoReadMaintenance("sync").catch((error) => {
+      console.error("[todo-sync] background maintenance deferred", { error });
+    }));
     const delta = await readTodoSyncDelta(after);
     console.info("[todo-sync] delta served", {
       after,
@@ -21,7 +24,6 @@ export async function GET(request: Request) {
       projectsIncluded: delta.reset || Boolean(delta.projects),
       settingsIncluded: delta.reset || Boolean(delta.settings),
       captureDraftIncluded: delta.reset || Object.prototype.hasOwnProperty.call(delta, "captureDraft"),
-      recurringReopened: recurrence?.reopened ?? 0,
       durationMs: Date.now() - startedAt,
     });
     return Response.json({ ...delta, serverTime: new Date().toISOString() }, {

@@ -111,7 +111,7 @@ test("ships automatic saving, queued offline edits, incremental polling, and con
   assert.doesNotMatch(page, />Save changes</);
   assert.match(page, /Saved automatically/);
   assert.match(page, /window\.setTimeout\([^]*700/);
-  assert.match(page, /window\.setInterval\([^]*3_000/);
+  assert.match(page, /liveSyncDelay\(liveSyncFailuresRef/);
   assert.match(page, /applyLiveSnapshot/);
   assert.match(page, /applyLiveDelta/);
   assert.match(page, /\/api\/bootstrap/);
@@ -119,7 +119,7 @@ test("ships automatic saving, queued offline edits, incremental polling, and con
   assert.doesNotMatch(page, /Promise\.all\(\[\s*request<\{ todos: Todo\[\] \}>\("\/api\/todos"/);
   assert.match(page, /saveOfflineTodoMutation/);
   assert.match(page, /listOfflineTodoMutations/);
-  assert.match(offlineStore, /DATABASE_VERSION = 7/);
+  assert.match(offlineStore, /DATABASE_VERSION = 8/);
   assert.match(offlineStore, /CAPTURE_DRAFT_STORE = "capture-draft"/);
   assert.match(page, /updateCaptureTitle\(event\.target\.value, "typing"\)/);
   assert.match(page, /updateEditDraftField/);
@@ -138,7 +138,7 @@ test("ships automatic saving, queued offline edits, incremental polling, and con
   assert.match(offlineStore, /fieldTimestamps/);
   assert.match(page, /local-first shell hydrated/);
   assert.match(page, /task action committed to durable outbox/);
-  assert.match(page, /timeoutMs: 5_000/);
+  assert.match(page, /timeoutMs: 15_000/);
   assert.match(page, /connectionQuality === "degraded"/);
   assert.match(page, /SYNC_STATUS_DELAY_MS = 5_000/);
   assert.match(page, /setShowPendingSyncStatus\(true\)/);

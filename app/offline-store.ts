@@ -103,7 +103,7 @@ export type OfflineTaskAction = {
 };
 
 const DATABASE_NAME = "dawar-todo-offline";
-const DATABASE_VERSION = 7;
+const DATABASE_VERSION = 8;
 const TODO_STORE = "pending-todos";
 const CACHE_STORE = "cached-state";
 const MUTATION_STORE = "pending-mutations";
@@ -122,8 +122,11 @@ export type CachedServerState<T> = {
   savedAt: string;
 };
 
-function openDatabase() {
-  return new Promise<IDBDatabase>((resolve, reject) => {
+let databasePromise: Promise<IDBDatabase> | null = null;
+
+function openDatabase(): Promise<IDBDatabase> {
+  if (databasePromise) return databasePromise;
+  databasePromise = new Promise<IDBDatabase>((resolve, reject) => {
     if (!("indexedDB" in window)) {
       reject(new Error("This browser cannot save tasks for offline use."));
       return;
@@ -135,6 +138,8 @@ function openDatabase() {
         const store = database.createObjectStore(TODO_STORE, { keyPath: "clientId" });
         store.createIndex("createdAt", "createdAt");
       }
+      const todos = request.transaction!.objectStore(TODO_STORE);
+      if (!todos.indexNames.contains("localId")) todos.createIndex("localId", "localId");
       if (!database.objectStoreNames.contains(CACHE_STORE)) database.createObjectStore(CACHE_STORE, { keyPath: "key" });
       if (!database.objectStoreNames.contains(MUTATION_STORE)) {
         const store = database.createObjectStore(MUTATION_STORE, { keyPath: "todoId" });
@@ -164,22 +169,41 @@ function openDatabase() {
         database.createObjectStore(TALK_DRAFT_STORE, { keyPath: "key" });
       }
     };
-    request.onsuccess = () => resolve(request.result);
+    request.onsuccess = () => {
+      const database = request.result;
+      database.onversionchange = () => { database.close(); databasePromise = null; };
+      database.onclose = () => { databasePromise = null; };
+      resolve(database);
+    };
     request.onerror = () => reject(request.error ?? new Error("Offline storage could not be opened."));
-  });
+  }).catch((error) => { databasePromise = null; throw error; });
+  return databasePromise;
 }
 
 function runRequest<T>(storeName: string, mode: IDBTransactionMode, operation: (store: IDBObjectStore) => IDBRequest<T>) {
   return openDatabase().then((database) => new Promise<T>((resolve, reject) => {
     const transaction = database.transaction(storeName, mode);
     const request = operation(transaction.objectStore(storeName));
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error ?? new Error("Offline storage request failed."));
-    transaction.oncomplete = () => database.close();
-    transaction.onerror = () => {
-      database.close();
-      reject(transaction.error ?? new Error("Offline storage transaction failed."));
+    // A successful request can still be rolled back. Acknowledge only commit.
+    transaction.oncomplete = () => resolve(request.result);
+    transaction.onerror = transaction.onabort = () => reject(transaction.error ?? request.error ?? new Error("Offline storage transaction failed."));
+  }));
+}
+
+function updateRecord<T>(storeName: string, key: IDBValidKey, update: (current: T | undefined) => T | undefined, index?: string) {
+  return openDatabase().then((database) => new Promise<T | undefined>((resolve, reject) => {
+    const transaction = database.transaction(storeName, "readwrite");
+    const store = transaction.objectStore(storeName);
+    const read = index ? store.index(index).get(key) : store.get(key);
+    let next: T | undefined;
+    read.onsuccess = () => {
+      try {
+        next = update(read.result as T | undefined);
+        if (next !== undefined) store.put(next);
+      } catch (error) { transaction.abort(); reject(error); }
     };
+    transaction.oncomplete = () => resolve(next);
+    transaction.onerror = transaction.onabort = () => reject(transaction.error ?? new Error("Offline storage update failed."));
   }));
 }
 
@@ -215,8 +239,7 @@ export async function listOfflineTodos() {
 }
 
 export async function getOfflineTodoByLocalId(localId: number) {
-  const records = await listOfflineTodos();
-  return records.find((record) => record.localId === localId) ?? null;
+  return await runRequest<OfflineTodoRecord | undefined>(TODO_STORE, "readonly", (store) => store.index("localId").get(localId)) ?? null;
 }
 
 export async function deleteOfflineTodo(clientId: string) {
@@ -228,15 +251,10 @@ export async function updateOfflineTodo(
   localId: number,
   patch: Partial<Omit<OfflineTodoRecord, "clientId" | "localId" | "attachments">>,
 ) {
-  const records = await listOfflineTodos();
-  const current = records.find((record) => record.localId === localId);
-  if (!current) return null;
-  const next: OfflineTodoRecord = {
-    ...current,
-    ...patch,
-    updatedAt: new Date().toISOString(),
-  };
-  await runRequest(TODO_STORE, "readwrite", (store) => store.put(next));
+  const next = await updateRecord<OfflineTodoRecord>(TODO_STORE, localId, (current) => current ? {
+    ...current, ...patch, updatedAt: new Date().toISOString(),
+  } : undefined, "localId");
+  if (!next) return null;
   console.info("[todo-offline] local task updated", {
     clientId: next.clientId,
     localId,
@@ -246,8 +264,7 @@ export async function updateOfflineTodo(
 }
 
 export async function deleteOfflineTodoByLocalId(localId: number) {
-  const records = await listOfflineTodos();
-  const current = records.find((record) => record.localId === localId);
+  const current = await getOfflineTodoByLocalId(localId);
   if (!current) return false;
   await deleteOfflineTodo(current.clientId);
   console.info("[todo-offline] local task deleted before synchronization", {
@@ -263,20 +280,16 @@ export async function markOfflineTodoAttachmentUploaded(
   remoteAttachmentId: string,
   draftToken: string,
 ) {
-  const records = await listOfflineTodos();
-  const current = records.find((record) => record.localId === localId);
-  if (!current) return null;
-  const next: OfflineTodoRecord = {
+  const next = await updateRecord<OfflineTodoRecord>(TODO_STORE, localId, (current) => current ? {
     ...current,
     draftToken,
     attachments: current.attachments.map((attachment) => attachment.localId === attachmentLocalId
-      ? { ...attachment, remoteAttachmentId }
-      : attachment),
+      ? { ...attachment, remoteAttachmentId } : attachment),
     updatedAt: new Date().toISOString(),
-  };
-  await runRequest(TODO_STORE, "readwrite", (store) => store.put(next));
+  } : undefined, "localId");
+  if (!next) return null;
   console.info("[todo-offline] attachment upload checkpoint stored", {
-    clientId: current.clientId,
+    clientId: next.clientId,
     localId,
     attachmentLocalId,
     remoteAttachmentId,
@@ -288,16 +301,14 @@ export async function appendOfflineTodoAttachments(
   localId: number,
   attachments: OfflineStoredAttachment[],
 ) {
-  const current = await getOfflineTodoByLocalId(localId);
-  if (!current) return null;
-  const next: OfflineTodoRecord = {
+  const next = await updateRecord<OfflineTodoRecord>(TODO_STORE, localId, (current) => current ? {
     ...current,
     attachments: [...current.attachments, ...attachments],
     updatedAt: new Date().toISOString(),
-  };
-  await runRequest(TODO_STORE, "readwrite", (store) => store.put(next));
+  } : undefined, "localId");
+  if (!next) return null;
   console.info("[todo-offline] local task attachments appended", {
-    clientId: current.clientId,
+    clientId: next.clientId,
     localId,
     added: attachments.length,
     total: next.attachments.length,
@@ -307,16 +318,14 @@ export async function appendOfflineTodoAttachments(
 }
 
 export async function deleteOfflineTodoAttachment(localId: number, attachmentLocalId: string) {
-  const current = await getOfflineTodoByLocalId(localId);
-  if (!current) return null;
-  const next: OfflineTodoRecord = {
+  const next = await updateRecord<OfflineTodoRecord>(TODO_STORE, localId, (current) => current ? {
     ...current,
     attachments: current.attachments.filter((attachment) => attachment.localId !== attachmentLocalId),
     updatedAt: new Date().toISOString(),
-  };
-  await runRequest(TODO_STORE, "readwrite", (store) => store.put(next));
+  } : undefined, "localId");
+  if (!next) return null;
   console.info("[todo-offline] local task attachment removed", {
-    clientId: current.clientId,
+    clientId: next.clientId,
     localId,
     attachmentLocalId,
     remaining: next.attachments.length,
@@ -329,25 +338,25 @@ export async function saveOfflineTodoMutation(
   patch: Record<string, unknown>,
   fieldTimestamps: Record<string, string>,
 ) {
-  const previous = await runRequest<OfflineTodoMutation | undefined>(MUTATION_STORE, "readonly", (store) => store.get(todoId));
-  const mergedPatch = { ...(previous?.patch ?? {}) };
-  const mergedTimestamps = { ...(previous?.fieldTimestamps ?? {}) };
-  for (const [field, value] of Object.entries(patch)) {
-    const timestamp = fieldTimestamps[field];
-    if (!timestamp) continue;
-    if (!mergedTimestamps[field] || timestamp >= mergedTimestamps[field]) {
-      mergedPatch[field] = value;
-      mergedTimestamps[field] = timestamp;
+  const record = (await updateRecord<OfflineTodoMutation>(MUTATION_STORE, todoId, (previous) => {
+    const mergedPatch = { ...(previous?.patch ?? {}) };
+    const mergedTimestamps = { ...(previous?.fieldTimestamps ?? {}) };
+    for (const [field, value] of Object.entries(patch)) {
+      const timestamp = fieldTimestamps[field];
+      if (!timestamp) continue;
+      if (!mergedTimestamps[field] || timestamp >= mergedTimestamps[field]) {
+        mergedPatch[field] = value;
+        mergedTimestamps[field] = timestamp;
+      }
     }
-  }
-  const record: OfflineTodoMutation = {
-    todoId,
-    mutationId: crypto.randomUUID(),
-    patch: mergedPatch,
-    fieldTimestamps: mergedTimestamps,
-    createdAt: previous?.createdAt ?? new Date().toISOString(),
-  };
-  await runRequest(MUTATION_STORE, "readwrite", (store) => store.put(record));
+    return {
+      todoId,
+      mutationId: crypto.randomUUID(),
+      patch: mergedPatch,
+      fieldTimestamps: mergedTimestamps,
+      createdAt: previous?.createdAt ?? new Date().toISOString(),
+    };
+  }))!;
   console.info("[todo-offline] task edit queued", {
     todoId,
     mutationId: record.mutationId,
@@ -381,13 +390,9 @@ export async function deleteOfflineTodoMutation(todoId: number, expectedMutation
     };
     read.onerror = () => reject(read.error ?? new Error("Offline task edit could not be inspected."));
     transaction.oncomplete = () => {
-      database.close();
       resolve(matched);
     };
-    transaction.onerror = () => {
-      database.close();
-      reject(transaction.error ?? new Error("Offline task edit cleanup failed."));
-    };
+    transaction.onerror = transaction.onabort = () => reject(transaction.error ?? new Error("Offline task edit cleanup failed."));
   }));
   console.info("[todo-offline] synchronized task edit cleanup checked", {
     todoId,
@@ -423,23 +428,34 @@ export async function listOfflineTaskActions() {
   return actions.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 }
 
-export async function deleteOfflineTaskAction(operationId: string) {
-  await runRequest(ACTION_STORE, "readwrite", (store) => store.delete(operationId));
-  console.info("[todo-offline] synchronized task action removed", { operationId });
+export async function deleteOfflineTaskAction(operationId: string, expectedUndoRequested?: boolean) {
+  if (expectedUndoRequested === undefined) {
+    await runRequest(ACTION_STORE, "readwrite", (store) => store.delete(operationId));
+    return true;
+  }
+  return openDatabase().then((database) => new Promise<boolean>((resolve, reject) => {
+    const transaction = database.transaction(ACTION_STORE, "readwrite");
+    const store = transaction.objectStore(ACTION_STORE);
+    const read = store.get(operationId);
+    let removed = false;
+    read.onsuccess = () => {
+      const current = read.result as OfflineTaskAction | undefined;
+      if (!current || Boolean(current.undoRequested) === expectedUndoRequested) {
+        store.delete(operationId);
+        removed = true;
+      }
+    };
+    transaction.oncomplete = () => resolve(removed);
+    transaction.onerror = transaction.onabort = () => reject(transaction.error ?? new Error("Queued action acknowledgement failed."));
+  }));
 }
 
 export async function markOfflineTaskActionUndo(operationId: string) {
-  const action = await runRequest<OfflineTaskAction | undefined>(
-    ACTION_STORE,
-    "readonly",
-    (store) => store.get(operationId),
-  );
-  if (!action) return null;
-  const next = { ...action, undoRequested: true };
-  await runRequest(ACTION_STORE, "readwrite", (store) => store.put(next));
+  const next = await updateRecord<OfflineTaskAction>(ACTION_STORE, operationId, (action) => action ? { ...action, undoRequested: true } : undefined);
+  if (!next) return null;
   console.info("[todo-offline] queued task action marked for undo", {
     operationId,
-    taskIds: action.taskIds,
+    taskIds: next.taskIds,
   });
   return next;
 }
@@ -449,18 +465,10 @@ export async function deferOfflineTaskAction(
   attempts: number,
   delayMs: number,
 ) {
-  const action = await runRequest<OfflineTaskAction | undefined>(
-    ACTION_STORE,
-    "readonly",
-    (store) => store.get(operationId),
-  );
-  if (!action) return null;
-  const next: OfflineTaskAction = {
-    ...action,
-    attempts,
-    nextAttemptAt: new Date(Date.now() + delayMs).toISOString(),
-  };
-  await runRequest(ACTION_STORE, "readwrite", (store) => store.put(next));
+  const next = await updateRecord<OfflineTaskAction>(ACTION_STORE, operationId, (action) => action ? {
+    ...action, attempts, nextAttemptAt: new Date(Date.now() + delayMs).toISOString(),
+  } : undefined);
+  if (!next) return null;
   console.warn("[todo-offline] task action synchronization deferred", {
     operationId,
     attempts,

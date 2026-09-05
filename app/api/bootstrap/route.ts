@@ -1,10 +1,13 @@
+import { waitUntil } from "cloudflare:workers";
 import { readTodoBootstrap } from "../../../db/todos";
 import { runTodoReadMaintenance } from "../../../db/maintenance";
 
 export async function GET() {
   const startedAt = Date.now();
   try {
-    const recurrence = await runTodoReadMaintenance("bootstrap");
+    waitUntil(runTodoReadMaintenance("bootstrap").catch((error) => {
+      console.error("[todo-sync] background maintenance deferred", { error });
+    }));
     const snapshot = await readTodoBootstrap();
     console.info("[todo-sync] bootstrap served", {
       todos: snapshot.todos.length,
@@ -12,7 +15,6 @@ export async function GET() {
       captureDraftLength: snapshot.captureDraft?.text.length ?? 0,
       captureDraftVersion: snapshot.captureDraft?.version ?? null,
       revision: snapshot.revision,
-      recurringReopened: recurrence?.reopened ?? 0,
       durationMs: Date.now() - startedAt,
     });
     return Response.json({ ...snapshot, serverTime: new Date().toISOString() }, {
