@@ -37,7 +37,7 @@ export async function PATCH(request: Request) {
       : null;
     const snoozeQuickPresets = existing?.snoozeQuickPresets ?? parseQuickSnoozePresets(payload.snoozeQuickPresets);
     if (!snoozeQuickPresets) {
-      return Response.json({ error: "Choose four different Quick Snooze times between 15 minutes and 12 hours." }, { status: 400 });
+      return Response.json({ error: "Choose four different Quick Snooze times between 15 minutes and 6 months." }, { status: 400 });
     }
     const realtimeVoice = existing?.realtimeVoice ?? normalizeRealtimeVoice(payload.realtimeVoice);
     if (!realtimeVoice) {

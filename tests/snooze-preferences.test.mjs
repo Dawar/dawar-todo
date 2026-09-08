@@ -14,7 +14,17 @@ const root = new URL("../", import.meta.url);
 
 test("Quick Snooze choices cover useful durations and always normalize shortest-to-longest", () => {
   assert.equal(QUICK_SNOOZE_OPTIONS[0].minutes, 15);
-  assert.equal(QUICK_SNOOZE_OPTIONS.at(-1).minutes, 12 * 60);
+  assert.equal(QUICK_SNOOZE_OPTIONS.at(-1).minutes, 180 * 24 * 60);
+  assert.deepEqual(
+    QUICK_SNOOZE_OPTIONS.slice(-5).map(({ value, label }) => ({ value, label })),
+    [
+      { value: "1w", label: "1 week" },
+      { value: "2w", label: "2 weeks" },
+      { value: "1mo", label: "1 month" },
+      { value: "3mo", label: "3 months" },
+      { value: "6mo", label: "6 months" },
+    ],
+  );
   assert.deepEqual(DEFAULT_QUICK_SNOOZE_PRESETS, ["15m", "30m", "1h", "2h"]);
   assert.deepEqual(sortQuickSnoozePresets(["12h", "45m", "4h", "90m"]), ["45m", "90m", "4h", "12h"]);
   assert.deepEqual(parseQuickSnoozePresets(["8h", "15m", "2h", "45m"]), ["15m", "45m", "2h", "8h"]);
@@ -23,6 +33,8 @@ test("Quick Snooze choices cover useful durations and always normalize shortest-
   assert.equal(parseQuickSnoozePresets(["15m", "30m", "1h", "24h"]), null);
   assert.equal(quickSnoozeDurationMs("90m"), 90 * 60 * 1000);
   assert.equal(quickSnoozeDurationMs("12h"), 12 * 60 * 60 * 1000);
+  assert.equal(quickSnoozeDurationMs("1w"), 7 * 24 * 60 * 60 * 1000);
+  assert.equal(quickSnoozeDurationMs("6mo"), 180 * 24 * 60 * 60 * 1000);
 });
 
 test("persists Quick Snooze settings, emits live-sync revisions, and documents the contract", async () => {
@@ -72,5 +84,9 @@ test("persists Quick Snooze settings, emits live-sync revisions, and documents t
   assert.equal(openApi.components.schemas.Settings.properties.snoozeQuickPresets.minItems, 4);
   assert.equal(openApi.components.schemas.Settings.properties.snoozeQuickPresets.maxItems, 4);
   assert.equal(openApi.components.schemas.Settings.properties.snoozeQuickPresets.uniqueItems, true);
+  assert.deepEqual(
+    openApi.components.schemas.Settings.properties.snoozeQuickPresets.items.enum.slice(-5),
+    ["1w", "2w", "1mo", "3mo", "6mo"],
+  );
   assert.match(skill, /snoozeQuickPresets/);
 });

@@ -142,6 +142,8 @@ test("ships the simplified todo and project surface", async () => {
   assert.match(snoozePresets, /15 minutes/);
   assert.match(snoozePresets, /45 minutes/);
   assert.match(snoozePresets, /12 hours/);
+  assert.match(snoozePresets, /1 week/);
+  assert.match(snoozePresets, /6 months/);
   assert.match(snoozePresets, /parseQuickSnoozePresets/);
   assert.match(page, /quickSnoozePresets\.map/);
   assert.match(page, /quickSnoozeLabel\(preset\)/);

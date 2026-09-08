@@ -10,6 +10,11 @@ export const QUICK_SNOOZE_OPTIONS = [
   { value: "6h", minutes: 360, label: "6 hours" },
   { value: "8h", minutes: 480, label: "8 hours" },
   { value: "12h", minutes: 720, label: "12 hours" },
+  { value: "1w", minutes: 7 * 24 * 60, label: "1 week" },
+  { value: "2w", minutes: 14 * 24 * 60, label: "2 weeks" },
+  { value: "1mo", minutes: 30 * 24 * 60, label: "1 month" },
+  { value: "3mo", minutes: 90 * 24 * 60, label: "3 months" },
+  { value: "6mo", minutes: 180 * 24 * 60, label: "6 months" },
 ] as const;
 
 export type QuickSnoozePreset = (typeof QUICK_SNOOZE_OPTIONS)[number]["value"];
