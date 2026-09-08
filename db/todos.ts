@@ -1131,7 +1131,7 @@ export async function readTodoSyncDelta(afterRevision: number): Promise<TodoSync
       ORDER BY revision ASC
       LIMIT 501
     `).bind(afterRevision),
-    db.prepare("SELECT MIN(revision) AS first_revision, MAX(revision) AS last_revision FROM todo_sync_changes"),
+    db.prepare("SELECT (SELECT revision FROM todo_sync_changes ORDER BY revision ASC LIMIT 1) AS first_revision, (SELECT revision FROM todo_sync_changes ORDER BY revision DESC LIMIT 1) AS last_revision"),
   ]) as [D1Result<TodoSyncChangeRow>, D1Result<{ first_revision: number | null; last_revision: number | null }>];
   const firstRevision = Number(boundResult.results[0]?.first_revision ?? 0);
   const lastRevision = Number(boundResult.results[0]?.last_revision ?? 0);
@@ -1349,6 +1349,10 @@ export async function createTodo(input: {
     if (existing) {
       if (input.urgentAlert && existing.priority === 1 && existing.source_kind === "api-token") {
         await ensureUrgentCampaignForTodo(existing.id, input.urgentAlert);
+      }
+      if (input.attachmentIds?.length) {
+        await claimDraftAttachments(existing.id, input.draftToken, input.attachmentIds);
+        return (await getTodo(existing.id))!;
       }
       console.info("[todo-db] idempotent offline create replay resolved", { clientId, id: existing.id, attachmentCount: Number(existing.attachment_count ?? 0) });
       return mapTodo(existing);

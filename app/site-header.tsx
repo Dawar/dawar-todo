@@ -1,33 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { type MouseEvent, useState } from "react";
+import { useState } from "react";
+import { useShellNavigation } from "./app-shell";
 import { ActionIcon } from "./action-icon";
 import { KeyboardShortcutsDialog } from "./keyboard-shortcuts-dialog";
-
-type StandaloneNavigator = Navigator & { standalone?: boolean };
-
-function handleStandaloneDocumentNavigation(event: MouseEvent<HTMLAnchorElement>, href: string) {
-  if (
-    event.defaultPrevented
-    || event.button !== 0
-    || event.metaKey
-    || event.ctrlKey
-    || event.shiftKey
-    || event.altKey
-  ) return;
-  const standalone = window.matchMedia("(display-mode: standalone)").matches
-    || Boolean((navigator as StandaloneNavigator).standalone);
-  if (!standalone) return;
-  event.preventDefault();
-  console.info("[todo-pwa] standalone document navigation requested", {
-    from: window.location.pathname,
-    to: href,
-    displayModeStandalone: window.matchMedia("(display-mode: standalone)").matches,
-    navigatorStandalone: Boolean((navigator as StandaloneNavigator).standalone),
-  });
-  window.location.assign(href);
-}
 
 export function SiteHeader({
   current,
@@ -40,6 +17,7 @@ export function SiteHeader({
   onProjectClick?: () => void;
   onKeyboardHelp?: () => void;
 }) {
+  const navigate = useShellNavigation();
   const [shortcutGuideOpen, setShortcutGuideOpen] = useState(false);
   const brand = (
     <>
@@ -71,7 +49,7 @@ export function SiteHeader({
           <Link
             href="/"
             prefetch={false}
-            onClick={(event) => handleStandaloneDocumentNavigation(event, "/")}
+            onClick={(event) => navigate(event, "/")}
             className="flex min-w-0 max-w-[38vw] items-center gap-2 rounded-lg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#216e4e] sm:gap-2.5"
           >
             {brand}
@@ -95,7 +73,7 @@ export function SiteHeader({
               key={item.href}
               href={item.href}
               prefetch={false}
-              onClick={(event) => handleStandaloneDocumentNavigation(event, item.href)}
+              onClick={(event) => navigate(event, item.href)}
               aria-label={item.label}
               aria-current={item.active ? "page" : undefined}
               title={item.label}

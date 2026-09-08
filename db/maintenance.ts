@@ -58,7 +58,7 @@ export async function runTodoReadMaintenance(source: "bootstrap" | "sync" | "leg
       : Promise.resolve(null),
     scheduleAttachmentCleanup(),
   ]);
-  if (shouldCheckRecurrence || source !== "sync") {
+  {
     console.info("[todo-maintenance] read maintenance checked", {
       source,
       recurrenceMinute,

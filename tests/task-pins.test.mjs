@@ -7,7 +7,7 @@ const root = new URL("../", import.meta.url);
 
 test("limits the active pin list to five tasks across app and phone actions", async () => {
   const [page, database, taskRoute, urgentAlerts] = await Promise.all([
-    readFile(new URL("app/page.tsx", root), "utf8"),
+    Promise.all(["app/page.tsx", "app/task-sync.ts", "app/task-model.ts", "app/sync-request.ts"].map((path) => readFile(new URL(path, root), "utf8"))).then((parts) => parts.join("\n")),
     readFile(new URL("db/todos.ts", root), "utf8"),
     readFile(new URL("app/api/todos/[id]/route.ts", root), "utf8"),
     readFile(new URL("db/urgent-alerts.ts", root), "utf8"),
@@ -28,7 +28,7 @@ test("limits the active pin list to five tasks across app and phone actions", as
 
 test("snoozing clears pins and the pin-list toggle restores canonical mixing", async () => {
   const [page, database, urgentAlerts] = await Promise.all([
-    readFile(new URL("app/page.tsx", root), "utf8"),
+    Promise.all(["app/page.tsx", "app/task-sync.ts", "app/task-model.ts", "app/sync-request.ts"].map((path) => readFile(new URL(path, root), "utf8"))).then((parts) => parts.join("\n")),
     readFile(new URL("db/todos.ts", root), "utf8"),
     readFile(new URL("db/urgent-alerts.ts", root), "utf8"),
   ]);
@@ -38,7 +38,7 @@ test("snoozing clears pins and the pin-list toggle restores canonical mixing", a
   assert.match(urgentAlerts, /snoozed_until = \?, pinned = 0/);
   assert.match(page, /snoozedUntil: temporarySnooze, pinned: false/);
   assert.match(page, /snoozedUntil: optimisticUntil, pinned: false/);
-  assert.match(page, /record\.pinned && !todo\.snoozedUntil/);
+  assert.match(database, /normalizedUpdate\.snoozedUntil/);
 
   assert.match(page, /window\.localStorage\.getItem\(PIN_LIST_PREFERENCE_KEY\)/);
   assert.match(page, /window\.localStorage\.setItem\(PIN_LIST_PREFERENCE_KEY/);

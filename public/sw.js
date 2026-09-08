@@ -1,5 +1,5 @@
 const CACHE_PREFIX = "dawar-todo-shell-";
-const CACHE_NAME = `${CACHE_PREFIX}v25`;
+const CACHE_NAME = `${CACHE_PREFIX}v27`;
 const SHELL = [
   "/",
   "/settings",
@@ -72,7 +72,11 @@ async function cacheAssetGraph(cache, initialUrls, strict) {
       if (seen.has(url)) return [];
       seen.add(url);
       try {
-        const response = await fetch(new Request(url, { cache: "reload", credentials: "same-origin" }));
+        // Content-addressed bundles never change at the same URL. Reuse them
+        // across navigations and shell upgrades instead of downloading the graph.
+        const immutable = url.startsWith("/assets/") || url.startsWith("/_next/static/");
+        const cached = immutable ? await caches.match(url) : null;
+        const response = cached || await fetch(new Request(url, { cache: "reload", credentials: "same-origin" }));
         const inspect = /\.(?:css|js|mjs)(?:\?|$)/i.test(url) ? response.clone() : null;
         await cacheResponse(cache, url, response);
         return inspect ? discoveredAssetUrls(await inspect.text(), url) : [];
@@ -102,9 +106,9 @@ async function refreshDocumentShell(response, cacheKey) {
   if (!response.ok) return;
   const cache = await caches.open(CACHE_NAME);
   const html = await response.clone().text();
+  const assets = discoveredAssetUrls(html);
+  await cacheAssetGraph(cache, assets, true);
   await cache.put(cacheKey, response);
-  const assets = shellAssetUrls(html).filter((url) => url !== "/");
-  await cacheAssetGraph(cache, assets, false);
 }
 
 self.addEventListener("activate", (event) => {
@@ -174,15 +178,28 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  event.respondWith(
-    caches.match(request).then((cached) => {
-      const network = fetch(request).then((response) => {
-        if (response.ok) caches.open(CACHE_NAME).then((cache) => cache.put(request, response.clone()));
-        return response;
-      }).catch(() => cached);
-      return cached || network;
-    }),
-  );
+  // RSC/router responses are protocol messages, not reusable app-shell files.
+  const asset = url.pathname.startsWith("/assets/") || url.pathname.startsWith("/_next/static/")
+    || /\.(?:css|js|mjs|woff2?|png|webp|jpg|jpeg|svg|ico)$/i.test(url.pathname)
+    || url.pathname === "/manifest.webmanifest";
+  if (!asset) return;
+  event.respondWith((async () => {
+    const cached = await caches.match(request);
+    const immutable = url.pathname.startsWith("/assets/") || url.pathname.startsWith("/_next/static/");
+    if (cached && immutable) return cached;
+    const network = fetch(request).then(async (response) => {
+      if (response.ok) {
+        const cache = await caches.open(CACHE_NAME);
+        await cache.put(request, response.clone());
+      }
+      return response;
+    });
+    if (cached) {
+      event.waitUntil(network.catch(() => undefined));
+      return cached;
+    }
+    return network;
+  })());
 });
 
 self.addEventListener("message", (event) => {

@@ -340,6 +340,7 @@ export async function uploadTaskAttachment(input: {
 }
 
 export async function uploadTaskAttachmentMultipart(input: {
+  clientUploadId?: string;
   file: File;
   kind: BrowserAttachmentKind;
   durationMs?: number;
@@ -354,6 +355,7 @@ export async function uploadTaskAttachmentMultipart(input: {
       : mediaMimeType(input.file, input.kind);
   if (!mimeType) throw new Error("That attachment type is invalid.");
   const form = new FormData();
+  if (input.clientUploadId) form.set("clientUploadId", input.clientUploadId);
   form.set("file", input.file);
   form.set("kind", input.kind);
   form.set("mimeType", mimeType);

@@ -175,7 +175,7 @@ test("activation preserves the previous app shell without navigating open PWA wi
         "dawar-todo-shell-v21",
         "dawar-todo-shell-v22",
         "dawar-todo-shell-v23",
-        "dawar-todo-shell-v25",
+        `dawar-todo-shell-v${workerSource.match(/CACHE_PREFIX\}v(\d+)/)[1]}`,
         "unrelated-cache",
       ],
       delete: async (key) => {
@@ -209,4 +209,29 @@ test("activation preserves the previous app shell without navigating open PWA wi
     "dawar-todo-shell-v22",
     "dawar-todo-shell-v21",
   ]);
+});
+
+test("cached immutable bundles cause no network requests and router payloads bypass shell caching", async () => {
+  const workerSource = await readFile(new URL("public/sw.js", root), "utf8");
+  const listeners = new Map();
+  let fetches = 0;
+  let response;
+  vm.runInNewContext(workerSource, {
+    self: { location: { origin }, addEventListener: (name, fn) => listeners.set(name, fn) },
+    caches: { match: async () => new Response("cached bundle") },
+    fetch: async () => { fetches++; return new Response("network"); },
+    Request, Response, URL, Set, Promise, Error, console,
+  });
+  const dispatch = (path) => listeners.get("fetch")({
+    request: { method: "GET", mode: "cors", url: `${origin}${path}` },
+    respondWith(promise) { response = promise; },
+    waitUntil() {},
+  });
+  dispatch("/assets/page-abcdef.js");
+  assert.equal(await (await response).text(), "cached bundle");
+  assert.equal(fetches, 0);
+  response = null;
+  dispatch("/?_rsc=next-route");
+  assert.equal(response, null);
+  assert.equal(fetches, 0);
 });

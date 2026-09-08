@@ -6,7 +6,7 @@ const root = new URL("../", import.meta.url);
 
 test("ships the simplified todo and project surface", async () => {
   const [page, settingsPage, snoozePresets, layout, hosting, database, schema, todosRoute, todoRoute, bulkRoute, projectsRoute, actionIcons, siteHeader, pinMigration] = await Promise.all([
-    readFile(new URL("app/page.tsx", root), "utf8"),
+    Promise.all(["app/page.tsx", "app/task-sync.ts", "app/task-model.ts", "app/sync-request.ts"].map((path) => readFile(new URL(path, root), "utf8"))).then((parts) => parts.join("\n")),
     readFile(new URL("app/settings/page.tsx", root), "utf8"),
     readFile(new URL("lib/snooze-presets.ts", root), "utf8"),
     readFile(new URL("app/layout.tsx", root), "utf8"),
@@ -92,9 +92,10 @@ test("ships the simplified todo and project surface", async () => {
   assert.match(page, /onProjectClick=\{openProjectSelector\}/);
   assert.doesNotMatch(page, /aria-label="Filter by project"/);
   assert.match(page, /New project/);
-  assert.match(page, /setProject\(""\);\s+setView\("open"\)/);
+  assert.doesNotMatch(page, /setProject\(""\);\s+setView\("open"\)/);
   assert.match(page, /await saveOfflineTodo\(\{[\s\S]*title,[\s\S]*status: "open",[\s\S]*project: captureProject \|\| null,[\s\S]*draftToken: captureDraftToken/);
-  assert.match(page, /clientId: record\.clientId,[\s\S]*status: record\.status \?\? "open"[\s\S]*attachmentIds/);
+  assert.match(page, /clientId: record\.clientId/);
+  assert.match(page, /promoteOfflineTodo\(record, result\.todo\)/);
   assert.match(page, /onAssignProject=\{openCaptureProjectAssignment\}/);
   assert.match(page, /quick add project staged/);
   assert.match(page, /captureDraft: true/);
@@ -174,8 +175,8 @@ test("ships the simplified todo and project surface", async () => {
   assert.match(actionIcons, /PinOff/);
   assert.match(actionIcons, /pin: Pin/);
   assert.match(siteHeader, /label: "Settings", icon: "settings"/);
-  assert.match(siteHeader, /display-mode: standalone/);
-  assert.match(siteHeader, /window\.location\.assign\(href\)/);
+  assert.match(siteHeader, /useShellNavigation/);
+  assert.doesNotMatch(siteHeader, /window\.location\.assign/);
   assert.match(siteHeader, /prefetch=\{false\}/);
   assert.doesNotMatch(siteHeader, /href !== "\/settings"/);
   assert.match(siteHeader, /<ActionIcon name=\{item\.icon\}/);
@@ -199,7 +200,7 @@ test("ships the simplified todo and project surface", async () => {
 test("removes starter preview dependencies", async () => {
   const [packageJson, page, layout] = await Promise.all([
     readFile(new URL("package.json", root), "utf8"),
-    readFile(new URL("app/page.tsx", root), "utf8"),
+    Promise.all(["app/page.tsx", "app/task-sync.ts", "app/task-model.ts", "app/sync-request.ts"].map((path) => readFile(new URL(path, root), "utf8"))).then((parts) => parts.join("\n")),
     readFile(new URL("app/layout.tsx", root), "utf8"),
   ]);
   const combined = `${packageJson}\n${page}\n${layout}`;
@@ -233,7 +234,7 @@ test("supports a deliberate mobile pull gesture that fully reloads the app", asy
 
 test("animates task additions, removals, and moves inside the list stacking context", async () => {
   const [page, styles, packageJson] = await Promise.all([
-    readFile(new URL("app/page.tsx", root), "utf8"),
+    Promise.all(["app/page.tsx", "app/task-sync.ts", "app/task-model.ts", "app/sync-request.ts"].map((path) => readFile(new URL(path, root), "utf8"))).then((parts) => parts.join("\n")),
     readFile(new URL("app/globals.css", root), "utf8"),
     readFile(new URL("package.json", root), "utf8"),
   ]);
@@ -246,7 +247,7 @@ test("animates task additions, removals, and moves inside the list stacking cont
 });
 
 test("shows fully optimistic Undo and snooze controls while preserving concurrent Done", async () => {
-  const page = await readFile(new URL("app/page.tsx", root), "utf8");
+  const page = await Promise.all(["app/page.tsx", "app/task-sync.ts", "app/task-model.ts", "app/sync-request.ts"].map((path) => readFile(new URL(path, root), "utf8"))).then((parts) => parts.join("\n"));
 
   assert.match(page, /taskPreview\?: string/);
   assert.match(page, /dismissAt\?: number/);
@@ -275,7 +276,7 @@ test("shows fully optimistic Undo and snooze controls while preserving concurren
 
 test("keeps fixed action surfaces above the iPhone standalone safe area", async () => {
   const [page, layout, styles] = await Promise.all([
-    readFile(new URL("app/page.tsx", root), "utf8"),
+    Promise.all(["app/page.tsx", "app/task-sync.ts", "app/task-model.ts", "app/sync-request.ts"].map((path) => readFile(new URL(path, root), "utf8"))).then((parts) => parts.join("\n")),
     readFile(new URL("app/layout.tsx", root), "utf8"),
     readFile(new URL("app/globals.css", root), "utf8"),
   ]);
@@ -291,7 +292,7 @@ test("keeps fixed action surfaces above the iPhone standalone safe area", async 
 });
 
 test("uses an edge-to-edge task list surface on mobile while preserving desktop gutters", async () => {
-  const page = await readFile(new URL("app/page.tsx", root), "utf8");
+  const page = await Promise.all(["app/page.tsx", "app/task-sync.ts", "app/task-model.ts", "app/sync-request.ts"].map((path) => readFile(new URL(path, root), "utf8"))).then((parts) => parts.join("\n"));
 
   assert.match(page, /data-task-list-surface/);
   assert.match(page, /-mx-4 overflow-hidden border-y/);
@@ -300,7 +301,7 @@ test("uses an edge-to-edge task list surface on mobile while preserving desktop 
 
 test("moves between inline title editors at text boundaries without row keyboard highlighting", async () => {
   const [page, header, icons, shortcutGuide] = await Promise.all([
-    readFile(new URL("app/page.tsx", root), "utf8"),
+    Promise.all(["app/page.tsx", "app/task-sync.ts", "app/task-model.ts", "app/sync-request.ts"].map((path) => readFile(new URL(path, root), "utf8"))).then((parts) => parts.join("\n")),
     readFile(new URL("app/site-header.tsx", root), "utf8"),
     readFile(new URL("app/action-icon.tsx", root), "utf8"),
     readFile(new URL("app/keyboard-shortcuts-dialog.tsx", root), "utf8"),

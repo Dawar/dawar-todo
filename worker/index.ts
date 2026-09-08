@@ -1,6 +1,7 @@
 /** Cloudflare Worker entry point for the vinext-starter template. */
 import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } from "vinext/server/image-optimization";
 import handler from "vinext/server/app-router-entry";
+import { syncEventsResponse } from "./sync-events";
 import { appAccessResponse } from "./access";
 import { runTodoMinuteMaintenance } from "../db/minute-maintenance";
 import { handleTalkPhoneStream } from "./talk-phone-stream";
@@ -62,6 +63,8 @@ const worker = {
 
     const accessResponse = await appAccessResponse(routedRequest, env, ctx);
     if (accessResponse) return accessResponse;
+
+    if (url.pathname === "/api/sync/events" && request.method === "GET") return syncEventsResponse(routedRequest, env.DB);
 
     if (url.pathname === "/_vinext/image") {
       const allowedWidths = [...DEFAULT_DEVICE_SIZES, ...DEFAULT_IMAGE_SIZES];

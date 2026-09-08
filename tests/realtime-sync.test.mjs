@@ -90,7 +90,7 @@ test("Quick Add draft versions converge deterministically without trimming text"
 
 test("ships automatic saving, queued offline edits, incremental polling, and conflict metadata", async () => {
   const [page, offlineStore, database, schema, route, migration, syncMigration, bootstrapRoute, syncRoute, captureDraftRoute, maintenance, attachments, recurring, openApiText, skill] = await Promise.all([
-    readFile(new URL("app/page.tsx", root), "utf8"),
+    Promise.all(["app/page.tsx", "app/task-sync.ts", "app/task-model.ts", "app/sync-request.ts"].map((path) => readFile(new URL(path, root), "utf8"))).then((parts) => parts.join("\n")),
     readFile(new URL("app/offline-store.ts", root), "utf8"),
     readFile(new URL("db/todos.ts", root), "utf8"),
     readFile(new URL("db/schema.ts", root), "utf8"),
@@ -111,7 +111,7 @@ test("ships automatic saving, queued offline edits, incremental polling, and con
   assert.doesNotMatch(page, />Save changes</);
   assert.match(page, /Saved automatically/);
   assert.match(page, /window\.setTimeout\([^]*700/);
-  assert.match(page, /window\.setInterval\([^]*3_000/);
+  assert.match(page, /liveSyncDelay\(failures, quiet\)/);
   assert.match(page, /applyLiveSnapshot/);
   assert.match(page, /applyLiveDelta/);
   assert.match(page, /\/api\/bootstrap/);
@@ -119,7 +119,7 @@ test("ships automatic saving, queued offline edits, incremental polling, and con
   assert.doesNotMatch(page, /Promise\.all\(\[\s*request<\{ todos: Todo\[\] \}>\("\/api\/todos"/);
   assert.match(page, /saveOfflineTodoMutation/);
   assert.match(page, /listOfflineTodoMutations/);
-  assert.match(offlineStore, /DATABASE_VERSION = 7/);
+  assert.match(offlineStore, /DATABASE_VERSION = 9/);
   assert.match(offlineStore, /CAPTURE_DRAFT_STORE = "capture-draft"/);
   assert.match(page, /updateCaptureTitle\(event\.target\.value, "typing"\)/);
   assert.match(page, /updateEditDraftField/);
@@ -136,9 +136,9 @@ test("ships automatic saving, queued offline edits, incremental polling, and con
   assert.match(offlineStore, /pending-actions/);
   assert.match(offlineStore, /saveOfflineTaskAction/);
   assert.match(offlineStore, /fieldTimestamps/);
-  assert.match(page, /local-first shell hydrated/);
+  assert.match(page, /await reload\(\)/);
   assert.match(page, /task action committed to durable outbox/);
-  assert.match(page, /timeoutMs: 5_000/);
+  assert.match(page, /timeoutMs: 15_000/);
   assert.match(page, /connectionQuality === "degraded"/);
   assert.match(page, /SYNC_STATUS_DELAY_MS = 5_000/);
   assert.match(page, /setShowPendingSyncStatus\(true\)/);

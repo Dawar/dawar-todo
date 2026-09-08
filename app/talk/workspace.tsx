@@ -1,4 +1,5 @@
 "use client";
+import { taskSync } from "../task-sync";
 
 import Link from "next/link";
 import {
@@ -21,7 +22,7 @@ import {
   saveOfflineTalkMessage,
   type OfflineAssistantAttachment,
 } from "../offline-store";
-import { uploadTaskAttachment, type BrowserAttachmentKind } from "../attachment-upload-client";
+import { uploadTaskAttachment, uploadTaskAttachmentMultipart, type BrowserAttachmentKind } from "../attachment-upload-client";
 import {
   AssistantAttachmentMenu,
   AssistantVoiceRecorder,
@@ -1067,27 +1068,30 @@ export function TalkWorkspace() {
     }
   }, [draft, mergeMessage, selectedAttachmentIds, sendTextNow, stagedFiles]);
 
-  const syncOfflineMessages = useCallback(async () => {
+  const syncOfflineMessages = useCallback(async (signal?: AbortSignal) => {
     const threadId = selectedThreadIdRef.current;
     if (!navigator.onLine || !threadId) return;
     const queued = await listOfflineTalkMessages(threadId);
+    if (!queued.length) return;
     for (const message of queued) {
+      if (signal?.aborted) return;
       try {
         const uploadedIds = [...message.attachmentIds];
         if (message.attachments.length && !message.todoId) throw new Error("Choose a task before synchronizing attachments.");
         for (const attachment of message.attachments) {
           const file = new File([attachment.blob], attachment.fileName, { type: attachment.mimeType });
           const endpoint = `/api/todos/${message.todoId}/attachments`;
-          const uploaded = await uploadTaskAttachment({
+          const uploaded = await uploadTaskAttachmentMultipart({
+            clientUploadId: attachment.localId,
             file,
             kind: attachment.kind,
             durationMs: attachment.durationMs,
             endpoint,
             request: api,
-            discard: (uploadId) => api(`${endpoint}/${uploadId}?discard=1`, { method: "DELETE" }),
           });
           uploadedIds.push(uploaded.id);
         }
+        if (signal?.aborted || selectedThreadIdRef.current !== threadId) return;
         await sendTextNow(message.text, message.clientId, uploadedIds);
         await deleteOfflineTalkMessage(message.clientId);
         console.info("[todo-talk-ui] offline thread message synchronized", {
@@ -1101,7 +1105,7 @@ export function TalkWorkspace() {
           clientId: message.clientId,
           cause,
         });
-        break;
+        throw cause;
       }
     }
   }, [sendTextNow]);
@@ -1216,7 +1220,7 @@ export function TalkWorkspace() {
     }, 0);
     const online = () => {
       setState((current) => current === "offline" ? "ready" : current);
-      void syncOfflineMessagesRef.current();
+      taskSync.wake();
     };
     const offline = () => {
       if (sessionIdRef.current) void endSessionRef.current("offline");
@@ -1315,7 +1319,8 @@ export function TalkWorkspace() {
   }, [audioEnabled, endSession, sessionId, startAudio]);
 
   useEffect(() => {
-    if (navigator.onLine && selectedThreadId) void syncOfflineMessages();
+    if (!selectedThreadId) return;
+    return taskSync.registerLane(`talk:${selectedThreadId}`, syncOfflineMessages);
   }, [selectedThreadId, syncOfflineMessages]);
 
   useEffect(() => {
