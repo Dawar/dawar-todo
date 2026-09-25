@@ -11,6 +11,7 @@ import {
 } from "node:fs/promises";
 import { join, basename, resolve } from "node:path";
 import { constants } from "node:fs";
+import { setTimeout as delay } from "node:timers/promises";
 import {
   BOT_INSTRUCTIONS,
   cleanName,
@@ -416,13 +417,7 @@ export class BotRuntime extends EventEmitter {
           threadId: bot.threadId,
           includeTurns: false,
         });
-        const page = await this.codex.call("thread/turns/list", {
-          threadId: bot.threadId,
-          cursor: null,
-          limit: 20,
-          sortDirection: "desc",
-          itemsView: "full",
-        });
+        const page = await this.historyPage(bot.threadId);
         return {
           thread: { ...thread, turns: page.data.reverse() },
           nextCursor: page.nextCursor,
@@ -434,13 +429,7 @@ export class BotRuntime extends EventEmitter {
         };
       }
       case "history.page":
-        return this.codex.call("thread/turns/list", {
-          threadId: bot.threadId,
-          cursor: p.cursor ?? null,
-          limit: 20,
-          sortDirection: "desc",
-          itemsView: "full",
-        });
+        return this.historyPage(bot.threadId, p.cursor ?? null);
       case "bots.recover": {
         if (bot.threadId) return bot;
         await this.recoverCreation(bot);
@@ -611,6 +600,46 @@ export class BotRuntime extends EventEmitter {
       .catch(() => {});
     return saved;
   }
+  async historyPage(threadId, cursor = null) {
+    // Codex 0.156.1 can acknowledge thread/start before its rollout and
+    // paginated store are readable. A full native read synchronizes that store.
+    // Never turn an unavailable or corrupt history into an empty conversation.
+    const delays = [100, 250, 500, 1000, 2000];
+    const initializing = (error) =>
+      error.message ===
+        `invalid paginated history lineage for ${threadId}: missing source rollout` ||
+      (error.rpcCode === -32601 &&
+        error.message === "list_turns is not supported yet");
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await this.codex.call("thread/turns/list", {
+          threadId,
+          cursor,
+          limit: 20,
+          sortDirection: "desc",
+          itemsView: "full",
+        });
+      } catch (error) {
+        if (
+          cursor !== null ||
+          !initializing(error) ||
+          attempt === delays.length
+        )
+          throw error;
+        // Use Codex's own hydration path; do not infer empty history from a
+        // missing file or synthesize a replacement thread.
+        try {
+          await this.codex.call("thread/read", {
+            threadId,
+            includeTurns: true,
+          });
+        } catch (readError) {
+          if (!initializing(readError)) throw readError;
+        }
+        await delay(delays[attempt]);
+      }
+    }
+  }
   async load(bot) {
     if (!bot.threadId)
       throw new Error(bot.error ?? "This bot has not finished provisioning.");
@@ -621,6 +650,7 @@ export class BotRuntime extends EventEmitter {
         approvalPolicy: "never",
         sandbox: "danger-full-access",
         developerInstructions: BOT_INSTRUCTIONS,
+        excludeTurns: true,
       });
       this.loaded.add(bot.threadId);
     }

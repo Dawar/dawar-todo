@@ -41,6 +41,13 @@ class FakeCodex extends EventEmitter {
     }
     if (method === "thread/read")
       return { thread: this.threads.find((t) => t.id === params.threadId) };
+    if (method === "thread/turns/list")
+      return {
+        data: [
+          ...this.threads.find((t) => t.id === params.threadId).turns,
+        ].reverse(),
+        nextCursor: null,
+      };
     if (method === "thread/list")
       return { data: this.threads, nextCursor: null };
     if (method === "turn/start") {
@@ -93,6 +100,93 @@ const op = (
   params = {},
   operationId = crypto.randomUUID(),
 ) => runtime.handle({ method, botId, params, operationId });
+test("initial history retries native rollout initialization and preserves saved turns", async (t) => {
+  const { create, runtime, codex } = await setup(t);
+  const bot = await create();
+  const turns = [
+    { id: "first", items: [] },
+    { id: "second", items: [] },
+  ];
+  codex.threads[0].turns = turns;
+  const call = codex.call.bind(codex);
+  let attempts = 0;
+  codex.call = async (method, params) => {
+    if (method === "thread/turns/list") {
+      attempts++;
+      if (attempts === 1)
+        throw new Error(
+          `invalid paginated history lineage for ${bot.threadId}: missing source rollout`,
+        );
+      if (attempts === 2)
+        throw Object.assign(new Error("list_turns is not supported yet"), {
+          rpcCode: -32601,
+        });
+    }
+    return call(method, params);
+  };
+  const history = await op(runtime, bot.id, "history");
+  assert.deepEqual(history.thread.turns, turns);
+  assert.equal(history.thread.id, bot.threadId);
+  assert.equal(history.nextCursor, null);
+  assert.equal(attempts, 3);
+  assert.equal(
+    codex.calls.filter(
+      (c) => c.method === "thread/read" && c.params.includeTurns,
+    ).length,
+    2,
+  );
+  assert.equal(
+    codex.calls.filter((c) => c.method === "thread/start").length,
+    1,
+  );
+});
+test("new empty history synchronizes through native read without inventing turns", async (t) => {
+  const { create, runtime, codex } = await setup(t);
+  const bot = await create();
+  const call = codex.call.bind(codex);
+  let hydrated = false;
+  codex.call = async (method, params) => {
+    if (method === "thread/turns/list" && !hydrated)
+      throw new Error(
+        `invalid paginated history lineage for ${bot.threadId}: missing source rollout`,
+      );
+    if (method === "thread/read" && params.includeTurns) hydrated = true;
+    return call(method, params);
+  };
+  const history = await op(runtime, bot.id, "history");
+  assert.equal(hydrated, true);
+  assert.deepEqual(history.thread.turns, []);
+  assert.equal(history.nextCursor, null);
+});
+test("history errors remain visible and cursor pages are not retried", async (t) => {
+  const { create, runtime, codex } = await setup(t);
+  const bot = await create();
+  const call = codex.call.bind(codex);
+  let attempts = 0;
+  let failure = new Error("history is corrupt");
+  codex.call = async (method, params) => {
+    if (method === "thread/turns/list") {
+      attempts++;
+      throw failure;
+    }
+    return call(method, params);
+  };
+  await assert.rejects(op(runtime, bot.id, "history"), /history is corrupt/);
+  assert.equal(attempts, 1);
+  failure = new Error(
+    `invalid paginated history lineage for ${bot.threadId}: missing source rollout`,
+  );
+  await assert.rejects(
+    op(runtime, bot.id, "history.page", { cursor: "older" }),
+    /missing source rollout/,
+  );
+  assert.equal(attempts, 2);
+  await assert.rejects(
+    op(runtime, bot.id, "history"),
+    /missing source rollout/,
+  );
+  assert.equal(attempts, 8);
+});
 test("creation retry, stable avatar, normalized unique directories and one-to-one thread mapping", async (t) => {
   const { create, runtime, codex, store } = await setup(t);
   const a = await create("Átlas / ../../");
