@@ -126,11 +126,13 @@ function displayItems(items: ThreadItem[]): DisplayItem[] {
 
 function workGroupIsActive(turn: ConversationTurn, items: ThreadItem[]) {
   if (turn.status !== "inProgress") return false;
-  const statuses = items.filter((item) => "status" in item);
-  if (statuses.length)
-    return statuses.some((item) => item.status === "inProgress");
-  // Statusless items can only inherit activity while this is the latest group.
-  return turn.items.at(-1) === items.at(-1);
+  if (items.some((item) => "status" in item && item.status === "inProgress"))
+    return true;
+  const lastItem = items.at(-1);
+  // A trailing statusless item may still be active in the latest group.
+  return Boolean(
+    lastItem && !("status" in lastItem) && turn.items.at(-1) === lastItem,
+  );
 }
 
 export function BotsWorkspace() {
