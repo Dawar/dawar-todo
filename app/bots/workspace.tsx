@@ -124,6 +124,15 @@ function displayItems(items: ThreadItem[]): DisplayItem[] {
   return result;
 }
 
+function workGroupIsActive(turn: ConversationTurn, items: ThreadItem[]) {
+  if (turn.status !== "inProgress") return false;
+  const statuses = items.filter((item) => "status" in item);
+  if (statuses.length)
+    return statuses.some((item) => item.status === "inProgress");
+  // Statusless items can only inherit activity while this is the latest group.
+  return turn.items.at(-1) === items.at(-1);
+}
+
 export function BotsWorkspace() {
   const [, redraw] = useState(0),
     [selected, setSelected] = useState<string | null>(null),
@@ -701,7 +710,7 @@ export function BotsWorkspace() {
                               aria-hidden="true"
                             />
                             <span>
-                              {turn.status === "inProgress"
+                              {workGroupIsActive(turn, entry.items)
                                 ? "Working…"
                                 : "Work log"}
                             </span>
@@ -709,7 +718,7 @@ export function BotsWorkspace() {
                               {entry.items.length} step
                               {entry.items.length === 1 ? "" : "s"}
                             </small>
-                            {turn.status === "inProgress" && (
+                            {workGroupIsActive(turn, entry.items) && (
                               <LoaderCircle
                                 size={14}
                                 className="bots-spin"
