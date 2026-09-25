@@ -49,7 +49,7 @@ function isPublicTalkPhoneTransport(pathname: string) {
 }
 
 function isPublicInternalTransport(pathname: string) {
-  return pathname === "/api/internal/minute";
+  return pathname === "/api/internal/minute" || pathname === "/api/bots/notifications";
 }
 
 function unauthorizedApi(message = "Sign in with ChatGPT or use a valid API token to use Dawar Todo.") {
@@ -91,7 +91,7 @@ export async function appAccessResponse(
         { status: 403, headers: { "Cache-Control": "no-store" } },
       );
     }
-    if (url.pathname.startsWith("/api/assistant") || url.pathname.startsWith("/api/talk")) {
+    if (url.pathname.startsWith("/api/assistant") || url.pathname.startsWith("/api/talk") || url.pathname.startsWith("/api/bots")) {
       console.warn("[todo-auth] signed-in AI workspace rejected for bearer authentication", { path: url.pathname });
       return Response.json(
         { error: "The AI assistant and Talk are available only in the signed-in Dawar Todo interface." },

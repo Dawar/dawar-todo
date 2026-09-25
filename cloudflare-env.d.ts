@@ -1,6 +1,12 @@
 declare namespace Cloudflare {
   interface Env {
     DB: D1Database;
+    BOTS_OWNER_EMAIL?: string;
+    BOTS_RELAY_URL?: string;
+    BOTS_MACHINE_ID?: string;
+    BOTS_TICKET_SECRET?: string;
+    BOTS_NOTIFICATION_SECRET?: string;
+    BOTS_DEV_AUTH?: string;
     S3_ACCESS_KEY: string;
     S3_ACCESS_KEY_ID: string;
     S3_BUCKET: string;

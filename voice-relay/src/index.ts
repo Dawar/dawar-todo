@@ -6,10 +6,6 @@ import {
 
 type Env = SipRelayEnvironment;
 
-interface ExecutionContext {
-  waitUntil(promise: Promise<unknown>): void;
-}
-
 type TwilioStart = {
   accountSid?: string;
   callSid?: string;
@@ -494,11 +490,11 @@ function runPhoneBridge(
     const event = parseJson<TwilioEvent>(message.data);
     if (!event?.event) return;
     if (event.event === "start") {
-      context.waitUntil(initialize(event.start));
+      context.waitUntil(initialize("start" in event ? event.start : undefined));
       return;
     }
     if (event.event === "media") {
-      const audio = event.media?.payload;
+      const audio = "media" in event ? event.media?.payload : undefined;
       if (!audio) return;
       if (Date.now() - lastAddressedSpeechAt >= PHONE_IDLE_LIMIT_MS) {
         sendJson(openAI, {

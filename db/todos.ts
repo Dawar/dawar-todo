@@ -132,7 +132,7 @@ type TodoSyncChangeRow = {
 };
 
 let initialization: Promise<void> | null = null;
-const CURRENT_SCHEMA_VERSION = "29";
+const CURRENT_SCHEMA_VERSION = "30";
 
 function database() {
   if (!env.DB) throw new Error("The todo database is unavailable.");
@@ -431,6 +431,11 @@ export async function ensureTodoDatabase() {
           updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
         )
       `),
+      db.prepare("CREATE TABLE IF NOT EXISTS `todo_bot_notifications` (\n\t`id` text PRIMARY KEY NOT NULL,\n\t`owner_key` text NOT NULL,\n\t`bot_id` text NOT NULL,\n\t`title` text NOT NULL,\n\t`body` text NOT NULL,\n\t`created_at` text NOT NULL,\n\t`delivered_at` text\n);"),
+      db.prepare("CREATE INDEX IF NOT EXISTS `todo_bot_notifications_pending_idx` ON `todo_bot_notifications` (`delivered_at`,`created_at`);"),
+      db.prepare("CREATE TABLE IF NOT EXISTS `todo_bot_push_deliveries` (\n\t`notification_id` text NOT NULL,\n\t`subscription_id` text NOT NULL,\n\t`delivered_at` text NOT NULL,\n\tPRIMARY KEY(`notification_id`, `subscription_id`)\n);"),
+      db.prepare("CREATE TABLE IF NOT EXISTS `todo_bot_push_owners` (\n\t`subscription_id` text PRIMARY KEY NOT NULL,\n\t`owner_key` text NOT NULL\n);"),
+      db.prepare("CREATE INDEX IF NOT EXISTS `todo_bot_push_owners_owner_idx` ON `todo_bot_push_owners` (`owner_key`);"),
       db.prepare(`
         CREATE TABLE IF NOT EXISTS todo_push_subscriptions (
           id TEXT PRIMARY KEY NOT NULL,
