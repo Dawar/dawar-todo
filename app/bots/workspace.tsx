@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  type ClipboardEvent,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -73,6 +74,49 @@ function Avatar({ bot, small = false }: { bot: Bot; small?: boolean }) {
     </span>
   );
 }
+function UploadThumbnail({
+  botId,
+  attachmentId,
+  file,
+  online,
+}: {
+  botId: string;
+  attachmentId?: string;
+  file?: File;
+  online: boolean;
+}) {
+  const [url, setUrl] = useState("");
+  useEffect(() => {
+    let active = true;
+    let objectUrl = "";
+    if (file) {
+      objectUrl = URL.createObjectURL(file);
+      setUrl(objectUrl);
+    } else if (attachmentId && online) {
+      setUrl("");
+      void client
+        .download(botId, attachmentId)
+        .then(({ blob }) => {
+          if (!active) return;
+          objectUrl = URL.createObjectURL(blob);
+          setUrl(objectUrl);
+        })
+        .catch(() => {});
+    } else {
+      setUrl("");
+    }
+    return () => {
+      active = false;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [attachmentId, botId, file, online]);
+  return url ? (
+    <img src={url} alt="" />
+  ) : (
+    <Paperclip size={18} aria-hidden="true" />
+  );
+}
+type PendingBotUpload = { id: string; botId: string; file: File };
 function humanStatus(bot: Bot, online: boolean) {
   if (!online) return "VM offline";
   if (bot.archived) return "Archived";
@@ -149,7 +193,9 @@ export function BotsWorkspace() {
     [attachments, setAttachments] = useState<BotAttachment[]>([]),
     [draft, setDraft] = useState(""),
     [uploads, setUploads] = useState<BotAttachment[]>([]),
+    [queuedUploads, setQueuedUploads] = useState<PendingBotUpload[]>([]),
     [uploading, setUploading] = useState(""),
+    [uploadingId, setUploadingId] = useState<string | null>(null),
     [sending, setSending] = useState(false),
     [error, setError] = useState(""),
     [loading, setLoading] = useState(false),
@@ -160,6 +206,10 @@ export function BotsWorkspace() {
     screenRef = useRef<HTMLDivElement>(null),
     scrollRef = useRef<HTMLDivElement>(null),
     fileRef = useRef<HTMLInputElement>(null),
+    searchRef = useRef<HTMLInputElement>(null),
+    uploadingRef = useRef<string | null>(null),
+    removedUploads = useRef(new Set<string>()),
+    previewFiles = useRef(new Map<string, File>()),
     nearBottom = useRef(true),
     pendingEvents = useRef<BotEvent[]>([]),
     historyLoading = useRef(false),
@@ -262,6 +312,7 @@ export function BotsWorkspace() {
     };
   }, []);
   const loadHistory = useCallback(async (id: string) => {
+    if (loadedId.current !== id) previewFiles.current.clear();
     loadedId.current = null;
     draftId.current = null;
     const cached = client.cache<{
@@ -412,16 +463,21 @@ export function BotsWorkspace() {
     });
   }
   async function send() {
-    if (!bot || sending) return;
+    if (!bot || sending || uploadingRef.current === bot.id) return;
     const text = draft.trim(),
       files = uploads.map((a) => a.id);
     if (!text && !files.length) return;
+    if (uploads.filter((a) => a.mimeType.startsWith("image/")).length > 6) {
+      setError("Attach at most 6 images per message.");
+      return;
+    }
     setSending(true);
     setError("");
     nearBottom.current = true;
     try {
       await client.rpc("turn.send", bot.id, { text, attachments: files });
       if (draftRef.current.trim() === text) setDraft("");
+      previewFiles.current.clear();
       setUploads([]);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Message could not be sent.");
@@ -429,28 +485,102 @@ export function BotsWorkspace() {
       setSending(false);
     }
   }
-  async function upload(files: FileList | null) {
+  async function upload(files: FileList | File[] | null) {
     if (!bot || !files) return;
+    const selectedFiles = Array.from(files);
+    if (!selectedFiles.length) return;
     setError("");
+    if (uploadingRef.current) {
+      setError("Wait for the current attachments to finish uploading.");
+      return;
+    }
+    uploadingRef.current = bot.id;
+    const uploadBotId = bot.id;
     try {
-      if (uploads.length + files.length > 12)
+      if (uploads.length + selectedFiles.length > 12)
         throw new Error("Attach at most 12 files.");
-      for (const file of Array.from(files)) {
-        if (file.size > 100 * 1024 * 1024)
-          throw new Error("Files must be under 100 MB.");
-        if (uploads.length >= 12) throw new Error("Attach at most 12 files.");
+      if (
+        uploads.filter((a) => a.mimeType.startsWith("image/")).length +
+          selectedFiles.filter((file) => file.type.startsWith("image/")).length >
+        6
+      )
+        throw new Error("Attach at most 6 images per message.");
+      if (selectedFiles.some((file) => file.size > 100 * 1024 * 1024))
+        throw new Error("Files must be under 100 MB.");
+      const queue = selectedFiles.map((file) => ({
+        id: crypto.randomUUID(),
+        botId: uploadBotId,
+        file,
+      }));
+      setQueuedUploads(queue);
+      for (const item of queue) {
+        if (removedUploads.current.has(item.id)) continue;
+        const file = item.file;
+        setUploadingId(item.id);
         setUploading(`${file.name} · 0%`);
-        const attachment = await client.upload(bot.id, file, (value) =>
+        const attachment = await client.upload(uploadBotId, file, (value) =>
           setUploading(`${file.name} · ${value}%`),
         );
-        setUploads((current) => [...current, attachment]);
+        if (
+          !removedUploads.current.has(item.id) &&
+          selectedRef.current === uploadBotId
+        ) {
+          if (file.type.startsWith("image/"))
+            previewFiles.current.set(attachment.id, file);
+          setUploads((current) => [...current, attachment]);
+        } else if (!removedUploads.current.has(item.id)) {
+          const cached = client.cache<BotAttachment[]>(
+            `uploads:${uploadBotId}`,
+            [],
+          );
+          client.save(`uploads:${uploadBotId}`, [...cached, attachment]);
+        }
+        setQueuedUploads((current) =>
+          current.filter((queued) => queued.id !== item.id),
+        );
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Upload failed.");
     } finally {
+      uploadingRef.current = null;
+      setQueuedUploads([]);
       setUploading("");
+      setUploadingId(null);
+      removedUploads.current.clear();
       if (fileRef.current) fileRef.current.value = "";
     }
+  }
+  function pasteImages(event: ClipboardEvent<HTMLTextAreaElement>) {
+    const fromItems = [...event.clipboardData.items]
+      .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+      .map((item, index) => {
+        const file = item.getAsFile();
+        if (!file) return null;
+        const extension =
+          item.type === "image/jpeg"
+            ? "jpg"
+            : item.type.split("/")[1].split("+")[0];
+        const name = /\.[a-z0-9]+$/i.test(file.name)
+          ? file.name
+          : `pasted-image-${index + 1}.${extension}`;
+        return file.name === name && file.type === item.type
+          ? file
+          : new File([file], name, { type: item.type });
+      })
+      .filter((file): file is File => Boolean(file));
+    const images = fromItems.length
+      ? fromItems
+      : [...event.clipboardData.files].filter((file) =>
+          file.type.startsWith("image/"),
+        );
+    if (!images.length) return;
+    void upload(images);
+  }
+  function removeQueuedUpload(id: string) {
+    removedUploads.current.add(id);
+    setQueuedUploads((current) =>
+      current.filter((queued) => queued.id !== id),
+    );
   }
   const filtered = bots.filter(
     (b) =>
@@ -478,15 +608,28 @@ export function BotsWorkspace() {
               <Plus size={21} />
             </button>
           </div>
-          <label className="bots-search">
-            <Search size={17} />
+          <div className="bots-search">
+            <Search size={17} aria-hidden="true" />
             <input
+              ref={searchRef}
               aria-label="Search bots"
               placeholder="Search bots"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
             />
-          </label>
+            {search && (
+              <button
+                type="button"
+                aria-label="Clear bot search"
+                onClick={() => {
+                  setSearch("");
+                  searchRef.current?.focus();
+                }}
+              >
+                <X size={16} aria-hidden="true" />
+              </button>
+            )}
+          </div>
           <div className="bots-sidebar-filter">
             <button
               className={!archived ? "active" : ""}
@@ -502,35 +645,60 @@ export function BotsWorkspace() {
             </button>
           </div>
           <div className="bots-list">
-            {filtered.map((b) => (
-              <button
-                className={`bots-row ${selected === b.id ? "selected" : ""}`}
-                key={b.id}
-                onClick={() => select(b.id)}
-              >
-                <Avatar bot={b} />
-                <span className="bots-row-copy">
-                  <span className="bots-row-name">
-                    <span className="bots-row-title">{b.name}</span>
-                    <small>
-                      {new Date(b.updatedAt).toLocaleTimeString(undefined, {
-                        hour: "numeric",
-                        minute: "2-digit",
-                      })}
-                    </small>
+            {filtered.map((b) => {
+              const modelId = b.model ?? snapshot?.defaults.model;
+              const model = snapshot?.models.find((m) => m.model === modelId);
+              const modelName = model?.displayName ?? modelId ?? "Default model";
+              const effort = b.effort ?? snapshot?.defaults.effort ?? "default";
+              const tier = b.serviceTier ?? snapshot?.defaults.serviceTier;
+              const fast = tier === "priority" || tier === "fast";
+              return (
+                <button
+                  className={`bots-row ${selected === b.id ? "selected" : ""}`}
+                  key={b.id}
+                  onClick={() => select(b.id)}
+                >
+                  <Avatar bot={b} />
+                  <span className="bots-row-copy">
+                    <span className="bots-row-name">
+                      <span className="bots-row-title">{b.name}</span>
+                      <small>
+                        {new Date(b.updatedAt).toLocaleTimeString(undefined, {
+                          hour: "numeric",
+                          minute: "2-digit",
+                        })}
+                      </small>
+                    </span>
+                    <span className="bots-row-preview">
+                      {b.status === "waiting"
+                        ? "Needs your input"
+                        : b.preview || b.purpose || "Start a conversation"}
+                    </span>
+                    <span className="bots-row-config">
+                      <span className="bots-row-model" title={modelName}>
+                        {modelName}
+                      </span>
+                      <span aria-hidden="true">·</span>
+                      <span>{effort}</span>
+                      {fast && (
+                        <span
+                          className="bots-row-fast"
+                          role="img"
+                          aria-label="Fast mode"
+                          title="Fast mode"
+                        >
+                          <Zap size={12} aria-hidden="true" />
+                        </span>
+                      )}
+                    </span>
                   </span>
-                  <span className="bots-row-preview">
-                    {b.status === "waiting"
-                      ? "Needs your input"
-                      : b.preview || b.purpose || "Start a conversation"}
-                  </span>
-                </span>
-                {b.updatedAt > b.lastReadAt && <span className="bots-unread" />}
-                {(b.status === "running" || Boolean(b.workerTasks?.active)) && (
-                  <LoaderCircle size={14} className="bots-spin" />
-                )}
-              </button>
-            ))}
+                  {b.updatedAt > b.lastReadAt && <span className="bots-unread" />}
+                  {(b.status === "running" || Boolean(b.workerTasks?.active)) && (
+                    <LoaderCircle size={14} className="bots-spin" />
+                  )}
+                </button>
+              );
+            })}
             {!filtered.length && (
               <div className="bots-sidebar-empty">
                 {search
@@ -901,29 +1069,111 @@ export function BotsWorkspace() {
                       Plan
                     </button>
                   </div>
-                  {(uploads.length > 0 || uploading) && (
-                    <div className="bots-upload-list">
-                      {uploads.map((a) => (
-                        <span key={a.id}>
-                          {a.name}
-                          <button
-                            aria-label={`Remove ${a.name}`}
-                            onClick={() =>
-                              setUploads((current) =>
-                                current.filter((x) => x.id !== a.id),
-                              )
-                            }
+                  {(uploads.length > 0 ||
+                    uploadingRef.current === bot.id ||
+                    queuedUploads.some((item) => item.botId === bot.id)) && (
+                    <div
+                      className="bots-upload-list"
+                      role="group"
+                      aria-label="Attachments to send"
+                    >
+                      {uploads.map((a, index) =>
+                        a.mimeType.startsWith("image/") ? (
+                          <span
+                            className="bots-upload-image"
+                            key={a.id}
+                            title={a.name}
                           >
-                            <X size={13} />
-                          </button>
-                        </span>
-                      ))}
-                      {uploading && (
-                        <span>
-                          <LoaderCircle size={13} className="bots-spin" />
-                          {uploading}
-                        </span>
+                            <UploadThumbnail
+                              botId={bot.id}
+                              attachmentId={a.id}
+                              file={previewFiles.current.get(a.id)}
+                              online={online}
+                            />
+                            <button
+                              type="button"
+                              aria-label={`Remove image ${index + 1}: ${a.name}`}
+                              onClick={() => {
+                                previewFiles.current.delete(a.id);
+                                setUploads((current) =>
+                                  current.filter((x) => x.id !== a.id),
+                                );
+                              }}
+                            >
+                              <X size={13} aria-hidden="true" />
+                            </button>
+                          </span>
+                        ) : (
+                          <span key={a.id}>
+                            {a.name}
+                            <button
+                              type="button"
+                              aria-label={`Remove ${a.name}`}
+                              onClick={() =>
+                                setUploads((current) =>
+                                  current.filter((x) => x.id !== a.id),
+                                )
+                              }
+                            >
+                              <X size={13} aria-hidden="true" />
+                            </button>
+                          </span>
+                        ),
                       )}
+                      {queuedUploads
+                        .filter((item) => item.botId === bot.id)
+                        .map((item, index) =>
+                          item.file.type.startsWith("image/") ? (
+                            <span
+                              className="bots-upload-image"
+                              key={item.id}
+                              title={item.file.name}
+                            >
+                              <UploadThumbnail
+                                botId={bot.id}
+                                file={item.file}
+                                online={online}
+                              />
+                              <span className="bots-upload-progress">
+                                {uploadingId === item.id
+                                  ? uploading.split(" · ").at(-1)
+                                  : "Queued"}
+                              </span>
+                              <button
+                                type="button"
+                                aria-label={`Remove image ${uploads.length + index + 1}: ${item.file.name}`}
+                                onClick={() => removeQueuedUpload(item.id)}
+                              >
+                                <X size={13} aria-hidden="true" />
+                              </button>
+                            </span>
+                          ) : (
+                            <span key={item.id}>
+                              {uploadingId === item.id ? (
+                                <LoaderCircle size={13} className="bots-spin" />
+                              ) : null}
+                              {item.file.name} ·{" "}
+                              {uploadingId === item.id
+                                ? uploading.split(" · ").at(-1)
+                                : "Queued"}
+                              <button
+                                type="button"
+                                aria-label={`Remove ${item.file.name}`}
+                                onClick={() => removeQueuedUpload(item.id)}
+                              >
+                                <X size={13} aria-hidden="true" />
+                              </button>
+                            </span>
+                          ),
+                        )}
+                      {uploadingRef.current === bot.id &&
+                        uploadingId &&
+                        !queuedUploads.some((item) => item.id === uploadingId) && (
+                          <span>
+                            <LoaderCircle size={13} className="bots-spin" />
+                            Finishing canceled upload…
+                          </span>
+                        )}
                     </div>
                   )}
                   <form
@@ -944,7 +1194,7 @@ export function BotsWorkspace() {
                       type="button"
                       className="bots-icon-button"
                       aria-label="Attach file"
-                      disabled={!online || Boolean(uploading)}
+                      disabled={!online || Boolean(uploadingRef.current)}
                       onClick={() => fileRef.current?.click()}
                     >
                       <Paperclip size={20} />
@@ -958,6 +1208,7 @@ export function BotsWorkspace() {
                       }
                       value={draft}
                       rows={1}
+                      onPaste={pasteImages}
                       onChange={(e) => {
                         setDraft(e.target.value);
                         e.target.style.height = "auto";
@@ -1016,7 +1267,7 @@ export function BotsWorkspace() {
                         disabled={
                           !online ||
                           sending ||
-                          Boolean(uploading) ||
+                          uploadingRef.current === bot.id ||
                           (!draft.trim() && !uploads.length)
                         }
                       >

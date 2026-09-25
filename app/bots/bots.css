@@ -79,6 +79,18 @@ html.bots-viewport-locked body {
   width: 100%;
   background: none;
 }
+.bots-search button {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  margin: -5px -6px -5px 0;
+  border-radius: 7px;
+}
+.bots-search button:hover {
+  background: #dce4dd;
+}
 .bots-list {
   flex: 1;
   min-width: 0;
@@ -392,6 +404,26 @@ html.bots-viewport-locked body {
   font-size: 13px;
   color: #758178;
   margin-top: 4px;
+}
+.bots-row-config {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  margin-top: 3px;
+  color: #829087;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.bots-row-model {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.bots-row-fast {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: #327c59;
 }
 .bots-unread {
   width: 7px;
@@ -971,6 +1003,54 @@ html.bots-viewport-locked body {
   font-size: 12px;
   white-space: nowrap;
   color: #5c7866;
+}
+.bots-upload-list > .bots-upload-image {
+  position: relative;
+  display: grid;
+  place-items: center;
+  flex: 0 0 64px;
+  width: 64px;
+  height: 64px;
+  padding: 0;
+  overflow: hidden;
+  white-space: normal;
+}
+.bots-upload-image img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.bots-upload-image > button {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: #20392dcc;
+  color: #fff;
+}
+.bots-upload-image > button:hover {
+  background: #a43c38;
+}
+.bots-upload-list > span:not(.bots-upload-image) > button {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+}
+.bots-upload-progress {
+  position: absolute;
+  inset-inline: 0;
+  bottom: 0;
+  padding: 3px;
+  background: #20392dcc;
+  color: #fff;
+  font-size: 10px;
+  text-align: center;
 }
 .bots-artifact-link {
   display: inline-flex;
