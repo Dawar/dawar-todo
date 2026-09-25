@@ -28,6 +28,7 @@ import {
   LoaderCircle,
   RefreshCw,
   Zap,
+  ChevronRight,
 } from "lucide-react";
 import { SiteHeader } from "../site-header";
 import type {
@@ -38,6 +39,7 @@ import type {
   BotSchedule,
 } from "../../lib/bots-types";
 import type { Turn } from "../../lib/codex-protocol/v2/Turn";
+import type { ThreadItem } from "../../lib/codex-protocol/v2/ThreadItem";
 import {
   zonedDateTimeInputValue,
   zonedLocalDateTimeToUtc,
@@ -98,6 +100,28 @@ function stamp(value: string) {
     hour: "numeric",
     minute: "2-digit",
   }).format(new Date(value));
+}
+
+type DisplayItem =
+  | { kind: "message"; item: ThreadItem }
+  | { kind: "work"; items: ThreadItem[] };
+
+function displayItems(items: ThreadItem[]): DisplayItem[] {
+  const result: DisplayItem[] = [];
+  for (const item of items) {
+    if (item.type === "reasoning" && !item.summary.length) continue;
+    const isWork = ![
+      "userMessage",
+      "agentMessage",
+      "plan",
+      "contextCompaction",
+    ].includes(item.type);
+    const previous = result.at(-1);
+    if (isWork && previous?.kind === "work") previous.items.push(item);
+    else if (isWork) result.push({ kind: "work", items: [item] });
+    else result.push({ kind: "message", item });
+  }
+  return result;
 }
 
 export function BotsWorkspace() {
@@ -656,15 +680,58 @@ export function BotsWorkspace() {
                         {stamp(new Date(turn.startedAt * 1000).toISOString())}
                       </div>
                     )}
-                    {turn.items.map((item) => (
-                      <BotMessage
-                        key={item.id}
-                        item={item}
-                        botId={bot.id}
-                        attachments={attachments}
-                        download={(id) => void download(id)}
-                      />
-                    ))}
+                    {displayItems(turn.items).map((entry) =>
+                      entry.kind === "message" ? (
+                        <BotMessage
+                          key={entry.item.id}
+                          item={entry.item}
+                          botId={bot.id}
+                          attachments={attachments}
+                          download={(id) => void download(id)}
+                        />
+                      ) : (
+                        <details
+                          className="bots-activity"
+                          key={`work:${entry.items[0].id}`}
+                        >
+                          <summary>
+                            <ChevronRight
+                              className="bots-activity-chevron"
+                              size={15}
+                              aria-hidden="true"
+                            />
+                            <span>
+                              {turn.status === "inProgress"
+                                ? "Working…"
+                                : "Work log"}
+                            </span>
+                            <small>
+                              {entry.items.length} step
+                              {entry.items.length === 1 ? "" : "s"}
+                            </small>
+                            {turn.status === "inProgress" && (
+                              <LoaderCircle
+                                size={14}
+                                className="bots-spin"
+                                aria-hidden="true"
+                              />
+                            )}
+                          </summary>
+                          <div className="bots-activity-content">
+                            {entry.items.map((item) => (
+                              <BotMessage
+                                key={item.id}
+                                item={item}
+                                botId={bot.id}
+                                attachments={attachments}
+                                download={(id) => void download(id)}
+                                inWorkLog
+                              />
+                            ))}
+                          </div>
+                        </details>
+                      ),
+                    )}
                     {turn.planSteps && (
                       <details className="bots-tool">
                         <summary>Work plan</summary>

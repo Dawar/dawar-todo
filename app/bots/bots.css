@@ -178,7 +178,8 @@ html.bots-viewport-locked body {
   opacity: 0.5;
 }
 .bots-composer {
-  margin: 14px 24px 20px;
+  width: min(calc(100% - 36px), 1080px);
+  margin: 14px auto 20px;
   border: 1px solid #dce3de;
   border-radius: 19px;
   display: flex;
@@ -297,7 +298,8 @@ html.bots-viewport-locked body {
     padding-inline: 12px;
   }
   .bots-composer {
-    margin: 8px 12px calc(24px + env(safe-area-inset-bottom, 0px));
+    width: calc(100% - 24px);
+    margin: 8px auto calc(24px + env(safe-area-inset-bottom, 0px));
   }
   .bots-sidebar {
     border-right: 0;
@@ -440,7 +442,7 @@ html.bots-viewport-locked body {
   flex: 1;
   overflow: auto;
   overscroll-behavior: contain;
-  padding: 20px clamp(18px, 4vw, 54px);
+  padding: 20px max(18px, calc((100% - 1080px) / 2));
   min-height: 0;
   scroll-padding-block: 20px;
 }
@@ -563,6 +565,59 @@ html.bots-viewport-locked body {
   margin: 8px 0;
   overflow: hidden;
 }
+.bots-activity {
+  margin: 12px 0;
+  border: 1px solid #e0e8e2;
+  border-radius: 12px;
+  background: #f8faf8;
+  overflow: hidden;
+}
+.bots-activity > summary {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 10px 12px;
+  color: #587060;
+  cursor: pointer;
+  list-style: none;
+  font-size: 13px;
+  font-weight: 600;
+}
+.bots-activity > summary::-webkit-details-marker {
+  display: none;
+}
+.bots-activity > summary small {
+  color: #829087;
+  font-size: 12px;
+  font-weight: 400;
+}
+.bots-activity > summary .bots-spin {
+  margin-left: auto;
+}
+.bots-activity-chevron {
+  flex-shrink: 0;
+  transition: transform 0.15s ease;
+}
+.bots-activity[open] .bots-activity-chevron {
+  transform: rotate(90deg);
+}
+.bots-activity-content {
+  border-top: 1px solid #e7ece8;
+  padding: 4px 10px 8px;
+}
+.bots-activity-content .bots-tool {
+  background: #fff;
+}
+.bots-reasoning {
+  padding: 9px 3px;
+  color: #66756b;
+  font-size: 13px;
+  line-height: 1.55;
+}
+.bots-reasoning > span {
+  color: #859389;
+  font-weight: 600;
+}
 .bots-tool summary {
   padding: 9px 12px;
   display: flex;
@@ -616,7 +671,9 @@ html.bots-viewport-locked body {
 .bots-controls {
   display: flex;
   gap: 7px;
-  padding: 9px 24px 0;
+  width: min(calc(100% - 36px), 1080px);
+  margin-inline: auto;
+  padding: 9px 0 0;
   align-items: center;
   overflow-x: auto;
   flex-shrink: 0;
@@ -898,7 +955,9 @@ html.bots-viewport-locked body {
   display: flex;
   gap: 8px;
   overflow-x: auto;
-  padding: 7px 24px;
+  width: min(calc(100% - 36px), 1080px);
+  margin-inline: auto;
+  padding: 7px 0;
   flex-shrink: 0;
 }
 .bots-artifacts button,
@@ -948,7 +1007,7 @@ html.bots-viewport-locked body {
     padding: 14px 17px;
   }
   .bots-controls {
-    padding-inline: 12px;
+    width: calc(100% - 24px);
   }
   .bots-controls select {
     max-width: 150px;
@@ -962,7 +1021,7 @@ html.bots-viewport-locked body {
   }
   .bots-artifacts,
   .bots-upload-list {
-    padding-inline: 12px;
+    width: calc(100% - 24px);
   }
   .bots-screen > header > div > a {
     max-width: 27vw;

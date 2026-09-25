@@ -21,11 +21,13 @@ export function BotMessage({
   download,
   botId,
   attachments,
+  inWorkLog = false,
 }: {
   item: ThreadItem;
   botId: string;
   attachments: BotAttachment[];
   download: (id: string) => void;
+  inWorkLog?: boolean;
 }) {
   function markdown(value: string) {
     return (
@@ -109,12 +111,21 @@ export function BotMessage({
     );
   if (item.type === "reasoning")
     return item.summary.length ? (
-      <details className="bots-tool">
-        <summary>Thinking</summary>
-        <div className="bots-message-markdown">
-          {markdown(item.summary.join("\n\n"))}
+      inWorkLog ? (
+        <div className="bots-reasoning">
+          <span>Thinking</span>
+          <div className="bots-message-markdown">
+            {markdown(item.summary.join("\n\n"))}
+          </div>
         </div>
-      </details>
+      ) : (
+        <details className="bots-tool">
+          <summary>Thinking</summary>
+          <div className="bots-message-markdown">
+            {markdown(item.summary.join("\n\n"))}
+          </div>
+        </details>
+      )
     ) : null;
   if (item.type === "contextCompaction")
     return (
