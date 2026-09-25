@@ -1,13 +1,28 @@
+html.bots-viewport-locked,
+html.bots-viewport-locked body {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
 .bots-screen {
-  height: 100dvh;
+  position: fixed;
+  inset-inline: 0;
+  top: var(--bots-viewport-top, 0px);
+  height: var(--bots-viewport-height, 100dvh);
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   background: #fff;
   color: #202624;
 }
+.bots-screen > header {
+  flex-shrink: 0;
+}
 .bots-layout {
   display: grid;
   grid-template-columns: 300px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   flex: 1;
   min-height: 0;
   max-width: 1440px;
@@ -285,7 +300,7 @@
     padding-inline: 12px;
   }
   .bots-composer {
-    margin: 8px 12px max(12px, env(safe-area-inset-bottom));
+    margin: 8px 12px calc(24px + env(safe-area-inset-bottom, 0px));
   }
   .bots-sidebar {
     border-right: 0;
@@ -430,6 +445,7 @@
   overscroll-behavior: contain;
   padding: 20px clamp(18px, 4vw, 54px);
   min-height: 0;
+  scroll-padding-block: 20px;
 }
 .bots-message {
   margin: 14px 0;

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   Bot as BotIcon,
   Plus,
@@ -111,6 +111,7 @@ export function BotsWorkspace() {
     [busy, setBusy] = useState(false);
   const selectedRef = useRef(selected),
     draftRef = useRef(draft),
+    screenRef = useRef<HTMLDivElement>(null),
     scrollRef = useRef<HTMLDivElement>(null),
     fileRef = useRef<HTMLInputElement>(null),
     nearBottom = useRef(true),
@@ -129,6 +130,36 @@ export function BotsWorkspace() {
   const selectedModel = snapshot?.models.find(
     (m) => m.model === (bot?.model ?? snapshot.defaults.model),
   );
+  useLayoutEffect(() => {
+    const screen = screenRef.current;
+    if (!screen) return;
+    const root = document.documentElement;
+    const viewport = window.visualViewport;
+    // Activity tears down this effect when another tab becomes visible.
+    root.classList.add("bots-viewport-locked");
+    const resize = () => {
+      screen.style.setProperty(
+        "--bots-viewport-height",
+        `${viewport?.height ?? window.innerHeight}px`,
+      );
+      screen.style.setProperty(
+        "--bots-viewport-top",
+        `${viewport?.offsetTop ?? 0}px`,
+      );
+    };
+    resize();
+    viewport?.addEventListener("resize", resize);
+    viewport?.addEventListener("scroll", resize);
+    window.addEventListener("resize", resize);
+    return () => {
+      root.classList.remove("bots-viewport-locked");
+      viewport?.removeEventListener("resize", resize);
+      viewport?.removeEventListener("scroll", resize);
+      window.removeEventListener("resize", resize);
+      screen.style.removeProperty("--bots-viewport-height");
+      screen.style.removeProperty("--bots-viewport-top");
+    };
+  }, []);
   useEffect(() => {
     if (!creating && !editingSchedule) return;
     const previous = document.activeElement as HTMLElement | null;
@@ -378,7 +409,7 @@ export function BotsWorkspace() {
       snapshot?.schedules.filter((s) => s.botId === selected) ?? [],
     runs = snapshot?.runs.filter((r) => r.botId === selected) ?? [];
   return (
-    <div className="bots-screen">
+    <div className="bots-screen" ref={screenRef} data-no-pull-refresh>
       <SiteHeader current="bots" />
       <main className={`bots-layout ${selected ? "has-selection" : ""}`}>
         <aside className="bots-sidebar">
