@@ -428,7 +428,7 @@ export function BotsWorkspace() {
                 <Avatar bot={b} />
                 <span className="bots-row-copy">
                   <span className="bots-row-name">
-                    {b.name}
+                    <span className="bots-row-title">{b.name}</span>
                     <small>
                       {new Date(b.updatedAt).toLocaleTimeString(undefined, {
                         hour: "numeric",
