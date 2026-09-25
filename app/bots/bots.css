@@ -25,10 +25,7 @@ html.bots-viewport-locked body {
   grid-template-rows: minmax(0, 1fr);
   flex: 1;
   min-height: 0;
-  max-width: 1440px;
   width: 100%;
-  margin: auto;
-  border-inline: 1px solid #e5e9e6;
 }
 .bots-sidebar {
   display: flex;
@@ -633,6 +630,12 @@ html.bots-viewport-locked body {
   border-radius: 7px;
   max-width: 220px;
 }
+.bots-controls button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
 .bots-controls .active {
   background: #e1eee5;
   color: #216e4e;
@@ -938,11 +941,6 @@ html.bots-viewport-locked body {
 @keyframes bots-pulse {
   50% {
     opacity: 0.3;
-  }
-}
-@media (min-width: 1440px) {
-  .bots-profile {
-    right: calc((100vw - 1440px) / 2);
   }
 }
 @media (max-width: 700px) {

@@ -91,6 +91,7 @@ export class CodexManager {
   workerConfig() {
     // Even a disabled server must have a valid transport in 0.156.1.
     return {
+      "features.fast_mode": true,
       "mcp_servers.codex_manager": {
         command: process.execPath,
         args: [],
@@ -442,6 +443,7 @@ export class CodexManager {
   }
   async createWorker(bot, p, id, worktree = null) {
     const cwd = worktree?.path ?? (await this.rootFor(p));
+    const settings = this.runtime.settings(bot, p);
     if (p.parentWorkerId) this.owned("managerWorker", p.parentWorkerId, bot.id);
     const worker = {
       id,
@@ -468,7 +470,8 @@ export class CodexManager {
       sandbox: "danger-full-access",
       developerInstructions: WORKER_INSTRUCTIONS,
       config: this.workerConfig(),
-      ...(p.model ? { model: p.model } : {}),
+      model: settings.model,
+      serviceTier: settings.serviceTier,
       ephemeral: false,
     };
     const response =
@@ -515,9 +518,12 @@ export class CodexManager {
         "Worker worktree is unavailable; create a new worker in a valid workspace.",
       );
     if (!this.loaded.has(worker.threadId)) {
+      const settings = this.runtime.settings(this.store.bot(worker.botId));
       await this.codex.call("thread/resume", {
         threadId: worker.threadId,
         cwd: worker.cwd,
+        model: settings.model,
+        serviceTier: settings.serviceTier,
         excludeTurns: true,
         approvalPolicy: "never",
         sandbox: "danger-full-access",
@@ -681,6 +687,7 @@ export class CodexManager {
   }
   async delegate(bot, p, id) {
     const prompt = required(p.prompt, "prompt");
+    const settings = this.runtime.settings(bot, p);
     const dependencies = p.dependencies ?? [];
     if (!Array.isArray(dependencies) || dependencies.length > 50)
       throw new Error("Invalid task dependencies.");
@@ -697,8 +704,9 @@ export class CodexManager {
       constraints: p.constraints ?? "",
       acceptance: p.acceptance ?? "",
       dependencies,
-      model: p.model ?? null,
-      effort: p.effort ?? null,
+      model: settings.model,
+      effort: settings.effort,
+      serviceTier: settings.serviceTier,
       state: "provisioning",
       workerId: p.workerId ?? null,
       turnId: null,
@@ -1333,8 +1341,7 @@ export class CodexManager {
             input: [{ type: "text", text, text_elements: [] }],
             approvalPolicy: "never",
             sandboxPolicy: { type: "dangerFullAccess" },
-            ...(task.model ? { model: task.model } : {}),
-            ...(task.effort ? { effort: task.effort } : {}),
+            ...this.runtime.settings(this.store.bot(task.botId), task),
             additionalContext: {
               managerTask: {
                 kind: "application",

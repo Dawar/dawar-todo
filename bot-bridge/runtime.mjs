@@ -122,7 +122,11 @@ export class BotRuntime extends EventEmitter {
     this.locks = new Map();
     this.loaded = new Set();
     this.models = [];
-    this.defaults = { model: "", effort: null };
+    this.defaults = {
+      model: "gpt-6-luna",
+      effort: "high",
+      serviceTier: "priority",
+    };
     this.account = { authenticated: false };
     this.ready = false;
     codex.on("notification", (message) => this.onNotification(message));
@@ -175,14 +179,9 @@ export class BotRuntime extends EventEmitter {
             "Runtime restarted during execution. Review the conversation before retrying.",
         });
     await this.codex.start();
-    const [config, account] = await Promise.all([
-      this.codex.call("config/read", { includeLayers: false }),
-      this.codex.call("account/read", { refreshToken: false }),
-    ]);
-    this.defaults = {
-      model: config.config?.model ?? "",
-      effort: config.config?.model_reasoning_effort ?? null,
-    };
+    const account = await this.codex.call("account/read", {
+      refreshToken: false,
+    });
     this.account = { authenticated: Boolean(account.account) };
     let cursor = null;
     do {
@@ -190,11 +189,14 @@ export class BotRuntime extends EventEmitter {
       this.models.push(...page.data);
       cursor = page.nextCursor;
     } while (cursor);
-    if (!this.defaults.model)
-      this.defaults.model =
-        this.models.find((m) => m.isDefault)?.model ??
-        this.models[0]?.model ??
-        "";
+    const preferred = this.models.find((m) => m.model === this.defaults.model);
+    if (
+      !preferred?.supportedReasoningEfforts.some(
+        (e) => e.reasoningEffort === this.defaults.effort,
+      ) ||
+      !preferred.serviceTiers?.some((tier) => tier.id === this.defaults.serviceTier)
+    )
+      throw new Error("The configured Bots model, effort, or Fast tier is unavailable.");
     for (const bot of this.store.bots()) {
       if (!bot.threadId)
         try {
@@ -591,6 +593,7 @@ export class BotRuntime extends EventEmitter {
       archived: false,
       model: null,
       effort: null,
+      serviceTier: null,
       mode: "default",
       preview: "",
       updatedAt: now(),
@@ -602,13 +605,18 @@ export class BotRuntime extends EventEmitter {
     await initializeProfile(bot);
     const result = await this.codex.call("thread/start", {
       cwd: bot.cwd,
+      model: this.defaults.model,
+      serviceTier: this.defaults.serviceTier,
       approvalPolicy: "never",
       sandbox: "danger-full-access",
       ephemeral: false,
       developerInstructions: this.manager
         ? `${BOT_INSTRUCTIONS}\n\n${MANAGER_INSTRUCTIONS}`
         : BOT_INSTRUCTIONS,
-      ...(this.manager ? { config: this.manager.config(bot) } : {}),
+      config: {
+        "features.fast_mode": true,
+        ...(this.manager ? this.manager.config(bot) : {}),
+      },
       dynamicTools,
       serviceName: "dawar-todo-bots",
     });
@@ -670,21 +678,36 @@ export class BotRuntime extends EventEmitter {
       await this.codex.call("thread/resume", {
         threadId: bot.threadId,
         cwd: bot.cwd,
+        model: this.settings(bot).model,
+        serviceTier: this.settings(bot).serviceTier,
         approvalPolicy: "never",
         sandbox: "danger-full-access",
         developerInstructions: this.manager
           ? `${BOT_INSTRUCTIONS}\n\n${MANAGER_INSTRUCTIONS}`
           : BOT_INSTRUCTIONS,
-        ...(this.manager ? { config: this.manager.config(bot) } : {}),
+        config: {
+          "features.fast_mode": true,
+          ...(this.manager ? this.manager.config(bot) : {}),
+        },
         excludeTurns: true,
       });
       this.loaded.add(bot.threadId);
     }
   }
+  settings(bot, override = {}) {
+    return {
+      model: override.model ?? bot.model ?? this.defaults.model,
+      effort: override.effort ?? bot.effort ?? this.defaults.effort,
+      serviceTier:
+        override.serviceTier ?? bot.serviceTier ?? this.defaults.serviceTier,
+    };
+  }
   async update(bot, p) {
     const name = p.name === undefined ? bot.name : cleanName(p.name);
     const model = p.model === undefined ? bot.model : p.model || null,
-      effort = p.effort === undefined ? bot.effort : p.effort || null;
+      effort = p.effort === undefined ? bot.effort : p.effort || null,
+      serviceTier =
+        p.serviceTier === undefined ? bot.serviceTier : p.serviceTier || null;
     const catalog = this.models.find(
       (m) => m.model === (model ?? this.defaults.model),
     );
@@ -696,6 +719,12 @@ export class BotRuntime extends EventEmitter {
       )
     )
       throw new Error("That reasoning effort is not available for this model.");
+    const effectiveTier = serviceTier ?? this.defaults.serviceTier;
+    if (
+      effectiveTier !== "default" &&
+      !catalog.serviceTiers?.some((tier) => tier.id === effectiveTier)
+    )
+      throw new Error("That speed is not available for this model.");
     if (p.mode !== undefined && !["default", "plan"].includes(p.mode))
       throw new Error("Invalid collaboration mode.");
     if (name !== bot.name) {
@@ -711,7 +740,13 @@ export class BotRuntime extends EventEmitter {
         { mode: 0o600 },
       );
     }
-    return this.saveBot(bot, { name, model, effort, mode: p.mode ?? bot.mode });
+    return this.saveBot(bot, {
+      name,
+      model,
+      effort,
+      serviceTier,
+      mode: p.mode ?? bot.mode,
+    });
   }
   async archive(bot, archived) {
     if (bot.activeTurnId || this.store.list("pending", bot.id).length)
@@ -797,8 +832,7 @@ export class BotRuntime extends EventEmitter {
       });
       return result;
     }
-    const model = bot.model ?? this.defaults.model,
-      effort = bot.effort ?? this.defaults.effort;
+    const { model, effort, serviceTier } = this.settings(bot);
     const params = {
       threadId: bot.threadId,
       clientUserMessageId: id,
@@ -809,6 +843,7 @@ export class BotRuntime extends EventEmitter {
       sandboxPolicy: { type: "dangerFullAccess" },
       model,
       effort,
+      serviceTier,
       collaborationMode: {
         mode: run ? "default" : bot.mode,
         settings: {

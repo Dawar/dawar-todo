@@ -16,16 +16,15 @@ class FakeCodex extends EventEmitter {
   async start() {}
   async call(method, params) {
     this.calls.push({ method, params });
-    if (method === "config/read")
-      return { config: { model: "model", model_reasoning_effort: "high" } };
     if (method === "account/read") return { account: { type: "chatgpt" } };
     if (method === "model/list")
       return {
         data: [
           {
-            model: "model",
+            model: "gpt-6-luna",
             isDefault: true,
             supportedReasoningEfforts: [{ reasoningEffort: "high" }],
+            serviceTiers: [{ id: "priority", name: "Fast" }],
           },
         ],
         nextCursor: null,
@@ -209,6 +208,26 @@ test("creation retry, stable avatar, normalized unique directories and one-to-on
   assert.throws(() => store.saveBot({ ...b, threadId: a.threadId }), /UNIQUE/);
   assert.equal(slugify("日本語"), "bot");
   assert.throws(() => cleanName("\n"), /name/);
+});
+test("Bots default to Luna high Fast and preserve an explicit standard-speed choice", async (t) => {
+  const { create, runtime, codex, store } = await setup(t);
+  const bot = await create();
+  assert.deepEqual(runtime.defaults, {
+    model: "gpt-6-luna",
+    effort: "high",
+    serviceTier: "priority",
+  });
+  const start = codex.calls.find((call) => call.method === "thread/start").params;
+  assert.equal(start.model, "gpt-6-luna");
+  assert.equal(start.serviceTier, "priority");
+  assert.equal(start.config["features.fast_mode"], true);
+  await op(runtime, bot.id, "turn.send", { text: "hello" });
+  const first = codex.calls.find((call) => call.method === "turn/start").params;
+  assert.equal(first.model, "gpt-6-luna");
+  assert.equal(first.effort, "high");
+  assert.equal(first.serviceTier, "priority");
+  await op(runtime, bot.id, "bots.update", { serviceTier: "default" });
+  assert.equal(runtime.settings(store.bot(bot.id)).serviceTier, "default");
 });
 test("changed profile read for each turn, steering and Stop use mapped thread", async (t) => {
   const { create, runtime, codex, store } = await setup(t);

@@ -35,7 +35,7 @@ export function SiteHeader({
 
   return (
     <header className="sticky top-0 z-30 border-b border-black/[0.06] bg-[#f6f7f5]/92 backdrop-blur-xl">
-      <div className="mx-auto flex h-14 max-w-5xl items-center justify-between gap-2 px-3 sm:px-6">
+      <div className={`mx-auto flex h-14 w-full items-center justify-between gap-2 px-3 sm:px-6 ${current === "bots" ? "max-w-none" : "max-w-5xl"}`}>
         {onProjectClick ? (
           <button
             type="button"

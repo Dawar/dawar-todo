@@ -198,6 +198,47 @@ test("tasks serialize per worker, satisfy dependencies and wake only their manag
   assert.equal(f.codex.threads.get("main").turns.length, 1);
   assert.ok(f.codex.sections.length > 0);
 });
+test("workers inherit manager model, effort, and speed unless delegation overrides them", async (t) => {
+  const f = await fixture(t);
+  f.store.saveBot({
+    ...f.store.bot(f.bot.id),
+    model: "gpt-6-sol",
+    effort: "xhigh",
+    serviceTier: "default",
+  });
+  const inherited = await f.call("tasks", "delegate", {
+    name: "Implement",
+    prompt: "Work",
+    cwd: f.directory,
+    isolated: false,
+  });
+  assert.deepEqual(
+    (({ model, effort, serviceTier }) => ({ model, effort, serviceTier }))(
+      f.store.get("managerTask", inherited.id),
+    ),
+    { model: "gpt-6-sol", effort: "xhigh", serviceTier: "default" },
+  );
+  const start = f.codex.calls.find((call) => call.method === "thread/start").p;
+  assert.equal(start.model, "gpt-6-sol");
+  assert.equal(start.serviceTier, "default");
+  await f.manager.tick();
+  const turn = f.codex.calls.find((call) => call.method === "turn/start").p;
+  assert.equal(turn.model, "gpt-6-sol");
+  assert.equal(turn.effort, "xhigh");
+  assert.equal(turn.serviceTier, "default");
+  const explicit = await f.call("tasks", "delegate", {
+    name: "Review",
+    prompt: "Review",
+    workerId: inherited.workerId,
+    model: "gpt-6-luna",
+    effort: "high",
+    serviceTier: "priority",
+  });
+  const override = f.store.get("managerTask", explicit.id);
+  assert.equal(override.model, "gpt-6-luna");
+  assert.equal(override.effort, "high");
+  assert.equal(override.serviceTier, "priority");
+});
 test("failed prerequisites cancel dependents and manager archive pauses dispatch", async (t) => {
   const f = await fixture(t);
   const first = await f.call("tasks", "delegate", {

@@ -14,6 +14,7 @@ export type Bot = {
   archived: boolean;
   model: string | null;
   effort: string | null;
+  serviceTier?: string | null;
   mode: "default" | "plan";
   preview: string;
   updatedAt: string;
@@ -67,7 +68,7 @@ export type BotSnapshot = {
   cursor: number;
   ready: boolean;
   account: { authenticated: boolean };
-  defaults: { model: string; effort: string | null };
+  defaults: { model: string; effort: string | null; serviceTier: string };
   models: Model[];
   schedules: BotSchedule[];
   runs: BotRun[];

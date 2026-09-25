@@ -27,6 +27,7 @@ import {
   Pencil,
   LoaderCircle,
   RefreshCw,
+  Zap,
 } from "lucide-react";
 import { SiteHeader } from "../site-header";
 import type {
@@ -140,6 +141,12 @@ export function BotsWorkspace() {
   const selectedModel = snapshot?.models.find(
     (m) => m.model === (bot?.model ?? snapshot.defaults.model),
   );
+  const fastTier = selectedModel?.serviceTiers.find(
+    (tier) => tier.id === "priority" || tier.id === "fast",
+  )?.id;
+  const fastActive =
+    Boolean(fastTier) &&
+    (bot?.serviceTier ?? snapshot?.defaults.serviceTier) === fastTier;
   useLayoutEffect(() => {
     const screen = screenRef.current;
     if (!screen) return;
@@ -769,7 +776,9 @@ export function BotsWorkspace() {
                         )
                       }
                     >
-                      <option value="">Default effort</option>
+                      <option value="">
+                        Default · {snapshot?.defaults.effort}
+                      </option>
                       {selectedModel?.supportedReasoningEfforts.map((e) => (
                         <option
                           key={e.reasoningEffort}
@@ -779,6 +788,27 @@ export function BotsWorkspace() {
                         </option>
                       ))}
                     </select>
+                    <button
+                      type="button"
+                      className={fastActive ? "active" : ""}
+                      aria-label="Fast mode"
+                      aria-pressed={fastActive}
+                      title={
+                        fastTier
+                          ? "Fast mode uses more Codex credits"
+                          : "Fast mode is unavailable for this model"
+                      }
+                      disabled={!online || !fastTier}
+                      onClick={() =>
+                        void action(() =>
+                          client.rpc("bots.update", bot.id, {
+                            serviceTier: fastActive ? "default" : fastTier,
+                          }),
+                        )
+                      }
+                    >
+                      <Zap size={13} aria-hidden="true" /> Fast
+                    </button>
                     <button
                       className={bot.mode === "plan" ? "active" : ""}
                       disabled={!online}
