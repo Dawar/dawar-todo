@@ -434,13 +434,19 @@ test("notification findings deduplicate", async (t) => {
   runtime.notify(bot, "finding:1", "Action required");
   assert.equal(store.list("notice").length, 1);
 });
-test("owner authorization excludes API tokens, foreign identities and origins; tickets expire and are machine-scoped", async () => {
-  const env = { BOTS_OWNER_EMAIL: "owner@example.com" };
+test("owner authorization uses stable site identity and excludes API tokens, foreign identities and origins; tickets expire and are machine-scoped", async () => {
+  const env = {
+    BOTS_OWNER_EMAIL: "owner@example.com",
+    BOTS_OWNER_USER_ID: "stable-owner-id",
+  };
   const request = (headers) =>
     new Request("https://work.dawar.ca/api/bots/session", { headers });
   assert.equal(
     botsOwner(
-      request({ "oai-authenticated-user-email": "owner@example.com" }),
+      request({
+        "oai-authenticated-user-id": "stable-owner-id",
+        "oai-authenticated-user-email": "alias@example.com",
+      }),
       env,
     ),
     "owner@example.com",
@@ -449,6 +455,7 @@ test("owner authorization excludes API tokens, foreign identities and origins; t
     botsOwner(
       request({
         Authorization: "Bearer x",
+        "oai-authenticated-user-id": "stable-owner-id",
         "oai-authenticated-user-email": "owner@example.com",
       }),
       env,
@@ -456,13 +463,20 @@ test("owner authorization excludes API tokens, foreign identities and origins; t
   );
   assert.throws(() =>
     botsOwner(
-      request({ "oai-authenticated-user-email": "other@example.com" }),
+      request({
+        "oai-authenticated-user-id": "foreign-user-id",
+        "oai-authenticated-user-email": "owner@example.com",
+      }),
       env,
     ),
   );
   assert.throws(() =>
+    botsOwner(request({ "oai-authenticated-user-email": "owner@example.com" }), env),
+  );
+  assert.throws(() =>
     botsOwner(
       request({
+        "oai-authenticated-user-id": "stable-owner-id",
         "oai-authenticated-user-email": "owner@example.com",
         Origin: "https://evil.example",
       }),

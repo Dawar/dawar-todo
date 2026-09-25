@@ -90,10 +90,16 @@ export async function secretMatches(a: string, b: string) {
 }
 export function botsOwner(
   request: Request,
-  environment: { BOTS_OWNER_EMAIL?: string; BOTS_DEV_AUTH?: string },
+  environment: {
+    BOTS_OWNER_EMAIL?: string;
+    BOTS_OWNER_USER_ID?: string;
+    BOTS_DEV_AUTH?: string;
+  },
 ) {
   const owner = environment.BOTS_OWNER_EMAIL?.trim().toLowerCase();
   if (!owner) throw new Error("Bots are not configured.");
+  const ownerUserId = environment.BOTS_OWNER_USER_ID?.trim();
+  if (!ownerUserId) throw new Error("Bots owner identity is not configured.");
   if (request.headers.has("Authorization"))
     throw new Error("Bots require the owner's signed-in session.");
   const url = new URL(request.url);
@@ -105,10 +111,8 @@ export function botsOwner(
     ["localhost", "127.0.0.1"].includes(url.hostname)
   )
     return owner;
-  const email = request.headers
-    .get("oai-authenticated-user-email")
-    ?.trim()
-    .toLowerCase();
-  if (email !== owner) throw new Error("Bots are available only to the owner.");
+  const userId = request.headers.get("oai-authenticated-user-id")?.trim();
+  if (userId !== ownerUserId)
+    throw new Error("Bots are available only to the owner.");
   return owner;
 }
