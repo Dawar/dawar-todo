@@ -12,6 +12,7 @@ import {
 import { join, basename, resolve } from "node:path";
 import { constants } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
+import { MANAGER_INSTRUCTIONS } from "./manager-tools.mjs";
 import {
   BOT_INSTRUCTIONS,
   cleanName,
@@ -441,7 +442,10 @@ export class BotRuntime extends EventEmitter {
           approvalPolicy: "never",
           sandbox: "danger-full-access",
           ephemeral: false,
-          developerInstructions: BOT_INSTRUCTIONS,
+          developerInstructions: this.manager
+            ? `${BOT_INSTRUCTIONS}\n\n${MANAGER_INSTRUCTIONS}`
+            : BOT_INSTRUCTIONS,
+          ...(this.manager ? { config: this.manager.config(bot) } : {}),
           dynamicTools,
           serviceName: "dawar-todo-bots",
         });
@@ -460,14 +464,30 @@ export class BotRuntime extends EventEmitter {
         return this.archive(bot, true);
       case "bots.restore":
         return this.archive(bot, false);
-      case "turn.send":
-        return this.send(bot, p, id);
+      case "turn.send": {
+        const notice = id?.startsWith("manager-notice:")
+          ? this.store.get("managerNotice", id.slice("manager-notice:".length))
+          : null;
+        const run =
+          notice?.botId === bot.id && notice.runId
+            ? this.store.get("run", notice.runId)
+            : null;
+        return this.send(bot, p, id, run);
+      }
       case "turn.interrupt": {
-        if (!bot.activeTurnId) return {};
-        return this.codex.call("turn/interrupt", {
-          threadId: bot.threadId,
-          turnId: bot.activeTurnId,
-        });
+        const operations = [];
+        if (this.manager) operations.push(this.manager.stop(bot));
+        if (bot.activeTurnId)
+          operations.push(
+            this.codex.call("turn/interrupt", {
+              threadId: bot.threadId,
+              turnId: bot.activeTurnId,
+            }),
+          );
+        const outcomes = await Promise.allSettled(operations);
+        const failed = outcomes.find((r) => r.status === "rejected");
+        if (failed) throw failed.reason;
+        return {};
       }
       case "thread.compact": {
         if (bot.activeTurnId)
@@ -585,7 +605,10 @@ export class BotRuntime extends EventEmitter {
       approvalPolicy: "never",
       sandbox: "danger-full-access",
       ephemeral: false,
-      developerInstructions: BOT_INSTRUCTIONS,
+      developerInstructions: this.manager
+        ? `${BOT_INSTRUCTIONS}\n\n${MANAGER_INSTRUCTIONS}`
+        : BOT_INSTRUCTIONS,
+      ...(this.manager ? { config: this.manager.config(bot) } : {}),
       dynamicTools,
       serviceName: "dawar-todo-bots",
     });
@@ -649,7 +672,10 @@ export class BotRuntime extends EventEmitter {
         cwd: bot.cwd,
         approvalPolicy: "never",
         sandbox: "danger-full-access",
-        developerInstructions: BOT_INSTRUCTIONS,
+        developerInstructions: this.manager
+          ? `${BOT_INSTRUCTIONS}\n\n${MANAGER_INSTRUCTIONS}`
+          : BOT_INSTRUCTIONS,
+        ...(this.manager ? { config: this.manager.config(bot) } : {}),
         excludeTurns: true,
       });
       this.loaded.add(bot.threadId);
@@ -719,6 +745,8 @@ export class BotRuntime extends EventEmitter {
   async send(bot, p, id, run = null) {
     if (bot.archived) throw new Error("Restore this bot first.");
     if (!this.ready) throw new Error("Codex is not ready.");
+    if (bot.managerPaused && !id.startsWith("manager-notice:"))
+      bot = this.saveBot(bot, { managerPaused: false });
     const text = String(p.text ?? "").trim();
     if (text.length > 200000) throw new Error("This message is too long.");
     const attachmentIds = p.attachments ?? [];
@@ -741,6 +769,11 @@ export class BotRuntime extends EventEmitter {
     }
     await this.load(bot);
     const additionalContext = await profileContext(bot);
+    if (this.manager)
+      additionalContext.managerPolicy = {
+        kind: "application",
+        value: MANAGER_INSTRUCTIONS,
+      };
     if (run)
       additionalContext.scheduledTask = {
         kind: "application",
@@ -757,7 +790,9 @@ export class BotRuntime extends EventEmitter {
       });
       this.emitUserMessage(bot, bot.activeTurnId, id, input);
       this.saveBot(this.store.bot(bot.id), {
-        preview: text.slice(0, 160),
+        preview: id.startsWith("manager-notice:")
+          ? bot.preview
+          : text.slice(0, 160),
         updatedAt: now(),
       });
       return result;
@@ -797,7 +832,9 @@ export class BotRuntime extends EventEmitter {
           .some((x) => x.request.params.isBlocking !== false)
           ? "waiting"
           : "running",
-        preview: text.slice(0, 160),
+        preview: id.startsWith("manager-notice:")
+          ? bot.preview
+          : text.slice(0, 160),
         updatedAt: now(),
         error: null,
       });
@@ -872,6 +909,7 @@ export class BotRuntime extends EventEmitter {
       return;
     }
     const threadId = message.params.threadId ?? message.params.conversationId;
+    if (this.manager?.request(message)) return;
     const bot = this.store.bots().find((b) => b.threadId === threadId);
     if (!bot) {
       this.codex.reject(
@@ -923,6 +961,7 @@ export class BotRuntime extends EventEmitter {
     this.notify(bot, `request:${key}`, `${bot.name} needs your input.`);
   }
   onNotification(message) {
+    if (this.manager?.event(message)) return;
     const p = message.params ?? {};
     const threadId = p.threadId ?? p.thread?.id;
     const bot = this.store.bots().find((b) => b.threadId === threadId);
@@ -1042,6 +1081,8 @@ export class BotRuntime extends EventEmitter {
   }
   async tick() {
     if (!this.ready) return;
+    if (this.manager)
+      void this.manager.tick().catch((error) => this.emit("fault", error));
     const created = collectDueRuns(this.store);
     if (created.length) this.emitEvent("schedules", {});
     for (const bot of this.store.bots()) {

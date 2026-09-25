@@ -2,6 +2,37 @@
 
 Bots use the owner's existing ChatGPT login in `~/.codex`. Each bot has one native Codex task and one private workspace in `~/bots/<initial-name>`. Display-name changes never move the workspace or replace the task. The six starter Markdown files are the source of truth for identity, behavior, and memory; their current contents are supplied on every new turn and steering message.
 
+## Manager and worker agents
+
+Every human-facing bot is also a persistent manager. Its existing conversation remains the relationship/context hub; substantial work is delegated to separate native Codex workers. No Codex Desktop management tools are required.
+
+`manager.mjs` runs inside the systemd service and owns the orchestration state. `manager-mcp.mjs` is a small stdio MCP adapter configured only on manager thread start/resume. It connects to a mode-600 Unix socket at `~/.local/share/dawar-todo-bots/manager/manager.sock` with a per-manager, process-lifetime capability in its environment. Nothing is exposed on a public port or the browser bridge. Workers explicitly disable this MCP server. This is routing/ownership isolation within the same trusted Linux account, not a sandbox against agents that already have full VM access.
+
+The manager receives six MCP tools:
+
+| Tool | Operations |
+| --- | --- |
+| `codex_projects` | Native list, read, create, update, delete (empty projects only). |
+| `codex_threads` | Discover/read native history; create, adopt, fork, message, steer, interrupt, rename, archive, restore, delete owned workers. |
+| `codex_sections` | Native list/create/update/delete and worker placement. |
+| `codex_worktrees` | Create/list/remove owned Git worktrees. |
+| `codex_tasks` | Delegate, inspect status/receipts, collect results, answer worker requests, cancel, acknowledge uncertain execution. |
+| `codex_organize` | Review the registry, set lifecycle state, preview/apply housekeeping. |
+
+Mutations require a stable `operationId`; successful retries return the receipt. Interrupted operations are retained for inspection, never blindly repeated. A unique SQLite index protects worker/thread mappings. Native Codex is authoritative for projects, sections and transcripts; records add manager ownership, parent-worker relationships, roles, dependencies, task state, result summaries and worktree/branch information. Other human-facing bots cannot be adopted. Existing unrelated native tasks must be explicitly adopted before mutation; read-only discovery is available across the VM.
+
+New delegated tasks use an isolated Git worktree by default. A manager can explicitly reuse a persistent specialist or choose `isolated: false`. Worktrees live under the manager state directory, use unique `codex/` branches unless one is supplied, and start from a resolved commit. Removal refuses active/uncollected tasks, uncommitted/untracked files, and commits not reachable from the specified `integratedRef`. Removal never forces Git or deletes the branch. Integration/merging is the manager's authorized repository work, not an automatic daemon side effect.
+
+Tasks serialize per worker. Up to four workers run concurrently by default (`BOTS_WORKER_CONCURRENCY`, clamped to 1–16). Prerequisites must complete successfully; a failed prerequisite cancels dependent queued work. Blocking native approvals/questions stay answerable through the manager. Asynchronous questions hold the original task and its dependencies; answers continue the same task with a distinct native turn receipt. Workers do not appear as extra bots in the human sidebar.
+
+Completion, failures and required input queue a durable callback to the manager. The callback waits for its conversation to be idle and for human-facing questions to resolve. Its hidden internal input wakes the existing conversation; the manager reviews native results and replies normally. Scheduled tasks retain their schedule context through worker callbacks so actionable findings can use the existing notification tool. The UI shows background task counts, and Stop cancels queued worker tasks, interrupts active workers and holds callbacks for the manager to inspect on the next human request. Browser closure does not stop worker execution.
+
+On restart, the daemon restores the same manager MCP connections, reconciles worker creation and completed native turns, expires process-bound requests, and marks ambiguous execution uncertain. `codex_tasks status` exposes incomplete operation receipts. `acknowledge` records a reviewed uncertain task as interrupted without rerunning it. Reserved worktrees and worker mappings are retained for recovery.
+
+Workers are placed in per-manager native Active Development, Waiting, Reference and Completed sections. Manual custom placement is preserved until lifecycle management is re-enabled with `setState`. Native section failures are exposed in worker records and do not prevent execution. Desktop's sidebar/project presentation remains best effort; the native project catalog and manager registry are the operational sources of truth. Housekeeping previews candidates and, with `apply: true`, archives temporary completed workers with collected results after seven days. It never removes worktrees or deletes threads automatically. Use the existing schedule tool for periodic housekeeping when requested.
+
+Manager policy is refreshed every turn without overwriting existing identity or memory files. New bot profiles include the policy. All runtime data belongs in the existing state-directory backup; no separate database migration or global Codex configuration edit is needed. After upgrading the code, restart the service while bots are idle so existing managers receive the new MCP configuration. Health includes manager worker/task counts; `manager.state` JSON logs contain identifiers and lifecycle states, not prompts or credentials.
+
 ## Components
 
 - `app/bots`: responsive conversation UI, native requests, local drafts/history, attachment transfer and schedule management.

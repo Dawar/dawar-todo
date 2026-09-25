@@ -19,6 +19,8 @@ export type Bot = {
   updatedAt: string;
   lastReadAt: string;
   activeTurnId: string | null;
+  workerTasks?: { active: number; waiting: number };
+  managerPaused?: boolean;
   error?: string | null;
 };
 export type BotSchedule = {

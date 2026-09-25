@@ -1,6 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import {
   Bot as BotIcon,
   Plus,
@@ -67,6 +73,10 @@ function Avatar({ bot, small = false }: { bot: Bot; small?: boolean }) {
 function humanStatus(bot: Bot, online: boolean) {
   if (!online) return "VM offline";
   if (bot.archived) return "Archived";
+  if (!bot.activeTurnId && bot.workerTasks?.active)
+    return `${bot.workerTasks.active} worker task${bot.workerTasks.active === 1 ? "" : "s"} in progress`;
+  if (!bot.activeTurnId && bot.workerTasks?.waiting)
+    return "Worker needs attention";
   return (
     (
       {
@@ -474,7 +484,7 @@ export function BotsWorkspace() {
                   </span>
                 </span>
                 {b.updatedAt > b.lastReadAt && <span className="bots-unread" />}
-                {b.status === "running" && (
+                {(b.status === "running" || Boolean(b.workerTasks?.active)) && (
                   <LoaderCircle size={14} className="bots-spin" />
                 )}
               </button>
@@ -687,12 +697,17 @@ export function BotsWorkspace() {
                     }
                   />
                 ))}
-                {bot.status === "running" && (
+                {(bot.status === "running" ||
+                  Boolean(bot.workerTasks?.active)) && (
                   <div className="bots-working">
                     <span />
                     <span />
                     <span />
-                    <small>{bot.name} is working</small>
+                    <small>
+                      {bot.workerTasks?.active
+                        ? humanStatus(bot, online)
+                        : `${bot.name} is working`}
+                    </small>
                   </div>
                 )}
               </div>
@@ -852,22 +867,25 @@ export function BotsWorkspace() {
                         }
                       }}
                     />
-                    {bot.activeTurnId && Boolean(draft || uploads.length) && (
-                      <button
-                        type="button"
-                        className="bots-icon-button"
-                        aria-label="Stop bot"
-                        disabled={!online}
-                        onClick={() =>
-                          void action(() =>
-                            client.rpc("turn.interrupt", bot.id),
-                          )
-                        }
-                      >
-                        <Square size={14} fill="currentColor" />
-                      </button>
-                    )}
-                    {bot.activeTurnId && !draft && !uploads.length ? (
+                    {(bot.activeTurnId || Boolean(bot.workerTasks?.active)) &&
+                      Boolean(draft || uploads.length) && (
+                        <button
+                          type="button"
+                          className="bots-icon-button"
+                          aria-label="Stop bot"
+                          disabled={!online}
+                          onClick={() =>
+                            void action(() =>
+                              client.rpc("turn.interrupt", bot.id),
+                            )
+                          }
+                        >
+                          <Square size={14} fill="currentColor" />
+                        </button>
+                      )}
+                    {(bot.activeTurnId || Boolean(bot.workerTasks?.active)) &&
+                    !draft &&
+                    !uploads.length ? (
                       <button
                         type="button"
                         className="bots-send"

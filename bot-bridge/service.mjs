@@ -4,6 +4,7 @@ import { createServer } from "node:http";
 import { Store } from "./store.mjs";
 import { Codex } from "./codex.mjs";
 import { BotRuntime } from "./runtime.mjs";
+import { CodexManager } from "./manager.mjs";
 
 const required = [
   "BOTS_RELAY_URL",
@@ -33,6 +34,16 @@ const runtime = new BotRuntime({
   root: process.env.BOTS_ROOT ?? join(homedir(), "bots"),
   defaultTimeZone: process.env.BOTS_TIME_ZONE ?? "UTC",
 });
+const manager = new CodexManager({
+  runtime,
+  store,
+  directory: join(
+    process.env.BOTS_STATE_DIR ??
+      join(homedir(), ".local/share/dawar-todo-bots"),
+    "manager",
+  ),
+});
+runtime.manager = manager;
 let socket = null,
   stopping = false,
   retry = 0,
@@ -44,6 +55,8 @@ runtime.on("fault", (error) =>
   log("runtime.error", { message: error.message }),
 );
 runtime.on("event", (event) => {
+  if (event.type === "manager")
+    log("manager.state", { botId: event.botId, ...event.data });
   if (online && socket?.readyState === WebSocket.OPEN)
     sendLarge(socket, { type: "event", event });
 });
@@ -57,7 +70,9 @@ codex.on("fault", (error) => {
   log("codex.error", { message: error.message });
   process.exit(1);
 });
+await manager.listen();
 await runtime.start();
+await manager.recover();
 log("runtime.ready", { version: "0.156.1", bots: store.bots().length });
 
 function connect() {
@@ -254,6 +269,11 @@ const health = createServer((request, response) => {
       relayConnected: online,
       bots: store.bots().length,
       codexVersion: "0.156.1",
+      manager: {
+        ready: true,
+        workers: store.list("managerWorker").length,
+        tasks: store.list("managerTask").length,
+      },
     }),
   );
 });
@@ -267,6 +287,7 @@ async function stop() {
   socket?.close();
   health.close();
   codex.close();
+  await manager.close();
   setTimeout(() => {
     store.close();
     process.exit(0);

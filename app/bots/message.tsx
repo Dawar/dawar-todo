@@ -56,6 +56,12 @@ export function BotMessage({
       </ReactMarkdown>
     );
   }
+  // Worker callbacks are internal supervision, not messages authored by Dawar.
+  if (
+    item.type === "userMessage" &&
+    item.clientId?.startsWith("manager-notice:")
+  )
+    return null;
   if (item.type === "userMessage")
     return (
       <div className="bots-message bots-user">
