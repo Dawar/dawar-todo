@@ -22,8 +22,9 @@ export type BotOperations = {
     params: { cursor?: string | null; revision?: string; after?: number };
     result: HistoryResponse;
   };
+  "history.attachments": { params: { cursor?: string | null }; result: { attachments: BotAttachment[]; nextCursor: string | null } };
   "history.detail": {
-    params: { turnId: string; itemId: string; offset?: number; version?: string };
+    params: { turnId: string; itemId: string; offset?: number; version?: string; knownVersion?: string };
     result: HistoryDetail;
   };
   "history.page": {

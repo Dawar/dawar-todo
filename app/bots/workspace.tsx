@@ -5,6 +5,7 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -22,7 +23,6 @@ import {
   Clock,
   Archive,
   RotateCcw,
-  Download,
   Play,
   Pause,
   Trash2,
@@ -30,7 +30,6 @@ import {
   LoaderCircle,
   RefreshCw,
   Zap,
-  ChevronRight,
   BarChart3,
   History,
   ListPlus,
@@ -39,25 +38,18 @@ import {
 import { SiteHeader } from "../site-header";
 import type {
   Bot,
-  BotAttachment,
   BotEvent,
-  BotHistory,
   BotSchedule,
   BotQueuedSubmission,
 } from "../../lib/bots-types";
-import type { Turn } from "../../lib/codex-protocol/v2/Turn";
-import type { ThreadItem } from "../../lib/codex-protocol/v2/ThreadItem";
 import {
   zonedDateTimeInputValue,
   zonedLocalDateTimeToUtc,
 } from "../../lib/zoned-date-time";
 import { botsClient as client } from "./client";
-import {
-  reduceBotTurns,
-  type NativeEvent,
-  type ConversationTurn,
-} from "./thread-state";
-import { BotMessage } from "./message";
+import type { NativeEvent } from "./thread-state";
+import { BotConversation } from "./timeline";
+import { BotSidebarList } from "./sidebar-list";
 import { RequestCard } from "./request-card";
 import { RunHistory } from "./run-history";
 import { UsagePanel } from "./usage-panel";
@@ -66,8 +58,7 @@ import { ComposerAttachments, ComposerStatus } from "./composer-state";
 import { UploadThumbnail } from "./upload-thumbnail";
 import "./bots.css";
 
-const EMPTY_TURNS: ConversationTurn[] = [];
-const EMPTY_ATTACHMENTS: BotAttachment[] = [];
+const EMPTY_BOTS: Bot[] = [];
 const EMPTY_QUEUE: BotQueuedSubmission[] = [];
 
 function initials(name: string) {
@@ -118,39 +109,6 @@ function stamp(value: string) {
   }).format(new Date(value));
 }
 
-type DisplayItem =
-  | { kind: "message"; item: ThreadItem }
-  | { kind: "work"; items: ThreadItem[] };
-
-function displayItems(items: ThreadItem[]): DisplayItem[] {
-  const result: DisplayItem[] = [];
-  for (const item of items) {
-    if (item.type === "reasoning" && !item.summary.length) continue;
-    const isWork = ![
-      "userMessage",
-      "agentMessage",
-      "plan",
-      "contextCompaction",
-    ].includes(item.type);
-    const previous = result.at(-1);
-    if (isWork && previous?.kind === "work") previous.items.push(item);
-    else if (isWork) result.push({ kind: "work", items: [item] });
-    else result.push({ kind: "message", item });
-  }
-  return result;
-}
-
-function workGroupIsActive(turn: ConversationTurn, items: ThreadItem[]) {
-  if (turn.status !== "inProgress") return false;
-  if (items.some((item) => "status" in item && item.status === "inProgress"))
-    return true;
-  const lastItem = items.at(-1);
-  // A trailing statusless item may still be active in the latest group.
-  return Boolean(
-    lastItem && !("status" in lastItem) && turn.items.at(-1) === lastItem,
-  );
-}
-
 export function BotsWorkspace() {
   const [, redraw] = useState(0),
     [selected, setSelected] = useState<string | null>(null),
@@ -163,34 +121,15 @@ export function BotsWorkspace() {
     [editingSchedule, setEditingSchedule] = useState<
       BotSchedule | "new" | null
     >(null);
-  const [loadedTurns, setTurns] = useState<ConversationTurn[]>([]),
-    [loadedAttachments, setAttachments] = useState<BotAttachment[]>([]),
-    [loadedQueue, setPromptQueue] = useState<BotQueuedSubmission[]>([]),
-    [historyScope, setHistoryScope] = useState(""),
+  const [loadedQueue, setPromptQueue] = useState<BotQueuedSubmission[]>([]),
     [queueScope, setQueueScope] = useState(""),
-    [cachedHistory, setCachedHistory] = useState(false),
-    [truncatedHistory, setTruncatedHistory] = useState(false),
-    [error, setError] = useState(""),
-    [loading, setLoading] = useState(false),
-    [olderCursor, setOlderCursor] = useState<string | null>(null),
-    [busy, setBusy] = useState(false);
-  const selectedRef = useRef(selected),
-    screenRef = useRef<HTMLDivElement>(null),
-    scrollRef = useRef<HTMLDivElement>(null),
-    fileRef = useRef<HTMLInputElement>(null),
-    searchRef = useRef<HTMLInputElement>(null),
-    nearBottom = useRef(true),
-    pendingEvents = useRef<BotEvent[]>([]),
-    historyLoading = useRef(false),
-    historyScopeRef = useRef(""),
-    historyRequest = useRef(0),
-    queueRequest = useRef(0),
-    createOperation = useRef(crypto.randomUUID());
+    [error, setError] = useState(""), [busy, setBusy] = useState(false);
+  const selectedRef = useRef(selected), screenRef = useRef<HTMLDivElement>(null),
+    fileRef = useRef<HTMLInputElement>(null), searchRef = useRef<HTMLInputElement>(null),
+    queueRequest = useRef(0), createOperation = useRef(crypto.randomUUID());
   useLayoutEffect(() => { selectedRef.current = selected; }, [selected]);
   const owner = client.owner;
   const scope = JSON.stringify([owner, selected]);
-  const turns = historyScope === scope ? loadedTurns : EMPTY_TURNS;
-  const attachments = historyScope === scope ? loadedAttachments : EMPTY_ATTACHMENTS;
   const promptQueue = queueScope === scope ? loadedQueue : EMPTY_QUEUE;
   const { composer, error: composerError } = useBotComposer(client.owner, selected);
   const draft = composer?.draft.text ?? "";
@@ -202,7 +141,7 @@ export function BotsWorkspace() {
   const setDraft = (text: string) => composer?.setText(text);
   const snapshot = client.snapshot,
     online = client.online,
-    bots = snapshot?.bots ?? [],
+    bots = snapshot?.bots ?? EMPTY_BOTS,
     bot = bots.find((b) => b.id === selected),
     pending = snapshot?.pending.filter((p) => p.botId === selected) ?? [];
   const selectedModel = snapshot?.models.find(
@@ -331,60 +270,6 @@ export function BotsWorkspace() {
       window.removeEventListener("dawar-shell-popstate", pop);
     };
   }, []);
-  const loadHistory = useCallback(async (id: string) => {
-    const owner = client.owner;
-    const request = ++historyRequest.current;
-    const scope = JSON.stringify([owner, id]);
-    const changed = historyScopeRef.current !== scope;
-    historyScopeRef.current = scope;
-    if (changed) {
-      setHistoryScope(scope);
-      setCachedHistory(false);
-      setTruncatedHistory(false);
-      setOlderCursor(null);
-      setTurns([]);
-      setAttachments([]);
-    }
-    const cached = changed ? await client.cachedHistory(id) : null;
-    if (selectedRef.current !== id || client.owner !== owner || historyRequest.current !== request) return;
-    if (cached) {
-      setCachedHistory(true);
-      setTruncatedHistory(Boolean(cached.truncated));
-      setTurns(cached.turns);
-      setAttachments(cached.attachments);
-    }
-    if (!client.online) { setLoading(false); historyLoading.current = false; return; }
-    setLoading(true);
-    historyLoading.current = true;
-    pendingEvents.current = [];
-    try {
-      const history = await client.rpc<BotHistory>("history", id);
-      if (selectedRef.current !== id || client.owner !== owner || historyRequest.current !== request) return;
-      let next = history.thread.turns;
-      for (const event of pendingEvents.current)
-        if (event.type === "codex")
-          next = reduceBotTurns(next, event.data as NativeEvent);
-      setTurns(next);
-      setCachedHistory(false);
-      setTruncatedHistory(false);
-      setOlderCursor(history.nextCursor);
-      setAttachments(history.attachments);
-      client.save(`history:${id}`, {
-        turns: next,
-        attachments: history.attachments,
-      });
-      await client.rpc("bots.read", id);
-    } catch (e) {
-      if (selectedRef.current === id && client.owner === owner && historyRequest.current === request)
-        setError(e instanceof Error ? e.message : "History could not load.");
-    } finally {
-      if (selectedRef.current === id && client.owner === owner && historyRequest.current === request) {
-        setLoading(false);
-        historyLoading.current = false;
-        pendingEvents.current = [];
-      }
-    }
-  }, []);
   const loadQueue = useCallback(async (id: string) => {
     const owner = client.owner;
     const request = ++queueRequest.current;
@@ -407,65 +292,30 @@ export function BotsWorkspace() {
       if (selected) {
         setQueueScope(JSON.stringify([client.owner, selected]));
         setPromptQueue(client.cache<BotQueuedSubmission[]>(`queue:${selected}`, []));
-        void loadHistory(selected);
         void loadQueue(selected);
       }
       else {
-        setTurns([]);
-        setAttachments([]);
         setPromptQueue([]);
       }
       setProfile(false);
       setError("");
-      nearBottom.current = true;
     });
     return () => { active = false; };
-  }, [selected, online, owner, loadHistory, loadQueue]);
+  }, [selected, online, owner, loadQueue]);
   useEffect(() => {
     const listener = (event: BotEvent) => {
       if (event.botId !== selectedRef.current) return;
-      if (historyLoading.current) {
-        pendingEvents.current.push(event);
-        return;
-      }
-      if (event.type === "history.refresh" && selectedRef.current)
-        void loadHistory(selectedRef.current);
       if ((event.type === "queue" ||
           (event.type === "codex" &&
            (event.data as NativeEvent).method === "thread/queue/changed")) &&
           selectedRef.current)
         void loadQueue(selectedRef.current);
-      if (event.type === "codex")
-        setTurns((current) =>
-          reduceBotTurns(current, event.data as NativeEvent),
-        );
-      if (event.type === "attachment")
-        setAttachments((current) => [
-          ...current.filter((a) => a.id !== (event.data as BotAttachment).id),
-          event.data as BotAttachment,
-        ]);
     };
     client.events.add(listener);
     return () => {
       client.events.delete(listener);
     };
-  }, [loadHistory, loadQueue]);
-  useEffect(() => {
-    if (selected && owner && historyScope === scope && loadedTurns.length)
-      client.save(`history:${selected}`, { turns: loadedTurns, attachments: loadedAttachments });
-  }, [selected, owner, historyScope, scope, loadedTurns, loadedAttachments]);
-  useEffect(() => {
-    const messages = scrollRef.current;
-    if (!messages) return;
-    // History updates and browser scroll restoration can retain an old x offset.
-    messages.scrollLeft = 0;
-    if (nearBottom.current)
-      messages.scrollTo({
-        left: 0,
-        top: messages.scrollHeight,
-        behavior: "instant",
-      });
-  }, [turns, attachments, selected, pending.length]);
+  }, [loadQueue]);
   useEffect(() => {
     if (
       !selected ||
@@ -481,14 +331,14 @@ export function BotsWorkspace() {
     );
     return () => clearTimeout(timer);
   }, [selected, online, bot]);
-  function select(id: string | null) {
+  const select = useCallback((id: string | null) => {
     selectedRef.current = id;
     setSelected(id);
     const url = new URL(window.location.href);
     if (id) url.searchParams.set("bot", id);
     else url.searchParams.delete("bot");
     window.history.pushState({}, "", url);
-  }
+  }, []);
   async function action(fn: () => Promise<unknown>) {
     setError("");
     setBusy(true);
@@ -515,7 +365,6 @@ export function BotsWorkspace() {
   async function send(queueNext = false) {
     if (!composer || !bot || !canSend) return;
     const id = bot.id;
-    nearBottom.current = true;
     await composer.send(queueNext);
     if (queueNext || editingQueueId) await loadQueue(id);
   }
@@ -561,11 +410,8 @@ export function BotsWorkspace() {
     if (!images.length) return;
     void upload(images);
   }
-  const filtered = bots.filter(
-    (b) =>
-      b.archived === archived &&
-      `${b.name} ${b.purpose}`.toLowerCase().includes(search.toLowerCase()),
-  );
+  const filtered = useMemo(() => bots.filter((b) => b.archived === archived &&
+    `${b.name} ${b.purpose}`.toLowerCase().includes(search.toLowerCase())), [bots, archived, search]);
   const schedules = snapshot?.schedules.filter((s) => s.botId === selected) ?? [];
   return (
     <div className="bots-screen" ref={screenRef} data-no-pull-refresh>
@@ -624,71 +470,8 @@ export function BotsWorkspace() {
               Archived
             </button>
           </div>
-          <div className="bots-list">
-            {filtered.map((b) => {
-              const modelId = b.model ?? snapshot?.defaults.model;
-              const model = snapshot?.models.find((m) => m.model === modelId);
-              const modelName = model?.displayName ?? modelId ?? "Default model";
-              const effort = b.effort ?? snapshot?.defaults.effort ?? "default";
-              const tier = b.serviceTier ?? snapshot?.defaults.serviceTier;
-              const fast = tier === "priority" || tier === "fast";
-              return (
-                <button
-                  className={`bots-row ${selected === b.id ? "selected" : ""}`}
-                  key={b.id}
-                  onClick={() => select(b.id)}
-                >
-                  <Avatar bot={b} />
-                  <span className="bots-row-copy">
-                    <span className="bots-row-name">
-                      <span className="bots-row-title">{b.name}</span>
-                      <small>
-                        {new Date(b.updatedAt).toLocaleTimeString(undefined, {
-                          hour: "numeric",
-                          minute: "2-digit",
-                        })}
-                      </small>
-                    </span>
-                    <span className="bots-row-preview">
-                      {b.status === "waiting"
-                        ? "Needs your input"
-                        : b.preview || b.purpose || "Start a conversation"}
-                    </span>
-                    <span className="bots-row-config">
-                      <span className="bots-row-model" title={modelName}>
-                        {modelName}
-                      </span>
-                      <span aria-hidden="true">·</span>
-                      <span>{effort}</span>
-                      {fast && (
-                        <span
-                          className="bots-row-fast"
-                          role="img"
-                          aria-label="Fast mode"
-                          title="Fast mode"
-                        >
-                          <Zap size={12} aria-hidden="true" />
-                        </span>
-                      )}
-                    </span>
-                  </span>
-                  {b.updatedAt > b.lastReadAt && <span className="bots-unread" />}
-                  {(b.status === "running" || Boolean(b.workerTasks?.active)) && (
-                    <LoaderCircle size={14} className="bots-spin" />
-                  )}
-                </button>
-              );
-            })}
-            {!filtered.length && (
-              <div className="bots-sidebar-empty">
-                {search
-                  ? "No matching bots."
-                  : archived
-                    ? "No archived bots."
-                    : "Your bots will appear here."}
-              </div>
-            )}
-          </div>
+          <BotSidebarList bots={filtered} snapshot={snapshot} selected={selected} select={select}
+            empty={search ? "No matching bots." : archived ? "No archived bots." : "Your bots will appear here."} />
           <div className="bots-machine">
             <span className={`bots-status-dot ${online ? "online" : ""}`} />
             <span>
@@ -789,147 +572,7 @@ export function BotsWorkspace() {
             </div>
           ) : (
             <>
-              <div
-                className="bots-messages"
-                ref={scrollRef}
-                onScroll={() => {
-                  const el = scrollRef.current;
-                  if (el) {
-                    if (el.scrollLeft) el.scrollLeft = 0;
-                    nearBottom.current =
-                      el.scrollHeight - el.scrollTop - el.clientHeight < 100;
-                  }
-                }}
-              >
-                {olderCursor && (
-                  <button
-                    className="bots-older"
-                    disabled={!online || busy}
-                    onClick={() =>
-                      void action(async () => {
-                        const owner = client.owner;
-                        const request = historyRequest.current;
-                        const page = await client.rpc<{
-                          data: Turn[];
-                          nextCursor: string | null;
-                        }>("history.page", bot.id, { cursor: olderCursor });
-                        if (client.owner !== owner || selectedRef.current !== bot.id || request !== historyRequest.current) return;
-                        setTurns((current) => [
-                          ...page.data
-                            .reverse()
-                            .filter((t) => !current.some((c) => c.id === t.id)),
-                          ...current,
-                        ]);
-                        setOlderCursor(page.nextCursor);
-                      })
-                    }
-                  >
-                    Load earlier messages
-                  </button>
-                )}
-                {cachedHistory && historyScope === scope && <div className="bots-system-note">{truncatedHistory ? "Recent cached messages shown. Connect to refresh the conversation and load earlier messages." : "Saved conversation shown. Messages received since this copy may be missing while offline."}</div>}
-                {loading && (
-                  <div className="bots-system-note">Loading conversation…</div>
-                )}
-                {!loading && !turns.length && (
-                  <div className="bots-conversation-start">
-                    <Avatar bot={bot} />
-                    <h2>{bot.name}</h2>
-                    <p>{bot.purpose || "What would you like to work on?"}</p>
-                  </div>
-                )}
-                {turns.map((turn) => {
-                  const scheduled = turn.items.some((item) => item.type === "userMessage" && item.clientId?.startsWith("schedule:"));
-                  const summary = turn.items.find((item) => item.type === "userMessage" && item.clientId?.startsWith("schedule:"));
-                  const scheduledText = summary?.type === "userMessage"
-                    ? summary.content.find((part) => part.type === "text")?.text ?? "Scheduled task"
-                    : "Scheduled task";
-                  const scheduledOutput = [...turn.items].reverse().find((item) => item.type === "agentMessage");
-                  return <details className={`bots-turn ${scheduled ? "is-scheduled" : ""}`} key={turn.id} open={!scheduled}>
-                    <summary>Scheduled run · {turn.startedAt ? stamp(new Date(turn.startedAt * 1000).toISOString()) : "recent"} · {turn.status} · {(scheduledOutput?.type === "agentMessage" ? scheduledOutput.text : scheduledText).slice(0, 110)} · Show full turn</summary>
-                    {turn.startedAt && (
-                      <div className="bots-time">
-                        {stamp(new Date(turn.startedAt * 1000).toISOString())}
-                      </div>
-                    )}
-                    {displayItems(turn.items).map((entry) =>
-                      entry.kind === "message" ? (
-                        <BotMessage
-                          key={entry.item.id}
-                          item={entry.item}
-                          botId={bot.id}
-                          attachments={attachments}
-                          download={(id) => void download(id)}
-                        />
-                      ) : (
-                        <details
-                          className="bots-activity"
-                          key={`work:${entry.items[0].id}`}
-                        >
-                          <summary>
-                            <ChevronRight
-                              className="bots-activity-chevron"
-                              size={15}
-                              aria-hidden="true"
-                            />
-                            <span>
-                              {workGroupIsActive(turn, entry.items)
-                                ? "Working…"
-                                : "Work log"}
-                            </span>
-                            <small>
-                              {entry.items.length} step
-                              {entry.items.length === 1 ? "" : "s"}
-                            </small>
-                            {workGroupIsActive(turn, entry.items) && (
-                              <LoaderCircle
-                                size={14}
-                                className="bots-spin"
-                                aria-hidden="true"
-                              />
-                            )}
-                          </summary>
-                          <div className="bots-activity-content">
-                            {entry.items.map((item) => (
-                              <BotMessage
-                                key={item.id}
-                                item={item}
-                                botId={bot.id}
-                                attachments={attachments}
-                                download={(id) => void download(id)}
-                                inWorkLog
-                              />
-                            ))}
-                          </div>
-                        </details>
-                      ),
-                    )}
-                    {turn.planSteps && (
-                      <details className="bots-tool">
-                        <summary>Work plan</summary>
-                        <ul>
-                          {turn.planSteps.map((step, i) => (
-                            <li key={i}>
-                              {step.status}: {step.step}
-                            </li>
-                          ))}
-                        </ul>
-                      </details>
-                    )}
-                    {turn.diff && (
-                      <details className="bots-tool">
-                        <summary>Turn changes</summary>
-                        <pre>{turn.diff}</pre>
-                      </details>
-                    )}
-                    {turn.error && (
-                      <div className="bots-error">{turn.error.message}</div>
-                    )}
-                    {turn.status === "interrupted" && (
-                      <div className="bots-system-note">Stopped</div>
-                    )}
-                  </details>;
-                })}
+              <BotConversation key={scope} owner={owner} bot={bot} online={online}>
                 {pending.map((request) => (
                   <RequestCard
                     key={request.key}
@@ -956,30 +599,10 @@ export function BotsWorkspace() {
                     </small>
                   </div>
                 )}
-              </div>
-              {attachments.some(
-                (a) => (a as BotAttachment & { artifact?: boolean }).artifact,
-              ) && (
-                <div className="bots-artifacts">
-                  {attachments
-                    .filter(
-                      (a) =>
-                        (a as BotAttachment & { artifact?: boolean }).artifact,
-                    )
-                    .map((a) => (
-                      <button
-                        key={a.id}
-                        disabled={!online || busy}
-                        onClick={() => void download(a.id)}
-                      >
-                        <Download size={14} />
-                        {a.name}
-                      </button>
-                    ))}
-                </div>
-              )}
+              </BotConversation>
               {!bot.archived && (
                 <>
+                  <div className="bots-composer-support">
                   <div className="bots-controls">
                     <select
                       aria-label="Model"
@@ -1118,6 +741,7 @@ export function BotsWorkspace() {
                   )}
                   <ComposerStatus composer={composer} error={composerError} />
                   {composer && <ComposerAttachments composer={composer} />}
+                  </div>
                   <form
                     className="bots-composer"
                     onSubmit={(e) => {
@@ -1414,7 +1038,7 @@ export function BotsWorkspace() {
           </aside>
         )}
       </main>
-      {showRunHistory && bot && <RunHistory bot={bot} schedules={schedules} attachments={attachments} online={online} onClose={() => setShowRunHistory(false)} download={(id) => void download(id)} />}
+      {showRunHistory && bot && <RunHistory bot={bot} schedules={schedules} attachments={[]} online={online} onClose={() => setShowRunHistory(false)} download={(id) => void download(id)} />}
       {showOverallUsage && <div className="bots-modal-backdrop" onClick={() => setShowOverallUsage(false)}><section className="bots-history-modal bots-usage-modal" role="dialog" aria-modal="true" aria-label="Codex account usage" onClick={(event) => event.stopPropagation()}><header><h2>Codex account usage</h2><button className="bots-icon-button" aria-label="Close account usage" onClick={() => setShowOverallUsage(false)}><X size={19} /></button></header><UsagePanel online={online} /></section></div>}
       {creating && (
         <div className="bots-modal-backdrop" onClick={() => setCreating(false)}>

@@ -1,6 +1,6 @@
 "use client";
-import { memo, useEffect, useState } from "react";
-import { LazyDetails, TextPages } from "./lazy-details";
+import { memo, useEffect, useState, useRef, useSyncExternalStore } from "react";
+import { LazyDetails, TextPages, ItemPages } from "./lazy-details";
 import { botsClient } from "./client";
 import type { BotAttachment } from "../../lib/bots-types";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
@@ -72,7 +72,7 @@ function BotMessage({
           {item.clientId?.startsWith("schedule:") && (
             <small>Scheduled task</small>
           )}
-          {item.content.map((c, i) =>
+          {<ItemPages items={item.content} render={(c, i) =>
             c.type === "text" ? (
               <TextPages key={i} text={c.text} render={(text) => <p>{text}</p>} />
             ) : c.type === "localImage" &&
@@ -90,8 +90,8 @@ function BotMessage({
                     ? `$${c.name}`
                     : "File attached"}
               </p>
-            ),
-          )}
+            )
+          } />}
         </div>
       </div>
     );
@@ -145,6 +145,22 @@ function BotMessage({
           : item.type === "dynamicToolCall"
             ? item.tool
             : item.type.replace(/([a-z])([A-Z])/g, "$1 $2");
+  const toolBody = () => command ? (
+        <>
+          <TextPages text={item.aggregatedOutput || "Waiting for output…"} render={(text) => <pre>{text}</pre>} />
+          {item.exitCode !== null && <small>Exit code {item.exitCode}</small>}
+        </>
+      ) : diff ? (
+        <ItemPages items={item.changes} size={5} render={(change, i) => (
+          <div key={i}>
+            <strong>{change.path}</strong>
+            <TextPages text={change.diff} render={(text) => <pre>{text}</pre>} />
+          </div>
+        )} />
+      ) : (
+        <TextPages text={JSON.stringify(item, null, 2)} render={(text) => <pre>{text}</pre>} />
+      );
+  if (inWorkLog) return <div className="bots-tool">{toolBody()}</div>;
   const running = "status" in item && item.status === "inProgress";
   return (
     <LazyDetails summary={<>
@@ -163,21 +179,7 @@ function BotMessage({
         ) : (
           <Check size={14} />
         )}
-      </>}>{() => command ? (
-        <>
-          <TextPages text={item.aggregatedOutput || "Waiting for output…"} render={(text) => <pre>{text}</pre>} />
-          {item.exitCode !== null && <small>Exit code {item.exitCode}</small>}
-        </>
-      ) : diff ? (
-        item.changes.map((change, i) => (
-          <div key={i}>
-            <strong>{change.path}</strong>
-            <TextPages text={change.diff} render={(text) => <pre>{text}</pre>} />
-          </div>
-        ))
-      ) : (
-        <TextPages text={JSON.stringify(item, null, 2)} render={(text) => <pre>{text}</pre>} />
-      )}
+      </>}>{toolBody}
     </LazyDetails>
   );
 }
@@ -192,8 +194,16 @@ function AttachmentImage({
   botId: string;
   attachment: BotAttachment;
 }) {
-  const [url, setUrl] = useState("");
+  const [url, setUrl] = useState(""), [visible, setVisible] = useState(false);
+  const placeholder = useRef<HTMLSpanElement>(null);
+  const online = useSyncExternalStore(botsClient.subscribe, () => botsClient.online, () => false);
   useEffect(() => {
+    const observer = new IntersectionObserver((entries) => { if (entries.some((entry) => entry.isIntersecting)) setVisible(true); }, { rootMargin: "200px" });
+    if (placeholder.current) observer.observe(placeholder.current);
+    return () => observer.disconnect();
+  }, []);
+  useEffect(() => {
+    if (!online || !visible) return;
     let alive = true,
       objectUrl = "";
     void botsClient
@@ -209,10 +219,10 @@ function AttachmentImage({
       alive = false;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [botId, attachment.id]);
-  return url ? (
+  }, [botId, attachment.id, online, visible]);
+  return <span ref={placeholder}>{url ? (
     <img className="bots-attached-image" src={url} alt={attachment.name} />
   ) : (
-    <span>{attachment.name}</span>
-  );
+    <span>{attachment.name}{!online ? " · reconnect to view image" : ""}</span>
+  )}</span>;
 }

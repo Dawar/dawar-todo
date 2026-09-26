@@ -17,6 +17,7 @@ const pause = (ms) => new Promise((r) => setTimeout(r, ms));
 test('a huge tool turn projects a useful answer, bounds response and retains native full detail', async () => {
   const tool = { type: 'commandExecution', id: 'tool-a', command: 'synthetic', aggregatedOutput: 'x'.repeat(2_000_000), status: 'completed' };
   const runtime = fakeRuntime([turn('turn-a', [tool, message('answer', 'Useful latest answer')])]);
+  let nativeReads = 0; const read = runtime.historyPage; runtime.historyPage = (...args) => { nativeReads++; return read(...args); };
   const projected = await historyViewPage(runtime, bot);
   assert.ok(Buffer.byteLength(JSON.stringify(projected)) < 4096);
   assert.equal(projected.entries.at(-1).item.text, 'Useful latest answer');
@@ -28,6 +29,7 @@ test('a huge tool turn projects a useful answer, bounds response and retains nat
     json += detail.json; offset = detail.nextOffset; version = detail.version;
   } while (offset !== null);
   assert.equal(JSON.parse(json).aggregatedOutput.length, 2_000_000);
+  assert.equal(nativeReads, 2, "one projection read and one detail read, independent of continuation count");
 });
 
 test('pagination is item-bounded and anchored across new arrivals, without dropping messages', async () => {
@@ -50,6 +52,11 @@ test('oversized messages explicitly offer complete detail, including Unicode', a
   assert.ok(Buffer.byteLength(JSON.stringify(entries)) < 128 * 1024);
   const a = await readHistoryDetail(runtime, bot, { turnId: 'turn-a', itemId: 'long' });
   original.text += ' changed';
+  const continuation = await readHistoryDetail(runtime, bot, { turnId: 'turn-a', itemId: 'long', offset: a.nextOffset, version: a.version });
+  assert.equal(continuation.version, a.version, 'continuation uses one consistent snapshot');
+  runtime.historyVersions = new Map([[bot.id, 2]]);
+  const changed = await readHistoryDetail(runtime, bot, { turnId: 'turn-a', itemId: 'long' });
+  assert.notEqual(changed.version, a.version);
   await assert.rejects(readHistoryDetail(runtime, bot, { turnId: 'turn-a', itemId: 'long', offset: a.nextOffset, version: a.version }), /changed/);
 });
 
@@ -92,7 +99,7 @@ test('same-thread requests deduplicate and a delayed page cannot erase newer liv
   const first = controller.refresh(), second = controller.refresh(); await pause(0); assert.equal(calls, 1);
   controller.receive({ type: 'codex', botId: 'bot-a', seq: 2, data: { method: 'item/agentMessage/delta', params: { turnId: 'turn-a', itemId: 'live', delta: '-live' } } });
   resolve(page([entry('live', 'stale')], { eventCursor: 1 })); await Promise.all([first, second]);
-  assert.deepEqual(controller.getSnapshot().entries.map((e) => e.item.text), ['Complete message', 'prefix-live']);
+  assert.deepEqual(Array.from(controller.getSnapshot().entries, (e) => e.item.text), ['Complete message', 'prefix-live']);
   await controller.flush(); assert.ok(writes.at(-1).dirty.some((e) => e.item.text === 'prefix-live'));
   await controller.dispose();
 });
@@ -109,4 +116,71 @@ test('100 ordered deltas coalesce into one dirty-item write and keep other item 
   assert.equal(controller.getSnapshot().entries[0], unchanged);
   assert.equal(controller.getSnapshot().entries[1].item.text, Array.from({ length: 100 }, (_, i) => `${i + 1},`).join(''));
   await controller.dispose();
+});
+
+test('disjoint cached/new tails retain a durable gap until every intervening item is reachable', async () => {
+  const env = runtime({ IDBKeyRange }), { BotTimeline } = env.load('app/bots/timeline-controller.ts');
+  const { createTimelineCache } = env.load('app/bots/timeline-cache.ts'), cache = createTimelineCache(env.indexedDB);
+  const items = Array.from({ length: 400 }, (_, i) => message(`item-${i}`)), native = fakeRuntime([turn('turn-a', items)]);
+  const old = items.slice(0, 40).map((item) => projectHistoryItem(turn('turn-a', []), item));
+  await cache.write({ owner: 'owner', botId: bot.id, order: old.map((e) => historyKey(e.turnId, e.id)), revision: 'old', eventCursor: 0, olderCursor: null, complete: true, attachments: [], touched: 1 }, old);
+  const transport = { owner: 'owner', online: true, rpc: async (_, id, params) => ({ kind: 'page', ...await historyViewPage(native, bot, params.cursor), revision: 'v2', eventCursor: 0 }) };
+  let controller = new BotTimeline('owner', bot.id, transport, cache);
+  await controller.refresh(); assert.equal(controller.getSnapshot().gaps.length, 1); await controller.dispose(); await cache.close();
+  controller = new BotTimeline('owner', bot.id, transport, createTimelineCache(env.indexedDB));
+  await controller.hydrate(); assert.equal(controller.getSnapshot().gaps.length, 1);
+  let count = 0;
+  while (controller.getSnapshot().gaps.length) { await controller.fillGap(controller.getSnapshot().gaps[0]); assert.ok(++count < 20); }
+  assert.deepEqual(Array.from(controller.getSnapshot().entries, (e) => e.id), items.map((i) => i.id));
+  await controller.flush(); await controller.dispose();
+});
+
+test('sparse completion settles existing entries and command status is independent of parent status', async () => {
+  const env = runtime({ IDBKeyRange }), { BotTimeline } = env.load('app/bots/timeline-controller.ts');
+  const tool = projectHistoryItem({ ...turn('turn-a', []), status: 'inProgress' }, { id: 'tool', type: 'commandExecution', command: 'synthetic', status: 'completed' });
+  assert.equal(tool.status, 'completed');
+  const live = { ...entry('live'), status: 'inProgress' };
+  const controller = new BotTimeline('owner', bot.id, { owner: 'owner', online: true, rpc: async () => page([live, tool]) }, { read: async () => null, write: async () => {} });
+  await controller.refresh();
+  controller.receive({ seq: 1, botId: bot.id, type: 'codex', data: { method: 'turn/completed', params: { turn: turn('turn-a', []) } } });
+  assert.ok(controller.getSnapshot().entries.every((e) => e.status === 'completed')); await controller.dispose();
+});
+
+test('long streaming flushes periodically, and owner revocation masks a late reply', async () => {
+  const env = runtime({ IDBKeyRange }), { BotTimeline } = env.load('app/bots/timeline-controller.ts');
+  const writes = [], transport = { owner: 'owner', online: true, rpc: async () => page([entry('live', '')]) };
+  const controller = new BotTimeline('owner', bot.id, transport, { read: async () => null, write: async (meta, dirty) => writes.push({ meta, dirty }) });
+  await controller.refresh(); await controller.flush(); writes.length = 0;
+  for (let seq = 1; seq <= 12; seq++) { controller.receive({ seq, botId: bot.id, type: 'codex', data: { method: 'item/agentMessage/delta', params: { turnId: 'turn-a', itemId: 'live', delta: 'x' } } }); await pause(50); }
+  assert.ok(writes.length >= 2, 'writes continue during sustained tokens'); await controller.dispose();
+  let resolve; transport.rpc = () => new Promise((r) => { resolve = r; });
+  const second = new BotTimeline('owner', bot.id, transport, { read: async () => null, write: async () => {} });
+  const request = second.refresh(); await pause(0); transport.owner = 'other'; await second.dispose(); resolve(page([entry('secret')])); await request;
+  assert.equal(second.getSnapshot().entries.length, 0);
+});
+
+test('a tools-only newest window keeps useful readable context without losing native access', async () => {
+  const user = { id: 'user', type: 'userMessage', content: [{ type: 'text', text: 'Useful user request', text_elements: [] }] };
+  const items = [user, message('answer', 'Useful earlier explanation'), ...Array.from({ length: 90 }, (_, i) => ({ type: 'commandExecution', id: `tool-${i}`, command: 'synthetic', status: 'inProgress', aggregatedOutput: 'tool output '.repeat(100000) }))];
+  const page = await historyViewPage(fakeRuntime([turn('turn-a', items)]), bot);
+  assert.equal(page.entries.length, 40); assert.equal(page.contextEntries.length, 2);
+  assert.match(JSON.stringify(page.contextEntries), /Useful user request/); assert.match(JSON.stringify(page.contextEntries), /Useful earlier explanation/);
+  assert.ok(Buffer.byteLength(JSON.stringify(page)) < 96 * 1024); assert.ok(page.olderCursor);
+});
+
+test('opened tool detail applies ordered deltas, persists completed detail, and validates unchanged versions cheaply', async () => {
+  const env = runtime({ IDBKeyRange }), { BotTimeline } = env.load('app/bots/timeline-controller.ts');
+  const tool = { type: 'commandExecution', id: 'tool', command: 'synthetic', status: 'completed', aggregatedOutput: 'initial' };
+  const projected = projectHistoryItem(turn('turn-a', []), tool), native = fakeRuntime([turn('turn-a', [tool])]);
+  const responses = [];
+  const transport = { owner: 'owner', online: true, rpc: async (method, _, params) => { const response = method === 'history.detail' ? await readHistoryDetail(native, bot, params) : page([projected]); responses.push(response); return response; } };
+  const controller = new BotTimeline('owner', bot.id, transport, { read: async () => null, write: async () => {} });
+  await controller.refresh(); const unsubscribe = controller.subscribeDetail(projected, () => {});
+  await controller.detail(projected); await pause(30);
+  for (let i = 2; i <= 4; i++) controller.receive({ seq: i, botId: bot.id, type: 'codex', data: { method: 'item/commandExecution/outputDelta', params: { turnId: 'turn-a', itemId: 'tool', delta: String(i) } } });
+  assert.equal(controller.detailItem(projected).aggregatedOutput, 'initial234'); unsubscribe();
+  await controller.detail(projected); assert.equal(responses.at(-1).notModified, true);
+  transport.online = false;
+  assert.equal((await controller.detail(projected)).aggregatedOutput, 'initial');
+  transport.owner = 'other'; await assert.rejects(controller.detail(projected), /owner changed/); await controller.dispose();
 });

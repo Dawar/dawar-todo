@@ -1,10 +1,10 @@
-import { historyBefore, historyKey, type HistoryEntry, type HistoryPosition } from "../../lib/bot-history-view";
+import { historyBefore, historyKey, type HistoryEntry, type HistoryPosition, type HistoryGap } from "../../lib/bot-history-view";
 import type { BotAttachment } from "../../lib/bots-types";
 
 export type TimelineMetadata = {
   owner: string; botId: string; revision: string; eventCursor: number;
   order: string[]; olderCursor: string | null; complete: boolean;
-  attachments: BotAttachment[]; position?: HistoryPosition; touched: number;
+  attachments: BotAttachment[]; contextEntries?: HistoryEntry[]; gaps?: HistoryGap[]; position?: HistoryPosition; touched: number;
 };
 export type TimelineCacheValue = { metadata: TimelineMetadata; entries: HistoryEntry[] };
 const MAX_THREADS = 12, MAX_ENTRIES = 240;

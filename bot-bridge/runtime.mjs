@@ -22,7 +22,7 @@ import {
   containedPath,
 } from "./profiles.mjs";
 import { normalizeSchedule, collectDueRuns } from "./schedules.mjs";
-import { readHistoryView, readHistoryDetail } from "./history-view.mjs";
+import { readHistoryView, readHistoryDetail, readHistoryAttachments } from "./history-view.mjs";
 
 const colors = [
   "#5c74b8",
@@ -53,6 +53,7 @@ const READ_METHODS = new Set([
   "history.turn",
   "history.view",
   "history.detail",
+  "history.attachments",
   "events",
   "schedules.list",
   "runs.page",
@@ -565,6 +566,8 @@ export class BotRuntime extends EventEmitter {
     }
     const bot = this.store.bot(String(botId));
     switch (method) {
+      case "history.attachments":
+        return readHistoryAttachments(this, bot, p);
       case "history.view":
         return readHistoryView(this, bot, p);
       case "history.detail":

@@ -62,6 +62,11 @@ export class BotsClient {
   notify() {
     for (const listener of this.listeners) listener();
   }
+  private snapshotTimer?: ReturnType<typeof setTimeout>;
+  private flushSnapshot() {
+    if (this.snapshotTimer) clearTimeout(this.snapshotTimer); this.snapshotTimer = undefined;
+    if (this.snapshot && this.owner) this.save("snapshot", { ...this.snapshot, pending: [] });
+  }
   private histories = new Map<string, unknown>();
   private connectionEpoch = 0;
   private authChannel?: BroadcastChannel;
@@ -97,6 +102,7 @@ export class BotsClient {
     return this.cache<CachedBotHistory | null>(`history:${botId}`, null) ?? readBotHistory(this.owner, botId);
   }
   private detachOwner() {
+    this.flushSnapshot();
     this.connectionEpoch++;
     this.online = false;
     const socket = this.socket;
@@ -165,6 +171,8 @@ export class BotsClient {
     }
     if (!this.authListeners && typeof document !== "undefined") {
       this.authListeners = true;
+      window.addEventListener("pagehide", () => this.flushSnapshot());
+      document.addEventListener("visibilitychange", () => { if (document.hidden) this.flushSnapshot(); });
       document.addEventListener("click", (event) => {
         const target = event.target;
         if (target instanceof Element && target.closest('a[href^="/signout-with-chatgpt"]')) this.clearOwnerCache();
@@ -400,13 +408,13 @@ export class BotsClient {
           };
         this.snapshot = { ...this.snapshot, cursor: event.seq };
         // Pending requests may contain secrets; only cache the visible bot list.
-        this.save("snapshot", { ...this.snapshot, pending: [] });
+        this.snapshotTimer ??= setTimeout(() => this.flushSnapshot(), 1000);
       }
       if (event.type === "runtime" && (event.data as { ready: boolean }).ready)
         void this.refresh().catch(() => {});
       if (event.type === "schedules") void this.refresh().catch(() => {});
       for (const listener of this.events) listener(event);
-      this.notify();
+      if (event.type !== "codex") this.notify();
     }
   }
   rememberOperation(request: BridgeRequest) {

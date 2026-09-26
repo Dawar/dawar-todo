@@ -1,6 +1,14 @@
 import { createHash } from 'node:crypto';
 import { projectHistoryItem, HISTORY_WINDOW, historyKey } from '../lib/bot-history-view.ts';
 
+const details = new WeakMap();
+const DETAIL_TTL = 30_000, DETAIL_BYTES = 32 * 1024 * 1024;
+function detailCache(runtime) {
+  let cache = details.get(runtime);
+  if (!cache) { cache = new Map(); details.set(runtime, cache); }
+  for (const [key, item] of cache) if (item.expires < Date.now()) cache.delete(key);
+  return cache;
+}
 const MAX_PAGE_BYTES = 96 * 1024;
 const encode = JSON.stringify;
 function decode(cursor) {
@@ -40,10 +48,24 @@ export async function historyViewPage(runtime, bot, cursor = null) {
   }
   const olderCursor = index < all.length ? encode({ native: position.native, before: historyKey(all[index - 1].turn.id, all[index - 1].item.id) })
     : page.nextCursor ? encode({ native: page.nextCursor, before: null }) : null;
+  const contextEntries = [];
+  if (!cursor && !entries.some((entry) => !entry.scheduled && ['userMessage', 'agentMessage'].includes(entry.type))) {
+    const types = new Set();
+    for (const { turn, item, scheduled } of all) {
+      if (scheduled || !['userMessage', 'agentMessage'].includes(item.type) || types.has(item.type)) continue;
+      types.add(item.type);
+      const entry = projectHistoryItem(turn, item, scheduled);
+      if (entry.item.type === 'agentMessage') { entry.item.text = entry.item.text.slice(0, 4096); entry.complete = false; }
+      else { entry.item.content = [{ type: 'text', text: item.content.filter((part) => part.type === 'text').map((part) => part.text).join('\n').slice(0, 4096), text_elements: [] }]; entry.complete = false; }
+      contextEntries.push(entry);
+      if (contextEntries.length === 2) break;
+    }
+    contextEntries.reverse();
+  }
   const paths = new Set(entries.flatMap((entry) => entry.item?.type === 'userMessage'
     ? entry.item.content.flatMap((part) => part.type === 'localImage' ? [part.path] : []) : []));
   const attachments = runtime.store.list('attachment', bot.id).filter((a) => a.ready && paths.has(a.path)).map((a) => runtime.publicAttachment(a));
-  return { entries: entries.reverse(), olderCursor, attachments, complete: !olderCursor && entries.every((e) => e.complete) };
+  return { entries: entries.reverse(), contextEntries, olderCursor, attachments, complete: !olderCursor && entries.every((e) => e.complete) };
 }
 
 export function historyRevision(runtime, bot) {
@@ -69,17 +91,49 @@ export async function readHistoryDetail(runtime, bot, params) {
     throw new Error('Invalid history item.');
   const offset = params.offset ?? 0;
   if (!Number.isSafeInteger(offset) || offset < 0) throw new Error('Invalid detail offset.');
-  // Native history remains the source for all details, including a single huge turn.
-  let cursor = null, item;
-  do {
-    const page = await runtime.historyPage(bot.threadId, cursor);
-    item = page.data.find((turn) => turn.id === params.turnId)?.items.find((entry) => entry.id === params.itemId);
-    cursor = page.nextCursor;
-  } while (!item && cursor);
-  if (!item) throw new Error('This history item is not available from the native thread.');
-  const json = JSON.stringify(item), version = createHash('sha256').update(json).digest('hex');
-  if (params.version && params.version !== version) throw new Error('The item changed while loading. Open its details again.');
-  const next = Math.min(json.length, offset + 12_288);
-  if (offset > json.length) throw new Error('Invalid detail offset.');
-  return { json: json.slice(offset, next), nextOffset: next < json.length ? next : null, totalLength: json.length, version };
+  const key = `${bot.id}:${bot.threadId}:${params.turnId}:${params.itemId}`, cache = detailCache(runtime);
+  let cached = cache.get(key);
+  if (cached && (params.version ? cached.version !== params.version : cached.revision !== historyRevision(runtime, bot))) cached = undefined;
+  if (!cached) {
+    // One native lookup/serialization per detail version, shared by requests.
+    const pendingKey = `${key}:pending`, existing = cache.get(pendingKey);
+    const promise = existing?.promise ?? (async () => {
+      let cursor = null, item;
+      do {
+        const page = await runtime.historyPage(bot.threadId, cursor);
+        item = page.data.find((turn) => turn.id === params.turnId)?.items.find((entry) => entry.id === params.itemId);
+        cursor = page.nextCursor;
+      } while (!item && cursor);
+      if (!item) throw new Error('This history item is not available from the native thread.');
+      const json = JSON.stringify(item), version = createHash('sha256').update(json).digest('hex');
+      const paths = new Set(item.type === 'userMessage' ? item.content.filter((part) => part.type === 'localImage').map((part) => part.path) : []);
+      const attachments = runtime.store.list('attachment', bot.id).filter((a) => a.ready && paths.has(a.path)).map((a) => runtime.publicAttachment(a));
+      const value = { json, version, attachments, eventCursor: runtime.store.cursor(), revision: historyRevision(runtime, bot), expires: Date.now() + DETAIL_TTL };
+      cache.set(key, value);
+      let bytes = 0;
+      for (const [other, entry] of [...cache].reverse()) if (entry.json) {
+        bytes += Buffer.byteLength(entry.json);
+        // A single oversized item remains recoverable, and expires promptly.
+        if (other !== key && (bytes > DETAIL_BYTES || cache.size > 5)) cache.delete(other);
+      }
+      return value;
+    })();
+    if (!existing) cache.set(pendingKey, { promise, expires: Date.now() + DETAIL_TTL });
+    try { cached = await promise; } finally { cache.delete(pendingKey); }
+  }
+  if (params.version && params.version !== cached.version) throw new Error('The item changed while loading. Open its details again.');
+  if (offset === 0 && params.knownVersion === cached.version) return { notModified: true, json: '', nextOffset: null, totalLength: cached.json.length, version: cached.version, eventCursor: cached.eventCursor };
+  const next = Math.min(cached.json.length, offset + 48 * 1024);
+  if (offset > cached.json.length) throw new Error('Invalid detail offset.');
+  return { json: cached.json.slice(offset, next), nextOffset: next < cached.json.length ? next : null,
+    totalLength: cached.json.length, version: cached.version, eventCursor: cached.eventCursor,
+    ...(offset === 0 ? { attachments: cached.attachments } : {}) };
+}
+
+export function readHistoryAttachments(runtime, bot, params) {
+  const list = runtime.store.list('attachment', bot.id).filter((item) => item.ready && item.artifact).reverse();
+  const index = params.cursor ? list.findIndex((item) => item.id === params.cursor) + 1 : 0;
+  if (params.cursor && !index) throw new Error('Attachment cursor unavailable. Reopen files.');
+  const page = list.slice(index, index + 20);
+  return { attachments: page.map((item) => runtime.publicAttachment(item)), nextCursor: index + page.length < list.length ? page.at(-1).id : null };
 }

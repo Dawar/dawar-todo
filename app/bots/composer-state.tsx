@@ -36,7 +36,11 @@ export function ComposerStatus({ composer, error }: { composer: BotComposer | nu
   const uploadErrors = composer?.draft.files.filter((f) => f.error) ?? [];
   const missingCopies = composer?.draft.files.some((f) => !f.hasBytes);
   const otherFailures = botComposers.unsavedElsewhere.filter((c) => c !== composer);
-  return <div className="bots-draft-status" aria-live="polite">
+  const needsAttention = Boolean(storageError || otherFailures.length || composer?.actionError || uploadErrors.length || missingCopies || operation || composer?.recoveries.length);
+  const status = storageError ? "Draft not saved · Review recovery" : !composer?.ready ? "Recovering draft…" : composer.saved ? "Draft saved on this device" : "Saving draft… Keep this tab open.";
+  return <div className="bots-draft-status" aria-live="polite"><details className="bots-recovery-details">
+    <summary>{status}{needsAttention && <strong> · {uploadErrors.length ? `${uploadErrors.length} upload(s) need attention` : "Review status"}</strong>}</summary>
+    <div className="bots-recovery-content">
     {storageError ? <div role="alert">{storageError} <button type="button" onClick={() => { void composer?.retry(); void botComposers.recoverOwner(); }}>Retry saving / recovery</button></div>
       : <span>{!composer?.ready ? "Recovering draft…" : composer.saved ? "Draft saved on this device" : "Saving draft… Keep this tab open."}</span>}
     {otherFailures.length > 0 && <div role="alert">{otherFailures.length} other bot draft(s) could not save. Keep this tab open. <button type="button" onClick={() => otherFailures.forEach((c) => { void c.retry(); })}>Retry saving all</button></div>}
@@ -48,5 +52,6 @@ export function ComposerStatus({ composer, error }: { composer: BotComposer | nu
       <option value="">Choose saved version</option>{composer.recoveries.map((slot, index) => <option key={slot} value={slot}>Saved version {index + 1}</option>)}
     </select></label>}
     {composer && composer.record.active !== "normal" && !composer.draft.queueId && <button type="button" onClick={() => composer.select("normal")}>Return to normal draft</button>}
+    </div></details>
   </div>;
 }
