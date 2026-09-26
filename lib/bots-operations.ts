@@ -4,6 +4,8 @@ import type {
   BotAttachment,
   BotHistory,
   BotSchedule,
+  BotRunPage,
+  BotThreadUsage,
   BotSnapshot,
   BotQueuedSubmission,
 } from "./bots-types";
@@ -17,6 +19,10 @@ export type BotOperations = {
   "history.page": {
     params: { cursor: string };
     result: ThreadTurnsListResponse;
+  };
+  "history.turn": {
+    params: { turnId: string; cursor?: string | null };
+    result: { turn: import("./codex-protocol/v2/Turn").Turn | null; nextCursor: string | null };
   };
   "bots.create": { params: { name: string; purpose?: string }; result: Bot };
   "bots.update": {
@@ -62,6 +68,8 @@ export type BotOperations = {
   "schedules.delete": { params: { id: string }; result: Record<string, never> };
   "schedules.run": { params: { id: string }; result: unknown };
   "schedules.list": { params: Record<string, never>; result: unknown };
+  "runs.page": { params: { cursor?: string | null; limit?: number }; result: BotRunPage };
+  "usage.bot": { params: Record<string, never>; result: BotThreadUsage };
   "runs.acknowledge": { params: { id: string }; result: Record<string, never> };
   "attachments.begin": {
     params: { name: string; size: number; mimeType: string };

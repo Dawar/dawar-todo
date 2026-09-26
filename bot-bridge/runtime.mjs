@@ -39,8 +39,11 @@ const READ_METHODS = new Set([
   "snapshot",
   "history",
   "history.page",
+  "history.turn",
   "events",
   "schedules.list",
+  "runs.page",
+  "usage.bot",
   "attachments.read",
   "queue.list",
   "runtime.info",
@@ -506,6 +509,19 @@ export class BotRuntime extends EventEmitter {
       }
       case "history.page":
         return this.historyPage(bot.threadId, p.cursor ?? null);
+      case "history.turn": {
+        if (typeof p.turnId !== "string" || !/^[a-zA-Z0-9-]{8,100}$/.test(p.turnId))
+          throw new Error("Invalid turn ID.");
+        let cursor = typeof p.cursor === "string" ? p.cursor : null;
+        for (let i = 0; i < 5; i++) {
+          const page = await this.historyPage(bot.threadId, cursor);
+          const turn = page.data.find((item) => item.id === p.turnId);
+          if (turn) return { turn, nextCursor: null };
+          cursor = page.nextCursor;
+          if (!cursor) break;
+        }
+        return { turn: null, nextCursor: cursor };
+      }
       case "queue.list": {
         const queue = await this.queueList(bot);
         return queue.map((item) => this.publicQueued(bot, item));
@@ -662,6 +678,42 @@ export class BotRuntime extends EventEmitter {
           schedules: this.store.list("schedule", bot.id),
           runs: this.store.list("run", bot.id),
         };
+      case "runs.page": {
+        const limit = Number.isInteger(p.limit) ? Math.min(50, Math.max(1, p.limit)) : 25;
+        const runs = this.store.list("run", bot.id)
+          .sort((a, b) => b.scheduledAt.localeCompare(a.scheduledAt) || b.id.localeCompare(a.id));
+        const cursor = typeof p.cursor === "string" ? p.cursor : null;
+        const start = cursor ? runs.findIndex((run) => run.id === cursor) + 1 : 0;
+        if (cursor && start === 0) throw new Error("Run history cursor expired. Refresh the history.");
+        const page = runs.slice(start, start + limit);
+        const latestBySchedule = [];
+        const seen = new Set();
+        for (const run of runs) {
+          if (!run.finishedAt || seen.has(run.scheduleId)) continue;
+          seen.add(run.scheduleId);
+          latestBySchedule.push(run);
+        }
+        return { runs: page, nextCursor: runs[start + limit] ? page.at(-1)?.id ?? null : null,
+          latestBySchedule };
+      }
+      case "usage.bot": {
+        if (!bot.threadId) return { botId: bot.id, threadId: null,
+          estimatedCreditsMicros: null, reason: "No conversation thread yet." };
+        try {
+          const response = await this.codex.call("account/usage/read", { threadId: bot.threadId });
+          const usage = response?.threadUsage;
+          if (usage?.threadId !== bot.threadId || usage.estimatedUsageCreditsMicros == null)
+            return { botId: bot.id, threadId: bot.threadId,
+              estimatedCreditsMicros: null, reason: "Native thread estimate unavailable." };
+          // The native API also returns account-wide summaries. Never include them
+          // in a bot estimate or forward them to this UI.
+          return { botId: bot.id, threadId: bot.threadId,
+            estimatedCreditsMicros: String(usage.estimatedUsageCreditsMicros) };
+        } catch {
+          return { botId: bot.id, threadId: bot.threadId,
+            estimatedCreditsMicros: null, reason: "Native thread estimate unavailable." };
+        }
+      }
       case "schedules.save":
         return this.saveSchedule(bot, p, id);
       case "schedules.delete": {

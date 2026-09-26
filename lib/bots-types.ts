@@ -48,6 +48,14 @@ export type BotRun = {
   startedAt: string | null;
   finishedAt: string | null;
   error: string | null;
+  turnId?: string | null;
+};
+export type BotRunPage = { runs: BotRun[]; nextCursor: string | null; latestBySchedule: BotRun[] };
+export type BotThreadUsage = {
+  botId: string;
+  threadId: string | null;
+  estimatedCreditsMicros: string | null;
+  reason?: string;
 };
 export type BotAttachment = {
   id: string;

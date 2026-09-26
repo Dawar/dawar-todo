@@ -31,6 +31,10 @@ import {
   RefreshCw,
   Zap,
   ChevronRight,
+  BarChart3,
+  History,
+  ListPlus,
+  Save,
 } from "lucide-react";
 import { SiteHeader } from "../site-header";
 import type {
@@ -55,6 +59,8 @@ import {
 } from "./thread-state";
 import { BotMessage } from "./message";
 import { RequestCard } from "./request-card";
+import { RunHistory } from "./run-history";
+import { UsagePanel } from "./usage-panel";
 import "./bots.css";
 
 function initials(name: string) {
@@ -188,6 +194,8 @@ export function BotsWorkspace() {
     [archived, setArchived] = useState(false),
     [creating, setCreating] = useState(false),
     [profile, setProfile] = useState(false),
+    [showRunHistory, setShowRunHistory] = useState(false),
+    [showOverallUsage, setShowOverallUsage] = useState(false),
     [editingSchedule, setEditingSchedule] = useState<
       BotSchedule | "new" | null
     >(null);
@@ -268,7 +276,7 @@ export function BotsWorkspace() {
     };
   }, []);
   useEffect(() => {
-    if (!creating && !editingSchedule) return;
+    if (!creating && !editingSchedule && !showRunHistory && !showOverallUsage) return;
     const previous = document.activeElement as HTMLElement | null;
     const dialog = document.querySelector<HTMLElement>('[role="dialog"]');
     const focusable = () =>
@@ -282,6 +290,8 @@ export function BotsWorkspace() {
       if (event.key === "Escape") {
         setCreating(false);
         setEditingSchedule(null);
+        setShowRunHistory(false);
+        setShowOverallUsage(false);
       }
       if (event.key !== "Tab") return;
       const items = focusable(),
@@ -300,7 +310,7 @@ export function BotsWorkspace() {
       document.removeEventListener("keydown", keydown);
       previous?.focus();
     };
-  }, [creating, editingSchedule]);
+  }, [creating, editingSchedule, showRunHistory, showOverallUsage]);
   useEffect(() => {
     const unsubscribe = client.subscribe(() => redraw((v) => v + 1));
     client.start();
@@ -668,9 +678,7 @@ export function BotsWorkspace() {
       b.archived === archived &&
       `${b.name} ${b.purpose}`.toLowerCase().includes(search.toLowerCase()),
   );
-  const schedules =
-      snapshot?.schedules.filter((s) => s.botId === selected) ?? [],
-    runs = snapshot?.runs.filter((r) => r.botId === selected) ?? [];
+  const schedules = snapshot?.schedules.filter((s) => s.botId === selected) ?? [];
   return (
     <div className="bots-screen" ref={screenRef} data-no-pull-refresh>
       <SiteHeader current="bots" />
@@ -678,6 +686,8 @@ export function BotsWorkspace() {
         <aside className="bots-sidebar">
           <div className="bots-sidebar-heading">
             <h1>Bots</h1>
+            <div className="bots-sidebar-tools">
+            <button className="bots-icon-button" title="Overall bots usage" aria-label="Overall bots usage" onClick={() => setShowOverallUsage(true)}><BarChart3 size={19} /></button>
             <button
               className="bots-icon-button"
               aria-label="Create bot"
@@ -688,6 +698,7 @@ export function BotsWorkspace() {
             >
               <Plus size={21} />
             </button>
+            </div>
           </div>
           <div className="bots-search">
             <Search size={17} aria-hidden="true" />
@@ -935,8 +946,15 @@ export function BotsWorkspace() {
                     <p>{bot.purpose || "What would you like to work on?"}</p>
                   </div>
                 )}
-                {turns.map((turn) => (
-                  <div className="bots-turn" key={turn.id}>
+                {turns.map((turn) => {
+                  const scheduled = turn.items.some((item) => item.type === "userMessage" && item.clientId?.startsWith("schedule:"));
+                  const summary = turn.items.find((item) => item.type === "userMessage" && item.clientId?.startsWith("schedule:"));
+                  const scheduledText = summary?.type === "userMessage"
+                    ? summary.content.find((part) => part.type === "text")?.text ?? "Scheduled task"
+                    : "Scheduled task";
+                  const scheduledOutput = [...turn.items].reverse().find((item) => item.type === "agentMessage");
+                  return <details className={`bots-turn ${scheduled ? "is-scheduled" : ""}`} key={turn.id} open={!scheduled}>
+                    <summary>Scheduled run · {turn.startedAt ? stamp(new Date(turn.startedAt * 1000).toISOString()) : "recent"} · {turn.status} · {(scheduledOutput?.type === "agentMessage" ? scheduledOutput.text : scheduledText).slice(0, 110)} · Show full turn</summary>
                     {turn.startedAt && (
                       <div className="bots-time">
                         {stamp(new Date(turn.startedAt * 1000).toISOString())}
@@ -1018,8 +1036,8 @@ export function BotsWorkspace() {
                     {turn.status === "interrupted" && (
                       <div className="bots-system-note">Stopped</div>
                     )}
-                  </div>
-                ))}
+                  </details>;
+                })}
                 {pending.map((request) => (
                   <RequestCard
                     key={request.key}
@@ -1370,11 +1388,13 @@ export function BotsWorkspace() {
                         <button type="button" className="bots-queue-button"
                           onClick={cancelQueueEdit}>Cancel edit</button>
                       )}
-                      <button type="button" className="bots-queue-button"
+                      <button type="button" className="bots-icon-button bots-queue-icon"
+                        title={editingQueueId ? "Save queue" : "Queue next"}
+                        aria-label={editingQueueId ? "Save queue" : "Queue next"}
                         disabled={!online || sending || Boolean(uploading || queuedUploads.length) ||
                           (!draft.trim() && !uploads.length)}
                         onClick={() => void send(true)}>
-                        {editingQueueId ? "Save queue" : "Queue next"}
+                        {editingQueueId ? <Save size={19} aria-hidden="true" /> : <ListPlus size={20} aria-hidden="true" />}
                       </button>
                       </>
                     )}
@@ -1492,6 +1512,8 @@ export function BotsWorkspace() {
             <p className="bots-profile-hint">
               Ask {bot.name} to change its personality, instructions, or memory.
             </p>
+            <h3 className="bots-profile-section-heading">Usage</h3>
+            <UsagePanel bots={[bot]} online={online} />
             <div className="bots-schedule-heading">
               <h3>
                 <Clock size={16} />
@@ -1506,6 +1528,7 @@ export function BotsWorkspace() {
                 <Plus size={17} />
               </button>
             </div>
+            <button className="bots-history-open" onClick={() => setShowRunHistory(true)}><History size={16} /> View schedule history</button>
             {!schedules.length && (
               <p className="bots-muted">
                 Ask your bot to schedule something, or add a schedule here.
@@ -1573,34 +1596,6 @@ export function BotsWorkspace() {
                 </div>
               </div>
             ))}
-            {runs.length > 0 && (
-              <details className="bots-run-history">
-                <summary>Recent runs</summary>
-                {runs.slice(0, 15).map((run) => (
-                  <div key={run.id}>
-                    <strong>{run.title}</strong>
-                    <small>
-                      {run.status} · {stamp(run.scheduledAt)}
-                    </small>
-                    {run.error && <p>{run.error}</p>}
-                    {run.status === "uncertain" && (
-                      <button
-                        disabled={!online}
-                        onClick={() =>
-                          void action(() =>
-                            client.rpc("runs.acknowledge", bot.id, {
-                              id: run.id,
-                            }),
-                          )
-                        }
-                      >
-                        I reviewed this run
-                      </button>
-                    )}
-                  </div>
-                ))}
-              </details>
-            )}
             <a className="bots-notification-link" href="/settings">
               Notification settings
             </a>
@@ -1632,6 +1627,8 @@ export function BotsWorkspace() {
           </aside>
         )}
       </main>
+      {showRunHistory && bot && <RunHistory bot={bot} schedules={schedules} attachments={attachments} online={online} onClose={() => setShowRunHistory(false)} download={(id) => void download(id)} />}
+      {showOverallUsage && <div className="bots-modal-backdrop" onClick={() => setShowOverallUsage(false)}><section className="bots-history-modal bots-usage-modal" role="dialog" aria-modal="true" aria-label="Overall bots usage" onClick={(event) => event.stopPropagation()}><header><h2>Overall bots usage</h2><button className="bots-icon-button" aria-label="Close overall bots usage" onClick={() => setShowOverallUsage(false)}><X size={19} /></button></header><UsagePanel bots={bots} online={online} /></section></div>}
       {creating && (
         <div className="bots-modal-backdrop" onClick={() => setCreating(false)}>
           <form
