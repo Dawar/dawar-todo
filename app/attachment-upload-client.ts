@@ -12,6 +12,7 @@ type PrivatePostTarget = {
 
 type PreparedImageUpload = {
   uploadId: string;
+  attachment?: TodoAttachment;
   uploads: {
     original: PrivatePostTarget;
     display: PrivatePostTarget;
@@ -159,14 +160,25 @@ async function imageVariants(file: File) {
   }
 }
 
+async function boundedImageVariants(file: File) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([imageVariants(file), new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("Image preparation timed out. Local bytes are retained.")), 30_000);
+    })]);
+  } finally { clearTimeout(timer); }
+}
+
 async function uploadStorageObject(target: PrivatePostTarget, body: Blob) {
   const form = new FormData();
   Object.entries(target.fields).forEach(([name, value]) => form.append(name, value));
   form.append("file", body, "upload");
-  const response = await fetch(target.url, { method: "POST", mode: "no-cors", body: form });
-  if (response.type !== "opaque" && !response.ok) {
-    throw new Error(`Private storage rejected an upload (${response.status}).`);
-  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 60_000);
+  try {
+    const response = await fetch(target.url, { method: "POST", mode: "no-cors", body: form, signal: controller.signal });
+    if (response.type !== "opaque" && !response.ok) throw new Error(`Private storage rejected an upload (${response.status}).`);
+  } finally { clearTimeout(timer); }
 }
 
 function mediaMimeType(file: File, kind: "audio" | "video") {
@@ -214,6 +226,7 @@ function mediaDuration(file: File, kind: "audio" | "video") {
 }
 
 export async function uploadTaskAttachment(input: {
+  clientUploadId?: string;
   file: File;
   kind: BrowserAttachmentKind;
   durationMs?: number;
@@ -233,11 +246,12 @@ export async function uploadTaskAttachment(input: {
     if (kind === "image") {
       const mimeType = imageMimeType(file);
       if (!mimeType) throw new Error("Choose a JPEG, PNG, WebP, GIF, HEIC, or HEIF image.");
-      const variants = await imageVariants(file);
+      const variants = await boundedImageVariants(file);
       const prepared = await request<PreparedImageUpload>(endpoint, {
         method: "POST",
         body: JSON.stringify({
           kind,
+          clientUploadId: input.clientUploadId,
           fileName: file.name || "image",
           mimeType,
           byteSize: file.size,
@@ -245,6 +259,7 @@ export async function uploadTaskAttachment(input: {
           thumbnailMimeType: variants.thumbnail.mimeType,
         }),
       });
+      if (prepared.attachment) return prepared.attachment;
       try {
         const uploads = await Promise.allSettled([
           uploadStorageObject(prepared.uploads.original, file),
@@ -271,7 +286,7 @@ export async function uploadTaskAttachment(input: {
         });
         return payload.attachment;
       } catch (error) {
-        await discard(prepared.uploadId).catch((discardError) => {
+        await (input.clientUploadId ? Promise.resolve() : discard(prepared.uploadId)).catch((discardError) => {
           console.error("[todo-attachment-client] incomplete image cleanup failed", {
             endpoint,
             attachmentId: prepared.uploadId,
@@ -292,6 +307,7 @@ export async function uploadTaskAttachment(input: {
       method: "POST",
       body: JSON.stringify({
         kind,
+        clientUploadId: input.clientUploadId,
         fileName: file.name || (kind === "audio" ? "Voice memo" : kind === "video" ? "Video" : "File"),
         mimeType,
         byteSize: file.size,
@@ -317,7 +333,7 @@ export async function uploadTaskAttachment(input: {
       });
       return payload.attachment;
     } catch (error) {
-      await discard(prepared.uploadId).catch((discardError) => {
+      await (input.clientUploadId ? Promise.resolve() : discard(prepared.uploadId)).catch((discardError) => {
         console.error("[todo-attachment-client] incomplete media cleanup failed", {
           endpoint,
           attachmentId: prepared.uploadId,

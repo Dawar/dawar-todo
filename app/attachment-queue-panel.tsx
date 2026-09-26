@@ -1,0 +1,62 @@
+"use client";
+import { useEffect, useState } from "react";
+import { listQueuedAttachments, retryQueuedAttachments, replaceQueuedAttachmentBytes, type QueuedAttachment } from "./offline-store";
+import { subscribeOfflineChanges } from "./offline-events";
+import { attachmentQueueMessage, hasAttachmentBytes } from "./attachment-queue";
+
+export function AttachmentQueuePanel({ count, states }: { count: number; states: Record<string, number> }) {
+  const [open, setOpen] = useState(false);
+  const [rows, setRows] = useState<QueuedAttachment[]>([]);
+  const [error, setError] = useState("");
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!open) return;
+    let active = true;
+    let generation = 0;
+    const reload = () => {
+      const version = ++generation;
+      void listQueuedAttachments().then((items) => { if (active && version === generation) setRows(items); })
+        .catch(() => { if (active) setError("Attachment storage could not be read. Try opening this panel again."); });
+    };
+    reload();
+    const unsubscribe = subscribeOfflineChanges(reload);
+    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => { active = false; unsubscribe(); window.clearInterval(timer); };
+  }, [open]);
+  const action = async (fn: () => Promise<unknown>) => {
+    setError("");
+    try { await fn(); } catch (error) { setError(error instanceof Error ? error.message : "Recovery could not finish."); }
+  };
+  const saveFile = (row: QueuedAttachment) => {
+    const url = URL.createObjectURL(row.blob);
+    const link = document.createElement("a"); link.href = url; link.download = row.fileName; link.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  };
+  const active = (states.uploading ?? 0) + (states.claiming ?? 0) + (states.checking ?? 0);
+  const blocked = (states.blocked ?? 0) + (states["missing-bytes"] ?? 0);
+  return <div className="mx-auto max-w-5xl px-4 pt-2 text-xs text-[#69716c] sm:px-6">
+    <p role="status">{count} attachment{count === 1 ? "" : "s"} pending · {active} in progress · {blocked} need attention</p>
+    <p>Transfers resume while the app is open and connected.</p>
+    <div className="flex gap-4 py-2">
+      <button type="button" className="underline" onClick={() => void action(() => retryQueuedAttachments())}>Retry uploads</button>
+      <button type="button" className="underline" aria-expanded={open} onClick={() => setOpen(!open)}>{open ? "Close attachment recovery" : "Review attachments"}</button>
+    </div>
+    {error && <p role="alert" className="text-red-700">{error}</p>}
+    {open && <ul aria-label="Pending attachment recovery" className="space-y-3 rounded-xl border p-3">
+      {rows.map((row) => <li key={row.localId} className="break-words border-b pb-3 last:border-0">
+        <p className="font-semibold">{row.fileName || "Attachment"}</p>
+        <p>{hasAttachmentBytes(row) ? `${row.blob.size.toLocaleString()} bytes saved on this device` : "No local file bytes available"}</p>
+        <p>{attachmentQueueMessage(row, now)}</p>
+        <div className="mt-2 flex flex-wrap gap-4">
+          <button type="button" className="underline" disabled={(row.leaseUntil ?? 0) > now} onClick={() => void action(() => retryQueuedAttachments(row.localId))}>Retry this attachment</button>
+          {hasAttachmentBytes(row) ? <button type="button" className="underline" onClick={() => saveFile(row)}>Save local file</button>
+            : <label className="underline">Choose original file<input type="file" className="block max-w-full" disabled={(row.leaseUntil ?? 0) > now} onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file) void action(() => replaceQueuedAttachmentBytes(row.localId, file));
+              event.target.value = "";
+            }} /></label>}
+        </div>
+      </li>)}
+    </ul>}
+  </div>;
+}
