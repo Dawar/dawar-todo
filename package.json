@@ -13,7 +13,12 @@
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate",
     "voice:check": "wrangler deploy --dry-run --config voice-relay/wrangler.jsonc",
-    "voice:deploy": "wrangler deploy --config voice-relay/wrangler.jsonc"
+    "voice:deploy": "wrangler deploy --config voice-relay/wrangler.jsonc",
+    "bots:test": "node --test bot-bridge/*.test.mjs",
+    "bots:check": "tsc --noEmit && wrangler deploy --dry-run --config bots-relay/wrangler.jsonc",
+    "bots:deploy": "wrangler deploy --config bots-relay/wrangler.jsonc",
+    "bots:install": "node bot-bridge/install.mjs",
+    "bots:protocol": "node bot-bridge/generate-protocol.mjs"
   },
   "dependencies": {
     "@formkit/auto-animate": "^0.10.0",

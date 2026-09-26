@@ -1,6 +1,17 @@
 import { sql } from "drizzle-orm";
 import { index, integer, primaryKey, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
+export const todoBotPushOwners = sqliteTable("todo_bot_push_owners", {
+  subscriptionId: text("subscription_id").primaryKey(), ownerKey: text("owner_key").notNull(),
+}, table => [index("todo_bot_push_owners_owner_idx").on(table.ownerKey)]);
+export const todoBotNotifications = sqliteTable("todo_bot_notifications", {
+  id: text("id").primaryKey(), ownerKey: text("owner_key").notNull(), botId: text("bot_id").notNull(),
+  title: text("title").notNull(), body: text("body").notNull(), createdAt: text("created_at").notNull(), deliveredAt: text("delivered_at"),
+}, table => [index("todo_bot_notifications_pending_idx").on(table.deliveredAt,table.createdAt)]);
+export const todoBotPushDeliveries = sqliteTable("todo_bot_push_deliveries", {
+  notificationId: text("notification_id").notNull(), subscriptionId: text("subscription_id").notNull(), deliveredAt: text("delivered_at").notNull(),
+}, table => [primaryKey({columns:[table.notificationId,table.subscriptionId]})]);
+
 export const todos = sqliteTable(
   "todos",
   {

@@ -27,7 +27,7 @@ test("cold install recursively precaches every generated client bundle", async (
   };
   const fetchLocal = async (input) => {
     const url = requestUrl(input);
-    if (url.pathname === "/" || url.pathname === "/assistant" || url.pathname === "/settings" || url.pathname === "/talk") return new Response(html, { status: 200, headers: { "Content-Type": "text/html" } });
+    if (url.pathname === "/" || url.pathname === "/assistant" || url.pathname === "/settings" || url.pathname === "/talk" || url.pathname === "/bots") return new Response(html, { status: 200, headers: { "Content-Type": "text/html" } });
     try {
       const body = await readFile(new URL(`dist/client${url.pathname}`, root));
       return new Response(body, { status: 200 });
@@ -72,6 +72,7 @@ test("cold install recursively precaches every generated client bundle", async (
   assert.equal(cached.has("/assistant"), false);
   assert.ok(cached.has("/settings"));
   assert.ok(cached.has("/talk"));
+  assert.ok(cached.has("/bots"));
   assert.ok(cached.has("/manifest.webmanifest"));
   assert.ok(cached.has("/icons/apple-touch-icon.png"));
 });

@@ -4,9 +4,9 @@ import { usePathname } from "next/navigation";
 import SettingsError from "./settings/error";
 import { taskSync } from "./task-sync";
 
-const loaders = { "/": () => import("./page"), "/talk": () => import("./talk/page"), "/settings": () => import("./settings/page") };
+const loaders = { "/": () => import("./page"), "/talk": () => import("./talk/page"), "/bots": () => import("./bots/page"), "/settings": () => import("./settings/page") };
 type ScreenPath = keyof typeof loaders;
-const pages = { "/": lazy(loaders["/"]), "/talk": lazy(loaders["/talk"]), "/settings": lazy(loaders["/settings"]) };
+const pages = { "/": lazy(loaders["/"]), "/talk": lazy(loaders["/talk"]), "/bots": lazy(loaders["/bots"]), "/settings": lazy(loaders["/settings"]) };
 const Navigation = createContext<((href: string) => boolean) | null>(null);
 function screenPath(path: string): ScreenPath | null { return Object.hasOwn(pages, path) ? path as ScreenPath : null; }
 
@@ -58,7 +58,7 @@ export function AppShell({ children }: { children: ReactNode }) {
     // framework still owns navigation to pages outside this shell.
     const onPopState = (event: PopStateEvent) => {
       if (!screenPath(current.current) || !screenPath(window.location.pathname)) return;
-      event.stopImmediatePropagation(); pop();
+      event.stopImmediatePropagation(); pop(); window.dispatchEvent(new Event("dawar-shell-popstate"));
     };
     window.addEventListener("popstate", onPopState, true);
     const previousRestoration = history.scrollRestoration;

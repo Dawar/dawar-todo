@@ -12,7 +12,7 @@ export function SiteHeader({
   onProjectClick,
   onKeyboardHelp,
 }: {
-  current: "todos" | "settings" | "assistant" | "talk";
+  current: "todos" | "settings" | "assistant" | "talk" | "bots";
   projectLabel?: string;
   onProjectClick?: () => void;
   onKeyboardHelp?: () => void;
@@ -29,12 +29,13 @@ export function SiteHeader({
   const navigation = [
     { href: "/", label: "Tasks", icon: "view-open" as const, active: current === "todos" },
     { href: "/talk", label: "Chat", icon: "assistant" as const, active: current === "talk" || current === "assistant" },
+    { href: "/bots", label: "Bots", icon: "assistant" as const, active: current === "bots" },
     { href: "/settings", label: "Settings", icon: "settings" as const, active: current === "settings" },
   ];
 
   return (
     <header className="sticky top-0 z-30 border-b border-black/[0.06] bg-[#f6f7f5]/92 backdrop-blur-xl">
-      <div className="mx-auto flex h-14 max-w-5xl items-center justify-between gap-2 px-3 sm:px-6">
+      <div className={`mx-auto flex h-14 w-full items-center justify-between gap-2 px-3 sm:px-6 ${current === "bots" ? "max-w-none" : "max-w-5xl"}`}>
         {onProjectClick ? (
           <button
             type="button"

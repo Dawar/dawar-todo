@@ -311,7 +311,7 @@ async function sendPushGatewayRequest(
   };
   if (!appleEndpoint) {
     requestOptions.urgency = "normal";
-    requestOptions.topic = "dawar-todo-open-items";
+    requestOptions.topic = payload.botNotification ? "dawar-todo-bots" : "dawar-todo-open-items";
   }
   const request = generatePushRequest(pushSubscription, JSON.stringify(payload), requestOptions);
   const requestBody = new Uint8Array(request.body.byteLength);
@@ -326,6 +326,7 @@ async function sendPushGatewayRequest(
     method: request.method,
     headers: request.headers,
     body: requestBody.buffer,
+    signal: AbortSignal.timeout(8000),
   });
 }
 
@@ -624,4 +625,37 @@ export async function sendTestPushNotification(
     });
     throw error;
   }
+}
+
+/** Owner-scoped bot events share the existing encrypted Web Push transport. */
+export async function dispatchBotPushNotifications(db: D1Database, environment: PushEnvironment, at = new Date()) {
+  const { VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY } = environment;
+  if (!VAPID_SUBJECT || !VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) return { sent: 0 };
+  const lease = await acquirePushDispatchLease(db, at);
+  if (!lease) return { sent: 0 };
+  let sent = 0;
+  const stopBefore = Date.now() + PUSH_LEASE_MS - 10000;
+  try {
+    const notices = await db.prepare(`SELECT id, owner_key, bot_id, title, body FROM todo_bot_notifications WHERE delivered_at IS NULL ORDER BY created_at LIMIT 20`).all<{ id: string; owner_key: string; bot_id: string; title: string; body: string }>();
+    for (const notice of notices.results) {
+      const subscriptions = await db.prepare(`SELECT s.* FROM todo_push_subscriptions s JOIN todo_bot_push_owners o ON o.subscription_id=s.id WHERE o.owner_key=? AND s.disabled_at IS NULL`).bind(notice.owner_key).all<TodoPushSubscriptionRow>();
+      let complete = subscriptions.results.length > 0;
+      for (const subscription of subscriptions.results) {
+        if (Date.now() >= stopBefore) return {sent};
+        const delivered = await db.prepare(`SELECT 1 AS found FROM todo_bot_push_deliveries WHERE notification_id=? AND subscription_id=?`).bind(notice.id,subscription.id).first();
+        if (delivered) continue;
+        try {
+          const response = await sendPushGatewayRequest(subscription, { title: notice.title, body: notice.body.slice(0,360), tag: `bot-${notice.id}`, url: `/bots?bot=${encodeURIComponent(notice.bot_id)}`, botNotification: true }, {VAPID_SUBJECT,VAPID_PUBLIC_KEY,VAPID_PRIVATE_KEY});
+          const outcome = await markSubscriptionDelivery(db,subscription,response,await readPushProviderReason(response));
+          if (outcome === "sent" || outcome === "invalid") {
+            await db.prepare(`INSERT OR IGNORE INTO todo_bot_push_deliveries(notification_id,subscription_id,delivered_at) VALUES(?,?,?)`).bind(notice.id,subscription.id,at.toISOString()).run();
+            if (outcome === "sent") sent++;
+          } else complete=false;
+        } catch { complete=false; }
+      }
+      if (complete) await db.prepare(`UPDATE todo_bot_notifications SET delivered_at=? WHERE id=?`).bind(at.toISOString(),notice.id).run();
+    }
+    await db.prepare(`UPDATE todo_bot_notifications SET delivered_at=? WHERE delivered_at IS NULL AND created_at < ?`).bind(at.toISOString(),new Date(at.valueOf()-7*86400000).toISOString()).run();
+    return {sent};
+  } finally { await releasePushDispatchLease(db,lease); }
 }
