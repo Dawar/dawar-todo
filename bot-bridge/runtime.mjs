@@ -54,6 +54,7 @@ const READ_METHODS = new Set([
   "schedules.list",
   "runs.page",
   "usage.bot",
+  "usage.account",
   "attachments.read",
   "queue.list",
   "runtime.info",
@@ -483,6 +484,44 @@ export class BotRuntime extends EventEmitter {
   }
   async dispatch(method, botId, p, id) {
     if (method === "snapshot") return this.snapshot();
+    if (method === "usage.account") {
+      const readAt = now();
+      let accountType = null;
+      try {
+        const account = await this.codex.call("account/read", { refreshToken: false });
+        accountType = account?.account?.type ?? null;
+        if (!accountType) return { accountType: null,
+          ordinaryUsageAllowed: null, availableResetCredits: null, limits: [], readAt,
+          reason: "Sign in to Codex to read account usage." };
+        const response = await this.codex.call("account/rateLimits/read", {});
+        const buckets = Object.entries(response?.rateLimitsByLimitId ?? {})
+          .filter(([, value]) => value);
+        const snapshots = buckets.length
+          ? buckets : [[response?.rateLimits?.limitId ?? null, response?.rateLimits]];
+        const window = (value) => value && Number.isFinite(value.usedPercent)
+          && value.usedPercent >= 0 ? {
+            usedPercent: value.usedPercent,
+            windowDurationMins: Number.isFinite(value.windowDurationMins) && value.windowDurationMins > 0
+              ? value.windowDurationMins : null,
+            resetsAt: Number.isFinite(value.resetsAt) && value.resetsAt > 0
+              ? value.resetsAt : null,
+          } : null;
+        const limits = snapshots.filter(([, value]) => value).map(([id, value]) => ({
+          limitId: value.limitId ?? id,
+          limitName: value.limitName ?? null,
+          model: value.normalModelSlug ?? null,
+          windows: [window(value.primary), window(value.secondary)].filter(Boolean),
+        }));
+        return { accountType, ordinaryUsageAllowed: typeof response?.ordinaryUsageAllowed === "boolean"
+          ? response.ordinaryUsageAllowed : null,
+          availableResetCredits: nativeIntegerText(response?.rateLimitResetCredits?.availableCount),
+          limits, readAt: now() };
+      } catch {
+        return { accountType, ordinaryUsageAllowed: null,
+          availableResetCredits: null, limits: [], readAt,
+          reason: "Account usage is unavailable right now. Try refreshing." };
+      }
+    }
     if (method === "runtime.info")
       return {
         ready: this.ready,

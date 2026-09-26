@@ -66,6 +66,25 @@ export type BotThreadUsage = {
   };
   reason?: string;
 };
+export type BotAccountQuotaWindow = {
+  usedPercent: number;
+  windowDurationMins: number | null;
+  resetsAt: number | null;
+};
+export type BotAccountQuotaLimit = {
+  limitId: string | null;
+  limitName: string | null;
+  model: string | null;
+  windows: BotAccountQuotaWindow[];
+};
+export type BotAccountQuota = {
+  accountType: "chatgpt" | "apiKey" | "amazonBedrock" | null;
+  ordinaryUsageAllowed: boolean | null;
+  availableResetCredits: string | null;
+  limits: BotAccountQuotaLimit[];
+  readAt: string;
+  reason?: string;
+};
 export type BotAttachment = {
   id: string;
   botId: string;

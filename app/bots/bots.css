@@ -921,8 +921,16 @@ html.bots-viewport-locked body {
 .bots-profile-section-heading { margin-top: 22px; font-size: 15px; font-weight: 600; }
 .bots-usage { margin: 10px 0 18px; font-size: 13px; line-height: 1.5; }
 .bots-usage p { margin: 8px 0; }
-.bots-usage-total, .bots-usage-row { border-top: 1px solid #e8ede9; padding: 10px 0; display: flex; flex-direction: column; gap: 3px; }
-.bots-usage-total span, .bots-usage-row span { color: #65766b; overflow-wrap: anywhere; }
+.bots-usage-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.bots-usage-heading button { flex: none; border: 1px solid #dce4de; border-radius: 8px; padding: 5px 9px; color: #216e4e; }
+.bots-usage-heading button:disabled { opacity: .5; }
+.bots-usage-credit { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; padding: 12px 0; }
+.bots-usage-credit strong { font-size: 24px; }
+.bots-usage-limit, .bots-usage-thread { border-top: 1px solid #e8ede9; padding: 12px 0; display: flex; flex-direction: column; gap: 6px; overflow-wrap: anywhere; }
+.bots-usage-window { display: flex; flex-direction: column; gap: 2px; padding: 6px 0; color: #65766b; }
+.bots-usage-window strong { color: inherit; }
+.bots-usage-meter { height: 7px; width: 100%; margin-top: 5px; border-radius: 5px; background: #e8ede9; overflow: hidden; }
+.bots-usage-meter span { display: block; height: 100%; background: #277a54; }
 .bots-history-open { display: flex; align-items: center; gap: 7px; margin: 10px 0; color: #216e4e; font-size: 13px; }
 .bots-history-modal { width: min(640px, calc(100vw - 24px)); max-height: min(85dvh, 800px); overflow: auto; background: white; border-radius: 16px; padding: 20px; color: #25352a; }
 .bots-history-modal > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }

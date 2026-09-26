@@ -6,6 +6,7 @@ import type {
   BotSchedule,
   BotRunPage,
   BotThreadUsage,
+  BotAccountQuota,
   BotSnapshot,
   BotQueuedSubmission,
 } from "./bots-types";
@@ -70,6 +71,7 @@ export type BotOperations = {
   "schedules.list": { params: Record<string, never>; result: unknown };
   "runs.page": { params: { cursor?: string | null; limit?: number }; result: BotRunPage };
   "usage.bot": { params: Record<string, never>; result: BotThreadUsage };
+  "usage.account": { params: Record<string, never>; result: BotAccountQuota };
   "runs.acknowledge": { params: { id: string }; result: Record<string, never> };
   "attachments.begin": {
     params: { name: string; size: number; mimeType: string };

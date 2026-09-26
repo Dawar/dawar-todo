@@ -687,7 +687,7 @@ export function BotsWorkspace() {
           <div className="bots-sidebar-heading">
             <h1>Bots</h1>
             <div className="bots-sidebar-tools">
-            <button className="bots-icon-button" title="Overall bots usage" aria-label="Overall bots usage" onClick={() => setShowOverallUsage(true)}><BarChart3 size={19} /></button>
+            <button className="bots-icon-button" title="Codex account usage" aria-label="Codex account usage" onClick={() => setShowOverallUsage(true)}><BarChart3 size={19} /></button>
             <button
               className="bots-icon-button"
               aria-label="Create bot"
@@ -1513,7 +1513,7 @@ export function BotsWorkspace() {
               Ask {bot.name} to change its personality, instructions, or memory.
             </p>
             <h3 className="bots-profile-section-heading">Usage</h3>
-            <UsagePanel bots={[bot]} online={online} />
+            <UsagePanel bot={bot} online={online} />
             <div className="bots-schedule-heading">
               <h3>
                 <Clock size={16} />
@@ -1628,7 +1628,7 @@ export function BotsWorkspace() {
         )}
       </main>
       {showRunHistory && bot && <RunHistory bot={bot} schedules={schedules} attachments={attachments} online={online} onClose={() => setShowRunHistory(false)} download={(id) => void download(id)} />}
-      {showOverallUsage && <div className="bots-modal-backdrop" onClick={() => setShowOverallUsage(false)}><section className="bots-history-modal bots-usage-modal" role="dialog" aria-modal="true" aria-label="Overall bots usage" onClick={(event) => event.stopPropagation()}><header><h2>Overall bots usage</h2><button className="bots-icon-button" aria-label="Close overall bots usage" onClick={() => setShowOverallUsage(false)}><X size={19} /></button></header><UsagePanel bots={bots} online={online} /></section></div>}
+      {showOverallUsage && <div className="bots-modal-backdrop" onClick={() => setShowOverallUsage(false)}><section className="bots-history-modal bots-usage-modal" role="dialog" aria-modal="true" aria-label="Codex account usage" onClick={(event) => event.stopPropagation()}><header><h2>Codex account usage</h2><button className="bots-icon-button" aria-label="Close account usage" onClick={() => setShowOverallUsage(false)}><X size={19} /></button></header><UsagePanel online={online} /></section></div>}
       {creating && (
         <div className="bots-modal-backdrop" onClick={() => setCreating(false)}>
           <form
