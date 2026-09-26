@@ -558,11 +558,17 @@ html.bots-viewport-locked body {
 .bots-messages {
   flex: 1;
   min-width: 0;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   overscroll-behavior: contain;
   padding: 20px max(18px, calc((100% - 1080px) / 2));
   min-height: 0;
   scroll-padding-block: 20px;
+}
+.bots-turn {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 .bots-message {
   margin: 14px 0;
@@ -575,6 +581,7 @@ html.bots-viewport-locked body {
   justify-content: flex-end;
 }
 .bots-bubble {
+  min-width: 0;
   max-width: 85%;
   background: #24734f;
   color: #fff;
@@ -599,6 +606,8 @@ html.bots-viewport-locked body {
   margin: 0.5em 0;
 }
 .bots-message-markdown {
+  min-width: 0;
+  max-width: 100%;
   overflow-wrap: anywhere;
 }
 .bots-message-markdown h1,
@@ -640,6 +649,7 @@ html.bots-viewport-locked body {
   padding: 2px 4px;
 }
 .bots-message-markdown pre {
+  max-width: 100%;
   background: #f3f6f4;
   padding: 13px;
   border: 1px solid #e4eae6;
@@ -990,6 +1000,9 @@ html.bots-viewport-locked body {
   color: #216e4e;
 }
 .bots-request {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
   margin: 20px 0;
   padding: 18px;
   border: 1px solid #cedfd3;
@@ -1006,6 +1019,7 @@ html.bots-viewport-locked body {
   font-weight: 600;
 }
 .bots-request fieldset {
+  min-width: 0;
   margin: 12px 0 18px;
 }
 .bots-request legend {
@@ -1041,6 +1055,9 @@ html.bots-viewport-locked body {
   border: 1px solid #dfe8e1;
   border-radius: 9px;
   cursor: pointer;
+}
+.bots-request .bots-option > span {
+  min-width: 0;
 }
 .bots-option strong {
   font-weight: 550;

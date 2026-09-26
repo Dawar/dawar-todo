@@ -431,9 +431,14 @@ export function BotsWorkspace() {
   useEffect(() => {
     if (selected && loadedId.current === selected && client.owner)
       client.save(`history:${selected}`, { turns, attachments });
+    const messages = scrollRef.current;
+    if (!messages) return;
+    // History updates and browser scroll restoration can retain an old x offset.
+    messages.scrollLeft = 0;
     if (nearBottom.current)
-      scrollRef.current?.scrollTo({
-        top: scrollRef.current.scrollHeight,
+      messages.scrollTo({
+        left: 0,
+        top: messages.scrollHeight,
         behavior: "instant",
       });
   }, [turns, attachments, selected, pending.length]);
@@ -890,9 +895,11 @@ export function BotsWorkspace() {
                 ref={scrollRef}
                 onScroll={() => {
                   const el = scrollRef.current;
-                  if (el)
+                  if (el) {
+                    if (el.scrollLeft) el.scrollLeft = 0;
                     nearBottom.current =
                       el.scrollHeight - el.scrollTop - el.clientHeight < 100;
+                  }
                 }}
               >
                 {olderCursor && (
