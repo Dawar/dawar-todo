@@ -250,8 +250,12 @@ export class BotComposer {
       const outcome = (error as { outcome?: string }).outcome;
       // A not-sent retry says nothing about a previous attempt with this ID.
       const uncertain = outcome !== "rejected";
-      this.actionError = uncertain ? "Send acknowledgement is unconfirmed. Check again to reconcile the same send; your draft is retained." : `Not sent: ${message(error)}`;
-      this.changes.push({ change: { kind: "settle", id: op.id, outcome: uncertain ? "uncertain" : "rejected", error: this.actionError } });
+      const detail = uncertain ? "Send acknowledgement is unconfirmed. Check again to reconcile the same send; your draft is retained." : `Not sent: ${message(error)}`;
+      // Uncertainty belongs to the durable operation. A second tab may already
+      // have confirmed it, or confirm it later; a separate actionError would
+      // keep falsely warning after that operation has been retired.
+      this.actionError = uncertain ? "" : detail;
+      this.changes.push({ change: { kind: "settle", id: op.id, outcome: uncertain ? "uncertain" : "rejected", error: detail } });
       this.renderPending();
       await this.flush().catch(() => {});
     } finally { this.sending.delete(op.id); this.notify(); }
