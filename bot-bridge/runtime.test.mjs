@@ -10,6 +10,12 @@ import { BotRuntime, validateResponse } from "./runtime.mjs";
 import { slugify, cleanName, PROFILE_FILES } from "./profiles.mjs";
 import { normalizeSchedule, collectDueRuns } from "./schedules.mjs";
 import { signBotTicket, verifyBotTicket, botsOwner } from "../lib/bots-auth.ts";
+import { BotsClient } from "../app/bots/client.ts";
+async function snapshotQueuedInput(input) {
+  return Promise.all(input.map(async (part) => part.type === "localImage"
+    ? { type: "image", url: `data:image/png;base64,${(await readFile(part.path)).toString("base64")}` }
+    : part));
+}
 class FakeCodex extends EventEmitter {
   calls = [];
   threads = [];
@@ -54,7 +60,8 @@ class FakeCodex extends EventEmitter {
     if (method === "thread/queue/list")
       return { data: [...(this.queues.get(params.threadId) ?? [])], nextCursor: null };
     if (method === "thread/queue/add") {
-      const item = { id: `queued-${this.calls.length}`, input: params.input,
+      const item = { id: `queued-${this.calls.length}`,
+        input: await snapshotQueuedInput(params.input),
         clientUserMessageId: params.clientUserMessageId };
       this.queues.set(params.threadId,
         [...(this.queues.get(params.threadId) ?? []), item]);
@@ -63,7 +70,7 @@ class FakeCodex extends EventEmitter {
     if (method === "thread/queue/update") {
       const queue = this.queues.get(params.threadId);
       const item = queue.find((x) => x.id === params.queuedSubmissionId);
-      item.input = params.input;
+      item.input = await snapshotQueuedInput(params.input);
       return { queuedSubmission: item };
     }
     if (method === "thread/queue/delete") {
@@ -193,6 +200,7 @@ test("queued uploads preserve six localImage paths and reject unready or foreign
     text: "Inspect pasted images", attachments: images.map((a) => a.id),
   });
   assert.equal(queued.queuedSubmission.input.filter((x) => x.type === "localImage").length, 6);
+  assert.equal(codex.queues.get(bot.threadId)[0].input.filter((x) => x.type === "image").length, 6);
   const listed = await op(runtime, bot.id, "queue.list");
   assert.deepEqual(listed[0].attachments.map((a) => a.name), images.map((a) => a.name));
   const edited = await op(runtime, bot.id, "queue.update", {
@@ -357,6 +365,24 @@ test("idle native queue left after bridge restart starts once", async (t) => {
   await resumed.tick();
   await settleQueue(resumed, bot.id);
   assert.equal(codex.calls.filter((call) => call.method === "thread/queue/start").length, 1);
+});
+test("interrupted turn leaves queued work paused across bridge restart", async (t) => {
+  const { create, runtime, codex, store } = await setup(t);
+  const bot = await create();
+  const active = await op(runtime, bot.id, "turn.send", { text: "Working" });
+  const queued = (await op(runtime, bot.id, "queue.add", { text: "Later" })).queuedSubmission;
+  await op(runtime, bot.id, "turn.interrupt");
+  codex.threads[0].turns[0].status = "interrupted";
+  runtime.onNotification({ method: "turn/completed", params: {
+    threadId: bot.threadId, turn: { id: active.turn.id, status: "interrupted" },
+  } });
+  const resumed = new BotRuntime({ store, codex, root: runtime.root });
+  await resumed.start();
+  await resumed.tick();
+  await settleQueue(resumed, bot.id);
+  assert.equal(store.bot(bot.id).queuePaused, true);
+  assert.equal(codex.calls.filter((call) => call.method === "thread/queue/start").length, 0);
+  assert.deepEqual((await op(resumed, bot.id, "queue.list")).map((item) => item.id), [queued.id]);
 });
 test("initial history retries native rollout initialization and preserves saved turns", async (t) => {
   const { create, runtime, codex } = await setup(t);
@@ -704,6 +730,108 @@ test("uncertain operation recovery matches native clientId and never replays", a
   });
   await runtime.reconcileOperations();
   assert.equal(store.operation("unknown-turn").status, "uncertain");
+});
+test("uncertain image enqueue is recovered from native queue after restart without adding twice", async (t) => {
+  const { create, runtime, store, codex } = await setup(t);
+  const bot = await create();
+  await op(runtime, bot.id, "turn.send", { text: "Working" });
+  const png = tinyPng();
+  const image = await op(runtime, bot.id, "attachments.begin", {
+    name: "pasted.png", size: png.length, mimeType: "image/png",
+  });
+  await op(runtime, bot.id, "attachments.chunk", {
+    id: image.id, offset: 0, data: png.toString("base64"),
+  });
+  await op(runtime, bot.id, "attachments.finish", { id: image.id });
+  const originalCall = codex.call.bind(codex);
+  codex.call = async (method, params) => {
+    const result = await originalCall(method, params);
+    if (method === "thread/queue/add")
+      throw new Error("disconnected after acknowledgement");
+    return result;
+  };
+  const id = "stable-image-enqueue-id";
+  const params = { text: "Check image", attachments: [image.id] };
+  await assert.rejects(op(runtime, bot.id, "queue.add", params, id), /disconnected/);
+  assert.equal(store.operation(id).status, "uncertain");
+  const resumed = new BotRuntime({ store, codex, root: runtime.root });
+  await resumed.start();
+  const item = codex.queues.get(bot.threadId)[0];
+  assert.equal(store.operation(id).status, "done");
+  assert.equal(item.clientUserMessageId, id);
+  assert.equal(item.input.filter((input) => input.type === "image").length, 1);
+  const recovered = await op(resumed, bot.id, "queue.add", params, id);
+  assert.deepEqual(recovered.queuedSubmission.input.filter((input) => input.type === "localImage"),
+    [{ type: "localImage", path: store.get("attachment", image.id).path }]);
+  assert.deepEqual(recovered.queuedSubmission.attachments.map((a) => a.id), [image.id]);
+  assert.equal(codex.calls.filter((call) => call.method === "thread/queue/add").length, 1);
+});
+test("consumed uncertain image enqueue reconciles from the turn; missing evidence never replays", async (t) => {
+  const { create, runtime, store, codex } = await setup(t);
+  const bot = await create();
+  await op(runtime, bot.id, "turn.send", { text: "Working" });
+  const png = tinyPng();
+  const image = await op(runtime, bot.id, "attachments.begin", {
+    name: "pasted.png", size: png.length, mimeType: "image/png",
+  });
+  await op(runtime, bot.id, "attachments.chunk", {
+    id: image.id, offset: 0, data: png.toString("base64"),
+  });
+  await op(runtime, bot.id, "attachments.finish", { id: image.id });
+  const originalCall = codex.call.bind(codex);
+  codex.call = async (method, params) => {
+    const result = await originalCall(method, params);
+    if (method === "thread/queue/add")
+      throw new Error("disconnected after acknowledgement");
+    return result;
+  };
+  const id = "consumed-image-enqueue-id";
+  const params = { text: "Check image", attachments: [image.id] };
+  await assert.rejects(op(runtime, bot.id, "queue.add", params, id), /disconnected/);
+  const item = codex.queues.get(bot.threadId)[0];
+  codex.queues.set(bot.threadId, []);
+  codex.threads[0].turns.push({ id: "consumed-turn", status: "completed",
+    items: [{ type: "userMessage", clientId: id, content: item.input }] });
+  const resumed = new BotRuntime({ store, codex, root: runtime.root });
+  await resumed.start();
+  assert.deepEqual(await op(resumed, bot.id, "queue.add", params, id),
+    { consumedTurnId: "consumed-turn" });
+  assert.equal(store.operation(id).status, "done");
+  const unknownId = "unknown-image-enqueue-id";
+  store.saveOperation(unknownId, "fingerprint", "dispatching", {
+    method: "queue.add", botId: bot.id,
+  });
+  await resumed.reconcileOperations();
+  assert.equal(store.operation(unknownId).status, "uncertain");
+  assert.equal(codex.calls.filter((call) => call.method === "thread/queue/add").length, 1);
+});
+test("browser retains queued add and replays its original operation ID", async () => {
+  const client = new BotsClient();
+  const cache = new Map();
+  client.cache = (key, fallback) => cache.get(key) ?? fallback;
+  client.save = (key, value) => cache.set(key, value);
+  const request = { type: "request", id: "socket-request", operationId: "stable-image-enqueue-id",
+    method: "queue.add", botId: "bot", params: { text: "Check image", attachments: ["image"] } };
+  client.rememberOperation(request);
+  const replayed = [];
+  client.rpc = async (...args) => { replayed.push(args); return {}; };
+  client.refresh = async () => {};
+  client.replayPending();
+  assert.deepEqual(replayed, [["queue.add", "bot", request.params, request.operationId]]);
+  let rejected;
+  client.pending.set(request.id, {
+    request, timer: setTimeout(() => {}, 10000), resolve: () => {},
+    reject: (error) => { rejected = error; },
+  });
+  client.receive({ type: "response", id: request.id,
+    error: "Acknowledgement was lost. Native state has not confirmed this operation." });
+  assert.match(rejected.message, /Acknowledgement was lost/);
+  assert.equal(cache.get("operations")[request.operationId].operationId, request.operationId);
+  client.pending.set(request.id, {
+    request, timer: setTimeout(() => {}, 10000), resolve: () => {}, reject: () => {},
+  });
+  client.receive({ type: "response", id: request.id, result: { consumedTurnId: "turn" } });
+  assert.deepEqual(cache.get("operations"), {});
 });
 test("notification findings deduplicate", async (t) => {
   const { create, runtime, store } = await setup(t);

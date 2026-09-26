@@ -272,7 +272,10 @@ export class BotsClient {
       }
       clearTimeout(pending.timer);
       this.pending.delete(String(message.id));
-      this.forgetOperation(pending.request.operationId);
+      // An uncertain native mutation may have succeeded. Keep its stable ID
+      // for reconciliation on reconnect instead of creating a second request.
+      if (!message.error || !/acknowledg|disconnected|timed out/i.test(String(message.error)))
+        this.forgetOperation(pending.request.operationId);
       if (message.error) pending.reject(new Error(String(message.error)));
       else pending.resolve(result);
       return;
@@ -319,7 +322,7 @@ export class BotsClient {
     }
   }
   rememberOperation(request: BridgeRequest) {
-    if (!["turn.send", "bots.create"].includes(request.method)) return;
+    if (!["turn.send", "bots.create", "queue.add"].includes(request.method)) return;
     const ops = this.cache<Record<string, BridgeRequest>>("operations", {});
     ops[request.operationId] = request;
     this.save("operations", ops);

@@ -327,42 +327,56 @@ export class BotRuntime extends EventEmitter {
       });
   }
   async reconcileOperations() {
-    for (const op of this.store.uncertainOperations()) {
-      let result = null;
-      if (op.method === "bots.create") {
-        const bot = this.store.bots().find((b) => b.id === op.id);
-        if (bot?.threadId) result = bot;
+    for (const op of this.store.uncertainOperations())
+      await this.reconcileOperation(op);
+  }
+  async reconcileOperation(op) {
+    let result = null;
+    if (op.method === "bots.create") {
+      const bot = this.store.bots().find((b) => b.id === op.id);
+      if (bot?.threadId) result = bot;
+    }
+    if (["turn.send", "queue.add"].includes(op.method) && op.botId) {
+      let bot;
+      try {
+        bot = this.store.bot(op.botId);
+      } catch {
+        /* Bot lookup may be unavailable during recovery. */
       }
-      if (op.method === "turn.send" && op.botId) {
+      if (bot && op.method === "queue.add") {
         try {
-          const bot = this.store.bot(op.botId);
+          const queue = await this.queueList(bot);
+          const item = queue.find((item) => item.clientUserMessageId === op.id);
+          if (item) result = { queuedSubmission: this.publicQueued(bot, item) };
+        } catch {
+          /* A consumed item can still be found in the native turn history. */
+        }
+      }
+      if (bot && !result) {
+        try {
           const { thread } = await this.codex.call("thread/read", {
             threadId: bot.threadId,
             includeTurns: true,
           });
-          const turn = thread.turns.find((t) =>
+          const turn = thread.turns?.find((t) =>
             t.items?.some((i) => i.clientId === op.id),
           );
-          if (turn) result = { turn };
+          if (turn) result = op.method === "queue.add"
+            ? { consumedTurnId: turn.id }
+            : { turn };
         } catch {
-          /* retain uncertainty */
+          /* Native state is unavailable; never replay an uncertain mutation. */
         }
       }
-      this.store.saveOperation(
-        op.id,
-        op.fingerprint,
-        result ? "done" : "uncertain",
-        {
-          ...op,
-          ...(result
-            ? { result }
-            : {
-                error:
-                  "The runtime restarted before acknowledgement. Check the conversation; this operation has not been replayed.",
-              }),
-        },
-      );
     }
+    this.store.saveOperation(op.id, op.fingerprint,
+      result ? "done" : "uncertain", {
+        ...op,
+        ...(result
+          ? { result, error: null }
+          : { error: "Acknowledgement was lost. Native state has not confirmed this operation; it was not replayed." }),
+      });
+    return result;
   }
   snapshot() {
     return {
@@ -417,8 +431,12 @@ export class BotRuntime extends EventEmitter {
         if (existing.fingerprint !== fingerprint)
           throw new Error("Operation ID was reused with different input.");
         if (existing.status === "done") return existing.result;
+        if (["dispatching", "uncertain"].includes(existing.status)) {
+          const result = await this.reconcileOperation(existing);
+          if (result) return result;
+        }
         throw new Error(
-          existing.error ??
+          this.store.operation(operationId).error ??
             "This operation may already have run. Refresh the conversation before retrying.",
         );
       }
@@ -490,20 +508,7 @@ export class BotRuntime extends EventEmitter {
         return this.historyPage(bot.threadId, p.cursor ?? null);
       case "queue.list": {
         const queue = await this.queueList(bot);
-        const attachments = this.store.list("attachment", bot.id)
-          .filter((a) => a.ready);
-        return queue.map((item) => ({
-          ...item,
-          attachments: item.input
-            .map((input) => input.type === "localImage"
-              ? input.path
-              : input.type === "text" && input.text.startsWith("Attached file: ")
-                ? input.text.split("\nLocal path: ")[1]
-                : null)
-            .map((path) => attachments.find((a) => a.path === path))
-            .filter(Boolean)
-            .map((a) => this.publicAttachment(a)),
-        }));
+        return queue.map((item) => this.publicQueued(bot, item));
       }
       case "queue.add": {
         if (bot.archived) throw new Error("Restore this bot first.");
@@ -511,13 +516,18 @@ export class BotRuntime extends EventEmitter {
         const input = await this.messageInput(bot, p);
         await this.load(bot);
         await this.syncQueueSettings(bot);
+        // Native snapshots localImage to inline data URLs. Save IDs first so
+        // previews and edits survive a lost queue/add acknowledgement.
+        this.store.put("queuedAttachments", {
+          id, botId: bot.id, attachmentIds: p.attachments ?? [],
+        });
         const result = await this.codex.call("thread/queue/add", {
           threadId: bot.threadId,
           input,
           clientUserMessageId: id,
         });
         this.emitEvent("queue", {}, bot.id);
-        return result;
+        return { queuedSubmission: this.publicQueued(bot, result.queuedSubmission) };
       }
       case "queue.update": {
         const queue = await this.queueList(bot);
@@ -529,16 +539,22 @@ export class BotRuntime extends EventEmitter {
           queuedSubmissionId: item.id,
           input,
         });
+        this.store.put("queuedAttachments", {
+          id: item.clientUserMessageId, botId: bot.id,
+          attachmentIds: p.attachments ?? [],
+        });
         this.emitEvent("queue", {}, bot.id);
-        return result;
+        return { queuedSubmission: this.publicQueued(bot, result.queuedSubmission) };
       }
       case "queue.delete": {
-        if (!(await this.queueList(bot)).some((x) => x.id === p.id))
+        const item = (await this.queueList(bot)).find((x) => x.id === p.id);
+        if (!item)
           throw new Error("Queued prompt not found.");
         const result = await this.codex.call("thread/queue/delete", {
           threadId: bot.threadId,
           queuedSubmissionId: p.id,
         });
+        this.store.remove("queuedAttachments", item.clientUserMessageId);
         this.emitEvent("queue", {}, bot.id);
         return result;
       }
@@ -991,6 +1007,33 @@ export class BotRuntime extends EventEmitter {
     }
     return input;
   }
+  publicQueued(bot, item) {
+    const saved = this.store.get("queuedAttachments", item.clientUserMessageId);
+    const owned = this.store.list("attachment", bot.id).filter((a) => a.ready);
+    const attachments = saved?.botId === bot.id
+      ? saved.attachmentIds
+        .map((id) => owned.find((a) => a.id === id))
+        .filter(Boolean)
+      : item.input
+        .map((part) => part.type === "localImage"
+          ? part.path
+          : part.type === "text" && part.text.startsWith("Attached file: ")
+            ? part.text.split("\nLocal path: ")[1]
+            : null)
+        .map((path) => owned.find((a) => a.path === path))
+        .filter(Boolean);
+    const images = attachments.filter((a) => a.mimeType.startsWith("image/"));
+    let imageIndex = 0;
+    const input = item.input.map((part) => {
+      if (part.type !== "image") return part;
+      const image = images[imageIndex++];
+      return image
+        ? { type: "localImage", path: image.path }
+        : textInput("[Queued image; upload metadata unavailable]");
+    });
+    return { ...item, input,
+      attachments: attachments.map((a) => this.publicAttachment(a)) };
+  }
   async queueList(bot) {
     await this.load(bot);
     const items = [];
@@ -1346,6 +1389,8 @@ export class BotRuntime extends EventEmitter {
     const created = collectDueRuns(this.store);
     if (created.length) this.emitEvent("schedules", {});
     for (const bot of this.store.bots()) {
+      // Native 0.156.1 also skips interrupted thread idle and wake events.
+      // Keep the bridge pause across restart until queue.resume is requested.
       if (
         bot.archived ||
         bot.queuePaused ||

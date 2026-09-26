@@ -38,7 +38,7 @@ export type BotOperations = {
   "queue.list": { params: Record<string, never>; result: BotQueuedSubmission[] };
   "queue.add": {
     params: { text: string; attachments?: string[] };
-    result: { queuedSubmission: QueuedSubmission };
+    result: { queuedSubmission: QueuedSubmission } | { consumedTurnId: string };
   };
   "queue.update": {
     params: { id: string; text: string; attachments?: string[] };

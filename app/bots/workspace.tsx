@@ -495,6 +495,8 @@ export function BotsWorkspace() {
   }
   async function send(queueNext = false) {
     if (!bot || sending || uploadingRef.current === bot.id) return;
+    // Editing always updates the selected item, including form submission.
+    queueNext ||= Boolean(editingQueueId);
     const text = draft.trim(),
       files = uploads.map((a) => a.id);
     if (!text && !files.length) return;
@@ -1308,7 +1310,7 @@ export function BotsWorkspace() {
                     className="bots-composer"
                     onSubmit={(e) => {
                       e.preventDefault();
-                      void send();
+                      void send(Boolean(editingQueueId));
                     }}
                   >
                     <input
@@ -1385,7 +1387,7 @@ export function BotsWorkspace() {
                           <Square size={14} fill="currentColor" />
                         </button>
                       )}
-                    {(bot.activeTurnId || Boolean(bot.workerTasks?.active)) &&
+                    {!editingQueueId && ((bot.activeTurnId || Boolean(bot.workerTasks?.active)) &&
                     !draft &&
                     !uploads.length ? (
                       <button
@@ -1405,8 +1407,7 @@ export function BotsWorkspace() {
                       <button
                         className="bots-send"
                         aria-label={
-                          editingQueueId ? "Send immediately" :
-                            bot.activeTurnId ? "Send follow-up" : "Send message"
+                          bot.activeTurnId ? "Send follow-up" : "Send message"
                         }
                         disabled={
                           !online ||
@@ -1421,7 +1422,7 @@ export function BotsWorkspace() {
                           <ArrowUp size={20} />
                         )}
                       </button>
-                    )}
+                    ))}
                   </form>
                 </>
               )}
