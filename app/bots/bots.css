@@ -548,12 +548,16 @@ html.bots-viewport-locked body {
   gap: 10px;
   align-items: center;
   justify-content: space-between;
+  min-width: 0;
 }
 .bots-banner > span {
   flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .bots-messages {
   flex: 1;
+  min-width: 0;
   overflow: auto;
   overscroll-behavior: contain;
   padding: 20px max(18px, calc((100% - 1080px) / 2));
@@ -577,6 +581,7 @@ html.bots-viewport-locked body {
   border-radius: 19px 19px 5px 19px;
   padding: 10px 16px;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 .bots-bubble p + p {
   margin-top: 8px;
@@ -592,6 +597,9 @@ html.bots-viewport-locked body {
 }
 .bots-message-markdown p {
   margin: 0.5em 0;
+}
+.bots-message-markdown {
+  overflow-wrap: anywhere;
 }
 .bots-message-markdown h1,
 .bots-message-markdown h2,
@@ -846,6 +854,7 @@ html.bots-viewport-locked body {
   color: #ae3b3b;
   margin: 10px 0;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 .bots-profile {
   position: absolute;

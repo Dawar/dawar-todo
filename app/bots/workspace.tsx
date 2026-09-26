@@ -852,7 +852,7 @@ export function BotsWorkspace() {
           )}
           {bot?.error && (
             <div className="bots-banner">
-              {bot.error}
+              <span>{bot.error}</span>
               {!bot.threadId && (
                 <button
                   disabled={!online || busy}
