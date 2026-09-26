@@ -6,15 +6,19 @@ html.bots-viewport-locked body {
   overscroll-behavior: none;
 }
 .bots-screen {
+  --bots-safe-bottom: env(safe-area-inset-bottom, 0px);
   position: fixed;
   inset-inline: 0;
-  top: var(--bots-viewport-top, 0px);
-  height: var(--bots-viewport-height, 100dvh);
+  top: var(--bots-keyboard-top, 0px);
+  height: var(--bots-keyboard-height, 100dvh);
   overflow: hidden;
   display: flex;
   flex-direction: column;
   background: #fff;
   color: #202624;
+}
+.bots-screen.bots-keyboard-open {
+  --bots-safe-bottom: 0px;
 }
 .bots-screen > header {
   flex-shrink: 0;
@@ -100,7 +104,7 @@ html.bots-viewport-locked body {
   padding: 0 8px;
 }
 .bots-machine {
-  padding: 16px;
+  padding: 16px 16px calc(16px + var(--bots-safe-bottom));
   font-size: 12px;
   color: #6a756f;
   display: flex;
@@ -395,7 +399,7 @@ html.bots-viewport-locked body {
   }
   .bots-composer {
     width: calc(100% - 24px);
-    margin: 8px auto calc(24px + env(safe-area-inset-bottom, 0px));
+    margin: 8px auto calc(24px + var(--bots-safe-bottom));
   }
   .bots-sidebar {
     border-right: 0;

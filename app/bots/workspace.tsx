@@ -252,29 +252,63 @@ export function BotsWorkspace() {
     const viewport = window.visualViewport;
     // Activity tears down this effect when another tab becomes visible.
     root.classList.add("bots-viewport-locked");
+    let frame = 0;
+    let delayed = 0;
     const resize = () => {
-      screen.style.setProperty(
-        "--bots-viewport-height",
-        `${viewport?.height ?? window.innerHeight}px`,
-      );
-      screen.style.setProperty(
-        "--bots-viewport-top",
-        `${viewport?.offsetTop ?? 0}px`,
-      );
+      const active = document.activeElement;
+      const editing = active instanceof HTMLElement &&
+        screen.contains(active) &&
+        active.getClientRects().length > 0 &&
+        (active.matches("input, textarea, select") || active.isContentEditable);
+      const layoutHeight = Math.max(window.innerHeight, root.clientHeight);
+      // The visual viewport can retain its keyboard height after iOS dismisses
+      // the keyboard. Only let it override 100dvh while an editor is focused.
+      const keyboardOpen = editing && viewport &&
+        viewport.height < layoutHeight - 120;
+      screen.classList.toggle("bots-keyboard-open", Boolean(keyboardOpen));
+      if (keyboardOpen) {
+        screen.style.setProperty("--bots-keyboard-height", `${viewport.height}px`);
+        screen.style.setProperty("--bots-keyboard-top", `${viewport.offsetTop}px`);
+      } else {
+        screen.style.removeProperty("--bots-keyboard-height");
+        screen.style.removeProperty("--bots-keyboard-top");
+      }
+    };
+    const scheduleResize = () => {
+      window.cancelAnimationFrame(frame);
+      window.clearTimeout(delayed);
+      frame = window.requestAnimationFrame(resize);
+      // Safari sometimes fires resize before visualViewport has its final size.
+      delayed = window.setTimeout(resize, 250);
     };
     resize();
-    viewport?.addEventListener("resize", resize);
-    viewport?.addEventListener("scroll", resize);
-    window.addEventListener("resize", resize);
+    viewport?.addEventListener("resize", scheduleResize);
+    viewport?.addEventListener("scroll", scheduleResize);
+    window.addEventListener("resize", scheduleResize);
+    window.addEventListener("orientationchange", scheduleResize);
+    window.addEventListener("pageshow", scheduleResize);
+    document.addEventListener("visibilitychange", scheduleResize);
+    document.addEventListener("focusin", scheduleResize);
+    document.addEventListener("focusout", scheduleResize);
+    window.addEventListener("dawar-before-navigation", scheduleResize);
     return () => {
       root.classList.remove("bots-viewport-locked");
-      viewport?.removeEventListener("resize", resize);
-      viewport?.removeEventListener("scroll", resize);
-      window.removeEventListener("resize", resize);
-      screen.style.removeProperty("--bots-viewport-height");
-      screen.style.removeProperty("--bots-viewport-top");
+      viewport?.removeEventListener("resize", scheduleResize);
+      viewport?.removeEventListener("scroll", scheduleResize);
+      window.removeEventListener("resize", scheduleResize);
+      window.removeEventListener("orientationchange", scheduleResize);
+      window.removeEventListener("pageshow", scheduleResize);
+      document.removeEventListener("visibilitychange", scheduleResize);
+      document.removeEventListener("focusin", scheduleResize);
+      document.removeEventListener("focusout", scheduleResize);
+      window.removeEventListener("dawar-before-navigation", scheduleResize);
+      window.cancelAnimationFrame(frame);
+      window.clearTimeout(delayed);
+      screen.classList.remove("bots-keyboard-open");
+      screen.style.removeProperty("--bots-keyboard-height");
+      screen.style.removeProperty("--bots-keyboard-top");
     };
-  }, []);
+  }, [selected]);
   useEffect(() => {
     if (!creating && !editingSchedule && !showRunHistory && !showOverallUsage) return;
     const previous = document.activeElement as HTMLElement | null;
