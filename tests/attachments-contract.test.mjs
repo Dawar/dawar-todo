@@ -95,7 +95,7 @@ test("stores private task images with optimized variants and recovery metadata",
   assert.match(attachments, /thumbnailFormat !== expectedThumbnailFormat/);
   assert.match(attachments, /Math\.max\(displayDimensions\.width, displayDimensions\.height\) > 2048/);
   assert.match(attachments, /Math\.max\(thumbnailDimensions\.width, thumbnailDimensions\.height\) > 480/);
-  assert.match(attachments, /invalid direct upload cleanup failed/);
+  assert.match(attachments, /Never delete its/);
   assert.match(attachments, /deleted_at.*DELETED_RETENTION_DAYS/s);
   assert.match(attachments, /upload_state = 'uploading'.*expires_at/s);
   assert.match(todos, /attachments\?: AttachmentRow\[\]/);
@@ -108,7 +108,7 @@ test("stores private task images with optimized variants and recovery metadata",
 
 test("exposes capture, Safari-safe optimization, drop, gallery, and viewer contracts", async () => {
   const [page, actionIcons, draftRoute, taskAttachmentsRoute, attachmentRoute, todosRoute, openApiText] = await Promise.all([
-    Promise.all(["app/page.tsx", "app/task-sync.ts", "app/task-model.ts", "app/sync-request.ts"].map((path) => readFile(new URL(path, root), "utf8"))).then((parts) => parts.join("\n")),
+    Promise.all(["app/page.tsx", "app/task-sync.ts", "app/attachment-sync.ts", "app/task-model.ts", "app/sync-request.ts"].map((path) => readFile(new URL(path, root), "utf8"))).then((parts) => parts.join("\n")),
     readFile(new URL("app/action-icon.tsx", root), "utf8"),
     readFile(new URL("app/api/attachments/drafts/route.ts", root), "utf8"),
     readFile(new URL("app/api/todos/[id]/attachments/route.ts", root), "utf8"),
@@ -229,7 +229,7 @@ test("accepts common document and archive types through a shared allowlist", asy
 
 test("installs an offline-capable PWA with idempotent queued task syncing", async () => {
   const [page, offlineStore, serviceWorker, manifest, layout, register, schema] = await Promise.all([
-    Promise.all(["app/page.tsx", "app/task-sync.ts", "app/task-model.ts", "app/sync-request.ts"].map((path) => readFile(new URL(path, root), "utf8"))).then((parts) => parts.join("\n")),
+    Promise.all(["app/page.tsx", "app/task-sync.ts", "app/attachment-sync.ts", "app/task-model.ts", "app/sync-request.ts"].map((path) => readFile(new URL(path, root), "utf8"))).then((parts) => parts.join("\n")),
     readFile(new URL("app/offline-store.ts", root), "utf8"),
     readFile(new URL("public/sw.js", root), "utf8"),
     readFile(new URL("public/manifest.webmanifest", root), "utf8"),
@@ -292,7 +292,7 @@ test("installs an offline-capable PWA with idempotent queued task syncing", asyn
 
 test("keeps the installed app badge aligned with the current Open task count", async () => {
   const [page, settings, badgeSource, actionIcons, badgeModule] = await Promise.all([
-    Promise.all(["app/page.tsx", "app/task-sync.ts", "app/task-model.ts", "app/sync-request.ts"].map((path) => readFile(new URL(path, root), "utf8"))).then((parts) => parts.join("\n")),
+    Promise.all(["app/page.tsx", "app/task-sync.ts", "app/attachment-sync.ts", "app/task-model.ts", "app/sync-request.ts"].map((path) => readFile(new URL(path, root), "utf8"))).then((parts) => parts.join("\n")),
     readFile(new URL("app/settings/page.tsx", root), "utf8"),
     readFile(new URL("app/app-badge.ts", root), "utf8"),
     readFile(new URL("app/action-icon.tsx", root), "utf8"),

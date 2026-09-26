@@ -43,6 +43,8 @@ import {
 import type { RealtimeVoice } from "../lib/ai-preferences";
 import { snoozeLabel } from "../lib/snooze-label";
 import { zonedDateTimeInputValue, zonedLocalDateTimeToUtc } from "../lib/zoned-date-time";
+import { AttachmentQueuePanel } from "./attachment-queue-panel";
+import { attachmentQueueMessage, hasAttachmentBytes } from "./attachment-queue";
 import { SiteHeader } from "./site-header";
 import { KeyboardShortcutsDialog } from "./keyboard-shortcuts-dialog";
 import { PullGesturePill } from "./pull-to-refresh";
@@ -1510,6 +1512,7 @@ export default function Home() {
   const pendingCompletionIdsRef = useRef<Set<number>>(new Set());
   const optimisticOperationsRef = useRef<Map<string, OptimisticOperation>>(new Map());
   const [uploadCount, setUploadCount] = useState(0);
+  const [uploadStates, setUploadStates] = useState<Record<string, number>>({});
   const lastLiveSnapshotRef = useRef("");
   const syncWakeTimerRef = useRef<number | null>(null);
   const syncWakeAtRef = useRef(0);
@@ -1889,7 +1892,7 @@ export default function Home() {
     });
     setLoading(state.loading); setOnline(navigator.onLine); setConnectionQuality(state.quality);
     setOfflineCount(state.creates); setOfflineEditCount(state.edits); setOfflineActionCount(state.actions);
-    setUploadCount(state.uploads);
+    setUploadCount(state.uploads); setUploadStates(state.uploadStates);
     pendingTodoPatchesRef.current = new Map(state.mutations.map((mutation) => [mutation.todoId, mutation.patch]));
     rebuildPendingActionState(state.pendingActions);
     setRegisteredProjects((current) => JSON.stringify(current) === JSON.stringify(state.projects) ? current : state.projects);
@@ -2830,13 +2833,17 @@ export default function Home() {
     setLoadingAttachments(true);
     setAttachmentError("");
     try {
-      const queued = (await listQueuedAttachments()).filter((upload) => upload.todoId === todoId && !upload.cancelled);
+      const allQueued = (await listQueuedAttachments()).filter((upload) => upload.todoId === todoId && !upload.cancelled);
+      const queued = allQueued.filter(hasAttachmentBytes);
+      if (allQueued.length !== queued.length) setAttachmentError("Some local file bytes are missing. Open Review attachments to recover them.");
       setDetailUploads((current) => {
         const pending = new Set(queued.map((upload) => upload.localId));
         for (const item of current) if (!pending.has(item.localId)) URL.revokeObjectURL(item.previewUrl);
-        return queued.map((upload) => current.find((item) => item.localId === upload.localId) ?? {
-          localId: upload.localId, file: new File([upload.blob], upload.fileName, { type: upload.mimeType }), previewUrl: URL.createObjectURL(upload.blob), kind: upload.kind, durationMs: upload.durationMs, status: upload.error ? "error" : "offline", attachment: null, error: upload.error ?? "",
-        });
+        return queued.map((upload) => ({
+          ...(current.find((item) => item.localId === upload.localId) ?? {
+            localId: upload.localId, file: new File([upload.blob], upload.fileName, { type: upload.mimeType }), previewUrl: URL.createObjectURL(upload.blob), kind: upload.kind, durationMs: upload.durationMs, attachment: null,
+          }), status: (upload.leaseUntil ?? 0) > Date.now() ? "uploading" : upload.error ? "error" : "offline", error: attachmentQueueMessage(upload),
+        }));
       });
       if (!navigator.onLine) return;
       const { attachments } = await request<{ attachments: TodoAttachment[] }>(`/api/todos/${todoId}/attachments`);
@@ -2901,7 +2908,8 @@ export default function Home() {
   async function uploadDetailAttachment(todoId: number, item: PendingAttachment) {
     try {
       await queueTaskAttachments(todoId, [{ localId: item.localId, kind: item.kind, fileName: item.file.name, mimeType: item.file.type, durationMs: item.durationMs, blob: item.file }]);
-      setDetailUploads((current) => current.map((candidate) => candidate.localId === item.localId ? { ...candidate, status: "offline", error: "" } : candidate));
+      await retryQueuedAttachments(item.localId);
+      setDetailUploads((current) => current.map((candidate) => candidate.localId === item.localId ? { ...candidate, status: "offline", error: "Queued; resumes while the app is open and connected." } : candidate));
     } catch (error) {
       setDetailUploads((current) => current.map((candidate) => candidate.localId === item.localId ? { ...candidate, status: "error", error: error instanceof Error ? error.message : "The attachment could not be saved on this device." } : candidate));
     }
@@ -4671,10 +4679,7 @@ export default function Home() {
               : `${pendingSyncCount} waiting to sync`}
         </div>
       )}
-      {uploadCount > 0 && <div className="mx-auto max-w-5xl px-4 pt-2 text-xs text-[#69716c] sm:px-6" role="status">
-        {uploadCount} attachment{uploadCount === 1 ? "" : "s"} saved on this device · {online ? "uploading in the background" : "waiting for a connection"}
-        <button type="button" className="ml-2 underline" onClick={() => void retryQueuedAttachments()}>Retry uploads</button>
-      </div>}
+      {uploadCount > 0 && <AttachmentQueuePanel count={uploadCount} states={uploadStates} />}
       {imageDropActive && (
         <div className="pointer-events-none fixed inset-0 z-[100] grid place-items-center bg-[#153d2d]/25 p-5 backdrop-blur-[2px]" role="status" aria-live="polite">
           <div className="flex max-w-sm items-center gap-3 rounded-2xl border border-[#216e4e]/25 bg-white px-5 py-4 text-base font-semibold text-[#216e4e] shadow-2xl">

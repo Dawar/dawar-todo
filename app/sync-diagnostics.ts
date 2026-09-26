@@ -2,10 +2,13 @@
 
 import {
   listOfflineTaskActions,
+  listQueuedAttachments,
   listOfflineTodoMutations,
   listOfflineTodos,
   loadCachedServerState,
 } from "./offline-store";
+
+import { attachmentQueueDiagnostic } from "./attachment-queue";
 
 type SyncDiagnosticValue = string | number | boolean | null;
 type SyncDiagnosticDetails = Record<string, SyncDiagnosticValue>;
@@ -28,6 +31,12 @@ type ConnectionNavigator = Navigator & {
 
 const DIAGNOSTIC_STORAGE_KEY = "dawar-todo-sync-diagnostics-v1";
 const DIAGNOSTIC_EVENT_LIMIT = 40;
+function retainDiagnosticEvents(entries: StoredSyncDiagnosticEvent[]) {
+  // Frequent idle task polls must not erase the last attachment failure.
+  return [...entries.filter((entry) => !entry.event.startsWith("attachment-")).slice(-DIAGNOSTIC_EVENT_LIMIT),
+    ...entries.filter((entry) => entry.event.startsWith("attachment-")).slice(-20)]
+    .sort((a, b) => a.at.localeCompare(b.at));
+}
 
 function safeError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
@@ -40,15 +49,14 @@ function readStoredSyncDiagnosticEvents() {
     if (!value) return [] as StoredSyncDiagnosticEvent[];
     const parsed = JSON.parse(value);
     if (!Array.isArray(parsed)) return [] as StoredSyncDiagnosticEvent[];
-    return parsed
+    return retainDiagnosticEvents(parsed
       .filter((entry): entry is StoredSyncDiagnosticEvent => (
         Boolean(entry)
         && typeof entry.at === "string"
         && typeof entry.event === "string"
         && Boolean(entry.details)
         && typeof entry.details === "object"
-      ))
-      .slice(-DIAGNOSTIC_EVENT_LIMIT);
+      )));
   } catch {
     return [] as StoredSyncDiagnosticEvent[];
   }
@@ -64,7 +72,7 @@ export function recordSyncDiagnostic(event: string, details: SyncDiagnosticDetai
     });
     window.localStorage.setItem(
       DIAGNOSTIC_STORAGE_KEY,
-      JSON.stringify(entries.slice(-DIAGNOSTIC_EVENT_LIMIT)),
+      JSON.stringify(retainDiagnosticEvents(entries)),
     );
   } catch (error) {
     console.warn("[todo-diagnostics] sync event could not be retained", {
@@ -138,6 +146,7 @@ export async function buildSyncDiagnosticsReport(
     estimateResult,
     persistedResult,
     apiProbeResult,
+    attachmentsResult,
   ] = await Promise.allSettled([
     listOfflineTodos(),
     listOfflineTodoMutations(),
@@ -148,6 +157,7 @@ export async function buildSyncDiagnosticsReport(
     estimatePromise,
     persistedPromise,
     probeSettingsApi(),
+    listQueuedAttachments(),
   ]);
 
   const pendingTodos = settledValue(pendingTodosResult, []);
@@ -161,6 +171,7 @@ export async function buildSyncDiagnosticsReport(
   const connection = (navigator as ConnectionNavigator).connection;
   const controller = "serviceWorker" in navigator ? navigator.serviceWorker.controller : null;
   const storageErrors = {
+    attachments: settledError(attachmentsResult),
     pendingCreates: settledError(pendingTodosResult),
     pendingEdits: settledError(pendingMutationsResult),
     pendingActions: settledError(pendingActionsResult),
@@ -173,7 +184,7 @@ export async function buildSyncDiagnosticsReport(
 
   const report = {
     report: "Dawar Todo privacy-safe sync diagnostics",
-    schemaVersion: 1,
+    schemaVersion: 2,
     generatedAt: new Date(now).toISOString(),
     source,
     privacy: "Task text, notes, task IDs, operation IDs, attachment names, API tokens, credentials, and device IDs are omitted.",
@@ -225,12 +236,19 @@ export async function buildSyncDiagnosticsReport(
         creates: pendingTodos.length,
         edits: pendingMutations.length,
         actions: pendingActions.length,
+        attachments: settledValue(attachmentsResult, []).length,
       },
+      attachments: settledValue(attachmentsResult, []).map((row) => ({
+        ...attachmentQueueDiagnostic(row, now),
+        targetInCache: cachedState?.todos.some((todo) => (todo as { id: number }).id === row.todoId) ?? false,
+        pendingTargetAction: pendingActions.some((action) => action.taskIds.includes(row.todoId)
+          && (action.body.action === "merge" || (!action.undoRequested && action.optimisticDeletedIds?.includes(row.todoId)))),
+      })),
       creates: pendingTodos.map((todo) => ({
         ageMs: ageMs(todo.createdAt, now),
         attachmentCount: todo.attachments.length,
         uploadedAttachmentCount: todo.attachments.filter((attachment) => Boolean(attachment.remoteAttachmentId)).length,
-        attachmentBytes: todo.attachments.reduce((total, attachment) => total + attachment.blob.size, 0),
+        attachmentBytes: todo.attachments.reduce((total, attachment) => total + (attachment.blob?.size ?? 0), 0),
       })),
       edits: pendingMutations.map((mutation) => ({
         ageMs: ageMs(mutation.createdAt, now),
@@ -239,7 +257,7 @@ export async function buildSyncDiagnosticsReport(
       actions: pendingActions.map((action) => ({
         kind: action.kind,
         method: action.method,
-        path: action.path.split("?")[0],
+        path: action.path.split("?")[0].replace(/\/\d+(?=\/|$)/g, "/:id"),
         ageMs: ageMs(action.createdAt, now),
         attempts: action.attempts,
         retryInMs: Math.max(0, new Date(action.nextAttemptAt).valueOf() - now),

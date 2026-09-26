@@ -2141,7 +2141,7 @@ export async function mergeTodos(inputIds: number[]) {
   const byId = new Map(result.results.map((row) => [row.id, row]));
   const rows = ids.map((id) => byId.get(id)).filter((row): row is TodoRow => Boolean(row));
   if (rows.length < 2) throw new Error("At least two selected tasks must still exist.");
-  const attachmentBefore = await attachmentSnapshotsForTodos(ids);
+  const attachmentBefore = await attachmentSnapshotsForTodos(ids, true);
 
   const shared = (field: "project" | "context") => {
     const first = rows[0][field];

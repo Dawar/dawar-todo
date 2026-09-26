@@ -7,14 +7,16 @@ import { subscribeOfflineChanges } from "./offline-events";
 import {
   listOfflineTodos, listOfflineTodoMutations, listOfflineTaskActions, loadCachedServerState,
   commitRemoteTasks, promoteOfflineTodo, deferOfflineTaskAction, rejectOfflineTaskAction,
-  listQueuedAttachments, finishQueuedAttachment, deferQueuedAttachment,
+  listQueuedAttachments,
   type OfflineTodoMutation, type OfflineTaskAction,
 } from "./offline-store";
-import { uploadTaskAttachmentMultipart } from "./attachment-upload-client";
+import { syncQueuedAttachment } from "./attachment-sync";
+import { attachmentQueueState } from "./attachment-queue";
 import { recordSyncDiagnostic } from "./sync-diagnostics";
 
 export type SyncSnapshot = {
   loading: boolean; quality: ConnectionQuality; creates: number; edits: number; actions: number; uploads: number;
+  uploadStates: Record<string, number>;
   revision: number; projects: string[]; settings?: TodoSettings; captureDraft?: CaptureDraft | null;
   mutations: OfflineTodoMutation[]; pendingActions: OfflineTaskAction[];
 };
@@ -29,7 +31,7 @@ export type TaskSyncEvent =
 
 /** Browser-session engine. No component owns its network requests or timers. */
 export function createTaskSyncEngine() {
-  let snapshot: SyncSnapshot = { loading: true, quality: "online", creates: 0, edits: 0, actions: 0, uploads: 0, revision: 0, projects: [], mutations: [], pendingActions: [] };
+  let snapshot: SyncSnapshot = { loading: true, quality: "online", creates: 0, edits: 0, actions: 0, uploads: 0, uploadStates: {}, revision: 0, projects: [], mutations: [], pendingActions: [] };
   const listeners = new Set<() => void>();
   const events = new Set<(event: TaskSyncEvent) => void>();
   const health = createSyncHealth();
@@ -92,6 +94,7 @@ export function createTaskSyncEngine() {
         const tasks = (cache?.todos ?? []).filter((todo) => !deleted.has(todo.id)).map((todo) => ({ ...todo, ...patches.get(todo.id) } as Todo));
         taskStore.setAll(tasks);
         publish({ loading: false, creates: creates.length, edits: mutations.length, actions: actions.length, uploads: uploads.length,
+          uploadStates: uploads.reduce<Record<string, number>>((counts, upload) => { const state = attachmentQueueState(upload); counts[state] = (counts[state] ?? 0) + 1; return counts; }, {}),
           mutations, pendingActions: actions, revision: cache?.revision ?? 0, projects: cache?.projects ?? [],
           ...(cache?.settings ? { settings: cache.settings } : {}),
           ...(cache && Object.hasOwn(cache, "captureDraft") ? { captureDraft: cache.captureDraft } : {}),
@@ -142,6 +145,8 @@ export function createTaskSyncEngine() {
         const acknowledged = await commitRemoteTasks({
           todos: action.undoRequested ? [] : result.todo ? [result.todo] : result.todos ?? [],
           deletedIds: action.undoRequested ? [] : action.optimisticDeletedIds ?? (result.todo ? (result.ids ?? []).filter((id) => id !== result.todo?.id) : []),
+          ...(action.body.action === "merge" && result.todo && !action.undoRequested
+            ? { attachmentTarget: { fromIds: action.taskIds, todoId: result.todo.id } } : {}),
           acknowledgeAction: { operationId: action.operationId, undoRequested: Boolean(action.undoRequested) },
         });
         if (!acknowledged) { again = true; action.taskIds.forEach((id) => blocked.add(id)); continue; }
@@ -206,58 +211,38 @@ export function createTaskSyncEngine() {
       wake(failures ? Math.max(2_000, poll) : again ? 150 : Math.min(poll, deferred));
     }
   }
-  async function discardQueuedFile(upload: { todoId: number; localId: string; remoteAttachmentId?: string }) {
-    const endpoint = `/api/todos/${upload.todoId}/attachments/${upload.remoteAttachmentId ?? upload.localId}`;
-    try { await request(endpoint, { method: "DELETE" }); }
-    catch (error) { if ((error as { status?: number }).status !== 404) throw error; }
-    await request(`${endpoint}?discard=1`, { method: "DELETE" });
-    await finishQueuedAttachment(upload.localId);
-  }
   async function wakeUploads() {
     if (!available()) return;
     if (uploading) { uploadAgain = true; return; }
     if (uploadTimer !== undefined) { clearTimeout(uploadTimer); uploadTimer = undefined; }
     uploading = true; uploadAgain = false;
+    let nextDelay = Infinity;
     try {
       await withLock("dawar-attachment-sync", async () => {
         for (const upload of await listQueuedAttachments()) {
           if (!available()) break;
-          if (upload.nextAttemptAt > Date.now()) continue;
-          // Deletions cancel uploads; a deletion racing an upload is checked by the server too.
+          if (upload.nextAttemptAt > Date.now() || (upload.leaseUntil ?? 0) > Date.now()) continue;
           const pending = await listOfflineTaskActions();
-          if (pending.some((action) => action.optimisticDeletedIds?.includes(upload.todoId))) continue;
-          try {
-            if (upload.cancelled) { await discardQueuedFile(upload); continue; }
-            let claimed = false;
-            if (upload.remoteAttachmentId && upload.draftToken) {
-              try {
-                await request(`/api/todos/${upload.todoId}/attachments/claim`, { method: "POST", body: JSON.stringify({ draftToken: upload.draftToken, attachmentIds: [upload.remoteAttachmentId] }) });
-                claimed = true;
-              } catch (error) { if ((error as { status?: number }).status !== 400) throw error; }
-            }
-            if (!claimed) {
-              await uploadTaskAttachmentMultipart({ file: new File([upload.blob], upload.fileName, { type: upload.mimeType }), kind: upload.kind, durationMs: upload.durationMs,
-                endpoint: `/api/todos/${upload.todoId}/attachments`, request, clientUploadId: upload.localId });
-            }
-            const current = (await listQueuedAttachments()).find((item) => item.localId === upload.localId);
-            if (current?.cancelled) await discardQueuedFile({ ...upload, remoteAttachmentId: claimed ? upload.remoteAttachmentId : undefined });
-            else await finishQueuedAttachment(upload.localId);
-            emit({ type: "attachment", todoId: upload.todoId }); wake();
-          } catch (error) {
-            const status = (error as { status?: number }).status;
-            if (status === 404) { await finishQueuedAttachment(upload.localId); continue; }
-            const delay = syncRetryDelay(upload.attempts + 1);
-            await deferQueuedAttachment(upload.localId, upload.attempts + 1, retryableSyncError(error) ? delay : Infinity, error instanceof Error ? error.message : "Upload deferred");
-            // A slow file never marks task sync as a slow connection.
-            if (!retryableSyncError(error)) emit({ type: "error", message: `Attachment saved on this device. ${error instanceof Error ? error.message : "Upload could not finish."}` });
-          }
+          // Wait for a merge/deletion result before deciding this file's target.
+          if (pending.some((action) => action.taskIds.includes(upload.todoId)
+            && (action.body.action === "merge" || (!action.undoRequested && action.optimisticDeletedIds?.includes(upload.todoId))))) continue;
+          const todoId = await syncQueuedAttachment(upload.localId);
+          if (todoId !== null) { emit({ type: "attachment", todoId }); wake(); }
         }
       });
       await reload();
-    } catch (error) { console.warn("[todo-sync] upload lane deferred", error); }
-    finally {
+      for (const row of await listQueuedAttachments()) {
+        const eligibleAt = Math.max(row.nextAttemptAt, row.leaseUntil ?? 0);
+        nextDelay = Math.min(nextDelay, Math.max(2_000, eligibleAt - Date.now()));
+      }
+    } catch {
+      recordSyncDiagnostic("attachment-storage-failed");
+      nextDelay = 10_000;
+    } finally {
       uploading = false;
-      if (available() && (snapshot.uploads || uploadAgain)) uploadTimer = setTimeout(() => void wakeUploads(), uploadAgain ? 100 : 2_000);
+      if (available() && (Number.isFinite(nextDelay) || uploadAgain)) {
+        uploadTimer = setTimeout(() => void wakeUploads(), uploadAgain ? 100 : nextDelay);
+      }
     }
   }
   function closeStream() {
@@ -313,7 +298,7 @@ export function createTaskSyncEngine() {
       if (started) return;
       started = true; stopped = false;
       unsubscribe = subscribeOfflineChanges((change, external) => {
-        if (external || change === "uploads") void reload().catch((error) => emit({ type: "error", message: String(error) }));
+        if (external || change === "uploads" || change === "remote") void reload().catch((error) => emit({ type: "error", message: String(error) }));
         if (change === "local") { if (reloadRunning) reloadAgain = true; wake(250); }
         if (change === "uploads") void wakeUploads();
         if (change === "chat") wakeLanes();
