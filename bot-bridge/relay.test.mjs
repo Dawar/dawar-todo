@@ -142,3 +142,13 @@ test("relay rejects expired sessions, bad credentials and oversized frames", asy
   await relay.webSocketMessage(oversized, "x".repeat(420001));
   assert.equal(oversized.closed, 1009);
 });
+
+test('relay preserves proven rejection and treats an older bridge error as uncertain', async () => {
+  const { socket, send } = setup(); const machine = socket('machine'), browser = socket('browser');
+  await send(machine, { type: 'auth', role: 'machine', machineId: 'vm', credential: 'machine' });
+  await send(browser, { type: 'auth', ticket: await ticket() });
+  for (const [outcome, expected] of [['rejected', 'rejected'], ['uncertain', 'uncertain'], [undefined, 'uncertain']]) {
+    await send(machine, { type: 'response', clientId: 'browser', id: 'submitted-request', error: 'arbitrary response text', outcome });
+    assert.equal(browser.sent.at(-1).outcome, expected);
+  }
+});

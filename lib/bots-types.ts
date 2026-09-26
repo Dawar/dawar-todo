@@ -134,3 +134,12 @@ export type BridgeRequest = {
   botId?: string;
   params: Record<string, unknown>;
 };
+
+/** An error without explicit certainty always leaves a mutation unconfirmed. */
+export type BridgeResponse = {
+  type: "response";
+  id: string;
+  result?: unknown;
+  error?: string;
+  outcome?: "rejected" | "uncertain";
+};

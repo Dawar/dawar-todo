@@ -1274,3 +1274,15 @@ html.bots-viewport-locked body {
 .bots-machine {
   overflow-wrap: anywhere;
 }
+
+.bots-draft-status {
+  padding: 3px 16px;
+  font-size: 11px;
+  color: #59665d;
+  flex-shrink: 0;
+  max-height: 24vh;
+  overflow-y: auto;
+}
+.bots-draft-status [role="alert"] { color: #9c342c; }
+.bots-draft-status button { text-decoration: underline; margin-left: 6px; }
+.bots-draft-status select { max-width: 100%; }
