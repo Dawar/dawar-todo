@@ -15,6 +15,7 @@ import {
   ArrowLeft,
   MoreHorizontal,
   ArrowUp,
+  ArrowDown,
   Paperclip,
   X,
   Square,
@@ -38,6 +39,7 @@ import type {
   BotEvent,
   BotHistory,
   BotSchedule,
+  BotQueuedSubmission,
 } from "../../lib/bots-types";
 import type { Turn } from "../../lib/codex-protocol/v2/Turn";
 import type { ThreadItem } from "../../lib/codex-protocol/v2/ThreadItem";
@@ -191,6 +193,8 @@ export function BotsWorkspace() {
     >(null);
   const [turns, setTurns] = useState<ConversationTurn[]>([]),
     [attachments, setAttachments] = useState<BotAttachment[]>([]),
+    [promptQueue, setPromptQueue] = useState<BotQueuedSubmission[]>([]),
+    [editingQueueId, setEditingQueueId] = useState<string | null>(null),
     [draft, setDraft] = useState(""),
     [uploads, setUploads] = useState<BotAttachment[]>([]),
     [queuedUploads, setQueuedUploads] = useState<PendingBotUpload[]>([]),
@@ -210,6 +214,7 @@ export function BotsWorkspace() {
     uploadingRef = useRef<string | null>(null),
     removedUploads = useRef(new Set<string>()),
     previewFiles = useRef(new Map<string, File>()),
+    preQueueEdit = useRef<{ text: string; uploads: BotAttachment[] } | null>(null),
     nearBottom = useRef(true),
     pendingEvents = useRef<BotEvent[]>([]),
     historyLoading = useRef(false),
@@ -364,16 +369,36 @@ export function BotsWorkspace() {
       }
     }
   }, []);
+  const loadQueue = useCallback(async (id: string) => {
+    if (!client.online) return;
+    try {
+      const queue = await client.rpc<BotQueuedSubmission[]>("queue.list", id);
+      if (selectedRef.current === id) {
+        setPromptQueue(queue);
+        client.save(`queue:${id}`, queue);
+      }
+    } catch (e) {
+      if (selectedRef.current === id)
+        setError(e instanceof Error ? e.message : "Queue could not load.");
+    }
+  }, []);
   useEffect(() => {
-    if (selected) void loadHistory(selected);
+    if (selected) {
+      preQueueEdit.current = null;
+      setPromptQueue(client.cache<BotQueuedSubmission[]>(`queue:${selected}`, []));
+      setEditingQueueId(null);
+      void loadHistory(selected);
+      void loadQueue(selected);
+    }
     else {
       setTurns([]);
       setAttachments([]);
+      setPromptQueue([]);
     }
     setProfile(false);
     setError("");
     nearBottom.current = true;
-  }, [selected, online, loadHistory]);
+  }, [selected, online, loadHistory, loadQueue]);
   useEffect(() => {
     const listener = (event: BotEvent) => {
       if (event.botId !== selectedRef.current) return;
@@ -383,6 +408,11 @@ export function BotsWorkspace() {
       }
       if (event.type === "history.refresh" && selectedRef.current)
         void loadHistory(selectedRef.current);
+      if ((event.type === "queue" ||
+          (event.type === "codex" &&
+           (event.data as NativeEvent).method === "thread/queue/changed")) &&
+          selectedRef.current)
+        void loadQueue(selectedRef.current);
       if (event.type === "codex")
         setTurns((current) =>
           reduceBotTurns(current, event.data as NativeEvent),
@@ -397,7 +427,7 @@ export function BotsWorkspace() {
     return () => {
       client.events.delete(listener);
     };
-  }, []);
+  }, [loadQueue]);
   useEffect(() => {
     if (selected && loadedId.current === selected && client.owner)
       client.save(`history:${selected}`, { turns, attachments });
@@ -408,13 +438,13 @@ export function BotsWorkspace() {
       });
   }, [turns, attachments, selected, pending.length]);
   useEffect(() => {
-    if (selected && draftId.current === selected && client.owner)
+    if (selected && draftId.current === selected && client.owner && !editingQueueId)
       client.save(`draft:${selected}`, draft);
-  }, [draft, selected]);
+  }, [draft, selected, editingQueueId]);
   useEffect(() => {
-    if (selected && draftId.current === selected && client.owner)
+    if (selected && draftId.current === selected && client.owner && !editingQueueId)
       client.save(`uploads:${selected}`, uploads);
-  }, [uploads, selected]);
+  }, [uploads, selected, editingQueueId]);
   useEffect(() => {
     if (
       !selected ||
@@ -432,7 +462,8 @@ export function BotsWorkspace() {
   }, [selected, online, bot]);
   function select(id: string | null) {
     if (selectedRef.current)
-      client.save(`draft:${selectedRef.current}`, draftRef.current);
+      client.save(`draft:${selectedRef.current}`,
+        preQueueEdit.current?.text ?? draftRef.current);
     setSelected(id);
     const url = new URL(window.location.href);
     if (id) url.searchParams.set("bot", id);
@@ -462,7 +493,7 @@ export function BotsWorkspace() {
       setTimeout(() => URL.revokeObjectURL(url), 60000);
     });
   }
-  async function send() {
+  async function send(queueNext = false) {
     if (!bot || sending || uploadingRef.current === bot.id) return;
     const text = draft.trim(),
       files = uploads.map((a) => a.id);
@@ -475,15 +506,58 @@ export function BotsWorkspace() {
     setError("");
     nearBottom.current = true;
     try {
-      await client.rpc("turn.send", bot.id, { text, attachments: files });
-      if (draftRef.current.trim() === text) setDraft("");
-      previewFiles.current.clear();
-      setUploads([]);
+      if (editingQueueId && queueNext) {
+        await client.rpc("queue.update", bot.id, {
+          id: editingQueueId, text, attachments: files,
+        });
+      } else {
+        await client.rpc(queueNext ? "queue.add" : "turn.send", bot.id, {
+          text, attachments: files,
+        });
+      }
+      if (queueNext) await loadQueue(bot.id);
+      if (editingQueueId) {
+        const previous = preQueueEdit.current;
+        preQueueEdit.current = null;
+        setEditingQueueId(null);
+        setDraft(previous?.text ?? "");
+        setUploads(previous?.uploads ?? []);
+      } else {
+        if (draftRef.current.trim() === text) setDraft("");
+        previewFiles.current.clear();
+        setUploads([]);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Message could not be sent.");
     } finally {
       setSending(false);
     }
+  }
+  function editQueued(item: BotQueuedSubmission) {
+    if (!preQueueEdit.current)
+      preQueueEdit.current = { text: draft, uploads };
+    setEditingQueueId(item.id);
+    setDraft(item.input.filter((input) => input.type === "text")
+      .filter((input) => !input.text.startsWith("Attached file: "))
+      .map((input) => input.text).join("\n"));
+    setUploads(item.attachments);
+  }
+  function cancelQueueEdit() {
+    const previous = preQueueEdit.current;
+    preQueueEdit.current = null;
+    setEditingQueueId(null);
+    setDraft(previous?.text ?? "");
+    setUploads(previous?.uploads ?? []);
+  }
+  async function changeQueue(fn: () => Promise<unknown>) {
+    if (!bot) return;
+    await action(async () => {
+      try {
+        await fn();
+      } finally {
+        await loadQueue(bot.id);
+      }
+    });
   }
   async function upload(files: FileList | File[] | null) {
     if (!bot || !files) return;
@@ -1069,6 +1143,60 @@ export function BotsWorkspace() {
                       Plan
                     </button>
                   </div>
+                  {promptQueue.length > 0 && (
+                    <div className="bots-prompt-queue" role="region" aria-label="Queued prompts">
+                      <strong>Queued next</strong>
+                      {bot.queuePaused && (
+                        <div className="bots-queue-paused">
+                          Queue paused.
+                          <button type="button" disabled={!online || busy}
+                            onClick={() => void changeQueue(() => client.rpc("queue.resume", bot.id))}>
+                            Resume queue
+                          </button>
+                        </div>
+                      )}
+                      {promptQueue.map((item, index) => (
+                        <div className="bots-prompt-queue-item" key={item.id}>
+                          <span className="bots-queue-number">{index + 1}</span>
+                          <div className="bots-queue-content">
+                            <span>{item.input.flatMap((input) =>
+                              input.type === "text" && !input.text.startsWith("Attached file: ")
+                                ? [input.text] : []).join("\n") || "Attachments"}</span>
+                            {item.attachments.length > 0 && (
+                              <div className="bots-queue-attachments">
+                                {item.attachments.map((a) => (
+                                  <span key={a.id} title={a.name}>
+                                    {a.mimeType.startsWith("image/") && (
+                                      <UploadThumbnail botId={bot.id} attachmentId={a.id} online={online} />
+                                    )}
+                                    {a.name}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                          <div className="bots-queue-actions">
+                            <button type="button" aria-label={`Edit queued prompt ${index + 1}`}
+                              disabled={!online || sending} onClick={() => editQueued(item)}><Pencil size={15} /></button>
+                            <button type="button" aria-label={`Move queued prompt ${index + 1} up`}
+                              disabled={!online || busy || index === 0}
+                              onClick={() => void changeQueue(() => client.rpc("queue.reorder", bot.id, {
+                                ids: promptQueue.map((x) => x.id).toSpliced(index - 1, 2, item.id, promptQueue[index - 1].id),
+                              }))}><ArrowUp size={15} /></button>
+                            <button type="button" aria-label={`Move queued prompt ${index + 1} down`}
+                              disabled={!online || busy || index === promptQueue.length - 1}
+                              onClick={() => void changeQueue(() => client.rpc("queue.reorder", bot.id, {
+                                ids: promptQueue.map((x) => x.id).toSpliced(index, 2, promptQueue[index + 1].id, item.id),
+                              }))}><ArrowDown size={15} /></button>
+                            <button type="button" aria-label={`Remove queued prompt ${index + 1}`}
+                              disabled={!online || busy}
+                              onClick={() => void changeQueue(() => client.rpc("queue.delete", bot.id, { id: item.id }))}>
+                              <Trash2 size={15} /></button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                   {(uploads.length > 0 ||
                     uploadingRef.current === bot.id ||
                     queuedUploads.some((item) => item.botId === bot.id)) && (
@@ -1222,10 +1350,25 @@ export function BotsWorkspace() {
                           !e.nativeEvent.isComposing
                         ) {
                           e.preventDefault();
-                          void send();
+                          void send(Boolean(editingQueueId));
                         }
                       }}
                     />
+                    {(bot.activeTurnId || bot.workerTasks?.active ||
+                      promptQueue.length > 0 || editingQueueId) && (
+                      <>
+                      {editingQueueId && (
+                        <button type="button" className="bots-queue-button"
+                          onClick={cancelQueueEdit}>Cancel edit</button>
+                      )}
+                      <button type="button" className="bots-queue-button"
+                        disabled={!online || sending || Boolean(uploading || queuedUploads.length) ||
+                          (!draft.trim() && !uploads.length)}
+                        onClick={() => void send(true)}>
+                        {editingQueueId ? "Save queue" : "Queue next"}
+                      </button>
+                      </>
+                    )}
                     {(bot.activeTurnId || Boolean(bot.workerTasks?.active)) &&
                       Boolean(draft || uploads.length) && (
                         <button
@@ -1262,7 +1405,8 @@ export function BotsWorkspace() {
                       <button
                         className="bots-send"
                         aria-label={
-                          bot.activeTurnId ? "Send follow-up" : "Send message"
+                          editingQueueId ? "Send immediately" :
+                            bot.activeTurnId ? "Send follow-up" : "Send message"
                         }
                         disabled={
                           !online ||

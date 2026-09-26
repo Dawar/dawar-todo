@@ -1,6 +1,7 @@
 import type { ServerRequest } from "./codex-protocol/ServerRequest";
 import type { Thread } from "./codex-protocol/v2/Thread";
 import type { Model } from "./codex-protocol/v2/Model";
+import type { QueuedSubmission } from "./codex-protocol/v2/QueuedSubmission";
 
 export type Bot = {
   id: string;
@@ -22,6 +23,7 @@ export type Bot = {
   activeTurnId: string | null;
   workerTasks?: { active: number; waiting: number };
   managerPaused?: boolean;
+  queuePaused?: boolean;
   error?: string | null;
 };
 export type BotSchedule = {
@@ -78,6 +80,9 @@ export type BotHistory = {
   thread: Thread;
   attachments: BotAttachment[];
   pending: BotRequest[];
+};
+export type BotQueuedSubmission = QueuedSubmission & {
+  attachments: BotAttachment[];
 };
 export type BotEvent = {
   seq: number;

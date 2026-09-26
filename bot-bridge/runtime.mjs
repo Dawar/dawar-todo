@@ -42,6 +42,7 @@ const READ_METHODS = new Set([
   "events",
   "schedules.list",
   "attachments.read",
+  "queue.list",
   "runtime.info",
 ]);
 const MAX_FILE = 100 * 1024 * 1024;
@@ -155,6 +156,9 @@ export class BotRuntime extends EventEmitter {
   }
   async start() {
     await mkdir(this.root, { recursive: true, mode: 0o700 });
+    const recovering = new Set(this.store.bots()
+      .filter((bot) => bot.activeTurnId)
+      .map((bot) => bot.id));
     // A server request is only answerable in the process that emitted it.
     for (const p of this.store.list("pending"))
       if (!p.async) this.store.remove("pending", p.id);
@@ -165,8 +169,7 @@ export class BotRuntime extends EventEmitter {
           status: this.store.list("pending", bot.id).length
             ? "waiting"
             : "interrupted",
-          error:
-            "The runtime restarted. Review the last result before continuing.",
+          error: "The runtime restarted. Checking the native conversation.",
         });
     for (const active of this.store.list("activeRun"))
       this.store.remove("activeRun", active.id);
@@ -210,6 +213,58 @@ export class BotRuntime extends EventEmitter {
         } catch (e) {
           this.saveBot(bot, { status: "error", error: e.message });
         }
+    }
+    // The native thread owns execution across bridge restarts. Never dispatch a
+    // queued prompt until its latest turn has been reconciled.
+    for (const bot of this.store.bots()) {
+      if (!bot.threadId || bot.archived) continue;
+      try {
+        const [{ thread: summary }, queue] = await Promise.all([
+          this.codex.call("thread/read", {
+            threadId: bot.threadId, includeTurns: false,
+          }),
+          this.queueList(bot),
+        ]);
+        if (!recovering.has(bot.id) && !queue.length &&
+            summary.status?.type !== "active") continue;
+        const { thread } = await this.codex.call("thread/read", {
+          threadId: bot.threadId,
+          includeTurns: true,
+        });
+        const latest = await this.latestNativeTurn(bot, thread);
+        const active = thread.status?.type === "active" ||
+          (!thread.status && latest?.status === "inProgress");
+        if (active && latest?.status !== "inProgress")
+          this.saveBot(this.store.bot(bot.id), {
+            queuePaused: true,
+            status: "error",
+            error: "An active native turn could not be identified after restart.",
+          });
+        else if (active)
+          this.saveBot(this.store.bot(bot.id), {
+            activeTurnId: latest.id,
+            status: "running",
+            queuePaused: false,
+            error: null,
+          });
+        else if (latest?.status === "interrupted")
+          this.saveBot(this.store.bot(bot.id), {
+            queuePaused: true,
+            status: "interrupted",
+            error: latest.error?.message ?? null,
+          });
+        else if (bot.status === "interrupted" && !bot.queuePaused)
+          this.saveBot(this.store.bot(bot.id), {
+            status: this.store.list("pending", bot.id).length ? "waiting" : "idle",
+            error: null,
+          });
+      } catch (error) {
+        this.saveBot(this.store.bot(bot.id), {
+          queuePaused: true,
+          status: "error",
+          error: `Queue recovery needs review: ${error.message}`,
+        });
+      }
     }
     await this.reconcileOperations();
     for (const run of this.store
@@ -433,6 +488,90 @@ export class BotRuntime extends EventEmitter {
       }
       case "history.page":
         return this.historyPage(bot.threadId, p.cursor ?? null);
+      case "queue.list": {
+        const queue = await this.queueList(bot);
+        const attachments = this.store.list("attachment", bot.id)
+          .filter((a) => a.ready);
+        return queue.map((item) => ({
+          ...item,
+          attachments: item.input
+            .map((input) => input.type === "localImage"
+              ? input.path
+              : input.type === "text" && input.text.startsWith("Attached file: ")
+                ? input.text.split("\nLocal path: ")[1]
+                : null)
+            .map((path) => attachments.find((a) => a.path === path))
+            .filter(Boolean)
+            .map((a) => this.publicAttachment(a)),
+        }));
+      }
+      case "queue.add": {
+        if (bot.archived) throw new Error("Restore this bot first.");
+        if (!this.ready) throw new Error("Codex is not ready.");
+        const input = await this.messageInput(bot, p);
+        await this.load(bot);
+        await this.syncQueueSettings(bot);
+        const result = await this.codex.call("thread/queue/add", {
+          threadId: bot.threadId,
+          input,
+          clientUserMessageId: id,
+        });
+        this.emitEvent("queue", {}, bot.id);
+        return result;
+      }
+      case "queue.update": {
+        const queue = await this.queueList(bot);
+        const item = queue.find((x) => x.id === p.id);
+        if (!item) throw new Error("Queued prompt not found.");
+        const input = await this.messageInput(bot, p);
+        const result = await this.codex.call("thread/queue/update", {
+          threadId: bot.threadId,
+          queuedSubmissionId: item.id,
+          input,
+        });
+        this.emitEvent("queue", {}, bot.id);
+        return result;
+      }
+      case "queue.delete": {
+        if (!(await this.queueList(bot)).some((x) => x.id === p.id))
+          throw new Error("Queued prompt not found.");
+        const result = await this.codex.call("thread/queue/delete", {
+          threadId: bot.threadId,
+          queuedSubmissionId: p.id,
+        });
+        this.emitEvent("queue", {}, bot.id);
+        return result;
+      }
+      case "queue.reorder": {
+        const queue = await this.queueList(bot);
+        if (!Array.isArray(p.ids) || p.ids.length !== queue.length ||
+            new Set(p.ids).size !== queue.length ||
+            queue.some((x) => !p.ids.includes(x.id)))
+          throw new Error("Reorder must include every queued prompt once.");
+        const result = await this.codex.call("thread/queue/reorder", {
+          threadId: bot.threadId,
+          queuedSubmissionIds: p.ids,
+        });
+        this.emitEvent("queue", {}, bot.id);
+        return result;
+      }
+      case "queue.resume": {
+        if (bot.archived) throw new Error("Restore this bot first.");
+        const { thread } = await this.codex.call("thread/read", {
+          threadId: bot.threadId, includeTurns: true,
+        });
+        const latest = await this.latestNativeTurn(bot, thread);
+        const active = thread.status?.type === "active" ||
+          (!thread.status && latest?.status === "inProgress");
+        if (active && latest?.status !== "inProgress")
+          throw new Error("The active native turn could not be identified. Refresh before resuming the queue.");
+        const waiting = this.store.list("pending", bot.id).length > 0;
+        this.saveBot(bot, { queuePaused: false, error: null,
+          activeTurnId: active ? latest.id : null,
+          status: waiting ? "waiting" : active ? "running" : "idle" });
+        setImmediate(() => void this.tick().catch((e) => this.emit("fault", e)));
+        return {};
+      }
       case "bots.recover": {
         if (bot.threadId) return bot;
         await this.recoverCreation(bot);
@@ -477,6 +616,7 @@ export class BotRuntime extends EventEmitter {
         return this.send(bot, p, id, run);
       }
       case "turn.interrupt": {
+        this.saveBot(bot, { queuePaused: true });
         const operations = [];
         if (this.manager) operations.push(this.manager.stop(bot));
         if (bot.activeTurnId)
@@ -740,13 +880,18 @@ export class BotRuntime extends EventEmitter {
         { mode: 0o600 },
       );
     }
-    return this.saveBot(bot, {
+    const next = {
+      ...bot,
       name,
       model,
       effort,
       serviceTier,
       mode: p.mode ?? bot.mode,
-    });
+    };
+    if (next.model !== bot.model || next.effort !== bot.effort ||
+        next.serviceTier !== bot.serviceTier || next.mode !== bot.mode)
+      await this.syncQueueSettings(next);
+    return this.saveBot(bot, next);
   }
   async archive(bot, archived) {
     if (bot.activeTurnId || this.store.list("pending", bot.id).length)
@@ -782,26 +927,8 @@ export class BotRuntime extends EventEmitter {
     if (!this.ready) throw new Error("Codex is not ready.");
     if (bot.managerPaused && !id.startsWith("manager-notice:"))
       bot = this.saveBot(bot, { managerPaused: false });
+    const input = await this.messageInput(bot, p);
     const text = String(p.text ?? "").trim();
-    if (text.length > 200000) throw new Error("This message is too long.");
-    const attachmentIds = p.attachments ?? [];
-    if (!Array.isArray(attachmentIds) || attachmentIds.length > 12)
-      throw new Error("Attach at most 12 files.");
-    if (!text && !attachmentIds.length)
-      throw new Error("Write a message or attach a file.");
-    const input = text ? [textInput(text)] : [];
-    for (const attachmentId of attachmentIds) {
-      const a = this.owned("attachment", attachmentId, bot.id);
-      if (!a.ready)
-        throw new Error("Wait for attachments to finish uploading.");
-      await containedPath(bot.cwd, a.path);
-      if (a.mimeType.startsWith("image/"))
-        input.push({ type: "localImage", path: a.path });
-      else
-        input.push(
-          textInput(`Attached file: ${a.name}\nLocal path: ${a.path}`),
-        );
-    }
     await this.load(bot);
     const additionalContext = await profileContext(bot);
     if (this.manager)
@@ -830,8 +957,62 @@ export class BotRuntime extends EventEmitter {
           : text.slice(0, 160),
         updatedAt: now(),
       });
+      if (!run && bot.queuePaused)
+        this.saveBot(this.store.bot(bot.id), { queuePaused: false });
       return result;
     }
+    const result = await this.startTurn(bot, input, text, id, run, additionalContext);
+    if (!run && bot.queuePaused)
+      this.saveBot(this.store.bot(bot.id), { queuePaused: false });
+    return result;
+  }
+  async messageInput(bot, p) {
+    const text = String(p.text ?? "").trim();
+    if (text.length > 200000) throw new Error("This message is too long.");
+    const attachmentIds = p.attachments ?? [];
+    if (!Array.isArray(attachmentIds) || attachmentIds.length > 12)
+      throw new Error("Attach at most 12 files.");
+    if (!text && !attachmentIds.length)
+      throw new Error("Write a message or attach a file.");
+    const input = text ? [textInput(text)] : [];
+    let images = 0;
+    for (const attachmentId of attachmentIds) {
+      const a = this.owned("attachment", attachmentId, bot.id);
+      if (!a.ready)
+        throw new Error("Wait for attachments to finish uploading.");
+      await containedPath(bot.cwd, a.path);
+      if (a.mimeType.startsWith("image/")) {
+        if (++images > 6) throw new Error("Attach at most 6 images per message.");
+        input.push({ type: "localImage", path: a.path });
+      } else
+        input.push(
+          textInput(`Attached file: ${a.name}\nLocal path: ${a.path}`),
+        );
+    }
+    return input;
+  }
+  async queueList(bot) {
+    await this.load(bot);
+    const items = [];
+    let cursor = null;
+    do {
+      const page = await this.codex.call("thread/queue/list", {
+        threadId: bot.threadId, cursor, limit: 100,
+      });
+      items.push(...page.data);
+      cursor = page.nextCursor;
+    } while (cursor);
+    return items;
+  }
+  async latestNativeTurn(bot, thread) {
+    let latest = thread.turns?.at(-1);
+    if (thread.status?.type === "active" && latest?.status !== "inProgress") {
+      const page = await this.historyPage(bot.threadId);
+      latest = page.data.find((turn) => turn.status === "inProgress") ?? latest;
+    }
+    return latest;
+  }
+  async startTurn(bot, input, text, id, run, additionalContext) {
     const { model, effort, serviceTier } = this.settings(bot);
     const params = {
       threadId: bot.threadId,
@@ -883,6 +1064,41 @@ export class BotRuntime extends EventEmitter {
         });
     }
     return result;
+  }
+  async startQueued(bot, item) {
+    // queue/start takes only a submission ID; its turn inherits thread settings.
+    await this.syncQueueSettings(bot);
+    const { turn } = await this.codex.call("thread/queue/start", {
+      threadId: bot.threadId,
+      queuedSubmissionId: item.id,
+    });
+    this.emitEvent("queue", {}, bot.id);
+    this.emitUserMessage(bot, turn.id, item.clientUserMessageId, item.input);
+    if (turn.status === "inProgress")
+      this.saveBot(this.store.bot(bot.id), {
+        activeTurnId: turn.id,
+        status: "running",
+        preview: item.input.find((input) => input.type === "text")?.text.slice(0, 160) ?? "Attachments",
+        error: null,
+        updatedAt: now(),
+      });
+    return turn;
+  }
+  async syncQueueSettings(bot) {
+    const { model, effort, serviceTier } = this.settings(bot);
+    await this.codex.call("thread/settings/update", {
+      threadId: bot.threadId,
+      cwd: bot.cwd,
+      approvalPolicy: "never",
+      sandboxPolicy: { type: "dangerFullAccess" },
+      model,
+      effort,
+      serviceTier,
+      collaborationMode: {
+        mode: bot.mode,
+        settings: { model, reasoning_effort: effort, developer_instructions: null },
+      },
+    });
   }
   emitUserMessage(bot, turnId, clientId, content) {
     this.emitEvent(
@@ -1003,6 +1219,8 @@ export class BotRuntime extends EventEmitter {
     if (!bot) return;
     // Keep native events intact so every renderer uses the generated protocol contract.
     this.emitEvent("codex", message, bot.id);
+    if (message.method === "thread/queue/changed")
+      this.emitEvent("queue", {}, bot.id);
     if (message.method === "turn/started")
       this.saveBot(bot, {
         activeTurnId: p.turn.id,
@@ -1058,25 +1276,32 @@ export class BotRuntime extends EventEmitter {
       this.emitEvent("request.resolved", { key }, bot.id);
     }
     if (message.method === "turn/completed") {
+      // Native queue dispatch can start the next turn before this notification
+      // is delivered. Do not clear that newer turn's active ID.
+      const newerActive = this.store.bot(bot.id).activeTurnId &&
+        this.store.bot(bot.id).activeTurnId !== p.turn.id;
       for (const pending of this.store.list("pending", bot.id))
         if (!pending.async && pending.request.params.turnId === p.turn.id) {
           this.store.remove("pending", pending.id);
           this.emitEvent("request.resolved", { key: pending.id }, bot.id);
         }
       const failed = p.turn.status === "failed";
+      if (p.turn.status === "interrupted")
+        this.saveBot(this.store.bot(bot.id), { queuePaused: true });
       const error = p.turn.error?.message ?? null;
-      this.saveBot(this.store.bot(bot.id), {
-        activeTurnId: null,
-        status: failed
-          ? "error"
-          : p.turn.status === "interrupted"
-            ? "interrupted"
-            : this.store.list("pending", bot.id).length
-              ? "waiting"
-              : "idle",
-        error,
-        updatedAt: now(),
-      });
+      if (!newerActive)
+        this.saveBot(this.store.bot(bot.id), {
+          activeTurnId: null,
+          status: failed
+            ? "error"
+            : p.turn.status === "interrupted"
+              ? "interrupted"
+              : this.store.list("pending", bot.id).length
+                ? "waiting"
+                : "idle",
+          error,
+          updatedAt: now(),
+        });
       const active = this.store.get("activeRun", bot.id);
       if (active) {
         const run = this.store.get("run", active.runId);
@@ -1123,12 +1348,81 @@ export class BotRuntime extends EventEmitter {
     for (const bot of this.store.bots()) {
       if (
         bot.archived ||
+        bot.queuePaused ||
         bot.activeTurnId ||
+        bot.workerTasks?.active ||
+        bot.workerTasks?.waiting ||
         this.locks.has(bot.id) ||
         this.store.list("pending", bot.id).length ||
         this.store.list("run", bot.id).some((r) => r.status === "uncertain")
       )
         continue;
+      // Native dispatches after completed or failed turns. This path only
+      // recovers a queue left idle after a bridge restart or explicit resume.
+      let queue;
+      try {
+        queue = await this.queueList(bot);
+      } catch (error) {
+        this.emit("fault", error);
+        continue;
+      }
+      if (queue.length) {
+        void this.lock(bot.id, async () => {
+          const current = this.store.bot(bot.id);
+          if (current.activeTurnId || current.archived || current.queuePaused ||
+              current.workerTasks?.active || current.workerTasks?.waiting ||
+              this.store.list("pending", bot.id).length) return;
+          let first;
+          try {
+            // Re-read after obtaining the lock: another client can mutate the queue.
+            first = (await this.queueList(current))[0];
+            if (!first) return;
+            const { thread } = await this.codex.call("thread/read", {
+              threadId: current.threadId, includeTurns: true,
+            });
+            const latest = await this.latestNativeTurn(current, thread);
+            const active = thread.status?.type === "active" ||
+              (!thread.status && latest?.status === "inProgress");
+            if (active && latest?.status !== "inProgress")
+              throw new Error("An active native turn could not be identified.");
+            if (active) {
+              this.saveBot(this.store.bot(bot.id), {
+                activeTurnId: latest.id, status: "running", error: null,
+              });
+              return;
+            }
+            await this.startQueued(current, first);
+          } catch (error) {
+            try {
+              const [{ thread }, remaining] = await Promise.all([
+                this.codex.call("thread/read", {
+                  threadId: current.threadId, includeTurns: true,
+                }),
+                this.queueList(current),
+              ]);
+              const latest = await this.latestNativeTurn(current, thread);
+              const active = thread.status?.type === "active" ||
+                (!thread.status && latest?.status === "inProgress");
+              if (active && latest?.status === "inProgress") {
+                this.saveBot(this.store.bot(bot.id), {
+                  activeTurnId: latest.id, status: "running",
+                  queuePaused: false, error: null,
+                });
+                return;
+              }
+              if (first && !remaining.some((item) => item.id === first.id) ||
+                  /active or pending turn/i.test(error.message)) return;
+            } catch {
+              // Preserve the queue for review when native state cannot be read.
+            }
+            this.saveBot(this.store.bot(bot.id), {
+              queuePaused: true, status: "error",
+              error: `Queued prompt needs review: ${error.message}`,
+            });
+          }
+        }).catch((e) => this.emit("fault", e));
+        continue;
+      }
       const run = this.store
         .list("run", bot.id)
         .filter((r) => r.status === "queued")

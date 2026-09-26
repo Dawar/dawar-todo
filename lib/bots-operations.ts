@@ -5,10 +5,12 @@ import type {
   BotHistory,
   BotSchedule,
   BotSnapshot,
+  BotQueuedSubmission,
 } from "./bots-types";
 import type { ThreadTurnsListResponse } from "./codex-protocol/v2/ThreadTurnsListResponse";
 import type { TurnStartResponse } from "./codex-protocol/v2/TurnStartResponse";
 import type { TurnSteerResponse } from "./codex-protocol/v2/TurnSteerResponse";
+import type { QueuedSubmission } from "./codex-protocol/v2/QueuedSubmission";
 export type BotOperations = {
   snapshot: { params: Record<string, never>; result: BotSnapshot };
   history: { params: Record<string, never>; result: BotHistory };
@@ -33,6 +35,18 @@ export type BotOperations = {
     params: Record<string, never>;
     result: Record<string, never>;
   };
+  "queue.list": { params: Record<string, never>; result: BotQueuedSubmission[] };
+  "queue.add": {
+    params: { text: string; attachments?: string[] };
+    result: { queuedSubmission: QueuedSubmission };
+  };
+  "queue.update": {
+    params: { id: string; text: string; attachments?: string[] };
+    result: { queuedSubmission: QueuedSubmission };
+  };
+  "queue.delete": { params: { id: string }; result: { deleted: boolean } };
+  "queue.reorder": { params: { ids: string[] }; result: Record<string, never> };
+  "queue.resume": { params: Record<string, never>; result: Record<string, never> };
   "thread.compact": {
     params: Record<string, never>;
     result: Record<string, never>;

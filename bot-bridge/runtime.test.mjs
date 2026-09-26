@@ -4,6 +4,7 @@ import { EventEmitter } from "node:events";
 import { mkdtemp, rm, readFile, writeFile, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { deflateSync } from "node:zlib";
 import { Store } from "./store.mjs";
 import { BotRuntime, validateResponse } from "./runtime.mjs";
 import { slugify, cleanName, PROFILE_FILES } from "./profiles.mjs";
@@ -13,6 +14,7 @@ class FakeCodex extends EventEmitter {
   calls = [];
   threads = [];
   answers = [];
+  queues = new Map();
   async start() {}
   async call(method, params) {
     this.calls.push({ method, params });
@@ -49,6 +51,44 @@ class FakeCodex extends EventEmitter {
       };
     if (method === "thread/list")
       return { data: this.threads, nextCursor: null };
+    if (method === "thread/queue/list")
+      return { data: [...(this.queues.get(params.threadId) ?? [])], nextCursor: null };
+    if (method === "thread/queue/add") {
+      const item = { id: `queued-${this.calls.length}`, input: params.input,
+        clientUserMessageId: params.clientUserMessageId };
+      this.queues.set(params.threadId,
+        [...(this.queues.get(params.threadId) ?? []), item]);
+      return { queuedSubmission: item };
+    }
+    if (method === "thread/queue/update") {
+      const queue = this.queues.get(params.threadId);
+      const item = queue.find((x) => x.id === params.queuedSubmissionId);
+      item.input = params.input;
+      return { queuedSubmission: item };
+    }
+    if (method === "thread/queue/delete") {
+      const queue = this.queues.get(params.threadId);
+      const remaining = queue.filter((x) => x.id !== params.queuedSubmissionId);
+      this.queues.set(params.threadId, remaining);
+      return { deleted: remaining.length !== queue.length };
+    }
+    if (method === "thread/queue/reorder") {
+      const queue = this.queues.get(params.threadId);
+      this.queues.set(params.threadId,
+        params.queuedSubmissionIds.map((id) => queue.find((x) => x.id === id)));
+      return {};
+    }
+    if (method === "thread/queue/start") {
+      const queue = this.queues.get(params.threadId);
+      const item = queue.find((x) => x.id === params.queuedSubmissionId);
+      if (!item) throw new Error("Queued prompt not found");
+      this.queues.set(params.threadId, queue.filter((x) => x.id !== item.id));
+      const turn = { id: `turn-${this.calls.length}`, status: "inProgress",
+        items: [{ type: "userMessage", id: `native-${item.id}`,
+          clientId: item.clientUserMessageId, content: item.input }] };
+      this.threads.find((t) => t.id === params.threadId).turns.push(turn);
+      return { turn };
+    }
     if (method === "turn/start") {
       const turn = {
         id: `turn-${this.calls.length}`,
@@ -99,6 +139,225 @@ const op = (
   params = {},
   operationId = crypto.randomUUID(),
 ) => runtime.handle({ method, botId, params, operationId });
+async function settleQueue(runtime, botId) {
+  await new Promise((resolve) => setImmediate(resolve));
+  if (runtime.locks.has(botId)) await runtime.locks.get(botId);
+}
+function tinyPng() {
+  const crc32 = (bytes) => {
+    let crc = -1;
+    for (const byte of bytes) {
+      crc ^= byte;
+      for (let i = 0; i < 8; i++)
+        crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
+    }
+    return (crc ^ -1) >>> 0;
+  };
+  const chunk = (name, data) => {
+    const body = Buffer.concat([Buffer.from(name), data]);
+    const length = Buffer.alloc(4), checksum = Buffer.alloc(4);
+    length.writeUInt32BE(data.length);
+    checksum.writeUInt32BE(crc32(body));
+    return Buffer.concat([length, body, checksum]);
+  };
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(1, 0);
+  header.writeUInt32BE(1, 4);
+  header[8] = 8;
+  header[9] = 6;
+  return Buffer.concat([
+    Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
+    chunk("IHDR", header),
+    chunk("IDAT", deflateSync(Buffer.from([0, 255, 0, 0, 255]))),
+    chunk("IEND", Buffer.alloc(0)),
+  ]);
+}
+test("queued uploads preserve six localImage paths and reject unready or foreign attachments", async (t) => {
+  const { create, runtime, codex } = await setup(t);
+  const bot = await create();
+  const other = await create("Other", "create-operation-2");
+  await op(runtime, bot.id, "turn.send", { text: "Working" });
+  const images = [];
+  const png = tinyPng();
+  for (let i = 0; i < 6; i++) {
+    const image = await op(runtime, bot.id, "attachments.begin", {
+      name: `pasted-${i}.png`, size: png.length, mimeType: "image/png",
+    });
+    await op(runtime, bot.id, "attachments.chunk", {
+      id: image.id, offset: 0, data: png.toString("base64"),
+    });
+    await op(runtime, bot.id, "attachments.finish", { id: image.id });
+    images.push(image);
+  }
+  const queued = await op(runtime, bot.id, "queue.add", {
+    text: "Inspect pasted images", attachments: images.map((a) => a.id),
+  });
+  assert.equal(queued.queuedSubmission.input.filter((x) => x.type === "localImage").length, 6);
+  const listed = await op(runtime, bot.id, "queue.list");
+  assert.deepEqual(listed[0].attachments.map((a) => a.name), images.map((a) => a.name));
+  const edited = await op(runtime, bot.id, "queue.update", {
+    id: queued.queuedSubmission.id,
+    text: "Inspect all six pasted images carefully",
+    attachments: images.map((a) => a.id),
+  });
+  assert.equal(edited.queuedSubmission.input.filter((x) => x.type === "localImage").length, 6);
+  assert.deepEqual((await op(runtime, bot.id, "queue.list"))[0].attachments.map((a) => a.id),
+    images.map((a) => a.id));
+  for (const image of images)
+    assert.equal((await op(runtime, bot.id, "attachments.read", { id: image.id })).size, png.length);
+  const seventh = await op(runtime, bot.id, "attachments.begin", {
+    name: "seventh.png", size: 1, mimeType: "image/png",
+  });
+  await assert.rejects(op(runtime, bot.id, "queue.add", {
+    text: "Wait", attachments: [seventh.id],
+  }), /finish uploading/);
+  await op(runtime, bot.id, "attachments.chunk", {
+    id: seventh.id, offset: 0, data: Buffer.from([7]).toString("base64"),
+  });
+  await op(runtime, bot.id, "attachments.finish", { id: seventh.id });
+  await assert.rejects(op(runtime, bot.id, "queue.add", {
+    text: "Too many", attachments: [...images, seventh].map((a) => a.id),
+  }), /at most 6 images/);
+  await assert.rejects(op(runtime, other.id, "queue.add", {
+    text: "Foreign", attachments: [images[0].id],
+  }), /not found/);
+  assert.equal(codex.calls.filter((c) => c.method === "thread/queue/add").length, 1);
+});
+test("native queue reorders and removes items, then dispatches sequentially across restart", async (t) => {
+  const { create, runtime, codex, store } = await setup(t);
+  const bot = await create();
+  const first = await op(runtime, bot.id, "turn.send", { text: "Active" });
+  const a = (await op(runtime, bot.id, "queue.add", { text: "A" })).queuedSubmission;
+  const b = (await op(runtime, bot.id, "queue.add", { text: "B" })).queuedSubmission;
+  const c = (await op(runtime, bot.id, "queue.add", { text: "C" })).queuedSubmission;
+  await op(runtime, bot.id, "queue.reorder", { ids: [b.id, a.id, c.id] });
+  await op(runtime, bot.id, "queue.update", { id: b.id, text: "B edited" });
+  await op(runtime, bot.id, "queue.delete", { id: a.id });
+  assert.deepEqual((await op(runtime, bot.id, "queue.list")).map((x) => x.id), [b.id, c.id]);
+  await assert.rejects(op(runtime, bot.id, "queue.reorder", { ids: [b.id, b.id] }), /every queued prompt/);
+  const nativeFirst = codex.threads[0].turns.find((turn) => turn.id === first.turn.id);
+  nativeFirst.status = "completed";
+  runtime.onNotification({ method: "turn/completed", params: {
+    threadId: bot.threadId, turn: { id: first.turn.id, status: "completed" },
+  } });
+  await runtime.tick();
+  await settleQueue(runtime, bot.id);
+  const startCalls = () => codex.calls.filter((call) => call.method === "thread/queue/start");
+  assert.equal(startCalls().length, 1);
+  assert.equal(startCalls()[0].params.queuedSubmissionId, b.id);
+  const settings = codex.calls.find((call) => call.method === "thread/settings/update").params;
+  assert.equal(settings.model, "gpt-6-luna");
+  assert.equal(settings.collaborationMode.mode, "default");
+  const resumed = new BotRuntime({ store, codex, root: runtime.root });
+  await resumed.start();
+  await resumed.tick();
+  await settleQueue(resumed, bot.id);
+  assert.equal(startCalls().length, 1, "restart must retain the running native turn");
+  const running = codex.threads[0].turns.at(-1);
+  assert.equal(running.items[0].content[0].text, "B edited");
+  running.status = "completed";
+  resumed.onNotification({ method: "turn/completed", params: {
+    threadId: bot.threadId, turn: { id: running.id, status: "completed" },
+  } });
+  await resumed.tick();
+  await settleQueue(resumed, bot.id);
+  assert.equal(startCalls().length, 2);
+  assert.equal(startCalls()[1].params.queuedSubmissionId, c.id);
+  assert.deepEqual(await op(resumed, bot.id, "queue.list"), []);
+});
+test("queued work waits for questions and Stop, and uncertain start reconciles before resume", async (t) => {
+  const { create, runtime, codex, store } = await setup(t);
+  const bot = await create();
+  const first = await op(runtime, bot.id, "turn.send", { text: "Active" });
+  const a = (await op(runtime, bot.id, "queue.add", { text: "A" })).queuedSubmission;
+  const b = (await op(runtime, bot.id, "queue.add", { text: "B" })).queuedSubmission;
+  const nativeFirst = codex.threads[0].turns[0];
+  nativeFirst.status = "completed";
+  runtime.store.put("pending", {
+    id: "question", botId: bot.id, async: true,
+    request: { method: "item/tool/requestUserInput", params: { questions: [] } },
+  });
+  runtime.onNotification({ method: "turn/completed", params: {
+    threadId: bot.threadId, turn: { id: first.turn.id, status: "completed" },
+  } });
+  await runtime.tick();
+  assert.equal(codex.calls.filter((x) => x.method === "thread/queue/start").length, 0);
+  store.remove("pending", "question");
+  await op(runtime, bot.id, "turn.interrupt");
+  await runtime.tick();
+  assert.equal(codex.calls.filter((x) => x.method === "thread/queue/start").length, 0);
+  const originalCall = codex.call.bind(codex);
+  let lostAck = true;
+  codex.call = async (method, params) => {
+    const result = await originalCall(method, params);
+    if (method === "thread/queue/start" && lostAck) {
+      lostAck = false;
+      throw new Error("disconnected after acknowledgement");
+    }
+    return result;
+  };
+  await op(runtime, bot.id, "queue.resume");
+  await settleQueue(runtime, bot.id);
+  assert.equal(store.bot(bot.id).queuePaused, false);
+  assert.equal(store.bot(bot.id).activeTurnId, codex.threads[0].turns.at(-1).id);
+  assert.equal(codex.calls.filter((x) => x.method === "thread/queue/start").length, 1);
+  const resumed = new BotRuntime({ store, codex, root: runtime.root });
+  await resumed.start();
+  await op(resumed, bot.id, "queue.resume");
+  await resumed.tick();
+  await settleQueue(resumed, bot.id);
+  assert.equal(codex.calls.filter((x) => x.method === "thread/queue/start").length, 1);
+  assert.equal(store.bot(bot.id).activeTurnId, codex.threads[0].turns.at(-1).id);
+  assert.deepEqual((await op(resumed, bot.id, "queue.list")).map((x) => x.id), [b.id]);
+  assert.equal(a.id, codex.calls.find((x) => x.method === "thread/queue/start").params.queuedSubmissionId);
+});
+test("native automatic queue advance keeps the newer turn active", async (t) => {
+  const { create, runtime, codex, store } = await setup(t);
+  const bot = await create();
+  const first = await op(runtime, bot.id, "turn.send", { text: "Active" });
+  const a = (await op(runtime, bot.id, "queue.add", { text: "A" })).queuedSubmission;
+  const b = (await op(runtime, bot.id, "queue.add", { text: "B" })).queuedSubmission;
+  const queue = codex.queues.get(bot.threadId);
+  codex.queues.set(bot.threadId, queue.filter((item) => item.id !== a.id));
+  codex.threads[0].turns[0].status = "completed";
+  codex.threads[0].turns.push({ id: "native-next", status: "inProgress", items: [] });
+  runtime.onNotification({ method: "turn/started", params: {
+    threadId: bot.threadId, turn: { id: "native-next", status: "inProgress" },
+  } });
+  runtime.onNotification({ method: "turn/completed", params: {
+    threadId: bot.threadId, turn: { id: first.turn.id, status: "completed" },
+  } });
+  await runtime.tick();
+  assert.equal(store.bot(bot.id).activeTurnId, "native-next");
+  assert.equal(codex.calls.filter((call) => call.method === "thread/queue/start").length, 0);
+  assert.deepEqual((await op(runtime, bot.id, "queue.list")).map((item) => item.id), [b.id]);
+  const resumed = new BotRuntime({ store, codex, root: runtime.root });
+  await resumed.start();
+  await resumed.tick();
+  await settleQueue(resumed, bot.id);
+  assert.equal(store.bot(bot.id).activeTurnId, "native-next");
+  assert.equal(codex.calls.filter((call) => call.method === "thread/queue/start").length, 0);
+});
+test("idle native queue left after bridge restart starts once", async (t) => {
+  const { create, runtime, codex, store } = await setup(t);
+  const bot = await create();
+  const first = await op(runtime, bot.id, "turn.send", { text: "Active" });
+  const queued = (await op(runtime, bot.id, "queue.add", { text: "After restart" })).queuedSubmission;
+  codex.threads[0].turns[0].status = "completed";
+  runtime.onNotification({ method: "turn/completed", params: {
+    threadId: bot.threadId, turn: { id: first.turn.id, status: "completed" },
+  } });
+  const resumed = new BotRuntime({ store, codex, root: runtime.root });
+  await resumed.start();
+  await resumed.tick();
+  await settleQueue(resumed, bot.id);
+  const starts = codex.calls.filter((call) => call.method === "thread/queue/start");
+  assert.equal(starts.length, 1);
+  assert.equal(starts[0].params.queuedSubmissionId, queued.id);
+  await resumed.tick();
+  await settleQueue(resumed, bot.id);
+  assert.equal(codex.calls.filter((call) => call.method === "thread/queue/start").length, 1);
+});
 test("initial history retries native rollout initialization and preserves saved turns", async (t) => {
   const { create, runtime, codex } = await setup(t);
   const bot = await create();
