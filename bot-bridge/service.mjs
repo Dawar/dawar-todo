@@ -4,6 +4,7 @@ import { createServer } from "node:http";
 import { Store } from "./store.mjs";
 import { Codex } from "./codex.mjs";
 import { BotRuntime } from "./runtime.mjs";
+import { bridgeResponse } from "./response.mjs";
 import { CodexManager } from "./manager.mjs";
 
 const required = [
@@ -116,19 +117,7 @@ function connect() {
       return;
     }
     if (message.type === "request") {
-      let result, error;
-      try {
-        result = await runtime.handle(message);
-      } catch (e) {
-        error = e.message;
-      }
-      const response = {
-        type: "response",
-        clientId: message.clientId,
-        id: message.id,
-        result,
-        error,
-      };
+      const response = await bridgeResponse(runtime, message);
       if (current.readyState === WebSocket.OPEN) sendLarge(current, response);
     }
   });

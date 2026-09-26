@@ -61,7 +61,14 @@ import { BotMessage } from "./message";
 import { RequestCard } from "./request-card";
 import { RunHistory } from "./run-history";
 import { UsagePanel } from "./usage-panel";
+import { useBotComposer } from "./use-composer";
+import { ComposerAttachments, ComposerStatus } from "./composer-state";
+import { UploadThumbnail } from "./upload-thumbnail";
 import "./bots.css";
+
+const EMPTY_TURNS: ConversationTurn[] = [];
+const EMPTY_ATTACHMENTS: BotAttachment[] = [];
+const EMPTY_QUEUE: BotQueuedSubmission[] = [];
 
 function initials(name: string) {
   return name
@@ -82,49 +89,6 @@ function Avatar({ bot, small = false }: { bot: Bot; small?: boolean }) {
     </span>
   );
 }
-function UploadThumbnail({
-  botId,
-  attachmentId,
-  file,
-  online,
-}: {
-  botId: string;
-  attachmentId?: string;
-  file?: File;
-  online: boolean;
-}) {
-  const [url, setUrl] = useState("");
-  useEffect(() => {
-    let active = true;
-    let objectUrl = "";
-    if (file) {
-      objectUrl = URL.createObjectURL(file);
-      setUrl(objectUrl);
-    } else if (attachmentId && online) {
-      setUrl("");
-      void client
-        .download(botId, attachmentId)
-        .then(({ blob }) => {
-          if (!active) return;
-          objectUrl = URL.createObjectURL(blob);
-          setUrl(objectUrl);
-        })
-        .catch(() => {});
-    } else {
-      setUrl("");
-    }
-    return () => {
-      active = false;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-    };
-  }, [attachmentId, botId, file, online]);
-  return url ? (
-    <img src={url} alt="" />
-  ) : (
-    <Paperclip size={18} aria-hidden="true" />
-  );
-}
-type PendingBotUpload = { id: string; botId: string; file: File };
 function humanStatus(bot: Bot, online: boolean) {
   if (!online) return "VM offline";
   if (bot.archived) return "Archived";
@@ -199,38 +163,43 @@ export function BotsWorkspace() {
     [editingSchedule, setEditingSchedule] = useState<
       BotSchedule | "new" | null
     >(null);
-  const [turns, setTurns] = useState<ConversationTurn[]>([]),
-    [attachments, setAttachments] = useState<BotAttachment[]>([]),
-    [promptQueue, setPromptQueue] = useState<BotQueuedSubmission[]>([]),
-    [editingQueueId, setEditingQueueId] = useState<string | null>(null),
-    [draft, setDraft] = useState(""),
-    [uploads, setUploads] = useState<BotAttachment[]>([]),
-    [queuedUploads, setQueuedUploads] = useState<PendingBotUpload[]>([]),
-    [uploading, setUploading] = useState(""),
-    [uploadingId, setUploadingId] = useState<string | null>(null),
-    [sending, setSending] = useState(false),
+  const [loadedTurns, setTurns] = useState<ConversationTurn[]>([]),
+    [loadedAttachments, setAttachments] = useState<BotAttachment[]>([]),
+    [loadedQueue, setPromptQueue] = useState<BotQueuedSubmission[]>([]),
+    [historyScope, setHistoryScope] = useState(""),
+    [queueScope, setQueueScope] = useState(""),
+    [cachedHistory, setCachedHistory] = useState(false),
+    [truncatedHistory, setTruncatedHistory] = useState(false),
     [error, setError] = useState(""),
     [loading, setLoading] = useState(false),
     [olderCursor, setOlderCursor] = useState<string | null>(null),
     [busy, setBusy] = useState(false);
   const selectedRef = useRef(selected),
-    draftRef = useRef(draft),
     screenRef = useRef<HTMLDivElement>(null),
     scrollRef = useRef<HTMLDivElement>(null),
     fileRef = useRef<HTMLInputElement>(null),
     searchRef = useRef<HTMLInputElement>(null),
-    uploadingRef = useRef<string | null>(null),
-    removedUploads = useRef(new Set<string>()),
-    previewFiles = useRef(new Map<string, File>()),
-    preQueueEdit = useRef<{ text: string; uploads: BotAttachment[] } | null>(null),
     nearBottom = useRef(true),
     pendingEvents = useRef<BotEvent[]>([]),
     historyLoading = useRef(false),
-    loadedId = useRef<string | null>(null),
-    draftId = useRef<string | null>(null),
+    historyScopeRef = useRef(""),
+    historyRequest = useRef(0),
+    queueRequest = useRef(0),
     createOperation = useRef(crypto.randomUUID());
-  selectedRef.current = selected;
-  draftRef.current = draft;
+  useLayoutEffect(() => { selectedRef.current = selected; }, [selected]);
+  const owner = client.owner;
+  const scope = JSON.stringify([owner, selected]);
+  const turns = historyScope === scope ? loadedTurns : EMPTY_TURNS;
+  const attachments = historyScope === scope ? loadedAttachments : EMPTY_ATTACHMENTS;
+  const promptQueue = queueScope === scope ? loadedQueue : EMPTY_QUEUE;
+  const { composer, error: composerError } = useBotComposer(client.owner, selected);
+  const draft = composer?.draft.text ?? "";
+  const uploads = composer?.draft.files ?? [];
+  const editingQueueId = composer?.draft.queueId ?? null;
+  const sending = Boolean(composer?.operation);
+  const canSend = Boolean(composer?.ready && !composer.storageError && !sending &&
+    uploads.every((file) => file.remote?.ready));
+  const setDraft = (text: string) => composer?.setText(text);
   const snapshot = client.snapshot,
     online = client.online,
     bots = snapshot?.bots ?? [],
@@ -348,10 +317,12 @@ export function BotsWorkspace() {
   useEffect(() => {
     const unsubscribe = client.subscribe(() => redraw((v) => v + 1));
     client.start();
-    const initial = new URLSearchParams(window.location.search).get("bot");
-    if (initial) setSelected(initial);
-    const pop = () =>
-      setSelected(new URLSearchParams(window.location.search).get("bot"));
+    const pop = () => {
+      const id = new URLSearchParams(window.location.search).get("bot");
+      selectedRef.current = id;
+      setSelected(id);
+    };
+    queueMicrotask(pop);
     window.addEventListener("popstate", pop);
     window.addEventListener("dawar-shell-popstate", pop);
     return () => {
@@ -361,40 +332,41 @@ export function BotsWorkspace() {
     };
   }, []);
   const loadHistory = useCallback(async (id: string) => {
-    if (loadedId.current !== id) previewFiles.current.clear();
-    loadedId.current = null;
-    draftId.current = null;
-    const cached = client.cache<{
-      turns: Turn[];
-      attachments: BotAttachment[];
-    } | null>(`history:${id}`, null);
-    if (cached) {
-      setTurns(cached.turns);
-      setAttachments(cached.attachments);
-    } else {
+    const owner = client.owner;
+    const request = ++historyRequest.current;
+    const scope = JSON.stringify([owner, id]);
+    const changed = historyScopeRef.current !== scope;
+    historyScopeRef.current = scope;
+    if (changed) {
+      setHistoryScope(scope);
+      setCachedHistory(false);
+      setTruncatedHistory(false);
+      setOlderCursor(null);
       setTurns([]);
       setAttachments([]);
     }
-    setDraft(client.cache(`draft:${id}`, ""));
-    setUploads(client.cache<BotAttachment[]>(`uploads:${id}`, []));
-    queueMicrotask(() => {
-      if (selectedRef.current === id) {
-        loadedId.current = id;
-        draftId.current = id;
-      }
-    });
-    if (!client.online) return;
+    const cached = changed ? await client.cachedHistory(id) : null;
+    if (selectedRef.current !== id || client.owner !== owner || historyRequest.current !== request) return;
+    if (cached) {
+      setCachedHistory(true);
+      setTruncatedHistory(Boolean(cached.truncated));
+      setTurns(cached.turns);
+      setAttachments(cached.attachments);
+    }
+    if (!client.online) { setLoading(false); historyLoading.current = false; return; }
     setLoading(true);
     historyLoading.current = true;
     pendingEvents.current = [];
     try {
       const history = await client.rpc<BotHistory>("history", id);
-      if (selectedRef.current !== id) return;
+      if (selectedRef.current !== id || client.owner !== owner || historyRequest.current !== request) return;
       let next = history.thread.turns;
       for (const event of pendingEvents.current)
         if (event.type === "codex")
           next = reduceBotTurns(next, event.data as NativeEvent);
       setTurns(next);
+      setCachedHistory(false);
+      setTruncatedHistory(false);
       setOlderCursor(history.nextCursor);
       setAttachments(history.attachments);
       client.save(`history:${id}`, {
@@ -403,10 +375,10 @@ export function BotsWorkspace() {
       });
       await client.rpc("bots.read", id);
     } catch (e) {
-      if (selectedRef.current === id)
+      if (selectedRef.current === id && client.owner === owner && historyRequest.current === request)
         setError(e instanceof Error ? e.message : "History could not load.");
     } finally {
-      if (selectedRef.current === id) {
+      if (selectedRef.current === id && client.owner === owner && historyRequest.current === request) {
         setLoading(false);
         historyLoading.current = false;
         pendingEvents.current = [];
@@ -414,35 +386,41 @@ export function BotsWorkspace() {
     }
   }, []);
   const loadQueue = useCallback(async (id: string) => {
+    const owner = client.owner;
+    const request = ++queueRequest.current;
     if (!client.online) return;
     try {
       const queue = await client.rpc<BotQueuedSubmission[]>("queue.list", id);
-      if (selectedRef.current === id) {
+      if (selectedRef.current === id && client.owner === owner && queueRequest.current === request) {
         setPromptQueue(queue);
         client.save(`queue:${id}`, queue);
       }
     } catch (e) {
-      if (selectedRef.current === id)
+      if (selectedRef.current === id && client.owner === owner && queueRequest.current === request)
         setError(e instanceof Error ? e.message : "Queue could not load.");
     }
   }, []);
   useEffect(() => {
-    if (selected) {
-      preQueueEdit.current = null;
-      setPromptQueue(client.cache<BotQueuedSubmission[]>(`queue:${selected}`, []));
-      setEditingQueueId(null);
-      void loadHistory(selected);
-      void loadQueue(selected);
-    }
-    else {
-      setTurns([]);
-      setAttachments([]);
-      setPromptQueue([]);
-    }
-    setProfile(false);
-    setError("");
-    nearBottom.current = true;
-  }, [selected, online, loadHistory, loadQueue]);
+    let active = true;
+    queueMicrotask(() => {
+      if (!active) return;
+      if (selected) {
+        setQueueScope(JSON.stringify([client.owner, selected]));
+        setPromptQueue(client.cache<BotQueuedSubmission[]>(`queue:${selected}`, []));
+        void loadHistory(selected);
+        void loadQueue(selected);
+      }
+      else {
+        setTurns([]);
+        setAttachments([]);
+        setPromptQueue([]);
+      }
+      setProfile(false);
+      setError("");
+      nearBottom.current = true;
+    });
+    return () => { active = false; };
+  }, [selected, online, owner, loadHistory, loadQueue]);
   useEffect(() => {
     const listener = (event: BotEvent) => {
       if (event.botId !== selectedRef.current) return;
@@ -471,10 +449,12 @@ export function BotsWorkspace() {
     return () => {
       client.events.delete(listener);
     };
-  }, [loadQueue]);
+  }, [loadHistory, loadQueue]);
   useEffect(() => {
-    if (selected && loadedId.current === selected && client.owner)
-      client.save(`history:${selected}`, { turns, attachments });
+    if (selected && owner && historyScope === scope && loadedTurns.length)
+      client.save(`history:${selected}`, { turns: loadedTurns, attachments: loadedAttachments });
+  }, [selected, owner, historyScope, scope, loadedTurns, loadedAttachments]);
+  useEffect(() => {
     const messages = scrollRef.current;
     if (!messages) return;
     // History updates and browser scroll restoration can retain an old x offset.
@@ -486,14 +466,6 @@ export function BotsWorkspace() {
         behavior: "instant",
       });
   }, [turns, attachments, selected, pending.length]);
-  useEffect(() => {
-    if (selected && draftId.current === selected && client.owner && !editingQueueId)
-      client.save(`draft:${selected}`, draft);
-  }, [draft, selected, editingQueueId]);
-  useEffect(() => {
-    if (selected && draftId.current === selected && client.owner && !editingQueueId)
-      client.save(`uploads:${selected}`, uploads);
-  }, [uploads, selected, editingQueueId]);
   useEffect(() => {
     if (
       !selected ||
@@ -510,9 +482,7 @@ export function BotsWorkspace() {
     return () => clearTimeout(timer);
   }, [selected, online, bot]);
   function select(id: string | null) {
-    if (selectedRef.current)
-      client.save(`draft:${selectedRef.current}`,
-        preQueueEdit.current?.text ?? draftRef.current);
+    selectedRef.current = id;
     setSelected(id);
     const url = new URL(window.location.href);
     if (id) url.searchParams.set("bot", id);
@@ -543,63 +513,14 @@ export function BotsWorkspace() {
     });
   }
   async function send(queueNext = false) {
-    if (!bot || sending || uploadingRef.current === bot.id) return;
-    // Editing always updates the selected item, including form submission.
-    queueNext ||= Boolean(editingQueueId);
-    const text = draft.trim(),
-      files = uploads.map((a) => a.id);
-    if (!text && !files.length) return;
-    if (uploads.filter((a) => a.mimeType.startsWith("image/")).length > 6) {
-      setError("Attach at most 6 images per message.");
-      return;
-    }
-    setSending(true);
-    setError("");
+    if (!composer || !bot || !canSend) return;
+    const id = bot.id;
     nearBottom.current = true;
-    try {
-      if (editingQueueId && queueNext) {
-        await client.rpc("queue.update", bot.id, {
-          id: editingQueueId, text, attachments: files,
-        });
-      } else {
-        await client.rpc(queueNext ? "queue.add" : "turn.send", bot.id, {
-          text, attachments: files,
-        });
-      }
-      if (queueNext) await loadQueue(bot.id);
-      if (editingQueueId) {
-        const previous = preQueueEdit.current;
-        preQueueEdit.current = null;
-        setEditingQueueId(null);
-        setDraft(previous?.text ?? "");
-        setUploads(previous?.uploads ?? []);
-      } else {
-        if (draftRef.current.trim() === text) setDraft("");
-        previewFiles.current.clear();
-        setUploads([]);
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Message could not be sent.");
-    } finally {
-      setSending(false);
-    }
+    await composer.send(queueNext);
+    if (queueNext || editingQueueId) await loadQueue(id);
   }
-  function editQueued(item: BotQueuedSubmission) {
-    if (!preQueueEdit.current)
-      preQueueEdit.current = { text: draft, uploads };
-    setEditingQueueId(item.id);
-    setDraft(item.input.filter((input) => input.type === "text")
-      .filter((input) => !input.text.startsWith("Attached file: "))
-      .map((input) => input.text).join("\n"));
-    setUploads(item.attachments);
-  }
-  function cancelQueueEdit() {
-    const previous = preQueueEdit.current;
-    preQueueEdit.current = null;
-    setEditingQueueId(null);
-    setDraft(previous?.text ?? "");
-    setUploads(previous?.uploads ?? []);
-  }
+  function editQueued(item: BotQueuedSubmission) { composer?.edit(item); }
+  function cancelQueueEdit() { composer?.select("normal"); }
   async function changeQueue(fn: () => Promise<unknown>) {
     if (!bot) return;
     await action(async () => {
@@ -610,70 +531,9 @@ export function BotsWorkspace() {
       }
     });
   }
-  async function upload(files: FileList | File[] | null) {
-    if (!bot || !files) return;
-    const selectedFiles = Array.from(files);
-    if (!selectedFiles.length) return;
-    setError("");
-    if (uploadingRef.current) {
-      setError("Wait for the current attachments to finish uploading.");
-      return;
-    }
-    uploadingRef.current = bot.id;
-    const uploadBotId = bot.id;
-    try {
-      if (uploads.length + selectedFiles.length > 12)
-        throw new Error("Attach at most 12 files.");
-      if (
-        uploads.filter((a) => a.mimeType.startsWith("image/")).length +
-          selectedFiles.filter((file) => file.type.startsWith("image/")).length >
-        6
-      )
-        throw new Error("Attach at most 6 images per message.");
-      if (selectedFiles.some((file) => file.size > 100 * 1024 * 1024))
-        throw new Error("Files must be under 100 MB.");
-      const queue = selectedFiles.map((file) => ({
-        id: crypto.randomUUID(),
-        botId: uploadBotId,
-        file,
-      }));
-      setQueuedUploads(queue);
-      for (const item of queue) {
-        if (removedUploads.current.has(item.id)) continue;
-        const file = item.file;
-        setUploadingId(item.id);
-        setUploading(`${file.name} · 0%`);
-        const attachment = await client.upload(uploadBotId, file, (value) =>
-          setUploading(`${file.name} · ${value}%`),
-        );
-        if (
-          !removedUploads.current.has(item.id) &&
-          selectedRef.current === uploadBotId
-        ) {
-          if (file.type.startsWith("image/"))
-            previewFiles.current.set(attachment.id, file);
-          setUploads((current) => [...current, attachment]);
-        } else if (!removedUploads.current.has(item.id)) {
-          const cached = client.cache<BotAttachment[]>(
-            `uploads:${uploadBotId}`,
-            [],
-          );
-          client.save(`uploads:${uploadBotId}`, [...cached, attachment]);
-        }
-        setQueuedUploads((current) =>
-          current.filter((queued) => queued.id !== item.id),
-        );
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Upload failed.");
-    } finally {
-      uploadingRef.current = null;
-      setQueuedUploads([]);
-      setUploading("");
-      setUploadingId(null);
-      removedUploads.current.clear();
-      if (fileRef.current) fileRef.current.value = "";
-    }
+  function upload(files: FileList | File[] | null) {
+    if (files && composer?.ready) composer.addFiles(Array.from(files));
+    if (fileRef.current) fileRef.current.value = "";
   }
   function pasteImages(event: ClipboardEvent<HTMLTextAreaElement>) {
     const fromItems = [...event.clipboardData.items]
@@ -700,12 +560,6 @@ export function BotsWorkspace() {
         );
     if (!images.length) return;
     void upload(images);
-  }
-  function removeQueuedUpload(id: string) {
-    removedUploads.current.add(id);
-    setQueuedUploads((current) =>
-      current.filter((queued) => queued.id !== id),
-    );
   }
   const filtered = bots.filter(
     (b) =>
@@ -953,10 +807,13 @@ export function BotsWorkspace() {
                     disabled={!online || busy}
                     onClick={() =>
                       void action(async () => {
+                        const owner = client.owner;
+                        const request = historyRequest.current;
                         const page = await client.rpc<{
                           data: Turn[];
                           nextCursor: string | null;
                         }>("history.page", bot.id, { cursor: olderCursor });
+                        if (client.owner !== owner || selectedRef.current !== bot.id || request !== historyRequest.current) return;
                         setTurns((current) => [
                           ...page.data
                             .reverse()
@@ -970,6 +827,7 @@ export function BotsWorkspace() {
                     Load earlier messages
                   </button>
                 )}
+                {cachedHistory && historyScope === scope && <div className="bots-system-note">{truncatedHistory ? "Recent cached messages shown. Connect to refresh the conversation and load earlier messages." : "Saved conversation shown. Messages received since this copy may be missing while offline."}</div>}
                 {loading && (
                   <div className="bots-system-note">Loading conversation…</div>
                 )}
@@ -1238,7 +1096,7 @@ export function BotsWorkspace() {
                           </div>
                           <div className="bots-queue-actions">
                             <button type="button" aria-label={`Edit queued prompt ${index + 1}`}
-                              disabled={!online || sending} onClick={() => editQueued(item)}><Pencil size={15} /></button>
+                              disabled={!composer?.ready || sending} onClick={() => editQueued(item)}><Pencil size={15} /></button>
                             <button type="button" aria-label={`Move queued prompt ${index + 1} up`}
                               disabled={!online || busy || index === 0}
                               onClick={() => void changeQueue(() => client.rpc("queue.reorder", bot.id, {
@@ -1258,113 +1116,8 @@ export function BotsWorkspace() {
                       ))}
                     </div>
                   )}
-                  {(uploads.length > 0 ||
-                    uploadingRef.current === bot.id ||
-                    queuedUploads.some((item) => item.botId === bot.id)) && (
-                    <div
-                      className="bots-upload-list"
-                      role="group"
-                      aria-label="Attachments to send"
-                    >
-                      {uploads.map((a, index) =>
-                        a.mimeType.startsWith("image/") ? (
-                          <span
-                            className="bots-upload-image"
-                            key={a.id}
-                            title={a.name}
-                          >
-                            <UploadThumbnail
-                              botId={bot.id}
-                              attachmentId={a.id}
-                              file={previewFiles.current.get(a.id)}
-                              online={online}
-                            />
-                            <button
-                              type="button"
-                              aria-label={`Remove image ${index + 1}: ${a.name}`}
-                              onClick={() => {
-                                previewFiles.current.delete(a.id);
-                                setUploads((current) =>
-                                  current.filter((x) => x.id !== a.id),
-                                );
-                              }}
-                            >
-                              <X size={13} aria-hidden="true" />
-                            </button>
-                          </span>
-                        ) : (
-                          <span key={a.id}>
-                            {a.name}
-                            <button
-                              type="button"
-                              aria-label={`Remove ${a.name}`}
-                              onClick={() =>
-                                setUploads((current) =>
-                                  current.filter((x) => x.id !== a.id),
-                                )
-                              }
-                            >
-                              <X size={13} aria-hidden="true" />
-                            </button>
-                          </span>
-                        ),
-                      )}
-                      {queuedUploads
-                        .filter((item) => item.botId === bot.id)
-                        .map((item, index) =>
-                          item.file.type.startsWith("image/") ? (
-                            <span
-                              className="bots-upload-image"
-                              key={item.id}
-                              title={item.file.name}
-                            >
-                              <UploadThumbnail
-                                botId={bot.id}
-                                file={item.file}
-                                online={online}
-                              />
-                              <span className="bots-upload-progress">
-                                {uploadingId === item.id
-                                  ? uploading.split(" · ").at(-1)
-                                  : "Queued"}
-                              </span>
-                              <button
-                                type="button"
-                                aria-label={`Remove image ${uploads.length + index + 1}: ${item.file.name}`}
-                                onClick={() => removeQueuedUpload(item.id)}
-                              >
-                                <X size={13} aria-hidden="true" />
-                              </button>
-                            </span>
-                          ) : (
-                            <span key={item.id}>
-                              {uploadingId === item.id ? (
-                                <LoaderCircle size={13} className="bots-spin" />
-                              ) : null}
-                              {item.file.name} ·{" "}
-                              {uploadingId === item.id
-                                ? uploading.split(" · ").at(-1)
-                                : "Queued"}
-                              <button
-                                type="button"
-                                aria-label={`Remove ${item.file.name}`}
-                                onClick={() => removeQueuedUpload(item.id)}
-                              >
-                                <X size={13} aria-hidden="true" />
-                              </button>
-                            </span>
-                          ),
-                        )}
-                      {uploadingRef.current === bot.id &&
-                        uploadingId &&
-                        !queuedUploads.some((item) => item.id === uploadingId) && (
-                          <span>
-                            <LoaderCircle size={13} className="bots-spin" />
-                            Finishing canceled upload…
-                          </span>
-                        )}
-                    </div>
-                  )}
+                  <ComposerStatus composer={composer} error={composerError} />
+                  {composer && <ComposerAttachments composer={composer} />}
                   <form
                     className="bots-composer"
                     onSubmit={(e) => {
@@ -1383,7 +1136,7 @@ export function BotsWorkspace() {
                       type="button"
                       className="bots-icon-button"
                       aria-label="Attach file"
-                      disabled={!online || Boolean(uploadingRef.current)}
+                      disabled={!composer?.ready}
                       onClick={() => fileRef.current?.click()}
                     >
                       <Paperclip size={20} />
@@ -1396,6 +1149,7 @@ export function BotsWorkspace() {
                           : "Write a draft while your VM reconnects…"
                       }
                       value={draft}
+                      disabled={!composer?.ready}
                       rows={1}
                       onPaste={pasteImages}
                       onChange={(e) => {
@@ -1425,7 +1179,7 @@ export function BotsWorkspace() {
                       <button type="button" className="bots-icon-button bots-queue-icon"
                         title={editingQueueId ? "Save queue" : "Queue next"}
                         aria-label={editingQueueId ? "Save queue" : "Queue next"}
-                        disabled={!online || sending || Boolean(uploading || queuedUploads.length) ||
+                        disabled={!online || !canSend ||
                           (!draft.trim() && !uploads.length)}
                         onClick={() => void send(true)}>
                         {editingQueueId ? <Save size={19} aria-hidden="true" /> : <ListPlus size={20} aria-hidden="true" />}
@@ -1472,8 +1226,7 @@ export function BotsWorkspace() {
                         }
                         disabled={
                           !online ||
-                          sending ||
-                          uploadingRef.current === bot.id ||
+                          !canSend ||
                           (!draft.trim() && !uploads.length)
                         }
                       >

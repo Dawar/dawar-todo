@@ -440,38 +440,46 @@ export class BotRuntime extends EventEmitter {
       .update(JSON.stringify({ method, botId, params }))
       .digest("hex");
     return this.lock(botId ?? "create", async () => {
+      const composerMutation = ["turn.send", "queue.add", "queue.update"].includes(method);
+      const attempt = composerMutation ? { started: false, rejected: false } : null;
       const existing = this.store.operation(operationId);
       if (existing) {
         if (existing.fingerprint !== fingerprint)
           throw new Error("Operation ID was reused with different input.");
         if (existing.status === "done") return existing.result;
-        if (["dispatching", "uncertain"].includes(existing.status)) {
+        if (["dispatching", "uncertain"].includes(existing.status) ||
+            (composerMutation && existing.status === "failed" && existing.outcome !== "rejected")) {
           const result = await this.reconcileOperation(existing);
           if (result) return result;
         }
-        throw new Error(
+        throw Object.assign(new Error(
           this.store.operation(operationId).error ??
             "This operation may already have run. Refresh the conversation before retrying.",
-        );
+        ), { outcome: existing.outcome === "rejected" ? "rejected" : "uncertain" });
       }
       const data = { method, botId, params, createdAt: now() };
       this.store.saveOperation(operationId, fingerprint, "dispatching", data);
       try {
-        const result = await this.dispatch(method, botId, params, operationId);
+        const result = await this.dispatch(method, botId, params, operationId, attempt);
         this.store.saveOperation(operationId, fingerprint, "done", {
           ...data,
           result,
         });
         return result;
       } catch (e) {
-        const uncertain =
-          /timed out|disconnected|acknowledg/i.test(e.message) && !e.definite;
+        // For composer mutations certainty comes from the native call boundary,
+        // never an error string or the fact that dispatch threw after a commit.
+        const uncertain = attempt
+          ? attempt.started && !attempt.rejected
+          : /timed out|disconnected|acknowledg/i.test(e.message) && !e.definite;
+        const outcome = attempt ? (uncertain ? "uncertain" : "rejected") : "uncertain";
         this.store.saveOperation(
           operationId,
           fingerprint,
           uncertain ? "uncertain" : "failed",
-          { ...data, error: e.message },
+          { ...data, error: e.message, outcome },
         );
+        e.outcome = outcome;
         throw e;
       }
     });
@@ -482,7 +490,18 @@ export class BotRuntime extends EventEmitter {
       throw new Error("Record not found for this bot.");
     return record;
   }
-  async dispatch(method, botId, p, id) {
+  async submitNative(method, params, attempt) {
+    if (attempt) attempt.started = true;
+    try {
+      return await this.codex.call(method, params);
+    } catch (error) {
+      // Codex sets definite only for an explicit native JSON-RPC error reply.
+      // A subsequent local/parser/storage exception cannot reuse that evidence.
+      if (attempt && error.definite === true) attempt.rejected = true;
+      throw error;
+    }
+  }
+  async dispatch(method, botId, p, id, attempt = null) {
     if (method === "snapshot") return this.snapshot();
     if (method === "usage.account") {
       const readAt = now();
@@ -586,11 +605,11 @@ export class BotRuntime extends EventEmitter {
         this.store.put("queuedAttachments", {
           id, botId: bot.id, attachmentIds: p.attachments ?? [],
         });
-        const result = await this.codex.call("thread/queue/add", {
+        const result = await this.submitNative("thread/queue/add", {
           threadId: bot.threadId,
           input,
           clientUserMessageId: id,
-        });
+        }, attempt);
         this.emitEvent("queue", {}, bot.id);
         return { queuedSubmission: this.publicQueued(bot, result.queuedSubmission) };
       }
@@ -599,11 +618,11 @@ export class BotRuntime extends EventEmitter {
         const item = queue.find((x) => x.id === p.id);
         if (!item) throw new Error("Queued prompt not found.");
         const input = await this.messageInput(bot, p);
-        const result = await this.codex.call("thread/queue/update", {
+        const result = await this.submitNative("thread/queue/update", {
           threadId: bot.threadId,
           queuedSubmissionId: item.id,
           input,
-        });
+        }, attempt);
         this.store.put("queuedAttachments", {
           id: item.clientUserMessageId, botId: bot.id,
           attachmentIds: p.attachments ?? [],
@@ -694,7 +713,7 @@ export class BotRuntime extends EventEmitter {
           notice?.botId === bot.id && notice.runId
             ? this.store.get("run", notice.runId)
             : null;
-        return this.send(bot, p, id, run);
+        return this.send(bot, p, id, run, attempt);
       }
       case "turn.interrupt": {
         this.saveBot(bot, { queuePaused: true });
@@ -1050,7 +1069,7 @@ export class BotRuntime extends EventEmitter {
     this.emitEvent("schedules", {}, bot.id);
     return this.saveBot(bot, { archived, status: "idle" });
   }
-  async send(bot, p, id, run = null) {
+  async send(bot, p, id, run = null, attempt = null) {
     if (bot.archived) throw new Error("Restore this bot first.");
     if (!this.ready) throw new Error("Codex is not ready.");
     if (bot.managerPaused && !id.startsWith("manager-notice:"))
@@ -1071,13 +1090,13 @@ export class BotRuntime extends EventEmitter {
       };
     if (bot.activeTurnId) {
       if (run) throw new Error("Bot is busy.");
-      const result = await this.codex.call("turn/steer", {
+      const result = await this.submitNative("turn/steer", {
         threadId: bot.threadId,
         expectedTurnId: bot.activeTurnId,
         clientUserMessageId: id,
         input,
         additionalContext,
-      });
+      }, attempt);
       this.emitUserMessage(bot, bot.activeTurnId, id, input);
       this.saveBot(this.store.bot(bot.id), {
         preview: id.startsWith("manager-notice:")
@@ -1089,7 +1108,7 @@ export class BotRuntime extends EventEmitter {
         this.saveBot(this.store.bot(bot.id), { queuePaused: false });
       return result;
     }
-    const result = await this.startTurn(bot, input, text, id, run, additionalContext);
+    const result = await this.startTurn(bot, input, text, id, run, additionalContext, attempt);
     if (!run && bot.queuePaused)
       this.saveBot(this.store.bot(bot.id), { queuePaused: false });
     return result;
@@ -1167,7 +1186,7 @@ export class BotRuntime extends EventEmitter {
     }
     return latest;
   }
-  async startTurn(bot, input, text, id, run, additionalContext) {
+  async startTurn(bot, input, text, id, run, additionalContext, attempt = null) {
     const { model, effort, serviceTier } = this.settings(bot);
     const params = {
       threadId: bot.threadId,
@@ -1192,7 +1211,7 @@ export class BotRuntime extends EventEmitter {
     };
     if (run)
       this.store.put("activeRun", { id: bot.id, botId: bot.id, runId: run.id });
-    const result = await this.codex.call("turn/start", params);
+    const result = await this.submitNative("turn/start", params, attempt);
     this.emitUserMessage(bot, result.turn.id, id, input);
     const current = this.store.bot(bot.id);
     if (result.turn.status === "inProgress")

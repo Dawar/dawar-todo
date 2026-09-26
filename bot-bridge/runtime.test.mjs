@@ -11,6 +11,8 @@ import { slugify, cleanName, PROFILE_FILES } from "./profiles.mjs";
 import { normalizeSchedule, collectDueRuns } from "./schedules.mjs";
 import { signBotTicket, verifyBotTicket, botsOwner } from "../lib/bots-auth.ts";
 import { BotsClient } from "../app/bots/client.ts";
+import { bridgeResponse } from "./response.mjs";
+import { runtime as browserRuntime } from "../tests/helpers/load-ts.mjs";
 async function snapshotQueuedInput(input) {
   return Promise.all(input.map(async (part) => part.type === "localImage"
     ? { type: "image", url: `data:image/png;base64,${(await readFile(part.path)).toString("base64")}` }
@@ -805,22 +807,22 @@ test("consumed uncertain image enqueue reconciles from the turn; missing evidenc
   assert.equal(store.operation(unknownId).status, "uncertain");
   assert.equal(codex.calls.filter((call) => call.method === "thread/queue/add").length, 1);
 });
-test("browser retains queued add and replays its original operation ID", async () => {
+test("browser defers legacy queued sends to durable migration and replays pending stable IDs", async () => {
   const client = new BotsClient();
   const cache = new Map();
   client.cache = (key, fallback) => cache.get(key) ?? fallback;
   client.save = (key, value) => cache.set(key, value);
   const request = { type: "request", id: "socket-request", operationId: "stable-image-enqueue-id",
     method: "queue.add", botId: "bot", params: { text: "Check image", attachments: ["image"] } };
-  client.rememberOperation(request);
+  cache.set("operations", { [request.operationId]: request });
   const replayed = [];
   client.rpc = async (...args) => { replayed.push(args); return {}; };
   client.refresh = async () => {};
   client.replayPending();
-  assert.deepEqual(replayed, [["queue.add", "bot", request.params, request.operationId]]);
+  assert.deepEqual(replayed, []);
   let rejected;
   client.pending.set(request.id, {
-    request, timer: setTimeout(() => {}, 10000), resolve: () => {},
+    request, owner: client.owner, managed: true, timer: setTimeout(() => {}, 10000), resolve: () => {},
     reject: (error) => { rejected = error; },
   });
   client.receive({ type: "response", id: request.id,
@@ -828,10 +830,10 @@ test("browser retains queued add and replays its original operation ID", async (
   assert.match(rejected.message, /Acknowledgement was lost/);
   assert.equal(cache.get("operations")[request.operationId].operationId, request.operationId);
   client.pending.set(request.id, {
-    request, timer: setTimeout(() => {}, 10000), resolve: () => {}, reject: () => {},
+    request, owner: client.owner, managed: true, timer: setTimeout(() => {}, 10000), resolve: () => {}, reject: () => {},
   });
   client.receive({ type: "response", id: request.id, result: { consumedTurnId: "turn" } });
-  assert.deepEqual(cache.get("operations"), {});
+  assert.equal(cache.get("operations")[request.operationId].operationId, request.operationId);
 });
 test("notification findings deduplicate", async (t) => {
   const { create, runtime, store } = await setup(t);
@@ -902,4 +904,113 @@ test("owner authorization uses stable site identity and excludes API tokens, for
   await assert.rejects(verifyBotTicket(token, "secret", "other", 1000));
   await assert.rejects(verifyBotTicket(token, "secret", "vm", 1061));
   await assert.rejects(verifyBotTicket(token, "wrong", "vm", 1000));
+});
+
+async function connectedComposer(runtime, bot) {
+  const env = browserRuntime({ Error, TypeError });
+  const { BotDraftStore } = env.load('app/bots/draft-store.ts');
+  const { BotComposer } = env.load('app/bots/composer-controller.ts');
+  const store = new BotDraftStore(env.indexedDB);
+  const client = new BotsClient(); client.owner = 'test-owner'; client.online = true;
+  const requests = [], responses = [];
+  client.socket = { readyState: WebSocket.OPEN, close() {}, send(json) {
+    const request = JSON.parse(json); requests.push(request);
+    void bridgeResponse(runtime, request).then((response) => { responses.push(response); client.receive(response); });
+  } };
+  const composer = new BotComposer(client.owner, bot.id, store, client);
+  await composer.open();
+  return { composer, client, requests, responses, store };
+}
+
+test('real runtime/service/client rejects pre-dispatch validation and permits a corrected durable send', async (t) => {
+  const { create, runtime, codex, store } = await setup(t); const bot = await create();
+  const { composer, requests, responses } = await connectedComposer(runtime, bot);
+  runtime.saveBot(bot, { archived: true });
+  composer.setText('first draft'); await composer.flush(); await composer.send();
+  assert.equal(responses[0].outcome, 'rejected'); assert.equal(composer.operation, undefined);
+  assert.equal(store.operation(requests[0].operationId).outcome, 'rejected');
+  assert.equal(composer.draft.text, 'first draft');
+  runtime.saveBot(store.bot(bot.id), { archived: false });
+  composer.setText('corrected draft'); await composer.flush(); await composer.send();
+  assert.notEqual(requests[0].operationId, requests[1].operationId);
+  assert.equal(composer.draft.text, '');
+  assert.equal(codex.calls.filter((call) => call.method === 'turn/start').length, 1);
+});
+
+test('native definite error is rejected, but post-commit EPIPE/parser/local errors keep the operation ID', async (t) => {
+  for (const fault of ['native-definite', 'EPIPE', 'parser', 'post-commit-definite-property']) {
+    await t.test(fault, async (t) => {
+      const { create, runtime, codex, store } = await setup(t); const bot = await create();
+      const { composer, requests, responses } = await connectedComposer(runtime, bot);
+      const original = codex.call.bind(codex), originalEcho = runtime.emitUserMessage.bind(runtime);
+      codex.call = async (method, params) => {
+        if (method === 'turn/start' && fault === 'native-definite') throw Object.assign(new Error('Native rejected parameters'), { definite: true });
+        const result = await original(method, params);
+        if (method === 'turn/start' && fault === 'EPIPE') throw new Error('write EPIPE');
+        if (method === 'turn/start' && fault === 'parser') return {}; // Successful native commit, malformed return data.
+        return result;
+      };
+      if (fault === 'post-commit-definite-property') runtime.emitUserMessage = () => { throw Object.assign(new Error('Local formatting failure'), { definite: true }); };
+      composer.setText('one submitted message'); await composer.flush(); await composer.send();
+      const id = requests[0].operationId;
+      codex.call = original; runtime.emitUserMessage = originalEcho;
+      if (fault === 'native-definite') {
+        assert.equal(responses[0].outcome, 'rejected'); assert.equal(composer.operation, undefined);
+        assert.equal(store.operation(id).status, 'failed');
+        composer.setText('corrected after definite rejection'); await composer.flush(); await composer.send();
+        assert.notEqual(requests[1].operationId, id);
+      } else {
+        assert.equal(responses[0].outcome, 'uncertain'); assert.equal(composer.operation.id, id);
+        assert.equal(store.operation(id).status, 'uncertain');
+        composer.setText('new unsubmitted typing'); await composer.flush(); await composer.reconcile();
+        assert.equal(requests[1].operationId, id); assert.equal(composer.operation, undefined);
+        assert.equal(composer.draft.text, 'new unsubmitted typing');
+      }
+      assert.equal(codex.calls.filter((call) => call.method === 'turn/start').length, 1);
+    });
+  }
+});
+
+test('legacy failed label without certainty cannot authorize a second native send', async (t) => {
+  const { create, runtime, codex, store } = await setup(t); const bot = await create();
+  const { composer, requests, responses } = await connectedComposer(runtime, bot);
+  const original = codex.call.bind(codex);
+  codex.call = async (method, params) => {
+    const result = await original(method, params);
+    if (method === 'turn/start') throw new Error('arbitrary old-bridge failure');
+    return result;
+  };
+  composer.setText('legacy uncertain'); await composer.flush(); await composer.send();
+  const id = requests[0].operationId, saved = store.operation(id);
+  store.saveOperation(id, saved.fingerprint, 'failed', { ...saved, outcome: undefined });
+  codex.call = original;
+  await composer.reconcile();
+  assert.equal(requests[1].operationId, id); assert.ok(responses[1].result.turn);
+  assert.equal(codex.calls.filter((call) => call.method === 'turn/start').length, 1);
+});
+
+test('queue add and queue update propagate certainty at their native mutation boundaries', async (t) => {
+  const { create, runtime, codex, store } = await setup(t); const bot = await create();
+  const { composer, requests, responses } = await connectedComposer(runtime, bot);
+  const original = codex.call.bind(codex);
+  codex.call = async (method, params) => {
+    const result = await original(method, params);
+    if (method === 'thread/queue/add') throw new Error('post-commit queue transport error');
+    return result;
+  };
+  composer.setText('queue once'); await composer.flush(); await composer.send(true);
+  assert.equal(responses[0].outcome, 'uncertain'); const addId = requests[0].operationId;
+  codex.call = original; await composer.reconcile(); assert.equal(requests[1].operationId, addId);
+  assert.equal(codex.calls.filter((call) => call.method === 'thread/queue/add').length, 1);
+  const item = (await runtime.queueList(store.bot(bot.id)))[0]; composer.edit({ ...item, attachments: [] }); await composer.flush();
+  codex.call = async (method, params) => { if (method === 'thread/queue/update') throw Object.assign(new Error('Native rejected edit'), { definite: true }); return original(method, params); };
+  composer.setText('invalid edit'); await composer.flush(); await composer.send(true);
+  assert.equal(responses.at(-1).outcome, 'rejected'); assert.equal(composer.operation, undefined);
+  const rejectedId = requests.at(-1).operationId;
+  codex.call = async (method, params) => { const result = await original(method, params); if (method === 'thread/queue/update') throw new Error('post-commit edit transport error'); return result; };
+  composer.setText('corrected edit'); await composer.flush(); await composer.send(true);
+  assert.notEqual(requests.at(-1).operationId, rejectedId); assert.equal(responses.at(-1).outcome, 'uncertain');
+  const uncertainId = composer.operation.id; codex.call = original; await composer.reconcile();
+  assert.equal(composer.operation.id, uncertainId); // No native operation identity exists to prove this queue update after a lost ack.
+  assert.equal(codex.calls.filter((call) => call.method === 'thread/queue/update').length, 1);
 });

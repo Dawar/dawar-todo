@@ -170,6 +170,7 @@ export class BotRelay extends DurableObject<Env> {
             id: message.id,
             result: message.result,
             error: message.error,
+            outcome: message.outcome === "rejected" ? "rejected" : "uncertain",
           });
       } else if (message.type === "event" || message.type === "eventChunk")
         this.broadcast(message);
