@@ -1,5 +1,6 @@
 "use client";
-import { useEffect, useState } from "react";
+import { memo, useEffect, useState } from "react";
+import { LazyDetails, TextPages } from "./lazy-details";
 import { botsClient } from "./client";
 import type { BotAttachment } from "../../lib/bots-types";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
@@ -16,7 +17,7 @@ import {
 } from "lucide-react";
 import type { ThreadItem } from "../../lib/codex-protocol/v2/ThreadItem";
 
-export function BotMessage({
+function BotMessage({
   item,
   download,
   botId,
@@ -30,7 +31,7 @@ export function BotMessage({
   inWorkLog?: boolean;
 }) {
   function markdown(value: string) {
-    return (
+    return <TextPages text={value} render={(text) => (
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[rehypeSanitize]}
@@ -54,9 +55,9 @@ export function BotMessage({
             ),
         }}
       >
-        {value}
+        {text}
       </ReactMarkdown>
-    );
+    )} />;
   }
   // Worker callbacks are internal supervision, not messages authored by Dawar.
   if (
@@ -73,7 +74,7 @@ export function BotMessage({
           )}
           {item.content.map((c, i) =>
             c.type === "text" ? (
-              <p key={i}>{c.text}</p>
+              <TextPages key={i} text={c.text} render={(text) => <p>{text}</p>} />
             ) : c.type === "localImage" &&
               attachments.find((a) => a.path === c.path) ? (
               <AttachmentImage
@@ -119,12 +120,11 @@ export function BotMessage({
           </div>
         </div>
       ) : (
-        <details className="bots-tool">
-          <summary>Thinking</summary>
+        <LazyDetails summary="Thinking">{() => <>
           <div className="bots-message-markdown">
             {markdown(item.summary.join("\n\n"))}
           </div>
-        </details>
+        </>}</LazyDetails>
       )
     ) : null;
   if (item.type === "contextCompaction")
@@ -147,8 +147,7 @@ export function BotMessage({
             : item.type.replace(/([a-z])([A-Z])/g, "$1 $2");
   const running = "status" in item && item.status === "inProgress";
   return (
-    <details className="bots-tool">
-      <summary>
+    <LazyDetails summary={<>
         {command ? (
           <Terminal size={15} />
         ) : diff ? (
@@ -164,25 +163,27 @@ export function BotMessage({
         ) : (
           <Check size={14} />
         )}
-      </summary>
-      {command ? (
+      </>}>{() => command ? (
         <>
-          <pre>{item.aggregatedOutput || "Waiting for output…"}</pre>
+          <TextPages text={item.aggregatedOutput || "Waiting for output…"} render={(text) => <pre>{text}</pre>} />
           {item.exitCode !== null && <small>Exit code {item.exitCode}</small>}
         </>
       ) : diff ? (
         item.changes.map((change, i) => (
           <div key={i}>
             <strong>{change.path}</strong>
-            <pre>{change.diff}</pre>
+            <TextPages text={change.diff} render={(text) => <pre>{text}</pre>} />
           </div>
         ))
       ) : (
-        <pre>{JSON.stringify(item, null, 2)}</pre>
+        <TextPages text={JSON.stringify(item, null, 2)} render={(text) => <pre>{text}</pre>} />
       )}
-    </details>
+    </LazyDetails>
   );
 }
+
+const MemoBotMessage = memo(BotMessage);
+export { MemoBotMessage as BotMessage };
 
 function AttachmentImage({
   botId,

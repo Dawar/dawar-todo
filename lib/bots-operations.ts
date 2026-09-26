@@ -14,9 +14,18 @@ import type { ThreadTurnsListResponse } from "./codex-protocol/v2/ThreadTurnsLis
 import type { TurnStartResponse } from "./codex-protocol/v2/TurnStartResponse";
 import type { TurnSteerResponse } from "./codex-protocol/v2/TurnSteerResponse";
 import type { QueuedSubmission } from "./codex-protocol/v2/QueuedSubmission";
+import type { HistoryResponse, HistoryDetail } from "./bot-history-view";
 export type BotOperations = {
   snapshot: { params: Record<string, never>; result: BotSnapshot };
   history: { params: Record<string, never>; result: BotHistory };
+  "history.view": {
+    params: { cursor?: string | null; revision?: string; after?: number };
+    result: HistoryResponse;
+  };
+  "history.detail": {
+    params: { turnId: string; itemId: string; offset?: number; version?: string };
+    result: HistoryDetail;
+  };
   "history.page": {
     params: { cursor: string };
     result: ThreadTurnsListResponse;

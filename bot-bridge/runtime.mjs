@@ -22,6 +22,7 @@ import {
   containedPath,
 } from "./profiles.mjs";
 import { normalizeSchedule, collectDueRuns } from "./schedules.mjs";
+import { readHistoryView, readHistoryDetail } from "./history-view.mjs";
 
 const colors = [
   "#5c74b8",
@@ -50,6 +51,8 @@ const READ_METHODS = new Set([
   "history",
   "history.page",
   "history.turn",
+  "history.view",
+  "history.detail",
   "events",
   "schedules.list",
   "runs.page",
@@ -160,6 +163,10 @@ export class BotRuntime extends EventEmitter {
   }
   emitEvent(type, data, botId) {
     const event = this.store.event({ type, data, ...(botId ? { botId } : {}) });
+    if (botId && ["codex", "attachment", "history.refresh"].includes(type)) {
+      this.historyVersions ??= new Map();
+      this.historyVersions.set(botId, event.seq);
+    }
     this.emit("event", event);
     return event;
   }
@@ -558,6 +565,10 @@ export class BotRuntime extends EventEmitter {
     }
     const bot = this.store.bot(String(botId));
     switch (method) {
+      case "history.view":
+        return readHistoryView(this, bot, p);
+      case "history.detail":
+        return readHistoryDetail(this, bot, p);
       case "history": {
         if (!bot.archived) await this.load(bot);
         const { thread } = await this.codex.call("thread/read", {
