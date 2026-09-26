@@ -65,7 +65,7 @@ export function RunHistory({ bot, schedules, attachments, online, onClose, downl
         {!transcript && !busy && turnCursor && <button className="bots-history-link" onClick={() => void openTurn(turnId, turnCursor)}>Search earlier conversation</button>}
         {!transcript && !busy && !turnCursor && !error && <p>This turn is not available in native conversation history.</p>}
       </> : <>
-        <p className="bots-muted">Scheduled runs are stored separately from the chat. Open a run’s native conversation turn to see its full output when available.</p>
+        <p className="bots-muted">This view shows recorded schedule times and outcomes. The bot’s conversation still holds each native turn; open a run’s turn here to read its full output when available.</p>
         {!online && <p>Connect to your VM to read schedule history.</p>}
         <h3>Schedules</h3>
         {schedules.map((schedule) => {
@@ -77,7 +77,7 @@ export function RunHistory({ bot, schedules, attachments, online, onClose, downl
             {last?.error && <small>{last.error}</small>}
           </div>;
         })}
-        {!schedules.length && <p>No current schedules. Past runs remain below.</p>}
+        {!schedules.length && <p>No current schedules. Any recorded past runs appear below.</p>}
         <h3>Runs</h3>
         {runs.map((run) => <div className="bots-history-run" key={run.id}>
           <strong>{run.title}</strong>

@@ -35,6 +35,16 @@ const colors = [
 ];
 const now = () => new Date().toISOString();
 const textInput = (text) => ({ type: "text", text, text_elements: [] });
+const nativeIntegerText = (value) => {
+  if (typeof value === "bigint") return value >= 0 ? value.toString() : null;
+  if (typeof value === "number") return Number.isSafeInteger(value) && value >= 0 ? String(value) : null;
+  return typeof value === "string" && /^\d+$/.test(value) ? value : null;
+};
+const usageMetric = (groups, field) => {
+  const values = groups.map((group) => nativeIntegerText(group?.[field])).filter((value) => value !== null);
+  return { value: values.length ? values.reduce((sum, value) => sum + BigInt(value), 0n).toString() : null,
+    reportedGroups: values.length };
+};
 const READ_METHODS = new Set([
   "snapshot",
   "history",
@@ -702,16 +712,27 @@ export class BotRuntime extends EventEmitter {
         try {
           const response = await this.codex.call("account/usage/read", { threadId: bot.threadId });
           const usage = response?.threadUsage;
-          if (usage?.threadId !== bot.threadId || usage.estimatedUsageCreditsMicros == null)
+          if (usage?.threadId !== bot.threadId)
             return { botId: bot.id, threadId: bot.threadId,
-              estimatedCreditsMicros: null, reason: "Native thread estimate unavailable." };
+              estimatedCreditsMicros: null, reason: "Native thread usage unavailable." };
           // The native API also returns account-wide summaries. Never include them
           // in a bot estimate or forward them to this UI.
+          const groups = Array.isArray(usage.groups) ? usage.groups : [];
+          const tokens = {
+            total: usageMetric(groups, "totalTokens"),
+            input: usageMetric(groups, "inputTokens"),
+            output: usageMetric(groups, "outputTokens"),
+            cachedInput: usageMetric(groups, "cachedInputTokens"),
+            netNewInput: usageMetric(groups, "netNewInputTokens"),
+          };
           return { botId: bot.id, threadId: bot.threadId,
-            estimatedCreditsMicros: String(usage.estimatedUsageCreditsMicros) };
+            estimatedCreditsMicros: nativeIntegerText(usage.estimatedUsageCreditsMicros),
+            groupCount: groups.length, tokens,
+            ...(!groups.length && usage.estimatedUsageCreditsMicros == null
+              ? { reason: "Native thread usage unavailable." } : {}) };
         } catch {
           return { botId: bot.id, threadId: bot.threadId,
-            estimatedCreditsMicros: null, reason: "Native thread estimate unavailable." };
+            estimatedCreditsMicros: null, reason: "Native thread usage unavailable." };
         }
       }
       case "schedules.save":

@@ -51,10 +51,19 @@ export type BotRun = {
   turnId?: string | null;
 };
 export type BotRunPage = { runs: BotRun[]; nextCursor: string | null; latestBySchedule: BotRun[] };
+export type BotUsageMetric = { value: string | null; reportedGroups: number };
 export type BotThreadUsage = {
   botId: string;
   threadId: string | null;
   estimatedCreditsMicros: string | null;
+  groupCount?: number;
+  tokens?: {
+    total: BotUsageMetric;
+    input: BotUsageMetric;
+    output: BotUsageMetric;
+    cachedInput: BotUsageMetric;
+    netNewInput: BotUsageMetric;
+  };
   reason?: string;
 };
 export type BotAttachment = {
