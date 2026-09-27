@@ -1,5 +1,6 @@
 "use client";
 import { offlineRecordTodo, type Todo, type SyncResponse } from "./task-model";
+import { offlineDatabaseVersion, updatePwaLifecycle } from "./pwa-lifecycle";
 import { notifyOfflineChange } from "./offline-events";
 
 export type OfflineAttachmentKind = "image" | "audio" | "video" | "file";
@@ -14,7 +15,10 @@ export type OfflineStoredAttachment = {
   remoteAttachmentId?: string;
 };
 
+export type TaskRejection = { status: number; at: string };
+
 export type OfflineTodoRecord = {
+  rejected?: TaskRejection;
   deleted?: boolean;
   clientId: string;
   localId: number;
@@ -40,6 +44,7 @@ export type OfflineTodoRecord = {
 };
 
 export type OfflineTodoMutation = {
+  rejected?: TaskRejection;
   todoId: number;
   mutationId: string;
   patch: Record<string, unknown>;
@@ -107,7 +112,7 @@ export type OfflineTaskAction = {
 };
 
 const DATABASE_NAME = "dawar-todo-offline";
-const DATABASE_VERSION = 10;
+const DATABASE_VERSION = offlineDatabaseVersion;
 const TASK_STORE = "task-state";
 const IDENTITY_STORE = "task-identities";
 const UPLOAD_STORE = "attachment-outbox";
@@ -132,8 +137,10 @@ export type CachedServerState<T> = {
 };
 
 let databasePromise: Promise<IDBDatabase> | null = null;
+let superseded = false;
 
 export function openDatabase(): Promise<IDBDatabase> {
+  if (superseded) return Promise.reject(new Error("This page uses an older database version. Preserve unsaved input and reopen the app; queued changes are retained."));
   if (databasePromise) return databasePromise;
   databasePromise = new Promise<IDBDatabase>((resolve, reject) => {
     if (!("indexedDB" in window)) {
@@ -141,7 +148,9 @@ export function openDatabase(): Promise<IDBDatabase> {
       return;
     }
     const request = indexedDB.open(DATABASE_NAME, DATABASE_VERSION);
-    request.onupgradeneeded = () => {
+    request.onblocked = () => updatePwaLifecycle({ storage: "blocked" });
+    request.onupgradeneeded = (event) => {
+      updatePwaLifecycle({ upgradedFrom: event.oldVersion || null });
       const database = request.result;
       const migrateTasks = !database.objectStoreNames.contains(TASK_STORE);
       if (migrateTasks) database.createObjectStore(TASK_STORE, { keyPath: "id" });
@@ -194,11 +203,22 @@ export function openDatabase(): Promise<IDBDatabase> {
     };
     request.onsuccess = () => {
       const database = request.result;
-      database.onversionchange = () => { database.close(); databasePromise = null; };
+      updatePwaLifecycle({ storage: "ready", databaseVersion: database.version });
+      database.onversionchange = () => {
+        // Fence this document permanently. Reopening without an explicit version
+        // would allow old upload code to mutate a newer outbox unsafely.
+        superseded = true;
+        updatePwaLifecycle({ storage: "superseded" });
+        database.close(); databasePromise = null;
+      };
       database.onclose = () => { databasePromise = null; };
       resolve(database);
     };
-    request.onerror = () => reject(request.error ?? new Error("Offline storage could not be opened."));
+    request.onerror = () => {
+      superseded = request.error?.name === "VersionError";
+      updatePwaLifecycle({ storage: superseded ? "superseded" : "unavailable" });
+      reject(request.error ?? new Error("Offline storage could not be opened."));
+    };
   }).catch((error) => { databasePromise = null; throw error; });
   return databasePromise;
 }
@@ -285,7 +305,7 @@ export async function updateOfflineTodo(
   patch: Partial<Omit<OfflineTodoRecord, "clientId" | "localId" | "attachments">>,
 ) {
   const next = await updateRecord<OfflineTodoRecord>(TODO_STORE, localId, (current) => current ? {
-    ...current, ...patch, updatedAt: new Date().toISOString(),
+    ...current, ...patch, rejected: undefined, updatedAt: new Date().toISOString(),
   } : undefined, "localId");
   if (!next) {
     const resolved = await resolveTaskId(localId);
@@ -410,6 +430,27 @@ export async function saveOfflineTodoMutation(
 export async function listOfflineTodoMutations() {
   const records = await runRequest<OfflineTodoMutation[]>(MUTATION_STORE, "readonly", (store) => store.getAll());
   return records.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+}
+
+/** Compare the sent intent before parking it: a late rejection cannot block newer input. */
+export async function rejectOfflineTaskIntent(sent: OfflineTodoRecord | OfflineTodoMutation, status: number) {
+  const rejected = { status, at: new Date().toISOString() };
+  if ("mutationId" in sent) {
+    await updateRecord<OfflineTodoMutation>(MUTATION_STORE, sent.todoId, (current) =>
+      current?.mutationId === sent.mutationId ? { ...current, rejected } : current);
+  } else {
+    await updateRecord<OfflineTodoRecord>(TODO_STORE, sent.clientId, (current) =>
+      current && current.updatedAt === sent.updatedAt
+        && JSON.stringify(offlineRecordTodo(current)) === JSON.stringify(offlineRecordTodo(sent))
+        ? { ...current, rejected } : current);
+  }
+  notifyOfflineChange("local");
+}
+
+export async function retryOfflineTaskIntent(kind: "create" | "edit", id: string | number) {
+  if (kind === "edit") await updateRecord<OfflineTodoMutation>(MUTATION_STORE, id, (current) => current ? { ...current, rejected: undefined } : current);
+  else await updateRecord<OfflineTodoRecord>(TODO_STORE, id, (current) => current ? { ...current, rejected: undefined } : current);
+  notifyOfflineChange("local");
 }
 
 export async function deleteOfflineTodoMutation(todoId: number, expectedMutationId?: string) {
@@ -800,6 +841,28 @@ export async function commitRemoteTasks(input: {
   acknowledgeMutation?: { todoId: number; mutationId: string };
   acknowledgeAction?: { operationId: string; undoRequested: boolean };
 }) {
+  // A delta with no entity changes only advances metadata. Do not read or
+  // serialize task rows/outboxes, and do not announce an unchanged task cache.
+  if (!input.reset && !input.todos.length && !input.deletedIds?.length
+    && !input.acknowledgeMutation && !input.acknowledgeAction && !input.attachmentTarget) {
+    let changed = false;
+    await taskTransaction([CACHE_STORE], (transaction) => {
+      const store = transaction.objectStore(CACHE_STORE);
+      const request = store.get("server");
+      request.onsuccess = () => {
+        const old = request.result ?? { key: "server", projects: [], revision: 0 };
+        if (input.revision !== undefined && input.revision < old.revision) return;
+        const next = { ...old, savedAt: new Date().toISOString() };
+        for (const key of ["revision", "projects", "settings", "captureDraft"] as const) if (Object.hasOwn(input, key)) {
+          if (JSON.stringify(old[key]) !== JSON.stringify(input[key])) changed = true;
+          next[key] = input[key];
+        }
+        store.put(next);
+      };
+    });
+    if (changed) notifyOfflineChange("remote");
+    return true;
+  }
   let acknowledged = true;
   await taskTransaction([TASK_STORE, CACHE_STORE, TODO_STORE, MUTATION_STORE, ACTION_STORE, UPLOAD_STORE], (transaction) => {
     const tasks = transaction.objectStore(TASK_STORE);
@@ -856,7 +919,8 @@ export async function commitRemoteTasks(input: {
       }
       for (const id of deleted) {
         next.delete(id); tasks.delete(id);
-        transaction.objectStore(MUTATION_STORE).delete(id);
+        const mutation = queuedMutations.find((entry) => entry.todoId === id);
+        if (mutation) transaction.objectStore(MUTATION_STORE).put({ ...mutation, rejected: { status: 404, at: new Date().toISOString() } });
       }
       for (const todo of input.todos) next.set(todo.id, { ...todo, offline: false });
       for (const record of pending.result as OfflineTodoRecord[]) {
@@ -932,6 +996,7 @@ export async function promoteOfflineTodo(sent: OfflineTodoRecord, remote: Todo) 
     };
   });
   notifyOfflineChange("local");
+  notifyOfflineChange("uploads");
   return promoted;
 }
 

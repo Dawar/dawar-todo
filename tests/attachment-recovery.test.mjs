@@ -37,7 +37,7 @@ test('upgrade from v9 preserves Infinity, draft IDs, all bytes and queued work; 
   const old = await new Promise((resolve, reject) => { request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
   old.close();
   const db = env.load('app/offline-store.ts');
-  assert.equal((await db.openDatabase()).version, 10);
+  assert.equal((await db.openDatabase()).version, 11);
   const [row] = await rows(db);
   assert.equal(await row.blob.text(), 'private bytes');
   assert.equal(row.remoteAttachmentId, remoteId);

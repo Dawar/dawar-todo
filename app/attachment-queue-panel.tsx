@@ -20,9 +20,17 @@ export function AttachmentQueuePanel({ count, states }: { count: number; states:
     };
     reload();
     const unsubscribe = subscribeOfflineChanges(reload);
-    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
-    return () => { active = false; unsubscribe(); window.clearInterval(timer); };
+    const reconcileClock = () => setNow(Date.now());
+    document.addEventListener("visibilitychange", reconcileClock);
+    window.addEventListener("online", reconcileClock);
+    return () => { active = false; unsubscribe(); document.removeEventListener("visibilitychange", reconcileClock); window.removeEventListener("online", reconcileClock); };
   }, [open]);
+  useEffect(() => {
+    if (!open || !navigator.onLine || document.visibilityState === "hidden") return;
+    if (!rows.some((row) => (row.leaseUntil ?? 0) > now || (Number.isFinite(row.nextAttemptAt) && row.nextAttemptAt > now))) return;
+    const timer = window.setTimeout(() => setNow(Date.now()), 1_000);
+    return () => window.clearTimeout(timer);
+  }, [open, rows, now]);
   const action = async (fn: () => Promise<unknown>) => {
     setError("");
     try { await fn(); } catch (error) { setError(error instanceof Error ? error.message : "Recovery could not finish."); }
@@ -37,20 +45,20 @@ export function AttachmentQueuePanel({ count, states }: { count: number; states:
   return <div className="mx-auto max-w-5xl px-4 pt-2 text-xs text-[#69716c] sm:px-6">
     <p role="status">{count} attachment{count === 1 ? "" : "s"} pending · {active} in progress · {blocked} need attention</p>
     <p>Transfers resume while the app is open and connected.</p>
-    <div className="flex gap-4 py-2">
+    <div className="flex flex-wrap gap-4 py-2">
       <button type="button" className="underline" onClick={() => void action(() => retryQueuedAttachments())}>Retry uploads</button>
       <button type="button" className="underline" aria-expanded={open} onClick={() => setOpen(!open)}>{open ? "Close attachment recovery" : "Review attachments"}</button>
     </div>
     {error && <p role="alert" className="text-red-700">{error}</p>}
     {open && <ul aria-label="Pending attachment recovery" className="space-y-3 rounded-xl border p-3">
-      {rows.map((row) => <li key={row.localId} className="break-words border-b pb-3 last:border-0">
+      {rows.map((row) => <li key={row.localId} className="min-w-0 break-words border-b pb-3 [overflow-wrap:anywhere] last:border-0">
         <p className="font-semibold">{row.fileName || "Attachment"}</p>
         <p>{hasAttachmentBytes(row) ? `${row.blob.size.toLocaleString()} bytes saved on this device` : "No local file bytes available"}</p>
         <p>{attachmentQueueMessage(row, now)}</p>
         <div className="mt-2 flex flex-wrap gap-4">
           <button type="button" className="underline" disabled={(row.leaseUntil ?? 0) > now} onClick={() => void action(() => retryQueuedAttachments(row.localId))}>Retry this attachment</button>
           {hasAttachmentBytes(row) ? <button type="button" className="underline" onClick={() => saveFile(row)}>Save local file</button>
-            : <label className="underline">Choose original file<input type="file" className="block max-w-full" disabled={(row.leaseUntil ?? 0) > now} onChange={(event) => {
+            : <label className="min-w-0 w-full max-w-full underline">Choose original file<input type="file" className="block min-w-0 w-full max-w-full" disabled={(row.leaseUntil ?? 0) > now} onChange={(event) => {
               const file = event.target.files?.[0];
               if (file) void action(() => replaceQueuedAttachmentBytes(row.localId, file));
               event.target.value = "";

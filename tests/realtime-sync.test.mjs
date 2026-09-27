@@ -119,7 +119,7 @@ test("ships automatic saving, queued offline edits, incremental polling, and con
   assert.doesNotMatch(page, /Promise\.all\(\[\s*request<\{ todos: Todo\[\] \}>\("\/api\/todos"/);
   assert.match(page, /saveOfflineTodoMutation/);
   assert.match(page, /listOfflineTodoMutations/);
-  assert.match(offlineStore, /DATABASE_VERSION = 10/);
+  assert.match(offlineStore, /DATABASE_VERSION = offlineDatabaseVersion/);
   assert.match(offlineStore, /CAPTURE_DRAFT_STORE = "capture-draft"/);
   assert.match(page, /updateCaptureTitle\(event\.target\.value, "typing"\)/);
   assert.match(page, /updateEditDraftField/);

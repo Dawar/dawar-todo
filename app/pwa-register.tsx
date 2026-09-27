@@ -1,5 +1,7 @@
 "use client";
 
+import { StorageLifecycleNotice } from "./storage-lifecycle-notice";
+import { inspectWorkerVersion } from "./pwa-lifecycle";
 import { useEffect } from "react";
 import { getOrCreateDeviceId, headersWithDeviceId } from "./device-id";
 import { ensureCurrentPushSubscription } from "./push-client";
@@ -61,6 +63,9 @@ export function PwaRegister() {
       });
       return;
     }
+    const inspect = () => { void inspectWorkerVersion(); };
+    navigator.serviceWorker.addEventListener("controllerchange", inspect);
+    inspect();
     const register = () => navigator.serviceWorker.register("/sw.js", { scope: "/" })
       .then((registration) => {
         console.info("[todo-pwa] service worker registered", { scope: registration.scope });
@@ -74,7 +79,7 @@ export function PwaRegister() {
       .catch((error) => console.error("[todo-pwa] service worker registration failed", error));
     if (document.readyState === "complete") void register();
     else window.addEventListener("load", register, { once: true });
-    return () => window.removeEventListener("load", register);
+    return () => { window.removeEventListener("load", register); navigator.serviceWorker.removeEventListener("controllerchange", inspect); };
   }, []);
-  return null;
+  return <StorageLifecycleNotice />;
 }
