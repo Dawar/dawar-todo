@@ -6,7 +6,7 @@ import type { BotAttachment, BotEvent } from "./bots-types";
 export type HistoryEntry = {
   id: string; turnId: string; type: ThreadItem["type"]; label: string;
   item: ThreadItem | null; complete: boolean; scheduled: boolean;
-  startedAt: number | null; status: Turn["status"]; updatedSeq?: number;
+  startedAt: number | null; itemStatus?: string; status: Turn["status"]; updatedSeq?: number;
 };
 export type HistoryPage = {
   entries: HistoryEntry[]; contextEntries?: HistoryEntry[]; olderCursor: string | null; revision: string;
@@ -51,7 +51,7 @@ export function projectHistoryItem(turn: Pick<Turn, "id" | "startedAt" | "status
     else if (source.type === "mcpToolCall") label = `${source.server} · ${source.tool}`.slice(0, 160);
   }
   return { id: source.id, turnId: turn.id, type: source.type, label, item, complete,
-    scheduled, startedAt: turn.startedAt, status: "status" in source && source.status === "inProgress" ? "inProgress" : "status" in source && source.status === "completed" ? "completed" : turn.status };
+    scheduled, startedAt: turn.startedAt, ...("status" in source ? { itemStatus: String(source.status) } : {}), status: "status" in source && source.status === "inProgress" ? "inProgress" : "status" in source && source.status === "completed" ? "completed" : turn.status };
 }
 
 /** Legacy caches can paint a useful tail without cloning/serializing their tool bodies. */

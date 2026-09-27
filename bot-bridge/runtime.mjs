@@ -1,3 +1,4 @@
+import { boundHistoryEvent } from "./history-events.mjs";
 import { EventEmitter } from "node:events";
 import { randomUUID, createHash, randomInt } from "node:crypto";
 import {
@@ -163,6 +164,18 @@ export class BotRuntime extends EventEmitter {
     });
   }
   emitEvent(type, data, botId) {
+    const bounded = boundHistoryEvent(type, data);
+    if (bounded.supplement && botId) {
+      this.historySupplements ??= new Map();
+      const key = `${botId}:${bounded.data.turnId}:${bounded.supplement.id}`;
+      this.historySupplements.delete(key); this.historySupplements.set(key, bounded.supplement);
+      let chars = 0;
+      for (const [other, item] of [...this.historySupplements].reverse()) {
+        chars += item.text.length;
+        if (other !== key && (chars > 8 * 1024 * 1024 || this.historySupplements.size > 8)) this.historySupplements.delete(other);
+      }
+    }
+    ({ type, data } = bounded);
     const event = this.store.event({ type, data, ...(botId ? { botId } : {}) });
     if (botId && ["codex", "attachment", "history.refresh"].includes(type)) {
       this.historyVersions ??= new Map();
@@ -569,6 +582,7 @@ export class BotRuntime extends EventEmitter {
       case "history.attachments":
         return readHistoryAttachments(this, bot, p);
       case "history.view":
+        if (!bot.archived) await this.load(bot);
         return readHistoryView(this, bot, p);
       case "history.detail":
         return readHistoryDetail(this, bot, p);

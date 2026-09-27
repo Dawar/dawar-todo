@@ -38,7 +38,7 @@ export function ComposerStatus({ composer, error }: { composer: BotComposer | nu
   const otherFailures = botComposers.unsavedElsewhere.filter((c) => c !== composer);
   const needsAttention = Boolean(storageError || otherFailures.length || composer?.actionError || uploadErrors.length || missingCopies || operation || composer?.recoveries.length);
   const status = storageError ? "Draft not saved · Review recovery" : !composer?.ready ? "Recovering draft…" : composer.saved ? "Draft saved on this device" : "Saving draft… Keep this tab open.";
-  return <div className="bots-draft-status" aria-live="polite"><details className="bots-recovery-details">
+  return <div className="bots-draft-status" aria-live="polite"><details className="bots-recovery-details" open={needsAttention}>
     <summary>{status}{needsAttention && <strong> · {uploadErrors.length ? `${uploadErrors.length} upload(s) need attention` : "Review status"}</strong>}</summary>
     <div className="bots-recovery-content">
     {storageError ? <div role="alert">{storageError} <button type="button" onClick={() => { void composer?.retry(); void botComposers.recoverOwner(); }}>Retry saving / recovery</button></div>

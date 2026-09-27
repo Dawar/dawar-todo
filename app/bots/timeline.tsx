@@ -14,6 +14,7 @@ const EntryBody = memo(function EntryBody({ entry, timeline, attachments, downlo
 }) {
   const { turnId, id } = entry;
   const full = useSyncExternalStore(useCallback((fn) => timeline.subscribeDetail({ turnId, id }, fn), [timeline, turnId, id]), () => timeline.detailItem(entry), () => null);
+  const refreshing = useSyncExternalStore(timeline.subscribe, () => timeline.detailPending(entry), () => false);
   const [error, setError] = useState(""), [loading, setLoading] = useState(false);
   const load = useCallback(async () => {
     setLoading(true); setError("");
@@ -23,7 +24,7 @@ const EntryBody = memo(function EntryBody({ entry, timeline, attachments, downlo
   // Deferred entries mount only after the user opens their disclosure.
   useEffect(() => { let active = true; if (!entry.item) queueMicrotask(() => { if (active) void load(); }); return () => { active = false; }; }, [entry.item, load]);
   const item = full ?? entry.item;
-  return <>{item && <BotMessage item={item} botId={timeline.botId} attachments={attachments} download={download} inWorkLog />}
+  return <>{refreshing && <small>Refreshing live full detail…</small>}{item && <BotMessage item={item} botId={timeline.botId} attachments={attachments} download={download} inWorkLog />}
     {!entry.complete && <div className="bots-detail-status">
       <button disabled={loading} onClick={() => void load()}>{loading ? "Loading complete item…" : full ? "Refresh full detail" : item ? "Continue · load complete message" : "Load full detail"}</button>
       {full && !botsClient.online && <small>Saved full detail; changes since this copy may be missing.</small>}
@@ -31,12 +32,12 @@ const EntryBody = memo(function EntryBody({ entry, timeline, attachments, downlo
     </div>}
     {error && <p role="alert" className="bots-error">{error}</p>}</>;
 });
-const TimelineEntry = memo(function TimelineEntry(props: Parameters<typeof EntryBody>[0]) {
+export const TimelineEntry = memo(function TimelineEntry(props: Parameters<typeof EntryBody>[0]) {
   const { entry } = props;
   return <div data-history-key={historyKey(entry.turnId, entry.id)}>
     {entry.scheduled ? <LazyDetails className="bots-turn is-scheduled" summary={`Scheduled run · ${entry.status} · ${entry.label}`}>
       {() => <EntryBody {...props} />}</LazyDetails>
-      : !entry.item ? <LazyDetails className="bots-activity" summary={<><span>Work log · {entry.label}</span><small>{entry.status}</small></>}>
+      : !entry.item ? <LazyDetails className="bots-activity" summary={<><span>Work log · {entry.label}</span><small>{entry.itemStatus ?? entry.status}</small></>}>
         {() => <EntryBody {...props} />}</LazyDetails> : <EntryBody {...props} />}
   </div>;
 });
@@ -153,7 +154,7 @@ function ArtifactList({ botId, online, download, cached }: { botId: string; onli
       if (botsClient.owner === owner) { setPage(result.attachments); setCursor(result.nextCursor); }
     } catch (e) { setError(String(e)); }
   }, [botId, owner]);
-  useEffect(() => { if (online) void load(null); }, [online, load]);
+  useEffect(() => { let active = true; if (online) queueMicrotask(() => { if (active) void load(null); }); return () => { active = false; }; }, [online, load]);
   return <>{page.map((file) => <button className="bots-artifact-link" key={file.id} disabled={!online} onClick={() => download(file.id)}>{file.name}</button>)}
     {!online && <p>Saved references shown. Connect to list and download files.</p>}
     {cursor && <button disabled={!online} onClick={() => void load(cursor)}>More files</button>}

@@ -19,7 +19,7 @@ export type BotOperations = {
   snapshot: { params: Record<string, never>; result: BotSnapshot };
   history: { params: Record<string, never>; result: BotHistory };
   "history.view": {
-    params: { cursor?: string | null; revision?: string; after?: number };
+    params: { cursor?: string | null; turnId?: string; revision?: string; after?: number };
     result: HistoryResponse;
   };
   "history.attachments": { params: { cursor?: string | null }; result: { attachments: BotAttachment[]; nextCursor: string | null } };

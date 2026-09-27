@@ -33,9 +33,17 @@ export class BotTimeline {
   private publishTimer?: ReturnType<typeof setTimeout>;
   private disposed = false;
   private metadataVersion = 0;
+  private cachedKeys = new Set<string>();
+  private refreshTimer?: ReturnType<typeof setTimeout>;
+  private refreshAgain = false;
+  private detailTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private detailInvalidations = new Map<string, number>();
+  private detailCursors = new Map<string, number>();
+  private supplements = new Map<string, ThreadItem>();
   private detailItems = new Map<string, ThreadItem>();
   private detailListeners = new Map<string, Set<() => void>>();
   private detailEvents = new Map<string, BotEvent[]>();
+  detailPending = (entry: HistoryEntry) => this.detailInvalidations.has(historyKey(entry.turnId, entry.id));
   detailItem = (entry: HistoryEntry) => this.detailItems.get(historyKey(entry.turnId, entry.id)) ?? null;
   subscribeDetail(entry: Pick<HistoryEntry, "turnId" | "id">, listener: () => void) {
     const key = historyKey(entry.turnId, entry.id), listeners = this.detailListeners.get(key) ?? new Set();
@@ -78,7 +86,7 @@ export class BotTimeline {
         const live = this.state.eventCursor;
         const liveDirty = new Map(this.dirty);
         this.merge(cached.entries, true, -1); this.dirty = liveDirty;
-        const m = cached.metadata;
+        const m = cached.metadata; this.cachedKeys = new Set(m.order ?? []);
         this.publish({ revision: m.revision, eventCursor: Math.max(live, m.eventCursor), olderCursor: m.olderCursor,
           attachments: m.attachments, contextEntries: m.contextEntries ?? [], gaps: m.gaps ?? [], complete: m.complete, position: m.position ?? this.state.position, cached: true }, true);
       } catch (e) { this.publish({ error: `Offline history cache unavailable: ${String(e)}` }, true); }
@@ -114,7 +122,7 @@ export class BotTimeline {
         this.publish({ revision: response.revision, eventCursor: Math.max(this.state.eventCursor, response.eventCursor) });
         this.scheduleWrite();
       } catch (e) { this.publish({ error: e instanceof Error ? e.message : String(e) }); }
-      finally { this.request = undefined; if (!this.disposed) this.publish({ loading: false }, true); }
+      finally { this.request = undefined; if (!this.disposed) { this.publish({ loading: false }, true); if (this.refreshAgain) { this.refreshAgain = false; this.scheduleRefresh(); } } }
     })();
     return this.request;
   }
@@ -152,12 +160,57 @@ export class BotTimeline {
       this.publish({ entries, gaps, attachments: mergeAttachments(this.state.attachments, page.attachments) }, true); this.scheduleWrite();
     } catch (e) { this.publish({ error: String(e) }, true); }
   }
+  private scheduleRefresh() {
+    this.state = { ...this.state, revision: "" };
+    if (this.request) { this.refreshAgain = true; return; }
+    this.refreshTimer ??= setTimeout(() => { this.refreshTimer = undefined; if (!this.disposed) void this.refresh(); }, 250);
+  }
+  private invalidateDetail(entry: HistoryEntry, seq: number) {
+    const key = historyKey(entry.turnId, entry.id);
+    if (!this.detailListeners.get(key)?.size) return;
+    this.detailInvalidations.set(key, seq);
+    if (this.detailTimers.has(key)) return;
+    this.detailTimers.set(key, setTimeout(async () => {
+      this.detailTimers.delete(key);
+      if (this.disposed || !this.detailListeners.get(key)?.size || !this.transport.online) return;
+      const wanted = this.detailInvalidations.get(key) ?? seq;
+      try {
+        await this.detail(entry);
+        if ((this.detailCursors.get(key) ?? 0) < wanted || (this.detailInvalidations.get(key) ?? 0) > wanted) this.invalidateDetail(entry, this.detailInvalidations.get(key) ?? wanted);
+        else { this.detailInvalidations.delete(key); this.publish({}, true); }
+      } catch (error) { this.detailInvalidations.delete(key); this.publish({ error: `Open detail could not refresh: ${String(error)}` }, true); }
+    }, 1000));
+  }
   receive(event: BotEvent) {
     if (this.disposed || event.botId !== this.botId || event.seq <= this.state.eventCursor) return;
-    if (event.type === "history.refresh") { this.state = { ...this.state, revision: "" }; void this.refresh(); return; }
+    if (event.type === "history.refresh") {
+      const data = event.data as { reason?: string; method?: string; turnId?: string; itemId?: string; entry?: HistoryEntry; turn?: Turn };
+      if (data.reason !== "large-native-event") { this.scheduleRefresh(); return; }
+      const entries = [...this.state.entries];
+      if (data.entry) {
+        const next = { ...data.entry, updatedSeq: event.seq }, key = historyKey(next.turnId, next.id);
+        const index = entries.findIndex((entry) => historyKey(entry.turnId, entry.id) === key);
+        if (index < 0) entries.push(next); else entries[index] = { ...next, scheduled: entries[index].scheduled || next.scheduled };
+        this.dirty.set(key, index < 0 ? next : entries[index]);
+      }
+      if (data.turn) {
+        for (let i = 0; i < entries.length; i++) if (entries[i].turnId === data.turn.id) {
+          entries[i] = { ...entries[i], status: data.turn.status, updatedSeq: event.seq };
+          this.dirty.set(historyKey(entries[i].turnId, entries[i].id), entries[i]);
+        }
+        for (const entry of entries) if (entry.turnId === data.turn.id) this.invalidateDetail(entry, event.seq);
+        this.scheduleRefresh(); // Sparse/final turns can contain previously unseen items.
+      }
+      const entry = entries.find((entry) => entry.turnId === data.turnId && entry.id === data.itemId);
+      if (entry) this.invalidateDetail(entry, event.seq);
+      else if (!data.turn) this.scheduleRefresh();
+      this.publish({ entries, eventCursor: event.seq }); this.scheduleWrite();
+      if (data.method === "turn/completed" || data.method === "item/completed") void this.flush();
+      return;
+    }
     if (event.type === "attachment") { this.publish({ attachments: mergeAttachments(this.state.attachments, [event.data as BotAttachment]), eventCursor: event.seq }); this.scheduleWrite(); return; }
     if (event.type !== "codex") return;
-    const { method, params: p } = event.data as { method: string; params: { turnId?: string; itemId?: string; item?: ThreadItem; turn?: Turn; delta?: string } };
+    const { method, params: p } = event.data as { method: string; params: { turnId?: string; itemId?: string; item?: ThreadItem; turn?: Turn; delta?: string; diff?: string; plan?: unknown } };
     const turnId = p.turnId ?? p.turn?.id;
     for (const [key, events] of this.detailEvents) if (key.startsWith(`${turnId}:`)) events.push(event);
     for (const [key, item] of this.detailItems) {
@@ -179,7 +232,14 @@ export class BotTimeline {
         prior?.scheduled || p.item.type === "userMessage" && Boolean(p.item.clientId?.startsWith("schedule:"))));
     } else if (p.turn && (method === "turn/completed" || method === "turn/started")) {
       for (const entry of this.state.entries) if (entry.turnId === turnId && entry.status !== p.turn.status) update({ ...entry, status: p.turn.status });
+      if (method === "turn/completed") for (const entry of this.state.entries) if (entry.turnId === turnId) this.invalidateDetail(entry, event.seq);
       for (const item of p.turn.items) update(projectHistoryItem(p.turn, item, p.turn.items.some((i) => i.type === "userMessage" && Boolean(i.clientId?.startsWith("schedule:")))));
+    } else if (method === "turn/diff/updated" || method === "turn/plan/updated") {
+      const id = method === "turn/diff/updated" ? "live-turn-diff" : "live-turn-plan";
+      const item: ThreadItem = { id, type: "plan", text: method === "turn/diff/updated" ? "```diff\n" + (p.diff ?? "") + "\n```" : JSON.stringify(p.plan, null, 2) };
+      const key = historyKey(turnId, id); this.supplements.set(key, item);
+      if (this.detailItems.has(key)) this.detailItems.set(key, item);
+      update({ id, turnId, type: "plan", label: method === "turn/diff/updated" ? "Turn changes" : "Work plan", item: null, complete: false, scheduled: false, status: "inProgress", startedAt: null });
     } else if (p.itemId && /(?:\/delta|Delta)$/.test(method)) {
       const entry = this.state.entries.find((e) => e.turnId === turnId && e.id === p.itemId);
       if (entry?.item && (entry.item.type === "agentMessage" || entry.item.type === "plan")) {
@@ -202,13 +262,23 @@ export class BotTimeline {
     if (this.writeTimer) clearTimeout(this.writeTimer); this.writeTimer = undefined;
     if (this.write) { const version = this.writeVersion; await this.write; if (version < this.metadataVersion) return this.flush(); return; }
     if (!this.state.cached && !this.state.entries.length) return;
-    const dirty = [...this.dirty.values()]; this.dirty.clear();
-    const tail = this.state.entries.slice(-240);
+    const dirtyMap = new Map(this.dirty); this.dirty.clear();
+    const all = this.state.entries, anchorIndex = all.findIndex((entry) => historyKey(entry.turnId, entry.id) === this.state.position.anchor);
+    let tail = all.slice(-240), gaps = this.state.gaps;
+    if (!this.state.position.following && anchorIndex >= 0 && anchorIndex < all.length - 240) {
+      const reading = all.slice(Math.max(0, anchorIndex - 20), anchorIndex + 20), latest = all.slice(-200);
+      tail = [...reading, ...latest];
+      const before = historyKey(latest[0].turnId, latest[0].id);
+      gaps = [...gaps.filter((gap) => gap.before !== before), { before, stop: historyKey(reading.at(-1)!.turnId, reading.at(-1)!.id), cursor: historyBefore(latest[0]) }];
+    }
+    const keys = new Set(tail.map((entry) => historyKey(entry.turnId, entry.id)));
+    for (const entry of tail) if (!this.cachedKeys.has(historyKey(entry.turnId, entry.id))) dirtyMap.set(historyKey(entry.turnId, entry.id), entry);
+    const dirty = [...dirtyMap.values()].filter((entry) => keys.has(historyKey(entry.turnId, entry.id)));
     const metadata: TimelineMetadata = { owner: this.owner, botId: this.botId, order: tail.map((e) => historyKey(e.turnId, e.id)),
       revision: this.state.revision, eventCursor: this.state.eventCursor, olderCursor: tail.length < this.state.entries.length ? historyBefore(tail[0]) : this.state.olderCursor,
-      attachments: this.state.attachments, contextEntries: this.state.contextEntries, gaps: this.state.gaps.filter((gap) => tail.some((entry) => historyKey(entry.turnId, entry.id) === gap.before)), complete: tail.length === this.state.entries.length && this.state.complete, position: this.state.position, touched: Date.now() };
+      attachments: this.state.attachments, contextEntries: this.state.contextEntries, gaps: gaps.filter((gap) => keys.has(gap.before)), complete: tail.length === this.state.entries.length && this.state.complete, position: this.state.position, touched: Date.now() };
     this.writeVersion = this.metadataVersion;
-    this.write = this.cache.write(metadata, dirty).catch((error) => {
+    this.write = this.cache.write(metadata, dirty).then(() => { this.cachedKeys = keys; }).catch((error) => {
       for (const e of dirty) if (!this.dirty.has(historyKey(e.turnId, e.id))) this.dirty.set(historyKey(e.turnId, e.id), e);
       this.publish({ error: `History is visible but its offline cache could not be updated: ${String(error)}` }, true);
     }).finally(() => { this.write = undefined; });
@@ -216,6 +286,9 @@ export class BotTimeline {
   }
   detail(entry: HistoryEntry): Promise<ThreadItem> {
     const key = historyKey(entry.turnId, entry.id);
+    if (this.transport.owner !== this.owner || this.disposed) return Promise.reject(new Error("Conversation owner changed."));
+    const supplement = this.supplements.get(key);
+    if (supplement) { this.detailItems.set(key, supplement); this.detailListeners.get(key)?.forEach((listener) => listener()); return Promise.resolve(supplement); }
     if (entry.complete && entry.item) return Promise.resolve(entry.item);
     const prior = this.detailRequests.get(key); if (prior) return prior;
     const promise = (async () => {
@@ -234,7 +307,7 @@ export class BotTimeline {
       do {
         const part = await this.transport.rpc<HistoryDetail>("history.detail", this.botId, { turnId: entry.turnId, itemId: entry.id, offset, version, ...(offset === 0 && cached?.version ? { knownVersion: cached.version } : {}) });
         if (this.transport.owner !== this.owner || this.disposed) throw new Error("Conversation owner changed.");
-        if (part.notModified && cached) { this.publish({ attachments: mergeAttachments(this.state.attachments, cached.attachments) }); return cached.item; }
+        if (part.notModified && cached) { this.detailCursors.set(key, part.eventCursor ?? cursor); this.publish({ attachments: mergeAttachments(this.state.attachments, cached.attachments) }); return cached.item; }
         if (version && version !== part.version) throw new Error("The item changed. Open its details again.");
         json += part.json; version = part.version; cursor = part.eventCursor ?? cursor;
         if (part.attachments?.length) this.publish({ attachments: mergeAttachments(this.state.attachments, part.attachments) });
@@ -251,14 +324,14 @@ export class BotTimeline {
         const reduced = reduceBotTurns([{ id: entry.turnId, items: [item], itemsView: "full", status: entry.status, startedAt: entry.startedAt, completedAt: null, durationMs: null, error: null }], native);
         item = reduced[0]?.items.find((value) => value.id === entry.id) ?? item;
       }
-      this.detailItems.set(key, item);
+      this.detailItems.set(key, item); this.detailCursors.set(key, cursor);
       if (entry.status !== "inProgress") void saveOpenedDetail(this.owner, this.botId, key, item, this.state.attachments, version!).catch(() => {});
       this.detailListeners.get(key)?.forEach((listener) => listener());
       return item;
     })().finally(() => { this.detailRequests.delete(key); this.detailEvents.delete(key); });
     this.detailRequests.set(key, promise); return promise;
   }
-  async dispose() { this.disposed = true; await this.flush(); if (this.publishTimer) clearTimeout(this.publishTimer); this.listeners.clear(); }
+  async dispose() { this.disposed = true; if (this.refreshTimer) clearTimeout(this.refreshTimer); for (const timer of this.detailTimers.values()) clearTimeout(timer); this.detailTimers.clear(); await this.flush(); if (this.publishTimer) clearTimeout(this.publishTimer); this.listeners.clear(); }
 }
 function mergeAttachments(old: BotAttachment[], incoming: BotAttachment[]) {
   if (!incoming.length) return old;

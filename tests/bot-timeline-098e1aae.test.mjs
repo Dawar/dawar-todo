@@ -184,3 +184,36 @@ test('opened tool detail applies ordered deltas, persists completed detail, and 
   assert.equal((await controller.detail(projected)).aggregatedOutput, 'initial');
   transport.owner = 'other'; await assert.rejects(controller.detail(projected), /owner changed/); await controller.dispose();
 });
+
+test('live work plans and turn diffs remain explicitly available without putting large diffs into the timeline cache', async () => {
+  const env = runtime({ IDBKeyRange }), { BotTimeline } = env.load('app/bots/timeline-controller.ts');
+  const controller = new BotTimeline('owner', bot.id, { owner: 'owner', online: true, rpc: async () => page([]) }, { read: async () => null, write: async () => {} });
+  const diff = 'large complete diff\n'.repeat(10000);
+  controller.receive({ seq: 1, botId: bot.id, type: 'codex', data: { method: 'turn/diff/updated', params: { turnId: 'turn-a', diff } } });
+  const entry = controller.getSnapshot().entries[0]; assert.equal(entry.item, null);
+  assert.equal((await controller.detail(entry)).text, '```diff\n' + diff + '\n```');
+  controller.receive({ seq: 2, botId: bot.id, type: 'codex', data: { method: 'turn/plan/updated', params: { turnId: 'turn-a', plan: [{ step: 'Preserved work step', status: 'inProgress' }] } } });
+  assert.match((await controller.detail(controller.getSnapshot().entries[1])).text, /Preserved work step/); await controller.dispose();
+});
+
+test('cache keeps a distant reading anchor plus latest messages and an explicit eviction gap', async () => {
+  const env = runtime({ IDBKeyRange }), { BotTimeline } = env.load('app/bots/timeline-controller.ts');
+  const { createTimelineCache } = env.load('app/bots/timeline-cache.ts'), cache = createTimelineCache(env.indexedDB);
+  const entries = Array.from({ length: 500 }, (_, i) => entry(`item-${i}`));
+  const controller = new BotTimeline('owner', bot.id, { owner: 'owner', online: true, rpc: async () => page(entries) }, cache);
+  await controller.refresh(); await controller.flush();
+  controller.position({ anchor: historyKey('turn-a', 'item-50'), offset: 15, following: false }); await controller.flush(); await controller.dispose();
+  const stored = await cache.read('owner', bot.id);
+  assert.ok(stored.entries.some((e) => e.id === 'item-50')); assert.equal(stored.entries.at(-1).id, 'item-499');
+  assert.ok(stored.entries.length <= 240); assert.equal(stored.metadata.gaps.length, 1); assert.ok(stored.metadata.olderCursor);
+  await cache.close();
+});
+
+test('scheduled turn access pages inside one huge turn and does not transfer neighbouring turns', async () => {
+  const items = Array.from({ length: 95 }, (_, i) => message(`scheduled-${i}`));
+  const native = fakeRuntime([turn('newer', [message('newer-item')]), turn('scheduled', items), turn('older', [message('older-item')])]);
+  const first = await historyViewPage(native, bot, null, 'scheduled');
+  const second = await historyViewPage(native, bot, first.olderCursor);
+  const third = await historyViewPage(native, bot, second.olderCursor);
+  assert.equal(third.olderCursor, null); assert.deepEqual([...third.entries, ...second.entries, ...first.entries].map((e) => e.id), items.map((i) => i.id));
+});

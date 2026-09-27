@@ -22,13 +22,21 @@ function decode(cursor) {
 }
 
 /** Explicit projection of full native items. Does not assume native summary semantics. */
-export async function historyViewPage(runtime, bot, cursor = null) {
+export async function historyViewPage(runtime, bot, cursor = null, turnId = null) {
   const position = decode(cursor);
+  turnId ??= position.turnId;
+  if (turnId != null && (typeof turnId !== 'string' || turnId.length > 200)) throw new Error('Invalid turn id.');
   let page, all, start = 0;
   do {
     page = await runtime.historyPage(bot.threadId, position.native);
     all = [];
+    if (turnId && !page.data.some((turn) => turn.id === turnId)) {
+      position.native = page.nextCursor;
+      if (position.native) continue;
+      throw new Error('This turn is not available in native conversation history.');
+    }
     for (const turn of page.data) {
+      if (turnId && turn.id !== turnId) continue;
       const scheduled = turn.items.some((item) => item.type === 'userMessage' && item.clientId?.startsWith('schedule:'));
       for (let i = turn.items.length - 1; i >= 0; i--) all.push({ turn, item: turn.items[i], scheduled });
     }
@@ -46,8 +54,8 @@ export async function historyViewPage(runtime, bot, cursor = null) {
     if (entries.length && bytes + length > MAX_PAGE_BYTES) break;
     entries.push(entry); bytes += length;
   }
-  const olderCursor = index < all.length ? encode({ native: position.native, before: historyKey(all[index - 1].turn.id, all[index - 1].item.id) })
-    : page.nextCursor ? encode({ native: page.nextCursor, before: null }) : null;
+  const olderCursor = index < all.length ? encode({ native: position.native, before: historyKey(all[index - 1].turn.id, all[index - 1].item.id), ...(turnId ? { turnId } : {}) })
+    : !turnId && page.nextCursor ? encode({ native: page.nextCursor, before: null }) : null;
   const contextEntries = [];
   if (!cursor && !entries.some((entry) => !entry.scheduled && ['userMessage', 'agentMessage'].includes(entry.type))) {
     const types = new Set();
@@ -74,15 +82,15 @@ export function historyRevision(runtime, bot) {
 
 export async function readHistoryView(runtime, bot, params) {
   const revision = historyRevision(runtime, bot), eventCursor = runtime.store.cursor();
-  if (!params.cursor && params.revision === revision) return { kind: 'unchanged', revision, eventCursor };
-  if (!params.cursor && params.revision?.startsWith(`${runtime.epoch}:${bot.threadId}:`) && Number.isSafeInteger(params.after) && params.after >= 0) {
+  if (!params.cursor && !params.turnId && params.revision === revision) return { kind: 'unchanged', revision, eventCursor };
+  if (!params.cursor && !params.turnId && params.revision?.startsWith(`${runtime.epoch}:${bot.threadId}:`) && Number.isSafeInteger(params.after) && params.after >= 0) {
     const replay = runtime.store.replay(params.after);
     const contiguous = !replay.length ? params.after === eventCursor : replay[0].seq === params.after + 1;
     const events = replay.filter((e) => e.botId === bot.id && ['codex', 'attachment', 'history.refresh'].includes(e.type));
-    if (contiguous && !events.some((e) => e.type !== 'codex') && Buffer.byteLength(JSON.stringify(events)) < MAX_PAGE_BYTES)
+    if (contiguous && !events.some((e) => e.type !== 'codex' && !(e.type === 'history.refresh' && e.data?.reason === 'large-native-event')) && Buffer.byteLength(JSON.stringify(events)) < MAX_PAGE_BYTES)
       return { kind: 'events', revision, eventCursor, events };
   }
-  const page = await historyViewPage(runtime, bot, params.cursor ?? null);
+  const page = await historyViewPage(runtime, bot, params.cursor ?? null, params.turnId ?? null);
   return { kind: 'page', ...page, revision, eventCursor };
 }
 
@@ -98,8 +106,9 @@ export async function readHistoryDetail(runtime, bot, params) {
     // One native lookup/serialization per detail version, shared by requests.
     const pendingKey = `${key}:pending`, existing = cache.get(pendingKey);
     const promise = existing?.promise ?? (async () => {
-      let cursor = null, item;
-      do {
+      let cursor = null, item = runtime.historySupplements?.get(`${bot.id}:${params.turnId}:${params.itemId}`);
+      if (!item && ['live-turn-diff', 'live-turn-plan'].includes(params.itemId)) throw new Error('This live aggregate has expired. Individual commands and file changes remain in native history.');
+      if (!item) do {
         const page = await runtime.historyPage(bot.threadId, cursor);
         item = page.data.find((turn) => turn.id === params.turnId)?.items.find((entry) => entry.id === params.itemId);
         cursor = page.nextCursor;
