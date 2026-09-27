@@ -1077,12 +1077,14 @@ export class BotRuntime extends EventEmitter {
       serviceTier,
       mode: p.mode ?? bot.mode,
     };
-    if (!bot.activeTurnId && (next.model !== bot.model || next.effort !== bot.effort ||
-        next.serviceTier !== bot.serviceTier || next.mode !== bot.mode))
+    if (next.model !== bot.model || next.effort !== bot.effort ||
+        next.serviceTier !== bot.serviceTier || next.mode !== bot.mode)
       await this.syncQueueSettings(next);
-    // An active turn keeps its own settings. Persist the next turn's choice;
-    // startTurn passes it explicitly and queued starts resync before dispatch.
-    return this.saveBot(bot, next);
+    // Native queue advance can start the next turn without startQueued. v2
+    // thread/settings/update targets subsequent turns, including during a run.
+    // Notifications may change activeTurnId while that call is awaiting its
+    // reply; retain those newer fields when committing the confirmed choice.
+    return this.saveBot(this.store.bot(bot.id), { name, model, effort, serviceTier, mode: next.mode });
   }
   async archive(bot, archived) {
     if (bot.activeTurnId || this.store.list("pending", bot.id).length)

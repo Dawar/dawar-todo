@@ -379,7 +379,9 @@ export class BotsClient {
     }
     if (message.type === "event") {
       const event = message.event as BotEvent;
-      if (this.snapshot) {
+      // A snapshot response may include this event already. Replaying an older
+      // event must not roll the visible bot settings or cursor backwards.
+      if (this.snapshot && event.seq > this.snapshot.cursor) {
         if (event.type === "bot") {
           const bot = event.data as BotSnapshot["bots"][number];
           this.snapshot = {
@@ -462,8 +464,12 @@ export class BotsClient {
   }
   async refresh() {
     const owner = this.owner;
+    const epoch = this.connectionEpoch;
     const snapshot = await this.rpc<BotSnapshot>("snapshot");
-    if (this.owner !== owner) return snapshot;
+    if (this.owner !== owner || this.connectionEpoch !== epoch)
+      throw new BotRpcError("The signed-in owner changed.", "not-sent");
+    if (this.snapshot && snapshot.cursor < this.snapshot.cursor)
+      return this.snapshot;
     this.snapshot = snapshot;
     this.online = snapshot.ready;
     if (this.online)
