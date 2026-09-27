@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { BotRequest } from "../../lib/bots-types";
 
 type JsonSchema = {
@@ -152,16 +152,26 @@ export function RequestCard({
     }),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false),
+    [accepted, setAccepted] = useState(false),
     [raw, setRaw] = useState(false);
+  const submitting = useRef(false);
   const request = pending.request;
   async function submit(result: unknown) {
+    // A rapid second tap can arrive before React renders the disabled button.
+    if (submitting.current || disabled) return;
+    submitting.current = true;
     setBusy(true);
+    setAccepted(false);
     setError("");
     try {
       await respond(result);
+      // Keep the card locked until the resolved request disappears from the
+      // snapshot. A slow event should not invite a second answer.
+      setAccepted(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Response failed.");
       setBusy(false);
+      submitting.current = false;
     }
   }
   const locked = disabled || busy;
@@ -169,13 +179,28 @@ export function RequestCard({
   if (request.method === "item/tool/requestUserInput")
     content = (
       <form
+        noValidate
         onSubmit={(e) => {
           e.preventDefault();
+          if (locked) return;
+          const missing = request.params.questions.find(
+            (q) => !answers[q.id]?.trim(),
+          );
+          if (missing) {
+            setError(`Select an option or type an answer for ${missing.header}.`);
+            return;
+          }
           void submit({
             answers: Object.fromEntries(
               request.params.questions.map((q) => [
                 q.id,
-                { answers: [answers[q.id] ?? ""] },
+                {
+                  answers: [
+                    q.options?.some((option) => option.label === answers[q.id])
+                      ? answers[q.id]
+                      : answers[q.id].trim(),
+                  ],
+                },
               ]),
             ),
           });
@@ -190,9 +215,13 @@ export function RequestCard({
                   type="radio"
                   name={pending.key + q.id}
                   checked={answers[q.id] === option.label}
-                  onChange={() =>
-                    setAnswers({ ...answers, [q.id]: option.label })
-                  }
+                  onChange={() => {
+                    setAnswers((current) => ({
+                      ...current,
+                      [q.id]: option.label,
+                    }));
+                    setError("");
+                  }}
                 />
                 <span>
                   <strong>{option.label}</strong>
@@ -202,7 +231,6 @@ export function RequestCard({
             ))}
             <input
               type={q.isSecret ? "password" : "text"}
-              required={!answers[q.id]}
               aria-label={`Answer: ${q.header}`}
               placeholder={
                 q.options?.length ? "Or type your answer…" : "Your answer…"
@@ -212,14 +240,17 @@ export function RequestCard({
                   ? ""
                   : (answers[q.id] ?? "")
               }
-              onChange={(e) =>
-                setAnswers({ ...answers, [q.id]: e.target.value })
-              }
+              onChange={(e) => {
+                const value = e.target.value;
+                setAnswers((current) => ({ ...current, [q.id]: value }));
+                setError("");
+              }}
             />
           </fieldset>
         ))}
+        <p>Select an option or type an answer for each question.</p>
         <button className="bots-primary" disabled={locked}>
-          Send answers
+          {accepted ? "Answers sent" : busy ? "Sending answers…" : "Send answers"}
         </button>
       </form>
     );
@@ -428,6 +459,13 @@ export function RequestCard({
       {error && (
         <p role="alert" className="bots-error">
           {error}
+        </p>
+      )}
+      {busy && (
+        <p role="status">
+          {accepted
+            ? "Answers accepted. Waiting for the conversation to update…"
+            : "Sending answers…"}
         </p>
       )}
     </section>
