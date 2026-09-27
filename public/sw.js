@@ -1,5 +1,5 @@
 const CACHE_PREFIX = "dawar-todo-shell-";
-const CACHE_NAME = `${CACHE_PREFIX}v32`;
+const CACHE_NAME = `${CACHE_PREFIX}v33`;
 const SHELL = [
   "/",
   "/settings",
@@ -63,7 +63,21 @@ async function cacheResponse(cache, key, response) {
   await cache.put(key, response);
 }
 
+// A generation-local completion index is written only after the entire graph
+// succeeds. Partial installations must still inspect/retry their dependencies.
+const GRAPH_INDEX = "/.pwa-complete-asset-graph";
+let completedGraph;
+let graphIndexWrite = Promise.resolve();
+async function completedAssets(cache) {
+  if (!completedGraph) completedGraph = cache.match(GRAPH_INDEX).then(async (response) => {
+    try { return new Set(response ? await response.json() : []); } catch { return new Set(); }
+  });
+  return completedGraph;
+}
 async function cacheAssetGraph(cache, initialUrls, strict) {
+  const complete = await completedAssets(cache);
+  const discovered = new Set();
+  let failed = false;
   const seen = new Set();
   let pending = [...new Set(initialUrls)];
   while (pending.length) {
@@ -76,12 +90,16 @@ async function cacheAssetGraph(cache, initialUrls, strict) {
         // Content-addressed bundles never change at the same URL. Reuse them
         // across navigations and shell upgrades instead of downloading the graph.
         const immutable = url.startsWith("/assets/") || url.startsWith("/_next/static/");
-        const cached = immutable ? await caches.match(url) : null;
+        if (immutable && complete.has(url)) return [];
+        const current = immutable ? await cache.match(url) : null;
+        const cached = current || (immutable ? await caches.match(url) : null);
         const response = cached || await fetch(new Request(url, { cache: "reload", credentials: "same-origin" }));
         const inspect = /\.(?:css|js|mjs)(?:\?|$)/i.test(url) ? response.clone() : null;
-        await cacheResponse(cache, url, response);
+        if (!current) await cacheResponse(cache, url, response);
+        if (immutable) discovered.add(url);
         return inspect ? discoveredAssetUrls(await inspect.text(), url) : [];
       } catch (error) {
+        failed = true;
         if (strict) throw error;
         return [];
       }
@@ -89,6 +107,13 @@ async function cacheAssetGraph(cache, initialUrls, strict) {
     for (const urls of results) {
       for (const url of urls) if (!seen.has(url)) pending.push(url);
     }
+  }
+  if (!failed && discovered.size) {
+    discovered.forEach((url) => complete.add(url));
+    // Serialize overlapping walks and snapshot the union when the write runs.
+    graphIndexWrite = graphIndexWrite.catch(() => undefined).then(() =>
+      cache.put(GRAPH_INDEX, new Response(JSON.stringify([...complete]), { headers: { "Content-Type": "application/json" } })));
+    await graphIndexWrite;
   }
   return seen.size;
 }
@@ -204,6 +229,7 @@ self.addEventListener("fetch", (event) => {
 });
 
 self.addEventListener("message", (event) => {
+  if (event.data?.type === "PWA_VERSION") event.ports?.[0]?.postMessage({ cache: CACHE_NAME, databaseVersion: 11 });
   if (event.data?.type === "SKIP_WAITING") self.skipWaiting();
 });
 

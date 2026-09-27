@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import vinext from "vinext";
 import { defineConfig } from "vite";
 import hostingConfig from "./.openai/hosting.json";
@@ -7,6 +8,11 @@ const SITE_CREATOR_PLACEHOLDER_DATABASE_ID =
   "00000000-0000-4000-8000-000000000000";
 
 const { d1, r2 } = hostingConfig;
+function documentBuildId() {
+  if (process.env.DAWAR_BUILD_ID) return process.env.DAWAR_BUILD_ID;
+  try { return execFileSync("git", ["rev-parse", "--short=12", "HEAD"], { encoding: "utf8" }).trim(); }
+  catch { return "unversioned"; } // Archive builds should supply DAWAR_BUILD_ID.
+}
 
 // macOS Seatbelt blocks FSEvents, so Codex previews need polling for HMR.
 const isCodexSeatbeltSandbox = process.env.CODEX_SANDBOX === "seatbelt";
@@ -50,6 +56,7 @@ export default defineConfig(async () => {
   const { cloudflare } = await import("@cloudflare/vite-plugin");
 
   return {
+    define: { __DAWAR_BUILD__: JSON.stringify(documentBuildId()) },
     server: isCodexSeatbeltSandbox
       ? { watch: { useFsEvents: false, usePolling: true } }
       : undefined,

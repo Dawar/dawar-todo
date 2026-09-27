@@ -74,3 +74,6 @@ The separate 9 PM Eastern quota/countdown and artifact-gallery work remains inde
 - New schema v10 and shell v32 require a normal app reload to load new JS; an old document's v9 open can fail after upgrade. Manager should verify mixed-tab behavior and coordinate the final shell version with the parallel passes. Do not clear IndexedDB/caches, force-delete rows, or roll back to v9 against an upgraded device. A fix-forward release preserves queued state.
 
 No merge, push, deployment, service restart, cache clearing, production data deletion or schedule change was performed. Manager owns integration and release validation.
+
+
+The [Tasks/PWA continuation report](pwa-tasks-2026-09-26.md) records the subsequent implementation, DB v11/SW v33 coordination, comparable measurements, browser/fault checks and residual requirements. Its status supersedes the remaining Tasks findings above; bot/chat work remains separately owned.

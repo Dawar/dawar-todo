@@ -7,9 +7,10 @@ import { subscribeOfflineChanges } from "./offline-events";
 import {
   listOfflineTodos, listOfflineTodoMutations, listOfflineTaskActions, loadCachedServerState,
   commitRemoteTasks, promoteOfflineTodo, deferOfflineTaskAction, rejectOfflineTaskAction,
-  listQueuedAttachments,
-  type OfflineTodoMutation, type OfflineTaskAction,
+  listQueuedAttachments, rejectOfflineTaskIntent,
+  type OfflineTodoMutation, type OfflineTaskAction, type OfflineTodoRecord,
 } from "./offline-store";
+import { taskActionRetryDelay, uploadWaitingForTaskAction } from "./task-queue-order";
 import { syncQueuedAttachment } from "./attachment-sync";
 import { attachmentQueueState } from "./attachment-queue";
 import { recordSyncDiagnostic } from "./sync-diagnostics";
@@ -17,6 +18,7 @@ import { recordSyncDiagnostic } from "./sync-diagnostics";
 export type SyncSnapshot = {
   loading: boolean; quality: ConnectionQuality; creates: number; edits: number; actions: number; uploads: number;
   uploadStates: Record<string, number>;
+  rejectedCreates: OfflineTodoRecord[];
   revision: number; projects: string[]; settings?: TodoSettings; captureDraft?: CaptureDraft | null;
   mutations: OfflineTodoMutation[]; pendingActions: OfflineTaskAction[];
 };
@@ -31,7 +33,7 @@ export type TaskSyncEvent =
 
 /** Browser-session engine. No component owns its network requests or timers. */
 export function createTaskSyncEngine() {
-  let snapshot: SyncSnapshot = { loading: true, quality: "online", creates: 0, edits: 0, actions: 0, uploads: 0, uploadStates: {}, revision: 0, projects: [], mutations: [], pendingActions: [] };
+  let snapshot: SyncSnapshot = { loading: true, quality: "online", creates: 0, edits: 0, actions: 0, uploads: 0, uploadStates: {}, rejectedCreates: [], revision: 0, projects: [], mutations: [], pendingActions: [] };
   const listeners = new Set<() => void>();
   const events = new Set<(event: TaskSyncEvent) => void>();
   const health = createSyncHealth();
@@ -42,6 +44,7 @@ export function createTaskSyncEngine() {
   let failures = 0;
   let quiet = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let timerIsPoll = false;
   let uploadTimer: ReturnType<typeof setTimeout> | undefined;
   let uploading = false;
   let uploadAgain = false;
@@ -50,6 +53,8 @@ export function createTaskSyncEngine() {
   let unsubscribe: (() => void) | undefined;
   let reloadRunning: Promise<void> | null = null;
   let reloadAgain = false;
+  let cacheDirty = true;
+  let lastLifecycleWake = -Infinity;
   let stream: EventSource | null = null;
   let streamHealthy = false;
   let streamLastSignal = 0;
@@ -74,14 +79,14 @@ export function createTaskSyncEngine() {
   const emit = (event: TaskSyncEvent) => events.forEach((listener) => listener(event));
   const publish = (patch: Partial<SyncSnapshot>) => {
     const next = { ...snapshot, ...patch };
-    if (JSON.stringify(next) === JSON.stringify(snapshot)) return;
+    if (Object.keys(patch).every((key) => Object.is(next[key as keyof SyncSnapshot], snapshot[key as keyof SyncSnapshot]))) return;
     snapshot = next; listeners.forEach((listener) => listener());
   };
   async function reload() {
     if (reloadRunning) { reloadAgain = true; return reloadRunning; }
     reloadRunning = (async () => {
       do {
-        reloadAgain = false;
+        reloadAgain = false; cacheDirty = false;
         const localVersion = taskStore.getVersion();
         const [cache, creates, mutations, actions, uploads] = await Promise.all([
           loadCachedServerState<Todo>(), listOfflineTodos(), listOfflineTodoMutations(), listOfflineTaskActions(), listQueuedAttachments(),
@@ -95,7 +100,7 @@ export function createTaskSyncEngine() {
         taskStore.setAll(tasks);
         publish({ loading: false, creates: creates.length, edits: mutations.length, actions: actions.length, uploads: uploads.length,
           uploadStates: uploads.reduce<Record<string, number>>((counts, upload) => { const state = attachmentQueueState(upload); counts[state] = (counts[state] ?? 0) + 1; return counts; }, {}),
-          mutations, pendingActions: actions, revision: cache?.revision ?? 0, projects: cache?.projects ?? [],
+          rejectedCreates: creates.filter((record) => record.rejected), mutations, pendingActions: actions, revision: cache?.revision ?? 0, projects: cache?.projects ?? [],
           ...(cache?.settings ? { settings: cache.settings } : {}),
           ...(cache && Object.hasOwn(cache, "captureDraft") ? { captureDraft: cache.captureDraft } : {}),
         });
@@ -108,10 +113,11 @@ export function createTaskSyncEngine() {
       await navigator.locks.request(name, { ifAvailable: true }, async (lock) => { if (lock) await operation(); });
     } else await operation(); // Server operation IDs and conditional acknowledgements still protect retries.
   }
-  function wake(delay = 0) {
+  function wake(delay = 0, polling = false) {
     if (!started || stopped) return;
     if (running) { again = true; return; }
     if (timer !== undefined) clearTimeout(timer);
+    timerIsPoll = polling;
     timer = available() ? setTimeout(() => { timer = undefined; void tick(); }, delay) : undefined;
   }
   function success() { failures = 0; publish({ quality: health.success() }); }
@@ -122,8 +128,10 @@ export function createTaskSyncEngine() {
   }
   async function flushTasks() {
     const [mutations, actions, records] = await Promise.all([listOfflineTodoMutations(), listOfflineTaskActions(), listOfflineTodos()]);
+    const blocked = new Set<number>();
     for (const mutation of mutations) {
       if (!available()) return;
+      if (mutation.rejected) { blocked.add(mutation.todoId); continue; }
       try {
         const result = await request<{ todo: Todo; appliedFields: string[] }>(`/api/todos/${mutation.todoId}`, {
           method: "PATCH", body: JSON.stringify({ ...mutation.patch, autosave: true, mutation: { mutationId: mutation.mutationId, fieldTimestamps: mutation.fieldTimestamps } }),
@@ -131,11 +139,12 @@ export function createTaskSyncEngine() {
         await commitRemoteTasks({ todos: [result.todo], acknowledgeMutation: mutation });
         success(); emit({ type: "edit", mutation, ...result });
       } catch (error) {
-        if ((error as { status?: number }).status === 404) { await commitRemoteTasks({ todos: [], deletedIds: [mutation.todoId] }); continue; }
-        throw error;
+        if (retryableSyncError(error)) throw error;
+        await rejectOfflineTaskIntent(mutation, (error as { status: number }).status);
+        blocked.add(mutation.todoId);
+        recordSyncDiagnostic("task-intent-rejected", { kind: "edit", status: (error as { status: number }).status });
       }
     }
-    const blocked = new Set<number>();
     for (const action of actions) {
       if (!available()) return;
       if (action.taskIds.some((id) => blocked.has(id)) || Date.parse(action.nextAttemptAt) > Date.now()) { action.taskIds.forEach((id) => blocked.add(id)); continue; }
@@ -167,14 +176,21 @@ export function createTaskSyncEngine() {
     }
     for (const record of records) {
       if (!available()) return;
+      if (record.rejected) continue;
       // Create the task immediately; queued files use a separate transport lane.
-      const result = await request<{ todo: Todo }>("/api/todos", { method: "POST", body: JSON.stringify({
-        clientId: record.clientId, title: record.title, notes: record.notes, priority: record.priority ?? 3,
-        dueDate: record.dueDate, project: record.project, context: record.context, recurrenceCron: record.recurrenceCron,
-      }) });
-      const todo = await promoteOfflineTodo(record, result.todo);
-      success(); if (todo) emit({ type: "promoted", localId: record.localId, todo });
-      again = true;
+      try {
+        const result = await request<{ todo: Todo }>("/api/todos", { method: "POST", body: JSON.stringify({
+          clientId: record.clientId, title: record.title, notes: record.notes, priority: record.priority ?? 3,
+          dueDate: record.dueDate, project: record.project, context: record.context, recurrenceCron: record.recurrenceCron,
+        }) });
+        const todo = await promoteOfflineTodo(record, result.todo);
+        success(); if (todo) emit({ type: "promoted", localId: record.localId, todo });
+        again = true;
+      } catch (error) {
+        if (retryableSyncError(error)) throw error;
+        await rejectOfflineTaskIntent(record, (error as { status: number }).status);
+        recordSyncDiagnostic("task-intent-rejected", { kind: "create", status: (error as { status: number }).status });
+      }
     }
   }
   async function read() {
@@ -186,6 +202,8 @@ export function createTaskSyncEngine() {
         : { ...await request<BootstrapResponse>("/api/bootstrap", { cache: "no-store", timeoutMs: 15_000, signal: readController.signal }), reset: true, reason: "initial" };
       if (readController.signal.aborted) return;
       await commitRemoteTasks(result);
+      if (result.reset || result.todos.length || (!result.reset && result.deletedIds.length)) cacheDirty = true;
+      publish({ revision: Math.max(snapshot.revision, result.revision) });
       initialized = true;
       quiet = result.todos.length || (!result.reset && result.deletedIds.length) ? 0 : quiet + 1;
       success(); emit({ type: "remote", result });
@@ -197,18 +215,22 @@ export function createTaskSyncEngine() {
     running = true; again = false;
     const startedAt = Date.now();
     try {
-      await withLock("dawar-task-sync", async () => { await reload(); await flushTasks(); await read(); });
-      await reload();
+      await withLock("dawar-task-sync", async () => {
+        if (cacheDirty) await reload();
+        if (snapshot.creates || snapshot.edits || snapshot.actions) await flushTasks();
+        await read();
+      });
+      if (cacheDirty) await reload();
       connectStream();
     } catch (error) {
       if ((error as { name?: string }).name !== "AbortError") failure(error);
     } finally {
       running = false;
       recordSyncDiagnostic("sync-finished", { remainingCreates: snapshot.creates, remainingEdits: snapshot.edits, remainingActions: snapshot.actions, durationMs: Date.now() - startedAt });
-      void wakeUploads(); wakeLanes();
-      const deferred = snapshot.pendingActions.reduce((delay, action) => Math.min(delay, Math.max(500, Date.parse(action.nextAttemptAt) - Date.now())), Infinity);
+      wakeLanes();
+      const deferred = taskActionRetryDelay(snapshot.pendingActions, snapshot.mutations, Date.now());
       const poll = streamHealthy ? 30_000 : liveSyncDelay(failures, quiet);
-      wake(failures ? Math.max(2_000, poll) : again ? 150 : Math.min(poll, deferred));
+      wake(failures ? Math.max(2_000, poll) : again ? 150 : Math.min(poll, deferred), !failures && !again && deferred >= poll);
     }
   }
   async function wakeUploads() {
@@ -224,14 +246,16 @@ export function createTaskSyncEngine() {
           if (upload.nextAttemptAt > Date.now() || (upload.leaseUntil ?? 0) > Date.now()) continue;
           const pending = await listOfflineTaskActions();
           // Wait for a merge/deletion result before deciding this file's target.
-          if (pending.some((action) => action.taskIds.includes(upload.todoId)
-            && (action.body.action === "merge" || (!action.undoRequested && action.optimisticDeletedIds?.includes(upload.todoId))))) continue;
+          if (uploadWaitingForTaskAction(upload, pending)) continue;
           const todoId = await syncQueuedAttachment(upload.localId);
           if (todoId !== null) { emit({ type: "attachment", todoId }); wake(); }
         }
       });
       await reload();
+      const pending = await listOfflineTaskActions();
       for (const row of await listQueuedAttachments()) {
+        // Target actions wake this lane through local/remote notifications.
+        if (uploadWaitingForTaskAction(row, pending)) continue;
         const eligibleAt = Math.max(row.nextAttemptAt, row.leaseUntil ?? 0);
         nextDelay = Math.min(nextDelay, Math.max(2_000, eligibleAt - Date.now()));
       }
@@ -258,7 +282,11 @@ export function createTaskSyncEngine() {
       stream = new EventSource(`/api/sync/events?after=${snapshot.revision}`);
       streamLastSignal = Date.now();
       const signal = (event: MessageEvent) => {
+        const becameHealthy = !streamHealthy;
         streamLastSignal = Date.now(); streamHealthy = true;
+        // Replace a provisional fallback poll after the first healthy signal.
+        // Heartbeats must not postpone the periodic safety read indefinitely.
+        if (becameHealthy && !running && timerIsPoll) wake(30_000, true);
         if (event.type === "revision") { const revision = Number(event.data); if (Number.isInteger(revision) && revision !== snapshot.revision) wake(); }
       };
       stream.addEventListener("revision", signal as EventListener);
@@ -278,8 +306,11 @@ export function createTaskSyncEngine() {
       readController?.abort(); closeStream();
       if (timer !== undefined) clearTimeout(timer);
       if (uploadTimer !== undefined) clearTimeout(uploadTimer);
+      lastLifecycleWake = -Infinity;
       return;
     }
+    if (Date.now() - lastLifecycleWake < 500) return;
+    lastLifecycleWake = Date.now();
     failures = 0; quiet = 0; streamRetryAt = 0;
     wake(); void wakeUploads(); wakeLanes();
   }
@@ -298,9 +329,10 @@ export function createTaskSyncEngine() {
       if (started) return;
       started = true; stopped = false;
       unsubscribe = subscribeOfflineChanges((change, external) => {
-        if (external || change === "uploads" || change === "remote") void reload().catch((error) => emit({ type: "error", message: String(error) }));
+        if (change !== "chat") cacheDirty = true;
+        if ((external || change === "uploads" || change === "remote") && !running && !uploading) void reload().catch((error) => emit({ type: "error", message: String(error) }));
         if (change === "local") { if (reloadRunning) reloadAgain = true; wake(250); }
-        if (change === "uploads") void wakeUploads();
+        if (change === "uploads" || ((change === "remote" || change === "local") && snapshot.uploads > 0)) void wakeUploads();
         if (change === "chat") wakeLanes();
       });
       window.addEventListener("online", lifecycle); window.addEventListener("offline", lifecycle);

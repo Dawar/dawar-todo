@@ -8,6 +8,8 @@ import {
   loadCachedServerState,
 } from "./offline-store";
 
+import { TaskCaptureSession } from "./task-capture";
+import { getPwaLifecycle, inspectWorkerVersion } from "./pwa-lifecycle";
 import { attachmentQueueDiagnostic } from "./attachment-queue";
 
 type SyncDiagnosticValue = string | number | boolean | null;
@@ -121,10 +123,18 @@ function ageMs(value: string, now: number) {
   return Number.isFinite(timestamp) ? Math.max(0, now - timestamp) : null;
 }
 
+function boundedStorage<T>(operation: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  return Promise.race([operation, new Promise<T>((_resolve, reject) => {
+    timer = setTimeout(() => reject(new Error("Offline storage is still waiting. See lifecycle state and keep unsaved input open.")), 2000);
+  })]).finally(() => clearTimeout(timer));
+}
+
 export async function buildSyncDiagnosticsReport(
   source: "settings" | "settings-error",
   extra: SyncDiagnosticDetails = {},
 ) {
+  await inspectWorkerVersion();
   const now = Date.now();
   const cacheKeysPromise = "caches" in window ? caches.keys() : Promise.resolve([] as string[]);
   const registrationPromise = "serviceWorker" in navigator
@@ -147,17 +157,19 @@ export async function buildSyncDiagnosticsReport(
     persistedResult,
     apiProbeResult,
     attachmentsResult,
+    captureResult,
   ] = await Promise.allSettled([
-    listOfflineTodos(),
-    listOfflineTodoMutations(),
-    listOfflineTaskActions(),
-    loadCachedServerState<unknown>(),
+    boundedStorage(listOfflineTodos()),
+    boundedStorage(listOfflineTodoMutations()),
+    boundedStorage(listOfflineTaskActions()),
+    boundedStorage(loadCachedServerState<unknown>()),
     cacheKeysPromise,
     registrationPromise,
     estimatePromise,
     persistedPromise,
     probeSettingsApi(),
-    listQueuedAttachments(),
+    boundedStorage(listQueuedAttachments()),
+    boundedStorage(new TaskCaptureSession().load()),
   ]);
 
   const pendingTodos = settledValue(pendingTodosResult, []);
@@ -172,6 +184,7 @@ export async function buildSyncDiagnosticsReport(
   const controller = "serviceWorker" in navigator ? navigator.serviceWorker.controller : null;
   const storageErrors = {
     attachments: settledError(attachmentsResult),
+    capture: settledError(captureResult),
     pendingCreates: settledError(pendingTodosResult),
     pendingEdits: settledError(pendingMutationsResult),
     pendingActions: settledError(pendingActionsResult),
@@ -184,8 +197,9 @@ export async function buildSyncDiagnosticsReport(
 
   const report = {
     report: "Dawar Todo privacy-safe sync diagnostics",
-    schemaVersion: 2,
+    schemaVersion: 3,
     generatedAt: new Date(now).toISOString(),
+    lifecycle: getPwaLifecycle(),
     source,
     privacy: "Task text, notes, task IDs, operation IDs, attachment names, API tokens, credentials, and device IDs are omitted.",
     page: {
@@ -231,6 +245,12 @@ export async function buildSyncDiagnosticsReport(
       quotaBytes: estimate.quota ?? null,
       errors: Object.fromEntries(Object.entries(storageErrors).filter(([, value]) => value !== null)),
     },
+    capture: captureResult.status === "fulfilled" ? {
+      hasText: Boolean(captureResult.value.draft?.text),
+      attachmentCount: captureResult.value.attachments.length,
+      attachmentBytes: captureResult.value.attachments.reduce((sum, item) => sum + (item.blob?.size ?? 0), 0),
+      missingBytes: captureResult.value.attachments.filter((item) => !item.blob || !item.blob.size).length,
+    } : null,
     queue: {
       counts: {
         creates: pendingTodos.length,
@@ -245,12 +265,14 @@ export async function buildSyncDiagnosticsReport(
           && (action.body.action === "merge" || (!action.undoRequested && action.optimisticDeletedIds?.includes(row.todoId)))),
       })),
       creates: pendingTodos.map((todo) => ({
+        rejected: todo.rejected ?? null,
         ageMs: ageMs(todo.createdAt, now),
         attachmentCount: todo.attachments.length,
         uploadedAttachmentCount: todo.attachments.filter((attachment) => Boolean(attachment.remoteAttachmentId)).length,
         attachmentBytes: todo.attachments.reduce((total, attachment) => total + (attachment.blob?.size ?? 0), 0),
       })),
       edits: pendingMutations.map((mutation) => ({
+        rejected: mutation.rejected ?? null,
         ageMs: ageMs(mutation.createdAt, now),
         fields: Object.keys(mutation.patch).sort(),
       })),
