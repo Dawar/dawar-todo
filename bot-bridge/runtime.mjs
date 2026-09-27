@@ -502,7 +502,12 @@ export class BotRuntime extends EventEmitter {
         const uncertain = attempt
           ? attempt.started && !attempt.rejected
           : /timed out|disconnected|acknowledg/i.test(e.message) && !e.definite;
-        const outcome = attempt ? (uncertain ? "uncertain" : "rejected") : "uncertain";
+        // Settings-only updates have no side effect before validation/native
+        // settings acknowledgement. An explicit native rejection is definite;
+        // transport loss or a later storage fault still needs reconciliation.
+        const settingsRejected = method === "bots.update" && params.name === undefined && e.definite === true;
+        const outcome = attempt ? (uncertain ? "uncertain" : "rejected") :
+          settingsRejected ? "rejected" : "uncertain";
         this.store.saveOperation(
           operationId,
           fingerprint,
@@ -1040,22 +1045,22 @@ export class BotRuntime extends EventEmitter {
     const catalog = this.models.find(
       (m) => m.model === (model ?? this.defaults.model),
     );
-    if (!catalog) throw new Error("That model is not available.");
+    if (!catalog) throw Object.assign(new Error("That model is not available."), { definite: true });
     if (
       effort &&
       !catalog.supportedReasoningEfforts.some(
         (e) => e.reasoningEffort === effort,
       )
     )
-      throw new Error("That reasoning effort is not available for this model.");
+      throw Object.assign(new Error("That reasoning effort is not available for this model."), { definite: true });
     const effectiveTier = serviceTier ?? this.defaults.serviceTier;
     if (
       effectiveTier !== "default" &&
       !catalog.serviceTiers?.some((tier) => tier.id === effectiveTier)
     )
-      throw new Error("That speed is not available for this model.");
+      throw Object.assign(new Error("That speed is not available for this model."), { definite: true });
     if (p.mode !== undefined && !["default", "plan"].includes(p.mode))
-      throw new Error("Invalid collaboration mode.");
+      throw Object.assign(new Error("Invalid collaboration mode."), { definite: true });
     if (name !== bot.name) {
       await this.codex.call("thread/name/set", {
         threadId: bot.threadId,
