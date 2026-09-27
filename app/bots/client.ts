@@ -37,6 +37,26 @@ function validComposerResult(method: string, result: Record<string, unknown> | u
   if (method === "queue.update") return Boolean(result && identified(result.queuedSubmission));
   return true;
 }
+function snapshotEventKey(event: BotEvent) {
+  if (event.type === "bot") return `bot:${(event.data as BotSnapshot["bots"][number]).id}`;
+  if (event.type === "request" || event.type === "request.resolved")
+    return `request:${(event.data as { key: string }).key}`;
+  return null;
+}
+function applySnapshotEvent(snapshot: BotSnapshot, event: BotEvent): BotSnapshot {
+  if (event.type === "bot") {
+    const bot = event.data as BotSnapshot["bots"][number];
+    return { ...snapshot, bots: [...snapshot.bots.filter(item => item.id !== bot.id), bot]
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)) };
+  }
+  if (event.type === "request") {
+    const request = event.data as BotSnapshot["pending"][number];
+    return { ...snapshot, pending: [...snapshot.pending.filter(item => item.key !== request.key), request] };
+  }
+  if (event.type === "request.resolved")
+    return { ...snapshot, pending: snapshot.pending.filter(item => item.key !== (event.data as { key: string }).key) };
+  return snapshot;
+}
 export class BotsClient {
   socket: WebSocket | null = null;
   snapshot: BotSnapshot | null = null;
@@ -70,6 +90,12 @@ export class BotsClient {
   }
   private histories = new Map<string, unknown>();
   private connectionEpoch = 0;
+  // A cache or an isolated event is not proof that all earlier events arrived.
+  // Only a full server snapshot advances this watermark. Keep the latest patch
+  // per entity so a full snapshot can heal gaps without undoing newer events.
+  private fullSnapshotCursor = -1;
+  private latestSnapshotEvent = 0;
+  private snapshotPatches = new Map<string, BotEvent>();
   private authChannel?: BroadcastChannel;
   private authListeners = false;
   cacheKey(key: string) {
@@ -120,6 +146,9 @@ export class BotsClient {
     }
     this.pending.clear();
     this.snapshot = null;
+    this.fullSnapshotCursor = -1;
+    this.latestSnapshotEvent = 0;
+    this.snapshotPatches.clear();
     this.histories.clear();
     this.owner = "";
   }
@@ -379,37 +408,15 @@ export class BotsClient {
     }
     if (message.type === "event") {
       const event = message.event as BotEvent;
-      // A snapshot response may include this event already. Replaying an older
-      // event must not roll the visible bot settings or cursor backwards.
-      if (this.snapshot && event.seq > this.snapshot.cursor) {
-        if (event.type === "bot") {
-          const bot = event.data as BotSnapshot["bots"][number];
-          this.snapshot = {
-            ...this.snapshot,
-            bots: [
-              ...this.snapshot.bots.filter((b) => b.id !== bot.id),
-              bot,
-            ].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
-          };
-        }
-        if (event.type === "request")
-          this.snapshot = {
-            ...this.snapshot,
-            pending: [
-              ...this.snapshot.pending.filter(
-                (p) => p.key !== (event.data as { key: string }).key,
-              ),
-              event.data as BotSnapshot["pending"][number],
-            ],
-          };
-        if (event.type === "request.resolved")
-          this.snapshot = {
-            ...this.snapshot,
-            pending: this.snapshot.pending.filter(
-              (p) => p.key !== (event.data as { key: string }).key,
-            ),
-          };
-        this.snapshot = { ...this.snapshot, cursor: event.seq };
+      this.latestSnapshotEvent = Math.max(this.latestSnapshotEvent, event.seq);
+      const key = snapshotEventKey(event);
+      if (key && event.seq > this.fullSnapshotCursor &&
+          event.seq > (this.snapshotPatches.get(key)?.seq ?? -1)) {
+        this.snapshotPatches.set(key, event);
+        if (this.snapshot) this.snapshot = applySnapshotEvent(this.snapshot, event);
+      }
+      if (this.snapshot) {
+        this.snapshot = { ...this.snapshot, cursor: Math.max(this.snapshot.cursor, event.seq) };
         // Pending requests may contain secrets; only cache the visible bot list.
         this.snapshotTimer ??= setTimeout(() => this.flushSnapshot(), 1000);
       }
@@ -468,9 +475,15 @@ export class BotsClient {
     const snapshot = await this.rpc<BotSnapshot>("snapshot");
     if (this.owner !== owner || this.connectionEpoch !== epoch)
       throw new BotRpcError("The signed-in owner changed.", "not-sent");
-    if (this.snapshot && snapshot.cursor < this.snapshot.cursor)
+    if (this.snapshot && snapshot.cursor < this.fullSnapshotCursor)
       return this.snapshot;
-    this.snapshot = snapshot;
+    this.fullSnapshotCursor = snapshot.cursor;
+    let merged = snapshot;
+    for (const [key, event] of [...this.snapshotPatches].sort((a, b) => a[1].seq - b[1].seq)) {
+      if (event.seq <= snapshot.cursor) this.snapshotPatches.delete(key);
+      else merged = applySnapshotEvent(merged, event);
+    }
+    this.snapshot = { ...merged, cursor: Math.max(snapshot.cursor, this.latestSnapshotEvent) };
     this.online = snapshot.ready;
     if (this.online)
       void this.rpc(
@@ -479,9 +492,9 @@ export class BotsClient {
         { timeZone: this.timeZone },
         `timezone:${this.timeZone}:${new Date().toISOString().slice(0, 13)}`,
       ).catch(() => {});
-    this.save("snapshot", { ...snapshot, pending: [] });
+    this.save("snapshot", { ...this.snapshot, pending: [] });
     this.notify();
-    return snapshot;
+    return this.snapshot;
   }
   rpc<T = unknown>(
     method: keyof BotOperations,

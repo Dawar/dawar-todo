@@ -1,5 +1,7 @@
 # Bot Plan/Fast responsiveness, v140 follow-up
 
+**Review correction:** this records the initial `319bba0` implementation. Its storage preflight, whole-Bot confirmation and value-based Check recovery were subsequently rejected by independent review. The corrected behavior and reproducible evidence are in [BOT_TOGGLE_REVIEW_V141.md](BOT_TOGGLE_REVIEW_V141.md); the earlier recovery/persistence claims below are superseded.
+
 Base: `af1837204eacf8930462c0c9e7ecd3305a3b9f6d` (released v140), isolated branch `codex/bot-typing-recent-3d829950`. The branch was clean before syncing; its previous two commits were already present on main as reviewed cherry-picks. No real bot settings or messages were changed.
 
 ## Cause, evidence, and fix

@@ -27,7 +27,7 @@ export function ComposerSettings({ bot, snapshot, online }: { bot: Bot; snapshot
   const pending = state.pending;
   const queued = Boolean(pending && Object.entries(state.intent).some(([field, value]) =>
     pending.values[field as keyof Values] !== value));
-  const status = pending?.phase === "saving" ? "Saving" : "Checking";
+  const status = pending?.phase === "saving" ? "Saving" : pending?.phase === "storage" ? "Paused" : "Unconfirmed";
   return <div className="bots-settings-wrap">
     <div className="bots-settings" aria-label="Settings for this bot" aria-busy={pending?.phase === "saving"}>
       <div className="bots-settings-selects">
@@ -70,9 +70,12 @@ export function ComposerSettings({ bot, snapshot, online }: { bot: Bot; snapshot
       {activeTurn && <span className="bots-settings-scope">Future turns</span>}
     </div>
     {activeTurn && <span className="bots-settings-context">New turns after saving · This run keeps its settings.</span>}
-    {state.error && <div className="bots-settings-error" role="alert"><span>{state.error}</span>{pending?.phase === "checking" && <>
-      <button type="button" disabled={!online} onClick={() => void controller.check()}>Check setting</button>
-      <button type="button" disabled={!online} onClick={() => controller.retry()}>Try again</button>
-    </>}</div>}
+    {(state.error || state.storageError || pending?.phase === "storage") && <div className="bots-settings-error" role="alert">
+      <span>{state.storageError || state.error || "Saving is paused. Retry storage to continue with the same saved change."}</span>
+      {(state.storageError || pending?.phase === "storage") &&
+        <button type="button" disabled={!online} onClick={() => controller.retryStorage()}>Retry storage</button>}
+      {pending?.phase === "checking" &&
+        <button type="button" disabled={!online || Boolean(state.storageError)} onClick={() => controller.retry()}>Retry saved change</button>}
+    </div>}
   </div>;
 }
