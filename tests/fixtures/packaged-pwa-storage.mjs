@@ -35,10 +35,19 @@ window.packagedSmoke = {
     const task = await offline.getOfflineTodoByLocalId(taskId);
     const record = await store.get(owner, botId);
     const bytes = await store.file(owner, botId, 'packaged-pwa-bot-png');
-    const draft = await offline.loadOfflineCaptureDraft();
+    const database = await offline.openDatabase();
+    const capture = await new Promise((resolve, reject) => {
+      const tx = database.transaction('capture-draft', 'readonly');
+      const request = tx.objectStore('capture-draft').get('task-capture-v1');
+      tx.oncomplete = () => resolve(request.result);
+      tx.onabort = tx.onerror = () => reject(tx.error);
+    });
+    const draft = capture ? capture.draft : await offline.loadOfflineCaptureDraft();
     return { taskPresent: task?.title === taskTitle, taskFileHash: task?.attachments[0]?.blob && await hash(task.attachments[0].blob),
       botText: record?.slots.normal.text, botFileHash: bytes && await hash(bytes), operations: Object.keys(record?.operations ?? {}).length,
-      quickText: draft?.text, captureKeys: draft ? Object.keys(draft) : [], localTaskCount: (await offline.listOfflineTodos()).length };
+      quickText: draft?.text, captureKeys: draft ? Object.keys(draft) : [], captureUsesDurableRecord: Boolean(capture),
+      captureFileHashes: await Promise.all((capture?.attachments ?? []).map((file) => hash(file.blob))),
+      localTaskCount: (await offline.listOfflineTodos()).length };
   },
   async captureImage() {
     const image = document.querySelector('[aria-label="Attachments to add"] img');

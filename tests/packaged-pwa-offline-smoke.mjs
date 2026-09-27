@@ -235,6 +235,10 @@ try {
   await page.evaluate('packagedSmoke.stageCaptureImage()');
   await until(() => page.evaluate('packagedSmoke.captureImage().then((i) => i?.decoded)'), 'synthetic Quick Add file staged through UI');
   assert.equal((await page.evaluate('packagedSmoke.captureImage()')).hash, expected.pngHash);
+  if ((await page.evaluate('packagedSmoke.stored()')).captureUsesDurableRecord) {
+    await until(() => page.evaluate(`packagedSmoke.stored().then((s) => s.captureFileHashes.includes(${JSON.stringify(expected.pngHash)}))`), 'Quick Add original bytes committed before leaving');
+    report.checks.captureBytesCommitted = true;
+  }
   await page.evaluate('[...document.querySelectorAll(\'a[aria-label="Bots"]\')].find((e) => e.getClientRects().length).click()');
   await until(() => page.evaluate('!!document.querySelector(".bots-row-title")'), 'offline shell route to Bots');
   await page.evaluate('[...document.querySelectorAll(".bots-row")].find((e) => e.textContent.includes("Packaged PWA Smoke Bot")).click()');
@@ -261,6 +265,16 @@ try {
   page = await startBrowser(); // Same fresh profile, all network already blocked.
   await navigate(page, '/', taskSelector);
   report.checks.taskBrowserRestart = await checkTask(page, expected);
+  const restartedCapture = await page.evaluate('packagedSmoke.stored()');
+  const restartedCaptureImage = await page.evaluate('packagedSmoke.captureImage()');
+  report.checks.captureFileAfterBrowserRestart = {
+    exactStoredBytes: restartedCapture.captureFileHashes.includes(expected.pngHash),
+    decodedPreview: restartedCaptureImage?.decoded === true && restartedCaptureImage.hash === expected.pngHash,
+    required: requireCaptureFiles,
+  };
+  if (requireCaptureFiles && (!report.checks.captureFileAfterBrowserRestart.exactStoredBytes || !report.checks.captureFileAfterBrowserRestart.decodedPreview)) {
+    report.findings.push('Quick Add original attachment bytes or preview missing after offline browser restart');
+  }
   await typeText(page, taskSelector, ' — edited after restart');
   await until(() => page.evaluate('packagedSmoke.stored().then((s) => s.quickText === packagedSmoke.quickText + " — edited after restart")'), 'Quick Add remains editable after offline restart');
   report.checks.quickAddEditableAfterRestart = true;
