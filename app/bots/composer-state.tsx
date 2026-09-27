@@ -1,5 +1,5 @@
 /* eslint-disable @next/next/no-img-element -- Staged local bytes use browser object URLs. */
-import { useLayoutEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Paperclip, X } from "lucide-react";
 import type { BotComposer } from "./composer-controller";
 import { botComposers } from "./composer-service";
@@ -31,18 +31,27 @@ export function ComposerAttachments({ composer }: { composer: BotComposer }) {
   </div>;
 }
 export function ComposerStatus({ composer, error }: { composer: BotComposer | null; error: string }) {
+  const [slowSave, setSlowSave] = useState(false);
+  const saving = Boolean(composer?.ready && composer.dirty);
+  useEffect(() => {
+    const timer = setTimeout(() => setSlowSave(saving), saving ? 2000 : 0);
+    return () => clearTimeout(timer);
+  }, [saving, composer]);
   const storageError = error || composer?.storageError || botComposers.error;
   const operation = composer?.operation;
   const uploadErrors = composer?.draft.files.filter((f) => f.error) ?? [];
   const missingCopies = composer?.draft.files.some((f) => !f.hasBytes);
   const otherFailures = botComposers.unsavedElsewhere.filter((c) => c !== composer);
-  const needsAttention = Boolean(storageError || otherFailures.length || composer?.actionError || uploadErrors.length || missingCopies || operation || composer?.recoveries.length);
-  const status = storageError ? "Draft not saved · Review recovery" : !composer?.ready ? "Recovering draft…" : composer.saved ? "Draft saved on this device" : "Saving draft… Keep this tab open.";
+  const needsAttention = Boolean(storageError || otherFailures.length || composer?.actionError || uploadErrors.length || missingCopies || operation && !composer?.sendingNow || composer?.recoveries.length);
+  // Routine durable writes stay immediate. Only actionable recovery occupies a
+  // status row; it must not appear/disappear for every keystroke or empty draft.
+  if (!needsAttention) return slowSave && saving ? <div className="bots-slow-save" role="status">Saving your draft… Keep this tab open for a moment.</div> : null;
+  const status = storageError ? "This draft needs saving" : uploadErrors.length ? `${uploadErrors.length} ${uploadErrors.length === 1 ? "attachment needs" : "attachments need"} attention` : operation ? "Confirm your last message" : "Draft recovery";
   return <div className="bots-draft-status" aria-live="polite"><details className="bots-recovery-details" open={needsAttention}>
-    <summary>{status}{needsAttention && <strong> · {uploadErrors.length ? `${uploadErrors.length} upload(s) need attention` : "Review status"}</strong>}</summary>
+    <summary>{status}</summary>
     <div className="bots-recovery-content">
     {storageError ? <div role="alert">{storageError} <button type="button" onClick={() => { void composer?.retry(); void botComposers.recoverOwner(); }}>Retry saving / recovery</button></div>
-      : <span>{!composer?.ready ? "Recovering draft…" : composer.saved ? "Draft saved on this device" : "Saving draft… Keep this tab open."}</span>}
+      : null}
     {otherFailures.length > 0 && <div role="alert">{otherFailures.length} other bot draft(s) could not save. Keep this tab open. <button type="button" onClick={() => otherFailures.forEach((c) => { void c.retry(); })}>Retry saving all</button></div>}
     {composer?.actionError && <div role="alert">{composer.actionError}</div>}
     {uploadErrors.length > 0 && <div role="alert">{uploadErrors.map((f) => `${f.name}: ${f.error}`).join(" · ")} Your staged files are retained. <button type="button" onClick={() => void composer?.retry()}>Retry uploads</button> <button type="button" onClick={() => void composer?.restartFailedUploads()}>Restart failed transfers</button></div>}

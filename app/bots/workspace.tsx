@@ -55,8 +55,10 @@ import { RunHistory } from "./run-history";
 import { UsagePanel } from "./usage-panel";
 import { useBotComposer } from "./use-composer";
 import { ComposerAttachments, ComposerStatus } from "./composer-state";
+import { ComposerInput } from "./composer-input";
 import { UploadThumbnail } from "./upload-thumbnail";
 import "./bots.css";
+import "./chat-design.css";
 
 const EMPTY_BOTS: Bot[] = [];
 const EMPTY_QUEUE: BotQueuedSubmission[] = [];
@@ -81,7 +83,7 @@ function Avatar({ bot, small = false }: { bot: Bot; small?: boolean }) {
   );
 }
 function humanStatus(bot: Bot, online: boolean) {
-  if (!online) return "VM offline";
+  if (!online) return "Offline";
   if (bot.archived) return "Archived";
   if (!bot.activeTurnId && bot.workerTasks?.active)
     return `${bot.workerTasks.active} worker task${bot.workerTasks.active === 1 ? "" : "s"} in progress`;
@@ -476,10 +478,10 @@ export function BotsWorkspace() {
             <span className={`bots-status-dot ${online ? "online" : ""}`} />
             <span>
               {online
-                ? "Your VM is connected"
+                ? "Connected"
                 : client.error
                   ? client.error
-                  : "Connecting to your VM…"}
+                  : "Connecting…"}
             </span>
             <button
               className="bots-icon-button"
@@ -765,23 +767,15 @@ export function BotsWorkspace() {
                     >
                       <Paperclip size={20} />
                     </button>
-                    <textarea
+                    <ComposerInput
+                      key={scope}
                       aria-label={`Message ${bot.name}`}
-                      placeholder={
-                        online
-                          ? `Message ${bot.name}…`
-                          : "Write a draft while your VM reconnects…"
-                      }
+                      placeholder={online ? "Message…" : "Write a draft…"}
                       value={draft}
                       disabled={!composer?.ready}
                       rows={1}
                       onPaste={pasteImages}
-                      onChange={(e) => {
-                        setDraft(e.target.value);
-                        e.target.style.height = "auto";
-                        e.target.style.height =
-                          Math.min(e.target.scrollHeight, 180) + "px";
-                      }}
+                      onChange={(e) => setDraft(e.target.value)}
                       onKeyDown={(e) => {
                         if (
                           e.key === "Enter" &&

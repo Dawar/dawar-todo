@@ -1,0 +1,77 @@
+/* Shared chat rhythm: quiet surfaces, readable text, deliberate controls. */
+.bots-screen { --chat-width: 860px; --chat-green: #216e4e; }
+.bots-conversation-heading { min-height: 64px; height: auto; padding-block: 10px; }
+.bots-header-title { min-width: 0; }
+.bots-header-title strong { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; line-height: 1.35; }
+.bots-header-title small { margin-top: 2px; }
+.bots-icon-button { min-width: 40px; height: 40px; border-radius: 12px; }
+.bots-screen button, .bots-screen a, .bots-screen summary { -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+.bots-screen :is(button, a, summary, select, input):focus-visible { outline: 2px solid #388661; outline-offset: 3px; }
+.bots-timeline { flex: 1; min-height: 0; position: relative; display: flex; }
+.bots-messages { padding: 24px max(24px, calc((100% - var(--chat-width)) / 2)); overflow-anchor: none; }
+.bots-message { margin-block: 22px; }
+.bots-message-markdown { line-height: 1.7; }
+.bots-bubble { border-radius: 20px 20px 6px 20px; }
+.bots-jump-latest { position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%); display: inline-flex; align-items: center; gap: 7px; min-height: 40px; padding: 8px 14px; margin: 0; white-space: nowrap; border: 1px solid #dce5df; border-radius: 24px; background: #fff; color: #305442; box-shadow: 0 3px 16px #1c3a2520; font-size: 12px; font-weight: 600; z-index: 3; }
+.bots-jump-latest:hover { background: #f3f8f4; }
+.bots-activity { border: 1px solid #e7ece8; border-radius: 12px; background: #f8faf8; margin-block: 14px; }
+.bots-activity > summary { min-height: 44px; padding: 10px 13px; color: #53695c; font-weight: 500; }
+.bots-activity > summary > small:last-child { margin-left: auto; color: #728078; }
+.bots-disclosure-chevron { flex: 0 0 auto; transition: transform .16s ease; }
+details[open] > summary > .bots-disclosure-chevron { transform: rotate(90deg); }
+.bots-tool > summary, .bots-turn.is-scheduled > summary { display: flex; gap: 8px; align-items: center; list-style: none; }
+.bots-tool > summary::-webkit-details-marker, .bots-turn.is-scheduled > summary::-webkit-details-marker { display: none; }
+.bots-activity[open] > div { padding-inline: 12px; }
+.bots-composer-support { flex-shrink: 1; padding-top: 2px; }
+.bots-controls { width: min(calc(100% - 40px), var(--chat-width)); gap: 4px; padding-top: 6px; scrollbar-width: none; }
+.bots-controls::-webkit-scrollbar { display: none; }
+.bots-controls :is(select, button) { min-height: 36px; font-size: 12px; color: #617269; padding: 6px 8px; background: transparent; border-radius: 9px; }
+.bots-controls select { flex-shrink: 1; min-width: 62px; }
+.bots-controls button { flex-shrink: 0; }
+.bots-controls :is(select, button):hover { background: #f0f5f1; }
+.bots-controls .active { background: #edf5ef; color: #216e4e; }
+.bots-composer { box-sizing: border-box; width: min(calc(100% - 32px), var(--chat-width)); margin: 5px auto max(14px, var(--bots-safe-bottom)); padding: 7px; gap: 5px; border-radius: 22px; border: 1px solid #d6e1d9; background: #fafcfb; box-shadow: 0 2px 6px #213e2b05; transition: border-color .15s, box-shadow .15s; }
+.bots-composer:focus-within { border-color: #8ab49a; box-shadow: 0 0 0 3px #2370490a; }
+.bots-composer textarea { box-sizing: border-box; height: 40px; min-height: 40px; max-height: 180px; padding: 8px 3px; line-height: 24px; font-size: 16px; border: 0; outline: none !important; overflow-y: auto; }
+.bots-composer textarea::placeholder { color: #8b9790; }
+.bots-composer .bots-icon-button, .bots-send { height: 40px; width: 40px; min-width: 40px; }
+.bots-send { transition: background .15s, transform .15s; }
+.bots-send:not(:disabled):hover { background: #195d40; }
+.bots-send:not(:disabled):active { transform: scale(.95); }
+.bots-queue-icon { background: transparent; }
+.bots-draft-status { width: min(calc(100% - 32px), var(--chat-width)); margin: 6px auto; padding: 0; border-radius: 12px; border: 1px solid #eadfd0; background: #fffcf7; color: #735d40; font-size: 12px; line-height: 1.5; }
+.bots-recovery-details > summary { min-height: 40px; padding: 10px 12px; font-weight: 600; }
+.bots-recovery-content { padding: 0 12px 12px; }
+.bots-recovery-content button { min-height: 36px; }
+.bots-upload-list { width: min(calc(100% - 32px), var(--chat-width)); }
+.bots-detail-status { color: #7b877f; }
+.bots-detail-status small { font-size: 11px; }
+.bots-detail-status button { background: #f1f6f2; color: #38684a; min-height: 36px; }
+.bots-working { margin-top: 16px; }
+.bots-slow-save { width: min(calc(100% - 32px), var(--chat-width)); margin: 5px auto; font-size: 12px; color: #776343; }
+.bots-start-icon { display: inline-grid; place-items: center; width: 58px; height: 58px; margin-bottom: 6px; color: #518169; border-radius: 20px; background: #f0f6f1; }
+.bots-history-skeleton { display: flex; flex-direction: column; gap: 13px; padding-block: 24px; }
+.bots-history-skeleton span { width: 88%; height: 12px; border-radius: 8px; background: #eff3f0; }
+.bots-history-skeleton span:first-child { margin: 0 0 26px auto; width: 56%; height: 44px; background: #eaf2ec; border-radius: 18px 18px 4px 18px; }
+.bots-history-skeleton span:last-child { width: 54%; }
+.bots-history-error { display: flex; align-items: flex-start; gap: 13px; padding: 18px; margin-top: 20px; border: 1px solid #e7e5dc; background: #fbfaf7; border-radius: 16px; color: #6c6657; font-size: 14px; }
+.bots-history-error svg { flex-shrink: 0; }
+.bots-history-error p { margin: 5px 0 12px; overflow-wrap: anywhere; }
+.bots-history-error button { min-height: 40px; padding: 8px 12px; border: 1px solid #d7ded5; border-radius: 9px; color: #346649; background: #fff; }
+.bots-keyboard-open .bots-conversation-heading { min-height: 52px; height: auto; padding: 6px 12px; }
+.bots-keyboard-open .bots-header-title strong { -webkit-line-clamp: 1; }
+.bots-keyboard-open .bots-composer { padding: 5px; }
+.bots-keyboard-open .bots-composer textarea { min-height: 40px; }
+.bots-keyboard-open .bots-controls :is(select, button) { min-height: 32px; }
+@media (max-width: 700px) {
+  .bots-messages { padding: 18px 16px; }
+  .bots-conversation-heading { padding-inline: 12px; gap: 9px; }
+  .bots-controls { width: calc(100% - 26px); }
+  .bots-controls select { max-width: 140px; padding-inline: 5px; }
+  .bots-composer, .bots-draft-status, .bots-upload-list { width: calc(100% - 24px); }
+  .bots-message-markdown { font-size: 15px; line-height: 1.65; }
+  .bots-jump-latest { bottom: 10px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .bots-disclosure-chevron, .bots-composer, .bots-send { transition: none; }
+}

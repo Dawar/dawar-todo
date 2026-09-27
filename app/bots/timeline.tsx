@@ -6,6 +6,7 @@ import type { BotTimeline } from "./timeline-controller";
 import { useBotTimeline } from "./use-timeline";
 import { botsClient } from "./client";
 import { BotMessage } from "./message";
+import { ArrowDown, MessageCircle, CloudOff } from "lucide-react";
 import { LazyDetails } from "./lazy-details";
 
 const PAGE = 40;
@@ -56,10 +57,18 @@ export const TimelineEntry = memo(function TimelineEntry(props: Parameters<typeo
 export function BotConversation({ owner, bot, online, children }: { owner: string; bot: Bot; online: boolean; children?: ReactNode }) {
   const { timeline, state } = useBotTimeline(owner, bot.id, online);
   const scroll = useRef<HTMLDivElement>(null), content = useRef<HTMLDivElement>(null);
-  const restored = useRef(false), following = useRef(true), saved = useRef(state.position);
+  const restored = useRef(false), following = useRef(true), saved = useRef(state.position), hasNewer = useRef(false);
+  const geometry = useRef(""), userScroll = useRef(false);
+  const [showJump, setShowJump] = useState(false);
   const [downloadError, setDownloadError] = useState("");
   const [end, setEnd] = useState<number | null>(null), [paging, setPaging] = useState(false);
   const last = end === null ? state.entries.length : Math.min(end, state.entries.length), first = Math.max(0, last - PAGE);
+  useLayoutEffect(() => { hasNewer.current = last < state.entries.length; }, [last, state.entries.length]);
+  const updateJump = useCallback(() => {
+    const element = scroll.current; if (!element) return;
+    const distance = element.scrollHeight - element.clientHeight - element.scrollTop;
+    setShowJump((visible) => hasNewer.current || (distance > 2 && (distance > 120 || visible)));
+  }, []);
   const groups = useMemo(() => {
     const result: { kind: string; entries: HistoryEntry[] }[] = [];
     for (const entry of state.entries.slice(first, last)) {
@@ -79,21 +88,30 @@ export function BotConversation({ owner, bot, online, children }: { owner: strin
   }, [bot.id]);
   const capture = useCallback(() => {
     const element = scroll.current; if (!element) return;
+    const size = `${element.clientHeight}:${element.scrollHeight}`;
+    // A resized composer/image can fire scroll before ResizeObserver. That is
+    // not a user leaving the bottom: preserve follow-latest through the resize.
+    if (following.current && geometry.current !== size && !userScroll.current) {
+      geometry.current = size; element.scrollTop = element.scrollHeight; updateJump(); return;
+    }
+    geometry.current = size; userScroll.current = false;
     following.current = end === null && element.scrollHeight - element.scrollTop - element.clientHeight < 100;
     const top = element.getBoundingClientRect().top;
     const anchor = [...element.querySelectorAll<HTMLElement>("[data-history-key]")].find((e) => e.getBoundingClientRect().bottom >= top);
     saved.current = { anchor: anchor?.dataset.historyKey ?? null, offset: anchor ? anchor.getBoundingClientRect().top - top : 0, following: following.current };
-    timeline.position(saved.current);
-  }, [timeline, end]);
+    timeline.position(saved.current); updateJump();
+  }, [timeline, end, updateJump]);
   const restore = useCallback(() => {
     const element = scroll.current; if (!element) return;
+    geometry.current = `${element.clientHeight}:${element.scrollHeight}`;
     element.scrollLeft = 0;
     if (following.current) element.scrollTop = element.scrollHeight;
     else {
       const anchor = [...element.querySelectorAll<HTMLElement>("[data-history-key]")].find((e) => e.dataset.historyKey === saved.current.anchor);
       if (anchor) element.scrollTop += anchor.getBoundingClientRect().top - element.getBoundingClientRect().top - saved.current.offset;
     }
-  }, []);
+    updateJump();
+  }, [updateJump]);
   useLayoutEffect(() => {
     if (!state.entries.length) return;
     if (!restored.current) {
@@ -105,7 +123,7 @@ export function BotConversation({ owner, bot, online, children }: { owner: strin
   }, [state.entries, state.position, first, restore]);
   useLayoutEffect(() => {
     // Late images and opened details retain the reading anchor or follow latest.
-    const observer = new ResizeObserver(restore); if (content.current) observer.observe(content.current);
+    const observer = new ResizeObserver(restore); if (content.current) observer.observe(content.current); if (scroll.current) observer.observe(scroll.current);
     return () => { observer.disconnect(); };
   }, [restore]);
   async function earlier() {
@@ -121,14 +139,14 @@ export function BotConversation({ owner, bot, online, children }: { owner: strin
       timeline.position(saved.current);
     } finally { setPaging(false); }
   }
-  const latest = () => { following.current = true; saved.current = { anchor: null, offset: 0, following: true }; timeline.position(saved.current); setEnd(null); requestAnimationFrame(restore); };
-  return <><div className="bots-messages" ref={scroll} onScroll={capture}><div ref={content}>
+  const latest = () => { setShowJump(false); following.current = true; saved.current = { anchor: null, offset: 0, following: true }; timeline.position(saved.current); setEnd(null); requestAnimationFrame(restore); };
+  return <div className="bots-timeline"><div className="bots-messages" ref={scroll} onScroll={capture} onWheel={() => { userScroll.current = true; }} onTouchMove={() => { userScroll.current = true; }} onPointerDown={(event) => { if (event.target === event.currentTarget) userScroll.current = true; }}><div ref={content}>
     {(first > 0 || state.olderCursor) && <button className="bots-older" disabled={paging || first === 0 && !online} onClick={() => void earlier()}>Load earlier messages</button>}
     {(first > 0 || last < state.entries.length || state.olderCursor) && <div className="bots-system-note">Showing messages {first + 1}–{last} of {state.entries.length} loaded. Earlier history remains available.</div>}
     {!online && state.cached && <div className="bots-system-note">Saved recent conversation. Deferred details and newer messages need a connection.</div>}
-    {state.error && <div className="bots-error" role="alert">{state.error} <button disabled={!online} onClick={() => void timeline.refresh()}>Retry history</button></div>}
-    {state.loading && !state.entries.length && <div className="bots-system-note">Loading conversation…</div>}
-    {!state.loading && !state.entries.length && <div className="bots-conversation-start"><h2>{bot.name}</h2><p>{bot.purpose || "What would you like to work on?"}</p></div>}
+    {state.error && <div className="bots-history-error" role="alert"><CloudOff size={22} aria-hidden="true" /><div><strong>Let’s try that again</strong><p>{state.error}</p><button disabled={!online} onClick={() => void timeline.refresh()}>Reload conversation</button></div></div>}
+    {state.loading && !state.entries.length && <div className="bots-history-skeleton" role="status" aria-label="Loading conversation"><span /><span /><span /><span /></div>}
+    {!state.loading && !state.error && !state.entries.length && <div className="bots-conversation-start"><span className="bots-start-icon"><MessageCircle size={26} strokeWidth={1.4} aria-hidden="true" /></span><h2>{bot.name}</h2><p>{bot.purpose || "What would you like to work on?"}</p></div>}
     {end === null && !groups.some((group) => group.kind === "message") && state.contextEntries.length > 0 && <section aria-label="Latest readable context">
       <p className="bots-system-note">Latest readable messages. Intervening work remains accessible through earlier history.</p>
       {state.contextEntries.map((entry) => <TimelineEntry key={historyKey(entry.turnId, entry.id)} entry={entry} timeline={timeline} attachments={state.attachments} download={download} />)}
@@ -137,7 +155,7 @@ export function BotConversation({ owner, bot, online, children }: { owner: strin
       const entry = group.entries[0], key = historyKey(entry.turnId, entry.id);
       const body = () => group.entries.map((value) => <TimelineEntry key={historyKey(value.turnId, value.id)} entry={{ ...value, scheduled: false }} timeline={timeline} attachments={state.attachments} download={download} />);
       const summary = group.kind.startsWith("schedule:") ? `Scheduled run · ${entry.status} · ${group.entries.map((e) => e.item?.type === "agentMessage" ? e.item.text : "").filter(Boolean).at(-1)?.slice(0, 110) ?? entry.label}`
-        : `Work log · ${group.entries.length} steps`;
+        : <><span>Work log</span><small>{group.entries.length} {group.entries.length === 1 ? "step" : "steps"}</small></>;
       return <Fragment key={key}>
         {state.gaps.filter((gap) => group.entries.some((entry) => gap.before === historyKey(entry.turnId, entry.id))).map((gap) => <div className="bots-system-note" key={gap.before}>
           Messages between this page and the saved older copy have not loaded. <button disabled={!online || paging} onClick={() => {
@@ -148,25 +166,7 @@ export function BotConversation({ owner, bot, online, children }: { owner: strin
       </Fragment>;
     })}
     {last < state.entries.length && <button className="bots-older" onClick={() => { setEnd(Math.min(state.entries.length, last + PAGE)); saved.current = { anchor: null, offset: 0, following: false }; scroll.current?.scrollTo(0, 0); }}>Newer messages</button>}
-    <LazyDetails summary="Files and artifacts">{() => <ArtifactList botId={bot.id} online={online} download={download} cached={state.attachments} />}</LazyDetails>
     {downloadError && <p className="bots-error" role="alert">{downloadError}</p>}
     {children}
-  </div></div><button className="bots-jump-latest" onClick={latest}>Jump to latest ↓</button></>;
-}
-
-function ArtifactList({ botId, online, download, cached }: { botId: string; online: boolean; download: (id: string) => void; cached: BotAttachment[] }) {
-  const [page, setPage] = useState<BotAttachment[]>(cached.filter((a) => (a as BotAttachment & { artifact?: boolean }).artifact).slice(-20));
-  const [cursor, setCursor] = useState<string | null>(null), [error, setError] = useState("");
-  const owner = botsClient.owner;
-  const load = useCallback(async (cursor: string | null) => {
-    try {
-      const result = await botsClient.rpc<{ attachments: BotAttachment[]; nextCursor: string | null }>("history.attachments", botId, { cursor });
-      if (botsClient.owner === owner) { setPage(result.attachments); setCursor(result.nextCursor); }
-    } catch (e) { setError(String(e)); }
-  }, [botId, owner]);
-  useEffect(() => { let active = true; if (online) queueMicrotask(() => { if (active) void load(null); }); return () => { active = false; }; }, [online, load]);
-  return <>{page.map((file) => <button className="bots-artifact-link" key={file.id} disabled={!online} onClick={() => download(file.id)}>{file.name}</button>)}
-    {!online && <p>Saved references shown. Connect to list and download files.</p>}
-    {cursor && <button disabled={!online} onClick={() => void load(cursor)}>More files</button>}
-    {error && <p role="alert">{error}</p>}</>;
+  </div></div>{showJump && <button className="bots-jump-latest" onClick={latest}><ArrowDown size={16} aria-hidden="true" />Latest messages</button>}</div>;
 }

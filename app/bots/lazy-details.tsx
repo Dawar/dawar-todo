@@ -1,5 +1,6 @@
 "use client";
 import { useState, type ReactNode } from "react";
+import { ChevronRight } from "lucide-react";
 
 /** A closed disclosure does not mount markdown, images, tools, or their effects. */
 export function LazyDetails({ summary, children, className = "bots-tool" }: {
@@ -8,7 +9,7 @@ export function LazyDetails({ summary, children, className = "bots-tool" }: {
   const [open, setOpen] = useState(false);
   return <details className={className} open={open} onToggle={(event) => {
     if (event.target === event.currentTarget) setOpen(event.currentTarget.open);
-  }}><summary>{summary}</summary>{open && children()}</details>;
+  }}><summary><ChevronRight size={15} className="bots-disclosure-chevron" aria-hidden="true" />{summary}</summary>{open && children()}</details>;
 }
 
 export function TextPages({ text, render }: { text: string; render: (text: string) => ReactNode }) {
