@@ -5,13 +5,23 @@ export function hasAttachmentBytes(row: QueuedAttachment) {
   return row.blob instanceof Blob && row.blob.size > 0;
 }
 
+export function attachmentLeaseExpiry(row: QueuedAttachment) {
+  return row.leaseToken && Number.isFinite(row.leaseUntil) ? row.leaseUntil! : 0;
+}
+
 export function attachmentQueueState(row: QueuedAttachment, now = Date.now()) {
-  if ((row.leaseUntil ?? 0) > now) return row.phase ?? "checking";
+  if (attachmentLeaseExpiry(row) > now) return row.phase ?? "checking";
   if (row.state === "blocked" || row.nextAttemptAt === Infinity) return "blocked";
   if (row.cancelled) return "removing";
   if (!hasAttachmentBytes(row) && !row.remoteAttachmentId) return "missing-bytes";
   if (row.phase && row.leaseToken) return "interrupted";
   return row.nextAttemptAt > now ? "retry" : "queued";
+}
+
+export function attachmentQueueCounts(rows: QueuedAttachment[], now = Date.now()) {
+  return rows.reduce<Record<string, number>>((counts, row) => {
+    const state = attachmentQueueState(row, now); counts[state] = (counts[state] ?? 0) + 1; return counts;
+  }, {});
 }
 
 export function attachmentQueueMessage(row: QueuedAttachment, now = Date.now()) {
@@ -42,7 +52,7 @@ export function attachmentQueueDiagnostic(row: QueuedAttachment, now = Date.now(
     lastAttemptAgeMs: row.lastAttemptAt ? Math.max(0, now - row.lastAttemptAt) : null,
     retryInMs: Number.isFinite(row.nextAttemptAt) ? Math.max(0, row.nextAttemptAt - now) : null,
     automaticRetry: state !== "blocked" && state !== "missing-bytes",
-    leaseRemainingMs: Math.max(0, (row.leaseUntil ?? 0) - now),
+    leaseRemainingMs: Math.max(0, attachmentLeaseExpiry(row) - now),
     bytesPresent: hasAttachmentBytes(row), bytes: row.blob instanceof Blob ? row.blob.size : 0,
     remoteIdentityPresent: Boolean(row.remoteAttachmentId), draftIdentityPresent: Boolean(row.draftToken),
     localTarget: row.todoId < 1, cancelled: Boolean(row.cancelled),

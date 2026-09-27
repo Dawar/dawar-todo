@@ -77,3 +77,5 @@ No merge, push, deployment, service restart, cache clearing, production data del
 
 
 The [Tasks/PWA continuation report](pwa-tasks-2026-09-26.md) records the subsequent implementation, DB v11/SW v33 coordination, comparable measurements, browser/fault checks and residual requirements. Its status supersedes the remaining Tasks findings above; bot/chat work remains separately owned.
+
+The actual phone still failed after v136. The [27 September follow-up](phone-attachment-recovery-2026-09-27.md) supersedes any inference that prior synthetic fallback validation established recovery of those five rows; it adds a complete serialized route/native-IDB contract and records the remaining phone evidence gap.
