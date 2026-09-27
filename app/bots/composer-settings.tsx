@@ -21,6 +21,7 @@ export function ComposerSettings({ bot, snapshot, online }: { bot: Bot; snapshot
   const controller = useMemo(() => getComposerSettings(owner, bot.id), [owner, bot.id]);
   const state = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
   useLayoutEffect(() => controller.observe(bot, snapshot, online), [controller, bot, snapshot, online]);
+  useLayoutEffect(() => controller.attach(), [controller]);
   const effective = controller.displayed(bot);
   const { model, active, available } = fastChoice(effective, snapshot);
   const activeTurn = Boolean(bot.activeTurnId);
@@ -70,12 +71,14 @@ export function ComposerSettings({ bot, snapshot, online }: { bot: Bot; snapshot
       {activeTurn && <span className="bots-settings-scope">Future turns</span>}
     </div>
     {activeTurn && <span className="bots-settings-context">New turns after saving · This run keeps its settings.</span>}
-    {(state.error || state.storageError || pending?.phase === "storage") && <div className="bots-settings-error" role="alert">
-      <span>{state.storageError || state.error || "Saving is paused. Retry storage to continue with the same saved change."}</span>
+    {(state.error || state.storageError || state.confirmationError || pending?.phase === "storage") && <div className="bots-settings-error" role="alert">
+      <span>{state.storageError || state.error || state.confirmationError || "Saving is paused. Retry storage to continue with the same saved change."}</span>
       {(state.storageError || pending?.phase === "storage") &&
         <button type="button" disabled={!online} onClick={() => controller.retryStorage()}>Retry storage</button>}
       {pending?.phase === "checking" &&
         <button type="button" disabled={!online || Boolean(state.storageError)} onClick={() => controller.retry()}>Retry saved change</button>}
+      {state.confirmationError && <button type="button" disabled={!online || state.refreshingConfirmation}
+        onClick={() => controller.refreshConfirmed()}>{state.refreshingConfirmation ? "Refreshing…" : "Refresh settings"}</button>}
     </div>}
   </div>;
 }

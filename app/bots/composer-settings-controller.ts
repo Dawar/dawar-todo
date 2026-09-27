@@ -19,12 +19,15 @@ export type SettingsState = {
   confirmed: Confirmed | null;
   error: string;
   storageError: string;
+  confirmationError: string;
+  refreshingConfirmation: boolean;
 };
 
 export const valuesOf = (bot: Bot): Values => ({
   model: bot.model, effort: bot.effort, serviceTier: bot.serviceTier ?? null, mode: bot.mode,
 });
 const fields: Setting[] = ["model", "effort", "serviceTier", "mode"];
+const confirmationRetryDelays = [2000, 5000, 10000];
 const matches = (bot: Bot, values: Partial<Values>) => {
   const stored = valuesOf(bot);
   return fields.every(field => values[field] === undefined || values[field] === stored[field]);
@@ -33,7 +36,8 @@ const matches = (bot: Bot, values: Partial<Values>) => {
 /** Per-owner, per-bot desired state outlives a sidebar switch. Only one native
  * settings update is in flight; later taps coalesce into the next ordered save. */
 export class ComposerSettingsController {
-  private state: SettingsState = { intent: {}, versions: {}, pending: null, confirmed: null, error: "", storageError: "" };
+  private state: SettingsState = { intent: {}, versions: {}, pending: null, confirmed: null, error: "", storageError: "",
+    confirmationError: "", refreshingConfirmation: false };
   private listeners = new Set<() => void>();
   private serial = 0;
   private bot: Bot | null = null;
@@ -41,7 +45,13 @@ export class ComposerSettingsController {
   private online = false;
   private storageKey: string;
   private confirmationRequest: string | null = null;
-  private confirmationAttempt = { operationId: "", at: 0 };
+  private confirmationAttempt = { operationId: "", count: 0 };
+  private confirmationTimer: ReturnType<typeof setTimeout> | null = null;
+  // Standalone controllers become observable via observe(); the component
+  // binds its mounted/Activity/page lifecycle through attach().
+  private present = true;
+  private pageActive = true;
+  private confirmationAvailable = false;
   constructor(readonly owner: string, readonly botId: string) {
     this.storageKey = `dawar-bots:${owner}:settings:${botId}`;
     if (typeof localStorage === "undefined") return;
@@ -66,11 +76,33 @@ export class ComposerSettingsController {
         typeof value === "number" && Number.isSafeInteger(value)));
       this.state = { intent, versions: prior.versions ?? {}, pending, confirmed,
         error: pending ? "A previous save is unconfirmed. Retry the saved change to reconcile it before saving your latest choice." : "",
-        storageError: "" };
+        storageError: "", confirmationError: "", refreshingConfirmation: false };
     } catch { /* An invalid cache cannot prevent opening this bot. */ }
   }
   getSnapshot = () => this.state;
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
+  attach() {
+    this.present = true;
+    this.pageActive = true;
+    const update = () => this.updateConfirmationAvailability();
+    const hide = () => { this.pageActive = false; update(); };
+    const show = () => { this.pageActive = true; update(); };
+    document.addEventListener("visibilitychange", update);
+    window.addEventListener("pagehide", hide);
+    window.addEventListener("pageshow", show);
+    window.addEventListener("online", update);
+    window.addEventListener("offline", update);
+    update();
+    return () => {
+      this.present = false;
+      this.updateConfirmationAvailability();
+      document.removeEventListener("visibilitychange", update);
+      window.removeEventListener("pagehide", hide);
+      window.removeEventListener("pageshow", show);
+      window.removeEventListener("online", update);
+      window.removeEventListener("offline", update);
+    };
+  }
   private setLocal(state: SettingsState) {
     this.state = state;
     for (const listener of this.listeners) listener();
@@ -103,8 +135,7 @@ export class ComposerSettingsController {
   }
   observe(bot: Bot, snapshot: BotSnapshot, online: boolean) {
     this.bot = bot; this.snapshot = snapshot; this.online = online;
-    if (!online) this.confirmationAttempt = { operationId: "", at: 0 };
-    else this.reconcileConfirmation();
+    this.updateConfirmationAvailability();
     if (online && !this.state.pending && Object.keys(this.state.intent).length) this.pump();
   }
   edit(values: Partial<Values>) {
@@ -184,17 +215,45 @@ export class ComposerSettingsController {
       Object.assign(submitted, { [field]: stored[field] });
     const confirmed: Confirmed = { values: { ...this.state.confirmed?.values, ...submitted },
       afterCursor: pending.afterCursor, operationId: pending.operationId };
-    this.publish({ ...this.state, confirmed, pending: null, error: "" });
+    this.publish({ ...this.state, confirmed, pending: null, error: "", confirmationError: "" });
     // The queued latest intent stays visible while the next save is dispatched.
     this.pump();
     this.reconcileConfirmation();
   }
-  private reconcileConfirmation() {
+  private clearConfirmationTimer() {
+    if (this.confirmationTimer !== null) clearTimeout(this.confirmationTimer);
+    this.confirmationTimer = null;
+  }
+  private canReconcileConfirmation() {
+    return this.present && this.pageActive && this.online && botsClient.online && botsClient.owner === this.owner &&
+      (typeof document === "undefined" || document.visibilityState !== "hidden") &&
+      (typeof navigator === "undefined" || navigator.onLine !== false);
+  }
+  private updateConfirmationAvailability() {
+    const available = this.canReconcileConfirmation();
+    const resumed = available && !this.confirmationAvailable;
+    this.confirmationAvailable = available;
+    if (!available) this.clearConfirmationTimer();
+    else this.reconcileConfirmation(resumed);
+  }
+  private reconcileConfirmation(reset = false) {
     const confirmed = this.state.confirmed;
-    if (!confirmed || !this.online || botsClient.owner !== this.owner || this.confirmationRequest) return;
-    if (this.confirmationAttempt.operationId === confirmed.operationId && Date.now() - this.confirmationAttempt.at < 5000) return;
+    if (!this.canReconcileConfirmation()) {
+      this.confirmationAvailable = false;
+      this.clearConfirmationTimer();
+      return;
+    }
+    if (!confirmed) { this.clearConfirmationTimer(); return; }
+    if (reset || this.confirmationAttempt.operationId !== confirmed.operationId) {
+      this.clearConfirmationTimer();
+      this.confirmationAttempt = { operationId: confirmed.operationId,
+        count: this.confirmationRequest === confirmed.operationId ? 1 : 0 };
+    }
+    if (this.confirmationRequest || this.confirmationTimer !== null ||
+        this.confirmationAttempt.count > confirmationRetryDelays.length) return;
+    this.confirmationAttempt.count++;
     this.confirmationRequest = confirmed.operationId;
-    this.confirmationAttempt = { operationId: confirmed.operationId, at: Date.now() };
+    this.setLocal({ ...this.state, refreshingConfirmation: true });
     // This full snapshot is requested AFTER a terminal success for the exact
     // operation. Unlike value equality, it can reconcile the acknowledged
     // overlay, including a later authoritative change from another client.
@@ -203,12 +262,37 @@ export class ComposerSettingsController {
     void botsClient.refresh().then(snapshot => {
       if (botsClient.owner !== this.owner || this.state.confirmed?.operationId !== confirmed.operationId ||
           !snapshot.bots.some(bot => bot.id === this.botId)) return;
-      this.publish({ ...this.state, confirmed: null });
+      this.clearConfirmationTimer();
+      this.publish({ ...this.state, confirmed: null, confirmationError: "" });
       this.pump();
     }).catch(() => {}).finally(() => {
       this.confirmationRequest = null;
-      if (this.state.confirmed?.operationId !== confirmed.operationId) this.reconcileConfirmation();
+      const stillConfirmed = this.state.confirmed?.operationId === confirmed.operationId;
+      if (!this.canReconcileConfirmation()) {
+        this.confirmationAvailable = false;
+        this.clearConfirmationTimer();
+      } else if (stillConfirmed) {
+        const delay = confirmationRetryDelays[this.confirmationAttempt.count - 1];
+        // One timer, only after the preceding read settles. No render/event is
+        // needed to wake it; hidden/offline/owner transitions cancel or guard it.
+        this.clearConfirmationTimer();
+        if (delay !== undefined) this.confirmationTimer = setTimeout(() => {
+          this.confirmationTimer = null;
+          this.reconcileConfirmation();
+        }, delay);
+        // Exhausted: error/action stay visible, with no more automatic reads.
+      }
+      // Schedule before notifying subscribers so observation cannot bypass the
+      // backoff between clearing the in-flight marker and installing the timer.
+      this.setLocal({ ...this.state, refreshingConfirmation: false,
+        ...(botsClient.owner === this.owner && stillConfirmed ? {
+          confirmationError: "Your change was saved, but current settings could not be refreshed. Displayed settings may be out of date.",
+        } : {}) });
+      if (!stillConfirmed) this.reconcileConfirmation();
     });
+  }
+  refreshConfirmed() {
+    if (!this.confirmationRequest) this.reconcileConfirmation(true);
   }
   retry() {
     const pending = this.state.pending;

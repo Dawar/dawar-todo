@@ -17,7 +17,7 @@ Additional boundary calculations passed: event 14 is retained over complete snap
 ## Implementation and compatibility
 
 - `app/bots/client.ts` distinguishes a complete server-snapshot watermark from a provisional cached/event cursor. Latest patches per bot/request are replayed over older complete snapshots; patches already covered by a full snapshot are removed. Owner detachment resets both watermarks and patches. Existing owner/connection-epoch checks still reject stale-owner replies. This repairs missing state rather than merely masking it in the toggle component.
-- `app/bots/composer-settings-controller.ts` overlays only submitted fields from exact successful operation receipts. Confirmation clears through a full read issued after that terminal success, not through arbitrary event activity or matching values. Immediate desired state remains separate and rapid taps still coalesce into one ordered successor. Failed confirmation reads retain the overlay and retry on subsequent observations, with a five-second backoff.
+- `app/bots/composer-settings-controller.ts` overlays only submitted fields from exact successful operation receipts. Confirmation clears through a full read issued after that terminal success, not through arbitrary event activity or matching values. Immediate desired state remains separate and rapid taps still coalesce into one ordered successor. **The original observation-only five-second backoff was insufficient:** it could leave an acknowledged overlay pinned indefinitely after a failed read. The bounded scheduled replacement is documented below.
 - Every send, including recovery, must successfully store the complete latest intent plus exact pending identity/parameters first. Storage errors prevent dispatch. Owner/bot-scoped persisted records migrate v1 pending operations and desired intent; v1's unsafe whole-Bot confirmation overlay is discarded. Restored pending operations require explicit same-ID recovery. No critical draft/history store is modified.
 - `app/bots/composer-settings.tsx` replaces the misleading Check action with **Retry saved change**, and adds **Retry storage** / **Paused** states. A same-ID retry may finish an in-flight operation, retrieve its terminal result, or dispatch it if the server has never seen it. It is not described as read-only. Uncertainty is not converted into success based on setting values.
 
@@ -37,9 +37,32 @@ Tap Plan on, reverse Plan off, and enable Fast before the first reply: all press
 
 Personally inspected the actual screenshots. Normal controls, storage failure and unconfirmed recovery fit without horizontal overflow. Local disposable evidence is in `outputs/bot-typing-recent/`: `composer-v141-final-320.png`, `composer-v141-final-390.png`, `composer-v141-final-desktop.png`, `composer-v141-pending-390.png`, `composer-v141-storage-320.png`, `composer-v141-storage-390.png`, `composer-v141-unconfirmed-320.png`, `composer-v141-unconfirmed-390.png`, `composer-v141-recovered-390.png`. These ignored images are available for manager review; they are not part of the source commit.
 
-## Verification and limits
+## Read-reconciliation liveness correction after af997cd
 
-Commands actually run successfully:
+Independent review accepted the three corrections above but found a remaining failure: Plan-on succeeds, its post-success snapshot fails, an external Plan-off event arrives one second later, and the observation backoff suppresses the only subsequent read. At eleven seconds, idle UI still shows Plan on with no error. The earlier report's claim that subsequent observations provided sufficient recovery was wrong.
+
+The controller now schedules an initial confirmation read plus at most **three retries**, delayed **2, 5 and 10 seconds after the preceding failed read settles**. The scheduled wake-up is independent of React renders and unrelated events. After the first failed read, a truthful message explains that the change was saved but current displayed settings may be out of date. **Refresh settings** starts a new bounded read cycle; it is disabled while its confirmation read is in flight. On exhaustion the message/action remain, with no automatic timer or further reads.
+
+Lifecycle ownership is explicit in `ComposerSettings`' layout effect and its cleanup, including React Activity hide/show. Bot navigation/unmount, page visibility/pagehide, offline state and owner mismatch cancel or guard waiting timers. Returning to an eligible foreground view or reconnecting resumes a bounded cycle. A new acknowledged operation starts its own cycle. There is at most one confirmation timer and one confirmation read in flight per controller; the next timer is installed before notifying subscribers, preventing an observation from bypassing the backoff. An in-flight read may finish while hidden, but cannot create hidden follow-up activity.
+
+Code-path review of the counterexample (not an executed timing measurement):
+
+| Sequence | Resulting path |
+| --- | --- |
+| Initial Plan acknowledgement followed by failed snapshot at t=0 | Keep submitted-field receipt; display refresh error; schedule a read for t=2s. |
+| Authoritative external Plan-off event at t=1s, then idle | Observation finds the existing timer and does not reset it. No subsequent render is needed. |
+| Scheduled read completes with authoritative Plan off | Clear acknowledged overlay and refresh error. Current Plan off becomes visible; queued desired intent, if any, still takes precedence. |
+| Every read fails promptly | Reads begin at approximately t=0, 2, 7, 17s; then stop with the recovery action visible. Network time is additional. |
+| Hide/offline before a scheduled wake-up | Cancel the timer. Resume with a fresh bounded cycle on return/reconnect; no background polling for hidden bots. |
+| A different operation succeeds during an older confirmation read | The older response cannot clear the newer operation's receipt; the newer cycle starts after that in-flight read settles. |
+
+The original three corrections remain: only submitted fields are overlaid; full-snapshot/event ordering is unchanged; exact pending identity plus intent must persist before writes; uncertain operations require explicit same-ID retry. The scheduler never calls that uncertain-write retry. Draft stores and bot/native settings code are unchanged. Shell generation **37** is retained from the still-unshipped parent.
+
+For this liveness follow-up, source/code-path review, `npx tsc --noEmit`, scoped ESLint on the two changed TS/TSX files, `npm run build`, and `git diff --check` passed. **No automated tests or diagnostics were added or run**, and no new browser/timing/Safari verification is claimed. Earlier screenshots and executable diagnostic results below are evidence for `af997cd`, not measured validation of this scheduler. The existing snapshot RPC may take up to its 125-second timeout; retries are bounded in count, not a 17-second total network deadline. The error is visible after the first failed read, including while later reads are pending. The UI cannot know an external setting while the server is unreachable; it keeps the saved receipt visibly qualified until authoritative reconciliation succeeds.
+
+## Earlier af997cd verification and limits
+
+Commands actually run successfully for the original three corrections (not rerun for the liveness follow-up):
 
 ```sh
 node diagnostics/bot-settings-review.mjs
