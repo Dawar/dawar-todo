@@ -1,5 +1,5 @@
 import '../tests/fixtures/bot-design-browser.jsx';
-import { botsClient as client } from '../app/bots/client';
+import { botsClient as client, BotRpcError } from '../app/bots/client';
 import { getBotTimeline } from '../app/bots/use-timeline';
 import { timelineCache } from '../app/bots/timeline-cache';
 const original = client.rpc.bind(client);
@@ -15,6 +15,7 @@ client.rpc = async (method, botId, params, ...rest) => {
 window.feed = {
   calls,
   client,
+  BotRpcError,
   timeline:()=>getBotTimeline(client.owner,'design-a'),
   async open(){enabled=true; calls.length=0; await design.scenario('populated');},
   async cache(){await this.timeline().flush(); return timelineCache.read(client.owner,'design-a');},

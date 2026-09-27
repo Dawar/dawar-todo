@@ -29,7 +29,6 @@ import {
   Pencil,
   LoaderCircle,
   RefreshCw,
-  Zap,
   BarChart3,
   History,
   ListPlus,
@@ -56,6 +55,7 @@ import { UsagePanel } from "./usage-panel";
 import { useBotComposer } from "./use-composer";
 import { ComposerAttachments, ComposerStatus } from "./composer-state";
 import { ComposerInput } from "./composer-input";
+import { ComposerSettings } from "./composer-settings";
 import { ArtifactGallery, BotAttachmentsEntry, ArtifactNav } from "./artifact-gallery";
 import { UploadThumbnail } from "./upload-thumbnail";
 import "./bots.css";
@@ -148,15 +148,6 @@ export function BotsWorkspace() {
     bots = snapshot?.bots ?? EMPTY_BOTS,
     bot = bots.find((b) => b.id === selected),
     pending = snapshot?.pending.filter((p) => p.botId === selected) ?? [];
-  const selectedModel = snapshot?.models.find(
-    (m) => m.model === (bot?.model ?? snapshot.defaults.model),
-  );
-  const fastTier = selectedModel?.serviceTiers.find(
-    (tier) => tier.id === "priority" || tier.id === "fast",
-  )?.id;
-  const fastActive =
-    Boolean(fastTier) &&
-    (bot?.serviceTier ?? snapshot?.defaults.serviceTier) === fastTier;
   useLayoutEffect(() => {
     const screen = screenRef.current;
     if (!screen) return;
@@ -619,89 +610,8 @@ export function BotsWorkspace() {
               {!bot.archived && (
                 <>
                   <div className="bots-composer-support">
-                  <div className="bots-controls">
-                    <select
-                      aria-label="Model"
-                      disabled={!online}
-                      value={bot.model ?? ""}
-                      onChange={(e) =>
-                        void action(() =>
-                          client.rpc("bots.update", bot.id, {
-                            model: e.target.value || null,
-                            effort: null,
-                          }),
-                        )
-                      }
-                    >
-                      <option value="">
-                        Default · {snapshot?.defaults.model}
-                      </option>
-                      {snapshot?.models.map((m) => (
-                        <option key={m.id} value={m.model}>
-                          {m.displayName}
-                        </option>
-                      ))}
-                    </select>
-                    <select
-                      aria-label="Reasoning effort"
-                      disabled={!online}
-                      value={bot.effort ?? ""}
-                      onChange={(e) =>
-                        void action(() =>
-                          client.rpc("bots.update", bot.id, {
-                            effort: e.target.value || null,
-                          }),
-                        )
-                      }
-                    >
-                      <option value="">
-                        Default · {snapshot?.defaults.effort}
-                      </option>
-                      {selectedModel?.supportedReasoningEfforts.map((e) => (
-                        <option
-                          key={e.reasoningEffort}
-                          value={e.reasoningEffort}
-                        >
-                          {e.reasoningEffort}
-                        </option>
-                      ))}
-                    </select>
-                    <button
-                      type="button"
-                      className={fastActive ? "active" : ""}
-                      aria-label="Fast mode"
-                      aria-pressed={fastActive}
-                      title={
-                        fastTier
-                          ? "Fast mode uses more Codex credits"
-                          : "Fast mode is unavailable for this model"
-                      }
-                      disabled={!online || !fastTier}
-                      onClick={() =>
-                        void action(() =>
-                          client.rpc("bots.update", bot.id, {
-                            serviceTier: fastActive ? "default" : fastTier,
-                          }),
-                        )
-                      }
-                    >
-                      <Zap size={13} aria-hidden="true" /> Fast
-                    </button>
-                    <button
-                      className={bot.mode === "plan" ? "active" : ""}
-                      disabled={!online}
-                      onClick={() =>
-                        void action(() =>
-                          client.rpc("bots.update", bot.id, {
-                            mode: bot.mode === "plan" ? "default" : "plan",
-                          }),
-                        )
-                      }
-                    >
-                      Plan
-                    </button>
-                  </div>
-                  {promptQueue.length > 0 && (
+                    {snapshot && <ComposerSettings key={scope} bot={bot} snapshot={snapshot} online={online} />}
+                    {promptQueue.length > 0 && (
                     <div className="bots-prompt-queue" role="region" aria-label="Queued prompts">
                       <strong>Queued next</strong>
                       {bot.queuePaused && (

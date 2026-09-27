@@ -45,7 +45,7 @@ export type BotOperations = {
   };
   "bots.create": { params: { name: string; purpose?: string }; result: Bot };
   "bots.update": {
-    params: Partial<Pick<Bot, "name" | "model" | "effort" | "mode">>;
+    params: Partial<Pick<Bot, "name" | "model" | "effort" | "serviceTier" | "mode">>;
     result: Bot;
   };
   "bots.read": { params: Record<string, never>; result: Bot };

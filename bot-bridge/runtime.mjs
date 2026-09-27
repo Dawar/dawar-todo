@@ -1077,9 +1077,11 @@ export class BotRuntime extends EventEmitter {
       serviceTier,
       mode: p.mode ?? bot.mode,
     };
-    if (next.model !== bot.model || next.effort !== bot.effort ||
-        next.serviceTier !== bot.serviceTier || next.mode !== bot.mode)
+    if (!bot.activeTurnId && (next.model !== bot.model || next.effort !== bot.effort ||
+        next.serviceTier !== bot.serviceTier || next.mode !== bot.mode))
       await this.syncQueueSettings(next);
+    // An active turn keeps its own settings. Persist the next turn's choice;
+    // startTurn passes it explicitly and queued starts resync before dispatch.
     return this.saveBot(bot, next);
   }
   async archive(bot, archived) {
