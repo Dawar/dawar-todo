@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { projectHistoryItem, HISTORY_WINDOW, historyKey } from '../lib/bot-history-view.ts';
+import { historyAttachmentSelectors, readHistoryAttachmentMetadata, HISTORY_ATTACHMENT_BYTES } from './history-attachments.mjs';
 
 const details = new WeakMap();
 const DETAIL_TTL = 30_000, DETAIL_BYTES = 32 * 1024 * 1024;
@@ -10,6 +11,8 @@ function detailCache(runtime) {
   return cache;
 }
 const MAX_PAGE_BYTES = 96 * 1024;
+// Leave room for bounded attachment metadata, two context excerpts and envelope.
+const MAX_ENTRY_BYTES = MAX_PAGE_BYTES - HISTORY_ATTACHMENT_BYTES - 12 * 1024;
 const encode = JSON.stringify;
 function decode(cursor) {
   if (!cursor) return { native: null, before: null };
@@ -51,7 +54,7 @@ export async function historyViewPage(runtime, bot, cursor = null, turnId = null
     const { turn, item, scheduled } = all[index];
     const entry = projectHistoryItem(turn, item, scheduled);
     const length = Buffer.byteLength(JSON.stringify(entry));
-    if (entries.length && bytes + length > MAX_PAGE_BYTES) break;
+    if (entries.length && bytes + length > MAX_ENTRY_BYTES) break;
     entries.push(entry); bytes += length;
   }
   const olderCursor = index < all.length ? encode({ native: position.native, before: historyKey(all[index - 1].turn.id, all[index - 1].item.id), ...(turnId ? { turnId } : {}) })
@@ -70,14 +73,16 @@ export async function historyViewPage(runtime, bot, cursor = null, turnId = null
     }
     contextEntries.reverse();
   }
-  const paths = new Set(entries.flatMap((entry) => entry.item?.type === 'userMessage'
-    ? entry.item.content.flatMap((part) => part.type === 'localImage' ? [part.path] : []) : []));
-  const attachments = runtime.store.list('attachment', bot.id).filter((a) => a.ready && paths.has(a.path)).map((a) => runtime.publicAttachment(a));
+  const metadataBudget = MAX_PAGE_BYTES - bytes - Buffer.byteLength(JSON.stringify(contextEntries)) - Buffer.byteLength(olderCursor ?? '') - 2048;
+  const attachments = readHistoryAttachmentMetadata(runtime, bot, historyAttachmentSelectors([...entries, ...contextEntries]), metadataBudget);
   return { entries: entries.reverse(), contextEntries, olderCursor, attachments, complete: !olderCursor && entries.every((e) => e.complete) };
 }
 
 export function historyRevision(runtime, bot) {
   return `${runtime.epoch}:${bot.threadId}:${bot.updatedAt}:${runtime.historyVersions?.get(bot.id) ?? 0}`;
+}
+function detailRevision(runtime, bot) {
+  return `${runtime.epoch}:${bot.threadId}:${bot.updatedAt}:${runtime.historyContentVersions?.get(bot.id) ?? 0}`;
 }
 
 export async function readHistoryView(runtime, bot, params) {
@@ -87,7 +92,7 @@ export async function readHistoryView(runtime, bot, params) {
     const replay = runtime.store.replay(params.after);
     const contiguous = !replay.length ? params.after === eventCursor : replay[0].seq === params.after + 1;
     const events = replay.filter((e) => e.botId === bot.id && ['codex', 'attachment', 'history.refresh'].includes(e.type));
-    if (contiguous && !events.some((e) => e.type !== 'codex' && !(e.type === 'history.refresh' && e.data?.reason === 'large-native-event')) && Buffer.byteLength(JSON.stringify(events)) < MAX_PAGE_BYTES)
+    if (contiguous && !events.some((e) => !['codex', 'attachment'].includes(e.type) && !(e.type === 'history.refresh' && e.data?.reason === 'large-native-event')) && Buffer.byteLength(JSON.stringify(events)) < MAX_PAGE_BYTES)
       return { kind: 'events', revision, eventCursor, events };
   }
   const page = await historyViewPage(runtime, bot, params.cursor ?? null, params.turnId ?? null);
@@ -101,11 +106,12 @@ export async function readHistoryDetail(runtime, bot, params) {
   if (!Number.isSafeInteger(offset) || offset < 0) throw new Error('Invalid detail offset.');
   const key = `${bot.id}:${bot.threadId}:${params.turnId}:${params.itemId}`, cache = detailCache(runtime);
   let cached = cache.get(key);
-  if (cached && (params.version ? cached.version !== params.version : cached.revision !== historyRevision(runtime, bot))) cached = undefined;
+  if (cached && (params.version ? cached.version !== params.version : cached.revision !== detailRevision(runtime, bot))) cached = undefined;
   if (!cached) {
     // One native lookup/serialization per detail version, shared by requests.
     const pendingKey = `${key}:pending`, existing = cache.get(pendingKey);
     const promise = existing?.promise ?? (async () => {
+      const revision = detailRevision(runtime, bot), eventCursor = runtime.store.cursor();
       let cursor = null, item = runtime.historySupplements?.get(`${bot.id}:${params.turnId}:${params.itemId}`);
       if (!item && ['live-turn-diff', 'live-turn-plan'].includes(params.itemId)) throw new Error('This live aggregate has expired. Individual commands and file changes remain in native history.');
       if (!item) do {
@@ -115,9 +121,8 @@ export async function readHistoryDetail(runtime, bot, params) {
       } while (!item && cursor);
       if (!item) throw new Error('This history item is not available from the native thread.');
       const json = JSON.stringify(item), version = createHash('sha256').update(json).digest('hex');
-      const paths = new Set(item.type === 'userMessage' ? item.content.filter((part) => part.type === 'localImage').map((part) => part.path) : []);
-      const attachments = runtime.store.list('attachment', bot.id).filter((a) => a.ready && paths.has(a.path)).map((a) => runtime.publicAttachment(a));
-      const value = { json, version, attachments, eventCursor: runtime.store.cursor(), revision: historyRevision(runtime, bot), expires: Date.now() + DETAIL_TTL };
+      const selectors = historyAttachmentSelectors([{ turnId: params.turnId, id: item.id, item }]);
+      const value = { json, version, selectors, eventCursor, revision, expires: Date.now() + DETAIL_TTL };
       cache.set(key, value);
       let bytes = 0;
       for (const [other, entry] of [...cache].reverse()) if (entry.json) {
@@ -131,12 +136,15 @@ export async function readHistoryDetail(runtime, bot, params) {
     try { cached = await promise; } finally { cache.delete(pendingKey); }
   }
   if (params.version && params.version !== cached.version) throw new Error('The item changed while loading. Open its details again.');
-  if (offset === 0 && params.knownVersion === cached.version) return { notModified: true, json: '', nextOffset: null, totalLength: cached.json.length, version: cached.version, eventCursor: cached.eventCursor };
+  // Metadata can arrive after native completion. Re-query it independently of
+  // the text hash, including conditional detail hits, without native/file I/O.
+  const attachments = offset === 0 ? readHistoryAttachmentMetadata(runtime, bot, cached.selectors) : undefined;
+  if (offset === 0 && params.knownVersion === cached.version) return { notModified: true, json: '', nextOffset: null, totalLength: cached.json.length, version: cached.version, eventCursor: cached.eventCursor, attachments };
   const next = Math.min(cached.json.length, offset + 48 * 1024);
   if (offset > cached.json.length) throw new Error('Invalid detail offset.');
   return { json: cached.json.slice(offset, next), nextOffset: next < cached.json.length ? next : null,
     totalLength: cached.json.length, version: cached.version, eventCursor: cached.eventCursor,
-    ...(offset === 0 ? { attachments: cached.attachments } : {}) };
+    ...(offset === 0 ? { attachments } : {}) };
 }
 
 export function readHistoryAttachments(runtime, bot, params) {

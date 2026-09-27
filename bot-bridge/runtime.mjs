@@ -1,5 +1,5 @@
 import { boundHistoryEvent } from "./history-events.mjs";
-import { listArtifacts, artifactMime } from "./artifact-library.mjs";
+import { listArtifacts, artifactMime, artifactMetadata } from "./artifact-library.mjs";
 import { readArtifactPreview } from "./artifact-previews.mjs";
 import { registerArtifact, registerNativeItem, indexNativeArtifacts, rememberInputProvenance } from "./artifact-outputs.mjs";
 import { EventEmitter } from "node:events";
@@ -185,6 +185,10 @@ export class BotRuntime extends EventEmitter {
     if (botId && ["codex", "attachment", "history.refresh"].includes(type)) {
       this.historyVersions ??= new Map();
       this.historyVersions.set(botId, event.seq);
+      if (type !== "attachment") {
+        this.historyContentVersions ??= new Map();
+        this.historyContentVersions.set(botId, event.seq);
+      }
     }
     this.emit("event", event);
     return event;
@@ -1735,6 +1739,7 @@ export class BotRuntime extends EventEmitter {
       });
   }
   publicAttachment(a) {
+    if (a.ready && a.artifact) return { ...artifactMetadata(a, this.store.bot(a.botId)), artifact: true };
     const { received, sha256, ...publicData } = a;
     void received; void sha256;
     return publicData;

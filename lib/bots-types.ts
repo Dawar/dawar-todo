@@ -93,6 +93,13 @@ export type BotAttachment = {
   size: number;
   ready: boolean;
   path?: string;
+  /** Present on delivered history/output metadata; previews remain lazy. */
+  createdAt?: string | null;
+  artifact?: boolean;
+  direction?: "input" | "output";
+  source?: "upload" | "published" | "native";
+  provenance?: { threadId?: string; turnId?: string; itemId?: string; operationId?: string };
+  preview?: { kind: "image" | "pdf" | "none"; version: string };
 };
 export type BotArtifactKind = "image" | "pdf" | "document" | "audio" | "video" | "other";
 /** Metadata only. Original bytes remain behind bot-scoped attachments.read. */

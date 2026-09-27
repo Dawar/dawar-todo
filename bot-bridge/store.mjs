@@ -11,6 +11,10 @@ export class Store {
       CREATE TABLE IF NOT EXISTS bots(id TEXT PRIMARY KEY, slug TEXT UNIQUE NOT NULL, thread_id TEXT UNIQUE, json TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS records(kind TEXT NOT NULL, id TEXT NOT NULL, bot_id TEXT, json TEXT NOT NULL, PRIMARY KEY(kind,id));
       CREATE INDEX IF NOT EXISTS records_bot ON records(kind,bot_id);
+      CREATE INDEX IF NOT EXISTS history_attachment_path ON records(bot_id,json_extract(json,'$.path'),id)
+        WHERE kind='attachment' AND json_extract(json,'$.ready')=1;
+      CREATE INDEX IF NOT EXISTS history_attachment_item ON records(bot_id,json_extract(json,'$.provenance.turnId'),json_extract(json,'$.provenance.itemId'),COALESCE(json_extract(json,'$.provenance.threadId'),''),id)
+        WHERE kind='attachment' AND json_extract(json,'$.ready')=1 AND json_extract(json,'$.artifact')=1;
       CREATE UNIQUE INDEX IF NOT EXISTS manager_thread_mapping
         ON records(json_extract(json, '$.threadId')) WHERE kind='managerWorker';
       CREATE TABLE IF NOT EXISTS operations(id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, status TEXT NOT NULL, json TEXT NOT NULL);
