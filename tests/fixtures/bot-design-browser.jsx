@@ -20,7 +20,7 @@ const field = () => document.querySelector('.bots-composer textarea');
 const selected = () => new URLSearchParams(location.search).get('bot') || 'design-a';
 const composer = () => botComposers.peek(client.owner, selected());
 const message = (id, text, type = 'agentMessage') => type === 'userMessage' ? { id, type, content: [{ type: 'text', text, text_elements: [] }] } : { id, type, text, phase: 'final_answer', memoryCitation: null, questions: null, delivery: null };
-const turns = () => scene === 'empty' ? [] : scene === 'outputs' ? [{ id: 'design-turn', status: 'completed', itemsView: 'full', items: [message('user','Bring the launch idea to life.', 'userMessage'), { id: 'tool-0', type: 'commandExecution', command: 'Prepare a thoughtful first draft', status: 'completed', aggregatedOutput: 'Synthetic work only.' }, message('answer','Here’s a considered plan, with room for your ideas.\n\n[Read the plan](bot-artifact:file-1)\n\nWe can shape the next draft together.')] }] : [{ id: 'design-turn', status: 'completed', startedAt: 1789891200, itemsView: 'full', items: [
+const turns = () => scene === 'empty' ? [] : [{ id: 'design-turn', status: 'completed', startedAt: 1789891200, itemsView: 'full', items: [
   message('user', 'Help me make room for the work that matters this week.', 'userMessage'),
   ...Array.from({ length: 2 }, (_, i) => ({ id: `tool-${i}`, type: 'commandExecution', command: 'Review weekly notes', status: 'completed', aggregatedOutput: 'A synthetic work note. No real account data.' })),
   message('answer', '### A lighter week, with a little more focus\n\nStart with one meaningful outcome: **finish the launch story**. Give it your best hour before the small things take over.\n\n- **Monday:** shape the idea and choose three examples.\n- **Tuesday:** write the first draft, then take a walk.\n- **Wednesday:** share it with someone whose taste you trust.\n\nLeave a little white space. A good plan should help you breathe.'),
@@ -30,9 +30,9 @@ const turns = () => scene === 'empty' ? [] : scene === 'outputs' ? [{ id: 'desig
 client.start = () => {};
 const rpcCalls = [];
 client.rpc = async (method, botId, params, _id, options) => {
-  if (method.startsWith('artifacts.') || method === 'attachments.read') {
-    check(options?.owner === client.owner, 'artifact request missing captured owner');
-    rpcCalls.push({ method, botId, params, owner: options.owner });
+  if (method.startsWith('artifacts.') || method === 'attachments.read' || scene === 'outputs' && ['history.view', 'history.detail'].includes(method)) {
+    if (!method.startsWith('history.')) check(options?.owner === client.owner, 'artifact request missing captured owner');
+    const call = { method, botId, params, owner: client.owner }; rpcCalls.push(call);
     if (!client.online) throw new Error('Synthetic offline transport');
     if (method === 'artifacts.index' && galleryScene === 'index-error') throw new Error('An earlier file could not be read. Try again when your bot reconnects.');
     if (method === 'artifacts.index' && galleryScene === 'index-more') return { registered:0, nextCursor: params.cursor ? null : 'synthetic-older', failures:[] };
@@ -43,14 +43,16 @@ client.rpc = async (method, botId, params, _id, options) => {
       if (galleryScene === 'empty') return { items: [], nextCursor: null };
     }
     const response = await fetch('/artifact-rpc', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ method, botId, params }) }).then((r) => r.json());
-    if (response.error) throw new Error(response.error); return response.result;
+    if (response.error) throw new Error(response.error);
+    call.bytes = new TextEncoder().encode(JSON.stringify(response.result)).length;
+    if (method.startsWith('history.')) call.attachments = response.result.attachments;
+    return response.result;
   }
   if (method === 'history.view') {
     if (scene === 'loading') return new Promise(() => {});
     await wait(30);
     if (scene === 'error') throw new Error('The conversation could not load. Your draft is safe.');
-    const attachments = scene === 'outputs' ? (await client.rpc('artifacts.list', botId, { limit:36,cursor:null,search:'',type:'all',direction:'all',sort:'newest' }, undefined, { owner:client.owner })).items.filter((item) => item.id === 'file-1') : [];
-    return { kind: 'page', entries: historyTail(turns()), contextEntries: [], attachments, olderCursor: null, revision: 'design', eventCursor: 0, complete: true };
+    return { kind: 'page', entries: historyTail(turns()), contextEntries: [], attachments: [], olderCursor: null, revision: 'design', eventCursor: 0, complete: true };
   }
   if (method === 'history.detail') { const item = turns()[0].items.find((x) => x.id === params.itemId); return { json: JSON.stringify(item), nextOffset: null, totalLength: 100, version: 'design', eventCursor: 0 }; }
   if (method === 'usage.account') return { accountType: 'chatgpt', ordinaryUsageAllowed: true, availableResetCredits: null, limits: [{ limitId: 'standard', limitName: 'Your plan', model: null, windows: [{ usedPercent: 12, windowDurationMins: 10080, resetsAt: Math.floor(Date.now()/1000) + 183840 }, { usedPercent: 0, windowDurationMins: 300, resetsAt: Math.floor(Date.now()/1000)+10860 }] }], readAt: new Date().toISOString() };
@@ -86,16 +88,35 @@ window.design = {
     return {boundedEarlierPage:true, explicitContinuation:true, recoverableIndexError:true};
   },
   async outputCards() {
+    const start = rpcCalls.length;
     galleryScene='populated';await this.scenario('outputs');
     await until(()=>document.querySelector('.bots-agent .bots-returned-file'),'published Markdown link becomes a real output card');
     const card=document.querySelector('.bots-agent .bots-returned-file');
-    check(card.textContent.includes('A considered plan.pdf'),'metadata filename missing');
-    check(document.querySelectorAll('.bots-returned-file').length===1,'same delivered file duplicated in work log and reply');
+    check(card.textContent.includes('A considered plan.pdf'),'real history metadata filename missing');
+    const nativeCard = document.querySelector('.bots-returned-files .bots-returned-file');
+    check(nativeCard?.textContent.includes('Forest study.png'), 'native output metadata card missing from fresh history');
+    check(document.querySelectorAll('.bots-returned-file').length===2,'same delivered file duplicated in work log and reply');
     check(!document.querySelector('.bots-activity[open]'),'work log opened to show output');
-    await until(()=>card.querySelector('img')?.complete,'real message-local PDF thumbnail');
+    await until(()=>[card,nativeCard].every((el)=>el.querySelector('img')?.complete && el.querySelector('img').naturalWidth > 0),'real message-local PDF and image thumbnails');
+    const initialCalls = rpcCalls.slice(start), view = initialCalls.find((call)=>call.method==='history.view');
+    const files = view?.attachments ?? [];
+    check(files.length===2 && files.every((file)=>file.size>0 && file.preview?.version),'history.view must supply bounded complete metadata');
+    check(files.some((file)=>file.source==='native' && file.provenance?.itemId==='output-3'),'registered native output provenance missing');
+    check(!initialCalls.some((call)=>call.method==='history.detail' || call.method==='attachments.read'),'closed work eagerly downloaded detail or originals');
+    check(!initialCalls.some((call)=>call.method==='artifacts.list' || call.method==='artifacts.index'),'fresh history borrowed gallery metadata');
     card.click();await until(()=>document.querySelector('.bots-file-viewer iframe'),'message-local PDF original');
-    this.galleryAction('close');await wait(30);
-    return {publishedLink:true,realPdfPreview:true,originalViewer:true,closedWorkLog:true};
+    await this.galleryAction('close');await wait(30);
+    nativeCard.click();await until(()=>document.querySelector('.bots-file-viewer-body > img')?.complete,'message-local image original');
+    await this.galleryAction('close');await wait(30);
+    document.querySelector('.bots-activity > summary').click();
+    await until(()=>document.querySelectorAll('.bots-activity .bots-activity > summary').length===2, 'individual work disclosures');
+    document.querySelectorAll('.bots-activity .bots-activity > summary').forEach((summary)=>summary.click());
+    await until(()=>rpcCalls.slice(start).filter((call)=>call.method==='history.detail' && call.attachments?.length).length===2,'opened work must use real history.detail metadata');
+    const details = rpcCalls.slice(start).filter((call)=>call.method==='history.detail');
+    check(details.some((call)=>call.params.itemId==='tool-0' && call.attachments.some((file)=>file.name==='A considered plan.pdf')),'published detail metadata missing');
+    check(details.some((call)=>call.params.itemId==='output-3' && call.attachments.some((file)=>file.name==='Forest study.png' && file.source==='native')),'native detail metadata missing');
+    document.querySelector('.bots-activity > summary').click();await wait(50);
+    return {publishedLink:true,nativeOutput:true,realPdfPreview:true,realImagePreview:true,originalViewers:true,closedWorkLog:true,closedDetailRequests:0,eagerOriginals:0,galleryMetadataRequests:0,historyViewBytes:view.bytes,historyDetailBytes:details.map((call)=>call.bytes)};
   },
   async galleryCountChecks(single = false) {
     const cards = () => [...document.querySelectorAll('.bots-file-card')];
@@ -106,9 +127,13 @@ window.design = {
       input.dispatchEvent(new Event('input', { bubbles: true }));
       await until(() => cards().length === 1 && label() === '1 file', 'honest singular inventory');
       check(document.querySelector('.bots-gallery-month h2')?.textContent === 'Date unknown1 file', 'singular month count');
+      await until(() => cards()[0].querySelector('img')?.naturalWidth > 0, 'single PDF thumbnail');
       return { header: label(), cards: cards().length, unknownDate: true };
     }
     await this.gallery('populated');
+    // Native output indexing can schedule its single coalesced first-page refresh.
+    await wait(650);
+    await until(() => !document.querySelector('.bots-gallery-pages button:last-child')?.disabled, 'first page settled');
     check(label() === '36+ files', 'first page lower bound');
     const before = rpcCalls.filter((r) => r.method === 'artifacts.list').length;
     for (const page of [2, 3]) {
@@ -123,6 +148,7 @@ window.design = {
     const requests = rpcCalls.filter((r) => r.method === 'artifacts.list').length - before;
     check(requests === 2, 'count labels must not iterate inventory');
     check(document.body.scrollWidth <= innerWidth + 1, 'count wording overflows viewport');
+    await until(() => cards().filter((el) => el.getBoundingClientRect().top < innerHeight && el.querySelector('.is-image,.is-pdf')).every((el) => el.querySelector('img')?.naturalWidth > 0), 'visible last-page previews settled');
     return { header: label(), cards: cards().length, months, requests };
   },
   async galleryChecks() {

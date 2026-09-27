@@ -6,6 +6,7 @@ import { EventEmitter } from 'node:events';
 import sharp from 'sharp';
 import { Store } from '../../bot-bridge/store.mjs';
 import { BotRuntime } from '../../bot-bridge/runtime.mjs';
+import { registerArtifact, registerNativeItem } from '../../bot-bridge/artifact-outputs.mjs';
 function documentPdf() {
   const stream = `0.99 0.99 0.97 rg 0 0 612 792 re f 0.22 0.38 0.28 rg 48 735 54 6 re f
 BT /F1 28 Tf 48 650 Td (A considered plan) Tj /F1 12 Tf 0 -30 Td (A little clarity. A thoughtful next step.) Tj ET
@@ -17,7 +18,13 @@ BT /F1 28 Tf 48 650 Td (A considered plan) Tj /F1 12 Tf 0 -30 Td (A little clari
 }
 export async function designArtifacts() {
   const root = await mkdtemp(join(tmpdir(), 'bot-design-artifacts-')), store = new Store(join(root, 'state.sqlite'));
-  const codex = new EventEmitter(); codex.call = async () => ({ data: [], nextCursor: null });
+  const codex = new EventEmitter(), nativeCalls = []; let nativeItems = [];
+  codex.call = async (method, params) => {
+    nativeCalls.push({ method, threadId: params.threadId });
+    if (method === 'thread/resume') return {};
+    if (method !== 'thread/turns/list') throw new Error(`Unexpected synthetic native call: ${method}`);
+    return { data: params.threadId === 'thread-design-a' ? [{ id: 'design-turn', status: 'completed', startedAt: 1790467200, items: nativeItems }] : [], nextCursor: null };
+  };
   const runtime = new BotRuntime({ store, codex, root }), calls = [];
   const botNames = ['Studio · Planning & ideas', 'Field notes'];
   for (const [i, id] of ['design-a', 'design-b'].entries()) {
@@ -25,15 +32,33 @@ export async function designArtifacts() {
   }
   const image = await sharp(Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600"><rect width="800" height="600" fill="#e4eadb"/><circle cx="600" cy="145" r="74" fill="#f8f1de"/><path d="M0 430Q170 230 390 390T800 330V600H0" fill="#a2b396"/><path d="M0 520Q210 330 460 500T800 430V600H0" fill="#63866c"/><path d="M530 600Q575 430 670 470" stroke="#e6eada" stroke-width="12" fill="none"/><text x="45" y="70" font-family="Arial" letter-spacing="4" font-size="18" fill="#58725b">FIELD NOTES / 026</text></svg>')).png().toBuffer();
   const pdf = documentPdf(), text = Buffer.from('A synthetic document. No user data.');
+  let published;
+  const nativeImage = { id: 'output-3', type: 'imageGeneration', status: 'completed', failure: null, result: '', savedPath: join(root, 'design-a', 'Forest study.png') };
   for (let i = 0; i < 80; i++) {
     const botId = i % 4 ? 'design-a' : 'design-b', kind = i % 3, bytes = kind === 0 ? image : kind === 1 ? pdf : text;
     const name = i === 79 ? 'One final note.pdf' : ['Quiet morning.png', 'A considered plan.pdf', 'Launch story.md', 'Forest study.png', 'Weekly field notes.pdf', 'Creative brief.txt'][i % 6];
-    const path = join(root, botId, `file-${i}`); await writeFile(path, bytes);
+    const path = i === 3 ? nativeImage.savedPath : join(root, botId, `file-${i}`); await writeFile(path, bytes);
+    const createdAt = i > 77 ? null : new Date(Date.UTC(2026, i < 8 ? 8 : i < 36 ? 7 : 6, 27 - i % 8)).toISOString();
+    if (i === 1) {
+      published = await registerArtifact(runtime, store.bot(botId), { path, name }, { turnId: 'design-turn', itemId: 'tool-0', createdAt });
+      continue;
+    }
+    if (i === 3) {
+      const registered = await registerNativeItem(runtime, store.bot(botId), 'design-turn', nativeImage, createdAt);
+      if (registered.registered !== 1 || registered.failures.length) throw new Error('Synthetic native output registration failed');
+      continue;
+    }
     store.put('attachment', { id: `file-${i}`, botId, name, mimeType: kind === 0 ? 'image/png' : kind === 1 ? 'application/pdf' : 'text/plain', size: bytes.length, path, ready: true,
-      createdAt: i > 77 ? null : new Date(Date.UTC(2026, i < 8 ? 8 : i < 36 ? 7 : 6, 27 - i % 8)).toISOString(), artifact: Boolean(i % 4), provenance: { itemId: i === 1 ? 'tool-0' : `output-${i}`, turnId: 'design-turn' } });
+      createdAt, artifact: Boolean(i % 4), provenance: { itemId: `output-${i}`, turnId: 'design-turn' } });
   }
+  nativeItems = [
+    { id: 'user', type: 'userMessage', content: [{ type: 'text', text: 'Bring the launch idea to life.', text_elements: [] }] },
+    { id: 'tool-0', type: 'commandExecution', command: 'Prepare a thoughtful first draft', status: 'completed', aggregatedOutput: 'Synthetic work only.' },
+    nativeImage,
+    { id: 'answer', type: 'agentMessage', text: `Here’s a considered plan, with room for your ideas.\n\n[Read the plan](bot-artifact:${published.attachmentId})\n\nWe can shape the next draft together.`, phase: 'final_answer', memoryCitation: null, questions: null, delivery: null },
+  ];
   return {
-    calls,
+    calls, nativeCalls,
     async handle(request) {
       const start = performance.now(); const result = await runtime.handle(request);
       calls.push({ method: request.method, botId: request.botId, ms: performance.now() - start, bytes: Buffer.byteLength(JSON.stringify(result)), mimeType: result?.mimeType, preview: result?.status, id: request.params?.id });

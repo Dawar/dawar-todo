@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import test, { after } from 'node:test';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { Store } from '../bot-bridge/store.mjs';
 import { IDBKeyRange } from 'fake-indexeddb';
 import { runtime } from './helpers/load-ts.mjs';
 import { historyViewPage, readHistoryView, readHistoryDetail } from '../bot-bridge/history-view.mjs';
@@ -8,7 +12,10 @@ import { historyTail, projectHistoryItem, historyKey } from '../lib/bot-history-
 const turn = (id, items) => ({ id, items, status: 'completed', startedAt: 1, completedAt: 2, durationMs: 1, error: null, itemsView: 'full' });
 const message = (id, text = 'Complete message') => ({ id, type: 'agentMessage', text, phase: 'final_answer', memoryCitation: null, delivery: null, questions: null });
 const bot = { id: 'bot-a', threadId: 'native-thread', updatedAt: 'stable' };
-const fakeRuntime = (turns) => ({ epoch: 'epoch', store: { cursor: () => 1, replay: () => [], list: () => [] },
+// Real empty metadata indexes support the adapter's bounded attachment queries.
+const metadataRoot = mkdtempSync(join(tmpdir(), 'bot-timeline-metadata-')), metadataStore = new Store(join(metadataRoot, 'state.sqlite'));
+after(() => { metadataStore.close(); rmSync(metadataRoot, { recursive: true, force: true }); });
+const fakeRuntime = (turns) => ({ epoch: 'epoch', store: { db: metadataStore.db, cursor: () => 1, replay: () => [], list: () => [] },
   historyPage: async () => ({ data: turns, nextCursor: null }) });
 const entry = (id, text) => projectHistoryItem(turn('turn-a', []), message(id, text));
 const page = (entries, extra = {}) => ({ kind: 'page', entries, olderCursor: null, revision: 'v1', eventCursor: 0, attachments: [], complete: true, ...extra });
@@ -54,7 +61,7 @@ test('oversized messages explicitly offer complete detail, including Unicode', a
   original.text += ' changed';
   const continuation = await readHistoryDetail(runtime, bot, { turnId: 'turn-a', itemId: 'long', offset: a.nextOffset, version: a.version });
   assert.equal(continuation.version, a.version, 'continuation uses one consistent snapshot');
-  runtime.historyVersions = new Map([[bot.id, 2]]);
+  runtime.historyContentVersions = new Map([[bot.id, 2]]);
   const changed = await readHistoryDetail(runtime, bot, { turnId: 'turn-a', itemId: 'long' });
   assert.notEqual(changed.version, a.version);
   await assert.rejects(readHistoryDetail(runtime, bot, { turnId: 'turn-a', itemId: 'long', offset: a.nextOffset, version: a.version }), /changed/);

@@ -8,6 +8,7 @@ import { spawn } from 'node:child_process';
 import { build } from 'esbuild';
 import { readHistoryView, readHistoryDetail } from '../bot-bridge/history-view.mjs';
 import { fixture } from './perf-chat-fixtures-098e1aae.mjs';
+import { Store } from '../bot-bridge/store.mjs';
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 async function until(fn, label) { for (let i = 0; i < 300; i++) { const value = await fn(); if (value) return value; await delay(30); } throw new Error(`Timed out: ${label}`); }
@@ -15,6 +16,7 @@ const bundle = await build({ entryPoints: ['tests/perf-chat-entry-098e1aae.jsx']
   plugins: [{ name: 'synthetic-shell', setup(builder) { builder.onLoad({ filter: /app\/bots\/message\.tsx$/ }, async ({ path }) => ({ loader: 'tsx', contents: (await readFile(path, 'utf8')).replace('  function markdown(value: string) {', '  window.baselineMessageRenders = (window.baselineMessageRenders || 0) + 1; (window.messageIds ??= []).push(item.id); function markdown(value: string) {') })); builder.onLoad({ filter: /app\/site-header\.tsx$/ }, () => ({ contents: 'export function SiteHeader(){return null}', loader: 'tsx' })); } }], logLevel: 'silent' });
 const js = bundle.outputFiles.find((file) => file.path.endsWith('.js')).text;
 const css = bundle.outputFiles.find((file) => file.path.endsWith('.css'))?.text ?? '';
+const metadataRoot = await mkdtemp(join(tmpdir(), 'bot-perf-metadata-')), stores = [];
 let options = {}, runtimes = new Map();
 const server = createServer(async (req, res) => {
   const path = new URL(req.url, 'http://localhost').pathname;
@@ -29,7 +31,9 @@ const server = createServer(async (req, res) => {
     let runtime = runtimes.get(botId);
     if (!runtime) {
       const data = fixture(botId, options);
-      runtime = { epoch: 'synthetic', store: { cursor: () => 0, replay: () => [], list: () => data.attachments }, publicAttachment: (a) => a,
+      const store = new Store(join(metadataRoot, `${stores.length}.sqlite`)); stores.push(store);
+      for (const attachment of data.attachments) store.put('attachment', attachment);
+      runtime = { epoch: 'synthetic', store, publicAttachment: (a) => a,
         historyPage: async (_, cursor) => { const end = cursor ? Number(cursor) : data.turns.length, start = Math.max(0, end - 20); return { data: data.turns.slice(start, end).reverse(), nextCursor: start ? String(start) : null }; } };
       runtimes.set(botId, runtime);
     }
@@ -93,4 +97,6 @@ try {
   if (chrome && chrome.exitCode === null) chrome.kill('SIGKILL');
   await new Promise((resolve) => server.close(resolve));
   await rm(profile, { recursive: true, force: true, maxRetries: 3 });
+  for (const store of stores) store.close();
+  await rm(metadataRoot, { recursive: true, force: true });
 }

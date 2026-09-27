@@ -2,7 +2,7 @@ import { HISTORY_TEXT_LIMIT, historyTail, historyBefore, historyKey, projectHist
 import type { BotAttachment, BotEvent } from "../../lib/bots-types";
 import type { ThreadItem } from "../../lib/codex-protocol/v2/ThreadItem";
 import type { Turn } from "../../lib/codex-protocol/v2/Turn";
-import { readOpenedDetail, saveOpenedDetail } from "./timeline-detail-cache";
+import { readOpenedDetail, saveOpenedDetail, updateOpenedDetailAttachments } from "./timeline-detail-cache";
 import { reduceBotTurns, type NativeEvent } from "./thread-state";
 import { timelineCache, type createTimelineCache, type TimelineMetadata } from "./timeline-cache";
 
@@ -311,9 +311,21 @@ export class BotTimeline {
       }
       let offset = 0, json = "", version: string | undefined, cursor = this.state.eventCursor;
       do {
+        const attachmentsAtRequest = this.state.attachments;
         const part = await this.transport.rpc<HistoryDetail>("history.detail", this.botId, { turnId: entry.turnId, itemId: entry.id, offset, version, ...(offset === 0 && cached?.version ? { knownVersion: cached.version } : {}) });
         if (this.transport.owner !== this.owner || this.disposed) throw new Error("Conversation owner changed.");
-        if (part.notModified && cached) { this.detailCursors.set(key, part.eventCursor ?? cursor); this.publish({ attachments: mergeAttachments(this.state.attachments, cached.attachments) }); return cached.item; }
+        if (part.notModified && cached) {
+          this.detailCursors.set(key, part.eventCursor ?? cursor);
+          // Text versions do not cover later publications or preview metadata.
+          // Preserve attachment events received while this request was in flight.
+          const before = new Map(attachmentsAtRequest.map((file) => [file.id, file]));
+          const arrived = this.state.attachments.filter((file) => before.get(file.id) !== file);
+          const attachments = mergeAttachments(mergeAttachments(mergeAttachments(cached.attachments, this.state.attachments), part.attachments ?? []), arrived);
+          this.publish({ attachments }); this.scheduleWrite();
+          await updateOpenedDetailAttachments(this.owner, this.botId, key, attachments, cached.version).catch(() => {});
+          if (this.transport.owner !== this.owner || this.disposed) throw new Error("Conversation owner changed.");
+          return cached.item;
+        }
         if (version && version !== part.version) throw new Error("The item changed. Open its details again.");
         json += part.json; version = part.version; cursor = part.eventCursor ?? cursor;
         if (part.attachments?.length) this.publish({ attachments: mergeAttachments(this.state.attachments, part.attachments) });

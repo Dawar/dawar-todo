@@ -17,8 +17,27 @@ function open() {
 export async function readOpenedDetail(owner: string, botId: string, key: string): Promise<{ item: ThreadItem; attachments: BotAttachment[]; savedAt: number; version: string } | null> {
   const db = await open();
   return new Promise((resolve, reject) => {
-    const request = db.transaction("bodies").objectStore("bodies").get(JSON.stringify([owner, botId, key]));
-    request.onsuccess = () => resolve(request.result ?? null); request.onerror = () => reject(request.error);
+    const tx = db.transaction(["bodies", "metadata"]), storedKey = JSON.stringify([owner, botId, key]);
+    const body = tx.objectStore("bodies").get(storedKey), metadata = tx.objectStore("metadata").get(storedKey);
+    tx.oncomplete = () => {
+      const value = body.result, meta = metadata.result;
+      resolve(value && meta?.version === value.version && meta.attachments
+        ? { ...value, attachments: meta.attachments, savedAt: meta.touched } : value ?? null);
+    };
+    tx.onabort = () => reject(tx.error); tx.onerror = () => {};
+  });
+}
+/** Refresh metadata without reserializing or cloning the unchanged native body. */
+export async function updateOpenedDetailAttachments(owner: string, botId: string, itemKey: string, attachments: BotAttachment[], version: string) {
+  const db = await open(), key = JSON.stringify([owner, botId, itemKey]);
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction("metadata", "readwrite"), store = tx.objectStore("metadata"), request = store.get(key);
+    tx.oncomplete = () => resolve(); tx.onabort = () => reject(tx.error); tx.onerror = () => {};
+    request.onsuccess = () => {
+      const prior = request.result;
+      // Legacy metadata has no version; a concurrent newer body save does.
+      if (prior && (!prior.version || prior.version === version)) store.put({ ...prior, attachments, version, touched: Date.now() });
+    };
   });
 }
 /** Completed on-demand details only. Streaming tokens never serialize this store. */
@@ -30,7 +49,7 @@ export async function saveOpenedDetail(owner: string, botId: string, itemKey: st
     const tx = db.transaction(["bodies", "metadata"], "readwrite"), touched = Date.now();
     tx.oncomplete = () => resolve(); tx.onabort = () => reject(tx.error); tx.onerror = () => {};
     tx.objectStore("bodies").put({ item, attachments, savedAt: touched, version }, key);
-    tx.objectStore("metadata").put({ key, bytes, touched });
+    tx.objectStore("metadata").put({ key, bytes, touched, version });
     // Metadata-only eviction; no full-body getAll/clone while pruning.
     const request = tx.objectStore("metadata").index("touched").openCursor(null, "prev"); let size = 0, count = 0;
     request.onsuccess = () => {

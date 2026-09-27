@@ -61,10 +61,11 @@ try {
     await send('Page.navigate', { url: origin + '/preview?bot=design-a' });
     await until(() => evaluate('!!window.design'), 'workspace bundle');
     if (process.env.BOT_DESIGN_FOLLOWUP) {
-      const paging = await evaluate('design.galleryCountChecks()'); await capture(`gallery-last-page-${width}`);
-      const singular = await evaluate('design.galleryCountChecks(true)'); await capture(`gallery-single-file-${width}`);
+      // Fresh owner/browser context: verify history before ever opening a gallery.
       const outputs = process.env.BOT_DESIGN_FOLLOWUP === 'counts' ? undefined : await evaluate('design.outputCards()');
       if (outputs) await capture(`message-outputs-${width}`);
+      const paging = await evaluate('design.galleryCountChecks()'); await capture(`gallery-last-page-${width}`);
+      const singular = await evaluate('design.galleryCountChecks(true)'); await capture(`gallery-single-file-${width}`);
       results.push({ width, paging, singular, outputs }); continue;
     }
     await evaluate('design.scenario("populated")'); await capture(`chat-${width}`);
@@ -102,7 +103,7 @@ try {
     results.push({ width, reproduction, geometry, jump, states, gallery });
   }
   assert.deepEqual(errors, []);
-  const result = { artifactRuntime: artifacts.calls, browser: await evaluate('navigator.userAgent'), results, browserErrors: errors, limits: 'Chromium emulation with synthetic backend. No actual Safari/iPhone verification.' };
+  const result = { artifactRuntime: artifacts.calls, nativeCalls: artifacts.nativeCalls, browser: await evaluate('navigator.userAgent'), results, browserErrors: errors, limits: 'Chromium emulation, real BotRuntime/SQLite/files and Sharp/Poppler with synthetic Codex transport. No actual Safari/iPhone verification.' };
   await writeFile(`${output}/result.json`, JSON.stringify(result, null, 2)); console.log(JSON.stringify(result, null, 2));
 
 } finally {
