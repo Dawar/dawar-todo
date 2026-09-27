@@ -1,4 +1,7 @@
 import { boundHistoryEvent } from "./history-events.mjs";
+import { listArtifacts, artifactMime, artifactMetadata } from "./artifact-library.mjs";
+import { readArtifactPreview } from "./artifact-previews.mjs";
+import { registerArtifact, registerNativeItem, indexNativeArtifacts, rememberInputProvenance } from "./artifact-outputs.mjs";
 import { EventEmitter } from "node:events";
 import { randomUUID, createHash, randomInt } from "node:crypto";
 import {
@@ -6,7 +9,6 @@ import {
   readFile,
   writeFile,
   open,
-  copyFile,
   stat,
   lstat,
 } from "node:fs/promises";
@@ -55,6 +57,9 @@ const READ_METHODS = new Set([
   "history.view",
   "history.detail",
   "history.attachments",
+  "artifacts.list",
+  "artifacts.preview",
+  "artifacts.index",
   "events",
   "schedules.list",
   "runs.page",
@@ -180,6 +185,10 @@ export class BotRuntime extends EventEmitter {
     if (botId && ["codex", "attachment", "history.refresh"].includes(type)) {
       this.historyVersions ??= new Map();
       this.historyVersions.set(botId, event.seq);
+      if (type !== "attachment") {
+        this.historyContentVersions ??= new Map();
+        this.historyContentVersions.set(botId, event.seq);
+      }
     }
     this.emit("event", event);
     return event;
@@ -577,8 +586,13 @@ export class BotRuntime extends EventEmitter {
       this.store.meta("timeZone", p.timeZone);
       return {};
     }
+    if (method === "artifacts.list") return listArtifacts(this, botId, p);
     const bot = this.store.bot(String(botId));
     switch (method) {
+      case "artifacts.preview":
+        return readArtifactPreview(this, bot, p);
+      case "artifacts.index":
+        return indexNativeArtifacts(this, bot, p);
       case "history.attachments":
         return readHistoryAttachments(this, bot, p);
       case "history.view":
@@ -1303,6 +1317,7 @@ export class BotRuntime extends EventEmitter {
     });
   }
   emitUserMessage(bot, turnId, clientId, content) {
+    rememberInputProvenance(this, bot, turnId, { type: "userMessage", id: `client:${clientId}`, clientId, content });
     this.emitEvent(
       "codex",
       {
@@ -1419,6 +1434,20 @@ export class BotRuntime extends EventEmitter {
     const threadId = p.threadId ?? p.thread?.id;
     const bot = this.store.bots().find((b) => b.threadId === threadId);
     if (!bot) return;
+    if (message.method === "item/completed") {
+      rememberInputProvenance(this, bot, p.turnId, p.item);
+      if (["imageGeneration", "mcpToolCall"].includes(p.item?.type)) {
+        this.pendingArtifactItems ??= 0;
+        const report = (failures) => { if (failures.length) this.emitEvent("artifact.issue", { failures }, bot.id); };
+        if (this.pendingArtifactItems >= 8) report([{ itemId: p.item.id, reason: "Output indexing is busy. Reopen the artifact library to recover this output from native history." }]);
+        else {
+          this.pendingArtifactItems++;
+          void registerNativeItem(this, bot, p.turnId, p.item).then(({ failures }) => report(failures))
+            .catch(() => report([{ itemId: p.item.id, reason: "Output indexing failed. Retry from the artifact library; the native output was retained." }]))
+            .finally(() => { this.pendingArtifactItems--; });
+        }
+      }
+    }
     // Keep native events intact so every renderer uses the generated protocol contract.
     this.emitEvent("codex", message, bot.id);
     if (message.method === "thread/queue/changed")
@@ -1690,7 +1719,7 @@ export class BotRuntime extends EventEmitter {
         return { reported: true };
       }
       case "bots_publish_artifact":
-        return this.publishArtifact(bot, args);
+        return this.publishArtifact(bot, args, { key: `publish:${p.callId}`, turnId: p.turnId, itemId: p.callId });
       default:
         throw new Error("Unknown bot tool.");
     }
@@ -1710,7 +1739,9 @@ export class BotRuntime extends EventEmitter {
       });
   }
   publicAttachment(a) {
-    const { received, ...publicData } = a;
+    if (a.ready && a.artifact) return { ...artifactMetadata(a, this.store.bot(a.botId)), artifact: true };
+    const { received, sha256, ...publicData } = a;
+    void received; void sha256;
     return publicData;
   }
   async beginUpload(bot, p, id) {
@@ -1800,6 +1831,9 @@ export class BotRuntime extends EventEmitter {
     await containedPath(bot.cwd, a.path);
     const f = await open(a.path, constants.O_RDONLY | constants.O_NOFOLLOW);
     try {
+      await containedPath(bot.cwd, `/proc/self/fd/${f.fd}`);
+      const info = await f.stat();
+      if (!info.isFile() || info.size !== a.size) throw new Error("Attachment file changed. Its stored metadata was retained.");
       const data = Buffer.alloc(Math.min(CHUNK, a.size - offset));
       const { bytesRead } = await f.read(data, 0, data.length, offset);
       return {
@@ -1808,42 +1842,14 @@ export class BotRuntime extends EventEmitter {
         nextOffset: offset + bytesRead,
         size: a.size,
         name: a.name,
-        mimeType: a.mimeType,
+        mimeType: artifactMime(a.name, a.mimeType),
       };
     } finally {
       await f.close();
     }
   }
-  async publishArtifact(bot, p) {
-    const source = resolve(bot.cwd, String(p.path));
-    const info = await lstat(source);
-    if (!info.isFile() || info.isSymbolicLink() || info.size > MAX_FILE)
-      throw new Error("Publish a regular file of at most 100 MB.");
-    const id = randomUUID(),
-      name = basename(source),
-      dir = join(bot.cwd, "artifacts", id);
-    await mkdir(dir, { recursive: true, mode: 0o700 });
-    await containedPath(bot.cwd, dir);
-    const path = join(dir, name);
-    await copyFile(source, path, constants.COPYFILE_EXCL);
-    const a = this.store.put("attachment", {
-      id,
-      botId: bot.id,
-      name,
-      path,
-      size: info.size,
-      mimeType: String(p.mimeType ?? "application/octet-stream"),
-      ready: true,
-      received: info.size,
-      createdAt: now(),
-      artifact: true,
-    });
-    this.emitEvent("attachment", this.publicAttachment(a), bot.id);
-    return {
-      attachmentId: id,
-      name,
-      markdown: `[${name}](bot-artifact:${id})`,
-    };
+  async publishArtifact(bot, p, context) {
+    return registerArtifact(this, bot, p, context);
   }
 }
 

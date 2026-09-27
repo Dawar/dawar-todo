@@ -9,6 +9,9 @@ import type {
   BotAccountQuota,
   BotSnapshot,
   BotQueuedSubmission,
+  BotArtifactQuery,
+  BotArtifactPage,
+  BotArtifactPreview,
 } from "./bots-types";
 import type { ThreadTurnsListResponse } from "./codex-protocol/v2/ThreadTurnsListResponse";
 import type { TurnStartResponse } from "./codex-protocol/v2/TurnStartResponse";
@@ -23,6 +26,11 @@ export type BotOperations = {
     result: HistoryResponse;
   };
   "history.attachments": { params: { cursor?: string | null }; result: { attachments: BotAttachment[]; nextCursor: string | null } };
+  /** Omit request.botId for all bots authorized by this machine's owner session. */
+  "artifacts.list": { params: BotArtifactQuery; result: BotArtifactPage };
+  "artifacts.preview": { params: { id: string; version?: string }; result: BotArtifactPreview };
+  /** Explicit, bounded native-history backfill; botId required. Never scans paths or sends a turn. */
+  "artifacts.index": { params: { cursor?: string | null }; result: { registered: number; nextCursor: string | null; failures: { itemId: string; reason: string }[] } };
   "history.detail": {
     params: { turnId: string; itemId: string; offset?: number; version?: string; knownVersion?: string };
     result: HistoryDetail;

@@ -16,6 +16,7 @@ export type HistoryResponse =
   | ({ kind: "page" } & HistoryPage)
   | { kind: "unchanged"; revision: string; eventCursor: number }
   | { kind: "events"; revision: string; eventCursor: number; events: BotEvent[] };
+/** Attachments refresh independently, including when notModified reuses text. */
 export type HistoryDetail = { json: string; nextOffset: number | null; totalLength: number; version: string; eventCursor?: number; notModified?: boolean; attachments?: BotAttachment[] };
 export type HistoryGap = { before: string; stop: string; cursor: string };
 export type HistoryPosition = { anchor: string | null; offset: number; following: boolean };
