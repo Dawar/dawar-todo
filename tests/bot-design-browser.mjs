@@ -22,7 +22,7 @@ const bundle = await build({ entryPoints: ['tests/fixtures/bot-design-browser.js
 const js = bundle.outputFiles.find((file) => file.path.endsWith('.js')).text;
 const globalCss = await postcss([tailwind()]).process(await readFile('app/globals.css', 'utf8'), { from: resolve('app/globals.css') });
 const css = globalCss.css + '\n' + bundle.outputFiles.find((file) => file.path.endsWith('.css')).text;
-const output = process.env.BOT_DESIGN_BASE ? 'outputs/bot-design-before' : 'outputs/bot-design'; await mkdir(output, { recursive: true });
+const output = process.env.BOT_DESIGN_BASE ? 'outputs/bot-design-before' : process.env.BOT_DESIGN_FOLLOWUP ? 'outputs/bot-design-followup' : 'outputs/bot-design'; await mkdir(output, { recursive: true });
 const artifacts = await designArtifacts();
 const server = createServer(async (req, res) => {
   const path = new URL(req.url, 'http://localhost').pathname;
@@ -60,6 +60,13 @@ try {
     await send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: width < 700 });
     await send('Page.navigate', { url: origin + '/preview?bot=design-a' });
     await until(() => evaluate('!!window.design'), 'workspace bundle');
+    if (process.env.BOT_DESIGN_FOLLOWUP) {
+      const paging = await evaluate('design.galleryCountChecks()'); await capture(`gallery-last-page-${width}`);
+      const singular = await evaluate('design.galleryCountChecks(true)'); await capture(`gallery-single-file-${width}`);
+      const outputs = process.env.BOT_DESIGN_FOLLOWUP === 'counts' ? undefined : await evaluate('design.outputCards()');
+      if (outputs) await capture(`message-outputs-${width}`);
+      results.push({ width, paging, singular, outputs }); continue;
+    }
     await evaluate('design.scenario("populated")'); await capture(`chat-${width}`);
     const reproduction = await evaluate('design.emptyHeightReproduction()'); await capture(`empty-height-reproduction-${width}`);
     if (process.env.BOT_DESIGN_BASE) { results.push({ width, reproduction }); break; }

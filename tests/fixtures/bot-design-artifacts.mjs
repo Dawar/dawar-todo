@@ -27,7 +27,7 @@ export async function designArtifacts() {
   const pdf = documentPdf(), text = Buffer.from('A synthetic document. No user data.');
   for (let i = 0; i < 80; i++) {
     const botId = i % 4 ? 'design-a' : 'design-b', kind = i % 3, bytes = kind === 0 ? image : kind === 1 ? pdf : text;
-    const name = ['Quiet morning.png', 'A considered plan.pdf', 'Launch story.md', 'Forest study.png', 'Weekly field notes.pdf', 'Creative brief.txt'][i % 6];
+    const name = i === 79 ? 'One final note.pdf' : ['Quiet morning.png', 'A considered plan.pdf', 'Launch story.md', 'Forest study.png', 'Weekly field notes.pdf', 'Creative brief.txt'][i % 6];
     const path = join(root, botId, `file-${i}`); await writeFile(path, bytes);
     store.put('attachment', { id: `file-${i}`, botId, name, mimeType: kind === 0 ? 'image/png' : kind === 1 ? 'application/pdf' : 'text/plain', size: bytes.length, path, ready: true,
       createdAt: i > 77 ? null : new Date(Date.UTC(2026, i < 8 ? 8 : i < 36 ? 7 : 6, 27 - i % 8)).toISOString(), artifact: Boolean(i % 4), provenance: { itemId: i === 1 ? 'tool-0' : `output-${i}`, turnId: 'design-turn' } });

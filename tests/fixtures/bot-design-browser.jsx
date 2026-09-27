@@ -97,6 +97,34 @@ window.design = {
     this.galleryAction('close');await wait(30);
     return {publishedLink:true,realPdfPreview:true,originalViewer:true,closedWorkLog:true};
   },
+  async galleryCountChecks(single = false) {
+    const cards = () => [...document.querySelectorAll('.bots-file-card')];
+    const label = () => document.querySelector('.bots-gallery-total')?.textContent;
+    if (single) {
+      const input = document.querySelector('[aria-label="Search files"]');
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, 'One final note');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      await until(() => cards().length === 1 && label() === '1 file', 'honest singular inventory');
+      check(document.querySelector('.bots-gallery-month h2')?.textContent === 'Date unknown1 file', 'singular month count');
+      return { header: label(), cards: cards().length, unknownDate: true };
+    }
+    await this.gallery('populated');
+    check(label() === '36+ files', 'first page lower bound');
+    const before = rpcCalls.filter((r) => r.method === 'artifacts.list').length;
+    for (const page of [2, 3]) {
+      document.querySelector('.bots-gallery-pages button:last-child').click();
+      await until(() => label()?.startsWith(`Page ${page} ·`), `page ${page} count`);
+    }
+    check(label() === 'Page 3 · 8 files', 'last page size masquerades as inventory');
+    check(cards().length === 8, 'last page fixture');
+    const months = [...document.querySelectorAll('.bots-gallery-month h2')].map((el) => el.textContent);
+    check(months.every((text) => text.endsWith('files on this page')), 'month counts must be page scoped');
+    check(document.querySelector('.bots-gallery-pages button:last-child').disabled, 'last page has no older cursor');
+    const requests = rpcCalls.filter((r) => r.method === 'artifacts.list').length - before;
+    check(requests === 2, 'count labels must not iterate inventory');
+    check(document.body.scrollWidth <= innerWidth + 1, 'count wording overflows viewport');
+    return { header: label(), cards: cards().length, months, requests };
+  },
   async galleryChecks() {
     const cards = () => [...document.querySelectorAll('.bots-file-card')];
     const text = (selector, value) => { const el = document.querySelector(selector); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el,value); el.dispatchEvent(new Event('input',{bubbles:true})); };
