@@ -40,7 +40,10 @@ test('large native events are compact before storage/wire; real client refreshes
   const env = browserRuntime({ IDBKeyRange, localStorage: { getItem: () => null, setItem() {} } });
   const { BotsClient } = env.load('app/bots/client.ts'), { BotTimeline } = env.load('app/bots/timeline-controller.ts');
   const client = new BotsClient(); client.owner = 'synthetic-owner'; client.online = true;
-  const requests = []; client.rpc = async (method, botId, params) => { requests.push(method); return JSON.parse(JSON.stringify(await runtime.handle({ method, botId, params }))); };
+  const requests = [], responses = []; client.rpc = async (method, botId, params) => {
+    requests.push(method); const json = JSON.stringify(await runtime.handle({ method, botId, params }));
+    responses.push({ method, bytes: Buffer.byteLength(json) }); return JSON.parse(json);
+  };
   const timeline = new BotTimeline(client.owner, 'bot', client, { read: async () => null, write: async () => {} });
   client.events.add((event) => timeline.receive(event));
   const events = []; runtime.on('event', (event) => { events.push(event); client.receive({ type: 'event', event: JSON.parse(JSON.stringify(event)) }); });
@@ -54,7 +57,8 @@ test('large native events are compact before storage/wire; real client refreshes
   await new Promise((r) => setTimeout(r, 300)); assert.deepEqual(requests, ['history.view']);
   assert.ok(events.every((event) => Buffer.byteLength(JSON.stringify(event)) < 16384));
   assert.ok(store.replay(0).every((event) => !JSON.stringify(event).includes(rawDelta.params.delta)));
-  const unsubscribe = timeline.subscribeDetail(descriptor, () => {}); await timeline.detail(descriptor); const before = scans;
+  const unsubscribe = timeline.subscribeDetail(descriptor, () => {}); await timeline.detail(descriptor); const before = scans, beforeResponses = responses.length;
+  const initialDetailBytes = responses.filter((response) => response.method === 'history.detail').reduce((n, response) => n + response.bytes, 0);
   nativeItem = { ...nativeItem, status: 'completed', aggregatedOutput: nativeItem.aggregatedOutput + '\nFINAL AUTHORITATIVE OUTPUT' };
   runtime.emitEvent('codex', { method: 'item/completed', params: { turnId: 'turn', item: nativeItem } }, 'bot');
   runtime.emitEvent('codex', { method: 'turn/completed', params: { turn: { id: 'turn', status: 'completed', items: [] } } }, 'bot');
@@ -64,6 +68,8 @@ test('large native events are compact before storage/wire; real client refreshes
   assert.equal(scans - before, 1, 'one coalesced full native lookup for open final detail');
   const rawBytes = Buffer.byteLength(JSON.stringify(rawItem)) + 10 * Buffer.byteLength(JSON.stringify(rawDelta));
   const wireBytes = events.slice(0, 11).reduce((n, event) => n + Buffer.byteLength(JSON.stringify(event)), 0);
-  console.log(JSON.stringify({ scenario: 'large closed-tool item plus 10 output deltas', nativePayloadBytes: rawBytes, compactWireBytes: wireBytes, persistedReplayBytes: Buffer.byteLength(JSON.stringify(store.replay(0))), closedDetailRequests: 0, openFinalNativeScans: scans - before }));
+  const finalDetail = responses.slice(beforeResponses).filter((response) => response.method === 'history.detail');
+  console.log(JSON.stringify({ scenario: 'large closed-tool item plus 10 output deltas', nativePayloadBytes: rawBytes, compactWireBytes: wireBytes, persistedReplayBytes: Buffer.byteLength(JSON.stringify(store.replay(0))), closedDetailRequests: 0,
+    initialDetailBytes, openFinalNativeScans: scans - before, openFinalDetailBytes: finalDetail.reduce((n, response) => n + response.bytes, 0), openFinalDetailChunks: finalDetail.length }));
   unsubscribe(); await timeline.dispose();
 });

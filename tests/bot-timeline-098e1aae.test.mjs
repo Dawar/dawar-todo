@@ -217,3 +217,20 @@ test('scheduled turn access pages inside one huge turn and does not transfer nei
   const third = await historyViewPage(native, bot, second.olderCursor);
   assert.equal(third.olderCursor, null); assert.deepEqual([...third.entries, ...second.entries, ...first.entries].map((e) => e.id), items.map((i) => i.id));
 });
+
+test('mounted text previews never fetch full detail on completion; oversized text deltas coalesce bounded view refresh', async () => {
+  const env = runtime({ IDBKeyRange }), { BotTimeline } = env.load('app/bots/timeline-controller.ts');
+  const requests = [], preview = { ...entry('live', 'preview'), status: 'inProgress' };
+  const controller = new BotTimeline('owner', bot.id, { owner: 'owner', online: true, rpc: async (method) => {
+    requests.push(method); return page([preview], { eventCursor: requests.length === 1 ? 0 : 11 });
+  } }, { read: async () => null, write: async () => {} });
+  await controller.refresh(); const unsubscribe = controller.subscribeDetail(preview, () => {});
+  for (let seq = 1; seq <= 10; seq++) controller.receive({ seq, botId: bot.id, type: 'history.refresh', data: {
+    reason: 'large-native-event', method: 'item/agentMessage/delta', turnId: 'turn-a', itemId: 'live',
+  } });
+  controller.receive({ seq: 11, botId: bot.id, type: 'codex', data: { method: 'turn/completed', params: { turn: turn('turn-a', []) } } });
+  await pause(1200);
+  assert.deepEqual(requests, ['history.view', 'history.view']);
+  assert.equal(controller.detailPending(preview), false);
+  unsubscribe(); await controller.dispose();
+});

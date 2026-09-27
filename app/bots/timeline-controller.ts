@@ -167,7 +167,7 @@ export class BotTimeline {
   }
   private invalidateDetail(entry: HistoryEntry, seq: number) {
     const key = historyKey(entry.turnId, entry.id);
-    if (!this.detailListeners.get(key)?.size) return;
+    if (!this.detailListeners.get(key)?.size || entry.item && !this.detailItems.has(key)) return;
     this.detailInvalidations.set(key, seq);
     if (this.detailTimers.has(key)) return;
     this.detailTimers.set(key, setTimeout(async () => {
@@ -175,7 +175,7 @@ export class BotTimeline {
       if (this.disposed || !this.detailListeners.get(key)?.size || !this.transport.online) return;
       const wanted = this.detailInvalidations.get(key) ?? seq;
       try {
-        await this.detail(entry);
+        await this.detail(this.state.entries.find((value) => historyKey(value.turnId, value.id) === key) ?? entry);
         if ((this.detailCursors.get(key) ?? 0) < wanted || (this.detailInvalidations.get(key) ?? 0) > wanted) this.invalidateDetail(entry, this.detailInvalidations.get(key) ?? wanted);
         else { this.detailInvalidations.delete(key); this.publish({}, true); }
       } catch (error) { this.detailInvalidations.delete(key); this.publish({ error: `Open detail could not refresh: ${String(error)}` }, true); }
@@ -204,6 +204,9 @@ export class BotTimeline {
       const entry = entries.find((entry) => entry.turnId === data.turnId && entry.id === data.itemId);
       if (entry) this.invalidateDetail(entry, event.seq);
       else if (!data.turn) this.scheduleRefresh();
+      // Oversized text deltas carry no text; refresh the bounded readable view.
+      // A mounted preview must not silently request the entire native item.
+      if (entry?.item && !data.entry && !data.turn) this.scheduleRefresh();
       this.publish({ entries, eventCursor: event.seq }); this.scheduleWrite();
       if (data.method === "turn/completed" || data.method === "item/completed") void this.flush();
       return;
@@ -289,7 +292,10 @@ export class BotTimeline {
     if (this.transport.owner !== this.owner || this.disposed) return Promise.reject(new Error("Conversation owner changed."));
     const supplement = this.supplements.get(key);
     if (supplement) { this.detailItems.set(key, supplement); this.detailListeners.get(key)?.forEach((listener) => listener()); return Promise.resolve(supplement); }
-    if (entry.complete && entry.item) return Promise.resolve(entry.item);
+    if (entry.complete && entry.item) {
+      this.detailCursors.set(key, this.state.eventCursor); this.detailItems.set(key, entry.item);
+      this.detailListeners.get(key)?.forEach((listener) => listener()); return Promise.resolve(entry.item);
+    }
     const prior = this.detailRequests.get(key); if (prior) return prior;
     const promise = (async () => {
       this.detailEvents.set(key, []);
@@ -325,7 +331,8 @@ export class BotTimeline {
         item = reduced[0]?.items.find((value) => value.id === entry.id) ?? item;
       }
       this.detailItems.set(key, item); this.detailCursors.set(key, cursor);
-      if (entry.status !== "inProgress") void saveOpenedDetail(this.owner, this.botId, key, item, this.state.attachments, version!).catch(() => {});
+      const current = this.state.entries.find((value) => historyKey(value.turnId, value.id) === key) ?? entry;
+      if (current.status !== "inProgress") void saveOpenedDetail(this.owner, this.botId, key, item, this.state.attachments, version!).catch(() => {});
       this.detailListeners.get(key)?.forEach((listener) => listener());
       return item;
     })().finally(() => { this.detailRequests.delete(key); this.detailEvents.delete(key); });

@@ -21,8 +21,18 @@ const EntryBody = memo(function EntryBody({ entry, timeline, attachments, downlo
     try { await timeline.detail(entry); } catch (e) { setError(String(e)); }
     finally { setLoading(false); }
   }, [entry, timeline]);
-  // Deferred entries mount only after the user opens their disclosure.
-  useEffect(() => { let active = true; if (!entry.item) queueMicrotask(() => { if (active) void load(); }); return () => { active = false; }; }, [entry.item, load]);
+  // Deferred entries mount only after disclosure. Later descriptors must not
+  // bypass the controller's coalesced live-detail invalidation lane.
+  const initialEntry = useRef(entry);
+  useEffect(() => {
+    let active = true;
+    if (!initialEntry.current.item) queueMicrotask(() => {
+      if (!active) return;
+      setLoading(true);
+      void timeline.detail(initialEntry.current).catch((error) => { if (active) setError(String(error)); }).finally(() => { if (active) setLoading(false); });
+    });
+    return () => { active = false; };
+  }, [timeline]);
   const item = full ?? entry.item;
   return <>{refreshing && <small>Refreshing live full detail…</small>}{item && <BotMessage item={item} botId={timeline.botId} attachments={attachments} download={download} inWorkLog />}
     {!entry.complete && <div className="bots-detail-status">
