@@ -4,8 +4,14 @@ export async function bridgeResponse(runtime, request) {
     return { type: "response", clientId: request.clientId, id: request.id,
       result: await runtime.handle(request) };
   } catch (error) {
+    const outcome = error?.outcome === "rejected" ? "rejected" : "uncertain";
+    const detail = typeof error?.message === "string" && error.message
+      ? error.message : "The bridge could not confirm the operation.";
+    // sendLarge chunks only result for oversized replies. Keep failures in one
+    // frame so both error and certainty survive old relay/client envelopes.
+    const text = detail.length > 32000 ? `${detail.slice(0, 32000)}… [error truncated]` : detail;
     return { type: "response", clientId: request.clientId, id: request.id,
-      error: error.message ?? "The bridge could not confirm the operation.",
-      outcome: error.outcome === "rejected" ? "rejected" : "uncertain" };
+      error: text, outcome,
+      result: { __dawarBotFailure: { version: 1, operationId: request.operationId, outcome } } };
   }
 }
