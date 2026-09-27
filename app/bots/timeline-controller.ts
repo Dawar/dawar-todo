@@ -1,5 +1,5 @@
-import { reconcileHistory, conversationEntries, preserveUserIdentity } from "./history-reconcile";
-import { retainHistory, retainedAttachments, CACHE_ENTRIES, CACHE_BYTES } from "./history-window";
+import { reconcileHistory, conversationEntries, orderedHistory } from "./history-reconcile";
+import { historyBoundaries, retainHistory, retainedAttachments, CACHE_ENTRIES, CACHE_BYTES } from "./history-window";
 import { HISTORY_TEXT_LIMIT, conversationItem, historyTail, historyBefore, historyKey, projectHistoryItem, type HistoryEntry, type HistoryResponse, type HistoryDetail, type HistoryPosition, type HistoryGap } from "../../lib/bot-history-view";
 import type { BotAttachment, BotEvent } from "../../lib/bots-types";
 import type { ThreadItem } from "../../lib/codex-protocol/v2/ThreadItem";
@@ -25,6 +25,7 @@ type Cache = ReturnType<typeof createTimelineCache>;
 export class BotTimeline {
   private state = initial();
   private aliases = new Map<string, string>();
+  private identityAliases = new Map<string, string>();
   resolveKey = (key: string | null): string | null => {
     const seen = new Set<string>();
     while (key && this.aliases.has(key) && !seen.has(key)) { seen.add(key); key = this.aliases.get(key)!; }
@@ -32,7 +33,7 @@ export class BotTimeline {
   };
   private normalize(entries: HistoryEntry[]) {
     const reconciled = reconcileHistory(conversationEntries(entries));
-    for (const [from, to] of reconciled.aliases) this.aliases.set(from, to);
+    for (const [from, to] of reconciled.aliases) { this.aliases.set(from, to); this.identityAliases.set(from, to); }
     const kept = new Set(reconciled.entries.map((entry) => historyKey(entry.turnId, entry.id)));
     const successors: (HistoryEntry | undefined)[] = new Array(entries.length);
     let next: HistoryEntry | undefined, previous: HistoryEntry | undefined;
@@ -47,10 +48,20 @@ export class BotTimeline {
       const replacement = successors[index] ?? previous;
       if (replacement) this.aliases.set(key, historyKey(replacement.turnId, replacement.id));
     }
-    this.state = { ...this.state, position: { ...this.state.position, anchor: this.resolveKey(this.state.position.anchor) },
-      gaps: this.state.gaps.map((gap) => ({ ...gap, before: this.resolveKey(gap.before)!, stop: this.resolveKey(gap.stop)! })).filter((gap) => gap.before !== gap.stop) };
+    const boundaries = historyBoundaries(reconciled.entries, this.mapGaps(this.state.gaps), this.state.olderCursor, entries);
+    this.state = { ...this.state, ...boundaries, position: { ...this.state.position, anchor: this.resolveKey(this.state.position.anchor) } };
     for (const entry of reconciled.entries) if (reconciled.aliases.size) this.dirty.set(historyKey(entry.turnId, entry.id), entry);
     return reconciled.entries;
+  }
+  private mapGaps(gaps: HistoryGap[]) {
+    // Reading anchors may fall back to a neighbour after a tool disappears.
+    // Gap endpoints need identity aliases only; removal must retain the hole.
+    const identity = (key: string) => {
+      const seen = new Set<string>();
+      while (this.identityAliases.has(key) && !seen.has(key)) { seen.add(key); key = this.identityAliases.get(key)!; }
+      return key;
+    };
+    return gaps.map(gap => ({ ...gap, before: identity(gap.before), stop: identity(gap.stop) }));
   }
   private listeners = new Set<() => void>();
   private dirty = new Map<string, HistoryEntry>();
@@ -91,17 +102,25 @@ export class BotTimeline {
     else this.publishTimer ??= setTimeout(() => { this.publishTimer = undefined; this.listeners.forEach((fn) => fn()); for (const listeners of this.detailListeners.values()) listeners.forEach((fn) => fn()); }, 16);
   }
   private merge(entries: HistoryEntry[], prepend = false, preserveAfter = Infinity) {
-    const existing = new Map(this.state.entries.map((e) => [historyKey(e.turnId, e.id), e]));
-    const fresh = new Map(entries.map((e) => [historyKey(e.turnId, e.id), e]));
-    const merged = this.state.entries.map((old) => {
-      const key = historyKey(old.turnId, old.id), next = fresh.get(key);
-      if (!next || (old.updatedSeq ?? 0) > preserveAfter) return old;
-      const value = preserveUserIdentity(old, next); this.dirty.set(key, value); return value;
-    });
-    const added = entries.filter((e) => !existing.has(historyKey(e.turnId, e.id)));
-    for (const e of added) this.dirty.set(historyKey(e.turnId, e.id), e);
-    const normalized = this.normalize(prepend ? [...added, ...merged] : [...merged, ...added]);
+    const existing = new Map(this.state.entries.map(entry => [historyKey(entry.turnId, entry.id), entry]));
+    const normalized = this.normalize(orderedHistory(this.state.entries, entries, prepend, preserveAfter));
+    for (const entry of normalized) if (existing.get(historyKey(entry.turnId, entry.id)) !== entry) this.dirty.set(historyKey(entry.turnId, entry.id), entry);
     this.state = { ...this.state, entries: normalized };
+  }
+  /** A contiguous native page can extend or close previously evicted ranges. */
+  private pageBoundaries(page: Extract<HistoryResponse, { kind: "page" }>, older = false) {
+    const entries = this.state.entries, indices = new Map(entries.map((entry, index) => [historyKey(entry.turnId, entry.id), index]));
+    const positions = page.entries.map(entry => indices.get(this.resolveKey(historyKey(entry.turnId, entry.id))!)).filter((index): index is number => index !== undefined);
+    const first = Math.min(...positions), last = Math.max(...positions);
+    const gaps = this.state.gaps.flatMap(gap => {
+      const before = indices.get(gap.before)!, stop = indices.get(gap.stop)!;
+      if (last >= before && (first <= stop || !page.olderCursor)) return [];
+      if (last >= before && first < before && first > stop) return [{ ...gap, before: historyKey(entries[first].turnId, entries[first].id), cursor: page.olderCursor ?? historyBefore(entries[first]) }];
+      if (first <= stop && last > stop && last < before) return [{ ...gap, stop: historyKey(entries[last].turnId, entries[last].id) }];
+      return [gap];
+    });
+    const olderCursor = older || first === 0 || !entries.length || !page.olderCursor ? page.olderCursor : this.state.olderCursor;
+    return { gaps, olderCursor, complete: !olderCursor && !gaps.length && entries.every(entry => entry.complete) };
   }
   seed(turns: Turn[], attachments: BotAttachment[]) {
     if (this.state.cached || this.state.entries.length || !turns.length || this.disposed) return;
@@ -119,8 +138,9 @@ export class BotTimeline {
         const liveDirty = new Map(this.dirty);
         this.merge(cached.entries, true, -1); this.dirty = liveDirty;
         const m = cached.metadata; this.cachedKeys = new Set(m.order ?? []);
-        this.publish({ revision: m.revision.endsWith(":conversation-v1") ? m.revision : "", eventCursor: Math.max(live, m.eventCursor), olderCursor: m.olderCursor,
-          partialTurn: m.partialTurn, attachments: m.attachments, contextEntries: m.contextEntries ?? [], gaps: (m.gaps ?? []).map((gap) => ({ ...gap, before: this.resolveKey(gap.before)!, stop: this.resolveKey(gap.stop)! })).filter((gap) => gap.before !== gap.stop), complete: m.complete, position: { ...(m.position ?? this.state.position), anchor: this.resolveKey(m.position?.anchor ?? null) }, cached: true }, true);
+        const boundaries = historyBoundaries(this.state.entries, this.mapGaps(m.gaps ?? []), m.olderCursor, cached.entries);
+        this.publish({ revision: m.revision.endsWith(":conversation-v2") ? m.revision : "", eventCursor: Math.max(live, m.eventCursor), ...boundaries,
+          partialTurn: m.partialTurn, attachments: m.attachments, contextEntries: m.contextEntries ?? [], complete: m.complete && !boundaries.olderCursor && !boundaries.gaps.length, position: { ...(m.position ?? this.state.position), anchor: this.resolveKey(m.position?.anchor ?? null) }, cached: true }, true);
         this.scheduleWrite();
       } catch (e) { this.publish({ error: `Offline history cache unavailable: ${String(e)}` }, true); }
     })();
@@ -138,7 +158,6 @@ export class BotTimeline {
         if (this.disposed || this.transport.owner !== this.owner) return;
         if (response.kind === "events") for (const event of response.events) this.receive(event);
         if (response.kind === "page") {
-          const empty = this.state.entries.length === 0;
           const known = new Set(this.state.entries.map((entry) => historyKey(entry.turnId, entry.id)));
           const clients = new Set(this.state.entries.flatMap((entry) => entry.item?.type === "userMessage" && entry.item.clientId ? [entry.item.clientId] : []));
           const overlaps = response.entries.some((entry) => known.has(historyKey(entry.turnId, entry.id)) || entry.item?.type === "userMessage" && entry.item.clientId && clients.has(entry.item.clientId));
@@ -152,8 +171,7 @@ export class BotTimeline {
           this.merge(response.entries, false, startCursor);
           // Keep loaded older pages; a latest-page refresh never replaces them.
           this.publish({ partialTurn: response.partialTurn, attachments: mergeAttachments(this.state.attachments, response.attachments), contextEntries: response.contextEntries ?? [],
-            olderCursor: !empty && this.state.cached ? this.state.olderCursor : response.olderCursor,
-            complete: empty ? response.complete : response.complete && this.state.complete, cached: true });
+            ...this.pageBoundaries(response), cached: true });
         }
         this.publish({ revision: response.revision, eventCursor: Math.max(this.state.eventCursor, response.eventCursor) });
         this.scheduleWrite();
@@ -171,8 +189,9 @@ export class BotTimeline {
       try {
         const page = await this.transport.rpc<HistoryResponse>("history.view", this.botId, { projection: "conversation", cursor });
         if (this.disposed || this.transport.owner !== this.owner || page.kind !== "page") return;
+        if (!page.entries.length && page.olderCursor === cursor) throw new Error("History pagination made no progress. Retry to reconnect these pages.");
         this.merge(page.entries, true, -1);
-        this.publish({ partialTurn: page.partialTurn, olderCursor: page.olderCursor, attachments: mergeAttachments(this.state.attachments, page.attachments), complete: page.complete }, true);
+        this.publish({ partialTurn: page.partialTurn, ...this.pageBoundaries(page, true), attachments: mergeAttachments(this.state.attachments, page.attachments) }, true);
         this.scheduleWrite();
       } catch (e) { this.publish({ error: String(e) }, true); }
       finally { this.olderRequest = undefined; }
@@ -191,23 +210,34 @@ export class BotTimeline {
     try {
       const page = await this.transport.rpc<HistoryResponse>("history.view", this.botId, { projection: "conversation", cursor: direction > 0 ? JSON.stringify({ native: null, before: null, after: gap.stop }) : gap.cursor });
       if (this.disposed || this.transport.owner !== this.owner || page.kind !== "page") return;
-      const boundary = this.state.entries.findIndex((entry) => historyKey(entry.turnId, entry.id) === gap.before);
-      const currentGap = this.state.gaps.find((value) => value.before === gap.before && value.stop === gap.stop);
+      const beforeKey = this.resolveKey(gap.before), stopKey = this.resolveKey(gap.stop);
+      const boundary = this.state.entries.findIndex((entry) => historyKey(entry.turnId, entry.id) === beforeKey);
+      const currentGap = this.state.gaps.find((value) => value.before === beforeKey && value.stop === stopKey);
       if (boundary < 0 || !currentGap) return;
-      const stop = this.state.entries.findIndex((entry) => historyKey(entry.turnId, entry.id) === gap.stop);
+      const stop = this.state.entries.findIndex((entry) => historyKey(entry.turnId, entry.id) === stopKey);
       const targetKeys = new Set((direction > 0 ? this.state.entries.slice(boundary) : this.state.entries.slice(0, boundary)).map((entry) => historyKey(entry.turnId, entry.id)));
-      const connected = page.entries.some((entry) => targetKeys.has(historyKey(entry.turnId, entry.id)));
+      const clients = new Map(this.state.entries.flatMap(entry => entry.item?.type === "userMessage" && entry.item.clientId ? [[entry.item.clientId, historyKey(entry.turnId, entry.id)] as const] : []));
+      const identity = (entry: HistoryEntry) => entry.item?.type === "userMessage" && entry.item.clientId && clients.get(entry.item.clientId) || this.resolveKey(historyKey(entry.turnId, entry.id))!;
+      const connected = page.entries.some((entry) => targetKeys.has(identity(entry)));
       const allKeys = new Set(this.state.entries.map((entry) => historyKey(entry.turnId, entry.id)));
-      const added = page.entries.filter((entry) => !allKeys.has(historyKey(entry.turnId, entry.id)));
-      for (const entry of added) this.dirty.set(historyKey(entry.turnId, entry.id), entry);
+      const added = page.entries.filter((entry) => !allKeys.has(identity(entry)));
+      const exhausted = direction > 0 ? page.newerCursor === null : !page.olderCursor;
+      if (!connected && !exhausted && !added.length && (direction > 0 || page.olderCursor === currentGap.cursor)) throw new Error("History pagination made no progress. Retry to reconnect these pages.");
       const insertion = direction > 0 && stop >= 0 ? stop + 1 : boundary;
-      const entries = [...this.state.entries.slice(0, insertion), ...added, ...this.state.entries.slice(insertion)];
-      const gaps = this.state.gaps.flatMap((value) => value !== currentGap ? [value] : connected ? [] : [direction > 0 ? {
-        ...gap, stop: added.length ? historyKey(added.at(-1)!.turnId, added.at(-1)!.id) : gap.stop,
-      } : { ...gap, before: added.length ? historyKey(added[0].turnId, added[0].id) : gap.before, cursor: page.olderCursor ?? gap.cursor }]);
-      const normalized = this.normalize(entries);
-      const mappedGaps = gaps.map((gap) => ({ ...gap, before: this.resolveKey(gap.before)!, stop: this.resolveKey(gap.stop)! })).filter((gap) => gap.before !== gap.stop);
-      this.publish({ entries: normalized, gaps: mappedGaps, attachments: mergeAttachments(this.state.attachments, page.attachments) }, true); this.scheduleWrite();
+      const previous = this.state.entries;
+      const gaps = this.state.gaps.flatMap((value) => value !== currentGap ? [value] : connected || exhausted ? [] : [direction > 0 ? {
+        ...currentGap, stop: added.length ? historyKey(added.at(-1)!.turnId, added.at(-1)!.id) : currentGap.stop,
+      } : { ...currentGap, before: added.length ? historyKey(added[0].turnId, added[0].id) : currentGap.before, cursor: page.olderCursor! }]);
+      if (page.entries.some(entry => allKeys.has(identity(entry)))) this.merge(page.entries, direction < 0, -1);
+      else {
+        const normalized = this.normalize([...previous.slice(0, insertion), ...added, ...previous.slice(insertion)]);
+        this.state = { ...this.state, entries: normalized };
+        for (const entry of added) this.dirty.set(historyKey(entry.turnId, entry.id), entry);
+      }
+      const first = this.state.entries[0], incomingFirst = page.entries[0];
+      const ownsOldest = direction < 0 && (!page.olderCursor || first && incomingFirst && this.resolveKey(historyKey(incomingFirst.turnId, incomingFirst.id)) === historyKey(first.turnId, first.id));
+      const boundaries = historyBoundaries(this.state.entries, this.mapGaps(gaps), ownsOldest ? page.olderCursor : this.state.olderCursor, previous);
+      this.publish({ ...boundaries, complete: !boundaries.olderCursor && !boundaries.gaps.length && this.state.entries.every(entry => entry.complete), attachments: mergeAttachments(this.state.attachments, page.attachments) }, true); this.scheduleWrite();
     } catch (e) { this.publish({ error: String(e) }, true); }
   }
   private scheduleRefresh() {
@@ -283,6 +313,10 @@ export class BotTimeline {
       for (const entry of this.state.entries) if (entry.turnId === turnId) update({ ...entry, status: p.turn.status, turnStatus: p.turn.status });
       if (method === "turn/completed") for (const entry of this.state.entries) if (entry.turnId === turnId) this.invalidateDetail(entry, event.seq);
       for (const item of p.turn.items) update(projectHistoryItem(p.turn, item, p.turn.items.some((i) => i.type === "userMessage" && Boolean(i.clientId?.startsWith("schedule:")))));
+      // Removing a tool-heavy live tail admits older readable turns and can
+      // remove a gap's newest endpoint. Reconcile that boundary once, even
+      // when native completion contains only sparse item/status information.
+      if (method === "turn/completed") this.scheduleRefresh();
     } else if (method === "turn/diff/updated" || method === "turn/plan/updated") {
       const id = method === "turn/diff/updated" ? "live-turn-diff" : "live-turn-plan";
       const item: ThreadItem = { id, type: "plan", text: method === "turn/diff/updated" ? "```diff\n" + (p.diff ?? "") + "\n```" : JSON.stringify(p.plan, null, 2) };
@@ -328,7 +362,7 @@ export class BotTimeline {
     const tail = retained.entries, gaps = retained.gaps;
     const attachments = retainedAttachments(tail, this.state.attachments);
     if (tail.length < this.state.entries.length) this.publish({ entries: tail, attachments, gaps, olderCursor: retained.olderCursor, complete: false });
-    else if (this.state.attachments.length > attachments.length) this.publish({ attachments });
+    else if (this.state.attachments.length > attachments.length || JSON.stringify(gaps) !== JSON.stringify(this.state.gaps) || retained.olderCursor !== this.state.olderCursor) this.publish({ attachments, gaps, olderCursor: retained.olderCursor });
     const keys = new Set(tail.map((entry) => historyKey(entry.turnId, entry.id)));
     for (const entry of tail) if (!this.cachedKeys.has(historyKey(entry.turnId, entry.id))) dirtyMap.set(historyKey(entry.turnId, entry.id), entry);
     const dirty = [...dirtyMap.values()].filter((entry) => keys.has(historyKey(entry.turnId, entry.id)));

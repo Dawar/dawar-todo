@@ -7,6 +7,36 @@ export function preserveUserIdentity(old: HistoryEntry, next: HistoryEntry): His
   if (next.item.clientId && next.item.content.length) return next;
   return { ...next, item: { ...next.item, clientId: next.item.clientId || old.item.clientId, content: next.item.content.length ? next.item.content : old.item.content } };
 }
+/** Weave chronological pages at shared native/client identities. Incoming order
+ * is authoritative; entries known only locally stay beside the next shared
+ * anchor. In particular, a newly expanded older prefix is never appended. */
+export function orderedHistory(old: HistoryEntry[], incoming: HistoryEntry[], prepend: boolean, preserveAfter: number) {
+  const keys = new Map(old.map((entry, index) => [historyKey(entry.turnId, entry.id), index]));
+  const clients = new Map(old.flatMap((entry, index) => { const id = clientId(entry); return id ? [[id, index] as const] : []; }));
+  const matches = incoming.map(entry => keys.get(historyKey(entry.turnId, entry.id)) ?? (clientId(entry) ? clients.get(clientId(entry)!) : undefined));
+  const matched = new Set(matches.filter(index => index !== undefined));
+  if (!matched.size) return prepend ? [...incoming, ...old] : [...old, ...incoming];
+  const before = new Map<number, HistoryEntry[]>(); let pending: HistoryEntry[] = [];
+  old.forEach((entry, index) => {
+    if (matched.has(index)) { before.set(index, pending); pending = []; }
+    else pending.push(entry);
+  });
+  const tail = pending, result: HistoryEntry[] = []; pending = [];
+  incoming.forEach((entry, index) => {
+    const at = matches[index];
+    if (at === undefined) { pending.push(entry); return; }
+    const prior = old[at];
+    let winner = reconcileHistory([prior, entry]).entries[0];
+    if ((prior.updatedSeq ?? 0) > preserveAfter) {
+      // Keep newer live content, but still adopt a canonical native identity.
+      const item = preserveUserIdentity(winner, prior).item;
+      winner = { ...prior, id: winner.id, turnId: winner.turnId, item: item ? { ...item, id: winner.id } : winner.item };
+    }
+    result.push(...(before.get(at) ?? []), ...pending, prior, winner);
+    before.delete(at); pending = [];
+  });
+  return [...result, ...pending, ...tail];
+}
 /** Identity is scoped by the owning BotTimeline. Equal text is never identity. */
 export function reconcileHistory(values: HistoryEntry[]) {
   const entries: HistoryEntry[] = [], keys = new Map<string, number>(), clients = new Map<string, number>(), aliases = new Map<string, string>();

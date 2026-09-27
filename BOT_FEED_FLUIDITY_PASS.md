@@ -2,6 +2,43 @@
 
 Base: `6ad69eac3696c04b4f351830025ed57cb59f5b73` (v138/SW35). Branch: `codex/bot-typing-recent-3d829950`. No Tasks/SW, draft/outbox, operation-certainty or original-file storage changes. No publication or production restart.
 
+## Independent review corrections after f9850af
+
+The initial navigation inspection below missed three counterexamples identified by the independent backend review. They were reproduced against the exact `f9850affeb291b3a5d9a616451b6790588fe5d1a` sources, then recalculated against the corrected modules. These are focused numerical diagnostics, not an automated regression suite.
+
+| Counterexample | At f9850af | Corrected observation |
+|---|---|---|
+| 25 turns, two readable items each, 230 active tools in turn 24 | Active cap starts at `t12:u12`; completion refresh produces turns **12…24, 0…11**, Latest=`t11:a11`, obsolete oldest cursor, complete=false | **0…24**, Latest=`t24:a24`, oldest cursor=null, complete=true; 50 readable entries, zero completed tools. Active/completed page sizes unchanged: 57,011 / 14,922 bytes. |
+| Retain turns 30…39 while a gap still references stop 20 | Invalid interior gap survives with a missing older endpoint | Zero interior gaps; ordinary older boundary before turn 30. Backward recovery adds **25 then 5** entries, finishes with 40 ordered entries, null cursor and zero gaps. |
+| Native exhaustion before a gap endpoint is found | Empty exhausted response retains its old gap cursor | Gap closes on exhaustion; no exhausted-cursor retry loop. Canonical alias endpoints also close the gap and retain the reader's −12px offset. |
+| Forward page containing 300 short entries in one turn | Entries0…255, `newerCursor:null`; final 44 unreachable through this cursor | **256 + 44**, through entry 299, then null cursor. First response 80,521 bytes (61-byte continuation overhead). This is the same truncation failure as the review's entry 207 fixture, with smaller item text. |
+| A readable newer turn separated from its anchor by 25 empty turns | Zero entries, null continuation | `t26:a26` returned immediately; empty native pages do not erase the nearest useful page. |
+| Byte cap: 300 entries, each with 1,200 text characters | Truncation/cursor risk | **113 + 112 + 75** entries, no gaps or repeats; largest response 170,282 bytes, below 192KiB. |
+| Forward traversal over 75 ordinary turns | Turn/cursor limit must remain explicit | Exactly **25 + 25 + 25** turns; final cursor null. |
+
+`history-reconcile.ts` now weaves overlapping pages around native keys/nonempty client IDs instead of appending every new item. Native page order controls overlap; local-only entries retain their neighbouring anchors. Live content newer than the request still wins, while canonical identity replaces a provisional ID. Calculations preserve two intentional equal-text messages with different client IDs and the newer live answer. No timestamp sorting or text deduplication is used.
+
+`history-window.ts` validates both gap endpoints and their chronological order during retention, normalization and hydration. Eviction/removal widens an interior boundary to surviving neighbours or converts it into an ordinary older boundary. Tool-removal anchor fallbacks are separate from canonical identity aliases, so a reading-anchor fallback cannot falsely close a history gap. `fillGap` recognizes canonical endpoints, closes at definitive native exhaustion, updates an oldest boundary it extends, and reports a non-progressing response as a recoverable error. Sparse terminal events schedule one coalesced latest refresh so removal of a tool-heavy tail admits older readable content.
+
+`conversation-view.mjs` now retains a bounded nearest projected buffer across native pages and separately records whether newer projected entries were discarded. It no longer constructs an unbounded projected native-page array in the forward scan. The existing 25-turn / 256-entry / 192KiB response bounds remain. Native full-turn reads and scans to locate old anchors remain a limitation; this does not reduce them to a delta/summary API.
+
+Backward empty pages keep advancing native cursors: the diagnostic's sequence is 2→4→6→null, ending in the available answer. An initially empty feed makes **one** automatic continuation; if it is still empty, an accessible Continue control remains. This deliberately stops a long fully-filtered stretch from causing an all-history fetch cascade. In the 390px rendered inspection, requests stayed at 2 during 1.1 seconds idle; clicking Continue made request 3 and displayed 75 entries / 25 turns, still following latest. The empty state no longer falsely presents a brand-new conversation. An unusually long fully-filtered stretch may therefore need explicit continuation; ordinary populated feed paging remains automatic.
+
+Rendered completion inspection used the real workspace/controller and the actual projection's synthetic pages: reader anchor `t18:a18` remained fixed across removal of 230 tools and backward expansion, with **0.313px rounding drift**; all 27 sampled post-refresh frames had the same offset, following remained false, and the last row was turn 24. Screens were inspected: `outputs/bot-typing-recent/review-active-reader-390.png`, `review-completed-reader-390.png`, `review-empty-continuation-390.png`, `review-empty-recovered-390.png`, `review-latest-390.png`. This is local Chromium inspection, not physical iPhone/Safari verification.
+
+Compatibility: response/cursor fields and IndexedDB schema are unchanged. Existing native/before/after cursors still work. The conversation revision advances to `conversation-v2` so a previously cached bad ordering cannot indefinitely receive `unchanged`; its contents remain readable offline and are reconciled on the next online refresh. In-memory cached provisional/canonical snapshots hydrate as one canonical row, retain their gap and reader offset, and invalidate only the old revision. No draft/outbox/blob/native-history records are removed. The manager-coordinated bridge reload already required for this pass remains necessary; none was performed here.
+
+Reproduce the exact before/after calculations (temporary bundles/results are ignored under `outputs/`):
+
+```sh
+BOT_FEED_REVIEW_REF=f9850affeb291b3a5d9a616451b6790588fe5d1a BOT_FEED_REVIEW_LABEL=before node diagnostics/bot-feed-review.mjs
+BOT_FEED_REVIEW_LABEL=after node diagnostics/bot-feed-review.mjs
+```
+
+The diagnostic prints ordering, oldest/newest cursors, cache/gap/alias variants, bounded byte counts and empty-page progress. It bundles real modules from the specified Git snapshot or working tree, uses only in-memory synthetic native pages, and never calls a native process or user account. `review-pages.json` also exposes its projected active/completed pages for direct browser inspection. Detailed observations are saved in `review-before.json`, `review-after.json`, `review-rendered-completion.json` and `review-rendered-empty.json`.
+
+The existing `node diagnostics/bot-feed-inspect.mjs` was rerun: 25 tool-heavy turns remain 1 RPC / 30,371 bytes; the 1,000-tool huge-turn page remains 46,927 bytes with summaries/files and full-answer continuation preserved. Final correction checks: scoped TypeScript, ESLint, production build and diff check. No automated test suites were added or run. Return this commit for independent re-review; no self-release.
+
 ## Changes and causes
 
 - **Typing:** the live textarea was collapsed to `height: 0` to measure every value change. Its 40px minimum temporarily replaced a 64px two-line editor, enlarged the feed by 24px and clamped its scroll position. An offscreen value-only mirror now measures wrapping; the live height changes only when its required height changes. Placeholder, empty/clear, restored value, width/font, Activity and keyboard geometry remain covered by the existing observers.

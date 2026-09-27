@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { historyKey } from '../../lib/bot-history-view';
 import { historyWindow, windowEndAround } from './history-window';
 import type { BotTimeline, TimelineState } from './timeline-controller';
@@ -10,6 +10,7 @@ export function useFeedScroll(timeline: BotTimeline, state: TimelineState, onlin
   const saved = useRef(state.position), restored = useRef(false), following = useRef(state.position.following);
   const [endKey, setEndKey] = useState<string | null>(null), [showJump, setShowJump] = useState(false), [paging, setPaging] = useState(false);
   const busy = useRef(false), inputUntil = useRef(0), direction = useRef(0), previousTop = useRef(0), expectedTop = useRef<number | null>(null);
+  const continuedEmpty = useRef(false);
   const visibleAnchors = useRef<{ key: string; offset: number }[]>([]), stateRef = useRef(state);
   const endIndex = endKey ? state.entries.findIndex((entry) => historyKey(entry.turnId, entry.id) === timeline.resolveKey(endKey)) : -1;
   let range = historyWindow(state.entries, endIndex < 0 ? state.entries.length : endIndex + 1, state.gaps);
@@ -59,7 +60,7 @@ export function useFeedScroll(timeline: BotTimeline, state: TimelineState, onlin
     if (current.error && !retry) return;
     if (toward < 0 && range.first === 0 && !current.olderCursor && !current.gaps.length) return;
     if (toward > 0 && range.last >= current.entries.length) return;
-    capture(); following.current = false; saved.current.following = false;
+    if (current.entries.length) { capture(); following.current = false; saved.current.following = false; }
     busy.current = true; setPaging(true);
     try {
       // A gap must be connected before crossing its boundary. One request per
@@ -79,6 +80,12 @@ export function useFeedScroll(timeline: BotTimeline, state: TimelineState, onlin
       timeline.position(saved.current);
     } finally { busy.current = false; setPaging(false); }
   }, [capture, timeline, online]);
+  useEffect(() => {
+    if (!online || state.loading || state.error || state.entries.length || !state.olderCursor || continuedEmpty.current) return;
+    // One bounded continuation on opening. A long stretch of filtered empty
+    // turns retains an explicit load control, never an all-history cascade.
+    continuedEmpty.current = true; void page(-1);
+  }, [online, state.loading, state.error, state.entries.length, state.olderCursor, page]);
   const intent = useCallback((toward: number) => {
     inputUntil.current = performance.now() + 1000; direction.current = toward;
     if (toward < 0) {

@@ -87,7 +87,7 @@ function detailRevision(runtime, bot) {
 }
 
 export async function readHistoryView(runtime, bot, params) {
-  const revision = historyRevision(runtime, bot) + (params.projection === "conversation" ? ":conversation-v1" : ""), eventCursor = runtime.store.cursor();
+  const revision = historyRevision(runtime, bot) + (params.projection === "conversation" ? ":conversation-v2" : ""), eventCursor = runtime.store.cursor();
   if (!params.cursor && !params.turnId && params.revision === revision) return { kind: 'unchanged', revision, eventCursor };
   if (params.projection !== 'conversation' && !params.cursor && !params.turnId && params.revision?.startsWith(`${runtime.epoch}:${bot.threadId}:`) && Number.isSafeInteger(params.after) && params.after >= 0) {
     const replay = runtime.store.replay(params.after);

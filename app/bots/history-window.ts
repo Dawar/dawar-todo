@@ -34,6 +34,39 @@ export function windowEndAround(entries: HistoryEntry[], anchor: number, gaps: H
   return end;
 }
 
+/** Interior gaps need two retained, ordered endpoints. Eviction/removal widens
+ * them to the nearest surviving boundaries, or moves them to the older edge. */
+export function historyBoundaries(entries: HistoryEntry[], gaps: HistoryGap[], olderCursor: string | null, previous = entries) {
+  if (!entries.length) return { gaps: [], olderCursor };
+  const key = (entry: HistoryEntry) => historyKey(entry.turnId, entry.id);
+  const indices = new Map(entries.map((entry, index) => [key(entry), index]));
+  const prior = new Map(previous.map((entry, index) => [key(entry), index]));
+  const kept = previous.filter(entry => indices.has(key(entry)));
+  const valid = new Map<string, HistoryGap>();
+  for (const gap of gaps) {
+    let before = indices.get(gap.before), stop = indices.get(gap.stop);
+    const oldBefore = prior.get(gap.before), oldStop = prior.get(gap.stop);
+    if (before === undefined && oldBefore !== undefined) {
+      const next = kept.find(entry => prior.get(key(entry))! >= oldBefore);
+      if (next) before = indices.get(key(next));
+    }
+    if (stop === undefined && oldStop !== undefined) {
+      const preceding = kept.findLast(entry => prior.get(key(entry))! <= oldStop);
+      if (preceding) stop = indices.get(key(preceding));
+    }
+    // Older caches can already have lost an endpoint; conservatively retain
+    // the reachable interval between adjacent surviving entries.
+    if (before === undefined && stop !== undefined && oldBefore === undefined && stop + 1 < entries.length) before = stop + 1;
+    if (stop === undefined && before !== undefined && oldStop === undefined && before > 0) stop = before - 1;
+    if (before === undefined) continue;
+    if (stop === undefined) { olderCursor = historyBefore(entries[0]); continue; }
+    if (stop >= before) continue; // Already crossed/reconciled; never invert.
+    const right = key(entries[before]), left = key(entries[stop]);
+    valid.set(right, { before: right, stop: left, cursor: right === gap.before && left === gap.stop ? gap.cursor : historyBefore(entries[before]) });
+  }
+  return { gaps: [...valid.values()], olderCursor };
+}
+
 /** Keep a contiguous recent tail plus a distant reading range, with explicit gaps. */
 export function retainHistory(entries: HistoryEntry[], position: HistoryPosition, gaps: HistoryGap[], olderCursor: string | null, count: number, bytes: number) {
   const tail = (remainingCount: number, remainingBytes: number) => {
@@ -48,7 +81,7 @@ export function retainHistory(entries: HistoryEntry[], position: HistoryPosition
     return start;
   };
   let start = tail(count, bytes);
-  if (start === 0) return { entries, gaps, olderCursor };
+  if (start === 0) return { entries, ...historyBoundaries(entries, gaps, olderCursor) };
   const anchor = !position.following ? entries.findIndex((entry) => historyKey(entry.turnId, entry.id) === position.anchor) : -1;
   let retained = entries.slice(start);
   if (anchor >= 0 && anchor < start) {
@@ -60,7 +93,8 @@ export function retainHistory(entries: HistoryEntry[], position: HistoryPosition
   }
 
   const kept = new Set(retained.map((entry) => historyKey(entry.turnId, entry.id)));
-  const savedGaps = new Map(gaps.filter((gap) => kept.has(gap.before)).map((gap) => [gap.before, gap]));
+  const boundaries = historyBoundaries(retained, gaps, retained[0] !== entries[0] ? historyBefore(retained[0]) : olderCursor, entries);
+  const savedGaps = new Map(boundaries.gaps.map((gap) => [gap.before, gap]));
   let previous = -1;
   for (let index = 0; index < entries.length; index++) {
     const key = historyKey(entries[index].turnId, entries[index].id);
@@ -68,7 +102,7 @@ export function retainHistory(entries: HistoryEntry[], position: HistoryPosition
     if (previous >= 0 && index > previous + 1) savedGaps.set(key, { before: key, stop: historyKey(entries[previous].turnId, entries[previous].id), cursor: historyBefore(entries[index]) });
     previous = index;
   }
-  return { entries: retained, gaps: [...savedGaps.values()], olderCursor: retained[0] !== entries[0] ? historyBefore(retained[0]) : olderCursor };
+  return { entries: retained, gaps: [...savedGaps.values()], olderCursor: boundaries.olderCursor };
 }
 
 const attachmentSelectors = new WeakMap<HistoryEntry, { paths: string[]; ids: string[] }>();

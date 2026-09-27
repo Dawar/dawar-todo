@@ -66,40 +66,36 @@ export async function conversationViewPage(runtime, bot, cursor) {
  * Native pagination is descending, so locating an old anchor can still require
  * native scans. Retain only one bounded projected page from those scans. */
 async function conversationViewAfter(runtime, bot, after) {
-  let cursor = null, previous = [], newerExists = false;
+  let cursor = null, newerExists = false, bytes = 0;
+  // Descending native scan, bounded oldest/nearest projected tail. Empty pages
+  // must not replace it; dropped newer entries must outlive native cursors.
+  const nearest = [], counts = new Map();
   do {
     const page = await runtime.historyPage(bot.threadId, cursor, CONVERSATION_TURNS);
-    const values = [], anchor = { index: -1 };
     for (const turn of page.data) {
       const scheduled = turn.items.some((item) => item.type === 'userMessage' && item.clientId?.startsWith('schedule:'));
-      for (const item of [...turn.items].reverse()) {
-        if (historyKey(turn.id, item.id) === after) anchor.index = values.length;
-        if (turn.status === 'inProgress' || conversationItem(item.type) && (item.type !== 'reasoning' || item.summary.some((text) => text.trim()))) values.push(projectHistoryItem(turn, item, scheduled));
+      for (let index = turn.items.length - 1; index >= 0; index--) {
+        const item = turn.items[index];
+        if (historyKey(turn.id, item.id) === after) {
+          const entries = nearest.slice().reverse().map(value => value.entry), turnIds = [...new Set(entries.map(entry => entry.turnId))];
+          const selectors = historyAttachmentSelectors(entries); selectors.turns = turnIds;
+          const first = entries[0], last = entries.at(-1);
+          return { entries, turnIds, attachments: readHistoryAttachmentMetadata(runtime, bot, selectors),
+            olderCursor: first ? JSON.stringify({ native: null, before: historyKey(first.turnId, first.id) }) : null,
+            newerCursor: last && newerExists ? JSON.stringify({ native: null, before: null, after: historyKey(last.turnId, last.id) }) : null,
+            complete: false };
+        }
+        if (turn.status !== 'inProgress' && (!conversationItem(item.type) || item.type === 'reasoning' && !item.summary.some(text => text.trim()))) continue;
+        const entry = projectHistoryItem(turn, item, scheduled), size = Buffer.byteLength(JSON.stringify(entry));
+        nearest.push({ entry, size }); bytes += size; counts.set(turn.id, (counts.get(turn.id) ?? 0) + 1);
+        while (nearest.length > 1 && (nearest.length > CONVERSATION_ITEMS || counts.size > CONVERSATION_TURNS || bytes > CONVERSATION_BYTES - 26 * 1024)) {
+          const dropped = nearest.shift(); bytes -= dropped.size;
+          const count = counts.get(dropped.entry.turnId) - 1;
+          if (count) counts.set(dropped.entry.turnId, count); else counts.delete(dropped.entry.turnId);
+          newerExists = true;
+        }
       }
     }
-    if (anchor.index >= 0) {
-      const candidates = [...values.slice(0, anchor.index).reverse(), ...previous.slice().reverse()];
-      const entries = [], turnIds = new Set(); let bytes = 0;
-      for (const entry of candidates) {
-        const size = Buffer.byteLength(JSON.stringify(entry));
-        if (!turnIds.has(entry.turnId) && turnIds.size >= CONVERSATION_TURNS || entries.length >= CONVERSATION_ITEMS || entries.length && bytes + size > CONVERSATION_BYTES - 26 * 1024) break;
-        entries.push(entry); turnIds.add(entry.turnId); bytes += size;
-      }
-      const selectors = historyAttachmentSelectors(entries); selectors.turns = [...turnIds];
-      const last = entries.at(-1), first = entries[0];
-      return { entries, turnIds: [...turnIds], attachments: readHistoryAttachmentMetadata(runtime, bot, selectors),
-        olderCursor: first ? JSON.stringify({ native: null, before: historyKey(first.turnId, first.id) }) : null,
-        newerCursor: last && (entries.length < candidates.length || newerExists) ? JSON.stringify({ native: null, before: null, after: historyKey(last.turnId, last.id) }) : null,
-        complete: false };
-    }
-    // Keep descriptors bounded even for a pathological previous native page.
-    previous = []; let bytes = 0;
-    for (const entry of values.slice().reverse()) {
-      const size = Buffer.byteLength(JSON.stringify(entry));
-      if (previous.length && (previous.length >= CONVERSATION_ITEMS || bytes + size > CONVERSATION_BYTES - 26 * 1024)) break;
-      previous.unshift(entry); bytes += size;
-    }
-    newerExists = cursor !== null;
     cursor = page.nextCursor;
   } while (cursor);
   throw new Error('This conversation anchor is unavailable. Reload to reconnect its pages.');
