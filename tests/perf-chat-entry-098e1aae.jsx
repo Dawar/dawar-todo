@@ -95,7 +95,13 @@ window.performanceChat = {
       select(b); await paint(); select(a); await paint(); await wait(20);
       const returned = [...document.querySelectorAll('[data-history-key]')].find((el) => nodeKey(el) === position.anchor);
       const restoration = { anchorFound: Boolean(returned), offsetErrorPx: returned ? returned.getBoundingClientRect().top - document.querySelector('.bots-messages').getBoundingClientRect().top - position.offset : null };
-      document.querySelector('.bots-jump-latest').click(); await paint();
+      const jump = document.querySelector('.bots-jump-latest');
+      if (jump) jump.click();
+      else {
+        const current = document.querySelector('.bots-messages');
+        check(current.scrollHeight - current.clientHeight - current.scrollTop <= 120 && ![...document.querySelectorAll('.bots-older')].some((button) => button.textContent === 'Newer messages'), 'latest control missing away from newest content');
+      }
+      await paint();
       client.online = false; client.notify(); select(b); await paint(); const offline = await open(a, true);
       client.online = true; client.notify(); await until(() => calls.every((c) => c.done), 'reconnect'); await wait(options.rtt + 50);
       result.navigation.push({ name, first, other, repeat, streaming, pagination, restoration, offline });

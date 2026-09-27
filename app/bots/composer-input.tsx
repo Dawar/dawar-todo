@@ -8,7 +8,7 @@ export function ComposerInput({ value, ...props }: Omit<TextareaHTMLAttributes<H
   useLayoutEffect(() => {
     const input = ref.current;
     if (!input) return;
-    let frame = 0, previous = "";
+    let frame = 0, previous = "", active = true;
     const resize = () => {
       if (!input.getClientRects().length || input.clientWidth === 0) return;
       const css = getComputedStyle(input);
@@ -20,7 +20,7 @@ export function ComposerInput({ value, ...props }: Omit<TextareaHTMLAttributes<H
       const border = parseFloat(css.borderTopWidth) + parseFloat(css.borderBottomWidth);
       input.style.height = `${Math.min(maximum, Math.max(minimum, input.value ? input.scrollHeight + border : minimum))}px`;
     };
-    const schedule = () => { cancelAnimationFrame(frame); frame = requestAnimationFrame(resize); };
+    const schedule = () => { if (!active) return; cancelAnimationFrame(frame); frame = requestAnimationFrame(resize); };
     measure.current = resize;
     const observer = new ResizeObserver(schedule);
     observer.observe(input); if (input.parentElement) observer.observe(input.parentElement);
@@ -34,7 +34,7 @@ export function ComposerInput({ value, ...props }: Omit<TextareaHTMLAttributes<H
     void document.fonts?.ready.then(schedule);
     resize();
     return () => {
-      measure.current = () => {}; cancelAnimationFrame(frame); observer.disconnect(); styles.disconnect();
+      active = false; measure.current = () => {}; cancelAnimationFrame(frame); observer.disconnect(); styles.disconnect();
       window.visualViewport?.removeEventListener("resize", schedule);
       window.removeEventListener("resize", schedule); window.removeEventListener("pageshow", schedule);
       document.fonts?.removeEventListener("loadingdone", schedule);

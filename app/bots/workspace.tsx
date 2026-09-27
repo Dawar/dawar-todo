@@ -56,6 +56,7 @@ import { UsagePanel } from "./usage-panel";
 import { useBotComposer } from "./use-composer";
 import { ComposerAttachments, ComposerStatus } from "./composer-state";
 import { ComposerInput } from "./composer-input";
+import { ArtifactGallery, BotAttachmentsEntry, ArtifactNav } from "./artifact-gallery";
 import { UploadThumbnail } from "./upload-thumbnail";
 import "./bots.css";
 import "./chat-design.css";
@@ -118,6 +119,7 @@ export function BotsWorkspace() {
     [archived, setArchived] = useState(false),
     [creating, setCreating] = useState(false),
     [profile, setProfile] = useState(false),
+    [gallery, setGallery] = useState<"artifacts" | "attachments" | null>(null),
     [showRunHistory, setShowRunHistory] = useState(false),
     [showOverallUsage, setShowOverallUsage] = useState(false),
     [editingSchedule, setEditingSchedule] = useState<
@@ -259,7 +261,8 @@ export function BotsWorkspace() {
     const unsubscribe = client.subscribe(() => redraw((v) => v + 1));
     client.start();
     const pop = () => {
-      const id = new URLSearchParams(window.location.search).get("bot");
+      const params = new URLSearchParams(window.location.search), id = params.get("bot"), view = params.get("view");
+      setGallery(view === "artifacts" || view === "attachments" && id ? view : null);
       selectedRef.current = id;
       setSelected(id);
     };
@@ -335,12 +338,22 @@ export function BotsWorkspace() {
   }, [selected, online, bot]);
   const select = useCallback((id: string | null) => {
     selectedRef.current = id;
-    setSelected(id);
+    setSelected(id); setGallery(null);
     const url = new URL(window.location.href);
+    url.searchParams.delete("view");
     if (id) url.searchParams.set("bot", id);
     else url.searchParams.delete("bot");
     window.history.pushState({}, "", url);
   }, []);
+  function openGallery(view: "artifacts" | "attachments") {
+    const url = new URL(window.location.href); url.searchParams.set("view", view);
+    if (view === "artifacts") { url.searchParams.delete("bot"); setSelected(null); selectedRef.current = null; }
+    setGallery(view); window.history.pushState({}, "", url);
+  }
+  function closeGallery() {
+    const url = new URL(window.location.href); url.searchParams.delete("view"); window.history.pushState({}, "", url);
+    if (gallery === "attachments") setProfile(true); setGallery(null);
+  }
   async function action(fn: () => Promise<unknown>) {
     setError("");
     setBusy(true);
@@ -418,7 +431,7 @@ export function BotsWorkspace() {
   return (
     <div className="bots-screen" ref={screenRef} data-no-pull-refresh>
       <SiteHeader current="bots" />
-      <main className={`bots-layout ${selected ? "has-selection" : ""}`}>
+      <main className={`bots-layout ${selected || gallery ? "has-selection" : ""}`}>
         <aside className="bots-sidebar">
           <div className="bots-sidebar-heading">
             <h1>Bots</h1>
@@ -436,6 +449,7 @@ export function BotsWorkspace() {
             </button>
             </div>
           </div>
+          <ArtifactNav active={gallery === "artifacts"} onOpen={() => openGallery("artifacts")} />
           <div className="bots-search">
             <Search size={17} aria-hidden="true" />
             <input
@@ -496,7 +510,7 @@ export function BotsWorkspace() {
             </button>
           </div>
         </aside>
-        <section className="bots-conversation">
+        {gallery ? <ArtifactGallery key={`${owner}:${gallery}:${gallery === "attachments" ? bot?.id : "all"}`} owner={owner} online={online} bots={bots} bot={gallery === "attachments" ? bot : undefined} onClose={closeGallery} /> : <section className="bots-conversation">
           <header className="bots-conversation-heading">
             <button
               className="bots-icon-button bots-back"
@@ -874,8 +888,8 @@ export function BotsWorkspace() {
               )}
             </>
           )}
-        </section>
-        {profile && bot && (
+        </section>}
+        {profile && bot && !gallery && (
           <aside className="bots-profile">
             <div className="bots-profile-heading">
               <h2>Bot details</h2>
@@ -917,6 +931,7 @@ export function BotsWorkspace() {
             <p className="bots-profile-hint">
               Ask {bot.name} to change its personality, instructions, or memory.
             </p>
+            <BotAttachmentsEntry bot={bot} owner={owner} online={online} onOpen={() => openGallery("attachments")} />
             <h3 className="bots-profile-section-heading">Usage</h3>
             <UsagePanel bot={bot} online={online} />
             <div className="bots-schedule-heading">

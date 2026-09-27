@@ -8,6 +8,7 @@ import { botsClient } from "./client";
 import { BotMessage } from "./message";
 import { ArrowDown, MessageCircle, CloudOff } from "lucide-react";
 import { LazyDetails } from "./lazy-details";
+import { ReturnedArtifacts } from "./returned-artifact";
 
 const PAGE = 40;
 const EntryBody = memo(function EntryBody({ entry, timeline, attachments, download }: {
@@ -35,11 +36,11 @@ const EntryBody = memo(function EntryBody({ entry, timeline, attachments, downlo
     return () => { active = false; };
   }, [timeline]);
   const item = full ?? entry.item;
-  return <>{refreshing && <small>Refreshing live full detail…</small>}{item && <BotMessage item={item} botId={timeline.botId} attachments={attachments} download={download} inWorkLog />}
+  return <>{refreshing && <small>Updating…</small>}{item && <BotMessage item={item} botId={timeline.botId} attachments={attachments} download={download} inWorkLog />}
     {!entry.complete && <div className="bots-detail-status">
-      <button disabled={loading} onClick={() => void load()}>{loading ? "Loading complete item…" : full ? "Refresh full detail" : item ? "Continue · load complete message" : "Load full detail"}</button>
-      {full && !botsClient.online && <small>Saved full detail; changes since this copy may be missing.</small>}
-      {!full && <small>{item ? "Message preview. The complete message remains in native history." : "Full tool output remains in native history."}</small>}
+      <button disabled={loading} onClick={() => void load()}>{loading ? "Loading…" : full ? "Refresh details" : item ? "Continue · load complete message" : "Open full details"}</button>
+      {full && !botsClient.online && <small>Saved copy. Reconnect to check for changes.</small>}
+      {!full && <small>{item ? "A preview of this message. Continue to read it in full." : "Open this work item to see its full details."}</small>}
     </div>}
     {error && <p role="alert" className="bots-error">{error}</p>}</>;
 });
@@ -79,6 +80,9 @@ export function BotConversation({ owner, bot, online, children }: { owner: strin
     }
     return result;
   }, [state.entries, first, last]);
+  const linkedArtifacts = useMemo(() => new Set(state.entries.slice(first, last).flatMap((entry) =>
+    entry.item?.type === "agentMessage" ? [...entry.item.text.matchAll(/\]\(<?bot-artifact:([^\s)>]+)/g)].map((match) => match[1]) : [],
+  )), [state.entries, first, last]);
   const download = useCallback((id: string) => {
     setDownloadError("");
     void botsClient.download(bot.id, id).then(({ blob, name }) => {
@@ -143,7 +147,7 @@ export function BotConversation({ owner, bot, online, children }: { owner: strin
   return <div className="bots-timeline"><div className="bots-messages" ref={scroll} onScroll={capture} onWheel={() => { userScroll.current = true; }} onTouchMove={() => { userScroll.current = true; }} onPointerDown={(event) => { if (event.target === event.currentTarget) userScroll.current = true; }}><div ref={content}>
     {(first > 0 || state.olderCursor) && <button className="bots-older" disabled={paging || first === 0 && !online} onClick={() => void earlier()}>Load earlier messages</button>}
     {(first > 0 || last < state.entries.length || state.olderCursor) && <div className="bots-system-note">Showing messages {first + 1}–{last} of {state.entries.length} loaded. Earlier history remains available.</div>}
-    {!online && state.cached && <div className="bots-system-note">Saved recent conversation. Deferred details and newer messages need a connection.</div>}
+    {!online && state.cached && <div className="bots-system-note">Saved conversation. Reconnect for updates and work details not saved here.</div>}
     {state.error && <div className="bots-history-error" role="alert"><CloudOff size={22} aria-hidden="true" /><div><strong>Let’s try that again</strong><p>{state.error}</p><button disabled={!online} onClick={() => void timeline.refresh()}>Reload conversation</button></div></div>}
     {state.loading && !state.entries.length && <div className="bots-history-skeleton" role="status" aria-label="Loading conversation"><span /><span /><span /><span /></div>}
     {!state.loading && !state.error && !state.entries.length && <div className="bots-conversation-start"><span className="bots-start-icon"><MessageCircle size={26} strokeWidth={1.4} aria-hidden="true" /></span><h2>{bot.name}</h2><p>{bot.purpose || "What would you like to work on?"}</p></div>}
@@ -158,11 +162,11 @@ export function BotConversation({ owner, bot, online, children }: { owner: strin
         : <><span>Work log</span><small>{group.entries.length} {group.entries.length === 1 ? "step" : "steps"}</small></>;
       return <Fragment key={key}>
         {state.gaps.filter((gap) => group.entries.some((entry) => gap.before === historyKey(entry.turnId, entry.id))).map((gap) => <div className="bots-system-note" key={gap.before}>
-          Messages between this page and the saved older copy have not loaded. <button disabled={!online || paging} onClick={() => {
+          Some messages between these pages are not loaded. <button disabled={!online || paging} onClick={() => {
             capture(); setPaging(true); void timeline.fillGap(gap).finally(() => setPaging(false));
-          }}>Load missing interval</button></div>)}
+          }}>Load messages in between</button></div>)}
         {group.kind === "message" ? <TimelineEntry entry={entry} timeline={timeline} attachments={state.attachments} download={download} />
-          : <div data-history-key={key} style={{ position: "relative" }}>{group.entries.slice(1).map((value) => <span key={value.id} data-history-key={historyKey(value.turnId, value.id)} aria-hidden="true" style={{ position: "absolute", top: 0, height: 0, pointerEvents: "none" }} />)}<LazyDetails className={group.kind.startsWith("schedule:") ? "bots-turn is-scheduled" : "bots-activity"} summary={summary}>{body}</LazyDetails></div>}
+          : <div data-history-key={key} style={{ position: "relative" }}>{group.entries.slice(1).map((value) => <span key={value.id} data-history-key={historyKey(value.turnId, value.id)} aria-hidden="true" style={{ position: "absolute", top: 0, height: 0, pointerEvents: "none" }} />)}<LazyDetails className={group.kind.startsWith("schedule:") ? "bots-turn is-scheduled" : "bots-activity"} summary={summary}>{body}</LazyDetails>{group.kind.startsWith("work:") && <ReturnedArtifacts linked={linkedArtifacts} attachments={state.attachments} itemIds={group.entries.map((value) => value.id)} botId={bot.id} />}</div>}
       </Fragment>;
     })}
     {last < state.entries.length && <button className="bots-older" onClick={() => { setEnd(Math.min(state.entries.length, last + PAGE)); saved.current = { anchor: null, offset: 0, following: false }; scroll.current?.scrollTo(0, 0); }}>Newer messages</button>}

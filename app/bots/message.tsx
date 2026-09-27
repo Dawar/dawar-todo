@@ -2,10 +2,12 @@
 import { memo, useEffect, useState, useRef, useSyncExternalStore } from "react";
 import { LazyDetails, TextPages, ItemPages } from "./lazy-details";
 import { botsClient } from "./client";
+import { ReturnedArtifact } from "./returned-artifact";
 import type { BotAttachment } from "../../lib/bots-types";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import rehypeSanitize from "rehype-sanitize";
+import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
+const messageSchema = { ...defaultSchema, protocols: { ...defaultSchema.protocols, href: [...(defaultSchema.protocols?.href ?? []), "bot-artifact"] } };
 import {
   Terminal,
   FileDiff,
@@ -34,20 +36,14 @@ function BotMessage({
     return <TextPages text={value} render={(text) => (
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
-        rehypePlugins={[rehypeSanitize]}
+        rehypePlugins={[[rehypeSanitize, messageSchema]]}
         urlTransform={(url) =>
           url.startsWith("bot-artifact:") ? url : defaultUrlTransform(url)
         }
         components={{
           a: ({ href, children }) =>
             href?.startsWith("bot-artifact:") ? (
-              <button
-                className="bots-artifact-link"
-                onClick={() => download(href.slice(13))}
-              >
-                <Download size={15} />
-                {children}
-              </button>
+              <ReturnedArtifact botId={botId} id={href.slice(13)} attachment={attachments.find((file) => file.id === href.slice(13))}>{children}</ReturnedArtifact>
             ) : (
               <a href={href} target="_blank" rel="noreferrer">
                 {children}

@@ -58,6 +58,12 @@ details[open] > summary > .bots-disclosure-chevron { transform: rotate(90deg); }
 .bots-history-error svg { flex-shrink: 0; }
 .bots-history-error p { margin: 5px 0 12px; overflow-wrap: anywhere; }
 .bots-history-error button { min-height: 40px; padding: 8px 12px; border: 1px solid #d7ded5; border-radius: 9px; color: #346649; background: #fff; }
+.bots-quota-window { padding: 12px 0; }
+.bots-quota-title { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; }
+.bots-quota-title > strong { color: #346f4d; font-size: 12px; }
+.bots-quota-window .bots-usage-meter { height: 6px; margin-block: 9px; }
+.bots-quota-reset { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 3px 10px; font-size: 11px; color: #7e877f; }
+.bots-quota-reset > span:first-child { color: #617166; }
 .bots-keyboard-open .bots-conversation-heading { min-height: 52px; height: auto; padding: 6px 12px; }
 .bots-keyboard-open .bots-header-title strong { -webkit-line-clamp: 1; }
 .bots-keyboard-open .bots-composer { padding: 5px; }

@@ -8,6 +8,7 @@ import { spawn, execFileSync } from 'node:child_process';
 import { build } from 'esbuild';
 import postcss from 'postcss';
 import tailwind from '@tailwindcss/postcss';
+import { designArtifacts } from './fixtures/bot-design-artifacts.mjs';
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 async function until(fn, label) { for (let i = 0; i < 300; i++) { const value = await fn(); if (value) return value; await delay(30); } throw new Error(`Timed out: ${label}`); }
@@ -22,10 +23,14 @@ const js = bundle.outputFiles.find((file) => file.path.endsWith('.js')).text;
 const globalCss = await postcss([tailwind()]).process(await readFile('app/globals.css', 'utf8'), { from: resolve('app/globals.css') });
 const css = globalCss.css + '\n' + bundle.outputFiles.find((file) => file.path.endsWith('.css')).text;
 const output = process.env.BOT_DESIGN_BASE ? 'outputs/bot-design-before' : 'outputs/bot-design'; await mkdir(output, { recursive: true });
-const server = createServer((req, res) => {
+const artifacts = await designArtifacts();
+const server = createServer(async (req, res) => {
   const path = new URL(req.url, 'http://localhost').pathname;
   res.setHeader('Cache-Control', 'no-store');
-  if (path === '/harness.js') { res.setHeader('Content-Type', 'application/javascript'); res.end(js); }
+  if (path === '/artifact-rpc') {
+    try { const parts = []; for await (const part of req) parts.push(part); const request = JSON.parse(Buffer.concat(parts).toString()); const result = await artifacts.handle(request); res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ result })); } catch (error) { res.end(JSON.stringify({ error: error.message })); }
+  }
+  else if (path === '/harness.js') { res.setHeader('Content-Type', 'application/javascript'); res.end(js); }
   else if (path === '/harness.css') { res.setHeader('Content-Type', 'text/css'); res.end(css); }
   else res.end('<!doctype html><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="stylesheet" href="/harness.css"><div id="root"></div><script src="/harness.js"></script>');
 });
@@ -73,10 +78,24 @@ try {
       states[name] = await evaluate(`design.scenario(${JSON.stringify(name)})`); await capture(`${name}-${width}`);
       assert.ok(states[name].bodyWidth <= width + 1, `${name} overflow at ${width}`);
     }
-    results.push({ width, reproduction, geometry, jump, states });
+    const gallery = {};
+    for (const name of ['populated', 'empty', 'loading', 'offline', 'error']) {
+      gallery[name] = await evaluate(`design.gallery(${JSON.stringify(name)})`); await capture(`gallery-${name}-${width}`);
+    }
+    await evaluate('design.gallery("populated")');
+    gallery.interactions = await evaluate('design.galleryChecks()');
+    await evaluate('delete window.design'); await send('Page.reload'); await until(() => evaluate('!!window.design'), 'fresh page');
+    gallery.offlineRestart = await evaluate('design.offlineReload()'); await capture(`gallery-offline-preview-${width}`); await evaluate('design.galleryAction("close")'); await capture(`gallery-offline-cached-${width}`);
+    await evaluate('design.gallery("populated", "bot")'); await capture(`attachments-${width}`);
+    gallery.image = await evaluate('design.galleryAction("image")'); await capture(`viewer-image-${width}`); await evaluate('design.galleryAction("close")');
+    gallery.pdf = await evaluate('design.galleryAction("pdf")'); await capture(`viewer-pdf-${width}`); await evaluate('design.galleryAction("close")');
+    await evaluate('design.galleryAction("quota")'); await capture(`settings-quota-${width}`);
+    gallery.discovery = await evaluate('design.discoveryChecks()');
+    gallery.outputs = await evaluate('design.outputCards()'); await capture(`message-outputs-${width}`);
+    results.push({ width, reproduction, geometry, jump, states, gallery });
   }
   assert.deepEqual(errors, []);
-  const result = { browser: await evaluate('navigator.userAgent'), results, browserErrors: errors, limits: 'Chromium emulation with synthetic backend. No actual Safari/iPhone verification.' };
+  const result = { artifactRuntime: artifacts.calls, browser: await evaluate('navigator.userAgent'), results, browserErrors: errors, limits: 'Chromium emulation with synthetic backend. No actual Safari/iPhone verification.' };
   await writeFile(`${output}/result.json`, JSON.stringify(result, null, 2)); console.log(JSON.stringify(result, null, 2));
 
 } finally {
@@ -85,4 +104,5 @@ try {
   if (chrome && chrome.exitCode === null) chrome.kill('SIGKILL');
   await new Promise((resolve) => server.close(resolve));
   await rm(profile, { recursive: true, force: true, maxRetries: 3 });
+  await artifacts.close();
 }

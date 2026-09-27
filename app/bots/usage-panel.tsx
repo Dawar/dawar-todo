@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { Bot, BotAccountQuota, BotThreadUsage, BotUsageMetric } from "../../lib/bots-types";
 import { botsClient } from "./client";
+import { QuotaWindow } from "./quota-window";
 
 type TokenField = keyof NonNullable<BotThreadUsage["tokens"]>;
 const tokenFields: { key: TokenField; label: string }[] = [
@@ -29,25 +30,6 @@ function tokenText(metric: BotUsageMetric | undefined, groupCount: number | unde
   const partial = groupCount && metric?.reportedGroups !== groupCount
     ? ` (partial: ${metric?.reportedGroups ?? 0}/${groupCount} groups)` : "";
   return `${value.toLocaleString()}${partial}`;
-}
-
-function duration(minutes: number | null) {
-  if (minutes === null) return "Quota window";
-  if (minutes === 10080) return "Weekly window";
-  if (minutes % 1440 === 0) return `${minutes / 1440}-day window`;
-  if (minutes % 60 === 0) return `${minutes / 60}-hour window`;
-  return `${minutes}-minute window`;
-}
-
-function percentage(value: number) {
-  return `${Number(value.toFixed(1))}%`;
-}
-
-function resetTime(seconds: number | null) {
-  if (seconds === null) return "Reset time unavailable";
-  const date = new Date(seconds * 1000);
-  return Number.isNaN(date.getTime()) ? "Reset time unavailable"
-    : `Resets ${date.toLocaleString(undefined, { year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short" })}`;
 }
 
 export function UsagePanel({ bot, online }: { bot?: Bot; online: boolean }) {
@@ -102,12 +84,7 @@ export function UsagePanel({ bot, online }: { bot?: Bot; online: boolean }) {
       {quota.accountType === "chatgpt" && quota.ordinaryUsageAllowed === false && <p>Ordinary included usage is currently unavailable.</p>}
       {quota.limits.map((limit, index) => <div className="bots-usage-limit" key={`${limit.limitId ?? "default"}-${index}`}>
         <strong>{limit.limitName || limit.limitId || "Codex quota"}{limit.model ? ` · ${limit.model}` : ""}</strong>
-        {limit.windows.map((window, windowIndex) => <div className="bots-usage-window" key={windowIndex}>
-          <span>{duration(window.windowDurationMins)}</span>
-          <span><strong>{percentage(window.usedPercent)}</strong> used · <strong>{percentage(Math.max(0, 100 - window.usedPercent))}</strong> remaining</span>
-          <span>{resetTime(window.resetsAt)}</span>
-          <div className="bots-usage-meter" role="meter" aria-label={`${duration(window.windowDurationMins)} used`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.min(100, window.usedPercent)}><span style={{ width: `${Math.min(100, window.usedPercent)}%` }} /></div>
-        </div>)}
+        {limit.windows.map((window, windowIndex) => <QuotaWindow window={window} key={windowIndex} />)}
       </div>)}
       {!quota.reason && resetCredits === null && !quota.limits.some((limit) => limit.windows.length) && <p>No quota details were reported for this account.</p>}
       <p className="bots-muted">Updated {new Date(quota.readAt).toLocaleString()}</p>
