@@ -135,7 +135,17 @@ export type BridgeRequest = {
   params: Record<string, unknown>;
 };
 
-/** An error without explicit certainty always leaves a mutation unconfirmed. */
+/** Reserved error-only result envelope, preserved by older deployed relays. */
+export type BridgeFailureResult = {
+  __dawarBotFailure: {
+    version: 1;
+    operationId: string;
+    outcome: "rejected" | "uncertain";
+  };
+};
+
+/** An error without explicit certainty always leaves a mutation unconfirmed.
+ * Error replies may carry BridgeFailureResult in result; success stays native. */
 export type BridgeResponse = {
   type: "response";
   id: string;

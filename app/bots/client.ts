@@ -1,4 +1,5 @@
 import { readBotHistory, queueBotHistory, type CachedBotHistory } from "./history-cache.ts";
+import { botFailureOutcome } from "../../lib/bots-response.ts";
 import type { BotOperations } from "../../lib/bots-operations";
 import type {
   BotEvent,
@@ -360,7 +361,7 @@ export class BotsClient {
       // for reconciliation on reconnect instead of creating a second request.
       // Error text is not evidence that a native mutation failed. Old bridges,
       // relay failures and unknown parser/service errors must retain the ID.
-      const uncertain = message.outcome !== "rejected";
+      const uncertain = botFailureOutcome(message, result, pending.request.operationId) !== "rejected";
       if (!pending.managed && (!message.error || !uncertain)) this.forgetOperation(pending.request.operationId);
       if (message.error) pending.reject(new BotRpcError(String(message.error), uncertain ? "uncertain" : "rejected"));
       else if (pending.managed && !validComposerResult(pending.request.method, result))
