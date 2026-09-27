@@ -6,10 +6,10 @@ import type { BotAttachment, BotEvent } from "./bots-types";
 export type HistoryEntry = {
   id: string; turnId: string; type: ThreadItem["type"]; label: string;
   item: ThreadItem | null; complete: boolean; scheduled: boolean;
-  startedAt: number | null; itemStatus?: string; status: Turn["status"]; updatedSeq?: number;
+  startedAt: number | null; turnStatus?: Turn["status"]; itemStatus?: string; status: Turn["status"]; updatedSeq?: number;
 };
 export type HistoryPage = {
-  entries: HistoryEntry[]; contextEntries?: HistoryEntry[]; olderCursor: string | null; revision: string;
+  entries: HistoryEntry[]; turnIds?: string[]; newerCursor?: string | null; partialTurn?: boolean; contextEntries?: HistoryEntry[]; olderCursor: string | null; revision: string;
   eventCursor: number; attachments: BotAttachment[]; complete: boolean;
 };
 export type HistoryResponse =
@@ -20,7 +20,9 @@ export type HistoryResponse =
 export type HistoryDetail = { json: string; nextOffset: number | null; totalLength: number; version: string; eventCursor?: number; notModified?: boolean; attachments?: BotAttachment[] };
 export type HistoryGap = { before: string; stop: string; cursor: string };
 export type HistoryPosition = { anchor: string | null; offset: number; following: boolean };
-export const HISTORY_WINDOW = 40;
+export const HISTORY_WINDOW = 40; // Legacy diagnostic item view.
+export const CONVERSATION_TURNS = 25;
+export const conversationItem = (type: string) => ["userMessage", "agentMessage", "plan", "reasoning"].includes(type);
 export const HISTORY_TEXT_LIMIT = 16384;
 export const historyKey = (turnId: string, itemId: string) => `${turnId}:${itemId}`;
 export const historyBefore = (entry: HistoryEntry) => JSON.stringify({ native: null, before: historyKey(entry.turnId, entry.id) });
@@ -43,6 +45,11 @@ export function projectHistoryItem(turn: Pick<Turn, "id" | "startedAt" | "status
       return { type: "text" as const, text: "[Attachment or input available in full message]", text_elements: [] };
     }).slice(0, 32) };
     if (source.content.length > 32) complete = false;
+  } else if (source.type === "reasoning") {
+    let remaining = HISTORY_TEXT_LIMIT;
+    const summary = source.summary.slice(0, 64).map((text) => { const value = text.slice(0, remaining); remaining -= value.length; if (value.length !== text.length) complete = false; return value; });
+    if (source.summary.length > 64) complete = false;
+    item = { type: "reasoning", id: source.id, summary, content: [] };
   } else if (source.type === "contextCompaction") item = source;
   else {
     complete = false;
@@ -52,7 +59,7 @@ export function projectHistoryItem(turn: Pick<Turn, "id" | "startedAt" | "status
     else if (source.type === "mcpToolCall") label = `${source.server} · ${source.tool}`.slice(0, 160);
   }
   return { id: source.id, turnId: turn.id, type: source.type, label, item, complete,
-    scheduled, startedAt: turn.startedAt, ...("status" in source ? { itemStatus: String(source.status) } : {}), status: "status" in source && source.status === "inProgress" ? "inProgress" : "status" in source && source.status === "completed" ? "completed" : turn.status };
+    scheduled, startedAt: turn.startedAt, turnStatus: turn.status, ...("status" in source ? { itemStatus: String(source.status) } : {}), status: "status" in source && source.status === "inProgress" ? "inProgress" : "status" in source && source.status === "completed" ? "completed" : turn.status };
 }
 
 /** Legacy caches can paint a useful tail without cloning/serializing their tool bodies. */
@@ -62,7 +69,7 @@ export function historyTail(turns: Turn[], limit = HISTORY_WINDOW): HistoryEntry
     const turn = turns[t];
     const scheduled = turn.items.some((i) => i.type === "userMessage" && i.clientId?.startsWith("schedule:"));
     for (let i = turn.items.length - 1; i >= 0 && entries.length < limit; i--)
-      entries.push(projectHistoryItem(turn, turn.items[i], scheduled));
+      if (turn.status === "inProgress" || conversationItem(turn.items[i].type)) entries.push(projectHistoryItem(turn, turn.items[i], scheduled));
   }
   return entries.reverse();
 }

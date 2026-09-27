@@ -22,7 +22,7 @@ export type BotOperations = {
   snapshot: { params: Record<string, never>; result: BotSnapshot };
   history: { params: Record<string, never>; result: BotHistory };
   "history.view": {
-    params: { cursor?: string | null; turnId?: string; revision?: string; after?: number };
+    params: { projection?: "conversation"; cursor?: string | null; turnId?: string; revision?: string; after?: number };
     result: HistoryResponse;
   };
   "history.attachments": { params: { cursor?: string | null }; result: { attachments: BotAttachment[]; nextCursor: string | null } };
@@ -32,7 +32,7 @@ export type BotOperations = {
   /** Explicit, bounded native-history backfill; botId required. Never scans paths or sends a turn. */
   "artifacts.index": { params: { cursor?: string | null }; result: { registered: number; nextCursor: string | null; failures: { itemId: string; reason: string }[] } };
   "history.detail": {
-    params: { turnId: string; itemId: string; offset?: number; version?: string; knownVersion?: string };
+    params: { projection?: "conversation"; turnId: string; itemId: string; offset?: number; version?: string; knownVersion?: string };
     result: HistoryDetail;
   };
   "history.page": {

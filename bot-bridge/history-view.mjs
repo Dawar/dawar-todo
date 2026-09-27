@@ -1,3 +1,4 @@
+import { conversationViewPage } from './conversation-view.mjs';
 import { createHash } from 'node:crypto';
 import { projectHistoryItem, HISTORY_WINDOW, historyKey } from '../lib/bot-history-view.ts';
 import { historyAttachmentSelectors, readHistoryAttachmentMetadata, HISTORY_ATTACHMENT_BYTES } from './history-attachments.mjs';
@@ -86,16 +87,16 @@ function detailRevision(runtime, bot) {
 }
 
 export async function readHistoryView(runtime, bot, params) {
-  const revision = historyRevision(runtime, bot), eventCursor = runtime.store.cursor();
+  const revision = historyRevision(runtime, bot) + (params.projection === "conversation" ? ":conversation-v1" : ""), eventCursor = runtime.store.cursor();
   if (!params.cursor && !params.turnId && params.revision === revision) return { kind: 'unchanged', revision, eventCursor };
-  if (!params.cursor && !params.turnId && params.revision?.startsWith(`${runtime.epoch}:${bot.threadId}:`) && Number.isSafeInteger(params.after) && params.after >= 0) {
+  if (params.projection !== 'conversation' && !params.cursor && !params.turnId && params.revision?.startsWith(`${runtime.epoch}:${bot.threadId}:`) && Number.isSafeInteger(params.after) && params.after >= 0) {
     const replay = runtime.store.replay(params.after);
     const contiguous = !replay.length ? params.after === eventCursor : replay[0].seq === params.after + 1;
     const events = replay.filter((e) => e.botId === bot.id && ['codex', 'attachment', 'history.refresh'].includes(e.type));
     if (contiguous && !events.some((e) => !['codex', 'attachment'].includes(e.type) && !(e.type === 'history.refresh' && e.data?.reason === 'large-native-event')) && Buffer.byteLength(JSON.stringify(events)) < MAX_PAGE_BYTES)
       return { kind: 'events', revision, eventCursor, events };
   }
-  const page = await historyViewPage(runtime, bot, params.cursor ?? null, params.turnId ?? null);
+  const page = params.projection === "conversation" ? await conversationViewPage(runtime, bot, params.cursor ?? null) : await historyViewPage(runtime, bot, params.cursor ?? null, params.turnId ?? null);
   return { kind: 'page', ...page, revision, eventCursor };
 }
 
@@ -104,7 +105,7 @@ export async function readHistoryDetail(runtime, bot, params) {
     throw new Error('Invalid history item.');
   const offset = params.offset ?? 0;
   if (!Number.isSafeInteger(offset) || offset < 0) throw new Error('Invalid detail offset.');
-  const key = `${bot.id}:${bot.threadId}:${params.turnId}:${params.itemId}`, cache = detailCache(runtime);
+  const key = `${bot.id}:${bot.threadId}:${params.turnId}:${params.itemId}:${params.projection ?? "native"}`, cache = detailCache(runtime);
   let cached = cache.get(key);
   if (cached && (params.version ? cached.version !== params.version : cached.revision !== detailRevision(runtime, bot))) cached = undefined;
   if (!cached) {
@@ -120,6 +121,8 @@ export async function readHistoryDetail(runtime, bot, params) {
         cursor = page.nextCursor;
       } while (!item && cursor);
       if (!item) throw new Error('This history item is not available from the native thread.');
+      // The ordinary chat detail route never transfers private reasoning content.
+      if (params.projection === 'conversation' && item.type === 'reasoning') item = { ...item, content: [] };
       const json = JSON.stringify(item), version = createHash('sha256').update(json).digest('hex');
       const selectors = historyAttachmentSelectors([{ turnId: params.turnId, id: item.id, item }]);
       const value = { json, version, selectors, eventCursor, revision, expires: Date.now() + DETAIL_TTL };

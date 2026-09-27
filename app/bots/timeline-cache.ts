@@ -3,11 +3,11 @@ import type { BotAttachment } from "../../lib/bots-types";
 
 export type TimelineMetadata = {
   owner: string; botId: string; revision: string; eventCursor: number;
-  order: string[]; olderCursor: string | null; complete: boolean;
+  order: string[]; partialTurn?: boolean; olderCursor: string | null; complete: boolean;
   attachments: BotAttachment[]; contextEntries?: HistoryEntry[]; gaps?: HistoryGap[]; position?: HistoryPosition; touched: number;
 };
 export type TimelineCacheValue = { metadata: TimelineMetadata; entries: HistoryEntry[] };
-const MAX_THREADS = 12, MAX_ENTRIES = 240;
+const MAX_THREADS = 12, MAX_ENTRIES = 2000;
 
 /** Only disposable history lives here. Draft/outbox/blob stores are never opened. */
 export function createTimelineCache(factory?: IDBFactory) {

@@ -59,5 +59,17 @@ export function readHistoryAttachmentMetadata(runtime, bot, selectors, byteBudge
     rows.sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
     for (const row of rows.slice(0, PER_ITEM)) add(row);
   }
+  if (selectors.turns?.length) {
+    const turn = db.prepare(`SELECT json FROM records INDEXED BY history_attachment_item WHERE kind='attachment'
+      AND json_extract(json,'$.ready')=1 AND json_extract(json,'$.artifact')=1 AND bot_id=?
+      AND json_extract(json,'$.provenance.turnId')=? LIMIT 64`);
+    for (const turnId of selectors.turns.slice(0, 25)) {
+      if (attachments.size >= HISTORY_ATTACHMENT_LIMIT || bytes >= byteBudget) break;
+      for (const row of turn.all(bot.id, turnId)) {
+        const threadId = JSON.parse(row.json).provenance?.threadId;
+        if (!threadId || threadId === bot.threadId) add(row);
+      }
+    }
+  }
   return [...attachments.values()];
 }

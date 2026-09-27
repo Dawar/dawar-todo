@@ -562,6 +562,7 @@ html.bots-viewport-locked body {
   overflow-wrap: anywhere;
 }
 .bots-messages {
+  overflow-anchor: none;
   flex: 1;
   min-width: 0;
   overflow-x: hidden;
@@ -1311,3 +1312,5 @@ html.bots-viewport-locked body {
 .bots-keyboard-open .bots-upload-list > .bots-upload-image { width: 48px; height: 48px; flex-basis: 48px; }
 .bots-keyboard-open .bots-prompt-queue { max-height: 70px; margin-top: 3px; padding: 4px 8px; }
 .bots-upload-progress { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-height: 1.4em; }
+
+.bots-feed-loading { position: absolute; z-index: 2; top: 8px; left: 50%; transform: translateX(-50%); padding: 5px 12px; border-radius: 20px; background: var(--surface, #fff); box-shadow: 0 2px 12px #0001; color: #64756b; font-size: 12px; pointer-events: none; white-space: nowrap; }

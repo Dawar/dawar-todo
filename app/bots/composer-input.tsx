@@ -8,17 +8,27 @@ export function ComposerInput({ value, ...props }: Omit<TextareaHTMLAttributes<H
   useLayoutEffect(() => {
     const input = ref.current;
     if (!input) return;
+    // Measuring the live editor at height zero changes the feed's scroll range
+    // (and can trigger native caret scrolling) before its height is restored.
+    const mirror = document.createElement("textarea");
+    mirror.tabIndex = -1; mirror.setAttribute("aria-hidden", "true");
+    mirror.style.cssText = "position:fixed;left:-10000px;top:0;visibility:hidden;pointer-events:none;height:0;min-height:0;max-height:none;overflow:hidden;box-sizing:border-box;";
+    document.body.appendChild(mirror);
     let frame = 0, previous = "", active = true;
     const resize = () => {
       if (!input.getClientRects().length || input.clientWidth === 0) return;
       const css = getComputedStyle(input);
-      const signature = [input.value, input.clientWidth, css.font, css.lineHeight, css.paddingTop, css.paddingBottom, css.minHeight, css.maxHeight].join("|");
+      const properties = ["width", "font", "font-family", "font-size", "font-weight", "font-style", "font-variation-settings", "line-height", "letter-spacing", "word-spacing", "text-indent", "text-transform", "padding", "border-width", "border-style", "white-space", "overflow-wrap", "word-break", "tab-size", "direction"];
+      const values = properties.map((property) => css.getPropertyValue(property));
+      const signature = [input.value, ...values, css.minHeight, css.maxHeight].join("|");
       if (signature === previous) return;
       previous = signature;
       const minimum = parseFloat(css.minHeight) || 40, maximum = parseFloat(css.maxHeight) || 180;
-      input.style.height = "0px";
       const border = parseFloat(css.borderTopWidth) + parseFloat(css.borderBottomWidth);
-      input.style.height = `${Math.min(maximum, Math.max(minimum, input.value ? input.scrollHeight + border : minimum))}px`;
+      properties.forEach((property, index) => mirror.style.setProperty(property, values[index]));
+      mirror.wrap = input.wrap; mirror.value = input.value;
+      const height = `${Math.min(maximum, Math.max(minimum, input.value ? mirror.scrollHeight + border : minimum))}px`;
+      if (input.style.height !== height) input.style.height = height;
     };
     const schedule = () => { if (!active) return; cancelAnimationFrame(frame); frame = requestAnimationFrame(resize); };
     measure.current = resize;
@@ -34,7 +44,7 @@ export function ComposerInput({ value, ...props }: Omit<TextareaHTMLAttributes<H
     void document.fonts?.ready.then(schedule);
     resize();
     return () => {
-      active = false; measure.current = () => {}; cancelAnimationFrame(frame); observer.disconnect(); styles.disconnect();
+      active = false; measure.current = () => {}; cancelAnimationFrame(frame); observer.disconnect(); styles.disconnect(); mirror.remove();
       window.visualViewport?.removeEventListener("resize", schedule);
       window.removeEventListener("resize", schedule); window.removeEventListener("pageshow", schedule);
       document.fonts?.removeEventListener("loadingdone", schedule);

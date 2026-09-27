@@ -960,7 +960,7 @@ export class BotRuntime extends EventEmitter {
       .catch(() => {});
     return saved;
   }
-  async historyPage(threadId, cursor = null) {
+  async historyPage(threadId, cursor = null, limit = 20) {
     // Codex 0.156.1 can acknowledge thread/start before its rollout and
     // paginated store are readable. A full native read synchronizes that store.
     // Never turn an unavailable or corrupt history into an empty conversation.
@@ -975,7 +975,7 @@ export class BotRuntime extends EventEmitter {
         return await this.codex.call("thread/turns/list", {
           threadId,
           cursor,
-          limit: 20,
+          limit,
           sortDirection: "desc",
           itemsView: "full",
         });
