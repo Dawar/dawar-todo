@@ -5,6 +5,7 @@ import { basename, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { containedPath } from './profiles.mjs';
 import { artifactMime } from './artifact-library.mjs';
+import { artifactDate, historicalArtifactDate } from './artifact-dates.mjs';
 
 const MAX_FILE = 100 * 1024 * 1024, MAX_INLINE = 20 * 1024 * 1024;
 const digest = (value) => createHash('sha256').update(value).digest('hex');
@@ -96,7 +97,9 @@ export async function registerArtifact(runtime, bot, input, context = {}) {
         }
         a = { id, botId: bot.id, name, path, size, sha256, mimeType: artifactMime(name, input.mimeType),
           ready: true, received: size, artifact: true, source: context.source ?? 'published',
-          createdAt: context.createdAt ?? new Date().toISOString(), provenance: provenance(bot, context) };
+          // Undefined means an observed live event/publication; null explicitly
+          // preserves an unknown historical time, including across retries.
+          createdAt: context.createdAt === undefined ? new Date().toISOString() : artifactDate(context.createdAt), provenance: provenance(bot, context) };
       }
       runtime.store.transaction(() => {
         runtime.store.put('attachment', a);
@@ -177,8 +180,7 @@ async function indexNativePage(runtime, bot, p) {
   for (; end < items.length && end < offset + 40; end++) {
     const { turn, item } = items[end];
     if (!rememberInputProvenance(runtime, bot, turn.id, item)) failures.push({ itemId: item.id, reason: 'Attachment provenance could not be saved. Original files remain available; retry indexing.' });
-    const createdAt = turn.completedAt ?? turn.startedAt;
-    const result = await registerNativeItem(runtime, bot, turn.id, item, typeof createdAt === 'number' ? new Date(createdAt * 1000).toISOString() : undefined);
+    const result = await registerNativeItem(runtime, bot, turn.id, item, historicalArtifactDate(turn));
     registered += result.registered; failures.push(...result.failures);
   }
   const more = end < items.length;

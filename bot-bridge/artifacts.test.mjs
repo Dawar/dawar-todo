@@ -31,6 +31,87 @@ function metadata(store, bot, id, options = {}) {
 }
 const image = () => sharp({ create: { width: 900, height: 450, channels: 3, background: '#ee3300' } }).png().toBuffer();
 
+test('historical artifact dates use valid native seconds or persist null without aborting/re-dating on retry', async (t) => {
+  const { bots, store, rpc, codex } = await setup(t); const bot = bots[0], bytes = await image();
+  const cases = [
+    ['missing', {}, null],
+    ['null', { completedAt: null, startedAt: null }, null],
+    ['nonfinite', { completedAt: NaN, startedAt: Infinity }, null],
+    ['out-of-range', { completedAt: 8_640_000_000_001, startedAt: -8_640_000_000_001 }, null],
+    ['wrong-types', { completedAt: '2025-07-01T00:00:00Z', startedAt: {} }, null],
+    ['completed', { completedAt: 1751328000, startedAt: 1735689600 }, '2025-07-01T00:00:00.000Z'],
+    ['started', { completedAt: null, startedAt: 1735689600 }, '2025-01-01T00:00:00.000Z'],
+    ['invalid-completed', { completedAt: NaN, startedAt: 1735689600 }, '2025-01-01T00:00:00.000Z'],
+    ['invalid-completed-type', { completedAt: 'bad', startedAt: 1735689600 }, '2025-01-01T00:00:00.000Z'],
+    ['epoch-fallback', { completedAt: Number.MAX_VALUE, startedAt: 0 }, '1970-01-01T00:00:00.000Z'],
+    ['fractional-seconds', { completedAt: 1751328000.125 }, '2025-07-01T00:00:00.125Z'],
+    ['date-upper-bound', { completedAt: 8_640_000_000_000 }, '+275760-09-13T00:00:00.000Z'],
+    ['date-lower-bound', { startedAt: -8_640_000_000_000 }, '-271821-04-20T00:00:00.000Z'],
+  ];
+  codex.turns = cases.map(([id, times]) => ({ id: `turn-${id}`, ...times, items: [{ type: 'imageGeneration', id,
+    status: 'completed', result: bytes.toString('base64'), savedPath: join(bot.cwd, `${id}.png`) }] }));
+  const indexed = await rpc('artifacts.index', bot);
+  assert.equal(indexed.registered, cases.length); assert.deepEqual(indexed.failures, []);
+  const originals = store.list('attachment', bot.id);
+  for (const [id, , expected] of cases) {
+    const record = originals.find((a) => a.provenance.itemId === id);
+    assert.equal(record.createdAt, expected, id); assert.equal(Object.hasOwn(record, 'createdAt'), true);
+    assert.deepEqual(Buffer.from((await rpc('attachments.read', bot, { id: record.id })).data, 'base64'), bytes);
+  }
+  // Publication receipts and existing dates are authoritative on repeated indexing.
+  codex.turns.forEach((turn) => { turn.completedAt = 1893456000; });
+  assert.equal((await rpc('artifacts.index', bot)).registered, cases.length);
+  assert.deepEqual(store.list('attachment', bot.id), originals);
+});
+
+test('live observation and explicit publishing get current dates while known legacy dates stay intact', async (t) => {
+  const { bots, runtime, store, rpc } = await setup(t); const bot = bots[0], bytes = await image();
+  const before = Date.now();
+  runtime.onNotification({ method: 'item/completed', params: { threadId: bot.threadId, turnId: 'live-turn', item: {
+    type: 'imageGeneration', id: 'observed-image', status: 'completed', result: bytes.toString('base64') } } });
+  while (runtime.pendingArtifactItems) await new Promise((resolve) => setImmediate(resolve));
+  await writeFile(join(bot.cwd, 'explicit.png'), bytes);
+  const publication = await runtime.publishArtifact(bot, { path: 'explicit.png' }, { key: 'observed-publish' });
+  for (const a of store.list('attachment', bot.id)) assert.ok(Date.parse(a.createdAt) >= before && Date.parse(a.createdAt) <= Date.now());
+  const publishedDate = store.get('attachment', publication.attachmentId).createdAt;
+  await runtime.publishArtifact(bot, { path: 'explicit.png' }, { key: 'observed-publish', createdAt: null });
+  assert.equal(store.get('attachment', publication.attachmentId).createdAt, publishedDate);
+  const path = join(bot.cwd, 'legacy-dated.png'), legacyDate = '2024-03-20T15:00:00+05:30'; await writeFile(path, bytes);
+  metadata(store, bot, 'legacy-dated', { path, name: 'legacy-dated.png', size: bytes.length, mimeType: 'image/png', artifact: true, createdAt: legacyDate });
+  await registerNativeItem(runtime, bot, 'legacy-turn', { type: 'imageGeneration', id: 'legacy-dated-item', status: 'completed', savedPath: path, result: '' }, null);
+  assert.equal(store.get('attachment', 'legacy-dated').createdAt, legacyDate);
+  assert.equal((await rpc('artifacts.list', bot, { search: 'legacy-dated' })).items[0].createdAt, '2024-03-20T09:30:00.000Z');
+});
+
+test('date paging uses displayed instants and groups legacy invalid dates consistently without rewriting originals', async (t) => {
+  const { bots, store, rpc } = await setup(t); const bot = bots[0];
+  const dates = {
+    'before-offset': '2026-01-01T00:30:00+02:00', 'after-utc': '2025-12-31T23:00:00Z',
+    'last-year': '2025-12-31T21:00:00Z', 'null-z': null, 'invalid-y': 'zzzz',
+    'number-x': 1751328000, 'missing-w': undefined, 'array-v': [2025], 'object-u': { year: 2025 },
+    expanded: '+010000-01-01T00:00:00Z', negative: '-000001-01-01T00:00:00Z',
+  };
+  for (const [id, createdAt] of Object.entries(dates)) metadata(store, bot, id, { createdAt });
+  const originals = store.list('attachment', bot.id);
+  const unknown = ['object-u', 'number-x', 'null-z', 'missing-w', 'invalid-y', 'array-v'];
+  const newest = ['expanded', 'after-utc', 'before-offset', 'last-year', 'negative', ...unknown];
+  for (const sort of ['newest', 'oldest']) {
+    const seen = []; let cursor = null;
+    do {
+      const page = await rpc('artifacts.list', bot, { sort, limit: 2, cursor }); seen.push(...page.items); cursor = page.nextCursor;
+    } while (cursor);
+    assert.deepEqual(seen.map((a) => a.id), sort === 'newest' ? newest : [...newest].reverse());
+    for (const a of seen) {
+      if (unknown.includes(a.id)) assert.equal(a.createdAt, null);
+      else assert.equal(a.createdAt, new Date(dates[a.id]).toISOString());
+    }
+  }
+  const first = await rpc('artifacts.list', bot, { limit: 1 });
+  const old = JSON.parse(Buffer.from(first.nextCursor, 'base64url').toString()); old.v = 1;
+  await assert.rejects(rpc('artifacts.list', bot, { cursor: Buffer.from(JSON.stringify(old)).toString('base64url') }), /cursor.*Refresh/);
+  assert.deepEqual(store.list('attachment', bot.id), originals);
+});
+
 test('metadata-only global/per-bot paging has deterministic month ordering, filters and no native/file hydration', async (t) => {
   const { store, bots, rpc, codex } = await setup(t);
   for (let i = 0; i < 105; i++) metadata(store, bots[i % 2], `file-${String(i).padStart(3, '0')}`, { createdAt: `2026-${i < 70 ? '08' : '09'}-01T00:00:00.000Z`, artifact: i % 3 === 0 });
