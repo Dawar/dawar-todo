@@ -1,23 +1,27 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, useRef } from "react";
 import { X } from "lucide-react";
 import type { Bot, BotAttachment, BotRun, BotRunPage, BotSchedule } from "../../lib/bots-types";
-import type { Turn } from "../../lib/codex-protocol/v2/Turn";
+import type { HistoryPage, HistoryResponse } from "../../lib/bot-history-view";
 import { botsClient } from "./client";
-import { BotMessage } from "./message";
+import { TimelineEntry } from "./timeline";
+import { getBotTimeline } from "./use-timeline";
 
 const date = (value: string) => new Date(value).toLocaleString();
 
 export function RunHistory({ bot, schedules, attachments, online, onClose, download }:
   { bot: Bot; schedules: BotSchedule[]; attachments: BotAttachment[]; online: boolean;
     onClose: () => void; download: (id: string) => void }) {
+  const requestGeneration = useRef(0);
+  useEffect(() => () => { requestGeneration.current++; }, [bot.id]);
+  const timeline = getBotTimeline(botsClient.owner, bot.id);
   const [runs, setRuns] = useState<BotRun[]>([]);
   const [latest, setLatest] = useState<BotRun[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [transcript, setTranscript] = useState<Turn | null>(null);
+  const [transcript, setTranscript] = useState<HistoryPage | null>(null);
   const [turnId, setTurnId] = useState<string | null>(null);
   const [turnCursor, setTurnCursor] = useState<string | null>(null);
   const load = useCallback(async (next: string | null) => {
@@ -34,15 +38,15 @@ export function RunHistory({ bot, schedules, attachments, online, onClose, downl
   }, [bot.id, online]);
   useEffect(() => { void Promise.resolve().then(() => load(null)); }, [load]);
   async function openTurn(id: string, next: string | null = null) {
+    const request = ++requestGeneration.current, owner = botsClient.owner;
     setBusy(true);
     setError("");
     setTurnId(id);
     if (!next) setTranscript(null);
     try {
-      const result = await botsClient.rpc<{ turn: Turn | null; nextCursor: string | null }>(
-        "history.turn", bot.id, { turnId: id, cursor: next });
-      setTranscript(result.turn);
-      setTurnCursor(result.nextCursor);
+      const result = await botsClient.rpc<HistoryResponse>("history.view", bot.id, { turnId: id, cursor: next });
+      if (request !== requestGeneration.current || owner !== botsClient.owner) return;
+      if (result.kind === "page") { setTranscript(result); setTurnCursor(result.olderCursor); }
     } catch (e) { setError(e instanceof Error ? e.message : "Transcript unavailable."); }
     finally { setBusy(false); }
   }
@@ -60,9 +64,9 @@ export function RunHistory({ bot, schedules, attachments, online, onClose, downl
       {turnId ? <>
         <button className="bots-history-link" onClick={() => { setTurnId(null); setTranscript(null); }}>← Back to runs</button>
         <h3>Scheduled conversation turn</h3>
-        {transcript?.items.map((item) => <BotMessage key={item.id} item={item} botId={bot.id} attachments={attachments} download={download} />)}
-        {transcript && !transcript.items.length && <p>No transcript items are available for this turn.</p>}
-        {!transcript && !busy && turnCursor && <button className="bots-history-link" onClick={() => void openTurn(turnId, turnCursor)}>Search earlier conversation</button>}
+        {transcript?.entries.map((entry) => <TimelineEntry key={entry.id} entry={{ ...entry, scheduled: false }} timeline={timeline} attachments={transcript.attachments.length ? transcript.attachments : attachments} download={download} />)}
+        {transcript && !transcript.entries.length && <p>No transcript items are available for this turn.</p>}
+        {!busy && turnCursor && <button className="bots-history-link" disabled={!online} onClick={() => void openTurn(turnId, turnCursor)}>Load earlier items in this turn</button>}
         {!transcript && !busy && !turnCursor && !error && <p>This turn is not available in native conversation history.</p>}
       </> : <>
         <p className="bots-muted">This view shows recorded schedule times and outcomes. The bot’s conversation still holds each native turn; open a run’s turn here to read its full output when available.</p>

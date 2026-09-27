@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { readFile } from 'node:fs/promises';
 import { IDBObjectStore } from 'fake-indexeddb';
 import { runtime } from './helpers/load-ts.mjs';
 
@@ -221,14 +220,18 @@ test('six image and twelve file limits count offline staged attachments', async 
   c.addFiles([new File(['x'], 'extra.txt')]); assert.match(c.actionError, /12 files/); assert.equal(c.draft.files.length, 12);
 });
 
-test('history refresh integration has no composer writes and selection guards include generation and owner', async () => {
-  const source = await readFile(new URL('../app/bots/workspace.tsx', import.meta.url), 'utf8');
-  const history = source.slice(source.indexOf('const loadHistory ='), source.indexOf('const loadQueue ='));
-  assert.doesNotMatch(history, /setDraft|setUploads|composer\./);
-  assert.match(history, /historyRequest.current !== request/); assert.match(history, /client.owner !== owner/);
-  assert.doesNotMatch(source, /preQueueEdit|draftId|previewFiles|client.save\(`draft:/);
-  const service = await readFile(new URL('../app/bots/composer-service.ts', import.meta.url), 'utf8');
-  for (const lifecycle of ['pagehide', 'visibilitychange', 'dawar-before-navigation', 'popstate', 'beforeunload']) assert.ok(service.includes(lifecycle));
+test('real history refresh cannot overwrite newer typing or another owner composer', async () => {
+  const env = setup(), c = env.composer(); await c.open(); c.setText('before'); await c.flush();
+  const { BotTimeline } = env.load('app/bots/timeline-controller.ts');
+  const response = deferred(); env.transport.online = true; env.transport.rpc = () => response.promise;
+  const timeline = new BotTimeline('alice', 'bot-a', env.transport, { read: async () => null, write: async () => {} });
+  const loading = timeline.refresh(); await new Promise((r) => setTimeout(r, 0));
+  c.setText('typing during history'); await c.flush(); env.transport.owner = 'bob';
+  response.resolve({ kind: 'page', entries: [], attachments: [], olderCursor: null, revision: 'v1', eventCursor: 0, complete: true });
+  await loading;
+  assert.equal(c.draft.text, 'typing during history');
+  assert.equal((await env.store.load('alice', 'bot-a')).slots.normal.text, 'typing during history');
+  assert.equal(timeline.getSnapshot().cached, false); await timeline.dispose();
 });
 
 test('send identity transaction failure prevents dispatch; reconciliation also waits for commit', async () => {

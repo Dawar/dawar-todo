@@ -49,7 +49,8 @@ const server = createServer(async (req, res) => {
         uploads.get(r.params.id).chunks.set(r.params.offset, r.params.data); sendResult(res, { result: {} });
       } else if (r.method === 'attachments.finish') {
         const f = uploads.get(r.params.id); f.ready = true; sendResult(res, { result: { ...f, chunks: undefined } });
-      } else if (r.method === 'history') sendResult(res, { result: { thread: { turns: [] }, attachments: [], nextCursor: null } });
+      } else if (r.method === 'history.view') sendResult(res, { result: { kind: 'page', entries: [], attachments: [], olderCursor: null, revision: 'synthetic-review', eventCursor: 0, complete: true } });
+      else if (r.method === 'history') sendResult(res, { result: { thread: { turns: [] }, attachments: [], nextCursor: null } });
       else sendResult(res, { result: [] });
     } else if (path === '/away') res.end('<!doctype html><title>Synthetic navigation</title><p>Away from the bot workspace</p><a href="/review?bot=A">Back</a>');
     else res.end('<!doctype html><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="stylesheet" href="/review.css"><div id="root"></div><script src="/review.js"></script>');

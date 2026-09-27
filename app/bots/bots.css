@@ -1286,3 +1286,28 @@ html.bots-viewport-locked body {
 .bots-draft-status [role="alert"] { color: #9c342c; }
 .bots-draft-status button { text-decoration: underline; margin-left: 6px; }
 .bots-draft-status select { max-width: 100%; }
+
+.bots-detail-status, .bots-text-pages { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 8px 0; font-size: 12px; color: #537361; }
+.bots-detail-status button, .bots-text-pages button, .bots-jump-latest { padding: 6px 10px; border-radius: 8px; background: #e9eeea; }
+.bots-jump-latest { align-self: center; flex: 0 0 auto; font-size: 12px; margin: 2px 0; }
+
+/* Support controls share a bounded scroll budget; the editor stays reachable. */
+.bots-composer-support { min-height: 0; max-height: 45%; flex: 0 1 auto; overflow-y: auto; overflow-x: hidden; }
+.bots-draft-status { max-height: min(160px, 20dvh); min-width: 0; overflow-wrap: anywhere; }
+.bots-recovery-details > summary { cursor: pointer; padding: 4px 0; }
+.bots-recovery-content { padding: 4px 0; }
+.bots-recovery-content [role="alert"] { margin-bottom: 6px; }
+.bots-recovery-content button { min-height: 30px; }
+.bots-keyboard-open > header { display: none; }
+.bots-keyboard-open .bots-conversation-heading { box-sizing: border-box; height: 44px; padding: 4px 12px; }
+.bots-keyboard-open .bots-banner { max-height: 32px; overflow-y: auto; padding-block: 3px; flex: 0 1 auto; }
+.bots-keyboard-open .bots-composer-support { max-height: calc(var(--bots-keyboard-height) * .40); }
+.bots-keyboard-open .bots-draft-status { max-height: 64px; }
+.bots-keyboard-open .bots-composer { box-sizing: border-box; margin-block: 4px; padding: 5px; }
+.bots-keyboard-open .bots-composer textarea { min-height: 38px; max-height: max(38px, calc(var(--bots-keyboard-height) * .18)); overflow-y: auto; }
+.bots-keyboard-open .bots-controls { padding-top: 3px; }
+.bots-keyboard-open .bots-controls select, .bots-keyboard-open .bots-controls button { padding-block: 3px; }
+.bots-keyboard-open .bots-upload-list { padding-block: 3px; }
+.bots-keyboard-open .bots-upload-list > .bots-upload-image { width: 48px; height: 48px; flex-basis: 48px; }
+.bots-keyboard-open .bots-prompt-queue { max-height: 70px; margin-top: 3px; padding: 4px 8px; }
+.bots-upload-progress { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-height: 1.4em; }
