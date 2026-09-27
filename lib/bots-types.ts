@@ -94,6 +94,31 @@ export type BotAttachment = {
   ready: boolean;
   path?: string;
 };
+export type BotArtifactKind = "image" | "pdf" | "document" | "audio" | "video" | "other";
+/** Metadata only. Original bytes remain behind bot-scoped attachments.read. */
+export type BotArtifact = Omit<BotAttachment, "path"> & {
+  botName: string;
+  botColor: string;
+  botArchived: boolean;
+  createdAt: string | null;
+  direction: "input" | "output";
+  source: "upload" | "published" | "native";
+  kind: BotArtifactKind;
+  provenance: { threadId?: string; turnId?: string; itemId?: string; operationId?: string };
+  preview: { kind: "image" | "pdf" | "none"; version: string };
+};
+export type BotArtifactQuery = {
+  cursor?: string | null;
+  limit?: number;
+  search?: string;
+  type?: BotArtifactKind | "all";
+  direction?: "input" | "output" | "all";
+  sort?: "newest" | "oldest" | "name";
+};
+export type BotArtifactPage = { items: BotArtifact[]; nextCursor: string | null };
+export type BotArtifactPreview =
+  | { status: "ready"; version: string; mimeType: "image/webp"; data: string; width: number; height: number }
+  | { status: "unavailable"; version: string; reason: string };
 export type BotRequest = {
   key: string;
   botId: string;
