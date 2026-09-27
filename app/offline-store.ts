@@ -2,6 +2,7 @@
 import { offlineRecordTodo, type Todo, type SyncResponse } from "./task-model";
 import { offlineDatabaseVersion, updatePwaLifecycle } from "./pwa-lifecycle";
 import { notifyOfflineChange } from "./offline-events";
+import { attachmentLeaseExpiry } from "./attachment-queue";
 
 export type OfflineAttachmentKind = "image" | "audio" | "video" | "file";
 
@@ -789,9 +790,9 @@ export async function queueTaskAttachments(todoId: number, attachments: OfflineS
 export async function acquireQueuedAttachment(localId: string, now = Date.now()) {
   let acquired: QueuedAttachment | undefined;
   await updateRecord<QueuedAttachment>(UPLOAD_STORE, localId, (row) => {
-    if (!row || (row.leaseUntil ?? 0) > now || row.nextAttemptAt > now) return undefined;
+    if (!row || attachmentLeaseExpiry(row) > now || row.nextAttemptAt > now) return undefined;
     acquired = { ...row, leaseToken: crypto.randomUUID(), leaseUntil: now + 120_000,
-      phase: "checking", lastAttemptAt: now, attempts: row.attempts + 1 };
+      state: "queued", phase: "checking", lastAttemptAt: now, attempts: row.attempts + 1 };
     return acquired;
   });
   if (acquired) notifyOfflineChange("remote");
@@ -800,7 +801,9 @@ export async function acquireQueuedAttachment(localId: string, now = Date.now())
 
 export async function updateQueuedAttachment(localId: string, leaseToken: string, patch: Partial<QueuedAttachment>) {
   const row = await updateRecord<QueuedAttachment>(UPLOAD_STORE, localId, (current) =>
-    current?.leaseToken === leaseToken ? { ...current, ...patch } : undefined);
+    // A callback resumed after suspension may release its own lease, but cannot
+    // renew expired ownership before a new recovery check.
+    current?.leaseToken === leaseToken && (!patch.leaseUntil || attachmentLeaseExpiry(current) > Date.now()) ? { ...current, ...patch } : undefined);
   notifyOfflineChange("remote");
   return row;
 }
@@ -824,7 +827,7 @@ export async function finishQueuedAttachment(localId: string, leaseToken: string
 export async function replaceQueuedAttachmentBytes(localId: string, file: File) {
   await updateRecord<QueuedAttachment>(UPLOAD_STORE, localId, (row) => {
     if (!row) throw new Error("This queued attachment is no longer available.");
-    if ((row.leaseUntil ?? 0) > Date.now()) throw new Error("Wait for the current attempt to finish.");
+    if (attachmentLeaseExpiry(row) > Date.now()) throw new Error("Wait for the current attempt to finish.");
     if (file.name !== row.fileName || (row.blob?.size && row.blob.size !== file.size)) {
       throw new Error("Choose the original file with the same name and size.");
     }
@@ -1014,7 +1017,7 @@ export async function retryQueuedAttachments(localId?: string) {
     const read = store.getAll();
     read.onsuccess = () => {
       for (const upload of read.result as QueuedAttachment[]) {
-        if ((!localId || upload.localId === localId) && (upload.leaseUntil ?? 0) <= Date.now()) {
+        if ((!localId || upload.localId === localId) && attachmentLeaseExpiry(upload) <= Date.now()) {
           store.put({ ...upload, nextAttemptAt: 0, state: "queued", reason: undefined, error: undefined, leaseToken: undefined, leaseUntil: undefined, phase: undefined });
         }
       }

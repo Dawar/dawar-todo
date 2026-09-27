@@ -8,6 +8,7 @@ import { hasAttachmentBytes } from "./attachment-queue";
 import { request, retryableSyncError, syncRetryDelay } from "./sync-request";
 import { uploadTaskAttachmentMultipart, uploadTaskAttachment } from "./attachment-upload-client";
 import { recordSyncDiagnostic } from "./sync-diagnostics";
+import { documentBuild } from "./pwa-lifecycle";
 
 class BlockedAttachment extends Error {
   constructor(public reason: QueuedAttachment["reason"], message: string) { super(message); }
@@ -28,13 +29,14 @@ export async function syncQueuedAttachment(localId: string) {
     method: "POST", body: JSON.stringify({ todoId: row!.todoId,
       ids: [...new Set([localId, row!.remoteAttachmentId].filter(Boolean))], draftToken: row!.draftToken }),
   });
-  recordSyncDiagnostic("attachment-attempt", { kind: row.kind, attempt: row.attempts, bytesPresent: hasAttachmentBytes(row) });
+  recordSyncDiagnostic("attachment-attempt", { build: documentBuild, recoveryProtocol: 2, kind: row.kind, attempt: row.attempts, bytesPresent: hasAttachmentBytes(row) });
   try {
     const resolved = await resolveTaskId(row.todoId);
     if (resolved < 1) throw new BlockedAttachment("target-missing", "Waiting for the task to synchronize. Retry after the task appears.");
     if (resolved !== row.todoId) await update({ todoId: resolved });
     const recovery = await inspect();
     if (!Array.isArray(recovery.files)) throw new Error("Recovery response unavailable.");
+    recordSyncDiagnostic("attachment-recovery-checked", { imageCapability: recovery.imageProcessingAvailable === true ? "available" : recovery.imageProcessingAvailable === false ? "unavailable" : "unknown" });
     const ready = recovery.files.find((file) => file.state === "ready" && file.todoId !== null);
     // Re-read cancellation intent after every network wait through the lease update.
     await phase("checking");
@@ -78,8 +80,12 @@ export async function syncQueuedAttachment(localId: string) {
         throw new BlockedAttachment("rejected", "An upload with this identity belongs to another target. Save the local file or retry to reconcile it.");
       }
       if (!hasAttachmentBytes(row)) throw new BlockedAttachment("missing-bytes", "Local file bytes are missing. Choose the original file to recover.");
-      await update({ transport: row.kind === "image" && recovery.imageProcessingAvailable === false ? "browser" : "multipart",
-        imageBindingAvailable: recovery.imageProcessingAvailable });
+      // Only a positive capability permits server image processing. Retain a
+      // prior explicit rejection across retries even if another worker says yes.
+      const knownUnavailable = row.imageBindingAvailable === false || (row.lastStatus === 503 && row.serverPhase === "image-binding");
+      const browserImage = row.kind === "image" && (recovery.imageProcessingAvailable !== true || knownUnavailable);
+      await update({ transport: browserImage ? "browser" : "multipart",
+        imageBindingAvailable: knownUnavailable ? false : recovery.imageProcessingAvailable });
       await phase("uploading");
       if (row.cancelled) throw new Error("Removal requested; checking on the next attempt.");
       const uploadRequest: typeof request = async <T,>(path: string, options?: Parameters<typeof request>[1]) => {
@@ -89,12 +95,24 @@ export async function syncQueuedAttachment(localId: string) {
       };
       const input = { file: new File([row.blob], row.fileName, { type: row.mimeType }), kind: row.kind,
         durationMs: row.durationMs, endpoint: `/api/todos/${row.todoId}/attachments`, request: uploadRequest, clientUploadId: localId };
-      if (row.kind === "image" && recovery.imageProcessingAvailable === false) {
-        recordSyncDiagnostic("attachment-browser-fallback", { reason: "image-binding-unavailable" });
+      const browserUpload = async (reason: string) => {
+        await update({ transport: "browser" });
+        recordSyncDiagnostic("attachment-browser-fallback", { reason });
         // Stable ID means a lost finalize response reconciles as the same file.
         await uploadTaskAttachment({ ...input, discard: async () => undefined });
+      };
+      if (browserImage) {
+        await browserUpload(recovery.imageProcessingAvailable === false || row.imageBindingAvailable === false ? "image-binding-unavailable" : "image-capability-unknown");
       } else {
-        await uploadTaskAttachmentMultipart(input);
+        try { await uploadTaskAttachmentMultipart(input); }
+        catch (error) {
+          const unavailable = error as { code?: string; phase?: string; status?: number };
+          if (row.kind !== "image" || unavailable.code !== "image-processing-unavailable" || unavailable.phase !== "image-binding" || unavailable.status !== 503) throw error;
+          // This typed failure occurs before preparation/storage. Retry through
+          // the stable-ID JSON path, never discard or manufacture a new identity.
+          await update({ imageBindingAvailable: false, lastStatus: 503, serverPhase: "image-binding" });
+          await browserUpload("multipart-image-binding-unavailable");
+        }
       }
     }
     if (!await finishQueuedAttachment(localId, lease)) {
@@ -110,9 +128,9 @@ export async function syncQueuedAttachment(localId: string) {
     // Fixed text: backend/storage messages can contain private URLs or file names.
     const message = error instanceof BlockedAttachment ? error.message : reason === "auth" ? "Sign in again, then retry." : status === 404 ? "The upload target is unavailable. Retry to check or save the local file." : blocked ? `Upload rejected${status ? ` (HTTP ${status})` : ""}. Retry to check or save the local file.` : "Upload could not be confirmed; local bytes are retained.";
     const delay = blocked ? Infinity : syncRetryDelay(row.attempts);
-    await updateQueuedAttachment(localId, lease, { state: blocked ? "blocked" : "retry", reason, error: message,
-      lastStatus: status, serverPhase: (error as { phase?: string }).phase, nextAttemptAt: Date.now() + delay, leaseToken: undefined, leaseUntil: undefined });
-    recordSyncDiagnostic("attachment-deferred", { reason: reason ?? null, status: status ?? null, attempts: row.attempts, automaticRetry: !blocked });
+    const deferred = await updateQueuedAttachment(localId, lease, { state: blocked ? "blocked" : "retry", reason, error: message,
+      lastStatus: status, serverPhase: (error as { phase?: string }).phase ?? row.serverPhase, nextAttemptAt: Date.now() + delay, leaseToken: undefined, leaseUntil: undefined, phase: undefined });
+    recordSyncDiagnostic(deferred ? "attachment-deferred" : "attachment-ownership-changed", { reason: reason ?? null, status: status ?? null, attempts: row.attempts, automaticRetry: Boolean(deferred) && !blocked });
     return null;
   }
 }

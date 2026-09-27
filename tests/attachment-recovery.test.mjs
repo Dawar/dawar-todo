@@ -11,7 +11,7 @@ function setup({ request, upload, browserUpload, extra } = {}) {
   const calls = [];
   const env = runtime(extra, {
     './sync-request': {
-      request: async (path, init) => { calls.push(path); return request ? request(path, init) : { targetExists: true, files: [{ id, state: 'missing', todoId: null }] }; },
+      request: async (path, init) => { calls.push(path); return request ? { imageProcessingAvailable: true, ...await request(path, init) } : { imageProcessingAvailable: true, targetExists: true, files: [{ id, state: 'missing', todoId: null }] }; },
       retryableSyncError: (error) => !error.status || error.status >= 500,
       syncRetryDelay: () => 2,
     },

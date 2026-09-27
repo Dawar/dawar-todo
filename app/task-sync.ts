@@ -12,7 +12,7 @@ import {
 } from "./offline-store";
 import { taskActionRetryDelay, uploadWaitingForTaskAction } from "./task-queue-order";
 import { syncQueuedAttachment } from "./attachment-sync";
-import { attachmentQueueState } from "./attachment-queue";
+import { attachmentQueueCounts, attachmentLeaseExpiry } from "./attachment-queue";
 import { recordSyncDiagnostic } from "./sync-diagnostics";
 
 export type SyncSnapshot = {
@@ -99,7 +99,7 @@ export function createTaskSyncEngine() {
         const tasks = (cache?.todos ?? []).filter((todo) => !deleted.has(todo.id)).map((todo) => ({ ...todo, ...patches.get(todo.id) } as Todo));
         taskStore.setAll(tasks);
         publish({ loading: false, creates: creates.length, edits: mutations.length, actions: actions.length, uploads: uploads.length,
-          uploadStates: uploads.reduce<Record<string, number>>((counts, upload) => { const state = attachmentQueueState(upload); counts[state] = (counts[state] ?? 0) + 1; return counts; }, {}),
+          uploadStates: attachmentQueueCounts(uploads),
           rejectedCreates: creates.filter((record) => record.rejected), mutations, pendingActions: actions, revision: cache?.revision ?? 0, projects: cache?.projects ?? [],
           ...(cache?.settings ? { settings: cache.settings } : {}),
           ...(cache && Object.hasOwn(cache, "captureDraft") ? { captureDraft: cache.captureDraft } : {}),
@@ -243,7 +243,7 @@ export function createTaskSyncEngine() {
       await withLock("dawar-attachment-sync", async () => {
         for (const upload of await listQueuedAttachments()) {
           if (!available()) break;
-          if (upload.nextAttemptAt > Date.now() || (upload.leaseUntil ?? 0) > Date.now()) continue;
+          if (upload.nextAttemptAt > Date.now() || attachmentLeaseExpiry(upload) > Date.now()) continue;
           const pending = await listOfflineTaskActions();
           // Wait for a merge/deletion result before deciding this file's target.
           if (uploadWaitingForTaskAction(upload, pending)) continue;
@@ -256,7 +256,7 @@ export function createTaskSyncEngine() {
       for (const row of await listQueuedAttachments()) {
         // Target actions wake this lane through local/remote notifications.
         if (uploadWaitingForTaskAction(row, pending)) continue;
-        const eligibleAt = Math.max(row.nextAttemptAt, row.leaseUntil ?? 0);
+        const eligibleAt = Math.max(row.nextAttemptAt, attachmentLeaseExpiry(row));
         nextDelay = Math.min(nextDelay, Math.max(2_000, eligibleAt - Date.now()));
       }
     } catch {
