@@ -1,5 +1,18 @@
 # Night runtime corrections — R1–R5
 
+## R6 activity-order correction — latest candidate
+
+Source **`1401699c43cb47c356f778c4ad3abd9a9e4ad64c`**, task `796928e9`, follows the correction-required rereview of source `7c292e3` / report `b45d932`. This addendum supersedes any implication below that the old active-ID check alone fenced newer finished turns. The rereviewer found direct R1–R5 resolved; R6 still required this correction and independent re-review.
+
+A private durable `botActivity` record now preserves a monotonic observation generation across starts, finishes and restart. Every awaited active projection captures a bot-scoped token before its reads/ACK, then compares it atomically before changing active state. A later B start **and completion** invalidate delayed A even when B has cleared `activeTurnId`. Native notifications advance the counter independently of bot locks. Exact terminal evidence, current pending requests and newer pause revisions remain authoritative.
+
+Scheduled attribution now additionally requires matching current bot and observed active identity; a rejected A projection cannot independently restore activeRun or active snapshot metadata. Accepted operation/run/continuation receipts can still settle without an active projection. Same-A start/completion before ACK keeps truthful receipt/evidence handling; no terminal state, replacement operation or send is invented. Startup/native reads, primary/continuation recovery, all turn/start and legacy queue/start ACKs, resume and both tick read paths were audited. Operation/queue/Plan/active-supervisor reconciliation only projects exact-ID terminal evidence and uses the same scheduled-attribution gate.
+
+No public API/type/frontend change is needed for `de69932a`; R1–R5 and additive queue/continuation contracts remain. This adds one internal record kind without deleting existing data. Full source anchors, caller inventory, generation 10→11→12 calculations and migration/limits are in manager home `NIGHT_RUNTIME_ACTIVITY_FENCE.md` (unique copy `NIGHT_RUNTIME_ACTIVITY_FENCE_796928e9_3816777c.md`).
+
+Checks actually run for R6: syntax and scoped ESLint for all five changed backend modules, TypeScript and diff check passed. No tests/suites, runtime fixtures, live DB/native/user mutation, browser review, new app build, main integration/rebase, push/deploy or restart. All race/restart sequences are source-derived, unexecuted; native timing and crash/COMMIT behavior remain for independent validation. Source is committed for review, not shipped. Independent scheduled lanes remain unfinished.
+
+
 2026-09-28 · worker 3816777c · task 88c10ee5f3bb4e193bb0049bef076f6ed46e42e263e74c9725ddf3656a0de315
 
 Branch: `codex/night-runtime-recovery-3816777c`, continuing reviewed implementation `25e928d75c8f3f91f8680287ae3a119450a86340` and report HEAD `1d5135e40333c081a07268acf15b401a1648039f`. Earlier history remains intact. This report supersedes the prior report's automatic-native-reset description. It is an implementation handoff for independent review, not release acceptance.
