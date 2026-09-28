@@ -1,14 +1,14 @@
-import type { BotAttachment, BotQueuedSubmission } from "../../lib/bots-types";
+import type { BotAttachment, BotQueuedSubmission, BotRunReceipt } from "../../lib/bots-types";
 import { queueEditable } from "./queue-state";
 import { readQueueAction } from "./queue-action-store";
 import {
   BotDraftStore, changeDraft, emptyDraft, emptyRecord, fileLimit, fileReferences,
-  type DraftChange, type DraftRecord, type StagedFile, type Submission,
+  type DraftChange, type DraftRecord, type StagedFile, type Submission, type RunDeliveryResult,
 } from "./draft-store";
 
 export type ComposerTransport = {
   owner: string; online: boolean;
-  rpc: (method: Submission["method"] | "queue.list", botId: string, params: Record<string, unknown>, id: string | undefined, options: { owner: string; managed: boolean }) => Promise<unknown>;
+  rpc: (method: Submission["method"] | "queue.list" | "runs.receipt", botId: string, params: Record<string, unknown>, id: string | undefined, options: { owner: string; managed: boolean }) => Promise<unknown>;
   upload: (botId: string, file: File, progress: (value: number) => void, id: string, owner: string) => Promise<BotAttachment>;
   download: (botId: string, id: string, owner?: string) => Promise<{ blob: Blob }>;
 };
@@ -33,9 +33,10 @@ export class BotComposer {
   private listeners = new Set<() => void>();
   private recovering = 0;
   constructor(readonly owner: string, readonly botId: string, private store: BotDraftStore,
-    private transport: ComposerTransport, private committed: () => void = () => {}) {
-    this.record = this.persisted = emptyRecord(owner, botId);
+    private transport: ComposerTransport, private committed: () => void = () => {}, private destination?: { runId: string; storageKey: string }) {
+    this.record = this.persisted = emptyRecord(owner, this.storageKey);
   }
+  private get storageKey() { return this.destination?.storageKey ?? this.botId; }
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   private notify() { for (const listener of this.listeners) listener(); }
   get draft() { return this.record.slots[this.record.active]; }
@@ -60,7 +61,7 @@ export class BotComposer {
     if (this.opening) { await this.opening; if (hydrate && this.ready) await this.recoverFiles().catch((error) => { this.storageError = message(error); this.notify(); }); return; }
     this.opening = (async () => {
       try {
-        this.persisted = await this.store.load(this.owner, this.botId);
+        this.persisted = await this.store.load(this.owner, this.storageKey);
         this.renderPending();
         this.ready = true;
         this.storageError = "";
@@ -74,7 +75,7 @@ export class BotComposer {
     const generation = ++this.recovering;
     for (const file of Object.values(this.record.slots).flatMap((d) => d.files)) {
       if (this.files.has(file.id) || !file.hasBytes) continue;
-      const blob = await this.store.file(this.owner, this.botId, file.id);
+      const blob = await this.store.file(this.owner, this.storageKey, file.id);
       if (generation !== this.recovering) return;
       if (!blob) throw new Error(`Saved bytes for ${file.name} could not be recovered. Keep the draft and retry recovery.`);
       this.files.set(file.id, new File([blob], file.name, { type: file.mimeType }));
@@ -85,7 +86,7 @@ export class BotComposer {
     if (!this.ready) return this.open();
     if (this.dirty) return; // The transaction will merge against the latest record.
     try {
-      const record = await this.store.get(this.owner, this.botId);
+      const record = await this.store.get(this.owner, this.storageKey);
       if (this.dirty || !record || record.revision === this.persisted.revision) return;
       this.persisted = record;
       this.renderPending();
@@ -111,7 +112,7 @@ export class BotComposer {
       while (this.changes.length) {
         const item = this.changes[0];
         try {
-          this.persisted = await this.store.change(this.owner, this.botId, item.change, item.bytes);
+          this.persisted = await this.store.change(this.owner, this.storageKey, item.change, item.bytes);
           this.changes.shift();
           this.storageError = "";
           this.renderPending();
@@ -119,7 +120,7 @@ export class BotComposer {
         } catch (error) {
           if (item.change.kind === "submit" && (error as Error).name === "DraftChangedError") {
             this.changes.shift();
-            this.persisted = await this.store.get(this.owner, this.botId) ?? this.persisted;
+            this.persisted = await this.store.get(this.owner, this.storageKey) ?? this.persisted;
             this.renderPending();
             this.actionError = message(error);
           } else this.storageError = `${message(error)} Changes are still in this tab. Retry saving before closing it.`;
@@ -192,7 +193,7 @@ export class BotComposer {
           this.files.set(file.id, new File([blob], file.name, { type: file.mimeType }));
           this.enqueue({ kind: "bytes", id: file.id }, new Map([[file.id, blob]]));
         } else {
-          const bytes = await this.store.file(this.owner, this.botId, file.id);
+          const bytes = await this.store.file(this.owner, this.storageKey, file.id);
           if (!bytes) throw new Error("Attachment bytes are unavailable. Retry recovery before sending.");
           if (!this.canUseOwner || !Object.values(this.record.slots).some((d) => d.files.some((f) => f.id === file.id))) continue;
           const uploaded = await this.transport.upload(this.botId, new File([bytes], file.name, { type: file.mimeType }), (value) => {
@@ -240,8 +241,9 @@ export class BotComposer {
       if (draft.files.some((f) => !f.remote?.ready)) throw new Error("Attachments are saved locally. Finish or retry their uploads before sending.");
       if (!draft.text.trim() && !draft.files.length) return;
       const op: Submission = {
-        id: crypto.randomUUID(), slot, method: draft.queueId ? "queue.update" : queueNext ? "queue.add" : "turn.send",
-        params: { ...(draft.queueId ? { id: draft.queueId, ...(draft.queueRevision === undefined ? {} : { expectedRevision: draft.queueRevision }) } : {}), text: draft.text.trim(), attachments: draft.files.map((f) => f.remote!.id) },
+        id: crypto.randomUUID(), slot, method: this.destination ? "runs.send" : draft.queueId ? "queue.update" : queueNext ? "queue.add" : "turn.send",
+        params: { ...(this.destination ? { runId: this.destination.runId } : {}), ...(draft.queueId ? { id: draft.queueId, ...(draft.queueRevision === undefined ? {} : { expectedRevision: draft.queueRevision }) } : {}), text: draft.text.trim(), attachments: draft.files.map((f) => f.remote!.id) },
+        ...(this.destination ? { runDelivery: { state: "prepared" as const, token: crypto.randomUUID() } } : {}),
         textVersion: draft.textVersion, fileIds: draft.files.map((f) => f.id), state: "pending",
       };
       // This durable record is the authorization to reconcile after restart.
@@ -257,7 +259,70 @@ export class BotComposer {
     try { await this.flush(); } catch { return; }
     for (const op of Object.values(this.persisted.operations)) await this.dispatch(op);
   }
+  private async runChange(change: Extract<DraftChange, { kind: "run-claim" | "run-result" }>) {
+    // Use this controller's existing write queue as well as the store's strict
+    // cross-tab transaction. Concurrent typing cannot publish an older record
+    // over a newer local commit while the claim is awaiting storage.
+    const queued = { change };
+    this.changes.push(queued);
+    try { await this.flush(); }
+    catch (error) {
+      if (change.kind === "run-claim") {
+        this.changes = this.changes.filter(value => value !== queued);
+        if (this.persisted.operations[change.id]?.runDelivery?.token === change.token) {
+          // The claim committed but a subsequent queued write failed. No RPC
+          // has run; retain its exact release for the next explicit save retry.
+          this.changes.push({ change: { kind: "run-result", id: change.id, expectedToken: change.token, nextToken: crypto.randomUUID(), outcome: "not-sent", error: "Saved reply is waiting to send." } });
+        }
+        this.renderPending(); this.notify();
+      }
+      throw error;
+    }
+    return this.persisted.operations[change.id];
+  }
+  private async dispatchRun(saved: Submission) {
+    if (this.sending.has(saved.id) || !this.canUseOwner || !this.transport.online) return;
+    this.sending.add(saved.id); this.notify();
+    let op: Submission | undefined, claimed = false;
+    const claim = crypto.randomUUID();
+    const settle = async (outcome: RunDeliveryResult, error?: string) => {
+      if (!op) return;
+      await this.runChange({ kind: "run-result", id: op.id, expectedToken: op.runDelivery?.token ?? null, nextToken: crypto.randomUUID(), outcome, error });
+    };
+    try {
+      if (!this.destination || saved.params.runId !== this.destination.runId) throw Error("This reply's destination could not be verified. Its draft is retained.");
+      // Exactly one tab can move this existing prepared operation across the
+      // durable boundary. Legacy/possible rows get only a receipt lookup.
+      op = await this.runChange({ kind: "run-claim", id: saved.id, token: claim });
+      if (!op) return;
+      claimed = op.runDelivery?.token === claim;
+      if (!this.canUseOwner || !this.transport.online) {
+        if (claimed) await settle("not-sent", "Saved reply is waiting to send. Reconnect or resume this same reply.");
+        return;
+      }
+      const receipt = await this.transport.rpc(claimed ? "runs.send" : "runs.receipt", this.botId,
+        claimed ? op.params : { runId: this.destination.runId, operationId: op.id }, claimed ? op.id : undefined,
+        { owner: this.owner, managed: true }) as BotRunReceipt;
+      if (receipt?.operationId !== op.id || receipt.runId !== this.destination.runId || !receipt.laneId || !["accepted", "queued", "uncertain", "rejected"].includes(receipt.state)) throw Error("The run receipt could not be verified. Your reply is retained.");
+      if (receipt.state === "accepted" && receipt.turnId) { await settle("success"); this.actionError = ""; }
+      else if (receipt.state === "rejected") { await settle("rejected"); this.actionError = receipt.waitReason || "This reply was not delivered. Your draft and files are retained."; }
+      else {
+        // Positive server receipt is stronger than an outstanding claimant's
+        // local not-sent result; advance the token to fence that stale result.
+        await settle("queued", receipt.state === "queued" ? "Queued for this run. Check delivery when it is ready; your reply and files are retained." : "Run delivery is unconfirmed. Check its original receipt; your reply and files are retained.");
+      }
+    } catch (error) {
+      const outcome = (error as { outcome?: string }).outcome;
+      try {
+        if (claimed && outcome === "not-sent") await settle("not-sent", "Saved reply was not sent. Reconnect or resume this same reply.");
+        else if (claimed && outcome === "rejected") { await settle("rejected"); this.actionError = `Not sent: ${message(error)}`; }
+        else if (op) await settle("uncertain", "Delivery is unconfirmed. Check the original receipt; your reply and files are retained.");
+        else this.actionError = message(error);
+      } catch (storage) { this.storageError = `${message(storage)} Your saved reply identity is retained. Retry saving before closing this tab.`; }
+    } finally { this.sending.delete(saved.id); this.notify(); }
+  }
   private async dispatch(op: Submission) {
+    if (op.method === "runs.send") return this.dispatchRun(op);
     if (this.sending.has(op.id) || !this.canUseOwner || !this.transport.online) return;
     this.sending.add(op.id); this.notify();
     try {

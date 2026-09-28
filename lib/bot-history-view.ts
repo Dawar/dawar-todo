@@ -9,7 +9,9 @@ export type HistoryEntry = {
   audience?: "conversation" | "mixed" | "finding"; runId?: string; findingId?: string; legacyContext?: boolean;
   startedAt: number | null; turnStatus?: Turn["status"]; itemStatus?: string; status: Turn["status"]; updatedSeq?: number;
 };
+export type HistoryContext = { laneId: string; runId: string | null; threadId: string };
 export type HistoryPage = {
+  context?: HistoryContext;
   /** Routine turns inspected and excluded before filling the conversation page. */
   activityTurns?: { turnId: string; runId?: string; active?: boolean }[];
   entries: HistoryEntry[]; turnIds?: string[]; newerCursor?: string | null; partialTurn?: boolean; contextEntries?: HistoryEntry[]; olderCursor: string | null; revision: string;
@@ -17,10 +19,10 @@ export type HistoryPage = {
 };
 export type HistoryResponse =
   | ({ kind: "page" } & HistoryPage)
-  | { kind: "unchanged"; revision: string; eventCursor: number }
-  | { kind: "events"; revision: string; eventCursor: number; events: BotEvent[] };
+  | { kind: "unchanged"; context?: HistoryContext; revision: string; eventCursor: number }
+  | { kind: "events"; context?: HistoryContext; revision: string; eventCursor: number; events: BotEvent[] };
 /** Attachments refresh independently, including when notModified reuses text. */
-export type HistoryDetail = { json: string; nextOffset: number | null; totalLength: number; version: string; eventCursor?: number; notModified?: boolean; attachments?: BotAttachment[] };
+export type HistoryDetail = { context?: HistoryContext; json: string; nextOffset: number | null; totalLength: number; version: string; eventCursor?: number; notModified?: boolean; attachments?: BotAttachment[] };
 export type HistoryGap = { before: string; stop: string; cursor: string };
 export type HistoryPosition = { anchor: string | null; offset: number; following: boolean };
 export const HISTORY_WINDOW = 40; // Legacy diagnostic item view.

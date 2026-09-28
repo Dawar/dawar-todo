@@ -24,8 +24,8 @@ export function ReturnedArtifact({ botId, id, children, attachment }: { botId: s
     <span><strong>{title}</strong><small>{mimeType === "application/pdf" ? "PDF document" : mimeType.startsWith("image/") ? "Image" : "Shared file"}{attachment && ` · ${fileSize(attachment.size)}`}</small></span><ArrowUpRight size={17} aria-hidden="true" />
   </button>{open && createPortal(<ArtifactViewer key={`${owner}:${id}`} item={item} owner={owner} online={online} onClose={close} />, document.body)}</>;
 }
-export function ReturnedArtifacts({ attachments, itemIds = [], turnId, botId, linked }: { attachments: BotAttachment[]; itemIds?: string[]; turnId?: string; botId: string; linked: Set<string> }) {
-  const delivered = (attachments as DeliveredAttachment[]).filter((file) => !linked.has(file.id) && file.ready && (file.artifact || file.direction === "output") && (turnId ? file.provenance?.turnId === turnId : file.provenance?.itemId && itemIds.includes(file.provenance.itemId)));
+export function ReturnedArtifacts({ attachments, itemIds = [], turnId, threadId, botId, linked }: { attachments: BotAttachment[]; itemIds?: string[]; turnId?: string; threadId?: string; botId: string; linked: Set<string> }) {
+  const delivered = (attachments as DeliveredAttachment[]).filter((file) => !linked.has(file.id) && (!threadId || file.provenance?.threadId === threadId) && file.ready && (file.artifact || file.direction === "output") && (turnId ? file.provenance?.turnId === turnId : file.provenance?.itemId && itemIds.includes(file.provenance.itemId)));
   if (!delivered.length) return null;
   return <div className="bots-returned-files">{delivered.slice(0, 6).map((file) => <ReturnedArtifact key={file.id} id={file.id} botId={botId} attachment={file} />)}{delivered.length > 6 && <a href={`/bots?bot=${encodeURIComponent(botId)}&view=attachments`}>View all attachments</a>}</div>;
 }

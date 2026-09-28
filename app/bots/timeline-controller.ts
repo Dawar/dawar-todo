@@ -290,6 +290,7 @@ export class BotTimeline {
     }, 1000));
   }
   receive(event: BotEvent) {
+    if (event.type.startsWith("run.")) return; // Run traffic never enters main history/detail/write lanes.
     if (this.disposed || event.botId !== this.botId) return;
     if (event.type === "schedules") {
       if (event.seq <= this.attributionCursor) return;

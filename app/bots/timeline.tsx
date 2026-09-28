@@ -3,6 +3,8 @@ import { Fragment, memo, useCallback, useEffect, useRef, useState, useMemo, useS
 import type { Bot, BotAttachment } from "../../lib/bots-types";
 import { historyKey, type HistoryEntry } from "../../lib/bot-history-view";
 import type { BotTimeline } from "./timeline-controller";
+/** Main and owned-run readers share rendering only, never state or persistence. */
+export type HistoryDetailReader = Pick<BotTimeline, "botId" | "subscribeDetail" | "detailItem" | "subscribe" | "detailPending" | "detail"> & { detailError?: (entry: HistoryEntry) => string };
 import { useBotTimeline } from "./use-timeline";
 import { botsClient } from "./client";
 import { BotMessage } from "./message";
@@ -11,13 +13,15 @@ import { LazyDetails } from "./lazy-details";
 import { useFeedScroll } from "./use-feed-scroll";
 import { ReturnedArtifacts } from "./returned-artifact";
 import type { ActivityTarget } from "./conversation-activity";
+const noDetailErrors = () => () => {};
 
 const EntryBody = memo(function EntryBody({ entry, timeline, attachments, download }: {
-  entry: HistoryEntry; timeline: BotTimeline; attachments: BotAttachment[]; download: (id: string) => void;
+  entry: HistoryEntry; timeline: HistoryDetailReader; attachments: BotAttachment[]; download: (id: string) => void;
 }) {
   const { turnId, id } = entry;
   const full = useSyncExternalStore(useCallback((fn) => timeline.subscribeDetail({ turnId, id }, fn), [timeline, turnId, id]), () => timeline.detailItem(entry), () => null);
   const refreshing = useSyncExternalStore(timeline.subscribe, () => timeline.detailPending(entry), () => false);
+  const detailError = useSyncExternalStore(timeline.detailError ? timeline.subscribe : noDetailErrors, () => timeline.detailError?.(entry) ?? "", () => "");
   const [error, setError] = useState(""), [loading, setLoading] = useState(false);
   const load = useCallback(async () => {
     setLoading(true); setError("");
@@ -43,7 +47,7 @@ const EntryBody = memo(function EntryBody({ entry, timeline, attachments, downlo
       {full && !botsClient.online && <small>Saved copy. Reconnect to check for changes.</small>}
       {!full && <small>{item ? "A preview of this message. Continue to read it in full." : "Open this work item to see its full details."}</small>}
     </div>}
-    {error && <p role="alert" className="bots-error">{error}</p>}</>;
+    {(timeline.detailError ? detailError : error) && <p role="alert" className="bots-error">{timeline.detailError ? detailError : error}{timeline.detailError && entry.complete && <button disabled={refreshing || loading} onClick={() => void load()}>Refresh details</button>}</p>}</>;
 });
 export const TimelineEntry = memo(function TimelineEntry(props: Parameters<typeof EntryBody>[0]) {
   const { entry } = props;

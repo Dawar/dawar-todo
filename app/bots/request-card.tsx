@@ -1,5 +1,5 @@
 "use client";
-import { useRef, useState } from "react";
+import { useRef, useEffect, useState } from "react";
 import type { BotRequest } from "../../lib/bots-types";
 
 type JsonSchema = {
@@ -129,17 +129,21 @@ function decisionLabel(decision: unknown) {
   if (decision === "cancel" || decision === "abort") return "Cancel";
   return "Allow and save rule";
 }
+const runForms = new Map<string, { answers: Record<string, string>; form: Record<string, unknown>; raw: boolean; rawText: string | null }>();
 export function RequestCard({
   pending,
   respond,
   disabled,
+  memoryKey,
 }: {
   pending: BotRequest;
   respond: (result: unknown) => Promise<void>;
   disabled: boolean;
+  memoryKey?: string;
 }) {
-  const [answers, setAnswers] = useState<Record<string, string>>({}),
+  const [answers, setAnswers] = useState<Record<string, string>>(() => memoryKey ? runForms.get(memoryKey)?.answers ?? {} : {}),
     [form, setForm] = useState<Record<string, unknown>>(() => {
+      if (memoryKey && runForms.has(memoryKey)) return runForms.get(memoryKey)!.form;
       const p = pending.request.params;
       const schema = (
         "requestedSchema" in p ? p.requestedSchema : {}
@@ -153,7 +157,9 @@ export function RequestCard({
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false),
     [accepted, setAccepted] = useState(false),
-    [raw, setRaw] = useState(false);
+    [raw, setRaw] = useState(() => memoryKey ? runForms.get(memoryKey)?.raw ?? false : false);
+  const [rawText, setRawText] = useState<string | null>(() => memoryKey ? runForms.get(memoryKey)?.rawText ?? null : null);
+  useEffect(() => { if (memoryKey) runForms.set(memoryKey, { answers, form, raw, rawText }); }, [memoryKey, answers, form, raw, rawText]);
   const submitting = useRef(false);
   const request = pending.request;
   async function submit(result: unknown) {
@@ -312,7 +318,7 @@ export function RequestCard({
             <input
               type="checkbox"
               checked={raw}
-              onChange={(e) => setRaw(e.target.checked)}
+              onChange={(e) => { setRaw(e.target.checked); setRawText(JSON.stringify(form, null, 2)); }}
             />
             Edit response as JSON
           </label>
@@ -332,8 +338,9 @@ export function RequestCard({
               Response (JSON)
               <textarea
                 required
-                defaultValue={JSON.stringify(form, null, 2)}
+                value={rawText ?? JSON.stringify(form, null, 2)}
                 onChange={(e) => {
+                  setRawText(e.target.value);
                   try {
                     setForm(JSON.parse(e.target.value));
                     e.target.setCustomValidity("");

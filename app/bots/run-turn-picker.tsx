@@ -17,7 +17,8 @@ function cachePage(key: string, botId: string, runId: string, page: BotRunTurnPa
 export function RunTurnPicker({ owner, botId, runId, primary, selected, online, onSelect }: {
   owner: string; botId: string; runId: string; primary?: BotRun; selected: string; online: boolean; onSelect: (turnId: string) => void;
 }) {
-  const key = "activity-turns:v1";
+  const lanes = client.snapshot?.capabilities?.backgroundRunLanes === 1;
+  const key = lanes ? "activity-turns:v2" : "activity-turns:v1";
   const [page, setPage] = useState<BotRunTurnPage | null>(() => client.owner === owner ? client.cache<Saved[]>(key, []).find(value => value.botId === botId && value.runId === runId)?.page ?? null : null);
   const [loadedCursor, setLoadedCursor] = useState<string | null>(null);
   const [cursors, setCursors] = useState<(string | null)[]>([null]), [index, setIndex] = useState(0);
@@ -48,9 +49,9 @@ export function RunTurnPicker({ owner, botId, runId, primary, selected, online, 
   useEffect(() => {
     // Never move an open reader/page when follow-ups arrive. Refresh is explicit
     // because stable receipt-ID ordering can insert a new row before this page.
-    const event = (event: BotEvent) => { if (event.type === "schedules" && event.botId === botId && client.owner === owner) setChanged(true); };
+    const event = (event: BotEvent) => { if ((event.type === "schedules" || lanes && event.type === "run.state" && (event.data as { runId?: string }).runId === runId) && event.botId === botId && client.owner === owner) setChanged(true); };
     client.events.add(event); return () => { client.events.delete(event); };
-  }, [botId, owner]);
+  }, [botId, owner, runId, lanes]);
   const select = (turnId: string) => { onSelect(turnId); if (disclosure.current) disclosure.current.open = false; };
   const refresh = () => { setIndex(0); setCursors([null]); setAttempt(value => value + 1); };
   return <details className="bots-run-turns" ref={disclosure}>
