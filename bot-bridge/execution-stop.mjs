@@ -1,4 +1,5 @@
 import { terminalTurn, usableTurnId } from "./native-turn.mjs";
+import { unreservedRun, setAdmissionPause } from "./run-admission.mjs";
 
 const now = () => new Date().toISOString();
 const terminal = new Set(["completed", "failed", "interrupted", "cancelled"]);
@@ -12,6 +13,15 @@ export async function stopExecutions(runtime, bot, operationId, scope, runId = n
     const targets = [];
     const lanes = runtime.store.executionMetadata("runLane", bot.id).filter(l => scope === "all" || scope === "run" && l.runId === runId);
     if (scope === "run" && lanes.length !== 1) throw new Error("Run stop target is unavailable.");
+    // Capture once, in the same commit as the stop receipt. This also sees a
+    // queued run whose reservation is currently awaiting profile/filesystem IO.
+    const runIds = new Set(lanes.map(lane => lane.runId));
+    if (scope === "all") for (const run of runtime.store.list("run", bot.id))
+      if (unreservedRun(runtime.store, run)) runIds.add(run.id);
+    const runPauses = [...runIds].map(id => {
+      const pause = setAdmissionPause(runtime.store, runtime.store.get("run", id), true, operationId);
+      return { runId: id, revision: pause.revision };
+    });
     if (scope !== "run") {
       const current = runtime.store.bot(bot.id), activity = runtime.store.get("botActivity", bot.id);
       runtime.saveBot(current, { queuePaused: true, ...(scope === "all" ? { managerPaused: true } : {}) });
@@ -39,7 +49,8 @@ export async function stopExecutions(runtime, bot, operationId, scope, runId = n
     }
     for (const notice of runtime.store.list("managerNotice", bot.id)) if (matches(notice.destination) && notice.state === "queued")
       runtime.store.put("managerNotice", { ...notice, state: "held" });
-    return runtime.store.put("executionStop", { id: operationId, botId: bot.id, scope, runId, targets, state: "pending", createdAt: now() });
+    if (runPauses.length) runtime.emitEvent("schedules", {}, bot.id);
+    return runtime.store.put("executionStop", { id: operationId, botId: bot.id, scope, runId, runPauses, targets, state: "pending", createdAt: now() });
   });
   return reconcileStop(runtime, stop);
 }

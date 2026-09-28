@@ -487,7 +487,7 @@ export class BotRuntime extends EventEmitter {
   }
   publicRun(run) {
     const lane = run.executionLane === "run-v1" && this.store.get("runLane", run.laneId);
-    return lane ? { ...run, ...this.runs.publicRun(lane) } : run;
+    return { ...run, ...(lane ? this.runs.publicRun(lane) : this.runs.unreservedMetadata(run)) };
   }
   async lock(key, fn) {
     const previous = this.locks.get(key) ?? Promise.resolve();
@@ -519,7 +519,9 @@ export class BotRuntime extends EventEmitter {
       .update(JSON.stringify({ method, botId, params }))
       .digest("hex");
     const runRequest = method === "requests.respond" && (this.store.get("runPending", params.key) ?? this.store.get("answerExecution", `answer:${params.key}`));
-    const laneKey = method.startsWith("runs.") && params.runId ? this.runs.lane(botId, params.runId).id : runRequest?.laneId;
+    const resumeRun = method === "runs.resume" && this.owned("run", params.runId, botId);
+    const laneKey = resumeRun ? resumeRun.laneId ?? `run-preparation:${resumeRun.id}` :
+      method.startsWith("runs.") && params.runId ? this.runs.lane(botId, params.runId).id : runRequest?.laneId;
     return this.lock(laneKey ?? botId ?? "create", async () => {
       const inputMutation = ["turn.send", "requests.respond", "queue.add", "queue.update", "queue.delete", "queue.reorder"].includes(method);
       const lifecycleMutation = ["turn.interrupt", "runs.interrupt", "bots.archive", "bots.restore"].includes(method);
@@ -543,12 +545,13 @@ export class BotRuntime extends EventEmitter {
       if (local) return local.result;
       if (method === "runs.send" || method === "runs.resume") {
         try {
-          const bot = this.store.bot(botId), lane = this.runs.lane(botId, params.runId);
-          if (bot.archived || bot.archiving || lane.archived) throw new Error("Restore this bot before changing a run.");
+          const bot = this.store.bot(botId), run = this.owned("run", params.runId, botId);
+          const lane = method === "runs.send" || run.laneId ? this.runs.lane(botId, params.runId) : null;
+          if (bot.archived || bot.archiving || lane?.archived) throw new Error("Restore this bot before changing a run.");
           const input = method === "runs.send" ? await this.messageInput(bot, params) : null;
           return this.store.transaction(() => {
             const result = method === "runs.send" ? this.runs.accept(lane, operationId,
-              { text: String(params.text ?? "").trim(), input, attachments: params.attachments ?? [] }, { kind: "owner" }) : this.runs.resume(bot, params);
+              { text: String(params.text ?? "").trim(), input, attachments: params.attachments ?? [] }, { kind: "owner" }) : this.runs.resume(bot, params, operationId);
             this.store.saveOperation(operationId, fingerprint, "done", { method, botId, params, result, createdAt: now() });
             return result;
           });
@@ -1231,6 +1234,8 @@ export class BotRuntime extends EventEmitter {
     return this.archive(bot, record.archived, record.id);
   }
   async archive(bot, archived, operationId) {
+    if (archived && this.store.list("runAdmission", bot.id).some(a => Number.isSafeInteger(a.preparingRevision)))
+      throw new Error("Run preparation is still returning to its admission fence. Retry archival after it settles; its prompt was retained.");
     if (archived && (this.store.executionMetadata("runLane", bot.id).some(l => this.runs.unfinished(l)) ||
       this.store.list("executionStop", bot.id).some(s => s.state !== "done") ||
       this.store.list("managerTask", bot.id).some(t => !["completed", "failed", "interrupted", "cancelled"].includes(t.state))))
