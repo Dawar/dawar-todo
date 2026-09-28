@@ -51,7 +51,7 @@ function ReadyRunComposer({ composer, online, paused }: { composer: BotComposer;
     <header><strong>Reply to this run</strong><span>{paused ? "Paused · replies wait until you resume its queue" : "Your main conversation stays separate"}</span></header>
     {error && <p role="alert">{error} {composer.storageError && <button onClick={() => void composer.retry()}>Retry saving</button>}</p>}
     {failedFiles && <p role="alert">Your files are retained. <button onClick={() => void composer.retry()}>Retry file recovery</button><button onClick={() => void composer.restartFailedUploads()}>Restart failed transfers</button></p>}
-    {op && <p role="status">{composer.sendingNow ? "Confirming delivery…" : op.error || "Checking this reply's delivery."}<button disabled={!online || composer.sendingNow} onClick={() => void composer.reconcile()}>Check delivery</button></p>}
+    {op && <p role="status">{composer.sendingNow ? "Confirming delivery…" : op.error || (op.runDelivery?.state === "prepared" ? "Saved reply is waiting to send." : "Checking this reply's delivery.")}<button disabled={!online || composer.sendingNow} onClick={() => void composer.reconcile()}>{op.runDelivery?.state === "prepared" ? "Send saved reply" : "Check delivery"}</button></p>}
     <ComposerAttachments composer={composer} />
     <form onSubmit={event => { event.preventDefault(); void composer.send(); }}>
       <input ref={file} type="file" multiple hidden onChange={event => { if (event.target.files) composer.addFiles([...event.target.files]); event.target.value = ""; }} />

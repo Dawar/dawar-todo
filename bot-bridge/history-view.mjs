@@ -110,7 +110,7 @@ export async function readHistoryView(runtime, bot, params) {
     const revision = `${runtime.epoch}:${target.versionKey}:${target.updatedAt}:${eventCursor}:run-view-v1`;
     if (!cursor && params.revision === revision) return { kind: 'unchanged', context, revision, eventCursor };
     const page = await historyViewPage(runtime, bot, cursor, target.turnId, target);
-    return { kind: 'page', ...page, context, revision, eventCursor,
+    return { kind: 'page', ...page, context, turnIds: [target.turnId], revision, eventCursor,
       olderCursor: page.olderCursor ? JSON.stringify({ scope: target.versionKey, turnId: target.turnId, cursor: page.olderCursor }) : null };
   }
   const revision = historyRevision(runtime, bot) + (params.projection === "conversation" ? ":conversation-v4" : ""), eventCursor = runtime.store.cursor();

@@ -3,7 +3,7 @@ import { queueEditable } from "./queue-state";
 import { readQueueAction } from "./queue-action-store";
 import {
   BotDraftStore, changeDraft, emptyDraft, emptyRecord, fileLimit, fileReferences,
-  type DraftChange, type DraftRecord, type StagedFile, type Submission,
+  type DraftChange, type DraftRecord, type StagedFile, type Submission, type RunDeliveryResult,
 } from "./draft-store";
 
 export type ComposerTransport = {
@@ -243,6 +243,7 @@ export class BotComposer {
       const op: Submission = {
         id: crypto.randomUUID(), slot, method: this.destination ? "runs.send" : draft.queueId ? "queue.update" : queueNext ? "queue.add" : "turn.send",
         params: { ...(this.destination ? { runId: this.destination.runId } : {}), ...(draft.queueId ? { id: draft.queueId, ...(draft.queueRevision === undefined ? {} : { expectedRevision: draft.queueRevision }) } : {}), text: draft.text.trim(), attachments: draft.files.map((f) => f.remote!.id) },
+        ...(this.destination ? { runDelivery: { state: "prepared" as const, token: crypto.randomUUID() } } : {}),
         textVersion: draft.textVersion, fileIds: draft.files.map((f) => f.id), state: "pending",
       };
       // This durable record is the authorization to reconcile after restart.
@@ -250,7 +251,7 @@ export class BotComposer {
       this.enqueue({ kind: "submit", operation: op });
       await this.flush();
       const submitted = Object.values(this.persisted.operations).find((p) => p.slot === slot);
-      if (submitted) await this.dispatch(submitted, submitted.id === op.id);
+      if (submitted) await this.dispatch(submitted);
     } catch (error) { this.actionError = message(error); this.notify(); }
   }
   async reconcile() {
@@ -258,25 +259,74 @@ export class BotComposer {
     try { await this.flush(); } catch { return; }
     for (const op of Object.values(this.persisted.operations)) await this.dispatch(op);
   }
-  private async dispatch(op: Submission, firstSend = false) {
+  private async runChange(change: Extract<DraftChange, { kind: "run-claim" | "run-result" }>) {
+    // Use this controller's existing write queue as well as the store's strict
+    // cross-tab transaction. Concurrent typing cannot publish an older record
+    // over a newer local commit while the claim is awaiting storage.
+    const queued = { change };
+    this.changes.push(queued);
+    try { await this.flush(); }
+    catch (error) {
+      if (change.kind === "run-claim") {
+        this.changes = this.changes.filter(value => value !== queued);
+        if (this.persisted.operations[change.id]?.runDelivery?.token === change.token) {
+          // The claim committed but a subsequent queued write failed. No RPC
+          // has run; retain its exact release for the next explicit save retry.
+          this.changes.push({ change: { kind: "run-result", id: change.id, expectedToken: change.token, nextToken: crypto.randomUUID(), outcome: "not-sent", error: "Saved reply is waiting to send." } });
+        }
+        this.renderPending(); this.notify();
+      }
+      throw error;
+    }
+    return this.persisted.operations[change.id];
+  }
+  private async dispatchRun(saved: Submission) {
+    if (this.sending.has(saved.id) || !this.canUseOwner || !this.transport.online) return;
+    this.sending.add(saved.id); this.notify();
+    let op: Submission | undefined, claimed = false;
+    const claim = crypto.randomUUID();
+    const settle = async (outcome: RunDeliveryResult, error?: string) => {
+      if (!op) return;
+      await this.runChange({ kind: "run-result", id: op.id, expectedToken: op.runDelivery?.token ?? null, nextToken: crypto.randomUUID(), outcome, error });
+    };
+    try {
+      if (!this.destination || saved.params.runId !== this.destination.runId) throw Error("This reply's destination could not be verified. Its draft is retained.");
+      // Exactly one tab can move this existing prepared operation across the
+      // durable boundary. Legacy/possible rows get only a receipt lookup.
+      op = await this.runChange({ kind: "run-claim", id: saved.id, token: claim });
+      if (!op) return;
+      claimed = op.runDelivery?.token === claim;
+      if (!this.canUseOwner || !this.transport.online) {
+        if (claimed) await settle("not-sent", "Saved reply is waiting to send. Reconnect or resume this same reply.");
+        return;
+      }
+      const receipt = await this.transport.rpc(claimed ? "runs.send" : "runs.receipt", this.botId,
+        claimed ? op.params : { runId: this.destination.runId, operationId: op.id }, claimed ? op.id : undefined,
+        { owner: this.owner, managed: true }) as BotRunReceipt;
+      if (receipt?.operationId !== op.id || receipt.runId !== this.destination.runId || !receipt.laneId || !["accepted", "queued", "uncertain", "rejected"].includes(receipt.state)) throw Error("The run receipt could not be verified. Your reply is retained.");
+      if (receipt.state === "accepted" && receipt.turnId) { await settle("success"); this.actionError = ""; }
+      else if (receipt.state === "rejected") { await settle("rejected"); this.actionError = receipt.waitReason || "This reply was not delivered. Your draft and files are retained."; }
+      else {
+        // Positive server receipt is stronger than an outstanding claimant's
+        // local not-sent result; advance the token to fence that stale result.
+        await settle("queued", receipt.state === "queued" ? "Queued for this run. Check delivery when it is ready; your reply and files are retained." : "Run delivery is unconfirmed. Check its original receipt; your reply and files are retained.");
+      }
+    } catch (error) {
+      const outcome = (error as { outcome?: string }).outcome;
+      try {
+        if (claimed && outcome === "not-sent") await settle("not-sent", "Saved reply was not sent. Reconnect or resume this same reply.");
+        else if (claimed && outcome === "rejected") { await settle("rejected"); this.actionError = `Not sent: ${message(error)}`; }
+        else if (op) await settle("uncertain", "Delivery is unconfirmed. Check the original receipt; your reply and files are retained.");
+        else this.actionError = message(error);
+      } catch (storage) { this.storageError = `${message(storage)} Your saved reply identity is retained. Retry saving before closing this tab.`; }
+    } finally { this.sending.delete(saved.id); this.notify(); }
+  }
+  private async dispatch(op: Submission) {
+    if (op.method === "runs.send") return this.dispatchRun(op);
     if (this.sending.has(op.id) || !this.canUseOwner || !this.transport.online) return;
     this.sending.add(op.id); this.notify();
     try {
-      if (op.method === "runs.send") {
-        if (!this.destination || op.params.runId !== this.destination.runId) throw Error("This reply's destination could not be verified. Its draft is retained.");
-        // Recovery reads the exact receipt. Reconnect or matching display values
-        // never authorize a new submission or retry an uncertain native effect.
-        const receipt = await this.transport.rpc(firstSend ? "runs.send" : "runs.receipt", this.botId,
-          firstSend ? op.params : { runId: this.destination.runId, operationId: op.id }, firstSend ? op.id : undefined,
-          { owner: this.owner, managed: true }) as BotRunReceipt;
-        if (receipt?.operationId !== op.id || receipt.runId !== this.destination.runId || !receipt.laneId || !["accepted", "queued", "uncertain", "rejected"].includes(receipt.state)) throw Error("The run receipt could not be verified. Your reply is retained.");
-        if (receipt.state === "rejected") throw Object.assign(Error(receipt.waitReason || "This reply was not delivered."), { outcome: "rejected", runRejected: true });
-        if (receipt.state !== "accepted" || !receipt.turnId) {
-          const error = receipt.state === "queued" ? "Queued for this run. Check delivery after it is ready; your reply and files are retained." : "Run delivery is unconfirmed. Check its original receipt; your reply and files are retained.";
-          this.changes.push({ change: { kind: "settle", id: op.id, outcome: "uncertain", error } });
-          this.renderPending(); await this.flush(); return;
-        }
-      } else await this.transport.rpc(op.method, this.botId, op.params, op.id, { owner: this.owner, managed: true });
+      await this.transport.rpc(op.method, this.botId, op.params, op.id, { owner: this.owner, managed: true });
       this.actionError = "";
       // Even after an owner/selection change, settle the originating record only.
       this.record = changeDraft(this.record, { kind: "settle", id: op.id, outcome: "success" });
@@ -285,7 +335,7 @@ export class BotComposer {
     } catch (error) {
       const outcome = (error as { outcome?: string }).outcome;
       // A not-sent retry says nothing about a previous attempt with this ID.
-      const uncertain = outcome !== "rejected" || op.method === "runs.send" && !firstSend && !(error as { runRejected?: boolean }).runRejected;
+      const uncertain = outcome !== "rejected";
       const detail = uncertain ? "Send acknowledgement is unconfirmed. Check again to reconcile the same send; your draft is retained." : `Not sent: ${message(error)}`;
       // Uncertainty belongs to the durable operation. A second tab may already
       // have confirmed it, or confirm it later; a separate actionError would

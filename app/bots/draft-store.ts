@@ -13,12 +13,15 @@ export type Submission = {
   id: string; slot: string; method: "turn.send" | "queue.add" | "queue.update" | "runs.send";
   params: Record<string, unknown>; textVersion: string; fileIds: string[];
   state: "pending" | "uncertain"; error?: string;
+  /** Run sends only. Absent on older rows means possibly dispatched, never prepared. */
+  runDelivery?: { state: "prepared" | "possible"; token: string };
 };
 export type DraftRecord = {
   owner: string; botId: string; revision: string; active: string;
   slots: Record<string, Draft>; operations: Record<string, Submission>;
   migrated: boolean;
 };
+export type RunDeliveryResult = "not-sent" | "uncertain" | "queued" | "success" | "rejected";
 export type DraftChange =
   | { kind: "text"; slot: string; text: string; version: string; base: string }
   | { kind: "add"; slot: string; files: StagedFile[] }
@@ -30,6 +33,8 @@ export type DraftChange =
   | { kind: "edit"; slot: string; draft: Draft }
   | { kind: "select"; slot: string }
   | { kind: "submit"; operation: Submission }
+  | { kind: "run-claim"; id: string; token: string }
+  | { kind: "run-result"; id: string; expectedToken: string | null; nextToken: string; outcome: RunDeliveryResult; error?: string }
   | { kind: "settle"; id: string; outcome: "success" | "rejected" | "uncertain"; error?: string };
 export const emptyDraft = (): Draft => ({ text: "", textVersion: "empty", files: [] });
 export const emptyRecord = (owner: string, botId: string): DraftRecord => ({
@@ -100,6 +105,19 @@ export function changeDraft(source: DraftRecord, change: DraftChange): DraftReco
         throw Object.assign(new Error("The draft changed in another tab. Review it before sending."), { name: "DraftChangedError" });
       record.operations[op.id] = op;
     }
+  } else if (change.kind === "run-claim") {
+    const op = record.operations[change.id];
+    if (op?.method !== "runs.send" || op.runDelivery?.state !== "prepared") return source;
+    record.operations[op.id] = { ...op, runDelivery: { state: "possible", token: change.token }, error: undefined };
+  } else if (change.kind === "run-result") {
+    const op = record.operations[change.id];
+    // A delayed attempt cannot release a newer claim, overwrite server evidence,
+    // or recreate an operation already retired by another tab.
+    if (op?.method !== "runs.send" || (op.runDelivery?.token ?? null) !== change.expectedToken) return source;
+    if (change.outcome === "success" || change.outcome === "rejected")
+      return changeDraft(record, { kind: "settle", id: op.id, outcome: change.outcome, error: change.error });
+    record.operations[op.id] = { ...op, state: change.outcome === "not-sent" ? "pending" : "uncertain", error: change.error,
+      ...(change.outcome === "uncertain" ? {} : { runDelivery: { state: change.outcome === "not-sent" ? "prepared" : "possible", token: change.nextToken } }) };
   } else if (change.kind === "settle") {
     const op = record.operations[change.id];
     if (!op) return source; // A repeated acknowledgement is harmless.

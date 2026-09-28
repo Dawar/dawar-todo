@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useMemo, useState, useRef } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useState, useRef } from "react";
 import { ArrowLeft, ArrowRight, CheckCircle2, Clock3, CalendarDays, CircleAlert, LoaderCircle, RefreshCw, X } from "lucide-react";
 import type { Bot, BotAttachment, BotRun, BotRunPage, BotSchedule, BotEvent, BotRunStateEvent } from "../../lib/bots-types";
 import type { HistoryPage, HistoryResponse } from "../../lib/bot-history-view";
@@ -7,6 +7,7 @@ import { botsClient } from "./client";
 import { TimelineEntry } from "./timeline";
 import { RunTurnPicker } from "./run-turn-picker";
 import { ReturnedArtifacts } from "./returned-artifact";
+import { RunPageRead } from "./run-page-read";
 import { updateRunPage } from "./run-page-events";
 import { useRunScroll } from "./use-run-scroll";
 import { RunComposer } from "./run-composer";
@@ -48,13 +49,22 @@ export function RunHistory({ bot, schedules, attachments, online, onClose, downl
   const [runCursors, setRunCursors] = useState<(string | null)[]>([null]), [runPage, setRunPage] = useState(0);
   const [newActivity, setNewActivity] = useState(false);
   const [target, setTarget] = useState<ActivityTarget | null>(initialTarget ?? null);
-  const [transcript, setTranscript] = useState<HistoryPage | null>(null);
+  const [transcript, setTranscriptState] = useState<HistoryPage | null>(null);
+  const transcriptRef = useRef<HistoryPage | null>(null);
+  const setTranscript = useCallback((value: HistoryPage | null | ((page: HistoryPage | null) => HistoryPage | null)) => {
+    const next = typeof value === "function" ? value(transcriptRef.current) : value;
+    transcriptRef.current = next; setTranscriptState(next);
+  }, []);
+  const pendingRead = useRef<RunPageRead | null>(null);
+  const liveGap = useRef<{ identity: string; seq: number } | null>(null);
   const [pageCursors, setPageCursors] = useState<(string | null)[]>([null]);
   const [detailPage, setDetailPage] = useState(0);
   const actionRequest = useRef(false);
   const active = useRef(true), generation = useRef(0), listRequest = useRef(false), refreshAgain = useRef(false), runPageRef = useRef(0), targetRef = useRef(target);
   const listEpoch = useRef(0), currentListCursor = useRef<string | null>(null);
-  useEffect(() => { runPageRef.current = runPage; targetRef.current = target; }, [runPage, target]);
+  const selectedIdentity = JSON.stringify([owner, bot.id, target?.runId, target?.turnId, pageCursors[detailPage]]);
+  const selectedRef = useRef({ identity: selectedIdentity, append: !pageCursors[detailPage] });
+  useLayoutEffect(() => { runPageRef.current = runPage; targetRef.current = target; selectedRef.current = { identity: selectedIdentity, append: !pageCursors[detailPage] }; }, [runPage, target, selectedIdentity, pageCursors, detailPage]);
   const detailIdentity = useRef("");
   const body = useRef<HTMLDivElement>(null), savedScroll = useRef(0);
   useRunScroll(body, JSON.stringify([owner, bot.id, target?.runId, target?.turnId, detailPage, target ? null : runPage]), transcript?.revision);
@@ -100,9 +110,20 @@ export function RunHistory({ bot, schedules, attachments, online, onClose, downl
         }
         if (!targetRef.current || targetRef.current.runId === data.runId) setNewActivity(true);
         if (value.type === "run.codex" && targetRef.current?.runId === data.runId) {
+          const read = pendingRead.current;
+          if (read?.owner === owner && read.identity === selectedRef.current.identity && read.generation === generation.current) read.record(value);
+          const identity = selectedRef.current.identity, request = generation.current;
+          // After a dropped batch, later deltas cannot repair its missing text.
+          // Keep the page until an authoritative read covers the actual event.
+          if (liveGap.current?.identity === identity) { liveGap.current.seq = Math.max(liveGap.current.seq, value.seq); return; }
           buffered.push(value);
-          if (buffered.length > 64 || JSON.stringify(buffered).length > 256 * 1024) buffered = [];
-          frame ||= requestAnimationFrame(() => { frame = 0; const batch = buffered; buffered = []; setTranscript(page => page ? updateRunPage(page, batch, targetRef.current?.turnId) : page); });
+          if (buffered.length > 64 || new TextEncoder().encode(JSON.stringify(buffered)).length > 256 * 1024) { buffered = []; liveGap.current = { identity, seq: value.seq }; setError("New output needs a fresh page. Refresh this part; your current view is retained."); }
+          frame ||= requestAnimationFrame(() => {
+            frame = 0; const batch = buffered; buffered = [];
+            if (!batch.length || liveGap.current?.identity === identity || identity !== selectedRef.current.identity || request !== generation.current || !valid()) return;
+            try { setTranscript(page => page ? updateRunPage(page, batch, targetRef.current?.turnId, selectedRef.current.append) : page); }
+            catch (error) { liveGap.current = { identity, seq: Math.max(...batch.map(event => event.seq)) }; setError(error instanceof Error ? error.message : "Refresh this part for new output."); }
+          });
         }
         return;
       }
@@ -115,33 +136,46 @@ export function RunHistory({ bot, schedules, attachments, online, onClose, downl
     };
     botsClient.events.add(event);
     return () => { active.current = false; if (timer) clearTimeout(timer); if (frame) cancelAnimationFrame(frame); botsClient.events.delete(event); };
-  }, [bot.id, load, online, valid, lanes, owner]);
+  }, [bot.id, load, online, valid, lanes, owner, setTranscript]);
   useEffect(() => { if (!listBusy && refreshAgain.current) { refreshAgain.current = false; void Promise.resolve().then(() => load(currentListCursor.current)); } }, [listBusy, load]);
   useEffect(() => {
     if (!target) return;
-    if (lanes && target.runId) {
-      const cached = savedRunPage(owner, bot.id, target.runId, target.turnId, pageCursors[detailPage]);
-      if (cached) void Promise.resolve().then(() => { if (valid()) setTranscript(cached); });
-    }
-    if (!online) return;
-    const request = ++generation.current;
+    const request = ++generation.current, identity = selectedIdentity;
     let canceled = false;
+    let evidence: RunPageRead | null = null;
     void Promise.resolve().then(async () => {
       if (canceled || !valid()) return;
-      const identity = JSON.stringify([target.runId, target.turnId, pageCursors[detailPage]]);
       const changedPart = identity !== detailIdentity.current;
-      setDetailBusy(true); setError(""); if (changedPart) setTranscript(lanes && target.runId ? savedRunPage(owner, bot.id, target.runId, target.turnId, pageCursors[detailPage]) : null);
-      const result = await botsClient.rpc<HistoryResponse>("history.view", bot.id, { ...(lanes && target.runId ? { runId: target.runId } : {}), ...(target.turnId ? { turnId: target.turnId } : {}), cursor: pageCursors[detailPage] }, undefined, { owner });
-      if (canceled || !valid() || request !== generation.current) return;
-      if (lanes && target.runId) {
-        verifyRunPage(result, target.runId, runEvents.current.get(target.runId)?.run);
-        if (result.kind === "page") saveRunPage(owner, bot.id, target.runId, target.turnId, pageCursors[detailPage], result);
+      // A refresh must never replace an already newer page with its old cache.
+      if (changedPart) {
+        setTranscript(lanes && target.runId ? savedRunPage(owner, bot.id, target.runId, target.turnId, pageCursors[detailPage]) : null);
+        detailIdentity.current = identity;
       }
-      if (result.kind === "page") { setTranscript(result); detailIdentity.current = identity;  }
+      if (!online) return;
+      setDetailBusy(true); setError("");
+      if (lanes && target.runId) {
+        evidence = new RunPageRead(owner, bot.id, target.runId, target.turnId ?? null, identity, request, !pageCursors[detailPage]);
+        pendingRead.current = evidence;
+      }
+      const result = await botsClient.rpc<HistoryResponse>("history.view", bot.id, { ...(lanes && target.runId ? { runId: target.runId } : {}), ...(target.turnId ? { turnId: target.turnId } : {}), cursor: pageCursors[detailPage] }, undefined, { owner });
+      if (canceled || !valid() || request !== generation.current || identity !== selectedRef.current.identity) return;
+      if (lanes && target.runId) {
+        const page = verifyRunPage(result, target.runId, runEvents.current.get(target.runId)?.run);
+        const reconciled = evidence!.reconcile(page);
+        const current = transcriptRef.current;
+        if (current && current.eventCursor > reconciled.eventCursor) throw Error("A newer update is already visible. Your current page is retained; refresh this part again.");
+        if (liveGap.current?.identity === identity && liveGap.current.seq > reconciled.eventCursor) throw Error("This page does not yet include new output. Your current view is retained; refresh this part again.");
+        saveRunPage(owner, bot.id, target.runId, target.turnId, pageCursors[detailPage], reconciled);
+        liveGap.current = null;
+        setTranscript(reconciled);
+      } else if (result.kind === "page") setTranscript(result);
     }).catch(reason => { if (!canceled && valid() && request === generation.current) setError(reason instanceof Error ? reason.message : "This run could not be opened."); })
-      .finally(() => { if (botsClient.owner === owner && request === generation.current) setDetailBusy(false); });
-    return () => { canceled = true; };
-  }, [bot.id, detailPage, online, owner, pageCursors, target, valid, lanes]);
+      .finally(() => {
+        evidence?.release(); if (pendingRead.current === evidence) pendingRead.current = null;
+        if (botsClient.owner === owner && request === generation.current) setDetailBusy(false);
+      });
+    return () => { canceled = true; evidence?.release(); if (pendingRead.current === evidence) pendingRead.current = null; };
+  }, [bot.id, detailPage, online, owner, pageCursors, target, valid, lanes, selectedIdentity, setTranscript]);
   const open = (run: BotRun) => {
     if (!run.turnId && !lanes) return;
     savedScroll.current = body.current?.scrollTop ?? 0;
