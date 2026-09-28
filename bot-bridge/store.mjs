@@ -20,6 +20,9 @@ export class Store {
       CREATE UNIQUE INDEX IF NOT EXISTS manager_thread_mapping
         ON records(json_extract(json, '$.threadId')) WHERE kind='managerWorker';
       CREATE TABLE IF NOT EXISTS operations(id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, status TEXT NOT NULL, json TEXT NOT NULL);
+      CREATE INDEX IF NOT EXISTS answer_operation_question ON operations(
+        json_extract(json,'$.botId'),json_extract(json,'$.params.key'))
+        WHERE json_extract(json,'$.method')='requests.respond';
       CREATE TABLE IF NOT EXISTS events(seq INTEGER PRIMARY KEY AUTOINCREMENT, json TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, json TEXT NOT NULL);`);
   }
@@ -106,6 +109,17 @@ export class Store {
         fingerprint: r.fingerprint,
         status: r.status,
       }));
+  }
+  retainedAnswerOperation(botId, key, excludeId = null) {
+    // Earliest retained attempt, never the new retry's payload. Indexed by the
+    // bot/question key; rowid is insertion order, not a wall-clock authority.
+    const row = this.db.prepare(`SELECT id FROM operations
+      WHERE json_extract(json,'$.method')='requests.respond'
+      AND json_extract(json,'$.botId')=? AND json_extract(json,'$.params.key')=?
+      AND (? IS NULL OR id<>?)
+      AND COALESCE(json_extract(json,'$.outcome'),'uncertain')<>'rejected'
+      ORDER BY rowid LIMIT 1`).get(botId, key, excludeId, excludeId);
+    return row ? this.operation(row.id) : null;
   }
   unconfirmedModeIntent(botId, since) {
     // Older bridges used status=failed for some transport/local exceptions;

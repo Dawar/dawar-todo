@@ -1,3 +1,4 @@
+import { usableTurn } from "./native-turn.mjs";
 import { captureActivity, activityUnchanged, activityUnresolved, requireCurrentActivity,
   projectCurrentActive, projectCurrentIdle } from "./turn-state.mjs";
 
@@ -59,7 +60,7 @@ export async function reconcileCurrentActivity(runtime, botId) {
     const turns = Array.isArray(page?.data) ? page.data : [];
     if (current.status.type === "idle") return projectCurrentIdle(runtime, botId, token, turns[0]);
     if (initial.status.type !== "active" || pageError || turns[0]?.status !== "inProgress" ||
-        typeof turns[0].id !== "string" || !turns[0].id ||
+        !usableTurn(turns[0]) ||
         turns.filter(turn => turn?.status === "inProgress").length !== 1)
       throw new Error("Native thread is busy, but its current turn is not yet identified. Input remains contained.");
     const established = runtime.store.transaction(() => {

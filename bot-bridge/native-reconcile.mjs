@@ -1,3 +1,5 @@
+import { requireTurn } from "./native-turn.mjs";
+
 // Read-only, bounded reconciliation. Absence from a page is never rejection.
 export async function findNativeTurn(runtime, threadId, { turnId, clientId, cursor = null }) {
   const seen = new Set();
@@ -5,7 +7,7 @@ export async function findNativeTurn(runtime, threadId, { turnId, clientId, curs
     const page = await runtime.historyPage(threadId, cursor, 25);
     const turn = page.data.find((entry) => (turnId && entry.id === turnId) ||
       (clientId && entry.items?.some((item) => item.type === "userMessage" && item.clientId === clientId)));
-    if (turn) return { turn, nextCursor: null };
+    if (turn) return { turn: requireTurn(turn), nextCursor: null };
     const next = page.nextCursor ?? null;
     if (!next) return { turn: null, nextCursor: null };
     if (next === cursor || seen.has(next)) throw new Error("Native reconciliation cursor did not advance.");
