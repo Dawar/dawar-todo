@@ -46,7 +46,7 @@ import { tmpdir } from 'node:os';
 await mkdir('outputs/bot-typing-recent', { recursive: true });
 let js='',css='';
 async function compile(){
-const bundle=await build({entryPoints:['diagnostics/night-conversation-fixture.jsx'],bundle:true,write:false,outdir:'outputs/browser-preview',format:'iife',jsx:'automatic',define:{'process.env.NODE_ENV':'"production"'},plugins:[{name:'preview-shell',setup(b){b.onLoad({filter:/app\/app-shell\.tsx$/},()=>({contents:'export const useShellNavigation = () => () => false;',loader:'tsx'}));b.onResolve({filter:/^next\/link$/},()=>({path:'link',namespace:'preview'}));b.onLoad({filter:/.*/,namespace:'preview'},()=>({contents:'import React from "react"; export default function Link({prefetch,...props}) {return <a {...props}/>}',loader:'jsx',resolveDir:process.cwd()}));}}],logLevel:'silent'});
+const bundle=await build({entryPoints:[process.argv.includes('--queue') ? 'diagnostics/night-queue-fixture.jsx' : 'diagnostics/night-conversation-fixture.jsx'],bundle:true,write:false,outdir:'outputs/browser-preview',format:'iife',jsx:'automatic',define:{'process.env.NODE_ENV':'"production"'},plugins:[{name:'preview-shell',setup(b){b.onLoad({filter:/app\/app-shell\.tsx$/},()=>({contents:'export const useShellNavigation = () => () => false;',loader:'tsx'}));b.onResolve({filter:/^next\/link$/},()=>({path:'link',namespace:'preview'}));b.onLoad({filter:/.*/,namespace:'preview'},()=>({contents:'import React from "react"; export default function Link({prefetch,...props}) {return <a {...props}/>}',loader:'jsx',resolveDir:process.cwd()}));}}],logLevel:'silent'});
 js=bundle.outputFiles.find(f=>f.path.endsWith('.js')).text;css=(await postcss([tailwind()]).process(await readFile('app/globals.css','utf8'),{from:resolve('app/globals.css')})).css+'\n'+bundle.outputFiles.find(f=>f.path.endsWith('.css')).text;
 }
 await compile();
@@ -57,7 +57,8 @@ const server=createServer(async(req,res)=>{
       const result=request.method==='snapshot'?snapshot:allowed.includes(request.method)?await runtime.handle(request):request.method==='usage.account'?{limits:[],ordinaryUsageAllowed:true}:[];
       res.setHeader('Content-Type','application/json');res.end(JSON.stringify({result}));
     }catch(error){res.end(JSON.stringify({error:error.message}));}
-  } else if(path==='/fixture')res.end(JSON.stringify(snapshot));
+  } else if(path==='/fixture-image'){res.setHeader('Content-Type','image/png');res.end(await readFile('public/icons/icon-192.png'));}
+  else if(path==='/fixture')res.end(JSON.stringify(snapshot));
   else if(path==='/native-info')res.end(JSON.stringify({nativeCalls,turns:turns.length,runs:runs.length}));
   else if(path==='/rebuild'){await compile();res.end('rebuilt');}
   else if(path==='/preview.js'){res.setHeader('Content-Type','application/javascript');res.end(js);}

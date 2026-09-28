@@ -16,7 +16,6 @@ import {
   ArrowLeft,
   MoreHorizontal,
   ArrowUp,
-  ArrowDown,
   Paperclip,
   X,
   Square,
@@ -58,7 +57,7 @@ import { ComposerAttachments, ComposerStatus } from "./composer-state";
 import { ComposerInput } from "./composer-input";
 import { ComposerSettings } from "./composer-settings";
 import { ArtifactGallery, BotAttachmentsEntry, ArtifactNav } from "./artifact-gallery";
-import { UploadThumbnail } from "./upload-thumbnail";
+import { PromptQueue } from "./prompt-queue";
 import "./bots.css";
 import "./chat-design.css";
 
@@ -378,16 +377,6 @@ export function BotsWorkspace() {
   }
   function editQueued(item: BotQueuedSubmission) { composer?.edit(item); }
   function cancelQueueEdit() { composer?.select("normal"); }
-  async function changeQueue(fn: () => Promise<unknown>) {
-    if (!bot) return;
-    await action(async () => {
-      try {
-        await fn();
-      } finally {
-        await loadQueue(bot.id);
-      }
-    });
-  }
   function upload(files: FileList | File[] | null) {
     if (files && composer?.ready) composer.addFiles(Array.from(files));
     if (fileRef.current) fileRef.current.value = "";
@@ -617,60 +606,8 @@ export function BotsWorkspace() {
                 <>
                   <div className="bots-composer-support">
                     {snapshot && <ComposerSettings key={scope} bot={bot} snapshot={snapshot} online={online} />}
-                    {promptQueue.length > 0 && (
-                    <div className="bots-prompt-queue" role="region" aria-label="Queued prompts">
-                      <strong>Queued next</strong>
-                      {bot.queuePaused && (
-                        <div className="bots-queue-paused">
-                          Queue paused.
-                          <button type="button" disabled={!online || busy}
-                            onClick={() => void changeQueue(() => client.rpc("queue.resume", bot.id))}>
-                            Resume queue
-                          </button>
-                        </div>
-                      )}
-                      {promptQueue.map((item, index) => (
-                        <div className="bots-prompt-queue-item" key={item.id}>
-                          <span className="bots-queue-number">{index + 1}</span>
-                          <div className="bots-queue-content">
-                            <span>{item.input.flatMap((input) =>
-                              input.type === "text" && !input.text.startsWith("Attached file: ")
-                                ? [input.text] : []).join("\n") || "Attachments"}</span>
-                            {item.attachments.length > 0 && (
-                              <div className="bots-queue-attachments">
-                                {item.attachments.map((a) => (
-                                  <span key={a.id} title={a.name}>
-                                    {a.mimeType.startsWith("image/") && (
-                                      <UploadThumbnail botId={bot.id} attachmentId={a.id} online={online} />
-                                    )}
-                                    {a.name}
-                                  </span>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                          <div className="bots-queue-actions">
-                            <button type="button" aria-label={`Edit queued prompt ${index + 1}`}
-                              disabled={!composer?.ready || sending} onClick={() => editQueued(item)}><Pencil size={15} /></button>
-                            <button type="button" aria-label={`Move queued prompt ${index + 1} up`}
-                              disabled={!online || busy || index === 0}
-                              onClick={() => void changeQueue(() => client.rpc("queue.reorder", bot.id, {
-                                ids: promptQueue.map((x) => x.id).toSpliced(index - 1, 2, item.id, promptQueue[index - 1].id),
-                              }))}><ArrowUp size={15} /></button>
-                            <button type="button" aria-label={`Move queued prompt ${index + 1} down`}
-                              disabled={!online || busy || index === promptQueue.length - 1}
-                              onClick={() => void changeQueue(() => client.rpc("queue.reorder", bot.id, {
-                                ids: promptQueue.map((x) => x.id).toSpliced(index, 2, promptQueue[index + 1].id, item.id),
-                              }))}><ArrowDown size={15} /></button>
-                            <button type="button" aria-label={`Remove queued prompt ${index + 1}`}
-                              disabled={!online || busy}
-                              onClick={() => void changeQueue(() => client.rpc("queue.delete", bot.id, { id: item.id }))}>
-                              <Trash2 size={15} /></button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
+                    <PromptQueue key={scope} owner={owner} bot={bot} items={promptQueue} online={online}
+                      canEdit={Boolean(composer?.ready && !sending)} onEdit={editQueued} refresh={() => loadQueue(bot.id)} />
                   <ComposerStatus composer={composer} error={composerError} />
                   {composer && <ComposerAttachments composer={composer} />}
                   </div>

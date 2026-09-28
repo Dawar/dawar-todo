@@ -151,6 +151,12 @@ export type BotHistory = {
 };
 export type BotQueuedSubmission = QueuedSubmission & {
   attachments: BotAttachment[];
+  /** Optional bridge-staged fields; legacy native queues omit these. */
+  state?: "queued" | "dispatching" | "uncertain" | "failed";
+  revision?: number;
+  operationId?: string | null;
+  waitReason?: "main-turn-running" | "needs-input" | "paused" | "delivery-unconfirmed" | "rejected" | "plan-reconciliation" | null;
+  error?: string | null;
 };
 export type BotEvent = {
   seq: number;

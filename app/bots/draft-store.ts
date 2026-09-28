@@ -7,7 +7,7 @@ export type StagedFile = {
   remote?: BotAttachment; uploadId?: string; hasBytes: boolean; error?: string;
 };
 export type Draft = {
-  text: string; textVersion: string; files: StagedFile[]; queueId?: string;
+  text: string; textVersion: string; files: StagedFile[]; queueId?: string; queueRevision?: number;
 };
 export type Submission = {
   id: string; slot: string; method: "turn.send" | "queue.add" | "queue.update";
@@ -80,7 +80,13 @@ export function changeDraft(source: DraftRecord, change: DraftChange): DraftReco
     }
   } else if (change.kind === "edit") {
     const existing = record.slots[change.slot];
-    if (!existing || (!existing.text && !existing.files.length && !Object.values(record.operations).some((op) => op.slot === change.slot))) record.slots[change.slot] = change.draft;
+    const pending = Object.values(record.operations).some((op) => op.slot === change.slot);
+    if (existing && !pending && existing.queueRevision !== change.draft.queueRevision) {
+      // A later server revision must not silently inherit an older edit. Keep
+      // its exact text/file references in the established recovery surface.
+      if (existing.text || existing.files.length) record.slots[`recovered:${existing.textVersion}`] = { ...existing, files: [...existing.files] };
+      record.slots[change.slot] = change.draft;
+    } else if (!existing || (!existing.text && !existing.files.length && !pending)) record.slots[change.slot] = change.draft;
     record.active = change.slot;
   } else if (change.kind === "select") {
     if (record.slots[change.slot]) record.active = change.slot;

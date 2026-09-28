@@ -146,7 +146,7 @@ export function RunHistory({ bot, schedules, attachments, online, onClose, downl
             {detailPage > 0 && <button disabled={!online || busy} onClick={() => setDetailPage(page => page - 1)}>Newer detail<ArrowRight size={15} /></button>}
           </nav>
         </> : <>
-          <div className="bots-run-intro"><h3>A little work, happening in the background.</h3><p>Scheduled checks and their outcomes live here. Your conversation stays focused on you.</p></div>
+          <div className="bots-run-intro"><h3>Scheduled activity</h3><p>Review scheduled runs, their progress, and recorded results.</p></div>
           {!online && <div className="bots-run-notice"><Clock3 size={18} /><p>Saved activity. Reconnect for updates and full run details.</p></div>}
           {schedules.some(schedule => schedule.enabled && schedule.nextRunAt) && <section className="bots-run-upcoming" aria-label="Coming up"><CalendarDays size={18} /><div><strong>Coming up</strong>{schedules.filter(schedule => schedule.enabled && schedule.nextRunAt).sort((a, b) => a.nextRunAt!.localeCompare(b.nextRunAt!)).slice(0, 3).map(schedule => <p key={schedule.id}><span>{schedule.title}</span><time>{stamp(schedule.nextRunAt)}</time></p>)}</div></section>}
           <div className="bots-run-tools"><div role="group" aria-label="Filter activity"><button aria-pressed={filter === "all"} onClick={() => setFilter("all")}>All runs</button><button aria-pressed={filter === "attention"} onClick={() => setFilter("attention")}>Needs attention</button></div><button className="bots-icon-button" aria-label="Refresh activity" disabled={busy || !online} onClick={firstPage}><RefreshCw size={16} /></button></div>
@@ -162,7 +162,7 @@ export function RunHistory({ bot, schedules, attachments, online, onClose, downl
         </>}
         {busy && <p className="bots-run-loading" role="status"><LoaderCircle size={16} className="bots-spin" />{target ? "Opening this run…" : "Updating activity…"}</p>}
       </div>
-      <footer><button onClick={onClose}><MessagesLabel />Back to conversation</button><span>Routine work stays out of your chat.</span></footer>
+      <footer><button onClick={onClose}><MessagesLabel />Back to conversation</button><span>Scheduled runs and recorded results.</span></footer>
     </section>
   </div>;
 }
