@@ -12,8 +12,8 @@ const digest = (value) => createHash('sha256').update(value).digest('hex');
 const privateName = (name) => /(^|[\\/])\.(?:env(?:\.|$)|git(?:[\\/]|$)|ssh(?:[\\/]|$)|aws(?:[\\/]|$)|codex(?:[\\/]|$))|\.(?:pem|key|p12|pfx)$/i.test(name);
 const publicResult = (a) => ({ attachmentId: a.id, name: a.name, markdown: `[${a.name.replace(/[\[\]]/g, '')}](bot-artifact:${a.id})` });
 function provenance(bot, p) {
-  const result = { threadId: bot.threadId };
-  for (const key of ['turnId', 'itemId', 'operationId']) if (typeof p?.[key] === 'string' && p[key].length <= 200) result[key] = p[key];
+  const result = { threadId: p?.threadId ?? bot.threadId };
+  for (const key of ['turnId', 'itemId', 'operationId', 'laneId', 'runId']) if (typeof p?.[key] === 'string' && p[key].length <= 200) result[key] = p[key];
   return result;
 }
 async function writeAll(file, bytes) {
@@ -103,9 +103,11 @@ export async function registerArtifact(runtime, bot, input, context = {}) {
       }
       runtime.store.transaction(() => {
         runtime.store.put('attachment', a);
-        if (publicationId) runtime.store.put('artifactPublication', { id: publicationId, botId: bot.id, attachmentId: id });
+        if (publicationId) runtime.store.put('artifactPublication', { id: publicationId, botId: bot.id, attachmentId: id,
+          provenance: provenance(bot, context) });
       });
-      runtime.emitEvent('attachment', runtime.publicAttachment(a), bot.id);
+      if (context.laneId && runtime.runs?.isolated(context.runId)) runtime.runs.event(context.laneId, 'attachment', runtime.publicAttachment(a));
+      else runtime.emitEvent('attachment', runtime.publicAttachment(a), bot.id);
       return publicResult(a);
     } finally { await source?.close(); await destination?.close(); if (temporary) await unlink(temporary).catch(() => {}); }
   });
@@ -149,46 +151,48 @@ export function intendedOutputs(item) {
   }
   return [];
 }
-export async function registerNativeItem(runtime, bot, turnId, item, createdAt) {
+export async function registerNativeItem(runtime, bot, turnId, item, createdAt, context = {}) {
   if (typeof turnId !== 'string' || turnId.length > 200 || typeof item?.id !== 'string' || item.id.length > 200) return { registered: 0, failures: [] };
   const outputs = intendedOutputs(item); let registered = 0; const failures = [];
   for (let i = 0; i < outputs.length; i++) {
     if (outputs[i].unavailable) { failures.push({ itemId: item.id, reason: outputs[i].unavailable }); continue; }
     try {
-      await registerArtifact(runtime, bot, outputs[i], { source: 'native', turnId, itemId: item.id, createdAt,
-        key: `native:${bot.threadId}:${turnId}:${item.id}:${i}` });
+      await registerArtifact(runtime, bot, outputs[i], { ...context, source: 'native', turnId, itemId: item.id, createdAt,
+        key: `native:${context.threadId ?? bot.threadId}:${turnId}:${item.id}:${i}` });
       registered++;
     } catch (error) { failures.push({ itemId: item.id, reason: error?.artifactReason ?? 'An intended output could not be registered. Its source was retained; retry indexing after the file is available inside this bot workspace.' }); }
   }
   return { registered, failures };
 }
-async function indexNativePage(runtime, bot, p) {
+async function indexNativePage(runtime, bot, p, context = {}) {
+  const threadId = context.threadId ?? bot.threadId;
   let native = null, before = null;
   if (p.cursor != null) {
     try {
       if (typeof p.cursor !== 'string' || p.cursor.length > 8192) throw new Error();
       const c = JSON.parse(Buffer.from(p.cursor, 'base64url').toString());
-      if (c.v !== 1 || c.botId !== bot.id || c.threadId !== bot.threadId || (c.native !== null && typeof c.native !== 'string') || (c.before !== null && (typeof c.before !== 'string' || c.before.length > 500))) throw new Error();
+      if (c.v !== 1 || c.botId !== bot.id || c.threadId !== threadId || (c.runId ?? null) !== (context.runId ?? null) || (c.native !== null && typeof c.native !== 'string') || (c.before !== null && (typeof c.before !== 'string' || c.before.length > 500))) throw new Error();
       ({ native, before } = c);
     } catch { throw new Error('Invalid native artifact indexing cursor.'); }
   }
-  const page = await runtime.historyPage(bot.threadId, native);
-  const items = page.data.flatMap((turn) => turn.items.map((item) => ({ turn, item })));
+  const page = await runtime.historyPage(threadId, native);
+  const items = page.data.filter(turn => context.kind !== 'main-legacy' || turn.id === context.turnId)
+    .flatMap((turn) => turn.items.map((item) => ({ turn, item })));
   const offset = before ? items.findIndex(({ turn, item }) => `${turn.id}:${item.id}` === before) + 1 : 0;
   if (before && !offset) throw new Error('Native history changed. Restart artifact indexing.');
   const failures = []; let registered = 0, end = offset;
   for (; end < items.length && end < offset + 40; end++) {
     const { turn, item } = items[end];
-    if (!rememberInputProvenance(runtime, bot, turn.id, item)) failures.push({ itemId: item.id, reason: 'Attachment provenance could not be saved. Original files remain available; retry indexing.' });
-    const result = await registerNativeItem(runtime, bot, turn.id, item, historicalArtifactDate(turn));
+    if (!rememberInputProvenance(runtime, bot, turn.id, item, context)) failures.push({ itemId: item.id, reason: 'Attachment provenance could not be saved. Original files remain available; retry indexing.' });
+    const result = await registerNativeItem(runtime, bot, turn.id, item, historicalArtifactDate(turn), context);
     registered += result.registered; failures.push(...result.failures);
   }
   const more = end < items.length;
-  return { registered, failures, nextCursor: more || page.nextCursor ? Buffer.from(JSON.stringify({ v: 1, botId: bot.id, threadId: bot.threadId,
+  return { registered, failures, nextCursor: more || page.nextCursor ? Buffer.from(JSON.stringify({ v: 1, botId: bot.id, threadId, runId: context.runId ?? null,
     native: more ? native : page.nextCursor, before: more ? `${items[end - 1].turn.id}:${items[end - 1].item.id}` : null })).toString('base64url') : null };
 }
 
-export function rememberInputProvenance(runtime, bot, turnId, item) {
+export function rememberInputProvenance(runtime, bot, turnId, item, context = {}) {
   if (item?.type !== 'userMessage') return true;
   try {
     const queued = item.clientId && runtime.store.get('queuedAttachments', item.clientId);
@@ -205,7 +209,7 @@ export function rememberInputProvenance(runtime, bot, turnId, item) {
       if (!a || a.botId !== bot.id) continue;
       if (a.artifact || !a.ready || (!ids?.includes(a.id) && !paths.has(a.path))) continue;
       if (a.provenance?.turnId && a.provenance.turnId !== turnId) continue;
-      runtime.store.put('attachment', { ...a, provenance: provenance(bot, { turnId, itemId: item.id, operationId: item.clientId }) });
+      runtime.store.put('attachment', { ...a, provenance: provenance(bot, { ...context, turnId, itemId: item.id, operationId: item.clientId }) });
     }
     return true;
   } catch {
@@ -216,12 +220,12 @@ export function rememberInputProvenance(runtime, bot, turnId, item) {
 }
 
 const indexTasks = new WeakMap();
-export async function indexNativeArtifacts(runtime, bot, p) {
+export async function indexNativeArtifacts(runtime, bot, p, context = {}) {
   let tasks = indexTasks.get(runtime);
   if (!tasks) { tasks = new Map(); indexTasks.set(runtime, tasks); }
-  const key = JSON.stringify([bot.id, p.cursor ?? null]);
+  const key = JSON.stringify([bot.id, context.threadId ?? bot.threadId, context.runId ?? null, p.cursor ?? null]);
   if (tasks.has(key)) return tasks.get(key);
   if (tasks.size >= 2) throw new Error('Artifact indexing is busy. Try again shortly.');
-  const task = indexNativePage(runtime, bot, p); tasks.set(key, task);
+  const task = indexNativePage(runtime, bot, p, context); tasks.set(key, task);
   try { return await task; } finally { tasks.delete(key); }
 }

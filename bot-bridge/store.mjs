@@ -13,6 +13,9 @@ export class Store {
       CREATE INDEX IF NOT EXISTS records_bot ON records(kind,bot_id);
       CREATE INDEX IF NOT EXISTS run_turn_page ON records(bot_id,json_extract(json,'$.runId'),id) WHERE kind='runTurn';
       CREATE INDEX IF NOT EXISTS run_turn_identity ON records(kind,bot_id,json_extract(json,'$.turnId')) WHERE kind IN ('run','runTurn');
+      CREATE UNIQUE INDEX IF NOT EXISTS run_lane_thread ON records(json_extract(json,'$.threadId')) WHERE kind='runLane';
+      CREATE INDEX IF NOT EXISTS run_finding_page ON records(bot_id,json_extract(json,'$.runId'),id) WHERE kind='runFinding';
+      CREATE INDEX IF NOT EXISTS artifact_publication_context ON records(bot_id,json_extract(json,'$.provenance.threadId'),json_extract(json,'$.provenance.turnId'),json_extract(json,'$.provenance.itemId')) WHERE kind='artifactPublication';
       CREATE INDEX IF NOT EXISTS history_attachment_path ON records(bot_id,json_extract(json,'$.path'),id)
         WHERE kind='attachment' AND json_extract(json,'$.ready')=1;
       CREATE INDEX IF NOT EXISTS history_attachment_item ON records(bot_id,json_extract(json,'$.provenance.turnId'),json_extract(json,'$.provenance.itemId'),COALESCE(json_extract(json,'$.provenance.threadId'),''),id)
@@ -59,6 +62,13 @@ export class Store {
             .all(kind, botId)
         : this.db.prepare("SELECT json FROM records WHERE kind=?").all(kind)
     ).map((r) => JSON.parse(r.json));
+  }
+  executionMetadata(kind, botId = null) {
+    if (!["runLane", "runIntake", "managerExecution"].includes(kind)) throw new Error("Unknown execution metadata kind.");
+    // Admission/snapshots inspect metadata without hydrating frozen profiles,
+    // full submitted input or native parameters for the historical library.
+    return this.db.prepare(`SELECT json_remove(json,'$.profile','$.nativeParams','$.input','$.text','$.selectedContext') AS json
+      FROM records WHERE kind=? AND (? IS NULL OR bot_id=?)`).all(kind, botId, botId).map(row => JSON.parse(row.json));
   }
   put(kind, record) {
     this.db

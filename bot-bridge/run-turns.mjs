@@ -11,6 +11,7 @@ const date = value => {
 // operation results, native items or file bodies in the activity index.
 export function publicRunTurn(receipt) {
   return { id: receipt.id, botId: receipt.botId, runId: receipt.runId,
+    laneId: receipt.laneId ?? null, threadId: receipt.threadId ?? null,
     operationId: receipt.operationId ?? receipt.id, turnId: nullable(receipt.turnId),
     status: receipt.status, error: nullable(receipt.error)?.slice(0, 2048) ?? null,
     createdAt: date(receipt.createdAt), finishedAt: date(receipt.finishedAt) };

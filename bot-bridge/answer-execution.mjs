@@ -176,11 +176,13 @@ export class AnswerExecutions {
     // Lazy additive migration of still-visible old questions; no original row
     // is removed until acceptance is actually established.
     for (const pending of this.store.list("pending")) {
+      if (pending.laneId) continue;
       if (!pending.async || this.runtime.locks.has(pending.botId)) continue;
       const bot = this.store.bot(pending.botId);
       if (!bot.archived) this.importLegacy(bot, pending);
     }
     const due = this.store.list("answerExecution").filter(record => {
+      if (record.laneId) return false;
       if (record.state === "rejected") return false;
       if (record.state === "accepted" && record.settledAt && !this.store.get("pending", record.key)) return false;
       return !(Date.parse(record.reconcileAfter ?? "") > Date.now());

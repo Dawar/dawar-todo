@@ -45,6 +45,7 @@ export async function dispatchScheduled(runtime, bot, run) {
 }
 
 export async function reconcileScheduled(runtime, run) {
+  if (run.executionLane === "run-v1") return;
   const bot = runtime.store.bot(run.botId);
   const found = await findNativeTurn(runtime, run.threadId ?? bot.threadId, {
     turnId: run.turnId, clientId: run.operationId ?? `schedule:${run.id}`, cursor: run.reconcileCursor ?? null,
@@ -77,7 +78,8 @@ export function scheduledContext(runtime, botId, turnId = runtime.store.bot(botI
   if (!turnId) return null;
   const find = kind => {
     const row = runtime.store.db.prepare(`SELECT json FROM records WHERE kind=? AND kind IN ('run','runTurn')
-      AND bot_id=? AND json_extract(json,'$.turnId')=? LIMIT 1`).get(kind, botId, turnId);
+      AND bot_id=? AND json_extract(json,'$.turnId')=? AND json_extract(json,'$.laneId') IS NULL
+      AND COALESCE(json_extract(json,'$.executionLane'),'main-legacy')<>'run-v1' LIMIT 1`).get(kind, botId, turnId);
     return row ? JSON.parse(row.json) : null;
   };
   const continuation = find("runTurn");
@@ -91,6 +93,7 @@ export function scheduledContext(runtime, botId, turnId = runtime.store.bot(botI
 }
 
 export async function reconcileRunTurn(runtime, receipt) {
+  if (receipt.laneId) return;
   const bot = runtime.store.bot(receipt.botId);
   if (runtime.store.get("run", receipt.runId)?.botId !== bot.id) throw new Error("Scheduled continuation owner mismatch.");
   const found = await findNativeTurn(runtime, receipt.threadId ?? bot.threadId, {
@@ -112,6 +115,7 @@ export async function reconcileRunTurn(runtime, receipt) {
 export async function recoverRunTurns(runtime, limit = 2, startup = false) {
   let checked = 0;
   for (const receipt of runtime.store.list("runTurn")) {
+    if (receipt.laneId) continue;
     if (terminal.has(receipt.status) || runtime.locks.has(receipt.botId) || checked >= limit ||
         (!startup && Date.parse(receipt.reconcileAfter ?? "") > Date.now())) continue;
     checked++;

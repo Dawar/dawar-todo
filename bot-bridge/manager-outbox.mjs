@@ -8,9 +8,13 @@ export function ensureNotice(manager, botId, key, text, runId = null, source = {
   const id = noticeId(botId, key);
   const existing = manager.store.get("managerNotice", id);
   if (existing) return existing;
+  const run = runId && manager.store.get("run", runId);
+  const lane = run?.executionLane === "run-v1" && manager.store.get("runLane", run.laneId);
+  const destination = lane ? { botId, runId, laneId: lane.id, threadId: lane.threadId } : null;
   return manager.store.put("managerNotice", {
     id, botId, key, operationId: `manager-notice:${id}`,
-    state: manager.store.bot(botId).managerPaused ? "held" : "queued",
+    state: (lane ? lane.paused : manager.store.bot(botId).managerPaused) ? "held" : "queued",
+    destination,
     text, runId, source, createdAt: now(), deliveredAt: null,
   });
 }
@@ -24,6 +28,9 @@ export function finishTask(manager, task, state, error, turn, repair = false) {
         (current.turnId && turn?.id && current.turnId !== turn.id)) return current;
     const finishedTurn = turn?.id ?? task.turnId ?? current.turnId;
     const executionId = current.dispatchKey ?? current.id;
+    const execution = store.get("managerExecution", executionId);
+    if (execution && execution.taskId === current.id) store.put("managerExecution", { ...execution,
+      turnId: finishedTurn ?? execution.turnId, state, error: error ?? null });
     const legacy = store.get("managerNotice", noticeId(task.botId, `task:${task.id}:${state}`));
     const key = `task:${task.id}:${executionId}:${finishedTurn ?? "no-turn"}:${state}`;
     const priorNotice = current.completionNoticeId && store.get("managerNotice", current.completionNoticeId);
@@ -68,8 +75,58 @@ export function repairTerminalNotices(manager) {
 export async function deliverNotices(manager) {
   const { store, runtime } = manager;
   let reconciled = 0, delivered = 0;
-  for (const original of store.list("managerNotice")) {
+  // Read recovery has its own rotating, backoff-bounded budget. Already
+  // admitted run input is never charged against new notice delivery again.
+  const notices = store.list("managerNotice").sort((a, b) =>
+    (a.reconcileAfter ?? "").localeCompare(b.reconcileAfter ?? "") || a.createdAt.localeCompare(b.createdAt));
+  for (const original of notices) {
     if (["delivered", "rejected"].includes(original.state)) continue;
+    if (original.destination?.laneId) {
+      const operationId = original.operationId;
+      const existing = store.get("runIntake", operationId);
+      if (existing) {
+        if (existing.botId !== original.botId || existing.runId !== original.runId || existing.laneId !== original.destination.laneId) {
+          store.put("managerNotice", { ...original, state: "uncertain", error: "Worker notice destination changed; original input was retained." });
+          continue;
+        }
+        if (reconciled >= 2 || Date.parse(original.reconcileAfter ?? "") > Date.now()) continue;
+        reconciled++;
+        store.transaction(() => {
+          const notice = store.get("managerNotice", original.id), intake = store.get("runIntake", operationId);
+          store.put("managerNotice", { ...notice,
+            state: intake.state === "accepted" ? "delivered" : intake.state === "rejected" ? "rejected" :
+              notice.state === "held" ? "held" : intake.state === "queued" ? "queued" : "uncertain",
+            deliveryTurnId: intake.turnId ?? null,
+            ...(intake.state === "accepted" ? { deliveredAt: notice.deliveredAt ?? now() } : {}),
+            reconcileAfter: new Date(Date.now() + 30000).toISOString() });
+        });
+        continue;
+      }
+      // Unknown legacy dispatch without intake is not positive no-send proof.
+      if (delivered >= 2 || ["held", "uncertain", "dispatching"].includes(original.state) ||
+          runtime.locks.has(original.destination.laneId)) continue;
+      await runtime.lock(original.destination.laneId, () => {
+        const lane = store.get("runLane", original.destination.laneId), bot = store.bot(original.botId);
+        const notice = store.get("managerNotice", original.id);
+        if (!lane || lane.botId !== notice.botId || lane.runId !== notice.runId || lane.threadId !== notice.destination.threadId ||
+            bot.archived || bot.archiving || lane.paused || notice.state !== "queued" || store.get("runIntake", operationId)) return;
+        // Local queue acceptance and notice transition commit together. A
+        // lost native ACK remains in runIntake, never main operation recovery.
+        let accepted = false;
+        try { store.transaction(() => {
+            runtime.runs.accept(lane, operationId,
+              { text: `[Manager update]\n${notice.text}`, input: [{ type: "text", text: `[Manager update]\n${notice.text}`, text_elements: [] }], attachments: [] },
+              { kind: "worker-notice", sourceExecutionId: notice.source?.executionId ?? null, noticeId: notice.id });
+            accepted = true;
+            store.put("managerNotice", { ...notice, state: "queued", deliveryTurnId: null });
+          });
+        } finally {
+          // afterCommit publication may throw after durable acceptance.
+          if (accepted && store.get("runIntake", operationId)) delivered++;
+        }
+      }).catch(error => runtime.emit("fault", error));
+      continue;
+    }
     const operationId = original.operationId ?? `manager-notice:${original.id}`;
     let prior = store.operation(operationId);
     if (prior && prior.status !== "done" && prior.outcome !== "rejected") {
@@ -97,7 +154,7 @@ export async function deliverNotices(manager) {
     // itself must persist an operation before crossing the native boundary.
     if (["uncertain", "held"].includes(original.state)) continue;
     const bot = store.bot(original.botId);
-    if (delivered >= 2 || bot.archived || bot.managerPaused || bot.activeTurnId || runtime.activityUnresolved(bot.id) ||
+    if (delivered >= 2 || bot.archived || bot.archiving || bot.managerPaused || bot.queuePaused || bot.activeTurnId || runtime.activityUnresolved(bot.id) ||
         runtime.locks.has(bot.id) || store.list("pending", bot.id).length) continue;
     delivered++;
     store.put("managerNotice", { ...original, operationId, state: "dispatching", attemptedAt: now() });
