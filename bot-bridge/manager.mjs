@@ -244,7 +244,7 @@ export class CodexManager {
       }
       if (!this.runtime.ready) throw new Error("Native context recovery is still in progress; retry this same operation after readiness.");
       const delegates = name === "codex_tasks" && args.operation === "delegate" ||
-        name === "codex_workers" && args.operation === "message";
+        name === "codex_threads" && args.operation === "message";
       if (delegates && this.runtime.activityUnresolved(botId))
         throw new Error("Current native activity is unresolved; delegation attribution will be available after read-only recovery.");
       if (delegates && this.runtime.scheduledUncertain(botId) &&

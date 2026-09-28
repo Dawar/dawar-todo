@@ -37,12 +37,35 @@ export function requireCurrentActivity(runtime, botId, turnId = null, reason = "
     reconcileAfter: null, reconciliationError: null, attempts: 0 });
 }
 
-// Acceptance is a historical fact, not proof of what is active now. Even a
-// done operation must retain containment when its active projection was lost.
-export function retainAcceptedActivity(runtime, botId, turn) {
-  if (turn?.status !== "inProgress" || terminalTurn(runtime.store.get("planTurnEvidence", turn.id)) ||
-      observedActiveTurn(runtime, botId, turn.id)) return;
-  requireCurrentActivity(runtime, botId, turn.id, "accepted-turn-not-currently-projected");
+// Only an actual new submission may invalidate a previous current-state proof.
+// Persist before crossing that boundary, including when its ACK is later lost.
+// This is ordering metadata; original operations/inputs remain in their ledger.
+export function beginTurnDispatch(runtime, botId, operationId) {
+  return runtime.store.transaction(() => {
+    const generation = captureActivity(runtime, botId).generation + 1;
+    advanceActivity(runtime, botId, runtime.store.get("botActivity", botId).activeTurnId, {
+      unresolved: true, unresolvedTurnId: null, reason: "native-start-in-flight",
+      dispatchOperationId: operationId, dispatchGeneration: generation,
+      reconcileAfter: null, reconciliationError: null, attempts: 0,
+    });
+    return { botId, generation, operationId, authority: "submission" };
+  });
+}
+
+function ownsDispatch(runtime, botId, token) {
+  const activity = runtime.store.get("botActivity", botId);
+  return token?.authority === "submission" && token.botId === botId &&
+    activity?.dispatchOperationId === token.operationId && activity.dispatchGeneration === token.generation;
+}
+
+// A real submission's late ACK/error is new evidence, unlike an arbitrary
+// number of later history reads. It may require a new current read, but never
+// replaces newer active/terminal state. Only dispatch call sites possess this
+// token; historical recovery cannot manufacture one from captureActivity.
+export function requireDispatchReconciliation(runtime, botId, token, turn = null) {
+  if (!ownsDispatch(runtime, botId, token) || terminalTurn(turn) ||
+      (turn?.id && (terminalTurn(runtime.store.get("planTurnEvidence", turn.id)) || observedActiveTurn(runtime, botId, turn.id)))) return;
+  requireCurrentActivity(runtime, botId, turn?.id, "submission-needs-current-state");
 }
 
 export function observedActiveTurn(runtime, botId, turnId) {
@@ -106,17 +129,22 @@ export function projectTerminalTurn(runtime, botId, turn, completeEvidence = fal
   });
 }
 
-export function projectActiveTurn(runtime, botId, turn, token, changes = {}) {
-  if (turn.status !== "inProgress") return false;
+// ACK authority is tied to the actual dispatch, never a token captured before
+// a historical lookup. A later current proof wins, even if old history still
+// says inProgress. A stale ACK can retain containment for a fresh current read;
+// later historical recovery cannot repeat that invalidation.
+export function acknowledgeTurnDispatch(runtime, botId, turn, token, changes = {}) {
+  if (turn?.status !== "inProgress") return false;
   return runtime.store.transaction(() => {
-    if (!activityUnchanged(runtime, botId, token) || activityUnresolved(runtime, botId)) {
-      retainAcceptedActivity(runtime, botId, turn);
+    if (!ownsDispatch(runtime, botId, token)) return false;
+    if (!activityUnchanged(runtime, botId, token)) {
+      requireDispatchReconciliation(runtime, botId, token, turn);
       return false;
     }
     const terminal = runtime.store.get("planTurnEvidence", turn.id);
     const bot = runtime.store.bot(botId);
     if ((terminal?.botId === botId && terminalTurn(terminal)) || (bot.activeTurnId && bot.activeTurnId !== turn.id)) {
-      retainAcceptedActivity(runtime, botId, turn);
+      requireDispatchReconciliation(runtime, botId, token, turn);
       return false;
     }
     saveActive(runtime, botId, turn, changes);

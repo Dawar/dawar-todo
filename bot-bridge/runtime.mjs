@@ -7,9 +7,9 @@ import { PlanLifecycle } from "./plan-lifecycle.mjs";
 import { stagedQueue, dispatchPrompt, reconcilePrompt } from "./prompt-queue.mjs";
 import { findNativeTurn } from "./native-reconcile.mjs";
 import { dispatchScheduled, reconcileScheduled, scheduledContext, recoverRunTurns } from "./scheduled-execution.mjs";
-import { projectTerminalTurn, projectActiveTurn, reconcileActiveTurns, captureActivity,
+import { projectTerminalTurn, beginTurnDispatch, acknowledgeTurnDispatch, requireDispatchReconciliation, reconcileActiveTurns, captureActivity,
   activityUnchanged, observeStartedTurn, observedActiveTurn, activityUnresolved,
-  requireCurrentActivity, retainAcceptedActivity } from "./turn-state.mjs";
+  requireCurrentActivity } from "./turn-state.mjs";
 import { reconcileCurrentActivity, recoverCurrentActivities } from "./current-activity.mjs";
 import { acceptLocalQueueOperation } from "./local-queue-operation.mjs";
 import { listRunTurns, publicRunTurn, activeScheduledTurn } from "./run-turns.mjs";
@@ -219,9 +219,6 @@ export class BotRuntime extends EventEmitter {
   projectTerminalTurn(botId, turn, completeEvidence = false) {
     return projectTerminalTurn(this, botId, turn, completeEvidence);
   }
-  projectActiveTurn(botId, turn, activity, changes = {}) {
-    return projectActiveTurn(this, botId, turn, activity, changes);
-  }
   activityUnresolved(botId) { return activityUnresolved(this, botId); }
   reconcileCurrentActivity(botId) { return reconcileCurrentActivity(this, botId); }
   async ensureCurrentActivity(botId) {
@@ -397,13 +394,11 @@ export class BotRuntime extends EventEmitter {
           });
           op = { ...op, reconcileCursor: found.nextCursor };
           if (found.turn) {
-            retainAcceptedActivity(this, bot.id, found.turn);
             const notice = op.id.startsWith("manager-notice:") &&
               this.store.get("managerNotice", op.id.slice("manager-notice:".length));
             if (notice?.botId === bot.id && notice.runId) this.recordScheduledTurn(bot.id, notice.runId, op.id, found.turn);
             this.projectTerminalTurn(bot.id, found.turn, true);
-            // A storage failure while retaining activity must not fall through
-            // the read-recovery catch with a successful receipt but no fence.
+            // Historical acceptance settles a receipt, never current activity.
             result = op.method === "queue.add" ? { consumedTurnId: found.turn.id } : { turn: found.turn };
           }
         } catch {
@@ -469,15 +464,15 @@ export class BotRuntime extends EventEmitter {
       .update(JSON.stringify({ method, botId, params }))
       .digest("hex");
     return this.lock(botId ?? "create", async () => {
-      const composerMutation = ["turn.send", "queue.add", "queue.update", "queue.delete", "queue.reorder"].includes(method);
-      const attempt = composerMutation ? { started: false, rejected: false } : null;
+      const inputMutation = ["turn.send", "requests.respond", "queue.add", "queue.update", "queue.delete", "queue.reorder"].includes(method);
+      const attempt = inputMutation ? { started: false, rejected: false } : null;
       const existing = this.store.operation(operationId);
       if (existing) {
         if (existing.fingerprint !== fingerprint)
           throw new Error("Operation ID was reused with different input.");
         if (existing.status === "done") return existing.result;
         if (["dispatching", "uncertain"].includes(existing.status) ||
-            (composerMutation && existing.status === "failed" && existing.outcome !== "rejected")) {
+            (inputMutation && existing.status === "failed" && existing.outcome !== "rejected")) {
           const result = await this.reconcileOperation(existing);
           if (result) return result;
         }
@@ -508,9 +503,7 @@ export class BotRuntime extends EventEmitter {
       } catch (e) {
         const committed = this.store.operation(operationId);
         if (committed?.status === "done") return committed.result;
-        if (method === "turn.send" && attempt && !attempt.started)
-          this.plans.rejected(this.store.get("planExecution", operationId), attempt);
-        // For composer mutations certainty comes from the native call boundary,
+        // For input mutations certainty comes from the native call boundary,
         // never an error string or the fact that dispatch threw after a commit.
         const uncertain = attempt
           ? attempt.started && !attempt.rejected
@@ -777,7 +770,7 @@ export class BotRuntime extends EventEmitter {
         });
       }
       case "requests.respond":
-        return this.respond(bot, p);
+        return this.respond(bot, p, attempt);
       case "schedules.list":
         return {
           schedules: this.store.list("schedule", bot.id),
@@ -1245,81 +1238,75 @@ export class BotRuntime extends EventEmitter {
     } while (cursor);
     return items;
   }
-  async latestNativeTurn(bot, thread) {
-    let latest = thread.turns?.at(-1);
-    if (thread.status?.type === "active" && latest?.status !== "inProgress") {
-      const page = await this.historyPage(bot.threadId);
-      latest = page.data.find((turn) => turn.status === "inProgress") ?? latest;
-    }
-    return latest;
-  }
   async startTurn(bot, input, text, id, run, additionalContext, attempt = null) {
-    const plan = await this.plans.prepare(bot, id, run);
-    await this.ensureCurrentActivity(bot.id);
-    bot = this.store.bot(bot.id);
-    if (bot.activeTurnId || this.scheduledUncertain(bot.id, id))
-      throw new Error("Native activity changed before dispatch. No new turn was started; queue or retry your input after reconciliation.");
-    const { model, effort, serviceTier } = this.settings(bot);
-    const params = {
-      threadId: bot.threadId,
-      clientUserMessageId: id,
-      input,
-      additionalContext,
-      cwd: bot.cwd,
-      approvalPolicy: "never",
-      sandboxPolicy: { type: "dangerFullAccess" },
-      model,
-      effort,
-      serviceTier,
-      collaborationMode: {
-        mode: run || id.startsWith("manager-notice:") ? "default" : bot.mode,
-        settings: {
-          model,
-          reasoning_effort: effort,
-          developer_instructions: null,
-        },
-      },
-      turnTrigger: run ? "scheduled" : "user",
-    };
-    const activity = captureActivity(this, bot.id);
-    if (run) this.store.transaction(() => {
-      this.store.put("activeRun", { id: bot.id, botId: bot.id, runId: run.id, operationId: id });
-      if (id !== (run.operationId ?? `schedule:${run.id}`)) this.store.put("runTurn", {
-        id, operationId: id, botId: bot.id, runId: run.id, threadId: bot.threadId, turnId: null,
-        status: "starting", createdAt: now(),
-      });
-    });
+    // The boundary/owner covers preparation too, for every caller including
+    // async answers that do not pass an outer composer attempt object.
     const boundary = attempt ?? { started: false, rejected: false };
-    let result;
+    const preparationId = randomUUID();
+    let activity, result;
     try {
+      const plan = await this.plans.prepare(bot, id, run, preparationId);
+      await this.ensureCurrentActivity(bot.id);
+      bot = this.store.bot(bot.id);
+      if (bot.activeTurnId || this.scheduledUncertain(bot.id, id))
+        throw new Error("Native activity changed before dispatch. No new turn was started; queue or retry your input after reconciliation.");
+      const { model, effort, serviceTier } = this.settings(bot);
+      const params = {
+        threadId: bot.threadId,
+        clientUserMessageId: id,
+        input,
+        additionalContext,
+        cwd: bot.cwd,
+        approvalPolicy: "never",
+        sandboxPolicy: { type: "dangerFullAccess" },
+        model,
+        effort,
+        serviceTier,
+        collaborationMode: {
+          mode: run || id.startsWith("manager-notice:") ? "default" : bot.mode,
+          settings: { model, reasoning_effort: effort, developer_instructions: null },
+        },
+        turnTrigger: run ? "scheduled" : "user",
+      };
+      activity = this.store.transaction(() => {
+        const fence = beginTurnDispatch(this, bot.id, id);
+        this.plans.dispatching(plan, fence);
+        if (run) {
+          this.store.put("activeRun", { id: bot.id, botId: bot.id, runId: run.id, operationId: id, preparationId });
+          if (id !== (run.operationId ?? `schedule:${run.id}`)) this.store.put("runTurn", {
+            id, operationId: id, botId: bot.id, runId: run.id, threadId: bot.threadId, turnId: null,
+            status: "starting", preparationId, createdAt: now(),
+          });
+        }
+        return fence;
+      });
       result = await this.submitNative("turn/start", params, boundary);
+      this.plans.bind(plan, result.turn);
+      const completed = this.store.get("planTurnEvidence", result.turn.id);
+      acknowledgeTurnDispatch(this, bot.id, result.turn, activity, {
+        preview: id.startsWith("manager-notice:") ? bot.preview : text.slice(0, 160),
+        updatedAt: now(), error: null,
+      });
+      this.emitUserMessage(bot, result.turn.id, id, input);
+      if (run) this.recordScheduledTurn(bot.id, run.id, id,
+        ["completed", "failed", "interrupted"].includes(completed?.status)
+          ? { ...result.turn, status: completed.status, error: completed.error ? { message: completed.error } : null }
+          : result.turn);
+      this.projectTerminalTurn(bot.id, result.turn);
+      return result;
     } catch (error) {
-      this.plans.rejected(plan, boundary);
+      if (boundary.started && !boundary.rejected)
+        requireDispatchReconciliation(this, bot.id, activity, result?.turn);
+      this.plans.rejected(id, preparationId, boundary);
       if (run && (!boundary.started || boundary.rejected) &&
-          this.store.get("activeRun", bot.id)?.operationId === id) {
+          this.store.get("activeRun", bot.id)?.preparationId === preparationId) {
         this.store.remove("activeRun", bot.id);
         const receipt = this.store.get("runTurn", id);
-        if (receipt) this.store.put("runTurn", { ...receipt, status: "failed", outcome: "rejected", error: error.message });
+        if (receipt?.preparationId === preparationId && !receipt.turnId)
+          this.store.put("runTurn", { ...receipt, status: "failed", outcome: "rejected", error: error.message });
       }
       throw error;
     }
-    this.plans.bind(plan, result.turn);
-    this.emitUserMessage(bot, result.turn.id, id, input);
-    const completed = this.store.get("planTurnEvidence", result.turn.id);
-    if (result.turn.status === "inProgress" && !["completed", "failed", "interrupted"].includes(completed?.status))
-      this.projectActiveTurn(bot.id, result.turn, activity, {
-        preview: id.startsWith("manager-notice:")
-          ? bot.preview
-          : text.slice(0, 160),
-        updatedAt: now(),
-        error: null,
-      });
-    if (run) this.recordScheduledTurn(bot.id, run.id, id,
-      ["completed", "failed", "interrupted"].includes(completed?.status)
-        ? { ...result.turn, status: completed.status, error: completed.error ? { message: completed.error } : null }
-        : result.turn);
-    this.projectTerminalTurn(bot.id, result.turn);
-    return result;
   }
   scheduledUncertain(botId, excludeOperationId = null) {
     if (this.activityUnresolved(botId)) return true;
@@ -1352,12 +1339,14 @@ export class BotRuntime extends EventEmitter {
   recordScheduledTurn(botId, runId, operationId, turn) {
     this.store.transaction(() => {
       const run = this.owned("run", runId, botId);
-      retainAcceptedActivity(this, botId, turn);
       const evidence = this.store.get("planTurnEvidence", turn.id);
       if (evidence?.botId === botId && ["completed", "failed", "interrupted"].includes(evidence.status))
         turn = { ...turn, status: evidence.status, error: evidence.error ? { message: evidence.error } : null };
       const complete = ["completed", "failed", "interrupted"].includes(turn.status);
-      const state = { turnId: turn.id, status: turn.status === "inProgress" ? "running" : turn.status,
+      // An old inProgress receipt is acceptance, not current execution proof.
+      // Keep its unfinished outcome explicit without restoring/reblocking it.
+      const state = { turnId: turn.id, status: turn.status === "inProgress"
+        ? observedActiveTurn(this, botId, turn.id) ? "running" : "uncertain" : turn.status,
         error: turn.error?.message ?? null, ...(complete ? { finishedAt: now() } : {}) };
       const primary = operationId === (run.operationId ?? `schedule:${run.id}`);
       // Preserve the original run's execution identity when a worker notice
@@ -1388,20 +1377,26 @@ export class BotRuntime extends EventEmitter {
     await this.syncQueueSettings(bot);
     if (!activityUnchanged(this, bot.id, activity) || this.activityUnresolved(bot.id) || this.store.bot(bot.id).activeTurnId)
       throw new Error("Native activity changed before the legacy queued start.");
-    const { turn } = await this.codex.call("thread/queue/start", {
-      threadId: bot.threadId,
-      queuedSubmissionId: item.id,
-    });
-    this.emitEvent("queue", {}, bot.id);
-    this.emitUserMessage(bot, turn.id, item.clientUserMessageId, item.input);
-    if (turn.status === "inProgress")
-      this.projectActiveTurn(bot.id, turn, activity, {
+    const dispatch = beginTurnDispatch(this, bot.id, item.id);
+    let turn;
+    try {
+      ({ turn } = await this.codex.call("thread/queue/start", {
+        threadId: bot.threadId,
+        queuedSubmissionId: item.id,
+      }));
+      acknowledgeTurnDispatch(this, bot.id, turn, dispatch, {
         preview: item.input.find((input) => input.type === "text")?.text.slice(0, 160) ?? "Attachments",
         error: null,
         updatedAt: now(),
       });
-    this.projectTerminalTurn(bot.id, turn);
-    return turn;
+      this.emitEvent("queue", {}, bot.id);
+      this.emitUserMessage(bot, turn.id, item.clientUserMessageId, item.input);
+      this.projectTerminalTurn(bot.id, turn);
+      return turn;
+    } catch (error) {
+      requireDispatchReconciliation(this, bot.id, dispatch, turn);
+      throw error;
+    }
   }
   async syncQueueSettings(bot) {
     const { model, effort, serviceTier } = this.settings(bot);
@@ -1439,7 +1434,7 @@ export class BotRuntime extends EventEmitter {
       bot.id,
     );
   }
-  async respond(bot, p) {
+  async respond(bot, p, attempt = null) {
     const pending = this.owned("pending", p.key, bot.id);
     if (!pending.async && pending.epoch !== this.epoch)
       throw new Error("This request expired when the runtime restarted.");
@@ -1448,8 +1443,13 @@ export class BotRuntime extends EventEmitter {
       const text = pending.request.params.questions
         .map((q) => `${q.question}\n${result.answers[q.id].answers.join("\n")}`)
         .join("\n\n");
-      await this.send(this.store.bot(bot.id), { text }, `answer:${pending.id}`);
-    } else this.codex.respond(pending.request.id, result);
+      await this.send(this.store.bot(bot.id), { text }, `answer:${pending.id}`, null, attempt);
+    } else {
+      // No terminal native receipt exists for this write. Everything after
+      // the response boundary remains uncertain on failure, including storage.
+      if (attempt) attempt.started = true;
+      this.codex.respond(pending.request.id, result);
+    }
     this.store.remove("pending", pending.id);
     this.emitEvent("request.resolved", { key: pending.id }, bot.id);
     const current = this.store.bot(bot.id);
@@ -1699,33 +1699,17 @@ export class BotRuntime extends EventEmitter {
             const current = this.store.bot(bot.id);
             if (current.activeTurnId || current.archived || current.queuePaused || this.scheduledUncertain(current.id) ||
                 this.store.list("pending", bot.id).length) return;
-            let first;
-            const activity = captureActivity(this, bot.id);
             try {
               // Re-read after obtaining the lock: another client can mutate the queue.
-              first = (await this.queueList(current))[0];
+              const first = (await this.queueList(current))[0];
               if (!first) return;
-              const { thread } = await this.codex.call("thread/read", {
-                threadId: current.threadId, includeTurns: true,
-              });
-              const latest = await this.latestNativeTurn(current, thread);
-              if (!activityUnchanged(this, bot.id, activity)) {
-                retainAcceptedActivity(this, bot.id, latest);
-                if (thread.status?.type === "active" && latest?.status !== "inProgress")
-                  requireCurrentActivity(this, bot.id, null, "native-busy-without-current-turn");
-                return;
-              }
-              const active = thread.status?.type === "active" ||
-                (!thread.status && latest?.status === "inProgress");
-              if (active && latest?.status !== "inProgress") {
-                requireCurrentActivity(this, bot.id, null, "native-busy-without-current-turn");
-                throw new Error("An active native turn could not be identified.");
-              }
-              if (active) {
-                this.projectActiveTurn(bot.id, latest, activity, { error: null });
-                this.recordScheduledEvidence(bot.id, latest);
-                return;
-              }
+              // Only current-state authority can decide idle/active. Historical
+              // inProgress rows cannot substitute for this read or reblock it.
+              if (!await this.reconcileCurrentActivity(current.id)) return;
+              const checked = this.store.bot(current.id);
+              if (checked.activeTurnId || checked.queuePaused || this.scheduledUncertain(current.id) ||
+                  this.store.list("pending", current.id).length) return;
+              const activity = captureActivity(this, bot.id);
               await this.plans.settle(current.id);
               if (!activityUnchanged(this, bot.id, activity)) return;
               if (this.plans.blocked(current.id)) return;
@@ -1733,39 +1717,14 @@ export class BotRuntime extends EventEmitter {
               if (local) await dispatchPrompt(this, this.store.bot(current.id), local);
               else await this.startQueued(this.store.bot(current.id), first);
             } catch (error) {
-              const recoveryActivity = captureActivity(this, bot.id);
-              try {
-                const [{ thread }, remaining] = await Promise.all([
-                  this.codex.call("thread/read", {
-                    threadId: current.threadId, includeTurns: true,
-                  }),
-                  this.queueList(current),
-                ]);
-                const latest = await this.latestNativeTurn(current, thread);
-                if (!activityUnchanged(this, bot.id, recoveryActivity)) {
-                  retainAcceptedActivity(this, bot.id, latest);
-                  if (thread.status?.type === "active" && latest?.status !== "inProgress")
-                    requireCurrentActivity(this, bot.id, null, "native-busy-without-current-turn");
-                  return;
-                }
-                const active = thread.status?.type === "active" ||
-                  (!thread.status && latest?.status === "inProgress");
-                if (active && latest?.status === "inProgress") {
-                  this.projectActiveTurn(bot.id, latest, recoveryActivity, { error: null });
-                  this.recordScheduledEvidence(bot.id, latest);
-                  return;
-                }
-                if (active) requireCurrentActivity(this, bot.id, null, "native-busy-without-current-turn");
-                if (first && !remaining.some((item) => item.id === first.id) ||
-                    /active or pending turn/i.test(error.message)) return;
-              } catch {
-                // Preserve the queue for review when native state cannot be read.
-              }
-              if (!activityUnchanged(this, bot.id, recoveryActivity)) return;
+              // Current idle is not a receipt for the failed legacy dispatch.
+              // Pause before read-only repair; no absence/text-based replay or
+              // clearing a newer pause if the recovery reader also fails.
               this.saveBot(this.store.bot(bot.id), {
-                queuePaused: true, status: "error",
+                queuePaused: true,
                 error: `Queued prompt needs review: ${error.message}`,
               });
+              await this.reconcileCurrentActivity(current.id);
             }
           }).catch((e) => this.emit("fault", e));
           continue;

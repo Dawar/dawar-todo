@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import { findNativeTurn } from "./native-reconcile.mjs";
-import { retainAcceptedActivity } from "./turn-state.mjs";
 
 const now = () => new Date().toISOString();
 const terminal = new Set(["completed", "failed", "interrupted"]);
@@ -16,7 +15,7 @@ export class PlanLifecycle {
       record.state === "dispatching" ||
       (record.state === "running" && terminal.has(this.store.get("planTurnEvidence", record.turnId)?.status)));
   }
-  async prepare(bot, operationId, run) {
+  async prepare(bot, operationId, run, preparationId) {
     await this.settle(bot.id);
     bot = this.store.bot(bot.id);
     if (this.blocked(bot.id)) throw new Error("The previous Plan transition needs reconciliation before another turn can start.");
@@ -24,13 +23,25 @@ export class PlanLifecycle {
     if ((await this.runtime.nativeQueueList(bot)).length)
       throw new Error("Let the legacy native queue finish before starting a Plan turn. New Queue next prompts are safely staged.");
     const existing = this.store.get("planExecution", operationId);
-    if (existing) return existing;
+    if (existing && !(existing.state === "finished" && !existing.turnId &&
+        ["not-submitted", "rejected"].includes(existing.preparationOutcome)))
+      throw new Error("This Plan execution already has a retained receipt. Reconcile its original operation instead of submitting it again.");
     return this.store.transaction(() => {
       const intentId = bot.modeIntentId ?? `legacy:${randomUUID()}`;
       if (!bot.modeIntentId) this.runtime.saveBot(this.store.bot(bot.id), { modeIntentId: intentId });
-      return this.store.put("planExecution", { id: operationId, botId: bot.id, threadId: bot.threadId,
-        intentId, state: "dispatching", turnId: null, createdAt: now() });
+      return this.store.put("planExecution", { ...existing, id: operationId, botId: bot.id, threadId: bot.threadId,
+        intentId, preparationId, preparationOutcome: null, dispatchFence: null, state: "dispatching", turnId: null,
+        finishedAt: null, reconcileAfter: null, createdAt: now() });
     });
+  }
+  dispatching(record, fence) {
+    if (!record) return;
+    const current = this.store.get("planExecution", record.id);
+    if (current?.preparationId !== record.preparationId || current.state !== "dispatching" || current.turnId)
+      throw new Error("Plan preparation changed before native submission.");
+    // In the same transaction as beginTurnDispatch, before submitNative.
+    // Presence means an effect may have happened, never that it succeeded.
+    this.store.put("planExecution", { ...current, dispatchFence: fence });
   }
   bind(record, turn, completeEvidence = false) {
     if (!record) return;
@@ -41,11 +52,15 @@ export class PlanLifecycle {
     const outcome = this.store.get("planTurnEvidence", turn.id);
     if (terminal.has(outcome?.status)) this.schedule(record.botId);
   }
-  rejected(record, attempt) {
-    if (!record) return;
-    if (!attempt?.started || attempt.rejected)
-      this.store.put("planExecution", { ...this.store.get("planExecution", record.id), state: "finished", finishedAt: now() });
-    // Unknown dispatch remains identifiable by its original client message ID.
+  rejected(operationId, preparationId, attempt) {
+    if (attempt.started && !attempt.rejected) return;
+    const record = this.store.get("planExecution", operationId);
+    // Only this invocation's still-unbound preparation can be retired. A
+    // failed prepare of an older uncertain operation must not retire that ID.
+    if (!record || record.preparationId !== preparationId || record.state !== "dispatching" || record.turnId) return;
+    this.store.put("planExecution", { ...record, state: "finished", finishedAt: now(),
+      preparationOutcome: attempt.started ? "rejected" : "not-submitted" });
+    // Unknown/accepted dispatch remains identifiable by its original ID.
   }
   note(botId, message, completeEvidence = false) {
     const p = message.params ?? {};
@@ -118,6 +133,13 @@ export class PlanLifecycle {
       if (count >= limit || Date.parse(record.reconcileAfter ?? "") > Date.now()) continue;
       count++;
       await this.runtime.lock(record.botId, async () => {
+        const prepared = this.store.get("planExecution", record.id);
+        if (prepared?.state === "dispatching" && prepared.preparationId && !prepared.dispatchFence && !prepared.turnId) {
+          // Only the new preparation format proves the submit boundary was
+          // never reserved. Legacy records and reserved/lost ACKs stay unknown.
+          this.rejected(prepared.id, prepared.preparationId, { started: false, rejected: false });
+          return;
+        }
         const found = await findNativeTurn(this.runtime, record.threadId, { turnId: record.turnId,
           clientId: record.id, cursor: record.reconcileCursor ?? null });
         const current = this.store.get("planExecution", record.id);
@@ -129,7 +151,6 @@ export class PlanLifecycle {
           reconcileAfter: new Date(Date.now() + 60000).toISOString() });
         if (found.turn) {
           this.bind(this.store.get("planExecution", current.id), found.turn, true);
-          retainAcceptedActivity(this.runtime, record.botId, found.turn);
           this.runtime.projectTerminalTurn(record.botId, found.turn, true);
           await this.settle(record.botId);
         }

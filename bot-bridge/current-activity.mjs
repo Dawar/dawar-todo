@@ -9,13 +9,35 @@ export async function reconcileCurrentActivity(runtime, botId) {
   const token = captureActivity(runtime, botId);
   try {
     if (!bot.threadId || bot.archived) throw new Error("Restore a provisioned bot before checking native activity.");
+    let resumed = false;
+    if (!runtime.loaded.has(bot.threadId)) {
+      resumed = true;
+      await runtime.load(bot);
+    }
     const read = async () => {
       const { thread } = await runtime.codex.call("thread/read", { threadId: bot.threadId, includeTurns: false });
-      if (thread?.id !== bot.threadId || !["idle", "active"].includes(thread.status?.type))
+      if (thread?.id !== bot.threadId || !["idle", "active", "notLoaded"].includes(thread.status?.type))
         throw new Error("Native current activity is unavailable; no conflicting input was sent.");
       return thread;
     };
-    const initial = await read();
+    let initial = await read();
+    if (initial.status.type === "notLoaded") {
+      // A current notLoaded overrides the cache, but a stale response cannot
+      // force a resume after a newer native start. At most one resume per pass.
+      if (!activityUnchanged(runtime, botId, token)) {
+        if (!activityUnresolved(runtime, botId)) return true;
+        throw new Error("Native activity changed before load recovery. Containment was retained.");
+      }
+      runtime.loaded.delete(bot.threadId);
+      if (!resumed) {
+        await runtime.load(bot);
+        initial = await read();
+      }
+    }
+    if (initial.status.type === "notLoaded") {
+      if (activityUnchanged(runtime, botId, token)) runtime.loaded.delete(bot.threadId);
+      throw new Error("Native thread is still not loaded after resume; current-state recovery will retry.");
+    }
     let page = null, pageError = null;
     try {
       // No full history/items hydration. One newest metadata page bounds work.
@@ -29,6 +51,10 @@ export async function reconcileCurrentActivity(runtime, botId) {
     if (!activityUnchanged(runtime, botId, token)) {
       if (!activityUnresolved(runtime, botId)) return true; // A newer native start established identity.
       throw new Error("Native activity changed during the current-state read. Containment was retained.");
+    }
+    if (current.status.type === "notLoaded") {
+      runtime.loaded.delete(bot.threadId);
+      throw new Error("Native thread unloaded during reconciliation; current-state recovery will retry.");
     }
     const turns = Array.isArray(page?.data) ? page.data : [];
     if (current.status.type === "idle") return projectCurrentIdle(runtime, botId, token, turns[0]);
