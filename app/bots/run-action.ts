@@ -36,7 +36,8 @@ class RunAction {
     catch { this.error = "This action could not be saved. Nothing was dispatched; retry when browser storage is available."; this.notify(); throw Error(this.error); }
     this.intent = intent; this.accepted = false; this.busy = true; this.error = ""; this.notify();
     try {
-      await client.rpc(intent.method, this.botId, intent.params, intent.id, { owner: this.owner, managed: true });
+      const result = await client.rpc(intent.method, this.botId, intent.params, intent.id, { owner: this.owner, managed: true });
+      if (!result || typeof result !== "object" || Array.isArray(result)) throw Error("The response did not confirm this action. Check the same saved action again.");
       // Settlement belongs to the originating owner even while presentation is hidden.
       localStorage.removeItem(this.key); this.intent = null; this.accepted = true;
     } catch (reason) {
