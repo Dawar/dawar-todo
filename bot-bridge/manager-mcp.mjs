@@ -1,7 +1,7 @@
 // One stdio MCP adapter per manager session. Only the service owns state/native RPC.
 import { createInterface } from "node:readline";
 import { request } from "node:http";
-import { MANAGER_TOOLS } from "./manager-tools.mjs";
+import { MANAGER_TOOLS, RUN_MESSAGE_TOOL } from "./manager-tools.mjs";
 
 const [socketPath, botId] = process.argv.slice(2);
 const token = process.env.DAWAR_MANAGER_TOKEN;
@@ -76,7 +76,7 @@ async function handle(message) {
         result = {};
         break;
       case "tools/list":
-        result = { tools: MANAGER_TOOLS };
+        result = { tools: [...MANAGER_TOOLS, RUN_MESSAGE_TOOL] };
         break;
       case "tools/call":
         try {

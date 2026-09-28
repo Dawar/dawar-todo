@@ -1,5 +1,14 @@
 // This catalog is shared by the local MCP adapter and its authenticated host.
 const text = { type: "string" };
+// Existing main threads cannot replace persisted dynamicTools via resume.
+// The already-authenticated bot MCP exposes this same narrowly owned intake;
+// it does not claim a native caller turn that MCP does not provide.
+export const RUN_MESSAGE_TOOL = {
+  name: "bots_run_message",
+  description: "Forward explicitly selected relevant text to an owned scheduled run. It queues on that run, never the main conversation. Reuse operationId for an identical retry.",
+  inputSchema: { type: "object", properties: { runId: text, text, operationId: text },
+    required: ["runId", "text", "operationId"], additionalProperties: false },
+};
 const fields = {
   operationId: {
     ...text,

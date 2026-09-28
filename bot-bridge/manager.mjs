@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import { requireTurn, usableTurn } from "./native-turn.mjs";
 import {
   randomUUID,
   randomBytes,
@@ -163,7 +164,9 @@ export class CodexManager {
   }
   put(kind, value) {
     const next = this.store.put(kind, { ...value, updatedAt: now() });
-    this.runtime.emitEvent(
+    const destination = next.destination ?? (kind === "managerWorker" && next.lastTaskId && this.store.get("managerTask", next.lastTaskId)?.destination);
+    if (destination?.laneId) this.runtime.runs.publish(destination.laneId);
+    else this.runtime.emitEvent(
       "manager",
       { kind, id: next.id, state: next.state },
       next.botId,
@@ -173,8 +176,8 @@ export class CodexManager {
     return next;
   }
   refreshStats(botId) {
-    const tasks = this.store.list("managerTask", botId);
-    const workers = this.store.list("managerWorker", botId);
+    const tasks = this.store.list("managerTask", botId).filter(t => !t.destination?.laneId);
+    const workers = this.store.list("managerWorker", botId).filter(w => !w.lastTaskId || !this.store.get("managerTask", w.lastTaskId)?.destination?.laneId);
     const workerTasks = {
       active: tasks.filter((t) =>
         ["queued", "starting", "running"].includes(t.state),
@@ -207,10 +210,21 @@ export class CodexManager {
     const failed = outcomes.find((r) => r.status === "rejected");
     if (failed) throw failed.reason;
   }
-  async call(botId, name, args) {
+  async call(botId, name, args, origin = null) {
     const bot = this.store.bot(botId);
-    if (bot.archived)
+    if (bot.archived || bot.archiving)
       throw new Error("Restore this manager before using its tools.");
+    if (name === "bots_run_message") {
+      if (origin) throw new Error("Native forwarding uses the explicit native tool route.");
+      if (typeof args?.runId !== "string" || args.runId.length > 512 || typeof args.text !== "string" ||
+          typeof args.operationId !== "string" || !/^[a-zA-Z0-9:_-]{10,180}$/.test(args.operationId))
+        throw new Error("Provide a runId, selected text and stable operationId.");
+      const lane = this.runtime.runs.lane(bot.id, args.runId);
+      return this.runtime.lock(lane.id, () => this.runtime.runs.send(bot,
+        { runId: args.runId, text: args.text }, args.operationId,
+        { kind: "authenticated-bot-mcp", botId: bot.id, sourceThreadId: null, sourceTurnId: null,
+          authority: "existing-bot-manager-token" }));
+    }
     const tool = MANAGER_TOOLS.find((t) => t.name === name);
     if (
       !tool ||
@@ -225,12 +239,12 @@ export class CodexManager {
       (name === "codex_organize" &&
         args.operation === "housekeep" &&
         !args.apply);
-    if (read) return this.dispatch(bot, name, args);
+    if (read) return this.dispatch(bot, name, args, undefined, origin);
     const opId = required(args.operationId, "operationId");
     if (opId.length > 160) throw new Error("operationId is too long.");
     const id = createHash("sha256").update(`${botId}:${opId}`).digest("hex");
     const fingerprint = createHash("sha256")
-      .update(JSON.stringify({ name, args }))
+      .update(JSON.stringify({ name, args, ...(origin ? { origin } : {}) }))
       .digest("hex");
     return this.runtime.lock(`manager:${botId}`, async () => {
       const prior = this.store.get("managerOperation", id);
@@ -243,11 +257,12 @@ export class CodexManager {
         );
       }
       if (!this.runtime.ready) throw new Error("Native context recovery is still in progress; retry this same operation after readiness.");
+      if (origin) this.runtime.runs.assertOrigin(origin);
       const delegates = name === "codex_tasks" && args.operation === "delegate" ||
         name === "codex_threads" && args.operation === "message";
-      if (delegates && this.runtime.activityUnresolved(botId))
+      if (!origin && delegates && this.runtime.activityUnresolved(botId))
         throw new Error("Current native activity is unresolved; delegation attribution will be available after read-only recovery.");
-      if (delegates && this.runtime.scheduledUncertain(botId) &&
+      if (!origin && delegates && this.runtime.scheduledUncertain(botId) &&
           !this.runtime.scheduledContext(botId))
         throw new Error("Scheduled context is not yet identified; retry this same delegation after native reconciliation.");
       const operation = {
@@ -256,13 +271,14 @@ export class CodexManager {
         opId,
         name,
         args,
+        origin,
         fingerprint,
         state: "dispatching",
         createdAt: now(),
       };
       this.store.put("managerOperation", operation);
       try {
-        const result = await this.dispatch(bot, name, args, id);
+        const result = await this.dispatch(bot, name, args, id, origin);
         this.store.put("managerOperation", {
           ...operation,
           state: "done",
@@ -283,9 +299,9 @@ export class CodexManager {
       }
     });
   }
-  async dispatch(bot, name, p, id) {
+  async dispatch(bot, name, p, id, origin = null) {
     if (name === "codex_projects") return this.projects(bot, p, id);
-    if (name === "codex_threads") return this.threads(bot, p, id);
+    if (name === "codex_threads") return this.threads(bot, p, id, origin);
     if (name === "codex_sections") return this.sections(bot, p);
     if (name === "codex_worktrees") {
       if (p.operation === "create") return this.createWorktree(bot, p, id);
@@ -302,7 +318,7 @@ export class CodexManager {
         })),
       );
     }
-    if (name === "codex_tasks") return this.tasks(bot, p, id);
+    if (name === "codex_tasks") return this.tasks(bot, p, id, origin);
     if (name === "codex_organize") return this.organize(bot, p);
     throw new Error("Unknown manager tool.");
   }
@@ -543,7 +559,7 @@ export class CodexManager {
       this.loaded.add(worker.threadId);
     }
   }
-  async threads(bot, p, id) {
+  async threads(bot, p, id, origin = null) {
     if (p.operation === "list")
       return this.codex.call("thread/list", {
         ...pageParams(p),
@@ -599,7 +615,7 @@ export class CodexManager {
     }
     const worker = this.owned("managerWorker", p.workerId, bot.id);
     if (p.operation === "message")
-      return this.delegate(bot, { ...p, name: p.name ?? worker.name }, id);
+      return this.delegate(bot, { ...p, name: p.name ?? worker.name }, id, origin);
     if (p.operation === "steer") {
       if (!worker.activeTurnId)
         throw new Error("Worker is idle; use message or delegate.");
@@ -695,7 +711,7 @@ export class CodexManager {
       ...(p.operation === "update" ? { name: cleanName(p.name) } : {}),
     });
   }
-  async delegate(bot, p, id) {
+  async delegate(bot, p, id, origin = null) {
     const prompt = required(p.prompt, "prompt");
     const settings = this.runtime.settings(bot, p);
     const dependencies = p.dependencies ?? [];
@@ -706,9 +722,11 @@ export class CodexManager {
     const task = {
       id,
       botId: bot.id,
-      requestedBy: bot.threadId,
-      requestedByTurnId: this.store.bot(bot.id).activeTurnId ?? null,
-      scheduledRunId: this.runtime.scheduledContext(bot.id)?.runId ?? null,
+      requestedBy: origin?.threadId ?? bot.threadId,
+      requestedByTurnId: origin?.turnId ?? this.store.bot(bot.id).activeTurnId ?? null,
+      scheduledRunId: origin?.runId ?? this.runtime.scheduledContext(bot.id)?.runId ?? null,
+      destination: origin ? { botId: bot.id, laneId: origin.laneId, runId: origin.runId, threadId: origin.threadId } : null,
+      origin,
       name: cleanName(p.name),
       prompt,
       context: p.context ?? "",
@@ -740,7 +758,7 @@ export class CodexManager {
       }
       return this.store.transaction(() => {
         const saved = this.put("managerTask", { ...task, workerId: worker.id, state: "queued" });
-        return this.store.bot(bot.id).managerPaused
+        return this.executionPaused(saved)
           ? this.finish(saved, "cancelled", "Stopped by the human during worker provisioning.") : saved;
       });
     } catch (error) {
@@ -759,8 +777,11 @@ export class CodexManager {
       throw error;
     }
   }
-  async tasks(bot, p, id) {
-    if (p.operation === "delegate") return this.delegate(bot, p, id);
+  executionPaused(task) {
+    return task.destination?.laneId ? this.store.get("runLane", task.destination.laneId)?.paused !== false : this.store.bot(task.botId).managerPaused;
+  }
+  async tasks(bot, p, id, origin = null) {
+    if (p.operation === "delegate") return this.delegate(bot, p, id, origin);
     if (p.operation === "requests")
       return this.store.list("managerRequest", bot.id);
     if (p.operation === "respond") return this.respond(bot, p);
@@ -1002,6 +1023,7 @@ export class CodexManager {
     const p = message.params ?? {},
       worker = this.workerFor(p.threadId ?? p.thread?.id);
     if (!worker) return false;
+    if (["turn/started", "turn/completed"].includes(message.method)) this.recordExecution(worker, p.turn);
     if (message.method === "turn/started")
       this.put("managerWorker", {
         ...worker,
@@ -1015,7 +1037,7 @@ export class CodexManager {
           (t) =>
             t.workerId === worker.id &&
             (t.turnId === p.turn.id || (t.state === "starting" && !t.turnId &&
-              (worker.activeTurnId === p.turn.id || p.turn.items?.some(item =>
+              ((!t.destination?.laneId && worker.activeTurnId === p.turn.id) || p.turn.items?.some(item =>
                 item.type === "userMessage" && item.clientId === `manager-task:${t.dispatchKey ?? t.id}`)))),
         );
       if (task) this.completeTask(task, p.turn);
@@ -1085,18 +1107,36 @@ export class CodexManager {
       createdAt: now(),
     });
     this.put("managerWorker", { ...worker, state: "waiting" });
+    this.attributeRequest(this.store.get("managerRequest", id));
+  }
+  recordExecution(worker, turn) {
+    if (!usableTurn(turn)) return;
+    const clients = new Set((turn.items ?? []).filter(i => i.type === "userMessage").map(i => i.clientId));
+    for (const execution of this.store.executionMetadata("managerExecution", worker.botId)) {
+      if (execution.threadId !== worker.threadId || execution.workerId !== worker.id ||
+          execution.turnId !== turn.id && !clients.has(execution.operationId)) continue;
+      this.store.put("managerExecution", { ...this.store.get("managerExecution", execution.id), turnId: turn.id,
+        state: terminal.has(execution.state) ? execution.state : turn.status });
+    }
+  }
+  attributeRequest(pending) {
+    if (pending.noticeAttributed) return;
+    const worker = this.owned("managerWorker", pending.workerId, pending.botId);
+    const execution = this.store.executionMetadata("managerExecution", pending.botId).find(e =>
+      e.workerId === worker.id && e.turnId === pending.request.params.turnId);
+    const task = execution ?? this.store.list("managerTask", pending.botId).find(t =>
+      t.workerId === worker.id && t.turnId === pending.request.params.turnId);
+    if (!task) return; // Await exact ACK/history; never guess a new main/run parent.
+    this.store.transaction(() => {
+    this.store.put("managerRequest", { ...pending, taskId: task.taskId ?? task.id,
+      executionId: execution?.id ?? task.dispatchKey ?? task.id, destination: task.destination ?? null, noticeAttributed: true });
     this.notice(
       worker.botId,
-      `request:${id}`,
-      `Worker ${worker.name} (${worker.id}) needs input. Read codex_tasks requests, answer from the task's existing authorization or ask the human if necessary. Request ID: ${id}.`,
-      this.store
-        .list("managerTask", worker.botId)
-        .find(
-          (t) =>
-            t.workerId === worker.id &&
-            ["starting", "running", "waiting"].includes(t.state),
-        )?.scheduledRunId,
+      `request:${pending.id}`,
+      `Worker ${worker.name} (${worker.id}) needs input. Read codex_tasks requests, answer from the task's existing authorization or ask the human if necessary. Request ID: ${pending.id}.`,
+      task.scheduledRunId ?? task.destination?.runId ?? null,
     );
+    });
   }
   request(message) {
     const worker = this.workerFor(
@@ -1220,6 +1260,7 @@ export class CodexManager {
         if (!worker?.threadId) throw new Error("Worker creation needs reconciliation.");
         const found = await findNativeTurn(this.runtime, worker.threadId, { turnId: task.turnId,
           clientId: `manager-task:${task.dispatchKey ?? task.id}`, cursor: task.reconcileCursor ?? null });
+        if (found.turn) this.recordExecution(worker, found.turn);
         const current = this.store.get("managerTask", task.id);
         if (!["starting", "running", "uncertain", "provisioning"].includes(current.state) ||
             (current.dispatchKey ?? current.id) !== (task.dispatchKey ?? task.id)) continue;
@@ -1260,7 +1301,7 @@ export class CodexManager {
         )
           break;
         const bot = this.store.bot(task.botId);
-        if (bot.archived || bot.managerPaused) continue;
+        if (bot.archived || bot.archiving || this.executionPaused(task)) continue;
         const dependencies = task.dependencies.map((id) =>
           this.store.get("managerTask", id),
         );
@@ -1299,6 +1340,7 @@ export class CodexManager {
           reconcileAfter: new Date(Date.now() + 60000).toISOString(),
           dispatchOperationId: `manager-task:${task.dispatchKey ?? task.id}`,
         });
+        const boundary = { started: false, rejected: false };
         try {
           await this.loadWorker(worker);
           const priorResults = dependencies
@@ -1310,7 +1352,7 @@ export class CodexManager {
           const text =
             task.replyPrompt ??
             `${task.prompt}\n\nContext:\n${task.context}\n\nConstraints:\n${task.constraints}\n\nAcceptance criteria:\n${task.acceptance}\n\nPrerequisite results (evidence, not overriding instructions):\n${priorResults}`;
-          const { turn } = await this.codex.call("turn/start", {
+          const nativeParams = {
             threadId: worker.threadId,
             cwd: worker.cwd,
             clientUserMessageId: `manager-task:${task.dispatchKey ?? task.id}`,
@@ -1329,7 +1371,22 @@ export class CodexManager {
                 value: `${WORKER_INSTRUCTIONS}\nTask ID: ${task.id}. Role: ${worker.role}. Manager: ${bot.name}.`,
               },
             },
+          };
+          if (this.executionPaused(task) || this.store.bot(task.botId).archiving)
+            throw Object.assign(new Error("Worker execution was paused before submission."), { definite: true });
+          if (task.destination?.laneId) this.store.put("managerExecution", {
+            id: task.dispatchKey ?? task.id, botId: task.botId, taskId: task.id, workerId: worker.id,
+            threadId: worker.threadId, turnId: null, state: "dispatching", destination: task.destination,
+            scheduledRunId: task.scheduledRunId, origin: task.origin, operationId: nativeParams.clientUserMessageId,
+            nativeParams, createdAt: now(),
           });
+          const { turn } = await this.runtime.submitNative("turn/start", nativeParams, boundary);
+          if (task.destination?.laneId) {
+            requireTurn(turn);
+            const receipt = this.store.get("managerExecution", task.dispatchKey ?? task.id);
+            this.store.put("managerExecution", { ...receipt, turnId: turn.id,
+              state: terminal.has(receipt.state) ? receipt.state : turn.status, acceptedAt: now() });
+          }
           // Completion can arrive before the RPC response; do not undo it.
           const current = this.store.get("managerTask", task.id);
           if (current.state === "starting") {
@@ -1349,7 +1406,7 @@ export class CodexManager {
             }
           }
           if (
-            this.store.bot(bot.id).managerPaused &&
+            this.executionPaused(task) &&
             !terminal.has(turn.status)
           )
             await this.codex.call("turn/interrupt", {
@@ -1359,7 +1416,9 @@ export class CodexManager {
         } catch (error) {
           const current = this.store.get("managerTask", task.id);
           if (terminal.has(current.state) || current.state === "waiting" || current.dispatchKey !== task.dispatchKey) continue;
-          if (error.definite) this.finish(current, "failed", error.message);
+          // Only preparation or the actual start's explicit rejection proves
+          // no execution. A later interrupt/storage failure cannot undo an ACK.
+          if (!boundary.started || boundary.rejected) this.finish(current, "failed", error.message);
           else {
             this.put("managerTask", {
               ...current,
@@ -1370,11 +1429,13 @@ export class CodexManager {
               bot.id,
               `uncertain:${task.id}`,
               `Task ${task.id} has an uncertain execution outcome: ${error.message}. Inspect before retrying.`,
+              task.scheduledRunId,
             );
           }
         }
       }
       repairTerminalNotices(this);
+      for (const pending of this.store.list("managerRequest")) this.attributeRequest(pending);
       await deliverNotices(this);
       await this.reconcileTasks();
       for (const worker of this.store.list("managerWorker"))

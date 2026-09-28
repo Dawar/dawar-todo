@@ -1,4 +1,6 @@
 import { AnswerExecutions } from "./answer-execution.mjs";
+import { BackgroundRuns } from "./background-runs.mjs";
+import { stopExecutions, reconcileStop } from "./execution-stop.mjs";
 import { requireTurn, requireSteer, usableTurn, usableTurnId, terminalTurn } from "./native-turn.mjs";
 import { boundHistoryEvent } from "./history-events.mjs";
 import { listArtifacts, artifactMime, artifactMetadata } from "./artifact-library.mjs";
@@ -27,7 +29,7 @@ import {
 import { join, basename, resolve } from "node:path";
 import { constants } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
-import { MANAGER_INSTRUCTIONS } from "./manager-tools.mjs";
+import { MANAGER_INSTRUCTIONS, RUN_MESSAGE_TOOL } from "./manager-tools.mjs";
 import {
   BOT_INSTRUCTIONS,
   cleanName,
@@ -76,6 +78,9 @@ const READ_METHODS = new Set([
   "schedules.list",
   "runs.page",
   "runs.turns",
+  "runs.receipt",
+  "runs.requests",
+  "runs.findings",
   "usage.bot",
   "usage.account",
   "attachments.read",
@@ -101,6 +106,7 @@ const schema = (properties, required = []) => ({
 });
 const str = { type: "string" };
 export const dynamicTools = [
+  { type: "function", ...RUN_MESSAGE_TOOL },
   {
     type: "function",
     name: "bots_schedule_list",
@@ -159,6 +165,7 @@ export class BotRuntime extends EventEmitter {
     this.epoch = randomUUID();
     this.plans = new PlanLifecycle(this);
     this.answers = new AnswerExecutions(this, validateResponse);
+    this.runs = new BackgroundRuns(this, dynamicTools, validateResponse, INTERACTIONS);
     this.locks = new Map();
     this.loaded = new Set();
     this.models = [];
@@ -230,6 +237,7 @@ export class BotRuntime extends EventEmitter {
   }
   async start() {
     await mkdir(this.root, { recursive: true, mode: 0o700 });
+    this.runs.start();
     // A server request is only answerable in the process that emitted it.
     for (const p of this.store.list("pending"))
       if (!p.async) this.store.remove("pending", p.id);
@@ -250,10 +258,10 @@ export class BotRuntime extends EventEmitter {
     for (const active of this.store.list("activeRun"))
       this.store.remove("activeRun", active.id);
     for (const receipt of this.store.list("runTurn"))
-      if (["starting", "running"].includes(receipt.status))
+      if (!receipt.laneId && ["starting", "running"].includes(receipt.status))
         this.store.put("runTurn", { ...receipt, status: "uncertain" });
     for (const run of this.store.list("run"))
-      if (["running", "starting"].includes(run.status))
+      if (run.executionLane !== "run-v1" && ["running", "starting"].includes(run.status))
         this.store.put("run", {
           ...run,
           status: "uncertain",
@@ -304,7 +312,7 @@ export class BotRuntime extends EventEmitter {
     await this.reconcileOperations();
     await this.plans.recover(100);
     await this.answers.recover(100);
-    for (const run of this.store.list("run").filter(run => run.status === "uncertain")) {
+    for (const run of this.store.list("run").filter(run => run.executionLane !== "run-v1" && run.status === "uncertain")) {
       try { await reconcileScheduled(this, run); } catch { /* Keep uncertain IDs for the next bounded recovery. */ }
     }
     await recoverRunTurns(this, 100, true);
@@ -356,17 +364,33 @@ export class BotRuntime extends EventEmitter {
   }
   async reconcileOperation(op) {
     let result = null;
+    const archive = this.store.get("executionArchive", op.id);
+    if (archive) {
+      try { result = await this.reconcileArchive(archive); }
+      catch { return null; } // Read failure never makes startup replay archival.
+    }
+    const stop = this.store.get("executionStop", op.id);
+    if (stop) {
+      try { result = await this.lock(`stop:${stop.id}`, () => reconcileStop(this, stop)); } catch { return null; }
+    }
+    if (op.method === "runs.send") {
+      const intake = this.store.get("runIntake", op.id);
+      if (intake?.botId === op.botId && intake.runId === op.params.runId) result = this.runs.receipt(intake);
+    }
     if (op.method === "requests.respond" && op.botId) {
       const bot = this.store.bot(op.botId);
-      let record = this.answers.get(bot, op.params?.key);
+      const saved = this.store.get("answerExecution", `answer:${op.params?.key}`);
+      const answers = saved?.laneId ? this.runs.port(saved.laneId).answers : this.answers;
+      const state = saved?.laneId ? this.runs.port(saved.laneId).state() : bot;
+      let record = answers.get(state, op.params?.key);
       const pending = this.store.get("pending", op.params?.key);
       if (!record && pending?.async && pending.botId === bot.id) record = this.answers.importLegacy(bot, pending);
       if (record) {
-        await this.answers.reconcile(record);
-        record = this.answers.get(bot, op.params.key);
+        await answers.reconcile(record);
+        record = answers.get(state, op.params.key);
         let matches = false;
         try {
-          const payload = this.answers.payload(record.request, op.params.result);
+          const payload = answers.payload(record.request, op.params.result);
           matches = record.fingerprint ? payload.fingerprint === record.fingerprint : payload.text === record.text;
         } catch { /* Malformed/different input is never silently accepted. */ }
         if (matches && record.state === "accepted") result = {};
@@ -442,6 +466,8 @@ export class BotRuntime extends EventEmitter {
   }
   snapshot() {
     return {
+      capabilities: { backgroundRunLanes: 1 },
+      ...this.runs.snapshot(),
       bots: this.store
         .bots()
         .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
@@ -456,8 +482,12 @@ export class BotRuntime extends EventEmitter {
       runs: this.store
         .list("run")
         .sort((a, b) => b.scheduledAt.localeCompare(a.scheduledAt))
-        .slice(0, 100),
+        .slice(0, 100).map(run => this.publicRun(run)),
     };
+  }
+  publicRun(run) {
+    const lane = run.executionLane === "run-v1" && this.store.get("runLane", run.laneId);
+    return lane ? { ...run, ...this.runs.publicRun(lane) } : run;
   }
   async lock(key, fn) {
     const previous = this.locks.get(key) ?? Promise.resolve();
@@ -488,8 +518,11 @@ export class BotRuntime extends EventEmitter {
     const fingerprint = createHash("sha256")
       .update(JSON.stringify({ method, botId, params }))
       .digest("hex");
-    return this.lock(botId ?? "create", async () => {
+    const runRequest = method === "requests.respond" && (this.store.get("runPending", params.key) ?? this.store.get("answerExecution", `answer:${params.key}`));
+    const laneKey = method.startsWith("runs.") && params.runId ? this.runs.lane(botId, params.runId).id : runRequest?.laneId;
+    return this.lock(laneKey ?? botId ?? "create", async () => {
       const inputMutation = ["turn.send", "requests.respond", "queue.add", "queue.update", "queue.delete", "queue.reorder"].includes(method);
+      const lifecycleMutation = ["turn.interrupt", "runs.interrupt", "bots.archive", "bots.restore"].includes(method);
       const attempt = inputMutation ? { started: false, rejected: false } : null;
       const existing = this.store.operation(operationId);
       if (existing) {
@@ -497,7 +530,7 @@ export class BotRuntime extends EventEmitter {
           throw new Error("Operation ID was reused with different input.");
         if (existing.status === "done") return existing.result;
         if (["dispatching", "uncertain"].includes(existing.status) ||
-            (inputMutation && existing.status === "failed" && existing.outcome !== "rejected")) {
+            ((inputMutation || lifecycleMutation) && existing.status === "failed" && existing.outcome !== "rejected")) {
           const result = await this.reconcileOperation(existing);
           if (result) return result;
         }
@@ -508,6 +541,24 @@ export class BotRuntime extends EventEmitter {
       }
       const local = await acceptLocalQueueOperation(this, { method, botId, params, operationId }, fingerprint);
       if (local) return local.result;
+      if (method === "runs.send" || method === "runs.resume") {
+        try {
+          const bot = this.store.bot(botId), lane = this.runs.lane(botId, params.runId);
+          if (bot.archived || bot.archiving || lane.archived) throw new Error("Restore this bot before changing a run.");
+          const input = method === "runs.send" ? await this.messageInput(bot, params) : null;
+          return this.store.transaction(() => {
+            const result = method === "runs.send" ? this.runs.accept(lane, operationId,
+              { text: String(params.text ?? "").trim(), input, attachments: params.attachments ?? [] }, { kind: "owner" }) : this.runs.resume(bot, params);
+            this.store.saveOperation(operationId, fingerprint, "done", { method, botId, params, result, createdAt: now() });
+            return result;
+          });
+        } catch (error) {
+          const committed = this.store.operation(operationId);
+          if (committed?.status === "done") return committed.result;
+          error.outcome = "rejected";
+          throw error;
+        }
+      }
       if (method === "turn.send" && operationId.startsWith("manager-notice:")) {
         const notice = this.store.get("managerNotice", operationId.slice("manager-notice:".length));
         if (!notice || notice.botId !== botId) throw new Error("Manager notice is not owned by this bot.");
@@ -537,7 +588,8 @@ export class BotRuntime extends EventEmitter {
         // settings acknowledgement. An explicit native rejection is definite;
         // transport loss or a later storage fault still needs reconciliation.
         const settingsRejected = method === "bots.update" && params.name === undefined && e.definite === true;
-        const outcome = attempt ? (uncertain ? "uncertain" : "rejected") :
+        const lifecycleRejected = lifecycleMutation && !this.store.get("executionStop", operationId) && !this.store.get("executionArchive", operationId);
+        const outcome = attempt ? (uncertain ? "uncertain" : "rejected") : lifecycleRejected ? "rejected" :
           settingsRejected ? "rejected" : "uncertain";
         this.store.saveOperation(
           operationId,
@@ -555,6 +607,34 @@ export class BotRuntime extends EventEmitter {
     if (!record || record.botId !== botId)
       throw new Error("Record not found for this bot.");
     return record;
+  }
+  resolveHistoryTarget(bot, params = {}) {
+    let run = params.runId != null ? this.owned("run", params.runId, bot.id) : null;
+    let part = null;
+    if (params.turnId != null) {
+      if (!usableTurnId(params.turnId) || params.turnId.length > 200) throw new Error("Invalid turn identity.");
+      const rows = this.store.db.prepare("SELECT json FROM records WHERE kind IN ('run','runTurn') AND bot_id=? AND json_extract(json,'$.turnId')=? AND (? IS NULL OR (kind='run' AND id=?) OR (kind='runTurn' AND json_extract(json,'$.runId')=?)) GROUP BY CASE WHEN kind='run' THEN id ELSE json_extract(json,'$.runId') END LIMIT 2")
+        .all(bot.id, params.turnId, run?.id ?? null, run?.id ?? null, run?.id ?? null);
+      const parts = rows.map(row => JSON.parse(row.json));
+      if (new Set(parts.map(value => value.runId ?? value.id)).size > 1)
+        throw new Error("Turn identity has multiple retained run contexts. Select its exact run.");
+      part = parts[0] ?? null;
+      const owner = part && (part.runId ?? part.id);
+      if (run && run.turnId !== params.turnId && owner !== run.id) throw new Error("Selected turn is not a retained part of this run.");
+      if (!run && owner) run = this.owned("run", owner, bot.id);
+    }
+    if (!run) return { botId: bot.id, laneId: `main:${bot.id}`, runId: null, threadId: bot.threadId,
+      kind: "main", turnId: params.turnId ?? null, updatedAt: bot.updatedAt, versionKey: `main:${bot.threadId}` };
+    if (params.projection === "conversation") throw new Error("Conversation projection cannot select a scheduled run.");
+    const isolated = run.executionLane === "run-v1", lane = isolated ? this.runs.lane(bot.id, run.id) : null;
+    const turnId = params.turnId ?? run.turnId;
+    if (!usableTurnId(turnId)) throw new Error("This run's primary native receipt is still unconfirmed. History is unavailable until exact evidence arrives.");
+    const threadId = lane?.threadId ?? run.threadId ?? bot.threadId;
+    if (!usableTurnId(threadId) || part?.threadId && part.threadId !== threadId) throw new Error("Run history destination is inconsistent; original receipts were retained.");
+    return { botId: bot.id, laneId: lane?.id ?? `main:${bot.id}`, runId: run.id, threadId,
+      kind: isolated ? "scheduled-run" : "main-legacy", turnId,
+      updatedAt: lane?.updatedAt ?? part?.finishedAt ?? run.finishedAt ?? run.startedAt ?? run.scheduledAt,
+      versionKey: `run:${run.id}:${threadId}` };
   }
   async submitNative(method, params, attempt) {
     if (attempt) attempt.started = true;
@@ -631,11 +711,11 @@ export class BotRuntime extends EventEmitter {
       case "artifacts.preview":
         return readArtifactPreview(this, bot, p);
       case "artifacts.index":
-        return indexNativeArtifacts(this, bot, p);
+        return indexNativeArtifacts(this, bot, p, this.resolveHistoryTarget(bot, p));
       case "history.attachments":
         return readHistoryAttachments(this, bot, p);
       case "history.view":
-        if (!bot.archived) await this.load(bot);
+        if (!bot.archived && this.resolveHistoryTarget(bot, p).kind !== "scheduled-run") await this.load(bot);
         return readHistoryView(this, bot, p);
       case "history.detail":
         return readHistoryDetail(this, bot, p);
@@ -656,14 +736,40 @@ export class BotRuntime extends EventEmitter {
           pending: this.store.list("pending", bot.id),
         };
       }
-      case "history.page":
-        return this.historyPage(bot.threadId, p.cursor ?? null);
+      case "history.page": {
+        const target = this.resolveHistoryTarget(bot, p);
+        if (!target.runId) return this.historyPage(target.threadId, p.cursor ?? null);
+        let cursor = null;
+        if (p.cursor != null) {
+          try {
+            if (typeof p.cursor !== "string" || p.cursor.length > 8192) throw new Error();
+            const saved = JSON.parse(Buffer.from(p.cursor, "base64url"));
+            if (saved.context !== target.versionKey || saved.turnId !== target.turnId || typeof saved.native !== "string") throw new Error();
+            cursor = saved.native;
+          } catch { throw new Error("Run history cursor belongs to a different execution."); }
+        }
+        const page = await this.historyPage(target.threadId, cursor);
+        const data = page.data.filter(t => t.id === target.turnId);
+        return { ...page, data, context: { laneId: target.laneId, runId: target.runId, threadId: target.threadId },
+          nextCursor: !data.length && page.nextCursor ? Buffer.from(JSON.stringify({ context: target.versionKey, turnId: target.turnId, native: page.nextCursor })).toString("base64url") : null };
+      }
       case "history.turn": {
         if (typeof p.turnId !== "string" || !/^[a-zA-Z0-9-]{8,100}$/.test(p.turnId))
           throw new Error("Invalid turn ID.");
+        const target = this.resolveHistoryTarget(bot, p);
+        if (target.runId) {
+          let position = p.cursor ?? null;
+          for (let i = 0; i < 5; i++) {
+            const page = await this.dispatch("history.page", bot.id, { ...p, cursor: position });
+            if (page.data[0]) return { turn: page.data[0], nextCursor: null, context: page.context };
+            position = page.nextCursor;
+            if (!position) break;
+          }
+          return { turn: null, nextCursor: position, context: { laneId: target.laneId, runId: target.runId, threadId: target.threadId } };
+        }
         let cursor = typeof p.cursor === "string" ? p.cursor : null;
         for (let i = 0; i < 5; i++) {
-          const page = await this.historyPage(bot.threadId, cursor);
+          const page = await this.historyPage(this.resolveHistoryTarget(bot, p).threadId, cursor);
           const turn = page.data.find((item) => item.id === p.turnId);
           if (turn) return { turn, nextCursor: null };
           cursor = page.nextCursor;
@@ -756,9 +862,9 @@ export class BotRuntime extends EventEmitter {
       case "bots.update":
         return this.update(bot, p, id);
       case "bots.archive":
-        return this.archive(bot, true);
+        return this.archive(bot, true, id);
       case "bots.restore":
-        return this.archive(bot, false);
+        return this.archive(bot, false, id);
       case "turn.send": {
         const notice = id?.startsWith("manager-notice:")
           ? this.store.get("managerNotice", id.slice("manager-notice:".length))
@@ -770,20 +876,7 @@ export class BotRuntime extends EventEmitter {
         return this.send(bot, p, id, run, attempt);
       }
       case "turn.interrupt": {
-        this.saveBot(bot, { queuePaused: true });
-        const operations = [];
-        if (this.manager) operations.push(this.manager.stop(bot));
-        if (bot.activeTurnId)
-          operations.push(
-            this.codex.call("turn/interrupt", {
-              threadId: bot.threadId,
-              turnId: bot.activeTurnId,
-            }),
-          );
-        const outcomes = await Promise.allSettled(operations);
-        const failed = outcomes.find((r) => r.status === "rejected");
-        if (failed) throw failed.reason;
-        return {};
+        return this.lock(`stop:${id}`, () => stopExecutions(this, bot, id, p.scope ?? "all"));
       }
       case "thread.compact": {
         await this.load(bot);
@@ -795,7 +888,16 @@ export class BotRuntime extends EventEmitter {
         });
       }
       case "requests.respond":
+        if (this.store.get("runPending", p.key) || this.store.get("answerExecution", `answer:${p.key}`)?.laneId)
+          return this.runs.respond(bot, p, id, attempt);
         return this.respond(bot, p, attempt, id);
+      case "runs.receipt":
+      case "runs.requests":
+      case "runs.findings":
+        return this.runs.read(bot, method, p);
+      case "runs.interrupt":
+        this.runs.lane(bot.id, p.runId);
+        return this.lock(`stop:${id}`, () => stopExecutions(this, bot, id, "run", p.runId));
       case "schedules.list":
         return {
           schedules: this.store.list("schedule", bot.id),
@@ -816,8 +918,8 @@ export class BotRuntime extends EventEmitter {
           seen.add(run.scheduleId);
           latestBySchedule.push(run);
         }
-        return { runs: page, nextCursor: runs[start + limit] ? page.at(-1)?.id ?? null : null,
-          latestBySchedule };
+        return { runs: page.map(run => this.publicRun(run)), nextCursor: runs[start + limit] ? page.at(-1)?.id ?? null : null,
+          latestBySchedule: latestBySchedule.map(run => this.publicRun(run)) };
       }
       case "runs.turns":
         return listRunTurns(this, bot, p);
@@ -874,6 +976,8 @@ export class BotRuntime extends EventEmitter {
           scheduleId: s.id,
           title: s.title,
           prompt: s.prompt,
+          origin: s.origin ?? null,
+          selectedContext: s.selectedContext ?? null,
           status: "queued",
           scheduledAt: now(),
           startedAt: null,
@@ -885,6 +989,7 @@ export class BotRuntime extends EventEmitter {
       }
       case "runs.acknowledge": {
         const run = this.owned("run", p.id, bot.id);
+        if (run.executionLane === "run-v1") throw new Error("An isolated run requires exact native evidence; manual acknowledgement cannot fabricate completion.");
         if (run.status !== "uncertain")
           throw new Error("This run does not need reconciliation.");
         this.store.put("run", {
@@ -1108,17 +1213,55 @@ export class BotRuntime extends EventEmitter {
         ...(p.mode !== undefined ? { modeIntentId: operationId ?? randomUUID() } : {}) });
     });
   }
-  async archive(bot, archived) {
+  async reconcileArchive(record) {
+    const bot = this.store.bot(record.botId);
+    const unknown = record.targets.find(t => ["dispatching", "uncertain"].includes(t.state));
+    if (!unknown) return this.archive(bot, record.archived, record.id);
+    const lane = this.runs.byThread(unknown.threadId);
+    const paths = [...new Set([bot.cwd, lane?.markerPath].filter(Boolean))];
+    const page = await this.codex.call("thread/list", { archived: record.archived, cwd: paths,
+      sourceKinds: ["appServer"], cursor: record.cursorThreadId === unknown.threadId ? record.cursor ?? null : null, limit: 100 });
+    if (!Array.isArray(page.data)) return null;
+    const ids = new Set(page.data.map(t => t.id));
+    const current = this.store.get("executionArchive", record.id);
+    const targets = current.targets.map(t => ids.has(t.threadId) && ["dispatching", "uncertain"].includes(t.state) ? { ...t, state: "done", evidence: "exact-current-archive-membership" } : t);
+    this.store.put("executionArchive", { ...current, targets, cursorThreadId: unknown.threadId, cursor: page.nextCursor ?? null,
+      reconcileAfter: new Date(Date.now() + 30000).toISOString() });
+    if (targets.some(t => ["dispatching", "uncertain"].includes(t.state))) return null;
+    return this.archive(bot, record.archived, record.id);
+  }
+  async archive(bot, archived, operationId) {
+    if (archived && (this.store.executionMetadata("runLane", bot.id).some(l => this.runs.unfinished(l)) ||
+      this.store.list("executionStop", bot.id).some(s => s.state !== "done") ||
+      this.store.list("managerTask", bot.id).some(t => !["completed", "failed", "interrupted", "cancelled"].includes(t.state))))
+      throw new Error("Resolve all run executions, questions and retained stops before archiving this bot.");
     if (bot.activeTurnId || this.store.list("pending", bot.id).length)
       throw new Error(
         "Stop the bot and resolve pending questions before archiving.",
       );
-    if (archived) {
-      await this.codex.call("thread/archive", { threadId: bot.threadId });
-      this.loaded.delete(bot.threadId);
-    } else {
-      await this.codex.call("thread/unarchive", { threadId: bot.threadId });
-      this.loaded.delete(bot.threadId);
+    let archive = this.store.get("executionArchive", operationId);
+    if (!archive) archive = this.store.transaction(() => {
+      if (this.store.list("executionArchive", bot.id).some(a => a.state !== "done")) throw new Error("An earlier archive/restore operation still needs exact native evidence.");
+      this.saveBot(this.store.bot(bot.id), { archiving: true });
+      return this.store.put("executionArchive", { id: operationId, botId: bot.id, archived, state: "pending",
+        targets: [...new Set([bot.threadId, ...this.store.executionMetadata("runLane", bot.id).map(l => l.threadId)].filter(Boolean))]
+          .map(threadId => ({ threadId, state: "queued" })), createdAt: now() });
+    });
+    for (const target of archive.targets) {
+      if (target.state === "done") continue;
+      if (target.state !== "queued") throw new Error("Archive acknowledgement remains unconfirmed. Original thread targets were retained and not replayed.");
+      target.state = "dispatching";
+      this.store.put("executionArchive", archive);
+      try {
+        await this.codex.call(archived ? "thread/archive" : "thread/unarchive", { threadId: target.threadId });
+        target.state = "done";
+        this.loaded.delete(target.threadId);
+        this.store.put("executionArchive", archive);
+      } catch (error) {
+        const saved = this.store.get("executionArchive", operationId);
+        if (saved.targets.find(t => t.threadId === target.threadId)?.state === "done") { target.state = "done"; continue; }
+        target.state = "uncertain"; this.store.put("executionArchive", archive); throw error;
+      }
     }
     for (const schedule of this.store.list("schedule", bot.id))
       if (archived)
@@ -1135,11 +1278,15 @@ export class BotRuntime extends EventEmitter {
           finishedAt: now(),
         });
     this.emitEvent("schedules", {}, bot.id);
-    return this.saveBot(bot, { archived, status: "idle" });
+    return this.store.transaction(() => {
+      this.store.put("executionArchive", { ...archive, state: "done" });
+      for (const lane of this.store.executionMetadata("runLane", bot.id)) this.store.put("runLane", { ...this.store.get("runLane", lane.id), archived });
+      return this.saveBot(this.store.bot(bot.id), { archived, archiving: false, status: "idle" });
+    });
   }
   async send(bot, p, id, run = null, attempt = null, staged = false, answer = null) {
     this.answers.assertPrepared(bot, id, answer);
-    if (bot.archived) throw new Error("Restore this bot first.");
+    if (bot.archived || bot.archiving) throw new Error("Restore this bot or finish its retained archive operation first.");
     if (!this.ready) throw new Error("Codex is not ready.");
     if (bot.managerPaused && !id.startsWith("manager-notice:"))
       bot = this.saveBot(bot, { managerPaused: false });
@@ -1343,13 +1490,14 @@ export class BotRuntime extends EventEmitter {
   }
   scheduledUncertain(botId, excludeOperationId = null) {
     if (this.activityUnresolved(botId)) return true;
-    if (this.store.list("run", botId).some(run => ["starting", "uncertain"].includes(run.status) &&
+    if (this.store.list("run", botId).some(run => run.executionLane !== "run-v1" && ["starting", "uncertain"].includes(run.status) &&
         (run.operationId ?? `schedule:${run.id}`) !== excludeOperationId &&
         (!run.turnId || this.store.operation(run.operationId ?? `schedule:${run.id}`)?.status !== "done"))) return true;
-    if (this.store.list("runTurn", botId).some(receipt => ["starting", "uncertain"].includes(receipt.status) &&
+    if (this.store.list("runTurn", botId).some(receipt => !receipt.laneId && ["starting", "uncertain"].includes(receipt.status) &&
         (receipt.operationId ?? receipt.id) !== excludeOperationId &&
         (!receipt.turnId || this.store.operation(receipt.operationId ?? receipt.id)?.status !== "done"))) return true;
     return this.store.list("managerNotice", botId).some(notice => {
+      if (notice.destination?.laneId) return false;
       if (!notice.runId) return false;
       const id = notice.operationId ?? `manager-notice:${notice.id}`;
       if (id === excludeOperationId) return false;
@@ -1363,9 +1511,10 @@ export class BotRuntime extends EventEmitter {
     let context = this.scheduledContext(botId, turn.id);
     if (!context) for (const item of turn.items ?? []) {
       if (item.type !== "userMessage" || !item.clientId) continue;
-      const receipt = this.store.get("runTurn", item.clientId);
+      const savedReceipt = this.store.get("runTurn", item.clientId);
+      const receipt = savedReceipt?.laneId ? null : savedReceipt;
       const run = receipt?.botId === botId ? this.store.get("run", receipt.runId) :
-        this.store.list("run", botId).find(entry => (entry.operationId ?? `schedule:${entry.id}`) === item.clientId);
+        this.store.list("run", botId).find(entry => entry.executionLane !== "run-v1" && (entry.operationId ?? `schedule:${entry.id}`) === item.clientId);
       if (run?.botId === botId) { context = { runId: run.id, operationId: item.clientId }; break; }
     }
     if (context) this.recordScheduledTurn(botId, context.runId, context.operationId, turn);
@@ -1518,6 +1667,8 @@ export class BotRuntime extends EventEmitter {
     }
     const threadId = message.params.threadId ?? message.params.conversationId;
     if (this.manager?.request(message)) return;
+    const lane = this.runs.byThread(threadId);
+    if (lane) return this.runs.request(lane, message);
     const bot = this.store.bots().find((b) => b.threadId === threadId);
     if (!bot) {
       this.codex.reject(
@@ -1572,6 +1723,14 @@ export class BotRuntime extends EventEmitter {
     if (this.manager?.event(message)) return;
     const p = message.params ?? {};
     const threadId = p.threadId ?? p.thread?.id;
+    if (["thread/archived", "thread/unarchived"].includes(message.method)) {
+      for (const archive of this.store.list("executionArchive")) if (archive.state !== "done" && archive.archived === (message.method === "thread/archived")) {
+        const target = archive.targets.find(t => t.threadId === threadId && ["dispatching", "uncertain"].includes(t.state));
+        if (target) { target.state = "done"; this.store.put("executionArchive", archive); }
+      }
+    }
+    const lane = this.runs.byThread(threadId);
+    if (lane) { this.runs.notification(lane, message); return; }
     const bot = this.store.bots().find((b) => b.threadId === threadId);
     if (!bot) return;
     if (["turn/started", "turn/completed"].includes(message.method) &&
@@ -1670,7 +1829,7 @@ export class BotRuntime extends EventEmitter {
         );
     }
   }
-  saveSchedule(bot, p, id) {
+  saveSchedule(bot, p, id, origin = null) {
     if (bot.archived) throw new Error("Restore this bot first.");
     const existing = p.id ? this.owned("schedule", p.id, bot.id) : null;
     const schedule = normalizeSchedule(
@@ -1682,6 +1841,7 @@ export class BotRuntime extends EventEmitter {
       existing,
     );
     if (!existing && id) schedule.id = id;
+    if (!existing) schedule.origin = origin ?? { kind: "owner", operationId: id ?? null };
     this.store.put("schedule", schedule);
     this.emitEvent("schedules", {}, bot.id);
     return schedule;
@@ -1706,7 +1866,7 @@ export class BotRuntime extends EventEmitter {
       }
       let runsChecked = 0;
       for (const run of this.store.list("run")) {
-        if (!["starting", "running", "uncertain"].includes(run.status) || this.locks.has(run.botId) ||
+        if (run.executionLane === "run-v1" || !["starting", "running", "uncertain"].includes(run.status) || this.locks.has(run.botId) ||
             Date.parse(run.reconcileAfter ?? "") > Date.now() || runsChecked >= 2) continue;
         runsChecked++;
         await this.lock(run.botId, () => reconcileScheduled(this, run)).catch(error => {
@@ -1719,11 +1879,13 @@ export class BotRuntime extends EventEmitter {
         void this.manager.tick().catch((error) => this.emit("fault", error));
       const created = collectDueRuns(this.store);
       if (created.length) this.emitEvent("schedules", {});
+      void this.runs.tick().catch(error => this.emit("fault", error));
       for (const bot of this.store.bots()) {
         // Native 0.156.1 also skips interrupted thread idle and wake events.
         // Keep the bridge pause across restart until queue.resume is requested.
         if (
           bot.archived ||
+          bot.archiving ||
           bot.queuePaused ||
           bot.activeTurnId ||
           this.locks.has(bot.id) ||
@@ -1777,7 +1939,7 @@ export class BotRuntime extends EventEmitter {
         }
         const run = this.store
           .list("run", bot.id)
-          .filter((r) => r.status === "queued")
+          .filter((r) => r.status === "queued" && r.executionLane === "main-legacy")
           .sort((a, b) => a.scheduledAt.localeCompare(b.scheduledAt))[0];
         if (!run) continue;
         void this.lock(bot.id, async () => {
@@ -1790,10 +1952,18 @@ export class BotRuntime extends EventEmitter {
       }
     } finally { this.tickRunning = false; }
   }
-  async dynamicTool(bot, p) {
+  async dynamicTool(bot, p, origin = null) {
     const args =
       typeof p.arguments === "string" ? JSON.parse(p.arguments) : p.arguments;
     switch (p.tool) {
+      case "bots_run_message": {
+        if (typeof args.operationId !== "string" || !/^[a-zA-Z0-9:_-]{10,180}$/.test(args.operationId)) throw new Error("A stable run message operationId is required.");
+        const source = origin ?? { botId: bot.id, threadId: bot.threadId, turnId: p.turnId, callId: p.callId, authority: "native-tool" };
+        if (!origin && (this.activityUnresolved(bot.id) || this.store.bot(bot.id).activeTurnId !== p.turnId || p.threadId !== bot.threadId))
+          throw new Error("Forwarding requires the current native main turn's authority.");
+        return this.lock(this.runs.lane(bot.id, args.runId).id, () => this.runs.send(bot, args, args.operationId,
+          { kind: "native-forward", sourceThreadId: source.threadId, sourceTurnId: source.turnId, sourceRunId: source.runId ?? null, authority: source.authority }));
+      }
       case "bots_schedule_list":
         return {
           schedules: this.store.list("schedule", bot.id),
@@ -1801,10 +1971,12 @@ export class BotRuntime extends EventEmitter {
           defaultTimeZone: this.defaultTimeZone,
         };
       case "bots_schedule_save":
-        return this.saveSchedule(bot, args, `tool:${p.callId}`);
+        return this.saveSchedule(bot, args, `tool:${p.callId}`, { kind: "native-tool", threadId: p.threadId, turnId: p.turnId,
+          callId: p.callId, runId: origin?.runId ?? null });
       case "bots_schedule_delete":
         return this.dispatch("schedules.delete", bot.id, args);
       case "bots_report_result": {
+        if (origin?.runId) return this.runs.finding(bot, origin, args);
         const active = this.scheduledContext(bot.id, p.turnId);
         if (!active)
           throw new Error(
@@ -1820,7 +1992,7 @@ export class BotRuntime extends EventEmitter {
         return { reported: true };
       }
       case "bots_publish_artifact":
-        return this.publishArtifact(bot, args, { key: `publish:${p.callId}`, turnId: p.turnId, itemId: p.callId });
+        return this.publishArtifact(bot, args, { key: origin ? `publish:${p.threadId}:${p.callId}` : `publish:${p.callId}`, turnId: p.turnId, itemId: p.callId, ...(origin ?? {}) });
       default:
         throw new Error("Unknown bot tool.");
     }
