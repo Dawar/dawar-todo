@@ -1,4 +1,6 @@
 import type { BotAttachment, BotQueuedSubmission } from "../../lib/bots-types";
+import { queueEditable } from "./queue-state";
+import { readQueueAction } from "./queue-action-store";
 import {
   BotDraftStore, changeDraft, emptyDraft, emptyRecord, fileLimit, fileReferences,
   type DraftChange, type DraftRecord, type StagedFile, type Submission,
@@ -6,7 +8,7 @@ import {
 
 export type ComposerTransport = {
   owner: string; online: boolean;
-  rpc: (method: Submission["method"], botId: string, params: Record<string, unknown>, id: string, options: { owner: string; managed: boolean }) => Promise<unknown>;
+  rpc: (method: Submission["method"] | "queue.list", botId: string, params: Record<string, unknown>, id: string | undefined, options: { owner: string; managed: boolean }) => Promise<unknown>;
   upload: (botId: string, file: File, progress: (value: number) => void, id: string, owner: string) => Promise<BotAttachment>;
   download: (botId: string, id: string, owner?: string) => Promise<{ blob: Blob }>;
 };
@@ -144,15 +146,17 @@ export class BotComposer {
   }
   removeFile(id: string) { this.enqueue({ kind: "remove", slot: this.record.active, id }); }
   edit(item: BotQueuedSubmission) {
+    if (!queueEditable(item)) { this.actionError = "This queued message is being confirmed. Its draft and files are retained; refresh its status before editing."; this.notify(); return; }
     const slot = `queue:${item.id}`;
+    this.actionError = "";
     this.enqueue({ kind: "edit", slot, draft: {
-      ...emptyDraft(), queueId: item.id, textVersion: crypto.randomUUID(),
+      ...emptyDraft(), queueId: item.id, queueRevision: item.revision, textVersion: crypto.randomUUID(),
       text: item.input.filter((i) => i.type === "text").filter((i) => !i.text.startsWith("Attached file: ")).map((i) => i.text).join("\n"),
       files: item.attachments.map((a) => ({ id: a.id, name: a.name, mimeType: a.mimeType, size: a.size, hasBytes: false, remote: a })),
     } });
     void this.flush().then(() => this.resumeUploads()).catch(() => {});
   }
-  select(slot: string) { this.enqueue({ kind: "select", slot }); }
+  select(slot: string) { this.actionError = ""; this.enqueue({ kind: "select", slot }); }
   async retry() {
     if (!this.ready) await this.open();
     try {
@@ -213,6 +217,23 @@ export class BotComposer {
       const existing = Object.values(this.persisted.operations).find((op) => op.slot === slot);
       if (existing) { await this.dispatch(existing); return; }
       const draft = this.persisted.slots[slot];
+      if (draft.queueId) {
+        // Read-only preflight, only for a NEW update. An already submitted
+        // operation above always reconciles its exact ID/parameters instead.
+        const checkQueueAction = () => {
+          const action = readQueueAction(this.owner, this.botId);
+          if (action.pending || action.error) throw new Error("A saved queue action needs confirmation before this edit can be submitted. Your draft is retained; check the queue action first.");
+        };
+        checkQueueAction();
+        const queue = await this.transport.rpc("queue.list", this.botId, {}, undefined, { owner: this.owner, managed: false }) as BotQueuedSubmission[];
+        if (!this.canUseOwner || !this.transport.online) return;
+        checkQueueAction();
+        if (!Array.isArray(queue)) throw new Error("Queue status is unavailable. Your edit is saved; reconnect before saving it to the queue.");
+        const current = queue.find(item => item.id === draft.queueId);
+        if (!current) throw new Error("This message is no longer queued. Your edited draft and files are still saved; cancel the edit to return to your conversation.");
+        if (!queueEditable(current)) throw new Error("This queued message is being confirmed. Your edit is saved; wait for its status before changing it.");
+        if (current.revision !== draft.queueRevision) throw new Error("This queued message changed. Your edited draft is saved. Open Edit on the current message to review its latest version; your previous edit will remain in draft recovery.");
+      }
       if (draft.text.trim().length > 200000) throw new Error("This message is too long (maximum 200,000 characters).");
       const limit = fileLimit(draft.files);
       if (limit) throw new Error(limit);
@@ -220,7 +241,7 @@ export class BotComposer {
       if (!draft.text.trim() && !draft.files.length) return;
       const op: Submission = {
         id: crypto.randomUUID(), slot, method: draft.queueId ? "queue.update" : queueNext ? "queue.add" : "turn.send",
-        params: { ...(draft.queueId ? { id: draft.queueId } : {}), text: draft.text.trim(), attachments: draft.files.map((f) => f.remote!.id) },
+        params: { ...(draft.queueId ? { id: draft.queueId, ...(draft.queueRevision === undefined ? {} : { expectedRevision: draft.queueRevision }) } : {}), text: draft.text.trim(), attachments: draft.files.map((f) => f.remote!.id) },
         textVersion: draft.textVersion, fileIds: draft.files.map((f) => f.id), state: "pending",
       };
       // This durable record is the authorization to reconcile after restart.

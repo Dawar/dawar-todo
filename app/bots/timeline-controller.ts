@@ -1,7 +1,8 @@
 import { reconcileHistory, conversationEntries, orderedHistory } from "./history-reconcile";
+import { turnAudience, scheduleInput, humanInput, reportedFinding, projectConversationItem, type TurnAudience } from "../../lib/bot-conversation";
 import { historyBoundaries, retainHistory, retainedAttachments, CACHE_ENTRIES, CACHE_BYTES } from "./history-window";
 import { HISTORY_TEXT_LIMIT, conversationItem, historyTail, historyBefore, historyKey, projectHistoryItem, type HistoryEntry, type HistoryResponse, type HistoryDetail, type HistoryPosition, type HistoryGap } from "../../lib/bot-history-view";
-import type { BotAttachment, BotEvent } from "../../lib/bots-types";
+import type { BotAttachment, BotEvent, BotScheduledTurn, BotScheduledEventData } from "../../lib/bots-types";
 import type { ThreadItem } from "../../lib/codex-protocol/v2/ThreadItem";
 import type { Turn } from "../../lib/codex-protocol/v2/Turn";
 import { readOpenedDetail, saveOpenedDetail, updateOpenedDetailAttachments } from "./timeline-detail-cache";
@@ -24,6 +25,22 @@ type Cache = ReturnType<typeof createTimelineCache>;
 /** One owner/thread store and one refresh in flight, independent of React selection. */
 export class BotTimeline {
   private state = initial();
+  private attributed = new Map<string, string>();
+  private attributionCursor = -1;
+  /** Metadata invalidates projection; only a full native projection can prove
+   * absence of human input. Never hide a partial cached turn from a receipt. */
+  scheduled(turns: BotScheduledTurn[]) {
+    if (this.disposed || this.transport.owner !== this.owner) return;
+    let changed = false;
+    for (const turn of turns) {
+      if (turn.botId !== this.botId || !turn.turnId || !turn.runId) continue;
+      if (this.attributed.get(turn.turnId) === turn.runId) continue;
+      this.attributed.set(turn.turnId, turn.runId); changed = true;
+    }
+    while (this.attributed.size > 384) this.attributed.delete(this.attributed.keys().next().value!);
+    if (changed) { this.state = { ...this.state, revision: "" }; if (this.hydration) this.scheduleRefresh(); }
+  }
+  private turnAudiences = new Map<string, TurnAudience>();
   private aliases = new Map<string, string>();
   private identityAliases = new Map<string, string>();
   resolveKey = (key: string | null): string | null => {
@@ -32,7 +49,7 @@ export class BotTimeline {
     return key;
   };
   private normalize(entries: HistoryEntry[]) {
-    const reconciled = reconcileHistory(conversationEntries(entries));
+    const reconciled = reconcileHistory(conversationEntries(entries, this.turnAudiences));
     for (const [from, to] of reconciled.aliases) { this.aliases.set(from, to); this.identityAliases.set(from, to); }
     const kept = new Set(reconciled.entries.map((entry) => historyKey(entry.turnId, entry.id)));
     const successors: (HistoryEntry | undefined)[] = new Array(entries.length);
@@ -107,6 +124,11 @@ export class BotTimeline {
     for (const entry of normalized) if (existing.get(historyKey(entry.turnId, entry.id)) !== entry) this.dirty.set(historyKey(entry.turnId, entry.id), entry);
     this.state = { ...this.state, entries: normalized };
   }
+  private rememberPage(page: Extract<HistoryResponse, { kind: "page" }>) {
+    for (const value of page.activityTurns ?? []) this.turnAudiences.set(value.turnId, { kind: "activity", runId: value.runId, active: value.active });
+    for (const entry of page.entries) if (entry.audience)
+      this.turnAudiences.set(entry.turnId, { kind: entry.audience === "finding" ? "activity" : entry.audience, runId: entry.runId, active: entry.turnStatus === "inProgress" });
+  }
   /** A contiguous native page can extend or close previously evicted ranges. */
   private pageBoundaries(page: Extract<HistoryResponse, { kind: "page" }>, older = false) {
     const entries = this.state.entries, indices = new Map(entries.map((entry, index) => [historyKey(entry.turnId, entry.id), index]));
@@ -124,6 +146,7 @@ export class BotTimeline {
   }
   seed(turns: Turn[], attachments: BotAttachment[]) {
     if (this.state.cached || this.state.entries.length || !turns.length || this.disposed) return;
+    for (const turn of turns) this.turnAudiences.set(turn.id, { ...turnAudience(turn.items), active: turn.status === "inProgress" });
     const entries = historyTail(turns, turns.reduce((n, turn) => n + turn.items.length, 0));
     this.merge(entries);
     this.publish({ cached: true, attachments, olderCursor: entries.length ? historyBefore(entries[0]) : null }, true);
@@ -136,11 +159,13 @@ export class BotTimeline {
         if (!cached || this.disposed) return;
         const live = this.state.eventCursor;
         const liveDirty = new Map(this.dirty);
+        for (const { turnId, ...audience } of cached.metadata.turnAudiences ?? [])
+          if (!this.turnAudiences.has(turnId)) this.turnAudiences.set(turnId, audience);
         this.merge(cached.entries, true, -1); this.dirty = liveDirty;
         const m = cached.metadata; this.cachedKeys = new Set(m.order ?? []);
         const boundaries = historyBoundaries(this.state.entries, this.mapGaps(m.gaps ?? []), m.olderCursor, cached.entries);
-        this.publish({ revision: m.revision.endsWith(":conversation-v2") ? m.revision : "", eventCursor: Math.max(live, m.eventCursor), ...boundaries,
-          partialTurn: m.partialTurn, attachments: m.attachments, contextEntries: m.contextEntries ?? [], complete: m.complete && !boundaries.olderCursor && !boundaries.gaps.length, position: { ...(m.position ?? this.state.position), anchor: this.resolveKey(m.position?.anchor ?? null) }, cached: true }, true);
+        this.publish({ revision: m.revision.endsWith(":conversation-v4") ? m.revision : "", eventCursor: Math.max(live, m.eventCursor), ...boundaries,
+          partialTurn: m.partialTurn, attachments: m.attachments, contextEntries: conversationEntries(m.contextEntries ?? [], this.turnAudiences), complete: m.complete && !boundaries.olderCursor && !boundaries.gaps.length, position: { ...(m.position ?? this.state.position), anchor: this.resolveKey(m.position?.anchor ?? null) }, cached: true }, true);
         this.scheduleWrite();
       } catch (e) { this.publish({ error: `Offline history cache unavailable: ${String(e)}` }, true); }
     })();
@@ -158,6 +183,7 @@ export class BotTimeline {
         if (this.disposed || this.transport.owner !== this.owner) return;
         if (response.kind === "events") for (const event of response.events) this.receive(event);
         if (response.kind === "page") {
+          this.rememberPage(response);
           const known = new Set(this.state.entries.map((entry) => historyKey(entry.turnId, entry.id)));
           const clients = new Set(this.state.entries.flatMap((entry) => entry.item?.type === "userMessage" && entry.item.clientId ? [entry.item.clientId] : []));
           const overlaps = response.entries.some((entry) => known.has(historyKey(entry.turnId, entry.id)) || entry.item?.type === "userMessage" && entry.item.clientId && clients.has(entry.item.clientId));
@@ -189,6 +215,7 @@ export class BotTimeline {
       try {
         const page = await this.transport.rpc<HistoryResponse>("history.view", this.botId, { projection: "conversation", cursor });
         if (this.disposed || this.transport.owner !== this.owner || page.kind !== "page") return;
+        this.rememberPage(page);
         if (!page.entries.length && page.olderCursor === cursor) throw new Error("History pagination made no progress. Retry to reconnect these pages.");
         this.merge(page.entries, true, -1);
         this.publish({ partialTurn: page.partialTurn, ...this.pageBoundaries(page, true), attachments: mergeAttachments(this.state.attachments, page.attachments) }, true);
@@ -210,6 +237,7 @@ export class BotTimeline {
     try {
       const page = await this.transport.rpc<HistoryResponse>("history.view", this.botId, { projection: "conversation", cursor: direction > 0 ? JSON.stringify({ native: null, before: null, after: gap.stop }) : gap.cursor });
       if (this.disposed || this.transport.owner !== this.owner || page.kind !== "page") return;
+      this.rememberPage(page);
       const beforeKey = this.resolveKey(gap.before), stopKey = this.resolveKey(gap.stop);
       const boundary = this.state.entries.findIndex((entry) => historyKey(entry.turnId, entry.id) === beforeKey);
       const currentGap = this.state.gaps.find((value) => value.before === beforeKey && value.stop === stopKey);
@@ -262,7 +290,20 @@ export class BotTimeline {
     }, 1000));
   }
   receive(event: BotEvent) {
-    if (this.disposed || event.botId !== this.botId || event.seq <= this.state.eventCursor) return;
+    if (this.disposed || event.botId !== this.botId) return;
+    if (event.type === "schedules") {
+      if (event.seq <= this.attributionCursor) return;
+      this.attributionCursor = event.seq;
+      const data = event.data as BotScheduledEventData;
+      if (data.activeScheduledTurn) this.scheduled([data.activeScheduledTurn]);
+      // Even a previously seen receipt can now be terminal/acknowledged. A
+      // new projection heals an old cached classification without guessing.
+      if (data.runTurn?.botId === this.botId && data.runTurn.turnId) {
+        this.state = { ...this.state, revision: "" }; this.scheduleRefresh();
+      }
+      return;
+    }
+    if (event.seq <= this.state.eventCursor) return;
     if (event.type === "history.refresh") {
       const data = event.data as { reason?: string; method?: string; turnId?: string; itemId?: string; entry?: HistoryEntry; turn?: Turn };
       if (data.reason !== "large-native-event") { this.scheduleRefresh(); return; }
@@ -304,15 +345,35 @@ export class BotTimeline {
       if (next && next !== item) { this.detailItems.set(key, next.type === "reasoning" ? { ...next, content: [] } : next); }
     }
     if (!turnId) { this.publish({ eventCursor: event.seq }); return; }
+    if (p.item && scheduleInput(p.item)) {
+      const runId = p.item.type === "userMessage" ? p.item.clientId!.slice(9) : undefined;
+      const mixed = this.state.entries.some(entry => entry.turnId === turnId && entry.item && humanInput(entry.item));
+      this.turnAudiences.set(turnId, { kind: mixed ? "mixed" : "activity", runId, active: true });
+    } else if (p.item && humanInput(p.item) && this.turnAudiences.get(turnId)?.kind === "activity") {
+      this.turnAudiences.set(turnId, { ...this.turnAudiences.get(turnId)!, kind: "mixed" });
+      this.scheduleRefresh(); // Recover surrounding replies hidden before the human steered in.
+    }
+    if (p.turn?.items.some(scheduleInput)) this.turnAudiences.set(turnId, turnAudience(p.turn.items));
+    if (p.turn && this.turnAudiences.has(turnId)) this.turnAudiences.set(turnId, { ...this.turnAudiences.get(turnId)!, active: p.turn.status === "inProgress" });
     const update = (entry: HistoryEntry) => this.merge([{ ...entry, updatedSeq: event.seq }]);
     if (p.item && /item\/(started|completed)$/.test(method)) {
       const prior = this.state.entries.find((e) => e.turnId === turnId);
+      const audience = this.turnAudiences.get(turnId);
+      if (audience?.kind === "activity" && reportedFinding(p.item)) {
+        const entry = projectConversationItem({ id: turnId, startedAt: prior?.startedAt ?? Date.now() / 1000, status: prior?.turnStatus ?? "inProgress" }, p.item, audience);
+        if (entry) update(entry);
+      }
+      else
       update(projectHistoryItem({ id: turnId, startedAt: prior?.startedAt ?? Date.now() / 1000, status: prior?.turnStatus ?? "inProgress" }, p.item,
         prior?.scheduled || p.item.type === "userMessage" && Boolean(p.item.clientId?.startsWith("schedule:"))));
     } else if (p.turn && (method === "turn/completed" || method === "turn/started")) {
       for (const entry of this.state.entries) if (entry.turnId === turnId) update({ ...entry, status: p.turn.status, turnStatus: p.turn.status });
       if (method === "turn/completed") for (const entry of this.state.entries) if (entry.turnId === turnId) this.invalidateDetail(entry, event.seq);
-      for (const item of p.turn.items) update(projectHistoryItem(p.turn, item, p.turn.items.some((i) => i.type === "userMessage" && Boolean(i.clientId?.startsWith("schedule:")))));
+      for (const item of p.turn.items) {
+        const audience = this.turnAudiences.get(turnId) ?? turnAudience(p.turn.items);
+        const entry = projectConversationItem(p.turn, item, audience);
+        if (entry) update(entry);
+      }
       // Removing a tool-heavy live tail admits older readable turns and can
       // remove a gap's newest endpoint. Reconcile that boundary once, even
       // when native completion contains only sparse item/status information.
@@ -366,7 +427,12 @@ export class BotTimeline {
     const keys = new Set(tail.map((entry) => historyKey(entry.turnId, entry.id)));
     for (const entry of tail) if (!this.cachedKeys.has(historyKey(entry.turnId, entry.id))) dirtyMap.set(historyKey(entry.turnId, entry.id), entry);
     const dirty = [...dirtyMap.values()].filter((entry) => keys.has(historyKey(entry.turnId, entry.id)));
+    if (this.turnAudiences.size > 384) {
+      const retainedTurns = new Set(tail.map(entry => entry.turnId));
+      for (const [turnId, audience] of this.turnAudiences) if (!retainedTurns.has(turnId) && !audience.active && this.turnAudiences.size > 384) this.turnAudiences.delete(turnId);
+    }
     const metadata: TimelineMetadata = { owner: this.owner, botId: this.botId, order: tail.map((e) => historyKey(e.turnId, e.id)),
+      turnAudiences: [...this.turnAudiences].map(([turnId, audience]) => ({ turnId, ...audience })),
       partialTurn: this.state.partialTurn, revision: this.state.revision, eventCursor: this.state.eventCursor, olderCursor: retained.olderCursor,
       attachments, contextEntries: this.state.contextEntries, gaps: gaps.filter((gap) => keys.has(gap.before)), complete: tail.length === this.state.entries.length && this.state.complete, position: this.state.position, touched: Date.now() };
     this.writeVersion = this.metadataVersion;

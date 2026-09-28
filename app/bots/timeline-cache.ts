@@ -2,6 +2,7 @@ import { historyBefore, historyKey, type HistoryEntry, type HistoryPosition, typ
 import type { BotAttachment } from "../../lib/bots-types";
 
 export type TimelineMetadata = {
+  turnAudiences?: { turnId: string; kind: "conversation" | "activity" | "mixed"; runId?: string; active?: boolean }[];
   owner: string; botId: string; revision: string; eventCursor: number;
   order: string[]; partialTurn?: boolean; olderCursor: string | null; complete: boolean;
   attachments: BotAttachment[]; contextEntries?: HistoryEntry[]; gaps?: HistoryGap[]; position?: HistoryPosition; touched: number;

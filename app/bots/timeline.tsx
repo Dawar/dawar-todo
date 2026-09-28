@@ -10,6 +10,7 @@ import { ArrowDown, MessageCircle, CloudOff } from "lucide-react";
 import { LazyDetails } from "./lazy-details";
 import { useFeedScroll } from "./use-feed-scroll";
 import { ReturnedArtifacts } from "./returned-artifact";
+import type { ActivityTarget } from "./conversation-activity";
 
 const EntryBody = memo(function EntryBody({ entry, timeline, attachments, download }: {
   entry: HistoryEntry; timeline: BotTimeline; attachments: BotAttachment[]; download: (id: string) => void;
@@ -55,7 +56,7 @@ export const TimelineEntry = memo(function TimelineEntry(props: Parameters<typeo
 });
 
 /** Bounded body window; all preceding entries remain reachable through explicit pages. */
-export function BotConversation({ owner, bot, online, children }: { owner: string; bot: Bot; online: boolean; children?: ReactNode }) {
+export function BotConversation({ owner, bot, online, children, onOpenActivity }: { owner: string; bot: Bot; online: boolean; children?: ReactNode; onOpenActivity?: (target: ActivityTarget) => void }) {
   const { timeline, state } = useBotTimeline(owner, bot.id, online);
   const feed = useFeedScroll(timeline, state, online);
   const { first, last, scroll, content, showJump, paging, latest } = feed;
@@ -63,7 +64,7 @@ export function BotConversation({ owner, bot, online, children }: { owner: strin
   const groups = useMemo(() => {
     const result: { kind: string; entries: HistoryEntry[] }[] = [];
     for (const entry of state.entries.slice(first, last)) {
-      const kind = entry.scheduled ? `schedule:${entry.turnId}` : entry.type === "reasoning" ? `thinking:${entry.turnId}` : !entry.item ? `work:${entry.turnId}` : "message";
+      const kind = entry.type === "reasoning" ? `thinking:${entry.turnId}` : !entry.item ? `work:${entry.turnId}` : "message";
       const previous = result.at(-1);
       if (kind !== "message" && previous?.kind === kind) previous.entries.push(entry);
       else result.push({ kind, entries: [entry] });
@@ -95,15 +96,18 @@ export function BotConversation({ owner, bot, online, children }: { owner: strin
     {groups.map((group) => {
       const entry = group.entries[0], key = historyKey(entry.turnId, entry.id);
       const body = () => group.entries.map((value) => group.kind.startsWith("thinking:") ? <div key={value.id} data-history-key={historyKey(value.turnId, value.id)}><EntryBody entry={value} timeline={timeline} attachments={state.attachments} download={download} /></div> : <TimelineEntry key={historyKey(value.turnId, value.id)} entry={{ ...value, scheduled: false }} timeline={timeline} attachments={state.attachments} download={download} />);
-      const summary = group.kind.startsWith("schedule:") ? `Scheduled run · ${entry.status} · ${group.entries.map((e) => e.item?.type === "agentMessage" ? e.item.text : "").filter(Boolean).at(-1)?.slice(0, 110) ?? entry.label}`
-        : group.kind.startsWith("thinking:") ? "Thinking" : <><span>Work log</span><small>{group.entries.length} {group.entries.length === 1 ? "step" : "steps"}</small></>;
+      const summary = group.kind.startsWith("thinking:") ? "Thinking" : <><span>Work log</span><small>{group.entries.length} {group.entries.length === 1 ? "step" : "steps"}</small></>;
       return <Fragment key={key}>
+        {(entry.audience === "finding" || entry.audience === "mixed" && groups[groups.indexOf(group) - 1]?.entries[0].turnId !== entry.turnId) && <div className="bots-run-provenance">
+          <span>{entry.audience === "finding" ? "A finding from scheduled work" : entry.legacyContext ? "Earlier saved context" : "Conversation during scheduled work"}</span>
+          {onOpenActivity && <button onClick={() => onOpenActivity({ turnId: entry.turnId, runId: entry.runId })}>View full run</button>}
+        </div>}
         {(!online || state.error) && state.gaps.filter((gap) => group.entries.some((entry) => gap.before === historyKey(entry.turnId, entry.id))).map((gap) => <div className="bots-system-note" key={gap.before}>
           Some messages between these pages are not loaded. <button disabled={!online || paging} onClick={() => {
             feed.capture(); void timeline.fillGap(gap);
           }}>Load messages in between</button></div>)}
         {group.kind === "message" ? <TimelineEntry entry={entry} timeline={timeline} attachments={state.attachments} download={download} />
-          : <div data-history-key={key} style={{ position: "relative" }}>{group.entries.slice(1).map((value) => <span key={value.id} data-history-key={historyKey(value.turnId, value.id)} aria-hidden="true" style={{ position: "absolute", top: 0, height: 0, pointerEvents: "none" }} />)}<LazyDetails className={group.kind.startsWith("schedule:") ? "bots-turn is-scheduled" : "bots-activity"} summary={summary}>{body}</LazyDetails></div>}
+          : <div data-history-key={key} style={{ position: "relative" }}>{group.entries.slice(1).map((value) => <span key={value.id} data-history-key={historyKey(value.turnId, value.id)} aria-hidden="true" style={{ position: "absolute", top: 0, height: 0, pointerEvents: "none" }} />)}<LazyDetails className="bots-activity" summary={summary}>{body}</LazyDetails></div>}
         {group === groups.at(-1) || groups[groups.indexOf(group) + 1]?.entries[0].turnId !== entry.turnId ? <ReturnedArtifacts linked={linkedArtifacts} attachments={state.attachments} turnId={entry.turnId} botId={bot.id} /> : null}
       </Fragment>;
     })}

@@ -16,7 +16,6 @@ import {
   ArrowLeft,
   MoreHorizontal,
   ArrowUp,
-  ArrowDown,
   Paperclip,
   X,
   Square,
@@ -51,13 +50,14 @@ import { BotConversation } from "./timeline";
 import { BotSidebarList } from "./sidebar-list";
 import { RequestCard } from "./request-card";
 import { RunHistory } from "./run-history";
+import { ConversationActivity, type ActivityTarget } from "./conversation-activity";
 import { UsagePanel } from "./usage-panel";
 import { useBotComposer } from "./use-composer";
 import { ComposerAttachments, ComposerStatus } from "./composer-state";
 import { ComposerInput } from "./composer-input";
 import { ComposerSettings } from "./composer-settings";
 import { ArtifactGallery, BotAttachmentsEntry, ArtifactNav } from "./artifact-gallery";
-import { UploadThumbnail } from "./upload-thumbnail";
+import { PromptQueue } from "./prompt-queue";
 import "./bots.css";
 import "./chat-design.css";
 
@@ -121,6 +121,7 @@ export function BotsWorkspace() {
     [profile, setProfile] = useState(false),
     [gallery, setGallery] = useState<"artifacts" | "attachments" | null>(null),
     [showRunHistory, setShowRunHistory] = useState(false),
+    [activityTarget, setActivityTarget] = useState<ActivityTarget | null>(null),
     [showOverallUsage, setShowOverallUsage] = useState(false),
     [editingSchedule, setEditingSchedule] = useState<
       BotSchedule | "new" | null
@@ -376,16 +377,6 @@ export function BotsWorkspace() {
   }
   function editQueued(item: BotQueuedSubmission) { composer?.edit(item); }
   function cancelQueueEdit() { composer?.select("normal"); }
-  async function changeQueue(fn: () => Promise<unknown>) {
-    if (!bot) return;
-    await action(async () => {
-      try {
-        await fn();
-      } finally {
-        await loadQueue(bot.id);
-      }
-    });
-  }
   function upload(files: FileList | File[] | null) {
     if (files && composer?.ready) composer.addFiles(Array.from(files));
     if (fileRef.current) fileRef.current.value = "";
@@ -419,6 +410,10 @@ export function BotsWorkspace() {
   const filtered = useMemo(() => bots.filter((b) => b.archived === archived &&
     `${b.name} ${b.purpose}`.toLowerCase().includes(search.toLowerCase())), [bots, archived, search]);
   const schedules = snapshot?.schedules.filter((s) => s.botId === selected) ?? [];
+  const recentRuns = snapshot?.runs.filter(run => run.botId === selected) ?? [];
+  const activeScheduledTurns = snapshot?.activeScheduledTurns?.filter(turn => turn.botId === selected);
+  const scheduledActive = activeScheduledTurns ? activeScheduledTurns.length > 0 : recentRuns.some(run => ["running", "starting"].includes(run.status) && (!run.turnId || run.turnId === bot?.activeTurnId));
+  const openActivity = (target: ActivityTarget | null = null) => { setActivityTarget(target); setShowRunHistory(true); };
   return (
     <div className="bots-screen" ref={screenRef} data-no-pull-refresh>
       <SiteHeader current="bots" />
@@ -579,7 +574,8 @@ export function BotsWorkspace() {
             </div>
           ) : (
             <>
-              <BotConversation key={scope} owner={owner} bot={bot} online={online}>
+              <ConversationActivity runs={recentRuns} activeTurns={activeScheduledTurns} onOpen={openActivity} />
+              <BotConversation key={scope} owner={owner} bot={bot} online={online} onOpenActivity={openActivity}>
                 {pending.map((request) => (
                   <RequestCard
                     key={request.key}
@@ -593,7 +589,7 @@ export function BotsWorkspace() {
                     }
                   />
                 ))}
-                {(bot.status === "running" ||
+                {(!scheduledActive && bot.status === "running" ||
                   Boolean(bot.workerTasks?.active)) && (
                   <div className="bots-working">
                     <span />
@@ -611,60 +607,8 @@ export function BotsWorkspace() {
                 <>
                   <div className="bots-composer-support">
                     {snapshot && <ComposerSettings key={scope} bot={bot} snapshot={snapshot} online={online} />}
-                    {promptQueue.length > 0 && (
-                    <div className="bots-prompt-queue" role="region" aria-label="Queued prompts">
-                      <strong>Queued next</strong>
-                      {bot.queuePaused && (
-                        <div className="bots-queue-paused">
-                          Queue paused.
-                          <button type="button" disabled={!online || busy}
-                            onClick={() => void changeQueue(() => client.rpc("queue.resume", bot.id))}>
-                            Resume queue
-                          </button>
-                        </div>
-                      )}
-                      {promptQueue.map((item, index) => (
-                        <div className="bots-prompt-queue-item" key={item.id}>
-                          <span className="bots-queue-number">{index + 1}</span>
-                          <div className="bots-queue-content">
-                            <span>{item.input.flatMap((input) =>
-                              input.type === "text" && !input.text.startsWith("Attached file: ")
-                                ? [input.text] : []).join("\n") || "Attachments"}</span>
-                            {item.attachments.length > 0 && (
-                              <div className="bots-queue-attachments">
-                                {item.attachments.map((a) => (
-                                  <span key={a.id} title={a.name}>
-                                    {a.mimeType.startsWith("image/") && (
-                                      <UploadThumbnail botId={bot.id} attachmentId={a.id} online={online} />
-                                    )}
-                                    {a.name}
-                                  </span>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                          <div className="bots-queue-actions">
-                            <button type="button" aria-label={`Edit queued prompt ${index + 1}`}
-                              disabled={!composer?.ready || sending} onClick={() => editQueued(item)}><Pencil size={15} /></button>
-                            <button type="button" aria-label={`Move queued prompt ${index + 1} up`}
-                              disabled={!online || busy || index === 0}
-                              onClick={() => void changeQueue(() => client.rpc("queue.reorder", bot.id, {
-                                ids: promptQueue.map((x) => x.id).toSpliced(index - 1, 2, item.id, promptQueue[index - 1].id),
-                              }))}><ArrowUp size={15} /></button>
-                            <button type="button" aria-label={`Move queued prompt ${index + 1} down`}
-                              disabled={!online || busy || index === promptQueue.length - 1}
-                              onClick={() => void changeQueue(() => client.rpc("queue.reorder", bot.id, {
-                                ids: promptQueue.map((x) => x.id).toSpliced(index, 2, promptQueue[index + 1].id, item.id),
-                              }))}><ArrowDown size={15} /></button>
-                            <button type="button" aria-label={`Remove queued prompt ${index + 1}`}
-                              disabled={!online || busy}
-                              onClick={() => void changeQueue(() => client.rpc("queue.delete", bot.id, { id: item.id }))}>
-                              <Trash2 size={15} /></button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
+                    <PromptQueue key={scope} owner={owner} bot={bot} items={promptQueue} online={online}
+                      canEdit={Boolean(composer?.ready && !sending)} onEdit={editQueued} refresh={() => loadQueue(bot.id)} />
                   <ComposerStatus composer={composer} error={composerError} />
                   {composer && <ComposerAttachments composer={composer} />}
                   </div>
@@ -704,10 +648,12 @@ export function BotsWorkspace() {
                         if (
                           e.key === "Enter" &&
                           !e.shiftKey &&
-                          !e.nativeEvent.isComposing
+                          !e.nativeEvent.isComposing &&
+                          e.nativeEvent.keyCode !== 229
                         ) {
                           e.preventDefault();
-                          void send(Boolean(editingQueueId));
+                          if (e.repeat) return;
+                          void send(e.ctrlKey || Boolean(editingQueueId));
                         }
                       }}
                     />
@@ -719,8 +665,9 @@ export function BotsWorkspace() {
                           onClick={cancelQueueEdit}>Cancel edit</button>
                       )}
                       <button type="button" className="bots-icon-button bots-queue-icon"
-                        title={editingQueueId ? "Save queue" : "Queue next"}
+                        title={editingQueueId ? "Save queue (Ctrl+Enter)" : "Queue next (Ctrl+Enter)"}
                         aria-label={editingQueueId ? "Save queue" : "Queue next"}
+                        aria-keyshortcuts="Control+Enter"
                         disabled={!online || !canSend ||
                           (!draft.trim() && !uploads.length)}
                         onClick={() => void send(true)}>
@@ -858,7 +805,7 @@ export function BotsWorkspace() {
                 <Plus size={17} />
               </button>
             </div>
-            <button className="bots-history-open" onClick={() => setShowRunHistory(true)}><History size={16} /> View schedule history</button>
+            <button className="bots-history-open" onClick={() => openActivity()}><History size={16} /> Activity &amp; run history</button>
             {!schedules.length && (
               <p className="bots-muted">
                 Ask your bot to schedule something, or add a schedule here.
@@ -957,7 +904,7 @@ export function BotsWorkspace() {
           </aside>
         )}
       </main>
-      {showRunHistory && bot && <RunHistory bot={bot} schedules={schedules} attachments={[]} online={online} onClose={() => setShowRunHistory(false)} download={(id) => void download(id)} />}
+      {showRunHistory && bot && <RunHistory key={scope} bot={bot} schedules={schedules} recentRuns={recentRuns} initialTarget={activityTarget} attachments={[]} online={online} onClose={() => setShowRunHistory(false)} download={(id) => void download(id)} />}
       {showOverallUsage && <div className="bots-modal-backdrop" onClick={() => setShowOverallUsage(false)}><section className="bots-history-modal bots-usage-modal" role="dialog" aria-modal="true" aria-label="Codex account usage" onClick={(event) => event.stopPropagation()}><header><h2>Codex account usage</h2><button className="bots-icon-button" aria-label="Close account usage" onClick={() => setShowOverallUsage(false)}><X size={19} /></button></header><UsagePanel online={online} /></section></div>}
       {creating && (
         <div className="bots-modal-backdrop" onClick={() => setCreating(false)}>

@@ -1,4 +1,5 @@
 import { conversationItem, historyKey, type HistoryEntry } from '../../lib/bot-history-view';
+import { humanInput, scheduleInput, type TurnAudience } from '../../lib/bot-conversation';
 
 const clientId = (entry: HistoryEntry) => entry.item?.type === 'userMessage' ? entry.item.clientId || null : null;
 const provisional = (entry: HistoryEntry) => entry.id.startsWith('client:');
@@ -55,6 +56,31 @@ export function reconcileHistory(values: HistoryEntry[]) {
   }
   return { entries, aliases };
 }
-export function conversationEntries(entries: HistoryEntry[]) {
-  return entries.filter((entry) => conversationItem(entry.type) && entry.id !== 'live-turn-diff' || (entry.turnStatus ?? entry.status) === 'inProgress').filter((entry) => entry.item?.type !== 'reasoning' || (entry.turnStatus ?? entry.status) === 'inProgress' || entry.item.summary.some((text) => text.trim())).map((entry) => entry.item?.type === 'reasoning' && entry.item.content.length ? { ...entry, item: { ...entry.item, content: [] } } : entry);
+export function conversationEntries(entries: HistoryEntry[], audiences = new Map<string, TurnAudience>()): HistoryEntry[] {
+  // Full native projection supplies provenance. Old partial caches do not: keep
+  // ambiguous scheduled reply context visible until a full page classifies it.
+  for (const entry of entries) {
+    if (!audiences.has(entry.turnId) && !entry.legacyContext && (entry.audience === 'mixed' || entry.audience === 'conversation')) audiences.set(entry.turnId, { kind: entry.audience, runId: entry.runId });
+    if (entry.audience === 'finding' && !audiences.has(entry.turnId)) audiences.set(entry.turnId, { kind: 'activity', runId: entry.runId });
+  }
+  for (const entry of entries) if (entry.item && humanInput(entry.item) && audiences.get(entry.turnId)?.kind === 'activity')
+    audiences.set(entry.turnId, { ...audiences.get(entry.turnId)!, kind: 'mixed' });
+  // A repeated report is not a chronological overlap between native pages.
+  // Keep its newest loaded occurrence, without aliasing turns or reordering
+  // intervening human messages. Native key/clientId reconciliation is separate.
+  const findings = new Map(entries.filter(entry => entry.findingId).map(entry => [entry.findingId, entry]));
+  return entries.filter(entry => entry.audience === 'finding' || audiences.get(entry.turnId)?.kind !== 'activity')
+    .filter(entry => !entry.findingId || findings.get(entry.findingId) === entry)
+    .filter(entry => !entry.item || !scheduleInput(entry.item))
+    .filter(entry => !(entry.item?.type === 'userMessage' && entry.item.clientId?.startsWith('manager-notice:')))
+    .filter(entry => conversationItem(entry.type) && entry.id !== 'live-turn-diff' || (entry.turnStatus ?? entry.status) === 'inProgress')
+    .filter(entry => entry.item?.type !== 'reasoning' || (entry.turnStatus ?? entry.status) === 'inProgress' || entry.item.summary.some(text => text.trim()))
+    .map(entry => {
+      const audience = audiences.get(entry.turnId);
+      const item = entry.item?.type === 'reasoning' && entry.item.content.length ? { ...entry.item, content: [] } : entry.item;
+      const legacyContext = !audience && (entry.scheduled || entry.legacyContext);
+      const kind: HistoryEntry['audience'] = entry.audience === 'finding' ? 'finding' : audience?.kind === 'mixed' || legacyContext ? 'mixed' : entry.audience;
+      if (item === entry.item && !entry.scheduled && kind === entry.audience && (audience?.runId ?? entry.runId) === entry.runId && Boolean(legacyContext) === Boolean(entry.legacyContext)) return entry;
+      return { ...entry, item, scheduled: false, audience: kind, runId: audience?.runId ?? entry.runId, legacyContext: Boolean(legacyContext) };
+    });
 }

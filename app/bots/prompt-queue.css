@@ -1,0 +1,27 @@
+.bots-queue-panel > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.bots-queue-panel > header strong { display: flex; align-items: center; gap: 7px; font-size: 12px; }
+.bots-queue-panel > header strong span { display: inline-grid; place-items: center; min-width: 19px; height: 19px; border-radius: 50%; color: #5c7967; background: #edf4ee; font-size: 10px; }
+.bots-queue-panel > header > button { min-width: 34px; min-height: 34px; display: grid; place-items: center; color: #5b7c67; }
+.bots-queue-panel .bots-queue-content { min-width: 0; }
+.bots-queue-panel .bots-queue-status { margin: 5px 0 0; font-size: 11px; line-height: 1.5; color: #718277; }
+.bots-queue-panel .bots-queue-status strong { display: block; font-weight: 600; color: #446b53; }
+.bots-queue-panel .bots-queue-status.needs-attention strong { color: #92663f; }
+.bots-queue-panel .bots-queue-status > span { display: block; overflow-wrap: anywhere; }
+.bots-queue-panel .bots-queue-item-error { margin: 5px 0 0; color: #936950; font-size: 11px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 80px; overflow: auto; }
+.bots-queue-panel .bots-queue-actions button { width: 32px; height: 32px; min-width: 32px; display: grid; place-items: center; }
+.bots-queue-panel .bots-queue-actions { flex-wrap: wrap; justify-content: flex-end; max-width: 68px; }
+.bots-queue-panel .bots-queue-explanation, .bots-queue-panel .bots-queue-action-note { font-size: 11px; line-height: 1.5; color: #697f70; }
+.bots-queue-panel .bots-queue-action-note { padding: 9px 11px; border-radius: 9px; background: #f4f7f4; margin: 6px 0; overflow-wrap: anywhere; }
+.bots-queue-panel .bots-queue-action-note p { margin: 0; }
+.bots-queue-panel .bots-queue-action-note.is-error { color: #926348; background: #fff5ec; }
+.bots-queue-panel .bots-queue-action-note button { min-height: 34px; font-weight: 600; color: #356d4b; }
+.bots-queue-panel .bots-queue-paused { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
+.bots-queue-panel button:disabled { opacity: .4; cursor: not-allowed; }
+.bots-queue-panel button:focus-visible { outline: 2px solid #4c9970; outline-offset: 2px; }
+.bots-prompt-queue.bots-queue-panel { width: min(calc(100% - 36px), 860px); }
+
+@media (pointer: coarse) {
+  .bots-queue-panel .bots-queue-actions { max-width: 92px; flex: 0 0 92px; }
+  .bots-queue-panel .bots-queue-actions button { width: 44px; height: 44px; min-width: 44px; }
+  .bots-queue-panel > header > button, .bots-queue-panel .bots-queue-action-note button, .bots-queue-panel .bots-queue-paused button { min-width: 44px; min-height: 44px; }
+}
