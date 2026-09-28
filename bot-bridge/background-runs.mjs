@@ -626,6 +626,18 @@ export class BackgroundRuns {
     const lane = this.lane(bot.id, p.runId);
     if (!["prepared", "bound"].includes(lane.provisioning) || activityUnresolved(this.port(lane.id), bot.id) || this.store.executionMetadata("runIntake", bot.id).some(r => r.laneId === lane.id && ["dispatching", "uncertain"].includes(r.state)))
       throw new Error("Resolve this run's unknown execution before resuming queued work. Nothing was replayed.");
+    // A stop ACK only accepts the interrupt; its terminal notification may
+    // still pause this exact turn. Resume must follow that projection (or a
+    // fenced current-idle proof), never acknowledge intent it can later undo.
+    // Also retain unidentified/uncertain original targets: a later stop
+    // reconciliation must not interrupt them after a successful resume.
+    if (this.store.list("executionStop", bot.id).some(stop => stop.targets.some(target =>
+      target.kind === "run" && target.laneId === lane.id && target.state !== "done")))
+      throw new Error("This run's original stop is still settling. Nothing was resumed; retry Resume after its interruption is confirmed.");
+    const activity = this.store.get("runActivity", lane.id);
+    if (lane.provisioning === "bound" && (lane.activeTurnId !== null || !activity ||
+        activity.unresolved !== false || activity.activeTurnId !== null))
+      throw new Error("Wait for this run's current turn to finish and its activity to be confirmed before resuming queued work. Nothing was resumed.");
     setAdmissionPause(this.store, run, false, operationId);
     this.store.put("runLane", { ...lane, paused: false, pauseRevision: (lane.pauseRevision ?? 0) + 1, reconcileAfter: null });
     for (const notice of this.store.list("managerNotice", bot.id)) if (notice.destination?.laneId === lane.id && notice.state === "held" && !this.store.operation(notice.operationId))
