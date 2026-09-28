@@ -1709,11 +1709,18 @@ export class BotRuntime extends EventEmitter {
                 threadId: current.threadId, includeTurns: true,
               });
               const latest = await this.latestNativeTurn(current, thread);
-              if (!activityUnchanged(this, bot.id, activity)) return;
+              if (!activityUnchanged(this, bot.id, activity)) {
+                retainAcceptedActivity(this, bot.id, latest);
+                if (thread.status?.type === "active" && latest?.status !== "inProgress")
+                  requireCurrentActivity(this, bot.id, null, "native-busy-without-current-turn");
+                return;
+              }
               const active = thread.status?.type === "active" ||
                 (!thread.status && latest?.status === "inProgress");
-              if (active && latest?.status !== "inProgress")
+              if (active && latest?.status !== "inProgress") {
+                requireCurrentActivity(this, bot.id, null, "native-busy-without-current-turn");
                 throw new Error("An active native turn could not be identified.");
+              }
               if (active) {
                 this.projectActiveTurn(bot.id, latest, activity, { error: null });
                 this.recordScheduledEvidence(bot.id, latest);
@@ -1735,7 +1742,12 @@ export class BotRuntime extends EventEmitter {
                   this.queueList(current),
                 ]);
                 const latest = await this.latestNativeTurn(current, thread);
-                if (!activityUnchanged(this, bot.id, recoveryActivity)) return;
+                if (!activityUnchanged(this, bot.id, recoveryActivity)) {
+                  retainAcceptedActivity(this, bot.id, latest);
+                  if (thread.status?.type === "active" && latest?.status !== "inProgress")
+                    requireCurrentActivity(this, bot.id, null, "native-busy-without-current-turn");
+                  return;
+                }
                 const active = thread.status?.type === "active" ||
                   (!thread.status && latest?.status === "inProgress");
                 if (active && latest?.status === "inProgress") {
@@ -1743,6 +1755,7 @@ export class BotRuntime extends EventEmitter {
                   this.recordScheduledEvidence(bot.id, latest);
                   return;
                 }
+                if (active) requireCurrentActivity(this, bot.id, null, "native-busy-without-current-turn");
                 if (first && !remaining.some((item) => item.id === first.id) ||
                     /active or pending turn/i.test(error.message)) return;
               } catch {
