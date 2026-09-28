@@ -13,6 +13,8 @@ import { fileURLToPath } from "node:url";
 import { MANAGER_TOOLS, WORKER_INSTRUCTIONS } from "./manager-tools.mjs";
 import { validateResponse } from "./runtime.mjs";
 import { slugify, cleanName } from "./profiles.mjs";
+import { finishTask, ensureNotice, repairTerminalNotices, deliverNotices } from "./manager-outbox.mjs";
+import { findNativeTurn } from "./native-reconcile.mjs";
 
 const exec = promisify(execFile);
 const now = () => new Date().toISOString();
@@ -240,6 +242,14 @@ export class CodexManager {
           `Operation ${opId} is ${prior.state}: ${prior.error ?? "Inspect status before any retry."}`,
         );
       }
+      if (!this.runtime.ready) throw new Error("Native context recovery is still in progress; retry this same operation after readiness.");
+      const delegates = name === "codex_tasks" && args.operation === "delegate" ||
+        name === "codex_threads" && args.operation === "message";
+      if (delegates && this.runtime.activityUnresolved(botId))
+        throw new Error("Current native activity is unresolved; delegation attribution will be available after read-only recovery.");
+      if (delegates && this.runtime.scheduledUncertain(botId) &&
+          !this.runtime.scheduledContext(botId))
+        throw new Error("Scheduled context is not yet identified; retry this same delegation after native reconciliation.");
       const operation = {
         id,
         botId,
@@ -697,7 +707,8 @@ export class CodexManager {
       id,
       botId: bot.id,
       requestedBy: bot.threadId,
-      scheduledRunId: this.store.get("activeRun", bot.id)?.runId ?? null,
+      requestedByTurnId: this.store.bot(bot.id).activeTurnId ?? null,
+      scheduledRunId: this.runtime.scheduledContext(bot.id)?.runId ?? null,
       name: cleanName(p.name),
       prompt,
       context: p.context ?? "",
@@ -727,12 +738,14 @@ export class CodexManager {
             : await this.createWorktree(bot, p, `${id}-tree`);
         worker = await this.createWorker(bot, p, `${id}-worker`, worktree);
       }
-      return this.put("managerTask", {
-        ...task,
-        workerId: worker.id,
-        state: this.store.bot(bot.id).managerPaused ? "cancelled" : "queued",
+      return this.store.transaction(() => {
+        const saved = this.put("managerTask", { ...task, workerId: worker.id, state: "queued" });
+        return this.store.bot(bot.id).managerPaused
+          ? this.finish(saved, "cancelled", "Stopped by the human during worker provisioning.") : saved;
       });
     } catch (error) {
+      const committed = this.store.get("managerTask", task.id);
+      if (terminal.has(committed?.state)) return committed;
       this.put("managerTask", {
         ...task,
         workerId:
@@ -931,47 +944,10 @@ export class CodexManager {
     }
   }
   notice(botId, key, text, runId = null) {
-    const id = createHash("sha256").update(`${botId}:${key}`).digest("hex");
-    if (!this.store.get("managerNotice", id))
-      this.store.put("managerNotice", {
-        id,
-        botId,
-        state: this.store.bot(botId).managerPaused ? "held" : "queued",
-        text,
-        runId,
-        createdAt: now(),
-      });
+    return ensureNotice(this, botId, key, text, runId);
   }
   finish(task, state, error, turn) {
-    const saved = this.put("managerTask", {
-      ...task,
-      state,
-      error,
-      resultSummary: resultText(turn) || task.resultSummary || "",
-      finishedAt: now(),
-    });
-    const worker = this.store.get("managerWorker", task.workerId);
-    if (worker && (!worker.activeTurnId || worker.activeTurnId === task.turnId))
-      this.put("managerWorker", {
-        ...worker,
-        activeTurnId: null,
-        state: state === "completed" ? "completed" : "waiting",
-        lastTaskId: task.id,
-      });
-    if (state !== "completed")
-      for (const pending of this.store.list("managerRequest", task.botId))
-        if (
-          pending.workerId === task.workerId &&
-          pending.request.params.turnId === task.turnId
-        )
-          this.store.remove("managerRequest", pending.id);
-    this.notice(
-      task.botId,
-      `task:${task.id}:${state}`,
-      `Worker task ${task.name} (${task.id}) is ${state}. ${error ?? ""} Use codex_tasks collectResult to inspect native evidence, review it and continue the human's request.`,
-      task.scheduledRunId,
-    );
-    return saved;
+    return finishTask(this, task, state, error, turn);
   }
   continueTask(task, reply) {
     return this.put("managerTask", {
@@ -984,6 +960,8 @@ export class CodexManager {
         Boolean,
       ),
       dispatchKey: `${task.id}-reply-${randomUUID()}`,
+      completionNoticeId: null, finishedAt: null, collectedAt: null,
+      reconcileCursor: null, reconcileAfter: null, lastNativeStatus: null,
     });
   }
   completeTask(task, turn) {
@@ -1036,7 +1014,9 @@ export class CodexManager {
         .find(
           (t) =>
             t.workerId === worker.id &&
-            (t.turnId === p.turn.id || (t.state === "starting" && !t.turnId)),
+            (t.turnId === p.turn.id || (t.state === "starting" && !t.turnId &&
+              (worker.activeTurnId === p.turn.id || p.turn.items?.some(item =>
+                item.type === "userMessage" && item.clientId === `manager-task:${t.dispatchKey ?? t.id}`)))),
         );
       if (task) this.completeTask(task, p.turn);
       for (const pending of this.store.list("managerRequest", worker.botId))
@@ -1225,49 +1205,43 @@ export class CodexManager {
         state: worker.activeTurnId ? "waiting" : worker.state,
       });
     }
-    for (const task of this.store.list("managerTask")) {
-      if (
-        !["starting", "running", "uncertain", "provisioning"].includes(
-          task.state,
-        )
-      )
-        continue;
-      const worker = this.store.get(
-        "managerWorker",
-        task.workerId ?? `${task.id}-worker`,
-      );
+    repairTerminalNotices(this);
+    await this.reconcileTasks(100);
+  }
+  async reconcileTasks(limit = 2) {
+    const candidates = this.store.list("managerTask").filter(task =>
+      ["starting", "running", "uncertain", "provisioning"].includes(task.state) &&
+      (!task.reconcileAfter || Date.parse(task.reconcileAfter) <= Date.now()));
+    for (const task of candidates.slice(0, limit)) {
+      const worker = this.store.get("managerWorker", task.workerId ?? `${task.id}-worker`);
       if (!task.workerId && worker) task.workerId = worker.id;
+      const delay = { reconcileAfter: new Date(Date.now() + 60000).toISOString(), checkedAt: now() };
       try {
-        if (!worker?.threadId)
-          throw new Error("Worker creation needs reconciliation.");
-        const { thread } = await this.codex.call("thread/read", {
-          threadId: worker.threadId,
-          includeTurns: true,
+        if (!worker?.threadId) throw new Error("Worker creation needs reconciliation.");
+        const found = await findNativeTurn(this.runtime, worker.threadId, { turnId: task.turnId,
+          clientId: `manager-task:${task.dispatchKey ?? task.id}`, cursor: task.reconcileCursor ?? null });
+        const current = this.store.get("managerTask", task.id);
+        if (!["starting", "running", "uncertain", "provisioning"].includes(current.state) ||
+            (current.dispatchKey ?? current.id) !== (task.dispatchKey ?? task.id)) continue;
+        if (found.turn && terminal.has(found.turn.status)) this.completeTask(current, found.turn);
+        else if (found.turn?.status === "inProgress") this.store.transaction(() => {
+          this.put("managerTask", { ...current, ...delay, state: "running", turnId: found.turn.id,
+            reconcileCursor: null, error: null, lastNativeStatus: "inProgress" });
+          this.put("managerWorker", { ...this.owned("managerWorker", worker.id, task.botId),
+            activeTurnId: found.turn.id, state: this.store.list("managerRequest", task.botId)
+              .some(request => request.workerId === worker.id) ? "waiting" : "active" });
         });
-        const turn = thread.turns.find(
-          (t) =>
-            t.id === task.turnId ||
-            t.items?.some(
-              (i) =>
-                i.clientId === `manager-task:${task.dispatchKey ?? task.id}`,
-            ),
-        );
-        if (turn && terminal.has(turn.status)) this.completeTask(task, turn);
-        else
-          throw new Error(
-            "Execution outcome is uncertain after restart; inspect native history before acknowledging or retrying.",
-          );
+        else {
+          this.put("managerTask", { ...current, ...delay, state: "uncertain", reconcileCursor: found.nextCursor,
+            error: "Native execution has not been identified; no new dispatch was made." });
+          this.notice(task.botId, `uncertain:${task.id}:${task.dispatchKey ?? task.id}`,
+            `Worker task ${task.name} (${task.id}) needs native reconciliation. Inspect codex_tasks status; do not rerun it blindly.`, task.scheduledRunId);
+        }
       } catch (error) {
-        this.put("managerTask", {
-          ...task,
-          state: "uncertain",
-          error: error.message,
-        });
-        this.notice(
-          task.botId,
-          `uncertain:${task.id}`,
-          `Worker task ${task.name} (${task.id}) needs reconciliation after restart. Inspect codex_tasks status and native history; do not rerun it blindly.`,
-        );
+        const current = this.store.get("managerTask", task.id);
+        if (!["starting", "running", "uncertain", "provisioning"].includes(current.state) ||
+            (current.dispatchKey ?? current.id) !== (task.dispatchKey ?? task.id)) continue;
+        this.put("managerTask", { ...current, ...delay, state: "uncertain", error: error.message });
       }
     }
   }
@@ -1322,6 +1296,8 @@ export class CodexManager {
           ...task,
           state: "starting",
           startedAt: now(),
+          reconcileAfter: new Date(Date.now() + 60000).toISOString(),
+          dispatchOperationId: `manager-task:${task.dispatchKey ?? task.id}`,
         });
         try {
           await this.loadWorker(worker);
@@ -1342,6 +1318,11 @@ export class CodexManager {
             approvalPolicy: "never",
             sandboxPolicy: { type: "dangerFullAccess" },
             ...this.runtime.settings(this.store.bot(task.botId), task),
+            collaborationMode: { mode: "default", settings: {
+              model: this.runtime.settings(this.store.bot(task.botId), task).model,
+              reasoning_effort: this.runtime.settings(this.store.bot(task.botId), task).effort,
+              developer_instructions: null,
+            } },
             additionalContext: {
               managerTask: {
                 kind: "application",
@@ -1376,10 +1357,12 @@ export class CodexManager {
               turnId: turn.id,
             });
         } catch (error) {
-          if (error.definite) this.finish(task, "failed", error.message);
+          const current = this.store.get("managerTask", task.id);
+          if (terminal.has(current.state) || current.state === "waiting" || current.dispatchKey !== task.dispatchKey) continue;
+          if (error.definite) this.finish(current, "failed", error.message);
           else {
             this.put("managerTask", {
-              ...task,
+              ...current,
               state: "uncertain",
               error: error.message,
             });
@@ -1391,58 +1374,9 @@ export class CodexManager {
           }
         }
       }
-      for (const notice of this.store
-        .list("managerNotice")
-        .filter((n) => n.state === "queued")) {
-        const bot = this.store.bot(notice.botId);
-        if (
-          bot.archived ||
-          bot.managerPaused ||
-          bot.activeTurnId ||
-          this.runtime.locks.has(bot.id) ||
-          this.store.list("pending", bot.id).length
-        )
-          continue;
-        const operationId = `manager-notice:${notice.id}`;
-        const prior = this.store.operation(operationId);
-        if (prior) {
-          this.store.put("managerNotice", {
-            ...notice,
-            state: prior.status === "done" ? "delivered" : "uncertain",
-          });
-          if (prior.status !== "done")
-            this.runtime.notify(
-              bot,
-              `manager-notice:${notice.id}`,
-              "Worker results need review; open this bot to continue.",
-            );
-          continue;
-        }
-        try {
-          await this.runtime.handle({
-            method: "turn.send",
-            botId: bot.id,
-            operationId,
-            params: { text: `[Manager update]\n${notice.text}` },
-          });
-          this.store.put("managerNotice", {
-            ...notice,
-            state: "delivered",
-            deliveredAt: now(),
-          });
-        } catch (error) {
-          this.store.put("managerNotice", {
-            ...notice,
-            state: "uncertain",
-            error: error.message,
-          });
-          this.runtime.notify(
-            bot,
-            `manager-notice:${notice.id}`,
-            "Worker results need review; open this bot to continue.",
-          );
-        }
-      }
+      repairTerminalNotices(this);
+      await deliverNotices(this);
+      await this.reconcileTasks();
       for (const worker of this.store.list("managerWorker"))
         await this.syncSection(worker);
     } finally {

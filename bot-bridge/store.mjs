@@ -11,6 +11,8 @@ export class Store {
       CREATE TABLE IF NOT EXISTS bots(id TEXT PRIMARY KEY, slug TEXT UNIQUE NOT NULL, thread_id TEXT UNIQUE, json TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS records(kind TEXT NOT NULL, id TEXT NOT NULL, bot_id TEXT, json TEXT NOT NULL, PRIMARY KEY(kind,id));
       CREATE INDEX IF NOT EXISTS records_bot ON records(kind,bot_id);
+      CREATE INDEX IF NOT EXISTS run_turn_page ON records(bot_id,json_extract(json,'$.runId'),id) WHERE kind='runTurn';
+      CREATE INDEX IF NOT EXISTS run_turn_identity ON records(kind,bot_id,json_extract(json,'$.turnId')) WHERE kind IN ('run','runTurn');
       CREATE INDEX IF NOT EXISTS history_attachment_path ON records(bot_id,json_extract(json,'$.path'),id)
         WHERE kind='attachment' AND json_extract(json,'$.ready')=1;
       CREATE INDEX IF NOT EXISTS history_attachment_item ON records(bot_id,json_extract(json,'$.provenance.turnId'),json_extract(json,'$.provenance.itemId'),COALESCE(json_extract(json,'$.provenance.threadId'),''),id)
@@ -105,6 +107,16 @@ export class Store {
         status: r.status,
       }));
   }
+  unconfirmedModeIntent(botId, since) {
+    // Older bridges used status=failed for some transport/local exceptions;
+    // only a proven rejected outcome makes those settings safe to supersede.
+    return Boolean(this.db.prepare(`SELECT 1 FROM operations
+      WHERE status <> 'done' AND COALESCE(json_extract(json,'$.outcome'),'uncertain') <> 'rejected'
+      AND json_extract(json,'$.method')='bots.update' AND json_extract(json,'$.botId')=?
+      AND json_extract(json,'$.createdAt')>=?
+      AND json_type(json,'$.params.mode') IS NOT NULL
+      LIMIT 1`).get(botId, since));
+  }
   event(event) {
     const result = this.db
       .prepare("INSERT INTO events(json) VALUES(?)")
@@ -129,15 +141,37 @@ export class Store {
       .map((r) => ({ seq: Number(r.seq), ...JSON.parse(r.json) }));
   }
   transaction(fn) {
-    this.db.exec("BEGIN IMMEDIATE");
+    const depth = this.transactionDepth ?? 0;
+    const mark = this.commitCallbacks?.length ?? 0;
+    this.commitCallbacks ??= [];
+    this.db.exec(depth ? `SAVEPOINT nested_${depth}` : "BEGIN IMMEDIATE");
+    this.transactionDepth = depth + 1;
+    let result;
     try {
-      const result = fn();
-      this.db.exec("COMMIT");
-      return result;
+      result = fn();
+      if (result && typeof result.then === "function")
+        throw new Error("Store transactions must be synchronous.");
+      this.db.exec(depth ? `RELEASE nested_${depth}` : "COMMIT");
     } catch (e) {
-      this.db.exec("ROLLBACK");
+      this.db.exec(depth ? `ROLLBACK TO nested_${depth}; RELEASE nested_${depth}` : "ROLLBACK");
+      this.commitCallbacks.length = mark;
       throw e;
+    } finally {
+      this.transactionDepth = depth;
     }
+    // Publication happens only after the durable commit. A listener failure
+    // must not attempt to roll back an already committed transaction.
+    if (!depth) {
+      const callbacks = this.commitCallbacks.splice(0);
+      let failure;
+      for (const callback of callbacks) try { callback(); } catch (error) { failure ??= error; }
+      if (failure) throw failure;
+    }
+    return result;
+  }
+  afterCommit(callback) {
+    if (this.transactionDepth) this.commitCallbacks.push(callback);
+    else callback();
   }
   close() {
     this.db.close();
