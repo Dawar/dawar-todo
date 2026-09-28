@@ -1,5 +1,6 @@
 import { readBotHistory, queueBotHistory, type CachedBotHistory } from "./history-cache.ts";
 import { botFailureOutcome } from "../../lib/bots-response.ts";
+import { validRunState } from "./run-context";
 import type { BotOperations } from "../../lib/bots-operations";
 import type {
   BotEvent,
@@ -51,7 +52,7 @@ function snapshotEventKey(event: BotEvent) {
 function applySnapshotEvent(snapshot: BotSnapshot, event: BotEvent, key?: string): BotSnapshot {
   if (event.type === "run.state" && event.botId && snapshot.capabilities?.backgroundRunLanes === 1) {
     const data = event.data as BotRunStateEvent;
-    if (!data.runId || !data.laneId || !data.threadId || data.run?.id !== data.runId || data.run.botId !== event.botId || !data.background || data.background.botId && data.background.botId !== event.botId) return snapshot;
+    if (!validRunState(data, event.botId)) return snapshot;
     if (key?.startsWith("background:")) return { ...snapshot, backgroundByBot: [...(snapshot.backgroundByBot ?? []).filter(value => value.botId !== event.botId), { ...data.background, botId: event.botId }] };
     return { ...snapshot, runs: [data.run, ...snapshot.runs.filter(run => run.id !== data.runId)].slice(0, 100) };
   }

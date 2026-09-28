@@ -8,6 +8,8 @@ import { TimelineEntry } from "./timeline";
 import { RunTurnPicker } from "./run-turn-picker";
 import { ReturnedArtifacts } from "./returned-artifact";
 import { RunPageRead } from "./run-page-read";
+import { runNeedsBinding, validRunState } from "./run-context";
+import { runHistoryRefresh } from "./run-history-refresh";
 import { updateRunPage } from "./run-page-events";
 import { useRunScroll } from "./use-run-scroll";
 import { RunComposer } from "./run-composer";
@@ -21,7 +23,7 @@ import type { ActivityTarget } from "./conversation-activity";
 const validDate = (value: string | null) => value && Number.isFinite(Date.parse(value)) ? new Date(value) : null;
 const stamp = (value: string | null) => validDate(value)?.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) ?? "Date unavailable";
 const day = (value: string) => validDate(value)?.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric", year: "numeric" }) ?? "Date unavailable";
-const labels: Record<string, string> = { queued: "Queued", starting: "Starting", running: "In progress", completed: "Finished", failed: "Needs attention", uncertain: "Needs review", interrupted: "Interrupted", acknowledged: "Reviewed", cancelled: "Cancelled", skipped: "Skipped" };
+const labels: Record<string, string> = { paused: "Paused", queued: "Queued", starting: "Starting", running: "In progress", completed: "Finished", failed: "Needs attention", uncertain: "Needs review", interrupted: "Interrupted", acknowledged: "Reviewed", cancelled: "Cancelled", skipped: "Skipped" };
 const needsAttention = (run: BotRun) => ["failed", "uncertain", "interrupted"].includes(run.status) || run.activity?.state === "waiting-input" || run.activity?.state === "uncertain";
 // Deliberately omit native prompts/private internals from this disposable cache.
 const compactRun = (run: BotRun): BotRun => ({ id: run.id, botId: run.botId, scheduleId: run.scheduleId, title: run.title,
@@ -49,6 +51,8 @@ export function RunHistory({ bot, schedules, attachments, online, onClose, downl
   const [runCursors, setRunCursors] = useState<(string | null)[]>([null]), [runPage, setRunPage] = useState(0);
   const [newActivity, setNewActivity] = useState(false);
   const [target, setTarget] = useState<ActivityTarget | null>(initialTarget ?? null);
+  const selectedRun = [...runs, ...recentRuns, ...(saved?.runs ?? [])].find(run => target?.runId ? run.id === target.runId : !!target?.turnId && run.turnId === target.turnId);
+  const unbound = !!(lanes && selectedRun && runNeedsBinding(selectedRun));
   const [transcript, setTranscriptState] = useState<HistoryPage | null>(null);
   const transcriptRef = useRef<HistoryPage | null>(null);
   const setTranscript = useCallback((value: HistoryPage | null | ((page: HistoryPage | null) => HistoryPage | null)) => {
@@ -100,7 +104,7 @@ export function RunHistory({ bot, schedules, attachments, online, onClose, downl
       if (value.botId !== bot.id || botsClient.owner !== owner) return;
       if (lanes && value.type.startsWith("run.")) {
         const data = value.data as Partial<BotRunStateEvent>;
-        if (!data.runId || !data.laneId || !data.threadId || value.seq <= (runSequences.current.get(`${value.type}:${data.runId}`) ?? -1)) return;
+        if (!data.runId || (value.type === "run.state" ? !validRunState(data, bot.id) : !data.laneId || !data.threadId) || value.seq <= (runSequences.current.get(`${value.type}:${data.runId}`) ?? -1)) return;
         runSequences.current.set(`${value.type}:${data.runId}`, value.seq);
         if (runSequences.current.size > 100) runSequences.current.delete(runSequences.current.keys().next().value!);
         if (value.type === "run.state" && data.run?.id === data.runId && data.run.botId === bot.id) {
@@ -109,7 +113,7 @@ export function RunHistory({ bot, schedules, attachments, online, onClose, downl
           setRuns(current => current.some(run => run.id === data.runId) ? current.map(run => run.id === data.runId ? compactRun(data.run!) : run) : current);
         }
         if (!targetRef.current || targetRef.current.runId === data.runId) setNewActivity(true);
-        if (value.type === "run.codex" && targetRef.current?.runId === data.runId) {
+        if ((value.type === "run.codex" || runHistoryRefresh(value)) && targetRef.current?.runId === data.runId) {
           const read = pendingRead.current;
           if (read?.owner === owner && read.identity === selectedRef.current.identity && read.generation === generation.current) read.record(value);
           const identity = selectedRef.current.identity, request = generation.current;
@@ -139,7 +143,7 @@ export function RunHistory({ bot, schedules, attachments, online, onClose, downl
   }, [bot.id, load, online, valid, lanes, owner, setTranscript]);
   useEffect(() => { if (!listBusy && refreshAgain.current) { refreshAgain.current = false; void Promise.resolve().then(() => load(currentListCursor.current)); } }, [listBusy, load]);
   useEffect(() => {
-    if (!target) return;
+    if (!target || unbound) return;
     const request = ++generation.current, identity = selectedIdentity;
     let canceled = false;
     let evidence: RunPageRead | null = null;
@@ -147,7 +151,7 @@ export function RunHistory({ bot, schedules, attachments, online, onClose, downl
       if (canceled || !valid()) return;
       const changedPart = identity !== detailIdentity.current;
       // A refresh must never replace an already newer page with its old cache.
-      if (changedPart) {
+      if (changedPart || !transcriptRef.current) {
         setTranscript(lanes && target.runId ? savedRunPage(owner, bot.id, target.runId, target.turnId, pageCursors[detailPage]) : null);
         detailIdentity.current = identity;
       }
@@ -175,7 +179,7 @@ export function RunHistory({ bot, schedules, attachments, online, onClose, downl
         if (botsClient.owner === owner && request === generation.current) setDetailBusy(false);
       });
     return () => { canceled = true; evidence?.release(); if (pendingRead.current === evidence) pendingRead.current = null; };
-  }, [bot.id, detailPage, online, owner, pageCursors, target, valid, lanes, selectedIdentity, setTranscript]);
+  }, [bot.id, detailPage, online, owner, pageCursors, target, valid, lanes, selectedIdentity, setTranscript, unbound]);
   const open = (run: BotRun) => {
     if (!run.turnId && !lanes) return;
     savedScroll.current = body.current?.scrollTop ?? 0;
@@ -208,7 +212,7 @@ export function RunHistory({ bot, schedules, attachments, online, onClose, downl
     }
     return [...groups];
   }, [filter, runs]);
-  const selectedRun = [...runs, ...recentRuns, ...(saved?.runs ?? [])].find(run => target?.runId ? run.id === target.runId : !!target?.turnId && run.turnId === target.turnId);
+  const bound = !unbound && !!(selectedRun?.threadId || selectedRun?.turnId || transcript?.context?.runId === target?.runId && transcript?.context?.threadId);
   const linked = useMemo(() => new Set(transcript?.entries.flatMap(entry => entry.item?.type === "agentMessage" ? [...entry.item.text.matchAll(/\]\(<?bot-artifact:([^\s)>]+)/g)].map(match => match[1]) : []) ?? []), [transcript]);
   return <div className="bots-modal-backdrop bots-activity-backdrop" onClick={onClose}>
     <section className="bots-run-library" role="dialog" aria-modal="true" aria-label={`${bot.name} activity`} onClick={event => event.stopPropagation()}>
@@ -223,13 +227,14 @@ export function RunHistory({ bot, schedules, attachments, online, onClose, downl
         {target ? <>
           <button className="bots-run-back" onClick={back}><ArrowLeft size={16} />All activity</button>
           <div className="bots-run-detail-title"><span>Scheduled run</span><h3>{selectedRun?.title ?? "Earlier activity"}</h3><p>{selectedRun ? stamp(selectedRun.scheduledAt) : "Full recorded conversation"}</p></div>
-          {lanes && target.runId && <RunQuestions key={`${owner}:${bot.id}:${target.runId}`} owner={owner} botId={bot.id} runId={target.runId} online={online} />}
-          {target.runId && (lanes || botsClient.snapshot?.activeScheduledTurns !== undefined) && <RunTurnPicker key={`${owner}:${bot.id}:${target.runId}`} owner={owner} botId={bot.id} runId={target.runId} primary={selectedRun} selected={target.turnId ?? ""} online={online} onSelect={turnId => {
+          {lanes && bound && target.runId && <RunQuestions key={`${owner}:${bot.id}:${target.runId}`} owner={owner} botId={bot.id} runId={target.runId} online={online} />}
+          {!unbound && target.runId && (lanes || botsClient.snapshot?.activeScheduledTurns !== undefined) && <RunTurnPicker key={`${owner}:${bot.id}:${target.runId}`} owner={owner} botId={bot.id} runId={target.runId} primary={selectedRun} selected={target.turnId ?? ""} online={online} onSelect={turnId => {
             generation.current++; setTranscript(null); setPageCursors([null]); setDetailPage(0); setTarget({ runId: target.runId, turnId });
           }} />}
           {lanes && selectedRun && <RunControls owner={owner} botId={bot.id} run={selectedRun} online={online} />}
-          {!online && <div className="bots-run-notice"><CircleAlert size={18} /><p>{transcript ? "Saved run detail. Connect for updates and details not yet opened." : "Connect to open this run. Your saved conversation is still available."}</p></div>}
-          {newActivity && <button className="bots-run-back" disabled={!online || busy} onClick={() => { setNewActivity(false); setPageCursors(current => [...current]); }}>Updated · Refresh this part<RefreshCw size={14} /></button>}
+          {unbound && <div className="bots-run-notice"><Clock3 size={18} /><p>{selectedRun?.laneId ? "This run’s conversation is not available yet. Its preparation or confirmation is still pending." : "This run has not started."} {selectedRun?.activity?.state === "paused" ? "Its queued work is saved until you resume it." : "Its conversation will be available when it starts."}</p></div>}
+          {!unbound && !online && <div className="bots-run-notice"><CircleAlert size={18} /><p>{transcript ? "Saved run detail. Connect for updates and details not yet opened." : "Connect to open this run. Your saved conversation is still available."}</p></div>}
+          {!unbound && newActivity && <button className="bots-run-back" disabled={!online || busy} onClick={() => { setNewActivity(false); setPageCursors(current => [...current]); }}>Updated · Refresh this part<RefreshCw size={14} /></button>}
           {lanes && target.runId && transcript?.context ? <RunTranscript key={JSON.stringify([owner, bot.id, target.runId, target.turnId, detailPage])} owner={owner} botId={bot.id} runId={target.runId} page={transcript} download={download} /> : <div className="bots-run-transcript">
             {transcript?.entries.map(entry => <TimelineEntry key={`${entry.turnId}:${entry.id}`} entry={{ ...entry, scheduled: false }} timeline={timeline} attachments={transcript.attachments.length ? transcript.attachments : attachments} download={download} />)}
             {transcript && <ReturnedArtifacts botId={bot.id} turnId={target.turnId ?? undefined} attachments={transcript.attachments} linked={linked} />}
@@ -239,7 +244,7 @@ export function RunHistory({ bot, schedules, attachments, online, onClose, downl
             {transcript?.olderCursor && <button disabled={!online || busy} onClick={() => { setPageCursors(current => [...current.slice(0, detailPage + 1), transcript.olderCursor]); setDetailPage(page => page + 1); }}><ArrowLeft size={15} />Earlier detail</button>}
             {detailPage > 0 && <button disabled={!online || busy} onClick={() => setDetailPage(page => page - 1)}>Newer detail<ArrowRight size={15} /></button>}
           </nav>
-          {lanes && target.runId && <RunComposer key={`${owner}:${bot.id}:${target.runId}`} owner={owner} botId={bot.id} runId={target.runId} online={online} paused={selectedRun?.activity?.state === "paused"} />}
+          {lanes && bound && target.runId && <RunComposer key={`${owner}:${bot.id}:${target.runId}`} owner={owner} botId={bot.id} runId={target.runId} online={online} paused={selectedRun?.activity?.state === "paused"} />}
         </> : <>
           <div className="bots-run-intro"><h3>Scheduled activity</h3><p>Review scheduled runs, their progress, and recorded results.</p></div>
           {!online && <div className="bots-run-notice"><Clock3 size={18} /><p>Saved activity. Reconnect for updates and full run details.</p></div>}
@@ -249,7 +254,7 @@ export function RunHistory({ bot, schedules, attachments, online, onClose, downl
           {runPage > 0 && <button className="bots-run-back" disabled={!online || busy} onClick={() => runPageTo(runPage - 1, runCursors[runPage - 1])}><ArrowLeft size={15} />Newer activity</button>}
           {groups.map(([date, values]) => <section className="bots-run-day" key={date}><h3>{date}</h3>{values.map(run => <article className={`bots-run-card ${needsAttention(run) ? "needs-attention" : ""}`} key={run.id}>
             <div className="bots-run-card-icon">{["running", "starting"].includes(run.status) ? <LoaderCircle size={18} className="bots-spin" /> : needsAttention(run) ? <CircleAlert size={18} /> : run.status === "completed" ? <CheckCircle2 size={18} /> : <Clock3 size={18} />}</div>
-            <div className="bots-run-card-content"><div className="bots-run-card-title"><h4>{run.title}</h4><span className={`bots-run-status is-${run.status}`}>{labels[run.status] ?? "Recorded"}</span></div><p><time>{stamp(run.startedAt ?? run.scheduledAt)}</time>{run.finishedAt && <span> · Finished {validDate(run.finishedAt)?.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}</span>}</p>{run.error && <p className="bots-run-error-text">{run.error}</p>}<div className="bots-run-card-actions">{run.turnId || lanes ? <button disabled={busy} onClick={() => open(run)}>Open run<ArrowRight size={14} /></button> : <span>{run.status === "queued" ? "Waiting to start" : "No recorded conversation"}</span>}{run.status === "uncertain" && <button disabled={!online || busy} onClick={() => void acknowledge(run)}>I reviewed this run</button>}</div></div>
+            <div className="bots-run-card-content"><div className="bots-run-card-title"><h4>{run.title}</h4><span className={`bots-run-status is-${run.status}`}>{labels[run.activity?.state === "paused" ? "paused" : run.status] ?? "Recorded"}</span></div><p><time>{stamp(run.startedAt ?? run.scheduledAt)}</time>{run.finishedAt && <span> · Finished {validDate(run.finishedAt)?.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}</span>}</p>{run.error && <p className="bots-run-error-text">{run.error}</p>}<div className="bots-run-card-actions">{run.turnId || lanes ? <button disabled={busy} onClick={() => open(run)}>Open run<ArrowRight size={14} /></button> : <span>{run.status === "queued" ? "Waiting to start" : "No recorded conversation"}</span>}{run.status === "uncertain" && <button disabled={!online || busy} onClick={() => void acknowledge(run)}>I reviewed this run</button>}</div></div>
           </article>)}</section>)}
           {!groups.length && !busy && !error && <div className="bots-run-empty"><Clock3 size={30} strokeWidth={1.4} /><h3>{filter === "attention" ? "Nothing needs your attention here" : "A quieter kind of history"}</h3><p>{filter === "attention" ? "No issues on this page. You can also browse earlier activity." : "Your scheduled runs will appear here, with their progress and results."}</p></div>}
           {lanes && <StopAll owner={owner} botId={bot.id} online={online} />}

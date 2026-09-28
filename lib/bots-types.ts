@@ -42,10 +42,10 @@ export type BotRunContext = { laneId: string; runId: string; threadId: string };
 export type BotBackground = { botId: string; running: number; needsInput: number; unconfirmed: number };
 export type BotRunReceipt = { operationId: string; runId: string; laneId: string; state: "queued" | "accepted" | "uncertain" | "rejected"; turnId: string | null; waitReason: string | null };
 export type BotRunFinding = BotRunContext & { id: string; botId: string; turnId: string; key: string; summary: string; createdAt: string };
-export type BotRunStateEvent = BotRunContext & { run: BotRun; background: Omit<BotBackground, "botId"> & { botId?: string } };
+export type BotRunStateEvent = { runId: string; laneId?: string | null; threadId?: string | null; run: BotRun; background: Omit<BotBackground, "botId"> & { botId?: string }; historyRefresh?: unknown };
 export type BotRun = {
   executionLane?: "main-legacy" | "run-v1";
-  laneId?: string; threadId?: string;
+  laneId?: string | null; threadId?: string | null;
   activity?: { state: "provisioning" | "queued" | "running" | "waiting-input" | "waiting-workers" | "idle" | "uncertain" | "paused"; activeTurnId: string | null; waitReason: string | null };
   id: string;
   botId: string;

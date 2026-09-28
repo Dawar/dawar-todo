@@ -2,6 +2,7 @@ import { historyKey, projectHistoryItem, type HistoryPage } from "../../lib/bot-
 import type { BotEvent } from "../../lib/bots-types";
 import { reconcileHistory } from "./history-reconcile";
 import { reduceBotTurns, type NativeEvent } from "./thread-state";
+import { runHistoryRefresh } from "./run-history-refresh";
 /** Apply ordered events only to this already-opened part. No main controller or store calls. */
 export function updateRunPage(page: HistoryPage, events: BotEvent[], turnId?: string | null, append = true): HistoryPage {
   let entries = page.entries;
@@ -10,6 +11,19 @@ export function updateRunPage(page: HistoryPage, events: BotEvent[], turnId?: st
     const data = event.data as { runId?: string; laneId?: string; threadId?: string; message?: NativeEvent };
     if (event.seq <= cursor || data.runId !== page.context?.runId || data.laneId !== page.context?.laneId || data.threadId !== page.context?.threadId) continue;
     cursor = event.seq;
+    const refresh = runHistoryRefresh(event);
+    if (refresh) {
+      if (refresh.turnId !== (turnId ?? page.turnIds?.[0] ?? entries[0]?.turnId)) continue;
+      const descriptor = refresh.entry;
+      if (descriptor && descriptor.turnId === refresh.turnId && (!refresh.itemId || descriptor.id === refresh.itemId)) {
+        const existing = entries.find(value => value.turnId === descriptor.turnId && value.id === descriptor.id || descriptor.item?.type === "userMessage" && descriptor.item.clientId && value.item?.type === "userMessage" && value.item.clientId === descriptor.item.clientId);
+        const projected = { ...descriptor, startedAt: existing?.startedAt ?? descriptor.startedAt, turnStatus: existing?.turnStatus ?? descriptor.turnStatus, updatedSeq: event.seq };
+        if (existing) entries = reconcileHistory(entries.map(value => value === existing ? projected : value)).entries;
+        else if (append) entries = reconcileHistory([...entries, projected]).entries;
+      } else entries = entries.map(value => value.turnId === refresh.turnId && (!refresh.itemId || value.id === refresh.itemId) ? { ...value, complete: false, updatedSeq: event.seq } : value);
+      if (refresh.turn) entries = entries.map(value => value.turnId === refresh.turnId ? { ...value, turnStatus: refresh.turn!.status, status: value.itemStatus === "inProgress" ? refresh.turn!.status : value.status } : value);
+      continue;
+    }
     const native = data.message;
     if (!native?.params || (native.params.turnId ?? native.params.turn?.id) !== (turnId ?? page.turnIds?.[0] ?? entries[0]?.turnId)) continue;
     const id = native.params.turnId ?? native.params.turn!.id;
