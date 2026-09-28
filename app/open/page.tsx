@@ -6,7 +6,7 @@ import { DEFAULT_OPENING_TAB, openingTabPath, parseOpeningTab } from "../../lib/
 import { cacheOpeningTab, cachedOpeningTab } from "../opening-preference";
 import { loadCachedSettings } from "../offline-store";
 
-/** The manifest enters here. Explicit Tasks links continue to mean `/`. */
+/** Shared resolver for `/open` and eligible fresh legacy-root launches. */
 export default function OpenAppPage() {
   useEffect(() => {
     let active = true;
@@ -41,6 +41,6 @@ export default function OpenAppPage() {
   }, []);
   return <main className="mx-auto max-w-lg p-6 text-sm text-[#69716c]">
     <p role="status">Opening Dawar Todo…</p>
-    <noscript><p><Link href="/" prefetch={false}>Open Tasks</Link> · <Link href="/bots" prefetch={false}>Open Bots</Link></p></noscript>
+    <noscript><p><Link href="/tasks" prefetch={false}>Open Tasks</Link> · <Link href="/bots" prefetch={false}>Open Bots</Link></p></noscript>
   </main>;
 }

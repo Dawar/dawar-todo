@@ -2,6 +2,7 @@ const CACHE_PREFIX = "dawar-todo-shell-";
 const CACHE_NAME = `${CACHE_PREFIX}v38`;
 const SHELL = [
   "/",
+  "/tasks",
   "/open",
   "/settings",
   "/talk",
@@ -252,7 +253,7 @@ self.addEventListener("push", (event) => {
     icon: "/icons/icon-192.png",
     badge: "/icons/icon-192.png",
     data: {
-      url: typeof payload.url === "string" ? payload.url : "/",
+      url: typeof payload.url === "string" ? payload.url : "/tasks",
     },
   };
   event.waitUntil((async () => {
@@ -271,7 +272,11 @@ self.addEventListener("push", (event) => {
 
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
-  const target = new URL(event.notification.data?.url || "/", self.location.origin).href;
+  const destination = new URL(event.notification.data?.url || "/tasks", self.location.origin);
+  // Old task notifications used bare `/`, now also a neutral launch entry.
+  // Keep their Tasks intent; query/hash task links and bot URLs stay exact.
+  if (destination.origin === self.location.origin && destination.pathname === "/" && !destination.search && !destination.hash) destination.pathname = "/tasks";
+  const target = destination.href;
   event.waitUntil((async () => {
     const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
     const existing = windows.find((client) => new URL(client.url).origin === self.location.origin);

@@ -6,5 +6,5 @@ export function parseOpeningTab(value: unknown): OpeningTab | null {
 }
 
 export function openingTabPath(tab: OpeningTab) {
-  return tab === "bots" ? "/bots" : "/";
+  return tab === "bots" ? "/bots" : "/tasks";
 }

@@ -1458,7 +1458,7 @@ export function TalkWorkspace() {
                                   <button type="button" onClick={() => void undoAction(message)} className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-white px-2.5 text-xs font-semibold text-[#216e4e] shadow-sm"><ActionIcon name="undo" className="h-3.5 w-3.5" />Undo</button>
                                 )}
                                 {Boolean(message.metadata.undone) && <span className="text-xs font-medium text-[#78817c]">Undone</span>}
-                                {typeof message.metadata.taskId === "number" && <Link href="/" className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs font-semibold text-[#59615c] hover:bg-white"><ActionIcon name="view-open" className="h-3.5 w-3.5" />Open task</Link>}
+                                {typeof message.metadata.taskId === "number" && <Link href="/tasks" className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs font-semibold text-[#59615c] hover:bg-white"><ActionIcon name="view-open" className="h-3.5 w-3.5" />Open task</Link>}
                                 {failed && <button type="button" onClick={() => void sendMessage(`Retry the failed action: ${message.content}`)} className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-white px-2.5 text-xs font-semibold text-red-700"><ActionIcon name="retry" className="h-3.5 w-3.5" />Retry</button>}
                               </div>
                               {sources.length > 0 && (

@@ -27,7 +27,7 @@ export function SiteHeader({
     </>
   );
   const navigation = [
-    { href: "/", label: "Tasks", icon: "view-open" as const, active: current === "todos" },
+    { href: "/tasks", label: "Tasks", icon: "view-open" as const, active: current === "todos" },
     { href: "/talk", label: "Chat", icon: "assistant" as const, active: current === "talk" || current === "assistant" },
     { href: "/bots", label: "Bots", icon: "assistant" as const, active: current === "bots" },
     { href: "/settings", label: "Settings", icon: "settings" as const, active: current === "settings" },
@@ -48,9 +48,9 @@ export function SiteHeader({
           </button>
         ) : (
           <Link
-            href="/"
+            href="/tasks"
             prefetch={false}
-            onClick={(event) => navigate(event, "/")}
+            onClick={(event) => navigate(event, "/tasks")}
             className="flex min-w-0 max-w-[38vw] items-center gap-2 rounded-lg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#216e4e] sm:gap-2.5"
           >
             {brand}

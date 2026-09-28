@@ -71,7 +71,7 @@ export default function SettingsError({
             Try Settings again
           </button>
           <Link
-            href="/"
+            href="/tasks"
             className="inline-flex h-11 items-center justify-center rounded-xl bg-white px-4 text-sm font-semibold text-[#4f5c55] ring-1 ring-black/[0.1] transition hover:bg-[#f4f6f4] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#216e4e]"
           >
             Back to tasks

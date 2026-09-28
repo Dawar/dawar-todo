@@ -284,7 +284,7 @@ function notificationPayload(events: TodoPushEventRow[], openCount: number) {
     title,
     body,
     tag: "dawar-todo-open-items",
-    url: "/",
+    url: "/tasks",
     openCount,
   };
 }
