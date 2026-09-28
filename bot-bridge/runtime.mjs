@@ -567,8 +567,11 @@ export class BotRuntime extends EventEmitter {
       return await this.codex.call(method, params);
     } catch (error) {
       // Codex sets definite only for an explicit native JSON-RPC error reply.
-      // A subsequent local/parser/storage exception cannot reuse that evidence.
-      if (attempt && error.definite === true) attempt.rejected = true;
+      // Legacy delete/reorder have no reviewed native no-effect receipt: only
+      // our local pre-boundary validation can reject those operations safely.
+      // A subsequent local/parser/storage exception cannot reuse native evidence.
+      if (attempt && error.definite === true &&
+          !["thread/queue/delete", "thread/queue/reorder"].includes(method)) attempt.rejected = true;
       throw error;
     }
   }
