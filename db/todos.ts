@@ -23,6 +23,7 @@ import {
 import { zonedLocalDateTimeToUtc } from "../lib/zoned-date-time";
 import { validateTaskDescription } from "../lib/task-description";
 import { MAX_PINNED_TASKS } from "../lib/task-pins";
+import { DEFAULT_OPENING_TAB, parseOpeningTab, type OpeningTab } from "../lib/app-preferences";
 
 type StoredTodoStatus = "open" | "completed" | "archived";
 export type TodoStatus = "open" | "completed";
@@ -93,6 +94,8 @@ export type TodoMutationMetadata = {
 };
 
 export type TodoSettings = {
+  openAppTo: OpeningTab;
+  openAppToUpdatedAt?: string | null;
   snoozeTimeZone: string;
   snoozeWakeHour: number;
   snoozeQuickPresets: QuickSnoozePreset[];
@@ -185,7 +188,7 @@ function mapTodoCaptureDraft(value: string | null | undefined): TodoCaptureDraft
   }
 }
 
-function mapTodoSettings(rows: Array<{ key: string; value: string }>): TodoSettings {
+function mapTodoSettings(rows: Array<{ key: string; value: string; updated_at?: string }>): TodoSettings {
   const values = Object.fromEntries(rows.map((row) => [row.key, row.value]));
   let snoozeQuickPresets = DEFAULT_QUICK_SNOOZE_PRESETS;
   try {
@@ -195,6 +198,8 @@ function mapTodoSettings(rows: Array<{ key: string; value: string }>): TodoSetti
     snoozeQuickPresets = DEFAULT_QUICK_SNOOZE_PRESETS;
   }
   return {
+    openAppTo: parseOpeningTab(values.open_app_to) ?? DEFAULT_OPENING_TAB,
+    openAppToUpdatedAt: rows.find((row) => row.key === "open_app_to")?.updated_at ?? null,
     snoozeTimeZone: values.snooze_timezone || "America/Toronto",
     snoozeWakeHour: Number(values.snooze_wake_hour ?? 8),
     snoozeQuickPresets: [...snoozeQuickPresets],
@@ -1096,13 +1101,13 @@ export async function readTodoBootstrap(): Promise<TodoBootstrapSnapshot> {
   const [todoResult, projectResult, settingResult, captureDraftResult, revisionResult] = await db.batch([
     db.prepare(`${todoListSql} ORDER BY sort_order ASC, id DESC`),
     db.prepare("SELECT name FROM todo_projects ORDER BY name COLLATE NOCASE ASC"),
-    db.prepare("SELECT key, value FROM app_settings WHERE key IN ('snooze_timezone', 'snooze_wake_hour', 'snooze_quick_presets', 'ai_realtime_voice')"),
+    db.prepare("SELECT key, value, updated_at FROM app_settings WHERE key IN ('snooze_timezone', 'snooze_wake_hour', 'snooze_quick_presets', 'ai_realtime_voice', 'open_app_to')"),
     db.prepare("SELECT value FROM app_settings WHERE key = 'capture_draft'"),
     db.prepare("SELECT COALESCE(MAX(revision), 0) AS revision FROM todo_sync_changes"),
   ]) as [
     D1Result<TodoRow>,
     D1Result<{ name: string }>,
-    D1Result<{ key: string; value: string }>,
+    D1Result<{ key: string; value: string; updated_at: string }>,
     D1Result<{ value: string }>,
     D1Result<{ revision: number }>,
   ];
@@ -1851,43 +1856,33 @@ function zonedDateToUtc(year: number, month: number, day: number, hour: number, 
 export async function getTodoSettings(): Promise<TodoSettings> {
   await ensureTodoDatabase();
   const result = await database()
-    .prepare("SELECT key, value FROM app_settings WHERE key IN ('snooze_timezone', 'snooze_wake_hour', 'snooze_quick_presets', 'ai_realtime_voice')")
-    .all<{ key: string; value: string }>();
+    .prepare("SELECT key, value, updated_at FROM app_settings WHERE key IN ('snooze_timezone', 'snooze_wake_hour', 'snooze_quick_presets', 'ai_realtime_voice', 'open_app_to')")
+    .all<{ key: string; value: string; updated_at: string }>();
   return mapTodoSettings(result.results);
 }
 
-export async function updateTodoSettings(settings: TodoSettings): Promise<TodoSettings> {
+export async function updateTodoSettings(settings: Partial<Omit<TodoSettings, "openAppToUpdatedAt">>): Promise<TodoSettings> {
   await ensureTodoDatabase();
   const db = database();
-  await db.batch([
-    db.prepare(`
-      INSERT INTO app_settings (key, value, updated_at)
-      VALUES ('snooze_timezone', ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
-    `).bind(settings.snoozeTimeZone),
-    db.prepare(`
-      INSERT INTO app_settings (key, value, updated_at)
-      VALUES ('snooze_wake_hour', ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
-    `).bind(String(settings.snoozeWakeHour)),
-    db.prepare(`
-      INSERT INTO app_settings (key, value, updated_at)
-      VALUES ('snooze_quick_presets', ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
-    `).bind(JSON.stringify(settings.snoozeQuickPresets)),
-    db.prepare(`
-      INSERT INTO app_settings (key, value, updated_at)
-      VALUES ('ai_realtime_voice', ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
-    `).bind(settings.realtimeVoice),
-  ]);
-  console.info("[todo-db] settings updated", {
-    snoozeTimeZone: settings.snoozeTimeZone,
-    snoozeWakeHour: settings.snoozeWakeHour,
-    quickSnoozeCount: settings.snoozeQuickPresets.length,
-    realtimeVoice: settings.realtimeVoice,
-  });
-  return settings;
+  const fields: Array<[keyof typeof settings, string]> = [
+    ["snoozeTimeZone", "snooze_timezone"], ["snoozeWakeHour", "snooze_wake_hour"],
+    ["snoozeQuickPresets", "snooze_quick_presets"], ["realtimeVoice", "ai_realtime_voice"],
+    ["openAppTo", "open_app_to"],
+  ];
+  const writes = fields.filter(([field]) => settings[field] !== undefined).map(([field, key]) => db.prepare(`
+    INSERT INTO app_settings (key, value, updated_at)
+    VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+    WHERE app_settings.value IS NOT excluded.value
+  `).bind(key, field === "snoozeQuickPresets" ? JSON.stringify(settings[field]) : String(settings[field])));
+  // Older fields have database triggers. These preferences use an atomic
+  // change receipt, avoiding a schema reset/upgrade for a new key/value row.
+  if (settings.openAppTo !== undefined || settings.realtimeVoice !== undefined) writes.push(db.prepare(
+    "INSERT INTO todo_sync_changes (entity_type, entity_key, operation) VALUES ('settings', 'preferences', 'changed')",
+  ));
+  if (writes.length) await db.batch(writes);
+  console.info("[todo-db] settings updated", { fields: Object.keys(settings) });
+  return getTodoSettings();
 }
 
 export async function getTodoCaptureDraft(): Promise<TodoCaptureDraft | null> {

@@ -607,6 +607,12 @@ export async function loadCachedServerState<T>() {
   });
 }
 
+/** Read preferences at neutral launch without loading task rows or outboxes. */
+export async function loadCachedSettings() {
+  const metadata = await runRequest<CachedServerState<never> | undefined>(CACHE_STORE, "readonly", (store) => store.get("server"));
+  return metadata?.settings;
+}
+
 export async function saveOfflineAssistantMessage(record: OfflineAssistantMessage) {
   try {
     await runRequest(ASSISTANT_QUEUE_STORE, "readwrite", (store) => store.put(record));

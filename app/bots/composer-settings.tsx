@@ -1,7 +1,7 @@
 "use client";
 
 import { useLayoutEffect, useMemo, useSyncExternalStore } from "react";
-import { ListTodo, LoaderCircle, Zap } from "lucide-react";
+import { Check, ListTodo, LoaderCircle, Zap } from "lucide-react";
 import type { Bot, BotSnapshot } from "../../lib/bots-types";
 import { botsClient } from "./client";
 import { getComposerSettings, type Values } from "./composer-settings-controller";
@@ -51,18 +51,18 @@ export function ComposerSettings({ bot, snapshot, online }: { bot: Bot; snapshot
         </select></label>
       </div>
       <div className="bots-settings-toggles" role="group" aria-label="Reply mode and speed">
-        <button type="button" className={effective.mode === "plan" ? "active" : ""} aria-pressed={effective.mode === "plan"}
+        <button type="button" aria-pressed={effective.mode === "plan"}
           disabled={!online} title={activeTurn ? "Applies to turns started after this saves; the current run keeps its settings" : "Plan the next reply"}
           onClick={() => controller.edit({ mode: controller.displayed(bot).mode === "plan" ? "default" : "plan" })}>
-          <ListTodo size={15} aria-hidden="true" />Plan
+          {effective.mode === "plan" ? <Check size={15} aria-hidden="true" /> : <ListTodo size={15} aria-hidden="true" />}Plan
         </button>
-        <button type="button" className={active ? "active" : ""} aria-pressed={active}
+        <button type="button" aria-pressed={active}
           disabled={!online || !available && !active} title={!available && !active ? "Fast is unavailable for this model" : activeTurn ? "Applies to turns started after this saves; the current run keeps its settings" : "Fast uses more Codex credits"}
           onClick={() => {
             const choice = fastChoice(controller.displayed(bot), snapshot);
             controller.edit({ serviceTier: choice.active ? "default" : choice.available });
           }}>
-          <Zap size={15} aria-hidden="true" />Fast
+          {active ? <Check size={15} aria-hidden="true" /> : <Zap size={15} aria-hidden="true" />}Fast
         </button>
       </div>
       <span className="bots-settings-progress" role={pending ? "status" : undefined}>

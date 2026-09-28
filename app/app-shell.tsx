@@ -3,10 +3,11 @@ import { Activity, Component, Suspense, createContext, lazy, useContext, useEffe
 import { usePathname } from "next/navigation";
 import SettingsError from "./settings/error";
 import { taskSync } from "./task-sync";
+import { cacheOpeningTab, cachedOpeningTab } from "./opening-preference";
 
-const loaders = { "/": () => import("./page"), "/talk": () => import("./talk/page"), "/bots": () => import("./bots/page"), "/settings": () => import("./settings/page") };
+const loaders = { "/": () => import("./page"), "/open": () => import("./open/page"), "/talk": () => import("./talk/page"), "/bots": () => import("./bots/page"), "/settings": () => import("./settings/page") };
 type ScreenPath = keyof typeof loaders;
-const pages = { "/": lazy(loaders["/"]), "/talk": lazy(loaders["/talk"]), "/bots": lazy(loaders["/bots"]), "/settings": lazy(loaders["/settings"]) };
+const pages = { "/": lazy(loaders["/"]), "/open": lazy(loaders["/open"]), "/talk": lazy(loaders["/talk"]), "/bots": lazy(loaders["/bots"]), "/settings": lazy(loaders["/settings"]) };
 const Navigation = createContext<((href: string) => boolean) | null>(null);
 function screenPath(path: string): ScreenPath | null { return Object.hasOwn(pages, path) ? path as ScreenPath : null; }
 
@@ -35,6 +36,7 @@ class ScreenBoundary extends Component<{ path: ScreenPath; children: ReactNode }
 
 export function AppShell({ children }: { children: ReactNode }) {
   const initialPath = usePathname();
+  const neutralEntry = useRef(initialPath === "/open");
   const [path, setPath] = useState(initialPath);
   const route = screenPath(path);
   const [visited, setVisited] = useState<ScreenPath[]>(route ? [route] : []);
@@ -52,7 +54,21 @@ export function AppShell({ children }: { children: ReactNode }) {
     if (initialPath !== current.current) visit(initialPath);
   }, [initialPath]);
   useEffect(() => {
+    // `/open` immediately replaces itself. The destination starts sync once;
+    // deciding where to launch needs only the cached settings metadata.
+    if (neutralEntry.current) return;
     taskSync.start();
+    // Bootstrap/deltas keep the launch preference current even if Settings was
+    // never opened here. Hydration of an older IDB snapshot only fills a gap.
+    const hydratePreference = () => {
+      const settings = taskSync.getSnapshot().settings;
+      if (!cachedOpeningTab()) cacheOpeningTab(settings?.openAppTo, settings?.openAppToUpdatedAt);
+    };
+    hydratePreference();
+    const unsubscribeSettings = taskSync.subscribe(hydratePreference);
+    const unsubscribeRemote = taskSync.onEvent((event) => {
+      if (event.type === "remote") cacheOpeningTab(event.result.settings?.openAppTo, event.result.settings?.openAppToUpdatedAt);
+    });
     const pop = () => visit(window.location.pathname);
     // Keep back/forward in the cached shell, including while offline. The route
     // framework still owns navigation to pages outside this shell.
@@ -64,7 +80,7 @@ export function AppShell({ children }: { children: ReactNode }) {
     const previousRestoration = history.scrollRestoration;
     history.scrollRestoration = "manual";
     const preload = window.setTimeout(() => { for (const load of Object.values(loaders)) void load().catch(() => undefined); }, 1_500);
-    return () => { window.removeEventListener("popstate", onPopState, true); history.scrollRestoration = previousRestoration; window.clearTimeout(preload); };
+    return () => { unsubscribeSettings(); unsubscribeRemote(); window.removeEventListener("popstate", onPopState, true); history.scrollRestoration = previousRestoration; window.clearTimeout(preload); };
   }, []);
   const navigate = (href: string) => {
     const url = new URL(href, window.location.href);

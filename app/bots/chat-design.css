@@ -32,9 +32,14 @@ details[open] > summary > .bots-disclosure-chevron { transform: rotate(90deg); }
 .bots-settings-selects label:nth-child(2) { flex: 0 1 136px; }
 .bots-settings select { width: 100%; min-width: 0; min-height: 36px; padding: 6px 22px 6px 9px; border: 1px solid #e2e9e3; border-radius: 10px; background: #fff; color: #3e5647; font-size: 12px; font-weight: 550; text-overflow: ellipsis; }
 .bots-settings-toggles { padding: 2px; border-radius: 11px; background: #e8efe9; flex-shrink: 0; }
-.bots-settings-toggles button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 34px; min-width: 67px; padding: 5px 9px; border: 1px solid transparent; border-radius: 9px; color: #526d5b; font-size: 12px; font-weight: 650; white-space: nowrap; }
-.bots-settings-toggles button:hover:not(:disabled) { background: #fff; }
-.bots-settings-toggles button.active { border-color: #c6e3ce; background: #fff; color: #17643e; box-shadow: 0 1px 3px #203b2413; }
+.bots-settings-toggles button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 36px; min-width: 67px; padding: 5px 9px; border: 1px solid transparent; border-radius: 9px; background: transparent; color: #526d5b; font-size: 12px; font-weight: 650; white-space: nowrap; }
+.bots-settings-toggles button[aria-pressed="true"] { border-color: #38794f; background: #e0f0e5; color: #145330; box-shadow: inset 0 0 0 1px #38794f; }
+.bots-settings-toggles button:focus-visible { outline: 2px solid #315ec5; outline-offset: 2px; }
+.bots-settings-toggles button:active:not(:disabled) { transform: translateY(1px); }
+@media (hover: hover) and (pointer: fine) {
+  .bots-settings-toggles button[aria-pressed="false"]:hover:not(:disabled) { border-color: #b9c7bd; background: #f5f7f5; }
+  .bots-settings-toggles button[aria-pressed="true"]:hover:not(:disabled) { border-color: #145330; }
+}
 .bots-settings :is(button, select):disabled { cursor: not-allowed; opacity: .55; }
 .bots-settings-scope { margin-left: auto; padding-inline: 7px; color: #557564; font-size: 11px; font-weight: 600; white-space: nowrap; }
 .bots-settings-progress { position: absolute; top: -12px; right: 7px; display: inline-flex; align-items: center; gap: 4px; min-height: 20px; padding: 2px 6px; border-radius: 10px; color: #397757; font-size: 10px; font-weight: 650; white-space: nowrap; }
@@ -91,7 +96,7 @@ details[open] > summary > .bots-disclosure-chevron { transform: rotate(90deg); }
 .bots-keyboard-open .bots-controls :is(select, button) { min-height: 32px; }
 .bots-keyboard-open .bots-settings { padding-block: 2px; }
 .bots-keyboard-open .bots-settings select { min-height: 38px; }
-.bots-keyboard-open .bots-settings-toggles button { min-height: 38px; }
+.bots-keyboard-open .bots-settings-toggles button { min-height: 44px; }
 @media (max-width: 700px) {
   .bots-messages { padding: 18px 16px; }
   .bots-conversation-heading { padding-inline: 12px; gap: 9px; }
@@ -104,7 +109,7 @@ details[open] > summary > .bots-disclosure-chevron { transform: rotate(90deg); }
   .bots-settings-selects label:nth-child(2) { flex: 0 1 77px; }
   .bots-settings select { min-height: 40px; padding-inline: 6px 18px; }
   .bots-settings-toggles { gap: 1px; }
-  .bots-settings-toggles button { min-width: 54px; min-height: 40px; gap: 3px; padding-inline: 5px; }
+  .bots-settings-toggles button { min-width: 54px; min-height: 44px; gap: 3px; padding-inline: 5px; }
   .bots-settings-scope { display: none; }
   .bots-settings-context { display: block; padding: 3px 6px 0; color: #607869; font-size: 11px; }
   .bots-composer, .bots-draft-status, .bots-upload-list { width: calc(100% - 24px); }
