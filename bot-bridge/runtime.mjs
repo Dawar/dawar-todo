@@ -1,3 +1,5 @@
+import { AnswerExecutions } from "./answer-execution.mjs";
+import { requireTurn, requireSteer, usableTurn, usableTurnId, terminalTurn } from "./native-turn.mjs";
 import { boundHistoryEvent } from "./history-events.mjs";
 import { listArtifacts, artifactMime, artifactMetadata } from "./artifact-library.mjs";
 import { readArtifactPreview } from "./artifact-previews.mjs";
@@ -156,6 +158,7 @@ export class BotRuntime extends EventEmitter {
     });
     this.epoch = randomUUID();
     this.plans = new PlanLifecycle(this);
+    this.answers = new AnswerExecutions(this, validateResponse);
     this.locks = new Map();
     this.loaded = new Set();
     this.models = [];
@@ -300,6 +303,7 @@ export class BotRuntime extends EventEmitter {
     await recoverCurrentActivities(this, 100, true);
     await this.reconcileOperations();
     await this.plans.recover(100);
+    await this.answers.recover(100);
     for (const run of this.store.list("run").filter(run => run.status === "uncertain")) {
       try { await reconcileScheduled(this, run); } catch { /* Keep uncertain IDs for the next bounded recovery. */ }
     }
@@ -352,6 +356,27 @@ export class BotRuntime extends EventEmitter {
   }
   async reconcileOperation(op) {
     let result = null;
+    if (op.method === "requests.respond" && op.botId) {
+      const bot = this.store.bot(op.botId);
+      let record = this.answers.get(bot, op.params?.key);
+      const pending = this.store.get("pending", op.params?.key);
+      if (!record && pending?.async && pending.botId === bot.id) record = this.answers.importLegacy(bot, pending);
+      if (record) {
+        await this.answers.reconcile(record);
+        record = this.answers.get(bot, op.params.key);
+        let matches = false;
+        try {
+          const payload = this.answers.payload(record.request, op.params.result);
+          matches = record.fingerprint ? payload.fingerprint === record.fingerprint : payload.text === record.text;
+        } catch { /* Malformed/different input is never silently accepted. */ }
+        if (matches && record.state === "accepted") result = {};
+        else if (record.state === "rejected" && record.originalOuterId === op.id) {
+          this.store.saveOperation(op.id, op.fingerprint, "failed", { ...op, outcome: "rejected",
+            error: "The original answer was not submitted or was definitively rejected. You may answer again." });
+          return null;
+        }
+      }
+    }
     if (op.method === "schedule.dispatch") {
       const run = this.store.get("run", op.runId);
       if (run && run.botId === op.botId) {
@@ -479,7 +504,7 @@ export class BotRuntime extends EventEmitter {
         throw Object.assign(new Error(
           this.store.operation(operationId).error ??
             "This operation may already have run. Refresh the conversation before retrying.",
-        ), { outcome: existing.outcome === "rejected" ? "rejected" : "uncertain" });
+        ), { outcome: this.store.operation(operationId).outcome === "rejected" ? "rejected" : "uncertain" });
       }
       const local = await acceptLocalQueueOperation(this, { method, botId, params, operationId }, fingerprint);
       if (local) return local.result;
@@ -770,7 +795,7 @@ export class BotRuntime extends EventEmitter {
         });
       }
       case "requests.respond":
-        return this.respond(bot, p, attempt);
+        return this.respond(bot, p, attempt, id);
       case "schedules.list":
         return {
           schedules: this.store.list("schedule", bot.id),
@@ -1112,7 +1137,8 @@ export class BotRuntime extends EventEmitter {
     this.emitEvent("schedules", {}, bot.id);
     return this.saveBot(bot, { archived, status: "idle" });
   }
-  async send(bot, p, id, run = null, attempt = null, staged = false) {
+  async send(bot, p, id, run = null, attempt = null, staged = false, answer = null) {
+    this.answers.assertPrepared(bot, id, answer);
     if (bot.archived) throw new Error("Restore this bot first.");
     if (!this.ready) throw new Error("Codex is not ready.");
     if (bot.managerPaused && !id.startsWith("manager-notice:"))
@@ -1139,13 +1165,16 @@ export class BotRuntime extends EventEmitter {
       if (run || staged) throw new Error("Bot is busy.");
       if (this.scheduledContext(bot.id, bot.activeTurnId))
         throw new Error("A scheduled run is using this conversation. Use Queue next to keep your message separate; your draft is retained.");
-      const result = await this.submitNative("turn/steer", {
-        threadId: bot.threadId,
-        expectedTurnId: bot.activeTurnId,
-        clientUserMessageId: id,
-        input,
-        additionalContext,
-      }, attempt);
+      const params = { threadId: bot.threadId, expectedTurnId: bot.activeTurnId,
+        clientUserMessageId: id, input, additionalContext };
+      this.answers.dispatch(bot, id, answer, "turn/steer", params);
+      const result = await this.submitNative("turn/steer", params, attempt);
+      try { requireSteer(result, bot.activeTurnId); }
+      catch (error) {
+        requireCurrentActivity(this, bot.id, null, "invalid-steer-acknowledgement");
+        throw error;
+      }
+      this.answers.accept(answer, { turnId: result.turnId, source: "steer-ack" });
       this.emitUserMessage(bot, bot.activeTurnId, id, input);
       this.saveBot(this.store.bot(bot.id), {
         preview: id.startsWith("manager-notice:")
@@ -1159,7 +1188,7 @@ export class BotRuntime extends EventEmitter {
         this.saveBot(this.store.bot(bot.id), { queuePaused: false });
       return result;
     }
-    const result = await this.startTurn(bot, input, text, id, run, additionalContext, attempt);
+    const result = await this.startTurn(bot, input, text, id, run, additionalContext, attempt, answer);
     if (!run && bot.queuePaused && this.store.get("planTurnEvidence", result.turn?.id)?.status !== "interrupted" &&
         (this.store.bot(bot.id).queuePauseRevision ?? 0) === (bot.queuePauseRevision ?? 0) &&
         (!this.store.bot(bot.id).activeTurnId || this.store.bot(bot.id).activeTurnId === result.turn?.id))
@@ -1238,13 +1267,14 @@ export class BotRuntime extends EventEmitter {
     } while (cursor);
     return items;
   }
-  async startTurn(bot, input, text, id, run, additionalContext, attempt = null) {
+  async startTurn(bot, input, text, id, run, additionalContext, attempt = null, answer = null) {
     // The boundary/owner covers preparation too, for every caller including
     // async answers that do not pass an outer composer attempt object.
     const boundary = attempt ?? { started: false, rejected: false };
     const preparationId = randomUUID();
     let activity, result;
     try {
+      this.answers.assertPrepared(bot, id, answer);
       const plan = await this.plans.prepare(bot, id, run, preparationId);
       await this.ensureCurrentActivity(bot.id);
       bot = this.store.bot(bot.id);
@@ -1271,6 +1301,7 @@ export class BotRuntime extends EventEmitter {
       activity = this.store.transaction(() => {
         const fence = beginTurnDispatch(this, bot.id, id);
         this.plans.dispatching(plan, fence);
+        this.answers.dispatch(bot, id, answer, "turn/start", params, fence);
         if (run) {
           this.store.put("activeRun", { id: bot.id, botId: bot.id, runId: run.id, operationId: id, preparationId });
           if (id !== (run.operationId ?? `schedule:${run.id}`)) this.store.put("runTurn", {
@@ -1281,6 +1312,8 @@ export class BotRuntime extends EventEmitter {
         return fence;
       });
       result = await this.submitNative("turn/start", params, boundary);
+      requireTurn(result?.turn);
+      this.answers.accept(answer, { turnId: result.turn.id, status: result.turn.status, source: "start-ack" });
       this.plans.bind(plan, result.turn);
       const completed = this.store.get("planTurnEvidence", result.turn.id);
       acknowledgeTurnDispatch(this, bot.id, result.turn, activity, {
@@ -1326,6 +1359,7 @@ export class BotRuntime extends EventEmitter {
   }
   scheduledContext(botId, turnId) { return scheduledContext(this, botId, turnId); }
   recordScheduledEvidence(botId, turn) {
+    if (!usableTurn(turn)) return;
     let context = this.scheduledContext(botId, turn.id);
     if (!context) for (const item of turn.items ?? []) {
       if (item.type !== "userMessage" || !item.clientId) continue;
@@ -1337,6 +1371,7 @@ export class BotRuntime extends EventEmitter {
     if (context) this.recordScheduledTurn(botId, context.runId, context.operationId, turn);
   }
   recordScheduledTurn(botId, runId, operationId, turn) {
+    requireTurn(turn);
     this.store.transaction(() => {
       const run = this.owned("run", runId, botId);
       const evidence = this.store.get("planTurnEvidence", turn.id);
@@ -1384,6 +1419,7 @@ export class BotRuntime extends EventEmitter {
         threadId: bot.threadId,
         queuedSubmissionId: item.id,
       }));
+      requireTurn(turn);
       acknowledgeTurnDispatch(this, bot.id, turn, dispatch, {
         preview: item.input.find((input) => input.type === "text")?.text.slice(0, 160) ?? "Attachments",
         error: null,
@@ -1434,32 +1470,33 @@ export class BotRuntime extends EventEmitter {
       bot.id,
     );
   }
-  async respond(bot, p, attempt = null) {
-    const pending = this.owned("pending", p.key, bot.id);
+  async respond(bot, p, attempt = null, outerId = null) {
+    const prior = this.answers.get(bot, p.key);
+    const pending = prior ? { id: prior.key, botId: bot.id, async: true, request: prior.request } : this.owned("pending", p.key, bot.id);
     if (!pending.async && pending.epoch !== this.epoch)
       throw new Error("This request expired when the runtime restarted.");
-    const result = validateResponse(pending.request, p.result);
     if (pending.async) {
-      const text = pending.request.params.questions
-        .map((q) => `${q.question}\n${result.answers[q.id].answers.join("\n")}`)
-        .join("\n\n");
-      await this.send(this.store.bot(bot.id), { text }, `answer:${pending.id}`, null, attempt);
-    } else {
-      // No terminal native receipt exists for this write. Everything after
-      // the response boundary remains uncertain on failure, including storage.
-      if (attempt) attempt.started = true;
-      this.codex.respond(pending.request.id, result);
+      const boundary = attempt ?? { started: false, rejected: false };
+      const prepared = await this.answers.prepare(bot, pending, p.result, outerId, boundary);
+      if (prepared.accepted) return {};
+      try {
+        await this.send(this.store.bot(bot.id), { text: prepared.text }, `answer:${pending.id}`, null, boundary, false, prepared.token);
+        this.answers.finish(this.answers.get(bot, pending.id));
+        return {};
+      } catch (error) {
+        this.answers.reject(prepared.token, boundary, error.message);
+        throw error;
+      }
     }
+    const result = validateResponse(pending.request, p.result);
+    // Sync native requests have no acceptance receipt; preserve the existing
+    // uncertain outer-ID boundary. They do not use the async answer identity.
+    if (attempt) attempt.started = true;
+    this.codex.respond(pending.request.id, result);
     this.store.remove("pending", pending.id);
     this.emitEvent("request.resolved", { key: pending.id }, bot.id);
     const current = this.store.bot(bot.id);
-    this.saveBot(current, {
-      status: this.store.list("pending", bot.id).length
-        ? "waiting"
-        : current.activeTurnId
-          ? "running"
-          : "idle",
-    });
+    this.saveBot(current, { status: this.store.list("pending", bot.id).length ? "waiting" : current.activeTurnId ? "running" : "idle" });
     return {};
   }
   async onServerRequest(message) {
@@ -1537,6 +1574,13 @@ export class BotRuntime extends EventEmitter {
     const threadId = p.threadId ?? p.thread?.id;
     const bot = this.store.bots().find((b) => b.threadId === threadId);
     if (!bot) return;
+    if (["turn/started", "turn/completed"].includes(message.method) &&
+        (!usableTurn(p.turn) || (message.method === "turn/started" ? p.turn.status !== "inProgress" : !terminalTurn(p.turn)))) {
+      requireCurrentActivity(this, bot.id, null, "invalid-native-turn-notification");
+      this.emit("fault", new Error("Native turn notification has no usable identity/status; current reconciliation is required."));
+      return;
+    }
+    if (message.method === "item/completed" && !usableTurnId(p.turnId)) return;
     if (message.method !== "turn/completed") this.plans.note(bot.id, message);
     if (message.method === "item/completed") {
       rememberInputProvenance(this, bot, p.turnId, p.item);
@@ -1578,6 +1622,7 @@ export class BotRuntime extends EventEmitter {
       p.item.questions?.length
     ) {
       const key = `async:${p.item.id}`;
+      if (this.answers.get(bot, key)?.state === "accepted") return;
       const request = {
         id: key,
         method: "item/tool/requestUserInput",
@@ -1646,6 +1691,7 @@ export class BotRuntime extends EventEmitter {
     this.tickRunning = true;
     try {
       await this.plans.recover();
+      await this.answers.recover();
       await recoverRunTurns(this);
       await reconcileActiveTurns(this);
       let recovered = 0;

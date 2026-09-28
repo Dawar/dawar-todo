@@ -1,3 +1,4 @@
+import { requireTurn, usableTurnId, terminalTurn } from "./native-turn.mjs";
 import { randomUUID } from "node:crypto";
 import { findNativeTurn } from "./native-reconcile.mjs";
 
@@ -44,6 +45,7 @@ export class PlanLifecycle {
     this.store.put("planExecution", { ...current, dispatchFence: fence });
   }
   bind(record, turn, completeEvidence = false) {
+    requireTurn(turn);
     if (!record) return;
     const current = this.store.get("planExecution", record.id);
     if (!current || ["consumed", "superseded", "finished"].includes(current.state)) return;
@@ -65,7 +67,8 @@ export class PlanLifecycle {
   note(botId, message, completeEvidence = false) {
     const p = message.params ?? {};
     const turnId = p.turnId ?? p.turn?.id;
-    if (!turnId) return;
+    if (!usableTurnId(turnId)) return;
+    if (message.method === "turn/completed" && !terminalTurn(p.turn)) return;
     if (message.method !== "turn/completed" && !(message.method === "item/completed" && proposed(p.item))) return;
     const current = this.store.get("planTurnEvidence", turnId);
     if (current && current.botId !== botId) return;

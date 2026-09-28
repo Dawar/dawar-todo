@@ -1,7 +1,9 @@
 import { findNativeTurn } from "./native-reconcile.mjs";
 
+import { usableTurn, usableTurnId, requireTurn, terminalTurn } from "./native-turn.mjs";
+export { terminalTurn } from "./native-turn.mjs";
+
 const now = () => new Date().toISOString();
-export const terminalTurn = turn => ["completed", "failed", "interrupted"].includes(turn?.status);
 
 // Persist observed ordering, including idle after completion. Bot locks do not
 // serialize native notifications. Tokens must precede the first awaited read
@@ -64,12 +66,12 @@ function ownsDispatch(runtime, botId, token) {
 // token; historical recovery cannot manufacture one from captureActivity.
 export function requireDispatchReconciliation(runtime, botId, token, turn = null) {
   if (!ownsDispatch(runtime, botId, token) || terminalTurn(turn) ||
-      (turn?.id && (terminalTurn(runtime.store.get("planTurnEvidence", turn.id)) || observedActiveTurn(runtime, botId, turn.id)))) return;
-  requireCurrentActivity(runtime, botId, turn?.id, "submission-needs-current-state");
+      (usableTurnId(turn?.id) && (terminalTurn(runtime.store.get("planTurnEvidence", turn.id)) || observedActiveTurn(runtime, botId, turn.id)))) return;
+  requireCurrentActivity(runtime, botId, usableTurn(turn) ? turn.id : null, "submission-needs-current-state");
 }
 
 export function observedActiveTurn(runtime, botId, turnId) {
-  return Boolean(!activityUnresolved(runtime, botId) && turnId && runtime.store.bot(botId).activeTurnId === turnId &&
+  return Boolean(!activityUnresolved(runtime, botId) && usableTurnId(turnId) && runtime.store.bot(botId).activeTurnId === turnId &&
     runtime.store.get("botActivity", botId)?.activeTurnId === turnId &&
     !terminalTurn(runtime.store.get("planTurnEvidence", turnId)));
 }
@@ -87,6 +89,7 @@ function saveActive(runtime, botId, turn, changes) {
 // Direct native start observations, unlike awaited snapshots, establish the
 // next generation themselves. Both generation and bot state commit together.
 export function observeStartedTurn(runtime, botId, turn, changes = {}) {
+  if (!usableTurn(turn) || turn.status !== "inProgress") return false;
   return runtime.store.transaction(() => {
     if (terminalTurn(runtime.store.get("planTurnEvidence", turn.id))) return false;
     saveActive(runtime, botId, turn, changes);
@@ -134,7 +137,8 @@ export function projectTerminalTurn(runtime, botId, turn, completeEvidence = fal
 // says inProgress. A stale ACK can retain containment for a fresh current read;
 // later historical recovery cannot repeat that invalidation.
 export function acknowledgeTurnDispatch(runtime, botId, turn, token, changes = {}) {
-  if (turn?.status !== "inProgress") return false;
+  requireTurn(turn); // Validate terminal ACKs too, before the early return.
+  if (turn.status !== "inProgress") return false;
   return runtime.store.transaction(() => {
     if (!ownsDispatch(runtime, botId, token)) return false;
     if (!activityUnchanged(runtime, botId, token)) {
@@ -156,7 +160,7 @@ export function acknowledgeTurnDispatch(runtime, botId, turn, token, changes = {
 // mark an old operation/turn completed, rejected, or safe to replay.
 export function projectCurrentActive(runtime, botId, turn, token) {
   return runtime.store.transaction(() => {
-    if (!activityUnchanged(runtime, botId, token) || turn?.status !== "inProgress" ||
+    if (!activityUnchanged(runtime, botId, token) || !usableTurn(turn) || turn.status !== "inProgress" ||
         terminalTurn(runtime.store.get("planTurnEvidence", turn.id))) return false;
     saveActive(runtime, botId, turn, {});
     return true;
