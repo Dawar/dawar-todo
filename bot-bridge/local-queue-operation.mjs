@@ -1,4 +1,5 @@
 import { enqueuePrompt, mutatePrompt, stagedQueue } from "./prompt-queue.mjs";
+import { captureActivity, activityUnchanged } from "./turn-state.mjs";
 
 // Runs under the bot lock. Awaited work is validation/read-only with respect to
 // the queue; the returned synchronous closure and operation receipt commit in
@@ -49,11 +50,14 @@ export async function prepareLocalQueueMutation(runtime, method, botId, params, 
     throw new Error("Reconcile unconfirmed execution, or edit/remove a rejected prompt, before resuming this queue.");
   if (bot.archived) throw new Error("Restore this bot first.");
   const beforeTurnId = bot.activeTurnId;
+  const activity = captureActivity(runtime, botId);
   const { thread } = await runtime.codex.call("thread/read", { threadId: bot.threadId, includeTurns: true });
   const latest = await runtime.latestNativeTurn(bot, thread);
   const active = thread.status?.type === "active" || (!thread.status && latest?.status === "inProgress");
   if (active && latest?.status !== "inProgress") throw new Error("The active native turn could not be identified. Refresh before resuming the queue.");
   return () => {
+    if (!activityUnchanged(runtime, botId, activity))
+      throw new Error("Native activity changed during recovery. Refresh before resuming the queue again.");
     const current = runtime.store.bot(botId);
     if ((current.queuePauseRevision ?? 0) !== (bot.queuePauseRevision ?? 0))
       throw new Error("A newer queue pause needs review. Refresh before resuming again.");
@@ -61,8 +65,7 @@ export async function prepareLocalQueueMutation(runtime, method, botId, params, 
         (latest?.id === beforeTurnId && latest.status === "interrupted")))
       throw new Error("The turn was interrupted during recovery. Review it before resuming the queue again.");
     // A notification received during the read wins over that read's snapshot.
-    const newer = current.activeTurnId && current.activeTurnId !== beforeTurnId && current.activeTurnId !== latest?.id;
-    if (active && !newer) runtime.projectActiveTurn(botId, latest);
+    if (active) runtime.projectActiveTurn(botId, latest, activity);
     if (!active && latest) runtime.projectTerminalTurn(botId, latest, true);
     const after = runtime.store.bot(botId);
     runtime.saveBot(after, { queuePaused: false, error: null,

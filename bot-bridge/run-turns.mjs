@@ -1,3 +1,5 @@
+import { observedActiveTurn } from "./turn-state.mjs";
+
 const nullable = value => typeof value === "string" && value ? value : null;
 const date = value => {
   if (typeof value !== "string") return null;
@@ -43,7 +45,7 @@ export function listRunTurns(runtime, bot, params) {
 
 export function activeScheduledTurn(runtime, botId) {
   const context = runtime.scheduledContext(botId);
-  if (!context) return null;
+  if (!context || !observedActiveTurn(runtime, botId, context.turnId)) return null;
   const run = runtime.store.get("run", context.runId);
   const continuation = context.operationId !== (run.operationId ?? `schedule:${run.id}`);
   const receipt = continuation ? runtime.store.get("runTurn", context.operationId) : run;

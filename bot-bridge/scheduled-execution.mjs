@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { findNativeTurn } from "./native-reconcile.mjs";
 import { finishLocalOperation } from "./prompt-queue.mjs";
+import { captureActivity } from "./turn-state.mjs";
 
 const now = () => new Date().toISOString();
 const terminal = new Set(["completed", "failed", "interrupted"]);
@@ -46,6 +47,7 @@ export async function dispatchScheduled(runtime, bot, run) {
 
 export async function reconcileScheduled(runtime, run) {
   const bot = runtime.store.bot(run.botId);
+  const activity = captureActivity(runtime, bot.id);
   const found = await findNativeTurn(runtime, run.threadId ?? bot.threadId, {
     turnId: run.turnId, clientId: run.operationId ?? `schedule:${run.id}`, cursor: run.reconcileCursor ?? null,
   });
@@ -65,7 +67,7 @@ export async function reconcileScheduled(runtime, run) {
       ...(found.turn ? { turnId: found.turn.id, status: found.turn.status === "inProgress" ? "running" : found.turn.status,
         error: found.turn.error?.message ?? null, ...(terminal.has(found.turn.status) ? { finishedAt: now() } : {}) } : {}) });
     if (found.turn) {
-      runtime.projectActiveTurn(bot.id, found.turn);
+      runtime.projectActiveTurn(bot.id, found.turn, activity);
       runtime.recordScheduledTurn(bot.id, run.id, run.operationId ?? `schedule:${run.id}`, found.turn);
       runtime.projectTerminalTurn(bot.id, found.turn, true);
       finishLocalOperation(runtime.store, run.operationId ?? `schedule:${run.id}`, { turn: found.turn });
@@ -94,6 +96,7 @@ export function scheduledContext(runtime, botId, turnId = runtime.store.bot(botI
 export async function reconcileRunTurn(runtime, receipt) {
   const bot = runtime.store.bot(receipt.botId);
   if (runtime.store.get("run", receipt.runId)?.botId !== bot.id) throw new Error("Scheduled continuation owner mismatch.");
+  const activity = captureActivity(runtime, bot.id);
   const found = await findNativeTurn(runtime, receipt.threadId ?? bot.threadId, {
     turnId: receipt.turnId, clientId: receipt.operationId ?? receipt.id, cursor: receipt.reconcileCursor ?? null,
   });
@@ -104,7 +107,7 @@ export async function reconcileRunTurn(runtime, receipt) {
       status: found.turn ? current.status : "uncertain", reconcileCursor: found.nextCursor,
       reconcileAfter: new Date(Date.now() + 60000).toISOString(), checkedAt: now() });
     if (!found.turn) return; // Retain original identity; never dispatch a replacement.
-    runtime.projectActiveTurn(bot.id, found.turn);
+    runtime.projectActiveTurn(bot.id, found.turn, activity);
     runtime.recordScheduledTurn(bot.id, receipt.runId, receipt.operationId ?? receipt.id, found.turn);
     runtime.projectTerminalTurn(bot.id, found.turn, true);
     finishLocalOperation(runtime.store, receipt.operationId ?? receipt.id, { turn: found.turn });
