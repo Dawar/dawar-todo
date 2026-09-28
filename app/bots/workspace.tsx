@@ -50,7 +50,8 @@ import { BotConversation } from "./timeline";
 import { BotSidebarList } from "./sidebar-list";
 import { RequestCard } from "./request-card";
 import { RunFindings } from "./run-findings";
-import { MainStopButton, MainStopRecovery, StopAll } from "./run-controls";
+import { MainStopButton, MainStopRecovery } from "./run-controls";
+import { BotWorkControls } from "./bot-work-controls";
 import { RunHistory } from "./run-history";
 import { ConversationActivity, type ActivityTarget } from "./conversation-activity";
 import { UsagePanel } from "./usage-panel";
@@ -413,7 +414,8 @@ export function BotsWorkspace() {
   const filtered = useMemo(() => bots.filter((b) => b.archived === archived &&
     `${b.name} ${b.purpose}`.toLowerCase().includes(search.toLowerCase())), [bots, archived, search]);
   const schedules = snapshot?.schedules.filter((s) => s.botId === selected) ?? [];
-  const recentRuns = snapshot?.runs.filter(run => run.botId === selected) ?? [];
+  const recentRuns = [...new Map([...(lanes ? snapshot?.backgroundRuns ?? [] : []), ...(snapshot?.runs ?? [])]
+    .filter(run => run.botId === selected).map(run => [run.id, run])).values()];
   const activeScheduledTurns = snapshot?.activeScheduledTurns?.filter(turn => turn.botId === selected);
   const scheduledActive = !lanes && (activeScheduledTurns ? activeScheduledTurns.length > 0 : recentRuns.some(run => ["running", "starting"].includes(run.status) && (!run.turnId || run.turnId === bot?.activeTurnId)));
   const openActivity = (target: ActivityTarget | null = null) => { setActivityTarget(target); setShowRunHistory(true); };
@@ -793,7 +795,7 @@ export function BotsWorkspace() {
             <p className="bots-profile-hint">
               Ask {bot.name} to change its personality, instructions, or memory.
             </p>
-            {lanes && <StopAll owner={owner} botId={bot.id} online={online} />}
+            {lanes && <BotWorkControls key={scope} owner={owner} bot={bot} runs={recentRuns} online={online} onOpen={target => { setProfile(false); openActivity(target); }} />}
             <BotAttachmentsEntry bot={bot} owner={owner} online={online} onOpen={() => openGallery("attachments")} />
             <h3 className="bots-profile-section-heading">Usage</h3>
             <UsagePanel bot={bot} online={online} />

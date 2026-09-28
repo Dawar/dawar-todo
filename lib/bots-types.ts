@@ -46,7 +46,7 @@ export type BotRunStateEvent = { runId: string; laneId?: string | null; threadId
 export type BotRun = {
   executionLane?: "main-legacy" | "run-v1";
   laneId?: string | null; threadId?: string | null;
-  activity?: { state: "provisioning" | "queued" | "running" | "waiting-input" | "waiting-workers" | "idle" | "uncertain" | "paused"; activeTurnId: string | null; waitReason: string | null };
+  activity?: { state: "provisioning" | "queued" | "running" | "waiting-input" | "waiting-workers" | "idle" | "uncertain" | "paused"; activeTurnId: string | null; waitReason: string | null; queuedCount?: number; pendingCount?: number };
   id: string;
   botId: string;
   scheduleId: string;
@@ -172,6 +172,8 @@ export type BotRunRequestResolvedEvent = BotRunContext & { key: string };
 export type BotSnapshot = {
   capabilities?: { backgroundRunLanes?: 1 };
   backgroundByBot?: BotBackground[];
+  /** Existing runtime metadata prioritizes unfinished runs over recent history. */
+  backgroundRuns?: BotRun[];
   bots: Bot[];
   pending: BotRequest[];
   cursor: number;

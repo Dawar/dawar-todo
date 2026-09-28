@@ -54,7 +54,10 @@ function applySnapshotEvent(snapshot: BotSnapshot, event: BotEvent, key?: string
     const data = event.data as BotRunStateEvent;
     if (!validRunState(data, event.botId)) return snapshot;
     if (key?.startsWith("background:")) return { ...snapshot, backgroundByBot: [...(snapshot.backgroundByBot ?? []).filter(value => value.botId !== event.botId), { ...data.background, botId: event.botId }] };
-    return { ...snapshot, runs: [data.run, ...snapshot.runs.filter(run => run.id !== data.runId)].slice(0, 100) };
+    return { ...snapshot, runs: [data.run, ...snapshot.runs.filter(run => run.id !== data.runId)].slice(0, 100),
+      // Keep an older unfinished run's snapshot row current too. This patch
+      // uses the same per-run event/snapshot sequence fence as recent runs.
+      ...(snapshot.backgroundRuns ? { backgroundRuns: snapshot.backgroundRuns.map(run => run.id === data.runId && run.botId === event.botId ? data.run : run) } : {}) };
   }
   if (event.type === "schedules" && event.botId && Object.hasOwn(event.data as object, "activeScheduledTurn")) {
     const active = (event.data as BotScheduledEventData).activeScheduledTurn;
