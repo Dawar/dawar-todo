@@ -1,6 +1,37 @@
 # Night runtime corrections — R1–R5
 
-## R6 activity-order correction — latest candidate
+## F1 current-activity containment — latest candidate
+
+2026-09-28 · task `5321bed0192f182682ecbfcf1822dff0a345ca59700ab35629b20e2b31271fa4` · branch `codex/night-runtime-recovery-3816777c`.
+
+Source commits **`5352968bc383c079f00cd1cad65ac41d805bdd96`** and **`77d18e6fa61733a4eb8a9ed87e12ad09e56b9f6c`**, continuing reviewed source `1401699c` / report HEAD `5c9a7b8` without rebase/reset. The latter closes the two queue-tick early-return paths found during the same caller audit. Reviewer `b26accc3` found original R6 resolved but required F1: a rejected active projection could still retire receipt uncertainty and leave public active ID null, allowing a conflicting start. This correction remains a candidate for independent review, not shipped/accepted code.
+
+Acceptance and current activity now have separate durable state. An accepted in-progress turn whose projection is refused keeps its exact success/turn/operation/input receipts, and sets a private `botActivity.unresolved` barrier unless equivalent current active or exact terminal evidence already exists. Neither a successful operation nor unrelated terminal evidence clears that barrier. Known current native start observations, or a fresh fenced current-state read, can establish the current projection without inventing an old execution outcome. Duplicate unrelated terminal evidence no longer advances the generation unnecessarily. The R6 monotonic generation check remains intact.
+
+Before coding, the state invariants were stated as follows:
+
+| Evidence | Receipt | Current projection / starts |
+| --- | --- | --- |
+| Accepted in-progress response, valid fence or matching observed active identity | Preserve success | Active identity; existing scheduled/input gates apply |
+| Accepted in-progress response, refused fence and no equivalent current observation | Preserve success | Persist unresolved; no conflicting starts |
+| Exact terminal evidence | Settle that exact turn only | Preserve newer identity, unknown current barrier, pauses and unrelated pending requests |
+| Fresh current native idle/identified active, unchanged generation | No inference about old unknown outcome | Establish current projection and release only the current-state barrier |
+| Failed/stale read | Preserve all receipts | Retain unresolved; bounded automatic read recovery |
+| New observed native start | Preserve earlier receipts | Establish new current identity/generation; no stale ACK override |
+
+`current-activity.mjs` reads thread metadata, one newest 25-turn metadata page, then thread metadata again. Idle requires explicit final native `idle`, matching thread ID and an unchanged durable generation. Active additionally requires both status reads active, one newest in-progress turn with a valid ID, no conflicting terminal evidence and the same fence. Missing/notLoaded/systemError/busy-without-ID is not idle. No full items/history hydration, send, settings mutation or native replay is used. The checked-in native contract provides current thread status but no atomic current-turn-ID read: these are sequential reads plus observed-event fencing, not a claim of an atomic native snapshot or proof against entirely unobserved external native transitions.
+
+Startup marks existing and newly recovered native threads unresolved before readiness. Tick recovery retries at 5/15/30 seconds (maximum backoff), two due records per cycle; startup checks up to 100 records per pass before and after receipt recovery. Explicit Send/resume can request a fresh read. Bot locks prevent duplicate bridge attempts for one bot, while native notifications still advance the fence independently. Read errors persist, do not clear containment, and need no page/render to retry. Existing 120-second native RPC timeouts and other serial recovery work can delay progress; there is no readiness/latency guarantee or recovery promise during permanent native/storage unavailability.
+
+The gate audit covers human Send/steer, managed and legacy main starts, queue/schedule tick, manager notices, delegation/worker-message attribution, resume and compaction entry. Queue-tick stale busy reads now retain containment even before the common projection helper is reached. Fresh current idle can release historical *current-state* uncertainty for an already-done operation with an exact turn ID; unknown acceptance remains independently guarded. Receipt discovery never starts replacement work. A generic operation's successful result is assigned only after its activity evidence persists, so a caught storage failure cannot return success without the barrier.
+
+Migration/public compatibility: additive private fields in existing `botActivity` JSON only; no schema migration, originals/attachment bytes/receipt deletion or public API/type/frontend change. The diagnostic candidate turn ID is not a replacement receipt ledger. Existing queue `delivery-unconfirmed` wait reason is reused. R1 app-owned Plan consumption, R2 exact continuation provenance/discovery, R3 terminal/pause fencing, R4 immutable attachment associations and R5 atomic local queue acceptance remain. Full scheduled lane isolation, delayed caller correlation and todo/Operator architecture remain unfinished. The same-turn start-before-ACK preview lag remains nonblocking and unchanged.
+
+Checks actually run for this correction: `node --check` and scoped ESLint on all eight changed backend modules, final changed-runtime syntax/lint, `npx tsc --noEmit` (including final source), and `git diff --check`, all passed. No automated tests/suites, runtime imports/fixtures/fault injection, build, live DB/native/user mutation, browser/device review, main/other-worker changes, merge/rebase/push/deploy or restart. Race/COMMIT/restart sequences are source traces only; native ordering and actual recovery latency remain unexecuted.
+
+Full caller inventory, exact source traces, migration and evidence limits are in manager home `NIGHT_RUNTIME_CONTAINMENT_CORRECTION.md`, unique copy `NIGHT_RUNTIME_CONTAINMENT_CORRECTION_5321bed0_3816777c.md`. A manager-coordinated bridge release/reload is required only after independent acceptance and existing idle/legacy-queue safeguards. Public frontend contract is unchanged.
+
+## R6 activity-order correction — prior reviewed candidate
 
 Source **`1401699c43cb47c356f778c4ad3abd9a9e4ad64c`**, task `796928e9`, follows the correction-required rereview of source `7c292e3` / report `b45d932`. This addendum supersedes any implication below that the old active-ID check alone fenced newer finished turns. The rereviewer found direct R1–R5 resolved; R6 still required this correction and independent re-review.
 
