@@ -25,8 +25,13 @@ export function RunTurnPicker({ owner, botId, runId, primary, selected, online, 
   const disclosure = useRef<HTMLDetailsElement>(null);
   const cursor = cursors[index];
   useEffect(() => {
-    if (!online || client.owner !== owner) return;
     let canceled = false;
+    if (!online || client.owner !== owner) {
+      // A canceled online read cannot settle its loading state. Clear only
+      // this owner's presentation, without changing cached data or retrying.
+      void Promise.resolve().then(() => { if (!canceled && client.owner === owner) setBusy(false); });
+      return () => { canceled = true; };
+    }
     void Promise.resolve().then(async () => {
       if (canceled) return;
       setBusy(true); setError("");
