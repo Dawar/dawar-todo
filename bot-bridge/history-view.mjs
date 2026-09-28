@@ -75,7 +75,9 @@ export async function historyViewPage(runtime, bot, cursor = null, turnId = null
     contextEntries.reverse();
   }
   const metadataBudget = MAX_PAGE_BYTES - bytes - Buffer.byteLength(JSON.stringify(contextEntries)) - Buffer.byteLength(olderCursor ?? '') - 2048;
-  const attachments = readHistoryAttachmentMetadata(runtime, bot, historyAttachmentSelectors([...entries, ...contextEntries]), metadataBudget);
+  const selectors = historyAttachmentSelectors([...entries, ...contextEntries]);
+  if (turnId) selectors.turns = [turnId];
+  const attachments = readHistoryAttachmentMetadata(runtime, bot, selectors, metadataBudget);
   return { entries: entries.reverse(), contextEntries, olderCursor, attachments, complete: !olderCursor && entries.every((e) => e.complete) };
 }
 
@@ -87,7 +89,7 @@ function detailRevision(runtime, bot) {
 }
 
 export async function readHistoryView(runtime, bot, params) {
-  const revision = historyRevision(runtime, bot) + (params.projection === "conversation" ? ":conversation-v2" : ""), eventCursor = runtime.store.cursor();
+  const revision = historyRevision(runtime, bot) + (params.projection === "conversation" ? ":conversation-v3" : ""), eventCursor = runtime.store.cursor();
   if (!params.cursor && !params.turnId && params.revision === revision) return { kind: 'unchanged', revision, eventCursor };
   if (params.projection !== 'conversation' && !params.cursor && !params.turnId && params.revision?.startsWith(`${runtime.epoch}:${bot.threadId}:`) && Number.isSafeInteger(params.after) && params.after >= 0) {
     const replay = runtime.store.replay(params.after);

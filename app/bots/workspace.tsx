@@ -51,6 +51,7 @@ import { BotConversation } from "./timeline";
 import { BotSidebarList } from "./sidebar-list";
 import { RequestCard } from "./request-card";
 import { RunHistory } from "./run-history";
+import { ConversationActivity, type ActivityTarget } from "./conversation-activity";
 import { UsagePanel } from "./usage-panel";
 import { useBotComposer } from "./use-composer";
 import { ComposerAttachments, ComposerStatus } from "./composer-state";
@@ -121,6 +122,7 @@ export function BotsWorkspace() {
     [profile, setProfile] = useState(false),
     [gallery, setGallery] = useState<"artifacts" | "attachments" | null>(null),
     [showRunHistory, setShowRunHistory] = useState(false),
+    [activityTarget, setActivityTarget] = useState<ActivityTarget | null>(null),
     [showOverallUsage, setShowOverallUsage] = useState(false),
     [editingSchedule, setEditingSchedule] = useState<
       BotSchedule | "new" | null
@@ -419,6 +421,9 @@ export function BotsWorkspace() {
   const filtered = useMemo(() => bots.filter((b) => b.archived === archived &&
     `${b.name} ${b.purpose}`.toLowerCase().includes(search.toLowerCase())), [bots, archived, search]);
   const schedules = snapshot?.schedules.filter((s) => s.botId === selected) ?? [];
+  const recentRuns = snapshot?.runs.filter(run => run.botId === selected) ?? [];
+  const scheduledActive = recentRuns.some(run => ["running", "starting"].includes(run.status) && (!run.turnId || run.turnId === bot?.activeTurnId));
+  const openActivity = (target: ActivityTarget | null = null) => { setActivityTarget(target); setShowRunHistory(true); };
   return (
     <div className="bots-screen" ref={screenRef} data-no-pull-refresh>
       <SiteHeader current="bots" />
@@ -579,7 +584,8 @@ export function BotsWorkspace() {
             </div>
           ) : (
             <>
-              <BotConversation key={scope} owner={owner} bot={bot} online={online}>
+              <ConversationActivity runs={recentRuns} onOpen={() => openActivity()} />
+              <BotConversation key={scope} owner={owner} bot={bot} online={online} onOpenActivity={openActivity}>
                 {pending.map((request) => (
                   <RequestCard
                     key={request.key}
@@ -593,7 +599,7 @@ export function BotsWorkspace() {
                     }
                   />
                 ))}
-                {(bot.status === "running" ||
+                {(!scheduledActive && bot.status === "running" ||
                   Boolean(bot.workerTasks?.active)) && (
                   <div className="bots-working">
                     <span />
@@ -858,7 +864,7 @@ export function BotsWorkspace() {
                 <Plus size={17} />
               </button>
             </div>
-            <button className="bots-history-open" onClick={() => setShowRunHistory(true)}><History size={16} /> View schedule history</button>
+            <button className="bots-history-open" onClick={() => openActivity()}><History size={16} /> Activity &amp; run history</button>
             {!schedules.length && (
               <p className="bots-muted">
                 Ask your bot to schedule something, or add a schedule here.
@@ -957,7 +963,7 @@ export function BotsWorkspace() {
           </aside>
         )}
       </main>
-      {showRunHistory && bot && <RunHistory bot={bot} schedules={schedules} attachments={[]} online={online} onClose={() => setShowRunHistory(false)} download={(id) => void download(id)} />}
+      {showRunHistory && bot && <RunHistory key={scope} bot={bot} schedules={schedules} recentRuns={recentRuns} initialTarget={activityTarget} attachments={[]} online={online} onClose={() => setShowRunHistory(false)} download={(id) => void download(id)} />}
       {showOverallUsage && <div className="bots-modal-backdrop" onClick={() => setShowOverallUsage(false)}><section className="bots-history-modal bots-usage-modal" role="dialog" aria-modal="true" aria-label="Codex account usage" onClick={(event) => event.stopPropagation()}><header><h2>Codex account usage</h2><button className="bots-icon-button" aria-label="Close account usage" onClick={() => setShowOverallUsage(false)}><X size={19} /></button></header><UsagePanel online={online} /></section></div>}
       {creating && (
         <div className="bots-modal-backdrop" onClick={() => setCreating(false)}>

@@ -6,9 +6,12 @@ import type { BotAttachment, BotEvent } from "./bots-types";
 export type HistoryEntry = {
   id: string; turnId: string; type: ThreadItem["type"]; label: string;
   item: ThreadItem | null; complete: boolean; scheduled: boolean;
+  audience?: "conversation" | "mixed" | "finding"; runId?: string; findingId?: string; legacyContext?: boolean;
   startedAt: number | null; turnStatus?: Turn["status"]; itemStatus?: string; status: Turn["status"]; updatedSeq?: number;
 };
 export type HistoryPage = {
+  /** Routine turns inspected and excluded before filling the conversation page. */
+  activityTurns?: { turnId: string; runId?: string; active?: boolean }[];
   entries: HistoryEntry[]; turnIds?: string[]; newerCursor?: string | null; partialTurn?: boolean; contextEntries?: HistoryEntry[]; olderCursor: string | null; revision: string;
   eventCursor: number; attachments: BotAttachment[]; complete: boolean;
 };
@@ -57,6 +60,7 @@ export function projectHistoryItem(turn: Pick<Turn, "id" | "startedAt" | "status
     else if (source.type === "fileChange") label = `${source.changes.length} file changes`;
     else if (source.type === "webSearch") label = source.query.slice(0, 160);
     else if (source.type === "mcpToolCall") label = `${source.server} · ${source.tool}`.slice(0, 160);
+    else if (source.type === "dynamicToolCall") label = source.tool === "bots_report_result" ? "Reported finding" : source.tool === "bots_publish_artifact" ? "Saved file" : "Tool result";
   }
   return { id: source.id, turnId: turn.id, type: source.type, label, item, complete,
     scheduled, startedAt: turn.startedAt, turnStatus: turn.status, ...("status" in source ? { itemStatus: String(source.status) } : {}), status: "status" in source && source.status === "inProgress" ? "inProgress" : "status" in source && source.status === "completed" ? "completed" : turn.status };
