@@ -610,8 +610,8 @@ export function BotsWorkspace() {
               {!bot.archived && (
                 <>
                   <div className="bots-composer-support">
-                    {snapshot && <ComposerSettings key={scope} bot={bot} snapshot={snapshot} online={online} />}
-                    <PromptQueue key={scope} owner={owner} bot={bot} items={promptQueue} online={online}
+                    {snapshot && <ComposerSettings key={`settings:${scope}`} bot={bot} snapshot={snapshot} online={online} />}
+                    <PromptQueue key={`queue:${scope}`} owner={owner} bot={bot} items={promptQueue} online={online}
                       canEdit={Boolean(composer?.ready && !sending)} onEdit={editQueued} refresh={() => loadQueue(bot.id)} />
                   {lanes && <MainStopRecovery owner={owner} botId={bot.id} online={online} />}
                   <ComposerStatus composer={composer} error={composerError} />
