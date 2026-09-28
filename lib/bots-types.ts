@@ -38,7 +38,15 @@ export type BotSchedule = {
   nextRunAt: string | null;
   createdAt: string;
 };
+export type BotRunContext = { laneId: string; runId: string; threadId: string };
+export type BotBackground = { botId: string; running: number; needsInput: number; unconfirmed: number };
+export type BotRunReceipt = { operationId: string; runId: string; laneId: string; state: "queued" | "accepted" | "uncertain" | "rejected"; turnId: string | null; waitReason: string | null };
+export type BotRunFinding = BotRunContext & { id: string; botId: string; turnId: string; key: string; summary: string; createdAt: string };
+export type BotRunStateEvent = BotRunContext & { run: BotRun; background: Omit<BotBackground, "botId"> & { botId?: string } };
 export type BotRun = {
+  executionLane?: "main-legacy" | "run-v1";
+  laneId?: string; threadId?: string;
+  activity?: { state: "provisioning" | "queued" | "running" | "waiting-input" | "waiting-workers" | "idle" | "uncertain" | "paused"; activeTurnId: string | null; waitReason: string | null };
   id: string;
   botId: string;
   scheduleId: string;
@@ -53,6 +61,7 @@ export type BotRun = {
 export type BotRunPage = { runs: BotRun[]; nextCursor: string | null; latestBySchedule: BotRun[] };
 /** Metadata for a scheduled-context continuation; the primary run.turnId stays unchanged. */
 export type BotRunTurn = {
+  laneId?: string; threadId?: string; source?: string;
   id: string;
   botId: string;
   runId: string;
@@ -123,7 +132,7 @@ export type BotAttachment = {
   artifact?: boolean;
   direction?: "input" | "output";
   source?: "upload" | "published" | "native";
-  provenance?: { threadId?: string; turnId?: string; itemId?: string; operationId?: string };
+  provenance?: { runId?: string; laneId?: string; threadId?: string; turnId?: string; itemId?: string; operationId?: string };
   preview?: { kind: "image" | "pdf" | "none"; version: string };
 };
 export type BotArtifactKind = "image" | "pdf" | "document" | "audio" | "video" | "other";
@@ -136,7 +145,7 @@ export type BotArtifact = Omit<BotAttachment, "path"> & {
   direction: "input" | "output";
   source: "upload" | "published" | "native";
   kind: BotArtifactKind;
-  provenance: { threadId?: string; turnId?: string; itemId?: string; operationId?: string };
+  provenance: { runId?: string; laneId?: string; threadId?: string; turnId?: string; itemId?: string; operationId?: string };
   preview: { kind: "image" | "pdf" | "none"; version: string };
 };
 export type BotArtifactQuery = {
@@ -152,12 +161,17 @@ export type BotArtifactPreview =
   | { status: "ready"; version: string; mimeType: "image/webp"; data: string; width: number; height: number }
   | { status: "unavailable"; version: string; reason: string };
 export type BotRequest = {
+  runId?: string; laneId?: string; threadId?: string;
   key: string;
   botId: string;
   request: ServerRequest;
   createdAt: string;
 };
+export type BotRunRequestEvent = BotRequest & BotRunContext;
+export type BotRunRequestResolvedEvent = BotRunContext & { key: string };
 export type BotSnapshot = {
+  capabilities?: { backgroundRunLanes?: 1 };
+  backgroundByBot?: BotBackground[];
   bots: Bot[];
   pending: BotRequest[];
   cursor: number;

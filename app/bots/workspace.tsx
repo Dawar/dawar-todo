@@ -49,6 +49,8 @@ import type { NativeEvent } from "./thread-state";
 import { BotConversation } from "./timeline";
 import { BotSidebarList } from "./sidebar-list";
 import { RequestCard } from "./request-card";
+import { RunFindings } from "./run-findings";
+import { MainStopButton, MainStopRecovery, StopAll } from "./run-controls";
 import { RunHistory } from "./run-history";
 import { ConversationActivity, type ActivityTarget } from "./conversation-activity";
 import { UsagePanel } from "./usage-panel";
@@ -144,11 +146,12 @@ export function BotsWorkspace() {
   const canSend = Boolean(composer?.ready && !composer.storageError && !sending &&
     uploads.every((file) => file.remote?.ready));
   const setDraft = (text: string) => composer?.setText(text);
-  const snapshot = client.snapshot,
-    online = client.online,
+  const snapshot = client.snapshot;
+  const lanes = snapshot?.capabilities?.backgroundRunLanes === 1;
+  const online = client.online,
     bots = snapshot?.bots ?? EMPTY_BOTS,
     bot = bots.find((b) => b.id === selected),
-    pending = snapshot?.pending.filter((p) => p.botId === selected) ?? [];
+    pending = snapshot?.pending.filter((p) => p.botId === selected && !(lanes && p.runId && p.laneId && p.threadId)) ?? [];
   useLayoutEffect(() => {
     const screen = screenRef.current;
     if (!screen) return;
@@ -412,7 +415,7 @@ export function BotsWorkspace() {
   const schedules = snapshot?.schedules.filter((s) => s.botId === selected) ?? [];
   const recentRuns = snapshot?.runs.filter(run => run.botId === selected) ?? [];
   const activeScheduledTurns = snapshot?.activeScheduledTurns?.filter(turn => turn.botId === selected);
-  const scheduledActive = activeScheduledTurns ? activeScheduledTurns.length > 0 : recentRuns.some(run => ["running", "starting"].includes(run.status) && (!run.turnId || run.turnId === bot?.activeTurnId));
+  const scheduledActive = !lanes && (activeScheduledTurns ? activeScheduledTurns.length > 0 : recentRuns.some(run => ["running", "starting"].includes(run.status) && (!run.turnId || run.turnId === bot?.activeTurnId)));
   const openActivity = (target: ActivityTarget | null = null) => { setActivityTarget(target); setShowRunHistory(true); };
   return (
     <div className="bots-screen" ref={screenRef} data-no-pull-refresh>
@@ -574,8 +577,9 @@ export function BotsWorkspace() {
             </div>
           ) : (
             <>
-              <ConversationActivity runs={recentRuns} activeTurns={activeScheduledTurns} onOpen={openActivity} />
+              <ConversationActivity runs={recentRuns} activeTurns={activeScheduledTurns} background={lanes ? snapshot?.backgroundByBot?.find(value => value.botId === bot.id) ?? { botId: bot.id, running: 0, needsInput: 0, unconfirmed: 0 } : undefined} onOpen={openActivity} />
               <BotConversation key={scope} owner={owner} bot={bot} online={online} onOpenActivity={openActivity}>
+                {lanes && <RunFindings key={scope} owner={owner} botId={bot.id} online={online} onOpen={openActivity} />}
                 {pending.map((request) => (
                   <RequestCard
                     key={request.key}
@@ -609,6 +613,7 @@ export function BotsWorkspace() {
                     {snapshot && <ComposerSettings key={scope} bot={bot} snapshot={snapshot} online={online} />}
                     <PromptQueue key={scope} owner={owner} bot={bot} items={promptQueue} online={online}
                       canEdit={Boolean(composer?.ready && !sending)} onEdit={editQueued} refresh={() => loadQueue(bot.id)} />
+                  {lanes && <MainStopRecovery owner={owner} botId={bot.id} online={online} />}
                   <ComposerStatus composer={composer} error={composerError} />
                   {composer && <ComposerAttachments composer={composer} />}
                   </div>
@@ -675,12 +680,12 @@ export function BotsWorkspace() {
                       </button>
                       </>
                     )}
-                    {(bot.activeTurnId || Boolean(bot.workerTasks?.active)) &&
-                      Boolean(draft || uploads.length) && (
+                    {(bot.activeTurnId || !lanes && Boolean(bot.workerTasks?.active)) &&
+                      Boolean(draft || uploads.length) && (lanes ? <MainStopButton owner={owner} botId={bot.id} online={online} className="bots-icon-button" /> :
                         <button
                           type="button"
                           className="bots-icon-button"
-                          aria-label="Stop bot"
+                          aria-label="Stop all bot work"
                           disabled={!online}
                           onClick={() =>
                             void action(() =>
@@ -691,13 +696,13 @@ export function BotsWorkspace() {
                           <Square size={14} fill="currentColor" />
                         </button>
                       )}
-                    {!editingQueueId && ((bot.activeTurnId || Boolean(bot.workerTasks?.active)) &&
+                    {!editingQueueId && ((bot.activeTurnId || !lanes && Boolean(bot.workerTasks?.active)) &&
                     !draft &&
-                    !uploads.length ? (
+                    !uploads.length ? (lanes ? <MainStopButton owner={owner} botId={bot.id} online={online} className="bots-send" /> :
                       <button
                         type="button"
                         className="bots-send"
-                        aria-label="Stop bot"
+                        aria-label="Stop all bot work"
                         disabled={!online}
                         onClick={() =>
                           void action(() =>
@@ -788,6 +793,7 @@ export function BotsWorkspace() {
             <p className="bots-profile-hint">
               Ask {bot.name} to change its personality, instructions, or memory.
             </p>
+            {lanes && <StopAll owner={owner} botId={bot.id} online={online} />}
             <BotAttachmentsEntry bot={bot} owner={owner} online={online} onOpen={() => openGallery("attachments")} />
             <h3 className="bots-profile-section-heading">Usage</h3>
             <UsagePanel bot={bot} online={online} />

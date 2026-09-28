@@ -10,7 +10,7 @@ export type Draft = {
   text: string; textVersion: string; files: StagedFile[]; queueId?: string; queueRevision?: number;
 };
 export type Submission = {
-  id: string; slot: string; method: "turn.send" | "queue.add" | "queue.update";
+  id: string; slot: string; method: "turn.send" | "queue.add" | "queue.update" | "runs.send";
   params: Record<string, unknown>; textVersion: string; fileIds: string[];
   state: "pending" | "uncertain"; error?: string;
 };
@@ -125,11 +125,11 @@ export function changeDraft(source: DraftRecord, change: DraftChange): DraftReco
 type FileRow = { owner: string; botId: string; id: string; blob: Blob };
 export class BotDraftStore {
   private connection?: Promise<IDBDatabase>;
-  constructor(private factory: IDBFactory = indexedDB, private legacy?: Storage) {}
+  constructor(private factory: IDBFactory = indexedDB, private legacy?: Storage, private database = DRAFT_DATABASE) {}
   private open() {
     if (!this.connection) {
       this.connection = new Promise<IDBDatabase>((resolve, reject) => {
-        const request = this.factory.open(DRAFT_DATABASE, 1);
+        const request = this.factory.open(this.database, 1);
         request.onupgradeneeded = () => {
           const db = request.result;
           db.createObjectStore("drafts", { keyPath: ["owner", "botId"] }).createIndex("owner", "owner");

@@ -5,6 +5,7 @@ import type {
   BotHistory,
   BotSchedule,
   BotRunPage,
+  BotRunReceipt, BotRunFinding, BotRequest,
   BotRunTurnPage,
   BotThreadUsage,
   BotAccountQuota,
@@ -23,7 +24,7 @@ export type BotOperations = {
   snapshot: { params: Record<string, never>; result: BotSnapshot };
   history: { params: Record<string, never>; result: BotHistory };
   "history.view": {
-    params: { projection?: "conversation"; cursor?: string | null; turnId?: string; revision?: string; after?: number };
+    params: { runId?: string; projection?: "conversation"; cursor?: string | null; turnId?: string; revision?: string; after?: number };
     result: HistoryResponse;
   };
   "history.attachments": { params: { cursor?: string | null }; result: { attachments: BotAttachment[]; nextCursor: string | null } };
@@ -31,17 +32,17 @@ export type BotOperations = {
   "artifacts.list": { params: BotArtifactQuery; result: BotArtifactPage };
   "artifacts.preview": { params: { id: string; version?: string }; result: BotArtifactPreview };
   /** Explicit, bounded native-history backfill; botId required. Never scans paths or sends a turn. */
-  "artifacts.index": { params: { cursor?: string | null }; result: { registered: number; nextCursor: string | null; failures: { itemId: string; reason: string }[] } };
+  "artifacts.index": { params: { runId?: string; cursor?: string | null }; result: { registered: number; nextCursor: string | null; failures: { itemId: string; reason: string }[] } };
   "history.detail": {
-    params: { projection?: "conversation"; turnId: string; itemId: string; offset?: number; version?: string; knownVersion?: string };
+    params: { runId?: string; projection?: "conversation"; turnId: string; itemId: string; offset?: number; version?: string; knownVersion?: string };
     result: HistoryDetail;
   };
   "history.page": {
-    params: { cursor: string };
+    params: { runId?: string; cursor: string };
     result: ThreadTurnsListResponse;
   };
   "history.turn": {
-    params: { turnId: string; cursor?: string | null };
+    params: { runId?: string; turnId: string; cursor?: string | null };
     result: { turn: import("./codex-protocol/v2/Turn").Turn | null; nextCursor: string | null };
   };
   "bots.create": { params: { name: string; purpose?: string }; result: Bot };
@@ -58,7 +59,7 @@ export type BotOperations = {
     result: TurnStartResponse | TurnSteerResponse;
   };
   "turn.interrupt": {
-    params: Record<string, never>;
+    params: { scope?: "main" | "all" };
     result: Record<string, never>;
   };
   "queue.list": { params: Record<string, never>; result: BotQueuedSubmission[] };
@@ -88,6 +89,12 @@ export type BotOperations = {
   "schedules.delete": { params: { id: string }; result: Record<string, never> };
   "schedules.run": { params: { id: string }; result: unknown };
   "schedules.list": { params: Record<string, never>; result: unknown };
+  "runs.send": { params: { runId: string; text: string; attachments?: string[] }; result: BotRunReceipt };
+  "runs.receipt": { params: { runId: string; operationId: string }; result: BotRunReceipt };
+  "runs.requests": { params: { runId: string }; result: { pending: BotRequest[] } };
+  "runs.interrupt": { params: { runId: string }; result: Record<string, never> };
+  "runs.resume": { params: { runId: string }; result: Record<string, never> };
+  "runs.findings": { params: { runId?: string; cursor?: string | null; limit?: number }; result: { findings: BotRunFinding[]; nextCursor: string | null } };
   "runs.page": { params: { cursor?: string | null; limit?: number }; result: BotRunPage };
   /** Continuation metadata in stable ID order; default 25, maximum 50. */
   "runs.turns": { params: { runId: string; cursor?: string | null; limit?: number }; result: BotRunTurnPage };

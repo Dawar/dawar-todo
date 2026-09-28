@@ -3,6 +3,8 @@ import { Fragment, memo, useCallback, useEffect, useRef, useState, useMemo, useS
 import type { Bot, BotAttachment } from "../../lib/bots-types";
 import { historyKey, type HistoryEntry } from "../../lib/bot-history-view";
 import type { BotTimeline } from "./timeline-controller";
+/** Main and owned-run readers share rendering only, never state or persistence. */
+export type HistoryDetailReader = Pick<BotTimeline, "botId" | "subscribeDetail" | "detailItem" | "subscribe" | "detailPending" | "detail">;
 import { useBotTimeline } from "./use-timeline";
 import { botsClient } from "./client";
 import { BotMessage } from "./message";
@@ -13,7 +15,7 @@ import { ReturnedArtifacts } from "./returned-artifact";
 import type { ActivityTarget } from "./conversation-activity";
 
 const EntryBody = memo(function EntryBody({ entry, timeline, attachments, download }: {
-  entry: HistoryEntry; timeline: BotTimeline; attachments: BotAttachment[]; download: (id: string) => void;
+  entry: HistoryEntry; timeline: HistoryDetailReader; attachments: BotAttachment[]; download: (id: string) => void;
 }) {
   const { turnId, id } = entry;
   const full = useSyncExternalStore(useCallback((fn) => timeline.subscribeDetail({ turnId, id }, fn), [timeline, turnId, id]), () => timeline.detailItem(entry), () => null);

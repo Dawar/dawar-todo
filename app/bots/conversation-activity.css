@@ -103,3 +103,29 @@
 .bots-run-turns-body nav button { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: #3b754e; min-height: 44px; }
 .bots-run-turns-body > div > p.bots-run-turn-error { color: #9b6550; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 100px; overflow: auto; }
 .bots-run-turns > summary:focus-visible { outline: 2px solid #4c9970; outline-offset: 2px; border-radius: 12px; }
+
+/* Scoped run interactions reuse Activity's card/spacing language. */
+.bots-run-reply { margin: 22px 0 6px; padding: 16px; border: 1px solid #e3ebe5; border-radius: 16px; background: #fff; }
+.bots-run-reply header { display: grid; gap: 5px; margin-bottom: 12px; }
+.bots-run-reply header span, .bots-run-reply small, .bots-run-controls small { color: #728075; font-size: 12px; line-height: 1.5; }
+.bots-run-reply form { display: flex; align-items: flex-end; gap: 8px; }
+.bots-run-reply textarea { min-width: 0; flex: 1; width: 100%; resize: none; min-height: 42px; max-height: 150px; padding: 10px 12px; border: 1px solid #e3ebe5; border-radius: 12px; font: inherit; font-size: 16px; line-height: 1.4; background: var(--background); color: inherit; }
+.bots-run-reply textarea:focus { outline: 2px solid #286748; outline-offset: 1px; }
+.bots-run-reply p, .bots-run-questions p { overflow-wrap: anywhere; }
+.bots-run-reply p button, .bots-run-questions p button { margin: 4px 8px 4px 0; min-height: 40px; }
+.bots-run-reply .bots-send { position: static; flex: 0 0 40px; width: 40px; height: 40px; }
+.bots-run-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 12px 0; padding: 12px 0; border-block: 1px solid #e3ebe5; font-size: 13px; }
+.bots-run-controls > span { flex: 1; }
+.bots-run-controls small, .bots-run-controls p { flex-basis: 100%; margin: 0; overflow-wrap: anywhere; }
+.bots-run-controls button { min-height: 40px; padding: 8px 12px; border: 1px solid #e3ebe5; border-radius: 10px; background: #fff; color: inherit; }
+.bots-run-findings { margin: 14px 0; border: 1px solid #e3ebe5; border-radius: 14px; font-size: 13px; }
+.bots-run-findings > summary { padding: 12px 14px; cursor: pointer; color: #286748; font-weight: 600; }
+.bots-run-findings > div { max-height: 340px; overflow: auto; padding: 0 14px 12px; overscroll-behavior: contain; }
+.bots-run-findings article { padding: 12px 0; border-top: 1px solid #e3ebe5; }
+.bots-run-findings p { margin: 0 0 8px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+.bots-run-findings button { display: inline-flex; align-items: center; gap: 6px; min-height: 40px; color: #286748; }
+.bots-run-questions:empty { display: none; }
+@media (pointer: coarse) {
+  .bots-run-controls button, .bots-run-findings button, .bots-run-reply button { min-height: 44px; min-width: 44px; }
+}
+@media (max-width: 390px) { .bots-run-reply { padding: 12px; } .bots-run-reply form { gap: 4px; } }

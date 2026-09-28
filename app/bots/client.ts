@@ -7,6 +7,7 @@ import type {
   BridgeRequest,
   BotAttachment,
   BotScheduledEventData,
+  BotRunStateEvent,
 } from "../../lib/bots-types";
 
 export class BotRpcError extends Error {
@@ -39,13 +40,21 @@ function validComposerResult(method: string, result: Record<string, unknown> | u
   return true;
 }
 function snapshotEventKey(event: BotEvent) {
+  if (event.type === "run.state" && event.botId) return `run:${event.botId}:${(event.data as BotRunStateEvent).runId}`;
+  if (event.type === "run.request" || event.type === "run.request.resolved") return `request:${(event.data as { key: string }).key}`;
   if (event.type === "schedules" && event.botId && Object.hasOwn(event.data as object, "activeScheduledTurn")) return `scheduled:${event.botId}`;
   if (event.type === "bot") return `bot:${(event.data as BotSnapshot["bots"][number]).id}`;
   if (event.type === "request" || event.type === "request.resolved")
     return `request:${(event.data as { key: string }).key}`;
   return null;
 }
-function applySnapshotEvent(snapshot: BotSnapshot, event: BotEvent): BotSnapshot {
+function applySnapshotEvent(snapshot: BotSnapshot, event: BotEvent, key?: string): BotSnapshot {
+  if (event.type === "run.state" && event.botId && snapshot.capabilities?.backgroundRunLanes === 1) {
+    const data = event.data as BotRunStateEvent;
+    if (!data.runId || !data.laneId || !data.threadId || data.run?.id !== data.runId || data.run.botId !== event.botId || !data.background || data.background.botId && data.background.botId !== event.botId) return snapshot;
+    if (key?.startsWith("background:")) return { ...snapshot, backgroundByBot: [...(snapshot.backgroundByBot ?? []).filter(value => value.botId !== event.botId), { ...data.background, botId: event.botId }] };
+    return { ...snapshot, runs: [data.run, ...snapshot.runs.filter(run => run.id !== data.runId)].slice(0, 100) };
+  }
   if (event.type === "schedules" && event.botId && Object.hasOwn(event.data as object, "activeScheduledTurn")) {
     const active = (event.data as BotScheduledEventData).activeScheduledTurn;
     if (active !== null && (!active || active.botId !== event.botId || !active.turnId || !active.runId)) return snapshot;
@@ -56,11 +65,11 @@ function applySnapshotEvent(snapshot: BotSnapshot, event: BotEvent): BotSnapshot
     return { ...snapshot, bots: [...snapshot.bots.filter(item => item.id !== bot.id), bot]
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)) };
   }
-  if (event.type === "request") {
+  if (event.type === "request" || event.type === "run.request") {
     const request = event.data as BotSnapshot["pending"][number];
     return { ...snapshot, pending: [...snapshot.pending.filter(item => item.key !== request.key), request] };
   }
-  if (event.type === "request.resolved")
+  if (event.type === "request.resolved" || event.type === "run.request.resolved")
     return { ...snapshot, pending: snapshot.pending.filter(item => item.key !== (event.data as { key: string }).key) };
   return snapshot;
 }
@@ -416,11 +425,15 @@ export class BotsClient {
     if (message.type === "event") {
       const event = message.event as BotEvent;
       this.latestSnapshotEvent = Math.max(this.latestSnapshotEvent, event.seq);
-      const key = snapshotEventKey(event);
-      if (key && event.seq > this.fullSnapshotCursor &&
-          event.seq > (this.snapshotPatches.get(key)?.seq ?? -1)) {
+      const keys = [snapshotEventKey(event), ...(event.type === "run.state" && event.botId ? [`background:${event.botId}`] : [])];
+      for (const key of keys) if (key && event.seq > this.fullSnapshotCursor && event.seq > (this.snapshotPatches.get(key)?.seq ?? -1)) {
         this.snapshotPatches.set(key, event);
-        if (this.snapshot) this.snapshot = applySnapshotEvent(this.snapshot, event);
+        if (this.snapshot) this.snapshot = applySnapshotEvent(this.snapshot, event, key);
+      }
+      // Keep run metadata bounded; counts have their own per-bot sequence fence.
+      if (event.type === "run.state") {
+        const runPatches = [...this.snapshotPatches].filter(([key]) => key.startsWith("run:")).sort((a, b) => b[1].seq - a[1].seq);
+        for (const [key] of runPatches.slice(100)) this.snapshotPatches.delete(key);
       }
       if (this.snapshot) {
         this.snapshot = { ...this.snapshot, cursor: Math.max(this.snapshot.cursor, event.seq) };
@@ -431,7 +444,7 @@ export class BotsClient {
         void this.refresh().catch(() => {});
       if (event.type === "schedules") void this.refresh().catch(() => {});
       for (const listener of this.events) listener(event);
-      if (event.type !== "codex") this.notify();
+      if (event.type !== "codex" && event.type !== "run.codex") this.notify();
     }
   }
   rememberOperation(request: BridgeRequest) {
@@ -488,7 +501,7 @@ export class BotsClient {
     let merged = snapshot;
     for (const [key, event] of [...this.snapshotPatches].sort((a, b) => a[1].seq - b[1].seq)) {
       if (event.seq <= snapshot.cursor) this.snapshotPatches.delete(key);
-      else merged = applySnapshotEvent(merged, event);
+      else merged = applySnapshotEvent(merged, event, key);
     }
     this.snapshot = { ...merged, cursor: Math.max(snapshot.cursor, this.latestSnapshotEvent) };
     this.online = snapshot.ready;
