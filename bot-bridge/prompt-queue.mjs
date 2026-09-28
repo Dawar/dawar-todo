@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { findNativeTurn } from "./native-reconcile.mjs";
+import { rememberInputProvenance } from "./artifact-outputs.mjs";
 
 const now = () => new Date().toISOString();
 const pendingStates = new Set(["queued", "dispatching", "uncertain", "failed"]);
@@ -18,6 +19,7 @@ export function enqueuePrompt(runtime, bot, params, id, input) {
     if (existing && existing.botId !== bot.id) throw new Error("Queue identity belongs to another bot.");
     const item = existing ?? runtime.store.put("promptQueue", {
       id, botId: bot.id, threadId: bot.threadId, clientUserMessageId: id, input,
+      attachmentIds: [...(params.attachments ?? [])],
       state: "queued", revision: 1, position: Math.max(0, ...stagedQueue(runtime.store, bot.id).map(entry => entry.position)) + 1,
       source: { kind: "conversation", operationId: id }, createdAt: now(),
     });
@@ -28,16 +30,20 @@ export function enqueuePrompt(runtime, bot, params, id, input) {
   });
 }
 export function mutatePrompt(runtime, bot, item, method, params, operationId, input) {
-  if (item.botId !== bot.id) throw new Error("Queued prompt is not owned by this bot.");
-  if (!["queued", "failed"].includes(item.state))
-    throw new Error("This queued send is unconfirmed. Its identity and input must be reconciled before editing or removal.");
   return runtime.store.transaction(() => {
+    item = runtime.store.get("promptQueue", item.id);
+    if (!item || item.botId !== bot.id) throw new Error("Queued prompt is not owned by this bot.");
+    if (params.expectedRevision !== undefined && (!Number.isSafeInteger(params.expectedRevision) || params.expectedRevision < 1 ||
+        item.revision !== params.expectedRevision)) throw new Error("This queued prompt changed. Reopen its current revision; your edit was not applied.");
+    if (!["queued", "failed"].includes(item.state))
+      throw new Error("This queued send is unconfirmed. Its identity and input must be reconciled before editing or removal.");
     if (method === "queue.delete") {
       runtime.store.put("promptQueue", { ...item, state: "cancelled", cancelledAt: now() });
       runtime.emitEvent("queue", {}, bot.id);
       return finishLocalOperation(runtime.store, operationId, { deleted: true });
     }
     const next = runtime.store.put("promptQueue", { ...item, input, state: "queued", revision: item.revision + 1,
+      attachmentIds: [...(params.attachments ?? [])], clientUserMessageId: item.id,
       error: null, operationId: null, updatedAt: now() });
     runtime.store.put("queuedAttachments", { id: item.id, botId: bot.id, attachmentIds: params.attachments ?? [] });
     runtime.emitEvent("queue", {}, bot.id);
@@ -56,10 +62,18 @@ export async function dispatchPrompt(runtime, bot, item) {
   // A definitively rejected item can be edited into a new revision. Its new
   // dispatch has a distinct native identity; uncertainty can never be edited.
   const clientId = operationId;
+  const originalAttachments = runtime.store.get("queuedAttachments", item.id);
+  const attachmentIds = [...(item.attachmentIds ?? (originalAttachments?.botId === bot.id ? originalAttachments.attachmentIds : []) ?? [])];
   runtime.store.transaction(() => {
-    runtime.store.put("promptQueue", { ...item, state: "dispatching", operationId, clientUserMessageId: clientId, attemptedAt: now() });
+    const frozen = runtime.store.get("queuedAttachments", clientId);
+    if (frozen && (frozen.botId !== bot.id || JSON.stringify(frozen.attachmentIds) !== JSON.stringify(attachmentIds)))
+      throw new Error("Native dispatch attachment identity conflicts with its immutable receipt.");
+    runtime.store.put("queuedAttachments", { id: clientId, botId: bot.id, queueId: item.id,
+      revision: item.revision, attachmentIds, immutable: true });
+    runtime.store.put("promptQueue", { ...item, attachmentIds, state: "dispatching", operationId, clientUserMessageId: clientId, attemptedAt: now() });
     runtime.store.saveOperation(operationId, fingerprint, "dispatching", {
-      method: "queue.dispatch", botId: bot.id, queueId: item.id, clientId, createdAt: now(),
+      method: "queue.dispatch", botId: bot.id, queueId: item.id, revision: item.revision,
+      clientId, params: { attachments: attachmentIds }, createdAt: now(),
     });
   });
   const attempt = { started: false, rejected: false };
@@ -91,12 +105,13 @@ export async function dispatchPrompt(runtime, bot, item) {
 export async function reconcilePrompt(runtime, item) {
   const operation = item.operationId && runtime.store.operation(item.operationId);
   let result = operation?.status === "done" ? operation.result : null;
+  let fullEvidence = false;
   let nextCursor = null;
   if (!result) {
     const found = await findNativeTurn(runtime, item.threadId, { turnId: item.turnId,
       clientId: item.clientUserMessageId, cursor: item.reconcileCursor ?? null });
     nextCursor = found.nextCursor;
-    if (found.turn) result = { turn: found.turn };
+    if (found.turn) { result = { turn: found.turn }; fullEvidence = true; }
   }
   runtime.store.transaction(() => {
     const current = runtime.store.get("promptQueue", item.id);
@@ -107,6 +122,17 @@ export async function reconcilePrompt(runtime, item) {
       ...(result ? { turnId: result.turn?.id ?? result.turnId, deliveredAt: now(), error: null }
         : { error: "Native execution is unconfirmed. This prompt was not resent." }) });
     if (result && operation) finishLocalOperation(runtime.store, item.operationId, result);
+    if (result) {
+      const turnId = result.turn?.id ?? result.turnId;
+      const bot = runtime.store.bot(item.botId);
+      // Exact native acceptance/receipt binds this revision even if canonical
+      // inputs contain inline images or no local paths. Never match equal text.
+      const canonical = result.turn?.items?.find(entry => entry.type === "userMessage" && entry.clientId === current.clientUserMessageId);
+      if (turnId) rememberInputProvenance(runtime, bot, turnId, canonical ?? {
+        type: "userMessage", id: `client:${current.clientUserMessageId}`, clientId: current.clientUserMessageId, content: current.input,
+      });
+      if (result.turn) runtime.projectTerminalTurn(item.botId, result.turn, fullEvidence);
+    }
     runtime.emitEvent("queue", {}, item.botId);
   });
 }

@@ -51,6 +51,31 @@ export type BotRun = {
   turnId?: string | null;
 };
 export type BotRunPage = { runs: BotRun[]; nextCursor: string | null; latestBySchedule: BotRun[] };
+/** Metadata for a scheduled-context continuation; the primary run.turnId stays unchanged. */
+export type BotRunTurn = {
+  id: string;
+  botId: string;
+  runId: string;
+  operationId: string;
+  turnId: string | null;
+  status: string;
+  error: string | null;
+  createdAt: string | null;
+  finishedAt: string | null;
+};
+export type BotRunTurnPage = { turns: BotRunTurn[]; nextCursor: string | null };
+export type BotScheduledTurn = {
+  botId: string;
+  runId: string;
+  turnId: string;
+  operationId: string;
+  continuation: boolean;
+};
+/** Additive data on bot-scoped schedules events. Missing fields mean older service. */
+export type BotScheduledEventData = {
+  runTurn?: BotRunTurn | null;
+  activeScheduledTurn?: BotScheduledTurn | null;
+};
 export type BotUsageMetric = { value: string | null; reportedGroups: number };
 export type BotThreadUsage = {
   botId: string;
@@ -142,6 +167,7 @@ export type BotSnapshot = {
   models: Model[];
   schedules: BotSchedule[];
   runs: BotRun[];
+  activeScheduledTurns?: BotScheduledTurn[];
 };
 export type BotHistory = {
   nextCursor: string | null;

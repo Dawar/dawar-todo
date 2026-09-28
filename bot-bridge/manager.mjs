@@ -242,6 +242,10 @@ export class CodexManager {
           `Operation ${opId} is ${prior.state}: ${prior.error ?? "Inspect status before any retry."}`,
         );
       }
+      if (!this.runtime.ready) throw new Error("Native context recovery is still in progress; retry this same operation after readiness.");
+      if (name === "codex_tasks" && args.operation === "delegate" && this.runtime.scheduledUncertain(botId) &&
+          !this.runtime.scheduledContext(botId))
+        throw new Error("Scheduled context is not yet identified; retry this same delegation after native reconciliation.");
       const operation = {
         id,
         botId,
@@ -699,7 +703,8 @@ export class CodexManager {
       id,
       botId: bot.id,
       requestedBy: bot.threadId,
-      scheduledRunId: this.store.get("activeRun", bot.id)?.runId ?? null,
+      requestedByTurnId: this.store.bot(bot.id).activeTurnId ?? null,
+      scheduledRunId: this.runtime.scheduledContext(bot.id)?.runId ?? null,
       name: cleanName(p.name),
       prompt,
       context: p.context ?? "",
@@ -1309,6 +1314,11 @@ export class CodexManager {
             approvalPolicy: "never",
             sandboxPolicy: { type: "dangerFullAccess" },
             ...this.runtime.settings(this.store.bot(task.botId), task),
+            collaborationMode: { mode: "default", settings: {
+              model: this.runtime.settings(this.store.bot(task.botId), task).model,
+              reasoning_effort: this.runtime.settings(this.store.bot(task.botId), task).effort,
+              developer_instructions: null,
+            } },
             additionalContext: {
               managerTask: {
                 kind: "application",

@@ -11,6 +11,8 @@ export class Store {
       CREATE TABLE IF NOT EXISTS bots(id TEXT PRIMARY KEY, slug TEXT UNIQUE NOT NULL, thread_id TEXT UNIQUE, json TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS records(kind TEXT NOT NULL, id TEXT NOT NULL, bot_id TEXT, json TEXT NOT NULL, PRIMARY KEY(kind,id));
       CREATE INDEX IF NOT EXISTS records_bot ON records(kind,bot_id);
+      CREATE INDEX IF NOT EXISTS run_turn_page ON records(bot_id,json_extract(json,'$.runId'),id) WHERE kind='runTurn';
+      CREATE INDEX IF NOT EXISTS run_turn_identity ON records(kind,bot_id,json_extract(json,'$.turnId')) WHERE kind IN ('run','runTurn');
       CREATE INDEX IF NOT EXISTS history_attachment_path ON records(bot_id,json_extract(json,'$.path'),id)
         WHERE kind='attachment' AND json_extract(json,'$.ready')=1;
       CREATE INDEX IF NOT EXISTS history_attachment_item ON records(bot_id,json_extract(json,'$.provenance.turnId'),json_extract(json,'$.provenance.itemId'),COALESCE(json_extract(json,'$.provenance.threadId'),''),id)
@@ -105,15 +107,14 @@ export class Store {
         status: r.status,
       }));
   }
-  unconfirmedSettings(botId, since) {
+  unconfirmedModeIntent(botId, since) {
     // Older bridges used status=failed for some transport/local exceptions;
     // only a proven rejected outcome makes those settings safe to supersede.
     return Boolean(this.db.prepare(`SELECT 1 FROM operations
       WHERE status <> 'done' AND COALESCE(json_extract(json,'$.outcome'),'uncertain') <> 'rejected'
       AND json_extract(json,'$.method')='bots.update' AND json_extract(json,'$.botId')=?
       AND json_extract(json,'$.createdAt')>=?
-      AND (json_type(json,'$.params.mode') IS NOT NULL OR json_type(json,'$.params.model') IS NOT NULL
-        OR json_type(json,'$.params.effort') IS NOT NULL OR json_type(json,'$.params.serviceTier') IS NOT NULL)
+      AND json_type(json,'$.params.mode') IS NOT NULL
       LIMIT 1`).get(botId, since));
   }
   event(event) {

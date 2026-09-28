@@ -51,25 +51,77 @@ export async function reconcileScheduled(runtime, run) {
   });
   runtime.store.transaction(() => {
     const current = runtime.store.get("run", run.id);
-    if (!current || !["starting", "running", "uncertain"].includes(current.status)) return;
+    if (!current) return;
+    if (terminal.has(current.status)) {
+      if (found.turn?.id === current.turnId) {
+        runtime.projectTerminalTurn(bot.id, found.turn, true);
+        finishLocalOperation(runtime.store, run.operationId ?? `schedule:${run.id}`, { turn: found.turn });
+      }
+      return;
+    }
+    if (!["starting", "running", "uncertain"].includes(current.status)) return;
     runtime.store.put("run", { ...current, reconcileCursor: found.nextCursor,
       reconcileAfter: new Date(Date.now() + 60000).toISOString(),
       ...(found.turn ? { turnId: found.turn.id, status: found.turn.status === "inProgress" ? "running" : found.turn.status,
         error: found.turn.error?.message ?? null, ...(terminal.has(found.turn.status) ? { finishedAt: now() } : {}) } : {}) });
     if (found.turn) {
-      const active = runtime.store.get("activeRun", bot.id);
-      if (found.turn.status === "inProgress" && (!active || active.turnId === found.turn.id ||
-          active.operationId === (run.operationId ?? `schedule:${run.id}`))) {
-        runtime.store.put("activeRun", { id: bot.id, botId: bot.id, runId: run.id,
-          operationId: run.operationId ?? `schedule:${run.id}`, turnId: found.turn.id });
-        const currentBot = runtime.store.bot(bot.id);
-        if (!currentBot.activeTurnId || currentBot.activeTurnId === found.turn.id)
-          runtime.saveBot(currentBot, { activeTurnId: found.turn.id, status: "running" });
-      } else if (terminal.has(found.turn.status) && active?.runId === run.id &&
-          (active.turnId === found.turn.id || active.operationId === (run.operationId ?? `schedule:${run.id}`)))
-        runtime.store.remove("activeRun", bot.id);
+      runtime.projectActiveTurn(bot.id, found.turn);
+      runtime.recordScheduledTurn(bot.id, run.id, run.operationId ?? `schedule:${run.id}`, found.turn);
+      runtime.projectTerminalTurn(bot.id, found.turn, true);
       finishLocalOperation(runtime.store, run.operationId ?? `schedule:${run.id}`, { turn: found.turn });
     }
     runtime.emitEvent("schedules", {}, bot.id);
   });
+}
+
+export function scheduledContext(runtime, botId, turnId = runtime.store.bot(botId).activeTurnId) {
+  if (!turnId) return null;
+  const find = kind => {
+    const row = runtime.store.db.prepare(`SELECT json FROM records WHERE kind=? AND kind IN ('run','runTurn')
+      AND bot_id=? AND json_extract(json,'$.turnId')=? LIMIT 1`).get(kind, botId, turnId);
+    return row ? JSON.parse(row.json) : null;
+  };
+  const continuation = find("runTurn");
+  const run = continuation ? runtime.store.get("run", continuation.runId) :
+    find("run");
+  if (run?.botId === botId) return { botId, runId: run.id, turnId,
+    operationId: continuation?.operationId ?? run.operationId ?? `schedule:${run.id}` };
+  const active = runtime.store.get("activeRun", botId);
+  if (active?.botId === botId && active.turnId === turnId && runtime.store.get("run", active.runId)?.botId === botId) return active;
+  return null;
+}
+
+export async function reconcileRunTurn(runtime, receipt) {
+  const bot = runtime.store.bot(receipt.botId);
+  if (runtime.store.get("run", receipt.runId)?.botId !== bot.id) throw new Error("Scheduled continuation owner mismatch.");
+  const found = await findNativeTurn(runtime, receipt.threadId ?? bot.threadId, {
+    turnId: receipt.turnId, clientId: receipt.operationId ?? receipt.id, cursor: receipt.reconcileCursor ?? null,
+  });
+  runtime.store.transaction(() => {
+    const current = runtime.store.get("runTurn", receipt.id);
+    if (!current || terminal.has(current.status)) return;
+    runtime.store.put("runTurn", { ...current, threadId: receipt.threadId ?? bot.threadId,
+      status: found.turn ? current.status : "uncertain", reconcileCursor: found.nextCursor,
+      reconcileAfter: new Date(Date.now() + 60000).toISOString(), checkedAt: now() });
+    if (!found.turn) return; // Retain original identity; never dispatch a replacement.
+    runtime.projectActiveTurn(bot.id, found.turn);
+    runtime.recordScheduledTurn(bot.id, receipt.runId, receipt.operationId ?? receipt.id, found.turn);
+    runtime.projectTerminalTurn(bot.id, found.turn, true);
+    finishLocalOperation(runtime.store, receipt.operationId ?? receipt.id, { turn: found.turn });
+  });
+}
+
+export async function recoverRunTurns(runtime, limit = 2, startup = false) {
+  let checked = 0;
+  for (const receipt of runtime.store.list("runTurn")) {
+    if (terminal.has(receipt.status) || runtime.locks.has(receipt.botId) || checked >= limit ||
+        (!startup && Date.parse(receipt.reconcileAfter ?? "") > Date.now())) continue;
+    checked++;
+    await runtime.lock(receipt.botId, () => reconcileRunTurn(runtime, receipt)).catch(error => {
+      const current = runtime.store.get("runTurn", receipt.id);
+      if (!current || terminal.has(current.status)) return;
+      runtime.store.put("runTurn", { ...current, status: "uncertain", reconciliationError: error.message,
+        reconcileAfter: new Date(Date.now() + 60000).toISOString() });
+    });
+  }
 }

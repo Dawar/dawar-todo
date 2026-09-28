@@ -4,9 +4,12 @@ import { readArtifactPreview } from "./artifact-previews.mjs";
 import { registerArtifact, registerNativeItem, indexNativeArtifacts, rememberInputProvenance } from "./artifact-outputs.mjs";
 import { EventEmitter } from "node:events";
 import { PlanLifecycle } from "./plan-lifecycle.mjs";
-import { enqueuePrompt, mutatePrompt, stagedQueue, dispatchPrompt, reconcilePrompt, finishLocalOperation } from "./prompt-queue.mjs";
+import { stagedQueue, dispatchPrompt, reconcilePrompt } from "./prompt-queue.mjs";
 import { findNativeTurn } from "./native-reconcile.mjs";
-import { dispatchScheduled, reconcileScheduled } from "./scheduled-execution.mjs";
+import { dispatchScheduled, reconcileScheduled, scheduledContext, recoverRunTurns } from "./scheduled-execution.mjs";
+import { projectTerminalTurn, projectActiveTurn, reconcileActiveTurns } from "./turn-state.mjs";
+import { acceptLocalQueueOperation } from "./local-queue-operation.mjs";
+import { listRunTurns, publicRunTurn, activeScheduledTurn } from "./run-turns.mjs";
 import { randomUUID, createHash, randomInt } from "node:crypto";
 import {
   mkdir,
@@ -67,6 +70,7 @@ const READ_METHODS = new Set([
   "events",
   "schedules.list",
   "runs.page",
+  "runs.turns",
   "usage.bot",
   "usage.account",
   "attachments.read",
@@ -174,6 +178,7 @@ export class BotRuntime extends EventEmitter {
     });
   }
   emitEvent(type, data, botId) {
+    if (type === "schedules" && botId) data = { ...data, activeScheduledTurn: activeScheduledTurn(this, botId) };
     const bounded = boundHistoryEvent(type, data);
     if (bounded.supplement && botId) {
       this.historySupplements ??= new Map();
@@ -201,9 +206,18 @@ export class BotRuntime extends EventEmitter {
     return event;
   }
   saveBot(bot, changes = {}) {
-    const next = this.store.saveBot({ ...bot, ...changes });
+    // A late successful Send must not clear a pause raised while its ACK was
+    // pending (including a newer turn's interruption after it already ended).
+    const next = this.store.saveBot({ ...bot, ...changes,
+      ...(changes.queuePaused === true ? { queuePauseRevision: (bot.queuePauseRevision ?? 0) + 1 } : {}) });
     this.emitEvent("bot", next, next.id);
     return next;
+  }
+  projectTerminalTurn(botId, turn, completeEvidence = false) {
+    return projectTerminalTurn(this, botId, turn, completeEvidence);
+  }
+  projectActiveTurn(botId, turn, changes = {}) {
+    return projectActiveTurn(this, botId, turn, changes);
   }
   async start() {
     await mkdir(this.root, { recursive: true, mode: 0o700 });
@@ -224,6 +238,9 @@ export class BotRuntime extends EventEmitter {
         });
     for (const active of this.store.list("activeRun"))
       this.store.remove("activeRun", active.id);
+    for (const receipt of this.store.list("runTurn"))
+      if (["starting", "running"].includes(receipt.status))
+        this.store.put("runTurn", { ...receipt, status: "uncertain" });
     for (const run of this.store.list("run"))
       if (["running", "starting"].includes(run.status))
         this.store.put("run", {
@@ -292,12 +309,7 @@ export class BotRuntime extends EventEmitter {
             error: "An active native turn could not be identified after restart.",
           });
         else if (active)
-          this.saveBot(this.store.bot(bot.id), {
-            activeTurnId: latest.id,
-            status: "running",
-            queuePaused: false,
-            error: null,
-          });
+          this.projectActiveTurn(bot.id, latest, { error: null });
         else if (latest?.status === "interrupted")
           this.saveBot(this.store.bot(bot.id), {
             queuePaused: true,
@@ -321,6 +333,13 @@ export class BotRuntime extends EventEmitter {
     await this.plans.recover(100);
     for (const run of this.store.list("run").filter(run => run.status === "uncertain")) {
       try { await reconcileScheduled(this, run); } catch { /* Keep uncertain IDs for the next bounded recovery. */ }
+    }
+    await recoverRunTurns(this, 100, true);
+    // Done send receipts are not in uncertainOperations. Durable turn
+    // attribution must be restored before requests can be accepted anyway.
+    for (const bot of this.store.bots()) {
+      const context = this.scheduledContext(bot.id);
+      if (context) this.store.put("activeRun", { ...context, id: bot.id });
     }
     this.ready = true;
     this.emitEvent("runtime", { ready: true });
@@ -408,6 +427,7 @@ export class BotRuntime extends EventEmitter {
             const notice = op.id.startsWith("manager-notice:") &&
               this.store.get("managerNotice", op.id.slice("manager-notice:".length));
             if (notice?.botId === bot.id && notice.runId) this.recordScheduledTurn(bot.id, notice.runId, op.id, found.turn);
+            this.projectTerminalTurn(bot.id, found.turn, true);
           }
         } catch {
           /* Missing native evidence never authorizes a second execution. */
@@ -435,6 +455,7 @@ export class BotRuntime extends EventEmitter {
       defaults: this.defaults,
       models: this.models,
       schedules: this.store.list("schedule"),
+      activeScheduledTurns: this.store.bots().map(bot => activeScheduledTurn(this, bot.id)).filter(Boolean),
       runs: this.store
         .list("run")
         .sort((a, b) => b.scheduledAt.localeCompare(a.scheduledAt))
@@ -471,7 +492,7 @@ export class BotRuntime extends EventEmitter {
       .update(JSON.stringify({ method, botId, params }))
       .digest("hex");
     return this.lock(botId ?? "create", async () => {
-      const composerMutation = ["turn.send", "queue.add", "queue.update"].includes(method);
+      const composerMutation = ["turn.send", "queue.add", "queue.update", "queue.delete", "queue.reorder"].includes(method);
       const attempt = composerMutation ? { started: false, rejected: false } : null;
       const existing = this.store.operation(operationId);
       if (existing) {
@@ -488,6 +509,8 @@ export class BotRuntime extends EventEmitter {
             "This operation may already have run. Refresh the conversation before retrying.",
         ), { outcome: existing.outcome === "rejected" ? "rejected" : "uncertain" });
       }
+      const local = await acceptLocalQueueOperation(this, { method, botId, params, operationId }, fingerprint);
+      if (local) return local.result;
       if (method === "turn.send" && operationId.startsWith("manager-notice:")) {
         const notice = this.store.get("managerNotice", operationId.slice("manager-notice:".length));
         if (!notice || notice.botId !== botId) throw new Error("Manager notice is not owned by this bot.");
@@ -654,15 +677,12 @@ export class BotRuntime extends EventEmitter {
         const queue = await this.queueList(bot);
         return queue.map((item) => this.publicQueued(bot, item));
       }
-      case "queue.add": {
-        if (bot.archived) throw new Error("Restore this bot first.");
-        if (!this.ready) throw new Error("Codex is not ready.");
-        const input = await this.messageInput(bot, p);
-        return enqueuePrompt(this, bot, p, id, input);
-      }
+      case "queue.add":
+      case "queue.resume":
+        throw new Error("Local queue operations require atomic acceptance through handle().");
       case "queue.update": {
         const local = this.store.get("promptQueue", p.id);
-        if (local) return mutatePrompt(this, bot, local, method, p, id, await this.messageInput(bot, p));
+        if (local) throw new Error("Local queue edits require atomic acceptance through handle().");
         const queue = await this.queueList(bot);
         const item = queue.find((x) => x.id === p.id);
         if (!item) throw new Error("Queued prompt not found.");
@@ -681,14 +701,14 @@ export class BotRuntime extends EventEmitter {
       }
       case "queue.delete": {
         const local = this.store.get("promptQueue", p.id);
-        if (local) return mutatePrompt(this, bot, local, method, p, id);
+        if (local) throw new Error("Local queue removal requires atomic acceptance through handle().");
         const item = (await this.queueList(bot)).find((x) => x.id === p.id);
         if (!item)
           throw new Error("Queued prompt not found.");
-        const result = await this.codex.call("thread/queue/delete", {
+        const result = await this.submitNative("thread/queue/delete", {
           threadId: bot.threadId,
           queuedSubmissionId: p.id,
-        });
+        }, attempt);
         this.store.remove("queuedAttachments", item.clientUserMessageId);
         this.emitEvent("queue", {}, bot.id);
         return result;
@@ -700,42 +720,13 @@ export class BotRuntime extends EventEmitter {
             queue.some((x) => !p.ids.includes(x.id)))
           throw new Error("Reorder must include every queued prompt once.");
         const local = stagedQueue(this.store, bot.id);
-        if (local.length) {
-          const legacy = queue.filter(item => !this.store.get("promptQueue", item.id));
-          if (legacy.some((item, index) => p.ids[index] !== item.id))
-            throw new Error("Legacy native prompts must remain ahead of staged prompts until they finish.");
-          return this.store.transaction(() => {
-            p.ids.slice(legacy.length).forEach((itemId, position) =>
-              this.store.put("promptQueue", { ...this.store.get("promptQueue", itemId), position }));
-            this.emitEvent("queue", {}, bot.id);
-            return finishLocalOperation(this.store, id, {});
-          });
-        }
-        const result = await this.codex.call("thread/queue/reorder", {
+        if (local.length) throw new Error("Local queue reorder requires atomic acceptance through handle().");
+        const result = await this.submitNative("thread/queue/reorder", {
           threadId: bot.threadId,
           queuedSubmissionIds: p.ids,
-        });
+        }, attempt);
         this.emitEvent("queue", {}, bot.id);
         return result;
-      }
-      case "queue.resume": {
-        if (stagedQueue(this.store, bot.id).some(item => item.state !== "queued") || this.plans.blocked(bot.id))
-          throw new Error("Reconcile unconfirmed execution, or edit/remove a rejected prompt, before resuming this queue.");
-        if (bot.archived) throw new Error("Restore this bot first.");
-        const { thread } = await this.codex.call("thread/read", {
-          threadId: bot.threadId, includeTurns: true,
-        });
-        const latest = await this.latestNativeTurn(bot, thread);
-        const active = thread.status?.type === "active" ||
-          (!thread.status && latest?.status === "inProgress");
-        if (active && latest?.status !== "inProgress")
-          throw new Error("The active native turn could not be identified. Refresh before resuming the queue.");
-        const waiting = this.store.list("pending", bot.id).length > 0;
-        this.saveBot(bot, { queuePaused: false, error: null,
-          activeTurnId: active ? latest.id : null,
-          status: waiting ? "waiting" : active ? "running" : "idle" });
-        setImmediate(() => void this.tick().catch((e) => this.emit("fault", e)));
-        return {};
       }
       case "bots.recover": {
         if (bot.threadId) return bot;
@@ -829,6 +820,8 @@ export class BotRuntime extends EventEmitter {
         return { runs: page, nextCursor: runs[start + limit] ? page.at(-1)?.id ?? null : null,
           latestBySchedule };
       }
+      case "runs.turns":
+        return listRunTurns(this, bot, p);
       case "usage.bot": {
         if (!bot.threadId) return { botId: bot.id, threadId: null,
           estimatedCreditsMicros: null, reason: "No conversation thread yet." };
@@ -1055,8 +1048,6 @@ export class BotRuntime extends EventEmitter {
     };
   }
   async update(bot, p, operationId) {
-    if (this.store.list("planExecution", bot.id).some(record => ["resetting", "uncertain"].includes(record.state)))
-      throw Object.assign(new Error("A native Plan reset is unconfirmed. Reconcile that transition before changing settings."), { definite: true });
     if (p.mode === "plan" && (await this.nativeQueueList(bot)).length)
       throw Object.assign(new Error("Let the legacy native queue finish before enabling Plan. New queued prompts are staged safely."), { definite: true });
     const name = p.name === undefined ? bot.name : cleanName(p.name);
@@ -1171,7 +1162,7 @@ export class BotRuntime extends EventEmitter {
       throw new Error("Scheduled execution is unconfirmed. Queue your message while its native state is reconciled.");
     if (bot.activeTurnId) {
       if (run || staged) throw new Error("Bot is busy.");
-      if (this.store.get("activeRun", bot.id) || this.store.list("run", bot.id).some(entry => entry.turnId === bot.activeTurnId))
+      if (this.scheduledContext(bot.id, bot.activeTurnId))
         throw new Error("A scheduled run is using this conversation. Use Queue next to keep your message separate; your draft is retained.");
       const result = await this.submitNative("turn/steer", {
         threadId: bot.threadId,
@@ -1187,12 +1178,16 @@ export class BotRuntime extends EventEmitter {
           : text.slice(0, 160),
         updatedAt: now(),
       });
-      if (!run && bot.queuePaused)
+      if (!run && bot.queuePaused && this.store.bot(bot.id).activeTurnId === bot.activeTurnId &&
+          (this.store.bot(bot.id).queuePauseRevision ?? 0) === (bot.queuePauseRevision ?? 0) &&
+          this.store.get("planTurnEvidence", bot.activeTurnId)?.status !== "interrupted")
         this.saveBot(this.store.bot(bot.id), { queuePaused: false });
       return result;
     }
     const result = await this.startTurn(bot, input, text, id, run, additionalContext, attempt);
-    if (!run && bot.queuePaused)
+    if (!run && bot.queuePaused && this.store.get("planTurnEvidence", result.turn?.id)?.status !== "interrupted" &&
+        (this.store.bot(bot.id).queuePauseRevision ?? 0) === (bot.queuePauseRevision ?? 0) &&
+        (!this.store.bot(bot.id).activeTurnId || this.store.bot(bot.id).activeTurnId === result.turn?.id))
       this.saveBot(this.store.bot(bot.id), { queuePaused: false });
     return result;
   }
@@ -1292,7 +1287,7 @@ export class BotRuntime extends EventEmitter {
       effort,
       serviceTier,
       collaborationMode: {
-        mode: run ? "default" : bot.mode,
+        mode: run || id.startsWith("manager-notice:") ? "default" : bot.mode,
         settings: {
           model,
           reasoning_effort: effort,
@@ -1301,8 +1296,13 @@ export class BotRuntime extends EventEmitter {
       },
       turnTrigger: run ? "scheduled" : "user",
     };
-    if (run)
+    if (run) this.store.transaction(() => {
       this.store.put("activeRun", { id: bot.id, botId: bot.id, runId: run.id, operationId: id });
+      if (id !== (run.operationId ?? `schedule:${run.id}`)) this.store.put("runTurn", {
+        id, operationId: id, botId: bot.id, runId: run.id, threadId: bot.threadId, turnId: null,
+        status: "starting", createdAt: now(),
+      });
+    });
     const boundary = attempt ?? { started: false, rejected: false };
     let result;
     try {
@@ -1310,22 +1310,18 @@ export class BotRuntime extends EventEmitter {
     } catch (error) {
       this.plans.rejected(plan, boundary);
       if (run && (!boundary.started || boundary.rejected) &&
-          this.store.get("activeRun", bot.id)?.operationId === id) this.store.remove("activeRun", bot.id);
+          this.store.get("activeRun", bot.id)?.operationId === id) {
+        this.store.remove("activeRun", bot.id);
+        const receipt = this.store.get("runTurn", id);
+        if (receipt) this.store.put("runTurn", { ...receipt, status: "failed", outcome: "rejected", error: error.message });
+      }
       throw error;
     }
     this.plans.bind(plan, result.turn);
     this.emitUserMessage(bot, result.turn.id, id, input);
-    const current = this.store.bot(bot.id);
     const completed = this.store.get("planTurnEvidence", result.turn.id);
-    if (result.turn.status === "inProgress" && !["completed", "failed", "interrupted"].includes(completed?.status) &&
-        (!current.activeTurnId || current.activeTurnId === result.turn.id))
-      this.saveBot(current, {
-        activeTurnId: result.turn.id,
-        status: this.store
-          .list("pending", bot.id)
-          .some((x) => x.request.params.isBlocking !== false)
-          ? "waiting"
-          : "running",
+    if (result.turn.status === "inProgress" && !["completed", "failed", "interrupted"].includes(completed?.status))
+      this.projectActiveTurn(bot.id, result.turn, {
         preview: id.startsWith("manager-notice:")
           ? bot.preview
           : text.slice(0, 160),
@@ -1336,10 +1332,14 @@ export class BotRuntime extends EventEmitter {
       ["completed", "failed", "interrupted"].includes(completed?.status)
         ? { ...result.turn, status: completed.status, error: completed.error ? { message: completed.error } : null }
         : result.turn);
+    this.projectTerminalTurn(bot.id, result.turn);
     return result;
   }
   scheduledUncertain(botId, excludeOperationId = null) {
-    if (this.store.list("run", botId).some(run => run.status === "uncertain")) return true;
+    if (this.store.list("run", botId).some(run => ["starting", "uncertain"].includes(run.status) &&
+        (run.operationId ?? `schedule:${run.id}`) !== excludeOperationId)) return true;
+    if (this.store.list("runTurn", botId).some(receipt => ["starting", "uncertain"].includes(receipt.status) &&
+        receipt.operationId !== excludeOperationId)) return true;
     return this.store.list("managerNotice", botId).some(notice => {
       if (!notice.runId) return false;
       const id = notice.operationId ?? `manager-notice:${notice.id}`;
@@ -1348,9 +1348,24 @@ export class BotRuntime extends EventEmitter {
       return operation && ["dispatching", "uncertain"].includes(operation.status);
     });
   }
+  scheduledContext(botId, turnId) { return scheduledContext(this, botId, turnId); }
+  recordScheduledEvidence(botId, turn) {
+    let context = this.scheduledContext(botId, turn.id);
+    if (!context) for (const item of turn.items ?? []) {
+      if (item.type !== "userMessage" || !item.clientId) continue;
+      const receipt = this.store.get("runTurn", item.clientId);
+      const run = receipt?.botId === botId ? this.store.get("run", receipt.runId) :
+        this.store.list("run", botId).find(entry => (entry.operationId ?? `schedule:${entry.id}`) === item.clientId);
+      if (run?.botId === botId) { context = { runId: run.id, operationId: item.clientId }; break; }
+    }
+    if (context) this.recordScheduledTurn(botId, context.runId, context.operationId, turn);
+  }
   recordScheduledTurn(botId, runId, operationId, turn) {
     this.store.transaction(() => {
       const run = this.owned("run", runId, botId);
+      const evidence = this.store.get("planTurnEvidence", turn.id);
+      if (evidence?.botId === botId && ["completed", "failed", "interrupted"].includes(evidence.status))
+        turn = { ...turn, status: evidence.status, error: evidence.error ? { message: evidence.error } : null };
       const complete = ["completed", "failed", "interrupted"].includes(turn.status);
       const state = { turnId: turn.id, status: turn.status === "inProgress" ? "running" : turn.status,
         error: turn.error?.message ?? null, ...(complete ? { finishedAt: now() } : {}) };
@@ -1359,18 +1374,22 @@ export class BotRuntime extends EventEmitter {
       // continues its scheduled context on a distinct native turn.
       if (primary && ["starting", "running", "uncertain"].includes(run.status))
         this.store.put("run", { ...run, ...state });
-      else if (!primary) this.store.put("runTurn", { id: operationId, botId, runId, operationId, ...state });
+      else if (!primary) this.store.put("runTurn", { ...this.store.get("runTurn", operationId),
+        id: operationId, botId, runId, operationId, threadId: run.threadId ?? this.store.bot(botId).threadId, ...state });
       const active = this.store.get("activeRun", botId);
       const bot = this.store.bot(botId);
-      if (!complete && (!bot.activeTurnId || bot.activeTurnId === turn.id) &&
+      if (!complete && bot.activeTurnId === turn.id &&
           (!active || active.operationId === operationId || active.turnId === turn.id))
         this.store.put("activeRun", { id: botId, botId, runId, operationId, turnId: turn.id });
       else if (complete && active && (active.operationId === operationId || active.turnId === turn.id))
         this.store.remove("activeRun", botId);
-      this.emitEvent("schedules", {}, botId);
+      this.emitEvent("schedules", { runTurn: primary ? null : publicRunTurn(this.store.get("runTurn", operationId)) }, botId);
     });
   }
   async startQueued(bot, item) {
+    if (this.store.list("planExecution", bot.id).some(record => record.legacyNativeReset?.outcome === "unconfirmed" ||
+        record.resetOperationId && ["resetting", "uncertain"].includes(record.state)))
+      throw new Error("Legacy native queue inheritance requires review of the retained native-reset receipt. Managed staged turns use explicit mode.");
     // queue/start takes only a submission ID; its turn inherits thread settings.
     await this.syncQueueSettings(bot);
     const { turn } = await this.codex.call("thread/queue/start", {
@@ -1380,13 +1399,12 @@ export class BotRuntime extends EventEmitter {
     this.emitEvent("queue", {}, bot.id);
     this.emitUserMessage(bot, turn.id, item.clientUserMessageId, item.input);
     if (turn.status === "inProgress")
-      this.saveBot(this.store.bot(bot.id), {
-        activeTurnId: turn.id,
-        status: "running",
+      this.projectActiveTurn(bot.id, turn, {
         preview: item.input.find((input) => input.type === "text")?.text.slice(0, 160) ?? "Attachments",
         error: null,
         updatedAt: now(),
       });
+    this.projectTerminalTurn(bot.id, turn);
     return turn;
   }
   async syncQueueSettings(bot) {
@@ -1523,9 +1541,12 @@ export class BotRuntime extends EventEmitter {
     const threadId = p.threadId ?? p.thread?.id;
     const bot = this.store.bots().find((b) => b.threadId === threadId);
     if (!bot) return;
-    this.plans.note(bot.id, message);
+    if (message.method !== "turn/completed") this.plans.note(bot.id, message);
     if (message.method === "item/completed") {
       rememberInputProvenance(this, bot, p.turnId, p.item);
+      if (p.item?.type === "userMessage") this.recordScheduledEvidence(bot.id, {
+        id: p.turnId, status: "inProgress", items: [p.item],
+      });
       if (["imageGeneration", "mcpToolCall"].includes(p.item?.type)) {
         this.pendingArtifactItems ??= 0;
         const report = (failures) => { if (failures.length) this.emitEvent("artifact.issue", { failures }, bot.id); };
@@ -1542,13 +1563,16 @@ export class BotRuntime extends EventEmitter {
     this.emitEvent("codex", message, bot.id);
     if (message.method === "thread/queue/changed")
       this.emitEvent("queue", {}, bot.id);
-    if (message.method === "turn/started")
+    if (message.method === "turn/started" && !["completed", "failed", "interrupted"].includes(
+      this.store.get("planTurnEvidence", p.turn.id)?.status)) {
       this.saveBot(bot, {
         activeTurnId: p.turn.id,
         status: "running",
         updatedAt: now(),
         error: null,
       });
+      this.recordScheduledEvidence(bot.id, p.turn);
+    }
     if (message.method === "item/completed" && p.item?.type === "agentMessage")
       this.saveBot(this.store.bot(bot.id), {
         preview: p.item.text.slice(0, 160),
@@ -1597,43 +1621,13 @@ export class BotRuntime extends EventEmitter {
       this.emitEvent("request.resolved", { key }, bot.id);
     }
     if (message.method === "turn/completed") {
-      // Native queue dispatch can start the next turn before this notification
-      // is delivered. Do not clear that newer turn's active ID.
-      const newerActive = this.store.bot(bot.id).activeTurnId &&
-        this.store.bot(bot.id).activeTurnId !== p.turn.id;
-      for (const pending of this.store.list("pending", bot.id))
-        if (!pending.async && pending.request.params.turnId === p.turn.id) {
-          this.store.remove("pending", pending.id);
-          this.emitEvent("request.resolved", { key: pending.id }, bot.id);
-        }
-      const failed = p.turn.status === "failed";
-      if (p.turn.status === "interrupted")
-        this.saveBot(this.store.bot(bot.id), { queuePaused: true });
-      const error = p.turn.error?.message ?? null;
-      if (!newerActive)
-        this.saveBot(this.store.bot(bot.id), {
-          activeTurnId: null,
-          status: failed
-            ? "error"
-            : p.turn.status === "interrupted"
-              ? "interrupted"
-              : this.store.list("pending", bot.id).length
-                ? "waiting"
-                : "idle",
-          error,
-          updatedAt: now(),
-        });
-      const active = this.store.get("activeRun", bot.id);
-      if (active && (active.turnId === p.turn.id || (active.operationId && p.turn.items?.some(item =>
-        item.type === "userMessage" && item.clientId === active.operationId)))) {
-        const run = this.store.get("run", active.runId);
-        if (run) this.recordScheduledTurn(bot.id, run.id, active.operationId ?? `schedule:${run.id}`, p.turn);
-      }
-      if (failed)
+      this.recordScheduledEvidence(bot.id, p.turn);
+      this.projectTerminalTurn(bot.id, p.turn);
+      if (p.turn.status === "failed")
         this.notify(
           bot,
           `failure:${p.turn.id}`,
-          error ?? "The bot encountered an error.",
+          p.turn.error?.message ?? "The bot encountered an error.",
         );
     }
   }
@@ -1658,6 +1652,8 @@ export class BotRuntime extends EventEmitter {
     this.tickRunning = true;
     try {
       await this.plans.recover();
+      await recoverRunTurns(this);
+      await reconcileActiveTurns(this);
       let recovered = 0;
       for (const item of this.store.list("promptQueue")) {
         if (!["dispatching", "uncertain"].includes(item.state) || this.locks.has(item.botId) ||
@@ -1722,9 +1718,8 @@ export class BotRuntime extends EventEmitter {
               if (active && latest?.status !== "inProgress")
                 throw new Error("An active native turn could not be identified.");
               if (active) {
-                this.saveBot(this.store.bot(bot.id), {
-                  activeTurnId: latest.id, status: "running", error: null,
-                });
+                this.projectActiveTurn(bot.id, latest, { error: null });
+                this.recordScheduledEvidence(bot.id, latest);
                 return;
               }
               await this.plans.settle(current.id);
@@ -1744,10 +1739,8 @@ export class BotRuntime extends EventEmitter {
                 const active = thread.status?.type === "active" ||
                   (!thread.status && latest?.status === "inProgress");
                 if (active && latest?.status === "inProgress") {
-                  this.saveBot(this.store.bot(bot.id), {
-                    activeTurnId: latest.id, status: "running",
-                    queuePaused: false, error: null,
-                  });
+                  this.projectActiveTurn(bot.id, latest, { error: null });
+                  this.recordScheduledEvidence(bot.id, latest);
                   return;
                 }
                 if (first && !remaining.some((item) => item.id === first.id) ||
@@ -1793,7 +1786,7 @@ export class BotRuntime extends EventEmitter {
       case "bots_schedule_delete":
         return this.dispatch("schedules.delete", bot.id, args);
       case "bots_report_result": {
-        const active = this.store.get("activeRun", bot.id);
+        const active = this.scheduledContext(bot.id, p.turnId);
         if (!active)
           throw new Error(
             "Result notifications are for scheduled runs. Reply normally in an interactive conversation.",
