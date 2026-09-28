@@ -5,6 +5,7 @@ import type {
   BotHistory,
   BotSchedule,
   BotRunPage,
+  BotRunTurnPage,
   BotThreadUsage,
   BotAccountQuota,
   BotSnapshot,
@@ -66,10 +67,10 @@ export type BotOperations = {
     result: { queuedSubmission: QueuedSubmission } | { consumedTurnId: string };
   };
   "queue.update": {
-    params: { id: string; text: string; attachments?: string[] };
+    params: { id: string; text: string; attachments?: string[]; expectedRevision?: number };
     result: { queuedSubmission: QueuedSubmission };
   };
-  "queue.delete": { params: { id: string }; result: { deleted: boolean } };
+  "queue.delete": { params: { id: string; expectedRevision?: number }; result: { deleted: boolean } };
   "queue.reorder": { params: { ids: string[] }; result: Record<string, never> };
   "queue.resume": { params: Record<string, never>; result: Record<string, never> };
   "thread.compact": {
@@ -88,6 +89,7 @@ export type BotOperations = {
   "schedules.run": { params: { id: string }; result: unknown };
   "schedules.list": { params: Record<string, never>; result: unknown };
   "runs.page": { params: { cursor?: string | null; limit?: number }; result: BotRunPage };
+  "runs.turns": { params: { runId: string; cursor?: string | null; limit?: number }; result: BotRunTurnPage };
   "usage.bot": { params: Record<string, never>; result: BotThreadUsage };
   "usage.account": { params: Record<string, never>; result: BotAccountQuota };
   "runs.acknowledge": { params: { id: string }; result: Record<string, never> };

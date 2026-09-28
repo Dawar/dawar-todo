@@ -89,8 +89,18 @@ function detailRevision(runtime, bot) {
 }
 
 export async function readHistoryView(runtime, bot, params) {
-  const revision = historyRevision(runtime, bot) + (params.projection === "conversation" ? ":conversation-v3" : ""), eventCursor = runtime.store.cursor();
-  if (!params.cursor && !params.turnId && params.revision === revision) return { kind: 'unchanged', revision, eventCursor };
+  const revision = historyRevision(runtime, bot) + (params.projection === "conversation" ? ":conversation-v4" : ""), eventCursor = runtime.store.cursor();
+  let attributionUnchanged = true;
+  if (params.projection === 'conversation' && params.after !== eventCursor) {
+    // Schedule receipts can change without native content changing. Inspect
+    // only event metadata; a replay gap forces projection rather than trusting
+    // a cached audience. No native scan is used to enumerate continuations.
+    const first = Number.isSafeInteger(params.after) && params.after >= 0
+      ? runtime.store.db.prepare('SELECT seq FROM events WHERE seq>? ORDER BY seq LIMIT 1').get(params.after) : null;
+    attributionUnchanged = first?.seq === params.after + 1 && !runtime.store.db.prepare(`SELECT 1 FROM events
+      WHERE seq>? AND json_extract(json,'$.type')='schedules' AND json_extract(json,'$.botId')=? LIMIT 1`).get(params.after, bot.id);
+  }
+  if (!params.cursor && !params.turnId && params.revision === revision && attributionUnchanged) return { kind: 'unchanged', revision, eventCursor };
   if (params.projection !== 'conversation' && !params.cursor && !params.turnId && params.revision?.startsWith(`${runtime.epoch}:${bot.threadId}:`) && Number.isSafeInteger(params.after) && params.after >= 0) {
     const replay = runtime.store.replay(params.after);
     const contiguous = !replay.length ? params.after === eventCursor : replay[0].seq === params.after + 1;

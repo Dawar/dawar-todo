@@ -1,5 +1,5 @@
 // Manual synthetic UI only. No scenarios, assertions, user account or native mutation.
-import React from 'react';
+import React, { Activity, useState, useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BotsWorkspace } from '../app/bots/workspace';
 import { botsClient as client, BotRpcError } from '../app/bots/client';
@@ -16,11 +16,14 @@ const items=[
   {id:'staged-2',clientUserMessageId:'queue-start:failed-fixture',input:[...input('Use this reference for the next draft.'),{type:'localImage',path:file.path}],attachments:[file],state:'failed',revision:1,operationId:'queue-start:failed-fixture',waitReason:'rejected',error:'The model was unavailable before this message could start.'},
   {id:'staged-3',clientUserMessageId:'queue-start:uncertain-fixture',input:input('Check the final wording once more.'),attachments:[],state:'uncertain',revision:1,operationId:'queue-start:uncertain-fixture',waitReason:'delivery-unconfirmed'},
 ];
-let queue=structuredClone(items), failure='none';const calls=[], receipts=new Map();
+let queue=structuredClone(items), failure='none', hold=false;const held=[], calls=[], receipts=new Map();
+function Preview(){const [mode,setMode]=useState('visible');useEffect(()=>{window.queuePreview.view=setMode;},[]);return mode==='unmounted'?null:<Activity mode={mode}><BotsWorkspace/></Activity>;}
 client.rpc=async(method,botId,params={},id,options)=>{
   calls.push({method,botId,params:structuredClone(params),id,owner:options?.owner});
   if(!client.online)throw new BotRpcError('Synthetic connection is offline.','not-sent');
   if(method==='queue.list')return structuredClone(queue);
+  if(['queue.delete','queue.reorder','queue.resume','queue.update','queue.add','runs.acknowledge'].includes(method)&&hold)await new Promise(resolve=>held.push(resolve));
+  if(method==='runs.acknowledge'){if(failure!=='none')throw new BotRpcError('Synthetic review response '+failure,failure);return {};}
   if(['queue.delete','queue.reorder','queue.resume','queue.update','queue.add'].includes(method)){
     if(receipts.has(id))return receipts.get(id);
     if(failure==='uncertain')throw new BotRpcError('Synthetic acknowledgement was lost.','uncertain');
@@ -36,9 +39,12 @@ client.rpc=async(method,botId,params={},id,options)=>{
   if(response.error)throw Error(response.error);return response.result;
 };
 client.download=async()=>({blob:await fetch('/fixture-image').then(r=>r.blob()),name:file.name});
-fetch('/fixture').then(r=>r.json()).then(snapshot=>{client.snapshot={...snapshot,bots:snapshot.bots.map(b=>({...b,queuePaused:true}))};history.replaceState({},'','/preview?bot=night-studio');createRoot(document.getElementById('root')).render(<BotsWorkspace/>);});
+fetch('/fixture').then(r=>r.json()).then(snapshot=>{client.snapshot={...snapshot,bots:snapshot.bots.map(b=>({...b,queuePaused:true}))};history.replaceState({},'','/preview?bot=night-studio');createRoot(document.getElementById('root')).render(<Preview/>);});
 window.queuePreview={client,calls,composer:()=>botComposers.peek(owner,'night-studio'),timeline:()=>getBotTimeline(owner,'night-studio'),
   failure(value){failure=value;},
+  hold(value=true){hold=value;}, release(outcome='none'){failure=outcome;hold=false;held.splice(0).forEach(resolve=>resolve());},
+  owner,
+
   rows(value){queue=structuredClone(value);for(const listener of client.events)listener({type:'queue',botId:'night-studio',data:{},seq:1});},
   items,
   async echo(id='staged-image',revision=1){const hash=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(`night-studio:${id}:${revision}`))),b=>b.toString(16).padStart(2,'0')).join('');const clientId=`queue-start:${hash}`,timeline=getBotTimeline(owner,'night-studio');let sequence=Math.max(100,timeline.getSnapshot().eventCursor);

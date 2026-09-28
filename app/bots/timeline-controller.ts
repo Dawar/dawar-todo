@@ -2,7 +2,7 @@ import { reconcileHistory, conversationEntries, orderedHistory } from "./history
 import { turnAudience, scheduleInput, humanInput, reportedFinding, projectConversationItem, type TurnAudience } from "../../lib/bot-conversation";
 import { historyBoundaries, retainHistory, retainedAttachments, CACHE_ENTRIES, CACHE_BYTES } from "./history-window";
 import { HISTORY_TEXT_LIMIT, conversationItem, historyTail, historyBefore, historyKey, projectHistoryItem, type HistoryEntry, type HistoryResponse, type HistoryDetail, type HistoryPosition, type HistoryGap } from "../../lib/bot-history-view";
-import type { BotAttachment, BotEvent } from "../../lib/bots-types";
+import type { BotAttachment, BotEvent, BotScheduledTurn, BotScheduledEventData } from "../../lib/bots-types";
 import type { ThreadItem } from "../../lib/codex-protocol/v2/ThreadItem";
 import type { Turn } from "../../lib/codex-protocol/v2/Turn";
 import { readOpenedDetail, saveOpenedDetail, updateOpenedDetailAttachments } from "./timeline-detail-cache";
@@ -25,6 +25,21 @@ type Cache = ReturnType<typeof createTimelineCache>;
 /** One owner/thread store and one refresh in flight, independent of React selection. */
 export class BotTimeline {
   private state = initial();
+  private attributed = new Map<string, string>();
+  private attributionCursor = -1;
+  /** Metadata invalidates projection; only a full native projection can prove
+   * absence of human input. Never hide a partial cached turn from a receipt. */
+  scheduled(turns: BotScheduledTurn[]) {
+    if (this.disposed || this.transport.owner !== this.owner) return;
+    let changed = false;
+    for (const turn of turns) {
+      if (turn.botId !== this.botId || !turn.turnId || !turn.runId) continue;
+      if (this.attributed.get(turn.turnId) === turn.runId) continue;
+      this.attributed.set(turn.turnId, turn.runId); changed = true;
+    }
+    while (this.attributed.size > 384) this.attributed.delete(this.attributed.keys().next().value!);
+    if (changed) { this.state = { ...this.state, revision: "" }; if (this.hydration) this.scheduleRefresh(); }
+  }
   private turnAudiences = new Map<string, TurnAudience>();
   private aliases = new Map<string, string>();
   private identityAliases = new Map<string, string>();
@@ -149,7 +164,7 @@ export class BotTimeline {
         this.merge(cached.entries, true, -1); this.dirty = liveDirty;
         const m = cached.metadata; this.cachedKeys = new Set(m.order ?? []);
         const boundaries = historyBoundaries(this.state.entries, this.mapGaps(m.gaps ?? []), m.olderCursor, cached.entries);
-        this.publish({ revision: m.revision.endsWith(":conversation-v3") ? m.revision : "", eventCursor: Math.max(live, m.eventCursor), ...boundaries,
+        this.publish({ revision: m.revision.endsWith(":conversation-v4") ? m.revision : "", eventCursor: Math.max(live, m.eventCursor), ...boundaries,
           partialTurn: m.partialTurn, attachments: m.attachments, contextEntries: conversationEntries(m.contextEntries ?? [], this.turnAudiences), complete: m.complete && !boundaries.olderCursor && !boundaries.gaps.length, position: { ...(m.position ?? this.state.position), anchor: this.resolveKey(m.position?.anchor ?? null) }, cached: true }, true);
         this.scheduleWrite();
       } catch (e) { this.publish({ error: `Offline history cache unavailable: ${String(e)}` }, true); }
@@ -275,7 +290,20 @@ export class BotTimeline {
     }, 1000));
   }
   receive(event: BotEvent) {
-    if (this.disposed || event.botId !== this.botId || event.seq <= this.state.eventCursor) return;
+    if (this.disposed || event.botId !== this.botId) return;
+    if (event.type === "schedules") {
+      if (event.seq <= this.attributionCursor) return;
+      this.attributionCursor = event.seq;
+      const data = event.data as BotScheduledEventData;
+      if (data.activeScheduledTurn) this.scheduled([data.activeScheduledTurn]);
+      // Even a previously seen receipt can now be terminal/acknowledged. A
+      // new projection heals an old cached classification without guessing.
+      if (data.runTurn?.botId === this.botId && data.runTurn.turnId) {
+        this.state = { ...this.state, revision: "" }; this.scheduleRefresh();
+      }
+      return;
+    }
+    if (event.seq <= this.state.eventCursor) return;
     if (event.type === "history.refresh") {
       const data = event.data as { reason?: string; method?: string; turnId?: string; itemId?: string; entry?: HistoryEntry; turn?: Turn };
       if (data.reason !== "large-native-event") { this.scheduleRefresh(); return; }

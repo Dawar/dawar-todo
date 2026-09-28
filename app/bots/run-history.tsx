@@ -5,6 +5,7 @@ import type { Bot, BotAttachment, BotRun, BotRunPage, BotSchedule } from "../../
 import type { HistoryPage, HistoryResponse } from "../../lib/bot-history-view";
 import { botsClient } from "./client";
 import { TimelineEntry } from "./timeline";
+import { RunTurnPicker } from "./run-turn-picker";
 import { ReturnedArtifacts } from "./returned-artifact";
 import { getBotTimeline } from "./use-timeline";
 import type { ActivityTarget } from "./conversation-activity";
@@ -32,6 +33,7 @@ export function RunHistory({ bot, schedules, attachments, online, onClose, downl
   const [runs, setRuns] = useState<BotRun[]>(() => mergeRuns(saved?.runs ?? [], recentRuns).slice(0, 25));
   const [cursor, setCursor] = useState<string | null>(saved?.cursor ?? null);
   const [listBusy, setListBusy] = useState(false), [detailBusy, setDetailBusy] = useState(false), [actionBusy, setActionBusy] = useState(false), [error, setError] = useState("");
+  const [reviewError, setReviewError] = useState<{run: BotRun; message: string} | null>(null);
   const busy = online && (listBusy || detailBusy) || actionBusy;
   const [filter, setFilter] = useState("all");
   const [runCursors, setRunCursors] = useState<(string | null)[]>([null]), [runPage, setRunPage] = useState(0);
@@ -40,9 +42,11 @@ export function RunHistory({ bot, schedules, attachments, online, onClose, downl
   const [transcript, setTranscript] = useState<HistoryPage | null>(null);
   const [pageCursors, setPageCursors] = useState<(string | null)[]>([null]);
   const [detailPage, setDetailPage] = useState(0);
+  const actionRequest = useRef(false);
   const active = useRef(true), generation = useRef(0), listRequest = useRef(false), refreshAgain = useRef(false), runPageRef = useRef(0), targetRef = useRef(target);
   const listEpoch = useRef(0), currentListCursor = useRef<string | null>(null);
   useEffect(() => { runPageRef.current = runPage; targetRef.current = target; }, [runPage, target]);
+  const detailIdentity = useRef("");
   const body = useRef<HTMLDivElement>(null), savedScroll = useRef(0);
   const valid = useCallback(() => active.current && botsClient.owner === owner, [owner]);
   const load = useCallback(async (next: string | null) => {
@@ -57,10 +61,15 @@ export function RunHistory({ bot, schedules, attachments, online, onClose, downl
       setRuns(values); setCursor(page.nextCursor);
       if (!next) { botsClient.save(cacheKey, { runs: values, cursor: page.nextCursor }); setNewActivity(false); }
     } catch (reason) { if (valid() && request === listEpoch.current && !targetRef.current) setError(reason instanceof Error ? reason.message : "Activity could not be loaded."); }
-    finally { listRequest.current = false; if (valid()) setListBusy(false); }
+    finally { listRequest.current = false; if (botsClient.owner === owner) setListBusy(false); }
   }, [bot.id, cacheKey, online, owner, valid]);
   useEffect(() => {
     active.current = true;
+    void Promise.resolve().then(() => {
+      if (!valid()) return;
+      setActionBusy(actionRequest.current); setListBusy(listRequest.current);
+      if (!targetRef.current || !online) setDetailBusy(false);
+    });
     listEpoch.current++;
     void Promise.resolve().then(() => load(currentListCursor.current));
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -74,7 +83,7 @@ export function RunHistory({ bot, schedules, attachments, online, onClose, downl
     };
     botsClient.events.add(event);
     return () => { active.current = false; if (timer) clearTimeout(timer); botsClient.events.delete(event); };
-  }, [bot.id, load]);
+  }, [bot.id, load, online, valid]);
   useEffect(() => { if (!listBusy && refreshAgain.current) { refreshAgain.current = false; void Promise.resolve().then(() => load(currentListCursor.current)); } }, [listBusy, load]);
   useEffect(() => {
     if (!target || !online) return;
@@ -82,12 +91,14 @@ export function RunHistory({ bot, schedules, attachments, online, onClose, downl
     let canceled = false;
     void Promise.resolve().then(async () => {
       if (canceled || !valid()) return;
-      setDetailBusy(true); setError(""); setTranscript(null);
+      const identity = JSON.stringify([target.turnId, pageCursors[detailPage]]);
+      const changedPart = identity !== detailIdentity.current;
+      setDetailBusy(true); setError(""); if (changedPart) setTranscript(null);
       const result = await botsClient.rpc<HistoryResponse>("history.view", bot.id, { turnId: target.turnId, cursor: pageCursors[detailPage] }, undefined, { owner });
       if (canceled || !valid() || request !== generation.current) return;
-      if (result.kind === "page") { setTranscript(result); if (body.current) body.current.scrollTop = 0; }
+      if (result.kind === "page") { setTranscript(result); detailIdentity.current = identity; if (changedPart && body.current) body.current.scrollTop = 0; }
     }).catch(reason => { if (!canceled && valid() && request === generation.current) setError(reason instanceof Error ? reason.message : "This run could not be opened."); })
-      .finally(() => { if (!canceled && valid() && request === generation.current) setDetailBusy(false); });
+      .finally(() => { if (botsClient.owner === owner && request === generation.current) setDetailBusy(false); });
     return () => { canceled = true; };
   }, [bot.id, detailPage, online, owner, pageCursors, target, valid]);
   const open = (run: BotRun) => {
@@ -107,12 +118,13 @@ export function RunHistory({ bot, schedules, attachments, online, onClose, downl
     if (body.current) body.current.scrollTop = 0;
   };
   const acknowledge = async (run: BotRun) => {
-    setActionBusy(true); setError("");
+    if (actionRequest.current) return;
+    actionRequest.current = true; setActionBusy(true); setReviewError(null);
     try {
       await botsClient.rpc("runs.acknowledge", bot.id, { id: run.id }, `run-review:${run.id}`, { owner });
       if (valid()) await load(runCursors[runPage]);
-    } catch (reason) { if (valid()) setError(reason instanceof Error ? reason.message : "The review could not be saved. Retry the same review."); }
-    finally { if (valid()) setActionBusy(false); }
+    } catch (reason) { if (botsClient.owner === owner) setReviewError({ run, message: reason instanceof Error ? reason.message : "The review could not be confirmed." }); }
+    finally { actionRequest.current = false; if (botsClient.owner === owner) setActionBusy(false); }
   };
   const groups = useMemo(() => {
     const groups = new Map<string, BotRun[]>();
@@ -121,7 +133,7 @@ export function RunHistory({ bot, schedules, attachments, online, onClose, downl
     }
     return [...groups];
   }, [filter, runs]);
-  const selectedRun = runs.find(run => run.id === target?.runId || run.turnId === target?.turnId);
+  const selectedRun = [...runs, ...recentRuns, ...(saved?.runs ?? [])].find(run => run.id === target?.runId || run.turnId === target?.turnId);
   const linked = useMemo(() => new Set(transcript?.entries.flatMap(entry => entry.item?.type === "agentMessage" ? [...entry.item.text.matchAll(/\]\(<?bot-artifact:([^\s)>]+)/g)].map(match => match[1]) : []) ?? []), [transcript]);
   return <div className="bots-modal-backdrop bots-activity-backdrop" onClick={onClose}>
     <section className="bots-run-library" role="dialog" aria-modal="true" aria-label={`${bot.name} activity`} onClick={event => event.stopPropagation()}>
@@ -131,11 +143,16 @@ export function RunHistory({ bot, schedules, attachments, online, onClose, downl
         <button className="bots-icon-button" aria-label="Close activity and return to conversation" onClick={onClose}><X size={20} /></button>
       </header>
       <div className="bots-run-library-body" ref={body}>
+        {reviewError && <div className="bots-run-notice is-error" role="alert"><CircleAlert size={18} /><div><p>{reviewError.message}</p><button disabled={!online || actionBusy} onClick={() => void acknowledge(reviewError.run)}>Retry same review</button></div></div>}
         {error && <div className="bots-run-notice is-error" role="alert"><CircleAlert size={18} /><div><p>{error}</p><button disabled={!online || busy} onClick={() => target ? setPageCursors(current => [...current]) : void load(currentListCursor.current)}>Try again</button></div></div>}
         {target ? <>
           <button className="bots-run-back" onClick={back}><ArrowLeft size={16} />All activity</button>
           <div className="bots-run-detail-title"><span>Scheduled run</span><h3>{selectedRun?.title ?? "Earlier activity"}</h3><p>{selectedRun ? stamp(selectedRun.scheduledAt) : "Full recorded conversation"}</p></div>
+          {target.runId && botsClient.snapshot?.activeScheduledTurns !== undefined && <RunTurnPicker key={`${owner}:${bot.id}:${target.runId}`} owner={owner} botId={bot.id} runId={target.runId} primary={selectedRun} selected={target.turnId} online={online} onSelect={turnId => {
+            generation.current++; setTranscript(null); setPageCursors([null]); setDetailPage(0); setTarget({ runId: target.runId, turnId });
+          }} />}
           {!online && <div className="bots-run-notice"><CircleAlert size={18} /><p>Connect to open this run. Your saved conversation is still available.</p></div>}
+          {newActivity && <button className="bots-run-back" disabled={!online || busy} onClick={() => { setNewActivity(false); setPageCursors(current => [...current]); }}>Updated · Refresh this part<RefreshCw size={14} /></button>}
           <div className="bots-run-transcript">
             {transcript?.entries.map(entry => <TimelineEntry key={`${entry.turnId}:${entry.id}`} entry={{ ...entry, scheduled: false }} timeline={timeline} attachments={transcript.attachments.length ? transcript.attachments : attachments} download={download} />)}
             {transcript && <ReturnedArtifacts botId={bot.id} turnId={target.turnId} attachments={transcript.attachments} linked={linked} />}

@@ -13,6 +13,8 @@ function listen() {
     for (const timeline of timelines.values()) if (timeline.owner === botsClient.owner) timeline.receive(event);
   });
   botsClient.subscribe(() => {
+    for (const timeline of timelines.values()) if (timeline.owner === botsClient.owner && botsClient.snapshot?.activeScheduledTurns)
+      timeline.scheduled(botsClient.snapshot.activeScheduledTurns);
     if (lastOwner === botsClient.owner) return;
     lastOwner = botsClient.owner;
     for (const [key, timeline] of timelines) if (timeline.owner !== lastOwner) {
@@ -34,6 +36,7 @@ export function getBotTimeline(owner: string, botId: string) {
     const oldest = timelines.keys().next().value!;
     const evicted = timelines.get(oldest)!; timelines.delete(oldest); void evicted.dispose();
   }
+  if (owner === botsClient.owner && botsClient.snapshot?.activeScheduledTurns) timeline.scheduled(botsClient.snapshot.activeScheduledTurns);
   return timeline;
 }
 export function useBotTimeline(owner: string, botId: string, online: boolean) {

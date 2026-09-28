@@ -6,6 +6,7 @@ import type {
   BotSnapshot,
   BridgeRequest,
   BotAttachment,
+  BotScheduledEventData,
 } from "../../lib/bots-types";
 
 export class BotRpcError extends Error {
@@ -38,12 +39,18 @@ function validComposerResult(method: string, result: Record<string, unknown> | u
   return true;
 }
 function snapshotEventKey(event: BotEvent) {
+  if (event.type === "schedules" && event.botId && Object.hasOwn(event.data as object, "activeScheduledTurn")) return `scheduled:${event.botId}`;
   if (event.type === "bot") return `bot:${(event.data as BotSnapshot["bots"][number]).id}`;
   if (event.type === "request" || event.type === "request.resolved")
     return `request:${(event.data as { key: string }).key}`;
   return null;
 }
 function applySnapshotEvent(snapshot: BotSnapshot, event: BotEvent): BotSnapshot {
+  if (event.type === "schedules" && event.botId && Object.hasOwn(event.data as object, "activeScheduledTurn")) {
+    const active = (event.data as BotScheduledEventData).activeScheduledTurn;
+    if (active !== null && (!active || active.botId !== event.botId || !active.turnId || !active.runId)) return snapshot;
+    return { ...snapshot, activeScheduledTurns: [...(snapshot.activeScheduledTurns ?? []).filter(turn => turn.botId !== event.botId), ...(active ? [active] : [])] };
+  }
   if (event.type === "bot") {
     const bot = event.data as BotSnapshot["bots"][number];
     return { ...snapshot, bots: [...snapshot.bots.filter(item => item.id !== bot.id), bot]

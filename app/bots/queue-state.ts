@@ -2,7 +2,7 @@ import type { BotQueuedSubmission } from '../../lib/bots-types';
 
 export const stagedPrompt = (item: BotQueuedSubmission) => item.state !== undefined || item.revision !== undefined;
 export const queueEditable = (item: BotQueuedSubmission) =>
-  (item.state === undefined || item.state === 'queued' || item.state === 'failed') && item.waitReason !== 'delivery-unconfirmed';
+  (item.revision === undefined || Number.isSafeInteger(item.revision) && item.revision > 0) && (item.state === undefined || item.state === 'queued' || item.state === 'failed') && item.waitReason !== 'delivery-unconfirmed';
 export const queueResumeBlocked = (items: BotQueuedSubmission[]) => items.some(item =>
   !queueEditable(item) || item.state === 'failed' || item.waitReason === 'rejected' || item.waitReason === 'plan-reconciliation');
 export function canMoveQueued(items: BotQueuedSubmission[], index: number, direction: number) {

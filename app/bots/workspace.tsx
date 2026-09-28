@@ -411,7 +411,8 @@ export function BotsWorkspace() {
     `${b.name} ${b.purpose}`.toLowerCase().includes(search.toLowerCase())), [bots, archived, search]);
   const schedules = snapshot?.schedules.filter((s) => s.botId === selected) ?? [];
   const recentRuns = snapshot?.runs.filter(run => run.botId === selected) ?? [];
-  const scheduledActive = recentRuns.some(run => ["running", "starting"].includes(run.status) && (!run.turnId || run.turnId === bot?.activeTurnId));
+  const activeScheduledTurns = snapshot?.activeScheduledTurns?.filter(turn => turn.botId === selected);
+  const scheduledActive = activeScheduledTurns ? activeScheduledTurns.length > 0 : recentRuns.some(run => ["running", "starting"].includes(run.status) && (!run.turnId || run.turnId === bot?.activeTurnId));
   const openActivity = (target: ActivityTarget | null = null) => { setActivityTarget(target); setShowRunHistory(true); };
   return (
     <div className="bots-screen" ref={screenRef} data-no-pull-refresh>
@@ -573,7 +574,7 @@ export function BotsWorkspace() {
             </div>
           ) : (
             <>
-              <ConversationActivity runs={recentRuns} onOpen={() => openActivity()} />
+              <ConversationActivity runs={recentRuns} activeTurns={activeScheduledTurns} onOpen={openActivity} />
               <BotConversation key={scope} owner={owner} bot={bot} online={online} onOpenActivity={openActivity}>
                 {pending.map((request) => (
                   <RequestCard

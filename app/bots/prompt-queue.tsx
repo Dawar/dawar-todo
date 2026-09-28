@@ -39,7 +39,7 @@ export function PromptQueue({ owner, bot, items, online, canEdit, onEdit, refres
           <button type="button" aria-label={`Edit queued message ${index + 1}`} disabled={!canEdit || !mutable} onClick={() => onEdit(item)}><Pencil size={15} /></button>
           <button type="button" aria-label={`Move queued message ${index + 1} up`} disabled={!online || locked || !canMoveQueued(items,index,-1)} onClick={() => move(index,-1)}><ArrowUp size={15} /></button>
           <button type="button" aria-label={`Move queued message ${index + 1} down`} disabled={!online || locked || !canMoveQueued(items,index,1)} onClick={() => move(index,1)}><ArrowDown size={15} /></button>
-          <button type="button" aria-label={`Remove queued message ${index + 1}`} disabled={!online || !mutable} onClick={() => action.run('queue.delete', { id: item.id })}><Trash2 size={15} /></button>
+          <button type="button" aria-label={`Remove queued message ${index + 1}`} disabled={!online || !mutable} onClick={() => action.run('queue.delete', { id: item.id, ...(item.revision === undefined ? {} : { expectedRevision: item.revision }) })}><Trash2 size={15} /></button>
         </div>
       </article>;
     })}

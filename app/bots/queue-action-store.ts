@@ -11,7 +11,7 @@ export function readQueueAction(owner: string, botId: string): { pending: Pendin
       const raw = localStorage.getItem(key); if (!raw) continue;
       const p = JSON.parse(raw) as PendingQueueAction;
       const params = p.params;
-      const validParams = params && typeof params === 'object' && !Array.isArray(params) && (p.method === 'queue.delete' ? typeof params.id === 'string' && params.id.length > 0 :
+      const validParams = params && typeof params === 'object' && !Array.isArray(params) && (p.method === 'queue.delete' ? typeof params.id === 'string' && params.id.length > 0 && (params.expectedRevision === undefined || Number.isSafeInteger(params.expectedRevision) && Number(params.expectedRevision) > 0) :
         p.method === 'queue.reorder' ? Array.isArray(params.ids) && params.ids.every(id => typeof id === 'string') : p.method === 'queue.resume' && Object.keys(params).length === 0);
       if (p.owner !== owner || p.botId !== botId || typeof p.id !== 'string' || !/^[a-zA-Z0-9:_-]{10,180}$/.test(p.id) || key !== prefix+p.id || !validParams)
         throw Error('Saved queue action cannot be read. Keep this site’s storage and ask for recovery.');

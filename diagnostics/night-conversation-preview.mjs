@@ -1,5 +1,7 @@
 // Manual UI inspection only: temporary SQLite, synthetic native pages, isolated Chrome.
 
+import { execFileSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 import { EventEmitter } from 'node:events';
 import { Store } from '../bot-bridge/store.mjs';
 import { BotRuntime } from '../bot-bridge/runtime.mjs';
@@ -34,6 +36,27 @@ const snapshot={bots:[bot],pending:[],cursor:0,ready:true,models:[{id:'gpt-6',mo
 const nativeCalls=[];
 codex.call=async(method,params)=>{nativeCalls.push({method,params});if(method==='thread/resume')return {};const start=Number(params.cursor||0);return {data:[...turns].reverse().slice(start,start+params.limit),nextCursor:start+params.limit<turns.length?String(start+params.limit):null};};
 const runtime=new BotRuntime({store,codex,root:nativeRoot});
+// Read-only candidate adapter, extracted to this fixture's temporary directory.
+// No candidate runtime lifecycle/native methods are imported or started.
+let listRunTurns;
+if (process.argv.includes('--continuations')) {
+  const source=execFileSync('git',['show','7c292e35a4c534db417a8743d8b988b91e3deeb4:bot-bridge/run-turns.mjs'],{encoding:'utf8'});
+  const modulePath=join(nativeRoot,'run-turns.mjs');await writeFile(modulePath,source);
+  ({listRunTurns}=await import(pathToFileURL(modulePath).href));
+  runtime.scheduledContext=()=>null; // Expose discovery capability, never route/send.
+  runs.at(-1).status='completed';turns.at(-1).status='completed';
+  for(let i=0;i<58;i++) {
+    const id=`manager-notice:follow-${String(i).padStart(3,'0')}`,turnId=`follow-${i}`;
+    const items=[user(`notice-${i}`,'Synthetic worker result is ready.',id),answer(`follow-answer-${i}`,`### Follow-up ${i+1}\n\nThe studio check is complete. Its original history remains available here.`)];
+    if(i===55)items.push(user('follow-human','Keep the launch on Thursday.'),answer('follow-human-answer','Thursday it is. I’ll keep the plan focused.'));
+    if(i===56)items.push({type:'dynamicToolCall',id:'follow-finding',tool:'bots_report_result',status:'completed',success:true,arguments:{key:'follow-up',summary:'### Ready for your review\n\nThe revised studio plan is ready.'},contentItems:[],durationMs:2});
+    turns.push({id:turnId,status:i===57?'inProgress':'completed',startedAt:Math.floor(clock/1000)+i,itemsView:'full',items});
+    store.put('runTurn',{id,operationId:id,botId:bot.id,runId:'run-254',turnId,threadId:bot.threadId,status:i===57?'running':i===54?'uncertain':'completed',error:null,createdAt:i===0?null:new Date(clock+i*1000).toISOString(),finishedAt:null});
+  }
+  bot.activeTurnId='follow-57';snapshot.activeScheduledTurns=[{botId:bot.id,runId:'run-254',turnId:bot.activeTurnId,operationId:'manager-notice:follow-057',continuation:true}];
+  store.db.exec("CREATE INDEX run_turn_page ON records(bot_id,json_extract(json,'$.runId'),id) WHERE kind='runTurn'; CREATE INDEX run_turn_identity ON records(kind,bot_id,json_extract(json,'$.turnId')) WHERE kind IN ('run','runTurn');");
+}
+
 store.saveBot(bot);runtime.loaded.add(bot.threadId);for(const run of runs)store.put('run',run);
 import { build } from 'esbuild';
 import postcss from 'postcss';
@@ -54,7 +77,7 @@ const server=createServer(async(req,res)=>{
   const path=new URL(req.url,'http://localhost').pathname;res.setHeader('Cache-Control','no-store');
   if(path==='/rpc') { let body='';for await(const chunk of req)body+=chunk;
     try {const request=JSON.parse(body);const allowed=['history.view','history.detail','runs.page'];
-      const result=request.method==='snapshot'?snapshot:allowed.includes(request.method)?await runtime.handle(request):request.method==='usage.account'?{limits:[],ordinaryUsageAllowed:true}:[];
+      const result=request.method==='snapshot'?snapshot:request.method==='runs.turns'&&listRunTurns?listRunTurns(runtime,bot,request.params):allowed.includes(request.method)?await runtime.handle(request):request.method==='usage.account'?{limits:[],ordinaryUsageAllowed:true}:[];
       res.setHeader('Content-Type','application/json');res.end(JSON.stringify({result}));
     }catch(error){res.end(JSON.stringify({error:error.message}));}
   } else if(path==='/fixture-image'){res.setHeader('Content-Type','image/png');res.end(await readFile('public/icons/icon-192.png'));}

@@ -241,7 +241,7 @@ export class BotComposer {
       if (!draft.text.trim() && !draft.files.length) return;
       const op: Submission = {
         id: crypto.randomUUID(), slot, method: draft.queueId ? "queue.update" : queueNext ? "queue.add" : "turn.send",
-        params: { ...(draft.queueId ? { id: draft.queueId } : {}), text: draft.text.trim(), attachments: draft.files.map((f) => f.remote!.id) },
+        params: { ...(draft.queueId ? { id: draft.queueId, ...(draft.queueRevision === undefined ? {} : { expectedRevision: draft.queueRevision }) } : {}), text: draft.text.trim(), attachments: draft.files.map((f) => f.remote!.id) },
         textVersion: draft.textVersion, fileIds: draft.files.map((f) => f.id), state: "pending",
       };
       // This durable record is the authorization to reconcile after restart.
