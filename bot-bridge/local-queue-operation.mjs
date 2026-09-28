@@ -49,24 +49,19 @@ export async function prepareLocalQueueMutation(runtime, method, botId, params, 
   if (stagedQueue(runtime.store, botId).some(item => item.state !== "queued") || runtime.plans.blocked(botId))
     throw new Error("Reconcile unconfirmed execution, or edit/remove a rejected prompt, before resuming this queue.");
   if (bot.archived) throw new Error("Restore this bot first.");
-  const beforeTurnId = bot.activeTurnId;
+  // This read may repair CURRENT projection, independently of queue acceptance.
+  // It never resumes a queue or settles an unknown historical operation.
+  if (!await runtime.reconcileCurrentActivity(botId))
+    throw new Error("Current native activity is unresolved. Recovery will retry; the queue was not resumed.");
   const activity = captureActivity(runtime, botId);
-  const { thread } = await runtime.codex.call("thread/read", { threadId: bot.threadId, includeTurns: true });
-  const latest = await runtime.latestNativeTurn(bot, thread);
-  const active = thread.status?.type === "active" || (!thread.status && latest?.status === "inProgress");
-  if (active && latest?.status !== "inProgress") throw new Error("The active native turn could not be identified. Refresh before resuming the queue.");
   return () => {
-    if (!activityUnchanged(runtime, botId, activity))
+    if (!activityUnchanged(runtime, botId, activity) || runtime.activityUnresolved(botId))
       throw new Error("Native activity changed during recovery. Refresh before resuming the queue again.");
     const current = runtime.store.bot(botId);
     if ((current.queuePauseRevision ?? 0) !== (bot.queuePauseRevision ?? 0))
       throw new Error("A newer queue pause needs review. Refresh before resuming again.");
-    if (bot.status !== "interrupted" && (current.status === "interrupted" ||
-        (latest?.id === beforeTurnId && latest.status === "interrupted")))
+    if (bot.status !== "interrupted" && current.status === "interrupted")
       throw new Error("The turn was interrupted during recovery. Review it before resuming the queue again.");
-    // A notification received during the read wins over that read's snapshot.
-    if (active) runtime.projectActiveTurn(botId, latest, activity);
-    if (!active && latest) runtime.projectTerminalTurn(botId, latest, true);
     const after = runtime.store.bot(botId);
     runtime.saveBot(after, { queuePaused: false, error: null,
       status: runtime.store.list("pending", botId).length ? "waiting" : after.activeTurnId ? "running" : "idle" });

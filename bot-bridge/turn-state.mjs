@@ -19,21 +19,42 @@ export function activityUnchanged(runtime, botId, token) {
     runtime.store.get("botActivity", botId)?.generation === token.generation;
 }
 
-function advanceActivity(runtime, botId, activeTurnId) {
+function advanceActivity(runtime, botId, activeTurnId, changes = {}) {
   const token = captureActivity(runtime, botId);
   if (!Number.isSafeInteger(token.generation + 1)) throw new Error("Observed activity generation exhausted.");
-  runtime.store.put("botActivity", { id: botId, botId, generation: token.generation + 1, activeTurnId });
+  runtime.store.put("botActivity", { ...runtime.store.get("botActivity", botId), ...changes,
+    id: botId, botId, generation: token.generation + 1, activeTurnId });
+}
+
+export const activityUnresolved = (runtime, botId) => runtime.store.get("botActivity", botId)?.unresolved === true;
+
+export function requireCurrentActivity(runtime, botId, turnId = null, reason = "current-state-required") {
+  captureActivity(runtime, botId);
+  const current = runtime.store.get("botActivity", botId);
+  if (current.unresolved && (!turnId || current.unresolvedTurnId === turnId)) return;
+  advanceActivity(runtime, botId, current.activeTurnId, { unresolved: true,
+    unresolvedTurnId: turnId ?? current.unresolvedTurnId ?? null, reason,
+    reconcileAfter: null, reconciliationError: null, attempts: 0 });
+}
+
+// Acceptance is a historical fact, not proof of what is active now. Even a
+// done operation must retain containment when its active projection was lost.
+export function retainAcceptedActivity(runtime, botId, turn) {
+  if (turn?.status !== "inProgress" || terminalTurn(runtime.store.get("planTurnEvidence", turn.id)) ||
+      observedActiveTurn(runtime, botId, turn.id)) return;
+  requireCurrentActivity(runtime, botId, turn.id, "accepted-turn-not-currently-projected");
 }
 
 export function observedActiveTurn(runtime, botId, turnId) {
-  return Boolean(turnId && runtime.store.bot(botId).activeTurnId === turnId &&
+  return Boolean(!activityUnresolved(runtime, botId) && turnId && runtime.store.bot(botId).activeTurnId === turnId &&
     runtime.store.get("botActivity", botId)?.activeTurnId === turnId &&
     !terminalTurn(runtime.store.get("planTurnEvidence", turnId)));
 }
 
 function saveActive(runtime, botId, turn, changes) {
   const bot = runtime.store.bot(botId);
-  advanceActivity(runtime, botId, turn.id);
+  advanceActivity(runtime, botId, turn.id, { unresolved: false, unresolvedTurnId: null,
+    reason: null, reconcileAfter: null, reconciliationError: null, attempts: 0 });
   const active = runtime.store.get("activeRun", botId);
   if (active?.turnId && active.turnId !== turn.id) runtime.store.remove("activeRun", botId);
   runtime.saveBot(bot, { ...changes, activeTurnId: turn.id,
@@ -56,7 +77,11 @@ export function projectTerminalTurn(runtime, botId, turn, completeEvidence = fal
   return runtime.store.transaction(() => {
     captureActivity(runtime, botId);
     const activity = runtime.store.get("botActivity", botId);
-    advanceActivity(runtime, botId, activity.activeTurnId === turn.id ? null : activity.activeTurnId);
+    const previous = runtime.store.get("planTurnEvidence", turn.id);
+    // Duplicate unrelated terminal evidence does not establish new current
+    // activity, and must not starve the current-state reconciliation reader.
+    if (previous?.status !== turn.status || activity.activeTurnId === turn.id || runtime.store.bot(botId).activeTurnId === turn.id)
+      advanceActivity(runtime, botId, activity.activeTurnId === turn.id ? null : activity.activeTurnId);
     runtime.plans.note(botId, { method: "turn/completed", params: { turn } }, completeEvidence);
     for (const pending of runtime.store.list("pending", botId)) {
       if (!pending.async && pending.request.params.turnId === turn.id) {
@@ -84,11 +109,51 @@ export function projectTerminalTurn(runtime, botId, turn, completeEvidence = fal
 export function projectActiveTurn(runtime, botId, turn, token, changes = {}) {
   if (turn.status !== "inProgress") return false;
   return runtime.store.transaction(() => {
-    if (!activityUnchanged(runtime, botId, token)) return false;
+    if (!activityUnchanged(runtime, botId, token) || activityUnresolved(runtime, botId)) {
+      retainAcceptedActivity(runtime, botId, turn);
+      return false;
+    }
     const terminal = runtime.store.get("planTurnEvidence", turn.id);
     const bot = runtime.store.bot(botId);
-    if ((terminal?.botId === botId && terminalTurn(terminal)) || (bot.activeTurnId && bot.activeTurnId !== turn.id)) return false;
+    if ((terminal?.botId === botId && terminalTurn(terminal)) || (bot.activeTurnId && bot.activeTurnId !== turn.id)) {
+      retainAcceptedActivity(runtime, botId, turn);
+      return false;
+    }
     saveActive(runtime, botId, turn, changes);
+    return true;
+  });
+}
+
+// Only a fenced native CURRENT-state read uses these functions. They do not
+// mark an old operation/turn completed, rejected, or safe to replay.
+export function projectCurrentActive(runtime, botId, turn, token) {
+  return runtime.store.transaction(() => {
+    if (!activityUnchanged(runtime, botId, token) || turn?.status !== "inProgress" ||
+        terminalTurn(runtime.store.get("planTurnEvidence", turn.id))) return false;
+    saveActive(runtime, botId, turn, {});
+    return true;
+  });
+}
+
+export function projectCurrentIdle(runtime, botId, token, latest = null) {
+  return runtime.store.transaction(() => {
+    if (!activityUnchanged(runtime, botId, token)) return false;
+    const bot = runtime.store.bot(botId);
+    // Separate exact terminal evidence can retain a missed interruption gate.
+    // An idle status alone never invents a historical outcome.
+    if (terminalTurn(latest) && (bot.activeTurnId === latest.id ||
+        runtime.store.get("botActivity", botId)?.activeTurnId === latest.id)) {
+      runtime.recordScheduledEvidence(botId, latest);
+      projectTerminalTurn(runtime, botId, latest);
+      if (latest.status === "interrupted" && !runtime.store.bot(botId).queuePaused)
+        runtime.saveBot(runtime.store.bot(botId), { queuePaused: true });
+    }
+    advanceActivity(runtime, botId, null, { unresolved: false, unresolvedTurnId: null,
+      reason: null, reconcileAfter: null, reconciliationError: null, attempts: 0 });
+    runtime.store.remove("activeRun", botId);
+    const current = runtime.store.bot(botId);
+    runtime.saveBot(current, { activeTurnId: null, status: runtime.store.list("pending", botId).length ? "waiting" :
+      current.queuePaused ? "interrupted" : "idle" });
     return true;
   });
 }

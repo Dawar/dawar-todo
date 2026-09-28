@@ -97,7 +97,7 @@ export async function deliverNotices(manager) {
     // itself must persist an operation before crossing the native boundary.
     if (["uncertain", "held"].includes(original.state)) continue;
     const bot = store.bot(original.botId);
-    if (delivered >= 2 || bot.archived || bot.managerPaused || bot.activeTurnId ||
+    if (delivered >= 2 || bot.archived || bot.managerPaused || bot.activeTurnId || runtime.activityUnresolved(bot.id) ||
         runtime.locks.has(bot.id) || store.list("pending", bot.id).length) continue;
     delivered++;
     store.put("managerNotice", { ...original, operationId, state: "dispatching", attemptedAt: now() });

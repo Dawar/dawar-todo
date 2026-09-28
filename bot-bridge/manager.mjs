@@ -243,7 +243,11 @@ export class CodexManager {
         );
       }
       if (!this.runtime.ready) throw new Error("Native context recovery is still in progress; retry this same operation after readiness.");
-      if (name === "codex_tasks" && args.operation === "delegate" && this.runtime.scheduledUncertain(botId) &&
+      const delegates = name === "codex_tasks" && args.operation === "delegate" ||
+        name === "codex_workers" && args.operation === "message";
+      if (delegates && this.runtime.activityUnresolved(botId))
+        throw new Error("Current native activity is unresolved; delegation attribution will be available after read-only recovery.");
+      if (delegates && this.runtime.scheduledUncertain(botId) &&
           !this.runtime.scheduledContext(botId))
         throw new Error("Scheduled context is not yet identified; retry this same delegation after native reconciliation.");
       const operation = {

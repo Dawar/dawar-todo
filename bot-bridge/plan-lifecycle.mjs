@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { findNativeTurn } from "./native-reconcile.mjs";
+import { retainAcceptedActivity } from "./turn-state.mjs";
 
 const now = () => new Date().toISOString();
 const terminal = new Set(["completed", "failed", "interrupted"]);
@@ -128,6 +129,7 @@ export class PlanLifecycle {
           reconcileAfter: new Date(Date.now() + 60000).toISOString() });
         if (found.turn) {
           this.bind(this.store.get("planExecution", current.id), found.turn, true);
+          retainAcceptedActivity(this.runtime, record.botId, found.turn);
           this.runtime.projectTerminalTurn(record.botId, found.turn, true);
           await this.settle(record.botId);
         }

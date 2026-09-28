@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { findNativeTurn } from "./native-reconcile.mjs";
 import { rememberInputProvenance } from "./artifact-outputs.mjs";
+import { retainAcceptedActivity } from "./turn-state.mjs";
 
 const now = () => new Date().toISOString();
 const pendingStates = new Set(["queued", "dispatching", "uncertain", "failed"]);
@@ -123,6 +124,7 @@ export async function reconcilePrompt(runtime, item) {
         : { error: "Native execution is unconfirmed. This prompt was not resent." }) });
     if (result && operation) finishLocalOperation(runtime.store, item.operationId, result);
     if (result) {
+      retainAcceptedActivity(runtime, item.botId, result.turn);
       const turnId = result.turn?.id ?? result.turnId;
       const bot = runtime.store.bot(item.botId);
       // Exact native acceptance/receipt binds this revision even if canonical
