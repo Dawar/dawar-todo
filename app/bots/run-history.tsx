@@ -12,6 +12,7 @@ import { runNeedsBinding, validRunState } from "./run-context";
 import { runHistoryRefresh } from "./run-history-refresh";
 import { updateRunPage } from "./run-page-events";
 import { useRunScroll } from "./use-run-scroll";
+import { useRunMetadata } from "./use-run-metadata";
 import { RunComposer } from "./run-composer";
 import { RunQuestions } from "./run-questions";
 import { RunControls, StopAll } from "./run-controls";
@@ -51,7 +52,21 @@ export function RunHistory({ bot, schedules, attachments, online, onClose, downl
   const [runCursors, setRunCursors] = useState<(string | null)[]>([null]), [runPage, setRunPage] = useState(0);
   const [newActivity, setNewActivity] = useState(false);
   const [target, setTarget] = useState<ActivityTarget | null>(initialTarget ?? null);
-  const selectedRun = [...runs, ...recentRuns, ...(saved?.runs ?? [])].find(run => target?.runId ? run.id === target.runId : !!target?.turnId && run.turnId === target.turnId);
+  const [metadataCursor, setMetadataCursor] = useState<string | null>(null);
+  const selectedMetadata = useRef<BotRun | null>(null);
+  const onMetadata = useCallback((run: BotRun) => {
+    if (botsClient.owner !== owner || run.botId !== bot.id) return;
+    const compact = compactRun(run);
+    selectedMetadata.current = compact;
+    // Membership and cursors belong to the list read. Metadata only replaces
+    // an existing row, including in the disposable first-page cache.
+    setRuns(current => current.map(row => row.id === run.id ? compact : row));
+    const cached = botsClient.cache<{ runs: BotRun[]; cursor: string | null } | null>(cacheKey, null);
+    if (cached?.runs.some(row => row.id === run.id)) botsClient.save(cacheKey, { ...cached, runs: cached.runs.map(row => row.id === run.id ? compact : row) });
+  }, [owner, bot.id, cacheKey]);
+  const fallbackRun = [...runs, ...recentRuns, ...(saved?.runs ?? [])].find(run => run.botId === bot.id && (target?.runId ? run.id === target.runId : !!target?.turnId && run.turnId === target.turnId));
+  const metadata = useRunMetadata({ owner, botId: bot.id, runId: target?.runId, cursor: metadataCursor, online, enabled: lanes, fallback: fallbackRun, onMetadata });
+  const selectedRun = metadata.run;
   const unbound = !!(lanes && selectedRun && runNeedsBinding(selectedRun));
   const [transcript, setTranscriptState] = useState<HistoryPage | null>(null);
   const transcriptRef = useRef<HistoryPage | null>(null);
@@ -83,12 +98,15 @@ export function RunHistory({ bot, schedules, attachments, online, onClose, downl
       runEvents.current.clear();
       const page = await botsClient.rpc<BotRunPage>("runs.page", bot.id, { cursor: next, limit: 25 }, undefined, { owner });
       if (!valid() || request !== listEpoch.current) return;
-      const values = page.runs.map(run => compactRun(runEvents.current.get(run.id)?.run ?? run));
+      // Selected metadata has its own read/event fence; a parallel list read
+      // must not restore its earlier paused row into the display or cache.
+      const values = page.runs.map(run => compactRun(lanes && targetRef.current?.runId === run.id && selectedMetadata.current?.id === run.id
+        ? selectedMetadata.current : runEvents.current.get(run.id)?.run ?? run));
       setRuns(values); setCursor(page.nextCursor);
       if (!next) { botsClient.save(cacheKey, { runs: values, cursor: page.nextCursor }); setNewActivity(false); }
     } catch (reason) { if (valid() && request === listEpoch.current && !targetRef.current) setError(reason instanceof Error ? reason.message : "Activity could not be loaded."); }
     finally { listRequest.current = false; if (botsClient.owner === owner) setListBusy(false); }
-  }, [bot.id, cacheKey, online, owner, valid]);
+  }, [bot.id, cacheKey, online, owner, valid, lanes]);
   useEffect(() => {
     active.current = true;
     void Promise.resolve().then(() => {
@@ -183,6 +201,10 @@ export function RunHistory({ bot, schedules, attachments, online, onClose, downl
   const open = (run: BotRun) => {
     if (!run.turnId && !lanes) return;
     savedScroll.current = body.current?.scrollTop ?? 0;
+    const index = runs.findIndex(row => row.id === run.id);
+    // A known predecessor keeps a selected older row reachable even when new
+    // runs arrive ahead of this page. No history ID or cursor is fabricated.
+    setMetadataCursor(index > 0 ? runs[index - 1].id : currentListCursor.current);
     setPageCursors([null]); setDetailPage(0); setTarget({ turnId: run.turnId, runId: run.id });
   };
   const back = () => {
@@ -231,8 +253,9 @@ export function RunHistory({ bot, schedules, attachments, online, onClose, downl
           {!unbound && target.runId && (lanes || botsClient.snapshot?.activeScheduledTurns !== undefined) && <RunTurnPicker key={`${owner}:${bot.id}:${target.runId}`} owner={owner} botId={bot.id} runId={target.runId} primary={selectedRun} selected={target.turnId ?? ""} online={online} onSelect={turnId => {
             generation.current++; setTranscript(null); setPageCursors([null]); setDetailPage(0); setTarget({ runId: target.runId, turnId });
           }} />}
-          {lanes && selectedRun && <RunControls owner={owner} botId={bot.id} run={selectedRun} online={online} />}
-          {unbound && <div className="bots-run-notice"><Clock3 size={18} /><p>{selectedRun?.laneId ? "This run’s conversation is not available yet. Its preparation or confirmation is still pending." : "This run has not started."} {selectedRun?.activity?.state === "paused" ? "Its queued work is saved until you resume it." : "Its conversation will be available when it starts."}</p></div>}
+          {lanes && selectedRun && <RunControls owner={owner} botId={bot.id} run={selectedRun} online={online} onConfirmed={metadata.refresh} />}
+          {unbound && <div className="bots-run-notice"><Clock3 size={18} /><div><p>{selectedRun?.laneId ? "This run’s conversation is not available yet. Its preparation or confirmation is still pending." : "This run has not started."} {selectedRun?.activity?.state === "paused" ? "Its queued work is saved until you resume it." : "Its conversation will be available when it starts."} {!online && "Saved status. Reconnect for updates."}</p><button disabled={!online || metadata.busy} onClick={metadata.refresh}>{metadata.busy ? "Updating status…" : "Refresh status"}</button></div></div>}
+          {lanes && metadata.error && <div className="bots-run-notice is-error" role="alert"><CircleAlert size={18} /><div><p>{metadata.error}</p><button disabled={!online || metadata.busy} onClick={metadata.refresh}>Retry status</button></div></div>}
           {!unbound && !online && <div className="bots-run-notice"><CircleAlert size={18} /><p>{transcript ? "Saved run detail. Connect for updates and details not yet opened." : "Connect to open this run. Your saved conversation is still available."}</p></div>}
           {!unbound && newActivity && <button className="bots-run-back" disabled={!online || busy} onClick={() => { setNewActivity(false); setPageCursors(current => [...current]); }}>Updated · Refresh this part<RefreshCw size={14} /></button>}
           {lanes && target.runId && transcript?.context ? <RunTranscript key={JSON.stringify([owner, bot.id, target.runId, target.turnId, detailPage])} owner={owner} botId={bot.id} runId={target.runId} page={transcript} download={download} /> : <div className="bots-run-transcript">

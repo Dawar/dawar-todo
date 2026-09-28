@@ -4,12 +4,12 @@ import type { BotRun } from "../../lib/bots-types";
 import { useRunAction } from "./run-action";
 import { runNeedsBinding } from "./run-context";
 
-export function RunControls({ owner, botId, run, online }: { owner: string; botId: string; run: BotRun; online: boolean }) {
+export function RunControls({ owner, botId, run, online, onConfirmed }: { owner: string; botId: string; run: BotRun; online: boolean; onConfirmed: () => void }) {
   const action = useRunAction(owner, botId, `control:${run.id}`);
   const paused = run.activity?.state === "paused";
   return <div className="bots-run-controls">
     <span>{paused ? "This run is paused" : run.activity?.state === "waiting-input" ? "Waiting for your answer" : run.activity?.state === "waiting-workers" ? "Working with helpers" : run.activity?.state === "uncertain" ? "Delivery needs confirmation" : run.activity?.state === "idle" ? "Run is idle" : "Run activity"}</span>
-    {action.intent ? <button disabled={!online || action.busy} onClick={() => void action.retry().catch(() => {})}>Check same action</button> : <button disabled={!online || action.busy || !paused && runNeedsBinding(run)} onClick={() => void action.perform(paused ? "runs.resume" : "runs.interrupt", { runId: run.id }).catch(() => {})}>{action.busy ? "Confirming…" : paused ? "Resume queued work" : runNeedsBinding(run) ? "Waiting to start" : "Stop this run"}</button>}
+    {action.intent ? <button disabled={!online || action.busy} onClick={() => void action.retry().then(onConfirmed).catch(() => {})}>Check same action</button> : <button disabled={!online || action.busy || !paused && runNeedsBinding(run)} onClick={() => void action.perform(paused ? "runs.resume" : "runs.interrupt", { runId: run.id }).then(onConfirmed).catch(() => {})}>{action.busy ? "Confirming…" : paused ? "Resume queued work" : runNeedsBinding(run) ? "Waiting to start" : "Stop this run"}</button>}
     {paused && <small>Resumes only queued work, replies and notices. Interrupted work does not restart automatically.</small>}
     {action.error && <p role="alert">{action.error}</p>}
   </div>;
