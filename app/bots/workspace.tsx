@@ -647,10 +647,12 @@ export function BotsWorkspace() {
                         if (
                           e.key === "Enter" &&
                           !e.shiftKey &&
-                          !e.nativeEvent.isComposing
+                          !e.nativeEvent.isComposing &&
+                          e.nativeEvent.keyCode !== 229
                         ) {
                           e.preventDefault();
-                          void send(Boolean(editingQueueId));
+                          if (e.repeat) return;
+                          void send(e.ctrlKey || Boolean(editingQueueId));
                         }
                       }}
                     />
@@ -662,8 +664,9 @@ export function BotsWorkspace() {
                           onClick={cancelQueueEdit}>Cancel edit</button>
                       )}
                       <button type="button" className="bots-icon-button bots-queue-icon"
-                        title={editingQueueId ? "Save queue" : "Queue next"}
+                        title={editingQueueId ? "Save queue (Ctrl+Enter)" : "Queue next (Ctrl+Enter)"}
                         aria-label={editingQueueId ? "Save queue" : "Queue next"}
+                        aria-keyshortcuts="Control+Enter"
                         disabled={!online || !canSend ||
                           (!draft.trim() && !uploads.length)}
                         onClick={() => void send(true)}>
