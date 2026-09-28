@@ -125,6 +125,9 @@ export default function SettingsPage() {
   });
   const changedSettings = useRef(new Set<keyof Settings>());
   const settingsLoadGeneration = useRef(0);
+  const settingsReadController = useRef<AbortController | null>(null);
+  const settingsSaveInFlight = useRef(false);
+  const settingsLoadError = useRef("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
@@ -167,11 +170,23 @@ export default function SettingsPage() {
   const [diagnosticMessage, setDiagnosticMessage] = useState("");
 
   useEffect(() => {
+    // Activity can resume during PATCH. Defer the GET until settlement, rather
+    // than capturing a pre-commit snapshot that could later overwrite Saved.
+    if (settingsSaveInFlight.current) return;
+    let active = true;
     const generation = ++settingsLoadGeneration.current;
-    request<{ settings: Settings }>("/api/settings")
+    const controller = new AbortController();
+    settingsReadController.current = controller;
+    const currentLoad = () => active && generation === settingsLoadGeneration.current && !settingsSaveInFlight.current;
+    const timeout = window.setTimeout(() => controller.abort(), 15_000);
+    request<{ settings: Settings }>("/api/settings", { signal: controller.signal, cache: "no-store" })
       .then(({ settings: loaded }) => {
-        if (generation !== settingsLoadGeneration.current) return;
+        if (!currentLoad()) return;
+        const previousLoadError = settingsLoadError.current;
+        settingsLoadError.current = "";
+        if (previousLoadError) setMessage((current) => current === previousLoadError ? "" : current);
         setSettings((current) => {
+          if (!currentLoad()) return current;
           const next: Settings = {
             ...loaded,
             openAppTo: parseOpeningTab(loaded.openAppTo) ?? cachedOpeningTab() ?? DEFAULT_OPENING_TAB,
@@ -186,12 +201,24 @@ export default function SettingsPage() {
         console.info("[todo-ui] settings loaded", loaded);
       })
       .catch((error: Error) => {
-        if (generation !== settingsLoadGeneration.current) return;
-        if (!changedSettings.current.has("openAppTo")) setSettings((current) => ({ ...current, openAppTo: cachedOpeningTab() ?? DEFAULT_OPENING_TAB }));
-        setMessage(error.message);
+        if (!currentLoad()) return;
+        if (!changedSettings.current.has("openAppTo")) setSettings((current) => currentLoad() ? { ...current, openAppTo: cachedOpeningTab() ?? DEFAULT_OPENING_TAB } : current);
+        settingsLoadError.current = controller.signal.aborted ? "Loading preferences timed out. Your edits are kept; reopen Settings to retry." : error.message;
+        setMessage(settingsLoadError.current);
       })
-      .finally(() => { if (generation === settingsLoadGeneration.current) setLoading(false); });
+      .finally(() => {
+        window.clearTimeout(timeout);
+        if (currentLoad()) setLoading(false);
+      });
+    return () => {
+      active = false;
+      if (settingsReadController.current === controller) settingsReadController.current = null;
+      controller.abort();
+      window.clearTimeout(timeout);
+    };
+  }, [saving]);
 
+  useEffect(() => {
     request<{ feeds: CalendarFeed[] }>("/api/calendar-feeds")
       .then(({ feeds }) => {
         setCalendarFeeds(feeds);
@@ -323,16 +350,24 @@ export default function SettingsPage() {
 
   async function save(event: FormEvent) {
     event.preventDefault();
-    // An older GET finishing after this PATCH must not replace its result.
+    if (settingsSaveInFlight.current || loading) return;
+    settingsSaveInFlight.current = true;
     settingsLoadGeneration.current++;
+    settingsReadController.current?.abort();
+    setLoading(false);
     setSaving(true);
     setSaved(false);
+    settingsLoadError.current = "";
     setMessage("");
     try {
       const { settings: persisted } = await request<{ settings: Settings }>("/api/settings", {
         method: "PATCH",
         body: JSON.stringify(Object.fromEntries([...changedSettings.current].map((key) => [key, settings[key]]))),
       });
+      // Fence reads again at acknowledgement, including any Activity-resume
+      // work queued while the mutation was pending, before clearing dirty keys.
+      settingsLoadGeneration.current++;
+      settingsReadController.current?.abort();
       setSettings({ ...persisted, openAppTo: parseOpeningTab(persisted.openAppTo) ?? settings.openAppTo });
       changedSettings.current.clear();
       setSaved(true);
@@ -341,6 +376,10 @@ export default function SettingsPage() {
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Settings could not be saved.");
     } finally {
+      settingsLoadGeneration.current++;
+      settingsReadController.current?.abort();
+      settingsSaveInFlight.current = false;
+      setLoading(false);
       setSaving(false);
     }
   }
