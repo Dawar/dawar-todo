@@ -13,6 +13,7 @@ import { findNativeTurn } from "./native-reconcile.mjs";
 import { registerNativeItem, rememberInputProvenance } from "./artifact-outputs.mjs";
 import { boundHistoryEvent } from "./history-events.mjs";
 import { reconcileStop } from "./execution-stop.mjs";
+import { occurrenceReady, unsentRun } from "./schedule-decisions.mjs";
 import { unreservedRun, admissionRevision, admissionPaused, admissionOpen,
   setAdmissionPause, beginPreparation, finishPreparation } from "./run-admission.mjs";
 
@@ -22,8 +23,10 @@ const terminal = new Set(["completed", "failed", "interrupted", "cancelled"]);
 const pauseError = () => new Error("This run is paused. Resume its queued work explicitly; no input was dispatched.");
 const textInput = text => ({ type: "text", text, text_elements: [] });
 const due = row => !(Date.parse(row.reconcileAfter ?? "") > Date.now());
-const retryAt = attempts => new Date(Date.now() + (attempts === 1 ? 5000 : attempts === 2 ? 15000 : 60000)).toISOString();
+const retryAt = attempts => new Date(Date.now() + (attempts === 1 ? 5000 : attempts === 2 ? 15000 : attempts < 6 ? 60000 : attempts < 10 ? 300000 : 900000)).toISOString();
 const privateInput = new Set(["queued", "dispatching", "uncertain"]);
+const releaseOutstanding = lane => Boolean(lane.releasePending || lane.releaseRequestedAt || lane.releasedAt);
+const originalSubscription = lane => !lane.subscriptionResumedAt && !releaseOutstanding(lane);
 
 export class BackgroundRuns {
   constructor(runtime, tools, validateResponse, interactions) {
@@ -51,11 +54,14 @@ export class BackgroundRuns {
   isolated(runId) { return Boolean(runId && this.store.get("run", runId)?.executionLane === "run-v1"); }
   context(lane, turnId = null) { return { botId: lane.botId, runId: lane.runId, laneId: lane.id, threadId: lane.threadId, turnId }; }
   unreservedMetadata(run) {
-    if (!unreservedRun(this.store, run) || !admissionPaused(this.store, run.id)) return null;
+    if (!unreservedRun(this.store, run) || (!admissionPaused(this.store, run.id) && !run.decision)) return null;
+    const waiting = run.decision?.state === "required";
     return { id: run.id, botId: run.botId, scheduleId: run.scheduleId, title: run.title, status: run.status,
       scheduledAt: run.scheduledAt, startedAt: null, finishedAt: null, turnId: null,
       operationId: run.operationId ?? `schedule:${run.id}`,
-      activity: { state: "paused", activeTurnId: null, waitReason: "stopped-before-start", paused: true,
+      decision: run.decision,
+      activity: { state: waiting ? "waiting-input" : admissionPaused(this.store, run.id) ? "paused" : "queued", activeTurnId: null,
+        waitReason: waiting ? "overdue-decision" : admissionPaused(this.store, run.id) ? "stopped-before-start" : run.decision?.state === "rescheduled" ? "rescheduled" : "capacity", paused: admissionPaused(this.store, run.id),
         unresolved: false, error: null, pendingCount: 0, queuedCount: 1 } };
   }
   publicRun(lane) {
@@ -64,18 +70,23 @@ export class BackgroundRuns {
     const queuedCount = this.store.executionMetadata("runIntake", lane.botId).filter(p => p.laneId === lane.id && p.state === "queued").length;
     const unresolved = activityUnresolved(this.port(lane.id), lane.botId);
     const waitingWorkers = this.store.list("managerTask", lane.botId).some(t => t.destination?.laneId === lane.id && !terminal.has(t.state));
-    const state = lane.provisioning === "prepared" && lane.paused ? "paused" : lane.provisioning !== "bound" ? lane.provisioning === "uncertain" ? "uncertain" : "provisioning" :
+    const decisionRequired = run.status === "queued" && run.decision?.state === "required" && unsentRun(this.store, run);
+    const state = decisionRequired ? "waiting-input" : lane.provisioning === "prepared" && lane.paused ? "paused" : lane.provisioning !== "bound" ? lane.provisioning === "uncertain" ? "uncertain" : "provisioning" :
       unresolved ? "uncertain" : lane.paused ? "paused" : pendingCount ? "waiting-input" :
         lane.activeTurnId ? "running" : waitingWorkers ? "waiting-workers" : queuedCount ? "queued" : "idle";
     return { id: run.id, botId: run.botId, scheduleId: run.scheduleId, title: run.title, status: run.status,
       scheduledAt: run.scheduledAt, startedAt: run.startedAt, finishedAt: run.finishedAt, turnId: run.turnId ?? null,
+      decision: run.decision,
       error: run.error?.slice(0, 2048) ?? null, contextWarning: run.contextWarning ?? null, operationId: run.operationId,
       laneId: lane.id, threadId: lane.threadId, executionLane: "run-v1",
-      activity: { state, activeTurnId: lane.activeTurnId ?? null, waitReason: state === "queued" && lane.admitted === false ? "capacity" : ["running", "idle"].includes(state) ? null : state,
+      activity: { state, activeTurnId: lane.activeTurnId ?? null, waitReason: decisionRequired ? "overdue-decision" : lane.retiredBeforeStartAt && !lane.activeTurnId && !queuedCount ? "cancelled-before-start" : state === "queued" && lane.admitted === false ? "capacity" : ["running", "idle"].includes(state) ? null : state,
         paused: !!lane.paused, unresolved, error: lane.error?.slice(0, 2048) ?? null,
         provisioning: lane.provisioning, pendingCount, queuedCount } };
   }
   unfinished(lane) {
+    if (lane.retiredBeforeStartAt && lane.provisioning === "prepared" && !lane.threadId &&
+        !this.store.executionMetadata("runIntake", lane.botId).some(r => r.laneId === lane.id && privateInput.has(r.state)) &&
+        unsentRun(this.store, this.store.get("run", lane.runId))) return false;
     if (lane.provisioning !== "bound" || lane.activeTurnId || activityUnresolved(this.port(lane.id), lane.botId)) return true;
     if (this.store.list("runPending", lane.botId).some(p => p.laneId === lane.id)) return true;
     if (this.store.executionMetadata("runIntake", lane.botId).some(p => p.laneId === lane.id && privateInput.has(p.state))) return true;
@@ -88,7 +99,7 @@ export class BackgroundRuns {
     const unreserved = this.store.list("run", botId).filter(r => this.unreservedMetadata(r));
     return { botId, unfinished: lanes.filter(l => this.unfinished(l)).length + unreserved.length,
       running: lanes.filter(l => l.activeTurnId).length,
-      needsInput: this.store.list("runPending", botId).length,
+      needsInput: this.store.list("runPending", botId).length + this.store.list("run", botId).filter(r => r.decision?.state === "required" && r.status === "queued").length,
       unconfirmed: lanes.filter(l => l.provisioning === "uncertain" || activityUnresolved(this.port(l.id), botId)).length };
   }
   publish(id) {
@@ -124,6 +135,7 @@ export class BackgroundRuns {
         .slice(0, 100).map(entry => entry.run ?? this.publicRun(entry.lane)) };
   }
   start() {
+    this.runtime.scheduleDecisions.refresh();
     // Preparation contains no native effects before its lane reservation.
     // Restart retires the dead async frame, never its pause or execution IDs.
     for (const admission of this.store.list("runAdmission"))
@@ -167,7 +179,44 @@ export class BackgroundRuns {
   async load(id) {
     const lane = this.store.get("runLane", id);
     if (!lane?.threadId || lane.provisioning !== "bound") throw new Error("Run thread provisioning is unconfirmed; no replacement was created.");
-    if (this.runtime.loaded.has(lane.threadId)) return;
+    if (this.runtime.loaded.has(lane.threadId) && !releaseOutstanding(lane)) return;
+    if (releaseOutstanding(lane)) this.runtime.loaded.delete(lane.threadId);
+    // Native0.156.1 keeps a fresh thread in memory before its rollout exists.
+    // resume resolves persisted history first; do not resume our known queued
+    // first input before trying the native live metadata path. This exception
+    // is unavailable after any release attempt or dispatch/evidence. Reading
+    // resident state does not attach the bridge's native subscription.
+    if (originalSubscription(lane) && unsentRun(this.store, this.store.get("run", lane.runId))) {
+      const port = this.port(id), fence = captureActivity(port, lane.botId);
+      let thread;
+      try { ({ thread } = await this.runtime.codex.call("thread/read", { threadId: lane.threadId, includeTurns: false })); }
+      catch {
+        throw new Error("The original empty run thread is unavailable. Input remains unsent; recovery will retry with backoff. No replacement thread was created.");
+      }
+      if (thread?.id !== lane.threadId || !["idle", "active", "notLoaded"].includes(thread.status?.type))
+        throw new Error("New run thread identity/current status is unavailable; its original input remains unsent.");
+      if (!activityUnchanged(port, lane.botId, fence) || !unsentRun(this.store, this.store.get("run", lane.runId)))
+        throw new Error("Run activity changed during first-thread recovery; input retained.");
+      if (thread.status.type !== "notLoaded") {
+        if (thread.canAcceptDirectInput === false) throw new Error("Native run thread cannot accept direct input yet.");
+        if (thread.status.type === "idle" && !lane.emptyThreadPersistedAt && thread.historyMode === "paginated") {
+          // Versioned native source: includeTurns on a loaded paginated
+          // thread calls persist_thread. Our durable queued-first-input proof
+          // confines this one hydration to an otherwise empty owned thread.
+          const persisted = await this.runtime.codex.call("thread/read", { threadId: lane.threadId, includeTurns: true });
+          if (persisted?.thread?.id !== lane.threadId || persisted.thread.status?.type !== "idle" ||
+              !Array.isArray(persisted.thread.turns) || persisted.thread.turns.length || !activityUnchanged(port, lane.botId, fence))
+            throw new Error("The new run thread changed while persisting; no scheduled input was sent.");
+          this.store.put("runLane", { ...this.store.get("runLane", id), emptyThreadPersistedAt: now() });
+        }
+        // A native close/release observation during either awaited read also
+        // requires resume; current idle alone cannot restore a subscription.
+        if (originalSubscription(this.store.get("runLane", id))) {
+          this.runtime.loaded.add(lane.threadId);
+          return;
+        }
+      }
+    }
     if (!await this.loadedCapacity(lane.threadId)) throw new Error("Background threads are awaiting native resource release. Recovery will retry automatically.");
     const result = await this.runtime.codex.call("thread/resume", {
       threadId: lane.threadId, cwd: lane.home, model: lane.settings.model, serviceTier: lane.settings.serviceTier,
@@ -178,16 +227,23 @@ export class BackgroundRuns {
     if (result.thread.canAcceptDirectInput === false) throw new Error("Native thread currently refuses direct input. This run was not submitted or replaced.");
     // Native persists thread/start dynamicTools in rollout metadata. Resume
     // intentionally supplies no undocumented dynamicTools override.
+    const current = this.store.get("runLane", id);
+    this.store.put("runLane", { ...current,
+      // After a verified resume this is no longer the original creation
+      // subscription, even after its completed release flags are cleared.
+      subscriptionResumedAt: now(),
+      releasePending: false, releaseRequestedAt: null, releasedAt: null });
     this.runtime.loaded.add(lane.threadId);
-    this.store.put("runLane", { ...this.store.get("runLane", id), releasePending: false, releaseRequestedAt: null, releasedAt: null });
   }
   async provision(bot, run) {
+    if (!occurrenceReady(this.runtime.scheduleDecisions.ensure(run.id))) return;
     const id = `run:${hash(`${bot.id}:${run.id}`)}`;
     if (this.store.get("runLane", id)) return;
     const revision = admissionRevision(this.store, run.id);
     if (!beginPreparation(this.store, run, revision)) return;
     try {
       const context = await profileContext(bot);
+      if (!occurrenceReady(this.runtime.scheduleDecisions.ensure(run.id))) return;
       if (!admissionOpen(this.store, run.id, revision)) return;
       if (run.selectedContext != null) {
         const selected = run.selectedContext;
@@ -205,7 +261,8 @@ export class BackgroundRuns {
       await mkdir(lane.markerPath, { recursive: true, mode: 0o700 });
       if (!admissionOpen(this.store, run.id, revision)) return;
       await containedPath(bot.cwd, lane.markerPath);
-      if (!admissionOpen(this.store, run.id, revision) || !unreservedRun(this.store, this.store.get("run", run.id))) return;
+      if (!admissionOpen(this.store, run.id, revision) || !unreservedRun(this.store, this.store.get("run", run.id)) ||
+          !occurrenceReady(this.runtime.scheduleDecisions.ensure(run.id))) return;
       if (this.store.bot(bot.id).archived || this.store.bot(bot.id).archiving) throw new Error("Bot archival began before run reservation.");
       this.store.transaction(() => {
         this.store.put("runContext", { id, botId: bot.id, profile: context, selectedContext: run.selectedContext ?? null });
@@ -225,16 +282,18 @@ export class BackgroundRuns {
   }
   async createThread(id) {
     let lane = this.store.get("runLane", id);
+    if (!occurrenceReady(this.runtime.scheduleDecisions.ensure(lane.runId))) return;
     if (lane.provisioning !== "prepared") return this.recoverCreation(id);
     const revision = admissionRevision(this.store, lane.runId);
     if (!await this.loadedCapacity()) throw new Error("Background capacity is waiting for native idle-thread release.");
     lane = this.store.get("runLane", id);
-    if (!admissionOpen(this.store, lane.runId, revision) || this.store.bot(lane.botId).archived || this.store.bot(lane.botId).archiving || lane.paused)
+    if (!admissionOpen(this.store, lane.runId, revision) || this.store.bot(lane.botId).archived || this.store.bot(lane.botId).archiving || lane.paused ||
+        !occurrenceReady(this.runtime.scheduleDecisions.ensure(lane.runId)))
       throw new Error("Run provisioning is paused; no native creation was submitted.");
     this.store.put("runLane", { ...lane, provisioning: "dispatching", creationOperationId: `lane-create:${hash(id)}` });
     try {
       const result = await this.runtime.codex.call("thread/start", {
-        cwd: lane.markerPath, threadSource: lane.marker, ephemeral: false,
+        cwd: lane.markerPath, threadSource: lane.marker, ephemeral: false, historyMode: "paginated",
         model: lane.settings.model, serviceTier: lane.settings.serviceTier,
         approvalPolicy: lane.permission.approvalPolicy, sandbox: lane.permission.sandbox,
         developerInstructions: this.instructions(lane), config: this.config(),
@@ -242,6 +301,7 @@ export class BackgroundRuns {
       });
       if (!usableTurnId(result?.thread?.id)) throw new Error("Run creation acknowledgement has no usable thread identity.");
       this.bind(id, result.thread.id);
+      await this.load(id); // Materialize the empty owned thread without a turn.
     } catch (error) {
       lane = this.store.get("runLane", id);
       if (lane.provisioning !== "bound") this.store.put("runLane", { ...this.store.get("runLane", lane.id), provisioning: "uncertain", error: error.message });
@@ -289,6 +349,8 @@ export class BackgroundRuns {
     }
     const owner = this.store.bot(lane.botId);
     if (owner.archived || owner.archiving) throw new Error("Bot archival prevents new run intake; original input was not submitted.");
+    if (lane.retiredBeforeStartAt && lane.provisioning === "prepared" && !lane.threadId)
+      throw new Error("This occurrence was cancelled before its thread was created. Schedule new work explicitly; nothing was submitted.");
     if (!this.unfinished(lane)) this.store.put("runLane", { ...this.store.get("runLane", lane.id), admitted: false, reconcileAfter: null });
     const record = { id: operationId, operationId, botId: lane.botId, runId: lane.runId, laneId: lane.id,
       target: { botId: lane.botId, laneId: lane.id, runId: lane.runId }, origin, fingerprint,
@@ -324,9 +386,12 @@ export class BackgroundRuns {
     if (!payload || !context) throw new Error("Retained run input/context is unavailable; nothing was resubmitted.");
     let fence, result;
     try {
+      if (record.primary && !occurrenceReady(this.runtime.scheduleDecisions.ensure(lane.runId))) return;
       await this.load(id);
       if (activityUnresolved(port, bot.id) && !await reconcileCurrentActivity(port, bot.id)) throw new Error("Run activity is unresolved; no conflicting input was submitted.");
       lane = this.store.get("runLane", id);
+      if (record.primary && !occurrenceReady(this.runtime.scheduleDecisions.ensure(lane.runId))) return;
+      if (this.store.get("runIntake", record.id)?.state !== "queued") throw new Error("Run input is no longer queued; its existing receipt was retained.");
       if (lane.paused || !admissionOpen(this.store, lane.runId, revision)) throw pauseError();
       if (this.store.bot(bot.id).archived || this.store.bot(bot.id).archiving) throw new Error("This bot is being archived; no run input was submitted.");
       if (lane.activeTurnId || port.store.list("pending", bot.id).some(p => p.id !== answer?.key)) throw new Error("Run is waiting for its current turn or question.");
@@ -366,7 +431,7 @@ export class BackgroundRuns {
       const current = this.store.get("runIntake", record.id);
       // No-submit admission failures remain queued. A native rejection is
       // terminal; a post-effect storage/publication failure remains uncertain.
-      if (current?.state !== "accepted") this.store.put("runIntake", { ...current,
+      if (current?.state !== "accepted" && !(current?.disposition === "cancelled-before-start" && !boundary.started)) this.store.put("runIntake", { ...current,
         state: boundary.started ? boundary.rejected ? "rejected" : "uncertain" : "queued", error: error.message });
       if (boundary.started && current?.state !== "accepted") {
         const kind = record.primary ? "run" : "runTurn", key = record.primary ? lane.runId : record.id;
@@ -649,13 +714,14 @@ export class BackgroundRuns {
     if (this.tickRunning) return;
     this.tickRunning = true;
     try {
+    this.runtime.scheduleDecisions.refresh();
     for (const lane of this.store.executionMetadata("runLane").filter(l => l.releasePending && due(l)).slice(0, 2)) {
       if (this.runtime.locks.has(lane.id)) continue;
       await this.runtime.lock(lane.id, () => this.release(lane.id)).catch(error => this.runtime.emit("fault", error));
     }
     let checked = 0;
     for (const lane of this.store.executionMetadata("runLane").sort((a, b) => (a.reconcileAfter ?? "").localeCompare(b.reconcileAfter ?? ""))) {
-      if (lane.admitted === false) continue;
+      if (lane.admitted === false && !(lane.retiredBeforeStartAt && lane.provisioning === "bound")) continue;
       if (lane.releaseRequestedAt && !this.unfinished(lane)) continue;
       if (checked >= 2 || !due(lane) || this.runtime.locks.has(lane.id) || this.store.bot(lane.botId).archived || this.store.bot(lane.botId).archiving) continue;
       checked++;
@@ -666,7 +732,18 @@ export class BackgroundRuns {
           return;
         }
         const port = this.port(lane.id);
-        if (activityUnresolved(port, lane.botId)) await reconcileCurrentActivity(port, lane.botId);
+        if (activityUnresolved(port, lane.botId)) {
+          const previousError = this.store.get("runActivity", lane.id)?.reconciliationError;
+          if (!await reconcileCurrentActivity(port, lane.botId)) {
+            const activity = this.store.get("runActivity", lane.id);
+            this.store.put("runLane", { ...this.store.get("runLane", lane.id), error: activity.reconciliationError,
+              reconcileAfter: activity.reconcileAfter });
+            this.publish(lane.id);
+            return;
+          }
+          const current = this.store.get("runLane", lane.id);
+          if (previousError && current.error === previousError) this.store.put("runLane", { ...current, error: null });
+        }
         const recovery = this.store.executionMetadata("runIntake", lane.botId).filter(r => {
           if (r.laneId !== lane.id || !due(r) || !["dispatching", "uncertain", "accepted"].includes(r.state)) return false;
           const receipt = r.primary ? this.store.get("run", lane.runId) : this.store.get("runTurn", r.id);
@@ -694,20 +771,28 @@ export class BackgroundRuns {
       const unfinished = this.store.executionMetadata("runLane").filter(l => this.occupies(l));
       if (unfinished.length >= 2) return;
       const waiting = this.store.executionMetadata("runLane").find(l => l.admitted === false && this.unfinished(l) &&
+        (this.store.get("runIntake", this.store.get("run", l.runId).operationId)?.state !== "queued" || occurrenceReady(this.runtime.scheduleDecisions.ensure(l.runId))) &&
         !l.paused && !admissionPaused(this.store, l.runId) && !this.store.bot(l.botId).archived && !this.store.bot(l.botId).archiving && !unfinished.some(other => other.botId === l.botId));
       if (waiting) {
         const revision = admissionRevision(this.store, waiting.runId);
         if (!await this.loadedCapacity(waiting.threadId)) return;
-        if (!admissionOpen(this.store, waiting.runId, revision) || this.store.get("runLane", waiting.id).paused ||
-            this.store.bot(waiting.botId).archived || this.store.bot(waiting.botId).archiving) return;
         this.store.transaction(() => {
-          this.store.put("runLane", { ...this.store.get("runLane", waiting.id), admitted: true, reconcileAfter: null });
+          // Capacity reads can outlive a decision/expiry. Inspect the actual
+          // primary intake, not the historical primary's occurrence window
+          // when admitting a continuation or receipt reconciliation instead.
+          const run = this.runtime.scheduleDecisions.ensure(waiting.runId);
+          const primary = this.store.get("runIntake", run.operationId);
+          if (primary?.state === "queued" && !occurrenceReady(run)) return;
+          const current = this.store.get("runLane", waiting.id);
+          if (!admissionOpen(this.store, waiting.runId, revision) || current.paused ||
+              this.store.bot(waiting.botId).archived || this.store.bot(waiting.botId).archiving) return;
+          this.store.put("runLane", { ...current, admitted: true, reconcileAfter: null });
           requireCurrentActivity(this.port(waiting.id), waiting.botId, null, "explicit-run-followup-current-state-required");
           this.publish(waiting.id);
         });
         return;
       }
-      const run = this.store.list("run").filter(r => unreservedRun(this.store, r) && !admissionPaused(this.store, r.id))
+      const run = this.store.list("run").filter(r => unreservedRun(this.store, r) && !admissionPaused(this.store, r.id) && occurrenceReady(r))
         .sort((a, b) => a.scheduledAt.localeCompare(b.scheduledAt)).find(r =>
           !this.store.bot(r.botId).archived && !this.store.bot(r.botId).archiving && !unfinished.some(l => l.botId === r.botId));
       if (run) try { await this.provision(this.store.bot(run.botId), run); }

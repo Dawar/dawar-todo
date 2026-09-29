@@ -76,7 +76,8 @@ export async function reconcileCurrentActivity(runtime, botId) {
     if (!state?.unresolved) return true;
     const attempts = (state.attempts ?? 0) + 1;
     runtime.store.put("botActivity", { ...state, attempts, reconciliationError: error.message,
-      reconcileAfter: new Date(Date.now() + (attempts === 1 ? 5000 : attempts === 2 ? 15000 : 30000)).toISOString() });
+      reconcileAfter: new Date(Date.now() + (runtime.currentActivityRetryDelay?.(attempts) ??
+        (attempts === 1 ? 5000 : attempts === 2 ? 15000 : 30000))).toISOString() });
     return false;
   }
 }
