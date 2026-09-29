@@ -85,7 +85,10 @@ export function collectDueRuns(store, now = new Date()) {
         .some(
           (r) =>
             r.scheduleId === schedule.id &&
-            ["queued", "starting", "running", "uncertain"].includes(r.status),
+            ["queued", "starting", "running", "uncertain"].includes(r.status) &&
+            // A held/rescheduled occurrence does not move or disable the
+            // recurring definition's future occurrences. Its input stays put.
+            !(r.status === "queued" && ["required", "rescheduled"].includes(r.decision?.state)),
         );
       if (queued) continue;
       const id = `${schedule.id}:${schedule.nextRunAt}`;

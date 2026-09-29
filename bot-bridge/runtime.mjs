@@ -1,5 +1,6 @@
 import { AnswerExecutions } from "./answer-execution.mjs";
 import { BackgroundRuns } from "./background-runs.mjs";
+import { ScheduleDecisions } from "./schedule-decisions.mjs";
 import { stopExecutions, reconcileStop } from "./execution-stop.mjs";
 import { requireTurn, requireSteer, usableTurn, usableTurnId, terminalTurn } from "./native-turn.mjs";
 import { boundHistoryEvent } from "./history-events.mjs";
@@ -81,6 +82,7 @@ const READ_METHODS = new Set([
   "runs.receipt",
   "runs.requests",
   "runs.findings",
+  "runs.decisions",
   "usage.bot",
   "usage.account",
   "attachments.read",
@@ -166,6 +168,7 @@ export class BotRuntime extends EventEmitter {
     this.plans = new PlanLifecycle(this);
     this.answers = new AnswerExecutions(this, validateResponse);
     this.runs = new BackgroundRuns(this, dynamicTools, validateResponse, INTERACTIONS);
+    this.scheduleDecisions = new ScheduleDecisions(this);
     this.locks = new Map();
     this.loaded = new Set();
     this.models = [];
@@ -466,7 +469,7 @@ export class BotRuntime extends EventEmitter {
   }
   snapshot() {
     return {
-      capabilities: { backgroundRunLanes: 1 },
+      capabilities: { backgroundRunLanes: 1, scheduleDecisions: 1 },
       ...this.runs.snapshot(),
       bots: this.store
         .bots()
@@ -519,7 +522,7 @@ export class BotRuntime extends EventEmitter {
       .update(JSON.stringify({ method, botId, params }))
       .digest("hex");
     const runRequest = method === "requests.respond" && (this.store.get("runPending", params.key) ?? this.store.get("answerExecution", `answer:${params.key}`));
-    const resumeRun = method === "runs.resume" && this.owned("run", params.runId, botId);
+    const resumeRun = ["runs.resume", "runs.decide"].includes(method) && this.owned("run", params.runId, botId);
     const laneKey = resumeRun ? resumeRun.laneId ?? `run-preparation:${resumeRun.id}` :
       method.startsWith("runs.") && params.runId ? this.runs.lane(botId, params.runId).id : runRequest?.laneId;
     return this.lock(laneKey ?? botId ?? "create", async () => {
@@ -543,7 +546,7 @@ export class BotRuntime extends EventEmitter {
       }
       const local = await acceptLocalQueueOperation(this, { method, botId, params, operationId }, fingerprint);
       if (local) return local.result;
-      if (method === "runs.send" || method === "runs.resume") {
+      if (["runs.send", "runs.resume", "runs.decide"].includes(method)) {
         try {
           const bot = this.store.bot(botId), run = this.owned("run", params.runId, botId);
           const lane = method === "runs.send" || run.laneId ? this.runs.lane(botId, params.runId) : null;
@@ -551,7 +554,8 @@ export class BotRuntime extends EventEmitter {
           const input = method === "runs.send" ? await this.messageInput(bot, params) : null;
           return this.store.transaction(() => {
             const result = method === "runs.send" ? this.runs.accept(lane, operationId,
-              { text: String(params.text ?? "").trim(), input, attachments: params.attachments ?? [] }, { kind: "owner" }) : this.runs.resume(bot, params, operationId);
+              { text: String(params.text ?? "").trim(), input, attachments: params.attachments ?? [] }, { kind: "owner" }) :
+              method === "runs.decide" ? this.scheduleDecisions.decide(bot, params, operationId) : this.runs.resume(bot, params, operationId);
             this.store.saveOperation(operationId, fingerprint, "done", { method, botId, params, result, createdAt: now() });
             return result;
           });
@@ -898,6 +902,8 @@ export class BotRuntime extends EventEmitter {
       case "runs.requests":
       case "runs.findings":
         return this.runs.read(bot, method, p);
+      case "runs.decisions":
+        return this.scheduleDecisions.list(bot, p);
       case "runs.interrupt":
         this.runs.lane(bot.id, p.runId);
         return this.lock(`stop:${id}`, () => stopExecutions(this, bot, id, "run", p.runId));
@@ -959,15 +965,15 @@ export class BotRuntime extends EventEmitter {
         return this.saveSchedule(bot, p, id);
       case "schedules.delete": {
         this.owned("schedule", p.id, bot.id);
-        this.store.remove("schedule", p.id);
-        for (const run of this.store.list("run", bot.id))
-          if (run.scheduleId === p.id && run.status === "queued")
-            this.store.put("run", {
-              ...run,
-              status: "cancelled",
-              finishedAt: now(),
-            });
-        this.emitEvent("schedules", {}, bot.id);
+        this.store.transaction(() => {
+          this.store.remove("schedule", p.id);
+          for (const run of this.store.list("run", bot.id))
+            if (run.scheduleId === p.id && run.status === "queued") {
+              this.store.put("run", { ...run, status: "cancelled", finishedAt: now() });
+              this.scheduleDecisions.retireCancelled(run.id);
+            }
+          this.emitEvent("schedules", {}, bot.id);
+        });
         return {};
       }
       case "schedules.run": {
@@ -1882,7 +1888,9 @@ export class BotRuntime extends EventEmitter {
       await recoverCurrentActivities(this);
       if (this.manager)
         void this.manager.tick().catch((error) => this.emit("fault", error));
+      this.scheduleDecisions.refresh();
       const created = collectDueRuns(this.store);
+      this.scheduleDecisions.refresh();
       if (created.length) this.emitEvent("schedules", {});
       void this.runs.tick().catch(error => this.emit("fault", error));
       for (const bot of this.store.bots()) {

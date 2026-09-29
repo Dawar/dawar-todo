@@ -68,6 +68,9 @@ export class RunStatePort {
   emitEvent(type, data) { return this.lanes.event(this.laneId, type, data); }
   emit(type, data) { return this.runtime.emit(type, data); }
   load() { return this.lanes.load(this.laneId); }
+  currentActivityRetryDelay(attempts) {
+    return attempts === 1 ? 5000 : attempts === 2 ? 15000 : attempts < 6 ? 60000 : attempts < 10 ? 300000 : 900000;
+  }
   historyPage(...args) { return this.runtime.historyPage(...args); }
   recordScheduledEvidence(_botId, turn) { return this.lanes.recordEvidence(this.laneId, turn); }
   initialize() {
