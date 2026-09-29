@@ -75,7 +75,7 @@ export class CodexManager {
       Math.min(16, Number(process.env.BOTS_WORKER_CONCURRENCY) || 4),
     );
   }
-  config(bot) {
+  config(bot, executionMode = bot.executionMode) {
     if (!this.tokens.has(bot.id))
       this.tokens.set(bot.id, randomBytes(32).toString("hex"));
     return {
@@ -86,7 +86,7 @@ export class CodexManager {
           this.socketPath,
           bot.id,
         ],
-        env: { DAWAR_MANAGER_TOKEN: this.tokens.get(bot.id), DAWAR_BOT_EXECUTION_MODE: bot.executionMode ?? "legacy" },
+        env: { DAWAR_MANAGER_TOKEN: this.tokens.get(bot.id), DAWAR_BOT_EXECUTION_MODE: executionMode ?? "legacy" },
         startup_timeout_sec: 15,
         tool_timeout_sec: 120,
         required: true,
@@ -227,7 +227,7 @@ export class CodexManager {
       throw new Error("Restore this manager before using its tools.");
     if (name === "bots_peers") {
       if (origin) throw new Error("Use the owned native peer tool route.");
-      return this.runtime.peerTool(bot, args);
+      return this.runtime.peerTool(bot, args, { authority: "authenticated-bot-mcp", botId: bot.id, threadId: null, turnId: null, callId: null });
     }
     if (name === "bots_work") {
       if (origin) throw new Error("Progress belongs to the primary named bot.");

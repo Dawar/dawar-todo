@@ -157,13 +157,21 @@ export class MessageBursts {
     });
   }
   async tick() {
-    let recovered = 0;
-    for (const bot of this.store.bots()) {
-      if (bot.archived || bot.archiving || this.runtime.locks.has(bot.id)) continue;
-      const first = this.batches(bot.id).find(open);
-      if (!first) continue;
-      if (['dispatching', 'uncertain'].includes(first.state) && recovered++ >= 2) continue;
+    const candidates = this.store.bots().filter(bot => !bot.archived && !bot.archiving && !this.runtime.locks.has(bot.id))
+      .map(bot => ({ bot, first: this.batches(bot.id).find(open) })).filter(row => row.first);
+    // Already-confirmed receipts settle locally, independent of native read
+    // backoff/budget. Other recovery candidates rotate only after becoming due.
+    for (const { bot, first } of candidates) if (['dispatching', 'uncertain'].includes(first.state) && this.store.operation(first.id)?.status === 'done')
+      await this.runtime.lock(bot.id, () => this.settle(first, this.store.operation(first.id).result)).catch(error => this.runtime.emit('fault', error));
+    const due = candidates.filter(({ first }) => ['dispatching', 'uncertain'].includes(first.state) && this.store.operation(first.id)?.status !== 'done' &&
+      !(Date.parse(first.reconcileAfter ?? '') > Date.now())).sort((a, b) => a.first.id < b.first.id ? -1 : a.first.id > b.first.id ? 1 : 0);
+    const split = due.findIndex(({ first }) => first.id > (this.recoveryAfter ?? ''));
+    const ordered = split < 0 ? due : [...due.slice(split), ...due.slice(0, split)];
+    for (const { bot, first } of ordered.slice(0, 2)) {
+      this.recoveryAfter = first.id;
       await this.pump(bot.id, true).catch(error => this.runtime.emit('fault', error));
     }
+    for (const { bot } of candidates) if (!['dispatching', 'uncertain'].includes(this.batches(bot.id).find(open)?.state))
+      await this.pump(bot.id, false).catch(error => this.runtime.emit('fault', error));
   }
 }

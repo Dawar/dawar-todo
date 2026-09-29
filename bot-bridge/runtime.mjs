@@ -519,7 +519,7 @@ export class BotRuntime extends EventEmitter {
       if (this.locks.get(key) === next) this.locks.delete(key);
     }
   }
-  async handle(request) {
+  async handle(request, trustedOrigin = null) {
     const { method, botId, params = {}, operationId } = request;
     if (
       typeof method !== "string" ||
@@ -561,7 +561,7 @@ export class BotRuntime extends EventEmitter {
             "This operation may already have run. Refresh the conversation before retrying.",
         ), { outcome: this.store.operation(operationId).outcome === "rejected" ? "rejected" : "uncertain" });
       }
-      const single = await acceptSingleThreadOperation(this, { method, botId, params, operationId }, fingerprint);
+      const single = await acceptSingleThreadOperation(this, { method, botId, params, operationId }, fingerprint, trustedOrigin);
       if (single) return single.result;
       const local = await acceptLocalQueueOperation(this, { method, botId, params, operationId }, fingerprint);
       if (local) return local.result;
@@ -1164,29 +1164,23 @@ export class BotRuntime extends EventEmitter {
       }
     }
   }
+  resumeParams(bot, executionMode = bot.executionMode) {
+    return {
+      threadId: bot.threadId, cwd: bot.cwd, model: this.settings(bot).model,
+      serviceTier: this.settings(bot).serviceTier, approvalPolicy: "never", sandbox: "danger-full-access",
+      developerInstructions: this.manager ? `${BOT_INSTRUCTIONS}\n\n${DIRECT_INSTRUCTIONS}` : BOT_INSTRUCTIONS,
+      config: { "features.fast_mode": true, ...(executionMode === "single-thread" ? { "features.multi_agent": false } : {}),
+        ...(this.manager ? this.manager.config(bot, executionMode) : {}) }, excludeTurns: true,
+    };
+  }
   async load(bot) {
-    if (!bot.threadId)
-      throw new Error(bot.error ?? "This bot has not finished provisioning.");
-    if (!this.loaded.has(bot.threadId)) {
-      await this.codex.call("thread/resume", {
-        threadId: bot.threadId,
-        cwd: bot.cwd,
-        model: this.settings(bot).model,
-        serviceTier: this.settings(bot).serviceTier,
-        approvalPolicy: "never",
-        sandbox: "danger-full-access",
-        developerInstructions: this.manager
-          ? `${BOT_INSTRUCTIONS}\n\n${DIRECT_INSTRUCTIONS}`
-          : BOT_INSTRUCTIONS,
-        config: {
-          "features.fast_mode": true,
-          ...(this.primary.single(bot) ? { "features.multi_agent": false } : {}),
-          ...(this.manager ? this.manager.config(bot) : {}),
-        },
-        excludeTurns: true,
-      });
+    if (!bot.threadId) throw new Error(bot.error ?? "This bot has not finished provisioning.");
+    return this.lock(`load:${bot.threadId}`, async () => {
+      if (this.loaded.has(bot.threadId)) return;
+      const response = await this.codex.call("thread/resume", this.resumeParams(this.store.bot(bot.id)));
+      if (response?.thread?.id !== bot.threadId) throw new Error("Native resume did not confirm this bot's original thread.");
       this.loaded.add(bot.threadId);
-    }
+    });
   }
   settings(bot, override = {}) {
     return {
@@ -2022,11 +2016,14 @@ export class BotRuntime extends EventEmitter {
       }
     } finally { this.tickRunning = false; }
   }
-  async peerTool(bot, args) {
+  async peerTool(bot, args, origin) {
     const { operation, operationId, ...params } = args ?? {};
     if (!["directory", "list", "read", "send", "reply", "cancel"].includes(operation)) throw new Error("Unknown peer operation.");
-    if (["send", "reply", "cancel"].includes(operation) && (this.activityUnresolved(bot.id) || !this.store.bot(bot.id).activeTurnId)) throw new Error("Peer tool attribution waits for confirmed current native activity.");
-    return this.handle({ method: `peers.${operation}`, botId: bot.id, params, operationId });
+    // Private argument from the authenticated transport, never args/params.
+    // Validate only NEW acceptance after exact prior receipts have been read.
+    const trustedOrigin = Object.freeze({ ...origin,
+      ...(["native-tool", "authenticated-bot-mcp"].includes(origin?.authority) ? { generation: captureActivity(this, bot.id).generation } : {}) });
+    return this.handle({ method: `peers.${operation}`, botId: bot.id, params, operationId }, trustedOrigin);
   }
   async dynamicTool(bot, p, origin = null) {
     const args =
@@ -2035,7 +2032,7 @@ export class BotRuntime extends EventEmitter {
       case "bots_work": { if (origin) throw new Error("Progress belongs to the primary named bot."); return this.primary.progress(bot, args); }
       case "bots_peers": {
         if (origin) throw new Error("Named peer tools belong to the primary thread.");
-        return this.peerTool(bot, args);
+        return this.peerTool(bot, args, { authority: "native-tool", botId: bot.id, threadId: p.threadId, turnId: p.turnId, callId: p.callId });
       }
       case "bots_run_message": {
         if (typeof args.operationId !== "string" || !/^[a-zA-Z0-9:_-]{10,180}$/.test(args.operationId)) throw new Error("A stable run message operationId is required.");

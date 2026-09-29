@@ -2,13 +2,13 @@ import { preferencePatch } from './bot-preferences.mjs';
 
 // These mutations accept only local durable state. Receipt + accepted input
 // commit together; failed storage never dispatches an unrecoverable operation.
-export async function acceptSingleThreadOperation(runtime, request, fingerprint) {
+export async function acceptSingleThreadOperation(runtime, request, fingerprint, trustedOrigin = null) {
   const { method, botId, params, operationId } = request;
   if (!['bursts.submit', 'bursts.start', 'bursts.stop', 'work.resume', 'bots.update', 'peers.send', 'peers.reply', 'peers.cancel'].includes(method)) return null;
   if (method === 'bots.update' && (!Object.keys(params).length || Object.keys(params).some(k => !['avatar', 'burstQuietSeconds'].includes(k)))) return null;
   const bot = runtime.store.bot(botId);
   try {
-    if (method.startsWith('peers.')) return { result: await runtime.peers.mutate(bot, method, params, operationId, fingerprint) };
+    if (method.startsWith('peers.')) return { result: await runtime.peers.mutate(bot, method, params, operationId, fingerprint, trustedOrigin) };
     let mutate;
     if (method === 'bursts.submit') mutate = await runtime.bursts.prepare(bot, params, operationId);
     else if (method === 'bursts.start') mutate = () => runtime.bursts.start(bot, operationId);

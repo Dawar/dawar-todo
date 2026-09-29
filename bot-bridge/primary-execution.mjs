@@ -1,3 +1,4 @@
+import { configurePrimary } from './primary-configuration.mjs';
 import { createHash, randomUUID } from 'node:crypto';
 import { stagedQueue, dispatchPrompt } from './prompt-queue.mjs';
 import { reconcileStop } from './execution-stop.mjs';
@@ -12,7 +13,7 @@ export const DIRECT_INSTRUCTIONS = `You directly own the full authorized objecti
 export const WORK_TOOL = { name: 'bots_work', description: 'Record concise remaining work or peer wait for your current authorized objective. Does not create a goal or schedule another turn; native goals own continuation.', inputSchema: { type: 'object', additionalProperties: false, properties: { summary: { type: 'string', maxLength: 1000 }, remaining: { type: 'string', maxLength: 4000 }, waitingFor: { type: 'array', items: { type: 'string' }, maxItems: 12 } }, required: ['summary', 'remaining', 'waitingFor'] } };
 
 export class PrimaryExecution {
-  constructor(runtime) { this.runtime = runtime; this.store = runtime.store; }
+  constructor(runtime) { this.runtime = runtime; this.store = runtime.store; this.configuring = new Map(); }
   openItems(botId) {
     return this.store.db.prepare("SELECT json_remove(json,'$.text','$.input') AS json FROM records WHERE kind='primaryInbox' AND bot_id=? AND json_extract(json,'$.state') NOT IN ('cancelled','failed') AND json_extract(json,'$.terminalStatus') IS NULL ORDER BY rowid")
       .all(botId).map(r => JSON.parse(r.json));
@@ -84,6 +85,7 @@ export class PrimaryExecution {
   migrationCursor(botId) { return this.store.db.prepare("SELECT COALESCE(MAX(seq),0) n FROM events WHERE json_extract(json,'$.botId')=?").get(botId).n; }
   migrationBlock(bot) {
     if (bot.archived || bot.archiving || !bot.threadId || bot.activeTurnId || this.runtime.activityUnresolved(bot.id)) return 'Current primary execution must settle first.';
+    if (this.store.list('pending', bot.id).length || this.store.list('promptQueue', bot.id).some(q => ['dispatching', 'uncertain', 'native-queued'].includes(q.state))) return 'Original questions or native queue delivery must settle first.';
     if (this.runtime.locks.has(`manager:${bot.id}`) || this.store.list('managerOperation', bot.id).some(op => op.state === 'dispatching')) return 'An original manager mutation is still in flight.';
     if (this.store.list('managerTask', bot.id).some(t => !terminal.has(t.state) || t.state === 'completed' && !t.collectedAt)) return 'Collect the original legacy worker work first.';
     if (this.store.list('managerRequest', bot.id).length) return 'An original worker question is pending.';
@@ -110,11 +112,17 @@ export class PrimaryExecution {
       if (!reason && (!activityUnchanged(this.runtime, bot.id, token) || this.migrationCursor(bot.id) !== cursor)) reason = 'Activity changed during migration; it will be checked again.';
       reason ??= this.migrationBlock(this.store.bot(bot.id));
     }
+    let configured;
+    if (!reason) {
+      const result = await configurePrimary(this, this.store.bot(bot.id));
+      if (typeof result === 'string') reason = result;
+      else configured = result;
+    }
     const current = this.store.bot(bot.id);
+    if (!reason && (!activityUnchanged(this.runtime, bot.id, configured) || this.migrationBlock(current))) reason = 'Activity changed before configuration promotion.';
     if (reason) { if (current.migrationReason !== reason) this.runtime.saveBot(current, { executionMode: 'legacy', migrationReason: reason }); return; }
     this.store.transaction(() => {
       this.runtime.saveBot(current, { executionMode: 'single-thread', migrationReason: null });
-      this.runtime.loaded.delete(bot.threadId); // next resume installs direct developer instructions, same thread
       this.publish(bot.id);
     });
   }
@@ -239,6 +247,8 @@ export class PrimaryExecution {
   }
   notification(bot, message) {
     const p = message.params ?? {};
+    const configuring = this.configuring.get(bot.id);
+    if (configuring?.threadId === bot.threadId && (message.method === 'thread/closed' || message.method === 'thread/status/changed' && p.status?.type === 'notLoaded')) configuring.unloaded = true;
     if (message.method === 'thread/goal/updated' && p.goal?.threadId === bot.threadId || message.method === 'thread/goal/cleared') {
       this.store.put('nativeGoal', { id: bot.id, botId: bot.id, goal: p.goal ?? null, observedAt: now(), eventCursor: this.store.cursor() + 1 }); this.publish(bot.id);
     }
@@ -347,16 +357,32 @@ export class PrimaryExecution {
     } catch { return false; }
   }
   async tick() {
-    let migrated = 0, recovered = 0;
+    // Spend read slots only on due, unlocked candidates, rotating after every
+    // attempt (including failure). Backoff and stable original IDs survive restarts.
+    const rotate = (rows, after) => {
+      rows.sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+      const first = rows.findIndex(row => row.id > (after ?? ''));
+      return first < 0 ? rows : [...rows.slice(first), ...rows.slice(0, first)];
+    };
+    const bots = this.store.bots();
+    const dueMigrations = bots.filter(b => !b.archived && !this.single(b) && !this.runtime.locks.has(b.id) &&
+      !(Date.parse(this.store.get('executionMigration', b.id)?.checkAfter ?? '') > Date.now()));
+    for (const bot of rotate(dueMigrations, this.migrationAfter).slice(0, 1)) {
+      this.migrationAfter = bot.id;
+      this.store.put('executionMigration', { ...this.store.get('executionMigration', bot.id), id: bot.id, botId: bot.id, checkAfter: new Date(Date.now() + 60000).toISOString() });
+      await this.runtime.lock(bot.id, () => this.migrate(this.store.bot(bot.id))).catch(e => this.runtime.emit('fault', e));
+    }
+    const dueReceipts = bots.filter(b => !b.archived && this.single(b) && !this.runtime.locks.has(b.id)).flatMap(b => this.openItems(b.id))
+      .filter(i => ['dispatching', 'uncertain', 'accepted'].includes(i.state) && !i.terminalStatus && !(Date.parse(i.reconcileAfter ?? '') > Date.now()));
+    for (const item of rotate(dueReceipts, this.recoveryAfter).slice(0, 2)) {
+      this.recoveryAfter = item.id;
+      await this.runtime.lock(item.botId, async () => {
+        const current = this.store.get('primaryInbox', item.id);
+        if (current && ['dispatching', 'uncertain', 'accepted'].includes(current.state) && !current.terminalStatus) await this.recover(current);
+      }).catch(e => this.runtime.emit('fault', e));
+    }
     for (const bot of this.store.bots()) {
-      if (this.runtime.locks.has(bot.id) || bot.archived) continue;
-      if (!this.single(bot)) {
-        if (migrated++ < 1 && !(Date.parse(this.store.get('executionMigration', bot.id)?.checkAfter ?? '') > Date.now())) {
-          this.store.put('executionMigration', { id: bot.id, botId: bot.id, checkAfter: new Date(Date.now() + 60000).toISOString() });
-          await this.runtime.lock(bot.id, () => this.migrate(bot)).catch(e => { this.runtime.emit('fault', e); });
-        }
-        continue;
-      }
+      if (this.runtime.locks.has(bot.id) || bot.archived || !this.single(bot)) continue;
       await this.runtime.lock(bot.id, async () => {
         const preparingStop = this.store.list('executionStop', bot.id).find(s => s.primaryMode && s.state !== 'done' &&
           !(Date.parse(s.reconcileAfter ?? '') > Date.now()) && this.store.get('primaryStop', s.id)?.goal?.state === 'queued');
@@ -376,7 +402,6 @@ export class PrimaryExecution {
           await dispatchPrompt(this.runtime, before, firstHuman); return;
         }
         const items = this.openItems(bot.id);
-        for (const item of items.filter(i => ['dispatching', 'uncertain', 'accepted'].includes(i.state) && !i.terminalStatus)) if (recovered++ < 2) await this.recover(item).catch(e => this.runtime.emit('fault', e));
         const current = this.store.bot(bot.id);
         if (current.queuePaused || (current.activeTurnId && current.mode !== 'default') || current.archiving || this.runtime.activityUnresolved(bot.id) || this.store.list('pending', bot.id).length || items.some(i => ['dispatching', 'uncertain'].includes(i.state))) return;
         const first = this.openItems(bot.id).filter(i => i.state === 'queued' && (i.kind !== 'schedule' || occurrenceReady(this.store.get('run', i.sourceId)))).sort((a, b) => (a.kind === 'schedule' ? 0 : 1) - (b.kind === 'schedule' ? 0 : 1))[0];
