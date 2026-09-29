@@ -134,6 +134,18 @@ export class BotComposer {
     if (text === this.draft.text) return;
     this.enqueue({ kind: "text", slot: this.record.active, text, version: crypto.randomUUID(), base: this.draft.textVersion });
   }
+  async appendForward(id: string, text: string) {
+    await this.open(false);
+    if (!this.ready || !this.canUseOwner) throw Error("Connect as the draft’s owner before forwarding.");
+    await this.flush();
+    if (!this.canUseOwner) throw Error("The signed-in owner changed. The forward is retained.");
+    this.enqueue({ kind: "forward", id, text, version: `forward:${id}` });
+    await this.flush();
+    const slot = this.persisted.forwarded?.[id];
+    if (!slot) throw Error("The forwarded draft could not be confirmed. Retry this same forward.");
+    if (!this.canUseOwner) throw Error("The draft was saved for its original owner. Sign back in to open it.");
+    this.select(slot); await this.flush();
+  }
   addFiles(input: File[]) {
     const files: StagedFile[] = input.map((f) => ({ id: crypto.randomUUID(), name: f.name, mimeType: f.type || "application/octet-stream", size: f.size, hasBytes: true }));
     const limit = fileLimit([...this.draft.files, ...files]);
@@ -209,7 +221,7 @@ export class BotComposer {
       } finally { this.transferring.delete(file.id); this.progress.delete(file.id); this.notify(); }
     }
   }
-  async send(queueNext = false) {
+  async send(queueNext = false, burst = false) {
     if (!this.ready || !this.canUseOwner || !this.transport.online) return;
     const slot = this.record.active;
     this.actionError = "";
@@ -241,7 +253,7 @@ export class BotComposer {
       if (draft.files.some((f) => !f.remote?.ready)) throw new Error("Attachments are saved locally. Finish or retry their uploads before sending.");
       if (!draft.text.trim() && !draft.files.length) return;
       const op: Submission = {
-        id: crypto.randomUUID(), slot, method: this.destination ? "runs.send" : draft.queueId ? "queue.update" : queueNext ? "queue.add" : "turn.send",
+        id: crypto.randomUUID(), slot, method: this.destination ? "runs.send" : draft.queueId ? "queue.update" : queueNext ? "queue.add" : burst ? "bursts.submit" : "turn.send",
         params: { ...(this.destination ? { runId: this.destination.runId } : {}), ...(draft.queueId ? { id: draft.queueId, ...(draft.queueRevision === undefined ? {} : { expectedRevision: draft.queueRevision }) } : {}), text: draft.text.trim(), attachments: draft.files.map((f) => f.remote!.id) },
         ...(this.destination ? { runDelivery: { state: "prepared" as const, token: crypto.randomUUID() } } : {}),
         textVersion: draft.textVersion, fileIds: draft.files.map((f) => f.id), state: "pending",

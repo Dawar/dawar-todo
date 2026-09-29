@@ -1,10 +1,10 @@
 /** Critical scoped actions. Operation identity is immutable; only its outcome changes. */
-export type RunActionMethod = "runs.interrupt" | "runs.resume" | "requests.respond" | "turn.interrupt" | "runs.decide";
+export type RunActionMethod = "runs.interrupt" | "runs.resume" | "requests.respond" | "turn.interrupt" | "runs.decide" | "work.resume" | "peers.cancel" | "bursts.start" | "bursts.stop";
 export type RunActionIntent = { id: string; method: RunActionMethod; params: Record<string, unknown> };
 type Operation = RunActionIntent & { scope: string; state: "pending" | "accepted" | "rejected"; error?: string };
 type Scope = { key: string; pending: string[]; revision: number; last?: string };
 export type ActionSelection = { revision: number; current: Operation | null; last: Operation | null; selected?: Operation };
-const methods = new Set(["runs.interrupt", "runs.resume", "requests.respond", "turn.interrupt", "runs.decide"]);
+const methods = new Set(["runs.interrupt", "runs.resume", "requests.respond", "turn.interrupt", "runs.decide", "work.resume", "peers.cancel", "bursts.start", "bursts.stop"]);
 let connection: Promise<IDBDatabase> | undefined;
 function open() {
   connection ??= new Promise<IDBDatabase>((resolve, reject) => {

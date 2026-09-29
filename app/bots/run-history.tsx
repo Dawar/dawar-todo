@@ -1,5 +1,6 @@
 "use client";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useState, useRef } from "react";
+import "./conversation-activity.css";
+import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useState, useRef } from "react";
 import { ArrowLeft, ArrowRight, Clock3, CalendarDays, CircleAlert, LoaderCircle, RefreshCw, X } from "lucide-react";
 import type { Bot, BotAttachment, BotRun, BotRunPage, BotSchedule, BotEvent, BotRunStateEvent } from "../../lib/bots-types";
 import type { HistoryPage, HistoryResponse } from "../../lib/bot-history-view";
@@ -12,6 +13,7 @@ import { hasCurrentRunDecision, runNeedsBinding, validRunState } from "./run-con
 import { runHistoryRefresh } from "./run-history-refresh";
 import { updateRunPage } from "./run-page-events";
 import { useRunScroll } from "./use-run-scroll";
+import { HistoryScrollContext } from "./history-scroll-context";
 import { useRunMetadata } from "./use-run-metadata";
 import { RunComposer } from "./run-composer";
 import { RunQuestions } from "./run-questions";
@@ -36,9 +38,9 @@ function mergeRuns(old: BotRun[], incoming: BotRun[]) {
   return [...values.values()].sort((a, b) => (Date.parse(b.scheduledAt) || 0) - (Date.parse(a.scheduledAt) || 0) || b.id.localeCompare(a.id));
 }
 
-export function RunHistory({ bot, schedules, attachments, online, onClose, download, initialTarget, recentRuns = [] }:
+export function RunHistory({ bot, schedules, attachments, online, onClose, download, initialTarget, recentRuns = [], embedded = false }:
   { bot: Bot; schedules: BotSchedule[]; attachments: BotAttachment[]; online: boolean;
-    onClose: () => void; download: (id: string) => void; initialTarget?: ActivityTarget | null; recentRuns?: BotRun[] }) {
+    onClose: () => void; download: (id: string) => void; initialTarget?: ActivityTarget | null; recentRuns?: BotRun[]; embedded?: boolean }) {
   const lanes = botsClient.snapshot?.capabilities?.backgroundRunLanes === 1;
   const owner = botsClient.owner, cacheKey = `activity:${bot.id}`;
   const timeline = useMemo(() => getBotTimeline(owner, bot.id), [owner, bot.id]);
@@ -86,8 +88,8 @@ export function RunHistory({ bot, schedules, attachments, online, onClose, downl
   const selectedRef = useRef({ identity: selectedIdentity, append: !pageCursors[detailPage] });
   useLayoutEffect(() => { runPageRef.current = runPage; targetRef.current = target; selectedRef.current = { identity: selectedIdentity, append: !pageCursors[detailPage] }; }, [runPage, target, selectedIdentity, pageCursors, detailPage]);
   const detailIdentity = useRef("");
-  const body = useRef<HTMLDivElement>(null), savedScroll = useRef(0);
-  useRunScroll(body, JSON.stringify([owner, bot.id, target?.runId, target?.turnId, detailPage, target ? null : runPage]), transcript?.revision);
+  const body = useRef<HTMLDivElement>(null), scrollContainer = useContext(HistoryScrollContext);
+  const saveScroll = useRunScroll(body, JSON.stringify([owner, bot.id, target?.runId, target?.turnId, detailPage, target ? null : runPage]), transcript?.revision, embedded ? scrollContainer : undefined, !!target || runPage > 0);
   const runSequences = useRef(new Map<string, number>());
   const valid = useCallback(() => active.current && botsClient.owner === owner, [owner]);
   const load = useCallback(async (next: string | null) => {
@@ -201,7 +203,7 @@ export function RunHistory({ bot, schedules, attachments, online, onClose, downl
   }, [bot.id, detailPage, online, owner, pageCursors, target, valid, lanes, selectedIdentity, setTranscript, unbound]);
   const open = (run: BotRun) => {
     if (!run.turnId && !lanes) return;
-    savedScroll.current = body.current?.scrollTop ?? 0;
+    saveScroll();
     const index = runs.findIndex(row => row.id === run.id);
     // A known predecessor keeps a selected older row reachable even when new
     // runs arrive ahead of this page. No history ID or cursor is fabricated.
@@ -209,15 +211,15 @@ export function RunHistory({ bot, schedules, attachments, online, onClose, downl
     setPageCursors([null]); setDetailPage(0); setTarget({ turnId: run.turnId, runId: run.id });
   };
   const back = () => {
+    saveScroll();
     generation.current++; setTarget(null); setTranscript(null); setError(""); setDetailBusy(false);
-    requestAnimationFrame(() => { if (body.current) body.current.scrollTop = savedScroll.current; });
   };
-  const firstPage = () => { setRunCursors([null]); setRunPage(0); runPageRef.current = 0; currentListCursor.current = null; void load(null); };
+  const firstPage = () => { saveScroll(); setRunCursors([null]); setRunPage(0); runPageRef.current = 0; currentListCursor.current = null; void load(null); };
   const runPageTo = (index: number, next: string | null) => {
     if (busy) return;
+    saveScroll();
     setRunCursors(current => index >= current.length ? [...current, next] : current);
     setRunPage(index); runPageRef.current = index; currentListCursor.current = next; void load(next);
-    if (body.current) body.current.scrollTop = 0;
   };
   const acknowledge = async (run: BotRun) => {
     if (actionRequest.current) return;
@@ -237,29 +239,33 @@ export function RunHistory({ bot, schedules, attachments, online, onClose, downl
     return [...groups];
   }, [visibleRuns]);
   const bound = !unbound && !!(selectedRun?.threadId || selectedRun?.turnId || transcript?.context?.runId === target?.runId && transcript?.context?.threadId);
+  const mainSingle = String(selectedRun?.executionLane) === "main-single";
+  // A primary thread ID is not an isolated run binding. Questions on it keep
+  // the original conversation keys/answer route; legacy isolated runs retain theirs.
+  const isolatedQuestions = bound && selectedRun?.executionLane === "run-v1" && !!selectedRun.laneId && !!selectedRun.threadId;
   const linked = useMemo(() => new Set(transcript?.entries.flatMap(entry => entry.item?.type === "agentMessage" ? [...entry.item.text.matchAll(/\]\(<?bot-artifact:([^\s)>]+)/g)].map(match => match[1]) : []) ?? []), [transcript]);
-  return <div className="bots-modal-backdrop bots-activity-backdrop" onClick={onClose}>
-    <section className="bots-run-library" role="dialog" aria-modal="true" aria-label={`${bot.name} activity`} onClick={event => event.stopPropagation()}>
-      <header className="bots-run-library-heading">
+  const panel = <section className="bots-run-library" role={embedded ? undefined : "dialog"} aria-modal={embedded ? undefined : true} aria-label={`${bot.name} history`} onClick={event => event.stopPropagation()}>
+      {!embedded && <header className="bots-run-library-heading">
         <div className="bots-run-heading-mark"><Clock3 size={22} aria-hidden="true" /></div>
-        <div><h2>Activity</h2><p>{bot.name}</p></div>
-        <button className="bots-icon-button" aria-label="Close activity and return to conversation" onClick={onClose}><X size={20} /></button>
-      </header>
+        <div><h2>History</h2><p>{bot.name}</p></div>
+        <button className="bots-icon-button" aria-label="Close history and return to conversation" onClick={onClose}><X size={20} /></button>
+      </header>}
       <div className="bots-run-library-body" ref={body}>
         {reviewError && <div className="bots-run-notice is-error" role="alert"><CircleAlert size={18} /><div><p>{reviewError.message}</p><button disabled={!online || actionBusy} onClick={() => void acknowledge(reviewError.run)}>Retry same review</button></div></div>}
         {error && <div className="bots-run-notice is-error" role="alert"><CircleAlert size={18} /><div><p>{error}</p><button disabled={!online || busy} onClick={() => target ? setPageCursors(current => [...current]) : void load(currentListCursor.current)}>Try again</button></div></div>}
         {target ? <>
-          <button className="bots-run-back" onClick={back}><ArrowLeft size={16} />All activity</button>
+          <button className="bots-run-back" onClick={back}><ArrowLeft size={16} />All history</button>
           <div className="bots-run-detail-title"><span>Scheduled run</span><h3>{selectedRun?.title ?? "Earlier activity"}</h3><p>{selectedRun ? stamp(selectedRun.scheduledAt) : "Full recorded conversation"}</p></div>
           {selectedRun && <p className="bots-run-detail-state"><strong>{runPresentation(selectedRun).label}</strong>{runPresentation(selectedRun).hint && <span>{runPresentation(selectedRun).hint}</span>}</p>}
           {selectedRun?.decision?.notBefore && <p className="bots-run-detail-state">New start time {stamp(selectedRun.decision.notBefore)}</p>}
           {selectedRun?.error && <details className="bots-run-error-details"><summary>Recorded details</summary><p>{selectedRun.error}</p></details>}
-          {lanes && bound && target.runId && <RunQuestions key={`${owner}:${bot.id}:${target.runId}`} owner={owner} botId={bot.id} runId={target.runId} online={online} />}
+          {lanes && isolatedQuestions && target.runId && <RunQuestions key={`${owner}:${bot.id}:${target.runId}`} owner={owner} botId={bot.id} runId={target.runId} online={online} />}
+          {mainSingle && <p className="bots-muted">Questions for this run stay in your conversation. <button className="bots-run-back" onClick={onClose}>Open conversation<ArrowRight size={14} /></button></p>}
           {!unbound && target.runId && (lanes || botsClient.snapshot?.activeScheduledTurns !== undefined) && <RunTurnPicker key={`${owner}:${bot.id}:${target.runId}`} owner={owner} botId={bot.id} runId={target.runId} primary={selectedRun} selected={target.turnId ?? ""} online={online} onSelect={turnId => {
-            generation.current++; setTranscript(null); setPageCursors([null]); setDetailPage(0); setTarget({ runId: target.runId, turnId });
+            saveScroll(); generation.current++; setTranscript(null); setPageCursors([null]); setDetailPage(0); setTarget({ runId: target.runId, turnId });
           }} />}
           {botsClient.snapshot?.capabilities?.scheduleDecisions === 1 && selectedRun && <RunDecisionControls owner={owner} botId={bot.id} run={selectedRun} online={online} onConfirmed={metadata.refresh} />}
-          {lanes && selectedRun && <RunControls owner={owner} botId={bot.id} run={selectedRun} online={online} onConfirmed={metadata.refresh} allowNewActions={!hasCurrentRunDecision(selectedRun)} />}
+          {lanes && selectedRun && <RunControls owner={owner} botId={bot.id} run={selectedRun} online={online} onConfirmed={metadata.refresh} allowNewActions={!hasCurrentRunDecision(selectedRun) && String(selectedRun.executionLane) !== "main-single"} />}
           {unbound && <div className="bots-run-notice"><Clock3 size={18} /><div><p>{selectedRun?.laneId ? "This run’s conversation is not available yet. Its preparation or confirmation is still pending." : "This run has not started."} {selectedRun?.activity?.state === "paused" ? "Its queued work is saved until you resume it." : "Its conversation will be available when it starts."} {!online && "Saved status. Reconnect for updates."}</p><button disabled={!online || metadata.busy} onClick={metadata.refresh}>{metadata.busy ? "Updating status…" : "Refresh status"}</button></div></div>}
           {lanes && metadata.error && <div className="bots-run-notice is-error" role="alert"><CircleAlert size={18} /><div><p>{metadata.error}</p><button disabled={!online || metadata.busy} onClick={metadata.refresh}>Retry status</button></div></div>}
           {!unbound && !online && <div className="bots-run-notice"><CircleAlert size={18} /><p>{transcript ? "Saved run detail. Connect for updates and details not yet opened." : "Connect to open this run. Your saved conversation is still available."}</p></div>}
@@ -270,28 +276,28 @@ export function RunHistory({ bot, schedules, attachments, online, onClose, downl
           </div>}
           {transcript && !transcript.entries.length && <p className="bots-muted">No messages were recorded in this part of the run.</p>}
           <nav className="bots-run-pagination" aria-label="Run transcript pages">
-            {transcript?.olderCursor && <button disabled={!online || busy} onClick={() => { setPageCursors(current => [...current.slice(0, detailPage + 1), transcript.olderCursor]); setDetailPage(page => page + 1); }}><ArrowLeft size={15} />Earlier detail</button>}
-            {detailPage > 0 && <button disabled={!online || busy} onClick={() => setDetailPage(page => page - 1)}>Newer detail<ArrowRight size={15} /></button>}
+            {transcript?.olderCursor && <button disabled={!online || busy} onClick={() => { saveScroll(); setPageCursors(current => [...current.slice(0, detailPage + 1), transcript.olderCursor]); setDetailPage(page => page + 1); }}><ArrowLeft size={15} />Earlier detail</button>}
+            {detailPage > 0 && <button disabled={!online || busy} onClick={() => { saveScroll(); setDetailPage(page => page - 1); }}>Newer detail<ArrowRight size={15} /></button>}
           </nav>
-          {lanes && bound && target.runId && <RunComposer key={`${owner}:${bot.id}:${target.runId}`} owner={owner} botId={bot.id} runId={target.runId} online={online} paused={selectedRun?.activity?.state === "paused"} />}
+          {lanes && bound && target.runId && String(selectedRun?.executionLane) !== "main-single" && <RunComposer recoveryOnly={(bot as import("./single-thread-contract").Bot).executionMode === "single-thread"} key={`${owner}:${bot.id}:${target.runId}`} owner={owner} botId={bot.id} runId={target.runId} online={online} paused={selectedRun?.activity?.state === "paused"} />}
         </> : <>
-          <div className="bots-run-intro"><h3>Scheduled activity</h3><p>Review scheduled runs, their progress, and recorded results.</p></div>
-          {!online && <div className="bots-run-notice"><Clock3 size={18} /><p>Saved activity. Reconnect for updates and full run details.</p></div>}
-          {botsClient.snapshot?.capabilities?.scheduleDecisions === 1 && <RunDecisions owner={owner} botId={bot.id} online={online} />}
-          {schedules.some(schedule => schedule.enabled && schedule.nextRunAt) && <section className="bots-run-upcoming" aria-label="Coming up"><CalendarDays size={18} /><div><strong>Coming up</strong>{schedules.filter(schedule => schedule.enabled && schedule.nextRunAt).sort((a, b) => a.nextRunAt!.localeCompare(b.nextRunAt!)).slice(0, 3).map(schedule => <p key={schedule.id}><span>{schedule.title}</span><time>{stamp(schedule.nextRunAt)}</time></p>)}</div></section>}
-          <div className="bots-run-tools"><div role="group" aria-label="Filter activity"><button aria-pressed={filter === "all"} onClick={() => setFilter("all")}>All runs</button><button aria-pressed={filter === "attention"} onClick={() => setFilter("attention")}>Needs attention</button></div><button className="bots-icon-button" aria-label="Refresh activity" disabled={busy || !online} onClick={firstPage}><RefreshCw size={16} /></button></div>
-          {newActivity && <button className="bots-run-back" onClick={firstPage}>New activity · Show recent runs<ArrowRight size={15} /></button>}
-          {runPage > 0 && <button className="bots-run-back" disabled={!online || busy} onClick={() => runPageTo(runPage - 1, runCursors[runPage - 1])}><ArrowLeft size={15} />Newer activity</button>}
+          <div className="bots-run-intro"><h3>History</h3><p>Scheduled checks and earlier work, with the complete record when you need it.</p></div>
+          {!online && <div className="bots-run-notice"><Clock3 size={18} /><p>Saved history. Reconnect for updates and full run details.</p></div>}
+          {!embedded && botsClient.snapshot?.capabilities?.scheduleDecisions === 1 && <RunDecisions owner={owner} botId={bot.id} online={online} />}
+          {!embedded && schedules.some(schedule => schedule.enabled && schedule.nextRunAt) && <section className="bots-run-upcoming" aria-label="Coming up"><CalendarDays size={18} /><div><strong>Coming up</strong>{schedules.filter(schedule => schedule.enabled && schedule.nextRunAt).sort((a, b) => a.nextRunAt!.localeCompare(b.nextRunAt!)).slice(0, 3).map(schedule => <p key={schedule.id}><span>{schedule.title}</span><time>{stamp(schedule.nextRunAt)}</time></p>)}</div></section>}
+          <div className="bots-run-tools"><div role="group" aria-label="Filter history"><button aria-pressed={filter === "all"} onClick={() => setFilter("all")}>All runs</button><button aria-pressed={filter === "attention"} onClick={() => setFilter("attention")}>Needs attention</button></div><button className="bots-icon-button" aria-label="Refresh history" disabled={busy || !online} onClick={firstPage}><RefreshCw size={16} /></button></div>
+          {newActivity && <button className="bots-run-back" onClick={firstPage}>New records · Show recent history<ArrowRight size={15} /></button>}
+          {runPage > 0 && <button className="bots-run-back" disabled={!online || busy} onClick={() => runPageTo(runPage - 1, runCursors[runPage - 1])}><ArrowLeft size={15} />Newer history</button>}
           {groups.map(([date, values]) => <section className="bots-run-day" key={date}><h3>{date}</h3>{values.map(run => <RunActivityCard key={run.id} run={run} online={online} busy={busy} canOpen={!!run.turnId || lanes} stamp={stamp} open={open} acknowledge={run => void acknowledge(run)} />)}</section>)}
           {!groups.length && !busy && !error && <div className="bots-run-empty"><Clock3 size={30} strokeWidth={1.4} /><h3>{filter === "attention" ? "Nothing needs your attention here" : "A quieter kind of history"}</h3><p>{filter === "attention" ? "No issues on this page. You can also browse earlier activity." : "Your scheduled runs will appear here, with their progress and results."}</p></div>}
-          {lanes && <StopAll owner={owner} botId={bot.id} online={online} />}
+          {!embedded && lanes && <StopAll owner={owner} botId={bot.id} online={online} />}
           <p className="bots-run-page-note">{filter === "attention" ? `${visibleRuns.length} ${visibleRuns.length === 1 ? "run needs" : "runs need"} attention · ${runs.length} on this page` : `${visibleRuns.length} ${visibleRuns.length === 1 ? "run" : "runs"} on this page`}{cursor && " · Earlier activity available"}</p>
-          {cursor && <button className="bots-run-load" disabled={!online || busy} onClick={() => runPageTo(runPage + 1, cursor)}>Earlier activity<ArrowLeft size={15} /></button>}
+          {cursor && <button className="bots-run-load" disabled={!online || busy} onClick={() => runPageTo(runPage + 1, cursor)}>Earlier history<ArrowLeft size={15} /></button>}
         </>}
         {busy && <p className="bots-run-loading" role="status"><LoaderCircle size={16} className="bots-spin" />{target ? "Opening this run…" : "Updating activity…"}</p>}
       </div>
-      <footer><button onClick={onClose}><MessagesLabel />Back to conversation</button><span>Scheduled runs and recorded results.</span></footer>
-    </section>
-  </div>;
+      {!embedded && <footer><button onClick={onClose}><MessagesLabel />Back to conversation</button><span>Scheduled runs and recorded results.</span></footer>}
+    </section>;
+  return embedded ? panel : <div className="bots-modal-backdrop bots-activity-backdrop" onClick={onClose}>{panel}</div>;
 }
 function MessagesLabel() { return <ArrowLeft size={15} aria-hidden="true" />; }

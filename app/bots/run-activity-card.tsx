@@ -7,7 +7,7 @@ export function RunActivityCard({ run, online, busy, canOpen, stamp, open, ackno
   open: (run: BotRun) => void; acknowledge: (run: BotRun) => void;
 }) {
   const view = runPresentation(run);
-  return <article className={`bots-run-card tone-${view.tone}`}>
+  return <article data-history-key={`run:${run.id}`} className={`bots-run-card tone-${view.tone}`}>
     <div className="bots-run-card-icon" aria-hidden="true">{view.tone === "attention" ? <CircleAlert size={18} /> : view.tone === "working" ? <LoaderCircle size={18} className="bots-spin" /> : view.tone === "finished" ? <CheckCircle2 size={18} /> : ["cancelled", "interrupted", "skipped"].includes(run.status) ? <CircleMinus size={18} /> : <Clock3 size={18} />}</div>
     <div className="bots-run-card-content">
       <div className="bots-run-card-title"><h4>{run.title}</h4><span className={`bots-run-status tone-${view.tone}`}>{view.label}</span></div>

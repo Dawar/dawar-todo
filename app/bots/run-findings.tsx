@@ -44,8 +44,8 @@ export function RunFindings({ owner, botId, online, onOpen }: { owner: string; b
   }, [owner, botId, key, online, cursor, attempt]);
   const recent = () => { setCursor(null); setAttempt(value => value + 1); };
   if (!page.findings.length && !error && !newFindings) return null;
-  return <details className="bots-run-findings"><summary>Findings from Activity{newFindings ? " · new findings" : !online ? " · saved" : ""}</summary><div>
-    {page.findings.map(finding => <article key={finding.id}><p>{finding.summary}</p><button onClick={() => onOpen({ runId: finding.runId, turnId: finding.turnId })}>View scheduled run<ArrowUpRight size={14} /></button></article>)}
+  return <details className="bots-run-findings"><summary>Scheduled findings{newFindings ? " · new findings" : !online ? " · saved" : ""}</summary><div>
+    {page.findings.map(finding => <article key={finding.id}><p>{finding.summary}</p><button onClick={() => onOpen({ runId: finding.runId, turnId: finding.turnId })}>View record<ArrowUpRight size={14} /></button></article>)}
     {error && <p role="alert">{error}<button disabled={!online || busy} onClick={() => setAttempt(value => value + 1)}>Retry</button></p>}
     <nav>{(cursor || newFindings) && <button disabled={!online || busy} onClick={recent}>{newFindings ? "Show recent findings" : "Recent findings"}</button>}{page.nextCursor && <button disabled={!online || busy || loadedCursor !== cursor} onClick={() => setCursor(page.nextCursor)}>Earlier findings</button>}</nav>
   </div></details>;

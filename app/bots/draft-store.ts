@@ -10,7 +10,7 @@ export type Draft = {
   text: string; textVersion: string; files: StagedFile[]; queueId?: string; queueRevision?: number;
 };
 export type Submission = {
-  id: string; slot: string; method: "turn.send" | "queue.add" | "queue.update" | "runs.send";
+  id: string; slot: string; method: "bursts.submit" | "turn.send" | "queue.add" | "queue.update" | "runs.send";
   params: Record<string, unknown>; textVersion: string; fileIds: string[];
   state: "pending" | "uncertain"; error?: string;
   /** Run sends only. Absent on older rows means possibly dispatched, never prepared. */
@@ -19,6 +19,8 @@ export type Submission = {
 export type DraftRecord = {
   owner: string; botId: string; revision: string; active: string;
   slots: Record<string, Draft>; operations: Record<string, Submission>;
+  /** Local Forward acceptance tombstones. Never resent or pruned with caches. */
+  forwarded?: Record<string, string>;
   migrated: boolean;
 };
 export type RunDeliveryResult = "not-sent" | "uncertain" | "queued" | "success" | "rejected";
@@ -32,6 +34,7 @@ export type DraftChange =
   | { kind: "bytes"; id: string }
   | { kind: "edit"; slot: string; draft: Draft }
   | { kind: "select"; slot: string }
+  | { kind: "forward"; id: string; text: string; version: string }
   | { kind: "submit"; operation: Submission }
   | { kind: "run-claim"; id: string; token: string }
   | { kind: "run-result"; id: string; expectedToken: string | null; nextToken: string; outcome: RunDeliveryResult; error?: string }
@@ -95,6 +98,15 @@ export function changeDraft(source: DraftRecord, change: DraftChange): DraftReco
     record.active = change.slot;
   } else if (change.kind === "select") {
     if (record.slots[change.slot]) record.active = change.slot;
+  } else if (change.kind === "forward") {
+    if (record.forwarded?.[change.id]) return source;
+    // Forward is always an unsent normal draft, never an edit to a queued or
+    // recovered submission. The same transaction appends and records identity.
+    const draft = record.slots.normal;
+    draft.text = draft.text ? `${draft.text}\n\n---\n\n${change.text}` : change.text;
+    draft.textVersion = change.version;
+    record.forwarded = { ...record.forwarded, [change.id]: "normal" };
+    record.active = "normal";
   } else if (change.kind === "submit") {
     const op = change.operation;
     // Two tabs submitting the same slot share the first durable operation.

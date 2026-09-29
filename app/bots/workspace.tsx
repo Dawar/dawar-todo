@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  Activity,
   type ClipboardEvent,
   useCallback,
   useEffect,
@@ -19,23 +20,24 @@ import {
   Paperclip,
   X,
   Square,
-  Clock,
   Archive,
   RotateCcw,
-  Play,
-  Pause,
-  Trash2,
-  Pencil,
   LoaderCircle,
   RefreshCw,
   BarChart3,
-  History,
+  ListOrdered,
   ListPlus,
   Save,
 } from "lucide-react";
+import type { Bot } from "./single-thread-contract";
+import { BotAvatar as Avatar } from "./bot-avatar";
+import { PersonalitySettings } from "./personality-settings";
+import { BurstComposer } from "./burst-composer";
+import { WorkOverview, AutomaticInbox, workLabel } from "./work-overview";
+import { PeerConversations } from "./peer-conversations";
+import { finishTodoForward } from "../todo-forward";
 import { SiteHeader } from "../site-header";
 import type {
-  Bot,
   BotEvent,
   BotSchedule,
   BotQueuedSubmission,
@@ -53,7 +55,10 @@ import { RunFindings } from "./run-findings";
 import { MainStopButton, MainStopRecovery } from "./run-controls";
 import { BotWorkControls } from "./bot-work-controls";
 import { RunHistory } from "./run-history";
-import { ConversationActivity, type ActivityTarget } from "./conversation-activity";
+import type { ActivityTarget } from "./conversation-activity";
+import { BotDetailsDrawer, type BotDetailsSection } from "./bot-details";
+import { ScheduleList } from "./schedule-list";
+import { RunDecisions } from "./run-decisions";
 import { UsagePanel } from "./usage-panel";
 import { useBotComposer } from "./use-composer";
 import { ComposerAttachments, ComposerStatus } from "./composer-state";
@@ -67,32 +72,13 @@ import "./chat-design.css";
 const EMPTY_BOTS: Bot[] = [];
 const EMPTY_QUEUE: BotQueuedSubmission[] = [];
 
-function initials(name: string) {
-  return name
-    .trim()
-    .split(/\s+/)
-    .slice(0, 2)
-    .map((p) => p[0])
-    .join("")
-    .toUpperCase();
-}
-function Avatar({ bot, small = false }: { bot: Bot; small?: boolean }) {
-  return (
-    <span
-      className={`bots-avatar ${small ? "small" : ""}`}
-      style={{ background: bot.color }}
-    >
-      {initials(bot.name)}
-    </span>
-  );
-}
 function humanStatus(bot: Bot, online: boolean) {
   if (!online) return "Offline";
   if (bot.archived) return "Archived";
   if (!bot.activeTurnId && bot.workerTasks?.active)
-    return `${bot.workerTasks.active} worker task${bot.workerTasks.active === 1 ? "" : "s"} in progress`;
+    return "Finishing earlier work";
   if (!bot.activeTurnId && bot.workerTasks?.waiting)
-    return "Worker needs attention";
+    return "Earlier work needs your input";
   return (
     (
       {
@@ -100,19 +86,11 @@ function humanStatus(bot: Bot, online: boolean) {
         running: "Working",
         waiting: "Needs your input",
         provisioning: "Setting up",
-        error: "Needs attention",
+        error: "Unable to continue",
         interrupted: "Interrupted",
       } as Record<string, string>
     )[bot.status] ?? bot.status
   );
-}
-function stamp(value: string) {
-  return new Intl.DateTimeFormat(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  }).format(new Date(value));
 }
 
 export function BotsWorkspace() {
@@ -123,7 +101,7 @@ export function BotsWorkspace() {
     [creating, setCreating] = useState(false),
     [profile, setProfile] = useState(false),
     [gallery, setGallery] = useState<"artifacts" | "attachments" | null>(null),
-    [showRunHistory, setShowRunHistory] = useState(false),
+    [detailsSection, setDetailsSection] = useState<BotDetailsSection>("next"),
     [activityTarget, setActivityTarget] = useState<ActivityTarget | null>(null),
     [showOverallUsage, setShowOverallUsage] = useState(false),
     [editingSchedule, setEditingSchedule] = useState<
@@ -152,7 +130,12 @@ export function BotsWorkspace() {
   const online = client.online,
     bots = snapshot?.bots ?? EMPTY_BOTS,
     bot = bots.find((b) => b.id === selected),
-    pending = snapshot?.pending.filter((p) => p.botId === selected && !(lanes && p.runId && p.laneId && p.threadId)) ?? [];
+    pending = snapshot?.pending.filter((p) => p.botId === selected && !(lanes && p.runId && p.laneId && p.threadId && !(snapshot?.capabilities?.singleThreadExecution === 1 && bot?.executionMode === "single-thread" && p.threadId === bot.threadId))) ?? [];
+  const single = snapshot?.capabilities?.singleThreadExecution === 1 && bot?.executionMode === "single-thread";
+  const work = single ? snapshot?.workByBot?.find(value => value.botId === selected) : undefined;
+  const burstSupported = snapshot?.capabilities?.messageBursts === 1;
+  const burstEnabled = burstSupported && bot?.executionMode === "single-thread";
+  useEffect(() => { if (owner && selected && composer?.ready) { try { finishTodoForward(owner, selected); } catch { /* The exact draft insertion remains committed. */ } } }, [owner, selected, composer?.ready]);
   useLayoutEffect(() => {
     const screen = screenRef.current;
     if (!screen) return;
@@ -218,9 +201,9 @@ export function BotsWorkspace() {
     };
   }, [selected]);
   useEffect(() => {
-    if (!creating && !editingSchedule && !showRunHistory && !showOverallUsage) return;
+    if (!creating && !editingSchedule && !showOverallUsage) return;
     const previous = document.activeElement as HTMLElement | null;
-    const dialog = document.querySelector<HTMLElement>('[role="dialog"]');
+    const dialog = [...document.querySelectorAll<HTMLElement>('[role="dialog"]')].filter(node => node.getClientRects().length).at(-1);
     const focusable = () =>
       Array.from(
         dialog?.querySelectorAll<HTMLElement>(
@@ -232,7 +215,6 @@ export function BotsWorkspace() {
       if (event.key === "Escape") {
         setCreating(false);
         setEditingSchedule(null);
-        setShowRunHistory(false);
         setShowOverallUsage(false);
       }
       if (event.key !== "Tab") return;
@@ -252,7 +234,7 @@ export function BotsWorkspace() {
       document.removeEventListener("keydown", keydown);
       previous?.focus();
     };
-  }, [creating, editingSchedule, showRunHistory, showOverallUsage]);
+  }, [creating, editingSchedule, showOverallUsage]);
   useEffect(() => {
     const unsubscribe = client.subscribe(() => redraw((v) => v + 1));
     client.start();
@@ -271,6 +253,7 @@ export function BotsWorkspace() {
       window.removeEventListener("dawar-shell-popstate", pop);
     };
   }, []);
+  useEffect(() => { let active = true; queueMicrotask(() => { if (active) setProfile(false); }); return () => { active = false; }; }, [selected, owner]);
   const loadQueue = useCallback(async (id: string) => {
     const owner = client.owner;
     const request = ++queueRequest.current;
@@ -298,7 +281,6 @@ export function BotsWorkspace() {
       else {
         setPromptQueue([]);
       }
-      setProfile(false);
       setError("");
     });
     return () => { active = false; };
@@ -376,7 +358,7 @@ export function BotsWorkspace() {
   async function send(queueNext = false) {
     if (!composer || !bot || !canSend) return;
     const id = bot.id;
-    await composer.send(queueNext);
+    await composer.send(queueNext, burstEnabled);
     if (queueNext || editingQueueId) await loadQueue(id);
   }
   function editQueued(item: BotQueuedSubmission) { composer?.edit(item); }
@@ -416,9 +398,8 @@ export function BotsWorkspace() {
   const schedules = snapshot?.schedules.filter((s) => s.botId === selected) ?? [];
   const recentRuns = [...new Map([...(lanes ? snapshot?.backgroundRuns ?? [] : []), ...(snapshot?.runs ?? [])]
     .filter(run => run.botId === selected).map(run => [run.id, run])).values()];
-  const activeScheduledTurns = snapshot?.activeScheduledTurns?.filter(turn => turn.botId === selected);
-  const scheduledActive = !lanes && (activeScheduledTurns ? activeScheduledTurns.length > 0 : recentRuns.some(run => ["running", "starting"].includes(run.status) && (!run.turnId || run.turnId === bot?.activeTurnId)));
-  const openActivity = (target: ActivityTarget | null = null) => { setActivityTarget(target); setShowRunHistory(true); };
+  const closeProfile = useCallback(() => setProfile(false), []);
+  const openActivity = (target: ActivityTarget | null = null) => { setActivityTarget(target); setDetailsSection("history"); setProfile(true); };
   return (
     <div className="bots-screen" ref={screenRef} data-no-pull-refresh>
       <SiteHeader current="bots" />
@@ -515,11 +496,13 @@ export function BotsWorkspace() {
                 <Avatar bot={bot} small />
                 <div className="bots-header-title">
                   <strong>{bot.name}</strong>
-                  <small>{humanStatus(bot, online)}</small>
+
                 </div>
+                {promptQueue.length > 0 && <button className="bots-icon-button bots-up-next-link" aria-label={`Up next: ${promptQueue.length} queued ${promptQueue.length === 1 ? "message" : "messages"}`} onClick={() => { setDetailsSection("next"); setProfile(true); }}><ListOrdered size={19} aria-hidden="true" /><span>{promptQueue.length}</span></button>}
                 <button
                   className="bots-icon-button"
-                  aria-label="Bot details and schedules"
+                  aria-label="Bot details"
+                  aria-expanded={profile}
                   onClick={() => setProfile((v) => !v)}
                 >
                   <MoreHorizontal size={22} />
@@ -579,9 +562,9 @@ export function BotsWorkspace() {
             </div>
           ) : (
             <>
-              <ConversationActivity runs={recentRuns} activeTurns={activeScheduledTurns} background={lanes ? snapshot?.backgroundByBot?.find(value => value.botId === bot.id) ?? { botId: bot.id, running: 0, needsInput: 0, unconfirmed: 0 } : undefined} onOpen={openActivity} />
               <BotConversation key={scope} owner={owner} bot={bot} online={online} onOpenActivity={openActivity}>
                 {lanes && <RunFindings key={scope} owner={owner} botId={bot.id} online={online} onOpen={openActivity} />}
+                {snapshot?.capabilities?.peerInbox === 1 && <PeerConversations key={`peers:${scope}`} owner={owner} botId={bot.id} bots={bots} online={online} />}
                 {pending.map((request) => (
                   <RequestCard
                     key={request.key}
@@ -595,27 +578,14 @@ export function BotsWorkspace() {
                     }
                   />
                 ))}
-                {(!scheduledActive && bot.status === "running" ||
-                  Boolean(bot.workerTasks?.active)) && (
-                  <div className="bots-working">
-                    <span />
-                    <span />
-                    <span />
-                    <small>
-                      {bot.workerTasks?.active
-                        ? humanStatus(bot, online)
-                        : `${bot.name} is working`}
-                    </small>
-                  </div>
-                )}
+                <div className="bots-conversation-presence"><Avatar bot={bot} small /><button type="button" onClick={() => { setDetailsSection("next"); setProfile(true); }} aria-label="Open work details" title={online ? workLabel(work, bots) ?? humanStatus(bot, online) : "Offline"}>{online ? workLabel(work, bots) ?? humanStatus(bot, online) : "Offline"}</button></div>
               </BotConversation>
               {!bot.archived && (
                 <>
                   <div className="bots-composer-support">
+                    {burstSupported && <BurstComposer key={`bursts:${scope}`} owner={owner} botId={bot.id} online={online} draft={draft} submitting={composer?.operation?.method === "bursts.submit"} />}
                     {snapshot && <ComposerSettings key={`settings:${scope}`} bot={bot} snapshot={snapshot} online={online} />}
-                    <PromptQueue key={`queue:${scope}`} owner={owner} bot={bot} items={promptQueue} online={online}
-                      canEdit={Boolean(composer?.ready && !sending)} onEdit={editQueued} refresh={() => loadQueue(bot.id)} />
-                  {lanes && <MainStopRecovery owner={owner} botId={bot.id} online={online} />}
+                  {(lanes || single) && <MainStopRecovery owner={owner} botId={bot.id} online={online} />}
                   <ComposerStatus composer={composer} error={composerError} />
                   {composer && <ComposerAttachments composer={composer} />}
                   </div>
@@ -683,7 +653,7 @@ export function BotsWorkspace() {
                       </>
                     )}
                     {(bot.activeTurnId || !lanes && Boolean(bot.workerTasks?.active)) &&
-                      Boolean(draft || uploads.length) && (lanes ? <MainStopButton owner={owner} botId={bot.id} online={online} className="bots-icon-button" /> :
+                      Boolean(draft || uploads.length) && (lanes || single ? <MainStopButton owner={owner} botId={bot.id} online={online} className="bots-icon-button" /> :
                         <button
                           type="button"
                           className="bots-icon-button"
@@ -700,7 +670,7 @@ export function BotsWorkspace() {
                       )}
                     {!editingQueueId && ((bot.activeTurnId || !lanes && Boolean(bot.workerTasks?.active)) &&
                     !draft &&
-                    !uploads.length ? (lanes ? <MainStopButton owner={owner} botId={bot.id} online={online} className="bots-send" /> :
+                    !uploads.length ? (lanes || single ? <MainStopButton owner={owner} botId={bot.id} online={online} className="bots-send" /> :
                       <button
                         type="button"
                         className="bots-send"
@@ -753,166 +723,40 @@ export function BotsWorkspace() {
             </>
           )}
         </section>}
-        {profile && bot && !gallery && (
-          <aside className="bots-profile">
-            <div className="bots-profile-heading">
-              <h2>Bot details</h2>
-              <button
-                className="bots-icon-button"
-                aria-label="Close bot details"
-                onClick={() => setProfile(false)}
-              >
-                <X size={19} />
-              </button>
-            </div>
-            <Avatar bot={bot} />
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                const input = new FormData(e.currentTarget);
-                void action(() =>
-                  client.rpc("bots.update", bot.id, {
-                    name: String(input.get("name")),
-                  }),
-                );
-              }}
-            >
-              <label>
-                Name
-                <input
-                  name="name"
-                  defaultValue={bot.name}
-                  key={bot.id + bot.name}
-                  maxLength={80}
-                  required
-                />
-              </label>
-              <button type="submit" disabled={!online || busy}>
-                Save name
-              </button>
-            </form>
-            <p className="bots-muted">{bot.purpose}</p>
-            <p className="bots-profile-hint">
-              Ask {bot.name} to change its personality, instructions, or memory.
-            </p>
-            {lanes && <BotWorkControls key={scope} owner={owner} bot={bot} runs={recentRuns} online={online} onOpen={target => { setProfile(false); openActivity(target); }} />}
-            <BotAttachmentsEntry bot={bot} owner={owner} online={online} onOpen={() => openGallery("attachments")} />
-            <h3 className="bots-profile-section-heading">Usage</h3>
-            <UsagePanel bot={bot} online={online} />
-            <div className="bots-schedule-heading">
-              <h3>
-                <Clock size={16} />
-                Schedules
-              </h3>
-              <button
-                className="bots-icon-button"
-                aria-label="Add schedule"
-                disabled={!online || bot.archived}
-                onClick={() => setEditingSchedule("new")}
-              >
-                <Plus size={17} />
-              </button>
-            </div>
-            <button className="bots-history-open" onClick={() => openActivity()}><History size={16} /> Activity &amp; run history</button>
-            {!schedules.length && (
-              <p className="bots-muted">
-                Ask your bot to schedule something, or add a schedule here.
-              </p>
-            )}
-            {schedules.map((s) => (
-              <div className="bots-schedule" key={s.id}>
-                <strong>{s.title}</strong>
-                <small>
-                  {s.enabled && s.nextRunAt
-                    ? `Next ${stamp(s.nextRunAt)}`
-                    : !s.cron && s.at && new Date(s.at) < new Date()
-                      ? "Completed"
-                      : "Paused"}{" "}
-                  · {s.timeZone}
-                </small>
-                <div>
-                  <button
-                    title="Run now"
-                    aria-label={`Run ${s.title} now`}
-                    disabled={!online || busy || bot.archived}
-                    onClick={() =>
-                      void action(() =>
-                        client.rpc("schedules.run", bot.id, { id: s.id }),
-                      )
-                    }
-                  >
-                    <Play size={15} />
-                  </button>
-                  <button
-                    aria-label={`Edit ${s.title}`}
-                    disabled={!online}
-                    onClick={() => setEditingSchedule(s)}
-                  >
-                    <Pencil size={15} />
-                  </button>
-                  <button
-                    aria-label={
-                      s.enabled ? "Pause schedule" : "Resume schedule"
-                    }
-                    disabled={!online || busy || bot.archived}
-                    onClick={() =>
-                      void action(() =>
-                        client.rpc("schedules.save", bot.id, {
-                          id: s.id,
-                          enabled: !s.enabled,
-                        }),
-                      )
-                    }
-                  >
-                    {s.enabled ? <Pause size={15} /> : <Play size={15} />}
-                  </button>
-                  <button
-                    aria-label={`Delete ${s.title}`}
-                    disabled={!online || busy}
-                    onClick={() => {
-                      if (window.confirm(`Delete “${s.title}”?`))
-                        void action(() =>
-                          client.rpc("schedules.delete", bot.id, { id: s.id }),
-                        );
-                    }}
-                  >
-                    <Trash2 size={15} />
-                  </button>
+        {bot && !gallery && <Activity mode={profile ? "visible" : "hidden"}>
+          <BotDetailsDrawer key={scope} bot={bot} section={detailsSection} onSection={setDetailsSection} onClose={closeProfile}>
+            {{
+              next: <>
+                <h3>Up next</h3><p className="bots-details-lead">Messages waiting for their turn. Your conversation stays right where you left it.</p>
+                {single && <WorkOverview owner={owner} bot={bot} work={work} online={online} />}
+                {!single && !promptQueue.length && <div className="bots-details-empty"><ListOrdered size={27} strokeWidth={1.5} /><h3>A little breathing room</h3><p>Nothing is queued. Use Ctrl+Enter to save a message for the next turn.</p></div>}
+                <PromptQueue key={`queue:${scope}`} owner={owner} bot={bot} items={promptQueue} online={online}
+                  canEdit={Boolean(composer?.ready && !sending)} onEdit={item => { editQueued(item); setProfile(false); }} refresh={() => loadQueue(bot.id)} />
+                {single && <AutomaticInbox owner={owner} botId={bot.id} online={online} />}
+              </>,
+              schedules: <>
+                <ScheduleList bot={bot} schedules={schedules} online={online} busy={busy} onEdit={setEditingSchedule} action={action} />
+                {snapshot?.capabilities?.scheduleDecisions === 1 && <RunDecisions owner={owner} botId={bot.id} online={online} />}
+              </>,
+              files: <><h3>Files</h3><p className="bots-details-lead">Attachments and returned work, together. Open a preview, find a file, or download the original.</p><BotAttachmentsEntry bot={bot} owner={owner} online={online} onOpen={() => openGallery("attachments")} /></>,
+              history: <>{snapshot?.capabilities?.peerInbox === 1 && <PeerConversations key={`history-peers:${scope}`} owner={owner} botId={bot.id} bots={bots} online={online} historyView />}{lanes && <details data-history-key="legacy-controls" className="bots-legacy-controls"><summary>Earlier work · recovery and controls</summary><BotWorkControls owner={owner} bot={bot} runs={recentRuns} online={online} onOpen={openActivity} /></details>}<RunHistory key={`${scope}:${activityTarget?.runId ?? ""}:${activityTarget?.turnId ?? ""}`} embedded bot={bot} schedules={schedules} recentRuns={recentRuns} initialTarget={activityTarget} attachments={[]} online={online} onClose={closeProfile} download={id => void download(id)} /></>,
+              settings: <div className="bots-details-settings">
+                <form onSubmit={event => { event.preventDefault(); const input = new FormData(event.currentTarget); void action(() => client.rpc("bots.update", bot.id, { name: String(input.get("name")) })); }}>
+                  <label>Name<input name="name" defaultValue={bot.name} key={bot.id + bot.name} maxLength={80} required /></label><button type="submit" disabled={!online || busy}>Save name</button>
+                </form>
+                <p className="bots-profile-hint">{bot.purpose}</p><p className="bots-profile-hint">Ask {bot.name} to change its personality, instructions, or memory.</p>
+                {snapshot?.capabilities?.singleThreadExecution === 1 && <PersonalitySettings key={scope} bot={bot} snapshot={snapshot} online={online} />}
+                <h3>Usage</h3><UsagePanel bot={bot} online={online} />
+                <a className="bots-notification-link" href="/settings">Notification settings</a>
+                <div className="bots-profile-actions">
+                  <button disabled={!online || busy || Boolean(bot.activeTurnId)} onClick={() => void action(() => client.rpc("thread.compact", bot.id))}><RotateCcw size={16} />Compact conversation</button>
+                  <button disabled={!online || busy || Boolean(bot.activeTurnId)} onClick={() => void action(() => client.rpc(bot.archived ? "bots.restore" : "bots.archive", bot.id))}><Archive size={16} />{bot.archived ? "Restore bot" : "Archive bot"}</button>
                 </div>
-              </div>
-            ))}
-            <a className="bots-notification-link" href="/settings">
-              Notification settings
-            </a>
-            <div className="bots-profile-actions">
-              <button
-                disabled={!online || busy || Boolean(bot.activeTurnId)}
-                onClick={() =>
-                  void action(() => client.rpc("thread.compact", bot.id))
-                }
-              >
-                <RotateCcw size={16} />
-                Compact conversation
-              </button>
-              <button
-                disabled={!online || busy || Boolean(bot.activeTurnId)}
-                onClick={() =>
-                  void action(() =>
-                    client.rpc(
-                      bot.archived ? "bots.restore" : "bots.archive",
-                      bot.id,
-                    ),
-                  )
-                }
-              >
-                <Archive size={16} />
-                {bot.archived ? "Restore bot" : "Archive bot"}
-              </button>
-            </div>
-          </aside>
-        )}
+              </div>,
+            }}
+          </BotDetailsDrawer>
+        </Activity>}
       </main>
-      {showRunHistory && bot && <RunHistory key={scope} bot={bot} schedules={schedules} recentRuns={recentRuns} initialTarget={activityTarget} attachments={[]} online={online} onClose={() => setShowRunHistory(false)} download={(id) => void download(id)} />}
       {showOverallUsage && <div className="bots-modal-backdrop" onClick={() => setShowOverallUsage(false)}><section className="bots-history-modal bots-usage-modal" role="dialog" aria-modal="true" aria-label="Codex account usage" onClick={(event) => event.stopPropagation()}><header><h2>Codex account usage</h2><button className="bots-icon-button" aria-label="Close account usage" onClick={() => setShowOverallUsage(false)}><X size={19} /></button></header><UsagePanel online={online} /></section></div>}
       {creating && (
         <div className="bots-modal-backdrop" onClick={() => setCreating(false)}>
