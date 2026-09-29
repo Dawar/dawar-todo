@@ -84,7 +84,7 @@ export function mountAvatar(
     append(clip, eyelid);
     append(definitions, clip);
     const shine = element('g', { 'data-part': 'eye-shine', 'clip-path': `url(#${clipId})` });
-    append(shine, 
+    append(shine,
       element('circle', {
         cx: '0',
         cy: '7',
