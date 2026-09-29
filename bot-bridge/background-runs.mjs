@@ -25,6 +25,8 @@ const textInput = text => ({ type: "text", text, text_elements: [] });
 const due = row => !(Date.parse(row.reconcileAfter ?? "") > Date.now());
 const retryAt = attempts => new Date(Date.now() + (attempts === 1 ? 5000 : attempts === 2 ? 15000 : attempts < 6 ? 60000 : attempts < 10 ? 300000 : 900000)).toISOString();
 const privateInput = new Set(["queued", "dispatching", "uncertain"]);
+const releaseOutstanding = lane => Boolean(lane.releasePending || lane.releaseRequestedAt || lane.releasedAt);
+const originalSubscription = lane => !lane.subscriptionResumedAt && !releaseOutstanding(lane);
 
 export class BackgroundRuns {
   constructor(runtime, tools, validateResponse, interactions) {
@@ -177,12 +179,14 @@ export class BackgroundRuns {
   async load(id) {
     const lane = this.store.get("runLane", id);
     if (!lane?.threadId || lane.provisioning !== "bound") throw new Error("Run thread provisioning is unconfirmed; no replacement was created.");
-    if (this.runtime.loaded.has(lane.threadId)) return;
+    if (this.runtime.loaded.has(lane.threadId) && !releaseOutstanding(lane)) return;
+    if (releaseOutstanding(lane)) this.runtime.loaded.delete(lane.threadId);
     // Native0.156.1 keeps a fresh thread in memory before its rollout exists.
     // resume resolves persisted history first; do not resume our known queued
     // first input before trying the native live metadata path. This exception
-    // is unavailable once ANY dispatch/evidence exists, regardless of errors.
-    if (unsentRun(this.store, this.store.get("run", lane.runId))) {
+    // is unavailable after any release attempt or dispatch/evidence. Reading
+    // resident state does not attach the bridge's native subscription.
+    if (originalSubscription(lane) && unsentRun(this.store, this.store.get("run", lane.runId))) {
       const port = this.port(id), fence = captureActivity(port, lane.botId);
       let thread;
       try { ({ thread } = await this.runtime.codex.call("thread/read", { threadId: lane.threadId, includeTurns: false })); }
@@ -205,8 +209,12 @@ export class BackgroundRuns {
             throw new Error("The new run thread changed while persisting; no scheduled input was sent.");
           this.store.put("runLane", { ...this.store.get("runLane", id), emptyThreadPersistedAt: now() });
         }
-        this.runtime.loaded.add(lane.threadId);
-        return;
+        // A native close/release observation during either awaited read also
+        // requires resume; current idle alone cannot restore a subscription.
+        if (originalSubscription(this.store.get("runLane", id))) {
+          this.runtime.loaded.add(lane.threadId);
+          return;
+        }
       }
     }
     if (!await this.loadedCapacity(lane.threadId)) throw new Error("Background threads are awaiting native resource release. Recovery will retry automatically.");
@@ -219,8 +227,13 @@ export class BackgroundRuns {
     if (result.thread.canAcceptDirectInput === false) throw new Error("Native thread currently refuses direct input. This run was not submitted or replaced.");
     // Native persists thread/start dynamicTools in rollout metadata. Resume
     // intentionally supplies no undocumented dynamicTools override.
+    const current = this.store.get("runLane", id);
+    this.store.put("runLane", { ...current,
+      // After a verified resume this is no longer the original creation
+      // subscription, even after its completed release flags are cleared.
+      subscriptionResumedAt: now(),
+      releasePending: false, releaseRequestedAt: null, releasedAt: null });
     this.runtime.loaded.add(lane.threadId);
-    this.store.put("runLane", { ...this.store.get("runLane", id), releasePending: false, releaseRequestedAt: null, releasedAt: null });
   }
   async provision(bot, run) {
     if (!occurrenceReady(this.runtime.scheduleDecisions.ensure(run.id))) return;
@@ -763,10 +776,17 @@ export class BackgroundRuns {
       if (waiting) {
         const revision = admissionRevision(this.store, waiting.runId);
         if (!await this.loadedCapacity(waiting.threadId)) return;
-        if (!admissionOpen(this.store, waiting.runId, revision) || this.store.get("runLane", waiting.id).paused ||
-            this.store.bot(waiting.botId).archived || this.store.bot(waiting.botId).archiving) return;
         this.store.transaction(() => {
-          this.store.put("runLane", { ...this.store.get("runLane", waiting.id), admitted: true, reconcileAfter: null });
+          // Capacity reads can outlive a decision/expiry. Inspect the actual
+          // primary intake, not the historical primary's occurrence window
+          // when admitting a continuation or receipt reconciliation instead.
+          const run = this.runtime.scheduleDecisions.ensure(waiting.runId);
+          const primary = this.store.get("runIntake", run.operationId);
+          if (primary?.state === "queued" && !occurrenceReady(run)) return;
+          const current = this.store.get("runLane", waiting.id);
+          if (!admissionOpen(this.store, waiting.runId, revision) || current.paused ||
+              this.store.bot(waiting.botId).archived || this.store.bot(waiting.botId).archiving) return;
+          this.store.put("runLane", { ...current, admitted: true, reconcileAfter: null });
           requireCurrentActivity(this.port(waiting.id), waiting.botId, null, "explicit-run-followup-current-state-required");
           this.publish(waiting.id);
         });

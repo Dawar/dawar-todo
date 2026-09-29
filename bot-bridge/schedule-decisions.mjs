@@ -48,8 +48,19 @@ export class ScheduleDecisions {
   }
   ensure(runId, time = Date.now()) {
     let run = this.store.get("run", runId);
-    if (!run || run.status !== "queued" || run.decision?.state === "required" || !unsentRun(this.store, run)) return run;
+    if (!run || run.status !== "queued") return run;
     const at = Date.parse(occurrenceTime(run));
+    if (run.decision?.state === "required" || at > time) {
+      const lane = run.laneId && this.store.get("runLane", run.laneId);
+      // Repair an earlier stale admission once, without changing the decision
+      // revision/receipt or claiming native idle. Real execution is excluded.
+      if (lane && lane.admitted !== false && unsentRun(this.store, run)) this.store.transaction(() => {
+        this.store.put("runLane", { ...lane, admitted: false });
+        this.publish(run);
+      });
+      return run;
+    }
+    if (!unsentRun(this.store, run)) return run;
     if (Number.isFinite(at) && time - at <= SCHEDULE_GRACE_MS) return run;
     this.store.transaction(() => {
       run = this.store.get("run", runId);
