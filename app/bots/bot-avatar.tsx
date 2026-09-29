@@ -9,9 +9,11 @@ export const BotAvatar = memo(function BotAvatar({ bot, small = false, emotion, 
   const svg = useRef<SVGSVGElement>(null), controller = useRef<AvatarController | null>(null);
   const identity = bot.avatar ?? { ...identityFromSeed(bot.id), seed: bot.id };
   const active = working ?? bot.status === 'running';
+  const mountedIdentity = useRef(identity);
+  useLayoutEffect(() => { mountedIdentity.current = identity; });
   useLayoutEffect(() => {
     if (!svg.current) return;
-    try { controller.current = mountAvatar(svg.current, { ...identityFromSeed(bot.id), seed: bot.id, playful: false, shadow: false, reducedMotion: 'system' }, { label: bot.name }); } catch {
+    try { controller.current = mountAvatar(svg.current, { shape: mountedIdentity.current.shape, color: mountedIdentity.current.color as BotColor, seed: mountedIdentity.current.seed, playful: false, shadow: false, reducedMotion: 'system' }, { label: bot.name }); } catch {
       // Unsupported rendering retains the accessible static initials below.
       svg.current.replaceChildren();
       const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
