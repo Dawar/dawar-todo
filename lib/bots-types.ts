@@ -258,6 +258,8 @@ export type BotInboxItem = { id: string; botId: string; kind: "schedule" | "peer
 export type BotPeerRequest = { id: string; rootId: string; parentId: string | null; senderBotId: string; recipientBotId: string;
   kind: "message" | "question" | "task"; summary: string; state: "queued" | "working" | "waiting" | "completed" | "cancelled" | "failed" | "delivery-unconfirmed";
   round: number; roundLimit: 6; createdAt: string; updatedAt: string; turnId: string | null; result: string | null; cancelRequested: boolean };
+// At most twelve request/reply entries per root, plus one cancellation per request.
+// peers.read is request-scoped; attachment IDs are owned by its selected bot.
 export type BotPeerExchange = { id: string; requestId: string; botId: string; kind: "request" | "reply" | "cancel"; text: string; attachmentIds: string[]; createdAt: string; round: number };
 export type BotPeerPage = { requests: BotPeerRequest[]; nextCursor: string | null };
 export type BotBurstMessage = { id: string; botId: string; text: string; attachmentIds: string[]; createdAt: string;
