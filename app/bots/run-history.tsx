@@ -8,7 +8,7 @@ import { TimelineEntry } from "./timeline";
 import { RunTurnPicker } from "./run-turn-picker";
 import { ReturnedArtifacts } from "./returned-artifact";
 import { RunPageRead } from "./run-page-read";
-import { runNeedsBinding, validRunState } from "./run-context";
+import { hasCurrentRunDecision, runNeedsBinding, validRunState } from "./run-context";
 import { runHistoryRefresh } from "./run-history-refresh";
 import { updateRunPage } from "./run-page-events";
 import { useRunScroll } from "./use-run-scroll";
@@ -258,8 +258,8 @@ export function RunHistory({ bot, schedules, attachments, online, onClose, downl
           {!unbound && target.runId && (lanes || botsClient.snapshot?.activeScheduledTurns !== undefined) && <RunTurnPicker key={`${owner}:${bot.id}:${target.runId}`} owner={owner} botId={bot.id} runId={target.runId} primary={selectedRun} selected={target.turnId ?? ""} online={online} onSelect={turnId => {
             generation.current++; setTranscript(null); setPageCursors([null]); setDetailPage(0); setTarget({ runId: target.runId, turnId });
           }} />}
-          {botsClient.snapshot?.capabilities?.scheduleDecisions === 1 && selectedRun?.decision && <RunDecisionControls owner={owner} botId={bot.id} run={selectedRun} online={online} onConfirmed={metadata.refresh} />}
-          {lanes && selectedRun && selectedRun.decision?.state !== "required" && <RunControls owner={owner} botId={bot.id} run={selectedRun} online={online} onConfirmed={metadata.refresh} />}
+          {botsClient.snapshot?.capabilities?.scheduleDecisions === 1 && selectedRun && <RunDecisionControls owner={owner} botId={bot.id} run={selectedRun} online={online} onConfirmed={metadata.refresh} />}
+          {lanes && selectedRun && <RunControls owner={owner} botId={bot.id} run={selectedRun} online={online} onConfirmed={metadata.refresh} allowNewActions={!hasCurrentRunDecision(selectedRun)} />}
           {unbound && <div className="bots-run-notice"><Clock3 size={18} /><div><p>{selectedRun?.laneId ? "This run’s conversation is not available yet. Its preparation or confirmation is still pending." : "This run has not started."} {selectedRun?.activity?.state === "paused" ? "Its queued work is saved until you resume it." : "Its conversation will be available when it starts."} {!online && "Saved status. Reconnect for updates."}</p><button disabled={!online || metadata.busy} onClick={metadata.refresh}>{metadata.busy ? "Updating status…" : "Refresh status"}</button></div></div>}
           {lanes && metadata.error && <div className="bots-run-notice is-error" role="alert"><CircleAlert size={18} /><div><p>{metadata.error}</p><button disabled={!online || metadata.busy} onClick={metadata.refresh}>Retry status</button></div></div>}
           {!unbound && !online && <div className="bots-run-notice"><CircleAlert size={18} /><p>{transcript ? "Saved run detail. Connect for updates and details not yet opened." : "Connect to open this run. Your saved conversation is still available."}</p></div>}

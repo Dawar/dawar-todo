@@ -4,6 +4,7 @@ import { CalendarClock, RefreshCw } from "lucide-react";
 import type { BotEvent, BotRun } from "../../lib/bots-types";
 import { botsClient as client } from "./client";
 import { useRunAction } from "./run-action";
+import { hasCurrentRunDecision } from "./run-context";
 import "./run-decisions.css";
 
 const stamp = (value: string) => Number.isFinite(Date.parse(value)) ? new Date(value).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "Date unavailable";
@@ -12,14 +13,15 @@ const savedRun = (run: BotRun): BotRun => ({ id: run.id, botId: run.botId, sched
   status: run.status, scheduledAt: run.scheduledAt, startedAt: run.startedAt, finishedAt: run.finishedAt, error: null,
   decision: run.decision, activity: run.activity, executionLane: run.executionLane, laneId: run.laneId, threadId: run.threadId, turnId: run.turnId });
 
-export function RunDecisionControls({ owner, botId, run, online, onConfirmed }: {
-  owner: string; botId: string; run: BotRun; online: boolean; onConfirmed: () => void;
+export function RunDecisionControls({ owner, botId, run, online, onConfirmed, allowNewActions = true }: {
+  owner: string; botId: string; run: BotRun; online: boolean; onConfirmed: () => void; allowNewActions?: boolean;
 }) {
   const action = useRunAction(owner, botId, `decision:${run.id}`);
   const [rescheduling, setRescheduling] = useState(false), [at, setAt] = useState(""), [error, setError] = useState("");
   const decision = run.decision;
+  const eligible = hasCurrentRunDecision(run);
   const confirmed = action.confirmation?.method === "runs.decide" && action.confirmation.params.expectedRevision === decision?.revision;
-  const enabled = online && action.ready && !action.busy && !action.intent && !confirmed && decision?.state === "required" && run.status !== "uncertain" && run.activity?.state !== "uncertain";
+  const enabled = online && allowNewActions && action.ready && !action.busy && !action.intent && !confirmed && eligible;
   const choose = async (choice: "start" | "reschedule" | "cancel") => {
     if (!enabled || !decision || client.owner !== owner) return;
     const date = choice === "reschedule" ? new Date(at) : null;
@@ -32,9 +34,9 @@ export function RunDecisionControls({ owner, botId, run, online, onConfirmed }: 
       if (client.owner === owner) { setRescheduling(false); onConfirmed(); }
     } catch { /* Exact choice and ID remain in the origin-owned journal. */ }
   };
-  if (!decision && !action.intent && !action.error) return null;
+  if (!eligible && !action.intent && !action.error) return null;
   return <div className="bots-run-decision-controls">
-    {action.intent ? <><p>A saved choice is awaiting confirmation. Check it before making another choice.</p><button disabled={!online || action.busy || !action.ready} onClick={() => void action.retry().then(() => { if (client.owner === owner) onConfirmed(); }).catch(() => {})}>{action.busy ? "Confirming…" : "Check saved choice"}</button></> : confirmed ? <p role="status">Choice saved. Refresh status to see what happens next.<button disabled={!online} onClick={onConfirmed}>Refresh status</button></p> : decision?.state === "required" ? <>
+    {action.intent ? <><p>A saved choice is awaiting confirmation. Check it before making another choice.</p><button disabled={!online || action.busy || !action.ready} onClick={() => void action.retry().then(() => { if (client.owner === owner) onConfirmed(); }).catch(() => {})}>{action.busy ? "Confirming…" : "Check saved choice"}</button></> : confirmed && eligible ? <p role="status">Choice saved. Refresh status to see what happens next.<button disabled={!online} onClick={onConfirmed}>Refresh status</button></p> : eligible ? <>
       <p>This start time was missed. Choose what happens to this occurrence.</p>
       <div className="bots-run-decision-buttons">
         <button className="is-primary" disabled={!enabled} onClick={() => void choose("start")}>Start now</button>
@@ -66,7 +68,7 @@ export function RunDecisions({ owner, botId, online }: { owner: string; botId: s
       if (client.owner !== owner || event.botId !== botId || !["schedules", "run.state"].includes(event.type)) return;
       if (event.type === "run.state") {
         const run = (event.data as { run?: BotRun }).run;
-        if (!run || run.botId !== botId || !pageIds.current.has(run.id) && run.decision?.state !== "required") return;
+        if (!run || run.botId !== botId || !pageIds.current.has(run.id) && !hasCurrentRunDecision(run)) return;
       }
       eventRevision.current++; setUpdated(true);
     };
@@ -80,7 +82,7 @@ export function RunDecisions({ owner, botId, online }: { owner: string; botId: s
       setBusy(true);
       const result = await client.rpc<Page>("runs.decisions", botId, { cursor, limit: 5 }, undefined, { owner });
       if (canceled || client.owner !== owner) return;
-      if (!Array.isArray(result.runs) || result.runs.length > 5 || result.runs.some(run => run.botId !== botId || !run.id || run.decision?.state !== "required") || new Set(result.runs.map(run => run.id)).size !== result.runs.length || result.nextCursor && result.nextCursor === cursor) throw Error("Pending choices could not be verified. Refresh them again.");
+      if (!Array.isArray(result.runs) || result.runs.length > 5 || result.runs.some(run => run.botId !== botId || !run.id || run.status !== "queued" || run.decision?.state !== "required") || new Set(result.runs.map(run => run.id)).size !== result.runs.length || result.nextCursor && result.nextCursor === cursor) throw Error("Pending choices could not be verified. Refresh them again.");
       // No live insertion/truncation ahead of an older cursor. A later event
       // leaves an explicit refresh cue; it is never evidence of action success.
       const next = { runs: result.runs.map(savedRun), nextCursor: result.nextCursor };
@@ -98,7 +100,7 @@ export function RunDecisions({ owner, botId, online }: { owner: string; botId: s
     <header><CalendarClock size={18} aria-hidden="true" /><h3>Waiting for your choice</h3><button disabled={!online || busy} onClick={refresh} aria-label="Refresh pending choices"><RefreshCw size={15} /></button></header>
     {!online && <p>Saved choices. Reconnect before deciding.</p>}
     {updated && <p>Scheduled work changed.<button disabled={!online || busy} onClick={refresh}>Refresh choices</button></p>}
-    {page.runs.map(run => <article key={run.id}><h4>{run.title}</h4><p>Scheduled {stamp(run.decision!.scheduledAt)}{run.decision?.notBefore && <><br />New time {stamp(run.decision.notBefore)}</>}</p><RunDecisionControls owner={owner} botId={botId} run={run} online={online && !busy && !updated} onConfirmed={refresh} /></article>)}
+    {page.runs.map(run => <article key={run.id}><h4>{run.title}</h4><p>Scheduled {stamp(run.decision!.scheduledAt)}{run.decision?.notBefore && <><br />New time {stamp(run.decision.notBefore)}</>}</p><RunDecisionControls owner={owner} botId={botId} run={run} online={online} allowNewActions={!busy && !updated && !error} onConfirmed={refresh} /></article>)}
     {error && <p role="alert">{error}<button disabled={!online || busy} onClick={refresh}>Retry</button></p>}
     {online && busy && <p role="status">Updating pending choices…</p>}
     <nav aria-label="Pending choice pages">{cursor && <button disabled={!online || busy} onClick={refresh}>First choices</button>}{page.nextCursor && <button disabled={!online || busy || cursor !== loadedCursor} onClick={() => setCursor(page.nextCursor)}>More choices</button>}</nav>

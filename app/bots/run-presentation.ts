@@ -1,4 +1,5 @@
 import type { BotRun } from "../../lib/bots-types";
+import { hasCurrentRunDecision } from "./run-context";
 
 type Presentation = { label: string; tone: "neutral" | "working" | "finished" | "attention"; hint: string };
 const waits: Record<string, string> = {
@@ -21,13 +22,13 @@ export function runPresentation(run: BotRun): Presentation {
     label: "Needs review", tone: "attention",
     hint: run.status === "cancelled" ? "Cancelled, but an earlier action is still unconfirmed. Open the run to review its status." : "An earlier action is unconfirmed. Open the run to review its status; it has not been retried automatically.",
   };
-  if (run.decision?.state === "required") return { label: "Start time missed", tone: "attention", hint: "Choose Start now, Reschedule or Cancel this occurrence. Nothing starts until you decide." };
-  if (run.decision?.state === "rescheduled" && run.status === "queued") return { label: "Rescheduled", tone: "neutral", hint: "This occurrence has a new start time. The recurring schedule is unchanged." };
-  if (activity?.state === "waiting-input" || (activity?.pendingCount ?? 0) > 0) return {
+  if (hasCurrentRunDecision(run)) return { label: "Start time missed", tone: "attention", hint: "Choose Start now, Reschedule or Cancel this occurrence. Nothing starts until you decide." };
+  if ((activity?.state === "waiting-input" && activity.waitReason !== "overdue-decision") || (activity?.pendingCount ?? 0) > 0) return {
     label: "Answer needed", tone: "attention", hint: waits["waiting-input"],
   };
   if (activity?.activeTurnId || activity?.state === "running") return { label: "In progress", tone: "working", hint: "" };
   if (activity?.state === "waiting-workers") return { label: "Helpers working", tone: "working", hint: waits["waiting-workers"] };
+  if (run.decision?.state === "rescheduled" && run.status === "queued") return { label: "Rescheduled", tone: "neutral", hint: "This occurrence has a new start time. The recurring schedule is unchanged." };
   if (run.status === "failed") return { label: "Failed", tone: "attention", hint: "Open the run to review what stopped and decide what to do next." };
   // Completed/cancelled history is neutral unless current work above says
   // otherwise. An interrupted run is terminal, not an unknown delivery.

@@ -5,7 +5,7 @@ import { botsClient } from "./client";
 import { ReturnedArtifact } from "./returned-artifact";
 import { MarkdownTable } from "./markdown-table";
 import type { BotAttachment } from "../../lib/bots-types";
-import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
+import ReactMarkdown, { defaultUrlTransform, type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 const messageSchema = { ...defaultSchema, protocols: { ...defaultSchema.protocols, href: [...(defaultSchema.protocols?.href ?? []), "bot-artifact"] } };
@@ -19,6 +19,8 @@ import {
   LoaderCircle,
 } from "lucide-react";
 import type { ThreadItem } from "../../lib/codex-protocol/v2/ThreadItem";
+
+const renderMarkdownTable: Components["table"] = ({ children }) => <MarkdownTable>{children}</MarkdownTable>;
 
 function BotMessage({
   item,
@@ -42,7 +44,7 @@ function BotMessage({
           url.startsWith("bot-artifact:") ? url : defaultUrlTransform(url)
         }
         components={{
-          table: ({ children }) => <MarkdownTable>{children}</MarkdownTable>,
+          table: renderMarkdownTable,
           a: ({ href, children }) =>
             href?.startsWith("bot-artifact:") ? (
               <ReturnedArtifact botId={botId} id={href.slice(13)} attachment={attachments.find((file) => file.id === href.slice(13))}>{children}</ReturnedArtifact>
