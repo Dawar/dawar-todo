@@ -3,6 +3,7 @@ import { memo, useEffect, useState, useRef, useSyncExternalStore } from "react";
 import { LazyDetails, TextPages, ItemPages } from "./lazy-details";
 import { botsClient } from "./client";
 import { ReturnedArtifact } from "./returned-artifact";
+import { MarkdownTable } from "./markdown-table";
 import type { BotAttachment } from "../../lib/bots-types";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -41,6 +42,7 @@ function BotMessage({
           url.startsWith("bot-artifact:") ? url : defaultUrlTransform(url)
         }
         components={{
+          table: ({ children }) => <MarkdownTable>{children}</MarkdownTable>,
           a: ({ href, children }) =>
             href?.startsWith("bot-artifact:") ? (
               <ReturnedArtifact botId={botId} id={href.slice(13)} attachment={attachments.find((file) => file.id === href.slice(13))}>{children}</ReturnedArtifact>

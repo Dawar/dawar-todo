@@ -5,6 +5,7 @@ import type {
   BotHistory,
   BotSchedule,
   BotRunPage,
+  BotRun,
   BotRunReceipt, BotRunFinding, BotRequest,
   BotRunTurnPage,
   BotThreadUsage,
@@ -96,6 +97,8 @@ export type BotOperations = {
   "runs.resume": { params: { runId: string }; result: Record<string, never> };
   "runs.findings": { params: { runId?: string; cursor?: string | null; limit?: number }; result: { findings: BotRunFinding[]; nextCursor: string | null } };
   "runs.page": { params: { cursor?: string | null; limit?: number }; result: BotRunPage };
+  "runs.decisions": { params: { cursor?: string | null; limit?: number }; result: { runs: BotRun[]; nextCursor: string | null } };
+  "runs.decide": { params: { runId: string; expectedRevision: number; choice: "start" | "reschedule" | "cancel"; at?: string }; result: { operationId: string; run: BotRun } };
   /** Continuation metadata in stable ID order; default 25, maximum 50. */
   "runs.turns": { params: { runId: string; cursor?: string | null; limit?: number }; result: BotRunTurnPage };
   "usage.bot": { params: Record<string, never>; result: BotThreadUsage };
