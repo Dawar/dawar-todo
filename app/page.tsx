@@ -5314,7 +5314,7 @@ export default function Home() {
             <div className="relative flex min-w-0 items-center justify-between border-b border-black/[0.07] px-5 pb-4 pt-5 sm:px-6 sm:py-4">
               <span className="absolute left-1/2 top-2 h-1 w-10 -translate-x-1/2 rounded-full bg-black/15 sm:hidden" aria-hidden="true" />
               <h3 id="task-details-title" className="min-w-0 text-lg font-semibold text-[#202522]">Task details</h3>
-              <div className="flex shrink-0 items-center gap-1">
+              <div className="todo-detail-copy-actions flex shrink-0 items-center gap-1">
                 <button type="button" onClick={() => { if (editDraft) setForwardRequest({ id: crypto.randomUUID(), text: todoCopyText(editDraft.title, editDraft.notes) }); }} className="grid h-9 w-9 place-items-center rounded-full bg-[#eaf3ed] text-[#216e4e] hover:bg-[#e0ede4]" aria-label="Forward task to a bot draft" title="Forward"><ActionIcon name="forward" /></button>
                 <button type="button" onClick={() => void copyTaskDetails()} className="grid h-9 w-9 place-items-center rounded-full bg-[#f1f2f0] text-[#4f5752] hover:bg-[#e8eae7]" aria-label="Copy task title and description" title="Copy task"><ActionIcon name="copy" /></button>
                 <button type="button" onClick={closeTaskDetails} className="grid h-9 w-9 place-items-center rounded-full bg-[#f1f2f0] text-[#4f5752] hover:bg-[#e8eae7]" aria-label="Close task details" title="Close"><ActionIcon name="close" /></button>

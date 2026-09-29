@@ -21,7 +21,7 @@ function QuietTime({ dueAt, online }: { dueAt: string | null; online: boolean })
 }
 /** No optimistic native bubbles. Pending messages are receipt-owned here until
  * their one canonical batch appears in native history with batch.operationId. */
-export function BurstComposer({ owner, botId, online, draft }: { owner: string; botId: string; online: boolean; draft: string }) {
+export function BurstComposer({ owner, botId, online, draft, submitting = false }: { owner: string; botId: string; online: boolean; draft: string; submitting?: boolean }) {
   const cacheKey = `burst-summary:v1:${botId}`;
   const [value, setValue] = useState<BurstState | null>(() => client.owner === owner ? client.cache(cacheKey, null) : null), [error, setError] = useState(''), [refresh, setRefresh] = useState(0);
   useEffect(() => {
@@ -57,11 +57,11 @@ export function BurstComposer({ owner, botId, online, draft }: { owner: string; 
     return () => clearTimeout(timer);
   }, [draft, owner, botId, online, value?.burst?.state]);
   const burst = value?.burst, messages = value?.messages.filter(message => message.state !== 'sent') ?? [];
-  if (!messages.length && !action.intent && !action.error && !error) return null;
+  if (!messages.length && !submitting && !action.intent && !action.error && !error) return null;
   const paused = burst?.state === 'paused', uncertain = burst?.state === 'uncertain' || burst?.state === 'failed';
   return <div className="bots-burst-pending">
     {burst && burst.messageIds.length > messages.length && !online && <small>Showing {messages.length} saved previews of {burst.messageIds.length} pending messages. Reconnect for the complete batch.</small>}
-    <div className="bots-burst-line"><details><summary>{paused ? 'Held for you' : uncertain ? 'Delivery needs attention' : burst?.state === 'dispatching' ? 'Sending together' : 'Ready when you are'}{messages.length > 0 && <span> · {messages.length} {messages.length === 1 ? 'message' : 'messages'}</span>}</summary><div className="bots-burst-messages">{messages.map(message => <p key={message.id}>{message.text}{message.attachmentIds.length > 0 && <small><Paperclip size={12} />{message.attachmentIds.length} {message.attachmentIds.length === 1 ? 'file' : 'files'}</small>}</p>)}</div></details>
+    <div className="bots-burst-line"><details><summary>{submitting ? 'Saving your message…' : paused ? 'Held for you' : uncertain ? 'Delivery needs attention' : burst?.state === 'dispatching' ? 'Sending together' : 'Ready when you are'}{messages.length > 0 && <span> · {messages.length} {messages.length === 1 ? 'message' : 'messages'}</span>}</summary><div className="bots-burst-messages">{messages.map(message => <p key={message.id}>{message.text}{message.attachmentIds.length > 0 && <small><Paperclip size={12} />{message.attachmentIds.length} {message.attachmentIds.length === 1 ? 'file' : 'files'}</small>}</p>)}</div></details>
       {burst?.state === "pending" && <QuietTime dueAt={burst.dueAt} online={online} />}
       {!action.intent && burst && ['pending','paused'].includes(burst.state) && <div><button type="button" disabled={!online || action.busy || !action.ready} onClick={() => void action.perform('bursts.start', {}).then(() => setRefresh(value => value + 1)).catch(() => {})}><ArrowUp size={14} />Start now</button>{!paused && <button type="button" aria-label="Hold pending messages" disabled={!online || action.busy || !action.ready} onClick={() => void action.perform('bursts.stop', {}).then(() => setRefresh(value => value + 1)).catch(() => {})}><Pause size={14} /></button>}</div>}
     </div>

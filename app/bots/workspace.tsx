@@ -582,7 +582,7 @@ export function BotsWorkspace() {
               {!bot.archived && (
                 <>
                   <div className="bots-composer-support">
-                    {burstEnabled && <BurstComposer key={`bursts:${scope}`} owner={owner} botId={bot.id} online={online} draft={draft} />}
+                    {burstEnabled && <BurstComposer key={`bursts:${scope}`} owner={owner} botId={bot.id} online={online} draft={draft} submitting={composer?.operation?.method === "bursts.submit"} />}
                     {snapshot && <ComposerSettings key={`settings:${scope}`} bot={bot} snapshot={snapshot} online={online} />}
                   {(lanes || single) && <MainStopRecovery owner={owner} botId={bot.id} online={online} />}
                   <ComposerStatus composer={composer} error={composerError} />

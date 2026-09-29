@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { ArrowRight, Search, X } from 'lucide-react';
 import { botsClient as client } from './bots/client';
@@ -11,6 +11,7 @@ import './todo-forward.css';
 
 export function TodoForward({ request, onClose }: { request: { id: string; text: string } | null; onClose: () => void }) {
   const [saved, setSaved] = useState<TodoForwardIntent | null>(null), [open, setOpen] = useState(false);
+  const close = useCallback(() => { setOpen(false); onClose(); }, [onClose]);
   useEffect(() => {
     let active = true;
     const read = () => { if (!active) return; try { setSaved(client.owner ? pendingTodoForwards(client.owner)[0] ?? null : null); } catch { setSaved(null); } };
@@ -19,7 +20,7 @@ export function TodoForward({ request, onClose }: { request: { id: string; text:
     return () => { active = false; unsubscribe(); };
   }, []);
   return <>{!request && saved && <button type="button" className="todo-forward-recovery" onClick={() => setOpen(true)}>Continue saved Forward <ArrowRight size={15} /></button>}
-    {(request || open && saved) && <ForwardPicker key={request?.id ?? saved!.id} request={request ?? saved!} saved={request ? null : saved} onClose={() => { setOpen(false); onClose(); }} />}</>;
+    {(request || open && saved) && <ForwardPicker key={request?.id ?? saved!.id} request={request ?? saved!} saved={request ? null : saved} onClose={close} />}</>;
 }
 function ForwardPicker({ request, saved, onClose }: { request: { id: string; text: string }; saved: TodoForwardIntent | null; onClose: () => void }) {
   const [, redraw] = useState(0), [search, setSearch] = useState(''), [busy, setBusy] = useState(false), [error, setError] = useState(''), [destinationBot, setDestinationBot] = useState(saved?.botId ?? null);
