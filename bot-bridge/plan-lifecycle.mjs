@@ -131,7 +131,7 @@ export class PlanLifecycle {
   async recover(limit = 2) {
     let count = 0;
     for (const record of this.store.list("planExecution")) {
-      if (!["dispatching", "running", "resetting", "uncertain", "blocked"].includes(record.state)) continue;
+      if (!["dispatching", "queued", "running", "resetting", "uncertain", "blocked"].includes(record.state)) continue;
       if (this.runtime.locks.has(record.botId)) continue;
       if (count >= limit || Date.parse(record.reconcileAfter ?? "") > Date.now()) continue;
       count++;

@@ -8,6 +8,11 @@ const now = () => new Date().toISOString();
 export function unsentRun(store, run) {
   if (!run || !["queued", "cancelled"].includes(run.status) || run.turnId || run.startedAt ||
       store.operation(run.operationId ?? `schedule:${run.id}`)) return false;
+  if (run.executionLane === "main-single" && !run.laneId) {
+    const input = store.get("primaryInbox", run.operationId);
+    return input?.sourceId === run.id && input.botId === run.botId && input.kind === "schedule" &&
+      ["queued", "cancelled"].includes(input.state) && !input.turnId && !input.nativeQueueId && (!input.attemptedAt || input.withdrawal?.removedAt);
+  }
   if (!run.laneId) return run.status === "queued" ? unreservedRun(store, run) :
     !run.threadId && !run.executionLane;
   const lane = store.get("runLane", run.laneId);
@@ -82,6 +87,10 @@ export class ScheduleDecisions {
     if (run.cancelledPreparationAt) return true;
     this.store.transaction(() => {
       this.store.put("run", { ...run, cancelledPreparationAt: now() });
+      if (run.executionLane === "main-single") {
+        const input = this.store.get("primaryInbox", run.operationId);
+        if (input) this.store.put("primaryInbox", { ...input, state: "cancelled", error: null });
+      }
       setAdmissionPause(this.store, run, true, run.decision?.operationId ?? `cancelled:${run.id}`);
       if (lane) {
         for (const input of this.store.executionMetadata("runIntake", run.botId).filter(r => r.laneId === lane.id && r.state === "queued")) {

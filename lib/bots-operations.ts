@@ -1,6 +1,6 @@
 /** Public bridge contract. Native JSON-RPC method names never come from a browser. */
 import type {
-  Bot,
+  Bot, BotAvatar, BotWorkState, BotInboxItem, BotPeerRequest, BotPeerExchange, BotPeerPage, BotBurstState, BotBurstMessage, BotBurst,
   BotAttachment,
   BotHistory,
   BotSchedule,
@@ -22,6 +22,23 @@ import type { TurnSteerResponse } from "./codex-protocol/v2/TurnSteerResponse";
 import type { QueuedSubmission } from "./codex-protocol/v2/QueuedSubmission";
 import type { HistoryResponse, HistoryDetail } from "./bot-history-view";
 export type BotOperations = {
+  "work.read": { params: Record<string, never>; result: BotWorkState };
+  "work.resume": { params: Record<string, never>; result: BotWorkState };
+  "inbox.list": { params: { cursor?: string | null; limit?: number }; result: { items: BotInboxItem[]; nextCursor: string | null } };
+  "goals.read": { params: Record<string, never>; result: { goal: import("./codex-protocol/v2/ThreadGoal").ThreadGoal | null } };
+  "goals.set": { params: { objective?: string; status?: import("./codex-protocol/v2/ThreadGoalStatus").ThreadGoalStatus; tokenBudget?: number | null }; result: { goal: import("./codex-protocol/v2/ThreadGoal").ThreadGoal } };
+  "goals.clear": { params: Record<string, never>; result: { cleared: boolean } };
+  "peers.directory": { params: Record<string, never>; result: { bots: { id: string; name: string; purpose: string; color: string; available: boolean }[] } };
+  "peers.list": { params: { cursor?: string | null; limit?: number; rootId?: string }; result: BotPeerPage };
+  "peers.read": { params: { id: string }; result: { request: BotPeerRequest; exchanges: BotPeerExchange[] } };
+  "peers.send": { params: { recipientBotId: string; kind: "message" | "question" | "task"; summary: string; text: string; attachmentIds?: string[]; parentId?: string }; result: { request: BotPeerRequest } };
+  "peers.reply": { params: { id: string; text: string; attachmentIds?: string[]; state: "waiting" | "completed" | "failed" }; result: { request: BotPeerRequest } };
+  "peers.cancel": { params: { id: string }; result: { request: BotPeerRequest } };
+  "bursts.read": { params: Record<string, never>; result: BotBurstState };
+  "bursts.submit": { params: { text: string; attachments?: string[] }; result: { message: BotBurstMessage; burst: BotBurst } };
+  "bursts.typing": { params: { clientId: string; typing: boolean }; result: Record<string, never> };
+  "bursts.start": { params: Record<string, never>; result: BotBurstState };
+  "bursts.stop": { params: Record<string, never>; result: BotBurstState };
   snapshot: { params: Record<string, never>; result: BotSnapshot };
   history: { params: Record<string, never>; result: BotHistory };
   "history.view": {
@@ -48,7 +65,7 @@ export type BotOperations = {
   };
   "bots.create": { params: { name: string; purpose?: string }; result: Bot };
   "bots.update": {
-    params: Partial<Pick<Bot, "name" | "model" | "effort" | "serviceTier" | "mode">>;
+    params: Partial<Pick<Bot, "name" | "model" | "effort" | "serviceTier" | "mode" | "burstQuietSeconds">> & { avatar?: Pick<BotAvatar, "shape" | "color"> };
     result: Bot;
   };
   "bots.read": { params: Record<string, never>; result: Bot };

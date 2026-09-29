@@ -1,3 +1,5 @@
+import { PEER_TOOL } from "./peer-inbox.mjs";
+import { WORK_TOOL } from "./primary-execution.mjs";
 import { createServer } from "node:http";
 import { requireTurn, usableTurn } from "./native-turn.mjs";
 import {
@@ -11,7 +13,7 @@ import { promisify } from "node:util";
 import { mkdir, chmod, unlink, realpath } from "node:fs/promises";
 import { join, resolve, dirname, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
-import { MANAGER_TOOLS, WORKER_INSTRUCTIONS } from "./manager-tools.mjs";
+import { MANAGER_TOOLS, WORKER_INSTRUCTIONS, RUN_MESSAGE_TOOL } from "./manager-tools.mjs";
 import { validateResponse } from "./runtime.mjs";
 import { slugify, cleanName } from "./profiles.mjs";
 import { finishTask, ensureNotice, repairTerminalNotices, deliverNotices } from "./manager-outbox.mjs";
@@ -84,7 +86,7 @@ export class CodexManager {
           this.socketPath,
           bot.id,
         ],
-        env: { DAWAR_MANAGER_TOKEN: this.tokens.get(bot.id) },
+        env: { DAWAR_MANAGER_TOKEN: this.tokens.get(bot.id), DAWAR_BOT_EXECUTION_MODE: bot.executionMode ?? "legacy" },
         startup_timeout_sec: 15,
         tool_timeout_sec: 120,
         required: true,
@@ -113,7 +115,7 @@ export class CodexManager {
         res.writeHead(status, { "Content-Type": "application/json" });
         res.end(JSON.stringify(value));
       };
-      if (req.method !== "POST" || req.url !== "/tools/call")
+      if (req.method !== "POST" || !["/tools/call", "/tools/list"].includes(req.url))
         return respond(404, { error: "Not found." });
       try {
         let size = 0,
@@ -136,7 +138,7 @@ export class CodexManager {
           !timingSafeEqual(Buffer.from(token), Buffer.from(expected))
         )
           return respond(403, { error: "Invalid manager session." });
-        respond(200, { result: await this.call(botId, name, args) });
+        respond(200, { result: req.url === "/tools/list" ? { tools: this.tools(this.store.bot(botId)) } : await this.call(botId, name, args) });
       } catch (error) {
         respond(400, { error: error.message });
       }
@@ -210,10 +212,27 @@ export class CodexManager {
     const failed = outcomes.find((r) => r.status === "rejected");
     if (failed) throw failed.reason;
   }
+  tools(bot) {
+    if (!this.runtime.primary.single(bot)) return [...MANAGER_TOOLS, RUN_MESSAGE_TOOL, WORK_TOOL, PEER_TOOL];
+    const retained = MANAGER_TOOLS.map(tool => {
+      const operations = tool.inputSchema.properties.operation.enum.filter(op => ["list", "read", "status", "requests", "review"].includes(op) || tool.name === "codex_tasks" && op === "collectResult");
+      return operations.length ? { ...tool, description: `Retained legacy history/collection only. ${tool.description}`, inputSchema: { ...tool.inputSchema,
+        properties: { ...tool.inputSchema.properties, operation: { ...tool.inputSchema.properties.operation, enum: operations } } } } : null;
+    }).filter(Boolean);
+    return [...retained, WORK_TOOL, PEER_TOOL];
+  }
   async call(botId, name, args, origin = null) {
     const bot = this.store.bot(botId);
     if (bot.archived || bot.archiving)
       throw new Error("Restore this manager before using its tools.");
+    if (name === "bots_peers") {
+      if (origin) throw new Error("Use the owned native peer tool route.");
+      return this.runtime.peerTool(bot, args);
+    }
+    if (name === "bots_work") {
+      if (origin) throw new Error("Progress belongs to the primary named bot.");
+      return this.runtime.primary.progress(bot, args);
+    }
     if (name === "bots_run_message") {
       if (origin) throw new Error("Native forwarding uses the explicit native tool route.");
       if (typeof args?.runId !== "string" || args.runId.length > 512 || typeof args.text !== "string" ||
@@ -256,6 +275,8 @@ export class CodexManager {
           `Operation ${opId} is ${prior.state}: ${prior.error ?? "Inspect status before any retry."}`,
         );
       }
+      if (this.runtime.primary?.single(this.store.bot(botId)) && !(name === "codex_tasks" && args.operation === "collectResult"))
+        throw new Error("This bot executes directly in its primary thread. New legacy worker mutations are disabled; retained history and collection remain available.");
       if (!this.runtime.ready) throw new Error("Native context recovery is still in progress; retry this same operation after readiness.");
       if (origin) this.runtime.runs.assertOrigin(origin);
       const delegates = name === "codex_tasks" && args.operation === "delegate" ||
@@ -468,6 +489,7 @@ export class CodexManager {
     });
   }
   async createWorker(bot, p, id, worktree = null) {
+    if (this.runtime.primary?.single(this.store.bot(bot.id))) throw new Error("Single-thread bots cannot create legacy workers.");
     const cwd = worktree?.path ?? (await this.rootFor(p));
     const settings = this.runtime.settings(bot, p);
     if (p.parentWorkerId) this.owned("managerWorker", p.parentWorkerId, bot.id);
@@ -1301,7 +1323,7 @@ export class CodexManager {
         )
           break;
         const bot = this.store.bot(task.botId);
-        if (bot.archived || bot.archiving || this.executionPaused(task)) continue;
+        if (bot.archived || bot.archiving || this.runtime.primary.single(bot) || this.executionPaused(task)) continue;
         const dependencies = task.dependencies.map((id) =>
           this.store.get("managerTask", id),
         );

@@ -78,10 +78,10 @@ export async function dispatchPrompt(runtime, bot, item) {
   });
   const attempt = { started: false, rejected: false };
   try {
-    const result = await runtime.send(bot, { text: item.input.filter(part => part.type === "text").map(part => part.text).join("\n"),
+    const result = runtime.primary?.single(bot) ? await runtime.primary.submitPrompt(bot, item, operationId, attempt) : await runtime.send(bot, { text: item.input.filter(part => part.type === "text").map(part => part.text).join("\n"),
       stagedInput: item.input }, clientId, null, attempt, true);
     runtime.store.transaction(() => {
-      runtime.store.put("promptQueue", { ...runtime.store.get("promptQueue", item.id), state: "delivered",
+      runtime.store.put("promptQueue", { ...runtime.store.get("promptQueue", item.id), state: result.queuedSubmission ? "native-queued" : "delivered", nativeQueueId: result.queuedSubmission?.id ?? null,
         turnId: result.turn?.id ?? result.turnId, deliveredAt: now(), error: null });
       finishLocalOperation(runtime.store, operationId, result);
       runtime.emitEvent("queue", {}, bot.id);
@@ -103,7 +103,7 @@ export async function dispatchPrompt(runtime, bot, item) {
 }
 export async function reconcilePrompt(runtime, item) {
   const operation = item.operationId && runtime.store.operation(item.operationId);
-  let result = operation?.status === "done" ? operation.result : null;
+  let result = operation?.status === "done" && (operation.result?.turn?.id || operation.result?.turnId) ? operation.result : null;
   let fullEvidence = false;
   let nextCursor = null;
   if (!result) {
@@ -114,9 +114,9 @@ export async function reconcilePrompt(runtime, item) {
   }
   runtime.store.transaction(() => {
     const current = runtime.store.get("promptQueue", item.id);
-    if (!current || !["dispatching", "uncertain", "queued"].includes(current.state)) return;
+    if (!current || !["dispatching", "uncertain", "queued", "native-queued"].includes(current.state)) return;
     runtime.store.put("promptQueue", { ...current, operationId: item.operationId,
-      state: result ? "delivered" : "uncertain", reconcileCursor: nextCursor,
+      state: result ? "delivered" : current.nativeQueueId && current.state === "native-queued" ? "native-queued" : "uncertain", reconcileCursor: nextCursor,
       reconcileAfter: new Date(Date.now() + 30000).toISOString(),
       ...(result ? { turnId: result.turn?.id ?? result.turnId, deliveredAt: now(), error: null }
         : { error: "Native execution is unconfirmed. This prompt was not resent." }) });

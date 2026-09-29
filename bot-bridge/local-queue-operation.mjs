@@ -20,7 +20,9 @@ export async function prepareLocalQueueMutation(runtime, method, botId, params, 
       // Absence is not deletion proof. Validate against native metadata before
       // reserving any legacy mutation, then keep its existing uncertain path.
       const queue = await runtime.queueList(bot);
-      if (!queue.some(entry => entry.id === params.id)) throw new Error("Queued prompt not found.");
+      const selected = queue.find(entry => entry.id === params.id);
+      if (!selected) throw new Error("Queued prompt not found.");
+      if (runtime.store.get("primaryInbox", selected.clientUserMessageId)) throw new Error("Use the schedule or peer action for this automatic intake.");
       return null;
     }
     if (item.botId !== botId) throw new Error("Queued prompt is not owned by this bot.");

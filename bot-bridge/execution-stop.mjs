@@ -25,6 +25,15 @@ export async function stopExecutions(runtime, bot, operationId, scope, runId = n
     if (scope !== "run") {
       const current = runtime.store.bot(bot.id), activity = runtime.store.get("botActivity", bot.id);
       runtime.saveBot(current, { queuePaused: true, ...(scope === "all" ? { managerPaused: true } : {}) });
+      if (runtime.primary?.single(current)) {
+        runtime.bursts.pause(bot.id);
+        for (const item of runtime.primary.openItems(bot.id))
+          if (["dispatching", "uncertain", "accepted"].includes(item.state) && !item.terminalStatus)
+            targets.push({ kind: "main", threadId: bot.threadId, turnId: item.turnId ?? null, intakeId: item.id, state: "queued" });
+        for (const item of runtime.store.list("promptQueue", bot.id))
+          if (["dispatching", "uncertain", "native-queued"].includes(item.state))
+            targets.push({ kind: "main", threadId: bot.threadId, turnId: item.turnId ?? null, promptId: item.id, operationId: item.operationId, state: "queued" });
+      }
       if (current.activeTurnId || activity?.unresolved) targets.push({ kind: "main", threadId: bot.threadId,
         turnId: current.activeTurnId ?? null, operationId: activity?.dispatchOperationId ?? null,
         activityGeneration: activity?.generation ?? null, state: "queued" });
@@ -50,17 +59,26 @@ export async function stopExecutions(runtime, bot, operationId, scope, runId = n
     for (const notice of runtime.store.list("managerNotice", bot.id)) if (matches(notice.destination) && notice.state === "queued")
       runtime.store.put("managerNotice", { ...notice, state: "held" });
     if (runPauses.length) runtime.emitEvent("schedules", {}, bot.id);
-    return runtime.store.put("executionStop", { id: operationId, botId: bot.id, scope, runId, runPauses, targets, state: "pending", createdAt: now() });
+    return runtime.store.put("executionStop", { id: operationId, botId: bot.id, scope, runId, primaryMode: scope !== "run" && Boolean(runtime.primary?.single(bot)), runPauses, targets, state: "pending", createdAt: now() });
   });
+  if (scope !== "run" && runtime.primary?.single(bot)) await runtime.primary.stop(bot, operationId);
   return reconcileStop(runtime, stop);
 }
 
 export async function reconcileStop(runtime, stop) {
   const targets = stop.targets.map(t => ({ ...t }));
+  const goalSettled = !stop.primaryMode ||
+    await runtime.primary.stoppedGoal(stop.botId, stop.id);
   for (const target of targets) {
     if (target.state === "done") continue;
+    if (!target.turnId && (target.intakeId || target.promptId)) {
+      const input = runtime.store.get(target.intakeId ? "primaryInbox" : "promptQueue", target.intakeId ?? target.promptId);
+      if (input?.withdrawal?.operationId === stop.id && input.withdrawal.removedAt) { target.state = "done"; continue; }
+      target.turnId = input?.turnId ?? null;
+      if (!target.turnId) continue;
+    }
     if (!target.turnId) {
-      if (["main", "run"].includes(target.kind) && !target.operationId) {
+      if (["main", "run"].includes(target.kind) && !target.operationId && !target.intakeId && !target.promptId) {
         const activity = runtime.store.get(target.kind === "main" ? "botActivity" : "runActivity",
           target.kind === "main" ? stop.botId : target.laneId);
         if (activity && !activity.unresolved && !activity.activeTurnId && activity.generation > target.activityGeneration) {
@@ -110,7 +128,7 @@ export async function reconcileStop(runtime, stop) {
     } catch (error) { target.state = "uncertain"; target.error = error.message; }
     runtime.store.put("executionStop", { ...stop, targets });
   }
-  const done = targets.every(t => t.state === "done");
+  const done = goalSettled && targets.every(t => t.state === "done");
   runtime.store.put("executionStop", { ...stop, targets, state: done ? "done" : "uncertain",
     reconcileAfter: new Date(Date.now() + 30000).toISOString() });
   if (!done) throw Object.assign(new Error("Stop is retained for its original executions. Some native acknowledgements or turn identities remain unconfirmed; newer turns were not targeted."), { outcome: "uncertain" });

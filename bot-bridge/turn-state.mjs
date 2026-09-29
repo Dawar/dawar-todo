@@ -124,6 +124,7 @@ export function projectTerminalTurn(runtime, botId, turn, completeEvidence = fal
       ...(turn.status === "interrupted" ? { queuePaused: true } : {}),
       error: turn.error?.message ?? null, updatedAt: now(),
     });
+    if (matches && turn.status === "interrupted") runtime.bursts?.pause(botId);
     const active = runtime.store.get("activeRun", botId);
     if (active?.turnId === turn.id) runtime.store.remove("activeRun", botId);
     const watch = runtime.store.get("turnWatch", botId);

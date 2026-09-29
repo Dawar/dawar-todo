@@ -654,7 +654,7 @@ export class BackgroundRuns {
   }
   read(bot, method, p) {
     if (method === "runs.findings") {
-      if (p.runId != null) this.lane(bot.id, p.runId);
+      if (p.runId != null) this.runtime.owned("run", p.runId, bot.id);
       const limit = p.limit ?? 25;
       if (!Number.isSafeInteger(limit) || limit < 1 || limit > 50) throw new Error("Invalid finding page size.");
       let before = Number.MAX_SAFE_INTEGER;
@@ -792,7 +792,7 @@ export class BackgroundRuns {
         });
         return;
       }
-      const run = this.store.list("run").filter(r => unreservedRun(this.store, r) && !admissionPaused(this.store, r.id) && occurrenceReady(r))
+      const run = this.store.list("run").filter(r => !this.runtime.primary && unreservedRun(this.store, r) && !admissionPaused(this.store, r.id) && occurrenceReady(r))
         .sort((a, b) => a.scheduledAt.localeCompare(b.scheduledAt)).find(r =>
           !this.store.bot(r.botId).archived && !this.store.bot(r.botId).archiving && !unfinished.some(l => l.botId === r.botId));
       if (run) try { await this.provision(this.store.bot(run.botId), run); }

@@ -1,7 +1,6 @@
 // One stdio MCP adapter per manager session. Only the service owns state/native RPC.
 import { createInterface } from "node:readline";
 import { request } from "node:http";
-import { MANAGER_TOOLS, RUN_MESSAGE_TOOL } from "./manager-tools.mjs";
 
 const [socketPath, botId] = process.argv.slice(2);
 const token = process.env.DAWAR_MANAGER_TOKEN;
@@ -14,7 +13,7 @@ const invoke = (name, args) =>
     const req = request(
       {
         socketPath,
-        path: "/tools/call",
+        path: name === "__catalog" ? "/tools/list" : "/tools/call",
         method: "POST",
         headers: {
           Authorization: `Bearer ${token}`,
@@ -36,9 +35,8 @@ const invoke = (name, args) =>
         res.on("end", () => {
           try {
             const value = JSON.parse(Buffer.concat(chunks));
-            value.error
-              ? reject(new Error(value.error))
-              : resolve(value.result);
+            if (value.error) reject(new Error(value.error));
+            else resolve(value.result);
           } catch (error) {
             reject(error);
           }
@@ -68,7 +66,7 @@ async function handle(message) {
           )
             ? message.params.protocolVersion
             : "2024-11-05",
-          capabilities: { tools: {} },
+          capabilities: { tools: { listChanged: true } },
           serverInfo: { name: "dawar-codex-manager", version: "1.0.0" },
         };
         break;
@@ -76,7 +74,7 @@ async function handle(message) {
         result = {};
         break;
       case "tools/list":
-        result = { tools: [...MANAGER_TOOLS, RUN_MESSAGE_TOOL] };
+        result = await invoke("__catalog", {});
         break;
       case "tools/call":
         try {
@@ -85,6 +83,7 @@ async function handle(message) {
             message.params.arguments ?? {},
           );
           result = { content: [{ type: "text", text: JSON.stringify(value) }] };
+          reply({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
         } catch (error) {
           result = {
             isError: true,

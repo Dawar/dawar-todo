@@ -11,6 +11,11 @@ export class Store {
       CREATE TABLE IF NOT EXISTS bots(id TEXT PRIMARY KEY, slug TEXT UNIQUE NOT NULL, thread_id TEXT UNIQUE, json TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS records(kind TEXT NOT NULL, id TEXT NOT NULL, bot_id TEXT, json TEXT NOT NULL, PRIMARY KEY(kind,id));
       CREATE INDEX IF NOT EXISTS records_bot ON records(kind,bot_id);
+      CREATE INDEX IF NOT EXISTS primary_intake_source ON records(json_extract(json,'$.sourceId'),json_extract(json,'$.state')) WHERE kind='primaryInbox';
+      CREATE INDEX IF NOT EXISTS primary_intake_state ON records(bot_id,json_extract(json,'$.state')) WHERE kind='primaryInbox';
+      CREATE INDEX IF NOT EXISTS burst_message_state ON records(bot_id,json_extract(json,'$.state')) WHERE kind='burstMessage';
+      CREATE INDEX IF NOT EXISTS peer_recipient ON records(json_extract(json,'$.recipientBotId'),json_extract(json,'$.rootId')) WHERE kind='peerRequest';
+      CREATE INDEX IF NOT EXISTS peer_exchange_request ON records(json_extract(json,'$.requestId')) WHERE kind='peerExchange';
       CREATE INDEX IF NOT EXISTS run_turn_page ON records(bot_id,json_extract(json,'$.runId'),id) WHERE kind='runTurn';
       CREATE INDEX IF NOT EXISTS run_turn_identity ON records(kind,bot_id,json_extract(json,'$.turnId')) WHERE kind IN ('run','runTurn');
       CREATE UNIQUE INDEX IF NOT EXISTS run_lane_thread ON records(json_extract(json,'$.threadId')) WHERE kind='runLane';
@@ -27,6 +32,7 @@ export class Store {
         json_extract(json,'$.botId'),json_extract(json,'$.params.key'))
         WHERE json_extract(json,'$.method')='requests.respond';
       CREATE TABLE IF NOT EXISTS events(seq INTEGER PRIMARY KEY AUTOINCREMENT, json TEXT NOT NULL);
+      CREATE INDEX IF NOT EXISTS events_bot_cursor ON events(json_extract(json,'$.botId'),seq);
       CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, json TEXT NOT NULL);`);
   }
   bots() {

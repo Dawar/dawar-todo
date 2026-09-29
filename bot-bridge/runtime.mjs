@@ -1,3 +1,8 @@
+import { initialPreferences, preferencePatch } from "./bot-preferences.mjs";
+import { MessageBursts } from "./message-bursts.mjs";
+import { PeerInbox, PEER_TOOL } from "./peer-inbox.mjs";
+import { acceptSingleThreadOperation } from "./single-thread-operations.mjs";
+import { PrimaryExecution, DIRECT_INSTRUCTIONS, WORK_TOOL } from "./primary-execution.mjs";
 import { AnswerExecutions } from "./answer-execution.mjs";
 import { BackgroundRuns } from "./background-runs.mjs";
 import { ScheduleDecisions } from "./schedule-decisions.mjs";
@@ -30,7 +35,7 @@ import {
 import { join, basename, resolve } from "node:path";
 import { constants } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
-import { MANAGER_INSTRUCTIONS, RUN_MESSAGE_TOOL } from "./manager-tools.mjs";
+import { RUN_MESSAGE_TOOL } from "./manager-tools.mjs";
 import {
   BOT_INSTRUCTIONS,
   cleanName,
@@ -65,6 +70,7 @@ const usageMetric = (groups, field) => {
     reportedGroups: values.length };
 };
 const READ_METHODS = new Set([
+  "work.read", "inbox.list", "goals.read", "bursts.read", "bursts.typing", "peers.directory", "peers.read", "peers.list",
   "snapshot",
   "history",
   "history.page",
@@ -108,6 +114,8 @@ const schema = (properties, required = []) => ({
 });
 const str = { type: "string" };
 export const dynamicTools = [
+  { type: "function", ...WORK_TOOL },
+  { type: "function", ...PEER_TOOL },
   { type: "function", ...RUN_MESSAGE_TOOL },
   {
     type: "function",
@@ -165,6 +173,9 @@ export class BotRuntime extends EventEmitter {
       defaultTimeZone: store.meta("timeZone") ?? defaultTimeZone,
     });
     this.epoch = randomUUID();
+    this.primary = new PrimaryExecution(this);
+    this.peers = new PeerInbox(this);
+    this.bursts = new MessageBursts(this);
     this.plans = new PlanLifecycle(this);
     this.answers = new AnswerExecutions(this, validateResponse);
     this.runs = new BackgroundRuns(this, dynamicTools, validateResponse, INTERACTIONS);
@@ -227,6 +238,7 @@ export class BotRuntime extends EventEmitter {
     const next = this.store.saveBot({ ...bot, ...changes,
       ...(changes.queuePaused === true ? { queuePauseRevision: (bot.queuePauseRevision ?? 0) + 1 } : {}) });
     this.emitEvent("bot", next, next.id);
+    if (this.primary && ["activeTurnId", "status", "queuePaused", "executionMode"].some(key => Object.hasOwn(changes, key))) this.primary.publish(next.id);
     return next;
   }
   projectTerminalTurn(botId, turn, completeEvidence = false) {
@@ -290,7 +302,11 @@ export class BotRuntime extends EventEmitter {
       !preferred.serviceTiers?.some((tier) => tier.id === this.defaults.serviceTier)
     )
       throw new Error("The configured Bots model, effort, or Fast tier is unavailable.");
-    for (const bot of this.store.bots()) {
+    for (let bot of this.store.bots()) {
+      if (!bot.avatar || bot.burstQuietSeconds === undefined) {
+        const defaults = initialPreferences();
+        bot = this.saveBot(bot, { avatar: bot.avatar ?? defaults.avatar, burstQuietSeconds: bot.burstQuietSeconds ?? defaults.burstQuietSeconds });
+      }
       const activity = captureActivity(this, bot.id);
       if (!bot.threadId)
         try {
@@ -469,7 +485,8 @@ export class BotRuntime extends EventEmitter {
   }
   snapshot() {
     return {
-      capabilities: { backgroundRunLanes: 1, scheduleDecisions: 1 },
+      capabilities: { backgroundRunLanes: 1, scheduleDecisions: 1, singleThreadExecution: 1, peerInbox: 1, nativeGoals: 1, messageBursts: 1 },
+      workByBot: this.store.bots().map(bot => this.primary.work(bot)),
       ...this.runs.snapshot(),
       bots: this.store
         .bots()
@@ -526,7 +543,7 @@ export class BotRuntime extends EventEmitter {
     const laneKey = resumeRun ? resumeRun.laneId ?? `run-preparation:${resumeRun.id}` :
       method.startsWith("runs.") && params.runId ? this.runs.lane(botId, params.runId).id : runRequest?.laneId;
     return this.lock(laneKey ?? botId ?? "create", async () => {
-      const inputMutation = ["turn.send", "requests.respond", "queue.add", "queue.update", "queue.delete", "queue.reorder"].includes(method);
+      const inputMutation = ["turn.send", "requests.respond", "queue.add", "queue.update", "queue.delete", "queue.reorder", "goals.set", "goals.clear"].includes(method);
       const lifecycleMutation = ["turn.interrupt", "runs.interrupt", "bots.archive", "bots.restore"].includes(method);
       const attempt = inputMutation ? { started: false, rejected: false } : null;
       const existing = this.store.operation(operationId);
@@ -544,6 +561,8 @@ export class BotRuntime extends EventEmitter {
             "This operation may already have run. Refresh the conversation before retrying.",
         ), { outcome: this.store.operation(operationId).outcome === "rejected" ? "rejected" : "uncertain" });
       }
+      const single = await acceptSingleThreadOperation(this, { method, botId, params, operationId }, fingerprint);
+      if (single) return single.result;
       const local = await acceptLocalQueueOperation(this, { method, botId, params, operationId }, fingerprint);
       if (local) return local.result;
       if (["runs.send", "runs.resume", "runs.decide"].includes(method)) {
@@ -715,6 +734,17 @@ export class BotRuntime extends EventEmitter {
     if (method === "artifacts.list") return listArtifacts(this, botId, p);
     const bot = this.store.bot(String(botId));
     switch (method) {
+      case "work.read": return this.primary.work(bot);
+      case "inbox.list": return this.primary.list(bot, p);
+      case "work.resume": throw new Error("Local acceptance requires handle().");
+      case "bursts.read": return this.bursts.read(bot);
+      case "bursts.typing": return this.bursts.typing(bot, p);
+      case "peers.directory": return this.peers.directory();
+      case "peers.list": return this.peers.list(bot, p);
+      case "peers.read": return this.peers.read(bot, p);
+      case "goals.read": return this.primary.goal(bot, "get");
+      case "goals.set": return this.primary.goal(bot, "set", p, attempt, id);
+      case "goals.clear": return this.primary.goal(bot, "clear", {}, attempt, id);
       case "artifacts.preview":
         return readArtifactPreview(this, bot, p);
       case "artifacts.index":
@@ -786,7 +816,7 @@ export class BotRuntime extends EventEmitter {
       }
       case "queue.list": {
         const queue = await this.queueList(bot);
-        return queue.map((item) => this.publicQueued(bot, item));
+        return queue.filter(item => !this.store.get("primaryInbox", item.clientUserMessageId)).map((item) => this.publicQueued(bot, item));
       }
       case "queue.add":
       case "queue.resume":
@@ -851,9 +881,9 @@ export class BotRuntime extends EventEmitter {
           sandbox: "danger-full-access",
           ephemeral: false,
           developerInstructions: this.manager
-            ? `${BOT_INSTRUCTIONS}\n\n${MANAGER_INSTRUCTIONS}`
+            ? `${BOT_INSTRUCTIONS}\n\n${DIRECT_INSTRUCTIONS}`
             : BOT_INSTRUCTIONS,
-          ...(this.manager ? { config: this.manager.config(bot) } : {}),
+          config: { ...(this.manager ? this.manager.config(bot) : {}), ...(this.primary.single(bot) ? { "features.multi_agent": false } : {}) },
           dynamicTools,
           serviceName: "dawar-todo-bots",
         });
@@ -883,7 +913,10 @@ export class BotRuntime extends EventEmitter {
         return this.send(bot, p, id, run, attempt);
       }
       case "turn.interrupt": {
-        return this.lock(`stop:${id}`, () => stopExecutions(this, bot, id, p.scope ?? "all"));
+        return this.lock(`stop:${id}`, async () => {
+          if (!this.primary.single(bot)) this.bursts.pause(bot.id);
+          return stopExecutions(this, this.store.bot(bot.id), id, p.scope ?? (this.primary.single(bot) ? "main" : "all"));
+        });
       }
       case "thread.compact": {
         await this.load(bot);
@@ -1053,6 +1086,7 @@ export class BotRuntime extends EventEmitter {
       effort: null,
       serviceTier: null,
       mode: "default",
+      executionMode: "single-thread", migrationReason: null, ...initialPreferences(),
       preview: "",
       updatedAt: now(),
       lastReadAt: now(),
@@ -1069,10 +1103,11 @@ export class BotRuntime extends EventEmitter {
       sandbox: "danger-full-access",
       ephemeral: false,
       developerInstructions: this.manager
-        ? `${BOT_INSTRUCTIONS}\n\n${MANAGER_INSTRUCTIONS}`
+        ? `${BOT_INSTRUCTIONS}\n\n${DIRECT_INSTRUCTIONS}`
         : BOT_INSTRUCTIONS,
       config: {
         "features.fast_mode": true,
+        ...(this.primary.single(bot) ? { "features.multi_agent": false } : {}),
         ...(this.manager ? this.manager.config(bot) : {}),
       },
       dynamicTools,
@@ -1141,10 +1176,11 @@ export class BotRuntime extends EventEmitter {
         approvalPolicy: "never",
         sandbox: "danger-full-access",
         developerInstructions: this.manager
-          ? `${BOT_INSTRUCTIONS}\n\n${MANAGER_INSTRUCTIONS}`
+          ? `${BOT_INSTRUCTIONS}\n\n${DIRECT_INSTRUCTIONS}`
           : BOT_INSTRUCTIONS,
         config: {
           "features.fast_mode": true,
+          ...(this.primary.single(bot) ? { "features.multi_agent": false } : {}),
           ...(this.manager ? this.manager.config(bot) : {}),
         },
         excludeTurns: true,
@@ -1161,6 +1197,12 @@ export class BotRuntime extends EventEmitter {
     };
   }
   async update(bot, p, operationId) {
+    let preferences;
+    try { preferences = preferencePatch(bot, p); } catch (error) { error.definite = true; throw error; }
+    if (p.mode === "plan" && this.primary.single(bot)) {
+      const { goal } = await this.primary.goal(bot, "get");
+      if (goal?.status === "active") throw Object.assign(new Error("Pause the active native goal before enabling Plan."), { definite: true });
+    }
     if (p.mode === "plan" && (await this.nativeQueueList(bot)).length)
       throw Object.assign(new Error("Let the legacy native queue finish before enabling Plan. New queued prompts are staged safely."), { definite: true });
     const name = p.name === undefined ? bot.name : cleanName(p.name);
@@ -1218,7 +1260,7 @@ export class BotRuntime extends EventEmitter {
     return this.store.transaction(() => {
       if (p.mode !== undefined) for (const record of this.store.list("planExecution", bot.id))
         if (record.state === "blocked") this.store.put("planExecution", { ...record, state: "superseded", finishedAt: now() });
-      return this.saveBot(this.store.bot(bot.id), { name, model, effort, serviceTier, mode: next.mode,
+      return this.saveBot(this.store.bot(bot.id), { name, model, effort, serviceTier, mode: next.mode, ...preferences,
         ...(p.mode !== undefined ? { modeIntentId: operationId ?? randomUUID() } : {}) });
     });
   }
@@ -1242,6 +1284,9 @@ export class BotRuntime extends EventEmitter {
   async archive(bot, archived, operationId) {
     if (archived && this.store.list("runAdmission", bot.id).some(a => Number.isSafeInteger(a.preparingRevision)))
       throw new Error("Run preparation is still returning to its admission fence. Retry archival after it settles; its prompt was retained.");
+    if (archived && this.primary.single(bot) && (this.activityUnresolved(bot.id) || this.primary.openItems(bot.id).some(i => ["dispatching", "uncertain", "accepted"].includes(i.state)) ||
+        this.store.list("promptQueue", bot.id).some(i => ["dispatching", "uncertain", "native-queued"].includes(i.state)) || this.bursts.batches(bot.id).some(b => ["dispatching", "uncertain"].includes(b.state))))
+      throw new Error("Resolve current native intake before archiving; retained input was not removed.");
     if (archived && (this.store.executionMetadata("runLane", bot.id).some(l => this.runs.unfinished(l)) ||
       this.store.list("executionStop", bot.id).some(s => s.state !== "done") ||
       this.store.list("managerTask", bot.id).some(t => !["completed", "failed", "interrupted", "cancelled"].includes(t.state))))
@@ -1254,6 +1299,7 @@ export class BotRuntime extends EventEmitter {
     if (!archive) archive = this.store.transaction(() => {
       if (this.store.list("executionArchive", bot.id).some(a => a.state !== "done")) throw new Error("An earlier archive/restore operation still needs exact native evidence.");
       this.saveBot(this.store.bot(bot.id), { archiving: true });
+      if (archived) this.bursts.pause(bot.id);
       return this.store.put("executionArchive", { id: operationId, botId: bot.id, archived, state: "pending",
         targets: [...new Set([bot.threadId, ...this.store.executionMetadata("runLane", bot.id).map(l => l.threadId)].filter(Boolean))]
           .map(threadId => ({ threadId, state: "queued" })), createdAt: now() });
@@ -1295,20 +1341,20 @@ export class BotRuntime extends EventEmitter {
       return this.saveBot(this.store.bot(bot.id), { archived, archiving: false, status: "idle" });
     });
   }
-  async send(bot, p, id, run = null, attempt = null, staged = false, answer = null) {
+  async send(bot, p, id, run = null, attempt = null, staged = false, answer = null, acceptedInput = null) {
     this.answers.assertPrepared(bot, id, answer);
     if (bot.archived || bot.archiving) throw new Error("Restore this bot or finish its retained archive operation first.");
     if (!this.ready) throw new Error("Codex is not ready.");
     if (bot.managerPaused && !id.startsWith("manager-notice:"))
       bot = this.saveBot(bot, { managerPaused: false });
-    const input = staged ? p.stagedInput : await this.messageInput(bot, p);
+    const input = acceptedInput ?? (staged ? p.stagedInput : await this.messageInput(bot, p));
     const text = String(p.text ?? "").trim();
     await this.load(bot);
     const additionalContext = await profileContext(bot);
     if (this.manager)
       additionalContext.managerPolicy = {
         kind: "application",
-        value: MANAGER_INSTRUCTIONS,
+        value: DIRECT_INSTRUCTIONS,
       };
     if (run)
       additionalContext.scheduledTask = {
@@ -1321,7 +1367,7 @@ export class BotRuntime extends EventEmitter {
       throw new Error("Scheduled execution is unconfirmed. Queue your message while its native state is reconciled.");
     if (bot.activeTurnId) {
       if (run || staged) throw new Error("Bot is busy.");
-      if (this.scheduledContext(bot.id, bot.activeTurnId))
+      if (!this.primary.single(bot) && this.scheduledContext(bot.id, bot.activeTurnId))
         throw new Error("A scheduled run is using this conversation. Use Queue next to keep your message separate; your draft is retained.");
       const params = { threadId: bot.threadId, expectedTurnId: bot.activeTurnId,
         clientUserMessageId: id, input, additionalContext };
@@ -1501,6 +1547,7 @@ export class BotRuntime extends EventEmitter {
   }
   scheduledUncertain(botId, excludeOperationId = null) {
     if (this.activityUnresolved(botId)) return true;
+    if (this.primary.single(this.store.bot(botId))) return this.primary.openItems(botId).some(i => ["dispatching", "uncertain"].includes(i.state) && i.id !== excludeOperationId);
     if (this.store.list("run", botId).some(run => run.executionLane !== "run-v1" && ["starting", "uncertain"].includes(run.status) &&
         (run.operationId ?? `schedule:${run.id}`) !== excludeOperationId &&
         (!run.turnId || this.store.operation(run.operationId ?? `schedule:${run.id}`)?.status !== "done"))) return true;
@@ -1569,7 +1616,7 @@ export class BotRuntime extends EventEmitter {
       throw new Error("Legacy native queue inheritance requires review of the retained native-reset receipt. Managed staged turns use explicit mode.");
     // queue/start takes only a submission ID; its turn inherits thread settings.
     const activity = captureActivity(this, bot.id);
-    await this.syncQueueSettings(bot);
+    await this.syncQueueSettings(this.store.get("primaryInbox", item.clientUserMessageId) ? { ...bot, mode: "default" } : bot);
     if (!activityUnchanged(this, bot.id, activity) || this.activityUnresolved(bot.id) || this.store.bot(bot.id).activeTurnId)
       throw new Error("Native activity changed before the legacy queued start.");
     const dispatch = beginTurnDispatch(this, bot.id, item.id);
@@ -1751,6 +1798,7 @@ export class BotRuntime extends EventEmitter {
       return;
     }
     if (message.method === "item/completed" && !usableTurnId(p.turnId)) return;
+    this.primary.notification(bot, message);
     if (message.method !== "turn/completed") this.plans.note(bot.id, message);
     if (message.method === "item/completed") {
       rememberInputProvenance(this, bot, p.turnId, p.item);
@@ -1867,7 +1915,7 @@ export class BotRuntime extends EventEmitter {
       await reconcileActiveTurns(this);
       let recovered = 0;
       for (const item of this.store.list("promptQueue")) {
-        if (!["dispatching", "uncertain"].includes(item.state) || this.locks.has(item.botId) ||
+        if (!["dispatching", "uncertain", "native-queued"].includes(item.state) || this.locks.has(item.botId) ||
             Date.parse(item.reconcileAfter ?? "") > Date.now() || recovered >= 2) continue;
         recovered++;
         await this.lock(item.botId, () => reconcilePrompt(this, item)).catch(error => {
@@ -1893,6 +1941,8 @@ export class BotRuntime extends EventEmitter {
       this.scheduleDecisions.refresh();
       if (created.length) this.emitEvent("schedules", {});
       void this.runs.tick().catch(error => this.emit("fault", error));
+      await this.bursts.tick();
+      await this.primary.tick();
       for (const bot of this.store.bots()) {
         // Native 0.156.1 also skips interrupted thread idle and wake events.
         // Keep the bridge pause across restart until queue.resume is requested.
@@ -1965,10 +2015,21 @@ export class BotRuntime extends EventEmitter {
       }
     } finally { this.tickRunning = false; }
   }
+  async peerTool(bot, args) {
+    const { operation, operationId, ...params } = args ?? {};
+    if (!["directory", "list", "read", "send", "reply", "cancel"].includes(operation)) throw new Error("Unknown peer operation.");
+    if (["send", "reply", "cancel"].includes(operation) && (this.activityUnresolved(bot.id) || !this.store.bot(bot.id).activeTurnId)) throw new Error("Peer tool attribution waits for confirmed current native activity.");
+    return this.handle({ method: `peers.${operation}`, botId: bot.id, params, operationId });
+  }
   async dynamicTool(bot, p, origin = null) {
     const args =
       typeof p.arguments === "string" ? JSON.parse(p.arguments) : p.arguments;
     switch (p.tool) {
+      case "bots_work": { if (origin) throw new Error("Progress belongs to the primary named bot."); return this.primary.progress(bot, args); }
+      case "bots_peers": {
+        if (origin) throw new Error("Named peer tools belong to the primary thread.");
+        return this.peerTool(bot, args);
+      }
       case "bots_run_message": {
         if (typeof args.operationId !== "string" || !/^[a-zA-Z0-9:_-]{10,180}$/.test(args.operationId)) throw new Error("A stable run message operationId is required.");
         const source = origin ?? { botId: bot.id, threadId: bot.threadId, turnId: p.turnId, callId: p.callId, authority: "native-tool" };
@@ -2001,8 +2062,17 @@ export class BotRuntime extends EventEmitter {
           .slice(0, 1000);
         if (!key || !summary)
           throw new Error("Provide a finding key and summary.");
-        this.notify(bot, `finding:${key}`, summary);
-        return { reported: true };
+        return this.store.transaction(() => {
+          const findingId = createHash("sha256").update(`${bot.id}:${active.runId}:${key}`).digest("hex");
+          let finding = this.store.get("runFinding", findingId);
+          if (!finding) {
+            finding = this.store.put("runFinding", { id: findingId, botId: bot.id, laneId: `main:${bot.id}`, runId: active.runId,
+              threadId: bot.threadId, turnId: p.turnId, key, summary, createdAt: now() });
+            this.notify(bot, `finding:${key}`, summary);
+            this.emitEvent("run.finding", finding, bot.id);
+          }
+          return { reported: true, finding };
+        });
       }
       case "bots_publish_artifact":
         return this.publishArtifact(bot, args, { key: origin ? `publish:${p.threadId}:${p.callId}` : `publish:${p.callId}`, turnId: p.turnId, itemId: p.callId, ...(origin ?? {}) });

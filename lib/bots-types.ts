@@ -3,7 +3,13 @@ import type { Thread } from "./codex-protocol/v2/Thread";
 import type { Model } from "./codex-protocol/v2/Model";
 import type { QueuedSubmission } from "./codex-protocol/v2/QueuedSubmission";
 
+export type BotAvatar = { version: 1; shape: "circle" | "square" | "triangle" | "cloud" | "star" | "hexagon"; color: string; seed: string };
+export type BotBurstQuietSeconds = 0 | 3 | 8 | 15;
 export type Bot = {
+  executionMode?: "legacy" | "single-thread";
+  migrationReason?: string | null;
+  avatar?: BotAvatar;
+  burstQuietSeconds?: BotBurstQuietSeconds;
   id: string;
   name: string;
   purpose: string;
@@ -45,7 +51,7 @@ export type BotRunFinding = BotRunContext & { id: string; botId: string; turnId:
 export type BotRunStateEvent = { runId: string; laneId?: string | null; threadId?: string | null; run: BotRun; background: Omit<BotBackground, "botId"> & { botId?: string }; historyRefresh?: unknown };
 export type BotRun = {
   decision?: BotRunDecision;
-  executionLane?: "main-legacy" | "run-v1";
+  executionLane?: "main-legacy" | "main-single" | "run-v1";
   laneId?: string | null; threadId?: string | null;
   activity?: { state: "provisioning" | "queued" | "running" | "waiting-input" | "waiting-workers" | "idle" | "uncertain" | "paused"; activeTurnId: string | null; waitReason: string | null; queuedCount?: number; pendingCount?: number };
   id: string;
@@ -176,7 +182,8 @@ export type BotRequest = {
 export type BotRunRequestEvent = BotRequest & BotRunContext;
 export type BotRunRequestResolvedEvent = BotRunContext & { key: string };
 export type BotSnapshot = {
-  capabilities?: { backgroundRunLanes?: 1; scheduleDecisions?: 1 };
+  capabilities?: { backgroundRunLanes?: 1; scheduleDecisions?: 1; singleThreadExecution?: 1; peerInbox?: 1; nativeGoals?: 1; messageBursts?: 1 };
+  workByBot?: BotWorkState[];
   backgroundByBot?: BotBackground[];
   /** Existing runtime metadata prioritizes unfinished runs over recent history. */
   backgroundRuns?: BotRun[];
@@ -239,3 +246,22 @@ export type BridgeResponse = {
   error?: string;
   outcome?: "rejected" | "uncertain";
 };
+
+export type BotWorkState = {
+  botId: string; executionMode: "legacy" | "single-thread";
+  state: "ready" | "working" | "waiting" | "needs-input" | "paused" | "unconfirmed";
+  activeTurnId: string | null; paused: boolean; summary: string | null; remaining: string | null; waitingFor: string[];
+  goal: import("./codex-protocol/v2/ThreadGoal").ThreadGoal | null; goalObservedAt: string | null; migrationReason: string | null;
+};
+export type BotInboxItem = { id: string; botId: string; kind: "schedule" | "peer"; sourceId: string; summary: string;
+  state: "queued" | "dispatching" | "accepted" | "uncertain" | "cancelled" | "failed"; createdAt: string; turnId: string | null; waitReason: string | null };
+export type BotPeerRequest = { id: string; rootId: string; parentId: string | null; senderBotId: string; recipientBotId: string;
+  kind: "message" | "question" | "task"; summary: string; state: "queued" | "working" | "waiting" | "completed" | "cancelled" | "failed" | "delivery-unconfirmed";
+  round: number; roundLimit: 6; createdAt: string; updatedAt: string; turnId: string | null; result: string | null; cancelRequested: boolean };
+export type BotPeerExchange = { id: string; requestId: string; botId: string; kind: "request" | "reply" | "cancel"; text: string; attachmentIds: string[]; createdAt: string; round: number };
+export type BotPeerPage = { requests: BotPeerRequest[]; nextCursor: string | null };
+export type BotBurstMessage = { id: string; botId: string; text: string; attachmentIds: string[]; createdAt: string;
+  state: "pending" | "dispatching" | "sent" | "uncertain" | "failed"; batchId: string | null; turnId: string | null };
+export type BotBurst = { id: string; botId: string; state: "pending" | "paused" | "dispatching" | "sent" | "uncertain" | "failed";
+  messageIds: string[]; dueAt: string | null; operationId: string | null; turnId: string | null; error: string | null };
+export type BotBurstState = { messages: BotBurstMessage[]; burst: BotBurst | null; batches?: BotBurst[] };

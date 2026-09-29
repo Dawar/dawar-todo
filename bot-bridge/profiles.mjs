@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile, lstat, realpath } from "node:fs/promises";
-import { resolve, join, relative, isAbsolute } from "node:path";
+import { join, relative, isAbsolute } from "node:path";
 import { MANAGER_INSTRUCTIONS } from "./manager-tools.mjs";
+import { DIRECT_INSTRUCTIONS } from "./primary-execution.mjs";
 
 export const PROFILE_FILES = [
   "SOUL.md",
@@ -40,7 +41,7 @@ export async function initializeProfile(bot) {
     "USER.md":
       "# User\n\nRecord only facts and preferences the human has shared.\n",
     "MEMORY.md": "# Memory\n\nStore useful, verified knowledge here.\n",
-    "AGENTS.md": `# Operating instructions\n\n${BOT_INSTRUCTIONS}\n\n${MANAGER_INSTRUCTIONS}\n\nYour workspace is ${bot.cwd}. Keep deliverables here where practical. Never overwrite or delete another bot’s workspace without an explicit request.\n`,
+    "AGENTS.md": `# Operating instructions\n\n${BOT_INSTRUCTIONS}\n\n${DIRECT_INSTRUCTIONS}\n\nYour workspace is ${bot.cwd}. Keep deliverables here where practical. Never overwrite or delete another bot’s workspace without an explicit request.\n`,
     "TOOLS.md":
       "# Tools\n\nUse the tools exposed by your Codex session.\n\n- bots_schedule_list: inspect schedules and recent runs.\n- bots_schedule_save: create or update a one-time or recurring schedule.\n- bots_schedule_delete: cancel a schedule.\n- bots_report_result: notify Dawar of a meaningful finding during a scheduled run.\n- bots_publish_artifact: make a local file available to download in the conversation.\n\nDo not place credentials in these files.\n",
   };
@@ -60,7 +61,7 @@ export async function profileContext(bot) {
       const info = await lstat(path);
       if (!info.isFile() || info.isSymbolicLink() || info.size > 128 * 1024)
         throw new Error(`${file} must be a regular file under 128 KB.`);
-      parts.push(`## ${file}\n${await readFile(path, "utf8")}`);
+      parts.push(`## ${file}\n${(await readFile(path, "utf8")).replace(MANAGER_INSTRUCTIONS, DIRECT_INSTRUCTIONS)}`);
     } catch (e) {
       if (e.code === "ENOENT")
         parts.push(
