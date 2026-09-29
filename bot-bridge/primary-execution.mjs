@@ -128,7 +128,7 @@ export class PrimaryExecution {
   list(bot, p = {}) {
     const limit = p.limit ?? 30;
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new Error('Invalid inbox page size.');
-    const rows = this.store.db.prepare("SELECT rowid,json_remove(json,'$.text','$.input') AS json FROM records WHERE kind='primaryInbox' AND bot_id=? AND rowid>? ORDER BY rowid LIMIT ?")
+    const rows = this.store.db.prepare("SELECT rowid,json_remove(json,'$.text','$.input') AS json FROM records WHERE kind='primaryInbox' AND bot_id=? AND json_extract(json,'$.state') NOT IN ('cancelled','failed') AND json_extract(json,'$.terminalStatus') IS NULL AND rowid>? ORDER BY rowid LIMIT ?")
       .all(bot.id, this.cursor(p.cursor), limit + 1);
     return { items: rows.slice(0, limit).map(r => this.publicItem(JSON.parse(r.json))), nextCursor: rows.length > limit ? String(rows[limit - 1].rowid) : null };
   }
