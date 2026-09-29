@@ -47,7 +47,7 @@ export class PeerInbox {
     if (!origin || origin.botId !== bot.id || !['native-tool', 'authenticated-bot-mcp', 'owner'].includes(origin.authority)) throw new Error('Peer caller authority is missing.');
     if (origin.authority !== 'native-tool') {
       if (origin.threadId !== null || origin.turnId !== null || origin.callId !== null) throw new Error('Bot-only authentication cannot assert a native caller.');
-      if (origin.authority === 'authenticated-bot-mcp' && !activityUnchanged(this.runtime, bot.id, origin)) throw new Error('Bot admission context changed while the peer action waited. No new request was accepted.');
+      if (origin.authority === 'authenticated-bot-mcp' && (this.runtime.activityUnresolved(bot.id) || !activityUnchanged(this.runtime, bot.id, origin))) throw new Error('Bot admission context changed while the peer action waited. No new request was accepted.');
       return;
     }
     if (origin.threadId !== bot.threadId || typeof origin.callId !== 'string' || !origin.callId.trim() ||
