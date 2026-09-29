@@ -22,7 +22,7 @@ export class PrimaryExecution {
     const inbox = this.openItems(bot.id);
     const unconfirmed = this.runtime.activityUnresolved(bot.id) || inbox.some(i => ['dispatching', 'uncertain'].includes(i.state));
     return { botId: bot.id, executionMode: bot.executionMode ?? 'legacy',
-      state: bot.queuePaused ? 'paused' : this.store.list('pending', bot.id).length ? 'needs-input' : bot.activeTurnId ? 'working' : unconfirmed ? 'unconfirmed' : progress?.waitingFor?.length ? 'waiting' : 'ready',
+      state: bot.queuePaused ? 'paused' : this.store.list('pending', bot.id).length ? 'needs-input' : bot.activeTurnId ? 'working' : unconfirmed ? 'unconfirmed' : progress?.waitingFor?.length || goal?.goal?.status === 'blocked' ? 'waiting' : goal?.goal?.status === 'active' ? 'working' : 'ready',
       activeTurnId: bot.activeTurnId, paused: !!bot.queuePaused, summary: progress?.summary ?? goal?.goal?.objective ?? null,
       remaining: progress?.remaining ?? null, waitingFor: progress?.waitingFor ?? [], goal: goal?.goal ?? null,
       goalObservedAt: goal?.observedAt ?? null, migrationReason: bot.migrationReason ?? null };

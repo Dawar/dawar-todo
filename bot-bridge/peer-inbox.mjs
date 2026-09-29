@@ -22,7 +22,7 @@ export class PeerInbox {
   }
   public(r) { const { id, rootId, parentId, senderBotId, recipientBotId, kind, summary, state, round, createdAt, updatedAt, turnId, result, cancelRequested } = r;
     const unknown = this.store.db.prepare("SELECT 1 FROM records WHERE kind='primaryInbox' AND json_extract(json,'$.sourceId')=? AND json_extract(json,'$.state') IN ('dispatching','uncertain') LIMIT 1").get(id);
-    return { id, rootId, parentId, senderBotId, recipientBotId, kind, summary, state: unknown ? 'delivery-unconfirmed' : state, round, roundLimit: 6, createdAt, updatedAt, turnId, result, cancelRequested }; }
+    return { id, rootId, parentId, senderBotId, recipientBotId, kind, summary, state: unknown ? 'delivery-unconfirmed' : state, round: this.store.get('peerRoot', rootId)?.count ?? round, roundLimit: 6, createdAt, updatedAt, turnId, result, cancelRequested }; }
   publish(r) { for (const botId of [r.senderBotId, r.recipientBotId]) this.runtime.emitEvent('peer', { request: this.public(r) }, botId); }
   read(bot, p) {
     const request = this.owned(bot, p.id);
@@ -135,7 +135,17 @@ export class PeerInbox {
   delivered(intake, turn) {
     const r = this.store.get('peerRequest', intake.sourceId);
     if (!r) return;
-    if (intake.botId !== r.recipientBotId || intake.id !== r.id || terminal(r)) { this.publish(r); return; }
+    if (intake.botId !== r.recipientBotId || intake.id !== r.id || terminal(r)) {
+      if (intake.botId === r.senderBotId && terminal(r)) {
+        const progress = this.store.get('botWork', r.senderBotId);
+        const stillWaiting = this.store.list('peerRequest', r.senderBotId).some(other => other.recipientBotId === r.recipientBotId && !terminal(other));
+        if (progress?.waitingFor?.includes(r.recipientBotId) && !stillWaiting) {
+          this.store.put('botWork', { ...progress, waitingFor: progress.waitingFor.filter(id => id !== r.recipientBotId), updatedAt: now() });
+          this.runtime.primary.publish(r.senderBotId);
+        }
+      }
+      this.publish(r); return;
+    }
     const state = turn.status === 'failed' ? 'failed' : turn.status === 'interrupted' ? 'waiting' : turn.status === 'completed' ? 'waiting' : 'working';
     const next = this.store.put('peerRequest', { ...r, state, turnId: turn.id, updatedAt: now() }); this.publish(next);
   }
