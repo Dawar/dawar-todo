@@ -1,8 +1,9 @@
 "use client";
-import { Activity, useEffect, useId, useRef, type ReactNode } from "react";
+import { Activity, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { Clock3, FolderOpen, History, ListOrdered, Settings2, X } from "lucide-react";
 import type { Bot } from "../../lib/bots-types";
 import "./bot-details.css";
+import { HistoryScrollContext } from "./history-scroll-context";
 
 export type BotDetailsSection = "next" | "schedules" | "files" | "history" | "settings";
 const sections = [
@@ -20,6 +21,7 @@ export function BotDetailsDrawer({ bot, section, onSection, onClose, children }:
   onClose: () => void; children: Record<BotDetailsSection, ReactNode>;
 }) {
   const dialog = useRef<HTMLElement>(null), id = useId();
+  const [historyScroll, setHistoryScroll] = useState<HTMLDivElement | null>(null);
   useEffect(() => {
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const element = dialog.current;
@@ -54,7 +56,7 @@ export function BotDetailsDrawer({ bot, section, onSection, onClose, children }:
           }}><Icon size={17} aria-hidden="true" /><span>{label}</span></button>)}
       </div>
       {sections.map(({ id: value }) => <Activity key={value} mode={section === value ? "visible" : "hidden"}>
-        <div className={`bots-details-panel is-${value}`} role="tabpanel" id={`${id}-${value}-panel`} aria-labelledby={`${id}-${value}`} tabIndex={0}>{children[value]}</div>
+        <div ref={value === "history" ? setHistoryScroll : undefined} className={`bots-details-panel is-${value}`} role="tabpanel" id={`${id}-${value}-panel`} aria-labelledby={`${id}-${value}`} tabIndex={0}>{value === "history" ? <HistoryScrollContext value={historyScroll}>{children[value]}</HistoryScrollContext> : children[value]}</div>
       </Activity>)}
     </section>
   </div>;

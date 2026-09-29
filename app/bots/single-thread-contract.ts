@@ -12,7 +12,7 @@ export type PeerRequest = { id: string; rootId: string; parentId: string | null;
 export type PeerExchange = { id: string; requestId: string; botId: string; kind: 'request' | 'reply' | 'cancel'; text: string; attachmentIds: string[]; createdAt: string; round: number };
 export type BurstMessage = { id: string; botId: string; text: string; attachmentIds: string[]; createdAt: string; state: 'pending' | 'dispatching' | 'sent' | 'uncertain' | 'failed'; batchId: string | null; turnId: string | null };
 export type Burst = { id: string; botId: string; state: 'pending' | 'paused' | 'dispatching' | 'sent' | 'uncertain' | 'failed'; messageIds: string[]; dueAt: string | null; operationId: string | null; turnId: string | null; error: string | null };
-export type BurstState = { messages: BurstMessage[]; burst: Burst | null };
+export type BurstState = { messages: BurstMessage[]; burst: Burst | null; batches?: Burst[] };
 export type BotSnapshot = Omit<LegacySnapshot, 'bots' | 'capabilities'> & { bots: Bot[]; workByBot?: WorkState[]; capabilities?: LegacySnapshot['capabilities'] & { singleThreadExecution?: 1; peerInbox?: 1; nativeGoals?: 1; messageBursts?: 1 } };
 export type BotOperations = Omit<LegacyOperations, 'bots.update'> & {
   'bots.update': { params: LegacyOperations['bots.update']['params'] & { avatar?: Pick<AvatarIdentity, 'shape' | 'color'>; burstQuietSeconds?: 0 | 3 | 8 | 15 }; result: Bot };
@@ -26,6 +26,6 @@ export type BotOperations = Omit<LegacyOperations, 'bots.update'> & {
   'bursts.submit': { params: { text: string; attachments?: string[] }; result: { message: BurstMessage; burst: Burst } };
   'bursts.read': { params: Record<string, never>; result: BurstState };
   'bursts.typing': { params: { clientId: string; typing: boolean }; result: unknown };
-  'bursts.start': { params: Record<string, never>; result: unknown };
-  'bursts.stop': { params: Record<string, never>; result: unknown };
+  'bursts.start': { params: Record<string, never>; result: BurstState };
+  'bursts.stop': { params: Record<string, never>; result: BurstState };
 };

@@ -133,7 +133,8 @@ export function BotsWorkspace() {
     pending = snapshot?.pending.filter((p) => p.botId === selected && !(lanes && p.runId && p.laneId && p.threadId && !(snapshot?.capabilities?.singleThreadExecution === 1 && bot?.executionMode === "single-thread" && p.threadId === bot.threadId))) ?? [];
   const single = snapshot?.capabilities?.singleThreadExecution === 1 && bot?.executionMode === "single-thread";
   const work = single ? snapshot?.workByBot?.find(value => value.botId === selected) : undefined;
-  const burstEnabled = snapshot?.capabilities?.messageBursts === 1;
+  const burstSupported = snapshot?.capabilities?.messageBursts === 1;
+  const burstEnabled = burstSupported && bot?.executionMode === "single-thread";
   useEffect(() => { if (owner && selected && composer?.ready) { try { finishTodoForward(owner, selected); } catch { /* The exact draft insertion remains committed. */ } } }, [owner, selected, composer?.ready]);
   useLayoutEffect(() => {
     const screen = screenRef.current;
@@ -582,7 +583,7 @@ export function BotsWorkspace() {
               {!bot.archived && (
                 <>
                   <div className="bots-composer-support">
-                    {burstEnabled && <BurstComposer key={`bursts:${scope}`} owner={owner} botId={bot.id} online={online} draft={draft} submitting={composer?.operation?.method === "bursts.submit"} />}
+                    {burstSupported && <BurstComposer key={`bursts:${scope}`} owner={owner} botId={bot.id} online={online} draft={draft} submitting={composer?.operation?.method === "bursts.submit"} />}
                     {snapshot && <ComposerSettings key={`settings:${scope}`} bot={bot} snapshot={snapshot} online={online} />}
                   {(lanes || single) && <MainStopRecovery owner={owner} botId={bot.id} online={online} />}
                   <ComposerStatus composer={composer} error={composerError} />
@@ -738,7 +739,7 @@ export function BotsWorkspace() {
                 {snapshot?.capabilities?.scheduleDecisions === 1 && <RunDecisions owner={owner} botId={bot.id} online={online} />}
               </>,
               files: <><h3>Files</h3><p className="bots-details-lead">Attachments and returned work, together. Open a preview, find a file, or download the original.</p><BotAttachmentsEntry bot={bot} owner={owner} online={online} onOpen={() => openGallery("attachments")} /></>,
-              history: <>{snapshot?.capabilities?.peerInbox === 1 && <PeerConversations key={`history-peers:${scope}`} owner={owner} botId={bot.id} bots={bots} online={online} historyView />}{lanes && <details className="bots-legacy-controls"><summary>Earlier work · recovery and controls</summary><BotWorkControls owner={owner} bot={bot} runs={recentRuns} online={online} onOpen={openActivity} /></details>}<RunHistory key={`${scope}:${activityTarget?.runId ?? ""}:${activityTarget?.turnId ?? ""}`} embedded bot={bot} schedules={schedules} recentRuns={recentRuns} initialTarget={activityTarget} attachments={[]} online={online} onClose={closeProfile} download={id => void download(id)} /></>,
+              history: <>{snapshot?.capabilities?.peerInbox === 1 && <PeerConversations key={`history-peers:${scope}`} owner={owner} botId={bot.id} bots={bots} online={online} historyView />}{lanes && <details data-history-key="legacy-controls" className="bots-legacy-controls"><summary>Earlier work · recovery and controls</summary><BotWorkControls owner={owner} bot={bot} runs={recentRuns} online={online} onOpen={openActivity} /></details>}<RunHistory key={`${scope}:${activityTarget?.runId ?? ""}:${activityTarget?.turnId ?? ""}`} embedded bot={bot} schedules={schedules} recentRuns={recentRuns} initialTarget={activityTarget} attachments={[]} online={online} onClose={closeProfile} download={id => void download(id)} /></>,
               settings: <div className="bots-details-settings">
                 <form onSubmit={event => { event.preventDefault(); const input = new FormData(event.currentTarget); void action(() => client.rpc("bots.update", bot.id, { name: String(input.get("name")) })); }}>
                   <label>Name<input name="name" defaultValue={bot.name} key={bot.id + bot.name} maxLength={80} required /></label><button type="submit" disabled={!online || busy}>Save name</button>

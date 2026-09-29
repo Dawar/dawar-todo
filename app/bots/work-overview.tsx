@@ -31,7 +31,7 @@ export function AutomaticInbox({ owner, botId, online }: { owner: string; botId:
   }, [owner, botId, cursor, online, refresh]);
   return <section className="bots-auto-inbox"><header><h3>Scheduled & shared work</h3><button disabled={!online || busy} onClick={() => { setCursor(null); setRefresh(value => value + 1); setChanged(false); }}>{changed ? 'Refresh · updated' : 'Refresh'}</button></header>
     {page?.items.map(item => <article key={item.id}><span className="bots-inbox-dot" /><div><strong>{item.summary}</strong><small>{item.waitReason || ({ queued: 'Up next', dispatching: 'Starting', accepted: 'Started', uncertain: 'Delivery needs confirmation', cancelled: 'Cancelled', failed: 'Could not start' }[item.state])}</small></div><span>{item.kind === 'peer' ? 'Discussion' : 'Schedule'}</span></article>)}
-    {!page?.items.length && <p>{busy ? 'Loading upcoming work…' : !online ? 'Reconnect to see upcoming work.' : 'Nothing waiting here.'}</p>}
+    {!page?.items.length && <p>{!online ? 'Reconnect to see upcoming work.' : busy ? 'Loading upcoming work…' : 'Nothing waiting here.'}</p>}
     {error && <p role="alert">{error}</p>}{page?.nextCursor && <button disabled={busy || !online} onClick={() => setCursor(page.nextCursor)}>More upcoming work <ArrowRight size={14} /></button>}
   </section>;
 }
