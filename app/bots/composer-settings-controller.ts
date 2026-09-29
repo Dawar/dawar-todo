@@ -1,8 +1,8 @@
-import type { Bot, BotSnapshot } from "../../lib/bots-types";
+import type { Bot, BotSnapshot } from "./single-thread-contract";
 import { botsClient, BotRpcError } from "./client";
 
-export type Setting = "model" | "effort" | "serviceTier" | "mode";
-export type Values = Pick<Bot, Setting>;
+export type Setting = "model" | "effort" | "serviceTier" | "mode" | "avatar" | "burstQuietSeconds";
+export type Values = Omit<Pick<Bot, Setting>, "avatar"> & { avatar?: { shape: NonNullable<Bot["avatar"]>["shape"]; color: string } };
 type Versions = Partial<Record<Setting, number>>;
 type Pending = {
   values: Partial<Values>;
@@ -24,13 +24,13 @@ export type SettingsState = {
 };
 
 export const valuesOf = (bot: Bot): Values => ({
-  model: bot.model, effort: bot.effort, serviceTier: bot.serviceTier ?? null, mode: bot.mode,
+  model: bot.model, effort: bot.effort, serviceTier: bot.serviceTier ?? null, mode: bot.mode, avatar: bot.avatar ? { shape: bot.avatar.shape, color: bot.avatar.color } : undefined, burstQuietSeconds: bot.burstQuietSeconds,
 });
-const fields: Setting[] = ["model", "effort", "serviceTier", "mode"];
+const fields: Setting[] = ["model", "effort", "serviceTier", "mode", "avatar", "burstQuietSeconds"];
 const confirmationRetryDelays = [2000, 5000, 10000];
 const matches = (bot: Bot, values: Partial<Values>) => {
   const stored = valuesOf(bot);
-  return fields.every(field => values[field] === undefined || values[field] === stored[field]);
+  return fields.every(field => values[field] === undefined || JSON.stringify(values[field]) === JSON.stringify(stored[field]));
 };
 
 /** Per-owner, per-bot desired state outlives a sidebar switch. Only one native
@@ -50,6 +50,7 @@ export class ComposerSettingsController {
   // Standalone controllers become observable via observe(); the component
   // binds its mounted/Activity/page lifecycle through attach().
   private present = true;
+  private presentations = 0;
   private pageActive = true;
   private confirmationAvailable = false;
   constructor(readonly owner: string, readonly botId: string) {
@@ -61,8 +62,8 @@ export class ComposerSettingsController {
       const prior = stored.state as SettingsState;
       const intent: Partial<Values> = {};
       for (const field of fields) {
-        const value = prior.intent?.[field];
-        if (value === null || typeof value === "string") Object.assign(intent, { [field]: value });
+        const value: unknown = prior.intent?.[field];
+        if (value === null || typeof value === "string" || field === "burstQuietSeconds" && typeof value === "number" && [0, 3, 8, 15].includes(value) || field === "avatar" && value && typeof value === "object" && "shape" in value && "color" in value && typeof value.shape === "string" && typeof value.color === "string") Object.assign(intent, { [field]: value });
       }
       const pending = prior.pending && typeof prior.pending.operationId === "string" &&
         prior.pending.operationId.length >= 10 && typeof prior.pending.afterCursor === "number" &&
@@ -82,6 +83,7 @@ export class ComposerSettingsController {
   getSnapshot = () => this.state;
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   attach() {
+    this.presentations++;
     this.present = true;
     this.pageActive = true;
     const update = () => this.updateConfirmationAvailability();
@@ -94,7 +96,7 @@ export class ComposerSettingsController {
     window.addEventListener("offline", update);
     update();
     return () => {
-      this.present = false;
+      this.present = --this.presentations > 0;
       this.updateConfirmationAvailability();
       document.removeEventListener("visibilitychange", update);
       window.removeEventListener("pagehide", hide);
@@ -154,7 +156,7 @@ export class ComposerSettingsController {
     const values: Partial<Values> = {};
     for (const field of fields) {
       const wanted = this.state.intent[field];
-      if (wanted !== undefined && wanted !== committed[field]) Object.assign(values, { [field]: wanted });
+      if (wanted !== undefined && JSON.stringify(wanted) !== JSON.stringify(committed[field])) Object.assign(values, { [field]: wanted });
     }
     if (!Object.keys(values).length) {
       if (Object.keys(this.state.intent).length)

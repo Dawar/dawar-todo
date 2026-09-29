@@ -1,17 +1,18 @@
 "use client";
 import { memo, useMemo, useRef, useState } from "react";
-import { LoaderCircle, Zap } from "lucide-react";
+import { Zap } from "lucide-react";
 import type { Bot, BotSnapshot } from "../../lib/bots-types";
+import { BotAvatar } from "./bot-avatar";
 const HEIGHT = 96;
 const SidebarRow = memo(function SidebarRow({ bot: b, selected, select, modelName, effort, fast }: {
   bot: Bot; selected: boolean; select: (id: string) => void; modelName: string; effort: string; fast: boolean;
 }) {
   return <button className={`bots-row ${selected ? "selected" : ""}`} style={{ height: HEIGHT - 3 }} onClick={() => select(b.id)}>
-    <span className="bots-avatar" style={{ background: b.color }}>{b.name.trim().split(/\s+/).slice(0, 2).map((p) => p[0]).join("").toUpperCase()}</span>
+    <BotAvatar bot={b} />
     <span className="bots-row-copy"><span className="bots-row-name"><span className="bots-row-title">{b.name}</span><small>{new Date(b.updatedAt).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}</small></span>
       <span className="bots-row-preview">{b.status === "waiting" ? "Needs your input" : b.preview || b.purpose || "Start a conversation"}</span>
       <span className="bots-row-config"><span className="bots-row-model" title={modelName}>{modelName}</span><span aria-hidden="true">·</span><span>{effort}</span>{fast && <span className="bots-row-fast" role="img" aria-label="Fast mode"><Zap size={12} /></span>}</span>
-    </span>{b.updatedAt > b.lastReadAt && <span className="bots-unread" />}{(b.status === "running" || Boolean(b.workerTasks?.active)) && <LoaderCircle size={14} className="bots-spin" />}
+    </span>{b.updatedAt > b.lastReadAt && <span className="bots-unread" />}
   </button>;
 });
 export const BotSidebarList = memo(function BotSidebarList({ bots, snapshot, selected, select, empty }: {

@@ -14,6 +14,8 @@ import {
   useRef,
   useState,
 } from "react";
+import { TodoForward } from "./todo-forward-picker";
+import { todoCopyText } from "./todo-forward";
 import { TaskCaptureSession, TaskCaptureGate } from "./task-capture";
 import { TaskIntentPanel } from "./task-intent-panel";
 import { scheduleTitleSize, taskRowClock } from "./task-title-layout";
@@ -988,6 +990,7 @@ const TaskRow = memo(function TaskRow({
   onSelect,
   onAction,
   onEdit,
+  onForward,
   onPin,
   onAcknowledgeUrgent,
   onTitleChange,
@@ -1008,6 +1011,7 @@ const TaskRow = memo(function TaskRow({
   onSelect: (todo: Todo) => void;
   onAction: (todo: Todo, action: TodoAction, source: "hover" | "swipe") => void;
   onEdit: (todo: Todo, source: "hover" | "swipe") => void;
+  onForward: (todo: Todo) => void;
   onPin: (todo: Todo) => void;
   onAcknowledgeUrgent: (todo: Todo) => void;
   onTitleChange: (todo: Todo, title: string) => void;
@@ -1048,13 +1052,13 @@ const TaskRow = memo(function TaskRow({
   const longSwipe = swipeRatio >= SWIPE_LONG_ACTION_THRESHOLD;
   const revealAction = offset < 0
     ? (longSwipe ? leftSecondaryAction.label : primaryAction.label)
-    : (longSwipe ? "Delete" : "Edit");
+    : (longSwipe ? "Forward" : "Edit");
   const revealIcon: ActionIconName = offset < 0
     ? (longSwipe ? leftSecondaryAction.icon : primaryAction.icon)
-    : (longSwipe ? "delete" : "edit");
+    : (longSwipe ? "forward" : "edit");
   const revealClass = offset < 0
     ? longSwipe && (leftSecondaryAction.icon === "snooze" || leftSecondaryAction.icon === "wake") ? "bg-amber-500" : "bg-[#216e4e]"
-    : longSwipe ? "bg-red-600" : "bg-slate-500";
+    : longSwipe ? "bg-[#216e4e]" : "bg-slate-500";
 
   function pointerDown(event: ReactPointerEvent<HTMLDivElement>) {
     if (pending || event.pointerType !== "touch") return;
@@ -1132,7 +1136,7 @@ const TaskRow = memo(function TaskRow({
     }
     const action = direction < 0
       ? (ratio >= SWIPE_LONG_ACTION_THRESHOLD ? leftSecondaryAction.action : primaryAction.action)
-      : (ratio >= SWIPE_LONG_ACTION_THRESHOLD ? "delete" : "edit");
+      : (ratio >= SWIPE_LONG_ACTION_THRESHOLD ? "forward" : "edit");
     const activated = ratio >= SWIPE_ACTION_THRESHOLD && direction !== 0;
     console.info("[todo-gesture] mobile task swipe finished", {
       todoId: todo.id,
@@ -1145,7 +1149,7 @@ const TaskRow = memo(function TaskRow({
     });
     if (!activated) return;
     if (direction < 0) onAction(todo, action as TodoAction, "swipe");
-    else if (action === "delete") onAction(todo, "delete", "swipe");
+    else if (action === "forward") onForward(todo);
     else onEdit(todo, "swipe");
   }
 
@@ -1440,6 +1444,7 @@ export default function Home() {
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [pinListEnabled, setPinListEnabled] = useState(true);
   const [editingId, setEditingId] = useState<number | null>(null);
+  const [forwardRequest, setForwardRequest] = useState<{ id: string; text: string } | null>(null);
   const [editDraft, setEditDraft] = useState<TodoDraft | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
   const [editSaveState, setEditSaveState] = useState<EditSaveState>("saved");
@@ -1546,7 +1551,7 @@ export default function Home() {
   const reorderAnimationRestoreFrameRef = useRef<number | null>(null);
   const lastAppBadgeCountRef = useRef<number | null>(null);
   const deepLinkedTaskOpenedRef = useRef(false);
-  const taskDialogNestedOverlayOpen = projectDialog !== null || viewerIndex !== null || voiceTarget !== null || customSnoozeDialog !== null;
+  const taskDialogNestedOverlayOpen = forwardRequest !== null || projectDialog !== null || viewerIndex !== null || voiceTarget !== null || customSnoozeDialog !== null;
   const overlayOpen = editingId !== null || projectSelectorOpen || projectDialog !== null || newProjectOpen || projectDeleteDialog !== null || filtersOpen || viewerIndex !== null || voiceTarget !== null || shortcutsOpen || customSnoozeDialog !== null;
 
   useEffect(() => () => {
@@ -4419,7 +4424,7 @@ export default function Home() {
 
   async function copyTaskDetails() {
     if (!editDraft) return;
-    const text = [editDraft.title.trim(), editDraft.notes.trim()].filter(Boolean).join("\n\n");
+    const text = todoCopyText(editDraft.title, editDraft.notes);
     try {
       await copyTextToClipboard(text);
       setNotice({ tone: "success", text: "Task title and notes copied." });
@@ -4655,6 +4660,8 @@ export default function Home() {
 
   const stable_toggleSelected = useStableCallback(toggleSelected);
   const stable_taskAction = useStableCallback(taskAction);
+  const stable_forwardTask = useStableCallback((todo: Todo) => setForwardRequest({ id: crypto.randomUUID(), text: todoCopyText(todo.title, todo.notes) }));
+  const closeForward = useStableCallback(() => setForwardRequest(null));
   const stable_editTaskDetails = useStableCallback(editTaskDetails);
   const stable_togglePin = useStableCallback(togglePin);
   const stable_acknowledgeUrgentAlert = useStableCallback(acknowledgeUrgentAlert);
@@ -4668,6 +4675,7 @@ export default function Home() {
 
   return (
     <main className="min-h-screen bg-[#f6f7f5] text-[#1d211f]">
+      <TodoForward request={forwardRequest} onClose={closeForward} />
       <SiteHeader
         current="todos"
         projectLabel={project === UNASSIGNED_PROJECT ? "Unassigned" : project || "Dawar Todo"}
@@ -4921,6 +4929,7 @@ export default function Home() {
                     onSelect={stable_toggleSelected}
                     onAction={stable_taskAction}
                     onEdit={stable_editTaskDetails}
+                    onForward={stable_forwardTask}
                     onPin={stable_togglePin}
                     onAcknowledgeUrgent={stable_acknowledgeUrgentAlert}
                     onTitleChange={stable_updateInlineTitle}
@@ -4951,6 +4960,7 @@ export default function Home() {
                     onSelect={stable_toggleSelected}
                     onAction={stable_taskAction}
                     onEdit={stable_editTaskDetails}
+                    onForward={stable_forwardTask}
                     onPin={stable_togglePin}
                     onAcknowledgeUrgent={stable_acknowledgeUrgentAlert}
                     onTitleChange={stable_updateInlineTitle}
@@ -5305,6 +5315,7 @@ export default function Home() {
               <span className="absolute left-1/2 top-2 h-1 w-10 -translate-x-1/2 rounded-full bg-black/15 sm:hidden" aria-hidden="true" />
               <h3 id="task-details-title" className="min-w-0 text-lg font-semibold text-[#202522]">Task details</h3>
               <div className="flex shrink-0 items-center gap-1">
+                <button type="button" onClick={() => { if (editDraft) setForwardRequest({ id: crypto.randomUUID(), text: todoCopyText(editDraft.title, editDraft.notes) }); }} className="grid h-9 w-9 place-items-center rounded-full bg-[#eaf3ed] text-[#216e4e] hover:bg-[#e0ede4]" aria-label="Forward task to a bot draft" title="Forward"><ActionIcon name="forward" /></button>
                 <button type="button" onClick={() => void copyTaskDetails()} className="grid h-9 w-9 place-items-center rounded-full bg-[#f1f2f0] text-[#4f5752] hover:bg-[#e8eae7]" aria-label="Copy task title and description" title="Copy task"><ActionIcon name="copy" /></button>
                 <button type="button" onClick={closeTaskDetails} className="grid h-9 w-9 place-items-center rounded-full bg-[#f1f2f0] text-[#4f5752] hover:bg-[#e8eae7]" aria-label="Close task details" title="Close"><ActionIcon name="close" /></button>
               </div>

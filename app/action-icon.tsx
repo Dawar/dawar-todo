@@ -13,6 +13,7 @@ import {
   Download,
   Eye,
   FolderInput,
+  Forward,
   Folder,
   FolderPlus,
   FileText,
@@ -55,6 +56,7 @@ export type ActionIconName =
   | "calendar"
   | "close"
   | "copy"
+  | "forward"
   | "delete"
   | "done"
   | "download"
@@ -104,6 +106,7 @@ const icons: Record<ActionIconName, ComponentType<LucideProps>> = {
   calendar: CalendarDays,
   close: X,
   copy: Copy,
+  forward: Forward,
   delete: Trash2,
   done: CircleCheckBig,
   download: Download,

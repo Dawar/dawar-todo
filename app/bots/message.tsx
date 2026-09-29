@@ -111,7 +111,7 @@ function BotMessage({
       </div>
     );
   if (item.type === "reasoning")
-    return item.summary.length ? (
+    return item.summary.some(text => text.trim()) ? (
       inWorkLog ? (
         <div className="bots-reasoning">
           <span>Thinking</span>

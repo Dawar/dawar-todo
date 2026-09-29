@@ -1,10 +1,9 @@
 import { readBotHistory, queueBotHistory, type CachedBotHistory } from "./history-cache.ts";
 import { botFailureOutcome } from "../../lib/bots-response.ts";
 import { validRunState } from "./run-context";
-import type { BotOperations } from "../../lib/bots-operations";
+import type { BotOperations, BotSnapshot, WorkState } from "./single-thread-contract";
 import type {
   BotEvent,
-  BotSnapshot,
   BridgeRequest,
   BotAttachment,
   BotScheduledEventData,
@@ -35,12 +34,14 @@ type Session = {
 };
 function validComposerResult(method: string, result: Record<string, unknown> | undefined) {
   const identified = (value: unknown) => Boolean(value && typeof value === "object" && typeof (value as { id?: unknown }).id === "string");
+  if (method === "bursts.submit") return Boolean(result && identified(result.message) && identified(result.burst));
   if (method === "turn.send") return Boolean(result && (identified(result.turn) || typeof result.turnId === "string"));
   if (method === "queue.add") return Boolean(result && (identified(result.queuedSubmission) || typeof result.consumedTurnId === "string"));
   if (method === "queue.update") return Boolean(result && identified(result.queuedSubmission));
   return true;
 }
 function snapshotEventKey(event: BotEvent) {
+  if (event.type === "work" && event.botId) return `work:${event.botId}`;
   if (event.type === "run.state" && event.botId) return `run:${event.botId}:${(event.data as BotRunStateEvent).runId}`;
   if (event.type === "run.request" || event.type === "run.request.resolved") return `request:${(event.data as { key: string }).key}`;
   if (event.type === "schedules" && event.botId && Object.hasOwn(event.data as object, "activeScheduledTurn")) return `scheduled:${event.botId}`;
@@ -50,6 +51,11 @@ function snapshotEventKey(event: BotEvent) {
   return null;
 }
 function applySnapshotEvent(snapshot: BotSnapshot, event: BotEvent, key?: string): BotSnapshot {
+  if (event.type === "work" && event.botId) {
+    const work = event.data as WorkState;
+    if (work.botId !== event.botId) return snapshot;
+    return { ...snapshot, workByBot: [...(snapshot.workByBot ?? []).filter(value => value.botId !== event.botId), work] };
+  }
   if (event.type === "run.state" && event.botId && snapshot.capabilities?.backgroundRunLanes === 1) {
     const data = event.data as BotRunStateEvent;
     if (!validRunState(data, event.botId)) return snapshot;

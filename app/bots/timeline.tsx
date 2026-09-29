@@ -7,6 +7,7 @@ import type { BotTimeline } from "./timeline-controller";
 export type HistoryDetailReader = Pick<BotTimeline, "botId" | "subscribeDetail" | "detailItem" | "subscribe" | "detailPending" | "detail"> & { detailError?: (entry: HistoryEntry) => string };
 import { useBotTimeline } from "./use-timeline";
 import { botsClient } from "./client";
+import { BotAvatar } from "./bot-avatar";
 import { BotMessage } from "./message";
 import { ArrowDown, MessageCircle, CloudOff } from "lucide-react";
 import { LazyDetails } from "./lazy-details";
@@ -51,6 +52,7 @@ const EntryBody = memo(function EntryBody({ entry, timeline, attachments, downlo
 });
 export const TimelineEntry = memo(function TimelineEntry(props: Parameters<typeof EntryBody>[0]) {
   const { entry } = props;
+  if (entry.type === "reasoning" && (entry.item?.type !== "reasoning" || !entry.item.summary.some(text => text.trim()))) return null;
   return <div data-history-key={historyKey(entry.turnId, entry.id)}>
     {entry.type === "reasoning" ? <LazyDetails className="bots-activity" summary="Thinking">{() => <EntryBody {...props} />}</LazyDetails> : entry.scheduled ? <LazyDetails className="bots-turn is-scheduled" summary={`Scheduled run · ${entry.status} · ${entry.label}`}>
       {() => <EntryBody {...props} />}</LazyDetails>
@@ -68,6 +70,7 @@ export function BotConversation({ owner, bot, online, children, onOpenActivity }
   const groups = useMemo(() => {
     const result: { kind: string; entries: HistoryEntry[] }[] = [];
     for (const entry of state.entries.slice(first, last)) {
+      if (entry.type === "reasoning" && (entry.item?.type !== "reasoning" || !entry.item.summary.some(text => text.trim()))) continue;
       const kind = entry.type === "reasoning" ? `thinking:${entry.turnId}` : !entry.item ? `work:${entry.turnId}` : "message";
       const previous = result.at(-1);
       if (kind !== "message" && previous?.kind === kind) previous.entries.push(entry);
@@ -100,11 +103,11 @@ export function BotConversation({ owner, bot, online, children, onOpenActivity }
     {groups.map((group) => {
       const entry = group.entries[0], key = historyKey(entry.turnId, entry.id);
       const body = () => group.entries.map((value) => group.kind.startsWith("thinking:") ? <div key={value.id} data-history-key={historyKey(value.turnId, value.id)}><EntryBody entry={value} timeline={timeline} attachments={state.attachments} download={download} /></div> : <TimelineEntry key={historyKey(value.turnId, value.id)} entry={{ ...value, scheduled: false }} timeline={timeline} attachments={state.attachments} download={download} />);
-      const summary = group.kind.startsWith("thinking:") ? "Thinking" : <><span>Work log</span><small>{group.entries.length} {group.entries.length === 1 ? "step" : "steps"}</small></>;
+      const summary = group.kind.startsWith("thinking:") ? <span className="bots-reasoning-face"><BotAvatar bot={bot} small decorative emotion="thinking" working={entry.status === "inProgress"} /><span>Thinking</span></span> : <><span>Work log</span><small>{group.entries.length} {group.entries.length === 1 ? "step" : "steps"}</small></>;
       return <Fragment key={key}>
         {(entry.audience === "finding" || entry.audience === "mixed" && groups[groups.indexOf(group) - 1]?.entries[0].turnId !== entry.turnId) && <div className="bots-run-provenance">
           <span>{entry.audience === "finding" ? "A finding from scheduled work" : entry.legacyContext ? "Earlier saved context" : "Conversation during scheduled work"}</span>
-          {onOpenActivity && <button onClick={() => onOpenActivity({ turnId: entry.turnId, runId: entry.runId })}>View full run</button>}
+          {onOpenActivity && <button onClick={() => onOpenActivity({ turnId: entry.turnId, runId: entry.runId })}>Open in history</button>}
         </div>}
         {(!online || state.error) && state.gaps.filter((gap) => group.entries.some((entry) => gap.before === historyKey(entry.turnId, entry.id))).map((gap) => <div className="bots-system-note" key={gap.before}>
           Some messages between these pages are not loaded. <button disabled={!online || paging} onClick={() => {
