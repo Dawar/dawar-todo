@@ -84,7 +84,7 @@ export class PrimaryExecution {
     if (this.store.list('managerTask', bot.id).some(t => !terminal.has(t.state) || t.state === 'completed' && !t.collectedAt)) return 'Collect the original legacy worker work first.';
     if (this.store.list('managerRequest', bot.id).length) return 'An original worker question is pending.';
     if (this.store.list('managerNotice', bot.id).some(n => !['delivered', 'rejected'].includes(n.state))) return 'An original completion notice remains pending.';
-    if (this.store.list('runLane', bot.id).some(l => l.provisioning !== 'bound' || l.activeTurnId || this.runtime.runs.unfinished(l) || this.store.get('runActivity', l.id)?.unresolved)) return 'An original isolated run must settle on its original thread.';
+    if (this.store.list('runLane', bot.id).some(l => this.runtime.runs.unfinished(l))) return 'An original isolated run must settle on its original thread.';
     if (this.store.uncertainOperations().some(op => op.botId === bot.id && op.status === 'dispatching')) return 'An original operation is still in flight.';
     return null;
   }
@@ -93,12 +93,15 @@ export class PrimaryExecution {
     let reason = this.migrationBlock(bot);
     if (!reason) {
       const token = captureActivity(this.runtime, bot.id), cursor = this.migrationCursor(bot.id);
-      const targets = [...new Set([bot.threadId, ...this.store.list('managerWorker', bot.id).filter(w => !['archived', 'deleted'].includes(w.state)).map(w => w.threadId), ...this.store.list('runLane', bot.id).filter(l => !l.archived).map(l => l.threadId)])];
+      const targets = [...new Set([bot.threadId, ...this.store.list('managerWorker', bot.id).filter(w => !['archived', 'deleted'].includes(w.state)).map(w => w.threadId), ...this.store.list('runLane', bot.id).filter(l => !l.archived && l.threadId).map(l => l.threadId)])];
       if (targets.length > 64) reason = 'Legacy target inventory exceeds the bounded migration read.';
       else for (const threadId of targets) {
         if (!threadId) { reason = 'Original native identity is missing.'; break; }
         const { thread } = await this.runtime.codex.call('thread/read', { threadId, includeTurns: false });
-        if (thread?.id !== threadId || thread.status?.type !== 'idle') { reason = 'An original native target is active or cannot establish idle.'; break; }
+        // An explicit notLoaded on an already-settled legacy target cannot
+        // execute here: its queue/intake/task gates above are empty and single
+        // mode disables future worker mutation. Missing/read-error is different.
+        if (thread?.id !== threadId || !(thread.status?.type === 'idle' || threadId !== bot.threadId && thread.status?.type === 'notLoaded')) { reason = 'An original native target is active or cannot establish idle.'; break; }
       }
       if (!reason && (!activityUnchanged(this.runtime, bot.id, token) || this.migrationCursor(bot.id) !== cursor)) reason = 'Activity changed during migration; it will be checked again.';
       reason ??= this.migrationBlock(this.store.bot(bot.id));
