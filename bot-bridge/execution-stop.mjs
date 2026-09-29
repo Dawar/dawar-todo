@@ -58,6 +58,7 @@ export async function stopExecutions(runtime, bot, operationId, scope, runId = n
     }
     for (const notice of runtime.store.list("managerNotice", bot.id)) if (matches(notice.destination) && notice.state === "queued")
       runtime.store.put("managerNotice", { ...notice, state: "held" });
+    if (scope !== "run" && runtime.primary?.single(bot)) runtime.primary.reserveStop(bot, operationId);
     if (runPauses.length) runtime.emitEvent("schedules", {}, bot.id);
     return runtime.store.put("executionStop", { id: operationId, botId: bot.id, scope, runId, primaryMode: scope !== "run" && Boolean(runtime.primary?.single(bot)), runPauses, targets, state: "pending", createdAt: now() });
   });

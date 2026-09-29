@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { stagedQueue, dispatchPrompt } from './prompt-queue.mjs';
+import { reconcileStop } from './execution-stop.mjs';
 import { occurrenceReady } from './schedule-decisions.mjs';
 import { findNativeTurn } from './native-reconcile.mjs';
 import { usableTurn, terminalTurn } from './native-turn.mjs';
@@ -45,7 +46,10 @@ export class PrimaryExecution {
       if (!Object.keys(p).length || Object.keys(p).some(k => !['objective', 'status', 'tokenBudget'].includes(k))) throw new Error('Invalid goal change.');
     }
     if (method === 'set' && (p.objective !== undefined || p.status === 'active') && (bot.mode === 'plan' || this.runtime.plans.blocked(bot.id))) throw new Error('Finish or leave Plan before activating a native goal.');
-    if (method !== 'get') beginTurnDispatch(this.runtime, bot.id, operationId);
+    if (method !== 'get') this.store.transaction(() => {
+      this.store.put('goalIntent', { id: bot.id, botId: bot.id, operationId });
+      beginTurnDispatch(this.runtime, bot.id, operationId);
+    });
     let result;
     try {
       result = method === 'get' ? await this.runtime.codex.call('thread/goal/get', { threadId: bot.threadId }) :
@@ -257,23 +261,30 @@ export class PrimaryExecution {
       // Absence is not rejection and never enables another queue/add.
     }
   }
-  async stop(bot, operationId) {
-    let receipt = this.store.get('primaryStop', operationId);
-    if (!receipt) receipt = this.store.transaction(() => {
-      this.runtime.bursts?.pause(bot.id);
-      return this.store.put('primaryStop', { id: operationId, botId: bot.id, threadId: bot.threadId,
+  reserveStop(bot, operationId) {
+    const existing = this.store.get('primaryStop', operationId);
+    if (existing) return existing;
+    return this.store.put('primaryStop', { id: operationId, botId: bot.id, threadId: bot.threadId,
+        goal: { state: 'queued', threadId: bot.threadId, intentId: this.store.get('goalIntent', bot.id)?.operationId ?? null },
         targets: this.openItems(bot.id).filter(i => ['dispatching', 'uncertain', 'accepted'].includes(i.state) && !i.turnId && !i.terminalStatus)
           .map(i => ({ id: i.id, kind: 'primaryInbox', clientId: i.id, nativeQueueId: i.nativeQueueId ?? null, state: 'queued' })).concat(
           this.store.list('promptQueue', bot.id).filter(i => ['native-queued', 'dispatching', 'uncertain'].includes(i.state) && i.operationId && !i.turnId).map(i => ({ id: i.id, kind: 'promptQueue', clientId: i.clientUserMessageId, nativeQueueId: i.nativeQueueId, state: 'queued' }))), createdAt: now() });
-    });
-    if (!receipt.goal) {
+  }
+  async stop(bot, operationId) {
+    const receipt = this.reserveStop(bot, operationId);
+    if (receipt.goal.state === 'queued' && receipt.goal.intentId !== (this.store.get('goalIntent', bot.id)?.operationId ?? null)) {
+      receipt.goal.state = 'superseded-before-submission'; this.store.put('primaryStop', receipt);
+    }
+    if (receipt.goal.state === 'queued') {
       const observed = await this.runtime.codex.call('thread/goal/get', { threadId: bot.threadId });
       if (!observed || !Object.hasOwn(observed, 'goal')) throw new Error('Native goal status is unavailable.');
       const { goal } = observed;
       if (goal && goal.threadId !== bot.threadId) throw new Error('Native goal read did not match the stopped bot.');
-      receipt.goal = { state: goal?.status === 'active' ? 'dispatching' : 'not-required', threadId: bot.threadId };
+      if (receipt.goal.intentId !== (this.store.get('goalIntent', bot.id)?.operationId ?? null)) {
+        receipt.goal.state = 'superseded-before-submission';
+      } else receipt.goal.state = goal?.status === 'active' ? 'dispatching' : 'not-required';
       this.store.put('primaryStop', receipt);
-      if (goal?.status === 'active') {
+      if (receipt.goal.state === 'dispatching') {
         try {
           const result = await this.runtime.codex.call('thread/goal/set', { threadId: bot.threadId, status: 'paused' });
           if (result?.goal?.threadId !== bot.threadId || result.goal.status !== 'paused') throw new Error('Goal pause not acknowledged.');
@@ -324,7 +335,7 @@ export class PrimaryExecution {
   async stoppedGoal(botId, operationId) {
     const receipt = this.store.get('primaryStop', operationId);
     if (!receipt) return false;
-    if (['accepted', 'not-required'].includes(receipt.goal?.state) || receipt.goal?.currentlyPausedAt) return true;
+    if (['accepted', 'not-required', 'superseded-before-submission'].includes(receipt.goal?.state) || receipt.goal?.currentlyPausedAt) return true;
     // Read current goal authority only; never replay the unknown setting RPC or
     // claim its historical outcome. A later explicit resume is a different act.
     try {
@@ -347,6 +358,16 @@ export class PrimaryExecution {
         continue;
       }
       await this.runtime.lock(bot.id, async () => {
+        const preparingStop = this.store.list('executionStop', bot.id).find(s => s.primaryMode && s.state !== 'done' &&
+          !(Date.parse(s.reconcileAfter ?? '') > Date.now()) && this.store.get('primaryStop', s.id)?.goal?.state === 'queued');
+        if (preparingStop) {
+          await this.runtime.lock(`stop:${preparingStop.id}`, async () => {
+            await this.stop(this.store.bot(bot.id), preparingStop.id);
+            const result = await reconcileStop(this.runtime, this.store.get('executionStop', preparingStop.id));
+            const op = this.store.operation(preparingStop.id);
+            if (op) this.store.saveOperation(op.id, op.fingerprint, 'done', { ...op, result });
+          }); return;
+        }
         this.stageSchedules(bot);
         const firstHuman = stagedQueue(this.store, bot.id)[0];
         const before = this.store.bot(bot.id);
