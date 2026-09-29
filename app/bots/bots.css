@@ -668,18 +668,6 @@ html.bots-viewport-locked body {
   background: none;
   padding: 0;
 }
-.bots-message-markdown table {
-  border-collapse: collapse;
-  max-width: 100%;
-  display: block;
-  overflow: auto;
-  font-size: 14px;
-}
-.bots-message-markdown td,
-.bots-message-markdown th {
-  border: 1px solid #dce3de;
-  padding: 7px 10px;
-}
 .bots-message-markdown blockquote {
   border-left: 3px solid #83b098;
   padding-left: 13px;

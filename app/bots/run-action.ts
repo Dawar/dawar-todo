@@ -33,6 +33,7 @@ class RunAction {
   busy = false;
   ready = false;
   accepted = false;
+  confirmation: Intent | null = null;
   error = "";
   private journalRevision = -1;
   private revision = 0;
@@ -46,6 +47,7 @@ class RunAction {
     this.journalRevision = value.revision; this.ready = true;
     this.intent = value.current;
     this.accepted = !value.current && value.last?.state === "accepted";
+    this.confirmation = value.last?.state === "accepted" ? value.last : null;
     this.error = value.current?.error ?? (value.last?.state === "rejected" && !value.current ? value.last.error ?? "The action was rejected." : "");
     this.notify();
   }
@@ -66,8 +68,13 @@ class RunAction {
       if (operation.state === "accepted") return;
       if (operation.state === "rejected") throw Error(operation.error || "This exact action was rejected. Review the current state before making a new action.");
       intent = operation;
+      if (intent.method === "runs.decide" && client.snapshot?.capabilities?.scheduleDecisions !== 1) throw Error("Connect to a service that supports scheduled-run choices. The saved choice is retained.");
       const result = await client.rpc(intent.method, this.botId, intent.params, intent.id, { owner: this.owner, managed: true });
       if (!result || typeof result !== "object" || Array.isArray(result)) throw Error("The response did not confirm this action. Check the same saved action again.");
+      if (intent.method === "runs.decide") {
+        const receipt = result as { operationId?: string; run?: { id?: string; botId?: string } };
+        if (receipt.operationId !== intent.id || receipt.run?.id !== intent.params.runId || receipt.run?.botId !== this.botId) throw Error("The response did not confirm this exact choice. Check the saved choice again.");
+      }
       this.apply(await runActionJournal(this.key, { kind: "settle", id: intent.id, state: "accepted" })); changed(this.key);
     } catch (reason) {
       const error = reason instanceof Error ? reason.message : "This action is unconfirmed. Check the same saved action again.";

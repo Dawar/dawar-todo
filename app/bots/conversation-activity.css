@@ -32,15 +32,22 @@
 .bots-run-card { display: flex; align-items: flex-start; gap: 11px; padding: 15px 0; border-bottom: 1px solid #edf1ee; }
 .bots-run-card:last-child { border-bottom: 0; }
 .bots-run-card-icon { display: grid; place-items: center; background: #edf5ef; color: #58946a; width: 33px; height: 33px; border-radius: 11px; flex-shrink: 0; }
-.bots-run-card.needs-attention .bots-run-card-icon { background: #fbf0e9; color: #ac784b; }
+.bots-run-card.tone-attention .bots-run-card-icon { background: #fbf0e9; color: #ac784b; }
+.bots-run-card.tone-neutral .bots-run-card-icon { background: #f1f4f2; color: #7d8981; }
 .bots-run-card-content { flex: 1; min-width: 0; }
 .bots-run-card-title { display: flex; align-items: flex-start; gap: 6px 12px; justify-content: space-between; flex-wrap: wrap; }
 .bots-run-card-title h4 { margin: 0; font-size: 14px; line-height: 1.5; font-weight: 600; overflow-wrap: anywhere; }
 .bots-run-status { font-size: 10px; line-height: 1.4; padding: 3px 7px; border-radius: 20px; color: #76847b; background: #f1f4f2; white-space: nowrap; }
-.bots-run-status.is-running, .bots-run-status.is-starting { color: #246845; background: #e8f4eb; }
-.bots-run-status:is(.is-failed,.is-uncertain,.is-interrupted) { color: #9b6c46; background: #fff1e7; }
+.bots-run-status.tone-working { color: #246845; background: #e8f4eb; }
+.bots-run-status.tone-attention { color: #9b6c46; background: #fff1e7; }
 .bots-run-card-content > p { margin: 4px 0 0; font-size: 11px; line-height: 1.55; color: #849086; }
-.bots-run-card-content > p.bots-run-error-text { color: #9b6550; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 130px; overflow: auto; }
+.bots-run-card-content > p.bots-run-state-hint { font-size: 12px; color: #64756a; margin-top: 8px; }
+.bots-run-error-details { margin: 6px 0; color: #78867d; font-size: 12px; }
+.bots-run-error-details summary { cursor: pointer; display: list-item; min-height: 36px; padding: 8px 0; }
+.bots-run-error-details p { margin: 4px 0 10px; color: #6d766f; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 150px; overflow: auto; }
+.bots-run-error-details summary:focus-visible { outline: 2px solid #4c9970; outline-offset: 2px; }
+.bots-run-detail-state { display: grid; gap: 6px; margin: -8px 0 18px; color: #64756a; font-size: 12px; line-height: 1.6; }
+.bots-run-detail-state strong { color: #405e4b; font-weight: 600; }
 .bots-run-card-actions { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; margin-top: 4px; font-size: 11px; color: #879389; }
 .bots-run-card-actions button, .bots-run-back, .bots-run-pagination button, .bots-run-load, .bots-run-notice button { display: inline-flex; align-items: center; gap: 7px; min-height: 34px; color: #34744f; font-size: 12px; font-weight: 600; }
 .bots-run-detail-title { margin: 16px 0 23px; border-bottom: 1px solid #eaf0eb; padding-bottom: 20px; }
@@ -126,6 +133,7 @@
 .bots-run-findings button { display: inline-flex; align-items: center; gap: 6px; min-height: 40px; color: #286748; }
 .bots-run-questions:empty { display: none; }
 @media (pointer: coarse) {
-  .bots-run-controls button, .bots-run-findings button, .bots-run-reply button { min-height: 44px; min-width: 44px; }
+  .bots-run-controls button, .bots-run-findings button, .bots-run-reply button, .bots-run-card-actions button, .bots-run-tools button { min-height: 44px; min-width: 44px; }
+  .bots-run-error-details summary { min-height: 44px; }
 }
 @media (max-width: 390px) { .bots-run-reply { padding: 12px; } .bots-run-reply form { gap: 4px; } }

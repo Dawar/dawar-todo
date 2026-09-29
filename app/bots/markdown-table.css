@@ -1,0 +1,10 @@
+.bots-markdown-table { min-width: 0; max-width: 100%; margin: 14px 0; }
+.bots-table-hint { display: flex; align-items: center; gap: 6px; margin-bottom: 7px; color: #718077; font-size: 11px; line-height: 1.5; }
+.bots-table-hint svg { flex-shrink: 0; }
+.bots-table-viewport { max-width: 100%; overflow-x: auto; overscroll-behavior-x: contain; -webkit-overflow-scrolling: touch; border: 1px solid #dce3de; border-radius: 10px; scrollbar-width: thin; scrollbar-color: #9fb8a8 #f2f6f3; }
+.bots-table-viewport:focus-visible { outline: 2px solid #347b51; outline-offset: 3px; }
+.bots-message-markdown .bots-table-viewport table { display: table; width: max-content; min-width: 100%; max-width: none; border-collapse: separate; border-spacing: 0; font-size: 14px; }
+.bots-message-markdown .bots-table-viewport :is(th, td) { min-width: 10rem; max-width: 28rem; padding: 10px 12px; border: 0; border-right: 1px solid #e3e9e5; border-bottom: 1px solid #e3e9e5; vertical-align: top; white-space: normal; word-break: normal; overflow-wrap: break-word; }
+.bots-message-markdown .bots-table-viewport th { font-weight: 650; background: #f4f8f5; }
+.bots-message-markdown .bots-table-viewport tr > :last-child { border-right: 0; }
+.bots-message-markdown .bots-table-viewport tbody tr:last-child > td { border-bottom: 0; }

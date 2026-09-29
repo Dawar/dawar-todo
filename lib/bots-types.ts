@@ -44,6 +44,7 @@ export type BotRunReceipt = { operationId: string; runId: string; laneId: string
 export type BotRunFinding = BotRunContext & { id: string; botId: string; turnId: string; key: string; summary: string; createdAt: string };
 export type BotRunStateEvent = { runId: string; laneId?: string | null; threadId?: string | null; run: BotRun; background: Omit<BotBackground, "botId"> & { botId?: string }; historyRefresh?: unknown };
 export type BotRun = {
+  decision?: BotRunDecision;
   executionLane?: "main-legacy" | "run-v1";
   laneId?: string | null; threadId?: string | null;
   activity?: { state: "provisioning" | "queued" | "running" | "waiting-input" | "waiting-workers" | "idle" | "uncertain" | "paused"; activeTurnId: string | null; waitReason: string | null; queuedCount?: number; pendingCount?: number };
@@ -57,6 +58,11 @@ export type BotRun = {
   finishedAt: string | null;
   error: string | null;
   turnId?: string | null;
+};
+export type BotRunDecision = {
+  id: string; revision: number; state: "required" | "start-approved" | "rescheduled" | "cancelled";
+  reason: "missed-start"; scheduledAt: string; requestedAt: string; graceMs: number;
+  notBefore: string | null; decidedAt: string | null; operationId: string | null;
 };
 export type BotRunPage = { runs: BotRun[]; nextCursor: string | null; latestBySchedule: BotRun[] };
 /** Metadata for a scheduled-context continuation; the primary run.turnId stays unchanged. */
@@ -170,7 +176,7 @@ export type BotRequest = {
 export type BotRunRequestEvent = BotRequest & BotRunContext;
 export type BotRunRequestResolvedEvent = BotRunContext & { key: string };
 export type BotSnapshot = {
-  capabilities?: { backgroundRunLanes?: 1 };
+  capabilities?: { backgroundRunLanes?: 1; scheduleDecisions?: 1 };
   backgroundByBot?: BotBackground[];
   /** Existing runtime metadata prioritizes unfinished runs over recent history. */
   backgroundRuns?: BotRun[];

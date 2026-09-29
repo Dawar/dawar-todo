@@ -1,6 +1,6 @@
 "use client";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useState, useRef } from "react";
-import { ArrowLeft, ArrowRight, CheckCircle2, Clock3, CalendarDays, CircleAlert, LoaderCircle, RefreshCw, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, Clock3, CalendarDays, CircleAlert, LoaderCircle, RefreshCw, X } from "lucide-react";
 import type { Bot, BotAttachment, BotRun, BotRunPage, BotSchedule, BotEvent, BotRunStateEvent } from "../../lib/bots-types";
 import type { HistoryPage, HistoryResponse } from "../../lib/bot-history-view";
 import { botsClient } from "./client";
@@ -8,7 +8,7 @@ import { TimelineEntry } from "./timeline";
 import { RunTurnPicker } from "./run-turn-picker";
 import { ReturnedArtifacts } from "./returned-artifact";
 import { RunPageRead } from "./run-page-read";
-import { runNeedsBinding, validRunState } from "./run-context";
+import { hasCurrentRunDecision, runNeedsBinding, validRunState } from "./run-context";
 import { runHistoryRefresh } from "./run-history-refresh";
 import { updateRunPage } from "./run-page-events";
 import { useRunScroll } from "./use-run-scroll";
@@ -17,6 +17,9 @@ import { RunComposer } from "./run-composer";
 import { RunQuestions } from "./run-questions";
 import { RunControls, StopAll } from "./run-controls";
 import { RunTranscript } from "./run-transcript";
+import { RunActivityCard } from "./run-activity-card";
+import { RunDecisionControls, RunDecisions } from "./run-decisions";
+import { runNeedsAttention, runPresentation } from "./run-presentation";
 import { savedRunPage, saveRunPage, verifyRunPage } from "./run-history-reader";
 import { getBotTimeline } from "./use-timeline";
 import type { ActivityTarget } from "./conversation-activity";
@@ -24,11 +27,9 @@ import type { ActivityTarget } from "./conversation-activity";
 const validDate = (value: string | null) => value && Number.isFinite(Date.parse(value)) ? new Date(value) : null;
 const stamp = (value: string | null) => validDate(value)?.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) ?? "Date unavailable";
 const day = (value: string) => validDate(value)?.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric", year: "numeric" }) ?? "Date unavailable";
-const labels: Record<string, string> = { paused: "Paused", queued: "Queued", starting: "Starting", running: "In progress", completed: "Finished", failed: "Needs attention", uncertain: "Needs review", interrupted: "Interrupted", acknowledged: "Reviewed", cancelled: "Cancelled", skipped: "Skipped" };
-const needsAttention = (run: BotRun) => ["failed", "uncertain", "interrupted"].includes(run.status) || run.activity?.state === "waiting-input" || run.activity?.state === "uncertain";
 // Deliberately omit native prompts/private internals from this disposable cache.
 const compactRun = (run: BotRun): BotRun => ({ id: run.id, botId: run.botId, scheduleId: run.scheduleId, title: run.title,
-  executionLane: run.executionLane, laneId: run.laneId, threadId: run.threadId, activity: run.activity, status: run.status, scheduledAt: run.scheduledAt, startedAt: run.startedAt, finishedAt: run.finishedAt, error: run.error, turnId: run.turnId });
+  executionLane: run.executionLane, laneId: run.laneId, threadId: run.threadId, activity: run.activity, decision: run.decision, status: run.status, scheduledAt: run.scheduledAt, startedAt: run.startedAt, finishedAt: run.finishedAt, error: run.error, turnId: run.turnId });
 function mergeRuns(old: BotRun[], incoming: BotRun[]) {
   const values = new Map(old.map(run => [run.id, run]));
   for (const run of incoming) values.set(run.id, compactRun(run));
@@ -227,13 +228,14 @@ export function RunHistory({ bot, schedules, attachments, online, onClose, downl
     } catch (reason) { if (botsClient.owner === owner) setReviewError({ run, message: reason instanceof Error ? reason.message : "The review could not be confirmed." }); }
     finally { actionRequest.current = false; if (botsClient.owner === owner) setActionBusy(false); }
   };
+  const visibleRuns = useMemo(() => runs.filter(run => filter === "all" || runNeedsAttention(run)), [filter, runs]);
   const groups = useMemo(() => {
     const groups = new Map<string, BotRun[]>();
-    for (const run of runs.filter(run => filter === "all" || needsAttention(run))) {
+    for (const run of visibleRuns) {
       const title = day(run.scheduledAt); groups.set(title, [...(groups.get(title) ?? []), run]);
     }
     return [...groups];
-  }, [filter, runs]);
+  }, [visibleRuns]);
   const bound = !unbound && !!(selectedRun?.threadId || selectedRun?.turnId || transcript?.context?.runId === target?.runId && transcript?.context?.threadId);
   const linked = useMemo(() => new Set(transcript?.entries.flatMap(entry => entry.item?.type === "agentMessage" ? [...entry.item.text.matchAll(/\]\(<?bot-artifact:([^\s)>]+)/g)].map(match => match[1]) : []) ?? []), [transcript]);
   return <div className="bots-modal-backdrop bots-activity-backdrop" onClick={onClose}>
@@ -249,11 +251,15 @@ export function RunHistory({ bot, schedules, attachments, online, onClose, downl
         {target ? <>
           <button className="bots-run-back" onClick={back}><ArrowLeft size={16} />All activity</button>
           <div className="bots-run-detail-title"><span>Scheduled run</span><h3>{selectedRun?.title ?? "Earlier activity"}</h3><p>{selectedRun ? stamp(selectedRun.scheduledAt) : "Full recorded conversation"}</p></div>
+          {selectedRun && <p className="bots-run-detail-state"><strong>{runPresentation(selectedRun).label}</strong>{runPresentation(selectedRun).hint && <span>{runPresentation(selectedRun).hint}</span>}</p>}
+          {selectedRun?.decision?.notBefore && <p className="bots-run-detail-state">New start time {stamp(selectedRun.decision.notBefore)}</p>}
+          {selectedRun?.error && <details className="bots-run-error-details"><summary>Recorded details</summary><p>{selectedRun.error}</p></details>}
           {lanes && bound && target.runId && <RunQuestions key={`${owner}:${bot.id}:${target.runId}`} owner={owner} botId={bot.id} runId={target.runId} online={online} />}
           {!unbound && target.runId && (lanes || botsClient.snapshot?.activeScheduledTurns !== undefined) && <RunTurnPicker key={`${owner}:${bot.id}:${target.runId}`} owner={owner} botId={bot.id} runId={target.runId} primary={selectedRun} selected={target.turnId ?? ""} online={online} onSelect={turnId => {
             generation.current++; setTranscript(null); setPageCursors([null]); setDetailPage(0); setTarget({ runId: target.runId, turnId });
           }} />}
-          {lanes && selectedRun && <RunControls owner={owner} botId={bot.id} run={selectedRun} online={online} onConfirmed={metadata.refresh} />}
+          {botsClient.snapshot?.capabilities?.scheduleDecisions === 1 && selectedRun && <RunDecisionControls owner={owner} botId={bot.id} run={selectedRun} online={online} onConfirmed={metadata.refresh} />}
+          {lanes && selectedRun && <RunControls owner={owner} botId={bot.id} run={selectedRun} online={online} onConfirmed={metadata.refresh} allowNewActions={!hasCurrentRunDecision(selectedRun)} />}
           {unbound && <div className="bots-run-notice"><Clock3 size={18} /><div><p>{selectedRun?.laneId ? "This run’s conversation is not available yet. Its preparation or confirmation is still pending." : "This run has not started."} {selectedRun?.activity?.state === "paused" ? "Its queued work is saved until you resume it." : "Its conversation will be available when it starts."} {!online && "Saved status. Reconnect for updates."}</p><button disabled={!online || metadata.busy} onClick={metadata.refresh}>{metadata.busy ? "Updating status…" : "Refresh status"}</button></div></div>}
           {lanes && metadata.error && <div className="bots-run-notice is-error" role="alert"><CircleAlert size={18} /><div><p>{metadata.error}</p><button disabled={!online || metadata.busy} onClick={metadata.refresh}>Retry status</button></div></div>}
           {!unbound && !online && <div className="bots-run-notice"><CircleAlert size={18} /><p>{transcript ? "Saved run detail. Connect for updates and details not yet opened." : "Connect to open this run. Your saved conversation is still available."}</p></div>}
@@ -271,17 +277,15 @@ export function RunHistory({ bot, schedules, attachments, online, onClose, downl
         </> : <>
           <div className="bots-run-intro"><h3>Scheduled activity</h3><p>Review scheduled runs, their progress, and recorded results.</p></div>
           {!online && <div className="bots-run-notice"><Clock3 size={18} /><p>Saved activity. Reconnect for updates and full run details.</p></div>}
+          {botsClient.snapshot?.capabilities?.scheduleDecisions === 1 && <RunDecisions owner={owner} botId={bot.id} online={online} />}
           {schedules.some(schedule => schedule.enabled && schedule.nextRunAt) && <section className="bots-run-upcoming" aria-label="Coming up"><CalendarDays size={18} /><div><strong>Coming up</strong>{schedules.filter(schedule => schedule.enabled && schedule.nextRunAt).sort((a, b) => a.nextRunAt!.localeCompare(b.nextRunAt!)).slice(0, 3).map(schedule => <p key={schedule.id}><span>{schedule.title}</span><time>{stamp(schedule.nextRunAt)}</time></p>)}</div></section>}
           <div className="bots-run-tools"><div role="group" aria-label="Filter activity"><button aria-pressed={filter === "all"} onClick={() => setFilter("all")}>All runs</button><button aria-pressed={filter === "attention"} onClick={() => setFilter("attention")}>Needs attention</button></div><button className="bots-icon-button" aria-label="Refresh activity" disabled={busy || !online} onClick={firstPage}><RefreshCw size={16} /></button></div>
           {newActivity && <button className="bots-run-back" onClick={firstPage}>New activity · Show recent runs<ArrowRight size={15} /></button>}
           {runPage > 0 && <button className="bots-run-back" disabled={!online || busy} onClick={() => runPageTo(runPage - 1, runCursors[runPage - 1])}><ArrowLeft size={15} />Newer activity</button>}
-          {groups.map(([date, values]) => <section className="bots-run-day" key={date}><h3>{date}</h3>{values.map(run => <article className={`bots-run-card ${needsAttention(run) ? "needs-attention" : ""}`} key={run.id}>
-            <div className="bots-run-card-icon">{["running", "starting"].includes(run.status) ? <LoaderCircle size={18} className="bots-spin" /> : needsAttention(run) ? <CircleAlert size={18} /> : run.status === "completed" ? <CheckCircle2 size={18} /> : <Clock3 size={18} />}</div>
-            <div className="bots-run-card-content"><div className="bots-run-card-title"><h4>{run.title}</h4><span className={`bots-run-status is-${run.status}`}>{labels[run.activity?.state === "paused" ? "paused" : run.status] ?? "Recorded"}</span></div><p><time>{stamp(run.startedAt ?? run.scheduledAt)}</time>{run.finishedAt && <span> · Finished {validDate(run.finishedAt)?.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}</span>}</p>{run.error && <p className="bots-run-error-text">{run.error}</p>}<div className="bots-run-card-actions">{run.turnId || lanes ? <button disabled={busy} onClick={() => open(run)}>Open run<ArrowRight size={14} /></button> : <span>{run.status === "queued" ? "Waiting to start" : "No recorded conversation"}</span>}{run.status === "uncertain" && <button disabled={!online || busy} onClick={() => void acknowledge(run)}>I reviewed this run</button>}</div></div>
-          </article>)}</section>)}
+          {groups.map(([date, values]) => <section className="bots-run-day" key={date}><h3>{date}</h3>{values.map(run => <RunActivityCard key={run.id} run={run} online={online} busy={busy} canOpen={!!run.turnId || lanes} stamp={stamp} open={open} acknowledge={run => void acknowledge(run)} />)}</section>)}
           {!groups.length && !busy && !error && <div className="bots-run-empty"><Clock3 size={30} strokeWidth={1.4} /><h3>{filter === "attention" ? "Nothing needs your attention here" : "A quieter kind of history"}</h3><p>{filter === "attention" ? "No issues on this page. You can also browse earlier activity." : "Your scheduled runs will appear here, with their progress and results."}</p></div>}
           {lanes && <StopAll owner={owner} botId={bot.id} online={online} />}
-          <p className="bots-run-page-note">{runs.length} {runs.length === 1 ? "run" : "runs"} on this page</p>
+          <p className="bots-run-page-note">{filter === "attention" ? `${visibleRuns.length} ${visibleRuns.length === 1 ? "run needs" : "runs need"} attention · ${runs.length} on this page` : `${visibleRuns.length} ${visibleRuns.length === 1 ? "run" : "runs"} on this page`}{cursor && " · Earlier activity available"}</p>
           {cursor && <button className="bots-run-load" disabled={!online || busy} onClick={() => runPageTo(runPage + 1, cursor)}>Earlier activity<ArrowLeft size={15} /></button>}
         </>}
         {busy && <p className="bots-run-loading" role="status"><LoaderCircle size={16} className="bots-spin" />{target ? "Opening this run…" : "Updating activity…"}</p>}
