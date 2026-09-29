@@ -1424,6 +1424,10 @@ export class BotRuntime extends EventEmitter {
     }
     return input;
   }
+  managedPrompt(botId, clientId) {
+    const row = this.store.db.prepare("SELECT json FROM records WHERE kind='promptQueue' AND bot_id=? AND json_extract(json,'$.clientUserMessageId')=? LIMIT 1").get(botId, clientId);
+    return row ? JSON.parse(row.json) : null;
+  }
   publicQueued(bot, item) {
     const saved = this.store.get("queuedAttachments", item.clientUserMessageId);
     const owned = this.store.list("attachment", bot.id).filter((a) => a.ready);
@@ -1452,7 +1456,10 @@ export class BotRuntime extends EventEmitter {
       item.state === "failed" ? "rejected" : bot.queuePaused ? "paused" :
       this.store.list("pending", bot.id).length ? "needs-input" : bot.activeTurnId ? "main-turn-running" :
       this.plans.blocked(bot.id) ? "plan-reconciliation" : null;
+    const managed = this.managedPrompt(bot.id, item.clientUserMessageId);
     return { ...item, input, waitReason,
+      ...(managed && item.id !== managed.id ? { state: "dispatching", revision: managed.revision, operationId: managed.operationId,
+        error: "Accepted by the native queue; input is frozen. Stop retains unstarted input for editing." } : {}),
       attachments: attachments.map((a) => this.publicAttachment(a)) };
   }
   async queueList(bot) {

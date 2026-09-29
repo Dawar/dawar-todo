@@ -22,6 +22,7 @@ export async function prepareLocalQueueMutation(runtime, method, botId, params, 
       const queue = await runtime.queueList(bot);
       const selected = queue.find(entry => entry.id === params.id);
       if (!selected) throw new Error("Queued prompt not found.");
+      if (runtime.managedPrompt?.(botId, selected.clientUserMessageId)) throw new Error("This input was handed to the native queue. Stop retains positively unstarted input before editing/removal; its original receipt is preserved.");
       if (runtime.store.get("primaryInbox", selected.clientUserMessageId)) throw new Error("Use the schedule or peer action for this automatic intake.");
       return null;
     }

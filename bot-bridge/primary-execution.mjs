@@ -348,7 +348,7 @@ export class PrimaryExecution {
         const firstHuman = stagedQueue(this.store, bot.id)[0];
         const before = this.store.bot(bot.id);
         if (firstHuman?.state === 'queued' && !before.queuePaused && !before.archiving && !this.runtime.activityUnresolved(bot.id) &&
-            !this.store.list('pending', bot.id).length && !this.runtime.scheduledUncertain(bot.id) && (!before.activeTurnId || before.mode === 'default')) {
+            !this.store.list('pending', bot.id).length && !this.runtime.scheduledUncertain(bot.id) && (!before.activeTurnId || before.mode === 'default' && this.store.get('nativeGoal', bot.id)?.goal?.status === 'active')) {
           await dispatchPrompt(this.runtime, before, firstHuman); return;
         }
         const items = this.openItems(bot.id);
