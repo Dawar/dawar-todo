@@ -4,6 +4,7 @@ import { LazyDetails, TextPages, ItemPages } from "./lazy-details";
 import { botsClient } from "./client";
 import { ReturnedArtifact } from "./returned-artifact";
 import { MarkdownTable } from "./markdown-table";
+import { MarkdownCodeBlock } from "../markdown-code-block";
 import type { BotAttachment } from "../../lib/bots-types";
 import ReactMarkdown, { defaultUrlTransform, type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -45,6 +46,7 @@ function BotMessage({
         }
         components={{
           table: renderMarkdownTable,
+          pre: MarkdownCodeBlock,
           a: ({ href, children }) =>
             href?.startsWith("bot-artifact:") ? (
               <ReturnedArtifact botId={botId} id={href.slice(13)} attachment={attachments.find((file) => file.id === href.slice(13))}>{children}</ReturnedArtifact>

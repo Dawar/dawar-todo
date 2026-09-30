@@ -1,5 +1,5 @@
 const CACHE_PREFIX = "dawar-todo-shell-";
-const CACHE_NAME = `${CACHE_PREFIX}v49`;
+const CACHE_NAME = `${CACHE_PREFIX}v50`;
 const SHELL = [
   "/",
   "/tasks",
@@ -40,6 +40,10 @@ function discoveredAssetUrls(text, sourcePath = "/") {
       const normalized = value.startsWith("assets/") ? `/${value}` : value;
       const url = new URL(normalized, sourceUrl);
       if (url.origin !== self.location.origin || url.pathname.startsWith("/api/")) return;
+      // Mermaid's optional entry references every diagram engine. Keep that
+      // graph out of shell installation; requested diagram assets are cached
+      // by the normal asset handler after their first use.
+      if (url.pathname.startsWith("/assets/mermaid.core-")) return;
       const cacheable = url.pathname.startsWith("/assets/")
         || url.pathname.startsWith("/_next/")
         || /\.(?:css|js|mjs|woff2?|png|webp|jpg|jpeg|svg|ico)$/i.test(url.pathname);
