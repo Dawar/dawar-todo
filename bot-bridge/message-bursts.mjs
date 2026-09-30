@@ -2,8 +2,8 @@ import { randomUUID, createHash } from 'node:crypto';
 
 const now = () => new Date().toISOString();
 const open = b => !b.supersededBy && ['pending', 'paused', 'dispatching', 'uncertain', 'failed'].includes(b.state);
-const message = m => { const { id, botId, text, attachmentIds, createdAt, state, batchId, turnId } = m;
-  return { id, botId, text, attachmentIds, createdAt, state, batchId, turnId }; };
+const message = m => { const { id, botId, text, attachmentIds, createdAt, state, batchId, turnId, dismissed } = m;
+  return { id, botId, text, attachmentIds, createdAt, state, batchId, turnId, ...(dismissed ? { dismissed: true } : {}) }; };
 const batch = b => b && ({ id: b.id, botId: b.botId, state: b.state, messageIds: b.messageIds, dueAt: b.dueAt,
   operationId: b.id, turnId: b.turnId ?? null, error: b.error ?? null });
 
@@ -13,13 +13,13 @@ export class MessageBursts {
   constructor(runtime) { this.runtime = runtime; this.store = runtime.store; this.leases = new Map(); this.timers = new Map(); }
   batches(botId, history = false) {
     return this.store.db.prepare(`SELECT json FROM records WHERE kind='messageBurst' AND bot_id=? AND
-      (json_extract(json,'$.state') != 'sent' OR (? AND rowid IN (SELECT rowid FROM records WHERE kind='messageBurst' AND bot_id=? ORDER BY rowid DESC LIMIT 50)))
+      (json_extract(json,'$.state') NOT IN ('sent','discarded') OR (? AND json_extract(json,'$.state')='sent' AND rowid IN (SELECT rowid FROM records WHERE kind='messageBurst' AND bot_id=? ORDER BY rowid DESC LIMIT 50)))
       AND json_extract(json,'$.supersededBy') IS NULL ORDER BY json_extract(json,'$.sequence'),rowid`)
       .all(botId, history ? 1 : 0, botId).map(r => JSON.parse(r.json));
   }
   messages(botId, history = false) {
     return this.store.db.prepare(`SELECT json FROM records WHERE kind='burstMessage' AND bot_id=? AND
-      (json_extract(json,'$.state') != 'sent' OR (? AND rowid IN (SELECT rowid FROM records WHERE kind='burstMessage' AND bot_id=? ORDER BY rowid DESC LIMIT 50))) ORDER BY rowid`)
+      (json_extract(json,'$.state') NOT IN ('sent','discarded') OR (? AND json_extract(json,'$.state')='sent' AND rowid IN (SELECT rowid FROM records WHERE kind='burstMessage' AND bot_id=? ORDER BY rowid DESC LIMIT 50))) ORDER BY rowid`)
       .all(botId, history ? 1 : 0, botId).map(r => JSON.parse(r.json));
   }
   read(bot) {
@@ -83,6 +83,34 @@ export class MessageBursts {
   pause(botId) {
     for (const b of this.batches(botId)) if (b.state === 'pending') this.store.put('messageBurst', { ...b, state: 'paused', dueAt: null });
     this.publish(botId); return this.read(this.store.bot(botId));
+  }
+  discard(bot, p) {
+    if (!Array.isArray(p.messageIds) || !p.messageIds.length || p.messageIds.length > 200 ||
+        p.messageIds.some(id => typeof id !== 'string' || id.length > 200) || new Set(p.messageIds).size !== p.messageIds.length)
+      throw new Error('Select the saved messages to discard.');
+    const selected = p.messageIds.map(id => this.runtime.owned('burstMessage', id, bot.id));
+    const discardedIds = [], hiddenIds = [];
+    for (const m of selected) {
+      const b = m.batchId && this.store.get('messageBurst', m.batchId);
+      const op = b && this.store.operation(b.id);
+      // This mutation holds the ordinary bot lock and commits synchronously.
+      // A reserved native send is never removed, replayed or called cancelled.
+      const unsent = b?.botId === bot.id &&
+        ((['pending', 'paused'].includes(b.state) && !op) || (b.state === 'failed' && op?.outcome === 'rejected'));
+      if (m.state === 'discarded' || unsent) {
+        this.store.put('burstMessage', { ...m, state: 'discarded', dismissed: true, discardedAt: now() });
+        if (b) {
+          const remaining = b.messageIds.filter(id => id !== m.id);
+          this.store.put('messageBurst', { ...b, messageIds: remaining, ...(!remaining.length ? { state: 'discarded', dueAt: null, discardedAt: now() } : {}) });
+        }
+        discardedIds.push(m.id);
+      } else {
+        this.store.put('burstMessage', { ...m, dismissed: true });
+        hiddenIds.push(m.id);
+      }
+    }
+    this.publish(bot.id);
+    return { ...this.read(bot), discardedIds, hiddenIds };
   }
   start(bot, retryId) {
     if (this.batches(bot.id).some(b => !b.supersededBy && ['dispatching', 'uncertain'].includes(b.state))) throw new Error('Reconcile the original send before starting another batch; no message was repeated.');

@@ -11,8 +11,8 @@ export type WorkState = BotWorkState;
 export type InboxItem = { id: string; botId: string; kind: 'schedule' | 'peer'; sourceId: string; state: 'queued' | 'dispatching' | 'accepted' | 'uncertain' | 'cancelled' | 'failed'; summary: string; createdAt: string; turnId: string | null; waitReason: string | null };
 export type PeerRequest = { id: string; rootId: string; parentId: string | null; senderBotId: string; recipientBotId: string; kind: 'message' | 'question' | 'task'; summary: string; state: 'queued' | 'working' | 'waiting' | 'completed' | 'cancelled' | 'failed' | 'delivery-unconfirmed'; round: number; roundLimit: 6; createdAt: string; updatedAt: string; turnId: string | null; result: string | null; cancelRequested: boolean };
 export type PeerExchange = { id: string; requestId: string; botId: string; kind: 'request' | 'reply' | 'cancel'; text: string; attachmentIds: string[]; createdAt: string; round: number };
-export type BurstMessage = { id: string; botId: string; text: string; attachmentIds: string[]; createdAt: string; state: 'pending' | 'dispatching' | 'sent' | 'uncertain' | 'failed'; batchId: string | null; turnId: string | null };
-export type Burst = { id: string; botId: string; state: 'pending' | 'paused' | 'dispatching' | 'sent' | 'uncertain' | 'failed'; messageIds: string[]; dueAt: string | null; operationId: string | null; turnId: string | null; error: string | null };
+export type BurstMessage = { id: string; botId: string; text: string; attachmentIds: string[]; createdAt: string; state: 'pending' | 'dispatching' | 'sent' | 'uncertain' | 'failed' | 'discarded'; dismissed?: boolean; batchId: string | null; turnId: string | null };
+export type Burst = { id: string; botId: string; state: 'pending' | 'paused' | 'dispatching' | 'sent' | 'uncertain' | 'failed' | 'discarded'; messageIds: string[]; dueAt: string | null; operationId: string | null; turnId: string | null; error: string | null };
 export type BurstState = { messages: BurstMessage[]; burst: Burst | null; batches?: Burst[]; attachments?: BotAttachment[] };
 export type BotSnapshot = Omit<LegacySnapshot, 'bots' | 'capabilities'> & { bots: Bot[]; workByBot?: WorkState[]; capabilities?: LegacySnapshot['capabilities'] & { singleThreadExecution?: 1; peerInbox?: 1; nativeGoals?: 1; messageBursts?: 1 } };
 export type BotOperations = Omit<LegacyOperations, 'bots.update'> & {
@@ -28,5 +28,6 @@ export type BotOperations = Omit<LegacyOperations, 'bots.update'> & {
   'bursts.read': { params: Record<string, never>; result: BurstState };
   'bursts.typing': { params: { clientId: string; typing: boolean }; result: unknown };
   'bursts.start': { params: Record<string, never>; result: BurstState };
+  'bursts.discard': { params: { messageIds: string[] }; result: BurstState & { discardedIds: string[]; hiddenIds: string[] } };
   'bursts.stop': { params: Record<string, never>; result: BurstState };
 };

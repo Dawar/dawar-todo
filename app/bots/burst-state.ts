@@ -12,8 +12,9 @@ export function validBurstState(value: BurstState, botId: string) {
     && retainedBatches(value).length <= MAX_RECORDS && retainedBatches(value).every(batch => batch.botId === botId && Array.isArray(batch.messageIds) && batch.messageIds.length <= 200);
 }
 export function pendingMessageCount(value: SavedBurstState | null) {
-  const ids = new Set(retainedBatches(value).filter(batch => batch.state !== 'sent').flatMap(batch => batch.messageIds));
-  for (const message of value?.messages ?? []) if (message.state !== 'sent') ids.add(message.id);
+  const dismissed = new Set(value?.messages.filter(message => message.dismissed || message.state === 'discarded').map(message => message.id));
+  const ids = new Set(retainedBatches(value).filter(batch => !['sent', 'discarded'].includes(batch.state)).flatMap(batch => batch.messageIds).filter(id => !dismissed.has(id)));
+  for (const message of value?.messages ?? []) if (!message.dismissed && !['sent', 'discarded'].includes(message.state)) ids.add(message.id);
   return Math.max(ids.size, value?.preview?.messageCount ?? 0);
 }
 /** Disposable previews, never the submitted inputs/receipts. Metadata/counts for

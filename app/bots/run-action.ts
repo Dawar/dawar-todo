@@ -69,6 +69,7 @@ class RunAction {
       if (operation.state === "rejected") throw Error(operation.error || "This exact action was rejected. Review the current state before making a new action.");
       intent = operation;
       if (intent.method === "runs.decide" && client.snapshot?.capabilities?.scheduleDecisions !== 1) throw Error("Connect to a service that supports scheduled-run choices. The saved choice is retained.");
+      if (intent.method === "bursts.discard" && client.snapshot?.capabilities?.burstDiscard !== 1) throw Error("Connect to the updated service to discard these messages. The saved action is retained.");
       const capability = intent.method.startsWith("bursts.") ? "messageBursts" : (intent.method === "work.resume" || intent.method === "turn.interrupt" && intent.params.scope === "main" && client.snapshot?.capabilities?.singleThreadExecution === 1) ? "singleThreadExecution" : intent.method === "peers.cancel" ? "peerInbox" : "backgroundRunLanes";
       if (client.snapshot?.capabilities?.[capability] !== 1) throw Error("This service does not support the saved action. Its identity is retained.");
       const result = await client.rpc(intent.method, this.botId, intent.params, intent.id, { owner: this.owner, managed: true });
@@ -76,6 +77,12 @@ class RunAction {
       if (intent.method === "runs.decide") {
         const receipt = result as { operationId?: string; run?: { id?: string; botId?: string } };
         if (receipt.operationId !== intent.id || receipt.run?.id !== intent.params.runId || receipt.run?.botId !== this.botId) throw Error("The response did not confirm this exact choice. Check the saved choice again.");
+      }
+      if (intent.method === "bursts.discard") {
+        const receipt = result as { discardedIds?: string[]; hiddenIds?: string[] };
+        const ids = [...(receipt.discardedIds ?? []), ...(receipt.hiddenIds ?? [])];
+        const requested = intent.params.messageIds as string[];
+        if (ids.length !== requested.length || requested.some(id => !ids.includes(id))) throw Error("The reply did not confirm the exact messages. Check the saved discard action again.");
       }
       if (intent.method === "peers.cancel" && (result as { request?: { id?: string } }).request?.id !== intent.params.id) throw Error("The reply did not confirm this discussion. Retry its saved action.");
       this.apply(await runActionJournal(this.key, { kind: "settle", id: intent.id, state: "accepted" })); changed(this.key);

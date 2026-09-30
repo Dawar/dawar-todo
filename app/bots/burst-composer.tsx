@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
-import { ArrowUp, Paperclip, Pause } from 'lucide-react';
+import { ArrowUp, Paperclip, Pause, Trash2 } from 'lucide-react';
 import type { BotAttachment } from '../../lib/bots-types';
 import type { HistoryEntry } from '../../lib/bot-history-view';
 import type { Burst, BurstMessage } from './single-thread-contract';
@@ -20,6 +20,8 @@ export function useBurstConversation({ owner, botId, online, draft, enabled, qui
   useEffect(() => {
     if (value && client.owner === owner) client.save(cacheKey, savedBurstState(value));
   }, [owner, cacheKey, value]);
+  const discardAction = useRunAction(owner, botId, 'burst:discard');
+  const discard = (messageIds: string[]) => discardAction.perform('bursts.discard', { messageIds }).then(() => setRefresh(value => value + 1));
   const action = useRunAction(owner, botId, 'burst:control'), sequence = useRef(0), typing = useRef({ id: crypto.randomUUID(), last: 0, value: draft, inputAt: 0, active: false });
   const [typingUntil, setTypingUntil] = useState(0);
   useEffect(() => {
@@ -73,7 +75,7 @@ export function useBurstConversation({ owner, botId, online, draft, enabled, qui
   const paused = states.includes('paused'), blocked = uncertain || dispatching;
   const canStart = !blocked && (failed || paused || hasPending);
   const refreshDelivery = () => setRefresh(value => value + 1);
-  return { value: enabled ? value : null, batches, messages, count, action, error, hasPending, uncertain, dispatching, failed, paused, blocked, canStart, refreshDelivery, typingUntil };
+  return { value: enabled ? value : null, batches, messages, count, action, error, hasPending, uncertain, dispatching, failed, paused, blocked, canStart, refreshDelivery, typingUntil, discard, discardAction };
 }
 export type BurstConversation = ReturnType<typeof useBurstConversation>;
 
@@ -113,19 +115,22 @@ function BurstBubble({ message, batch, botId, attachments, quietSeconds, online,
   </div>;
 }
 export function BurstBubbles({ messages, batch, ...props }: { messages: BurstMessage[]; batch?: Burst; botId: string; attachments: BotAttachment[]; quietSeconds: number; online: boolean; typingUntil: number; truncatedIds?: string[] }) {
-  return <>{messages.map(message => <BurstBubble key={message.id} message={message} batch={batch} {...props} truncated={props.truncatedIds?.includes(message.id) ?? false} />)}</>;
+  return <>{messages.filter(message => !message.dismissed && message.state !== 'discarded').map(message => <BurstBubble key={message.id} message={message} batch={batch} {...props} truncated={props.truncatedIds?.includes(message.id) ?? false} />)}</>;
 }
 export function BurstControls({ burst, online, submitting = false }: { burst: BurstConversation; online: boolean; submitting?: boolean }) {
-  const { value, batches, messages, count, action, error, hasPending, uncertain, failed, paused, blocked, canStart, refreshDelivery } = burst;
-  if (!count && !batches.length && !submitting && !action.intent && !action.error && !error) return null;
+  const { value, batches, messages, count, action, error, hasPending, uncertain, dispatching, failed, paused, blocked, canStart, refreshDelivery, discard, discardAction } = burst;
+  if (!count && !batches.length && !submitting && !action.intent && !action.error && !discardAction.intent && !discardAction.error && !error) return null;
+  const visibleIds = messages.filter(message => !message.dismissed && message.state !== 'discarded').map(message => message.id);
+  const canDiscard = client.snapshot?.capabilities?.burstDiscard === 1;
   const truncatedText = new Set(value?.preview?.truncatedTextIds ?? []);
   const previewOnly = !!value?.preview || !online, completeBatchMetadata = value?.batches !== undefined;
   return <div className="bots-burst-pending">
     {previewOnly && (!completeBatchMetadata || count > messages.length || truncatedText.size > 0) && <small className="bots-burst-preview">Some saved messages are previews. Reconnect for complete messages and delivery status.</small>}
     <div className="bots-burst-line">
       {(!online || paused) && <small>{!online ? 'Saved · waiting for connection' : 'Messages held'}</small>}
-      {!action.intent && <div>{canStart && <button type="button" aria-label={failed ? 'Retry and start all retained messages' : 'Send waiting messages now'} title={failed ? 'Retry and start all retained messages' : 'Send now'} disabled={!online || action.busy || !action.ready} onClick={() => void action.perform('bursts.start', {}).then(refreshDelivery).catch(() => {})}><ArrowUp size={16} />{failed && 'Retry'}</button>}{hasPending && <button type="button" aria-label="Hold all pending messages" title="Hold waiting messages" disabled={!online || action.busy || !action.ready} onClick={() => void action.perform('bursts.stop', {}).then(refreshDelivery).catch(() => {})}><Pause size={16} /></button>}</div>}
+      <div>{!action.intent && <>{canStart && <button type="button" aria-label={failed ? 'Retry and start all retained messages' : 'Send waiting messages now'} title={failed ? 'Retry and start all retained messages' : 'Send now'} disabled={!online || action.busy || !action.ready} onClick={() => void action.perform('bursts.start', {}).then(refreshDelivery).catch(() => {})}><ArrowUp size={16} />{failed && 'Retry'}</button>}{hasPending && <button type="button" aria-label="Hold all pending messages" title="Hold waiting messages" disabled={!online || action.busy || !action.ready} onClick={() => void action.perform('bursts.stop', {}).then(refreshDelivery).catch(() => {})}><Pause size={16} /></button>}</>}{visibleIds.length > 0 && <button type="button" aria-label={uncertain || dispatching ? 'Hide retained message previews' : 'Discard waiting messages'} title={canDiscard ? uncertain || dispatching ? 'Clear previews; delivery may already be in progress' : 'Discard waiting messages' : 'Discard available after service update'} disabled={!online || !canDiscard || discardAction.busy || !discardAction.ready || !!discardAction.intent} onClick={() => void discard(visibleIds).catch(() => {})}><Trash2 size={16} /></button>}</div>
     </div>
+    {(discardAction.error || discardAction.intent) && <div className="bots-burst-recovery" role="status">{discardAction.error || 'Confirming the saved discard action…'}{discardAction.intent && <button disabled={!online || discardAction.busy} onClick={() => void discardAction.retry().then(refreshDelivery).catch(() => {})}>Check discard</button>}</div>}
     {(error || action.error || action.intent || failed || uncertain) && <div className="bots-burst-recovery" role="status">{action.error || error || (action.intent ? 'The saved control action needs confirmation. Your messages are retained.' : uncertain ? 'Waiting for the original delivery to be confirmed.' : blocked ? 'Waiting for delivery confirmation.' : 'Not delivered. Retry keeps the original messages and files.')}{action.intent ? <button disabled={!online || action.busy} onClick={() => void action.retry().then(refreshDelivery).catch(() => {})}>Check saved action</button> : <button disabled={!online} onClick={refreshDelivery}>Refresh delivery</button>}</div>}
   </div>;
 }
