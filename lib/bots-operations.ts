@@ -1,6 +1,6 @@
 /** Public bridge contract. Native JSON-RPC method names never come from a browser. */
 import type {
-  Bot, BotAvatar, BotWorkState, BotInboxItem, BotPeerRequest, BotPeerExchange, BotPeerPage, BotBurstState, BotBurstMessage, BotBurst,
+  BotTeam, BotTeamDetail, Bot, BotAvatar, BotWorkState, BotInboxItem, BotPeerRequest, BotPeerExchange, BotPeerPage, BotBurstState, BotBurstMessage, BotBurst,
   BotAttachment,
   BotHistory,
   BotSchedule,
@@ -22,6 +22,14 @@ import type { TurnSteerResponse } from "./codex-protocol/v2/TurnSteerResponse";
 import type { QueuedSubmission } from "./codex-protocol/v2/QueuedSubmission";
 import type { HistoryResponse, HistoryDetail } from "./bot-history-view";
 export type BotOperations = {
+  "teams.list": { params: Record<string, never>; result: BotTeam[] };
+  "teams.read": { params: { id: string }; result: BotTeamDetail };
+  "teams.save": { params: { id?: string; name: string; color: string; expectedRevision?: number }; result: { team: Omit<BotTeamDetail, "workspace" | "members"> } };
+  "teams.assign": { params: { botId: string; teamId: string | null; expectedTeamId: string | null }; result: { bot: Bot } };
+  "teams.reorder": { params: { ids: string[]; revisions: { id: string; revision: number }[] }; result: { applied: boolean } };
+  "teams.orderBots": { params: { id: string; ids: string[]; expectedRevision: number }; result: { applied: boolean } };
+  "teams.memory": { params: { id: string; memory: string; expectedRevision: number }; result: { team: Omit<BotTeamDetail, "workspace" | "members"> } };
+  "teams.delete": { params: { id: string; expectedRevision: number }; result: { applied: boolean } };
   "work.read": { params: Record<string, never>; result: BotWorkState };
   "work.resume": { params: Record<string, never>; result: BotWorkState };
   "inbox.list": { params: { cursor?: string | null; limit?: number }; result: { items: BotInboxItem[]; nextCursor: string | null } };

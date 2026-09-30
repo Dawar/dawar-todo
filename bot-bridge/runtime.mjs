@@ -16,6 +16,7 @@ import { registerArtifact, registerNativeItem, indexNativeArtifacts, rememberInp
 import { EventEmitter } from "node:events";
 import { PlanLifecycle } from "./plan-lifecycle.mjs";
 import { stagedQueue, dispatchPrompt, reconcilePrompt } from "./prompt-queue.mjs";
+import { TEAM_TOOL, publicTeams, readTeam, teamReference, acceptTeamOperation, teamTool } from "./teams.mjs";
 import { QUEUE_TOOL, ownedList, publicLists, flushDueLists, queueTool } from "./queue-lists.mjs";
 import { findNativeTurn } from "./native-reconcile.mjs";
 import { dispatchScheduled, reconcileScheduled, scheduledContext, recoverRunTurns } from "./scheduled-execution.mjs";
@@ -96,6 +97,8 @@ const READ_METHODS = new Set([
   "attachments.read",
   "queue.list",
   "queueLists.list",
+  "teams.list",
+  "teams.read",
   "runtime.info",
 ]);
 const MAX_FILE = 100 * 1024 * 1024;
@@ -117,6 +120,7 @@ const schema = (properties, required = []) => ({
 });
 const str = { type: "string" };
 export const dynamicTools = [
+  { type: "function", ...TEAM_TOOL },
   { type: "function", ...QUEUE_TOOL },
   { type: "function", ...WORK_TOOL },
   { type: "function", ...PEER_TOOL },
@@ -241,7 +245,9 @@ export class BotRuntime extends EventEmitter {
   saveBot(bot, changes = {}) {
     // A late successful Send must not clear a pause raised while its ACK was
     // pending (including a newer turn's interruption after it already ended).
-    const next = this.store.saveBot({ ...bot, ...changes,
+    // Membership is owner-managed metadata. A native ACK may carry an older
+    // bot projection; it must not undo a later team assignment or reorder.
+    const next = this.store.saveBot({ ...bot, ...this.store.teamPlacement(bot.id), ...changes,
       ...(changes.queuePaused === true ? { queuePauseRevision: (bot.queuePauseRevision ?? 0) + 1 } : {}) });
     this.emitEvent("bot", next, next.id);
     if (this.primary && ["activeTurnId", "status", "queuePaused", "executionMode"].some(key => Object.hasOwn(changes, key))) this.primary.publish(next.id);
@@ -491,7 +497,8 @@ export class BotRuntime extends EventEmitter {
   }
   snapshot() {
     return {
-      capabilities: { backgroundRunLanes: 1, scheduleDecisions: 1, singleThreadExecution: 1, peerInbox: 1, nativeGoals: 1, messageBursts: 1, queueLists: 1 },
+      capabilities: { backgroundRunLanes: 1, scheduleDecisions: 1, singleThreadExecution: 1, peerInbox: 1, nativeGoals: 1, messageBursts: 1, queueLists: 1, teams: 1 },
+      teams: publicTeams(this),
       workByBot: this.store.bots().map(bot => this.primary.work(bot)),
       ...this.runs.snapshot(),
       bots: this.store
@@ -548,7 +555,7 @@ export class BotRuntime extends EventEmitter {
     const resumeRun = ["runs.resume", "runs.decide"].includes(method) && this.owned("run", params.runId, botId);
     const laneKey = resumeRun ? resumeRun.laneId ?? `run-preparation:${resumeRun.id}` :
       method.startsWith("runs.") && params.runId ? this.runs.lane(botId, params.runId).id : runRequest?.laneId;
-    return this.lock(laneKey ?? botId ?? "create", async () => {
+    return this.lock(method.startsWith("teams.") ? "teams" : laneKey ?? botId ?? "create", async () => {
       const inputMutation = ["turn.send", "requests.respond", "queue.add", "queue.update", "queue.delete", "queue.reorder", "goals.set", "goals.clear"].includes(method);
       const lifecycleMutation = ["turn.interrupt", "runs.interrupt", "bots.archive", "bots.restore"].includes(method);
       const attempt = inputMutation ? { started: false, rejected: false } : null;
@@ -567,6 +574,8 @@ export class BotRuntime extends EventEmitter {
             "This operation may already have run. Refresh the conversation before retrying.",
         ), { outcome: this.store.operation(operationId).outcome === "rejected" ? "rejected" : "uncertain" });
       }
+      const shared = await acceptTeamOperation(this, { method, botId, params, operationId }, fingerprint);
+      if (shared) return shared.result;
       const single = await acceptSingleThreadOperation(this, { method, botId, params, operationId }, fingerprint, trustedOrigin);
       if (single) return single.result;
       const local = await acceptLocalQueueOperation(this, { method, botId, params, operationId }, fingerprint);
@@ -684,6 +693,8 @@ export class BotRuntime extends EventEmitter {
   }
   async dispatch(method, botId, p, id, attempt = null) {
     if (method === "snapshot") return this.snapshot();
+    if (method === "teams.list") return publicTeams(this);
+    if (method === "teams.read") return readTeam(this,p.id);
     if (method === "usage.account") {
       const readAt = now();
       let accountType = null;
@@ -1356,7 +1367,7 @@ export class BotRuntime extends EventEmitter {
     const input = acceptedInput ?? (staged ? p.stagedInput : await this.messageInput(bot, p));
     const text = String(p.text ?? "").trim();
     await this.load(bot);
-    const additionalContext = await profileContext(bot);
+    const additionalContext = await profileContext(bot,teamReference(this,bot));
     if (this.manager)
       additionalContext.managerPolicy = {
         kind: "application",
@@ -2042,6 +2053,10 @@ export class BotRuntime extends EventEmitter {
     const args =
       typeof p.arguments === "string" ? JSON.parse(p.arguments) : p.arguments;
     switch (p.tool) {
+      case "bots_team": {
+        if (origin) throw new Error("Team references belong to the primary named bot.");
+        return teamTool(this,bot,args);
+      }
       case "bots_queue": {
         if (origin) throw new Error("Queue lists belong to the primary named bot.");
         return queueTool(this,bot,args);

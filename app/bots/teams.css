@@ -1,0 +1,489 @@
+.bots-modal-backdrop.bots-teams-backdrop {
+  z-index: 85;
+}
+.bots-teams-modal {
+  width: min(720px, calc(100vw - 32px));
+  max-height: min(820px, calc(100dvh - 48px));
+  display: flex;
+  flex-direction: column;
+  background: #fcfdfb;
+  border: 1px solid #e2e9df;
+  border-radius: 24px;
+  box-shadow: 0 24px 80px #153c2926;
+  color: #2c4234;
+  overflow: hidden;
+}
+.bots-teams-modal > header {
+  display: flex;
+  gap: 15px;
+  align-items: center;
+  padding: 24px 26px;
+  border-bottom: 1px solid #e4eae0;
+  background: #f6f9f3;
+  flex: none;
+}
+.bots-teams-modal > header > div:nth-child(2) {
+  flex: 1;
+}
+.bots-teams-modal h2 {
+  font-weight: 650;
+  margin: 0 0 4px;
+  font-size: 22px;
+  letter-spacing: -0.5px;
+}
+.bots-teams-modal > header p {
+  margin: 0;
+  font-size: 13px;
+  color: #7d8d7f;
+}
+.bots-teams-symbol {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  background: #e6f0e5;
+  color: #447855;
+  border-radius: 16px;
+}
+.bots-teams-body {
+  padding: 24px 26px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  min-height: 0;
+}
+.bots-teams-intro {
+  display: flex;
+  gap: 20px;
+  align-items: start;
+  margin-bottom: 24px;
+}
+.bots-teams-intro > div {
+  flex: 1;
+}
+.bots-teams-intro h3 {
+  font-weight: 600;
+  font-size: 17px;
+  margin: 0 0 8px;
+}
+.bots-teams-intro p {
+  font-size: 13px;
+  line-height: 1.7;
+  margin: 0;
+  color: #7b8a7f;
+}
+.bots-teams-modal .bots-primary {
+  padding: 11px 15px;
+  font-size: 12px;
+  border-radius: 10px;
+  flex: none;
+}
+.bots-teams-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+.bots-team-card {
+  border: 1px solid #dfe8dc;
+  border-radius: 17px;
+  overflow: hidden;
+  background: #fff;
+}
+.bots-team-open {
+  display: flex;
+  align-items: start;
+  flex-direction: column;
+  gap: 9px;
+  padding: 20px;
+  text-align: left;
+  width: 100%;
+  background: transparent;
+}
+.bots-team-open:hover {
+  background: #f7faf4;
+}
+.bots-team-emblem {
+  display: grid;
+  place-items: center;
+  width: 47px;
+  height: 47px;
+  border-radius: 14px;
+  margin-bottom: 4px;
+}
+.bots-team-open strong {
+  font-size: 16px;
+  overflow-wrap: anywhere;
+}
+.bots-team-open > span:not(.bots-team-emblem) {
+  font-size: 12px;
+  color: #778777;
+}
+.bots-team-open small {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 11px;
+  color: #7c967f;
+}
+.bots-team-arrow {
+  transform: rotate(45deg);
+}
+.bots-team-order {
+  display: flex;
+  gap: 3px;
+  align-items: center;
+  padding: 6px 13px;
+  border-top: 1px solid #eaf0e5;
+  background: #fafcf7;
+}
+.bots-team-order > span {
+  flex: 1;
+  font-size: 10px;
+  color: #879782;
+}
+.bots-team-order button {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+}
+.bots-teams-empty {
+  grid-column: 1/-1;
+  display: grid;
+  justify-items: center;
+  padding: 38px 24px;
+  border: 1px dashed #c8d7c2;
+  border-radius: 18px;
+  text-align: center;
+  color: #83957c;
+  background: #f8faf3;
+}
+.bots-teams-empty h3 {
+  font-size: 17px;
+  color: #4a684b;
+  margin: 16px 0 8px;
+}
+.bots-teams-empty p {
+  font-size: 13px;
+  line-height: 1.8;
+  max-width: 360px;
+  margin: 0;
+}
+.bots-teams-footnote {
+  color: #8a9789;
+  font-size: 11px;
+  line-height: 1.7;
+  margin: 20px 0 0;
+}
+.bots-team-text-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  color: #52815a;
+  padding: 8px 0;
+}
+.bots-team-editor {
+  min-width: 0;
+}
+.bots-team-identity {
+  display: flex;
+  align-items: end;
+  gap: 12px;
+  padding: 18px 0 22px;
+}
+.bots-team-identity label {
+  display: grid;
+  gap: 7px;
+  font-size: 12px;
+  color: #6b8069;
+  flex: 1;
+  min-width: 0;
+}
+.bots-team-identity .bots-team-color {
+  flex: none;
+  width: 50px;
+}
+.bots-team-identity input:not([type="color"]),
+.bots-team-add select,
+.bots-team-assignment select {
+  border: 1px solid #d7e3d2;
+  border-radius: 10px;
+  padding: 11px 12px;
+  width: 100%;
+  background: #fff;
+  color: #344e38;
+  min-width: 0;
+  font-size: 13px;
+}
+.bots-team-color input {
+  height: 40px;
+  width: 48px;
+  border: 1px solid #d7e3d2;
+  border-radius: 10px;
+  padding: 5px;
+  background: #fff;
+}
+.bots-team-section {
+  padding: 22px 0;
+  border-top: 1px solid #e2e9dd;
+}
+.bots-team-section h3 {
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 15px;
+  margin: 0 0 8px;
+}
+.bots-team-section h3 span {
+  font-size: 11px;
+  background: #eaf2e6;
+  border-radius: 20px;
+  padding: 3px 8px;
+  color: #63855c;
+}
+.bots-team-section > p {
+  font-size: 12px;
+  color: #7b8d76;
+  line-height: 1.7;
+  margin: 0 0 16px;
+}
+.bots-team-member {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 11px 12px;
+  border: 1px solid #e2e9dd;
+  background: #fff;
+  border-radius: 11px;
+  margin-top: 7px;
+}
+.bots-team-member > span {
+  flex: 1;
+  min-width: 0;
+}
+.bots-team-member strong {
+  display: block;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  font-weight: 550;
+}
+.bots-team-member small {
+  color: #97a18e;
+  font-size: 10px;
+}
+.bots-team-member button,
+.bots-team-path button {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 7px;
+  color: #70896b;
+  flex: none;
+}
+.bots-team-member button:hover,
+.bots-team-order button:hover {
+  background: #edf4e8;
+}
+.bots-team-add {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  align-items: center;
+}
+.bots-team-add select {
+  flex: 1;
+}
+.bots-team-path {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: #eef4e8;
+  border: 1px solid #dee8d6;
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+.bots-team-path code {
+  flex: 1;
+  font-size: 11px;
+  color: #6f8361;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.bots-team-section textarea {
+  display: block;
+  width: 100%;
+  min-height: 180px;
+  resize: vertical;
+  border-radius: 12px;
+  border: 1px solid #d8e3d1;
+  background: #fff;
+  font-size: 13px;
+  line-height: 1.8;
+  color: #3a503a;
+  padding: 15px;
+}
+.bots-team-memory-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  margin-top: 12px;
+}
+.bots-team-memory-actions small {
+  font-size: 11px;
+  color: #9a8960;
+}
+.bots-team-remove {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+  border-top: 1px solid #e2e9dd;
+  padding-top: 20px;
+}
+.bots-team-remove button {
+  display: flex;
+  gap: 7px;
+  align-items: center;
+  color: #927c70;
+  font-size: 11px;
+  padding: 8px 0;
+}
+.bots-team-remove small {
+  font-size: 10px;
+  color: #99a18f;
+}
+.bots-teams-error {
+  padding: 12px 14px;
+  border: 1px solid #e9d9c6;
+  border-radius: 10px;
+  background: #fff8ee;
+  color: #957450;
+  font-size: 12px;
+  line-height: 1.7;
+  margin: 0 0 14px;
+  overflow-wrap: anywhere;
+}
+.bots-teams-error button {
+  display: block;
+  text-decoration: underline;
+  padding-top: 6px;
+}
+.bots-teams-modal button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.bots-teams-modal :focus-visible,
+.bots-team-assignment :focus-visible {
+  outline: 2px solid #428960;
+  outline-offset: 2px;
+}
+.bots-team-assignment {
+  border-top: 1px solid #e2e9dd;
+  padding: 18px 0;
+}
+.bots-team-assignment label {
+  display: grid;
+  gap: 8px;
+  font-size: 12px;
+  color: #6a7e6c;
+}
+.bots-team-filters {
+  display: flex;
+  gap: 7px;
+  padding: 0 16px 10px;
+  flex: none;
+}
+.bots-team-filters select {
+  min-width: 0;
+  flex: 1;
+  border-radius: 9px;
+  padding: 8px 9px;
+  font-size: 11px;
+  color: #63816c;
+  background: #edf3eb;
+  border: 1px solid #e0e9dc;
+}
+.bots-row-team {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 80px;
+  font-size: 9px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bots-row-team i {
+  flex: none;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+}
+@media (max-width: 520px) {
+  .bots-modal-backdrop.bots-teams-backdrop {
+    padding: 0;
+  }
+  .bots-teams-modal {
+    width: 100%;
+    max-height: 100%;
+    height: 100%;
+    border-radius: 0;
+    border: 0;
+  }
+  .bots-teams-modal > header {
+    padding: 22px 20px;
+  }
+  .bots-teams-body {
+    padding: 22px 20px;
+    padding-bottom: max(24px, env(safe-area-inset-bottom));
+  }
+  .bots-teams-grid {
+    gap: 10px;
+  }
+  .bots-team-open {
+    padding: 16px 13px;
+  }
+  .bots-team-open small {
+    font-size: 10px;
+  }
+  .bots-teams-intro {
+    gap: 12px;
+  }
+  .bots-team-identity {
+    flex-wrap: wrap;
+  }
+  .bots-team-identity > label:first-child {
+    flex: 1 1 calc(100% - 70px);
+  }
+  .bots-team-identity > button {
+    margin-top: 3px;
+  }
+  .bots-teams-modal .bots-primary {
+    min-height: 40px;
+  }
+  .bots-team-member button {
+    width: 36px;
+    height: 38px;
+  }
+  .bots-team-filters select {
+    font-size: 13px;
+  }
+}
+@media (pointer: coarse) {
+  .bots-team-identity input:not([type="color"]),
+  .bots-team-add select,
+  .bots-team-assignment select,
+  .bots-team-section textarea {
+    font-size: 16px;
+  }
+  .bots-team-order button {
+    width: 38px;
+    height: 38px;
+  }
+}

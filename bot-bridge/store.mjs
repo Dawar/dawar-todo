@@ -48,6 +48,10 @@ export class Store {
     if (!row) throw new Error("Bot not found.");
     return JSON.parse(row.json);
   }
+  teamPlacement(id) {
+    const row = this.db.prepare("SELECT json_extract(json,'$.teamId') AS teamId, json_extract(json,'$.teamOrder') AS teamOrder FROM bots WHERE id=?").get(id);
+    return row ? { teamId: row.teamId ?? null, teamOrder: row.teamOrder ?? 0 } : {};
+  }
   saveBot(bot) {
     this.db
       .prepare(

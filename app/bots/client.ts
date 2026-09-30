@@ -45,12 +45,17 @@ function snapshotEventKey(event: BotEvent) {
   if (event.type === "run.state" && event.botId) return `run:${event.botId}:${(event.data as BotRunStateEvent).runId}`;
   if (event.type === "run.request" || event.type === "run.request.resolved") return `request:${(event.data as { key: string }).key}`;
   if (event.type === "schedules" && event.botId && Object.hasOwn(event.data as object, "activeScheduledTurn")) return `scheduled:${event.botId}`;
+  if (event.type === "teams") return "teams";
   if (event.type === "bot") return `bot:${(event.data as BotSnapshot["bots"][number]).id}`;
   if (event.type === "request" || event.type === "request.resolved")
     return `request:${(event.data as { key: string }).key}`;
   return null;
 }
 function applySnapshotEvent(snapshot: BotSnapshot, event: BotEvent, key?: string): BotSnapshot {
+  if (event.type === "teams") {
+    const teams = (event.data as { teams?: BotSnapshot["teams"] }).teams;
+    return Array.isArray(teams) ? { ...snapshot, teams } : snapshot;
+  }
   if (event.type === "work" && event.botId) {
     const work = event.data as WorkState;
     if (work.botId !== event.botId) return snapshot;

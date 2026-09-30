@@ -28,6 +28,7 @@ import {
   ListOrdered,
   ListPlus,
   Save,
+  UsersRound,
 } from "lucide-react";
 import type { Bot } from "./single-thread-contract";
 import { BotAvatar as Avatar } from "./bot-avatar";
@@ -65,6 +66,7 @@ import { ComposerInput } from "./composer-input";
 import { ComposerSettings } from "./composer-settings";
 import { ArtifactGallery, BotAttachmentsEntry, ArtifactNav } from "./artifact-gallery";
 import { PromptQueue } from "./prompt-queue";
+import { TeamsManager, TeamAssignment } from "./teams";
 import { QueueLists, useQueueLists } from "./queue-lists";
 import "./bots.css";
 import "./chat-design.css";
@@ -125,7 +127,10 @@ export function BotsWorkspace() {
   const canSend = Boolean(composer?.ready && !composer.storageError && !sending &&
     uploads.every((file) => file.remote?.ready));
   const setDraft = (text: string) => composer?.setText(text);
+  const [showTeams, setShowTeams] = useState(false), [teamFilter, setTeamFilter] = useState("all"), [teamSort, setTeamSort] = useState("recent");
   const snapshot = client.snapshot;
+  const teams = snapshot?.teams ?? [];
+  const teamsSupported = snapshot?.capabilities?.teams === 1;
   const lanes = snapshot?.capabilities?.backgroundRunLanes === 1;
   const online = client.online,
     bots = snapshot?.bots ?? EMPTY_BOTS,
@@ -398,8 +403,19 @@ export function BotsWorkspace() {
     if (!images.length) return;
     void upload(images);
   }
-  const filtered = useMemo(() => bots.filter((b) => b.archived === archived &&
-    `${b.name} ${b.purpose}`.toLowerCase().includes(search.toLowerCase())), [bots, archived, search]);
+  const filtered = useMemo(() => {
+    const teams = snapshot?.teams ?? [];
+    const filter = teamFilter === "all" || teamFilter === "none" || teams.some(t=>t.id===teamFilter) ? teamFilter : "all";
+    const matching = bots.filter(b=>b.archived===archived && `${b.name} ${b.purpose}`.toLowerCase().includes(search.toLowerCase()) &&
+      (filter==="all"||filter==="none"&&!b.teamId||b.teamId===filter));
+    if (teamSort==="name") matching.sort((a,b)=>a.name.localeCompare(b.name)||a.id.localeCompare(b.id));
+    if (teamSort==="team") {
+      const order = new Map(teams.map((t,index)=>[t.id,index]));
+      matching.sort((a,b)=>(order.get(a.teamId??"")??teams.length)-(order.get(b.teamId??"")??teams.length) ||
+        (a.teamId===b.teamId?(a.teamOrder??0)-(b.teamOrder??0):0)||a.name.localeCompare(b.name)||a.id.localeCompare(b.id));
+    }
+    return matching;
+  }, [bots, archived, search, teamFilter, teamSort, snapshot?.teams]);
   const schedules = snapshot?.schedules.filter((s) => s.botId === selected) ?? [];
   const recentRuns = [...new Map([...(lanes ? snapshot?.backgroundRuns ?? [] : []), ...(snapshot?.runs ?? [])]
     .filter(run => run.botId === selected).map(run => [run.id, run])).values()];
@@ -413,6 +429,7 @@ export function BotsWorkspace() {
           <div className="bots-sidebar-heading">
             <h1>Bots</h1>
             <div className="bots-sidebar-tools">
+            <button className="bots-icon-button" disabled={!teamsSupported} title={teamsSupported ? "Teams" : "Teams will be available after the service update"} aria-label="Teams" onClick={() => setShowTeams(true)}><UsersRound size={19} /></button>
             <button className="bots-icon-button" title="Codex account usage" aria-label="Codex account usage" onClick={() => setShowOverallUsage(true)}><BarChart3 size={19} /></button>
             <button
               className="bots-icon-button"
@@ -463,8 +480,9 @@ export function BotsWorkspace() {
               Archived
             </button>
           </div>
+          {teamsSupported && <div className="bots-team-filters"><select aria-label="Filter bots by team" value={teamFilter==="all"||teamFilter==="none"||teams.some(t=>t.id===teamFilter)?teamFilter:"all"} onChange={e=>setTeamFilter(e.target.value)}><option value="all">All teams</option><option value="none">Unassigned</option>{teams.map(t=><option key={t.id} value={t.id}>{t.name}</option>)}</select><select aria-label="Bot list order" value={teamSort} onChange={e=>setTeamSort(e.target.value)}><option value="recent">Recent activity</option><option value="team">Team order</option><option value="name">Name</option></select></div>}
           <BotSidebarList bots={filtered} snapshot={snapshot} selected={selected} select={select}
-            empty={search ? "No matching bots." : archived ? "No archived bots." : "Your bots will appear here."} />
+            empty={teamFilter!=="all" ? "No bots in this team." : search ? "No matching bots." : archived ? "No archived bots." : "Your bots will appear here."} />
           <div className="bots-machine">
             <span className={`bots-status-dot ${online ? "online" : ""}`} />
             <span>
@@ -757,6 +775,7 @@ export function BotsWorkspace() {
                 </form>
                 <p className="bots-profile-hint">{bot.purpose}</p><p className="bots-profile-hint">Ask {bot.name} to change its personality, instructions, or memory.</p>
                 {snapshot?.capabilities?.singleThreadExecution === 1 && <PersonalitySettings key={scope} bot={bot} snapshot={snapshot} online={online} />}
+                {teamsSupported && <TeamAssignment key={`team:${scope}`} owner={owner} bot={bot} teams={teams} online={online} onManage={() => setShowTeams(true)} />}
                 <a className="bots-notification-link" href="/settings">Notification settings</a>
                 <div className="bots-profile-actions">
                   <button disabled={!online || busy || Boolean(bot.activeTurnId)} onClick={() => void action(() => client.rpc("thread.compact", bot.id))}><RotateCcw size={16} />Compact conversation</button>
@@ -767,6 +786,7 @@ export function BotsWorkspace() {
           </BotDetailsDrawer>
         </Activity>}
       </main>
+      {showTeams && (teamsSupported ? <TeamsManager key={owner} owner={owner} teams={teams} bots={bots} online={online} onClose={() => setShowTeams(false)} /> : <div className="bots-modal-backdrop" onClick={() => setShowTeams(false)}><section className="bots-modal" role="dialog" aria-modal="true" aria-label="Teams" onClick={event => event.stopPropagation()}><h2>Teams</h2><p>Teams will be available when the bot service update finishes.</p><button className="bots-primary" onClick={() => setShowTeams(false)}>Close</button></section></div>)}
       {showOverallUsage && <div className="bots-modal-backdrop" onClick={() => setShowOverallUsage(false)}><section className="bots-history-modal bots-usage-modal" role="dialog" aria-modal="true" aria-label="Codex account usage" onClick={(event) => event.stopPropagation()}><header><h2>Codex account usage</h2><button className="bots-icon-button" aria-label="Close account usage" onClick={() => setShowOverallUsage(false)}><X size={19} /></button></header><UsagePanel online={online} /></section></div>}
       {creating && (
         <div className="bots-modal-backdrop" onClick={() => setCreating(false)}>
