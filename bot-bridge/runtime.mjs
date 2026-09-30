@@ -9,6 +9,7 @@ import { BackgroundRuns } from "./background-runs.mjs";
 import { ScheduleDecisions } from "./schedule-decisions.mjs";
 import { stopExecutions, reconcileStop } from "./execution-stop.mjs";
 import { requireTurn, requireSteer, usableTurn, usableTurnId, terminalTurn } from "./native-turn.mjs";
+import { recordMessageTime } from "./message-times.mjs";
 import { boundHistoryEvent } from "./history-events.mjs";
 import { listArtifacts, artifactMime, artifactMetadata } from "./artifact-library.mjs";
 import { readArtifactPreview } from "./artifact-previews.mjs";
@@ -216,6 +217,7 @@ export class BotRuntime extends EventEmitter {
   }
   emitEvent(type, data, botId) {
     if (type === "schedules" && botId) data = { ...data, activeScheduledTurn: activeScheduledTurn(this, botId) };
+    if (type === "codex") data = recordMessageTime(this, botId, data);
     const bounded = boundHistoryEvent(type, data);
     if (bounded.supplement && botId) {
       this.historySupplements ??= new Map();

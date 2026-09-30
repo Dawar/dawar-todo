@@ -4,6 +4,7 @@ import { ArrowUp, Paperclip, Pause } from 'lucide-react';
 import type { BotAttachment } from '../../lib/bots-types';
 import type { HistoryEntry } from '../../lib/bot-history-view';
 import type { Burst, BurstMessage } from './single-thread-contract';
+import { MessageTime } from "./message-time";
 import { AttachmentImage } from './message';
 import { TextPages } from './lazy-details';
 import { botsClient as client } from './client';
@@ -108,6 +109,7 @@ function BurstBubble({ message, batch, botId, attachments, quietSeconds, online,
         {message.attachmentIds.map(id => { const file = attachments.find(file => file.id === id); return file?.mimeType.startsWith('image/') ? <AttachmentImage key={id} botId={botId} attachment={file} /> : <span key={id} className="bots-input-file"><Paperclip size={13} aria-hidden="true" />{file?.name ?? 'File attached'}</span>; })}
       </div>
     </div>
+    <MessageTime seconds={Date.parse(message.createdAt) / 1000} basis="saved" user inline />
   </div>;
 }
 export function BurstBubbles({ messages, batch, ...props }: { messages: BurstMessage[]; batch?: Burst; botId: string; attachments: BotAttachment[]; quietSeconds: number; online: boolean; typingUntil: number; truncatedIds?: string[] }) {

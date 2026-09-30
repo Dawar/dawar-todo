@@ -8,6 +8,7 @@ export type HistoryDetailReader = Pick<BotTimeline, "botId" | "subscribeDetail" 
 import { useBotTimeline } from "./use-timeline";
 import { botsClient } from "./client";
 import { BotAvatar } from "./bot-avatar";
+import { MessageTime } from "./message-time";
 import { BotMessage } from "./message";
 import { ArrowDown, MessageCircle, CloudOff } from "lucide-react";
 import { LazyDetails } from "./lazy-details";
@@ -60,6 +61,7 @@ export const TimelineEntry = memo(function TimelineEntry(props: Parameters<typeo
       {() => <EntryBody {...props} />}</LazyDetails>
       : !entry.item ? <LazyDetails className="bots-activity" summary={<><span>Work log · {entry.label}</span><small>{entry.itemStatus ?? entry.status}</small></>}>
         {() => <EntryBody {...props} />}</LazyDetails> : <EntryBody {...props} />}
+    {(entry.type === "userMessage" || entry.type === "agentMessage") && <MessageTime seconds={entry.messageAt} basis={entry.timeBasis ?? "turn-start"} user={entry.type === "userMessage"} />}
   </div>;
 });
 

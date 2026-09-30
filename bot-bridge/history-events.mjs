@@ -17,6 +17,7 @@ export function boundHistoryEvent(type, data) {
     } else if (entry.item?.type === 'userMessage') {
       entry.item.content = [{ type: 'text', text: params.item.content.filter((part) => part.type === 'text').map((part) => part.text).join('\n').slice(0, 2048), text_elements: [] }]; entry.complete = false;
     }
+    if (data.messageAt) { entry.messageAt = data.messageAt; entry.timeBasis = "received"; }
     compact.entry = entry;
   }
   let supplement;

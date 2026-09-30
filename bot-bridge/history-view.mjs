@@ -1,3 +1,4 @@
+import { withMessageTime } from "./message-times.mjs";
 import { conversationViewPage } from './conversation-view.mjs';
 import { createHash } from 'node:crypto';
 import { projectHistoryItem, HISTORY_WINDOW, historyKey } from '../lib/bot-history-view.ts';
@@ -54,7 +55,7 @@ export async function historyViewPage(runtime, bot, cursor = null, turnId = null
   const entries = []; let bytes = 0, index = start;
   for (; index < all.length && entries.length < HISTORY_WINDOW; index++) {
     const { turn, item, scheduled } = all[index];
-    const entry = projectHistoryItem(turn, item, scheduled);
+    const entry = withMessageTime(runtime, bot, target?.threadId ?? bot.threadId, projectHistoryItem(turn, item, scheduled));
     const length = Buffer.byteLength(JSON.stringify(entry));
     if (entries.length && bytes + length > MAX_ENTRY_BYTES) break;
     entries.push(entry); bytes += length;
@@ -67,7 +68,7 @@ export async function historyViewPage(runtime, bot, cursor = null, turnId = null
     for (const { turn, item, scheduled } of all) {
       if (scheduled || !['userMessage', 'agentMessage'].includes(item.type) || types.has(item.type)) continue;
       types.add(item.type);
-      const entry = projectHistoryItem(turn, item, scheduled);
+      const entry = withMessageTime(runtime, bot, target?.threadId ?? bot.threadId, projectHistoryItem(turn, item, scheduled));
       if (entry.item.type === 'agentMessage') { entry.item.text = entry.item.text.slice(0, 4096); entry.complete = false; }
       else { entry.item.content = [{ type: 'text', text: item.content.filter((part) => part.type === 'text').map((part) => part.text).join('\n').slice(0, 4096), text_elements: [] }]; entry.complete = false; }
       contextEntries.push(entry);

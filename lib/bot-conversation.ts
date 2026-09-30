@@ -27,7 +27,7 @@ export function reportedFinding(item: ThreadItem) {
   return key && summary ? { key: JSON.stringify([key, summary]), summary } : null;
 }
 
-export function projectConversationItem(turn: Pick<Turn, "id" | "startedAt" | "status">, item: ThreadItem, audience: TurnAudience): HistoryEntry | null {
+export function projectConversationItem(turn: Pick<Turn, "id" | "startedAt" | "status"> & Partial<Pick<Turn, "completedAt">>, item: ThreadItem, audience: TurnAudience): HistoryEntry | null {
   if (audience.kind === "activity") {
     if (item.type === "agentMessage" && item.questions?.length)
       return { ...projectHistoryItem(turn, item), audience: "conversation", runId: audience.runId };

@@ -7,6 +7,7 @@ export type HistoryEntry = {
   id: string; turnId: string; type: ThreadItem["type"]; label: string;
   item: ThreadItem | null; complete: boolean; scheduled: boolean;
   audience?: "conversation" | "mixed" | "finding"; runId?: string; findingId?: string; legacyContext?: boolean;
+  messageAt?: number | null; timeBasis?: "received" | "turn-start" | "turn-end";
   startedAt: number | null; turnStatus?: Turn["status"]; itemStatus?: string; status: Turn["status"]; updatedSeq?: number;
 };
 export type HistoryContext = { laneId: string; runId: string | null; threadId: string };
@@ -32,7 +33,7 @@ export const HISTORY_TEXT_LIMIT = 16384;
 export const historyKey = (turnId: string, itemId: string) => `${turnId}:${itemId}`;
 export const historyBefore = (entry: HistoryEntry) => JSON.stringify({ native: null, before: historyKey(entry.turnId, entry.id) });
 
-export function projectHistoryItem(turn: Pick<Turn, "id" | "startedAt" | "status">, source: ThreadItem, scheduled = false): HistoryEntry {
+export function projectHistoryItem(turn: Pick<Turn, "id" | "startedAt" | "status"> & Partial<Pick<Turn, "completedAt">>, source: ThreadItem, scheduled = false): HistoryEntry {
   let item: ThreadItem | null = null, complete = true;
   const clip = (text: string) => { if (text.length > HISTORY_TEXT_LIMIT) complete = false; return text.slice(0, HISTORY_TEXT_LIMIT); };
   let label = source.type.replace(/([a-z])([A-Z])/g, "$1 $2");
@@ -65,7 +66,7 @@ export function projectHistoryItem(turn: Pick<Turn, "id" | "startedAt" | "status
     else if (source.type === "dynamicToolCall") label = source.tool === "bots_report_result" ? "Reported finding" : source.tool === "bots_publish_artifact" ? "Saved file" : "Tool result";
   }
   return { id: source.id, turnId: turn.id, type: source.type, label, item, complete,
-    scheduled, startedAt: turn.startedAt, turnStatus: turn.status, ...("status" in source ? { itemStatus: String(source.status) } : {}), status: "status" in source && source.status === "inProgress" ? "inProgress" : "status" in source && source.status === "completed" ? "completed" : turn.status };
+    scheduled, messageAt: source.type === "agentMessage" && source.phase === "final_answer" ? turn.completedAt ?? null : turn.startedAt, timeBasis: source.type === "agentMessage" && source.phase === "final_answer" ? "turn-end" : "turn-start", startedAt: turn.startedAt, turnStatus: turn.status, ...("status" in source ? { itemStatus: String(source.status) } : {}), status: "status" in source && source.status === "inProgress" ? "inProgress" : "status" in source && source.status === "completed" ? "completed" : turn.status };
 }
 
 /** Legacy caches can paint a useful tail without cloning/serializing their tool bodies. */
