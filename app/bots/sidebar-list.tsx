@@ -4,6 +4,8 @@ import { ChevronDown, LoaderCircle, Zap } from "lucide-react";
 import type { Bot, BotSnapshot, BotTeam } from "../../lib/bots-types";
 import { BotAvatar } from "./bot-avatar";
 const HEIGHT = 96;
+const working = (bot: Bot) => Boolean(bot.activeTurnId || bot.status === "running" || bot.workerTasks?.active);
+const unread = (bot: Bot) => bot.updatedAt > bot.lastReadAt;
 const SidebarRow = memo(function SidebarRow({ bot: b, selected, select, modelName, effort, fast, team }: {
   bot: Bot; selected: boolean; select: (id: string) => void; modelName: string; effort: string; fast: boolean; team?: BotTeam;
 }) {
@@ -12,7 +14,7 @@ const SidebarRow = memo(function SidebarRow({ bot: b, selected, select, modelNam
     <span className="bots-row-copy"><span className="bots-row-name"><span className="bots-row-title">{b.name}</span><small>{new Date(b.updatedAt).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}</small></span>
       <span className="bots-row-preview">{b.status === "waiting" ? "Needs your input" : b.preview || b.purpose || "Start a conversation"}</span>
       <span className="bots-row-config"><span className="bots-row-model" title={modelName}>{modelName}</span><span aria-hidden="true">·</span><span>{effort}</span>{team&&<span className="bots-row-team" style={{color:team.color}} title={team.name}><i/>{team.name}</span>}{fast && <span className="bots-row-fast" role="img" aria-label="Fast mode"><Zap size={12} /></span>}</span>
-    </span>{Boolean(b.activeTurnId || b.status === "running" || b.workerTasks?.active) && <span className="bots-row-working" role="img" aria-label="Working"><LoaderCircle size={18} className="bots-spin" aria-hidden="true" /></span>}{b.updatedAt > b.lastReadAt && <span className="bots-unread" />}
+    </span>{working(b) && <span className="bots-row-working" role="img" aria-label="Working"><LoaderCircle size={18} className="bots-spin" aria-hidden="true" /></span>}{unread(b) && <span className="bots-unread" />}
   </button>;
 });
 type ListRow = { kind: "heading"; id: string; name: string; color?: string; count: number; offset: number; height: number } | { kind: "bot"; id: string; bot: Bot; offset: number; height: number };
@@ -24,16 +26,23 @@ export const BotSidebarList = memo(function BotSidebarList({ bots, snapshot, sel
   const models = useMemo(() => new Map(snapshot?.models.map(model => [model.model, model.displayName])), [snapshot?.models]);
   const teams = useMemo(() => new Map(snapshot?.teams?.map(team => [team.id, team])), [snapshot?.teams]);
   const rows = useMemo(() => {
+    const assigned = (bot: Bot) => Boolean(bot.teamId && teams.has(bot.teamId));
+    const result: ListRow[] = []; let offset = 0;
+    const append = (bot: Bot) => { result.push({ kind: "bot", id: bot.id, bot, offset, height: HEIGHT }); offset += HEIGHT; };
+    // Working bots lead, then unread, then unassigned. Keep the chosen order
+    // within each priority; hoisted bots never repeat under a team.
+    for (const bot of bots) if (working(bot)) append(bot);
+    for (const bot of bots) if (!working(bot) && unread(bot)) append(bot);
+    for (const bot of bots) if (!working(bot) && !unread(bot) && !assigned(bot)) append(bot);
     const groups = new Map<string, Bot[]>();
     // Groups follow the configured team order; row order keeps the selected filter/sort.
     for (const team of snapshot?.teams ?? []) groups.set(team.id, []);
-    for (const bot of bots) { const key = bot.teamId && teams.has(bot.teamId) ? bot.teamId : "unassigned"; if (!groups.has(key)) groups.set(key, []); groups.get(key)!.push(bot); }
-    const result: ListRow[] = []; let offset = 0;
+    for (const bot of bots) { if (working(bot) || unread(bot) || !assigned(bot)) continue; const key = bot.teamId && teams.has(bot.teamId) ? bot.teamId : "unassigned"; if (!groups.has(key)) groups.set(key, []); groups.get(key)!.push(bot); }
     for (const [key, members] of groups) {
       if (!members.length) continue;
       const team = teams.get(key);
       result.push({ kind: "heading", id: key, name: team?.name ?? "Bots", color: team?.color, count: members.length, offset, height: 42 }); offset += 42;
-      if (!collapsed.has(key)) for (const bot of members) { result.push({ kind: "bot", id: bot.id, bot, offset, height: HEIGHT }); offset += HEIGHT; }
+      if (!collapsed.has(key)) for (const bot of members) append(bot);
     }
     return result;
   }, [bots, snapshot?.teams, teams, collapsed]);
