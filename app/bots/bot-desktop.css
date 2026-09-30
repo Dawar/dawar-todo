@@ -1,6 +1,6 @@
 .bots-desktop-card {
   flex: none;
-  margin: 8px 12px;
+  margin: 0;
   padding: 10px;
   border: 1px solid var(--border, #dce0e8);
   border-radius: 12px;

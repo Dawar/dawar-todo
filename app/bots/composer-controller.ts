@@ -368,7 +368,9 @@ export class BotComposer {
     if (this.sending.has(op.id) || !this.canUseOwner || !this.transport.online) return;
     this.sending.add(op.id); this.notify();
     try {
-      await this.transport.rpc(op.method, this.botId, op.params, op.id, { owner: this.owner, managed: true });
+      const result = await this.transport.rpc(op.method, this.botId, op.params, op.id, { owner: this.owner, managed: true });
+      if (op.method === "queue.delete" && (result as { deleted?: boolean } | null)?.deleted !== true)
+        throw Error("Queue removal did not confirm deletion.");
       this.actionError = "";
       // Even after an owner/selection change, settle the originating record only.
       this.record = changeDraft(this.record, { kind: "settle", id: op.id, outcome: "success" });

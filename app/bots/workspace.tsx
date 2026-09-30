@@ -491,7 +491,6 @@ export function BotsWorkspace() {
           </div>
           <BotSidebarList bots={filtered} snapshot={snapshot} selected={selected} select={select}
             empty={teamFilter!=="all" ? "No bots in this team." : search ? "No matching bots." : archived ? "No archived bots." : "Your bots will appear here."} />
-          {bot && snapshot?.capabilities?.botDesktops === 1 && <BotDesktopCard key={scope} bot={bot} owner={owner} online={online} onOpen={() => setDesktopScope(scope)} />}
           <div className="bots-machine">
             <span className={`bots-status-dot ${online ? "online" : ""}`} />
             <span>
@@ -526,7 +525,7 @@ export function BotsWorkspace() {
             {bot ? (
               <>
                 <Avatar bot={bot} small />
-                {snapshot?.capabilities?.botDesktops === 1 && <button className="bots-icon-button bots-desktop-mobile-open" aria-label="Open bot desktop" disabled={!online || bot.archived} onClick={() => setDesktopScope(scope)}><span aria-hidden="true">▣</span></button>}
+                {snapshot?.capabilities?.botDesktops === 1 && <button className="bots-icon-button bots-desktop-mobile-open" aria-label="Show bot desktop" onClick={() => { setDetailsSection("desktop"); setProfile(true); }}><span aria-hidden="true">▣</span></button>}
                 <div className="bots-header-title">
                   <strong>{bot.name}</strong>
 
@@ -763,7 +762,7 @@ export function BotsWorkspace() {
             </>
           )}
         </section>}
-        {bot && !gallery && <Activity mode={profile ? "visible" : "hidden"}>
+        {bot && !gallery && <Activity mode={profile && desktopScope !== scope ? "visible" : "hidden"}>
           <BotDetailsDrawer key={scope} bot={bot} section={detailsSection} onSection={setDetailsSection} onClose={closeProfile} discussionAttention={discussions.requests.filter(r => ["failed", "delivery-unconfirmed"].includes(r.state) || ["working", "waiting"].includes(r.state) && bots.find(b => b.id === (r.senderBotId === bot.id ? r.recipientBotId : r.senderBotId))?.status === "waiting").length}>
             {{
               next: <>
@@ -778,6 +777,12 @@ export function BotsWorkspace() {
                 {snapshot?.capabilities?.scheduleDecisions === 1 && <RunDecisions owner={owner} botId={bot.id} online={online} />}
               </>,
               files: <><h3>Files</h3><p className="bots-details-lead">Attachments and returned work, together. Open a preview, find a file, or download the original.</p><BotAttachmentsEntry bot={bot} owner={owner} online={online} onOpen={() => openGallery("attachments")} /></>,
+              desktop: <><h3>Desktop</h3>{snapshot?.capabilities?.botDesktops === 1 ? <>
+                <p className="bots-details-lead">Open the preview to use the fullscreen controller.</p>
+                {/* Mount only in the open Desktop tab; no background captures
+                    from the bot list, other tabs, or behind the controller. */}
+                {profile && detailsSection === "desktop" && desktopScope !== scope && <BotDesktopCard key={`desktop:${scope}`} bot={bot} owner={owner} online={online} onOpen={() => setDesktopScope(scope)} />}
+              </> : <p className="bots-details-lead">Desktop is unavailable on this service.</p>}</>,
               discussions: snapshot?.capabilities?.peerInbox === 1 ? <PeerConversations key={`discussions:${scope}`} owner={owner} botId={bot.id} bots={bots} online={online} historyView targetId={discussionTarget} /> : <p className="bots-details-lead">Discussions are unavailable on this service.</p>,
               history: <>{lanes && <details data-history-key="legacy-controls" className="bots-legacy-controls"><summary>Earlier work · recovery and controls</summary><BotWorkControls owner={owner} bot={bot} runs={recentRuns} online={online} onOpen={openActivity} /></details>}<RunHistory key={`${scope}:${activityTarget?.runId ?? ""}:${activityTarget?.turnId ?? ""}`} embedded bot={bot} schedules={schedules} recentRuns={recentRuns} initialTarget={activityTarget} attachments={[]} online={online} onClose={closeProfile} download={id => void download(id)} /></>,
               settings: <div className="bots-details-settings">
