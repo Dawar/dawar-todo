@@ -68,7 +68,7 @@ export function BotConversation({ owner, bot, online, children, onOpenActivity, 
   const { timeline, state } = useBotTimeline(owner, bot.id, online);
   const burst = useBurstConversation({ owner, botId: bot.id, online, draft, enabled: burstsEnabled });
   const burstAttachments = useMemo(() => { const files = new Map(state.attachments.map(file => [file.id, file])); for (const file of burst.value?.attachments ?? []) files.set(file.id, file); return [...files.values()]; }, [state.attachments, burst.value]);
-  const batchProps = { botId: bot.id, attachments: burstAttachments, quietSeconds: bot.burstQuietSeconds ?? 8, online, typing: !!draft };
+  const batchProps = { botId: bot.id, attachments: burstAttachments, quietSeconds: 2.5, online, typingUntil: burst.typingUntil };
   const nativeBatchIds = new Set([...state.entries, ...state.contextEntries].flatMap(entry => entry.item?.type === "userMessage" && entry.item.clientId ? [entry.item.clientId] : []));
   const tailBatches = retainedBatches(burst.value).filter(batch => batch.state !== "sent" && !nativeBatchIds.has(batch.operationId ?? batch.id));
   const feed = useFeedScroll(timeline, state, online);

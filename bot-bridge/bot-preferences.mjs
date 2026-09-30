@@ -4,14 +4,14 @@ import { randomInt, randomUUID } from 'node:crypto';
 export const AVATAR_SHAPES = ['circle', 'square', 'triangle', 'cloud', 'star', 'hexagon'];
 export const AVATAR_COLORS = ['lilac', 'mint', 'coral', 'sky', 'butter', 'graphite'];
 export function initialPreferences() {
-  return { burstQuietSeconds: 8, avatar: { version: 1, shape: AVATAR_SHAPES[randomInt(AVATAR_SHAPES.length)],
+  return { burstQuietSeconds: 2.5, avatar: { version: 1, shape: AVATAR_SHAPES[randomInt(AVATAR_SHAPES.length)],
     color: AVATAR_COLORS[randomInt(AVATAR_COLORS.length)], seed: randomUUID() } };
 }
 export function preferencePatch(bot, params) {
   const patch = {};
   if (params.burstQuietSeconds !== undefined) {
-    if (![0, 3, 8, 15].includes(params.burstQuietSeconds)) throw new Error('Choose Off, 3, 8 or 15 seconds.');
-    patch.burstQuietSeconds = params.burstQuietSeconds;
+    if (![0, 2.5, 3, 8, 15].includes(params.burstQuietSeconds)) throw new Error('Choose Off or 2.5 seconds.');
+    patch.burstQuietSeconds = params.burstQuietSeconds === 0 ? 0 : 2.5;
   }
   if (params.avatar !== undefined) {
     const a = params.avatar;

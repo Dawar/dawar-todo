@@ -63,7 +63,7 @@ export class ComposerSettingsController {
       const intent: Partial<Values> = {};
       for (const field of fields) {
         const value: unknown = prior.intent?.[field];
-        if (value === null || typeof value === "string" || field === "burstQuietSeconds" && typeof value === "number" && [0, 3, 8, 15].includes(value) || field === "avatar" && value && typeof value === "object" && "shape" in value && "color" in value && typeof value.shape === "string" && typeof value.color === "string") Object.assign(intent, { [field]: value });
+        if (value === null || typeof value === "string" || field === "burstQuietSeconds" && typeof value === "number" && [0, 2.5, 3, 8, 15].includes(value) || field === "avatar" && value && typeof value === "object" && "shape" in value && "color" in value && typeof value.shape === "string" && typeof value.color === "string") Object.assign(intent, { [field]: value });
       }
       const pending = prior.pending && typeof prior.pending.operationId === "string" &&
         prior.pending.operationId.length >= 10 && typeof prior.pending.afterCursor === "number" &&

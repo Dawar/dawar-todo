@@ -4,7 +4,7 @@ import type { Model } from "./codex-protocol/v2/Model";
 import type { QueuedSubmission } from "./codex-protocol/v2/QueuedSubmission";
 
 export type BotAvatar = { version: 1; shape: "circle" | "square" | "triangle" | "cloud" | "star" | "hexagon"; color: string; seed: string };
-export type BotBurstQuietSeconds = 0 | 3 | 8 | 15;
+export type BotBurstQuietSeconds = 0 | 2.5 | 3 | 8 | 15;
 export type Bot = {
   executionMode?: "legacy" | "single-thread";
   migrationReason?: string | null;

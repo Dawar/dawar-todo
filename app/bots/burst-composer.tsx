@@ -19,7 +19,8 @@ export function useBurstConversation({ owner, botId, online, draft, enabled }: {
   useEffect(() => {
     if (value && client.owner === owner) client.save(cacheKey, savedBurstState(value));
   }, [owner, cacheKey, value]);
-  const action = useRunAction(owner, botId, 'burst:control'), sequence = useRef(0), typing = useRef({ id: crypto.randomUUID(), last: 0, value: draft });
+  const action = useRunAction(owner, botId, 'burst:control'), sequence = useRef(0), typing = useRef({ id: crypto.randomUUID(), last: 0, value: draft, inputAt: 0, active: false });
+  const [typingUntil, setTypingUntil] = useState(0);
   useEffect(() => {
     const listener = (event: BotEvent) => {
       if (!enabled || client.owner !== owner || event.botId !== botId || event.type !== 'burst' || event.seq <= sequence.current) return;
@@ -43,14 +44,24 @@ export function useBurstConversation({ owner, botId, online, draft, enabled }: {
   const hasPending = batches.some(batch => batch.state === 'pending');
   useEffect(() => {
     const state = typing.current;
-    if (state.value === draft) return;
-    state.value = draft;
-    if (!enabled || !online || !draft || !hasPending) return;
-    if (Date.now() - state.last >= 4000) {
+    if (state.value !== draft) { state.value = draft; state.inputAt = Date.now(); }
+    if (!enabled || !online || !hasPending) return;
+    const idleAt = state.inputAt + 2500, remaining = idleAt - Date.now();
+    const stopTyping = () => {
+      if (state.active && client.owner === owner && client.online) void client.rpc('bursts.typing', botId, { clientId: state.id, typing: false }, undefined, { owner }).catch(() => {});
+      state.active = false;
+      setTypingUntil(0);
+    };
+    if (!draft || remaining <= 0) { queueMicrotask(stopTyping); return; }
+    queueMicrotask(() => setTypingUntil(idleAt));
+    // A short renewable lease holds all pending batches. Only actual edits
+    // renew it; a saved nonempty draft must never keep the backlog waiting.
+    if (!state.active || Date.now() - state.last >= 750) {
       state.last = Date.now();
+      state.active = true;
       void client.rpc('bursts.typing', botId, { clientId: state.id, typing: true }, undefined, { owner }).catch(() => {});
     }
-    const timer = setTimeout(() => { if (client.owner === owner && client.online) void client.rpc('bursts.typing', botId, { clientId: state.id, typing: false }, undefined, { owner }).catch(() => {}); }, 2000);
+    const timer = setTimeout(stopTyping, remaining);
     return () => clearTimeout(timer);
   }, [draft, owner, botId, online, hasPending, enabled]);
   const messages = value?.messages.filter(message => message.state !== 'sent') ?? [], count = pendingMessageCount(value);
@@ -61,7 +72,7 @@ export function useBurstConversation({ owner, botId, online, draft, enabled }: {
   const paused = states.includes('paused'), blocked = uncertain || dispatching;
   const canStart = !blocked && (failed || paused || hasPending);
   const refreshDelivery = () => setRefresh(value => value + 1);
-  return { value: enabled ? value : null, batches, messages, count, action, error, hasPending, uncertain, dispatching, failed, paused, blocked, canStart, refreshDelivery };
+  return { value: enabled ? value : null, batches, messages, count, action, error, hasPending, uncertain, dispatching, failed, paused, blocked, canStart, refreshDelivery, typingUntil };
 }
 export type BurstConversation = ReturnType<typeof useBurstConversation>;
 
@@ -83,14 +94,15 @@ function BurstFill({ dueAt, quietSeconds, animate }: { dueAt: string | null; qui
   const style = { '--burst-progress': progress, '--burst-remaining': `${Number.isFinite(remaining) ? remaining : 0}s` } as CSSProperties;
   return <span aria-hidden="true" className={`bots-burst-fill${animate && Number.isFinite(due) ? ' is-counting' : ''}`} style={style} />;
 }
-function BurstBubble({ message, batch, botId, attachments, quietSeconds, online, typing, truncated }: {
+function BurstBubble({ message, batch, botId, attachments, quietSeconds, online, typingUntil, truncated }: {
   message: BurstMessage; batch: Burst | undefined; botId: string; attachments: BotAttachment[];
-  quietSeconds: number; online: boolean; typing: boolean; truncated: boolean;
+  quietSeconds: number; online: boolean; typingUntil: number; truncated: boolean;
 }) {
   const sent = batch?.state === 'sent', pending = batch?.state === 'pending';
+  const dueAt = pending && typingUntil > Date.parse(batch?.dueAt ?? '') ? new Date(typingUntil).toISOString() : batch?.dueAt ?? null;
   return <div className="bots-message bots-user" data-burst-message={message.id}>
     <div className={`bots-bubble${sent ? '' : ' bots-bubble-pending'}`} aria-label={sent ? undefined : 'Message waiting to send'}>
-      {!sent && <BurstFill key={`${batch?.dueAt}:${online}:${typing}`} dueAt={batch?.dueAt ?? null} quietSeconds={quietSeconds} animate={pending && online && !typing} />}
+      {!sent && <BurstFill key={`${dueAt}:${online}`} dueAt={dueAt} quietSeconds={quietSeconds} animate={pending && online} />}
       <div className="bots-burst-content"><TextPages text={message.text} render={text => <p>{text}</p>} />
         {truncated && <small>Saved preview · reconnect for complete text</small>}
         {message.attachmentIds.map(id => { const file = attachments.find(file => file.id === id); return file?.mimeType.startsWith('image/') ? <AttachmentImage key={id} botId={botId} attachment={file} /> : <span key={id} className="bots-input-file"><Paperclip size={13} aria-hidden="true" />{file?.name ?? 'File attached'}</span>; })}
@@ -98,7 +110,7 @@ function BurstBubble({ message, batch, botId, attachments, quietSeconds, online,
     </div>
   </div>;
 }
-export function BurstBubbles({ messages, batch, ...props }: { messages: BurstMessage[]; batch?: Burst; botId: string; attachments: BotAttachment[]; quietSeconds: number; online: boolean; typing: boolean; truncatedIds?: string[] }) {
+export function BurstBubbles({ messages, batch, ...props }: { messages: BurstMessage[]; batch?: Burst; botId: string; attachments: BotAttachment[]; quietSeconds: number; online: boolean; typingUntil: number; truncatedIds?: string[] }) {
   return <>{messages.map(message => <BurstBubble key={message.id} message={message} batch={batch} {...props} truncated={props.truncatedIds?.includes(message.id) ?? false} />)}</>;
 }
 export function BurstControls({ burst, online, submitting = false }: { burst: BurstConversation; online: boolean; submitting?: boolean }) {
