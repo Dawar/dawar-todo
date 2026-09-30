@@ -13,7 +13,7 @@ import { useRunAction } from './run-action';
 import { pendingMessageCount, retainedBatches, savedBurstState, validBurstState, type SavedBurstState } from './burst-state';
 import './single-thread.css';
 /** Receipt-owned staging shares the conversation feed, never native history. */
-export function useBurstConversation({ owner, botId, online, draft, enabled }: { owner: string; botId: string; online: boolean; draft: string; enabled: boolean }) {
+export function useBurstConversation({ owner, botId, online, draft, enabled, quietSeconds }: { owner: string; botId: string; online: boolean; draft: string; enabled: boolean; quietSeconds: number }) {
   const cacheKey = `burst-summary:v1:${botId}`;
   const [value, setValue] = useState<SavedBurstState | null>(() => { const saved = client.owner === owner ? client.cache<SavedBurstState | null>(cacheKey, null) : null; return saved && validBurstState(saved, botId) ? saved : null; }), [error, setError] = useState(''), [refresh, setRefresh] = useState(0);
   useEffect(() => {
@@ -46,7 +46,7 @@ export function useBurstConversation({ owner, botId, online, draft, enabled }: {
     const state = typing.current;
     if (state.value !== draft) { state.value = draft; state.inputAt = Date.now(); }
     if (!enabled || !online || !hasPending) return;
-    const idleAt = state.inputAt + 2500, remaining = idleAt - Date.now();
+    const idleAt = state.inputAt + quietSeconds * 1000, remaining = idleAt - Date.now();
     const stopTyping = () => {
       if (state.active && client.owner === owner && client.online) void client.rpc('bursts.typing', botId, { clientId: state.id, typing: false }, undefined, { owner }).catch(() => {});
       state.active = false;
@@ -63,7 +63,7 @@ export function useBurstConversation({ owner, botId, online, draft, enabled }: {
     }
     const timer = setTimeout(stopTyping, remaining);
     return () => clearTimeout(timer);
-  }, [draft, owner, botId, online, hasPending, enabled]);
+  }, [draft, owner, botId, online, hasPending, enabled, quietSeconds]);
   const messages = value?.messages.filter(message => message.state !== 'sent') ?? [], count = pendingMessageCount(value);
   // Start is bot-wide. A later uncertain split blocks retry of an earlier
   // definite failure too; neither text nor a missing native echo proves failure.

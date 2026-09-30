@@ -44,13 +44,13 @@ export class MessageBursts {
     if (!p.typing) { this.leases.delete(key); this.arm(bot.id); return {}; }
     if (!this.batches(bot.id).some(b => b.state === 'pending' && !b.immediate)) return {};
     if (this.leases.size < 1000 || this.leases.has(key)) {
-      this.leases.set(key, { botId: bot.id, until: Date.now() + 5000 });
+      this.leases.set(key, { botId: bot.id, until: Date.now() + Math.max(5000, (bot.burstQuietSeconds ?? 3) * 1000 + 2000) });
       // Persist the quiet deadline for restart/reconnect recovery. The lease
       // holds every pending split while this client types, with no one-minute
-      // cutoff. Idle notification releases it after 2.5s without an edit.
+      // cutoff. Idle notification releases it after the chosen quiet time without an edit.
       this.store.transaction(() => {
         for (const b of this.batches(bot.id)) if (b.state === 'pending' && !b.immediate)
-          this.store.put('messageBurst', { ...b, dueAt: new Date(Date.now() + 2500).toISOString() });
+          this.store.put('messageBurst', { ...b, dueAt: new Date(Date.now() + (bot.burstQuietSeconds ?? 3) * 1000).toISOString() });
       });
     }
     this.arm(bot.id); return {};
@@ -71,11 +71,11 @@ export class MessageBursts {
       if (current && (allFiles.length > 12 || images(allFiles) > 6 || members.reduce((n, m) => n + m.text.length, 0) + String(p.text ?? '').length > 190000)) current = null;
       if (!current) current = { id: `burst:${randomUUID()}`, botId: bot.id, threadId: bot.threadId, messageIds: [], createdAt: now(), sequence: Number(this.store.db.prepare("SELECT COALESCE(MAX(json_extract(json,'$.sequence')),0)+1 n FROM records WHERE kind='messageBurst' AND bot_id=?").get(bot.id).n) };
       // Explicit Send resumes retained pending batches; Queue/work.resume do not.
-      for (const old of this.batches(bot.id)) if (old.state === 'paused') this.store.put('messageBurst', { ...old, state: 'pending', dueAt: new Date(Date.now() + (bot.burstQuietSeconds === 0 ? 0 : 2500)).toISOString() });
+      for (const old of this.batches(bot.id)) if (old.state === 'paused') this.store.put('messageBurst', { ...old, state: 'pending', dueAt: new Date(Date.now() + (bot.burstQuietSeconds ?? 3) * 1000).toISOString() });
       const m = this.store.put('burstMessage', { id, botId: bot.id, text: String(p.text ?? '').trim(), input,
         attachmentIds: attachments, createdAt: now(), sequence: pending.length, state: 'pending', batchId: current.id, turnId: null });
       current = this.store.put('messageBurst', { ...current, state: 'pending', messageIds: [...current.messageIds, id],
-        lastSubmitAt: now(), dueAt: new Date(Date.now() + (bot.burstQuietSeconds === 0 ? 0 : 2500)).toISOString(), immediate: bot.burstQuietSeconds === 0 });
+        lastSubmitAt: now(), dueAt: new Date(Date.now() + (bot.burstQuietSeconds ?? 3) * 1000).toISOString(), immediate: bot.burstQuietSeconds === 0 });
       this.publish(bot.id);
       return { message: message(m), burst: batch(current) };
     };

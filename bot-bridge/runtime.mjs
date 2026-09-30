@@ -306,9 +306,9 @@ export class BotRuntime extends EventEmitter {
     )
       throw new Error("The configured Bots model, effort, or Fast tier is unavailable.");
     for (let bot of this.store.bots()) {
-      if (!bot.avatar || ![0, 2.5].includes(bot.burstQuietSeconds)) {
+      if (!bot.avatar || bot.burstQuietSeconds === undefined) {
         const defaults = initialPreferences();
-        bot = this.saveBot(bot, { avatar: bot.avatar ?? defaults.avatar, burstQuietSeconds: bot.burstQuietSeconds === 0 ? 0 : defaults.burstQuietSeconds });
+        bot = this.saveBot(bot, { avatar: bot.avatar ?? defaults.avatar, burstQuietSeconds: bot.burstQuietSeconds ?? defaults.burstQuietSeconds });
       }
       const activity = captureActivity(this, bot.id);
       if (!bot.threadId)

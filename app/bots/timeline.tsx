@@ -66,9 +66,10 @@ export const TimelineEntry = memo(function TimelineEntry(props: Parameters<typeo
 /** Bounded body window; all preceding entries remain reachable through explicit pages. */
 export function BotConversation({ owner, bot, online, children, onOpenActivity, draft = "", burstsEnabled = false, burstSubmitting = false }: { owner: string; bot: Bot; online: boolean; children?: ReactNode; onOpenActivity?: (target: ActivityTarget) => void; draft?: string; burstsEnabled?: boolean; burstSubmitting?: boolean }) {
   const { timeline, state } = useBotTimeline(owner, bot.id, online);
-  const burst = useBurstConversation({ owner, botId: bot.id, online, draft, enabled: burstsEnabled });
+  const quietSeconds = bot.burstQuietSeconds ?? 3;
+  const burst = useBurstConversation({ owner, botId: bot.id, online, draft, enabled: burstsEnabled, quietSeconds });
   const burstAttachments = useMemo(() => { const files = new Map(state.attachments.map(file => [file.id, file])); for (const file of burst.value?.attachments ?? []) files.set(file.id, file); return [...files.values()]; }, [state.attachments, burst.value]);
-  const batchProps = { botId: bot.id, attachments: burstAttachments, quietSeconds: 2.5, online, typingUntil: burst.typingUntil };
+  const batchProps = { botId: bot.id, attachments: burstAttachments, quietSeconds, online, typingUntil: burst.typingUntil };
   const nativeBatchIds = new Set([...state.entries, ...state.contextEntries].flatMap(entry => entry.item?.type === "userMessage" && entry.item.clientId ? [entry.item.clientId] : []));
   const tailBatches = retainedBatches(burst.value).filter(batch => batch.state !== "sent" && !nativeBatchIds.has(batch.operationId ?? batch.id));
   const feed = useFeedScroll(timeline, state, online);
