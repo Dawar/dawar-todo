@@ -1,6 +1,6 @@
 "use client";
-import { memo, useMemo, useRef, useState } from "react";
-import { LoaderCircle, Zap } from "lucide-react";
+import { memo, useId, useMemo, useRef, useState } from "react";
+import { ChevronDown, LoaderCircle, Zap } from "lucide-react";
 import type { Bot, BotSnapshot, BotTeam } from "../../lib/bots-types";
 import { BotAvatar } from "./bot-avatar";
 const HEIGHT = 96;
@@ -15,23 +15,46 @@ const SidebarRow = memo(function SidebarRow({ bot: b, selected, select, modelNam
     </span>{Boolean(b.activeTurnId || b.status === "running" || b.workerTasks?.active) && <span className="bots-row-working" role="img" aria-label="Working"><LoaderCircle size={18} className="bots-spin" aria-hidden="true" /></span>}{b.updatedAt > b.lastReadAt && <span className="bots-unread" />}
   </button>;
 });
+type ListRow = { kind: "heading"; id: string; name: string; color?: string; count: number; offset: number; height: number } | { kind: "bot"; id: string; bot: Bot; offset: number; height: number };
 export const BotSidebarList = memo(function BotSidebarList({ bots, snapshot, selected, select, empty }: {
   bots: Bot[]; snapshot: BotSnapshot | null; selected: string | null; select: (id: string) => void; empty: string;
 }) {
-  const [top, setTop] = useState(0), ref = useRef<HTMLDivElement>(null);
-  const models = useMemo(() => new Map(snapshot?.models.map((model) => [model.model, model.displayName])), [snapshot?.models]);
-  const start = Math.min(Math.max(0, bots.length - 1), Math.max(0, Math.floor(top / HEIGHT) - 3));
-  const end = Math.min(bots.length, start + 20);
-  return <div className="bots-list" ref={ref} onScroll={(e) => setTop(e.currentTarget.scrollTop)} onKeyDown={(event) => {
-    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
-    const index = bots.findIndex((bot) => bot.id === selected), next = Math.max(0, Math.min(bots.length - 1, index + (event.key === "ArrowDown" ? 1 : -1)));
-    if (bots[next]) { event.preventDefault(); select(bots[next].id); ref.current?.scrollTo(0, next * HEIGHT); }
+  const [top, setTop] = useState(0), [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
+  const ref = useRef<HTMLDivElement>(null), id = useId();
+  const models = useMemo(() => new Map(snapshot?.models.map(model => [model.model, model.displayName])), [snapshot?.models]);
+  const teams = useMemo(() => new Map(snapshot?.teams?.map(team => [team.id, team])), [snapshot?.teams]);
+  const rows = useMemo(() => {
+    const groups = new Map<string, Bot[]>();
+    // Groups follow the configured team order; row order keeps the selected filter/sort.
+    for (const team of snapshot?.teams ?? []) groups.set(team.id, []);
+    for (const bot of bots) { const key = bot.teamId && teams.has(bot.teamId) ? bot.teamId : "unassigned"; if (!groups.has(key)) groups.set(key, []); groups.get(key)!.push(bot); }
+    const result: ListRow[] = []; let offset = 0;
+    for (const [key, members] of groups) {
+      if (!members.length) continue;
+      const team = teams.get(key);
+      result.push({ kind: "heading", id: key, name: team?.name ?? "Bots", color: team?.color, count: members.length, offset, height: 42 }); offset += 42;
+      if (!collapsed.has(key)) for (const bot of members) { result.push({ kind: "bot", id: bot.id, bot, offset, height: HEIGHT }); offset += HEIGHT; }
+    }
+    return result;
+  }, [bots, snapshot?.teams, teams, collapsed]);
+  const total = rows.at(-1) ? rows.at(-1)!.offset + rows.at(-1)!.height : 0;
+  const viewport = ref.current?.clientHeight || 900;
+  const safeTop = Math.min(top, Math.max(0, total - viewport));
+  const visible = rows.filter(row => row.offset + row.height >= safeTop - HEIGHT * 3 && row.offset <= safeTop + viewport + HEIGHT * 3);
+  return <div className="bots-list" ref={ref} onScroll={event => setTop(event.currentTarget.scrollTop)} onKeyDown={event => {
+    if ((event.key !== "ArrowDown" && event.key !== "ArrowUp") || !(event.target as HTMLElement).closest(".bots-row")) return;
+    const members = rows.filter((row): row is Extract<ListRow, { kind: "bot" }> => row.kind === "bot");
+    const index = members.findIndex(row => row.id === selected), next = members[Math.max(0, Math.min(members.length - 1, index + (event.key === "ArrowDown" ? 1 : -1)))];
+    if (next) { event.preventDefault(); select(next.id); ref.current?.scrollTo(0, next.offset); }
   }}>
-    <div style={{ height: start * HEIGHT }} aria-hidden="true" />
-    {bots.slice(start, end).map((b) => {
-      const modelId = b.model ?? snapshot?.defaults.model ?? "Default model", tier = b.serviceTier ?? snapshot?.defaults.serviceTier;
-      return <SidebarRow key={b.id} bot={b} selected={b.id === selected} select={select} modelName={models.get(modelId) ?? modelId} effort={b.effort ?? snapshot?.defaults.effort ?? "default"} fast={tier === "priority" || tier === "fast"} team={snapshot?.teams?.find(t=>t.id===b.teamId)} />;
-    })}<div style={{ height: (bots.length - end) * HEIGHT }} aria-hidden="true" />
+    <div style={{ height: visible[0]?.offset ?? 0 }} aria-hidden="true" />
+    {visible.map(row => row.kind === "heading" ? <button key={`group:${row.id}`} type="button" className="bots-team-heading" style={{ height: row.height }} aria-expanded={!collapsed.has(row.id)} aria-label={`${row.name}, ${row.count} ${row.count === 1 ? "bot" : "bots"}`} onClick={() => setCollapsed(value => { const next = new Set(value); if (next.has(row.id)) next.delete(row.id); else next.add(row.id); return next; })}>
+      <ChevronDown size={15} className={collapsed.has(row.id) ? "is-collapsed" : ""} aria-hidden="true" /><span className="bots-team-dot" style={{ background: row.color ?? "#8a978e" }} aria-hidden="true" /><span id={`${id}-${row.id}`}>{row.name}</span><small>{row.count}</small>
+    </button> : <div key={row.id} style={{ height: row.height }}>{(() => {
+      const b = row.bot, modelId = b.model ?? snapshot?.defaults.model ?? "Default model", tier = b.serviceTier ?? snapshot?.defaults.serviceTier;
+      return <SidebarRow bot={b} selected={b.id === selected} select={select} modelName={models.get(modelId) ?? modelId} effort={b.effort ?? snapshot?.defaults.effort ?? "default"} fast={tier === "priority" || tier === "fast"} />;
+    })()}</div>)}
+    <div style={{ height: Math.max(0, total - (visible.at(-1) ? visible.at(-1)!.offset + visible.at(-1)!.height : 0)) }} aria-hidden="true" />
     {!bots.length && <div className="bots-sidebar-empty">{empty}</div>}
   </div>;
 });

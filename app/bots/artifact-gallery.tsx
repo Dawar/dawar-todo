@@ -132,5 +132,5 @@ export function BotAttachmentsEntry({ bot, owner, online, onOpen }: { bot: Bot; 
   return <button className="bots-attachments-entry" onClick={onOpen}><span className="bots-attachments-symbol"><Paperclip size={21} /></span><span><strong>Attachments</strong><small>Images, documents & shared files</small></span><span className="bots-attachments-count">{page?.total != null ? page.total : loading ? "…" : page?.items.length ? `${page.items.length}${page.nextCursor ? "+" : ""}` : "—"}</span><ChevronRight size={18} /></button>;
 }
 export function ArtifactNav({ active, onOpen }: { active: boolean; onOpen: () => void }) {
-  return <button className={`bots-artifacts-nav ${active ? "active" : ""}`} aria-current={active ? "page" : undefined} onClick={onOpen}><Images size={19} /><span>Artifacts</span><ChevronRight size={16} /></button>;
+  return <button className={`bots-icon-button bots-artifacts-icon ${active ? "active" : ""}`} title="Artifacts" aria-label="Artifacts" aria-current={active ? "page" : undefined} onClick={onOpen}><Images size={19} aria-hidden="true" /></button>;
 }

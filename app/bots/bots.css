@@ -1302,3 +1302,17 @@ html.bots-viewport-locked body {
 .bots-upload-progress { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-height: 1.4em; }
 
 .bots-feed-loading { position: absolute; z-index: 2; top: 8px; left: 50%; transform: translateX(-50%); padding: 5px 12px; border-radius: 20px; background: var(--surface, #fff); box-shadow: 0 2px 12px #0001; color: #64756b; font-size: 12px; pointer-events: none; white-space: nowrap; }
+
+/* One compact filter row keeps the list in view at narrow sidebar widths. */
+.bots-list-filters { display:flex; gap:5px; margin:0 12px 8px; flex:none; min-width:0; }
+.bots-list-filters select { min-width:0; flex:1 1 0; width:0; min-height:34px; padding:6px 4px; border:1px solid #dde6df; border-radius:8px; background:#edf1ec; color:#536b5b; font-size:11px; text-overflow:ellipsis; }
+.bots-search { margin-bottom:8px; }
+.bots-team-heading { width:100%; display:flex; align-items:center; gap:7px; padding:0 9px; color:#65756b; font-size:12px; font-weight:600; text-align:left; }
+.bots-team-heading>span:not(.bots-team-dot) { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.bots-team-heading>small { margin-left:auto; font-size:11px; font-weight:400; color:#8a968e; }
+.bots-team-heading>svg { flex:none; transition:transform .15s; }
+.bots-team-heading>svg.is-collapsed { transform:rotate(-90deg); }
+.bots-team-dot { width:6px; height:6px; border-radius:50%; flex:none; }
+.bots-team-heading:focus-visible,.bots-list-filters select:focus-visible { outline:2px solid #408b5c; outline-offset:-2px; }
+.bots-artifacts-icon.active { background:#e7efe8; color:#286748; }
+@media(hover:hover) { .bots-team-heading:hover { background:#eaf0ea; border-radius:8px; } }

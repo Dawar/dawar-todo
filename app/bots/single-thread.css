@@ -17,3 +17,12 @@
 .bots-burst-line{justify-content:flex-end;min-height:0}.bots-burst-line:empty{display:none}.bots-burst-pending{margin:0 0 8px}.bots-burst-line>small{margin-right:auto;align-self:center}
 @keyframes bot-burst-fill{from{transform:scaleX(var(--burst-progress,0))}to{transform:scaleX(1)}}
 @media(prefers-reduced-motion:reduce){.bots-burst-fill.is-counting{animation:none}}
+
+.bots-discussion-presence { display:inline-flex; align-items:center; gap:5px; min-width:0; color:#728278; font-size:11px; }
+.bots-discussion-presence .bot-avatar-engine.small { width:23px; height:23px; flex:none; }
+.bots-discussion-presence>span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.bots-discussion-notice { display:flex; align-items:center; gap:7px; color:#926044; font-size:12px; padding:9px 12px; margin:4px 0; border-radius:9px; background:#fbf5ed; text-align:left; width:fit-content; max-width:100%; }
+.bots-discussion-notice>span { min-width:0; overflow-wrap:anywhere; }
+.bots-discussion-notice>svg { flex:none; }
+.bots-conversation-presence { flex-wrap:wrap; }
+.bots-peer-summary>span>span { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }

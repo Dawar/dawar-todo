@@ -119,3 +119,5 @@ details[open] > summary > .bots-disclosure-chevron { transform: rotate(90deg); }
 @media (prefers-reduced-motion: reduce) {
   .bots-disclosure-chevron, .bots-composer, .bots-send { transition: none; }
 }
+
+.bots-scheduled-message-mark { display:flex; align-items:center; width:fit-content; color:#8a978f; margin:10px 0 -7px 0; }

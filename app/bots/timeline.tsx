@@ -10,12 +10,13 @@ import { botsClient } from "./client";
 import { BotAvatar } from "./bot-avatar";
 import { MessageTime } from "./message-time";
 import { BotMessage } from "./message";
-import { ArrowDown, MessageCircle, CloudOff } from "lucide-react";
+import { ArrowDown, MessageCircle, CloudOff, Clock3 } from "lucide-react";
 import { LazyDetails } from "./lazy-details";
 import { useFeedScroll } from "./use-feed-scroll";
 import { ReturnedArtifacts } from "./returned-artifact";
 import type { ActivityTarget } from "./conversation-activity";
 import { useBurstConversation, BurstControls, BurstBubbles, canonicalBurst } from "./burst-composer";
+import { useRunFindings } from "./run-findings";
 import { retainedBatches } from "./burst-state";
 const noDetailErrors = () => () => {};
 
@@ -57,24 +58,36 @@ export const TimelineEntry = memo(function TimelineEntry(props: Parameters<typeo
   const { entry } = props;
   if (entry.type === "reasoning" && (entry.item?.type !== "reasoning" || !entry.item.summary.some(text => text.trim()))) return null;
   return <div data-history-key={historyKey(entry.turnId, entry.id)}>
-    {entry.type === "reasoning" ? <LazyDetails className="bots-activity" summary="Thinking">{() => <EntryBody {...props} />}</LazyDetails> : entry.scheduled ? <LazyDetails className="bots-turn is-scheduled" summary={`Scheduled run · ${entry.status} · ${entry.label}`}>
-      {() => <EntryBody {...props} />}</LazyDetails>
-      : !entry.item ? <LazyDetails className="bots-activity" summary={<><span>Work log · {entry.label}</span><small>{entry.itemStatus ?? entry.status}</small></>}>
+    {(entry.audience === "finding" || entry.scheduled && entry.type === "agentMessage") && <span className="bots-scheduled-message-mark" role="img" aria-label="From scheduled work" title="From scheduled work"><Clock3 size={13} aria-hidden="true" /></span>}
+    {entry.type === "reasoning" ? <LazyDetails className="bots-activity" summary="Thinking">{() => <EntryBody {...props} />}</LazyDetails> : !entry.item ? <LazyDetails className="bots-activity" summary={<><span>Work log · {entry.label}</span><small>{entry.itemStatus ?? entry.status}</small></>}>
         {() => <EntryBody {...props} />}</LazyDetails> : <EntryBody {...props} />}
     {(entry.type === "userMessage" || entry.type === "agentMessage") && <MessageTime seconds={entry.messageAt} basis={entry.timeBasis ?? "turn-start"} user={entry.type === "userMessage"} />}
   </div>;
 });
 
 /** Bounded body window; all preceding entries remain reachable through explicit pages. */
-export function BotConversation({ owner, bot, online, children, onOpenActivity, draft = "", burstsEnabled = false, burstSubmitting = false }: { owner: string; bot: Bot; online: boolean; children?: ReactNode; onOpenActivity?: (target: ActivityTarget) => void; draft?: string; burstsEnabled?: boolean; burstSubmitting?: boolean }) {
-  const { timeline, state } = useBotTimeline(owner, bot.id, online);
+export function BotConversation({ owner, bot, online, children, draft = "", burstsEnabled = false, burstSubmitting = false }: { owner: string; bot: Bot; online: boolean; children?: ReactNode; onOpenActivity?: (target: ActivityTarget) => void; draft?: string; burstsEnabled?: boolean; burstSubmitting?: boolean }) {
+  const { timeline, state: nativeState } = useBotTimeline(owner, bot.id, online);
+  const findings = useRunFindings(owner, bot.id, online, botsClient.snapshot?.capabilities?.backgroundRunLanes === 1);
+  const projectEntries = useCallback((entries: HistoryEntry[]) => {
+    const extra: HistoryEntry[] = findings.findings.filter(f => !entries.some(e => e.audience === "finding" && e.runId === f.runId && e.turnId === f.turnId && e.item?.type === "agentMessage" && e.item.text.trim() === f.summary.trim())).map(f => {
+      const seconds = Date.parse(f.createdAt) / 1000;
+      return { id: `finding:${f.id}`, turnId: f.turnId, type: "agentMessage", label: "Scheduled finding", item: { type: "agentMessage", id: `finding:${f.id}`, text: f.summary, phase: "final_answer", memoryCitation: null, delivery: null, questions: null }, complete: true, scheduled: true, status: "completed", startedAt: seconds, messageAt: seconds, timeBasis: "received", audience: "finding", runId: f.runId };
+    });
+    if (!extra.length) return entries;
+    // Native item order stays authoritative; insert external run findings at their recorded arrival time.
+    const result = [...entries];
+    for (const f of extra) { const index = result.findIndex(e => (e.messageAt ?? e.startedAt ?? Infinity) > f.messageAt!); result.splice(index < 0 ? result.length : index, 0, f); }
+    return result;
+  }, [findings.findings]);
+  const state = useMemo(() => ({ ...nativeState, entries: projectEntries(nativeState.entries) }), [nativeState, projectEntries]);
   const quietSeconds = bot.burstQuietSeconds ?? 3;
   const burst = useBurstConversation({ owner, botId: bot.id, online, draft, enabled: burstsEnabled, quietSeconds });
   const burstAttachments = useMemo(() => { const files = new Map(state.attachments.map(file => [file.id, file])); for (const file of burst.value?.attachments ?? []) files.set(file.id, file); return [...files.values()]; }, [state.attachments, burst.value]);
   const batchProps = { botId: bot.id, attachments: burstAttachments, quietSeconds, online, typingUntil: burst.typingUntil };
   const nativeBatchIds = new Set([...state.entries, ...state.contextEntries].flatMap(entry => entry.item?.type === "userMessage" && entry.item.clientId ? [entry.item.clientId] : []));
   const tailBatches = retainedBatches(burst.value).filter(batch => batch.state !== "sent" && !nativeBatchIds.has(batch.operationId ?? batch.id));
-  const feed = useFeedScroll(timeline, state, online);
+  const feed = useFeedScroll(timeline, state, online, projectEntries);
   const { first, last, scroll, content, showJump, paging, latest } = feed;
   const [downloadError, setDownloadError] = useState("");
   const groups = useMemo(() => {
@@ -104,6 +117,8 @@ export function BotConversation({ owner, bot, online, children, onOpenActivity, 
     {state.partialTurn && first === 0 && <p className="bots-system-note">This large turn continues above. Scroll up for the rest.</p>}
     {!online && state.cached && <div className="bots-system-note">Saved conversation. Reconnect for updates and work details not saved here.</div>}
     {state.error && <div className="bots-history-error" role="alert"><CloudOff size={22} aria-hidden="true" /><div><strong>Let’s try that again</strong><p>{state.error}</p><button disabled={!online} onClick={() => void timeline.refresh()}>Reload conversation</button></div></div>}
+    {findings.nextCursor && first === 0 && <button className="bots-older" disabled={!online || findings.busy} onClick={() => { feed.capture(); void findings.older(); }}>Earlier scheduled findings</button>}
+    {findings.error && <p className="bots-error" role="alert">{findings.error}<button disabled={!online || findings.busy} onClick={findings.retry}>Retry</button></p>}
     {state.loading && !state.entries.length && <div className="bots-history-skeleton" role="status" aria-label="Loading conversation"><span /><span /><span /><span /></div>}
     {!state.loading && !state.error && !state.entries.length && !state.olderCursor && <div className="bots-conversation-start"><span className="bots-start-icon"><MessageCircle size={26} strokeWidth={1.4} aria-hidden="true" /></span><h2>{bot.name}</h2><p>{bot.purpose || "What would you like to work on?"}</p></div>}
     {last === state.entries.length && !groups.some((group) => group.kind === "message") && state.contextEntries.length > 0 && <section aria-label="Latest readable context">
@@ -116,10 +131,6 @@ export function BotConversation({ owner, bot, online, children, onOpenActivity, 
       const summary = group.kind.startsWith("thinking:") ? <span className="bots-reasoning-face"><BotAvatar bot={bot} small decorative emotion="thinking" working={entry.status === "inProgress"} /><span>Thinking</span></span> : <><span>Work log</span><small>{group.entries.length} {group.entries.length === 1 ? "step" : "steps"}</small></>;
       const confirmed = canonicalBurst(entry, burst.value);
       return <Fragment key={key}>
-        {(entry.audience === "finding" || entry.audience === "mixed" && groups[groups.indexOf(group) - 1]?.entries[0].turnId !== entry.turnId) && <div className="bots-run-provenance">
-          <span>{entry.audience === "finding" ? "A finding from scheduled work" : entry.legacyContext ? "Earlier saved context" : "Conversation during scheduled work"}</span>
-          {onOpenActivity && <button onClick={() => onOpenActivity({ turnId: entry.turnId, runId: entry.runId })}>Open in history</button>}
-        </div>}
         {(!online || state.error) && state.gaps.filter((gap) => group.entries.some((entry) => gap.before === historyKey(entry.turnId, entry.id))).map((gap) => <div className="bots-system-note" key={gap.before}>
           Some messages between these pages are not loaded. <button disabled={!online || paging} onClick={() => {
             feed.capture(); void timeline.fillGap(gap);

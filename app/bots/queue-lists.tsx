@@ -33,6 +33,25 @@ export function useQueueLists(owner: string, botId: string | null, online: boole
 }
 const when = (date:string|null,zone:string) => date ? new Intl.DateTimeFormat(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit',timeZone:zone}).format(new Date(date)) : null;
 const blank = () => ({name:'',cron:'0 9 * * 1-5',timeZone:Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',enabled:true});
+/** The composer journals the destination with the original text and attachments. */
+export function QueueDestinationPicker({lists, disabled, onChoose, onClose, onManage}: {
+  lists: BotQueueList[]; disabled: boolean; onChoose: (id: string | null) => void; onClose: () => void; onManage: () => void;
+}) {
+  const ref = useRef<HTMLDialogElement>(null);
+  useEffect(() => { const dialog = ref.current; dialog?.showModal(); return () => { dialog?.close(); }; }, []);
+  return <dialog ref={ref} className="bots-queue-picker" aria-labelledby="queue-picker-title" onCancel={onClose} onClick={event => {
+    if (event.target !== event.currentTarget) return;
+    const box = event.currentTarget.getBoundingClientRect();
+    if (event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom) onClose();
+  }}>
+    <header><div><span>Queue message</span><h2 id="queue-picker-title">Choose a list</h2></div><button type="button" className="bots-icon-button" aria-label="Close queue picker" onClick={onClose}><X size={20}/></button></header>
+    <div className="bots-queue-destinations">
+      <button type="button" disabled={disabled} onClick={() => onChoose(null)}><ListOrdered size={21}/><span><strong>Queued next</strong><small>Starts when this bot is free</small></span></button>
+      {lists.map(list => <button type="button" key={list.id} disabled={disabled} onClick={() => onChoose(list.id)}><FolderOpen size={21}/><span><strong>{list.name}</strong><small>{list.count} {list.count === 1 ? 'message' : 'messages'} · {list.cron ? list.enabled ? 'Scheduled' : 'Schedule paused' : 'Manual list'}</small></span></button>)}
+    </div>
+    <button type="button" className="bots-queue-manage" onClick={onManage}><Plus size={17}/>{lists.length ? 'Manage queue lists' : 'Create a queue list'}</button>
+  </dialog>;
+}
 export function QueueLists({owner,bot,lists,defaultItems,online,refreshLists,refreshDefault,onEditDefault}: {
   owner:string;bot:Bot;lists:BotQueueList[];defaultItems:BotQueuedSubmission[];online:boolean;
   refreshLists:()=>Promise<void>;refreshDefault:()=>Promise<void>;onEditDefault:(item:BotQueuedSubmission)=>void;

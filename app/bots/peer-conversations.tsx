@@ -1,6 +1,6 @@
 "use client";
 import { Fragment, useEffect, useRef, useState } from 'react';
-import { ChevronRight, MessageCircle, RefreshCw } from 'lucide-react';
+import { ChevronRight, MessageCircle, RefreshCw, AlertCircle } from 'lucide-react';
 import { botsClient as client } from './client';
 import type { BotEvent } from '../../lib/bots-types';
 import type { Bot, PeerExchange, PeerRequest } from './single-thread-contract';
@@ -11,7 +11,59 @@ import { useRunAction } from './run-action';
 import './single-thread.css';
 const label = (request: PeerRequest) => ({ queued: 'Up next', working: 'Working together', waiting: 'Waiting for a reply', completed: 'Result ready', cancelled: 'Cancelled', failed: 'Needs attention', 'delivery-unconfirmed': 'Delivery needs confirmation' }[request.state]);
 function Text({ text, botId }: { text: string; botId: string }) { return <BotMessage item={{ type: 'agentMessage', id: 'exchange-text', text, phase: null, delivery: null, memoryCitation: null, questions: null }} attachments={[]} botId={botId} download={() => {}} />; }
-export function PeerConversations({ owner, botId, bots, online, historyView = false }: { owner: string; botId: string; bots: Bot[]; online: boolean; historyView?: boolean }) {
+export function useDiscussionStatus(owner: string, botId: string | null, online: boolean, supported: boolean) {
+  const scope = JSON.stringify([owner, botId]);
+  const [value, setValue] = useState<{ scope: string; requests: PeerRequest[]; error: boolean }>({ scope: "", requests: [], error: false });
+  useEffect(() => {
+    if (!botId || !supported || client.owner !== owner) return;
+    let live = true;
+    const records = new Map<string, PeerRequest>();
+    const key = `peers-status:v1:${botId}`;
+    const relevant = (r: PeerRequest) => r.senderBotId === botId || r.recipientBotId === botId;
+    const retain = (r: PeerRequest) => !["completed", "cancelled"].includes(r.state);
+    const publish = (error = false) => {
+      if (!live || client.owner !== owner) return;
+      const requests = [...records.values()].filter(retain).map(r => ({ ...r, result: null }));
+      setValue({ scope, requests, error }); client.save(key, requests);
+    };
+    for (const r of client.cache<PeerRequest[]>(key, [])) if (relevant(r)) records.set(r.id, r);
+    const event = (event: BotEvent) => {
+      if (event.type !== "peer" || event.botId !== botId || client.owner !== owner) return;
+      const r = (event.data as { request?: PeerRequest }).request;
+      if (r && relevant(r) && (!records.has(r.id) || records.get(r.id)!.updatedAt <= r.updatedAt)) { records.set(r.id, { ...r, result: null }); publish(); }
+    };
+    client.events.add(event);
+    void Promise.resolve().then(async () => {
+      publish(); if (!online) return;
+      const found = new Map<string, PeerRequest>(), cursors = new Set<string>(); let cursor: string | null = null;
+      // Read request metadata only; completed exchange bodies remain lazy in Discussions.
+      do {
+        const next: { requests: PeerRequest[]; nextCursor: string | null } = await client.rpc("peers.list", botId, { limit: 100, ...(cursor ? { cursor } : {}) }, undefined, { owner });
+        if (!live || client.owner !== owner) return;
+        if (!Array.isArray(next.requests) || next.requests.length > 100 || next.requests.some(r => !relevant(r)) || next.nextCursor && cursors.has(next.nextCursor)) throw Error("Invalid discussion metadata");
+        for (const r of next.requests) found.set(r.id, { ...r, result: null });
+        cursor = next.nextCursor; if (cursor) cursors.add(cursor);
+      } while (cursor);
+      for (const [id, r] of records) if (!found.has(id) || r.updatedAt > found.get(id)!.updatedAt) found.set(id, r);
+      records.clear(); for (const [id, r] of found) if (retain(r)) records.set(id, r); publish();
+    }).catch(() => publish(true));
+    return () => { live = false; client.events.delete(event); };
+  }, [scope, owner, botId, online, supported]);
+  const requests = value.scope === scope ? value.requests : [];
+  return { requests, attention: requests.filter(r => ["failed", "delivery-unconfirmed"].includes(r.state)), error: value.scope === scope && value.error };
+}
+export function DiscussionStatus({ status, bots, botId, online, onOpen, attentionOnly = false }: {
+  status: ReturnType<typeof useDiscussionStatus>; bots: Bot[]; botId: string; online: boolean; onOpen: (id?: string | null) => void; attentionOnly?: boolean;
+}) {
+  const peerFor = (r: PeerRequest) => bots.find(b => b.id === (r.senderBotId === botId ? r.recipientBotId : r.senderBotId));
+  const blocked = status.attention[0] ?? status.requests.find(r => ["working", "waiting"].includes(r.state) && peerFor(r)?.status === "waiting");
+  if (attentionOnly) return blocked ? <button type="button" className="bots-discussion-notice" onClick={() => onOpen(blocked.id)}><AlertCircle size={15} aria-hidden="true" /><span>{blocked.state === "delivery-unconfirmed" ? "Discussion needs confirmation" : blocked.state === "failed" ? "Discussion needs attention" : `${peerFor(blocked)?.name.split(":")[0] ?? "A bot"} needs input`}</span><ChevronRight size={15} aria-hidden="true" /></button> : status.error ? <button type="button" className="bots-discussion-notice" onClick={() => onOpen()}><AlertCircle size={15} aria-hidden="true" /><span>Check discussions</span><ChevronRight size={15} aria-hidden="true" /></button> : null;
+  const active = online && status.requests.find(r => ["working", "waiting"].includes(r.state) && !r.cancelRequested);
+  if (!active || blocked) return null;
+  const peer = peerFor(active);
+  return <button type="button" className="bots-discussion-presence" onClick={() => onOpen(active.id)} title="Open discussion">{peer && <BotAvatar bot={peer} small decorative working={active.state === "working"} />}<span>Working with {peer?.name.split(":")[0] ?? "a bot"}{status.requests.filter(r => ["working", "waiting"].includes(r.state)).length > 1 ? " + others" : ""}</span></button>;
+}
+export function PeerConversations({ owner, botId, bots, online, historyView = false, targetId = null }: { owner: string; botId: string; bots: Bot[]; online: boolean; historyView?: boolean; targetId?: string | null }) {
   const key = `peers-metadata:v1:${botId}`;
   const [page, setPage] = useState<{ requests: PeerRequest[]; nextCursor: string | null }>(() => client.cache(key, { requests: [], nextCursor: null }));
   const [cursor, setCursor] = useState<string | null>(null), [attempt, setAttempt] = useState(0), [busy, setBusy] = useState(false), [error, setError] = useState(''), [changed, setChanged] = useState(false);
@@ -32,15 +84,26 @@ export function PeerConversations({ owner, botId, bots, online, historyView = fa
     }).catch(reason => { if (live) setError(String(reason)); }).finally(() => { if (live) setBusy(false); });
     return () => { live = false; };
   }, [owner, botId, cursor, online, attempt, key]);
-  if (!page.requests.length && !error && !changed) return null;
+  const [target, setTarget] = useState<PeerRequest | null>(null);
+  useEffect(() => {
+    let live = true;
+    if (targetId && online) void client.rpc<{ request: PeerRequest; exchanges: PeerExchange[] }>("peers.read", botId, { id: targetId }, undefined, { owner }).then(next => {
+      if (live && client.owner === owner && next.request.id === targetId && [next.request.senderBotId, next.request.recipientBotId].includes(botId)) setTarget(next.request);
+    }).catch(reason => { if (live) setError(String(reason)); });
+    return () => { live = false; };
+  }, [targetId, online, botId, owner]);
+  const requests = targetId && target?.id === targetId && !page.requests.some(r => r.id === targetId) ? [target, ...page.requests] : page.requests;
+
   return <section className="bots-peer-conversations" aria-label="Bot discussions"><header><MessageCircle size={16} /><span>{historyView ? "Discussions" : "Working together"}</span>{changed && <button disabled={!online || busy} onClick={() => { setCursor(null); setAttempt(value => value + 1); }}>New updates <RefreshCw size={13} /></button>}</header>
-    {page.requests.map((request, index) => <Fragment key={request.id}>{historyView && (index === 0 || page.requests[index - 1].createdAt.slice(0, 10) !== request.createdAt.slice(0, 10)) && <h4 className="bots-peer-date">{new Date(request.createdAt).toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' })}</h4>}<PeerCard request={request} owner={owner} botId={botId} bots={bots} online={online} historyView={historyView} /></Fragment>)}
+    {requests.map((request, index) => <Fragment key={request.id}>{historyView && (index === 0 || requests[index - 1].createdAt.slice(0, 10) !== request.createdAt.slice(0, 10)) && <h4 className="bots-peer-date">{new Date(request.createdAt).toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' })}</h4>}<PeerCard request={request} owner={owner} botId={botId} bots={bots} online={online} historyView={historyView} targetId={targetId} /></Fragment>)}
+    {!requests.length && !error && <p className="bots-details-lead">{busy ? "Loading discussions…" : "No discussions yet."}</p>}
     {error && <p role="alert">{error}<button disabled={!online || busy} onClick={() => setAttempt(value => value + 1)}>Retry</button></p>}
     {(cursor || page.nextCursor) && <nav>{cursor && <button disabled={!online || busy} onClick={() => setCursor(null)}>Recent discussions</button>}{page.nextCursor && <button disabled={!online || busy} onClick={() => setCursor(page.nextCursor)}>Earlier discussions</button>}</nav>}
   </section>;
 }
-function PeerCard({ request, owner, botId, bots, online, historyView }: { request: PeerRequest; owner: string; botId: string; bots: Bot[]; online: boolean; historyView: boolean }) {
+function PeerCard({ request, owner, botId, bots, online, historyView, targetId }: { request: PeerRequest; owner: string; botId: string; bots: Bot[]; online: boolean; historyView: boolean; targetId: string | null }) {
   const [open, setOpen] = useState(false), [eventCurrent, setCurrent] = useState<PeerRequest | null>(null), [unread, setUnread] = useState(false);
+  useEffect(() => { let live = true; if (targetId === request.id) queueMicrotask(() => { if (live) setOpen(true); }); return () => { live = false; }; }, [targetId, request.id]);
   const sequence = useRef(0);
   const current = eventCurrent && eventCurrent.updatedAt >= request.updatedAt ? eventCurrent : request;
   useEffect(() => {
@@ -51,7 +114,6 @@ function PeerCard({ request, owner, botId, bots, online, historyView }: { reques
   return <article className="bots-peer-card"><button data-history-key={historyView ? `peer:${request.id}` : undefined} className="bots-peer-summary" aria-expanded={open} onClick={() => { setOpen(value => !value); setUnread(false); }}>
     {peer ? <BotAvatar bot={peer} small decorative working={current.state === 'working'} /> : <MessageCircle size={20} />}
     <span><strong>{name}<small>{label(current)}</small></strong><span>{current.summary}</span></span><ChevronRight size={17} className={open ? 'is-open' : ''} /></button>
-    {current.result && !open && <div className="bots-peer-result"><Text text={current.result} botId={botId} /></div>}
     {open && <PeerDetail owner={owner} botId={botId} request={current} bots={bots} online={online} changed={unread} onRead={() => setUnread(false)} historyView={historyView} />}
   </article>;
 }

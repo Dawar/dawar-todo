@@ -12,3 +12,11 @@
 .bots-lists-error { color: #946652; background: #fff5ed; padding: 10px; border-radius: 10px; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }.bots-lists-error button { display: block; padding: 7px 0; font-weight: 600; }
 .bots-queue-lists button:disabled { opacity: .4; cursor: not-allowed; }.bots-queue-lists :focus-visible { outline: 2px solid #3b8a5f; outline-offset: 2px; }
 @media(pointer:coarse) { .bots-list-detail-heading button, .bots-lists-heading > button, .bots-list-editor header button { width: 44px; height: 44px; }.bots-list-editor input:not([type=checkbox]), .bots-list-editor select, .bots-list-editor textarea { font-size: 16px; } }
+.bots-queue-picker { position: fixed; inset: 0; margin: auto; width: min(420px, calc(100vw - 28px)); max-height: calc(100dvh - 40px); padding: 22px; border: 1px solid #dce7df; border-radius: 22px; background: #fff; color: #304638; box-shadow: 0 22px 80px #14372326; overflow-y: auto; }
+.bots-queue-picker::backdrop { background: #173a2a40; backdrop-filter: blur(3px); }
+.bots-queue-picker header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; gap: 12px; }
+.bots-queue-picker header span { font-size: 11px; color: #7d8c82; }.bots-queue-picker h2 { font-size: 20px; font-weight: 600; margin: 4px 0 0; }
+.bots-queue-destinations { display: grid; gap: 8px; }.bots-queue-destinations button { display: flex; gap: 13px; align-items: center; text-align: left; padding: 14px; border: 1px solid #dfe8e1; border-radius: 13px; background: #f8fbf8; color: #48705a; min-width: 0; }
+.bots-queue-destinations button > svg { flex: none; }.bots-queue-destinations span { min-width: 0; display: grid; gap: 4px; }.bots-queue-destinations strong { font-size: 14px; color: #344e3d; overflow-wrap: anywhere; }.bots-queue-destinations small { font-size: 11px; color: #7b8d80; }
+.bots-queue-destinations button:hover:not(:disabled) { background: #edf5ef; border-color: #a9c5b3; }.bots-queue-destinations button:disabled { opacity: .4; }
+.bots-queue-manage { display: flex; align-items: center; gap: 7px; margin: 15px auto 0; padding: 8px; color: #47725a; font-size: 12px; }.bots-queue-picker :focus-visible { outline: 2px solid #3b8a5f; outline-offset: 2px; }

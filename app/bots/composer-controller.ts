@@ -221,7 +221,7 @@ export class BotComposer {
       } finally { this.transferring.delete(file.id); this.progress.delete(file.id); this.notify(); }
     }
   }
-  async send(queueNext = false, burst = false) {
+  async send(queueNext = false, burst = false, listId: string | null = null) {
     if (!this.ready || !this.canUseOwner || !this.transport.online) return;
     const slot = this.record.active;
     this.actionError = "";
@@ -254,7 +254,7 @@ export class BotComposer {
       if (!draft.text.trim() && !draft.files.length) return;
       const op: Submission = {
         id: crypto.randomUUID(), slot, method: this.destination ? "runs.send" : draft.queueId ? "queue.update" : queueNext ? "queue.add" : burst ? "bursts.submit" : "turn.send",
-        params: { ...(this.destination ? { runId: this.destination.runId } : {}), ...(draft.queueId ? { id: draft.queueId, ...(draft.queueRevision === undefined ? {} : { expectedRevision: draft.queueRevision }) } : {}), text: draft.text.trim(), attachments: draft.files.map((f) => f.remote!.id) },
+        params: { ...(queueNext && !draft.queueId && !this.destination && listId ? { listId } : {}), ...(this.destination ? { runId: this.destination.runId } : {}), ...(draft.queueId ? { id: draft.queueId, ...(draft.queueRevision === undefined ? {} : { expectedRevision: draft.queueRevision }) } : {}), text: draft.text.trim(), attachments: draft.files.map((f) => f.remote!.id) },
         ...(this.destination ? { runDelivery: { state: "prepared" as const, token: crypto.randomUUID() } } : {}),
         textVersion: draft.textVersion, fileIds: draft.files.map((f) => f.id), state: "pending",
       };

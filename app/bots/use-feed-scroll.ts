@@ -1,11 +1,11 @@
 "use client";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { historyKey } from '../../lib/bot-history-view';
+import { type HistoryEntry, historyKey } from '../../lib/bot-history-view';
 import { historyWindow, windowEndAround } from './history-window';
 import type { BotTimeline, TimelineState } from './timeline-controller';
 
 /** Only user input changes reading intent. Geometry and data changes restore it. */
-export function useFeedScroll(timeline: BotTimeline, state: TimelineState, online: boolean) {
+export function useFeedScroll(timeline: BotTimeline, state: TimelineState, online: boolean, projectEntries: (entries: HistoryEntry[]) => HistoryEntry[] = entries => entries) {
   const scroll = useRef<HTMLDivElement>(null), content = useRef<HTMLDivElement>(null);
   const saved = useRef(state.position), restored = useRef(false), following = useRef(state.position.following);
   const [endKey, setEndKey] = useState<string | null>(null), [showJump, setShowJump] = useState(false), [paging, setPaging] = useState(false);
@@ -71,7 +71,7 @@ export function useFeedScroll(timeline: BotTimeline, state: TimelineState, onlin
       });
       if (gap) { if (!online) return; await timeline.fillGap(gap, toward); }
       else if (toward < 0 && range.first === 0) { if (!online) return; await timeline.older(); }
-      const entries = timeline.getSnapshot().entries;
+      const entries = projectEntries(timeline.getSnapshot().entries);
       const anchor = entries.findIndex((entry) => historyKey(entry.turnId, entry.id) === timeline.resolveKey(saved.current.anchor));
       if (anchor >= 0) {
         const end = windowEndAround(entries, anchor, timeline.getSnapshot().gaps);
@@ -79,7 +79,7 @@ export function useFeedScroll(timeline: BotTimeline, state: TimelineState, onlin
       }
       timeline.position(saved.current);
     } finally { busy.current = false; setPaging(false); }
-  }, [capture, timeline, online]);
+  }, [capture, timeline, online, projectEntries]);
   useEffect(() => {
     if (!online || state.loading || state.error || state.entries.length || !state.olderCursor || continuedEmpty.current) return;
     // One bounded continuation on opening. A long stretch of filtered empty

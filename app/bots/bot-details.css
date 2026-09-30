@@ -50,3 +50,9 @@
 @media(hover:hover) { .bots-details-nav button:hover { color: #286748; background: #f8faf8; } }
 
 .bots-details-panel.is-history{overflow:auto;overflow-anchor:none;padding:20px 24px}.bots-details-panel.is-history .bots-run-library{height:auto;overflow:visible}.bots-details-panel.is-history .bots-run-library-body{padding:0;overflow:visible}.bots-details-panel.is-history .bots-legacy-controls{margin:4px 0 20px}.bots-peer-date{font-size:11px;color:#7c8b80;font-weight:500;margin:18px 0 8px}@media(max-width:350px){.bots-details-panel.is-history{padding:18px 16px}}
+
+.bots-details-nav { display:flex; overflow-x:auto; gap:4px; }
+.bots-details-nav>button { flex:1 0 58px; }
+.bots-details-nav>button>span { position:relative; }
+.bots-details-nav>button:has(.bots-discussion-badge) { flex-basis:75px; }
+.bots-discussion-badge { display:inline-block; margin-left:3px; min-width:14px; padding:0 3px; border-radius:8px; background:#f7e8da; color:#985f37; font-size:9px; line-height:14px; }
