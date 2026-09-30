@@ -24,7 +24,6 @@ export function ComposerSettings({ bot, snapshot, online }: { bot: Bot; snapshot
   useLayoutEffect(() => controller.attach(), [controller]);
   const effective = controller.displayed(bot);
   const { model, active, available } = fastChoice(effective, snapshot);
-  const activeTurn = Boolean(bot.activeTurnId);
   const pending = state.pending;
   const queued = Boolean(pending && Object.entries(state.intent).some(([field, value]) =>
     pending.values[field as keyof Values] !== value));
@@ -52,12 +51,12 @@ export function ComposerSettings({ bot, snapshot, online }: { bot: Bot; snapshot
       </div>
       <div className="bots-settings-toggles" role="group" aria-label="Reply mode and speed">
         <button type="button" aria-pressed={effective.mode === "plan"}
-          disabled={!online} title={activeTurn ? "Applies to turns started after this saves; the current run keeps its settings" : "Plan the next reply"}
+          disabled={!online} title="Plan the next reply"
           onClick={() => controller.edit({ mode: controller.displayed(bot).mode === "plan" ? "default" : "plan" })}>
           {effective.mode === "plan" ? <Check size={15} aria-hidden="true" /> : <ListTodo size={15} aria-hidden="true" />}Plan
         </button>
         <button type="button" aria-pressed={active}
-          disabled={!online || !available && !active} title={!available && !active ? "Fast is unavailable for this model" : activeTurn ? "Applies to turns started after this saves; the current run keeps its settings" : "Fast uses more Codex credits"}
+          disabled={!online || !available && !active} title={!available && !active ? "Fast is unavailable for this model" : "Fast uses more Codex credits"}
           onClick={() => {
             const choice = fastChoice(controller.displayed(bot), snapshot);
             controller.edit({ serviceTier: choice.active ? "default" : choice.available });
@@ -68,9 +67,7 @@ export function ComposerSettings({ bot, snapshot, online }: { bot: Bot; snapshot
       <span className="bots-settings-progress" role={pending ? "status" : undefined}>
         {pending && <><LoaderCircle size={13} className={pending.phase === "saving" ? "bots-spin" : ""} aria-hidden="true" />{status}<span className="sr-only">{queued ? ", latest choice queued" : " bot setting"}</span></>}
       </span>
-      {activeTurn && <span className="bots-settings-scope">Future turns</span>}
     </div>
-    {activeTurn && <span className="bots-settings-context">New turns after saving · This run keeps its settings.</span>}
     {(state.error || state.storageError || state.confirmationError || pending?.phase === "storage") && <div className="bots-settings-error" role="alert">
       <span>{state.storageError || state.error || state.confirmationError || "Saving is paused. Retry storage to continue with the same saved change."}</span>
       {(state.storageError || pending?.phase === "storage") &&

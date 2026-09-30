@@ -11,7 +11,9 @@ export function workLabel(work: WorkState | undefined, bots: Bot[]) {
   if (work.state === 'unconfirmed') return 'Needs confirmation';
   if (work.state === 'needs-input') return 'Needs your input';
   if (work.state === 'waiting') return work.waitingFor.length ? `Waiting for ${work.waitingFor.map(id => bots.find(bot => bot.id === id)?.name ?? 'a reply').join(', ')}` : 'Waiting';
-  if (work.state === 'working') return work.summary ? `Working on ${work.summary}` : 'Working';
+  // Progress summaries persist across turns. They belong in work details,
+  // not the live presence label, where an old summary implies current work.
+  if (work.state === 'working') return 'Working';
   return 'Ready';
 }
 export function WorkOverview({ owner, bot, work, online }: { owner: string; bot: Bot; work?: WorkState; online: boolean }) {

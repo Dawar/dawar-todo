@@ -582,6 +582,8 @@ export function BotsWorkspace() {
               {!bot.archived && (
                 <>
                   <div className="bots-composer-support">
+                    <PromptQueue key={`queue:${scope}`} owner={owner} bot={bot} items={promptQueue} online={online}
+                      canEdit={Boolean(composer?.ready && !sending)} onEdit={editQueued} refresh={() => loadQueue(bot.id)} />
                     {snapshot && <ComposerSettings key={`settings:${scope}`} bot={bot} snapshot={snapshot} online={online} />}
                   {(lanes || single) && <MainStopRecovery owner={owner} botId={bot.id} online={online} />}
                   <ComposerStatus composer={composer} error={composerError} />
@@ -636,8 +638,9 @@ export function BotsWorkspace() {
                       promptQueue.length > 0 || editingQueueId) && (
                       <>
                       {editingQueueId && (
-                        <button type="button" className="bots-queue-button"
-                          onClick={cancelQueueEdit}>Cancel edit</button>
+                        <button type="button" className="bots-icon-button"
+                          aria-label="Cancel edit" title="Cancel edit"
+                          onClick={cancelQueueEdit}><X size={19} aria-hidden="true" /></button>
                       )}
                       <button type="button" className="bots-icon-button bots-queue-icon"
                         title={editingQueueId ? "Save queue (Ctrl+Enter)" : "Queue next (Ctrl+Enter)"}
@@ -725,11 +728,9 @@ export function BotsWorkspace() {
           <BotDetailsDrawer key={scope} bot={bot} section={detailsSection} onSection={setDetailsSection} onClose={closeProfile}>
             {{
               next: <>
-                <h3>Up next</h3><p className="bots-details-lead">Messages waiting for their turn. Your conversation stays right where you left it.</p>
+                <h3>Up next</h3><p className="bots-details-lead">Scheduled work and bot discussions.</p>
                 {single && <WorkOverview owner={owner} bot={bot} work={work} online={online} />}
                 {!single && !promptQueue.length && <div className="bots-details-empty"><ListOrdered size={27} strokeWidth={1.5} /><h3>A little breathing room</h3><p>Nothing is queued. Use Ctrl+Enter to save a message for the next turn.</p></div>}
-                <PromptQueue key={`queue:${scope}`} owner={owner} bot={bot} items={promptQueue} online={online}
-                  canEdit={Boolean(composer?.ready && !sending)} onEdit={item => { editQueued(item); setProfile(false); }} refresh={() => loadQueue(bot.id)} />
                 {single && <AutomaticInbox owner={owner} botId={bot.id} online={online} />}
               </>,
               schedules: <>
