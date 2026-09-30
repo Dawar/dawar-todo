@@ -19,7 +19,7 @@ export function PromptQueue({ owner, bot, items, online, canEdit, onEdit, refres
     [ids[index], ids[other]] = [ids[other], ids[index]];
     action.run('queue.reorder', { ids });
   };
-  return <section className="bots-prompt-queue bots-queue-panel" aria-label="Queued messages">
+  return <section className="bots-prompt-queue bots-queue-panel" aria-label="Queued messages" tabIndex={-1}>
     <header><strong>Queued next{items.length > 0 && <span>{items.length}</span>}</strong><button type="button" aria-label="Refresh queue status" disabled={!online || action.busy} onClick={() => void refresh()}><RefreshCw size={15} /></button></header>
     {!online && <p className="bots-queue-explanation">Saved queue. Reconnect to check its current status.</p>}
     {bot.queuePaused && items.length > 0 && <div className="bots-queue-paused"><span>{queueResumeBlocked(items) ? 'Review the messages below before resuming.' : 'Queue paused.'}</span><button type="button" disabled={!online || locked || queueResumeBlocked(items)} onClick={() => action.run('queue.resume')}>Resume queue</button></div>}

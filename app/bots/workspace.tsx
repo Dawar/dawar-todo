@@ -497,7 +497,11 @@ export function BotsWorkspace() {
                   <strong>{bot.name}</strong>
 
                 </div>
-                {promptQueue.length > 0 && <button className="bots-icon-button bots-up-next-link" aria-label={`Up next: ${promptQueue.length} queued ${promptQueue.length === 1 ? "message" : "messages"}`} onClick={() => { setDetailsSection("next"); setProfile(true); }}><ListOrdered size={19} aria-hidden="true" /><span>{promptQueue.length}</span></button>}
+                {promptQueue.length > 0 && <button className="bots-icon-button bots-up-next-link" aria-label={`Show ${promptQueue.length} queued ${promptQueue.length === 1 ? "message" : "messages"}`} onClick={() => {
+                  const queue = screenRef.current?.querySelector<HTMLElement>(".bots-prompt-queue");
+                  queue?.focus({ preventScroll: true });
+                  queue?.scrollIntoView({ block: "nearest" });
+                }}><ListOrdered size={19} aria-hidden="true" /><span>{promptQueue.length}</span></button>}
                 <button
                   className="bots-icon-button"
                   aria-label="Bot details"
