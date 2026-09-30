@@ -254,6 +254,7 @@ const health = createServer((request, response) => {
       relayConnected: online,
       bots: store.bots().length,
       codexVersion: CODEX_VERSION,
+      newBotDefaults: runtime.newBotDefaults,
       models: runtime.models.map(model => model.model),
       manager: {
         ready: true,

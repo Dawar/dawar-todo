@@ -32,7 +32,6 @@ import {
 import type { Bot } from "./single-thread-contract";
 import { BotAvatar as Avatar } from "./bot-avatar";
 import { PersonalitySettings } from "./personality-settings";
-import { BurstComposer } from "./burst-composer";
 import { WorkOverview, AutomaticInbox, workLabel } from "./work-overview";
 import { PeerConversations } from "./peer-conversations";
 import { finishTodoForward } from "../todo-forward";
@@ -562,7 +561,7 @@ export function BotsWorkspace() {
             </div>
           ) : (
             <>
-              <BotConversation key={scope} owner={owner} bot={bot} online={online} onOpenActivity={openActivity}>
+              <BotConversation key={scope} owner={owner} bot={bot} online={online} onOpenActivity={openActivity} draft={draft} burstsEnabled={burstSupported && !bot.archived} burstSubmitting={composer?.operation?.method === "bursts.submit"}>
                 {lanes && <RunFindings key={scope} owner={owner} botId={bot.id} online={online} onOpen={openActivity} />}
                 {snapshot?.capabilities?.peerInbox === 1 && <PeerConversations key={`peers:${scope}`} owner={owner} botId={bot.id} bots={bots} online={online} />}
                 {pending.map((request) => (
@@ -583,7 +582,6 @@ export function BotsWorkspace() {
               {!bot.archived && (
                 <>
                   <div className="bots-composer-support">
-                    {burstSupported && <BurstComposer key={`bursts:${scope}`} owner={owner} botId={bot.id} online={online} draft={draft} submitting={composer?.operation?.method === "bursts.submit"} />}
                     {snapshot && <ComposerSettings key={`settings:${scope}`} bot={bot} snapshot={snapshot} online={online} />}
                   {(lanes || single) && <MainStopRecovery owner={owner} botId={bot.id} online={online} />}
                   <ComposerStatus composer={composer} error={composerError} />

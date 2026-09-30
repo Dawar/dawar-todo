@@ -189,6 +189,8 @@ export class BotRuntime extends EventEmitter {
       effort: "high",
       serviceTier: "priority",
     };
+    // New bots capture this choice; legacy inherited settings remain stable.
+    this.newBotDefaults = { model: "gpt-6.1-sol", effort: "medium" };
     this.account = { authenticated: false };
     this.ready = false;
     codex.on("notification", (message) => this.onNotification(message));
@@ -1057,6 +1059,9 @@ export class BotRuntime extends EventEmitter {
   }
   async create(p, id) {
     if (!this.ready) throw new Error("Codex is not ready.");
+    const preferred = this.models.find(model => model.model === this.newBotDefaults.model);
+    if (!preferred?.supportedReasoningEfforts.some(option => option.reasoningEffort === this.newBotDefaults.effort))
+      throw Object.assign(new Error("The configured new-bot model or reasoning effort is unavailable."), { definite: true });
     const name = cleanName(p.name),
       purpose = String(p.purpose ?? "")
         .trim()
@@ -1083,8 +1088,8 @@ export class BotRuntime extends EventEmitter {
       color: colors[randomInt(colors.length)],
       status: "provisioning",
       archived: false,
-      model: null,
-      effort: null,
+      model: this.newBotDefaults.model,
+      effort: this.newBotDefaults.effort,
       serviceTier: null,
       mode: "default",
       executionMode: "single-thread", migrationReason: null, ...initialPreferences(),
@@ -1098,7 +1103,7 @@ export class BotRuntime extends EventEmitter {
     await initializeProfile(bot);
     const result = await this.codex.call("thread/start", {
       cwd: bot.cwd,
-      model: this.defaults.model,
+      model: bot.model,
       serviceTier: this.defaults.serviceTier,
       approvalPolicy: "never",
       sandbox: "danger-full-access",
@@ -1108,6 +1113,7 @@ export class BotRuntime extends EventEmitter {
         : BOT_INSTRUCTIONS,
       config: {
         "features.fast_mode": true,
+        model_reasoning_effort: bot.effort,
         ...(this.primary.single(bot) ? { "features.multi_agent": false } : {}),
         ...(this.manager ? this.manager.config(bot) : {}),
       },

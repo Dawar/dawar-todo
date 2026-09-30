@@ -14,6 +14,8 @@ import { LazyDetails } from "./lazy-details";
 import { useFeedScroll } from "./use-feed-scroll";
 import { ReturnedArtifacts } from "./returned-artifact";
 import type { ActivityTarget } from "./conversation-activity";
+import { useBurstConversation, BurstControls, BurstBubbles, canonicalBurst } from "./burst-composer";
+import { retainedBatches } from "./burst-state";
 const noDetailErrors = () => () => {};
 
 const EntryBody = memo(function EntryBody({ entry, timeline, attachments, download }: {
@@ -62,8 +64,13 @@ export const TimelineEntry = memo(function TimelineEntry(props: Parameters<typeo
 });
 
 /** Bounded body window; all preceding entries remain reachable through explicit pages. */
-export function BotConversation({ owner, bot, online, children, onOpenActivity }: { owner: string; bot: Bot; online: boolean; children?: ReactNode; onOpenActivity?: (target: ActivityTarget) => void }) {
+export function BotConversation({ owner, bot, online, children, onOpenActivity, draft = "", burstsEnabled = false, burstSubmitting = false }: { owner: string; bot: Bot; online: boolean; children?: ReactNode; onOpenActivity?: (target: ActivityTarget) => void; draft?: string; burstsEnabled?: boolean; burstSubmitting?: boolean }) {
   const { timeline, state } = useBotTimeline(owner, bot.id, online);
+  const burst = useBurstConversation({ owner, botId: bot.id, online, draft, enabled: burstsEnabled });
+  const burstAttachments = useMemo(() => { const files = new Map(state.attachments.map(file => [file.id, file])); for (const file of burst.value?.attachments ?? []) files.set(file.id, file); return [...files.values()]; }, [state.attachments, burst.value]);
+  const batchProps = { botId: bot.id, attachments: burstAttachments, quietSeconds: bot.burstQuietSeconds ?? 8, online, typing: !!draft };
+  const nativeBatchIds = new Set([...state.entries, ...state.contextEntries].flatMap(entry => entry.item?.type === "userMessage" && entry.item.clientId ? [entry.item.clientId] : []));
+  const tailBatches = retainedBatches(burst.value).filter(batch => batch.state !== "sent" && !nativeBatchIds.has(batch.operationId ?? batch.id));
   const feed = useFeedScroll(timeline, state, online);
   const { first, last, scroll, content, showJump, paging, latest } = feed;
   const [downloadError, setDownloadError] = useState("");
@@ -104,6 +111,7 @@ export function BotConversation({ owner, bot, online, children, onOpenActivity }
       const entry = group.entries[0], key = historyKey(entry.turnId, entry.id);
       const body = () => group.entries.map((value) => group.kind.startsWith("thinking:") ? <div key={value.id} data-history-key={historyKey(value.turnId, value.id)}><EntryBody entry={value} timeline={timeline} attachments={state.attachments} download={download} /></div> : <TimelineEntry key={historyKey(value.turnId, value.id)} entry={{ ...value, scheduled: false }} timeline={timeline} attachments={state.attachments} download={download} />);
       const summary = group.kind.startsWith("thinking:") ? <span className="bots-reasoning-face"><BotAvatar bot={bot} small decorative emotion="thinking" working={entry.status === "inProgress"} /><span>Thinking</span></span> : <><span>Work log</span><small>{group.entries.length} {group.entries.length === 1 ? "step" : "steps"}</small></>;
+      const confirmed = canonicalBurst(entry, burst.value);
       return <Fragment key={key}>
         {(entry.audience === "finding" || entry.audience === "mixed" && groups[groups.indexOf(group) - 1]?.entries[0].turnId !== entry.turnId) && <div className="bots-run-provenance">
           <span>{entry.audience === "finding" ? "A finding from scheduled work" : entry.legacyContext ? "Earlier saved context" : "Conversation during scheduled work"}</span>
@@ -113,13 +121,15 @@ export function BotConversation({ owner, bot, online, children, onOpenActivity }
           Some messages between these pages are not loaded. <button disabled={!online || paging} onClick={() => {
             feed.capture(); void timeline.fillGap(gap);
           }}>Load messages in between</button></div>)}
-        {group.kind === "message" ? <TimelineEntry entry={entry} timeline={timeline} attachments={state.attachments} download={download} />
+        {group.kind === "message" ? confirmed ? <div data-history-key={key}><BurstBubbles messages={confirmed.messages} batch={confirmed.batch} {...batchProps} /></div> : <TimelineEntry entry={entry} timeline={timeline} attachments={state.attachments} download={download} />
           : <div data-history-key={key} style={{ position: "relative" }}>{group.entries.slice(1).map((value) => <span key={value.id} data-history-key={historyKey(value.turnId, value.id)} aria-hidden="true" style={{ position: "absolute", top: 0, height: 0, pointerEvents: "none" }} />)}<LazyDetails className="bots-activity" summary={summary}>{body}</LazyDetails></div>}
         {group === groups.at(-1) || groups[groups.indexOf(group) + 1]?.entries[0].turnId !== entry.turnId ? <ReturnedArtifacts linked={linkedArtifacts} attachments={state.attachments} turnId={entry.turnId} botId={bot.id} /> : null}
       </Fragment>;
     })}
     {last < state.entries.length && (!online || state.error) && <button className="bots-older" disabled={paging || !online && state.gaps.some((gap) => gap.before === historyKey(state.entries[last].turnId, state.entries[last].id))} onClick={() => void feed.page(1, true)}>Load newer turns</button>}
     {downloadError && <p className="bots-error" role="alert">{downloadError}</p>}
+    {last === state.entries.length && tailBatches.map(batch => <BurstBubbles key={batch.id} batch={batch} messages={batch.messageIds.flatMap(id => { const message = burst.value?.messages.find(message => message.id === id); return message ? [message] : []; })} truncatedIds={burst.value?.preview?.truncatedTextIds} {...batchProps} />)}
+    {burstsEnabled && <BurstControls burst={burst} online={online} submitting={burstSubmitting} />}
     {children}
   </div></div>{showJump && <button className="bots-jump-latest" onClick={latest}><ArrowDown size={16} aria-hidden="true" />Latest messages</button>}</div>;
 }

@@ -187,7 +187,7 @@ function BotMessage({
 const MemoBotMessage = memo(BotMessage);
 export { MemoBotMessage as BotMessage };
 
-function AttachmentImage({
+export function AttachmentImage({
   botId,
   attachment,
 }: {

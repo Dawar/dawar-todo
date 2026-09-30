@@ -30,6 +30,7 @@ class FakeCodex extends EventEmitter {
     if (method === "model/list")
       return {
         data: [
+          { model: "gpt-6.1-sol", supportedReasoningEfforts: [{ reasoningEffort: "medium" }, { reasoningEffort: "high" }], serviceTiers: [{ id: "priority", name: "Fast" }] },
           {
             model: "gpt-6-luna",
             isDefault: true,
@@ -256,7 +257,7 @@ test("native queue reorders and removes items, then dispatches sequentially acro
   assert.equal(startCalls().length, 1);
   assert.equal(startCalls()[0].params.queuedSubmissionId, b.id);
   const settings = codex.calls.find((call) => call.method === "thread/settings/update").params;
-  assert.equal(settings.model, "gpt-6-luna");
+  assert.equal(settings.model, "gpt-6.1-sol");
   assert.equal(settings.collaborationMode.mode, "default");
   const resumed = new BotRuntime({ store, codex, root: runtime.root });
   await resumed.start();
@@ -496,7 +497,7 @@ test("creation retry, stable avatar, normalized unique directories and one-to-on
   assert.equal(slugify("日本語"), "bot");
   assert.throws(() => cleanName("\n"), /name/);
 });
-test("Bots default to Luna high Fast and preserve an explicit standard-speed choice", async (t) => {
+test("New bots default to GPT-6.1-Sol medium Fast and preserve an explicit standard-speed choice", async (t) => {
   const { create, runtime, codex, store } = await setup(t);
   const bot = await create();
   assert.deepEqual(runtime.defaults, {
@@ -505,13 +506,13 @@ test("Bots default to Luna high Fast and preserve an explicit standard-speed cho
     serviceTier: "priority",
   });
   const start = codex.calls.find((call) => call.method === "thread/start").params;
-  assert.equal(start.model, "gpt-6-luna");
+  assert.equal(start.model, "gpt-6.1-sol");
   assert.equal(start.serviceTier, "priority");
   assert.equal(start.config["features.fast_mode"], true);
   await op(runtime, bot.id, "turn.send", { text: "hello" });
   const first = codex.calls.find((call) => call.method === "turn/start").params;
-  assert.equal(first.model, "gpt-6-luna");
-  assert.equal(first.effort, "high");
+  assert.equal(first.model, "gpt-6.1-sol");
+  assert.equal(first.effort, "medium");
   assert.equal(first.serviceTier, "priority");
   await op(runtime, bot.id, "bots.update", { serviceTier: "default" });
   assert.equal(runtime.settings(store.bot(bot.id)).serviceTier, "default");

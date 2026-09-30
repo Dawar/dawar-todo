@@ -3,6 +3,7 @@
  * owns shared types; this adapter can be removed when that type commit lands. */
 import type { Bot as LegacyBot, BotSnapshot as LegacySnapshot, BotWorkState } from '../../lib/bots-types';
 import type { BotOperations as LegacyOperations } from '../../lib/bots-operations';
+import type { BotAttachment } from '../../lib/bots-types';
 import type { Shape } from './avatar-engine';
 export type AvatarIdentity = { version: 1; shape: Shape; color: string; seed: string };
 export type Bot = LegacyBot & { executionMode?: 'legacy' | 'single-thread'; migrationReason?: string | null; avatar?: AvatarIdentity; burstQuietSeconds?: 0 | 3 | 8 | 15 };
@@ -12,7 +13,7 @@ export type PeerRequest = { id: string; rootId: string; parentId: string | null;
 export type PeerExchange = { id: string; requestId: string; botId: string; kind: 'request' | 'reply' | 'cancel'; text: string; attachmentIds: string[]; createdAt: string; round: number };
 export type BurstMessage = { id: string; botId: string; text: string; attachmentIds: string[]; createdAt: string; state: 'pending' | 'dispatching' | 'sent' | 'uncertain' | 'failed'; batchId: string | null; turnId: string | null };
 export type Burst = { id: string; botId: string; state: 'pending' | 'paused' | 'dispatching' | 'sent' | 'uncertain' | 'failed'; messageIds: string[]; dueAt: string | null; operationId: string | null; turnId: string | null; error: string | null };
-export type BurstState = { messages: BurstMessage[]; burst: Burst | null; batches?: Burst[] };
+export type BurstState = { messages: BurstMessage[]; burst: Burst | null; batches?: Burst[]; attachments?: BotAttachment[] };
 export type BotSnapshot = Omit<LegacySnapshot, 'bots' | 'capabilities'> & { bots: Bot[]; workByBot?: WorkState[]; capabilities?: LegacySnapshot['capabilities'] & { singleThreadExecution?: 1; peerInbox?: 1; nativeGoals?: 1; messageBursts?: 1 } };
 export type BotOperations = Omit<LegacyOperations, 'bots.update'> & {
   'bots.update': { params: LegacyOperations['bots.update']['params'] & { avatar?: Pick<AvatarIdentity, 'shape' | 'color'>; burstQuietSeconds?: 0 | 3 | 8 | 15 }; result: Bot };

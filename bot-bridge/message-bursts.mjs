@@ -30,7 +30,10 @@ export class MessageBursts {
       const size = Buffer.byteLength(JSON.stringify(message(m))); if (recentBytes + size > 2 * 1024 * 1024) break;
       recent.push(m); recentBytes += size;
     }
-    return { messages: [...messages.filter(m => m.state !== 'sent'), ...recent].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.sequence - b.sequence).map(message),
+    const visibleMessages = [...messages.filter(m => m.state !== 'sent'), ...recent];
+    const attachmentIds = new Set(visibleMessages.flatMap(message => message.attachmentIds));
+    const attachments = [...attachmentIds].flatMap(id => { const file = this.store.get('attachment', id); return file?.botId === bot.id && file.ready ? [file] : []; });
+    return { attachments, messages: [...messages.filter(m => m.state !== 'sent'), ...recent].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.sequence - b.sequence).map(message),
       burst: batch(active[0] ?? batches.at(-1) ?? null), batches: [...active, ...batches.filter(b => b.state === 'sent').slice(-50)].map(batch) };
   }
   publish(botId) { this.runtime.emitEvent('burst', this.read(this.store.bot(botId)), botId); this.store.afterCommit(() => this.arm(botId)); }

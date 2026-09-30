@@ -266,4 +266,4 @@ export type BotBurstMessage = { id: string; botId: string; text: string; attachm
   state: "pending" | "dispatching" | "sent" | "uncertain" | "failed"; batchId: string | null; turnId: string | null };
 export type BotBurst = { id: string; botId: string; state: "pending" | "paused" | "dispatching" | "sent" | "uncertain" | "failed";
   messageIds: string[]; dueAt: string | null; operationId: string | null; turnId: string | null; error: string | null };
-export type BotBurstState = { messages: BotBurstMessage[]; burst: BotBurst | null; batches?: BotBurst[] };
+export type BotBurstState = { messages: BotBurstMessage[]; burst: BotBurst | null; batches?: BotBurst[]; attachments?: BotAttachment[] };

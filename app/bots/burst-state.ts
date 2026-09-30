@@ -7,6 +7,7 @@ export type SavedBurstState = BurstState & { preview?: { messageCount: number; t
 export const retainedBatches = (value: BurstState | null): Burst[] => value?.batches ?? (value?.burst ? [value.burst] : []);
 export function validBurstState(value: BurstState, botId: string) {
   return Array.isArray(value?.messages) && value.messages.length <= MAX_RECORDS && value.messages.every(message => message.botId === botId)
+    && (value.attachments === undefined || Array.isArray(value.attachments) && value.attachments.length <= 3000 && value.attachments.every(file => file.botId === botId))
     && (!value.burst || value.burst.botId === botId) && (value.batches === undefined || Array.isArray(value.batches))
     && retainedBatches(value).length <= MAX_RECORDS && retainedBatches(value).every(batch => batch.botId === botId && Array.isArray(batch.messageIds) && batch.messageIds.length <= 200);
 }
@@ -23,6 +24,7 @@ export function savedBurstState(value: SavedBurstState): SavedBurstState {
     if (message.text.length <= 2000) return message;
     truncated.add(message.id); return { ...message, text: message.text.slice(0, 2000) };
   });
-  return { burst: value.burst, batches: value.batches, messages,
+  const fileIds = new Set(messages.flatMap(message => message.attachmentIds));
+  return { burst: value.burst, batches: value.batches, messages, attachments: value.attachments?.filter(file => fileIds.has(file.id)),
     preview: { messageCount: pendingMessageCount(value), truncatedTextIds: messages.filter(message => truncated.has(message.id)).map(message => message.id) } };
 }
