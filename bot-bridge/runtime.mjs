@@ -1,4 +1,5 @@
 import { initialPreferences, preferencePatch } from "./bot-preferences.mjs";
+import { CODEX_VERSION } from "./codex-version.mjs";
 import { MessageBursts } from "./message-bursts.mjs";
 import { PeerInbox, PEER_TOOL } from "./peer-inbox.mjs";
 import { acceptSingleThreadOperation } from "./single-thread-operations.mjs";
@@ -721,7 +722,7 @@ export class BotRuntime extends EventEmitter {
         ready: this.ready,
         account: this.account,
         defaults: this.defaults,
-        version: "0.156.1",
+        version: CODEX_VERSION,
       };
     if (method === "events") return this.store.replay(Number(p.after) || 0);
     if (method === "bots.create") return this.create(p, id);

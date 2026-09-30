@@ -1,8 +1,9 @@
 import { EventEmitter } from "node:events";
 import { spawn, execFileSync } from "node:child_process";
 import { createInterface } from "node:readline";
+import { CODEX_VERSION } from "./codex-version.mjs";
 
-export const CODEX_VERSION = "0.156.1";
+export { CODEX_VERSION } from "./codex-version.mjs";
 export class Codex extends EventEmitter {
   constructor(binary) {
     super();

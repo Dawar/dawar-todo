@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { createServer } from "node:http";
 import { Store } from "./store.mjs";
 import { Codex } from "./codex.mjs";
+import { CODEX_VERSION, codexBinary } from "./codex-version.mjs";
 import { BotRuntime } from "./runtime.mjs";
 import { bridgeResponse } from "./response.mjs";
 import { CodexManager } from "./manager.mjs";
@@ -15,12 +16,7 @@ const required = [
 ];
 for (const key of required)
   if (!process.env[key]) throw new Error(`${key} is required.`);
-const binary =
-  process.env.BOTS_CODEX_BINARY ??
-  join(
-    homedir(),
-    ".codex/packages/standalone/releases/0.156.1-x86_64-unknown-linux-musl/bin/codex",
-  );
+const binary = codexBinary();
 const store = new Store(
   join(
     process.env.BOTS_STATE_DIR ??
@@ -74,7 +70,7 @@ codex.on("fault", (error) => {
 await manager.listen();
 await runtime.start();
 await manager.recover();
-log("runtime.ready", { version: "0.156.1", bots: store.bots().length });
+log("runtime.ready", { version: CODEX_VERSION, bots: store.bots().length });
 
 function connect() {
   if (stopping) return;
@@ -257,7 +253,8 @@ const health = createServer((request, response) => {
       ready: runtime.ready,
       relayConnected: online,
       bots: store.bots().length,
-      codexVersion: "0.156.1",
+      codexVersion: CODEX_VERSION,
+      models: runtime.models.map(model => model.model),
       manager: {
         ready: true,
         workers: store.list("managerWorker").length,

@@ -38,7 +38,7 @@ Manager policy is refreshed every turn without overwriting existing identity or 
 ## Components
 
 - `app/bots`: responsive conversation UI, native requests, local drafts/history, attachment transfer and schedule management.
-- `bot-bridge/service.mjs`: Node **24+** service, Codex **0.156.1** stdio child, local SQLite, scheduler and notification delivery. No publicly listening VM port. Health is loopback only.
+- `bot-bridge/service.mjs`: Node **24+** service, Codex **0.159.2** stdio child, local SQLite, scheduler and notification delivery. No publicly listening VM port. Health is loopback only.
 - `bots-relay`: separate Cloudflare Worker and SQLite Durable Object, using hibernating WebSockets. The VM and browser both connect outward.
 - `/api/bots/session`: signs one-use, 60-second relay tickets after owner identity and origin checks. Sessions last 15 minutes and renew. Todo bearer tokens are rejected.
 - `/api/bots/notifications`: independent machine credential, D1 outbox and per-owner subscription association. Existing Web Push subscriptions are claimed only with the authenticated browser's matching subscription keys.
@@ -48,7 +48,7 @@ The public operation contract is `lib/bots-operations.ts`; native bindings in `l
 ## Install and deploy
 
 1. Use the existing Sites source workflow to reconcile this checkout. Install dependencies with `npm ci`.
-2. Verify `node --version` is 24+ and the pinned binary exists at `~/.codex/packages/standalone/releases/0.156.1-x86_64-unknown-linux-musl/bin/codex`. Run that binary's `login status` as `dawar`.
+2. Verify `node --version` is 24+ and the pinned binary exists at `~/.codex/packages/app-server-daemon/releases/0.159.2-x86_64-unknown-linux-musl/bin/codex`. Run that binary's `login status` as `dawar`.
 3. Authenticate Wrangler with `npx wrangler login`, or provide a Cloudflare API token with Workers Scripts and account access plus the account ID in the environment. Set `SITE_ORIGIN` and `BOTS_MACHINE_ID` in `bots-relay/wrangler.jsonc` for the intended Site/VM.
 4. Generate three independent random 32-byte secrets. Keep them outside the repository in a mode-600 file. Configure the relay's `BOTS_TICKET_SECRET` and `BOTS_MACHINE_SECRET` with `wrangler secret put --config bots-relay/wrangler.jsonc`. Deploy with `npm run bots:deploy` and use the URL returned by Wrangler, adding `/connect` and changing HTTPS to WSS.
 5. In Sites runtime environment settings configure `BOTS_OWNER_EMAIL`, `BOTS_OWNER_USER_ID`, `BOTS_MACHINE_ID`, `BOTS_RELAY_URL`, `BOTS_TICKET_SECRET`, and `BOTS_NOTIFICATION_SECRET`. `BOTS_OWNER_USER_ID` is the Site-scoped `oai-authenticated-user-id` from the owner's ChatGPT sign-in; access checks use this stable ID, while `BOTS_OWNER_EMAIL` remains the canonical key for tickets and notifications. Mark both token secrets secret. Deploy the saved Site version to apply them. The machine secret is never sent to Sites or a browser.
@@ -95,3 +95,7 @@ npm test           # application production build and existing application tests
 ```
 
 Also validate a dedicated bot against the actual app-server: create/retry, streamed messages, native question and two-device resolution, chunked attachment round-trip, Plan/steer/Stop, a harmless one-time schedule, archive/restore, reconnect and service restart. Verify desktop and mobile layouts in the browser. Use an owner device with Web Push enabled for the final real notification delivery check.
+
+## Runtime updates
+
+The runtime pin and binary resolver live in `codex-version.mjs`. See [UPDATING_CODEX.md](UPDATING_CODEX.md) for authorized on-request/nightly updates and the idle restart handoff.
