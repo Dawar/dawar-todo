@@ -67,7 +67,7 @@ import { ComposerSettings } from "./composer-settings";
 import { ArtifactGallery, BotAttachmentsEntry, ArtifactNav } from "./artifact-gallery";
 import { PromptQueue } from "./prompt-queue";
 import { TeamsManager, TeamAssignment } from "./teams";
-import { QueueLists, QueueDestinationPicker, useQueueLists } from "./queue-lists";
+import { QueueLists, useQueueLists } from "./queue-lists";
 import "./bots.css";
 import "./chat-design.css";
 
@@ -103,7 +103,6 @@ export function BotsWorkspace() {
     [creating, setCreating] = useState(false),
     [profile, setProfile] = useState(false),
     [desktopScope, setDesktopScope] = useState<string | null>(null),
-    [queuePickerScope, setQueuePickerScope] = useState<string | null>(null),
     [gallery, setGallery] = useState<"artifacts" | "attachments" | null>(null),
     [detailsSection, setDetailsSection] = useState<BotDetailsSection>("next"),
     [activityTarget, setActivityTarget] = useState<ActivityTarget | null>(null),
@@ -126,8 +125,9 @@ export function BotsWorkspace() {
   const uploads = composer?.draft.files ?? [];
   const editingQueueId = composer?.draft.queueId ?? null;
   const sending = Boolean(composer?.operation);
+  const checkoutLocked = Boolean(composer?.draft.queueSource && !composer.draft.queueSource.removed);
   const canSend = Boolean(composer?.ready && !composer.storageError && !sending &&
-    uploads.every((file) => file.remote?.ready));
+    !checkoutLocked && uploads.every((file) => file.remote?.ready));
   const setDraft = (text: string) => composer?.setText(text);
   const [showTeams, setShowTeams] = useState(false), [teamFilter, setTeamFilter] = useState("all"), [teamSort, setTeamSort] = useState("recent");
   const snapshot = client.snapshot;
@@ -331,7 +331,7 @@ export function BotsWorkspace() {
   }, [selected, online, bot]);
   const select = useCallback((id: string | null) => {
     selectedRef.current = id;
-    setSelected(id); setGallery(null); setQueuePickerScope(null);
+    setSelected(id); setGallery(null);
     const url = new URL(window.location.href);
     url.searchParams.delete("view");
     if (id) url.searchParams.set("bot", id);
@@ -378,12 +378,18 @@ export function BotsWorkspace() {
   }
   function queueMessage() {
     if (!canSend || !online || (!draft.trim() && !uploads.length)) return;
-    if (!editingQueueId && !promptQueue.length && queueListsSupported) {
-      setQueuePickerScope(scope);
-      void refreshQueueLists().catch(() => {});
-    } else void send(true);
+    void send(true);
   }
-  function editQueued(item: BotQueuedSubmission) { composer?.edit(item); }
+  async function editQueued(item: BotQueuedSubmission) {
+    const editingComposer = composer, editingBot = selected;
+    const saved = await editingComposer?.checkout(item);
+    if (selectedRef.current === editingBot && client.owner === owner) {
+      if (saved) closeProfile();
+      await refreshDefaultQueue().catch(() => {});
+      await refreshQueueLists().catch(() => {});
+    }
+    return Boolean(saved);
+  }
   function cancelQueueEdit() { composer?.select("normal"); }
   function upload(files: FileList | File[] | null) {
     if (files && composer?.ready) composer.addFiles(Array.from(files));
@@ -640,7 +646,7 @@ export function BotsWorkspace() {
                       type="button"
                       className="bots-icon-button"
                       aria-label="Attach file"
-                      disabled={!composer?.ready}
+                      disabled={!composer?.ready || checkoutLocked}
                       onClick={() => fileRef.current?.click()}
                     >
                       <Paperclip size={20} />
@@ -650,7 +656,7 @@ export function BotsWorkspace() {
                       aria-label={`Message ${bot.name}`}
                       placeholder={online ? "Message…" : "Write a draft…"}
                       value={draft}
-                      disabled={!composer?.ready}
+                      disabled={!composer?.ready || checkoutLocked}
                       rows={1}
                       onPaste={pasteImages}
                       onChange={(e) => setDraft(e.target.value)}
@@ -766,7 +772,7 @@ export function BotsWorkspace() {
                 {!single && !promptQueue.length && <div className="bots-details-empty"><ListOrdered size={27} strokeWidth={1.5} /><h3>A little breathing room</h3><p>Nothing is queued. Use Ctrl+Enter to save a message for the next turn.</p></div>}
                 {single && <AutomaticInbox owner={owner} botId={bot.id} online={online} />}
               </>,
-              queues: queueListsSupported ? <QueueLists key={`lists:${scope}`} owner={owner} bot={bot} lists={queueLists.lists} defaultItems={promptQueue} online={online} refreshLists={queueLists.refresh} refreshDefault={refreshDefaultQueue} onEditDefault={item => { editQueued(item); closeProfile(); }} /> : <p className="bots-details-lead">Queue lists will be available when the bot service update finishes.</p>,
+              queues: queueListsSupported ? <QueueLists key={`lists:${scope}`} owner={owner} bot={bot} lists={queueLists.lists} defaultItems={promptQueue} online={online} refreshLists={queueLists.refresh} refreshDefault={refreshDefaultQueue} onEdit={editQueued} /> : <p className="bots-details-lead">Queue lists will be available when the bot service update finishes.</p>,
               schedules: <>
                 <ScheduleList bot={bot} schedules={schedules} online={online} busy={busy} onEdit={setEditingSchedule} action={action} />
                 {snapshot?.capabilities?.scheduleDecisions === 1 && <RunDecisions owner={owner} botId={bot.id} online={online} />}
@@ -794,7 +800,6 @@ export function BotsWorkspace() {
       </main>
       {showTeams && (teamsSupported ? <TeamsManager key={owner} owner={owner} teams={teams} bots={bots} online={online} onClose={() => setShowTeams(false)} /> : <div className="bots-modal-backdrop" onClick={() => setShowTeams(false)}><section className="bots-modal" role="dialog" aria-modal="true" aria-label="Teams" onClick={event => event.stopPropagation()}><h2>Teams</h2><p>Teams will be available when the bot service update finishes.</p><button className="bots-primary" onClick={() => setShowTeams(false)}>Close</button></section></div>)}
       {showOverallUsage && <div className="bots-modal-backdrop" onClick={() => setShowOverallUsage(false)}><section className="bots-history-modal bots-usage-modal" role="dialog" aria-modal="true" aria-label="Codex account usage" onClick={(event) => event.stopPropagation()}><header><h2>Codex account usage</h2><button className="bots-icon-button" aria-label="Close account usage" onClick={() => setShowOverallUsage(false)}><X size={19} /></button></header><UsagePanel online={online} /></section></div>}
-      {bot && queuePickerScope === scope && !bot.archived && <QueueDestinationPicker key={scope} lists={queueLists.lists} disabled={!online || !canSend || (!draft.trim() && !uploads.length)} onClose={() => setQueuePickerScope(null)} onChoose={listId => { setQueuePickerScope(null); void send(true, listId); }} onManage={() => { setQueuePickerScope(null); setDetailsSection("queues"); setProfile(true); }} />}
       {bot && desktopScope === scope && !bot.archived && <BotDesktopDialog key={scope} bot={bot} owner={owner} onClose={() => setDesktopScope(null)} />}
       {creating && (
         <div className="bots-modal-backdrop" onClick={() => setCreating(false)}>

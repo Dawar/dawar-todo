@@ -12,7 +12,9 @@ export const humanInput = (item: ThreadItem) => item.type === "userMessage" && !
 export function turnAudience(items: ThreadItem[], knownRunId?: string): TurnAudience {
   const trigger = items.find(scheduleInput);
   const runId = trigger?.type === "userMessage" ? trigger.clientId!.slice(9) : knownRunId;
-  if (!trigger && !knownRunId && !items.some(peerInput)) return { kind: "conversation" };
+  // Peer-triggered work belongs to this same conversation. Hide the incoming
+  // peer envelope, but retain the bot's visible progress and reasoning summaries.
+  if (!trigger && !knownRunId) return { kind: "conversation" };
   return { kind: items.some(humanInput) ? "mixed" : "activity", ...(runId ? { runId } : {}) };
 }
 

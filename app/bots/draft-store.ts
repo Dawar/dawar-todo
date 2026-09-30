@@ -8,9 +8,11 @@ export type StagedFile = {
 };
 export type Draft = {
   text: string; textVersion: string; files: StagedFile[]; queueId?: string; queueRevision?: number;
+  queueSource?: { id: string; listId: string | null; removed: boolean };
 };
 export type Submission = {
-  id: string; slot: string; method: "bursts.submit" | "turn.send" | "queue.add" | "queue.update" | "runs.send";
+  id: string; slot: string; method: "bursts.submit" | "turn.send" | "queue.add" | "queue.update" | "queue.delete" | "runs.send";
+  activateFrom?: string;
   params: Record<string, unknown>; textVersion: string; fileIds: string[];
   state: "pending" | "uncertain"; error?: string;
   /** Run sends only. Absent on older rows means possibly dispatched, never prepared. */
@@ -33,6 +35,7 @@ export type DraftChange =
   | { kind: "fileError"; id: string; error?: string }
   | { kind: "bytes"; id: string }
   | { kind: "edit"; slot: string; draft: Draft }
+  | { kind: "checkout"; draft: Draft; operation: Submission }
   | { kind: "select"; slot: string }
   | { kind: "forward"; id: string; text: string; version: string }
   | { kind: "submit"; operation: Submission }
@@ -96,6 +99,13 @@ export function changeDraft(source: DraftRecord, change: DraftChange): DraftReco
       record.slots[change.slot] = change.draft;
     } else if (!existing || (!existing.text && !existing.files.length && !pending)) record.slots[change.slot] = change.draft;
     record.active = change.slot;
+  } else if (change.kind === "checkout") {
+    // Snapshot and exact removal identity commit together before any RPC.
+    // Concurrent tabs adopt the original operation for this queue revision.
+    const saved = record.slots[change.operation.slot];
+    if (saved?.queueSource?.removed || Object.values(record.operations).some(op => op.slot === change.operation.slot)) return source;
+    record.slots[change.operation.slot] = saved ?? change.draft;
+    record.operations[change.operation.id] = change.operation;
   } else if (change.kind === "select") {
     if (record.slots[change.slot]) record.active = change.slot;
   } else if (change.kind === "forward") {
@@ -138,7 +148,13 @@ export function changeDraft(source: DraftRecord, change: DraftChange): DraftReco
     } else {
       delete record.operations[op.id];
       const draft = record.slots[op.slot];
-      if (change.outcome === "success" && draft) {
+      if (op.method === "queue.delete") {
+        // Removal confirms draft ownership, not delivery. Never clear its files.
+        if (change.outcome === "success" && draft) {
+          if (draft.queueSource) draft.queueSource = { ...draft.queueSource, removed: true };
+          if (record.active === op.activateFrom) record.active = op.slot;
+        }
+      } else if (change.outcome === "success" && draft) {
         if (draft.textVersion === op.textVersion) {
           draft.text = "";
           draft.textVersion = `ack:${op.id}`;
