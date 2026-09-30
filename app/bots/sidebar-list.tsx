@@ -12,7 +12,7 @@ const SidebarRow = memo(function SidebarRow({ bot: b, selected, select, modelNam
     <span className="bots-row-copy"><span className="bots-row-name"><span className="bots-row-title">{b.name}</span><small>{new Date(b.updatedAt).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}</small></span>
       <span className="bots-row-preview">{b.status === "waiting" ? "Needs your input" : b.preview || b.purpose || "Start a conversation"}</span>
       <span className="bots-row-config"><span className="bots-row-model" title={modelName}>{modelName}</span><span aria-hidden="true">·</span><span>{effort}</span>{fast && <span className="bots-row-fast" role="img" aria-label="Fast mode"><Zap size={12} /></span>}</span>
-    </span>{(b.activeTurnId || b.status === "running" || b.workerTasks?.active) && <span className="bots-row-working" role="img" aria-label="Working"><LoaderCircle size={18} className="bots-spin" aria-hidden="true" /></span>}{b.updatedAt > b.lastReadAt && <span className="bots-unread" />}
+    </span>{Boolean(b.activeTurnId || b.status === "running" || b.workerTasks?.active) && <span className="bots-row-working" role="img" aria-label="Working"><LoaderCircle size={18} className="bots-spin" aria-hidden="true" /></span>}{b.updatedAt > b.lastReadAt && <span className="bots-unread" />}
   </button>;
 });
 export const BotSidebarList = memo(function BotSidebarList({ bots, snapshot, selected, select, empty }: {
