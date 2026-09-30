@@ -22,7 +22,10 @@ from mcp.server.fastmcp import FastMCP
 from mcp.types import ImageContent, TextContent, ToolAnnotations
 from pydantic import Field
 
-pag.FAILSAFE = True
+# Dawar explicitly disabled the corner emergency stop for bot desktops.
+# The human desktop server retains its own policy. Exclusive control,
+# screenshot freshness, coordinate/window guards and action locks still apply.
+pag.FAILSAFE = False
 pag.PAUSE = 0.1
 mcp = FastMCP('linux-computer-use', instructions='Use screenshot before acting. Coordinates are unscaled X11 pixels. Observe target window, act, then screenshot to verify.', log_level='WARNING')
 Coord = Annotated[int, Field(strict=True, ge=0)]
@@ -54,8 +57,6 @@ def point(x, y):
     w, h = screen_size()
     if not (0 <= x < w and 0 <= y < h):
         raise ValueError(f'Point outside controllable screen: 0 <= x < {w}, 0 <= y < {h}. Take a fresh screenshot.')
-    if (x, y) in [(0, 0), (w-1, 0), (0, h-1), (w-1, h-1)]:
-        raise ValueError('Screen corners are reserved for the PyAutoGUI fail-safe.')
 
 
 def screen_size():
@@ -76,8 +77,6 @@ def serial():
             raise ValueError('Another computer-use call is in progress. Observe a new screenshot before retrying.')
         try:
             yield
-        except pag.FailSafeException:
-            raise ValueError('PyAutoGUI fail-safe triggered. Stop input, inspect a screenshot, and ask the operator to move the pointer away from the corner. Never disable FAILSAFE.') from None
         finally:
             fcntl.flock(lock, fcntl.LOCK_UN)
 
@@ -93,7 +92,6 @@ def ready(window_id=None):
         raise ValueError('The human is controlling this desktop in DawarTodo. Wait for release, then take a fresh screenshot.')
     if time.monotonic() - last_screenshot > 60:
         raise ValueError('A screenshot from this MCP connection within the last 60 seconds is required before input.')
-    pag.failSafeCheck()
     if window_id and (active_window() is None or int(window_id, 16) != int(active_window(), 16)):
         raise ValueError('Target window is not active. Screenshot, focus the observed window, and verify before input.')
 
@@ -137,7 +135,7 @@ def double_click(x: Coord, y: Coord, button: Button = 'left', window_id: WindowI
 
 @mcp.tool(annotations=ACT)
 def drag(start_x: Coord, start_y: Coord, end_x: Coord, end_y: Coord, duration: Seconds = 0.5, button: Button = 'left', window_id: WindowId | None = None) -> dict:
-    """Drag between observed absolute coordinates, holding button for duration 0.1..3 seconds; always release the button even on fail-safe."""
+    """Drag between observed absolute coordinates, holding button for duration 0.1..3 seconds; always release the button on error."""
     with serial():
         point(start_x, start_y); point(end_x, end_y); ready(window_id)
         pag.moveTo(start_x, start_y)
@@ -145,7 +143,7 @@ def drag(start_x: Coord, start_y: Coord, end_x: Coord, end_y: Coord, duration: S
             pag.mouseDown(button=button)
             pag.moveTo(end_x, end_y, duration=duration)
         finally:
-            # Release only; bypass failSafeCheck so an abort cannot leave a held button.
+            # Release only so an abort cannot leave a held button.
             pag.platformModule._mouseUp(*pag.position(), button)
         return done('drag')
 

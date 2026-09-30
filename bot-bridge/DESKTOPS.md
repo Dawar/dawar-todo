@@ -14,7 +14,7 @@ Every bot receives `bot_desktop` MCP configuration on native thread creation or 
 
 ## Tools and human collaboration
 
-The eight tools are screenshot, click, double_click, drag, scroll, type, keypress and window_focus. Screenshots use MSS; input uses PyAutoGUI. The server requires an observation from its MCP connection within 60 seconds before input, validates coordinates/window IDs and preserves the PyAutoGUI fail-safe. The sidebar's smaller preview does not satisfy this observation requirement.
+The eight tools are screenshot, click, double_click, drag, scroll, type, keypress and window_focus. Screenshots use MSS; input uses PyAutoGUI. The server requires an observation from its MCP connection within 60 seconds before input and validates coordinates/window IDs. Dawar explicitly disabled the mouse-corner emergency stop for bot desktops on 2026-09-30; pointer corners do not block keyboard or mouse input. Exclusive-control leases and action locks remain enforced. The human desktop server retains its separate policy. The sidebar's smaller preview does not satisfy the observation requirement.
 
 Shared human/agent control is the default. The viewer's optional **Take exclusive control** acquires a 30-second lease, renewed by its heartbeat, which blocks agent input while allowing screenshots and other work. Closing/disconnecting releases the lease; expiry recovers after a dropped connection. Other browser viewers must close before exclusive control can be acquired. Direct RDP shares the desktop but does not acquire a browser control lease.
 
