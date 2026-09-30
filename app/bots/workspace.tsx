@@ -65,6 +65,7 @@ import { ComposerInput } from "./composer-input";
 import { ComposerSettings } from "./composer-settings";
 import { ArtifactGallery, BotAttachmentsEntry, ArtifactNav } from "./artifact-gallery";
 import { PromptQueue } from "./prompt-queue";
+import { QueueLists, useQueueLists } from "./queue-lists";
 import "./bots.css";
 import "./chat-design.css";
 
@@ -132,6 +133,8 @@ export function BotsWorkspace() {
     pending = snapshot?.pending.filter((p) => p.botId === selected && !(lanes && p.runId && p.laneId && p.threadId && !(snapshot?.capabilities?.singleThreadExecution === 1 && bot?.executionMode === "single-thread" && p.threadId === bot.threadId))) ?? [];
   const single = snapshot?.capabilities?.singleThreadExecution === 1 && bot?.executionMode === "single-thread";
   const work = single ? snapshot?.workByBot?.find(value => value.botId === selected) : undefined;
+  const queueListsSupported = snapshot?.capabilities?.queueLists === 1;
+  const queueLists = useQueueLists(owner, selected, online, queueListsSupported);
   const burstSupported = snapshot?.capabilities?.messageBursts === 1;
   const burstEnabled = burstSupported && bot?.executionMode === "single-thread";
   useEffect(() => { if (owner && selected && composer?.ready) { try { finishTodoForward(owner, selected); } catch { /* The exact draft insertion remains committed. */ } } }, [owner, selected, composer?.ready]);
@@ -268,6 +271,9 @@ export function BotsWorkspace() {
         setError(e instanceof Error ? e.message : "Queue could not load.");
     }
   }, []);
+  const refreshDefaultQueue = useCallback(async () => { if (selected) await loadQueue(selected); }, [selected, loadQueue]);
+  const refreshQueueLists = queueLists.refresh;
+  const refreshQueues = useCallback(async () => { await Promise.all([refreshDefaultQueue(), refreshQueueLists()]); }, [refreshDefaultQueue, refreshQueueLists]);
   useEffect(() => {
     let active = true;
     queueMicrotask(() => {
@@ -587,7 +593,8 @@ export function BotsWorkspace() {
                 <>
                   <div className="bots-composer-support">
                     <PromptQueue key={`queue:${scope}`} owner={owner} bot={bot} items={promptQueue} online={online}
-                      canEdit={Boolean(composer?.ready && !sending)} onEdit={editQueued} refresh={() => loadQueue(bot.id)} />
+                      canEdit={Boolean(composer?.ready && !sending)} onEdit={editQueued} refresh={refreshQueues}
+                      supported={queueListsSupported} lists={queueLists.lists} onOpenLists={queueListsSupported ? () => { setDetailsSection("queues"); setProfile(true); } : undefined} />
                     {snapshot && <ComposerSettings key={`settings:${scope}`} bot={bot} snapshot={snapshot} online={online} />}
                   {(lanes || single) && <MainStopRecovery owner={owner} botId={bot.id} online={online} />}
                   <ComposerStatus composer={composer} error={composerError} />
@@ -737,6 +744,7 @@ export function BotsWorkspace() {
                 {!single && !promptQueue.length && <div className="bots-details-empty"><ListOrdered size={27} strokeWidth={1.5} /><h3>A little breathing room</h3><p>Nothing is queued. Use Ctrl+Enter to save a message for the next turn.</p></div>}
                 {single && <AutomaticInbox owner={owner} botId={bot.id} online={online} />}
               </>,
+              queues: queueListsSupported ? <QueueLists key={`lists:${scope}`} owner={owner} bot={bot} lists={queueLists.lists} defaultItems={promptQueue} online={online} refreshLists={queueLists.refresh} refreshDefault={refreshDefaultQueue} onEditDefault={item => { editQueued(item); closeProfile(); }} /> : <p className="bots-details-lead">Queue lists will be available when the bot service update finishes.</p>,
               schedules: <>
                 <ScheduleList bot={bot} schedules={schedules} online={online} busy={busy} onEdit={setEditingSchedule} action={action} />
                 {snapshot?.capabilities?.scheduleDecisions === 1 && <RunDecisions owner={owner} botId={bot.id} online={online} />}

@@ -25,3 +25,50 @@
   .bots-queue-panel .bots-queue-actions button { width: 44px; height: 44px; min-width: 44px; }
   .bots-queue-panel > header > button, .bots-queue-panel .bots-queue-action-note button, .bots-queue-panel .bots-queue-paused button { min-width: 44px; min-height: 44px; }
 }
+
+/* One reading column with selection on the left and a consistent actions menu. */
+.bots-queue-panel { border-radius: 16px; }
+.bots-queue-panel > header > div { display: flex; align-items: center; gap: 3px; }
+.bots-queue-panel > header button { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 9px; color: #577765; }
+.bots-queue-panel button:hover:not(:disabled), .bots-queue-item-menu > summary:hover { background: #eaf2ed; }
+.bots-queue-panel .bots-prompt-queue-item { display: grid; grid-template-columns: 20px minmax(0,1fr) 36px; gap: 10px; align-items: start; padding: 12px 0; position: relative; }
+.bots-queue-index { padding-top: 4px; color: #6b8775; font-size: 12px; }
+.bots-queue-panel input[type=checkbox] { width: 17px; height: 17px; margin: 0; accent-color: #24734f; cursor: pointer; }
+.bots-queue-panel .bots-queue-text { margin: 0; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; }
+.bots-queue-panel .bots-queue-text.is-open { display: block; }
+.bots-queue-panel .bots-queue-text-toggle { margin: 3px 0 0; padding: 4px 0; color: #557b65; font-size: 11px; min-height: 28px; }
+.bots-queue-panel .bots-queue-status { font-size: 10px; }
+.bots-queue-item-menu { position: relative; }
+.bots-queue-item-menu[open] { z-index: 5; }
+.bots-queue-item-menu > summary { list-style: none; width: 36px; height: 36px; display: grid; place-items: center; cursor: pointer; border-radius: 9px; color: #567661; }
+.bots-queue-item-menu > summary::-webkit-details-marker { display: none; }
+.bots-queue-panel .bots-queue-actions { position: absolute; top: 39px; right: 0; width: 190px; max-width: none; padding: 6px; display: grid; gap: 3px; border: 1px solid #dce6df; border-radius: 12px; background: #fff; box-shadow: 0 8px 30px #233e2d18; }
+.bots-queue-panel .bots-queue-actions button { display: flex; align-items: center; gap: 9px; width: 100%; height: auto; min-height: 38px; padding: 7px 9px; border-radius: 7px; font-size: 12px; text-align: left; }
+.bots-queue-panel .bots-queue-actions .is-destructive { border-top: 1px solid #edf0ed; color: #986757; }
+.bots-queue-order-actions { display: flex; align-items: center; gap: 2px; }
+.bots-queue-panel .bots-queue-order-actions button { width: 36px; justify-content: center; padding: 7px; }
+.bots-queue-order-actions > span { font-size: 11px; color: #7a8b80; margin-left: 5px; }
+.bots-queue-selection { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 0; border-bottom: 1px solid #e3ebe5; font-size: 11px; color: #668070; }
+.bots-queue-selection > label, .bots-queue-selection > div, .bots-queue-selection button, .bots-queue-move { display: flex; align-items: center; gap: 7px; }
+.bots-queue-selection button, .bots-queue-move { min-height: 36px; padding: 4px 8px; border-radius: 8px; font-size: 11px; color: #466f56; }
+.bots-queue-move select { background: transparent; max-width: 135px; border: 0; min-width: 0; font-size: inherit; cursor: pointer; }
+.bots-queue-move svg { flex: none; }
+.bots-queue-panel .bots-queue-attachments { display: flex; flex-wrap: wrap; gap: 6px; margin: 7px 0; }
+.bots-queue-panel .bots-queue-attachments > span { display: flex; align-items: center; gap: 5px; border: 1px solid #dfe8e1; padding: 3px 6px; border-radius: 7px; max-width: 155px; font-size: 10px; }
+.bots-queue-attachments > span > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bots-prompt-queue.bots-queue-panel.is-embedded { width: 100%; margin: 8px 0; padding: 0; border: 0; background: transparent; max-height: none; overflow: visible; }
+.bots-queue-panel:has(.bots-queue-item-menu[open]) { overflow: visible; }
+@media(pointer:coarse) { .bots-queue-panel .bots-prompt-queue-item { grid-template-columns: 22px minmax(0,1fr) 44px; }.bots-queue-item-menu > summary, .bots-queue-panel > header button { width: 44px; height: 44px; }.bots-queue-panel .bots-queue-actions button { min-height: 44px; }.bots-queue-panel .bots-queue-actions { flex: none; }.bots-queue-panel .bots-queue-order-actions button { width: 44px; }.bots-queue-selection button,.bots-queue-move { min-height: 44px; } }
+
+/* Expanded actions stay inside the scrollable queue, including on narrow screens. */
+.bots-queue-panel .bots-queue-item-menu { grid-column: 1 / -1; position: static; }
+.bots-queue-item-menu > summary { position: absolute; top: 12px; right: 0; }
+.bots-queue-panel .bots-queue-item-menu:not([open]) { height: 0; }
+.bots-queue-panel .bots-queue-actions { position: static; width: 100%; max-width: none; display: flex; flex-wrap: wrap; justify-content: flex-start; align-items: center; gap: 5px; padding: 7px; box-shadow: none; background: #f0f6f2; }
+.bots-queue-panel .bots-queue-actions > button { width: auto; }
+.bots-queue-panel .bots-queue-actions .is-destructive { border: 0; margin-left: auto; }
+.bots-queue-panel:has(.bots-queue-item-menu[open]) { overflow-y: auto; }
+.bots-prompt-queue.bots-queue-panel.is-embedded:has(.bots-queue-item-menu[open]) { overflow: visible; }
+
+.bots-queue-panel:not(.is-embedded) > header { position: sticky; top: -10px; z-index: 2; background: #f6faf7; padding: 3px 0; }
+@media(pointer:coarse) { .bots-queue-index { min-height: 44px; cursor: pointer; } }

@@ -1,15 +1,20 @@
 import { enqueuePrompt, mutatePrompt, stagedQueue } from "./prompt-queue.mjs";
 import { captureActivity, activityUnchanged } from "./turn-state.mjs";
+import { ownedList, prepareQueueListMutation } from "./queue-lists.mjs";
 
 // Runs under the bot lock. Awaited work is validation/read-only with respect to
 // the queue; the returned synchronous closure and operation receipt commit in
 // one transaction. No durable "dispatching" window precedes local acceptance.
 export async function prepareLocalQueueMutation(runtime, method, botId, params, id) {
-  if (!["queue.add", "queue.update", "queue.delete", "queue.reorder", "queue.resume"].includes(method)) return null;
+  if (!["queue.add", "queue.update", "queue.delete", "queue.reorder", "queue.resume", "queue.move", "queue.merge", "queueLists.save", "queueLists.delete", "queueLists.flush"].includes(method)) return null;
   const bot = runtime.store.bot(botId);
+  const listMutation = await prepareQueueListMutation(runtime, method, bot, params, id);
+  if (listMutation) return listMutation;
+  if (!["queue.add", "queue.update", "queue.delete", "queue.reorder", "queue.resume"].includes(method)) return null;
   if (method === "queue.add") {
     if (bot.archived) throw new Error("Restore this bot first.");
     if (!runtime.ready) throw new Error("Codex is not ready.");
+    ownedList(runtime, botId, params.listId);
     const input = await runtime.messageInput(bot, params);
     return () => enqueuePrompt(runtime, runtime.store.bot(botId), params, id, input);
   }
@@ -31,8 +36,9 @@ export async function prepareLocalQueueMutation(runtime, method, botId, params, 
     return () => mutatePrompt(runtime, runtime.store.bot(botId), runtime.store.get("promptQueue", item.id), method, params, id, input);
   }
   if (method === "queue.reorder") {
-    const queue = await runtime.queueList(bot);
-    const local = stagedQueue(runtime.store, botId);
+    const list = ownedList(runtime, botId, params.listId);
+    const queue = list ? stagedQueue(runtime.store,botId,list.id) : await runtime.queueList(bot);
+    const local = stagedQueue(runtime.store, botId, list?.id ?? null);
     if (!Array.isArray(params.ids) || params.ids.length !== queue.length ||
         new Set(params.ids).size !== queue.length || queue.some(item => !params.ids.includes(item.id)))
       throw new Error("Reorder must include every queued prompt once.");
@@ -41,7 +47,7 @@ export async function prepareLocalQueueMutation(runtime, method, botId, params, 
     if (legacy.some((item, index) => params.ids[index] !== item.id))
       throw new Error("Legacy native prompts must remain ahead of staged prompts until they finish.");
     return () => {
-      if (stagedQueue(runtime.store, botId).some(item => ["dispatching", "uncertain"].includes(item.state)))
+      if (stagedQueue(runtime.store, botId, list?.id ?? null).some(item => ["dispatching", "uncertain"].includes(item.state)))
         throw new Error("Reordering waits for the unconfirmed queued send to be reconciled.");
       params.ids.slice(legacy.length).forEach((itemId, position) =>
         runtime.store.put("promptQueue", { ...runtime.store.get("promptQueue", itemId), position }));

@@ -11,7 +11,7 @@ import type {
   BotThreadUsage,
   BotAccountQuota,
   BotSnapshot,
-  BotQueuedSubmission,
+  BotQueuedSubmission, BotQueueList,
   BotArtifactQuery,
   BotArtifactPage,
   BotArtifactPreview,
@@ -80,9 +80,15 @@ export type BotOperations = {
     params: { scope?: "main" | "all" };
     result: Record<string, never>;
   };
-  "queue.list": { params: Record<string, never>; result: BotQueuedSubmission[] };
+  "queue.list": { params: { listId?: string | null }; result: BotQueuedSubmission[] };
+  "queueLists.list": { params: Record<string, never>; result: BotQueueList[] };
+  "queueLists.save": { params: { id?: string; name: string; cron: string | null; timeZone: string; enabled: boolean; expectedRevision?: number }; result: { list: BotQueueList } };
+  "queueLists.delete": { params: { id: string; expectedRevision: number }; result: { applied: boolean } };
+  "queueLists.flush": { params: { id: string; expectedRevision: number }; result: { applied: boolean } };
+  "queue.move": { params: { items: { id: string; revision: number }[]; listId: string | null }; result: { applied: boolean } };
+  "queue.merge": { params: { items: { id: string; revision: number }[] }; result: { queuedSubmission: BotQueuedSubmission } };
   "queue.add": {
-    params: { text: string; attachments?: string[] };
+    params: { text: string; attachments?: string[]; listId?: string | null };
     result: { queuedSubmission: QueuedSubmission } | { consumedTurnId: string };
   };
   "queue.update": {
@@ -90,7 +96,7 @@ export type BotOperations = {
     result: { queuedSubmission: QueuedSubmission };
   };
   "queue.delete": { params: { id: string; expectedRevision?: number }; result: { deleted: boolean } };
-  "queue.reorder": { params: { ids: string[] }; result: Record<string, never> };
+  "queue.reorder": { params: { ids: string[]; listId?: string | null }; result: Record<string, never> };
   "queue.resume": { params: Record<string, never>; result: Record<string, never> };
   "thread.compact": {
     params: Record<string, never>;

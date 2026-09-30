@@ -4,8 +4,8 @@ import { rememberInputProvenance } from "./artifact-outputs.mjs";
 
 const now = () => new Date().toISOString();
 const pendingStates = new Set(["queued", "dispatching", "uncertain", "failed"]);
-export function stagedQueue(store, botId) {
-  return store.list("promptQueue", botId).filter(item => pendingStates.has(item.state))
+export function stagedQueue(store, botId, listId = null) {
+  return (store.queuedPrompts ? store.queuedPrompts(botId,listId) : store.list("promptQueue", botId).filter(item => pendingStates.has(item.state) && (item.listId ?? null) === listId))
     .sort((a, b) => a.position - b.position || a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
 }
 export function finishLocalOperation(store, id, result) {
@@ -18,9 +18,9 @@ export function enqueuePrompt(runtime, bot, params, id, input) {
     const existing = runtime.store.get("promptQueue", id);
     if (existing && existing.botId !== bot.id) throw new Error("Queue identity belongs to another bot.");
     const item = existing ?? runtime.store.put("promptQueue", {
-      id, botId: bot.id, threadId: bot.threadId, clientUserMessageId: id, input,
+      id, botId: bot.id, threadId: bot.threadId, listId: params.listId ?? null, clientUserMessageId: id, input,
       attachmentIds: [...(params.attachments ?? [])],
-      state: "queued", revision: 1, position: Math.max(0, ...stagedQueue(runtime.store, bot.id).map(entry => entry.position)) + 1,
+      state: "queued", revision: 1, position: Math.max(0, ...stagedQueue(runtime.store, bot.id, params.listId ?? null).map(entry => entry.position)) + 1,
       source: { kind: "conversation", operationId: id }, createdAt: now(),
     });
     runtime.store.put("queuedAttachments", { id, botId: bot.id, attachmentIds: params.attachments ?? [] });
@@ -51,7 +51,7 @@ export function mutatePrompt(runtime, bot, item, method, params, operationId, in
   });
 }
 export async function dispatchPrompt(runtime, bot, item) {
-  if (item.state !== "queued") return;
+  if (item.state !== "queued" || item.listId) return;
   const operationId = `queue-start:${createHash("sha256").update(`${bot.id}:${item.id}:${item.revision}`).digest("hex")}`;
   const prior = runtime.store.operation(operationId);
   if (prior) {

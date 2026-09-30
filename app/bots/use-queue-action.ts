@@ -28,38 +28,40 @@ export function useQueueAction(owner: string, botId: string, refresh: () => Prom
     if (owned()) { setPending(stored.pending); setNotSaved(false); setReadBlocked(Boolean(stored.error)); setError(stored.error); }
   };
   const send = async (next: Pending) => {
-    if (!valid() || !client.online || inFlight.current) return;
+    if (!valid() || !client.online || inFlight.current) return false;
     const stored = readQueueAction(owner, botId);
-    if (stored.error) { setError(stored.error); setReadBlocked(true); return; }
+    if (stored.error) { setError(stored.error); setReadBlocked(true); return false; }
     if (stored.pending && stored.pending.id !== next.id && !pendingRef.current) {
-      pendingRef.current = stored.pending; setPending(stored.pending); setNotSaved(false); setError('Another tab has a queue action awaiting confirmation. Check that same action first.'); return;
+      pendingRef.current = stored.pending; setPending(stored.pending); setNotSaved(false); setError('Another tab has a queue action awaiting confirmation. Check that same action first.'); return false;
     }
     pendingRef.current = next; setPending(next);
     // Separate keys preserve both receipts if two tabs act concurrently. Neither
     // can overwrite the other's uncertain operation or exact parameters.
     try { localStorage.setItem(prefix+next.id, JSON.stringify(next)); }
-    catch { setNotSaved(true); setError('This queue action was not sent because it could not be saved on this device. Retry after browser storage is available.'); return; }
+    catch { setNotSaved(true); setError('This queue action was not sent because it could not be saved on this device. Retry after browser storage is available.'); return false; }
     inFlight.current = true; setNotSaved(false); setBusy(true); setError('');
     try {
       await client.rpc(next.method, botId, next.params, next.id, { owner, managed: true });
       localStorage.removeItem(prefix+next.id);
       adoptStored();
+      return true;
     } catch (reason) {
       if ((reason as { outcome?: string }).outcome === 'rejected') {
         try { localStorage.removeItem(prefix+next.id); adoptStored(); }
-        catch { if (owned()) setError('The server rejected this action, but its local receipt could not be cleared. Retry the same action to recover it.'); return; }
+        catch { if (owned()) setError('The server rejected this action, but its local receipt could not be cleared. Retry the same action to recover it.'); return false; }
       }
       if (owned()) setError(message(reason));
+      return false;
     } finally {
       inFlight.current = false;
       if (owned()) setBusy(false);
-      if (valid()) await refresh();
+      if (valid()) { try { await refresh(); } catch (reason) { if (valid()) setError(message(reason)); } }
     }
   };
   return { pending, error, busy, notSaved, blocked: Boolean(pending || readBlocked),
     run(method: Method, params: Record<string, unknown> = {}) {
-      if (pendingRef.current || readBlocked) return;
-      void send({ id: crypto.randomUUID(), method, params, owner, botId });
+      if (pendingRef.current || readBlocked) return Promise.resolve(false);
+      return send({ id: crypto.randomUUID(), method, params, owner, botId });
     },
     retry() { if (pendingRef.current) void send(pendingRef.current); },
     recover() { if (valid() && !inFlight.current) adoptStored(); },

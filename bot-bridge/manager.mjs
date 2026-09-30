@@ -1,5 +1,6 @@
 import { PEER_TOOL } from "./peer-inbox.mjs";
 import { WORK_TOOL } from "./primary-execution.mjs";
+import { QUEUE_TOOL, queueTool } from "./queue-lists.mjs";
 import { createServer } from "node:http";
 import { requireTurn, usableTurn } from "./native-turn.mjs";
 import {
@@ -213,18 +214,22 @@ export class CodexManager {
     if (failed) throw failed.reason;
   }
   tools(bot) {
-    if (!this.runtime.primary.single(bot)) return [...MANAGER_TOOLS, RUN_MESSAGE_TOOL, WORK_TOOL, PEER_TOOL];
+    if (!this.runtime.primary.single(bot)) return [...MANAGER_TOOLS, RUN_MESSAGE_TOOL, WORK_TOOL, PEER_TOOL, QUEUE_TOOL];
     const retained = MANAGER_TOOLS.map(tool => {
       const operations = tool.inputSchema.properties.operation.enum.filter(op => ["list", "read", "status", "requests", "review"].includes(op) || tool.name === "codex_tasks" && op === "collectResult");
       return operations.length ? { ...tool, description: `Retained legacy history/collection only. ${tool.description}`, inputSchema: { ...tool.inputSchema,
         properties: { ...tool.inputSchema.properties, operation: { ...tool.inputSchema.properties.operation, enum: operations } } } } : null;
     }).filter(Boolean);
-    return [...retained, WORK_TOOL, PEER_TOOL];
+    return [...retained, WORK_TOOL, PEER_TOOL, QUEUE_TOOL];
   }
   async call(botId, name, args, origin = null) {
     const bot = this.store.bot(botId);
     if (bot.archived || bot.archiving)
       throw new Error("Restore this manager before using its tools.");
+    if (name === "bots_queue") {
+      if (origin) throw new Error("Queue lists belong to the primary named bot.");
+      return queueTool(this.runtime,bot,args);
+    }
     if (name === "bots_peers") {
       if (origin) throw new Error("Use the owned native peer tool route.");
       return this.runtime.peerTool(bot, args, { authority: "authenticated-bot-mcp", botId: bot.id, threadId: null, turnId: null, callId: null });

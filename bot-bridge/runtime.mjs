@@ -16,6 +16,7 @@ import { registerArtifact, registerNativeItem, indexNativeArtifacts, rememberInp
 import { EventEmitter } from "node:events";
 import { PlanLifecycle } from "./plan-lifecycle.mjs";
 import { stagedQueue, dispatchPrompt, reconcilePrompt } from "./prompt-queue.mjs";
+import { QUEUE_TOOL, ownedList, publicLists, flushDueLists, queueTool } from "./queue-lists.mjs";
 import { findNativeTurn } from "./native-reconcile.mjs";
 import { dispatchScheduled, reconcileScheduled, scheduledContext, recoverRunTurns } from "./scheduled-execution.mjs";
 import { projectTerminalTurn, beginTurnDispatch, acknowledgeTurnDispatch, requireDispatchReconciliation, reconcileActiveTurns, captureActivity,
@@ -94,6 +95,7 @@ const READ_METHODS = new Set([
   "usage.account",
   "attachments.read",
   "queue.list",
+  "queueLists.list",
   "runtime.info",
 ]);
 const MAX_FILE = 100 * 1024 * 1024;
@@ -115,6 +117,7 @@ const schema = (properties, required = []) => ({
 });
 const str = { type: "string" };
 export const dynamicTools = [
+  { type: "function", ...QUEUE_TOOL },
   { type: "function", ...WORK_TOOL },
   { type: "function", ...PEER_TOOL },
   { type: "function", ...RUN_MESSAGE_TOOL },
@@ -488,7 +491,7 @@ export class BotRuntime extends EventEmitter {
   }
   snapshot() {
     return {
-      capabilities: { backgroundRunLanes: 1, scheduleDecisions: 1, singleThreadExecution: 1, peerInbox: 1, nativeGoals: 1, messageBursts: 1 },
+      capabilities: { backgroundRunLanes: 1, scheduleDecisions: 1, singleThreadExecution: 1, peerInbox: 1, nativeGoals: 1, messageBursts: 1, queueLists: 1 },
       workByBot: this.store.bots().map(bot => this.primary.work(bot)),
       ...this.runs.snapshot(),
       bots: this.store
@@ -818,9 +821,11 @@ export class BotRuntime extends EventEmitter {
         return { turn: null, nextCursor: cursor };
       }
       case "queue.list": {
-        const queue = await this.queueList(bot);
+        const list = ownedList(this,bot.id,p.listId);
+        const queue = list ? stagedQueue(this.store,bot.id,list.id) : await this.queueList(bot);
         return queue.filter(item => !this.store.get("primaryInbox", item.clientUserMessageId)).map((item) => this.publicQueued(bot, item));
       }
+      case "queueLists.list": return publicLists(this,bot.id);
       case "queue.add":
       case "queue.resume":
         throw new Error("Local queue operations require atomic acceptance through handle().");
@@ -1949,6 +1954,7 @@ export class BotRuntime extends EventEmitter {
       this.scheduleDecisions.refresh();
       if (created.length) this.emitEvent("schedules", {});
       void this.runs.tick().catch(error => this.emit("fault", error));
+      await flushDueLists(this);
       await this.bursts.tick();
       await this.primary.tick();
       for (const bot of this.store.bots()) {
@@ -2036,6 +2042,10 @@ export class BotRuntime extends EventEmitter {
     const args =
       typeof p.arguments === "string" ? JSON.parse(p.arguments) : p.arguments;
     switch (p.tool) {
+      case "bots_queue": {
+        if (origin) throw new Error("Queue lists belong to the primary named bot.");
+        return queueTool(this,bot,args);
+      }
       case "bots_work": { if (origin) throw new Error("Progress belongs to the primary named bot."); return this.primary.progress(bot, args); }
       case "bots_peers": {
         if (origin) throw new Error("Named peer tools belong to the primary thread.");

@@ -12,6 +12,7 @@ export class Store {
       CREATE TABLE IF NOT EXISTS records(kind TEXT NOT NULL, id TEXT NOT NULL, bot_id TEXT, json TEXT NOT NULL, PRIMARY KEY(kind,id));
       CREATE INDEX IF NOT EXISTS records_bot ON records(kind,bot_id);
       CREATE INDEX IF NOT EXISTS prompt_queue_client ON records(bot_id,json_extract(json,'$.clientUserMessageId')) WHERE kind='promptQueue';
+      CREATE INDEX IF NOT EXISTS prompt_queue_list_state ON records(bot_id,COALESCE(json_extract(json,'$.listId'),''),json_extract(json,'$.state')) WHERE kind='promptQueue';
       CREATE INDEX IF NOT EXISTS primary_intake_source ON records(json_extract(json,'$.sourceId'),json_extract(json,'$.state')) WHERE kind='primaryInbox';
       CREATE INDEX IF NOT EXISTS primary_intake_state ON records(bot_id,json_extract(json,'$.state')) WHERE kind='primaryInbox';
       CREATE INDEX IF NOT EXISTS burst_message_state ON records(bot_id,json_extract(json,'$.state')) WHERE kind='burstMessage';
@@ -69,6 +70,14 @@ export class Store {
             .all(kind, botId)
         : this.db.prepare("SELECT json FROM records WHERE kind=?").all(kind)
     ).map((r) => JSON.parse(r.json));
+  }
+  queuedPrompts(botId, listId = null) {
+    // Read pending messages only; merged/delivered originals remain durable
+    // without being decoded on every queue or scheduler refresh.
+    return this.db.prepare(`SELECT json FROM records WHERE kind='promptQueue' AND bot_id=?
+      AND COALESCE(json_extract(json,'$.listId'),'')=?
+      AND json_extract(json,'$.state') IN ('queued','dispatching','uncertain','failed')`)
+      .all(botId, listId ?? '').map(row => JSON.parse(row.json));
   }
   executionMetadata(kind, botId = null) {
     if (!["runLane", "runIntake", "managerExecution"].includes(kind)) throw new Error("Unknown execution metadata kind.");
