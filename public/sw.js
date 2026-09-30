@@ -1,5 +1,5 @@
 const CACHE_PREFIX = "dawar-todo-shell-";
-const CACHE_NAME = `${CACHE_PREFIX}v55`;
+const CACHE_NAME = `${CACHE_PREFIX}v56`;
 const SHELL = [
   "/",
   "/tasks",
@@ -37,6 +37,11 @@ function discoveredAssetUrls(text, sourcePath = "/") {
   const add = (value) => {
     try {
       if (/[`${}+]/.test(value)) return;
+      // ELK embeds a CommonJS module table in its emitted bundle. These
+      // relative names address modules inside that table, not network files.
+      // Keep caching the real bundle and its other emitted dependencies.
+      if (/^\/assets\/elk-[A-Za-z0-9_-]+\.js$/.test(sourceUrl.pathname)
+        && (value === "./elk-api.js" || value === "./elk-worker.min.js")) return;
       const normalized = value.startsWith("assets/") ? `/${value}` : value;
       const url = new URL(normalized, sourceUrl);
       if (url.origin !== self.location.origin || url.pathname.startsWith("/api/")) return;
