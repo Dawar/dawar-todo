@@ -1,3 +1,4 @@
+import { installDesktops } from "./desktops/install.mjs";
 import { readFile, writeFile, mkdir, access } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
@@ -11,6 +12,7 @@ await access(config).catch(() => {
     `Configure ${config} using bot-bridge/environment.example first.`,
   );
 });
+await installDesktops();
 const service = await readFile(
   new URL("./dawar-todo-bots.service", import.meta.url),
   "utf8",

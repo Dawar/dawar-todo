@@ -56,6 +56,7 @@ import { MainStopButton, MainStopRecovery } from "./run-controls";
 import { BotWorkControls } from "./bot-work-controls";
 import { RunHistory } from "./run-history";
 import type { ActivityTarget } from "./conversation-activity";
+import { BotDesktopCard, BotDesktopDialog } from "./bot-desktop";
 import { BotDetailsDrawer, type BotDetailsSection } from "./bot-details";
 import { ScheduleList } from "./schedule-list";
 import { RunDecisions } from "./run-decisions";
@@ -102,6 +103,7 @@ export function BotsWorkspace() {
     [archived, setArchived] = useState(false),
     [creating, setCreating] = useState(false),
     [profile, setProfile] = useState(false),
+    [desktopScope, setDesktopScope] = useState<string | null>(null),
     [gallery, setGallery] = useState<"artifacts" | "attachments" | null>(null),
     [detailsSection, setDetailsSection] = useState<BotDetailsSection>("next"),
     [activityTarget, setActivityTarget] = useState<ActivityTarget | null>(null),
@@ -483,6 +485,7 @@ export function BotsWorkspace() {
           {teamsSupported && <div className="bots-team-filters"><select aria-label="Filter bots by team" value={teamFilter==="all"||teamFilter==="none"||teams.some(t=>t.id===teamFilter)?teamFilter:"all"} onChange={e=>setTeamFilter(e.target.value)}><option value="all">All teams</option><option value="none">Unassigned</option>{teams.map(t=><option key={t.id} value={t.id}>{t.name}</option>)}</select><select aria-label="Bot list order" value={teamSort} onChange={e=>setTeamSort(e.target.value)}><option value="recent">Recent activity</option><option value="team">Team order</option><option value="name">Name</option></select></div>}
           <BotSidebarList bots={filtered} snapshot={snapshot} selected={selected} select={select}
             empty={teamFilter!=="all" ? "No bots in this team." : search ? "No matching bots." : archived ? "No archived bots." : "Your bots will appear here."} />
+          {bot && snapshot?.capabilities?.botDesktops === 1 && <BotDesktopCard key={scope} bot={bot} owner={owner} online={online} onOpen={() => setDesktopScope(scope)} />}
           <div className="bots-machine">
             <span className={`bots-status-dot ${online ? "online" : ""}`} />
             <span>
@@ -517,6 +520,7 @@ export function BotsWorkspace() {
             {bot ? (
               <>
                 <Avatar bot={bot} small />
+                {snapshot?.capabilities?.botDesktops === 1 && <button className="bots-icon-button bots-desktop-mobile-open" aria-label="Open bot desktop" disabled={!online || bot.archived} onClick={() => setDesktopScope(scope)}><span aria-hidden="true">▣</span></button>}
                 <div className="bots-header-title">
                   <strong>{bot.name}</strong>
 
@@ -779,6 +783,7 @@ export function BotsWorkspace() {
                 <a className="bots-notification-link" href="/settings">Notification settings</a>
                 <div className="bots-profile-actions">
                   <button disabled={!online || busy || Boolean(bot.activeTurnId)} onClick={() => void action(() => client.rpc("thread.compact", bot.id))}><RotateCcw size={16} />Compact conversation</button>
+                  {bot.archived && snapshot?.capabilities?.botDesktops === 1 && <button disabled={!online || busy} onClick={() => { if (window.confirm(`Delete ${bot.name}? Its desktop data will be removed. Its workspace files and archived conversation are retained.`)) void action(() => client.rpc("bots.delete", bot.id)); }}>Delete bot</button>}
                   <button disabled={!online || busy || Boolean(bot.activeTurnId)} onClick={() => void action(() => client.rpc(bot.archived ? "bots.restore" : "bots.archive", bot.id))}><Archive size={16} />{bot.archived ? "Restore bot" : "Archive bot"}</button>
                 </div>
               </div>,
@@ -788,6 +793,7 @@ export function BotsWorkspace() {
       </main>
       {showTeams && (teamsSupported ? <TeamsManager key={owner} owner={owner} teams={teams} bots={bots} online={online} onClose={() => setShowTeams(false)} /> : <div className="bots-modal-backdrop" onClick={() => setShowTeams(false)}><section className="bots-modal" role="dialog" aria-modal="true" aria-label="Teams" onClick={event => event.stopPropagation()}><h2>Teams</h2><p>Teams will be available when the bot service update finishes.</p><button className="bots-primary" onClick={() => setShowTeams(false)}>Close</button></section></div>)}
       {showOverallUsage && <div className="bots-modal-backdrop" onClick={() => setShowOverallUsage(false)}><section className="bots-history-modal bots-usage-modal" role="dialog" aria-modal="true" aria-label="Codex account usage" onClick={(event) => event.stopPropagation()}><header><h2>Codex account usage</h2><button className="bots-icon-button" aria-label="Close account usage" onClick={() => setShowOverallUsage(false)}><X size={19} /></button></header><UsagePanel online={online} /></section></div>}
+      {bot && desktopScope === scope && !bot.archived && <BotDesktopDialog key={scope} bot={bot} owner={owner} onClose={() => setDesktopScope(null)} />}
       {creating && (
         <div className="bots-modal-backdrop" onClick={() => setCreating(false)}>
           <form

@@ -8,6 +8,7 @@ export type BotBurstQuietSeconds = 0 | 2.5 | 3 | 8 | 15;
 export type BotTeam = { id: string; name: string; color: string; position: number; revision: number; memberCount: number; createdAt: string; updatedAt: string };
 export type BotTeamDetail = Omit<BotTeam, "memberCount"> & { memory: string; workspace: string; members: { id: string; name: string; archived: boolean }[] };
 export type Bot = {
+  deletedAt?: string;
   teamId?: string | null;
   teamOrder?: number;
   executionMode?: "legacy" | "single-thread";
@@ -187,7 +188,7 @@ export type BotRunRequestEvent = BotRequest & BotRunContext;
 export type BotRunRequestResolvedEvent = BotRunContext & { key: string };
 export type BotQueueList = { id: string; botId: string; name: string; cron: string | null; timeZone: string; enabled: boolean; nextRunAt: string | null; revision: number; count: number; createdAt: string; lastFlushedAt?: string; lastFlushedCount?: number };
 export type BotSnapshot = {
-  capabilities?: { backgroundRunLanes?: 1; scheduleDecisions?: 1; singleThreadExecution?: 1; peerInbox?: 1; nativeGoals?: 1; messageBursts?: 1; burstDiscard?: 1; queueLists?: 1; teams?: 1 };
+  capabilities?: { botDesktops?: 1; backgroundRunLanes?: 1; scheduleDecisions?: 1; singleThreadExecution?: 1; peerInbox?: 1; nativeGoals?: 1; messageBursts?: 1; burstDiscard?: 1; queueLists?: 1; teams?: 1 };
   teams?: BotTeam[];
   workByBot?: BotWorkState[];
   backgroundByBot?: BotBackground[];

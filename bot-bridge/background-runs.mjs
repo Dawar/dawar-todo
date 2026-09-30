@@ -149,8 +149,8 @@ export class BackgroundRuns {
       if (lane.provisioning === "dispatching") this.store.put("runLane", { ...this.store.get("runLane", lane.id), provisioning: "uncertain" });
     }
   }
-  config() {
-    return this.runtime.manager?.workerConfig() ?? { "features.fast_mode": true,
+  config(lane) {
+    return this.runtime.manager?.workerConfig(this.store.bot(lane.botId)) ?? { "features.fast_mode": true,
       "mcp_servers.codex_manager": { command: process.execPath, args: [], enabled: false } };
   }
   instructions(lane) {
@@ -221,7 +221,7 @@ export class BackgroundRuns {
     const result = await this.runtime.codex.call("thread/resume", {
       threadId: lane.threadId, cwd: lane.home, model: lane.settings.model, serviceTier: lane.settings.serviceTier,
       approvalPolicy: lane.permission.approvalPolicy, sandbox: lane.permission.sandbox,
-      developerInstructions: this.instructions(lane), config: this.config(), excludeTurns: true,
+      developerInstructions: this.instructions(lane), config: this.config(lane), excludeTurns: true,
     });
     if (result?.thread?.id !== lane.threadId) throw new Error("Native resume did not confirm this run's thread identity.");
     if (result.thread.canAcceptDirectInput === false) throw new Error("Native thread currently refuses direct input. This run was not submitted or replaced.");
@@ -296,7 +296,7 @@ export class BackgroundRuns {
         cwd: lane.markerPath, threadSource: lane.marker, ephemeral: false, historyMode: "paginated",
         model: lane.settings.model, serviceTier: lane.settings.serviceTier,
         approvalPolicy: lane.permission.approvalPolicy, sandbox: lane.permission.sandbox,
-        developerInstructions: this.instructions(lane), config: this.config(),
+        developerInstructions: this.instructions(lane), config: this.config(lane),
         dynamicTools: [...this.tools, ...MANAGER_TOOLS.map(tool => ({ type: "function", ...tool }))],
       });
       if (!usableTurnId(result?.thread?.id)) throw new Error("Run creation acknowledgement has no usable thread identity.");

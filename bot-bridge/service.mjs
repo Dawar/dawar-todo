@@ -1,3 +1,4 @@
+import { BotDesktops } from "./desktops.mjs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "node:http";
@@ -41,6 +42,7 @@ const manager = new CodexManager({
   ),
 });
 runtime.manager = manager;
+runtime.desktops = new BotDesktops({ runtime, adopt: JSON.parse(process.env.BOTS_DESKTOP_ADOPT ?? '{}') });
 let socket = null,
   stopping = false,
   retry = 0,
@@ -70,6 +72,7 @@ codex.on("fault", (error) => {
 await manager.listen();
 await runtime.start();
 await manager.recover();
+await runtime.desktops.recover();
 log("runtime.ready", { version: CODEX_VERSION, bots: store.bots().length });
 
 function connect() {
@@ -112,14 +115,21 @@ function connect() {
       log("relay.connected");
       return;
     }
+    if (message.type === "desktop") {
+      await runtime.desktops.message(message, value => {
+        if (current.readyState === WebSocket.OPEN && current.bufferedAmount < 8 * 1024 * 1024) current.send(JSON.stringify(value));
+        else if (value.event !== "closed") void runtime.desktops.end(value.clientId, "Desktop connection is congested or offline.");
+      }).catch(() => runtime.desktops.end(message.clientId, "Desktop control connection failed."));
+      return;
+    }
     if (message.type === "request") {
       const response = await bridgeResponse(runtime, message);
       if (current.readyState === WebSocket.OPEN) sendLarge(current, response);
     }
   });
   current.addEventListener("error", () => {});
-  current.addEventListener("close", () => {
-    if (socket === current) online = false;
+  current.addEventListener("close", async () => {
+    if (socket === current) { online = false; await runtime.desktops.disconnect(); }
     if (!stopping) {
       const delay =
         Math.min(30000, 1000 * 2 ** Math.min(retry++, 5)) + Math.random() * 500;
@@ -274,6 +284,7 @@ async function stop() {
   socket?.close();
   health.close();
   codex.close();
+  await runtime.desktops.close();
   await manager.close();
   setTimeout(() => {
     store.close();

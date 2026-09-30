@@ -37,11 +37,11 @@ export class Store {
       CREATE INDEX IF NOT EXISTS events_bot_cursor ON events(json_extract(json,'$.botId'),seq);
       CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, json TEXT NOT NULL);`);
   }
-  bots() {
+  bots({ includeDeleted = false } = {}) {
     return this.db
       .prepare("SELECT json FROM bots")
       .all()
-      .map((r) => JSON.parse(r.json));
+      .map((r) => JSON.parse(r.json)).filter(bot => includeDeleted || !bot.deletedAt);
   }
   bot(id) {
     const row = this.db.prepare("SELECT json FROM bots WHERE id=?").get(id);

@@ -37,6 +37,8 @@ Manager policy is refreshed every turn without overwriting existing identity or 
 
 ## Components
 
+Bot-owned persistent XFCE desktops, assigned computer-use tools, sidebar previews and the browser control dialog are described in [DESKTOPS.md](DESKTOPS.md), including lazy creation, shared control, lifecycle and rollout requirements.
+
 - `app/bots`: responsive conversation UI, native requests, local drafts/history, attachment transfer and schedule management.
 - `bot-bridge/service.mjs`: Node **24+** service, Codex **0.159.2** stdio child, local SQLite, scheduler and notification delivery. No publicly listening VM port. Health is loopback only.
 - `bots-relay`: separate Cloudflare Worker and SQLite Durable Object, using hibernating WebSockets. The VM and browser both connect outward.

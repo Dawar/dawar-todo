@@ -1,3 +1,4 @@
+import { DESKTOP_INSTRUCTIONS } from "./desktops.mjs";
 import { initialPreferences, preferencePatch } from "./bot-preferences.mjs";
 import { CODEX_VERSION } from "./codex-version.mjs";
 import { MessageBursts } from "./message-bursts.mjs";
@@ -449,6 +450,14 @@ export class BotRuntime extends EventEmitter {
       }
     }
     if (["queue.add", "queue.update", "queue.delete", "queue.reorder"].includes(op.method) && op.status === "done") return op.result;
+    const deletion = this.store.get("executionDelete", op.id);
+    if (deletion?.botId === op.botId && op.method === "bots.delete") {
+      try { result = await this.finalizeDeletion(deletion); } catch { return null; }
+    }
+    if (op.method === "bots.delete" && op.botId) {
+      const bot = this.store.bot(op.botId);
+      if (bot.deletedAt && bot.deletedByOperation === op.id) result = bot;
+    }
     if (op.method === "bots.create") {
       const bot = this.store.bots().find((b) => b.id === op.id);
       if (bot?.threadId) result = bot;
@@ -499,7 +508,7 @@ export class BotRuntime extends EventEmitter {
   }
   snapshot() {
     return {
-      capabilities: { backgroundRunLanes: 1, scheduleDecisions: 1, singleThreadExecution: 1, peerInbox: 1, nativeGoals: 1, messageBursts: 1, burstDiscard: 1, queueLists: 1, teams: 1 },
+      capabilities: { backgroundRunLanes: 1, scheduleDecisions: 1, singleThreadExecution: 1, peerInbox: 1, nativeGoals: 1, messageBursts: 1, burstDiscard: 1, queueLists: 1, teams: 1, ...(this.desktops ? { botDesktops: 1 } : {}) },
       teams: publicTeams(this),
       workByBot: this.store.bots().map(bot => this.primary.work(bot)),
       ...this.runs.snapshot(),
@@ -543,6 +552,16 @@ export class BotRuntime extends EventEmitter {
       Array.isArray(params)
     )
       throw new Error("Invalid request.");
+    if (botId && this.store.bot(String(botId)).deletedAt && method !== "bots.delete")
+      throw Object.assign(new Error("This bot has been deleted. Its workspace and native history were retained."), { outcome: "rejected" });
+    if (["desktop.status", "desktop.preview", "desktop.open"].includes(method)) {
+      if (!this.desktops) throw new Error("Bot desktops are not configured on this machine.");
+      const bot = this.store.bot(String(botId));
+      if (method === "desktop.status") return this.desktops.status(bot);
+      if (method === "desktop.preview") return this.desktops.preview(bot);
+      // parent clientId is supplied by the authenticated relay, never params.
+      return this.desktops.ticket(bot, request.clientId);
+    }
     if (READ_METHODS.has(method))
       return this.dispatch(method, botId, params, operationId);
     if (
@@ -559,7 +578,7 @@ export class BotRuntime extends EventEmitter {
       method.startsWith("runs.") && params.runId ? this.runs.lane(botId, params.runId).id : runRequest?.laneId;
     return this.lock(method.startsWith("teams.") ? "teams" : laneKey ?? botId ?? "create", async () => {
       const inputMutation = ["turn.send", "requests.respond", "queue.add", "queue.update", "queue.delete", "queue.reorder", "goals.set", "goals.clear"].includes(method);
-      const lifecycleMutation = ["turn.interrupt", "runs.interrupt", "bots.archive", "bots.restore"].includes(method);
+      const lifecycleMutation = ["turn.interrupt", "runs.interrupt", "bots.archive", "bots.restore", "bots.delete"].includes(method);
       const attempt = inputMutation ? { started: false, rejected: false } : null;
       const existing = this.store.operation(operationId);
       if (existing) {
@@ -753,6 +772,15 @@ export class BotRuntime extends EventEmitter {
     if (method === "artifacts.list") return listArtifacts(this, botId, p);
     const bot = this.store.bot(String(botId));
     switch (method) {
+      case "desktop.start":
+        if (!this.desktops) throw new Error("Bot desktops are not configured.");
+        await this.desktops.lock(bot, () => this.desktops.start(bot));
+        return this.desktops.status(bot);
+      case "desktop.stop":
+      case "desktop.delete":
+        if (!this.desktops) throw new Error("Bot desktops are not configured.");
+        if (bot.activeTurnId || this.activityUnresolved(bot.id)) throw new Error("Stop this bot's work before closing its desktop apps.");
+        return this.desktops.stop(bot, method === "desktop.delete");
       case "work.read": return this.primary.work(bot);
       case "inbox.list": return this.primary.list(bot, p);
       case "work.resume": throw new Error("Local acceptance requires handle().");
@@ -902,7 +930,7 @@ export class BotRuntime extends EventEmitter {
           sandbox: "danger-full-access",
           ephemeral: false,
           developerInstructions: this.manager
-            ? `${BOT_INSTRUCTIONS}\n\n${DIRECT_INSTRUCTIONS}`
+            ? `${BOT_INSTRUCTIONS}\n\n${DIRECT_INSTRUCTIONS}${this.desktops ? `\n\n${DESKTOP_INSTRUCTIONS}` : ""}`
             : BOT_INSTRUCTIONS,
           config: { ...(this.manager ? this.manager.config(bot) : {}), ...(this.primary.single(bot) ? { "features.multi_agent": false } : {}) },
           dynamicTools,
@@ -921,6 +949,14 @@ export class BotRuntime extends EventEmitter {
         return this.update(bot, p, id);
       case "bots.archive":
         return this.archive(bot, true, id);
+      case "bots.delete": {
+        if (bot.deletedAt) throw new Error("This bot has already been deleted.");
+        if (!bot.archived || bot.archiving || bot.activeTurnId || this.activityUnresolved(bot.id) ||
+            this.store.list("pending", bot.id).length || this.store.executionMetadata("runLane", bot.id).some(l => this.runs.unfinished(l)))
+          throw new Error("Archive the bot and resolve its remaining work before deleting it.");
+        const deletion = this.store.put("executionDelete", {id, botId: bot.id, state: "accepted", acceptedAt: now()});
+        return this.finalizeDeletion(deletion);
+      }
       case "bots.restore":
         return this.archive(bot, false, id);
       case "turn.send": {
@@ -1087,7 +1123,7 @@ export class BotRuntime extends EventEmitter {
     const base = slugify(name);
     let slug = base;
     let suffix = 2;
-    const used = new Set(this.store.bots().map((b) => b.slug));
+    const used = new Set(this.store.bots({includeDeleted:true}).map((b) => b.slug));
     while (
       used.has(slug) ||
       (await lstat(join(this.root, slug)).then(
@@ -1127,7 +1163,7 @@ export class BotRuntime extends EventEmitter {
       sandbox: "danger-full-access",
       ephemeral: false,
       developerInstructions: this.manager
-        ? `${BOT_INSTRUCTIONS}\n\n${DIRECT_INSTRUCTIONS}`
+        ? `${BOT_INSTRUCTIONS}\n\n${DIRECT_INSTRUCTIONS}${this.desktops ? `\n\n${DESKTOP_INSTRUCTIONS}` : ""}`
         : BOT_INSTRUCTIONS,
       config: {
         "features.fast_mode": true,
@@ -1193,7 +1229,7 @@ export class BotRuntime extends EventEmitter {
     return {
       threadId: bot.threadId, cwd: bot.cwd, model: this.settings(bot).model,
       serviceTier: this.settings(bot).serviceTier, approvalPolicy: "never", sandbox: "danger-full-access",
-      developerInstructions: this.manager ? `${BOT_INSTRUCTIONS}\n\n${DIRECT_INSTRUCTIONS}` : BOT_INSTRUCTIONS,
+      developerInstructions: this.manager ? `${BOT_INSTRUCTIONS}\n\n${DIRECT_INSTRUCTIONS}${this.desktops ? `\n\n${DESKTOP_INSTRUCTIONS}` : ""}` : BOT_INSTRUCTIONS,
       config: { "features.fast_mode": true, ...(executionMode === "single-thread" ? { "features.multi_agent": false } : {}),
         ...(this.manager ? this.manager.config(bot, executionMode) : {}) }, excludeTurns: true,
     };
@@ -1300,6 +1336,17 @@ export class BotRuntime extends EventEmitter {
     if (targets.some(t => ["dispatching", "uncertain"].includes(t.state))) return null;
     return this.archive(bot, record.archived, record.id);
   }
+  async finalizeDeletion(deletion) {
+    const bot = this.store.bot(deletion.botId);
+    if (bot.deletedAt && bot.deletedByOperation === deletion.id) return bot;
+    if (!bot.archived || bot.archiving || bot.activeTurnId) throw new Error("Deletion is retained until this archived bot is settled.");
+    if (this.desktops) await this.desktops.stop(bot, true);
+    return this.store.transaction(() => {
+      const saved = this.saveBot(bot, {deletedAt: now(), deletedByOperation: deletion.id});
+      this.store.put("executionDelete", {...deletion, state:"done", finishedAt:now()});
+      return saved;
+    });
+  }
   async archive(bot, archived, operationId) {
     if (archived && this.store.list("runAdmission", bot.id).some(a => Number.isSafeInteger(a.preparingRevision)))
       throw new Error("Run preparation is still returning to its admission fence. Retry archival after it settles; its prompt was retained.");
@@ -1353,6 +1400,7 @@ export class BotRuntime extends EventEmitter {
           status: "cancelled",
           finishedAt: now(),
         });
+    if (archived && this.desktops) await this.desktops.stop(bot);
     this.emitEvent("schedules", {}, bot.id);
     return this.store.transaction(() => {
       this.store.put("executionArchive", { ...archive, state: "done" });

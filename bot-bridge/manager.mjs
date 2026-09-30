@@ -1,3 +1,4 @@
+import { DESKTOP_TOOLS } from "./desktops.mjs";
 import { PEER_TOOL } from "./peer-inbox.mjs";
 import { WORK_TOOL } from "./primary-execution.mjs";
 import { TEAM_TOOL, teamTool } from "./teams.mjs";
@@ -80,7 +81,18 @@ export class CodexManager {
   config(bot, executionMode = bot.executionMode) {
     if (!this.tokens.has(bot.id))
       this.tokens.set(bot.id, randomBytes(32).toString("hex"));
+    const desktopConfig = this.runtime.desktops ? {
+      "mcp_servers.bot_desktop": {
+        command: process.execPath,
+        args: [join(dirname(fileURLToPath(import.meta.url)), "manager-mcp.mjs"), this.socketPath, bot.id, "--desktop"],
+        env: { DAWAR_MANAGER_TOKEN: this.tokens.get(bot.id) }, startup_timeout_sec: 15, tool_timeout_sec: 90, required: true,
+      },
+      // Do not inherit globally installed computer tools targeting the human or Linus.
+      "mcp_servers.linux_computer_use.enabled": false,
+      "mcp_servers.bot_desktop_linus.enabled": false,
+    } : {};
     return {
+      ...desktopConfig,
       "mcp_servers.codex_manager": {
         command: process.execPath,
         args: [
@@ -95,10 +107,11 @@ export class CodexManager {
       },
     };
   }
-  workerConfig() {
+  workerConfig(bot = null) {
     // Even a disabled server must have a valid transport in 0.156.1.
     return {
       "features.fast_mode": true,
+      ...(bot && this.runtime.desktops ? Object.fromEntries(Object.entries(this.config(bot)).filter(([key]) => key !== "mcp_servers.codex_manager")) : {}),
       "mcp_servers.codex_manager": {
         command: process.execPath,
         args: [],
@@ -117,7 +130,7 @@ export class CodexManager {
         res.writeHead(status, { "Content-Type": "application/json" });
         res.end(JSON.stringify(value));
       };
-      if (req.method !== "POST" || !["/tools/call", "/tools/list"].includes(req.url))
+      if (req.method !== "POST" || !["/tools/call", "/tools/list", "/desktop/call", "/desktop/list"].includes(req.url))
         return respond(404, { error: "Not found." });
       try {
         let size = 0,
@@ -140,6 +153,11 @@ export class CodexManager {
           !timingSafeEqual(Buffer.from(token), Buffer.from(expected))
         )
           return respond(403, { error: "Invalid manager session." });
+        if (req.url.startsWith("/desktop/")) {
+          const bot = this.store.bot(botId);
+          if (!this.runtime.desktops || bot.archived || bot.archiving || bot.deletedAt) return respond(409, { error: "This bot's desktop is unavailable." });
+          return respond(200, { result: req.url === "/desktop/list" ? { tools: DESKTOP_TOOLS } : await this.runtime.desktops.call(bot, name, args) });
+        }
         respond(200, { result: req.url === "/tools/list" ? { tools: this.tools(this.store.bot(botId)) } : await this.call(botId, name, args) });
       } catch (error) {
         respond(400, { error: error.message });
@@ -225,7 +243,7 @@ export class CodexManager {
   }
   async call(botId, name, args, origin = null) {
     const bot = this.store.bot(botId);
-    if (bot.archived || bot.archiving)
+    if (bot.archived || bot.archiving || bot.deletedAt)
       throw new Error("Restore this manager before using its tools.");
     if (name === "bots_team") {
       if (origin) throw new Error("Team references belong to the primary named bot.");
@@ -527,7 +545,7 @@ export class CodexManager {
       approvalPolicy: "never",
       sandbox: "danger-full-access",
       developerInstructions: WORKER_INSTRUCTIONS,
-      config: this.workerConfig(),
+      config: this.workerConfig(bot),
       model: settings.model,
       serviceTier: settings.serviceTier,
       ephemeral: false,
@@ -586,7 +604,7 @@ export class CodexManager {
         approvalPolicy: "never",
         sandbox: "danger-full-access",
         developerInstructions: WORKER_INSTRUCTIONS,
-        config: this.workerConfig(),
+        config: this.workerConfig(bot),
       });
       this.loaded.add(worker.threadId);
     }

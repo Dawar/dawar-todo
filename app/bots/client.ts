@@ -76,6 +76,8 @@ function applySnapshotEvent(snapshot: BotSnapshot, event: BotEvent, key?: string
     return { ...snapshot, activeScheduledTurns: [...(snapshot.activeScheduledTurns ?? []).filter(turn => turn.botId !== event.botId), ...(active ? [active] : [])] };
   }
   if (event.type === "bot") {
+    const deleted = event.data as BotSnapshot["bots"][number];
+    if (deleted.deletedAt) return { ...snapshot, bots: snapshot.bots.filter(bot => bot.id !== deleted.id) };
     const bot = event.data as BotSnapshot["bots"][number];
     return { ...snapshot, bots: [...snapshot.bots.filter(item => item.id !== bot.id), bot]
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)) };
@@ -89,6 +91,7 @@ function applySnapshotEvent(snapshot: BotSnapshot, event: BotEvent, key?: string
   return snapshot;
 }
 export class BotsClient {
+  relayClientId: string | null = null;
   socket: WebSocket | null = null;
   snapshot: BotSnapshot | null = null;
   eventChunks = new Map<number, { bytes: Uint8Array; received: number }>();
@@ -162,6 +165,7 @@ export class BotsClient {
   private detachOwner() {
     this.flushSnapshot();
     this.connectionEpoch++;
+    this.relayClientId = null;
     this.online = false;
     const socket = this.socket;
     this.socket = null;
@@ -344,6 +348,7 @@ export class BotsClient {
       return;
     }
     if (message.type === "authenticated") {
+      this.relayClientId = typeof message.clientId === "string" ? message.clientId : null;
       this.online = Boolean(message.online);
       this.error = "";
       this.retry = 0;

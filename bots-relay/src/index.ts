@@ -14,8 +14,21 @@ type Connection = {
   role: "pending" | "browser" | "machine";
   expiresAt: number;
   owner?: string;
+  desktop?: boolean;
+  parentId?: string;
+  botId?: string;
 };
 const MAX_FRAME = 420_000;
+function encode(bytes: ArrayBuffer) {
+  const b = new Uint8Array(bytes);
+  let s = "";
+  for (let i = 0; i < b.length; i += 8192)
+    s += String.fromCharCode(...b.subarray(i, i + 8192));
+  return btoa(s);
+}
+function decode(text: string) {
+  return Uint8Array.from(atob(text), (c) => c.charCodeAt(0)).buffer;
+}
 function send(socket: WebSocket, message: unknown) {
   try {
     socket.send(JSON.stringify(message));
@@ -58,11 +71,35 @@ export class BotRelay extends DurableObject<Env> {
   broadcast(message: unknown) {
     for (const socket of this.ctx.getWebSockets()) {
       const c = this.connection(socket);
-      if (c?.role === "browser" && c.expiresAt > Date.now())
+      if (c?.role === "browser" && !c.desktop && c.expiresAt > Date.now())
         send(socket, message);
     }
   }
   async webSocketMessage(socket: WebSocket, data: string | ArrayBuffer) {
+    const attached = this.connection(socket);
+    if (data instanceof ArrayBuffer) {
+      if (
+        !attached?.desktop ||
+        attached.role !== "browser" ||
+        attached.expiresAt <= Date.now() ||
+        data.byteLength > 128 * 1024
+      ) {
+        socket.close(1009, "Invalid desktop frame");
+        return;
+      }
+      const machine = this.machine();
+      if (!machine) {
+        socket.close(1011, "VM offline");
+        return;
+      }
+      send(machine, {
+        type: "desktop",
+        event: "data",
+        clientId: attached.id,
+        data: encode(data),
+      });
+      return;
+    }
     if (typeof data !== "string" || data.length > MAX_FRAME) {
       socket.close(1009, "Frame too large");
       return;
@@ -111,8 +148,36 @@ export class BotRelay extends DurableObject<Env> {
           if (await this.ctx.storage.get(key))
             throw new Error("Ticket already used");
           await this.ctx.storage.put(key, ticket.exp * 1000);
+          const desktop = message.desktop;
+          let parentId: string | undefined;
+          if (desktop) {
+            if (
+              c.role !== "pending" ||
+              typeof desktop.token !== "string" ||
+              !/^[a-f0-9]{64}$/.test(desktop.token) ||
+              typeof desktop.botId !== "string" ||
+              desktop.botId.length > 180 ||
+              typeof desktop.parentId !== "string"
+            )
+              throw new Error("Invalid desktop connection");
+            const parent = this.ctx.getWebSockets().find((s) => {
+              const p = this.connection(s);
+              return (
+                p?.id === desktop.parentId &&
+                p.role === "browser" &&
+                !p.desktop &&
+                p.owner === ticket.owner &&
+                p.expiresAt > Date.now()
+              );
+            });
+            if (!parent) throw new Error("Desktop parent session expired");
+            parentId = desktop.parentId;
+          }
           socket.serializeAttachment({
             ...c,
+            ...(desktop
+              ? { desktop: true, parentId, botId: desktop.botId }
+              : {}),
             role: "browser",
             owner: ticket.owner,
             expiresAt: ticket.sessionExp * 1000,
@@ -122,14 +187,54 @@ export class BotRelay extends DurableObject<Env> {
             role: "browser",
             online: Boolean(this.machine()),
             expiresAt: ticket.sessionExp * 1000,
+            clientId: c.id,
           });
+          if (desktop) {
+            const machine = this.machine();
+            if (!machine) throw new Error("VM offline");
+            send(machine, {
+              type: "desktop",
+              event: "open",
+              clientId: c.id,
+              parentId,
+              botId: desktop.botId,
+              token: desktop.token,
+            });
+          }
         }
         await this.armAlarm();
         return;
       }
       if (c.role === "pending" || c.expiresAt <= Date.now())
         throw new Error("Session expired");
-      if (c.role === "browser") {
+      if (c.role === "browser" && c.desktop) {
+        if (
+          message.type !== "desktop" ||
+          !["ping", "close", "control"].includes(message.event)
+        )
+          throw new Error("Invalid desktop message");
+        const parent = this.ctx.getWebSockets().find((s) => {
+          const p = this.connection(s);
+          return (
+            p?.id === c.parentId &&
+            p.role === "browser" &&
+            !p.desktop &&
+            p.owner === c.owner &&
+            p.expiresAt > Date.now()
+          );
+        });
+        if (!parent) throw new Error("Desktop parent session expired");
+        const machine = this.machine();
+        if (!machine) throw new Error("VM offline");
+        send(machine, {
+          type: "desktop",
+          event: message.event,
+          clientId: c.id,
+          ...(message.event === "control"
+            ? { exclusive: message.exclusive === true }
+            : {}),
+        });
+      } else if (c.role === "browser") {
         if (
           message.type !== "request" ||
           typeof message.id !== "string" ||
@@ -155,6 +260,36 @@ export class BotRelay extends DurableObject<Env> {
           params: message.params,
           clientId: c.id,
         });
+      } else if (message.type === "desktop") {
+        const target = this.ctx.getWebSockets().find((s) => {
+          const p = this.connection(s);
+          return (
+            p?.desktop &&
+            p.role === "browser" &&
+            p.id === message.clientId &&
+            p.expiresAt > Date.now()
+          );
+        });
+        if (target) {
+          if (message.event === "data") {
+            if (
+              typeof message.data !== "string" ||
+              message.data.length > 180000
+            )
+              throw new Error("Invalid machine desktop frame");
+            target.send(decode(message.data));
+          } else if (["ready", "closed", "control"].includes(message.event)) {
+            send(target, {
+              type: "desktop",
+              event: message.event,
+              password: message.password,
+              error: message.error,
+              exclusive: message.exclusive,
+            });
+            if (message.event === "closed")
+              target.close(1000, "Desktop closed");
+          }
+        }
       } else if (message.type === "response") {
         const target = this.ctx.getWebSockets().find((s) => {
           const target = this.connection(s);
@@ -183,8 +318,20 @@ export class BotRelay extends DurableObject<Env> {
     }
   }
   async webSocketClose(socket: WebSocket) {
-    if (this.connection(socket)?.role === "machine" && !this.machine())
+    const c = this.connection(socket);
+    if (c?.desktop) {
+      const m = this.machine();
+      if (m) send(m, { type: "desktop", event: "close", clientId: c.id });
+    }
+    if (c?.role === "browser" && !c.desktop)
+      for (const s of this.ctx.getWebSockets())
+        if (this.connection(s)?.parentId === c.id)
+          s.close(4003, "Parent disconnected");
+    if (this.connection(socket)?.role === "machine" && !this.machine()) {
       this.broadcast({ type: "presence", online: false });
+      for (const s of this.ctx.getWebSockets())
+        if (this.connection(s)?.desktop) s.close(1011, "VM offline");
+    }
   }
   async webSocketError(socket: WebSocket) {
     socket.close(1011, "Connection error");

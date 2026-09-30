@@ -2,7 +2,8 @@
 import { createInterface } from "node:readline";
 import { request } from "node:http";
 
-const [socketPath, botId] = process.argv.slice(2);
+const [socketPath, botId, mode] = process.argv.slice(2);
+const desktop = mode === "--desktop";
 const token = process.env.DAWAR_MANAGER_TOKEN;
 if (!socketPath || !botId || !token)
   throw new Error("Missing manager connection configuration.");
@@ -13,7 +14,7 @@ const invoke = (name, args) =>
     const req = request(
       {
         socketPath,
-        path: name === "__catalog" ? "/tools/list" : "/tools/call",
+        path: desktop ? (name === "__catalog" ? "/desktop/list" : "/desktop/call") : (name === "__catalog" ? "/tools/list" : "/tools/call"),
         method: "POST",
         headers: {
           Authorization: `Bearer ${token}`,
@@ -27,7 +28,7 @@ const invoke = (name, args) =>
           chunks = [];
         res.on("data", (chunk) => {
           bytes += chunk.length;
-          if (bytes > 8 * 1024 * 1024)
+          if (bytes > 16 * 1024 * 1024)
             res.destroy(new Error("Manager response too large."));
           else chunks.push(chunk);
         });
@@ -67,7 +68,8 @@ async function handle(message) {
             ? message.params.protocolVersion
             : "2024-11-05",
           capabilities: { tools: { listChanged: true } },
-          serverInfo: { name: "dawar-codex-manager", version: "1.0.0" },
+          serverInfo: { name: desktop ? "bot-desktop" : "dawar-codex-manager", version: "1.0.0" },
+          ...(desktop ? { instructions: "Observe screenshot before acting and afterward. This server controls only this bot desktop. Shared human/agent input is allowed; honor optional exclusive control." } : {}),
         };
         break;
       case "ping":
@@ -82,8 +84,8 @@ async function handle(message) {
             message.params.name,
             message.params.arguments ?? {},
           );
-          result = { content: [{ type: "text", text: JSON.stringify(value) }] };
-          reply({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
+          result = desktop ? value : { content: [{ type: "text", text: JSON.stringify(value) }] };
+          if (!desktop) reply({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
         } catch (error) {
           result = {
             isError: true,

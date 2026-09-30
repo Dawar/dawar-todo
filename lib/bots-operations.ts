@@ -21,7 +21,14 @@ import type { TurnStartResponse } from "./codex-protocol/v2/TurnStartResponse";
 import type { TurnSteerResponse } from "./codex-protocol/v2/TurnSteerResponse";
 import type { QueuedSubmission } from "./codex-protocol/v2/QueuedSubmission";
 import type { HistoryResponse, HistoryDetail } from "./bot-history-view";
+export type BotDesktopState = { state: "not-created" | "running" | "stopped"; display?: string; rdpPort?: number; rdpBind?: string; shared: boolean; image?: string; width?: number; height?: number; capturedAt?: string };
 export type BotOperations = {
+  "desktop.status": {params: Record<string, never>; result: BotDesktopState};
+  "desktop.preview": {params: Record<string, never>; result: BotDesktopState};
+  "desktop.open": {params: Record<string, never>; result: {token:string; expiresAt:number}};
+  "desktop.start": {params: Record<string, never>; result: BotDesktopState};
+  "desktop.stop": {params: Record<string, never>; result: BotDesktopState};
+  "desktop.delete": {params: Record<string, never>; result: BotDesktopState};
   "teams.list": { params: Record<string, never>; result: BotTeam[] };
   "teams.read": { params: { id: string }; result: BotTeamDetail };
   "teams.save": { params: { id?: string; name: string; color: string; expectedRevision?: number }; result: { team: Omit<BotTeamDetail, "workspace" | "members"> } };
@@ -79,6 +86,7 @@ export type BotOperations = {
   "bots.read": { params: Record<string, never>; result: Bot };
   "bots.recover": { params: Record<string, never>; result: Bot };
   "bots.archive": { params: Record<string, never>; result: Bot };
+  "bots.delete": {params: Record<string, never>; result: Bot};
   "bots.restore": { params: Record<string, never>; result: Bot };
   "turn.send": {
     params: { text: string; attachments?: string[] };

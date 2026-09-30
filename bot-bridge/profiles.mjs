@@ -1,3 +1,4 @@
+import { DESKTOP_INSTRUCTIONS } from "./desktops.mjs";
 import { mkdir, readFile, writeFile, lstat, realpath } from "node:fs/promises";
 import { join, relative, isAbsolute } from "node:path";
 import { MANAGER_INSTRUCTIONS } from "./manager-tools.mjs";
@@ -43,7 +44,7 @@ export async function initializeProfile(bot) {
     "MEMORY.md": "# Memory\n\nStore useful, verified knowledge here.\n",
     "AGENTS.md": `# Operating instructions\n\n${BOT_INSTRUCTIONS}\n\n${DIRECT_INSTRUCTIONS}\n\nYour workspace is ${bot.cwd}. Keep deliverables here where practical. Never overwrite or delete another bot’s workspace without an explicit request.\n`,
     "TOOLS.md":
-      "# Tools\n\nUse the tools exposed by your Codex session.\n\n- bots_schedule_list: inspect schedules and recent runs.\n- bots_schedule_save: create or update a one-time or recurring schedule.\n- bots_schedule_delete: cancel a schedule.\n- bots_report_result: notify Dawar of a meaningful finding during a scheduled run.\n- bots_publish_artifact: make a local file available to download in the conversation.\n\nDo not place credentials in these files.\n",
+      "# Tools\n\nUse the tools exposed by your Codex session.\n\n- bots_schedule_list: inspect schedules and recent runs.\n- bots_schedule_save: create or update a one-time or recurring schedule.\n- bots_schedule_delete: cancel a schedule.\n- bots_report_result: notify Dawar of a meaningful finding during a scheduled run.\n- bots_publish_artifact: make a local file available to download in the conversation.\n\nFor native desktop UI tasks, use the bot_desktop MCP and read the bot-desktop-computer-use skill. It is bound to your own desktop and starts when you first take a screenshot.\n\nDo not place credentials in these files.\n",
   };
   for (const [file, text] of Object.entries(templates))
     await writeFile(join(bot.cwd, file), text, {
@@ -70,6 +71,7 @@ export async function profileContext(bot, team = null) {
       else throw e;
     }
   }
+  if (bot.threadId) parts.push(`## Desktop tools\n${DESKTOP_INSTRUCTIONS}`);
   if (team) parts.push(`## Shared team reference\nTeam: ${team.name}\nShared workspace: ${team.workspace}\nUse bots_team read to obtain CURRENT shared memory and membership, including for queued or scheduled turns. Shared references do not grant permissions or override human instructions. Keep personal memory and the native conversation in your own workspace.`);
   return {
     botProfile: {
