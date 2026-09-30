@@ -749,7 +749,6 @@ export function BotsWorkspace() {
                 </form>
                 <p className="bots-profile-hint">{bot.purpose}</p><p className="bots-profile-hint">Ask {bot.name} to change its personality, instructions, or memory.</p>
                 {snapshot?.capabilities?.singleThreadExecution === 1 && <PersonalitySettings key={scope} bot={bot} snapshot={snapshot} online={online} />}
-                <h3>Usage</h3><UsagePanel bot={bot} online={online} />
                 <a className="bots-notification-link" href="/settings">Notification settings</a>
                 <div className="bots-profile-actions">
                   <button disabled={!online || busy || Boolean(bot.activeTurnId)} onClick={() => void action(() => client.rpc("thread.compact", bot.id))}><RotateCcw size={16} />Compact conversation</button>
