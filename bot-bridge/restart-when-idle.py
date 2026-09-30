@@ -32,7 +32,7 @@ def local_state():
         active = [r for r in bots + rows if r.get('activeTurnId') or r.get('status') == 'running']
         # Pending native submissions are current work even before turn-start.
         pending = db.execute("SELECT COUNT(*) FROM records WHERE "
-            "(kind IN ('primaryInbox','burstBatch') AND json_extract(json,'$.state') IN ('dispatching','uncertain')) "
+            "(kind IN ('primaryInbox','burstBatch','messageBurst') AND json_extract(json,'$.state') IN ('dispatching','uncertain')) "
             "OR (kind='promptQueue' AND json_extract(json,'$.state') IN ('dispatching','native-queued'))").fetchone()[0]
         fence = sorted((r['id'], r.get('activeTurnId'), r.get('status')) for r in bots)
         return bots, bool(active or pending), fence
