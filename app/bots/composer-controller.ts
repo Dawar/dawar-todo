@@ -3,7 +3,7 @@ import { queueEditable } from "./queue-state";
 import { readQueueAction } from "./queue-action-store";
 import {
   BotDraftStore, changeDraft, emptyDraft, emptyRecord, fileLimit, fileReferences,
-  type DraftChange, type DraftRecord, type StagedFile, type Submission, type RunDeliveryResult,
+  type Draft, type DraftChange, type DraftRecord, type StagedFile, type Submission, type RunDeliveryResult,
 } from "./draft-store";
 
 export type ComposerTransport = {
@@ -41,7 +41,7 @@ export class BotComposer {
   private notify() { for (const listener of this.listeners) listener(); }
   get draft() { return this.record.slots[this.record.active]; }
   get dirty() { return this.changes.length > 0 || Boolean(this.draining); }
-  get operation() { return Object.values(this.record.operations).find((op) => op.slot === this.record.active); }
+  get operation() { return Object.values(this.record.operations).find((op) => op.slot === this.record.active || op.method === "queue.delete"); }
   get sendingNow() { return this.operation ? this.sending.has(this.operation.id) : false; }
   get recoveries() { return Object.keys(this.record.slots).filter((key) => key.startsWith("recovered:") && (this.record.slots[key].text || this.record.slots[key].files.length)); }
   get canUseOwner() { return this.transport.owner === this.owner; }
@@ -169,6 +169,35 @@ export class BotComposer {
     } });
     void this.flush().then(() => this.resumeUploads()).catch(() => {});
   }
+  async checkout(item: BotQueuedSubmission) {
+    if (!this.ready || !this.canUseOwner || !this.transport.online || this.operation) return false;
+    if (!queueEditable(item)) { this.actionError = "This queued message may already be starting. Refresh its status before editing."; this.notify(); return false; }
+    const slot = `recovered:queue:${item.id}:${item.revision ?? "native"}`;
+    try {
+      await this.flush();
+      const queueAction = readQueueAction(this.owner, this.botId);
+      if (queueAction.pending || queueAction.error) throw Error("Confirm the saved queue action before taking this message out for editing.");
+      if (this.persisted.slots[slot]?.queueSource?.removed) throw Error("This message is already saved as a draft. Open it from draft recovery; refresh the queue before making another copy.");
+      const draft: Draft = {
+        ...emptyDraft(), textVersion: crypto.randomUUID(),
+        text: item.input.flatMap(i => i.type === "text" && !i.text.startsWith("Attached file: ") ? [i.text] : []).join("\n"),
+        files: item.attachments.map(a => ({ id: a.id, name: a.name, mimeType: a.mimeType, size: a.size, hasBytes: false, remote: a })),
+        queueSource: { id: item.id, listId: item.listId ?? null, removed: false },
+      };
+      this.actionError = "";
+      this.enqueue({ kind: "checkout", draft, operation: {
+        id: crypto.randomUUID(), slot, method: "queue.delete", activateFrom: this.record.active,
+        params: { id: item.id, ...(item.revision === undefined ? {} : { expectedRevision: item.revision }) },
+        textVersion: draft.textVersion, fileIds: draft.files.map(f => f.id), state: "pending",
+      } });
+      await this.flush();
+      const operation = Object.values(this.persisted.operations).find(op => op.slot === slot);
+      if (operation) await this.dispatch(operation);
+      if (this.record.active !== slot || this.record.operations[operation?.id ?? ""]) return false;
+      void this.resumeUploads();
+      return true;
+    } catch (error) { this.actionError = message(error); this.notify(); return false; }
+  }
   select(slot: string) { this.actionError = ""; this.enqueue({ kind: "select", slot }); }
   async retry() {
     if (!this.ready) await this.open();
@@ -227,9 +256,10 @@ export class BotComposer {
     this.actionError = "";
     try {
       await this.flush();
-      const existing = Object.values(this.persisted.operations).find((op) => op.slot === slot);
-      if (existing) { await this.dispatch(existing); return; }
+      const existing = Object.values(this.persisted.operations).find((op) => op.slot === slot || op.method === "queue.delete");
+      if (existing) { await this.dispatch(existing); if (existing.method === "queue.delete") void this.resumeUploads(); return; }
       const draft = this.persisted.slots[slot];
+      if (draft.queueSource && !draft.queueSource.removed) throw Error("Removal was not confirmed. Refresh the queue before editing this saved copy; the original may already be starting.");
       if (draft.queueId) {
         // Read-only preflight, only for a NEW update. An already submitted
         // operation above always reconciles its exact ID/parameters instead.
@@ -254,7 +284,7 @@ export class BotComposer {
       if (!draft.text.trim() && !draft.files.length) return;
       const op: Submission = {
         id: crypto.randomUUID(), slot, method: this.destination ? "runs.send" : draft.queueId ? "queue.update" : queueNext ? "queue.add" : burst ? "bursts.submit" : "turn.send",
-        params: { ...(queueNext && !draft.queueId && !this.destination && listId ? { listId } : {}), ...(this.destination ? { runId: this.destination.runId } : {}), ...(draft.queueId ? { id: draft.queueId, ...(draft.queueRevision === undefined ? {} : { expectedRevision: draft.queueRevision }) } : {}), text: draft.text.trim(), attachments: draft.files.map((f) => f.remote!.id) },
+        params: { ...(queueNext && !draft.queueId && !this.destination && (listId ?? draft.queueSource?.listId) ? { listId: listId ?? draft.queueSource?.listId } : {}), ...(this.destination ? { runId: this.destination.runId } : {}), ...(draft.queueId ? { id: draft.queueId, ...(draft.queueRevision === undefined ? {} : { expectedRevision: draft.queueRevision }) } : {}), text: draft.text.trim(), attachments: draft.files.map((f) => f.remote!.id) },
         ...(this.destination ? { runDelivery: { state: "prepared" as const, token: crypto.randomUUID() } } : {}),
         textVersion: draft.textVersion, fileIds: draft.files.map((f) => f.id), state: "pending",
       };
@@ -348,7 +378,7 @@ export class BotComposer {
       const outcome = (error as { outcome?: string }).outcome;
       // A not-sent retry says nothing about a previous attempt with this ID.
       const uncertain = outcome !== "rejected";
-      const detail = uncertain ? "Send acknowledgement is unconfirmed. Check again to reconcile the same send; your draft is retained." : `Not sent: ${message(error)}`;
+      const detail = op.method === "queue.delete" ? uncertain ? "Queue removal is unconfirmed. Check the same removal before editing; your draft and files are saved." : `Could not take this message out of the queue: ${message(error)} Your saved copy is retained.` : uncertain ? "Send acknowledgement is unconfirmed. Check again to reconcile the same send; your draft is retained." : `Not sent: ${message(error)}`;
       // Uncertainty belongs to the durable operation. A second tab may already
       // have confirmed it, or confirm it later; a separate actionError would
       // keep falsely warning after that operation has been retired.

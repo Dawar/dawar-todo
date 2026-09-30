@@ -1,5 +1,5 @@
 import { conversationItem, historyKey, type HistoryEntry } from '../../lib/bot-history-view';
-import { humanInput, scheduleInput, type TurnAudience } from '../../lib/bot-conversation';
+import { humanInput, peerInput, scheduleInput, type TurnAudience } from '../../lib/bot-conversation';
 
 const clientId = (entry: HistoryEntry) => entry.item?.type === 'userMessage' ? entry.item.clientId || null : null;
 const provisional = (entry: HistoryEntry) => entry.id.startsWith('client:');
@@ -65,13 +65,16 @@ export function conversationEntries(entries: HistoryEntry[], audiences = new Map
   }
   for (const entry of entries) if (entry.item && humanInput(entry.item) && audiences.get(entry.turnId)?.kind === 'activity')
     audiences.set(entry.turnId, { ...audiences.get(entry.turnId)!, kind: 'mixed' });
+  const scheduledTurns = new Set(entries.filter(entry => entry.item && scheduleInput(entry.item)).map(entry => entry.turnId));
+  for (const entry of entries) if (entry.item && peerInput(entry.item) && !audiences.get(entry.turnId)?.runId && !scheduledTurns.has(entry.turnId))
+    audiences.set(entry.turnId, { kind: 'conversation' });
   // A repeated report is not a chronological overlap between native pages.
   // Keep its newest loaded occurrence, without aliasing turns or reordering
   // intervening human messages. Native key/clientId reconciliation is separate.
   const findings = new Map(entries.filter(entry => entry.findingId).map(entry => [entry.findingId, entry]));
   return entries.filter(entry => entry.audience === 'finding' || audiences.get(entry.turnId)?.kind !== 'activity')
     .filter(entry => !entry.findingId || findings.get(entry.findingId) === entry)
-    .filter(entry => !entry.item || !scheduleInput(entry.item))
+    .filter(entry => !entry.item || !scheduleInput(entry.item) && !peerInput(entry.item))
     .filter(entry => !(entry.item?.type === 'userMessage' && entry.item.clientId?.startsWith('manager-notice:')))
     .filter(entry => conversationItem(entry.type) && entry.id !== 'live-turn-diff' || (entry.turnStatus ?? entry.status) === 'inProgress')
     .filter(entry => entry.item?.type !== 'reasoning' || (entry.turnStatus ?? entry.status) === 'inProgress' || entry.item.summary.some(text => text.trim()))

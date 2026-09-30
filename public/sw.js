@@ -1,5 +1,5 @@
 const CACHE_PREFIX = "dawar-todo-shell-";
-const CACHE_NAME = `${CACHE_PREFIX}v58`;
+const CACHE_NAME = `${CACHE_PREFIX}v59`;
 const SHELL = [
   "/",
   "/tasks",

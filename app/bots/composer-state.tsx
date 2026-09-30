@@ -25,7 +25,7 @@ export function ComposerAttachments({ composer }: { composer: BotComposer }) {
       return <span key={`${composer.owner}:${composer.botId}:${file.id}`} className={image ? "bots-upload-image" : undefined} title={[file.name, file.error || status].filter(Boolean).join(" · ")}>
         {image ? <LocalPreview file={composer.files.get(file.id)} /> : file.name}
         {status && <span className={image ? "bots-upload-progress" : undefined}>{status}</span>}
-        <button type="button" aria-label={`Remove ${image ? `image ${index + 1}: ` : ""}${file.name}`} onClick={() => composer.removeFile(file.id)}><X size={13} aria-hidden="true" /></button>
+        <button type="button" disabled={Boolean(composer.draft.queueSource && !composer.draft.queueSource.removed)} aria-label={`Remove ${image ? `image ${index + 1}: ` : ""}${file.name}`} onClick={() => composer.removeFile(file.id)}><X size={13} aria-hidden="true" /></button>
       </span>;
     })}
   </div>;
@@ -46,7 +46,8 @@ export function ComposerStatus({ composer, error }: { composer: BotComposer | nu
   // Routine durable writes stay immediate. Only actionable recovery occupies a
   // status row; it must not appear/disappear for every keystroke or empty draft.
   if (!needsAttention) return slowSave && saving ? <div className="bots-slow-save" role="status">Saving your draft… Keep this tab open for a moment.</div> : null;
-  const status = storageError ? "This draft needs saving" : uploadErrors.length ? `${uploadErrors.length} ${uploadErrors.length === 1 ? "attachment needs" : "attachments need"} attention` : operation ? "Confirm your last message" : "Draft recovery";
+  const checkout = operation?.method === "queue.delete";
+  const status = storageError ? "This draft needs saving" : uploadErrors.length ? `${uploadErrors.length} ${uploadErrors.length === 1 ? "attachment needs" : "attachments need"} attention` : checkout ? "Taking message out of queue" : operation ? "Confirm your last message" : composer?.draft.queueSource?.removed ? "Editing queued message" : "Draft recovery";
   return <div className="bots-draft-status" aria-live="polite"><details className="bots-recovery-details" open={needsAttention}>
     <summary>{status}</summary>
     <div className="bots-recovery-content">
@@ -56,9 +57,10 @@ export function ComposerStatus({ composer, error }: { composer: BotComposer | nu
     {composer?.actionError && <div role="alert">{composer.actionError}</div>}
     {uploadErrors.length > 0 && <div role="alert">{uploadErrors.map((f) => `${f.name}: ${f.error}`).join(" · ")} Your staged files are retained. <button type="button" onClick={() => void composer?.retry()}>Retry uploads</button> <button type="button" onClick={() => void composer?.restartFailedUploads()}>Restart failed transfers</button></div>}
     {missingCopies && <div>Older attachments have server references only. Connect to recover their offline copies. <button type="button" onClick={() => void composer?.retry()}>Recover files</button></div>}
-    {operation && <div>{composer?.sendingNow ? "Waiting for send acknowledgement…" : operation.error || "Submitted message awaits acknowledgement."} <button type="button" disabled={composer?.sendingNow} onClick={() => void composer?.send()}>Check same send</button></div>}
+    {operation && <div>{checkout ? composer?.sendingNow ? "Confirming removal before editing…" : operation.error || "Queue removal needs confirmation. Your draft is saved." : composer?.sendingNow ? "Waiting for send acknowledgement…" : operation.error || "Submitted message awaits acknowledgement."} <button type="button" disabled={composer?.sendingNow} onClick={() => void composer?.send()}>{checkout ? "Check same removal" : "Check same send"}</button></div>}
+    {composer?.draft.queueSource && !operation && <div>{composer.draft.queueSource.removed ? "This message was taken out of its queue for editing. Queue it again when ready." : "Removal was not confirmed. Refresh the queue before editing; the original may already be starting."}</div>}
     {composer && composer.recoveries.length > 0 && <label>An earlier draft version was also saved. Recover version: <select aria-label="Recover conflicting draft" value={composer.record.active.startsWith("recovered:") ? composer.record.active : ""} onChange={(event) => composer.select(event.target.value)}>
-      <option value="">Choose saved version</option>{composer.recoveries.map((slot, index) => <option key={slot} value={slot}>Saved version {index + 1}</option>)}
+      <option value="">Choose saved version</option>{composer.recoveries.map((slot, index) => <option key={slot} value={slot}>{composer.record.slots[slot].queueSource ? "Queued draft" : "Saved version"} {index + 1}</option>)}
     </select></label>}
     {composer && composer.record.active !== "normal" && !composer.draft.queueId && <button type="button" onClick={() => composer.select("normal")}>Return to normal draft</button>}
     </div></details>

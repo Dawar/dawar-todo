@@ -1,5 +1,5 @@
 import { reconcileHistory, conversationEntries, orderedHistory } from "./history-reconcile";
-import { turnAudience, scheduleInput, humanInput, reportedFinding, projectConversationItem, type TurnAudience } from "../../lib/bot-conversation";
+import { turnAudience, scheduleInput, peerInput, humanInput, reportedFinding, projectConversationItem, type TurnAudience } from "../../lib/bot-conversation";
 import { historyBoundaries, retainHistory, retainedAttachments, CACHE_ENTRIES, CACHE_BYTES } from "./history-window";
 import { HISTORY_TEXT_LIMIT, conversationItem, historyTail, historyBefore, historyKey, projectHistoryItem, type HistoryEntry, type HistoryResponse, type HistoryDetail, type HistoryPosition, type HistoryGap } from "../../lib/bot-history-view";
 import type { BotAttachment, BotEvent, BotScheduledTurn, BotScheduledEventData } from "../../lib/bots-types";
@@ -164,7 +164,7 @@ export class BotTimeline {
         this.merge(cached.entries, true, -1); this.dirty = liveDirty;
         const m = cached.metadata; this.cachedKeys = new Set(m.order ?? []);
         const boundaries = historyBoundaries(this.state.entries, this.mapGaps(m.gaps ?? []), m.olderCursor, cached.entries);
-        this.publish({ revision: m.revision.endsWith(":conversation-v4") ? m.revision : "", eventCursor: Math.max(live, m.eventCursor), ...boundaries,
+        this.publish({ revision: m.revision.endsWith(":conversation-v5") ? m.revision : "", eventCursor: Math.max(live, m.eventCursor), ...boundaries,
           partialTurn: m.partialTurn, attachments: m.attachments, contextEntries: conversationEntries(m.contextEntries ?? [], this.turnAudiences), complete: m.complete && !boundaries.olderCursor && !boundaries.gaps.length, position: { ...(m.position ?? this.state.position), anchor: this.resolveKey(m.position?.anchor ?? null) }, cached: true }, true);
         this.scheduleWrite();
       } catch (e) { this.publish({ error: `Offline history cache unavailable: ${String(e)}` }, true); }
@@ -350,11 +350,14 @@ export class BotTimeline {
       const runId = p.item.type === "userMessage" ? p.item.clientId!.slice(9) : undefined;
       const mixed = this.state.entries.some(entry => entry.turnId === turnId && entry.item && humanInput(entry.item));
       this.turnAudiences.set(turnId, { kind: mixed ? "mixed" : "activity", runId, active: true });
+    } else if (p.item && peerInput(p.item) && !this.turnAudiences.get(turnId)?.runId) {
+      this.turnAudiences.set(turnId, { kind: "conversation", active: true });
+      this.scheduleRefresh();
     } else if (p.item && humanInput(p.item) && this.turnAudiences.get(turnId)?.kind === "activity") {
       this.turnAudiences.set(turnId, { ...this.turnAudiences.get(turnId)!, kind: "mixed" });
       this.scheduleRefresh(); // Recover surrounding replies hidden before the human steered in.
     }
-    if (p.turn?.items.some(scheduleInput)) this.turnAudiences.set(turnId, turnAudience(p.turn.items));
+    if (p.turn?.items.some(item => scheduleInput(item) || peerInput(item))) this.turnAudiences.set(turnId, turnAudience(p.turn.items, this.turnAudiences.get(turnId)?.runId));
     if (p.turn && this.turnAudiences.has(turnId)) this.turnAudiences.set(turnId, { ...this.turnAudiences.get(turnId)!, active: p.turn.status === "inProgress" });
     const update = (entry: HistoryEntry) => {
       const prior = this.state.entries.find(value => value.turnId === entry.turnId && value.id === entry.id);
@@ -405,6 +408,15 @@ export class BotTimeline {
         const reduced = reduceBotTurns([{ id: turnId, items: [entry.item], itemsView: "full", status: "inProgress", startedAt: entry.startedAt, completedAt: null, durationMs: null, error: null }], event.data as NativeEvent);
         const item = reduced[0]?.items[0];
         if (item?.type === "reasoning") update(projectHistoryItem({ id: turnId, startedAt: entry.startedAt, status: entry.turnStatus ?? "inProgress" }, { ...item, content: [] }, entry.scheduled));
+      }
+      if (!entry && method === "item/reasoning/summaryTextDelta") {
+        // Reconnect/replay can omit item/started. Paint the available summary
+        // immediately, then recover its authoritative prefix from history.
+        const seed: ThreadItem = { type: "reasoning", id: p.itemId, summary: [], content: [] };
+        const reduced = reduceBotTurns([{ id: turnId, items: [seed], itemsView: "full", status: "inProgress", startedAt: null, completedAt: null, durationMs: null, error: null }], event.data as NativeEvent);
+        const item = reduced[0]?.items[0];
+        if (item?.type === "reasoning") update(projectHistoryItem({ id: turnId, startedAt: null, status: "inProgress" }, item));
+        this.state = { ...this.state, revision: "" }; this.scheduleRefresh();
       }
       // Closed tool output stays deferred; authoritative detail is fetched on demand.
     }
