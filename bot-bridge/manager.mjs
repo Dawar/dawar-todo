@@ -1,4 +1,4 @@
-import { DESKTOP_TOOLS } from "./desktops.mjs";
+import { DESKTOP_TOOLS, canManagePrimaryDesktop } from "./desktops.mjs";
 import { PEER_TOOL } from "./peer-inbox.mjs";
 import { WORK_TOOL } from "./primary-execution.mjs";
 import { TEAM_TOOL, teamTool } from "./teams.mjs";
@@ -15,6 +15,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { mkdir, chmod, unlink, realpath } from "node:fs/promises";
 import { join, resolve, dirname, isAbsolute } from "node:path";
+import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { MANAGER_TOOLS, WORKER_INSTRUCTIONS, RUN_MESSAGE_TOOL } from "./manager-tools.mjs";
 import { DOWNLOAD_ATTACHMENT_TOOL } from "./storage.mjs";
@@ -88,8 +89,14 @@ export class CodexManager {
         args: [join(dirname(fileURLToPath(import.meta.url)), "manager-mcp.mjs"), this.socketPath, bot.id, "--desktop"],
         env: { DAWAR_MANAGER_TOKEN: this.tokens.get(bot.id) }, startup_timeout_sec: 15, tool_timeout_sec: 90, required: true,
       },
-      // Do not inherit globally installed computer tools targeting the human or Linus.
-      "mcp_servers.linux_computer_use.enabled": false,
+      // Only the explicitly configured computer-admin identity may target primary.
+      ...(canManagePrimaryDesktop(bot) ? {
+        "mcp_servers.linux_computer_use": {
+          command: join(homedir(), ".local/bin/codex-linux-computer-use"),
+          env: { CODEX_COMPUTER_DISPLAY: ":10.0" }, enabled: true,
+          startup_timeout_sec: 15, tool_timeout_sec: 45,
+        },
+      } : { "mcp_servers.linux_computer_use.enabled": false }),
       "mcp_servers.bot_desktop_linus.enabled": false,
     } : {};
     return {
@@ -112,7 +119,8 @@ export class CodexManager {
     // Even a disabled server must have a valid transport in 0.156.1.
     return {
       "features.fast_mode": true,
-      ...(bot && this.runtime.desktops ? Object.fromEntries(Object.entries(this.config(bot)).filter(([key]) => key !== "mcp_servers.codex_manager")) : {}),
+      ...(bot && this.runtime.desktops ? Object.fromEntries(Object.entries(this.config(bot)).filter(([key]) => key !== "mcp_servers.codex_manager" && key !== "mcp_servers.linux_computer_use")) : {}),
+      "mcp_servers.linux_computer_use.enabled": false,
       "mcp_servers.codex_manager": {
         command: process.execPath,
         args: [],

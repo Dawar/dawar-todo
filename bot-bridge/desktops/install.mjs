@@ -35,6 +35,20 @@ export async function installDesktops() {
   await mkdir(base, { recursive: true, mode: 0o700 });
   await mkdir(bin, { recursive: true });
   await mkdir(units, { recursive: true });
+  execFileSync("/usr/bin/python3", ["-c", "from gi.repository import Gio, GLib"], { stdio: "ignore" });
+  const sync = join(home, ".local/share/codex-desktop-sync");
+  await mkdir(sync, { recursive: true, mode: 0o700 });
+  for (const file of ["sync.py", "app.py"]) {
+    await copyFile(join(source, file), join(sync, file));
+    await chmod(join(sync, file), 0o700);
+  }
+  for (const [command, file] of [["codex-desktop-sync", "sync.py"], ["codex-desktop-app", "app.py"]]) {
+    await writeFile(join(bin, command), `#!/bin/sh\nexec /usr/bin/python3 "${join(sync, file)}" "$@"\n`, { mode: 0o700 });
+    await chmod(join(bin, command), 0o700);
+  }
+  await mkdir(join(units, "bot-desktop@.service.d"), { recursive: true });
+  await writeFile(join(units, "bot-desktop@.service.d/layout-sync.conf"), `[Service]\nExecStartPre=${bin}/codex-desktop-sync --profile %i --offline\n`);
+  await writeFile(join(units, "codex-desktop-sync.service"), `[Unit]\nDescription=Sync primary XFCE dock and shortcuts to bot desktops\nAfter=default.target\n\n[Service]\nType=simple\nExecStart=${bin}/codex-desktop-sync --watch\nRestart=on-failure\nRestartSec=5\nUMask=0077\n\n[Install]\nWantedBy=default.target\n`);
   await copyFile(join(source, "manager.py"), join(base, "manager.py.new"));
   await chmod(join(base, "manager.py.new"), 0o700);
   await rename(join(base, "manager.py.new"), join(base, "manager.py"));
@@ -64,5 +78,6 @@ export async function installDesktops() {
     { mode: 0o600 },
   );
   execFileSync("systemctl", ["--user", "daemon-reload"], { stdio: "inherit" });
+  execFileSync("systemctl", ["--user", "enable", "--now", "codex-desktop-sync.service"], { stdio: "inherit" });
 }
 if (process.argv[1] === fileURLToPath(import.meta.url)) await installDesktops();

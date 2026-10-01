@@ -107,6 +107,16 @@ export const DESKTOP_TOOLS = [
 export const DESKTOP_INSTRUCTIONS =
   "For desktop UI tasks use your bot_desktop MCP and the bot-desktop-computer-use skill. It is bound to your own persistent desktop and starts on first screenshot. Observe before input and verify afterward. Shared human/agent control is the default. Honor the human's optional exclusive control lease. Never switch to the human or another bot desktop to bypass a failure.";
 
+// Explicit owner configuration; neither bot names nor prompts grant this role.
+export function canManagePrimaryDesktop(bot) {
+  return Boolean(process.env.BOTS_PRIMARY_DESKTOP_BOT_ID && bot?.id === process.env.BOTS_PRIMARY_DESKTOP_BOT_ID);
+}
+export function desktopInstructions(bot) {
+  return DESKTOP_INSTRUCTIONS + (canManagePrimaryDesktop(bot)
+    ? " Dawar explicitly authorizes this computer-admin bot to manage BOTH its own bot desktop and the primary human desktop. For work specifically targeting the primary desktop use linux_computer_use and read the linux-computer-use skill; that MCP is pinned to :10.0. Continue using bot_desktop for your own work. Identify the intended desktop before observing or acting, honor the human's current activity, and never use either desktop to bypass a failure, exclusive control, or an authorization boundary. After primary dock or shortcut changes, run /home/dawar/.local/bin/codex-desktop-sync to propagate the shared layout."
+    : "");
+}
+
 // A bounded, lazy MCP connection. Never initializes X11 while simply listing tools.
 class ComputerClient {
   constructor(command, args, env) {

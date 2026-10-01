@@ -1,4 +1,4 @@
-import { DESKTOP_INSTRUCTIONS } from "./desktops.mjs";
+import { desktopInstructions } from "./desktops.mjs";
 import { DOWNLOAD_ATTACHMENT_TOOL, localFileDigest } from "./storage.mjs";
 import { initialPreferences, preferencePatch } from "./bot-preferences.mjs";
 import { CODEX_VERSION } from "./codex-version.mjs";
@@ -932,7 +932,7 @@ export class BotRuntime extends EventEmitter {
           sandbox: "danger-full-access",
           ephemeral: false,
           developerInstructions: this.manager
-            ? `${BOT_INSTRUCTIONS}\n\n${DIRECT_INSTRUCTIONS}${this.desktops ? `\n\n${DESKTOP_INSTRUCTIONS}` : ""}`
+            ? `${BOT_INSTRUCTIONS}\n\n${DIRECT_INSTRUCTIONS}${this.desktops ? `\n\n${desktopInstructions(bot)}` : ""}`
             : BOT_INSTRUCTIONS,
           config: { ...(this.manager ? this.manager.config(bot) : {}), ...(this.primary.single(bot) ? { "features.multi_agent": false } : {}) },
           dynamicTools,
@@ -1165,7 +1165,7 @@ export class BotRuntime extends EventEmitter {
       sandbox: "danger-full-access",
       ephemeral: false,
       developerInstructions: this.manager
-        ? `${BOT_INSTRUCTIONS}\n\n${DIRECT_INSTRUCTIONS}${this.desktops ? `\n\n${DESKTOP_INSTRUCTIONS}` : ""}`
+        ? `${BOT_INSTRUCTIONS}\n\n${DIRECT_INSTRUCTIONS}${this.desktops ? `\n\n${desktopInstructions(bot)}` : ""}`
         : BOT_INSTRUCTIONS,
       config: {
         "features.fast_mode": true,
@@ -1231,7 +1231,7 @@ export class BotRuntime extends EventEmitter {
     return {
       threadId: bot.threadId, cwd: bot.cwd, model: this.settings(bot).model,
       serviceTier: this.settings(bot).serviceTier, approvalPolicy: "never", sandbox: "danger-full-access",
-      developerInstructions: this.manager ? `${BOT_INSTRUCTIONS}\n\n${DIRECT_INSTRUCTIONS}${this.desktops ? `\n\n${DESKTOP_INSTRUCTIONS}` : ""}` : BOT_INSTRUCTIONS,
+      developerInstructions: this.manager ? `${BOT_INSTRUCTIONS}\n\n${DIRECT_INSTRUCTIONS}${this.desktops ? `\n\n${desktopInstructions(bot)}` : ""}` : BOT_INSTRUCTIONS,
       config: { "features.fast_mode": true, ...(executionMode === "single-thread" ? { "features.multi_agent": false } : {}),
         ...(this.manager ? this.manager.config(bot, executionMode) : {}) }, excludeTurns: true,
     };

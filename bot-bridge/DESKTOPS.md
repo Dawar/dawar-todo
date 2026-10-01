@@ -2,6 +2,16 @@
 
 Every bot receives `bot_desktop` MCP configuration on native thread creation or resume. Tools are authenticated to its stable bot ID through the private manager socket. Listing tools does not create a desktop. The first screenshot, or the human opening the viewer, provisions and starts a dedicated XFCE/Xvnc session as the service's Unix user.
 
+## Primary layout synchronization and computer-admin role
+
+`codex-desktop-sync` propagates primary `:10.0` XFCE panels/dock, desktop application shortcuts, local application launchers, wallpaper/icon settings and selected theme properties to managed profiles. The user service `codex-desktop-sync.service` watches primary launcher/settings directories with inotify and debounces changes. An `ExecStartPre` drop-in seeds newly started desktops while offline. Explicitly run the helper after managed primary layout changes. Unchanged templates are skipped; desktop actions/exclusive human leases defer a profile and the watcher retries. Backups and the sync manifest stay under each profile's `layout-backups/` and `layout-sync.json`.
+
+Only a changed panel requires briefly reloading that profile's XFCE panel. X11, XFCE session and apps remain running. Replacement panel user units bind to their desktop service and live independently of the watcher. Chrome launchers select each desktop's own persistent profile; Chrome app-ID shortcuts are converted to app URLs, with explicit mappings for the current four apps. Register future mappings privately in `~/.local/share/codex-desktop-sync/app-urls.json` when needed. There is no browser-cookie/profile copying. Resolution-specific display settings, autostart/session state, arbitrary Desktop documents and app data are outside the shared layout.
+
+Installer dependency: Debian `python3-gi` for Gio/GLib XFconf D-Bus access. Primary settings are read from its private live bus, bot updates use the target's private bus, and offline profiles use typed XFconf XML. No X11 authorization is changed. The helper refuses human displays as sync targets.
+
+The default bot role still uses its assigned desktop only. Setting service environment `BOTS_PRIMARY_DESKTOP_BOT_ID` to one explicitly authorized stable bot ID enables the pinned `linux_computer_use` MCP solely for that identity and adds matching developer/profile instructions. Dawar authorized Linus to manage its own desktop and primary desktop; the installed user-service drop-in selects Linus ID `b062a333-5f8a-4904-8bee-2b57557c6cc0`. It never authorizes switching desktops to bypass failures or exclusive control. This is routing for trusted same-user agents, not a Unix isolation boundary. Backend activation is required before a live native session receives the changed config.
+
 ## Ownership and lifecycle
 
 - Names are derived from the bot ID. Allocation is protected by an interprocess lock; the private `config.json` records the owner, X11 display and ports.
