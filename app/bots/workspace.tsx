@@ -18,6 +18,8 @@ import {
   MoreHorizontal,
   ArrowUp,
   Paperclip,
+  Copy,
+  ClipboardPaste,
   X,
   Square,
   Archive,
@@ -60,6 +62,7 @@ import { ScheduleList } from "./schedule-list";
 import { RunDecisions } from "./run-decisions";
 import { UsagePanel } from "./usage-panel";
 import { useBotComposer } from "./use-composer";
+import { botComposers, type ComposerPaste } from "./composer-service";
 import { ComposerAttachments, ComposerStatus } from "./composer-state";
 import { installExtensionShortcuts } from "./extension-shortcuts";
 import { SavedDrafts } from "./saved-drafts";
@@ -122,6 +125,7 @@ export function BotsWorkspace() {
   const scope = JSON.stringify([owner, selected]);
   const promptQueue = queueScope === scope ? loadedQueue : EMPTY_QUEUE;
   const { composer, error: composerError } = useBotComposer(client.owner, selected);
+  const [transferBusy,setTransferBusy]=useState(false),[transferError,setTransferError]=useState("");
   const draft = composer?.draft.text ?? "";
   const uploads = composer?.draft.files ?? [];
   const sending = Boolean(composer?.operation || composer?.committing);
@@ -331,19 +335,57 @@ export function BotsWorkspace() {
   }, [selected, online, bot]);
   const select = useCallback((id: string | null) => {
     selectedRef.current = id;
-    setSelected(id); setGallery(null);
+    setSelected(id); setGallery(null);setTransferError("");
     const url = new URL(window.location.href);
     url.searchParams.delete("view");
     if (id) url.searchParams.set("bot", id);
     else url.searchParams.delete("bot");
     window.history.pushState({}, "", url);
   }, []);
-  useEffect(()=>installExtensionShortcuts(window,extension=>{
+  const finishTransfer=useCallback(async(paste:ComposerPaste)=>{
+    const target=bots.find(bot=>bot.id===paste.targetBotId);
+    if(paste.nonEmpty&&!window.confirm(`Replace ${target?.name??"this bot"}'s existing draft? Its previous contents will be saved for recovery.`))return false;
+    await botComposers.applyPaste(paste);return true;
+  },[bots]);
+  const moveComposer=useCallback(async(targetId:string)=>{
+    const sourceId=selectedRef.current;
+    if(!sourceId||sourceId===targetId||transferBusy)return;
+    const source=botComposers.peek(owner,sourceId);
+    if(source?.ready&&!source.draft.text&&!source.draft.files.length&&!source.operation){select(targetId);setProfile(false);setShowTeams(false);return;}
+    setTransferBusy(true);setTransferError("");
+    try{
+      const snapshot=await botComposers.capture(owner,sourceId);
+      const paste=await botComposers.preparePaste(owner,targetId,snapshot.botId,true);
+      if(selectedRef.current!==sourceId)throw Error("Selection changed. Drafts are retained; start the move again.");
+      if(await finishTransfer(paste)){select(targetId);setProfile(false);setShowTeams(false);}
+    }catch(error){setTransferError(error instanceof Error?error.message:"Could not move this draft. Original drafts are retained.");}
+    finally{setTransferBusy(false);}
+  },[owner,select,finishTransfer,transferBusy]);
+  useEffect(()=>installExtensionShortcuts(window,(extension,move)=>{
     const target=bots.find(bot=>bot.extension===extension&&!bot.archived);
     if(!target||document.querySelector('dialog[open]'))return;
-    select(target.id);setProfile(false);setShowTeams(false);
+    if(move){void moveComposer(target.id);return;}
+    select(target.id);setProfile(false);setShowTeams(false);setTransferError("");
     requestAnimationFrame(()=>screenRef.current?.querySelector<HTMLTextAreaElement>('.bots-composer textarea')?.focus());
-  }),[bots,select]);
+  }),[bots,select,moveComposer]);
+  async function copyComposer(){
+    if(!selected||transferBusy)return;
+    setTransferBusy(true);setTransferError("");
+    try{await botComposers.copyComposer(owner,selected);}
+    catch(error){setTransferError(error instanceof Error?error.message:"Could not copy this composer. Original draft is retained.");}
+    finally{setTransferBusy(false);}
+  }
+  async function pasteComposer(){
+    if(!selected||transferBusy)return;
+    const targetId=selected;
+    setTransferBusy(true);setTransferError("");
+    try{
+      const paste=await botComposers.preparePaste(owner,targetId);
+      if(selectedRef.current!==targetId)throw Error("Selection changed. Paste into the intended bot again.");
+      await finishTransfer(paste);
+    }catch(error){setTransferError(error instanceof Error?error.message:"Could not paste this composer. Original drafts are retained.");}
+    finally{setTransferBusy(false);}
+  }
   function openGallery(view: "artifacts" | "attachments") {
     const url = new URL(window.location.href); url.searchParams.set("view", view);
     if (view === "artifacts") { url.searchParams.delete("bot"); setSelected(null); selectedRef.current = null; }
@@ -532,7 +574,7 @@ export function BotsWorkspace() {
                 <Avatar bot={bot} small />
                 {snapshot?.capabilities?.botDesktops === 1 && <button className="bots-icon-button bots-desktop-mobile-open" aria-label="Show bot desktop" onClick={() => { setDetailsSection("desktop"); setProfile(true); }}><span aria-hidden="true">▣</span></button>}
                 <div className="bots-header-title">
-                  <strong>{bot.name}{bot.extension&&<span className="bots-extension" title="Hold Ctrl (or Alt), type the extension, then release">#{bot.extension}</span>}</strong>
+                  <strong>{bot.name}{bot.extension&&<span className="bots-extension" title="Ctrl (or Alt) + extension switches bots; add Shift to move the composer">#{bot.extension}</span>}</strong>
 
                 </div>
                 {promptQueue.length > 0 && <button className="bots-icon-button bots-up-next-link" aria-label={`Show ${promptQueue.length} queued ${promptQueue.length === 1 ? "message" : "messages"}`} onClick={() => {
@@ -630,6 +672,7 @@ export function BotsWorkspace() {
                     {snapshot && <ComposerSettings key={`settings:${scope}`} bot={bot} snapshot={snapshot} online={online} />}
                   {(lanes || single) && <MainStopRecovery owner={owner} botId={bot.id} online={online} />}
                   <ComposerStatus composer={composer} error={composerError} />
+                  {transferError&&<p className="bots-error" role="alert">{transferError}</p>}
                   {composer && <ComposerAttachments composer={composer} />}
                   </div>
                   <form
@@ -680,6 +723,10 @@ export function BotsWorkspace() {
                     />
                     {(
                       <>
+                      <button type="button" className="bots-icon-button" title="Copy composer (text and attachments)" aria-label="Copy composer"
+                        disabled={!composer?.ready||sending||transferBusy||(!draft&&!uploads.length)} onClick={()=>void copyComposer()}><Copy size={19}/></button>
+                      <button type="button" className="bots-icon-button" title="Paste copied composer" aria-label="Paste composer"
+                        disabled={!composer?.ready||sending||transferBusy||!botComposers.clipboard(owner)} onClick={()=>void pasteComposer()}><ClipboardPaste size={19}/></button>
                       <button type="button" className="bots-icon-button bots-queue-icon"
                         title="Queue next (Ctrl+Enter)"
                         aria-label="Queue next"

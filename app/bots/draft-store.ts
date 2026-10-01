@@ -31,6 +31,10 @@ export type DraftRecord = {
   migrated: boolean;
   portableSeeded?: boolean;
   checkedOut?: Record<string, boolean>;
+  clipboardSource?: { botId: string; storageKey: string; slot: string; fingerprint: string };
+  receivedTransfers?: Record<string, string>;
+  restoredTo?: string;
+  restoredFingerprint?: string;
 };
 export type RunDeliveryResult = "not-sent" | "uncertain" | "queued" | "success" | "rejected";
 export type DraftChange =
@@ -54,6 +58,7 @@ export type DraftChange =
   | { kind: "run-result"; id: string; expectedToken: string | null; nextToken: string; outcome: RunDeliveryResult; error?: string }
   | { kind: "settle"; id: string; outcome: "success" | "rejected" | "uncertain"; error?: string };
 export const emptyDraft = (): Draft => ({ text: "", textVersion: "empty", files: [] });
+export const draftFingerprint = (record: DraftRecord) => JSON.stringify([record.active, record.slots[record.active].textVersion, record.slots[record.active].files.map(file => file.id)]);
 export const emptyRecord = (owner: string, botId: string): DraftRecord => ({
   owner, botId, revision: "empty", active: "normal", slots: { normal: emptyDraft() }, operations: {}, migrated: false,
 });
@@ -199,6 +204,21 @@ export function changeDraft(source: DraftRecord, change: DraftChange): DraftReco
 }
 
 type FileRow = { owner: string; botId: string; id: string; blob: Blob };
+const plainTransferredDraft = (source:Draft,botId:string):Draft => ({
+  text:source.text,textVersion:source.textVersion,files:source.files.map(file=>({...JSON.parse(JSON.stringify(file)),uploadBotId:file.uploadBotId??file.remote?.botId??botId}))
+});
+function copyDraftBytes(tx:IDBTransaction,owner:string,from:string,to:string,draft:Draft,changed:()=>void,fail:(error:unknown)=>void){
+  const files=tx.objectStore("files");
+  for(const file of draft.files)if(file.hasBytes){
+    const request=files.get([owner,from,file.id]);request.onsuccess=()=>{
+      const row=request.result as FileRow|undefined;
+      if(!row){if(file.remote?.ready){file.hasBytes=false;changed();}else fail(new Error(`Saved bytes for ${file.name} are unavailable. Original drafts are retained.`));return;}
+      if(row.blob.size!==file.size){fail(new Error(`Saved bytes for ${file.name} failed validation. Original drafts are retained.`));return;}
+      files.put({...row,botId:to});
+    };
+  }
+}
+
 export class BotDraftStore {
   private connection?: Promise<IDBDatabase>;
   constructor(private factory: IDBFactory = indexedDB, private legacy?: Storage, private database = DRAFT_DATABASE) {}
@@ -318,6 +338,84 @@ export class BotDraftStore {
       };
       sourceRequest.onsuccess = () => { source = sourceRequest.result; seed(); };
       targetRequest.onsuccess = () => { target = targetRequest.result; seed(); };
+    });
+  }
+  /** Local snapshots contain file bytes and provenance, never submission operations. */
+  async captureComposer(owner: string, sourceKey: string, botId: string, expected: string) {
+    const id = `clipboard:composer:${crypto.randomUUID()}`;
+    await this.transaction(["drafts", "files"], "readwrite", (tx, done, fail) => {
+      const drafts = tx.objectStore("drafts"), request = drafts.get([owner, sourceKey]);
+      request.onsuccess = () => {
+        const source = request.result as DraftRecord | undefined;
+        if (!source?.migrated || Object.keys(source.operations).length || draftFingerprint(source) !== expected) {
+          fail(new Error("The source draft changed or has a send awaiting confirmation. Copy it again when ready.")); return;
+        }
+        const draft = source.slots[source.active];
+        if (!draft.text && !draft.files.length) { fail(new Error("The source composer is empty.")); return; }
+        if (draft.queueId || draft.queueSource && !draft.queueSource.removed) { fail(new Error("Finish taking this message out of its queue before copying.")); return; }
+        const record = emptyRecord(owner, id); record.migrated = true; record.revision = crypto.randomUUID();
+        record.clipboardSource = {botId, storageKey:sourceKey, slot:source.active, fingerprint:expected};
+        record.slots.normal = plainTransferredDraft(draft, botId);
+        copyDraftBytes(tx, owner, sourceKey, id, record.slots.normal, () => drafts.put(record), fail);
+        drafts.put(record); done(id);
+      };
+    });
+    return (await this.get(owner, id))!;
+  }
+  /** Destination + optional source removal + receipt commit in one transaction. */
+  async pasteComposer(owner: string, snapshotId: string, targetBotId: string, expected: string, operationId: string, move = false) {
+    if (!snapshotId.startsWith("clipboard:composer:") || targetBotId.startsWith("clipboard:") || targetBotId === PORTABLE_COMPOSER)
+      throw new Error("This clipboard is not a bot draft.");
+    return this.transaction<DraftRecord>(["drafts", "files"], "readwrite", (tx, done, fail) => {
+      const drafts=tx.objectStore("drafts"), snapshotRequest=drafts.get([owner,snapshotId]), targetRequest=drafts.get([owner,targetBotId]);
+      let snapshot:DraftRecord|undefined, target:DraftRecord|undefined, read=0;
+      const paste=()=>{
+        if (++read!==2) return;
+        if (!snapshot?.clipboardSource || !target?.migrated) {fail(new Error("Copied draft is unavailable on this device. Copy it again from the source bot."));return;}
+        if (target.receivedTransfers?.[operationId]===snapshotId) {done(target);return;}
+        if (Object.keys(target.operations).length || draftFingerprint(target)!==expected) {fail(new Error("The destination draft changed. Review it before replacing it."));return;}
+        const finish=(source?:DraftRecord)=>{
+          if (move && (!source || Object.keys(source.operations).length || draftFingerprint(source)!==snapshot!.clipboardSource!.fingerprint)) {fail(new Error("The source draft changed. It was kept; start the move again."));return;}
+          const previous=target!.slots[target!.active];
+          if (previous.text || previous.files.length) target!.slots[`recovered:transfer:${operationId}`]=previous;
+          target!.slots.normal=plainTransferredDraft(snapshot!.slots.normal,snapshot!.clipboardSource!.botId);
+          target!.slots.normal.textVersion=`transfer:${operationId}`;target!.active="normal";
+          target!.receivedTransfers={...target!.receivedTransfers,[operationId]:snapshotId};target!.revision=crypto.randomUUID();
+          copyDraftBytes(tx,owner,snapshotId,targetBotId,target!.slots.normal,()=>drafts.put(target!),fail);
+          drafts.put(target!);
+          if(move && source){
+            // Retain a quiet recovery copy; the visible source composer is empty.
+            source.slots[`recovered:move:${operationId}`]=source.slots[source.active];
+            if(source.active!=="normal"&&(source.slots.normal.text||source.slots.normal.files.length))source.slots[`recovered:normal:${operationId}`]=source.slots.normal;
+            source.slots[source.active]=emptyDraft();source.slots.normal=emptyDraft();source.active="normal";source.revision=crypto.randomUUID();drafts.put(source);
+          }
+          done(target!);
+        };
+        if(move){
+          if(snapshot.clipboardSource.storageKey===targetBotId){fail(new Error("Choose a different bot to move this draft."));return;}
+          const request=drafts.get([owner,snapshot.clipboardSource.storageKey]);request.onsuccess=()=>finish(request.result);
+        }else finish();
+      };
+      snapshotRequest.onsuccess=()=>{snapshot=snapshotRequest.result;paste();};targetRequest.onsuccess=()=>{target=targetRequest.result;paste();};
+    });
+  }
+  /** Upgrade171 without discarding either shared or per-bot drafts or operations. */
+  async restorePortable(owner:string,targetBotId:string){
+    await this.load(owner,targetBotId);
+    return this.transaction(["drafts","files"],"readwrite",(tx,done,fail)=>{
+      const drafts=tx.objectStore("drafts"), a=drafts.get([owner,PORTABLE_COMPOSER]), b=drafts.get([owner,targetBotId]);
+      let source:DraftRecord|undefined,target:DraftRecord|undefined,read=0;
+      const restore=()=>{
+        if(++read!==2)return;
+        if(!source || source.restoredTo || !target || Object.keys(source.operations).length || Object.keys(target.operations).length || target.slots[target.active].text || target.slots[target.active].files.length){done(undefined);return;}
+        const original=source.slots[source.active];
+        if(!original || original.queueId || original.queueSource&&!original.queueSource.removed || !original.text&&!original.files.length){done(undefined);return;}
+        target.slots.normal=plainTransferredDraft(original,targetBotId);target.active="normal";target.revision=crypto.randomUUID();
+        source.restoredTo=targetBotId;source.restoredFingerprint=draftFingerprint(source);source.revision=crypto.randomUUID();
+        copyDraftBytes(tx,owner,PORTABLE_COMPOSER,targetBotId,target.slots.normal,()=>drafts.put(target!),fail);
+        drafts.put(source);drafts.put(target);done(undefined);
+      };
+      a.onsuccess=()=>{source=a.result;restore();};b.onsuccess=()=>{target=b.result;restore();};
     });
   }
   private legacySeed(owner: string, botId: string) {

@@ -33,10 +33,11 @@ try {
   const targets = await (await fetch(`http://${new URL(debuggerUrl).host}/json/list`)).json();
   socket = new WebSocket(targets.find((target) => target.type === 'page').webSocketDebuggerUrl);
   await new Promise((resolve) => socket.addEventListener('open', resolve, { once: true }));
-  let sequence = 0; const pending = new Map(), errors = [];
+  let sequence = 0; const pending = new Map(), errors = [], dialogs=[];
   socket.addEventListener('message', ({ data }) => {
     const msg = JSON.parse(data);
-    if (msg.id) { const item = pending.get(msg.id); pending.delete(msg.id); msg.error ? item.reject(new Error(JSON.stringify(msg.error))) : item.resolve(msg.result); }
+    if (msg.id) { const item = pending.get(msg.id); pending.delete(msg.id); if(msg.error)item.reject(new Error(JSON.stringify(msg.error)));else item.resolve(msg.result); }
+    else if(msg.method==='Page.javascriptDialogOpening')dialogs.push(msg.params);
     else if (msg.method === 'Runtime.exceptionThrown') errors.push(msg.params.exceptionDetails.exception?.description ?? msg.params.exceptionDetails.text);
   });
   const send = (method, params = {}) => new Promise((resolve, reject) => { const id = ++sequence; pending.set(id, { resolve, reject }); socket.send(JSON.stringify({ id, method, params })); });
@@ -49,8 +50,44 @@ try {
   await send('Input.dispatchKeyEvent',{type:'keyDown',key:'Alt',code:'AltLeft',modifiers:1});
   for (const digit of ['1','2']) await send('Input.dispatchKeyEvent',{type:'keyDown',key:digit,code:`Digit${digit}`,modifiers:1});
   await send('Input.dispatchKeyEvent',{type:'keyUp',key:'Alt',code:'AltLeft',modifiers:0});
-  await until(()=>evaluate('location.search.includes("bot=B") && document.querySelector("textarea")?.value==="Travel with me" && document.querySelector("textarea")?.getAttribute("aria-label")==="Message Bot B"'),'multi-digit portable switch');
+  await until(()=>evaluate('location.search.includes("bot=B") && document.querySelector("textarea")?.value==="" && document.querySelector("textarea")?.getAttribute("aria-label")==="Message Bot B"'),'ordinary multi-digit per-bot switch');
   await evaluate('history.pushState({},"","/harness?bot=A");window.dispatchEvent(new PopStateEvent("popstate"))');
+  await until(()=>evaluate('document.querySelector("textarea")?.value==="Travel with me"'),'A draft preserved');
+  await evaluate('portable.attach()');
+  await until(()=>evaluate('portable.draft("A").draft.files[0]?.uploadMode && !portable.draft("A").dirty'),'inflight file saved');
+  await send('Browser.grantPermissions',{origin,permissions:['clipboardReadWrite','clipboardSanitizedWrite']});
+  await evaluate('navigator.clipboard.writeText("plain clipboard text")');
+  await evaluate('document.querySelector(`button[aria-label="Copy composer"]`).click()');
+  await until(()=>evaluate('!!portable.clipboard()'),'special composer copied');
+  assert.equal(await evaluate('navigator.clipboard.readText()'),'plain clipboard text');
+  await evaluate('history.pushState({},"","/harness?bot=B");window.dispatchEvent(new PopStateEvent("popstate"))');
+  await until(()=>evaluate('portable.composer()?.botId==="B" && document.querySelector("textarea")?.value===""'),'B independent');
+  await evaluate('portable.type("Beta")');
+  await evaluate('document.querySelector(`button[aria-label="Paste composer"]`).click()');
+  await until(()=>dialogs.length===1,'paste overwrite warning');assert.match(dialogs[0].message,/Replace Bot B/);
+  await send('Page.handleJavaScriptDialog',{accept:false});
+  assert.equal(await evaluate('document.querySelector("textarea").value'),'Beta');
+  await until(()=>evaluate('!document.querySelector(`button[aria-label="Paste composer"]`).disabled'),'paste unlocked after cancel');
+  await evaluate('document.querySelector(`button[aria-label="Paste composer"]`).click()');
+  await until(()=>dialogs.length===2,'paste warning again');await send('Page.handleJavaScriptDialog',{accept:true});
+  await until(()=>evaluate('document.querySelector("textarea").value==="Travel with me" && portable.draft("B").draft.files.length===1'),'explicit paste text and unfinished image');
+  assert.equal(await evaluate('portable.draft("A").draft.text'),'Travel with me');
+  // Standard text paste remains the native textarea action, never a composer transfer.
+  await evaluate('(()=>{const field=document.querySelector("textarea");field.focus();field.setSelectionRange(0,field.value.length);})()');
+  await evaluate('document.addEventListener("paste",event=>{portable.textPaste={text:event.clipboardData.getData("text/plain"),prevented:event.defaultPrevented};},true)');
+  await send('Input.dispatchKeyEvent',{type:'keyDown',key:'Control',code:'ControlLeft',windowsVirtualKeyCode:17,modifiers:2});
+  await send('Input.dispatchKeyEvent',{type:'keyDown',key:'v',code:'KeyV',windowsVirtualKeyCode:86,modifiers:2});await send('Input.dispatchKeyEvent',{type:'keyUp',key:'v',code:'KeyV',windowsVirtualKeyCode:86,modifiers:2});
+  await send('Input.dispatchKeyEvent',{type:'keyUp',key:'Control',code:'ControlLeft',windowsVirtualKeyCode:17,modifiers:0});
+  await until(()=>evaluate('document.querySelector("textarea").value==="plain clipboard text"'),'ordinary text paste').catch(async error=>{console.log(await evaluate('(async()=>JSON.stringify({paste:portable.textPaste,active:document.activeElement?.outerHTML,fields:[...document.querySelectorAll("textarea")].map(f=>({value:f.value,range:[f.selectionStart,f.selectionEnd],visible:!!f.getClientRects().length})),clipboard:await navigator.clipboard.readText()}))()'));throw error;});
+  assert.equal(await evaluate('portable.draft("B").draft.files.length'),1);
+  await evaluate('portable.type("Moved contents")');
+  const moveShortcut=async()=>{await send('Input.dispatchKeyEvent',{type:'keyDown',key:'Alt',code:'AltLeft',modifiers:9});await send('Input.dispatchKeyEvent',{type:'keyDown',key:'@',code:'Digit2',modifiers:9});await send('Input.dispatchKeyEvent',{type:'keyUp',key:'Alt',code:'AltLeft',modifiers:0});};
+  await moveShortcut();await until(()=>dialogs.length===3,'move overwrite warning');await send('Page.handleJavaScriptDialog',{accept:false});
+  assert.equal(await evaluate('location.search.includes("bot=B")'),true);assert.equal(await evaluate('portable.draft("A").draft.text'),'Travel with me');
+  await until(()=>evaluate('!document.querySelector(`button[aria-label="Copy composer"]`).disabled'),'move unlocked after cancel');
+  await moveShortcut();await until(()=>dialogs.length===4,'move warning again');await send('Page.handleJavaScriptDialog',{accept:true});
+  await until(()=>evaluate('location.search.includes("bot=A") && document.querySelector("textarea")?.value==="Moved contents"'),'explicit Shift move selects destination');
+  assert.equal(await evaluate('portable.draft("B").draft.text'),'');assert.equal(await evaluate('portable.draft("B").draft.files.length'),0);assert.equal(await evaluate('portable.draft("A").draft.files[0].uploadBotId'),'A');
   await until(()=>evaluate('document.querySelectorAll(".bots-composer-support [data-queue-id]").length===3 && document.querySelector("textarea")?.getAttribute("aria-label")==="Message Bot A" && !document.querySelector(`.bots-composer-support button[aria-label="Move message 3 up"]`).disabled'),'queue rows').catch(async error=>{console.log(await evaluate('JSON.stringify({path:location.search,rows:document.querySelectorAll(".bots-composer-support [data-queue-id]").length,calls:portable.calls,text:document.body.innerText.slice(-1500)})'));console.log(errors);throw error;});
   await evaluate('document.querySelector(`.bots-composer-support button[aria-label="Move message 3 up"]`).click()');
   await until(()=>evaluate('portable.queue.map(q=>q.id).join(",")==="q1,q3,q2" && [...document.querySelectorAll(".bots-composer-support [data-queue-id]")].map(row=>row.dataset.queueId).join(",")==="q1,q3,q2" && !document.querySelector(`.bots-composer-support [data-queue-id="q3"] .bots-queue-drag`).disabled'),'arrow reorder').catch(async error=>{console.log(await evaluate('JSON.stringify({calls:portable.calls.slice(-10),queue:portable.queue.map(q=>q.id),rows:[...document.querySelectorAll(".bots-composer-support [data-queue-id]")].map(row=>({id:row.dataset.queueId,disabled:row.querySelector("button").disabled})),text:document.body.innerText.slice(-1200)})'));console.log(errors);throw error;});
@@ -78,14 +115,14 @@ try {
   await until(()=>evaluate('document.querySelector(".bots-list-editor input[type=time]")?.value==="21:00"'),'friendly schedule time');
   assert.equal(await evaluate('[...document.querySelectorAll(".bots-list-editor input")].some(input=>input.value==="America/Toronto")'),true);
   await evaluate('document.querySelector(`button[aria-label="Close bot details"]`).click()');
-  await mkdir('/home/dawar/bots/dwight-lead-developer-dawartodo-copy/outputs/portable-queue',{recursive:true});
-  const desktopShot=await send('Page.captureScreenshot',{format:'png'});await writeFile('/home/dawar/bots/dwight-lead-developer-dawartodo-copy/outputs/portable-queue/desktop.png',Buffer.from(desktopShot.data,'base64'));
+  await mkdir('/home/dawar/bots/dwight-lead-developer-dawartodo-copy/outputs/composer-transfer',{recursive:true});
+  const desktopShot=await send('Page.captureScreenshot',{format:'png'});await writeFile('/home/dawar/bots/dwight-lead-developer-dawartodo-copy/outputs/composer-transfer/desktop.png',Buffer.from(desktopShot.data,'base64'));
   await send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});
   await delay(100);
   assert.equal(await evaluate('document.documentElement.scrollWidth<=innerWidth'),true);
-  const mobileShot=await send('Page.captureScreenshot',{format:'png'});await writeFile('/home/dawar/bots/dwight-lead-developer-dawartodo-copy/outputs/portable-queue/mobile.png',Buffer.from(mobileShot.data,'base64'));
+  const mobileShot=await send('Page.captureScreenshot',{format:'png'});await writeFile('/home/dawar/bots/dwight-lead-developer-dawartodo-copy/outputs/composer-transfer/mobile.png',Buffer.from(mobileShot.data,'base64'));
   assert.deepEqual(errors,[]);
-  console.log(JSON.stringify({portableMultiDigitSwitch:true,visibleArrowReorder:true,pointerDragReorder:true,checkoutNormalDraft:true,quietComposer:true,directListTabs:true,friendlyScheduleTime:"21:00 America/Toronto",scheduledGroup:1,paragraphs:4,markdownListItems:2,mobileWidth:390,browserErrors:errors},null,2));
+  console.log(JSON.stringify({perBotDraftSwitch:true,specialCopyPaste:true,ordinaryTextClipboardUntouched:true,overwriteCancelAndConfirm:true,shiftMoveWithInflightFiles:true,visibleArrowReorder:true,pointerDragReorder:true,checkoutNormalDraft:true,quietComposer:true,directListTabs:true,friendlyScheduleTime:"21:00 America/Toronto",scheduledGroup:1,paragraphs:4,markdownListItems:2,mobileWidth:390,browserErrors:errors},null,2));
 } finally {
   socket?.close(); chrome?.kill('SIGTERM');
   if (chrome && chrome.exitCode === null) await Promise.race([new Promise((resolve) => chrome.once('exit', resolve)), delay(2000)]);

@@ -144,6 +144,14 @@ export class BotComposer {
     if (text === this.draft.text) return;
     this.enqueue({ kind: "text", slot: this.record.active, text, version: crypto.randomUUID(), base: this.draft.textVersion });
   }
+  async prepareCopy() {
+    await this.open(); await this.flush();
+    if (!this.canUseOwner || this.committing || Object.keys(this.record.operations).length)
+      throw Error("Confirm the current composer action before copying or moving its draft.");
+    for (const file of this.draft.files) if (!file.remote && !file.uploadMode)
+      this.enqueue({kind:"uploadMode",id:file.id,mode:this.transport.storageAvailable?"cloud":"legacy",botId:file.uploadBotId??this.botId});
+    await this.flush(); await this.refresh();
+  }
   async appendForward(id: string, text: string) {
     await this.open(false);
     if (!this.ready || !this.canUseOwner) throw Error("Connect as the draft’s owner before forwarding.");

@@ -14,5 +14,6 @@ client.rpc=async(method,botId,params={},id)=>{
  if(method==='queue.add'){queue.push({id,botId,revision:1,state:'queued',input:[{type:'text',text:params.text}],attachments:[]});return{queuedSubmission:queue.at(-1)};}
  return{};
 };
+const pendingUploads=new Map();client.upload=async(botId,file,progress,id)=>{progress(.3);if(!pendingUploads.has(id))pendingUploads.set(id,new Promise(()=>{}));return pendingUploads.get(id);};
 const root=createRoot(document.getElementById('root'));root.render(<BotsWorkspace/>);
-window.portable={calls,queue,composer:()=>botComposers.peek(owner,new URL(location.href).searchParams.get('bot')||'A'),type(text){const field=document.querySelector('.bots-composer textarea');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(field,text);field.dispatchEvent(new Event('input',{bubbles:true}));}};
+window.portable={calls,queue,owner,clipboard:()=>botComposers.clipboard(owner),draft:(botId)=>botComposers.peek(owner,botId),attach:()=>botComposers.peek(owner,"A").addFiles([new File(["image bytes"],"image.png",{type:"image/png"})]),composer:()=>botComposers.peek(owner,new URL(location.href).searchParams.get('bot')||'A'),type(text){const field=document.querySelector('.bots-composer textarea');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(field,text);field.dispatchEvent(new Event('input',{bubbles:true}));}};
