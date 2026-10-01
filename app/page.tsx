@@ -4707,11 +4707,11 @@ export default function Home() {
         </div>
       )}
       <div className="mx-auto max-w-5xl px-4 pb-28 pt-5 sm:px-6 sm:pt-7">
-        <div className="mb-2 text-xs text-[#68716b]" role="status">{captureSaveState}
+        {(captureSaveState.startsWith("Draft could not be loaded") || captureSaveState.startsWith("Draft not saved")) && <div className="mb-2 text-xs text-red-700" role="alert">{captureSaveState}
           {captureSaveState.startsWith("Draft could not be loaded") && <button type="button" className="ml-2 underline" onClick={hydrateCapture}>Retry loading draft</button>}
           {captureSaveState.startsWith("Draft not saved") && <button type="button" className="ml-2 underline" onClick={() => void checkpointCapture().catch(() => undefined)}>Retry saving</button>}
           {captureAttachments.map((item) => <a key={item.localId} href={item.previewUrl} download={item.file.name} className="ml-2 underline">Save {item.file.name}</a>)}
-        </div>
+        </div>}
         <form onSubmit={addTodo} className="mb-5 rounded-2xl border border-black/[0.07] bg-white p-2 shadow-[0_10px_35px_rgba(30,45,36,0.07)] sm:p-3">
           <div className="flex items-end gap-2">
             <div className="flex min-w-0 flex-1 items-start gap-2 px-1 py-2 sm:px-2">
