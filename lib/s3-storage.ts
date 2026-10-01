@@ -55,7 +55,7 @@ async function signedStorageResponse(url: URL, init?: RequestInit) {
   serverUrl.hostname = endpoint.hostname;
   serverUrl.pathname = `/${encodeURIComponent(bucket)}${url.pathname}`;
   const request = await signedHeaderRequest(serverUrl, method, init?.headers);
-  return fetch(request);
+  return fetch(request, { signal: init?.signal });
 }
 
 async function storageFetch(url: URL, init?: RequestInit) {
@@ -231,5 +231,30 @@ async function signedPostTarget(key: string, contentType: string, maximumBytes: 
     const result = await response.text();
     if (/<Error[>\s]/.test(result) || !/<CopyObjectResult[>\s]/.test(result)) throw new Error("Private storage did not confirm the copy.");
   }
-  return { storageUrl, signedStorageResponse, storageFetch, signedObjectUrl, signedPostTarget, copyObject, deleteKeys, storageResponseError };
+  // Read the existing provider configuration with the server's existing key.
+  // No secret/key/URL is returned and no bucket configuration is changed.
+  async function readBucketCors() {
+    const response = await signedStorageResponse(storageUrl(undefined, { cors: "" }), { signal: AbortSignal.timeout(10000) });
+    const reader = response.body?.getReader();
+    const chunks: Uint8Array[] = []; let size = 0;
+    if (reader) {
+      try { for (;;) { const next = await reader.read(); if (next.done) break;
+        size += next.value.length; if (size > 64 * 1024) throw new Error("Provider configuration response exceeds its bound."); chunks.push(next.value);
+      } } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
+    }
+    const bytes = new Uint8Array(size); let offset = 0;
+    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
+    const xml = new TextDecoder().decode(bytes);
+    const code = xml.match(/<Code>([A-Za-z0-9]{1,80})<\/Code>/)?.[1] ?? null;
+    if (!response.ok) return { http: response.status, code, configured: code === "NoSuchCORSConfiguration" ? false : null, rules: [] };
+    if (!/<CORSConfiguration[>\s]/.test(xml)) throw new Error("Invalid provider CORS response.");
+    const decode = (value: string) => value.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, "&");
+    const rules = [...xml.matchAll(/<CORSRule(?:\s[^>]*)?>([\s\S]*?)<\/CORSRule>/g)].map(match => {
+      const values = (tag: string) => [...match[1].matchAll(new RegExp(`<${tag}>([^<]*)</${tag}>`, "g"))].map(item => decode(item[1]));
+      const maxAge = values("MaxAgeSeconds")[0];
+      return { allowedOrigins: values("AllowedOrigin"), allowedMethods: values("AllowedMethod"), allowedHeaders: values("AllowedHeader"), exposeHeaders: values("ExposeHeader"), maxAgeSeconds: maxAge && /^\d+$/.test(maxAge) ? Number(maxAge) : null };
+    });
+    return { http: response.status, code: null, configured: true, rules };
+  }
+  return { storageUrl, signedStorageResponse, storageFetch, signedObjectUrl, signedPostTarget, copyObject, deleteKeys, storageResponseError, readBucketCors };
 }

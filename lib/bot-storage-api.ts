@@ -1,5 +1,6 @@
 import { BotStorage, StorageError, type BotStorageEnv } from "../db/bot-storage";
 import { botsOwner, secretMatches } from "./bots-auth";
+import { createS3Storage } from "./s3-storage";
 
 type Environment = BotStorageEnv & Cloudflare.Env & { BOTS_STORAGE_SERVICE_SECRET?: string; BOTS_STORAGE_CATALOG_READY?: string };
 export async function botStorageResponse(request: Request, environment: Environment, service = false) {
@@ -17,6 +18,11 @@ export async function botStorageResponse(request: Request, environment: Environm
     const input: Record<string, unknown> = request.method === "GET" ? Object.fromEntries(url.searchParams) : await boundedJson(request);
     const action = String(input.action ?? "status");
     if (action === "status") return Response.json({ owner,enabled: environment.BOTS_STORAGE_ENABLED === "1", catalogReady: environment.BOTS_STORAGE_CATALOG_READY === "1" },{headers});
+    if (action === "providerCors") {
+      if (!service) throw new StorageError("Provider configuration checks require the storage service credential.",403,"forbidden");
+      if (request.method !== "POST") throw new StorageError("Use POST for private provider checks.",405);
+      return Response.json({ providerCors: await createS3Storage(environment).readBucketCors() },{headers});
+    }
     if (!service && ["prepare","finalize"].includes(action) && environment.BOTS_STORAGE_ENABLED !== "1") throw new StorageError("Direct cloud transfers are not enabled yet.",503,"disabled");
     if (request.method === "GET" && !["list","download","preview"].includes(action)) throw new StorageError("Use POST for storage mutations.",405);
     const storage = new BotStorage(environment,owner,service); await storage.initialize();
