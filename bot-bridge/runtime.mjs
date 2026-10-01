@@ -1,4 +1,5 @@
 import { DESKTOP_INSTRUCTIONS } from "./desktops.mjs";
+import { DOWNLOAD_ATTACHMENT_TOOL, localFileDigest } from "./storage.mjs";
 import { initialPreferences, preferencePatch } from "./bot-preferences.mjs";
 import { CODEX_VERSION } from "./codex-version.mjs";
 import { MessageBursts } from "./message-bursts.mjs";
@@ -168,9 +169,10 @@ export const dynamicTools = [
     type: "function",
     name: "bots_publish_artifact",
     description:
-      "Publish a regular file from this VM as a downloadable attachment in the bot conversation.",
+      "Copy a finished regular file into this bot's artifacts directory and publish it to private cloud storage. Returns the existing conversation link only after cloud confirmation when enabled. On failure, the source and snapshot are retained; retry the same finished file. Files must be at most 100 MB.",
     inputSchema: schema({ path: str, mimeType: str }, ["path"]),
   },
+  { type: "function", ...DOWNLOAD_ATTACHMENT_TOOL },
 ];
 
 export class BotRuntime extends EventEmitter {
@@ -1477,9 +1479,12 @@ export class BotRuntime extends EventEmitter {
     const input = text ? [textInput(text)] : [];
     let images = 0;
     for (const attachmentId of attachmentIds) {
+      if (!this.store.get('attachment',attachmentId) && this.storage) await this.storage.importAttachment(bot,attachmentId);
       const a = this.owned("attachment", attachmentId, bot.id);
       if (!a.ready)
         throw new Error("Wait for attachments to finish uploading.");
+      if (this.storage) await this.storage.ensureLocal(bot,a);
+      else if (a.sha256 && await localFileDigest(bot,a.path,a.size) !== a.sha256) throw new Error('Attachment checksum mismatch. Original local file retained.');
       await containedPath(bot.cwd, a.path);
       if (a.mimeType.startsWith("image/")) {
         if (++images > 6) throw new Error("Attach at most 6 images per message.");
@@ -2162,6 +2167,8 @@ export class BotRuntime extends EventEmitter {
       }
       case "bots_publish_artifact":
         return this.publishArtifact(bot, args, { key: origin ? `publish:${p.threadId}:${p.callId}` : `publish:${p.callId}`, turnId: p.turnId, itemId: p.callId, ...(origin ?? {}) });
+      case "bots_download_attachment":
+        return this.downloadAttachment(bot,String(args.attachmentId ?? ''));
       default:
         throw new Error("Unknown bot tool.");
     }
@@ -2182,8 +2189,8 @@ export class BotRuntime extends EventEmitter {
   }
   publicAttachment(a) {
     if (a.ready && a.artifact) return { ...artifactMetadata(a, this.store.bot(a.botId)), artifact: true };
-    const { received, sha256, ...publicData } = a;
-    void received; void sha256;
+    const { received, ...publicData } = a;
+    void received;
     return publicData;
   }
   async beginUpload(bot, p, id) {
@@ -2260,16 +2267,20 @@ export class BotRuntime extends EventEmitter {
         .digest("hex");
       if (actual !== p.sha256) throw new Error("Upload checksum mismatch.");
     }
-    const ready = this.store.put("attachment", { ...a, ready: true });
+    const sha256 = await localFileDigest(bot,a.path,a.size);
+    let ready = this.store.put("attachment", { ...a, sha256, ready: true });
+    if (this.storage) ready = await this.storage.publish(bot,ready);
     this.emitEvent("attachment", this.publicAttachment(ready), bot.id);
     return this.publicAttachment(ready);
   }
   async readAttachment(bot, p) {
+    if (!this.store.get('attachment',p.id) && this.storage) await this.storage.importAttachment(bot,p.id);
     const a = this.owned("attachment", p.id, bot.id);
     if (!a.ready) throw new Error("Attachment is not ready.");
     const offset = Number(p.offset ?? 0);
     if (!Number.isSafeInteger(offset) || offset < 0 || offset > a.size)
       throw new Error("Invalid file offset.");
+    if (this.storage && offset === 0) await this.storage.ensureLocal(bot,a);
     await containedPath(bot.cwd, a.path);
     const f = await open(a.path, constants.O_RDONLY | constants.O_NOFOLLOW);
     try {
@@ -2292,6 +2303,14 @@ export class BotRuntime extends EventEmitter {
   }
   async publishArtifact(bot, p, context) {
     return registerArtifact(this, bot, p, context);
+  }
+  async downloadAttachment(bot,id) {
+    if (this.storage) return this.storage.download(bot,id);
+    const a = this.owned('attachment',id,bot.id);
+    if (!a.ready) throw new Error('Attachment is not ready.');
+    const actual = await localFileDigest(bot,a.path,a.size);
+    if (a.sha256 && a.sha256 !== actual) throw new Error('Attachment checksum mismatch. Existing file retained.');
+    return {path:a.path,name:a.name,size:a.size,mimeType:a.mimeType};
   }
 }
 

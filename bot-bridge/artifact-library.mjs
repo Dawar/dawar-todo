@@ -2,17 +2,8 @@ import { createHash } from 'node:crypto';
 import { artifactDate, artifactDateMillis, UNKNOWN_DATE_KEY } from './artifact-dates.mjs';
 
 const kinds = ['image', 'pdf', 'document', 'audio', 'video', 'other'];
-const extensions = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif', avif: 'image/avif', heic: 'image/heic', heif: 'image/heif', tif: 'image/tiff', tiff: 'image/tiff', bmp: 'image/bmp', svg: 'image/svg+xml', pdf: 'application/pdf', txt: 'text/plain', md: 'text/markdown', csv: 'text/csv', json: 'application/json', html: 'text/html', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation', mp3: 'audio/mpeg', wav: 'audio/wav', mp4: 'video/mp4', webm: 'video/webm' };
-export function artifactMime(name, mime) {
-  return typeof mime === 'string' && mime !== 'application/octet-stream' && /^[\w.+-]+\/[\w.+-]+$/.test(mime)
-    ? mime.toLowerCase() : extensions[String(name).split('.').at(-1).toLowerCase()] ?? 'application/octet-stream';
-}
-export function artifactKind(name, mime) {
-  mime = artifactMime(name, mime);
-  if (mime === 'application/pdf') return 'pdf';
-  for (const kind of ['image', 'audio', 'video']) if (mime.startsWith(`${kind}/`)) return kind;
-  return mime.startsWith('text/') || /json|officedocument|msword|opendocument|rtf/.test(mime) ? 'document' : 'other';
-}
+export { artifactMime, artifactKind } from '../lib/bot-file-metadata.mjs';
+import { artifactMime, artifactKind } from '../lib/bot-file-metadata.mjs';
 export function artifactVersion(a) {
   return createHash('sha256').update(JSON.stringify([a.id, a.botId, a.size, a.mimeType, a.createdAt, a.sha256])).digest('hex').slice(0, 24);
 }
@@ -24,7 +15,8 @@ export function artifactMetadata(a, bot) {
     name: a.name, mimeType: artifactMime(a.name, a.mimeType), size: a.size, ready: true,
     createdAt: artifactDate(a.createdAt),
     direction: a.artifact ? 'output' : 'input', source: a.source === 'native' ? 'native' : a.artifact ? 'published' : 'upload',
-    kind, provenance, preview: { kind: ['image', 'pdf'].includes(kind) ? kind : 'none', version: artifactVersion(a) } };
+    kind, provenance, sha256:a.sha256, cloudState:a.cloudState,
+    preview: { kind: ['image', 'pdf'].includes(kind) ? kind : 'none', version: artifactVersion(a) } };
 }
 const initialized = new WeakSet();
 export function listArtifacts(runtime, botId, p) {

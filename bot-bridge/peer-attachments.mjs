@@ -16,7 +16,8 @@ export async function copyPeerAttachments(runtime, sender, recipient, ids, excha
   for (const a of sources) {
     const id = `peer-file:${createHash('sha256').update(`${exchangeId}:${recipient.id}:${a.id}`).digest('hex')}`;
     const prior = runtime.store.get('attachment', id);
-    if (prior) { if (prior.botId !== recipient.id || prior.peerSource?.attachmentId !== a.id) throw new Error('Peer copy identity conflict.'); copies.push(prior); continue; }
+    if (prior) { if (prior.botId !== recipient.id || prior.peerSource?.attachmentId !== a.id) throw new Error('Peer copy identity conflict.'); copies.push(runtime.storage ? await runtime.storage.share(sender,recipient,a,prior,exchangeId) : prior); continue; }
+    if (runtime.storage) await runtime.storage.ensureLocal(sender,a);
     await containedPath(sender.cwd, a.path);
     const root = join(recipient.cwd, 'uploads', id.replace(':', '-'));
     await mkdir(root, { recursive: true, mode: 0o700 }); await containedPath(recipient.cwd, root);
@@ -54,8 +55,9 @@ export async function copyPeerAttachments(runtime, sender, recipient, ids, excha
         } finally { await existing.close(); }
       }
       const dir = await open(root, constants.O_RDONLY); try { await dir.sync(); } finally { await dir.close(); }
-      copies.push({ id, botId: recipient.id, name, path, size: total, mimeType: a.mimeType, sha256, received: total,
-        ready: true, createdAt: new Date().toISOString(), peerSource: { botId: sender.id, attachmentId: a.id, exchangeId } });
+      const copy = { id, botId: recipient.id, name, path, size: total, mimeType: a.mimeType, sha256, received: total,
+        ready: true, createdAt: new Date().toISOString(), peerSource: { botId: sender.id, attachmentId: a.id, exchangeId } };
+      copies.push(runtime.storage ? await runtime.storage.share(sender,recipient,a,copy,exchangeId) : copy);
     } finally { await source?.close(); await destination?.close(); await unlink(temp).catch(() => {}); }
   }
   // The caller atomically commits metadata with the exchange/intake/operation.

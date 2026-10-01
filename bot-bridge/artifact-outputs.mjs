@@ -29,7 +29,11 @@ export async function registerArtifact(runtime, bot, input, context = {}) {
   return runtime.lock(`artifact:${bot.id}`, async () => {
     const publicationId = context.key && digest(`${bot.id}:${context.key}`);
     const prior = publicationId && runtime.store.get('artifactPublication', publicationId);
-    if (prior) return publicResult(runtime.owned('attachment', prior.attachmentId, bot.id));
+    if (prior) {
+      let a = runtime.owned('attachment', prior.attachmentId, bot.id);
+      if (runtime.storage) a = await runtime.storage.publish(bot,a);
+      return publicResult(a);
+    }
     let source, sourceInfo, temporary, destination;
     try {
       let name = input.name;
@@ -106,6 +110,7 @@ export async function registerArtifact(runtime, bot, input, context = {}) {
         if (publicationId) runtime.store.put('artifactPublication', { id: publicationId, botId: bot.id, attachmentId: id,
           provenance: provenance(bot, context) });
       });
+      if (runtime.storage) a = await runtime.storage.publish(bot,a);
       if (context.laneId && runtime.runs?.isolated(context.runId)) runtime.runs.event(context.laneId, 'attachment', runtime.publicAttachment(a));
       else runtime.emitEvent('attachment', runtime.publicAttachment(a), bot.id);
       return publicResult(a);
@@ -209,7 +214,8 @@ export function rememberInputProvenance(runtime, bot, turnId, item, context = {}
       if (!a || a.botId !== bot.id) continue;
       if (a.artifact || !a.ready || (!ids?.includes(a.id) && !paths.has(a.path))) continue;
       if (a.provenance?.turnId && a.provenance.turnId !== turnId) continue;
-      runtime.store.put('attachment', { ...a, provenance: provenance(bot, { ...context, turnId, itemId: item.id, operationId: item.clientId }) });
+      const enriched=runtime.store.put('attachment', { ...a, provenance: provenance(bot, { ...context, turnId, itemId: item.id, operationId: item.clientId }) });
+      if(runtime.storage) void runtime.storage.enrich(enriched).catch(()=>{});
     }
     return true;
   } catch {

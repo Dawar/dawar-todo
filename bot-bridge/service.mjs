@@ -8,6 +8,7 @@ import { CODEX_VERSION, codexBinary } from "./codex-version.mjs";
 import { BotRuntime } from "./runtime.mjs";
 import { bridgeResponse } from "./response.mjs";
 import { CodexManager } from "./manager.mjs";
+import { BotStorageClient } from "./storage.mjs";
 
 const required = [
   "BOTS_RELAY_URL",
@@ -32,6 +33,10 @@ const runtime = new BotRuntime({
   root: process.env.BOTS_ROOT ?? join(homedir(), "bots"),
   defaultTimeZone: process.env.BOTS_TIME_ZONE ?? "UTC",
 });
+if (process.env.BOTS_STORAGE_SERVICE_SECRET) runtime.storage = new BotStorageClient(runtime,{
+  url:process.env.BOTS_SITE_URL, credential:process.env.BOTS_STORAGE_SERVICE_SECRET,
+  machineId:process.env.BOTS_MACHINE_ID ?? 'dawar-vm',
+});
 const manager = new CodexManager({
   runtime,
   store,
@@ -54,6 +59,7 @@ runtime.on("fault", (error) =>
   log("runtime.error", { message: error.message }),
 );
 runtime.on("event", (event) => {
+  if(runtime.storage && event.type==='bot') void runtime.storage.registerBots().catch(()=>log('storage.catalog-unavailable'));
   if (event.type === "manager")
     log("manager.state", { botId: event.botId, ...event.data });
   if (online && socket?.readyState === WebSocket.OPEN)
@@ -71,6 +77,7 @@ codex.on("fault", (error) => {
 });
 await manager.listen();
 await runtime.start();
+if (runtime.storage) void runtime.storage.recoverMetadata().catch(() => log('storage.catalog-unavailable'));
 await manager.recover();
 await runtime.desktops.recover();
 log("runtime.ready", { version: CODEX_VERSION, bots: store.bots().length });

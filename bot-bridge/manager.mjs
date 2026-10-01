@@ -17,6 +17,7 @@ import { mkdir, chmod, unlink, realpath } from "node:fs/promises";
 import { join, resolve, dirname, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import { MANAGER_TOOLS, WORKER_INSTRUCTIONS, RUN_MESSAGE_TOOL } from "./manager-tools.mjs";
+import { DOWNLOAD_ATTACHMENT_TOOL } from "./storage.mjs";
 import { validateResponse } from "./runtime.mjs";
 import { slugify, cleanName } from "./profiles.mjs";
 import { finishTask, ensureNotice, repairTerminalNotices, deliverNotices } from "./manager-outbox.mjs";
@@ -233,18 +234,19 @@ export class CodexManager {
     if (failed) throw failed.reason;
   }
   tools(bot) {
-    if (!this.runtime.primary.single(bot)) return [...MANAGER_TOOLS, RUN_MESSAGE_TOOL, WORK_TOOL, PEER_TOOL, QUEUE_TOOL, TEAM_TOOL];
+    if (!this.runtime.primary.single(bot)) return [...MANAGER_TOOLS, RUN_MESSAGE_TOOL, WORK_TOOL, PEER_TOOL, QUEUE_TOOL, TEAM_TOOL, DOWNLOAD_ATTACHMENT_TOOL];
     const retained = MANAGER_TOOLS.map(tool => {
       const operations = tool.inputSchema.properties.operation.enum.filter(op => ["list", "read", "status", "requests", "review"].includes(op) || tool.name === "codex_tasks" && op === "collectResult");
       return operations.length ? { ...tool, description: `Retained legacy history/collection only. ${tool.description}`, inputSchema: { ...tool.inputSchema,
         properties: { ...tool.inputSchema.properties, operation: { ...tool.inputSchema.properties.operation, enum: operations } } } } : null;
     }).filter(Boolean);
-    return [...retained, WORK_TOOL, PEER_TOOL, QUEUE_TOOL, TEAM_TOOL];
+    return [...retained, WORK_TOOL, PEER_TOOL, QUEUE_TOOL, TEAM_TOOL, DOWNLOAD_ATTACHMENT_TOOL];
   }
   async call(botId, name, args, origin = null) {
     const bot = this.store.bot(botId);
     if (bot.archived || bot.archiving || bot.deletedAt)
       throw new Error("Restore this manager before using its tools.");
+    if (name === 'bots_download_attachment') return this.runtime.downloadAttachment(bot,String(args.attachmentId ?? ''));
     if (name === "bots_team") {
       if (origin) throw new Error("Team references belong to the primary named bot.");
       return teamTool(this.runtime,bot,args);
