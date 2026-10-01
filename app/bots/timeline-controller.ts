@@ -26,6 +26,7 @@ type Cache = ReturnType<typeof createTimelineCache>;
 export class BotTimeline {
   private state = initial();
   private attributed = new Map<string, string>();
+  private normalScheduled = new Set<string>();
   private attributionCursor = -1;
   /** Metadata invalidates projection; only a full native projection can prove
    * absence of human input. Never hide a partial cached turn from a receipt. */
@@ -34,8 +35,12 @@ export class BotTimeline {
     let changed = false;
     for (const turn of turns) {
       if (turn.botId !== this.botId || !turn.turnId || !turn.runId) continue;
-      if (this.attributed.get(turn.turnId) === turn.runId) continue;
+      if (this.attributed.get(turn.turnId) === turn.runId && (!turn.conversation || this.normalScheduled.has(turn.turnId))) continue;
       this.attributed.set(turn.turnId, turn.runId); changed = true;
+      if (turn.conversation) {
+        this.normalScheduled.add(turn.turnId);
+        this.turnAudiences.set(turn.turnId, { kind: "conversation", runId: turn.runId, active: true });
+      }
     }
     while (this.attributed.size > 384) this.attributed.delete(this.attributed.keys().next().value!);
     if (changed) { this.state = { ...this.state, revision: "" }; if (this.hydration) this.scheduleRefresh(); }
@@ -128,6 +133,7 @@ export class BotTimeline {
     for (const value of page.activityTurns ?? []) this.turnAudiences.set(value.turnId, { kind: "activity", runId: value.runId, active: value.active });
     for (const entry of page.entries) if (entry.audience)
       this.turnAudiences.set(entry.turnId, { kind: entry.audience === "finding" ? "activity" : entry.audience, runId: entry.runId, active: entry.turnStatus === "inProgress" });
+    for (const entry of page.entries) if (entry.runId && entry.audience === "conversation" && entry.scheduled) this.normalScheduled.add(entry.turnId);
   }
   /** A contiguous native page can extend or close previously evicted ranges. */
   private pageBoundaries(page: Extract<HistoryResponse, { kind: "page" }>, older = false) {
@@ -161,10 +167,12 @@ export class BotTimeline {
         const liveDirty = new Map(this.dirty);
         for (const { turnId, ...audience } of cached.metadata.turnAudiences ?? [])
           if (!this.turnAudiences.has(turnId)) this.turnAudiences.set(turnId, audience);
+        for (const { turnId, kind, runId } of cached.metadata.turnAudiences ?? [])
+          if (kind === "conversation" && runId) this.normalScheduled.add(turnId);
         this.merge(cached.entries, true, -1); this.dirty = liveDirty;
         const m = cached.metadata; this.cachedKeys = new Set(m.order ?? []);
         const boundaries = historyBoundaries(this.state.entries, this.mapGaps(m.gaps ?? []), m.olderCursor, cached.entries);
-        this.publish({ revision: m.revision.endsWith(":conversation-v5") ? m.revision : "", eventCursor: Math.max(live, m.eventCursor), ...boundaries,
+        this.publish({ revision: m.revision.endsWith(":conversation-v6") ? m.revision : "", eventCursor: Math.max(live, m.eventCursor), ...boundaries,
           partialTurn: m.partialTurn, attachments: m.attachments, contextEntries: conversationEntries(m.contextEntries ?? [], this.turnAudiences), complete: m.complete && !boundaries.olderCursor && !boundaries.gaps.length, position: { ...(m.position ?? this.state.position), anchor: this.resolveKey(m.position?.anchor ?? null) }, cached: true }, true);
         this.scheduleWrite();
       } catch (e) { this.publish({ error: `Offline history cache unavailable: ${String(e)}` }, true); }
@@ -349,7 +357,7 @@ export class BotTimeline {
     if (p.item && scheduleInput(p.item)) {
       const runId = p.item.type === "userMessage" ? p.item.clientId!.slice(9) : undefined;
       const mixed = this.state.entries.some(entry => entry.turnId === turnId && entry.item && humanInput(entry.item));
-      this.turnAudiences.set(turnId, { kind: mixed ? "mixed" : "activity", runId, active: true });
+      this.turnAudiences.set(turnId, { kind: mixed ? "mixed" : this.normalScheduled.has(turnId) ? "conversation" : "activity", runId, active: true });
     } else if (p.item && peerInput(p.item) && !this.turnAudiences.get(turnId)?.runId) {
       this.turnAudiences.set(turnId, { kind: "conversation", active: true });
       this.scheduleRefresh();
@@ -357,7 +365,7 @@ export class BotTimeline {
       this.turnAudiences.set(turnId, { ...this.turnAudiences.get(turnId)!, kind: "mixed" });
       this.scheduleRefresh(); // Recover surrounding replies hidden before the human steered in.
     }
-    if (p.turn?.items.some(item => scheduleInput(item) || peerInput(item))) this.turnAudiences.set(turnId, turnAudience(p.turn.items, this.turnAudiences.get(turnId)?.runId));
+    if (p.turn?.items.some(item => scheduleInput(item) || peerInput(item))) this.turnAudiences.set(turnId, turnAudience(p.turn.items, this.turnAudiences.get(turnId)?.runId, this.normalScheduled.has(turnId)));
     if (p.turn && this.turnAudiences.has(turnId)) this.turnAudiences.set(turnId, { ...this.turnAudiences.get(turnId)!, active: p.turn.status === "inProgress" });
     const update = (entry: HistoryEntry) => {
       const prior = this.state.entries.find(value => value.turnId === entry.turnId && value.id === entry.id);

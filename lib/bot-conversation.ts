@@ -9,13 +9,13 @@ export const humanInput = (item: ThreadItem) => item.type === "userMessage" && !
 
 /** Inspect a full native turn, not an arbitrary tail of its projected items.
  * Without item-level provenance a mixed turn keeps all surrounding replies. */
-export function turnAudience(items: ThreadItem[], knownRunId?: string): TurnAudience {
+export function turnAudience(items: ThreadItem[], knownRunId?: string, conversation = false): TurnAudience {
   const trigger = items.find(scheduleInput);
   const runId = trigger?.type === "userMessage" ? trigger.clientId!.slice(9) : knownRunId;
   // Peer-triggered work belongs to this same conversation. Hide the incoming
   // peer envelope, but retain the bot's visible progress and reasoning summaries.
   if (!trigger && !knownRunId) return { kind: "conversation" };
-  return { kind: items.some(humanInput) ? "mixed" : "activity", ...(runId ? { runId } : {}) };
+  return { kind: items.some(humanInput) ? "mixed" : conversation ? "conversation" : "activity", ...(runId ? { runId } : {}) };
 }
 
 /** Only the explicit successful reporting tool is an actionable scheduled
@@ -41,5 +41,5 @@ export function projectConversationItem(turn: Pick<Turn, "id" | "startedAt" | "s
   }
   if (scheduleInput(item) || peerInput(item) || item.type === "userMessage" && item.clientId?.startsWith("manager-notice:")) return null;
   if (turn.status !== "inProgress" && (!conversationItem(item.type) || item.type === "reasoning" && !item.summary.some(text => text.trim()))) return null;
-  return { ...projectHistoryItem(turn, item), audience: audience.kind, runId: audience.runId };
+  return { ...projectHistoryItem(turn, item, Boolean(audience.runId)), audience: audience.kind, runId: audience.runId };
 }

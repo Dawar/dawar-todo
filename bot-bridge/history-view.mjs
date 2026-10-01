@@ -114,7 +114,7 @@ export async function readHistoryView(runtime, bot, params) {
     return { kind: 'page', ...page, context, turnIds: [target.turnId], revision, eventCursor,
       olderCursor: page.olderCursor ? JSON.stringify({ scope: target.versionKey, turnId: target.turnId, cursor: page.olderCursor }) : null };
   }
-  const revision = historyRevision(runtime, bot) + (params.projection === "conversation" ? ":conversation-v5" : ""), eventCursor = runtime.store.cursor();
+  const revision = historyRevision(runtime, bot) + (params.projection === "conversation" ? ":conversation-v6" : ""), eventCursor = runtime.store.cursor();
   let attributionUnchanged = true;
   if (params.projection === 'conversation' && params.after !== eventCursor) {
     // Schedule receipts can change without native content changing. Inspect

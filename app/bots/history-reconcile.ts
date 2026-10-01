@@ -83,7 +83,8 @@ export function conversationEntries(entries: HistoryEntry[], audiences = new Map
       const item = entry.item?.type === 'reasoning' && entry.item.content.length ? { ...entry.item, content: [] } : entry.item;
       const legacyContext = !audience && (entry.scheduled || entry.legacyContext);
       const kind: HistoryEntry['audience'] = entry.audience === 'finding' ? 'finding' : audience?.kind === 'mixed' || legacyContext ? 'mixed' : entry.audience;
-      if (item === entry.item && !entry.scheduled && kind === entry.audience && (audience?.runId ?? entry.runId) === entry.runId && Boolean(legacyContext) === Boolean(entry.legacyContext)) return entry;
-      return { ...entry, item, scheduled: false, audience: kind, runId: audience?.runId ?? entry.runId, legacyContext: Boolean(legacyContext) };
+      const scheduled = Boolean((audience?.runId ?? entry.runId) && (audience?.kind === 'conversation' || audience?.kind === 'mixed'));
+      if (item === entry.item && scheduled === entry.scheduled && kind === entry.audience && (audience?.runId ?? entry.runId) === entry.runId && Boolean(legacyContext) === Boolean(entry.legacyContext)) return entry;
+      return { ...entry, item, scheduled, audience: kind, runId: audience?.runId ?? entry.runId, legacyContext: Boolean(legacyContext) };
     });
 }

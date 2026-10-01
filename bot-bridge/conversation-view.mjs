@@ -10,9 +10,9 @@ const ENTRY_BYTES = CONVERSATION_BYTES - 42 * 1024;
 function projection(runtime, bot) {
   // Exact per-native-turn metadata lookups use the runtime's additive indexes.
   // Do not enumerate the native thread (or every run) to discover follow-ups.
-  const primary = runtime.store.db.prepare(`SELECT id FROM records WHERE kind='run' AND kind IN ('run','runTurn')
+  const primary = runtime.store.db.prepare(`SELECT id, json_extract(json,'$.conversation') AS conversation FROM records WHERE kind='run' AND kind IN ('run','runTurn')
     AND bot_id=? AND json_extract(json,'$.turnId')=? LIMIT 1`);
-  const continuation = runtime.store.db.prepare(`SELECT json_extract(c.json,'$.runId') AS runId FROM records c
+  const continuation = runtime.store.db.prepare(`SELECT json_extract(c.json,'$.runId') AS runId, json_extract(r.json,'$.conversation') AS conversation FROM records c
     JOIN records r ON r.kind='run' AND r.id=json_extract(c.json,'$.runId') AND r.bot_id=c.bot_id
     WHERE c.kind='runTurn' AND c.kind IN ('run','runTurn') AND c.bot_id=? AND json_extract(c.json,'$.turnId')=?
       AND json_extract(c.json,'$.status') IN ('running','completed','failed','interrupted')
@@ -22,8 +22,8 @@ function projection(runtime, bot) {
   const hasDiscovery = typeof runtime.scheduledContext === 'function';
   const activityTurns = new Map(); let activityBytes = 0;
   const rows = (page) => page.data.flatMap(turn => {
-    const runId = primary.get(bot.id, turn.id)?.id ?? (hasDiscovery ? continuation.get(bot.id, turn.id, bot.threadId)?.runId : undefined);
-    const audience = turnAudience(turn.items, runId);
+    const run = primary.get(bot.id, turn.id) ?? (hasDiscovery ? continuation.get(bot.id, turn.id, bot.threadId) : undefined);
+    const audience = turnAudience(turn.items, run?.id ?? run?.runId, run?.conversation === 1);
     if (audience.kind === 'activity' && !activityTurns.has(turn.id)) {
       const value = { turnId: turn.id, runId: audience.runId, ...(turn.status === 'inProgress' ? { active: true } : {}) }, size = Buffer.byteLength(JSON.stringify(value));
       if (activityTurns.size < 128 && activityBytes + size < 8192) { activityTurns.set(turn.id, value); activityBytes += size; }

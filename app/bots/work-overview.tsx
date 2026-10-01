@@ -5,21 +5,20 @@ import type { Bot, InboxItem, WorkState } from './single-thread-contract';
 import { botsClient as client } from './client';
 import { useRunAction } from './run-action';
 import './single-thread.css';
-export function workLabel(work: WorkState | undefined, bots: Bot[]) {
-  if (!work) return null;
-  if (work.state === 'paused') return 'Paused';
+export function workLabel(work: WorkState | undefined, bot: Bot) {
+  if (!work || ['provisioning', 'error'].includes(bot.status)) return null;
   if (work.state === 'unconfirmed') return 'Needs confirmation';
   if (work.state === 'needs-input') return 'Needs your input';
-  if (work.state === 'waiting') return work.waitingFor.length ? `Waiting for ${work.waitingFor.map(id => bots.find(bot => bot.id === id)?.name ?? 'a reply').join(', ')}` : 'Waiting';
   // Progress summaries persist across turns. They belong in work details,
   // not the live presence label, where an old summary implies current work.
-  if (work.state === 'working') return 'Working';
+  if (work.state === 'working' && bot.activeTurnId) return 'Working';
   return 'Ready';
 }
 export function WorkOverview({ owner, bot, work, online }: { owner: string; bot: Bot; work?: WorkState; online: boolean }) {
   const action = useRunAction(owner, bot.id, 'work:resume');
   return <>{work?.paused && <div className="bots-work-pause"><Pause size={17} /><div><strong>Automatic work is paused</strong><p>Your conversation is still open. Resume when you’re ready for queued schedules and discussions.</p></div>{!action.intent && <button disabled={!online || action.busy || !action.ready} onClick={() => void action.perform('work.resume', {}).catch(() => {})}>Resume</button>}</div>}
     {(action.intent || action.error) && <div className="bots-action-recovery" role="status">{action.error || 'Resume is awaiting confirmation.'}<button disabled={!online || action.busy} onClick={() => void action.retry().catch(() => {})}>{action.busy ? 'Checking…' : 'Check saved action'}</button></div>}
+    {work?.goal && <section aria-label="Native objective"><h3>Objective · {work.goal.status}</h3><p className="bots-details-lead">{work.goal.objective}</p></section>}
     {work?.remaining && <p className="bots-details-lead">{work.remaining}</p>}
   </>;
 }

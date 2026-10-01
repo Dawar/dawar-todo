@@ -9,7 +9,7 @@ import { BotMessage } from './message';
 import { ReturnedArtifact } from './returned-artifact';
 import { useRunAction } from './run-action';
 import './single-thread.css';
-const label = (request: PeerRequest) => ({ queued: 'Up next', working: 'Working together', waiting: 'Waiting for a reply', completed: 'Result ready', cancelled: 'Cancelled', failed: 'Needs attention', 'delivery-unconfirmed': 'Delivery needs confirmation' }[request.state]);
+const label = (request: PeerRequest, bots: Bot[]) => ({ queued: 'Up next', working: request.executions?.some(e => bots.some(b => b.id === e.botId && b.activeTurnId === e.turnId)) ? 'Working together' : 'Waiting for a reply', waiting: 'Waiting for a reply', completed: 'Result ready', cancelled: 'Cancelled', failed: 'Needs attention', 'delivery-unconfirmed': 'Delivery needs confirmation' }[request.state]);
 function Text({ text, botId }: { text: string; botId: string }) { return <BotMessage item={{ type: 'agentMessage', id: 'exchange-text', text, phase: null, delivery: null, memoryCitation: null, questions: null }} attachments={[]} botId={botId} download={() => {}} />; }
 export function useDiscussionStatus(owner: string, botId: string | null, online: boolean, supported: boolean) {
   const scope = JSON.stringify([owner, botId]);
@@ -18,9 +18,10 @@ export function useDiscussionStatus(owner: string, botId: string | null, online:
     if (!botId || !supported || client.owner !== owner) return;
     let live = true;
     const records = new Map<string, PeerRequest>();
+    const concurrent = new Map<string, PeerRequest>();
     const key = `peers-status:v1:${botId}`;
     const relevant = (r: PeerRequest) => r.senderBotId === botId || r.recipientBotId === botId;
-    const retain = (r: PeerRequest) => !["completed", "cancelled"].includes(r.state);
+    const retain = (r: PeerRequest) => !["completed", "cancelled"].includes(r.state) || Boolean(r.executions?.length);
     const publish = (error = false) => {
       if (!live || client.owner !== owner) return;
       const requests = [...records.values()].filter(retain).map(r => ({ ...r, result: null }));
@@ -30,7 +31,7 @@ export function useDiscussionStatus(owner: string, botId: string | null, online:
     const event = (event: BotEvent) => {
       if (event.type !== "peer" || event.botId !== botId || client.owner !== owner) return;
       const r = (event.data as { request?: PeerRequest }).request;
-      if (r && relevant(r) && (!records.has(r.id) || records.get(r.id)!.updatedAt <= r.updatedAt)) { records.set(r.id, { ...r, result: null }); publish(); }
+      if (r && relevant(r) && (!records.has(r.id) || records.get(r.id)!.updatedAt <= r.updatedAt)) { concurrent.set(r.id, { ...r, result: null }); records.set(r.id, { ...r, result: null }); publish(); }
     };
     client.events.add(event);
     void Promise.resolve().then(async () => {
@@ -44,7 +45,9 @@ export function useDiscussionStatus(owner: string, botId: string | null, online:
         for (const r of next.requests) found.set(r.id, { ...r, result: null });
         cursor = next.nextCursor; if (cursor) cursors.add(cursor);
       } while (cursor);
-      for (const [id, r] of records) if (!found.has(id) || r.updatedAt > found.get(id)!.updatedAt) found.set(id, r);
+      // Only live events racing the read survive absence from a full read.
+      // Old cache rows cannot indefinitely resurrect obsolete requests.
+      for (const [id, r] of concurrent) if (!found.has(id) || r.updatedAt >= found.get(id)!.updatedAt) found.set(id, r);
       records.clear(); for (const [id, r] of found) if (retain(r)) records.set(id, r); publish();
     }).catch(() => publish(true));
     return () => { live = false; client.events.delete(event); };
@@ -52,16 +55,23 @@ export function useDiscussionStatus(owner: string, botId: string | null, online:
   const requests = value.scope === scope ? value.requests : [];
   return { requests, attention: requests.filter(r => ["failed", "delivery-unconfirmed"].includes(r.state)), error: value.scope === scope && value.error };
 }
+export function discussionNeedsAttention(request: PeerRequest, botId: string, bots: Bot[], online: boolean) {
+  if (["failed", "delivery-unconfirmed"].includes(request.state)) return true;
+  return online && Boolean(request.executions?.some(e => e.botId !== botId && client.snapshot?.pending.some(p =>
+    p.botId === e.botId && "turnId" in p.request.params && "threadId" in p.request.params &&
+    p.request.params.turnId === e.turnId && p.request.params.threadId === bots.find(b => b.id === e.botId)?.threadId)));
+}
 export function DiscussionStatus({ status, bots, botId, online, onOpen, attentionOnly = false }: {
   status: ReturnType<typeof useDiscussionStatus>; bots: Bot[]; botId: string; online: boolean; onOpen: (id?: string | null) => void; attentionOnly?: boolean;
 }) {
   const peerFor = (r: PeerRequest) => bots.find(b => b.id === (r.senderBotId === botId ? r.recipientBotId : r.senderBotId));
-  const blocked = status.attention[0] ?? status.requests.find(r => ["working", "waiting"].includes(r.state) && peerFor(r)?.status === "waiting");
+  const executions = (r: PeerRequest) => online ? (r.executions ?? []).filter(e => bots.some(b => b.id === e.botId && b.activeTurnId === e.turnId)) : [];
+  const blocked = status.requests.find(r => discussionNeedsAttention(r, botId, bots, online));
   if (attentionOnly) return blocked ? <button type="button" className="bots-discussion-notice" onClick={() => onOpen(blocked.id)}><AlertCircle size={15} aria-hidden="true" /><span>{blocked.state === "delivery-unconfirmed" ? "Discussion needs confirmation" : blocked.state === "failed" ? "Discussion needs attention" : `${peerFor(blocked)?.name.split(":")[0] ?? "A bot"} needs input`}</span><ChevronRight size={15} aria-hidden="true" /></button> : status.error ? <button type="button" className="bots-discussion-notice" onClick={() => onOpen()}><AlertCircle size={15} aria-hidden="true" /><span>Check discussions</span><ChevronRight size={15} aria-hidden="true" /></button> : null;
-  const active = online && status.requests.find(r => ["working", "waiting"].includes(r.state) && !r.cancelRequested);
+  const active = online && status.requests.find(r => executions(r).length && !r.cancelRequested);
   if (!active || blocked) return null;
   const peer = peerFor(active);
-  return <button type="button" className="bots-discussion-presence" onClick={() => onOpen(active.id)} title="Open discussion">{peer && <BotAvatar bot={peer} small decorative working={active.state === "working"} />}<span>Working with {peer?.name.split(":")[0] ?? "a bot"}{status.requests.filter(r => ["working", "waiting"].includes(r.state)).length > 1 ? " + others" : ""}</span></button>;
+  return <button type="button" className="bots-discussion-presence" onClick={() => onOpen(active.id)} title="Open discussion">{peer && <BotAvatar bot={peer} small decorative working />}<span>Working with {peer?.name.split(":")[0] ?? "a bot"}{status.requests.filter(r => executions(r).length).length > 1 ? " + others" : ""}</span></button>;
 }
 export function PeerConversations({ owner, botId, bots, online, historyView = false, targetId = null }: { owner: string; botId: string; bots: Bot[]; online: boolean; historyView?: boolean; targetId?: string | null }) {
   const key = `peers-metadata:v1:${botId}`;
@@ -112,8 +122,8 @@ function PeerCard({ request, owner, botId, bots, online, historyView, targetId }
   }, [owner, botId, request.id]);
   const peerId = current.senderBotId === botId ? current.recipientBotId : current.senderBotId, peer = bots.find(bot => bot.id === peerId), name = peer?.name ?? 'Bot';
   return <article className="bots-peer-card"><button data-history-key={historyView ? `peer:${request.id}` : undefined} className="bots-peer-summary" aria-expanded={open} onClick={() => { setOpen(value => !value); setUnread(false); }}>
-    {peer ? <BotAvatar bot={peer} small decorative working={current.state === 'working'} /> : <MessageCircle size={20} />}
-    <span><strong>{name}<small>{label(current)}</small></strong><span>{current.summary}</span></span><ChevronRight size={17} className={open ? 'is-open' : ''} /></button>
+    {peer ? <BotAvatar bot={peer} small decorative working={online && Boolean(current.executions?.some(e => bots.some(b => b.id === e.botId && b.activeTurnId === e.turnId)))} /> : <MessageCircle size={20} />}
+    <span><strong>{name}<small>{label(current, bots)}</small></strong><span>{current.summary}</span></span><ChevronRight size={17} className={open ? 'is-open' : ''} /></button>
     {open && <PeerDetail owner={owner} botId={botId} request={current} bots={bots} online={online} changed={unread} onRead={() => setUnread(false)} historyView={historyView} />}
   </article>;
 }

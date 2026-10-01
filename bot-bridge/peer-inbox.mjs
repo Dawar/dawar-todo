@@ -24,7 +24,12 @@ export class PeerInbox {
   }
   public(r) { const { id, rootId, parentId, senderBotId, recipientBotId, kind, summary, state, round, createdAt, updatedAt, turnId, result, cancelRequested } = r;
     const unknown = this.store.db.prepare("SELECT 1 FROM records WHERE kind='primaryInbox' AND json_extract(json,'$.sourceId')=? AND json_extract(json,'$.state') IN ('dispatching','uncertain') LIMIT 1").get(id);
-    return { id, rootId, parentId, senderBotId, recipientBotId, kind, summary, state: unknown ? 'delivery-unconfirmed' : state, round: this.store.get('peerRoot', rootId)?.count ?? round, roundLimit: PEER_ROUND_LIMIT, createdAt, updatedAt, turnId, result, cancelRequested }; }
+    // Delivery/response state is history, not presence. Only an exact current
+    // native intake (request or reply) can establish collaboration or input.
+    const executions = this.store.db.prepare("SELECT json_remove(json,'$.text','$.input') AS json FROM records WHERE kind='primaryInbox' AND json_extract(json,'$.sourceId')=?").all(id)
+      .map(row => JSON.parse(row.json)).filter(i => i.kind === 'peer' && (observedActiveTurn(this.runtime, i.botId, i.turnId) || this.store.list('pending', i.botId).some(p => p.request?.params?.turnId === i.turnId && p.request?.params?.threadId === this.store.bot(i.botId).threadId)))
+      .map(i => ({ botId: i.botId, turnId: i.turnId, needsInput: this.store.list('pending', i.botId).some(p => p.request?.params?.turnId === i.turnId && p.request?.params?.threadId === this.store.bot(i.botId).threadId) }));
+    return { id, rootId, parentId, senderBotId, recipientBotId, kind, summary, state: unknown ? 'delivery-unconfirmed' : state, round: this.store.get('peerRoot', rootId)?.count ?? round, roundLimit: PEER_ROUND_LIMIT, createdAt, updatedAt, turnId, result, cancelRequested, executions }; }
   publish(r) { for (const botId of [r.senderBotId, r.recipientBotId]) this.runtime.emitEvent('peer', { request: this.public(r) }, botId); }
   read(bot, p) {
     const request = this.owned(bot, p.id);
@@ -61,20 +66,19 @@ export class PeerInbox {
     // its root budget, but is stored separately from nullable provenance.
     const sourceTurnId = origin.authority === 'native-tool' ? origin.turnId : bot.activeTurnId;
     const intake = this.runtime.primary.openItems(bot.id).find(i => i.kind === 'peer' && sourceTurnId && i.turnId === sourceTurnId);
-    const nativeGoal = this.store.get('nativeGoal', bot.id)?.goal;
-    const objectiveKey = sourceTurnId && nativeGoal && !['complete', 'paused'].includes(nativeGoal.status) ? digest(`${nativeGoal.threadId}:${nativeGoal.createdAt}:${nativeGoal.objective}`) : null;
     const current = (intake && requests.find(r => r.id === intake.sourceId)) ?? requests.find(r =>
       r.recipientBotId === bot.id && r.turnId === sourceTurnId && sourceTurnId ||
-      r.senderBotId === bot.id && ((r.sourceTurnId === sourceTurnId || r.admissionTurnId === sourceTurnId) && sourceTurnId || objectiveKey && r.objectiveKey === objectiveKey));
+      r.senderBotId === bot.id && (r.sourceTurnId === sourceTurnId || r.admissionTurnId === sourceTurnId) && sourceTurnId);
     if (explicit) {
       const parent = this.owned(bot, explicit);
       if (current && current.rootId !== parent.rootId) throw new Error('This turn must retain its original discussion root.');
       return parent;
     }
     if (current) return current;
-    const open = requests.filter(r => !terminal(r) && [r.senderBotId, r.recipientBotId].includes(bot.id));
-    if (new Set(open.map(r => r.rootId)).size > 1) throw new Error('Select parentId for the relevant open discussion.');
-    return open[0] ?? null;
+    // An old unanswered message or broad objective cannot silently adopt a new
+    // topic. Related work still supplies parentId; current causal intake above
+    // enforces its root and unchanged anti-loop budget.
+    return null;
   }
   async mutate(bot, method, p, operationId, fingerprint, trustedOrigin = null) {
     const origin = trustedOrigin ?? Object.freeze({ authority: 'owner', botId: bot.id, threadId: null, turnId: null, callId: null });

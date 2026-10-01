@@ -35,7 +35,7 @@ import type { Bot } from "./single-thread-contract";
 import { BotAvatar as Avatar } from "./bot-avatar";
 import { PersonalitySettings } from "./personality-settings";
 import { WorkOverview, AutomaticInbox, workLabel } from "./work-overview";
-import { PeerConversations, DiscussionStatus, useDiscussionStatus } from "./peer-conversations";
+import { PeerConversations, DiscussionStatus, useDiscussionStatus, discussionNeedsAttention } from "./peer-conversations";
 import { finishTodoForward } from "../todo-forward";
 import { SiteHeader } from "../site-header";
 import type {
@@ -661,7 +661,7 @@ export function BotsWorkspace() {
                     }
                   />
                 ))}
-                <div className="bots-conversation-presence"><Avatar bot={bot} small /><button type="button" onClick={() => { setDetailsSection("next"); setProfile(true); }} aria-label="Open work details" title={online ? workLabel(work, bots) ?? humanStatus(bot, online) : "Offline"}>{online ? workLabel(work, bots) ?? humanStatus(bot, online) : "Offline"}</button>{snapshot?.capabilities?.peerInbox === 1 && <DiscussionStatus status={discussions} bots={bots} botId={bot.id} online={online} onOpen={openDiscussion} />}</div>
+                <div className="bots-conversation-presence"><Avatar bot={bot} small /><button type="button" onClick={() => { setDetailsSection("next"); setProfile(true); }} aria-label="Open work details" title={online ? workLabel(work, bot) ?? humanStatus(bot, online) : "Offline"}>{online ? workLabel(work, bot) ?? humanStatus(bot, online) : "Offline"}</button>{snapshot?.capabilities?.peerInbox === 1 && <DiscussionStatus status={discussions} bots={bots} botId={bot.id} online={online} onOpen={openDiscussion} />}</div>
               </BotConversation>
               {!bot.archived && (
                 <>
@@ -810,7 +810,7 @@ export function BotsWorkspace() {
           )}
         </section>}
         {bot && !gallery && <Activity mode={profile && desktopScope !== scope ? "visible" : "hidden"}>
-          <BotDetailsDrawer key={scope} bot={bot} section={detailsSection} onSection={setDetailsSection} onClose={closeProfile} discussionAttention={discussions.requests.filter(r => ["failed", "delivery-unconfirmed"].includes(r.state) || ["working", "waiting"].includes(r.state) && bots.find(b => b.id === (r.senderBotId === bot.id ? r.recipientBotId : r.senderBotId))?.status === "waiting").length}>
+          <BotDetailsDrawer key={scope} bot={bot} section={detailsSection} onSection={setDetailsSection} onClose={closeProfile} discussionAttention={discussions.requests.filter(r => discussionNeedsAttention(r, bot.id, bots, online)).length}>
             {{
               next: <>
                 <h3>Up next</h3><p className="bots-details-lead">Scheduled work and bot discussions.</p>

@@ -53,5 +53,5 @@ export function activeScheduledTurn(runtime, botId) {
   if (["completed", "failed", "interrupted"].includes(receipt?.status) ||
       ["completed", "failed", "interrupted"].includes(runtime.store.get("planTurnEvidence", context.turnId)?.status)) return null;
   return { botId, runId: context.runId, turnId: context.turnId, operationId: context.operationId,
-    continuation };
+    continuation, conversation: run.conversation === true };
 }
