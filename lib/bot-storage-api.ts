@@ -17,7 +17,7 @@ export async function botStorageResponse(request: Request, environment: Environm
     const url = new URL(request.url);
     const input: Record<string, unknown> = request.method === "GET" ? Object.fromEntries(url.searchParams) : await boundedJson(request);
     const action = String(input.action ?? "status");
-    if (action === "status") return Response.json({ owner,enabled: environment.BOTS_STORAGE_ENABLED === "1", catalogReady: environment.BOTS_STORAGE_CATALOG_READY === "1" },{headers});
+    if (action === "status") return Response.json({ owner,enabled: environment.BOTS_STORAGE_ENABLED === "1", catalogReady: environment.BOTS_STORAGE_CATALOG_READY === "1", portableCopy:true },{headers});
     if (action === "providerCors") {
       if (!service) throw new StorageError("Provider configuration checks require the storage service credential.",403,"forbidden");
       if (request.method !== "POST") throw new StorageError("Use POST for private provider checks.",405);
@@ -34,6 +34,7 @@ export async function botStorageResponse(request: Request, environment: Environm
       case "download": case "preview": result = await storage.download(String(input.id),String(input.botId),action === "preview"); break;
       case "list": result = await storage.list(input as Record<string,string>); break;
       case "share": result = await storage.share(input as Parameters<BotStorage["share"]>[0]); break;
+      case "copy": result = await storage.copy(input as Parameters<BotStorage["copy"]>[0]); break;
       default: throw new StorageError("Unknown storage action.");
     }
     return Response.json({ ...result,owner },{headers});

@@ -12,7 +12,7 @@ export function loadTypeScript(path,cache=new Map()) {
   const loaded={exports:{}}; cache.set(path,loaded);
   const source=ts.transpileModule(readFileSync(path,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
   vm.runInNewContext(source,{module:loaded,exports:loaded.exports,require:(name)=>name.startsWith('.')?(name.endsWith('.mjs')?require(resolve(dirname(path),name)):loadTypeScript(resolve(dirname(path),`${name}.ts`),cache)):require(name),
-    Request,Response,Headers,URL,URLSearchParams,crypto,TextEncoder,TextDecoder,Uint8Array,ArrayBuffer,FormData,File,Blob,AbortSignal,btoa,atob,console,fetch:(...args)=>globalThis.fetch(...args)}, {filename:path});
+    setTimeout,clearTimeout,Request,Response,Headers,URL,URLSearchParams,crypto,TextEncoder,TextDecoder,Uint8Array,ArrayBuffer,FormData,File,Blob,AbortSignal,btoa,atob,console,fetch:(...args)=>globalThis.fetch(...args)}, {filename:path});
   return loaded.exports;
 }
 export function d1() {

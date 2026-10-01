@@ -67,3 +67,16 @@ test('zero-byte files, inferred MIME, Unicode names and historical dates preserv
   assert.equal((await storage.list({search:'ÉTÉ',type:'pdf'})).items.length,1);
   const oldest=await storage.list({botId:'archived',sort:'oldest'});assert.equal(oldest.items[0].name,'😀.pdf');
 });
+test('portable composer grants are owner scoped, replayable without provider transfer and cannot claim peer provenance',async t=>{
+ const {storage,env,s3,DB,upload}=await fixture(t);await storage.registerBots([{id:'two',name:'Two',color:'#123456',archived:false}]);
+ const {metadata,bytes}=await upload('portable.bin');await storage.finalize(metadata.id,'one');const copies=s3.copyCount;
+ const owner=new BotStorage(env,env.BOTS_OWNER_EMAIL,false);await owner.initialize();
+ const input={id:metadata.id,botId:'one',recipientBotId:'two',attachmentId:randomUUID()};const result=await owner.copy(input);
+ assert.deepEqual(await owner.copy(input),result);assert.equal(s3.copyCount,copies);assert.equal(result.attachment.sha256,digest(bytes));assert.equal(result.attachment.peerSource,undefined);
+ assert.equal(DB.sqlite.prepare('SELECT COUNT(*) AS n FROM bot_storage_files WHERE bot_id=?').get('two').n,1);
+ await owner.download(input.attachmentId,'two');await assert.rejects(owner.download(input.attachmentId,'one'),/not found/);
+ await assert.rejects(owner.copy({...input,recipientBotId:'archived',attachmentId:randomUUID()}),/unavailable/);
+ const stranger=new BotStorage(env,'stranger',false);await stranger.initialize();await assert.rejects(stranger.copy(input),/not found/);
+ await assert.rejects(owner.copy({...input,id:'bucket/arbitrary/key'}),/Invalid/);
+ const other=await upload();await storage.finalize(other.metadata.id,'one');await assert.rejects(owner.copy({...input,id:other.metadata.id}),/conflict/);
+});

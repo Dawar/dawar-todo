@@ -164,6 +164,25 @@ export class BotStorage {
     await this.environment.DB.prepare("INSERT OR IGNORE INTO bot_storage_ready(owner_key,id) VALUES(?,?)").bind(this.owner,metadata.id).run();
     return { attachment: this.receipt(saved) };
   }
+  async copy(input: { id: string; botId: string; recipientBotId: string; attachmentId: string }) {
+    const row = await this.row(input.id,input.botId);
+    if (row.state !== "ready" || row.parent_id) throw new StorageError("Choose a ready original attachment.",409,"not_ready");
+    const botId = validId(input.recipientBotId), id = validId(input.attachmentId);
+    if (!/^[a-f0-9-]{36}$/i.test(id)) throw new StorageError("Invalid composer attachment ID.");
+    const identity = await this.environment.DB.prepare("SELECT metadata FROM bot_storage_identities WHERE owner_key=? AND id=? AND machine_id=?").bind(this.owner,botId,this.environment.BOTS_MACHINE_ID ?? "dawar-vm").first<{metadata:string}>();
+    if (!identity || JSON.parse(identity.metadata).archived) throw new StorageError("Recipient bot is unavailable.",404,"not_found");
+    const source: Metadata = JSON.parse(row.metadata);
+    const createdAt = new Date().toISOString();
+    const metadata = { ...source, id, botId, artifact:false, source:"upload", provenance:{}, peerSource:undefined,
+      composerSource:{botId:source.botId,attachmentId:source.id},createdAt,dateKey:Date.parse(createdAt) };
+    const fingerprint = hash(JSON.stringify(["composer",botId,source.botId,source.id,source.sha256,source.size,source.name,source.mimeType]));
+    await this.environment.DB.prepare("INSERT OR IGNORE INTO bot_storage_files(owner_key,id,bot_id,fingerprint,staging_key,object_key,state,metadata) VALUES(?,?,?,?,?,?,'ready',?)")
+      .bind(this.owner,id,botId,fingerprint,row.staging_key,row.object_key,JSON.stringify(metadata)).run();
+    const saved = await this.row(id,botId);
+    if (saved.fingerprint !== fingerprint || saved.state !== "ready") throw new StorageError("Attachment transfer identity conflict.",409,"conflict");
+    await this.environment.DB.prepare("INSERT OR IGNORE INTO bot_storage_ready(owner_key,id) VALUES(?,?)").bind(this.owner,id).run();
+    return { attachment:this.receipt(saved) };
+  }
   async list(input: Record<string,string>) {
     const limit = Number(input.limit ?? 36), sort = input.sort ?? "newest", type = input.type ?? "all", direction = input.direction ?? "all", needle = (input.search ?? "").trim().normalize("NFKC").toLowerCase();
     if (!Number.isInteger(limit) || limit < 1 || limit > 60 || !["newest","oldest","name"].includes(sort) || !["all","image","pdf","document","audio","video","other"].includes(type) || !["all","input","output"].includes(direction) || needle.length > 160) throw new StorageError("Invalid catalog filters.");

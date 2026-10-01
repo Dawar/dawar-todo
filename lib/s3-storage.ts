@@ -1,3 +1,4 @@
+import { replayableStorageFetch } from "./storage-transfer";
 /** Private SigV4 signing shared by Todo and bot storage. Never send this environment to clients. */
 export type S3Environment = { S3_ACCESS_KEY: string; S3_ACCESS_KEY_ID: string; S3_BUCKET: string; S3_ENDPOINT_URL: string };
 type StorageConfig = { bucket: string; endpoint: URL; region: string };
@@ -55,7 +56,7 @@ async function signedStorageResponse(url: URL, init?: RequestInit) {
   serverUrl.hostname = endpoint.hostname;
   serverUrl.pathname = `/${encodeURIComponent(bucket)}${url.pathname}`;
   const request = await signedHeaderRequest(serverUrl, method, init?.headers);
-  return fetch(request, { signal: init?.signal });
+  return ["GET","HEAD","PUT"].includes(method) ? replayableStorageFetch(fetch,request,{signal:init?.signal}) : fetch(request,{signal:init?.signal});
 }
 
 async function storageFetch(url: URL, init?: RequestInit) {
