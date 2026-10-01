@@ -1,4 +1,4 @@
-CREATE TABLE `bot_storage_files` (
+CREATE TABLE IF NOT EXISTS `bot_storage_files` (
 	`seq` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
 	`owner_key` text NOT NULL,
 	`id` text NOT NULL,
@@ -11,10 +11,10 @@ CREATE TABLE `bot_storage_files` (
 	`parent_id` text
 );
 --> statement-breakpoint
-CREATE UNIQUE INDEX `bot_storage_identity` ON `bot_storage_files` (`owner_key`,`id`);--> statement-breakpoint
-CREATE INDEX `bot_storage_catalog` ON `bot_storage_files` (`owner_key`,`bot_id`,`state`,`seq`);--> statement-breakpoint
-CREATE INDEX `bot_storage_derivatives` ON `bot_storage_files` (`owner_key`,`parent_id`,`state`);--> statement-breakpoint
-CREATE TABLE `bot_storage_identities` (
+CREATE UNIQUE INDEX IF NOT EXISTS `bot_storage_identity` ON `bot_storage_files` (`owner_key`,`id`);--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS `bot_storage_catalog` ON `bot_storage_files` (`owner_key`,`bot_id`,`state`,`seq`);--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS `bot_storage_derivatives` ON `bot_storage_files` (`owner_key`,`parent_id`,`state`);--> statement-breakpoint
+CREATE TABLE IF NOT EXISTS `bot_storage_identities` (
 	`owner_key` text NOT NULL,
 	`id` text NOT NULL,
 	`machine_id` text NOT NULL,
