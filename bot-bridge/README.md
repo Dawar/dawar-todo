@@ -2,6 +2,8 @@
 
 Bots use the owner's existing ChatGPT login in `~/.codex`. Each bot has one native Codex task and one private workspace in `~/bots/<initial-name>`. Display-name changes never move the workspace or replace the task. The six starter Markdown files are the source of truth for identity, behavior, and memory; their current contents are supplied on every new turn and steering message.
 
+Team members also receive current team catalog memory and any of the same six Markdown files present in their shared team folder. A starter team `AGENTS.md` is created only when missing; existing files are preserved. Team files must be real regular files of at most 128 KB, with no symlink traversal. Bots should save important shared decisions and verified useful discoveries during work through `bots_team`: read, merge with current memory, then save with the returned revision and a stable operation ID. The catalog remains the shared-memory source of truth; Markdown files provide supplemental guidance/documentation. Team updates appear on the next submission or explicit read, and do not wake idle teammates. Current primary messages, queue dispatches, scheduled work and steering use fresh team context; retained legacy run submissions refresh team context without replacing their frozen personal/run context.
+
 ## Manager and worker agents
 
 Every human-facing bot is also a persistent manager. Its existing conversation remains the relationship/context hub; substantial work is delegated to separate native Codex workers. No Codex Desktop management tools are required.

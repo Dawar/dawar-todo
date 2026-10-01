@@ -3,7 +3,8 @@ import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { RunStatePort } from "./run-state-port.mjs";
 import { MANAGER_TOOLS, MANAGER_INSTRUCTIONS } from "./manager-tools.mjs";
-import { RUN_INSTRUCTIONS, profileContext, containedPath } from "./profiles.mjs";
+import { RUN_INSTRUCTIONS, profileContext, teamProfileContext, containedPath } from "./profiles.mjs";
+import { teamReference } from "./teams.mjs";
 import { requireTurn, usableTurn, usableTurnId, terminalTurn, requireSteer } from "./native-turn.mjs";
 import { beginTurnDispatch, acknowledgeTurnDispatch, requireDispatchReconciliation,
   observeStartedTurn, observedActiveTurn, projectTerminalTurn, activityUnresolved, requireCurrentActivity,
@@ -388,6 +389,11 @@ export class BackgroundRuns {
     try {
       if (record.primary && !occurrenceReady(this.runtime.scheduleDecisions.ensure(lane.runId))) return;
       await this.load(id);
+      // Retain the original personal/run context, but refresh the current team
+      // at submission rather than inheriting stale membership or shared memory.
+      const profile = { ...context.profile };
+      delete profile.teamProfile;
+      Object.assign(profile, await teamProfileContext(await teamReference(this.runtime, this.store.bot(bot.id))));
       if (activityUnresolved(port, bot.id) && !await reconcileCurrentActivity(port, bot.id)) throw new Error("Run activity is unresolved; no conflicting input was submitted.");
       lane = this.store.get("runLane", id);
       if (record.primary && !occurrenceReady(this.runtime.scheduleDecisions.ensure(lane.runId))) return;
@@ -401,7 +407,7 @@ export class BackgroundRuns {
         cwd: lane.home, approvalPolicy: lane.permission.approvalPolicy, sandboxPolicy: { type: "dangerFullAccess" },
         ...lane.settings, collaborationMode: { mode: "default", settings: { model: lane.settings.model,
           reasoning_effort: lane.settings.effort, developer_instructions: null } }, turnTrigger: "scheduled",
-        additionalContext: { ...context.profile, scheduledTask: { kind: "application",
+        additionalContext: { ...profile, scheduledTask: { kind: "application",
           value: `${this.instructions(lane)}\nSchedule: ${this.store.get("run", lane.runId).title}. Scheduled for ${this.store.get("run", lane.runId).scheduledAt}.\nSelected context: ${context.selectedContext ? JSON.stringify(context.selectedContext) : "None saved; do not assume access to main dialogue."}` } } };
       fence = this.store.transaction(() => {
         const token = beginTurnDispatch(port, bot.id, record.id);

@@ -1419,7 +1419,7 @@ export class BotRuntime extends EventEmitter {
     const input = acceptedInput ?? (staged ? p.stagedInput : await this.messageInput(bot, p));
     const text = String(p.text ?? "").trim();
     await this.load(bot);
-    const additionalContext = await profileContext(bot,teamReference(this,bot));
+    const additionalContext = await profileContext(bot, await teamReference(this, bot));
     if (this.manager)
       additionalContext.managerPolicy = {
         kind: "application",

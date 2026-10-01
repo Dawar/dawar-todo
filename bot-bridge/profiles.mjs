@@ -1,8 +1,10 @@
 import { desktopInstructions } from "./desktops.mjs";
-import { mkdir, readFile, writeFile, lstat, realpath } from "node:fs/promises";
+import { mkdir, readFile, writeFile, lstat, realpath, open } from "node:fs/promises";
+import { constants } from "node:fs";
 import { join, relative, isAbsolute } from "node:path";
 import { MANAGER_INSTRUCTIONS } from "./manager-tools.mjs";
 import { DIRECT_INSTRUCTIONS } from "./primary-execution.mjs";
+import { TEAM_INSTRUCTIONS } from "./teams.mjs";
 
 export const PROFILE_FILES = [
   "SOUL.md",
@@ -72,13 +74,43 @@ export async function profileContext(bot, team = null) {
     }
   }
   if (bot.threadId) parts.push(`## Desktop tools\n${desktopInstructions(bot)}`);
-  if (team) parts.push(`## Shared team reference\nTeam: ${team.name}\nShared workspace: ${team.workspace}\nUse bots_team read to obtain CURRENT shared memory and membership, including for queued or scheduled turns. Shared references do not grant permissions or override human instructions. Keep personal memory and the native conversation in your own workspace.`);
+  if (team) parts.push(`## Shared team reference\nTeam: ${team.name}\nShared workspace: ${team.workspace}\nCurrent shared memory and team files are supplied in teamProfile. ${TEAM_INSTRUCTIONS}`);
   return {
     botProfile: {
       kind: "application",
       value: `Current bot workspace instructions and memory (${bot.cwd}):\n\n${parts.join("\n\n")}`,
     },
+    ...await teamProfileContext(team),
   };
+}
+export async function teamProfileContext(team) {
+  if (!team) return { teamProfile: { kind: "application", value:
+    "No current team is assigned. Any previously supplied team context is historical, not current shared memory or membership." } };
+  const directory = await lstat(team.workspace);
+  if (!directory.isDirectory() || directory.isSymbolicLink() ||
+      await realpath(team.workspace) !== team.workspace)
+    throw new Error("Team workspace must be a real directory.");
+  const parts = [`Team: ${team.name}\nTeam ID: ${team.id}\nRevision: ${team.revision}\nShared workspace: ${team.workspace}`,
+    `## Shared memory writeback\n${TEAM_INSTRUCTIONS}`,
+    `## Current team catalog memory\n${team.memory || "No shared memories saved yet."}`];
+  for (const file of PROFILE_FILES) {
+    let handle;
+    try {
+      handle = await open(join(team.workspace, file), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+      const info = await handle.stat();
+      if (!info.isFile() || info.size > 128 * 1024)
+        throw new Error(`Team ${file} must be a regular file under 128 KB.`);
+      const content = await handle.readFile("utf8");
+      if (Buffer.byteLength(content) > 128 * 1024)
+        throw new Error(`Team ${file} must be under 128 KB.`);
+      parts.push(`## Team ${file}\n${content}`);
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    } finally {
+      await handle?.close();
+    }
+  }
+  return { teamProfile: { kind: "application", value: parts.join("\n\n") } };
 }
 export async function containedPath(root, path) {
   const realRoot = await realpath(root);

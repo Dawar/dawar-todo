@@ -8,6 +8,7 @@ import { deflateSync } from "node:zlib";
 import { Store } from "./store.mjs";
 import { BotRuntime, validateResponse } from "./runtime.mjs";
 import { slugify, cleanName, PROFILE_FILES } from "./profiles.mjs";
+import { readTeam } from "./teams.mjs";
 import { normalizeSchedule, collectDueRuns } from "./schedules.mjs";
 import { signBotTicket, verifyBotTicket, botsOwner } from "../lib/bots-auth.ts";
 import { BotsClient } from "../app/bots/client.ts";
@@ -532,6 +533,37 @@ test("changed profile read for each turn, steering and Stop use mapped thread", 
   await op(runtime, bot.id, "turn.interrupt");
   assert.equal(codex.calls.at(-1).method, "turn/interrupt");
   assert.ok(store.bot(bot.id).activeTurnId);
+});
+test("team memory and files refresh on turn start and steering; membership removal clears them", async t => {
+  const { create, runtime, codex, store } = await setup(t);
+  // The retained generic fake returns {} for steer. This check needs the
+  // protocol's positive acknowledgement, without weakening production guards.
+  const originalCall = codex.call.bind(codex);
+  codex.call = async (method, params) => {
+    const result = await originalCall(method, params);
+    return method === "turn/steer" ? { turnId: params.expectedTurnId } : result;
+  };
+  const bot = await create();
+  const team = store.put("team", { id: `team-${"b".repeat(32)}`, name: "Team", memory: "Start discovery", revision: 1 });
+  runtime.saveBot(bot, { teamId: team.id });
+  const shared = await readTeam(runtime, team.id);
+  await writeFile(join(shared.workspace, "TOOLS.md"), "Shared tools first");
+  await op(runtime, bot.id, "turn.send", { text: "hello" });
+  const start = codex.calls.find(c => c.method === "turn/start");
+  assert.match(start.params.additionalContext.teamProfile.value, /Start discovery/);
+  assert.match(start.params.additionalContext.teamProfile.value, /Shared tools first/);
+  store.put("team", { ...team, memory: "Steer discovery", revision: 2 });
+  await writeFile(join(shared.workspace, "TOOLS.md"), "Shared tools changed");
+  await op(runtime, bot.id, "turn.send", { text: "follow-up" });
+  const steer = codex.calls.filter(c => c.method === "turn/steer").at(-1);
+  assert.match(steer.params.additionalContext.teamProfile.value, /Steer discovery/);
+  assert.match(steer.params.additionalContext.teamProfile.value, /Shared tools changed/);
+  assert.doesNotMatch(steer.params.additionalContext.teamProfile.value, /Start discovery|Shared tools first/);
+  runtime.saveBot(store.bot(bot.id), { teamId: null });
+  await op(runtime, bot.id, "turn.send", { text: "now independent" });
+  const unassigned = codex.calls.filter(c => c.method === "turn/steer").at(-1).params.additionalContext.teamProfile.value;
+  assert.match(unassigned, /No current team is assigned/);
+  assert.doesNotMatch(unassigned, /Steer discovery|Shared tools changed/);
 });
 test("all enabled request families, reconnect snapshot, duplicate device resolution", async (t) => {
   const { create, runtime, codex, store } = await setup(t);
