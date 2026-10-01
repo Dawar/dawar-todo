@@ -1,6 +1,7 @@
 import { botsClient } from "./client";
 import type { BotAttachment, BotArtifact, BotArtifactPage, BotArtifactPreview } from "../../lib/bots-types";
 import { readArtifactCache, writeArtifactCache } from "./artifact-cache";
+import { cloudList, cloudDownload, CloudStorageError } from "./cloud-storage";
 export type GalleryType = "all" | "image" | "pdf" | "document";
 export type GalleryItem = BotAttachment & { createdAt: string | null; botName: string; botColor?: string; direction?: "input" | "output"; version?: string; kind?: BotArtifact["kind"] };
 export type GalleryQuery = { botId?: string; search: string; type: GalleryType; cursor: string | null };
@@ -12,13 +13,16 @@ export const fileType = (file: GalleryItem) => galleryType(file) === "pdf" ? "PD
 /** Native history stays authoritative; this adapter only reads registered metadata/previews. */
 export const artifactSource = {
   async list(query: GalleryQuery, owner: string): Promise<GalleryPage> {
-    const page = await botsClient.rpc<BotArtifactPage>("artifacts.list", query.botId, {
-      limit: 36, cursor: query.cursor, search: query.search.slice(0, 160), type: query.type, direction: "all", sort: "newest",
-    }, undefined, { owner });
+    const filters = { limit:36,cursor:query.cursor,search:query.search.slice(0,160),type:query.type,direction:"all",sort:"newest" };
+    const page = botsClient.storageCatalogAvailable ? await cloudList(owner,()=>botsClient.owner,{...filters,botId:query.botId}) : await botsClient.rpc<BotArtifactPage>("artifacts.list", query.botId, filters, undefined, { owner });
     if (page.items.length > 36) throw new Error("The file page was too large. Refresh the library and try again.");
     return { ...page, items: page.items.map((item) => ({ ...item, version: item.preview.version })), total: "total" in page && typeof page.total === "number" ? page.total : null };
   },
   async preview(item: GalleryItem, owner: string): Promise<Blob> {
+    if (item.cloudState === "ready" || botsClient.storageCatalogAvailable) {
+      try { return (await cloudDownload(owner,()=>botsClient.owner,item.botId,item.id,undefined,true)).blob; }
+      catch (error) { if (!(error instanceof CloudStorageError) || !["no_preview","not_found","not_ready"].includes(error.code) && error.status!==404) throw error; }
+    }
     const preview = await botsClient.rpc<BotArtifactPreview>("artifacts.preview", item.botId, { id: item.id, version: item.version }, undefined, { owner });
     if (preview.status !== "ready") throw new Error(preview.reason || "Preview unavailable.");
     if (preview.mimeType !== "image/webp" || preview.data.length > 174_764) throw new Error("Preview unavailable. Open the original file.");
@@ -67,6 +71,11 @@ export async function artifactPreview(item: GalleryItem, owner: string, online: 
   previews.set(key, promise); return promise;
 }
 export async function readArtifactOriginal(item: GalleryItem, owner: string, signal: AbortSignal) {
+  signal.throwIfAborted();
+  if (item.cloudState === "ready" || botsClient.storageCatalogAvailable) {
+    try { const {blob,name}=await cloudDownload(owner,()=>botsClient.owner,item.botId,item.id,signal); return new File([blob],name,{type:blob.type}); }
+    catch (error) { if (!(error instanceof CloudStorageError) || !["not_found","not_ready"].includes(error.code) && error.status!==404) throw error; }
+  }
   const parts: Uint8Array[] = []; let offset = 0, mimeType = item.mimeType, name = item.name;
   do {
     signal.throwIfAborted(); if (botsClient.owner !== owner) throw new Error("The account changed.");

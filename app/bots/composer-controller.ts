@@ -7,9 +7,9 @@ import {
 } from "./draft-store";
 
 export type ComposerTransport = {
-  owner: string; online: boolean;
+  owner: string; online: boolean; storageAvailable?: boolean;
   rpc: (method: Submission["method"] | "queue.list" | "runs.receipt", botId: string, params: Record<string, unknown>, id: string | undefined, options: { owner: string; managed: boolean }) => Promise<unknown>;
-  upload: (botId: string, file: File, progress: (value: number) => void, id: string, owner: string) => Promise<BotAttachment>;
+  upload: (botId: string, file: File, progress: (value: number) => void, id: string, owner: string, mode?:"cloud"|"legacy") => Promise<BotAttachment>;
   download: (botId: string, id: string, owner?: string) => Promise<{ blob: Blob }>;
 };
 type QueuedChange = { change: DraftChange; bytes?: Map<string, Blob> };
@@ -210,18 +210,17 @@ export class BotComposer {
     this.notify();
   }
   async restartFailedUploads() {
-    // A server may lose an incomplete upload checkpoint. Explicitly starting a
-    // fresh transfer keeps the same local file/bytes; it never submits a message.
+    // Retry the retained upload identity, including a lost cloud receipt.
     for (const file of this.draft.files) if (file.error && !file.remote && !this.transferring.has(file.id))
-      this.enqueue({ kind: "restartUpload", id: file.id, uploadId: crypto.randomUUID() });
+      this.enqueue({ kind: "restartUpload", id: file.id, uploadId: file.uploadMode === "cloud" ? file.uploadId ?? file.id : crypto.randomUUID() });
     try { await this.flush(); await this.resumeUploads(true); } catch { /* storageError is visible */ }
   }
   async resumeUploads(retry = false) {
-    if (!this.ready || !this.canUseOwner || !this.transport.online || this.storageError) return;
+    if (!this.ready || !this.canUseOwner || !(this.transport.online || this.transport.storageAvailable) || this.storageError) return;
     // Sequential per controller; a second invocation is harmless.
     const files = [...new Map(Object.values(this.persisted.slots).flatMap((d) => d.files).map((f) => [f.id, f])).values()];
     for (const file of files) {
-      if (!this.canUseOwner || !this.transport.online) return;
+      if (!this.canUseOwner || !(this.transport.online || this.transport.storageAvailable)) return;
       const current = Object.values(this.persisted.slots).flatMap((d) => d.files).find((f) => f.id === file.id);
       if (!current || this.transferring.has(file.id) || (current.error && !retry)) continue;
       if (current.remote && current.hasBytes) continue;
@@ -237,9 +236,12 @@ export class BotComposer {
           const bytes = await this.store.file(this.owner, this.storageKey, file.id);
           if (!bytes) throw new Error("Attachment bytes are unavailable. Retry recovery before sending.");
           if (!this.canUseOwner || !Object.values(this.record.slots).some((d) => d.files.some((f) => f.id === file.id))) continue;
+          let mode=file.uploadMode ?? (this.transport.storageAvailable ? "cloud" : "legacy");
+          if (!file.uploadMode) { this.enqueue({kind:"uploadMode",id:file.id,mode}); await this.flush(); }
+          mode=Object.values(this.persisted.slots).flatMap(draft=>draft.files).find(current=>current.id===file.id)?.uploadMode ?? mode;
           const uploaded = await this.transport.upload(this.botId, new File([bytes], file.name, { type: file.mimeType }), (value) => {
             this.progress.set(file.id, value); this.notify();
-          }, file.uploadId ?? file.id, this.owner);
+          }, file.uploadId ?? file.id, this.owner,mode);
           if (!this.canUseOwner) return;
           if (!uploaded?.ready || uploaded.botId !== this.botId || !uploaded.id) throw new Error("The server did not confirm this file upload. Your local bytes are retained.");
           this.enqueue({ kind: "uploaded", id: file.id, uploadId: file.uploadId ?? file.id, remote: uploaded });

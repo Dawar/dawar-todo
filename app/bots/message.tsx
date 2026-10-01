@@ -198,7 +198,7 @@ export function AttachmentImage({
 }) {
   const [url, setUrl] = useState(""), [visible, setVisible] = useState(false);
   const placeholder = useRef<HTMLSpanElement>(null);
-  const online = useSyncExternalStore(botsClient.subscribe, () => botsClient.online, () => false);
+  const online = useSyncExternalStore(botsClient.subscribe, () => botsClient.online || botsClient.storageCatalogAvailable, () => false);
   useEffect(() => {
     const observer = new IntersectionObserver((entries) => { if (entries.some((entry) => entry.isIntersecting)) setVisible(true); }, { rootMargin: "200px" });
     if (placeholder.current) observer.observe(placeholder.current);

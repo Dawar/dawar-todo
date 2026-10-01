@@ -9,6 +9,7 @@ class ComposerService {
   private started = false;
   private owner = "";
   private online = false;
+  private storageAvailable = false;
   error = "";
   private revision = 0;
   snapshot = () => this.revision;
@@ -100,9 +101,11 @@ class ComposerService {
     client.subscribe(() => {
       const reconnected = client.online && (!this.online || this.owner !== client.owner);
       const changedOwner = this.owner !== client.owner;
+      const storageConnected = client.storageAvailable && !this.storageAvailable;
+      this.storageAvailable = client.storageAvailable;
       this.owner = client.owner; this.online = client.online;
-      if (changedOwner || reconnected) void this.recoverOwner();
-      if (reconnected) for (const c of this.controllers.values()) if (c.owner === client.owner) {
+      if (changedOwner || reconnected || storageConnected) void this.recoverOwner();
+      if (reconnected || storageConnected) for (const c of this.controllers.values()) if (c.owner === client.owner) {
         void c.resumeUploads(true); void c.reconcile();
       }
     });

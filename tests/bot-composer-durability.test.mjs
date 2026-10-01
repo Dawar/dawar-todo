@@ -26,6 +26,24 @@ function setup(legacy = storage()) {
   return { ...env, store, composer, transport, calls, legacy, BotDraftStore, DRAFT_DATABASE };
 }
 const staged = (id, extra = {}) => ({ id, name: `${id}.png`, mimeType: 'image/png', size: 5, hasBytes: true, ...extra });
+
+test('cloud transfer mode and original upload ID survive a failed upload, reload and explicit retry while bridge is offline',async()=>{
+  const env=setup();env.transport.storageAvailable=true;const ids=[];
+  env.transport.upload=async(botId,file,progress,id,owner,mode)=>{
+    ids.push(id);assert.equal(mode,'cloud');assert.equal(owner,'alice');
+    if(ids.length===1) throw new Error('Cloud acknowledgement lost');
+    return {id,botId,name:file.name,size:file.size,mimeType:file.type,ready:true,cloudState:'ready'};
+  };
+  const first=env.composer();await first.open();await first.addFiles([new File(['ready'],'retained.txt',{type:'text/plain'})]);
+  await until(()=>Boolean(first.draft.files[0]?.error));await first.flush();
+  const original=first.draft.files[0];assert.equal(original.uploadMode,'cloud');assert.equal(original.hasBytes,true);
+  const reopened=env.composer();await reopened.open();await reopened.restartFailedUploads();
+  await until(()=>Boolean(reopened.draft.files[0]?.remote));await reopened.flush();
+  assert.ok(ids.length>=2);assert.ok(ids.every(id=>id===original.uploadId || id===original.id));
+  assert.equal(reopened.draft.files[0].remote.id,original.uploadId??original.id);
+  assert.equal(await (await env.store.file('alice','bot-a',original.id)).text(),'ready');
+  assert.equal(env.calls.filter(call=>call[0]==='turn.send'||call[0]==='queue.add').length,0);
+});
 const text = (value, version, base = 'legacy', slot = 'normal') => ({ kind: 'text', slot, text: value, version, base });
 async function abortPuts(run, name = 'drafts') {
   const original = IDBObjectStore.prototype.put;

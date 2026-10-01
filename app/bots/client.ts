@@ -1,4 +1,5 @@
 import { readBotHistory, queueBotHistory, type CachedBotHistory } from "./history-cache.ts";
+import { cloudStatus, cloudUpload, cloudDownload, CloudStorageError } from "./cloud-storage";
 import { botFailureOutcome } from "../../lib/bots-response.ts";
 import { validRunState } from "./run-context";
 import type { BotOperations, BotSnapshot, WorkState } from "./single-thread-contract";
@@ -96,6 +97,8 @@ export class BotsClient {
   snapshot: BotSnapshot | null = null;
   eventChunks = new Map<number, { bytes: Uint8Array; received: number }>();
   online = false;
+  storageAvailable = false;
+  storageCatalogAvailable = false;
   error = "";
   timeZone = "UTC";
   owner = "";
@@ -186,6 +189,8 @@ export class BotsClient {
     this.snapshotPatches.clear();
     this.histories.clear();
     this.owner = "";
+    this.storageAvailable = false;
+    this.storageCatalogAvailable = false;
   }
   clearOwnerCache(broadcast = true) {
     // Revoke access, not data. Drafts/bytes and legacy originals remain owned.
@@ -199,6 +204,14 @@ export class BotsClient {
     if (this.owner !== owner) this.detachOwner();
     this.owner = owner;
     this.snapshot ??= this.cache<BotSnapshot | null>("snapshot", null);
+    void this.refreshStorage(owner);
+  }
+  private async refreshStorage(owner:string) {
+    try {
+      const status=await cloudStatus(owner,()=>this.owner);
+      if (this.owner!==owner) return;
+      this.storageAvailable=status.enabled; this.storageCatalogAvailable=status.catalogReady; this.notify();
+    } catch { if (this.owner===owner) { this.storageAvailable=false; this.storageCatalogAvailable=false; this.notify(); } }
   }
   async session(): Promise<Session> {
     const epoch = this.connectionEpoch;
@@ -581,7 +594,8 @@ export class BotsClient {
       }
     });
   }
-  async upload(botId: string, file: File, onProgress: (value: number) => void, uploadId = crypto.randomUUID(), owner = this.owner) {
+  async upload(botId: string, file: File, onProgress: (value: number) => void, uploadId = crypto.randomUUID(), owner = this.owner,mode?:"cloud"|"legacy") {
+    if (mode === "cloud" || mode !== "legacy" && (await cloudStatus(owner,()=>this.owner)).enabled) return cloudUpload(owner,()=>this.owner,botId,file,uploadId,onProgress);
     const options = { owner, managed: true };
     const a = await this.rpc<BotAttachment>("attachments.begin", botId, {
       name: file.name,
@@ -606,12 +620,15 @@ export class BotsClient {
     }
     return this.rpc<BotAttachment>("attachments.finish", botId, { id: a.id }, `${uploadId}:finish`, options);
   }
-  async download(botId: string, id: string, owner = this.owner) {
+  async download(botId: string, id: string, owner = this.owner, signal?:AbortSignal) {
+    try { return await cloudDownload(owner,()=>this.owner,botId,id,signal); }
+    catch (error) { if (!(error instanceof CloudStorageError) || !["not_found","not_ready"].includes(error.code) && error.status!==404) throw error; }
     const chunks: Uint8Array[] = [];
     let offset = 0,
       name = "download",
       mimeType = "application/octet-stream";
     do {
+      signal?.throwIfAborted();
       const p = await this.rpc<{
         data: string;
         nextOffset: number;

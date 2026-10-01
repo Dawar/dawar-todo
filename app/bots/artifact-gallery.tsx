@@ -1,5 +1,5 @@
 "use client";
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { ArrowLeft, ChevronLeft, ChevronRight, Search, X, Images, FolderOpen, CloudOff, RefreshCw, Download, Paperclip } from "lucide-react";
 import type { Bot } from "../../lib/bots-types";
 import { botsClient } from "./client";
@@ -36,15 +36,17 @@ const monthName = (date: string | null) => {
   const value = new Date(date ?? ""); return Number.isFinite(value.getTime()) ? value.toLocaleDateString(undefined, { month: "long", year: "numeric" }) : "Date unknown";
 };
 
-type GalleryPosition = { search: string; type: GalleryType; botFilter: string; cursors: (string | null)[]; scroll: number };
+type GalleryPosition = { search: string; type: GalleryType; botFilter: string; cursors: (string | null)[]; scroll: number; cloudCatalog?:boolean };
 // Retain navigation, never original file bytes. Owner key prevents cross-account restoration.
 const positions = new Map<string, GalleryPosition>();
 const BotChoices = memo(function BotChoices({ bots }: { bots: Bot[] }) {
   return bots.map((bot) => <option key={bot.id} value={bot.id}>{bot.name}</option>);
 }, (before, after) => before.bots.length === after.bots.length && before.bots.every((bot, i) => bot.id === after.bots[i].id && bot.name === after.bots[i].name));
-export function ArtifactGallery({ bot, bots, owner, online, onClose }: { bot?: Bot; bots: Bot[]; owner: string; online: boolean; onClose: () => void }) {
+export function ArtifactGallery({ bot, bots, owner, online:bridgeOnline, onClose }: { bot?: Bot; bots: Bot[]; owner: string; online: boolean; onClose: () => void }) {
+  const cloudOnline=useSyncExternalStore(botsClient.subscribe,()=>botsClient.owner===owner && botsClient.storageCatalogAvailable,()=>false);
+  const online=bridgeOnline || cloudOnline;
   const positionKey = JSON.stringify([owner, bot?.id ?? "global"]);
-  const [initial] = useState(() => positions.get(positionKey)), saved = useRef(initial);
+  const [initial] = useState(() => { const position=positions.get(positionKey); return position && Boolean(position.cloudCatalog)!==cloudOnline ? {...position,cursors:[null],scroll:0} : position; }), saved = useRef(initial);
   const [search, setSearch] = useState(initial?.search ?? ""), [settledSearch, setSettledSearch] = useState(initial?.search.trim() ?? ""), [type, setType] = useState<GalleryType>(initial?.type ?? "all"), [botFilter, setBotFilter] = useState(initial?.botFilter ?? "");
   const [cursors, setCursors] = useState<(string | null)[]>(initial?.cursors ?? [null]);
   const [selected, setSelected] = useState<GalleryItem | null>(null), [download, setDownload] = useState(""), [downloadError, setDownloadError] = useState("");
@@ -53,6 +55,12 @@ export function ArtifactGallery({ bot, bots, owner, online, onClose }: { bot?: B
   const state = useGalleryPage(query, owner, online);
   const [updated, setUpdated] = useState(false), retry = state.retry;
   const refreshTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const catalogMode=useRef(cloudOnline);
+  useEffect(()=>{
+    if(catalogMode.current===cloudOnline) return;
+    catalogMode.current=cloudOnline;setCursors([null]);retry();
+    // Catalog cursors are scoped to their backend; retain the user's filters.
+  },[cloudOnline,retry]);
   const refresh = useCallback(() => {
     if (refreshTimer.current) return;
     refreshTimer.current = setTimeout(() => {
@@ -61,12 +69,12 @@ export function ArtifactGallery({ bot, bots, owner, online, onClose }: { bot?: B
     }, 350);
   }, [query.cursor, retry]);
   useEffect(() => () => { clearTimeout(refreshTimer.current); refreshTimer.current = undefined; }, [refresh]);
-  const discovery = useArtifactDiscovery(owner, query.botId ? [query.botId] : bots.map((b) => b.id), online, refresh);
+  const discovery = useArtifactDiscovery(owner, query.botId ? [query.botId] : bots.map((b) => b.id), bridgeOnline, refresh);
   useEffect(() => { const timer = setTimeout(() => { if (search.trim() !== settledSearch) { setSettledSearch(search.trim()); setCursors([null]); scroll.current?.scrollTo(0, 0); } }, 250); return () => clearTimeout(timer); }, [search, settledSearch]);
-  const navigation = useRef<GalleryPosition>({ search, type, botFilter, cursors, scroll: 0 });
+  const navigation = useRef<GalleryPosition>({ search, type, botFilter, cursors, scroll: 0,cloudCatalog:cloudOnline });
   useLayoutEffect(() => {
-    navigation.current = { search, type, botFilter, cursors, scroll: scroll.current?.scrollTop ?? 0 };
-  }, [search, type, botFilter, cursors]);
+    navigation.current = { search, type, botFilter, cursors, scroll: scroll.current?.scrollTop ?? 0,cloudCatalog:cloudOnline };
+  }, [search, type, botFilter, cursors,cloudOnline]);
   useLayoutEffect(() => {
     if (state.page && saved.current) { scroll.current?.scrollTo(0, saved.current.scroll); saved.current = undefined; }
   }, [state.page]);
@@ -126,7 +134,9 @@ export function ArtifactGallery({ bot, bots, owner, online, onClose }: { bot?: B
     {selected && <ArtifactViewer key={`${owner}:${selected.id}`} item={selected} owner={owner} online={online} onClose={closePreview} />}
   </section>;
 }
-export function BotAttachmentsEntry({ bot, owner, online, onOpen }: { bot: Bot; owner: string; online: boolean; onOpen: () => void }) {
+export function BotAttachmentsEntry({ bot, owner, online:bridgeOnline, onOpen }: { bot: Bot; owner: string; online: boolean; onOpen: () => void }) {
+  const cloudOnline=useSyncExternalStore(botsClient.subscribe,()=>botsClient.owner===owner && botsClient.storageCatalogAvailable,()=>false);
+  const online=bridgeOnline || cloudOnline;
   const query = useMemo(() => ({ botId: bot.id, search: "", type: "all" as const, cursor: null }), [bot.id]);
   const { page, loading } = useGalleryPage(query, owner, online);
   return <button className="bots-attachments-entry" onClick={onOpen}><span className="bots-attachments-symbol"><Paperclip size={21} /></span><span><strong>Attachments</strong><small>Images, documents & shared files</small></span><span className="bots-attachments-count">{page?.total != null ? page.total : loading ? "…" : page?.items.length ? `${page.items.length}${page.nextCursor ? "+" : ""}` : "—"}</span><ChevronRight size={18} /></button>;

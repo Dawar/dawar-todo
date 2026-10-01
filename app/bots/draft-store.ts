@@ -4,7 +4,7 @@ import type { BotAttachment, BridgeRequest } from "../../lib/bots-types";
 export const DRAFT_DATABASE = "dawar-bot-drafts";
 export type StagedFile = {
   id: string; name: string; mimeType: string; size: number;
-  remote?: BotAttachment; uploadId?: string; hasBytes: boolean; error?: string;
+  remote?: BotAttachment; uploadId?: string; uploadMode?: "cloud" | "legacy"; hasBytes: boolean; error?: string;
 };
 export type Draft = {
   text: string; textVersion: string; files: StagedFile[]; queueId?: string; queueRevision?: number;
@@ -32,6 +32,7 @@ export type DraftChange =
   | { kind: "remove"; slot: string; id: string }
   | { kind: "uploaded"; id: string; uploadId: string; remote: BotAttachment }
   | { kind: "restartUpload"; id: string; uploadId: string }
+  | { kind: "uploadMode"; id: string; mode: "cloud" | "legacy" }
   | { kind: "fileError"; id: string; error?: string }
   | { kind: "bytes"; id: string }
   | { kind: "edit"; slot: string; draft: Draft }
@@ -80,12 +81,13 @@ export function changeDraft(source: DraftRecord, change: DraftChange): DraftReco
     for (const file of change.files) if (!draft.files.some((f) => f.id === file.id)) draft.files.push(file);
   } else if (change.kind === "remove") {
     record.slots[change.slot].files = record.slots[change.slot].files.filter((f) => f.id !== change.id);
-  } else if (change.kind === "uploaded" || change.kind === "restartUpload" || change.kind === "fileError" || change.kind === "bytes") {
+  } else if (change.kind === "uploaded" || change.kind === "restartUpload" || change.kind === "uploadMode" || change.kind === "fileError" || change.kind === "bytes") {
     for (const draft of Object.values(record.slots)) {
       const file = draft.files.find((f) => f.id === change.id);
       if (!file) continue; // A late upload must not resurrect a removed file.
       if (change.kind === "uploaded" && (file.uploadId ?? file.id) === change.uploadId) { file.remote = change.remote; delete file.error; }
       if (change.kind === "restartUpload" && !file.remote) { file.uploadId = change.uploadId; delete file.error; }
+      if (change.kind === "uploadMode" && !file.remote && !file.uploadMode) file.uploadMode = change.mode;
       if (change.kind === "fileError") file.error = change.error;
       if (change.kind === "bytes") { file.hasBytes = true; delete file.error; }
     }
