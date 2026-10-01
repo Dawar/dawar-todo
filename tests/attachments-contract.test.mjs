@@ -6,7 +6,7 @@ const root = new URL("../", import.meta.url);
 
 test("stores private task images with optimized variants and recovery metadata", async () => {
   const [attachments, todos, schema, migration, uploadMigration, mediaMigration, hosting, packageJson] = await Promise.all([
-    readFile(new URL("db/attachments.ts", root), "utf8"),
+    readFile(new URL("db/attachments.ts", root), "utf8").then(async source => source + "\n" + await readFile(new URL("lib/s3-storage.ts", root), "utf8")),
     readFile(new URL("db/todos.ts", root), "utf8"),
     readFile(new URL("db/schema.ts", root), "utf8"),
     readFile(new URL("drizzle/0004_abnormal_onslaught.sql", root), "utf8"),
@@ -45,7 +45,7 @@ test("stores private task images with optimized variants and recovery metadata",
   assert.match(attachments, /serverUrl\.pathname = `\/\$\{encodeURIComponent\(bucket\)\}\$\{url\.pathname\}`/);
   assert.match(attachments, /signedHeaderRequest/);
   assert.match(attachments, /x-amz-content-sha256/);
-  assert.match(attachments, /host;x-amz-content-sha256;x-amz-date/);
+  assert.match(attachments, /canonical\.map\(\(\[name\]\) => name\)\.join\(";"\)/);
   assert.match(attachments, /headers\.set\("Authorization"/);
   assert.match(attachments, /canonicalRequest/);
   assert.match(attachments, /UNSIGNED-PAYLOAD/);

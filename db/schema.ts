@@ -1,6 +1,17 @@
 import { sql } from "drizzle-orm";
 import { index, integer, primaryKey, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
+export const botStorageIdentities = sqliteTable("bot_storage_identities", {
+  ownerKey:text("owner_key").notNull(), id:text("id").notNull(), machineId:text("machine_id").notNull(), metadata:text("metadata").notNull(),
+},table=>[primaryKey({columns:[table.ownerKey,table.id]})]);
+export const botStorageFiles = sqliteTable("bot_storage_files", {
+  seq:integer("seq").primaryKey({autoIncrement:true}),ownerKey:text("owner_key").notNull(),id:text("id").notNull(),botId:text("bot_id").notNull(),
+  fingerprint:text("fingerprint").notNull(),stagingKey:text("staging_key").notNull(),objectKey:text("object_key").notNull(),state:text("state").notNull(),metadata:text("metadata").notNull(),parentId:text("parent_id"),
+},table=>[uniqueIndex("bot_storage_identity").on(table.ownerKey,table.id),index("bot_storage_catalog").on(table.ownerKey,table.botId,table.state,table.seq),index("bot_storage_derivatives").on(table.ownerKey,table.parentId,table.state)]);
+export const botStorageReady = sqliteTable("bot_storage_ready", {
+  seq:integer("seq").primaryKey({autoIncrement:true}),ownerKey:text("owner_key").notNull(),id:text("id").notNull(),
+},table=>[uniqueIndex("bot_storage_ready_identity").on(table.ownerKey,table.id)]);
+
 export const todoBotPushOwners = sqliteTable("todo_bot_push_owners", {
   subscriptionId: text("subscription_id").primaryKey(), ownerKey: text("owner_key").notNull(),
 }, table => [index("todo_bot_push_owners_owner_idx").on(table.ownerKey)]);

@@ -144,6 +144,8 @@ export type BotAttachment = {
   size: number;
   ready: boolean;
   path?: string;
+  sha256?: string;
+  cloudState?: "pending" | "transferring" | "ready" | "failed";
   /** Present on delivered history/output metadata; previews remain lazy. */
   createdAt?: string | null;
   artifact?: boolean;

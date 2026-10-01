@@ -1,3 +1,4 @@
+import { createS3Storage } from "../lib/s3-storage";
 import { attachmentErrorDetails, type AttachmentPhase } from "../lib/attachment-errors";
 import type { AttachmentRecovery } from "../lib/attachment-recovery";
 import { env, waitUntil } from "cloudflare:workers";
@@ -13,7 +14,6 @@ export const MAX_FILE_ATTACHMENT_BYTES = 100 * 1024 * 1024;
 const MAX_IMAGE_PIXELS = 100_000_000;
 const DRAFT_LIFETIME_HOURS = 24;
 const DELETED_RETENTION_DAYS = 7;
-const SIGNED_URL_SECONDS = 60 * 60;
 const CLEANUP_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 type RuntimeEnv = {
@@ -25,9 +25,8 @@ type RuntimeEnv = {
   IMAGES: ImagesBinding;
 };
 
-type StorageConfig = { bucket: string; endpoint: URL; region: string };
-
-let cachedStorageConfig: StorageConfig | null = null;
+let cachedStorage: ReturnType<typeof createS3Storage> | null = null;
+function storage() { return cachedStorage ??= createS3Storage(runtime()); }
 let nextCleanupCheckAt = 0;
 
 export type AttachmentRow = {
@@ -81,46 +80,6 @@ function database() {
   return db;
 }
 
-function storageConfig() {
-  if (cachedStorageConfig) return cachedStorageConfig;
-  const current = runtime();
-  const missing = [
-    "S3_ACCESS_KEY",
-    "S3_ACCESS_KEY_ID",
-    "S3_BUCKET",
-    "S3_ENDPOINT_URL",
-  ].filter((key) => !current[key as keyof RuntimeEnv]);
-  if (missing.length) throw new Error(`Image storage is missing ${missing.join(", ")}.`);
-  const endpointValue = /^https?:\/\//i.test(current.S3_ENDPOINT_URL)
-    ? current.S3_ENDPOINT_URL
-    : `https://${current.S3_ENDPOINT_URL}`;
-  const endpointUrl = new URL(endpointValue);
-  const bucketPrefix = `${current.S3_BUCKET}.`;
-  if (endpointUrl.hostname.startsWith(bucketPrefix)) endpointUrl.hostname = endpointUrl.hostname.slice(bucketPrefix.length);
-  endpointUrl.pathname = "/";
-  endpointUrl.search = "";
-  endpointUrl.hash = "";
-  const endpointRegion = endpointUrl.hostname.endsWith(".digitaloceanspaces.com")
-    ? endpointUrl.hostname.split(".")[0]
-    : "us-east-1";
-  // DigitalOcean's JavaScript S3 guidance uses the AWS-compatible signing
-  // region while the physical Spaces region remains encoded in the endpoint.
-  const signingRegion = endpointUrl.hostname.endsWith(".digitaloceanspaces.com")
-    ? "us-east-1"
-    : endpointRegion;
-  cachedStorageConfig = {
-    bucket: current.S3_BUCKET,
-    endpoint: endpointUrl,
-    region: signingRegion,
-  };
-  console.info("[todo-attachments] private storage configured", {
-    endpointRegion,
-    signingRegion,
-    virtualHosted: true,
-  });
-  return cachedStorageConfig;
-}
-
 function normalizedFormat(value: string) {
   const format = value.toLowerCase().replace(/^image\//, "");
   if (format === "jpg") return "jpeg";
@@ -137,56 +96,12 @@ function validateDraftToken(value: string) {
   return value;
 }
 
-function storageUrl(key?: string, query?: Record<string, string>) {
-  const { bucket, endpoint } = storageConfig();
-  const url = new URL(endpoint);
-  url.hostname = `${bucket}.${url.hostname}`;
-  url.pathname = key ? `/${key.split("/").map(encodeURIComponent).join("/")}` : "/";
-  Object.entries(query ?? {}).forEach(([name, value]) => url.searchParams.set(name, value));
-  return url;
-}
-
-async function signedStorageResponse(url: URL, init?: RequestInit) {
-  const method = init?.method ?? "GET";
-  const { bucket, endpoint } = storageConfig();
-  const serverUrl = new URL(url);
-  serverUrl.hostname = endpoint.hostname;
-  serverUrl.pathname = `/${encodeURIComponent(bucket)}${url.pathname}`;
-  const request = await signedHeaderRequest(serverUrl, method, init?.headers);
-  return fetch(request);
-}
-
-async function storageFetch(url: URL, init?: RequestInit) {
-  const response = await signedStorageResponse(url, init);
-  if (!response.ok) throw await storageResponseError("Private image storage", response);
-  return response;
-}
-
-async function storageResponseError(stage: string, response: Response) {
-  const body = await response.text().catch(() => "");
-  const code = body.match(/<Code>([^<]+)<\/Code>/i)?.[1] ?? null;
-  console.error("[todo-attachments] storage request failed", {
-    stage,
-    status: response.status,
-    code,
-    requestId: response.headers.get("x-amz-request-id"),
-  });
-  return new Error(`${stage} returned ${response.status}${code ? ` (${code})` : ""}.`);
-}
-
-async function deleteKeys(keys: string[]) {
-  await Promise.all([...new Set(keys.filter(Boolean))].map(async (key) => {
-    const response = await signedStorageResponse(storageUrl(key), { method: "DELETE" });
-    if (!response.ok && response.status !== 404) throw await storageResponseError("Private image cleanup", response);
-  }));
-}
-
-async function signedObjectUrl(key: string, downloadName?: string) {
-  const url = storageUrl(key, {
-    ...(downloadName ? { "response-content-disposition": `attachment; filename*=UTF-8''${encodeURIComponent(downloadName)}` } : {}),
-  });
-  return signedQueryUrl(url, "GET", SIGNED_URL_SECONDS);
-}
+function storageUrl(key?: string, query?: Record<string, string>) { return storage().storageUrl(key, query); }
+function storageFetch(url: URL, init?: RequestInit) { return storage().storageFetch(url, init); }
+function deleteKeys(keys: string[]) { return storage().deleteKeys(keys); }
+function signedObjectUrl(key: string, name?: string) { return storage().signedObjectUrl(key, name); }
+function signedPostTarget(key: string, type: string, max: number) { return storage().signedPostTarget(key, type, max); }
+function storageResponseError(stage: string, response: Response) { return storage().storageResponseError(stage, response); }
 
 async function mapAttachment(row: AttachmentRow): Promise<TodoAttachment> {
   const kind = row.kind ?? "image";
@@ -359,140 +274,6 @@ function targetValues(target: UploadTarget) {
     isDraft,
     draftToken: isDraft ? validateDraftToken(target.draftToken) : null,
     todoId: isDraft ? null : target.todoId,
-  };
-}
-
-function hmac(key: string | ArrayBuffer, value: string) {
-  const bytes = typeof key === "string" ? new TextEncoder().encode(key) : key;
-  return crypto.subtle.importKey("raw", bytes, { name: "HMAC", hash: "SHA-256" }, false, ["sign"])
-    .then((cryptoKey) => crypto.subtle.sign("HMAC", cryptoKey, new TextEncoder().encode(value)));
-}
-
-function hex(value: ArrayBuffer) {
-  return [...new Uint8Array(value)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
-function awsEncode(value: string) {
-  return encodeURIComponent(value).replace(/[!'()*]/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`);
-}
-
-function signatureKey(date: string, region: string) {
-  return hmac(`AWS4${runtime().S3_ACCESS_KEY}`, date)
-    .then((dateKey) => hmac(dateKey, region))
-    .then((regionKey) => hmac(regionKey, "s3"))
-    .then((serviceKey) => hmac(serviceKey, "aws4_request"));
-}
-
-async function sha256Hex(value: string) {
-  return hex(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)));
-}
-
-async function signedHeaderRequest(input: URL, method: string, inputHeaders?: HeadersInit) {
-  const current = runtime();
-  const { region } = storageConfig();
-  const url = new URL(input);
-  const amzDate = new Date().toISOString().replace(/[:-]|\.\d{3}/g, "");
-  const date = amzDate.slice(0, 8);
-  const scope = `${date}/${region}/s3/aws4_request`;
-  const payloadHash = await sha256Hex("");
-  const headers = new Headers(inputHeaders);
-  headers.set("x-amz-content-sha256", payloadHash);
-  headers.set("x-amz-date", amzDate);
-  const canonicalPath = url.pathname.split("/").map((segment) => {
-    try { return awsEncode(decodeURIComponent(segment)); } catch { return awsEncode(segment); }
-  }).join("/");
-  const canonicalQuery = [...url.searchParams]
-    .map(([name, value]) => [awsEncode(name), awsEncode(value)] as const)
-    .sort(([nameA, valueA], [nameB, valueB]) => nameA < nameB ? -1 : nameA > nameB ? 1 : valueA < valueB ? -1 : valueA > valueB ? 1 : 0)
-    .map(([name, value]) => `${name}=${value}`)
-    .join("&");
-  const signedHeaders = "host;x-amz-content-sha256;x-amz-date";
-  const canonicalHeaders = [
-    `host:${url.host}`,
-    `x-amz-content-sha256:${payloadHash}`,
-    `x-amz-date:${amzDate}`,
-    "",
-  ].join("\n");
-  const canonicalRequest = [
-    method.toUpperCase(),
-    canonicalPath,
-    canonicalQuery,
-    canonicalHeaders,
-    signedHeaders,
-    payloadHash,
-  ].join("\n");
-  const stringToSign = ["AWS4-HMAC-SHA256", amzDate, scope, await sha256Hex(canonicalRequest)].join("\n");
-  const signature = hex(await hmac(await signatureKey(date, region), stringToSign));
-  headers.set("Authorization", `AWS4-HMAC-SHA256 Credential=${current.S3_ACCESS_KEY_ID}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}`);
-  return new Request(url, { method, headers });
-}
-
-async function signedQueryUrl(input: URL, method: string, expires: number) {
-  const current = runtime();
-  const { region } = storageConfig();
-  const url = new URL(input);
-  const amzDate = new Date().toISOString().replace(/[:-]|\.\d{3}/g, "");
-  const date = amzDate.slice(0, 8);
-  const scope = `${date}/${region}/s3/aws4_request`;
-  url.searchParams.set("X-Amz-Algorithm", "AWS4-HMAC-SHA256");
-  url.searchParams.set("X-Amz-Credential", `${current.S3_ACCESS_KEY_ID}/${scope}`);
-  url.searchParams.set("X-Amz-Date", amzDate);
-  url.searchParams.set("X-Amz-Expires", String(expires));
-  url.searchParams.set("X-Amz-SignedHeaders", "host");
-  const canonicalPath = url.pathname.split("/").map((segment) => {
-    try { return awsEncode(decodeURIComponent(segment)); } catch { return awsEncode(segment); }
-  }).join("/");
-  const canonicalQuery = [...url.searchParams]
-    .map(([name, value]) => [awsEncode(name), awsEncode(value)] as const)
-    .sort(([nameA, valueA], [nameB, valueB]) => nameA < nameB ? -1 : nameA > nameB ? 1 : valueA < valueB ? -1 : valueA > valueB ? 1 : 0)
-    .map(([name, value]) => `${name}=${value}`)
-    .join("&");
-  const canonicalRequest = [
-    method.toUpperCase(),
-    canonicalPath,
-    canonicalQuery,
-    `host:${url.host}\n`,
-    "host",
-    "UNSIGNED-PAYLOAD",
-  ].join("\n");
-  const requestHash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonicalRequest));
-  const stringToSign = ["AWS4-HMAC-SHA256", amzDate, scope, hex(requestHash)].join("\n");
-  url.searchParams.set("X-Amz-Signature", hex(await hmac(await signatureKey(date, region), stringToSign)));
-  return url.toString().replaceAll("+", "%20");
-}
-
-async function signedPostTarget(key: string, contentType: string, maximumBytes: number) {
-  const current = runtime();
-  const { bucket, endpoint, region } = storageConfig();
-  const now = new Date();
-  const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, "");
-  const date = amzDate.slice(0, 8);
-  const credential = `${current.S3_ACCESS_KEY_ID}/${date}/${region}/s3/aws4_request`;
-  const fields = {
-    key,
-    "Content-Type": contentType,
-    success_action_status: "204",
-    "x-amz-algorithm": "AWS4-HMAC-SHA256",
-    "x-amz-credential": credential,
-    "x-amz-date": amzDate,
-  };
-  const policy = btoa(JSON.stringify({
-    expiration: new Date(now.valueOf() + 15 * 60 * 1000).toISOString(),
-    conditions: [
-      { bucket },
-      { key },
-      { "Content-Type": contentType },
-      { success_action_status: "204" },
-      { "x-amz-algorithm": fields["x-amz-algorithm"] },
-      { "x-amz-credential": credential },
-      { "x-amz-date": amzDate },
-      ["content-length-range", 1, maximumBytes],
-    ],
-  }));
-  const signingKey = await signatureKey(date, region);
-  return {
-    url: new URL(`https://${bucket}.${endpoint.hostname}/`).toString(),
-    fields: { ...fields, policy, "x-amz-signature": hex(await hmac(signingKey, policy)) },
   };
 }
 

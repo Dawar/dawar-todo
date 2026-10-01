@@ -7,6 +7,9 @@ declare namespace Cloudflare {
     BOTS_MACHINE_ID?: string;
     BOTS_TICKET_SECRET?: string;
     BOTS_NOTIFICATION_SECRET?: string;
+    BOTS_STORAGE_SERVICE_SECRET?: string;
+    BOTS_STORAGE_ENABLED?: string;
+    BOTS_STORAGE_CATALOG_READY?: string;
     BOTS_DEV_AUTH?: string;
     S3_ACCESS_KEY: string;
     S3_ACCESS_KEY_ID: string;

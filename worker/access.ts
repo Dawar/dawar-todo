@@ -49,7 +49,7 @@ function isPublicTalkPhoneTransport(pathname: string) {
 }
 
 function isPublicInternalTransport(pathname: string) {
-  return pathname === "/api/internal/minute" || pathname === "/api/bots/notifications";
+  return pathname === "/api/internal/minute" || pathname === "/api/bots/notifications" || pathname === "/api/bots/storage/service";
 }
 
 function unauthorizedApi(message = "Sign in with ChatGPT or use a valid API token to use Dawar Todo.") {

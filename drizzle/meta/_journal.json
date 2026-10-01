@@ -218,6 +218,20 @@
       "when": 1790304175125,
       "tag": "0030_hard_mockingbird",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "6",
+      "when": 1790817520317,
+      "tag": "0031_clean_obadiah_stane",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "6",
+      "when": 1790817643838,
+      "tag": "0032_colossal_killraven",
+      "breakpoints": true
     }
   ]
 }
