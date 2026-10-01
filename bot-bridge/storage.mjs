@@ -1,3 +1,4 @@
+import { replayableStorageFetch } from "../lib/storage-transfer.ts";
 import { createHash, randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
 import { open, mkdir, link, unlink } from 'node:fs/promises';
@@ -35,7 +36,7 @@ export class BotStorageClient {
   }
   async call(action,input={}) {
     let response;
-    try { response = await this.fetch(this.endpoint,{ method:'POST',headers:this.headers,body:JSON.stringify({ ...input,action }),signal:AbortSignal.timeout(120000),redirect:'error' }); }
+    try { response = await replayableStorageFetch(this.fetch,this.endpoint,{ method:'POST',headers:this.headers,body:JSON.stringify({ ...input,action }),signal:AbortSignal.timeout(120000),redirect:'error' }); }
     catch { throw new Error('Cloud storage acknowledgement unavailable. Retry the same attachment ID; local bytes are retained.'); }
     const result = await response.json().catch(() => null);
     if (!response.ok || !result) throw Object.assign(new Error(result?.error ?? 'Cloud storage request failed. Local files are retained.'),{storageCode:result?.code});
@@ -86,7 +87,7 @@ export class BotStorageClient {
             if (bytes.length !== a.size || createHash('sha256').update(bytes).digest('hex') !== sha256) throw new Error('Publication snapshot changed.');
             const body = new FormData(); for (const [key,value] of Object.entries(prepared.upload.fields)) body.set(key,value);
             body.set('file',new Blob([bytes],{type:a.mimeType}),a.name);
-            const uploaded = await this.fetch(prepared.upload.url,{ method:'POST',body,signal:AbortSignal.timeout(120000),redirect:'error' });
+            const uploaded = await replayableStorageFetch(this.fetch,prepared.upload.url,{ method:'POST',body,signal:AbortSignal.timeout(120000),redirect:'error' });
             if (!uploaded.ok) throw new Error('Cloud upload failed. Retry the same publication; its local snapshot is retained.');
           } finally { await file.close(); }
         }
@@ -136,7 +137,13 @@ export class BotStorageClient {
       try {
         file = await open(temporary,constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,0o600);
         await containedPath(bot.cwd,`/proc/self/fd/${file.fd}`);
-        const response = await this.fetch(url,{signal:AbortSignal.timeout(120000),redirect:'error'});
+        let response = await replayableStorageFetch(this.fetch,url,{signal:AbortSignal.timeout(120000),redirect:'error'});
+        if (response.status === 403) {
+          await response.body?.cancel().catch(()=>{});
+          const fresh=await this.call('download',{id:a.id,botId:bot.id});
+          if (fingerprint(a)!==fingerprint(fresh.attachment)) throw new Error('Refreshed download identity mismatch.');
+          response=await replayableStorageFetch(this.fetch,fresh.url,{signal:AbortSignal.timeout(120000),redirect:'error'});
+        }
         if (!response.ok || !response.body) throw new Error('Cloud download failed. Retry the same attachment ID.');
         const reader = response.body.getReader(), digest = createHash('sha256'); let size=0;
         try { for (;;) { const next = await reader.read(); if (next.done) break; size += next.value.length; if (size > a.size) throw new Error('Cloud file size mismatch.'); digest.update(next.value); let offset=0; while (offset < next.value.length) { const result = await file.write(next.value,offset,next.value.length-offset); if (!result.bytesWritten) throw new Error('Local download stalled.'); offset += result.bytesWritten; } } }
@@ -172,7 +179,7 @@ export class BotStorageClient {
       const metadata = {id,botId:bot.id,parentId:a.id,name:'thumbnail.webp',mimeType:'image/webp',size:bytes.length,sha256,createdAt:a.createdAt};
       const prepared = await this.call('prepare',metadata);
       if (!prepared.attachment) { const body = new FormData(); for (const [key,value] of Object.entries(prepared.upload.fields)) body.set(key,value); body.set('file',new Blob([bytes],{type:'image/webp'}),'thumbnail.webp');
-        const response = await this.fetch(prepared.upload.url,{method:'POST',body,signal:AbortSignal.timeout(60000),redirect:'error'}); if (!response.ok) throw new Error('Thumbnail upload unavailable.');
+        const response = await replayableStorageFetch(this.fetch,prepared.upload.url,{method:'POST',body,signal:AbortSignal.timeout(60000),redirect:'error'}); if (!response.ok) throw new Error('Thumbnail upload unavailable.');
         await this.call('finalize',{id,botId:bot.id}); }
     }).catch(() => { /* Derived previews never block original file publication. */ }).finally(() => this.previews.delete(a.id));
   }

@@ -54,11 +54,11 @@ const EntryBody = memo(function EntryBody({ entry, timeline, attachments, downlo
     </div>}
     {(timeline.detailError ? detailError : error) && <p role="alert" className="bots-error">{timeline.detailError ? detailError : error}{timeline.detailError && entry.complete && <button disabled={refreshing || loading} onClick={() => void load()}>Refresh details</button>}</p>}</>;
 });
-export const TimelineEntry = memo(function TimelineEntry(props: Parameters<typeof EntryBody>[0]) {
+export const TimelineEntry = memo(function TimelineEntry(props: Parameters<typeof EntryBody>[0] & { showScheduledMark?:boolean }) {
   const { entry } = props;
   if (entry.type === "reasoning" && (entry.item?.type !== "reasoning" || !entry.item.summary.some(text => text.trim()))) return null;
   return <div data-history-key={historyKey(entry.turnId, entry.id)}>
-    {(entry.audience === "finding" || entry.scheduled && entry.type === "agentMessage") && <span className="bots-scheduled-message-mark" role="img" aria-label="From scheduled work" title="From scheduled work"><Clock3 size={13} aria-hidden="true" /></span>}
+    {props.showScheduledMark !== false && (entry.audience === "finding" || entry.scheduled && entry.type === "agentMessage") && <span className="bots-scheduled-message-mark" role="img" aria-label="From scheduled work" title="From scheduled work"><Clock3 size={13} aria-hidden="true" /></span>}
     {entry.type === "reasoning" ? <LazyDetails className="bots-activity" summary="Thinking">{() => <EntryBody {...props} />}</LazyDetails> : !entry.item ? <LazyDetails className="bots-activity" summary={<><span>Work log · {entry.label}</span><small>{entry.itemStatus ?? entry.status}</small></>}>
         {() => <EntryBody {...props} />}</LazyDetails> : <EntryBody {...props} />}
     {(entry.type === "userMessage" || entry.type === "agentMessage") && <MessageTime seconds={entry.messageAt} basis={entry.timeBasis ?? "turn-start"} user={entry.type === "userMessage"} />}
@@ -94,7 +94,7 @@ export function BotConversation({ owner, bot, online, children, draft = "", burs
     const result: { kind: string; entries: HistoryEntry[] }[] = [];
     for (const entry of state.entries.slice(first, last)) {
       if (entry.type === "reasoning" && (entry.item?.type !== "reasoning" || !entry.item.summary.some(text => text.trim()))) continue;
-      const kind = entry.type === "reasoning" ? `thinking:${entry.turnId}` : !entry.item ? `work:${entry.turnId}` : "message";
+      const kind = entry.audience === "finding" && entry.runId ? `scheduled:${entry.runId}` : entry.type === "reasoning" ? `thinking:${entry.turnId}` : !entry.item ? `work:${entry.turnId}` : "message";
       const previous = result.at(-1);
       if (kind !== "message" && previous?.kind === kind) previous.entries.push(entry);
       else result.push({ kind, entries: [entry] });
@@ -121,7 +121,7 @@ export function BotConversation({ owner, bot, online, children, draft = "", burs
     {findings.error && <p className="bots-error" role="alert">{findings.error}<button disabled={!online || findings.busy} onClick={findings.retry}>Retry</button></p>}
     {state.loading && !state.entries.length && <div className="bots-history-skeleton" role="status" aria-label="Loading conversation"><span /><span /><span /><span /></div>}
     {!state.loading && !state.error && !state.entries.length && !state.olderCursor && <div className="bots-conversation-start"><span className="bots-start-icon"><MessageCircle size={26} strokeWidth={1.4} aria-hidden="true" /></span><h2>{bot.name}</h2><p>{bot.purpose || "What would you like to work on?"}</p></div>}
-    {last === state.entries.length && !groups.some((group) => group.kind === "message") && state.contextEntries.length > 0 && <section aria-label="Latest readable context">
+    {last === state.entries.length && !groups.some((group) => group.kind === "message" || group.kind.startsWith("scheduled:")) && state.contextEntries.length > 0 && <section aria-label="Latest readable context">
       <p className="bots-system-note">Latest readable messages. Intervening work remains accessible through earlier history.</p>
       {state.contextEntries.map((entry) => <TimelineEntry key={historyKey(entry.turnId, entry.id)} entry={entry} timeline={timeline} attachments={state.attachments} download={download} />)}
     </section>}
@@ -135,7 +135,7 @@ export function BotConversation({ owner, bot, online, children, draft = "", burs
           Some messages between these pages are not loaded. <button disabled={!online || paging} onClick={() => {
             feed.capture(); void timeline.fillGap(gap);
           }}>Load messages in between</button></div>)}
-        {group.kind === "message" ? confirmed ? <div data-history-key={key}><BurstBubbles messages={confirmed.messages} batch={confirmed.batch} {...batchProps} /></div> : <TimelineEntry entry={entry} timeline={timeline} attachments={state.attachments} download={download} />
+        {group.kind.startsWith("scheduled:") ? <section className="bots-scheduled-findings" aria-label="Findings from one scheduled run"><span className="bots-scheduled-message-mark" title="Findings from the same scheduled run"><Clock3 size={13} aria-hidden="true"/>Scheduled work</span>{group.entries.map(value=><TimelineEntry key={historyKey(value.turnId,value.id)} entry={value} timeline={timeline} attachments={state.attachments} download={download} showScheduledMark={false}/>)}</section> : group.kind === "message" ? confirmed ? <div data-history-key={key}><BurstBubbles messages={confirmed.messages} batch={confirmed.batch} {...batchProps} /></div> : <TimelineEntry entry={entry} timeline={timeline} attachments={state.attachments} download={download} />
           : <div data-history-key={key} style={{ position: "relative" }}>{group.entries.slice(1).map((value) => <span key={value.id} data-history-key={historyKey(value.turnId, value.id)} aria-hidden="true" style={{ position: "absolute", top: 0, height: 0, pointerEvents: "none" }} />)}<LazyDetails className="bots-activity" summary={summary}>{body}</LazyDetails></div>}
         {group === groups.at(-1) || groups[groups.indexOf(group) + 1]?.entries[0].turnId !== entry.turnId ? <ReturnedArtifacts linked={linkedArtifacts} attachments={state.attachments} turnId={entry.turnId} botId={bot.id} /> : null}
       </Fragment>;

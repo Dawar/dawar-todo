@@ -2,7 +2,7 @@ import type { BotAttachment, BotQueuedSubmission, BotRunReceipt } from "../../li
 import { queueEditable } from "./queue-state";
 import { readQueueAction } from "./queue-action-store";
 import {
-  BotDraftStore, changeDraft, emptyDraft, emptyRecord, fileLimit, fileReferences,
+  BotDraftStore, changeDraft, emptyDraft, emptyRecord, fileLimit, fileReferences, PORTABLE_COMPOSER,
   type Draft, type DraftChange, type DraftRecord, type StagedFile, type Submission, type RunDeliveryResult,
 } from "./draft-store";
 
@@ -11,6 +11,7 @@ export type ComposerTransport = {
   rpc: (method: Submission["method"] | "queue.list" | "runs.receipt", botId: string, params: Record<string, unknown>, id: string | undefined, options: { owner: string; managed: boolean }) => Promise<unknown>;
   upload: (botId: string, file: File, progress: (value: number) => void, id: string, owner: string, mode?:"cloud"|"legacy") => Promise<BotAttachment>;
   download: (botId: string, id: string, owner?: string) => Promise<{ blob: Blob }>;
+  copyAttachment?: (source: BotAttachment, botId: string, id: string, owner: string) => Promise<BotAttachment>;
 };
 type QueuedChange = { change: DraftChange; bytes?: Map<string, Blob> };
 const message = (error: unknown) => error instanceof Error ? error.message : "Draft recovery failed.";
@@ -32,11 +33,16 @@ export class BotComposer {
   private sending = new Set<string>();
   private listeners = new Set<() => void>();
   private recovering = 0;
-  constructor(readonly owner: string, readonly botId: string, private store: BotDraftStore,
-    private transport: ComposerTransport, private committed: () => void = () => {}, private destination?: { runId: string; storageKey: string }) {
+  private preparing: "send" | "checkout" | null = null;
+  get committing() { return this.preparing !== null; }
+  get checkingOut() { return this.preparing === "checkout"; }
+  constructor(readonly owner: string, private targetBotId: string, private store: BotDraftStore,
+    private transport: ComposerTransport, private committed: () => void = () => {}, private destination?: { runId: string; storageKey: string }, private portable = false) {
     this.record = this.persisted = emptyRecord(owner, this.storageKey);
   }
-  private get storageKey() { return this.destination?.storageKey ?? this.botId; }
+  get botId() { return this.targetBotId; }
+  bindBot(botId: string) { if (this.portable) this.targetBotId = botId; }
+  private get storageKey() { return this.destination?.storageKey ?? (this.portable ? PORTABLE_COMPOSER : this.botId); }
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   private notify() { for (const listener of this.listeners) listener(); }
   get draft() { return this.record.slots[this.record.active]; }
@@ -65,6 +71,9 @@ export class BotComposer {
         this.renderPending();
         this.ready = true;
         this.storageError = "";
+        if (this.draft.queueSource?.removed || this.draft.files.some(file => file.remote?.ready && file.error)) {
+          this.enqueue({kind:"normalize"}); await this.flush();
+        }
         if (hydrate) await this.recoverFiles();
       } catch (error) { this.storageError = message(error); }
       finally { this.opening = undefined; this.notify(); }
@@ -77,6 +86,7 @@ export class BotComposer {
       if (this.files.has(file.id) || !file.hasBytes) continue;
       const blob = await this.store.file(this.owner, this.storageKey, file.id);
       if (generation !== this.recovering) return;
+      if (!blob && file.remote?.ready) { this.enqueue({kind:"bytesAbsent",id:file.id}); continue; }
       if (!blob) throw new Error(`Saved bytes for ${file.name} could not be recovered. Keep the draft and retry recovery.`);
       this.files.set(file.id, new File([blob], file.name, { type: file.mimeType }));
     }
@@ -170,14 +180,16 @@ export class BotComposer {
     void this.flush().then(() => this.resumeUploads()).catch(() => {});
   }
   async checkout(item: BotQueuedSubmission) {
-    if (!this.ready || !this.canUseOwner || !this.transport.online || this.operation) return false;
+    const botId = this.botId;
+    if (!this.ready || !this.canUseOwner || !this.transport.online || this.operation || this.committing) return false;
     if (!queueEditable(item)) { this.actionError = "This queued message may already be starting. Refresh its status before editing."; this.notify(); return false; }
+    this.preparing = "checkout"; this.notify();
     const slot = `recovered:queue:${item.id}:${item.revision ?? "native"}`;
     try {
       await this.flush();
-      const queueAction = readQueueAction(this.owner, this.botId);
+      const queueAction = readQueueAction(this.owner, botId);
       if (queueAction.pending || queueAction.error) throw Error("Confirm the saved queue action before taking this message out for editing.");
-      if (this.persisted.slots[slot]?.queueSource?.removed) throw Error("This message is already saved as a draft. Open it from draft recovery; refresh the queue before making another copy.");
+      if (this.persisted.checkedOut?.[slot]) return true;
       const draft: Draft = {
         ...emptyDraft(), textVersion: crypto.randomUUID(),
         text: item.input.flatMap(i => i.type === "text" && !i.text.startsWith("Attached file: ") ? [i.text] : []).join("\n"),
@@ -186,17 +198,18 @@ export class BotComposer {
       };
       this.actionError = "";
       this.enqueue({ kind: "checkout", draft, operation: {
-        id: crypto.randomUUID(), slot, method: "queue.delete", activateFrom: this.record.active,
+        id: crypto.randomUUID(), botId, slot, method: "queue.delete", activateFrom: this.record.active,
         params: { id: item.id, ...(item.revision === undefined ? {} : { expectedRevision: item.revision }) },
         textVersion: draft.textVersion, fileIds: draft.files.map(f => f.id), state: "pending",
       } });
       await this.flush();
       const operation = Object.values(this.persisted.operations).find(op => op.slot === slot);
       if (operation) await this.dispatch(operation);
-      if (this.record.active !== slot || this.record.operations[operation?.id ?? ""]) return false;
+      if (!this.record.checkedOut?.[slot] || this.record.operations[operation?.id ?? ""]) return false;
       void this.resumeUploads();
       return true;
     } catch (error) { this.actionError = message(error); this.notify(); return false; }
+    finally { this.preparing = null; this.notify(); }
   }
   select(slot: string) { this.actionError = ""; this.enqueue({ kind: "select", slot }); }
   async retry() {
@@ -223,8 +236,7 @@ export class BotComposer {
       if (!this.canUseOwner || !(this.transport.online || this.transport.storageAvailable)) return;
       const current = Object.values(this.persisted.slots).flatMap((d) => d.files).find((f) => f.id === file.id);
       if (!current || this.transferring.has(file.id) || (current.error && !retry)) continue;
-      if (current.remote && current.hasBytes) continue;
-      if (file.remote && file.hasBytes) continue;
+      if (current.remote?.ready) continue; // An offline preview is optional, never a send dependency.
       this.transferring.add(file.id);
       try {
         if (!file.hasBytes && file.remote) {
@@ -236,14 +248,15 @@ export class BotComposer {
           const bytes = await this.store.file(this.owner, this.storageKey, file.id);
           if (!bytes) throw new Error("Attachment bytes are unavailable. Retry recovery before sending.");
           if (!this.canUseOwner || !Object.values(this.record.slots).some((d) => d.files.some((f) => f.id === file.id))) continue;
+          const uploadBotId = file.uploadBotId ?? this.botId;
           let mode=file.uploadMode ?? (this.transport.storageAvailable ? "cloud" : "legacy");
-          if (!file.uploadMode) { this.enqueue({kind:"uploadMode",id:file.id,mode}); await this.flush(); }
+          if (!file.uploadMode) { this.enqueue({kind:"uploadMode",id:file.id,mode,botId:uploadBotId}); await this.flush(); }
           mode=Object.values(this.persisted.slots).flatMap(draft=>draft.files).find(current=>current.id===file.id)?.uploadMode ?? mode;
-          const uploaded = await this.transport.upload(this.botId, new File([bytes], file.name, { type: file.mimeType }), (value) => {
+          const uploaded = await this.transport.upload(uploadBotId, new File([bytes], file.name, { type: file.mimeType }), (value) => {
             this.progress.set(file.id, value); this.notify();
           }, file.uploadId ?? file.id, this.owner,mode);
           if (!this.canUseOwner) return;
-          if (!uploaded?.ready || uploaded.botId !== this.botId || !uploaded.id) throw new Error("The server did not confirm this file upload. Your local bytes are retained.");
+          if (!uploaded?.ready || uploaded.botId !== uploadBotId || !uploaded.id) throw new Error("The server did not confirm this file upload. Your local bytes are retained.");
           this.enqueue({ kind: "uploaded", id: file.id, uploadId: file.uploadId ?? file.id, remote: uploaded });
         }
         await this.flush();
@@ -253,24 +266,27 @@ export class BotComposer {
     }
   }
   async send(queueNext = false, burst = false, listId: string | null = null) {
-    if (!this.ready || !this.canUseOwner || !this.transport.online) return;
+    if (!this.ready || !this.canUseOwner || !this.transport.online || this.committing) return;
+    this.preparing = "send"; this.notify();
     const slot = this.record.active;
+    const botId = this.botId;
     this.actionError = "";
     try {
       await this.flush();
       const existing = Object.values(this.persisted.operations).find((op) => op.slot === slot || op.method === "queue.delete");
       if (existing) { await this.dispatch(existing); if (existing.method === "queue.delete") void this.resumeUploads(); return; }
-      const draft = this.persisted.slots[slot];
+      let draft = this.persisted.slots[slot];
+      const textVersion = draft.textVersion, fileIds = draft.files.map(file => file.id).join("|");
       if (draft.queueSource && !draft.queueSource.removed) throw Error("Removal was not confirmed. Refresh the queue before editing this saved copy; the original may already be starting.");
       if (draft.queueId) {
         // Read-only preflight, only for a NEW update. An already submitted
         // operation above always reconciles its exact ID/parameters instead.
         const checkQueueAction = () => {
-          const action = readQueueAction(this.owner, this.botId);
+          const action = readQueueAction(this.owner, botId);
           if (action.pending || action.error) throw new Error("A saved queue action needs confirmation before this edit can be submitted. Your draft is retained; check the queue action first.");
         };
         checkQueueAction();
-        const queue = await this.transport.rpc("queue.list", this.botId, {}, undefined, { owner: this.owner, managed: false }) as BotQueuedSubmission[];
+        const queue = await this.transport.rpc("queue.list", botId, {}, undefined, { owner: this.owner, managed: false }) as BotQueuedSubmission[];
         if (!this.canUseOwner || !this.transport.online) return;
         checkQueueAction();
         if (!Array.isArray(queue)) throw new Error("Queue status is unavailable. Your edit is saved; reconnect before saving it to the queue.");
@@ -284,9 +300,21 @@ export class BotComposer {
       if (limit) throw new Error(limit);
       if (draft.files.some((f) => !f.remote?.ready)) throw new Error("Attachments are saved locally. Finish or retry their uploads before sending.");
       if (!draft.text.trim() && !draft.files.length) return;
+      for (const file of draft.files) if (file.remote!.botId !== botId && !file.copies?.[botId]) {
+        if (!this.transport.copyAttachment) throw Error("This attachment cannot move to this bot yet. Your draft is saved.");
+        this.enqueue({kind:"copyIdentity",id:file.id,botId,copyId:crypto.randomUUID()}); await this.flush();
+        const current = this.persisted.slots[slot].files.find(current => current.id === file.id);
+        if (!current?.remote) throw Error("The draft changed. Try sending again.");
+        const copy = await this.transport.copyAttachment(current.remote, botId, current.copyIds![botId], this.owner);
+        if (!copy.ready || copy.botId !== botId || copy.size !== current.size) throw Error("Attachment transfer could not be confirmed. Try again.");
+        this.enqueue({kind:"copied",id:file.id,botId,remote:copy}); await this.flush();
+      }
+      draft = this.persisted.slots[slot];
+      if (!this.canUseOwner || !this.transport.online) return;
+      if (!draft || draft.textVersion !== textVersion || draft.files.map(file => file.id).join("|") !== fileIds) throw Error("The draft changed during attachment transfer. Review it and send again.");
       const op: Submission = {
-        id: crypto.randomUUID(), slot, method: this.destination ? "runs.send" : draft.queueId ? "queue.update" : queueNext ? "queue.add" : burst ? "bursts.submit" : "turn.send",
-        params: { ...(queueNext && !draft.queueId && !this.destination && (listId ?? draft.queueSource?.listId) ? { listId: listId ?? draft.queueSource?.listId } : {}), ...(this.destination ? { runId: this.destination.runId } : {}), ...(draft.queueId ? { id: draft.queueId, ...(draft.queueRevision === undefined ? {} : { expectedRevision: draft.queueRevision }) } : {}), text: draft.text.trim(), attachments: draft.files.map((f) => f.remote!.id) },
+        id: crypto.randomUUID(), botId, slot, method: this.destination ? "runs.send" : draft.queueId ? "queue.update" : queueNext ? "queue.add" : burst ? "bursts.submit" : "turn.send",
+        params: { ...(queueNext && !draft.queueId && !this.destination && listId ? { listId } : {}), ...(this.destination ? { runId: this.destination.runId } : {}), ...(draft.queueId ? { id: draft.queueId, ...(draft.queueRevision === undefined ? {} : { expectedRevision: draft.queueRevision }) } : {}), text: draft.text.trim(), attachments: draft.files.map((f) => (f.remote!.botId === botId ? f.remote! : f.copies![botId]).id) },
         ...(this.destination ? { runDelivery: { state: "prepared" as const, token: crypto.randomUUID() } } : {}),
         textVersion: draft.textVersion, fileIds: draft.files.map((f) => f.id), state: "pending",
       };
@@ -297,6 +325,7 @@ export class BotComposer {
       const submitted = Object.values(this.persisted.operations).find((p) => p.slot === slot);
       if (submitted) await this.dispatch(submitted);
     } catch (error) { this.actionError = message(error); this.notify(); }
+    finally { this.preparing = null; this.notify(); }
   }
   async reconcile() {
     if (!this.ready || !this.canUseOwner || !this.transport.online || this.storageError) return;
@@ -370,7 +399,7 @@ export class BotComposer {
     if (this.sending.has(op.id) || !this.canUseOwner || !this.transport.online) return;
     this.sending.add(op.id); this.notify();
     try {
-      const result = await this.transport.rpc(op.method, this.botId, op.params, op.id, { owner: this.owner, managed: true });
+      const result = await this.transport.rpc(op.method, op.botId ?? this.botId, op.params, op.id, { owner: this.owner, managed: true });
       if (op.method === "queue.delete" && (result as { deleted?: boolean } | null)?.deleted !== true)
         throw Error("Queue removal did not confirm deletion.");
       this.actionError = "";

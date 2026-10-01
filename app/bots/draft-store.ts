@@ -2,15 +2,20 @@ import type { BotAttachment, BridgeRequest } from "../../lib/bots-types";
 
 // Critical data only. Histories and other disposable caches never enter this DB.
 export const DRAFT_DATABASE = "dawar-bot-drafts";
+export const PORTABLE_COMPOSER = "portable:composer:v1";
 export type StagedFile = {
   id: string; name: string; mimeType: string; size: number;
   remote?: BotAttachment; uploadId?: string; uploadMode?: "cloud" | "legacy"; hasBytes: boolean; error?: string;
+  uploadBotId?: string;
+  copies?: Record<string, BotAttachment>;
+  copyIds?: Record<string, string>;
 };
 export type Draft = {
   text: string; textVersion: string; files: StagedFile[]; queueId?: string; queueRevision?: number;
   queueSource?: { id: string; listId: string | null; removed: boolean };
 };
 export type Submission = {
+  botId?: string;
   id: string; slot: string; method: "bursts.submit" | "turn.send" | "queue.add" | "queue.update" | "queue.delete" | "runs.send";
   activateFrom?: string;
   params: Record<string, unknown>; textVersion: string; fileIds: string[];
@@ -24,6 +29,8 @@ export type DraftRecord = {
   /** Local Forward acceptance tombstones. Never resent or pruned with caches. */
   forwarded?: Record<string, string>;
   migrated: boolean;
+  portableSeeded?: boolean;
+  checkedOut?: Record<string, boolean>;
 };
 export type RunDeliveryResult = "not-sent" | "uncertain" | "queued" | "success" | "rejected";
 export type DraftChange =
@@ -32,9 +39,12 @@ export type DraftChange =
   | { kind: "remove"; slot: string; id: string }
   | { kind: "uploaded"; id: string; uploadId: string; remote: BotAttachment }
   | { kind: "restartUpload"; id: string; uploadId: string }
-  | { kind: "uploadMode"; id: string; mode: "cloud" | "legacy" }
+  | { kind: "uploadMode"; id: string; mode: "cloud" | "legacy"; botId?: string }
+  | { kind: "copyIdentity"; id: string; botId: string; copyId: string }
+  | { kind: "copied"; id: string; botId: string; remote: BotAttachment }
+  | { kind: "normalize" }
   | { kind: "fileError"; id: string; error?: string }
-  | { kind: "bytes"; id: string }
+  | { kind: "bytes" | "bytesAbsent"; id: string }
   | { kind: "edit"; slot: string; draft: Draft }
   | { kind: "checkout"; draft: Draft; operation: Submission }
   | { kind: "select"; slot: string }
@@ -67,7 +77,22 @@ export function changeDraft(source: DraftRecord, change: DraftChange): DraftReco
     ...source, slots: Object.fromEntries(Object.entries(source.slots).map(([key, d]) => [key, { ...d, files: d.files.map((f) => ({ ...f })) }])),
     operations: { ...source.operations },
   };
-  if (change.kind === "text") {
+  const promoteNormal = (draft: Draft, slot: string) => {
+    const previous = record.slots.normal;
+    if (previous !== draft && (previous.text || previous.files.length) && previous.textVersion !== draft.textVersion)
+      record.slots[`recovered:${previous.textVersion}`] = previous;
+    const { queueId, queueRevision, queueSource, ...plain } = draft;
+    void queueId; void queueRevision; void queueSource;
+    record.slots.normal = { ...plain, files: plain.files.map(file => file.remote?.ready ? { ...file, error: undefined } : file) };
+    if (slot !== "normal") delete record.slots[slot];
+    record.active = "normal";
+  };
+  if (change.kind === "normalize") {
+    if (!Object.keys(record.operations).length && record.slots[record.active]?.queueSource?.removed)
+      promoteNormal(record.slots[record.active], record.active);
+    for (const draft of Object.values(record.slots)) for (const file of draft.files)
+      if (file.remote?.ready) delete file.error;
+  } else if (change.kind === "text") {
     const draft = record.slots[change.slot];
     if (!draft) throw new Error("Draft is no longer available. Reopen it before editing.");
     if (draft.textVersion !== change.base && draft.textVersion !== change.version && draft.text !== change.text) {
@@ -81,15 +106,18 @@ export function changeDraft(source: DraftRecord, change: DraftChange): DraftReco
     for (const file of change.files) if (!draft.files.some((f) => f.id === file.id)) draft.files.push(file);
   } else if (change.kind === "remove") {
     record.slots[change.slot].files = record.slots[change.slot].files.filter((f) => f.id !== change.id);
-  } else if (change.kind === "uploaded" || change.kind === "restartUpload" || change.kind === "uploadMode" || change.kind === "fileError" || change.kind === "bytes") {
+  } else if (change.kind === "uploaded" || change.kind === "restartUpload" || change.kind === "uploadMode" || change.kind === "fileError" || change.kind === "bytes" || change.kind === "bytesAbsent" || change.kind === "copyIdentity" || change.kind === "copied") {
     for (const draft of Object.values(record.slots)) {
       const file = draft.files.find((f) => f.id === change.id);
       if (!file) continue; // A late upload must not resurrect a removed file.
       if (change.kind === "uploaded" && (file.uploadId ?? file.id) === change.uploadId) { file.remote = change.remote; delete file.error; }
       if (change.kind === "restartUpload" && !file.remote) { file.uploadId = change.uploadId; delete file.error; }
-      if (change.kind === "uploadMode" && !file.remote && !file.uploadMode) file.uploadMode = change.mode;
+      if (change.kind === "uploadMode" && !file.remote && !file.uploadMode) { file.uploadMode = change.mode; file.uploadBotId = change.botId; }
+      if (change.kind === "copyIdentity") file.copyIds = { ...file.copyIds, [change.botId]: file.copyIds?.[change.botId] ?? change.copyId };
+      if (change.kind === "copied") file.copies = { ...file.copies, [change.botId]: change.remote };
       if (change.kind === "fileError") file.error = change.error;
       if (change.kind === "bytes") { file.hasBytes = true; delete file.error; }
+      if (change.kind === "bytesAbsent" && file.remote?.ready) { file.hasBytes = false; delete file.error; }
     }
   } else if (change.kind === "edit") {
     const existing = record.slots[change.slot];
@@ -105,7 +133,7 @@ export function changeDraft(source: DraftRecord, change: DraftChange): DraftReco
     // Snapshot and exact removal identity commit together before any RPC.
     // Concurrent tabs adopt the original operation for this queue revision.
     const saved = record.slots[change.operation.slot];
-    if (saved?.queueSource?.removed || Object.values(record.operations).some(op => op.slot === change.operation.slot)) return source;
+    if (record.checkedOut?.[change.operation.slot] || saved?.queueSource?.removed || Object.values(record.operations).some(op => op.slot === change.operation.slot)) return source;
     record.slots[change.operation.slot] = saved ?? change.draft;
     record.operations[change.operation.id] = change.operation;
   } else if (change.kind === "select") {
@@ -153,8 +181,8 @@ export function changeDraft(source: DraftRecord, change: DraftChange): DraftReco
       if (op.method === "queue.delete") {
         // Removal confirms draft ownership, not delivery. Never clear its files.
         if (change.outcome === "success" && draft) {
-          if (draft.queueSource) draft.queueSource = { ...draft.queueSource, removed: true };
-          if (record.active === op.activateFrom) record.active = op.slot;
+          record.checkedOut = { ...record.checkedOut, [op.slot]: true };
+          promoteNormal(draft, op.slot);
         }
       } else if (change.outcome === "success" && draft) {
         if (draft.textVersion === op.textVersion) {
@@ -247,6 +275,49 @@ export class BotDraftStore {
           fail(error);
         }
       };
+    });
+  }
+  /** Adopt the first selected legacy draft atomically; keep all other originals. */
+  async seedPortable(owner: string, sourceBotId: string, restore = false) {
+    await this.load(owner, PORTABLE_COMPOSER);
+    await this.load(owner, sourceBotId);
+    return this.transaction<DraftRecord>(["drafts", "files"], "readwrite", (tx, done, fail) => {
+      const drafts = tx.objectStore("drafts"), files = tx.objectStore("files");
+      const sourceRequest = drafts.get([owner, sourceBotId]), targetRequest = drafts.get([owner, PORTABLE_COMPOSER]);
+      let source: DraftRecord | undefined, target: DraftRecord | undefined;
+      const seed = () => {
+        if (!source || !target) return;
+        if (target.portableSeeded && !restore) { done(target); return; }
+        const sourceSlot = restore || source.slots[source.active].queueId ? "normal" : source.active;
+        const draft = source.slots[sourceSlot];
+        if (Object.keys(source.operations).length) { if (restore) { fail(new Error("Confirm the original send before restoring this draft.")); return; } done(target); return; }
+        target.portableSeeded = true;
+        if (!Object.keys(source.operations).length && !draft.queueId && (!draft.queueSource || draft.queueSource.removed) &&
+            !Object.keys(target.operations).length && (restore || !target.slots.normal.text && !target.slots.normal.files.length)) {
+          const { queueId, queueRevision, queueSource, ...plain } = draft;
+          void queueId; void queueRevision; void queueSource;
+          if (restore && (target.slots.normal.text || target.slots.normal.files.length)) target.slots[`recovered:${target.slots.normal.textVersion}`] = target.slots.normal;
+          target.active = "normal";
+          target.slots.normal = { ...plain, files: plain.files.map(file => ({ ...file, uploadBotId: file.uploadBotId ?? sourceBotId, ...(file.remote?.ready ? {error:undefined} : {}) })) };
+          for (const file of plain.files) if (file.hasBytes) {
+            const request = files.get([owner, sourceBotId, file.id]);
+            request.onsuccess = () => {
+              if (!request.result) {
+                if (!file.remote?.ready) { tx.abort(); return; }
+                const adopted=target!.slots.normal.files.find(current=>current.id===file.id)!;
+                adopted.hasBytes=false; drafts.put(target!); return;
+              }
+              files.put({ ...request.result, botId: PORTABLE_COMPOSER });
+            };
+          }
+          source.slots[sourceSlot] = emptyDraft();
+          source.revision = crypto.randomUUID();
+          drafts.put(source);
+        }
+        target.revision = crypto.randomUUID(); drafts.put(target); done(target);
+      };
+      sourceRequest.onsuccess = () => { source = sourceRequest.result; seed(); };
+      targetRequest.onsuccess = () => { target = targetRequest.result; seed(); };
     });
   }
   private legacySeed(owner: string, botId: string) {

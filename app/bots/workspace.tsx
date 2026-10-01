@@ -27,7 +27,6 @@ import {
   BarChart3,
   ListOrdered,
   ListPlus,
-  Save,
   UsersRound,
 } from "lucide-react";
 import type { Bot } from "./single-thread-contract";
@@ -62,6 +61,8 @@ import { RunDecisions } from "./run-decisions";
 import { UsagePanel } from "./usage-panel";
 import { useBotComposer } from "./use-composer";
 import { ComposerAttachments, ComposerStatus } from "./composer-state";
+import { installExtensionShortcuts } from "./extension-shortcuts";
+import { SavedDrafts } from "./saved-drafts";
 import { ComposerInput } from "./composer-input";
 import { ComposerSettings } from "./composer-settings";
 import { ArtifactGallery, BotAttachmentsEntry, ArtifactNav } from "./artifact-gallery";
@@ -123,9 +124,8 @@ export function BotsWorkspace() {
   const { composer, error: composerError } = useBotComposer(client.owner, selected);
   const draft = composer?.draft.text ?? "";
   const uploads = composer?.draft.files ?? [];
-  const editingQueueId = composer?.draft.queueId ?? null;
-  const sending = Boolean(composer?.operation);
-  const checkoutLocked = Boolean(composer?.draft.queueSource && !composer.draft.queueSource.removed);
+  const sending = Boolean(composer?.operation || composer?.committing);
+  const checkoutLocked = composer?.checkingOut || composer?.operation?.method === "queue.delete" || Boolean(composer?.draft.queueSource && !composer.draft.queueSource.removed);
   const canSend = Boolean(composer?.ready && !composer.storageError && !sending &&
     !checkoutLocked && uploads.every((file) => file.remote?.ready));
   const setDraft = (text: string) => composer?.setText(text);
@@ -338,6 +338,12 @@ export function BotsWorkspace() {
     else url.searchParams.delete("bot");
     window.history.pushState({}, "", url);
   }, []);
+  useEffect(()=>installExtensionShortcuts(window,extension=>{
+    const target=bots.find(bot=>bot.extension===extension&&!bot.archived);
+    if(!target||document.querySelector('dialog[open]'))return;
+    select(target.id);setProfile(false);setShowTeams(false);
+    requestAnimationFrame(()=>screenRef.current?.querySelector<HTMLTextAreaElement>('.bots-composer textarea')?.focus());
+  }),[bots,select]);
   function openGallery(view: "artifacts" | "attachments") {
     const url = new URL(window.location.href); url.searchParams.set("view", view);
     if (view === "artifacts") { url.searchParams.delete("bot"); setSelected(null); selectedRef.current = null; }
@@ -374,7 +380,7 @@ export function BotsWorkspace() {
     if (!composer || !bot || !canSend) return;
     const id = bot.id;
     await composer.send(queueNext, burstEnabled, listId);
-    if (queueNext || editingQueueId) { await loadQueue(id); await refreshQueueLists().catch(() => {}); }
+    if (queueNext) { await loadQueue(id); await refreshQueueLists().catch(() => {}); }
   }
   function queueMessage() {
     if (!canSend || !online || (!draft.trim() && !uploads.length)) return;
@@ -390,7 +396,6 @@ export function BotsWorkspace() {
     }
     return Boolean(saved);
   }
-  function cancelQueueEdit() { composer?.select("normal"); }
   function upload(files: FileList | File[] | null) {
     if (files && composer?.ready) composer.addFiles(Array.from(files));
     if (fileRef.current) fileRef.current.value = "";
@@ -424,7 +429,7 @@ export function BotsWorkspace() {
   const filtered = useMemo(() => {
     const teams = snapshot?.teams ?? [];
     const filter = teamFilter === "all" || teamFilter === "none" || teams.some(t=>t.id===teamFilter) ? teamFilter : "all";
-    const matching = bots.filter(b=>b.archived===archived && `${b.name} ${b.purpose}`.toLowerCase().includes(search.toLowerCase()) &&
+    const matching = bots.filter(b=>b.archived===archived && `${b.name} ${b.purpose} #${b.extension ?? ""}`.toLowerCase().includes(search.toLowerCase()) &&
       (filter==="all"||filter==="none"&&!b.teamId||b.teamId===filter));
     if (teamSort==="name") matching.sort((a,b)=>a.name.localeCompare(b.name)||a.id.localeCompare(b.id));
     if (teamSort==="team") {
@@ -527,7 +532,7 @@ export function BotsWorkspace() {
                 <Avatar bot={bot} small />
                 {snapshot?.capabilities?.botDesktops === 1 && <button className="bots-icon-button bots-desktop-mobile-open" aria-label="Show bot desktop" onClick={() => { setDetailsSection("desktop"); setProfile(true); }}><span aria-hidden="true">▣</span></button>}
                 <div className="bots-header-title">
-                  <strong>{bot.name}</strong>
+                  <strong>{bot.name}{bot.extension&&<span className="bots-extension" title="Hold Ctrl (or Alt), type the extension, then release">#{bot.extension}</span>}</strong>
 
                 </div>
                 {promptQueue.length > 0 && <button className="bots-icon-button bots-up-next-link" aria-label={`Show ${promptQueue.length} queued ${promptQueue.length === 1 ? "message" : "messages"}`} onClick={() => {
@@ -621,7 +626,7 @@ export function BotsWorkspace() {
                   <div className="bots-composer-support">
                     <PromptQueue key={`queue:${scope}`} owner={owner} bot={bot} items={promptQueue} online={online}
                       canEdit={Boolean(composer?.ready && !sending)} onEdit={editQueued} refresh={refreshQueues}
-                      supported={queueListsSupported} lists={queueLists.lists} onOpenLists={queueListsSupported ? () => { setDetailsSection("queues"); setProfile(true); } : undefined} />
+                      supported={queueListsSupported} relativeMoves={snapshot?.capabilities?.queueRelativeMoves===1} lists={queueLists.lists} onOpenLists={queueListsSupported ? () => { setDetailsSection("queues"); setProfile(true); } : undefined} />
                     {snapshot && <ComposerSettings key={`settings:${scope}`} bot={bot} snapshot={snapshot} online={online} />}
                   {(lanes || single) && <MainStopRecovery owner={owner} botId={bot.id} online={online} />}
                   <ComposerStatus composer={composer} error={composerError} />
@@ -631,7 +636,7 @@ export function BotsWorkspace() {
                     className="bots-composer"
                     onSubmit={(e) => {
                       e.preventDefault();
-                      void send(Boolean(editingQueueId));
+                      void send();
                     }}
                   >
                     <input
@@ -668,26 +673,21 @@ export function BotsWorkspace() {
                         ) {
                           e.preventDefault();
                           if (e.repeat) return;
-                          if (e.ctrlKey && !editingQueueId) queueMessage();
-                          else void send(Boolean(editingQueueId));
+                          if (e.ctrlKey) queueMessage();
+                          else void send();
                         }
                       }}
                     />
                     {(
                       <>
-                      {editingQueueId && (
-                        <button type="button" className="bots-icon-button"
-                          aria-label="Cancel edit" title="Cancel edit"
-                          onClick={cancelQueueEdit}><X size={19} aria-hidden="true" /></button>
-                      )}
                       <button type="button" className="bots-icon-button bots-queue-icon"
-                        title={editingQueueId ? "Save queue (Ctrl+Enter)" : "Queue next (Ctrl+Enter)"}
-                        aria-label={editingQueueId ? "Save queue" : "Queue next"}
+                        title="Queue next (Ctrl+Enter)"
+                        aria-label="Queue next"
                         aria-keyshortcuts="Control+Enter"
                         disabled={!online || !canSend ||
                           (!draft.trim() && !uploads.length)}
                         onClick={queueMessage}>
-                        {editingQueueId ? <Save size={19} aria-hidden="true" /> : <ListPlus size={20} aria-hidden="true" />}
+                        <ListPlus size={20} aria-hidden="true" />
                       </button>
                       </>
                     )}
@@ -707,7 +707,7 @@ export function BotsWorkspace() {
                           <Square size={14} fill="currentColor" />
                         </button>
                       )}
-                    {!editingQueueId && ((bot.activeTurnId || !lanes && Boolean(bot.workerTasks?.active)) &&
+                    {((bot.activeTurnId || !lanes && Boolean(bot.workerTasks?.active)) &&
                     !draft &&
                     !uploads.length ? (lanes || single ? <MainStopButton owner={owner} botId={bot.id} online={online} className="bots-send" /> :
                       <button
@@ -789,7 +789,7 @@ export function BotsWorkspace() {
                 <form onSubmit={event => { event.preventDefault(); const input = new FormData(event.currentTarget); void action(() => client.rpc("bots.update", bot.id, { name: String(input.get("name")) })); }}>
                   <label>Name<input name="name" defaultValue={bot.name} key={bot.id + bot.name} maxLength={80} required /></label><button type="submit" disabled={!online || busy}>Save name</button>
                 </form>
-                <p className="bots-profile-hint">{bot.purpose}</p><p className="bots-profile-hint">Ask {bot.name} to change its personality, instructions, or memory.</p>
+                <SavedDrafts owner={owner} bots={bots} composer={composer}/><p className="bots-profile-hint">{bot.purpose}</p><p className="bots-profile-hint">Ask {bot.name} to change its personality, instructions, or memory.</p>
                 {snapshot?.capabilities?.singleThreadExecution === 1 && <PersonalitySettings key={scope} bot={bot} snapshot={snapshot} online={online} />}
                 {teamsSupported && <TeamAssignment key={`team:${scope}`} owner={owner} bot={bot} teams={teams} online={online} onManage={() => setShowTeams(true)} />}
                 <a className="bots-notification-link" href="/settings">Notification settings</a>

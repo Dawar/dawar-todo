@@ -61,7 +61,7 @@ test('browser -> verified bot read -> cloud publication -> browser download pres
 });
 test('interruption, expired URLs, lost receipt and service restart reuse ID and immutable copy',async t=>{
   const {owner,cloud,s3,env,DB}=await fixture(t),bytes=Buffer.from('recover'),id=randomUUID(),file=new File([bytes],'resume.bin');
-  s3.interruptUpload=true;await assert.rejects(browser.cloudUpload(owner,()=>owner,'alpha',file,id,()=>{}));
+  s3.interruptUpload=true;await browser.cloudUpload(owner,()=>owner,'alpha',file,id,()=>{});
   const resumed=await browser.cloudUpload(owner,()=>owner,'alpha',file,id,()=>{});assert.equal(resumed.id,id);
   const count=s3.copyCount;const restarted=new BotStorage(env,owner,true);await restarted.initialize();
   assert.equal((await restarted.finalize(id,'alpha')).attachment.id,id);assert.equal(s3.copyCount,count);
@@ -97,14 +97,14 @@ test('cross-bot, other owner, arbitrary keys and wrong storage credential are re
 });
 test('corrupt downloads never replace valid local files and failed publication retains original and copied snapshot',async t=>{
   const {cloud,upload,runtime,bots,store,s3}=await fixture(t),bytes=Buffer.from('retained'),{a}=await upload(bytes);await cloud.finalize(a.id,'alpha');
-  await runtime.storage.importAttachment(bots[0],a.id);const path=store.get('attachment',a.id).path;
+  s3.failDownload=1;await runtime.storage.importAttachment(bots[0],a.id);const path=store.get('attachment',a.id).path;
   s3.corruptDownload=true;assert.equal((await runtime.downloadAttachment(bots[0],a.id)).path,path);assert.deepEqual(await readFile(path),bytes);
   await unlink(path);await assert.rejects(runtime.downloadAttachment(bots[0],a.id),/checksum|size mismatch/);await assert.rejects(readFile(path),{code:'ENOENT'});
   s3.corruptDownload=false;await runtime.downloadAttachment(bots[0],a.id);assert.deepEqual(await readFile(path),bytes);
-  const source=join(bots[0].cwd,'finished.bin');await writeFile(source,bytes);s3.interruptUpload=true;
+  const source=join(bots[0].cwd,'finished.bin');await writeFile(source,bytes);const transport=runtime.storage.fetch;runtime.storage.fetch=async(input,init)=>{if(init?.body instanceof FormData)throw Error('persistent transfer failure');return transport(input,init);};
   await assert.rejects(runtime.publishArtifact(bots[0],{path:source},{key:'retain-on-failure'}));
   assert.deepEqual(await readFile(source),bytes);const pending=store.list('attachment','alpha').find(a=>a.artifact);assert.equal(pending.cloudState,'failed');assert.deepEqual(await readFile(pending.path),bytes);
-  const result=await runtime.publishArtifact(bots[0],{path:source},{key:'retain-on-failure'});assert.equal(result.attachmentId,pending.id);assert.equal(store.get('attachment',pending.id).cloudState,'ready');
+  runtime.storage.fetch=transport;const result=await runtime.publishArtifact(bots[0],{path:source},{key:'retain-on-failure'});assert.equal(result.attachmentId,pending.id);assert.equal(store.get('attachment',pending.id).cloudState,'ready');
 });
 test('zero-byte files and stable pagination include archived registered files without new ready files shifting later pages',async t=>{
   const {cloud,upload}=await fixture(t);

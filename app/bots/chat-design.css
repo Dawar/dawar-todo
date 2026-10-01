@@ -121,3 +121,7 @@ details[open] > summary > .bots-disclosure-chevron { transform: rotate(90deg); }
 }
 
 .bots-scheduled-message-mark { display:flex; align-items:center; width:fit-content; color:#8a978f; margin:10px 0 -7px 0; }
+.bots-extension { display:inline-block;margin-right:7px;padding:1px 5px;border-radius:5px;background:#eaf1ec;color:#607e6b;font-size:11px;font-weight:500;vertical-align:middle; }
+.bots-chat-heading .bots-extension { margin-left:8px; }
+.bots-draft-status { display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-size:12px; }.bots-draft-status button { min-height:36px;text-decoration:underline; }
+.bots-conversation-heading .bots-extension { margin-left:8px;margin-right:0; }

@@ -36,6 +36,21 @@ export class Store {
       CREATE TABLE IF NOT EXISTS events(seq INTEGER PRIMARY KEY AUTOINCREMENT, json TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS events_bot_cursor ON events(json_extract(json,'$.botId'),seq);
       CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, json TEXT NOT NULL);`);
+    this.transaction(() => {
+      const bots = this.db.prepare("SELECT json FROM bots ORDER BY rowid").all().map(row => JSON.parse(row.json));
+      let next = Math.max(2, Number(this.meta("next-bot-extension")) || 2,
+        ...bots.filter(bot => Number.isSafeInteger(bot.extension) && bot.extension >= 2).map(bot => bot.extension + 1));
+      const used = new Set();
+      for (const bot of bots) {
+        if (!Number.isSafeInteger(bot.extension) || bot.extension < 2 || used.has(bot.extension)) {
+          bot.extension = next++;
+          this.db.prepare("UPDATE bots SET json=? WHERE id=?").run(JSON.stringify(bot), bot.id);
+        }
+        used.add(bot.extension);
+      }
+      this.meta("next-bot-extension", next);
+    });
+    this.db.exec("CREATE UNIQUE INDEX IF NOT EXISTS bot_extension ON bots(json_extract(json,'$.extension')) WHERE json_extract(json,'$.extension') IS NOT NULL");
   }
   bots({ includeDeleted = false } = {}) {
     return this.db
@@ -53,12 +68,18 @@ export class Store {
     return row ? { teamId: row.teamId ?? null, teamOrder: row.teamOrder ?? 0 } : {};
   }
   saveBot(bot) {
-    this.db
-      .prepare(
-        "INSERT INTO bots VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET slug=excluded.slug,thread_id=excluded.thread_id,json=excluded.json",
-      )
-      .run(bot.id, bot.slug, bot.threadId, JSON.stringify(bot));
-    return bot;
+    return this.transaction(() => {
+      const prior = this.db.prepare("SELECT json_extract(json,'$.extension') AS extension FROM bots WHERE id=?").get(bot.id);
+      const extension = prior?.extension ?? this.meta("next-bot-extension") ?? 2;
+      if (!prior) this.meta("next-bot-extension", extension + 1);
+      bot = { ...bot, extension };
+      this.db
+        .prepare(
+          "INSERT INTO bots VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET slug=excluded.slug,thread_id=excluded.thread_id,json=excluded.json",
+        )
+        .run(bot.id, bot.slug, bot.threadId, JSON.stringify(bot));
+      return bot;
+    });
   }
   get(kind, id) {
     const row = this.db

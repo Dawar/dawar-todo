@@ -39,9 +39,32 @@ export async function prepareLocalQueueMutation(runtime, method, botId, params, 
     const list = ownedList(runtime, botId, params.listId);
     const queue = list ? stagedQueue(runtime.store,botId,list.id) : await runtime.queueList(bot);
     const local = stagedQueue(runtime.store, botId, list?.id ?? null);
+    if (typeof params.id === "string") {
+      const reorder = (rows) => {
+        const item = rows.find(item => item.id === params.id);
+        if (!item || !["queued", "failed"].includes(item.state) || !Number.isSafeInteger(params.expectedRevision) ||
+            params.expectedRevision < 1 || params.expectedRevision !== item.revision)
+          throw new Error("This message changed or has started. Refresh the queue and try again.");
+        const target = params.beforeId === null ? null : rows.find(item => item.id === params.beforeId);
+        if (params.beforeId !== null && !target) throw new Error("The destination moved. Refresh the queue and try again.");
+        if (rows.some(item => ["dispatching", "uncertain"].includes(item.state)))
+          throw new Error("A message is starting. Try moving it again after delivery is confirmed.");
+        if (params.beforeId === item.id) return rows;
+        const ordered = rows.filter(row => row.id !== item.id);
+        ordered.splice(target ? ordered.findIndex(row => row.id === target.id) : ordered.length, 0, item);
+        return ordered;
+      };
+      reorder(local);
+      return () => {
+        const ordered = reorder(stagedQueue(runtime.store, botId, list?.id ?? null));
+        ordered.forEach((row, position) => runtime.store.put("promptQueue", { ...row, position }));
+        runtime.emitEvent("queue", {}, botId);
+        return {};
+      };
+    }
     if (!Array.isArray(params.ids) || params.ids.length !== queue.length ||
         new Set(params.ids).size !== queue.length || queue.some(item => !params.ids.includes(item.id)))
-      throw new Error("Reorder must include every queued prompt once.");
+      throw new Error("The queue changed. Refresh it and try moving the message again.");
     if (!local.length && queue.length) return null;
     const legacy = queue.filter(item => !runtime.store.get("promptQueue", item.id));
     if (legacy.some((item, index) => params.ids[index] !== item.id))

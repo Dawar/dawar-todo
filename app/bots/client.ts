@@ -1,5 +1,5 @@
 import { readBotHistory, queueBotHistory, type CachedBotHistory } from "./history-cache.ts";
-import { cloudStatus, cloudUpload, cloudDownload, CloudStorageError } from "./cloud-storage";
+import { cloudStatus, cloudUpload, cloudDownload, cloudRequest, fileSha256, CloudStorageError } from "./cloud-storage";
 import { botFailureOutcome } from "../../lib/bots-response.ts";
 import { validRunState } from "./run-context";
 import type { BotOperations, BotSnapshot, WorkState } from "./single-thread-contract";
@@ -619,6 +619,21 @@ export class BotsClient {
       );
     }
     return this.rpc<BotAttachment>("attachments.finish", botId, { id: a.id }, `${uploadId}:finish`, options);
+  }
+  async copyAttachment(source: BotAttachment, botId: string, id: string, owner = this.owner) {
+    if ((await cloudStatus(owner,()=>this.owner)).portableCopy) {
+      try {
+        const result = await cloudRequest<{attachment:BotAttachment}>(owner,()=>this.owner,"copy",{id:source.id,botId:source.botId,recipientBotId:botId,attachmentId:id});
+        const copy=result.attachment;
+        if (!copy?.ready || copy.id!==id || copy.botId!==botId || copy.size!==source.size || copy.mimeType!==source.mimeType || source.sha256 && copy.sha256!==source.sha256) throw Error("Attachment transfer could not be verified.");
+        return copy;
+      } catch (error) {
+        if (!(error instanceof CloudStorageError) || !["not_found","not_ready"].includes(error.code)) throw error;
+      }
+    }
+    const {blob}=await this.download(source.botId,source.id,owner);
+    if (blob.size!==source.size || source.sha256 && await fileSha256(blob)!==source.sha256) throw Error("Attachment transfer checksum mismatch.");
+    return this.upload(botId,new File([blob],source.name,{type:source.mimeType}),()=>{},id,owner);
   }
   async download(botId: string, id: string, owner = this.owner, signal?:AbortSignal) {
     try { return await cloudDownload(owner,()=>this.owner,botId,id,signal); }

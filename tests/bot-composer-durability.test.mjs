@@ -18,7 +18,7 @@ function setup(legacy = storage()) {
   const calls = [];
   const transport = {
     owner: 'alice', online: false,
-    rpc: async (...args) => { calls.push(args); return {}; },
+    rpc: async (...args) => { calls.push(args); return args[0]==='queue.list' ? [{id:'q1',state:'queued',input:[],attachments:[]}] : {}; },
     upload: async (botId, file, progress, id) => { calls.push(['upload', botId, file, id]); return { id, botId, name: file.name, mimeType: file.type, size: file.size, ready: true }; },
     download: async () => ({ blob: new Blob(['legacy'], { type: 'image/png' }) }),
   };

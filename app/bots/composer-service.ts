@@ -1,5 +1,5 @@
 import { botsClient as client } from "./client";
-import { BotDraftStore } from "./draft-store";
+import { BotDraftStore, PORTABLE_COMPOSER } from "./draft-store";
 import { BotComposer } from "./composer-controller";
 
 class ComposerService {
@@ -13,11 +13,16 @@ class ComposerService {
   error = "";
   private revision = 0;
   snapshot = () => this.revision;
-  peek(owner: string, botId: string | null) { return botId ? this.controllers.get(JSON.stringify([owner, botId])) ?? null : null; }
+  peek(owner: string, botId: string | null) {
+    if (!botId) return null;
+    const composer = this.controllers.get(JSON.stringify([owner, PORTABLE_COMPOSER])) ?? null;
+    composer?.bindBot(botId); return composer;
+  }
   async openComposer(owner: string, botId: string) {
     try {
       const composer = this.get(owner, botId);
       this.notify();
+      if (!composer.record.portableSeeded) { await composer.flush(); await this.store!.seedPortable(owner, botId); if (composer.ready) await composer.refresh(); }
       await composer.open();
       void composer.resumeUploads(); void composer.reconcile();
     } catch {
@@ -29,13 +34,18 @@ class ComposerService {
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   private notify = () => { this.revision++; for (const listener of this.listeners) listener(); };
   get(owner: string, botId: string) {
+    const composer = this.controller(owner, botId, true);
+    composer.bindBot(botId); return composer;
+  }
+  private controller(owner: string, botId: string, portable = false) {
     if (!this.store) this.store = new BotDraftStore(indexedDB, localStorage);
-    const key = JSON.stringify([owner, botId]);
+    const storageKey = portable ? PORTABLE_COMPOSER : botId;
+    const key = JSON.stringify([owner, storageKey]);
     let composer = this.controllers.get(key);
     if (!composer) {
       composer = new BotComposer(owner, botId, this.store, client, () => {
-        this.channel?.postMessage({ owner, botId });
-      });
+        this.channel?.postMessage({ owner, botId: storageKey });
+      }, undefined, portable);
       composer.subscribe(this.notify);
       this.controllers.set(key, composer);
     }
@@ -55,12 +65,13 @@ class ComposerService {
       const records = await this.store.list(owner);
       const legacyIds = this.store.legacyBotIds(owner);
       const ids = new Set([
-        ...records.filter((r) => Object.keys(r.operations).length || Object.values(r.slots).some((d) => d.files.some((f) => !f.remote || !f.hasBytes))).map((r) => r.botId),
+        ...records.filter((r) => Object.keys(r.operations).length || Object.values(r.slots).some((d) => d.files.some((f) => !f.remote?.ready))).map((r) => r.botId),
         ...legacyIds,
       ]);
       for (const botId of ids) {
         if (client.owner !== owner) return;
-        const c = this.get(owner, botId);
+        const c = botId === PORTABLE_COMPOSER ? this.controllers.get(JSON.stringify([owner, botId])) : this.controller(owner, botId);
+        if (!c || botId === PORTABLE_COMPOSER && !c.ready) continue;
         await c.open(false);
         void c.resumeUploads(true);
         void c.reconcile();
@@ -110,6 +121,17 @@ class ComposerService {
       }
     });
     void this.recoverOwner();
+  }
+  async savedDrafts(owner:string) {
+    this.store ??= new BotDraftStore(indexedDB,localStorage);
+    return (await this.store.list(owner)).filter(record=>record.botId!==PORTABLE_COMPOSER && !record.botId.startsWith('run:') &&
+      (Object.keys(record.operations).length || record.slots.normal.text || record.slots.normal.files.length));
+  }
+  async restoreDraft(owner:string,sourceBotId:string) {
+    const composer=this.controllers.get(JSON.stringify([owner,PORTABLE_COMPOSER]));
+    await composer?.flush();
+    await this.store!.seedPortable(owner,sourceBotId,true);
+    await composer?.refresh();this.notify();
   }
   get unsavedElsewhere() {
     return [...this.controllers.values()].filter((c) => c.owner === client.owner && c.storageError);

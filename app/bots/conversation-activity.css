@@ -137,3 +137,5 @@
   .bots-run-error-details summary { min-height: 44px; }
 }
 @media (max-width: 390px) { .bots-run-reply { padding: 12px; } .bots-run-reply form { gap: 4px; } }
+.bots-scheduled-findings > .bots-scheduled-message-mark { display:flex;align-items:center;gap:6px;font-size:11px;color:#819086;margin-bottom:12px; }
+.bots-scheduled-findings > div + div { margin-top:14px; }
