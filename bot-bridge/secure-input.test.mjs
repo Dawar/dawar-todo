@@ -165,3 +165,10 @@ test('receipt wake uses one non-sensitive automatic intake ID, preserves Stop an
  const rows=s.store.list('primaryInbox',bot.id);assert.equal(rows.length,1);assert.equal(rows[0].kind,'secure-input');assert.equal(rows[0].state,'queued');assert.ok(!rows[0].text.includes(marker));assert.equal(s.store.bot(bot.id).queuePaused,true);assert.equal(s.store.db.prepare('SELECT COUNT(*) AS n FROM operations').get().n,0);
  const {projectConversationItem}=loadBrowser().load('lib/bot-conversation.ts');assert.equal(projectConversationItem({id:'turn',status:'completed'},{type:'userMessage',id:'receipt',clientId:rows[0].id,content:[{type:'text',text:rows[0].text}]},{kind:'conversation'}),null);
 });
+test('catalog preserves every outstanding request and sorts old metadata independently of SQLite index order',async t=>{
+ const s=await setup(t),r=await s.request();
+ for(let i=0;i<120;i++)s.store.put('secureInput',{...r.request,id:`closed:${String(120-i).padStart(4,'0')}`,state:'deleted',createdAt:new Date(Date.parse(r.request.createdAt)+i+1).toISOString()});
+ const list=s.secure.list(s.bot);assert.equal(list.length,20);assert.ok(list.some(row=>row.id===r.handle));assert.ok(list.some(row=>row.id==='closed:0001'));
+ assert.ok(s.secure.catalog().some(row=>row.id===r.handle));
+ for(let i=2;i<=8;i++)await s.request('https',`pending-${i}`);await assert.rejects(s.request('https','pending-nine'),/earlier secure request/);assert.equal(s.secure.list(s.bot).filter(row=>row.state==='waiting').length,8);
+});

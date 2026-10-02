@@ -537,7 +537,7 @@ export class BotRuntime extends EventEmitter {
         .bots()
         .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
       pending: this.store.list("pending"),
-      secureInputs: this.store.list("secureInput").slice(-100),
+      secureInputs: this.secure?.catalog() ?? [],
       cursor: this.store.cursor(),
       ready: this.ready,
       account: this.account,

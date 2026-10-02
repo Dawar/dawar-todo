@@ -43,10 +43,18 @@ export class SecureInputs {
         if (!bot || !row || row.botId !== bot.id || row.threadId !== bot.threadId || bot.archived || bot.archiving || bot.deletedAt) throw fail();
         return this.pendingStates.has(handle) ? { ...row, state: this.pendingStates.get(handle) } : row;
     }
-    list(bot) {
-        this.sweep();
-        return this.runtime.store.list('secureInput', bot.id).filter(r => r.threadId === bot.threadId).slice(-20).map(r => this.pendingStates.has(r.id) ? { ...r, state: this.pendingStates.get(r.id) } : r);
+    rows(bot = null) {
+        return this.runtime.store.list('secureInput', bot?.id).filter(r => !bot || r.threadId === bot.threadId).map(r => this.pendingStates.has(r.id) ? { ...r, state: this.pendingStates.get(r.id) } : r);
     }
+    recent(rows, limit) {
+        const order = (a,b) => String(a.createdAt).localeCompare(String(b.createdAt)) || a.id.localeCompare(b.id);
+        const active = rows.filter(r => ['waiting','received'].includes(r.state)).sort(order);
+        const old = rows.filter(r => !['waiting','received'].includes(r.state)).sort(order);
+        const remaining = Math.max(0,limit-active.length);
+        return [...(remaining ? old.slice(-remaining) : []),...active].sort(order).slice(-limit);
+    }
+    list(bot) { this.sweep(); return this.recent(this.rows(bot),20); }
+    catalog() { this.sweep(); return this.recent(this.rows(),100); }
     async request(bot, p, callId) {
         if(this.runtime.primary && !this.runtime.primary.single(bot))throw Error('Secure input requires this named bot’s persistent native thread.');
         if (this.runtime.relayOnline === false)
@@ -66,7 +74,7 @@ export class SecureInputs {
                 throw fail();
             return { request: existing, handle: existing.id };
         }
-        if (this.live.size >= 32 || this.list(bot).filter(r => ['waiting', 'received'].includes(r.state)).length >= 8)
+        if (this.live.size >= 32 || this.rows(bot).filter(r => ['waiting', 'received'].includes(r.state)).length >= 8)
             throw Error('Finish or delete an earlier secure request first.');
         const pair = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, false, ['deriveBits']);
         // Key generation yields. Reconcile this original request identity again
