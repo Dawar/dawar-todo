@@ -2,12 +2,16 @@
 import { useEffect, useMemo, useSyncExternalStore } from "react";
 import { botsClient } from "./client";
 import { BotTimeline } from "./timeline-controller";
+import { registerPwaUpdateGuard } from "../pwa-update";
 
 const timelines = new Map<string, BotTimeline>();
 let listening = false, lastOwner = "";
 function listen() {
   if (listening) return;
   listening = true;
+  registerPwaUpdateGuard("conversation-position", async () => {
+    await Promise.all([...timelines.values()].filter(timeline => timeline.owner === botsClient.owner).map(timeline => timeline.flushForUpdate()));
+  });
   const flush = () => { for (const timeline of timelines.values()) void timeline.flush(); };
   botsClient.events.add((event) => {
     for (const timeline of timelines.values()) if (timeline.owner === botsClient.owner) timeline.receive(event);

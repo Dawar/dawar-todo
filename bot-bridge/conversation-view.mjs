@@ -53,17 +53,30 @@ export async function conversationViewPage(runtime, bot, cursor) {
     if (typeof position.after !== 'string' || position.after.length > 500) throw new Error('Invalid conversation anchor.');
     return conversationViewAfter(runtime, bot, position.after);
   }
+  let hinted = false;
+  if (position.native === null && position.before && runtime.historyReads) {
+    const location = runtime.historyReads.location(bot.threadId, position.before.split(':')[0]);
+    if (location?.cursor) { position.native = location.cursor; hinted = true; }
+  }
   const view = projection(runtime, bot), visited = new Set();
+  let scannedPages = 0;
   const read = async () => {
     if (visited.has(position.native)) throw new Error('Native history pagination made no progress. Reopen the conversation.');
     visited.add(position.native);
+    scannedPages++;
     return runtime.historyPage(bot.threadId, position.native, CONVERSATION_TURNS);
   };
   let page, all, start;
   do {
-    page = await read(); all = view.rows(page);
+    try { page = await read(); }
+    catch (error) {
+      if (!hinted) throw error;
+      hinted = false; position.native = null; visited.clear(); continue;
+    }
+    all = view.rows(page);
     start = position.before ? all.findIndex(({ turn, item }) => historyKey(turn.id, item.id) === position.before) + 1 : 0;
     if (!position.before || start) break;
+    if (hinted) { hinted = false; position.native = null; visited.clear(); continue; }
     position.native = page.nextCursor;
     if (!position.native) throw new Error('This conversation anchor is unavailable. Reload to reconnect its pages.');
   } while (position.native);
@@ -85,9 +98,9 @@ export async function conversationViewPage(runtime, bot, cursor) {
       break;
     }
     olderCursor = page.nextCursor ? JSON.stringify({ native: page.nextCursor, before: null }) : null;
-    if (!page.nextCursor || turnIds.size >= CONVERSATION_TURNS) break;
-    // Routine scheduled/empty turns consume no conversational slots. Continue
-    // natively until 25 useful turns, payload safety bounds, or true exhaustion.
+    if (!page.nextCursor || turnIds.size >= CONVERSATION_TURNS || scannedPages >= 4) break;
+    // Empty legacy pages do not consume conversational slots, but each RPC is
+    // bounded. The remaining exact native cursor stays accessible to the UI.
     position.native = page.nextCursor; page = await read(); all = view.rows(page); index = 0;
   }
   return view.finish(entries.reverse(), { partialTurn, olderCursor, complete: !olderCursor && entries.every(entry => entry.complete) });

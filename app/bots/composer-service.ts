@@ -1,6 +1,7 @@
 import { botsClient as client } from "./client";
 import { BotDraftStore, PORTABLE_COMPOSER, draftFingerprint } from "./draft-store";
 import { BotComposer } from "./composer-controller";
+import { registerPwaUpdateGuard } from "../pwa-update";
 
 export type ComposerClipboard = { type:"dawar-composer"; version:1; snapshotId:string; sourceBotId:string; text:string; files:{name:string;size:number;mimeType:string;state:"ready"|"uploading"}[] };
 export type ComposerPaste = { owner:string; snapshotId:string; targetBotId:string; targetFingerprint:string; operationId:string; move:boolean; nonEmpty:boolean };
@@ -89,6 +90,12 @@ export class ComposerService {
   start() {
     if (this.started) return;
     this.started = true;
+    registerPwaUpdateGuard("bot-drafts", async () => {
+      const controllers = [...this.controllers.values()].filter(c => c.owner === client.owner);
+      if (controllers.some(c => c.committing)) throw Error("Finish the current composer action before refreshing.");
+      await Promise.all(controllers.map(c => c.flush()));
+      if (controllers.some(c => c.dirty || c.storageError)) throw Error("Save your bot drafts before refreshing. Keep this page open.");
+    });
     if (typeof BroadcastChannel !== "undefined") {
       this.channel = new BroadcastChannel("dawar-bot-drafts");
       this.channel.onmessage = (event) => {

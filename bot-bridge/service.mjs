@@ -268,6 +268,8 @@ const health = createServer((request, response) => {
   response.end(
     JSON.stringify({
       ready: runtime.ready,
+      historyReads: { concurrency: runtime.historyReads.concurrency, active: runtime.historyReads.active,
+        pending: runtime.historyReads.pending.size, ...runtime.historyReads.metrics },
       relayConnected: online,
       bots: store.bots().length,
       codexVersion: CODEX_VERSION,

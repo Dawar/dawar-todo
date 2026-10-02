@@ -467,6 +467,11 @@ export class BotTimeline {
     }).finally(() => { this.write = undefined; });
     return this.write;
   }
+  async flushForUpdate() {
+    await this.flush();
+    if (this.dirty.size || this.state.error.startsWith("History is visible but its offline cache"))
+      throw Error("Your conversation position could not be saved. Keep this page open and retry.");
+  }
   detail(entry: HistoryEntry): Promise<ThreadItem> {
     const key = historyKey(entry.turnId, entry.id);
     if (this.transport.owner !== this.owner || this.disposed) return Promise.reject(new Error("Conversation owner changed."));

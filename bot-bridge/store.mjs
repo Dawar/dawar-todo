@@ -14,6 +14,7 @@ export class Store {
       CREATE INDEX IF NOT EXISTS operator_call_records ON records(kind,json_extract(json,'$.callId')) WHERE kind IN ('operatorRequest','operatorSegment','operatorTranscript');
       CREATE INDEX IF NOT EXISTS operator_segment_records ON records(kind,json_extract(json,'$.segmentId')) WHERE kind IN ('operatorRequest','operatorTranscript');
       CREATE INDEX IF NOT EXISTS records_bot ON records(kind,bot_id);
+      CREATE INDEX IF NOT EXISTS run_state_bot ON records(json_extract(json,'$.status'),bot_id) WHERE kind='run';
       CREATE INDEX IF NOT EXISTS prompt_queue_client ON records(bot_id,json_extract(json,'$.clientUserMessageId')) WHERE kind='promptQueue';
       CREATE INDEX IF NOT EXISTS prompt_queue_list_state ON records(bot_id,COALESCE(json_extract(json,'$.listId'),''),json_extract(json,'$.state')) WHERE kind='promptQueue';
       CREATE INDEX IF NOT EXISTS primary_intake_source ON records(json_extract(json,'$.sourceId'),json_extract(json,'$.state')) WHERE kind='primaryInbox';
@@ -39,6 +40,11 @@ export class Store {
       CREATE TABLE IF NOT EXISTS events(seq INTEGER PRIMARY KEY AUTOINCREMENT, json TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS events_bot_cursor ON events(json_extract(json,'$.botId'),seq);
       CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, json TEXT NOT NULL);`);
+    // Incrementally observed native cursor locations, not history or execution
+    // authority. Exact native identity is verified whenever a hint is used.
+    this.db.exec(`CREATE TABLE IF NOT EXISTS native_history_locations(
+      thread_id TEXT NOT NULL, turn_id TEXT NOT NULL, cursor TEXT, page_limit INTEGER NOT NULL,
+      PRIMARY KEY(thread_id,turn_id))`);
     this.transaction(() => {
       const bots = this.db.prepare("SELECT json FROM bots ORDER BY rowid").all().map(row => JSON.parse(row.json));
       let next = Math.max(2, Number(this.meta("next-bot-extension")) || 2,

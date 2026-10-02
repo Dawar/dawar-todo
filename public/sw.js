@@ -1,5 +1,5 @@
 const CACHE_PREFIX = "dawar-todo-shell-";
-const CACHE_NAME = `${CACHE_PREFIX}v65`;
+const CACHE_NAME = `${CACHE_PREFIX}v66`;
 const SHELL = [
   "/",
   "/tasks",
@@ -8,6 +8,7 @@ const SHELL = [
   "/talk",
   "/bots",
   "/manifest.webmanifest",
+  "/pwa-build.json",
   "/icons/icon-192.png",
   "/icons/icon-512.png",
   "/icons/icon-maskable-512.png",
@@ -240,7 +241,23 @@ self.addEventListener("fetch", (event) => {
 });
 
 self.addEventListener("message", (event) => {
-  if (event.data?.type === "PWA_VERSION") event.ports?.[0]?.postMessage({ cache: CACHE_NAME, databaseVersion: 11 });
+  if (event.data?.type === "PWA_VERSION") event.waitUntil((async () => {
+    const cache = await caches.open(CACHE_NAME);
+    const manifest = await cache.match("/pwa-build.json");
+    let build = null; try { build = (await manifest?.json())?.build ?? null; } catch { /* Older shells have no build marker. */ }
+    event.ports?.[0]?.postMessage({ cache: CACHE_NAME, databaseVersion: 11, build });
+  })());
+  if (event.data?.type === "PWA_REFRESH_DOCUMENT") event.waitUntil((async () => {
+    try {
+      const url = new URL(event.data.url);
+      if (url.origin !== self.location.origin) throw Error("Invalid document origin.");
+      const response = await fetch(new Request(url.href, { cache: "reload", credentials: "same-origin" }));
+      if (!response.ok || new URL(response.url).origin !== self.location.origin || !response.headers.get("Content-Type")?.includes("text/html")) throw Error("Document unavailable.");
+      // Required assets must all succeed before replacing any document shell.
+      await refreshDocumentShell(response, url.pathname);
+      event.ports?.[0]?.postMessage({ ok: true });
+    } catch { event.ports?.[0]?.postMessage({ ok: false }); }
+  })());
   if (event.data?.type === "SKIP_WAITING") self.skipWaiting();
 });
 

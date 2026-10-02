@@ -146,7 +146,11 @@ export class PrimaryExecution {
   }
   cursor(value) { if (value == null) return 0; if (typeof value !== 'string' || !/^\d{1,16}$/.test(value) || !Number.isSafeInteger(Number(value))) throw new Error('Invalid cursor.'); return Number(value); }
   stageSchedules(bot) {
-    for (let run of this.store.list('run', bot.id).filter(r => r.status === 'queued' && !r.laneId && (!r.executionLane || r.executionLane === 'main-single')).sort((a, b) => a.scheduledAt.localeCompare(b.scheduledAt) || a.id.localeCompare(b.id))) {
+    const rows = this.store.db.prepare(`SELECT json FROM records WHERE kind='run' AND bot_id=?
+      AND json_extract(json,'$.status')='queued' AND COALESCE(json_extract(json,'$.laneId'),'')=''
+      AND COALESCE(json_extract(json,'$.executionLane'),'') IN ('','main-single')
+      ORDER BY json_extract(json,'$.scheduledAt'),id`).all(bot.id);
+    for (let run of rows.map(row => JSON.parse(row.json))) {
       run = this.runtime.scheduleDecisions.ensure(run.id);
       if (!occurrenceReady(run) || this.store.operation(run.operationId ?? `schedule:${run.id}`)) continue;
       // Retained intake input/fingerprint is immutable across upgrades.
@@ -360,6 +364,11 @@ export class PrimaryExecution {
     } catch { return false; }
   }
   async tick() {
+    if (this.tickRunning) return;
+    this.tickRunning = true;
+    try { await this.tickPass(); } finally { this.tickRunning = false; }
+  }
+  async tickPass() {
     // Spend read slots only on due, unlocked candidates, rotating after every
     // attempt (including failure). Backoff and stable original IDs survive restarts.
     const rotate = (rows, after) => {
@@ -384,9 +393,17 @@ export class PrimaryExecution {
         if (current && ['dispatching', 'uncertain', 'accepted'].includes(current.state) && !current.terminalStatus) await this.recover(current);
       }).catch(e => this.runtime.emit('fault', e));
     }
-    for (const bot of this.store.bots()) {
-      if (this.runtime.locks.has(bot.id) || bot.archived || !this.single(bot)) continue;
-      await this.runtime.lock(bot.id, async () => {
+    // Two concurrent per-bot admission preparations. Native execution itself
+    // remains native-owned. A slow bot cannot monopolize every admission slot.
+    this.admissionBackoff ??= new Map();
+    const candidates = this.store.bots().filter(bot => !this.runtime.locks.has(bot.id) && !bot.archived && this.single(bot) &&
+      !(this.admissionBackoff.get(bot.id)?.after > Date.now()) && (
+        stagedQueue(this.store, bot.id).some(item => item.state === 'queued') || this.openItems(bot.id).some(item => item.state === 'queued') ||
+        this.store.db.prepare(`SELECT 1 FROM records WHERE kind='run' AND bot_id=? AND json_extract(json,'$.status')='queued' LIMIT 1`).get(bot.id) ||
+        this.store.list('executionStop', bot.id).some(stop => stop.primaryMode && stop.state !== 'done')));
+    const admitted = rotate(candidates, this.admissionAfter);
+    if (admitted.length) this.admissionAfter = admitted[0].id;
+    const admit = bot => this.runtime.lock(bot.id, async () => {
         const preparingStop = this.store.list('executionStop', bot.id).find(s => s.primaryMode && s.state !== 'done' &&
           !(Date.parse(s.reconcileAfter ?? '') > Date.now()) && this.store.get('primaryStop', s.id)?.goal?.state === 'queued');
         if (preparingStop) {
@@ -409,7 +426,15 @@ export class PrimaryExecution {
         if (current.queuePaused || (current.activeTurnId && current.mode !== 'default') || current.archiving || this.runtime.activityUnresolved(bot.id) || this.store.list('pending', bot.id).length || items.some(i => ['dispatching', 'uncertain'].includes(i.state))) return;
         const first = this.openItems(bot.id).filter(i => i.state === 'queued' && (i.kind !== 'schedule' || occurrenceReady(this.store.get('run', i.sourceId)))).sort((a, b) => (a.kind === 'schedule' ? 0 : 1) - (b.kind === 'schedule' ? 0 : 1))[0];
         if (first) await this.submit(current, first);
-      }).catch(e => this.runtime.emit('fault', e));
-    }
+      }).then(() => this.admissionBackoff.delete(bot.id)).catch(e => {
+        const attempts = (this.admissionBackoff.get(bot.id)?.attempts ?? 0) + 1;
+        const delay = Math.min(60_000, 1000 * 2 ** Math.min(attempts, 6));
+        this.admissionBackoff.set(bot.id, { attempts, after: Date.now() + delay });
+        this.runtime.emit('fault', e);
+      });
+    let next = 0;
+    await Promise.all(Array.from({ length: Math.min(2, admitted.length) }, async () => {
+      while (next < admitted.length) await admit(admitted[next++]);
+    }));
   }
 }

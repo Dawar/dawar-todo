@@ -33,8 +33,10 @@ export async function historyViewPage(runtime, bot, cursor = null, turnId = null
   turnId ??= position.turnId;
   if (turnId != null && (typeof turnId !== 'string' || turnId.length > 200)) throw new Error('Invalid turn id.');
   let page, all, start = 0;
+  const selected = turnId && runtime.historyReads ? await runtime.historyReads.turn(target?.threadId ?? bot.threadId, turnId) : null;
+  if (turnId && runtime.historyReads && !selected) throw new Error('This turn is not available in native conversation history.');
   do {
-    page = await runtime.historyPage(target?.threadId ?? bot.threadId, position.native);
+    page = selected ? { data: [selected], nextCursor: null } : await runtime.historyPage(target?.threadId ?? bot.threadId, position.native);
     all = [];
     if (turnId && !page.data.some((turn) => turn.id === turnId)) {
       position.native = page.nextCursor;
@@ -89,6 +91,12 @@ export function historyRevision(runtime, bot) {
 function detailRevision(runtime, bot) {
   return `${runtime.epoch}:${bot.threadId}:${bot.updatedAt}:${runtime.historyContentVersions?.get(bot.id) ?? 0}`;
 }
+function runObservation(runtime, bot, target) {
+  // Other named bots' events cannot change this opened transcript. Retain
+  // global eventCursor for replay, but scope invalidation to owned evidence.
+  const seq = runtime.store.db.prepare("SELECT COALESCE(MAX(seq),0) AS seq FROM events WHERE json_extract(json,'$.botId')=?").get(bot.id).seq;
+  return `${runtime.epoch}:${target.versionKey}:${target.updatedAt}:${seq}`;
+}
 
 export async function readHistoryView(runtime, bot, params) {
   const target = runtime.resolveHistoryTarget(bot, params);
@@ -106,9 +114,7 @@ export async function readHistoryView(runtime, bot, params) {
       cursor = value.cursor;
     }
     const eventCursor = runtime.store.cursor();
-    // A global sequence conservatively invalidates an explicitly opened run;
-    // it never wakes main history or polls an unopened transcript.
-    const revision = `${runtime.epoch}:${target.versionKey}:${target.updatedAt}:${eventCursor}:run-view-v1`;
+    const revision = `${runObservation(runtime, bot, target)}:run-view-v2`;
     if (!cursor && params.revision === revision) return { kind: 'unchanged', context, revision, eventCursor };
     const page = await historyViewPage(runtime, bot, cursor, target.turnId, target);
     return { kind: 'page', ...page, context, turnIds: [target.turnId], revision, eventCursor,
@@ -140,7 +146,7 @@ export async function readHistoryView(runtime, bot, params) {
 export async function readHistoryDetail(runtime, bot, params) {
   const target = runtime.resolveHistoryTarget(bot, params);
   const context = { laneId: target.laneId, runId: target.runId, threadId: target.threadId };
-  const revisionForDetail = () => target.runId ? `${runtime.epoch}:${target.versionKey}:${target.updatedAt}:${runtime.store.cursor()}` : detailRevision(runtime, bot);
+  const revisionForDetail = () => target.runId ? runObservation(runtime, bot, target) : detailRevision(runtime, bot);
   if (typeof params.turnId !== 'string' || typeof params.itemId !== 'string' || params.turnId.length > 200 || params.itemId.length > 200)
     throw new Error('Invalid history item.');
   if (target.runId && target.turnId !== params.turnId) throw new Error('The selected item belongs to another run part.');
@@ -156,7 +162,8 @@ export async function readHistoryDetail(runtime, bot, params) {
       const revision = revisionForDetail(), eventCursor = runtime.store.cursor();
       let cursor = null, item = !target.runId && runtime.historySupplements?.get(`${bot.id}:${params.turnId}:${params.itemId}`);
       if (!item && ['live-turn-diff', 'live-turn-plan'].includes(params.itemId)) throw new Error('This live aggregate has expired. Individual commands and file changes remain in native history.');
-      if (!item) do {
+      if (!item && runtime.historyReads) item = (await runtime.historyReads.turn(target.threadId, params.turnId))?.items.find(entry => entry.id === params.itemId);
+      else if (!item) do {
         const page = await runtime.historyPage(target.threadId, cursor);
         item = page.data.find((turn) => turn.id === params.turnId)?.items.find((entry) => entry.id === params.itemId);
         cursor = page.nextCursor;

@@ -1,4 +1,5 @@
 import { OperatorCalls } from './operator.mjs';
+import { HistoryReads } from './history-reads.mjs';
 import { desktopInstructions } from "./desktops.mjs";
 import { DOWNLOAD_ATTACHMENT_TOOL, localFileDigest } from "./storage.mjs";
 import { initialPreferences, preferencePatch } from "./bot-preferences.mjs";
@@ -186,6 +187,7 @@ export class BotRuntime extends EventEmitter {
       defaultTimeZone: store.meta("timeZone") ?? defaultTimeZone,
     });
     this.epoch = randomUUID();
+    this.historyReads = new HistoryReads(this);
     this.primary = new PrimaryExecution(this);
     this.operator = new OperatorCalls(this);
     this.peers = new PeerInbox(this);
@@ -512,7 +514,7 @@ export class BotRuntime extends EventEmitter {
   }
   snapshot() {
     return {
-      capabilities: { backgroundRunLanes: 1, scheduleDecisions: 1, singleThreadExecution: 1, peerInbox: 1, nativeGoals: 1, nativeConversation: 1, operatorCalls: 1, messageBursts: 1, burstDiscard: 1, queueLists: 1, queueRelativeMoves: 1, teams: 1, ...(this.desktops ? { botDesktops: 1 } : {}) },
+      capabilities: { backgroundRunLanes: 1, scheduleDecisions: 1, singleThreadExecution: 1, peerInbox: 1, nativeGoals: 1, nativeConversation: 1, operatorCalls: 1, historyCursorIndex: 1, messageBursts: 1, burstDiscard: 1, queueLists: 1, queueRelativeMoves: 1, teams: 1, ...(this.desktops ? { botDesktops: 1 } : {}) },
       teams: publicTeams(this),
       workByBot: this.store.bots().map(bot => this.primary.work(bot)),
       ...this.runs.snapshot(),
@@ -1191,6 +1193,9 @@ export class BotRuntime extends EventEmitter {
     return saved;
   }
   async historyPage(threadId, cursor = null, limit = 20) {
+    return this.historyReads.page(threadId, cursor, limit);
+  }
+  async rawHistoryPage(threadId, cursor = null, limit = 20, itemsView = 'full') {
     // Codex 0.156.1 can acknowledge thread/start before its rollout and
     // paginated store are readable. A full native read synchronizes that store.
     // Never turn an unavailable or corrupt history into an empty conversation.
@@ -1207,7 +1212,7 @@ export class BotRuntime extends EventEmitter {
           cursor,
           limit,
           sortDirection: "desc",
-          itemsView: "full",
+          itemsView,
         });
       } catch (error) {
         if (
@@ -1996,7 +2001,9 @@ export class BotRuntime extends EventEmitter {
       await recoverRunTurns(this);
       await reconcileActiveTurns(this);
       let recovered = 0;
-      for (const item of this.store.list("promptQueue")) {
+      const recoveryRows = this.store.db.prepare(`SELECT json_remove(json,'$.input','$.text') AS json FROM records
+        WHERE kind='promptQueue' AND json_extract(json,'$.state') IN ('dispatching','uncertain','native-queued')`).all();
+      for (const item of recoveryRows.map(row => JSON.parse(row.json))) {
         if (!["dispatching", "uncertain", "native-queued"].includes(item.state) || this.locks.has(item.botId) ||
             Date.parse(item.reconcileAfter ?? "") > Date.now() || recovered >= 2) continue;
         recovered++;
@@ -2006,7 +2013,9 @@ export class BotRuntime extends EventEmitter {
         });
       }
       let runsChecked = 0;
-      for (const run of this.store.list("run")) {
+      const activeRunRows = this.store.db.prepare(`SELECT json_remove(json,'$.prompt','$.input') AS json FROM records
+        WHERE kind='run' AND json_extract(json,'$.status') IN ('starting','running','uncertain')`).all();
+      for (const run of activeRunRows.map(row => JSON.parse(row.json))) {
         if (run.executionLane === "run-v1" || !["starting", "running", "uncertain"].includes(run.status) || this.locks.has(run.botId) ||
             Date.parse(run.reconcileAfter ?? "") > Date.now() || runsChecked >= 2) continue;
         runsChecked++;
@@ -2025,8 +2034,11 @@ export class BotRuntime extends EventEmitter {
       void this.runs.tick().catch(error => this.emit("fault", error));
       await flushDueLists(this);
       await this.bursts.tick();
-      await this.primary.tick();
+      void this.primary.tick().catch(error => this.emit('fault', error));
       for (const bot of this.store.bots()) {
+        // Primary admission owns single-thread bots. Native accepted queues
+        // wake themselves; do not list every idle bot's native queue each tick.
+        if (this.primary.single(bot)) continue;
         // Native 0.156.1 also skips interrupted thread idle and wake events.
         // Keep the bridge pause across restart until queue.resume is requested.
         if (

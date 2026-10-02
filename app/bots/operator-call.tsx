@@ -5,6 +5,7 @@ import type { OperatorBot, OperatorContext, OperatorSegment, OperatorView } from
 import { OperatorVoiceEvents } from '../../lib/operator-voice-events';
 import { BotMessage } from './message';
 import { botsClient } from './client';
+import { registerPwaUpdateGuard } from '../pwa-update';
 import './operator-call.css';
 
 async function api<T>(url: string, input?: Record<string, unknown>, method = 'POST'): Promise<T> {
@@ -91,6 +92,9 @@ export function OperatorCallDialog({ bot, bots, onClose }: { bot: OperatorBot | 
   const ended = useRef(false), voice = useRef<OperatorVoiceEvents | null>(null), tools = useRef(Promise.resolve()), alive = useRef(true);
   const startingRef = useRef(false);
   const polling = useRef(false), queuedTools = useRef(new Set<string>()), lastSpeech = useRef(0);
+  useEffect(() => registerPwaUpdateGuard('operator-call', async () => {
+    if (startingRef.current || session.current && !ended.current) throw Error('Finish the voice call before refreshing.');
+  }), []);
   const send = (event: Record<string, unknown>) => { if (channel.current?.readyState !== 'open') return false; channel.current.send(JSON.stringify(event)); return true; };
   useEffect(() => { voice.current = new OperatorVoiceEvents(event => { if (channel.current?.readyState !== "open") return false; channel.current.send(JSON.stringify(event)); return true; }); }, []);
   async function refresh() {

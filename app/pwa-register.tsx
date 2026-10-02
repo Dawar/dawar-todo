@@ -63,11 +63,22 @@ export function PwaRegister() {
       });
       return;
     }
+    let registration: ServiceWorkerRegistration | undefined, checking = false, checkedAt = 0, disposed = false;
     const inspect = () => { void inspectWorkerVersion(); };
+    const check = async () => {
+      if (!registration || checking || document.hidden || !navigator.onLine || Date.now() - checkedAt < 60_000) return;
+      checking = true; checkedAt = Date.now();
+      try { await registration.update(); await inspectWorkerVersion(); }
+      catch { /* Offline/transient discovery is quiet; current data is retained. */ }
+      finally { checking = false; }
+    };
+    const discover = () => { void check(); };
     navigator.serviceWorker.addEventListener("controllerchange", inspect);
     inspect();
     const register = () => navigator.serviceWorker.register("/sw.js", { scope: "/" })
-      .then((registration) => {
+      .then((registered) => {
+        if (disposed) return;
+        registration = registered;
         console.info("[todo-pwa] service worker registered", { scope: registration.scope });
         void refreshExistingPushSubscription(registration).catch((error) => {
           console.warn("[todo-push] app-launch subscription refresh failed; scheduled delivery will retry", {
@@ -79,7 +90,10 @@ export function PwaRegister() {
       .catch((error) => console.error("[todo-pwa] service worker registration failed", error));
     if (document.readyState === "complete") void register();
     else window.addEventListener("load", register, { once: true });
-    return () => { window.removeEventListener("load", register); navigator.serviceWorker.removeEventListener("controllerchange", inspect); };
+    const interval = window.setInterval(discover, 5 * 60_000);
+    window.addEventListener("online", discover); window.addEventListener("focus", discover);
+    document.addEventListener("visibilitychange", discover);
+    return () => { disposed = true; clearInterval(interval); window.removeEventListener("online", discover); window.removeEventListener("focus", discover); document.removeEventListener("visibilitychange", discover); window.removeEventListener("load", register); navigator.serviceWorker.removeEventListener("controllerchange", inspect); };
   }, []);
   return <StorageLifecycleNotice />;
 }

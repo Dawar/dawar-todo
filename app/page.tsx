@@ -15,6 +15,7 @@ import {
   useState,
 } from "react";
 import { TodoForward } from "./todo-forward-picker";
+import { registerPwaUpdateGuard } from "./pwa-update";
 import { todoCopyText } from "./todo-forward";
 import { TaskCaptureSession, TaskCaptureGate } from "./task-capture";
 import { TaskIntentPanel } from "./task-intent-panel";
@@ -1488,6 +1489,8 @@ export default function Home() {
   const newTitleRef = useRef("");
   const captureDraftClientIdRef = useRef(crypto.randomUUID());
   const captureDraftRef = useRef<CaptureDraft | null>(null);
+  const prepareUpdateRef = useRef<() => Promise<void>>(async () => {});
+  useEffect(() => registerPwaUpdateGuard("todo-input", () => prepareUpdateRef.current()), []);
   const captureDraftSaveTimerRef = useRef<number | null>(null);
   const captureDraftInFlightRef = useRef(false);
   const queuedCaptureDraftRef = useRef<CaptureDraft | null>(null);
@@ -4300,6 +4303,14 @@ export default function Home() {
   }
 
   persistTaskDraftRef.current = persistTaskDraft;
+  prepareUpdateRef.current = async () => {
+    // Editing values can be intentionally invalid. Keep that editor open,
+    // rather than force a save or discard it during an unrelated app update.
+    if (editingIdRef.current !== null) throw Error("Close the task editor after saving before refreshing.");
+    if (captureGate.current.adding || voiceTarget) throw Error("Finish the current capture before refreshing.");
+    if (captureGate.current.ready) await checkpointCapture();
+    else if (captureDraftRef.current?.text || captureFilesRef.current.length) throw Error("Wait for your capture draft to finish loading before refreshing.");
+  };
   closeTaskDetailsRef.current = closeTaskDetails;
 
   function taskAction(todo: Todo, action: TodoAction, source: "hover" | "swipe" | "details") {
