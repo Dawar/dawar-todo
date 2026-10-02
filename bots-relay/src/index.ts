@@ -1,3 +1,4 @@
+import { secureBrowserFrame } from "../../lib/secure-relay";
 import { DurableObject } from "cloudflare:workers";
 import { secretMatches, verifyBotTicket } from "../../lib/bots-auth";
 
@@ -234,6 +235,13 @@ export class BotRelay extends DurableObject<Env> {
             ? { exclusive: message.exclusive === true }
             : {}),
         });
+      } else if (message.type === "secure" && c.role === "browser") {
+        const frame = secureBrowserFrame(message, c.owner!, c.id), machine = this.machine();
+        if (!machine) { send(socket, { type:"secure.response", id:message.id, error:"Bot bridge offline. Sensitive input was not stored." }); return; }
+        send(machine, frame);
+      } else if (message.type === "secure.response" && c.role === "machine") {
+        const target = this.ctx.getWebSockets().find(s => { const p=this.connection(s); return p?.role==="browser" && !p.desktop && p.id===message.clientId && p.expiresAt>Date.now(); });
+        if(target)send(target,{type:"secure.response",id:message.id,result:message.result,error:message.error});
       } else if (c.role === "browser") {
         if (
           message.type !== "request" ||

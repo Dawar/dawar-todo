@@ -48,6 +48,7 @@ const manager = new CodexManager({
 });
 runtime.manager = manager;
 runtime.desktops = new BotDesktops({ runtime, adopt: JSON.parse(process.env.BOTS_DESKTOP_ADOPT ?? '{}') });
+runtime.relayOnline = false;
 let socket = null,
   stopping = false,
   retry = 0,
@@ -117,9 +118,17 @@ function connect() {
       return;
     }
     if (message.type === "authenticated") {
-      online = true;
+      online = true; runtime.relayOnline = true;
       retry = 0;
       log("relay.connected");
+      return;
+    }
+    if (message.type === "secure") {
+      // Never bridgeResponse/handle/sendLarge/log this sensitive envelope.
+      let response;
+      try { response = { type:"secure.response", id:message.id, clientId:message.clientId, result:await runtime.secure.channel(message) }; }
+      catch { response = { type:"secure.response", id:message.id, clientId:message.clientId, error:"Secure transfer rejected or unavailable. Retain input while open; inspect status or request a fresh form." }; }
+      if(current.readyState===WebSocket.OPEN)current.send(JSON.stringify(response));
       return;
     }
     if (message.type === "desktop") {
@@ -136,7 +145,7 @@ function connect() {
   });
   current.addEventListener("error", () => {});
   current.addEventListener("close", async () => {
-    if (socket === current) { online = false; await runtime.desktops.disconnect(); }
+    if (socket === current) { online = false; runtime.relayOnline = false; await runtime.desktops.disconnect(); }
     if (!stopping) {
       const delay =
         Math.min(30000, 1000 * 2 ** Math.min(retry++, 5)) + Math.random() * 500;
@@ -292,6 +301,7 @@ async function stop() {
   clearInterval(heartbeat);
   socket?.close();
   health.close();
+  runtime.secure?.close();
   codex.close();
   await runtime.desktops.close();
   await manager.close();

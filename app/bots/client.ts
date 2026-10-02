@@ -43,6 +43,7 @@ function validComposerResult(method: string, result: Record<string, unknown> | u
   return true;
 }
 function snapshotEventKey(event: BotEvent) {
+  if(event.type === "secure.status")return `secure:${(event.data as {id:string}).id}`;
   if (event.type === "work" && event.botId) return `work:${event.botId}`;
   if (event.type === "run.state" && event.botId) return `run:${event.botId}:${(event.data as BotRunStateEvent).runId}`;
   if (event.type === "run.request" || event.type === "run.request.resolved") return `request:${(event.data as { key: string }).key}`;
@@ -54,6 +55,7 @@ function snapshotEventKey(event: BotEvent) {
   return null;
 }
 function applySnapshotEvent(snapshot: BotSnapshot, event: BotEvent, key?: string): BotSnapshot {
+  if(event.type === "secure.status"){const request=event.data as import("../../lib/secure-input").SecureRequest;return {...snapshot,secureInputs:[...(snapshot.secureInputs??[]).filter(r=>r.id!==request.id),request].slice(-100)};}
   if (event.type === "teams") {
     const teams = (event.data as { teams?: BotSnapshot["teams"] }).teams;
     return Array.isArray(teams) ? { ...snapshot, teams } : snapshot;
@@ -186,6 +188,7 @@ export class BotsClient {
       pending.reject(new BotRpcError("The signed-in owner changed. The submitted operation is retained for its original owner.", "uncertain"));
     }
     this.pending.clear();
+    for(const pending of this.securePending.values()){clearTimeout(pending.timer);pending.reject(Error('Signed-in owner changed. Close the sensitive form.'));}this.securePending.clear();
     this.snapshot = null;
     this.fullSnapshotCursor = -1;
     this.latestSnapshotEvent = 0;
@@ -304,6 +307,7 @@ export class BotsClient {
       socket.onclose = () => {
         if (this.socket !== socket) return;
         this.online = false;
+        for(const p of this.securePending.values()){clearTimeout(p.timer);p.reject(Error("Bridge disconnected. Retry the same encrypted submission while the form remains open."));}this.securePending.clear();
         this.eventChunks.clear();
         for (const p of this.pending.values()) {
           p.chunks = undefined;
@@ -334,7 +338,26 @@ export class BotsClient {
       Math.min(30000, 1000 * 2 ** Math.min(this.retry++, 5)),
     );
   }
+  private securePending = new Map<string, {owner:string;resolve:(v:unknown)=>void;reject:(e:Error)=>void;timer:ReturnType<typeof setTimeout>}>();
+  secure<T>(frame: Record<string, unknown>): Promise<T> {
+    if(!this.online || !this.socket || this.socket.readyState!==WebSocket.OPEN)return Promise.reject(Error("Bot bridge offline. Keep the form open to retain input."));
+    const id=crypto.randomUUID(),owner=this.owner;
+    return new Promise((resolve,reject)=>{
+      const timer=setTimeout(()=>{this.securePending.delete(id);reject(Error("Delivery unconfirmed. Retry the same encrypted submission or check status."));},15000);
+      this.securePending.set(id,{owner,resolve:resolve as (v:unknown)=>void,reject,timer});
+      try{this.socket!.send(JSON.stringify({...frame,type:"secure",id}));}catch{clearTimeout(timer);this.securePending.delete(id);reject(Error("Delivery unconfirmed. Keep this form open to retry."));}
+    });
+  }
   receive(message: Record<string, unknown>) {
+    if(message.type==="secure.response"){
+      const pending=this.securePending.get(String(message.id));if(!pending)return;
+      this.securePending.delete(String(message.id));clearTimeout(pending.timer);
+      if(pending.owner!==this.owner)pending.reject(Error("Signed-in owner changed. Sensitive form was discarded."));
+      else if(message.error)pending.reject(Error("Secure input rejected or unavailable. Check status or request a fresh form."));
+      else pending.resolve(message.result);
+      return;
+    }
+
     if (message.type === "eventChunk") {
       const seq = Number(message.seq),
         total = Number(message.total),

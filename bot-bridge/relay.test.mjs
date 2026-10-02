@@ -64,8 +64,19 @@ function setup() {
     return s;
   };
   const send = (s, m) => relay.webSocketMessage(s, JSON.stringify(m));
-  return { relay, socket, send, sockets };
+  return { relay, socket, send, sockets, storage };
 }
+test('secure channel requires authentication, binds routing and never stores or broadcasts transfer frames', async () => {
+  const {socket,send,storage}=setup(),machine=socket('machine'),a=socket('a'),b=socket('b'),pending=socket('unauthenticated');
+  await send(machine,{type:'auth',role:'machine',machineId:'vm',credential:'machine'});
+  await send(a,{type:'auth',ticket:await ticket()});await send(b,{type:'auth',ticket:await ticket()});
+  const frame={type:'secure',id:'secure-frame',action:'key',botId:'A',threadId:'thread-A',requestId:'secure:request',owner:'forged-owner',clientId:'forged-client'};
+  await send(pending,frame);assert.equal(pending.closed,1008);
+  await send(a,frame);assert.equal(machine.sent.at(-1).owner,'owner');assert.equal(machine.sent.at(-1).clientId,'a');
+  const before=b.sent.length;await send(machine,{type:'secure.response',clientId:'a',id:'secure-frame',result:{request:{state:'waiting'},publicKey:{kty:'EC'}}});
+  assert.equal(a.sent.at(-1).type,'secure.response');assert.equal(b.sent.length,before);assert.ok(!JSON.stringify([...storage]).includes('secure-frame'));
+  machine.close(1000);await send(a,frame);assert.equal(a.sent.at(-1).type,'secure.response');assert.match(a.sent.at(-1).error,/offline/);
+});
 async function ticket() {
   const n = Math.floor(Date.now() / 1000);
   return signBotTicket(

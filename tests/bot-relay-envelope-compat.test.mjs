@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { EventEmitter } from 'node:events';
 import vm from 'node:vm';
 import ts from 'typescript';
+import { secureBrowserFrame } from '../lib/secure-relay.ts';
 import { Store } from '../bot-bridge/store.mjs';
 import { BotRuntime } from '../bot-bridge/runtime.mjs';
 import { bridgeResponse } from '../bot-bridge/response.mjs';
@@ -26,6 +27,7 @@ function relayClass(source) {
   return compile(source, { WebSocket: { OPEN: 1 }, require(name) {
     if (name === 'cloudflare:workers') return { DurableObject: class { constructor(ctx, env) { this.ctx = ctx; this.env = env; } } };
     if (name === '../../lib/bots-auth') return { secretMatches() { throw new Error('Unexpected authentication path'); }, verifyBotTicket() { throw new Error('Unexpected authentication path'); } };
+    if (name === '../../lib/secure-relay') return { secureBrowserFrame };
     throw new Error(`Unexpected relay import ${name}`);
   } }).BotRelay;
 }
@@ -78,6 +80,8 @@ async function setup(t, { relay = OldRelay, transform = (r) => r } = {}) {
   t.after(async () => { journal.close(); await rm(dir, { recursive: true, force: true }); });
   const runtime = new BotRuntime({ store: journal, codex: native, root: join(dir, 'bots') });
   await runtime.start();
+  runtime.newBotDefaults = { model: 'gpt-6-luna', effort: 'high' }; // Match this synthetic catalog, not production defaults.
+  t.after(() => runtime.secure?.close());
   const bot = await runtime.handle({ method: 'bots.create', params: { name: 'Envelope test' }, operationId: 'create-envelope-bot' });
   const timers = new Map(); let timerId = 0;
   const env = browserRuntime({ Error, TypeError, btoa, atob, localStorage: entries(), WebSocket: { OPEN: 1 },

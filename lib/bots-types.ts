@@ -192,7 +192,8 @@ export type BotRunRequestEvent = BotRequest & BotRunContext;
 export type BotRunRequestResolvedEvent = BotRunContext & { key: string };
 export type BotQueueList = { id: string; botId: string; name: string; cron: string | null; timeZone: string; enabled: boolean; nextRunAt: string | null; revision: number; count: number; createdAt: string; lastFlushedAt?: string; lastFlushedCount?: number };
 export type BotSnapshot = {
-  capabilities?: { botDesktops?: 1; backgroundRunLanes?: 1; scheduleDecisions?: 1; singleThreadExecution?: 1; peerInbox?: 1; nativeGoals?: 1; nativeConversation?: 1; messageReplies?: 1; operatorCalls?: 1; messageBursts?: 1; burstDiscard?: 1; queueLists?: 1; queueRelativeMoves?: 1; teams?: 1 };
+  secureInputs?: import("./secure-input").SecureRequest[];
+  capabilities?: { botDesktops?: 1; backgroundRunLanes?: 1; scheduleDecisions?: 1; singleThreadExecution?: 1; peerInbox?: 1; nativeGoals?: 1; nativeConversation?: 1; messageReplies?: 1; secureInputs?: 1; operatorCalls?: 1; messageBursts?: 1; burstDiscard?: 1; queueLists?: 1; queueRelativeMoves?: 1; teams?: 1 };
   teams?: BotTeam[];
   workByBot?: BotWorkState[];
   backgroundByBot?: BotBackground[];
@@ -266,7 +267,7 @@ export type BotWorkState = {
   activeTurnId: string | null; paused: boolean; summary: string | null; remaining: string | null; waitingFor: string[];
   goal: import("./codex-protocol/v2/ThreadGoal").ThreadGoal | null; goalObservedAt: string | null; migrationReason: string | null;
 };
-export type BotInboxItem = { id: string; botId: string; kind: "schedule" | "peer"; sourceId: string; summary: string;
+export type BotInboxItem = { id: string; botId: string; kind: "schedule" | "peer" | "secure-input"; sourceId: string; summary: string;
   state: "queued" | "dispatching" | "accepted" | "uncertain" | "cancelled" | "failed"; createdAt: string; turnId: string | null; waitReason: string | null };
 export type BotPeerRequest = { id: string; rootId: string; parentId: string | null; senderBotId: string; recipientBotId: string;
   kind: "message" | "question" | "task"; summary: string; state: "queued" | "working" | "waiting" | "completed" | "cancelled" | "failed" | "delivery-unconfirmed";

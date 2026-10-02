@@ -28,7 +28,7 @@ const invoke = (name, args) =>
           chunks = [];
         res.on("data", (chunk) => {
           bytes += chunk.length;
-          if (bytes > 16 * 1024 * 1024)
+          if (bytes > (name === "bots_use_secure_input" ? 32 : 16) * 1024 * 1024)
             res.destroy(new Error("Manager response too large."));
           else chunks.push(chunk);
         });
@@ -84,7 +84,7 @@ async function handle(message) {
             message.params.name,
             message.params.arguments ?? {},
           );
-          result = desktop ? value : { content: [{ type: "text", text: JSON.stringify(value) }] };
+          result = value.__secureModelContent ? {content:value.__secureModelContent} : desktop ? value : { content: [{ type: "text", text: JSON.stringify(value) }] };
           if (!desktop) reply({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
         } catch (error) {
           result = {

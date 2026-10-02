@@ -1,3 +1,5 @@
+import { SecureInputs, redactSecureNotification } from "./secure-input.mjs";
+import { SECURE_TOOLS } from "./secure-input-tools.mjs";
 import { ownedReply, rememberReply, displayReplyItem, prepareReply, resolveReply } from "./message-replies.mjs";
 import { replyInputText } from "../lib/bot-replies.ts";
 import { OperatorCalls } from './operator.mjs';
@@ -80,6 +82,7 @@ const usageMetric = (groups, field) => {
     reportedGroups: values.length };
 };
 const READ_METHODS = new Set([
+  "secure.list",
   "work.read", "inbox.list", "goals.read", "bursts.read", "bursts.typing", "peers.directory", "peers.read", "peers.list",
   "snapshot",
   "history",
@@ -127,6 +130,7 @@ const schema = (properties, required = []) => ({
 });
 const str = { type: "string" };
 export const dynamicTools = [
+  ...SECURE_TOOLS.map(tool => ({type:"function",...tool})),
   { type: "function", ...TEAM_TOOL },
   { type: "function", ...QUEUE_TOOL },
   { type: "function", ...WORK_TOOL },
@@ -225,6 +229,7 @@ export class BotRuntime extends EventEmitter {
     });
   }
   emitEvent(type, data, botId) {
+    if (type === "codex") data = redactSecureNotification(data);
     if (type === "schedules" && botId) data = { ...data, activeScheduledTurn: activeScheduledTurn(this, botId) };
     if (type === "codex") data = recordMessageTime(this, botId, data);
     const bounded = boundHistoryEvent(type, data);
@@ -274,6 +279,7 @@ export class BotRuntime extends EventEmitter {
       throw new Error("Current native activity is unresolved. No conflicting input was sent; recovery will retry automatically. Queue your message or retry after reconciliation.");
   }
   async start() {
+    this.secure ??= new SecureInputs(this);
     await mkdir(this.root, { recursive: true, mode: 0o700 });
     this.runs.start();
     // A server request is only answerable in the process that emitted it.
@@ -514,9 +520,15 @@ export class BotRuntime extends EventEmitter {
       });
     return result;
   }
+  async secureReceived(row) {
+    const bot=this.store.bot(row.botId);
+    if(bot.threadId!==row.threadId || this.store.get("secureInput",row.id)?.state!=="received")return;
+    const id=`secure-receipt:${createHash("sha256").update(row.id).digest("hex")}`;
+    return this.primary.accept(bot,id,{kind:"secure-input",sourceId:row.id,summary:"Secure input received",text:`Secure one-time input received. Handle: ${row.id}. Expires: ${row.expiresAt}. Check live status before use. Private tools can use the submission; model reading ${row.modelRead ? "was explicitly permitted" : "was not permitted"}. Never echo secrets. Delete when the workflow finishes.`});
+  }
   snapshot() {
     return {
-      capabilities: { backgroundRunLanes: 1, scheduleDecisions: 1, singleThreadExecution: 1, peerInbox: 1, nativeGoals: 1, nativeConversation: 1, messageReplies: 1, operatorCalls: 1, historyCursorIndex: 1, messageBursts: 1, burstDiscard: 1, queueLists: 1, queueRelativeMoves: 1, teams: 1, ...(this.desktops ? { botDesktops: 1 } : {}) },
+      capabilities: { backgroundRunLanes: 1, scheduleDecisions: 1, singleThreadExecution: 1, peerInbox: 1, nativeGoals: 1, nativeConversation: 1, messageReplies: 1, secureInputs: 1, operatorCalls: 1, historyCursorIndex: 1, messageBursts: 1, burstDiscard: 1, queueLists: 1, queueRelativeMoves: 1, teams: 1, ...(this.desktops ? { botDesktops: 1 } : {}) },
 
       teams: publicTeams(this),
       workByBot: this.store.bots().map(bot => this.primary.work(bot)),
@@ -525,6 +537,7 @@ export class BotRuntime extends EventEmitter {
         .bots()
         .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
       pending: this.store.list("pending"),
+      secureInputs: this.store.list("secureInput").slice(-100),
       cursor: this.store.cursor(),
       ready: this.ready,
       account: this.account,
@@ -561,6 +574,7 @@ export class BotRuntime extends EventEmitter {
       Array.isArray(params)
     )
       throw new Error("Invalid request.");
+    if(method.startsWith("secure.") && method!=="secure.list")throw Error("Sensitive input requires the dedicated encrypted channel; ordinary RPC is rejected.");
     if (botId && this.store.bot(String(botId)).deletedAt && method !== "bots.delete")
       throw Object.assign(new Error("This bot has been deleted. Its workspace and native history were retained."), { outcome: "rejected" });
     if (["desktop.status", "desktop.preview", "desktop.open"].includes(method)) {
@@ -724,6 +738,7 @@ export class BotRuntime extends EventEmitter {
   }
   async dispatch(method, botId, p, id, attempt = null) {
     if (method === "snapshot") return this.snapshot();
+    if (method === "secure.list") return this.secure.list(this.store.bot(String(botId)));
     if (method === "teams.list") return publicTeams(this);
     if (method === "teams.read") return readTeam(this,p.id);
     if (method === "usage.account") {
@@ -1213,13 +1228,14 @@ export class BotRuntime extends EventEmitter {
         error.message === "list_turns is not supported yet");
     for (let attempt = 0; ; attempt++) {
       try {
-        return await this.codex.call("thread/turns/list", {
+        const page = await this.codex.call("thread/turns/list", {
           threadId,
           cursor,
           limit,
           sortDirection: "desc",
           itemsView,
         });
+        return { ...page, data: page.data.map(turn => redactSecureNotification({ params: { turn } }).params.turn) };
       } catch (error) {
         if (
           cursor !== null ||
@@ -1839,7 +1855,7 @@ export class BotRuntime extends EventEmitter {
         const result = await this.dynamicTool(bot, message.params);
         this.codex.respond(message.id, {
           success: true,
-          contentItems: [{ type: "inputText", text: JSON.stringify(result) }],
+          contentItems: result.__secureModelContent ? result.__secureModelContent.map(c=>c.type==="image" ? {type:"inputImage",imageUrl:`data:${c.mimeType};base64,${c.data}`} : {type:"inputText",text:c.text}) : [{ type: "inputText", text: JSON.stringify(result) }],
         });
       } catch (e) {
         this.codex.respond(message.id, {
@@ -1877,6 +1893,7 @@ export class BotRuntime extends EventEmitter {
     this.notify(bot, `request:${key}`, `${bot.name} needs your input.`);
   }
   onNotification(message) {
+    message = redactSecureNotification(message);
     if (this.manager?.event(message)) return;
     const p = message.params ?? {};
     const threadId = p.threadId ?? p.thread?.id;
@@ -2134,6 +2151,10 @@ export class BotRuntime extends EventEmitter {
   async dynamicTool(bot, p, origin = null) {
     const args =
       typeof p.arguments === "string" ? JSON.parse(p.arguments) : p.arguments;
+    if (SECURE_TOOLS.some(tool=>tool.name===p.tool)) {
+      if(origin || p.threadId && p.threadId!==bot.threadId)throw Error("Secure input belongs to this bot's current primary thread.");
+      return this.secure.tool(bot,p.tool,args,p.callId);
+    }
     switch (p.tool) {
       case "bots_team": {
         if (origin) throw new Error("Team references belong to the primary named bot.");

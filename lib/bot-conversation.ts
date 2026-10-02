@@ -5,7 +5,7 @@ import { conversationItem, projectHistoryItem, type HistoryEntry } from "./bot-h
 export type TurnAudience = { kind: "conversation" | "activity" | "mixed"; runId?: string; active?: boolean };
 export const scheduleInput = (item: ThreadItem) => item.type === "userMessage" && Boolean(item.clientId?.startsWith("schedule:"));
 export const peerInput = (item: ThreadItem) => item.type === "userMessage" && Boolean(item.clientId?.startsWith("peer:") || item.clientId?.startsWith("peer-exchange:"));
-export const humanInput = (item: ThreadItem) => item.type === "userMessage" && !scheduleInput(item) && !peerInput(item) && !item.clientId?.startsWith("manager-notice:");
+export const humanInput = (item: ThreadItem) => item.type === "userMessage" && !scheduleInput(item) && !peerInput(item) && !item.clientId?.startsWith("secure-receipt:") && !item.clientId?.startsWith("manager-notice:");
 
 /** Inspect a full native turn, not an arbitrary tail of its projected items.
  * Without item-level provenance a mixed turn keeps all surrounding replies. */
@@ -39,7 +39,7 @@ export function projectConversationItem(turn: Pick<Turn, "id" | "startedAt" | "s
       phase: "final_answer", memoryCitation: null, delivery: null, questions: null }),
       audience: "finding", findingId: finding.key, runId: audience.runId };
   }
-  if (scheduleInput(item) || peerInput(item) || item.type === "userMessage" && item.clientId?.startsWith("manager-notice:")) return null;
+  if (scheduleInput(item) || peerInput(item) || item.type === "userMessage" && item.clientId?.startsWith("secure-receipt:") || item.type === "userMessage" && item.clientId?.startsWith("manager-notice:")) return null;
   if (turn.status !== "inProgress" && (!conversationItem(item.type) || item.type === "reasoning" && !item.summary.some(text => text.trim()))) return null;
   return { ...projectHistoryItem(turn, item, Boolean(audience.runId)), audience: audience.kind, runId: audience.runId };
 }

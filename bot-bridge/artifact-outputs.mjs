@@ -129,6 +129,7 @@ function inlineImage(result) {
   return mimeType && bytes.length <= MAX_INLINE ? { bytes, mimeType, name: `generated-image.${mimeType.split('/')[1]}` } : null;
 }
 export function intendedOutputs(item) {
+  if (/(^|__)bots_use_secure_input$/.test(String(item?.tool ?? ''))) return []; // Never promote a secure transfer, including explicitly permitted model reads, into S3.
   if (item?.type === 'imageGeneration' && item.status === 'completed' && !item.failure) {
     const inline = inlineImage(item.result);
     if (inline) return [{ ...inline, ...(typeof item.savedPath === 'string' ? { name: basename(item.savedPath) } : {}) }];

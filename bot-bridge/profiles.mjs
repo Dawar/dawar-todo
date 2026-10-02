@@ -1,3 +1,4 @@
+import { SECURE_INSTRUCTIONS } from "./secure-input-tools.mjs";
 import { desktopInstructions } from "./desktops.mjs";
 import { mkdir, readFile, writeFile, lstat, realpath, open } from "node:fs/promises";
 import { constants } from "node:fs";
@@ -57,7 +58,7 @@ export async function initializeProfile(bot) {
     });
 }
 export async function profileContext(bot, team = null) {
-  const parts = [];
+  const parts = [`## Secure one-time input\n${SECURE_INSTRUCTIONS}`];
   for (const file of PROFILE_FILES) {
     const path = join(bot.cwd, file);
     try {

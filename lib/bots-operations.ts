@@ -25,6 +25,7 @@ import type { QueuedSubmission } from "./codex-protocol/v2/QueuedSubmission";
 import type { HistoryResponse, HistoryDetail } from "./bot-history-view";
 export type BotDesktopState = { state: "not-created" | "running" | "stopped"; display?: string; rdpPort?: number; rdpBind?: string; shared: boolean; image?: string; width?: number; height?: number; capturedAt?: string };
 export type BotOperations = {
+  "secure.list": {params: Record<string, never>; result: import("./secure-input").SecureRequest[]};
   "replies.prepare": { params: { threadId: string; turnId: string; itemId: string; partId?: string; cursor?: string | null }; result: { reply: BotReplyReference | null; nextCursor: string | null; unavailable: boolean } };
   "replies.resolve": { params: { reply: BotReplyReference; cursor?: string | null }; result: { entry: import("./bot-history-view").HistoryEntry | null; nextCursor: string | null; unavailable: boolean } };
   "operator.cards": { params: { limit?: number; before?: string | null }; result: { cards: OperatorSegment[]; nextCursor: string | null } };

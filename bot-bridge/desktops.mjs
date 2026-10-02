@@ -294,7 +294,7 @@ export class BotDesktops {
       BOTS_DESKTOP_CONTROL_LEASE: join(directory, "control.json"),
     };
   }
-  async call(bot, name, args) {
+  async call(bot, name, args, beforeInput = null) {
     if (!DESKTOP_TOOLS.some((t) => t.name === name))
       throw new Error("Unknown desktop tool.");
     this.assertBot(bot);
@@ -315,6 +315,7 @@ export class BotDesktops {
         );
         this.clients.set(bot.id, client);
       }
+      if (beforeInput) { await client.ready; beforeInput(); }
       return client.call(name, args);
     });
   }
