@@ -69,6 +69,15 @@ export class SecureInputs {
         if (this.live.size >= 32 || this.list(bot).filter(r => ['waiting', 'received'].includes(r.state)).length >= 8)
             throw Error('Finish or delete an earlier secure request first.');
         const pair = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, false, ['deriveBits']);
+        // Key generation yields. Reconcile this original request identity again
+        // before publishing a card so concurrent same-ID calls cannot fork it.
+        const concurrent = this.runtime.store.list('secureInput', bot.id).find(r => r.operation === operation);
+        if (concurrent) {
+            if (concurrent.descriptionHash !== fingerprint(description)) throw fail();
+            return { request: concurrent, handle: concurrent.id };
+        }
+        if (this.live.size >= 32 || this.list(bot).filter(r => ['waiting', 'received'].includes(r.state)).length >= 8)
+            throw Error('Finish or delete an earlier secure request first.');
         const row = { id: `secure:${randomUUID()}`, botId: bot.id, threadId: bot.threadId, ...description, state: 'waiting', createdAt: now(), operation, descriptionHash: fingerprint(description) };
         const value = { pair, operations: new Map(), responses: new Map(), aborts: new Set() };
         this.live.set(row.id, value);

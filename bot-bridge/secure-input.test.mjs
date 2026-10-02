@@ -25,6 +25,10 @@ test('ECDH/HKDF/AES authenticated form fields/images arrive privately with bound
  assert.equal((await transferSecureInput(s.transport,e)).id,received.id);assert.equal(s.notices.length,1);
  assert.deepEqual((await s.request()).request,received);assert.equal(s.store.list('attachment').length,0);assert.equal(s.store.db.prepare('SELECT COUNT(*) AS n FROM operations').get().n,0);
 });
+test('concurrent original request IDs publish only one secure card and volatile key',async t=>{
+ const s=await setup(t);const results=await Promise.all(Array.from({length:4},()=>s.request()));
+ assert.equal(new Set(results.map(r=>r.handle)).size,1);assert.equal(s.store.list('secureInput').length,1);assert.equal(s.secure.live.size,1);
+});
 test('foreign bot, thread, owner, handle and envelope tampering are rejected without consuming form',async t=>{
  const s=await setup(t),r=await s.request(),e=await s.seal(r.request),bytes=secureDecode(e.ciphertext);const frame={action:'chunk',...e.context,publicKey:e.publicKey,iv:e.iv,digest:e.digest,total:bytes.length,offset:0,data:secureBase64(bytes)};
  for(const change of [{botId:s.other.id},{threadId:s.other.threadId},{owner:'foreign-owner'},{requestId:'secure:missing'},{submissionId:'changed-id'},{iv:'AAAAAAAAAAAAAAAA'},{digest:'0'.repeat(64)}])await assert.rejects(s.secure.channel({...frame,...change}));
