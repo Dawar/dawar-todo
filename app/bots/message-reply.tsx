@@ -15,7 +15,7 @@ export function ReplyQuote({ reply, onOpen, onClear, foreign = false }: { reply:
     if (!onOpen || busy) return;
     setBusy(true); setError("");
     try { const found = await onOpen(reply); if (mounted.current) setUnavailable(!found); }
-    catch { if (mounted.current) setError("Could not open the original. Reconnect and try again."); }
+    catch (reason) { if (mounted.current) setError(reason instanceof Error ? reason.message : "Could not open the original. Reconnect and try again."); }
     finally { if (mounted.current) setBusy(false); }
   };
   const body = <><strong><CornerUpLeft size={13} aria-hidden="true"/>{reply.role === "user" ? "You" : "Bot"}</strong><span>{reply.text}{reply.truncated && "…"}</span>{(foreign || unavailable) && <small>{foreign ? "Original is in another conversation" : "Original message unavailable"}</small>}{busy && <small>Finding original…</small>}</>;
