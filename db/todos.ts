@@ -517,6 +517,9 @@ export async function ensureTodoDatabase() {
         )
       `),
       db.prepare(`
+        CREATE TABLE IF NOT EXISTS todo_operator_sessions (id TEXT PRIMARY KEY, user_key TEXT NOT NULL, context_json TEXT NOT NULL)
+      `),
+      db.prepare(`
         CREATE TABLE IF NOT EXISTS todo_talk_workspaces (
           user_key TEXT PRIMARY KEY NOT NULL,
           active_session_id TEXT,

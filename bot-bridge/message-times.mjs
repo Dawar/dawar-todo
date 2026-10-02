@@ -9,10 +9,13 @@ export function recordMessageTime(runtime, botId, data) {
   const id = key(p.threadId, p.turnId, item.id);
   let record = runtime.store.get('messageTime', id);
   if (!record) record = runtime.store.put('messageTime', { id, botId, at: Date.now() / 1000 });
-  return { ...data, messageAt: record.at };
+  const operatorSegmentId = item.type === "userMessage" ? runtime.operator?.origin(botId, item.clientId) : null;
+  return { ...data, messageAt: record.at, ...(operatorSegmentId ? { operatorSegmentId } : {}) };
 }
 export function withMessageTime(runtime, bot, threadId, entry) {
   if (!entry || !['userMessage', 'agentMessage'].includes(entry.type)) return entry;
   const record = runtime.store.get('messageTime', key(threadId, entry.turnId, entry.id));
-  return record?.botId === bot.id ? { ...entry, messageAt: record.at, timeBasis: 'received' } : entry;
+  const operatorSegmentId = entry.item?.type === 'userMessage' ? runtime.operator?.origin(bot.id, entry.item.clientId) : null;
+  const enriched = operatorSegmentId ? { ...entry, operatorSegmentId } : entry;
+  return record?.botId === bot.id ? { ...enriched, messageAt: record.at, timeBasis: 'received' } : enriched;
 }

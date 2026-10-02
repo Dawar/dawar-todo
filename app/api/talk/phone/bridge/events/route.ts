@@ -1,3 +1,4 @@
+import { operatorHeartbeat, operatorTranscript, readOperatorContext, operatorInstructions, operatorToolDefinitions, endOperator } from '../../../../../../lib/operator-server';
 import {
   appendTalkMessage,
   beginTalkToolCall,
@@ -19,6 +20,7 @@ import {
   hashedSafetyIdentifier,
   mintRealtimeClientSecret,
   talkInstructions,
+  talkToolDefinitions,
 } from "../../../../../../lib/talk-runtime";
 import { dispatchTalkTool, type TalkToolResult } from "../../../../../../lib/talk-tools";
 
@@ -71,7 +73,7 @@ export async function POST(request: Request) {
 
     if (action === "heartbeat") {
       const result = await heartbeatTalkSession(userKey, talkSessionId, focusedTodoId);
-      return Response.json(result, { headers: phoneBridgeHeaders });
+      return Response.json({ ...result, ...await operatorHeartbeat(userKey, talkSessionId) }, { headers: phoneBridgeHeaders });
     }
 
     if (action === "message") {
@@ -93,6 +95,7 @@ export async function POST(request: Request) {
             : {}),
         },
       });
+      if (role === "user" || role === "assistant") await operatorTranscript(userKey, talkSessionId, { realtimeItemId: String(payload.realtimeItemId ?? ""), role, content: String(payload.content ?? ""), segmentId: (payload.metadata as Record<string, unknown> | undefined)?.operatorSegmentId });
       return Response.json(result, { headers: phoneBridgeHeaders });
     }
 
@@ -188,9 +191,11 @@ export async function POST(request: Request) {
         .slice(-20)
         .map((message) => `${message.role}: ${message.content.replace(/\s+/g, " ").slice(0, 400)}`)
         .join("\n");
+      const operator = await readOperatorContext(userKey, talkSessionId);
       const secret = await mintRealtimeClientSecret({
         safetyIdentifier,
-        instructions: `${talkInstructions(context)}\n\nRECENT PHONE CONVERSATION\n${recent}`,
+        instructions: operator ? operatorInstructions(operator) : `${talkInstructions(context)}\n\nRECENT PHONE CONVERSATION\n${recent}`,
+        tools: operator ? operator.bot ? operatorToolDefinitions : [...operatorToolDefinitions, ...talkToolDefinitions] : undefined,
         audioFormat: "pcmu",
         voice: settings.realtimeVoice,
       });
@@ -212,6 +217,7 @@ export async function POST(request: Request) {
     if (action === "end") {
       const reason = String(payload.reason ?? "ended").trim().slice(0, 80) || "ended";
       const status = payload.status === "completed" ? "completed" : "failed";
+      await endOperator(userKey, talkSessionId).catch(() => undefined);
       await Promise.all([
         endTalkSession(userKey, talkSessionId, `phone-${reason}`),
         endTalkPhoneCall(callSid, status, reason),

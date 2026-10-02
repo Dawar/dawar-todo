@@ -232,6 +232,13 @@
       "when": 1790817643838,
       "tag": "0032_colossal_killraven",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "6",
+      "when": 1790898036130,
+      "tag": "0033_spooky_lester",
+      "breakpoints": true
     }
   ]
 }

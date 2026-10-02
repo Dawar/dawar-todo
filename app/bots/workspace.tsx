@@ -30,6 +30,7 @@ import {
   ListOrdered,
   ListPlus,
   UsersRound,
+  Phone,
 } from "lucide-react";
 import type { Bot } from "./single-thread-contract";
 import { BotAvatar as Avatar } from "./bot-avatar";
@@ -56,6 +57,7 @@ import { MainStopButton, MainStopRecovery } from "./run-controls";
 import { BotWorkControls } from "./bot-work-controls";
 import { RunHistory } from "./run-history";
 import type { ActivityTarget } from "./conversation-activity";
+import { OperatorCallDialog, OperatorCallHistory } from "./operator-call";
 import { BotDesktopCard, BotDesktopDialog } from "./bot-desktop";
 import { BotDetailsDrawer, type BotDetailsSection } from "./bot-details";
 import { ScheduleList } from "./schedule-list";
@@ -133,6 +135,7 @@ export function BotsWorkspace() {
   const canSend = Boolean(composer?.ready && !composer.storageError && !sending &&
     !checkoutLocked && uploads.every((file) => file.remote?.ready));
   const setDraft = (text: string) => composer?.setText(text);
+  const [showCall, setShowCall] = useState(false), [callBotId, setCallBotId] = useState<string | null>(null);
   const [showTeams, setShowTeams] = useState(false), [teamFilter, setTeamFilter] = useState("all"), [teamSort, setTeamSort] = useState("recent");
   const snapshot = client.snapshot;
   const teams = snapshot?.teams ?? [];
@@ -484,6 +487,7 @@ export function BotsWorkspace() {
   const schedules = snapshot?.schedules.filter((s) => s.botId === selected) ?? [];
   const recentRuns = [...new Map([...(lanes ? snapshot?.backgroundRuns ?? [] : []), ...(snapshot?.runs ?? [])]
     .filter(run => run.botId === selected).map(run => [run.id, run])).values()];
+  const openCalls = useCallback(() => { setDetailsSection("calls"); setProfile(true); }, []);
   const closeProfile = useCallback(() => setProfile(false), []);
   const openActivity = (target: ActivityTarget | null = null) => { setActivityTarget(target); setDetailsSection("history"); setProfile(true); };
   return (
@@ -494,6 +498,7 @@ export function BotsWorkspace() {
           <div className="bots-sidebar-heading">
             <h1>Bots</h1>
             <div className="bots-sidebar-tools">
+            {snapshot?.capabilities?.operatorCalls === 1 && <button className="bots-icon-button" aria-label="Call Operator" onClick={() => { setCallBotId(null); setShowCall(true); }}><Phone size={16} /></button>}
             <ArtifactNav active={gallery === "artifacts"} onOpen={() => openGallery("artifacts")} />
             <button className="bots-icon-button" disabled={!teamsSupported} title={teamsSupported ? "Teams" : "Teams will be available after the service update"} aria-label="Teams" onClick={() => setShowTeams(true)}><UsersRound size={19} /></button>
             <button className="bots-icon-button" title="Codex account usage" aria-label="Codex account usage" onClick={() => setShowOverallUsage(true)}><BarChart3 size={19} /></button>
@@ -577,6 +582,7 @@ export function BotsWorkspace() {
                   <strong>{bot.name}{bot.extension&&<span className="bots-extension" title="Ctrl (or Alt) + extension switches bots; add Shift to move the composer">#{bot.extension}</span>}</strong>
 
                 </div>
+                {snapshot?.capabilities?.operatorCalls === 1 && !bot.archived && <button className="bots-icon-button" aria-label={`Call ${bot.name}`} onClick={() => { setCallBotId(bot.id); setShowCall(true); }}><Phone size={18} /></button>}
                 {promptQueue.length > 0 && <button className="bots-icon-button bots-up-next-link" aria-label={`Show ${promptQueue.length} queued ${promptQueue.length === 1 ? "message" : "messages"}`} onClick={() => {
                   const queue = screenRef.current?.querySelector<HTMLElement>(".bots-prompt-queue");
                   queue?.focus({ preventScroll: true });
@@ -645,7 +651,7 @@ export function BotsWorkspace() {
             </div>
           ) : (
             <>
-              <BotConversation key={scope} owner={owner} bot={bot} online={online} onOpenActivity={openActivity} draft={draft} burstsEnabled={burstSupported && !bot.archived} burstSubmitting={composer?.operation?.method === "bursts.submit"}>
+              <BotConversation key={scope} owner={owner} bot={bot} online={online} onOpenActivity={openActivity} onOpenCall={openCalls} draft={draft} burstsEnabled={burstSupported && !bot.archived} burstSubmitting={composer?.operation?.method === "bursts.submit"}>
 
                 {snapshot?.capabilities?.peerInbox === 1 && <DiscussionStatus status={discussions} bots={bots} botId={bot.id} online={online} onOpen={openDiscussion} attentionOnly />}
                 {pending.map((request) => (
@@ -830,6 +836,7 @@ export function BotsWorkspace() {
                     from the bot list, other tabs, or behind the controller. */}
                 {profile && detailsSection === "desktop" && desktopScope !== scope && <BotDesktopCard key={`desktop:${scope}`} bot={bot} owner={owner} online={online} onOpen={() => setDesktopScope(scope)} />}
               </> : <p className="bots-details-lead">Desktop is unavailable on this service.</p>}</>,
+              calls: profile && detailsSection === "calls" && snapshot?.capabilities?.operatorCalls === 1 ? <OperatorCallHistory key={`calls:${scope}`} owner={owner} botId={bot.id} online={online} /> : <p className="bots-details-lead">Named-bot voice calling is unavailable on this service.</p>,
               discussions: snapshot?.capabilities?.peerInbox === 1 ? <PeerConversations key={`discussions:${scope}`} owner={owner} botId={bot.id} bots={bots} online={online} historyView targetId={discussionTarget} /> : <p className="bots-details-lead">Discussions are unavailable on this service.</p>,
               history: <>{lanes && <details data-history-key="legacy-controls" className="bots-legacy-controls"><summary>Earlier work · recovery and controls</summary><BotWorkControls owner={owner} bot={bot} runs={recentRuns} online={online} onOpen={openActivity} /></details>}<RunHistory key={`${scope}:${activityTarget?.runId ?? ""}:${activityTarget?.turnId ?? ""}`} embedded bot={bot} schedules={schedules} recentRuns={recentRuns} initialTarget={activityTarget} attachments={[]} online={online} onClose={closeProfile} download={id => void download(id)} /></>,
               settings: <div className="bots-details-settings">
@@ -852,6 +859,7 @@ export function BotsWorkspace() {
       </main>
       {showTeams && (teamsSupported ? <TeamsManager key={owner} owner={owner} teams={teams} bots={bots} online={online} onClose={() => setShowTeams(false)} /> : <div className="bots-modal-backdrop" onClick={() => setShowTeams(false)}><section className="bots-modal" role="dialog" aria-modal="true" aria-label="Teams" onClick={event => event.stopPropagation()}><h2>Teams</h2><p>Teams will be available when the bot service update finishes.</p><button className="bots-primary" onClick={() => setShowTeams(false)}>Close</button></section></div>)}
       {showOverallUsage && <div className="bots-modal-backdrop" onClick={() => setShowOverallUsage(false)}><section className="bots-history-modal bots-usage-modal" role="dialog" aria-modal="true" aria-label="Codex account usage" onClick={(event) => event.stopPropagation()}><header><h2>Codex account usage</h2><button className="bots-icon-button" aria-label="Close account usage" onClick={() => setShowOverallUsage(false)}><X size={19} /></button></header><UsagePanel online={online} /></section></div>}
+      {showCall && <OperatorCallDialog bot={bots.find(value => value.id === callBotId) ?? null} bots={bots.filter(value => !value.archived && value.executionMode === "single-thread")} onClose={() => setShowCall(false)} />}
       {bot && desktopScope === scope && !bot.archived && <BotDesktopDialog key={scope} bot={bot} owner={owner} onClose={() => setDesktopScope(null)} />}
       {creating && (
         <div className="bots-modal-backdrop" onClick={() => setCreating(false)}>

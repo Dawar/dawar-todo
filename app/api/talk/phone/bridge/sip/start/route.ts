@@ -1,3 +1,4 @@
+import { phoneOperator, operatorInstructions, operatorToolDefinitions } from '../../../../../../../lib/operator-server';
 import {
   attachTalkSessionToPhoneCall,
   connectTalkPhoneSip,
@@ -21,6 +22,7 @@ import {
   hashedSafetyIdentifier,
   realtimeSessionConfig,
   talkInstructions,
+  talkToolDefinitions,
   talkRuntimeConfig,
   withRecentTalkHistory,
 } from "../../../../../../../lib/talk-runtime";
@@ -87,8 +89,10 @@ export async function POST(request: Request) {
       listTalkHistory(userKey, { threadId: phoneThread.id, limit: 40 }),
       hashedSafetyIdentifier(userKey),
     ]);
+    const operator = await phoneOperator(userKey, talkSessionId);
     const session = realtimeSessionConfig({
-      instructions: withRecentTalkHistory(talkInstructions(context), history.messages),
+      instructions: operator ? operatorInstructions(operator) : withRecentTalkHistory(talkInstructions(context), history.messages),
+      tools: operator ? [...operatorToolDefinitions, ...talkToolDefinitions] : undefined,
       voice,
     });
     console.info("[todo-talk-phone-bridge] direct SIP session prepared", {
@@ -105,6 +109,7 @@ export async function POST(request: Request) {
     });
     return Response.json({
       talkSessionId,
+      operator,
       providerCallId,
       focusedTodoId,
       safetyIdentifier,

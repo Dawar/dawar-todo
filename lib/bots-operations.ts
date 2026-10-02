@@ -1,3 +1,4 @@
+import type { OperatorSegment } from './operator-types';
 /** Public bridge contract. Native JSON-RPC method names never come from a browser. */
 import type {
   BotTeam, BotTeamDetail, Bot, BotAvatar, BotWorkState, BotInboxItem, BotPeerRequest, BotPeerExchange, BotPeerPage, BotBurstState, BotBurstMessage, BotBurst,
@@ -23,6 +24,8 @@ import type { QueuedSubmission } from "./codex-protocol/v2/QueuedSubmission";
 import type { HistoryResponse, HistoryDetail } from "./bot-history-view";
 export type BotDesktopState = { state: "not-created" | "running" | "stopped"; display?: string; rdpPort?: number; rdpBind?: string; shared: boolean; image?: string; width?: number; height?: number; capturedAt?: string };
 export type BotOperations = {
+  "operator.cards": { params: { limit?: number; before?: string | null }; result: { cards: OperatorSegment[]; nextCursor: string | null } };
+  "operator.segment": { params: { segmentId: string; beforeTranscript?: string | null; beforeRequest?: string | null }; result: OperatorSegment };
   "desktop.status": {params: Record<string, never>; result: BotDesktopState};
   "desktop.preview": {params: Record<string, never>; result: BotDesktopState};
   "desktop.open": {params: Record<string, never>; result: {token:string; expiresAt:number}};

@@ -1,3 +1,4 @@
+import { phoneOperator, operatorInstructions, operatorToolDefinitions } from '../../../../../../lib/operator-server';
 import {
   attachTalkSessionToPhoneCall,
   consumeTalkPhoneStream,
@@ -21,6 +22,7 @@ import {
   hashedSafetyIdentifier,
   mintRealtimeClientSecret,
   talkInstructions,
+  talkToolDefinitions,
   talkRuntimeConfig,
   withRecentTalkHistory,
 } from "../../../../../../lib/talk-runtime";
@@ -98,9 +100,11 @@ export async function POST(request: Request) {
       listTalkHistory(userKey, { threadId: phoneThread.id, limit: 40 }),
       hashedSafetyIdentifier(userKey),
     ]);
+    const operator = await phoneOperator(userKey, talkSessionId);
     const secret = await mintRealtimeClientSecret({
       safetyIdentifier,
-      instructions: withRecentTalkHistory(talkInstructions(context), history.messages),
+      instructions: operator ? operatorInstructions(operator) : withRecentTalkHistory(talkInstructions(context), history.messages),
+      tools: operator ? [...operatorToolDefinitions, ...talkToolDefinitions] : undefined,
       audioFormat: "pcmu",
       voice,
     });
@@ -118,6 +122,7 @@ export async function POST(request: Request) {
     });
     return Response.json({
       talkSessionId,
+      operator,
       clientSecret: secret.value,
       expiresAt: secret.expiresAt,
       model: secret.model,

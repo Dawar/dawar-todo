@@ -690,3 +690,8 @@ export const todoAssistantMemories = sqliteTable(
     index("todo_assistant_memories_forgotten_idx").on(table.forgottenAt),
   ],
 );
+
+// Operator routing context only; execution remains native and existing call data is retained.
+export const todoOperatorSessions = sqliteTable('todo_operator_sessions', {
+  id: text('id').primaryKey(), userKey: text('user_key').notNull(), contextJson: text('context_json').notNull(),
+});

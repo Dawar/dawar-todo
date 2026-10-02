@@ -1,3 +1,4 @@
+import { dispatchOperatorTool, readOperatorContext } from './operator-server';
 import { env, waitUntil } from "cloudflare:workers";
 import { listTodoAttachments } from "../db/attachments";
 import {
@@ -605,6 +606,8 @@ export async function dispatchTalkTool(input: ToolDispatchInput): Promise<TalkTo
     name: input.name,
     argumentKeys: Object.keys(input.arguments),
   });
+  if (input.name.startsWith('operator_')) return dispatchOperatorTool(input);
+  if ((await readOperatorContext(input.userKey, input.sessionId))?.bot && input.name !== 'wait_for_user') throw new Error('Use the selected bot Operator tools for this work, or switch back to Operator.');
   if (input.name === "search_tasks") return searchTasks(input.arguments);
   if (input.name === "get_task_context") return getTaskContext(input.userKey, input.arguments);
   if (input.name === "focus_task") {

@@ -1,3 +1,4 @@
+import { OperatorCalls } from './operator.mjs';
 import { desktopInstructions } from "./desktops.mjs";
 import { DOWNLOAD_ATTACHMENT_TOOL, localFileDigest } from "./storage.mjs";
 import { initialPreferences, preferencePatch } from "./bot-preferences.mjs";
@@ -186,6 +187,7 @@ export class BotRuntime extends EventEmitter {
     });
     this.epoch = randomUUID();
     this.primary = new PrimaryExecution(this);
+    this.operator = new OperatorCalls(this);
     this.peers = new PeerInbox(this);
     this.bursts = new MessageBursts(this);
     this.plans = new PlanLifecycle(this);
@@ -510,7 +512,7 @@ export class BotRuntime extends EventEmitter {
   }
   snapshot() {
     return {
-      capabilities: { backgroundRunLanes: 1, scheduleDecisions: 1, singleThreadExecution: 1, peerInbox: 1, nativeGoals: 1, nativeConversation: 1, messageBursts: 1, burstDiscard: 1, queueLists: 1, queueRelativeMoves: 1, teams: 1, ...(this.desktops ? { botDesktops: 1 } : {}) },
+      capabilities: { backgroundRunLanes: 1, scheduleDecisions: 1, singleThreadExecution: 1, peerInbox: 1, nativeGoals: 1, nativeConversation: 1, operatorCalls: 1, messageBursts: 1, burstDiscard: 1, queueLists: 1, queueRelativeMoves: 1, teams: 1, ...(this.desktops ? { botDesktops: 1 } : {}) },
       teams: publicTeams(this),
       workByBot: this.store.bots().map(bot => this.primary.work(bot)),
       ...this.runs.snapshot(),
@@ -564,6 +566,7 @@ export class BotRuntime extends EventEmitter {
       // parent clientId is supplied by the authenticated relay, never params.
       return this.desktops.ticket(bot, request.clientId);
     }
+    if (method.startsWith("operator.")) return this.operator.handle(request);
     if (READ_METHODS.has(method))
       return this.dispatch(method, botId, params, operationId);
     if (

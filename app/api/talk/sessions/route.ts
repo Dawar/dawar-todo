@@ -1,3 +1,6 @@
+import { botsOwner } from '../../../../lib/bots-auth';
+import { env } from 'cloudflare:workers';
+import { openOperator, operatorInstructions, operatorToolDefinitions, endOperator } from '../../../../lib/operator-server';
 import {
   chooseTalkFocus,
   endTalkSession,
@@ -14,6 +17,7 @@ import {
   mintRealtimeClientSecret,
   talkInstructions,
   talkRuntimeConfig,
+  talkToolDefinitions,
   withRecentTalkHistory,
 } from "../../../../lib/talk-runtime";
 
@@ -23,7 +27,9 @@ export async function POST(request: Request) {
   let sessionId: string | null = null;
   try {
     userKey = talkUserKey(request);
-    const payload = await request.json().catch(() => ({})) as { threadId?: unknown };
+    const payload = await request.json().catch(() => ({})) as { threadId?: unknown; operator?: unknown; botId?: unknown };
+    const useOperator = payload.operator === true;
+    if (useOperator) botsOwner(request, env);
     const requestedThreadId = String(payload.threadId ?? "").trim();
     const [todos, workspace, settings] = await Promise.all([
       listTodos(),
@@ -49,9 +55,11 @@ export async function POST(request: Request) {
       listTalkHistory(userKey, { limit: 100, threadId: session.threadId }),
       hashedSafetyIdentifier(userKey),
     ]);
+    const operator = useOperator ? await openOperator(userKey, sessionId, typeof payload.botId === "string" ? payload.botId : null) : null;
     const secret = await mintRealtimeClientSecret({
       safetyIdentifier,
-      instructions: withRecentTalkHistory(talkInstructions(context), history.messages),
+      instructions: operator ? operatorInstructions(operator) : withRecentTalkHistory(talkInstructions(context), history.messages),
+      tools: operator ? operator.bot ? operatorToolDefinitions : [...operatorToolDefinitions, ...talkToolDefinitions] : undefined,
       voice,
     });
     console.info("[todo-talk-api] session started", {
@@ -68,6 +76,7 @@ export async function POST(request: Request) {
     });
     return Response.json({
       sessionId,
+      operator,
       threadId: session.threadId,
       clientSecret: secret.value,
       expiresAt: secret.expiresAt,
@@ -81,6 +90,7 @@ export async function POST(request: Request) {
     }, { headers: noStoreHeaders });
   } catch (error) {
     if (sessionId && userKey) {
+      await endOperator(userKey, sessionId).catch(() => undefined);
       await endTalkSession(userKey, sessionId, "startup-failed").catch(() => undefined);
     }
     console.error("[todo-talk-api] session start failed", {
