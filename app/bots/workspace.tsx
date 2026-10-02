@@ -1,5 +1,4 @@
 "use client";
-import { SecureInputCards } from "./secure-input-card";
 import { ReplyQuote } from "./message-reply";
 
 import {
@@ -669,7 +668,6 @@ export function BotsWorkspace() {
                     }
                   />
                 ))}
-                <SecureInputCards key={`secure:${scope}`} botId={bot.id} threadId={bot.threadId} online={online} enabled={snapshot?.capabilities?.secureInputs === 1} />
                 <div className="bots-conversation-presence"><Avatar bot={bot} small /><button type="button" onClick={() => { setDetailsSection("next"); setProfile(true); }} aria-label="Open work details" title={online ? workLabel(work, bot) ?? humanStatus(bot, online) : "Offline"}>{online ? workLabel(work, bot) ?? humanStatus(bot, online) : "Offline"}</button>{snapshot?.capabilities?.peerInbox === 1 && <DiscussionStatus status={discussions} bots={bots} botId={bot.id} online={online} onOpen={openDiscussion} />}</div>
               </BotConversation>
               {!bot.archived && (

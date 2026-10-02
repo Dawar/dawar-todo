@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
-import { LockKeyhole, X, Trash2 } from 'lucide-react';
+import { LockKeyhole, X, Trash2, ChevronRight } from 'lucide-react';
 import { botsClient as client } from './client';
 import { encryptSecureInput, secureBase64, SECURE_IMAGE_BYTES, type SecureDescriptor, type SecureEnvelope, type SecureRequest } from '../../lib/secure-input';
 import { transferSecureInput } from './secure-input-transfer';
@@ -76,12 +76,15 @@ function SecureForm({ request, onClose, onReceived }: {
   {error && <p role="alert">{error}</p>}<button type="submit" disabled={busy || !client.online}>{busy ? 'Transferring…' : sealed ? 'Retry same submission' : 'Submit securely'}</button>
  </form>;
 }
-function SecureCard({ request, online }: {
+export function SecureInputCard({ request, online }: {
     request: SecureRequest;
     online: boolean;
 }) {
     const [open, setOpen] = useState(false), [receipt, setReceipt] = useState<SecureRequest | null>(null), [error, setError] = useState(''), [busy, setBusy] = useState(false);
     const current = receipt?.state === 'deleted' ? receipt : request.state !== 'waiting' ? request : receipt ?? request;
+    const terminal = current.state !== 'waiting';
+    const stateLabel = current.state === 'waiting' ? 'Input requested' : current.state === 'received' ? 'Delivered' : current.state === 'unavailable' ? 'Unavailable' : current.state === 'expired' ? 'Expired' : 'Deleted';
+    useEffect(() => { if (terminal) queueMicrotask(() => setOpen(false)); }, [terminal, current.state]);
     const remove = async () => { setBusy(true); setError(''); try {
         await client.secure({ action: 'delete', botId: request.botId, threadId: request.threadId, requestId: request.id });
         setOpen(false);
@@ -93,12 +96,15 @@ function SecureCard({ request, online }: {
     finally {
         setBusy(false);
     } };
-    return <section className="bots-secure-card" aria-label="Secure one-time input"><div className="bots-secure-title"><LockKeyhole size={17}/><strong>{request.title}</strong></div><p>{request.purpose}</p><p>Destination: {request.destination.label}{request.destination.origin && <> · {request.destination.origin}</>}</p>
-  {current.state === 'waiting' ? open ? <SecureForm request={request} onClose={() => setOpen(false)} onReceived={r => { setReceipt(r); setOpen(false); }}/> : <button disabled={!online} onClick={() => setOpen(true)}>Open secure form</button> : <div className="bots-secure-receipt"><strong>{current.state === 'received' ? 'Delivered' : current.state === 'unavailable' ? 'Unavailable · ask for a fresh request' : current.state === 'expired' ? 'Expired' : 'Deleted'}</strong>{current.receivedAt && <p>Received: {new Date(current.receivedAt).toLocaleString()}</p>}{current.expiresAt && <p>Expiry: {new Date(current.expiresAt).toLocaleString()}</p>}{current.modelRead && <p>Model reading was explicitly permitted; those copies survive deletion.</p>}</div>}
-  {!['deleted', 'expired'].includes(current.state) && <button disabled={!online || busy} className="bots-secure-delete" onClick={() => void remove()}><Trash2 size={14}/>Delete Now</button>}{error && <p role="alert">{error}</p>}
- </section>;
+    return <details className={`bots-secure-card${terminal ? ' bots-secure-history' : ''}`} aria-label="Secure one-time input" open={open} onToggle={event => { if (event.target === event.currentTarget) setOpen(event.currentTarget.open); }}>
+  <summary><ChevronRight size={15} className="bots-disclosure-chevron" aria-hidden="true"/><LockKeyhole size={16} aria-hidden="true"/><span className="bots-secure-title">{request.title}</span><span className="bots-secure-state">{stateLabel}</span></summary>
+  {open && <div className="bots-secure-body"><p>{request.purpose}</p><p>Destination: {request.destination.label}{request.destination.origin && <> · {request.destination.origin}</>}</p>
+  {current.state === 'waiting' ? <>{!online && <p>Reconnect to submit this secure form.</p>}<SecureForm request={request} onClose={() => setOpen(false)} onReceived={r => { setReceipt(r); setOpen(false); }}/></> : <div className="bots-secure-receipt">{current.state === 'unavailable' && <p>This transfer is unavailable. Ask the bot for a fresh request if it is still needed.</p>}{current.receivedAt && <p>Received: {new Date(current.receivedAt).toLocaleString()}</p>}{current.expiresAt && <p>Expiry: {new Date(current.expiresAt).toLocaleString()}</p>}{current.modelRead && <p>Model reading was explicitly permitted; those copies survive deletion.</p>}</div>}
+  {!['deleted', 'expired'].includes(current.state) && <button disabled={!online || busy} className="bots-secure-delete" onClick={() => void remove()}><Trash2 size={14}/>Delete Now</button>}
+  </div>}{error && <p role="alert">{error}</p>}
+ </details>;
 }
-export function SecureInputCards({ botId, threadId, online, enabled }: {
+export function useSecureInputRequests({ botId, threadId, online, enabled }: {
     botId: string;
     threadId: string | null;
     online: boolean;
@@ -109,5 +115,5 @@ export function SecureInputCards({ botId, threadId, online, enabled }: {
         void client.rpc<SecureRequest[]>('secure.list', botId, {}).then(rows => { if (mounted)
             setRequests(rows); }).catch(() => { }); }; refresh(); const listener = (event: import('../../lib/bots-types').BotEvent) => { if (event.type === 'secure.status' && event.botId === botId)
         refresh(); }; client.events.add(listener); const timer = setInterval(refresh, 10000); return () => { mounted = false; client.events.delete(listener); clearInterval(timer); }; }, [botId, threadId, online, enabled]);
-    return <>{requests.filter(request => request.threadId === threadId).map(request => <SecureCard key={request.id} request={request} online={online}/>)}</>;
+    return enabled ? requests.filter(request => request.botId === botId && request.threadId === threadId) : [];
 }

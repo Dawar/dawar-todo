@@ -21,6 +21,8 @@ import type { ActivityTarget } from "./conversation-activity";
 import { useBurstConversation, BurstControls, BurstBubbles, canonicalBurst } from "./burst-composer";
 import { useRunFindings } from "./run-findings";
 import { retainedBatches } from "./burst-state";
+import { SecureInputCard, useSecureInputRequests } from "./secure-input-card";
+import { secureTimelineGroups, type ConversationGroup } from "./secure-input-timeline";
 const noDetailErrors = () => () => {};
 
 const EntryBody = memo(function EntryBody({ entry, timeline, attachments, download }: {
@@ -95,6 +97,7 @@ export function BotConversation({ owner, bot, online, children, onOpenCall, onRe
   const tailBatches = retainedBatches(burst.value).filter(batch => batch.state !== "sent" && !nativeBatchIds.has(batch.operationId ?? batch.id));
   const feed = useFeedScroll(timeline, state, online, projectEntries);
   const { first, last, scroll, content, showJump, paging, latest } = feed;
+  const secureRequests = useSecureInputRequests({ botId: bot.id, threadId: bot.threadId, online, enabled: botsClient.snapshot?.capabilities?.secureInputs === 1 });
   const sourceCursor = useRef(new Map<string, string>()), resolving = useRef(false), mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const openReply = async (reply: BotReplyReference) => {
@@ -127,7 +130,7 @@ export function BotConversation({ owner, bot, online, children, onOpenCall, onRe
   const replyProps = { onReply, onOpenReply: openReply, threadId: bot.threadId ?? undefined };
   const [downloadError, setDownloadError] = useState("");
   const groups = useMemo(() => {
-    const result: { kind: string; entries: HistoryEntry[] }[] = [];
+    const result: ConversationGroup[] = [];
     for (const entry of state.entries.slice(first, last)) {
       if (entry.type === "reasoning" && (entry.item?.type !== "reasoning" || !entry.item.summary.some(text => text.trim()))) continue;
       const kind = entry.audience === "finding" && entry.runId ? `scheduled:${entry.runId}` : entry.type === "reasoning" ? `thinking:${entry.turnId}` : !entry.item ? `work:${entry.turnId}` : "message";
@@ -135,8 +138,8 @@ export function BotConversation({ owner, bot, online, children, onOpenCall, onRe
       if (kind !== "message" && previous?.kind === kind) previous.entries.push(entry);
       else result.push({ kind, entries: [entry] });
     }
-    return result;
-  }, [state.entries, first, last]);
+    return secureTimelineGroups(result, secureRequests, state.entries, first, last, state.olderCursor);
+  }, [state.entries, state.olderCursor, first, last, secureRequests]);
   const linkedArtifacts = useMemo(() => new Set(state.entries.slice(first, last).flatMap((entry) =>
     entry.item?.type === "agentMessage" ? [...entry.item.text.matchAll(/\]\(<?bot-artifact:([^\s)>]+)/g)].map((match) => match[1]) : [],
   )), [state.entries, first, last]);
@@ -162,6 +165,7 @@ export function BotConversation({ owner, bot, online, children, onOpenCall, onRe
       {state.contextEntries.map((entry) => <TimelineEntry {...replyProps} onOpenCall={onOpenCall} key={historyKey(entry.turnId, entry.id)} entry={entry} timeline={timeline} attachments={state.attachments} download={download} />)}
     </section>}
     {groups.map((group) => {
+      if (group.secure) return <div key={group.secure.id} className="bots-secure-timeline-entry"><SecureInputCard request={group.secure} online={online}/><MessageTime seconds={Date.parse(group.secure.createdAt) / 1000} basis="received" inline/></div>;
       const entry = group.entries[0], key = historyKey(entry.turnId, entry.id);
       const body = () => group.entries.map((value) => group.kind.startsWith("thinking:") ? <div key={value.id} data-history-key={historyKey(value.turnId, value.id)}><EntryBody entry={value} timeline={timeline} attachments={state.attachments} download={download} /></div> : <TimelineEntry {...replyProps} onOpenCall={onOpenCall} key={historyKey(value.turnId, value.id)} entry={{ ...value, scheduled: false }} timeline={timeline} attachments={state.attachments} download={download} />);
       const summary = group.kind.startsWith("thinking:") ? <span className="bots-reasoning-face"><BotAvatar bot={bot} small decorative emotion="thinking" working={entry.status === "inProgress"} /><span>Thinking</span></span> : <><span>Work log</span><small>{group.entries.length} {group.entries.length === 1 ? "step" : "steps"}</small></>;
@@ -174,7 +178,7 @@ export function BotConversation({ owner, bot, online, children, onOpenCall, onRe
           }}>Load messages in between</button></div>)}
         {group.kind.startsWith("scheduled:") ? <section className="bots-scheduled-findings" aria-label="Findings from one scheduled run"><span className="bots-scheduled-message-mark" title="Findings from the same scheduled run"><Clock3 size={13} aria-hidden="true"/>Scheduled work</span>{group.entries.map(value=><TimelineEntry {...replyProps} onOpenCall={onOpenCall} key={historyKey(value.turnId,value.id)} entry={value} timeline={timeline} attachments={state.attachments} download={download} showScheduledMark={false}/>)}</section> : group.kind === "message" ? replyBatch ? <div data-history-key={key}><BurstBubbles messages={replyBatch} {...batchProps} onOpenReply={openReply} onReply={onReply} threadId={bot.threadId??undefined} replySource={entry} sent /></div> : confirmed ? <div data-history-key={key}><BurstBubbles messages={confirmed.messages} batch={confirmed.batch} {...batchProps} onOpenReply={openReply} onReply={onReply} threadId={bot.threadId??undefined} replySource={entry} /></div> : <TimelineEntry {...replyProps} onOpenCall={onOpenCall} entry={entry} timeline={timeline} attachments={state.attachments} download={download} />
           : <div data-history-key={key} style={{ position: "relative" }}>{group.entries.slice(1).map((value) => <span key={value.id} data-history-key={historyKey(value.turnId, value.id)} aria-hidden="true" style={{ position: "absolute", top: 0, height: 0, pointerEvents: "none" }} />)}<LazyDetails className="bots-activity" summary={summary}>{body}</LazyDetails></div>}
-        {group === groups.at(-1) || groups[groups.indexOf(group) + 1]?.entries[0].turnId !== entry.turnId ? <ReturnedArtifacts linked={linkedArtifacts} attachments={state.attachments} turnId={entry.turnId} botId={bot.id} /> : null}
+        {groups.slice(groups.indexOf(group) + 1).find(next => !next.secure)?.entries[0]?.turnId !== entry.turnId ? <ReturnedArtifacts linked={linkedArtifacts} attachments={state.attachments} turnId={entry.turnId} botId={bot.id} /> : null}
       </Fragment>;
     })}
     {last < state.entries.length && (!online || state.error) && <button className="bots-older" disabled={paging || !online && state.gaps.some((gap) => gap.before === historyKey(state.entries[last].turnId, state.entries[last].id))} onClick={() => void feed.page(1, true)}>Load newer turns</button>}
