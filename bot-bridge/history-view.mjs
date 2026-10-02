@@ -121,7 +121,7 @@ export async function readHistoryView(runtime, bot, params) {
     return { kind: 'page', ...page, context, turnIds: [target.turnId], revision, eventCursor,
       olderCursor: page.olderCursor ? JSON.stringify({ scope: target.versionKey, turnId: target.turnId, cursor: page.olderCursor }) : null };
   }
-  const revision = historyRevision(runtime, bot) + (params.projection === "conversation" ? ":conversation-v7" : ""), eventCursor = runtime.store.cursor();
+  const revision = historyRevision(runtime, bot) + (params.projection === "conversation" ? ":conversation-v8" : ""), eventCursor = runtime.store.cursor();
   let attributionUnchanged = true;
   if (params.projection === 'conversation' && params.after !== eventCursor) {
     // Schedule receipts can change without native content changing. Inspect
@@ -163,7 +163,7 @@ export async function readHistoryDetail(runtime, bot, params) {
       const revision = revisionForDetail(), eventCursor = runtime.store.cursor();
       let cursor = null, item = !target.runId && runtime.historySupplements?.get(`${bot.id}:${params.turnId}:${params.itemId}`);
       if (!item && ['live-turn-diff', 'live-turn-plan'].includes(params.itemId)) throw new Error('This live aggregate has expired. Individual commands and file changes remain in native history.');
-      if (!item && runtime.historyReads) item = (await runtime.historyReads.turn(target.threadId, params.turnId))?.items.find(entry => entry.id === params.itemId);
+      if (!item && runtime.historyReads) item = await runtime.historyReads.item(target.threadId, params.turnId, params.itemId);
       else if (!item) do {
         const page = await runtime.historyPage(target.threadId, cursor);
         item = page.data.find((turn) => turn.id === params.turnId)?.items.find((entry) => entry.id === params.itemId);
@@ -206,4 +206,32 @@ export function readHistoryAttachments(runtime, bot, params) {
   if (params.cursor && !index) throw new Error('Attachment cursor unavailable. Reopen files.');
   const page = list.slice(index, index + 20);
   return { attachments: page.map((item) => runtime.publicAttachment(item)), nextCursor: index + page.length < list.length ? page.at(-1).id : null };
+}
+
+/** Explicit native work-log disclosure. Each item page stays inside one turn;
+ * tool output bodies remain deferred to history.detail. No inference or replay. */
+export async function readHistoryLog(runtime, bot, params) {
+  if (typeof params.turnId !== 'string' || !params.turnId || params.turnId.length > 200) throw Error('Invalid work-log turn.');
+  let cursor = null;
+  if (params.cursor != null) {
+    if (typeof params.cursor !== 'string' || params.cursor.length > 8192) throw Error('Invalid work-log cursor.');
+    const value = JSON.parse(params.cursor);
+    if (value.turnId !== params.turnId || typeof value.cursor !== 'string') throw Error('Work-log cursor belongs to another turn.');
+    cursor = value.cursor;
+  }
+  const page = await runtime.historyReads.items(bot.threadId, params.turnId, cursor, 8, 'desc');
+  const located = await runtime.historyReads.metadata(bot.threadId, params.turnId, null, 1);
+  if (!located.turn) throw Error('Work-log metadata is farther back. Reload its conversation page and open it again.');
+  const turn = located.turn;
+  const entries = page.data.flatMap(value => {
+    const item = value.item;
+    if (item.type === 'userMessage' && /^(schedule:|peer:|peer-exchange:|manager-notice:|secure-receipt:)/.test(item.clientId ?? '') ||
+        item.type === 'agentMessage' && !item.text.trim() && !item.questions?.length) return [];
+    const entry = withMessageTime(runtime, bot, bot.threadId, projectHistoryItem(turn, displayReplyItem(runtime, bot, bot.threadId, item)));
+    if (value.startedAtMs != null) { entry.messageAt = value.startedAtMs / 1000; entry.timeBasis = 'received'; }
+    return [entry];
+  }).reverse();
+  const selectors = historyAttachmentSelectors(entries); selectors.turns = [params.turnId];
+  return { entries, olderCursor: page.nextCursor ? JSON.stringify({ turnId: params.turnId, cursor: page.nextCursor }) : null,
+    attachments: readHistoryAttachmentMetadata(runtime, bot, selectors) };
 }

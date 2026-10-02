@@ -85,7 +85,7 @@ export class Codex extends EventEmitter {
       throw new Error("Codex is disconnected.");
     this.process.stdin.write(JSON.stringify(message) + "\n");
   }
-  call(method, params = {}) {
+  call(method, params = {}, timeoutMs = 120000) {
     const id = ++this.counter;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -95,8 +95,8 @@ export class Codex extends EventEmitter {
             `Codex ${method} timed out; check the conversation before retrying.`,
           ),
         );
-      }, 120000);
-      this.pending.set(id, { resolve, reject, timer });
+      }, timeoutMs);
+      this.pending.set(id, { resolve, reject, timer, method, threadId: params.threadId });
       try {
         this.write({ id, method, params });
       } catch (e) {

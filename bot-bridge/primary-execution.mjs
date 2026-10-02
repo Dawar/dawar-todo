@@ -22,9 +22,14 @@ export class PrimaryExecution {
   work(bot) {
     const progress = this.store.get('botWork', bot.id), goal = this.store.get('nativeGoal', bot.id);
     const inbox = this.openItems(bot.id);
-    const unconfirmed = this.runtime.activityUnresolved(bot.id) || inbox.some(i => ['dispatching', 'uncertain'].includes(i.state));
+    const activity = this.store.get('botActivity', bot.id);
+    const inflight = activity?.unresolved && activity.reason === 'native-start-in-flight' &&
+      [...this.runtime.codex.pending.values()].some(call => call.threadId === bot.threadId && ['turn/start','turn/steer','thread/queue/add'].includes(call.method));
+    const unconfirmed = this.runtime.activityUnresolved(bot.id) && !inflight || inbox.some(i => i.state === 'uncertain' || i.state === 'dispatching' && !inflight);
+    const active = observedActiveTurn(this.runtime, bot.id, bot.activeTurnId);
+    const starting = inflight;
     return { botId: bot.id, executionMode: bot.executionMode ?? 'legacy',
-      state: this.store.list('pending', bot.id).some(p => p.request?.params?.threadId === bot.threadId && typeof p.request?.params?.turnId === 'string') ? 'needs-input' : unconfirmed ? 'unconfirmed' : observedActiveTurn(this.runtime, bot.id, bot.activeTurnId) ? 'working' : 'ready',
+      state: this.store.list('pending', bot.id).some(p => p.request?.params?.threadId === bot.threadId && typeof p.request?.params?.turnId === 'string') ? 'needs-input' : active ? 'working' : unconfirmed ? 'unconfirmed' : starting ? 'starting' : 'ready',
       activeTurnId: bot.activeTurnId, paused: !!bot.queuePaused, summary: progress?.summary ?? goal?.goal?.objective ?? null,
       remaining: progress?.remaining ?? null, waitingFor: progress?.waitingFor ?? [], goal: goal?.goal ?? null,
       goalObservedAt: goal?.observedAt ?? null, migrationReason: bot.migrationReason ?? null };

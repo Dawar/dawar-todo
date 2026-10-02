@@ -57,7 +57,7 @@ import {
   containedPath,
 } from "./profiles.mjs";
 import { normalizeSchedule, collectDueRuns } from "./schedules.mjs";
-import { readHistoryView, readHistoryDetail, readHistoryAttachments } from "./history-view.mjs";
+import { readHistoryView, readHistoryLog, readHistoryDetail, readHistoryAttachments } from "./history-view.mjs";
 
 const colors = [
   "#5c74b8",
@@ -88,7 +88,7 @@ const READ_METHODS = new Set([
   "history",
   "history.page",
   "history.turn",
-  "history.view",
+  "history.view", "history.log",
   "history.detail", "replies.prepare", "replies.resolve",
   "history.attachments",
   "artifacts.list",
@@ -824,10 +824,12 @@ export class BotRuntime extends EventEmitter {
       case "history.attachments":
         return readHistoryAttachments(this, bot, p);
       case "history.view":
-        if (!bot.archived && this.resolveHistoryTarget(bot, p).kind !== "scheduled-run") await this.load(bot);
+        // Paginated native reads do not need thread/resume or profile/tool
+        // reconfiguration. Loading chat must never wake or reconfigure a bot.
         return readHistoryView(this, bot, p);
       case "replies.prepare": return prepareReply(this, bot, p);
       case "replies.resolve": return resolveReply(this, bot, p);
+      case "history.log": return readHistoryLog(this, bot, p);
       case "history.detail":
         return readHistoryDetail(this, bot, p);
       case "history": {
@@ -1216,6 +1218,10 @@ export class BotRuntime extends EventEmitter {
   async historyPage(threadId, cursor = null, limit = 20) {
     return this.historyReads.page(threadId, cursor, limit);
   }
+  async rawHistoryItems(threadId, turnId, cursor, limit, sortDirection) {
+    const page = await this.codex.call('thread/items/list', { threadId, turnId, cursor, limit, sortDirection }, 12000);
+    return { ...page, data: page.data.map(entry => ({ ...entry, item: redactSecureNotification({ params: { item: entry.item } }).params.item })) };
+  }
   async rawHistoryPage(threadId, cursor = null, limit = 20, itemsView = 'full') {
     // Codex 0.156.1 can acknowledge thread/start before its rollout and
     // paginated store are readable. A full native read synchronizes that store.
@@ -1234,7 +1240,7 @@ export class BotRuntime extends EventEmitter {
           limit,
           sortDirection: "desc",
           itemsView,
-        });
+        }, 12000);
         return { ...page, data: page.data.map(turn => redactSecureNotification({ params: { turn } }).params.turn) };
       } catch (error) {
         if (
@@ -2208,7 +2214,7 @@ export class BotRuntime extends EventEmitter {
             finding = this.store.put("runFinding", { id: findingId, botId: bot.id, laneId: `main:${bot.id}`, runId: active.runId,
               threadId: bot.threadId, turnId: p.turnId, key, summary, createdAt: now() });
             this.notify(bot, `finding:${key}`, summary);
-            this.emitEvent("run.finding", finding, bot.id);
+            this.emitEvent("run.finding", { ...finding, conversation: this.store.get("run", finding.runId)?.conversation === true }, bot.id);
           }
           return { reported: true, finding };
         });

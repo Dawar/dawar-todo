@@ -8,14 +8,20 @@ export class HistoryReads {
     this.metrics = { calls: 0, bytes: 0, turns: 0, items: 0, coalesced: 0, peak: 0 };
   }
   page(threadId, cursor = null, limit = 20, itemsView = 'full') {
-    const key = JSON.stringify([threadId, cursor, limit, itemsView]);
+    return this.enqueue(threadId, { cursor, limit, itemsView });
+  }
+  items(threadId, turnId, cursor = null, limit = 8, sortDirection = 'desc') {
+    return this.enqueue(threadId, { turnId, cursor, limit, sortDirection, kind: 'items' });
+  }
+  enqueue(threadId, params) {
+    const key = JSON.stringify([threadId, params]);
     const existing = this.pending.get(key);
     if (existing) { this.metrics.coalesced++; return existing; }
     // Bound pending read work, without dropping durable user operations.
     if (this.pending.size >= 128) return Promise.reject(new Error('History reads are busy. Retry opening this history shortly.'));
     const promise = new Promise((resolve, reject) => {
       const queue = this.threads.get(threadId) ?? [];
-      const job = { cursor, limit, itemsView, resolve, reject };
+      const job = { ...params, resolve, reject };
       job.timer = setTimeout(() => {
         const queued = this.threads.get(threadId) ?? [];
         const remaining = queued.filter(entry => entry !== job);
@@ -43,9 +49,10 @@ export class HistoryReads {
       });
     }
   }
-  async read(threadId, { cursor, limit, itemsView }) {
-    const page = await this.runtime.rawHistoryPage(threadId, cursor, limit, itemsView);
+  async read(threadId, { kind, turnId, cursor, limit, itemsView, sortDirection }) {
+    const page = kind === 'items' ? await this.runtime.rawHistoryItems(threadId, turnId, cursor, limit, sortDirection) : await this.runtime.rawHistoryPage(threadId, cursor, limit, itemsView);
     this.metrics.calls++; this.metrics.bytes += Buffer.byteLength(JSON.stringify(page));
+    if (kind === 'items') { this.metrics.items += page.data.length; return page; }
     this.metrics.turns += page.data.length;
     this.metrics.items += page.data.reduce((n, turn) => n + turn.items.length, 0);
     const insert = this.runtime.store.db.prepare(`INSERT INTO native_history_locations VALUES(?,?,?,?)
@@ -58,33 +65,45 @@ export class HistoryReads {
   location(threadId, turnId) {
     return this.runtime.store.db.prepare('SELECT cursor,page_limit AS pageLimit FROM native_history_locations WHERE thread_id=? AND turn_id=?').get(threadId, turnId);
   }
-  async turn(threadId, turnId) {
-    const hint = this.location(threadId, turnId);
+  async metadata(threadId, turnId, cursor = null, batches = 4) {
+    const hint = cursor === null && this.location(threadId, turnId);
     if (hint) {
-      // Cursors may become stale after compaction or native upgrades. Verify
-      // exact identity, then fall back to native discovery; hints prove nothing.
-      try {
-        const page = await this.page(threadId, hint.cursor, hint.pageLimit);
-        const turn = page.data.find(turn => turn.id === turnId);
-        if (turn) return turn;
-      } catch { /* The normal read below supplies the actual error if unavailable. */ }
+      try { const page = await this.page(threadId, hint.cursor, hint.pageLimit, 'summary');
+        const turn = page.data.find(t => t.id === turnId); if (turn) return { turn, nextCursor: null }; }
+      catch { /* A hint is not native evidence. Bounded discovery follows. */ }
     }
-    let cursor = null; const seen = new Set();
-    do {
-      if (seen.has(cursor)) throw new Error('Native history pagination made no progress.');
+    const seen = new Set();
+    for (let n = 0; n < batches; n++) {
+      if (seen.has(cursor)) throw Error('Native history pagination made no progress.');
       seen.add(cursor);
-      // Metadata scans do not transfer/parse old command outputs. Full detail
-      // is fetched only for the page that positively contains the target.
-      const page = await this.page(threadId, cursor, 20, 'notLoaded');
-      if (page.data.some(turn => turn.id === turnId)) {
-        const full = await this.page(threadId, cursor, 20);
-        const turn = full.data.find(turn => turn.id === turnId);
-        if (turn) return turn;
-        // A moving native page is not positive absence. Start a fresh scan.
-        throw new Error('History changed while locating this turn. Retry opening it.');
-      }
-      cursor = page.nextCursor;
+      const page = await this.page(threadId, cursor, 3, 'summary');
+      const turn = page.data.find(t => t.id === turnId);
+      if (turn) return { turn, nextCursor: null };
+      cursor = page.nextCursor; if (!cursor) break;
+    }
+    return { turn: null, nextCursor: cursor };
+  }
+  async item(threadId, turnId, itemId) {
+    // Exact native turn scope, independent of thread depth. Item anchors are
+    // exclusive: reverse from the next item to recover the selected item.
+    const after = await this.items(threadId, turnId, { type: 'item', itemId }, 1, 'asc');
+    const page = after.data.length
+      ? await this.items(threadId, turnId, { type: 'item', itemId: after.data[0].item.id }, 1, 'desc')
+      : await this.items(threadId, turnId, null, 1, 'desc');
+    const entry = page.data.find(e => e.turnId === turnId && e.item.id === itemId);
+    if (!entry) throw Error('The native message could not be verified. Reopen its work log and retry.');
+    return entry.item;
+  }
+  async turn(threadId, turnId) {
+    let cursor = null, located;
+    do { located = await this.metadata(threadId, turnId, cursor); cursor = located.nextCursor; } while (!located.turn && cursor);
+    if (!located.turn) return null;
+    const items = []; cursor = null; const seen = new Set();
+    do {
+      if (seen.has(cursor)) throw Error('Native item pagination made no progress.'); seen.add(cursor);
+      const page = await this.items(threadId, turnId, cursor, 20, 'asc');
+      items.push(...page.data.map(e => e.item)); cursor = page.nextCursor;
     } while (cursor);
-    return null;
+    return { ...located.turn, items, itemsView: 'full' };
   }
 }

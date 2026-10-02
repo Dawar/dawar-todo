@@ -601,10 +601,10 @@ export class BotsClient {
         this.pending.delete(id);
         reject(
           new BotRpcError(
-            "Still waiting for acknowledgement. Check again to reconcile the same send.", "uncertain",
+            method.startsWith("history") || method.startsWith("replies.") ? "History lookup took too long. Retry or continue from the last verified page. Your draft is unchanged." : "Still waiting for acknowledgement. Check again to reconcile the same send.", "uncertain",
           ),
         );
-      }, 125000);
+      }, method.startsWith("history") || method.startsWith("replies.") ? 20000 : 125000);
       this.pending.set(id, {
         request, owner: this.owner, managed: options.managed ?? false,
         resolve: resolve as (value: unknown) => void,

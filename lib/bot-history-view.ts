@@ -4,6 +4,10 @@ import type { BotAttachment, BotEvent } from "./bots-types";
 
 /** A disposable, explicitly partial view. Native history remains authoritative. */
 export type HistoryEntry = {
+  /** Summary-backed chat: exact commentary and tools load only on disclosure. */
+  deferredTurn?: boolean;
+  turnError?: string;
+  questionNotice?: string;
   reply?: import("./bot-replies").BotReplyReference;
   replyMessages?: (import("./bots-types").BotBurstMessage & { textTruncated?: boolean })[];
   operatorSegmentId?: string;
@@ -69,6 +73,7 @@ export function projectHistoryItem(turn: Pick<Turn, "id" | "startedAt" | "status
     else if (source.type === "dynamicToolCall") label = source.tool === "bots_report_result" ? "Reported finding" : source.tool === "bots_publish_artifact" ? "Saved file" : "Tool result";
   }
   return { id: source.id, turnId: turn.id, type: source.type, label, item, complete,
+    ...(source.type === "agentMessage" && !source.text.trim() && source.questions?.length ? { questionNotice: source.questions.slice(0, 16).map(q => q.title).join("\n\n").slice(0, HISTORY_TEXT_LIMIT) } : {}),
     scheduled, messageAt: source.type === "agentMessage" && source.phase === "final_answer" ? turn.completedAt ?? null : turn.startedAt, timeBasis: source.type === "agentMessage" && source.phase === "final_answer" ? "turn-end" : "turn-start", startedAt: turn.startedAt, turnStatus: turn.status, ...("status" in source ? { itemStatus: String(source.status) } : {}), status: "status" in source && source.status === "inProgress" ? "inProgress" : "status" in source && source.status === "completed" ? "completed" : turn.status };
 }
 

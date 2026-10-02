@@ -7,7 +7,8 @@ import { useRunAction } from './run-action';
 import './single-thread.css';
 export function workLabel(work: WorkState | undefined, bot: Bot) {
   if (!work || ['provisioning', 'error'].includes(bot.status)) return null;
-  if (work.state === 'unconfirmed') return 'Needs confirmation';
+  if (work.state === 'unconfirmed') return 'Delivery unconfirmed';
+  if (work.state === 'starting') return 'Starting';
   if (work.state === 'needs-input') return 'Needs your input';
   // Progress summaries persist across turns. They belong in work details,
   // not the live presence label, where an old summary implies current work.

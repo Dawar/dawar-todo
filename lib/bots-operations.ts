@@ -67,6 +67,7 @@ export type BotOperations = {
     params: { runId?: string; projection?: "conversation"; cursor?: string | null; turnId?: string; revision?: string; after?: number };
     result: HistoryResponse;
   };
+  "history.log": { params: { turnId: string; cursor?: string | null }; result: { entries: import('./bot-history-view').HistoryEntry[]; olderCursor: string | null; attachments: BotAttachment[] } };
   "history.attachments": { params: { cursor?: string | null }; result: { attachments: BotAttachment[]; nextCursor: string | null } };
   /** Omit request.botId for all bots authorized by this machine's owner session. */
   "artifacts.list": { params: BotArtifactQuery; result: BotArtifactPage };

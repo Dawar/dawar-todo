@@ -654,7 +654,7 @@ export class BackgroundRuns {
       if (prior) return prior;
       const finding = this.store.put("runFinding", { id, ...this.context(lane, origin.turnId), key, summary, createdAt: now() });
       this.runtime.notify(bot, `finding:${key}`, summary); // Preserve existing cross-run semantic push dedup.
-      this.runtime.emitEvent("run.finding", finding, bot.id);
+      this.runtime.emitEvent("run.finding", { ...finding, conversation: this.store.get("run", finding.runId)?.conversation === true }, bot.id);
       return finding;
     });
   }
@@ -673,7 +673,7 @@ export class BackgroundRuns {
       }
       const rows = this.store.db.prepare("SELECT rowid,json FROM records WHERE kind='runFinding' AND bot_id=? AND (? IS NULL OR json_extract(json,'$.runId')=?) AND rowid<? ORDER BY rowid DESC LIMIT ?")
         .all(bot.id, p.runId ?? null, p.runId ?? null, before, limit + 1);
-      return { findings: rows.slice(0, limit).map(r => JSON.parse(r.json)), nextCursor: rows.length > limit ?
+      return { findings: rows.slice(0, limit).map(r => { const finding = JSON.parse(r.json); return { ...finding, conversation: this.store.get("run", finding.runId)?.conversation === true }; }), nextCursor: rows.length > limit ?
         Buffer.from(JSON.stringify({ botId: bot.id, runId: p.runId ?? null, before: rows[limit - 1].rowid })).toString("base64url") : null };
     }
     const lane = this.lane(bot.id, p.runId);

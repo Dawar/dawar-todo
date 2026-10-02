@@ -172,7 +172,7 @@ export class BotTimeline {
         this.merge(cached.entries, true, -1); this.dirty = liveDirty;
         const m = cached.metadata; this.cachedKeys = new Set(m.order ?? []);
         const boundaries = historyBoundaries(this.state.entries, this.mapGaps(m.gaps ?? []), m.olderCursor, cached.entries);
-        this.publish({ revision: m.revision.endsWith(":conversation-v6") ? m.revision : "", eventCursor: Math.max(live, m.eventCursor), ...boundaries,
+        this.publish({ revision: m.revision.endsWith(":conversation-v8") ? m.revision : "", eventCursor: Math.max(live, m.eventCursor), ...boundaries,
           partialTurn: m.partialTurn, attachments: m.attachments, contextEntries: conversationEntries(m.contextEntries ?? [], this.turnAudiences), complete: m.complete && !boundaries.olderCursor && !boundaries.gaps.length, position: { ...(m.position ?? this.state.position), anchor: this.resolveKey(m.position?.anchor ?? null) }, cached: true }, true);
         this.scheduleWrite();
       } catch (e) { this.publish({ error: `Offline history cache unavailable: ${String(e)}` }, true); }

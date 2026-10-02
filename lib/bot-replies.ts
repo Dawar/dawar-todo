@@ -13,7 +13,7 @@ export function boundedReplyText(text: string) {
   return { text: value, truncated: false };
 }
 export function replyableText(item: ThreadItem): string | null {
-  if (item.type === "agentMessage") return item.text;
+  if (item.type === "agentMessage") return item.text.trim() ? item.text : null;
   if (item.type !== "userMessage" || /^(schedule:|peer:|peer-exchange:|manager-notice:)/.test(item.clientId ?? "")) return null;
   return item.content.flatMap(part => part.type === "text" && !part.text.startsWith("Attached file: ") ? [part.text] : []).join("\n") || "[Message with attachments]";
 }

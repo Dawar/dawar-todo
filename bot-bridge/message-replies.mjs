@@ -56,31 +56,16 @@ async function source(runtime, bot, p) {
     const at = Date.parse(finding.createdAt) / 1000;
     return { item, entry: { ...projectHistoryItem({ id: finding.turnId, startedAt: at, status: "completed" }, item, true), audience: "finding", runId: finding.runId, messageAt: at, timeBasis: "received" }, nextCursor: null, unavailable: false };
   }
-  let found;
-  const hint = p.cursor == null && runtime.historyReads?.location(bot.threadId, p.turnId);
-  if (hint) {
-    try { const page = await runtime.historyPage(bot.threadId, hint.cursor, hint.pageLimit); const turn = page.data.find(turn => turn.id === p.turnId); if (turn) found = { turn, nextCursor: null }; }
-    catch { /* Verify through bounded fresh discovery when a cursor hint expired. */ }
-  }
-  if (!found && runtime.historyReads) {
-    let cursor = p.cursor ?? null; const seen = new Set();
-    for (let count = 0; count < 4; count++) {
-      if (seen.has(cursor)) throw Error("Native history pagination made no progress."); seen.add(cursor);
-      const page = await runtime.historyReads.page(bot.threadId, cursor, 20, "notLoaded");
-      if (page.data.some(turn => turn.id === p.turnId)) {
-        const full = await runtime.historyPage(bot.threadId, cursor, 20);
-        const turn = full.data.find(turn => turn.id === p.turnId);
-        if (!turn) throw Error("History changed while locating this message. Try again.");
-        found = { turn, nextCursor: null }; break;
-      }
-      cursor = page.nextCursor;
-      if (!cursor || count === 3) { found = { turn: null, nextCursor: cursor ?? null }; break; }
-    }
-  }
-  found ??= await findNativeTurn(runtime, bot.threadId, { turnId: p.turnId, cursor: p.cursor ?? null });
+  // Summary carries the exact final/user text without adjacent tool bodies.
+  // Omitted commentary is fetched by its exact native item anchor, only after
+  // scoped turn metadata establishes its native visibility policy.
+  const found = runtime.historyReads
+    ? await runtime.historyReads.metadata(bot.threadId, p.turnId, p.cursor ?? null, 2)
+    : await findNativeTurn(runtime, bot.threadId, { turnId: p.turnId, cursor: p.cursor ?? null });
   if (!found.turn) return { entry: null, nextCursor: found.nextCursor, unavailable: !found.nextCursor };
   const turn = found.turn;
-  const item = turn.items.find(item => item.id === p.itemId || item.type === "userMessage" && p.itemId === `client:${item.clientId}`);
+  let item = turn.items.find(item => item.id === p.itemId || item.type === "userMessage" && p.itemId === `client:${item.clientId}`);
+  if (!item && runtime.historyReads && !p.itemId.startsWith('client:')) item = await runtime.historyReads.item(bot.threadId, turn.id, p.itemId);
   // Projection supplies the same visibility policy as the conversation, including legacy scheduled turns.
   const run = runtime.scheduledContext?.(bot.id, turn.id);
   const audience = turnAudience(turn.items, run?.runId, (run && runtime.store.get("run", run.runId)?.conversation === true));

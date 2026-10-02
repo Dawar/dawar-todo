@@ -37,7 +37,7 @@ export function ReplyAction({ entry, botId, threadId, onReply, partId }: { entry
       let next = cursor; const visited = new Set();
       // Cursor hints usually resolve on the first read. Very old history gets
       // finite batches and a visible continuation, never an unbounded cascade.
-      for (let count = 0; count < 8 && mounted.current; count++) {
+      for (let count = 0; count < 1 && mounted.current; count++) {
         if (visited.has(next)) throw Error("History did not advance. Try again."); visited.add(next);
         const value = await client.rpc<{ reply: BotReplyReference | null; nextCursor: string | null; unavailable: boolean }>("replies.prepare", botId, { threadId, turnId: entry.turnId, itemId: entry.id, ...(partId ? { partId } : {}), cursor: next });
         if (!mounted.current) return;
@@ -49,5 +49,5 @@ export function ReplyAction({ entry, botId, threadId, onReply, partId }: { entry
     } catch (reason) { if (mounted.current) setError(reason instanceof Error ? reason.message : "Could not prepare this reply. Your draft is unchanged."); }
     finally { if (mounted.current) setBusy(false); }
   };
-  return <div className={`bots-reply-action${entry.type === "userMessage" ? " is-user" : ""}`}><button type="button" disabled={busy || !client.online} onClick={() => void select()} aria-label={cursor ? "Continue finding reply source" : "Reply to message"}><CornerUpLeft size={14} aria-hidden="true"/>{busy ? "Finding message…" : cursor ? "Continue finding message" : "Reply"}</button>{error && <small role="alert">{error}</small>}</div>;
+  return <div className={`bots-reply-action${entry.type === "userMessage" ? " is-user" : ""}`}><button type="button" disabled={busy || !client.online} onClick={() => void select()} title="Quote this message in your composer; no message is sent" aria-label={cursor ? "Continue finding quote source" : "Quote this message in composer"}><CornerUpLeft size={14} aria-hidden="true"/>{busy ? "Loading quote…" : cursor ? "Continue quote lookup" : "Quote reply"}</button>{cursor && !error && <small>More history remains. Continue to locate the original; your draft is unchanged.</small>}{error && <small role="alert">{error}</small>}</div>;
 }

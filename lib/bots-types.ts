@@ -53,7 +53,7 @@ export type BotSchedule = {
 export type BotRunContext = { laneId: string; runId: string; threadId: string };
 export type BotBackground = { botId: string; running: number; needsInput: number; unconfirmed: number };
 export type BotRunReceipt = { operationId: string; runId: string; laneId: string; state: "queued" | "accepted" | "uncertain" | "rejected"; turnId: string | null; waitReason: string | null };
-export type BotRunFinding = BotRunContext & { id: string; botId: string; turnId: string; key: string; summary: string; createdAt: string };
+export type BotRunFinding = BotRunContext & { id: string; botId: string; turnId: string; key: string; summary: string; createdAt: string; conversation?: boolean };
 export type BotRunStateEvent = { runId: string; laneId?: string | null; threadId?: string | null; run: BotRun; background: Omit<BotBackground, "botId"> & { botId?: string }; historyRefresh?: unknown };
 export type BotRun = {
   decision?: BotRunDecision;
@@ -263,7 +263,7 @@ export type BridgeResponse = {
 
 export type BotWorkState = {
   botId: string; executionMode: "legacy" | "single-thread";
-  state: "ready" | "working" | "waiting" | "needs-input" | "paused" | "unconfirmed";
+  state: "ready" | "working" | "waiting" | "needs-input" | "paused" | "unconfirmed" | "starting";
   activeTurnId: string | null; paused: boolean; summary: string | null; remaining: string | null; waitingFor: string[];
   goal: import("./codex-protocol/v2/ThreadGoal").ThreadGoal | null; goalObservedAt: string | null; migrationReason: string | null;
 };
