@@ -72,6 +72,7 @@ export async function prepareQueueListMutation(runtime, method, bot, params, id)
     if (items.some(i=>(i.listId ?? null)===listId)) throw Error('Selected messages are already in this queue.');
     return () => { append(runtime, bot.id, items, listId); runtime.emitEvent('queue', {}, bot.id); return { applied: true }; };
   }
+  if (items.some(item => runtime.store.get("messageReply", item.clientUserMessageId)?.reply)) throw Error("Messages with replies keep their own quoted source. Move or edit them individually instead of merging.");
   if (items.length < 2) throw Error('Select at least two messages to merge.');
   const listId = items[0].listId ?? null;
   if (items.some(i=>(i.listId ?? null)!==listId)) throw Error('Merge messages within the same queue list.');

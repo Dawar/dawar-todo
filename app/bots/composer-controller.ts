@@ -1,3 +1,4 @@
+import type { BotReplyReference } from "../../lib/bot-replies";
 import type { BotAttachment, BotQueuedSubmission, BotRunReceipt } from "../../lib/bots-types";
 import { queueEditable } from "./queue-state";
 import { readQueueAction } from "./queue-action-store";
@@ -7,7 +8,7 @@ import {
 } from "./draft-store";
 
 export type ComposerTransport = {
-  owner: string; online: boolean; storageAvailable?: boolean;
+  owner: string; online: boolean; storageAvailable?: boolean; replyAvailable?: boolean;
   rpc: (method: Submission["method"] | "queue.list" | "runs.receipt", botId: string, params: Record<string, unknown>, id: string | undefined, options: { owner: string; managed: boolean }) => Promise<unknown>;
   upload: (botId: string, file: File, progress: (value: number) => void, id: string, owner: string, mode?:"cloud"|"legacy") => Promise<BotAttachment>;
   download: (botId: string, id: string, owner?: string) => Promise<{ blob: Blob }>;
@@ -49,13 +50,13 @@ export class BotComposer {
   get dirty() { return this.changes.length > 0 || Boolean(this.draining); }
   get operation() { return Object.values(this.record.operations).find((op) => op.slot === this.record.active || op.method === "queue.delete"); }
   get sendingNow() { return this.operation ? this.sending.has(this.operation.id) : false; }
-  get recoveries() { return Object.keys(this.record.slots).filter((key) => key.startsWith("recovered:") && (this.record.slots[key].text || this.record.slots[key].files.length)); }
+  get recoveries() { return Object.keys(this.record.slots).filter((key) => key.startsWith("recovered:") && (this.record.slots[key].text || this.record.slots[key].files.length || this.record.slots[key].reply)); }
   get canUseOwner() { return this.transport.owner === this.owner; }
   get saved() { return this.ready && !this.dirty && !this.storageError; }
   private renderPending() {
     const active = this.record.active;
     this.record = this.changes.reduce((record, item) => changeDraft(record, item.change), this.persisted);
-    if (this.ready && this.record.slots[active] && (active === "normal" || this.record.slots[active].text || this.record.slots[active].files.length) && !this.changes.some((c) => c.change.kind === "select" || c.change.kind === "edit")) {
+    if (this.ready && this.record.slots[active] && (active === "normal" || this.record.slots[active].text || this.record.slots[active].files.length || this.record.slots[active].reply) && !this.changes.some((c) => c.change.kind === "select" || c.change.kind === "edit")) {
       // Remote tab navigation must not switch the composer under local typing.
       this.record = { ...this.record, active };
     }
@@ -144,6 +145,10 @@ export class BotComposer {
     if (text === this.draft.text) return;
     this.enqueue({ kind: "text", slot: this.record.active, text, version: crypto.randomUUID(), base: this.draft.textVersion });
   }
+  setReply(reply?: BotReplyReference) {
+    if (this.committing || this.operation?.method === "queue.delete" || this.draft.queueSource && !this.draft.queueSource.removed) return;
+    this.enqueue({ kind: "reply", slot: this.record.active, reply, version: crypto.randomUUID(), base: this.draft.textVersion });
+  }
   async prepareCopy() {
     await this.open(); await this.flush();
     if (!this.canUseOwner || this.committing || Object.keys(this.record.operations).length)
@@ -182,6 +187,7 @@ export class BotComposer {
     this.actionError = "";
     this.enqueue({ kind: "edit", slot, draft: {
       ...emptyDraft(), queueId: item.id, queueRevision: item.revision, textVersion: crypto.randomUUID(),
+      reply: item.reply,
       text: item.input.filter((i) => i.type === "text").filter((i) => !i.text.startsWith("Attached file: ")).map((i) => i.text).join("\n"),
       files: item.attachments.map((a) => ({ id: a.id, name: a.name, mimeType: a.mimeType, size: a.size, hasBytes: false, remote: a })),
     } });
@@ -200,6 +206,7 @@ export class BotComposer {
       if (this.persisted.checkedOut?.[slot]) return true;
       const draft: Draft = {
         ...emptyDraft(), textVersion: crypto.randomUUID(),
+        reply: item.reply,
         text: item.input.flatMap(i => i.type === "text" && !i.text.startsWith("Attached file: ") ? [i.text] : []).join("\n"),
         files: item.attachments.map(a => ({ id: a.id, name: a.name, mimeType: a.mimeType, size: a.size, hasBytes: false, remote: a })),
         queueSource: { id: item.id, listId: item.listId ?? null, removed: false },
@@ -284,6 +291,8 @@ export class BotComposer {
       const existing = Object.values(this.persisted.operations).find((op) => op.slot === slot || op.method === "queue.delete");
       if (existing) { await this.dispatch(existing); if (existing.method === "queue.delete") void this.resumeUploads(); return; }
       let draft = this.persisted.slots[slot];
+      if (draft.reply && !this.transport.replyAvailable) throw Error("Reconnect to the updated bot service before sending this reply. Your draft and files are retained.");
+      if (draft.reply && draft.reply.botId !== botId) throw Error("This quoted message belongs to another bot. Remove the reply or return to its original conversation.");
       const textVersion = draft.textVersion, fileIds = draft.files.map(file => file.id).join("|");
       if (draft.queueSource && !draft.queueSource.removed) throw Error("Removal was not confirmed. Refresh the queue before editing this saved copy; the original may already be starting.");
       if (draft.queueId) {
@@ -322,7 +331,7 @@ export class BotComposer {
       if (!draft || draft.textVersion !== textVersion || draft.files.map(file => file.id).join("|") !== fileIds) throw Error("The draft changed during attachment transfer. Review it and send again.");
       const op: Submission = {
         id: crypto.randomUUID(), botId, slot, method: this.destination ? "runs.send" : draft.queueId ? "queue.update" : queueNext ? "queue.add" : burst ? "bursts.submit" : "turn.send",
-        params: { ...(queueNext && !draft.queueId && !this.destination && listId ? { listId } : {}), ...(this.destination ? { runId: this.destination.runId } : {}), ...(draft.queueId ? { id: draft.queueId, ...(draft.queueRevision === undefined ? {} : { expectedRevision: draft.queueRevision }) } : {}), text: draft.text.trim(), attachments: draft.files.map((f) => (f.remote!.botId === botId ? f.remote! : f.copies![botId]).id) },
+        params: { ...(queueNext && !draft.queueId && !this.destination && listId ? { listId } : {}), ...(this.destination ? { runId: this.destination.runId } : {}), ...(draft.queueId ? { id: draft.queueId, ...(draft.queueRevision === undefined ? {} : { expectedRevision: draft.queueRevision }) } : {}), ...(draft.reply ? { reply: draft.reply } : {}), text: draft.text.trim(), attachments: draft.files.map((f) => (f.remote!.botId === botId ? f.remote! : f.copies![botId]).id) },
         ...(this.destination ? { runDelivery: { state: "prepared" as const, token: crypto.randomUUID() } } : {}),
         textVersion: draft.textVersion, fileIds: draft.files.map((f) => f.id), state: "pending",
       };

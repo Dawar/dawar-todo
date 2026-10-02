@@ -1,3 +1,4 @@
+import type { BotReplyReference } from "../../lib/bot-replies";
 import type { BotAttachment, BridgeRequest } from "../../lib/bots-types";
 
 // Critical data only. Histories and other disposable caches never enter this DB.
@@ -11,6 +12,7 @@ export type StagedFile = {
   copyIds?: Record<string, string>;
 };
 export type Draft = {
+  reply?: BotReplyReference;
   text: string; textVersion: string; files: StagedFile[]; queueId?: string; queueRevision?: number;
   queueSource?: { id: string; listId: string | null; removed: boolean };
 };
@@ -39,6 +41,7 @@ export type DraftRecord = {
 export type RunDeliveryResult = "not-sent" | "uncertain" | "queued" | "success" | "rejected";
 export type DraftChange =
   | { kind: "text"; slot: string; text: string; version: string; base: string }
+  | { kind: "reply"; slot: string; reply?: BotReplyReference; version: string; base: string }
   | { kind: "add"; slot: string; files: StagedFile[] }
   | { kind: "remove"; slot: string; id: string }
   | { kind: "uploaded"; id: string; uploadId: string; remote: BotAttachment }
@@ -58,7 +61,8 @@ export type DraftChange =
   | { kind: "run-result"; id: string; expectedToken: string | null; nextToken: string; outcome: RunDeliveryResult; error?: string }
   | { kind: "settle"; id: string; outcome: "success" | "rejected" | "uncertain"; error?: string };
 export const emptyDraft = (): Draft => ({ text: "", textVersion: "empty", files: [] });
-export const draftFingerprint = (record: DraftRecord) => JSON.stringify([record.active, record.slots[record.active].textVersion, record.slots[record.active].files.map(file => file.id)]);
+// No-reply drafts retain172's fingerprint, including legacy restore receipts.
+export const draftFingerprint = (record: DraftRecord) => JSON.stringify([record.active, record.slots[record.active].textVersion, record.slots[record.active].files.map(file => file.id), ...(record.slots[record.active].reply ? [record.slots[record.active].reply] : [])]);
 export const emptyRecord = (owner: string, botId: string): DraftRecord => ({
   owner, botId, revision: "empty", active: "normal", slots: { normal: emptyDraft() }, operations: {}, migrated: false,
 });
@@ -84,7 +88,7 @@ export function changeDraft(source: DraftRecord, change: DraftChange): DraftReco
   };
   const promoteNormal = (draft: Draft, slot: string) => {
     const previous = record.slots.normal;
-    if (previous !== draft && (previous.text || previous.files.length) && previous.textVersion !== draft.textVersion)
+    if (previous !== draft && (previous.text || previous.files.length || previous.reply) && previous.textVersion !== draft.textVersion)
       record.slots[`recovered:${previous.textVersion}`] = previous;
     const { queueId, queueRevision, queueSource, ...plain } = draft;
     void queueId; void queueRevision; void queueSource;
@@ -97,14 +101,15 @@ export function changeDraft(source: DraftRecord, change: DraftChange): DraftReco
       promoteNormal(record.slots[record.active], record.active);
     for (const draft of Object.values(record.slots)) for (const file of draft.files)
       if (file.remote?.ready) delete file.error;
-  } else if (change.kind === "text") {
+  } else if (change.kind === "text" || change.kind === "reply") {
     const draft = record.slots[change.slot];
     if (!draft) throw new Error("Draft is no longer available. Reopen it before editing.");
-    if (draft.textVersion !== change.base && draft.textVersion !== change.version && draft.text !== change.text) {
+    if (draft.textVersion !== change.base && draft.textVersion !== change.version && (change.kind === "reply" || draft.text !== change.text)) {
       record.slots[`recovered:${draft.textVersion}`] = { ...draft, files: [...draft.files] };
     }
     record.active = change.slot;
-    draft.text = change.text;
+    if (change.kind === "text") draft.text = change.text;
+    else draft.reply = change.reply;
     draft.textVersion = change.version;
   } else if (change.kind === "add") {
     const draft = record.slots[change.slot];
@@ -130,9 +135,9 @@ export function changeDraft(source: DraftRecord, change: DraftChange): DraftReco
     if (existing && !pending && existing.queueRevision !== change.draft.queueRevision) {
       // A later server revision must not silently inherit an older edit. Keep
       // its exact text/file references in the established recovery surface.
-      if (existing.text || existing.files.length) record.slots[`recovered:${existing.textVersion}`] = { ...existing, files: [...existing.files] };
+      if (existing.text || existing.files.length || existing.reply) record.slots[`recovered:${existing.textVersion}`] = { ...existing, files: [...existing.files] };
       record.slots[change.slot] = change.draft;
-    } else if (!existing || (!existing.text && !existing.files.length && !pending)) record.slots[change.slot] = change.draft;
+    } else if (!existing || (!existing.text && !existing.files.length && !existing.reply && !pending)) record.slots[change.slot] = change.draft;
     record.active = change.slot;
   } else if (change.kind === "checkout") {
     // Snapshot and exact removal identity commit together before any RPC.
@@ -191,11 +196,12 @@ export function changeDraft(source: DraftRecord, change: DraftChange): DraftReco
         }
       } else if (change.outcome === "success" && draft) {
         if (draft.textVersion === op.textVersion) {
+          delete draft.reply;
           draft.text = "";
           draft.textVersion = `ack:${op.id}`;
         }
         draft.files = draft.files.filter((f) => !op.fileIds.includes(f.id));
-        if (!draft.text && !draft.files.length && op.slot !== "normal" && record.active === op.slot)
+        if (!draft.text && !draft.files.length && !draft.reply && op.slot !== "normal" && record.active === op.slot)
           record.active = "normal";
       }
     }
@@ -205,7 +211,7 @@ export function changeDraft(source: DraftRecord, change: DraftChange): DraftReco
 
 type FileRow = { owner: string; botId: string; id: string; blob: Blob };
 const plainTransferredDraft = (source:Draft,botId:string):Draft => ({
-  text:source.text,textVersion:source.textVersion,files:source.files.map(file=>({...JSON.parse(JSON.stringify(file)),uploadBotId:file.uploadBotId??file.remote?.botId??botId}))
+  text:source.text,textVersion:source.textVersion,...(source.reply ? { reply: {...source.reply} } : {}),files:source.files.map(file=>({...JSON.parse(JSON.stringify(file)),uploadBotId:file.uploadBotId??file.remote?.botId??botId}))
 });
 function copyDraftBytes(tx:IDBTransaction,owner:string,from:string,to:string,draft:Draft,changed:()=>void,fail:(error:unknown)=>void){
   const files=tx.objectStore("files");
@@ -313,10 +319,10 @@ export class BotDraftStore {
         if (Object.keys(source.operations).length) { if (restore) { fail(new Error("Confirm the original send before restoring this draft.")); return; } done(target); return; }
         target.portableSeeded = true;
         if (!Object.keys(source.operations).length && !draft.queueId && (!draft.queueSource || draft.queueSource.removed) &&
-            !Object.keys(target.operations).length && (restore || !target.slots.normal.text && !target.slots.normal.files.length)) {
+            !Object.keys(target.operations).length && (restore || !target.slots.normal.text && !target.slots.normal.files.length && !target.slots.normal.reply)) {
           const { queueId, queueRevision, queueSource, ...plain } = draft;
           void queueId; void queueRevision; void queueSource;
-          if (restore && (target.slots.normal.text || target.slots.normal.files.length)) target.slots[`recovered:${target.slots.normal.textVersion}`] = target.slots.normal;
+          if (restore && (target.slots.normal.text || target.slots.normal.files.length || target.slots.normal.reply)) target.slots[`recovered:${target.slots.normal.textVersion}`] = target.slots.normal;
           target.active = "normal";
           target.slots.normal = { ...plain, files: plain.files.map(file => ({ ...file, uploadBotId: file.uploadBotId ?? sourceBotId, ...(file.remote?.ready ? {error:undefined} : {}) })) };
           for (const file of plain.files) if (file.hasBytes) {
@@ -351,7 +357,7 @@ export class BotDraftStore {
           fail(new Error("The source draft changed or has a send awaiting confirmation. Copy it again when ready.")); return;
         }
         const draft = source.slots[source.active];
-        if (!draft.text && !draft.files.length) { fail(new Error("The source composer is empty.")); return; }
+        if (!draft.text && !draft.files.length && !draft.reply) { fail(new Error("The source composer is empty.")); return; }
         if (draft.queueId || draft.queueSource && !draft.queueSource.removed) { fail(new Error("Finish taking this message out of its queue before copying.")); return; }
         const record = emptyRecord(owner, id); record.migrated = true; record.revision = crypto.randomUUID();
         record.clipboardSource = {botId, storageKey:sourceKey, slot:source.active, fingerprint:expected};
@@ -377,7 +383,7 @@ export class BotDraftStore {
         const finish=(source?:DraftRecord)=>{
           if (move && (!source || Object.keys(source.operations).length || draftFingerprint(source)!==snapshot!.clipboardSource!.fingerprint)) {fail(new Error("The source draft changed. It was kept; start the move again."));return;}
           const previous=target!.slots[target!.active];
-          if (previous.text || previous.files.length) target!.slots[`recovered:transfer:${operationId}`]=previous;
+          if (previous.text || previous.files.length || previous.reply) target!.slots[`recovered:transfer:${operationId}`]=previous;
           target!.slots.normal=plainTransferredDraft(snapshot!.slots.normal,snapshot!.clipboardSource!.botId);
           target!.slots.normal.textVersion=`transfer:${operationId}`;target!.active="normal";
           target!.receivedTransfers={...target!.receivedTransfers,[operationId]:snapshotId};target!.revision=crypto.randomUUID();
@@ -386,7 +392,7 @@ export class BotDraftStore {
           if(move && source){
             // Retain a quiet recovery copy; the visible source composer is empty.
             source.slots[`recovered:move:${operationId}`]=source.slots[source.active];
-            if(source.active!=="normal"&&(source.slots.normal.text||source.slots.normal.files.length))source.slots[`recovered:normal:${operationId}`]=source.slots.normal;
+            if(source.active!=="normal"&&(source.slots.normal.text||source.slots.normal.files.length||source.slots.normal.reply))source.slots[`recovered:normal:${operationId}`]=source.slots.normal;
             source.slots[source.active]=emptyDraft();source.slots.normal=emptyDraft();source.active="normal";source.revision=crypto.randomUUID();drafts.put(source);
           }
           done(target!);
@@ -407,9 +413,9 @@ export class BotDraftStore {
       let source:DraftRecord|undefined,target:DraftRecord|undefined,read=0;
       const restore=()=>{
         if(++read!==2)return;
-        if(!source || source.restoredTo || !target || Object.keys(source.operations).length || Object.keys(target.operations).length || target.slots[target.active].text || target.slots[target.active].files.length){done(undefined);return;}
+        if(!source || source.restoredTo || !target || Object.keys(source.operations).length || Object.keys(target.operations).length || target.slots[target.active].text || target.slots[target.active].files.length || target.slots[target.active].reply){done(undefined);return;}
         const original=source.slots[source.active];
-        if(!original || original.queueId || original.queueSource&&!original.queueSource.removed || !original.text&&!original.files.length){done(undefined);return;}
+        if(!original || original.queueId || original.queueSource&&!original.queueSource.removed || !original.text&&!original.files.length&&!original.reply){done(undefined);return;}
         target.slots.normal=plainTransferredDraft(original,targetBotId);target.active="normal";target.revision=crypto.randomUUID();
         source.restoredTo=targetBotId;source.restoredFingerprint=draftFingerprint(source);source.revision=crypto.randomUUID();
         copyDraftBytes(tx,owner,PORTABLE_COMPOSER,targetBotId,target.slots.normal,()=>drafts.put(target!),fail);

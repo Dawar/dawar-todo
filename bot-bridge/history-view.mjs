@@ -1,3 +1,4 @@
+import { displayReplyItem } from "./message-replies.mjs";
 import { withMessageTime } from "./message-times.mjs";
 import { conversationViewPage } from './conversation-view.mjs';
 import { createHash } from 'node:crypto';
@@ -57,7 +58,7 @@ export async function historyViewPage(runtime, bot, cursor = null, turnId = null
   const entries = []; let bytes = 0, index = start;
   for (; index < all.length && entries.length < HISTORY_WINDOW; index++) {
     const { turn, item, scheduled } = all[index];
-    const entry = withMessageTime(runtime, bot, target?.threadId ?? bot.threadId, projectHistoryItem(turn, item, scheduled));
+    const entry = withMessageTime(runtime, bot, target?.threadId ?? bot.threadId, projectHistoryItem(turn, displayReplyItem(runtime, bot, target?.threadId ?? bot.threadId, item), scheduled));
     const length = Buffer.byteLength(JSON.stringify(entry));
     if (entries.length && bytes + length > MAX_ENTRY_BYTES) break;
     entries.push(entry); bytes += length;
@@ -70,9 +71,9 @@ export async function historyViewPage(runtime, bot, cursor = null, turnId = null
     for (const { turn, item, scheduled } of all) {
       if (scheduled || !['userMessage', 'agentMessage'].includes(item.type) || types.has(item.type)) continue;
       types.add(item.type);
-      const entry = withMessageTime(runtime, bot, target?.threadId ?? bot.threadId, projectHistoryItem(turn, item, scheduled));
+      const entry = withMessageTime(runtime, bot, target?.threadId ?? bot.threadId, projectHistoryItem(turn, displayReplyItem(runtime, bot, target?.threadId ?? bot.threadId, item), scheduled));
       if (entry.item.type === 'agentMessage') { entry.item.text = entry.item.text.slice(0, 4096); entry.complete = false; }
-      else { entry.item.content = [{ type: 'text', text: item.content.filter((part) => part.type === 'text').map((part) => part.text).join('\n').slice(0, 4096), text_elements: [] }]; entry.complete = false; }
+      else { entry.item.content = [{ type: 'text', text: displayReplyItem(runtime, bot, target?.threadId ?? bot.threadId, item).content.filter((part) => part.type === 'text').map((part) => part.text).join('\n').slice(0, 4096), text_elements: [] }]; entry.complete = false; }
       contextEntries.push(entry);
       if (contextEntries.length === 2) break;
     }
@@ -120,7 +121,7 @@ export async function readHistoryView(runtime, bot, params) {
     return { kind: 'page', ...page, context, turnIds: [target.turnId], revision, eventCursor,
       olderCursor: page.olderCursor ? JSON.stringify({ scope: target.versionKey, turnId: target.turnId, cursor: page.olderCursor }) : null };
   }
-  const revision = historyRevision(runtime, bot) + (params.projection === "conversation" ? ":conversation-v6" : ""), eventCursor = runtime.store.cursor();
+  const revision = historyRevision(runtime, bot) + (params.projection === "conversation" ? ":conversation-v7" : ""), eventCursor = runtime.store.cursor();
   let attributionUnchanged = true;
   if (params.projection === 'conversation' && params.after !== eventCursor) {
     // Schedule receipts can change without native content changing. Inspect
@@ -171,6 +172,7 @@ export async function readHistoryDetail(runtime, bot, params) {
       if (!item) throw new Error('This history item is not available from the native thread.');
       // The ordinary chat detail route never transfers private reasoning content.
       if ((target.runId || params.projection === 'conversation') && item.type === 'reasoning') item = { ...item, content: [] };
+      if (params.projection === "conversation") item = displayReplyItem(runtime, bot, target.threadId, item);
       const json = JSON.stringify(item), version = createHash('sha256').update(target.runId ? `${target.versionKey}:${params.turnId}:${params.itemId}:${json}` : json).digest('hex');
       const selectors = historyAttachmentSelectors([{ turnId: params.turnId, id: item.id, item }]);
       const value = { json, version, selectors, eventCursor, revision, expires: Date.now() + DETAIL_TTL };

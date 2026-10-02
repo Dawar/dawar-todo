@@ -1,3 +1,4 @@
+import { rememberReply, copyReplyReceipt } from "./message-replies.mjs";
 import { createHash } from "node:crypto";
 import { findNativeTurn } from "./native-reconcile.mjs";
 import { rememberInputProvenance } from "./artifact-outputs.mjs";
@@ -23,6 +24,7 @@ export function enqueuePrompt(runtime, bot, params, id, input) {
       state: "queued", revision: 1, position: Math.max(0, ...stagedQueue(runtime.store, bot.id, params.listId ?? null).map(entry => entry.position)) + 1,
       source: { kind: "conversation", operationId: id }, createdAt: now(),
     });
+    rememberReply(runtime, bot, id, params.text, params.reply);
     runtime.store.put("queuedAttachments", { id, botId: bot.id, attachmentIds: params.attachments ?? [] });
     const result = finishLocalOperation(runtime.store, id, { queuedSubmission: runtime.publicQueued(bot, item) });
     runtime.emitEvent("queue", {}, bot.id);
@@ -45,6 +47,7 @@ export function mutatePrompt(runtime, bot, item, method, params, operationId, in
     const next = runtime.store.put("promptQueue", { ...item, input, state: "queued", revision: item.revision + 1,
       attachmentIds: [...(params.attachments ?? [])], clientUserMessageId: item.id,
       error: null, operationId: null, updatedAt: now() });
+    rememberReply(runtime, bot, item.id, params.text, params.reply);
     runtime.store.put("queuedAttachments", { id: item.id, botId: bot.id, attachmentIds: params.attachments ?? [] });
     runtime.emitEvent("queue", {}, bot.id);
     return finishLocalOperation(runtime.store, operationId, { queuedSubmission: runtime.publicQueued(bot, next) });
@@ -68,6 +71,7 @@ export async function dispatchPrompt(runtime, bot, item) {
     const frozen = runtime.store.get("queuedAttachments", clientId);
     if (frozen && (frozen.botId !== bot.id || JSON.stringify(frozen.attachmentIds) !== JSON.stringify(attachmentIds)))
       throw new Error("Native dispatch attachment identity conflicts with its immutable receipt.");
+    copyReplyReceipt(runtime, bot, item.clientUserMessageId, clientId);
     runtime.store.put("queuedAttachments", { id: clientId, botId: bot.id, queueId: item.id,
       revision: item.revision, attachmentIds, immutable: true });
     runtime.store.put("promptQueue", { ...item, attachmentIds, state: "dispatching", operationId, clientUserMessageId: clientId, attemptedAt: now() });

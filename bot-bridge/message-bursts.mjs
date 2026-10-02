@@ -1,9 +1,10 @@
+import { ownedReply } from "./message-replies.mjs";
 import { randomUUID, createHash } from 'node:crypto';
 
 const now = () => new Date().toISOString();
 const open = b => !b.supersededBy && ['pending', 'paused', 'dispatching', 'uncertain', 'failed'].includes(b.state);
-const message = m => { const { id, botId, text, attachmentIds, createdAt, state, batchId, turnId, dismissed } = m;
-  return { id, botId, text, attachmentIds, createdAt, state, batchId, turnId, ...(dismissed ? { dismissed: true } : {}) }; };
+const message = m => { const { id, botId, text, attachmentIds, createdAt, state, batchId, turnId, dismissed, reply } = m;
+  return { id, botId, text, attachmentIds, createdAt, state, batchId, turnId, ...(reply ? { reply } : {}), ...(dismissed ? { dismissed: true } : {}) }; };
 const batch = b => b && ({ id: b.id, botId: b.botId, state: b.state, messageIds: b.messageIds, dueAt: b.dueAt,
   operationId: b.id, turnId: b.turnId ?? null, error: b.error ?? null });
 
@@ -59,6 +60,7 @@ export class MessageBursts {
     if (!this.runtime.primary.single(bot)) throw new Error('Message bursts require single-thread execution. Your draft was retained.');
     if (bot.archived || bot.archiving) throw new Error('Restore this bot before submitting.');
     const input = await this.runtime.messageInput(bot, p);
+    const reply = ownedReply(this.runtime, bot, p.reply);
     return () => {
       const pending = this.messages(bot.id);
       if (pending.length >= 200 || pending.reduce((n, m) => n + Buffer.byteLength(m.text), 0) + Buffer.byteLength(String(p.text ?? '')) > 1024 * 1024)
@@ -68,11 +70,11 @@ export class MessageBursts {
       let current = this.batches(bot.id).filter(b => ['pending', 'paused'].includes(b.state)).at(-1);
       const members = current?.messageIds.map(mid => this.store.get('burstMessage', mid)) ?? [];
       const allFiles = [...members.flatMap(m => m.attachmentIds), ...attachments];
-      if (current && (allFiles.length > 12 || images(allFiles) > 6 || members.reduce((n, m) => n + m.text.length, 0) + String(p.text ?? '').length > 190000)) current = null;
+      if (current && ((reply || members.some(m => m.reply)) && members.length >= 12 || [...members.map(m => m.input), input].reduce((n, value) => n + Buffer.byteLength(JSON.stringify(value)), 0) > 190000 || allFiles.length > 12 || images(allFiles) > 6 || members.reduce((n, m) => n + m.text.length, 0) + String(p.text ?? '').length > 190000)) current = null;
       if (!current) current = { id: `burst:${randomUUID()}`, botId: bot.id, threadId: bot.threadId, messageIds: [], createdAt: now(), sequence: Number(this.store.db.prepare("SELECT COALESCE(MAX(json_extract(json,'$.sequence')),0)+1 n FROM records WHERE kind='messageBurst' AND bot_id=?").get(bot.id).n) };
       // Explicit Send resumes retained pending batches; Queue/work.resume do not.
       for (const old of this.batches(bot.id)) if (old.state === 'paused') this.store.put('messageBurst', { ...old, state: 'pending', dueAt: new Date(Date.now() + (bot.burstQuietSeconds ?? 3) * 1000).toISOString() });
-      const m = this.store.put('burstMessage', { id, botId: bot.id, text: String(p.text ?? '').trim(), input,
+      const m = this.store.put('burstMessage', { id, botId: bot.id, text: String(p.text ?? '').trim(), input, ...(reply ? { reply } : {}),
         attachmentIds: attachments, createdAt: now(), sequence: pending.length, state: 'pending', batchId: current.id, turnId: null });
       current = this.store.put('messageBurst', { ...current, state: 'pending', messageIds: [...current.messageIds, id],
         lastSubmitAt: now(), dueAt: new Date(Date.now() + (bot.burstQuietSeconds ?? 3) * 1000).toISOString(), immediate: bot.burstQuietSeconds === 0 });
@@ -144,6 +146,7 @@ export class MessageBursts {
     this.store.transaction(() => {
       this.store.put('messageBurst', { ...b, state: 'dispatching', params, dueAt: null });
       for (const m of messages) this.store.put('burstMessage', { ...m, state: 'dispatching' });
+      if (messages.some(m => m.reply)) this.store.put("messageReply", { id: b.id, botId: bot.id, threadId: bot.threadId, parts: messages.map(message) });
       this.store.put('queuedAttachments', { id: b.id, botId: bot.id, attachmentIds: params.attachments, immutable: true });
       this.store.saveOperation(b.id, fingerprint, 'dispatching', data);
       this.publish(bot.id);

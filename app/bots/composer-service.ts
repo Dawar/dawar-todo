@@ -160,7 +160,7 @@ export class ComposerService {
     if(!composer.canUseOwner || composer.committing || Object.keys(composer.record.operations).length)throw Error("Confirm the destination's current action before replacing its draft.");
     const snapshot=await this.store!.get(owner,snapshotId);
     if(!snapshot?.clipboardSource)throw Error("Copied composer is unavailable on this device. Copy it again.");
-    return {owner,snapshotId,targetBotId,targetFingerprint:draftFingerprint(composer.record),operationId:crypto.randomUUID(),move,nonEmpty:Boolean(composer.draft.text||composer.draft.files.length)};
+    return {owner,snapshotId,targetBotId,targetFingerprint:draftFingerprint(composer.record),operationId:crypto.randomUUID(),move,nonEmpty:Boolean(composer.draft.text||composer.draft.files.length||composer.draft.reply)};
   }
   async applyPaste(paste:ComposerPaste){
     if(client.owner!==paste.owner)throw Error("The signed-in owner changed. Original drafts are retained.");
@@ -181,7 +181,7 @@ export class ComposerService {
   }
   async savedDrafts(owner:string) {
     this.store ??= new BotDraftStore(indexedDB,localStorage);
-    return (await this.store.list(owner)).filter(record=>record.botId===PORTABLE_COMPOSER&&(!record.restoredTo||draftFingerprint(record)!==record.restoredFingerprint)&&(record.slots.normal.text||record.slots.normal.files.length));
+    return (await this.store.list(owner)).filter(record=>record.botId===PORTABLE_COMPOSER&&(!record.restoredTo||draftFingerprint(record)!==record.restoredFingerprint)&&(record.slots.normal.text||record.slots.normal.files.length||record.slots.normal.reply));
   }
   async restoreDraft(owner:string,sourceKey:string,targetBotId:string) {
     const record=await this.store!.get(owner,sourceKey);

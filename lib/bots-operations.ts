@@ -1,3 +1,4 @@
+import type { BotReplyReference } from "./bot-replies";
 import type { OperatorSegment } from './operator-types';
 /** Public bridge contract. Native JSON-RPC method names never come from a browser. */
 import type {
@@ -24,6 +25,8 @@ import type { QueuedSubmission } from "./codex-protocol/v2/QueuedSubmission";
 import type { HistoryResponse, HistoryDetail } from "./bot-history-view";
 export type BotDesktopState = { state: "not-created" | "running" | "stopped"; display?: string; rdpPort?: number; rdpBind?: string; shared: boolean; image?: string; width?: number; height?: number; capturedAt?: string };
 export type BotOperations = {
+  "replies.prepare": { params: { threadId: string; turnId: string; itemId: string; partId?: string; cursor?: string | null }; result: { reply: BotReplyReference | null; nextCursor: string | null; unavailable: boolean } };
+  "replies.resolve": { params: { reply: BotReplyReference; cursor?: string | null }; result: { entry: import("./bot-history-view").HistoryEntry | null; nextCursor: string | null; unavailable: boolean } };
   "operator.cards": { params: { limit?: number; before?: string | null }; result: { cards: OperatorSegment[]; nextCursor: string | null } };
   "operator.segment": { params: { segmentId: string; beforeTranscript?: string | null; beforeRequest?: string | null }; result: OperatorSegment };
   "desktop.status": {params: Record<string, never>; result: BotDesktopState};
@@ -53,7 +56,7 @@ export type BotOperations = {
   "peers.reply": { params: { id: string; text: string; attachmentIds?: string[]; state: "waiting" | "completed" | "failed" }; result: { request: BotPeerRequest } };
   "peers.cancel": { params: { id: string }; result: { request: BotPeerRequest } };
   "bursts.read": { params: Record<string, never>; result: BotBurstState };
-  "bursts.submit": { params: { text: string; attachments?: string[] }; result: { message: BotBurstMessage; burst: BotBurst } };
+  "bursts.submit": { params: { reply?: BotReplyReference; text: string; attachments?: string[] }; result: { message: BotBurstMessage; burst: BotBurst } };
   "bursts.typing": { params: { clientId: string; typing: boolean }; result: Record<string, never> };
   "bursts.start": { params: Record<string, never>; result: BotBurstState };
   "bursts.stop": { params: Record<string, never>; result: BotBurstState };
@@ -92,7 +95,7 @@ export type BotOperations = {
   "bots.delete": {params: Record<string, never>; result: Bot};
   "bots.restore": { params: Record<string, never>; result: Bot };
   "turn.send": {
-    params: { text: string; attachments?: string[] };
+    params: { reply?: BotReplyReference; text: string; attachments?: string[] };
     result: TurnStartResponse | TurnSteerResponse;
   };
   "turn.interrupt": {
@@ -107,11 +110,11 @@ export type BotOperations = {
   "queue.move": { params: { items: { id: string; revision: number }[]; listId: string | null }; result: { applied: boolean } };
   "queue.merge": { params: { items: { id: string; revision: number }[] }; result: { queuedSubmission: BotQueuedSubmission } };
   "queue.add": {
-    params: { text: string; attachments?: string[]; listId?: string | null };
+    params: { reply?: BotReplyReference; text: string; attachments?: string[]; listId?: string | null };
     result: { queuedSubmission: QueuedSubmission } | { consumedTurnId: string };
   };
   "queue.update": {
-    params: { id: string; text: string; attachments?: string[]; expectedRevision?: number };
+    params: { reply?: BotReplyReference; id: string; text: string; attachments?: string[]; expectedRevision?: number };
     result: { queuedSubmission: QueuedSubmission };
   };
   "queue.delete": { params: { id: string; expectedRevision?: number }; result: { deleted: boolean } };

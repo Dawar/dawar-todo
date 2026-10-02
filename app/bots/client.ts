@@ -12,6 +12,7 @@ import type {
 } from "../../lib/bots-types";
 
 export class BotRpcError extends Error {
+
   readonly outcome: "not-sent" | "rejected" | "uncertain";
   constructor(message: string, outcome: "not-sent" | "rejected" | "uncertain") { super(message); this.outcome = outcome; }
 }
@@ -92,6 +93,8 @@ function applySnapshotEvent(snapshot: BotSnapshot, event: BotEvent, key?: string
   return snapshot;
 }
 export class BotsClient {
+  get replyAvailable() { return this.snapshot?.capabilities?.messageReplies === 1; }
+
   relayClientId: string | null = null;
   socket: WebSocket | null = null;
   snapshot: BotSnapshot | null = null;

@@ -4,6 +4,8 @@ import type { BotAttachment, BotEvent } from "./bots-types";
 
 /** A disposable, explicitly partial view. Native history remains authoritative. */
 export type HistoryEntry = {
+  reply?: import("./bot-replies").BotReplyReference;
+  replyMessages?: (import("./bots-types").BotBurstMessage & { textTruncated?: boolean })[];
   operatorSegmentId?: string;
   id: string; turnId: string; type: ThreadItem["type"]; label: string;
   item: ThreadItem | null; complete: boolean; scheduled: boolean;

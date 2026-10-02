@@ -1,3 +1,5 @@
+import { ownedReply, rememberReply, displayReplyItem, prepareReply, resolveReply } from "./message-replies.mjs";
+import { replyInputText } from "../lib/bot-replies.ts";
 import { OperatorCalls } from './operator.mjs';
 import { HistoryReads } from './history-reads.mjs';
 import { desktopInstructions } from "./desktops.mjs";
@@ -84,7 +86,7 @@ const READ_METHODS = new Set([
   "history.page",
   "history.turn",
   "history.view",
-  "history.detail",
+  "history.detail", "replies.prepare", "replies.resolve",
   "history.attachments",
   "artifacts.list",
   "artifacts.preview",
@@ -514,7 +516,8 @@ export class BotRuntime extends EventEmitter {
   }
   snapshot() {
     return {
-      capabilities: { backgroundRunLanes: 1, scheduleDecisions: 1, singleThreadExecution: 1, peerInbox: 1, nativeGoals: 1, nativeConversation: 1, operatorCalls: 1, historyCursorIndex: 1, messageBursts: 1, burstDiscard: 1, queueLists: 1, queueRelativeMoves: 1, teams: 1, ...(this.desktops ? { botDesktops: 1 } : {}) },
+      capabilities: { backgroundRunLanes: 1, scheduleDecisions: 1, singleThreadExecution: 1, peerInbox: 1, nativeGoals: 1, nativeConversation: 1, messageReplies: 1, operatorCalls: 1, historyCursorIndex: 1, messageBursts: 1, burstDiscard: 1, queueLists: 1, queueRelativeMoves: 1, teams: 1, ...(this.desktops ? { botDesktops: 1 } : {}) },
+
       teams: publicTeams(this),
       workByBot: this.store.bots().map(bot => this.primary.work(bot)),
       ...this.runs.snapshot(),
@@ -808,6 +811,8 @@ export class BotRuntime extends EventEmitter {
       case "history.view":
         if (!bot.archived && this.resolveHistoryTarget(bot, p).kind !== "scheduled-run") await this.load(bot);
         return readHistoryView(this, bot, p);
+      case "replies.prepare": return prepareReply(this, bot, p);
+      case "replies.resolve": return resolveReply(this, bot, p);
       case "history.detail":
         return readHistoryDetail(this, bot, p);
       case "history": {
@@ -889,6 +894,7 @@ export class BotRuntime extends EventEmitter {
           queuedSubmissionId: item.id,
           input,
         }, attempt);
+        rememberReply(this, bot, item.clientUserMessageId, p.text, p.reply);
         this.store.put("queuedAttachments", {
           id: item.clientUserMessageId, botId: bot.id,
           attachmentIds: p.attachments ?? [],
@@ -1426,6 +1432,7 @@ export class BotRuntime extends EventEmitter {
       bot = this.saveBot(bot, { managerPaused: false });
     const input = acceptedInput ?? (staged ? p.stagedInput : await this.messageInput(bot, p));
     const text = String(p.text ?? "").trim();
+    if (!staged && !acceptedInput) rememberReply(this, bot, id, text, p.reply);
     await this.load(bot);
     const additionalContext = await profileContext(bot, await teamReference(this, bot));
     if (this.manager)
@@ -1484,7 +1491,10 @@ export class BotRuntime extends EventEmitter {
       throw new Error("Attach at most 12 files.");
     if (!text && !attachmentIds.length)
       throw new Error("Write a message or attach a file.");
-    const input = text ? [textInput(text)] : [];
+    const reply = ownedReply(this, bot, p.reply);
+    const modelText = reply ? replyInputText(reply, text) : text;
+    if (modelText.length > 200000) throw Error("This reply and message are too long. Shorten the new message; your draft is retained.");
+    const input = modelText ? [textInput(modelText)] : [];
     let images = 0;
     for (const attachmentId of attachmentIds) {
       if (!this.store.get('attachment',attachmentId) && this.storage) await this.storage.importAttachment(bot,attachmentId);
@@ -1537,7 +1547,9 @@ export class BotRuntime extends EventEmitter {
       this.store.list("pending", bot.id).length ? "needs-input" : bot.activeTurnId ? "main-turn-running" :
       this.plans.blocked(bot.id) ? "plan-reconciliation" : null;
     const managed = this.managedPrompt(bot.id, item.clientUserMessageId);
-    return { ...item, input, waitReason,
+    const reply = this.store.get("messageReply", item.clientUserMessageId);
+    const publicInput = reply?.botId === bot.id && reply.threadId === bot.threadId && reply.reply ? displayReplyItem(this, bot, bot.threadId, { type: "userMessage", clientId: item.clientUserMessageId, content: input }).content : input;
+    return { ...item, input: publicInput, ...(reply?.botId === bot.id && reply.reply ? { reply: reply.reply } : {}), waitReason,
       ...(managed && item.id !== managed.id ? { state: "dispatching", revision: managed.revision, operationId: managed.operationId,
         error: "Accepted by the native queue; input is frozen. Stop retains unstarted input for editing." } : {}),
       attachments: attachments.map((a) => this.publicAttachment(a)) };

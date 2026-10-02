@@ -1,4 +1,5 @@
 "use client";
+import { ReplyQuote } from "./message-reply";
 
 import {
   Activity,
@@ -354,7 +355,7 @@ export function BotsWorkspace() {
     const sourceId=selectedRef.current;
     if(!sourceId||sourceId===targetId||transferBusy)return;
     const source=botComposers.peek(owner,sourceId);
-    if(source?.ready&&!source.draft.text&&!source.draft.files.length&&!source.operation){select(targetId);setProfile(false);setShowTeams(false);return;}
+    if(source?.ready&&!source.draft.text&&!source.draft.files.length&&!source.draft.reply&&!source.operation){select(targetId);setProfile(false);setShowTeams(false);return;}
     setTransferBusy(true);setTransferError("");
     try{
       const snapshot=await botComposers.capture(owner,sourceId);
@@ -651,7 +652,7 @@ export function BotsWorkspace() {
             </div>
           ) : (
             <>
-              <BotConversation key={scope} owner={owner} bot={bot} online={online} onOpenActivity={openActivity} onOpenCall={openCalls} draft={draft} burstsEnabled={burstSupported && !bot.archived} burstSubmitting={composer?.operation?.method === "bursts.submit"}>
+              <BotConversation key={scope} owner={owner} bot={bot} online={online} onOpenActivity={openActivity} onOpenCall={openCalls} draft={draft} burstsEnabled={burstSupported && !bot.archived} onReply={snapshot?.capabilities?.messageReplies === 1 && composer?.ready && !checkoutLocked && !sending ? reply => composer.setReply(reply) : undefined} burstSubmitting={composer?.operation?.method === "bursts.submit"}>
 
                 {snapshot?.capabilities?.peerInbox === 1 && <DiscussionStatus status={discussions} bots={bots} botId={bot.id} online={online} onOpen={openDiscussion} attentionOnly />}
                 {pending.map((request) => (
@@ -679,6 +680,7 @@ export function BotsWorkspace() {
                   {(lanes || single) && <MainStopRecovery owner={owner} botId={bot.id} online={online} />}
                   <ComposerStatus composer={composer} error={composerError} />
                   {transferError&&<p className="bots-error" role="alert">{transferError}</p>}
+                  {composer?.draft.reply && <ReplyQuote key={composer.draft.reply.id} reply={composer.draft.reply} foreign={composer.draft.reply.botId !== bot.id || composer.draft.reply.threadId !== bot.threadId} onClear={checkoutLocked ? undefined : () => composer.setReply()} />}
                   {composer && <ComposerAttachments composer={composer} />}
                   </div>
                   <form
@@ -730,7 +732,7 @@ export function BotsWorkspace() {
                     {(
                       <>
                       <button type="button" className="bots-icon-button" title="Copy composer (text and attachments)" aria-label="Copy composer"
-                        disabled={!composer?.ready||sending||transferBusy||(!draft&&!uploads.length)} onClick={()=>void copyComposer()}><Copy size={19}/></button>
+                        disabled={!composer?.ready||sending||transferBusy||(!draft&&!uploads.length&&!composer?.draft.reply)} onClick={()=>void copyComposer()}><Copy size={19}/></button>
                       <button type="button" className="bots-icon-button" title="Paste copied composer" aria-label="Paste composer"
                         disabled={!composer?.ready||sending||transferBusy||!botComposers.clipboard(owner)} onClick={()=>void pasteComposer()}><ClipboardPaste size={19}/></button>
                       <button type="button" className="bots-icon-button bots-queue-icon"

@@ -214,6 +214,21 @@ export class BotTimeline {
     })();
     return this.request;
   }
+  revealSource(entry: HistoryEntry) {
+    const before = this.state.entries, key = historyKey(entry.turnId, entry.id);
+    if (before.some(value => historyKey(value.turnId, value.id) === key)) return;
+    const index = before.findIndex(value => (value.messageAt ?? value.startedAt ?? Infinity) > (entry.messageAt ?? entry.startedAt ?? -Infinity));
+    const at = index < 0 ? before.length : index;
+    const entries = this.normalize([...before.slice(0, at), entry, ...before.slice(at)]);
+    const previous = before[at - 1], next = before[at];
+    // Split a pre-existing hole instead of retaining an overlapping third gap.
+    const gaps = this.state.gaps.filter(gap => !next || gap.before !== historyKey(next.turnId, next.id));
+    if (previous) gaps.push({ before: key, stop: historyKey(previous.turnId, previous.id), cursor: historyBefore(entry) });
+    if (next) gaps.push({ before: historyKey(next.turnId, next.id), stop: key, cursor: historyBefore(next) });
+    this.dirty.set(key, entry);
+    this.publish({ entries, gaps, olderCursor: at === 0 ? historyBefore(entry) : this.state.olderCursor, complete: false }, true);
+    this.scheduleWrite();
+  }
   async older() {
     if (this.olderRequest) return this.olderRequest;
     const cursor = this.state.olderCursor;
@@ -344,7 +359,7 @@ export class BotTimeline {
     }
     if (event.type === "attachment") { this.publish({ attachments: mergeAttachments(this.state.attachments, [event.data as BotAttachment]), eventCursor: event.seq }); this.scheduleWrite(); return; }
     if (event.type !== "codex") return;
-    const { method, messageAt, operatorSegmentId, params: p } = event.data as { method: string; messageAt?: number; operatorSegmentId?: string; params: { turnId?: string; itemId?: string; item?: ThreadItem; turn?: Turn; delta?: string; diff?: string; plan?: unknown } };
+    const { method, messageAt, operatorSegmentId, reply, replyMessages, replyByClientId, params: p } = event.data as { method: string; messageAt?: number; operatorSegmentId?: string; reply?: HistoryEntry["reply"]; replyMessages?: HistoryEntry["replyMessages"]; replyByClientId?: Record<string, Pick<HistoryEntry, "reply" | "replyMessages">>; params: { turnId?: string; itemId?: string; item?: ThreadItem; turn?: Turn; delta?: string; diff?: string; plan?: unknown } };
     const turnId = p.turnId ?? p.turn?.id;
     for (const [key, events] of this.detailEvents) if (key.startsWith(`${turnId}:`)) events.push(event);
     for (const [key, item] of this.detailItems) {
@@ -370,7 +385,7 @@ export class BotTimeline {
     const update = (entry: HistoryEntry) => {
       const prior = this.state.entries.find(value => value.turnId === entry.turnId && value.id === entry.id);
       const observed = messageAt ?? (prior?.timeBasis === "received" ? prior.messageAt : null);
-      this.merge([{ ...entry, ...(operatorSegmentId ? { operatorSegmentId } : {}), ...(observed ? { messageAt: observed, timeBasis: "received" as const } : {}), updatedSeq: event.seq }]);
+      this.merge([{ ...entry, ...(entry.item?.type === "userMessage" ? replyByClientId?.[entry.item.clientId ?? ""] : {}), ...(reply ? { reply } : {}), ...(replyMessages ? { replyMessages } : {}), ...(operatorSegmentId ? { operatorSegmentId } : {}), ...(observed ? { messageAt: observed, timeBasis: "received" as const } : {}), updatedSeq: event.seq }]);
     };
     if (p.item && /item\/(started|completed)$/.test(method)) {
       const prior = this.state.entries.find((e) => e.turnId === turnId);

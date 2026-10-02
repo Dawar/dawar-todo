@@ -10,7 +10,7 @@ export function useFeedScroll(timeline: BotTimeline, state: TimelineState, onlin
   const saved = useRef(state.position), restored = useRef(false), following = useRef(state.position.following);
   const [endKey, setEndKey] = useState<string | null>(null), [showJump, setShowJump] = useState(false), [paging, setPaging] = useState(false);
   const busy = useRef(false), inputUntil = useRef(0), direction = useRef(0), previousTop = useRef(0), expectedTop = useRef<number | null>(null);
-  const continuedEmpty = useRef(false);
+  const continuedEmpty = useRef(false), intentVersion = useRef(0);
   const visibleAnchors = useRef<{ key: string; offset: number }[]>([]), stateRef = useRef(state);
   const endIndex = endKey ? state.entries.findIndex((entry) => historyKey(entry.turnId, entry.id) === timeline.resolveKey(endKey)) : -1;
   let range = historyWindow(state.entries, endIndex < 0 ? state.entries.length : endIndex + 1, state.gaps);
@@ -87,6 +87,7 @@ export function useFeedScroll(timeline: BotTimeline, state: TimelineState, onlin
     continuedEmpty.current = true; void page(-1);
   }, [online, state.loading, state.error, state.entries.length, state.olderCursor, page]);
   const intent = useCallback((toward: number) => {
+    intentVersion.current++;
     inputUntil.current = performance.now() + 1000; direction.current = toward;
     if (toward < 0) {
       following.current = false; capture();
@@ -136,15 +137,36 @@ export function useFeedScroll(timeline: BotTimeline, state: TimelineState, onlin
     return () => observer.disconnect();
   }, [restore]);
   const latest = () => {
+    intentVersion.current++;
     following.current = true; saved.current = { anchor: null, offset: 0, following: true };
     timeline.position(saved.current); setEndKey(null); setShowJump(false); requestAnimationFrame(restore);
   };
+  const jumpTo = (entry: HistoryEntry, partId?: string) => {
+    intentVersion.current++;
+    const key = historyKey(entry.turnId, entry.id);
+    following.current = false; saved.current = { anchor: key, offset: 24, following: false };
+    visibleAnchors.current = [{ key, offset: 24 }];
+    timeline.position(saved.current);
+    const entries = timeline.getSnapshot().entries, index = entries.findIndex(value => historyKey(value.turnId, value.id) === key);
+    const end = windowEndAround(entries, index, timeline.getSnapshot().gaps);
+    setEndKey(historyKey(entries[end - 1].turnId, entries[end - 1].id));
+    setShowJump(true); requestAnimationFrame(() => {
+      // A burst has one native item identity but several visible messages.
+      const anchor = [...scroll.current?.querySelectorAll<HTMLElement>('[data-history-key]') ?? []].find(node => node.dataset.historyKey === key);
+      const part = partId && [...anchor?.querySelectorAll<HTMLElement>('[data-burst-message]') ?? []].find(node => node.dataset.burstMessage === partId);
+      if (anchor && part) {
+        const offset = 24 - (part.getBoundingClientRect().top - anchor.getBoundingClientRect().top);
+        saved.current = { anchor: key, offset, following: false }; visibleAnchors.current = [{ key, offset }]; timeline.position(saved.current);
+      }
+      restore();
+    });
+  };
   const touch = useRef(0);
-  return { scroll, content, ...range, showJump, paging, latest, page, capture,
+  return { scroll, content, ...range, showJump, paging, latest, page, capture, jumpTo, readingIntent: () => intentVersion.current,
     handlers: { onScroll, onWheel: (event: React.WheelEvent) => intent(Math.sign(event.deltaY)),
       onTouchStart: (event: React.TouchEvent) => { touch.current = event.touches[0]?.clientY ?? 0; },
       onTouchMove: (event: React.TouchEvent) => { const y = event.touches[0]?.clientY ?? touch.current; intent(Math.sign(touch.current - y)); touch.current = y; },
       onKeyDown: (event: React.KeyboardEvent) => { if (['ArrowUp', 'PageUp', 'Home'].includes(event.key)) intent(-1); else if (['ArrowDown', 'PageDown', 'End', ' '].includes(event.key)) intent(1); },
-      onPointerDown: (event: React.PointerEvent) => { if (event.target === event.currentTarget) { inputUntil.current = performance.now() + 10_000; } },
+      onPointerDown: (event: React.PointerEvent) => { if (event.target === event.currentTarget) { intentVersion.current++; inputUntil.current = performance.now() + 10_000; } },
     } };
 }

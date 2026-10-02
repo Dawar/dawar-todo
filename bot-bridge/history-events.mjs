@@ -18,7 +18,9 @@ export function boundHistoryEvent(type, data) {
       entry.item.content = [{ type: 'text', text: params.item.content.filter((part) => part.type === 'text').map((part) => part.text).join('\n').slice(0, 2048), text_elements: [] }]; entry.complete = false;
     }
     if (data.messageAt) { entry.messageAt = data.messageAt; entry.timeBasis = "received"; }
-    compact.entry = entry;
+    Object.assign(entry, ...(data.reply ? [{ reply: data.reply }] : []), ...(data.replyMessages ? [{ replyMessages: data.replyMessages }] : []));
+    // Large reply aggregates use the normal bounded page refresh, not oversized replay.
+    if (Buffer.byteLength(JSON.stringify(entry)) <= MAX_LIVE_EVENT_BYTES - 2048) compact.entry = entry;
   }
   let supplement;
   if (turnId && (method === 'turn/diff/updated' || method === 'turn/plan/updated')) {

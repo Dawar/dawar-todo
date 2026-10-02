@@ -1,3 +1,4 @@
+import { displayReplyItem } from "./message-replies.mjs";
 import { withMessageTime } from "./message-times.mjs";
 import { CONVERSATION_TURNS, historyKey } from '../lib/bot-history-view.ts';
 import { turnAudience, projectConversationItem } from '../lib/bot-conversation.ts';
@@ -85,7 +86,7 @@ export async function conversationViewPage(runtime, bot, cursor) {
   while (true) {
     for (; index < all.length; index++) {
       const { turn, item, audience } = all[index];
-      const entry = withMessageTime(runtime, bot, bot.threadId, projectConversationItem(turn, item, audience));
+      const entry = withMessageTime(runtime, bot, bot.threadId, projectConversationItem(turn, displayReplyItem(runtime, bot, bot.threadId, item), audience));
       if (!entry || entry.findingId && findings.has(entry.findingId)) continue;
       const size = Buffer.byteLength(JSON.stringify(entry));
       if (!turnIds.has(turn.id) && turnIds.size >= CONVERSATION_TURNS || entries.length && (entries.length >= CONVERSATION_ITEMS || bytes + size > ENTRY_BYTES)) break;
@@ -124,7 +125,7 @@ async function conversationViewAfter(runtime, bot, after) {
           newerCursor: last && newerExists ? JSON.stringify({ native: null, before: null, after: historyKey(last.turnId, last.id) }) : null,
           complete: false });
       }
-      const entry = withMessageTime(runtime, bot, bot.threadId, projectConversationItem(turn, item, audience));
+      const entry = withMessageTime(runtime, bot, bot.threadId, projectConversationItem(turn, displayReplyItem(runtime, bot, bot.threadId, item), audience));
       if (!entry) continue;
       const size = Buffer.byteLength(JSON.stringify(entry));
       nearest.push({ entry, size }); bytes += size; counts.set(turn.id, (counts.get(turn.id) ?? 0) + 1);

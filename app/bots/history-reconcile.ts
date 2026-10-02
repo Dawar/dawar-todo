@@ -5,8 +5,9 @@ const clientId = (entry: HistoryEntry) => entry.item?.type === 'userMessage' ? e
 const provisional = (entry: HistoryEntry) => entry.id.startsWith('client:');
 export function preserveUserIdentity(old: HistoryEntry, next: HistoryEntry): HistoryEntry {
   if (old.item?.type !== 'userMessage' || next.item?.type !== 'userMessage') return next;
-  if (next.item.clientId && next.item.content.length) return next;
-  return { ...next, item: { ...next.item, clientId: next.item.clientId || old.item.clientId, content: next.item.content.length ? next.item.content : old.item.content } };
+  const enriched = { ...next, ...(next.reply === undefined && old.reply ? { reply: old.reply } : {}), ...(next.replyMessages === undefined && old.replyMessages ? { replyMessages: old.replyMessages } : {}) };
+  if (next.item.clientId && next.item.content.length) return enriched;
+  return { ...enriched, item: { ...next.item, clientId: next.item.clientId || old.item.clientId, content: next.item.content.length ? next.item.content : old.item.content } };
 }
 /** Weave chronological pages at shared native/client identities. Incoming order
  * is authoritative; entries known only locally stay beside the next shared

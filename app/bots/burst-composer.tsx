@@ -1,6 +1,8 @@
 "use client";
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { ArrowUp, Paperclip, Pause, Trash2 } from 'lucide-react';
+import { ReplyQuote, ReplyAction } from "./message-reply";
+import type { BotReplyReference } from "../../lib/bot-replies";
 import type { BotAttachment } from '../../lib/bots-types';
 import type { HistoryEntry } from '../../lib/bot-history-view';
 import type { Burst, BurstMessage } from './single-thread-contract';
@@ -97,25 +99,26 @@ function BurstFill({ dueAt, quietSeconds, animate }: { dueAt: string | null; qui
   const style = { '--burst-progress': progress, '--burst-remaining': `${Number.isFinite(remaining) ? remaining : 0}s` } as CSSProperties;
   return <span aria-hidden="true" className={`bots-burst-fill${animate && Number.isFinite(due) ? ' is-counting' : ''}`} style={style} />;
 }
-function BurstBubble({ message, batch, botId, attachments, quietSeconds, online, typingUntil, truncated }: {
+function BurstBubble({ message, batch, botId, attachments, quietSeconds, online, typingUntil, truncated, onOpenReply, sent: delivered, replySource, onReply, threadId }: {
   message: BurstMessage; batch: Burst | undefined; botId: string; attachments: BotAttachment[];
-  quietSeconds: number; online: boolean; typingUntil: number; truncated: boolean;
+  quietSeconds: number; online: boolean; typingUntil: number; truncated: boolean; replySource?: HistoryEntry; threadId?: string; onReply?: (reply: BotReplyReference) => void; sent?: boolean; onOpenReply?: (reply: BotReplyReference) => Promise<boolean>;
 }) {
-  const sent = batch?.state === 'sent', pending = batch?.state === 'pending';
+  const sent = delivered || batch?.state === 'sent', pending = batch?.state === 'pending';
   const dueAt = pending && typingUntil > Date.parse(batch?.dueAt ?? '') ? new Date(typingUntil).toISOString() : batch?.dueAt ?? null;
   return <div className="bots-message bots-user" data-burst-message={message.id}>
     <div className={`bots-bubble${sent ? '' : ' bots-bubble-pending'}`} aria-label={sent ? undefined : 'Message waiting to send'}>
       {!sent && <BurstFill key={`${dueAt}:${online}`} dueAt={dueAt} quietSeconds={quietSeconds} animate={pending && online} />}
-      <div className="bots-burst-content"><TextPages text={message.text} render={text => <p>{text}</p>} />
+      <div className="bots-burst-content">{message.reply && <ReplyQuote key={message.reply.id} reply={message.reply} onOpen={onOpenReply}/>}<TextPages text={message.text} render={text => <p>{text}</p>} />
         {truncated && <small>Saved preview · reconnect for complete text</small>}
         {message.attachmentIds.map(id => { const file = attachments.find(file => file.id === id); return file?.mimeType.startsWith('image/') ? <AttachmentImage key={id} botId={botId} attachment={file} /> : <span key={id} className="bots-input-file"><Paperclip size={13} aria-hidden="true" />{file?.name ?? 'File attached'}</span>; })}
       </div>
     </div>
+    {sent && replySource && threadId && onReply && <ReplyAction entry={replySource} botId={botId} threadId={threadId} partId={message.id} onReply={onReply}/>}
     <MessageTime seconds={Date.parse(message.createdAt) / 1000} basis="saved" user inline />
   </div>;
 }
-export function BurstBubbles({ messages, batch, ...props }: { messages: BurstMessage[]; batch?: Burst; botId: string; attachments: BotAttachment[]; quietSeconds: number; online: boolean; typingUntil: number; truncatedIds?: string[] }) {
-  return <>{messages.filter(message => !message.dismissed && message.state !== 'discarded').map(message => <BurstBubble key={message.id} message={message} batch={batch} {...props} truncated={props.truncatedIds?.includes(message.id) ?? false} />)}</>;
+export function BurstBubbles({ messages, batch, ...props }: { messages: BurstMessage[]; batch?: Burst; botId: string; attachments: BotAttachment[]; quietSeconds: number; online: boolean; typingUntil: number; truncatedIds?: string[]; replySource?: HistoryEntry; threadId?: string; onReply?: (reply: BotReplyReference) => void; sent?: boolean; onOpenReply?: (reply: BotReplyReference) => Promise<boolean> }) {
+  return <>{messages.filter(message => !message.dismissed && message.state !== 'discarded').map(message => <BurstBubble key={message.id} message={message} batch={batch} {...props} truncated={props.truncatedIds?.includes(message.id) || Boolean((message as BurstMessage & { textTruncated?: boolean }).textTruncated)} />)}</>;
 }
 export function BurstControls({ burst, online, submitting = false }: { burst: BurstConversation; online: boolean; submitting?: boolean }) {
   const { value, batches, messages, count, action, error, hasPending, uncertain, dispatching, failed, paused, canStart, refreshDelivery, discard, discardAction } = burst;

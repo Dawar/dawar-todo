@@ -192,7 +192,7 @@ export type BotRunRequestEvent = BotRequest & BotRunContext;
 export type BotRunRequestResolvedEvent = BotRunContext & { key: string };
 export type BotQueueList = { id: string; botId: string; name: string; cron: string | null; timeZone: string; enabled: boolean; nextRunAt: string | null; revision: number; count: number; createdAt: string; lastFlushedAt?: string; lastFlushedCount?: number };
 export type BotSnapshot = {
-  capabilities?: { botDesktops?: 1; backgroundRunLanes?: 1; scheduleDecisions?: 1; singleThreadExecution?: 1; peerInbox?: 1; nativeGoals?: 1; nativeConversation?: 1; operatorCalls?: 1; messageBursts?: 1; burstDiscard?: 1; queueLists?: 1; queueRelativeMoves?: 1; teams?: 1 };
+  capabilities?: { botDesktops?: 1; backgroundRunLanes?: 1; scheduleDecisions?: 1; singleThreadExecution?: 1; peerInbox?: 1; nativeGoals?: 1; nativeConversation?: 1; messageReplies?: 1; operatorCalls?: 1; messageBursts?: 1; burstDiscard?: 1; queueLists?: 1; queueRelativeMoves?: 1; teams?: 1 };
   teams?: BotTeam[];
   workByBot?: BotWorkState[];
   backgroundByBot?: BotBackground[];
@@ -216,6 +216,7 @@ export type BotHistory = {
   pending: BotRequest[];
 };
 export type BotQueuedSubmission = QueuedSubmission & {
+  reply?: import("./bot-replies").BotReplyReference;
   listId?: string | null;
   attachments: BotAttachment[];
   /** Optional bridge-staged fields; legacy native queues omit these. */
@@ -274,7 +275,7 @@ export type BotPeerRequest = { id: string; rootId: string; parentId: string | nu
 // peers.read is request-scoped; attachment IDs are owned by its selected bot.
 export type BotPeerExchange = { id: string; requestId: string; botId: string; kind: "request" | "reply" | "cancel"; text: string; attachmentIds: string[]; createdAt: string; round: number };
 export type BotPeerPage = { requests: BotPeerRequest[]; nextCursor: string | null };
-export type BotBurstMessage = { id: string; botId: string; text: string; attachmentIds: string[]; createdAt: string;
+export type BotBurstMessage = { reply?: import("./bot-replies").BotReplyReference; id: string; botId: string; text: string; attachmentIds: string[]; createdAt: string;
   state: "pending" | "dispatching" | "sent" | "uncertain" | "failed"; batchId: string | null; turnId: string | null };
 export type BotBurst = { id: string; botId: string; state: "pending" | "paused" | "dispatching" | "sent" | "uncertain" | "failed";
   messageIds: string[]; dueAt: string | null; operationId: string | null; turnId: string | null; error: string | null };
