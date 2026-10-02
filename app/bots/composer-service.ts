@@ -91,6 +91,8 @@ export class ComposerService {
     if (this.started) return;
     this.started = true;
     registerPwaUpdateGuard("bot-drafts", async () => {
+      if ([...this.controllers.values()].some(c => c.owner !== client.owner && (c.dirty || c.storageError)))
+        throw Error("An earlier sign-in has unsaved bot input. Preserve it before refreshing.");
       const controllers = [...this.controllers.values()].filter(c => c.owner === client.owner);
       if (controllers.some(c => c.committing)) throw Error("Finish the current composer action before refreshing.");
       await Promise.all(controllers.map(c => c.flush()));
