@@ -23,6 +23,9 @@ copies and verifies call transcripts, removes obsolete imported text sessions
 and their receipts, nulls retired thread links on surviving calls/receipts, deletes
 that owner's old Chat messages/threads, and commits one durable receipt.
 A late write, ID conflict or unknown dependency rolls the entire batch back.
+D1 reserved `_cf_KV` is excluded from PRAGMA inspection; every application table
+is inspected. Safe failure diagnostics expose stage/category only, never SQL or
+private row values.
 The original operation ID is never replaced on uncertainty.
 
 The encrypted backup chunks and metadata have no public route; they can be copied

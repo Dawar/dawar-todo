@@ -77,6 +77,9 @@ async function retireLegacyChatTransaction(progress: { stage: string }) {
   let inspectedForeignKeys = 0;
   for (const {name} of schemaRows.results) {
     if (!/^[a-zA-Z0-9_]+$/.test(name)) throw Error("Unexpected database schema; no data deleted.");
+    // D1's reserved storage table cannot be queried, including PRAGMA.
+    // Exclude only this documented internal table; inspect every app table.
+    if (name === "_cf_KV") continue;
     const fks = await env.DB.prepare(`PRAGMA foreign_key_list(${name})`).all<{ table: string }>();
     inspectedForeignKeys += fks.results.length;
     if (fks.results.some(f => ["todo_talk_threads", "todo_talk_messages", "todo_talk_sessions"].includes(f.table)))
