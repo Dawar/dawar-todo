@@ -82,6 +82,17 @@ export function OperatorCallHistory({ owner, botId, online }: { owner: string; b
 
 type RealtimeEvent = { type?: string; item_id?: string; item?: { id?: string }; transcript?: string; error?: { message?: string }; response?: { output?: Array<{ type?: string; call_id?: string; name?: string; arguments?: string }> } };
 type Start = { sessionId: string; clientSecret: string; operator: OperatorContext };
+export function OperatorQuestionContext({ context }: { context: OperatorContext }) {
+  const requests = context.pendingQuestions ?? [];
+  if (!requests.length) return null;
+  return <details className="operator-call-card"><summary>Input needed · {requests.reduce((n, r) => n + r.questions.length, 0)} questions</summary>
+    <div className="operator-call-card-body"><p>Tell Operator your answer. It will use the current question controls in {context.bot?.name}’s conversation.</p>
+      {requests.map(request => <section key={request.key}>{request.questions.map(question => <div key={question.id}>
+        <p><strong>{question.question}</strong></p>{question.options?.length ? <ol>{question.options.map(option => <li key={option.label}>{option.label}{option.description && <small>{option.description}</small>}</li>)}</ol> : null}
+      </div>)}{!request.voiceAnswerable && <p>Use the normal bot controls for this private input.</p>}
+        {['dispatching', 'prepared'].includes(request.answerState) && <p>The original answer is unconfirmed. Do not send it again.</p>}</section>)}
+    </div></details>;
+}
 
 export function OperatorCallDialog({ bot, bots, onClose }: { bot: OperatorBot | null; bots: OperatorBot[]; onClose: () => void }) {
   const [status, setStatus] = useState('Ready to call'), [error, setError] = useState(''), [muted, setMuted] = useState(false), [selected, setSelected] = useState<OperatorContext | null>(null), [view, setView] = useState<OperatorView | null>(null);
@@ -104,7 +115,7 @@ export function OperatorCallDialog({ bot, bots, onClose }: { bot: OperatorBot | 
       const result = await api<{ operator?: OperatorContext; operatorView?: OperatorView }>(`/api/talk/sessions/${session.current}`, { action: 'heartbeat' }, 'PATCH');
       if (!alive.current || ended.current) return;
       voice.current!.heartbeat(result);
-      if (result.operator) setSelected(result.operator);
+      if (result.operator) setSelected(voice.current!.context);
       if (result.operatorView) setView(result.operatorView);
     } catch (cause) { if (alive.current) setError(cause instanceof Error ? cause.message : 'Call readback is unavailable.'); }
     finally { polling.current = false; }
@@ -114,7 +125,7 @@ export function OperatorCallDialog({ bot, bots, onClose }: { bot: OperatorBot | 
     if (!id || ended.current) throw new Error('The voice connection has ended.');
     const body = await api<{ result: Record<string, unknown> }>(`/api/talk/sessions/${id}/tools`, { callId, name, arguments: args });
     voice.current!.apply(body.result);
-    if (body.result.operator) setSelected(body.result.operator as OperatorContext);
+    if (body.result.operator) setSelected(voice.current!.context);
     return body.result;
   }
   async function transcript(event: RealtimeEvent, role: 'user' | 'assistant') {
@@ -245,6 +256,7 @@ export function OperatorCallDialog({ bot, bots, onClose }: { bot: OperatorBot | 
       </>}
     </div>
     <p className="operator-muted operator-call-note">Bot work stays in its conversation and continues after the call. Stop bot pauses automatic intake.</p>
+    {selected && <OperatorQuestionContext context={selected} />}
     <div className="operator-segments">{view?.segments.map(segment => <OperatorCallCard key={segment.id} segment={segment} />)}</div>
   </section></div>;
 }

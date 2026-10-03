@@ -3,6 +3,7 @@ import { SECURE_TOOLS } from "./secure-input-tools.mjs";
 import { ownedReply, rememberReply, displayReplyItem, prepareReply, resolveReply } from "./message-replies.mjs";
 import { replyInputText } from "../lib/bot-replies.ts";
 import { OperatorCalls } from './operator.mjs';
+import { validateOperatorQuestion } from './operator-questions.mjs';
 import { HistoryReads } from './history-reads.mjs';
 import { desktopInstructions } from "./desktops.mjs";
 import { DOWNLOAD_ATTACHMENT_TOOL, localFileDigest } from "./storage.mjs";
@@ -528,7 +529,7 @@ export class BotRuntime extends EventEmitter {
   }
   snapshot() {
     return {
-      capabilities: { backgroundRunLanes: 1, scheduleDecisions: 1, singleThreadExecution: 1, peerInbox: 1, nativeGoals: 1, nativeConversation: 1, messageReplies: 1, secureInputs: 1, operatorCalls: 1, historyCursorIndex: 1, messageBursts: 1, burstDiscard: 1, queueLists: 1, queueRelativeMoves: 1, teams: 1, ...(this.desktops ? { botDesktops: 1 } : {}) },
+      capabilities: { backgroundRunLanes: 1, scheduleDecisions: 1, singleThreadExecution: 1, peerInbox: 1, nativeGoals: 1, nativeConversation: 1, messageReplies: 1, secureInputs: 1, operatorCalls: 1, operatorInputQuestions: 1, historyCursorIndex: 1, messageBursts: 1, burstDiscard: 1, queueLists: 1, queueRelativeMoves: 1, teams: 1, ...(this.desktops ? { botDesktops: 1 } : {}) },
 
       teams: publicTeams(this),
       workByBot: this.store.bots().map(bot => this.primary.work(bot)),
@@ -1799,6 +1800,12 @@ export class BotRuntime extends EventEmitter {
     );
   }
   async respond(bot, p, attempt = null, outerId = null) {
+    if (p.operatorQuestion) {
+      const row = this.store.get('pending', p.key);
+      validateOperatorQuestion(bot, row, p.operatorQuestion, p.result);
+      if (!row.async && (row.epoch !== this.epoch || this.store.bot(bot.id).activeTurnId !== row.request.params.turnId))
+        throw Object.assign(new Error('This blocking input question is no longer current. Read the selected bot context again.'), { outcome: 'rejected' });
+    }
     const prior = this.answers.get(bot, p.key);
     const pending = prior ? { id: prior.key, botId: bot.id, async: true, request: prior.request } : this.owned("pending", p.key, bot.id);
     if (!pending.async && pending.epoch !== this.epoch)

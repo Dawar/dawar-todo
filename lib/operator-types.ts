@@ -1,9 +1,19 @@
 export type OperatorBot = { id: string; name: string; avatar?: unknown; extension?: number; purpose?: string };
+export type OperatorInputQuestion = {
+  key: string; requestId: string; threadId: string; turnId: string; itemId: string; version: string;
+  kind: 'blocking' | 'async'; isBlocking: boolean; createdAt: string; answerState: string; voiceAnswerable: boolean;
+  questions: Array<{ id: string; header: string; question: string; isOther: boolean; isSecret: boolean;
+    options: Array<{ label: string; description: string }> | null }>;
+};
 export type OperatorContext = {
   callId: string; segmentId: string; bot: OperatorBot | null;
   activity: { state: string; paused: boolean; activeTurnId: string | null; goal?: { objective: string; status: string } | null } | null;
   reference?: Record<string, string>;
   recent: Array<{ role: string; text: string }>;
+  observedAt?: string;
+  selectionRevision?: number;
+  pendingQuestions?: OperatorInputQuestion[];
+  progress?: Array<{ id: string; turnId: string; text: string; phase?: string | null }>;
 };
 export type OperatorRequest = {
   id: string; callId: string; segmentId: string; bot: OperatorBot; text: string; createdAt: string;
