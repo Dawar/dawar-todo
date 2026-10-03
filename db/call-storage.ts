@@ -63,14 +63,16 @@ async function digest(bytes: Uint8Array) {
  * transactional compare/copy/delete/receipt. A race rolls back the ENTIRE batch.
  * No phone authentication/profile, recordings, tasks, native histories or other
  * tenant rows are deleted. A new call or old isolate write defers, never forces. */
-export async function retireLegacyChat() {
+async function retireLegacyChatTransaction(progress: { stage: string }) {
   await ensureSchema();
+  progress.stage = "configuration";
   const userKey = env.BOTS_OWNER_EMAIL?.trim().toLowerCase();
   if (!userKey || !env.BOTS_TICKET_SECRET) throw Error("Legacy Chat retirement needs the existing owner and private backup key.");
   const existing = await env.DB.prepare("SELECT operation_id,counts_json FROM todo_legacy_chat_retirements WHERE operation_id=? AND user_key=?").bind(RETIREMENT_ID,userKey).first();
   if (existing) return { completed: true, replayed: true };
   // Inspect actual foreign-key ownership before the reviewed deletes. Unknown
   // inbound dependencies are a concrete deferral, never a cascade assumption.
+  progress.stage = "foreign-keys";
   const schemaRows = await env.DB.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all<{ name: string }>();
   let inspectedForeignKeys = 0;
   for (const {name} of schemaRows.results) {
@@ -82,6 +84,7 @@ export async function retireLegacyChat() {
   }
   const active = await env.DB.prepare("SELECT COUNT(*) AS n FROM todo_talk_sessions WHERE user_key=? AND status='active' AND last_activity_at > strftime('%Y-%m-%dT%H:%M:%fZ','now','-2 minutes')").bind(userKey).first<{ n: number }>();
   if (active?.n) return { completed: false, deferred: "active-call" };
+  progress.stage = "snapshot";
   const snapshot: Record<string, Record<string, unknown>[]> = {};
   for (const table of snapshotTables) {
     // Bounded finite data migration; do not truncate an oversized backup.
@@ -91,6 +94,7 @@ export async function retireLegacyChat() {
   }
   const plain = encoder.encode(JSON.stringify({ format: 1, operationId: RETIREMENT_ID, userKey, snapshot }));
   if (plain.byteLength > 8*1024*1024) throw Error("Legacy Chat backup exceeds the reviewed byte bound; no data deleted.");
+  progress.stage = "encrypt-backup";
   const salt = crypto.getRandomValues(new Uint8Array(32)), iv = crypto.getRandomValues(new Uint8Array(12));
   const material = await crypto.subtle.importKey("raw",encoder.encode(env.BOTS_TICKET_SECRET),"HKDF",false,["deriveKey"]);
   const key = await crypto.subtle.deriveKey({name:"HKDF",hash:"SHA-256",salt,info:encoder.encode(`dawar-private-retirement-backup:${RETIREMENT_ID}`)},material,{name:"AES-GCM",length:256},false,["encrypt","decrypt"]);
@@ -99,6 +103,7 @@ export async function retireLegacyChat() {
   const verified = new Uint8Array(await crypto.subtle.decrypt({name:"AES-GCM",iv,additionalData:aad},key,cipher));
   const backupHash = await digest(plain);
   if (await digest(verified) !== backupHash) throw Error("Private backup validation failed; no data deleted.");
+  progress.stage = "backup-bound";
   const encoded = base64(cipher), chunks = encoded.match(/.{1,1000}/g) ?? [];
   if (chunks.length > 800) throw Error("Legacy Chat backup exceeds the reviewed transactional statement bound; no data deleted.");
   const statements: D1PreparedStatement[] = [];
@@ -140,7 +145,34 @@ export async function retireLegacyChat() {
   const counts = { ...Object.fromEntries(snapshotTables.map(t => [t,snapshot[t].length])), inspectedForeignKeys };
   statements.push(env.DB.prepare(`INSERT INTO todo_legacy_chat_retirements(operation_id,user_key,backup_sha256,ciphertext_sha256,salt,iv,chunks,counts_json,completed_at)
     VALUES(?,?,?,?,?,?,?,?,strftime('%Y-%m-%dT%H:%M:%fZ','now'))`).bind(RETIREMENT_ID,userKey,backupHash,await digest(cipher),base64(salt),base64(iv),chunks.length,JSON.stringify(counts)));
+  progress.stage = "atomic-transaction";
   await env.DB.batch(statements);
   console.info("[legacy-chat] scoped retirement completed", { operationId: RETIREMENT_ID, counts, backupChunks: chunks.length });
   return { completed: true, replayed: false, counts, backupChunks: chunks.length };
+}
+
+/** Diagnostic metadata excludes raw D1 errors, SQL and private row values. */
+export async function retireLegacyChat() {
+  const progress = { stage: "schema" };
+  try { return await retireLegacyChatTransaction(progress); }
+  catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    const categories: [RegExp, string][] = [
+      [/existing owner and private backup key/i, "configuration-missing"],
+      [/foreign-key dependency/i, "unreviewed-foreign-key"],
+      [/transactional statement bound/i, "backup-statement-bound"],
+      [/byte bound|snapshot exceeds/i, "backup-size-bound"],
+      [/too many sql variables/i, "d1-variable-limit"],
+      [/too many.*(subrequests|queries)|limit.*(subrequests|queries)/i, "d1-query-limit"],
+      [/statement.*(too long|length)|SQL.*too.*large/i, "d1-statement-limit"],
+      [/CHECK constraint/i, "snapshot-or-copy-race"],
+      [/UNIQUE constraint/i, "existing-claim-or-copy-conflict"],
+      [/not authorized|authorization|permission/i, "d1-permission"],
+      [/syntax error/i, "d1-syntax"],
+      [/no such (table|column)/i, "d1-schema"],
+    ];
+    const category = categories.find(([pattern]) => pattern.test(message))?.[1] ?? "unclassified";
+    console.error("[legacy-chat] retirement diagnostic", { operationId: RETIREMENT_ID, stage: progress.stage, category });
+    throw new Error("Scoped retirement deferred; diagnostic metadata recorded.");
+  }
 }
