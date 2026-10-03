@@ -15,6 +15,7 @@ import type { BotDesktopState } from "../../lib/bots-operations";
 import type RFB from "@novnc/novnc";
 import { botsClient as client } from "./client";
 import { DesktopChannel } from "./desktop-channel";
+import { DesktopTrackpad, desktopTouchMode, saveDesktopTouchMode, type DesktopTouchMode, type DesktopPointer } from "./desktop-trackpad";
 import "./bot-desktop.css";
 
 export function BotDesktopCard({
@@ -147,7 +148,16 @@ export function BotDesktopDialog({
   const screen = useRef<HTMLDivElement>(null),
     dialog = useRef<HTMLDivElement>(null),
     rfb = useRef<RFB | null>(null),
+    trackpad = useRef<DesktopTrackpad | null>(null),
+    pointer = useRef<DesktopPointer | null>(null),
+    pointerScope = useRef(""),
     socket = useRef<WebSocket | null>(null);
+  const [touchMode, setTouchMode] = useState<DesktopTouchMode>(desktopTouchMode);
+  const touchModeRef = useRef(touchMode);
+  useEffect(() => {
+    touchModeRef.current = touchMode;
+    trackpad.current?.setMode(touchMode);
+  }, [touchMode]);
   const [state, setState] = useState("Connecting…"),
     [error, setError] = useState(""),
     [exclusive, setExclusive] = useState(false),
@@ -207,8 +217,14 @@ export function BotDesktopDialog({
       renewal: ReturnType<typeof setInterval> | undefined,
       timeout: ReturnType<typeof setTimeout> | undefined,
       ws: WebSocket | undefined;
+    const scope = `${owner}:${bot.id}`;
+    if (pointerScope.current !== scope) {
+      pointer.current = null;
+      pointerScope.current = scope;
+    }
     const controller = new AbortController();
     const fail = (message: string) => {
+      trackpad.current?.cancel();
       if (!cancelled) {
         setError(message);
         setState("Disconnected");
@@ -307,6 +323,14 @@ export function BotDesktopDialog({
           remote.compressionLevel = 2;
           remote.addEventListener("connect", () => {
             if (!cancelled) {
+              try {
+                trackpad.current = new DesktopTrackpad(remote, screen.current!, pointer.current,
+                  (value) => { pointer.current = value; });
+                trackpad.current.setMode(touchModeRef.current);
+              } catch {
+                fail("Desktop pointer controls could not start. Reconnect to try again.");
+                return;
+              }
               setState("Connected");
               setError("");
               clearTimeout(timeout);
@@ -314,6 +338,7 @@ export function BotDesktopDialog({
             }
           });
           remote.addEventListener("disconnect", () => {
+            trackpad.current?.cancel();
             if (!cancelled) {
               setState("Disconnected");
               setExclusive(false);
@@ -370,6 +395,7 @@ export function BotDesktopDialog({
           }, 10000);
         });
         ws.addEventListener("close", () => {
+          trackpad.current?.cancel();
           if (!cancelled) {
             setState("Disconnected");
             setExclusive(false);
@@ -396,6 +422,8 @@ export function BotDesktopDialog({
       clearInterval(renewal);
       clearInterval(revocation);
       clearTimeout(timeout);
+      trackpad.current?.dispose();
+      trackpad.current = null;
       rfb.current?.disconnect();
       rfb.current = null;
       ws?.close();
@@ -486,6 +514,24 @@ export function BotDesktopDialog({
           ? "You have exclusive mouse and keyboard control."
           : "Shared control · you and the agent can use this desktop together."}{" "}
         Closing this window leaves apps running.
+      </div>
+      <div className="bots-desktop-touch-controls">
+        <button
+          type="button"
+          aria-label={`Touch input: ${touchMode === "trackpad" ? "Trackpad" : "Direct touch"}. Switch to ${touchMode === "trackpad" ? "Direct touch" : "Trackpad"}`}
+          onClick={() => {
+            const next = touchMode === "trackpad" ? "direct" : "trackpad";
+            saveDesktopTouchMode(next);
+            setTouchMode(next);
+          }}
+        >
+          {touchMode === "trackpad" ? "Trackpad" : "Direct touch"}
+        </button>
+        <span>
+          {touchMode === "trackpad"
+            ? "Swipe to move · Tap to click · Hold to drag · Two fingers to scroll or right-click"
+            : "Touch where you want to click"}
+        </span>
       </div>
       {error && (
         <p className="bots-desktop-error" role="alert">

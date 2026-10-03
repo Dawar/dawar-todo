@@ -135,7 +135,25 @@
   flex: 1;
   min-height: 0;
   overflow: hidden;
+  touch-action: none;
+  user-select: none;
 }
+.bots-desktop-touch-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 12px 8px;
+  background: #202634;
+  font-size: 12px;
+  color: #c2ccde;
+}
+.bots-desktop-touch-controls button {
+  flex: none;
+  min-height: 40px;
+  font-size: 14px;
+  color: #f3f5fa;
+}
+.bots-desktop-touch-controls span { line-height: 1.4; }
 .bots-desktop-error {
   font-size: 12px;
   padding: 6px 10px;
