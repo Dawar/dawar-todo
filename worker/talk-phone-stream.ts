@@ -1,3 +1,5 @@
+import { phoneOperator, operatorHeartbeat, operatorInstructions, operatorToolDefinitions, operatorTranscript, endOperator } from "../lib/operator-server";
+import { OperatorVoiceEvents } from "../lib/operator-voice-events";
 import {
   appendTalkMessage,
   beginTalkToolCall,
@@ -7,7 +9,6 @@ import {
   heartbeatTalkSession,
   listTalkHistory,
   readTalkWorkspace,
-  resolveSystemTalkThread,
   startTalkSession,
 } from "../db/talk";
 import {
@@ -211,12 +212,14 @@ export async function handleTalkPhoneStream(
   let rolloverTimer: ReturnType<typeof setTimeout> | null = null;
   let startupTimer: ReturnType<typeof setTimeout> | null = null;
   const startedAt = Date.now();
+  const operatorVoice = new OperatorVoiceEvents(event => sendJson(openAI,event));
 
   const heartbeat = async () => {
     if (!userKey || !talkSessionId || heartbeatRunning || Date.now() - lastHeartbeatAt < 10_000) return;
     heartbeatRunning = true;
     try {
       await heartbeatTalkSession(userKey, talkSessionId, focusedTodoId);
+      if (operatorVoice.context) operatorVoice.heartbeat(await operatorHeartbeat(userKey,talkSessionId));
       lastHeartbeatAt = Date.now();
     } finally {
       heartbeatRunning = false;
@@ -231,6 +234,8 @@ export async function handleTalkPhoneStream(
   ) => {
     if (!userKey || !talkSessionId || !content.trim()) return;
     await heartbeat();
+    if (operatorVoice.context && (role === "user" || role === "assistant"))
+      await operatorTranscript(userKey,talkSessionId,{ realtimeItemId,role,content,segmentId:operatorVoice.segment(realtimeItemId) });
     await appendTalkMessage({
       userKey,
       sessionId: talkSessionId,
@@ -251,6 +256,7 @@ export async function handleTalkPhoneStream(
     webSocketClose(twilio, status === "completed" ? 1000 : 1011, reason);
     await Promise.all([
       callSid ? endTalkPhoneCall(callSid, status, reason, environment.DB).catch(() => undefined) : Promise.resolve(),
+      userKey && talkSessionId ? endOperator(userKey,talkSessionId).catch(() => undefined) : Promise.resolve(),
       userKey && talkSessionId
         ? endTalkSession(userKey, talkSessionId, `phone-${reason}`).catch(() => undefined)
         : Promise.resolve(),
@@ -303,6 +309,7 @@ export async function handleTalkPhoneStream(
         argumentsJson,
       });
       if (existing.replayed && existing.result) {
+        operatorVoice.apply({ operator: existing.result.operator, sessionUpdate: existing.result.sessionUpdate });
         sendToolOutput(callId, existing.result);
         return;
       }
@@ -317,6 +324,7 @@ export async function handleTalkPhoneStream(
         name,
         arguments: args,
       });
+      operatorVoice.apply({ operator: result.operator, sessionUpdate: result.sessionUpdate });
       if (typeof result.focusedTodoId === "number") focusedTodoId = result.focusedTodoId;
       if (result.focusedTodoId === null) focusedTodoId = null;
       await completeTalkToolCall({
@@ -362,6 +370,7 @@ export async function handleTalkPhoneStream(
   const handleOpenAIEvent = (raw: unknown) => {
     const event = parseJson<OpenAIEvent>(raw);
     if (!event?.type) return;
+    operatorVoice.observe(event);
     if (event.type === "response.output_audio.delta" && event.delta) {
       sendJson(twilio, {
         event: "media",
@@ -444,7 +453,7 @@ export async function handleTalkPhoneStream(
         type: "realtime",
         model,
         output_modalities: ["audio"],
-        instructions,
+        instructions: operatorVoice.context ? operatorInstructions(operatorVoice.context) : instructions,
         reasoning: { effort: "low" },
         audio: {
           input: {
@@ -459,7 +468,7 @@ export async function handleTalkPhoneStream(
           },
           output: { format: { type: "audio/pcmu" }, voice },
         },
-        tools: talkToolDefinitions,
+        tools: operatorVoice.context ? operatorVoice.context.bot ? operatorToolDefinitions : [...operatorToolDefinitions,...talkToolDefinitions] : talkToolDefinitions,
         tool_choice: "auto",
         truncation: "auto",
       },
@@ -478,7 +487,7 @@ export async function handleTalkPhoneStream(
         if (ending || !userKey || !talkSessionId) return;
         const [context, history] = await Promise.all([
           buildSharedAssistantContext(userKey, focusedTodoId),
-          listTalkHistory(userKey, { limit: 40 }),
+          listTalkHistory(userKey, { sessionId: talkSessionId, limit: 40 }),
         ]);
         const recent = history.messages
           .slice(-20)
@@ -529,10 +538,9 @@ export async function handleTalkPhoneStream(
         readTalkWorkspace(userKey),
         getTodoSettings(),
       ]);
-      const phoneThread = await resolveSystemTalkThread(userKey, "phone");
       focusedTodoId = chooseTalkFocus(
         todos,
-        phoneThread.focusedTodoId ?? workspace.lastFocusedTodoId,
+        workspace.lastFocusedTodoId,
       );
       realtimeVoice = settings.realtimeVoice;
       const { model, voice } = talkRuntimeConfig(realtimeVoice);
@@ -541,15 +549,15 @@ export async function handleTalkPhoneStream(
         model,
         voice,
         focusedTodoId,
-        threadId: phoneThread.id,
         transport: "phone-relay",
       });
       talkSessionId = session.id;
       await attachTalkSessionToPhoneCall(callSid, talkSessionId, environment.DB);
       const [context, history] = await Promise.all([
-        buildSharedAssistantContext(userKey, focusedTodoId, phoneThread.summary),
-        listTalkHistory(userKey, { threadId: phoneThread.id, limit: 40 }),
+        buildSharedAssistantContext(userKey, focusedTodoId, workspace.summary),
+        listTalkHistory(userKey, { sessionId: talkSessionId, limit: 40 }),
       ]);
+      operatorVoice.context = await phoneOperator(userKey,talkSessionId);
       await configureOpenAI(withRecentTalkHistory(talkInstructions(context), history.messages));
       initialized = true;
       if (startupTimer) {
@@ -565,7 +573,7 @@ export async function handleTalkPhoneStream(
       sendJson(openAI, {
         type: "response.create",
         response: {
-          instructions: "Start immediately with one terse, useful question about the focused task. No greeting or capability explanation.",
+          instructions: operatorVoice.context ? "Greet exactly: Operator. Then listen." : "Start immediately with one terse, useful question about the focused task. No greeting or capability explanation.",
         },
       });
       console.info("[todo-talk-phone] authenticated media bridge started", {

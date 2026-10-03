@@ -1,0 +1,22 @@
+.bots-work-controls { margin: 22px 0; min-width: 0; }
+.bots-work-controls > h3 { margin: 0 0 7px; font-size: 15px; font-weight: 650; color: #304a39; }
+.bots-work-hint, .bots-work-empty { margin: 0 0 12px; color: #718077; font-size: 12px; line-height: 1.55; overflow-wrap: anywhere; }
+.bots-work-empty { padding: 12px; border: 1px dashed #dce6df; border-radius: 12px; }
+.bots-work-runs { display: grid; gap: 10px; }
+.bots-work-run { min-width: 0; padding: 12px; border: 1px solid #dfe8e1; border-radius: 13px; background: #f8fbf9; }
+.bots-work-run header { display: flex; align-items: flex-start; gap: 7px; color: #365d43; }
+.bots-work-run header svg { flex-shrink: 0; margin-top: 3px; }
+.bots-work-run h4 { margin: 0; font-size: 13px; line-height: 1.5; font-weight: 650; overflow-wrap: anywhere; }
+.bots-work-state { margin: 4px 0 9px 22px; font-size: 11px; color: #67816f; }
+.bots-work-run .bots-work-hint { margin-bottom: 8px; }
+.bots-work-run-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 5px 9px; }
+.bots-work-controls .bots-work-stop, .bots-work-controls .bots-work-open { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 44px; padding: 8px 10px; border-radius: 9px; font-size: 12px; line-height: 1.35; white-space: normal; text-align: start; }
+.bots-work-controls .bots-work-stop { border: 1px solid #d7e1da; background: #fff; color: #3e5345; }
+.bots-work-controls .bots-work-open { color: #276f49; }
+.bots-work-controls button:disabled { opacity: .5; cursor: not-allowed; }
+.bots-work-controls button:focus-visible { outline: 2px solid #315ec5; outline-offset: 2px; }
+.bots-work-error { margin: 10px 0 0; padding: 8px; background: #fff3ee; border-radius: 8px; color: #914a33; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.bots-work-error button { display: block; min-height: 44px; color: inherit; text-decoration: underline; }
+.bots-work-all { margin-top: 14px; padding-top: 12px; border-top: 1px solid #e3ebe5; }
+.bots-work-all .bots-run-controls { margin: 0; padding: 0; border: 0; }
+.bots-work-all .bots-run-controls button { min-height: 44px; color: #854c3c; border-color: #e7dcd6; }

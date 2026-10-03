@@ -1,0 +1,10 @@
+.markdown-diagram { min-width: 0; max-width: 100%; margin: 14px 0; overflow: hidden; border: 1px solid #dce6df; border-radius: 14px; background: #fcfdfb; color: #304638; }
+.markdown-diagram-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 5px 8px 5px 14px; border-bottom: 1px solid #e8eee9; font: 500 11px/1.5 system-ui, sans-serif; color: #728378; }
+.markdown-diagram-heading button { display: grid; place-items: center; width: 36px; height: 36px; border: 0; border-radius: 8px; background: transparent; color: #557462; cursor: pointer; }
+.markdown-diagram-heading button:hover { background: #edf4ef; }
+.markdown-diagram-heading button:focus-visible, .markdown-diagram-viewport:focus-visible { outline: 2px solid #347b51; outline-offset: -3px; }
+.markdown-diagram-viewport { display: flex; max-width: 100%; overflow: auto; padding: 20px; overscroll-behavior-x: contain; scrollbar-width: thin; scrollbar-color: #9fb8a8 #f2f6f3; }
+.markdown-diagram-viewport > svg { display: block; flex: none; max-width: none; margin: auto; }
+.markdown-diagram .markdown-diagram-placeholder { display: grid; place-items: center; min-height: 120px; padding: 20px; font-size: 12px; color: #728378; }
+.markdown-diagram > pre { margin: 0 !important; border: 0 !important; border-radius: 0 !important; }
+@media (pointer: coarse) { .markdown-diagram-heading button { width: 44px; height: 44px; } }

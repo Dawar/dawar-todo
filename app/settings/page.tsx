@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { ActionIcon } from "../action-icon";
 import {
   appleMobileBadgeRequiresNotificationPermission,
@@ -13,6 +13,8 @@ import { getOrCreateDeviceId, headersWithDeviceId } from "../device-id";
 import { ensureCurrentPushSubscription } from "../push-client";
 import { SiteHeader } from "../site-header";
 import { buildSyncDiagnosticsReport } from "../sync-diagnostics";
+import { cacheOpeningTab, cachedOpeningTab } from "../opening-preference";
+import { DEFAULT_OPENING_TAB, parseOpeningTab, type OpeningTab } from "../../lib/app-preferences";
 import {
   DEFAULT_QUICK_SNOOZE_PRESETS,
   QUICK_SNOOZE_OPTIONS,
@@ -26,6 +28,8 @@ import {
 } from "../../lib/ai-preferences";
 
 type Settings = {
+  openAppTo: OpeningTab;
+  openAppToUpdatedAt?: string | null;
   snoozeTimeZone: string;
   snoozeWakeHour: number;
   snoozeQuickPresets: QuickSnoozePreset[];
@@ -113,11 +117,17 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 
 export default function SettingsPage() {
   const [settings, setSettings] = useState<Settings>({
+    openAppTo: DEFAULT_OPENING_TAB,
     snoozeTimeZone: "America/Toronto",
     snoozeWakeHour: 8,
     snoozeQuickPresets: DEFAULT_QUICK_SNOOZE_PRESETS,
     realtimeVoice: DEFAULT_REALTIME_VOICE,
   });
+  const changedSettings = useRef(new Set<keyof Settings>());
+  const settingsLoadGeneration = useRef(0);
+  const settingsReadController = useRef<AbortController | null>(null);
+  const settingsSaveInFlight = useRef(false);
+  const settingsLoadError = useRef("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
@@ -160,18 +170,55 @@ export default function SettingsPage() {
   const [diagnosticMessage, setDiagnosticMessage] = useState("");
 
   useEffect(() => {
-    request<{ settings: Settings }>("/api/settings")
+    // Activity can resume during PATCH. Defer the GET until settlement, rather
+    // than capturing a pre-commit snapshot that could later overwrite Saved.
+    if (settingsSaveInFlight.current) return;
+    let active = true;
+    const generation = ++settingsLoadGeneration.current;
+    const controller = new AbortController();
+    settingsReadController.current = controller;
+    const currentLoad = () => active && generation === settingsLoadGeneration.current && !settingsSaveInFlight.current;
+    const timeout = window.setTimeout(() => controller.abort(), 15_000);
+    request<{ settings: Settings }>("/api/settings", { signal: controller.signal, cache: "no-store" })
       .then(({ settings: loaded }) => {
-        setSettings({
-          ...loaded,
-          snoozeQuickPresets: loaded.snoozeQuickPresets ?? DEFAULT_QUICK_SNOOZE_PRESETS,
-          realtimeVoice: loaded.realtimeVoice ?? DEFAULT_REALTIME_VOICE,
+        if (!currentLoad()) return;
+        const previousLoadError = settingsLoadError.current;
+        settingsLoadError.current = "";
+        if (previousLoadError) setMessage((current) => current === previousLoadError ? "" : current);
+        setSettings((current) => {
+          if (!currentLoad()) return current;
+          const next: Settings = {
+            ...loaded,
+            openAppTo: parseOpeningTab(loaded.openAppTo) ?? cachedOpeningTab() ?? DEFAULT_OPENING_TAB,
+            snoozeQuickPresets: loaded.snoozeQuickPresets ?? DEFAULT_QUICK_SNOOZE_PRESETS,
+            realtimeVoice: loaded.realtimeVoice ?? DEFAULT_REALTIME_VOICE,
+          };
+          // Returning to this Activity reruns effects. Keep any unsaved fields
+          // while refreshing the rest instead of replacing the form draft.
+          return { ...next, ...Object.fromEntries([...changedSettings.current].map((key) => [key, current[key]])) };
         });
+        cacheOpeningTab(loaded.openAppTo, loaded.openAppToUpdatedAt);
         console.info("[todo-ui] settings loaded", loaded);
       })
-      .catch((error: Error) => setMessage(error.message))
-      .finally(() => setLoading(false));
+      .catch((error: Error) => {
+        if (!currentLoad()) return;
+        if (!changedSettings.current.has("openAppTo")) setSettings((current) => currentLoad() ? { ...current, openAppTo: cachedOpeningTab() ?? DEFAULT_OPENING_TAB } : current);
+        settingsLoadError.current = controller.signal.aborted ? "Loading preferences timed out. Your edits are kept; reopen Settings to retry." : error.message;
+        setMessage(settingsLoadError.current);
+      })
+      .finally(() => {
+        window.clearTimeout(timeout);
+        if (currentLoad()) setLoading(false);
+      });
+    return () => {
+      active = false;
+      if (settingsReadController.current === controller) settingsReadController.current = null;
+      controller.abort();
+      window.clearTimeout(timeout);
+    };
+  }, [saving]);
 
+  useEffect(() => {
     request<{ feeds: CalendarFeed[] }>("/api/calendar-feeds")
       .then(({ feeds }) => {
         setCalendarFeeds(feeds);
@@ -303,25 +350,42 @@ export default function SettingsPage() {
 
   async function save(event: FormEvent) {
     event.preventDefault();
+    if (settingsSaveInFlight.current || loading) return;
+    settingsSaveInFlight.current = true;
+    settingsLoadGeneration.current++;
+    settingsReadController.current?.abort();
+    setLoading(false);
     setSaving(true);
     setSaved(false);
+    settingsLoadError.current = "";
     setMessage("");
     try {
       const { settings: persisted } = await request<{ settings: Settings }>("/api/settings", {
         method: "PATCH",
-        body: JSON.stringify(settings),
+        body: JSON.stringify(Object.fromEntries([...changedSettings.current].map((key) => [key, settings[key]]))),
       });
-      setSettings(persisted);
+      // Fence reads again at acknowledgement, including any Activity-resume
+      // work queued while the mutation was pending, before clearing dirty keys.
+      settingsLoadGeneration.current++;
+      settingsReadController.current?.abort();
+      setSettings({ ...persisted, openAppTo: parseOpeningTab(persisted.openAppTo) ?? settings.openAppTo });
+      changedSettings.current.clear();
       setSaved(true);
+      if (!cacheOpeningTab(persisted.openAppTo, persisted.openAppToUpdatedAt)) setMessage("Preferences saved online, but this browser could not remember the opening tab offline. Retry Save preferences when browser storage is available.");
       console.info("[todo-ui] settings saved", persisted);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Settings could not be saved.");
     } finally {
+      settingsLoadGeneration.current++;
+      settingsReadController.current?.abort();
+      settingsSaveInFlight.current = false;
+      setLoading(false);
       setSaving(false);
     }
   }
 
   function updateQuickSnoozePreset(index: number, value: QuickSnoozePreset) {
+    changedSettings.current.add("snoozeQuickPresets");
     setSettings((current) => {
       const next = [...current.snoozeQuickPresets];
       next[index] = value;
@@ -871,6 +935,24 @@ export default function SettingsPage() {
 
         <form onSubmit={save} className="rounded-2xl border border-black/[0.07] bg-white p-5 shadow-[0_10px_35px_rgba(30,45,36,0.06)] sm:p-7">
           <fieldset disabled={loading || saving} className="space-y-5 disabled:opacity-60">
+            <section aria-labelledby="opening-preference-title" className="border-b border-black/[0.07] pb-5">
+              <h2 id="opening-preference-title" className="text-lg font-semibold tracking-[-0.02em] text-[#202522]">App opening</h2>
+              <label className="mt-4 block">
+                <span className="mb-2 block text-sm font-semibold text-[#303632]">Open app to</span>
+                <select value={settings.openAppTo}
+                  onChange={(event) => {
+                    changedSettings.current.add("openAppTo");
+                    setSettings((current) => ({ ...current, openAppTo: event.target.value as OpeningTab }));
+                    setSaved(false);
+                  }}
+                  aria-describedby="opening-preference-help"
+                  className="h-12 w-full rounded-xl border border-black/[0.1] bg-white px-3 text-[16px] outline-none transition focus:border-[#216e4e]/60 focus:ring-3 focus:ring-[#216e4e]/10">
+                  <option value="tasks">Tasks</option>
+                  <option value="bots">Bots</option>
+                </select>
+              </label>
+              <p id="opening-preference-help" className="mt-1.5 text-xs leading-5 text-[#7c847f]">Used for a fresh app launch, including offline after saving on this device. Links and an already-open screen keep their destination.</p>
+            </section>
             <div>
               <h2 className="text-lg font-semibold tracking-[-0.02em] text-[#202522]">Daily review</h2>
               <p className="mt-1 text-sm leading-6 text-[#69716c]">Choose the timezone for snoozing and recurring task schedules.</p>
@@ -880,7 +962,7 @@ export default function SettingsPage() {
               <span className="mb-2 block text-sm font-semibold text-[#303632]">Time zone</span>
               <select
                 value={settings.snoozeTimeZone}
-                onChange={(event) => { setSettings((current) => ({ ...current, snoozeTimeZone: event.target.value })); setSaved(false); }}
+                onChange={(event) => { changedSettings.current.add("snoozeTimeZone"); setSettings((current) => ({ ...current, snoozeTimeZone: event.target.value })); setSaved(false); }}
                 className="h-12 w-full rounded-xl border border-black/[0.1] bg-white px-3 text-sm outline-none transition focus:border-[#216e4e]/60 focus:ring-3 focus:ring-[#216e4e]/10"
               >
                 {timeZones.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
@@ -891,7 +973,7 @@ export default function SettingsPage() {
               <span className="mb-2 block text-sm font-semibold text-[#303632]">Wake-up time</span>
               <select
                 value={settings.snoozeWakeHour}
-                onChange={(event) => { setSettings((current) => ({ ...current, snoozeWakeHour: Number(event.target.value) })); setSaved(false); }}
+                onChange={(event) => { changedSettings.current.add("snoozeWakeHour"); setSettings((current) => ({ ...current, snoozeWakeHour: Number(event.target.value) })); setSaved(false); }}
                 className="h-12 w-full rounded-xl border border-black/[0.1] bg-white px-3 text-sm outline-none transition focus:border-[#216e4e]/60 focus:ring-3 focus:ring-[#216e4e]/10"
               >
                 {Array.from({ length: 24 }, (_, hour) => <option key={hour} value={hour}>{hourLabel(hour)}</option>)}
@@ -941,6 +1023,7 @@ export default function SettingsPage() {
                   value={settings.realtimeVoice}
                   onChange={(event) => {
                     const realtimeVoice = event.target.value as RealtimeVoice;
+                    changedSettings.current.add("realtimeVoice");
                     setSettings((current) => ({ ...current, realtimeVoice }));
                     setSaved(false);
                     console.info("[todo-ai-preferences] Realtime voice preference changed", { realtimeVoice });
@@ -1082,7 +1165,7 @@ export default function SettingsPage() {
           <div className="flex items-start gap-3">
             <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-[#eaf3ed] text-[#216e4e]"><ActionIcon name="phone" className="h-5 w-5" /></span>
             <div className="min-w-0 flex-1">
-              <h2 id="talk-phone-title" className="text-lg font-semibold tracking-[-0.02em] text-[#202522]">Call Talk</h2>
+              <h2 id="talk-phone-title" className="text-lg font-semibold tracking-[-0.02em] text-[#202522]">Call Operator</h2>
               <p className="mt-1 text-sm leading-6 text-[#69716c]">Call the same realtime chief-of-staff assistant from any phone. Enter your private PIN before the assistant can read or change tasks.</p>
             </div>
           </div>
@@ -1095,7 +1178,7 @@ export default function SettingsPage() {
                 {!talkPhoneProfile?.providerReady
                   ? "Twilio credentials are not configured on this site."
                   : talkPhoneProfile.configured
-                    ? <>Enabled. Call <a className="font-semibold text-[#216e4e] underline decoration-[#216e4e]/30 underline-offset-2" href={`tel:${talkPhoneProfile.phoneNumber}`}>{talkPhoneProfile.phoneNumber}</a> and enter your PIN. Starting a phone call takes over any active browser Talk session.</>
+                    ? <>Enabled. Call <a className="font-semibold text-[#216e4e] underline decoration-[#216e4e]/30 underline-offset-2" href={`tel:${talkPhoneProfile.phoneNumber}`}>{talkPhoneProfile.phoneNumber}</a> and enter your PIN. Starting a phone call takes over any active browser Operator call.</>
                     : "Set a 6 to 8 digit PIN to connect the configured Twilio number."}
               </div>
 

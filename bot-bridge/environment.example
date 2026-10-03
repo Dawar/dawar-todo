@@ -1,0 +1,19 @@
+# Save as ~/.config/dawar-todo-bots/environment (chmod 600).
+BOTS_RELAY_URL=wss://YOUR-DEPLOYED-RELAY.workers.dev/connect
+BOTS_MACHINE_ID=dawar-vm
+BOTS_MACHINE_SECRET=REPLACE_WITH_32_RANDOM_BYTES
+BOTS_NOTIFICATION_SECRET=REPLACE_WITH_32_RANDOM_BYTES
+BOTS_SITE_URL=https://work.dawar.ca
+BOTS_TIME_ZONE=America/Toronto
+# Optional defaults:
+# BOTS_ROOT=/home/dawar/bots
+# BOTS_STATE_DIR=/home/dawar/.local/share/dawar-todo-bots
+# BOTS_HEALTH_PORT=47821
+# BOTS_CODEX_BINARY overrides the reviewed path in bot-bridge/codex-version.mjs.
+# Its --version must match CODEX_VERSION; update the pin and protocol together.
+
+# Optional desktop settings (X11 20..99, managed RDP 3391..3490):
+# New RDP routes bind loopback by default; set this machine's Tailscale IPv4 to allow private RDP.
+# BOTS_DESKTOP_RDP_BIND=100.87.162.94
+# Explicit adoption preserves an existing desktop and its apps:
+# BOTS_DESKTOP_ADOPT={"linus-computer-admin":"linus"}

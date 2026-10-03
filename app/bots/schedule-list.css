@@ -1,0 +1,12 @@
+.bots-schedule-row { border-bottom: 1px solid #e8eee9; }
+.bots-schedule-row summary { display: flex; align-items: center; gap: 14px; padding: 18px 0; min-height: 68px; cursor: pointer; list-style: none; }
+.bots-schedule-row summary::-webkit-details-marker { display: none; }
+.bots-schedule-row summary > span { flex: 1; min-width: 0; }
+.bots-schedule-row strong { display: block; color: #304f3b; font-size: 14px; font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; }
+.bots-schedule-row small { display: block; margin-top: 5px; color: #7d8b81; font-size: 12px; }
+.bots-schedule-row summary > svg { flex-shrink: 0; color: #8a998f; }
+.bots-schedule-row[open] summary > svg { transform: rotate(180deg); }
+.bots-schedule-row-body { padding: 0 0 15px; }
+.bots-schedule-row-body > p { margin: 0 0 8px; color: #7d8b81; font-size: 12px; }
+.bots-schedule-row-actions { display: flex; flex-wrap: wrap; gap: 4px 14px; }
+.bots-schedule-row-actions button { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: #3f7953; min-height: 44px; padding: 5px 2px; }

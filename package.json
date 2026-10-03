@@ -13,18 +13,27 @@
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate",
     "voice:check": "wrangler deploy --dry-run --config voice-relay/wrangler.jsonc",
-    "voice:deploy": "wrangler deploy --config voice-relay/wrangler.jsonc"
+    "voice:deploy": "wrangler deploy --config voice-relay/wrangler.jsonc",
+    "bots:test": "node --test bot-bridge/*.test.mjs",
+    "bots:check": "tsc --noEmit && wrangler deploy --dry-run --config bots-relay/wrangler.jsonc",
+    "bots:deploy": "wrangler deploy --config bots-relay/wrangler.jsonc",
+    "bots:install": "node bot-bridge/install.mjs",
+    "bots:protocol": "node bot-bridge/generate-protocol.mjs"
   },
   "dependencies": {
     "@formkit/auto-animate": "^0.10.0",
+    "@novnc/novnc": "^1.7.0",
+    "dompurify": "^3.4.16",
     "drizzle-orm": "0.45.2",
     "lucide-react": "^1.25.0",
+    "mermaid": "^12.0.0",
     "next": "16.2.6",
     "react": "19.2.6",
     "react-dom": "19.2.6",
     "react-markdown": "^10.1.0",
     "rehype-sanitize": "^6.0.0",
     "remark-gfm": "^4.0.1",
+    "sharp": "0.34.5",
     "web-push": "^3.6.7"
   },
   "devDependencies": {

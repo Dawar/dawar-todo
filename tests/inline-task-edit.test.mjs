@@ -11,7 +11,7 @@ test("task titles are seamless autogrowing inline editors", async () => {
   assert.match(page, /setTitleDraft\(event\.target\.value\)/);
   assert.match(page, /selected && !editingTitle/);
   assert.match(page, /textarea\.style\.height = "auto"/);
-  assert.match(page, /textarea\.style\.height = `\$\{textarea\.scrollHeight\}px`/);
+  assert.match(page, /scheduleTitleSize\(titleRef.current\)/);
   assert.match(page, /resize-none overflow-hidden border-0 bg-transparent p-0/);
   assert.match(page, /onTitleChange\(todo, event\.target\.value\)/);
   assert.match(page, /onTitleBlur\(todo, event\.target\.value\)/);

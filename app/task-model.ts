@@ -1,5 +1,6 @@
 import type { QuickSnoozePreset } from "../lib/snooze-presets";
 import type { RealtimeVoice } from "../lib/ai-preferences";
+import type { OpeningTab } from "../lib/app-preferences";
 import type { OfflineCaptureDraft, OfflineTodoRecord } from "./offline-store";
 
 export type Todo = {
@@ -27,6 +28,8 @@ export type Todo = {
 };
 
 export type TodoSettings = {
+  openAppTo: OpeningTab;
+  openAppToUpdatedAt?: string | null;
   snoozeTimeZone: string;
   snoozeWakeHour: number;
   snoozeQuickPresets: QuickSnoozePreset[];

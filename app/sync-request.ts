@@ -26,7 +26,7 @@ export function request<T>(path: string, options?: RequestOptions): Promise<T> {
   })
     .then(async (response) => {
       const jsonResponse = response.headers.get("content-type")?.includes("application/json");
-      const payload = (jsonResponse ? await response.json() : {}) as T & { error?: string };
+      const payload = (jsonResponse ? await response.json() : {}) as T & { error?: string; code?: string; phase?: string };
       if (response.ok && !jsonResponse) {
         const error = new Error("Please sign in again to continue syncing.") as Error & { status?: number };
         error.status = response.redirected ? 401 : 502;
@@ -35,6 +35,7 @@ export function request<T>(path: string, options?: RequestOptions): Promise<T> {
       if (!response.ok) {
         const error = new Error(payload.error || "Something went wrong.") as Error & { status?: number };
         error.status = response.status;
+        Object.assign(error, { code: payload.code, phase: payload.phase });
         throw error;
       }
       return payload;

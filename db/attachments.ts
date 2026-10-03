@@ -1,3 +1,6 @@
+import { createS3Storage } from "../lib/s3-storage";
+import { attachmentErrorDetails, type AttachmentPhase } from "../lib/attachment-errors";
+import type { AttachmentRecovery } from "../lib/attachment-recovery";
 import { env, waitUntil } from "cloudflare:workers";
 import { attachmentFileExtension, attachmentFileMimeType, detectAttachmentFileFormat } from "../lib/attachment-files";
 
@@ -11,7 +14,6 @@ export const MAX_FILE_ATTACHMENT_BYTES = 100 * 1024 * 1024;
 const MAX_IMAGE_PIXELS = 100_000_000;
 const DRAFT_LIFETIME_HOURS = 24;
 const DELETED_RETENTION_DAYS = 7;
-const SIGNED_URL_SECONDS = 60 * 60;
 const CLEANUP_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 type RuntimeEnv = {
@@ -23,9 +25,8 @@ type RuntimeEnv = {
   IMAGES: ImagesBinding;
 };
 
-type StorageConfig = { bucket: string; endpoint: URL; region: string };
-
-let cachedStorageConfig: StorageConfig | null = null;
+let cachedStorage: ReturnType<typeof createS3Storage> | null = null;
+function storage() { return cachedStorage ??= createS3Storage(runtime()); }
 let nextCleanupCheckAt = 0;
 
 export type AttachmentRow = {
@@ -79,46 +80,6 @@ function database() {
   return db;
 }
 
-function storageConfig() {
-  if (cachedStorageConfig) return cachedStorageConfig;
-  const current = runtime();
-  const missing = [
-    "S3_ACCESS_KEY",
-    "S3_ACCESS_KEY_ID",
-    "S3_BUCKET",
-    "S3_ENDPOINT_URL",
-  ].filter((key) => !current[key as keyof RuntimeEnv]);
-  if (missing.length) throw new Error(`Image storage is missing ${missing.join(", ")}.`);
-  const endpointValue = /^https?:\/\//i.test(current.S3_ENDPOINT_URL)
-    ? current.S3_ENDPOINT_URL
-    : `https://${current.S3_ENDPOINT_URL}`;
-  const endpointUrl = new URL(endpointValue);
-  const bucketPrefix = `${current.S3_BUCKET}.`;
-  if (endpointUrl.hostname.startsWith(bucketPrefix)) endpointUrl.hostname = endpointUrl.hostname.slice(bucketPrefix.length);
-  endpointUrl.pathname = "/";
-  endpointUrl.search = "";
-  endpointUrl.hash = "";
-  const endpointRegion = endpointUrl.hostname.endsWith(".digitaloceanspaces.com")
-    ? endpointUrl.hostname.split(".")[0]
-    : "us-east-1";
-  // DigitalOcean's JavaScript S3 guidance uses the AWS-compatible signing
-  // region while the physical Spaces region remains encoded in the endpoint.
-  const signingRegion = endpointUrl.hostname.endsWith(".digitaloceanspaces.com")
-    ? "us-east-1"
-    : endpointRegion;
-  cachedStorageConfig = {
-    bucket: current.S3_BUCKET,
-    endpoint: endpointUrl,
-    region: signingRegion,
-  };
-  console.info("[todo-attachments] private storage configured", {
-    endpointRegion,
-    signingRegion,
-    virtualHosted: true,
-  });
-  return cachedStorageConfig;
-}
-
 function normalizedFormat(value: string) {
   const format = value.toLowerCase().replace(/^image\//, "");
   if (format === "jpg") return "jpeg";
@@ -135,56 +96,12 @@ function validateDraftToken(value: string) {
   return value;
 }
 
-function storageUrl(key?: string, query?: Record<string, string>) {
-  const { bucket, endpoint } = storageConfig();
-  const url = new URL(endpoint);
-  url.hostname = `${bucket}.${url.hostname}`;
-  url.pathname = key ? `/${key.split("/").map(encodeURIComponent).join("/")}` : "/";
-  Object.entries(query ?? {}).forEach(([name, value]) => url.searchParams.set(name, value));
-  return url;
-}
-
-async function signedStorageResponse(url: URL, init?: RequestInit) {
-  const method = init?.method ?? "GET";
-  const { bucket, endpoint } = storageConfig();
-  const serverUrl = new URL(url);
-  serverUrl.hostname = endpoint.hostname;
-  serverUrl.pathname = `/${encodeURIComponent(bucket)}${url.pathname}`;
-  const request = await signedHeaderRequest(serverUrl, method, init?.headers);
-  return fetch(request);
-}
-
-async function storageFetch(url: URL, init?: RequestInit) {
-  const response = await signedStorageResponse(url, init);
-  if (!response.ok) throw await storageResponseError("Private image storage", response);
-  return response;
-}
-
-async function storageResponseError(stage: string, response: Response) {
-  const body = await response.text().catch(() => "");
-  const code = body.match(/<Code>([^<]+)<\/Code>/i)?.[1] ?? null;
-  console.error("[todo-attachments] storage request failed", {
-    stage,
-    status: response.status,
-    code,
-    requestId: response.headers.get("x-amz-request-id"),
-  });
-  return new Error(`${stage} returned ${response.status}${code ? ` (${code})` : ""}.`);
-}
-
-async function deleteKeys(keys: string[]) {
-  await Promise.all([...new Set(keys.filter(Boolean))].map(async (key) => {
-    const response = await signedStorageResponse(storageUrl(key), { method: "DELETE" });
-    if (!response.ok && response.status !== 404) throw await storageResponseError("Private image cleanup", response);
-  }));
-}
-
-async function signedObjectUrl(key: string, downloadName?: string) {
-  const url = storageUrl(key, {
-    ...(downloadName ? { "response-content-disposition": `attachment; filename*=UTF-8''${encodeURIComponent(downloadName)}` } : {}),
-  });
-  return signedQueryUrl(url, "GET", SIGNED_URL_SECONDS);
-}
+function storageUrl(key?: string, query?: Record<string, string>) { return storage().storageUrl(key, query); }
+function storageFetch(url: URL, init?: RequestInit) { return storage().storageFetch(url, init); }
+function deleteKeys(keys: string[]) { return storage().deleteKeys(keys); }
+function signedObjectUrl(key: string, name?: string) { return storage().signedObjectUrl(key, name); }
+function signedPostTarget(key: string, type: string, max: number) { return storage().signedPostTarget(key, type, max); }
+function storageResponseError(stage: string, response: Response) { return storage().storageResponseError(stage, response); }
 
 async function mapAttachment(row: AttachmentRow): Promise<TodoAttachment> {
   const kind = row.kind ?? "image";
@@ -360,140 +277,6 @@ function targetValues(target: UploadTarget) {
   };
 }
 
-function hmac(key: string | ArrayBuffer, value: string) {
-  const bytes = typeof key === "string" ? new TextEncoder().encode(key) : key;
-  return crypto.subtle.importKey("raw", bytes, { name: "HMAC", hash: "SHA-256" }, false, ["sign"])
-    .then((cryptoKey) => crypto.subtle.sign("HMAC", cryptoKey, new TextEncoder().encode(value)));
-}
-
-function hex(value: ArrayBuffer) {
-  return [...new Uint8Array(value)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
-function awsEncode(value: string) {
-  return encodeURIComponent(value).replace(/[!'()*]/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`);
-}
-
-function signatureKey(date: string, region: string) {
-  return hmac(`AWS4${runtime().S3_ACCESS_KEY}`, date)
-    .then((dateKey) => hmac(dateKey, region))
-    .then((regionKey) => hmac(regionKey, "s3"))
-    .then((serviceKey) => hmac(serviceKey, "aws4_request"));
-}
-
-async function sha256Hex(value: string) {
-  return hex(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)));
-}
-
-async function signedHeaderRequest(input: URL, method: string, inputHeaders?: HeadersInit) {
-  const current = runtime();
-  const { region } = storageConfig();
-  const url = new URL(input);
-  const amzDate = new Date().toISOString().replace(/[:-]|\.\d{3}/g, "");
-  const date = amzDate.slice(0, 8);
-  const scope = `${date}/${region}/s3/aws4_request`;
-  const payloadHash = await sha256Hex("");
-  const headers = new Headers(inputHeaders);
-  headers.set("x-amz-content-sha256", payloadHash);
-  headers.set("x-amz-date", amzDate);
-  const canonicalPath = url.pathname.split("/").map((segment) => {
-    try { return awsEncode(decodeURIComponent(segment)); } catch { return awsEncode(segment); }
-  }).join("/");
-  const canonicalQuery = [...url.searchParams]
-    .map(([name, value]) => [awsEncode(name), awsEncode(value)] as const)
-    .sort(([nameA, valueA], [nameB, valueB]) => nameA < nameB ? -1 : nameA > nameB ? 1 : valueA < valueB ? -1 : valueA > valueB ? 1 : 0)
-    .map(([name, value]) => `${name}=${value}`)
-    .join("&");
-  const signedHeaders = "host;x-amz-content-sha256;x-amz-date";
-  const canonicalHeaders = [
-    `host:${url.host}`,
-    `x-amz-content-sha256:${payloadHash}`,
-    `x-amz-date:${amzDate}`,
-    "",
-  ].join("\n");
-  const canonicalRequest = [
-    method.toUpperCase(),
-    canonicalPath,
-    canonicalQuery,
-    canonicalHeaders,
-    signedHeaders,
-    payloadHash,
-  ].join("\n");
-  const stringToSign = ["AWS4-HMAC-SHA256", amzDate, scope, await sha256Hex(canonicalRequest)].join("\n");
-  const signature = hex(await hmac(await signatureKey(date, region), stringToSign));
-  headers.set("Authorization", `AWS4-HMAC-SHA256 Credential=${current.S3_ACCESS_KEY_ID}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}`);
-  return new Request(url, { method, headers });
-}
-
-async function signedQueryUrl(input: URL, method: string, expires: number) {
-  const current = runtime();
-  const { region } = storageConfig();
-  const url = new URL(input);
-  const amzDate = new Date().toISOString().replace(/[:-]|\.\d{3}/g, "");
-  const date = amzDate.slice(0, 8);
-  const scope = `${date}/${region}/s3/aws4_request`;
-  url.searchParams.set("X-Amz-Algorithm", "AWS4-HMAC-SHA256");
-  url.searchParams.set("X-Amz-Credential", `${current.S3_ACCESS_KEY_ID}/${scope}`);
-  url.searchParams.set("X-Amz-Date", amzDate);
-  url.searchParams.set("X-Amz-Expires", String(expires));
-  url.searchParams.set("X-Amz-SignedHeaders", "host");
-  const canonicalPath = url.pathname.split("/").map((segment) => {
-    try { return awsEncode(decodeURIComponent(segment)); } catch { return awsEncode(segment); }
-  }).join("/");
-  const canonicalQuery = [...url.searchParams]
-    .map(([name, value]) => [awsEncode(name), awsEncode(value)] as const)
-    .sort(([nameA, valueA], [nameB, valueB]) => nameA < nameB ? -1 : nameA > nameB ? 1 : valueA < valueB ? -1 : valueA > valueB ? 1 : 0)
-    .map(([name, value]) => `${name}=${value}`)
-    .join("&");
-  const canonicalRequest = [
-    method.toUpperCase(),
-    canonicalPath,
-    canonicalQuery,
-    `host:${url.host}\n`,
-    "host",
-    "UNSIGNED-PAYLOAD",
-  ].join("\n");
-  const requestHash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonicalRequest));
-  const stringToSign = ["AWS4-HMAC-SHA256", amzDate, scope, hex(requestHash)].join("\n");
-  url.searchParams.set("X-Amz-Signature", hex(await hmac(await signatureKey(date, region), stringToSign)));
-  return url.toString().replaceAll("+", "%20");
-}
-
-async function signedPostTarget(key: string, contentType: string, maximumBytes: number) {
-  const current = runtime();
-  const { bucket, endpoint, region } = storageConfig();
-  const now = new Date();
-  const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, "");
-  const date = amzDate.slice(0, 8);
-  const credential = `${current.S3_ACCESS_KEY_ID}/${date}/${region}/s3/aws4_request`;
-  const fields = {
-    key,
-    "Content-Type": contentType,
-    success_action_status: "204",
-    "x-amz-algorithm": "AWS4-HMAC-SHA256",
-    "x-amz-credential": credential,
-    "x-amz-date": amzDate,
-  };
-  const policy = btoa(JSON.stringify({
-    expiration: new Date(now.valueOf() + 15 * 60 * 1000).toISOString(),
-    conditions: [
-      { bucket },
-      { key },
-      { "Content-Type": contentType },
-      { success_action_status: "204" },
-      { "x-amz-algorithm": fields["x-amz-algorithm"] },
-      { "x-amz-credential": credential },
-      { "x-amz-date": amzDate },
-      ["content-length-range", 1, maximumBytes],
-    ],
-  }));
-  const signingKey = await signatureKey(date, region);
-  return {
-    url: new URL(`https://${bucket}.${endpoint.hostname}/`).toString(),
-    fields: { ...fields, policy, "x-amz-signature": hex(await hmac(signingKey, policy)) },
-  };
-}
-
 function uploadIdentity(inputId?: string) {
   if (inputId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(inputId)) throw new Error("That file upload identifier is invalid.");
   return inputId || crypto.randomUUID();
@@ -559,13 +342,31 @@ export async function prepareTodoAttachmentUpload(
       nextOrder,
       expiresAt,
     ).first<AttachmentRow>();
-    const row = inserted ?? await db.prepare("SELECT * FROM todo_attachments WHERE id = ?").bind(id).first<AttachmentRow>();
-    if (row) validateUploadReplay(row, target, fileName, mimeType, byteSize, "image");
+    let row = inserted ?? await db.prepare("SELECT * FROM todo_attachments WHERE id = ?").bind(id).first<AttachmentRow>();
     if (!row) throw new Error("The image upload could not be prepared.");
+    validateUploadReplay(row, target, fileName, mimeType, byteSize, "image");
+    if (row.upload_state === "uploading" && (row.display_key !== displayKey || row.thumbnail_key !== thumbnailKey)) {
+      // Safari may change WebP to JPEG on retry. Change only an unfinished row,
+      // then sign the persisted keys. A concurrent ready result is immutable.
+      row = await db.prepare(`
+        UPDATE todo_attachments SET display_key = ?, thumbnail_key = ?,
+          updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+        WHERE id = ? AND upload_state = 'uploading' AND deleted_at IS NULL
+          AND display_key = ? AND thumbnail_key = ? AND todo_id IS ? AND draft_token IS ?
+        RETURNING *
+      `).bind(displayKey, thumbnailKey, id, row.display_key, row.thumbnail_key, todoId, draftToken).first<AttachmentRow>()
+        ?? await db.prepare("SELECT * FROM todo_attachments WHERE id = ?").bind(id).first<AttachmentRow>();
+      if (!row) throw new Error("The image upload could not be prepared.");
+      validateUploadReplay(row, target, fileName, mimeType, byteSize, "image");
+    }
+    if (row.upload_state === "ready") return { uploadId: id, attachment: await mapAttachment(row) };
+    if (row.display_key !== displayKey || row.thumbnail_key !== thumbnailKey) {
+      throw new Error("The image upload preparation was superseded; retry it.");
+    }
     const [originalUpload, displayUpload, thumbnailUpload] = await Promise.all([
-      signedPostTarget(originalKey, mimeType, byteSize),
-      signedPostTarget(displayKey, displayMimeType, 8 * 1024 * 1024),
-      signedPostTarget(thumbnailKey, thumbnailMimeType, 2 * 1024 * 1024),
+      signedPostTarget(row.original_key, mimeType, byteSize),
+      signedPostTarget(row.display_key, displayMimeType, 8 * 1024 * 1024),
+      signedPostTarget(row.thumbnail_key, thumbnailMimeType, 2 * 1024 * 1024),
     ]);
     console.info("[todo-attachments] direct upload prepared", {
       attachmentId: id,
@@ -678,7 +479,6 @@ export async function finalizeTodoAttachmentUpload(
   if (Number(readyCount?.count ?? 0) >= MAX_ATTACHMENTS_PER_TASK) {
     throw new Error(`Tasks are limited to ${MAX_ATTACHMENTS_PER_TASK} images.`);
   }
-  const keys = [row.original_key, row.display_key, row.thumbnail_key];
   try {
     // Read probes run first because Spaces returns a useful XML error body for GET,
     // while a failing HEAD response is bodyless and much harder to diagnose.
@@ -729,10 +529,16 @@ export async function finalizeTodoAttachmentUpload(
       SET width = ?, height = ?, byte_size = ?, upload_state = 'ready',
           expires_at = CASE WHEN todo_id IS NULL THEN expires_at ELSE NULL END,
           updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-      WHERE id = ? AND upload_state = 'uploading'
+      WHERE id = ? AND upload_state = 'uploading' AND deleted_at IS NULL
+        AND display_key = ? AND thumbnail_key = ?
+        AND (todo_id IS NULL OR EXISTS (SELECT 1 FROM todos WHERE todos.id = todo_attachments.todo_id))
       RETURNING *
-    `).bind(width, height, originalSize, id).first<AttachmentRow>();
-    if (!finalized) throw new Error("The uploaded image could not be finalized.");
+    `).bind(width, height, originalSize, id, row.display_key, row.thumbnail_key).first<AttachmentRow>();
+    if (!finalized) {
+      const current = await db.prepare("SELECT * FROM todo_attachments WHERE id = ?").bind(id).first<AttachmentRow>();
+      if (current?.upload_state === "ready" && !current.deleted_at) return mapAttachment(current);
+      throw new Error("The uploaded image could not be finalized; its preparation changed.");
+    }
     console.info("[todo-attachments] direct upload finalized", {
       attachmentId: id,
       todoId,
@@ -751,12 +557,8 @@ export async function finalizeTodoAttachmentUpload(
     });
     return mapAttachment(finalized);
   } catch (error) {
-    try {
-      await deleteKeys(keys);
-      await db.prepare("DELETE FROM todo_attachments WHERE id = ? AND upload_state = 'uploading'").bind(id).run();
-    } catch (cleanupError) {
-      console.error("[todo-attachments] invalid direct upload cleanup failed", { attachmentId: id, cleanupError });
-    }
+    // An overlapping request may have committed this ID. Never delete its
+    // objects on an uncertain failure; retry the same ID or let expiry clean it.
     console.error("[todo-attachments] direct upload finalize failed", { attachmentId: id, todoId, durationMs: Date.now() - startedAt, error });
     throw error;
   }
@@ -877,10 +679,15 @@ export async function finalizeTodoMediaAttachmentUpload(
       SET duration_ms = ?, byte_size = ?, upload_state = 'ready',
           expires_at = CASE WHEN todo_id IS NULL THEN expires_at ELSE NULL END,
           updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-      WHERE id = ? AND upload_state = 'uploading'
+      WHERE id = ? AND upload_state = 'uploading' AND deleted_at IS NULL
+        AND (todo_id IS NULL OR EXISTS (SELECT 1 FROM todos WHERE todos.id = todo_attachments.todo_id))
       RETURNING *
     `).bind(durationMs, actualBytes, id).first<AttachmentRow>();
-    if (!finalized) throw new Error("The media upload could not be finalized.");
+    if (!finalized) {
+      const current = await db.prepare("SELECT * FROM todo_attachments WHERE id = ?").bind(id).first<AttachmentRow>();
+      if (current?.upload_state === "ready" && !current.deleted_at) return mapAttachment(current);
+      throw new Error("The media upload could not be finalized.");
+    }
     console.info("[todo-attachments] original attachment upload finalized", {
       attachmentId: id,
       todoId,
@@ -892,12 +699,8 @@ export async function finalizeTodoMediaAttachmentUpload(
     });
     return mapAttachment(finalized);
   } catch (error) {
-    try {
-      await deleteKeys(attachmentObjectKeys(row));
-      await db.prepare("DELETE FROM todo_attachments WHERE id = ? AND upload_state = 'uploading'").bind(id).run();
-    } catch (cleanupError) {
-      console.error("[todo-attachments] invalid media cleanup failed", { attachmentId: id, cleanupError });
-    }
+    // An overlapping request may have committed this ID. Never delete its
+    // objects on an uncertain failure; retry the same ID or let expiry clean it.
     console.error("[todo-attachments] original attachment upload finalize failed", {
       attachmentId: id,
       todoId,
@@ -967,106 +770,127 @@ export async function uploadTodoAttachmentDirect(todoId: number, input: DirectAt
     suppliedMimeType: input.mimeType.toLowerCase().split(";", 1)[0],
   });
 
-  if (input.clientUploadId) {
-    const id = uploadIdentity(input.clientUploadId);
-    const existing = await database().prepare("SELECT * FROM todo_attachments WHERE id = ?").bind(id).first<AttachmentRow>();
-    if (existing) {
-      const mime = kind === "image" ? normalizedMimeType(input.mimeType, fileName) : kind === "audio" ? normalizedAudioMimeType(input.mimeType, fileName) : kind === "video" ? normalizedVideoMimeType(input.mimeType, fileName) : normalizedFileMimeType(input.mimeType, fileName);
-      validateUploadReplay(existing, { todoId }, fileName, mime, byteSize, kind);
-      if (existing.upload_state === "ready") return mapAttachment(existing);
+  let phase: AttachmentPhase = "identity";
+  try {
+    if (!await database().prepare("SELECT id FROM todos WHERE id = ?").bind(todoId).first()) throw new Error("Task not found.");
+    if (input.clientUploadId) {
+      const id = uploadIdentity(input.clientUploadId);
+      const existing = await database().prepare("SELECT * FROM todo_attachments WHERE id = ?").bind(id).first<AttachmentRow>();
+      if (existing) {
+        const mime = kind === "image" ? normalizedMimeType(input.mimeType, fileName) : kind === "audio" ? normalizedAudioMimeType(input.mimeType, fileName) : kind === "video" ? normalizedVideoMimeType(input.mimeType, fileName) : normalizedFileMimeType(input.mimeType, fileName);
+        validateUploadReplay(existing, { todoId }, fileName, mime, byteSize, kind);
+        if (existing.upload_state === "ready") return mapAttachment(existing);
+      }
     }
-  }
 
-  if (kind === "image") {
-    if (byteSize < 1) throw new Error("That image is empty.");
-    if (byteSize > MAX_ATTACHMENT_BYTES) throw new Error("Images are limited to 20 MB each.");
-    const mimeType = normalizedMimeType(input.mimeType, fileName);
-    const source = input.file.type === mimeType ? input.file : new Blob([input.file], { type: mimeType });
-    const images = runtime().IMAGES;
-    if (!images) throw new Error("Image processing is temporarily unavailable.");
-    const info = await images.info(source.stream());
-    if (!("width" in info) || !Number.isInteger(info.width) || !Number.isInteger(info.height) || info.width < 1 || info.height < 1 || info.width * info.height > MAX_IMAGE_PIXELS) {
-      throw new Error("That image is too large to process.");
+    if (kind === "image") {
+      if (byteSize < 1) throw new Error("That image is empty.");
+      if (byteSize > MAX_ATTACHMENT_BYTES) throw new Error("Images are limited to 20 MB each.");
+      const mimeType = normalizedMimeType(input.mimeType, fileName);
+      const source = input.file.type === mimeType ? input.file : new Blob([input.file], { type: mimeType });
+      phase = "image-binding";
+      const images = runtime().IMAGES;
+      if (!imageProcessingAvailable()) throw Object.assign(new Error("Image processing is temporarily unavailable."), { code: "image-processing-unavailable" });
+      phase = "image-info";
+      const info = await images.info(source.stream());
+      if (!("width" in info) || !Number.isInteger(info.width) || !Number.isInteger(info.height) || info.width < 1 || info.height < 1 || info.width * info.height > MAX_IMAGE_PIXELS) {
+        throw new Error("That image is too large to process.");
+      }
+      const expectedFormat = normalizedFormat(mimeType);
+      const inspectedFormat = normalizedFormat(info.format);
+      if (expectedFormat !== inspectedFormat && !(expectedFormat === "heif" && inspectedFormat === "heic") && !(expectedFormat === "heic" && inspectedFormat === "heif")) {
+        throw new Error("The uploaded file is not the expected image type.");
+      }
+      phase = "image-transform";
+      const [display, thumbnail] = await Promise.all([
+        optimizedImageBlob(source, 2048, 82),
+        optimizedImageBlob(source, 480, 75),
+      ]);
+      phase = "prepare";
+      const prepared = await prepareTodoAttachmentUpload({
+        clientUploadId: input.clientUploadId,
+        fileName,
+        mimeType,
+        byteSize,
+        displayMimeType: "image/webp",
+        thumbnailMimeType: "image/webp",
+      }, { todoId });
+      if (prepared.attachment) return prepared.attachment;
+      try {
+        phase = "storage";
+        await Promise.all([
+          uploadPreparedStorageTarget(prepared.uploads.original, source),
+          uploadPreparedStorageTarget(prepared.uploads.display, display),
+          uploadPreparedStorageTarget(prepared.uploads.thumbnail, thumbnail),
+        ]);
+        phase = "finalize";
+        const attachment = await finalizeTodoAttachmentUpload(prepared.uploadId, {
+          width: info.width,
+          height: info.height,
+        }, { todoId });
+        console.info("[todo-attachments] direct API upload completed", {
+          todoId,
+          attachmentId: attachment.id,
+          kind,
+          bytes: byteSize,
+          displayBytes: display.size,
+          thumbnailBytes: thumbnail.size,
+          width: info.width,
+          height: info.height,
+          durationMs: Date.now() - startedAt,
+        });
+        return attachment;
+      } catch (error) {
+        await (!input.clientUploadId ? discardTodoAttachmentUpload(todoId, prepared.uploadId) : Promise.resolve()).catch((cleanupError) => {
+          console.error("[todo-attachments] direct API image cleanup failed", { todoId, attachmentId: prepared.uploadId, cleanupError });
+        });
+        console.error("[todo-attachments] direct API upload failed", { todoId, attachmentId: prepared.uploadId, kind, bytes: byteSize, durationMs: Date.now() - startedAt, error });
+        throw error;
+      }
     }
-    const expectedFormat = normalizedFormat(mimeType);
-    const inspectedFormat = normalizedFormat(info.format);
-    if (expectedFormat !== inspectedFormat && !(expectedFormat === "heif" && inspectedFormat === "heic") && !(expectedFormat === "heic" && inspectedFormat === "heif")) {
-      throw new Error("The uploaded file is not the expected image type.");
-    }
-    const [display, thumbnail] = await Promise.all([
-      optimizedImageBlob(source, 2048, 82),
-      optimizedImageBlob(source, 480, 75),
-    ]);
-    const prepared = await prepareTodoAttachmentUpload({
+
+    phase = "prepare";
+    const prepared = await prepareTodoMediaAttachmentUpload({
       clientUploadId: input.clientUploadId,
+      kind,
       fileName,
-      mimeType,
+      mimeType: input.mimeType,
       byteSize,
-      displayMimeType: "image/webp",
-      thumbnailMimeType: "image/webp",
     }, { todoId });
     try {
-      await Promise.all([
-        uploadPreparedStorageTarget(prepared.uploads.original, source),
-        uploadPreparedStorageTarget(prepared.uploads.display, display),
-        uploadPreparedStorageTarget(prepared.uploads.thumbnail, thumbnail),
-      ]);
-      const attachment = await finalizeTodoAttachmentUpload(prepared.uploadId, {
-        width: info.width,
-        height: info.height,
+      const normalizedMime = kind === "audio" ? normalizedAudioMimeType(input.mimeType, fileName)
+        : kind === "video" ? normalizedVideoMimeType(input.mimeType, fileName)
+          : normalizedFileMimeType(input.mimeType, fileName);
+      const source = input.file.type === normalizedMime ? input.file : new Blob([input.file], { type: normalizedMime });
+      phase = "storage";
+      await uploadPreparedStorageTarget(prepared.uploads.original, source);
+      phase = "finalize";
+      const attachment = await finalizeTodoMediaAttachmentUpload(prepared.uploadId, {
+        durationMs: kind === "file" ? 0 : Number(input.durationMs),
       }, { todoId });
       console.info("[todo-attachments] direct API upload completed", {
         todoId,
         attachmentId: attachment.id,
         kind,
         bytes: byteSize,
-        displayBytes: display.size,
-        thumbnailBytes: thumbnail.size,
-        width: info.width,
-        height: info.height,
+        mediaDurationMs: attachment.durationMs,
         durationMs: Date.now() - startedAt,
       });
       return attachment;
     } catch (error) {
       await (!input.clientUploadId ? discardTodoAttachmentUpload(todoId, prepared.uploadId) : Promise.resolve()).catch((cleanupError) => {
-        console.error("[todo-attachments] direct API image cleanup failed", { todoId, attachmentId: prepared.uploadId, cleanupError });
+        console.error("[todo-attachments] direct API attachment cleanup failed", { todoId, attachmentId: prepared.uploadId, kind, cleanupError });
       });
       console.error("[todo-attachments] direct API upload failed", { todoId, attachmentId: prepared.uploadId, kind, bytes: byteSize, durationMs: Date.now() - startedAt, error });
       throw error;
     }
-  }
-
-  const prepared = await prepareTodoMediaAttachmentUpload({
-    clientUploadId: input.clientUploadId,
-    kind,
-    fileName,
-    mimeType: input.mimeType,
-    byteSize,
-  }, { todoId });
-  try {
-    const normalizedMime = kind === "audio" ? normalizedAudioMimeType(input.mimeType, fileName)
-      : kind === "video" ? normalizedVideoMimeType(input.mimeType, fileName)
-        : normalizedFileMimeType(input.mimeType, fileName);
-    const source = input.file.type === normalizedMime ? input.file : new Blob([input.file], { type: normalizedMime });
-    await uploadPreparedStorageTarget(prepared.uploads.original, source);
-    const attachment = await finalizeTodoMediaAttachmentUpload(prepared.uploadId, {
-      durationMs: kind === "file" ? 0 : Number(input.durationMs),
-    }, { todoId });
-    console.info("[todo-attachments] direct API upload completed", {
-      todoId,
-      attachmentId: attachment.id,
-      kind,
-      bytes: byteSize,
-      mediaDurationMs: attachment.durationMs,
-      durationMs: Date.now() - startedAt,
-    });
-    return attachment;
   } catch (error) {
-    await (!input.clientUploadId ? discardTodoAttachmentUpload(todoId, prepared.uploadId) : Promise.resolve()).catch((cleanupError) => {
-      console.error("[todo-attachments] direct API attachment cleanup failed", { todoId, attachmentId: prepared.uploadId, kind, cleanupError });
+    const tagged = error instanceof Error ? Object.assign(error, { attachmentPhase: phase }) : Object.assign(new Error("Attachment service failed."), { attachmentPhase: phase });
+    console.error("[todo-attachments] direct upload phase failed", {
+      ...attachmentErrorDetails(tagged), kind, bytes: byteSize,
+      imageBindingAvailable: imageProcessingAvailable(), durationMs: Date.now() - startedAt,
     });
-    console.error("[todo-attachments] direct API upload failed", { todoId, attachmentId: prepared.uploadId, kind, bytes: byteSize, durationMs: Date.now() - startedAt, error });
-    throw error;
+    throw tagged;
   }
 }
 
@@ -1094,14 +918,27 @@ export async function deleteDraftAttachment(id: string, draftToken: string) {
 }
 
 export async function discardTodoAttachmentUpload(todoId: number, id: string) {
+  uploadIdentity(id);
   const db = database();
+  // Reserve cancellation even before a slow multipart request has inserted its
+  // row. INSERT OR IGNORE never changes a ready attachment or another target.
+  const key = `todo-media/${id}/cancelled`;
+  await db.prepare(`
+    INSERT OR IGNORE INTO todo_attachments (
+      id, todo_id, original_key, display_key, thumbnail_key, file_name, mime_type,
+      byte_size, width, height, kind, upload_state, deleted_at
+    ) VALUES (?, ?, ?, ?, ?, 'cancelled', 'application/octet-stream', 0, 0, 0, 'file', 'uploading', strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+  `).bind(id, todoId, `${key}/original`, `${key}/display`, `${key}/thumbnail`).run();
+  // Persist the tombstone before touching storage. A late finalize cannot turn
+  // it ready and a late prepare cannot reuse the same stable identity.
   const row = await db.prepare(`
-    SELECT * FROM todo_attachments
-    WHERE id = ? AND todo_id = ? AND upload_state = 'uploading' AND deleted_at IS NULL
+    UPDATE todo_attachments SET deleted_at = COALESCE(deleted_at, strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+    WHERE id = ? AND todo_id = ? AND upload_state = 'uploading'
+    RETURNING *
   `).bind(id, todoId).first<AttachmentRow>();
   if (!row) return false;
   await deleteKeys(attachmentObjectKeys(row));
-  await db.prepare("DELETE FROM todo_attachments WHERE id = ? AND upload_state = 'uploading'").bind(id).run();
   console.info("[todo-attachments] incomplete task upload discarded", { attachmentId: id, todoId });
   return true;
 }
@@ -1150,12 +987,12 @@ export async function claimDraftAttachments(todoId: number, draftToken: string |
   return ids.length;
 }
 
-export async function attachmentSnapshotsForTodos(todoIds: number[]) {
+export async function attachmentSnapshotsForTodos(todoIds: number[], includeUploading = false) {
   if (!todoIds.length) return [];
   const placeholders = todoIds.map(() => "?").join(", ");
   const result = await database().prepare(`
     SELECT * FROM todo_attachments
-    WHERE todo_id IN (${placeholders}) AND upload_state = 'ready' AND deleted_at IS NULL
+    WHERE todo_id IN (${placeholders}) AND ${includeUploading ? "1 = 1" : "upload_state = 'ready'"} AND deleted_at IS NULL
     ORDER BY todo_id, sort_order, created_at
   `).bind(...todoIds).all<AttachmentRow>();
   return result.results;
@@ -1172,10 +1009,10 @@ export function restoreAttachmentStatements(db: D1Database, rows: AttachmentRow[
       todo_id = excluded.todo_id,
       draft_token = excluded.draft_token,
       kind = excluded.kind,
-      duration_ms = excluded.duration_ms,
-      upload_state = excluded.upload_state,
+      duration_ms = CASE WHEN todo_attachments.upload_state = 'ready' THEN todo_attachments.duration_ms ELSE excluded.duration_ms END,
+      upload_state = CASE WHEN todo_attachments.upload_state = 'ready' THEN 'ready' ELSE excluded.upload_state END,
       sort_order = excluded.sort_order,
-      expires_at = excluded.expires_at,
+      expires_at = CASE WHEN todo_attachments.upload_state = 'ready' AND excluded.todo_id IS NOT NULL THEN NULL ELSE excluded.expires_at END,
       deleted_at = excluded.deleted_at,
       updated_at = excluded.updated_at
   `);
@@ -1245,4 +1082,27 @@ export async function scheduleAttachmentCleanup() {
   waitUntil(cleanupExpiredAttachments().catch((error) => {
     console.error("[todo-attachments] cleanup failed", error);
   }));
+}
+
+/** Reconcile an uncertain response without retransmitting bytes or issuing signed URLs. */
+export async function inspectAttachmentRecovery(todoId: number, ids: string[], draftToken?: string): Promise<AttachmentRecovery> {
+  const db = database();
+  const target = await db.prepare("SELECT id FROM todos WHERE id = ?").bind(todoId).first();
+  const files: AttachmentRecovery["files"] = [];
+  for (const id of [...new Set(ids)]) {
+    const row = await db.prepare("SELECT * FROM todo_attachments WHERE id = ?").bind(id).first<AttachmentRow>();
+    if (!row) { files.push({ id, state: "missing", todoId: null }); continue; }
+    if (row.deleted_at) { files.push({ id, state: "deleted", todoId: row.todo_id }); continue; }
+    if (row.todo_id === null) {
+      const validDraft = Boolean(draftToken && row.draft_token === draftToken && row.expires_at && Date.parse(row.expires_at) > Date.now());
+      files.push({ id, state: validDraft ? row.upload_state === "ready" ? "draft" : "uploading" : "missing", todoId: null });
+    } else {
+      files.push({ id, state: row.upload_state, todoId: row.todo_id });
+    }
+  }
+  return { targetExists: Boolean(target), files };
+}
+
+export function imageProcessingAvailable() {
+  return typeof runtime().IMAGES?.info === "function" && typeof runtime().IMAGES?.input === "function";
 }

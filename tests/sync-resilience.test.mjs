@@ -55,7 +55,7 @@ test('a transaction that aborts after a successful put is never reported as save
   const store = offlineStore();
   // Initialize through the real migration first.
   await store.listOfflineTodoMutations();
-  const open = store.indexedDB.open('dawar-todo-offline', 9);
+  const open = store.indexedDB.open('dawar-todo-offline');
   const db = await new Promise((resolve, reject) => { open.onsuccess = () => resolve(open.result); open.onerror = () => reject(open.error); });
   const probe = db.transaction('pending-mutations', 'readwrite').objectStore('pending-mutations');
   const prototype = Object.getPrototypeOf(probe);

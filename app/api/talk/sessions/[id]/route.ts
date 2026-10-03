@@ -1,3 +1,4 @@
+import { operatorHeartbeat, endOperator } from '../../../../../lib/operator-server';
 import {
   endTalkSession,
   heartbeatTalkSession,
@@ -19,8 +20,9 @@ export async function PATCH(request: Request, context: RouteContext) {
     };
     const action = String(payload.action ?? "heartbeat");
     if (action === "end") {
+      const operatorEnded = await endOperator(userKey, sessionId).then(() => true).catch(() => false);
       const result = await endTalkSession(userKey, sessionId, String(payload.reason ?? "ended"));
-      return Response.json(result, { headers: noStoreHeaders });
+      return Response.json({ ...result, operatorEnded }, { headers: noStoreHeaders });
     }
     if (action === "focus") {
       const focusedTodoId = payload.focusedTodoId === null ? null : Number(payload.focusedTodoId);
@@ -44,7 +46,7 @@ export async function PATCH(request: Request, context: RouteContext) {
       focusedTodoId: focusedTodoId ?? null,
       durationMs: Date.now() - startedAt,
     });
-    return Response.json(result, { headers: noStoreHeaders });
+    return Response.json({ ...result, ...await operatorHeartbeat(userKey, sessionId) }, { headers: noStoreHeaders });
   } catch (error) {
     console.warn("[todo-talk-api] session update rejected", {
       sessionId,

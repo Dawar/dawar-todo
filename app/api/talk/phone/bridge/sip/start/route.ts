@@ -1,3 +1,4 @@
+import { phoneOperator, operatorInstructions, operatorToolDefinitions } from '../../../../../../../lib/operator-server';
 import {
   attachTalkSessionToPhoneCall,
   connectTalkPhoneSip,
@@ -7,7 +8,6 @@ import {
   heartbeatTalkSession,
   listTalkHistory,
   readTalkWorkspace,
-  resolveSystemTalkThread,
   startTalkSession,
 } from "../../../../../../../db/talk";
 import { getTodoSettings, listTodos } from "../../../../../../../db/todos";
@@ -21,6 +21,7 @@ import {
   hashedSafetyIdentifier,
   realtimeSessionConfig,
   talkInstructions,
+  talkToolDefinitions,
   talkRuntimeConfig,
   withRecentTalkHistory,
 } from "../../../../../../../lib/talk-runtime";
@@ -54,10 +55,9 @@ export async function POST(request: Request) {
       readTalkWorkspace(userKey),
       getTodoSettings(),
     ]);
-    const phoneThread = await resolveSystemTalkThread(userKey, "phone");
     const focusedTodoId = chooseTalkFocus(
       todos,
-      phoneThread.focusedTodoId ?? workspace.lastFocusedTodoId,
+      workspace.lastFocusedTodoId,
     );
     const { model, voice } = talkRuntimeConfig(settings.realtimeVoice);
 
@@ -75,7 +75,6 @@ export async function POST(request: Request) {
         model,
         voice,
         focusedTodoId,
-        threadId: phoneThread.id,
         transport: "phone-sip",
       });
       talkSessionId = session.id;
@@ -83,19 +82,20 @@ export async function POST(request: Request) {
     }
 
     const [context, history, safetyIdentifier] = await Promise.all([
-      buildSharedAssistantContext(userKey, focusedTodoId, phoneThread.summary),
-      listTalkHistory(userKey, { threadId: phoneThread.id, limit: 40 }),
+      buildSharedAssistantContext(userKey, focusedTodoId, workspace.summary),
+      listTalkHistory(userKey, { sessionId: talkSessionId, limit: 40 }),
       hashedSafetyIdentifier(userKey),
     ]);
+    const operator = await phoneOperator(userKey, talkSessionId);
     const session = realtimeSessionConfig({
-      instructions: withRecentTalkHistory(talkInstructions(context), history.messages),
+      instructions: operator ? operatorInstructions(operator) : withRecentTalkHistory(talkInstructions(context), history.messages),
+      tools: operator ? [...operatorToolDefinitions, ...talkToolDefinitions] : undefined,
       voice,
     });
     console.info("[todo-talk-phone-bridge] direct SIP session prepared", {
       callSid,
       providerCallId,
       talkSessionId,
-      threadId: phoneThread.id,
       focusedTodoId,
       model,
       voice,
@@ -105,6 +105,7 @@ export async function POST(request: Request) {
     });
     return Response.json({
       talkSessionId,
+      operator,
       providerCallId,
       focusedTodoId,
       safetyIdentifier,

@@ -1,3 +1,5 @@
+import { OperatorVoiceEvents } from '../../lib/operator-voice-events';
+import type { OperatorContext } from '../../lib/operator-types';
 import {
   handleOpenAISipWebhook,
   SipCallController,
@@ -5,10 +7,6 @@ import {
 } from "./sip-controller";
 
 type Env = SipRelayEnvironment;
-
-interface ExecutionContext {
-  waitUntil(promise: Promise<unknown>): void;
-}
 
 type TwilioStart = {
   accountSid?: string;
@@ -47,6 +45,7 @@ type RealtimeEvent = {
 };
 
 type BridgeStart = {
+  operator?: OperatorContext | null;
   talkSessionId: string;
   clientSecret: string;
   expiresAt: number;
@@ -56,6 +55,7 @@ type BridgeStart = {
 };
 
 type BridgeResult = Record<string, unknown> & {
+  operator?: unknown; operatorView?: unknown; sessionUpdate?: unknown;
   focusedTodoId?: number | null;
 };
 
@@ -156,6 +156,7 @@ function runPhoneBridge(
   let toolQueue = Promise.resolve();
   let startupTimer: ReturnType<typeof setTimeout> | null = null;
   let rolloverTimer: ReturnType<typeof setTimeout> | null = null;
+  const voice = new OperatorVoiceEvents(event => sendJson(openAI, event));
   const acceptedAt = Date.now();
 
   const eventRequest = <T = BridgeResult>(
@@ -179,7 +180,7 @@ function runPhoneBridge(
     }
     heartbeatRunning = true;
     try {
-      await eventRequest("heartbeat");
+      voice.heartbeat(await eventRequest("heartbeat"));
       lastHeartbeatAt = Date.now();
     } finally {
       heartbeatRunning = false;
@@ -197,6 +198,7 @@ function runPhoneBridge(
         role,
         realtimeItemId,
         content,
+        metadata: { operatorSegmentId: voice.segment(realtimeItemId) },
       }).catch((error) => {
         console.error("[voice-relay] transcript persistence failed", {
           callSid: callSid || null,
@@ -273,6 +275,7 @@ function runPhoneBridge(
         name,
         arguments: args,
       });
+      voice.apply(result);
       if (typeof result.focusedTodoId === "number" || result.focusedTodoId === null) {
         focusedTodoId = result.focusedTodoId;
       }
@@ -301,6 +304,7 @@ function runPhoneBridge(
   const handleRealtimeEvent = (raw: unknown) => {
     const event = parseJson<RealtimeEvent>(raw);
     if (!event?.type) return;
+    voice.observe(event);
     if (event.type === "response.output_audio.delta" && event.delta) {
       sendJson(twilio, {
         event: "media",
@@ -404,7 +408,7 @@ function runPhoneBridge(
       sendJson(openAI, {
         type: "response.create",
         response: {
-          instructions: "Start immediately with one terse, useful question about the focused task. No greeting or capability explanation.",
+          instructions: voice.context ? 'Greet exactly: Operator. Then listen.' : "Start immediately with one terse, useful question about the focused task. No greeting or capability explanation.",
         },
       });
       console.info("[voice-relay] OpenAI Realtime connected", {
@@ -459,6 +463,7 @@ function runPhoneBridge(
         },
       );
       talkSessionId = bridge.talkSessionId;
+      voice.context = bridge.operator ?? null;
       focusedTodoId = bridge.focusedTodoId;
       model = bridge.model;
       initialized = true;
@@ -494,11 +499,11 @@ function runPhoneBridge(
     const event = parseJson<TwilioEvent>(message.data);
     if (!event?.event) return;
     if (event.event === "start") {
-      context.waitUntil(initialize(event.start));
+      context.waitUntil(initialize("start" in event ? event.start : undefined));
       return;
     }
     if (event.event === "media") {
-      const audio = event.media?.payload;
+      const audio = "media" in event ? event.media?.payload : undefined;
       if (!audio) return;
       if (Date.now() - lastAddressedSpeechAt >= PHONE_IDLE_LIMIT_MS) {
         sendJson(openAI, {

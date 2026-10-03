@@ -1,3 +1,5 @@
+import { OperatorVoiceEvents } from '../../lib/operator-voice-events';
+import type { OperatorContext } from '../../lib/operator-types';
 export interface SipRelayEnvironment {
   SITE_BASE_URL: string;
   TODO_MAINTENANCE_SECRET?: string;
@@ -16,6 +18,7 @@ type OpenAIWebhook = {
 };
 
 type SipBridgeStart = {
+  operator?: OperatorContext | null;
   talkSessionId: string;
   providerCallId: string;
   focusedTodoId: number | null;
@@ -24,6 +27,7 @@ type SipBridgeStart = {
 };
 
 type BridgeResult = Record<string, unknown> & {
+  operator?: unknown; operatorView?: unknown; sessionUpdate?: unknown;
   focusedTodoId?: number | null;
 };
 
@@ -44,6 +48,7 @@ type RealtimeEvent = {
 };
 
 type ControllerState = {
+  operator?: OperatorContext | null; voiceSeen?: Record<string, string>; greeted?: boolean; itemSegments?: Array<[string, string]>; responseSegments?: Array<[string, string]>;
   callSid: string;
   providerCallId: string;
   token: string;
@@ -58,7 +63,7 @@ type ControllerState = {
 type WorkerResponse = Response & { webSocket?: WebSocket };
 
 const PHONE_IDLE_LIMIT_MS = 15 * 60 * 1_000;
-const HEARTBEAT_INTERVAL_MS = 60_000;
+const HEARTBEAT_INTERVAL_MS = 10_000;
 const OPENAI_CONNECT_TIMEOUT_MS = 15_000;
 const MAX_RECONNECT_ATTEMPTS = 4;
 const STATE_KEY = "sip-call";
@@ -253,6 +258,7 @@ export async function handleOpenAISipWebhook(
         token,
         talkSessionId: bridge.talkSessionId,
         focusedTodoId: bridge.focusedTodoId,
+        operator: bridge.operator,
       }),
     }).then(async (response) => {
       if (!response.ok) {
@@ -299,6 +305,7 @@ export class SipCallController {
   private state: ControllerState | null = null;
   private connecting: Promise<void> | null = null;
   private toolQueue: Promise<void> = Promise.resolve();
+  private voice = new OperatorVoiceEvents(event => sendJson(this.socket, event));
 
   constructor(
     private readonly durableState: DurableObjectState,
@@ -319,6 +326,7 @@ export class SipCallController {
       }
       const existing = await this.readState();
       this.state = {
+        operator: existing?.operator ?? payload.operator ?? null, voiceSeen: existing?.voiceSeen ?? {}, greeted: existing?.greeted ?? false, itemSegments: existing?.itemSegments ?? [], responseSegments: existing?.responseSegments ?? [],
         callSid: String(payload.callSid),
         providerCallId: String(payload.providerCallId),
         token: String(payload.token),
@@ -329,6 +337,7 @@ export class SipCallController {
         ended: false,
         reconnectAttempts: 0,
       };
+      this.voice.context = this.state.operator ?? null; this.voice.seen = this.state.voiceSeen ?? {}; this.voice.itemSegments = new Map(this.state.itemSegments ?? []); this.voice.responseSegments = new Map(this.state.responseSegments ?? []);
       await this.persistState();
       await this.connect();
       await this.durableState.storage.setAlarm(Date.now() + HEARTBEAT_INTERVAL_MS);
@@ -369,7 +378,7 @@ export class SipCallController {
         });
       });
     }
-    await this.eventRequest("heartbeat").catch((error) => {
+    const update = await this.eventRequest('heartbeat').catch((error) => {
       console.error("[voice-relay-sip] Sites heartbeat failed", {
         providerCallId: state.providerCallId,
         callSid: state.callSid,
@@ -377,6 +386,7 @@ export class SipCallController {
         error,
       });
     });
+    if (update && this.state) { this.voice.heartbeat(update); this.state.operator = this.voice.context; this.state.voiceSeen = this.voice.seen; await this.persistState(); }
     if (this.state && !this.state.ended) {
       await this.durableState.storage.setAlarm(Date.now() + HEARTBEAT_INTERVAL_MS);
     }
@@ -385,6 +395,7 @@ export class SipCallController {
   private async readState() {
     if (this.state) return this.state;
     this.state = await this.durableState.storage.get<ControllerState>(STATE_KEY) ?? null;
+    if (this.state) { this.voice.context = this.state.operator ?? null; this.voice.seen = this.state.voiceSeen ?? {}; this.voice.itemSegments = new Map(this.state.itemSegments ?? []); this.voice.responseSegments = new Map(this.state.responseSegments ?? []); }
     return this.state;
   }
 
@@ -459,9 +470,10 @@ export class SipCallController {
       sendJson(socket, {
         type: "response.create",
         response: {
-          instructions: "Start immediately with one terse, useful question about the focused task. No greeting or capability explanation.",
+          instructions: state.operator ? state.greeted ? "Continue seamlessly; stay silent until addressed or a useful result arrives." : 'Greet exactly: Operator. Then listen.' : "Start immediately with one terse, useful question about the focused task. No greeting or capability explanation.",
         },
       });
+      state.greeted = true; await this.persistState();
       console.info("[voice-relay-sip] OpenAI SIP sideband connected", {
         providerCallId: state.providerCallId,
         callSid: state.callSid,
@@ -512,6 +524,7 @@ export class SipCallController {
         role,
         realtimeItemId,
         content,
+        metadata: { operatorSegmentId: this.voice.segment(realtimeItemId) },
       }).catch(async (error) => {
         const state = await this.readState();
         console.error("[voice-relay-sip] transcript persistence failed", {
@@ -552,6 +565,7 @@ export class SipCallController {
         name,
         arguments: args,
       });
+      this.voice.apply(result); state.operator = this.voice.context; await this.persistState();
       if (typeof result.focusedTodoId === "number" || result.focusedTodoId === null) {
         state.focusedTodoId = result.focusedTodoId;
         await this.persistState();
@@ -592,6 +606,8 @@ export class SipCallController {
     if (!event?.type) return;
     const state = await this.readState();
     if (!state || state.ended) return;
+    this.voice.observe(event); state.itemSegments = [...this.voice.itemSegments]; state.responseSegments = [...this.voice.responseSegments];
+    if (event.type === 'conversation.item.added' || event.type === 'response.output_item.added' || event.type === 'input_audio_buffer.committed' || event.type === 'response.created') await this.persistState();
     if (event.type.includes("input_audio_transcription.completed")) {
       const transcript = String(event.transcript ?? "").trim();
       if (transcript) {

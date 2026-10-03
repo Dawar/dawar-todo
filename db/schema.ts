@@ -1,5 +1,27 @@
 import { sql } from "drizzle-orm";
-import { index, integer, primaryKey, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { check, index, integer, primaryKey, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+
+export const botStorageIdentities = sqliteTable("bot_storage_identities", {
+  ownerKey:text("owner_key").notNull(), id:text("id").notNull(), machineId:text("machine_id").notNull(), metadata:text("metadata").notNull(),
+},table=>[primaryKey({columns:[table.ownerKey,table.id]})]);
+export const botStorageFiles = sqliteTable("bot_storage_files", {
+  seq:integer("seq").primaryKey({autoIncrement:true}),ownerKey:text("owner_key").notNull(),id:text("id").notNull(),botId:text("bot_id").notNull(),
+  fingerprint:text("fingerprint").notNull(),stagingKey:text("staging_key").notNull(),objectKey:text("object_key").notNull(),state:text("state").notNull(),metadata:text("metadata").notNull(),parentId:text("parent_id"),
+},table=>[uniqueIndex("bot_storage_identity").on(table.ownerKey,table.id),index("bot_storage_catalog").on(table.ownerKey,table.botId,table.state,table.seq),index("bot_storage_derivatives").on(table.ownerKey,table.parentId,table.state)]);
+export const botStorageReady = sqliteTable("bot_storage_ready", {
+  seq:integer("seq").primaryKey({autoIncrement:true}),ownerKey:text("owner_key").notNull(),id:text("id").notNull(),
+},table=>[uniqueIndex("bot_storage_ready_identity").on(table.ownerKey,table.id)]);
+
+export const todoBotPushOwners = sqliteTable("todo_bot_push_owners", {
+  subscriptionId: text("subscription_id").primaryKey(), ownerKey: text("owner_key").notNull(),
+}, table => [index("todo_bot_push_owners_owner_idx").on(table.ownerKey)]);
+export const todoBotNotifications = sqliteTable("todo_bot_notifications", {
+  id: text("id").primaryKey(), ownerKey: text("owner_key").notNull(), botId: text("bot_id").notNull(),
+  title: text("title").notNull(), body: text("body").notNull(), createdAt: text("created_at").notNull(), deliveredAt: text("delivered_at"),
+}, table => [index("todo_bot_notifications_pending_idx").on(table.deliveredAt,table.createdAt)]);
+export const todoBotPushDeliveries = sqliteTable("todo_bot_push_deliveries", {
+  notificationId: text("notification_id").notNull(), subscriptionId: text("subscription_id").notNull(), deliveredAt: text("delivered_at").notNull(),
+}, table => [primaryKey({columns:[table.notificationId,table.subscriptionId]})]);
 
 export const todos = sqliteTable(
   "todos",
@@ -668,3 +690,29 @@ export const todoAssistantMemories = sqliteTable(
     index("todo_assistant_memories_forgotten_idx").on(table.forgottenAt),
   ],
 );
+
+// Operator routing context only; execution remains native and existing call data is retained.
+export const todoOperatorSessions = sqliteTable('todo_operator_sessions', {
+  id: text('id').primaryKey(), userKey: text('user_key').notNull(), contextJson: text('context_json').notNull(),
+});
+
+
+export const todoCallMessages = sqliteTable("todo_call_messages", {
+  id: text("id").primaryKey(), sessionId: text("session_id").notNull(), userKey: text("user_key").notNull(),
+  realtimeItemId: text("realtime_item_id").notNull(), role: text("role").notNull(), content: text("content").notNull(),
+  focusedTodoId: integer("focused_todo_id"), metadataJson: text("metadata_json").notNull().default("{}"),
+  createdAt: text("created_at").notNull().default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`),
+}, table => [uniqueIndex("todo_call_messages_realtime_idx").on(table.userKey,table.realtimeItemId),
+  index("todo_call_messages_session_idx").on(table.userKey,table.sessionId,table.createdAt,table.id)]);
+export const todoLegacyChatRetirements = sqliteTable("todo_legacy_chat_retirements", {
+  operationId: text("operation_id").primaryKey(), userKey: text("user_key").notNull(),
+  backupSha256: text("backup_sha256").notNull(), ciphertextSha256: text("ciphertext_sha256").notNull(),
+  salt: text("salt").notNull(), iv: text("iv").notNull(), chunks: integer("chunks").notNull(),
+  countsJson: text("counts_json").notNull(), completedAt: text("completed_at").notNull(),
+});
+export const todoLegacyChatBackupChunks = sqliteTable("todo_legacy_chat_backup_chunks", {
+  operationId: text("operation_id").notNull(), ordinal: integer("ordinal").notNull(), ciphertext: text("ciphertext").notNull(),
+}, table => [primaryKey({ columns: [table.operationId,table.ordinal] })]);
+export const todoLegacyChatRetirementGuard = sqliteTable("todo_legacy_chat_retirement_guard", {
+  operationId: text("operation_id").primaryKey(), valid: integer("valid").notNull(),
+}, table => [check("todo_legacy_chat_retirement_guard_valid", sql`${table.valid}=1`)]);
