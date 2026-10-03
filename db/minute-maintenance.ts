@@ -1,3 +1,4 @@
+import { retireLegacyChat } from "./call-storage";
 import { dispatchTodoPushNotifications, dispatchBotPushNotifications, type PushEnvironment } from "./push-notifications";
 import {
   ensureTodoDatabase,
@@ -21,6 +22,8 @@ export async function runTodoMinuteMaintenance(
 ) {
   const startedAt = Date.now();
   await ensureTodoDatabase();
+
+  try { await retireLegacyChat(); } catch { console.error("[legacy-chat] scoped retirement deferred; backup/source guard did not commit"); }
 
   const result = {
     recurring: null as Awaited<ReturnType<typeof processRecurringTodos>> | null,

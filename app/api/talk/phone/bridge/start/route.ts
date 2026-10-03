@@ -8,7 +8,6 @@ import {
   heartbeatTalkSession,
   listTalkHistory,
   readTalkWorkspace,
-  resolveSystemTalkThread,
   startTalkSession,
 } from "../../../../../../db/talk";
 import { getTodoSettings, listTodos } from "../../../../../../db/todos";
@@ -67,10 +66,9 @@ export async function POST(request: Request) {
       readTalkWorkspace(userKey),
       getTodoSettings(),
     ]);
-    const phoneThread = await resolveSystemTalkThread(userKey, "phone");
     const focusedTodoId = chooseTalkFocus(
       todos,
-      phoneThread.focusedTodoId ?? workspace.lastFocusedTodoId,
+      workspace.lastFocusedTodoId,
     );
     const { model, voice } = talkRuntimeConfig(settings.realtimeVoice);
 
@@ -88,7 +86,6 @@ export async function POST(request: Request) {
         model,
         voice,
         focusedTodoId,
-        threadId: phoneThread.id,
         transport: "phone-relay",
       });
       talkSessionId = session.id;
@@ -96,8 +93,8 @@ export async function POST(request: Request) {
     }
 
     const [context, history, safetyIdentifier] = await Promise.all([
-      buildSharedAssistantContext(userKey, focusedTodoId, phoneThread.summary),
-      listTalkHistory(userKey, { threadId: phoneThread.id, limit: 40 }),
+      buildSharedAssistantContext(userKey, focusedTodoId, workspace.summary),
+      listTalkHistory(userKey, { sessionId: talkSessionId, limit: 40 }),
       hashedSafetyIdentifier(userKey),
     ]);
     const operator = await phoneOperator(userKey, talkSessionId);
@@ -111,7 +108,6 @@ export async function POST(request: Request) {
     console.info("[todo-talk-phone-bridge] relay session started", {
       callSid,
       talkSessionId,
-      threadId: phoneThread.id,
       focusedTodoId,
       model: secret.model,
       voice: secret.voice,

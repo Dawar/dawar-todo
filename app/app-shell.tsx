@@ -6,9 +6,9 @@ import { taskSync } from "./task-sync";
 import { cacheOpeningTab, cachedOpeningTab } from "./opening-preference";
 import { initialShellPath } from "./launch-intent";
 
-const loaders = { "/tasks": () => import("./tasks/page"), "/open": () => import("./open/page"), "/talk": () => import("./talk/page"), "/bots": () => import("./bots/page"), "/settings": () => import("./settings/page") };
+const loaders = { "/tasks": () => import("./tasks/page"), "/open": () => import("./open/page"), "/bots": () => import("./bots/page"), "/settings": () => import("./settings/page") };
 type ScreenPath = keyof typeof loaders;
-const pages = { "/tasks": lazy(loaders["/tasks"]), "/open": lazy(loaders["/open"]), "/talk": lazy(loaders["/talk"]), "/bots": lazy(loaders["/bots"]), "/settings": lazy(loaders["/settings"]) };
+const pages = { "/tasks": lazy(loaders["/tasks"]), "/open": lazy(loaders["/open"]), "/bots": lazy(loaders["/bots"]), "/settings": lazy(loaders["/settings"]) };
 const Navigation = createContext<((href: string) => boolean) | null>(null);
 function screenPath(path: string | null): ScreenPath | null {
   if (path === "/") return "/tasks";

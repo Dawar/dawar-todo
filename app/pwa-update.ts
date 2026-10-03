@@ -12,9 +12,7 @@ export async function preparePwaRefresh() {
   if (!navigator.onLine) throw Error("Reconnect before refreshing the app.");
   if (["blocked", "superseded", "unavailable"].includes(getPwaLifecycle().storage))
     throw Error("Preserve your input and resolve offline storage before refreshing.");
-  // The retained Talk UI has its own active voice/draft state. Do not retire or
-  // interrupt it as part of this update; Operator has an exact live-call guard.
-  if (location.pathname.startsWith("/talk")) throw Error("Finish your call and leave Talk before refreshing.");
+  // Operator registers an exact live-call guard; adoption never interrupts audio.
   window.dispatchEvent(new Event("dawar-before-navigation"));
   await Promise.all([...guards.values()].map(guard => guard()));
   const worker = navigator.serviceWorker?.controller;

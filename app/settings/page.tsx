@@ -1165,7 +1165,7 @@ export default function SettingsPage() {
           <div className="flex items-start gap-3">
             <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-[#eaf3ed] text-[#216e4e]"><ActionIcon name="phone" className="h-5 w-5" /></span>
             <div className="min-w-0 flex-1">
-              <h2 id="talk-phone-title" className="text-lg font-semibold tracking-[-0.02em] text-[#202522]">Call Talk</h2>
+              <h2 id="talk-phone-title" className="text-lg font-semibold tracking-[-0.02em] text-[#202522]">Call Operator</h2>
               <p className="mt-1 text-sm leading-6 text-[#69716c]">Call the same realtime chief-of-staff assistant from any phone. Enter your private PIN before the assistant can read or change tasks.</p>
             </div>
           </div>
@@ -1178,7 +1178,7 @@ export default function SettingsPage() {
                 {!talkPhoneProfile?.providerReady
                   ? "Twilio credentials are not configured on this site."
                   : talkPhoneProfile.configured
-                    ? <>Enabled. Call <a className="font-semibold text-[#216e4e] underline decoration-[#216e4e]/30 underline-offset-2" href={`tel:${talkPhoneProfile.phoneNumber}`}>{talkPhoneProfile.phoneNumber}</a> and enter your PIN. Starting a phone call takes over any active browser Talk session.</>
+                    ? <>Enabled. Call <a className="font-semibold text-[#216e4e] underline decoration-[#216e4e]/30 underline-offset-2" href={`tel:${talkPhoneProfile.phoneNumber}`}>{talkPhoneProfile.phoneNumber}</a> and enter your PIN. Starting a phone call takes over any active browser Operator call.</>
                     : "Set a 6 to 8 digit PIN to connect the configured Twilio number."}
               </div>
 

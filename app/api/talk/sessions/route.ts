@@ -5,7 +5,6 @@ import {
   chooseTalkFocus,
   endTalkSession,
   listTalkHistory,
-  readTalkThread,
   readTalkWorkspace,
   startTalkSession,
 } from "../../../../db/talk";
@@ -30,29 +29,26 @@ export async function POST(request: Request) {
     const payload = await request.json().catch(() => ({})) as { threadId?: unknown; operator?: unknown; botId?: unknown };
     const useOperator = payload.operator === true;
     if (useOperator) botsOwner(request, env);
-    const requestedThreadId = String(payload.threadId ?? "").trim();
+    if (payload.threadId !== undefined) return Response.json({ error: "Legacy Chat threads are retired. Start Operator from Bots." }, { status: 410, headers: noStoreHeaders });
+    if (!useOperator) return Response.json({ error: "Start Operator from Bots." }, { status: 410, headers: noStoreHeaders });
     const [todos, workspace, settings] = await Promise.all([
       listTodos(),
       readTalkWorkspace(userKey),
       getTodoSettings(),
     ]);
-    const thread = requestedThreadId ? await readTalkThread(userKey, requestedThreadId) : null;
-    const focusedTodoId = thread
-      ? thread.focusedTodoId
-      : chooseTalkFocus(todos, workspace.lastFocusedTodoId);
+    const focusedTodoId = chooseTalkFocus(todos, workspace.lastFocusedTodoId);
     const { model, voice } = talkRuntimeConfig(settings.realtimeVoice);
     const session = await startTalkSession({
       userKey,
       model,
       voice,
       focusedTodoId,
-      threadId: thread?.id ?? null,
-      transport: "browser",
+      transport: "browser-operator",
     });
     sessionId = session.id;
     const [context, history, safetyIdentifier] = await Promise.all([
-      buildSharedAssistantContext(userKey, focusedTodoId, thread?.summary),
-      listTalkHistory(userKey, { limit: 100, threadId: session.threadId }),
+      buildSharedAssistantContext(userKey, focusedTodoId, workspace.summary),
+      listTalkHistory(userKey, { limit: 100, sessionId: session.id }),
       hashedSafetyIdentifier(userKey),
     ]);
     const operator = useOperator ? await openOperator(userKey, sessionId, typeof payload.botId === "string" ? payload.botId : null) : null;
@@ -64,7 +60,6 @@ export async function POST(request: Request) {
     });
     console.info("[todo-talk-api] session started", {
       sessionId,
-      threadId: session.threadId,
       focusedTodoId,
       model: secret.model,
       voice: secret.voice,
@@ -77,7 +72,6 @@ export async function POST(request: Request) {
     return Response.json({
       sessionId,
       operator,
-      threadId: session.threadId,
       clientSecret: secret.value,
       expiresAt: secret.expiresAt,
       model: secret.model,

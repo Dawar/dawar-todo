@@ -58,6 +58,10 @@ const worker = {
     const routedRequest = new Request(request, { headers: new Headers(request.headers) });
     const url = new URL(routedRequest.url);
 
+    if (url.pathname === "/talk" || url.pathname === "/talk/") return Response.redirect(new URL("/bots",url).toString(),303);
+    if (/^\/api\/talk\/(?:threads(?:\/.*)?|history)\/?$/.test(url.pathname))
+      return Response.json({ error: "Legacy Chat is retired. Use Bots for conversations and Operator for calls." }, { status: 410, headers: { "Cache-Control": "no-store" } });
+
     const phoneStreamResponse = await handleTalkPhoneStream(routedRequest, env);
     if (phoneStreamResponse) return phoneStreamResponse;
 

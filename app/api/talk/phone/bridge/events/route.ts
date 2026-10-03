@@ -6,7 +6,7 @@ import {
   endTalkSession,
   heartbeatTalkSession,
   listTalkHistory,
-  resolveSystemTalkThread,
+  readTalkWorkspace,
 } from "../../../../../../db/talk";
 import { endTalkPhoneCall } from "../../../../../../db/talk-phone";
 import { getTodoSettings } from "../../../../../../db/todos";
@@ -180,10 +180,10 @@ export async function POST(request: Request) {
 
     if (action === "rollover") {
       await heartbeatTalkSession(userKey, talkSessionId, focusedTodoId);
-      const phoneThread = await resolveSystemTalkThread(userKey, "phone");
+      const workspace = await readTalkWorkspace(userKey);
       const [context, history, safetyIdentifier, settings] = await Promise.all([
-        buildSharedAssistantContext(userKey, focusedTodoId ?? phoneThread.focusedTodoId, phoneThread.summary),
-        listTalkHistory(userKey, { limit: 40, threadId: phoneThread.id }),
+        buildSharedAssistantContext(userKey, focusedTodoId ?? workspace.lastFocusedTodoId, workspace.summary),
+        listTalkHistory(userKey, { limit: 40, sessionId: talkSessionId }),
         hashedSafetyIdentifier(userKey),
         getTodoSettings(),
       ]);

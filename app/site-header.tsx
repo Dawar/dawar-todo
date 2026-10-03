@@ -12,7 +12,7 @@ export function SiteHeader({
   onProjectClick,
   onKeyboardHelp,
 }: {
-  current: "todos" | "settings" | "assistant" | "talk" | "bots";
+  current: "todos" | "settings" | "assistant" | "bots";
   projectLabel?: string;
   onProjectClick?: () => void;
   onKeyboardHelp?: () => void;
@@ -28,7 +28,6 @@ export function SiteHeader({
   );
   const navigation = [
     { href: "/tasks", label: "Tasks", icon: "view-open" as const, active: current === "todos" },
-    { href: "/talk", label: "Chat", icon: "assistant" as const, active: current === "talk" || current === "assistant" },
     { href: "/bots", label: "Bots", icon: "assistant" as const, active: current === "bots" },
     { href: "/settings", label: "Settings", icon: "settings" as const, active: current === "settings" },
   ];

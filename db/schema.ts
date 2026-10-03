@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { index, integer, primaryKey, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { check, index, integer, primaryKey, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 export const botStorageIdentities = sqliteTable("bot_storage_identities", {
   ownerKey:text("owner_key").notNull(), id:text("id").notNull(), machineId:text("machine_id").notNull(), metadata:text("metadata").notNull(),
@@ -695,3 +695,24 @@ export const todoAssistantMemories = sqliteTable(
 export const todoOperatorSessions = sqliteTable('todo_operator_sessions', {
   id: text('id').primaryKey(), userKey: text('user_key').notNull(), contextJson: text('context_json').notNull(),
 });
+
+
+export const todoCallMessages = sqliteTable("todo_call_messages", {
+  id: text("id").primaryKey(), sessionId: text("session_id").notNull(), userKey: text("user_key").notNull(),
+  realtimeItemId: text("realtime_item_id").notNull(), role: text("role").notNull(), content: text("content").notNull(),
+  focusedTodoId: integer("focused_todo_id"), metadataJson: text("metadata_json").notNull().default("{}"),
+  createdAt: text("created_at").notNull().default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`),
+}, table => [uniqueIndex("todo_call_messages_realtime_idx").on(table.userKey,table.realtimeItemId),
+  index("todo_call_messages_session_idx").on(table.userKey,table.sessionId,table.createdAt,table.id)]);
+export const todoLegacyChatRetirements = sqliteTable("todo_legacy_chat_retirements", {
+  operationId: text("operation_id").primaryKey(), userKey: text("user_key").notNull(),
+  backupSha256: text("backup_sha256").notNull(), ciphertextSha256: text("ciphertext_sha256").notNull(),
+  salt: text("salt").notNull(), iv: text("iv").notNull(), chunks: integer("chunks").notNull(),
+  countsJson: text("counts_json").notNull(), completedAt: text("completed_at").notNull(),
+});
+export const todoLegacyChatBackupChunks = sqliteTable("todo_legacy_chat_backup_chunks", {
+  operationId: text("operation_id").notNull(), ordinal: integer("ordinal").notNull(), ciphertext: text("ciphertext").notNull(),
+}, table => [primaryKey({ columns: [table.operationId,table.ordinal] })]);
+export const todoLegacyChatRetirementGuard = sqliteTable("todo_legacy_chat_retirement_guard", {
+  operationId: text("operation_id").primaryKey(), valid: integer("valid").notNull(),
+}, table => [check("todo_legacy_chat_retirement_guard_valid", sql`${table.valid}=1`)]);
