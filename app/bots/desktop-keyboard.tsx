@@ -64,19 +64,21 @@ export function DesktopKeyboard({ remote, connected, onClose }: {
       setSelected([]);
     }
   };
-  const type = (value: string) => {
+  const type = (value: string, firstMods = selected) => {
+    let mods = firstMods;
     for (const char of value.replace(/\r\n?/g, "\n")) {
       const cp = char.codePointAt(0)!;
-      if (char === "\n") chord(...keys.Enter);
-      else if (char === "\t") chord(...keys.Tab);
-      else chord(cp <= 0xff ? cp : 0x01000000 | cp);
+      if (char === "\n") chord(...keys.Enter, mods);
+      else if (char === "\t") chord(...keys.Tab, mods);
+      else chord(cp <= 0xff ? cp : 0x01000000 | cp, undefined, mods);
+      mods = [];
     }
   };
   const edit = (element: HTMLTextAreaElement) => {
     if (composing.current) return;
     const change = desktopTextEdit(previous.current, element.value);
-    for (let i = 0; i < change.erase; i++) chord(...keys.Backspace);
-    type(change.text);
+    for (let i = 0; i < change.erase; i++) chord(...keys.Backspace, i === 0 ? selected : []);
+    type(change.text, change.erase ? [] : selected);
     reset();
   };
   const paste = (value: string) => {
@@ -148,7 +150,7 @@ export function DesktopKeyboard({ remote, connected, onClose }: {
           if (e.ctrlKey || e.metaKey) physicalMods.push("Ctrl");
           if (e.altKey) physicalMods.push("Alt");
           if (e.shiftKey) physicalMods.push("Shift");
-          if (keys[e.key] && e.key !== "Backspace" && e.key !== "Enter") {
+          if (keys[e.key] && (e.key !== "Backspace" && e.key !== "Enter" || e.ctrlKey || e.metaKey || e.altKey)) {
             e.preventDefault(); chord(...keys[e.key], physicalMods.length ? physicalMods : selected);
           } else if ((e.ctrlKey || e.metaKey || e.altKey) && Array.from(e.key).length === 1) {
             e.preventDefault(); chord(e.key.toLowerCase().codePointAt(0)!, e.code, physicalMods);

@@ -565,7 +565,7 @@ export function BotDesktopDialog({
         </p>
       )}
       <div className="bots-desktop-screen" ref={screen} />
-      {showText && <DesktopKeyboard remote={() => rfb.current} connected={state === "Connected"}
+      {showText && <DesktopKeyboard key={bot.id} remote={() => rfb.current} connected={state === "Connected"}
         onClose={() => { setShowText(false); rfb.current?.focus({ preventScroll: true }); }} />}
 
     </div>,
