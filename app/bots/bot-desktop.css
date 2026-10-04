@@ -121,7 +121,8 @@
   cursor: default;
 }
 .bots-desktop-dialog button:focus-visible,
-.bots-desktop-dialog input:focus-visible {
+.bots-desktop-dialog input:focus-visible,
+.bots-desktop-dialog textarea:focus-visible {
   outline: 2px solid #8bbcff;
   outline-offset: 2px;
 }
@@ -165,21 +166,43 @@
   background: #3e252c;
 }
 .bots-desktop-keyboard {
+  flex: none;
   display: flex;
-  flex-wrap: wrap;
-  gap: 7px;
-  padding: 10px;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 10px;
   background: #202634;
+  max-height: 45%;
+  overflow-y: auto;
 }
-.bots-desktop-keyboard input {
-  flex: 1;
-  min-width: 160px;
-  border: 1px solid #4c566b;
-  border-radius: 6px;
-  padding: 8px;
-  background: #151922;
-  color: #fff;
+.bots-desktop-key-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow-x: auto;
+  flex: none;
+  padding: 3px 1px;
 }
+.bots-desktop-key-row button, .bots-desktop-key-row details { flex: none; white-space: nowrap; }
+.bots-desktop-key-row button { min-width: 40px; min-height: 42px; }
+.bots-desktop-key-row button[aria-pressed="true"] { background: #42649a; border-color: #aac8ff; }
+.bots-desktop-key-row summary { cursor: pointer; padding: 10px; }
+.bots-desktop-key-more { display: flex; flex-wrap: wrap; gap: 6px; flex: none; }
+.bots-desktop-type-target { position: relative; min-height: 44px; flex: none; }
+.bots-desktop-type-target span {
+  position: absolute; inset: 0; display: flex; align-items: center; padding: 10px;
+  pointer-events: none; color: #c2ccde; font-size: 13px;
+}
+.bots-desktop-keyboard textarea {
+  display: block; box-sizing: border-box; width: 100%; resize: none; font-size: 16px;
+  border: 1px solid #4c566b; border-radius: 6px; padding: 10px;
+  background: #151922; color: #fff;
+}
+.bots-desktop-type-target textarea { color: transparent; caret-color: transparent; height: 44px; }
+.bots-desktop-paste { display: flex; align-items: stretch; gap: 8px; }
+.bots-desktop-paste textarea { min-width: 0; flex: 1; }
+.bots-desktop-paste button { flex: none; }
+.bots-desktop-key-message { font-size: 12px; margin: 0; color: #c2ccde; }
 .bots-desktop-mobile-open {
   display: none !important;
 }

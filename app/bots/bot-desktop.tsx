@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
+import { createPortal, flushSync } from "react-dom";
 import {
   Monitor,
   X,
@@ -16,6 +16,7 @@ import type RFB from "@novnc/novnc";
 import { botsClient as client } from "./client";
 import { DesktopChannel } from "./desktop-channel";
 import { DesktopTrackpad, desktopTouchMode, saveDesktopTouchMode, type DesktopTouchMode, type DesktopPointer } from "./desktop-trackpad";
+import { DesktopKeyboard } from "./desktop-keyboard";
 import "./bot-desktop.css";
 
 export function BotDesktopCard({
@@ -163,8 +164,25 @@ export function BotDesktopDialog({
     [exclusive, setExclusive] = useState(false),
     [changing, setChanging] = useState(false),
     [retry, setRetry] = useState(0),
-    [text, setText] = useState(""),
     [showText, setShowText] = useState(false);
+  const showTextRef = useRef(showText);
+  useEffect(() => {
+    showTextRef.current = showText;
+    if (rfb.current) rfb.current.focusOnClick = !showText;
+    const viewport = window.visualViewport;
+    const resize = () => {
+      if (!dialog.current) return;
+      dialog.current.style.height = showText && viewport ? `${viewport.height}px` : "";
+      dialog.current.style.top = showText && viewport ? `${viewport.offsetTop}px` : "";
+    };
+    resize();
+    viewport?.addEventListener("resize", resize);
+    viewport?.addEventListener("scroll", resize);
+    return () => {
+      viewport?.removeEventListener("resize", resize);
+      viewport?.removeEventListener("scroll", resize);
+    };
+  }, [showText, state]);
   const closeRef = useRef(onClose);
   useEffect(() => {
     closeRef.current = onClose;
@@ -178,6 +196,7 @@ export function BotDesktopDialog({
     document.body.style.overflow = "hidden";
     dialog.current?.querySelector<HTMLElement>("button")?.focus();
     const key = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
       // Escape belongs to the remote application while its canvas has focus.
       if (
         event.key === "Escape" &&
@@ -334,7 +353,8 @@ export function BotDesktopDialog({
               setState("Connected");
               setError("");
               clearTimeout(timeout);
-              remote.focus({ preventScroll: true });
+              remote.focusOnClick = !showTextRef.current;
+              if (!showTextRef.current) remote.focus({ preventScroll: true });
             }
           });
           remote.addEventListener("disconnect", () => {
@@ -486,8 +506,14 @@ export function BotDesktopDialog({
           </button>
           <button
             disabled={state !== "Connected"}
-            onClick={() => setShowText((v) => !v)}
-            aria-label="Show desktop keyboard controls"
+            onClick={() => {
+              flushSync(() => setShowText((v) => !v));
+              const typing = dialog.current?.querySelector<HTMLTextAreaElement>("[data-desktop-typing]");
+              if (typing) typing.focus({ preventScroll: true });
+              else rfb.current?.focus({ preventScroll: true });
+            }}
+            aria-pressed={showText}
+            aria-label={showText ? "Hide remote keyboard" : "Open remote keyboard"}
           >
             <Keyboard size={18} />
           </button>
@@ -539,47 +565,9 @@ export function BotDesktopDialog({
         </p>
       )}
       <div className="bots-desktop-screen" ref={screen} />
-      {showText && (
-        <form
-          className="bots-desktop-keyboard"
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (text) {
-              rfb.current?.clipboardPasteFrom(text);
-              rfb.current?.sendKey(0xffe3, "ControlLeft", true);
-              rfb.current?.sendKey(0x76, "KeyV");
-              rfb.current?.sendKey(0xffe3, "ControlLeft", false);
-              setText("");
-              rfb.current?.focus();
-            }
-          }}
-        >
-          <input
-            aria-label="Text to paste into desktop"
-            value={text}
-            onChange={(event) => setText(event.target.value)}
-            placeholder="Text to paste into focused app"
-          />
-          <button type="submit">Paste</button>
-          {[
-            ["Enter", 0xff0d],
-            ["Tab", 0xff09],
-            ["Escape", 0xff1b],
-            ["Backspace", 0xff08],
-          ].map(([label, key]) => (
-            <button
-              type="button"
-              key={label}
-              onClick={() => rfb.current?.sendKey(Number(key))}
-            >
-              {label}
-            </button>
-          ))}
-          <button type="button" onClick={() => rfb.current?.sendCtrlAltDel()}>
-            Ctrl Alt Del
-          </button>
-        </form>
-      )}
+      {showText && <DesktopKeyboard remote={() => rfb.current} connected={state === "Connected"}
+        onClose={() => { setShowText(false); rfb.current?.focus({ preventScroll: true }); }} />}
+
     </div>,
     document.body,
   );

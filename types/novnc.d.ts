@@ -8,6 +8,7 @@ declare module "@novnc/novnc" {
     scaleViewport: boolean;
     resizeSession: boolean;
     viewOnly: boolean;
+    focusOnClick: boolean;
     qualityLevel: number;
     compressionLevel: number;
     disconnect(): void;

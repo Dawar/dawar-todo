@@ -184,7 +184,7 @@ export class DesktopTrackpad {
         this.started = performance.now(); this.moved = false; this.multiple = false;
         this.cancelled = this.remote._mouseButtonMask !== 0; this.scrollX = 0; this.scrollY = 0;
         this.touchCursor = true;
-        this.remote.focus({ preventScroll: true });
+        if (this.remote.focusOnClick) this.remote.focus({ preventScroll: true });
         // No move or button event on contact. The finger's location never
         // becomes the cursor location, including after lifting/repositioning.
         this.paint();
