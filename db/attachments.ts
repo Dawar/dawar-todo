@@ -410,7 +410,7 @@ function detectedImageFormat(bytes: Uint8Array) {
 }
 
 async function firstBytes(key: string) {
-  const response = await storageFetch(storageUrl(key), { method: "GET", headers: { Range: "bytes=0-", "Accept-Encoding": "identity" }, signal: AbortSignal.timeout(30000) });
+  const response = await storageFetch(storageUrl(key), { method: "GET", headers: { Range: "bytes=0-" }, signal: AbortSignal.timeout(30000) });
   return readStoragePrefix(response);
 }
 
@@ -1104,7 +1104,7 @@ export async function inspectTaskUploadStorage(todoId: number, id: string) {
   if (!row) return null;
   const slots = row.kind === "image" ? [["original", row.original_key], ["display", row.display_key], ["thumbnail", row.thumbnail_key]] : [["original", row.original_key]];
   return Promise.all(slots.map(async ([slot, key]) => {
-    const response = await storage().signedStorageResponse(storageUrl(key), { headers: { Range: "bytes=0-", "Accept-Encoding": "identity" }, signal: AbortSignal.timeout(10000) });
+    const response = await storage().signedStorageResponse(storageUrl(key), { headers: { Range: "bytes=0-" }, signal: AbortSignal.timeout(10000) });
     const prefix = await storageResponseMetadata(response);
     if (!response.ok) return { slot, bytes: null, prefix };
     const object = await readStoragePrefix(response);
