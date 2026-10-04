@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { nativeToolResult } from "./tool-result.mjs";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { RunStatePort } from "./run-state-port.mjs";
@@ -576,7 +577,7 @@ export class BackgroundRuns {
           this.assertOrigin(origin);
           result = await this.runtime.dynamicTool(bot, p, origin);
         }
-        this.runtime.codex.respond(message.id, { success: true, contentItems: [{ type: "inputText", text: JSON.stringify(result) }] });
+        this.runtime.codex.respond(message.id, nativeToolResult(result));
       } catch (error) {
         this.runtime.codex.respond(message.id, { success: false, contentItems: [{ type: "inputText", text: error.message }] });
       }

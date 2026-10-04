@@ -1,5 +1,6 @@
 import { SecureInputs, redactSecureNotification } from "./secure-input.mjs";
 import { SECURE_TOOLS } from "./secure-input-tools.mjs";
+import { nativeToolResult } from "./tool-result.mjs";
 import { ownedReply, rememberReply, displayReplyItem, prepareReply, resolveReply } from "./message-replies.mjs";
 import { replyInputText } from "../lib/bot-replies.ts";
 import { OperatorCalls } from './operator.mjs';
@@ -1866,10 +1867,7 @@ export class BotRuntime extends EventEmitter {
     if (message.method === "item/tool/call") {
       try {
         const result = await this.dynamicTool(bot, message.params);
-        this.codex.respond(message.id, {
-          success: true,
-          contentItems: result.__secureModelContent ? result.__secureModelContent.map(c=>c.type==="image" ? {type:"inputImage",imageUrl:`data:${c.mimeType};base64,${c.data}`} : {type:"inputText",text:c.text}) : [{ type: "inputText", text: JSON.stringify(result) }],
-        });
+        this.codex.respond(message.id, nativeToolResult(result));
       } catch (e) {
         this.codex.respond(message.id, {
           success: false,

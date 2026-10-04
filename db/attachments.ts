@@ -1,4 +1,4 @@
-import { createS3Storage, storageResponseMetadata } from "../lib/s3-storage";
+import { createS3Storage, readStoragePrefix, storageResponseMetadata } from "../lib/s3-storage";
 import { attachmentErrorDetails, type AttachmentPhase } from "../lib/attachment-errors";
 import type { AttachmentRecovery } from "../lib/attachment-recovery";
 import { env, waitUntil } from "cloudflare:workers";
@@ -410,8 +410,8 @@ function detectedImageFormat(bytes: Uint8Array) {
 }
 
 async function firstBytes(key: string) {
-  const response = await storageFetch(storageUrl(key), { method: "GET", headers: { Range: "bytes=0-65535" } });
-  return new Uint8Array(await response.arrayBuffer());
+  const response = await storageFetch(storageUrl(key), { method: "GET", headers: { Range: "bytes=0-", "Accept-Encoding": "identity" }, signal: AbortSignal.timeout(30000) });
+  return readStoragePrefix(response);
 }
 
 function inspectedImageDimensions(bytes: Uint8Array, format: string) {
@@ -480,21 +480,16 @@ export async function finalizeTodoAttachmentUpload(
     throw new Error(`Tasks are limited to ${MAX_ATTACHMENTS_PER_TASK} images.`);
   }
   try {
-    // Read probes run first because Spaces returns a useful XML error body for GET,
-    // while a failing HEAD response is bodyless and much harder to diagnose.
-    const [originalBytes, displayBytes, thumbnailBytes] = await Promise.all([
+    // A single bounded GET provides the prefix and total size. Do not request
+    // beyond small thumbnails or depend on the provider's inconsistent HEAD.
+    const [original, display, thumbnail] = await Promise.all([
       firstBytes(row.original_key),
       firstBytes(row.display_key),
       firstBytes(row.thumbnail_key),
     ]);
-    const [originalHead, displayHead, thumbnailHead] = await Promise.all([
-      storageFetch(storageUrl(row.original_key), { method: "HEAD" }),
-      storageFetch(storageUrl(row.display_key), { method: "HEAD" }),
-      storageFetch(storageUrl(row.thumbnail_key), { method: "HEAD" }),
-    ]);
-    const originalSize = Number(originalHead.headers.get("content-length") ?? 0);
-    const displaySize = Number(displayHead.headers.get("content-length") ?? 0);
-    const thumbnailSize = Number(thumbnailHead.headers.get("content-length") ?? 0);
+    const { bytes: originalBytes, size: originalSize } = original;
+    const { bytes: displayBytes, size: displaySize } = display;
+    const { bytes: thumbnailBytes, size: thumbnailSize } = thumbnail;
     if (originalSize < 1 || originalSize > MAX_ATTACHMENT_BYTES || displaySize < 1 || displaySize > 8 * 1024 * 1024 || thumbnailSize < 1 || thumbnailSize > 2 * 1024 * 1024) {
       throw new Error("One or more uploaded image files has an invalid size.");
     }
@@ -665,11 +660,7 @@ export async function finalizeTodoMediaAttachmentUpload(
   const maximumDuration = row.kind === "audio" ? MAX_AUDIO_DURATION_MS : MAX_VIDEO_DURATION_MS;
   if (row.kind !== "file" && durationMs > maximumDuration) throw new Error(row.kind === "audio" ? "Voice memos are limited to 30 minutes." : "Videos are limited to 60 minutes.");
   try {
-    const [bytes, head] = await Promise.all([
-      firstBytes(row.original_key),
-      storageFetch(storageUrl(row.original_key), { method: "HEAD" }),
-    ]);
-    const actualBytes = Number(head.headers.get("content-length") ?? 0);
+    const { bytes, size: actualBytes } = await firstBytes(row.original_key);
     if (actualBytes < 1 || actualBytes > maximumBytes || actualBytes !== row.byte_size) throw new Error("The media upload is incomplete.");
     const actualFormat = row.kind === "file" ? detectAttachmentFileFormat(bytes) : detectedMediaFormat(bytes);
     const expectedFormat = row.kind === "audio" ? expectedAudioFormat(row.mime_type) : row.kind === "video" ? expectedVideoFormat(row.mime_type) : expectedFileFormat(row.file_name);
@@ -1113,14 +1104,12 @@ export async function inspectTaskUploadStorage(todoId: number, id: string) {
   if (!row) return null;
   const slots = row.kind === "image" ? [["original", row.original_key], ["display", row.display_key], ["thumbnail", row.thumbnail_key]] : [["original", row.original_key]];
   return Promise.all(slots.map(async ([slot, key]) => {
-    const signal = AbortSignal.timeout(10000);
-    const head = await storage().signedStorageResponse(storageUrl(key), { method: "HEAD", signal });
-    const length = head.ok && head.headers.has("content-length") ? Number(head.headers.get("content-length")) : null;
-    const headStatus = await storageResponseMetadata(head);
-    if (head.status === 404) return { slot, head: headStatus, bytes: null, prefix: null };
-    const response = await storage().signedStorageResponse(storageUrl(key), { headers: { Range: "bytes=0-65535" }, signal });
+    const response = await storage().signedStorageResponse(storageUrl(key), { headers: { Range: "bytes=0-", "Accept-Encoding": "identity" }, signal: AbortSignal.timeout(10000) });
     const prefix = await storageResponseMetadata(response);
-    await response.body?.cancel().catch(() => {});
-    return { slot, head: headStatus, bytes: length, prefix };
+    if (!response.ok) return { slot, bytes: null, prefix };
+    const object = await readStoragePrefix(response);
+    const format = row.kind === "image" ? detectedImageFormat(object.bytes) : null;
+    const dimensions = format ? inspectedImageDimensions(object.bytes, format) : null;
+    return { slot, bytes: object.size, prefix, dimensions };
   }));
 }

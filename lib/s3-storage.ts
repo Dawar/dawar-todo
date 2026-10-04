@@ -9,6 +9,31 @@ export class PrivateStorageError extends Error {
     super("Private storage verification failed. Retry the same attachment; local bytes are retained.");
   }
 }
+/** Read an open-ended range but retain at most 64 KiB. Small objects must not
+ * be requested past their end; size and magic bytes come from one response. */
+export async function readStoragePrefix(response: Response) {
+  const range = response.headers.get("content-range")?.match(/^bytes 0-(\d+)\/(\d+)$/i);
+  const size = response.status === 206 && range ? Number(range[2])
+    : response.status === 200 && response.headers.has("content-length") ? Number(response.headers.get("content-length")) : NaN;
+  const length = Math.min(size, 65536);
+  const encoding = response.headers.get("content-encoding");
+  if (!Number.isSafeInteger(size) || size < 1 || encoding && encoding !== "identity"
+    || response.status === 206 && (!range || Number(range[1]) < length - 1 || Number(range[1]) >= size)) {
+    await response.body?.cancel().catch(() => {});
+    throw new PrivateStorageError(502, "InvalidObjectMetadata");
+  }
+  const reader = response.body?.getReader();
+  if (!reader) throw new PrivateStorageError(502, "MissingObjectBody");
+  const bytes = new Uint8Array(length); let offset = 0;
+  try {
+    while (offset < length) {
+      const next = await reader.read();
+      if (next.done) throw new PrivateStorageError(502, "IncompleteObjectBody");
+      const part = next.value.subarray(0, length - offset); bytes.set(part, offset); offset += part.length;
+    }
+  } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
+  return { bytes, size };
+}
 /** Provider diagnostics are categories only: never XML, keys, URLs or credentials. */
 export async function storageResponseMetadata(response: Response) {
   if (response.ok) return { status: response.status, code: null, argument: null, reason: null };

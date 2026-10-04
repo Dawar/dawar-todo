@@ -1,4 +1,5 @@
 import { ensureTodoDatabase } from "../../../../db/todos";
+import { attachmentErrorDetails } from "../../../../lib/attachment-errors";
 import {
   finalizeTodoAttachmentUpload,
   finalizeTodoMediaAttachmentUpload,
@@ -55,7 +56,9 @@ export async function POST(request: Request) {
     const message = error instanceof Error ? error.message : "The image upload could not be prepared.";
     const inputError = /choose|image|audio|video|media|voice|file|document|archive|limited|invalid|large|available|duration|match/i.test(message);
     console.error("[todo-api] draft attachment preparation failed", { durationMs: Date.now() - startedAt, error });
-    return Response.json({ error: message }, { status: inputError ? 400 : 500 });
+    const details = attachmentErrorDetails(error);
+    const status = details.code === "storage-unavailable" ? 502 : inputError ? 400 : 500;
+    return Response.json({ error: status >= 500 ? details.errorMessage : message, code: details.code, phase: details.phase }, { status });
   }
 }
 
@@ -85,6 +88,8 @@ export async function PATCH(request: Request) {
     const message = error instanceof Error ? error.message : "The image upload could not be finalized.";
     const inputError = /image|audio|video|media|voice|file|document|archive|limited|invalid|large|available|expected|duration|match/i.test(message);
     console.error("[todo-api] draft attachment finalization failed", { durationMs: Date.now() - startedAt, error });
-    return Response.json({ error: message }, { status: inputError ? 400 : 500 });
+    const details = attachmentErrorDetails(error, "finalize");
+    const status = details.code === "storage-unavailable" ? 502 : inputError ? 400 : 500;
+    return Response.json({ error: status >= 500 ? details.errorMessage : message, code: details.code, phase: details.phase }, { status });
   }
 }
