@@ -5,7 +5,8 @@ export function attachmentErrorDetails(error: unknown, fallback: AttachmentPhase
   const message = typeof tagged?.message === "string" ? tagged.message : "";
   // Allowlist categories, never echo arbitrary storage/DB errors (which can
   // include signed URLs, SQL parameters, file names or credentials).
-  const safeMessage = message === "Image processing is temporarily unavailable." ? message
+  const safeMessage = tagged?.code === "storage-unavailable" ? "Private storage verification failed. Retry the same attachment; local bytes are retained."
+    : message === "Image processing is temporarily unavailable." ? message
     : /no such (?:table|column)/i.test(message) ? "Attachment database schema is incomplete."
     : /already used|attachment was removed/i.test(message) ? "Upload identity conflicts with existing metadata."
     : /not found/i.test(message) ? "Upload target not found."
@@ -15,7 +16,7 @@ export function attachmentErrorDetails(error: unknown, fallback: AttachmentPhase
     : /network|fetch|timed? ?out/i.test(message) ? "Attachment service transport failed."
     : "Attachment service operation failed; inspect the reported phase.";
   return { phase: tagged?.attachmentPhase ?? fallback,
-    code: tagged?.code === "image-processing-unavailable" ? tagged.code : "attachment-failed",
+    code: ["image-processing-unavailable", "storage-unavailable"].includes(tagged?.code ?? "") ? tagged.code! : "attachment-failed",
     errorName: ["Error", "TypeError", "RangeError", "TimeoutError", "AbortError"].includes(tagged?.name ?? "") ? tagged.name! : "Error",
     errorMessage: safeMessage };
 }

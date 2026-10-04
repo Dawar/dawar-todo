@@ -1,4 +1,4 @@
-import { createS3Storage } from "../lib/s3-storage";
+import { createS3Storage, storageResponseMetadata } from "../lib/s3-storage";
 import { attachmentErrorDetails, type AttachmentPhase } from "../lib/attachment-errors";
 import type { AttachmentRecovery } from "../lib/attachment-recovery";
 import { env, waitUntil } from "cloudflare:workers";
@@ -1105,4 +1105,22 @@ export async function inspectAttachmentRecovery(todoId: number, ids: string[], d
 
 export function imageProcessingAvailable() {
   return typeof runtime().IMAGES?.info === "function" && typeof runtime().IMAGES?.input === "function";
+}
+
+/** Bounded read-only support probe for an existing task upload. No object data is returned. */
+export async function inspectTaskUploadStorage(todoId: number, id: string) {
+  const row = await database().prepare("SELECT * FROM todo_attachments WHERE id = ? AND todo_id = ? AND deleted_at IS NULL AND upload_state = 'uploading'").bind(id, todoId).first<AttachmentRow>();
+  if (!row) return null;
+  const slots = row.kind === "image" ? [["original", row.original_key], ["display", row.display_key], ["thumbnail", row.thumbnail_key]] : [["original", row.original_key]];
+  return Promise.all(slots.map(async ([slot, key]) => {
+    const signal = AbortSignal.timeout(10000);
+    const head = await storage().signedStorageResponse(storageUrl(key), { method: "HEAD", signal });
+    const length = head.ok && head.headers.has("content-length") ? Number(head.headers.get("content-length")) : null;
+    const headStatus = await storageResponseMetadata(head);
+    if (head.status === 404) return { slot, head: headStatus, bytes: null, prefix: null };
+    const response = await storage().signedStorageResponse(storageUrl(key), { headers: { Range: "bytes=0-65535" }, signal });
+    const prefix = await storageResponseMetadata(response);
+    await response.body?.cancel().catch(() => {});
+    return { slot, head: headStatus, bytes: length, prefix };
+  }));
 }

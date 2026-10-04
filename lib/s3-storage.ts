@@ -2,6 +2,39 @@ import { replayableStorageFetch } from "./storage-transfer";
 /** Private SigV4 signing shared by Todo and bot storage. Never send this environment to clients. */
 export type S3Environment = { S3_ACCESS_KEY: string; S3_ACCESS_KEY_ID: string; S3_BUCKET: string; S3_ENDPOINT_URL: string };
 type StorageConfig = { bucket: string; endpoint: URL; region: string };
+export class PrivateStorageError extends Error {
+  readonly attachmentPhase = "storage";
+  readonly code = "storage-unavailable";
+  constructor(public readonly status: number, public readonly providerCode: string | null) {
+    super("Private storage verification failed. Retry the same attachment; local bytes are retained.");
+  }
+}
+/** Provider diagnostics are categories only: never XML, keys, URLs or credentials. */
+export async function storageResponseMetadata(response: Response) {
+  if (response.ok) return { status: response.status, code: null, argument: null, reason: null };
+  const reader = response.body?.getReader();
+  const chunks: Uint8Array[] = []; let size = 0;
+  try {
+    if (reader) for (;;) {
+      const next = await reader.read(); if (next.done) break;
+      size += next.value.length; if (size > 64 * 1024) break;
+      chunks.push(next.value);
+    }
+  } finally { await reader?.cancel().catch(() => {}); reader?.releaseLock(); }
+  const bytes = new Uint8Array(chunks.reduce((n, c) => n + c.length, 0)); let offset = 0;
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
+  const xml = new TextDecoder().decode(bytes);
+  const code = xml.match(/<Code>([A-Za-z0-9]{1,80})<\/Code>/)?.[1] ?? null;
+  const argumentValue = xml.match(/<ArgumentName>([^<]{1,80})<\/ArgumentName>/)?.[1];
+  const argument = ["Range", "Authorization", "x-amz-content-sha256", "x-amz-date", "SignedHeaders", "Credential"].includes(argumentValue ?? "") ? argumentValue! : null;
+  const message = xml.match(/<Message>([^<]{0,2048})<\/Message>/)?.[1] ?? "";
+  const reason = /range/i.test(message) ? "range" : /signed.?headers/i.test(message) ? "signed-headers"
+    : /sha256|payload.*hash/i.test(message) ? "payload-hash" : /authorization/i.test(message) ? "authorization"
+    : /signature/i.test(message) ? "signature" : /credential/i.test(message) ? "credential"
+    : /content.?length/i.test(message) ? "content-length" : /\bhost\b/i.test(message) ? "host"
+    : /date|expir|request.*time/i.test(message) ? "time" : "other";
+  return { status: response.status, code, argument, reason };
+}
 const SIGNED_URL_SECONDS = 60 * 60;
 export function createS3Storage(environment: S3Environment) {
   let cachedStorageConfig: StorageConfig | null = null;
@@ -66,15 +99,13 @@ async function storageFetch(url: URL, init?: RequestInit) {
 }
 
 async function storageResponseError(stage: string, response: Response) {
-  const body = await response.text().catch(() => "");
-  const code = body.match(/<Code>([^<]+)<\/Code>/i)?.[1] ?? null;
+  const details = await storageResponseMetadata(response);
   console.error("[todo-attachments] storage request failed", {
     stage,
-    status: response.status,
-    code,
+    ...details,
     requestId: response.headers.get("x-amz-request-id"),
   });
-  return new Error(`${stage} returned ${response.status}${code ? ` (${code})` : ""}.`);
+  return new PrivateStorageError(response.status, details.code);
 }
 
 async function deleteKeys(keys: string[]) {
