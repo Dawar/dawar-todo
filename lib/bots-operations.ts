@@ -60,6 +60,8 @@ export type BotOperations = {
   "bursts.submit": { params: { reply?: BotReplyReference; text: string; attachments?: string[] }; result: { message: BotBurstMessage; burst: BotBurst } };
   "bursts.typing": { params: { clientId: string; typing: boolean }; result: Record<string, never> };
   "bursts.start": { params: Record<string, never>; result: BotBurstState };
+  "bursts.resume": { params: Record<string, never>; result: BotBurstState };
+  "bursts.discard": { params: { messageIds: string[]; pendingOnly?: true }; result: BotBurstState & { discardedIds: string[]; hiddenIds: string[] } };
   "bursts.stop": { params: Record<string, never>; result: BotBurstState };
   snapshot: { params: Record<string, never>; result: BotSnapshot };
   history: { params: Record<string, never>; result: BotHistory };

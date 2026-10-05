@@ -2,7 +2,7 @@ import { ownedReply } from "./message-replies.mjs";
 import { randomUUID, createHash } from 'node:crypto';
 
 const now = () => new Date().toISOString();
-const open = b => !b.supersededBy && ['pending', 'paused', 'dispatching', 'uncertain', 'failed'].includes(b.state);
+const open = b => !b.supersededBy && ['pending', 'preparing', 'paused', 'dispatching', 'uncertain', 'failed'].includes(b.state);
 const message = m => { const { id, botId, text, attachmentIds, createdAt, state, batchId, turnId, dismissed, reply } = m;
   return { id, botId, text, attachmentIds, createdAt, state, batchId, turnId, ...(reply ? { reply } : {}), ...(dismissed ? { dismissed: true } : {}) }; };
 const batch = b => b && ({ id: b.id, botId: b.botId, state: b.state, messageIds: b.messageIds, dueAt: b.dueAt,
@@ -11,7 +11,26 @@ const batch = b => b && ({ id: b.id, botId: b.botId, state: b.state, messageIds:
 // A debounce of accepted human sends, not another execution engine. Only the
 // existing runtime.send + operation receipt may cross the native boundary.
 export class MessageBursts {
-  constructor(runtime) { this.runtime = runtime; this.store = runtime.store; this.leases = new Map(); this.timers = new Map(); }
+  constructor(runtime) {
+    this.runtime = runtime; this.store = runtime.store; this.leases = new Map(); this.timers = new Map();
+    // New preparation records have no native reservation until beforeDispatch.
+    // Process loss before that durable boundary is positively unsubmitted.
+    this.store.transaction(() => {
+      for (const bot of this.store.bots()) for (const b of this.batches(bot.id))
+        if (b.state === 'preparing' && !this.store.operation(b.id)) {
+          const plan = this.store.get('planExecution', b.id);
+          if (plan?.dispatchFence || plan?.turnId) continue; // Contradictory native evidence stays contained.
+          if (plan?.state === 'dispatching') this.store.put('planExecution', { ...plan, state: 'finished', preparationOutcome: 'not-submitted', finishedAt: now() });
+          this.store.put('messageBurst', { ...b, state: 'paused', dueAt: null, revision: (b.revision ?? 0) + 1 });
+          this.hold(bot.id, true);
+        }
+    });
+  }
+  hold(botId, paused) {
+    if (paused) for (const [key, lease] of this.leases) if (lease.botId === botId) this.leases.delete(key);
+    const old = this.store.get('burstControl', botId);
+    return this.store.put('burstControl', { id: botId, botId, paused, revision: (old?.revision ?? 0) + 1 });
+  }
   batches(botId, history = false) {
     return this.store.db.prepare(`SELECT json FROM records WHERE kind='messageBurst' AND bot_id=? AND
       (json_extract(json,'$.state') NOT IN ('sent','discarded') OR (? AND json_extract(json,'$.state')='sent' AND rowid IN (SELECT rowid FROM records WHERE kind='messageBurst' AND bot_id=? ORDER BY rowid DESC LIMIT 50)))
@@ -34,7 +53,7 @@ export class MessageBursts {
     const visibleMessages = [...messages.filter(m => m.state !== 'sent'), ...recent];
     const attachmentIds = new Set(visibleMessages.flatMap(message => message.attachmentIds));
     const attachments = [...attachmentIds].flatMap(id => { const file = this.store.get('attachment', id); return file?.botId === bot.id && file.ready ? [file] : []; });
-    return { attachments, messages: [...messages.filter(m => m.state !== 'sent'), ...recent].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.sequence - b.sequence).map(message),
+    return { paused: this.store.get('burstControl', bot.id)?.paused === true, attachments, messages: [...messages.filter(m => m.state !== 'sent'), ...recent].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.sequence - b.sequence).map(message),
       burst: batch(active[0] ?? batches.at(-1) ?? null), batches: [...active, ...batches.filter(b => b.state === 'sent').slice(-50)].map(batch) };
   }
   publish(botId) { this.runtime.emitEvent('burst', this.read(this.store.bot(botId)), botId); this.store.afterCommit(() => this.arm(botId)); }
@@ -72,25 +91,48 @@ export class MessageBursts {
       const allFiles = [...members.flatMap(m => m.attachmentIds), ...attachments];
       if (current && ((reply || members.some(m => m.reply)) && members.length >= 12 || [...members.map(m => m.input), input].reduce((n, value) => n + Buffer.byteLength(JSON.stringify(value)), 0) > 190000 || allFiles.length > 12 || images(allFiles) > 6 || members.reduce((n, m) => n + m.text.length, 0) + String(p.text ?? '').length > 190000)) current = null;
       if (!current) current = { id: `burst:${randomUUID()}`, botId: bot.id, threadId: bot.threadId, messageIds: [], createdAt: now(), sequence: Number(this.store.db.prepare("SELECT COALESCE(MAX(json_extract(json,'$.sequence')),0)+1 n FROM records WHERE kind='messageBurst' AND bot_id=?").get(bot.id).n) };
-      // Explicit Send resumes retained pending batches; Queue/work.resume do not.
-      for (const old of this.batches(bot.id)) if (old.state === 'paused') this.store.put('messageBurst', { ...old, state: 'pending', dueAt: new Date(Date.now() + (bot.burstQuietSeconds ?? 3) * 1000).toISOString() });
+      const held = this.store.get('burstControl', bot.id)?.paused === true || this.batches(bot.id).some(b => b.state === 'paused');
       const m = this.store.put('burstMessage', { id, botId: bot.id, text: String(p.text ?? '').trim(), input, ...(reply ? { reply } : {}),
         attachmentIds: attachments, createdAt: now(), sequence: pending.length, state: 'pending', batchId: current.id, turnId: null });
-      current = this.store.put('messageBurst', { ...current, state: 'pending', messageIds: [...current.messageIds, id],
-        lastSubmitAt: now(), dueAt: new Date(Date.now() + (bot.burstQuietSeconds ?? 3) * 1000).toISOString(), immediate: bot.burstQuietSeconds === 0 });
+      current = this.store.put('messageBurst', { ...current, state: held ? 'paused' : 'pending', revision: (current.revision ?? 0) + 1, messageIds: [...current.messageIds, id],
+        lastSubmitAt: now(), dueAt: held ? null : new Date(Date.now() + (bot.burstQuietSeconds ?? 3) * 1000).toISOString(), immediate: bot.burstQuietSeconds === 0 });
       this.publish(bot.id);
       return { message: message(m), burst: batch(current) };
     };
   }
   pause(botId) {
-    for (const b of this.batches(botId)) if (b.state === 'pending') this.store.put('messageBurst', { ...b, state: 'paused', dueAt: null });
-    this.publish(botId); return this.read(this.store.bot(botId));
+    this.hold(botId, true);
+    const heldIds = [], inFlightIds = [];
+    for (const b of this.batches(botId)) {
+      if (['pending', 'preparing', 'paused'].includes(b.state) && !this.store.operation(b.id)) {
+        this.store.put('messageBurst', { ...b, state: 'paused', dueAt: null, revision: (b.revision ?? 0) + 1 });
+        heldIds.push(...b.messageIds);
+      } else if (['dispatching', 'uncertain'].includes(b.state)) inFlightIds.push(...b.messageIds);
+    }
+    this.publish(botId); return { ...this.read(this.store.bot(botId)), heldIds, inFlightIds };
+  }
+  resume(bot) {
+    if (this.batches(bot.id).some(b => ['dispatching', 'uncertain', 'failed'].includes(b.state)))
+      throw Error('Resolve the retained delivery before resuming. Its original messages are saved.');
+    this.hold(bot.id, false);
+    const dueAt = new Date(Date.now() + (bot.burstQuietSeconds ?? 3) * 1000).toISOString();
+    for (const b of this.batches(bot.id)) if (['pending', 'paused'].includes(b.state))
+      this.store.put('messageBurst', { ...b, state: 'pending', dueAt, immediate: bot.burstQuietSeconds === 0, revision: (b.revision ?? 0) + 1 });
+    this.publish(bot.id); return this.read(bot);
   }
   discard(bot, p) {
     if (!Array.isArray(p.messageIds) || !p.messageIds.length || p.messageIds.length > 200 ||
         p.messageIds.some(id => typeof id !== 'string' || id.length > 200) || new Set(p.messageIds).size !== p.messageIds.length)
       throw new Error('Select the saved messages to discard.');
     const selected = p.messageIds.map(id => this.runtime.owned('burstMessage', id, bot.id));
+    const deletable = m => {
+      const b = m.batchId && this.store.get('messageBurst', m.batchId), op = b && this.store.operation(b.id);
+      return m.state === 'discarded' || b?.botId === bot.id &&
+        ((['pending', 'paused'].includes(b.state) && !op) || (b.state === 'failed' && op?.outcome === 'rejected'));
+    };
+    if (p.pendingOnly !== undefined && p.pendingOnly !== true) throw Error('Invalid pending-message deletion.');
+    if (p.pendingOnly && selected.some(m => !deletable(m)))
+      throw Error('This message has already begun delivery. It was not deleted.');
     const discardedIds = [], hiddenIds = [];
     for (const m of selected) {
       const b = m.batchId && this.store.get('messageBurst', m.batchId);
@@ -103,7 +145,7 @@ export class MessageBursts {
         this.store.put('burstMessage', { ...m, state: 'discarded', dismissed: true, discardedAt: now() });
         if (b) {
           const remaining = b.messageIds.filter(id => id !== m.id);
-          this.store.put('messageBurst', { ...b, messageIds: remaining, ...(!remaining.length ? { state: 'discarded', dueAt: null, discardedAt: now() } : {}) });
+          this.store.put('messageBurst', { ...b, revision: (b.revision ?? 0) + 1, messageIds: remaining, ...(!remaining.length ? { state: 'discarded', dueAt: null, discardedAt: now() } : {}) });
         }
         discardedIds.push(m.id);
       } else {
@@ -116,6 +158,7 @@ export class MessageBursts {
   }
   start(bot, retryId) {
     if (this.batches(bot.id).some(b => !b.supersededBy && ['dispatching', 'uncertain'].includes(b.state))) throw new Error('Reconcile the original send before starting another batch; no message was repeated.');
+    this.hold(bot.id, false);
     for (const old of this.batches(bot.id).filter(b => b.state === 'failed' && !b.supersededBy)) {
       const op = this.store.operation(old.id);
       if (op?.outcome !== 'rejected') throw new Error('The retained send has no definite rejection. Its original ID must reconcile.');
@@ -124,7 +167,7 @@ export class MessageBursts {
       this.store.put('messageBurst', { ...old, id: nextId, state: 'pending', error: null, dueAt: now(), immediate: true, supersedes: old.id, supersededBy: null });
       for (const id of old.messageIds) this.store.put('burstMessage', { ...this.store.get('burstMessage', id), state: 'pending', batchId: nextId });
     }
-    for (const b of this.batches(bot.id)) if (['pending', 'paused'].includes(b.state)) this.store.put('messageBurst', { ...b, state: 'pending', dueAt: now(), immediate: true });
+    for (const b of this.batches(bot.id)) if (['pending', 'paused'].includes(b.state)) this.store.put('messageBurst', { ...b, state: 'pending', dueAt: now(), immediate: true, revision: (b.revision ?? 0) + 1 });
     this.publish(bot.id); return this.read(bot);
   }
   settle(b, result) {
@@ -143,19 +186,28 @@ export class MessageBursts {
     // identical after process loss. Body/ordering freeze with this reservation.
     const fingerprint = createHash('sha256').update(JSON.stringify({ method: 'turn.send', botId: bot.id, params })).digest('hex');
     const data = { method: 'turn.send', botId: bot.id, params, createdAt: now(), burstId: b.id };
-    this.store.transaction(() => {
-      this.store.put('messageBurst', { ...b, state: 'dispatching', params, dueAt: null });
-      for (const m of messages) this.store.put('burstMessage', { ...m, state: 'dispatching' });
-      if (messages.some(m => m.reply)) this.store.put("messageReply", { id: b.id, botId: bot.id, threadId: bot.threadId, parts: messages.map(message) });
-      this.store.put('queuedAttachments', { id: b.id, botId: bot.id, attachmentIds: params.attachments, immutable: true });
-      this.store.saveOperation(b.id, fingerprint, 'dispatching', data);
-      this.publish(bot.id);
-    });
-    const attempt = { started: false, rejected: false };
+    const revision = (b.revision ?? 0) + 1;
+    this.store.put('messageBurst', { ...b, state: 'preparing', revision, dueAt: null });
+    this.publish(bot.id);
+    const attempt = { started: false, rejected: false, beforeDispatch: () => {
+      const current = this.store.get('messageBurst', b.id);
+      if (current?.state !== 'preparing' || current.revision !== revision || this.store.get('burstControl', bot.id)?.paused)
+        throw Object.assign(Error('Burst preparation was held before submission.'), { burstHeld: true });
+      this.store.transaction(() => {
+        if (this.store.bot(bot.id).managerPaused) this.runtime.saveBot(this.store.bot(bot.id), { managerPaused: false });
+        this.store.put('messageBurst', { ...this.store.get('messageBurst', b.id), state: 'dispatching', params, dueAt: null });
+        for (const m of messages) this.store.put('burstMessage', { ...m, state: 'dispatching' });
+        if (messages.some(m => m.reply)) this.store.put("messageReply", { id: b.id, botId: bot.id, threadId: bot.threadId, parts: messages.map(message) });
+        this.store.put('queuedAttachments', { id: b.id, botId: bot.id, attachmentIds: params.attachments, immutable: true });
+        this.store.saveOperation(b.id, fingerprint, 'dispatching', data);
+        this.publish(bot.id);
+      });
+    } };
     try {
       const result = await this.runtime.send(bot, params, b.id, null, attempt, false, null, messages.flatMap(m => m.input));
       this.store.transaction(() => { this.store.saveOperation(b.id, fingerprint, 'done', { ...data, result }); this.settle(b, result); });
     } catch (error) {
+      if (!attempt.started && !this.store.operation(b.id) && (error.burstHeld || this.store.get('messageBurst', b.id)?.revision !== revision || this.store.get('messageBurst', b.id)?.state !== 'preparing')) return;
       if (this.store.operation(b.id)?.status === 'done') { this.settle(b, this.store.operation(b.id).result); return; }
       const uncertain = attempt.started && !attempt.rejected;
       this.store.transaction(() => {

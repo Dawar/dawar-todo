@@ -538,7 +538,7 @@ export class BotRuntime extends EventEmitter {
   }
   snapshot() {
     return {
-      capabilities: { backgroundRunLanes: 1, scheduleDecisions: 1, singleThreadExecution: 1, peerInbox: 1, nativeGoals: 1, nativeConversation: 1, messageReplies: 1, secureInputs: 1, operatorCalls: 1, operatorInputQuestions: 1, historyCursorIndex: 1, messageBursts: 1, burstDiscard: 1, queueLists: 1, queueRelativeMoves: 1, queueSendNow: 1, teams: 1, ...(this.desktops ? { botDesktops: 1 } : {}) },
+      capabilities: { backgroundRunLanes: 1, scheduleDecisions: 1, singleThreadExecution: 1, peerInbox: 1, nativeGoals: 1, nativeConversation: 1, messageReplies: 1, secureInputs: 1, operatorCalls: 1, operatorInputQuestions: 1, historyCursorIndex: 1, messageBursts: 1, burstDiscard: 1, burstControls: 1, queueLists: 1, queueRelativeMoves: 1, queueSendNow: 1, teams: 1, ...(this.desktops ? { botDesktops: 1 } : {}) },
 
       teams: publicTeams(this),
       workByBot: this.store.bots().map(bot => this.primary.work(bot)),
@@ -606,6 +606,19 @@ export class BotRuntime extends EventEmitter {
     const fingerprint = createHash("sha256")
       .update(JSON.stringify({ method, botId, params }))
       .digest("hex");
+    // Pause is a synchronous local fence, independent of the long execution
+    // lock. It cannot cancel a native reservation, but can stop preparation.
+    if (["bursts.stop", "bursts.resume", "bursts.start"].includes(method) || method === "bursts.discard" && params.pendingOnly === true) {
+      const existing = this.store.operation(operationId);
+      if (existing) {
+        if (existing.fingerprint !== fingerprint) throw Error("Operation ID was reused with different input.");
+        if (existing.status === "done") return method === "bursts.discard" ? existing.result :
+          { ...existing.result, control: { operationId, method, botId } };
+        throw Object.assign(Error("The original burst action needs reconciliation."), { outcome: "uncertain" });
+      }
+      const accepted = await acceptSingleThreadOperation(this, request, fingerprint, trustedOrigin);
+      return accepted.result;
+    }
     const runRequest = method === "requests.respond" && (this.store.get("runPending", params.key) ?? this.store.get("answerExecution", `answer:${params.key}`));
     const resumeRun = ["runs.resume", "runs.decide"].includes(method) && this.owned("run", params.runId, botId);
     const laneKey = resumeRun ? resumeRun.laneId ?? `run-preparation:${resumeRun.id}` :
@@ -1461,7 +1474,7 @@ export class BotRuntime extends EventEmitter {
     this.answers.assertPrepared(bot, id, answer);
     if (bot.archived || bot.archiving) throw new Error("Restore this bot or finish its retained archive operation first.");
     if (!this.ready) throw new Error("Codex is not ready.");
-    if (bot.managerPaused && !id.startsWith("manager-notice:"))
+    if (bot.managerPaused && !attempt?.beforeDispatch && !id.startsWith("manager-notice:"))
       bot = this.saveBot(bot, { managerPaused: false });
     const input = acceptedInput ?? (staged ? p.stagedInput : await this.messageInput(bot, p));
     const text = String(p.text ?? "").trim();
@@ -1488,6 +1501,7 @@ export class BotRuntime extends EventEmitter {
         throw new Error("A scheduled run is using this conversation. Use Queue next to keep your message separate; your draft is retained.");
       const params = { threadId: bot.threadId, expectedTurnId: bot.activeTurnId,
         clientUserMessageId: id, input, additionalContext };
+      attempt?.beforeDispatch?.();
       this.answers.dispatch(bot, id, answer, "turn/steer", params);
       const result = await this.submitNative("turn/steer", params, attempt);
       try { requireSteer(result, bot.activeTurnId); }
@@ -1634,6 +1648,7 @@ export class BotRuntime extends EventEmitter {
         },
         turnTrigger: run ? "scheduled" : "user",
       };
+      boundary.beforeDispatch?.();
       activity = this.store.transaction(() => {
         const fence = beginTurnDispatch(this, bot.id, id);
         this.plans.dispatching(plan, fence);

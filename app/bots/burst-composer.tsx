@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
-import { ArrowUp, Paperclip, Pause, Trash2 } from 'lucide-react';
+import { ArrowUp, Copy, Paperclip, Pause, Play, Trash2 } from 'lucide-react';
 import { ReplyQuote, ReplyAction } from "./message-reply";
 import type { BotReplyReference } from "../../lib/bot-replies";
 import type { BotAttachment } from '../../lib/bots-types';
@@ -23,7 +23,7 @@ export function useBurstConversation({ owner, botId, online, draft, enabled, qui
     if (value && client.owner === owner) client.save(cacheKey, savedBurstState(value));
   }, [owner, cacheKey, value]);
   const discardAction = useRunAction(owner, botId, 'burst:discard');
-  const discard = (messageIds: string[]) => discardAction.perform('bursts.discard', { messageIds }).then(() => setRefresh(value => value + 1));
+  const discard = (messageIds: string[], pendingOnly = false) => discardAction.perform('bursts.discard', { messageIds, ...(pendingOnly ? { pendingOnly: true as const } : {}) }).then(() => setRefresh(value => value + 1));
   const action = useRunAction(owner, botId, 'burst:control'), sequence = useRef(0), typing = useRef({ id: crypto.randomUUID(), last: 0, value: draft, inputAt: 0, active: false });
   const [typingUntil, setTypingUntil] = useState(0);
   useEffect(() => {
@@ -46,7 +46,7 @@ export function useBurstConversation({ owner, botId, online, draft, enabled, qui
     return () => { live = false; };
   }, [owner, botId, online, refresh, enabled]);
   const batches = retainedBatches(value).filter(batch => batch.state !== 'sent');
-  const hasPending = batches.some(batch => batch.state === 'pending');
+  const hasPending = batches.some(batch => batch.state === 'pending' || batch.state === 'preparing');
   useEffect(() => {
     const state = typing.current;
     if (state.value !== draft) { state.value = draft; state.inputAt = Date.now(); }
@@ -74,10 +74,11 @@ export function useBurstConversation({ owner, botId, online, draft, enabled, qui
   // definite failure too; neither text nor a missing native echo proves failure.
   const states = [...batches.map(batch => batch.state), ...messages.map(message => message.state)];
   const uncertain = states.includes('uncertain'), dispatching = states.includes('dispatching'), failed = states.includes('failed');
-  const paused = states.includes('paused'), blocked = uncertain || dispatching;
-  const canStart = !blocked && (failed || paused || hasPending);
+  const paused = value?.paused === true || states.includes('paused'), blocked = uncertain || dispatching;
+  const canStart = !blocked && (failed || paused || batches.some(batch => batch.state === 'pending'));
+  const pauseRequested = action.intent?.method === 'bursts.stop';
   const refreshDelivery = () => setRefresh(value => value + 1);
-  return { value: enabled ? value : null, batches, messages, count, action, error, hasPending, uncertain, dispatching, failed, paused, blocked, canStart, refreshDelivery, typingUntil, discard, discardAction };
+  return { value: enabled ? value : null, batches, messages, count, action, error, hasPending, uncertain, dispatching, failed, paused, blocked, canStart, refreshDelivery, typingUntil, discard, discardAction, pauseRequested };
 }
 export type BurstConversation = ReturnType<typeof useBurstConversation>;
 
@@ -99,41 +100,57 @@ function BurstFill({ dueAt, quietSeconds, animate }: { dueAt: string | null; qui
   const style = { '--burst-progress': progress, '--burst-remaining': `${Number.isFinite(remaining) ? remaining : 0}s` } as CSSProperties;
   return <span aria-hidden="true" className={`bots-burst-fill${animate && Number.isFinite(due) ? ' is-counting' : ''}`} style={style} />;
 }
-function BurstBubble({ message, batch, botId, attachments, quietSeconds, online, typingUntil, truncated, onOpenReply, sent: delivered, replySource, onReply, threadId }: {
-  message: BurstMessage; batch: Burst | undefined; botId: string; attachments: BotAttachment[];
+function BurstBubble({ message, batch, botId, attachments, quietSeconds, online, typingUntil, truncated, onOpenReply, sent: delivered, replySource, onReply, threadId, controls }: {
+  controls?: BurstConversation; message: BurstMessage; batch: Burst | undefined; botId: string; attachments: BotAttachment[];
   quietSeconds: number; online: boolean; typingUntil: number; truncated: boolean; replySource?: HistoryEntry; threadId?: string; onReply?: (reply: BotReplyReference) => void; sent?: boolean; onOpenReply?: (reply: BotReplyReference) => Promise<boolean>;
 }) {
+  const [copyStatus, setCopyStatus] = useState('');
+  const held = batch?.state === 'paused' && !delivered;
   const sent = delivered || batch?.state === 'sent', pending = batch?.state === 'pending';
   const dueAt = pending && typingUntil > Date.parse(batch?.dueAt ?? '') ? new Date(typingUntil).toISOString() : batch?.dueAt ?? null;
   return <div className="bots-message bots-user" data-burst-message={message.id}>
     <div className={`bots-bubble${sent ? '' : ' bots-bubble-pending'}`} aria-label={sent ? undefined : 'Message waiting to send'}>
-      {!sent && <BurstFill key={`${dueAt}:${online}`} dueAt={dueAt} quietSeconds={quietSeconds} animate={pending && online} />}
+      {!sent && <BurstFill key={`${dueAt}:${online}`} dueAt={dueAt} quietSeconds={quietSeconds} animate={pending && online && !controls?.pauseRequested} />}
       <div className="bots-burst-content">{message.reply && <ReplyQuote key={message.reply.id} reply={message.reply} onOpen={onOpenReply}/>}<TextPages text={message.text} render={text => <p>{text}</p>} />
         {truncated && <small>Saved preview · reconnect for complete text</small>}
         {message.attachmentIds.map(id => { const file = attachments.find(file => file.id === id); return file?.mimeType.startsWith('image/') ? <AttachmentImage key={id} botId={botId} attachment={file} /> : <span key={id} className="bots-input-file"><Paperclip size={13} aria-hidden="true" />{file?.name ?? 'File attached'}</span>; })}
       </div>
     </div>
+    {held && controls && <div className="bots-burst-message-actions">
+      <button type="button" title={truncated ? 'Reconnect for complete message text' : 'Copy message text'} aria-label="Copy held message text" disabled={truncated} onClick={() => {
+        if (!navigator.clipboard) { setCopyStatus('Copy unavailable. Select the text to copy it.'); return; }
+        void navigator.clipboard.writeText(message.text).then(() => setCopyStatus('Copied')).catch(() => setCopyStatus('Copy failed. Select the text to copy it.'));
+      }}><Copy size={14}/><span>Copy text</span></button>
+      <button type="button" title="Delete this held message" aria-label="Delete held message" disabled={!online || client.snapshot?.capabilities?.burstControls !== 1 || !controls.discardAction.ready || controls.discardAction.busy || !!controls.discardAction.intent || controls.action.busy || !!controls.action.intent}
+        onClick={() => void controls.discard([message.id], true).catch(() => {})}><Trash2 size={14}/><span>Delete</span></button>
+      {copyStatus && <small role="status">{copyStatus}</small>}
+    </div>}
     {sent && replySource && threadId && onReply && <ReplyAction entry={replySource} botId={botId} threadId={threadId} partId={message.id} onReply={onReply}/>}
     <MessageTime seconds={Date.parse(message.createdAt) / 1000} basis="saved" user inline />
   </div>;
 }
-export function BurstBubbles({ messages, batch, ...props }: { messages: BurstMessage[]; batch?: Burst; botId: string; attachments: BotAttachment[]; quietSeconds: number; online: boolean; typingUntil: number; truncatedIds?: string[]; replySource?: HistoryEntry; threadId?: string; onReply?: (reply: BotReplyReference) => void; sent?: boolean; onOpenReply?: (reply: BotReplyReference) => Promise<boolean> }) {
+export function BurstBubbles({ messages, batch, ...props }: { messages: BurstMessage[]; batch?: Burst; botId: string; attachments: BotAttachment[]; quietSeconds: number; online: boolean; typingUntil: number; truncatedIds?: string[]; controls?: BurstConversation; replySource?: HistoryEntry; threadId?: string; onReply?: (reply: BotReplyReference) => void; sent?: boolean; onOpenReply?: (reply: BotReplyReference) => Promise<boolean> }) {
   return <>{messages.filter(message => !message.dismissed && message.state !== 'discarded').map(message => <BurstBubble key={message.id} message={message} batch={batch} {...props} truncated={props.truncatedIds?.includes(message.id) || Boolean((message as BurstMessage & { textTruncated?: boolean }).textTruncated)} />)}</>;
 }
 export function BurstControls({ burst, online, submitting = false }: { burst: BurstConversation; online: boolean; submitting?: boolean }) {
-  const { value, batches, messages, count, action, error, hasPending, uncertain, dispatching, failed, paused, canStart, refreshDelivery, discard, discardAction } = burst;
-  if (!count && !batches.length && !submitting && !action.error && !discardAction.error && !error) return null;
-  const visibleIds = messages.filter(message => !message.dismissed && message.state !== 'discarded').map(message => message.id);
-  const canDiscard = client.snapshot?.capabilities?.burstDiscard === 1;
+  const { value, batches, messages, count, action, error, hasPending, uncertain, dispatching, failed, paused, canStart, refreshDelivery, discard, discardAction, pauseRequested } = burst;
+  if (!count && !batches.length && !submitting && !paused && !action.error && !discardAction.error && !error) return null;
+  const controlsAvailable = client.snapshot?.capabilities?.burstControls === 1;
+  const heldIds = messages.filter(message => !message.dismissed && message.state !== 'discarded' && batches.some(batch => batch.state === 'paused' && batch.messageIds.includes(message.id))).map(message => message.id);
   const truncatedText = new Set(value?.preview?.truncatedTextIds ?? []);
   const previewOnly = !!value?.preview || !online, completeBatchMetadata = value?.batches !== undefined;
+  const busy = !online || action.busy || !action.ready || discardAction.busy || !!discardAction.intent;
   return <div className="bots-burst-pending">
     {previewOnly && (!completeBatchMetadata || count > messages.length || truncatedText.size > 0) && <small className="bots-burst-preview">Some saved messages are previews. Reconnect for complete messages and delivery status.</small>}
     <div className="bots-burst-line">
-      {(!online || paused) && <small>{!online ? 'Saved · waiting for connection' : 'Messages held'}</small>}
-      <div>{!action.intent && <>{canStart && <button type="button" aria-label={failed ? 'Retry and start all retained messages' : 'Send waiting messages now'} title={failed ? 'Retry and start all retained messages' : 'Send now'} disabled={!online || action.busy || !action.ready} onClick={() => void action.perform('bursts.start', {}).then(refreshDelivery).catch(() => {})}><ArrowUp size={16} />{failed && 'Retry'}</button>}{hasPending && <button type="button" aria-label="Hold all pending messages" title="Hold waiting messages" disabled={!online || action.busy || !action.ready} onClick={() => void action.perform('bursts.stop', {}).then(refreshDelivery).catch(() => {})}><Pause size={16} /></button>}</>}{visibleIds.length > 0 && <button type="button" aria-label={uncertain || dispatching ? 'Hide retained message previews' : 'Discard waiting messages'} title={canDiscard ? uncertain || dispatching ? 'Clear previews; delivery may already be in progress' : 'Discard waiting messages' : 'Discard available after service update'} disabled={!online || !canDiscard || discardAction.busy || !discardAction.ready || !!discardAction.intent} onClick={() => void discard(visibleIds).catch(() => {})}><Trash2 size={16} /></button>}</div>
+      <small role="status">{!online ? 'Saved · waiting for connection' : pauseRequested ? 'Confirming pause…' : paused ? dispatching || uncertain ? 'Paused · earlier delivery already began' : 'Paused' : uncertain ? 'Checking delivery' : dispatching ? 'Sending' : batches.some(batch => batch.state === 'preparing') ? 'Preparing to send' : ''}</small>
+      <div>{!action.intent && <>
+        {paused && controlsAvailable && !failed && <button type="button" aria-label="Resume entire burst" title="Resume countdown" disabled={busy || uncertain || dispatching} onClick={() => void action.perform('bursts.resume', {}).then(refreshDelivery).catch(() => {})}><Play size={16}/>Resume</button>}
+        {canStart && <button type="button" aria-label={failed ? 'Retry and send retained messages' : 'Send waiting messages now'} title="Send now" disabled={busy} onClick={() => void action.perform('bursts.start', {}).then(refreshDelivery).catch(() => {})}><ArrowUp size={16}/>{failed ? 'Retry' : 'Send now'}</button>}
+        {!paused && (hasPending || dispatching) && <button type="button" aria-label="Pause burst" title="Pause unsent messages" disabled={busy} onClick={() => void action.perform('bursts.stop', {}).then(refreshDelivery).catch(() => {})}><Pause size={16}/>Pause</button>}
+      </>}{heldIds.length > 0 && controlsAvailable && <button type="button" aria-label="Delete all held messages" title="Delete all held messages" disabled={busy || !discardAction.ready || !!action.intent} onClick={() => void discard(heldIds, true).catch(() => {})}><Trash2 size={16}/></button>}</div>
     </div>
-    {discardAction.error && <div className="bots-burst-recovery" role="alert">{discardAction.error}{discardAction.intent && <button disabled={!online || discardAction.busy} onClick={() => void discardAction.retry().then(refreshDelivery).catch(() => {})}>Check discard</button>}</div>}
+    {discardAction.error && <div className="bots-burst-recovery" role="alert">{discardAction.error}{discardAction.intent && <button disabled={!online || discardAction.busy} onClick={() => void discardAction.retry().then(refreshDelivery).catch(() => {})}>Check deletion</button>}</div>}
     {(error || action.error || failed) && <div className="bots-burst-recovery" role="alert">{action.error || error || 'Not delivered. Retry keeps the original messages and files.'}{action.intent ? <button disabled={!online || action.busy} onClick={() => void action.retry().then(refreshDelivery).catch(() => {})}>Check saved action</button> : <button disabled={!online} onClick={refreshDelivery}>Refresh delivery</button>}</div>}
   </div>;
 }
