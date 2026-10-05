@@ -34,6 +34,8 @@ self.addEventListener("install", (event) => {
 function discoveredAssetUrls(text, sourcePath = "/") {
   const urls = new Set();
   const sourceUrl = new URL(sourcePath, self.location.origin);
+  const hasPackagedPdfWorker = /^\/assets\/pdf-reviewer-[A-Za-z0-9_-]+\.js$/.test(sourceUrl.pathname)
+    && /["'`](?:\/assets\/|assets\/|\.\/)pdf\.worker\.min-[A-Za-z0-9_-]+\.mjs["'`]/.test(text);
   const add = (value) => {
     try {
       if (/[`${}+]/.test(value)) return;
@@ -42,6 +44,15 @@ function discoveredAssetUrls(text, sourcePath = "/") {
       // Keep caching the real bundle and its other emitted dependencies.
       if (/^\/assets\/elk-[A-Za-z0-9_-]+\.js$/.test(sourceUrl.pathname)
         && (value === "./elk-api.js" || value === "./elk-worker.min.js")) return;
+      // PDF.js retains its Node default in the browser bundle. Our reviewer
+      // explicitly sets workerSrc to the emitted, hashed worker above. Skip
+      // only that unused default when the real worker is present in this chunk;
+      // it is still discovered and must cache successfully like every asset.
+      if (hasPackagedPdfWorker && value === "./pdf.worker.mjs") return;
+      // The worker embeds this WebAssembly import-object key and its handlers;
+      // it names no separate JS file. The actual WASM uses our resource factory.
+      if (/^\/assets\/pdf\.worker\.min-[A-Za-z0-9_-]+\.mjs$/.test(sourceUrl.pathname)
+        && value === "./qcms_bg.js") return;
       const normalized = value.startsWith("assets/") ? `/${value}` : value;
       const url = new URL(normalized, sourceUrl);
       if (url.origin !== self.location.origin || url.pathname.startsWith("/api/")) return;
