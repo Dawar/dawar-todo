@@ -33,7 +33,7 @@ import { findNativeTurn } from "./native-reconcile.mjs";
 import { dispatchScheduled, reconcileScheduled, scheduledContext, recoverRunTurns } from "./scheduled-execution.mjs";
 import { projectTerminalTurn, beginTurnDispatch, acknowledgeTurnDispatch, requireDispatchReconciliation, reconcileActiveTurns, captureActivity,
   activityUnchanged, observeStartedTurn, observedActiveTurn, activityUnresolved,
-  requireCurrentActivity, observeThreadStatus, nativeWaiting } from "./turn-state.mjs";
+  requireCurrentActivity, observeThreadStatus, settledInputStatus } from "./turn-state.mjs";
 import { reconcileCurrentActivity, recoverCurrentActivities } from "./current-activity.mjs";
 import { acceptLocalQueueOperation } from "./local-queue-operation.mjs";
 import { listRunTurns, publicRunTurn, activeScheduledTurn } from "./run-turns.mjs";
@@ -1832,7 +1832,7 @@ export class BotRuntime extends EventEmitter {
     this.store.remove("pending", pending.id);
     this.emitEvent("request.resolved", { key: pending.id }, bot.id);
     const current = this.store.bot(bot.id);
-    this.saveBot(current, { status: this.store.list("pending", bot.id).length ? "waiting" : current.activeTurnId ? "running" : "idle" });
+    this.saveBot(current, { status: settledInputStatus(this, bot.id) });
     return {};
   }
   async onServerRequest(message) {
@@ -2007,7 +2007,7 @@ export class BotRuntime extends EventEmitter {
       this.emitEvent("request.resolved", { key }, bot.id);
       const current = this.store.bot(bot.id);
       if (observedActiveTurn(this, bot.id, current.activeTurnId)) this.saveBot(current, {
-        status: nativeWaiting(this, bot.id) || this.store.list("pending", bot.id).some(pending => pending.request.params.isBlocking !== false) ? "waiting" : "running",
+        status: settledInputStatus(this, bot.id, true),
       });
     }
     if (message.method === "turn/completed") {
@@ -2162,7 +2162,7 @@ export class BotRuntime extends EventEmitter {
     // Private argument from the authenticated transport, never args/params.
     // Validate only NEW acceptance after exact prior receipts have been read.
     const trustedOrigin = Object.freeze({ ...origin,
-      ...(["native-tool", "authenticated-bot-mcp"].includes(origin?.authority) ? { generation: captureActivity(this, bot.id).generation } : {}) });
+      ...(["native-tool", "authenticated-bot-mcp"].includes(origin?.authority) ? captureActivity(this, bot.id) : {}) });
     return this.handle({ method: `peers.${operation}`, botId: bot.id, params, operationId }, trustedOrigin);
   }
   async dynamicTool(bot, p, origin = null) {

@@ -7,6 +7,8 @@ import { join } from "node:path";
 import { deflateSync } from "node:zlib";
 import { Store } from "./store.mjs";
 import { BotRuntime, validateResponse } from "./runtime.mjs";
+import { nativeWaiting, requireCurrentActivity, beginTurnDispatch, captureActivity, projectCurrentActive } from "./turn-state.mjs";
+import { recoverCurrentActivities } from "./current-activity.mjs";
 import { slugify, cleanName, PROFILE_FILES } from "./profiles.mjs";
 import { readTeam } from "./teams.mjs";
 import { normalizeSchedule, collectDueRuns } from "./schedules.mjs";
@@ -1074,6 +1076,9 @@ test("native thread status fences reads, invalidates unloaded subscriptions and 
   runtime.onNotification({ method: "thread/closed", params: { threadId: bot.threadId } });
   assert.equal(runtime.loaded.has(bot.threadId), false);
   assert.equal(runtime.activityUnresolved(bot.id), true);
+  assert.equal(nativeWaiting(runtime, bot.id), false);
+  assert.equal(store.get("botActivity", bot.id).nativeStatus, null);
+  assert.equal(runtime.primary.work(store.bot(bot.id)).state, "unconfirmed");
   assert.equal(store.bot(bot.id).activeTurnId, current.id, "unload is not turn completion");
   assert.equal(codex.calls.some(call => call.method === "turn/start"), false, "no replay during unload");
 });
@@ -1132,4 +1137,202 @@ test("retained run lanes use native waiting/unload evidence without changing mai
   assert.equal(runtime.loaded.has("retained-thread"), false);
   assert.equal(store.get("runActivity", "retained-lane").unresolved, true);
   assert.equal(store.get("runLane", "retained-lane").activeTurnId, "retained-turn");
+});
+
+
+const waitingStatus = { type: "active", activeFlags: ["waitingOnUserInput"] };
+const nativeStatus = (runtime, threadId, status) => runtime.onNotification({ method: "thread/status/changed", params: { threadId, status } });
+const nativeStart = (runtime, threadId, id) => runtime.onNotification({ method: "turn/started", params: { threadId, turn: { id, status: "inProgress", items: [] } } });
+
+for (const legacy of [true, false]) test(`waiting recovery discards ${legacy ? "legacy" : "bound"} persisted flags on actual runtime restart`, async t => {
+  const { runtime, store, codex, create } = await setup(t);
+  const bot = await create();
+  nativeStart(runtime, bot.threadId, "persisted-turn");
+  nativeStatus(runtime, bot.threadId, waitingStatus);
+  assert.equal(nativeWaiting(runtime, bot.id), true);
+  if (legacy) {
+    const saved = store.get("botActivity", bot.id);
+    delete saved.threadId; delete saved.nativeStatusThreadId; delete saved.nativeStatusTurnId;
+    store.put("botActivity", saved);
+  }
+  store.put("pending", { id: "restart-blocking", botId: bot.id, request: { params: { threadId: bot.threadId, turnId: "persisted-turn" } } });
+  store.put("pending", { id: "restart-async", botId: bot.id, async: true, request: { params: { threadId: bot.threadId, turnId: "prior-turn", isBlocking: false } } });
+  const call = codex.call.bind(codex);
+  codex.call = (method, params) => method === "thread/resume" ? Promise.resolve({ thread: codex.threads.find(t => t.id === params.threadId) }) : call(method, params);
+  const restart = new BotRuntime({ store, codex, root: runtime.root });
+  await restart.start(); // Fake native current status is unavailable; recovery stays unresolved.
+  assert.equal(restart.activityUnresolved(bot.id), true);
+  assert.equal(nativeWaiting(restart, bot.id), false);
+  assert.equal(store.get("botActivity", bot.id).nativeStatus, null);
+  assert.equal(store.get("pending", "restart-blocking"), null, "expired process request is retired");
+  assert.equal(store.get("pending", "restart-async").async, true);
+  assert.equal(restart.primary.work(store.bot(bot.id)).state, "needs-input", "exact retained async question survives startup");
+  store.remove("pending", "restart-async");
+  assert.equal(restart.primary.work(store.bot(bot.id)).state, "unconfirmed");
+  codex.threads[0].status = { type: "idle" };
+  assert.equal(await restart.reconcileCurrentActivity(bot.id), true);
+  assert.equal(store.bot(bot.id).activeTurnId, null);
+  assert.equal(restart.primary.work(store.bot(bot.id)).state, "ready");
+  assert.equal(codex.calls.filter(c => c.method === "turn/start").length, 0);
+});
+
+test("waiting recovery contains status-only unknown turn until a current native read identifies it", async t => {
+  const { runtime, store, codex, create } = await setup(t);
+  const bot = await create();
+  runtime.loaded.add(bot.threadId);
+  nativeStatus(runtime, bot.threadId, waitingStatus);
+  assert.equal(nativeWaiting(runtime, bot.id), false);
+  assert.equal(store.get("botActivity", bot.id).nativeStatus, null);
+  assert.equal(store.bot(bot.id).activeTurnId, null);
+  assert.equal(store.bot(bot.id).status, "interrupted");
+  assert.equal(runtime.primary.work(store.bot(bot.id)).state, "unconfirmed");
+  codex.threads[0].status = waitingStatus;
+  assert.equal(await runtime.reconcileCurrentActivity(bot.id), false);
+  codex.threads[0].turns.push({ id: "identified-turn", status: "inProgress", items: [] });
+  assert.equal(await runtime.reconcileCurrentActivity(bot.id), true);
+  assert.equal(nativeWaiting(runtime, bot.id), true);
+  assert.equal(store.get("botActivity", bot.id).nativeStatusTurnId, "identified-turn");
+  assert.equal(runtime.primary.work(store.bot(bot.id)).state, "needs-input");
+  nativeStatus(runtime, bot.threadId, { type: "active", activeFlags: [] });
+  assert.equal(store.bot(bot.id).status, "running");
+  assert.equal(runtime.primary.work(store.bot(bot.id)).state, "working");
+});
+
+test("waiting recovery binds observations to current thread and clears old flags on new turns and dispatch", async t => {
+  const { runtime, store, create } = await setup(t);
+  const bot = await create();
+  nativeStart(runtime, bot.threadId, "old-turn");
+  nativeStatus(runtime, bot.threadId, waitingStatus);
+  nativeStart(runtime, bot.threadId, "new-turn");
+  assert.equal(nativeWaiting(runtime, bot.id), false);
+  assert.equal(store.bot(bot.id).status, "running");
+  nativeStatus(runtime, bot.threadId, waitingStatus);
+  runtime.onNotification({ method: "turn/completed", params: { threadId: bot.threadId, turn: { id: "old-turn", status: "completed", items: [] } } });
+  assert.equal(nativeWaiting(runtime, bot.id), true, "old terminal evidence cannot clear newer waiting");
+  assert.equal(store.bot(bot.id).activeTurnId, "new-turn");
+  const previousThreadRead = captureActivity(runtime, bot.id);
+  const replacement = runtime.saveBot(store.bot(bot.id), { threadId: "replacement-thread" });
+  assert.equal(nativeWaiting(runtime, bot.id), false, "observation belongs to original thread");
+  assert.equal(runtime.primary.work(store.bot(bot.id)).state, "unconfirmed");
+  assert.equal(projectCurrentActive(runtime, bot.id, { id: "new-turn", status: "inProgress", items: [] }, previousThreadRead, waitingStatus), false,
+    "a current read captured on the previous thread cannot bind waiting to its replacement");
+  nativeStatus(runtime, replacement.threadId, waitingStatus);
+  assert.equal(runtime.activityUnresolved(bot.id), true, "old turn proof cannot bind status on replacement thread");
+  assert.equal(nativeWaiting(runtime, bot.id), false);
+  nativeStart(runtime, replacement.threadId, "replacement-turn");
+  nativeStatus(runtime, replacement.threadId, waitingStatus);
+  assert.equal(nativeWaiting(runtime, bot.id), true);
+  beginTurnDispatch(runtime, bot.id, "new-dispatch");
+  assert.equal(nativeWaiting(runtime, bot.id), false);
+  assert.equal(store.get("botActivity", bot.id).nativeStatus, null);
+});
+
+test("waiting recovery keeps exact async and blocking questions separate from unresolved flags and answer settlement", async t => {
+  const { runtime, store, codex, create } = await setup(t);
+  const bot = await create();
+  nativeStart(runtime, bot.threadId, "current-turn");
+  nativeStatus(runtime, bot.threadId, waitingStatus);
+  requireCurrentActivity(runtime, bot.id, null, "fresh-recovery");
+  const key = `${runtime.epoch}:998`;
+  store.put("pending", { id: key, botId: bot.id, epoch: runtime.epoch, request: { id: 998, params: { threadId: bot.threadId, turnId: "current-turn" } } });
+  assert.equal(nativeWaiting(runtime, bot.id), false);
+  assert.equal(runtime.primary.work(store.bot(bot.id)).state, "needs-input", "actual pending blocking request is still visible");
+  runtime.onNotification({ method: "serverRequest/resolved", params: { threadId: bot.threadId, requestId: 998 } });
+  assert.equal(runtime.primary.work(store.bot(bot.id)).state, "unconfirmed");
+  const asyncKey = "async:old-question";
+  store.put("pending", { id: asyncKey, botId: bot.id, async: true, request: { params: { threadId: bot.threadId, turnId: "prior-turn", isBlocking: false } } });
+  store.put("pending", { id: "foreign-question", botId: bot.id, async: true, request: { params: { threadId: "other-thread", turnId: "other-turn", isBlocking: false } } });
+  assert.equal(runtime.primary.work(store.bot(bot.id)).state, "needs-input", "retained async question outlives its turn");
+  runtime.answers.finish({ id: asyncKey, key: asyncKey, botId: bot.id, state: "accepted" });
+  assert.equal(store.bot(bot.id).status, "interrupted", "answer settlement cannot invent confirmed running from retained turn ID");
+  assert.equal(runtime.primary.work(store.bot(bot.id)).state, "unconfirmed", "foreign-thread question cannot count as current input");
+  codex.threads[0].status = { type: "idle" };
+  assert.equal(await runtime.reconcileCurrentActivity(bot.id), true);
+  assert.equal(store.bot(bot.id).status, "idle");
+  assert.equal(runtime.primary.work(store.bot(bot.id)).state, "ready");
+});
+
+test("waiting recovery shares validity and exact question rules with retained lanes without main-thread leakage", async t => {
+  const { runtime, store, create } = await setup(t);
+  const bot = await create();
+  nativeStart(runtime, bot.threadId, "main-turn");
+  nativeStatus(runtime, bot.threadId, waitingStatus);
+  store.put("run", { id: "waiting-run", botId: bot.id, title: "Retained", status: "running", laneId: "waiting-lane", executionLane: "run-v1" });
+  store.put("runLane", { id: "waiting-lane", botId: bot.id, runId: "waiting-run", threadId: "waiting-thread", provisioning: "bound", status: "idle", paused: false });
+  const port = runtime.runs.port("waiting-lane"), lane = () => store.get("runLane", "waiting-lane");
+  nativeStatus(runtime, "waiting-thread", waitingStatus);
+  assert.equal(runtime.runs.publicRun(lane()).activity.state, "uncertain");
+  assert.equal(runtime.runs.counts(bot.id).needsInput, 0);
+  nativeStart(runtime, "waiting-thread", "lane-turn");
+  nativeStatus(runtime, "waiting-thread", waitingStatus);
+  assert.equal(nativeWaiting(port, bot.id), true);
+  const blocking = `${runtime.epoch}:999`;
+  port.store.put("pending", { id: blocking, botId: bot.id, request: { params: { threadId: "waiting-thread", turnId: "lane-turn" } } });
+  nativeStatus(runtime, "waiting-thread", { type: "active", activeFlags: [] });
+  assert.equal(lane().status, "waiting", "current blocking question keeps lane waiting");
+  runtime.onNotification({ method: "serverRequest/resolved", params: { threadId: "waiting-thread", requestId: 999 } });
+  assert.equal(lane().status, "running");
+  assert.equal(runtime.runs.counts(bot.id).needsInput, 0);
+  nativeStatus(runtime, "waiting-thread", waitingStatus);
+  port.initialize(); // Startup invalidates persisted observation, keeps exact identity for recovery.
+  assert.equal(nativeWaiting(port, bot.id), false);
+  assert.equal(runtime.runs.counts(bot.id).needsInput, 0);
+  const question = "async:lane-question";
+  port.store.put("pending", { id: question, botId: bot.id, async: true, request: { params: { threadId: "waiting-thread", turnId: "old-lane-turn", isBlocking: false } } });
+  assert.equal(runtime.runs.publicRun(lane()).activity.state, "waiting-input");
+  assert.equal(runtime.runs.publicRun(lane()).activity.unresolved, true);
+  assert.equal(runtime.runs.counts(bot.id).needsInput, 1);
+  port.answers.finish({ id: question, key: question, botId: bot.id, state: "accepted" });
+  assert.equal(lane().status, "interrupted");
+  assert.equal(runtime.runs.publicRun(lane()).activity.state, "uncertain");
+  assert.equal(runtime.runs.counts(bot.id).needsInput, 0);
+  nativeStart(runtime, "waiting-thread", "new-lane-turn");
+  nativeStatus(runtime, "waiting-thread", waitingStatus);
+  nativeStatus(runtime, "waiting-thread", { type: "systemError" });
+  assert.equal(nativeWaiting(port, bot.id), false);
+  assert.equal(runtime.runs.counts(bot.id).needsInput, 0);
+  assert.equal(nativeWaiting(runtime, bot.id), true);
+  assert.equal(store.bot(bot.id).activeTurnId, "main-turn");
+  assert.equal(runtime.primary.work(store.bot(bot.id)).state, "needs-input");
+});
+
+
+test("waiting recovery fences peer admission by thread without inventing native MCP provenance", async t => {
+  const { runtime, store, create } = await setup(t);
+  const bot = await create();
+  nativeStart(runtime, bot.threadId, "peer-current");
+  const accepted = [];
+  runtime.handle = async (_message, origin) => {
+    runtime.peers.assertOrigin(store.bot(bot.id), origin);
+    accepted.push(origin);
+  };
+  await runtime.peerTool(store.bot(bot.id), { operation: "directory" },
+    { authority: "authenticated-bot-mcp", botId: bot.id, threadId: null, turnId: null, callId: null });
+  await runtime.peerTool(store.bot(bot.id), { operation: "directory" },
+    { authority: "native-tool", botId: bot.id, threadId: bot.threadId, turnId: "peer-current", callId: "native-call" });
+  assert.equal(accepted[0].threadId, null);
+  assert.equal(accepted[0].turnId, null);
+  assert.equal(accepted[0].activityThreadId, bot.threadId);
+  runtime.saveBot(store.bot(bot.id), { threadId: "peer-replacement" });
+  for (const origin of accepted) assert.throws(() => runtime.peers.assertOrigin(store.bot(bot.id), origin), /changed|no longer confirmed/);
+});
+
+
+test("waiting recovery automatically reconciles thread replacement even without a status notification", async t => {
+  const { runtime, store, codex, create } = await setup(t);
+  const bot = await create();
+  nativeStart(runtime, bot.threadId, "previous-thread-turn");
+  nativeStatus(runtime, bot.threadId, waitingStatus);
+  runtime.saveBot(store.bot(bot.id), { threadId: "idle-replacement" });
+  runtime.loaded.add("idle-replacement");
+  codex.threads.push({ id: "idle-replacement", status: { type: "idle" }, turns: [] });
+  assert.equal(store.get("botActivity", bot.id).unresolved, false, "retained proof predates replacement");
+  assert.equal(runtime.activityUnresolved(bot.id), true);
+  await recoverCurrentActivities(runtime);
+  assert.equal(runtime.activityUnresolved(bot.id), false);
+  assert.equal(store.get("botActivity", bot.id).threadId, "idle-replacement");
+  assert.equal(store.get("botActivity", bot.id).nativeStatus, null);
+  assert.equal(store.bot(bot.id).activeTurnId, null);
+  assert.equal(runtime.primary.work(store.bot(bot.id)).state, "ready");
+  assert.equal(codex.calls.filter(c => c.method === "turn/start").length, 0);
 });

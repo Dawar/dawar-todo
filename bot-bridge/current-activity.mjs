@@ -86,7 +86,7 @@ export async function reconcileCurrentActivity(runtime, botId) {
 
 export async function recoverCurrentActivities(runtime, limit = 2, startup = false) {
   let checked = 0;
-  const due = runtime.store.list("botActivity").filter(state => state.unresolved)
+  const due = runtime.store.list("botActivity").filter(state => activityUnresolved(runtime, state.botId))
     .sort((a, b) => (a.reconcileAfter ?? "").localeCompare(b.reconcileAfter ?? "") || a.id.localeCompare(b.id));
   for (const state of due) {
     if (checked >= limit) break;

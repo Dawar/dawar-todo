@@ -11,13 +11,13 @@ const now = () => new Date().toISOString();
 export function captureActivity(runtime, botId) {
   let activity = runtime.store.get("botActivity", botId);
   if (!activity) activity = runtime.store.put("botActivity", {
-    id: botId, botId, generation: 0, activeTurnId: runtime.store.bot(botId).activeTurnId ?? null,
+    id: botId, botId, threadId: runtime.store.bot(botId).threadId, generation: 0, activeTurnId: runtime.store.bot(botId).activeTurnId ?? null,
   });
-  return { botId, generation: activity.generation };
+  return { botId, generation: activity.generation, activityThreadId: runtime.store.bot(botId).threadId };
 }
 
 export function activityUnchanged(runtime, botId, token) {
-  return token?.botId === botId && Number.isSafeInteger(token.generation) &&
+  return token?.botId === botId && token.activityThreadId === runtime.store.bot(botId).threadId && Number.isSafeInteger(token.generation) &&
     runtime.store.get("botActivity", botId)?.generation === token.generation;
 }
 
@@ -25,16 +25,41 @@ function advanceActivity(runtime, botId, activeTurnId, changes = {}) {
   const token = captureActivity(runtime, botId);
   if (!Number.isSafeInteger(token.generation + 1)) throw new Error("Observed activity generation exhausted.");
   runtime.store.put("botActivity", { ...runtime.store.get("botActivity", botId), ...changes,
-    id: botId, botId, generation: token.generation + 1, activeTurnId });
+    id: botId, botId, threadId: runtime.store.bot(botId).threadId, generation: token.generation + 1, activeTurnId });
 }
 
-export const activityUnresolved = (runtime, botId) => runtime.store.get("botActivity", botId)?.unresolved === true;
-
-export const nativeWaiting = (runtime, botId) => {
-  const status = runtime.store.get("botActivity", botId)?.nativeStatus;
-  return status?.type === "active" && status.activeFlags?.some(flag =>
-    flag === "waitingOnApproval" || flag === "waitingOnUserInput");
+export const activityUnresolved = (runtime, botId) => {
+  const activity = runtime.store.get("botActivity", botId);
+  return activity?.unresolved === true || Boolean(activity && activity.threadId !== runtime.store.bot(botId).threadId);
 };
+
+const waitingFlags = status => status?.type === "active" && status.activeFlags?.some(flag =>
+  flag === "waitingOnApproval" || flag === "waitingOnUserInput");
+const noWaitingObservation = { nativeStatus: null, nativeStatusThreadId: null, nativeStatusTurnId: null };
+
+// Persisted status is an observation, not a question or current-execution proof.
+export const nativeWaiting = (runtime, botId) => {
+  const bot = runtime.store.bot(botId), activity = runtime.store.get("botActivity", botId);
+  return Boolean(observedActiveTurn(runtime, botId, bot.activeTurnId) &&
+    activity.threadId === bot.threadId && activity.nativeStatusThreadId === bot.threadId && activity.nativeStatusTurnId === bot.activeTurnId &&
+    waitingFlags(activity.nativeStatus));
+};
+
+// Exact pending questions remain visible independently of a current-turn proof:
+// nonblocking questions can intentionally outlive the turn which asked them.
+export const pendingQuestions = (runtime, botId) => {
+  const threadId = runtime.store.bot(botId).threadId;
+  return runtime.store.list("pending", botId).filter(p => p.request?.params?.threadId === threadId &&
+    usableTurnId(p.request?.params?.turnId));
+};
+const blockingQuestion = (runtime, botId) => pendingQuestions(runtime, botId).some(p => p.request.params.isBlocking !== false);
+
+export function settledInputStatus(runtime, botId, blockingOnly = false) {
+  const bot = runtime.store.bot(botId);
+  if (nativeWaiting(runtime, botId) || (blockingOnly ? blockingQuestion(runtime, botId) : pendingQuestions(runtime, botId).length)) return "waiting";
+  if (activityUnresolved(runtime, botId)) return bot.status === "error" ? "error" : "interrupted";
+  return observedActiveTurn(runtime, botId, bot.activeTurnId) ? "running" : bot.queuePaused ? "interrupted" : "idle";
+}
 
 // Status notifications carry current thread authority but no turn identity.
 // Fence outstanding reads/ACKs, then recover identity without inventing a
@@ -44,14 +69,16 @@ export function observeThreadStatus(runtime, botId, status) {
   if (!status || !["idle", "active", "notLoaded", "systemError"].includes(status.type)) return false;
   return runtime.store.transaction(() => {
     const bot = runtime.store.bot(botId);
-    const known = observedActiveTurn(runtime, botId, bot.activeTurnId);
+    const known = runtime.store.get("botActivity", botId)?.threadId === bot.threadId &&
+      observedActiveTurn(runtime, botId, bot.activeTurnId);
     const unresolved = status.type !== "active" || !known;
-    advanceActivity(runtime, botId, bot.activeTurnId, { nativeStatus: status,
+    advanceActivity(runtime, botId, bot.activeTurnId, { ...(known && status.type === "active" ?
+      { nativeStatus: status, nativeStatusThreadId: bot.threadId, nativeStatusTurnId: bot.activeTurnId } : noWaitingObservation),
       ...(unresolved ? { unresolved: true, reason: `native-thread-${status.type}`,
         reconcileAfter: null, reconciliationError: null, attempts: 0 } : {}) });
     if (status.type === "notLoaded") runtime.loaded.delete(bot.threadId);
     runtime.saveBot(bot, { status: status.type === "systemError" ? "error" :
-      status.type === "active" ? nativeWaiting(runtime, botId) || runtime.store.list("pending", botId).some(p => p.request.params.isBlocking !== false) ? "waiting" : "running" : bot.status });
+      settledInputStatus(runtime, botId, true) });
     return true;
   });
 }
@@ -59,8 +86,8 @@ export function observeThreadStatus(runtime, botId, status) {
 export function requireCurrentActivity(runtime, botId, turnId = null, reason = "current-state-required") {
   captureActivity(runtime, botId);
   const current = runtime.store.get("botActivity", botId);
-  if (current.unresolved && (!turnId || current.unresolvedTurnId === turnId)) return;
-  advanceActivity(runtime, botId, current.activeTurnId, { unresolved: true,
+  if (current.unresolved && !current.nativeStatus && (!turnId || current.unresolvedTurnId === turnId)) return;
+  advanceActivity(runtime, botId, current.activeTurnId, { ...noWaitingObservation, unresolved: true,
     unresolvedTurnId: turnId ?? current.unresolvedTurnId ?? null, reason,
     reconcileAfter: null, reconciliationError: null, attempts: 0 });
 }
@@ -72,11 +99,11 @@ export function beginTurnDispatch(runtime, botId, operationId) {
   return runtime.store.transaction(() => {
     const generation = captureActivity(runtime, botId).generation + 1;
     advanceActivity(runtime, botId, runtime.store.get("botActivity", botId).activeTurnId, {
-      unresolved: true, unresolvedTurnId: null, reason: "native-start-in-flight",
+      ...noWaitingObservation, unresolved: true, unresolvedTurnId: null, reason: "native-start-in-flight",
       dispatchOperationId: operationId, dispatchGeneration: generation,
       reconcileAfter: null, reconciliationError: null, attempts: 0,
     });
-    return { botId, generation, operationId, authority: "submission" };
+    return { botId, generation, activityThreadId: runtime.store.bot(botId).threadId, operationId, authority: "submission" };
   });
 }
 
@@ -102,14 +129,20 @@ export function observedActiveTurn(runtime, botId, turnId) {
     !terminalTurn(runtime.store.get("planTurnEvidence", turnId)));
 }
 
-function saveActive(runtime, botId, turn, changes) {
+function saveActive(runtime, botId, turn, changes, nativeStatus) {
   const bot = runtime.store.bot(botId);
-  advanceActivity(runtime, botId, turn.id, { unresolved: false, unresolvedTurnId: null,
+  const activity = runtime.store.get("botActivity", botId);
+  const observation = nativeStatus ?? (activity?.threadId === bot.threadId && activity.nativeStatusThreadId === bot.threadId &&
+    activity.nativeStatusTurnId === turn.id ? activity.nativeStatus : null);
+  advanceActivity(runtime, botId, turn.id, { nativeStatus: observation,
+    nativeStatusThreadId: observation ? bot.threadId : null, nativeStatusTurnId: observation ? turn.id : null,
+    unresolved: false, unresolvedTurnId: null,
     reason: null, reconcileAfter: null, reconciliationError: null, attempts: 0 });
   const active = runtime.store.get("activeRun", botId);
   if (active?.turnId && active.turnId !== turn.id) runtime.store.remove("activeRun", botId);
   runtime.saveBot(bot, { ...changes, activeTurnId: turn.id,
-    status: nativeWaiting(runtime, botId) || runtime.store.list("pending", botId).some(pending => pending.request.params.isBlocking !== false) ? "waiting" : "running" });
+    // This native start/current read establishes turn identity in the same transaction.
+    status: waitingFlags(observation) || blockingQuestion(runtime, botId) ? "waiting" : "running" });
 }
 
 // Direct native start observations, unlike awaited snapshots, establish the
@@ -134,7 +167,7 @@ export function projectTerminalTurn(runtime, botId, turn, completeEvidence = fal
     // activity, and must not starve the current-state reconciliation reader.
     if (previous?.status !== turn.status || activity.activeTurnId === turn.id || runtime.store.bot(botId).activeTurnId === turn.id)
       advanceActivity(runtime, botId, activity.activeTurnId === turn.id ? null : activity.activeTurnId,
-        activity.activeTurnId === turn.id ? { nativeStatus: null } : {});
+        activity.activeTurnId === turn.id ? noWaitingObservation : {});
     runtime.plans.note(botId, { method: "turn/completed", params: { turn } }, completeEvidence);
     for (const pending of runtime.store.list("pending", botId)) {
       if (!pending.async && pending.request.params.turnId === turn.id) {
@@ -147,7 +180,7 @@ export function projectTerminalTurn(runtime, botId, turn, completeEvidence = fal
     if (matches) runtime.saveBot(bot, {
       activeTurnId: null,
       status: turn.status === "interrupted" ? "interrupted" : turn.status === "failed" ? "error" :
-        runtime.store.list("pending", botId).length ? "waiting" : bot.queuePaused ? "interrupted" : "idle",
+        pendingQuestions(runtime, botId).length ? "waiting" : bot.queuePaused ? "interrupted" : "idle",
       ...(turn.status === "interrupted" ? { queuePaused: true } : {}),
       error: turn.error?.message ?? null, updatedAt: now(),
     });
@@ -190,8 +223,7 @@ export function projectCurrentActive(runtime, botId, turn, token, nativeStatus) 
   return runtime.store.transaction(() => {
     if (!activityUnchanged(runtime, botId, token) || !usableTurn(turn) || turn.status !== "inProgress" ||
         terminalTurn(runtime.store.get("planTurnEvidence", turn.id))) return false;
-    if (nativeStatus) runtime.store.put("botActivity", { ...runtime.store.get("botActivity", botId), nativeStatus });
-    saveActive(runtime, botId, turn, {});
+    saveActive(runtime, botId, turn, {}, nativeStatus);
     return true;
   });
 }
@@ -210,10 +242,10 @@ export function projectCurrentIdle(runtime, botId, token, latest = null) {
         runtime.saveBot(runtime.store.bot(botId), { queuePaused: true });
     }
     advanceActivity(runtime, botId, null, { unresolved: false, unresolvedTurnId: null,
-      nativeStatus: { type: "idle" }, reason: null, reconcileAfter: null, reconciliationError: null, attempts: 0 });
+      ...noWaitingObservation, reason: null, reconcileAfter: null, reconciliationError: null, attempts: 0 });
     runtime.store.remove("activeRun", botId);
     const current = runtime.store.bot(botId);
-    runtime.saveBot(current, { activeTurnId: null, status: runtime.store.list("pending", botId).length ? "waiting" :
+    runtime.saveBot(current, { activeTurnId: null, status: pendingQuestions(runtime, botId).length ? "waiting" :
       current.queuePaused ? "interrupted" : "idle" });
     return true;
   });

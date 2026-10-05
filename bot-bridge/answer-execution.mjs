@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { findNativeTurn } from "./native-reconcile.mjs";
 import { requireTurn, usableTurnId } from "./native-turn.mjs";
-import { nativeWaiting } from "./turn-state.mjs";
+import { settledInputStatus } from "./turn-state.mjs";
 
 const now = () => new Date().toISOString();
 const nextCheck = () => new Date(Date.now() + 60000).toISOString();
@@ -120,8 +120,7 @@ export class AnswerExecutions {
         this.store.remove("pending", record.key);
         this.runtime.emitEvent("request.resolved", { key: record.key }, record.botId);
         const bot = this.store.bot(record.botId);
-        this.runtime.saveBot(bot, { status: nativeWaiting(this.runtime, bot.id) || this.store.list("pending", bot.id).length ? "waiting" :
-          bot.activeTurnId ? "running" : bot.queuePaused ? "interrupted" : "idle" });
+        this.runtime.saveBot(bot, { status: settledInputStatus(this.runtime, bot.id) });
       }
       this.store.put("answerExecution", { ...record, settledAt: now() });
     });
