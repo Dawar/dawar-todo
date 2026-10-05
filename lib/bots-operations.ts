@@ -120,6 +120,7 @@ export type BotOperations = {
     result: { queuedSubmission: QueuedSubmission };
   };
   "queue.delete": { params: { id: string; expectedRevision?: number }; result: { deleted: boolean } };
+  "queue.send": { params: { id: string; expectedRevision: number }; result: TurnStartResponse | TurnSteerResponse };
   "queue.reorder": { params: { ids: string[]; listId?: string | null }; result: Record<string, never> };
   "queue.resume": { params: Record<string, never>; result: Record<string, never> };
   "thread.compact": {

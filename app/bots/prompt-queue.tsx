@@ -1,9 +1,10 @@
 "use client";
 import { useEffect, useRef, useState } from 'react';
-import { ArrowDown, ArrowUp, Combine, FolderInput, FolderOpen, GripVertical, Pencil, RefreshCw, Trash2 } from 'lucide-react';
+import { ArrowDown, ArrowUp, Combine, FolderInput, FolderOpen, GripVertical, Pencil, RefreshCw, Send, Trash2 } from 'lucide-react';
 import type { Bot, BotQueueList, BotQueuedSubmission } from '../../lib/bots-types';
 import { canMoveQueued, queueEditable, queueResumeBlocked, queueStatus } from './queue-state';
 import { useQueueAction } from './use-queue-action';
+import { botsClient as client } from './client';
 import { UploadThumbnail } from './upload-thumbnail';
 import './prompt-queue.css';
 const textOf = (item:BotQueuedSubmission)=>item.input.flatMap(input=>input.type==='text'&&!input.text.startsWith('Attached file: ')?[input.text]:[]).join('\n')||'Attachments';
@@ -92,6 +93,7 @@ export function PromptQueue({ owner, bot, items, online, canEdit, onEdit, refres
           {item.error&&<p className="bots-queue-item-error">{item.error}</p>}
           {item.attachments.length>0&&<div className="bots-queue-attachments">{item.attachments.map(file=><span key={file.id} title={file.name}>{file.mimeType.startsWith('image/')&&<UploadThumbnail botId={bot.id} attachmentId={file.id} online={online}/>}<span>{file.name}</span></span>)}</div>}
           <div className="bots-queue-actions">
+            <button type="button" title={client.snapshot?.capabilities?.queueSendNow!==1?'Available after the bot service update':!queueEditable(item)||item.revision===undefined?'Delivery is already in progress; refresh to check it':'Send this message now; adds to the current turn if the bot is working'} disabled={!online||!mutable||bot.archived||client.snapshot?.capabilities?.queueSendNow!==1||item.revision===undefined} onClick={()=>void action.run('queue.send',{id:item.id,expectedRevision:item.revision})}><Send size={15}/>Send now</button>
             <button type="button" disabled={!online||!canEdit||!mutable} onClick={()=>onEdit(item)}><Pencil size={15}/>Edit</button>
             <button type="button" aria-label={`Move message ${index+1} up`} title="Move up" disabled={!online||locked||!canMoveQueued(items,index,-1)} onClick={()=>move(index,-1)}><ArrowUp size={16}/></button>
             <button type="button" aria-label={`Move message ${index+1} down`} title="Move down" disabled={!online||locked||!canMoveQueued(items,index,1)} onClick={()=>move(index,1)}><ArrowDown size={16}/></button>

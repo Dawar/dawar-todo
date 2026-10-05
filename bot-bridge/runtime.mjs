@@ -27,6 +27,7 @@ import { registerArtifact, registerNativeItem, indexNativeArtifacts, rememberInp
 import { EventEmitter } from "node:events";
 import { PlanLifecycle } from "./plan-lifecycle.mjs";
 import { stagedQueue, dispatchPrompt, reconcilePrompt } from "./prompt-queue.mjs";
+import { sendQueuedPrompt } from "./queue-send.mjs";
 import { TEAM_TOOL, publicTeams, readTeam, teamReference, acceptTeamOperation, teamTool } from "./teams.mjs";
 import { QUEUE_TOOL, ownedList, publicLists, flushDueLists, queueTool } from "./queue-lists.mjs";
 import { findNativeTurn } from "./native-reconcile.mjs";
@@ -458,9 +459,16 @@ export class BotRuntime extends EventEmitter {
         return this.store.operation(op.id)?.result ?? null;
       }
     }
-    if (op.method === "queue.dispatch") {
-      const item = this.store.get("promptQueue", op.queueId);
-      if (item && item.botId === op.botId) {
+    if (op.method === "queue.dispatch" || op.method === "queue.send") {
+      if (op.method === "queue.send" && !this.store.get("queueSend", op.id)) {
+        // Queue Send reserves its marker+frozen row atomically before a native
+        // call. A crash during file preparation is positively unsubmitted.
+        this.store.saveOperation(op.id, op.fingerprint, "failed", { ...op, outcome: "rejected",
+          error: "This queued message was not submitted before the service restarted. Send it again when ready." });
+        return null;
+      }
+      const item = this.store.get("promptQueue", op.queueId ?? op.params?.id);
+      if (item && item.botId === op.botId && item.operationId === op.id) {
         await reconcilePrompt(this, item);
         return this.store.operation(op.id)?.result ?? null;
       }
@@ -530,7 +538,7 @@ export class BotRuntime extends EventEmitter {
   }
   snapshot() {
     return {
-      capabilities: { backgroundRunLanes: 1, scheduleDecisions: 1, singleThreadExecution: 1, peerInbox: 1, nativeGoals: 1, nativeConversation: 1, messageReplies: 1, secureInputs: 1, operatorCalls: 1, operatorInputQuestions: 1, historyCursorIndex: 1, messageBursts: 1, burstDiscard: 1, queueLists: 1, queueRelativeMoves: 1, teams: 1, ...(this.desktops ? { botDesktops: 1 } : {}) },
+      capabilities: { backgroundRunLanes: 1, scheduleDecisions: 1, singleThreadExecution: 1, peerInbox: 1, nativeGoals: 1, nativeConversation: 1, messageReplies: 1, secureInputs: 1, operatorCalls: 1, operatorInputQuestions: 1, historyCursorIndex: 1, messageBursts: 1, burstDiscard: 1, queueLists: 1, queueRelativeMoves: 1, queueSendNow: 1, teams: 1, ...(this.desktops ? { botDesktops: 1 } : {}) },
 
       teams: publicTeams(this),
       workByBot: this.store.bots().map(bot => this.primary.work(bot)),
@@ -603,7 +611,7 @@ export class BotRuntime extends EventEmitter {
     const laneKey = resumeRun ? resumeRun.laneId ?? `run-preparation:${resumeRun.id}` :
       method.startsWith("runs.") && params.runId ? this.runs.lane(botId, params.runId).id : runRequest?.laneId;
     return this.lock(method.startsWith("teams.") ? "teams" : laneKey ?? botId ?? "create", async () => {
-      const inputMutation = ["turn.send", "requests.respond", "queue.add", "queue.update", "queue.delete", "queue.reorder", "goals.set", "goals.clear"].includes(method);
+      const inputMutation = ["turn.send", "requests.respond", "queue.add", "queue.update", "queue.delete", "queue.reorder", "queue.send", "goals.set", "goals.clear"].includes(method);
       const lifecycleMutation = ["turn.interrupt", "runs.interrupt", "bots.archive", "bots.restore", "bots.delete"].includes(method);
       const attempt = inputMutation ? { started: false, rejected: false } : null;
       const existing = this.store.operation(operationId);
@@ -898,6 +906,7 @@ export class BotRuntime extends EventEmitter {
         return queue.filter(item => !this.store.get("primaryInbox", item.clientUserMessageId)).map((item) => this.publicQueued(bot, item));
       }
       case "queueLists.list": return publicLists(this,bot.id);
+      case "queue.send": return sendQueuedPrompt(this, bot, p, id, attempt);
       case "queue.add":
       case "queue.resume":
         throw new Error("Local queue operations require atomic acceptance through handle().");

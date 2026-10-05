@@ -193,7 +193,7 @@ export type BotRunRequestResolvedEvent = BotRunContext & { key: string };
 export type BotQueueList = { id: string; botId: string; name: string; cron: string | null; timeZone: string; enabled: boolean; nextRunAt: string | null; revision: number; count: number; createdAt: string; lastFlushedAt?: string; lastFlushedCount?: number };
 export type BotSnapshot = {
   secureInputs?: import("./secure-input").SecureRequest[];
-  capabilities?: { botDesktops?: 1; backgroundRunLanes?: 1; scheduleDecisions?: 1; singleThreadExecution?: 1; peerInbox?: 1; nativeGoals?: 1; nativeConversation?: 1; messageReplies?: 1; secureInputs?: 1; operatorCalls?: 1; messageBursts?: 1; burstDiscard?: 1; queueLists?: 1; queueRelativeMoves?: 1; teams?: 1 };
+  capabilities?: { botDesktops?: 1; backgroundRunLanes?: 1; scheduleDecisions?: 1; singleThreadExecution?: 1; peerInbox?: 1; nativeGoals?: 1; nativeConversation?: 1; messageReplies?: 1; secureInputs?: 1; operatorCalls?: 1; messageBursts?: 1; burstDiscard?: 1; queueLists?: 1; queueRelativeMoves?: 1; queueSendNow?: 1; teams?: 1 };
   teams?: BotTeam[];
   workByBot?: BotWorkState[];
   backgroundByBot?: BotBackground[];

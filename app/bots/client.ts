@@ -37,7 +37,7 @@ type Session = {
 function validComposerResult(method: string, result: Record<string, unknown> | undefined) {
   const identified = (value: unknown) => Boolean(value && typeof value === "object" && typeof (value as { id?: unknown }).id === "string");
   if (method === "bursts.submit") return Boolean(result && identified(result.message) && identified(result.burst));
-  if (method === "turn.send") return Boolean(result && (identified(result.turn) || typeof result.turnId === "string"));
+  if (method === "turn.send" || method === "queue.send") return Boolean(result && (identified(result.turn) || typeof result.turnId === "string"));
   if (method === "queue.add") return Boolean(result && (identified(result.queuedSubmission) || typeof result.consumedTurnId === "string"));
   if (method === "queue.update") return Boolean(result && identified(result.queuedSubmission));
   return true;

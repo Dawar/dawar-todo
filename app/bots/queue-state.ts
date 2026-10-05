@@ -15,7 +15,7 @@ export function canMoveQueued(items: BotQueuedSubmission[], index: number, direc
 export function queueStatus(item: BotQueuedSubmission, paused = false) {
   if (item.state === 'dispatching') return { label: 'Confirming delivery', description: 'Waiting for confirmation. This message cannot be changed while it may be starting.', attention: true };
   if (item.state === 'uncertain' || item.waitReason === 'delivery-unconfirmed') return { label: 'Delivery unconfirmed', description: 'This message may have started. It will not be sent again automatically; refresh to check its status.', attention: true };
-  if (item.state === 'failed' || item.waitReason === 'rejected') return { label: 'Not sent', description: 'Edit and save to prepare another attempt, or remove this message. Then resume the queue.', attention: true };
+  if (item.state === 'failed' || item.waitReason === 'rejected') return { label: 'Not sent', description: 'Use Send now to retry, edit this message, or remove it.', attention: true };
   if (!queueEditable(item)) return { label: 'Status needs review', description: 'Refresh the queue before changing this message.', attention: true };
   switch (item.waitReason ?? (paused ? 'paused' : null)) {
     case 'needs-input': return { label: 'Waiting for your answer', description: 'Answer the bot’s question before this message can start.' };
