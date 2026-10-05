@@ -38,12 +38,13 @@ export class BotComposer {
   get committing() { return this.preparing !== null; }
   get checkingOut() { return this.preparing === "checkout"; }
   constructor(readonly owner: string, private targetBotId: string, private store: BotDraftStore,
-    private transport: ComposerTransport, private committed: () => void = () => {}, private destination?: { runId: string; storageKey: string }, private portable = false) {
+    private transport: ComposerTransport, private committed: () => void = () => {}, private destination?: { runId: string; storageKey: string }, private portable = false,
+    private separateDraft?: { storageKey: string; messageText: (draft: Draft) => string }) {
     this.record = this.persisted = emptyRecord(owner, this.storageKey);
   }
   get botId() { return this.targetBotId; }
   bindBot(botId: string) { if (this.portable) this.targetBotId = botId; }
-  private get storageKey() { return this.destination?.storageKey ?? (this.portable ? PORTABLE_COMPOSER : this.botId); }
+  private get storageKey() { return this.separateDraft?.storageKey ?? this.destination?.storageKey ?? (this.portable ? PORTABLE_COMPOSER : this.botId); }
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   private notify() { for (const listener of this.listeners) listener(); }
   get draft() { return this.record.slots[this.record.active]; }
@@ -169,8 +170,9 @@ export class BotComposer {
     if (!this.canUseOwner) throw Error("The draft was saved for its original owner. Sign back in to open it.");
     this.select(slot); await this.flush();
   }
-  addFiles(input: File[]) {
-    const files: StagedFile[] = input.map((f) => ({ id: crypto.randomUUID(), name: f.name, mimeType: f.type || "application/octet-stream", size: f.size, hasBytes: true }));
+  addFiles(input: File[], reviewPage?: number) {
+    if (reviewPage !== undefined && (!this.separateDraft || !Number.isSafeInteger(reviewPage) || reviewPage < 1)) return;
+    const files: StagedFile[] = input.map((f) => ({ id: crypto.randomUUID(), name: f.name, mimeType: f.type || "application/octet-stream", size: f.size, hasBytes: true, ...(reviewPage === undefined ? {} : { reviewPage }) }));
     const limit = fileLimit([...this.draft.files, ...files]);
     if (limit) { this.actionError = limit; this.notify(); return; }
     const bytes = new Map<string, Blob>();
@@ -312,11 +314,12 @@ export class BotComposer {
         if (!queueEditable(current)) throw new Error("This queued message is being confirmed. Your edit is saved; wait for its status before changing it.");
         if (current.revision !== draft.queueRevision) throw new Error("This queued message changed. Your edited draft is saved. Open Edit on the current message to review its latest version; your previous edit will remain in draft recovery.");
       }
-      if (draft.text.trim().length > 200000) throw new Error("This message is too long (maximum 200,000 characters).");
+      const text = this.separateDraft?.messageText(draft) ?? draft.text.trim();
+      if (text.length > 200000) throw new Error("This message is too long (maximum 200,000 characters).");
       const limit = fileLimit(draft.files);
       if (limit) throw new Error(limit);
       if (draft.files.some((f) => !f.remote?.ready)) throw new Error("Attachments are saved locally. Finish or retry their uploads before sending.");
-      if (!draft.text.trim() && !draft.files.length) return;
+      if (!text.trim() && !draft.files.length) return;
       for (const file of draft.files) if (file.remote!.botId !== botId && !file.copies?.[botId]) {
         if (!this.transport.copyAttachment) throw Error("This attachment cannot move to this bot yet. Your draft is saved.");
         this.enqueue({kind:"copyIdentity",id:file.id,botId,copyId:crypto.randomUUID()}); await this.flush();
@@ -331,7 +334,7 @@ export class BotComposer {
       if (!draft || draft.textVersion !== textVersion || draft.files.map(file => file.id).join("|") !== fileIds) throw Error("The draft changed during attachment transfer. Review it and send again.");
       const op: Submission = {
         id: crypto.randomUUID(), botId, slot, method: this.destination ? "runs.send" : draft.queueId ? "queue.update" : queueNext ? "queue.add" : burst ? "bursts.submit" : "turn.send",
-        params: { ...(queueNext && !draft.queueId && !this.destination && listId ? { listId } : {}), ...(this.destination ? { runId: this.destination.runId } : {}), ...(draft.queueId ? { id: draft.queueId, ...(draft.queueRevision === undefined ? {} : { expectedRevision: draft.queueRevision }) } : {}), ...(draft.reply ? { reply: draft.reply } : {}), text: draft.text.trim(), attachments: draft.files.map((f) => (f.remote!.botId === botId ? f.remote! : f.copies![botId]).id) },
+        params: { ...(queueNext && !draft.queueId && !this.destination && listId ? { listId } : {}), ...(this.destination ? { runId: this.destination.runId } : {}), ...(draft.queueId ? { id: draft.queueId, ...(draft.queueRevision === undefined ? {} : { expectedRevision: draft.queueRevision }) } : {}), ...(draft.reply ? { reply: draft.reply } : {}), text, attachments: draft.files.map((f) => (f.remote!.botId === botId ? f.remote! : f.copies![botId]).id) },
         ...(this.destination ? { runDelivery: { state: "prepared" as const, token: crypto.randomUUID() } } : {}),
         textVersion: draft.textVersion, fileIds: draft.files.map((f) => f.id), state: "pending",
       };

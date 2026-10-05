@@ -2,6 +2,7 @@ import { botsClient as client } from "./client";
 import { BotDraftStore, PORTABLE_COMPOSER, draftFingerprint } from "./draft-store";
 import { BotComposer } from "./composer-controller";
 import { registerPwaUpdateGuard } from "../pwa-update";
+import { pdfReviewKey, pdfReviewTarget, pdfReviewMessage } from "./pdf-review";
 
 export type ComposerClipboard = { type:"dawar-composer"; version:1; snapshotId:string; sourceBotId:string; text:string; files:{name:string;size:number;mimeType:string;state:"ready"|"uploading"}[] };
 export type ComposerPaste = { owner:string; snapshotId:string; targetBotId:string; targetFingerprint:string; operationId:string; move:boolean; nonEmpty:boolean };
@@ -40,6 +41,29 @@ export class ComposerService {
   get(owner: string, botId: string) {
     return this.controller(owner, botId);
   }
+  reviewComposer(owner: string, botId: string, attachmentId: string) {
+    this.store ??= new BotDraftStore(indexedDB, localStorage);
+    const storageKey = pdfReviewKey(botId, attachmentId), key = JSON.stringify([owner, storageKey]);
+    let composer = this.controllers.get(key);
+    if (!composer) {
+      composer = new BotComposer(owner, botId, this.store, client, () => this.channel?.postMessage({ owner, botId: storageKey }), undefined, false,
+        { storageKey, messageText: draft => pdfReviewMessage(draft.text, botId, attachmentId, draft.files) });
+      composer.subscribe(this.notify);
+      this.controllers.set(key, composer);
+    }
+    return composer;
+  }
+  async appendReview(owner: string, botId: string, documentFileId: string, operationId: string) {
+    if (client.owner !== owner) throw Error("The signed-in owner changed. Your review is retained.");
+    const source = this.reviewComposer(owner, botId, documentFileId), target = this.get(owner, botId);
+    if (source.committing || target.committing) throw Error("Finish the current composer action before adding this review.");
+    await source.flush(); await target.flush();
+    if (client.owner !== owner) throw Error("The signed-in owner changed. Your review is retained.");
+    await this.store!.appendPdfReview(owner, pdfReviewKey(botId, documentFileId), botId, documentFileId, draftFingerprint(source.record), operationId);
+    await source.refresh(); await target.refresh();
+    this.channel?.postMessage({ owner, botId }); this.channel?.postMessage({ owner, botId: pdfReviewKey(botId, documentFileId) });
+    void target.resumeUploads(); this.notify();
+  }
   private controller(owner: string, botId: string, portable = false) {
     if (!this.store) this.store = new BotDraftStore(indexedDB, localStorage);
     const storageKey = portable ? PORTABLE_COMPOSER : botId;
@@ -75,7 +99,8 @@ export class ComposerService {
         if (client.owner !== owner) return;
         const row=records.find(record=>record.botId===botId);
         const frozenTarget=Object.values(row?.operations??{}).find(operation=>operation.botId)?.botId;
-        const c=botId===PORTABLE_COMPOSER ? (frozenTarget?this.controller(owner,frozenTarget,true):undefined) : this.controller(owner,botId);
+        const review = pdfReviewTarget(botId);
+        const c=review ? this.reviewComposer(owner,review.botId,review.attachmentId) : botId.startsWith("pdf-review:") ? undefined : botId===PORTABLE_COMPOSER ? (frozenTarget?this.controller(owner,frozenTarget,true):undefined) : this.controller(owner,botId);
         if(!c)continue;
         await c.open(false);
         void c.resumeUploads(true);

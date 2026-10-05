@@ -1,0 +1,38 @@
+.bots-pdf-review { display:flex; flex-direction:column; min-height:0; height:100%; width:100%; }
+.bots-pdf-review-toolbar { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:10px 18px; border-bottom:1px solid #e1e8dd; background:#fff; }
+.bots-pdf-review button { display:inline-flex; align-items:center; justify-content:center; gap:7px; min-height:40px; border:1px solid #dfe8db; border-radius:9px; padding:8px 12px; color:#426f4a; background:#fff; font-size:13px; }
+.bots-pdf-review button:disabled { opacity:.4; }
+.bots-pdf-review-toolbar nav { display:flex; align-items:center; gap:6px; font-size:13px; white-space:nowrap; }
+.bots-pdf-review-toolbar nav button { padding:8px; }
+.bots-pdf-review-toolbar input { width:52px; text-align:center; border:1px solid #dfe8db; border-radius:6px; min-height:34px; }
+.bots-pdf-review-layout { display:grid; grid-template-columns:minmax(0,1.65fr) minmax(270px,1fr); flex:1; min-height:0; }
+.bots-pdf-review-page { min-height:0; position:relative; display:flex; }
+.bots-pdf-review-canvas { width:100%; overflow:auto; padding:16px; text-align:center; }
+.bots-pdf-review-canvas canvas { display:block; margin:0 auto; background:white; max-width:100%; height:auto!important; box-shadow:0 2px 12px #14221a19; }
+.bots-pdf-review-loading { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; gap:8px; padding:20px; color:#6c826b; font-size:13px; }
+.bots-pdf-review-loading.is-error { color:#975b44; flex-direction:column; overflow:auto; }
+.bots-pdf-review-notes { display:flex; flex-direction:column; gap:12px; min-height:0; min-width:0; padding:20px; border-left:1px solid #e1e8dd; background:#fff; overflow:auto; }
+.bots-pdf-review-notes > label { font-size:14px; font-weight:600; color:#375b41; }
+.bots-pdf-review-notes textarea { min-height:180px; flex:1; width:100%; resize:vertical; border:1px solid #dfe8db; border-radius:10px; padding:12px; font-size:16px; line-height:1.6; color:#293d30; }
+.bots-pdf-review-attach { align-self:flex-start; }
+.bots-pdf-review-files { display:flex; flex-direction:column; gap:8px; list-style:none; margin:0; padding:0; }
+.bots-pdf-review-files li { display:flex; align-items:center; gap:8px; background:#f6f9f3; border-radius:9px; padding:8px; }
+.bots-pdf-review-files li > span { flex:1; min-width:0; }
+.bots-pdf-review-files strong { display:block; font-size:12px; overflow-wrap:anywhere; }
+.bots-pdf-review-files small { display:block; color:#6d7c71; font-size:11px; margin-top:3px; overflow-wrap:anywhere; }
+.bots-pdf-review-files button { border:0; padding:7px; }
+.bots-pdf-review-bottom { display:flex; flex-direction:column; gap:12px; }
+.bots-pdf-review-noted { display:flex; gap:6px; flex-wrap:wrap; }
+.bots-pdf-review-noted button { min-height:32px; padding:5px 8px; font-size:12px; }
+.bots-pdf-review-noted button[aria-current] { background:#e7f0e3; border-color:#acd1b3; }
+.bots-pdf-review-bottom > p { color:#975b44; font-size:12px; line-height:1.5; overflow-wrap:anywhere; }
+.bots-pdf-review-bottom .bots-pdf-review-send { background:#286b45; color:#fff; border-color:#286b45; }
+.bots-pdf-review :is(button,textarea,input):focus-visible { outline:2px solid #388661; outline-offset:2px; }
+@media(max-width:700px) {
+  .bots-pdf-review-toolbar { padding:8px 12px; }
+  .bots-pdf-review-layout { display:flex; flex-direction:column; overflow:auto; }
+  .bots-pdf-review-page { min-height:42dvh; flex-shrink:0; }
+  .bots-pdf-review-canvas { max-height:50dvh; padding:12px; }
+  .bots-pdf-review-notes { border-left:0; border-top:1px solid #e1e8dd; padding:16px; overflow:visible; flex-shrink:0; }
+  .bots-pdf-review-notes textarea { min-height:160px; }
+}

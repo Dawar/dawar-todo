@@ -90,7 +90,7 @@
 .bots-file-viewer-notice button { font-weight: 600; text-decoration: underline; padding: 6px; }
 .bots-file-viewer > footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; border-top: 1px solid #e1e8dd; padding: 12px 20px; background: #fff; }
 .bots-file-viewer > footer > span { font-size: 11px; color: #859780; }
-.bots-file-viewer > footer > div { display: flex; gap: 8px; }
+.bots-file-viewer > footer > div { display: flex; gap: 8px; flex-wrap: wrap; }
 .bots-file-viewer footer :is(button,a) { display: inline-flex; align-items: center; justify-content: center; gap: 7px; border: 1px solid #dfe8db; padding: 9px 12px; min-height: 40px; font-size: 12px; border-radius: 10px; color: #426f4a; }
 .bots-file-viewer footer button:last-child { background: #286b45; color: #fff; border-color: #286b45; }
 .bots-file-viewer footer button:disabled { opacity: .4; }
@@ -136,6 +136,7 @@
 .bots-returned-file .bots-file-preview { flex-basis: calc(100% + 24px); width: calc(100% + 24px); margin-inline: -12px; aspect-ratio: 1.6; flex-shrink: 0; }
 .bots-returned-files { display: flex; flex-wrap: wrap; gap: 8px; }
 .bots-file-viewer :is(button,a):focus-visible { outline: 2px solid #388661; outline-offset: 3px; }
+.bots-upload-list .bots-pdf-draft-open { width:auto; height:auto; min-width:0; border:0; border-radius:0; padding:0; background:none; color:inherit; font-size:inherit; text-align:left; text-decoration:underline; text-underline-offset:3px; }
 @media(max-width:700px) {
   .bots-file-copy > strong { font-size: 12px; min-height: 36px; }
   .bots-file-copy > span { font-size: 11px; white-space: normal; line-height: 1.5; min-height: 33px; }

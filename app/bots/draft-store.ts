@@ -1,10 +1,13 @@
 import type { BotReplyReference } from "../../lib/bot-replies";
 import type { BotAttachment, BridgeRequest } from "../../lib/bots-types";
+import { pdfReviewTarget, pdfReviewMessage } from "./pdf-review";
 
 // Critical data only. Histories and other disposable caches never enter this DB.
 export const DRAFT_DATABASE = "dawar-bot-drafts";
 export const PORTABLE_COMPOSER = "portable:composer:v1";
 export type StagedFile = {
+  /** PDF review note page; ordinary composer files leave this absent. */
+  reviewPage?: number;
   id: string; name: string; mimeType: string; size: number;
   remote?: BotAttachment; uploadId?: string; uploadMode?: "cloud" | "legacy"; hasBytes: boolean; error?: string;
   uploadBotId?: string;
@@ -344,6 +347,40 @@ export class BotDraftStore {
       };
       sourceRequest.onsuccess = () => { source = sourceRequest.result; seed(); };
       targetRequest.onsuccess = () => { target = targetRequest.result; seed(); };
+    });
+  }
+  /** Add feedback to its original unsent PDF draft in one acknowledged transaction. */
+  async appendPdfReview(owner: string, sourceKey: string, botId: string, documentFileId: string, expected: string, operationId: string) {
+    const scope = pdfReviewTarget(sourceKey);
+    if (!scope || scope.botId !== botId || scope.attachmentId !== documentFileId) throw Error("The review belongs to another PDF or bot.");
+    return this.transaction<DraftRecord>(["drafts", "files"], "readwrite", (tx, done, fail) => {
+      const drafts = tx.objectStore("drafts"), sourceRequest = drafts.get([owner, sourceKey]), targetRequest = drafts.get([owner, botId]);
+      let source: DraftRecord | undefined, target: DraftRecord | undefined, reads = 0;
+      const apply = () => {
+        if (++reads !== 2) return;
+        if (target?.receivedTransfers?.[operationId] === sourceKey) { done(target); return; }
+        if (!source?.migrated || !target?.migrated || Object.keys(source.operations).length || Object.keys(target.operations).length ||
+            draftFingerprint(source) !== expected || target.active !== "normal" || !target.slots.normal.files.some(file => file.id === documentFileId)) {
+          fail(Error("The PDF draft changed or has a send awaiting confirmation. Your review is retained; reopen the PDF in its original composer.")); return;
+        }
+        try {
+          const draft = source.slots.normal, text = pdfReviewMessage(draft.text, botId, documentFileId, draft.files, false);
+          if (!text) { fail(Error("Add feedback or a page attachment first.")); return; }
+          const combined = target.slots.normal.text ? `${target.slots.normal.text}\n\n${text}` : text;
+          const newFiles = draft.files.filter(file => !target!.slots.normal.files.some(existing => existing.id === file.id));
+          const limit = fileLimit([...target.slots.normal.files, ...newFiles]);
+          if (limit || combined.length > 200000) { fail(Error(limit || "This message is too long (maximum 200,000 characters). Your review is retained.")); return; }
+          target.slots.normal.text = combined; target.slots.normal.textVersion = `review:${operationId}`;
+          target.slots.normal.files.push(...newFiles.map(file => ({ ...file })));
+          target.receivedTransfers = { ...target.receivedTransfers, [operationId]: sourceKey }; target.revision = crypto.randomUUID();
+          copyDraftBytes(tx, owner, sourceKey, botId, { ...draft, files: target.slots.normal.files.filter(file => newFiles.some(added => added.id === file.id)) }, () => drafts.put(target!), fail);
+          drafts.put(target);
+          source.slots.normal = emptyDraft(); source.revision = crypto.randomUUID(); drafts.put(source);
+          done(target);
+        } catch (error) { fail(error); }
+      };
+      sourceRequest.onsuccess = () => { source = sourceRequest.result; apply(); };
+      targetRequest.onsuccess = () => { target = targetRequest.result; apply(); };
     });
   }
   /** Local snapshots contain file bytes and provenance, never submission operations. */
