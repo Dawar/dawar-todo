@@ -1047,3 +1047,89 @@ test('queue add and queue update propagate certainty at their native mutation bo
   assert.equal(composer.operation.id, uncertainId); // No native operation identity exists to prove this queue update after a lost ack.
   assert.equal(codex.calls.filter((call) => call.method === 'thread/queue/update').length, 1);
 });
+
+test("native thread status fences reads, invalidates unloaded subscriptions and projects waiting flags", async (t) => {
+  const { runtime, store, codex, create } = await setup(t);
+  const bot = await create();
+  const current = { id: "native-active", status: "inProgress", items: [], itemsView: "notLoaded" };
+  runtime.onNotification({ method: "turn/started", params: { threadId: bot.threadId, turn: current } });
+  const token = store.get("botActivity", bot.id).generation;
+  runtime.onNotification({ method: "thread/status/changed", params: { threadId: bot.threadId,
+    status: { type: "active", activeFlags: ["waitingOnApproval"] } } });
+  assert.ok(store.get("botActivity", bot.id).generation > token);
+  assert.equal(store.bot(bot.id).status, "waiting");
+  assert.equal(runtime.primary.work(store.bot(bot.id)).state, "needs-input");
+  assert.equal(runtime.activityUnresolved(bot.id), false);
+  runtime.onNotification({ method: "thread/status/changed", params: { threadId: bot.threadId,
+    status: { type: "active", activeFlags: [] } } });
+  assert.equal(store.bot(bot.id).status, "running");
+  const key = `${runtime.epoch}:777`;
+  store.put("pending", { id: key, key, botId: bot.id, request: { params: { threadId: bot.threadId, turnId: current.id } } });
+  runtime.onNotification({ method: "thread/status/changed", params: { threadId: bot.threadId, status: { type: "active", activeFlags: [] } } });
+  assert.equal(store.bot(bot.id).status, "waiting");
+  runtime.onNotification({ method: "serverRequest/resolved", params: { threadId: bot.threadId, requestId: 777 } });
+  assert.equal(store.bot(bot.id).status, "running");
+  assert.equal(runtime.primary.work(store.bot(bot.id)).state, "working");
+  runtime.loaded.add(bot.threadId);
+  runtime.onNotification({ method: "thread/closed", params: { threadId: bot.threadId } });
+  assert.equal(runtime.loaded.has(bot.threadId), false);
+  assert.equal(runtime.activityUnresolved(bot.id), true);
+  assert.equal(store.bot(bot.id).activeTurnId, current.id, "unload is not turn completion");
+  assert.equal(codex.calls.some(call => call.method === "turn/start"), false, "no replay during unload");
+});
+
+test("status-only native activity cannot release a stale idle read or dispatch queued work", async (t) => {
+  const { runtime, store, codex, create } = await setup(t);
+  const bot = await create();
+  runtime.loaded.add(bot.threadId);
+  const original = codex.call.bind(codex);
+  let release, enteredSecond, reads = 0;
+  const secondRead = new Promise(resolve => { enteredSecond = resolve; });
+  codex.call = async (method, params) => method === "thread/read"
+    ? await new Promise(resolve => { release = () => resolve({ thread: { id: bot.threadId, status: { type: "idle" } } }); if (++reads === 2) enteredSecond(); })
+    : original(method, params);
+  const reading = runtime.reconcileCurrentActivity(bot.id);
+  await Promise.resolve();
+  runtime.onNotification({ method: "thread/status/changed", params: { threadId: bot.threadId,
+    status: { type: "active", activeFlags: [] } } });
+  release();
+  // The second status read is also delayed; both stale reads must lose to the notification.
+  await secondRead;
+  release();
+  assert.equal(await reading, false);
+  assert.equal(runtime.activityUnresolved(bot.id), true);
+  assert.equal(store.bot(bot.id).activeTurnId, null, "no invented current turn identity");
+});
+
+test("native system error contains execution until confirmed current recovery", async (t) => {
+  const { runtime, store, codex, create } = await setup(t);
+  const bot = await create();
+  runtime.loaded.add(bot.threadId);
+  runtime.onNotification({ method: "thread/status/changed", params: { threadId: bot.threadId, status: { type: "systemError" } } });
+  assert.equal(store.bot(bot.id).status, "error");
+  codex.threads[0].status = { type: "systemError" };
+  assert.equal(await runtime.reconcileCurrentActivity(bot.id), false);
+  assert.match(store.get("botActivity", bot.id).reconciliationError, /system error/);
+  codex.threads[0].status = { type: "idle" };
+  assert.equal(await runtime.reconcileCurrentActivity(bot.id), true);
+  assert.equal(store.bot(bot.id).status, "idle");
+  assert.equal(runtime.activityUnresolved(bot.id), false);
+});
+
+test("retained run lanes use native waiting/unload evidence without changing main-thread execution", async (t) => {
+  const { runtime, store, create } = await setup(t);
+  const bot = await create();
+  store.put("run", { id: "retained-run", botId: bot.id, title: "Retained run", status: "running", laneId: "retained-lane", executionLane: "run-v1" });
+  store.put("runLane", { id: "retained-lane", botId: bot.id, runId: "retained-run", threadId: "retained-thread", provisioning: "bound", status: "idle", paused: false });
+  runtime.onNotification({ method: "turn/started", params: { threadId: "retained-thread", turn: { id: "retained-turn", status: "inProgress", items: [] } } });
+  runtime.onNotification({ method: "thread/status/changed", params: { threadId: "retained-thread", status: { type: "active", activeFlags: ["waitingOnUserInput"] } } });
+  assert.equal(store.get("runLane", "retained-lane").status, "waiting");
+  assert.equal(runtime.runs.publicRun(store.get("runLane", "retained-lane")).activity.state, "waiting-input");
+  assert.equal(runtime.runs.counts(bot.id).needsInput, 1);
+  assert.equal(store.bot(bot.id).activeTurnId, null);
+  runtime.loaded.add("retained-thread");
+  runtime.onNotification({ method: "thread/closed", params: { threadId: "retained-thread" } });
+  assert.equal(runtime.loaded.has("retained-thread"), false);
+  assert.equal(store.get("runActivity", "retained-lane").unresolved, true);
+  assert.equal(store.get("runLane", "retained-lane").activeTurnId, "retained-turn");
+});

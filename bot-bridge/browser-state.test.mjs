@@ -96,3 +96,38 @@ test("push outbox targets only verified owner devices and deduplicates deliverie
   );
   sql.close();
 });
+
+test("streaming routes exact methods, preserves indexed reasoning parts and authoritative full items", () => {
+  const { reduceBotTurns } = runtime().load("app/bots/thread-state.ts");
+  let turns = [{ id: "t", status: "inProgress", itemsView: "full", items: [
+    { id: "a", type: "agentMessage", text: "prefix" },
+    { id: "p", type: "plan", text: "draft" },
+    { id: "r", type: "reasoning", summary: ["first"], content: [] },
+    { id: "f", type: "fileChange", changes: [], status: "inProgress" },
+  ] }];
+  const apply = (method, params) => { turns = reduceBotTurns(turns, { method, params: { turnId: "t", ...params } }); };
+  const previous = turns;
+  apply("item/fileChange/outputDelta", { itemId: "a", delta: "wrong-channel" });
+  assert.equal(turns, previous);
+  apply("item/agentMessage/delta", { itemId: "a", delta: "-live" });
+  apply("item/plan/delta", { itemId: "p", delta: "-stream" });
+  apply("item/reasoning/summaryPartAdded", { itemId: "r", summaryIndex: 1 });
+  apply("item/reasoning/summaryTextDelta", { itemId: "r", summaryIndex: 1, delta: "second" });
+  apply("item/reasoning/textDelta", { itemId: "r", contentIndex: 2, delta: "private-part" });
+  assert.equal(turns[0].items[0].text, "prefix-live");
+  assert.equal(turns[0].items[2].summary[1], "second");
+  assert.equal(turns[0].items[2].content[2], "private-part");
+  const stable = turns;
+  apply("item/reasoning/summaryTextDelta", { itemId: "r", summaryIndex: 1e9, delta: "invalid" });
+  assert.equal(turns, stable);
+  apply("item/fileChange/patchUpdated", { itemId: "f", changes: [{ path: "a.ts", diff: "+line" }] });
+  assert.equal(turns[0].items[3].changes[0].diff, "+line");
+  apply("item/completed", { item: { id: "p", type: "plan", text: "canonical final plan" } });
+  assert.equal(turns[0].items[1].text, "canonical final plan");
+  apply("turn/completed", { turn: { id: "t", status: "failed", itemsView: "notLoaded", items: [] } });
+  assert.equal(turns[0].items.length, 4);
+  apply("turn/completed", { turn: { id: "t", status: "failed", itemsView: "full", items: [] } });
+  assert.equal(turns[0].items.length, 0, "explicit full empty items are authoritative");
+  apply("turn/started", { turn: { id: "t", status: "inProgress", itemsView: "full", items: [] } });
+  assert.equal(turns[0].status, "failed", "late start cannot resurrect a terminal turn");
+});

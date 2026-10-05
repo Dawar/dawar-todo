@@ -17,6 +17,8 @@ export async function reconcileCurrentActivity(runtime, botId) {
     }
     const read = async () => {
       const { thread } = await runtime.codex.call("thread/read", { threadId: bot.threadId, includeTurns: false });
+      if (thread?.id === bot.threadId && thread.status?.type === "systemError")
+        throw new Error("Codex reports a thread system error; input remains contained until native recovery.");
       if (thread?.id !== bot.threadId || !["idle", "active", "notLoaded"].includes(thread.status?.type))
         throw new Error("Native current activity is unavailable; no conflicting input was sent.");
       return thread;
@@ -64,7 +66,7 @@ export async function reconcileCurrentActivity(runtime, botId) {
         turns.filter(turn => turn?.status === "inProgress").length !== 1)
       throw new Error("Native thread is busy, but its current turn is not yet identified. Input remains contained.");
     const established = runtime.store.transaction(() => {
-      if (!projectCurrentActive(runtime, botId, turns[0], token)) return false;
+      if (!projectCurrentActive(runtime, botId, turns[0], token, current.status)) return false;
       runtime.recordScheduledEvidence(botId, turns[0]);
       return !activityUnresolved(runtime, botId);
     });

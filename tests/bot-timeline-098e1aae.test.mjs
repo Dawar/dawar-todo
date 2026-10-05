@@ -241,3 +241,47 @@ test('mounted text previews never fetch full detail on completion; oversized tex
   assert.equal(controller.detailPending(preview), false);
   unsubscribe(); await controller.dispose();
 });
+
+test('reconnect retains exact failed/interrupted states on older rows and tool results remain independent', async () => {
+  for (const status of ['failed', 'interrupted']) {
+    const env = runtime({ IDBKeyRange }), { BotTimeline } = env.load('app/bots/timeline-controller.ts');
+    const parent = { ...turn('turn-a', []), status: 'inProgress' };
+    const older = projectHistoryItem(parent, message('older'));
+    const tool = projectHistoryItem(parent, { id: 'tool', type: 'commandExecution', command: 'checked', status: 'completed' });
+    const newest = projectHistoryItem(parent, message('newest'));
+    let nextPage = page([older, tool, newest]);
+    const writes = [];
+    const controller = new BotTimeline('owner', bot.id, { owner: 'owner', online: true, rpc: async () => nextPage }, { read: async () => null, write: async (_metadata, dirty) => writes.push(dirty) });
+    await controller.refresh();
+    nextPage = page([{ ...newest, turnStatus: status, status, turnError: 'native terminal reason' }]);
+    await controller.refresh();
+    const entries = controller.getSnapshot().entries;
+    assert.ok(entries.every(entry => entry.turnStatus === status));
+    assert.equal(entries.find(entry => entry.id === 'older').status, status);
+    assert.equal(entries.find(entry => entry.id === 'older').turnError, 'native terminal reason');
+    await controller.flush();
+    assert.equal(writes.at(-1).find(entry => entry.id === 'older').turnStatus, status, 'terminal state is durable in older cached rows too');
+    const { withTurnState } = env.load('lib/bot-history-view.ts');
+    assert.equal(withTurnState(tool, { status }).status, 'completed');
+    controller.receive({ seq: 2, botId: bot.id, type: 'history.refresh', data: { reason: 'large-native-event', method: 'turn/completed', turn: { ...turn('turn-a', []), status } } });
+    assert.equal(controller.getSnapshot().entries.find(entry => entry.id === 'older').turnStatus, status);
+    await controller.dispose();
+  }
+});
+
+test('main timeline rejects unrelated delta channels while live plan completion replaces its draft', async () => {
+  const env = runtime({ IDBKeyRange }), { BotTimeline } = env.load('app/bots/timeline-controller.ts');
+  const parent = { ...turn('turn-a', []), status: 'inProgress' };
+  const plan = projectHistoryItem(parent, { type: 'plan', id: 'plan', text: 'draft' });
+  const answer = projectHistoryItem(parent, message('answer', 'answer'));
+  const controller = new BotTimeline('owner', bot.id, { owner: 'owner', online: true, rpc: async () => page([plan, answer]) }, { read: async () => null, write: async () => {} });
+  await controller.refresh();
+  const apply = (seq, method, params) => controller.receive({ seq, type: 'codex', botId: bot.id, data: { method, params: { turnId: 'turn-a', ...params } } });
+  apply(1, 'item/commandExecution/outputDelta', { itemId: 'answer', delta: 'tool output' });
+  assert.equal(controller.getSnapshot().entries.find(entry => entry.id === 'answer').item.text, 'answer');
+  apply(2, 'item/plan/delta', { itemId: 'plan', delta: '-stream' });
+  assert.equal(controller.getSnapshot().entries.find(entry => entry.id === 'plan').item.text, 'draft-stream');
+  apply(3, 'item/completed', { item: { type: 'plan', id: 'plan', text: 'final native content' } });
+  assert.equal(controller.getSnapshot().entries.find(entry => entry.id === 'plan').item.text, 'final native content');
+  await controller.dispose();
+});

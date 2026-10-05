@@ -9,25 +9,26 @@ function storage(seed = {}) {
     getItem: (key) => entries.get(key) ?? null, setItem: (key, value) => entries.set(key, String(value)), removeItem: (key) => entries.delete(key) };
 }
 function setup(seed = {}, extra = {}) {
-  const timers = new Map(); let timerId = 0;
+  const timers = new Map(), intervals = new Map(); let timerId = 0;
   const localStorage = storage(seed);
   const sockets = [];
   class Socket {
     static OPEN = 1;
+    static CLOSED = 3;
     readyState = 1;
     sent = [];
     constructor() { sockets.push(this); }
-    send(value) { this.sent.push(JSON.parse(value)); }
+    send(value) { this.sent.push(value === "ping" ? value : JSON.parse(value)); }
     close() { this.readyState = 3; this.onclose?.(); }
   }
   const env = runtime({ localStorage, btoa, atob, WebSocket: Socket, Element: class {}, Error, TypeError,
     setTimeout: (fn) => { timers.set(++timerId, fn); return timerId; }, clearTimeout: (id) => timers.delete(id),
-    setInterval: () => 0, clearInterval: () => {},
+    setInterval: (fn) => { intervals.set(++timerId, fn); return timerId; }, clearInterval: (id) => intervals.delete(id),
     ...extra,
   });
   const { BotsClient, BotRpcError } = env.load('app/bots/client.ts');
   const client = new BotsClient();
-  return { ...env, client, localStorage, timers, sockets, Socket, BotRpcError };
+  return { ...env, client, localStorage, timers, intervals, sockets, Socket, BotRpcError };
 }
 const session = (owner) => ({ owner, ticket: 'test-only', timeZone: 'UTC', machineId: 'machine', url: 'wss://example.invalid' });
 const snapshot = (owner) => ({ bots: [{ id: `${owner}-bot` }], pending: [], defaults: {}, ready: true });
@@ -71,8 +72,8 @@ test('upload restart uses stable begin/chunk/finish IDs with identical payloads'
   const { client } = setup(); client.owner = 'alice'; const calls = [];
   client.rpc = async (...args) => { calls.push(args); return { id: 'upload-stable-id', ready: args[0] === 'attachments.finish' }; };
   const file = new File(['abc'.repeat(100000)], 'image.png', { type: 'image/png' });
-  await client.upload('bot-a', file, () => {}, 'upload-stable-id', 'alice'); const first = calls.splice(0);
-  await client.upload('bot-a', file, () => {}, 'upload-stable-id', 'alice');
+  await client.upload('bot-a', file, () => {}, 'upload-stable-id', 'alice', 'legacy'); const first = calls.splice(0);
+  await client.upload('bot-a', file, () => {}, 'upload-stable-id', 'alice', 'legacy');
   assert.deepEqual(calls, first); assert.deepEqual(calls.map((c) => c[3]), ['upload-stable-id', 'upload-stable-id:chunk:0', 'upload-stable-id:chunk:262144', 'upload-stable-id:finish']);
   for (const call of calls) assert.equal(call[4].owner, 'alice');
 });
@@ -157,5 +158,73 @@ test('actual client response/parser/reconnect failures retain a composer operati
   client.receive({ type: 'response', id: client.socket.sent.at(-1).id, result: { turn: { id: 'native-committed-once' } } }); await sending;
   assert.equal(c.operation, undefined); assert.equal(c.draft.text, '');
   assert.equal(new Set(client.socket.sent.map((r) => r.operationId)).size, 1);
+  client.clearOwnerCache();
+});
+
+test('heartbeat detects half-open sockets, pong extends liveness and reconnect retains original mutation identity', async () => {
+  let clock = 1000;
+  class ClockDate extends Date { static now() { return clock; } }
+  const { client, sockets, intervals } = setup({}, { Date: ClockDate });
+  client.session = async () => session('alice');
+  client.refresh = async () => snapshot('alice');
+  await client.connect();
+  const first = sockets[0];
+  client.receive({ type: 'authenticated', online: true });
+  const sending = client.rpc('turn.send', 'bot-a', {}, 'original-send', { managed: true });
+  const request = first.sent.at(-1);
+  const pulse = [...intervals.values()][0];
+  clock += 25000; pulse(); assert.equal(first.readyState, 1);
+  first.onmessage({ data: 'pong' });
+  clock += 40000; pulse(); assert.equal(first.readyState, 1, 'pong keeps a quiet connection alive');
+  clock += 21000; pulse();
+  assert.equal(first.readyState, 3); assert.equal(client.online, false);
+  assert.equal(client.pending.size, 1, 'a transport failure is not native rejection');
+  assert.ok(client.reconnectTimer);
+  await client.connect();
+  client.receive({ type: 'authenticated', online: true });
+  await Promise.resolve(); await Promise.resolve();
+  assert.equal(sockets[1].sent.find(value => value.operationId === 'original-send').operationId, request.operationId);
+  const active = [...client.pending.keys()][0];
+  client.receive({ type: 'response', id: active, result: { turn: { id: 'native-once' } } });
+  assert.equal((await sending).turn.id, 'native-once');
+  client.clearOwnerCache();
+});
+
+test('latest connection attempt owns the socket, superseded sockets close and unauthenticated setup times out', async () => {
+  const { client, sockets, timers } = setup();
+  const pendingSessions = [];
+  client.session = () => new Promise(resolve => pendingSessions.push(resolve));
+  const oldAttempt = client.connect(), newAttempt = client.connect();
+  pendingSessions[1](session('alice')); await newAttempt;
+  pendingSessions[0](session('alice')); await oldAttempt;
+  assert.equal(sockets.length, 1, 'late older session cannot replace the winning socket');
+  client.session = async () => session('alice');
+  await client.connect();
+  assert.equal(sockets[0].readyState, 3, 'replacement closes superseded transport');
+  const socket = sockets[1];
+  const handshake = timers.get(client.handshakeTimer);
+  handshake();
+  assert.equal(socket.readyState, 3);
+  assert.ok(client.reconnectTimer);
+  assert.match(client.error, /setup timed out/);
+  client.clearOwnerCache();
+});
+
+test('socket replacement discards partial transfer bytes and settles only the replayed original operation', async () => {
+  const { client } = setup();
+  client.session = async () => session('alice');
+  await client.connect(); client.online = true;
+  const result = client.rpc('turn.send', 'bot-a', {}, 'same-operation', { managed: true });
+  const id = [...client.pending.keys()][0];
+  const bytes = new TextEncoder().encode(JSON.stringify({ turn: { id: 'native-turn' } }));
+  const encode = bytes => btoa(String.fromCharCode(...bytes));
+  client.receive({ type: 'response', id, result: { __chunk: true, total: bytes.length, offset: 0, data: encode(bytes.slice(0, 4)) } });
+  assert.equal(client.pending.get(id).received, 4);
+  client.eventChunks.set(1, { bytes: new Uint8Array(10), received: 4 });
+  await client.connect();
+  assert.equal(client.pending.get(id).received, undefined);
+  assert.equal(client.eventChunks.size, 0);
+  client.receive({ type: 'response', id, result: { __chunk: true, total: bytes.length, offset: 0, data: encode(bytes) } });
+  assert.equal((await result).turn.id, 'native-turn');
   client.clearOwnerCache();
 });

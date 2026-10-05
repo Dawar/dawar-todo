@@ -5,7 +5,7 @@ import { reconcileStop } from './execution-stop.mjs';
 import { occurrenceReady } from './schedule-decisions.mjs';
 import { findNativeTurn } from './native-reconcile.mjs';
 import { usableTurn, terminalTurn } from './native-turn.mjs';
-import { captureActivity, activityUnchanged, beginTurnDispatch, requireDispatchReconciliation, observedActiveTurn } from './turn-state.mjs';
+import { captureActivity, activityUnchanged, beginTurnDispatch, requireDispatchReconciliation, observedActiveTurn, nativeWaiting } from './turn-state.mjs';
 
 const now = () => new Date().toISOString();
 const terminal = new Set(['completed', 'failed', 'interrupted', 'cancelled']);
@@ -29,7 +29,7 @@ export class PrimaryExecution {
     const active = observedActiveTurn(this.runtime, bot.id, bot.activeTurnId);
     const starting = inflight;
     return { botId: bot.id, executionMode: bot.executionMode ?? 'legacy',
-      state: this.store.list('pending', bot.id).some(p => p.request?.params?.threadId === bot.threadId && typeof p.request?.params?.turnId === 'string') ? 'needs-input' : active ? 'working' : unconfirmed ? 'unconfirmed' : starting ? 'starting' : 'ready',
+      state: nativeWaiting(this.runtime, bot.id) || this.store.list('pending', bot.id).some(p => p.request?.params?.threadId === bot.threadId && typeof p.request?.params?.turnId === 'string') ? 'needs-input' : active ? 'working' : unconfirmed ? 'unconfirmed' : starting ? 'starting' : 'ready',
       activeTurnId: bot.activeTurnId, paused: !!bot.queuePaused, summary: progress?.summary ?? goal?.goal?.objective ?? null,
       remaining: progress?.remaining ?? null, waitingFor: progress?.waitingFor ?? [], goal: goal?.goal ?? null,
       goalObservedAt: goal?.observedAt ?? null, migrationReason: bot.migrationReason ?? null };

@@ -30,6 +30,32 @@ function advanceActivity(runtime, botId, activeTurnId, changes = {}) {
 
 export const activityUnresolved = (runtime, botId) => runtime.store.get("botActivity", botId)?.unresolved === true;
 
+export const nativeWaiting = (runtime, botId) => {
+  const status = runtime.store.get("botActivity", botId)?.nativeStatus;
+  return status?.type === "active" && status.activeFlags?.some(flag =>
+    flag === "waitingOnApproval" || flag === "waitingOnUserInput");
+};
+
+// Status notifications carry current thread authority but no turn identity.
+// Fence outstanding reads/ACKs, then recover identity without inventing a
+// terminal outcome or replaying input. In particular, unload invalidates the
+// subscription cache so the next bounded recovery actually resumes it.
+export function observeThreadStatus(runtime, botId, status) {
+  if (!status || !["idle", "active", "notLoaded", "systemError"].includes(status.type)) return false;
+  return runtime.store.transaction(() => {
+    const bot = runtime.store.bot(botId);
+    const known = observedActiveTurn(runtime, botId, bot.activeTurnId);
+    const unresolved = status.type !== "active" || !known;
+    advanceActivity(runtime, botId, bot.activeTurnId, { nativeStatus: status,
+      ...(unresolved ? { unresolved: true, reason: `native-thread-${status.type}`,
+        reconcileAfter: null, reconciliationError: null, attempts: 0 } : {}) });
+    if (status.type === "notLoaded") runtime.loaded.delete(bot.threadId);
+    runtime.saveBot(bot, { status: status.type === "systemError" ? "error" :
+      status.type === "active" ? nativeWaiting(runtime, botId) || runtime.store.list("pending", botId).some(p => p.request.params.isBlocking !== false) ? "waiting" : "running" : bot.status });
+    return true;
+  });
+}
+
 export function requireCurrentActivity(runtime, botId, turnId = null, reason = "current-state-required") {
   captureActivity(runtime, botId);
   const current = runtime.store.get("botActivity", botId);
@@ -83,7 +109,7 @@ function saveActive(runtime, botId, turn, changes) {
   const active = runtime.store.get("activeRun", botId);
   if (active?.turnId && active.turnId !== turn.id) runtime.store.remove("activeRun", botId);
   runtime.saveBot(bot, { ...changes, activeTurnId: turn.id,
-    status: runtime.store.list("pending", botId).some(pending => pending.request.params.isBlocking !== false) ? "waiting" : "running" });
+    status: nativeWaiting(runtime, botId) || runtime.store.list("pending", botId).some(pending => pending.request.params.isBlocking !== false) ? "waiting" : "running" });
 }
 
 // Direct native start observations, unlike awaited snapshots, establish the
@@ -107,7 +133,8 @@ export function projectTerminalTurn(runtime, botId, turn, completeEvidence = fal
     // Duplicate unrelated terminal evidence does not establish new current
     // activity, and must not starve the current-state reconciliation reader.
     if (previous?.status !== turn.status || activity.activeTurnId === turn.id || runtime.store.bot(botId).activeTurnId === turn.id)
-      advanceActivity(runtime, botId, activity.activeTurnId === turn.id ? null : activity.activeTurnId);
+      advanceActivity(runtime, botId, activity.activeTurnId === turn.id ? null : activity.activeTurnId,
+        activity.activeTurnId === turn.id ? { nativeStatus: null } : {});
     runtime.plans.note(botId, { method: "turn/completed", params: { turn } }, completeEvidence);
     for (const pending of runtime.store.list("pending", botId)) {
       if (!pending.async && pending.request.params.turnId === turn.id) {
@@ -159,10 +186,11 @@ export function acknowledgeTurnDispatch(runtime, botId, turn, token, changes = {
 
 // Only a fenced native CURRENT-state read uses these functions. They do not
 // mark an old operation/turn completed, rejected, or safe to replay.
-export function projectCurrentActive(runtime, botId, turn, token) {
+export function projectCurrentActive(runtime, botId, turn, token, nativeStatus) {
   return runtime.store.transaction(() => {
     if (!activityUnchanged(runtime, botId, token) || !usableTurn(turn) || turn.status !== "inProgress" ||
         terminalTurn(runtime.store.get("planTurnEvidence", turn.id))) return false;
+    if (nativeStatus) runtime.store.put("botActivity", { ...runtime.store.get("botActivity", botId), nativeStatus });
     saveActive(runtime, botId, turn, {});
     return true;
   });
@@ -182,7 +210,7 @@ export function projectCurrentIdle(runtime, botId, token, latest = null) {
         runtime.saveBot(runtime.store.bot(botId), { queuePaused: true });
     }
     advanceActivity(runtime, botId, null, { unresolved: false, unresolvedTurnId: null,
-      reason: null, reconcileAfter: null, reconciliationError: null, attempts: 0 });
+      nativeStatus: { type: "idle" }, reason: null, reconcileAfter: null, reconciliationError: null, attempts: 0 });
     runtime.store.remove("activeRun", botId);
     const current = runtime.store.bot(botId);
     runtime.saveBot(current, { activeTurnId: null, status: runtime.store.list("pending", botId).length ? "waiting" :

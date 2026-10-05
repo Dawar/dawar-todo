@@ -1,4 +1,4 @@
-import { historyKey, projectHistoryItem, type HistoryPage } from "../../lib/bot-history-view";
+import { historyKey, projectHistoryItem, withTurnState, type HistoryPage } from "../../lib/bot-history-view";
 import type { BotEvent } from "../../lib/bots-types";
 import { reconcileHistory } from "./history-reconcile";
 import { reduceBotTurns, type NativeEvent } from "./thread-state";
@@ -21,7 +21,7 @@ export function updateRunPage(page: HistoryPage, events: BotEvent[], turnId?: st
         if (existing) entries = reconcileHistory(entries.map(value => value === existing ? projected : value)).entries;
         else if (append) entries = reconcileHistory([...entries, projected]).entries;
       } else entries = entries.map(value => value.turnId === refresh.turnId && (!refresh.itemId || value.id === refresh.itemId) ? { ...value, complete: false, updatedSeq: event.seq } : value);
-      if (refresh.turn) entries = entries.map(value => value.turnId === refresh.turnId ? { ...value, turnStatus: refresh.turn!.status, status: value.itemStatus === "inProgress" ? refresh.turn!.status : value.status } : value);
+      if (refresh.turn) entries = entries.map(value => value.turnId === refresh.turnId ? withTurnState(value, refresh.turn!) : value);
       continue;
     }
     const native = data.message;
@@ -44,7 +44,7 @@ export function updateRunPage(page: HistoryPage, events: BotEvent[], turnId?: st
       const projected = projectHistoryItem(next, native.params.item); byKey.set(historyKey(id, projected.id), projected);
     }
     entries = reconcileHistory([...byKey.values()]).entries;
-    if (native.method === "turn/completed") entries = entries.map(entry => entry.turnId === id ? { ...entry, status: entry.itemStatus === "inProgress" ? next.status : entry.status, turnStatus: next.status } : entry);
+    if (native.method === "turn/completed") entries = entries.map(entry => entry.turnId === id ? withTurnState(entry, next) : entry);
   }
   // Do not silently evict entries or invent a cursor. The existing bounded
   // native page and its explicit refresh affordance recover overflow exactly.

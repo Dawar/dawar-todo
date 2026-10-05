@@ -40,6 +40,15 @@ export const HISTORY_TEXT_LIMIT = 16384;
 export const historyKey = (turnId: string, itemId: string) => `${turnId}:${itemId}`;
 export const historyBefore = (entry: HistoryEntry) => JSON.stringify({ native: null, before: historyKey(entry.turnId, entry.id) });
 
+/** A tool's own terminal result survives failure/interruption of its parent.
+ * Sparse native turn metadata still settles retained rows outside this page. */
+export function withTurnState(entry: HistoryEntry, turn: Pick<Turn, "status"> & { error?: { message: string } | null }): HistoryEntry {
+  return { ...entry, turnStatus: turn.status,
+    status: entry.itemStatus === "completed" || entry.itemStatus === "failed" ? entry.itemStatus :
+      entry.itemStatus === "inProgress" && turn.status === "inProgress" ? "inProgress" : turn.status,
+    ...(turn.error?.message ? { turnError: turn.error.message } : {}) };
+}
+
 export function projectHistoryItem(turn: Pick<Turn, "id" | "startedAt" | "status"> & Partial<Pick<Turn, "completedAt">>, source: ThreadItem, scheduled = false): HistoryEntry {
   let item: ThreadItem | null = null, complete = true;
   const clip = (text: string) => { if (text.length > HISTORY_TEXT_LIMIT) complete = false; return text.slice(0, HISTORY_TEXT_LIMIT); };
@@ -72,9 +81,9 @@ export function projectHistoryItem(turn: Pick<Turn, "id" | "startedAt" | "status
     else if (source.type === "mcpToolCall") label = `${source.server} · ${source.tool}`.slice(0, 160);
     else if (source.type === "dynamicToolCall") label = source.tool === "bots_report_result" ? "Reported finding" : source.tool === "bots_publish_artifact" ? "Saved file" : "Tool result";
   }
-  return { id: source.id, turnId: turn.id, type: source.type, label, item, complete,
+  return withTurnState({ id: source.id, turnId: turn.id, type: source.type, label, item, complete,
     ...(source.type === "agentMessage" && !source.text.trim() && source.questions?.length ? { questionNotice: source.questions.slice(0, 16).map(q => q.title).join("\n\n").slice(0, HISTORY_TEXT_LIMIT) } : {}),
-    scheduled, messageAt: source.type === "agentMessage" && source.phase === "final_answer" ? turn.completedAt ?? null : turn.startedAt, timeBasis: source.type === "agentMessage" && source.phase === "final_answer" ? "turn-end" : "turn-start", startedAt: turn.startedAt, turnStatus: turn.status, ...("status" in source ? { itemStatus: String(source.status) } : {}), status: "status" in source && source.status === "inProgress" ? "inProgress" : "status" in source && source.status === "completed" ? "completed" : turn.status };
+    scheduled, messageAt: source.type === "agentMessage" && source.phase === "final_answer" ? turn.completedAt ?? null : turn.startedAt, timeBasis: source.type === "agentMessage" && source.phase === "final_answer" ? "turn-end" : "turn-start", startedAt: turn.startedAt, turnStatus: turn.status, ...("status" in source ? { itemStatus: String(source.status) } : {}), status: turn.status }, turn);
 }
 
 /** Legacy caches can paint a useful tail without cloning/serializing their tool bodies. */

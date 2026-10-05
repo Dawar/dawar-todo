@@ -132,6 +132,9 @@ export class BotsClient {
   }
   private histories = new Map<string, unknown>();
   private connectionEpoch = 0;
+  private connectionAttempt = 0;
+  private lastSocketMessageAt = 0;
+  private handshakeTimer?: ReturnType<typeof setTimeout>;
   // A cache or an isolated event is not proof that all earlier events arrived.
   // Only a full server snapshot advances this watermark. Keep the latest patch
   // per entity so a full snapshot can heal gaps without undoing newer events.
@@ -183,6 +186,9 @@ export class BotsClient {
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = null;
     this.eventChunks.clear();
+    if (this.handshakeTimer) clearTimeout(this.handshakeTimer);
+    this.handshakeTimer = undefined;
+    this.lastSocketMessageAt = 0;
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timer);
       pending.reject(new BotRpcError("The signed-in owner changed. The submitted operation is retained for its original owner.", "uncertain"));
@@ -256,7 +262,11 @@ export class BotsClient {
     if (!this.authListeners && typeof document !== "undefined") {
       this.authListeners = true;
       window.addEventListener("pagehide", () => this.flushSnapshot());
-      document.addEventListener("visibilitychange", () => { if (document.hidden) this.flushSnapshot(); });
+      document.addEventListener("visibilitychange", () => {
+        if (document.hidden) this.flushSnapshot(); else this.checkConnection();
+      });
+      window.addEventListener("focus", () => this.checkConnection());
+      window.addEventListener("online", () => this.checkConnection());
       document.addEventListener("click", (event) => {
         const target = event.target;
         if (target instanceof Element && target.closest('a[href^="/signout-with-chatgpt"]')) this.clearOwnerCache();
@@ -279,9 +289,10 @@ export class BotsClient {
   async connect() {
     if (this.stopped) return;
     const epoch = this.connectionEpoch;
+    const attempt = ++this.connectionAttempt;
     try {
       const session = await this.session();
-      if (this.stopped || epoch !== this.connectionEpoch) return;
+      if (this.stopped || epoch !== this.connectionEpoch || attempt !== this.connectionAttempt) return;
       this.useOwner(session.owner);
       this.timeZone = session.timeZone;
       try { localStorage.setItem("dawar-bots:last-owner", this.owner); } catch {}
@@ -290,12 +301,25 @@ export class BotsClient {
       const url = new URL(session.url);
       url.searchParams.set("machine", session.machineId);
       const socket = new WebSocket(url);
+      const previous = this.socket;
       this.socket = socket;
+      this.online = false;
+      this.resetConnectionTransfers();
+      previous?.close();
+      this.lastSocketMessageAt = Date.now();
+      if (this.handshakeTimer) clearTimeout(this.handshakeTimer);
+      this.handshakeTimer = setTimeout(() => {
+        if (this.socket !== socket) return;
+        this.error = "Connection setup timed out. Reconnecting…";
+        socket.close();
+      }, 15000);
       socket.onopen = () => {
         if (this.socket === socket) socket.send(JSON.stringify({ type: "auth", ticket: session.ticket }));
       };
       socket.onmessage = ({ data }) => {
-        if (this.socket !== socket || this.owner !== session.owner || data === "pong") return;
+        if (this.socket !== socket || this.owner !== session.owner) return;
+        this.lastSocketMessageAt = Date.now();
+        if (data === "pong") return;
         try {
           this.receive(JSON.parse(data));
         } catch {
@@ -306,18 +330,16 @@ export class BotsClient {
       socket.onerror = () => {};
       socket.onclose = () => {
         if (this.socket !== socket) return;
+        if (this.handshakeTimer) clearTimeout(this.handshakeTimer);
+        this.handshakeTimer = undefined;
         this.online = false;
-        for(const p of this.securePending.values()){clearTimeout(p.timer);p.reject(Error("Bridge disconnected. Retry the same encrypted submission while the form remains open."));}this.securePending.clear();
-        this.eventChunks.clear();
-        for (const p of this.pending.values()) {
-          p.chunks = undefined;
-          p.received = undefined;
-        }
+        this.resetConnectionTransfers();
         this.notify();
         this.scheduleReconnect();
       };
       this.notify();
     } catch (e) {
+      if (this.stopped || epoch !== this.connectionEpoch || attempt !== this.connectionAttempt) return;
       if (!this.stopped && epoch === this.connectionEpoch && e instanceof TypeError && !this.owner) {
         try { const owner = localStorage.getItem("dawar-bots:last-owner"); if (owner) this.useOwner(owner); } catch {}
       }
@@ -325,6 +347,38 @@ export class BotsClient {
       this.notify();
       this.scheduleReconnect();
     }
+  }
+  private resetConnectionTransfers() {
+    for (const p of this.securePending.values()) {
+      clearTimeout(p.timer);
+      p.reject(Error("Bridge disconnected. Retry the same encrypted submission while the form remains open."));
+    }
+    this.securePending.clear();
+    this.eventChunks.clear();
+    for (const p of this.pending.values()) {
+      p.chunks = undefined;
+      p.received = undefined;
+    }
+  }
+  /** Browsers can keep a dead socket OPEN after sleep/network changes. Native
+   * execution keeps running; reconnect the transport and reconcile stable
+   * operation IDs through the existing snapshot/history path. */
+  checkConnection() {
+    if (this.stopped) return;
+    const socket = this.socket;
+    if (!socket || socket.readyState === WebSocket.CLOSED) {
+      this.scheduleReconnect();
+      return;
+    }
+    if (socket.readyState !== WebSocket.OPEN) return;
+    if (Date.now() - this.lastSocketMessageAt > 60000) {
+      this.online = false;
+      this.error = "Connection lost. Reconnecting…";
+      this.notify();
+      socket.close();
+      return;
+    }
+    try { socket.send("ping"); } catch { socket.close(); }
   }
   scheduleReconnect() {
     if (this.stopped || this.reconnectTimer) return;
@@ -387,6 +441,9 @@ export class BotsClient {
       return;
     }
     if (message.type === "authenticated") {
+      if (this.handshakeTimer) clearTimeout(this.handshakeTimer);
+      this.handshakeTimer = undefined;
+      this.lastSocketMessageAt = Date.now();
       this.relayClientId = typeof message.clientId === "string" ? message.clientId : null;
       this.online = Boolean(message.online);
       this.error = "";
@@ -412,8 +469,7 @@ export class BotsClient {
       );
       if (this.heartbeat) clearInterval(this.heartbeat);
       this.heartbeat = setInterval(() => {
-        if (this.socket?.readyState === WebSocket.OPEN)
-          this.socket.send("ping");
+        if (this.socket === renewingSocket && this.connectionEpoch === renewingEpoch) this.checkConnection();
       }, 25000);
       const refreshedOwner = this.owner;
       if (this.online)

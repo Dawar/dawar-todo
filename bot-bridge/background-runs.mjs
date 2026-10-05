@@ -9,7 +9,7 @@ import { teamReference } from "./teams.mjs";
 import { requireTurn, usableTurn, usableTurnId, terminalTurn, requireSteer } from "./native-turn.mjs";
 import { beginTurnDispatch, acknowledgeTurnDispatch, requireDispatchReconciliation,
   observeStartedTurn, observedActiveTurn, projectTerminalTurn, activityUnresolved, requireCurrentActivity,
-  captureActivity, activityUnchanged } from "./turn-state.mjs";
+  captureActivity, activityUnchanged, observeThreadStatus, nativeWaiting } from "./turn-state.mjs";
 import { reconcileCurrentActivity } from "./current-activity.mjs";
 import { findNativeTurn } from "./native-reconcile.mjs";
 import { registerNativeItem, rememberInputProvenance } from "./artifact-outputs.mjs";
@@ -74,7 +74,7 @@ export class BackgroundRuns {
     const waitingWorkers = this.store.list("managerTask", lane.botId).some(t => t.destination?.laneId === lane.id && !terminal.has(t.state));
     const decisionRequired = run.status === "queued" && run.decision?.state === "required" && unsentRun(this.store, run);
     const state = decisionRequired ? "waiting-input" : lane.provisioning === "prepared" && lane.paused ? "paused" : lane.provisioning !== "bound" ? lane.provisioning === "uncertain" ? "uncertain" : "provisioning" :
-      unresolved ? "uncertain" : lane.paused ? "paused" : pendingCount ? "waiting-input" :
+      unresolved ? "uncertain" : lane.paused ? "paused" : pendingCount || nativeWaiting(this.port(lane.id), lane.botId) ? "waiting-input" :
         lane.activeTurnId ? "running" : waitingWorkers ? "waiting-workers" : queuedCount ? "queued" : "idle";
     return { id: run.id, botId: run.botId, scheduleId: run.scheduleId, title: run.title, status: run.status,
       scheduledAt: run.scheduledAt, startedAt: run.startedAt, finishedAt: run.finishedAt, turnId: run.turnId ?? null,
@@ -99,9 +99,10 @@ export class BackgroundRuns {
   counts(botId) {
     const lanes = this.store.executionMetadata("runLane", botId);
     const unreserved = this.store.list("run", botId).filter(r => this.unreservedMetadata(r));
+    const pending = this.store.list("runPending", botId), pendingLanes = new Set(pending.map(p => p.laneId));
     return { botId, unfinished: lanes.filter(l => this.unfinished(l)).length + unreserved.length,
       running: lanes.filter(l => l.activeTurnId).length,
-      needsInput: this.store.list("runPending", botId).length + this.store.list("run", botId).filter(r => r.decision?.state === "required" && r.status === "queued").length,
+      needsInput: pending.length + lanes.filter(l => !pendingLanes.has(l.id) && nativeWaiting(this.port(l.id), botId)).length + this.store.list("run", botId).filter(r => r.decision?.state === "required" && r.status === "queued").length,
       unconfirmed: lanes.filter(l => l.provisioning === "uncertain" || activityUnresolved(this.port(l.id), botId)).length };
   }
   publish(id) {
@@ -599,6 +600,8 @@ export class BackgroundRuns {
   }
   notification(lane, message) {
     const p = message.params ?? {}, port = this.port(lane.id), bot = this.store.bot(lane.botId);
+    if (message.method === "thread/status/changed") observeThreadStatus(port, lane.botId, p.status);
+    if (message.method === "thread/closed") observeThreadStatus(port, lane.botId, { type: "notLoaded" });
     if (message.method === "thread/closed" || message.method === "thread/status/changed" && p.status?.type === "notLoaded") {
       this.runtime.loaded.delete(lane.threadId);
       this.store.put("runLane", { ...this.store.get("runLane", lane.id), releasedAt: now() });
@@ -618,6 +621,10 @@ export class BackgroundRuns {
       const key = `${this.runtime.epoch}:${p.requestId}`;
       if (this.store.get("runPending", key)?.laneId === lane.id) {
         this.store.remove("runPending", key); this.event(lane.id, "request.resolved", { key });
+        const current = port.state();
+        if (observedActiveTurn(port, lane.botId, current.activeTurnId)) port.saveBot(current, {
+          status: nativeWaiting(port, lane.botId) || port.store.list("pending", lane.botId).some(pending => pending.request.params.isBlocking !== false) ? "waiting" : "running",
+        });
       }
     }
     if (message.method === "item/completed" && usableTurnId(p.turnId)) {

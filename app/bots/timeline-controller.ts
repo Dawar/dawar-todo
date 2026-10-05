@@ -1,12 +1,12 @@
 import { reconcileHistory, conversationEntries, orderedHistory } from "./history-reconcile";
 import { turnAudience, scheduleInput, peerInput, humanInput, reportedFinding, projectConversationItem, type TurnAudience } from "../../lib/bot-conversation";
 import { historyBoundaries, retainHistory, retainedAttachments, CACHE_ENTRIES, CACHE_BYTES } from "./history-window";
-import { HISTORY_TEXT_LIMIT, conversationItem, historyTail, historyBefore, historyKey, projectHistoryItem, type HistoryEntry, type HistoryResponse, type HistoryDetail, type HistoryPosition, type HistoryGap } from "../../lib/bot-history-view";
+import { HISTORY_TEXT_LIMIT, withTurnState, conversationItem, historyTail, historyBefore, historyKey, projectHistoryItem, type HistoryEntry, type HistoryResponse, type HistoryDetail, type HistoryPosition, type HistoryGap } from "../../lib/bot-history-view";
 import type { BotAttachment, BotEvent, BotScheduledTurn, BotScheduledEventData } from "../../lib/bots-types";
 import type { ThreadItem } from "../../lib/codex-protocol/v2/ThreadItem";
 import type { Turn } from "../../lib/codex-protocol/v2/Turn";
 import { readOpenedDetail, saveOpenedDetail, updateOpenedDetailAttachments } from "./timeline-detail-cache";
-import { reduceBotTurns, type NativeEvent } from "./thread-state";
+import { reduceBotTurns, reduceItemEvent, type NativeEvent } from "./thread-state";
 import { timelineCache, type createTimelineCache, type TimelineMetadata } from "./timeline-cache";
 
 export type TimelineTransport = {
@@ -200,8 +200,13 @@ export class BotTimeline {
             const gap = { before: historyKey(newFirst.turnId, newFirst.id), stop: historyKey(oldLast.turnId, oldLast.id), cursor: historyBefore(newFirst) };
             this.state = { ...this.state, gaps: [...this.state.gaps, gap] };
           }
-          const terminal = new Set(response.entries.filter((entry) => entry.turnStatus && entry.turnStatus !== "inProgress").map((entry) => entry.turnId));
-          this.state = { ...this.state, entries: this.state.entries.map((entry) => terminal.has(entry.turnId) && (entry.updatedSeq ?? 0) <= startCursor ? { ...entry, turnStatus: "completed" } : entry) };
+          const terminal = new Map(response.entries.filter((entry) => entry.turnStatus && entry.turnStatus !== "inProgress").map((entry) => [entry.turnId, { status: entry.turnStatus!, error: entry.turnError ? { message: entry.turnError } : null }]));
+          this.state = { ...this.state, entries: this.state.entries.map((entry) => {
+            if (!terminal.has(entry.turnId) || (entry.updatedSeq ?? 0) > startCursor) return entry;
+            const settled = { ...withTurnState(entry, terminal.get(entry.turnId)!), updatedSeq: response.eventCursor };
+            this.dirty.set(historyKey(settled.turnId, settled.id), settled);
+            return settled;
+          }) };
           this.merge(response.entries, false, startCursor);
           // Keep loaded older pages; a latest-page refresh never replaces them.
           this.publish({ partialTurn: response.partialTurn, attachments: mergeAttachments(this.state.attachments, response.attachments), contextEntries: response.contextEntries ?? [],
@@ -341,7 +346,7 @@ export class BotTimeline {
       }
       if (data.turn) {
         for (let i = 0; i < entries.length; i++) if (entries[i].turnId === data.turn.id) {
-          entries[i] = { ...entries[i], status: data.turn.status, turnStatus: data.turn.status, updatedSeq: event.seq };
+          entries[i] = { ...withTurnState(entries[i], data.turn), updatedSeq: event.seq };
           this.dirty.set(historyKey(entries[i].turnId, entries[i].id), entries[i]);
         }
         for (const entry of entries) if (entry.turnId === data.turn.id) this.invalidateDetail(entry, event.seq);
@@ -398,7 +403,7 @@ export class BotTimeline {
       update(projectHistoryItem({ id: turnId, startedAt: prior?.startedAt ?? null, status: prior?.turnStatus ?? "inProgress" }, p.item,
         prior?.scheduled || p.item.type === "userMessage" && Boolean(p.item.clientId?.startsWith("schedule:"))));
     } else if (p.turn && (method === "turn/completed" || method === "turn/started")) {
-      for (const entry of this.state.entries) if (entry.turnId === turnId) update({ ...entry, status: p.turn.status, turnStatus: p.turn.status, ...(entry.timeBasis !== "received" ? { messageAt: entry.type === "agentMessage" && entry.item?.type === "agentMessage" && entry.item.phase === "final_answer" ? p.turn.completedAt : p.turn.startedAt } : {}) });
+      for (const entry of this.state.entries) if (entry.turnId === turnId) update({ ...withTurnState(entry, p.turn), ...(entry.timeBasis !== "received" ? { messageAt: entry.type === "agentMessage" && entry.item?.type === "agentMessage" && entry.item.phase === "final_answer" ? p.turn.completedAt : p.turn.startedAt } : {}) });
       if (method === "turn/completed") for (const entry of this.state.entries) if (entry.turnId === turnId) this.invalidateDetail(entry, event.seq);
       for (const item of p.turn.items) {
         const audience = this.turnAudiences.get(turnId) ?? turnAudience(p.turn.items);
@@ -416,11 +421,13 @@ export class BotTimeline {
       if (this.detailItems.has(key)) this.detailItems.set(key, item);
       if (method === "turn/plan/updated") update(projectHistoryItem({ id: turnId, status: "inProgress", startedAt: null }, item));
       else update({ id, turnId, type: "plan", label: method === "turn/diff/updated" ? "Turn changes" : "Work plan", item: null, complete: false, scheduled: false, status: "inProgress", startedAt: null });
-    } else if (p.itemId && /(?:\/delta|Delta)$/.test(method)) {
+    } else if (p.itemId && (/(?:\/delta|Delta)$/.test(method) || method === "item/reasoning/summaryPartAdded")) {
       const entry = this.state.entries.find((e) => e.turnId === turnId && e.id === p.itemId);
       if (entry?.item && (entry.item.type === "agentMessage" || entry.item.type === "plan")) {
-        const text = entry.item.text + (p.delta ?? "");
-        update({ ...entry, item: { ...entry.item, text: text.slice(0, HISTORY_TEXT_LIMIT) }, complete: entry.complete && text.length <= HISTORY_TEXT_LIMIT });
+        const item = reduceItemEvent(entry.item, event.data as NativeEvent);
+        if (item !== entry.item && (item.type === "agentMessage" || item.type === "plan")) {
+          update({ ...entry, item: { ...item, text: item.text.slice(0, HISTORY_TEXT_LIMIT) }, complete: entry.complete && item.text.length <= HISTORY_TEXT_LIMIT });
+        }
       }
       if (!entry && method === "item/agentMessage/delta") {
         update(projectHistoryItem({ id: turnId, startedAt: null, status: "inProgress" }, { type: "agentMessage", id: p.itemId, text: p.delta ?? "", phase: null, memoryCitation: null, delivery: null, questions: null }));

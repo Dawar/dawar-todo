@@ -33,7 +33,7 @@ import { findNativeTurn } from "./native-reconcile.mjs";
 import { dispatchScheduled, reconcileScheduled, scheduledContext, recoverRunTurns } from "./scheduled-execution.mjs";
 import { projectTerminalTurn, beginTurnDispatch, acknowledgeTurnDispatch, requireDispatchReconciliation, reconcileActiveTurns, captureActivity,
   activityUnchanged, observeStartedTurn, observedActiveTurn, activityUnresolved,
-  requireCurrentActivity } from "./turn-state.mjs";
+  requireCurrentActivity, observeThreadStatus, nativeWaiting } from "./turn-state.mjs";
 import { reconcileCurrentActivity, recoverCurrentActivities } from "./current-activity.mjs";
 import { acceptLocalQueueOperation } from "./local-queue-operation.mjs";
 import { listRunTurns, publicRunTurn, activeScheduledTurn } from "./run-turns.mjs";
@@ -1926,6 +1926,8 @@ export class BotRuntime extends EventEmitter {
     }
     if (message.method === "item/completed" && !usableTurnId(p.turnId)) return;
     this.primary.notification(bot, message);
+    if (message.method === "thread/status/changed") observeThreadStatus(this, bot.id, p.status);
+    if (message.method === "thread/closed") observeThreadStatus(this, bot.id, { type: "notLoaded" });
     if (message.method !== "turn/completed") this.plans.note(bot.id, message);
     if (message.method === "item/completed") {
       rememberInputProvenance(this, bot, p.turnId, p.item);
@@ -2003,6 +2005,10 @@ export class BotRuntime extends EventEmitter {
       const key = `${this.epoch}:${p.requestId}`;
       this.store.remove("pending", key);
       this.emitEvent("request.resolved", { key }, bot.id);
+      const current = this.store.bot(bot.id);
+      if (observedActiveTurn(this, bot.id, current.activeTurnId)) this.saveBot(current, {
+        status: nativeWaiting(this, bot.id) || this.store.list("pending", bot.id).some(pending => pending.request.params.isBlocking !== false) ? "waiting" : "running",
+      });
     }
     if (message.method === "turn/completed") {
       this.recordScheduledEvidence(bot.id, p.turn);
