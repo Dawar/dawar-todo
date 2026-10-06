@@ -627,14 +627,19 @@ export class BotRuntime extends EventEmitter {
     // Peer control is a short local fence, never queued behind native execution
     // or attachment preparation. Bot transport provenance cannot grant it.
     if (["peers.control", "peers.send", "peers.reply", "peers.cancel"].includes(method)) {
+      const bot=this.store.bot(String(botId));
+      this.peers.assertReceiptCaller(bot,method,trustedOrigin);
       try {
-        const bot=this.store.bot(String(botId));
         return method === "peers.control" ? this.peers.control(bot,params,operationId,fingerprint,trustedOrigin) :
           await this.peers.mutate(bot,method,params,operationId,fingerprint,trustedOrigin);
       } catch(error) {
         const receipt=this.store.operation(operationId);
-        if(receipt?.status==='done')return receipt.result;
-        error.outcome=receipt && receipt.status!=='held'?'uncertain':'rejected'; throw error;
+        const matching=receipt?.fingerprint===fingerprint&&receipt.method===method&&receipt.botId===bot.id;
+        if(matching&&receipt.status==='done') {
+          this.peers.assertReceiptCaller(this.store.bot(bot.id),method,trustedOrigin);
+          return receipt.result;
+        }
+        error.outcome=matching&&receipt.status!=='held'?'uncertain':'rejected'; throw error;
       }
     }
     const runRequest = method === "requests.respond" && (this.store.get("runPending", params.key) ?? this.store.get("answerExecution", `answer:${params.key}`));

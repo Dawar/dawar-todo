@@ -51,6 +51,15 @@ Duplicates return that original receipt even when current root metadata has adva
 a conflicting revision has no effect. Unknown ACK: repeat the exact retained
 operation/params/ID, then read current root; never create a replacement grant.
 
+Receipt recovery checks the exact method/bot/input fingerprint and authenticated
+caller scope before returning any prior success. Owner-control receipts remain
+owner-only. A scoped old native receipt can be read after its original turn ends;
+new or held admission still requires current-turn authority. A held attempt re-reads
+root state/allowance under the write transaction. If a concurrent Continue makes
+the input eligible, the original input stays held for deliberate same-ID retry,
+without pausing the new allowance or replaying itself. A concurrent Stop stays
+stopped; reserved-reply pauses are written only at the atomic acceptance boundary.
+
 All old roots already at twelve migrate to `paused/legacy-limit`, retaining original
 counts, files and intake/request/exchange/operation IDs. No automatic reopening,
 replay or cancellation occurs. Migration is idempotent metadata in existing SQLite

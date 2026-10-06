@@ -12,7 +12,7 @@ export const PEER_TOOL = { name: 'bots_peers', description: `Collaborate with na
   type: 'object', additionalProperties: false, properties: { operation: { type: 'string', enum: ['directory', 'list', 'read', 'status', 'root', 'feed', 'exchange', 'held', 'send', 'reply', 'cancel'] },
     operationId: { type: 'string' }, recipientBotId: { type: 'string' }, id: { type: 'string' }, parentId: { type: 'string' }, rootId: { type: 'string' },
     kind: { type: 'string', enum: ['message', 'question', 'task'] }, summary: { type: 'string' }, text: { type: 'string' }, attachmentIds: { type: 'array', items: { type: 'string' }, maxItems: 12 },
-    state: { type: 'string', enum: ['waiting', 'completed', 'failed'] }, cursor: { type: 'string' }, limit: { type: 'integer', minimum: 1, maximum: 100 } }, required: ['operation'] } };
+    state: { type: 'string', enum: ['waiting', 'completed', 'failed'] }, cursor: { type: 'string' }, after: { type: 'string' }, limit: { type: 'integer', minimum: 1, maximum: 100 } }, required: ['operation'] } };
 
 export class PeerInbox {
   constructor(runtime) {
@@ -69,13 +69,12 @@ export class PeerInbox {
     return root?.state !== 'active' ? PEER_REASONS[root?.reason] ?? 'Discussion receipt needs review before intake.' : null;
   }
   control(bot, p, operationId, fingerprint, trustedOrigin) {
-    if (trustedOrigin && (trustedOrigin.authority !== 'owner' || trustedOrigin.botId !== bot.id ||
-      trustedOrigin.threadId !== null || trustedOrigin.turnId !== null || trustedOrigin.callId !== null)) throw Error('Only the authenticated owner can control a discussion.');
+    this.assertReceiptCaller(bot,'peers.control',trustedOrigin);
     if (typeof p.rootId!=='string'||!p.rootId||p.rootId.length>180||Object.keys(p).some(k=>!['rootId','action','expectedRevision'].includes(k)) || !['continue','stop'].includes(p.action) ||
       !Number.isSafeInteger(p.expectedRevision) || p.expectedRevision<1) throw Error('Choose a discussion action and its current revision.');
     return this.store.transaction(() => {
       const previous=this.store.operation(operationId);
-      if (previous) { if(previous.fingerprint!==fingerprint)throw Error('Operation ID conflicts with retained discussion control.'); if(previous.status==='done')return previous.result; throw Error('Reconcile the original discussion control.'); }
+      if (previous) { this.assertReceipt(previous,bot,'peers.control',fingerprint); if(previous.status==='done')return previous.result; throw Error('Reconcile the original discussion control.'); }
       const root=this.ownedRoot(bot,p.rootId);
       if(root.revision!==p.expectedRevision)throw Error('This discussion changed. Read its current revision before choosing Continue or Stop.');
       if(p.action==='continue' && root.state==='active')throw Error('The discussion is already active. An allowance cannot renew itself.');
@@ -85,14 +84,26 @@ export class PeerInbox {
       this.publishRoot(next); return result;
     });
   }
-  hold(bot, method, p, operationId, fingerprint, origin, root, reason) {
-    const next=this.store.transaction(()=>{
-      const next=this.store.put('peerRoot',pausePeerRoot(root,reason,now()));
-      this.store.saveOperation(operationId,fingerprint,'held',{method,botId:bot.id,params:p,origin:this.store.operation(operationId)?.origin??origin,heldRootId:next.id,localOnly:'peer-policy-v1',createdAt:this.store.operation(operationId)?.createdAt??now(),error:PEER_REASONS[next.reason]});
-      return next;
+  hold(bot, method, p, operationId, fingerprint, origin, root, evidence) {
+    const held=this.store.transaction(()=>{
+      const previous=this.store.operation(operationId);
+      if(previous) {
+        this.assertReceipt(previous,bot,method,fingerprint);
+        if(previous.status!=='held')throw Error('Reconcile the original peer acceptance receipt.');
+        if(previous.heldRootId!==root.id)throw Error('Retained peer input must keep its original root.');
+      }
+      // BEGIN IMMEDIATE fences every writer. A captured pause is not authority
+      // to overwrite a newer owner grant or Stop after preparation/rollback.
+      const current=this.ensureRoot(this.store.get('peerRoot',root.id)??root,false);
+      const reason=peerPauseReason(current,evidence,Date.now());
+      const next=this.store.put('peerRoot',reason?pausePeerRoot(current,reason,now()):current);
+      const error=reason?`${PEER_REASONS[reason]} Original input and operation ID are retained; only the owner can Continue this same root.`:
+        'Discussion changed during preparation. Original input and operation ID are retained; retry that same operation under current authority.';
+      this.store.saveOperation(operationId,fingerprint,'held',{method,botId:bot.id,params:p,origin:previous?.origin??origin,heldRootId:next.id,localOnly:'peer-policy-v1',createdAt:previous?.createdAt??now(),error});
+      return {root:next,error};
     });
-    this.publishRoot(next);
-    throw Object.assign(Error(`${PEER_REASONS[next.reason]} Original input and operation ID are retained; only the owner can Continue this same root.`),{outcome:'rejected'});
+    this.publishRoot(held.root);
+    throw Object.assign(Error(held.error),{outcome:'rejected'});
   }
   directory() { return { bots: this.store.bots().filter(b => !b.archived).map(b => ({ id: b.id, name: b.name, purpose: b.purpose, color: b.color,
     available: this.runtime.primary.single(b) && !b.archiving })) }; }
@@ -223,6 +234,21 @@ export class PeerInbox {
     if(!row)throw Error('Discussion is not owned by this bot.');
     return this.ensureRoot(this.store.get('peerRoot',id));
   }
+  assertReceipt(operation,bot,method,fingerprint) {
+    if(operation.fingerprint!==fingerprint||operation.method!==method||operation.botId!==bot.id)
+      throw Object.assign(Error('Operation ID conflicts with retained peer input.'),{outcome:'rejected'});
+  }
+  assertReceiptCaller(bot,method,trustedOrigin) {
+    const origin=trustedOrigin??{authority:'owner',botId:bot.id,threadId:null,turnId:null,callId:null};
+    if(method==='peers.control'&&origin.authority!=='owner')
+      throw Object.assign(Error('Only the authenticated owner can control a discussion.'),{outcome:'rejected'});
+    if(origin.botId!==bot.id||!['native-tool','authenticated-bot-mcp','owner'].includes(origin.authority)||
+      (origin.authority==='native-tool'?(origin.threadId!==bot.threadId||typeof origin.turnId!=='string'||!origin.turnId.trim()||typeof origin.callId!=='string'||!origin.callId.trim()):
+        (origin.threadId!==null||origin.turnId!==null||origin.callId!==null)))
+      throw Object.assign(Error('Peer caller authority is missing or belongs to another bot/thread.'),{outcome:'rejected'});
+    // A receipt read need not retain an active original turn. NEW acceptance
+    // still checks current native activity below, including held retries.
+  }
   assertOrigin(bot, origin) {
     if (!origin || origin.botId !== bot.id || !['native-tool', 'authenticated-bot-mcp', 'owner'].includes(origin.authority)) throw new Error('Peer caller authority is missing.');
     if (origin.authority !== 'native-tool') {
@@ -257,11 +283,14 @@ export class PeerInbox {
   }
   async mutate(bot, method, p, operationId, fingerprint, trustedOrigin = null) {
     const origin = trustedOrigin ?? Object.freeze({ authority: 'owner', botId: bot.id, threadId: null, turnId: null, callId: null });
+    this.assertReceiptCaller(bot,method,origin);
     // One short root-budget commit across participants. Native dispatch never
     // happens under this lock. Attachment copying precedes atomic acceptance.
     return this.runtime.lock('peer:intake', async () => {
+      bot=this.store.bot(bot.id);
+      this.assertReceiptCaller(bot,method,origin);
       const previous = this.store.operation(operationId);
-      if (previous) { if (previous.fingerprint !== fingerprint) throw new Error('Operation ID conflicts with retained peer input.'); if (previous.status === 'done') return previous.result; if(previous.status!=='held')throw new Error('Peer acceptance needs its original receipt.'); }
+      if (previous) { this.assertReceipt(previous,bot,method,fingerprint); if (previous.status === 'done') return previous.result; if(previous.status!=='held')throw new Error('Peer acceptance needs its original receipt.'); }
       const keys=method==='peers.send'?['recipientBotId','kind','summary','text','attachmentIds','parentId']:
         method==='peers.reply'?['id','state','text','attachmentIds']:['id'];
       if(Object.keys(p).some(k=>!keys.includes(k)) || ['id','recipientBotId','parentId'].some(k=>p[k]!=null&&(typeof p[k]!=='string'||!p[k]||p[k].length>180)))throw Error('Invalid scoped peer input. Retain its original operation ID.');
@@ -289,6 +318,13 @@ export class PeerInbox {
         } else {
           if (request.senderBotId !== bot.id) throw new Error('Only the requester can cancel its request.');
           if (request.cancelRequested || terminal(request)) return this.store.transaction(() => {
+            this.assertReceiptCaller(this.store.bot(bot.id),method,origin);
+            const receipt=this.store.operation(operationId);
+            if(receipt) {
+              this.assertReceipt(receipt,bot,method,fingerprint);
+              if(receipt.status==='done')return receipt.result;
+              if(receipt.status!=='held')throw Error('Reconcile the original peer acceptance receipt.');
+            }
             const result = { request: this.public(request) };
             this.store.saveOperation(operationId, fingerprint, 'done', { method, botId: bot.id, params: p, result, origin:previous?.origin??origin, ...(previous?.origin?{retryOrigin:origin}:{}), localOnly: 'peer-v1', createdAt: previous?.createdAt??now() });
             return result;
@@ -307,21 +343,22 @@ export class PeerInbox {
       const reserved=kind==='cancel'||kind==='reply'&&replies===0;
       const evidence={charged:consumesRound,bytes:Buffer.byteLength(text),hash:digest(text),sender:bot.id,recipient:recipient.id,kind};
       let reason=peerPauseReason(root,evidence,Date.now());
-      if(reason&&!reserved)this.hold(bot,method,p,operationId,fingerprint,origin,root,reason);
-      if(reason)root=this.store.put('peerRoot',pausePeerRoot(root,reason,now()));
+      if(reason&&!reserved)this.hold(bot,method,p,operationId,fingerprint,origin,root,evidence);
       if (!this.runtime.primary.single(recipient) || recipient.archived || recipient.archiving) throw new Error('Recipient is not available for primary intake.');
       const ids = kind === 'cancel' ? [] : p.attachmentIds ?? [];
       const copies = await copyPeerAttachments(this.runtime, bot, recipient, ids, exchangeId);
       try {
         root=this.ensureRoot(this.store.get('peerRoot',root.id) ?? root,false);
         reason=peerPauseReason(root,evidence,Date.now());
-        if(reason&&!reserved)this.hold(bot,method,p,operationId,fingerprint,origin,root,reason);
-        if(reason)root=this.store.put('peerRoot',pausePeerRoot(root,reason,now()));
+        if(reason&&!reserved)this.hold(bot,method,p,operationId,fingerprint,origin,root,evidence);
         return this.store.transaction(() => {
+        this.assertReceiptCaller(this.store.bot(bot.id),method,origin);
         const committedOperation=this.store.operation(operationId);
-        if(committedOperation?.status==='done') {
-          if(committedOperation.fingerprint!==fingerprint)throw Error('Operation ID conflicts with retained peer input.');
-          return committedOperation.result;
+        if(committedOperation) {
+          this.assertReceipt(committedOperation,bot,method,fingerprint);
+          if(committedOperation.status==='done')return committedOperation.result;
+          if(committedOperation.status!=='held'||committedOperation.heldRootId!==root.id)
+            throw Error('Reconcile the original peer acceptance receipt.');
         }
         // BEGIN IMMEDIATE also fences another DB writer, not just this runtime's
         // async lock. Never overwrite a concurrent owner Stop/Continue.
@@ -356,8 +393,11 @@ export class PeerInbox {
         this.store.saveOperation(operationId, fingerprint, 'done', { method, botId: bot.id, params: p, result, origin:previous?.origin??origin, ...(previous?.origin?{retryOrigin:origin}:{}), localOnly: 'peer-v1', createdAt: previous?.createdAt??now() });
         this.publish(r,exchangeId); this.publishRoot(root); return result;
       }); } catch (error) {
-        const committed = this.store.operation(operationId); if (committed?.status === 'done') return committed.result;
-        if(error.peerHold)this.hold(bot,method,p,operationId,fingerprint,origin,error.peerHold.root,error.peerHold.reason);
+        const committed = this.store.operation(operationId); if (committed?.status === 'done') {
+          this.assertReceiptCaller(this.store.bot(bot.id),method,origin);
+          this.assertReceipt(committed,bot,method,fingerprint); return committed.result;
+        }
+        if(error.peerHold)this.hold(bot,method,p,operationId,fingerprint,origin,error.peerHold.root,evidence);
         error.outcome = 'rejected'; throw error;
       }
     });
