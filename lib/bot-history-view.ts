@@ -32,7 +32,9 @@ export type HistoryResponse =
 /** Attachments refresh independently, including when notModified reuses text. */
 export type HistoryDetail = { context?: HistoryContext; json: string; nextOffset: number | null; totalLength: number; version: string; eventCursor?: number; notModified?: boolean; attachments?: BotAttachment[] };
 export type HistoryGap = { before: string; stop: string; cursor: string };
-export type HistoryPosition = { anchor: string | null; offset: number; following: boolean };
+/** tailContext identifies the supplementary readable preview, whose canonical
+ * item may also exist outside the mounted native window. It is display state. */
+export type HistoryPosition = { anchor: string | null; offset: number; following: boolean; tailContext?: boolean };
 export const HISTORY_WINDOW = 40; // Legacy diagnostic item view.
 export const CONVERSATION_TURNS = 25;
 export const conversationItem = (type: string) => ["userMessage", "agentMessage", "plan", "reasoning"].includes(type);

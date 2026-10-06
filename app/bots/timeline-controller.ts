@@ -457,7 +457,7 @@ export class BotTimeline {
   }
   position(position: HistoryPosition) {
     const old = this.state.position;
-    if (old.anchor === position.anchor && old.offset === position.offset && old.following === position.following) return;
+    if (old.anchor === position.anchor && old.offset === position.offset && old.following === position.following && Boolean(old.tailContext) === Boolean(position.tailContext)) return;
     this.state = { ...this.state, position }; this.scheduleWrite();
   }
   private scheduleWrite() { this.metadataVersion++; if (!this.disposed) this.writeTimer ??= setTimeout(() => { this.writeTimer = undefined; void this.flush(); }, 250); }

@@ -542,7 +542,7 @@ export function BotsWorkspace() {
             {teamsSupported && <select aria-label="Filter bots by team" value={teamFilter === "all" || teamFilter === "none" || teams.some(t => t.id === teamFilter) ? teamFilter : "all"} onChange={e => setTeamFilter(e.target.value)}><option value="all">All teams</option><option value="none">No team</option>{teams.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}</select>}
             <select aria-label="Bot list order" value={teamSort} onChange={e => setTeamSort(e.target.value)}><option value="recent">Recent</option><option value="team">Team order</option><option value="name">Name</option></select>
           </div>
-          <BotSidebarList bots={filtered} snapshot={snapshot} selected={selected} select={select}
+          <BotSidebarList owner={owner} search={search} bots={filtered} snapshot={snapshot} selected={selected} select={select}
             empty={teamFilter!=="all" ? "No bots in this team." : search ? "No matching bots." : archived ? "No archived bots." : "Your bots will appear here."} />
           <div className="bots-machine">
             <span className={`bots-status-dot ${online ? "online" : ""}`} />

@@ -177,6 +177,13 @@ export function BotConversation({ owner, bot, online, children, onOpenCall, onRe
       setTimeout(() => URL.revokeObjectURL(url), 60_000);
     }).catch((error) => setDownloadError(String(error)));
   }, [bot.id]);
+  // A supplementary context preview can share a canonical identity with an
+  // older cached item. Keep a preview being read when newer output arrives;
+  // it must neither recenter the native window nor repeat a mounted item.
+  const pinnedContext = state.position.tailContext && !state.position.following
+    ? [...state.contextEntries, ...state.entries].find(entry => historyKey(entry.turnId, entry.id) === timeline.resolveKey(state.position.anchor)) : undefined;
+  const mountedKeys = new Set(state.entries.slice(first, last).map(entry => historyKey(entry.turnId, entry.id)));
+  const contextEntries = (pinnedContext && !state.contextEntries.some(entry => historyKey(entry.turnId, entry.id) === historyKey(pinnedContext.turnId, pinnedContext.id)) ? [pinnedContext] : state.contextEntries).filter(entry => !mountedKeys.has(historyKey(entry.turnId, entry.id)));
   return <div className="bots-timeline"><div className="bots-messages" ref={scroll} tabIndex={0} {...feed.handlers}><div ref={content}>
     {paging && <div className="bots-feed-loading" role="status">Loading conversation…</div>}
     {(first > 0 || state.olderCursor) && !state.loading && (!online || state.error || !state.entries.length) && <button className="bots-older" disabled={paging || !online && (first === 0 || state.gaps.some((gap) => gap.before === historyKey(state.entries[first].turnId, state.entries[first].id)))} onClick={() => void feed.page(-1, true)}>{state.entries.length ? "Load earlier turns" : "Continue loading history"}</button>}
@@ -188,9 +195,9 @@ export function BotConversation({ owner, bot, online, children, onOpenCall, onRe
     {findings.error && <p className="bots-error" role="alert">{findings.error}<button disabled={!online || findings.busy} onClick={findings.retry}>Retry</button></p>}
     {state.loading && !state.entries.length && <div className="bots-history-skeleton" role="status" aria-label="Loading conversation"><span /><span /><span /><span /></div>}
     {!state.loading && !state.error && !state.entries.length && !state.olderCursor && <div className="bots-conversation-start"><span className="bots-start-icon"><MessageCircle size={26} strokeWidth={1.4} aria-hidden="true" /></span><h2>{bot.name}</h2><p>{bot.purpose || "What would you like to work on?"}</p></div>}
-    {last === state.entries.length && !groups.some((group) => group.kind === "message" || group.kind.startsWith("scheduled:")) && state.contextEntries.length > 0 && <section aria-label="Latest readable context">
+    {(pinnedContext || last === state.entries.length && !groups.some((group) => group.kind === "message" || group.kind.startsWith("scheduled:"))) && contextEntries.length > 0 && <section aria-label="Latest readable context" data-history-context>
       <p className="bots-system-note">Latest readable messages. Intervening work remains accessible through earlier history.</p>
-      {state.contextEntries.map((entry) => <TimelineEntry {...replyProps} onOpenCall={onOpenCall} key={historyKey(entry.turnId, entry.id)} entry={entry} timeline={timeline} attachments={state.attachments} download={download} />)}
+      {contextEntries.map((entry) => <TimelineEntry {...replyProps} onOpenCall={onOpenCall} key={historyKey(entry.turnId, entry.id)} entry={entry} timeline={timeline} attachments={state.attachments} download={download} />)}
     </section>}
     {groups.map((group) => {
       if (group.secure) return <div key={group.secure.id} className="bots-secure-timeline-entry"><SecureInputCard request={group.secure} online={online}/><MessageTime seconds={Date.parse(group.secure.createdAt) / 1000} basis="received" inline/></div>;
@@ -209,7 +216,7 @@ export function BotConversation({ owner, bot, online, children, onOpenCall, onRe
         {groups.slice(groups.indexOf(group) + 1).find(next => !next.secure)?.entries[0]?.turnId !== entry.turnId ? <ReturnedArtifacts linked={linkedArtifacts} attachments={state.attachments} turnId={entry.turnId} botId={bot.id} /> : null}
       </Fragment>;
     })}
-    {last < state.entries.length && (!online || state.error) && <button className="bots-older" disabled={paging || !online && state.gaps.some((gap) => gap.before === historyKey(state.entries[last].turnId, state.entries[last].id))} onClick={() => void feed.page(1, true)}>Load newer turns</button>}
+    {last < state.entries.length && <button className="bots-older" disabled={paging || !online && state.gaps.some((gap) => gap.before === historyKey(state.entries[last].turnId, state.entries[last].id))} onClick={() => void feed.page(1, true)}>Load newer turns</button>}
     {downloadError && <p className="bots-error" role="alert">{downloadError}</p>}
     {last === state.entries.length && tailBatches.map(batch => <BurstBubbles key={batch.id} batch={batch} messages={batch.messageIds.flatMap(id => { const message = burst.value?.messages.find(message => message.id === id); return message ? [message] : []; })} truncatedIds={burst.value?.preview?.truncatedTextIds} controls={burst} {...batchProps} onOpenReply={openReply} />)}
     {burstsEnabled && <BurstControls burst={burst} online={online} submitting={burstSubmitting} />}

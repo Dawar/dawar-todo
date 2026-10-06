@@ -3,6 +3,7 @@ import { memo, useId, useMemo, useRef, useState } from "react";
 import { ChevronDown, LoaderCircle, Zap } from "lucide-react";
 import type { Bot, BotSnapshot, BotTeam } from "../../lib/bots-types";
 import { BotAvatar } from "./bot-avatar";
+import { useSidebarPreferences } from './sidebar-preferences';
 const HEIGHT = 96;
 const working = (bot: Bot) => Boolean(bot.activeTurnId || bot.status === "running" || bot.workerTasks?.active);
 const unread = (bot: Bot) => bot.updatedAt > bot.lastReadAt;
@@ -18,10 +19,13 @@ const SidebarRow = memo(function SidebarRow({ bot: b, selected, select, modelNam
   </button>;
 });
 type ListRow = { kind: "heading"; id: string; name: string; color?: string; count: number; offset: number; height: number } | { kind: "bot"; id: string; bot: Bot; offset: number; height: number };
-export const BotSidebarList = memo(function BotSidebarList({ bots, snapshot, selected, select, empty }: {
-  bots: Bot[]; snapshot: BotSnapshot | null; selected: string | null; select: (id: string) => void; empty: string;
+export const BotSidebarList = memo(function BotSidebarList({ owner, search = '', bots, snapshot, selected, select, empty }: {
+  owner: string; search?: string; bots: Bot[]; snapshot: BotSnapshot | null; selected: string | null; select: (id: string) => void; empty: string;
 }) {
-  const [top, setTop] = useState(0), [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
+  const [top, setTop] = useState(0);
+  const { store, state: preferences } = useSidebarPreferences(owner);
+  const searching = Boolean(search.trim());
+  const collapsed = useMemo(() => new Set([...Object.keys(preferences.choices), ...Object.values(preferences.pending).map(p => p.request.teamId)].filter(key => store.collapsed(key))), [preferences, store]);
   const ref = useRef<HTMLDivElement>(null), id = useId();
   const models = useMemo(() => new Map(snapshot?.models.map(model => [model.model, model.displayName])), [snapshot?.models]);
   const teams = useMemo(() => new Map(snapshot?.teams?.map(team => [team.id, team])), [snapshot?.teams]);
@@ -42,10 +46,10 @@ export const BotSidebarList = memo(function BotSidebarList({ bots, snapshot, sel
       if (!members.length) continue;
       const team = teams.get(key);
       result.push({ kind: "heading", id: key, name: team?.name ?? "Bots", color: team?.color, count: members.length, offset, height: 42 }); offset += 42;
-      if (!collapsed.has(key)) for (const bot of members) append(bot);
+      if (searching || !collapsed.has(key)) for (const bot of members) append(bot);
     }
     return result;
-  }, [bots, snapshot?.teams, teams, collapsed]);
+  }, [bots, snapshot?.teams, teams, collapsed, searching]);
   const total = rows.at(-1) ? rows.at(-1)!.offset + rows.at(-1)!.height : 0;
   const viewport = ref.current?.clientHeight || 900;
   const safeTop = Math.min(top, Math.max(0, total - viewport));
@@ -57,13 +61,14 @@ export const BotSidebarList = memo(function BotSidebarList({ bots, snapshot, sel
     if (next) { event.preventDefault(); select(next.id); ref.current?.scrollTo(0, next.offset); }
   }}>
     <div style={{ height: visible[0]?.offset ?? 0 }} aria-hidden="true" />
-    {visible.map(row => row.kind === "heading" ? <button key={`group:${row.id}`} type="button" className="bots-team-heading" style={{ height: row.height }} aria-expanded={!collapsed.has(row.id)} aria-label={`${row.name}, ${row.count} ${row.count === 1 ? "bot" : "bots"}`} onClick={() => setCollapsed(value => { const next = new Set(value); if (next.has(row.id)) next.delete(row.id); else next.add(row.id); return next; })}>
-      <ChevronDown size={15} className={collapsed.has(row.id) ? "is-collapsed" : ""} aria-hidden="true" /><span className="bots-team-dot" style={{ background: row.color ?? "#8a978e" }} aria-hidden="true" /><span id={`${id}-${row.id}`}>{row.name}</span><small>{row.count}</small>
+    {visible.map(row => row.kind === "heading" ? <button key={`group:${row.id}`} type="button" className="bots-team-heading" style={{ height: row.height }} aria-expanded={searching || !collapsed.has(row.id)} aria-disabled={searching || undefined} aria-label={`${row.name}, ${row.count} ${row.count === 1 ? "bot" : "bots"}`} onClick={() => { if (!searching) store.toggle(row.id); }}>
+      <ChevronDown size={15} className={!searching && collapsed.has(row.id) ? "is-collapsed" : ""} aria-hidden="true" /><span className="bots-team-dot" style={{ background: row.color ?? "#8a978e" }} aria-hidden="true" /><span id={`${id}-${row.id}`}>{row.name}</span><small>{row.count}</small>
     </button> : <div key={row.id} style={{ height: row.height }}>{(() => {
       const b = row.bot, modelId = b.model ?? snapshot?.defaults.model ?? "Default model", tier = b.serviceTier ?? snapshot?.defaults.serviceTier;
       return <SidebarRow bot={b} selected={b.id === selected} select={select} modelName={models.get(modelId) ?? modelId} effort={b.effort ?? snapshot?.defaults.effort ?? "default"} fast={tier === "priority" || tier === "fast"} />;
     })()}</div>)}
     <div style={{ height: Math.max(0, total - (visible.at(-1) ? visible.at(-1)!.offset + visible.at(-1)!.height : 0)) }} aria-hidden="true" />
     {!bots.length && <div className="bots-sidebar-empty">{empty}</div>}
+    {preferences.error && <p className="bots-system-note" role="status">{preferences.error} <button type="button" onClick={() => void store.sync()}>Retry saving team choices</button></p>}
   </div>;
 });
