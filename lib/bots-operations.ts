@@ -2,7 +2,7 @@ import type { BotReplyReference } from "./bot-replies";
 import type { OperatorSegment } from './operator-types';
 /** Public bridge contract. Native JSON-RPC method names never come from a browser. */
 import type {
-  BotTeam, BotTeamDetail, Bot, BotAvatar, BotWorkState, BotInboxItem, BotPeerRequest, BotPeerExchange, BotPeerPage, BotBurstState, BotBurstMessage, BotBurst,
+  BotTeam, BotTeamDetail, Bot, BotAvatar, BotWorkState, BotInboxItem, BotPeerRequest, BotPeerPage, BotPeerBodyPage, BotPeerRoot, BotPeerStatus, BotPeerControl, BotPeerFeed, BotPeerExchangeMeta, BotPeerHeldPage, BotBurstState, BotBurstMessage, BotBurst,
   BotAttachment,
   BotHistory,
   BotSchedule,
@@ -57,7 +57,13 @@ export type BotOperations = {
   "goals.clear": { params: Record<string, never>; result: { cleared: boolean } };
   "peers.directory": { params: Record<string, never>; result: { bots: { id: string; name: string; purpose: string; color: string; available: boolean }[] } };
   "peers.list": { params: { cursor?: string | null; limit?: number; rootId?: string }; result: BotPeerPage };
-  "peers.read": { params: { id: string }; result: { request: BotPeerRequest; exchanges: BotPeerExchange[] } };
+  "peers.read": { params: { id: string; cursor?: string | null; limit?: number }; result: BotPeerBodyPage };
+  "peers.root": { params: { rootId: string }; result: { root: BotPeerRoot } };
+  "peers.status": { params: { cursor?: string | null; limit?: number }; result: BotPeerStatus };
+  "peers.held": { params: { rootId?: string; cursor?: string | null; limit?: number }; result: BotPeerHeldPage };
+  "peers.feed": { params: { cursor?: string | null; after?: string; limit?: number }; result: BotPeerFeed };
+  "peers.exchange": { params: { id: string }; result: { request: BotPeerRequest; exchange: BotPeerExchangeMeta & { text: string } } };
+  "peers.control": { params: { rootId: string; action: "continue" | "stop"; expectedRevision: number }; result: BotPeerControl };
   "peers.send": { params: { recipientBotId: string; kind: "message" | "question" | "task"; summary: string; text: string; attachmentIds?: string[]; parentId?: string }; result: { request: BotPeerRequest } };
   "peers.reply": { params: { id: string; text: string; attachmentIds?: string[]; state: "waiting" | "completed" | "failed" }; result: { request: BotPeerRequest } };
   "peers.cancel": { params: { id: string }; result: { request: BotPeerRequest } };
