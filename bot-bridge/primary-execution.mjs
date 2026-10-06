@@ -1,3 +1,4 @@
+import { primaryWorkView, primaryInboxItemView } from './primary-work-view.mjs';
 import { configurePrimary } from './primary-configuration.mjs';
 import { createHash, randomUUID } from 'node:crypto';
 import { stagedQueue, dispatchPrompt } from './prompt-queue.mjs';
@@ -5,7 +6,7 @@ import { reconcileStop } from './execution-stop.mjs';
 import { occurrenceReady } from './schedule-decisions.mjs';
 import { findNativeTurn } from './native-reconcile.mjs';
 import { usableTurn, terminalTurn } from './native-turn.mjs';
-import { captureActivity, activityUnchanged, beginTurnDispatch, requireDispatchReconciliation, observedActiveTurn, nativeWaiting, pendingQuestions } from './turn-state.mjs';
+import { captureActivity, activityUnchanged, beginTurnDispatch, requireDispatchReconciliation } from './turn-state.mjs';
 
 const now = () => new Date().toISOString();
 const terminal = new Set(['completed', 'failed', 'interrupted', 'cancelled']);
@@ -19,21 +20,7 @@ export class PrimaryExecution {
       .all(botId).map(r => JSON.parse(r.json));
   }
   single(bot) { return bot.executionMode === 'single-thread'; }
-  work(bot) {
-    const progress = this.store.get('botWork', bot.id), goal = this.store.get('nativeGoal', bot.id);
-    const inbox = this.openItems(bot.id);
-    const activity = this.store.get('botActivity', bot.id);
-    const inflight = activity?.unresolved && activity.reason === 'native-start-in-flight' &&
-      [...this.runtime.codex.pending.values()].some(call => call.threadId === bot.threadId && ['turn/start','turn/steer','thread/queue/add'].includes(call.method));
-    const unconfirmed = this.runtime.activityUnresolved(bot.id) && !inflight || inbox.some(i => i.state === 'uncertain' || i.state === 'dispatching' && !inflight);
-    const active = observedActiveTurn(this.runtime, bot.id, bot.activeTurnId);
-    const starting = inflight;
-    return { botId: bot.id, executionMode: bot.executionMode ?? 'legacy',
-      state: nativeWaiting(this.runtime, bot.id) || pendingQuestions(this.runtime, bot.id).length ? 'needs-input' : active ? 'working' : unconfirmed ? 'unconfirmed' : starting ? 'starting' : 'ready',
-      activeTurnId: bot.activeTurnId, paused: !!bot.queuePaused, summary: progress?.summary ?? goal?.goal?.objective ?? null,
-      remaining: progress?.remaining ?? null, waitingFor: progress?.waitingFor ?? [], goal: goal?.goal ?? null,
-      goalObservedAt: goal?.observedAt ?? null, migrationReason: bot.migrationReason ?? null };
-  }
+  work(bot) { return primaryWorkView(this.runtime, bot); }
   publish(botId) { this.runtime.emitEvent('work', this.work(this.store.bot(botId)), botId); }
   progress(bot, p) {
     if (typeof p.summary !== 'string' || p.summary.length > 1000 || typeof p.remaining !== 'string' || p.remaining.length > 4000 ||
@@ -140,8 +127,7 @@ export class PrimaryExecution {
       summary: summary.slice(0, 1000), text, attachmentIds: [...attachments], fingerprint, state: 'queued', createdAt: now(), turnId: null });
     this.publish(bot.id); return record;
   }
-  publicItem(row) { const { id, botId, kind, sourceId, summary, createdAt, turnId, state } = row;
-    return { id, botId, kind, sourceId, summary, createdAt, turnId, state, waitReason: row.error ?? (state === 'uncertain' ? 'Original native delivery is unconfirmed.' : null) }; }
+  publicItem(row) { return primaryInboxItemView(this.runtime, row); }
   list(bot, p = {}) {
     const limit = p.limit ?? 30;
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new Error('Invalid inbox page size.');
