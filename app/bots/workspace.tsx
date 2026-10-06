@@ -824,7 +824,7 @@ export function BotsWorkspace() {
                 <h3>Up next</h3><p className="bots-details-lead">Scheduled work and bot discussions.</p>
                 {single && <WorkOverview owner={owner} bot={bot} work={work} online={online} />}
                 {!single && !promptQueue.length && <div className="bots-details-empty"><ListOrdered size={27} strokeWidth={1.5} /><h3>A little breathing room</h3><p>Nothing is queued. Use Ctrl+Enter to save a message for the next turn.</p></div>}
-                {single && <AutomaticInbox owner={owner} botId={bot.id} online={online} />}
+                {single && <AutomaticInbox owner={owner} bot={bot} work={work} online={online} />}
               </>,
               queues: queueListsSupported ? <QueueLists key={`lists:${scope}`} owner={owner} bot={bot} lists={queueLists.lists} defaultItems={promptQueue} online={online} refreshLists={queueLists.refresh} refreshDefault={refreshDefaultQueue} onEdit={editQueued} /> : <p className="bots-details-lead">Queue lists will be available when the bot service update finishes.</p>,
               schedules: <>
