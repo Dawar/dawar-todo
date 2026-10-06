@@ -38,7 +38,11 @@ export function primaryWorkView(runtime, bot) {
 export function primaryInboxItemView(runtime, row) {
   const { id, botId, threadId, kind, sourceId, summary, createdAt, turnId, state } = row;
   const bot = runtime.store.bot(botId);
-  let waitReason = row.error ?? (state === 'uncertain' ? 'Original native delivery is unconfirmed.' : null);
+  // Discussion policy owns this read-only explanation. Its admission fence
+  // applies to local queued intake; accepted/uncertain native work keeps its
+  // own execution/confirmation status even when the discussion is stopped.
+  let waitReason = row.error ?? (state === 'queued' ? runtime.peers?.waitReason?.(row) : null) ??
+    (state === 'uncertain' ? 'Original native delivery is unconfirmed.' : null);
   if (state === 'accepted') {
     if (threadId !== bot.threadId) waitReason = 'Original thread binding needs confirmation.';
     else if (turnId && observedActiveTurn(runtime, botId, turnId)) {
