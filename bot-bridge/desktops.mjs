@@ -408,7 +408,7 @@ export class BotDesktops {
           if (thread?.id !== bot.threadId || thread.status?.type !== "idle" ||
               !activityUnchanged(this.runtime, bot.id, token) || this.blockedBrowser(bot)) return;
           const state = await this.browserCommand(bot, "probe");
-          if (state.connected || state.monotonicMs - state.idleMs > policy.release.monotonicMs || state.idleMs < 3600000 || state.boot !== policy.release.boot ||
+          if (state.monotonicMs - policy.release.monotonicMs < 3600000 || state.connected || state.monotonicMs - state.idleMs > policy.release.monotonicMs || state.idleMs < 3600000 || state.boot !== policy.release.boot ||
               JSON.stringify(state.instances) !== JSON.stringify(policy.release.instances)) return;
           if (!activityUnchanged(this.runtime, bot.id, token) || this.blockedBrowser(bot) ||
               this.policy(bot).revision !== policy.revision) return;

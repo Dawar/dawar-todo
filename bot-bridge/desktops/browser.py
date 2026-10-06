@@ -159,7 +159,7 @@ def close(p,cfg,expected):
             state=probe(p,cfg)
             if state['boot']!=expected['boot'] or state['instances']!=expected['instances'] or not state['instances']:
                 raise ValueError('Browser instance changed; release it again after review.')
-            if state['monotonicMs']-state['idleMs']>expected['monotonicMs'] or state['idleMs']<HOUR or state['connected'] or lease_active(p):
+            if state['monotonicMs']-expected['monotonicMs']<HOUR or state['monotonicMs']-state['idleMs']>expected['monotonicMs'] or state['idleMs']<HOUR or state['connected'] or lease_active(p):
                 raise ValueError('Desktop input, connection or exclusive lease protects this browser.')
             return state
         guard()
