@@ -73,20 +73,21 @@ export function conversationEntries(entries: HistoryEntry[], audiences = new Map
   // Keep its newest loaded occurrence, without aliasing turns or reordering
   // intervening human messages. Native key/clientId reconciliation is separate.
   const findings = new Map(entries.filter(entry => entry.findingId).map(entry => [entry.findingId, entry]));
-  return entries.filter(entry => entry.deferredTurn || entry.audience === 'finding' || audiences.get(entry.turnId)?.kind !== 'activity')
+  return entries.filter(entry => entry.peerAlias || entry.item && peerInput(entry.item) || entry.deferredTurn || entry.audience === 'finding' || audiences.get(entry.turnId)?.kind !== 'activity')
     .filter(entry => !entry.findingId || findings.get(entry.findingId) === entry)
-    .filter(entry => !entry.item || !scheduleInput(entry.item) && !peerInput(entry.item))
+    .filter(entry => !entry.item || !scheduleInput(entry.item))
     .filter(entry => !(entry.item?.type === 'userMessage' && entry.item.clientId?.startsWith('manager-notice:')))
     .filter(entry => entry.deferredTurn || conversationItem(entry.type) && entry.id !== 'live-turn-diff' || (entry.turnStatus ?? entry.status) === 'inProgress')
     .filter(entry => entry.item?.type !== 'agentMessage' || entry.item.text.trim() || entry.item.questions?.length || entry.questionNotice)
     .filter(entry => entry.item?.type !== 'reasoning' || (entry.turnStatus ?? entry.status) === 'inProgress' || entry.item.summary.some(text => text.trim()))
     .map(entry => {
       const audience = audiences.get(entry.turnId);
+      const peerAlias = entry.item?.type === 'userMessage' && peerInput(entry.item) ? entry.item.clientId! : entry.peerAlias;
       const item = entry.item?.type === 'reasoning' && entry.item.content.length ? { ...entry.item, content: [] } : entry.item;
       const legacyContext = !audience && (entry.scheduled || entry.legacyContext);
       const kind: HistoryEntry['audience'] = entry.audience === 'finding' ? 'finding' : audience?.kind === 'mixed' || legacyContext ? 'mixed' : entry.audience;
       const scheduled = Boolean((audience?.runId ?? entry.runId) && (audience?.kind === 'conversation' || audience?.kind === 'mixed'));
-      if (item === entry.item && scheduled === entry.scheduled && kind === entry.audience && (audience?.runId ?? entry.runId) === entry.runId && Boolean(legacyContext) === Boolean(entry.legacyContext)) return entry;
-      return { ...entry, item, scheduled, audience: kind, runId: audience?.runId ?? entry.runId, legacyContext: Boolean(legacyContext) };
+      if (peerAlias === entry.peerAlias && item === entry.item && scheduled === entry.scheduled && kind === entry.audience && (audience?.runId ?? entry.runId) === entry.runId && Boolean(legacyContext) === Boolean(entry.legacyContext)) return entry;
+      return { ...entry, item, ...(peerAlias ? { peerAlias } : {}), scheduled, audience: kind, runId: audience?.runId ?? entry.runId, legacyContext: Boolean(legacyContext) };
     });
 }
