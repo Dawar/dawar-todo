@@ -1,30 +1,63 @@
 import { replayableStorageFetch } from "../../lib/storage-transfer";
 import type { BotAttachment, BotArtifactPage } from "../../lib/bots-types";
+import { CloudTransferDeadline, cloudRetryDelay, CLOUD_METADATA_DEADLINE_MS, CLOUD_UPLOAD_DEADLINE_MS, CLOUD_DOWNLOAD_IDLE_MS, CLOUD_DOWNLOAD_DEADLINE_MS } from "./cloud-transfer-deadline";
 
 export class CloudStorageError extends Error { constructor(message: string,public code: string,public status: number) { super(message); } }
 type Receipt = BotAttachment & {sha256:string;cloudState:"ready"};
 type SignedDownload = {attachment:Receipt;url:string;expiresAt:string};
 type Preparation = {attachment?:Receipt;upload?:{url:string;fields:Record<string,string>}};
 type CheckOwner = () => string;
+const requestTimeout = (action: string) => new CloudStorageError(
+  action === "finalize" || action === "copy"
+    ? "Cloud transfer confirmation timed out. Your files are retained; retry to check the original transfer."
+    : "Cloud request timed out. Your draft and files are retained; retry when ready.",
+  "transfer_timeout", 0);
+const downloadTimeout = () => new CloudStorageError("Cloud download stalled or exceeded its time limit. Retry to download the complete file.", "transfer_timeout", 0);
+
+// Do not await cancellation: a stalled cancel handler must not hold recovery.
+function cancelBody(body: ReadableStream<Uint8Array> | null) { void body?.cancel().catch(() => {}); }
+function releaseReader(reader: ReadableStreamDefaultReader<Uint8Array>) {
+  void reader.cancel().catch(() => {});
+  reader.releaseLock();
+}
+async function cloudJson(response: Response, deadline: CloudTransferDeadline) {
+  if (!response.body) return null;
+  const reader = response.body.getReader(), decoder = new TextDecoder(), parts: string[] = [];
+  try {
+    for (;;) {
+      const next = await deadline.run(() => reader.read());
+      if (next.done) break;
+      parts.push(decoder.decode(next.value, { stream: true }));
+    }
+    parts.push(decoder.decode());
+    return JSON.parse(parts.join("")) as Record<string, unknown> | null;
+  } finally { releaseReader(reader); }
+}
 export async function cloudRequest<T>(owner:string,currentOwner:CheckOwner,action:string,input:Record<string,unknown>={},signal?:AbortSignal):Promise<T> {
   if (!owner || currentOwner() !== owner) throw new Error("The account changed. Your draft is retained.");
   const body = JSON.stringify({...input,action});
-  let response: Response | undefined;
   for (let attempt=0;attempt<3;attempt++) {
     signal?.throwIfAborted();
     if (currentOwner() !== owner) throw Error("The account changed. Your draft is retained.");
-    try { response = await fetch("/api/bots/storage",{method:"POST",headers:{"Content-Type":"application/json"},body,credentials:"same-origin",cache:"no-store",signal}); }
-    catch (error) { if (signal?.aborted || attempt===2) throw error; }
-    if (response && ![429,500,502,503,504].includes(response.status)) break;
-    if (attempt===2) break;
-    await response?.body?.cancel().catch(()=>{}); response=undefined;
-    await new Promise(resolve=>setTimeout(resolve,200*(attempt+1)));
+    const deadline = new CloudTransferDeadline(CLOUD_METADATA_DEADLINE_MS, () => requestTimeout(action), signal);
+    let response: Response | undefined;
+    try {
+      try { response = await deadline.run(() => fetch("/api/bots/storage", { method:"POST", headers:{"Content-Type":"application/json"}, body, credentials:"same-origin", cache:"no-store", signal:deadline.signal })); }
+      catch (error) { deadline.signal.throwIfAborted(); if (attempt === 2) throw error; }
+      if (response && (attempt === 2 || ![429,500,502,503,504].includes(response.status))) {
+        let result: Record<string, unknown> | null;
+        try { result = await cloudJson(response, deadline); }
+        catch { deadline.signal.throwIfAborted(); result = null; }
+        deadline.signal.throwIfAborted();
+        if (!response.ok) throw new CloudStorageError(String(result?.error ?? "Cloud transfer failed. Your local draft and files are retained."), String(result?.code ?? "unavailable"), response.status);
+        if (result?.owner !== owner || currentOwner() !== owner) throw new Error("The account changed. Your draft is retained.");
+        return result as T;
+      }
+      cancelBody(response?.body ?? null);
+      await cloudRetryDelay(deadline.signal, 200 * (attempt + 1));
+    } finally { if (response && !response.bodyUsed) cancelBody(response.body); deadline.dispose(); }
   }
-  if (!response) throw Error("Cloud storage is temporarily unavailable. Try again.");
-  const result = await response.json().catch(() => null) as Record<string,unknown> | null;
-  if (!response.ok) throw new CloudStorageError(String(result?.error ?? "Cloud transfer failed. Your local draft and files are retained."),String(result?.code ?? "unavailable"),response.status);
-  if (result?.owner !== owner || currentOwner() !== owner) throw new Error("The account changed. Your draft is retained.");
-  return result as T;
+  throw Error("Cloud storage is temporarily unavailable. Try again.");
 }
 const statuses = new Map<string,{expires:number;value:{enabled:boolean;catalogReady:boolean;portableCopy?:boolean}}>();
 export async function cloudStatus(owner:string,current:CheckOwner) {
@@ -44,7 +77,12 @@ export async function cloudUpload(owner:string,current:CheckOwner,botId:string,f
     if (prepared.attachment) { validateReceipt(prepared.attachment,metadata); progress(100); return prepared.attachment; }
     if (!prepared.upload) throw new Error("Cloud upload preparation is incomplete. Your files are retained.");
     const body=new FormData(); for (const [key,value] of Object.entries(prepared.upload.fields)) body.set(key,value); body.set("file",file,file.name);
-    const response=await replayableStorageFetch(fetch,prepared.upload.url,{method:"POST",body,redirect:"error",signal:AbortSignal.timeout(120000)});
+    const deadline = new CloudTransferDeadline(CLOUD_UPLOAD_DEADLINE_MS,
+      () => new CloudStorageError("Cloud upload timed out. Your draft and file bytes are retained; retry this upload.", "transfer_timeout", 0));
+    let response: Response;
+    try { response = await deadline.run(() => replayableStorageFetch(fetch, prepared.upload!.url, { method:"POST", body, redirect:"error", signal:deadline.signal })); }
+    finally { deadline.dispose(); }
+    cancelBody(response.body);
     if (current()!==owner) throw new Error("The account changed. Your draft is retained.");
     if (response.status===403 && attempt===0) continue; // Fresh URL, original ID.
     if (!response.ok) throw new Error("Cloud upload failed. Your draft and file bytes are retained; retry this upload.");
@@ -58,23 +96,28 @@ function validateReceipt(receipt:Receipt,expected:{id:string;botId:string;size:n
   if (!receipt || receipt.id!==expected.id || receipt.botId!==expected.botId || receipt.size!==expected.size || receipt.sha256!==expected.sha256 || receipt.cloudState!=="ready" || !receipt.ready) throw new Error("Cloud receipt does not match the retained attachment.");
 }
 export async function cloudDownload(owner:string,current:CheckOwner,botId:string,id:string,signal?:AbortSignal,preview=false) {
+  const deadline = new CloudTransferDeadline(CLOUD_DOWNLOAD_DEADLINE_MS, downloadTimeout, signal, CLOUD_DOWNLOAD_IDLE_MS);
+  try {
   for (let attempt=0;attempt<2;attempt++) {
-    signal?.throwIfAborted();
-    const result=await cloudRequest<SignedDownload>(owner,current,preview?"preview":"download",{botId,id},signal);
+    deadline.signal.throwIfAborted();
+    const result=await cloudRequest<SignedDownload>(owner,current,preview?"preview":"download",{botId,id},deadline.signal);
     if (result.attachment.botId!==botId || (!preview && result.attachment.id!==id)) throw new Error("Cloud download identity mismatch.");
     if (!Number.isSafeInteger(result.attachment.size) || result.attachment.size<0 || result.attachment.size>(preview?128*1024:100*1024*1024) || !/^[a-f0-9]{64}$/.test(result.attachment.sha256)) throw new Error("Invalid cloud file metadata.");
-    const response=await replayableStorageFetch(fetch,result.url,{signal,redirect:"error"});
-    if (response.status===403 && attempt===0) continue;
-    if (!response.ok) throw new Error("Cloud download failed. Please retry.");
+    deadline.progress();
+    const response=await deadline.run(() => replayableStorageFetch(fetch,result.url,{signal:deadline.signal,redirect:"error"}));
+    if (response.status===403 && attempt===0) { cancelBody(response.body); continue; }
+    if (!response.ok) { cancelBody(response.body); throw new Error("Cloud download failed. Please retry."); }
     if (!response.body) throw new Error("Cloud download returned no bytes.");
     const reader=response.body.getReader(),parts:Uint8Array[]=[]; let size=0;
-    try { for (;;) { const next=await reader.read(); if(next.done) break; size+=next.value.length; if(size>result.attachment.size) throw new Error("Cloud download size mismatch."); parts.push(next.value); } }
-    finally { await reader.cancel().catch(()=>{}); reader.releaseLock(); }
+    try { for (;;) { const next=await deadline.run(() => reader.read()); if(next.done) break; size+=next.value.length; if(size>result.attachment.size) throw new Error("Cloud download size mismatch."); if (next.value.length) deadline.progress(); parts.push(next.value); } }
+    finally { releaseReader(reader); }
     const blob=new Blob(parts as BlobPart[]);
-    if (blob.size!==result.attachment.size || await fileSha256(blob)!==result.attachment.sha256) throw new Error("Cloud download checksum mismatch.");
+    if (blob.size!==result.attachment.size || await deadline.run(() => fileSha256(blob))!==result.attachment.sha256) throw new Error("Cloud download checksum mismatch.");
+    deadline.signal.throwIfAborted();
     if (current()!==owner) throw new Error("The account changed.");
     return {blob:new Blob([blob],{type:result.attachment.mimeType}),name:result.attachment.name};
   }
   throw new Error("Download URL expired. Please retry.");
+  } finally { deadline.dispose(); }
 }
 export function cloudList(owner:string,current:CheckOwner,query:Record<string,unknown>) { return cloudRequest<BotArtifactPage>(owner,current,"list",query); }
