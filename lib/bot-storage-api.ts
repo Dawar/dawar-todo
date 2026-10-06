@@ -1,6 +1,7 @@
 import { BotStorage, StorageError, type BotStorageEnv } from "../db/bot-storage";
 import { botsOwner, secretMatches } from "./bots-auth";
 import { createS3Storage } from "./s3-storage";
+import { TaskQueueExports } from "../db/task-queue-exports";
 
 type Environment = BotStorageEnv & Cloudflare.Env & { BOTS_STORAGE_SERVICE_SECRET?: string; BOTS_STORAGE_CATALOG_READY?: string };
 export async function botStorageResponse(request: Request, environment: Environment, service = false) {
@@ -17,7 +18,7 @@ export async function botStorageResponse(request: Request, environment: Environm
     const url = new URL(request.url);
     const input: Record<string, unknown> = request.method === "GET" ? Object.fromEntries(url.searchParams) : await boundedJson(request);
     const action = String(input.action ?? "status");
-    if (action === "status") return Response.json({ owner,enabled: environment.BOTS_STORAGE_ENABLED === "1", catalogReady: environment.BOTS_STORAGE_CATALOG_READY === "1", portableCopy:true },{headers});
+    if (action === "status") return Response.json({ owner,enabled: environment.BOTS_STORAGE_ENABLED === "1", catalogReady: environment.BOTS_STORAGE_CATALOG_READY === "1", portableCopy:true,taskQueueExports:1 },{headers});
     if (action === "providerCors") {
       if (!service) throw new StorageError("Provider configuration checks require the storage service credential.",403,"forbidden");
       if (request.method !== "POST") throw new StorageError("Use POST for private provider checks.",405);
@@ -28,6 +29,10 @@ export async function botStorageResponse(request: Request, environment: Environm
     const storage = new BotStorage(environment,owner,service); await storage.initialize();
     let result;
     switch (action) {
+      case "taskQueueExport": {
+        if(!service) throw new StorageError("Private storage service receipt resolution required.",403,"forbidden");
+        result=await new TaskQueueExports(environment,owner).resolve(String(input.taskExportId),String(input.botId)); break;
+      }
       case "registerBots": result = await storage.registerBots(input.bots as Parameters<BotStorage["registerBots"]>[0]); break;
       case "prepare": result = await storage.prepare(input); break;
       case "finalize": result = await storage.finalize(String(input.id),String(input.botId)); break;

@@ -43,7 +43,23 @@ export class BotStorageClient {
     return result;
   }
   async registerBots() {
-    return this.call('registerBots',{bots:this.runtime.store.bots({ includeDeleted:true }).map(({id,name,color,archived}) => ({id,name,color,archived:Boolean(archived)}))});
+    return this.call('registerBots',{bots:this.runtime.store.bots({ includeDeleted:true }).map(({id,name,color,archived,deletedAt}) => ({id,name,color,archived:Boolean(archived),deleted:Boolean(deletedAt)}))});
+  }
+  /** Read-only typed receipt for Cody's queue admission; never accepts client snapshot text or bucket keys. */
+  async resolveTaskExport(bot,taskExportId) {
+    if(!bot || bot.archived || bot.deletedAt || typeof taskExportId!=='string' || !/^task-export:[a-f0-9]{64}$/.test(taskExportId)) throw new Error('Invalid task export scope.');
+    const result=await this.call('taskQueueExport',{taskExportId,botId:bot.id});
+    const r=result.receipt;
+    if(r?.version!==1 || r.taskExportId!==taskExportId || r.botId!==bot.id || r.state!=='ready' || typeof result.sourceCurrent!=='boolean'
+      || typeof r.operationId!=='string' || !Number.isSafeInteger(r.source?.todoId) || r.source.todoId<1
+      || !/^[a-f0-9]{64}$/.test(r.source.revision) || typeof r.source.title!=='string' || typeof r.source.notes!=='string'
+      || r.source.title.length+r.source.notes.length>190000 || !Array.isArray(r.source.files) || !Array.isArray(r.files)
+      || r.files.length>12 || r.files.length!==r.source.files.length || new Set(r.files.map(f=>f.attachmentId)).size!==r.files.length
+      || r.files.some((f,i)=>f.sourceAttachmentId!==r.source.files[i].id || f.size!==r.source.files[i].size || typeof f.attachmentId!=='string'
+        || !/^[a-f0-9-]{36}$/i.test(f.attachmentId) || !Number.isSafeInteger(f.size) || f.size<1 || f.size>100*1024*1024
+        || !/^[a-f0-9]{64}$/.test(f.sha256) || typeof f.name!=='string' || typeof f.mimeType!=='string'))
+      throw new Error('Task export receipt identity mismatch. Retain the original operation.');
+    return {receipt:r,sourceCurrent:result.sourceCurrent};
   }
   saveTransfer(a,fields) {
     const current=this.runtime.owned('attachment',a.id,a.botId);

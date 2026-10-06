@@ -4,7 +4,7 @@ import type { BotArtifact, BotAttachment } from "../lib/bots-types";
 import { artifactMime } from "../lib/bot-file-metadata.mjs";
 
 export type BotStorageEnv = S3Environment & { DB: D1Database; BOTS_MACHINE_ID?: string; BOTS_STORAGE_ENABLED?: string };
-type Identity = { id: string; name: string; color: string; archived: boolean };
+type Identity = { id: string; name: string; color: string; archived: boolean; deleted?:boolean };
 type FileRow = { owner_key: string; id: string; bot_id: string; fingerprint: string; staging_key: string; object_key: string; state: string; metadata: string; parent_id: string | null; seq: number };
 export class StorageError extends Error { constructor(message: string, public status = 400, public code = "invalid") { super(message); } }
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
@@ -58,7 +58,7 @@ export class BotStorage {
   async registerBots(bots: Identity[]) {
     if (!this.service || !Array.isArray(bots) || bots.length > 500) throw new StorageError("Storage service access required.",403);
     const statements = bots.map(bot => {
-      const metadata = { id: validId(bot.id), name: String(bot.name).slice(0,200), color: String(bot.color).slice(0,40), archived: Boolean(bot.archived) };
+      const metadata = { id: validId(bot.id), name: String(bot.name).slice(0,200), color: String(bot.color).slice(0,40), archived: Boolean(bot.archived), deleted:Boolean(bot.deleted) };
       return this.environment.DB.prepare("INSERT INTO bot_storage_identities VALUES(?,?,?,?) ON CONFLICT(owner_key,id) DO UPDATE SET metadata=excluded.metadata WHERE machine_id=excluded.machine_id").bind(this.owner, metadata.id, this.environment.BOTS_MACHINE_ID ?? "dawar-vm", JSON.stringify(metadata));
     });
     if (statements.length) await this.environment.DB.batch(statements);
@@ -91,13 +91,13 @@ export class BotStorage {
     if (row.state === "ready") return { attachment: this.receipt(row) };
     return { uploadId: row.id, upload: await this.storage.signedPostTarget(row.staging_key,metadata.mimeType,metadata.size,0), cloudState: row.state };
   }
-  private async verify(key: string, metadata: Metadata) {
-    const response = await this.storage.storageFetch(this.storage.storageUrl(key));
+  private async verify(key: string, metadata: Metadata, signal?: AbortSignal) {
+    const response = await this.storage.storageFetch(this.storage.storageUrl(key), { signal });
     if (!response.body) throw new StorageError("Storage returned no file bytes.",502,"integrity");
     const digest = createHash("sha256"); let size = 0;
     const reader = response.body.getReader();
     try { for (;;) { const next = await reader.read(); if (next.done) break; size += next.value.byteLength; if (size > metadata.size) throw new StorageError("Cloud file size mismatch.",422,"integrity"); digest.update(next.value); } }
-    finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
+    finally { void reader.cancel().catch(() => {}); reader.releaseLock(); }
     if (size !== metadata.size || digest.digest("hex") !== metadata.sha256) throw new StorageError("Cloud file checksum mismatch. Local bytes are retained.",422,"integrity");
     const etag = response.headers.get("etag");
     if (!etag) throw new StorageError("Storage did not provide a copy identity.",502,"integrity");
@@ -182,6 +182,65 @@ export class BotStorage {
     if (saved.fingerprint !== fingerprint || saved.state !== "ready") throw new StorageError("Attachment transfer identity conflict.",409,"conflict");
     await this.environment.DB.prepare("INSERT OR IGNORE INTO bot_storage_ready(owner_key,id) VALUES(?,?)").bind(this.owner,id).run();
     return { attachment:this.receipt(saved) };
+  }
+  /** Internal owner task export only; never expose bucket-key input as a storage API action. */
+  async importTaskOriginal(input: { id:string; botId:string; name:string; size:number; mimeType:string;
+    exportId:string; todoId:number; sourceRevision:string; sourceAttachmentId:string; sourceKey:string }, signal:AbortSignal) {
+    if (!this.service) throw new StorageError("Private task export required.",403,"forbidden");
+    const id=validId(input.id), botId=validId(input.botId);
+    const normalized=cleanMetadata({...input,sha256:"0".repeat(64)},true);
+    const taskSource={exportId:input.exportId,todoId:input.todoId,revision:input.sourceRevision,attachmentId:input.sourceAttachmentId};
+    const identity=await this.environment.DB.prepare("SELECT metadata FROM bot_storage_identities WHERE owner_key=? AND id=? AND machine_id=?")
+      .bind(this.owner,botId,this.environment.BOTS_MACHINE_ID ?? "dawar-vm").first<{metadata:string}>();
+    if (!identity || JSON.parse(identity.metadata).archived || JSON.parse(identity.metadata).deleted) throw new StorageError("Destination bot is unavailable.",404,"not_found");
+    let row=await this.environment.DB.prepare("SELECT * FROM bot_storage_files WHERE owner_key=? AND id=? AND bot_id=?")
+      .bind(this.owner,id,botId).first<FileRow>();
+    let etag:string | null=null;
+    let checksum:string;
+    if (row) {
+      const stored=JSON.parse(row.metadata);
+      if (JSON.stringify(stored.taskSource)!==JSON.stringify(taskSource) || stored.name!==normalized.name || stored.size!==input.size || stored.mimeType!==artifactMime(input.name,input.mimeType))
+        throw new StorageError("Task file export identity conflict. Retain the original operation.",409,"conflict");
+      checksum=stored.sha256;
+    } else {
+      // Todo originals predate SHA metadata; establish it by streaming the authenticated object, never a browser URL.
+      if (!Number.isSafeInteger(input.size) || input.size<1 || input.size>MAX_BYTES) throw new StorageError("Task file exceeds the bot's 100 MB limit.",413,"limit");
+      const response=await this.storage.storageFetch(this.storage.storageUrl(input.sourceKey),{signal});
+      const reader=response.body?.getReader(); if (!reader) throw new StorageError("Missing task file body.",502,"integrity");
+      const digest=createHash("sha256"); let size=0;
+      try { for (;;) { const next=await reader.read(); if(next.done) break; size+=next.value.length;
+        if(size>input.size) throw new StorageError("Task file size changed.",422,"integrity"); digest.update(next.value); } }
+      finally { void reader.cancel().catch(()=>{}); reader.releaseLock(); }
+      if(size!==input.size) throw new StorageError("Task file is incomplete.",422,"integrity");
+      checksum=digest.digest("hex"); etag=response.headers.get("etag");
+      if(!etag) throw new StorageError("Task original lacks an immutable copy identity.",502,"integrity");
+      const metadata=cleanMetadata({...input,sha256:checksum},true), createdAt=new Date().toISOString();
+      const prefix=`bots/${hash(this.owner)}/${hash(botId)}/${hash(id)}`;
+      const fingerprint=hash(JSON.stringify(["task",taskSource,botId,metadata.name,metadata.size,metadata.mimeType,checksum]));
+      await this.environment.DB.prepare("INSERT OR IGNORE INTO bot_storage_files(owner_key,id,bot_id,fingerprint,staging_key,object_key,state,metadata) VALUES(?,?,?,?,?,?,'pending',?)")
+        .bind(this.owner,id,botId,fingerprint,`${prefix}/staging`,`${prefix}/${checksum}/original`,JSON.stringify({...metadata,taskSource,createdAt,dateKey:Date.parse(createdAt),searchName:metadata.name.normalize("NFKC").toLowerCase()})).run();
+      row=await this.row(id,botId);
+      if(row.fingerprint!==fingerprint) throw new StorageError("Task original changed during export. Retain the original operation.",409,"conflict");
+    }
+    if(row.state==='ready') return this.receipt(row);
+    const metadata:Metadata=JSON.parse(row.metadata);
+    // A lost copy/receipt ACK reconciles this immutable key before attempting another copy.
+    const head=await this.storage.signedStorageResponse(this.storage.storageUrl(row.object_key),{method:'HEAD',signal});
+    let retained=false;
+    if(head.ok) {
+      try { await this.verify(row.object_key,metadata,signal); retained=true; }
+      catch(error) { if(!(error instanceof StorageError) || error.code!=="integrity") throw error; }
+    } else if(head.status!==404) throw new StorageError("Task copy confirmation is uncertain; retry the original export.",502,"uncertain");
+    if(!retained) {
+      etag ??= await this.verify(input.sourceKey,metadata,signal);
+      await this.storage.copyObject(input.sourceKey,row.object_key,etag,signal,true);
+      await this.verify(row.object_key,metadata,signal);
+    }
+    await this.environment.DB.batch([
+      this.environment.DB.prepare("UPDATE bot_storage_files SET state='ready' WHERE owner_key=? AND id=? AND fingerprint=?").bind(this.owner,id,row.fingerprint),
+      this.environment.DB.prepare("INSERT OR IGNORE INTO bot_storage_ready(owner_key,id) VALUES(?,?)").bind(this.owner,id),
+    ]);
+    return this.receipt(await this.row(id,botId));
   }
   async list(input: Record<string,string>) {
     const limit = Number(input.limit ?? 36), sort = input.sort ?? "newest", type = input.type ?? "all", direction = input.direction ?? "all", needle = (input.search ?? "").trim().normalize("NFKC").toLowerCase();

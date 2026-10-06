@@ -107,17 +107,17 @@ function storageUrl(key?: string, query?: Record<string, string>) {
   return url;
 }
 
-async function signedStorageResponse(url: URL, init?: RequestInit) {
+async function signedStorageResponse(url: URL, init?: RequestInit & { singleAttempt?:boolean }) {
   const method = init?.method ?? "GET";
   const { bucket, endpoint } = storageConfig();
   const serverUrl = new URL(url);
   serverUrl.hostname = endpoint.hostname;
   serverUrl.pathname = `/${encodeURIComponent(bucket)}${url.pathname}`;
   const request = await signedHeaderRequest(serverUrl, method, init?.headers);
-  return ["GET","HEAD","PUT"].includes(method) ? replayableStorageFetch(fetch,request,{signal:init?.signal}) : fetch(request,{signal:init?.signal});
+  return !init?.singleAttempt && ["GET","HEAD","PUT"].includes(method) ? replayableStorageFetch(fetch,request,{signal:init?.signal}) : fetch(request,{signal:init?.signal,...(init?.singleAttempt ? {redirect:"error" as const} : {})});
 }
 
-async function storageFetch(url: URL, init?: RequestInit) {
+async function storageFetch(url: URL, init?: RequestInit & { singleAttempt?:boolean }) {
   const response = await signedStorageResponse(url, init);
   if (!response.ok) throw await storageResponseError("Private image storage", response);
   return response;
@@ -279,8 +279,8 @@ async function signedPostTarget(key: string, contentType: string, maximumBytes: 
 }
 
 
-  async function copyObject(source: string, target: string, etag: string) {
-    const response = await storageFetch(storageUrl(target), { method: "PUT", headers: {
+  async function copyObject(source: string, target: string, etag: string, signal?: AbortSignal, singleAttempt=false) {
+    const response = await storageFetch(storageUrl(target), { method: "PUT", signal, singleAttempt, headers: {
       "x-amz-copy-source": `/${awsEncode(environment.S3_BUCKET)}/${source.split("/").map(awsEncode).join("/")}`,
       "x-amz-copy-source-if-match": etag,
       "x-amz-metadata-directive": "COPY",
