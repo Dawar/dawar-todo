@@ -1,6 +1,13 @@
 import { sql } from "drizzle-orm";
 import { check, index, integer, primaryKey, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
+export const todoBotExports = sqliteTable("todo_bot_exports", {
+  ownerKey:text("owner_key").notNull(), id:text("id").notNull(), operationId:text("operation_id").notNull(), fingerprint:text("fingerprint").notNull(),
+  botId:text("bot_id").notNull(), todoId:integer("todo_id").notNull(), sourceRevision:text("source_revision").notNull(), snapshot:text("snapshot").notNull(),
+  originals:text("originals").notNull(), receipt:text("receipt"), state:text("state").notNull(), createdAt:text("created_at").notNull(),
+  leaseToken:text("lease_token"), leaseUntil:integer("lease_until").notNull().default(0),
+},table=>[primaryKey({columns:[table.ownerKey,table.id]}),uniqueIndex("todo_bot_export_operation").on(table.ownerKey,table.operationId)]);
+
 export const botStorageIdentities = sqliteTable("bot_storage_identities", {
   ownerKey:text("owner_key").notNull(), id:text("id").notNull(), machineId:text("machine_id").notNull(), metadata:text("metadata").notNull(),
 },table=>[primaryKey({columns:[table.ownerKey,table.id]})]);
@@ -716,3 +723,6 @@ export const todoLegacyChatBackupChunks = sqliteTable("todo_legacy_chat_backup_c
 export const todoLegacyChatRetirementGuard = sqliteTable("todo_legacy_chat_retirement_guard", {
   operationId: text("operation_id").primaryKey(), valid: integer("valid").notNull(),
 }, table => [check("todo_legacy_chat_retirement_guard_valid", sql`${table.valid}=1`)]);
+
+export const todoQueueState = sqliteTable("todo_queue_state", {todoId:integer("todo_id").primaryKey(),generation:integer("generation").notNull().default(0),delegation:text("delegation"),delegationGeneration:integer("delegation_generation")});
+export const todoQueueReceipts = sqliteTable("todo_queue_receipts",{ownerKey:text("owner_key").notNull(),operationId:text("operation_id").notNull(),fingerprint:text("fingerprint").notNull(),todoId:integer("todo_id").notNull(),generation:integer("generation").notNull(),receipt:text("receipt").notNull()},t=>[primaryKey({columns:[t.ownerKey,t.operationId]})]);

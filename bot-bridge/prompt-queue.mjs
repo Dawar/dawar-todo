@@ -14,7 +14,7 @@ export function finishLocalOperation(store, id, result) {
   if (operation) store.saveOperation(id, operation.fingerprint, "done", { ...operation, result, error: null });
   return result;
 }
-export function enqueuePrompt(runtime, bot, params, id, input) {
+export function enqueuePrompt(runtime, bot, params, id, input, taskSource) {
   return runtime.store.transaction(() => {
     const existing = runtime.store.get("promptQueue", id);
     if (existing && existing.botId !== bot.id) throw new Error("Queue identity belongs to another bot.");
@@ -22,11 +22,11 @@ export function enqueuePrompt(runtime, bot, params, id, input) {
       id, botId: bot.id, threadId: bot.threadId, listId: params.listId ?? null, clientUserMessageId: id, input,
       attachmentIds: [...(params.attachments ?? [])],
       state: "queued", revision: 1, position: Math.max(0, ...stagedQueue(runtime.store, bot.id, params.listId ?? null).map(entry => entry.position)) + 1,
-      source: { kind: "conversation", operationId: id }, createdAt: now(),
+      source: taskSource ?? { kind: "conversation", operationId: id }, createdAt: now(),
     });
     rememberReply(runtime, bot, id, params.text, params.reply);
     runtime.store.put("queuedAttachments", { id, botId: bot.id, attachmentIds: params.attachments ?? [] });
-    const result = finishLocalOperation(runtime.store, id, { queuedSubmission: runtime.publicQueued(bot, item) });
+    const result = finishLocalOperation(runtime.store, id, { queuedSubmission: runtime.publicQueued(bot, item), ...(taskSource ? { taskSource } : {}) });
     runtime.emitEvent("queue", {}, bot.id);
     return result;
   });
@@ -61,7 +61,7 @@ export async function dispatchPrompt(runtime, bot, item) {
     await reconcilePrompt(runtime, { ...item, operationId });
     return;
   }
-  const fingerprint = createHash("sha256").update(JSON.stringify({ botId: bot.id, id: item.id, revision: item.revision, input: item.input })).digest("hex");
+  const fingerprint = createHash("sha256").update(JSON.stringify({ botId: bot.id, id: item.id, revision: item.revision, input: item.input, ...(item.source?.kind === "todo" ? { taskSource: item.source } : {}) })).digest("hex");
   // A definitively rejected item can be edited into a new revision. Its new
   // dispatch has a distinct native identity; uncertainty can never be edited.
   const clientId = operationId;
@@ -73,11 +73,11 @@ export async function dispatchPrompt(runtime, bot, item) {
       throw new Error("Native dispatch attachment identity conflicts with its immutable receipt.");
     copyReplyReceipt(runtime, bot, item.clientUserMessageId, clientId);
     runtime.store.put("queuedAttachments", { id: clientId, botId: bot.id, queueId: item.id,
-      revision: item.revision, attachmentIds, immutable: true });
+      revision: item.revision, attachmentIds, ...(item.source?.kind === "todo" ? { taskSource: item.source } : {}), immutable: true });
     runtime.store.put("promptQueue", { ...item, attachmentIds, state: "dispatching", operationId, clientUserMessageId: clientId, attemptedAt: now() });
     runtime.store.saveOperation(operationId, fingerprint, "dispatching", {
       method: "queue.dispatch", botId: bot.id, queueId: item.id, revision: item.revision,
-      clientId, params: { attachments: attachmentIds }, createdAt: now(),
+      clientId, params: { attachments: attachmentIds, ...(item.source?.kind === "todo" ? { taskSource: item.source } : {}) }, createdAt: now(),
     });
   });
   const attempt = { started: false, rejected: false };

@@ -24,6 +24,8 @@ export type Todo = {
   updatedAt: string;
   attachmentCount: number;
   clientId: string | null;
+  queueLastTransfer?: import("../lib/task-queue-delegation").TaskDelegation | null;
+  queueDelegation?: import("../lib/task-queue-delegation").TaskDelegation | null;
   offline?: boolean;
 };
 

@@ -15,6 +15,8 @@ import {
   useState,
 } from "react";
 import { TodoForward } from "./todo-forward-picker";
+import { TodoQueue, type QueueRequest } from "./todo-queue-picker";
+import type { TaskQueueSource } from "../lib/task-queue-export";
 import { registerPwaUpdateGuard } from "./pwa-update";
 import { todoCopyText } from "./todo-forward";
 import { TaskCaptureSession, TaskCaptureGate } from "./task-capture";
@@ -249,6 +251,7 @@ function patchTodo(todo: Todo, patch: Record<string, unknown>) {
   return {
     ...todo,
     ...(patch as Partial<Todo>),
+    ...(Object.keys(patch).length ? { queueDelegation: null } : {}),
     ...(patch.title !== undefined ? { title: String(patch.title) } : {}),
     ...(patch.notes !== undefined ? { notes: String(patch.notes) } : {}),
     ...(patch.priority !== undefined ? { priority: Number(patch.priority) } : {}),
@@ -916,8 +919,8 @@ function reorderCanonicalTodos(
 
 function matchesView(todo: Todo, view: View, now: number) {
   const snoozed = isSnoozed(todo, now);
-  if (view === "open") return todo.status === "open" && !snoozed;
-  if (view === "snoozed") return snoozed;
+  if (view === "open") return !todo.queueDelegation && todo.status === "open" && !snoozed;
+  if (view === "snoozed") return !todo.queueDelegation && snoozed;
   if (view === "done") return todo.status === "completed";
   if (view === "all") return todo.status === "open" || todo.status === "completed";
   return false;
@@ -991,7 +994,7 @@ const TaskRow = memo(function TaskRow({
   onSelect,
   onAction,
   onEdit,
-  onForward,
+  onQueue,
   onPin,
   onAcknowledgeUrgent,
   onTitleChange,
@@ -1012,7 +1015,7 @@ const TaskRow = memo(function TaskRow({
   onSelect: (todo: Todo) => void;
   onAction: (todo: Todo, action: TodoAction, source: "hover" | "swipe") => void;
   onEdit: (todo: Todo, source: "hover" | "swipe") => void;
-  onForward: (todo: Todo) => void;
+  onQueue: (todo: Todo) => void;
   onPin: (todo: Todo) => void;
   onAcknowledgeUrgent: (todo: Todo) => void;
   onTitleChange: (todo: Todo, title: string) => void;
@@ -1053,7 +1056,7 @@ const TaskRow = memo(function TaskRow({
   const longSwipe = swipeRatio >= SWIPE_LONG_ACTION_THRESHOLD;
   const revealAction = offset < 0
     ? (longSwipe ? leftSecondaryAction.label : primaryAction.label)
-    : (longSwipe ? "Forward" : "Edit");
+    : (longSwipe ? "Queue" : "Edit");
   const revealIcon: ActionIconName = offset < 0
     ? (longSwipe ? leftSecondaryAction.icon : primaryAction.icon)
     : (longSwipe ? "forward" : "edit");
@@ -1150,7 +1153,7 @@ const TaskRow = memo(function TaskRow({
     });
     if (!activated) return;
     if (direction < 0) onAction(todo, action as TodoAction, "swipe");
-    else if (action === "forward") onForward(todo);
+    else if (action === "forward") onQueue(todo);
     else onEdit(todo, "swipe");
   }
 
@@ -1307,7 +1310,7 @@ const TaskRow = memo(function TaskRow({
             {todo.attachmentCount > 0 && <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-[#eef2ef] px-1.5 py-0.5 text-[10px] font-medium text-[#68716b]"><ActionIcon name="attachment" className="h-3 w-3" />{todo.attachmentCount}</span>}
           </div>
           {todo.notes && <p className="mt-1 line-clamp-2 whitespace-pre-wrap text-xs leading-5 text-[#7c847f]">{todo.notes}</p>}
-          {(todo.project || todo.context || todo.dueDate || todo.priority <= 2 || snoozed || recurring || todo.offline) && (
+          {(todo.project || todo.context || todo.dueDate || todo.priority <= 2 || snoozed || recurring || todo.offline || todo.queueLastTransfer) && (
             <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px] font-medium leading-4">
               {todo.priority <= 2 && <span className={classNames("inline-flex min-h-[22px] items-center rounded-full px-2 py-0.5", todo.priority === 1 ? "bg-red-50 text-red-700 ring-1 ring-inset ring-red-200/70" : "bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-200/70")}>{priorityLabels[todo.priority]}</span>}
               {todo.project && <span className="inline-flex min-h-[22px] items-center gap-1 rounded-full bg-[#eef2ef] px-2 py-0.5 text-[#55615a] ring-1 ring-inset ring-[#dfe5e1]"><ActionIcon name="folder" className="h-3 w-3" />{todo.project}</span>}
@@ -1315,6 +1318,7 @@ const TaskRow = memo(function TaskRow({
               {todo.dueDate && <span className={classNames("inline-flex min-h-[22px] items-center gap-1 rounded-full px-2 py-0.5 ring-1 ring-inset", isDueTodayOrOverdue(todo.dueDate) && todo.status === "open" && !snoozed ? "bg-red-50 text-red-700 ring-red-200/70" : "bg-slate-50 text-slate-600 ring-slate-200/80")}><ActionIcon name="calendar" className="h-3 w-3" />{formatDueDate(todo.dueDate)}</span>}
               {snoozed && todo.snoozedUntil && <SnoozeStatusBadge value={todo.snoozedUntil} now={now} timeZone={timeZone} />}
               {todo.recurrenceCron && <span className="inline-flex min-h-[22px] items-center gap-1 rounded-full bg-violet-50 px-2 py-0.5 text-violet-700 ring-1 ring-inset ring-violet-200/70"><ActionIcon name="repeat" className="h-3 w-3" />{recurrenceLabel(todo.recurrenceCron, todo.status, now, timeZone)}</span>}
+              {todo.queueLastTransfer && <span className="inline-flex min-h-[22px] items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-emerald-700">Queued · source retained</span>}
               {todo.offline && <span className="inline-flex min-h-[22px] items-center gap-1 rounded-full bg-orange-50 px-2 py-0.5 text-orange-700 ring-1 ring-inset ring-orange-200/70"><ActionIcon name="retry" className="h-3 w-3" />Saved on device</span>}
             </div>
           )}
@@ -1374,6 +1378,7 @@ const TaskRow = memo(function TaskRow({
                 <span className="sr-only">Acknowledge urgent alert</span>
               </button>
             )}
+            <button type="button" data-row-action onClick={() => onQueue(todo)} aria-label={`Queue to bot: ${todo.title}`} title="Queue to bot" className="grid h-9 w-9 place-items-center rounded-lg text-[#69716c] hover:bg-[#eef0ed] focus-visible:outline-2 focus-visible:outline-[#216e4e]"><ActionIcon name="forward" className="h-[18px] w-[18px]" /><span className="sr-only">Queue to bot</span></button>
             {hoverActions.map(({ action, label, icon }) => (
               <button
                 key={action}
@@ -1445,7 +1450,7 @@ export default function Home() {
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [pinListEnabled, setPinListEnabled] = useState(true);
   const [editingId, setEditingId] = useState<number | null>(null);
-  const [forwardRequest, setForwardRequest] = useState<{ id: string; text: string } | null>(null);
+  const [queueRequest, setQueueRequest] = useState<QueueRequest | null>(null);
   const [editDraft, setEditDraft] = useState<TodoDraft | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
   const [editSaveState, setEditSaveState] = useState<EditSaveState>("saved");
@@ -1554,7 +1559,7 @@ export default function Home() {
   const reorderAnimationRestoreFrameRef = useRef<number | null>(null);
   const lastAppBadgeCountRef = useRef<number | null>(null);
   const deepLinkedTaskOpenedRef = useRef(false);
-  const taskDialogNestedOverlayOpen = forwardRequest !== null || projectDialog !== null || viewerIndex !== null || voiceTarget !== null || customSnoozeDialog !== null;
+  const taskDialogNestedOverlayOpen = queueRequest !== null || projectDialog !== null || viewerIndex !== null || voiceTarget !== null || customSnoozeDialog !== null;
   const overlayOpen = editingId !== null || projectSelectorOpen || projectDialog !== null || newProjectOpen || projectDeleteDialog !== null || filtersOpen || viewerIndex !== null || voiceTarget !== null || shortcutsOpen || customSnoozeDialog !== null;
 
   useEffect(() => () => {
@@ -2227,6 +2232,7 @@ export default function Home() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if (document.querySelector(".todo-queue-dialog")) return;
       const target = event.target as HTMLElement;
       const typing = Boolean(target.closest("input, textarea, select, [contenteditable='true']"));
       const imageCount = detailAttachments.filter((attachment) => attachment.kind === "image").length;
@@ -2371,7 +2377,7 @@ export default function Home() {
       registeredProjects.map((name) => [name, { open: 0, snoozed: 0, done: 0 }]),
     );
     todos.forEach((todo) => {
-      if (!todo.project) return;
+      if (!todo.project || todo.queueDelegation && todo.status !== "completed") return;
       const counts = projectCounts.get(todo.project) ?? { open: 0, snoozed: 0, done: 0 };
       if (todo.status === "completed") counts.done += 1;
       else if (isSnoozed(todo, now)) counts.snoozed += 1;
@@ -2384,7 +2390,7 @@ export default function Home() {
   const unassignedProjectCounts = useMemo(() => {
     const counts = { open: 0, snoozed: 0, done: 0 };
     todos.forEach((todo) => {
-      if (todo.project) return;
+      if (todo.project || todo.queueDelegation && todo.status !== "completed") return;
       if (todo.status === "completed") counts.done += 1;
       else if (isSnoozed(todo, now)) counts.snoozed += 1;
       else counts.open += 1;
@@ -2407,7 +2413,7 @@ export default function Home() {
     const needle = deferredQuery.trim().toLowerCase();
     const rows = todos.filter((todo) => {
       const searchable = [todo.title, todo.notes, todo.project, todo.context].filter(Boolean).join(" ").toLowerCase();
-      return matchesView(todo, view, now)
+      return (matchesView(todo, view, now) || Boolean(needle && todo.queueDelegation))
         && (!needle || todo.id === inlineEditingId || searchable.includes(needle))
         && (!project || (project === UNASSIGNED_PROJECT ? !todo.project : todo.project === project))
         && (!priority || todo.priority === Number(priority));
@@ -2415,9 +2421,9 @@ export default function Home() {
     return [...rows].sort(compareCanonicalOrder);
   }, [todos, view, deferredQuery, project, priority, now, inlineEditingId]);
 
-  const pinnedTaskCount = todos.filter((todo) => todo.pinned).length;
-  const pinnedOpenTodos = view === "open" && pinListEnabled ? filtered.filter((todo) => todo.pinned) : [];
-  const regularOpenTodos = view === "open" && pinListEnabled ? filtered.filter((todo) => !todo.pinned) : filtered;
+  const pinnedTaskCount = todos.filter((todo) => todo.pinned && !todo.queueDelegation).length;
+  const pinnedOpenTodos = view === "open" && pinListEnabled ? filtered.filter((todo) => todo.pinned && !todo.queueDelegation) : [];
+  const regularOpenTodos = view === "open" && pinListEnabled ? filtered.filter((todo) => !todo.pinned || todo.queueDelegation) : filtered;
   const displayedTodos = view === "open" && pinListEnabled ? [...pinnedOpenTodos, ...regularOpenTodos] : filtered;
 
   const selectedIds = useMemo(() => [...selected], [selected]);
@@ -4671,8 +4677,26 @@ export default function Home() {
 
   const stable_toggleSelected = useStableCallback(toggleSelected);
   const stable_taskAction = useStableCallback(taskAction);
-  const stable_forwardTask = useStableCallback((todo: Todo) => setForwardRequest({ id: crypto.randomUUID(), text: todoCopyText(todo.title, todo.notes) }));
-  const closeForward = useStableCallback(() => setForwardRequest(null));
+  const stable_queueTask = useStableCallback((todo: Todo) => setQueueRequest({ id: crypto.randomUUID(), todoIds: [todo.id] }));
+  const closeQueue = useStableCallback(() => setQueueRequest(null));
+  const queueGuard = useStableCallback(async (id: number, source?: TaskQueueSource) => {
+    const current = taskStore.getById(id);
+    if (!current || current.id < 1 || current.offline) throw Error("Save and sync this task before queueing.");
+    if (pendingTodoPatchesRef.current.has(id) || pendingActionPatchesRef.current.has(id) || pendingDeletedIdsRef.current.has(id)
+        || Object.keys(taskStore.getDraft(taskKey(current)) ?? {}).length) throw Error("Wait for pending task changes to save before queueing.");
+    if (editingIdRef.current === id && (autosaveInFlightRef.current || editSaveState !== "saved" || loadingAttachments
+      || editDraftRef.current && editBaselineRef.current && Object.keys(changedDraftPatch(editDraftRef.current, editBaselineRef.current)).length
+      || detailUploads.some(file => file.status !== "ready"))) throw Error("Save the task and finish its files before queueing. Your draft is retained.");
+    const [mutations, uploads, actions] = await Promise.all([listOfflineTodoMutations(), listQueuedAttachments(), listOfflineTaskActions()]);
+    if (mutations.some(m => m.todoId === id) || uploads.some(file => file.todoId === id && !file.cancelled)
+      || actions.some(action => action.taskIds.includes(id))) throw Error("Sync pending task changes/files before queueing.");
+    const latest = taskStore.getById(id);
+    if (source && (!latest || latest.title !== source.title || latest.notes !== source.notes || latest.updatedAt !== source.updatedAt || latest.attachmentCount !== source.files.length))
+      throw Error("The saved task differs from your selection. Save/reload it before queueing; retain the original transfer.");
+    if (source && editingIdRef.current === id && (detailAttachments.length !== source.files.length || detailAttachments.some(file => !source.files.some(f => f.id === file.id && f.name === file.fileName && f.size === file.byteSize && f.mimeType === file.mimeType))))
+      throw Error("Task files changed. Reload their confirmed state before queueing.");
+  });
+  const queueChanged = useStableCallback(() => taskSync.wake());
   const stable_editTaskDetails = useStableCallback(editTaskDetails);
   const stable_togglePin = useStableCallback(togglePin);
   const stable_acknowledgeUrgentAlert = useStableCallback(acknowledgeUrgentAlert);
@@ -4686,7 +4710,8 @@ export default function Home() {
 
   return (
     <main className="min-h-screen bg-[#f6f7f5] text-[#1d211f]">
-      <TodoForward request={forwardRequest} onClose={closeForward} />
+      <TodoForward request={null} onClose={() => {}} />
+      <TodoQueue request={queueRequest} onClose={closeQueue} guard={queueGuard} onChanged={queueChanged} />
       <SiteHeader
         current="todos"
         projectLabel={project === UNASSIGNED_PROJECT ? "Unassigned" : project || "Dawar Todo"}
@@ -4940,7 +4965,7 @@ export default function Home() {
                     onSelect={stable_toggleSelected}
                     onAction={stable_taskAction}
                     onEdit={stable_editTaskDetails}
-                    onForward={stable_forwardTask}
+                    onQueue={stable_queueTask}
                     onPin={stable_togglePin}
                     onAcknowledgeUrgent={stable_acknowledgeUrgentAlert}
                     onTitleChange={stable_updateInlineTitle}
@@ -4971,7 +4996,7 @@ export default function Home() {
                     onSelect={stable_toggleSelected}
                     onAction={stable_taskAction}
                     onEdit={stable_editTaskDetails}
-                    onForward={stable_forwardTask}
+                    onQueue={stable_queueTask}
                     onPin={stable_togglePin}
                     onAcknowledgeUrgent={stable_acknowledgeUrgentAlert}
                     onTitleChange={stable_updateInlineTitle}
@@ -5007,6 +5032,7 @@ export default function Home() {
         >
           <div className="pointer-events-auto flex items-center gap-1.5 overflow-x-auto rounded-2xl border border-[#216e4e]/20 bg-[#eaf3ed]/95 p-2 shadow-[0_16px_50px_rgba(23,61,42,0.2)] backdrop-blur-xl sm:gap-2">
             <span className="min-w-max px-2 text-sm font-semibold text-[#195d41]">{selectedIds.length} selected</span>
+            <button type="button" onClick={() => setQueueRequest({ id: crypto.randomUUID(), todoIds: displayedTodos.filter(todo => selected.has(todo.id)).map(todo => todo.id) })} className="inline-flex min-w-max items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-[#216e4e] shadow-sm"><ActionIcon name="forward" />Queue to bot</button>
             {selectedTodos.some((todo) => todo.status === "open") && <button type="button" onClick={() => bulkAction("complete")} disabled={syncing} className="inline-flex min-w-max items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-[#216e4e] shadow-sm hover:bg-[#f8fbf9] disabled:opacity-50"><ActionIcon name="done" />Done</button>}
             {view === "snoozed" && selectedTodos.some((todo) => todo.status === "open") ? (
               <button type="button" onClick={() => bulkAction("unsnooze")} disabled={syncing} className="inline-flex min-w-max items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-[#216e4e] shadow-sm hover:bg-[#f8fbf9] disabled:opacity-50"><ActionIcon name="wake" />Wake</button>
@@ -5326,7 +5352,8 @@ export default function Home() {
               <span className="absolute left-1/2 top-2 h-1 w-10 -translate-x-1/2 rounded-full bg-black/15 sm:hidden" aria-hidden="true" />
               <h3 id="task-details-title" className="min-w-0 text-lg font-semibold text-[#202522]">Task details</h3>
               <div className="todo-detail-copy-actions flex shrink-0 items-center gap-1">
-                <button type="button" onClick={() => { if (editDraft) setForwardRequest({ id: crypto.randomUUID(), text: todoCopyText(editDraft.title, editDraft.notes) }); }} className="grid h-9 w-9 place-items-center rounded-full bg-[#eaf3ed] text-[#216e4e] hover:bg-[#e0ede4]" aria-label="Forward task to a bot draft" title="Forward"><ActionIcon name="forward" /></button>
+                {editingTodo?.queueLastTransfer && <a className="text-xs text-[#216e4e]" href={`/bots?bot=${encodeURIComponent(editingTodo.queueLastTransfer.botId)}`}>Queued to bot · source retained</a>}
+                <button type="button" onClick={() => { if (editingId !== null) setQueueRequest({ id: crypto.randomUUID(), todoIds: [editingId] }); }} className="grid h-9 w-9 place-items-center rounded-full bg-[#eaf3ed] text-[#216e4e] hover:bg-[#e0ede4]" aria-label="Queue task to a bot" title="Queue to bot"><ActionIcon name="forward" /></button>
                 <button type="button" onClick={() => void copyTaskDetails()} className="grid h-9 w-9 place-items-center rounded-full bg-[#f1f2f0] text-[#4f5752] hover:bg-[#e8eae7]" aria-label="Copy task title and description" title="Copy task"><ActionIcon name="copy" /></button>
                 <button type="button" onClick={closeTaskDetails} className="grid h-9 w-9 place-items-center rounded-full bg-[#f1f2f0] text-[#4f5752] hover:bg-[#e8eae7]" aria-label="Close task details" title="Close"><ActionIcon name="close" /></button>
               </div>

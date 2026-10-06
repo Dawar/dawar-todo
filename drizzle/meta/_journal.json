@@ -246,6 +246,20 @@
       "when": 1790987976127,
       "tag": "0034_married_dracula",
       "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "6",
+      "when": 1791298333991,
+      "tag": "0035_task_bot_exports",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "6",
+      "when": 1791300196720,
+      "tag": "0036_task_queue_delegation",
+      "breakpoints": true
     }
   ]
 }

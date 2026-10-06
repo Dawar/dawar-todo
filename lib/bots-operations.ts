@@ -125,9 +125,10 @@ export type BotOperations = {
   "queue.move": { params: { items: { id: string; revision: number }[]; listId: string | null }; result: { applied: boolean } };
   "queue.merge": { params: { items: { id: string; revision: number }[] }; result: { queuedSubmission: BotQueuedSubmission } };
   "queue.add": {
-    params: { reply?: BotReplyReference; text: string; attachments?: string[]; listId?: string | null };
-    result: { queuedSubmission: QueuedSubmission } | { consumedTurnId: string };
+    params: { reply?: BotReplyReference; text?: string; attachments?: string[]; listId?: string | null; taskExportId?: string; taskSource?: { todoId: number; revision: string; exportOperationId: string } };
+    result: ({ queuedSubmission: QueuedSubmission } | { consumedTurnId: string }) & { taskSource?: import("./task-queue-delegation").TaskQueueBinding };
   };
+  "queue.taskConfirm": { params: { queueOperationId: string; taskExportId: string }; result: { delegation: import("./task-queue-delegation").TaskDelegation; active: boolean } };
   "queue.update": {
     params: { reply?: BotReplyReference; id: string; text: string; attachments?: string[]; expectedRevision?: number };
     result: { queuedSubmission: QueuedSubmission };

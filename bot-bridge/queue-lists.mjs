@@ -88,7 +88,7 @@ export async function prepareQueueListMutation(runtime, method, bot, params, id)
   return () => {
     const item = runtime.store.put('promptQueue', { id, botId: bot.id, threadId: bot.threadId, listId, clientUserMessageId: id, input,
       attachmentIds: attachments, state: 'queued', revision: 1, position: items[0].position,
-      source: { kind: 'merge', operationId: id, members: items.map(i=>({id:i.id,revision:i.revision})) }, createdAt: now() });
+      source: { kind: 'merge', operationId: id, members: items.map(i=>({id:i.id,revision:i.revision,...(i.source?.kind === "todo" ? { taskSource:i.source } : {})})) }, createdAt: now() });
     runtime.store.put('queuedAttachments', { id, botId: bot.id, attachmentIds: attachments });
     for (const original of items) runtime.store.put('promptQueue', { ...original, state: 'merged', mergedInto: id, mergedAt: now() });
     runtime.emitEvent('queue', {}, bot.id); return { queuedSubmission: runtime.publicQueued(bot,item) };
