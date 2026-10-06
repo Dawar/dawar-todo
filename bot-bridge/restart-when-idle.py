@@ -12,6 +12,7 @@ from pathlib import Path
 import socket
 import sqlite3
 import subprocess
+import sys
 import time
 import urllib.request
 
@@ -24,7 +25,7 @@ def command(*args):
     return subprocess.check_output(args, cwd=ROOT, text=True).strip()
 
 
-def local_state():
+def local_state(observation=None):
     with sqlite3.connect(f'file:{STATE}/state.sqlite?mode=ro', uri=True) as db:
         bots = [json.loads(r[0]) for r in db.execute('SELECT json FROM bots')]
         rows = [json.loads(r[0]) for r in db.execute(
@@ -34,6 +35,12 @@ def local_state():
         pending = db.execute("SELECT COUNT(*) FROM records WHERE "
             "(kind IN ('primaryInbox','burstBatch','messageBurst') AND json_extract(json,'$.state') IN ('dispatching','uncertain')) "
             "OR (kind='promptQueue' AND json_extract(json,'$.state') IN ('dispatching','native-queued'))").fetchone()[0]
+        if observation is not None:
+            observation['local'] = {
+                'activeBots': sum(bool(r.get('activeTurnId') or r.get('status') == 'running') for r in bots),
+                'activeAux': sum(bool(r.get('activeTurnId') or r.get('status') == 'running') for r in rows),
+                'pendingDispatch': pending,
+            }
         fence = sorted((r['id'], r.get('activeTurnId'), r.get('status')) for r in bots)
         return bots, bool(active or pending), fence
 
@@ -61,7 +68,7 @@ def manager_connection():
     raise RuntimeError('Local native status credential is unavailable')
 
 
-def native_idle(bots):
+def native_idle(bots, observation=None):
     sock, bot, token = manager_connection()
     statuses = {}
     for archived in (False, True):
@@ -95,11 +102,21 @@ def native_idle(bots):
                 connection.close()
         else:
             raise RuntimeError('Native status pagination exceeded bound')
+    def describe_native():
+        if observation is not None:
+            counts = {status: 0 for status in ('idle', 'notLoaded', 'active', 'systemError', 'unknown')}
+            for status in statuses.values():
+                counts[status if isinstance(status, str) and status in counts else 'unknown'] += 1
+            observation['native'] = {'checked': True, 'observedThreads': len(statuses), 'statuses': counts}
+
+    describe_native()
     if any(status not in ('idle', 'notLoaded') for status in statuses.values()):
         return False
     # Native list omits empty, never-written threads. Read that exact identity
     # with a small byte bound rather than inferring idle from the omission.
     missing = [b for b in bots if b.get('threadId') and not b.get('archived') and b['threadId'] not in statuses]
+    if observation is not None:
+        observation['native']['omittedPrimaries'] = len(missing)
     if len(missing) > 4:
         raise RuntimeError('Too many omitted primary threads to establish idle')
     for target in missing:
@@ -122,6 +139,9 @@ def native_idle(bots):
             statuses[target['threadId']] = thread.get('status', {}).get('type')
         finally:
             connection.close()
+    describe_native()
+    if observation is not None:
+        observation['native']['omittedPrimaries'] = len(missing)
     return all(not b.get('threadId') or b.get('archived') or statuses.get(b['threadId']) in ('idle', 'notLoaded') for b in bots)
 
 
@@ -137,20 +157,36 @@ def main():
     if receipt.exists():
         raise RuntimeError('Restart receipt already exists; inspect it rather than repeat')
     deadline = time.monotonic() + min(max(args.wait_seconds, 0), 3600)
+    started = time.monotonic()
+    attempts, previous_reason, blocked = 0, None, {}
     while True:
         if command('git', 'rev-parse', 'HEAD') != args.commit or command('git', 'status', '--porcelain'):
             raise RuntimeError('Reviewed source changed')
-        bots, busy, fence = local_state()
-        if not busy and native_idle(bots):
+        attempts += 1
+        observation = {'phase': 'before-backup', 'native': {'checked': False}}
+        bots, busy, fence = local_state(observation)
+        reason = 'local-current-work' if busy else 'native-current-work'
+        if not busy and native_idle(bots, observation):
             # Back up while the service is still healthy, then recheck current
             # activity immediately before the one exclusive restart claim.
             with sqlite3.connect(f'file:{STATE}/state.sqlite?mode=ro', uri=True) as source:
                 with sqlite3.connect(receipt_dir / 'state-before.sqlite') as backup:
                     source.backup(backup)
-            _, busy, after = local_state()
-            if not busy and after == fence and native_idle(bots):
+            observation = {'phase': 'after-backup', 'native': {'checked': False}}
+            _, busy, after = local_state(observation)
+            reason = 'local-current-work' if busy else 'local-fence-changed' if after != fence else 'native-current-work'
+            if not busy and after == fence and native_idle(bots, observation):
                 break
+        blocked[reason] = blocked.get(reason, 0) + 1
+        diagnostic = {'event': 'idle-handoff-wait', 'attempts': attempts,
+                      'elapsedSeconds': round(time.monotonic() - started, 1),
+                      'reason': reason, 'observation': observation, 'blockedAttempts': blocked}
+        if reason != previous_reason:
+            print(json.dumps(diagnostic), file=sys.stderr, flush=True)
+            previous_reason = reason
         if time.monotonic() >= deadline:
+            diagnostic['event'] = 'idle-handoff-timeout'
+            print(json.dumps(diagnostic), file=sys.stderr, flush=True)
             raise RuntimeError('Active work did not settle; no restart performed')
         time.sleep(5)
     previous_pid = command('systemctl', '--user', 'show', SERVICE, '-p', 'MainPID', '--value')

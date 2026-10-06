@@ -44,6 +44,17 @@ expires or a read fails, inspect the reason; do not force an active restart.
 Keep the unit and receipt paths in a durable checkpoint. Existing user permission
 covers this update procedure; do not ask again for routine compatible upgrades.
 
+The helper writes bounded `idle-handoff-wait` journal records when the deferral
+reason changes, and `idle-handoff-timeout` with attempt counts and the last
+observation. These contain only local active-bot/aux/pending counts, native
+status counts when checked, and the before/after-backup phase. Local work skips
+native reads; `checked:false` is not native idle proof. No bot/thread identities,
+message contents or credentials are logged. Counts describe those observations,
+not actors throughout the wait. Inspect them with the original unit invocation;
+a timeout without these records cannot retrospectively identify its blocker.
+The diagnostics do not relax any idle, source, receipt or backup check and do
+not authorize a retry, a manager exemption, Stop/drain or a forced restart.
+
 Inspect the receipt and health after activation. Confirm the new model list
 through the PWA's normal reconnect. Do not send a real message or change a bot's
 selected model merely to check availability. Report successful catalog exposure
