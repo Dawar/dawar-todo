@@ -88,6 +88,7 @@ def seed_locked(p, cfg, data):
         if Path('/proc',pid).exists(): return {'memorySaver':'pending-live-lock'}
     elif singleton.exists(): return {'memorySaver':'pending-uncertain-lock'}
     path = data/'Local State'
+    if path.is_symlink(): raise ValueError('Browser preference ownership is uncertain.')
     value = json.loads(path.read_text()) if path.exists() else {}
     pref = value.setdefault('performance_tuning', {}).setdefault('high_efficiency_mode', {})
     if pref.get('state') != 2 or pref.get('aggressiveness') != 1:
@@ -141,15 +142,24 @@ def probe(p,cfg):
             'idleMs':idle_ms(cfg['display'],p/'Xauthority'), 'monotonicMs':time.monotonic()*1000, 'connected':connections(cfg)}
 
 
+def lease_active(p):
+    path=p/'control.json'
+    if not path.exists(): return False
+    lease=json.loads(path.read_text())
+    if not isinstance(lease.get('session'),str) or not lease['session'] or not isinstance(lease.get('expiresAt'),(float,int)):
+        raise ValueError('Exclusive control state is uncertain.')
+    import math
+    if not math.isfinite(lease['expiresAt']): raise ValueError('Exclusive control state is uncertain.')
+    return lease['expiresAt']>time.time()*1000
+
 def close(p,cfg,expected):
     with (p/'action.lock').open('a') as lock:
         fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
         def guard():
             state=probe(p,cfg)
-            lease=json.loads((p/'control.json').read_text()) if (p/'control.json').exists() else {}
             if state['boot']!=expected['boot'] or state['instances']!=expected['instances'] or not state['instances']:
                 raise ValueError('Browser instance changed; release it again after review.')
-            if state['monotonicMs']-state['idleMs']>expected['monotonicMs'] or state['idleMs']<HOUR or state['connected'] or lease.get('expiresAt',0)>time.time()*1000:
+            if state['monotonicMs']-state['idleMs']>expected['monotonicMs'] or state['idleMs']<HOUR or state['connected'] or lease_active(p):
                 raise ValueError('Desktop input, connection or exclusive lease protects this browser.')
             return state
         guard()
@@ -170,8 +180,7 @@ def close(p,cfg,expected):
 def reopen(p,cfg):
     with (p/'action.lock').open('a') as lock:
         fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
-        lease=json.loads((p/'control.json').read_text()) if (p/'control.json').exists() else {}
-        if lease.get('expiresAt',0)>time.time()*1000: raise ValueError('Human exclusive control is active.')
+        if lease_active(p): raise ValueError('Human exclusive control is active.')
         env={'DISPLAY':f':{cfg["display"]}','XAUTHORITY':str(p/'Xauthority'),
             'XDG_CONFIG_HOME':str(p/'config'),'XDG_DATA_HOME':str(p/'data'),'XDG_CACHE_HOME':str(p/'cache')}
         # An independent user service keeps Chrome outside the central bridge's

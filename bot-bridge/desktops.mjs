@@ -308,9 +308,21 @@ export class BotDesktops {
     };
   }
   policy(bot) {
-    return this.runtime.store.get("browserRetention", bot.id) ?? {
+    const p = this.runtime.store.get("browserRetention", bot.id) ?? {
       id: bot.id, botId: bot.id, profile: this.name(bot), mode: "preserve", release: null, protected: true, revision: 0,
     };
+    if (p.botId !== bot.id || p.profile !== this.name(bot) || !["preserve", "idle60", "keep-task"].includes(p.mode) ||
+        typeof p.protected !== "boolean" || !Number.isSafeInteger(p.revision) || p.revision < 0 || p.revision >= Number.MAX_SAFE_INTEGER)
+      throw Error("Browser policy is uncertain; retain the browser and review its configuration.");
+    const r = p.release;
+    if (r && (!Number.isFinite(r.at) || r.at <= 0 || !Number.isFinite(r.monotonicMs) || r.monotonicMs < 0 ||
+        typeof r.boot !== "string" || !/^[a-f0-9-]{36}$/.test(r.boot) || typeof r.threadId !== "string" ||
+        !Array.isArray(r.instances) || !r.instances.length || r.instances.length > 4 || r.instances.some(i =>
+          !Number.isSafeInteger(i.pid) || i.pid <= 0 || typeof i.start !== "string" || !/^\d+$/.test(i.start))))
+      throw Error("Browser release is incomplete; retain the browser and review its configuration.");
+    if (p.afterTaskMode != null && !["preserve", "idle60"].includes(p.afterTaskMode))
+      throw Error("Browser task retention is uncertain; retain the browser.");
+    return p;
   }
   publicPolicy(bot) {
     const p = this.policy(bot);
