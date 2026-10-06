@@ -142,12 +142,18 @@ export class PeerTimelineStore {
       // Never turn a page's absence into deletion of cached/live rows.
       const recent = next.direction === "older" && !this.state.checkpoint ? next : await this.read({});
       if (!this.valid(epoch)) return;
+      // Refresh mutable native bindings for the reading page without changing
+      // its immutable receipt window or the reconnect traversal watermark.
+      const reading = this.state.page?.exchanges ?? [];
+      const selected = reading.length && reading.at(-1)!.arrivalSequence !== recent.exchanges.at(-1)?.arrivalSequence
+        ? await this.read({ after: String(Number(reading[0].arrivalSequence) - 1) }) : recent;
+      if (!this.valid(epoch)) return;
       const status = await this.client.rpc<BotPeerStatus>("peers.status",this.botId,{limit:12},undefined,{owner:this.owner});
       if (!this.valid(epoch)) return;
       if (!Array.isArray(status.requests) || status.requests.length > 12 || status.requests.some(r => ![r.senderBotId,r.recipientBotId].includes(this.botId))) throw Error("Discussion presence could not be verified.");
       if (before === this.eventSequence) for (const r of status.requests) this.requests.set(r.id,r);
       while(this.requests.size > 24) this.requests.delete(this.requests.keys().next().value!);
-      const latest = new Map(recent.exchanges.map(e => [e.id, e]));
+      const latest = new Map([...selected.exchanges, ...recent.exchanges].map(e => [e.id, e]));
       this.publish({ page: this.state.page ? { ...this.state.page, exchanges: this.state.page.exchanges.map(e => latest.get(e.id) ?? e) } : recent, recent, checkpoint: next.direction === "older" || next.complete ? next.highWater : this.state.checkpoint, pendingNewer: next.direction === "newer" && !next.complete ? next.nextCursor : null, changed: before !== this.eventSequence || !next.complete && next.direction === "newer", error: "" });
     } catch (reason) { if (this.valid(epoch)) this.publish({ error: reason instanceof Error ? reason.message : "Reconnect to read bot messages." }); }
     finally { if (this.valid(epoch)) this.publish({ busy: false }); }
