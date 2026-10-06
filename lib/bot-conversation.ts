@@ -12,8 +12,8 @@ export const humanInput = (item: ThreadItem) => item.type === "userMessage" && !
 export function turnAudience(items: ThreadItem[], knownRunId?: string, conversation = false): TurnAudience {
   const trigger = items.find(scheduleInput);
   const runId = trigger?.type === "userMessage" ? trigger.clientId!.slice(9) : knownRunId;
-  // Peer-triggered work belongs to this same conversation. Hide the incoming
-  // peer envelope, but retain the bot's visible progress and reasoning summaries.
+  // Peer-triggered work belongs to this same conversation. Its native input is
+  // retained as a provenance fallback; canonical receipts replace it in the UI.
   if (!trigger && !knownRunId) return { kind: "conversation" };
   return { kind: items.some(humanInput) ? "mixed" : conversation ? "conversation" : "activity", ...(runId ? { runId } : {}) };
 }
@@ -30,6 +30,7 @@ export function reportedFinding(item: ThreadItem) {
 }
 
 export function projectConversationItem(turn: Pick<Turn, "id" | "startedAt" | "status"> & Partial<Pick<Turn, "completedAt">>, item: ThreadItem, audience: TurnAudience): HistoryEntry | null {
+  if (peerInput(item)) return { ...projectHistoryItem(turn, item), peerAlias: item.type === "userMessage" ? item.clientId! : undefined, audience: "conversation" };
   if (item.type === "agentMessage" && !item.text.trim() && !item.questions?.length) return null;
   if (audience.kind === "activity") {
     if (item.type === "agentMessage" && item.questions?.length)
@@ -40,7 +41,7 @@ export function projectConversationItem(turn: Pick<Turn, "id" | "startedAt" | "s
       phase: "final_answer", memoryCitation: null, delivery: null, questions: null }),
       audience: "finding", findingId: finding.key, runId: audience.runId };
   }
-  if (scheduleInput(item) || peerInput(item) || item.type === "userMessage" && item.clientId?.startsWith("secure-receipt:") || item.type === "userMessage" && item.clientId?.startsWith("manager-notice:")) return null;
+  if (scheduleInput(item) || item.type === "userMessage" && item.clientId?.startsWith("secure-receipt:") || item.type === "userMessage" && item.clientId?.startsWith("manager-notice:")) return null;
   if (turn.status !== "inProgress" && (!conversationItem(item.type) || item.type === "reasoning" && !item.summary.some(text => text.trim()))) return null;
   return { ...projectHistoryItem(turn, item, Boolean(audience.runId)), audience: audience.kind, runId: audience.runId };
 }

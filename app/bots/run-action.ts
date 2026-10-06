@@ -1,5 +1,5 @@
 import { useMemo, useSyncExternalStore } from "react";
-import type { BotOperations } from "./single-thread-contract";
+import type { BotOperations } from "../../lib/bots-operations";
 import { botsClient as client } from "./client";
 import { runActionJournal, type RunActionMethod as Method, type RunActionIntent as Intent, type ActionSelection } from "./run-action-journal";
 
@@ -41,7 +41,7 @@ class RunAction {
   get mounted() { return this.listeners.size > 0; }
   snapshot = () => this.revision;
   subscribe = (fn: () => void) => { this.listeners.add(fn); listen(); void this.refresh(); return () => { this.listeners.delete(fn); }; };
-  constructor(readonly owner: string, readonly botId: string, private key: string) {}
+  constructor(readonly owner: string, readonly botId: string, private key: string, private scope: string) {}
   private apply(value: ActionSelection) {
     if (value.revision < this.journalRevision) return;
     this.journalRevision = value.revision; this.ready = true;
@@ -68,10 +68,11 @@ class RunAction {
       if (operation.state === "accepted") return;
       if (operation.state === "rejected") throw Error(operation.error || "This exact action was rejected. Review the current state before making a new action.");
       intent = operation;
+      if (intent.method === "peers.control" && this.scope !== `peer-root:${intent.params.rootId}`) throw Error("The saved control belongs to a different discussion. Its original identity is retained; no control was sent.");
       if (intent.method === "runs.decide" && client.snapshot?.capabilities?.scheduleDecisions !== 1) throw Error("Connect to a service that supports scheduled-run choices. The saved choice is retained.");
       if (intent.method === "bursts.discard" && client.snapshot?.capabilities?.burstDiscard !== 1) throw Error("Connect to the updated service to discard these messages. The saved action is retained.");
       if ((intent.method === "bursts.resume" || intent.method === "bursts.discard" && intent.params.pendingOnly) && client.snapshot?.capabilities?.burstControls !== 1) throw Error("Connect to the updated service for held-message controls. This saved action is retained.");
-      const capability = intent.method.startsWith("bursts.") ? "messageBursts" : (intent.method === "work.resume" || intent.method === "turn.interrupt" && intent.params.scope === "main" && client.snapshot?.capabilities?.singleThreadExecution === 1) ? "singleThreadExecution" : intent.method === "peers.cancel" ? "peerInbox" : "backgroundRunLanes";
+      const capability = intent.method === "peers.control" ? "peerRootControls" : intent.method.startsWith("bursts.") ? "messageBursts" : (intent.method === "work.resume" || intent.method === "turn.interrupt" && intent.params.scope === "main" && client.snapshot?.capabilities?.singleThreadExecution === 1) ? "singleThreadExecution" : intent.method === "peers.cancel" ? "peerInbox" : "backgroundRunLanes";
       if (client.snapshot?.capabilities?.[capability] !== 1) throw Error("This service does not support the saved action. Its identity is retained.");
       const result = await client.rpc(intent.method, this.botId, intent.params, intent.id, { owner: this.owner, managed: true });
       if (!result || typeof result !== "object" || Array.isArray(result)) throw Error("The response did not confirm this action. Check the same saved action again.");
@@ -90,6 +91,10 @@ class RunAction {
         if (receipt?.operationId !== intent.id || receipt.method !== intent.method || receipt.botId !== this.botId) throw Error("This burst control was not confirmed. Check the same saved action again.");
       }
       if (intent.method === "peers.cancel" && (result as { request?: { id?: string } }).request?.id !== intent.params.id) throw Error("The reply did not confirm this discussion. Retry its saved action.");
+      if (intent.method === "peers.control") {
+        const { control, root } = result as import("../../lib/bots-types").BotPeerControl;
+        if (control?.operationId !== intent.id || control.botId !== this.botId || control.rootId !== intent.params.rootId || control.action !== intent.params.action || control.expectedRevision !== intent.params.expectedRevision || control.appliedRevision !== Number(intent.params.expectedRevision) + 1 || control.scope !== "discussion-admission" || control.nativeInterruption !== false || root?.id !== control.rootId || root.revision !== control.appliedRevision || root.version !== 1) throw Error("This discussion control was not confirmed. Check the same saved action again.");
+      }
       this.apply(await runActionJournal(this.key, { kind: "settle", id: intent.id, state: "accepted" })); changed(this.key);
     } catch (reason) {
       const error = reason instanceof Error ? reason.message : "This action is unconfirmed. Check the same saved action again.";
@@ -107,7 +112,7 @@ export function useRunAction(owner: string, botId: string, scope: string) {
   const action = useMemo(() => {
     const key = `dawar-run-action:v1:${JSON.stringify([owner, botId, scope])}`;
     let value = actions.get(key);
-    if (!value) { value = new RunAction(owner, botId, key); actions.set(key, value); }
+    if (!value) { value = new RunAction(owner, botId, key, scope); actions.set(key, value); }
     return value;
   }, [owner, botId, scope]);
   useSyncExternalStore(action.subscribe, action.snapshot, action.snapshot);

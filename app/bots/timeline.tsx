@@ -23,6 +23,8 @@ import { useRunFindings } from "./run-findings";
 import { retainedBatches } from "./burst-state";
 import { SecureInputCard, useSecureInputRequests } from "./secure-input-card";
 import { secureTimelineGroups, type ConversationGroup } from "./secure-input-timeline";
+import { usePeerTimeline, PeerTimelineMessage, PeerPaging } from "./peer-timeline";
+import { peerConversationEntries, peerAliases } from "./peer-timeline-store";
 const noDetailErrors = () => () => {};
 
 const EntryBody = memo(function EntryBody({ entry, timeline, attachments, download }: {
@@ -86,6 +88,7 @@ function TurnWorkLog({ entry, timeline, download }: { entry: HistoryEntry; timel
 }
 export const TimelineEntry = memo(function TimelineEntry(props: Parameters<typeof EntryBody>[0] & { showScheduledMark?:boolean; onOpenCall?: () => void; threadId?: string; onReply?: (reply: BotReplyReference) => void; onOpenReply?: (reply: BotReplyReference) => Promise<boolean> }) {
   const { entry } = props;
+  if (entry.peerAlias) return <div data-history-key={historyKey(entry.turnId, entry.id)} className="bots-peer-original"><p>Original bot input · canonical discussion receipt not loaded</p><LazyDetails className="bots-activity" summary="Read original native input">{() => <EntryBody {...props}/>}</LazyDetails><MessageTime seconds={entry.messageAt} basis={entry.timeBasis ?? "turn-start"} inline/></div>;
   if (entry.item?.type === "agentMessage" && !entry.item.text.trim() && !entry.item.questions?.length && !entry.questionNotice) return null;
   if (entry.type === "reasoning" && (entry.item?.type !== "reasoning" || !entry.item.summary.some(text => text.trim()))) return null;
   return <div data-history-key={historyKey(entry.turnId, entry.id)}>
@@ -103,17 +106,19 @@ export const TimelineEntry = memo(function TimelineEntry(props: Parameters<typeo
 export function BotConversation({ owner, bot, online, children, onOpenCall, onReply, draft = "", burstsEnabled = false, burstSubmitting = false }: { owner: string; bot: Bot; online: boolean; children?: ReactNode; onOpenActivity?: (target: ActivityTarget) => void; onOpenCall?: () => void; onReply?: (reply: BotReplyReference) => void; draft?: string; burstsEnabled?: boolean; burstSubmitting?: boolean }) {
   const { timeline, state: nativeState } = useBotTimeline(owner, bot.id, online);
   const findings = useRunFindings(owner, bot.id, online, botsClient.snapshot?.capabilities?.backgroundRunLanes === 1);
+  const peerSupported = botsClient.snapshot?.capabilities?.peerBodyPaging === 1;
+  const peers = usePeerTimeline(owner, bot.id, online, peerSupported);
   const projectEntries = useCallback((entries: HistoryEntry[]) => {
     const extra: HistoryEntry[] = findings.findings.filter(f => f.conversation !== true && !entries.some(e => e.scheduled && e.audience === "conversation" && e.runId === f.runId) && !entries.some(e => e.audience === "finding" && e.runId === f.runId && e.turnId === f.turnId && e.item?.type === "agentMessage" && e.item.text.trim() === f.summary.trim())).map(f => {
       const seconds = Date.parse(f.createdAt) / 1000;
       return { id: `finding:${f.id}`, turnId: f.turnId, type: "agentMessage", label: "Scheduled finding", item: { type: "agentMessage", id: `finding:${f.id}`, text: f.summary, phase: "final_answer", memoryCitation: null, delivery: null, questions: null }, complete: true, scheduled: true, status: "completed", startedAt: seconds, messageAt: seconds, timeBasis: "received", audience: "finding", runId: f.runId };
     });
-    if (!extra.length) return entries;
+    if (!extra.length) return peerConversationEntries(entries, peers.rows);
     // Native item order stays authoritative; insert external run findings at their recorded arrival time.
     const result = [...entries];
     for (const f of extra) { const index = result.findIndex(e => (e.messageAt ?? e.startedAt ?? Infinity) > f.messageAt!); result.splice(index < 0 ? result.length : index, 0, f); }
-    return result;
-  }, [findings.findings]);
+    return peerConversationEntries(result, peers.rows);
+  }, [findings.findings, peers.rows]);
   const state = useMemo(() => ({ ...nativeState, entries: projectEntries(nativeState.entries) }), [nativeState, projectEntries]);
   const quietSeconds = bot.burstQuietSeconds ?? 3;
   const burst = useBurstConversation({ owner, botId: bot.id, online, draft, enabled: burstsEnabled, quietSeconds });
@@ -160,7 +165,7 @@ export function BotConversation({ owner, bot, online, children, onOpenCall, onRe
     for (const entry of state.entries.slice(first, last)) {
       if (entry.item?.type === "agentMessage" && !entry.item.text.trim() && !entry.item.questions?.length && !entry.questionNotice) continue;
       if (entry.type === "reasoning" && (entry.item?.type !== "reasoning" || !entry.item.summary.some(text => text.trim()))) continue;
-      const kind = entry.audience === "finding" && entry.runId ? `scheduled:${entry.runId}` : entry.type === "reasoning" ? `thinking:${entry.turnId}` : !entry.item ? `work:${entry.turnId}` : "message";
+      const kind = entry.peer ? "message" : entry.audience === "finding" && entry.runId ? `scheduled:${entry.runId}` : entry.type === "reasoning" ? `thinking:${entry.turnId}` : !entry.item ? `work:${entry.turnId}` : "message";
       const previous = result.at(-1);
       if (kind !== "message" && previous?.kind === kind) previous.entries.push(entry);
       else result.push({ kind, entries: [entry] });
@@ -183,7 +188,10 @@ export function BotConversation({ owner, bot, online, children, onOpenCall, onRe
   const pinnedContext = state.position.tailContext && !state.position.following
     ? [...state.contextEntries, ...state.entries].find(entry => historyKey(entry.turnId, entry.id) === timeline.resolveKey(state.position.anchor)) : undefined;
   const mountedKeys = new Set(state.entries.slice(first, last).map(entry => historyKey(entry.turnId, entry.id)));
-  const contextEntries = (pinnedContext && !state.contextEntries.some(entry => historyKey(entry.turnId, entry.id) === historyKey(pinnedContext.turnId, pinnedContext.id)) ? [pinnedContext] : state.contextEntries).filter(entry => !mountedKeys.has(historyKey(entry.turnId, entry.id)));
+  const aliases = new Set(peers.rows.flatMap(peerAliases));
+  const contextEntries = (pinnedContext && !state.contextEntries.some(entry => historyKey(entry.turnId, entry.id) === historyKey(pinnedContext.turnId, pinnedContext.id)) ? [pinnedContext] : state.contextEntries).filter(entry => !mountedKeys.has(historyKey(entry.turnId, entry.id)) && (!entry.peerAlias || !aliases.has(entry.peerAlias)));
+  const rootRows = new Map(state.entries.slice(first, last).flatMap(e => e.peer ? [[e.peer.rootId, e.peer.id] as const] : []));
+  const namedBots = botsClient.snapshot?.bots ?? [bot];
   return <div className="bots-timeline"><div className="bots-messages" ref={scroll} tabIndex={0} {...feed.handlers}><div ref={content}>
     {paging && <div className="bots-feed-loading" role="status">Loading conversation…</div>}
     {(first > 0 || state.olderCursor) && !state.loading && (!online || state.error || !state.entries.length) && <button className="bots-older" disabled={paging || !online && (first === 0 || state.gaps.some((gap) => gap.before === historyKey(state.entries[first].turnId, state.entries[first].id)))} onClick={() => void feed.page(-1, true)}>{state.entries.length ? "Load earlier turns" : "Continue loading history"}</button>}
@@ -193,6 +201,7 @@ export function BotConversation({ owner, bot, online, children, onOpenCall, onRe
     {state.error && <div className="bots-history-error" role="alert"><CloudOff size={22} aria-hidden="true" /><div><strong>Let’s try that again</strong><p>{state.error}</p><button disabled={!online} onClick={() => void timeline.refresh()}>Reload conversation</button></div></div>}
     {findings.nextCursor && first === 0 && <button className="bots-older" disabled={!online || findings.busy} onClick={() => { feed.capture(); void findings.older(); }}>Earlier scheduled findings</button>}
     {findings.error && <p className="bots-error" role="alert">{findings.error}<button disabled={!online || findings.busy} onClick={findings.retry}>Retry</button></p>}
+    {peerSupported && <PeerPaging store={peers.store} online={online} capture={feed.capture}/>}
     {state.loading && !state.entries.length && <div className="bots-history-skeleton" role="status" aria-label="Loading conversation"><span /><span /><span /><span /></div>}
     {!state.loading && !state.error && !state.entries.length && !state.olderCursor && <div className="bots-conversation-start"><span className="bots-start-icon"><MessageCircle size={26} strokeWidth={1.4} aria-hidden="true" /></span><h2>{bot.name}</h2><p>{bot.purpose || "What would you like to work on?"}</p></div>}
     {(pinnedContext || last === state.entries.length && !groups.some((group) => group.kind === "message" || group.kind.startsWith("scheduled:"))) && contextEntries.length > 0 && <section aria-label="Latest readable context" data-history-context>
@@ -211,7 +220,7 @@ export function BotConversation({ owner, bot, online, children, onOpenCall, onRe
           Some messages between these pages are not loaded. <button disabled={!online || paging} onClick={() => {
             feed.capture(); void timeline.fillGap(gap);
           }}>Load messages in between</button></div>)}
-        {group.kind.startsWith("scheduled:") ? <section className="bots-scheduled-findings" aria-label="Findings from one scheduled run"><span className="bots-scheduled-message-mark" title="Findings from the same scheduled run"><Clock3 size={13} aria-hidden="true"/>Scheduled work</span>{group.entries.map(value=><TimelineEntry {...replyProps} onOpenCall={onOpenCall} key={historyKey(value.turnId,value.id)} entry={value} timeline={timeline} attachments={state.attachments} download={download} showScheduledMark={false}/>)}</section> : group.kind === "message" ? replyBatch ? <div data-history-key={key}><BurstBubbles messages={replyBatch} {...batchProps} onOpenReply={openReply} onReply={onReply} threadId={bot.threadId??undefined} replySource={entry} sent /></div> : confirmed ? <div data-history-key={key}><BurstBubbles messages={confirmed.messages} batch={confirmed.batch} {...batchProps} onOpenReply={openReply} onReply={onReply} threadId={bot.threadId??undefined} replySource={entry} /></div> : <TimelineEntry {...replyProps} onOpenCall={onOpenCall} entry={entry} timeline={timeline} attachments={state.attachments} download={download} />
+        {entry.peer ? <div data-history-key={key}><PeerTimelineMessage owner={owner} botId={bot.id} meta={entry.peer} nativeKeys={[...(entry.peerNativeKeys ?? []), ...nativeState.contextEntries.filter(e => e.peerAlias && peerAliases(entry.peer!).includes(e.peerAlias)).map(e => historyKey(e.turnId,e.id))]} store={peers.store} online={online} bots={namedBots} showRoot={rootRows.get(entry.peer.rootId) === entry.peer.id}/></div> : group.kind.startsWith("scheduled:") ? <section className="bots-scheduled-findings" aria-label="Findings from one scheduled run"><span className="bots-scheduled-message-mark" title="Findings from the same scheduled run"><Clock3 size={13} aria-hidden="true"/>Scheduled work</span>{group.entries.map(value=><TimelineEntry {...replyProps} onOpenCall={onOpenCall} key={historyKey(value.turnId,value.id)} entry={value} timeline={timeline} attachments={state.attachments} download={download} showScheduledMark={false}/>)}</section> : group.kind === "message" ? replyBatch ? <div data-history-key={key}><BurstBubbles messages={replyBatch} {...batchProps} onOpenReply={openReply} onReply={onReply} threadId={bot.threadId??undefined} replySource={entry} sent /></div> : confirmed ? <div data-history-key={key}><BurstBubbles messages={confirmed.messages} batch={confirmed.batch} {...batchProps} onOpenReply={openReply} onReply={onReply} threadId={bot.threadId??undefined} replySource={entry} /></div> : <TimelineEntry {...replyProps} onOpenCall={onOpenCall} entry={entry} timeline={timeline} attachments={state.attachments} download={download} />
           : <div data-history-key={key} style={{ position: "relative" }}>{group.entries.slice(1).map((value) => <span key={value.id} data-history-key={historyKey(value.turnId, value.id)} aria-hidden="true" style={{ position: "absolute", top: 0, height: 0, pointerEvents: "none" }} />)}<LazyDetails className="bots-activity" summary={summary}>{body}</LazyDetails></div>}
         {groups.slice(groups.indexOf(group) + 1).find(next => !next.secure)?.entries[0]?.turnId !== entry.turnId ? <ReturnedArtifacts linked={linkedArtifacts} attachments={state.attachments} turnId={entry.turnId} botId={bot.id} /> : null}
       </Fragment>;

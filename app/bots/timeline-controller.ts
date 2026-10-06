@@ -495,6 +495,7 @@ export class BotTimeline {
       throw Error("Your conversation position could not be saved. Keep this page open and retry.");
   }
   detail(entry: HistoryEntry): Promise<ThreadItem> {
+    if (entry.status === "received") return Promise.reject(Error("Peer receipt bodies use their scoped discussion reader."));
     const key = historyKey(entry.turnId, entry.id);
     if (this.transport.owner !== this.owner || this.disposed) return Promise.reject(new Error("Conversation owner changed."));
     const supplement = this.supplements.get(key);
@@ -547,6 +548,7 @@ export class BotTimeline {
       for (const event of this.detailEvents.get(key) ?? []) {
         const native = event.data as NativeEvent;
         if (event.seq <= cursor) continue;
+        if (entry.status === "received") throw Error("Peer receipt bodies use the scoped discussion reader.");
         const reduced = reduceBotTurns([{ id: entry.turnId, items: [item], itemsView: "full", status: entry.status, startedAt: entry.startedAt, completedAt: null, durationMs: null, error: null }], native);
         item = reduced[0]?.items.find((value) => value.id === entry.id) ?? item;
       }

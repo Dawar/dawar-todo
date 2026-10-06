@@ -4,6 +4,10 @@ import type { BotAttachment, BotEvent } from "./bots-types";
 
 /** A disposable, explicitly partial view. Native history remains authoritative. */
 export type HistoryEntry = {
+  /** Display provenance only; never a native message or activity publisher. */
+  peer?: import("./bots-types").BotPeerExchangeMeta;
+  peerNativeKeys?: string[];
+  peerAlias?: string;
   /** Summary-backed chat: exact commentary and tools load only on disclosure. */
   deferredTurn?: boolean;
   turnError?: string;
@@ -15,7 +19,7 @@ export type HistoryEntry = {
   item: ThreadItem | null; complete: boolean; scheduled: boolean;
   audience?: "conversation" | "mixed" | "finding"; runId?: string; findingId?: string; legacyContext?: boolean;
   messageAt?: number | null; timeBasis?: "received" | "turn-start" | "turn-end";
-  startedAt: number | null; turnStatus?: Turn["status"]; itemStatus?: string; status: Turn["status"]; updatedSeq?: number;
+  startedAt: number | null; turnStatus?: Turn["status"]; itemStatus?: string; status: Turn["status"] | "received"; updatedSeq?: number;
 };
 export type HistoryContext = { laneId: string; runId: string | null; threadId: string };
 export type HistoryPage = {
