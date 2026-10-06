@@ -60,15 +60,22 @@ export function ComposerAttachments({ composer }: { composer: BotComposer }) {
   </div>;
 }
 export function ComposerStatus({ composer, error }: { composer: BotComposer | null; error: string }) {
+  const profile = useSyncExternalStore(botsClient.subscribe, () => {
+    if (!composer || botsClient.owner !== composer.owner) return undefined;
+    const bot = botsClient.snapshot?.bots.find(row => row.id === composer.botId), value = bot?.profilePreparation;
+    return value && value.botId === bot?.id && value.threadId === bot?.threadId ? value : undefined;
+  }, () => undefined);
   const storageError = error || composer?.storageError || botComposers.error;
   const operation = composer?.operation;
   const uploadErrors = composer?.draft.files.filter(file=>file.error && !file.remote?.ready) ?? [];
   const detail = storageError || composer?.actionError || (operation && !composer?.sendingNow ? operation.error : "") || uploadErrors.map(file=>`${file.name}: ${file.error}`).join(" · ");
-  if (!detail) return null;
-  return <div className="bots-draft-status" role="alert"><span>{detail}</span>
+  if (!detail && !profile) return null;
+  return <>{profile && <div className="bots-draft-status" role={profile.state === "blocked" ? "alert" : "status"}>
+    <span>{profile.message}{profile.bytes !== undefined ? ` (${Math.ceil(profile.bytes / 1024)} KiB memory.)` : ""}</span>
+  </div>}{detail && <div className="bots-draft-status" role="alert"><span>{detail}</span>
     <button type="button" disabled={composer?.sendingNow} onClick={()=>{
       if (operation) void composer?.send();
       else { void composer?.retry(); void botComposers.recoverOwner(); }
     }}>Retry</button>
-  </div>;
+  </div>}</>;
 }

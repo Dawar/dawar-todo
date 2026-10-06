@@ -27,6 +27,7 @@ function protectBrowser(runtime, botId) {
   if (p && (!p.protected || p.release)) runtime.store.put("browserRetention", { ...p, protected: true, release: null, revision: p.revision + 1 });
 }
 function advanceActivity(runtime, botId, activeTurnId, changes = {}) {
+  runtime.memoryMaintenance?.cancelPreparation(botId);
   runtime.desktops?.cancelBrowserMaintenance(botId);
   if (activeTurnId && runtime.store.get("botActivity", botId)?.activeTurnId !== activeTurnId) protectBrowser(runtime, botId);
   const token = captureActivity(runtime, botId);

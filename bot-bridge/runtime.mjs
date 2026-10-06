@@ -29,6 +29,7 @@ import { PlanLifecycle } from "./plan-lifecycle.mjs";
 import { stagedQueue, dispatchPrompt, reconcilePrompt } from "./prompt-queue.mjs";
 import { sendQueuedPrompt } from "./queue-send.mjs";
 import { TEAM_TOOL, publicTeams, readTeam, teamReference, acceptTeamOperation, teamTool } from "./teams.mjs";
+import { BotMemoryMaintenance, MEMORY_TOOL } from './memory-maintenance.mjs';
 import { QUEUE_TOOL, ownedList, publicLists, flushDueLists, queueTool } from "./queue-lists.mjs";
 import { findNativeTurn } from "./native-reconcile.mjs";
 import { dispatchScheduled, reconcileScheduled, scheduledContext, recoverRunTurns } from "./scheduled-execution.mjs";
@@ -56,7 +57,6 @@ import {
   cleanName,
   slugify,
   initializeProfile,
-  profileContext,
   containedPath,
 } from "./profiles.mjs";
 import { normalizeSchedule, collectDueRuns } from "./schedules.mjs";
@@ -133,6 +133,7 @@ const schema = (properties, required = []) => ({
 });
 const str = { type: "string" };
 export const dynamicTools = [
+  { type: 'function', ...MEMORY_TOOL },
   ...SECURE_TOOLS.map(tool => ({type:"function",...tool})),
   { type: "function", ...TEAM_TOOL },
   { type: "function", ...QUEUE_TOOL },
@@ -205,6 +206,7 @@ export class BotRuntime extends EventEmitter {
     this.answers = new AnswerExecutions(this, validateResponse);
     this.runs = new BackgroundRuns(this, dynamicTools, validateResponse, INTERACTIONS);
     this.scheduleDecisions = new ScheduleDecisions(this);
+    this.memoryMaintenance = new BotMemoryMaintenance(this);
     this.locks = new Map();
     this.loaded = new Set();
     this.models = [];
@@ -538,7 +540,7 @@ export class BotRuntime extends EventEmitter {
   }
   snapshot() {
     return {
-      capabilities: { backgroundRunLanes: 1, scheduleDecisions: 1, singleThreadExecution: 1, peerInbox: 1, nativeGoals: 1, nativeConversation: 1, messageReplies: 1, secureInputs: 1, operatorCalls: 1, operatorInputQuestions: 1, historyCursorIndex: 1, messageBursts: 1, burstDiscard: 1, burstControls: 1, queueLists: 1, queueRelativeMoves: 1, queueSendNow: 1, teams: 1, ...(this.desktops ? { botDesktops: 1, botBrowserRetention: 1 } : {}) },
+      capabilities: { botMemoryMaintenance: 1, backgroundRunLanes: 1, scheduleDecisions: 1, singleThreadExecution: 1, peerInbox: 1, nativeGoals: 1, nativeConversation: 1, messageReplies: 1, secureInputs: 1, operatorCalls: 1, operatorInputQuestions: 1, historyCursorIndex: 1, messageBursts: 1, burstDiscard: 1, burstControls: 1, queueLists: 1, queueRelativeMoves: 1, queueSendNow: 1, teams: 1, ...(this.desktops ? { botDesktops: 1, botBrowserRetention: 1 } : {}) },
 
       teams: publicTeams(this),
       workByBot: this.store.bots().map(bot => this.primary.work(bot)),
@@ -580,6 +582,8 @@ export class BotRuntime extends EventEmitter {
   }
   async handle(request, trustedOrigin = null) {
     const { method, botId, params = {}, operationId } = request;
+    if (botId && ['turn.send', 'turn.interrupt', 'queue.add', 'queue.send', 'questions.respond', 'bots.archive', 'bots.delete', 'bursts.add', 'bursts.stop'].includes(method))
+      this.memoryMaintenance.cancelPreparation(botId);
     if (
       typeof method !== "string" ||
       !params ||
@@ -1491,8 +1495,8 @@ export class BotRuntime extends EventEmitter {
     const input = acceptedInput ?? (staged ? p.stagedInput : await this.messageInput(bot, p));
     const text = String(p.text ?? "").trim();
     if (!staged && !acceptedInput) rememberReply(this, bot, id, text, p.reply);
+    const additionalContext = await this.memoryMaintenance.context(bot, await teamReference(this, bot));
     await this.load(bot);
-    const additionalContext = await profileContext(bot, await teamReference(this, bot));
     if (this.manager)
       additionalContext.managerPolicy = {
         kind: "application",
@@ -1816,6 +1820,9 @@ export class BotRuntime extends EventEmitter {
       },
     });
   }
+  async preparePrimaryMemory(bot, item) {
+    return this.memoryMaintenance.preparation(bot, item, await teamReference(this, bot));
+  }
   emitUserMessage(bot, turnId, clientId, content) {
     rememberInputProvenance(this, bot, turnId, { type: "userMessage", id: `client:${clientId}`, clientId, content });
     this.emitEvent(
@@ -2077,6 +2084,9 @@ export class BotRuntime extends EventEmitter {
   async tick() {
     if (!this.ready || this.tickRunning) return;
     this.tickRunning = true;
+    // Metadata/backup work cannot occupy a bot admission lock or stall the
+    // shared dispatcher. Semantic work enters the original native thread later.
+    void this.memoryMaintenance.tick().catch(error => this.emit('fault', error));
     try {
       await this.plans.recover();
       await this.answers.recover();
@@ -2204,6 +2214,10 @@ export class BotRuntime extends EventEmitter {
   async dynamicTool(bot, p, origin = null) {
     const args =
       typeof p.arguments === "string" ? JSON.parse(p.arguments) : p.arguments;
+    if (p.tool === MEMORY_TOOL.name) {
+      if (origin) throw Error('Memory maintenance belongs to the primary named bot.');
+      return this.memoryMaintenance.tool(bot, args, { authority: 'native-tool', threadId: p.threadId, turnId: p.turnId, callId: p.callId });
+    }
     if (SECURE_TOOLS.some(tool=>tool.name===p.tool)) {
       if(origin || p.threadId && p.threadId!==bot.threadId)throw Error("Secure input belongs to this bot's current primary thread.");
       return this.secure.tool(bot,p.tool,args,p.callId);
