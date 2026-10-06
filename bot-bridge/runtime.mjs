@@ -566,6 +566,9 @@ export class BotRuntime extends EventEmitter {
     return { ...run, ...(lane ? this.runs.publicRun(lane) : this.runs.unreservedMetadata(run)) };
   }
   async lock(key, fn) {
+    // Maintenance never owns this lock. Any real admission cancels its
+    // disposable browser-close helper before joining a possibly long queue.
+    this.desktops?.cancelBrowserMaintenance(key);
     const previous = this.locks.get(key) ?? Promise.resolve();
     const next = previous.catch(() => {}).then(fn);
     this.locks.set(key, next);
@@ -587,6 +590,8 @@ export class BotRuntime extends EventEmitter {
     if(method.startsWith("secure.") && method!=="secure.list")throw Error("Sensitive input requires the dedicated encrypted channel; ordinary RPC is rejected.");
     if (botId && this.store.bot(String(botId)).deletedAt && method !== "bots.delete")
       throw Object.assign(new Error("This bot has been deleted. Its workspace and native history were retained."), { outcome: "rejected" });
+    if (botId && !["desktop.status", "desktop.preview"].includes(method))
+      this.desktops?.cancelBrowserMaintenance(String(botId));
     if (["desktop.status", "desktop.preview", "desktop.open"].includes(method)) {
       if (!this.desktops) throw new Error("Bot desktops are not configured on this machine.");
       const bot = this.store.bot(String(botId));

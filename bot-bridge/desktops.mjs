@@ -1,4 +1,4 @@
-import { spawn, execFile, execFileSync } from "node:child_process";
+import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { createInterface } from "node:readline";
 import { createHash, randomBytes } from "node:crypto";
@@ -217,6 +217,7 @@ export class BotDesktops {
     Object.assign(this, { runtime, base, launcher, adopt });
     this.clients = new Map();
     this.observations = new Map();
+    this.browserMaintenance = new Map();
     this.retentionBusy = false;
     this.retentionTimer = setInterval(() => void this.retentionTick().catch(() => {}), 60000);
     this.retentionTimer.unref();
@@ -330,6 +331,7 @@ export class BotDesktops {
       closeAfterMinutes: 60, revision: p.revision, lastResult: p.lastResult ?? null, afterTaskMode: p.afterTaskMode ?? null };
   }
   savePolicy(bot, changes) {
+    this.cancelBrowserMaintenance(bot.id);
     const old = this.policy(bot);
     if (old.botId !== bot.id || old.profile !== this.name(bot)) throw Error("Browser policy ownership mismatch.");
     return this.runtime.store.put("browserRetention", { ...old, ...changes, revision: old.revision + 1 });
@@ -389,6 +391,82 @@ export class BotDesktops {
       [...this.sessions.values()].some(s => s.bot.id === bot.id) ||
       [...this.tickets.values()].some(t => t.botId === bot.id);
   }
+  cancelBrowserMaintenance(botId) {
+    const attempt = this.browserMaintenance.get(botId);
+    if (!attempt || attempt.cancelled) return;
+    attempt.cancelled = true;
+    attempt.cancel?.(); // Only the disposable helper; never signal Chrome.
+  }
+  maintenanceValid(bot, attempt, revision) {
+    return this.browserMaintenance.get(bot.id) === attempt && !attempt.cancelled &&
+      !this.runtime.locks.has(bot.id) && !this.locks.has(bot.id) &&
+      !this.blockedBrowser(bot) && activityUnchanged(this.runtime, bot.id, attempt.token) &&
+      this.policy(bot).revision === revision;
+  }
+  async maintenanceIdle(bot, attempt, revision) {
+    if (!this.maintenanceValid(bot, attempt, revision)) return false;
+    // No admission/desktop lock is held across this read. Send/Stop can cancel
+    // immediately, even if transport never replies. Late replies grant nothing.
+    const { thread } = await this.runtime.codex.call("thread/read", { threadId: bot.threadId, includeTurns: false }, 2000);
+    if (thread?.id !== bot.threadId || thread.status?.type !== "idle" ||
+        !this.maintenanceValid(bot, attempt, revision)) return false;
+    attempt.nativeReadAt = performance.now();
+    return true;
+  }
+  async closeReleasedBrowser(bot, attempt, revision, release) {
+    // Bidirectional per-window permits keep slow OS work outside the event
+    // loop. Each native read is followed by final OS checks, then a short-lived
+    // commit permit. New admission/activity/viewer/input cancels the helper.
+    const child = spawn("/usr/bin/python3", [join(resources, "browser.py"), "close", this.name(bot),
+      "--owner", bot.id, "--expected", JSON.stringify(release), "--bridge-permits"],
+    { env: { ...process.env, BOTS_DESKTOP_DIR: this.base }, stdio: ["pipe", "pipe", "pipe"] });
+    attempt.cancel = () => { child.stdin.destroy(); child.kill("SIGTERM"); };
+    if (attempt.cancelled) attempt.cancel();
+    child.stderr.on("data", () => {});
+    return new Promise((resolve, reject) => {
+      let settled = false, phase = "prepare", nextWindow = 0, pending = false, result = null, size = 0;
+      const timer = setTimeout(() => finish(Error("Browser close deadline expired.")), 12000);
+      const lines = createInterface({ input: child.stdout });
+      const finish = error => {
+        if (settled) return;
+        settled = true; clearTimeout(timer); lines.close();
+        child.stdin.destroy();
+        if (error) { child.kill("SIGTERM"); reject(error); } else resolve(result);
+      };
+      // Broken pipes are deferrals; no helper retry or browser signal.
+      child.stdin.on("error", () => finish(Error("Browser close helper disconnected.")));
+      child.on("error", () => finish(Error("Browser close helper unavailable.")));
+      child.on("exit", code => finish(code === 0 && result && !attempt.cancelled ? null : Error("Browser close deferred or refused.")));
+      lines.on("line", line => {
+        size += line.length;
+        if (size > 65536) return finish(Error("Browser close protocol exceeded its bound."));
+        let message; try { message = JSON.parse(line); } catch { return finish(Error("Invalid browser close protocol.")); }
+        if (message.event === "done" && !pending && phase === "prepare" && message.closeRequested === nextWindow && nextWindow > 0) {
+          result = message; return;
+        }
+        if (pending || message.event !== phase || message.window !== nextWindow || nextWindow >= 8)
+          return finish(Error("Unexpected browser close protocol."));
+        if (phase === "prepare") {
+          pending = true;
+          void this.maintenanceIdle(bot, attempt, revision).then(idle => {
+            pending = false;
+            if (settled) return;
+            if (!idle) return finish(Error("Native activity protects the browser."));
+            phase = "commit";
+            child.stdin.write(JSON.stringify({ event: "prepare", window: nextWindow }) + "\n");
+          }).catch(() => finish(Error("Native idle read is uncertain.")));
+        } else {
+          // All checks and permit issuance occur in one JS turn; no awaited
+          // lock/read here. Native freshness and a 200ms OS permit bound the
+          // unavoidable gap between observation and X11 request delivery.
+          if (!this.maintenanceValid(bot, attempt, revision) || performance.now() - attempt.nativeReadAt > 1000)
+            return finish(Error("Activity changed before the browser close request."));
+          phase = "prepare"; nextWindow++;
+          child.stdin.write(JSON.stringify({ event: "commit", window: message.window, expiresAt: Date.now() + 200 }) + "\n");
+        }
+      });
+    });
+  }
   async retentionTick() {
     if (this.retentionBusy) return;
     this.retentionBusy = true;
@@ -398,31 +476,32 @@ export class BotDesktops {
         const p = this.policy(bot);
         if (p.mode !== "idle60" || p.protected || !p.release || Date.now() - p.release.at < 3600000 ||
             this.runtime.locks.has(bot.id) || this.locks.has(bot.id)) continue;
-        await this.runtime.lock(bot.id, () => this.lock(bot, async () => {
-          if (this.blockedBrowser(bot)) return;
+        const attempt = { token: captureActivity(this.runtime, bot.id), cancelled: false };
+        this.browserMaintenance.set(bot.id, attempt);
+        let consumedRevision = null;
+        try {
+          if (this.blockedBrowser(bot)) continue;
           const policy = this.policy(bot);
           if (policy.profile !== this.name(bot) || policy.mode !== "idle60" || policy.protected || !policy.release ||
-              policy.release.threadId !== bot.threadId || Date.now() - policy.release.at < 3600000) return;
-          const token = captureActivity(this.runtime, bot.id);
-          const { thread } = await this.runtime.codex.call("thread/read", { threadId: bot.threadId, includeTurns: false });
-          if (thread?.id !== bot.threadId || thread.status?.type !== "idle" ||
-              !activityUnchanged(this.runtime, bot.id, token) || this.blockedBrowser(bot)) return;
+              policy.release.threadId !== bot.threadId || Date.now() - policy.release.at < 3600000) continue;
+          if (!await this.maintenanceIdle(bot, attempt, policy.revision)) continue;
           const state = await this.browserCommand(bot, "probe");
           if (state.monotonicMs - policy.release.monotonicMs < 3600000 || state.connected || state.monotonicMs - state.idleMs > policy.release.monotonicMs || state.idleMs < 3600000 || state.boot !== policy.release.boot ||
-              JSON.stringify(state.instances) !== JSON.stringify(policy.release.instances)) return;
-          if (!activityUnchanged(this.runtime, bot.id, token) || this.blockedBrowser(bot) ||
-              this.policy(bot).revision !== policy.revision) return;
-          // Persist the single attempt before the synchronous final, locked OS recheck.
-          // This fences bridge admission and viewer/ticket creation through WM_DELETE.
-          this.savePolicy(bot, { protected: true, release: null, lastResult: "Graceful close requested; prompts are never forced." });
-          try {
-            const args = [join(resources,"browser.py"),"close",this.name(bot),"--owner",bot.id,"--expected",JSON.stringify(policy.release)];
-            execFileSync("/usr/bin/python3",args,{timeout:12000,maxBuffer:65536,stdio:["ignore","pipe","pipe"],
-              env:{...process.env,BOTS_DESKTOP_DIR:this.base}});
-          } catch {
-            this.savePolicy(bot, { lastResult: "Close deferred or refused. Review and release again when safe." });
-          }
-        })).catch(() => {}); // Missing/uncertain OS/native ownership defers, never guesses.
+              JSON.stringify(state.instances) !== JSON.stringify(policy.release.instances)) continue;
+          if (!this.maintenanceValid(bot, attempt, policy.revision)) continue;
+          // One synchronous local commit before any close effect. No lock is
+          // retained across subprocess/native waits; subsequent admission wins.
+          consumedRevision = policy.revision + 1;
+          this.runtime.store.put("browserRetention", { ...policy, protected: true, release: null, revision: consumedRevision,
+            lastResult: "One graceful close attempt started; prompts are never forced." });
+          await this.closeReleasedBrowser(bot, attempt, consumedRevision, policy.release);
+        } catch {
+          if (consumedRevision != null && this.policy(bot).revision === consumedRevision)
+            this.savePolicy(bot, { lastResult: "Close deferred, cancelled or refused. Review and release again when safe." });
+        } finally {
+          this.cancelBrowserMaintenance(bot.id);
+          if (this.browserMaintenance.get(bot.id) === attempt) this.browserMaintenance.delete(bot.id);
+        } // Missing/uncertain OS/native ownership defers, never guesses.
       }
     } finally { this.retentionBusy = false; }
   }
@@ -430,6 +509,7 @@ export class BotDesktops {
     if (!DESKTOP_TOOLS.some((t) => t.name === name))
       throw new Error("Unknown desktop tool.");
     this.assertBot(bot);
+    if (name !== "screenshot" && name !== "browser_status") this.cancelBrowserMaintenance(bot.id);
     if (name === "browser_status") {
       const probe = await this.browserCommand(bot, "probe");
       return { content: [{ type: "text", text: JSON.stringify({ ...this.publicPolicy(bot), memorySaver: probe.memorySaver,
@@ -520,6 +600,7 @@ export class BotDesktops {
     });
   }
   async ticket(bot, clientId) {
+    this.cancelBrowserMaintenance(bot.id);
     this.assertBot(bot);
     if (!clientId)
       throw new Error("An authenticated browser session is required.");
@@ -552,6 +633,7 @@ export class BotDesktops {
         "Eight live desktop dialogs are already open. Close one first.",
       );
     const bot = this.runtime.store.bot(ticket.botId);
+    this.cancelBrowserMaintenance(bot.id);
     this.assertBot(bot);
     return this.lock(bot, async () => {
       if (
@@ -703,6 +785,7 @@ export class BotDesktops {
       await this.command(s.bot, "lease-release", id).catch(() => {});
   }
   async stop(bot, remove = false) {
+    this.cancelBrowserMaintenance(bot.id);
     return this.lock(bot, async () => {
       for (const [id, s] of this.sessions)
         if (s.bot.id === bot.id) await this.end(id, "Desktop stopped.");
@@ -729,6 +812,7 @@ export class BotDesktops {
     this.tickets.clear();
   }
   async close() {
+    for (const botId of this.browserMaintenance.keys()) this.cancelBrowserMaintenance(botId);
     clearInterval(this.retentionTimer);
     clearInterval(this.sweeper);
     await this.disconnect();

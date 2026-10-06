@@ -9,7 +9,9 @@ import os
 from pathlib import Path
 import socket
 import shlex
+import select
 import subprocess
+import sys
 import tempfile
 import time
 
@@ -152,7 +154,62 @@ def lease_active(p):
     if not math.isfinite(lease['expiresAt']): raise ValueError('Exclusive control state is uncertain.')
     return lease['expiresAt']>time.time()*1000
 
-def close(p,cfg,expected):
+def permit(event, window):
+    print(json.dumps({'event':event,'window':window}),flush=True)
+    if not select.select([sys.stdin],[],[],2.5)[0]: raise ValueError('Bridge close permit unavailable.')
+    raw=sys.stdin.readline(4097)
+    if not raw or len(raw)>4096: raise ValueError('Bridge close permit disconnected.')
+    value=json.loads(raw)
+    if value.get('event')!=event or value.get('window')!=window: raise ValueError('Bridge close permit mismatch.')
+    return value
+
+
+def request_window_close(env, window, pids, deadline, final_guard):
+    # Equivalent to wmctrl -ic: ask the window manager through _NET_CLOSE_WINDOW.
+    # No long-lived subprocess can issue a delayed close after helper cancellation.
+    x11=ctypes.CDLL(ctypes.util.find_library('X11'))
+    class Data(ctypes.Union):
+        _fields_=[('b',ctypes.c_char*20),('s',ctypes.c_short*10),('l',ctypes.c_long*5)]
+    class Client(ctypes.Structure):
+        _fields_=[('type',ctypes.c_int),('serial',ctypes.c_ulong),('send_event',ctypes.c_int),
+            ('display',ctypes.c_void_p),('window',ctypes.c_ulong),('message_type',ctypes.c_ulong),
+            ('format',ctypes.c_int),('data',Data)]
+    class Event(ctypes.Union):
+        _fields_=[('client',Client),('pad',ctypes.c_long*24)]
+    x11.XOpenDisplay.argtypes=[ctypes.c_char_p];x11.XOpenDisplay.restype=ctypes.c_void_p
+    x11.XDefaultRootWindow.argtypes=[ctypes.c_void_p];x11.XDefaultRootWindow.restype=ctypes.c_ulong
+    x11.XInternAtom.argtypes=[ctypes.c_void_p,ctypes.c_char_p,ctypes.c_int];x11.XInternAtom.restype=ctypes.c_ulong
+    x11.XSendEvent.argtypes=[ctypes.c_void_p,ctypes.c_ulong,ctypes.c_int,ctypes.c_long,ctypes.POINTER(Event)]
+    x11.XFlush.argtypes=[ctypes.c_void_p];x11.XCloseDisplay.argtypes=[ctypes.c_void_p]
+    x11.XGetWindowProperty.argtypes=[ctypes.c_void_p,ctypes.c_ulong,ctypes.c_ulong,ctypes.c_long,ctypes.c_long,
+        ctypes.c_int,ctypes.c_ulong,ctypes.POINTER(ctypes.c_ulong),ctypes.POINTER(ctypes.c_int),
+        ctypes.POINTER(ctypes.c_ulong),ctypes.POINTER(ctypes.c_ulong),ctypes.POINTER(ctypes.POINTER(ctypes.c_ubyte))]
+    x11.XFree.argtypes=[ctypes.c_void_p]
+    d=x11.XOpenDisplay(env['DISPLAY'].encode())
+    if not d: raise ValueError('Desktop connection unavailable for close.')
+    try:
+        root=x11.XDefaultRootWindow(d);atom=x11.XInternAtom(d,b'_NET_CLOSE_WINDOW',False)
+        event=Event();event.client.type=33;event.client.send_event=True;event.client.display=d
+        event.client.window=int(window,16);event.client.message_type=atom;event.client.format=32
+        event.client.data.l[0]=0;event.client.data.l[1]=2
+        final_guard()
+        actual=ctypes.c_ulong();fmt=ctypes.c_int();count=ctypes.c_ulong();after=ctypes.c_ulong();data=ctypes.POINTER(ctypes.c_ubyte)()
+        pid_atom=x11.XInternAtom(d,b'_NET_WM_PID',True)
+        status=x11.XGetWindowProperty(d,int(window,16),pid_atom,0,1,False,6,ctypes.byref(actual),ctypes.byref(fmt),ctypes.byref(count),ctypes.byref(after),ctypes.byref(data))
+        try:
+            if status!=0 or actual.value!=6 or fmt.value!=32 or count.value!=1 or not data or ctypes.cast(data,ctypes.POINTER(ctypes.c_ulong))[0] not in pids:
+                raise ValueError('Final browser window ownership is uncertain.')
+        finally:
+            if data: x11.XFree(data)
+        if time.monotonic()>deadline: raise ValueError('Bridge close permit expired; browser retained.')
+        if not x11.XSendEvent(d,root,False,(1<<20)|(1<<19),ctypes.byref(event)):
+            raise ValueError('Window manager refused close request.')
+        x11.XFlush(d)
+    finally: x11.XCloseDisplay(d)
+
+
+def close(p,cfg,expected,bridge_permits=False):
+    if not bridge_permits: raise ValueError('Graceful cleanup requires current bridge permits.')
     with (p/'action.lock').open('a') as lock:
         fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
         def guard():
@@ -171,10 +228,20 @@ def close(p,cfg,expected):
         if not windows: raise ValueError('No owned browser window; background browser is retained.')
         sent=0
         for window in windows:
-            guard() # Recheck under the same input/action lock immediately before each WM_DELETE.
-            subprocess.run(['/usr/bin/wmctrl','-ic',window],env=env,capture_output=True,check=True,timeout=2)
+            permit('prepare',sent) # Native idle is read outside bridge admission locks.
+            guard()
+            # Refresh exact window ownership after the slow preparation steps.
+            raw=subprocess.run(['/usr/bin/wmctrl','-lp'],env=env,capture_output=True,text=True,check=True,timeout=2).stdout
+            if not any(line.split()[0]==window and int(line.split()[2]) in pids for line in raw.splitlines() if len(line.split())>=4):
+                raise ValueError('Browser window ownership changed.')
+            authorization=permit('commit',sent)
+            expires=authorization.get('expiresAt')
+            if not isinstance(expires,(int,float)) or not 0 < expires-time.time()*1000 <= 200:
+                raise ValueError('Bridge close permit expired or invalid.')
+            deadline=time.monotonic()+min(0.2,(expires-time.time()*1000)/1000)
+            request_window_close(env,window,pids,deadline,guard)
             sent+=1
-        return {'closeRequested':sent,'verify':'Graceful request only. Refusal or save prompts remain open; no force kill or automatic retry.'}
+        return {'event':'done','closeRequested':sent,'verify':'Graceful request only. Refusal or save prompts remain open; no force kill or automatic retry.'}
 
 
 def reopen(p,cfg):
@@ -197,9 +264,9 @@ def reopen(p,cfg):
 
 def main():
     if os.getuid()==0 or os.getuid()!=os.geteuid(): raise ValueError('Run as the desktop user.')
-    parser=argparse.ArgumentParser(); parser.add_argument('action',choices=('seed','probe','close','reopen')); parser.add_argument('name');parser.add_argument('--owner',required=True);parser.add_argument('--expected')
+    parser=argparse.ArgumentParser(); parser.add_argument('action',choices=('seed','probe','close','reopen')); parser.add_argument('name');parser.add_argument('--owner',required=True);parser.add_argument('--expected');parser.add_argument('--bridge-permits',action='store_true')
     a=parser.parse_args();p,cfg=profile(a.name,a.owner)
-    value=seed(p,cfg) if a.action=='seed' else probe(p,cfg) if a.action=='probe' else reopen(p,cfg) if a.action=='reopen' else close(p,cfg,json.loads(a.expected))
+    value=seed(p,cfg) if a.action=='seed' else probe(p,cfg) if a.action=='probe' else reopen(p,cfg) if a.action=='reopen' else close(p,cfg,json.loads(a.expected),a.bridge_permits)
     print(json.dumps(value))
 
 if __name__=='__main__':
