@@ -5,9 +5,12 @@ import type { QueuedSubmission } from "./codex-protocol/v2/QueuedSubmission";
 
 export type BotAvatar = { version: 1; shape: "circle" | "square" | "triangle" | "cloud" | "star" | "hexagon"; color: string; seed: string };
 export type BotBurstQuietSeconds = 0 | 2.5 | 3 | 8 | 15;
+export type BotProfilePreparation = { botId: string; threadId: string | null; state: "warning" | "fallback" | "blocked"; file: string;
+  message: string; bytes?: number; sourceHash?: string; operationId?: string; observedAt: string };
 export type BotTeam = { id: string; name: string; color: string; position: number; revision: number; memberCount: number; createdAt: string; updatedAt: string };
 export type BotTeamDetail = Omit<BotTeam, "memberCount"> & { memory: string; workspace: string; members: { id: string; name: string; archived: boolean }[] };
 export type Bot = {
+  profilePreparation?: BotProfilePreparation | null;
   extension?: number;
   deletedAt?: string;
   teamId?: string | null;
@@ -193,7 +196,7 @@ export type BotRunRequestResolvedEvent = BotRunContext & { key: string };
 export type BotQueueList = { id: string; botId: string; name: string; cron: string | null; timeZone: string; enabled: boolean; nextRunAt: string | null; revision: number; count: number; createdAt: string; lastFlushedAt?: string; lastFlushedCount?: number };
 export type BotSnapshot = {
   secureInputs?: import("./secure-input").SecureRequest[];
-  capabilities?: { botDesktops?: 1; backgroundRunLanes?: 1; scheduleDecisions?: 1; singleThreadExecution?: 1; peerInbox?: 1; peerRootControls?: 1; peerBodyPaging?: 1; nativeGoals?: 1; nativeConversation?: 1; messageReplies?: 1; secureInputs?: 1; operatorCalls?: 1; messageBursts?: 1; burstDiscard?: 1; burstControls?: 1; queueLists?: 1; queueRelativeMoves?: 1; queueSendNow?: 1; teams?: 1 };
+  capabilities?: { botMemoryMaintenance?: 1; botDesktops?: 1; backgroundRunLanes?: 1; scheduleDecisions?: 1; singleThreadExecution?: 1; peerInbox?: 1; peerRootControls?: 1; peerBodyPaging?: 1; nativeGoals?: 1; nativeConversation?: 1; messageReplies?: 1; secureInputs?: 1; operatorCalls?: 1; messageBursts?: 1; burstDiscard?: 1; burstControls?: 1; queueLists?: 1; queueRelativeMoves?: 1; queueSendNow?: 1; teams?: 1 };
   teams?: BotTeam[];
   workByBot?: BotWorkState[];
   backgroundByBot?: BotBackground[];
@@ -267,7 +270,7 @@ export type BotWorkState = {
   activeTurnId: string | null; paused: boolean; summary: string | null; remaining: string | null; waitingFor: string[];
   goal: import("./codex-protocol/v2/ThreadGoal").ThreadGoal | null; goalObservedAt: string | null; migrationReason: string | null;
 };
-export type BotInboxItem = { id: string; botId: string; kind: "schedule" | "peer" | "secure-input"; sourceId: string; summary: string;
+export type BotInboxItem = { id: string; botId: string; kind: "schedule" | "peer" | "secure-input" | "memory-maintenance"; sourceId: string; summary: string;
   state: "queued" | "dispatching" | "accepted" | "uncertain" | "cancelled" | "failed"; createdAt: string; turnId: string | null; waitReason: string | null };
 export type BotPeerRoot = {
   id: string; version: 1; revision: number; state: "active" | "paused" | "stopped";

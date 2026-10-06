@@ -1,4 +1,5 @@
 import { SECURE_TOOLS } from "./secure-input-tools.mjs";
+import { MEMORY_TOOL } from './memory-maintenance.mjs';
 import { DESKTOP_TOOLS, canManagePrimaryDesktop } from "./desktops.mjs";
 import { PEER_TOOL } from "./peer-inbox.mjs";
 import { WORK_TOOL } from "./primary-execution.mjs";
@@ -243,18 +244,22 @@ export class CodexManager {
     if (failed) throw failed.reason;
   }
   tools(bot) {
-    if (!this.runtime.primary.single(bot)) return [...SECURE_TOOLS, ...MANAGER_TOOLS, RUN_MESSAGE_TOOL, WORK_TOOL, PEER_TOOL, QUEUE_TOOL, TEAM_TOOL, DOWNLOAD_ATTACHMENT_TOOL];
+    if (!this.runtime.primary.single(bot)) return [MEMORY_TOOL, ...SECURE_TOOLS, ...MANAGER_TOOLS, RUN_MESSAGE_TOOL, WORK_TOOL, PEER_TOOL, QUEUE_TOOL, TEAM_TOOL, DOWNLOAD_ATTACHMENT_TOOL];
     const retained = MANAGER_TOOLS.map(tool => {
       const operations = tool.inputSchema.properties.operation.enum.filter(op => ["list", "read", "status", "requests", "review"].includes(op) || tool.name === "codex_tasks" && op === "collectResult");
       return operations.length ? { ...tool, description: `Retained legacy history/collection only. ${tool.description}`, inputSchema: { ...tool.inputSchema,
         properties: { ...tool.inputSchema.properties, operation: { ...tool.inputSchema.properties.operation, enum: operations } } } } : null;
     }).filter(Boolean);
-    return [...SECURE_TOOLS, ...retained, WORK_TOOL, PEER_TOOL, QUEUE_TOOL, TEAM_TOOL, DOWNLOAD_ATTACHMENT_TOOL];
+    return [MEMORY_TOOL, ...SECURE_TOOLS, ...retained, WORK_TOOL, PEER_TOOL, QUEUE_TOOL, TEAM_TOOL, DOWNLOAD_ATTACHMENT_TOOL];
   }
   async call(botId, name, args, origin = null) {
     const bot = this.store.bot(botId);
     if (bot.archived || bot.archiving || bot.deletedAt)
       throw new Error("Restore this manager before using its tools.");
+    if (name === MEMORY_TOOL.name) {
+      if (origin) throw Error('Memory maintenance belongs to the primary named bot.');
+      return this.runtime.memoryMaintenance.tool(bot, args, { authority: 'authenticated-bot-mcp' });
+    }
     if(SECURE_TOOLS.some(tool=>tool.name===name)){
       if(origin)throw Error("Secure input belongs to the primary bot thread.");
       return this.runtime.secure.tool(bot,name,args);

@@ -157,8 +157,11 @@ export class PrimaryExecution {
   async submit(bot, item) {
     item = this.store.get('primaryInbox', item.id);
     if (item.state !== 'queued' || this.store.get('primaryInbox', item.id)?.state !== 'queued' || !this.runtime.peers.canDispatch(item)) return;
+    if (!this.runtime.memoryMaintenance.eligible(this.store.bot(bot.id), item)) return;
     if (item.kind === 'schedule' && !occurrenceReady(this.runtime.scheduleDecisions.ensure(item.sourceId))) return;
-    const input = await this.runtime.messageInput(bot, { text: item.text, attachments: item.attachmentIds });
+    const preparedText = await this.runtime.preparePrimaryMemory(bot, item);
+    if (preparedText === null) return;
+    const input = await this.runtime.messageInput(bot, { text: preparedText, attachments: item.attachmentIds });
     await this.runtime.load(bot);
     if (stagedQueue(this.store, bot.id).length || (await this.runtime.nativeQueueList(bot)).length) return;
     await this.runtime.plans.settle(bot.id);
@@ -171,6 +174,7 @@ export class PrimaryExecution {
     if ((current.activeTurnId && current.mode !== 'default') || current.queuePaused || current.archived || current.archiving || this.runtime.activityUnresolved(bot.id) || this.store.list('pending', bot.id).length) return;
     const latest = this.store.get('primaryInbox', item.id);
     if (latest?.state !== 'queued' || latest.fingerprint !== item.fingerprint || !this.runtime.peers.canDispatch(latest)) return; // cancel/decision may commit across preparation awaits
+    if (!this.runtime.memoryMaintenance.eligible(current, latest)) return;
     // Commit immutable identity/input BEFORE native queue/add. No turn/start:
     // native continuation/start races can never turn this intake into steering.
     this.store.transaction(() => {
@@ -200,6 +204,7 @@ export class PrimaryExecution {
   async submitPrompt(bot, item, operationId, attempt) {
     const preparationId = randomUUID(); let plan, fence;
     try {
+      const input = await this.runtime.memoryMaintenance.queuedInput(bot, item.input);
       plan = await this.runtime.plans.prepare(bot, operationId, null, preparationId);
       await this.runtime.ensureCurrentActivity(bot.id);
       bot = this.store.bot(bot.id);
@@ -211,7 +216,7 @@ export class PrimaryExecution {
         const token = beginTurnDispatch(this.runtime, bot.id, operationId);
         this.runtime.plans.dispatching(plan, token); return token;
       });
-      const result = await this.runtime.submitNative('thread/queue/add', { threadId: bot.threadId, input: item.input, clientUserMessageId: operationId }, attempt);
+      const result = await this.runtime.submitNative('thread/queue/add', { threadId: bot.threadId, input, clientUserMessageId: operationId }, attempt);
       const q = result?.queuedSubmission;
       if (typeof q?.id !== 'string' || !q.id || q.clientUserMessageId !== operationId) throw new Error('Native queue acceptance has no matching identity.');
       if (plan && this.store.get('planExecution', plan.id)?.state === 'dispatching') this.store.put('planExecution', { ...this.store.get('planExecution', plan.id), state: 'queued' });
@@ -416,7 +421,8 @@ export class PrimaryExecution {
         const items = this.openItems(bot.id);
         const current = this.store.bot(bot.id);
         if (current.queuePaused || (current.activeTurnId && current.mode !== 'default') || current.archiving || this.runtime.activityUnresolved(bot.id) || this.store.list('pending', bot.id).length || items.some(i => ['dispatching', 'uncertain'].includes(i.state))) return;
-        const first = this.openItems(bot.id).filter(i => i.state === 'queued' && this.runtime.peers.canDispatch(i) && (i.kind !== 'schedule' || occurrenceReady(this.store.get('run', i.sourceId)))).sort((a, b) => (a.kind === 'schedule' ? 0 : 1) - (b.kind === 'schedule' ? 0 : 1))[0];
+        const priority = row => row.kind === 'schedule' ? 0 : row.kind === 'memory-maintenance' ? 2 : 1;
+        const first = this.openItems(bot.id).filter(i => i.state === 'queued' && this.runtime.peers.canDispatch(i) && this.runtime.memoryMaintenance.eligible(current, i) && (i.kind !== 'schedule' || occurrenceReady(this.store.get('run', i.sourceId)))).sort((a, b) => priority(a) - priority(b))[0];
         if (first) await this.submit(current, first);
       }).then(() => this.admissionBackoff.delete(bot.id)).catch(e => {
         const attempts = (this.admissionBackoff.get(bot.id)?.attempts ?? 0) + 1;

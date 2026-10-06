@@ -1,11 +1,14 @@
 import { SECURE_INSTRUCTIONS } from "./secure-input-tools.mjs";
 import { desktopInstructions } from "./desktops.mjs";
-import { mkdir, readFile, writeFile, lstat, realpath, open } from "node:fs/promises";
+import { mkdir, writeFile, lstat, realpath, open } from "node:fs/promises";
 import { constants } from "node:fs";
 import { join, relative, isAbsolute } from "node:path";
 import { MANAGER_INSTRUCTIONS } from "./manager-tools.mjs";
 import { DIRECT_INSTRUCTIONS } from "./primary-execution.mjs";
 import { TEAM_INSTRUCTIONS } from "./teams.mjs";
+import { profileFile, MEMORY_TRIGGER, PROFILE_LIMIT, memoryId, memoryFallback, maintenanceMemoryContext, memoryCurrentState } from './memory-files.mjs';
+
+export const MEMORY_INSTRUCTIONS = `Keep active MEMORY.md concise: current verified preferences/constraints, decisions, unfinished approved work, uncertainty IDs and pointers to evidence. Preserve detailed chronology in private archives. At 32768 UTF-8 bytes use bots_memory_maintenance inspect/prepare, read the full exact source archive, write its fixed candidate.md privately (0600), review constraints/approvals/unfinished work/uncertainty/references, then verify and commit using the SAME operation ID and candidate SHA-256. Never compact native history, change another bot's profiles, resume a paused goal, or publish archives. Human Send, Stop and questions take priority. Respect .memory-maintenance operation locks; do not directly rewrite MEMORY.md during a prepared commit. Verification records a semantic review by your current model, not a mathematical proof; never invent facts or drop current constraints. If source changed, retain the original candidate/receipt and re-read current facts before another review. Quiet no-op inspections; report meaningful compaction with bytes and private archive pointer only.`;
 
 export const PROFILE_FILES = [
   "SOUL.md",
@@ -15,7 +18,9 @@ export const PROFILE_FILES = [
   "AGENTS.md",
   "TOOLS.md",
 ];
-export const BOT_INSTRUCTIONS = `You are a persistent bot in Dawar Todo. Your working directory is your home workspace. Read SOUL.md, IDENTITY.md, USER.md, MEMORY.md, AGENTS.md, and TOOLS.md before beginning each task. These files define your identity, behavior, operational rules and durable knowledge. Keep factual memories useful and concise; never invent facts about the human. You can update these files when asked. Use the provided bots_schedule tools for scheduled work, bots_report_result for actionable scheduled results, and bots_publish_artifact to share files. Respond to explicit requests for future or recurring work by actually creating a schedule. Scheduled turns share this conversation. Scheduled prompts use ordinary conversation replies with Markdown and attachments. Follow any quiet-if-unchanged instruction in the schedule prompt. bots_report_result is optional for a separate actionable notification, not required to display a reply. Questions and failures are surfaced automatically. Your messages are shown in a chat interface. Do not claim access to desktop-only integrations unless they are available in your actual tool list.`;
+export const BOT_INSTRUCTIONS = `You are a persistent bot in Dawar Todo. Your working directory is your home workspace. Read SOUL.md, IDENTITY.md, USER.md, MEMORY.md, AGENTS.md, and TOOLS.md before beginning each task. These files define your identity, behavior, operational rules and durable knowledge. Keep factual memories useful and concise; never invent facts about the human. You can update these files when asked. Use the provided bots_schedule tools for scheduled work, bots_report_result for actionable scheduled results, and bots_publish_artifact to share files. Respond to explicit requests for future or recurring work by actually creating a schedule. Scheduled turns share this conversation. Scheduled prompts use ordinary conversation replies with Markdown and attachments. Follow any quiet-if-unchanged instruction in the schedule prompt. bots_report_result is optional for a separate actionable notification, not required to display a reply. Questions and failures are surfaced automatically. Your messages are shown in a chat interface. Do not claim access to desktop-only integrations unless they are available in your actual tool list.
+
+${MEMORY_INSTRUCTIONS}`;
 export const RUN_INSTRUCTIONS = BOT_INSTRUCTIONS.replace("Scheduled turns share this conversation.",
   "This is an isolated scheduled execution. The human's main conversation is a separate native thread. Only the frozen schedule prompt, profile and explicitly forwarded context are available. Do not assume missing conversational context; ask a question in this run if necessary. Your questions, selected follow-ups and worker notices return here. Legacy profile text about sharing the main conversation describes older runs, not this execution.");
 export function slugify(name) {
@@ -57,20 +62,35 @@ export async function initializeProfile(bot) {
       if (e.code !== "EEXIST") throw e;
     });
 }
-export async function profileContext(bot, team = null) {
-  const parts = [`## Secure one-time input\n${SECURE_INSTRUCTIONS}`];
+export async function profileContext(bot, team = null, { onMemoryState = () => {}, onMemoryContent = () => {}, maintenanceId = null } = {}) {
+  const parts = [`## Secure one-time input\n${SECURE_INSTRUCTIONS}`, `## File memory maintenance\n${MEMORY_INSTRUCTIONS}`];
   for (const file of PROFILE_FILES) {
-    const path = join(bot.cwd, file);
     try {
-      const info = await lstat(path);
-      if (!info.isFile() || info.isSymbolicLink() || info.size > 128 * 1024)
-        throw new Error(`${file} must be a regular file under 128 KB.`);
-      parts.push(`## ${file}\n${(await readFile(path, "utf8")).replace(MANAGER_INSTRUCTIONS, DIRECT_INSTRUCTIONS)}`);
+      const source = await profileFile(bot, file);
+      let text = source.text;
+      if (file === 'MEMORY.md') {
+        const pending = await memoryCurrentState(bot, source);
+        const id = memoryId(bot, source, source.workspaceIdentity);
+        if (maintenanceId) text = await maintenanceMemoryContext(bot, maintenanceId, source);
+        else if (source.size > PROFILE_LIMIT) {
+          let fallback;
+          try { fallback = await memoryFallback(bot, id, source); }
+          catch (error) {
+            onMemoryState({ state: 'blocked', file, bytes: source.size, sourceHash: source.hash, operationId: id,
+              message: 'Oversized memory has no safe summary for its current version. Your message/files are retained; finish memory recovery first.' });
+            throw Object.assign(new Error(`MEMORY.md needs recovery before delivery: ${error.message} Your message and files are retained.`), { outcome: 'rejected' });
+          }
+          text = `${fallback.text}\n\nCurrent-source verified compact fallback; full ${source.size}-byte source retained at ${fallback.receipt.archive}. Source SHA-256 ${source.hash}. Semantic review ${fallback.receipt.reviewedAt}. Finish original ${id}; do not treat older summaries as fresh constraints.`;
+        }
+        onMemoryState(source.size >= MEMORY_TRIGGER ? { state: source.size > PROFILE_LIMIT && !maintenanceId ? 'fallback' : 'warning', file, bytes: source.size, sourceHash: source.hash, operationId: id,
+          message: source.size > PROFILE_LIMIT && !maintenanceId ? 'Using a compact summary reviewed against this exact memory version; its full archive is retained.' : 'Memory maintenance is pending. Current memory and messages are retained.' } : null);
+        if (pending) onMemoryState({ ...pending, file, bytes: source.size, sourceHash: source.hash });
+        onMemoryContent({ kind: 'application', value: `Current file-memory reference for ${bot.id}, source SHA-256 ${source.hash}. This supersedes stale frozen MEMORY snippets, not the original run's permissions/scope.\n${text}` });
+      }
+      parts.push(`## ${file}\n${text.replace(MANAGER_INSTRUCTIONS, DIRECT_INSTRUCTIONS)}`);
     } catch (e) {
-      if (e.code === "ENOENT")
-        parts.push(
-          `## ${file}\nMissing; ask the human before reconstructing personal facts.`,
-        );
+      if (e.code === "ENOENT" && e.profileMissing)
+        parts.push(`## ${file}\nMissing; ask the human before reconstructing personal facts.`);
       else throw e;
     }
   }

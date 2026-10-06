@@ -4,7 +4,7 @@ import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { RunStatePort } from "./run-state-port.mjs";
 import { MANAGER_TOOLS, MANAGER_INSTRUCTIONS } from "./manager-tools.mjs";
-import { RUN_INSTRUCTIONS, profileContext, teamProfileContext, containedPath } from "./profiles.mjs";
+import { RUN_INSTRUCTIONS, teamProfileContext, containedPath } from "./profiles.mjs";
 import { teamReference } from "./teams.mjs";
 import { requireTurn, usableTurn, usableTurnId, terminalTurn, requireSteer } from "./native-turn.mjs";
 import { beginTurnDispatch, acknowledgeTurnDispatch, requireDispatchReconciliation,
@@ -248,7 +248,7 @@ export class BackgroundRuns {
     const revision = admissionRevision(this.store, run.id);
     if (!beginPreparation(this.store, run, revision)) return;
     try {
-      const context = await profileContext(bot);
+      const context = await this.runtime.memoryMaintenance.context(bot);
       if (!occurrenceReady(this.runtime.scheduleDecisions.ensure(run.id))) return;
       if (!admissionOpen(this.store, run.id, revision)) return;
       if (run.selectedContext != null) {
@@ -393,10 +393,13 @@ export class BackgroundRuns {
     let fence, result;
     try {
       if (record.primary && !occurrenceReady(this.runtime.scheduleDecisions.ensure(lane.runId))) return;
+      let currentFileMemory;
+      await this.runtime.memoryMaintenance.context(bot, null, null, value => { currentFileMemory = value; });
       await this.load(id);
       // Retain the original personal/run context, but refresh the current team
       // at submission rather than inheriting stale membership or shared memory.
       const profile = { ...context.profile };
+      if (currentFileMemory) profile.currentFileMemory = currentFileMemory;
       delete profile.teamProfile;
       Object.assign(profile, await teamProfileContext(await teamReference(this.runtime, this.store.bot(bot.id))));
       if (activityUnresolved(port, bot.id) && !await reconcileCurrentActivity(port, bot.id)) throw new Error("Run activity is unresolved; no conflicting input was submitted.");
