@@ -45,10 +45,17 @@ export class PeerInbox {
       JOIN records r ON r.kind='peerRequest' AND r.id=json_extract(i.json,'$.sourceId') WHERE i.kind='primaryInbox'
       AND json_extract(r.json,'$.rootId')=? AND json_extract(i.json,'$.terminalStatus') IS NULL
       AND json_extract(i.json,'$.state') NOT IN ('failed','cancelled') GROUP BY state`).all(root.id);
+    // Materialize replied request IDs once instead of a correlated exchange
+    // scan for every retained request. No body or persistent cache is needed.
+    const reservedReplies = this.store.db.prepare(`SELECT COUNT(*) AS n FROM records r
+      LEFT JOIN (SELECT DISTINCT json_extract(json,'$.requestId') AS requestId FROM records
+        WHERE kind='peerExchange' AND json_extract(json,'$.kind')='reply') replies ON replies.requestId=r.id
+      WHERE r.kind='peerRequest' AND json_extract(r.json,'$.rootId')=?
+        AND json_extract(r.json,'$.state') NOT IN ('cancelled','failed','completed') AND replies.requestId IS NULL`).get(root.id).n;
     return { id: root.id, version: PEER_POLICY_VERSION, revision: root.revision, state: root.state, reason: root.reason,
       reasonText: root.reason ? PEER_REASONS[root.reason] : null, pausedAt: root.pausedAt, allowance: root.allowance,
       lifetimeContributions: root.count, lifetimeExchanges: root.lifetimeExchanges, lifetimeSelectedBytes: root.lifetimeBytes,
-      limits: PEER_LIMITS, participants:participants.slice(0,64), participantCount, participantsComplete:participantCount<=64, heldOperations:this.store.db.prepare("SELECT COUNT(*) AS n FROM operations WHERE status='held' AND json_extract(json,'$.heldRootId')=?").get(root.id).n, reservedReplies: this.store.db.prepare("SELECT COUNT(*) AS n FROM records r WHERE r.kind='peerRequest' AND json_extract(r.json,'$.rootId')=? AND json_extract(r.json,'$.state') NOT IN ('cancelled','failed','completed') AND NOT EXISTS(SELECT 1 FROM records e WHERE e.kind='peerExchange' AND json_extract(e.json,'$.requestId')=r.id AND json_extract(e.json,'$.kind')='reply')").get(root.id).n, ownerControls: {authority:'owner',canContinue:root.state!=='active',canStop:root.state!=='stopped'}, queuedIntakes: intake.find(i => i.state==='queued')?.count ?? 0,
+      limits: PEER_LIMITS, participants:participants.slice(0,64), participantCount, participantsComplete:participantCount<=64, heldOperations:this.store.db.prepare("SELECT COUNT(*) AS n FROM operations WHERE status='held' AND json_extract(json,'$.heldRootId')=?").get(root.id).n, reservedReplies, ownerControls: {authority:'owner',canContinue:root.state!=='active',canStop:root.state!=='stopped'}, queuedIntakes: intake.find(i => i.state==='queued')?.count ?? 0,
       committedIntakes: intake.filter(i => ['dispatching','uncertain','accepted'].includes(i.state)).reduce((n,i)=>n+i.count,0),
       observationSeq: this.store.cursor(), stopScope: 'discussion-admission', nativeInterruption: false };
   }
@@ -112,15 +119,22 @@ export class PeerInbox {
     if (!r || ![r.senderBotId, r.recipientBotId].includes(bot.id)) throw new Error('Peer request is not owned by this bot.');
     return r;
   }
-  public(r) { const { id, rootId, parentId, senderBotId, recipientBotId, kind, summary, state, round, createdAt, updatedAt, turnId, cancelRequested } = r;
+  public(r, rootViews = null) { const { id, rootId, parentId, senderBotId, recipientBotId, kind, summary, state, round, createdAt, updatedAt, turnId, cancelRequested } = r;
     const unknown = this.store.db.prepare("SELECT 1 FROM records WHERE kind='primaryInbox' AND json_extract(json,'$.sourceId')=? AND json_extract(json,'$.state') IN ('dispatching','uncertain') LIMIT 1").get(id);
     // Delivery/response state is history, not presence. Only an exact current
     // native intake (request or reply) can establish collaboration or input.
     const executions = this.store.db.prepare("SELECT json_remove(json,'$.text','$.input') AS json FROM records WHERE kind='primaryInbox' AND json_extract(json,'$.sourceId')=?").all(id)
       .map(row => JSON.parse(row.json)).filter(i => i.kind === 'peer' && (observedActiveTurn(this.runtime, i.botId, i.turnId) || this.store.list('pending', i.botId).some(p => p.request?.params?.turnId === i.turnId && p.request?.params?.threadId === this.store.bot(i.botId).threadId)))
       .map(i => ({ botId: i.botId, turnId: i.turnId, needsInput: this.store.list('pending', i.botId).some(p => p.request?.params?.turnId === i.turnId && p.request?.params?.threadId === this.store.bot(i.botId).threadId) }));
-    const root = this.ensureRoot(this.store.get('peerRoot', rootId));
-    return { id, rootId, parentId, senderBotId, recipientBotId, kind, summary, root: this.publicRoot(root), hasResult: Boolean(r.hasResult || r.result), state: unknown ? 'delivery-unconfirmed' : state, round: root.count ?? round, roundLimit: root.count + Math.max(0,PEER_LIMITS.contributions-root.allowance.contributions), createdAt, updatedAt, turnId, result: null, cancelRequested, executions }; }
+    // Only a single synchronous, bot-scoped list/status call shares root views.
+    // Owner changes, later reads and other bots always build fresh metadata.
+    let view = rootViews?.get(rootId);
+    if (!view) {
+      const root = this.ensureRoot(this.store.get('peerRoot', rootId));
+      view = { root, metadata: this.publicRoot(root) }; rootViews?.set(rootId, view);
+    }
+    const { root, metadata } = view;
+    return { id, rootId, parentId, senderBotId, recipientBotId, kind, summary, root: metadata, hasResult: Boolean(r.hasResult || r.result), state: unknown ? 'delivery-unconfirmed' : state, round: root.count ?? round, roundLimit: root.count + Math.max(0,PEER_LIMITS.contributions-root.allowance.contributions), createdAt, updatedAt, turnId, result: null, cancelRequested, executions }; }
   held(bot,p={}) {
     const limit=p.limit??PEER_PAGE_LIMIT;
     if(!Number.isSafeInteger(limit)||limit<1||limit>PEER_PAGE_LIMIT)throw Error('Read at most 12 retained inputs per page.');
@@ -218,7 +232,8 @@ export class PeerInbox {
     if (p.rootId) this.ownedRoot(bot, p.rootId);
     const rows = this.store.db.prepare("SELECT rowid,json_set(json_remove(json,'$.result'),'$.hasResult',json_extract(json,'$.result') IS NOT NULL) AS json FROM records WHERE kind='peerRequest' AND (bot_id=? OR json_extract(json,'$.recipientBotId')=?) AND (? IS NULL OR rowid<?) AND (? IS NULL OR json_extract(json,'$.rootId')=?) ORDER BY rowid DESC LIMIT ?")
       .all(bot.id, bot.id, p.cursor == null ? null : this.runtime.primary.cursor(p.cursor), p.cursor == null ? null : this.runtime.primary.cursor(p.cursor), p.rootId ?? null, p.rootId ?? null, limit + 1);
-    return { requests: rows.slice(0, limit).map(r => this.public(JSON.parse(r.json))), nextCursor: rows.length > limit ? String(rows[limit - 1].rowid) : null };
+    const rootViews = new Map();
+    return { requests: rows.slice(0, limit).map(r => this.public(JSON.parse(r.json), rootViews)), nextCursor: rows.length > limit ? String(rows[limit - 1].rowid) : null };
   }
   status(bot,p={}) {
     const limit=p.limit ?? PEER_PAGE_LIMIT;
@@ -227,7 +242,8 @@ export class PeerInbox {
     const rows=this.store.db.prepare(`SELECT r.rowid,json_set(json_remove(r.json,'$.result'),'$.hasResult',json_extract(r.json,'$.result') IS NOT NULL) AS json FROM records r JOIN records root ON root.kind='peerRoot' AND root.id=json_extract(r.json,'$.rootId') WHERE r.kind='peerRequest' AND (r.bot_id=? OR json_extract(r.json,'$.recipientBotId')=?) AND r.rowid<? AND ${eligible} ORDER BY r.rowid DESC LIMIT ?`)
       .all(bot.id,bot.id,p.cursor==null?Number.MAX_SAFE_INTEGER:this.runtime.primary.cursor(p.cursor),bot.id,bot.id,limit+1);
     const totals=this.store.db.prepare(`SELECT SUM(CASE WHEN json_extract(r.json,'$.state') NOT IN ('completed','cancelled','failed') THEN 1 ELSE 0 END) AS openRequests,COUNT(*) AS visibleRequests,COUNT(DISTINCT CASE WHEN json_extract(root.json,'$.state')='paused' THEN root.id END) AS pausedRoots,COUNT(DISTINCT CASE WHEN json_extract(root.json,'$.state')='stopped' THEN root.id END) AS stoppedRoots FROM records r JOIN records root ON root.kind='peerRoot' AND root.id=json_extract(r.json,'$.rootId') WHERE r.kind='peerRequest' AND (r.bot_id=? OR json_extract(r.json,'$.recipientBotId')=?) AND ${eligible}`).get(bot.id,bot.id,bot.id,bot.id);
-    return {requests:rows.slice(0,limit).map(r=>this.public(JSON.parse(r.json))),nextCursor:rows.length>limit?String(rows[limit-1].rowid):null,totals:{...totals,openRequests:totals.openRequests??0}};
+    const rootViews = new Map();
+    return {requests:rows.slice(0,limit).map(r=>this.public(JSON.parse(r.json),rootViews)),nextCursor:rows.length>limit?String(rows[limit-1].rowid):null,totals:{...totals,openRequests:totals.openRequests??0}};
   }
   ownedRoot(bot,id) {
     const row=this.store.db.prepare("SELECT 1 FROM records WHERE kind='peerRequest' AND json_extract(json,'$.rootId')=? AND (bot_id=? OR json_extract(json,'$.recipientBotId')=?) LIMIT 1").get(id,bot.id,bot.id);
