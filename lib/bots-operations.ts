@@ -23,7 +23,8 @@ import type { TurnStartResponse } from "./codex-protocol/v2/TurnStartResponse";
 import type { TurnSteerResponse } from "./codex-protocol/v2/TurnSteerResponse";
 import type { QueuedSubmission } from "./codex-protocol/v2/QueuedSubmission";
 import type { HistoryResponse, HistoryDetail } from "./bot-history-view";
-export type BotDesktopState = { state: "not-created" | "running" | "stopped"; display?: string; rdpPort?: number; rdpBind?: string; shared: boolean; image?: string; width?: number; height?: number; capturedAt?: string };
+export type BotBrowserRetention = { mode: "preserve" | "idle60" | "keep-task"; protected: boolean; releasedAt: number | null; closeAfterMinutes: number; revision: number; lastResult: string | null; afterTaskMode: "preserve" | "idle60" | null };
+export type BotDesktopState = { state: "not-created" | "running" | "stopped"; display?: string; rdpPort?: number; rdpBind?: string; shared: boolean; browser?: BotBrowserRetention; image?: string; width?: number; height?: number; capturedAt?: string };
 export type BotOperations = {
   "secure.list": {params: Record<string, never>; result: import("./secure-input").SecureRequest[]};
   "replies.prepare": { params: { threadId: string; turnId: string; itemId: string; partId?: string; cursor?: string | null }; result: { reply: BotReplyReference | null; nextCursor: string | null; unavailable: boolean } };
@@ -33,6 +34,10 @@ export type BotOperations = {
   "desktop.status": {params: Record<string, never>; result: BotDesktopState};
   "desktop.preview": {params: Record<string, never>; result: BotDesktopState};
   "desktop.open": {params: Record<string, never>; result: {token:string; expiresAt:number}};
+  "desktop.browserPolicy": {params: {mode: BotBrowserRetention["mode"]; expectedRevision: number}; result: BotBrowserRetention};
+  "desktop.browserRelease": {params: {safeToClose: true}; result: BotBrowserRetention};
+  "desktop.browserProtect": {params: Record<string, never>; result: BotBrowserRetention};
+  "desktop.browserReopen": {params: Record<string, never>; result: BotBrowserRetention};
   "desktop.start": {params: Record<string, never>; result: BotDesktopState};
   "desktop.stop": {params: Record<string, never>; result: BotDesktopState};
   "desktop.delete": {params: Record<string, never>; result: BotDesktopState};

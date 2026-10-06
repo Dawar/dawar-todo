@@ -136,7 +136,11 @@ password=ask
 
 
 def supervise(name):
+    from browser import profile, seed
     cfg = config(name)
+    if cfg.get("owner"):
+        p, cfg = profile(name, cfg["owner"])
+        seed(p, cfg)
     dest = directory(name)
     display = cfg['display']
     env = os.environ.copy()

@@ -224,3 +224,8 @@
     max-width: 36vw;
   }
 }
+
+.bots-browser-retention { padding: .5rem 0; font-size: .8rem; }
+.bots-browser-retention label { display: grid; gap: .35rem; font-weight: 600; }
+.bots-browser-retention select { width: 100%; padding: .45rem; color: inherit; background: var(--background); border: 1px solid var(--border); border-radius: .5rem; }
+.bots-browser-retention p { margin: .4rem 0 0; line-height: 1.4; opacity: .8; }

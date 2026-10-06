@@ -538,7 +538,7 @@ export class BotRuntime extends EventEmitter {
   }
   snapshot() {
     return {
-      capabilities: { backgroundRunLanes: 1, scheduleDecisions: 1, singleThreadExecution: 1, peerInbox: 1, nativeGoals: 1, nativeConversation: 1, messageReplies: 1, secureInputs: 1, operatorCalls: 1, operatorInputQuestions: 1, historyCursorIndex: 1, messageBursts: 1, burstDiscard: 1, burstControls: 1, queueLists: 1, queueRelativeMoves: 1, queueSendNow: 1, teams: 1, ...(this.desktops ? { botDesktops: 1 } : {}) },
+      capabilities: { backgroundRunLanes: 1, scheduleDecisions: 1, singleThreadExecution: 1, peerInbox: 1, nativeGoals: 1, nativeConversation: 1, messageReplies: 1, secureInputs: 1, operatorCalls: 1, operatorInputQuestions: 1, historyCursorIndex: 1, messageBursts: 1, burstDiscard: 1, burstControls: 1, queueLists: 1, queueRelativeMoves: 1, queueSendNow: 1, teams: 1, ...(this.desktops ? { botDesktops: 1, botBrowserRetention: 1 } : {}) },
 
       teams: publicTeams(this),
       workByBot: this.store.bots().map(bot => this.primary.work(bot)),
@@ -696,10 +696,11 @@ export class BotRuntime extends EventEmitter {
         // Settings-only updates have no side effect before validation/native
         // settings acknowledgement. An explicit native rejection is definite;
         // transport loss or a later storage fault still needs reconciliation.
+        const browserRejected = method.startsWith("desktop.browser") && e.browserNoEffect === true;
         const settingsRejected = method === "bots.update" && params.name === undefined && e.definite === true;
         const lifecycleRejected = lifecycleMutation && !this.store.get("executionStop", operationId) && !this.store.get("executionArchive", operationId);
         const outcome = attempt ? (uncertain ? "uncertain" : "rejected") : lifecycleRejected ? "rejected" :
-          settingsRejected ? "rejected" : "uncertain";
+          settingsRejected || browserRejected ? "rejected" : "uncertain";
         this.store.saveOperation(
           operationId,
           fingerprint,
@@ -820,6 +821,12 @@ export class BotRuntime extends EventEmitter {
     if (method === "artifacts.list") return listArtifacts(this, botId, p);
     const bot = this.store.bot(String(botId));
     switch (method) {
+      case "desktop.browserPolicy":
+      case "desktop.browserRelease":
+      case "desktop.browserProtect":
+      case "desktop.browserReopen":
+        if (!this.desktops) throw Error("Bot desktops are not configured.");
+        return this.desktops.browserAction(bot, method.slice("desktop.browser".length).toLowerCase(), p);
       case "desktop.start":
         if (!this.desktops) throw new Error("Bot desktops are not configured.");
         await this.desktops.lock(bot, () => this.desktops.start(bot));

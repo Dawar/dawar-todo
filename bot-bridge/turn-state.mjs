@@ -21,7 +21,12 @@ export function activityUnchanged(runtime, botId, token) {
     runtime.store.get("botActivity", botId)?.generation === token.generation;
 }
 
+function protectBrowser(runtime, botId) {
+  const p = runtime.store.get("browserRetention", botId);
+  if (p && (!p.protected || p.release)) runtime.store.put("browserRetention", { ...p, protected: true, release: null, revision: p.revision + 1 });
+}
 function advanceActivity(runtime, botId, activeTurnId, changes = {}) {
+  if (activeTurnId && runtime.store.get("botActivity", botId)?.activeTurnId !== activeTurnId) protectBrowser(runtime, botId);
   const token = captureActivity(runtime, botId);
   if (!Number.isSafeInteger(token.generation + 1)) throw new Error("Observed activity generation exhausted.");
   runtime.store.put("botActivity", { ...runtime.store.get("botActivity", botId), ...changes,
@@ -96,6 +101,7 @@ export function requireCurrentActivity(runtime, botId, turnId = null, reason = "
 // Persist before crossing that boundary, including when its ACK is later lost.
 // This is ordering metadata; original operations/inputs remain in their ledger.
 export function beginTurnDispatch(runtime, botId, operationId) {
+  protectBrowser(runtime, botId);
   return runtime.store.transaction(() => {
     const generation = captureActivity(runtime, botId).generation + 1;
     advanceActivity(runtime, botId, runtime.store.get("botActivity", botId).activeTurnId, {

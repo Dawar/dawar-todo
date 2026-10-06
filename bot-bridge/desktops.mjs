@@ -1,4 +1,4 @@
-import { spawn, execFile } from "node:child_process";
+import { spawn, execFile, execFileSync } from "node:child_process";
 import { promisify } from "node:util";
 import { createInterface } from "node:readline";
 import { createHash, randomBytes } from "node:crypto";
@@ -8,8 +8,10 @@ import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { connect } from "node:net";
 import sharp from "sharp";
+import { captureActivity, activityUnchanged } from "./turn-state.mjs";
 
 const exec = promisify(execFile);
+const noBrowserEffect = message => Object.assign(Error(message), { browserNoEffect: true });
 const resources = fileURLToPath(new URL("./desktops/", import.meta.url));
 const object = (properties = {}, required = []) => ({
   type: "object",
@@ -30,12 +32,19 @@ const tool = (name, description, properties, required = []) => ({
   description,
   inputSchema: object(properties, required),
   annotations: {
-    readOnlyHint: name === "screenshot",
-    destructiveHint: name !== "screenshot",
-    openWorldHint: name !== "screenshot",
+    readOnlyHint: ["screenshot", "browser_status"].includes(name),
+    destructiveHint: !["screenshot", "browser_status"].includes(name),
+    openWorldHint: !["screenshot", "browser_status"].includes(name),
   },
 });
 export const DESKTOP_TOOLS = [
+  tool("browser_status", "Read your assigned browser retention policy and Memory Saver status; no tab content is returned.", {}),
+  tool("browser_release", "Explicitly designate your saved, finished browser workflow safe to close after 60 minutes if the owner opted in. Do not release ongoing, unfinished or review pages. Idempotent operation_id required.",
+    { operation_id: str, safe_to_close: { type: "boolean", const: true } }, ["operation_id", "safe_to_close"]),
+  tool("browser_protect", "Keep your browser open for unfinished work or review; revoke any prior safe-to-close release.",
+    { operation_id: str }, ["operation_id"]),
+  tool("browser_reopen", "Reopen only your assigned Chrome profile with tab restoration. A fresh own screenshot is required; verify afterward. Unsaved state is not guaranteed to restore.",
+    { operation_id: str }, ["operation_id"]),
   tool(
     "screenshot",
     "Observe this bot's own desktop as PNG, with pixel dimensions and window IDs. First use starts it. Inspect before acting and again afterward.",
@@ -105,7 +114,7 @@ export const DESKTOP_TOOLS = [
   ),
 ];
 export const DESKTOP_INSTRUCTIONS =
-  "For desktop UI tasks use your bot_desktop MCP and the bot-desktop-computer-use skill. It is bound to your own persistent desktop and starts on first screenshot. Observe before input and verify afterward. Shared human/agent control is the default. Honor the human's optional exclusive control lease. Never switch to the human or another bot desktop to bypass a failure.";
+  "For desktop UI tasks use your bot_desktop MCP and the bot-desktop-computer-use skill. It is bound to your own persistent desktop and starts on first screenshot. Observe before input and verify afterward. Shared human/agent control is the default. Honor the human's optional exclusive control lease. Never switch to the human or another bot desktop to bypass a failure. Close completed-task tabs while retaining ongoing work and review pages. Read browser_status; use browser_protect for unfinished workflows and browser_release only after saving and completing the browser work. Preserve is the default; cleanup requires explicit owner opt-in and a safe-to-close release.";
 
 // Explicit owner configuration; neither bot names nor prompts grant this role.
 export function canManagePrimaryDesktop(bot) {
@@ -207,6 +216,10 @@ export class BotDesktops {
   }) {
     Object.assign(this, { runtime, base, launcher, adopt });
     this.clients = new Map();
+    this.observations = new Map();
+    this.retentionBusy = false;
+    this.retentionTimer = setInterval(() => void this.retentionTick().catch(() => {}), 60000);
+    this.retentionTimer.unref();
     this.locks = new Map();
     this.previews = new Map();
     this.tickets = new Map();
@@ -294,16 +307,134 @@ export class BotDesktops {
       BOTS_DESKTOP_CONTROL_LEASE: join(directory, "control.json"),
     };
   }
+  policy(bot) {
+    return this.runtime.store.get("browserRetention", bot.id) ?? {
+      id: bot.id, botId: bot.id, profile: this.name(bot), mode: "preserve", release: null, protected: true, revision: 0,
+    };
+  }
+  publicPolicy(bot) {
+    const p = this.policy(bot);
+    return { mode: p.mode, protected: p.protected, releasedAt: p.release?.at ?? null,
+      closeAfterMinutes: 60, revision: p.revision, lastResult: p.lastResult ?? null, afterTaskMode: p.afterTaskMode ?? null };
+  }
+  savePolicy(bot, changes) {
+    const old = this.policy(bot);
+    if (old.botId !== bot.id || old.profile !== this.name(bot)) throw Error("Browser policy ownership mismatch.");
+    return this.runtime.store.put("browserRetention", { ...old, ...changes, revision: old.revision + 1 });
+  }
+  async browserCommand(bot, action, expected = null) {
+    await this.configured(bot);
+    const args = [join(resources, "browser.py"), action, this.name(bot), "--owner", bot.id];
+    if (expected) args.push("--expected", JSON.stringify(expected));
+    const options = { timeout: 12000, maxBuffer: 65536, env: { ...process.env, BOTS_DESKTOP_DIR: this.base }, encoding: "utf8" };
+    const raw = (await exec("/usr/bin/python3", args, options)).stdout;
+    return JSON.parse(raw);
+  }
+  async browserAction(bot, action, params = {}) {
+    return this.lock(bot, async () => {
+      this.assertBot(this.runtime.store.bot(bot.id));
+      if (action === "policy") {
+        if (!["preserve", "idle60", "keep-task"].includes(params.mode) || params.expectedRevision !== this.policy(bot).revision)
+          throw noBrowserEffect("Browser settings changed. Refresh before saving.");
+        // Selecting a timeout never asserts that current tabs are safe to lose.
+        const previous = this.policy(bot);
+        this.savePolicy(bot, { mode: params.mode,
+          afterTaskMode: params.mode === "keep-task" ? previous.mode === "keep-task" ? previous.afterTaskMode ?? "preserve" : previous.mode : null,
+          protected: true, release: null, lastResult: null });
+      } else if (action === "protect") {
+        this.savePolicy(bot, { protected: true, release: null, lastResult: null });
+      } else if (action === "release") {
+        if (params.safeToClose !== true) throw noBrowserEffect("An explicit safe-to-close designation is required.");
+        const token = captureActivity(this.runtime, bot.id);
+        const current = this.runtime.store.bot(bot.id);
+        if (this.runtime.activityUnresolved(bot.id)) throw noBrowserEffect("Native activity is uncertain; retain the browser.");
+        const instance = await this.browserCommand(bot, "probe").catch(error => { error.browserNoEffect = true; throw error; });
+        if (!activityUnchanged(this.runtime, bot.id, token) || this.runtime.activityUnresolved(bot.id) ||
+            this.runtime.store.bot(bot.id).activeTurnId !== current.activeTurnId)
+          throw noBrowserEffect("Native work changed during release. Retain the browser and review the current task.");
+        if (!instance.instances.length) throw noBrowserEffect("No running assigned browser to release.");
+        const release = { at: Date.now(), monotonicMs: instance.monotonicMs, boot: instance.boot, instances: instance.instances,
+          turnId: current.activeTurnId ?? null, threadId: current.threadId };
+        const previous = this.policy(bot);
+        this.savePolicy(bot, { mode: previous.mode === "keep-task" ? previous.afterTaskMode ?? "preserve" : previous.mode,
+          afterTaskMode: null, protected: false, release, lastResult: null });
+      } else if (action === "reopen") {
+        if (Date.now() - (this.observations.get(bot.id) ?? 0) > 60000) throw noBrowserEffect("Observe a fresh own screenshot before reopening Chrome.");
+        this.savePolicy(bot, { protected: true, release: null, lastResult: null });
+        await this.browserCommand(bot, "reopen");
+      }
+      return this.publicPolicy(bot);
+    });
+  }
+  blockedBrowser(bot) {
+    const r = this.runtime, current = r.store.bot(bot.id);
+    return !current.threadId || current.archived || current.archiving || current.deletedAt || current.activeTurnId ||
+      r.activityUnresolved(bot.id) || r.scheduledUncertain(bot.id) || r.store.list("pending",bot.id).length ||
+      r.store.list("managerWorker",bot.id).some(w => w.activeTurnId) ||
+      r.store.list("runLane",bot.id).some(w => w.activeTurnId) ||
+      ["primaryInbox","promptQueue","burstBatch","messageBurst"].some(kind => r.store.list(kind,bot.id).some(x =>
+        ["dispatching","uncertain","native-queued"].includes(x.state))) ||
+      [...this.sessions.values()].some(s => s.bot.id === bot.id) ||
+      [...this.tickets.values()].some(t => t.botId === bot.id);
+  }
+  async retentionTick() {
+    if (this.retentionBusy) return;
+    this.retentionBusy = true;
+    try {
+      // Only explicit candidates need a native read; preserved profiles cost nothing.
+      for (const bot of this.runtime.store.bots()) {
+        const p = this.policy(bot);
+        if (p.mode !== "idle60" || p.protected || !p.release || Date.now() - p.release.at < 3600000 ||
+            this.runtime.locks.has(bot.id) || this.locks.has(bot.id)) continue;
+        await this.runtime.lock(bot.id, () => this.lock(bot, async () => {
+          if (this.blockedBrowser(bot)) return;
+          const policy = this.policy(bot);
+          if (policy.profile !== this.name(bot) || policy.mode !== "idle60" || policy.protected || !policy.release ||
+              policy.release.threadId !== bot.threadId || Date.now() - policy.release.at < 3600000) return;
+          const token = captureActivity(this.runtime, bot.id);
+          const { thread } = await this.runtime.codex.call("thread/read", { threadId: bot.threadId, includeTurns: false });
+          if (thread?.id !== bot.threadId || thread.status?.type !== "idle" ||
+              !activityUnchanged(this.runtime, bot.id, token) || this.blockedBrowser(bot)) return;
+          const state = await this.browserCommand(bot, "probe");
+          if (state.connected || state.monotonicMs - state.idleMs > policy.release.monotonicMs || state.idleMs < 3600000 || state.boot !== policy.release.boot ||
+              JSON.stringify(state.instances) !== JSON.stringify(policy.release.instances)) return;
+          if (!activityUnchanged(this.runtime, bot.id, token) || this.blockedBrowser(bot) ||
+              this.policy(bot).revision !== policy.revision) return;
+          // Persist the single attempt before the synchronous final, locked OS recheck.
+          // This fences bridge admission and viewer/ticket creation through WM_DELETE.
+          this.savePolicy(bot, { protected: true, release: null, lastResult: "Graceful close requested; prompts are never forced." });
+          try {
+            const args = [join(resources,"browser.py"),"close",this.name(bot),"--owner",bot.id,"--expected",JSON.stringify(policy.release)];
+            execFileSync("/usr/bin/python3",args,{timeout:12000,maxBuffer:65536,stdio:["ignore","pipe","pipe"],
+              env:{...process.env,BOTS_DESKTOP_DIR:this.base}});
+          } catch {
+            this.savePolicy(bot, { lastResult: "Close deferred or refused. Review and release again when safe." });
+          }
+        })).catch(() => {}); // Missing/uncertain OS/native ownership defers, never guesses.
+      }
+    } finally { this.retentionBusy = false; }
+  }
   async call(bot, name, args, beforeInput = null) {
     if (!DESKTOP_TOOLS.some((t) => t.name === name))
       throw new Error("Unknown desktop tool.");
     this.assertBot(bot);
+    if (name === "browser_status") {
+      const probe = await this.browserCommand(bot, "probe");
+      return { content: [{ type: "text", text: JSON.stringify({ ...this.publicPolicy(bot), memorySaver: probe.memorySaver,
+        browserRunning: Boolean(probe.instances.length) }) }] };
+    }
+    if (name.startsWith("browser_")) {
+      const action = name.slice(8);
+      const result = await this.runtime.handle({ method: "desktop.browser" + action[0].toUpperCase() + action.slice(1), botId: bot.id,
+        operationId: args.operation_id, params: action === "release" ? { safeToClose: args.safe_to_close } : {} });
+      return { content: [{ type: "text", text: JSON.stringify(result) }] };
+    }
     return this.lock(bot, async () => {
       this.assertBot(this.runtime.store.bot(bot.id));
       // Only an observation may start a desktop; input cannot act on a fresh unseen session.
       let client = this.clients.get(bot.id);
       if (!client || client.dead) {
-        if (name !== "screenshot")
+        if (!["screenshot", "browser_status"].includes(name))
           throw new Error(
             "Take a screenshot from this connection before input.",
           );
@@ -316,22 +447,27 @@ export class BotDesktops {
         this.clients.set(bot.id, client);
       }
       if (beforeInput) { await client.ready; beforeInput(); }
-      return client.call(name, args);
+      if (name !== "screenshot") this.savePolicy(bot, { protected: true, release: null });
+      const result = await client.call(name, args);
+      if (name === "screenshot" && !result.isError) this.observations.set(bot.id, Date.now());
+      return result;
     });
   }
   async status(bot) {
     try {
       const cfg = await this.configured(bot),
         running = await this.running(cfg);
+      const browser = this.publicPolicy(bot);
       return {
         state: running ? "running" : "stopped",
         display: `:${cfg.display}`,
         rdpPort: cfg.rdp_port,
         rdpBind: cfg.rdp_bind,
         shared: true,
+        browser,
       };
     } catch (e) {
-      if (e.code === "ENOENT") return { state: "not-created", shared: true };
+      if (e.code === "ENOENT") return { state: "not-created", shared: true, browser: this.publicPolicy(bot) };
       throw e;
     }
   }
@@ -339,10 +475,10 @@ export class BotDesktops {
     const state = await this.status(bot);
     if (state.state !== "running") return state;
     const cached = this.previews.get(bot.id);
-    if (cached?.until > Date.now()) return cached.value;
+    if (cached?.until > Date.now()) return { ...cached.value, browser: this.publicPolicy(bot) };
     return this.lock(bot, async () => {
       const again = this.previews.get(bot.id);
-      if (again?.until > Date.now()) return again.value;
+      if (again?.until > Date.now()) return { ...again.value, browser: this.publicPolicy(bot) };
       const cfg = await this.configured(bot);
       const { stdout } = await exec(
         this.launcher,
@@ -379,6 +515,7 @@ export class BotDesktops {
       await this.start(bot);
       if (this.tickets.size >= 32)
         throw new Error("Too many pending desktop connections. Wait a moment.");
+      this.savePolicy(bot, { protected: true, release: null });
       const token = randomBytes(32).toString("hex");
       this.tickets.set(token, {
         botId: bot.id,
@@ -580,6 +717,7 @@ export class BotDesktops {
     this.tickets.clear();
   }
   async close() {
+    clearInterval(this.retentionTimer);
     clearInterval(this.sweeper);
     await this.disconnect();
     for (const c of this.clients.values()) c.close();

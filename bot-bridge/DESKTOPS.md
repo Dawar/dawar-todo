@@ -70,3 +70,7 @@ Deploy the updated application and Bots relay, apply the two private environment
 Local checks on 2026-09-30: application production build, TypeScript, targeted lint, Python compilation and relay deployment dry run passed. Real XFCE observations and reversible input worked through the new MCP. A disposable desktop was created lazily from the actual sidebar component; the actual noVNC dialog displayed it and accepted mouse/keyboard input. Shared mode was default; exclusive lease acquisition and release on viewer close were observed. The disposable desktop and review server were removed afterward. Human `:10` and Linus `:20` remained running; Linus health checks passed.
 
 These checks used a loopback development bridge to exercise the actual UI and VM gateway. They do not establish production relay authorization behavior, owner-login end-to-end behavior, mobile layout or multi-bot load capacity. No production relay/app publication or bridge restart was performed during implementation review. Formal automated suites were not run.
+
+## Browser memory and retention
+
+Bot-only balanced Memory Saver, safe opt-in retention, agent release/protection tools, guarded graceful close and tab restoration are documented in [desktops/BROWSER_MEMORY.md](desktops/BROWSER_MEMORY.md). Preserve remains the default. Screenshots/preview polling are not actual input activity. Installed helpers and public/bridge activation evidence must be recorded separately.

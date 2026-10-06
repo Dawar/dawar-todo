@@ -11,7 +11,7 @@ import {
   Square,
 } from "lucide-react";
 import type { Bot } from "../../lib/bots-types";
-import type { BotDesktopState } from "../../lib/bots-operations";
+import type { BotDesktopState, BotBrowserRetention } from "../../lib/bots-operations";
 import type RFB from "@novnc/novnc";
 import { botsClient as client } from "./client";
 import { DesktopChannel } from "./desktop-channel";
@@ -31,7 +31,8 @@ export function BotDesktopCard({
   onOpen: () => void;
 }) {
   const [desktop, setDesktop] = useState<BotDesktopState | null>(null),
-    [error, setError] = useState("");
+    [error, setError] = useState(""),
+    [savingPolicy, setSavingPolicy] = useState(false);
   const ref = useRef<HTMLElement>(null);
   useEffect(() => {
     let cancelled = false,
@@ -128,6 +129,38 @@ export function BotDesktopCard({
         )}
         <span className="bots-desktop-preview-label">{label}</span>
       </button>
+      {desktop?.browser && (
+        <div className="bots-browser-retention">
+          <label>
+            Browser retention
+            <select value={desktop.browser.mode} disabled={!online || bot.archived || savingPolicy}
+              onChange={async event => {
+                const mode = event.target.value as "preserve" | "idle60" | "keep-task";
+                const expectedRevision = desktop.browser!.revision;
+                setSavingPolicy(true);
+                try {
+                  const browser = await client.rpc<BotBrowserRetention>("desktop.browserPolicy", bot.id, { mode, expectedRevision },
+                    crypto.randomUUID(), { owner, managed: true });
+                  setDesktop(current => current ? { ...current, browser } : current);
+                  setError("");
+                } catch (e) { setError(e instanceof Error ? e.message : "Could not save browser settings."); }
+                finally { setSavingPolicy(false); }
+              }}>
+              <option value="preserve">Preserve browser</option>
+              <option value="idle60">Close when safe after 60 minutes</option>
+              <option value="keep-task">Keep open for current task</option>
+            </select>
+          </label>
+          <p>{desktop.browser.mode === "idle60"
+            ? desktop.browser.protected || !desktop.browser.releasedAt
+              ? "Waiting for the agent to designate saved browser work safe to close."
+              : "Released · cleanup waits for 60 minutes without work, connections or input."
+            : desktop.browser.mode === "keep-task"
+              ? "Browser stays open until the agent completes and releases this task, then the previous retention setting resumes."
+              : "Browser stays open."} The desktop stays running. Tabs can restore on reopening; unsaved state is not guaranteed.</p>
+          {desktop.browser.lastResult && <p role="status">{desktop.browser.lastResult}</p>}
+        </div>
+      )}
       {error && (
         <p className="bots-desktop-error" role="status">
           {error}
