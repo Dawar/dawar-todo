@@ -53,13 +53,19 @@ export class ComposerService {
     }
     return composer;
   }
-  async appendReview(owner: string, botId: string, documentFileId: string, operationId: string) {
+  async appendReview(owner: string, botId: string, documentFileId: string, operationId: string, expectedDocument?: string) {
     if (client.owner !== owner) throw Error("The signed-in owner changed. Your review is retained.");
     const source = this.reviewComposer(owner, botId, documentFileId), target = this.get(owner, botId);
     if (source.committing || target.committing) throw Error("Finish the current composer action before adding this review.");
     await source.flush(); await target.flush();
     if (client.owner !== owner) throw Error("The signed-in owner changed. Your review is retained.");
-    await this.store!.appendPdfReview(owner, pdfReviewKey(botId, documentFileId), botId, documentFileId, draftFingerprint(source.record), operationId);
+    try { await this.store!.appendPdfReview(owner, pdfReviewKey(botId, documentFileId), botId, documentFileId, draftFingerprint(source.record), operationId, expectedDocument); }
+    catch (error) {
+      // Rejected/aborted local transactions have no committed append. A later
+      // refresh failure is deliberately outside this known-not-applied fence.
+      if (expectedDocument !== undefined && error instanceof Error) Object.assign(error, { reviewAdditionOutcome: "not-applied" });
+      throw error;
+    }
     await source.refresh(); await target.refresh();
     this.channel?.postMessage({ owner, botId }); this.channel?.postMessage({ owner, botId: pdfReviewKey(botId, documentFileId) });
     void target.resumeUploads(); this.notify();

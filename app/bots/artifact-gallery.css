@@ -76,6 +76,8 @@
 .bots-artifacts-nav.active { background: #e7f0e3; border-color: #ccdcca; color: #31643e; }
 .bots-file-viewer-backdrop { position: fixed; inset: 0; background: #14221acf; backdrop-filter: blur(5px); z-index: 90; display: grid; place-items: center; padding: 30px; }
 .bots-file-viewer { width: min(100%, 1100px); height: min(90dvh, 950px); min-height: 0; min-width: 0; display: flex; flex-direction: column; border-radius: 19px; overflow: hidden; background: #f6f7f4; box-shadow: 0 25px 90px #07190b66; }
+dialog.bots-file-viewer { position: fixed; inset: 0; margin: auto; padding: 0; border: 0; max-width: calc(100% - 60px); max-height: 90dvh; color: inherit; }
+dialog.bots-file-viewer::backdrop { background: #14221acf; backdrop-filter: blur(5px); }
 .bots-file-viewer > header { display: flex; gap: 15px; align-items: center; justify-content: space-between; padding: 15px 22px; border-bottom: 1px solid #e4e9e1; background: #fff; }
 .bots-file-viewer > header > div { min-width: 0; }
 .bots-file-viewer header strong { font-size: 14px; display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -120,6 +122,7 @@
   .bots-gallery-error { padding: 16px; }
   .bots-file-viewer-backdrop { padding: 0; }
   .bots-file-viewer { width: 100%; height: 100dvh; border-radius: 0; }
+  dialog.bots-file-viewer { max-width: 100%; max-height: 100dvh; }
   .bots-file-viewer > header { padding: max(12px, env(safe-area-inset-top)) 14px 12px; }
   .bots-file-viewer > footer { padding: 10px 12px max(12px, env(safe-area-inset-bottom)); }
   .bots-file-viewer > footer > span { display: none; }

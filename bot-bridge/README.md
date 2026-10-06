@@ -88,6 +88,8 @@ Native request IDs are namespaced by process epoch and persisted for browser rec
 
 Uploads are at most 100 MB per file, 12 files per message, in acknowledged 256 KiB chunks. Downloads are restricted to registered files in the mapped workspace. `bots_publish_artifact` copies a VM file into the bot's artifact directory, returns its registered link, and adds it to the conversation download shelf. Long responses/events are bounded at 32 MB; conversation history is paginated by 20 turns.
 
+For readable Markdown/static HTML reports and simple document feedback, see [report authoring guidance](ARTIFACT_DOCUMENTS.md). Original downloads, image/PDF viewers and ordinary message delivery are retained.
+
 Notifications deduplicate reports by bot, finding key and content. Routine successful scheduled checks do not notify. Failures and requests for input do. Web Push is at-least-once transport: per-device delivery receipts and notification tags suppress duplicates; a provider acknowledgement lost during a crash can still cause a retry. A device must enable notifications in Settings and subsequently connect to Bots to associate the subscription with the verified owner. No provider delivery guarantee is implied when the browser or OS suppresses notifications.
 
 ## Validation

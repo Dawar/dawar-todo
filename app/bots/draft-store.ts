@@ -1,6 +1,7 @@
 import type { BotReplyReference } from "../../lib/bot-replies";
 import type { BotAttachment, BridgeRequest } from "../../lib/bots-types";
 import { pdfReviewTarget, pdfReviewMessage } from "./pdf-review";
+import { documentIdentity } from "./document-source";
 
 // Critical data only. Histories and other disposable caches never enter this DB.
 export const DRAFT_DATABASE = "dawar-bot-drafts";
@@ -349,8 +350,8 @@ export class BotDraftStore {
       targetRequest.onsuccess = () => { target = targetRequest.result; seed(); };
     });
   }
-  /** Add feedback to its original unsent PDF draft in one acknowledged transaction. */
-  async appendPdfReview(owner: string, sourceKey: string, botId: string, documentFileId: string, expected: string, operationId: string) {
+  /** Add feedback to its original unsent document draft in one acknowledged transaction. */
+  async appendPdfReview(owner: string, sourceKey: string, botId: string, documentFileId: string, expected: string, operationId: string, expectedDocument?: string) {
     const scope = pdfReviewTarget(sourceKey);
     if (!scope || scope.botId !== botId || scope.attachmentId !== documentFileId) throw Error("The review belongs to another PDF or bot.");
     return this.transaction<DraftRecord>(["drafts", "files"], "readwrite", (tx, done, fail) => {
@@ -358,10 +359,23 @@ export class BotDraftStore {
       let source: DraftRecord | undefined, target: DraftRecord | undefined, reads = 0;
       const apply = () => {
         if (++reads !== 2) return;
-        if (target?.receivedTransfers?.[operationId] === sourceKey) { done(target); return; }
+        const receipt = target?.receivedTransfers?.[operationId];
+        if (receipt && expectedDocument !== undefined) {
+          try {
+            const prior = JSON.parse(receipt) as { sourceKey: string; expectedDocument: string; expected: string };
+            if (prior.sourceKey !== sourceKey || prior.expectedDocument !== expectedDocument || source?.slots.normal.text && prior.expected !== expected)
+              throw Error("Changed review operation");
+            done(target!); return;
+          } catch { fail(Error("This saved addition belongs to different feedback or a changed document. Your notes are retained.")); return; }
+        }
+        if (receipt === sourceKey) { done(target!); return; }
+        const original = target?.slots.normal.files.find(file => file.id === documentFileId);
         if (!source?.migrated || !target?.migrated || Object.keys(source.operations).length || Object.keys(target.operations).length ||
             draftFingerprint(source) !== expected || target.active !== "normal" || !target.slots.normal.files.some(file => file.id === documentFileId)) {
-          fail(Error("The PDF draft changed or has a send awaiting confirmation. Your review is retained; reopen the PDF in its original composer.")); return;
+          fail(Error("The document draft changed or has a send awaiting confirmation. Your review is retained; reopen the document in its original composer.")); return;
+        }
+        if (expectedDocument !== undefined && (!original || documentIdentity(original) !== expectedDocument || target.slots.normal.queueId || target.slots.normal.queueSource && !target.slots.normal.queueSource.removed)) {
+          fail(Error("The original document changed or this draft is locked. Your feedback is retained; reopen the document in its original composer.")); return;
         }
         try {
           const draft = source.slots.normal, text = pdfReviewMessage(draft.text, botId, documentFileId, draft.files, false);
@@ -372,7 +386,7 @@ export class BotDraftStore {
           if (limit || combined.length > 200000) { fail(Error(limit || "This message is too long (maximum 200,000 characters). Your review is retained.")); return; }
           target.slots.normal.text = combined; target.slots.normal.textVersion = `review:${operationId}`;
           target.slots.normal.files.push(...newFiles.map(file => ({ ...file })));
-          target.receivedTransfers = { ...target.receivedTransfers, [operationId]: sourceKey }; target.revision = crypto.randomUUID();
+          target.receivedTransfers = { ...target.receivedTransfers, [operationId]: expectedDocument === undefined ? sourceKey : JSON.stringify({ sourceKey, expectedDocument, expected }) }; target.revision = crypto.randomUUID();
           copyDraftBytes(tx, owner, sourceKey, botId, { ...draft, files: target.slots.normal.files.filter(file => newFiles.some(added => added.id === file.id)) }, () => drafts.put(target!), fail);
           drafts.put(target);
           source.slots.normal = emptyDraft(); source.revision = crypto.randomUUID(); drafts.put(source);

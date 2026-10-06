@@ -9,6 +9,7 @@ import { botsClient } from "./client";
 import { ArtifactViewer } from "./artifact-viewer";
 import type { StagedFile } from "./draft-store";
 import type { GalleryItem } from "./artifact-source";
+import { documentKind, documentIdentity } from "./document-source";
 import "./artifact-gallery.css";
 
 function LocalPreview({ file }: { file?: File }) {
@@ -27,15 +28,17 @@ function ComposerAttachment({ composer, file, index, online }: { composer: BotCo
   const close = useCallback(() => setOpen(false), []);
   const image = file.mimeType.startsWith("image/");
   const pdf = !image && (file.mimeType === "application/pdf" || /\.pdf$/i.test(file.name));
+  const textDocument = !image && !pdf && documentKind(file);
   const percent = composer.progress.get(file.id);
   const locked = Boolean(composer.draft.queueSource && !composer.draft.queueSource.removed);
   const status = file.error && !file.remote?.ready ? "Upload needs retry" : percent !== undefined ? `${percent}%` : !file.remote ? composer.dirty ? "Saving file…" : "Saved locally · awaiting upload" : "";
   const item: GalleryItem = useMemo(() => ({ id: file.id, botId: composer.botId, name: file.name, mimeType: pdf ? "application/pdf" : file.mimeType, size: file.size, ready: false,
     botName: botsClient.snapshot?.bots.find(bot => bot.id === composer.botId)?.name ?? "Bot", createdAt: null }), [file.id, file.name, file.mimeType, file.size, composer.botId, pdf]);
-  // Only the existing ordinary main PDF draft can add initial feedback. Run,
+  // Only the existing ordinary main document draft can add initial feedback. Run,
   // recovered and queue-edit previews never gain a review-send entry point.
-  const canReview = pdf && composer.record.botId === composer.botId && composer.record.active === "normal" && !locked && !composer.draft.queueId && !composer.operation && !composer.committing;
-  const initialSubmission = useMemo(() => canReview ? { documentFileId: file.id } : undefined, [canReview, file.id]);
+  const canReview = Boolean(pdf || textDocument) && composer.record.botId === composer.botId && composer.record.active === "normal" && !locked && !composer.draft.queueId && !composer.operation && !composer.committing;
+  const identity = documentIdentity(file);
+  const initialSubmission = useMemo(() => canReview ? { documentFileId: file.id, documentIdentity: identity } : undefined, [canReview, file.id, identity]);
   const view = () => {
     if (!composer.canUseOwner) { setError("Sign back in as this file's owner to open it."); return; }
     if (!composer.files.has(file.id) && !file.remote?.ready) { setError("The saved file is unavailable. Retry file recovery before opening it."); return; }
@@ -43,7 +46,7 @@ function ComposerAttachment({ composer, file, index, online }: { composer: BotCo
   };
   const thumbnail = composer.files.has(file.id) ? <LocalPreview file={composer.files.get(file.id)} /> : file.remote?.ready ? <UploadThumbnail botId={file.remote.botId} attachmentId={file.remote.id} online={online} /> : <LocalPreview />;
   return <><span className={image ? "bots-upload-image" : undefined} title={[file.name, file.error || status].filter(Boolean).join(" · ")}>
-    {image || pdf ? <button type="button" className="bots-attachment-open" aria-label={`Open ${file.name}`} aria-haspopup="dialog" onClick={view}>{image ? thumbnail : file.name}</button> : file.name}
+    {image || pdf || textDocument ? <button type="button" className="bots-attachment-open" aria-label={`Open ${file.name}`} aria-haspopup="dialog" onClick={view}>{image ? thumbnail : file.name}</button> : file.name}
     {status && <span className={image ? "bots-upload-progress" : undefined}>{status}</span>}
     <button type="button" disabled={locked} aria-label={`Remove ${image ? `image ${index + 1}: ` : ""}${file.name}`} onClick={() => composer.removeFile(file.id)}><X size={13} aria-hidden="true" /></button>
   </span>{error && <span role="alert">{error}</span>}{open && createPortal(<ArtifactViewer item={item} owner={composer.owner} online={online} originalFile={composer.files.get(file.id)} sourceAttachment={file.remote} initialSubmission={initialSubmission} readOnly={!canReview} onClose={close} />, document.body)}</>;
