@@ -136,7 +136,7 @@
 .bots-returned-file .bots-file-preview { flex-basis: calc(100% + 24px); width: calc(100% + 24px); margin-inline: -12px; aspect-ratio: 1.6; flex-shrink: 0; }
 .bots-returned-files { display: flex; flex-wrap: wrap; gap: 8px; }
 .bots-file-viewer :is(button,a):focus-visible { outline: 2px solid #388661; outline-offset: 3px; }
-.bots-upload-list .bots-pdf-draft-open { width:auto; height:auto; min-width:0; border:0; border-radius:0; padding:0; background:none; color:inherit; font-size:inherit; text-align:left; text-decoration:underline; text-underline-offset:3px; }
+.bots-upload-list > span:not(.bots-upload-image) > .bots-attachment-open { width:auto; height:auto; min-width:0; min-height:40px; border:0; border-radius:0; padding:0; background:none; color:inherit; font-size:inherit; text-align:left; text-decoration:underline; text-underline-offset:3px; }
 @media(max-width:700px) {
   .bots-file-copy > strong { font-size: 12px; min-height: 36px; }
   .bots-file-copy > span { font-size: 11px; white-space: normal; line-height: 1.5; min-height: 33px; }
@@ -155,3 +155,8 @@
 }
 
 @media(max-width:700px) { .bots-gallery-search input, .bots-gallery-bot-filter select { font-size: 16px; } }
+
+.bots-upload-image > .bots-attachment-open { position: static; display: grid; place-items: center; width: 100%; height: 100%; border-radius: 0; background: transparent; color: inherit; text-decoration: none; }
+.bots-upload-image > .bots-attachment-open:hover { background: transparent; }
+.bots-attachment-open:focus-visible { outline: 2px solid #286b45; outline-offset: -2px; }
+.bots-upload-image > .bots-upload-progress { pointer-events: none; }

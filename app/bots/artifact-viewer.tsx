@@ -7,14 +7,14 @@ import type { BotAttachment } from "../../lib/bots-types";
 import { botsClient } from "./client";
 type ArtifactViewerProps = {
   item: GalleryItem; owner: string; online: boolean; onClose: () => void;
-  originalFile?: Blob; sourceAttachment?: BotAttachment; initialSubmission?: { documentFileId: string };
+  originalFile?: Blob; sourceAttachment?: BotAttachment; initialSubmission?: { documentFileId: string }; readOnly?: boolean;
 };
 export function ArtifactViewer(props: ArtifactViewerProps) {
   const canUseOwner = useSyncExternalStore(botsClient.subscribe, () => botsClient.owner === props.owner, () => false);
   // A new owner/document remounts the viewer, disposing the old blob and review.
-  return canUseOwner ? <ScopedArtifactViewer key={JSON.stringify([props.owner, props.item.botId, props.item.id])} {...props} /> : null;
+  return canUseOwner ? <ScopedArtifactViewer key={JSON.stringify([props.owner, props.item.botId, props.item.id, props.readOnly, props.initialSubmission?.documentFileId])} {...props} /> : null;
 }
-function ScopedArtifactViewer({ item, owner, online, onClose, originalFile, sourceAttachment, initialSubmission }: ArtifactViewerProps) {
+function ScopedArtifactViewer({ item, owner, online, onClose, originalFile, sourceAttachment, initialSubmission, readOnly = false }: ArtifactViewerProps) {
   const dialog = useRef<HTMLDivElement>(null), blob = useRef<Blob | null>(null), urls = useRef(new Set<string>()), hasPreview = useRef(false);
   const [filename, setFilename] = useState(item.name);
   const [url, setUrl] = useState(""), [preview, setPreview] = useState(""), [type, setType] = useState(galleryType(item));
@@ -32,12 +32,12 @@ function ScopedArtifactViewer({ item, owner, online, onClose, originalFile, sour
       else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
     };
     document.addEventListener("keydown", key, true);
-    return () => { document.removeEventListener("keydown", key, true); previous?.focus(); };
+    return () => { document.removeEventListener("keydown", key, true); if (previous?.isConnected) previous.focus(); };
   }, []);
   useEffect(() => {
     const ownedUrls = urls.current;
     return () => { ownedUrls.forEach((url) => URL.revokeObjectURL(url)); ownedUrls.clear(); blob.current = null; hasPreview.current = false; };
-  }, [item, owner]);
+  }, []);
   useEffect(() => {
     // A completed original remains usable if the connection drops while open.
     if (blob.current) return;
@@ -49,7 +49,7 @@ function ScopedArtifactViewer({ item, owner, online, onClose, originalFile, sour
       return () => abort.abort();
     }
     void Promise.resolve().then(() => { if (!abort.signal.aborted) setLoading(online); });
-    if (!hasPreview.current) void artifactPreview(item, owner, online).then((value) => { if (!abort.signal.aborted) { const next = URL.createObjectURL(value); urls.current.add(next); hasPreview.current = true; setPreview(next); } }).catch(() => {});
+    if (!hasPreview.current) void artifactPreview(sourceAttachment ? { ...item, ...sourceAttachment } : item, owner, online).then((value) => { if (!abort.signal.aborted) { const next = URL.createObjectURL(value); urls.current.add(next); hasPreview.current = true; setPreview(next); } }).catch(() => {});
     if (online) {
       void readArtifactOriginal(sourceAttachment ? { ...item, ...sourceAttachment } : item, owner, abort.signal).then((value) => {
         if (abort.signal.aborted) return;
@@ -72,7 +72,7 @@ function ScopedArtifactViewer({ item, owner, online, onClose, originalFile, sour
       </div>}
       <footer><span>{type === "pdf" ? "PDF document" : type === "image" ? "Image" : "Document"}</span><div>
         {type === "image" && (url || preview) && <button onClick={() => setZoom((v) => !v)} aria-label={zoom ? "Fit image" : "Zoom image"}>{zoom ? <ZoomOut size={17} /> : <ZoomIn size={17} />}{zoom ? "Fit" : "Zoom"}</button>}
-        {type === "pdf" && url && !review && (initialSubmission || item.ready && !originalFile) && <button onClick={() => setReview(blob.current)}><MessageSquare size={16} />Create review</button>}
+        {type === "pdf" && url && !review && !readOnly && (initialSubmission || item.ready && !originalFile) && <button onClick={() => setReview(blob.current)}><MessageSquare size={16} />Create review</button>}
         {type === "pdf" && url && <a href={url} target="_blank" rel="noopener noreferrer"><ExternalLink size={16} />Open PDF</a>}
         <button disabled={!url} onClick={() => { if (blob.current) saveArtifact(blob.current, item.name); }}><Download size={16} />Download</button>
       </div></footer>
