@@ -68,10 +68,12 @@ export async function profileFile(bot, name) {
   catch (error) { if (error.memoryMissingAtOpen) error.profileMissing = true; throw error; }
   finally { await scope.close(); }
 }
-async function privateDirectory(parent, name) {
+async function privateDirectory(parent, name, create = true) {
   await parent.check();
-  await mkdir(parent.path(name), { mode: 0o700 }).catch(e => { if (e.code !== 'EEXIST') throw e; });
-  await parent.sync();
+  if (create) {
+    await mkdir(parent.path(name), { mode: 0o700 }).catch(e => { if (e.code !== 'EEXIST') throw e; });
+    await parent.sync();
+  }
   const handle = await open(parent.path(name), flags | constants.O_DIRECTORY);
   try {
     const before = await handle.stat({ bigint: true }); owned(before, name, true);
@@ -124,6 +126,26 @@ async function markCurrent(workspace, id) {
   try { await replacePrivateJson(parent, 'current.json', { operationId: id }); } finally { await parent.close(); }
 }
 const receiptName = id => { if (typeof id !== 'string' || !/^memory-v1-[a-f0-9]{64}$/.test(id)) fail('Use the original memory operation ID.'); return id; };
+
+// Ordinary profile reads never join a preparation/verification mutation lock.
+// All directories/files remain anchored, private and bounded. A committing
+// receipt still takes the exclusive, original-ID reconciliation path below.
+async function inspectMemoryOperation(bot, id, read, { metadataOnly = false } = {}) {
+  const workspace = await memoryWorkspace(bot); let parent, scope;
+  try {
+    parent = await privateDirectory(workspace, '.memory-maintenance', false);
+    scope = await privateDirectory(parent, receiptName(id), false);
+    const before = await readOwnedFile(scope, 'receipt.json', 64 * 1024, true);
+    const receipt = JSON.parse(before.text); matchBot(receipt, bot, workspace, id);
+    if (receipt.state === 'committing') return null;
+    const value = await read({ workspace, scope, receipt });
+    const after = await readOwnedFile(scope, 'receipt.json', 64 * 1024, true);
+    const current = JSON.parse(after.text); matchBot(current, bot, workspace, id);
+    if (current.state === 'committing') return null;
+    if (!metadataOnly && after.hash !== before.hash) fail('Memory summary receipt changed during its read. Retain input and inspect the original operation.');
+    return { value };
+  } finally { await scope?.close(); await parent?.close(); await workspace.close(); }
+}
 
 export async function memoryOperation(bot, id, callback, { create = false } = {}) {
   const workspace = await memoryWorkspace(bot); let parent, scope, lock;
@@ -259,7 +281,7 @@ export async function commitMemory(bot, id, expectedHash, guard = () => true, si
   });
 }
 export async function memoryFallback(bot, id, source) {
-  return memoryOperation(bot, id, async ({ scope, receipt, workspace }) => {
+  const read = async ({ scope, receipt, workspace }) => {
     if (!receipt || receipt.sourceHash !== source.hash || receipt.sourceIdentity !== sourceVersion(source) || receipt.verifiedSourceHash !== source.hash || !receipt.review || !['verified', 'committing'].includes(receipt.state))
       fail('No verified summary matches the current memory. Retain the message/files and finish memory recovery first.');
     await verifyArchive(scope, receipt);
@@ -268,7 +290,9 @@ export async function memoryFallback(bot, id, source) {
     const current = await readOwnedFile(workspace, 'MEMORY.md', MEMORY_SOURCE_LIMIT);
     if (current.hash !== source.hash || sourceVersion(current) !== sourceVersion(source)) fail('Memory version changed during fallback preparation.');
     return { text: candidate.text, receipt: memoryReceipt(receipt) };
-  });
+  };
+  const inspected = await inspectMemoryOperation(bot, id, read);
+  return inspected ? inspected.value : memoryOperation(bot, id, read);
 }
 export async function maintenanceMemoryContext(bot, id, source) {
   return memoryOperation(bot, id, async ({ scope, receipt }) => {
@@ -283,10 +307,16 @@ export async function memoryCurrentState(bot, source) {
   try {
     try { await lstat(workspace.path('.memory-maintenance')); }
     catch (error) { if (error.code === 'ENOENT') return null; throw error; }
-    parent = await privateDirectory(workspace, '.memory-maintenance');
+    parent = await privateDirectory(workspace, '.memory-maintenance', false);
     try { id = JSON.parse((await readOwnedFile(parent, 'current.json', 1024, true)).text).operationId; receiptName(id); }
     catch (error) { if (error.code === 'ENOENT') return null; throw error; }
   } finally { await parent?.close(); await workspace.close(); }
+  const inspected = await inspectMemoryOperation(bot, id, async ({ workspace }) => {
+    if (!sameStat(await lstat(workspace.path('MEMORY.md'), { bigint: true }), source.stat))
+      fail('Memory changed during ordinary profile preparation. Retain input and read its current version.');
+    await workspace.check();
+  }, { metadataOnly: true });
+  if (inspected) return null;
   return memoryOperation(bot, id, async ({ receipt, scope, workspace, save }) => {
     if (!receipt) fail('Current memory operation receipt is missing.');
     if (receipt.state !== 'committing') return null;

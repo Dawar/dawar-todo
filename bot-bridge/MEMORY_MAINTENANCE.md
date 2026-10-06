@@ -87,6 +87,14 @@ shows it without mutating its draft/files or adding conversation copies. Old
 clients ignore the field; absent field remains compatible.
 
 At 32 KiB ordinary delivery still includes the full safe current memory and warns.
+Preparation/verification locks do not reject that ordinary read. Current-receipt
+metadata and verified fallback bytes are inspected without acquiring, creating,
+clearing or waiting on a mutation lock. Private ownership, anchored paths, byte
+limits, source identity and receipt/candidate stability are still checked.
+A committing receipt retains the exclusive original-ID reconciliation gate;
+unknown exchanges never become safe reads merely because human intake canceled
+background preparation. Cancellation can leave file I/O settling with its lock
+still held, while safe noncommitting profile preparation proceeds independently.
 Above 128 KiB, only a private verified candidate bound to that EXACT current
 source/version and valid own-turn review may substitute, with an archive/hash
 reference. A stale, missing, corrupt, unsafe or unresolved fallback blocks before
