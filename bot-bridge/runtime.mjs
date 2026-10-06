@@ -86,7 +86,7 @@ const usageMetric = (groups, field) => {
 };
 const READ_METHODS = new Set([
   "secure.list",
-  "work.read", "inbox.list", "goals.read", "bursts.read", "bursts.typing", "peers.directory", "peers.read", "peers.list",
+  "work.read", "inbox.list", "goals.read", "bursts.read", "bursts.typing", "peers.directory", "peers.read", "peers.list", "peers.root", "peers.status", "peers.feed", "peers.exchange", "peers.held",
   "snapshot",
   "history",
   "history.page",
@@ -538,7 +538,7 @@ export class BotRuntime extends EventEmitter {
   }
   snapshot() {
     return {
-      capabilities: { backgroundRunLanes: 1, scheduleDecisions: 1, singleThreadExecution: 1, peerInbox: 1, nativeGoals: 1, nativeConversation: 1, messageReplies: 1, secureInputs: 1, operatorCalls: 1, operatorInputQuestions: 1, historyCursorIndex: 1, messageBursts: 1, burstDiscard: 1, burstControls: 1, queueLists: 1, queueRelativeMoves: 1, queueSendNow: 1, teams: 1, ...(this.desktops ? { botDesktops: 1, botBrowserRetention: 1 } : {}) },
+      capabilities: { backgroundRunLanes: 1, scheduleDecisions: 1, singleThreadExecution: 1, peerInbox: 1, peerRootControls: 1, peerBodyPaging: 1, nativeGoals: 1, nativeConversation: 1, messageReplies: 1, secureInputs: 1, operatorCalls: 1, operatorInputQuestions: 1, historyCursorIndex: 1, messageBursts: 1, burstDiscard: 1, burstControls: 1, queueLists: 1, queueRelativeMoves: 1, queueSendNow: 1, teams: 1, ...(this.desktops ? { botDesktops: 1, botBrowserRetention: 1 } : {}) },
 
       teams: publicTeams(this),
       workByBot: this.store.bots().map(bot => this.primary.work(bot)),
@@ -623,6 +623,19 @@ export class BotRuntime extends EventEmitter {
       }
       const accepted = await acceptSingleThreadOperation(this, request, fingerprint, trustedOrigin);
       return accepted.result;
+    }
+    // Peer control is a short local fence, never queued behind native execution
+    // or attachment preparation. Bot transport provenance cannot grant it.
+    if (["peers.control", "peers.send", "peers.reply", "peers.cancel"].includes(method)) {
+      try {
+        const bot=this.store.bot(String(botId));
+        return method === "peers.control" ? this.peers.control(bot,params,operationId,fingerprint,trustedOrigin) :
+          await this.peers.mutate(bot,method,params,operationId,fingerprint,trustedOrigin);
+      } catch(error) {
+        const receipt=this.store.operation(operationId);
+        if(receipt?.status==='done')return receipt.result;
+        error.outcome=receipt && receipt.status!=='held'?'uncertain':'rejected'; throw error;
+      }
     }
     const runRequest = method === "requests.respond" && (this.store.get("runPending", params.key) ?? this.store.get("answerExecution", `answer:${params.key}`));
     const resumeRun = ["runs.resume", "runs.decide"].includes(method) && this.owned("run", params.runId, botId);
@@ -849,6 +862,11 @@ export class BotRuntime extends EventEmitter {
       case "peers.directory": return this.peers.directory();
       case "peers.list": return this.peers.list(bot, p);
       case "peers.read": return this.peers.read(bot, p);
+      case "peers.root": return this.peers.root(bot,p);
+      case "peers.status": return this.peers.status(bot,p);
+      case "peers.feed": return this.peers.feed(bot,p);
+      case "peers.exchange": return this.peers.exchange(bot,p);
+      case "peers.held": return this.peers.held(bot,p);
       case "goals.read": return this.primary.goal(bot, "get");
       case "goals.set": return this.primary.goal(bot, "set", p, attempt, id);
       case "goals.clear": return this.primary.goal(bot, "clear", {}, attempt, id);
@@ -2194,7 +2212,7 @@ export class BotRuntime extends EventEmitter {
   }
   async peerTool(bot, args, origin) {
     const { operation, operationId, ...params } = args ?? {};
-    if (!["directory", "list", "read", "send", "reply", "cancel"].includes(operation)) throw new Error("Unknown peer operation.");
+    if (!["directory", "list", "read", "root", "status", "feed", "exchange", "held", "send", "reply", "cancel"].includes(operation)) throw new Error("Unknown peer operation.");
     // Private argument from the authenticated transport, never args/params.
     // Validate only NEW acceptance after exact prior receipts have been read.
     const trustedOrigin = Object.freeze({ ...origin,
