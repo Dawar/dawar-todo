@@ -19,7 +19,7 @@ export function TodoForward({ request, onClose }: { request: { id: string; text:
     const unsubscribe = client.subscribe(read);
     return () => { active = false; unsubscribe(); };
   }, []);
-  return <>{!request && saved && <button type="button" className="todo-forward-recovery" onClick={() => setOpen(true)}>Continue saved Forward <ArrowRight size={15} /></button>}
+  return <>{!request && saved && <button type="button" className="todo-forward-recovery" onClick={() => setOpen(true)}>Open saved draft <ArrowRight size={15} /></button>}
     {(request || open && saved) && <ForwardPicker key={request?.id ?? saved!.id} request={request ?? saved!} saved={request ? null : saved} onClose={close} />}</>;
 }
 function ForwardPicker({ request, saved, onClose }: { request: { id: string; text: string }; saved: TodoForwardIntent | null; onClose: () => void }) {

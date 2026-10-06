@@ -1,3 +1,5 @@
+import { ensureTaskDelegationSchema } from "./task-queue-delegation";
+import type { TaskDelegation } from "../lib/task-queue-delegation";
 import { env } from "cloudflare:workers";
 import { importedTodos } from "./imported-todos";
 import {
@@ -52,6 +54,8 @@ type TodoRow = {
   created_at: string;
   updated_at: string;
   attachment_count?: number;
+  queue_delegation?: string | null;
+  queue_last_transfer?: string | null;
 };
 
 type UndoSnapshot = {
@@ -81,6 +85,8 @@ export type Todo = {
   createdAt: string;
   updatedAt: string;
   attachmentCount: number;
+  queueDelegation?: TaskDelegation | null;
+  queueLastTransfer?: TaskDelegation | null;
 };
 
 export type TodoUpdate = Partial<
@@ -164,6 +170,8 @@ function mapTodo(row: TodoRow): Todo {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     attachmentCount: Number(row.attachment_count ?? 0),
+    queueDelegation: row.queue_delegation ? JSON.parse(row.queue_delegation) : null,
+    queueLastTransfer: row.queue_last_transfer ? JSON.parse(row.queue_last_transfer) : null,
   };
 }
 
@@ -209,6 +217,8 @@ function mapTodoSettings(rows: Array<{ key: string; value: string; updated_at?: 
 
 const todoListSql = `
   SELECT todos.*,
+    (SELECT delegation FROM todo_queue_state WHERE todo_id=todos.id) AS queue_last_transfer,
+    (SELECT delegation FROM todo_queue_state WHERE todo_id=todos.id AND generation=delegation_generation) AS queue_delegation,
     (SELECT COUNT(*) FROM todo_attachments
      WHERE todo_attachments.todo_id = todos.id
        AND todo_attachments.upload_state = 'ready'
@@ -315,6 +325,7 @@ export async function ensureTodoDatabase() {
         .prepare("SELECT value FROM app_settings WHERE key = 'schema_version'")
         .first<{ value: string }>();
       if (schemaVersion?.value === CURRENT_SCHEMA_VERSION) {
+        await ensureTaskDelegationSchema(db);
         console.info("[todo-db] production schema fast path", {
           schemaVersion: schemaVersion.value,
           durationMs: Date.now() - fastPathStartedAt,
@@ -1022,6 +1033,7 @@ export async function ensureTodoDatabase() {
     });
 
     await ensureTodoSyncSchema(db);
+    await ensureTaskDelegationSchema(db);
     await db.prepare("PRAGMA optimize").run();
 
     console.info("[todo-db] ready", {
@@ -1353,6 +1365,8 @@ export async function createTodo(input: {
   if (clientId) {
     const existing = await db.prepare(`
       SELECT todos.*,
+      (SELECT delegation FROM todo_queue_state WHERE todo_id=todos.id) AS queue_last_transfer,
+    (SELECT delegation FROM todo_queue_state WHERE todo_id=todos.id AND generation=delegation_generation) AS queue_delegation,
         (SELECT COUNT(*) FROM todo_attachments
          WHERE todo_attachments.todo_id = todos.id
            AND todo_attachments.upload_state = 'ready'
@@ -1454,6 +1468,8 @@ export async function createTodo(input: {
   if (!row && clientId) {
     const replay = await db.prepare(`
       SELECT todos.*,
+      (SELECT delegation FROM todo_queue_state WHERE todo_id=todos.id) AS queue_last_transfer,
+    (SELECT delegation FROM todo_queue_state WHERE todo_id=todos.id AND generation=delegation_generation) AS queue_delegation,
         (SELECT COUNT(*) FROM todo_attachments
          WHERE todo_attachments.todo_id = todos.id
            AND todo_attachments.upload_state = 'ready'
@@ -1618,7 +1634,7 @@ export async function updateTodo(
     throw new Error("Only active open tasks can be pinned.");
   }
   if (normalizedUpdate.pinned === true && !before.pinned) {
-    const pinned = await db.prepare("SELECT COUNT(*) AS count FROM todos WHERE pinned = 1")
+    const pinned = await db.prepare("SELECT COUNT(*) AS count FROM todos WHERE pinned = 1 AND NOT EXISTS (SELECT 1 FROM todo_queue_state WHERE todo_id=todos.id AND delegation IS NOT NULL AND generation=delegation_generation)")
       .first<{ count: number }>();
     if (Number(pinned?.count ?? 0) >= MAX_PINNED_TASKS) {
       console.warn("[todo-db] pin limit rejected", {
@@ -1669,7 +1685,7 @@ export async function updateTodo(
           EXISTS (SELECT 1 FROM todos WHERE id = ? AND status = 'open' AND snoozed_until IS NULL)
           AND (
             EXISTS (SELECT 1 FROM todos WHERE id = ? AND pinned = 1)
-            OR (SELECT COUNT(*) FROM todos WHERE pinned = 1) < ?
+            OR (SELECT COUNT(*) FROM todos WHERE pinned = 1 AND NOT EXISTS (SELECT 1 FROM todo_queue_state WHERE todo_id=todos.id AND delegation IS NOT NULL AND generation=delegation_generation)) < ?
           )
         )
         ON CONFLICT(todo_id, field) DO UPDATE SET
@@ -1770,6 +1786,8 @@ export async function getTodo(id: number): Promise<Todo | null> {
   await ensureTodoDatabase();
   const row = await database().prepare(`
     SELECT todos.*,
+      (SELECT delegation FROM todo_queue_state WHERE todo_id=todos.id) AS queue_last_transfer,
+    (SELECT delegation FROM todo_queue_state WHERE todo_id=todos.id AND generation=delegation_generation) AS queue_delegation,
       (SELECT COUNT(*) FROM todo_attachments
        WHERE todo_attachments.todo_id = todos.id
          AND todo_attachments.upload_state = 'ready'
@@ -1999,6 +2017,8 @@ async function adjustSnoozedTodosUntil(
   `).bind(until, ...ids).run();
   const updated = await db.prepare(`
     SELECT todos.*,
+      (SELECT delegation FROM todo_queue_state WHERE todo_id=todos.id) AS queue_last_transfer,
+    (SELECT delegation FROM todo_queue_state WHERE todo_id=todos.id AND generation=delegation_generation) AS queue_delegation,
       (SELECT COUNT(*) FROM todo_attachments
        WHERE todo_attachments.todo_id = todos.id
          AND todo_attachments.upload_state = 'ready'
@@ -2107,6 +2127,8 @@ export async function bulkUpdateTodos(
   }
   const updated = await db.prepare(`
     SELECT todos.*,
+      (SELECT delegation FROM todo_queue_state WHERE todo_id=todos.id) AS queue_last_transfer,
+    (SELECT delegation FROM todo_queue_state WHERE todo_id=todos.id AND generation=delegation_generation) AS queue_delegation,
       (SELECT COUNT(*) FROM todo_attachments
        WHERE todo_attachments.todo_id = todos.id
          AND todo_attachments.upload_state = 'ready'
@@ -2248,9 +2270,9 @@ export async function undoTodoAction(undoToken: string) {
   `);
   const restoredIds = snapshot.todos.map((row) => row.id);
   const existingPinned = restoredIds.length
-    ? await db.prepare(`SELECT COUNT(*) AS count FROM todos WHERE pinned = 1 AND id NOT IN (${placeholders(restoredIds.length)})`)
+    ? await db.prepare(`SELECT COUNT(*) AS count FROM todos WHERE pinned = 1 AND NOT EXISTS (SELECT 1 FROM todo_queue_state WHERE todo_id=todos.id AND delegation IS NOT NULL AND generation=delegation_generation) AND id NOT IN (${placeholders(restoredIds.length)})`)
       .bind(...restoredIds).first<{ count: number }>()
-    : await db.prepare("SELECT COUNT(*) AS count FROM todos WHERE pinned = 1").first<{ count: number }>();
+    : await db.prepare("SELECT COUNT(*) AS count FROM todos WHERE pinned = 1 AND NOT EXISTS (SELECT 1 FROM todo_queue_state WHERE todo_id=todos.id AND delegation IS NOT NULL AND generation=delegation_generation)").first<{ count: number }>();
   let remainingPinSlots = Math.max(0, MAX_PINNED_TASKS - Number(existingPinned?.count ?? 0));
   let pinsClearedByPolicy = 0;
   const normalizedTodos = snapshot.todos.map((row) => row.status === "archived"

@@ -1,4 +1,5 @@
 import { enqueuePrompt, mutatePrompt, stagedQueue } from "./prompt-queue.mjs";
+import { taskQueueInput } from "./task-queue.mjs";
 import { captureActivity, activityUnchanged } from "./turn-state.mjs";
 import { ownedList, prepareQueueListMutation } from "./queue-lists.mjs";
 
@@ -12,11 +13,12 @@ export async function prepareLocalQueueMutation(runtime, method, botId, params, 
   if (listMutation) return listMutation;
   if (!["queue.add", "queue.update", "queue.delete", "queue.reorder", "queue.resume"].includes(method)) return null;
   if (method === "queue.add") {
-    if (bot.archived) throw new Error("Restore this bot first.");
+    if (bot.archived || bot.archiving || bot.deletedAt) throw new Error("Restore this bot first.");
     if (!runtime.ready) throw new Error("Codex is not ready.");
     ownedList(runtime, botId, params.listId);
-    const input = await runtime.messageInput(bot, params);
-    return () => enqueuePrompt(runtime, runtime.store.bot(botId), params, id, input);
+    const task = params.taskExportId ? await taskQueueInput(runtime, bot, params, id) : null;
+    const input = task?.input ?? await runtime.messageInput(bot, params);
+    return () => enqueuePrompt(runtime, runtime.store.bot(botId), task?.params ?? params, id, input, task?.source);
   }
   if (["queue.update", "queue.delete"].includes(method)) {
     const item = runtime.store.get("promptQueue", params.id);

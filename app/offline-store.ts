@@ -940,7 +940,7 @@ export async function commitRemoteTasks(input: {
       }
       for (const mutation of queuedMutations) {
         const todo = next.get(mutation.todoId);
-        if (todo && !deleted.has(todo.id)) next.set(todo.id, { ...todo, ...mutation.patch } as Todo);
+        if (todo && !deleted.has(todo.id)) next.set(todo.id, { ...todo, ...mutation.patch, queueDelegation: null } as Todo);
       }
       for (const action of queuedActions) {
         if (action.undoRequested) {
@@ -949,9 +949,13 @@ export async function commitRemoteTasks(input: {
         }
         for (const [rawId, patch] of Object.entries(action.optimisticPatches ?? {})) {
           const todo = next.get(Number(rawId));
-          if (todo) next.set(todo.id, { ...todo, ...patch });
+          if (todo) next.set(todo.id, { ...todo, ...patch, queueDelegation: null });
         }
         for (const id of action.optimisticDeletedIds ?? []) next.delete(id);
+      }
+      for (const upload of uploads.result as QueuedAttachment[]) {
+        const todo=next.get(upload.todoId);
+        if (todo && !upload.cancelled) next.set(todo.id,{...todo,queueDelegation:null});
       }
       const previous = new Map<number, Todo>((old.result as Todo[]).map((todo) => [todo.id, todo]));
       for (const id of previous.keys()) if (!next.has(id)) tasks.delete(id);

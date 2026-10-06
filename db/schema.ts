@@ -723,3 +723,6 @@ export const todoLegacyChatBackupChunks = sqliteTable("todo_legacy_chat_backup_c
 export const todoLegacyChatRetirementGuard = sqliteTable("todo_legacy_chat_retirement_guard", {
   operationId: text("operation_id").primaryKey(), valid: integer("valid").notNull(),
 }, table => [check("todo_legacy_chat_retirement_guard_valid", sql`${table.valid}=1`)]);
+
+export const todoQueueState = sqliteTable("todo_queue_state", {todoId:integer("todo_id").primaryKey(),generation:integer("generation").notNull().default(0),delegation:text("delegation"),delegationGeneration:integer("delegation_generation")});
+export const todoQueueReceipts = sqliteTable("todo_queue_receipts",{ownerKey:text("owner_key").notNull(),operationId:text("operation_id").notNull(),fingerprint:text("fingerprint").notNull(),todoId:integer("todo_id").notNull(),generation:integer("generation").notNull(),receipt:text("receipt").notNull()},t=>[primaryKey({columns:[t.ownerKey,t.operationId]})]);

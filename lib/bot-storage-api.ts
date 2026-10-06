@@ -1,3 +1,4 @@
+import { confirmTaskDelegation, type DelegationInput } from "../db/task-queue-delegation";
 import { BotStorage, StorageError, type BotStorageEnv } from "../db/bot-storage";
 import { botsOwner, secretMatches } from "./bots-auth";
 import { createS3Storage } from "./s3-storage";
@@ -29,6 +30,10 @@ export async function botStorageResponse(request: Request, environment: Environm
     const storage = new BotStorage(environment,owner,service); await storage.initialize();
     let result;
     switch (action) {
+      case "taskQueueDelegate": {
+        if(!service) throw new StorageError("Private queue acceptance confirmation required.",403,"forbidden");
+        result=await confirmTaskDelegation(environment,owner,input as unknown as DelegationInput); break;
+      }
       case "taskQueueExport": {
         if(!service) throw new StorageError("Private storage service receipt resolution required.",403,"forbidden");
         result=await new TaskQueueExports(environment,owner).resolve(String(input.taskExportId),String(input.botId)); break;

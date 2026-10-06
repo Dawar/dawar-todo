@@ -1,3 +1,4 @@
+import { confirmTaskQueue } from "./task-queue.mjs";
 import { SecureInputs, redactSecureNotification } from "./secure-input.mjs";
 import { SECURE_TOOLS } from "./secure-input-tools.mjs";
 import { nativeToolResult } from "./tool-result.mjs";
@@ -452,6 +453,11 @@ export class BotRuntime extends EventEmitter {
         }
       }
     }
+    if (op.method === "queue.taskConfirm") {
+      const value = await confirmTaskQueue(this, op.botId, op.params, op.id);
+      this.store.saveOperation(op.id, op.fingerprint, "done", { ...op, result: value });
+      return value;
+    }
     if (op.method === "schedule.dispatch") {
       const run = this.store.get("run", op.runId);
       if (run && run.botId === op.botId) {
@@ -538,7 +544,7 @@ export class BotRuntime extends EventEmitter {
   }
   snapshot() {
     return {
-      capabilities: { backgroundRunLanes: 1, scheduleDecisions: 1, singleThreadExecution: 1, peerInbox: 1, nativeGoals: 1, nativeConversation: 1, messageReplies: 1, secureInputs: 1, operatorCalls: 1, operatorInputQuestions: 1, historyCursorIndex: 1, messageBursts: 1, burstDiscard: 1, burstControls: 1, queueLists: 1, queueRelativeMoves: 1, queueSendNow: 1, teams: 1, ...(this.desktops ? { botDesktops: 1, botBrowserRetention: 1 } : {}) },
+      capabilities: { backgroundRunLanes: 1, scheduleDecisions: 1, singleThreadExecution: 1, peerInbox: 1, nativeGoals: 1, nativeConversation: 1, messageReplies: 1, secureInputs: 1, operatorCalls: 1, operatorInputQuestions: 1, historyCursorIndex: 1, messageBursts: 1, burstDiscard: 1, burstControls: 1, queueLists: 1, queueRelativeMoves: 1, queueSendNow: 1, ...(this.storage ? { taskQueues: 1 } : {}), teams: 1, ...(this.desktops ? { botDesktops: 1, botBrowserRetention: 1 } : {}) },
 
       teams: publicTeams(this),
       workByBot: this.store.bots().map(bot => this.primary.work(bot)),
@@ -587,6 +593,8 @@ export class BotRuntime extends EventEmitter {
       Array.isArray(params)
     )
       throw new Error("Invalid request.");
+    if ((method === "queue.taskConfirm" || method === "queue.add" && params.taskExportId) && (!request.clientId || trustedOrigin))
+      throw new Error("Task queue transfer requires the authenticated owner browser.");
     if(method.startsWith("secure.") && method!=="secure.list")throw Error("Sensitive input requires the dedicated encrypted channel; ordinary RPC is rejected.");
     if (botId && this.store.bot(String(botId)).deletedAt && method !== "bots.delete")
       throw Object.assign(new Error("This bot has been deleted. Its workspace and native history were retained."), { outcome: "rejected" });
@@ -636,7 +644,8 @@ export class BotRuntime extends EventEmitter {
       if (existing) {
         if (existing.fingerprint !== fingerprint)
           throw new Error("Operation ID was reused with different input.");
-        if (existing.status === "done") return existing.result;
+        if (existing.status === "done") return method === "queue.taskConfirm" ? confirmTaskQueue(this, botId, params, operationId) : existing.result;
+        if (method === "queue.taskConfirm") return this.reconcileOperation(existing);
         if (["dispatching", "uncertain"].includes(existing.status) ||
             ((inputMutation || lifecycleMutation) && existing.status === "failed" && existing.outcome !== "rejected")) {
           const result = await this.reconcileOperation(existing);
@@ -932,6 +941,7 @@ export class BotRuntime extends EventEmitter {
       }
       case "queueLists.list": return publicLists(this,bot.id);
       case "queue.send": return sendQueuedPrompt(this, bot, p, id, attempt);
+      case "queue.taskConfirm": return confirmTaskQueue(this, botId, p, id);
       case "queue.add":
       case "queue.resume":
         throw new Error("Local queue operations require atomic acceptance through handle().");
