@@ -8,6 +8,18 @@ type State = { page: Page | null; recent: Page | null; checkpoint: string | null
 export type PeerTransport = { owner: string; online: boolean; events: Set<(e: BotEvent) => void>;
   rpc<T>(method: string, botId: string, params: Record<string, unknown>, operationId?: string, options?: { owner: string }): Promise<T>;
   cache<T>(key: string, fallback: T): T; save(key: string, value: unknown): void };
+// Timeline presence and the existing workspace notice share one in-flight
+// metadata read. No cached response is execution authority on the next read.
+const statusReads = new WeakMap<PeerTransport, Map<string, Promise<BotPeerStatus>>>();
+export function readPeerStatus(client: PeerTransport, owner: string, botId: string) {
+  if (client.owner !== owner) return Promise.reject(Error("Discussion owner changed."));
+  let reads = statusReads.get(client);
+  if (!reads) { reads = new Map(); statusReads.set(client, reads); }
+  const key = JSON.stringify([owner,botId]), running = reads.get(key);
+  if (running) return running;
+  const read = client.rpc<BotPeerStatus>("peers.status",botId,{limit:12},undefined,{owner}).finally(() => { if (reads!.get(key) === read) reads!.delete(key); });
+  reads.set(key,read); return read;
+}
 const bytes = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).length;
 const sequence = (value: string) => /^\d+$/.test(value) && Number.isSafeInteger(Number(value));
 export function scopedPeer(meta: Meta, botId: string) {
@@ -50,6 +62,7 @@ export class PeerTimelineStore {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private epoch = 0;
   private eventSequence = 0;
+  private refreshing: number | null = null;
   private liveRows = new Map<string, { seq: number; meta: Meta }>();
   private bodyCount = 0;
   private bodyQueue: (() => void)[] = [];
@@ -70,7 +83,7 @@ export class PeerTimelineStore {
   getSnapshot = () => this.state;
   subscribe = (fn: () => void) => {
     this.listeners.add(fn);
-    if (!this.alive) { this.alive = true; this.epoch++; this.client.events.add(this.event); }
+    if (!this.alive) { this.alive = true; this.epoch++; this.refreshing = null; this.state = { ...this.state, busy: false }; this.client.events.add(this.event); }
     return () => { this.listeners.delete(fn); if (!this.listeners.size) { this.alive = false; this.epoch++; this.client.events.delete(this.event); if (this.timer) clearTimeout(this.timer); this.timer = null; } };
   };
   private valid(epoch = this.epoch) { return this.alive && epoch === this.epoch && this.client.owner === this.owner; }
@@ -131,8 +144,8 @@ export class PeerTimelineStore {
     if (!this.timer) this.timer = setTimeout(() => { this.timer = null; void this.refresh(); }, 100);
   };
   async refresh(resetPresence = false) {
-    if (!this.enabled || !this.valid() || !this.client.online || this.state.busy) return;
-    const epoch = this.epoch; this.publish({ busy: true });
+    if (!this.enabled || !this.valid() || !this.client.online || this.state.busy || this.refreshing === this.epoch) return;
+    const epoch = this.epoch; this.refreshing = epoch; this.publish({ busy: true });
     if (resetPresence) this.requests.clear();
     const before = this.eventSequence;
     try {
@@ -148,15 +161,16 @@ export class PeerTimelineStore {
       const selected = reading.length && reading.at(-1)!.arrivalSequence !== recent.exchanges.at(-1)?.arrivalSequence
         ? await this.read({ after: String(Number(reading[0].arrivalSequence) - 1) }) : recent;
       if (!this.valid(epoch)) return;
-      const status = await this.client.rpc<BotPeerStatus>("peers.status",this.botId,{limit:12},undefined,{owner:this.owner});
+      const latest = new Map([...selected.exchanges, ...recent.exchanges].map(e => [e.id, e]));
+      this.publish({ page: this.state.page ? { ...this.state.page, exchanges: this.state.page.exchanges.map(e => latest.get(e.id) ?? e) } : recent, recent, checkpoint: next.direction === "older" || next.complete ? next.highWater : this.state.checkpoint, pendingNewer: next.direction === "newer" && !next.complete ? next.nextCursor : null, changed: before !== this.eventSequence || !next.complete && next.direction === "newer", error: "", busy: false });
+      const status = await readPeerStatus(this.client,this.owner,this.botId);
       if (!this.valid(epoch)) return;
       if (!Array.isArray(status.requests) || status.requests.length > 12 || status.requests.some(r => ![r.senderBotId,r.recipientBotId].includes(this.botId))) throw Error("Discussion presence could not be verified.");
       if (before === this.eventSequence) for (const r of status.requests) this.requests.set(r.id,r);
       while(this.requests.size > 24) this.requests.delete(this.requests.keys().next().value!);
-      const latest = new Map([...selected.exchanges, ...recent.exchanges].map(e => [e.id, e]));
-      this.publish({ page: this.state.page ? { ...this.state.page, exchanges: this.state.page.exchanges.map(e => latest.get(e.id) ?? e) } : recent, recent, checkpoint: next.direction === "older" || next.complete ? next.highWater : this.state.checkpoint, pendingNewer: next.direction === "newer" && !next.complete ? next.nextCursor : null, changed: before !== this.eventSequence || !next.complete && next.direction === "newer", error: "" });
+      this.publish({});
     } catch (reason) { if (this.valid(epoch)) this.publish({ error: reason instanceof Error ? reason.message : "Reconnect to read bot messages." }); }
-    finally { if (this.valid(epoch)) this.publish({ busy: false }); }
+    finally { if (this.refreshing === epoch) this.refreshing = null; if (this.valid(epoch)) this.publish({ busy: false }); }
   }
   async navigate(direction: "older" | "newer" | "recent") {
     if (!this.valid() || !this.client.online || this.state.busy) return;

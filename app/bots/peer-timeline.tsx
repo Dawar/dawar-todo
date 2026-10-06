@@ -103,7 +103,7 @@ export function PeerRootControls({ owner, botId, rootId, online }: { owner: stri
       <p>Stop discussion holds new discussion intake. Already accepted or running work continues; each bot’s Stop and goals are separate.</p>
       {!action.intent && <div>{root.state !== "active" && root.ownerControls.canContinue && <button type="button" disabled={!online || action.busy || !action.ready} onClick={() => perform("continue")}>Continue discussion</button>}{root.ownerControls.canStop && root.state !== "stopped" && <button type="button" disabled={!online || action.busy || !action.ready} onClick={() => perform("stop")}>Stop discussion</button>}</div>}
     </>}
-    {(action.intent || action.error) && <p role="status">{action.error || "Confirming the saved discussion action…"}<button type="button" disabled={!online || action.busy} onClick={() => void action.retry().catch(() => {})}>Check saved action</button></p>}
+    {(action.intent || action.error) && <p role="status">{action.error || "Confirming the saved discussion action…"}{action.intent && <button type="button" disabled={!online || action.busy} onClick={() => void action.retry().catch(() => {})}>Check saved action</button>}<button type="button" disabled={!online || action.busy} onClick={() => void refresh()}>Read current discussion</button></p>}
     {error && <p role="alert">{error}<button type="button" disabled={!online} onClick={() => void refresh()}>Read current discussion</button></p>}
   </section>;
 }

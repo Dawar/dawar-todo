@@ -9,6 +9,7 @@ import { BotMessage } from './message';
 import { ReturnedArtifact } from './returned-artifact';
 import { useRunAction } from './run-action';
 import { PeerRootControls } from './peer-timeline';
+import { readPeerStatus } from './peer-timeline-store';
 import './single-thread.css';
 const currentExecution = (request: PeerRequest, bots: Bot[], online: boolean) => online && Boolean(request.executions?.some(e => bots.some(b => b.id === e.botId && ["running", "waiting"].includes(b.status) && b.activeTurnId === e.turnId)));
 const label = (request: PeerRequest, bots: Bot[], online: boolean) => ({ queued: request.root?.state === 'paused' ? 'Discussion paused' : request.root?.state === 'stopped' ? 'Discussion stopped' : 'Up next', working: currentExecution(request, bots, online) ? 'Working together' : 'Waiting for a reply', waiting: 'Waiting for a reply', completed: 'Result ready', cancelled: 'Cancelled', failed: 'Needs attention', 'delivery-unconfirmed': 'Delivery needs confirmation' }[request.state]);
@@ -46,7 +47,7 @@ export function useDiscussionStatus(owner: string, botId: string | null, online:
       const found = new Map<string, PeerRequest>();
       // One representative page. Its absence never settles/deletes other
       // requests; all original records stay navigable in Discussions.
-      const next: { requests: PeerRequest[]; nextCursor: string | null; totals?: BotPeerStatus["totals"] } = paged ? await client.rpc<BotPeerStatus>("peers.status", botId, { limit: 12 }, undefined, { owner }) : await client.rpc<{ requests: PeerRequest[]; nextCursor: string | null }>("peers.list", botId, { limit: 12 }, undefined, { owner });
+      const next: { requests: PeerRequest[]; nextCursor: string | null; totals?: BotPeerStatus["totals"] } = paged ? await readPeerStatus(client, owner, botId) : await client.rpc<{ requests: PeerRequest[]; nextCursor: string | null }>("peers.list", botId, { limit: 12 }, undefined, { owner });
       if (!live || client.owner !== owner) return;
       if (!Array.isArray(next.requests) || next.requests.length > 12 || next.requests.some(r => !relevant(r))) throw Error("Invalid discussion metadata");
       for (const r of next.requests) found.set(r.id, { ...r, result: null });
