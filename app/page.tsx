@@ -1411,6 +1411,12 @@ const SubscribedTaskRow = memo(function SubscribedTaskRow(props: React.Component
   return current ? <TaskRow {...props} todo={current} now={taskRowClock(current, props.now)} /> : null;
 });
 
+function resizeCapture(textarea: HTMLTextAreaElement) {
+  textarea.style.overflowY = "hidden";
+  textarea.style.height = "auto";
+  textarea.style.height = `${textarea.scrollHeight}px`;
+}
+
 export default function Home() {
   const [loading, setLoading] = useState(true);
   const [todos, setTodos] = useTaskList();
@@ -2458,11 +2464,37 @@ export default function Home() {
     setViewerCopyState("idle");
   }, [viewerAttachment?.id]);
 
-  function resizeCapture(textarea: HTMLTextAreaElement) {
-    textarea.style.height = "auto";
-    textarea.style.height = `${Math.min(textarea.scrollHeight, 120)}px`;
-    textarea.style.overflowY = textarea.scrollHeight > 120 ? "auto" : "hidden";
-  }
+  useLayoutEffect(() => {
+    if (captureRef.current) resizeCapture(captureRef.current);
+  }, [newTitle]);
+
+  useLayoutEffect(() => {
+    const textarea = captureRef.current;
+    if (!textarea) return;
+    let frame: number | null = null;
+    const scheduleResize = () => {
+      if (frame !== null) return;
+      frame = window.requestAnimationFrame(() => {
+        frame = null;
+        resizeCapture(textarea);
+      });
+    };
+    // Ignore height notifications from our own sizing, and resize outside the
+    // observer delivery so width reflow cannot create a feedback loop.
+    let width = 0;
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(([entry]) => {
+      if (entry.contentRect.width === width) return;
+      width = entry.contentRect.width;
+      scheduleResize();
+    });
+    observer?.observe(textarea);
+    if (!observer) window.addEventListener("resize", scheduleResize);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener("resize", scheduleResize);
+      if (frame !== null) window.cancelAnimationFrame(frame);
+    };
+  }, []);
 
   async function persistCaptureDraft(draft: CaptureDraft, source: string) {
     if (!navigator.onLine) {
@@ -4762,7 +4794,7 @@ export default function Home() {
                 ref={captureRef}
                 disabled={!captureReady || adding}
                 value={newTitle}
-                onChange={(event) => { updateCaptureTitle(event.target.value, "typing"); resizeCapture(event.currentTarget); }}
+                onChange={(event) => updateCaptureTitle(event.target.value, "typing")}
                 onBlur={flushCaptureDraft}
                 onPaste={(event) => {
                   const files = clipboardAttachments(event);
@@ -4779,7 +4811,7 @@ export default function Home() {
                 aria-label="Add a task"
                 aria-busy={recognizingCaptureTitle}
                 maxLength={2000}
-                className="min-h-10 max-h-[120px] min-w-0 flex-1 resize-none overflow-hidden bg-transparent py-2 text-[16px] leading-6 text-[#151816] outline-none placeholder:text-[#929994]"
+                className="min-h-10 min-w-0 flex-1 resize-none overflow-hidden bg-transparent py-2 text-[16px] leading-6 text-[#151816] outline-none placeholder:text-[#929994]"
               />
             </div>
             <div className="flex shrink-0 items-center gap-2">
