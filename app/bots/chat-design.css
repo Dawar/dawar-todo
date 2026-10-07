@@ -7,12 +7,12 @@
 .bots-icon-button { min-width: 40px; height: 40px; border-radius: 12px; }
 .bots-screen button, .bots-screen a, .bots-screen summary { -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
 .bots-screen :is(button, a, summary, select, input):focus-visible { outline: 2px solid #388661; outline-offset: 3px; }
-.bots-timeline { flex: 1; min-height: 0; position: relative; display: flex; }
+.bots-timeline { flex: 1; min-height: 0; position: relative; display: flex; flex-direction: column; }
 .bots-messages { padding: 24px max(24px, calc((100% - var(--chat-width)) / 2)); overflow-anchor: none; }
 .bots-message { margin-block: 22px; }
 .bots-message-markdown { line-height: 1.7; }
 .bots-bubble { border-radius: 20px 20px 6px 20px; }
-.bots-jump-latest { position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%); display: inline-flex; align-items: center; gap: 7px; min-height: 40px; padding: 8px 14px; margin: 0; white-space: nowrap; border: 1px solid #dce5df; border-radius: 24px; background: #fff; color: #305442; box-shadow: 0 3px 16px #1c3a2520; font-size: 12px; font-weight: 600; z-index: 3; }
+.bots-jump-latest { position: static; transform: none; display: inline-flex; align-items: center; gap: 7px; min-height: 40px; padding: 8px 14px; margin: 8px auto; white-space: nowrap; border: 1px solid #dce5df; border-radius: 24px; background: #fff; color: #305442; box-shadow: 0 3px 16px #1c3a2520; font-size: 12px; font-weight: 600; }
 .bots-jump-latest:hover { background: #f3f8f4; }
 .bots-activity { border: 1px solid #e7ece8; border-radius: 12px; background: #f8faf8; margin-block: 14px; }
 .bots-activity > summary { min-height: 44px; padding: 10px 13px; color: #53695c; font-weight: 500; }
@@ -114,7 +114,6 @@ details[open] > summary > .bots-disclosure-chevron { transform: rotate(90deg); }
   .bots-settings-context { display: block; padding: 3px 6px 0; color: #607869; font-size: 11px; }
   .bots-composer, .bots-draft-status, .bots-upload-list { width: calc(100% - 24px); }
   .bots-message-markdown { font-size: 15px; line-height: 1.65; }
-  .bots-jump-latest { bottom: 10px; }
 }
 @media (prefers-reduced-motion: reduce) {
   .bots-disclosure-chevron, .bots-composer, .bots-send { transition: none; }

@@ -38,6 +38,12 @@ export function useFeedScroll(timeline: BotTimeline, state: TimelineState, onlin
     // visible edges, rather than sixteen aliases of the first collapsed row.
     visibleAnchors.current = visible.length > 16 ? [...visible.slice(0, 8), ...visible.slice(-8)] : visible;
     const anchor = visibleAnchors.current[0];
+    // An older page can mount this same reply as a canonical row. Retain the
+    // context reading intent through that transition; DOM placement alone
+    // must not turn the next gesture into a jump to a collapsed tool window.
+    const sameContext = saved.current.tailContext && anchor?.key === timeline.resolveKey(saved.current.anchor)
+      && stateRef.current.entries.some(entry => historyKey(entry.turnId, entry.id) === anchor.key && (entry.type === 'agentMessage' || entry.type === 'userMessage'));
+    if (anchor && sameContext) anchor.tailContext = true;
     saved.current = { anchor: anchor?.key ?? null, offset: anchor?.offset ?? 0, following: following.current, ...(anchor?.tailContext ? { tailContext: true } : {}) };
     timeline.position(saved.current);
   }, [timeline]);
@@ -105,7 +111,10 @@ export function useFeedScroll(timeline: BotTimeline, state: TimelineState, onlin
         const nextRange = historyWindow(entries, end, gaps);
         const inWindow = (key: string | null) => entries.findIndex(entry => historyKey(entry.turnId, entry.id) === timeline.resolveKey(key));
         const anchor = inWindow(saved.current.anchor);
-        if (anchor < nextRange.first || anchor >= nextRange.last) {
+        // Supplementary readable context sits outside the native body window.
+        // Moving that window must not replace its visible reading anchor with
+        // a collapsed tool alias and unmount the reply on the next render.
+        if (!saved.current.tailContext && (anchor < nextRange.first || anchor >= nextRange.last)) {
           const retained = visibleAnchors.current.find(candidate => { const at = inWindow(candidate.key); return !candidate.tailContext && at >= nextRange.first && at < nextRange.last; });
           const fallback = entries[toward < 0 ? nextRange.last - 1 : nextRange.first];
           saved.current = { anchor: retained?.key ?? historyKey(fallback.turnId, fallback.id), offset: retained?.offset ?? edgeOffset, following: false };

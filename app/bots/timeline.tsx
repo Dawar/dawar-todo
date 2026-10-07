@@ -185,11 +185,12 @@ export function BotConversation({ owner, bot, online, children, onOpenCall, onRe
   // A supplementary context preview can share a canonical identity with an
   // older cached item. Keep a preview being read when newer output arrives;
   // it must neither recenter the native window nor repeat a mounted item.
+  // Other message groups (including peer arrivals) do not replace that reply.
   const pinnedContext = state.position.tailContext && !state.position.following
     ? [...state.contextEntries, ...state.entries].find(entry => historyKey(entry.turnId, entry.id) === timeline.resolveKey(state.position.anchor)) : undefined;
-  const mountedKeys = new Set(state.entries.slice(first, last).map(entry => historyKey(entry.turnId, entry.id)));
+  const mountedKeys = new Set(state.entries.slice(first, last).map(entry => timeline.resolveKey(historyKey(entry.turnId, entry.id))));
   const aliases = new Set(peers.rows.flatMap(peerAliases));
-  const contextEntries = (pinnedContext && !state.contextEntries.some(entry => historyKey(entry.turnId, entry.id) === historyKey(pinnedContext.turnId, pinnedContext.id)) ? [pinnedContext] : state.contextEntries).filter(entry => !mountedKeys.has(historyKey(entry.turnId, entry.id)) && (!entry.peerAlias || !aliases.has(entry.peerAlias)));
+  const contextEntries = (pinnedContext && !state.contextEntries.some(entry => historyKey(entry.turnId, entry.id) === historyKey(pinnedContext.turnId, pinnedContext.id)) ? [pinnedContext] : state.contextEntries).filter(entry => !mountedKeys.has(timeline.resolveKey(historyKey(entry.turnId, entry.id))) && (!entry.peerAlias || !aliases.has(entry.peerAlias)));
   const rootRows = new Map(state.entries.slice(first, last).flatMap(e => e.peer ? [[e.peer.rootId, e.peer.id] as const] : []));
   const namedBots = botsClient.snapshot?.bots ?? [bot];
   return <div className="bots-timeline"><div className="bots-messages" ref={scroll} tabIndex={0} {...feed.handlers}><div ref={content}>
@@ -204,7 +205,7 @@ export function BotConversation({ owner, bot, online, children, onOpenCall, onRe
     {peerSupported && <PeerPaging store={peers.store} online={online} capture={feed.capture}/>}
     {state.loading && !state.entries.length && <div className="bots-history-skeleton" role="status" aria-label="Loading conversation"><span /><span /><span /><span /></div>}
     {!state.loading && !state.error && !state.entries.length && !state.olderCursor && <div className="bots-conversation-start"><span className="bots-start-icon"><MessageCircle size={26} strokeWidth={1.4} aria-hidden="true" /></span><h2>{bot.name}</h2><p>{bot.purpose || "What would you like to work on?"}</p></div>}
-    {(pinnedContext || last === state.entries.length && !groups.some((group) => group.kind === "message" || group.kind.startsWith("scheduled:"))) && contextEntries.length > 0 && <section aria-label="Latest readable context" data-history-context>
+    {(pinnedContext || last === state.entries.length) && contextEntries.length > 0 && <section aria-label="Latest readable context" data-history-context>
       <p className="bots-system-note">Latest readable messages. Intervening work remains accessible through earlier history.</p>
       {contextEntries.map((entry) => <TimelineEntry {...replyProps} onOpenCall={onOpenCall} key={historyKey(entry.turnId, entry.id)} entry={entry} timeline={timeline} attachments={state.attachments} download={download} />)}
     </section>}
