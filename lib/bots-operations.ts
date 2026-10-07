@@ -99,6 +99,8 @@ export type BotOperations = {
     params: { runId?: string; turnId: string; cursor?: string | null };
     result: { turn: import("./codex-protocol/v2/Turn").Turn | null; nextCursor: string | null };
   };
+  "botAdmin.list": { params: Record<string, never>; result: { requests: import("./bot-admin-types").BotAdminRequest[] } };
+  "botAdmin.control": { params: { id: string; expectedRevision: number; specHash: string; decision: "approve" | "revoke" }; result: { request: import("./bot-admin-types").BotAdminRequest } };
   "bots.create": { params: { name: string; purpose?: string }; result: Bot };
   "bots.update": {
     params: Partial<Pick<Bot, "name" | "model" | "effort" | "serviceTier" | "mode" | "burstQuietSeconds">> & { avatar?: Pick<BotAvatar, "shape" | "color"> };

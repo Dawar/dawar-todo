@@ -35,6 +35,7 @@ import {
 } from "lucide-react";
 import type { Bot } from "./single-thread-contract";
 import { BotAvatar as Avatar } from "./bot-avatar";
+import { BotAdminApprovals } from "./bot-admin-approvals";
 import { PersonalitySettings } from "./personality-settings";
 import { WorkOverview, AutomaticInbox, workLabel } from "./work-overview";
 import { PeerConversations, DiscussionStatus, useDiscussionStatus, discussionNeedsAttention } from "./peer-conversations";
@@ -847,6 +848,7 @@ export function BotsWorkspace() {
                 </form>
                 <SavedDrafts owner={owner} bots={bots} composer={composer}/><p className="bots-profile-hint">{bot.purpose}</p><p className="bots-profile-hint">Ask {bot.name} to change its personality, instructions, or memory.</p>
                 {snapshot?.capabilities?.singleThreadExecution === 1 && <PersonalitySettings key={scope} bot={bot} snapshot={snapshot} online={online} />}
+                {snapshot?.capabilities?.botAdministration === 1 && bot.executionMode === "single-thread" && <BotAdminApprovals key={`admin:${scope}`} owner={owner} botId={bot.id} botName={bot.name} online={online} />}
                 {teamsSupported && <TeamAssignment key={`team:${scope}`} owner={owner} bot={bot} teams={teams} online={online} onManage={() => setShowTeams(true)} />}
                 <a className="bots-notification-link" href="/settings">Notification settings</a>
                 <div className="bots-profile-actions">

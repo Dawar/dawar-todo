@@ -49,10 +49,10 @@ export function publicTeams(runtime) {
     .list("team")
     .filter((t) => !t.deletedAt)
     .sort((a, b) => a.position - b.position || a.id.localeCompare(b.id))
-    .map(({ memory: _memory, ...t }) => ({
-      ...t,
-      memberCount: members(runtime, t.id).length,
-    }));
+    .map(({ memory: _memory, ...t }) => {
+      void _memory; // Private shared memory is omitted from the owner catalog.
+      return { ...t, memberCount: members(runtime, t.id).length };
+    });
 }
 export async function teamReference(runtime, bot) {
   if (!bot.teamId) return null;
@@ -277,12 +277,13 @@ async function prepare(runtime, method, botId, p, id) {
     }),
   });
 }
-export async function acceptTeamOperation(runtime, request, fingerprint) {
+export async function acceptTeamOperation(runtime, request, fingerprint, beforeCommit = null) {
   const { method, botId, params, operationId } = request;
   if (!methods.has(method)) return null;
   try {
     const mutation = await prepare(runtime, method, botId, params, operationId);
     const result = runtime.store.transaction(() => {
+      beforeCommit?.();
       const result = mutation();
       runtime.store.saveOperation(operationId, fingerprint, "done", {
         method,

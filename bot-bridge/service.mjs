@@ -32,6 +32,7 @@ const runtime = new BotRuntime({
   codex,
   root: process.env.BOTS_ROOT ?? join(homedir(), "bots"),
   defaultTimeZone: process.env.BOTS_TIME_ZONE ?? "UTC",
+  adminLeadIds: JSON.parse(process.env.BOTS_ADMIN_LEAD_IDS ?? '[]'),
 });
 if (process.env.BOTS_STORAGE_SERVICE_SECRET) runtime.storage = new BotStorageClient(runtime,{
   url:process.env.BOTS_SITE_URL, credential:process.env.BOTS_STORAGE_SERVICE_SECRET,

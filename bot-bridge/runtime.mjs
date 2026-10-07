@@ -1,3 +1,4 @@
+import { BotAdministration, BOT_ADMIN_TOOL } from './bot-admin.mjs';
 import { confirmTaskQueue } from "./task-queue.mjs";
 import { SecureInputs, redactSecureNotification } from "./secure-input.mjs";
 import { SECURE_TOOLS } from "./secure-input-tools.mjs";
@@ -134,6 +135,7 @@ const schema = (properties, required = []) => ({
 });
 const str = { type: "string" };
 export const dynamicTools = [
+  { type: 'function', ...BOT_ADMIN_TOOL },
   { type: 'function', ...MEMORY_TOOL },
   ...SECURE_TOOLS.map(tool => ({type:"function",...tool})),
   { type: "function", ...TEAM_TOOL },
@@ -189,7 +191,7 @@ export const dynamicTools = [
 ];
 
 export class BotRuntime extends EventEmitter {
-  constructor({ store, codex, root, defaultTimeZone = "UTC" }) {
+  constructor({ store, codex, root, defaultTimeZone = "UTC", adminLeadIds = [] }) {
     super();
     Object.assign(this, {
       store,
@@ -197,6 +199,7 @@ export class BotRuntime extends EventEmitter {
       root: resolve(root),
       defaultTimeZone: store.meta("timeZone") ?? defaultTimeZone,
     });
+    this.botAdmin = new BotAdministration(this, adminLeadIds);
     this.epoch = randomUUID();
     this.historyReads = new HistoryReads(this);
     this.primary = new PrimaryExecution(this);
@@ -546,8 +549,9 @@ export class BotRuntime extends EventEmitter {
   }
   snapshot() {
     return {
-      capabilities: { botMemoryMaintenance: 1, backgroundRunLanes: 1, scheduleDecisions: 1, singleThreadExecution: 1, peerInbox: 1, peerRootControls: 1, peerBodyPaging: 1, nativeGoals: 1, nativeConversation: 1, messageReplies: 1, secureInputs: 1, operatorCalls: 1, operatorInputQuestions: 1, historyCursorIndex: 1, messageBursts: 1, burstDiscard: 1, burstControls: 1, queueLists: 1, queueRelativeMoves: 1, queueSendNow: 1, ...(this.storage ? { taskQueues: 1 } : {}), teams: 1, ...(this.desktops ? { botDesktops: 1, botBrowserRetention: 1 } : {}) },
+      capabilities: { botAdministration: 1, botMemoryMaintenance: 1, backgroundRunLanes: 1, scheduleDecisions: 1, singleThreadExecution: 1, peerInbox: 1, peerRootControls: 1, peerBodyPaging: 1, nativeGoals: 1, nativeConversation: 1, messageReplies: 1, secureInputs: 1, operatorCalls: 1, operatorInputQuestions: 1, historyCursorIndex: 1, messageBursts: 1, burstDiscard: 1, burstControls: 1, queueLists: 1, queueRelativeMoves: 1, queueSendNow: 1, ...(this.storage ? { taskQueues: 1 } : {}), teams: 1, ...(this.desktops ? { botDesktops: 1, botBrowserRetention: 1 } : {}) },
 
+      botAdminLeadIds: [...this.botAdmin.leads],
       teams: publicTeams(this),
       workByBot: this.store.bots().map(bot => this.primary.work(bot)),
       ...this.runs.snapshot(),
@@ -597,6 +601,7 @@ export class BotRuntime extends EventEmitter {
       Array.isArray(params)
     )
       throw new Error("Invalid request.");
+    if (method.startsWith("botAdmin.")) return this.botAdmin.owner(request, trustedOrigin);
     if ((method === "queue.taskConfirm" || method === "queue.add" && params.taskExportId) && (!request.clientId || trustedOrigin))
       throw new Error("Task queue transfer requires the authenticated owner browser.");
     if(method.startsWith("secure.") && method!=="secure.list")throw Error("Sensitive input requires the dedicated encrypted channel; ordinary RPC is rejected.");
@@ -715,7 +720,7 @@ export class BotRuntime extends EventEmitter {
       const data = { method, botId, params, createdAt: now() };
       this.store.saveOperation(operationId, fingerprint, "dispatching", data);
       try {
-        const result = await this.dispatch(method, botId, params, operationId, attempt);
+        const result = await this.dispatch(method, botId, params, operationId, attempt, trustedOrigin?.authority === "bot-admin-provisioning" ? trustedOrigin.authorizeProvisioning : null);
         this.store.saveOperation(operationId, fingerprint, "done", {
           ...data,
           result,
@@ -796,7 +801,7 @@ export class BotRuntime extends EventEmitter {
       throw error;
     }
   }
-  async dispatch(method, botId, p, id, attempt = null) {
+  async dispatch(method, botId, p, id, attempt = null, authorizeProvisioning = null) {
     if (method === "snapshot") return this.snapshot();
     if (method === "secure.list") return this.secure.list(this.store.bot(String(botId)));
     if (method === "teams.list") return publicTeams(this);
@@ -847,7 +852,7 @@ export class BotRuntime extends EventEmitter {
         version: CODEX_VERSION,
       };
     if (method === "events") return this.store.replay(Number(p.after) || 0);
-    if (method === "bots.create") return this.create(p, id);
+    if (method === "bots.create") return this.create(p, id, authorizeProvisioning);
     if (method === "settings.timeZone") {
       new Intl.DateTimeFormat("en", { timeZone: p.timeZone }).format();
       this.defaultTimeZone = p.timeZone;
@@ -1036,7 +1041,7 @@ export class BotRuntime extends EventEmitter {
             ? `${BOT_INSTRUCTIONS}\n\n${DIRECT_INSTRUCTIONS}${this.desktops ? `\n\n${desktopInstructions(bot)}` : ""}`
             : BOT_INSTRUCTIONS,
           config: { ...(this.manager ? this.manager.config(bot) : {}), ...(this.primary.single(bot) ? { "features.multi_agent": false } : {}) },
-          dynamicTools,
+          dynamicTools: dynamicTools.filter(t => t.name !== BOT_ADMIN_TOOL.name || this.botAdmin.allowed(bot)),
           serviceName: "dawar-todo-bots",
         });
         this.loaded.add(result.thread.id);
@@ -1214,7 +1219,8 @@ export class BotRuntime extends EventEmitter {
         throw new Error("Unsupported Bots operation.");
     }
   }
-  async create(p, id) {
+  async create(p, id, authorizeProvisioning = null) {
+    authorizeProvisioning?.();
     if (!this.ready) throw new Error("Codex is not ready.");
     const preferred = this.models.find(model => model.model === this.newBotDefaults.model);
     if (!preferred?.supportedReasoningEfforts.some(option => option.reasoningEffort === this.newBotDefaults.effort))
@@ -1256,8 +1262,10 @@ export class BotRuntime extends EventEmitter {
       activeTurnId: null,
       error: null,
     };
+    authorizeProvisioning?.();
     this.saveBot(bot);
     await initializeProfile(bot);
+    authorizeProvisioning?.();
     const result = await this.codex.call("thread/start", {
       cwd: bot.cwd,
       model: bot.model,
@@ -1274,7 +1282,7 @@ export class BotRuntime extends EventEmitter {
         ...(this.primary.single(bot) ? { "features.multi_agent": false } : {}),
         ...(this.manager ? this.manager.config(bot) : {}),
       },
-      dynamicTools,
+      dynamicTools: dynamicTools.filter(t => t.name !== BOT_ADMIN_TOOL.name || this.botAdmin.allowed(bot)),
       serviceName: "dawar-todo-bots",
     });
     // Save the mapping before any subsequent RPC can fail.
@@ -2254,6 +2262,10 @@ export class BotRuntime extends EventEmitter {
     if (SECURE_TOOLS.some(tool=>tool.name===p.tool)) {
       if(origin || p.threadId && p.threadId!==bot.threadId)throw Error("Secure input belongs to this bot's current primary thread.");
       return this.secure.tool(bot,p.tool,args,p.callId);
+    }
+    if (p.tool === BOT_ADMIN_TOOL.name) {
+      if(origin) throw Error("Bot administration belongs to the calling bot’s primary thread.");
+      return this.botAdmin.tool(bot,args,{authority:"native-tool",botId:bot.id,threadId:p.threadId,turnId:p.turnId});
     }
     switch (p.tool) {
       case "bots_team": {
