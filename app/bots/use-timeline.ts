@@ -48,15 +48,46 @@ export function useBotTimeline(owner: string, botId: string, online: boolean) {
   const state = useSyncExternalStore(timeline.subscribe, timeline.getSnapshot, timeline.getSnapshot);
   useEffect(() => {
     let active = true;
+    let checkedAt = 0;
+    const observation = () => {
+      const bot = botsClient.snapshot?.bots.find(bot => bot.id === botId);
+      return bot ? JSON.stringify([bot.threadId, bot.updatedAt]) : "";
+    };
+    let observed = observation(), pendingObservation = false;
+    const current = () => active && botsClient.owner === owner;
+    const checkLatest = () => {
+      if (!current() || !botsClient.online || document.hidden || !pendingObservation && Date.now() - checkedAt < 10_000) return;
+      pendingObservation = false;
+      checkedAt = Date.now();
+      void timeline.refreshLatest();
+    };
+    // A fresh sidebar snapshot can arrive without the corresponding native
+    // events after suspension/reconnect. Heal the selected conversation too.
+    const unsubscribe = botsClient.subscribe(() => {
+      if (!current()) return;
+      const next = observation();
+      if (!next || next === observed) return;
+      observed = next; pendingObservation = true;
+      if (botsClient.online && !document.hidden) { pendingObservation = false; timeline.invalidateLatest(); }
+    });
+    window.addEventListener("focus", checkLatest);
+    window.addEventListener("pageshow", checkLatest);
+    document.addEventListener("visibilitychange", checkLatest);
     void (async () => {
       await timeline.hydrate();
       if (!timeline.getSnapshot().cached) {
         const legacy = await botsClient.cachedHistory(botId);
         if (active && botsClient.owner === owner && legacy) timeline.seed(legacy.turns, legacy.attachments);
       }
-      if (active && botsClient.owner === owner) await timeline.refresh();
+      if (current()) { checkedAt = Date.now(); await timeline.refreshLatest(); }
     })();
-    return () => { active = false; void timeline.flush(); };
+    return () => {
+      active = false; unsubscribe();
+      window.removeEventListener("focus", checkLatest);
+      window.removeEventListener("pageshow", checkLatest);
+      document.removeEventListener("visibilitychange", checkLatest);
+      void timeline.flush();
+    };
   }, [timeline, owner, botId, online]);
   return { timeline, state };
 }

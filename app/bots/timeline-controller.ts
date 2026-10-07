@@ -11,6 +11,7 @@ import { timelineCache, type createTimelineCache, type TimelineMetadata } from "
 
 export type TimelineTransport = {
   owner: string; online: boolean;
+  snapshot?: { bots: { id: string; threadId: string | null }[] } | null;
   rpc<T>(method: "history.view" | "history.detail", botId: string, params?: Record<string, unknown>): Promise<T>;
 };
 export type TimelineState = {
@@ -89,6 +90,8 @@ export class BotTimeline {
   private dirty = new Map<string, HistoryEntry>();
   private hydration?: Promise<void>;
   private request?: Promise<void>;
+  private latestRequest?: Promise<void>;
+  private latestCursor: string | null = null;
   private olderRequest?: Promise<void>;
   private gapRequests = new Map<string, Promise<void>>();
   private write?: Promise<void>;
@@ -162,7 +165,7 @@ export class BotTimeline {
     this.hydration ??= (async () => {
       try {
         const cached = await this.cache.read(this.owner, this.botId);
-        if (!cached || this.disposed) return;
+        if (!cached || this.disposed || this.transport.owner !== this.owner) return;
         const live = this.state.eventCursor;
         const liveDirty = new Map(this.dirty);
         for (const { turnId, ...audience } of cached.metadata.turnAudiences ?? [])
@@ -172,25 +175,59 @@ export class BotTimeline {
         this.merge(cached.entries, true, -1); this.dirty = liveDirty;
         const m = cached.metadata; this.cachedKeys = new Set(m.order ?? []);
         const boundaries = historyBoundaries(this.state.entries, this.mapGaps(m.gaps ?? []), m.olderCursor, cached.entries);
-        this.publish({ revision: m.revision.endsWith(":conversation-v8") ? m.revision : "", eventCursor: Math.max(live, m.eventCursor), ...boundaries,
+        const present = new Set(cached.entries.map(entry => historyKey(entry.turnId, entry.id)));
+        const intact = m.order.every(key => present.has(key));
+        this.publish({ revision: intact && m.revision.endsWith(":conversation-v8") ? m.revision : "", eventCursor: Math.max(live, m.eventCursor), ...boundaries,
           partialTurn: m.partialTurn, attachments: m.attachments, contextEntries: conversationEntries(m.contextEntries ?? [], this.turnAudiences), complete: m.complete && !boundaries.olderCursor && !boundaries.gaps.length, position: { ...(m.position ?? this.state.position), anchor: this.resolveKey(m.position?.anchor ?? null) }, cached: true }, true);
         this.scheduleWrite();
       } catch (e) { this.publish({ error: `Offline history cache unavailable: ${String(e)}` }, true); }
     })();
     return this.hydration;
   }
+  /** Cache revisions describe an earlier projection, not proof of the live
+   * tail. Opening/reconnecting/resuming checks one bounded latest page without
+   * throwing away older pages or changing the user's reading position. */
+  refreshLatest() {
+    if (this.latestRequest) return this.latestRequest;
+    this.latestRequest = (async () => {
+      await this.hydrate();
+      // A conditional request already in flight cannot satisfy this check.
+      // Coalesce its callers into one subsequent unconditional projection.
+      await this.request;
+      if (!this.transport.online || this.transport.owner !== this.owner || this.disposed) return;
+      this.latestCursor = null;
+      this.state = { ...this.state, revision: "" };
+      await this.refresh();
+    })().finally(() => { this.latestRequest = undefined; });
+    return this.latestRequest;
+  }
+  invalidateLatest() { if (!this.disposed && this.transport.owner === this.owner) this.scheduleRefresh(); }
+  recoverLatest() { return this.latestCursor ? this.refresh() : this.refreshLatest(); }
+  private currentThread() { return this.transport.snapshot?.bots.find(bot => bot.id === this.botId)?.threadId; }
   async refresh() {
     await this.hydrate();
     if (!this.transport.online || this.transport.owner !== this.owner || this.disposed) return;
     if (this.request) return this.request;
     const startCursor = this.state.eventCursor;
+    const threadId = this.currentThread();
+    const latestCursor = this.latestCursor;
     this.publish({ loading: true, error: "" }, true);
     this.request = (async () => {
       try {
-        const response = await this.transport.rpc<HistoryResponse>("history.view", this.botId, { projection: "conversation", revision: this.state.revision || undefined, after: this.state.eventCursor });
+        const response = await this.transport.rpc<HistoryResponse>("history.view", this.botId, {
+          projection: "conversation", ...(latestCursor ? { cursor: latestCursor } : { revision: this.state.revision || undefined }), after: this.state.eventCursor });
         if (this.disposed || this.transport.owner !== this.owner) return;
+        if (threadId !== this.currentThread()) { this.scheduleRefresh(); return; }
+        if (threadId && response.context?.threadId && response.context.threadId !== threadId)
+          throw Error("The conversation changed while loading. Reconnect and reload its history.");
         if (response.kind === "events") for (const event of response.events) this.receive(event);
         if (response.kind === "page") {
+          if (!response.entries.length && response.olderCursor === latestCursor && latestCursor)
+            throw Error("Recent history did not advance. Reconnect and reload the conversation.");
+          // Filtered native pages must not make an old cached tail look current.
+          // Retain the new cursor separately from the older reading window;
+          // Reload conversation advances exactly one page, never a scan loop.
+          this.latestCursor = !response.entries.length ? response.olderCursor : null;
           this.rememberPage(response);
           const known = new Set(this.state.entries.map((entry) => historyKey(entry.turnId, entry.id)));
           const clients = new Set(this.state.entries.flatMap((entry) => entry.item?.type === "userMessage" && entry.item.clientId ? [entry.item.clientId] : []));
@@ -210,11 +247,15 @@ export class BotTimeline {
           this.merge(response.entries, false, startCursor);
           // Keep loaded older pages; a latest-page refresh never replaces them.
           this.publish({ partialTurn: response.partialTurn, attachments: mergeAttachments(this.state.attachments, response.attachments), contextEntries: response.contextEntries ?? [],
-            ...this.pageBoundaries(response), cached: true });
+            ...this.pageBoundaries(response), cached: true,
+            ...(this.latestCursor ? { error: "Recent history continues beyond this page. Reload conversation to continue; your saved messages are kept." }
+              : !response.entries.length && this.state.entries.length && !response.contextEntries?.length
+                ? { error: "No visible messages were returned from the current conversation. Saved history is retained; reload to check again." } : {}) });
         }
-        this.publish({ revision: response.revision, eventCursor: Math.max(this.state.eventCursor, response.eventCursor) });
+        this.publish({ revision: this.latestCursor ? "" : response.revision, eventCursor: Math.max(this.state.eventCursor, response.eventCursor) });
         this.scheduleWrite();
-      } catch (e) { this.publish({ error: e instanceof Error ? e.message : String(e) }); }
+      } catch (e) { if (!this.disposed && this.transport.owner === this.owner && threadId === this.currentThread())
+        this.publish({ error: e instanceof Error ? e.message : String(e) }); }
       finally { this.request = undefined; if (!this.disposed) { this.publish({ loading: false }, true); if (this.refreshAgain) { this.refreshAgain = false; this.scheduleRefresh(); } } }
     })();
     return this.request;
@@ -297,6 +338,7 @@ export class BotTimeline {
     } catch (e) { this.publish({ error: String(e) }, true); }
   }
   private scheduleRefresh() {
+    this.latestCursor = null;
     this.state = { ...this.state, revision: "" };
     if (this.request) { this.refreshAgain = true; return; }
     this.refreshTimer ??= setTimeout(() => { this.refreshTimer = undefined; if (!this.disposed) void this.refresh(); }, 250);
