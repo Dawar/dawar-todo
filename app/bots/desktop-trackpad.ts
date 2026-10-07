@@ -1,4 +1,5 @@
 import type RFB from "@novnc/novnc";
+import type { DesktopViewport } from "./desktop-viewport";
 
 export type DesktopTouchMode = "trackpad" | "direct";
 export type DesktopPointer = { x: number; y: number };
@@ -53,9 +54,12 @@ export class DesktopTrackpad {
   private suppressMouseUntil = 0;
   private observer: ResizeObserver;
   private touchCursor = false;
+  private pair: { x: number; y: number; distance: number } | null = null;
+  private gesture: "pending" | "scroll" | "pinch" = "pending";
+  private frame = 0;
 
   constructor(remote: RFB, private root: HTMLElement, retained: DesktopPointer | null,
-    private remember: (point: DesktopPointer) => void) {
+    private remember: (point: DesktopPointer) => void, private viewport?: () => DesktopViewport | null) {
     this.remote = remote as PointerRFB;
     const r = this.remote;
     if (!(r._canvas instanceof HTMLCanvasElement) || typeof r._sendMouse !== "function" ||
@@ -132,10 +136,15 @@ export class DesktopTrackpad {
   private clearHold() { clearTimeout(this.hold); this.hold = undefined; }
   private release() {
     this.clearHold();
-    if (this.dragging) { this.dragging = false; this.button(0); }
+    if (this.dragging) {
+      this.dragging = false;
+      try { this.button(0); } catch { /* Lost transport: cleanup is not an acknowledged remote release. */ }
+    }
   }
 
   cancel = () => {
+    cancelAnimationFrame(this.frame); this.frame = 0;
+    this.viewport?.()?.endPinch(); this.pair = null;
     this.release();
     if (this.fingers.size) {
       this.cancelled = true;
@@ -156,11 +165,13 @@ export class DesktopTrackpad {
   // passes unchanged. preventDefault plus this guard excludes compatibility
   // mouse events; an actual mouse pointerdown immediately removes the guard.
   private touch = (event: Event) => {
-    if (this.enabled || this.fingers.size || performance.now() < this.suppressMouseUntil) this.stop(event);
+    // Both touch modes are handled here so noVNC's gesture recognizer cannot
+    // turn a pinch into remote wheel/key input. Physical mouse/pen still pass.
+    this.stop(event);
   };
   private mouse = (event: Event) => {
     const mouse = event as MouseEvent & { sourceCapabilities?: { firesTouchEvents?: boolean } };
-    if ((this.enabled && mouse.sourceCapabilities?.firesTouchEvents) || performance.now() < this.suppressMouseUntil)
+    if (mouse.sourceCapabilities?.firesTouchEvents || performance.now() < this.suppressMouseUntil)
       this.stop(event);
   };
 
@@ -173,17 +184,13 @@ export class DesktopTrackpad {
       }
       return;
     }
-    if (!this.enabled && !this.fingers.has(e.pointerId)) {
-      if (e.type === "pointerdown") this.suppressMouseUntil = 0;
-      return;
-    }
     this.stop(e);
     this.suppressMouseUntil = performance.now() + 800;
     if (e.type === "pointerdown") {
       if (!this.fingers.size) {
         this.started = performance.now(); this.moved = false; this.multiple = false;
         this.cancelled = this.remote._mouseButtonMask !== 0; this.scrollX = 0; this.scrollY = 0;
-        this.touchCursor = true;
+        this.touchCursor = this.enabled;
         if (this.remote.focusOnClick) this.remote.focus({ preventScroll: true });
         // No move or button event on contact. The finger's location never
         // becomes the cursor location, including after lifting/repositioning.
@@ -194,12 +201,17 @@ export class DesktopTrackpad {
       if (this.fingers.size === 1 && !this.cancelled) {
         // Hold, then move to drag; a normal swipe never presses a button.
         this.hold = setTimeout(() => {
-          if (!this.cancelled && !this.moved && this.fingers.size === 1 && this.enabled) {
+          if (!this.cancelled && !this.moved && this.fingers.size === 1 && !this.viewport?.()?.panEnabled) {
+            if (!this.enabled) this.direct(e.clientX, e.clientY);
             this.dragging = true; this.button(1);
           }
         }, 450);
       } else {
         this.release(); this.multiple = true;
+        if (this.fingers.size === 2) {
+          this.viewport?.()?.interruptInput(); this.cancelled = false;
+        }
+        this.pair = this.pairPosition(); this.gesture = "pending";
         if (this.fingers.size > 2) this.cancelled = true;
       }
       return;
@@ -213,26 +225,73 @@ export class DesktopTrackpad {
         this.moved = true; this.clearHold();
       }
       if (this.cancelled) return;
-      if (!this.multiple) this.move(dx, dy);
+      if (!this.multiple && this.viewport?.()?.panEnabled) {
+        this.clearHold(); this.moved = true; this.viewport()?.pan(dx, dy);
+      }
+      else if (!this.multiple && this.enabled) this.move(dx, dy);
+      else if (!this.multiple) {
+        if (this.moved && !this.dragging) {
+          this.direct(finger.startX, finger.startY); this.dragging = true; this.button(1);
+        }
+        this.direct(e.clientX, e.clientY);
+      }
       else if (this.fingers.size === 2) {
-        this.scrollX += dx / 2; this.scrollY += dy / 2;
-        for (let i = 0; i < 8 && Math.abs(this.scrollY) >= 18; i++) {
-          const sign = Math.sign(this.scrollY); this.click(sign > 0 ? 8 : 16); this.scrollY -= sign * 18;
-        }
-        for (let i = 0; i < 8 && Math.abs(this.scrollX) >= 18; i++) {
-          const sign = Math.sign(this.scrollX); this.click(sign > 0 ? 32 : 64); this.scrollX -= sign * 18;
-        }
+        // Evaluate a pair once per frame, not once per finger: staggered
+        // pointermove events must not misclassify a parallel swipe as a pinch.
+        if (!this.frame) this.frame = requestAnimationFrame(() => { this.frame = 0; this.movePair(); });
       }
       return;
     }
     if (e.type === "pointercancel" || e.type === "lostpointercapture") this.cancel();
+    if (this.frame) { cancelAnimationFrame(this.frame); this.frame = 0; this.movePair(); }
     const wasDragging = this.dragging;
     this.release();
     this.fingers.delete(e.pointerId);
     try { if (this.canvas.hasPointerCapture(e.pointerId)) this.canvas.releasePointerCapture(e.pointerId); } catch { /* Already released. */ }
-    if (!this.fingers.size && !this.cancelled && !wasDragging && !this.moved && performance.now() - this.started < 300)
+    if (!this.fingers.size && !this.cancelled && !wasDragging && !this.moved && !this.viewport?.()?.panEnabled && performance.now() - this.started < 300) {
+      if (!this.enabled) this.direct(e.clientX, e.clientY);
       this.click(this.multiple ? 4 : 1);
+    }
+    if (!this.fingers.size) { this.viewport?.()?.endPinch(); this.pair = null; }
   };
+
+  private direct(x: number, y: number) {
+    const rect = this.canvas.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    this.point = { x: clamp((x - rect.left) / rect.width), y: clamp((y - rect.top) / rect.height) };
+    const p = this.coordinates(); this.remote._handleMouseMove(p.x, p.y);
+  }
+  private pairPosition() {
+    const [a, b] = this.fingers.values();
+    if (!a || !b) return null;
+    return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, distance: Math.hypot(a.x - b.x, a.y - b.y) };
+  }
+  private movePair() {
+    const current = this.pairPosition(), before = this.pair;
+    if (!current || !before || this.cancelled) return;
+    const span = Math.abs(current.distance - before.distance);
+    const travel = Math.hypot(current.x - before.x, current.y - before.y);
+    if (this.gesture === "pending") {
+      if (span > Math.max(12, before.distance * 0.10)) {
+        this.gesture = "pinch"; this.moved = true;
+        this.viewport?.()?.beginPinch(before.x, before.y, before.distance);
+      } else if (travel > 12 && span < Math.max(6, before.distance * 0.03)) {
+        this.gesture = "scroll"; this.moved = true;
+      } else return;
+    }
+    if (this.gesture === "pinch") this.viewport?.()?.pinch(current.x, current.y, current.distance);
+    else if (this.viewport?.()?.panEnabled) { this.viewport()?.pan(current.x - before.x, current.y - before.y); this.pair = current; }
+    else {
+      this.scrollX += current.x - before.x; this.scrollY += current.y - before.y;
+      for (let i = 0; i < 8 && Math.abs(this.scrollY) >= 18; i++) {
+        const sign = Math.sign(this.scrollY); this.click(sign > 0 ? 8 : 16); this.scrollY -= sign * 18;
+      }
+      for (let i = 0; i < 8 && Math.abs(this.scrollX) >= 18; i++) {
+        const sign = Math.sign(this.scrollX); this.click(sign > 0 ? 32 : 64); this.scrollX -= sign * 18;
+      }
+      this.pair = current;
+    }
+  }
 
   dispose() {
     this.cancel();

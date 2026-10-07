@@ -9,6 +9,11 @@ import {
   LockKeyhole,
   UsersRound,
   Square,
+  MoreHorizontal,
+  Move,
+  Maximize,
+  Minus,
+  Plus,
 } from "lucide-react";
 import type { Bot } from "../../lib/bots-types";
 import type { BotDesktopState, BotBrowserRetention } from "../../lib/bots-operations";
@@ -17,6 +22,7 @@ import { botsClient as client } from "./client";
 import { DesktopChannel } from "./desktop-channel";
 import { DesktopTrackpad, desktopTouchMode, saveDesktopTouchMode, type DesktopTouchMode, type DesktopPointer } from "./desktop-trackpad";
 import { DesktopKeyboard } from "./desktop-keyboard";
+import { DesktopViewport, desktopKeyboardOpen, releaseDesktopInput, type DesktopView } from "./desktop-viewport";
 import "./bot-desktop.css";
 
 export function BotDesktopCard({
@@ -183,9 +189,13 @@ export function BotDesktopDialog({
     dialog = useRef<HTMLDivElement>(null),
     rfb = useRef<RFB | null>(null),
     trackpad = useRef<DesktopTrackpad | null>(null),
+    viewport = useRef<DesktopViewport | null>(null),
     pointer = useRef<DesktopPointer | null>(null),
     pointerScope = useRef(""),
     socket = useRef<WebSocket | null>(null);
+  const [view, setView] = useState<DesktopView>({ zoom: 1, panning: false });
+  const [keyboardOpen, setKeyboardOpen] = useState(false);
+  const keyboardOpenRef = useRef(false);
   const [touchMode, setTouchMode] = useState<DesktopTouchMode>(desktopTouchMode);
   const touchModeRef = useRef(touchMode);
   useEffect(() => {
@@ -202,20 +212,30 @@ export function BotDesktopDialog({
   useEffect(() => {
     showTextRef.current = showText;
     if (rfb.current) rfb.current.focusOnClick = !showText;
-    const viewport = window.visualViewport;
+  }, [showText, state]);
+  useEffect(() => {
+    const visual = window.visualViewport;
+    let baseline = window.innerHeight, width = window.innerWidth, frame = 0;
     const resize = () => {
       if (!dialog.current) return;
-      dialog.current.style.height = showText && viewport ? `${viewport.height}px` : "";
-      dialog.current.style.top = showText && viewport ? `${viewport.offsetTop}px` : "";
+      if (width !== window.innerWidth) { width = window.innerWidth; baseline = window.innerHeight; }
+      const active = document.activeElement;
+      const editable = active instanceof HTMLElement && dialog.current.contains(active) &&
+        (active.matches("textarea,input") || active.isContentEditable);
+      if (!editable) baseline = Math.max(baseline, window.innerHeight);
+      const open = desktopKeyboardOpen(Math.max(baseline, window.innerHeight), visual?.height ?? window.innerHeight, visual?.scale ?? 1, editable);
+      keyboardOpenRef.current = open; setKeyboardOpen(open); viewport.current?.alignTop(open);
+      dialog.current.style.height = `${visual?.height ?? window.innerHeight}px`;
+      dialog.current.style.top = `${visual?.offsetTop ?? 0}px`;
     };
-    resize();
-    viewport?.addEventListener("resize", resize);
-    viewport?.addEventListener("scroll", resize);
+    const schedule = () => { cancelAnimationFrame(frame); frame = requestAnimationFrame(resize); };
+    resize(); visual?.addEventListener("resize", schedule); visual?.addEventListener("scroll", schedule);
+    window.addEventListener("resize", schedule); document.addEventListener("focusin", schedule); document.addEventListener("focusout", schedule);
     return () => {
-      viewport?.removeEventListener("resize", resize);
-      viewport?.removeEventListener("scroll", resize);
+      cancelAnimationFrame(frame); visual?.removeEventListener("resize", schedule); visual?.removeEventListener("scroll", schedule);
+      window.removeEventListener("resize", schedule); document.removeEventListener("focusin", schedule); document.removeEventListener("focusout", schedule);
     };
-  }, [showText, state]);
+  }, [bot.id, owner]);
   const closeRef = useRef(onClose);
   useEffect(() => {
     closeRef.current = onClose;
@@ -244,7 +264,7 @@ export function BotDesktopDialog({
       ) {
         const items = [
           ...(dialog.current?.querySelectorAll<HTMLElement>(
-            "button:not(:disabled),input:not(:disabled),textarea:not(:disabled),canvas",
+            "button:not(:disabled),summary,input:not(:disabled),textarea:not(:disabled),canvas",
           ) ?? []),
         ].filter((n) => n.getClientRects().length);
         if (event.shiftKey && document.activeElement === items[0]) {
@@ -277,6 +297,7 @@ export function BotDesktopDialog({
     const controller = new AbortController();
     const fail = (message: string) => {
       trackpad.current?.cancel();
+      releaseDesktopInput(rfb.current);
       if (!cancelled) {
         setError(message);
         setState("Disconnected");
@@ -377,7 +398,9 @@ export function BotDesktopDialog({
             if (!cancelled) {
               try {
                 trackpad.current = new DesktopTrackpad(remote, screen.current!, pointer.current,
-                  (value) => { pointer.current = value; });
+                  (value) => { pointer.current = value; }, () => viewport.current);
+                viewport.current = new DesktopViewport(remote, screen.current!, setView, () => trackpad.current?.cancel());
+                viewport.current.alignTop(keyboardOpenRef.current);
                 trackpad.current.setMode(touchModeRef.current);
               } catch {
                 fail("Desktop pointer controls could not start. Reconnect to try again.");
@@ -392,6 +415,7 @@ export function BotDesktopDialog({
           });
           remote.addEventListener("disconnect", () => {
             trackpad.current?.cancel();
+            releaseDesktopInput(remote);
             if (!cancelled) {
               setState("Disconnected");
               setExclusive(false);
@@ -449,6 +473,7 @@ export function BotDesktopDialog({
         });
         ws.addEventListener("close", () => {
           trackpad.current?.cancel();
+          releaseDesktopInput(rfb.current);
           if (!cancelled) {
             setState("Disconnected");
             setExclusive(false);
@@ -475,6 +500,8 @@ export function BotDesktopDialog({
       clearInterval(renewal);
       clearInterval(revocation);
       clearTimeout(timeout);
+      viewport.current?.dispose();
+      viewport.current = null;
       trackpad.current?.dispose();
       trackpad.current = null;
       rfb.current?.disconnect();
@@ -508,7 +535,7 @@ export function BotDesktopDialog({
   };
   return createPortal(
     <div
-      className="bots-desktop-dialog"
+      className={`bots-desktop-dialog${keyboardOpen ? " bots-desktop-keyboard-open" : ""}`}
       ref={dialog}
       role="dialog"
       aria-modal="true"
@@ -516,81 +543,49 @@ export function BotDesktopDialog({
     >
       <header>
         <div className="bots-desktop-heading">
-          <Monitor size={20} />
-          <strong>{bot.name}</strong>
-          <span role="status">{state}</span>
+          <Monitor size={20} aria-hidden="true" />
+          <div><strong>{bot.name}</strong><span role="status" data-connected={state === "Connected"}>{state}</span></div>
         </div>
-        <div className="bots-desktop-actions">
-          <button
-            disabled={state !== "Connected" || changing}
-            onClick={control}
-            title={
-              exclusive
-                ? "Let the agent use mouse and keyboard too"
-                : "Pause agent mouse and keyboard input"
-            }
-          >
-            {exclusive ? <LockKeyhole size={17} /> : <UsersRound size={17} />}
-            <span>
-              {exclusive
-                ? "Release exclusive control"
-                : "Take exclusive control"}
-            </span>
-          </button>
-          <button
-            disabled={state !== "Connected"}
-            onClick={() => {
-              flushSync(() => setShowText((v) => !v));
-              const typing = dialog.current?.querySelector<HTMLTextAreaElement>("[data-desktop-typing]");
-              if (typing) typing.focus({ preventScroll: true });
-              else rfb.current?.focus({ preventScroll: true });
-            }}
-            aria-pressed={showText}
-            aria-label={showText ? "Hide remote keyboard" : "Open remote keyboard"}
-          >
-            <Keyboard size={18} />
-          </button>
-          <button
-            onClick={() => setRetry((v) => v + 1)}
-            aria-label="Reconnect desktop"
-          >
-            <RefreshCw size={18} />
-          </button>
-          <button
-            onClick={() => void stop()}
-            disabled={Boolean(bot.activeTurnId)}
-            aria-label="Stop desktop and close apps"
-          >
-            <Square size={17} />
-          </button>
-          <button onClick={onClose} aria-label="Close desktop dialog">
-            <X size={22} />
-          </button>
-        </div>
+        <button onClick={onClose} aria-label="Close desktop · apps stay running" title="Close viewer · apps stay running"><X size={22} /></button>
       </header>
-      <div className="bots-desktop-mode">
-        {exclusive
-          ? "You have exclusive mouse and keyboard control."
-          : "Shared control · you and the agent can use this desktop together."}{" "}
-        Closing this window leaves apps running.
-      </div>
-      <div className="bots-desktop-touch-controls">
-        <button
-          type="button"
-          aria-label={`Touch input: ${touchMode === "trackpad" ? "Trackpad" : "Direct touch"}. Switch to ${touchMode === "trackpad" ? "Direct touch" : "Trackpad"}`}
-          onClick={() => {
-            const next = touchMode === "trackpad" ? "direct" : "trackpad";
-            saveDesktopTouchMode(next);
-            setTouchMode(next);
-          }}
-        >
-          {touchMode === "trackpad" ? "Trackpad" : "Direct touch"}
+      <div className="bots-desktop-controls">
+      <div className="bots-desktop-toolbar" aria-label="Desktop controls">
+        <div className="bots-desktop-control-group">
+          <button disabled={state !== "Connected"} onClick={() => {
+            trackpad.current?.cancel(); releaseDesktopInput(rfb.current);
+            flushSync(() => setShowText(v => !v));
+            const typing = dialog.current?.querySelector<HTMLTextAreaElement>("[data-desktop-typing]");
+            if (typing) typing.focus({ preventScroll: true }); else rfb.current?.focus({ preventScroll: true });
+          }} aria-pressed={showText} aria-label={showText ? "Hide remote keyboard" : "Open remote keyboard"}>
+            <Keyboard size={18} /><span>Keyboard</span>
+          </button>
+          <button type="button" aria-label={`Touch input: ${touchMode === "trackpad" ? "Trackpad" : "Direct touch"}. Switch touch mode`}
+            onClick={() => { releaseDesktopInput(rfb.current); const next = touchMode === "trackpad" ? "direct" : "trackpad"; saveDesktopTouchMode(next); setTouchMode(next); }}>
+            {touchMode === "trackpad" ? "Trackpad" : "Direct touch"}
+          </button>
+        <button className="bots-desktop-lease" disabled={state !== "Connected" || changing} onClick={control}
+          aria-pressed={exclusive} aria-label={exclusive ? "Release exclusive control" : "Take exclusive control"}
+          title={exclusive ? "Let the agent use mouse and keyboard too" : "Pause agent mouse and keyboard input"}>
+          {exclusive ? <LockKeyhole size={16} /> : <UsersRound size={16} />}<span>{changing ? "Changing control…" : exclusive ? "Exclusive" : "Shared"}</span>
         </button>
-        <span>
-          {touchMode === "trackpad"
-            ? "Swipe to move · Tap to click · Hold to drag · Two fingers to scroll or right-click"
-            : "Touch where you want to click"}
-        </span>
+        </div>
+        <div className="bots-desktop-control-group bots-desktop-scale" aria-label="Screen zoom">
+          <button disabled={state !== "Connected" || view.zoom <= 0.5} aria-label="Zoom screen out" onClick={() => viewport.current?.setZoom(view.zoom / 1.25)}><Minus size={17} /></button>
+          <button disabled={state !== "Connected"} aria-label={`Fit screen · ${Math.round(view.zoom * 100)} percent of fit`} onClick={() => viewport.current?.fit()}><Maximize size={16} /><span>{view.zoom === 1 ? "Fit" : `${Math.round(view.zoom * 100)}%`}</span></button>
+          <button disabled={state !== "Connected" || view.zoom >= 4} aria-label="Zoom screen in" onClick={() => viewport.current?.setZoom(view.zoom * 1.25)}><Plus size={17} /></button>
+          <button disabled={state !== "Connected" || view.zoom <= 1} aria-label="Pan enlarged screen" aria-pressed={view.panning} onClick={() => viewport.current?.togglePan()}><Move size={17} /><span>Pan</span></button>
+        </div>
+        <details className="bots-desktop-more">
+          <summary aria-label="More desktop options"><MoreHorizontal size={20} /></summary>
+          <div>
+            <button onClick={() => setRetry(v => v + 1)}><RefreshCw size={17} />Reconnect</button>
+            <button onClick={() => void stop()} disabled={Boolean(bot.activeTurnId)}><Square size={17} />Stop desktop</button>
+            <p>Closing the viewer leaves apps running. Stop closes them.</p>
+            <p>{touchMode === "trackpad" ? "Swipe to move · Tap to click · Hold to drag · Two fingers to scroll or right-click." : "Tap to click · Drag to move remote items."} Pinch to zoom; use Pan to move an enlarged screen.</p>
+            <p>{exclusive ? "Agent input is paused while you have exclusive control." : "You and the agent can use this desktop together."}</p>
+          </div>
+        </details>
+      </div>
       </div>
       {error && (
         <p className="bots-desktop-error" role="alert">
@@ -598,7 +593,7 @@ export function BotDesktopDialog({
         </p>
       )}
       <div className="bots-desktop-screen" ref={screen} />
-      {showText && <DesktopKeyboard key={bot.id} remote={() => rfb.current} connected={state === "Connected"}
+      {showText && <DesktopKeyboard key={`${owner}:${bot.id}`} remote={() => rfb.current} connected={state === "Connected"}
         onClose={() => { setShowText(false); rfb.current?.focus({ preventScroll: true }); }} />}
 
     </div>,
