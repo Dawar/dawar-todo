@@ -28,3 +28,4 @@
 .bots-list-detail-heading button,.bots-lists-heading button { display:inline-flex;align-items:center;gap:6px;min-height:40px;padding:6px 9px; }
 @media(pointer:coarse) { .bots-list-detail-heading button,.bots-lists-heading > button { width:auto;height:auto;min-height:44px; } }
 .bots-saved-drafts { margin:16px 0;font-size:12px;color:#657e6c; }.bots-saved-drafts summary { cursor:pointer; }.bots-saved-drafts > div { display:flex;align-items:center;gap:10px;justify-content:space-between;padding:8px 0;overflow-wrap:anywhere; }.bots-saved-drafts button { padding:5px 9px;min-height:36px;color:#246848; }
+.bots-queue-picker-note{margin:0 0 12px;color:var(--muted-foreground,#647068);font-size:13px;line-height:1.5;overflow-wrap:anywhere}

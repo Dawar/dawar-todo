@@ -4,7 +4,7 @@ import { preferencePatch } from './bot-preferences.mjs';
 // commit together; failed storage never dispatches an unrecoverable operation.
 export async function acceptSingleThreadOperation(runtime, request, fingerprint, trustedOrigin = null) {
   const { method, botId, params, operationId } = request;
-  if (!['bursts.submit', 'bursts.start', 'bursts.resume', 'bursts.stop', 'bursts.discard', 'work.resume', 'bots.update', 'peers.send', 'peers.reply', 'peers.cancel'].includes(method)) return null;
+  if (!['bursts.submit', 'bursts.start', 'bursts.resume', 'bursts.stop', 'bursts.discard', 'bursts.queue', 'work.resume', 'bots.update', 'peers.send', 'peers.reply', 'peers.cancel'].includes(method)) return null;
   if (method === 'bots.update' && (!Object.keys(params).length || Object.keys(params).some(k => !['avatar', 'burstQuietSeconds'].includes(k)))) return null;
   const bot = runtime.store.bot(botId);
   try {
@@ -16,6 +16,7 @@ export async function acceptSingleThreadOperation(runtime, request, fingerprint,
     else if (method === 'bursts.resume') mutate = () => runtime.bursts.resume(bot);
     else if (method === 'bursts.stop') mutate = () => runtime.bursts.pause(bot.id);
     else if (method === 'bursts.discard') mutate = () => runtime.bursts.discard(bot, params);
+    else if (method === 'bursts.queue') mutate = () => runtime.bursts.queue(bot, params, operationId);
     else if (method === 'work.resume') mutate = await runtime.primary.prepareResume(bot);
     else { const patch = preferencePatch(bot, params); mutate = () => runtime.saveBot(runtime.store.bot(botId), patch); }
     const result = runtime.store.transaction(() => {

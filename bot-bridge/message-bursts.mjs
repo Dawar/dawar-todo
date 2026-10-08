@@ -1,11 +1,12 @@
 import { ownedReply } from "./message-replies.mjs";
 import { randomUUID, createHash } from 'node:crypto';
+import { queueHeldBurst } from './burst-queue.mjs';
 
 const now = () => new Date().toISOString();
 const open = b => !b.supersededBy && ['pending', 'preparing', 'paused', 'dispatching', 'uncertain', 'failed'].includes(b.state);
 const message = m => { const { id, botId, text, attachmentIds, createdAt, state, batchId, turnId, dismissed, reply } = m;
   return { id, botId, text, attachmentIds, createdAt, state, batchId, turnId, ...(reply ? { reply } : {}), ...(dismissed ? { dismissed: true } : {}) }; };
-const batch = b => b && ({ id: b.id, botId: b.botId, state: b.state, messageIds: b.messageIds, dueAt: b.dueAt,
+const batch = b => b && ({ id: b.id, botId: b.botId, revision: b.revision, state: b.state, messageIds: b.messageIds, dueAt: b.dueAt,
   operationId: b.id, turnId: b.turnId ?? null, error: b.error ?? null });
 
 // A debounce of accepted human sends, not another execution engine. Only the
@@ -33,13 +34,13 @@ export class MessageBursts {
   }
   batches(botId, history = false) {
     return this.store.db.prepare(`SELECT json FROM records WHERE kind='messageBurst' AND bot_id=? AND
-      (json_extract(json,'$.state') NOT IN ('sent','discarded') OR (? AND json_extract(json,'$.state')='sent' AND rowid IN (SELECT rowid FROM records WHERE kind='messageBurst' AND bot_id=? ORDER BY rowid DESC LIMIT 50)))
+      (json_extract(json,'$.state') NOT IN ('sent','discarded','queued') OR (? AND json_extract(json,'$.state')='sent' AND rowid IN (SELECT rowid FROM records WHERE kind='messageBurst' AND bot_id=? ORDER BY rowid DESC LIMIT 50)))
       AND json_extract(json,'$.supersededBy') IS NULL ORDER BY json_extract(json,'$.sequence'),rowid`)
       .all(botId, history ? 1 : 0, botId).map(r => JSON.parse(r.json));
   }
   messages(botId, history = false) {
     return this.store.db.prepare(`SELECT json FROM records WHERE kind='burstMessage' AND bot_id=? AND
-      (json_extract(json,'$.state') NOT IN ('sent','discarded') OR (? AND json_extract(json,'$.state')='sent' AND rowid IN (SELECT rowid FROM records WHERE kind='burstMessage' AND bot_id=? ORDER BY rowid DESC LIMIT 50))) ORDER BY rowid`)
+      (json_extract(json,'$.state') NOT IN ('sent','discarded','queued') OR (? AND json_extract(json,'$.state')='sent' AND rowid IN (SELECT rowid FROM records WHERE kind='burstMessage' AND bot_id=? ORDER BY rowid DESC LIMIT 50))) ORDER BY rowid`)
       .all(botId, history ? 1 : 0, botId).map(r => JSON.parse(r.json));
   }
   read(bot) {
@@ -53,10 +54,12 @@ export class MessageBursts {
     const visibleMessages = [...messages.filter(m => m.state !== 'sent'), ...recent];
     const attachmentIds = new Set(visibleMessages.flatMap(message => message.attachmentIds));
     const attachments = [...attachmentIds].flatMap(id => { const file = this.store.get('attachment', id); return file?.botId === bot.id && file.ready ? [file] : []; });
-    return { paused: this.store.get('burstControl', bot.id)?.paused === true, attachments, messages: [...messages.filter(m => m.state !== 'sent'), ...recent].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.sequence - b.sequence).map(message),
+    const control = this.store.get('burstControl', bot.id);
+    return { threadId: bot.threadId, controlRevision: control?.revision ?? 0, paused: control?.paused === true, attachments, messages: [...messages.filter(m => m.state !== 'sent'), ...recent].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.sequence - b.sequence).map(message),
       burst: batch(active[0] ?? batches.at(-1) ?? null), batches: [...active, ...batches.filter(b => b.state === 'sent').slice(-50)].map(batch) };
   }
   publish(botId) { this.runtime.emitEvent('burst', this.read(this.store.bot(botId)), botId); this.store.afterCommit(() => this.arm(botId)); }
+  queue(bot, params, operationId) { return queueHeldBurst(this.runtime, bot, params, operationId); }
   typing(bot, p) {
     if (typeof p.clientId !== 'string' || !/^[a-zA-Z0-9:_-]{1,120}$/.test(p.clientId) || typeof p.typing !== 'boolean') throw new Error('Invalid typing lease.');
     const key = `${bot.id}:${p.clientId}`;

@@ -15,6 +15,7 @@ import type { BurstState } from './single-thread-contract';
 import { useRunAction } from './run-action';
 import { pendingMessageCount, retainedBatches, savedBurstState, validBurstState, type SavedBurstState } from './burst-state';
 import './single-thread.css';
+import { BurstQueueControl } from './burst-queue-control';
 /** Receipt-owned staging shares the conversation feed, never native history. */
 export function useBurstConversation({ owner, botId, online, draft, enabled, quietSeconds }: { owner: string; botId: string; online: boolean; draft: string; enabled: boolean; quietSeconds: number }) {
   const cacheKey = `burst-summary:v1:${botId}`;
@@ -23,6 +24,8 @@ export function useBurstConversation({ owner, botId, online, draft, enabled, qui
     if (value && client.owner === owner) client.save(cacheKey, savedBurstState(value));
   }, [owner, cacheKey, value]);
   const discardAction = useRunAction(owner, botId, 'burst:discard');
+  const queueAction = useRunAction(owner, botId, 'burst:queue');
+  const [queuePreparing,setQueuePreparing] = useState(false);
   const discard = (messageIds: string[], pendingOnly = false) => discardAction.perform('bursts.discard', { messageIds, ...(pendingOnly ? { pendingOnly: true as const } : {}) }).then(() => setRefresh(value => value + 1));
   const action = useRunAction(owner, botId, 'burst:control'), sequence = useRef(0), typing = useRef({ id: crypto.randomUUID(), last: 0, value: draft, inputAt: 0, active: false });
   const [typingUntil, setTypingUntil] = useState(0);
@@ -78,7 +81,7 @@ export function useBurstConversation({ owner, botId, online, draft, enabled, qui
   const canStart = !blocked && (failed || paused || batches.some(batch => batch.state === 'pending'));
   const pauseRequested = action.intent?.method === 'bursts.stop';
   const refreshDelivery = () => setRefresh(value => value + 1);
-  return { value: enabled ? value : null, batches, messages, count, action, error, hasPending, uncertain, dispatching, failed, paused, blocked, canStart, refreshDelivery, typingUntil, discard, discardAction, pauseRequested };
+  return { owner, botId, value: enabled ? value : null, batches, messages, count, action, error, hasPending, uncertain, dispatching, failed, paused, blocked, canStart, refreshDelivery, typingUntil, discard, discardAction, pauseRequested, queueAction, queuePreparing, setQueuePreparing };
 }
 export type BurstConversation = ReturnType<typeof useBurstConversation>;
 
@@ -121,7 +124,7 @@ function BurstBubble({ message, batch, botId, attachments, quietSeconds, online,
         if (!navigator.clipboard) { setCopyStatus('Copy unavailable. Select the text to copy it.'); return; }
         void navigator.clipboard.writeText(message.text).then(() => setCopyStatus('Copied')).catch(() => setCopyStatus('Copy failed. Select the text to copy it.'));
       }}><Copy size={14}/><span>Copy text</span></button>
-      <button type="button" title="Delete this held message" aria-label="Delete held message" disabled={!online || client.snapshot?.capabilities?.burstControls !== 1 || !controls.discardAction.ready || controls.discardAction.busy || !!controls.discardAction.intent || controls.action.busy || !!controls.action.intent}
+      <button type="button" title="Delete this held message" aria-label="Delete held message" disabled={!online || client.snapshot?.capabilities?.burstControls !== 1 || !controls.discardAction.ready || controls.discardAction.busy || !!controls.discardAction.intent || controls.action.busy || !!controls.action.intent || controls.queuePreparing || controls.queueAction.busy || !!controls.queueAction.intent}
         onClick={() => void controls.discard([message.id], true).catch(() => {})}><Trash2 size={14}/><span>Delete</span></button>
       {copyStatus && <small role="status">{copyStatus}</small>}
     </div>}
@@ -134,23 +137,24 @@ export function BurstBubbles({ messages, batch, ...props }: { messages: BurstMes
 }
 export function BurstControls({ burst, online, submitting = false }: { burst: BurstConversation; online: boolean; submitting?: boolean }) {
   const { value, batches, messages, count, action, error, hasPending, uncertain, dispatching, failed, paused, canStart, refreshDelivery, discard, discardAction, pauseRequested } = burst;
-  if (!count && !batches.length && !submitting && !paused && !action.error && !discardAction.error && !error) return null;
+  if (!count && !batches.length && !submitting && !paused && !action.error && !discardAction.error && !burst.queueAction.intent && !burst.queueAction.error && !error) return null;
   const controlsAvailable = client.snapshot?.capabilities?.burstControls === 1;
   const heldIds = messages.filter(message => !message.dismissed && message.state !== 'discarded' && batches.some(batch => batch.state === 'paused' && batch.messageIds.includes(message.id))).map(message => message.id);
   const truncatedText = new Set(value?.preview?.truncatedTextIds ?? []);
   const previewOnly = !!value?.preview || !online, completeBatchMetadata = value?.batches !== undefined;
-  const busy = !online || action.busy || !action.ready || discardAction.busy || !!discardAction.intent;
+  const baseBusy = !online || action.busy || !action.ready || !!action.intent || discardAction.busy || !!discardAction.intent;
+  const busy = baseBusy || burst.queuePreparing || burst.queueAction.busy || !!burst.queueAction.intent || client.snapshot?.capabilities?.burstQueue === 1 && !burst.queueAction.ready;
   return <div className="bots-burst-pending">
     {previewOnly && (!completeBatchMetadata || count > messages.length || truncatedText.size > 0) && <small className="bots-burst-preview">Some saved messages are previews. Reconnect for complete messages and delivery status.</small>}
     <div className="bots-burst-line">
       <small role="status">{!online ? 'Saved · waiting for connection' : pauseRequested ? 'Confirming pause…' : paused ? dispatching || uncertain ? 'Paused · earlier delivery already began' : 'Paused' : uncertain ? 'Checking delivery' : dispatching ? 'Sending' : batches.some(batch => batch.state === 'preparing') ? 'Preparing to send' : ''}</small>
-      <div>{!action.intent && <>
+      <div><BurstQueueControl burst={burst} online={online} disabled={baseBusy || uncertain || dispatching || failed || !count} />{!action.intent && <>
         {paused && controlsAvailable && !failed && <button type="button" aria-label="Resume entire burst" title="Resume countdown" disabled={busy || uncertain || dispatching} onClick={() => void action.perform('bursts.resume', {}).then(refreshDelivery).catch(() => {})}><Play size={16}/>Resume</button>}
         {canStart && <button type="button" aria-label={failed ? 'Retry and send retained messages' : 'Send waiting messages now'} title="Send now" disabled={busy} onClick={() => void action.perform('bursts.start', {}).then(refreshDelivery).catch(() => {})}><ArrowUp size={16}/>{failed ? 'Retry' : 'Send now'}</button>}
         {!paused && (hasPending || dispatching) && <button type="button" aria-label="Pause burst" title="Pause unsent messages" disabled={busy} onClick={() => void action.perform('bursts.stop', {}).then(refreshDelivery).catch(() => {})}><Pause size={16}/>Pause</button>}
       </>}{heldIds.length > 0 && controlsAvailable && <button type="button" aria-label="Delete all held messages" title="Delete all held messages" disabled={busy || !discardAction.ready || !!action.intent} onClick={() => void discard(heldIds, true).catch(() => {})}><Trash2 size={16}/></button>}</div>
     </div>
     {discardAction.error && <div className="bots-burst-recovery" role="alert">{discardAction.error}{discardAction.intent && <button disabled={!online || discardAction.busy} onClick={() => void discardAction.retry().then(refreshDelivery).catch(() => {})}>Check deletion</button>}</div>}
-    {(error || action.error || failed) && <div className="bots-burst-recovery" role="alert">{action.error || error || 'Not delivered. Retry keeps the original messages and files.'}{action.intent ? <button disabled={!online || action.busy} onClick={() => void action.retry().then(refreshDelivery).catch(() => {})}>Check saved action</button> : <button disabled={!online} onClick={refreshDelivery}>Refresh delivery</button>}</div>}
+    {(error || action.error || failed || action.intent) && <div className="bots-burst-recovery" role="alert">{action.error || error || (action.intent ? 'This saved burst action needs confirmation.' : 'Not delivered. Retry keeps the original messages and files.')}{action.intent ? <button disabled={!online || action.busy} onClick={() => void action.retry().then(refreshDelivery).catch(() => {})}>Check saved action</button> : <button disabled={!online} onClick={refreshDelivery}>Refresh delivery</button>}</div>}
   </div>;
 }

@@ -282,14 +282,26 @@ export class BotComposer {
       } finally { this.transferring.delete(file.id); this.progress.delete(file.id); this.notify(); }
     }
   }
-  async send(queueNext = false, burst = false, listId: string | null = null) {
+  /** Capture only draft identity/content, not transient upload progress. */
+  get destinationSignature() {
+    const draft = this.draft;
+    return JSON.stringify([this.owner, this.botId, this.record.active, draft.textVersion, draft.text, draft.reply,
+      draft.files.map(file => [file.id,file.remote?.id,file.remote?.botId,file.name,file.size,file.mimeType]), draft.queueId, draft.queueRevision, draft.queueSource]);
+  }
+  async send(queueNext = false, burst = false, listId: string | null = null, expectedDraft?: string, currentScope?: () => boolean) {
     if (!this.ready || !this.canUseOwner || !this.transport.online || this.committing) return;
     this.preparing = "send"; this.notify();
     const slot = this.record.active;
     const botId = this.botId;
     this.actionError = "";
     try {
+      const checkDestination = () => {
+        if (expectedDraft !== undefined && this.destinationSignature !== expectedDraft || currentScope && !currentScope())
+          throw Error("The draft or selected bot changed. Nothing new was submitted; choose its destination again.");
+      };
+      checkDestination();
       await this.flush();
+      checkDestination();
       const existing = Object.values(this.persisted.operations).find((op) => op.slot === slot || op.method === "queue.delete");
       if (existing) { await this.dispatch(existing); if (existing.method === "queue.delete") void this.resumeUploads(); return; }
       let draft = this.persisted.slots[slot];
@@ -331,6 +343,7 @@ export class BotComposer {
       }
       draft = this.persisted.slots[slot];
       if (!this.canUseOwner || !this.transport.online) return;
+      checkDestination();
       if (!draft || draft.textVersion !== textVersion || draft.files.map(file => file.id).join("|") !== fileIds) throw Error("The draft changed during attachment transfer. Review it and send again.");
       const op: Submission = {
         id: crypto.randomUUID(), botId, slot, method: this.destination ? "runs.send" : draft.queueId ? "queue.update" : queueNext ? "queue.add" : burst ? "bursts.submit" : "turn.send",

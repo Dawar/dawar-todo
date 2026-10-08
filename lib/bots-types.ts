@@ -201,7 +201,7 @@ export type BotQueueList = { id: string; botId: string; name: string; cron: stri
 export type BotSnapshot = {
   secureInputs?: import("./secure-input").SecureRequest[];
   botAdminLeadIds?: string[];
-  capabilities?: { accountUsageHistory?: 1; botAdministration?: 1; botMemoryMaintenance?: 1; botDesktops?: 1; backgroundRunLanes?: 1; scheduleDecisions?: 1; singleThreadExecution?: 1; peerInbox?: 1; peerRootControls?: 1; peerBodyPaging?: 1; nativeGoals?: 1; nativeConversation?: 1; messageReplies?: 1; secureInputs?: 1; operatorCalls?: 1; messageBursts?: 1; burstDiscard?: 1; burstControls?: 1; queueLists?: 1; queueRelativeMoves?: 1; queueSendNow?: 1; taskQueues?: 1; teams?: 1 };
+  capabilities?: { accountUsageHistory?: 1; botAdministration?: 1; botMemoryMaintenance?: 1; botDesktops?: 1; backgroundRunLanes?: 1; scheduleDecisions?: 1; singleThreadExecution?: 1; peerInbox?: 1; peerRootControls?: 1; peerBodyPaging?: 1; nativeGoals?: 1; nativeConversation?: 1; messageReplies?: 1; secureInputs?: 1; operatorCalls?: 1; messageBursts?: 1; burstDiscard?: 1; burstControls?: 1; burstQueue?: 1; queueLists?: 1; queueRelativeMoves?: 1; queueSendNow?: 1; taskQueues?: 1; teams?: 1 };
   teams?: BotTeam[];
   workByBot?: BotWorkState[];
   backgroundByBot?: BotBackground[];
@@ -310,6 +310,6 @@ export type BotPeerFeed = { exchanges: BotPeerExchangeMeta[]; nextCursor: string
 export type BotPeerControl = { root: BotPeerRoot; previous: { revision: number; state: BotPeerRoot["state"]; reason: BotPeerRoot["reason"]; allowance: BotPeerRoot["allowance"] }; control: { operationId: string; rootId: string; botId: string; expectedRevision: number; action: "continue" | "stop"; appliedRevision: number; scope: "discussion-admission"; nativeInterruption: false } };
 export type BotBurstMessage = { reply?: import("./bot-replies").BotReplyReference; id: string; botId: string; text: string; attachmentIds: string[]; createdAt: string;
   state: "pending" | "dispatching" | "sent" | "uncertain" | "failed"; batchId: string | null; turnId: string | null };
-export type BotBurst = { id: string; botId: string; state: "pending" | "preparing" | "paused" | "dispatching" | "sent" | "uncertain" | "failed" | "discarded";
+export type BotBurst = { id: string; botId: string; revision?: number; state: "pending" | "preparing" | "paused" | "dispatching" | "sent" | "uncertain" | "failed" | "discarded";
   messageIds: string[]; dueAt: string | null; operationId: string | null; turnId: string | null; error: string | null };
-export type BotBurstState = { paused?: boolean; control?: { operationId: string; method: string; botId: string }; heldIds?: string[]; inFlightIds?: string[]; messages: BotBurstMessage[]; burst: BotBurst | null; batches?: BotBurst[]; attachments?: BotAttachment[] };
+export type BotBurstState = { threadId?: string | null; controlRevision?: number; paused?: boolean; control?: { operationId: string; method: string; botId: string }; heldIds?: string[]; inFlightIds?: string[]; messages: BotBurstMessage[]; burst: BotBurst | null; batches?: BotBurst[]; attachments?: BotAttachment[] };

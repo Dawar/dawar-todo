@@ -560,7 +560,7 @@ export class BotRuntime extends EventEmitter {
   }
   snapshot() {
     return {
-      capabilities: { accountUsageHistory: 1, runtimeMaintenance: 1, botAdministration: 1, botMemoryMaintenance: 1, backgroundRunLanes: 1, scheduleDecisions: 1, singleThreadExecution: 1, peerInbox: 1, peerRootControls: 1, peerBodyPaging: 1, nativeGoals: 1, nativeConversation: 1, messageReplies: 1, secureInputs: 1, operatorCalls: 1, operatorInputQuestions: 1, historyCursorIndex: 1, messageBursts: 1, burstDiscard: 1, burstControls: 1, queueLists: 1, queueRelativeMoves: 1, queueSendNow: 1, ...(this.storage ? { taskQueues: 1 } : {}), teams: 1, ...(this.desktops ? { botDesktops: 1, botBrowserRetention: 1 } : {}) },
+      capabilities: { accountUsageHistory: 1, runtimeMaintenance: 1, botAdministration: 1, botMemoryMaintenance: 1, backgroundRunLanes: 1, scheduleDecisions: 1, singleThreadExecution: 1, peerInbox: 1, peerRootControls: 1, peerBodyPaging: 1, nativeGoals: 1, nativeConversation: 1, messageReplies: 1, secureInputs: 1, operatorCalls: 1, operatorInputQuestions: 1, historyCursorIndex: 1, messageBursts: 1, burstDiscard: 1, burstControls: 1, burstQueue: 1, queueLists: 1, queueRelativeMoves: 1, queueSendNow: 1, ...(this.storage ? { taskQueues: 1 } : {}), teams: 1, ...(this.desktops ? { botDesktops: 1, botBrowserRetention: 1 } : {}) },
 
       botAdminLeadIds: [...this.botAdmin.leads],
       teams: publicTeams(this),
@@ -618,6 +618,8 @@ export class BotRuntime extends EventEmitter {
     if (method.startsWith("botAdmin.")) return this.botAdmin.owner(request, trustedOrigin);
     if ((method === "queue.taskConfirm" || method === "queue.add" && params.taskExportId) && (!request.clientId || trustedOrigin))
       throw new Error("Task queue transfer requires the authenticated owner browser.");
+    if (method === "bursts.queue" && (!request.clientId || trustedOrigin))
+      throw Object.assign(Error("Burst queue transfer requires the authenticated owner browser."), {outcome:"rejected"});
     if(method.startsWith("secure.") && method!=="secure.list")throw Error("Sensitive input requires the dedicated encrypted channel; ordinary RPC is rejected.");
     if (method === "usage.history" && (!request.clientId || trustedOrigin))
       throw Error("Account usage history requires the authenticated owner browser.");
@@ -646,11 +648,11 @@ export class BotRuntime extends EventEmitter {
       .digest("hex");
     // Pause is a synchronous local fence, independent of the long execution
     // lock. It cannot cancel a native reservation, but can stop preparation.
-    if (["bursts.stop", "bursts.resume", "bursts.start"].includes(method) || method === "bursts.discard" && params.pendingOnly === true) {
+    if (["bursts.stop", "bursts.resume", "bursts.start", "bursts.queue"].includes(method) || method === "bursts.discard" && params.pendingOnly === true) {
       const existing = this.store.operation(operationId);
       if (existing) {
         if (existing.fingerprint !== fingerprint) throw Error("Operation ID was reused with different input.");
-        if (existing.status === "done") return method === "bursts.discard" ? existing.result :
+        if (existing.status === "done") return ["bursts.discard","bursts.queue"].includes(method) ? existing.result :
           { ...existing.result, control: { operationId, method, botId } };
         throw Object.assign(Error("The original burst action needs reconciliation."), { outcome: "uncertain" });
       }

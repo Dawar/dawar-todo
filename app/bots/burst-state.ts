@@ -26,6 +26,6 @@ export function savedBurstState(value: SavedBurstState): SavedBurstState {
     truncated.add(message.id); return { ...message, text: message.text.slice(0, 2000) };
   });
   const fileIds = new Set(messages.flatMap(message => message.attachmentIds));
-  return { paused: value.paused, burst: value.burst, batches: value.batches, messages, attachments: value.attachments?.filter(file => fileIds.has(file.id)),
+  return { threadId:value.threadId, controlRevision:value.controlRevision, paused: value.paused, burst: value.burst, batches: value.batches, messages, attachments: value.attachments?.filter(file => fileIds.has(file.id)),
     preview: { messageCount: pendingMessageCount(value), truncatedTextIds: messages.filter(message => truncated.has(message.id)).map(message => message.id) } };
 }

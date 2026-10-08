@@ -78,6 +78,7 @@ import { ArtifactGallery, BotAttachmentsEntry, ArtifactNav } from "./artifact-ga
 import { PromptQueue } from "./prompt-queue";
 import { TeamsManager, TeamAssignment } from "./teams";
 import { QueueLists, useQueueLists } from "./queue-lists";
+import { useComposerQueueDestination } from "./composer-queue-destination";
 import "./bots.css";
 import "./chat-design.css";
 
@@ -426,15 +427,14 @@ export function BotsWorkspace() {
     });
   }
   async function send(queueNext = false, listId: string | null = null) {
-    if (!composer || !bot || !canSend) return;
+    if (!composer || !bot || !canSend || queueDestination.busy) return;
     const id = bot.id;
     await composer.send(queueNext, burstEnabled, listId);
     if (queueNext) { await loadQueue(id); await refreshQueueLists().catch(() => {}); }
   }
-  function queueMessage() {
-    if (!canSend || !online || (!draft.trim() && !uploads.length)) return;
-    void send(true);
-  }
+  const queueDestination = useComposerQueueDestination({owner, botId: selected, threadId: bot?.threadId,
+    composer, online, supported: queueListsSupported, canSend, burst: burstEnabled, refresh: refreshQueues});
+  function queueMessage() { void queueDestination.queue(); }
   async function editQueued(item: BotQueuedSubmission) {
     const editingComposer = composer, editingBot = selected;
     const saved = await editingComposer?.checkout(item);
@@ -743,7 +743,7 @@ export function BotsWorkspace() {
                         title="Queue next (Ctrl+Enter)"
                         aria-label="Queue next"
                         aria-keyshortcuts="Control+Enter"
-                        disabled={!online || !canSend ||
+                        disabled={!online || !canSend || queueDestination.busy ||
                           (!draft.trim() && !uploads.length)}
                         onClick={queueMessage}>
                         <ListPlus size={20} aria-hidden="true" />
@@ -791,6 +791,7 @@ export function BotsWorkspace() {
                         disabled={
                           !online ||
                           !canSend ||
+                          queueDestination.busy ||
                           (!draft.trim() && !uploads.length)
                         }
                       >
@@ -804,6 +805,9 @@ export function BotsWorkspace() {
                   </form>
                 </>
               )}
+              {queueDestination.dialog}
+              {queueDestination.checking && <p className="bots-queue-picker-note" role="status">Checking the active queue…</p>}
+              {queueDestination.error && !queueDestination.busy && <p className="bots-lists-error" role="alert">{queueDestination.error}</p>}
               {bot.archived && (
                 <div className="bots-archived-banner">
                   This bot is archived.

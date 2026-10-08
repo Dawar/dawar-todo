@@ -12,8 +12,8 @@ export type InboxItem = { id: string; botId: string; kind: 'schedule' | 'peer'; 
 export type PeerRequest = BotPeerRequest;
 export type PeerExchange = BotPeerExchange;
 export type BurstMessage = { reply?: import('../../lib/bot-replies').BotReplyReference; id: string; botId: string; text: string; attachmentIds: string[]; createdAt: string; state: 'pending' | 'dispatching' | 'sent' | 'uncertain' | 'failed' | 'discarded'; dismissed?: boolean; batchId: string | null; turnId: string | null };
-export type Burst = { id: string; botId: string; state: 'pending' | 'preparing' | 'paused' | 'dispatching' | 'sent' | 'uncertain' | 'failed' | 'discarded'; messageIds: string[]; dueAt: string | null; operationId: string | null; turnId: string | null; error: string | null };
-export type BurstState = { paused?: boolean; control?: { operationId: string; method: string; botId: string }; heldIds?: string[]; inFlightIds?: string[]; messages: BurstMessage[]; burst: Burst | null; batches?: Burst[]; attachments?: BotAttachment[] };
+export type Burst = { id: string; botId: string; revision?: number; state: 'pending' | 'preparing' | 'paused' | 'dispatching' | 'sent' | 'uncertain' | 'failed' | 'discarded'; messageIds: string[]; dueAt: string | null; operationId: string | null; turnId: string | null; error: string | null };
+export type BurstState = { threadId?: string | null; controlRevision?: number; paused?: boolean; control?: { operationId: string; method: string; botId: string }; heldIds?: string[]; inFlightIds?: string[]; messages: BurstMessage[]; burst: Burst | null; batches?: Burst[]; attachments?: BotAttachment[] };
 export type BotSnapshot = Omit<LegacySnapshot, 'bots' | 'capabilities'> & { bots: Bot[]; workByBot?: WorkState[]; capabilities?: LegacySnapshot['capabilities'] & { singleThreadExecution?: 1; peerInbox?: 1; nativeGoals?: 1; messageBursts?: 1 } };
 export type BotOperations = Omit<LegacyOperations, 'bots.update'> & {
   'bots.update': { params: LegacyOperations['bots.update']['params'] & { avatar?: Pick<AvatarIdentity, 'shape' | 'color'>; burstQuietSeconds?: 0 | 2.5 | 3 | 8 | 15 }; result: Bot };

@@ -68,6 +68,7 @@ export type BotOperations = {
   "peers.reply": { params: { id: string; text: string; attachmentIds?: string[]; state: "waiting" | "completed" | "failed" }; result: { request: BotPeerRequest } };
   "peers.cancel": { params: { id: string }; result: { request: BotPeerRequest } };
   "bursts.read": { params: Record<string, never>; result: BotBurstState };
+  "bursts.queue": { params: import("./burst-queue").BurstQueueParams; result: BotBurstState & {transfer:import("./burst-queue").BurstQueueReceipt} };
   "bursts.submit": { params: { reply?: BotReplyReference; text: string; attachments?: string[] }; result: { message: BotBurstMessage; burst: BotBurst } };
   "bursts.typing": { params: { clientId: string; typing: boolean }; result: Record<string, never> };
   "bursts.start": { params: Record<string, never>; result: BotBurstState };

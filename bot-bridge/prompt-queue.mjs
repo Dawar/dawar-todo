@@ -14,14 +14,14 @@ export function finishLocalOperation(store, id, result) {
   if (operation) store.saveOperation(id, operation.fingerprint, "done", { ...operation, result, error: null });
   return result;
 }
-export function enqueuePrompt(runtime, bot, params, id, input, taskSource) {
+export function enqueuePrompt(runtime, bot, params, id, input, taskSource, allocatedPosition) {
   return runtime.store.transaction(() => {
     const existing = runtime.store.get("promptQueue", id);
     if (existing && existing.botId !== bot.id) throw new Error("Queue identity belongs to another bot.");
     const item = existing ?? runtime.store.put("promptQueue", {
       id, botId: bot.id, threadId: bot.threadId, listId: params.listId ?? null, clientUserMessageId: id, input,
       attachmentIds: [...(params.attachments ?? [])],
-      state: "queued", revision: 1, position: Math.max(0, ...stagedQueue(runtime.store, bot.id, params.listId ?? null).map(entry => entry.position)) + 1,
+      state: "queued", revision: 1, position: allocatedPosition ?? Math.max(0, ...stagedQueue(runtime.store, bot.id, params.listId ?? null).map(entry => entry.position)) + 1,
       source: taskSource ?? { kind: "conversation", operationId: id }, createdAt: now(),
     });
     rememberReply(runtime, bot, id, params.text, params.reply);
