@@ -11,6 +11,7 @@ const identity = (value, label) => {
   return value;
 };
 const bounded = (value, limit) => typeof value === 'string' ? value.slice(0, limit) : '';
+const displayable = item => item.type === 'agentMessage' && (item.phase == null || ['commentary', 'final_answer'].includes(item.phase));
 const botInfo = bot => ({ id: bot.id, name: bot.name, avatar: bot.avatar, extension: bot.extension, purpose: bounded(bot.purpose, 300) });
 
 // Call records are routing/transcript/delivery receipts. They never own bot
@@ -53,7 +54,9 @@ export class OperatorCalls {
       COALESCE(json_extract(json,'$.data.params.item.phase'),json_extract(json,'$.data.entry.item.phase')) AS phase
       FROM events WHERE json_extract(json,'$.botId')=? AND
       COALESCE(json_extract(json,'$.data.params.turnId'),json_extract(json,'$.data.turnId'))=? AND
-      COALESCE(json_extract(json,'$.data.params.item.type'),json_extract(json,'$.data.entry.item.type'))='agentMessage'
+      COALESCE(json_extract(json,'$.data.params.item.type'),json_extract(json,'$.data.entry.item.type'))='agentMessage' AND
+      (COALESCE(json_extract(json,'$.data.params.item.phase'),json_extract(json,'$.data.entry.item.phase')) IS NULL OR
+       COALESCE(json_extract(json,'$.data.params.item.phase'),json_extract(json,'$.data.entry.item.phase')) IN ('commentary','final_answer'))
       ORDER BY seq DESC LIMIT 4`).all(botId, turnId);
     return rows.filter((r, index) => r.text?.trim() && rows.findIndex(other => other.id === r.id) === index)
       .slice(0, 2).reverse().map(row => ({ id: row.id, text: row.text, phase: row.phase, turnId, observedSequence: row.seq }));
@@ -75,7 +78,7 @@ export class OperatorCalls {
         } catch { /* Optional reference files never grant permissions. */ } finally { await handle?.close(); }
       }
       const page = await this.runtime.historyReads.page(bot.threadId, null, 2, 'summary');
-      recent = page.data.slice(0, 2).reverse().flatMap(turn => (turn.items ?? []).filter(item => ['userMessage', 'agentMessage'].includes(item.type)).slice(-4).map(item => ({
+      recent = page.data.slice(0, 2).reverse().flatMap(turn => (turn.items ?? []).filter(item => item.type === 'userMessage' || displayable(item)).slice(-4).map(item => ({
         role: item.type === 'userMessage' ? 'user' : 'assistant',
         text: bounded(item.text ?? item.content?.filter(part => part.type === 'text').map(part => part.text).join('\n'), 1200),
       }))).slice(-6);
@@ -113,7 +116,7 @@ export class OperatorCalls {
         turn = { ...turn, items: [...turn.items, ...this.progress(bot.id, turn.id).map(i => ({ ...i, type: 'agentMessage' }))]
           .filter((item, index, items) => items.findIndex(i => i.id === item.id) === index) };
       }
-      const terminalEvidence = turn && terminalTurn(turn) ? { ...turn, items: (turn.items ?? []).filter(item => item.type === 'agentMessage').slice(-5).map(item => ({ ...item, text: bounded(item.text, 8000) })) } :
+      const terminalEvidence = turn && terminalTurn(turn) ? { ...turn, items: (turn.items ?? []).filter(item => displayable(item)).slice(-5).map(item => ({ ...item, text: bounded(item.text, 8000) })) } :
         asyncAnswer && request.terminalEvidence?.id !== answer?.receipt?.turnId ? null : request.terminalEvidence;
       this.store.put('operatorRequest', { ...request, turnId, cursor: found.nextCursor, terminalEvidence });
       // A retained terminal native observation is historical evidence only.
@@ -121,7 +124,7 @@ export class OperatorCalls {
       if (!turn && terminalEvidence) turn = terminalEvidence;
     }
     const pending = turnId ? this.store.list('pending', bot.id).filter(row => row.request?.params?.threadId === request.threadId && row.request?.params?.turnId === turnId) : [];
-    const messages = (turn?.items ?? []).filter(item => item.type === 'agentMessage').map(item => ({ id: item.id, text: bounded(item.text, 8000), phase: item.phase }));
+    const messages = (turn?.items ?? []).filter(item => displayable(item)).map(item => ({ id: item.id, text: bounded(item.text, 8000), phase: item.phase }));
     const finals = messages.filter(item => item.phase === 'final_answer');
     const state = pending.length ? 'needs-input' : turn ? terminalTurn(turn) ? turn.status === 'completed' ? finals.length ? 'completed' : 'turn-ended' : turn.status : 'working'
       : queued?.state === 'cancelled' ? 'cancelled' : queued?.state === 'failed' || op?.status === 'failed' && op.outcome === 'rejected' ? 'rejected'

@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Mic, MicOff, Phone, PhoneOff, Square, VolumeX, X } from 'lucide-react';
 import type { OperatorBot, OperatorContext, OperatorSegment, OperatorView } from '../../lib/operator-types';
-import { OperatorVoiceEvents } from '../../lib/operator-voice-events';
+import { OperatorVoiceEvents, type OperatorRealtimeEvent } from '../../lib/operator-voice-events';
 import { BotMessage } from './message';
 import { botsClient } from './client';
 import { registerPwaUpdateGuard } from '../pwa-update';
@@ -80,7 +80,7 @@ export function OperatorCallHistory({ owner, botId, online }: { owner: string; b
   return <div className="operator-call-history"><h3>Calls</h3>{error && <p role="alert">{error}</p>}{cards.map(segment => <OperatorCallCard key={segment.id} segment={segment} />)}{cursor && <button disabled={loading || !online} onClick={() => void older()}>Earlier calls</button>}{!cards.length && !error && <p className="operator-muted">Call conversations and submitted bot work appear here.</p>}</div>;
 }
 
-type RealtimeEvent = { type?: string; item_id?: string; item?: { id?: string }; transcript?: string; error?: { message?: string }; response?: { output?: Array<{ type?: string; call_id?: string; name?: string; arguments?: string }> } };
+type RealtimeEvent = OperatorRealtimeEvent & { transcript?: string };
 type Start = { sessionId: string; clientSecret: string; operator: OperatorContext };
 export function OperatorQuestionContext({ context }: { context: OperatorContext }) {
   const requests = context.pendingQuestions ?? [];
@@ -110,21 +110,23 @@ export function OperatorCallDialog({ bot, bots, onClose }: { bot: OperatorBot | 
   useEffect(() => { voice.current = new OperatorVoiceEvents(event => { if (channel.current?.readyState !== "open") return false; channel.current.send(JSON.stringify(event)); return true; }); }, []);
   async function refresh() {
     if (!session.current || ended.current || polling.current) return;
+    const id = session.current, attention = voice.current;
     polling.current = true;
     try {
-      const result = await api<{ operator?: OperatorContext; operatorView?: OperatorView }>(`/api/talk/sessions/${session.current}`, { action: 'heartbeat' }, 'PATCH');
-      if (!alive.current || ended.current) return;
-      voice.current!.heartbeat(result);
+      const result = await api<{ operator?: OperatorContext; operatorView?: OperatorView }>(`/api/talk/sessions/${id}`, { action: 'heartbeat' }, 'PATCH');
+      if (!alive.current || ended.current || session.current !== id || voice.current !== attention) return;
+      attention!.heartbeat(result);
       if (result.operator) setSelected(voice.current!.context);
       if (result.operatorView) setView(result.operatorView);
-    } catch (cause) { if (alive.current) setError(cause instanceof Error ? cause.message : 'Call readback is unavailable.'); }
+    } catch (cause) { if (alive.current && session.current === id && voice.current === attention && !ended.current) setError(cause instanceof Error ? cause.message : 'Call readback is unavailable.'); }
     finally { polling.current = false; }
   }
   async function tool(name: string, args: Record<string, unknown>, callId: string) {
-    const id = session.current;
+    const id = session.current, attention = voice.current;
     if (!id || ended.current) throw new Error('The voice connection has ended.');
     const body = await api<{ result: Record<string, unknown> }>(`/api/talk/sessions/${id}/tools`, { callId, name, arguments: args });
-    voice.current!.apply(body.result);
+    if (ended.current || session.current !== id || voice.current !== attention) throw new Error('The original call ended. Track the original action receipt; do not resubmit.');
+    attention!.apply(body.result);
     if (body.result.operator) setSelected(voice.current!.context);
     return body.result;
   }
@@ -138,7 +140,7 @@ export function OperatorCallDialog({ bot, bots, onClose }: { bot: OperatorBot | 
   function event(raw: string) {
     let value: RealtimeEvent;
     try { value = JSON.parse(raw); } catch { return; }
-    voice.current!.observe(value);
+    if (!voice.current!.observe(value)) return;
     if (value.type?.includes('input_audio_transcription.completed')) { lastSpeech.current = Date.now(); void transcript(value, 'user'); }
     if (value.type?.includes('output_audio_transcript.done')) void transcript(value, 'assistant');
     if (value.type === 'input_audio_buffer.speech_started') setStatus('Listening');
@@ -149,19 +151,24 @@ export function OperatorCallDialog({ bot, bots, onClose }: { bot: OperatorBot | 
     const calls = value.response?.output?.filter(item => item.type === 'function_call' && item.call_id && !queuedTools.current.has(item.call_id)) ?? [];
     for (const call of calls) queuedTools.current.add(call.call_id!);
     if (!calls.length) return;
+    const id = session.current, attention = voice.current;
+    const current = () => !ended.current && session.current === id && voice.current === attention;
     tools.current = tools.current.then(async () => {
       for (const call of calls) {
-        if (ended.current) return;
+        if (!current()) return;
         let output: Record<string, unknown>;
         try { output = await tool(call.name!, JSON.parse(call.arguments || '{}') as Record<string, unknown>, call.call_id!); }
         catch (cause) { output = { error: cause instanceof Error ? cause.message : 'Original delivery is unconfirmed. Track it before retrying.' }; }
-        send({ type: 'conversation.item.create', item: { type: 'function_call_output', call_id: call.call_id, output: JSON.stringify(output) } });
+        if (!current()) return;
+        if (!send({ type: 'conversation.item.create', item: { type: 'function_call_output', call_id: call.call_id, output: JSON.stringify(output) } })) {
+          setError('Voice output is unconfirmed. Submitted bot work retains its original receipt; do not resubmit.'); return;
+        }
       }
-      send({ type: 'response.create' });
+      if (current()) attention!.respond();
     });
   }
   async function end() {
-    if (ended.current) return; ended.current = true;
+    if (ended.current) return; ended.current = true; voice.current?.close();
     const id = session.current; session.current = null;
     channel.current?.close(); pc.current?.close(); stream.current?.getTracks().forEach(track => track.stop());
     audio.current?.pause(); if (audio.current) audio.current.srcObject = null;
@@ -173,6 +180,7 @@ export function OperatorCallDialog({ bot, bots, onClose }: { bot: OperatorBot | 
   }
   async function start() {
     if (startingRef.current || session.current) return;
+    voice.current = new OperatorVoiceEvents(send); queuedTools.current.clear(); tools.current = Promise.resolve();
     startingRef.current = true; setMuted(false); setStarting(true); setError(''); setStatus('Connecting'); ended.current = false;
     try {
       const mic = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -188,7 +196,7 @@ export function OperatorCallDialog({ bot, bots, onClose }: { bot: OperatorBot | 
       const speaker = new Audio(); speaker.autoplay = true; audio.current = speaker;
       peer.ontrack = value => { speaker.srcObject = value.streams[0]; void speaker.play().catch(() => { if (alive.current) setError('Tap Enable speaker to allow audio playback.'); }); };
       const dataChannel = peer.createDataChannel('oai-events'); channel.current = dataChannel;
-      dataChannel.addEventListener('message', value => event(String(value.data)));
+      dataChannel.addEventListener('message', value => { if (channel.current === dataChannel && !ended.current) event(String(value.data)); });
       const opened = new Promise<void>((resolve, reject) => {
         const timer = setTimeout(() => reject(new Error('The voice data channel did not open.')), 15000);
         dataChannel.addEventListener('open', () => { clearTimeout(timer); resolve(); }, { once: true });
@@ -201,7 +209,7 @@ export function OperatorCallDialog({ bot, bots, onClose }: { bot: OperatorBot | 
       await peer.setRemoteDescription({ type: 'answer', sdp: await answer.text() }); await opened;
       if (ended.current || !alive.current) return;
       lastSpeech.current = Date.now(); setConnected(true); setStatus('Listening');
-      send({ type: 'response.create', response: { instructions: 'Greet exactly: Operator. Then listen. The server-confirmed selected bot context is already active.' } });
+      voice.current!.respond({ instructions: 'Greet exactly: Operator. If a bot is connected, briefly identify it from the confirmed context. Then listen.' });
       peer.onconnectionstatechange = () => { if (peer.connectionState === 'failed' && !ended.current) { setError('The voice connection dropped. Submitted bot work continues; track its original receipt.'); void end(); } };
       await refresh();
     } catch (cause) { if (alive.current) setError(cause instanceof Error ? cause.message : 'The call could not start.'); await end(); }

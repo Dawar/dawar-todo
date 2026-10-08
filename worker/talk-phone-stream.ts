@@ -1,5 +1,5 @@
 import { phoneOperator, operatorHeartbeat, operatorInstructions, operatorToolDefinitions, operatorTranscript, endOperator } from "../lib/operator-server";
-import { OperatorVoiceEvents } from "../lib/operator-voice-events";
+import { OperatorVoiceEvents, type OperatorRealtimeEvent } from "../lib/operator-voice-events";
 import {
   appendTalkMessage,
   beginTalkToolCall,
@@ -71,25 +71,10 @@ type TwilioEvent =
   | TwilioStartEvent
   | TwilioMediaEvent
   | TwilioStopEvent
+  | { event: "mark"; streamSid?: string; mark?: { name?: string } }
   | { event?: string };
 
-type OpenAIEvent = {
-  type?: string;
-  item_id?: string;
-  transcript?: string;
-  delta?: string;
-  error?: { message?: string; code?: string };
-  response?: {
-    id?: string;
-    status?: string;
-    output?: Array<{
-      type?: string;
-      call_id?: string;
-      name?: string;
-      arguments?: string;
-    }>;
-  };
-};
+type OpenAIEvent = OperatorRealtimeEvent & { transcript?: string; delta?: string };
 
 type WorkerResponse = Response & { webSocket?: WebSocket };
 
@@ -212,6 +197,8 @@ export async function handleTalkPhoneStream(
   let rolloverTimer: ReturnType<typeof setTimeout> | null = null;
   let startupTimer: ReturnType<typeof setTimeout> | null = null;
   const startedAt = Date.now();
+  const audioResponses = new Set<string>();
+  const playbackMarks = new Map<string, string>();
   const operatorVoice = new OperatorVoiceEvents(event => sendJson(openAI,event));
 
   const heartbeat = async () => {
@@ -249,7 +236,7 @@ export async function handleTalkPhoneStream(
 
   const finish = async (status: "completed" | "failed", reason: string) => {
     if (ending) return;
-    ending = true;
+    ending = true; operatorVoice.close(); audioResponses.clear(); playbackMarks.clear();
     if (startupTimer) clearTimeout(startupTimer);
     if (rolloverTimer) clearTimeout(rolloverTimer);
     webSocketClose(openAI, status === "completed" ? 1000 : 1011, reason);
@@ -271,7 +258,7 @@ export async function handleTalkPhoneStream(
   };
 
   const sendToolOutput = (toolCallId: string, result: Record<string, unknown>) => {
-    sendJson(openAI, {
+    return sendJson(openAI, {
       type: "conversation.item.create",
       item: {
         type: "function_call_output",
@@ -288,7 +275,9 @@ export async function handleTalkPhoneStream(
   }) => {
     const callId = String(tool.call_id ?? "").trim();
     const name = String(tool.name ?? "").trim();
-    if (!callId || !name || !userKey || !talkSessionId) return;
+    if (!callId || !name || !userKey || !talkSessionId || ending) return false;
+    const transport = openAI;
+    const output = (result: Record<string, unknown>) => !ending && transport === openAI && sendToolOutput(callId, result);
     let args: Record<string, unknown> = {};
     try {
       const parsed = JSON.parse(tool.arguments || "{}") as unknown;
@@ -310,12 +299,10 @@ export async function handleTalkPhoneStream(
       });
       if (existing.replayed && existing.result) {
         operatorVoice.apply({ operator: existing.result.operator, sessionUpdate: existing.result.sessionUpdate });
-        sendToolOutput(callId, existing.result);
-        return;
+        return output(existing.result);
       }
       if (existing.replayed && existing.pending) {
-        sendToolOutput(callId, { error: "That action is already processing." });
-        return;
+        return output({ error: "That action is already processing." });
       }
       const result = await dispatchTalkTool({
         userKey,
@@ -339,7 +326,7 @@ export async function handleTalkPhoneStream(
         undoToken: result.undoToken ?? null,
         sources: result.sources ?? [],
       });
-      sendToolOutput(callId, result);
+      const delivered = output(result);
       console.info("[todo-talk-phone] tool call completed", {
         callSid,
         talkSessionId,
@@ -347,6 +334,7 @@ export async function handleTalkPhoneStream(
         name,
         undoAvailable: Boolean(result.undoToken),
       });
+      return delivered;
     } catch (error) {
       const message = error instanceof Error ? error.message : "That action did not complete.";
       await completeTalkToolCall({
@@ -356,7 +344,7 @@ export async function handleTalkPhoneStream(
         result: { error: message },
         failed: true,
       }).catch(() => undefined);
-      sendToolOutput(callId, { error: message });
+      const delivered = output({ error: message });
       console.error("[todo-talk-phone] tool call failed", {
         callSid,
         talkSessionId,
@@ -364,14 +352,16 @@ export async function handleTalkPhoneStream(
         name,
         error,
       });
+      return delivered;
     }
   };
 
   const handleOpenAIEvent = (raw: unknown) => {
     const event = parseJson<OpenAIEvent>(raw);
-    if (!event?.type) return;
-    operatorVoice.observe(event);
+    if (!event?.type || ending) return;
+    if (!operatorVoice.observe(event)) return;
     if (event.type === "response.output_audio.delta" && event.delta) {
+      if (event.response_id) { audioResponses.add(event.response_id); operatorVoice.playbackStarted(event.response_id); }
       sendJson(twilio, {
         event: "media",
         streamSid,
@@ -380,7 +370,11 @@ export async function handleTalkPhoneStream(
       return;
     }
     if (event.type === "input_audio_buffer.speech_started") {
+      // clear echoes outstanding marks for unplayed audio. Retire them as interrupted.
       sendJson(twilio, { event: "clear", streamSid });
+      playbackMarks.clear();
+      for (const id of audioResponses) operatorVoice.playbackStopped(id, true);
+      audioResponses.clear();
       return;
     }
     if (event.type.includes("input_audio_transcription.completed")) {
@@ -409,12 +403,18 @@ export async function handleTalkPhoneStream(
       return;
     }
     if (event.type === "response.done") {
+      const id = event.response?.id;
+      if (id && audioResponses.has(id)) {
+        const name = crypto.randomUUID(); playbackMarks.set(name, id);
+        sendJson(twilio, { event: "mark", streamSid, mark: { name } });
+      }
       const tools = event.response?.output?.filter((item) => item.type === "function_call") ?? [];
       if (tools.length) {
+        const transport = openAI;
         toolQueue = toolQueue
           .then(async () => {
-            for (const tool of tools) await runToolCall(tool);
-            sendJson(openAI, { type: "response.create" });
+            for (const tool of tools) { if (ending || openAI !== transport || !await runToolCall(tool)) return; }
+            if (!ending && openAI === transport) operatorVoice.respond();
           })
           .catch((error) => console.error("[todo-talk-phone] tool queue failed", {
             callSid,
@@ -438,15 +438,17 @@ export async function handleTalkPhoneStream(
     const { model, voice } = talkRuntimeConfig(realtimeVoice);
     const safetyIdentifier = await hashedSafetyIdentifier(userKey);
     const next = await openOpenAIRealtimeSocket(environment, { model, safetyIdentifier });
-    next.addEventListener("message", (message) => handleOpenAIEvent(message.data));
+    next.addEventListener("message", (message) => { if (next === openAI) handleOpenAIEvent(message.data); });
     next.addEventListener("close", () => {
       if (!ending && next === openAI) void finish("failed", "openai-disconnected");
     });
     next.addEventListener("error", () => {
       if (!ending && next === openAI) void finish("failed", "openai-connection-error");
     });
+    if (ending) { webSocketClose(next, 1000, "call-ended"); return; }
     const previous = openAI;
-    openAI = next;
+    openAI = next; operatorVoice.transportReset(rollover);
+    audioResponses.clear(); playbackMarks.clear();
     sendJson(openAI, {
       type: "session.update",
       session: {
@@ -475,12 +477,8 @@ export async function handleTalkPhoneStream(
     });
     if (rollover) {
       webSocketClose(previous, 1000, "session-rollover");
-      sendJson(openAI, {
-        type: "response.create",
-        response: {
-          instructions: "Continue seamlessly from the phone conversation. Say nothing unless the user is waiting for a response.",
-        },
-      });
+      // Operator resumes retained evidence on heartbeat; ordinary Talk retains its existing continuation.
+      if (!operatorVoice.context) operatorVoice.respond({ instructions: "Continue seamlessly from the phone conversation. Say nothing unless the user is waiting for a response." });
     }
     rolloverTimer = setTimeout(() => {
       void (async () => {
@@ -570,12 +568,7 @@ export async function handleTalkPhoneStream(
       for (const audio of pending) {
         sendJson(openAI, { type: "input_audio_buffer.append", audio });
       }
-      sendJson(openAI, {
-        type: "response.create",
-        response: {
-          instructions: operatorVoice.context ? "Greet exactly: Operator. Then listen." : "Start immediately with one terse, useful question about the focused task. No greeting or capability explanation.",
-        },
-      });
+      operatorVoice.respond({ instructions: operatorVoice.context ? "Greet exactly: Operator. Briefly identify the confirmed bot, then listen." : "Start immediately with one terse, useful question about the focused task. No greeting or capability explanation." });
       console.info("[todo-talk-phone] authenticated media bridge started", {
         callSid,
         talkSessionId,
@@ -625,6 +618,11 @@ export async function handleTalkPhoneStream(
         console.error("[todo-talk-phone] heartbeat failed", { callSid, talkSessionId, error });
         void finish("failed", "session-replaced");
       });
+      return;
+    }
+    if (event.event === "mark" && 'mark' in event && (!event.streamSid || event.streamSid === streamSid)) {
+      const name = event.mark?.name, id = name && playbackMarks.get(name);
+      if (id && name) { playbackMarks.delete(name); audioResponses.delete(id); operatorVoice.playbackStopped(id); }
       return;
     }
     if (event.event === "stop") void finish("completed", "caller-ended");
