@@ -54,6 +54,10 @@ export function mutatePrompt(runtime, bot, item, method, params, operationId, in
   });
 }
 export async function dispatchPrompt(runtime, bot, item) {
+  if (runtime.maintenance?.holding()) return;
+  return runtime.maintenance ? runtime.maintenance.admit(() => dispatchAdmitted(runtime, bot, item)) : dispatchAdmitted(runtime, bot, item);
+}
+async function dispatchAdmitted(runtime, bot, item) {
   if (item.state !== "queued" || item.listId) return;
   const operationId = `queue-start:${createHash("sha256").update(`${bot.id}:${item.id}:${item.revision}`).digest("hex")}`;
   const prior = runtime.store.operation(operationId);

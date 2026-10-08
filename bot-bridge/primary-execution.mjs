@@ -155,6 +155,10 @@ export class PrimaryExecution {
     }
   }
   async submit(bot, item) {
+    if (this.runtime.maintenance.holding()) return;
+    return this.runtime.maintenance.admit(() => this.submitAdmitted(bot, item));
+  }
+  async submitAdmitted(bot, item) {
     item = this.store.get('primaryInbox', item.id);
     if (item.state !== 'queued' || this.store.get('primaryInbox', item.id)?.state !== 'queued' || !this.runtime.peers.canDispatch(item)) return;
     if (!this.runtime.memoryMaintenance.eligible(this.store.bot(bot.id), item)) return;
@@ -202,6 +206,9 @@ export class PrimaryExecution {
     }
   }
   async submitPrompt(bot, item, operationId, attempt) {
+    return this.runtime.maintenance.admit(() => this.submitPromptAdmitted(bot, item, operationId, attempt));
+  }
+  async submitPromptAdmitted(bot, item, operationId, attempt) {
     const preparationId = randomUUID(); let plan, fence;
     try {
       const input = await this.runtime.memoryMaintenance.queuedInput(bot, item.input);
@@ -374,12 +381,12 @@ export class PrimaryExecution {
       return first < 0 ? rows : [...rows.slice(first), ...rows.slice(0, first)];
     };
     const bots = this.store.bots();
-    const dueMigrations = bots.filter(b => !b.archived && !this.single(b) && !this.runtime.locks.has(b.id) &&
+    const dueMigrations = bots.filter(b => !this.runtime.maintenance.holding() && !b.archived && !this.single(b) && !this.runtime.locks.has(b.id) &&
       !(Date.parse(this.store.get('executionMigration', b.id)?.checkAfter ?? '') > Date.now()));
     for (const bot of rotate(dueMigrations, this.migrationAfter).slice(0, 1)) {
       this.migrationAfter = bot.id;
       this.store.put('executionMigration', { ...this.store.get('executionMigration', bot.id), id: bot.id, botId: bot.id, checkAfter: new Date(Date.now() + 60000).toISOString() });
-      await this.runtime.lock(bot.id, () => this.migrate(this.store.bot(bot.id))).catch(e => this.runtime.emit('fault', e));
+      await this.runtime.lock(bot.id, () => this.runtime.maintenance.admit(() => this.migrate(this.store.bot(bot.id)))).catch(e => this.runtime.emit('fault', e));
     }
     const dueReceipts = bots.filter(b => !b.archived && this.single(b) && !this.runtime.locks.has(b.id)).flatMap(b => this.openItems(b.id))
       .filter(i => ['dispatching', 'uncertain', 'accepted'].includes(i.state) && !i.terminalStatus && !(Date.parse(i.reconcileAfter ?? '') > Date.now()));
@@ -411,6 +418,8 @@ export class PrimaryExecution {
             if (op) this.store.saveOperation(op.id, op.fingerprint, 'done', { ...op, result });
           }); return;
         }
+        if (this.runtime.maintenance.holding()) return;
+        return this.runtime.maintenance.admit(async () => {
         this.stageSchedules(bot);
         const firstHuman = stagedQueue(this.store, bot.id)[0];
         const before = this.store.bot(bot.id);
@@ -424,6 +433,7 @@ export class PrimaryExecution {
         const priority = row => row.kind === 'schedule' ? 0 : row.kind === 'memory-maintenance' ? 2 : 1;
         const first = this.openItems(bot.id).filter(i => i.state === 'queued' && this.runtime.peers.canDispatch(i) && this.runtime.memoryMaintenance.eligible(current, i) && (i.kind !== 'schedule' || occurrenceReady(this.store.get('run', i.sourceId)))).sort((a, b) => priority(a) - priority(b))[0];
         if (first) await this.submit(current, first);
+        });
       }).then(() => this.admissionBackoff.delete(bot.id)).catch(e => {
         const attempts = (this.admissionBackoff.get(bot.id)?.attempts ?? 0) + 1;
         const delay = Math.min(60_000, 1000 * 2 ** Math.min(attempts, 6));

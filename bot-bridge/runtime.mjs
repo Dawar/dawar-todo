@@ -1,3 +1,4 @@
+import { RuntimeMaintenance } from './runtime-maintenance.mjs';
 import { BotAdministration, BOT_ADMIN_TOOL } from './bot-admin.mjs';
 import { confirmTaskQueue } from "./task-queue.mjs";
 import { SecureInputs, redactSecureNotification } from "./secure-input.mjs";
@@ -201,6 +202,9 @@ export class BotRuntime extends EventEmitter {
     });
     this.botAdmin = new BotAdministration(this, adminLeadIds);
     this.epoch = randomUUID();
+    this.maintenance = new RuntimeMaintenance(this);
+    codex.admissionGuard = (method, params) => this.maintenance.native(method, params);
+    codex.on("notification", () => { this.maintenance.generation++; });
     this.historyReads = new HistoryReads(this);
     this.primary = new PrimaryExecution(this);
     this.operator = new OperatorCalls(this);
@@ -549,7 +553,7 @@ export class BotRuntime extends EventEmitter {
   }
   snapshot() {
     return {
-      capabilities: { botAdministration: 1, botMemoryMaintenance: 1, backgroundRunLanes: 1, scheduleDecisions: 1, singleThreadExecution: 1, peerInbox: 1, peerRootControls: 1, peerBodyPaging: 1, nativeGoals: 1, nativeConversation: 1, messageReplies: 1, secureInputs: 1, operatorCalls: 1, operatorInputQuestions: 1, historyCursorIndex: 1, messageBursts: 1, burstDiscard: 1, burstControls: 1, queueLists: 1, queueRelativeMoves: 1, queueSendNow: 1, ...(this.storage ? { taskQueues: 1 } : {}), teams: 1, ...(this.desktops ? { botDesktops: 1, botBrowserRetention: 1 } : {}) },
+      capabilities: { runtimeMaintenance: 1, botAdministration: 1, botMemoryMaintenance: 1, backgroundRunLanes: 1, scheduleDecisions: 1, singleThreadExecution: 1, peerInbox: 1, peerRootControls: 1, peerBodyPaging: 1, nativeGoals: 1, nativeConversation: 1, messageReplies: 1, secureInputs: 1, operatorCalls: 1, operatorInputQuestions: 1, historyCursorIndex: 1, messageBursts: 1, burstDiscard: 1, burstControls: 1, queueLists: 1, queueRelativeMoves: 1, queueSendNow: 1, ...(this.storage ? { taskQueues: 1 } : {}), teams: 1, ...(this.desktops ? { botDesktops: 1, botBrowserRetention: 1 } : {}) },
 
       botAdminLeadIds: [...this.botAdmin.leads],
       teams: publicTeams(this),
@@ -591,6 +595,9 @@ export class BotRuntime extends EventEmitter {
     }
   }
   async handle(request, trustedOrigin = null) {
+    return this.maintenance.handle(request, trustedOrigin, () => this.handleRequest(request, trustedOrigin));
+  }
+  async handleRequest(request, trustedOrigin = null) {
     const { method, botId, params = {}, operationId } = request;
     if (botId && ['turn.send', 'turn.interrupt', 'queue.add', 'queue.send', 'questions.respond', 'bots.archive', 'bots.delete', 'bursts.add', 'bursts.stop'].includes(method))
       this.memoryMaintenance.cancelPreparation(botId);
@@ -788,6 +795,7 @@ export class BotRuntime extends EventEmitter {
       versionKey: `run:${run.id}:${threadId}` };
   }
   async submitNative(method, params, attempt) {
+    this.maintenance.native(method, params); // reject before the effect/uncertainty boundary
     if (attempt) attempt.started = true;
     try {
       return await this.codex.call(method, params);
@@ -850,6 +858,7 @@ export class BotRuntime extends EventEmitter {
         account: this.account,
         defaults: this.defaults,
         version: CODEX_VERSION,
+        maintenance: this.maintenance.snapshot(),
       };
     if (method === "events") return this.store.replay(Number(p.after) || 0);
     if (method === "bots.create") return this.create(p, id, authorizeProvisioning);
@@ -1528,6 +1537,9 @@ export class BotRuntime extends EventEmitter {
     });
   }
   async send(bot, p, id, run = null, attempt = null, staged = false, answer = null, acceptedInput = null) {
+    return this.maintenance.admit(() => this.sendAdmitted(bot, p, id, run, attempt, staged, answer, acceptedInput));
+  }
+  async sendAdmitted(bot, p, id, run = null, attempt = null, staged = false, answer = null, acceptedInput = null) {
     this.answers.assertPrepared(bot, id, answer);
     if (bot.archived || bot.archiving) throw new Error("Restore this bot or finish its retained archive operation first.");
     if (!this.ready) throw new Error("Codex is not ready.");
@@ -1812,6 +1824,9 @@ export class BotRuntime extends EventEmitter {
     });
   }
   async startQueued(bot, item) {
+    return this.maintenance.admit(() => this.startQueuedAdmitted(bot, item));
+  }
+  async startQueuedAdmitted(bot, item) {
     await this.ensureCurrentActivity(bot.id);
     bot = this.store.bot(bot.id);
     if (bot.activeTurnId || this.scheduledUncertain(bot.id)) throw new Error("Native activity is busy or unresolved.");
@@ -1900,7 +1915,7 @@ export class BotRuntime extends EventEmitter {
       const prepared = await this.answers.prepare(bot, pending, p.result, outerId, boundary);
       if (prepared.accepted) return {};
       try {
-        await this.send(this.store.bot(bot.id), { text: prepared.text }, `answer:${pending.id}`, null, boundary, false, prepared.token);
+        await this.maintenance.continueInput(() => this.send(this.store.bot(bot.id), { text: prepared.text }, `answer:${pending.id}`, null, boundary, false, prepared.token));
         this.answers.finish(this.answers.get(bot, pending.id));
         return {};
       } catch (error) {
@@ -2123,11 +2138,11 @@ export class BotRuntime extends EventEmitter {
     return schedule;
   }
   async tick() {
-    if (!this.ready || this.tickRunning) return;
+    if (!this.ready || this.tickRunning || this.maintenance.holding() && this.maintenance.current.phase !== "draining") return;
     this.tickRunning = true;
     // Metadata/backup work cannot occupy a bot admission lock or stall the
     // shared dispatcher. Semantic work enters the original native thread later.
-    void this.memoryMaintenance.tick().catch(error => this.emit('fault', error));
+    if (!this.maintenance.holding()) void this.maintenance.track(() => this.memoryMaintenance.tick()).catch(error => this.emit('fault', error));
     try {
       await this.plans.recover();
       await this.answers.recover();
@@ -2165,13 +2180,13 @@ export class BotRuntime extends EventEmitter {
       this.scheduleDecisions.refresh();
       if (created.length) this.emitEvent("schedules", {});
       void this.runs.tick().catch(error => this.emit("fault", error));
-      await flushDueLists(this);
+      if (!this.maintenance.holding()) await flushDueLists(this);
       await this.bursts.tick();
       void this.primary.tick().catch(error => this.emit('fault', error));
       for (const bot of this.store.bots()) {
         // Primary admission owns single-thread bots. Native accepted queues
         // wake themselves; do not list every idle bot's native queue each tick.
-        if (this.primary.single(bot)) continue;
+        if (this.primary.single(bot) || this.maintenance.holding()) continue;
         // Native 0.156.1 also skips interrupted thread idle and wake events.
         // Keep the bridge pause across restart until queue.resume is requested.
         if (
@@ -2253,6 +2268,9 @@ export class BotRuntime extends EventEmitter {
     return this.handle({ method: `peers.${operation}`, botId: bot.id, params, operationId }, trustedOrigin);
   }
   async dynamicTool(bot, p, origin = null) {
+    return this.maintenance.track(() => this.dynamicToolTracked(bot, p, origin));
+  }
+  async dynamicToolTracked(bot, p, origin = null) {
     const args =
       typeof p.arguments === "string" ? JSON.parse(p.arguments) : p.arguments;
     if (p.tool === MEMORY_TOOL.name) {

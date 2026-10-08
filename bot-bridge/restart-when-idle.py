@@ -8,6 +8,7 @@ import argparse
 import http.client
 import json
 import os
+import re
 from pathlib import Path
 import socket
 import sqlite3
@@ -22,7 +23,7 @@ SERVICE = 'dawar-todo-bots.service'
 
 
 def command(*args):
-    return subprocess.check_output(args, cwd=ROOT, text=True).strip()
+    return subprocess.check_output(args, cwd=ROOT, text=True, timeout=10).strip()
 
 
 def local_state(observation=None):
@@ -145,18 +146,93 @@ def native_idle(bots, observation=None):
     return all(not b.get('threadId') or b.get('archived') or statuses.get(b['threadId']) in ('idle', 'notLoaded') for b in bots)
 
 
+def owner_maintenance(params):
+    # Existing private MACHINE credential, never a bot MCP session or forged
+    # browser owner. Only the systemd-owned current service is consulted.
+    pid = command('systemctl', '--user', 'show', SERVICE, '-p', 'MainPID', '--value')
+    process = Path('/proc') / pid
+    if not pid.isdigit() or int(pid) < 1 or process.stat().st_uid != os.getuid():
+        raise RuntimeError('Owner maintenance service identity unavailable')
+    env = dict(part.split(b'=', 1) for part in (process / 'environ').read_bytes().split(b'\0') if b'=' in part)
+    token = env.get(b'BOTS_MACHINE_SECRET', b'').decode()
+    if len(token) < 32:
+        raise RuntimeError('Owner maintenance credential unavailable')
+    connection = http.client.HTTPConnection('localhost', timeout=30)
+    connection.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    connection.sock.settimeout(30)
+    connection.sock.connect(str(STATE / 'manager/manager.sock'))
+    try:
+        connection.request('POST', '/runtime/maintenance', json.dumps(params),
+                           {'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json'})
+        response = connection.getresponse()
+        raw = response.read(65537)
+        if response.status != 200 or len(raw) > 65536:
+            raise RuntimeError('Owner maintenance blocked; inspect original identity/status (no restart)')
+        result = json.loads(raw).get('result')
+        if not isinstance(result, dict):
+            raise RuntimeError('Invalid maintenance metadata')
+        return result
+    finally:
+        connection.close()
+
+
+def begin_drain(args, receipt_dir):
+    with urllib.request.urlopen('http://127.0.0.1:47821/healthz', timeout=2) as response:
+        health = json.load(response)
+    metadata = health.get('maintenance', {})
+    invocation = command('systemctl', '--user', 'show', SERVICE, '-p', 'InvocationID', '--value')
+    if metadata.get('version') != 1 or not metadata.get('instanceId') or metadata.get('invocationId') != invocation:
+        raise RuntimeError('Admission drain is not installed; use original strict-idle procedure, never simulate a fence')
+    params = {'operationId': args.maintenance_operation, 'commit': args.commit, 'version': args.version,
+              'instanceId': metadata['instanceId'], 'invocationId': invocation,
+              'unitId': args.unit_id, 'waitSeconds': min(max(args.wait_seconds, 1), 900)}
+    # One helper identity. A retained attempt is inspected, not relaunchable.
+    with (receipt_dir / 'drain.json').open('x') as file:
+        json.dump(params, file, indent=2); file.flush(); os.fsync(file.fileno())
+    try:
+        result = owner_maintenance({**params, 'action': 'begin'})
+    except (OSError, ValueError, RuntimeError):
+        # Positive original-ID status can reconcile a lost begin ACK. It never
+        # creates another operation or extends the original expiry.
+        result = owner_maintenance({**params, 'action': 'status'})
+    if result.get('phase') != 'draining':
+        raise RuntimeError('Original maintenance lease is not active; inspect it')
+    return params
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--commit', required=True)
     parser.add_argument('--version', required=True)
     parser.add_argument('--wait-seconds', type=int, default=900)
+    parser.add_argument('--maintenance-operation')
+    parser.add_argument('--unit-id')
     args = parser.parse_args()
+    if not re.fullmatch(r'[0-9a-f]{40}', args.commit) or not re.fullmatch(r'\d+\.\d+\.\d+', args.version):
+        raise RuntimeError('Exact reviewed SHA and version are required')
+    if bool(args.maintenance_operation) != bool(args.unit_id):
+        raise RuntimeError('A maintenance operation and original unit ID are both required')
     receipt_dir = STATE / 'runtime-updates' / args.commit
     receipt_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     receipt = receipt_dir / 'restart.json'
     if receipt.exists():
         raise RuntimeError('Restart receipt already exists; inspect it rather than repeat')
-    deadline = time.monotonic() + min(max(args.wait_seconds, 0), 3600)
+    if command('git', 'rev-parse', 'HEAD') != args.commit or command('git', 'status', '--porcelain'):
+        raise RuntimeError('Reviewed source changed')
+    drain = begin_drain(args, receipt_dir) if args.maintenance_operation else None
+    try:
+        activate(args, receipt_dir, receipt, drain)
+    finally:
+        if drain:
+            try:
+                owner_maintenance({**drain, 'action': 'cancel'})
+            except (OSError, ValueError, RuntimeError):
+                # Claimed, disconnected or expired is retained for inspection.
+                pass
+
+
+def activate(args, receipt_dir, receipt, drain):
+    deadline = time.monotonic() + min(max(args.wait_seconds, 0), 900 if drain else 3600)
     started = time.monotonic()
     attempts, previous_reason, blocked = 0, None, {}
     while True:
@@ -165,6 +241,10 @@ def main():
         attempts += 1
         observation = {'phase': 'before-backup', 'native': {'checked': False}}
         bots, busy, fence = local_state(observation)
+        if drain:
+            checked = owner_maintenance({**drain, 'action': 'observe'})
+            observation['maintenance'] = {key: checked.get(key) for key in ('safe', 'counts', 'native', 'reason')}
+            busy = busy or not checked.get('safe')
         reason = 'local-current-work' if busy else 'native-current-work'
         if not busy and native_idle(bots, observation):
             # Back up while the service is still healthy, then recheck current
@@ -176,7 +256,17 @@ def main():
             _, busy, after = local_state(observation)
             reason = 'local-current-work' if busy else 'local-fence-changed' if after != fence else 'native-current-work'
             if not busy and after == fence and native_idle(bots, observation):
-                break
+                if drain:
+                    checked = owner_maintenance({**drain, 'action': 'observe'})
+                    observation['maintenance'] = {key: checked.get(key) for key in ('safe', 'counts', 'native', 'reason')}
+                    if not checked.get('safe'):
+                        busy = True
+                    else:
+                        sealed = owner_maintenance({**drain, 'action': 'seal'})
+                        if sealed.get('phase') != 'sealed':
+                            raise RuntimeError('Maintenance could not seal; no restart')
+                if not busy:
+                    break
         blocked[reason] = blocked.get(reason, 0) + 1
         diagnostic = {'event': 'idle-handoff-wait', 'attempts': attempts,
                       'elapsedSeconds': round(time.monotonic() - started, 1),
@@ -195,6 +285,15 @@ def main():
         json.dump(data, file, indent=2)
         file.flush()
         os.fsync(file.fileno())
+    if drain:
+        claimed = owner_maintenance({**drain, 'action': 'claim'})
+        acknowledged_at = time.monotonic()
+        if claimed.get('phase') != 'claimed' or not isinstance(claimed.get('remainingMs'), (int, float)):
+            raise RuntimeError('Maintenance claim failed; no restart')
+        if command('systemctl', '--user', 'show', SERVICE, '-p', 'InvocationID', '--value') != drain['invocationId']:
+            raise RuntimeError('Original service changed; inspect retained claim, no restart')
+        if claimed['remainingMs'] - (time.monotonic() - acknowledged_at) * 1000 < 45_000:
+            raise RuntimeError('Original lease leaves no restart handoff window; inspect retained claim')
     subprocess.run(['systemctl', '--user', 'restart', SERVICE], check=True, timeout=45)
     for _ in range(60):
         try:

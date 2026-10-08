@@ -527,6 +527,7 @@ export class BackgroundRuns {
       attachmentIds: [], origin: { kind: "answer", requestId: question.id,
         sourceThreadId: question.request.params.threadId, sourceTurnId: question.request.params.turnId },
       permission: lane.permission, revision: prepared.token.revision, primary: false, createdAt: now(), turnId: null };
+    return this.runtime.maintenance.continueInput(async () => {
     try {
       if (lane.admitted === false) throw new Error("This run is waiting for background capacity. Keep the original answer and retry after admission.");
       await this.load(laneId);
@@ -568,6 +569,7 @@ export class BackgroundRuns {
         ...current, state: boundary.started && !boundary.rejected ? "uncertain" : "rejected", error: error.message });
       throw error;
     }
+    });
   }
   async request(lane, message) {
     const bot = this.store.bot(lane.botId);
@@ -748,7 +750,7 @@ export class BackgroundRuns {
       await this.runtime.lock(lane.id, async () => {
         this.store.put("runLane", { ...this.store.get("runLane", lane.id), reconcileAfter: retryAt(3) });
         if (lane.provisioning !== "bound") {
-          if (lane.provisioning === "prepared") await this.createThread(lane.id); else await this.recoverCreation(lane.id);
+          if (lane.provisioning === "prepared") { if (!this.runtime.maintenance.holding()) await this.runtime.maintenance.admit(() => this.createThread(lane.id)); } else await this.recoverCreation(lane.id);
           return;
         }
         const port = this.port(lane.id);
@@ -787,7 +789,7 @@ export class BackgroundRuns {
       });
     }
     // Global admission lock is distinct from every main conversation lock.
-    await this.runtime.lock("run-admission", async () => {
+    if (!this.runtime.maintenance.holding()) await this.runtime.maintenance.admit(() => this.runtime.lock("run-admission", async () => {
       const unfinished = this.store.executionMetadata("runLane").filter(l => this.occupies(l));
       if (unfinished.length >= 2) return;
       const waiting = this.store.executionMetadata("runLane").find(l => l.admitted === false && this.unfinished(l) &&
@@ -825,7 +827,7 @@ export class BackgroundRuns {
         }
         throw error;
       }
-    }).catch(error => this.runtime.emit("fault", error));
+    })).catch(error => this.runtime.emit("fault", error));
     for (const stop of this.store.list("executionStop").filter(s => s.state !== "done" && due(s)).slice(0, 2))
       await this.runtime.lock(`stop:${stop.id}`, async () => {
         const result = await reconcileStop(this.runtime, this.store.get("executionStop", stop.id));
