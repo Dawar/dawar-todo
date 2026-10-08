@@ -18,6 +18,7 @@ import sys
 import time
 import urllib.request
 from native_queue_receipts import completed_queue_receipts, digest, MAX_ORIGINALS, MAX_RECORD_BYTES
+from legacy_manager_rejections import passive_legacy_manager_rejections, MAX_REJECTIONS
 
 ROOT = Path(__file__).resolve().parent.parent
 STATE = Path.home() / '.local/share/dawar-todo-bots'
@@ -62,15 +63,17 @@ def local_state(observation=None, reconcile_native_queued=False):
             raw = db.execute("SELECT json FROM records WHERE kind='promptQueue' AND json_extract(json,'$.state')='native-queued' LIMIT ?", (MAX_ORIGINALS + 1,)).fetchall()
             accepted = db.execute("SELECT json FROM records WHERE kind='primaryInbox' AND json_extract(json,'$.state')='accepted' AND json_extract(json,'$.terminalStatus') IS NULL LIMIT ?", (MAX_ORIGINALS + 1,)).fetchall()
             questions = db.execute("SELECT json FROM records WHERE kind='pending' LIMIT ?", (MAX_ORIGINALS + 1,)).fetchall()
-            all_raw = raw + accepted + questions
-            if len(all_raw) > MAX_ORIGINALS or any(len(row[0].encode()) > MAX_RECORD_BYTES for row in all_raw):
+            legacy = db.execute("SELECT CASE WHEN length(CAST(json AS BLOB))<=1048576 THEN json ELSE NULL END FROM records WHERE kind='managerOperation' AND json_extract(json,'$.state') IN ('dispatching','uncertain') LIMIT ?", (MAX_REJECTIONS + 1,)).fetchall()
+            all_raw = raw + accepted + questions + legacy
+            if len(raw + accepted + questions) > MAX_ORIGINALS or len(legacy) > MAX_REJECTIONS or any(row[0] is None or len(row[0].encode()) > MAX_RECORD_BYTES for row in all_raw):
                 raise RuntimeError('Retained queue metadata exceeds bootstrap bound')
             # Avoid native evidence reads while a human/auxiliary turn or any
             # other admission remains active. Terminal originals cannot mask it.
             if not active and pending == len(all_raw):
                 proof = completed_queue_receipts(db, bots, [json.loads(row[0]) for row in raw],
                     accepted=[json.loads(row[0]) for row in accepted], questions=[json.loads(row[0]) for row in questions])
-                pending -= len(proof['originals']) + len(proof['terminalInputs']) + len(proof['passiveQuestions'])
+                proof['passiveLegacyRejections'] = passive_legacy_manager_rejections(db, bots, legacy)
+                pending -= len(proof['originals']) + len(proof['terminalInputs']) + len(proof['passiveQuestions']) + len(proof['passiveLegacyRejections'])
         if observation is not None:
             observation['local'] = {
                 'activeBots': sum(bool(r.get('activeTurnId') or r.get('status') == 'running') for r in bots),

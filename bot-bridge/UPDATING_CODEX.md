@@ -108,7 +108,7 @@ when its exact original client and recorded turn match unique, fresh terminal
 native evidence. An interrupted/failed turn remains interrupted/failed; no
 task, receipt or local intake is edited or automatically resumed. A saved
 `async:true` / `isBlocking:false` question is passive only when the original
-owned request/item/turn match an indexed agent question in a fresh terminal
+owned request/item/turn match an indexed agent question in a fresh completed
 turn. The question remains stored and answerable with its original identity.
 Neither its text nor its answer is read or submitted by the helper.
 
@@ -131,3 +131,25 @@ historical completions. If current idle/volatile state cannot be established,
 retain the blocker. Future updates use the installed maintenance drain. Keep
 the original rows/bytes and private backup for same-ID recovery; never restore
 a backup over newer work merely to repeat activation.
+
+### Finished legacy pre-effect refusals
+
+The fixed `legacy-manager-rejections.json` review binds only the twelve original
+September25–29 refusals identified during the October8 restart repair. The
+Python bootstrap and installed maintenance counter share this metadata review;
+they never edit, finish, retry or report success for those uncertain records.
+Each classification requires the exact raw-record SHA-256, original ID/opId,
+recomputed typed argument fingerprint, finished refusal, registered owner and
+owned original target, plus the reviewed manager producer source hash. The four
+guards rejected missing delegate prompt, idle-worker steer, running-task result
+collection and unintegrated worktree removal before their mutating/native effects.
+No prompt/body values are copied into the review.
+
+New, changed, in-flight, lost-ACK or unreviewed errors remain blockers. This is
+not an error-text or age exemption. Bootstrap includes these original bytes in
+its repeated proof/fence and preserves the strict default when opt-in is omitted.
+The installed maintenance counter subtracts only exact reviewed passive records;
+all other work, native, volatile, source and exclusive-restart gates remain.
+Changing the reviewed manager producer invalidates classification until an
+independent exact-source review updates that binding; never grow the fixed list
+automatically or remove the original uncertain receipts.

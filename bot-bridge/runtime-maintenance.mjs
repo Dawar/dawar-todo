@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { passiveLegacyManagerRejections } from './legacy-manager-rejections.mjs';
 
 const processStart = pid => { try { const s = readFileSync(`/proc/${pid}/stat`, 'utf8'); return s.slice(s.lastIndexOf(')') + 2).split(' ')[19]; } catch { return null; } };
 const processAlive = identity => Boolean(identity?.start && processStart(identity.pid) === identity.start);
@@ -89,7 +90,7 @@ export class RuntimeMaintenance {
       admissions: this.admissions, requests: this.requests, nativeRpc: this.runtime.codex.pending?.size ?? 0,
       localActive: bots.filter(b => b.activeTurnId || b.status === 'running').length,
       auxiliaryActive: count("SELECT count(*) n FROM records WHERE kind IN ('runLane','managerWorker') AND (json_extract(json,'$.activeTurnId') IS NOT NULL OR json_extract(json,'$.status')='running')"),
-      acceptedOrUnknown: count("SELECT count(*) n FROM records WHERE (kind='primaryInbox' AND json_extract(json,'$.state') IN ('dispatching','uncertain','accepted') AND json_extract(json,'$.terminalStatus') IS NULL) OR (kind IN ('messageBurst','burstBatch') AND json_extract(json,'$.state') IN ('dispatching','uncertain')) OR (kind='promptQueue' AND json_extract(json,'$.state') IN ('dispatching','uncertain','native-queued')) OR (kind IN ('runIntake','answerExecution','managerOperation','managerExecution') AND json_extract(json,'$.state') IN ('dispatching','uncertain')) OR (kind='managerTask' AND json_extract(json,'$.state') IN ('starting','running','uncertain','provisioning')) OR (kind='runLane' AND json_extract(json,'$.provisioning') IN ('dispatching','uncertain'))") + count("SELECT count(*) n FROM operations WHERE status IN ('dispatching','uncertain')"),
+      acceptedOrUnknown: count("SELECT count(*) n FROM records WHERE (kind='primaryInbox' AND json_extract(json,'$.state') IN ('dispatching','uncertain','accepted') AND json_extract(json,'$.terminalStatus') IS NULL) OR (kind IN ('messageBurst','burstBatch') AND json_extract(json,'$.state') IN ('dispatching','uncertain')) OR (kind='promptQueue' AND json_extract(json,'$.state') IN ('dispatching','uncertain','native-queued')) OR (kind IN ('runIntake','answerExecution','managerOperation','managerExecution') AND json_extract(json,'$.state') IN ('dispatching','uncertain')) OR (kind='managerTask' AND json_extract(json,'$.state') IN ('starting','running','uncertain','provisioning')) OR (kind='runLane' AND json_extract(json,'$.provisioning') IN ('dispatching','uncertain'))") + count("SELECT count(*) n FROM operations WHERE status IN ('dispatching','uncertain')") - passiveLegacyManagerRejections(this.store).length,
       pendingInput: count("SELECT count(*) n FROM records WHERE kind IN ('pending','managerRequest','runPending')"),
       activeGoals: count("SELECT count(*) n FROM records WHERE kind='nativeGoal' AND json_extract(json,'$.goal.status')='active'"),
       calls: count("SELECT count(*) n FROM records WHERE kind='operatorCall' AND json_extract(json,'$.endedAt') IS NULL"),
