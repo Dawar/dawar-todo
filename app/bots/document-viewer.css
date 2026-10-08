@@ -16,6 +16,23 @@
 .bots-document-links summary { cursor: pointer; } .bots-document-links ul { padding: 10px 0; }
 .bots-document-state { flex: 1; min-width: 0; padding: 24px; color: #617366; }
 .bots-document-state button { margin-top: 12px; text-decoration: underline; }
+.bots-visualization-reference { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 8px; max-width: 100%; }
+.bots-visualization-reference > button { color: #286b45; text-decoration: underline; text-align: left; overflow-wrap: anywhere; min-height: 44px; }
+.bots-visualization-reference > button:disabled { opacity: .55; }
+.bots-visualization-reference small { font-size: 13px; overflow-wrap: anywhere; }
+.bots-route-diagram { flex: 1; min-height: 0; overflow: auto; padding: 24px; color: #27332c; font: 16px/1.6 system-ui,sans-serif; overflow-wrap: anywhere; }
+.bots-route-diagram h2 { font-size: 1.5em; margin: 0 0 16px; }
+.bots-route-diagram label { display: block; }
+.bots-route-diagram select { min-height: 44px; width: 100%; max-width: 420px; padding: 8px; border: 1px solid #a8bdaa; border-radius: 6px; background: #fff; }
+.bots-route-diagram select:focus-visible { outline: 2px solid #286b45; outline-offset: 2px; }
+.bots-route-legend { font-size: 13px; margin: 16px 0; }
+.bots-route-diagram ol { list-style: none; padding: 0; margin: 0; }
+.bots-route-diagram li { display: grid; grid-template-columns: minmax(90px,.3fr) minmax(0,1fr); gap: 12px; padding: 12px 0 24px; }
+.bots-route-diagram li > div { border-left: 3px solid #388661; padding-left: 12px; }
+.bots-route-diagram li.is-native > div { border-color: #6c67a3; }
+.bots-route-diagram li p { margin: 4px 0; }
+.bots-route-diagram li code { font: 13px/1.5 ui-monospace,monospace; white-space: pre-wrap; }
+@media(max-width:500px) { .bots-route-diagram { padding: 16px; } .bots-route-diagram li { grid-template-columns: minmax(0,1fr); gap: 4px; } }
 .bots-document-review { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .bots-document-review-toolbar { flex: none; padding: 8px 14px; border-bottom: 1px solid #e1e8dd; }
 .bots-document-review-toolbar button { display: inline-flex; align-items: center; gap: 8px; padding: 8px; min-height: 40px; }

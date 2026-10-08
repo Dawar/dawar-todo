@@ -2007,7 +2007,8 @@ export class BotRuntime extends EventEmitter {
       if (p.item?.type === "userMessage") this.recordScheduledEvidence(bot.id, {
         id: p.turnId, status: "inProgress", items: [p.item],
       });
-      if (["imageGeneration", "mcpToolCall"].includes(p.item?.type)) {
+      if (["imageGeneration", "mcpToolCall"].includes(p.item?.type) ||
+          p.item?.type === "agentMessage" && p.item.phase === "final_answer" && p.item.text?.includes("\uE200visualize\uE202")) {
         this.pendingArtifactItems ??= 0;
         const report = (failures) => { if (failures.length) this.emitEvent("artifact.issue", { failures }, bot.id); };
         if (this.pendingArtifactItems >= 8) report([{ itemId: p.item.id, reason: "Output indexing is busy. Reopen the artifact library to recover this output from native history." }]);

@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { containedPath } from './profiles.mjs';
 import { artifactMime } from './artifact-library.mjs';
 import { artifactDate, historicalArtifactDate } from './artifact-dates.mjs';
+import { visualizationReferences } from '../lib/bot-visualization-reference.mjs';
 
 const MAX_FILE = 100 * 1024 * 1024, MAX_INLINE = 20 * 1024 * 1024;
 const digest = (value) => createHash('sha256').update(value).digest('hex');
@@ -40,12 +41,21 @@ export async function registerArtifact(runtime, bot, input, context = {}) {
       const nativeBytes = context.source === 'native' ? Number(runtime.store.db.prepare("SELECT COALESCE(SUM(json_extract(json,'$.size')),0) AS bytes FROM records WHERE kind='attachment' AND bot_id=? AND json_extract(json,'$.source')='native'").get(bot.id).bytes) : 0;
       if (input.path) {
         const path = resolve(bot.cwd, input.path);
+        if (input.visualizationReference) {
+          if (context.source !== 'native' || input.visualizationReference !== input.path) throw Error('Invalid visualization output.');
+          const outputs = join(bot.cwd, 'outputs'), child = relative(outputs, path);
+          if (!child || child.startsWith('..') || child.split(/[\\/]/).some(part => part.startsWith('.')) || !/\.html?$/i.test(path)) throw Error('Visualizations must be finished HTML in this bot outputs folder.');
+          const directory = await lstat(outputs);
+          if (!directory.isDirectory() || directory.isSymbolicLink()) throw Error('Visualizations need a real outputs directory.');
+          await containedPath(outputs, path);
+        }
         const info = await lstat(path);
         if (!info.isFile() || info.isSymbolicLink() || info.size > MAX_FILE) throw new Error('Publish a regular file of at most 100 MB.');
         await containedPath(bot.cwd, path);
         if (privateName(relative(bot.cwd, path))) throw new Error('Credential and private configuration files cannot be published.');
         source = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
         await containedPath(bot.cwd, `/proc/self/fd/${source.fd}`);
+        if (input.visualizationReference) await containedPath(join(bot.cwd, 'outputs'), `/proc/self/fd/${source.fd}`);
         sourceInfo = await source.stat();
         if (!sourceInfo.isFile() || sourceInfo.size > MAX_FILE) throw new Error('Publish a regular file of at most 100 MB.');
         name ??= basename(path);
@@ -105,6 +115,11 @@ export async function registerArtifact(runtime, bot, input, context = {}) {
           // preserves an unknown historical time, including across retries.
           createdAt: context.createdAt === undefined ? new Date().toISOString() : artifactDate(context.createdAt), provenance: provenance(bot, context) };
       }
+      if (input.visualizationReference) {
+        const references = [...new Set([...(a.visualizationReferences ?? []), input.visualizationReference])];
+        if (references.length > 6) throw Error('Visualization alias limit; publish the original explicitly.');
+        a = { ...a, visualizationReferences: references };
+      }
       runtime.store.transaction(() => {
         runtime.store.put('attachment', a);
         if (publicationId) runtime.store.put('artifactPublication', { id: publicationId, botId: bot.id, attachmentId: id,
@@ -128,8 +143,24 @@ function inlineImage(result) {
       : bytes.toString('ascii', 0, 4) === 'RIFF' && bytes.toString('ascii', 8, 12) === 'WEBP' ? 'image/webp' : null;
   return mimeType && bytes.length <= MAX_INLINE ? { bytes, mimeType, name: `generated-image.${mimeType.split('/')[1]}` } : null;
 }
+function standaloneReference(text, reference) {
+  const lines = text.slice(0, reference.start).split('\n'), prefix = lines.pop();
+  if (!/^ {0,3}$/.test(prefix) || text.slice(reference.end).split('\n')[0].trim()) return false;
+  let fence = null;
+  for (const line of lines) {
+    const marker = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+    if (!marker) continue;
+    if (!fence) fence = { char: marker[1][0], size: marker[1].length };
+    else if (marker[1][0] === fence.char && marker[1].length >= fence.size && !marker[2].trim()) fence = null;
+  }
+  return !fence; // Code examples never authorize output registration.
+}
 export function intendedOutputs(item) {
   if (/(^|__)bots_use_secure_input$/.test(String(item?.tool ?? ''))) return []; // Never promote a secure transfer, including explicitly permitted model reads, into S3.
+  if (item?.type === 'agentMessage' && item.phase === 'final_answer') {
+    return visualizationReferences(item.text).filter(reference => reference.path && standaloneReference(item.text, reference))
+      .map(reference => ({ path: reference.path, visualizationReference: reference.path, mimeType: 'text/html' }));
+  }
   if (item?.type === 'imageGeneration' && item.status === 'completed' && !item.failure) {
     const inline = inlineImage(item.result);
     if (inline) return [{ ...inline, ...(typeof item.savedPath === 'string' ? { name: basename(item.savedPath) } : {}) }];

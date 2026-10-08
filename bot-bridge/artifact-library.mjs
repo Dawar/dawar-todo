@@ -16,6 +16,7 @@ export function artifactMetadata(a, bot) {
     createdAt: artifactDate(a.createdAt),
     direction: a.artifact ? 'output' : 'input', source: a.source === 'native' ? 'native' : a.artifact ? 'published' : 'upload',
     kind, provenance, sha256:a.sha256, cloudState:a.cloudState,
+    ...(Array.isArray(a.visualizationReferences) ? { visualizationReferences: a.visualizationReferences.slice(0, 6) } : {}),
     preview: { kind: ['image', 'pdf'].includes(kind) ? kind : 'none', version: artifactVersion(a) } };
 }
 const initialized = new WeakSet();

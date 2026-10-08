@@ -12,4 +12,18 @@ Readers can select **Create review** and explicitly send simple notes to the ori
 
 HTML safety: reviewed DOMPurify allowlist, empty iframe sandbox and a CSP before report content. No scripts, forms, parent navigation, app session/storage access or implicit external/relative requests. Styles apply only inside the frame. This is a document preview, not a hosted interactive application.
 
+## Data-only route diagrams
+
+For a selectable flow diagram, publish HTML containing a data block instead of executable rendering code:
+
+```html
+<script type="application/json" data-bot-visualization="routes-v1">
+{"version":1,"title":"Delivery paths","routes":{"send":{"label":"Human Send","stages":[["app","Browser","Submit","Explicit human input","turn.send"],["native","Codex","Run","The selected bot's thread","turn/start"]],"note":"A receipt is distinct from completion."}}}
+</script>
+```
+
+The app renders these strings and the route selector itself. It never executes document scripts, HTML event handlers or widget/native APIs. Each stage has exactly five strings: owner (`app` or `native`), actor, title, detail and code. Use at most 12 routes, 32 stages per route, 4,000 characters per field and 64,000 characters of JSON. Keep the original download for unsupported content. The retained `dawar-work-routing-v1` fragment is supported by reading its literal `const routes` data only; this compatibility adapter does not support arbitrary JavaScript applications.
+
+Prefer the registered link returned by `bots_publish_artifact`. A supported standalone visualize reference in a native final response is also an intended output, only for finished `.html`/`.htm` files under that same bot's real `outputs` directory. Existing explicit **Index shared outputs** can register a bounded historical page through the normal immutable artifact-copy pipeline. The viewer resolves only registered same-bot aliases; it never reads a path supplied in a chat link. Missing/foreign/private files stay unavailable, with indexing or explicit publication guidance. Index continuation is a reader action, not an automatic transcript scan. Original native text, bytes, source identities and feedback delivery remain unchanged.
+
 References: [DOMPurify](https://github.com/cure53/DOMPurify), [MDN iframe sandbox/srcdoc](https://developer.mozilla.org/en-US/docs/Web/HTML/Reference/Elements/iframe). Sandbox alone does not block network resources; srcdoc relative URLs can inherit the embedding document's base.

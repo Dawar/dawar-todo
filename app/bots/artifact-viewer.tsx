@@ -45,7 +45,7 @@ function ScopedArtifactViewer({ item, owner, online, onClose, originalFile, sour
     const key = (event: KeyboardEvent) => {
       if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); closeDialog(); }
       if (event.key !== "Tab") return;
-      const elements = [...dialog.current!.querySelectorAll<HTMLElement>('button:not(:disabled),a[href],iframe,textarea:not(:disabled),input:not(:disabled):not([type=hidden])')].filter(element => element.getClientRects().length), first = elements[0], last = elements.at(-1);
+      const elements = [...dialog.current!.querySelectorAll<HTMLElement>('button:not(:disabled),a[href],iframe,select:not(:disabled),textarea:not(:disabled),input:not(:disabled):not([type=hidden])')].filter(element => element.getClientRects().length), first = elements[0], last = elements.at(-1);
       if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
       else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
     };

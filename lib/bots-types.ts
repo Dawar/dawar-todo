@@ -151,6 +151,8 @@ export type BotAttachment = {
   size: number;
   ready: boolean;
   path?: string;
+  /** Verified native output aliases; these never authorize arbitrary path reads. */
+  visualizationReferences?: string[];
   sha256?: string;
   cloudState?: "pending" | "transferring" | "ready" | "failed";
   /** Present on delivered history/output metadata; previews remain lazy. */

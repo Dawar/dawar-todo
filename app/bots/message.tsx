@@ -1,8 +1,10 @@
 "use client";
-import { Fragment, memo, useEffect, useState, useRef, useMemo, useSyncExternalStore, type ReactNode } from "react";
+import { createContext, useContext, Fragment, memo, useEffect, useState, useRef, useMemo, useSyncExternalStore, type ReactNode } from "react";
 import { LazyDetails, TextPages, ItemPages } from "./lazy-details";
 import { botsClient } from "./client";
 import { ReturnedArtifact } from "./returned-artifact";
+import { ReturnedVisualization } from "./returned-visualization";
+import { remarkVisualizations } from "./visualization-markdown";
 import { MarkdownTable } from "./markdown-table";
 import { MarkdownCodeBlock } from "../markdown-code-block";
 import type { BotAttachment } from "../../lib/bots-types";
@@ -10,7 +12,7 @@ import { proposedPlanParts } from "../../lib/proposed-plan";
 import ReactMarkdown, { defaultUrlTransform, type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
-const messageSchema = { ...defaultSchema, protocols: { ...defaultSchema.protocols, href: [...(defaultSchema.protocols?.href ?? []), "bot-artifact"] } };
+const messageSchema = { ...defaultSchema, protocols: { ...defaultSchema.protocols, href: [...(defaultSchema.protocols?.href ?? []), "bot-artifact", "bot-visualization"] } };
 import {
   Terminal,
   FileDiff,
@@ -23,6 +25,15 @@ import {
 import type { ThreadItem } from "../../lib/codex-protocol/v2/ThreadItem";
 
 const renderMarkdownTable: Components["table"] = ({ children }) => <MarkdownTable>{children}</MarkdownTable>;
+const MarkdownFiles = createContext<{ botId: string; attachments: BotAttachment[] }>({ botId: "", attachments: [] });
+const MarkdownLink: Components["a"] = ({ href, children }) => {
+  const { botId, attachments } = useContext(MarkdownFiles);
+  if (href?.startsWith("bot-visualization:")) return <ReturnedVisualization botId={botId} reference={href.slice(18)} attachments={attachments} />;
+  if (href?.startsWith("bot-artifact:")) return <ReturnedArtifact botId={botId} id={href.slice(13)} attachment={attachments.find(file => file.id === href.slice(13))}>{children}</ReturnedArtifact>;
+  return <a href={href} target="_blank" rel="noreferrer">{children}</a>;
+};
+// Stable Markdown adapters retain an open viewer when message metadata updates.
+const markdownComponents: Components = { table: renderMarkdownTable, pre: MarkdownCodeBlock, a: MarkdownLink };
 
 function ProposedPlanText({ text, partial, nativePlan = false, render }: {
   text: string; partial: boolean; nativePlan?: boolean; render: (text: string) => ReactNode;
@@ -53,29 +64,21 @@ function BotMessage({
   inWorkLog?: boolean;
   partial?: boolean;
 }) {
+  const markdownFiles = useMemo(() => ({ botId, attachments }), [botId, attachments]);
   function markdownPage(text: string) {
     return (
+      <MarkdownFiles.Provider value={markdownFiles}>
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={[remarkGfm, remarkVisualizations]}
         rehypePlugins={[[rehypeSanitize, messageSchema]]}
         urlTransform={(url) =>
-          url.startsWith("bot-artifact:") ? url : defaultUrlTransform(url)
+          url.startsWith("bot-artifact:") || url.startsWith("bot-visualization:") ? url : defaultUrlTransform(url)
         }
-        components={{
-          table: renderMarkdownTable,
-          pre: MarkdownCodeBlock,
-          a: ({ href, children }) =>
-            href?.startsWith("bot-artifact:") ? (
-              <ReturnedArtifact botId={botId} id={href.slice(13)} attachment={attachments.find((file) => file.id === href.slice(13))}>{children}</ReturnedArtifact>
-            ) : (
-              <a href={href} target="_blank" rel="noreferrer">
-                {children}
-              </a>
-            ),
-        }}
+        components={markdownComponents}
       >
         {text}
       </ReactMarkdown>
+      </MarkdownFiles.Provider>
     );
   }
   function markdown(value: string) { return <TextPages text={value} render={markdownPage} />; }
