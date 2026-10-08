@@ -160,7 +160,7 @@ def completed_queue_receipts(app, bots, rows, native_root=None, accepted=None, q
                 "WHERE t.thread_id=? AND t.turn_id=? AND i.item_id=? AND i.item_type='agentMessage' "
                 "AND json_array_length(json_extract(i.item_json,'$.questions'))>0 LIMIT 2",
                 (params['threadId'], params.get('turnId'), params['itemId'])).fetchall()
-            terminal = terminal_metadata(params['threadId'], turns, params.get('turnId'))
+            terminal = terminal_metadata(params['threadId'], turns, params.get('turnId'), True)
             passive_questions.append({'id': row['id'], 'botId': row['botId'], 'threadId': params['threadId'], **terminal})
         if time.monotonic() >= deadline or before != [database_stamp(path, root) for path in paths] or \
                 any(private_file(path, root / 'sessions') != stamp for path, stamp in rollouts):

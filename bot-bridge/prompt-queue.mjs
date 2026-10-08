@@ -110,7 +110,20 @@ async function dispatchAdmitted(runtime, bot, item) {
   }
 }
 export async function reconcilePrompt(runtime, item) {
-  const operation = item.operationId && runtime.store.operation(item.operationId);
+  // tick intentionally enumerates metadata without input/text. Read only this
+  // scoped original before awaiting, rather than comparing its input to that
+  // projection or accepting a caller's stale full row as authoritative.
+  const original = runtime.store.get("promptQueue", item.id);
+  const fields = ["botId", "threadId", "state", "revision", "operationId", "clientUserMessageId", "nativeQueueId", "turnId", "reconcileCursor"];
+  if (!original || !["dispatching", "uncertain", "queued", "native-queued"].includes(original.state) ||
+      fields.some(key => original[key] !== item[key]) ||
+      Object.hasOwn(item, "input") && JSON.stringify(original.input) !== JSON.stringify(item.input) ||
+      runtime.store.bot(original.botId).threadId !== original.threadId) return;
+  const snapshot = row => JSON.stringify({ ...Object.fromEntries(fields.map(key => [key, row[key]])),
+    input: row.input, source: row.source, attachmentIds: row.attachmentIds });
+  const originalSnapshot = snapshot(original);
+  const operation = original.operationId && runtime.store.operation(original.operationId);
+  const operationSnapshot = JSON.stringify(operation);
   if (operation && (operation.method !== "queue.dispatch" || operation.botId !== item.botId || operation.queueId !== item.id ||
       operation.revision !== item.revision || operation.clientId !== item.clientUserMessageId))
     throw new Error("Original queue dispatch receipt conflicts. This prompt was not resent.");
@@ -118,18 +131,17 @@ export async function reconcilePrompt(runtime, item) {
   let fullEvidence = false;
   let nextCursor = null;
   if (!result) {
-    const found = await findNativeTurn(runtime, item.threadId, { turnId: item.turnId,
-      clientId: item.clientUserMessageId, cursor: item.reconcileCursor ?? null, itemsView: "summary" });
+    const found = await findNativeTurn(runtime, original.threadId, { turnId: original.turnId,
+      clientId: original.clientUserMessageId, cursor: original.reconcileCursor ?? null, itemsView: "summary" });
     nextCursor = found.nextCursor;
     if (found.turn) { result = { turn: found.turn }; fullEvidence = found.turn.itemsView === "full"; }
   }
   runtime.store.transaction(() => {
     const current = runtime.store.get("promptQueue", item.id);
     if (!current || !["dispatching", "uncertain", "queued", "native-queued"].includes(current.state)) return;
-    if (current.botId !== item.botId || current.threadId !== item.threadId || current.revision !== item.revision ||
-        current.operationId !== item.operationId || current.clientUserMessageId !== item.clientUserMessageId ||
-        current.nativeQueueId !== item.nativeQueueId || JSON.stringify(current.input) !== JSON.stringify(item.input) ||
-        runtime.store.bot(item.botId).threadId !== item.threadId) return;
+    if (snapshot(current) !== originalSnapshot ||
+        JSON.stringify(original.operationId && runtime.store.operation(original.operationId)) !== operationSnapshot ||
+        runtime.store.bot(original.botId).threadId !== original.threadId) return;
     runtime.store.put("promptQueue", { ...current, operationId: item.operationId,
       state: result ? "delivered" : current.nativeQueueId && current.state === "native-queued" ? "native-queued" : "uncertain", reconcileCursor: nextCursor,
       reconcileAfter: new Date(Date.now() + 30000).toISOString(),
