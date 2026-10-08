@@ -53,7 +53,7 @@ def bounded_database(stack, path, deadline):
     return db
 
 
-def completed_queue_receipts(app, bots, rows, native_root=None):
+def completed_queue_receipts(app, bots, rows, native_root=None, accepted=None, questions=None):
     """Returns private identity/freshness proof; caller still proves current idle.
 
     native_root is internal dependency injection for disposable observations;
@@ -61,13 +61,14 @@ def completed_queue_receipts(app, bots, rows, native_root=None):
     this function. Each query has the common six-second progress deadline.
     """
     root = Path(native_root) if native_root is not None else Path.home() / '.codex'
-    if not 0 <= len(rows) <= MAX_ORIGINALS:
+    accepted, questions = accepted or [], questions or []
+    if not 0 <= len(rows) + len(accepted) + len(questions) <= MAX_ORIGINALS:
         raise RuntimeError('Completed native queue receipt bound exceeded')
     paths = [root / name for name in ('thread_history_1.sqlite', 'queue_1.sqlite', 'goals_1.sqlite', 'state_5.sqlite')]
     before = [database_stamp(path, root) for path in paths]
     deadline = time.monotonic() + 6
     bot_map = {bot['id']: bot for bot in bots}
-    originals, rollouts = [], []
+    originals, terminal_inputs, passive_questions, rollouts = [], [], [], []
     with ExitStack() as stack:
         history, queue, goals, state = [bounded_database(stack, path, deadline) for path in paths]
         if queue.execute('SELECT EXISTS(SELECT 1 FROM queued_items)').fetchone()[0]:
@@ -77,8 +78,43 @@ def completed_queue_receipts(app, bots, rows, native_root=None):
         if goals.execute("SELECT EXISTS(SELECT 1 FROM thread_goals WHERE status IS NULL OR status NOT IN "
                          "('active','paused','blocked','usage_limited','budget_limited','complete'))").fetchone()[0]:
             raise RuntimeError('Unknown native Goal metadata blocks bootstrap')
+
+        def scope(bot_id, thread_id):
+            bot = bot_map.get(bot_id)
+            if not bot or bot.get('threadId') != thread_id or bot.get('deletedAt') or bot.get('archiving') or bot.get('archived'):
+                raise RuntimeError('Retained native scope is unconfirmed')
+            return bot
+
+        def terminal_metadata(thread_id, turns, expected_turn=None, completed_only=False):
+            if len(turns) != 1:
+                raise RuntimeError('Exact original native terminal evidence is missing or ambiguous')
+            turn, status, started, completed, end = turns[0]
+            if status not in (('completed',) if completed_only else ('completed', 'failed', 'interrupted')) or \
+                    type(started) is not int or type(completed) is not int or completed < started or \
+                    completed > time.time() + 2 or type(end) is not int or end <= 0 or expected_turn not in (None, turn):
+                raise RuntimeError('Original native execution is not confirmed terminal')
+            if history.execute("SELECT EXISTS(SELECT 1 FROM thread_turns WHERE thread_id=? AND "
+                               "(status NOT IN ('completed','failed','interrupted') OR status IS NULL))", (thread_id,)).fetchone()[0]:
+                raise RuntimeError('Unsettled indexed native execution blocks bootstrap')
+            projected = history.execute('SELECT next_rollout_byte_offset FROM thread_history_projection_state WHERE thread_id=?', (thread_id,)).fetchone()
+            location = state.execute('SELECT rollout_path FROM threads WHERE id=?', (thread_id,)).fetchone()
+            if not projected or not location:
+                raise RuntimeError('Native projection freshness is unavailable')
+            rollout = Path(location[0])
+            stamp = private_file(rollout, root / 'sessions')
+            if type(projected[0]) is not int or projected[0] != stamp[2] or end > projected[0]:
+                raise RuntimeError('Native projection is stale or incomplete')
+            rollouts.append((rollout, stamp))
+            return {'turnId': turn, 'status': status, 'completedAt': completed, 'projectedBytes': projected[0]}
+
+        def original_turns(thread_id, client):
+            return history.execute("SELECT t.turn_id,t.status,t.started_at,t.completed_at,t.rollout_end_byte_offset "
+                "FROM thread_turns t JOIN thread_items i ON i.thread_id=t.thread_id AND i.turn_id=t.turn_id "
+                "AND i.item_id=t.first_user_item_id WHERE t.thread_id=? AND i.item_type='userMessage' "
+                "AND json_extract(i.item_json,'$.clientId')=? LIMIT 2", (thread_id, client)).fetchall()
+
         for row in rows:
-            bot = bot_map.get(row.get('botId'))
+            bot = scope(row.get('botId'), row.get('threadId'))
             revision = row.get('revision')
             if not bot or bot.get('threadId') != row.get('threadId') or bot.get('deletedAt') or bot.get('archiving') or bot.get('archived') or \
                     row.get('state') != 'native-queued' or type(revision) is not int or revision < 1 or row.get('listId'):
@@ -100,34 +136,36 @@ def completed_queue_receipts(app, bots, rows, native_root=None):
                 raise RuntimeError('Native queue receipt binding conflicts')
             # A queued start must be the first canonical user item of one turn.
             # Project only indexed identity columns; never transfer item bodies.
-            turns = history.execute("SELECT t.turn_id,t.status,t.started_at,t.completed_at,t.rollout_end_byte_offset "
-                "FROM thread_turns t JOIN thread_items i ON i.thread_id=t.thread_id AND i.turn_id=t.turn_id "
-                "AND i.item_id=t.first_user_item_id WHERE t.thread_id=? AND i.item_type='userMessage' "
-                "AND json_extract(i.item_json,'$.clientId')=? LIMIT 2", (row['threadId'], client)).fetchall()
-            if len(turns) != 1:
-                raise RuntimeError('Exact original native completion is missing or ambiguous')
-            turn, status, started, completed, end = turns[0]
-            if status != 'completed' or type(started) is not int or type(completed) is not int or \
-                    completed < started or completed > time.time() + 2 or type(end) is not int or end <= 0 or \
-                    row.get('turnId') not in (None, turn):
-                raise RuntimeError('Original native execution is not confirmed completed')
-            if history.execute("SELECT EXISTS(SELECT 1 FROM thread_turns WHERE thread_id=? AND "
-                               "(status NOT IN ('completed','failed','interrupted') OR status IS NULL))", (row['threadId'],)).fetchone()[0]:
-                raise RuntimeError('Unsettled indexed native execution blocks bootstrap')
-            projected = history.execute('SELECT next_rollout_byte_offset FROM thread_history_projection_state WHERE thread_id=?', (row['threadId'],)).fetchone()
-            location = state.execute('SELECT rollout_path FROM threads WHERE id=?', (row['threadId'],)).fetchone()
-            if not projected or not location:
-                raise RuntimeError('Native projection freshness is unavailable')
-            rollout = Path(location[0])
-            stamp = private_file(rollout, root / 'sessions')
-            if type(projected[0]) is not int or projected[0] != stamp[2] or end > projected[0]:
-                raise RuntimeError('Native projection is stale or incomplete')
-            rollouts.append((rollout, stamp))
+            terminal = terminal_metadata(row['threadId'], original_turns(row['threadId'], client), row.get('turnId'), True)
             originals.append({'queueId': row['id'], 'botId': bot['id'], 'threadId': row['threadId'],
                               'revision': revision, 'clientId': client, 'nativeQueueId': row['nativeQueueId'],
-                              'turnId': turn, 'completedAt': completed, 'projectedBytes': projected[0]})
+                              **terminal})
+        for row in accepted:
+            scope(row.get('botId'), row.get('threadId'))
+            if row.get('state') != 'accepted' or not isinstance(row.get('id'), str) or not row.get('id') or not row.get('turnId'):
+                raise RuntimeError('Accepted intake lacks its exact original native binding')
+            terminal = terminal_metadata(row['threadId'], original_turns(row['threadId'], row['id']), row['turnId'])
+            # Terminal is execution evidence, never task completion or release
+            # of an interrupted/held input. Its local receipt stays unchanged.
+            terminal_inputs.append({'id': row['id'], 'botId': row['botId'], 'threadId': row['threadId'], **terminal})
+        for row in questions:
+            request = row.get('request', {})
+            params = request.get('params', {})
+            scope(row.get('botId'), params.get('threadId'))
+            if row.get('async') is not True or params.get('isBlocking') is not False or request.get('method') != 'item/tool/requestUserInput' or \
+                    row.get('id') != request.get('id') or row.get('id') != 'async:' + str(params.get('itemId')):
+                raise RuntimeError('Pending native question is not a durable nonblocking notification')
+            turns = history.execute("SELECT t.turn_id,t.status,t.started_at,t.completed_at,t.rollout_end_byte_offset "
+                "FROM thread_turns t JOIN thread_items i ON i.thread_id=t.thread_id AND i.turn_id=t.turn_id "
+                "WHERE t.thread_id=? AND t.turn_id=? AND i.item_id=? AND i.item_type='agentMessage' "
+                "AND json_array_length(json_extract(i.item_json,'$.questions'))>0 LIMIT 2",
+                (params['threadId'], params.get('turnId'), params['itemId'])).fetchall()
+            terminal = terminal_metadata(params['threadId'], turns, params.get('turnId'))
+            passive_questions.append({'id': row['id'], 'botId': row['botId'], 'threadId': params['threadId'], **terminal})
         if time.monotonic() >= deadline or before != [database_stamp(path, root) for path in paths] or \
                 any(private_file(path, root / 'sessions') != stamp for path, stamp in rollouts):
             raise RuntimeError('Native receipt observation changed or exceeded its bound')
     return {'originals': sorted(originals, key=lambda row: row['queueId']), 'databaseStamps': before,
+            'terminalInputs': sorted(terminal_inputs, key=lambda row: row['id']),
+            'passiveQuestions': sorted(passive_questions, key=lambda row: row['id']),
             'rolloutStamps': sorted((str(path), stamp) for path, stamp in rollouts)}

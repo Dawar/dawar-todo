@@ -91,7 +91,8 @@ never reuse a claimed or failed attempt, run a competing helper, or revive a
 superseded version target. This flag requires a healthy old bridge without
 installed admission drain; it cannot be combined with the drain arguments.
 
-Only up to eight positively acknowledged `queue.dispatch` originals qualify.
+The combined original/terminal/question observation is limited to eight rows.
+Positively acknowledged `queue.dispatch` originals qualify as follows.
 The reader binds the bot/current thread, revision, original hashed dispatch
 client, immutable input fingerprint and native queued receipt. It requires one
 indexed **completed** turn whose first canonical user item has that exact
@@ -102,8 +103,17 @@ unfinished execution, stale projection, active native Goal, any accepted native
 queue, unsafe files or concurrent changes stop the helper. Absence alone never
 proves completion. Bodies, credentials and transcripts are not returned.
 
-All local active/auxiliary work, other accepted/uncertain receipts, pending
-questions, open calls and live secure-input metadata remain blockers. The
+An accepted primary intake can cease to be a **current-work** blocker only
+when its exact original client and recorded turn match unique, fresh terminal
+native evidence. An interrupted/failed turn remains interrupted/failed; no
+task, receipt or local intake is edited or automatically resumed. A saved
+`async:true` / `isBlocking:false` question is passive only when the original
+owned request/item/turn match an indexed agent question in a fresh terminal
+turn. The question remains stored and answerable with its original identity.
+Neither its text nor its answer is read or submitted by the helper.
+
+All local active/auxiliary work, other accepted/uncertain receipts, live or
+unknown questions, open calls and live secure-input metadata remain blockers. The
 helper still checks fresh native current status, source, backup, original
 service identity and the exclusive one-restart receipt. It compares the
 originals and native database/rollout stamps across the backup, then rechecks

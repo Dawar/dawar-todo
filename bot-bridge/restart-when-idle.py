@@ -60,13 +60,17 @@ def local_state(observation=None, reconcile_native_queued=False):
             extra += db.execute("SELECT COUNT(*) FROM operations WHERE status IN ('dispatching','uncertain')").fetchone()[0]
             pending += extra
             raw = db.execute("SELECT json FROM records WHERE kind='promptQueue' AND json_extract(json,'$.state')='native-queued' LIMIT ?", (MAX_ORIGINALS + 1,)).fetchall()
-            if len(raw) > MAX_ORIGINALS or any(len(row[0].encode()) > MAX_RECORD_BYTES for row in raw):
+            accepted = db.execute("SELECT json FROM records WHERE kind='primaryInbox' AND json_extract(json,'$.state')='accepted' AND json_extract(json,'$.terminalStatus') IS NULL LIMIT ?", (MAX_ORIGINALS + 1,)).fetchall()
+            questions = db.execute("SELECT json FROM records WHERE kind='pending' LIMIT ?", (MAX_ORIGINALS + 1,)).fetchall()
+            all_raw = raw + accepted + questions
+            if len(all_raw) > MAX_ORIGINALS or any(len(row[0].encode()) > MAX_RECORD_BYTES for row in all_raw):
                 raise RuntimeError('Retained queue metadata exceeds bootstrap bound')
             # Avoid native evidence reads while a human/auxiliary turn or any
             # other admission remains active. Terminal originals cannot mask it.
-            if not active and pending == len(raw):
-                proof = completed_queue_receipts(db, bots, [json.loads(row[0]) for row in raw])
-                pending -= len(proof['originals'])
+            if not active and pending == len(all_raw):
+                proof = completed_queue_receipts(db, bots, [json.loads(row[0]) for row in raw],
+                    accepted=[json.loads(row[0]) for row in accepted], questions=[json.loads(row[0]) for row in questions])
+                pending -= len(proof['originals']) + len(proof['terminalInputs']) + len(proof['passiveQuestions'])
         if observation is not None:
             observation['local'] = {
                 'activeBots': sum(bool(r.get('activeTurnId') or r.get('status') == 'running') for r in bots),
@@ -79,7 +83,7 @@ def local_state(observation=None, reconcile_native_queued=False):
             # Full local original bytes are hashed, never logged/copied into a
             # native call. Source changes or new original identities invalidate
             # the second observation even if their busy count stayed the same.
-            fence = {'bots': digest(bots), 'aux': digest(rows), 'originalRows': digest(raw), 'native': proof}
+            fence = {'bots': digest(bots), 'aux': digest(rows), 'originalRows': digest(all_raw), 'native': proof}
             if observation is not None:
                 observation['_receiptProof'] = proof
         return bots, bool(active or pending), fence
