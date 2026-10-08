@@ -111,18 +111,25 @@ async function dispatchAdmitted(runtime, bot, item) {
 }
 export async function reconcilePrompt(runtime, item) {
   const operation = item.operationId && runtime.store.operation(item.operationId);
+  if (operation && (operation.method !== "queue.dispatch" || operation.botId !== item.botId || operation.queueId !== item.id ||
+      operation.revision !== item.revision || operation.clientId !== item.clientUserMessageId))
+    throw new Error("Original queue dispatch receipt conflicts. This prompt was not resent.");
   let result = operation?.status === "done" && (operation.result?.turn?.id || operation.result?.turnId) ? operation.result : null;
   let fullEvidence = false;
   let nextCursor = null;
   if (!result) {
     const found = await findNativeTurn(runtime, item.threadId, { turnId: item.turnId,
-      clientId: item.clientUserMessageId, cursor: item.reconcileCursor ?? null });
+      clientId: item.clientUserMessageId, cursor: item.reconcileCursor ?? null, itemsView: "summary" });
     nextCursor = found.nextCursor;
-    if (found.turn) { result = { turn: found.turn }; fullEvidence = true; }
+    if (found.turn) { result = { turn: found.turn }; fullEvidence = found.turn.itemsView === "full"; }
   }
   runtime.store.transaction(() => {
     const current = runtime.store.get("promptQueue", item.id);
     if (!current || !["dispatching", "uncertain", "queued", "native-queued"].includes(current.state)) return;
+    if (current.botId !== item.botId || current.threadId !== item.threadId || current.revision !== item.revision ||
+        current.operationId !== item.operationId || current.clientUserMessageId !== item.clientUserMessageId ||
+        current.nativeQueueId !== item.nativeQueueId || JSON.stringify(current.input) !== JSON.stringify(item.input) ||
+        runtime.store.bot(item.botId).threadId !== item.threadId) return;
     runtime.store.put("promptQueue", { ...current, operationId: item.operationId,
       state: result ? "delivered" : current.nativeQueueId && current.state === "native-queued" ? "native-queued" : "uncertain", reconcileCursor: nextCursor,
       reconcileAfter: new Date(Date.now() + 30000).toISOString(),

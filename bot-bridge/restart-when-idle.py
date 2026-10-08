@@ -5,6 +5,7 @@ Uses the existing private local manager credential for read-only native status.
 Never runs messages, rewrites work records, or retries a claimed restart.
 """
 import argparse
+from contextlib import closing
 import http.client
 import json
 import os
@@ -16,6 +17,7 @@ import subprocess
 import sys
 import time
 import urllib.request
+from native_queue_receipts import completed_queue_receipts, digest, MAX_ORIGINALS, MAX_RECORD_BYTES
 
 ROOT = Path(__file__).resolve().parent.parent
 STATE = Path.home() / '.local/share/dawar-todo-bots'
@@ -26,8 +28,13 @@ def command(*args):
     return subprocess.check_output(args, cwd=ROOT, text=True, timeout=10).strip()
 
 
-def local_state(observation=None):
-    with sqlite3.connect(f'file:{STATE}/state.sqlite?mode=ro', uri=True) as db:
+def local_state(observation=None, reconcile_native_queued=False):
+    with closing(sqlite3.connect(f'file:{STATE}/state.sqlite?mode=ro', uri=True)) as db:
+        db.execute('PRAGMA query_only=ON')
+        if reconcile_native_queued:
+            read_deadline = time.monotonic() + 6
+            db.set_progress_handler(lambda: int(time.monotonic() >= read_deadline), 1000)
+        db.execute('BEGIN')
         bots = [json.loads(r[0]) for r in db.execute('SELECT json FROM bots')]
         rows = [json.loads(r[0]) for r in db.execute(
             "SELECT json FROM records WHERE kind IN ('runLane','managerWorker')")]
@@ -36,13 +43,45 @@ def local_state(observation=None):
         pending = db.execute("SELECT COUNT(*) FROM records WHERE "
             "(kind IN ('primaryInbox','burstBatch','messageBurst') AND json_extract(json,'$.state') IN ('dispatching','uncertain')) "
             "OR (kind='promptQueue' AND json_extract(json,'$.state') IN ('dispatching','native-queued'))").fetchone()[0]
+        proof = None
+        if reconcile_native_queued:
+            # First installation has no admission drain. Never equate terminal
+            # historical inputs with current idle, or ignore other uncertainty.
+            extra = db.execute("SELECT COUNT(*) FROM records WHERE "
+                "(kind='primaryInbox' AND json_extract(json,'$.state') IN ('dispatching','uncertain','accepted') AND json_extract(json,'$.terminalStatus') IS NULL) "
+                "OR (kind='promptQueue' AND json_extract(json,'$.state')='uncertain') "
+                "OR (kind IN ('runIntake','answerExecution','managerOperation','managerExecution') AND json_extract(json,'$.state') IN ('dispatching','uncertain')) "
+                "OR (kind='managerTask' AND json_extract(json,'$.state') IN ('starting','running','uncertain','provisioning')) "
+                "OR (kind='runLane' AND json_extract(json,'$.provisioning') IN ('dispatching','uncertain')) "
+                "OR kind IN ('pending','managerRequest','runPending') "
+                "OR (kind='nativeGoal' AND json_extract(json,'$.goal.status')='active') "
+                "OR (kind='operatorCall' AND json_extract(json,'$.endedAt') IS NULL) "
+                "OR (kind='secureInput' AND json_extract(json,'$.state') IN ('waiting','received'))").fetchone()[0]
+            extra += db.execute("SELECT COUNT(*) FROM operations WHERE status IN ('dispatching','uncertain')").fetchone()[0]
+            pending += extra
+            raw = db.execute("SELECT json FROM records WHERE kind='promptQueue' AND json_extract(json,'$.state')='native-queued' LIMIT ?", (MAX_ORIGINALS + 1,)).fetchall()
+            if len(raw) > MAX_ORIGINALS or any(len(row[0].encode()) > MAX_RECORD_BYTES for row in raw):
+                raise RuntimeError('Retained queue metadata exceeds bootstrap bound')
+            # Avoid native evidence reads while a human/auxiliary turn or any
+            # other admission remains active. Terminal originals cannot mask it.
+            if not active and pending == len(raw):
+                proof = completed_queue_receipts(db, bots, [json.loads(row[0]) for row in raw])
+                pending -= len(proof['originals'])
         if observation is not None:
             observation['local'] = {
                 'activeBots': sum(bool(r.get('activeTurnId') or r.get('status') == 'running') for r in bots),
                 'activeAux': sum(bool(r.get('activeTurnId') or r.get('status') == 'running') for r in rows),
                 'pendingDispatch': pending,
+                **({'completedOriginals': len(proof['originals']) if proof else 0} if reconcile_native_queued else {}),
             }
         fence = sorted((r['id'], r.get('activeTurnId'), r.get('status')) for r in bots)
+        if proof is not None:
+            # Full local original bytes are hashed, never logged/copied into a
+            # native call. Source changes or new original identities invalidate
+            # the second observation even if their busy count stayed the same.
+            fence = {'bots': digest(bots), 'aux': digest(rows), 'originalRows': digest(raw), 'native': proof}
+            if observation is not None:
+                observation['_receiptProof'] = proof
         return bots, bool(active or pending), fence
 
 
@@ -207,11 +246,15 @@ def main():
     parser.add_argument('--wait-seconds', type=int, default=900)
     parser.add_argument('--maintenance-operation')
     parser.add_argument('--unit-id')
+    parser.add_argument('--reconcile-native-queued', action='store_true',
+                        help='First-bootstrap only: prove exact completed original queue receipts read-only')
     args = parser.parse_args()
     if not re.fullmatch(r'[0-9a-f]{40}', args.commit) or not re.fullmatch(r'\d+\.\d+\.\d+', args.version):
         raise RuntimeError('Exact reviewed SHA and version are required')
     if bool(args.maintenance_operation) != bool(args.unit_id):
         raise RuntimeError('A maintenance operation and original unit ID are both required')
+    if args.reconcile_native_queued and args.maintenance_operation:
+        raise RuntimeError('Use the installed admission drain separately from first-bootstrap reconciliation')
     receipt_dir = STATE / 'runtime-updates' / args.commit
     receipt_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     receipt = receipt_dir / 'restart.json'
@@ -219,6 +262,9 @@ def main():
         raise RuntimeError('Restart receipt already exists; inspect it rather than repeat')
     if command('git', 'rev-parse', 'HEAD') != args.commit or command('git', 'status', '--porcelain'):
         raise RuntimeError('Reviewed source changed')
+    pin = re.search(r'export const CODEX_VERSION = "(\d+\.\d+\.\d+)";', (ROOT / 'bot-bridge/codex-version.mjs').read_text())
+    if not pin or pin.group(1) != args.version:
+        raise RuntimeError('Reviewed runtime version changed')
     drain = begin_drain(args, receipt_dir) if args.maintenance_operation else None
     try:
         activate(args, receipt_dir, receipt, drain)
@@ -232,6 +278,17 @@ def main():
 
 
 def activate(args, receipt_dir, receipt, drain):
+    bootstrap = getattr(args, 'reconcile_native_queued', False)
+    def service_identity():
+        return [command('systemctl', '--user', 'show', SERVICE, '-p', field, '--value') for field in ('MainPID', 'InvocationID')]
+    original_service = service_identity() if bootstrap else None
+    if bootstrap:
+        if not original_service[0].isdigit() or int(original_service[0]) < 1 or not re.fullmatch('[0-9a-f]{32}', original_service[1]):
+            raise RuntimeError('Original bootstrap process identity is unavailable')
+        with urllib.request.urlopen('http://127.0.0.1:47821/healthz', timeout=2) as response:
+            health = json.load(response)
+        if not health.get('ready') or not health.get('relayConnected') or health.get('maintenance', {}).get('version') == 1:
+            raise RuntimeError('Bootstrap requires the healthy old bridge; use the installed drain when available')
     deadline = time.monotonic() + min(max(args.wait_seconds, 0), 900 if drain else 3600)
     started = time.monotonic()
     attempts, previous_reason, blocked = 0, None, {}
@@ -240,7 +297,7 @@ def activate(args, receipt_dir, receipt, drain):
             raise RuntimeError('Reviewed source changed')
         attempts += 1
         observation = {'phase': 'before-backup', 'native': {'checked': False}}
-        bots, busy, fence = local_state(observation)
+        bots, busy, fence = local_state(observation, bootstrap)
         if drain:
             checked = owner_maintenance({**drain, 'action': 'observe'})
             observation['maintenance'] = {key: checked.get(key) for key in ('safe', 'counts', 'native', 'reason')}
@@ -253,7 +310,7 @@ def activate(args, receipt_dir, receipt, drain):
                 with sqlite3.connect(receipt_dir / 'state-before.sqlite') as backup:
                     source.backup(backup)
             observation = {'phase': 'after-backup', 'native': {'checked': False}}
-            _, busy, after = local_state(observation)
+            _, busy, after = local_state(observation, bootstrap)
             reason = 'local-current-work' if busy else 'local-fence-changed' if after != fence else 'native-current-work'
             if not busy and after == fence and native_idle(bots, observation):
                 if drain:
@@ -266,11 +323,24 @@ def activate(args, receipt_dir, receipt, drain):
                         if sealed.get('phase') != 'sealed':
                             raise RuntimeError('Maintenance could not seal; no restart')
                 if not busy:
+                    if bootstrap:
+                        # Current status RPCs may await. Recheck the private
+                        # receipts and all local gates after those awaits, not
+                        # just before them, and bind the original process.
+                        final = {'phase': 'before-claim', 'native': {'checked': False}}
+                        _, busy, latest = local_state(final, True)
+                        if latest != after or service_identity() != original_service:
+                            raise RuntimeError('Original bootstrap evidence or service changed; no restart')
+                        if busy:
+                            raise RuntimeError('New local work blocks bootstrap; no restart')
+                        observation = final
+                    if command('git', 'rev-parse', 'HEAD') != args.commit or command('git', 'status', '--porcelain'):
+                        raise RuntimeError('Reviewed source changed before claim')
                     break
         blocked[reason] = blocked.get(reason, 0) + 1
         diagnostic = {'event': 'idle-handoff-wait', 'attempts': attempts,
                       'elapsedSeconds': round(time.monotonic() - started, 1),
-                      'reason': reason, 'observation': observation, 'blockedAttempts': blocked}
+                      'reason': reason, 'observation': {k: v for k, v in observation.items() if not k.startswith('_')}, 'blockedAttempts': blocked}
         if reason != previous_reason:
             print(json.dumps(diagnostic), file=sys.stderr, flush=True)
             previous_reason = reason
@@ -281,6 +351,10 @@ def activate(args, receipt_dir, receipt, drain):
         time.sleep(5)
     previous_pid = command('systemctl', '--user', 'show', SERVICE, '-p', 'MainPID', '--value')
     data = {'commit': args.commit, 'version': args.version, 'status': 'claimed', 'claimedAt': time.time(), 'previousPid': previous_pid}
+    if bootstrap:
+        if service_identity() != original_service:
+            raise RuntimeError('Original bootstrap service changed before claim')
+        data['completedQueueReceipts'] = observation.get('_receiptProof', {})
     with receipt.open('x') as file:
         json.dump(data, file, indent=2)
         file.flush()
@@ -303,7 +377,7 @@ def activate(args, receipt_dir, receipt, drain):
             if health.get('ready') and health.get('relayConnected') and health.get('codexVersion') == args.version and pid != previous_pid:
                 data.update(status='healthy', verifiedAt=time.time(), pid=pid, models=health.get('models', []))
                 receipt.write_text(json.dumps(data, indent=2))
-                print(json.dumps(data))
+                print(json.dumps({k: v for k, v in data.items() if k != 'completedQueueReceipts'}))
                 return
         except (OSError, ValueError):
             pass
