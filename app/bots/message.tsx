@@ -1,11 +1,12 @@
 "use client";
-import { memo, useEffect, useState, useRef, useSyncExternalStore } from "react";
+import { Fragment, memo, useEffect, useState, useRef, useMemo, useSyncExternalStore, type ReactNode } from "react";
 import { LazyDetails, TextPages, ItemPages } from "./lazy-details";
 import { botsClient } from "./client";
 import { ReturnedArtifact } from "./returned-artifact";
 import { MarkdownTable } from "./markdown-table";
 import { MarkdownCodeBlock } from "../markdown-code-block";
 import type { BotAttachment } from "../../lib/bots-types";
+import { proposedPlanParts } from "../../lib/proposed-plan";
 import ReactMarkdown, { defaultUrlTransform, type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
@@ -23,21 +24,37 @@ import type { ThreadItem } from "../../lib/codex-protocol/v2/ThreadItem";
 
 const renderMarkdownTable: Components["table"] = ({ children }) => <MarkdownTable>{children}</MarkdownTable>;
 
+function ProposedPlanText({ text, partial, nativePlan = false, render }: {
+  text: string; partial: boolean; nativePlan?: boolean; render: (text: string) => ReactNode;
+}) {
+  const parts = useMemo(() => proposedPlanParts(text, partial), [text, partial]);
+  return <TextPages text={text} render={(page, offset) => parts.flatMap(part => {
+    const start = Math.max(part.start, offset), end = Math.min(part.end, offset + page.length);
+    if (start >= end && !(part.kind === "plan" && part.start === part.end && part.start >= offset && part.start <= offset + page.length)) return [];
+    const body = render(text.slice(start, Math.max(start, end)));
+    return [part.kind === "plan" && !nativePlan ? <div key={part.key} className="bots-plan">
+      <span>Proposed plan</span><div className="bots-message-markdown">{body}</div>
+    </div> : <Fragment key={part.key}>{body}</Fragment>];
+  })} />;
+}
+
 function BotMessage({
   item,
   download,
   botId,
   attachments,
   inWorkLog = false,
+  partial = false,
 }: {
   item: ThreadItem;
   botId: string;
   attachments: BotAttachment[];
   download: (id: string) => void;
   inWorkLog?: boolean;
+  partial?: boolean;
 }) {
-  function markdown(value: string) {
-    return <TextPages text={value} render={(text) => (
+  function markdownPage(text: string) {
+    return (
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[[rehypeSanitize, messageSchema]]}
@@ -59,8 +76,9 @@ function BotMessage({
       >
         {text}
       </ReactMarkdown>
-    )} />;
+    );
   }
+  function markdown(value: string) { return <TextPages text={value} render={markdownPage} />; }
   // Worker callbacks are internal supervision, not messages authored by Dawar.
   if (
     item.type === "userMessage" &&
@@ -102,14 +120,14 @@ function BotMessage({
       <div
         className={`bots-message bots-agent ${item.phase === "commentary" ? "is-commentary" : ""}`}
       >
-        <div className="bots-message-markdown">{markdown(item.text)}</div>
+        <div className="bots-message-markdown"><ProposedPlanText text={item.text} partial={partial} render={markdownPage} /></div>
       </div>
     );
   if (item.type === "plan")
     return (
       <div className="bots-plan">
         <span>Proposed plan</span>
-        <div className="bots-message-markdown">{markdown(item.text)}</div>
+        <div className="bots-message-markdown"><ProposedPlanText text={item.text} partial={partial} nativePlan render={markdownPage} /></div>
       </div>
     );
   if (item.type === "reasoning")

@@ -53,7 +53,7 @@ const EntryBody = memo(function EntryBody({ entry, timeline, attachments, downlo
     return () => { active = false; };
   }, [timeline]);
   const item = full ?? entry.item;
-  return <>{entry.questionNotice && <p className="bots-system-note">{entry.questionNotice}</p>}{refreshing && <small>Updating…</small>}{item && <BotMessage item={item} botId={timeline.botId} attachments={attachments} download={download} inWorkLog />}
+  return <>{entry.questionNotice && <p className="bots-system-note">{entry.questionNotice}</p>}{refreshing && <small>Updating…</small>}{item && <BotMessage item={item} botId={timeline.botId} attachments={attachments} download={download} inWorkLog partial={entry.status === "inProgress" || !full && !entry.complete} />}
     {!entry.complete && <div className="bots-detail-status">
       <button disabled={loading} onClick={() => void load()}>{loading ? "Loading…" : full ? "Refresh details" : item ? "Continue · load complete message" : "Open full details"}</button>
       {full && !botsClient.online && <small>Saved copy. Reconnect to check for changes.</small>}

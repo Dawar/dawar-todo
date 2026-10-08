@@ -12,7 +12,7 @@ export function LazyDetails({ summary, children, className = "bots-tool" }: {
   }}><summary><ChevronRight size={15} className="bots-disclosure-chevron" aria-hidden="true" />{summary}</summary>{open && children()}</details>;
 }
 
-export function TextPages({ text, render }: { text: string; render: (text: string) => ReactNode }) {
+export function TextPages({ text, render }: { text: string; render: (text: string, offset: number) => ReactNode }) {
   const [page, setPage] = useState(0), size = 16384, total = Math.max(1, Math.ceil(text.length / size));
   const current = Math.min(page, total - 1);
   return <>{total > 1 && <nav className="bots-text-pages" aria-label="Full message pages">
@@ -21,7 +21,7 @@ export function TextPages({ text, render }: { text: string; render: (text: strin
     <button disabled={current === 0} onClick={() => setPage(0)}>First part</button>
     <button disabled={current === total - 1} onClick={() => setPage(total - 1)}>Last part</button>
     <button disabled={current === total - 1} onClick={() => setPage(current + 1)}>Next part</button>
-  </nav>}{render(text.slice(current * size, (current + 1) * size))}</>;
+  </nav>}{render(text.slice(current * size, (current + 1) * size), current * size)}</>;
 }
 
 export function ItemPages<T>({ items, render, size = 10 }: { items: T[]; render: (item: T, index: number) => ReactNode; size?: number }) {
