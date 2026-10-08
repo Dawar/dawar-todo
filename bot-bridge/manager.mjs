@@ -67,12 +67,13 @@ const resultText = (turn) =>
     .slice(-24000);
 
 export class CodexManager {
-  constructor({ runtime, store, directory }) {
+  constructor({ runtime, store, directory, maintenanceCredential = null }) {
     Object.assign(this, {
       runtime,
       store,
       codex: runtime.codex,
       directory: resolve(directory),
+      maintenanceCredential,
     });
     this.socketPath = join(this.directory, "manager.sock");
     this.tokens = new Map();
@@ -137,7 +138,20 @@ export class CodexManager {
     await unlink(this.socketPath).catch((e) => {
       if (e.code !== "ENOENT") throw e;
     });
-    this.server = createServer(async (req, res) => {
+    this.server = createServer((req, res) => {
+      if (req.url === "/runtime/maintenance") return void this.maintenanceRequest(req, res);
+      void this.runtime.maintenance.track(() => this.httpRequest(req, res)).catch(error => {
+        if (!res.headersSent) res.writeHead(409, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: error.message, outcome: "rejected" }));
+      });
+    });
+    await new Promise((yes, no) => {
+      this.server.once("error", no);
+      this.server.listen(this.socketPath, yes);
+    });
+    await chmod(this.socketPath, 0o600);
+  }
+  async httpRequest(req, res) {
       const respond = (status, value) => {
         res.writeHead(status, { "Content-Type": "application/json" });
         res.end(JSON.stringify(value));
@@ -174,12 +188,18 @@ export class CodexManager {
       } catch (error) {
         respond(400, { error: error.message });
       }
-    });
-    await new Promise((yes, no) => {
-      this.server.once("error", no);
-      this.server.listen(this.socketPath, yes);
-    });
-    await chmod(this.socketPath, 0o600);
+  }
+  async maintenanceRequest(req, res) {
+    const reply = (status, data) => { res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(data)); };
+    const credential = this.maintenanceCredential, token = String(req.headers.authorization ?? '').replace(/^Bearer /, '');
+    if (req.method !== 'POST' || !credential || Buffer.byteLength(token) !== Buffer.byteLength(credential) || !timingSafeEqual(Buffer.from(token), Buffer.from(credential))) return reply(403, { error: 'Owner maintenance authentication required.' });
+    try {
+      let size = 0; const chunks = [];
+      for await (const chunk of req) { size += chunk.length; if (size > 4096) return reply(413, { error: 'Maintenance metadata exceeds bound.' }); chunks.push(chunk); }
+      const params = JSON.parse(Buffer.concat(chunks));
+      // Local credential gives this one fixed operation, never arbitrary RPC.
+      reply(200, { result: await this.runtime.maintenance.control(params) });
+    } catch { reply(409, { error: 'Maintenance blocked or identity changed. Inspect metadata and original receipt; no retry with a new ID.' }); }
   }
   async close() {
     if (this.server) await new Promise((yes) => this.server.close(yes));
@@ -255,6 +275,13 @@ export class CodexManager {
     return [...admin, MEMORY_TOOL, ...SECURE_TOOLS, ...retained, WORK_TOOL, PEER_TOOL, QUEUE_TOOL, TEAM_TOOL, DOWNLOAD_ATTACHMENT_TOOL];
   }
   async call(botId, name, args, origin = null) {
+    const run = () => this.callTracked(botId, name, args, origin);
+    const admission = name === BOT_ADMIN_TOOL.name && args?.operation === "create" ||
+      name === "codex_threads" && ["create", "fork", "message"].includes(args?.operation) ||
+      name === "codex_tasks" && args?.operation === "delegate";
+    return this.runtime.maintenance.track(() => admission ? this.runtime.maintenance.admit(run) : run());
+  }
+  async callTracked(botId, name, args, origin = null) {
     const bot = this.store.bot(botId);
     if (bot.archived || bot.archiving || bot.deletedAt)
       throw new Error("Restore this manager before using its tools.");
@@ -1363,9 +1390,13 @@ export class CodexManager {
     }
   }
   async tick() {
+    return this.runtime.maintenance.track(() => this.tickAdmitted());
+  }
+  async tickAdmitted() {
     if (this.tickRunning || !this.runtime.ready) return;
     this.tickRunning = true;
     try {
+      if (!this.runtime.maintenance.holding()) await this.runtime.maintenance.admit(async () => {
       for (const task of this.store
         .list("managerTask")
         .filter((t) => t.state === "queued")) {
@@ -1510,6 +1541,7 @@ export class CodexManager {
           }
         }
       }
+      });
       repairTerminalNotices(this);
       for (const pending of this.store.list("managerRequest")) this.attributeRequest(pending);
       await deliverNotices(this);

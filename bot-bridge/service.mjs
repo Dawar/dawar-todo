@@ -47,21 +47,24 @@ const manager = new CodexManager({
     "manager",
   ),
 });
+manager.maintenanceCredential = process.env.BOTS_MACHINE_SECRET;
 runtime.manager = manager;
 runtime.desktops = new BotDesktops({ runtime, adopt: JSON.parse(process.env.BOTS_DESKTOP_ADOPT ?? '{}') });
+runtime.relayBuffered = () => socket?.bufferedAmount ?? 0;
 runtime.relayOnline = false;
 let socket = null,
   stopping = false,
   retry = 0,
   online = false,
   notifying = false;
+runtime.serviceWork = () => Number(notifying);
 const log = (event, data = {}) =>
   console.log(JSON.stringify({ at: new Date().toISOString(), event, ...data }));
 runtime.on("fault", (error) =>
   log("runtime.error", { message: error.message }),
 );
 runtime.on("event", (event) => {
-  if(runtime.storage && event.type==='bot') void runtime.storage.registerBots().catch(()=>log('storage.catalog-unavailable'));
+  if(runtime.storage && event.type==='bot') void runtime.maintenance.track(() => runtime.storage.registerBots()).catch(()=>log('storage.catalog-unavailable'));
   if (event.type === "manager")
     log("manager.state", { botId: event.botId, ...event.data });
   if (online && socket?.readyState === WebSocket.OPEN)
@@ -127,16 +130,16 @@ function connect() {
     if (message.type === "secure") {
       // Never bridgeResponse/handle/sendLarge/log this sensitive envelope.
       let response;
-      try { response = { type:"secure.response", id:message.id, clientId:message.clientId, result:await runtime.secure.channel(message) }; }
+      try { response = { type:"secure.response", id:message.id, clientId:message.clientId, result:await runtime.maintenance.track(() => runtime.secure.channel(message)) }; }
       catch { response = { type:"secure.response", id:message.id, clientId:message.clientId, error:"Secure transfer rejected or unavailable. Retain input while open; inspect status or request a fresh form." }; }
       if(current.readyState===WebSocket.OPEN)current.send(JSON.stringify(response));
       return;
     }
     if (message.type === "desktop") {
-      await runtime.desktops.message(message, value => {
+      await runtime.maintenance.track(() => runtime.desktops.message(message, value => {
         if (current.readyState === WebSocket.OPEN && current.bufferedAmount < 8 * 1024 * 1024) current.send(JSON.stringify(value));
         else if (value.event !== "closed") void runtime.desktops.end(value.clientId, "Desktop connection is congested or offline.");
-      }).catch(() => runtime.desktops.end(message.clientId, "Desktop control connection failed."));
+      })).catch(() => runtime.desktops.end(message.clientId, "Desktop control connection failed."));
       return;
     }
     if (message.type === "request") {
@@ -218,6 +221,7 @@ function sendLarge(connection, message) {
     );
 }
 async function flushNotifications() {
+  if (runtime.maintenance.holding() && runtime.maintenance.current.phase !== "draining") return;
   if (notifying) return;
   notifying = true;
   try {
@@ -278,6 +282,7 @@ const health = createServer((request, response) => {
   response.end(
     JSON.stringify({
       ready: runtime.ready,
+      maintenance: runtime.maintenance.snapshot(),
       historyReads: { concurrency: runtime.historyReads.concurrency, active: runtime.historyReads.active,
         pending: runtime.historyReads.pending.size, ...runtime.historyReads.metrics },
       relayConnected: online,
@@ -302,6 +307,7 @@ async function stop() {
   clearInterval(heartbeat);
   socket?.close();
   health.close();
+  runtime.maintenance.close();
   runtime.secure?.close();
   codex.close();
   await runtime.desktops.close();

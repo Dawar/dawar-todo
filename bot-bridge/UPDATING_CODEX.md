@@ -63,3 +63,15 @@ backup available for recovery; do not restore a database over newer user work.
 
 The nightly bot reports actionable failures or important new model availability.
 An unchanged check finishes quietly.
+
+## Bounded admission for future updates
+
+See [MAINTENANCE.md](MAINTENANCE.md) for the new exact-owner operation,
+15-minute lease, metadata blockers, original-ID recovery and sealed cutover.
+The optional `--maintenance-operation` / `--unit-id` helper arguments require
+actual installed `runtimeMaintenance:1` / health metadata. The current old
+service cannot be drained by merely writing a lease or running new source:
+first installation still needs the original strict-idle guard. Active native
+Goals, accepted native queues, volatile sessions and uncertain receipts are
+fail-closed blockers; never pause/replay them implicitly. Independent approved
+source work no longer waits solely for an unfinished backend activation.

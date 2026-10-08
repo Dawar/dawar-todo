@@ -246,7 +246,7 @@ export class MessageBursts {
       if (first.state !== 'pending' || this.runtime.activityUnresolved(bot.id) || this.store.list('pending', bot.id).length) return;
       const lease = first.immediate ? 0 : Math.max(0, ...[...this.leases.values()].filter(l => l.botId === bot.id).map(l => l.until));
       if (Date.now() < Math.max(Date.parse(first.dueAt), lease)) { this.arm(botId); return; }
-      await this.dispatch(bot, first);
+      if (!this.runtime.maintenance.holding()) await this.runtime.maintenance.admit(() => this.dispatch(bot, first));
     });
   }
   async tick() {

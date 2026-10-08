@@ -8,6 +8,10 @@ const terminal = new Set(["completed", "failed", "interrupted"]);
 // Compatibility lane: schedules still use the main native thread. These
 // receipts preserve identity for the later independent-background-thread lane.
 export async function dispatchScheduled(runtime, bot, run) {
+  if (runtime.maintenance?.holding()) return;
+  return runtime.maintenance ? runtime.maintenance.admit(() => dispatchAdmitted(runtime, bot, run)) : dispatchAdmitted(runtime, bot, run);
+}
+async function dispatchAdmitted(runtime, bot, run) {
   const operationId = `schedule:${run.id}`;
   if (runtime.store.operation(operationId)) return; // Reconciliation, never blind retry.
   const fingerprint = createHash("sha256").update(JSON.stringify({ botId: bot.id, runId: run.id, prompt: run.prompt })).digest("hex");

@@ -86,6 +86,7 @@ export class Codex extends EventEmitter {
     this.process.stdin.write(JSON.stringify(message) + "\n");
   }
   call(method, params = {}, timeoutMs = 120000) {
+    this.admissionGuard?.(method, params);
     const id = ++this.counter;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
