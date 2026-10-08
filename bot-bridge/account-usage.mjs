@@ -83,6 +83,13 @@ export class AccountUsageCollector {
     this.changeTimer.unref?.();
   }
   notification(message) {
+    if (message.method === "account/login/completed") {
+      if (message.params?.success === true) {
+        this.invalidate("Login completed. Verifying usage identity.");
+        this.requestObservation();
+      }
+      return true;
+    }
     if (message.method === "account/updated") {
       this.invalidate(message.params?.authMode === null ? "Sign in to Codex to collect usage history." : "Account changed. Verifying usage identity.");
       this.requestObservation();
