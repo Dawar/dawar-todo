@@ -1,3 +1,4 @@
+import { itemTiming, turnTiming } from '../lib/bot-timing.ts';
 import { displayReplyItem } from "./message-replies.mjs";
 import { withMessageTime } from "./message-times.mjs";
 import { CONVERSATION_TURNS, historyKey } from '../lib/bot-history-view.ts';
@@ -40,7 +41,8 @@ function projection(runtime, bot) {
     const hasFiles = runtime.store.db.prepare(`SELECT 1 FROM records WHERE kind='artifactPublication' AND bot_id=? AND json_extract(json,'$.provenance.threadId')=? AND json_extract(json,'$.provenance.turnId')=? LIMIT 1`).get(bot.id, bot.threadId, turn.id);
     if (turn.itemsView === 'summary' && turn.status !== 'inProgress' &&
         (legacyFindings.length || audience.kind !== 'activity' && (turn.error?.message || hasFiles || rows.some(({ item }) => item.type === 'agentMessage' && item.text.trim() || item.type === 'userMessage' && !/^(schedule:|peer:|peer-exchange:|manager-notice:|secure-receipt:)/.test(item.clientId ?? ''))))) {
-      rows.push({ turn, item: { type: 'contextCompaction', id: 'native-turn-log' }, audience, deferred: true });
+      const final = rows.findIndex(({ item }) => item.type === 'agentMessage' && item.phase === 'final_answer');
+      rows.splice(final < 0 ? 0 : final + 1, 0, { turn, item: { type: 'contextCompaction', id: 'native-turn-log' }, audience, deferred: true });
     }
     return rows;
   });
@@ -101,6 +103,7 @@ export async function conversationViewPage(runtime, bot, cursor) {
     for (; index < all.length; index++) {
       const { turn, item, audience, deferred } = all[index];
       const entry = deferred ? deferredLog(turn, audience) : withMessageTime(runtime, bot, bot.threadId, projectConversationItem(turn, displayReplyItem(runtime, bot, bot.threadId, item), audience));
+      if (entry && !deferred) Object.assign(entry, itemTiming(item, turn.itemTimings?.[item.id]));
       if (!entry || entry.findingId && findings.has(entry.findingId)) continue;
       const size = Buffer.byteLength(JSON.stringify(entry));
       if (!turnIds.has(turn.id) && turnIds.size >= CONVERSATION_TURNS || entries.length && (entries.length >= CONVERSATION_ITEMS || bytes + size > ENTRY_BYTES)) break;
@@ -141,6 +144,7 @@ async function conversationViewAfter(runtime, bot, after) {
           complete: false });
       }
       const entry = deferred ? deferredLog(turn, audience) : withMessageTime(runtime, bot, bot.threadId, projectConversationItem(turn, displayReplyItem(runtime, bot, bot.threadId, item), audience));
+      if (entry && !deferred) Object.assign(entry, itemTiming(item, turn.itemTimings?.[item.id]));
       if (!entry) continue;
       const size = Buffer.byteLength(JSON.stringify(entry));
       nearest.push({ entry, size }); bytes += size; counts.set(turn.id, (counts.get(turn.id) ?? 0) + 1);
@@ -157,7 +161,7 @@ async function conversationViewAfter(runtime, bot, after) {
 }
 
 function deferredLog(turn, audience) {
-  return { deferredTurn: true, ...(turn.error?.message ? { turnError: turn.error.message } : {}), id: 'native-turn-log', turnId: turn.id, type: 'contextCompaction', label: 'Work log', item: null,
+  return { ...turnTiming(turn), deferredTurn: true, ...(turn.error?.message ? { turnError: turn.error.message } : {}), id: 'native-turn-log', turnId: turn.id, type: 'contextCompaction', label: 'Work log', item: null,
     complete: true, scheduled: false, audience: audience.kind === 'activity' ? undefined : audience.kind, runId: audience.runId, startedAt: turn.startedAt,
     messageAt: turn.startedAt, timeBasis: 'turn-start', turnStatus: turn.status, status: turn.status };
 }
@@ -171,7 +175,7 @@ async function readChatPage(runtime, bot, cursor) {
   for (const turn of page.data) {
     if (turn.status === 'inProgress') {
       const tail = await runtime.historyReads.items(bot.threadId, turn.id, null, 8, 'desc');
-      data.push({ ...turn, items: [...new Map([...turn.items, ...tail.data.map(e => e.item).reverse()].map(i => [i.id, i])).values()] });
+      data.push({ ...turn, itemTimings: Object.fromEntries(tail.data.map(e => [e.item.id, { startedAtMs: e.startedAtMs, completedAtMs: e.completedAtMs }])), items: [...new Map([...turn.items, ...tail.data.map(e => e.item).reverse()].map(i => [i.id, i])).values()] });
     } else data.push(turn);
   }
   return { ...page, data };

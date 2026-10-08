@@ -1,15 +1,18 @@
+import { turnTiming, itemTiming, type NativeTiming } from './bot-timing.ts';
 import type { ThreadItem } from "./codex-protocol/v2/ThreadItem";
 import type { Turn } from "./codex-protocol/v2/Turn";
 import type { BotAttachment, BotEvent } from "./bots-types";
 
 /** A disposable, explicitly partial view. Native history remains authoritative. */
-export type HistoryEntry = {
+export type HistoryEntry = NativeTiming & {
   /** Display provenance only; never a native message or activity publisher. */
   peer?: import("./bots-types").BotPeerExchangeMeta;
   peerNativeKeys?: string[];
   peerAlias?: string;
   /** Summary-backed chat: exact commentary and tools load only on disclosure. */
   deferredTurn?: boolean;
+  /** Explicit native tool metadata marks files/questions as conversational boundaries. */
+  activityBoundary?: boolean;
   turnError?: string;
   questionNotice?: string;
   reply?: import("./bot-replies").BotReplyReference;
@@ -34,7 +37,7 @@ export type HistoryResponse =
   | { kind: "unchanged"; context?: HistoryContext; revision: string; eventCursor: number }
   | { kind: "events"; context?: HistoryContext; revision: string; eventCursor: number; events: BotEvent[] };
 /** Attachments refresh independently, including when notModified reuses text. */
-export type HistoryDetail = { context?: HistoryContext; json: string; nextOffset: number | null; totalLength: number; version: string; eventCursor?: number; notModified?: boolean; attachments?: BotAttachment[] };
+export type HistoryDetail = { timing?: NativeTiming; context?: HistoryContext; json: string; nextOffset: number | null; totalLength: number; version: string; eventCursor?: number; notModified?: boolean; attachments?: BotAttachment[] };
 export type HistoryGap = { before: string; stop: string; cursor: string };
 /** tailContext identifies the supplementary readable preview, whose canonical
  * item may also exist outside the mounted native window. It is display state. */
@@ -48,14 +51,14 @@ export const historyBefore = (entry: HistoryEntry) => JSON.stringify({ native: n
 
 /** A tool's own terminal result survives failure/interruption of its parent.
  * Sparse native turn metadata still settles retained rows outside this page. */
-export function withTurnState(entry: HistoryEntry, turn: Pick<Turn, "status"> & { error?: { message: string } | null }): HistoryEntry {
-  return { ...entry, turnStatus: turn.status,
+export function withTurnState(entry: HistoryEntry, turn: Pick<Turn, "status"> & Partial<Pick<Turn, "startedAt" | "completedAt" | "durationMs">> & { error?: { message: string } | null }): HistoryEntry {
+  return { ...entry, ...turnTiming(turn), turnStatus: turn.status,
     status: entry.itemStatus === "completed" || entry.itemStatus === "failed" ? entry.itemStatus :
       entry.itemStatus === "inProgress" && turn.status === "inProgress" ? "inProgress" : turn.status,
     ...(turn.error?.message ? { turnError: turn.error.message } : {}) };
 }
 
-export function projectHistoryItem(turn: Pick<Turn, "id" | "startedAt" | "status"> & Partial<Pick<Turn, "completedAt">>, source: ThreadItem, scheduled = false): HistoryEntry {
+export function projectHistoryItem(turn: Pick<Turn, "id" | "startedAt" | "status"> & Partial<Pick<Turn, "completedAt" | "durationMs">>, source: ThreadItem, scheduled = false, endpoints?: { startedAtMs?: number | null; completedAtMs?: number | null }): HistoryEntry {
   let item: ThreadItem | null = null, complete = true;
   const clip = (text: string) => { if (text.length > HISTORY_TEXT_LIMIT) complete = false; return text.slice(0, HISTORY_TEXT_LIMIT); };
   let label = source.type.replace(/([a-z])([A-Z])/g, "$1 $2");
@@ -89,6 +92,7 @@ export function projectHistoryItem(turn: Pick<Turn, "id" | "startedAt" | "status
   }
   return withTurnState({ id: source.id, turnId: turn.id, type: source.type, label, item, complete,
     ...(source.type === "agentMessage" && !source.text.trim() && source.questions?.length ? { questionNotice: source.questions.slice(0, 16).map(q => q.title).join("\n\n").slice(0, HISTORY_TEXT_LIMIT) } : {}),
+    ...itemTiming(source as typeof source & { durationMs?: number | null }, endpoints), ...(('tool' in source || 'name' in source) && /(?:^|[._])bots_(?:publish_artifact|report_result|request_secure_input|request_user_input(?:_async)?)$/.test(String('tool' in source ? source.tool : 'name' in source ? source.name : '')) ? { activityBoundary: true } : {}),
     scheduled, messageAt: source.type === "agentMessage" && source.phase === "final_answer" ? turn.completedAt ?? null : turn.startedAt, timeBasis: source.type === "agentMessage" && source.phase === "final_answer" ? "turn-end" : "turn-start", startedAt: turn.startedAt, turnStatus: turn.status, ...("status" in source ? { itemStatus: String(source.status) } : {}), status: turn.status }, turn);
 }
 

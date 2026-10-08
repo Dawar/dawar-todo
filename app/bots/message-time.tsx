@@ -1,6 +1,7 @@
 "use client";
 import { useSyncExternalStore } from "react";
 import "./message-time.css";
+import { durationLabel, type Elapsed } from "../../lib/bot-timing";
 
 // One minute clock for mounted timestamps. No chat data refresh or live region.
 let now = 0;
@@ -28,13 +29,13 @@ function subscribe(listener: () => void) {
 }
 const snapshot = () => now;
 const serverSnapshot = () => 0;
-export function MessageTime({ seconds, basis, user = false, inline = false }: {
+export function MessageTime({ seconds, basis, user = false, inline = false, elapsed }: {
   seconds?: number | null;
   basis?: "received" | "turn-start" | "turn-end" | "saved";
-  user?: boolean; inline?: boolean;
+  user?: boolean; inline?: boolean; elapsed?: Elapsed | null;
 }) {
   const clock = useSyncExternalStore(subscribe, snapshot, serverSnapshot);
-  if (!clock || !seconds || !Number.isFinite(seconds) || seconds <= 0) return null;
+  if (!clock || !seconds || !Number.isFinite(seconds) || seconds <= 0) return elapsed ? <div className="bots-message-time is-inline"><ElapsedTime value={elapsed}/></div> : null;
   const date = new Date(seconds * 1000);
   if (!Number.isFinite(date.getTime())) return null;
   const minutes = Math.max(0, Math.floor((clock - date.getTime()) / 60_000));
@@ -46,6 +47,8 @@ export function MessageTime({ seconds, basis, user = false, inline = false }: {
   const source = basis === "turn-start" ? "Approximate message time: native turn started" : basis === "turn-end" ? "Approximate reply time: native turn finished" : basis === "saved" ? "Message saved" : "Message received by the bot service";
   const title = `${source} · ${date.toLocaleString(undefined, { dateStyle: "full", timeStyle: "long" })}`;
   return <div className={`bots-message-time${user ? " is-user" : ""}${inline ? " is-inline" : ""}`}>
-    <time dateTime={date.toISOString()} title={title} aria-label={`${approximate ? "Approximate time, " : ""}${title}, ${ago}`}>{approximate && "≈ "}{local}<span aria-hidden="true"> · </span>{ago}</time>
+    <time dateTime={date.toISOString()} title={title} aria-label={`${approximate ? "Approximate time, " : ""}${title}, ${ago}`}>{approximate && "≈ "}{local}<span aria-hidden="true"> · </span>{ago}</time>{elapsed && <><span aria-hidden="true"> · </span><ElapsedTime value={elapsed}/></>}
   </div>;
 }
+
+export function ElapsedTime({ value }: { value: Elapsed }) { return <span className="bots-elapsed" title={value.approximate ? "Approximate elapsed wall time from matching native start and completion" : "Native reported duration"}>{value.approximate ? "≈ " : ""}Worked {durationLabel(value.ms)}</span>; }

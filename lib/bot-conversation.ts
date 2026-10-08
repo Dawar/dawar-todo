@@ -29,7 +29,7 @@ export function reportedFinding(item: ThreadItem) {
   return key && summary ? { key: JSON.stringify([key, summary]), summary } : null;
 }
 
-export function projectConversationItem(turn: Pick<Turn, "id" | "startedAt" | "status"> & Partial<Pick<Turn, "completedAt">>, item: ThreadItem, audience: TurnAudience): HistoryEntry | null {
+export function projectConversationItem(turn: Pick<Turn, "id" | "startedAt" | "status"> & Partial<Pick<Turn, "completedAt" | "durationMs">>, item: ThreadItem, audience: TurnAudience): HistoryEntry | null {
   if (peerInput(item)) return { ...projectHistoryItem(turn, item), peerAlias: item.type === "userMessage" ? item.clientId! : undefined, audience: "conversation" };
   if (item.type === "agentMessage" && !item.text.trim() && !item.questions?.length) return null;
   if (audience.kind === "activity") {

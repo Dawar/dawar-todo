@@ -1,3 +1,4 @@
+import { itemTiming } from '../lib/bot-timing.ts';
 import { displayReplyItem } from "./message-replies.mjs";
 import { withMessageTime } from "./message-times.mjs";
 import { conversationViewPage } from './conversation-view.mjs';
@@ -58,7 +59,7 @@ export async function historyViewPage(runtime, bot, cursor = null, turnId = null
   const entries = []; let bytes = 0, index = start;
   for (; index < all.length && entries.length < HISTORY_WINDOW; index++) {
     const { turn, item, scheduled } = all[index];
-    const entry = withMessageTime(runtime, bot, target?.threadId ?? bot.threadId, projectHistoryItem(turn, displayReplyItem(runtime, bot, target?.threadId ?? bot.threadId, item), scheduled));
+    const entry = withMessageTime(runtime, bot, target?.threadId ?? bot.threadId, projectHistoryItem(turn, displayReplyItem(runtime, bot, target?.threadId ?? bot.threadId, item), scheduled, turn.itemTimings?.[item.id]));
     const length = Buffer.byteLength(JSON.stringify(entry));
     if (entries.length && bytes + length > MAX_ENTRY_BYTES) break;
     entries.push(entry); bytes += length;
@@ -71,7 +72,7 @@ export async function historyViewPage(runtime, bot, cursor = null, turnId = null
     for (const { turn, item, scheduled } of all) {
       if (scheduled || !['userMessage', 'agentMessage'].includes(item.type) || types.has(item.type)) continue;
       types.add(item.type);
-      const entry = withMessageTime(runtime, bot, target?.threadId ?? bot.threadId, projectHistoryItem(turn, displayReplyItem(runtime, bot, target?.threadId ?? bot.threadId, item), scheduled));
+      const entry = withMessageTime(runtime, bot, target?.threadId ?? bot.threadId, projectHistoryItem(turn, displayReplyItem(runtime, bot, target?.threadId ?? bot.threadId, item), scheduled, turn.itemTimings?.[item.id]));
       if (entry.item.type === 'agentMessage') { entry.item.text = entry.item.text.slice(0, 4096); entry.complete = false; }
       else { entry.item.content = [{ type: 'text', text: displayReplyItem(runtime, bot, target?.threadId ?? bot.threadId, item).content.filter((part) => part.type === 'text').map((part) => part.text).join('\n').slice(0, 4096), text_elements: [] }]; entry.complete = false; }
       contextEntries.push(entry);
@@ -161,9 +162,14 @@ export async function readHistoryDetail(runtime, bot, params) {
     const pendingKey = `${key}:pending`, existing = cache.get(pendingKey);
     const promise = existing?.promise ?? (async () => {
       const revision = revisionForDetail(), eventCursor = runtime.store.cursor();
+      let timing;
       let cursor = null, item = !target.runId && runtime.historySupplements?.get(`${bot.id}:${params.turnId}:${params.itemId}`);
       if (!item && ['live-turn-diff', 'live-turn-plan'].includes(params.itemId)) throw new Error('This live aggregate has expired. Individual commands and file changes remain in native history.');
-      if (!item && runtime.historyReads) item = await runtime.historyReads.item(target.threadId, params.turnId, params.itemId);
+      if (!item && runtime.historyReads) {
+        const entry = runtime.historyReads.itemEntry ? await runtime.historyReads.itemEntry(target.threadId, params.turnId, params.itemId) : null;
+        item = entry?.item ?? await runtime.historyReads.item(target.threadId, params.turnId, params.itemId);
+        timing = itemTiming(item, entry ?? undefined);
+      }
       else if (!item) do {
         const page = await runtime.historyPage(target.threadId, cursor);
         item = page.data.find((turn) => turn.id === params.turnId)?.items.find((entry) => entry.id === params.itemId);
@@ -175,7 +181,7 @@ export async function readHistoryDetail(runtime, bot, params) {
       if (params.projection === "conversation") item = displayReplyItem(runtime, bot, target.threadId, item);
       const json = JSON.stringify(item), version = createHash('sha256').update(target.runId ? `${target.versionKey}:${params.turnId}:${params.itemId}:${json}` : json).digest('hex');
       const selectors = historyAttachmentSelectors([{ turnId: params.turnId, id: item.id, item }]);
-      const value = { json, version, selectors, eventCursor, revision, expires: Date.now() + DETAIL_TTL };
+      const value = { json, version, selectors, timing, eventCursor, revision, expires: Date.now() + DETAIL_TTL };
       cache.set(key, value);
       let bytes = 0;
       for (const [other, entry] of [...cache].reverse()) if (entry.json) {
@@ -192,12 +198,12 @@ export async function readHistoryDetail(runtime, bot, params) {
   // Metadata can arrive after native completion. Re-query it independently of
   // the text hash, including conditional detail hits, without native/file I/O.
   const attachments = offset === 0 ? readHistoryAttachmentMetadata(runtime, bot, cached.selectors, HISTORY_ATTACHMENT_BYTES, target) : undefined;
-  if (offset === 0 && params.knownVersion === cached.version) return { context, notModified: true, json: '', nextOffset: null, totalLength: cached.json.length, version: cached.version, eventCursor: cached.eventCursor, attachments };
+  if (offset === 0 && params.knownVersion === cached.version) return { context, notModified: true, json: '', nextOffset: null, totalLength: cached.json.length, version: cached.version, eventCursor: cached.eventCursor, attachments, timing: cached.timing };
   const next = Math.min(cached.json.length, offset + 48 * 1024);
   if (offset > cached.json.length) throw new Error('Invalid detail offset.');
   return { context, json: cached.json.slice(offset, next), nextOffset: next < cached.json.length ? next : null,
     totalLength: cached.json.length, version: cached.version, eventCursor: cached.eventCursor,
-    ...(offset === 0 ? { attachments } : {}) };
+    ...(offset === 0 ? { attachments, timing: cached.timing } : {}) };
 }
 
 export function readHistoryAttachments(runtime, bot, params) {
@@ -227,7 +233,7 @@ export async function readHistoryLog(runtime, bot, params) {
     const item = value.item;
     if (item.type === 'userMessage' && /^(schedule:|manager-notice:|secure-receipt:)/.test(item.clientId ?? '') ||
         item.type === 'agentMessage' && !item.text.trim() && !item.questions?.length) return [];
-    const entry = withMessageTime(runtime, bot, bot.threadId, projectHistoryItem(turn, displayReplyItem(runtime, bot, bot.threadId, item)));
+    const entry = withMessageTime(runtime, bot, bot.threadId, projectHistoryItem(turn, displayReplyItem(runtime, bot, bot.threadId, item), false, value));
     if (item.type === 'userMessage' && /^(peer:|peer-exchange:)/.test(item.clientId ?? '')) entry.peerAlias = item.clientId;
     if (value.startedAtMs != null) { entry.messageAt = value.startedAtMs / 1000; entry.timeBasis = 'received'; }
     return [entry];

@@ -37,6 +37,7 @@ import type { Bot } from "./single-thread-contract";
 import { BotAvatar as Avatar } from "./bot-avatar";
 import { BotAdminApprovals } from "./bot-admin-approvals";
 import { PersonalitySettings } from "./personality-settings";
+import { ActiveTurnElapsed } from "./active-turn-elapsed";
 import { WorkOverview, AutomaticInbox, workLabel } from "./work-overview";
 import { GoalIndicator, NativeGoalPanel } from "./native-goal-panel";
 import { PeerConversations, DiscussionStatus, useDiscussionStatus, discussionNeedsAttention } from "./peer-conversations";
@@ -671,7 +672,7 @@ export function BotsWorkspace() {
                     }
                   />
                 ))}
-                <div className="bots-conversation-presence"><Avatar bot={bot} small /><button type="button" onClick={() => { setDetailsSection("next"); setProfile(true); }} aria-label="Open work details" title={online ? workLabel(work, bot) ?? humanStatus(bot, online) : "Offline"}>{online ? workLabel(work, bot) ?? humanStatus(bot, online) : "Offline"}</button>{snapshot?.capabilities?.peerInbox === 1 && <DiscussionStatus status={discussions} bots={bots} botId={bot.id} online={online} onOpen={openDiscussion} />}</div>
+                <div className="bots-conversation-presence"><Avatar bot={bot} small /><button type="button" onClick={() => { setDetailsSection("next"); setProfile(true); }} aria-label="Open work details" title={online ? workLabel(work, bot) ?? humanStatus(bot, online) : "Offline"}>{online ? workLabel(work, bot) ?? humanStatus(bot, online) : "Offline"}</button><ActiveTurnElapsed owner={owner} bot={bot} work={work} online={online}/>{snapshot?.capabilities?.peerInbox === 1 && <DiscussionStatus status={discussions} bots={bots} botId={bot.id} online={online} onOpen={openDiscussion} />}</div>
               </BotConversation>
               {!bot.archived && (
                 <>

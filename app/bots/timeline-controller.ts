@@ -1,3 +1,4 @@
+import { turnTiming, type NativeTiming } from '../../lib/bot-timing';
 import { reconcileHistory, conversationEntries, orderedHistory } from "./history-reconcile";
 import { turnAudience, scheduleInput, peerInput, humanInput, reportedFinding, projectConversationItem, type TurnAudience } from "../../lib/bot-conversation";
 import { historyBoundaries, retainHistory, retainedAttachments, CACHE_ENTRIES, CACHE_BYTES } from "./history-window";
@@ -15,6 +16,7 @@ export type TimelineTransport = {
   rpc<T>(method: "history.view" | "history.detail", botId: string, params?: Record<string, unknown>): Promise<T>;
 };
 export type TimelineState = {
+  currentTiming?: NativeTiming & { threadId: string; turnId: string; turnStatus?: string };
   partialTurn?: boolean; entries: HistoryEntry[]; contextEntries: HistoryEntry[]; attachments: BotAttachment[]; olderCursor: string | null;
   revision: string; eventCursor: number; complete: boolean; loading: boolean;
   error: string; cached: boolean; gaps: HistoryGap[]; position: HistoryPosition;
@@ -406,8 +408,15 @@ export class BotTimeline {
     }
     if (event.type === "attachment") { this.publish({ attachments: mergeAttachments(this.state.attachments, [event.data as BotAttachment]), eventCursor: event.seq }); this.scheduleWrite(); return; }
     if (event.type !== "codex") return;
-    const { method, messageAt, operatorSegmentId, reply, replyMessages, replyByClientId, params: p } = event.data as { method: string; messageAt?: number; operatorSegmentId?: string; reply?: HistoryEntry["reply"]; replyMessages?: HistoryEntry["replyMessages"]; replyByClientId?: Record<string, Pick<HistoryEntry, "reply" | "replyMessages">>; params: { turnId?: string; itemId?: string; item?: ThreadItem; turn?: Turn; delta?: string; diff?: string; plan?: unknown } };
+    const { method, messageAt, operatorSegmentId, reply, replyMessages, replyByClientId, params: p } = event.data as { method: string; messageAt?: number; operatorSegmentId?: string; reply?: HistoryEntry["reply"]; replyMessages?: HistoryEntry["replyMessages"]; replyByClientId?: Record<string, Pick<HistoryEntry, "reply" | "replyMessages">>; params: { threadId?: string; startedAtMs?: number | null; completedAtMs?: number | null; turnId?: string; itemId?: string; item?: ThreadItem; turn?: Turn; delta?: string; diff?: string; plan?: unknown } };
     const turnId = p.turnId ?? p.turn?.id;
+    if (p.turn && p.threadId && p.threadId === this.currentThread() && ['turn/started', 'turn/completed'].includes(method)) {
+      const current = this.state.currentTiming;
+      // An unrelated old terminal observation never replaces the live start.
+      if (method === 'turn/started' || !current || current.turnId === p.turn.id)
+        this.publish({ currentTiming: { ...(current?.turnId === p.turn.id ? current : {}), ...turnTiming(p.turn), turnStatus: p.turn.status, threadId: p.threadId, turnId: p.turn.id } });
+    }
+
     for (const [key, events] of this.detailEvents) if (key.startsWith(`${turnId}:`)) events.push(event);
     for (const [key, item] of this.detailItems) {
       if (!key.startsWith(`${turnId}:`)) continue;
@@ -432,18 +441,19 @@ export class BotTimeline {
     const update = (entry: HistoryEntry) => {
       const prior = this.state.entries.find(value => value.turnId === entry.turnId && value.id === entry.id);
       const observed = messageAt ?? (prior?.timeBasis === "received" ? prior.messageAt : null);
-      this.merge([{ ...entry, ...(entry.item?.type === "userMessage" ? replyByClientId?.[entry.item.clientId ?? ""] : {}), ...(reply ? { reply } : {}), ...(replyMessages ? { replyMessages } : {}), ...(operatorSegmentId ? { operatorSegmentId } : {}), ...(observed ? { messageAt: observed, timeBasis: "received" as const } : {}), updatedSeq: event.seq }]);
+      this.merge([{ ...prior, ...entry, ...(entry.item?.type === "userMessage" ? replyByClientId?.[entry.item.clientId ?? ""] : {}), ...(reply ? { reply } : {}), ...(replyMessages ? { replyMessages } : {}), ...(operatorSegmentId ? { operatorSegmentId } : {}), ...(observed ? { messageAt: observed, timeBasis: "received" as const } : {}), updatedSeq: event.seq }]);
     };
     if (p.item && /item\/(started|completed)$/.test(method)) {
       const prior = this.state.entries.find((e) => e.turnId === turnId);
+      const known = this.state.currentTiming?.turnId === turnId && this.state.currentTiming.threadId === this.currentThread() ? this.state.currentTiming : prior;
       const audience = this.turnAudiences.get(turnId);
       if (audience?.kind === "activity" && reportedFinding(p.item)) {
-        const entry = projectConversationItem({ id: turnId, startedAt: prior?.startedAt ?? null, status: prior?.turnStatus ?? "inProgress" }, p.item, audience);
+        const entry = projectConversationItem({ id: turnId, startedAt: known?.turnStartedAt ?? prior?.startedAt ?? null, completedAt: known?.turnCompletedAt, durationMs: known?.turnDurationMs, status: prior?.turnStatus ?? "inProgress" }, p.item, audience);
         if (entry) update(entry);
       }
       else
-      update(projectHistoryItem({ id: turnId, startedAt: prior?.startedAt ?? null, status: prior?.turnStatus ?? "inProgress" }, p.item,
-        prior?.scheduled || p.item.type === "userMessage" && Boolean(p.item.clientId?.startsWith("schedule:"))));
+      update(projectHistoryItem({ id: turnId, startedAt: known?.turnStartedAt ?? prior?.startedAt ?? null, completedAt: known?.turnCompletedAt, durationMs: known?.turnDurationMs, status: prior?.turnStatus ?? "inProgress" }, p.item,
+        prior?.scheduled || p.item.type === "userMessage" && Boolean(p.item.clientId?.startsWith("schedule:")), p));
     } else if (p.turn && (method === "turn/completed" || method === "turn/started")) {
       for (const entry of this.state.entries) if (entry.turnId === turnId) update({ ...withTurnState(entry, p.turn), ...(entry.timeBasis !== "received" ? { messageAt: entry.type === "agentMessage" && entry.item?.type === "agentMessage" && entry.item.phase === "final_answer" ? p.turn.completedAt : p.turn.startedAt } : {}) });
       if (method === "turn/completed") for (const entry of this.state.entries) if (entry.turnId === turnId) this.invalidateDetail(entry, event.seq);
@@ -547,6 +557,7 @@ export class BotTimeline {
       this.detailListeners.get(key)?.forEach((listener) => listener()); return Promise.resolve(entry.item);
     }
     const prior = this.detailRequests.get(key); if (prior) return prior;
+    const timingThread = this.currentThread();
     const promise = (async () => {
       this.detailEvents.set(key, []);
       if (this.transport.owner !== this.owner || this.disposed) throw new Error("Conversation owner changed.");
@@ -565,6 +576,13 @@ export class BotTimeline {
         const attachmentsAtRequest = this.state.attachments;
         const part = await this.transport.rpc<HistoryDetail>("history.detail", this.botId, { projection: "conversation", turnId: entry.turnId, itemId: entry.id, offset, version, ...(offset === 0 && cached?.version ? { knownVersion: cached.version } : {}) });
         if (this.transport.owner !== this.owner || this.disposed) throw new Error("Conversation owner changed.");
+        if (part.timing && timingThread === this.currentThread() && (!part.context || part.context.threadId === timingThread)) {
+          const current = this.state.entries.find(value => historyKey(value.turnId, value.id) === key);
+          if (current && (current.updatedSeq ?? 0) <= (part.eventCursor ?? cursor)) {
+            const next = { ...current, ...part.timing }; this.dirty.set(key, next);
+            this.publish({ entries: this.state.entries.map(value => value === current ? next : value) }); this.scheduleWrite();
+          }
+        }
         if (part.notModified && cached) {
           this.detailCursors.set(key, part.eventCursor ?? cursor);
           // Text versions do not cover later publications or preview metadata.

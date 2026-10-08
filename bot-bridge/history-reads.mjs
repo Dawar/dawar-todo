@@ -83,7 +83,8 @@ export class HistoryReads {
     }
     return { turn: null, nextCursor: cursor };
   }
-  async item(threadId, turnId, itemId) {
+  async item(threadId, turnId, itemId) { return (await this.itemEntry(threadId, turnId, itemId)).item; }
+  async itemEntry(threadId, turnId, itemId) {
     // Exact native turn scope, independent of thread depth. Item anchors are
     // exclusive: reverse from the next item to recover the selected item.
     const after = await this.items(threadId, turnId, { type: 'item', itemId }, 1, 'asc');
@@ -92,18 +93,19 @@ export class HistoryReads {
       : await this.items(threadId, turnId, null, 1, 'desc');
     const entry = page.data.find(e => e.turnId === turnId && e.item.id === itemId);
     if (!entry) throw Error('The native message could not be verified. Reopen its work log and retry.');
-    return entry.item;
+    return entry;
   }
   async turn(threadId, turnId) {
     let cursor = null, located;
     do { located = await this.metadata(threadId, turnId, cursor); cursor = located.nextCursor; } while (!located.turn && cursor);
     if (!located.turn) return null;
-    const items = []; cursor = null; const seen = new Set();
+    const items = [], itemTimings = {}; cursor = null; const seen = new Set();
     do {
       if (seen.has(cursor)) throw Error('Native item pagination made no progress.'); seen.add(cursor);
       const page = await this.items(threadId, turnId, cursor, 20, 'asc');
-      items.push(...page.data.map(e => e.item)); cursor = page.nextCursor;
+      items.push(...page.data.map(e => e.item));
+      for (const e of page.data) itemTimings[e.item.id] = { startedAtMs: e.startedAtMs, completedAtMs: e.completedAtMs }; cursor = page.nextCursor;
     } while (cursor);
-    return { ...located.turn, items, itemsView: 'full' };
+    return { ...located.turn, items, itemTimings, itemsView: 'full' };
   }
 }

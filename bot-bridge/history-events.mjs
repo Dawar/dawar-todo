@@ -11,7 +11,7 @@ export function boundHistoryEvent(type, data) {
   const compact = { reason: 'large-native-event', method, turnId, itemId };
   if (params.item && turnId) {
     const entry = projectHistoryItem({ id: turnId, startedAt: null, status: 'inProgress' }, params.item,
-      params.item.type === 'userMessage' && Boolean(params.item.clientId?.startsWith('schedule:')));
+      params.item.type === 'userMessage' && Boolean(params.item.clientId?.startsWith('schedule:')), params);
     if (entry.item?.type === 'agentMessage' || entry.item?.type === 'plan') {
       entry.item.text = entry.item.text.slice(0, 2048); entry.complete = false;
     } else if (entry.item?.type === 'userMessage') {

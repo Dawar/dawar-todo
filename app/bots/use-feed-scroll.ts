@@ -199,7 +199,7 @@ export function useFeedScroll(timeline: BotTimeline, state: TimelineState, onlin
     following.current = false; saved.current = { anchor: key, offset: 24, following: false };
     visibleAnchors.current = [{ key, offset: 24 }];
     timeline.position(saved.current);
-    const entries = timeline.getSnapshot().entries, index = entries.findIndex(value => historyKey(value.turnId, value.id) === key);
+    const entries = projectEntries(timeline.getSnapshot().entries), index = entries.findIndex(value => historyKey(value.turnId, value.id) === key);
     const end = windowEndAround(entries, index, timeline.getSnapshot().gaps);
     setEndKey(historyKey(entries[end - 1].turnId, entries[end - 1].id));
     setShowJump(true); requestAnimationFrame(() => {
