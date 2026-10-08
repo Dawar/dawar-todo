@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import { spawn, execFileSync } from "node:child_process";
 import { createInterface } from "node:readline";
 import { CODEX_VERSION } from "./codex-version.mjs";
+import { parseAccountUsageMessage } from "./account-usage-decoder.mjs";
 
 export { CODEX_VERSION } from "./codex-version.mjs";
 export class Codex extends EventEmitter {
@@ -48,7 +49,14 @@ export class Codex extends EventEmitter {
           e.rpcCode = message.error.code;
           e.definite = true;
           p.reject(e);
-        } else p.resolve(message.result);
+        } else {
+          try {
+            if (p.method === "account/usage/read") message = parseAccountUsageMessage(line, p.method);
+            p.resolve(message.result);
+          } catch {
+            p.reject(new Error("Native account usage could not be decoded without losing precision."));
+          }
+        }
       }
     });
     this.process.on("exit", (code) => {

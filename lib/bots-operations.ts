@@ -166,7 +166,8 @@ export type BotOperations = {
   /** Continuation metadata in stable ID order; default 25, maximum 50. */
   "runs.turns": { params: { runId: string; cursor?: string | null; limit?: number }; result: BotRunTurnPage };
   "usage.bot": { params: Record<string, never>; result: BotThreadUsage };
-  "usage.account": { params: Record<string, never>; result: BotAccountQuota };
+  "usage.account": { params: { refresh?: boolean }; result: BotAccountQuota };
+  "usage.history": { params: { range?: import("./usage-history").UsageHistoryRange; cursor?: string | null }; result: import("./usage-history").UsageHistory };
   "runs.acknowledge": { params: { id: string }; result: Record<string, never> };
   "attachments.begin": {
     params: { name: string; size: number; mimeType: string };

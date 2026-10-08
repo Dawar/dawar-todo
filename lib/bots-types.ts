@@ -137,6 +137,8 @@ export type BotAccountQuota = {
   accountType: "chatgpt" | "apiKey" | "amazonBedrock" | null;
   ordinaryUsageAllowed: boolean | null;
   availableResetCredits: string | null;
+  ordinaryUsageAllowedObservedAt?: string | null;
+  availableResetCreditsObservedAt?: string | null;
   limits: BotAccountQuotaLimit[];
   readAt: string;
   reason?: string;
@@ -197,7 +199,7 @@ export type BotQueueList = { id: string; botId: string; name: string; cron: stri
 export type BotSnapshot = {
   secureInputs?: import("./secure-input").SecureRequest[];
   botAdminLeadIds?: string[];
-  capabilities?: { botAdministration?: 1; botMemoryMaintenance?: 1; botDesktops?: 1; backgroundRunLanes?: 1; scheduleDecisions?: 1; singleThreadExecution?: 1; peerInbox?: 1; peerRootControls?: 1; peerBodyPaging?: 1; nativeGoals?: 1; nativeConversation?: 1; messageReplies?: 1; secureInputs?: 1; operatorCalls?: 1; messageBursts?: 1; burstDiscard?: 1; burstControls?: 1; queueLists?: 1; queueRelativeMoves?: 1; queueSendNow?: 1; taskQueues?: 1; teams?: 1 };
+  capabilities?: { accountUsageHistory?: 1; botAdministration?: 1; botMemoryMaintenance?: 1; botDesktops?: 1; backgroundRunLanes?: 1; scheduleDecisions?: 1; singleThreadExecution?: 1; peerInbox?: 1; peerRootControls?: 1; peerBodyPaging?: 1; nativeGoals?: 1; nativeConversation?: 1; messageReplies?: 1; secureInputs?: 1; operatorCalls?: 1; messageBursts?: 1; burstDiscard?: 1; burstControls?: 1; queueLists?: 1; queueRelativeMoves?: 1; queueSendNow?: 1; taskQueues?: 1; teams?: 1 };
   teams?: BotTeam[];
   workByBot?: BotWorkState[];
   backgroundByBot?: BotBackground[];

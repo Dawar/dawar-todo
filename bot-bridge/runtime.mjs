@@ -64,6 +64,7 @@ import {
 } from "./profiles.mjs";
 import { normalizeSchedule, collectDueRuns } from "./schedules.mjs";
 import { readHistoryView, readHistoryLog, readHistoryDetail, readHistoryAttachments } from "./history-view.mjs";
+import { AccountUsageCollector } from "./account-usage.mjs";
 
 const colors = [
   "#5c74b8",
@@ -110,6 +111,7 @@ const READ_METHODS = new Set([
   "runs.decisions",
   "usage.bot",
   "usage.account",
+  "usage.history",
   "attachments.read",
   "queue.list",
   "queueLists.list",
@@ -203,6 +205,9 @@ export class BotRuntime extends EventEmitter {
     this.botAdmin = new BotAdministration(this, adminLeadIds);
     this.epoch = randomUUID();
     this.maintenance = new RuntimeMaintenance(this);
+    this.usage = new AccountUsageCollector({ store, codex,
+      allowed: () => this.ready && codex.ready && !this.maintenance.holding(),
+      onChange: data => this.emitEvent("usage", data) });
     codex.admissionGuard = (method, params) => this.maintenance.native(method, params);
     codex.on("notification", () => { this.maintenance.generation++; });
     this.historyReads = new HistoryReads(this);
@@ -238,6 +243,7 @@ export class BotRuntime extends EventEmitter {
     );
     codex.on("disconnect", () => {
       this.ready = false;
+      this.usage.disconnected();
       this.emitEvent("runtime", { ready: false });
     });
   }
@@ -386,6 +392,7 @@ export class BotRuntime extends EventEmitter {
         this.store.put("activeRun", { ...context, id: bot.id });
     }
     this.ready = true;
+    this.usage.start();
     this.emitEvent("runtime", { ready: true });
   }
   async recoverCreation(bot) {
@@ -553,7 +560,7 @@ export class BotRuntime extends EventEmitter {
   }
   snapshot() {
     return {
-      capabilities: { runtimeMaintenance: 1, botAdministration: 1, botMemoryMaintenance: 1, backgroundRunLanes: 1, scheduleDecisions: 1, singleThreadExecution: 1, peerInbox: 1, peerRootControls: 1, peerBodyPaging: 1, nativeGoals: 1, nativeConversation: 1, messageReplies: 1, secureInputs: 1, operatorCalls: 1, operatorInputQuestions: 1, historyCursorIndex: 1, messageBursts: 1, burstDiscard: 1, burstControls: 1, queueLists: 1, queueRelativeMoves: 1, queueSendNow: 1, ...(this.storage ? { taskQueues: 1 } : {}), teams: 1, ...(this.desktops ? { botDesktops: 1, botBrowserRetention: 1 } : {}) },
+      capabilities: { accountUsageHistory: 1, runtimeMaintenance: 1, botAdministration: 1, botMemoryMaintenance: 1, backgroundRunLanes: 1, scheduleDecisions: 1, singleThreadExecution: 1, peerInbox: 1, peerRootControls: 1, peerBodyPaging: 1, nativeGoals: 1, nativeConversation: 1, messageReplies: 1, secureInputs: 1, operatorCalls: 1, operatorInputQuestions: 1, historyCursorIndex: 1, messageBursts: 1, burstDiscard: 1, burstControls: 1, queueLists: 1, queueRelativeMoves: 1, queueSendNow: 1, ...(this.storage ? { taskQueues: 1 } : {}), teams: 1, ...(this.desktops ? { botDesktops: 1, botBrowserRetention: 1 } : {}) },
 
       botAdminLeadIds: [...this.botAdmin.leads],
       teams: publicTeams(this),
@@ -612,6 +619,8 @@ export class BotRuntime extends EventEmitter {
     if ((method === "queue.taskConfirm" || method === "queue.add" && params.taskExportId) && (!request.clientId || trustedOrigin))
       throw new Error("Task queue transfer requires the authenticated owner browser.");
     if(method.startsWith("secure.") && method!=="secure.list")throw Error("Sensitive input requires the dedicated encrypted channel; ordinary RPC is rejected.");
+    if (method === "usage.history" && (!request.clientId || trustedOrigin))
+      throw Error("Account usage history requires the authenticated owner browser.");
     if (botId && this.store.bot(String(botId)).deletedAt && method !== "bots.delete")
       throw Object.assign(new Error("This bot has been deleted. Its workspace and native history were retained."), { outcome: "rejected" });
     if (botId && !["desktop.status", "desktop.preview"].includes(method))
@@ -814,44 +823,8 @@ export class BotRuntime extends EventEmitter {
     if (method === "secure.list") return this.secure.list(this.store.bot(String(botId)));
     if (method === "teams.list") return publicTeams(this);
     if (method === "teams.read") return readTeam(this,p.id);
-    if (method === "usage.account") {
-      const readAt = now();
-      let accountType = null;
-      try {
-        const account = await this.codex.call("account/read", { refreshToken: false });
-        accountType = account?.account?.type ?? null;
-        if (!accountType) return { accountType: null,
-          ordinaryUsageAllowed: null, availableResetCredits: null, limits: [], readAt,
-          reason: "Sign in to Codex to read account usage." };
-        const response = await this.codex.call("account/rateLimits/read", {});
-        const buckets = Object.entries(response?.rateLimitsByLimitId ?? {})
-          .filter(([, value]) => value);
-        const snapshots = buckets.length
-          ? buckets : [[response?.rateLimits?.limitId ?? null, response?.rateLimits]];
-        const window = (value) => value && Number.isFinite(value.usedPercent)
-          && value.usedPercent >= 0 ? {
-            usedPercent: value.usedPercent,
-            windowDurationMins: Number.isFinite(value.windowDurationMins) && value.windowDurationMins > 0
-              ? value.windowDurationMins : null,
-            resetsAt: Number.isFinite(value.resetsAt) && value.resetsAt > 0
-              ? value.resetsAt : null,
-          } : null;
-        const limits = snapshots.filter(([, value]) => value).map(([id, value]) => ({
-          limitId: value.limitId ?? id,
-          limitName: value.limitName ?? null,
-          model: value.normalModelSlug ?? null,
-          windows: [window(value.primary), window(value.secondary)].filter(Boolean),
-        }));
-        return { accountType, ordinaryUsageAllowed: typeof response?.ordinaryUsageAllowed === "boolean"
-          ? response.ordinaryUsageAllowed : null,
-          availableResetCredits: nativeIntegerText(response?.rateLimitResetCredits?.availableCount),
-          limits, readAt: now() };
-      } catch {
-        return { accountType, ordinaryUsageAllowed: null,
-          availableResetCredits: null, limits: [], readAt,
-          reason: "Account usage is unavailable right now. Try refreshing." };
-      }
-    }
+    if (method === "usage.account") return p.refresh === false ? this.usage.legacy() : this.usage.refresh("manual");
+    if (method === "usage.history") return this.usage.history(p);
     if (method === "runtime.info")
       return {
         ready: this.ready,
@@ -2004,6 +1977,7 @@ export class BotRuntime extends EventEmitter {
   }
   onNotification(message) {
     message = redactSecureNotification(message);
+    if (this.usage.notification(message)) return;
     if (this.manager?.event(message)) return;
     const p = message.params ?? {};
     const threadId = p.threadId ?? p.thread?.id;

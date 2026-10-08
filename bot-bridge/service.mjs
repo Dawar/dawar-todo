@@ -123,6 +123,7 @@ function connect() {
     }
     if (message.type === "authenticated") {
       online = true; runtime.relayOnline = true;
+      void runtime.usage.refresh("relay-reconnect");
       retry = 0;
       log("relay.connected");
       return;
@@ -307,6 +308,7 @@ async function stop() {
   clearInterval(heartbeat);
   socket?.close();
   health.close();
+  runtime.usage.stop();
   runtime.maintenance.close();
   runtime.secure?.close();
   codex.close();
