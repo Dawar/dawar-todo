@@ -46,7 +46,7 @@ export class PrimaryExecution {
     let result;
     try {
       result = method === 'get' ? await this.runtime.codex.call('thread/goal/get', { threadId: bot.threadId }) :
-        await this.runtime.submitNative(`thread/goal/${method}`, { threadId: bot.threadId, ...(method === 'set' ? p : {}) }, attempt);
+        await this.runtime.submitNative(`thread/goal/${method}`, { threadId: bot.threadId, origin: 'user', ...(method === 'set' ? p : {}) }, attempt);
     } catch (error) {
       // No app-owned receipt exists inside the native goal service. A reply
       // error after crossing this boundary cannot authorize another activation.
@@ -307,7 +307,7 @@ export class PrimaryExecution {
       this.store.put('primaryStop', receipt);
       if (receipt.goal.state === 'dispatching') {
         try {
-          const result = await this.runtime.codex.call('thread/goal/set', { threadId: bot.threadId, status: 'paused' });
+          const result = await this.runtime.codex.call('thread/goal/set', { threadId: bot.threadId, origin: 'automatic', status: 'paused' });
           if (result?.goal?.threadId !== bot.threadId || result.goal.status !== 'paused') throw new Error('Goal pause not acknowledged.');
           receipt.goal.state = 'accepted';
         } catch { receipt.goal.state = 'uncertain'; }
