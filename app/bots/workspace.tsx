@@ -38,6 +38,7 @@ import { BotAvatar as Avatar } from "./bot-avatar";
 import { BotAdminApprovals } from "./bot-admin-approvals";
 import { PersonalitySettings } from "./personality-settings";
 import { WorkOverview, AutomaticInbox, workLabel } from "./work-overview";
+import { GoalIndicator, NativeGoalPanel } from "./native-goal-panel";
 import { PeerConversations, DiscussionStatus, useDiscussionStatus, discussionNeedsAttention } from "./peer-conversations";
 import { finishTodoForward } from "../todo-forward";
 import { SiteHeader } from "../site-header";
@@ -584,6 +585,7 @@ export function BotsWorkspace() {
                   <strong>{bot.name}{bot.extension&&<span className="bots-extension" title="Ctrl (or Alt) + extension switches bots; add Shift to move the composer">#{bot.extension}</span>}</strong>
 
                 </div>
+                {single && snapshot?.capabilities?.nativeGoals === 1 && <GoalIndicator bot={bot} work={work} onOpen={() => { setDetailsSection('goals'); setProfile(true); }} />}
                 {snapshot?.capabilities?.operatorCalls === 1 && !bot.archived && <button className="bots-icon-button" aria-label={`Call ${bot.name}`} onClick={() => { setCallBotId(bot.id); setShowCall(true); }}><Phone size={18} /></button>}
                 {promptQueue.length > 0 && <button className="bots-icon-button bots-up-next-link" aria-label={`Show ${promptQueue.length} queued ${promptQueue.length === 1 ? "message" : "messages"}`} onClick={() => {
                   const queue = screenRef.current?.querySelector<HTMLElement>(".bots-prompt-queue");
@@ -827,6 +829,7 @@ export function BotsWorkspace() {
                 {!single && !promptQueue.length && <div className="bots-details-empty"><ListOrdered size={27} strokeWidth={1.5} /><h3>A little breathing room</h3><p>Nothing is queued. Use Ctrl+Enter to save a message for the next turn.</p></div>}
                 {single && <AutomaticInbox owner={owner} bot={bot} work={work} online={online} />}
               </>,
+              goals: <NativeGoalPanel key={`goal:${owner}:${bot.id}:${bot.threadId}`} owner={owner} bot={bot} work={work} snapshot={snapshot} online={online} />,
               queues: queueListsSupported ? <QueueLists key={`lists:${scope}`} owner={owner} bot={bot} lists={queueLists.lists} defaultItems={promptQueue} online={online} refreshLists={queueLists.refresh} refreshDefault={refreshDefaultQueue} onEdit={editQueued} /> : <p className="bots-details-lead">Queue lists will be available when the bot service update finishes.</p>,
               schedules: <>
                 <ScheduleList bot={bot} schedules={schedules} online={online} busy={busy} onEdit={setEditingSchedule} action={action} />
