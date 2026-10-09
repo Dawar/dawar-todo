@@ -6,6 +6,7 @@ import { nativeToolResult } from './tool-result.mjs';
 import { boundHistoryEvent } from './history-events.mjs';
 import { historyViewPage,readHistoryDetail,readHistoryLog } from './history-view.mjs';
 import { DESKTOP_TOOLS } from './desktops.mjs';
+import { recentCollaborationPage } from './collaboration-page.mjs';
 
 const now = () => new Date().toISOString();
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -30,6 +31,7 @@ export const COLLABORATION_TOOL = { name: 'bots_conversations', description: 'Bo
     workId: { type: 'string', maxLength: 180 }, requestId: { type: 'string', maxLength: 180 }, rootId: { type: 'string', maxLength: 180 },
     deliveryId: { type: 'string' }, outcome: { type: 'string', enum: ['completed','blocked'] }, references: { type: 'array', maxItems: 12, items: { type: 'string', maxLength: 1000 } },
     cursor: { type: ['string','null'] }, limit: { type: 'integer', minimum: 1, maximum: 40 },
+    view: { type: 'string', enum: ['latest','older','newer'] },
     resource: { type: 'string', enum: ['desktop','workspace','external'] }, effectId: { type: 'string' }, settled: { type: 'boolean' },
     resultId: {type:'string'}, boundary: {type:'string',enum:['dependency','milestone','human']}, dependencyId: {type:'string'}, relatedWorkId: {type:'string'}
   }
@@ -102,6 +104,7 @@ export class Collaboration {
   }
   wrapCursor(c,cursor) {return cursor?JSON.stringify({contextId:c.id,threadId:c.threadId,cursor}):null;}
   page(kind, botId, p = {}, predicate = '1', args = [], project = x => x) {
+    if (p.view !== undefined) return recentCollaborationPage(this.store, kind, botId, p, predicate, args, project);
     const limit = p.limit ?? 20;
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 40) throw Error('Invalid room page size.');
     const rows = this.store.db.prepare(`SELECT rowid,json FROM records WHERE kind=? AND (? IS NULL OR bot_id=?) AND ${predicate} AND rowid>? ORDER BY rowid LIMIT ?`)
@@ -166,7 +169,7 @@ export class Collaboration {
     const author = this.author(botId, origin, Boolean(request.clientId));
     if (method === 'conversations.list') { exact(p,['cursor','limit']); return this.page('collaborationRoom', null, p, `EXISTS (SELECT 1 FROM json_each(json_extract(records.json,'$.members')) WHERE value=?)`, [botId]); }
     if (method === 'conversations.read') {
-      exact(p,['roomId','cursor','limit']); const room = this.room(botId, p.roomId);
+      exact(p,['roomId','cursor','limit','view']); const room = this.room(botId, p.roomId);
       // Delivery metadata belongs to the same bounded page budget. A page of
       // multi-recipient posts must not multiply an otherwise small body page.
       const page = this.page('collaborationPost', null, p, `json_extract(json,'$.roomId')=?`, [room.id],post=>({...post,
@@ -195,7 +198,7 @@ export class Collaboration {
         await readHistoryLog(this.runtime,{...bot,threadId:c.threadId},{...params,cursor:this.nativeCursor(c,params.cursor)});
       return {...result,...(method==='conversations.log'?{olderCursor:this.wrapCursor(c,result.olderCursor)}:{}),context:this.publicContext(c)};
     }
-    if (method === 'collaboration.results') { exact(p,['cursor','limit']); return this.page('collaborationResult',botId,p); }
+    if (method === 'collaboration.results') { exact(p,['cursor','limit','view']); return this.page('collaborationResult',botId,p); }
     if (method === 'execution.config') {
       if(author.kind==='bot'&&author.contextId) {
         if(p.contextId&&p.contextId!==author.contextId) throw Error('Use the current registered context configuration.');
@@ -218,7 +221,6 @@ export class Collaboration {
       if (method === 'conversations.create') {
         exact(p,['type','name','members']); const members = this.members(p.members);
         if (!members.includes(botId) || !['pair','group'].includes(p.type) || p.type === 'pair' && members.length !== 2) throw Error('Invalid room identity.');
-        if (author.kind !== 'owner' && p.type !== 'pair') throw Error('Named groups require the owner.');
         const id = p.type === 'pair' ? `room:pair:${hash(members)}` : `room:group:${hash(operationId)}`;
         const original = this.store.get('collaborationRoom',id);
         result = original ?? this.store.put('collaborationRoom',{ id, type:p.type, name: text(p.name ?? members.map(id=>this.store.bot(id).name).join(' + '), 512,'room name'), members, revision:1, held:false, createdAt:now(), operationId });

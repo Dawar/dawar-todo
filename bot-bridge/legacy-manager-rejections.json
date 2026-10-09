@@ -2,7 +2,7 @@
   "version": 1,
   "authority": "Original restart-now75f and same9a2 correction09c8; no new execution authority",
   "sourceCommit": "77b4262790b6cffc73d5084f293364a3522f9afd",
-  "managerSourceSha256": "1c7ebd9797cafa7d3514a166eb24ad18094c8d09dfa0fb378402a3e66dfcb3f7",
+  "managerSourceSha256": "a1e99a146bfa435177d7622483a954bf4e76c9b8231d5bf69b1da20f8a40325b",
   "guards": {
     "delegate": {
       "name": "codex_tasks",
@@ -219,5 +219,13 @@
       "fingerprint": "6b010f7fde1cb9c5db6e24a8b5951baa664629b2e620b1c50e48d2c501a91ec4",
       "targetId": "01491e1130b10998ace4bdd30b35ea0b04e5f9b45004a3a3d15284b792d57de4-tree"
     }
-  ]
+  ],
+  "producerSourceReview": {
+    "originalManagerSourceSha256": "1c7ebd9797cafa7d3514a166eb24ad18094c8d09dfa0fb378402a3e66dfcb3f7",
+    "currentCandidateParent": "ef9f0fe0070e1b8b934b8d3925a5e515119ae041",
+    "unchangedGuardSuffixSha256": "c4e2e3f3a6ebb1cac4ebd00aa5e95cf1bb16415ae62a99307819349649a794cb",
+    "fixedGuardsAndRecordsSha256": "c3ffb3092ad081fd6ed30f56e3ecd2140966c544b8cd29e5c5c6e2e07e64091b",
+    "originalRecordCount": 12,
+    "scope": "Collaboration routing/import/resource adapters precede the unchanged legacy guards; only the same original fixed pre-effect refusals remain passive."
+  }
 }

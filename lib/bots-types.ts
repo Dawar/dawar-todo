@@ -1,4 +1,4 @@
-export type { CollaborationRoom, CollaborationPost, CollaborationContext, CollaborationDelivery, CollaborationResult, CollaborationPage, TurnConfiguration, ExecutionConfiguration } from './bot-collaboration';
+export type { CollaborationRoom, CollaborationPost, CollaborationContext, CollaborationDelivery, CollaborationResult, CollaborationPage, CollaborationRecentParams, TurnConfiguration, ExecutionConfiguration } from './bot-collaboration';
 import type { ServerRequest } from "./codex-protocol/ServerRequest";
 import type { Thread } from "./codex-protocol/v2/Thread";
 import type { Model } from "./codex-protocol/v2/Model";

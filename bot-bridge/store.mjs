@@ -12,6 +12,9 @@ export class Store {
       CREATE TABLE IF NOT EXISTS records(kind TEXT NOT NULL, id TEXT NOT NULL, bot_id TEXT, json TEXT NOT NULL, PRIMARY KEY(kind,id));
       CREATE UNIQUE INDEX IF NOT EXISTS collaboration_native_context ON records(json_extract(json,'$.threadId')) WHERE kind='collaborationContext' AND json_extract(json,'$.threadId') IS NOT NULL;
       CREATE INDEX IF NOT EXISTS collaboration_room_posts ON records(json_extract(json,'$.roomId'),id) WHERE kind='collaborationPost';
+      CREATE INDEX IF NOT EXISTS collaboration_recent_posts ON records(json_extract(json,'$.roomId')) WHERE kind='collaborationPost';
+      CREATE INDEX IF NOT EXISTS collaboration_recent_results ON records(bot_id) WHERE kind='collaborationResult';
+      CREATE INDEX IF NOT EXISTS collaboration_post_deliveries ON records(json_extract(json,'$.postId')) WHERE kind='collaborationDelivery';
       CREATE INDEX IF NOT EXISTS collaboration_delivery_context ON records(bot_id,json_extract(json,'$.contextId'),json_extract(json,'$.state')) WHERE kind='collaborationDelivery';
       CREATE INDEX IF NOT EXISTS operator_native_request ON records(bot_id,json_extract(json,'$.nativeOperationId')) WHERE kind='operatorRequest';
       CREATE INDEX IF NOT EXISTS operator_call_records ON records(kind,json_extract(json,'$.callId')) WHERE kind IN ('operatorRequest','operatorSegment','operatorTranscript');

@@ -47,6 +47,26 @@ partial pages are not deletion. Active question metadata is separately paged by
 `conversations.requests`. Old synchronous questions remain visible but become
 unavailable after a process restart; async answers have original-ID deliveries.
 
+Room reads and result inbox reads additionally accept `view: "latest"` without
+a cursor for a bounded recent tail. Items remain chronological. `olderCursor`
+continues with `view: "older"`; `complete` means that backward snapshot has no
+remaining older page. `newerCursor` starts `view: "newer"` catch-up. Its first
+read captures a `highWater`; continuation pages keep that watermark frozen so
+new arrivals cannot extend a catch-up indefinitely. On completion, the returned
+`newerCursor` starts the next catch-up after that watermark. All new cursors are
+opaque kind/bot/query-scope/direction positions, not authorization. Every read
+still checks current membership/caller scope. Recent pages reserve envelope
+space inside the existing byte ceiling; unread large records remain retained.
+Without `view`, the existing numeric forward cursor behavior is unchanged.
+Newer pages omit `olderCursor`: retain the existing backward reading position.
+Events invalidate mutable delivery/result metadata; a partial page never
+deletes retained history or replaces unrelated scope. Opening a recent room
+does not scan its whole log or start a model.
+
+Authenticated current named bots can create both pairs and groups including
+themselves with 2–12 active named members. Only the owner changes membership or
+hold; creation/membership supplies no new approval or external-action authority.
+
 ## Results and shared effects
 
 The context publishes one explicit useful `collaboration.result` against its

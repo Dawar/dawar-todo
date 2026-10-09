@@ -1,4 +1,4 @@
-import type { CollaborationRoom, CollaborationPost, CollaborationContext, CollaborationDelivery, CollaborationResult, CollaborationPage, CollaborationPostParams, CollaborationResource, ExecutionConfiguration } from './bot-collaboration';
+import type { CollaborationRoom, CollaborationPost, CollaborationContext, CollaborationDelivery, CollaborationResult, CollaborationPage, CollaborationRecentParams, CollaborationPostParams, CollaborationResource, ExecutionConfiguration } from './bot-collaboration';
 import type { BotReplyReference } from "./bot-replies";
 import type { OperatorSegment } from './operator-types';
 /** Public bridge contract. Native JSON-RPC method names never come from a browser. */
@@ -28,7 +28,7 @@ export type BotBrowserRetention = { mode: "preserve" | "idle60" | "keep-task"; p
 export type BotDesktopState = { state: "not-created" | "running" | "stopped"; display?: string; rdpPort?: number; rdpBind?: string; shared: boolean; browser?: BotBrowserRetention; image?: string; width?: number; height?: number; capturedAt?: string };
 export type BotOperations = {
   "conversations.list": {params:{cursor?:string|null;limit?:number};result:CollaborationPage<CollaborationRoom>};
-  "conversations.read": {params:{roomId:string;cursor?:string|null;limit?:number};result:CollaborationPage<CollaborationPost>&{room:CollaborationRoom;deliveries:CollaborationDelivery[]}};
+  "conversations.read": {params:CollaborationRecentParams&{roomId:string};result:CollaborationPage<CollaborationPost>&{room:CollaborationRoom;deliveries:CollaborationDelivery[]}};
   "conversations.create": {params:{type:'pair'|'group';name?:string;members:string[]};result:CollaborationRoom};
   "conversations.membership": {params:{roomId:string;expectedRevision:number;members:string[]};result:CollaborationRoom};
   "conversations.hold": {params:{roomId:string;expectedRevision:number;held:boolean};result:CollaborationRoom};
@@ -38,7 +38,7 @@ export type BotOperations = {
   "conversations.detail": {params:{contextId:string;turnId:string;itemId:string;offset?:number;version?:string;knownVersion?:string};result:Omit<HistoryDetail,'context'>&{context:CollaborationContext}};
   "conversations.log": {params:{contextId:string;turnId:string;cursor?:string|null};result:{context:CollaborationContext;entries:import('./bot-history-view').HistoryEntry[];olderCursor:string|null;attachments:BotAttachment[]}};
   "conversations.contexts": {params:{roomId:string;cursor?:string|null;limit?:number};result:CollaborationPage<CollaborationContext>};
-  "collaboration.results": {params:{cursor?:string|null;limit?:number};result:CollaborationPage<CollaborationResult>};
+  "collaboration.results": {params:CollaborationRecentParams;result:CollaborationPage<CollaborationResult>};
   "collaboration.result": {params:{deliveryId:string;outcome:'completed'|'blocked';text:string;references?:string[]};result:{results:CollaborationResult[]}};
   "collaboration.consume": {params:{resultId:string};result:{id:string;botId:string;resultId:string;operationId:string;author:import("./bot-collaboration").CollaborationAuthor;createdAt:string}};
   "collaboration.await": {params:{workId:string;boundary:'dependency'|'milestone'};result:{id:string;botId:string;workId:string;boundary:'dependency'|'milestone'}};
