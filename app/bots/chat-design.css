@@ -24,6 +24,10 @@ details[open] > summary > .bots-disclosure-chevron { transform: rotate(90deg); }
 .bots-activity[open] > div { padding-inline: 12px; }
 .bots-composer-support { flex-shrink: 1; padding-top: 2px; }
 .bots-settings-wrap { width: min(calc(100% - 32px), var(--chat-width)); margin: 5px auto 0; }
+.bots-settings-next-heading { display: flex; align-items: baseline; flex-wrap: wrap; justify-content: space-between; gap: 3px 10px; margin: 0 4px 5px; color: #50695a; font-size: 11px; }
+.bots-settings-next-heading strong { font-weight: 650; }
+.bots-settings-next-heading > span { display: inline-flex; align-items: center; gap: 4px; color: #617269; }
+.bots-settings-next-note { margin: 4px 5px; color: #67776e; font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; }
 .bots-settings { position: relative; display: flex; align-items: center; gap: 5px; min-width: 0; padding: 4px; border: 1px solid #e3ebe5; border-radius: 14px; background: #f4f8f5; color: #50695a; }
 .bots-settings-selects, .bots-settings-toggles { display: flex; align-items: center; min-width: 0; gap: 4px; }
 .bots-settings-selects { flex: 1 1 auto; }
@@ -104,6 +108,8 @@ details[open] > summary > .bots-disclosure-chevron { transform: rotate(90deg); }
   .bots-controls select { max-width: 140px; padding-inline: 5px; }
   .bots-settings-wrap { width: calc(100% - 24px); }
   .bots-settings { gap: 3px; }
+  .bots-settings-wrap .bots-settings { flex-wrap: wrap; }
+  .bots-settings-wrap .bots-settings-selects { flex-basis: 100%; }
   .bots-settings-selects { flex: 1 1 0; gap: 3px; }
   .bots-settings-selects label:first-child { flex: 1 1 0; }
   .bots-settings-selects label:nth-child(2) { flex: 0 1 77px; }
