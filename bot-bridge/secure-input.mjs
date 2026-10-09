@@ -1,4 +1,5 @@
 import { randomUUID, createHash } from 'node:crypto';
+import { SECURE_RESPONSE_BYTES, SECURE_RESPONSE_COUNT, SECURE_RESPONSE_TOTAL, SECURE_HTTPS_OPERATIONS, secureAwait, secureResponseBytes } from './secure-response.mjs';
 import { SECURE_IMAGE_BYTES, SECURE_WIRE_BYTES, secureContextBytes, secureDerivedKey } from '../lib/secure-input.ts';
 const now = () => new Date().toISOString(), hour = 3600000;
 const id = value => typeof value === 'string' && /^[a-zA-Z0-9:_-]{1,180}$/.test(value);
@@ -87,7 +88,7 @@ export class SecureInputs {
         if (this.live.size >= 32 || this.list(bot).filter(r => ['waiting', 'received'].includes(r.state)).length >= 8)
             throw Error('Finish or delete an earlier secure request first.');
         const row = { id: `secure:${randomUUID()}`, botId: bot.id, threadId: bot.threadId, ...description, state: 'waiting', createdAt: now(), operation, descriptionHash: fingerprint(description) };
-        const value = { pair, operations: new Map(), responses: new Map(), aborts: new Set() };
+        const value = { pair, operations: new Map(), responses: new Map(), responseReservations: new Set(), aborts: new Set() };
         this.live.set(row.id, value);
         this.retain(row.id, value, this.clock() + hour);
         try { this.save(row); } catch { clearTimeout(value.expiryTimer); value.pair=null; this.live.delete(row.id); throw fail(); }
@@ -106,11 +107,12 @@ export class SecureInputs {
             for (const image of value.payload?.images ?? [])
                 image.bytes.fill(0);
             for (const response of value.responses.values())
-                response.bytes.fill(0);
+                response.bytes?.fill(0);
             value.pair = null;
             value.payload = null;
             value.plain = null;
             value.responses.clear();
+            value.responseReservations.clear();
             this.live.delete(handle);
         }
         for (const [key, transfer] of this.transfers)
@@ -281,7 +283,7 @@ export class SecureInputs {
         if (name === 'bots_delete_secure_input')
             return this.clear(row.id);
         if (p.mode === 'status')
-            return { request: row, handle: row.id };
+            return { request: row, handle: row.id, ...(this.live.has(row.id) ? { usage: this.usage(this.live.get(row.id)) } : {}) };
         const value = this.live.get(row.id);
         if (row.state !== 'received' || !value?.payload)
             throw Error('No live secure submission. Ask for a fresh request if unavailable.');
@@ -290,30 +292,61 @@ export class SecureInputs {
                 throw Error('Private submission: model reading was not approved by the human.');
             if (p.source === 'response') {
                 const response = value.responses.get(p.responseId);
-                if (!response)
-                    throw fail();
-                return { __secureModelContent: [{ type: 'text', text: response.bytes.toString('utf8') }] };
+                if (!response) throw fail();
+                if (!response.bytes) throw Error('This response was explicitly released. Its original operation receipt remains; repeating it will not send HTTP again.');
+                if (!response.modelReadable) throw Error('Binary response retained privately. No registered-file download/export adapter is available; release the response when finished.');
+                let text; try { text = new TextDecoder('utf-8', { fatal: true }).decode(response.bytes); } catch { throw Error('Response is not supported UTF-8 text. No binary download adapter is available.'); }
+                return { __secureModelContent: [{ type: 'text', text }] };
             }
             return { __secureModelContent: [{ type: 'text', text: JSON.stringify(value.payload.fields) }, ...value.payload.images.map(image => ({ type: 'image', mimeType: image.mimeType, data: image.bytes.toString('base64') }))] };
         }
         if (!id(p.operationId ?? callId))
             throw fail();
         const operation = p.operationId ?? callId, hash = fingerprint(p), prior = value.operations.get(operation);
-        if (prior) {
-            if (prior.hash !== hash)
-                throw fail();
-            return prior.promise;
+        if (prior && prior.hash !== hash) throw fail();
+        if (prior && !prior.blocked) return this.replay(value, await prior.promise);
+        if (!prior) {
+            const release = p.mode === 'release-response';
+            const count = [...value.operations.values()].filter(run => (run.mode === 'release-response') === release).length;
+            if (count >= SECURE_HTTPS_OPERATIONS || p.mode === 'desktop' && [...value.operations.values()].filter(run => run.mode === 'desktop').length >= 32)
+                throw Error('Finite secure operation budget reached. Original receipts and response release remain available until expiry; do not rotate a credential to retry an uncertain effect.');
         }
-        if (value.operations.size >= 32)
-            throw Error('Secure use limit reached. Finish and delete this transfer.');
-        const run = { hash };
-        run.promise = this.use(bot, row, value, p);
+        // Only a positively blocked-before-HTTP attempt may run again under its
+        // SAME fingerprint/ID. Committed, rejected and unknown effects never do.
+        const run = prior ?? { hash, mode: p.mode };
+        run.blocked = false;
+        let resolve, reject;
+        run.promise = new Promise((yes, no) => { resolve = yes; reject = no; });
         value.operations.set(operation, run);
+        void this.use(bot, row, value, p).then(result => { run.blocked = result.state === 'blocked' && result.effect === 'not-started'; resolve(result); }, reject);
         return run.promise;
+    }
+    replay(value, result) {
+        if (result.state === 'used' && result.responseId && value.responses.get(result.responseId)?.bytes === null) return { ...result, response: 'released' };
+        return result;
+    }
+    usage(value) {
+        const bodies = [...value.responses.values()].filter(response => response.bytes);
+        return { retainedResponses: bodies.length, retainedBytes: bodies.reduce((n, r) => n + r.bytes.length, 0), inFlightResponses: value.responseReservations.size,
+            responseLimit: SECURE_RESPONSE_COUNT, responseByteLimit: SECURE_RESPONSE_BYTES, aggregateByteLimit: SECURE_RESPONSE_TOTAL,
+            operationLimit: SECURE_HTTPS_OPERATIONS, remainingOperations: SECURE_HTTPS_OPERATIONS - [...value.operations.values()].filter(run => run.mode !== 'release-response').length,
+            responses: [...value.responses].map(([id, r]) => ({ id, state: r.bytes ? 'retained' : 'released', bytes: r.bytes?.length ?? 0, modelReadable: r.modelReadable })) };
+    }
+    reserve(value) {
+        const bodies = [...value.responses.values()].filter(r => r.bytes);
+        const total = [...this.live.values()].reduce((n, v) => n + [...v.responses.values()].reduce((sum, r) => sum + (r.bytes?.length ?? 0), 0) + v.responseReservations.size * SECURE_RESPONSE_BYTES, 0);
+        if (bodies.length + value.responseReservations.size >= SECURE_RESPONSE_COUNT || total + SECURE_RESPONSE_BYTES > SECURE_RESPONSE_TOTAL) return null;
+        const reservation = Symbol(); value.responseReservations.add(reservation); return reservation;
     }
     async use(bot, row, value, p) {
         let begun = false;
         try {
+            if (p.mode === 'release-response') {
+                if (!id(p.responseId)) throw fail();
+                const response = value.responses.get(p.responseId); if (!response) throw fail();
+                response.bytes?.fill(0); response.bytes = null;
+                return { state: 'response-released', responseId: p.responseId, credentialRetained: true };
+            }
             if (p.mode === 'desktop') {
                 if (row.destination.kind !== 'desktop' || !/^0x[0-9a-fA-F]{1,8}$/.test(p.window_id))
                     throw fail();
@@ -378,56 +411,35 @@ export class SecureInputs {
             const method = p.method ?? 'POST';
             if (!['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(method) || method === 'GET' && body)
                 throw fail();
+            const reservation = this.reserve(value);
+            if (!reservation) return { state: 'blocked', effect: 'not-started', response: 'capacity-before-request', detail: 'No HTTP started. Explicitly release consumed responses, then retry this SAME operation ID and unchanged input.', usage: this.usage(value) };
             const abort = new AbortController();
             value.aborts.add(abort);
             const timer = setTimeout(() => abort.abort(), 30000);
             timer.unref?.();
             try {
                 begun = true;
-                const response = await this.fetcher(url, { method, headers, body, redirect: 'manual', signal: abort.signal });
+                const response = await secureAwait(Promise.resolve(this.fetcher(url, { method, headers, body, redirect: 'manual', signal: abort.signal })).then(response => { if (abort.signal.aborted) void response.body?.cancel().catch(() => {}); return response; }), abort.signal);
                 if (response.status >= 300 && response.status < 400) {
-                    await response.body?.cancel();
+                    void response.body?.cancel().catch(() => {});
                     return { state: 'redirect-rejected', status: response.status };
                 }
                 if (this.live.get(row.id) !== value) {
-                    await response.body?.cancel();
+                    void response.body?.cancel().catch(() => {});
                     return { state: 'unavailable' };
                 }
-                const reader = response.body?.getReader();
-                let size = 0;
-                const chunks = [];
-                if (reader)
-                    for (;;) {
-                        const { value: chunk, done } = await reader.read();
-                        if (done)
-                            break;
-                        size += chunk.length;
-                        if (size > 1024 * 1024) {
-                            await reader.cancel();
-                            for (const chunk of chunks)
-                                chunk.fill(0);
-                            return { state: 'used', status: response.status, response: 'too-large-withheld' };
-                        }
-                        chunks.push(chunk);
-                    }
-                const bytes = Buffer.concat(chunks);
-                for (const chunk of chunks)
-                    chunk.fill(0);
-                if (this.live.get(row.id) !== value) {
-                    bytes.fill(0);
-                    return { state: 'unavailable' };
-                }
-                if (value.responses.size >= 16 || [...this.live.values()].reduce((sum, v) => sum + [...v.responses.values()].reduce((n, r) => n + r.bytes.length, 0), 0) + bytes.length > 64 * 1024 * 1024) {
-                    bytes.fill(0);
-                    return { state: 'used', status: response.status, response: 'capacity-withheld' };
-                }
+                const bytes = await secureResponseBytes(response, abort.signal);
+                if (bytes === null) return { state: 'used', status: response.status, response: 'too-large-withheld', detail: 'HTTP completed; body exceeds the private 1 MiB limit. Do not repeat a mutation. Binary download/export requires a reviewed registered-file adapter.' };
+                if (this.live.get(row.id) !== value) { bytes.fill(0); return { state: 'unavailable' }; }
                 const responseId = `response:${randomUUID()}`;
-                value.responses.set(responseId, { bytes });
+                const mime = (response.headers.get('content-type') ?? '').split(';')[0].trim().toLowerCase();
+                value.responses.set(responseId, { bytes, modelReadable: !mime || mime.startsWith('text/') || /^application\/(?:json|[a-z0-9.+-]+\+json|xml|[a-z0-9.+-]+\+xml)$/.test(mime) });
                 return { state: 'used', status: response.status, responseId, modelRead: row.modelRead === true };
             }
             finally {
                 clearTimeout(timer);
                 value.aborts.delete(abort);
+                value.responseReservations.delete(reservation);
             }
         }
         catch {

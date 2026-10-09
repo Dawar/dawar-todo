@@ -25,7 +25,8 @@ import type { ActivityTarget } from "./conversation-activity";
 import { useBurstConversation, BurstControls, BurstBubbles, canonicalBurst } from "./burst-composer";
 import { useRunFindings } from "./run-findings";
 import { retainedBatches } from "./burst-state";
-import { SecureInputCard, useSecureInputRequests } from "./secure-input-card";
+import { SecureInputCard, SecureInputAccess } from "./secure-input-card";
+import { useSecureInputRequests } from "./secure-input-requests";
 import { secureTimelineGroups, type ConversationGroup } from "./secure-input-timeline";
 import { usePeerTimeline, PeerTimelineMessage, PeerPaging } from "./peer-timeline";
 import { peerConversationEntries, peerAliases } from "./peer-timeline-store";
@@ -153,7 +154,7 @@ function BotConversationFeed({ owner, bot, online, children, onOpenCall, onReply
   const tailBatches = retainedBatches(burst.value).filter(batch => batch.state !== "sent" && !nativeBatchIds.has(batch.operationId ?? batch.id));
   const feed = useFeedScroll(timeline, state, online, projectEntries);
   const { first, last, scroll, content, showJump, paging, latest } = feed;
-  const secureRequests = useSecureInputRequests({ botId: bot.id, threadId: bot.threadId, online, enabled: botsClient.snapshot?.capabilities?.secureInputs === 1 });
+  const secure = useSecureInputRequests({ owner, botId: bot.id, threadId: bot.threadId, online, enabled: botsClient.snapshot?.capabilities?.secureInputs === 1 });
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const revealActivity = (entry: HistoryEntry) => setExpanded(prior => new Set([...prior, timeline.resolveKey(historyKey(entry.turnId, entry.id))!]));
   const sourceCursor = useRef(new Map<string, string>()), resolving = useRef(false), mounted = useRef(true);
@@ -194,8 +195,8 @@ function BotConversationFeed({ owner, bot, online, children, onOpenCall, onReply
       if (entry.type === "reasoning" && (entry.item?.type !== "reasoning" || !entry.item.summary.some(text => text.trim()))) continue;
       result.push({ kind: "message", entries: [entry] });
     }
-    return compactGroups(secureTimelineGroups(result, secureRequests, state.entries, first, last, state.olderCursor), state.gaps);
-  }, [state.entries, state.olderCursor, state.gaps, first, last, secureRequests]);
+    return compactGroups(secureTimelineGroups(result, secure.requests.filter(r => r.state !== 'waiting'), state.entries, first, last, state.olderCursor), state.gaps);
+  }, [state.entries, state.olderCursor, state.gaps, first, last, secure.requests]);
   // Retain open aliases only within this mounted conversation's bounded cache.
   useEffect(() => {
     let alive = true;
@@ -230,7 +231,7 @@ function BotConversationFeed({ owner, bot, online, children, onOpenCall, onReply
   const contextEntries = (pinnedContext && !state.contextEntries.some(entry => historyKey(entry.turnId, entry.id) === historyKey(pinnedContext.turnId, pinnedContext.id)) ? [pinnedContext] : state.contextEntries).filter(entry => !mountedKeys.has(timeline.resolveKey(historyKey(entry.turnId, entry.id))) && (!entry.peerAlias || !aliases.has(entry.peerAlias)));
   const rootRows = new Map(state.entries.slice(first, last).flatMap(e => e.peer ? [[e.peer.rootId, e.peer.id] as const] : []));
   const namedBots = botsClient.snapshot?.bots ?? [bot];
-  return <NativeTimingContext.Provider value={{ owner, botId: bot.id, threadId: bot.threadId, entries: nativeState.entries, current: nativeState.currentTiming }}><div className="bots-timeline"><div className="bots-messages" ref={scroll} tabIndex={0} {...feed.handlers}><div ref={content}>
+  return <NativeTimingContext.Provider value={{ owner, botId: bot.id, threadId: bot.threadId, entries: nativeState.entries, current: nativeState.currentTiming }}><div className="bots-timeline"><SecureInputAccess key={JSON.stringify([owner, bot.id, bot.threadId])} state={secure}/><div className="bots-messages" ref={scroll} tabIndex={0} {...feed.handlers}><div ref={content}>
     {paging && <div className="bots-feed-loading" role="status">Loading conversation…</div>}
     {(first > 0 || state.olderCursor) && !state.loading && (!online || state.error || !state.entries.length) && <button className="bots-older" disabled={paging || !online && (first === 0 || state.gaps.some((gap) => gap.before === historyKey(state.entries[first].turnId, state.entries[first].id)))} onClick={() => void feed.page(-1, true)}>{state.entries.length ? "Load earlier turns" : "Continue loading history"}</button>}
     {!state.loading && !state.error && !state.entries.length && state.olderCursor && <p className="bots-system-note">This page has no conversational replies. Earlier messages remain available above.</p>}
