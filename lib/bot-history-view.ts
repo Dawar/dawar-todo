@@ -26,6 +26,7 @@ export type HistoryEntry = NativeTiming & {
 };
 export type HistoryContext = { laneId: string; runId: string | null; threadId: string };
 export type HistoryPage = {
+  turnConfigurations?: import("./bot-collaboration").TurnConfiguration[];
   context?: HistoryContext;
   /** Routine turns inspected and excluded before filling the conversation page. */
   activityTurns?: { turnId: string; runId?: string; active?: boolean }[];

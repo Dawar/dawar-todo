@@ -12,6 +12,7 @@ function selected(runtime, bot, params) {
     throw Error('This message changed. Refresh the queue before sending it.');
   if (!['queued', 'failed'].includes(item.state) || item.nativeQueueId)
     throw Error('This message may already be starting. Refresh to check its original delivery.');
+  if (item.configuration?.confirmation === "pending-unsupported") throw Error(item.configuration.reason);
   if (bot.archived || bot.archiving) throw Error('Restore this bot first.');
   return item;
 }

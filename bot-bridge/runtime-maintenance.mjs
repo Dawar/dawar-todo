@@ -89,9 +89,10 @@ export class RuntimeMaintenance {
     return {
       admissions: this.admissions, requests: this.requests, nativeRpc: this.runtime.codex.pending?.size ?? 0,
       localActive: bots.filter(b => b.activeTurnId || b.status === 'running').length,
-      auxiliaryActive: count("SELECT count(*) n FROM records WHERE kind IN ('runLane','managerWorker') AND (json_extract(json,'$.activeTurnId') IS NOT NULL OR json_extract(json,'$.status')='running')"),
+      auxiliaryActive: count("SELECT count(*) n FROM records WHERE kind IN ('runLane','managerWorker','collaborationContext') AND (json_extract(json,'$.activeTurnId') IS NOT NULL OR json_extract(json,'$.status')='running')"),
       acceptedOrUnknown: count("SELECT count(*) n FROM records WHERE (kind='primaryInbox' AND json_extract(json,'$.state') IN ('dispatching','uncertain','accepted') AND json_extract(json,'$.terminalStatus') IS NULL) OR (kind IN ('messageBurst','burstBatch') AND json_extract(json,'$.state') IN ('dispatching','uncertain')) OR (kind='promptQueue' AND json_extract(json,'$.state') IN ('dispatching','uncertain','native-queued')) OR (kind IN ('runIntake','answerExecution','managerOperation','managerExecution') AND json_extract(json,'$.state') IN ('dispatching','uncertain')) OR (kind='managerTask' AND json_extract(json,'$.state') IN ('starting','running','uncertain','provisioning')) OR (kind='runLane' AND json_extract(json,'$.provisioning') IN ('dispatching','uncertain'))") + count("SELECT count(*) n FROM operations WHERE status IN ('dispatching','uncertain')") - passiveLegacyManagerRejections(this.store).length,
-      pendingInput: count("SELECT count(*) n FROM records WHERE kind IN ('pending','managerRequest','runPending')"),
+      collaborationUnknown: count("SELECT count(*) n FROM records WHERE (kind='collaborationContext' AND (json_extract(json,'$.status')='unknown' OR json_extract(json,'$.provisioning') IN ('dispatching','uncertain') OR json_extract(json,'$.releaseState') IN ('dispatching','uncertain'))) OR (kind='collaborationDelivery' AND json_extract(json,'$.state') IN ('dispatching','uncertain','accepted') AND json_extract(json,'$.terminalStatus') IS NULL) OR (kind='collaborationResource' AND json_extract(json,'$.state')<>'released') OR (kind IN ('collaborationEffect','collaborationStopGoal') AND json_extract(json,'$.state') IN ('dispatching','uncertain')) OR (kind='collaborationGoal' AND json_extract(json,'$.goal.status')='active')"),
+      pendingInput: count("SELECT count(*) n FROM records WHERE kind IN ('pending','managerRequest','runPending','collaborationPending')"),
       activeGoals: count("SELECT count(*) n FROM records WHERE kind='nativeGoal' AND json_extract(json,'$.goal.status')='active'"),
       calls: count("SELECT count(*) n FROM records WHERE kind='operatorCall' AND json_extract(json,'$.endedAt') IS NULL"),
       desktops: this.runtime.desktops?.sessions.size ?? 0,
@@ -134,7 +135,7 @@ export class RuntimeMaintenance {
   async observe(row) {
     const counts = this.counts();
     if (Object.values(counts).some(n => n !== 0)) return { safe: false, counts, reason: 'Current work, tools, volatile state or unknown acceptance remains.' };
-    const generation = this.generation, deadline = this.monotonic() + 20_000;
+    const generation = this.generation, collaborationChange=this.store.meta('collaboration-change'), deadline = this.monotonic() + 20_000;
     const read = (method, params) => {
       const left = deadline - this.monotonic(); if (left <= 0) throw Error('Native maintenance observation exceeded its deadline.');
       return this.runtime.codex.call(method, params, Math.min(left, 5000));
@@ -160,8 +161,8 @@ export class RuntimeMaintenance {
       if (!Array.isArray(page?.data) || !Object.hasOwn(page,'nextCursor') || page.nextCursor !== null && typeof page.nextCursor !== 'string') throw Error('Unknown accepted native queue state.');
       if (page.data.length || page.nextCursor !== null) nativeQueues++;
     }
-    const after = this.counts(), safe = this.monotonic() <= deadline && !active && !activeGoals && !nativeQueues && generation === this.generation && !Object.values(after).some(n => n !== 0);
-    if (safe && this.current?.id === row.id && this.current.phase === 'draining') this.proof = { generation, at: this.clock(), monotonicAt: this.monotonic(), operationId: row.id };
+    const after = this.counts(), safe = this.monotonic() <= deadline && !active && !activeGoals && !nativeQueues && generation === this.generation && collaborationChange===this.store.meta('collaboration-change') && !Object.values(after).some(n => n !== 0);
+    if (safe && this.current?.id === row.id && this.current.phase === 'draining') this.proof = { generation, collaborationChange, at: this.clock(), monotonicAt: this.monotonic(), operationId: row.id };
     return { safe, counts: after, native: { loaded: threads.size, active, activeGoals, nativeQueues }, reason: safe ? null : 'Native work/Goal/queue or concurrent activity prevents restart.' };
   }
   async control(p) {
@@ -180,7 +181,7 @@ export class RuntimeMaintenance {
     if (p.action === 'seal' || p.action === 'claim') {
       if (Math.min(row.expiresAtMs - this.clock(), this.currentDeadline - this.monotonic()) < 45_000) throw Error('Maintenance deadline leaves no safe restart handoff window.');
       if (this.current?.id !== row.id || row.phase !== (p.action === 'seal' ? 'draining' : 'sealed') ||
-          !this.proof || this.proof.operationId !== row.id || this.proof.generation !== this.generation || this.monotonic() - this.proof.monotonicAt > 5000 || Object.values(this.counts()).some(n => n !== 0)) throw Error('Fresh drained state is not proven; no restart authorized.');
+          !this.proof || this.proof.operationId !== row.id || this.proof.generation !== this.generation || this.proof.collaborationChange!==this.store.meta('collaboration-change') || this.monotonic() - this.proof.monotonicAt > 5000 || Object.values(this.counts()).some(n => n !== 0)) throw Error('Fresh drained state is not proven; no restart authorized.');
       this.source(row.commit, row.version);
       const next = { ...row, phase: p.action === 'seal' ? 'sealed' : 'claimed' };
       this.store.put('runtimeMaintenance', next); this.current = next;

@@ -1,3 +1,4 @@
+import { COLLABORATION_POLICY } from './collaboration.mjs';
 import { SECURE_INSTRUCTIONS } from "./secure-input-tools.mjs";
 import { desktopInstructions } from "./desktops.mjs";
 import { mkdir, writeFile, lstat, realpath, open } from "node:fs/promises";
@@ -50,7 +51,7 @@ export async function initializeProfile(bot) {
     "USER.md":
       "# User\n\nRecord only facts and preferences the human has shared.\n",
     "MEMORY.md": "# Memory\n\nStore useful, verified knowledge here.\n",
-    "AGENTS.md": `# Operating instructions\n\n${BOT_INSTRUCTIONS}\n\n${DIRECT_INSTRUCTIONS}\n\nYour workspace is ${bot.cwd}. Keep deliverables here where practical. Never overwrite or delete another bot’s workspace without an explicit request.\n`,
+    "AGENTS.md": `# Operating instructions\n\n${BOT_INSTRUCTIONS}\n\n${DIRECT_INSTRUCTIONS}\n\n${COLLABORATION_POLICY}\n\nYour workspace is ${bot.cwd}. Keep deliverables here where practical. Never overwrite or delete another bot’s workspace without an explicit request.\n`,
     "TOOLS.md":
       "# Tools\n\nUse the tools exposed by your Codex session.\n\n- bots_schedule_list: inspect schedules and recent runs.\n- bots_schedule_save: create or update a one-time or recurring schedule.\n- bots_schedule_delete: cancel a schedule.\n- bots_report_result: notify Dawar of a meaningful finding during a scheduled run.\n- bots_publish_artifact: make a local file available to download in the conversation.\n\nFor native desktop UI tasks, use the bot_desktop MCP and read the bot-desktop-computer-use skill. It is bound to your own desktop and starts when you first take a screenshot.\n\nDo not place credentials in these files.\n",
   };
@@ -63,7 +64,7 @@ export async function initializeProfile(bot) {
     });
 }
 export async function profileContext(bot, team = null, { onMemoryState = () => {}, onMemoryContent = () => {}, maintenanceId = null } = {}) {
-  const parts = [`## Secure one-time input\n${SECURE_INSTRUCTIONS}`, `## File memory maintenance\n${MEMORY_INSTRUCTIONS}`];
+  const parts = [`## Common named collaboration policy\n${COLLABORATION_POLICY}`, `## Secure one-time input\n${SECURE_INSTRUCTIONS}`, `## File memory maintenance\n${MEMORY_INSTRUCTIONS}`];
   for (const file of PROFILE_FILES) {
     try {
       const source = await profileFile(bot, file);
