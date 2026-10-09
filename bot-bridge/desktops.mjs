@@ -336,6 +336,15 @@ export class BotDesktops {
     if (old.botId !== bot.id || old.profile !== this.name(bot)) throw Error("Browser policy ownership mismatch.");
     return this.runtime.store.put("browserRetention", { ...old, ...changes, revision: old.revision + 1 });
   }
+  protectForActivity(bot) {
+    // Input always cancels maintenance, including an already prepared attempt.
+    // Reaffirming an already protected policy is not a policy mutation: advancing
+    // its revision here would invalidate the owner's own selector interaction.
+    this.cancelBrowserMaintenance(bot.id);
+    const policy = this.policy(bot);
+    if (policy.protected && policy.release == null) return policy;
+    return this.savePolicy(bot, { protected: true, release: null });
+  }
   async browserCommand(bot, action, expected = null) {
     await this.configured(bot);
     const args = [join(resources, "browser.py"), action, this.name(bot), "--owner", bot.id];
@@ -542,7 +551,7 @@ export class BotDesktops {
         this.clients.set(bot.id, client);
       }
       if (beforeInput) { await client.ready; beforeInput(); }
-      if (name !== "screenshot") this.savePolicy(bot, { protected: true, release: null });
+      if (name !== "screenshot") this.protectForActivity(bot);
       const result = await client.call(name, args);
       if (name === "screenshot" && !result.isError) this.observations.set(bot.id, Date.now());
       return result;
@@ -611,7 +620,7 @@ export class BotDesktops {
       await this.start(bot);
       if (this.tickets.size >= 32)
         throw new Error("Too many pending desktop connections. Wait a moment.");
-      this.savePolicy(bot, { protected: true, release: null });
+      this.protectForActivity(bot);
       const token = randomBytes(32).toString("hex");
       this.tickets.set(token, {
         botId: bot.id,

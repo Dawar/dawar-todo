@@ -25,6 +25,8 @@ Policy changes use authenticated `desktop.browserPolicy` RPC with `expectedRevis
 
 Assigned MCP tools add `browser_status`, `browser_protect`, `browser_release(safe_to_close=true)` and `browser_reopen`. Mutations require a stable `operation_id` and use that same ledger/owner bot lock. Release captures the current activity token **before** the awaited process probe and checks it after; any new native activity/unresolved state rejects the stale release. It binds the exact current browser root PID/starttime, boot ID, thread, timestamp and actual-input monotonic boundary. Protect is always conservative. New native dispatch/observed activity revokes release without altering existing native generation/status/receipt authority. Agent desktop input and human viewer opening also revoke it.
 
+Implicit protection on desktop input or viewer opening always cancels pending browser maintenance and validates ownership/policy. If the policy is already protected with no release, it leaves the revision unchanged; otherwise it revokes release and advances the revision. Explicit `browser_protect` remains a durable mutation with its original receipt behavior. This allows an owner to use the retention selector from the same bot desktop without its own input invalidating the selector's revision. Stale or concurrent actual policy changes still reject. Passive preview responses cannot replace a newer browser revision or clear a policy-saving error.
+
 The manager's once-per-minute timer only considers opted-in, released profiles. Preview screenshots do not refresh activity. All of these are required:
 
 1. Release at least60minutes old, profile/thread/revision and exact browser instance unchanged.

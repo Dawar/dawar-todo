@@ -38,6 +38,7 @@ export function BotDesktopCard({
 }) {
   const [desktop, setDesktop] = useState<BotDesktopState | null>(null),
     [error, setError] = useState(""),
+    [policyError, setPolicyError] = useState(""),
     [savingPolicy, setSavingPolicy] = useState(false);
   const ref = useRef<HTMLElement>(null);
   useEffect(() => {
@@ -63,7 +64,9 @@ export function BotDesktopCard({
           { owner, managed: true },
         );
         if (!cancelled) {
-          setDesktop(value);
+          setDesktop(current => current?.browser && value.browser && current.browser.revision > value.browser.revision
+            ? { ...value, browser: current.browser }
+            : value);
           setError("");
         }
       } catch (e) {
@@ -148,8 +151,8 @@ export function BotDesktopCard({
                   const browser = await client.rpc<BotBrowserRetention>("desktop.browserPolicy", bot.id, { mode, expectedRevision },
                     crypto.randomUUID(), { owner, managed: true });
                   setDesktop(current => current ? { ...current, browser } : current);
-                  setError("");
-                } catch (e) { setError(e instanceof Error ? e.message : "Could not save browser settings."); }
+                  setPolicyError("");
+                } catch (e) { setPolicyError(e instanceof Error ? e.message : "Could not save browser settings."); }
                 finally { setSavingPolicy(false); }
               }}>
               <option value="preserve">Preserve browser</option>
@@ -172,6 +175,7 @@ export function BotDesktopCard({
           {error}
         </p>
       )}
+      {policyError && <p className="bots-desktop-error" role="status">{policyError}</p>}
     </section>
   );
 }
