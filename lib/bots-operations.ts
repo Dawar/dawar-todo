@@ -27,6 +27,7 @@ import type { HistoryResponse, HistoryDetail } from "./bot-history-view";
 export type BotBrowserRetention = { mode: "preserve" | "idle60" | "keep-task"; protected: boolean; releasedAt: number | null; closeAfterMinutes: number; revision: number; lastResult: string | null; afterTaskMode: "preserve" | "idle60" | null };
 export type BotDesktopState = { state: "not-created" | "running" | "stopped"; display?: string; rdpPort?: number; rdpBind?: string; shared: boolean; browser?: BotBrowserRetention; image?: string; width?: number; height?: number; capturedAt?: string };
 export type BotOperations = {
+  'taskRequests.source': {params:{threadId:string;turnId?:string;itemId?:string;questionKey?:string;cursor?:string|null};result:{source:import('./task-requests').TaskRequestSource|null;spec:import('./task-requests').TaskRequestSpec|null;nextCursor:string|null;unavailable:boolean}};
   "conversations.list": {params:{cursor?:string|null;limit?:number};result:CollaborationPage<CollaborationRoom>};
   "conversations.read": {params:CollaborationRecentParams&{roomId:string};result:CollaborationPage<CollaborationPost>&{room:CollaborationRoom;deliveries:CollaborationDelivery[]}};
   "conversations.create": {params:{type:'pair'|'group';name?:string;members:string[]};result:CollaborationRoom};

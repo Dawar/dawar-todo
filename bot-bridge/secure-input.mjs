@@ -26,7 +26,7 @@ export class SecureInputs {
         this.timer.unref?.();
     }
     save(row) {
-        try { this.runtime.store.transaction(() => { this.runtime.store.put('secureInput', row); this.runtime.emitEvent('secure.status', row, row.botId); }); }
+        try { this.runtime.store.transaction(() => { this.runtime.store.put('secureInput', row); this.runtime.emitEvent(row.taskRequest?'task-request.private':'secure.status', row.taskRequest?{id:row.taskRequest.requestId,threadId:row.threadId,state:row.state}:row, row.botId); }); }
         catch { if (fingerprint(this.runtime.store.get('secureInput', row.id)) !== fingerprint(row)) throw fail(); }
         this.pendingStates.delete(row.id);
         return row;
@@ -54,9 +54,9 @@ export class SecureInputs {
         const remaining = Math.max(0,limit-active.length);
         return [...(remaining ? old.slice(-remaining) : []),...active].sort(order).slice(-limit);
     }
-    list(bot) { this.sweep(); return this.recent(this.rows(bot),20); }
-    catalog() { this.sweep(); return this.recent(this.rows(),100); }
-    async request(bot, p, callId) {
+    list(bot) { this.sweep(); return this.recent(this.rows(bot).filter(r=>!r.taskRequest),20); }
+    catalog() { this.sweep(); return this.recent(this.rows().filter(r=>!r.taskRequest),100); }
+    async request(bot, p, callId, taskRequest = null) {
         if(this.runtime.primary && !this.runtime.primary.single(bot))throw Error('Secure input requires this named bot’s persistent native thread.');
         if (this.runtime.relayOnline === false)
             throw Error('Connect the bot bridge before requesting secure input.');
@@ -69,6 +69,7 @@ export class SecureInputs {
         const slots = (list, field) => list.map(s => { if (!plain(s) || typeof s.name !== 'string' || !/^[a-zA-Z][a-zA-Z0-9_-]{0,39}$/.test(s.name) || names.has(s.name) || s.name === 'allow-model')
             throw fail(); names.add(s.name); return { name: s.name, label: label(s.label, 100), required: s.required !== false, ...(field ? { secret: s.secret !== false } : {}) }; });
         const description = { title: label(p.title, 100), purpose: label(p.purpose), destination: { kind: p.destination.kind, label: label(p.destination.label, 200), ...(p.destination.kind === 'https' ? { origin: origin(p.destination.origin).origin } : {}) }, fields: slots(fields, true), images: slots(images, false) };
+        if(taskRequest) description.taskRequest=taskRequest;
         const operation = `${bot.id}:${bot.threadId}:${p.operationId ?? callId}`, existing = this.runtime.store.list('secureInput', bot.id).find(r => r.operation === operation);
         if (existing) {
             if (existing.descriptionHash !== fingerprint(description))
@@ -85,7 +86,7 @@ export class SecureInputs {
             if (concurrent.descriptionHash !== fingerprint(description)) throw fail();
             return { request: concurrent, handle: concurrent.id };
         }
-        if (this.live.size >= 32 || this.list(bot).filter(r => ['waiting', 'received'].includes(r.state)).length >= 8)
+        if (this.live.size >= 32 || this.rows(bot).filter(r => ['waiting', 'received'].includes(r.state)).length >= 8)
             throw Error('Finish or delete an earlier secure request first.');
         const row = { id: `secure:${randomUUID()}`, botId: bot.id, threadId: bot.threadId, ...description, state: 'waiting', createdAt: now(), operation, descriptionHash: fingerprint(description) };
         const value = { pair, operations: new Map(), responses: new Map(), responseReservations: new Set(), aborts: new Set() };

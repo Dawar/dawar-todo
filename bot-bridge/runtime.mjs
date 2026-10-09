@@ -1,4 +1,5 @@
 import { Collaboration, COLLABORATION_TOOL, CONTEXT_DESKTOP_TOOL, COLLABORATION_POLICY } from './collaboration.mjs';
+import { TaskRequestBridge, TASK_REQUEST_TOOL } from './task-requests.mjs';
 import { ExecutionConfiguration } from './execution-config.mjs';
 import { RuntimeMaintenance } from './runtime-maintenance.mjs';
 import { BotAdministration, BOT_ADMIN_TOOL } from './bot-admin.mjs';
@@ -140,6 +141,7 @@ const schema = (properties, required = []) => ({
 });
 const str = { type: "string" };
 export const dynamicTools = [
+  { type: 'function', ...TASK_REQUEST_TOOL },
   { type: "function", ...COLLABORATION_TOOL },
   { type: 'function', ...BOT_ADMIN_TOOL },
   { type: 'function', ...MEMORY_TOOL },
@@ -220,6 +222,7 @@ export class BotRuntime extends EventEmitter {
     this.bursts = new MessageBursts(this);
     this.plans = new PlanLifecycle(this);
     this.answers = new AnswerExecutions(this, validateResponse);
+    this.taskRequests = new TaskRequestBridge(this);
     this.runs = new BackgroundRuns(this, dynamicTools, validateResponse, INTERACTIONS);
     this.executionConfig = new ExecutionConfiguration(this);
     this.collaboration = new Collaboration(this, [{ type: "function", ...CONTEXT_DESKTOP_TOOL }, ...dynamicTools.filter(t => [COLLABORATION_TOOL.name, "bots_publish_artifact", "bots_download_attachment"].includes(t.name))], validateResponse, INTERACTIONS);
@@ -559,6 +562,9 @@ export class BotRuntime extends EventEmitter {
     return result;
   }
   async secureReceived(row) {
+    // A protected form promotes exactly one complete submission, after ordinary
+    // readiness and the bound private receipt are independently checked.
+    if(row.taskRequest)return;
     const bot=this.store.bot(row.botId);
     if(bot.threadId!==row.threadId || this.store.get("secureInput",row.id)?.state!=="received")return;
     const id=`secure-receipt:${createHash("sha256").update(row.id).digest("hex")}`;
@@ -566,7 +572,7 @@ export class BotRuntime extends EventEmitter {
   }
   snapshot() {
     return {
-      capabilities: { collaborationRooms: 1, executionConfiguration: 1, accountUsageHistory: 1, runtimeMaintenance: 1, botAdministration: 1, botMemoryMaintenance: 1, backgroundRunLanes: 1, scheduleDecisions: 1, singleThreadExecution: 1, peerInbox: 1, peerRootControls: 1, peerBodyPaging: 1, nativeGoals: 1, nativeConversation: 1, messageReplies: 1, secureInputs: 1, secureResponseLifecycle: 1, operatorCalls: 1, operatorInputQuestions: 1, historyCursorIndex: 1, messageBursts: 1, burstDiscard: 1, burstControls: 1, burstQueue: 1, queueLists: 1, queueRelativeMoves: 1, queueSendNow: 1, ...(this.storage ? { taskQueues: 1 } : {}), teams: 1, ...(this.desktops ? { botDesktops: 1, botBrowserRetention: 1 } : {}) },
+      capabilities: { taskRequests: this.storage ? 1 : undefined, collaborationRooms: 1, executionConfiguration: 1, accountUsageHistory: 1, runtimeMaintenance: 1, botAdministration: 1, botMemoryMaintenance: 1, backgroundRunLanes: 1, scheduleDecisions: 1, singleThreadExecution: 1, peerInbox: 1, peerRootControls: 1, peerBodyPaging: 1, nativeGoals: 1, nativeConversation: 1, messageReplies: 1, secureInputs: 1, secureResponseLifecycle: 1, operatorCalls: 1, operatorInputQuestions: 1, historyCursorIndex: 1, messageBursts: 1, burstDiscard: 1, burstControls: 1, burstQueue: 1, queueLists: 1, queueRelativeMoves: 1, queueSendNow: 1, ...(this.storage ? { taskQueues: 1 } : {}), teams: 1, ...(this.desktops ? { botDesktops: 1, botBrowserRetention: 1 } : {}) },
 
       botAdminLeadIds: [...this.botAdmin.leads],
       teams: publicTeams(this),
@@ -621,6 +627,10 @@ export class BotRuntime extends EventEmitter {
       Array.isArray(params)
     )
       throw new Error("Invalid request.");
+    if(method==='taskRequests.source') {
+      if(!request.clientId||trustedOrigin)throw Error('Task Request source lookup requires the authenticated owner browser.');
+      return this.taskRequests.source(this.store.bot(String(botId)),params);
+    }
     if (method.startsWith("conversations.") || method.startsWith("collaboration.") || method === "execution.config")
       return this.collaboration.handle(request, trustedOrigin);
     if (method === "requests.respond" && (this.store.get("collaborationPending", params.key) || this.store.get("collaborationAnswer", params.key)))
@@ -2180,6 +2190,7 @@ export class BotRuntime extends EventEmitter {
       void this.runs.tick().catch(error => this.emit("fault", error));
       if (!this.maintenance.holding()) await flushDueLists(this);
       await this.bursts.tick();
+      void this.taskRequests.tick().catch(() => {});
       void this.primary.tick().catch(error => this.emit('fault', error));
       for (const bot of this.store.bots()) {
         // Primary admission owns single-thread bots. Native accepted queues
@@ -2271,6 +2282,10 @@ export class BotRuntime extends EventEmitter {
   async dynamicToolTracked(bot, p, origin = null) {
     const args =
       typeof p.arguments === "string" ? JSON.parse(p.arguments) : p.arguments;
+    if(p.tool===TASK_REQUEST_TOOL.name) {
+      if(origin)throw Error('Task Request drafts belong to the primary named bot.');
+      return this.taskRequests.draft(bot,args,{authority:'native-tool',botId:bot.id,threadId:p.threadId,turnId:p.turnId});
+    }
     if (p.tool === COLLABORATION_TOOL.name) {
       if (origin) throw Error("Use the registered collaboration context adapter.");
       const { operation, operationId, ...params } = args;

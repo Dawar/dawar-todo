@@ -22,7 +22,7 @@ export type TaskRequestValues = Record<string, string | string[]>;
 export type TaskRequestSubmission = {
   id: string; revision: number; contributorName: string; values: TaskRequestValues; files: TaskRequestFile[];
   secure?: { handle: string; submissionId: string; expiresAt: string; modelRead: boolean };
-  status: TaskRequestStatus; submittedAt?: string; delivery?: { operationId: string; nativeTurnId?: string; reason?: string };
+  status: TaskRequestStatus; submittedAt?: string; delivery?: { operationId: string; nativeTurnId?: string; nativeQueueId?: string; reason?: string };
 };
 export type TaskRequest = {
   id: string; revision: number; source: TaskRequestSource; spec: TaskRequestSpec; status: TaskRequestStatus;
@@ -49,6 +49,20 @@ export type TaskRequestGuestAction =
   | { action: 'finalize' | 'download'; id: string; fileId: string }
   | { action: 'secure-session'; id: string; submissionId: string }
   | { action: 'submit'; id: string; operationId: string; expectedRevision: number; submissionId: string; secureHandle?: string };
+
+/** Shared producer schema; canonical runtime validation also checks cross-field references. */
+export const TASK_REQUEST_SPEC_SCHEMA = {
+  type:'object',additionalProperties:false,required:['version','title','instructions','context','groups','fields'],properties:{
+    version:{type:'integer',enum:[1]},title:{type:'string',maxLength:100},instructions:{type:'string',maxLength:12000},context:{type:'string',maxLength:12000},
+    groups:{type:'array',maxItems:12,items:{type:'object',additionalProperties:false,required:['id','label'],properties:{id:{type:'string',maxLength:180},label:{type:'string',maxLength:200},notes:{type:'string',maxLength:2000}}}},
+    fields:{type:'array',minItems:1,maxItems:32,items:{type:'object',additionalProperties:false,required:['id','label','kind','required'],properties:{
+      id:{type:'string',pattern:'^[a-zA-Z][a-zA-Z0-9_-]{0,39}$'},label:{type:'string',maxLength:200,description:'Private labels have a 100-character limit.'},required:{type:'boolean'},
+      kind:{type:'string',enum:['text','long-text','choice','image','file','secure-text','secure-image']},notes:{type:'string',maxLength:2000},groupId:{type:'string',maxLength:180},questionId:{type:'string',maxLength:180},
+      choices:{type:'array',minItems:1,maxItems:20,items:{type:'object',additionalProperties:false,required:['id','label'],properties:{id:{type:'string',maxLength:180},label:{type:'string',maxLength:200}}}},
+    }}},
+    secure:{type:'object',additionalProperties:false,required:['purpose','destination'],properties:{purpose:{type:'string',maxLength:500},destination:{type:'object',additionalProperties:false,required:['kind','label'],properties:{kind:{type:'string',enum:['https','desktop']},label:{type:'string',maxLength:200},origin:{type:'string',description:'Exact HTTPS origin only, required for HTTPS; no path, credentials or query.'}}}}},
+  },
+} as const;
 
 const plain = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v) && Object.getPrototypeOf(v) === Object.prototype;
 export function taskRequestId(v: unknown): string {
@@ -84,10 +98,11 @@ export function taskRequestSpec(input: unknown): TaskRequestSpec {
       choices=f.choices.map(c=>{if(!plain(c)) throw Error('Invalid choice.');keys(c,['id','label']);return {id:taskRequestId(c.id),label:text(c.label,200)};});
       if(new Set(choices.map(c=>c.id)).size!==choices.length) throw Error('Duplicate choice.');
     } else if(f.choices !== undefined) throw Error('Choices belong to choice fields.');
-    return { id,kind:f.kind as TaskRequestField['kind'],label:text(f.label,200),required:f.required,
+    return { id,kind:f.kind as TaskRequestField['kind'],label:text(f.label,String(f.kind).startsWith('secure-')?100:200),required:f.required,
       ...(f.notes === undefined ? {} : {notes:text(f.notes,2000,true)}),...(f.groupId === undefined ? {} : {groupId:String(f.groupId)}),
       ...(choices ? {choices}:{}),...(f.questionId === undefined ? {} : {questionId:taskRequestId(f.questionId)}) };
   });
+  if(fields.filter(f=>f.kind==='image').length>6)throw Error('Ordinary image field bounds exceeded.');
   if(fields.filter(f=>f.kind==='secure-text').length>6 || fields.filter(f=>f.kind==='secure-image').length>2) throw Error('Private field bounds exceeded.');
   let secure: TaskRequestSpec['secure'];
   if(fields.some(f=>f.kind.startsWith('secure-'))) {

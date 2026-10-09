@@ -2,7 +2,7 @@
   "version": 1,
   "authority": "Original restart-now75f and same9a2 correction09c8; no new execution authority",
   "sourceCommit": "77b4262790b6cffc73d5084f293364a3522f9afd",
-  "managerSourceSha256": "a1e99a146bfa435177d7622483a954bf4e76c9b8231d5bf69b1da20f8a40325b",
+  "managerSourceSha256": "e722a38157798a390d5ef51fba9076f8e4ac68bf7a7f8ca066b90559a64fbc51",
   "guards": {
     "delegate": {
       "name": "codex_tasks",
@@ -227,5 +227,10 @@
     "fixedGuardsAndRecordsSha256": "c3ffb3092ad081fd6ed30f56e3ecd2140966c544b8cd29e5c5c6e2e07e64091b",
     "originalRecordCount": 12,
     "scope": "Collaboration routing/import/resource adapters precede the unchanged legacy guards; only the same original fixed pre-effect refusals remain passive."
+  },
+  "sourceReview": {
+    "base": "9170875d2748280f9829f9bf2ed152f24315fab9",
+    "reason": "TaskRequests catalog/route only; all four original guard methods byte-identical; all twelve original rows/targets rebound without replay",
+    "evidence": "/home/dawar/bots/dwight-lead-developer-dawartodo-copy/task-requests-evidence-20261009/manager-guard-review.json"
   }
 }

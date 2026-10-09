@@ -128,10 +128,16 @@ function connect() {
       log("relay.connected");
       return;
     }
+    if(message.type==='task-request') {
+      let response;
+      try {response={type:'task-request.response',id:message.id,clientId:message.clientId,result:await runtime.maintenance.track(()=>runtime.taskRequests.channel(message))};}
+      catch {response={type:'task-request.response',id:message.id,clientId:message.clientId,error:'Private form transfer rejected or unavailable. Retain the original submission/ciphertext IDs.'};}
+      if(current.readyState===WebSocket.OPEN)current.send(JSON.stringify(response));return;
+    }
     if (message.type === "secure") {
       // Never bridgeResponse/handle/sendLarge/log this sensitive envelope.
       let response;
-      try { response = { type:"secure.response", id:message.id, clientId:message.clientId, result:await runtime.maintenance.track(() => runtime.secure.channel(message)) }; }
+      try { if(runtime.store.get('secureInput',message.requestId)?.taskRequest)throw Error('Use the protected form channel.'); response = { type:"secure.response", id:message.id, clientId:message.clientId, result:await runtime.maintenance.track(() => runtime.secure.channel(message)) }; }
       catch { response = { type:"secure.response", id:message.id, clientId:message.clientId, error:"Secure transfer rejected or unavailable. Retain input while open; inspect status or request a fresh form." }; }
       if(current.readyState===WebSocket.OPEN)current.send(JSON.stringify(response));
       return;

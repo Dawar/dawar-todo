@@ -49,7 +49,7 @@ function isPublicTalkPhoneTransport(pathname: string) {
 }
 
 function isPublicInternalTransport(pathname: string) {
-  return pathname === "/api/internal/minute" || pathname === "/api/bots/notifications" || pathname === "/api/bots/storage/service";
+  return pathname === "/api/internal/minute" || pathname === "/api/bots/notifications" || pathname === "/api/bots/storage/service" || pathname === '/api/task-requests/service';
 }
 
 function unauthorizedApi(message = "Sign in with ChatGPT or use a valid API token to use Dawar Todo.") {
@@ -77,6 +77,9 @@ export async function appAccessResponse(
   if (isPublicStaticPath(url.pathname) || isDispatchAuthPath(url.pathname)) return null;
   if (isPublicTalkPhoneTransport(url.pathname)) return null;
   if (isPublicInternalTransport(url.pathname)) return null;
+  // Exact guest surface only; the API validates a request-scoped bearer/PIN.
+  // No owner ticket, general Bots transport or neighboring data is exposed.
+  if (url.pathname === '/task-request' || url.pathname === '/task-request/' || url.pathname === '/api/task-requests/guest') return null;
   if (request.headers.get(AUTHENTICATED_USER_HEADER)?.trim()) return null;
 
   const apiRequest = url.pathname.startsWith("/api/");

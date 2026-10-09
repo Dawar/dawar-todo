@@ -163,6 +163,7 @@ export class PrimaryExecution {
     if (item.kind === 'collaboration-result' && this.store.bot(bot.id).activeTurnId) return;
     if (item.state !== 'queued' || this.store.get('primaryInbox', item.id)?.state !== 'queued' || !this.runtime.peers.canDispatch(item)) return;
     if (!this.runtime.memoryMaintenance.eligible(this.store.bot(bot.id), item)) return;
+    if (item.kind==='task-request'&&!await this.runtime.taskRequests?.canDispatch(bot,item))return;
     if (item.kind === 'schedule' && !occurrenceReady(this.runtime.scheduleDecisions.ensure(item.sourceId))) return;
     const preparedText = await this.runtime.preparePrimaryMemory(bot, item);
     if (preparedText === null) return;
@@ -181,6 +182,11 @@ export class PrimaryExecution {
     const latest = this.store.get('primaryInbox', item.id);
     if (latest?.state !== 'queued' || latest.fingerprint !== item.fingerprint || !this.runtime.peers.canDispatch(latest)) return; // cancel/decision may commit across preparation awaits
     if (!this.runtime.memoryMaintenance.eligible(current, latest)) return;
+    if (item.kind==='task-request') {
+      if(!await this.runtime.taskRequests?.canDispatch(current,latest))return;
+      const confirmed=this.store.bot(bot.id);
+      if(confirmed.threadId!==bot.threadId||confirmed.queuePaused||confirmed.archived||confirmed.archiving||this.runtime.maintenance.holding()||this.store.get('primaryInbox',item.id)?.state!=='queued')return;
+    }
     // Commit immutable identity/input BEFORE native queue/add. No turn/start:
     // native continuation/start races can never turn this intake into steering.
     this.store.transaction(() => {
