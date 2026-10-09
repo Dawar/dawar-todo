@@ -163,6 +163,6 @@ export function RoomConversation({owner,botId,roomId,bots,online,onBack}:{owner:
       {contexts.map(context=><LazyDetails key={context.id} className="bots-room-context" summary={<><MessageCircle size={14}/>{bots.find(b=>b.id===context.botId)?.name??'Named bot'} · room work {context.status}{context.provisioning!=='bound'&&` · ${context.provisioning}`}</>}>{()=> <><ConfigurationEvidence value={context.config}/><p>Goal: {context.goal.status} · room context, separate from foreground</p><CollaborationContextHistory owner={owner} botId={context.botId} context={context} online={online}/></>}</LazyDetails>)}
       {contextRead.error&&<p role="alert">{contextRead.error}<button disabled={!online} onClick={contextRead.refresh}>Retry contexts</button></p>}
     </div>
-    {quoteError&&<p role="alert">{quoteError}</p>}{room&&<RoomComposer draft={draft} key={`${owner}:${roomId}:${botId}`} owner={owner} botId={botId} room={room} bots={bots} contexts={contexts} online={online&&supported} onSent={()=>{if(read.following)void read.newer();}}/>}
+    {quoteError&&<p role="alert">{quoteError}</p>}{room&&<RoomComposer draft={draft} key={`${owner}:${roomId}:${botId}`} owner={owner} botId={botId} room={room} bots={bots} contexts={contexts} online={online&&supported} onSent={read.invalidate}/>}
   </section>;
 }

@@ -31,9 +31,9 @@ class RoomFeed {
       this.value={...this.value,deliveries:[...this.value.deliveries.filter(v=>v.id!==d.delivery!.id),d.delivery]};this.notify();
     }
     if(!d.operationId)return; // Repeated context status isn't a room-body read.
-    this.newerAvailable=true;this.notify();
-    if(this.following&&this.latestWindow&&!this.timer)this.timer=setTimeout(()=>{this.timer=undefined;void this.newer();},250);
+    this.invalidate();
   };
+  invalidate=()=>{if(!this.current())return;this.newerAvailable=true;this.notify();if(this.following&&this.latestWindow&&!this.timer)this.timer=setTimeout(()=>{this.timer=undefined;void this.newer();},250);};
   private async load(params:CollaborationRecentParams,append=false){
     if(this.loading){this.pending=true;return;}
     if(!this.current()||!client.online)return;
