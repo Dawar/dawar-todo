@@ -150,6 +150,18 @@ accepted original and these two pending notices; new, changed, blocking,
 active, unknown or stale question evidence still blocks. Full current raw
 bytes remain fenced across observation, backup and exclusive restart receipt.
 
+During the bounded **pre-backup wait only**, an observation in which the exact
+Connie record changes only its valid, later `reconcileAfter` scheduling timestamp
+is discarded and remains busy. The helper logs the fixed record identity, changed
+field name, byte counts and before/after hashes, then starts a fresh observation;
+it never qualifies that changed observation as idle. Input/receipt/owner changes,
+either notice changing, invalid/backward timestamps and unknown records still
+refuse. Once an unchanged idle observation is acquired, full raw-byte equality
+remains mandatory within and between every backup/final/claim observation.
+Diagnostics contain no input, receipt bodies, question text or timestamp values.
+The failed65b invocation attempt remains retained; a source correction does not
+authorize deleting it, retrying that attempt or launching another restart.
+
 Private backup, repeated native/store/RAM/process/source checks, <=900-second
 whole-helper deadline, original lease budget and an exclusive fsynced restart
 receipt precede exactly one restart. An exclusive invocation-wide

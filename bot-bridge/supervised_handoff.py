@@ -5,6 +5,7 @@ remain possible until restart: the human-agreed window controls that race.
 No record is rewritten, native input replayed, or installed Seal/Claim invoked.
 """
 from contextlib import closing
+from datetime import datetime
 import hashlib
 import json
 import math
@@ -27,7 +28,7 @@ CONNIE = 'peer:432942828b0fda3ba0dc17b009ea1bc7f0ecb5bde9defb74b86b34ae39b98eb2'
 DOC = 'async:call_lyPF3QB2taTul9nX7DijB2U5'
 LINUS = 'async:call_d097a830dc35437ab45a37c30692bb4e'
 # Exact reviewed original, excluding ONLY the recovery scheduling timestamp.
-# Every byte, including that timestamp, remains in the current cutover fence.
+# Every byte, including that timestamp, remains in the idle/cutover fence.
 CONNIE_SHA = '0bdd911fbaf08a23aa3196d10d8a99f1518b40441ea4ab28fe83c9c3157368fa'
 DOC_SHA = 'a8f38bb9625ac6aac98c0f0b665c6bf6dd1c7463550bb2cc8bf3b5ff053d14c7'
 LINUS_SHA = 'd973f81caaa47f7eb3cb9c189d020213f3ac44bc239b617269c109d8a418c2b7'
@@ -113,7 +114,7 @@ def process_identity(helper):
     return [values, result, hashlib.sha256(unit.encode()).hexdigest()]
 
 
-def exact_originals(helper):
+def exact_originals(helper, metadata=False):
     # Query-only, fixed IDs, finite rows/bytes. All unknown/new rows also remain
     # strict blockers in local_state and in the independently sampled RAM counts.
     private_file(helper.STATE / 'state.sqlite', helper.STATE)
@@ -122,18 +123,53 @@ def exact_originals(helper):
         rows = db.execute("SELECT kind,id,CASE WHEN length(CAST(json AS BLOB))<=1048576 THEN json ELSE NULL END FROM records WHERE (kind='primaryInbox' AND id=?) OR (kind='pending' AND id IN (?,?))", (CONNIE, DOC, LINUS)).fetchall()
     if len(rows) != 3 or any(not r[2] for r in rows):
         raise RuntimeError('Reviewed retained originals unavailable')
-    for kind, ident, raw in rows:
+    records = []
+    for kind, ident, raw in sorted(rows):
         row = json.loads(raw)
+        record = {'kind': kind, 'id': ident, 'bytes': len(raw.encode()),
+                  'rawSha256': hashlib.sha256(raw.encode()).hexdigest(),
+                  'fields': {key: digest(value) for key, value in row.items()}}
+        diagnostic = {key: record[key] for key in ('kind', 'id', 'bytes', 'rawSha256')}
         if row.get('id') != ident:
-            raise RuntimeError('Original record identity changed')
+            raise RuntimeError('Original record identity changed: ' + json.dumps(diagnostic, sort_keys=True))
         if kind == 'primaryInbox':
-            row.pop('reconcileAfter', None)
+            record['reconcileAfter'] = row.pop('reconcileAfter', None)
             encoded = json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()
-            if hashlib.sha256(encoded).hexdigest() != CONNIE_SHA:
-                raise RuntimeError('Reviewed Connie original input/receipt changed')
-        elif hashlib.sha256(raw.encode()).hexdigest() != {DOC: DOC_SHA, LINUS: LINUS_SHA}.get(ident):
-            raise RuntimeError('Reviewed terminal notice changed')
-    return digest(rows)
+            record['invariantSha256'] = hashlib.sha256(encoded).hexdigest()
+            if record['invariantSha256'] != CONNIE_SHA:
+                diagnostic['invariantSha256'] = record['invariantSha256']
+                raise RuntimeError('Reviewed Connie original input/receipt changed: ' + json.dumps(diagnostic, sort_keys=True))
+        elif record['rawSha256'] != {DOC: DOC_SHA, LINUS: LINUS_SHA}.get(ident):
+            raise RuntimeError('Reviewed terminal notice changed: ' + json.dumps(diagnostic, sort_keys=True))
+        records.append(record)
+    return {'digest': digest(rows), 'records': records} if metadata else digest(rows)
+
+
+def original_changes(before, after):
+    changes = []
+    for previous, current in zip(before['records'], after['records'], strict=True):
+        if previous != current:
+            keys = sorted(k for k in previous['fields'].keys() | current['fields'].keys()
+                          if previous['fields'].get(k) != current['fields'].get(k))
+            changes.append({'kind': current['kind'], 'id': current['id'], 'changedFields': keys,
+                            'beforeRawSha256': previous['rawSha256'], 'afterRawSha256': current['rawSha256'],
+                            'beforeBytes': previous['bytes'], 'afterBytes': current['bytes']})
+    return changes
+
+
+def scheduling_change_only(before, after, changes):
+    # This does not qualify idle: discard the entire observation and retry only
+    # in the bounded pre-backup wait. All subsequent cutover reads stay exact.
+    if len(changes) != 1 or changes[0]['id'] != CONNIE or changes[0]['kind'] != 'primaryInbox' or changes[0]['changedFields'] != ['reconcileAfter']:
+        return False
+    stamps = [next(r for r in sample['records'] if r['id'] == CONNIE)['reconcileAfter'] for sample in (before, after)]
+    if not all(isinstance(value, str) and re.fullmatch(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z', value) for value in stamps):
+        return False
+    try:
+        previous, current = [datetime.strptime(value, '%Y-%m-%dT%H:%M:%S.%fZ') for value in stamps]
+        return current > previous
+    except ValueError:
+        return False
 
 
 def fresh_native(proof):
@@ -160,8 +196,8 @@ def lease_status(helper, drain, deadline):
     return row, safe, time.monotonic()
 
 
-def snapshot(helper, drain, deadline):
-    original = exact_originals(helper)
+def snapshot(helper, drain, deadline, waiting=False):
+    original = exact_originals(helper, metadata=True)
     observation = {'phase': 'supervised-unsealed', 'native': {'checked': False}}
     bots, busy, fence = helper.local_state(observation, True)
     proof = observation.get('_receiptProof')
@@ -171,11 +207,21 @@ def snapshot(helper, drain, deadline):
         raise RuntimeError('Supervised proof is not confined to the three exact originals')
     lease, safe, sampled = lease_status(helper, drain, deadline)
     identity = process_identity(helper)
-    if exact_originals(helper) != original:
-        raise RuntimeError('Original bytes changed during observation')
+    after = exact_originals(helper, metadata=True)
+    if after != original:
+        changes = original_changes(original, after)
+        deferred = waiting and scheduling_change_only(original, after, changes)
+        diagnostic = {'phase': 'pre-backup-wait' if waiting else 'strict-cutover',
+                      'action': 'discard-and-wait' if deferred else 'refuse',
+                      'localBusy': busy, 'ramSafe': safe, 'changes': changes}
+        print(json.dumps({'originalObservation': diagnostic}, sort_keys=True), flush=True)
+        if not deferred:
+            raise RuntimeError('Original bytes changed during observation: ' + json.dumps(diagnostic, sort_keys=True))
+        observation['originalObservation'] = diagnostic
+        busy = True
     if not busy and (time.monotonic() - sampled > 5 or not fresh_native(proof)):
         raise RuntimeError('Current native/RAM proof became stale during observation')
-    return bots, busy or not safe, {'local': fence, 'originalBytes': original, 'process': identity, 'expiresAt': lease.get('expiresAt')}, lease, sampled, observation
+    return bots, busy or not safe, {'local': fence, 'originalBytes': after['digest'], 'process': identity, 'expiresAt': lease.get('expiresAt')}, lease, sampled, observation
 
 
 def source(helper, args):
@@ -207,7 +253,7 @@ def activate_supervised(helper, args, receipt_dir, receipt, drain, deadline, evi
     check_attempt(helper, evidence)
     while True:
         source(helper, args)
-        bots, busy, fence, lease, sampled, observation = snapshot(helper, drain, deadline)
+        bots, busy, fence, lease, sampled, observation = snapshot(helper, drain, deadline, waiting=True)
         if not busy and helper.native_idle(bots, observation):
             break
         if deadline - time.monotonic() < 50:
