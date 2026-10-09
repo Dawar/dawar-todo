@@ -229,6 +229,15 @@ function BotConversationFeed({ owner, bot, online, children, onOpenCall, onReply
   const mountedKeys = new Set(state.entries.slice(first, last).map(entry => timeline.resolveKey(historyKey(entry.turnId, entry.id))));
   const aliases = new Set(peers.rows.flatMap(peerAliases));
   const contextEntries = (pinnedContext && !state.contextEntries.some(entry => historyKey(entry.turnId, entry.id) === historyKey(pinnedContext.turnId, pinnedContext.id)) ? [pinnedContext] : state.contextEntries).filter(entry => !mountedKeys.has(timeline.resolveKey(historyKey(entry.turnId, entry.id))) && (!entry.peerAlias || !aliases.has(entry.peerAlias)));
+  const afterContext = contextEntries.filter(entry => {
+    const index = state.entries.findIndex(value => historyKey(value.turnId, value.id) === timeline.resolveKey(historyKey(entry.turnId, entry.id)));
+    return index >= last;
+  });
+  const beforeContext = contextEntries.filter(entry => !afterContext.includes(entry));
+  const readableContext = (entries: HistoryEntry[]) => entries.length > 0 && <section aria-label="Latest readable context" data-history-context>
+    <p className="bots-system-note">Latest readable messages. Intervening work remains accessible through earlier history.</p>
+    {entries.map(entry => <TimelineEntry {...replyProps} onOpenCall={onOpenCall} key={historyKey(entry.turnId, entry.id)} entry={entry} timeline={timeline} attachments={state.attachments} download={download} />)}
+  </section>;
   const rootRows = new Map(state.entries.slice(first, last).flatMap(e => e.peer ? [[e.peer.rootId, e.peer.id] as const] : []));
   const namedBots = botsClient.snapshot?.bots ?? [bot];
   return <NativeTimingContext.Provider value={{ owner, botId: bot.id, threadId: bot.threadId, entries: nativeState.entries, current: nativeState.currentTiming }}><div className="bots-timeline"><SecureInputAccess key={JSON.stringify([owner, bot.id, bot.threadId])} state={secure}/><div className="bots-messages" ref={scroll} tabIndex={0} {...feed.handlers}><div ref={content}>
@@ -243,10 +252,7 @@ function BotConversationFeed({ owner, bot, online, children, onOpenCall, onReply
     {peerSupported && <PeerPaging store={peers.store} online={online} capture={feed.capture}/>}
     {state.loading && !state.entries.length && <div className="bots-history-skeleton" role="status" aria-label="Loading conversation"><span /><span /><span /><span /></div>}
     {!state.loading && !state.error && !state.entries.length && !state.olderCursor && <div className="bots-conversation-start"><span className="bots-start-icon"><MessageCircle size={26} strokeWidth={1.4} aria-hidden="true" /></span><h2>{bot.name}</h2><p>{bot.purpose || "What would you like to work on?"}</p></div>}
-    {(pinnedContext || last === state.entries.length) && contextEntries.length > 0 && <section aria-label="Latest readable context" data-history-context>
-      <p className="bots-system-note">Latest readable messages. Intervening work remains accessible through earlier history.</p>
-      {contextEntries.map((entry) => <TimelineEntry {...replyProps} onOpenCall={onOpenCall} key={historyKey(entry.turnId, entry.id)} entry={entry} timeline={timeline} attachments={state.attachments} download={download} />)}
-    </section>}
+    {(pinnedContext || last === state.entries.length) && readableContext(beforeContext)}
     {groups.map((group) => {
       if (group.secure) return <div key={group.secure.id} className="bots-secure-timeline-entry"><SecureInputCard request={group.secure} online={online}/><MessageTime seconds={Date.parse(group.secure.createdAt) / 1000} basis="received" inline/></div>;
       const entry = group.entries[0], key = historyKey(entry.turnId, entry.id);
@@ -270,6 +276,7 @@ function BotConversationFeed({ owner, bot, online, children, onOpenCall, onReply
         {groups.slice(groups.indexOf(group) + 1).find(next => !next.secure)?.entries[0]?.turnId !== entry.turnId ? <ReturnedArtifacts linked={linkedArtifacts} attachments={state.attachments} turnId={entry.turnId} botId={bot.id} /> : null}
       </Fragment>;
     })}
+    {(pinnedContext || last === state.entries.length) && readableContext(afterContext)}
     {downloadError && <p className="bots-error" role="alert">{downloadError}</p>}
     {last === state.entries.length && tailBatches.map(batch => <BurstBubbles key={batch.id} batch={batch} messages={batch.messageIds.flatMap(id => { const message = burst.value?.messages.find(message => message.id === id); return message ? [message] : []; })} truncatedIds={burst.value?.preview?.truncatedTextIds} controls={burst} {...batchProps} onOpenReply={openReply} />)}
     {burstsEnabled && <BurstControls burst={burst} online={online} submitting={burstSubmitting} />}

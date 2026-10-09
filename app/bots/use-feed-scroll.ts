@@ -13,7 +13,7 @@ export function useFeedScroll(timeline: BotTimeline, state: TimelineState, onlin
   const continuedEmpty = useRef(false), intentVersion = useRef(0);
   const forwardTail = useRef<string | null>(null);
   const visibleAnchors = useRef<{ key: string; offset: number; tailContext?: boolean }[]>([]), stateRef = useRef(state);
-  const endIndex = endKey ? state.entries.findIndex((entry) => historyKey(entry.turnId, entry.id) === timeline.resolveKey(endKey)) : -1;
+  const endIndex = !state.position.following && endKey ? state.entries.findIndex((entry) => historyKey(entry.turnId, entry.id) === timeline.resolveKey(endKey)) : -1;
   let range = historyWindow(state.entries, endIndex < 0 ? state.entries.length : endIndex + 1, state.gaps);
   const readingIndex = !state.position.following && !state.position.tailContext ? state.entries.findIndex((entry) => historyKey(entry.turnId, entry.id) === timeline.resolveKey(state.position.anchor)) : -1;
   // Eviction/page completion can publish before the edge handler adjusts its
@@ -22,6 +22,11 @@ export function useFeedScroll(timeline: BotTimeline, state: TimelineState, onlin
     range = historyWindow(state.entries, windowEndAround(state.entries, readingIndex, state.gaps), state.gaps);
   const rangeRef = useRef(range);
   useLayoutEffect(() => { stateRef.current = state; rangeRef.current = range; });
+  const atLoadedTail = useCallback(() => {
+    const current = stateRef.current, tail = current.entries.at(-1);
+    return rangeRef.current.last === current.entries.length || Boolean(tail && saved.current.tailContext
+      && timeline.resolveKey(saved.current.anchor) === historyKey(tail.turnId, tail.id));
+  }, [timeline]);
   const updateJump = useCallback(() => {
     const element = scroll.current; if (!element) return;
     const newer = rangeRef.current.last < stateRef.current.entries.length;
@@ -31,13 +36,20 @@ export function useFeedScroll(timeline: BotTimeline, state: TimelineState, onlin
   const capture = useCallback(() => {
     const element = scroll.current; if (!element) return;
     const top = element.getBoundingClientRect().top;
-    const visible = [...element.querySelectorAll<HTMLElement>('[data-history-key]')]
-      .filter((node) => node.getBoundingClientRect().bottom >= top && node.getBoundingClientRect().top < top + element.clientHeight)
-      .map((node) => ({ key: node.dataset.historyKey!, offset: node.getBoundingClientRect().top - top, tailContext: Boolean(node.closest('[data-history-context]')) }));
+    const nodes = [...element.querySelectorAll<HTMLElement>('[data-history-key]')]
+      .filter((node) => node.getBoundingClientRect().bottom > top && node.getBoundingClientRect().top < top + element.clientHeight);
+    const visible = nodes.map((node) => ({ key: node.dataset.historyKey!, offset: node.getBoundingClientRect().top - top, tailContext: Boolean(node.closest('[data-history-context]')) }));
     // Collapsed work logs expose many zero-height native aliases. Keep both
     // visible edges, rather than sixteen aliases of the first collapsed row.
     visibleAnchors.current = visible.length > 16 ? [...visible.slice(0, 8), ...visible.slice(-8)] : visible;
-    const anchor = visibleAnchors.current[0];
+    // Keep a visible long reply as the anchor when its preceding Activity
+    // appears. Its zero-height aliases are fallback identities, not rows.
+    const previous = timeline.resolveKey(saved.current.anchor);
+    const at = nodes.findIndex(node => node.dataset.historyKey === previous && node.getBoundingClientRect().height > 0);
+    const first = nodes.findIndex(node => node.getBoundingClientRect().height > 0);
+    const anchor = visible[at >= 0 ? at : first >= 0 ? first : 0];
+    if (anchor && !visibleAnchors.current.some(candidate => candidate.key === anchor.key))
+      visibleAnchors.current = [anchor, ...visibleAnchors.current.slice(0, 15)];
     // An older page can mount this same reply as a canonical row. Retain the
     // context reading intent through that transition; DOM placement alone
     // must not turn the next gesture into a jump to a collapsed tool window.
@@ -76,7 +88,7 @@ export function useFeedScroll(timeline: BotTimeline, state: TimelineState, onlin
     const current = stateRef.current, range = rangeRef.current;
     if (current.error && !retry) return;
     if (toward < 0 && range.first === 0 && !current.olderCursor && !current.gaps.length) return;
-    if (toward > 0 && range.last >= current.entries.length) return;
+    if (toward > 0 && atLoadedTail()) return;
     if (current.entries.length) { capture(); following.current = false; saved.current.following = false; }
     const edge = current.entries[toward < 0 ? range.first : range.last - 1];
     const edgeKey = edge && historyKey(edge.turnId, edge.id);
@@ -114,7 +126,14 @@ export function useFeedScroll(timeline: BotTimeline, state: TimelineState, onlin
         // Supplementary readable context sits outside the native body window.
         // Moving that window must not replace its visible reading anchor with
         // a collapsed tool alias and unmount the reply on the next render.
-        if (!saved.current.tailContext && (anchor < nextRange.first || anchor >= nextRange.last)) {
+        const reading = entries[anchor];
+        const readable = reading && (reading.type === 'agentMessage' || reading.type === 'plan');
+        if (readable && visibleAnchors.current.some(candidate => candidate.key === timeline.resolveKey(saved.current.anchor))) {
+          // Retain one visible readable row outside the shifted raw window.
+          // The context lane renders it once, on its native side of that
+          // window, while paging continues from the exact mounted edge.
+          if (anchor < nextRange.first || anchor >= nextRange.last) saved.current = { ...saved.current, tailContext: true };
+        } else if (!saved.current.tailContext && (anchor < nextRange.first || anchor >= nextRange.last)) {
           const retained = visibleAnchors.current.find(candidate => { const at = inWindow(candidate.key); return !candidate.tailContext && at >= nextRange.first && at < nextRange.last; });
           const fallback = entries[toward < 0 ? nextRange.last - 1 : nextRange.first];
           saved.current = { anchor: retained?.key ?? historyKey(fallback.turnId, fallback.id), offset: retained?.offset ?? edgeOffset, following: false };
@@ -125,7 +144,7 @@ export function useFeedScroll(timeline: BotTimeline, state: TimelineState, onlin
       }
       timeline.position(saved.current);
     } finally { busy.current = false; setPaging(false); }
-  }, [capture, timeline, online, projectEntries]);
+  }, [atLoadedTail, capture, timeline, online, projectEntries]);
   useEffect(() => {
     if (!online || state.loading || state.error || state.entries.length || !state.olderCursor || continuedEmpty.current) return;
     // One bounded continuation on opening. A long stretch of filtered empty
@@ -142,11 +161,11 @@ export function useFeedScroll(timeline: BotTimeline, state: TimelineState, onlin
       if (last) setEndKey(historyKey(entries[last - 1].turnId, entries[last - 1].id));
     }
     const element = scroll.current;
-    if (element && toward > 0 && element.scrollHeight - element.clientHeight - element.scrollTop <= 1 && rangeRef.current.last === stateRef.current.entries.length) {
+    if (element && toward > 0 && element.scrollHeight - element.clientHeight - element.scrollTop <= 1 && atLoadedTail()) {
       following.current = true; setEndKey(null); capture(); updateJump();
     }
     if (element && (toward < 0 && element.scrollTop <= 1 || toward > 0 && element.scrollHeight - element.clientHeight - element.scrollTop <= 1)) void page(toward);
-  }, [capture, page, updateJump]);
+  }, [atLoadedTail, capture, page, updateJump]);
   const onScroll = useCallback(() => {
     const element = scroll.current; if (!element) return;
     const top = element.scrollTop, delta = top - previousTop.current; previousTop.current = top;
@@ -161,12 +180,12 @@ export function useFeedScroll(timeline: BotTimeline, state: TimelineState, onlin
       const entries = stateRef.current.entries, last = rangeRef.current.last;
       if (last) setEndKey(historyKey(entries[last - 1].turnId, entries[last - 1].id));
     }
-    if (toward > 0 && distance <= 2 && rangeRef.current.last === stateRef.current.entries.length) {
+    if (toward > 0 && distance <= 2 && atLoadedTail()) {
       following.current = true; setEndKey(null);
     }
     capture(); updateJump();
     if (toward < 0 && top < 300 || toward > 0 && distance < 300) void page(toward);
-  }, [capture, page, restore, updateJump]);
+  }, [atLoadedTail, capture, page, restore, updateJump]);
   useLayoutEffect(() => {
     if (!state.entries.length) return;
     if (!restored.current) {
