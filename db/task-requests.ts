@@ -204,7 +204,7 @@ export class TaskRequests {
   async secureScope(g:Grant,submissionId:string) {
     const r=await this.grantCurrent(g),s=await this.submission(g);
     if(submissionId!==s.id||!r.spec.secure)throw new StorageError('Private submission scope unavailable.',409,'scope');
-    return {owner:this.owner,requestId:r.id,revision:r.revision,grantId:g.id,submissionId:s.id,source:r.source,spec:r.spec};
+    return {owner:`grant-owner:${this.sign(json(['task-request-crypto-owner-v1',this.owner,g.id]))}`,requestId:r.id,revision:r.revision,grantId:g.id,submissionId:s.id,source:r.source,spec:r.spec};
   }
   async secureAuthorize(binding:Record<string,unknown>) {
     const g=await this.db.prepare('SELECT * FROM task_request_grants WHERE id=? AND owner_key=? AND request_id=? AND revision=?').bind(taskRequestId(binding.grantId),this.owner,taskRequestId(binding.requestId),binding.revision).first<Grant>();

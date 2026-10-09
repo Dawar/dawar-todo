@@ -59,7 +59,7 @@ export async function taskRequestResponse(request:Request,env:TaskRequestEnviron
           if(!env.BOTS_TICKET_SECRET||!env.BOTS_RELAY_URL)throw new StorageError('Private transfer service unavailable.',503,'unavailable');
           const scope=await forms.secureScope(g,taskRequestId(p.submissionId)),current=Math.floor(Date.now()/1000);
           const binding={requestId:id,revision:g.revision,grantId:g.id,submissionId:scope.submissionId};
-          const ticket=await signTaskRequestTicket({role:'task-request',owner,machineId:env.BOTS_MACHINE_ID??'dawar-vm',jti:crypto.randomUUID(),exp:current+60,sessionExp:current+900,binding,botId:scope.source.botId,threadId:scope.source.threadId},env.BOTS_TICKET_SECRET);
+          const ticket=await signTaskRequestTicket({role:'task-request',owner:scope.owner,machineId:env.BOTS_MACHINE_ID??'dawar-vm',jti:crypto.randomUUID(),exp:current+60,sessionExp:current+900,binding,botId:scope.source.botId,threadId:scope.source.threadId},env.BOTS_TICKET_SECRET);
           result={ticket,url:env.BOTS_RELAY_URL,machineId:env.BOTS_MACHINE_ID??'dawar-vm',binding,expiresAt:(current+900)*1000};break;
         }
         default:throw new StorageError('Unknown guest form operation.');
