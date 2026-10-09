@@ -61,7 +61,7 @@ loops, more than 100 loaded sessions or the 20-second observation budget fail
 closed. An active native Goal and any accepted queue remain restart blockers;
 this code cannot stop their autonomous execution. Bridge-held pending/unknown
 receipts are also blockers. A bounded exact-original exception permits only
-the reviewed Connie interrupted intake and Doc completed nonblocking notice
+the reviewed Connie interrupted intake and Doc/Linus completed nonblocking notices
 to remain retained without blocking cutover. Their exact record, bot, thread
 and turn identities are bound in the classifier; new terminal-looking rows
 still block and require their normal original-ID reconciliation.
@@ -111,8 +111,8 @@ restricted to that pre-maintenance bridge and cannot be combined with a
 maintenance operation.
 
 An installed older maintenance-v1 bridge may lack this classifier. Installed
-`d0113f9` counts the retained Connie interrupted intake and Doc nonblocking
-notice before Observe proof, so it cannot reach Seal/Claim. Installing source
+`d0113f9` counts the retained Connie interrupted intake and Doc/Linus nonblocking
+notices before Observe proof, so it cannot reach Seal/Claim. Installing source
 cannot change that process. Its ordinary drain still admits existing async
 question answers. No external proof is an installed seal.
 
@@ -134,15 +134,21 @@ python3 -B bot-bridge/restart-when-idle.py --commit FULL_REVIEWED_SHA --version 
 
 This retains the installed bounded admission drain, all local/native contexts,
 Goals/queues, RAM/tool/request/lock/history, call/desktop/secure and unknown
-blockers. Only the two fixed originals and the independently reviewed fixed
+blockers. Only the three fixed originals and the independently reviewed fixed
 legacy pre-effect refusals can qualify. Their fresh query-only native evidence
 is mandatory. The stale Connie raw hash is not reused: comparison with the
 private d011 pre-update backup found only `reconcileAfter` changed, which the
 original PrimaryExecution.recover writes before its metadata read. Its exact
 input/receipt invariant is bound to that reviewed original; **all current bytes,
 including reconcileAfter, are fenced across every cutover read**. Changed
-input/receipt, new/foreign/unknown rows or stale projection still block. Neither
-record is rewritten, answered, deleted, replayed or reported successful.
+input/receipt, new/foreign/unknown rows or stale projection still block. No
+retained record is rewritten, answered, deleted, replayed or reported successful.
+The added Linus notice is only `async:call_d097a830dc35437ab45a37c30692bb4e`,
+bound to its exact raw SHA-256, bot/thread/turn and current canonical completed
+agent-message question proof. The old RAM counters must report exactly one
+accepted original and these two pending notices; new, changed, blocking,
+active, unknown or stale question evidence still blocks. Full current raw
+bytes remain fenced across observation, backup and exclusive restart receipt.
 
 Private backup, repeated native/store/RAM/process/source checks, <=900-second
 whole-helper deadline, original lease budget and an exclusive fsynced restart

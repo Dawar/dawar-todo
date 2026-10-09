@@ -18,6 +18,9 @@ const reviewedOriginals = [
   { kind:'pending', id:'async:call_lyPF3QB2taTul9nX7DijB2U5',
     botId:'3f261c5b-9f08-4ccb-8aa1-948d42a405a7', threadId:'01a0e66e-939b-7ca1-839e-50147278592c', turnId:'01a10b13-bc93-7e80-8a40-569e4ce71224',
     rawRecordSha256:'a8f38bb9625ac6aac98c0f0b665c6bf6dd1c7463550bb2cc8bf3b5ff053d14c7' },
+  { kind:'pending', id:'async:call_d097a830dc35437ab45a37c30692bb4e',
+    botId:'b062a333-5f8a-4904-8bee-2b57557c6cc0', threadId:'01a0dc39-1829-7553-a951-de3d622744fb', turnId:'01a11f91-af1f-7d12-8447-ef7180eefdbf',
+    rawRecordSha256:'d973f81caaa47f7eb3cb9c189d020213f3ac44bc239b617269c109d8a418c2b7' },
 ];
 
 // Fixed private metadata reader, no caller path, RPC, transcript or credential.

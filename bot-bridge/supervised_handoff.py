@@ -25,10 +25,12 @@ CHILD_PID = 2321969
 BINARY_SHA = '9a820c17865fa825d04db416818679a9d63bd72e50835c396f496e5684626c9c'
 CONNIE = 'peer:432942828b0fda3ba0dc17b009ea1bc7f0ecb5bde9defb74b86b34ae39b98eb2'
 DOC = 'async:call_lyPF3QB2taTul9nX7DijB2U5'
+LINUS = 'async:call_d097a830dc35437ab45a37c30692bb4e'
 # Exact reviewed original, excluding ONLY the recovery scheduling timestamp.
 # Every byte, including that timestamp, remains in the current cutover fence.
 CONNIE_SHA = '0bdd911fbaf08a23aa3196d10d8a99f1518b40441ea4ab28fe83c9c3157368fa'
 DOC_SHA = 'a8f38bb9625ac6aac98c0f0b665c6bf6dd1c7463550bb2cc8bf3b5ff053d14c7'
+LINUS_SHA = 'd973f81caaa47f7eb3cb9c189d020213f3ac44bc239b617269c109d8a418c2b7'
 COUNT_KEYS = set('admissions requests nativeRpc localActive auxiliaryActive acceptedOrUnknown pendingInput activeGoals calls desktops volatileSecure secureTransfers browserMaintenance bufferedRelay runtimeTick localLocks historyReads browserRetention serviceWork'.split())
 
 
@@ -117,8 +119,8 @@ def exact_originals(helper):
     private_file(helper.STATE / 'state.sqlite', helper.STATE)
     with closing(sqlite3.connect(f'file:{helper.STATE}/state.sqlite?mode=ro', uri=True, timeout=.25)) as db:
         db.execute('PRAGMA query_only=ON')
-        rows = db.execute("SELECT kind,id,CASE WHEN length(CAST(json AS BLOB))<=1048576 THEN json ELSE NULL END FROM records WHERE (kind='primaryInbox' AND id=?) OR (kind='pending' AND id=?)", (CONNIE, DOC)).fetchall()
-    if len(rows) != 2 or any(not r[2] for r in rows):
+        rows = db.execute("SELECT kind,id,CASE WHEN length(CAST(json AS BLOB))<=1048576 THEN json ELSE NULL END FROM records WHERE (kind='primaryInbox' AND id=?) OR (kind='pending' AND id IN (?,?))", (CONNIE, DOC, LINUS)).fetchall()
+    if len(rows) != 3 or any(not r[2] for r in rows):
         raise RuntimeError('Reviewed retained originals unavailable')
     for kind, ident, raw in rows:
         row = json.loads(raw)
@@ -129,8 +131,8 @@ def exact_originals(helper):
             encoded = json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()
             if hashlib.sha256(encoded).hexdigest() != CONNIE_SHA:
                 raise RuntimeError('Reviewed Connie original input/receipt changed')
-        elif hashlib.sha256(raw.encode()).hexdigest() != DOC_SHA:
-            raise RuntimeError('Reviewed Doc notice changed')
+        elif hashlib.sha256(raw.encode()).hexdigest() != {DOC: DOC_SHA, LINUS: LINUS_SHA}.get(ident):
+            raise RuntimeError('Reviewed terminal notice changed')
     return digest(rows)
 
 
@@ -154,7 +156,7 @@ def lease_status(helper, drain, deadline):
     counts = row.get('counts')
     if not isinstance(counts, dict) or set(counts) != COUNT_KEYS or any(type(v) is not int or v < 0 for v in counts.values()):
         raise RuntimeError('Installed RAM/work counter contract is unknown')
-    safe = all(v == ({'acceptedOrUnknown': 1, 'pendingInput': 1}.get(k, 0)) for k, v in counts.items())
+    safe = all(v == ({'acceptedOrUnknown': 1, 'pendingInput': 2}.get(k, 0)) for k, v in counts.items())
     return row, safe, time.monotonic()
 
 
@@ -165,8 +167,8 @@ def snapshot(helper, drain, deadline):
     proof = observation.get('_receiptProof')
     if not busy and (not proof or proof.get('originals') != [] or
                      {r['id'] for r in proof.get('terminalInputs', [])} != {CONNIE} or
-                     {r['id'] for r in proof.get('passiveQuestions', [])} != {DOC}):
-        raise RuntimeError('Supervised proof is not confined to the two exact originals')
+                     {r['id'] for r in proof.get('passiveQuestions', [])} != {DOC, LINUS}):
+        raise RuntimeError('Supervised proof is not confined to the three exact originals')
     lease, safe, sampled = lease_status(helper, drain, deadline)
     identity = process_identity(helper)
     if exact_originals(helper) != original:
