@@ -32,6 +32,7 @@ import {
   ListPlus,
   UsersRound,
   Phone,
+  MessagesSquare,
 } from "lucide-react";
 import type { Bot } from "./single-thread-contract";
 import { BotAvatar as Avatar } from "./bot-avatar";
@@ -74,6 +75,9 @@ import { installExtensionShortcuts } from "./extension-shortcuts";
 import { SavedDrafts } from "./saved-drafts";
 import { ComposerInput } from "./composer-input";
 import { ComposerSettings } from "./composer-settings";
+import { DiscussionsNavigator, RoomConversation, CollaborationInbox } from "./collaboration-rooms";
+import { useExecutionConfiguration, WorkingConfiguration } from "./configuration-evidence";
+import { QueueConfigurationIntent } from "./queue-configuration-intent";
 import { ArtifactGallery, BotAttachmentsEntry, ArtifactNav } from "./artifact-gallery";
 import { PromptQueue } from "./prompt-queue";
 import { TeamsManager, TeamAssignment } from "./teams";
@@ -142,6 +146,7 @@ export function BotsWorkspace() {
   const setDraft = (text: string) => composer?.setText(text);
   const [showCall, setShowCall] = useState(false), [callBotId, setCallBotId] = useState<string | null>(null);
   const [showTeams, setShowTeams] = useState(false), [teamFilter, setTeamFilter] = useState("all"), [teamSort, setTeamSort] = useState("recent");
+  const [navigation,setNavigation] = useState<"bots"|"rooms">("bots"), [roomId,setRoomId]=useState<string|null>(null), [roomMember,setRoomMember]=useState("");
   const snapshot = client.snapshot;
   const teams = snapshot?.teams ?? [];
   const teamsSupported = snapshot?.capabilities?.teams === 1;
@@ -150,6 +155,13 @@ export function BotsWorkspace() {
     bots = snapshot?.bots ?? EMPTY_BOTS,
     bot = bots.find((b) => b.id === selected),
     pending = snapshot?.pending.filter((p) => p.botId === selected && !(lanes && p.runId && p.laneId && p.threadId && !(snapshot?.capabilities?.singleThreadExecution === 1 && bot?.executionMode === "single-thread" && p.threadId === bot.threadId))) ?? [];
+  const roomBotId = roomMember || selected || bots.find(b=>!b.archived)?.id || "";
+  const openRoom=(id:string,member=roomBotId)=>{
+    setRoomId(id);setRoomMember(member);setNavigation('rooms');setProfile(false);
+    const url=new URL(window.location.href);url.searchParams.delete('view');url.searchParams.set('room',id);url.searchParams.set('roomBot',member);window.history.pushState({},'',url);
+  };
+  const closeRoom=()=>{setRoomId(null);const url=new URL(window.location.href);url.searchParams.delete('room');url.searchParams.delete('roomBot');window.history.pushState({},'',url);};
+  const configuration = useExecutionConfiguration(owner, bot, online && navigation === "bots");
   const single = snapshot?.capabilities?.singleThreadExecution === 1 && bot?.executionMode === "single-thread";
   const work = single ? snapshot?.workByBot?.find(value => value.botId === selected) : undefined;
   const queueListsSupported = snapshot?.capabilities?.queueLists === 1;
@@ -263,7 +275,8 @@ export function BotsWorkspace() {
     const unsubscribe = client.subscribe(() => redraw((v) => v + 1));
     client.start();
     const pop = () => {
-      const params = new URLSearchParams(window.location.search), id = params.get("bot"), view = params.get("view");
+      const params = new URLSearchParams(window.location.search), id = params.get("bot"), view = params.get("view"), room = params.get("room"), member = params.get("roomBot");
+      setNavigation(room?"rooms":"bots");setRoomId(room);setRoomMember(member??"");
       setGallery(view === "artifacts" || view === "attachments" && id ? view : null);
       selectedRef.current = id;
       setSelected(id);
@@ -343,9 +356,9 @@ export function BotsWorkspace() {
   }, [selected, online, bot]);
   const select = useCallback((id: string | null) => {
     selectedRef.current = id;
-    setSelected(id); setGallery(null);setTransferError("");
+    setSelected(id); setGallery(null);setTransferError("");setNavigation("bots");
     const url = new URL(window.location.href);
-    url.searchParams.delete("view");
+    url.searchParams.delete("view");url.searchParams.delete("room");url.searchParams.delete("roomBot");
     if (id) url.searchParams.set("bot", id);
     else url.searchParams.delete("bot");
     window.history.pushState({}, "", url);
@@ -497,12 +510,13 @@ export function BotsWorkspace() {
   return (
     <div className="bots-screen" ref={screenRef} data-no-pull-refresh>
       <SiteHeader current="bots" />
-      <main className={`bots-layout ${selected || gallery ? "has-selection" : ""}`}>
+      <main className={`bots-layout ${navigation === "rooms" ? roomId ? "has-selection" : "" : selected || gallery ? "has-selection" : ""}`}>
         <aside className="bots-sidebar">
-          <div className="bots-sidebar-heading">
-            <h1>Bots</h1>
+          <div className="bots-sidebar-heading bots-collaboration-heading">
+            <h1>{navigation === "rooms" ? "Conversations" : "Bots"}</h1>
             <div className="bots-sidebar-tools">
             {snapshot?.capabilities?.operatorCalls === 1 && <button className="bots-icon-button" aria-label="Call Operator" onClick={() => { setCallBotId(null); setShowCall(true); }}><Phone size={16} /></button>}
+            <button className="bots-icon-button" title="Discussions" aria-label="Discussions" aria-pressed={navigation === "rooms"} onClick={() => {setNavigation(v=>v === "bots"?"rooms":"bots");setProfile(false);}}><MessagesSquare size={18}/></button>
             <ArtifactNav active={gallery === "artifacts"} onOpen={() => openGallery("artifacts")} />
             <button className="bots-icon-button" disabled={!teamsSupported} title={teamsSupported ? "Teams" : "Teams will be available after the service update"} aria-label="Teams" onClick={() => setShowTeams(true)}><UsersRound size={19} /></button>
             <button className="bots-icon-button" title="Codex account usage" aria-label="Codex account usage" onClick={() => setShowOverallUsage(true)}><BarChart3 size={19} /></button>
@@ -518,6 +532,7 @@ export function BotsWorkspace() {
             </button>
             </div>
           </div>
+          <Activity mode={navigation === "bots" ? "visible" : "hidden"}>
           <div className="bots-search">
             <Search size={17} aria-hidden="true" />
             <input
@@ -547,6 +562,8 @@ export function BotsWorkspace() {
           </div>
           <BotSidebarList owner={owner} search={search} bots={filtered} snapshot={snapshot} selected={selected} select={select}
             empty={teamFilter!=="all" ? "No bots in this team." : search ? "No matching bots." : archived ? "No archived bots." : "Your bots will appear here."} />
+          </Activity>
+          <Activity mode={navigation === "rooms" ? "visible" : "hidden"}><DiscussionsNavigator key={`${owner}:${roomBotId}`} owner={owner} bots={bots} online={online} botId={roomBotId} onBot={id=>{setRoomMember(id);setRoomId(null);}} selected={roomId} onOpen={room=>openRoom(room.id)}/></Activity>
           <div className="bots-machine">
             <span className={`bots-status-dot ${online ? "online" : ""}`} />
             <span>
@@ -569,6 +586,8 @@ export function BotsWorkspace() {
             </button>
           </div>
         </aside>
+        <Activity mode={navigation === "rooms" ? "visible" : "hidden"}>{roomId ? <RoomConversation key={`${owner}:${roomBotId}:${roomId}`} owner={owner} botId={roomBotId} roomId={roomId} bots={bots} online={online} onBack={closeRoom}/> : <section className="bots-conversation"><div className="bots-empty"><MessagesSquare size={34}/><h2>Conversations</h2><p>Open or create a room with named bots.</p></div></section>}</Activity>
+        <Activity mode={navigation === "bots" ? "visible" : "hidden"}>
         {gallery ? <ArtifactGallery key={`${owner}:${gallery}:${gallery === "attachments" ? bot?.id : "all"}`} owner={owner} online={online} bots={bots} bot={gallery === "attachments" ? bot : undefined} onClose={closeGallery} /> : <section className="bots-conversation">
           <header className="bots-conversation-heading">
             <button
@@ -656,6 +675,8 @@ export function BotsWorkspace() {
             </div>
           ) : (
             <>
+              {snapshot?.capabilities?.executionConfiguration === 1 && <WorkingConfiguration value={configuration.value} activeTurnId={bot.activeTurnId} online={online}/>}
+              {snapshot?.capabilities?.collaborationRooms === 1 && <CollaborationInbox key={`${owner}:${bot.id}`} owner={owner} botId={bot.id} online={online} bots={bots} onOpen={id=>openRoom(id,bot.id)}/>}
               <BotConversation key={scope} owner={owner} bot={bot} online={online} onOpenActivity={openActivity} onOpenCall={openCalls} draft={draft} burstsEnabled={burstSupported && !bot.archived} onReply={snapshot?.capabilities?.messageReplies === 1 && composer?.ready && !checkoutLocked && !sending ? reply => composer.setReply(reply) : undefined} burstSubmitting={composer?.operation?.method === "bursts.submit"}>
 
                 {snapshot?.capabilities?.peerInbox === 1 && <DiscussionStatus status={discussions} bots={bots} botId={bot.id} online={online} onOpen={openDiscussion} attentionOnly />}
@@ -681,6 +702,7 @@ export function BotsWorkspace() {
                       canEdit={Boolean(composer?.ready && !sending)} onEdit={editQueued} refresh={refreshQueues}
                       supported={queueListsSupported} relativeMoves={snapshot?.capabilities?.queueRelativeMoves===1} lists={queueLists.lists} onOpenLists={queueListsSupported ? () => { setDetailsSection("queues"); setProfile(true); } : undefined} />
                     {snapshot && <ComposerSettings key={`settings:${scope}`} bot={bot} snapshot={snapshot} online={online} />}
+                    {composer && bot.activeTurnId && configuration.value && <QueueConfigurationIntent owner={owner} bot={bot} composer={composer} configuration={configuration.value} online={online} refresh={configuration.refresh}/>}
                   {(lanes || single) && <MainStopRecovery owner={owner} botId={bot.id} online={online} />}
                   <ComposerStatus composer={composer} error={composerError} />
                   {transferError&&<p className="bots-error" role="alert">{transferError}</p>}
@@ -825,8 +847,9 @@ export function BotsWorkspace() {
             </>
           )}
         </section>}
+        </Activity>
         {bot && !gallery && <Activity mode={profile && desktopScope !== scope ? "visible" : "hidden"}>
-          <BotDetailsDrawer key={scope} bot={bot} section={detailsSection} onSection={setDetailsSection} onClose={closeProfile} discussionAttention={discussions.requests.filter(r => discussionNeedsAttention(r, bot.id, bots, online)).length}>
+          <BotDetailsDrawer legacyDiscussionsOnly={snapshot?.capabilities?.collaborationRooms === 1} key={scope} bot={bot} section={detailsSection} onSection={setDetailsSection} onClose={closeProfile} discussionAttention={discussions.requests.filter(r => discussionNeedsAttention(r, bot.id, bots, online)).length}>
             {{
               next: <>
                 <h3>Up next</h3><p className="bots-details-lead">Scheduled work and bot discussions.</p>

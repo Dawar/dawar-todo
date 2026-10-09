@@ -21,10 +21,11 @@ const sections = [
 
 /** Presentation stays separate from the single conversation/composer. Hidden
  * sections retain their reading/form state but React pauses their effects. */
-export function BotDetailsDrawer({ bot, section, onSection, onClose, children, discussionAttention = 0 }: {
+export function BotDetailsDrawer({ bot, section, onSection, onClose, children, discussionAttention = 0, legacyDiscussionsOnly = false }: {
   bot: Bot; section: BotDetailsSection; onSection: (section: BotDetailsSection) => void;
-  onClose: () => void; children: Record<BotDetailsSection, ReactNode>; discussionAttention?: number;
+  onClose: () => void; children: Record<BotDetailsSection, ReactNode>; discussionAttention?: number; legacyDiscussionsOnly?: boolean;
 }) {
+  const tabs = sections.filter(tab=>!legacyDiscussionsOnly || tab.id!=="discussions" || section === "discussions");
   const dialog = useRef<HTMLElement>(null), id = useId();
   const [historyScroll, setHistoryScroll] = useState<HTMLDivElement | null>(null);
   useEffect(() => {
@@ -51,13 +52,13 @@ export function BotDetailsDrawer({ bot, section, onSection, onClose, children, d
         <button className="bots-icon-button" aria-label="Close bot details" onClick={onClose}><X size={20} /></button>
       </header>
       <div className="bots-details-nav" role="tablist" aria-label="Bot details sections">
-        {sections.map(({ id: value, label, icon: Icon }) => <button key={value} id={`${id}-${value}`} role="tab" aria-selected={section === value} aria-controls={`${id}-${value}-panel`} tabIndex={section === value ? 0 : -1}
+        {tabs.map(({ id: value, label, icon: Icon }) => <button key={value} id={`${id}-${value}`} role="tab" aria-selected={section === value} aria-controls={`${id}-${value}-panel`} tabIndex={section === value ? 0 : -1}
           onClick={() => onSection(value)} onKeyDown={event => {
             if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
             event.preventDefault();
-            const index = sections.findIndex(item => item.id === section);
-            const next = event.key === "Home" ? 0 : event.key === "End" ? sections.length - 1 : (index + (event.key === "ArrowRight" ? 1 : -1) + sections.length) % sections.length;
-            const target = sections[next].id; onSection(target); document.getElementById(`${id}-${target}`)?.focus();
+            const index = tabs.findIndex(item => item.id === section);
+            const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : (index + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+            const target = tabs[next].id; onSection(target); document.getElementById(`${id}-${target}`)?.focus();
           }}><Icon size={17} aria-hidden="true" /><span>{label}{value === "discussions" && discussionAttention > 0 && <small className="bots-discussion-badge" aria-label={`${discussionAttention} discussions need attention`}>{discussionAttention}</small>}</span></button>)}
       </div>
       {sections.map(({ id: value }) => <Activity key={value} mode={section === value ? "visible" : "hidden"}>

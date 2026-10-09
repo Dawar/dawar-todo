@@ -49,6 +49,8 @@ export class BotTimeline {
     if (changed) { this.state = { ...this.state, revision: "" }; if (this.hydration) this.scheduleRefresh(); }
   }
   private turnAudiences = new Map<string, TurnAudience>();
+  private configurations = new Map<string, import("../../lib/bot-collaboration").TurnConfiguration | null>();
+  configuration = (threadId: string | null | undefined, turnId: string) => threadId ? this.configurations.get(JSON.stringify([threadId,turnId])) ?? null : null;
   private aliases = new Map<string, string>();
   private identityAliases = new Map<string, string>();
   resolveKey = (key: string | null): string | null => {
@@ -135,6 +137,13 @@ export class BotTimeline {
     this.state = { ...this.state, entries: normalized };
   }
   private rememberPage(page: Extract<HistoryResponse, { kind: "page" }>) {
+    for (const value of page.turnConfigurations ?? []) {
+      if (value.threadId !== this.currentThread() || !value.turnId) continue;
+      const key = JSON.stringify([value.threadId,value.turnId]), old = this.configurations.get(key);
+      // Conflicting original evidence is Unknown, never filled from selectors.
+      this.configurations.set(key, this.configurations.has(key) && JSON.stringify(old) !== JSON.stringify(value) ? null : value);
+    }
+    while (this.configurations.size > 384) this.configurations.delete(this.configurations.keys().next().value!);
     for (const value of page.activityTurns ?? []) this.turnAudiences.set(value.turnId, { kind: "activity", runId: value.runId, active: value.active });
     for (const entry of page.entries) if (entry.audience)
       this.turnAudiences.set(entry.turnId, { kind: entry.audience === "finding" ? "activity" : entry.audience, runId: entry.runId, active: entry.turnStatus === "inProgress" });

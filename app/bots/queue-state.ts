@@ -13,6 +13,7 @@ export function canMoveQueued(items: BotQueuedSubmission[], index: number, direc
   return !items.some(stagedPrompt) || stagedPrompt(items[index]) && stagedPrompt(items[other]);
 }
 export function queueStatus(item: BotQueuedSubmission, paused = false) {
+  if (item.configuration?.confirmation === "pending-unsupported") return {label: "Intended settings unsupported", description: item.configuration.reason, attention: true};
   if (item.state === 'dispatching') return { label: 'Confirming delivery', description: 'Waiting for confirmation. This message cannot be changed while it may be starting.', attention: true };
   if (item.state === 'uncertain' || item.waitReason === 'delivery-unconfirmed') return { label: 'Delivery unconfirmed', description: 'This message may have started. It will not be sent again automatically; refresh to check its status.', attention: true };
   if (item.state === 'failed' || item.waitReason === 'rejected') return { label: 'Not sent', description: 'Use Send now to retry, edit this message, or remove it.', attention: true };

@@ -288,7 +288,7 @@ export class BotComposer {
     return JSON.stringify([this.owner, this.botId, this.record.active, draft.textVersion, draft.text, draft.reply,
       draft.files.map(file => [file.id,file.remote?.id,file.remote?.botId,file.name,file.size,file.mimeType]), draft.queueId, draft.queueRevision, draft.queueSource]);
   }
-  async send(queueNext = false, burst = false, listId: string | null = null, expectedDraft?: string, currentScope?: () => boolean) {
+  async send(queueNext = false, burst = false, listId: string | null = null, expectedDraft?: string, currentScope?: () => boolean, configuration?: import("../../lib/bot-collaboration").ExecutionSettings & { settingsRevision: number }) {
     if (!this.ready || !this.canUseOwner || !this.transport.online || this.committing) return;
     this.preparing = "send"; this.notify();
     const slot = this.record.active;
@@ -299,6 +299,7 @@ export class BotComposer {
         if (expectedDraft !== undefined && this.destinationSignature !== expectedDraft || currentScope && !currentScope())
           throw Error("The draft or selected bot changed. Nothing new was submitted; choose its destination again.");
       };
+      if (configuration && (!queueNext || burst || this.destination)) throw Error("Intended settings only apply to an explicit queued message. Your draft is retained.");
       checkDestination();
       await this.flush();
       checkDestination();
@@ -347,7 +348,7 @@ export class BotComposer {
       if (!draft || draft.textVersion !== textVersion || draft.files.map(file => file.id).join("|") !== fileIds) throw Error("The draft changed during attachment transfer. Review it and send again.");
       const op: Submission = {
         id: crypto.randomUUID(), botId, slot, method: this.destination ? "runs.send" : draft.queueId ? "queue.update" : queueNext ? "queue.add" : burst ? "bursts.submit" : "turn.send",
-        params: { ...(queueNext && !draft.queueId && !this.destination && listId ? { listId } : {}), ...(this.destination ? { runId: this.destination.runId } : {}), ...(draft.queueId ? { id: draft.queueId, ...(draft.queueRevision === undefined ? {} : { expectedRevision: draft.queueRevision }) } : {}), ...(draft.reply ? { reply: draft.reply } : {}), text, attachments: draft.files.map((f) => (f.remote!.botId === botId ? f.remote! : f.copies![botId]).id) },
+        params: { ...(configuration ? { configuration } : {}), ...(queueNext && !draft.queueId && !this.destination && listId ? { listId } : {}), ...(this.destination ? { runId: this.destination.runId } : {}), ...(draft.queueId ? { id: draft.queueId, ...(draft.queueRevision === undefined ? {} : { expectedRevision: draft.queueRevision }) } : {}), ...(draft.reply ? { reply: draft.reply } : {}), text, attachments: draft.files.map((f) => (f.remote!.botId === botId ? f.remote! : f.copies![botId]).id) },
         ...(this.destination ? { runDelivery: { state: "prepared" as const, token: crypto.randomUUID() } } : {}),
         textVersion: draft.textVersion, fileIds: draft.files.map((f) => f.id), state: "pending",
       };
@@ -435,6 +436,12 @@ export class BotComposer {
       const result = await this.transport.rpc(op.method, op.botId ?? this.botId, op.params, op.id, { owner: this.owner, managed: true });
       if (op.method === "queue.delete" && (result as { deleted?: boolean } | null)?.deleted !== true)
         throw Error("Queue removal did not confirm deletion.");
+      if (op.params.configuration) {
+        const requested=op.params.configuration as import('../../lib/bot-collaboration').ExecutionSettings & {settingsRevision:number};
+        const returned=(result as {queuedSubmission?:BotQueuedSubmission}|null)?.queuedSubmission?.configuration;
+        if (!returned || returned.settingsRevision!==requested.settingsRevision || returned.requested.model!==requested.model || returned.requested.effort!==requested.effort || returned.requested.mode!==requested.mode || returned.requested.serviceTier!==requested.serviceTier || returned.confirmation!=='pending-unsupported')
+          throw Error('The original queued settings were not confirmed. Keep the saved operation and reconcile the same ID.');
+      }
       this.actionError = "";
       // Even after an owner/selection change, settle the originating record only.
       this.record = changeDraft(this.record, { kind: "settle", id: op.id, outcome: "success" });

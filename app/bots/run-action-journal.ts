@@ -1,10 +1,10 @@
 /** Critical scoped actions. Operation identity is immutable; only its outcome changes. */
-export type RunActionMethod = "goals.set" | "goals.clear" | "runs.interrupt" | "runs.resume" | "requests.respond" | "turn.interrupt" | "runs.decide" | "work.resume" | "peers.cancel" | "peers.control" | "bursts.start" | "bursts.resume" | "bursts.stop" | "bursts.discard" | "bursts.queue";
-export type RunActionIntent = { id: string; method: RunActionMethod; params: Record<string, unknown> };
-type Operation = RunActionIntent & { scope: string; state: "pending" | "accepted" | "rejected"; error?: string };
+export type RunActionMethod = "goals.set" | "goals.clear" | "runs.interrupt" | "runs.resume" | "requests.respond" | "turn.interrupt" | "runs.decide" | "work.resume" | "peers.cancel" | "peers.control" | "bursts.start" | "bursts.resume" | "bursts.stop" | "bursts.discard" | "bursts.queue" | "conversations.create" | "conversations.post" | "conversations.membership" | "conversations.hold" | "collaboration.promote";
+export type RunActionIntent = { id: string; method: RunActionMethod; params: Record<string, unknown>; targetBotId?:string; capture?: {draftVersion:string} };
+type Operation = RunActionIntent & { scope: string; state: "pending" | "accepted" | "rejected"; error?: string; result?: unknown };
 type Scope = { key: string; pending: string[]; revision: number; last?: string };
 export type ActionSelection = { revision: number; current: Operation | null; last: Operation | null; selected?: Operation };
-const methods = new Set(["goals.set", "goals.clear", "runs.interrupt", "runs.resume", "requests.respond", "turn.interrupt", "runs.decide", "work.resume", "peers.cancel", "peers.control", "bursts.start", "bursts.resume", "bursts.stop", "bursts.discard", "bursts.queue"]);
+const methods = new Set(["goals.set", "goals.clear", "runs.interrupt", "runs.resume", "requests.respond", "turn.interrupt", "runs.decide", "work.resume", "peers.cancel", "peers.control", "bursts.start", "bursts.resume", "bursts.stop", "bursts.discard", "bursts.queue", "conversations.create", "conversations.post", "conversations.membership", "conversations.hold", "collaboration.promote"]);
 let connection: Promise<IDBDatabase> | undefined;
 function open() {
   connection ??= new Promise<IDBDatabase>((resolve, reject) => {
@@ -32,7 +32,7 @@ function legacy(key: string): RunActionIntent | null {
   return value;
 }
 const same = (a: RunActionIntent, b: RunActionIntent) => a.method === b.method && JSON.stringify(a.params) === JSON.stringify(b.params);
-type Command = { kind: "read" } | { kind: "admit"; intent: RunActionIntent } | { kind: "exact"; id: string } | { kind: "settle"; id: string; state: Operation["state"]; error?: string };
+type Command = { kind: "read" } | { kind: "admit"; intent: RunActionIntent } | { kind: "exact"; id: string } | { kind: "settle"; id: string; state: Operation["state"]; error?: string; result?: unknown };
 
 /** One strict transaction imports, selects/adopts, and settles exact IDs across tabs. */
 export async function runActionJournal(key: string, command: Command): Promise<ActionSelection> {
@@ -65,7 +65,7 @@ export async function runActionJournal(key: string, command: Command): Promise<A
           read(command.id, operation => {
             if (!operation) { fail(Error("The exact saved action is unavailable. No replacement action was submitted.")); return; }
             if (command.kind === "settle" && operation.state === "pending") {
-              operation = { ...operation, state: command.state, error: command.error };
+              operation = { ...operation, state: command.state, error: command.error, ...(command.result === undefined ? {} : {result:command.result}) };
               operations.put(operation); scope.revision++;
               if (command.state !== "pending") {
                 // Delayed settlement of X cannot delete/select over pending Y.
