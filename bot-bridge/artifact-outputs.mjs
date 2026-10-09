@@ -14,7 +14,7 @@ const privateName = (name) => /(^|[\\/])\.(?:env(?:\.|$)|git(?:[\\/]|$)|ssh(?:[\
 const publicResult = (a) => ({ attachmentId: a.id, name: a.name, markdown: `[${a.name.replace(/[\[\]]/g, '')}](bot-artifact:${a.id})` });
 function provenance(bot, p) {
   const result = { threadId: p?.threadId ?? bot.threadId };
-  for (const key of ['turnId', 'itemId', 'operationId', 'laneId', 'runId']) if (typeof p?.[key] === 'string' && p[key].length <= 200) result[key] = p[key];
+  for (const key of ['turnId', 'itemId', 'operationId', 'laneId', 'runId', 'contextId', 'roomId']) if (typeof p?.[key] === 'string' && p[key].length <= 200) result[key] = p[key];
   return result;
 }
 async function writeAll(file, bytes) {
@@ -126,7 +126,8 @@ export async function registerArtifact(runtime, bot, input, context = {}) {
           provenance: provenance(bot, context) });
       });
       if (runtime.storage) a = await runtime.storage.publish(bot,a);
-      if (context.laneId && runtime.runs?.isolated(context.runId)) runtime.runs.event(context.laneId, 'attachment', runtime.publicAttachment(a));
+      if (context.contextId) runtime.emitEvent('collaboration.attachment', {contextId:context.contextId,roomId:context.roomId,attachment:runtime.publicAttachment(a)},bot.id);
+      else if (context.laneId && runtime.runs?.isolated(context.runId)) runtime.runs.event(context.laneId, 'attachment', runtime.publicAttachment(a));
       else runtime.emitEvent('attachment', runtime.publicAttachment(a), bot.id);
       return publicResult(a);
     } finally { await source?.close(); await destination?.close(); if (temporary) await unlink(temporary).catch(() => {}); }

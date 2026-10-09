@@ -142,19 +142,20 @@ export async function readHistoryView(runtime, bot, params) {
       return { kind: 'events', context, revision, eventCursor, events };
   }
   const page = params.projection === "conversation" ? await conversationViewPage(runtime, bot, params.cursor ?? null) : await historyViewPage(runtime, bot, params.cursor ?? null, params.turnId ?? null);
-  return { kind: 'page', ...page, context, revision, eventCursor };
+  const turnConfigurations = runtime.executionConfig ? [...new Set([...(page.entries ?? []), ...(page.contextEntries ?? [])].map(e=>e.turnId))].map(id=>runtime.executionConfig.turn(bot.id,target.threadId,id)) : [];
+  return { kind: 'page', ...page, turnConfigurations, context, revision, eventCursor };
 }
 
-export async function readHistoryDetail(runtime, bot, params) {
-  const target = runtime.resolveHistoryTarget(bot, params);
+export async function readHistoryDetail(runtime, bot, params, authorizedTarget = null) {
+  const target = authorizedTarget ?? runtime.resolveHistoryTarget(bot, params);
   const context = { laneId: target.laneId, runId: target.runId, threadId: target.threadId };
-  const revisionForDetail = () => target.runId ? runObservation(runtime, bot, target) : detailRevision(runtime, bot);
+  const revisionForDetail = () => target.runId || target.contextId ? runObservation(runtime, bot, target) : detailRevision(runtime, bot);
   if (typeof params.turnId !== 'string' || typeof params.itemId !== 'string' || params.turnId.length > 200 || params.itemId.length > 200)
     throw new Error('Invalid history item.');
   if (target.runId && target.turnId !== params.turnId) throw new Error('The selected item belongs to another run part.');
   const offset = params.offset ?? 0;
   if (!Number.isSafeInteger(offset) || offset < 0) throw new Error('Invalid detail offset.');
-  const key = JSON.stringify([bot.id, target.runId ? target.versionKey : bot.threadId, params.turnId, params.itemId, params.projection ?? "native"]), cache = detailCache(runtime);
+  const key = JSON.stringify([bot.id, target.runId || target.contextId ? target.versionKey : bot.threadId, params.turnId, params.itemId, params.projection ?? "native"]), cache = detailCache(runtime);
   let cached = cache.get(key);
   if (cached && (params.version ? cached.version !== params.version : cached.revision !== revisionForDetail())) cached = undefined;
   if (!cached) {
@@ -179,7 +180,7 @@ export async function readHistoryDetail(runtime, bot, params) {
       // The ordinary chat detail route never transfers private reasoning content.
       if ((target.runId || params.projection === 'conversation') && item.type === 'reasoning') item = { ...item, content: [] };
       if (params.projection === "conversation") item = displayReplyItem(runtime, bot, target.threadId, item);
-      const json = JSON.stringify(item), version = createHash('sha256').update(target.runId ? `${target.versionKey}:${params.turnId}:${params.itemId}:${json}` : json).digest('hex');
+      const json = JSON.stringify(item), version = createHash('sha256').update(target.runId || target.contextId ? `${target.versionKey}:${params.turnId}:${params.itemId}:${json}` : json).digest('hex');
       const selectors = historyAttachmentSelectors([{ turnId: params.turnId, id: item.id, item }]);
       const value = { json, version, selectors, timing, eventCursor, revision, expires: Date.now() + DETAIL_TTL };
       cache.set(key, value);

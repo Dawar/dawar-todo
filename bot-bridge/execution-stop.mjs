@@ -37,6 +37,16 @@ export async function stopExecutions(runtime, bot, operationId, scope, runId = n
       if (current.activeTurnId || activity?.unresolved) targets.push({ kind: "main", threadId: bot.threadId,
         turnId: current.activeTurnId ?? null, operationId: activity?.dispatchOperationId ?? null,
         activityGeneration: activity?.generation ?? null, state: "queued" });
+      for (const context of runtime.store.list('collaborationContext', bot.id)) {
+        // Global bot Stop covers all newly registered room contexts. A room
+        // hold alone only fences its mailbox and never recalls committed work.
+        if (context.threadId || context.provisioning==='dispatching' || context.provisioning==='uncertain') targets.push({kind:'collaboration',contextId:context.id,
+          threadId:context.threadId,turnId:context.activeTurnId ?? null,creationOperationId:context.creationOperationId,state:'queued'});
+        for (const delivery of runtime.collaboration.deliveries(bot.id)) if (delivery.contextId===context.id &&
+          ['dispatching','uncertain','accepted'].includes(delivery.state) && !delivery.terminalStatus)
+          targets.push({kind:'collaboration',contextId:context.id,threadId:context.threadId,turnId:delivery.turnId,
+            deliveryId:delivery.id,state:'queued'});
+      }
     }
     for (const lane of lanes) {
       runtime.store.put("runLane", { ...runtime.store.get("runLane", lane.id), paused: true, pauseRevision: (lane.pauseRevision ?? 0) + 1 });
@@ -72,6 +82,24 @@ export async function reconcileStop(runtime, stop) {
     await runtime.primary.stoppedGoal(stop.botId, stop.id);
   for (const target of targets) {
     if (target.state === "done") continue;
+    if (target.kind === 'collaboration') {
+      const c = runtime.store.get('collaborationContext', target.contextId);
+      const d = target.deliveryId && runtime.store.get('collaborationDelivery',target.deliveryId);
+      if (!c || c.botId !== stop.botId || target.threadId && c.threadId !== target.threadId || target.creationOperationId && c.creationOperationId !== target.creationOperationId) continue;
+      target.threadId ??= c.threadId;
+      if (!target.threadId || !await runtime.collaboration.stopGoal(c,stop.id)) continue;
+      if (d) {
+        if (d.botId !== stop.botId || d.contextId !== c.id) continue;
+        if (d.terminalStatus || d.state==='rejected') { target.state='done'; continue; }
+        target.turnId ??= d.turnId;
+      }
+      if (!target.turnId && !d) {
+        try { const fresh=await runtime.collaboration.current(c,false); if (fresh.status==='idle') {target.state='done';continue;} target.turnId=fresh.activeTurnId; }
+        catch { continue; }
+      }
+      const evidence=target.turnId && runtime.store.get('collaborationTurn',`${c.id}:${target.turnId}`);
+      if (evidence && ['completed','failed','interrupted'].includes(evidence.status)) {target.state='done';continue;}
+    }
     if (!target.turnId && (target.intakeId || target.promptId)) {
       const input = runtime.store.get(target.intakeId ? "primaryInbox" : "promptQueue", target.intakeId ?? target.promptId);
       if (input?.withdrawal?.operationId === stop.id && input.withdrawal.removedAt) { target.state = "done"; continue; }

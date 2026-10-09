@@ -51,6 +51,11 @@ export class BotMemoryMaintenance {
       !this.store.list('run', bot.id).some(row => ['queued', 'starting', 'running', 'uncertain'].includes(row.status)) &&
       !this.store.list('executionStop', bot.id).some(row => row.state !== 'done') &&
       !this.store.list('planExecution', bot.id).some(row => ['preparing', 'dispatching', 'queued', 'running', 'uncertain'].includes(row.state)) &&
+      !this.store.list('collaborationContext',bot.id).some(row=>row.activeTurnId||row.status==='unknown'||['dispatching','uncertain'].includes(row.provisioning)) &&
+      !runtime.collaboration.deliveries(bot.id).length &&
+      !this.store.list('collaborationPending',bot.id).length &&
+      !this.store.list('collaborationResource',bot.id).some(row=>row.state!=='released') &&
+      !this.store.list('collaborationGoal',bot.id).some(row=>row.goal?.status==='active') &&
       !this.store.list('runLane', bot.id).some(row => runtime.runs.unfinished(row)) &&
       !this.store.list('managerTask', bot.id).some(row => !['completed', 'failed', 'cancelled'].includes(row.state)) &&
       this.store.get('nativeGoal', bot.id)?.goal?.status !== 'active' &&

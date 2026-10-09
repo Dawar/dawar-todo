@@ -10,6 +10,9 @@ export class Store {
     this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;
       CREATE TABLE IF NOT EXISTS bots(id TEXT PRIMARY KEY, slug TEXT UNIQUE NOT NULL, thread_id TEXT UNIQUE, json TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS records(kind TEXT NOT NULL, id TEXT NOT NULL, bot_id TEXT, json TEXT NOT NULL, PRIMARY KEY(kind,id));
+      CREATE UNIQUE INDEX IF NOT EXISTS collaboration_native_context ON records(json_extract(json,'$.threadId')) WHERE kind='collaborationContext' AND json_extract(json,'$.threadId') IS NOT NULL;
+      CREATE INDEX IF NOT EXISTS collaboration_room_posts ON records(json_extract(json,'$.roomId'),id) WHERE kind='collaborationPost';
+      CREATE INDEX IF NOT EXISTS collaboration_delivery_context ON records(bot_id,json_extract(json,'$.contextId'),json_extract(json,'$.state')) WHERE kind='collaborationDelivery';
       CREATE INDEX IF NOT EXISTS operator_native_request ON records(bot_id,json_extract(json,'$.nativeOperationId')) WHERE kind='operatorRequest';
       CREATE INDEX IF NOT EXISTS operator_call_records ON records(kind,json_extract(json,'$.callId')) WHERE kind IN ('operatorRequest','operatorSegment','operatorTranscript');
       CREATE INDEX IF NOT EXISTS operator_segment_records ON records(kind,json_extract(json,'$.segmentId')) WHERE kind IN ('operatorRequest','operatorTranscript');
@@ -40,6 +43,14 @@ export class Store {
       CREATE TABLE IF NOT EXISTS events(seq INTEGER PRIMARY KEY AUTOINCREMENT, json TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS events_bot_cursor ON events(json_extract(json,'$.botId'),seq);
       CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, json TEXT NOT NULL);`);
+    // Every context/config mutation advances a scalar cutover fence in the
+    // SAME SQLite transaction. Maintenance never reads room bodies to hash a
+    // transcript, and equal busy counts cannot hide changed original records.
+    for (const operation of ['INSERT','UPDATE','DELETE']) this.db.exec(`
+      CREATE TRIGGER IF NOT EXISTS collaboration_change_${operation.toLowerCase()} AFTER ${operation} ON records
+      WHEN ${operation==='DELETE'?'OLD':'NEW'}.kind LIKE 'collaboration%' OR ${operation==='DELETE'?'OLD':'NEW'}.kind IN ('executionConfig','executionSettings')
+      BEGIN INSERT INTO meta(key,json) VALUES('collaboration-change','1')
+        ON CONFLICT(key) DO UPDATE SET json=CAST(CAST(meta.json AS INTEGER)+1 AS TEXT); END;`);
     // Incrementally observed native cursor locations, not history or execution
     // authority. Exact native identity is verified whenever a hint is used.
     this.db.exec(`CREATE TABLE IF NOT EXISTS native_history_locations(
