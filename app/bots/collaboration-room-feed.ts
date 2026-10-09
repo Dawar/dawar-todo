@@ -68,6 +68,6 @@ export function useRoomFeed(owner:string,botId:string,roomId:string,online:boole
     feed.activate();client.events.add(feed.receive);if(online&&supported)void feed.reconnect();
     return()=>{client.events.delete(feed.receive);feed.dispose();};
   },[feed,online,supported]);
-  useEffect(()=>{for(const[key,value]of feeds)if(value.owner!==owner){value.dispose();feeds.delete(key);}while(feeds.size>6){const key=feeds.keys().next().value!;if(feeds.get(key)===feed)break;feeds.get(key)!.dispose();feeds.delete(key);}},[feed,owner]);
+  useEffect(()=>{for(const[key,value]of feeds)if(value.owner!==owner){value.dispose();feeds.delete(key);}while(feeds.size>6){const victim=[...feeds].find(([,value])=>value!==feed);if(!victim)break;victim[1].dispose();feeds.delete(victim[0]);}},[feed,owner]);
   return feed;
 }
