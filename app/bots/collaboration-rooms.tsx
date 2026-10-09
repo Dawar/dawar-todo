@@ -46,7 +46,7 @@ function CreateRoom({owner,botId,bots,online,onCreated,onClose}:{owner:string;bo
   const action=useRunAction(owner,botId,'rooms:create');
   const submit=async()=>{const r=await action.performResult('conversations.create',{type,members,...(type==='group'?{name:name.trim()}:{})});if(client.owner===owner)onCreated(r as CollaborationRoom);};
   return <form className="bots-room-editor" onSubmit={e=>{e.preventDefault();void submit().catch(ignore);}} onKeyDown={e=>{if(e.key==='Escape')onClose();}}>
-    <h2>Create or reuse a conversation</h2><label>Room type<select value={type} onChange={e=>setType(e.target.value as typeof type)}><option value="pair">Pair</option><option value="group">Named group</option></select></label>
+    <h2>Create or reuse a conversation</h2><label>Room type<select autoFocus value={type} onChange={e=>setType(e.target.value as typeof type)}><option value="pair">Pair</option><option value="group">Named group</option></select></label>
     {type==='group'&&<label>Name<input autoFocus maxLength={120} value={name} onChange={e=>setName(e.target.value)}/></label>}
     <Members bots={bots} value={members} onChange={setMembers} disabled={action.busy||!!action.intent}/>
     <p>Only addressed messages wake a bot. Membership supplies no additional authority.</p>
@@ -56,6 +56,7 @@ function CreateRoom({owner,botId,bots,online,onCreated,onClose}:{owner:string;bo
 }
 export function DiscussionsNavigator({owner,bots,online,botId,onBot,onOpen,selected}:{owner:string;bots:Bot[];online:boolean;botId:string;onBot:(id:string)=>void;onOpen:(room:CollaborationRoom)=>void;selected:string|null}) {
   const [search,setSearch]=useState(''),[create,setCreate]=useState(false),[cursors,setCursors]=useState<(string|null)[]>([null]),[attention,setAttention]=useState<string[]>([]);
+  const createButton=useRef<HTMLButtonElement>(null);
   const read=useCollaborationRead(owner,botId,'conversations.list',{limit:40,...(cursors.at(-1)?{cursor:cursors.at(-1)!}:{})},!!botId&&online&&client.snapshot?.capabilities?.collaborationRooms===1);
   const valid=roomPage<CollaborationRoom>(read.value,r=>r.members.includes(botId)&&r.members.length<=12&&typeof r.name==='string');
   const rooms=valid?read.value!.items:[];
@@ -70,8 +71,8 @@ export function DiscussionsNavigator({owner,bots,online,botId,onBot,onOpen,selec
   },[owner,read.value,selected]);
   return <div className="bots-room-navigation"><label>Conversations involving<select aria-label="Conversation member" value={botId} onChange={e=>onBot(e.target.value)}>{bots.filter(b=>!b.archived).map(b=><option key={b.id} value={b.id}>{b.name}</option>)}</select></label>
     <label className="bots-room-search"><Search size={16}/><input aria-label="Search loaded conversations" placeholder="Search conversations" value={search} onChange={e=>setSearch(e.target.value)}/></label>
-    <button disabled={!botId||!online||client.snapshot?.capabilities?.collaborationRooms!==1} onClick={()=>setCreate(v=>!v)}><Plus size={16}/>New conversation</button>
-    {create&&<CreateRoom key={`${owner}:${botId}`} owner={owner} botId={botId} bots={bots} online={online} onClose={()=>setCreate(false)} onCreated={r=>{setCreate(false);read.refresh();onOpen(r);}}/>}
+    <button ref={createButton} disabled={!botId||!online||client.snapshot?.capabilities?.collaborationRooms!==1} onClick={()=>setCreate(v=>!v)}><Plus size={16}/>New conversation</button>
+    {create&&<CreateRoom key={`${owner}:${botId}`} owner={owner} botId={botId} bots={bots} online={online} onClose={()=>{setCreate(false);createButton.current?.focus();}} onCreated={r=>{setCreate(false);read.refresh();onOpen(r);}}/>}
     {client.snapshot?.capabilities?.collaborationRooms!==1?<p>The connected service does not yet support rooms. Existing bot discussions remain available in bot details.</p>:<>
       {rooms.filter(r=>roomName(r,bots).toLowerCase().includes(search.trim().toLowerCase())).map(room=><button className={`bots-room-row ${selected===room.id?'selected':''}`} key={room.id} onClick={()=>{setAttention(old=>old.filter(id=>id!==room.id));onOpen(room);}}><RoomAvatars members={room.members} bots={bots}/><span>{roomName(room,bots)}{room.held&&<small>Room held</small>}{attention.includes(room.id)&&<small title="Observed new activity in this view; no device-wide unread count is inferred">New activity</small>}</span></button>)}
       {read.loading&&<p role="status">Loading conversations…</p>}{read.error&&<p role="alert">{read.error}</p>}{!read.loading&&valid&&!rooms.length&&<p>No conversations on this page.</p>}
