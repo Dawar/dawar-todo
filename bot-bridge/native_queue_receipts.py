@@ -169,3 +169,25 @@ def completed_queue_receipts(app, bots, rows, native_root=None, accepted=None, q
             'terminalInputs': sorted(terminal_inputs, key=lambda row: row['id']),
             'passiveQuestions': sorted(passive_questions, key=lambda row: row['id']),
             'rolloutStamps': sorted((str(path), stamp) for path, stamp in rollouts)}
+
+
+if __name__ == '__main__':
+    import sys
+    # An internal fixed-source subprocess, not a tool or arbitrary path reader.
+    try:
+        if sys.argv[1:] != ['--maintenance-proof']:
+            raise RuntimeError('Unsupported metadata operation')
+        raw = sys.stdin.buffer.read(16385)
+        if len(raw) > 16384:
+            raise RuntimeError('Metadata input exceeds bound')
+        data = json.loads(raw)
+        if set(data) != {'bots', 'accepted', 'questions'} or not all(isinstance(data[k], list) for k in data):
+            raise RuntimeError('Invalid metadata input')
+        proof = completed_queue_receipts(None, data['bots'], [], accepted=data['accepted'], questions=data['questions'])
+        # Nanosecond stamps must cross JSON losslessly; no BigInt on relay.
+        proof['databaseStamps'] = [[list(map(str, stamp)) if stamp else None for stamp in pair] for pair in proof['databaseStamps']]
+        proof['rolloutStamps'] = [[path, list(map(str, stamp))] for path, stamp in proof['rolloutStamps']]
+        print(json.dumps(proof, separators=(',', ':')))
+    except Exception:
+        print('Bounded retained terminal proof unavailable.', file=sys.stderr)
+        sys.exit(1)

@@ -4,6 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { passiveLegacyManagerRejections } from './legacy-manager-rejections.mjs';
+import { MaintenanceTerminalProof } from './maintenance-terminal-proof.mjs';
 
 const processStart = pid => { try { const s = readFileSync(`/proc/${pid}/stat`, 'utf8'); return s.slice(s.lastIndexOf(')') + 2).split(' ')[19]; } catch { return null; } };
 const processAlive = identity => Boolean(identity?.start && processStart(identity.pid) === identity.start);
@@ -16,9 +17,10 @@ const direct = new Set(['turn.send', 'queue.send', 'bots.create', 'bots.recover'
 
 /** Local owner maintenance only. No bot tool or browser-supplied authority. */
 export class RuntimeMaintenance {
-  constructor(runtime, { clock = Date.now, monotonic = () => performance.now(), source = checkSource, invocation = process.env.INVOCATION_ID ?? null, alive = processAlive } = {}) {
+  constructor(runtime, { clock = Date.now, monotonic = () => performance.now(), source = checkSource, invocation = process.env.INVOCATION_ID ?? null, alive = processAlive, terminalProof = new MaintenanceTerminalProof(runtime.store) } = {}) {
     Object.assign(this, { runtime, store: runtime.store, clock, monotonic, source, invocation });
     this.scope = new AsyncLocalStorage(); this.admissions = 0; this.requests = 0; this.generation = 0;
+    this.terminalProof = terminalProof;
     // A dead process cannot retain an admission fence. Preserve its original
     // receipt; never renew, replay, or infer that a claimed restart succeeded.
     for (const row of this.store.list('runtimeMaintenance')) if (phases.has(row.phase)) {
@@ -41,7 +43,7 @@ export class RuntimeMaintenance {
   }
   end(phase, reason) {
     const row = this.current; if (!row) return;
-    this.current = null; this.proof = null;
+    this.current = null; this.proof = null; this.passiveProof = null;
     try { this.store.put('runtimeMaintenance', { ...row, phase, reason, endedAt: stamp(this.clock()) }); }
     catch (error) { this.runtime.emit?.('fault', error); } // an expired RAM fence cannot trap human input
     this.runtime.emitEvent?.('runtime', { maintenance: this.snapshot() });
@@ -86,7 +88,7 @@ export class RuntimeMaintenance {
   counts() {
     const count = sql => this.store.db.prepare(sql).get().n;
     const bots = this.store.bots();
-    return {
+    const counts = {
       admissions: this.admissions, requests: this.requests, nativeRpc: this.runtime.codex.pending?.size ?? 0,
       localActive: bots.filter(b => b.activeTurnId || b.status === 'running').length,
       auxiliaryActive: count("SELECT count(*) n FROM records WHERE kind IN ('runLane','managerWorker','collaborationContext') AND (json_extract(json,'$.activeTurnId') IS NOT NULL OR json_extract(json,'$.status')='running')"),
@@ -106,6 +108,30 @@ export class RuntimeMaintenance {
       browserRetention: Number(Boolean(this.runtime.desktops?.retentionBusy)),
       serviceWork: Number(this.runtime.serviceWork?.() ?? 0),
     };
+    const p = this.passiveProof;
+    if (p && this.current?.id === p.operationId && this.generation === p.generation &&
+        this.monotonic() - p.at <= 5000 && this.terminalProof.snapshot()?.fingerprint === p.fingerprint && this.terminalProof.fresh(p.native)) {
+      counts.acceptedOrUnknown -= p.native.terminalInputs.length;
+      counts.pendingInput -= p.native.passiveQuestions.length;
+    }
+    return counts;
+  }
+  async qualifyPassive(deadline) {
+    const counts = this.counts(), snapshot = this.terminalProof.snapshot();
+    if (!snapshot || Object.entries(counts).some(([key,n]) => !['acceptedOrUnknown','pendingInput'].includes(key) && n !== 0) ||
+        counts.acceptedOrUnknown !== snapshot.input.accepted.length || counts.pendingInput !== snapshot.input.questions.length) return;
+    const generation = this.generation, operationId = this.current?.id;
+    this.passiveProof = null;
+    this.requests++;
+    try {
+      const remaining = deadline - this.monotonic(); if (remaining < 1) return;
+      const native = await this.terminalProof.read(snapshot.input, remaining);
+      if (!operationId || this.current?.id !== operationId || this.current.phase !== 'draining' || generation !== this.generation ||
+          this.monotonic() > deadline || this.terminalProof.snapshot()?.fingerprint !== snapshot.fingerprint ||
+          !this.terminalProof.matches(snapshot,native) || !this.terminalProof.fresh(native)) return;
+      this.passiveProof = { operationId, generation, fingerprint:snapshot.fingerprint, native, at:this.monotonic() };
+    } catch { /* Unavailable/unknown metadata remains a strict blocker. */ }
+    finally { this.requests--; }
   }
   begin(p) {
     if (!p || Object.keys(p).some(k => !['action','operationId','commit','version','instanceId','invocationId','unitId','waitSeconds'].includes(k)) || !/^[a-zA-Z0-9:_-]{10,180}$/.test(p.operationId) || !/^[a-f0-9]{40}$/.test(p.commit) ||
@@ -133,9 +159,11 @@ export class RuntimeMaintenance {
     return row;
   }
   async observe(row) {
+    const deadline = this.monotonic() + 20_000;
+    await this.qualifyPassive(deadline);
     const counts = this.counts();
     if (Object.values(counts).some(n => n !== 0)) return { safe: false, counts, reason: 'Current work, tools, volatile state or unknown acceptance remains.' };
-    const generation = this.generation, collaborationChange=this.store.meta('collaboration-change'), deadline = this.monotonic() + 20_000;
+    const generation = this.generation, collaborationChange=this.store.meta('collaboration-change');
     const read = (method, params) => {
       const left = deadline - this.monotonic(); if (left <= 0) throw Error('Native maintenance observation exceeded its deadline.');
       return this.runtime.codex.call(method, params, Math.min(left, 5000));
@@ -161,6 +189,7 @@ export class RuntimeMaintenance {
       if (!Array.isArray(page?.data) || !Object.hasOwn(page,'nextCursor') || page.nextCursor !== null && typeof page.nextCursor !== 'string') throw Error('Unknown accepted native queue state.');
       if (page.data.length || page.nextCursor !== null) nativeQueues++;
     }
+    await this.qualifyPassive(deadline);
     const after = this.counts(), safe = this.monotonic() <= deadline && !active && !activeGoals && !nativeQueues && generation === this.generation && collaborationChange===this.store.meta('collaboration-change') && !Object.values(after).some(n => n !== 0);
     if (safe && this.current?.id === row.id && this.current.phase === 'draining') this.proof = { generation, collaborationChange, at: this.clock(), monotonicAt: this.monotonic(), operationId: row.id };
     return { safe, counts: after, native: { loaded: threads.size, active, activeGoals, nativeQueues }, reason: safe ? null : 'Native work/Goal/queue or concurrent activity prevents restart.' };

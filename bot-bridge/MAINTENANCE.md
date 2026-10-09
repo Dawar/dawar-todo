@@ -60,8 +60,36 @@ start, model inference or whole history is involved. Unknown/malformed/cursor
 loops, more than 100 loaded sessions or the 20-second observation budget fail
 closed. An active native Goal and any accepted queue remain restart blockers;
 this code cannot stop their autonomous execution. Bridge-held pending/unknown
-receipts are also blockers, even if a historical index suggests completion.
-Original-ID reconciliation must establish their current status separately.
+receipts are also blockers. A bounded exact-original exception permits only
+the reviewed Connie interrupted intake and Doc completed nonblocking notice
+to remain retained without blocking cutover. Their exact record, bot, thread
+and turn identities are bound in the classifier; new terminal-looking rows
+still block and require their normal original-ID reconciliation.
+This changes maintenance classification only: interrupted work is still
+interrupted, a notice stays unanswered and answerable, and no row is settled,
+deleted, replayed or converted to a successful effect.
+
+The internal fixed-source reader accepts at most eight retained originals and
+16 KiB of body-free identity metadata. It reads the private native index,
+queue, Goal and thread-location databases query-only, with a six-second
+deadline and no native RPC, transcript scan or credential read. An intake
+must bind its exact current bot/thread, original client ID and recorded
+terminal turn. A notice must bind its exact async request/item/turn, explicit
+`isBlocking:false`, native agent-message question and completed turn. All
+indexed turns for those threads must be terminal and their projections must
+cover the current owned rollout bytes. Missing, foreign, malformed, active,
+blocking, ambiguous or incomplete evidence fails closed. The global native
+queue and active/unknown Goal checks remain strict.
+
+The child read is tracked as in-flight work outside admission locks. After it
+returns, the original raw rows, all current bot bindings, lease and native
+notification generation must still match. Database/WAL and rollout inode,
+size and nanosecond modification stamps must remain unchanged. Cached proof
+lasts at most five seconds and is revalidated for every count/Seal/Claim.
+Other pending inputs, uncertainty, collaboration contexts/resources and all
+RAM/tool/work counters still block. This private metadata proof alone never
+proves global idle; the existing native observation and all-thread check are
+still required. No caller can supply a proof override or native file path.
 The existing all-thread strict-idle check is still required. A native event or
 concurrent request invalidates safety before seal/claim. Exact source is checked
 again. At least 45 seconds of the original lease must remain for handoff. Private
@@ -77,12 +105,24 @@ requires inspection instead of a new helper identity.
 
 ## Activation (Dwight only)
 
-The currently running old bridge does **not** have this endpoint. First
-installation therefore still uses the unchanged strict-idle procedure. Do not
-pretend this source's admission fence is installed or kill active work to
-bootstrap it. Independent source/front-end work can proceed while activation
-is pending. Keep the failed5f/be711d unit/empty target and original9a2 upgrade
-identities; do not rerun them as a maintenance-process test.
+For a bridge without this endpoint, first installation uses the existing
+reviewed strict-idle procedure. The `--reconcile-native-queued` bootstrap is
+restricted to that pre-maintenance bridge and cannot be combined with a
+maintenance operation.
+
+An installed older maintenance-v1 bridge may itself lack the retained-terminal
+classifier. In particular, installed `d0113f9` counts an accepted interrupted
+intake and an unanswered nonblocking notice before recording Observe proof;
+its Seal/Claim then reject those same rows. Installing this source does not
+retroactively change that running process. An external proof cannot bypass
+the old Seal/Claim or silently treat a draining lease as sealed: human answers
+remain admitted during draining. There is no supported proof-import action
+in that older endpoint. That first handoff remains a concrete owner-reviewed
+contract blocker until a safe mechanism is established. Do not write or clear
+retained rows, inject events, relaunch the bootstrap, patch the running process,
+or kill active work to evade it. Independent source/front-end work can proceed
+while activation is pending. Keep the failed5f/be711d unit/empty target and
+original9a2 upgrade identities; do not rerun them as a maintenance-process test.
 
 After actual installed capability/identity/health proof, a later compatible
 reviewed update can use ONE named transient unit and stable maintenance identity:
