@@ -110,19 +110,57 @@ reviewed strict-idle procedure. The `--reconcile-native-queued` bootstrap is
 restricted to that pre-maintenance bridge and cannot be combined with a
 maintenance operation.
 
-An installed older maintenance-v1 bridge may itself lack the retained-terminal
-classifier. In particular, installed `d0113f9` counts an accepted interrupted
-intake and an unanswered nonblocking notice before recording Observe proof;
-its Seal/Claim then reject those same rows. Installing this source does not
-retroactively change that running process. An external proof cannot bypass
-the old Seal/Claim or silently treat a draining lease as sealed: human answers
-remain admitted during draining. There is no supported proof-import action
-in that older endpoint. That first handoff remains a concrete owner-reviewed
-contract blocker until a safe mechanism is established. Do not write or clear
-retained rows, inject events, relaunch the bootstrap, patch the running process,
-or kill active work to evade it. Independent source/front-end work can proceed
-while activation is pending. Keep the failed5f/be711d unit/empty target and
-original9a2 upgrade identities; do not rerun them as a maintenance-process test.
+An installed older maintenance-v1 bridge may lack this classifier. Installed
+`d0113f9` counts the retained Connie interrupted intake and Doc nonblocking
+notice before Observe proof, so it cannot reach Seal/Claim. Installing source
+cannot change that process. Its ordinary drain still admits existing async
+question answers. No external proof is an installed seal.
+
+Dawar explicitly approved a **one-time supervised UNSEALED first handoff** in
+native user `msg_01a1207c-7861-7100-938e-92dce1a7d634` (October9 11:46:30.625UTC).
+The helper verifies that fixed original approval and the exact private healthy
+d011 restart receipt, parent/native child identity and binary. This mode is
+restricted to that original invocation. Dwight must confirm the agreed human
+window: do not answer existing bot questions during cutover. **There remains
+an unsealed async-answer last-read-to-restart race.** The helper does not call,
+forge, bypass or claim an installed Seal/Claim. This is not an active-turn
+restart, a general maintenance exemption, or a new bot/owner RPC.
+
+Dwight alone can run the reviewed target after integrating the exact source:
+
+```sh
+python3 -B bot-bridge/restart-when-idle.py --commit FULL_REVIEWED_SHA --version VERSION --maintenance-operation ORIGINAL_OPERATION_ID --unit-id ORIGINAL_UNIT.service --wait-seconds 900 --supervised-d011-once
+```
+
+This retains the installed bounded admission drain, all local/native contexts,
+Goals/queues, RAM/tool/request/lock/history, call/desktop/secure and unknown
+blockers. Only the two fixed originals and the independently reviewed fixed
+legacy pre-effect refusals can qualify. Their fresh query-only native evidence
+is mandatory. The stale Connie raw hash is not reused: comparison with the
+private d011 pre-update backup found only `reconcileAfter` changed, which the
+original PrimaryExecution.recover writes before its metadata read. Its exact
+input/receipt invariant is bound to that reviewed original; **all current bytes,
+including reconcileAfter, are fenced across every cutover read**. Changed
+input/receipt, new/foreign/unknown rows or stale projection still block. Neither
+record is rewritten, answered, deleted, replayed or reported successful.
+
+Private backup, repeated native/store/RAM/process/source checks, <=900-second
+whole-helper deadline, original lease budget and an exclusive fsynced restart
+receipt precede exactly one restart. An exclusive invocation-wide
+`supervised-d011-INVOCATION.json` also prevents a different commit/operation
+from evading an earlier uncertain attempt; it is never deleted or renewed. No old receipt or backup is overwritten;
+post-backup disagreement aborts rather than refreshing proof to force progress.
+A final check after receipt fsync blocks new activity before restart. The receipt
+explicitly records UNSEALED and the remaining answer race. Before any claim,
+failure cancels only this helper's original drain when possible; lost begin ACK
+uses the same-ID status and original expiry. A retained claim or restart/health
+uncertainty requires inspection, never another helper/restart. Source evidence
+is not live installation or genuine concurrency acceptance. The default
+Seal/Claim path and pre-maintenance bootstrap remain unchanged.
+
+Do not clear rows, inject events, patch the running bridge, kill active work or
+use this option for a different invocation. Keep failed5f/be711d and original9a2
+upgrade identities untouched. Independent approved work remains independent.
 
 After actual installed capability/identity/health proof, a later compatible
 reviewed update can use ONE named transient unit and stable maintenance identity:

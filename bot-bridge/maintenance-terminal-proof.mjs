@@ -6,15 +6,18 @@ import { join, relative, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const hash = value => createHash('sha256').update(value).digest('hex');
+const canonical = value => JSON.stringify(value, (_, v) => v && !Array.isArray(v) && typeof v === 'object' ? Object.fromEntries(Object.keys(v).sort().map(k => [k, v[k]])) : v);
 const MAX = 8;
 const reader = fileURLToPath(new URL('./native_queue_receipts.py', import.meta.url));
 // Reviewed retained originals only. A new terminal-looking row still blocks;
 // this is not a general exemption for accepted input or unanswered questions.
 const reviewedOriginals = [
   { kind:'primaryInbox', id:'peer:432942828b0fda3ba0dc17b009ea1bc7f0ecb5bde9defb74b86b34ae39b98eb2',
-    botId:'bbb1ead9-1f6d-4256-a7ea-5d90c866be0c', threadId:'01a0d925-33f3-7f00-ae17-70d88902aaa9', turnId:'01a10dfc-0097-7452-8d7e-eabe373308d6' },
+    botId:'bbb1ead9-1f6d-4256-a7ea-5d90c866be0c', threadId:'01a0d925-33f3-7f00-ae17-70d88902aaa9', turnId:'01a10dfc-0097-7452-8d7e-eabe373308d6',
+    stableRecordSha256:'0bdd911fbaf08a23aa3196d10d8a99f1518b40441ea4ab28fe83c9c3157368fa' },
   { kind:'pending', id:'async:call_lyPF3QB2taTul9nX7DijB2U5',
-    botId:'3f261c5b-9f08-4ccb-8aa1-948d42a405a7', threadId:'01a0e66e-939b-7ca1-839e-50147278592c', turnId:'01a10b13-bc93-7e80-8a40-569e4ce71224' },
+    botId:'3f261c5b-9f08-4ccb-8aa1-948d42a405a7', threadId:'01a0e66e-939b-7ca1-839e-50147278592c', turnId:'01a10b13-bc93-7e80-8a40-569e4ce71224',
+    rawRecordSha256:'a8f38bb9625ac6aac98c0f0b665c6bf6dd1c7463550bb2cc8bf3b5ff053d14c7' },
 ];
 
 // Fixed private metadata reader, no caller path, RPC, transcript or credential.
@@ -53,6 +56,11 @@ export class MaintenanceTerminalProof {
         const original = this.originals.find(x => x.kind === kind && x.id === r.id);
         if (!original || original.botId !== row.botId || original.threadId !== (row.threadId ?? row.request?.params?.threadId) ||
             original.turnId !== (row.turnId ?? row.request?.params?.turnId)) return null;
+        // Only original recovery scheduling varies before capture. Full current
+        // bytes (including that time) still fence every later await/Seal/Claim.
+        const stable = { ...row }; delete stable.reconcileAfter;
+        if (original.rawRecordSha256 && hash(r.json) !== original.rawRecordSha256 ||
+            original.stableRecordSha256 && hash(canonical(stable)) !== original.stableRecordSha256) return null;
         records.push({ kind, id: r.id, rawHash: hash(r.json), row });
       }
     }
