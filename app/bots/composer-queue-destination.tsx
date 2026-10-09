@@ -1,9 +1,11 @@
 "use client";
 import { useLayoutEffect, useRef, useState } from "react";
 import type { BotQueueList, BotQueuedSubmission } from "../../lib/bots-types";
+import type { BotAdmissionWork } from "../../lib/bot-work-view";
 import type { BotComposer } from "./composer-controller";
 import { botsClient as client } from "./client";
 import { QueueDestinationPicker } from "./queue-lists";
+import { queueDestinationWork } from "./queue-destination-work";
 
 /** Fresh reads are observational. Only an explicit destination commits a send. */
 export function useComposerQueueDestination({owner, botId, threadId, composer, online, supported, canSend, burst, refresh}: {
@@ -40,6 +42,11 @@ export function useComposerQueueDestination({owner, botId, threadId, composer, o
       if (!current(capture)) throw Error("The draft or conversation changed. Your message is retained; choose again.");
       if (!Array.isArray(queue) || queue.some(item => !item.id || (item.listId ?? null) !== null)) throw Error("The active queue could not be verified. Nothing was submitted; try Queue again.");
       if (queue.length) { await submit(capture, true, null); return; }
+      const work = await client.rpc<BotAdmissionWork>("work.read", botId, {}, undefined, {owner});
+      if (!current(capture)) throw Error("The draft or conversation changed. Your message is retained; choose again.");
+      const activity = queueDestinationWork(work, client.snapshot?.bots.find(bot => bot.id === botId));
+      if (activity === "working") { await submit(capture, true, null); return; }
+      if (activity !== "idle") throw Error("This bot's activity needs confirmation. Your draft is retained; try Queue again.");
       const lists = await client.rpc<BotQueueList[]>("queueLists.list", botId, {}, undefined, {owner});
       if (!current(capture)) throw Error("The draft or conversation changed. Your message is retained; choose again.");
       if (!Array.isArray(lists) || lists.some(list => list.botId !== botId || !list.id)) throw Error("Queue lists could not be verified. Nothing was submitted; try Queue again.");
@@ -56,7 +63,7 @@ export function useComposerQueueDestination({owner, botId, threadId, composer, o
   }
   const visible = choice?.owner === owner && choice.botId === botId && choice.threadId === threadId;
   return {queue, busy: loading || Boolean(visible), checking:loading && !visible, error, dialog: visible && choice ? <QueueDestinationPicker
-    lists={choice.lists} showDefault={false} returnFocus={choice.opener} disabled={loading || !online || !canSend || composer?.destinationSignature !== choice.signature}
+    lists={choice.lists} returnFocus={choice.opener} disabled={loading || !online || !canSend || composer?.destinationSignature !== choice.signature}
     description="Queued next starts automatically when this bot is free. A manual list holds your message until that list is transferred."
     error={error || (composer?.destinationSignature !== choice.signature ? "The draft changed. Cancel and choose its destination again." : "")}
     onChoose={id => void choose(true, id)} onSubmitNow={() => void choose(false, null)} onClose={() => { setChoice(null); setError(""); }} /> : null};

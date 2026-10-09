@@ -3,11 +3,13 @@ import { useEffect, useRef, useState } from 'react';
 import { ListPlus } from 'lucide-react';
 import type { BotQueueList, BotQueuedSubmission } from '../../lib/bots-types';
 import type { BurstQueueParams } from '../../lib/burst-queue';
+import type { BotAdmissionWork } from '../../lib/bot-work-view';
 import type { BurstConversation } from './burst-composer';
 import type { BurstState } from './single-thread-contract';
 import { botsClient as client } from './client';
 import { QueueDestinationPicker } from './queue-lists';
 import { captureHeldBurst } from './burst-queue-selection';
+import { queueDestinationWork } from './queue-destination-work';
 
 export function BurstQueueControl({burst, online, disabled}: {burst:BurstConversation; online:boolean; disabled:boolean}) {
   const {owner,botId,action,queueAction,refreshDelivery,setQueuePreparing} = burst;
@@ -39,6 +41,11 @@ export function BurstQueueControl({burst, online, disabled}: {burst:BurstConvers
       if (!current(threadId)) throw Error('The account or conversation changed. The original messages remain paused.');
       if (!Array.isArray(queue) || queue.some(item => !item.id || (item.listId ?? null) !== null)) throw Error('The active queue could not be verified. Messages stay paused; try Queue again.');
       if (queue.length) { await place(source,null); return; }
+      const work = await client.rpc<BotAdmissionWork>('work.read',botId,{},undefined,{owner});
+      if (!current(threadId)) throw Error('The account or conversation changed. The original messages remain paused.');
+      const activity = queueDestinationWork(work,client.snapshot?.bots.find(bot => bot.id === botId));
+      if (activity === 'working') { await place(source,null); return; }
+      if (activity !== 'idle') throw Error("This bot's activity needs confirmation. Messages stay paused; try Queue again.");
       const lists = await client.rpc<BotQueueList[]>('queueLists.list',botId,{},undefined,{owner});
       if (!current(threadId)) throw Error('The account or conversation changed. The original messages remain paused.');
       if (!Array.isArray(lists) || lists.some(list => list.botId !== botId || !list.id)) throw Error('Queue lists could not be verified. Messages stay paused; try Queue again.');
@@ -62,8 +69,8 @@ export function BurstQueueControl({burst, online, disabled}: {burst:BurstConvers
   return <>
     <button type="button" aria-label="Queue waiting burst messages" disabled={disabled || working || !!choice || !queueAction.ready || !!queueAction.intent}
       onClick={() => void open()}><ListPlus size={16}/>Queue</button>
-    {choice && <QueueDestinationPicker lists={choice.lists} showDefault={false} returnFocus={choice.opener} disabled={disabled || working || !!queueAction.intent || !online}
-      description="Messages are paused on the server. A manual list holds them until it is transferred; Cancel leaves the burst paused."
+    {choice && <QueueDestinationPicker lists={choice.lists} returnFocus={choice.opener} disabled={disabled || working || !!queueAction.intent || !online}
+      description="Messages are paused on the server. Queued next starts when this bot is free; a manual list holds them until it is transferred. Cancel leaves the burst paused."
       error={error || queueAction.error} onChoose={id => void choose(id)} onClose={() => {setChoice(null);setQueuePreparing(false);setError('');}} />}
     {(error || queueAction.error) && !choice && <div className="bots-burst-recovery" role="alert">{queueAction.error || error}
       {queueAction.intent && <button disabled={!online || queueAction.busy} onClick={() => void queueAction.retry().then(refreshDelivery).catch(()=>{})}>Check queue placement</button>}</div>}
