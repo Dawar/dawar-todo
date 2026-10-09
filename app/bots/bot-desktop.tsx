@@ -20,6 +20,7 @@ import type { BotDesktopState, BotBrowserRetention } from "../../lib/bots-operat
 import type RFB from "@novnc/novnc";
 import { botsClient as client } from "./client";
 import { DesktopChannel } from "./desktop-channel";
+import { DesktopControl } from "./desktop-control";
 import { DesktopTrackpad, desktopTouchMode, saveDesktopTouchMode, type DesktopTouchMode, type DesktopPointer } from "./desktop-trackpad";
 import { DesktopKeyboard } from "./desktop-keyboard";
 import { DesktopViewport, desktopKeyboardOpen, releaseDesktopInput, type DesktopView } from "./desktop-viewport";
@@ -196,7 +197,8 @@ export function BotDesktopDialog({
     viewport = useRef<DesktopViewport | null>(null),
     pointer = useRef<DesktopPointer | null>(null),
     pointerScope = useRef(""),
-    socket = useRef<WebSocket | null>(null);
+    socket = useRef<WebSocket | null>(null),
+    controlReply = useRef<DesktopControl | null>(null);
   const [view, setView] = useState<DesktopView>({ zoom: 1, panning: false });
   const [keyboardOpen, setKeyboardOpen] = useState(false);
   const keyboardOpenRef = useRef(false);
@@ -208,7 +210,7 @@ export function BotDesktopDialog({
   }, [touchMode]);
   const [state, setState] = useState("Connecting…"),
     [error, setError] = useState(""),
-    [exclusive, setExclusive] = useState(false),
+    [exclusive, setExclusive] = useState<boolean | null>(null),
     [changing, setChanging] = useState(false),
     [retry, setRetry] = useState(0),
     [showText, setShowText] = useState(false);
@@ -289,10 +291,13 @@ export function BotDesktopDialog({
   }, []);
   useEffect(() => {
     let cancelled = false,
+      failed = false,
       heartbeat: ReturnType<typeof setInterval> | undefined,
       renewal: ReturnType<typeof setInterval> | undefined,
       timeout: ReturnType<typeof setTimeout> | undefined,
-      ws: WebSocket | undefined;
+      parentId: string | null | undefined,
+      ws: WebSocket | undefined,
+      control: DesktopControl | undefined;
     const scope = `${owner}:${bot.id}`;
     if (pointerScope.current !== scope) {
       pointer.current = null;
@@ -300,8 +305,15 @@ export function BotDesktopDialog({
     }
     const controller = new AbortController();
     const fail = (message: string) => {
+      if (cancelled || failed) return;
+      failed = true;
+      control?.end();
+      clearTimeout(timeout);
+      clearInterval(heartbeat);
+      clearInterval(renewal);
       trackpad.current?.cancel();
       releaseDesktopInput(rfb.current);
+      if (rfb.current) rfb.current.viewOnly = true;
       if (!cancelled) {
         setError(message);
         setState("Disconnected");
@@ -312,10 +324,10 @@ export function BotDesktopDialog({
     void (async () => {
       setError("");
       setState("Starting desktop…");
-      setExclusive(false);
+      setExclusive(null);
       setChanging(false);
       try {
-        const parentId = client.relayClientId;
+        parentId = client.relayClientId;
         if (!parentId || client.owner !== owner)
           throw new Error("Reconnect DawarTodo before opening the desktop.");
         const access = await client.rpc<{ token: string }>(
@@ -353,6 +365,22 @@ export function BotDesktopDialog({
         url.searchParams.set("machine", session.machineId);
         ws = new WebSocket(url);
         socket.current = ws;
+        const current = () => !cancelled && !failed && socket.current === ws &&
+          client.owner === owner && client.relayClientId === parentId && client.online;
+        control = new DesktopControl(
+          exclusive => {
+            if (!current() || ws?.readyState !== WebSocket.OPEN)
+              throw new Error("Desktop stream changed.");
+            ws.send(JSON.stringify({ type: "desktop", event: "control", exclusive }));
+          },
+          value => {
+            if (cancelled || socket.current !== ws) return;
+            setExclusive(value.exclusive);
+            setChanging(value.changing);
+          },
+          fail,
+        );
+        controlReply.current = control;
         const channel = new DesktopChannel(ws);
         timeout = setTimeout(
           () => fail("The desktop did not connect. Reconnect to try again."),
@@ -369,6 +397,7 @@ export function BotDesktopDialog({
           ),
         );
         ws.addEventListener("message", (event) => {
+          if (!current()) return;
           if (typeof event.data !== "string") return;
           let message;
           try {
@@ -381,9 +410,7 @@ export function BotDesktopDialog({
             return;
           }
           if (message.event === "control") {
-            setExclusive(message.exclusive === true);
-            setChanging(false);
-            setError(message.error || "");
+            control?.reply(message);
             return;
           }
           if (message.event !== "ready" || rfb.current || !screen.current)
@@ -399,7 +426,7 @@ export function BotDesktopDialog({
           remote.qualityLevel = 6;
           remote.compressionLevel = 2;
           remote.addEventListener("connect", () => {
-            if (!cancelled) {
+            if (current()) {
               try {
                 trackpad.current = new DesktopTrackpad(remote, screen.current!, pointer.current,
                   (value) => { pointer.current = value; }, () => viewport.current);
@@ -411,6 +438,7 @@ export function BotDesktopDialog({
                 return;
               }
               setState("Connected");
+              control?.connected();
               setError("");
               clearTimeout(timeout);
               remote.focusOnClick = !showTextRef.current;
@@ -418,13 +446,7 @@ export function BotDesktopDialog({
             }
           });
           remote.addEventListener("disconnect", () => {
-            trackpad.current?.cancel();
-            releaseDesktopInput(remote);
-            if (!cancelled) {
-              setState("Disconnected");
-              setExclusive(false);
-              setChanging(false);
-            }
+            fail("Desktop disconnected. Reconnect to continue; apps stay running.");
           });
           remote.addEventListener("securityfailure", () =>
             fail("Desktop authentication failed."),
@@ -450,7 +472,7 @@ export function BotDesktopDialog({
                     client.owner !== owner
                   )
                     throw new Error(fresh.error || "Desktop session expired.");
-                  if (ws?.readyState === WebSocket.OPEN)
+                  if (current() && ws?.readyState === WebSocket.OPEN)
                     ws.send(
                       JSON.stringify({
                         type: "auth",
@@ -459,7 +481,7 @@ export function BotDesktopDialog({
                       }),
                     );
                 } catch (e) {
-                  if (!cancelled)
+                  if (current())
                     fail(
                       e instanceof Error
                         ? e.message
@@ -471,20 +493,12 @@ export function BotDesktopDialog({
             10 * 60 * 1000,
           );
           heartbeat = setInterval(() => {
-            if (ws?.readyState === WebSocket.OPEN)
+            if (current() && ws?.readyState === WebSocket.OPEN)
               ws.send(JSON.stringify({ type: "desktop", event: "ping" }));
           }, 10000);
         });
         ws.addEventListener("close", () => {
-          trackpad.current?.cancel();
-          releaseDesktopInput(rfb.current);
-          if (!cancelled) {
-            setState("Disconnected");
-            setExclusive(false);
-            setChanging(false);
-            clearInterval(heartbeat);
-            clearInterval(renewal);
-          }
+          fail("Desktop connection closed. Reconnect to continue; apps stay running.");
         });
         ws.addEventListener("error", () => fail("Desktop connection failed."));
       } catch (e) {
@@ -494,11 +508,13 @@ export function BotDesktopDialog({
     })();
     // Owner sign-out, bot deletion and parent reconnect revoke this separate stream.
     const revocation = setInterval(() => {
-      if (client.owner !== owner || !client.online)
+      if (client.owner !== owner || !client.online || (parentId && client.relayClientId !== parentId))
         fail("DawarTodo disconnected. Reconnect to continue.");
     }, 1000);
     return () => {
       cancelled = true;
+      control?.end();
+      if (controlReply.current === control) controlReply.current = null;
       controller.abort();
       clearInterval(heartbeat);
       clearInterval(renewal);
@@ -515,15 +531,8 @@ export function BotDesktopDialog({
     };
   }, [bot.id, owner, retry]);
   const control = () => {
-    if (socket.current?.readyState !== WebSocket.OPEN) return;
-    setChanging(true);
-    socket.current.send(
-      JSON.stringify({
-        type: "desktop",
-        event: "control",
-        exclusive: !exclusive,
-      }),
-    );
+    if (exclusive === null) setRetry(v => v + 1);
+    else controlReply.current?.request();
   };
   const stop = async () => {
     if (!window.confirm("Stop this desktop? Its open apps will close.")) return;
@@ -548,7 +557,7 @@ export function BotDesktopDialog({
       <header>
         <div className="bots-desktop-heading">
           <Monitor size={20} aria-hidden="true" />
-          <div><strong>{bot.name}</strong><span role="status" data-connected={state === "Connected"}>{state}</span></div>
+          <div><strong>{bot.name}</strong><span role="status" data-connected={state === "Connected"}>{state}{state === "Disconnected" && exclusive === null ? " · Control unknown" : ""}</span></div>
         </div>
         <button onClick={onClose} aria-label="Close desktop · apps stay running" title="Close viewer · apps stay running"><X size={22} /></button>
       </header>
@@ -567,10 +576,10 @@ export function BotDesktopDialog({
             onClick={() => { releaseDesktopInput(rfb.current); const next = touchMode === "trackpad" ? "direct" : "trackpad"; saveDesktopTouchMode(next); setTouchMode(next); }}>
             {touchMode === "trackpad" ? "Trackpad" : "Direct touch"}
           </button>
-        <button className="bots-desktop-lease" disabled={state !== "Connected" || changing} onClick={control}
-          aria-pressed={exclusive} aria-label={exclusive ? "Release exclusive control" : "Take exclusive control"}
-          title={exclusive ? "Let the agent use mouse and keyboard too" : "Pause agent mouse and keyboard input"}>
-          {exclusive ? <LockKeyhole size={16} /> : <UsersRound size={16} />}<span>{changing ? "Changing control…" : exclusive ? "Exclusive" : "Shared"}</span>
+        <button className="bots-desktop-lease" disabled={changing || (state !== "Connected" && state !== "Disconnected")} onClick={control}
+          aria-pressed={exclusive ?? undefined} aria-label={exclusive === null ? "Reconnect desktop control" : exclusive ? "Release exclusive control" : "Take exclusive control"}
+          title={exclusive === null ? "Reconnect without replaying input; apps stay running" : exclusive ? "Let the agent use mouse and keyboard too" : "Pause agent mouse and keyboard input"}>
+          {exclusive === null ? <RefreshCw size={16} /> : exclusive ? <LockKeyhole size={16} /> : <UsersRound size={16} />}<span>{changing ? "Changing control…" : exclusive === null ? "Reconnect control" : exclusive ? "Exclusive" : "Shared"}</span>
         </button>
         </div>
         <div className="bots-desktop-control-group bots-desktop-scale" aria-label="Screen zoom">
@@ -586,7 +595,7 @@ export function BotDesktopDialog({
             <button onClick={() => void stop()} disabled={Boolean(bot.activeTurnId)}><Square size={17} />Stop desktop</button>
             <p>Closing the viewer leaves apps running. Stop closes them.</p>
             <p>{touchMode === "trackpad" ? "Swipe to move · Tap to click · Hold to drag · Two fingers to scroll or right-click." : "Tap to click · Drag to move remote items."} Pinch to zoom; use Pan to move an enlarged screen.</p>
-            <p>{exclusive ? "Agent input is paused while you have exclusive control." : "You and the agent can use this desktop together."}</p>
+            <p>{exclusive === null ? "Control mode is unknown. Reconnect; an unconfirmed exclusive lease may remain until its release or expiry." : exclusive ? "Agent input is paused while you have exclusive control." : "You and the agent can use this desktop together."}</p>
           </div>
         </details>
       </div>
