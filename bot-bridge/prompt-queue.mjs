@@ -18,10 +18,12 @@ export function enqueuePrompt(runtime, bot, params, id, input, taskSource, alloc
   return runtime.store.transaction(() => {
     const existing = runtime.store.get("promptQueue", id);
     if (existing && existing.botId !== bot.id) throw new Error("Queue identity belongs to another bot.");
+    const configuration = runtime.executionConfig?.queueIntent(bot, params.configuration);
     const item = existing ?? runtime.store.put("promptQueue", {
       id, botId: bot.id, threadId: bot.threadId, listId: params.listId ?? null, clientUserMessageId: id, input,
       attachmentIds: [...(params.attachments ?? [])],
       state: "queued", revision: 1, position: allocatedPosition ?? Math.max(0, ...stagedQueue(runtime.store, bot.id, params.listId ?? null).map(entry => entry.position)) + 1,
+      ...(configuration ? { configuration, error: configuration.reason } : {}),
       source: taskSource ?? { kind: "conversation", operationId: id }, createdAt: now(),
     });
     rememberReply(runtime, bot, id, params.text, params.reply);
@@ -44,9 +46,10 @@ export function mutatePrompt(runtime, bot, item, method, params, operationId, in
       runtime.emitEvent("queue", {}, bot.id);
       return finishLocalOperation(runtime.store, operationId, { deleted: true });
     }
-    const next = runtime.store.put("promptQueue", { ...item, input, state: "queued", revision: item.revision + 1,
+    const configuration = Object.hasOwn(params, "configuration") ? runtime.executionConfig?.queueIntent(bot, params.configuration) : item.configuration;
+    const next = runtime.store.put("promptQueue", { ...item, input, configuration, state: "queued", revision: item.revision + 1,
       attachmentIds: [...(params.attachments ?? [])], clientUserMessageId: item.id,
-      error: null, operationId: null, updatedAt: now() });
+      error: configuration?.reason ?? null, operationId: null, updatedAt: now() });
     rememberReply(runtime, bot, item.id, params.text, params.reply);
     runtime.store.put("queuedAttachments", { id: item.id, botId: bot.id, attachmentIds: params.attachments ?? [] });
     runtime.emitEvent("queue", {}, bot.id);
@@ -58,7 +61,7 @@ export async function dispatchPrompt(runtime, bot, item) {
   return runtime.maintenance ? runtime.maintenance.admit(() => dispatchAdmitted(runtime, bot, item)) : dispatchAdmitted(runtime, bot, item);
 }
 async function dispatchAdmitted(runtime, bot, item) {
-  if (item.state !== "queued" || item.listId) return;
+  if (item.state !== "queued" || item.listId || item.configuration?.confirmation === "pending-unsupported") return;
   const operationId = `queue-start:${createHash("sha256").update(`${bot.id}:${item.id}:${item.revision}`).digest("hex")}`;
   const prior = runtime.store.operation(operationId);
   if (prior) {

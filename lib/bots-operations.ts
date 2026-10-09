@@ -1,3 +1,4 @@
+import type { CollaborationRoom, CollaborationPost, CollaborationContext, CollaborationDelivery, CollaborationResult, CollaborationPage, CollaborationPostParams, CollaborationResource, ExecutionConfiguration } from './bot-collaboration';
 import type { BotReplyReference } from "./bot-replies";
 import type { OperatorSegment } from './operator-types';
 /** Public bridge contract. Native JSON-RPC method names never come from a browser. */
@@ -26,6 +27,26 @@ import type { HistoryResponse, HistoryDetail } from "./bot-history-view";
 export type BotBrowserRetention = { mode: "preserve" | "idle60" | "keep-task"; protected: boolean; releasedAt: number | null; closeAfterMinutes: number; revision: number; lastResult: string | null; afterTaskMode: "preserve" | "idle60" | null };
 export type BotDesktopState = { state: "not-created" | "running" | "stopped"; display?: string; rdpPort?: number; rdpBind?: string; shared: boolean; browser?: BotBrowserRetention; image?: string; width?: number; height?: number; capturedAt?: string };
 export type BotOperations = {
+  "conversations.list": {params:{cursor?:string|null;limit?:number};result:CollaborationPage<CollaborationRoom>};
+  "conversations.read": {params:{roomId:string;cursor?:string|null;limit?:number};result:CollaborationPage<CollaborationPost>&{room:CollaborationRoom;deliveries:CollaborationDelivery[]}};
+  "conversations.create": {params:{type:'pair'|'group';name?:string;members:string[]};result:CollaborationRoom};
+  "conversations.membership": {params:{roomId:string;expectedRevision:number;members:string[]};result:CollaborationRoom};
+  "conversations.hold": {params:{roomId:string;expectedRevision:number;held:boolean};result:CollaborationRoom};
+  "conversations.post": {params:CollaborationPostParams;result:{post:CollaborationPost;deliveries:CollaborationDelivery[]}};
+  "conversations.history": {params:{contextId:string;cursor?:string|null;turnId?:string};result:{context:CollaborationContext;entries:import("./bot-history-view").HistoryEntry[];contextEntries:import("./bot-history-view").HistoryEntry[];turnConfigurations:import('./bot-collaboration').TurnConfiguration[];olderCursor:string|null;complete:boolean;attachments:BotAttachment[]}};
+  "conversations.requests": {params:{contextId:string;cursor?:string|null;limit?:number};result:CollaborationPage<{id:string;key:string;botId:string;roomId:string;contextId:string;threadId:string;turnId:string;request:import("./bots-types").BotRequest["request"];unavailable?:boolean}>};
+  "conversations.detail": {params:{contextId:string;turnId:string;itemId:string;offset?:number;version?:string;knownVersion?:string};result:Omit<HistoryDetail,'context'>&{context:CollaborationContext}};
+  "conversations.log": {params:{contextId:string;turnId:string;cursor?:string|null};result:{context:CollaborationContext;entries:import('./bot-history-view').HistoryEntry[];olderCursor:string|null;attachments:BotAttachment[]}};
+  "conversations.contexts": {params:{roomId:string;cursor?:string|null;limit?:number};result:CollaborationPage<CollaborationContext>};
+  "collaboration.results": {params:{cursor?:string|null;limit?:number};result:CollaborationPage<CollaborationResult>};
+  "collaboration.result": {params:{deliveryId:string;outcome:'completed'|'blocked';text:string;references?:string[]};result:{results:CollaborationResult[]}};
+  "collaboration.consume": {params:{resultId:string};result:{id:string;botId:string;resultId:string;operationId:string;author:import("./bot-collaboration").CollaborationAuthor;createdAt:string}};
+  "collaboration.await": {params:{workId:string;boundary:'dependency'|'milestone'};result:{id:string;botId:string;workId:string;boundary:'dependency'|'milestone'}};
+  "collaboration.promote": {params:{resultId:string;boundary:'dependency'|'milestone'|'human';dependencyId?:string;relatedWorkId:string};result:CollaborationResult};
+  "collaboration.resourceAcquire": {params:{resource:'desktop'|'workspace'|'external';effectId:string};result:CollaborationResource};
+  "collaboration.resourceRelease": {params:{resource:'desktop'|'workspace'|'external';effectId:string;settled:true};result:CollaborationResource};
+  "execution.config": {params:{contextId?:string;turnId?:string;cursor?:string|null;limit?:number};result:ExecutionConfiguration};
+
   "secure.list": {params: Record<string, never>; result: import("./secure-input").SecureRequest[]};
   "replies.prepare": { params: { threadId: string; turnId: string; itemId: string; partId?: string; cursor?: string | null }; result: { reply: BotReplyReference | null; nextCursor: string | null; unavailable: boolean } };
   "replies.resolve": { params: { reply: BotReplyReference; cursor?: string | null }; result: { entry: import("./bot-history-view").HistoryEntry | null; nextCursor: string | null; unavailable: boolean } };
@@ -128,12 +149,12 @@ export type BotOperations = {
   "queue.move": { params: { items: { id: string; revision: number }[]; listId: string | null }; result: { applied: boolean } };
   "queue.merge": { params: { items: { id: string; revision: number }[] }; result: { queuedSubmission: BotQueuedSubmission } };
   "queue.add": {
-    params: { reply?: BotReplyReference; text?: string; attachments?: string[]; listId?: string | null; taskExportId?: string; taskSource?: { todoId: number; revision: string; exportOperationId: string } };
+    params: { configuration?: import("./bot-collaboration").ExecutionSettings & {settingsRevision:number}; reply?: BotReplyReference; text?: string; attachments?: string[]; listId?: string | null; taskExportId?: string; taskSource?: { todoId: number; revision: string; exportOperationId: string } };
     result: ({ queuedSubmission: QueuedSubmission } | { consumedTurnId: string }) & { taskSource?: import("./task-queue-delegation").TaskQueueBinding };
   };
   "queue.taskConfirm": { params: { queueOperationId: string; taskExportId: string }; result: { delegation: import("./task-queue-delegation").TaskDelegation; active: boolean } };
   "queue.update": {
-    params: { reply?: BotReplyReference; id: string; text: string; attachments?: string[]; expectedRevision?: number };
+    params: { configuration?: import("./bot-collaboration").ExecutionSettings & {settingsRevision:number}; reply?: BotReplyReference; id: string; text: string; attachments?: string[]; expectedRevision?: number };
     result: { queuedSubmission: QueuedSubmission };
   };
   "queue.delete": { params: { id: string; expectedRevision?: number }; result: { deleted: boolean } };

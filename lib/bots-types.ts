@@ -1,3 +1,4 @@
+export type { CollaborationRoom, CollaborationPost, CollaborationContext, CollaborationDelivery, CollaborationResult, CollaborationPage, TurnConfiguration, ExecutionConfiguration } from './bot-collaboration';
 import type { ServerRequest } from "./codex-protocol/ServerRequest";
 import type { Thread } from "./codex-protocol/v2/Thread";
 import type { Model } from "./codex-protocol/v2/Model";
@@ -201,7 +202,7 @@ export type BotQueueList = { id: string; botId: string; name: string; cron: stri
 export type BotSnapshot = {
   secureInputs?: import("./secure-input").SecureRequest[];
   botAdminLeadIds?: string[];
-  capabilities?: { accountUsageHistory?: 1; botAdministration?: 1; botMemoryMaintenance?: 1; botDesktops?: 1; backgroundRunLanes?: 1; scheduleDecisions?: 1; singleThreadExecution?: 1; peerInbox?: 1; peerRootControls?: 1; peerBodyPaging?: 1; nativeGoals?: 1; nativeConversation?: 1; messageReplies?: 1; secureInputs?: 1; secureResponseLifecycle?: 1; operatorCalls?: 1; messageBursts?: 1; burstDiscard?: 1; burstControls?: 1; burstQueue?: 1; queueLists?: 1; queueRelativeMoves?: 1; queueSendNow?: 1; taskQueues?: 1; teams?: 1 };
+  capabilities?: { collaborationRooms?: 1; executionConfiguration?: 1; accountUsageHistory?: 1; botAdministration?: 1; botMemoryMaintenance?: 1; botDesktops?: 1; backgroundRunLanes?: 1; scheduleDecisions?: 1; singleThreadExecution?: 1; peerInbox?: 1; peerRootControls?: 1; peerBodyPaging?: 1; nativeGoals?: 1; nativeConversation?: 1; messageReplies?: 1; secureInputs?: 1; secureResponseLifecycle?: 1; operatorCalls?: 1; messageBursts?: 1; burstDiscard?: 1; burstControls?: 1; burstQueue?: 1; queueLists?: 1; queueRelativeMoves?: 1; queueSendNow?: 1; taskQueues?: 1; teams?: 1 };
   teams?: BotTeam[];
   workByBot?: BotWorkState[];
   backgroundByBot?: BotBackground[];
@@ -225,6 +226,7 @@ export type BotHistory = {
   pending: BotRequest[];
 };
 export type BotQueuedSubmission = QueuedSubmission & {
+  configuration?: {requested:import('./bot-collaboration').ExecutionSettings;settingsRevision:number;confirmation:'pending-unsupported';reason:string} | null;
   source?: import("./task-queue-delegation").TaskQueueBinding | { kind: string; operationId?: string; members?: unknown[] };
   reply?: import("./bot-replies").BotReplyReference;
   listId?: string | null;
@@ -233,7 +235,7 @@ export type BotQueuedSubmission = QueuedSubmission & {
   state?: "queued" | "dispatching" | "uncertain" | "failed";
   revision?: number;
   operationId?: string | null;
-  waitReason?: "main-turn-running" | "needs-input" | "paused" | "delivery-unconfirmed" | "rejected" | "plan-reconciliation" | null;
+  waitReason?: "main-turn-running" | "needs-input" | "paused" | "delivery-unconfirmed" | "rejected" | "plan-reconciliation" | "configuration-unsupported" | null;
   error?: string | null;
 };
 export type BotEvent = {

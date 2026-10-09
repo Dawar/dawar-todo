@@ -386,6 +386,8 @@ export class BotDesktops {
       r.activityUnresolved(bot.id) || r.scheduledUncertain(bot.id) || r.store.list("pending",bot.id).length ||
       r.store.list("managerWorker",bot.id).some(w => w.activeTurnId) ||
       r.store.list("runLane",bot.id).some(w => w.activeTurnId) ||
+      r.store.list("collaborationContext",bot.id).some(w => w.activeTurnId || w.status === "unknown") ||
+      r.store.list("collaborationResource",bot.id).some(w => w.state !== "released") ||
       ["primaryInbox","promptQueue","burstBatch","messageBurst"].some(kind => r.store.list(kind,bot.id).some(x =>
         ["dispatching","uncertain","native-queued"].includes(x.state))) ||
       [...this.sessions.values()].some(s => s.bot.id === bot.id) ||
@@ -509,6 +511,7 @@ export class BotDesktops {
     if (!DESKTOP_TOOLS.some((t) => t.name === name))
       throw new Error("Unknown desktop tool.");
     this.assertBot(bot);
+    if (beforeInput) beforeInput();
     if (name !== "screenshot" && name !== "browser_status") this.cancelBrowserMaintenance(bot.id);
     if (name === "browser_status") {
       const probe = await this.browserCommand(bot, "probe");

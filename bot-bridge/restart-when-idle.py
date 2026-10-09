@@ -38,12 +38,22 @@ def local_state(observation=None, reconcile_native_queued=False):
         db.execute('BEGIN')
         bots = [json.loads(r[0]) for r in db.execute('SELECT json FROM bots')]
         rows = [json.loads(r[0]) for r in db.execute(
-            "SELECT json FROM records WHERE kind IN ('runLane','managerWorker')")]
+            "SELECT json FROM records WHERE kind IN ('runLane','managerWorker','collaborationContext')")]
         active = [r for r in bots + rows if r.get('activeTurnId') or r.get('status') == 'running']
         # Pending native submissions are current work even before turn-start.
         pending = db.execute("SELECT COUNT(*) FROM records WHERE "
             "(kind IN ('primaryInbox','burstBatch','messageBurst') AND json_extract(json,'$.state') IN ('dispatching','uncertain')) "
             "OR (kind='promptQueue' AND json_extract(json,'$.state') IN ('dispatching','native-queued'))").fetchone()[0]
+        # All-context uncertainty is always blocking, including strict legacy
+        # bootstrap. No terminal foreground receipt can exempt another context.
+        collaboration_pending = db.execute("SELECT COUNT(*) FROM records WHERE "
+            "(kind='collaborationContext' AND (json_extract(json,'$.status')='unknown' OR json_extract(json,'$.provisioning') IN ('dispatching','uncertain') OR json_extract(json,'$.releaseState') IN ('dispatching','uncertain'))) "
+            "OR (kind='collaborationDelivery' AND json_extract(json,'$.state') IN ('dispatching','uncertain','accepted') AND json_extract(json,'$.terminalStatus') IS NULL) "
+            "OR kind='collaborationPending' "
+            "OR (kind='collaborationResource' AND json_extract(json,'$.state')<>'released') "
+            "OR (kind IN ('collaborationEffect','collaborationStopGoal') AND json_extract(json,'$.state') IN ('dispatching','uncertain')) "
+            "OR (kind='collaborationGoal' AND json_extract(json,'$.goal.status')='active')").fetchone()[0]
+        pending += collaboration_pending
         proof = None
         if reconcile_native_queued:
             # First installation has no admission drain. Never equate terminal
@@ -81,12 +91,13 @@ def local_state(observation=None, reconcile_native_queued=False):
                 'pendingDispatch': pending,
                 **({'completedOriginals': len(proof['originals']) if proof else 0} if reconcile_native_queued else {}),
             }
-        fence = sorted((r['id'], r.get('activeTurnId'), r.get('status')) for r in bots)
+        collaboration_change = db.execute("SELECT json FROM meta WHERE key='collaboration-change'").fetchone()
+        fence = {'bots': digest(bots), 'aux': digest(rows), 'collaborationChange': collaboration_change, 'collaborationPending': collaboration_pending}
         if proof is not None:
             # Full local original bytes are hashed, never logged/copied into a
             # native call. Source changes or new original identities invalidate
             # the second observation even if their busy count stayed the same.
-            fence = {'bots': digest(bots), 'aux': digest(rows), 'originalRows': digest(all_raw), 'native': proof}
+            fence = {'bots': digest(bots), 'aux': digest(rows), 'collaborationChange': collaboration_change, 'originalRows': digest(all_raw), 'native': proof}
             if observation is not None:
                 observation['_receiptProof'] = proof
         return bots, bool(active or pending), fence

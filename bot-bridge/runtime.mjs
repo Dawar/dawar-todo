@@ -1,3 +1,5 @@
+import { Collaboration, COLLABORATION_TOOL, CONTEXT_DESKTOP_TOOL, COLLABORATION_POLICY } from './collaboration.mjs';
+import { ExecutionConfiguration } from './execution-config.mjs';
 import { RuntimeMaintenance } from './runtime-maintenance.mjs';
 import { BotAdministration, BOT_ADMIN_TOOL } from './bot-admin.mjs';
 import { confirmTaskQueue } from "./task-queue.mjs";
@@ -138,6 +140,7 @@ const schema = (properties, required = []) => ({
 });
 const str = { type: "string" };
 export const dynamicTools = [
+  { type: "function", ...COLLABORATION_TOOL },
   { type: 'function', ...BOT_ADMIN_TOOL },
   { type: 'function', ...MEMORY_TOOL },
   ...SECURE_TOOLS.map(tool => ({type:"function",...tool})),
@@ -218,6 +221,8 @@ export class BotRuntime extends EventEmitter {
     this.plans = new PlanLifecycle(this);
     this.answers = new AnswerExecutions(this, validateResponse);
     this.runs = new BackgroundRuns(this, dynamicTools, validateResponse, INTERACTIONS);
+    this.executionConfig = new ExecutionConfiguration(this);
+    this.collaboration = new Collaboration(this, [{ type: "function", ...CONTEXT_DESKTOP_TOOL }, ...dynamicTools.filter(t => [COLLABORATION_TOOL.name, "bots_publish_artifact", "bots_download_attachment"].includes(t.name))], validateResponse, INTERACTIONS);
     this.scheduleDecisions = new ScheduleDecisions(this);
     this.memoryMaintenance = new BotMemoryMaintenance(this);
     this.locks = new Map();
@@ -301,6 +306,7 @@ export class BotRuntime extends EventEmitter {
     this.secure ??= new SecureInputs(this);
     await mkdir(this.root, { recursive: true, mode: 0o700 });
     this.runs.start();
+    this.collaboration.start();
     // A server request is only answerable in the process that emitted it.
     for (const p of this.store.list("pending"))
       if (!p.async) this.store.remove("pending", p.id);
@@ -560,7 +566,7 @@ export class BotRuntime extends EventEmitter {
   }
   snapshot() {
     return {
-      capabilities: { accountUsageHistory: 1, runtimeMaintenance: 1, botAdministration: 1, botMemoryMaintenance: 1, backgroundRunLanes: 1, scheduleDecisions: 1, singleThreadExecution: 1, peerInbox: 1, peerRootControls: 1, peerBodyPaging: 1, nativeGoals: 1, nativeConversation: 1, messageReplies: 1, secureInputs: 1, secureResponseLifecycle: 1, operatorCalls: 1, operatorInputQuestions: 1, historyCursorIndex: 1, messageBursts: 1, burstDiscard: 1, burstControls: 1, burstQueue: 1, queueLists: 1, queueRelativeMoves: 1, queueSendNow: 1, ...(this.storage ? { taskQueues: 1 } : {}), teams: 1, ...(this.desktops ? { botDesktops: 1, botBrowserRetention: 1 } : {}) },
+      capabilities: { collaborationRooms: 1, executionConfiguration: 1, accountUsageHistory: 1, runtimeMaintenance: 1, botAdministration: 1, botMemoryMaintenance: 1, backgroundRunLanes: 1, scheduleDecisions: 1, singleThreadExecution: 1, peerInbox: 1, peerRootControls: 1, peerBodyPaging: 1, nativeGoals: 1, nativeConversation: 1, messageReplies: 1, secureInputs: 1, secureResponseLifecycle: 1, operatorCalls: 1, operatorInputQuestions: 1, historyCursorIndex: 1, messageBursts: 1, burstDiscard: 1, burstControls: 1, burstQueue: 1, queueLists: 1, queueRelativeMoves: 1, queueSendNow: 1, ...(this.storage ? { taskQueues: 1 } : {}), teams: 1, ...(this.desktops ? { botDesktops: 1, botBrowserRetention: 1 } : {}) },
 
       botAdminLeadIds: [...this.botAdmin.leads],
       teams: publicTeams(this),
@@ -615,6 +621,10 @@ export class BotRuntime extends EventEmitter {
       Array.isArray(params)
     )
       throw new Error("Invalid request.");
+    if (method.startsWith("conversations.") || method.startsWith("collaboration.") || method === "execution.config")
+      return this.collaboration.handle(request, trustedOrigin);
+    if (method === "requests.respond" && (this.store.get("collaborationPending", params.key) || this.store.get("collaborationAnswer", params.key)))
+      return this.collaboration.respond(request, trustedOrigin);
     if (method.startsWith("botAdmin.")) return this.botAdmin.owner(request, trustedOrigin);
     if ((method === "queue.taskConfirm" || method === "queue.add" && params.taskExportId) && (!request.clientId || trustedOrigin))
       throw new Error("Task queue transfer requires the authenticated owner browser.");
@@ -1332,7 +1342,7 @@ export class BotRuntime extends EventEmitter {
     return {
       threadId: bot.threadId, cwd: bot.cwd, model: this.settings(bot).model,
       serviceTier: this.settings(bot).serviceTier, approvalPolicy: "never", sandbox: "danger-full-access",
-      developerInstructions: this.manager ? `${BOT_INSTRUCTIONS}\n\n${DIRECT_INSTRUCTIONS}${this.desktops ? `\n\n${desktopInstructions(bot)}` : ""}` : BOT_INSTRUCTIONS,
+      developerInstructions: this.manager ? `${BOT_INSTRUCTIONS}\n\n${DIRECT_INSTRUCTIONS}\n${COLLABORATION_POLICY}${this.desktops ? `\n\n${desktopInstructions(bot)}` : ""}` : BOT_INSTRUCTIONS,
       config: { "features.fast_mode": true, ...(executionMode === "single-thread" ? { "features.multi_agent": false } : {}),
         ...(this.manager ? this.manager.config(bot, executionMode) : {}) }, excludeTurns: true,
     };
@@ -1408,7 +1418,8 @@ export class BotRuntime extends EventEmitter {
       serviceTier,
       mode: p.mode ?? bot.mode,
     };
-    if (next.model !== bot.model || next.effort !== bot.effort ||
+    const settingsTouched=['model','effort','serviceTier','mode'].some(key=>Object.hasOwn(p,key));
+    if (settingsTouched || next.model !== bot.model || next.effort !== bot.effort ||
         next.serviceTier !== bot.serviceTier || next.mode !== bot.mode)
       await this.syncQueueSettings(next);
     // Native queue advance can start the next turn without startQueued. v2
@@ -1418,8 +1429,10 @@ export class BotRuntime extends EventEmitter {
     return this.store.transaction(() => {
       if (p.mode !== undefined) for (const record of this.store.list("planExecution", bot.id))
         if (record.state === "blocked") this.store.put("planExecution", { ...record, state: "superseded", finishedAt: now() });
-      return this.saveBot(this.store.bot(bot.id), { name, model, effort, serviceTier, mode: next.mode, ...preferences,
+      const saved = this.saveBot(this.store.bot(bot.id), { name, model, effort, serviceTier, mode: next.mode, ...preferences,
         ...(p.mode !== undefined ? { modeIntentId: operationId ?? randomUUID() } : {}) });
+      if(settingsTouched) this.executionConfig.saved(saved, operationId, p);
+      return saved;
     });
   }
   async reconcileArchive(record) {
@@ -1528,7 +1541,7 @@ export class BotRuntime extends EventEmitter {
     if (this.manager)
       additionalContext.managerPolicy = {
         kind: "application",
-        value: DIRECT_INSTRUCTIONS,
+        value: `${DIRECT_INSTRUCTIONS}\n${COLLABORATION_POLICY}`,
       };
     if (run)
       additionalContext.scheduledTask = {
@@ -1633,7 +1646,7 @@ export class BotRuntime extends EventEmitter {
         ? { type: "localImage", path: image.path }
         : textInput("[Queued image; upload metadata unavailable]");
     });
-    const waitReason = item.state === "uncertain" || item.state === "dispatching" || this.activityUnresolved(bot.id) ? "delivery-unconfirmed" :
+    const waitReason = item.configuration?.confirmation === "pending-unsupported" ? "configuration-unsupported" : item.state === "uncertain" || item.state === "dispatching" || this.activityUnresolved(bot.id) ? "delivery-unconfirmed" :
       item.state === "failed" ? "rejected" : bot.queuePaused ? "paused" :
       this.store.list("pending", bot.id).length ? "needs-input" : bot.activeTurnId ? "main-turn-running" :
       this.plans.blocked(bot.id) ? "plan-reconciliation" : null;
@@ -1706,8 +1719,10 @@ export class BotRuntime extends EventEmitter {
         }
         return fence;
       });
+      this.executionConfig.capture(bot, id, bot.threadId, params.collaborationMode.mode);
       result = await this.submitNative("turn/start", params, boundary);
       requireTurn(result?.turn);
+      this.executionConfig.bind(id, result.turn.id, "turn/start-ack");
       this.answers.accept(answer, { turnId: result.turn.id, status: result.turn.status, source: "start-ack" });
       this.plans.bind(plan, result.turn);
       const completed = this.store.get("planTurnEvidence", result.turn.id);
@@ -1927,6 +1942,8 @@ export class BotRuntime extends EventEmitter {
       return;
     }
     const threadId = message.params.threadId ?? message.params.conversationId;
+    const roomContext = this.collaboration.byThread(threadId);
+    if (roomContext) return this.collaboration.request(roomContext, message);
     if (this.manager?.request(message)) return;
     const lane = this.runs.byThread(threadId);
     if (lane) return this.runs.request(lane, message);
@@ -1980,6 +1997,8 @@ export class BotRuntime extends EventEmitter {
   onNotification(message) {
     message = redactSecureNotification(message);
     if (this.usage.notification(message)) return;
+    const roomContext = this.collaboration.byThread(message.params?.threadId ?? message.params?.thread?.id);
+    if (roomContext) { this.collaboration.notification(roomContext, message); return; }
     if (this.manager?.event(message)) return;
     const p = message.params ?? {};
     const threadId = p.threadId ?? p.thread?.id;
@@ -2000,6 +2019,7 @@ export class BotRuntime extends EventEmitter {
       return;
     }
     if (message.method === "item/completed" && !usableTurnId(p.turnId)) return;
+    this.collaboration.observeTool(bot, message);
     this.primary.notification(bot, message);
     if (message.method === "thread/status/changed") observeThreadStatus(this, bot.id, p.status);
     if (message.method === "thread/closed") observeThreadStatus(this, bot.id, { type: "notLoaded" });
@@ -2121,6 +2141,7 @@ export class BotRuntime extends EventEmitter {
     // shared dispatcher. Semantic work enters the original native thread later.
     if (!this.maintenance.holding()) void this.maintenance.track(() => this.memoryMaintenance.tick()).catch(error => this.emit('fault', error));
     try {
+      void this.maintenance.track(() => this.collaboration.tick()).catch(error => this.emit("fault", error));
       await this.plans.recover();
       await this.answers.recover();
       await recoverRunTurns(this);
@@ -2250,6 +2271,13 @@ export class BotRuntime extends EventEmitter {
   async dynamicToolTracked(bot, p, origin = null) {
     const args =
       typeof p.arguments === "string" ? JSON.parse(p.arguments) : p.arguments;
+    if (p.tool === COLLABORATION_TOOL.name) {
+      if (origin) throw Error("Use the registered collaboration context adapter.");
+      const { operation, operationId, ...params } = args;
+      const mapping = { results: "collaboration.results", result: "collaboration.result", config: "execution.config", resourceAcquire: "collaboration.resourceAcquire", resourceRelease: "collaboration.resourceRelease", await: "collaboration.await", promote: "collaboration.promote", consume: "collaboration.consume" };
+      return this.handle({ method: mapping[operation] ?? `conversations.${operation}`, botId: bot.id, params, operationId },
+        { authority: "native-tool", botId: bot.id, threadId: p.threadId, turnId: p.turnId });
+    }
     if (p.tool === MEMORY_TOOL.name) {
       if (origin) throw Error('Memory maintenance belongs to the primary named bot.');
       return this.memoryMaintenance.tool(bot, args, { authority: 'native-tool', threadId: p.threadId, turnId: p.turnId, callId: p.callId });
@@ -2321,8 +2349,10 @@ export class BotRuntime extends EventEmitter {
         });
       }
       case "bots_publish_artifact":
+        this.collaboration.assertFileResource(bot, origin);
         return this.publishArtifact(bot, args, { key: origin ? `publish:${p.threadId}:${p.callId}` : `publish:${p.callId}`, turnId: p.turnId, itemId: p.callId, ...(origin ?? {}) });
       case "bots_download_attachment":
+        this.collaboration.assertFileResource(bot, origin);
         return this.downloadAttachment(bot,String(args.attachmentId ?? ''));
       default:
         throw new Error("Unknown bot tool.");

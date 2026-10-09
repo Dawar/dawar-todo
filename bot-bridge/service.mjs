@@ -284,6 +284,7 @@ const health = createServer((request, response) => {
     JSON.stringify({
       ready: runtime.ready,
       maintenance: runtime.maintenance.snapshot(),
+      collaboration: runtime.collaboration.health(),
       historyReads: { concurrency: runtime.historyReads.concurrency, active: runtime.historyReads.active,
         pending: runtime.historyReads.pending.size, ...runtime.historyReads.metrics },
       relayConnected: online,

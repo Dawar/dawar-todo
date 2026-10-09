@@ -160,6 +160,7 @@ export class PrimaryExecution {
   }
   async submitAdmitted(bot, item) {
     item = this.store.get('primaryInbox', item.id);
+    if (item.kind === 'collaboration-result' && this.store.bot(bot.id).activeTurnId) return;
     if (item.state !== 'queued' || this.store.get('primaryInbox', item.id)?.state !== 'queued' || !this.runtime.peers.canDispatch(item)) return;
     if (!this.runtime.memoryMaintenance.eligible(this.store.bot(bot.id), item)) return;
     if (item.kind === 'schedule' && !occurrenceReady(this.runtime.scheduleDecisions.ensure(item.sourceId))) return;
@@ -175,6 +176,7 @@ export class PrimaryExecution {
     await this.runtime.syncQueueSettings({ ...this.store.bot(bot.id), mode: 'default' });
     const current = this.store.bot(bot.id);
     if (item.kind === 'schedule' && !occurrenceReady(this.runtime.scheduleDecisions.ensure(item.sourceId))) return;
+    if (item.kind === 'collaboration-result' && current.activeTurnId) return;
     if ((current.activeTurnId && current.mode !== 'default') || current.queuePaused || current.archived || current.archiving || this.runtime.activityUnresolved(bot.id) || this.store.list('pending', bot.id).length) return;
     const latest = this.store.get('primaryInbox', item.id);
     if (latest?.state !== 'queued' || latest.fingerprint !== item.fingerprint || !this.runtime.peers.canDispatch(latest)) return; // cancel/decision may commit across preparation awaits
@@ -189,6 +191,7 @@ export class PrimaryExecution {
       this.store.put('queuedAttachments', { id: item.id, botId: bot.id, attachmentIds: item.attachmentIds, immutable: true });
     });
     try {
+      this.runtime.executionConfig?.capture(current, item.id, bot.threadId, 'default', 'thread/queue/add-inherited');
       const result = await this.runtime.codex.call('thread/queue/add', { threadId: bot.threadId, input, clientUserMessageId: item.id });
       const q = result?.queuedSubmission;
       if (!q?.id || q.clientUserMessageId !== item.id) throw new Error('Native queue acknowledgement has no matching identity.');
@@ -223,6 +226,7 @@ export class PrimaryExecution {
         const token = beginTurnDispatch(this.runtime, bot.id, operationId);
         this.runtime.plans.dispatching(plan, token); return token;
       });
+      this.runtime.executionConfig?.capture(current, operationId, bot.threadId, bot.mode ?? 'default', 'thread/queue/add-inherited');
       const result = await this.runtime.submitNative('thread/queue/add', { threadId: bot.threadId, input, clientUserMessageId: operationId }, attempt);
       const q = result?.queuedSubmission;
       if (typeof q?.id !== 'string' || !q.id || q.clientUserMessageId !== operationId) throw new Error('Native queue acceptance has no matching identity.');
@@ -244,7 +248,13 @@ export class PrimaryExecution {
     if (terminalTurn(evidence)) turn = { ...turn, status: evidence.status };
     if (current.terminalStatus && turn.status === 'inProgress') turn = { ...turn, status: current.terminalStatus };
     this.store.transaction(() => {
+      this.runtime.executionConfig?.bind(item.id, turn.id, 'exact-primary-client-evidence');
       this.store.put('primaryInbox', { ...current, state: 'accepted', turnId: turn.id, terminalStatus: terminalTurn(turn) ? turn.status : current.terminalStatus, error: null });
+      if (current.kind === 'collaboration-result') {
+        const result=this.store.get('collaborationResult',current.sourceId);
+        if (result?.botId===current.botId && result.promotion?.id===current.id)
+          this.store.put('collaborationResult',{...result,promotion:{...result.promotion,state:'accepted',turnId:turn.id,evidence:'exact-primary-native-client'}});
+      }
       if (current.kind === 'schedule') {
         const run = this.store.get('run', current.sourceId);
         if (run?.botId === current.botId) {
@@ -258,6 +268,8 @@ export class PrimaryExecution {
   }
   notification(bot, message) {
     const p = message.params ?? {};
+    if (message.method === "item/completed" && p.item?.type === "userMessage" && p.item.clientId)
+      this.runtime.executionConfig?.bind(p.item.clientId, p.turnId, "exact-live-native-client");
     const configuring = this.configuring.get(bot.id);
     if (configuring?.threadId === bot.threadId && (message.method === 'thread/closed' || message.method === 'thread/status/changed' && p.status?.type === 'notLoaded')) configuring.unloaded = true;
     if (message.method === 'thread/goal/updated' && p.goal?.threadId === bot.threadId || message.method === 'thread/goal/cleared') {
