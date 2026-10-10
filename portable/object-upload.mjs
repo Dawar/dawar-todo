@@ -100,11 +100,12 @@ export class ObjectUpload {
     });
     const path=join(this.directory,`.part-${claim}`);let handle;
     const abort=new AbortController(),timer=setTimeout(()=>abort.abort(Error('Upload chunk deadline expired.')),120000),interrupted=()=>abort.abort(Error('Upload chunk interrupted.'));
+    const validate=this.objects.writer.bindWork(()=>this.guard(token,row));
     req.once('aborted',interrupted);
     try{
       handle=await open(path,constants.O_CREAT|constants.O_EXCL|constants.O_WRONLY|constants.O_NOFOLLOW,0o600);
       let received=0;const sha=createHash('sha256');
-      await pipeline(req,new Transform({transform:(c,e,cb)=>{try{this.guard(token,row);received+=c.length;if(received>size)throw Error('Chunk exceeds original size.');sha.update(c);cb(null,c);}catch(error){cb(error);}}}),handle.createWriteStream({autoClose:true}),{signal:abort.signal});
+      await pipeline(req,new Transform({transform:(c,e,cb)=>{try{validate();received+=c.length;if(received>size)throw Error('Chunk exceeds original size.');sha.update(c);cb(null,c);}catch(error){cb(error);}}}),handle.createWriteStream({autoClose:true}),{signal:abort.signal});
       if(received!==size||sha.digest('hex')!==hashes[index])throw Error('Upload chunk checksum differs.');
       // fs.WriteStream closes before pipeline settles. Reopen the exact private
       // temporary file for fsync; autoClose:false would leave pipeline waiting.

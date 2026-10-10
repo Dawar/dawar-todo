@@ -30,6 +30,12 @@ export class LocalWorkAdmission {
   }
   current(){return this.db.prepare('SELECT * FROM portable_async_admission WHERE id=1').get();}
   scope(){const s=contexts.getStore();return s?.owner===this?s:null;}
+  bind(factory){
+    const scope=this.scope();if(!scope||typeof factory!=='function')throw failed();
+    // Incoming Node streams can invoke callbacks from their upstream context.
+    // Capture only the actual admitted lifetime, never a new admission grant.
+    return (...args)=>contexts.run(scope,()=>{this.writer.assertWriter();return factory(...args);});
+  }
   assertWriteScope(){
     const row=this.current();if(!same(row,this.expected)||!validState(row))throw failed();
     const scope=this.scope();

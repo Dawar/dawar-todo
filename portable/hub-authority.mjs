@@ -50,6 +50,7 @@ export class HubWriteAuthority {
   command(sql) {this.managedTransaction=true;try{this.db.exec(sql);}finally{this.managedTransaction=false;}}
   workScope(action){return action===sql.SQLITE_INSERT&&this.admitting===true&&this.depth>0||action===sql.SQLITE_UPDATE&&this.settling===true;}
   runWork(kind,factory){return this.admission.run(kind,factory);}
+  bindWork(factory){return this.admission.bind(factory);}
   settleWork(factory){
     // A completed lifetime may settle during a hold, but this path cannot
     // mutate application data, admission, writer identity or a native receipt.

@@ -90,7 +90,7 @@ export class ObjectStorage {
     await mkdir(this.files.directory,{recursive:true,mode:0o700});
     const temporary=join(this.files.directory,`.upload-${randomUUID()}`),handle=await open(temporary,constants.O_CREAT|constants.O_EXCL|constants.O_WRONLY|constants.O_NOFOLLOW,0o600);
     let fileTask=null,size=0,bodySize=0;const sha=createHash('sha256'),fields=new Map(),abort=new AbortController();
-    const timer=setTimeout(()=>abort.abort(Error('Upload deadline expired.')),15*60*1000),validateGrant=()=>{this.assertWriter();return this.verify(new URL(url).searchParams.get('grant'),'POST');};
+    const timer=setTimeout(()=>abort.abort(Error('Upload deadline expired.')),15*60*1000),validateGrant=this.writer.bindWork(()=>{this.assertWriter();return this.verify(new URL(url).searchParams.get('grant'),'POST');});
     const aborted=()=>abort.abort(Error('Upload interrupted.'));req.once('aborted',aborted);
     try{
       const parser=busboy({headers:req.headers,limits:{files:1,fields:2,parts:4,fieldSize:2048,fieldNameSize:32,fileSize:v.maximum+1,headerPairs:20}});
