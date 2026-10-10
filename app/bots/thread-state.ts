@@ -4,13 +4,14 @@ import type { ThreadItem } from "../../lib/codex-protocol/v2/ThreadItem";
 export type ConversationTurn = Turn & {
   diff?: string;
   planSteps?: { step: string; status: string }[];
+  planExplanation?: string | null;
 };
 export type NativeEvent = {
   method: string;
   params: {
     threadId?: string; turnId?: string; turn?: Turn; item?: ThreadItem;
     itemId?: string; delta?: string; summaryIndex?: number; contentIndex?: number;
-    text?: string; diff?: string; plan?: unknown;
+    text?: string; diff?: string; plan?: unknown; explanation?: string | null;
     changes?: Extract<ThreadItem, { type: "fileChange" }>["changes"];
   };
 };
@@ -70,7 +71,7 @@ export function reduceBotTurns(turns: ConversationTurn[], event: NativeEvent): C
     if (index < 0) items.push(p.item); else items[index] = p.item;
     turn = { ...turn, items };
   } else if (event.method === "turn/diff/updated") turn = { ...turn, diff: p.diff };
-  else if (event.method === "turn/plan/updated") turn = { ...turn, planSteps: p.plan as ConversationTurn["planSteps"] };
+  else if (event.method === "turn/plan/updated") turn = { ...turn, planSteps: p.plan as ConversationTurn["planSteps"], planExplanation: p.explanation ?? null };
   else {
     const items = turn.items.map(item => reduceItemEvent(item, event));
     if (items.every((item, index) => item === turn.items[index])) return turns;

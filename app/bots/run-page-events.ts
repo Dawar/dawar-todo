@@ -1,4 +1,4 @@
-import { historyKey, projectHistoryItem, withTurnState, type HistoryPage } from "../../lib/bot-history-view";
+import { historyKey, projectHistoryItem, projectWorkPlan, withTurnState, type HistoryPage } from "../../lib/bot-history-view";
 import type { BotEvent } from "../../lib/bots-types";
 import { reconcileHistory } from "./history-reconcile";
 import { reduceBotTurns, type NativeEvent } from "./thread-state";
@@ -14,10 +14,15 @@ export function updateRunPage(page: HistoryPage, events: BotEvent[], turnId?: st
     const refresh = runHistoryRefresh(event);
     if (refresh) {
       if (refresh.turnId !== (turnId ?? page.turnIds?.[0] ?? entries[0]?.turnId)) continue;
+      if (refresh.method === 'turn/plan/updated' && !refresh.entry) {
+        entries = entries.filter(value => historyKey(value.turnId, value.id) !== historyKey(refresh.turnId, 'live-turn-plan'));
+        continue;
+      }
       const descriptor = refresh.entry;
       if (descriptor && descriptor.turnId === refresh.turnId && (!refresh.itemId || descriptor.id === refresh.itemId)) {
         const existing = entries.find(value => value.turnId === descriptor.turnId && value.id === descriptor.id || descriptor.item?.type === "userMessage" && descriptor.item.clientId && value.item?.type === "userMessage" && value.item.clientId === descriptor.item.clientId);
-        const projected = { ...descriptor, startedAt: existing?.startedAt ?? descriptor.startedAt, turnStatus: existing?.turnStatus ?? descriptor.turnStatus, updatedSeq: event.seq };
+        const projected = { ...descriptor, startedAt: existing?.startedAt ?? descriptor.startedAt, turnStatus: existing?.turnStatus ?? descriptor.turnStatus,
+          ...(descriptor.workPlan && existing?.turnStatus ? { status: existing.turnStatus } : {}), updatedSeq: event.seq };
         if (existing) entries = reconcileHistory(entries.map(value => value === existing ? projected : value)).entries;
         else if (append) entries = reconcileHistory([...entries, projected]).entries;
       } else entries = entries.map(value => value.turnId === refresh.turnId && (!refresh.itemId || value.id === refresh.itemId) ? { ...value, complete: false, updatedSeq: event.seq } : value);
@@ -25,6 +30,7 @@ export function updateRunPage(page: HistoryPage, events: BotEvent[], turnId?: st
       continue;
     }
     const native = data.message;
+    if (native?.params?.threadId && native.params.threadId !== page.context?.threadId) continue;
     if (!native?.params || (native.params.turnId ?? native.params.turn?.id) !== (turnId ?? page.turnIds?.[0] ?? entries[0]?.turnId)) continue;
     const id = native.params.turnId ?? native.params.turn!.id;
     const turn = { id, items: entries.filter(entry => entry.turnId === id && entry.item).map(entry => entry.item!), itemsView: "full" as const,
@@ -34,6 +40,11 @@ export function updateRunPage(page: HistoryPage, events: BotEvent[], turnId?: st
     const next = reduceBotTurns([turn], native)[0];
     if (!next) continue;
     const byKey = new Map(entries.map(entry => [historyKey(entry.turnId, entry.id), entry]));
+    if (native.method === 'turn/plan/updated') {
+      const projected = projectWorkPlan(next, next.planSteps, next.planExplanation), key = historyKey(id, 'live-turn-plan');
+      if (projected && (append || byKey.has(key))) byKey.set(key, { ...projected, updatedSeq: event.seq });
+      else if (!projected) byKey.delete(key);
+    }
     for (const item of next.items) {
       const projected = projectHistoryItem(next, item);
       const key = historyKey(next.id, item.id), old = byKey.get(key) ?? (item.type === "userMessage" && item.clientId ? entries.find(entry => entry.item?.type === "userMessage" && entry.item.clientId === item.clientId) : undefined);

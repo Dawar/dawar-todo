@@ -16,7 +16,8 @@ import { NativeTimingContext } from "./active-turn-elapsed";
 import "./compact-activity.css";
 import { MessageTime } from "./message-time";
 import { ConfigurationEvidence } from "./configuration-evidence";
-import { BotMessage } from "./message";
+import { BotMessage, WorkPlanMessage } from "./message";
+import { readWorkPlanSource } from '../../lib/native-work-plan';
 import { OperatorSegmentBody } from "./operator-call";
 import { ArrowDown, MessageCircle, CloudOff, Clock3, Phone } from "lucide-react";
 import { LazyDetails } from "./lazy-details";
@@ -53,7 +54,7 @@ const EntryBody = memo(function EntryBody({ entry, timeline, attachments, downlo
   const initialEntry = useRef(entry);
   useEffect(() => {
     let active = true;
-    if (!initialEntry.current.item) queueMicrotask(() => {
+    if (!initialEntry.current.item && !(initialEntry.current.workPlan && initialEntry.current.complete)) queueMicrotask(() => {
       if (!active) return;
       setLoading(true);
       void timeline.detail(initialEntry.current).catch((error) => { if (active) setError(String(error)); }).finally(() => { if (active) setLoading(false); });
@@ -61,13 +62,17 @@ const EntryBody = memo(function EntryBody({ entry, timeline, attachments, downlo
     return () => { active = false; };
   }, [timeline]);
   const item = full ?? entry.item;
-  return <>{entry.questionNotice && <p className="bots-system-note">{entry.questionNotice}</p>}{refreshing && <small>Updating…</small>}{item && <BotMessage item={item} botId={timeline.botId} attachments={attachments} download={download} inWorkLog partial={entry.status === "inProgress" || !full && !entry.complete} />}
+  let workPlan = entry.workPlan, planError = '';
+  // A new native preview stays current while an older opened detail is being
+  // reconciled. A failed/expired full read must not cover it with stale steps.
+  if (workPlan && full?.type === 'plan' && !refreshing && !loading && !detailError && !error) try { workPlan = readWorkPlanSource(full.text) ?? undefined; } catch (reason) { planError = String(reason); }
+  return <>{entry.questionNotice && <p className="bots-system-note">{entry.questionNotice}</p>}{refreshing && <small>Updating…</small>}{entry.workPlan ? workPlan && <WorkPlanMessage plan={workPlan} botId={timeline.botId} attachments={attachments} turnStatus={entry.turnStatus ?? entry.status}/> : item && <BotMessage item={item} botId={timeline.botId} attachments={attachments} download={download} inWorkLog partial={entry.status === "inProgress" || !full && !entry.complete} />}
     {!entry.complete && <div className="bots-detail-status">
       <button disabled={loading} onClick={() => void load()}>{loading ? "Loading…" : full ? "Refresh details" : item ? "Continue · load complete message" : "Open full details"}</button>
       {full && !botsClient.online && <small>Saved copy. Reconnect to check for changes.</small>}
-      {!full && <small>{item ? "A preview of this message. Continue to read it in full." : "Open this work item to see its full details."}</small>}
+      {!full && <small>{entry.workPlan ? 'The bounded native snapshot remains readable. Full live updates may expire; missing historical explanations are not reconstructed.' : item ? "A preview of this message. Continue to read it in full." : "Open this work item to see its full details."}</small>}
     </div>}
-    {(timeline.detailError ? detailError : error) && <p role="alert" className="bots-error">{timeline.detailError ? detailError : error}{timeline.detailError && entry.complete && <button disabled={refreshing || loading} onClick={() => void load()}>Refresh details</button>}</p>}</>;
+    {(planError || (timeline.detailError ? detailError : error)) && <p role="alert" className="bots-error">{planError || (timeline.detailError ? detailError : error)}{timeline.detailError && entry.complete && <button disabled={refreshing || loading} onClick={() => void load()}>Refresh details</button>}</p>}</>;
 });
 type WorkLogPage = { entries: HistoryEntry[]; olderCursor: string | null; attachments: BotAttachment[] };
 function TurnWorkLog({ entry, timeline, download, excluded, onPage, cachedPage }: { entry: HistoryEntry; timeline: HistoryDetailReader; download: (id: string) => void; excluded?: Set<string>; onPage?: (page: WorkLogPage, turnId: string) => void; cachedPage?: WorkLogPage }) {
@@ -107,7 +112,7 @@ export const TimelineEntry = memo(function TimelineEntry(props: Parameters<typeo
   return <div data-history-key={historyKey(entry.turnId, entry.id)}>
     {props.showScheduledMark !== false && (entry.audience === "finding" || entry.scheduled && entry.type === "agentMessage") && <span className="bots-scheduled-message-mark" role="img" aria-label="From scheduled work" title="From scheduled work"><Clock3 size={13} aria-hidden="true" /></span>}
     {entry.reply && <ReplyQuote key={entry.reply.id} reply={entry.reply} onOpen={props.onOpenReply} />}
-    {entry.type === "reasoning" ? <LazyDetails className="bots-activity" summary="Thinking">{() => <EntryBody {...props} />}</LazyDetails> : !entry.item ? <LazyDetails className="bots-activity" summary={<><span>Work log · {entry.label}</span><small>{entry.itemStatus ?? entry.status}</small></>}>
+    {entry.workPlan ? <LazyDetails className="bots-activity" summary={<span className="bots-work-plan-summary"><span>Work plan</span><small>{entry.workPlan.completedSteps} of {entry.workPlan.totalSteps} steps completed{!entry.complete ? ' · Partial snapshot' : ''}</small></span>}>{() => <EntryBody {...props}/>}</LazyDetails> : entry.type === "reasoning" ? <LazyDetails className="bots-activity" summary="Thinking">{() => <EntryBody {...props} />}</LazyDetails> : !entry.item ? <LazyDetails className="bots-activity" summary={<><span>Work log · {entry.label}</span><small>{entry.itemStatus ?? entry.status}</small></>}>
         {() => entry.deferredTurn ? <TurnWorkLog entry={entry} timeline={props.timeline} download={props.download}/> : <EntryBody {...props} />}</LazyDetails> : <EntryBody {...props} />}
     {props.onReply && props.threadId && <ReplyAction entry={entry} botId={props.timeline.botId} threadId={props.threadId} onReply={props.onReply} />}
     {props.configurationSupported && entry.item?.type === "agentMessage" && entry.item.phase === "final_answer" && <ConfigurationEvidence value={props.configuration} label="Turn settings"/>}

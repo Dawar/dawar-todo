@@ -2,7 +2,8 @@ import { turnTiming, type NativeTiming } from '../../lib/bot-timing';
 import { reconcileHistory, conversationEntries, orderedHistory } from "./history-reconcile";
 import { turnAudience, scheduleInput, peerInput, humanInput, reportedFinding, projectConversationItem, type TurnAudience } from "../../lib/bot-conversation";
 import { historyBoundaries, retainHistory, retainedAttachments, CACHE_ENTRIES, CACHE_BYTES } from "./history-window";
-import { HISTORY_TEXT_LIMIT, withTurnState, conversationItem, historyTail, historyBefore, historyKey, projectHistoryItem, type HistoryEntry, type HistoryResponse, type HistoryDetail, type HistoryPosition, type HistoryGap } from "../../lib/bot-history-view";
+import { HISTORY_TEXT_LIMIT, withTurnState, conversationItem, historyTail, historyBefore, historyKey, projectHistoryItem, projectWorkPlan, type HistoryEntry, type HistoryResponse, type HistoryDetail, type HistoryPosition, type HistoryGap } from "../../lib/bot-history-view";
+import { workPlanSource } from '../../lib/native-work-plan';
 import type { BotAttachment, BotEvent, BotScheduledTurn, BotScheduledEventData } from "../../lib/bots-types";
 import type { ThreadItem } from "../../lib/codex-protocol/v2/ThreadItem";
 import type { Turn } from "../../lib/codex-protocol/v2/Turn";
@@ -12,11 +13,11 @@ import { timelineCache, type createTimelineCache, type TimelineMetadata } from "
 
 export type TimelineTransport = {
   owner: string; online: boolean;
-  snapshot?: { bots: { id: string; threadId: string | null }[] } | null;
+  snapshot?: { bots: { id: string; threadId: string | null; activeTurnId?: string | null }[] } | null;
   rpc<T>(method: "history.view" | "history.detail", botId: string, params?: Record<string, unknown>): Promise<T>;
 };
 export type TimelineState = {
-  currentTiming?: NativeTiming & { threadId: string; turnId: string; turnStatus?: string };
+  currentTiming?: NativeTiming & { threadId: string; turnId: string; turnStatus?: Turn['status'] };
   partialTurn?: boolean; entries: HistoryEntry[]; contextEntries: HistoryEntry[]; attachments: BotAttachment[]; olderCursor: string | null;
   revision: string; eventCursor: number; complete: boolean; loading: boolean;
   error: string; cached: boolean; gaps: HistoryGap[]; position: HistoryPosition;
@@ -111,6 +112,12 @@ export class BotTimeline {
   private detailInvalidations = new Map<string, number>();
   private detailCursors = new Map<string, number>();
   private supplements = new Map<string, ThreadItem>();
+  private planScope(threadId: string | undefined, turnId: string | undefined) {
+    if (!turnId || !threadId || threadId !== this.currentThread()) return false;
+    const active = this.transport.snapshot?.bots.find(bot => bot.id === this.botId)?.activeTurnId ??
+      (this.state.currentTiming?.turnStatus === 'inProgress' ? this.state.currentTiming.turnId : null);
+    return !active || active === turnId || this.state.entries.some(entry => entry.turnId === turnId);
+  }
   private detailItems = new Map<string, ThreadItem>();
   private detailListeners = new Map<string, Set<() => void>>();
   private detailEvents = new Map<string, BotEvent[]>();
@@ -367,7 +374,7 @@ export class BotTimeline {
         await this.detail(this.state.entries.find((value) => historyKey(value.turnId, value.id) === key) ?? entry);
         if ((this.detailCursors.get(key) ?? 0) < wanted || (this.detailInvalidations.get(key) ?? 0) > wanted) this.invalidateDetail(entry, this.detailInvalidations.get(key) ?? wanted);
         else { this.detailInvalidations.delete(key); this.publish({}, true); }
-      } catch (error) { this.detailInvalidations.delete(key); this.publish({ error: `Open detail could not refresh: ${String(error)}` }, true); }
+      } catch (error) { this.detailInvalidations.delete(key); if (entry.workPlan) this.detailItems.delete(key); this.publish({ error: `Open detail could not refresh: ${String(error)}` }, true); }
     }, 1000));
   }
   receive(event: BotEvent) {
@@ -387,12 +394,18 @@ export class BotTimeline {
     }
     if (event.seq <= this.state.eventCursor) return;
     if (event.type === "history.refresh") {
-      const data = event.data as { reason?: string; method?: string; turnId?: string; itemId?: string; entry?: HistoryEntry; turn?: Turn };
+      const data = event.data as { reason?: string; method?: string; threadId?: string; turnId?: string; itemId?: string; entry?: HistoryEntry; turn?: Turn };
       if (data.reason !== "large-native-event") { this.scheduleRefresh(); return; }
-      const entries = [...this.state.entries];
+      if (data.method === 'turn/plan/updated' && data.threadId && !this.planScope(data.threadId, data.turnId)) return;
+      // This descriptor supersedes the earlier small notification's local
+      // body. The full replacement is now in the existing server detail lane.
+      if (data.method === 'turn/plan/updated' && data.turnId) this.supplements.delete(historyKey(data.turnId, 'live-turn-plan'));
+      const entries = this.state.entries.filter(entry => !(data.method === 'turn/plan/updated' && !data.entry && entry.turnId === data.turnId && entry.id === 'live-turn-plan'));
       if (data.entry) {
         const terminal = this.state.entries.find((entry) => entry.turnId === data.entry!.turnId && entry.turnStatus && entry.turnStatus !== "inProgress");
-        const next = { ...data.entry, ...(terminal ? { turnStatus: terminal.turnStatus } : {}), updatedSeq: event.seq }, key = historyKey(next.turnId, next.id);
+        const timing = this.state.currentTiming;
+        const status = terminal?.turnStatus ?? (data.entry.workPlan && timing?.turnId === data.entry.turnId && timing.threadId === this.currentThread() ? timing.turnStatus : undefined);
+        const next = { ...data.entry, ...(status && status !== 'inProgress' ? { turnStatus: status, status } : {}), updatedSeq: event.seq }, key = historyKey(next.turnId, next.id);
         const index = entries.findIndex((entry) => historyKey(entry.turnId, entry.id) === key);
         if (index < 0) entries.push(next); else entries[index] = { ...next, scheduled: entries[index].scheduled || next.scheduled };
         this.dirty.set(key, index < 0 ? next : entries[index]);
@@ -407,7 +420,7 @@ export class BotTimeline {
       }
       const entry = entries.find((entry) => entry.turnId === data.turnId && entry.id === data.itemId);
       if (entry) this.invalidateDetail(entry, event.seq);
-      else if (!data.turn) this.scheduleRefresh();
+      else if (!data.turn && data.method !== 'turn/plan/updated') this.scheduleRefresh();
       // Oversized text deltas carry no text; refresh the bounded readable view.
       // A mounted preview must not silently request the entire native item.
       if (entry?.item && !data.entry && !data.turn) this.scheduleRefresh();
@@ -417,8 +430,9 @@ export class BotTimeline {
     }
     if (event.type === "attachment") { this.publish({ attachments: mergeAttachments(this.state.attachments, [event.data as BotAttachment]), eventCursor: event.seq }); this.scheduleWrite(); return; }
     if (event.type !== "codex") return;
-    const { method, messageAt, operatorSegmentId, reply, replyMessages, replyByClientId, params: p } = event.data as { method: string; messageAt?: number; operatorSegmentId?: string; reply?: HistoryEntry["reply"]; replyMessages?: HistoryEntry["replyMessages"]; replyByClientId?: Record<string, Pick<HistoryEntry, "reply" | "replyMessages">>; params: { threadId?: string; startedAtMs?: number | null; completedAtMs?: number | null; turnId?: string; itemId?: string; item?: ThreadItem; turn?: Turn; delta?: string; diff?: string; plan?: unknown } };
+    const { method, messageAt, operatorSegmentId, reply, replyMessages, replyByClientId, params: p } = event.data as { method: string; messageAt?: number; operatorSegmentId?: string; reply?: HistoryEntry["reply"]; replyMessages?: HistoryEntry["replyMessages"]; replyByClientId?: Record<string, Pick<HistoryEntry, "reply" | "replyMessages">>; params: { threadId?: string; startedAtMs?: number | null; completedAtMs?: number | null; turnId?: string; itemId?: string; item?: ThreadItem; turn?: Turn; delta?: string; diff?: string; plan?: unknown; explanation?: string | null } };
     const turnId = p.turnId ?? p.turn?.id;
+    if (method === 'turn/plan/updated' && !this.planScope(p.threadId, turnId)) return;
     if (p.turn && p.threadId && p.threadId === this.currentThread() && ['turn/started', 'turn/completed'].includes(method)) {
       const current = this.state.currentTiming;
       // An unrelated old terminal observation never replaces the live start.
@@ -450,7 +464,7 @@ export class BotTimeline {
     const update = (entry: HistoryEntry) => {
       const prior = this.state.entries.find(value => value.turnId === entry.turnId && value.id === entry.id);
       const observed = messageAt ?? (prior?.timeBasis === "received" ? prior.messageAt : null);
-      this.merge([{ ...prior, ...entry, ...(entry.item?.type === "userMessage" ? replyByClientId?.[entry.item.clientId ?? ""] : {}), ...(reply ? { reply } : {}), ...(replyMessages ? { replyMessages } : {}), ...(operatorSegmentId ? { operatorSegmentId } : {}), ...(observed ? { messageAt: observed, timeBasis: "received" as const } : {}), updatedSeq: event.seq }]);
+      this.merge([{ ...prior, ...entry, ...(entry.item ? { workPlan: undefined } : {}), ...(entry.item?.type === "userMessage" ? replyByClientId?.[entry.item.clientId ?? ""] : {}), ...(reply ? { reply } : {}), ...(replyMessages ? { replyMessages } : {}), ...(operatorSegmentId ? { operatorSegmentId } : {}), ...(observed ? { messageAt: observed, timeBasis: "received" as const } : {}), updatedSeq: event.seq }]);
     };
     if (p.item && /item\/(started|completed)$/.test(method)) {
       const prior = this.state.entries.find((e) => e.turnId === turnId);
@@ -477,10 +491,22 @@ export class BotTimeline {
       if (method === "turn/completed") this.scheduleRefresh();
     } else if (method === "turn/diff/updated" || method === "turn/plan/updated") {
       const id = method === "turn/diff/updated" ? "live-turn-diff" : "live-turn-plan";
-      const item: ThreadItem = { id, type: "plan", text: method === "turn/diff/updated" ? "```diff\n" + (p.diff ?? "") + "\n```" : JSON.stringify(p.plan, null, 2) };
+      const item: ThreadItem = { id, type: "plan", text: method === "turn/diff/updated" ? "```diff\n" + (p.diff ?? "") + "\n```" : workPlanSource(p.plan, p.explanation) };
       const key = historyKey(turnId, id); this.supplements.set(key, item);
+      let supplementChars = 0;
+      for (const [oldKey, value] of [...this.supplements].reverse()) {
+        supplementChars += value.type === 'plan' ? value.text.length : 0;
+        if (supplementChars > 8 * 1024 * 1024 || this.supplements.size > 8 && oldKey !== key) this.supplements.delete(oldKey);
+      }
       if (this.detailItems.has(key)) this.detailItems.set(key, item);
-      if (method === "turn/plan/updated") update(projectHistoryItem({ id: turnId, status: "inProgress", startedAt: null }, item));
+      if (method === "turn/plan/updated") {
+        const prior = this.state.entries.find(entry => entry.turnId === turnId);
+        const current = this.state.currentTiming;
+        const timing = current?.turnId === turnId && current.threadId === p.threadId ? current : undefined;
+        const projected = projectWorkPlan({ id: turnId, status: prior?.turnStatus ?? timing?.turnStatus ?? 'inProgress', startedAt: prior?.startedAt ?? timing?.turnStartedAt ?? null }, p.plan, p.explanation);
+        if (projected) update(projected);
+        else { this.state = { ...this.state, entries: this.state.entries.filter(entry => historyKey(entry.turnId, entry.id) !== key) }; this.supplements.delete(key); this.detailItems.delete(key); }
+      }
       else update({ id, turnId, type: "plan", label: method === "turn/diff/updated" ? "Turn changes" : "Work plan", item: null, complete: false, scheduled: false, status: "inProgress", startedAt: null });
     } else if (p.itemId && (/(?:\/delta|Delta)$/.test(method) || method === "item/reasoning/summaryPartAdded")) {
       const entry = this.state.entries.find((e) => e.turnId === turnId && e.id === p.itemId);
@@ -622,8 +648,13 @@ export class BotTimeline {
         item = reduced[0]?.items.find((value) => value.id === entry.id) ?? item;
       }
       if (item.type === "reasoning") item = { ...item, content: [] };
-      this.detailItems.set(key, item); this.detailCursors.set(key, cursor);
       const current = this.state.entries.find((value) => historyKey(value.turnId, value.id) === key) ?? entry;
+      if (current.workPlan && (current.updatedSeq ?? 0) > cursor) {
+        const latest = this.supplements.get(key);
+        if (!latest) throw Error('The Work plan changed while loading. Its latest bounded snapshot is retained; reopen full details.');
+        item = latest; cursor = current.updatedSeq!;
+      }
+      this.detailItems.set(key, item); this.detailCursors.set(key, cursor);
       if (current.status !== "inProgress" && conversationItem(item.type) && item.id !== "live-turn-diff") void saveOpenedDetail(this.owner, this.botId, key, item, this.state.attachments, version!).catch(() => {});
       this.detailListeners.get(key)?.forEach((listener) => listener());
       return item;

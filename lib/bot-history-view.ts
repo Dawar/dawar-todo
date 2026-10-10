@@ -2,9 +2,12 @@ import { turnTiming, itemTiming, type NativeTiming } from './bot-timing.ts';
 import type { ThreadItem } from "./codex-protocol/v2/ThreadItem";
 import type { Turn } from "./codex-protocol/v2/Turn";
 import type { BotAttachment, BotEvent } from "./bots-types";
+import { nativeWorkPlan, type NativeWorkPlan } from './native-work-plan.ts';
 
 /** A disposable, explicitly partial view. Native history remains authoritative. */
 export type HistoryEntry = NativeTiming & {
+  /** Native turn/plan/updated display; never a native Plan-mode final item. */
+  workPlan?: NativeWorkPlan;
   /** Display provenance only; never a native message or activity publisher. */
   peer?: import("./bots-types").BotPeerExchangeMeta;
   peerNativeKeys?: string[];
@@ -95,6 +98,13 @@ export function projectHistoryItem(turn: Pick<Turn, "id" | "startedAt" | "status
     ...(source.type === "agentMessage" && !source.text.trim() && source.questions?.length ? { questionNotice: source.questions.slice(0, 16).map(q => q.title).join("\n\n").slice(0, HISTORY_TEXT_LIMIT) } : {}),
     ...itemTiming(source as typeof source & { durationMs?: number | null }, endpoints), ...(('tool' in source || 'name' in source) && /(?:^|[._])bots_(?:publish_artifact|report_result|request_secure_input|request_user_input(?:_async)?)$/.test(String('tool' in source ? source.tool : 'name' in source ? source.name : '')) ? { activityBoundary: true } : {}),
     scheduled, messageAt: source.type === "agentMessage" && source.phase === "final_answer" ? turn.completedAt ?? null : turn.startedAt, timeBasis: source.type === "agentMessage" && source.phase === "final_answer" ? "turn-end" : "turn-start", startedAt: turn.startedAt, turnStatus: turn.status, ...("status" in source ? { itemStatus: String(source.status) } : {}), status: turn.status }, turn);
+}
+
+export function projectWorkPlan(turn: Pick<Turn, 'id' | 'status' | 'startedAt'>, plan: unknown, explanation: unknown): HistoryEntry | null {
+  const workPlan = nativeWorkPlan(plan, explanation);
+  return workPlan ? { id: 'live-turn-plan', turnId: turn.id, type: 'plan', label: 'Work plan', item: null,
+    workPlan, complete: workPlan.complete, scheduled: false, startedAt: turn.startedAt,
+    turnStatus: turn.status, status: turn.status } : null;
 }
 
 /** Legacy caches can paint a useful tail without cloning/serializing their tool bodies. */
