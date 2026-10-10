@@ -1,5 +1,5 @@
 import { migrationIdentityResponse } from './migration-identity';
-import { captureD1Application } from '../portable/d1-application-snapshot.mjs';
+import { captureD1Application, probeD1Application } from '../portable/d1-application-snapshot.mjs';
 import { snapshotRecipient, sealApplicationSnapshot } from '../portable/snapshot-sealing.mjs';
 
 type Environment = { BOTS_OWNER_EMAIL?:string; BOTS_OWNER_USER_ID?:string; DB:D1Database };
@@ -23,6 +23,7 @@ export async function applicationSnapshotResponse(request:Request,environment:En
     return Response.json({error:'Supply the temporary migration recipient public key.'},{status:400,headers});
   }
   try {
+    if(url.searchParams.get('probe')==='1')return Response.json(await probeD1Application(environment.DB,AbortSignal.timeout(30000)),{headers});
     const result = await captureD1Application(environment.DB,AbortSignal.timeout(30000));
     const sealed = await sealApplicationSnapshot(result.snapshot,recipient!,url.origin);
     return Response.json(sealed,{headers:{...headers,'Content-Disposition':'attachment; filename="dawar-application.snapshot.sealed.json"'}});
