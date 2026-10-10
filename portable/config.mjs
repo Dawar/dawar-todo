@@ -13,6 +13,11 @@ export function loadConfig(path = process.env.DAWAR_HUB_CONFIG) {
     if (c.gatewayPort === c.sitePort) throw Error('Gateway and site ports must differ.');
     if (!c.owner?.key || !c.owner?.userId || !Array.isArray(c.identityBindings)) throw Error('Explicit original owner mapping is required.');
     if(typeof c.gatewaySecret!=='string'||!/^[A-Za-z0-9_-]{43,128}$/.test(c.gatewaySecret))throw Error('A private random gateway secret is required.');
+    if(c.voice){
+      if(typeof c.voice.enabled!=='boolean'||c.voice.scheduleMinute!==undefined&&typeof c.voice.scheduleMinute!=='boolean'||Object.keys(c.voice).some(k=>!['enabled','scheduleMinute'].includes(k)))throw Error('Invalid portable voice activation configuration.');
+      if(c.voice.enabled&&(!c.hub?.activationReceipt||!/^[a-f0-9]{40}$/.test(c.hub.source)))throw Error('Voice hosting requires exact reviewed hub activation.');
+      if(c.voice.scheduleMinute&&(!c.voice.enabled||typeof c.applicationEnvironment?.TODO_MAINTENANCE_SECRET!=='string'||!c.applicationEnvironment.TODO_MAINTENANCE_SECRET.trim()))throw Error('Minute scheduling requires explicit voice hosting and its existing maintenance secret.');
+    }
     if(c.auth0){
       const issuer=new URL(c.auth0.issuer);
       if(issuer.protocol!=='https:'||issuer.pathname!=='/'||issuer.username||issuer.password||issuer.search||issuer.hash||typeof c.auth0.clientId!=='string'||!c.auth0.clientId)throw Error('Invalid Auth0 application configuration.');

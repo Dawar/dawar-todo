@@ -1,3 +1,4 @@
+import {voiceFetch,voiceSocket,voicePair,voiceUpgrade,voiceWaitUntil} from './platform';
 import { OperatorVoiceEvents } from '../../lib/operator-voice-events';
 import type { OperatorContext } from '../../lib/operator-types';
 import {
@@ -59,7 +60,6 @@ type BridgeResult = Record<string, unknown> & {
   focusedTodoId?: number | null;
 };
 
-type WorkerResponse = Response & { webSocket?: WebSocket };
 
 const PHONE_IDLE_LIMIT_MS = 15 * 60 * 1_000;
 const REALTIME_ROLLOVER_MS = 50 * 60 * 1_000;
@@ -108,7 +108,7 @@ async function bridgeRequest<T>(
   payload: Record<string, unknown>,
 ) {
   const url = new URL(`/api/talk/phone/bridge/${path}`, baseUrl(environment));
-  const response = await fetch(url, {
+  const response = await voiceFetch(environment, url, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
@@ -125,10 +125,10 @@ async function bridgeRequest<T>(
   return body;
 }
 
-function realtimeSocket(model: string, clientSecret: string) {
+function realtimeSocket(environment:Env, model: string, clientSecret: string) {
   const url = new URL("wss://api.openai.com/v1/realtime");
   url.searchParams.set("model", model);
-  return new WebSocket(url, [
+  return voiceSocket(environment, url, [
     "realtime",
     `openai-insecure-api-key.${clientSecret}`,
   ]);
@@ -193,7 +193,7 @@ function runPhoneBridge(
     content: string,
   ) => {
     if (!content.trim() || ending) return;
-    context.waitUntil(
+    voiceWaitUntil(environment, context, () =>
       eventRequest("message", {
         role,
         realtimeItemId,
@@ -369,7 +369,7 @@ function runPhoneBridge(
     rollover = false,
   ) => {
     const previous = openAI;
-    const next = realtimeSocket(credentials.model, credentials.clientSecret);
+    const next = realtimeSocket(environment, credentials.model, credentials.clientSecret);
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(
         () => reject(new Error("OpenAI Realtime connection timed out.")),
@@ -387,7 +387,7 @@ function runPhoneBridge(
       }, { once: true });
       next.addEventListener("close", () => {
         if (!ending && next === openAI) {
-          context.waitUntil(finish("failed", "openai-disconnected"));
+          voiceWaitUntil(environment, context, () => finish("failed", "openai-disconnected"));
         }
       });
     });
@@ -421,7 +421,7 @@ function runPhoneBridge(
     }
     if (rolloverTimer) clearTimeout(rolloverTimer);
     rolloverTimer = setTimeout(() => {
-      context.waitUntil((async () => {
+      voiceWaitUntil(environment, context, () => (async () => {
         const credentials = await eventRequest<{
           clientSecret: string;
           model: string;
@@ -499,7 +499,7 @@ function runPhoneBridge(
     const event = parseJson<TwilioEvent>(message.data);
     if (!event?.event) return;
     if (event.event === "start") {
-      context.waitUntil(initialize("start" in event ? event.start : undefined));
+      voiceWaitUntil(environment, context, () => initialize("start" in event ? event.start : undefined));
       return;
     }
     if (event.event === "media") {
@@ -512,7 +512,7 @@ function runPhoneBridge(
             instructions: "Say only: Ending the call after fifteen minutes without a response.",
           },
         });
-        setTimeout(() => context.waitUntil(finish("completed", "idle-timeout")), 2_000);
+        setTimeout(() => voiceWaitUntil(environment, context, () => finish("completed", "idle-timeout")), 2_000);
         return;
       }
       if (!initialized || !socketOpen(openAI)) {
@@ -520,7 +520,7 @@ function runPhoneBridge(
         return;
       }
       sendJson(openAI, { type: "input_audio_buffer.append", audio });
-      context.waitUntil(heartbeat().catch((error) => {
+      if (!heartbeatRunning && Date.now() - lastHeartbeatAt >= 10_000) voiceWaitUntil(environment, context, () => heartbeat().catch((error) => {
         console.error("[voice-relay] heartbeat failed", {
           callSid,
           talkSessionId,
@@ -530,13 +530,13 @@ function runPhoneBridge(
       }));
       return;
     }
-    if (event.event === "stop") context.waitUntil(finish("completed", "caller-ended"));
+    if (event.event === "stop") voiceWaitUntil(environment, context, () => finish("completed", "caller-ended"));
   });
   twilio.addEventListener("close", () => {
-    if (!ending) context.waitUntil(finish("completed", "twilio-disconnected"));
+    if (!ending) voiceWaitUntil(environment, context, () => finish("completed", "twilio-disconnected"));
   });
   twilio.addEventListener("error", () => {
-    if (!ending) context.waitUntil(finish("failed", "twilio-connection-error"));
+    if (!ending) voiceWaitUntil(environment, context, () => finish("failed", "twilio-connection-error"));
   });
 
   startupTimer = setTimeout(() => {
@@ -546,7 +546,7 @@ function runPhoneBridge(
         streamSid: streamSid || null,
         durationMs: Date.now() - acceptedAt,
       });
-      context.waitUntil(finish("failed", "twilio-start-timeout"));
+      voiceWaitUntil(environment, context, () => finish("failed", "twilio-start-timeout"));
     }
   }, START_TIMEOUT_MS);
 }
@@ -579,7 +579,7 @@ const worker = {
       });
     }
 
-    const pair = new WebSocketPair();
+    const pair = voicePair(environment);
     const client = pair[0];
     const twilio = pair[1];
     twilio.accept();
@@ -588,10 +588,7 @@ const worker = {
       colo: request.cf?.colo ?? null,
       userAgent: request.headers.get("user-agent")?.slice(0, 80) ?? null,
     });
-    return new Response(null, {
-      status: 101,
-      webSocket: client,
-    } as ResponseInit & { webSocket: WebSocket }) as WorkerResponse;
+    return voiceUpgrade(environment, client);
   },
   async scheduled(controller: ScheduledController, environment: Env, context: ExecutionContext) {
     const secret = environment.TODO_MAINTENANCE_SECRET?.trim();
@@ -600,9 +597,9 @@ const worker = {
       return;
     }
     const scheduledAt = new Date(controller.scheduledTime);
-    context.waitUntil((async () => {
+    voiceWaitUntil(environment, context, () => (async () => {
       const url = new URL("/api/internal/minute", baseUrl(environment));
-      const response = await fetch(url, {
+      const response = await voiceFetch(environment, url, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${secret}`,

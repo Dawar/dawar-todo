@@ -411,3 +411,52 @@ The controller performs no installation, hold, release, retry or automatic
 execution. Its external adapters and real owner HTTPS transport are not yet
 connected to production. Fixture observations can validate this composition
 without proving those four actual production writer authorities are frozen.
+
+### Portable voice and provider hosting
+
+The gateway can host the original voice relay at `/api/voice/health`,
+`/api/voice/openai/webhook`, and `/api/voice/stream`. The existing application
+routes continue to validate Twilio callbacks, PINs and one-use bridge tokens.
+`voice.enabled` is false by default and requires the exact hub activation
+receipt. Provider routes, credentials and production routing are unchanged
+until the reviewed rollover. Move the configured relay URL and SIP webhook
+only after the original relay has finished its calls and uncertain effects.
+Cloudflare deployments retain their original transports through the same
+explicit platform functions; no request can select the Node adapter.
+
+Node uses `ws`, the original SIP coordinator, and owner-only `voice.sqlite`.
+Only the two existing SIP values are supported, with 1 MiB per value, 64 MiB
+aggregate and 1,024 controller identities. SQLite WAL/FULL transactions bind
+alarm generations, immutable effect IDs, fingerprints and reviewed source
+before each admitted effect. Socket lifetimes, background factories, alarms
+and HTTP responses are tracked separately. At most 32 incoming voice requests,
+64 resident sockets/requests, 128 background factories, 1 MiB socket frames and
+2 MiB outbound buffering are admitted. No-op media heartbeats are not admitted
+as background effects. The retained
+100,000-effect journal refuses exhaustion instead of deleting uncertainty.
+
+Provider HTTP and WebSockets are restricted to the original OpenAI endpoints;
+redirects are refused. Original phone bridge and minute requests go only to
+the configured site on loopback with the gateway proof and existing private
+bearer, never through a caller-supplied destination. Response bodies are bounded
+before HTTP settlement. Journals contain hashes and status, not provider bodies,
+tokens or ephemeral keys. SIP call values remain private because the original
+coordinator needs their existing tokens; do not publish or copy that database
+into normal artifacts. Backups remain deferred by the latest human amendment.
+
+`voice.scheduleMinute` explicitly enables the existing minute producer only
+after activation and private secret provisioning. Occurrence IDs persist
+before the original scheduled handler runs. There is no replay of missed,
+unknown or expired occurrences, or a backward-clock duplicate, and no second scheduler should remain active
+after rollover. SIP alarms retain their exact generation and are claimed before
+execution. A crashed/ambiguous call or effect stays retained and blocks replay;
+the adapter does not reconnect old calls merely because a new process started.
+
+Shutdown holds new voice starts while admitted work finishes. It refuses active
+calls, sockets, alarms, unknown effects or unresolved callback faults, and uses
+a bounded wall/monotonic deadline. The site is not stopped following a refused
+drain. This local barrier is explicitly **unsealed**; it is not the combined
+application/control/native freeze, a Cloudflare old-relay observer, an operating
+system kill guard or proof of genuine provider/device acceptance. Do not send
+service Stop until the complete reviewed handoff is actually satisfied. Source
+rollback must preserve the private voice journal and terminal reader semantics.

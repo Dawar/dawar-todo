@@ -12,6 +12,10 @@
   },
   "identityBindings": [],
   "applicationEnvironment": {},
+  "voice": {
+    "enabled": false,
+    "scheduleMinute": false
+  },
   "agent": {
     "hubOrigin": "https://OWNER_PROVISIONED_HOSTNAME.invalid",
     "nodeId": "OWNER_APPROVED_ENROLLED_NODE_ID",

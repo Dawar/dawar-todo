@@ -17,6 +17,7 @@ import { HubNodeStorage } from './hub-node-storage.mjs';
 import { HubControls,hubActivation } from './hub-controls.mjs';
 import { HUB_TOOLS } from './control-protocol.mjs';
 import { verifyBotTicket } from '../lib/bots-auth.ts';
+import {createVoiceRuntime} from './voice-runtime.mjs';
 
 const json = (response,status,body) => { response.writeHead(status,{'content-type':'application/json','cache-control':'no-store'});response.end(JSON.stringify(body)); };
 async function readBody(req) {
@@ -34,6 +35,7 @@ export function startGateway(config) {
   const authority=hubActivation(config),broadcast=(owner,event)=>{for(const b of browsers)if(b.owner===owner&&b.ws.readyState===1)b.ws.send(JSON.stringify({type:'event',event}));};
   const controls=new HubControls({path:join(config.dataDirectory,'control.sqlite'),hub:store,router,authority,broadcast,...(config.schedulerQuietWindow?{quietWindow:config.schedulerQuietWindow}:{})});router.controls=controls;
   const nodeStorage=new HubNodeStorage({hub:store,controls,application,objects,config});
+  const voice=config.voice?.enabled===true?createVoiceRuntime(config,{assertWriter:()=>controls.assertWriter()}):null;
   const scheduler=authority?setInterval(()=>void controls.tick().catch(error=>controls.emit('fault',error)),5000):null;
   const downloadDirectory=resolve(config.agentDownloadDirectory??fileURLToPath(new URL('../agent-downloads',import.meta.url)));
   const sockets = new WebSocketServer({noServer:true,maxPayload:MAX_FRAME_BYTES,perMessageDeflate:false});
@@ -42,6 +44,15 @@ export function startGateway(config) {
       const u = new URL(req.url,config.publicOrigin), headers = new Headers();
       for (const [key,value] of Object.entries(req.headers)) if(value!==undefined)headers.set(key,Array.isArray(value)?value.join(','):value);
       stripIdentity(headers);
+      if(u.pathname.startsWith('/api/voice/')){
+        if(!voice)return json(res,503,{error:'Portable voice hosting has not been activated.'});
+        const path={'/api/voice/health':'/health','/api/voice/openai/webhook':'/openai/webhook','/api/voice/stream':'/stream'}[u.pathname];
+        if(!path||u.search)return json(res,404,{error:'Unknown voice route.'});
+        let body;
+        if(req.method==='POST'){const parts=[];let size=0;for await(const c of req){size+=c.length;if(size>128*1024)throw Error('Request too large.');parts.push(c);}body=Buffer.concat(parts);}
+        const result=await voice.fetch(new Request(new URL(path,config.publicOrigin),{method:req.method,headers,body}));
+        res.writeHead(result.status,Object.fromEntries(result.headers));return res.end(Buffer.from(await result.arrayBuffer()));
+      }
       const r = new Request(u,{method:req.method,headers}), session = identity.session(r);
       if(u.pathname==='/storage/object'){
         const result=await objects.serveNode(req,u);res.writeHead(result.status,Object.fromEntries(result.headers));
@@ -134,6 +145,14 @@ export function startGateway(config) {
   });
   server.on('upgrade',(req,socket,head)=>{
     const u=new URL(req.url,config.publicOrigin);
+    if(u.pathname==='/api/voice/stream'){
+      if(!voice||req.headers.origin||u.search){socket.destroy();return;}
+      const headers=new Headers();for(const [key,value]of Object.entries(req.headers))if(value!==undefined)headers.set(key,Array.isArray(value)?value.join(','):value);stripIdentity(headers);
+      void voice.fetch(new Request(new URL('/stream',config.publicOrigin),{headers})).then(result=>{
+        if(result.status!==101||socket.destroyed){result.abandon?.();socket.destroy();return;}
+        try{sockets.handleUpgrade(req,socket,head,ws=>result.attach(ws));}catch{result.abandon();socket.destroy();}
+      }).catch(()=>socket.destroy());return;
+    }
     if(u.pathname==='/connect'){
       const session=identity.session(new Request(u,{headers:req.headers}));
       if(!session||req.headers.origin!==config.publicOrigin||u.searchParams.get('machine')!==(config.applicationEnvironment?.BOTS_MACHINE_ID??'dawar-vm')){socket.destroy();return;}
@@ -208,5 +227,6 @@ export function startGateway(config) {
     });
   });
   server.listen(config.gatewayPort??3210,'127.0.0.1');
-  return {server,store,application,objects,router,controls,close:async()=>{clearInterval(scheduler);router.close();for(const ws of sockets.clients)ws.close();await new Promise(resolve=>server.close(resolve));controls.close();objects.close();store.close();application.close();}};
+  let closing;
+  return {server,store,application,objects,router,controls,voice,close:()=>closing??=(async()=>{if(voice)await voice.close();clearInterval(scheduler);router.close();for(const ws of sockets.clients)ws.close();await new Promise(resolve=>server.close(resolve));controls.close();objects.close();store.close();application.close();})()};
 }

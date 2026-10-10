@@ -31,6 +31,7 @@ test("ships a PIN-gated Twilio bridge into the shared Talk runtime", async () =>
     sipController,
     relayConfig,
     environment,
+    voicePlatform,
   ] = await Promise.all([
     readFile(new URL("db/schema.ts", root), "utf8"),
     readFile(new URL("db/todos.ts", root), "utf8"),
@@ -55,6 +56,7 @@ test("ships a PIN-gated Twilio bridge into the shared Talk runtime", async () =>
     readFile(new URL("voice-relay/src/sip-controller.ts", root), "utf8"),
     readFile(new URL("voice-relay/wrangler.jsonc", root), "utf8"),
     readFile(new URL(".env.example", root), "utf8"),
+    readFile(new URL("voice-relay/src/platform.ts", root), "utf8"),
   ]);
 
   assert.match(schema, /todoTalkPhoneProfiles/);
@@ -163,7 +165,8 @@ test("ships a PIN-gated Twilio bridge into the shared Talk runtime", async () =>
   assert.match(bridgeEventsRoute, /appendTalkMessage/);
   assert.match(bridgeEventsRoute, /action === "rollover"/);
   assert.match(bridgeRuntime, /authenticateTalkPhoneBridge/);
-  assert.match(relay, /new WebSocket\(url/);
+  assert.match(relay, /voiceSocket\(environment, url/);
+  assert.match(voicePlatform, /new WebSocket\(url,protocols\)/);
   assert.match(relay, /openai-insecure-api-key/);
   assert.match(relay, /input_audio_buffer\.append/);
   assert.match(relay, /response\.output_audio\.delta/);

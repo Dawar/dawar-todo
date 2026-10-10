@@ -1,6 +1,7 @@
+import {voiceFetch,voiceWaitUntil,type VoicePlatformEnvironment} from './platform';
 import { OperatorVoiceEvents, type OperatorRealtimeEvent, type OperatorVoiceSnapshot } from '../../lib/operator-voice-events';
 import type { OperatorContext } from '../../lib/operator-types';
-export interface SipRelayEnvironment {
+export interface SipRelayEnvironment extends VoicePlatformEnvironment {
   SITE_BASE_URL: string;
   TODO_MAINTENANCE_SECRET?: string;
   OPENAI_API_KEY?: string;
@@ -102,7 +103,7 @@ async function bridgeRequest<T>(
   payload: Record<string, unknown>,
 ) {
   const url = new URL(`/api/talk/phone/bridge/${path}`, siteBaseUrl(environment));
-  const response = await fetch(url, {
+  const response = await voiceFetch(environment, url, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
@@ -130,7 +131,7 @@ async function acceptOpenAICall(
   bridge: SipBridgeStart,
 ) {
   const startedAt = Date.now();
-  const response = await fetch(
+  const response = await voiceFetch(environment,
     `https://api.openai.com/v1/realtime/calls/${encodeURIComponent(bridge.providerCallId)}/accept`,
     {
       method: "POST",
@@ -169,7 +170,7 @@ async function rejectOpenAICall(
   statusCode = 603,
 ) {
   if (!providerCallId) return;
-  await fetch(
+  await voiceFetch(environment,
     `https://api.openai.com/v1/realtime/calls/${encodeURIComponent(providerCallId)}/reject`,
     {
       method: "POST",
@@ -237,7 +238,7 @@ export async function handleOpenAISipWebhook(
 
     const controllerId = environment.SIP_CONTROLLERS.idFromName(providerCallId);
     const controller = environment.SIP_CONTROLLERS.get(controllerId);
-    context.waitUntil(controller.fetch("https://sip-controller/start", {
+    voiceWaitUntil(environment, context, () => controller.fetch("https://sip-controller/start", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -259,7 +260,7 @@ export async function handleOpenAISipWebhook(
         talkSessionId: bridge.talkSessionId,
         error,
       });
-      await fetch(
+      await voiceFetch(environment,
         `https://api.openai.com/v1/realtime/calls/${encodeURIComponent(providerCallId)}/hangup`,
         {
           method: "POST",
@@ -416,7 +417,7 @@ export class SipCallController {
   private async openRealtimeSocket(providerCallId: string) {
     const url = new URL("https://api.openai.com/v1/realtime");
     url.searchParams.set("call_id", providerCallId);
-    const response = await fetch(url, {
+    const response = await voiceFetch(this.environment, url, {
       headers: {
         ...openAIHeaders(this.environment),
         Upgrade: "websocket",
@@ -450,12 +451,12 @@ export class SipCallController {
       state.reconnectAttempts = 0;
       await this.persistState();
       socket.addEventListener("message", (message) => {
-        if (this.socket === socket) this.durableState.waitUntil(this.handleRealtimeEvent(message.data));
+        if (this.socket === socket) voiceWaitUntil(this.environment, this.durableState, () => this.handleRealtimeEvent(message.data));
       });
       socket.addEventListener("close", (event) => {
         if (this.socket !== socket) return;
         this.socket = null;
-        this.durableState.waitUntil(this.handleSocketClose(event.code, event.reason));
+        voiceWaitUntil(this.environment, this.durableState, () => this.handleSocketClose(event.code, event.reason));
       });
       socket.addEventListener("error", () => {
         console.error("[voice-relay-sip] OpenAI sideband socket error", {
@@ -513,7 +514,7 @@ export class SipCallController {
     content: string,
   ) {
     if (!content.trim()) return;
-    this.durableState.waitUntil(
+    voiceWaitUntil(this.environment, this.durableState, () =>
       this.eventRequest("message", {
         role,
         realtimeItemId,
@@ -680,7 +681,7 @@ export class SipCallController {
       });
     });
     if (hangup) {
-      await fetch(
+      await voiceFetch(this.environment,
         `https://api.openai.com/v1/realtime/calls/${encodeURIComponent(state.providerCallId)}/hangup`,
         {
           method: "POST",
