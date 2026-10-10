@@ -93,6 +93,7 @@ export function startGateway(config) {
         if(u.pathname==='/api/portable/revoke' && req.method==='POST'){store.revoke(session.owner,b.nodeId);connections.get(b.nodeId)?.close(1008,'Node revoked');return json(res,200,{revoked:true});}
         if(u.pathname==='/api/portable/placement' && req.method==='POST')return json(res,200,store.place(session.owner,b.botId,b.nodeId,b.expectedEpoch));
         if(u.pathname==='/api/portable/stop' && req.method==='POST'){
+          if(b.stopped!==true)throw Error('Use the original queue or work Resume action to release Stop.');
           const p=store.stop(session.owner,b.botId,b.stopped);connections.get(p.node_id)?.send(JSON.stringify({type:'sync',...store.sync(p.node_id)}));
           return json(res,200,{placement:p,confirmation:'pending'});
         }

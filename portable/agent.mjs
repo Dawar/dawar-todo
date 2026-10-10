@@ -10,6 +10,7 @@ import { nodeKey, signature, fingerprint,id,PROTOCOL_VERSION, RUNTIME_VERSION } 
 import { AGENT_READS, AGENT_MUTATIONS } from './hub-rpc.mjs';
 import { HUB_TOOLS,NODE_LOGICAL_COMMANDS } from './control-protocol.mjs';
 import { admitLogicalCommand } from './agent-admission.mjs';
+import { queueResumeReceipt } from './agent-queue-resume.mjs';
 const fingerprintLegacy=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
 export class AgentTransport {
@@ -72,7 +73,7 @@ export class AgentTransport {
   async recover(){
     if(this.recovering||this.closed||!this.runtime.ready)return;this.recovering=true;
     try{
-      let rows=this.journal.db.prepare("SELECT rowid AS rowNumber,* FROM node_commands WHERE rowid>? AND state IN ('unknown','native-accepted','running') ORDER BY rowid LIMIT 2").all(this.recoveryCursor??0);
+      let rows=this.journal.db.prepare("SELECT rowid AS rowNumber,* FROM node_commands WHERE rowid>? AND state IN ('received','dispatching','unknown','native-accepted','running') ORDER BY rowid LIMIT 2").all(this.recoveryCursor??0);
       if(!rows.length){this.recoveryCursor=0;return;}
       for(const row of rows){
         this.recoveryCursor=row.rowNumber;
@@ -80,20 +81,26 @@ export class AgentTransport {
         if(this.runtime.locks.has(bot.id))continue;
         await this.runtime.lock(bot.id,()=>this.runtime.maintenance.track(async()=>{
           const op=this.runtime.store.operation(command.operation_id);
-          if(!op||op.botId!==bot.id||!['turn.send','queue.dispatch','schedule.dispatch'].includes(op.method))return;
+          if(!op||op.botId!==bot.id||!['turn.send','queue.send','queue.dispatch','schedule.dispatch','queue.resume'].includes(op.method))return;
           const binding=NODE_LOGICAL_COMMANDS.has(payload.method)?op.portableFingerprint===command.fingerprint:
             op.fingerprint===fingerprintLegacy({method:payload.method,botId:bot.id,params:payload.params??{}});
           if(!binding)return;
+          if(payload.method==='portable.queueResume'){
+            if(op.status!=='done'||op.method!=='queue.resume'||op.controlRevision!==payload.params.controlRevision)return;
+            const receipt=queueResumeReceipt(command,op.result),current=this.journal.db.prepare('SELECT * FROM node_commands WHERE operation_id=?').get(op.id);
+            if(current?.fingerprint!==row.fingerprint||!['received','dispatching','unknown'].includes(current.state))return;
+            this.journal.settle(op.id,'terminal',receipt);this.receipt(this.journal.db.prepare('SELECT * FROM node_commands WHERE operation_id=?').get(op.id));return;
+          }
           const before={threadId:bot.threadId,method:op.method,botId:op.botId,fingerprint:op.fingerprint,portableFingerprint:op.portableFingerprint??null};
           const result=op.status==='done'?op.result:await this.runtime.reconcileOperation(op),after=this.runtime.store.operation(op.id);
           if(!result||!after||fingerprint(before)!==fingerprint({threadId:this.runtime.store.bot(bot.id).threadId,method:after.method,botId:after.botId,fingerprint:after.fingerprint,portableFingerprint:after.portableFingerprint??null}))return;
           const turnId=result.turn?.id??result.turnId;if(!turnId)return;
           const current=this.journal.db.prepare('SELECT * FROM node_commands WHERE operation_id=?').get(op.id);
-          if(current?.fingerprint!==row.fingerprint||!['unknown','native-accepted','running'].includes(current.state))return;
+          if(current?.fingerprint!==row.fingerprint||!['received','dispatching','unknown','native-accepted','running'].includes(current.state))return;
           const terminal=this.runtime.store.get('planTurnEvidence',turnId),status=['completed','failed','interrupted'].includes(result.turn?.status)?result.turn.status:
             terminal?.botId===bot.id&&['completed','failed','interrupted'].includes(terminal.status)?terminal.status:null;
           const receipt={operationId:op.id,threadId:bot.threadId,turnId,result,evidence:{kind:'original-native-client',operationId:op.id,threadId:bot.threadId,turnId},...(status?{nativeStatus:status}:{})};
-          if(current.state==='unknown')this.journal.settle(op.id,status?'terminal':'native-accepted',receipt);
+          if(['received','dispatching','unknown'].includes(current.state))this.journal.settle(op.id,status?'terminal':'native-accepted',receipt);
           else if(status)this.journal.settle(op.id,'terminal',receipt);else return;
           this.receipt(this.journal.db.prepare('SELECT * FROM node_commands WHERE operation_id=?').get(op.id));
         }));
@@ -162,7 +169,7 @@ export class AgentTransport {
     if(!AGENT_MUTATIONS.has(payload.method)&&!NODE_LOGICAL_COMMANDS.has(payload.method))throw Error('Unsupported assigned command.');
     // Stop itself remains admissible while the synchronized Stop fence blocks
     // new turns. Offline/foreign/stale controls never grant interruption.
-    if(payload.method==='turn.interrupt'?!this.journal.currentControl(command):!this.journal.canAdmit(command))return;
+    if(['turn.interrupt','portable.queueResume','portable.queueSend'].includes(payload.method)?!this.journal.currentControl(command):!this.journal.canAdmit(command))return;
     const bot=this.runtime.store.bot(command.bot_id);if(!bot || bot.archived || bot.deletedAt)throw Error('Assigned native bot is absent or archived.');
     const request={method:payload.method,botId:command.bot_id,operationId:command.operation_id,params:payload.params,clientId:`hub:${this.enrollment.nodeId}`};
     if(row.state==='dispatching' && !this.runtime.store.operation(command.operation_id)) {
@@ -176,8 +183,8 @@ export class AgentTransport {
     try {
       const result=NODE_LOGICAL_COMMANDS.has(payload.method)?await admitLogicalCommand(this,command,payload):await this.runtime.handle(request), turnId=result?.turn?.id??result?.turnId;
       const terminalStatus=['completed','failed','interrupted'].includes(result?.turn?.status)?result.turn.status:null;
-      const receipt={operationId:command.operation_id,threadId:bot.threadId,...(turnId?{turnId}:{}),...(terminalStatus?{nativeStatus:terminalStatus}:{}),result};
-      this.journal.settle(command.operation_id,turnId?(terminalStatus?'terminal':'native-accepted'):payload.method==='turn.send'||NODE_LOGICAL_COMMANDS.has(payload.method)?'unknown':'terminal',receipt);
+      const receipt=payload.method==='portable.queueResume'?queueResumeReceipt(command,result):{operationId:command.operation_id,threadId:bot.threadId,...(turnId?{turnId}:{}),...(terminalStatus?{nativeStatus:terminalStatus}:{}),result};
+      this.journal.settle(command.operation_id,payload.method==='portable.queueResume'?'terminal':turnId?(terminalStatus?'terminal':'native-accepted'):payload.method==='turn.send'||NODE_LOGICAL_COMMANDS.has(payload.method)?'unknown':'terminal',receipt);
     } catch(error){
       if(error.deferred&&this.journal.db.prepare('SELECT state FROM node_commands WHERE operation_id=?').get(command.operation_id)?.state==='received')return;
       this.journal.settle(command.operation_id,error.outcome==='rejected'?'terminal':'unknown',{operationId:command.operation_id,outcome:error.outcome??'uncertain',error:error.message});

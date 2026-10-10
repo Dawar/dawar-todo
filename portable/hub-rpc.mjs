@@ -43,12 +43,26 @@ export class HubRpc {
       if(row.state==='unknown')throw Object.assign(Error('Original native acceptance is unknown. It has not been resubmitted.'),{outcome:'uncertain'});
       if(r.outcome==='rejected')throw Object.assign(Error(r.error??'Original operation rejected.'),{outcome:'rejected'});
     }
+    return this.wait(row);
+  }
+  wait(row){
+    const p=this.store.placement(row.owner,row.bot_id),ws=this.connection(p);
+    if(p.node_id!==row.node_id||p.epoch!==row.epoch)throw Object.assign(Error('Original placement changed; no new delivery was made.'),{outcome:'uncertain'});
+    if(row.receipt){
+      const r=JSON.parse(row.receipt);
+      if(r.outcome==='rejected')throw Object.assign(Error(r.error??'Original operation rejected.'),{outcome:'rejected'});
+      if(r.result!==undefined&&['native-accepted','running','terminal'].includes(row.state))return Promise.resolve({result:r.result,delivery:{state:row.state,nodeId:row.node_id,epoch:row.epoch}});
+      if(row.state==='unknown')throw Object.assign(Error('Original outcome remains unconfirmed; it was not resubmitted.'),{outcome:'uncertain'});
+    }
     if(!ws)throw Object.assign(Error('Original input is saved at the hub, waiting for its assigned node. Native acceptance is not confirmed.'),{outcome:'uncertain',delivery:{state:row.state}});
+    let item;
     const waiting=new Promise((resolve,reject)=>{
       const timer=setTimeout(()=>{const values=this.writes.get(row.operation_id);values?.delete(item);if(!values?.size)this.writes.delete(row.operation_id);reject(Object.assign(Error('Original input remains in delivery; reconcile the same operation before any retry.'),{outcome:'uncertain'}));},30000);
-      const item={owner,resolve,reject,timer};const values=this.writes.get(row.operation_id)??new Set();values.add(item);this.writes.set(row.operation_id,values);
+      item={owner:row.owner,resolve,reject,timer};const values=this.writes.get(row.operation_id)??new Set();values.add(item);this.writes.set(row.operation_id,values);
     });
-    ws.send(boundedFrame({type:'sync',...this.store.sync(p.node_id)}));return waiting;
+    try{ws.send(boundedFrame({type:'sync',...this.store.sync(p.node_id)}));}
+    catch(error){clearTimeout(item.timer);const values=this.writes.get(row.operation_id);values?.delete(item);if(!values?.size)this.writes.delete(row.operation_id);item.reject(Object.assign(error,{outcome:'uncertain'}));}
+    return waiting;
   }
   readResult(nodeId,m){
     const r=this.reads.get(m.rpcId);if(!r)return;
@@ -92,7 +106,7 @@ export class HubRpc {
     for(const [key,value] of Object.entries(first.capabilities??{}))if(value===1&&snapshots.length===placements.length&&snapshots.every(({s})=>s.capabilities?.[key]===1))common[key]=1;
     // A runtime's generic capability is not evidence that the hub transport
     // has implemented its consumer. Keep unfinished portable controls hidden.
-    for(const key of ['taskRequests','backgroundRunLanes','scheduleDecisions','peerInbox','peerRootControls','peerBodyPaging','collaborationRooms','operatorCalls','operatorInputQuestions','secureInputs','secureResponseLifecycle','messageBursts','burstDiscard','burstControls','burstQueue','queueSendNow','taskQueues','teams','botDesktops','botBrowserRetention','botAdministration'])delete common[key];
+    for(const key of ['taskRequests','backgroundRunLanes','scheduleDecisions','peerInbox','peerRootControls','peerBodyPaging','collaborationRooms','operatorCalls','operatorInputQuestions','secureInputs','secureResponseLifecycle','messageBursts','burstDiscard','burstControls','burstQueue','taskQueues','teams','botDesktops','botBrowserRetention','botAdministration'])delete common[key];
     if(placements.some(p=>JSON.parse(this.store.node(p.node_id).hello).capabilities.autonomousGoals!==true))delete common.nativeGoals;
     const schedules=this.controls?placements.flatMap(p=>this.controls.store.list('schedule',p.bot_id)):[],runs=this.controls?placements.flatMap(p=>this.controls.store.list('run',p.bot_id)).sort((a,b)=>b.scheduledAt.localeCompare(a.scheduledAt)).slice(0,100):scoped('runs');
     return {result:{...first,cursor,bots,workByBot:scoped('workByBot'),pending:scoped('pending'),schedules,runs,activeScheduledTurns:scoped('activeScheduledTurns'),ready:snapshots.length===placements.length&&placements.every(p=>!!this.connection(p)),

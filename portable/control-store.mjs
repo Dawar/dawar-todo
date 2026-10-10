@@ -1,5 +1,5 @@
 import { privateDatabase } from './sqlite.mjs';
-import { boundedFrame, canonical, compatible, digest, fingerprint, id, originalNativeProof,publicFingerprint, secret, verifySignature } from './protocol.mjs';
+import { boundedFrame, canonical, compatible, digest, fingerprint, id, originalNativeProof,originalLocalControlProof,publicFingerprint, secret, verifySignature } from './protocol.mjs';
 
 const transitions = {
   // A later immutable receipt proves node receipt even when that earlier ACK
@@ -155,7 +155,7 @@ export class HubStore {
       if (p.node_id !== nodeId || p.epoch !== r.epoch) throw Error('Stale placement receipt.');
       if (r.state === state && r.receipt_hash === digest(text)) return r;
       if (!transitions[r.state]?.includes(state)) throw Error('Receipt state regressed or contradicts original outcome.');
-      if(r.state==='unknown'&&!originalNativeProof(receipt,operationId))throw Error('Unknown delivery requires exact original native evidence, never a retry.');
+      if(r.state==='unknown'&&!originalNativeProof(receipt,operationId)&&!(state==='terminal'&&originalLocalControlProof(receipt,operationId,r.fingerprint,JSON.parse(r.payload))))throw Error('Unknown delivery requires exact original acceptance evidence, never a retry.');
       if (['native-accepted','running'].includes(state) && (!id(receipt?.threadId) || !id(receipt?.turnId) || receipt?.operationId !== operationId)) throw Error('Positive native receipt required.');
       this.db.prepare('UPDATE portable_mailbox SET state=?,receipt=?,receipt_hash=?,updated_at=? WHERE operation_id=?')
         .run(state, text, digest(text), now, operationId);
@@ -233,7 +233,8 @@ export class NodeJournal {
   settle(operationId, state, receipt) {
     const old = this.db.prepare('SELECT * FROM node_commands WHERE operation_id=?').get(operationId);
     if (!old || !(old.state==='dispatching'?['native-accepted','terminal','unknown']:transitions[old.state])?.includes(state)) throw Error('Invalid node settlement.');
-    if(old.state==='unknown'&&!originalNativeProof(receipt,operationId))throw Error('Unknown native outcome requires exact original receipt proof.');
+    const command=JSON.parse(old.command);
+    if(old.state==='unknown'&&!originalNativeProof(receipt,operationId)&&!(state==='terminal'&&originalLocalControlProof(receipt,operationId,old.fingerprint,JSON.parse(command.payload))))throw Error('Unknown outcome requires exact original receipt proof.');
     this.db.prepare('UPDATE node_commands SET state=?,receipt=? WHERE operation_id=?').run(state,boundedFrame(receipt),operationId);
   }
   recordEvent(eventId, event) {

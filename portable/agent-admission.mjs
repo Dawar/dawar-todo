@@ -1,6 +1,7 @@
 import { fingerprint,id } from './protocol.mjs';
 import { NODE_LOGICAL_COMMANDS } from './control-protocol.mjs';
 import { ownedReply,prepareReply,rememberReply } from '../bot-bridge/message-replies.mjs';
+import { resumeLogicalQueue } from './agent-queue-resume.mjs';
 
 const now=()=>new Date().toISOString();
 const refused=message=>Object.assign(Error(message),{outcome:'rejected'});
@@ -12,15 +13,18 @@ const queueIdentity=q=>({id:q.id,botId:q.botId,threadId:q.threadId,revision:q.re
 // this adapter never calls the native automatic prompt queue.
 export async function admitLogicalCommand(transport,command,payload) {
   if(!NODE_LOGICAL_COMMANDS.has(payload.method))throw refused('Unsupported logical command.');
+  if(payload.method==='portable.queueResume')return resumeLogicalQueue(transport,command,payload);
   const {runtime,journal}=transport,store=runtime.store,params=payload.params;
-  const queued=payload.method==='portable.queueDispatch',source=queued?params?.item:params?.run;
+  const explicit=payload.method==='portable.queueSend',queued=explicit||payload.method==='portable.queueDispatch',source=queued?params?.item:params?.run;
   const bot=store.bot(command.bot_id);
-  if(!source||source.botId!==bot.id||source.threadId!==bot.threadId||!id(source.id)||queued&&(!Number.isSafeInteger(source.revision)||source.revision<1||source.state!=='queued'||source.listId||source.configuration?.confirmation==='pending-unsupported')||!queued&&(source.status!=='queued'||source.selectedContext||source.laneId))throw refused('Logical source is outside this assigned primary conversation.');
+  if(!source||source.botId!==bot.id||source.threadId!==bot.threadId||!id(source.id)||queued&&(!Number.isSafeInteger(source.revision)||source.revision<1||!(explicit?['queued','failed']:['queued']).includes(source.state)||!explicit&&source.listId||source.nativeQueueId||source.configuration?.confirmation==='pending-unsupported')||!queued&&(source.status!=='queued'||source.selectedContext||source.laneId)||explicit&&(!Number.isSafeInteger(params.controlRevision)||params.controlRevision<1))throw refused('Logical source is outside this assigned primary conversation.');
   return runtime.lock(bot.id,()=>runtime.maintenance.admit(async()=>{
     const before=journal.currentControl(command);
+    if(explicit&&before&&(before.stopped||before.revision!==params.controlRevision))throw refused('A newer Stop or control supersedes this explicit Send.');
     if(!before||before.stopped)throw defer('Hub control is offline, stale or stopped.');
     const assertControl=()=>{
       const c=journal.currentControl(command),b=store.bot(bot.id);
+      if(explicit&&c&&(c.stopped||c.revision!==params.controlRevision))throw refused('A newer Stop or control supersedes this explicit Send before submission.');
       if(!c||c.stopped||c.revision!==before.revision)throw defer('Assigned control changed before native submission.');
       if(b.threadId!==bot.threadId||b.archived||b.archiving||b.deletedAt)throw refused('Assigned conversation changed before native submission.');
     };
@@ -36,7 +40,8 @@ export async function admitLogicalCommand(transport,command,payload) {
     if(!await runtime.reconcileCurrentActivity(bot.id))throw defer('Current native activity is unresolved; this saved input did not start.');
     assertControl();
     const current=store.bot(bot.id),work=runtime.primary.work(current);
-    if(work.state!=='ready'||current.queuePaused||runtime.plans.blocked(bot.id))throw defer('Current work, input, Stop or Plan requires attention before automatic admission.');
+    if(!explicit&&(work.state!=='ready'||current.queuePaused||runtime.plans.blocked(bot.id)))throw defer('Current work, input, Stop or Plan requires attention before automatic admission.');
+    if(explicit&&(current.managerPaused||store.list('executionStop',bot.id).some(s=>s.scope!=='run'&&s.state!=='done')))throw refused('Complete the original Stop or Resume work before this Send.');
     // Neither an old idle projection nor a historical receipt is global
     // native queue/Goal evidence. One fresh bounded queue page must be empty.
     let nativeQueue,goal;
@@ -45,7 +50,7 @@ export async function admitLogicalCommand(transport,command,payload) {
       ({goal}=await runtime.primary.goal(current,'get'));
     }catch(error){throw defer(`Current native admission evidence is unavailable: ${error.message}`);}
     if(!Array.isArray(nativeQueue?.data)||nativeQueue.data.length||nativeQueue.nextCursor)throw defer('Retained native queued input must settle before hub admission.');
-    if(goal?.status==='active')throw defer('An active native Goal owns this conversation.');
+    if(!explicit&&goal?.status==='active')throw defer('An active native Goal owns this conversation.');
     assertControl();
     let text,input,attachments=[];
     if(queued){
@@ -87,8 +92,9 @@ export async function admitLogicalCommand(transport,command,payload) {
         store.put('promptQueue',{...source,state:'dispatching',operationId:command.operation_id,clientUserMessageId:command.operation_id,attemptedAt:now()});
         store.put('queuedAttachments',{id:command.operation_id,botId:bot.id,queueId:source.id,revision:source.revision,attachmentIds:attachments,immutable:true});
         rememberReply(runtime,current,command.operation_id,text,params.reply);
+        if(explicit)store.put('queueSend',{id:command.operation_id,botId:bot.id,threadId:bot.threadId,queueId:source.id,revision:source.revision,originalClientId:source.clientUserMessageId,createdAt:now()});
       }else store.put('run',{...source,status:'starting',operationId:command.operation_id,conversation:true,executionLane:'main-single',startedAt:now()});
-      store.saveOperation(command.operation_id,command.fingerprint,'dispatching',{portableFingerprint:command.fingerprint,method:queued?'queue.dispatch':'schedule.dispatch',botId:bot.id,[queued?'queueId':'runId']:source.id,...(queued?{revision:source.revision,clientId:command.operation_id}:{}),params:{attachments},createdAt:now()});
+      store.saveOperation(command.operation_id,command.fingerprint,'dispatching',{portableFingerprint:command.fingerprint,method:explicit?'queue.send':queued?'queue.dispatch':'schedule.dispatch',botId:bot.id,[queued?'queueId':'runId']:source.id,...(queued?{revision:source.revision,clientId:command.operation_id}:{}),params:{attachments},createdAt:now()});
     });}catch(error){
       // This transaction contains no native call. A rolled-back reservation
       // with no original operation is positive no-effect evidence in this
@@ -99,7 +105,7 @@ export async function admitLogicalCommand(transport,command,payload) {
     try{
       // staged=true refuses steering into a newly busy turn. startTurn uses
       // the original native client ID and captures the current exact settings.
-      const result=await runtime.send(store.bot(bot.id),{text,stagedInput:input},command.operation_id,queued?null:store.get('run',source.id),attempt,true);
+      const result=await runtime.send(store.bot(bot.id),{text,stagedInput:input},command.operation_id,queued?null:store.get('run',source.id),attempt,!explicit,null,input);
       store.transaction(()=>{
         const op=store.operation(command.operation_id),row=store.get(queued?'promptQueue':'run',source.id);
         if(op?.portableFingerprint!==command.fingerprint||row?.operationId!==command.operation_id)throw unknown('Original acceptance receipt changed after native submission.');

@@ -113,7 +113,18 @@ proof remains contained. Quiet-window and notification schedules are not
 inferred from names. The current configured quiet window and explicit
 exception IDs govern scheduler eligibility.
 
-This staging step does not complete queue Send/Resume, task/burst transfer,
+Owner queue Send and Resume use the same durable mailbox. Send captures one
+saved revision and may steer a positively acknowledged current turn through
+the existing native path. A pending or unknown input blocks another Send;
+known native acceptance alone does not block deliberate feedback. Resume
+checks the completed Stop and current primary activity on the assigned agent,
+then records its local acceptance without running a node-local scheduler or
+resuming a Goal. The hub release intent is visibly pending until that receipt.
+Later Stop revisions supersede either action. Only an exact durable local
+Resume receipt can reconcile an ambiguous Resume; no native retry is used.
+The low-level Stop endpoint cannot clear Stop and bypass these checks.
+
+This staging step does not complete task/burst transfer,
 all room/desktop/voice/browser roles, registered-file transfer or provisioning.
 Generic runtime capabilities for unfinished transport consumers are hidden.
 The application writer freeze, production authority migration, actual native

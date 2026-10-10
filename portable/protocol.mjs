@@ -27,6 +27,13 @@ export function originalNativeProof(receipt,operationId) {
     &&id(receipt.threadId)&&id(receipt.turnId)&&e.threadId===receipt.threadId&&e.turnId===receipt.turnId
     &&(receipt.result?.turn?.id??receipt.result?.turnId)===receipt.turnId;
 }
+export function originalLocalControlProof(receipt,operationId,hash,payload) {
+  const e=receipt?.evidence,p=payload?.params;
+  return payload?.method==='portable.queueResume'&&e?.kind==='original-local-control'&&e.method===payload.method
+    &&receipt.operationId===operationId&&e.operationId===operationId&&e.fingerprint===hash
+    &&id(receipt.threadId)&&receipt.threadId===p.threadId&&e.threadId===p.threadId
+    &&Number.isSafeInteger(p.controlRevision)&&e.controlRevision===p.controlRevision&&receipt.result!==undefined;
+}
 export function boundedFrame(value) {
   const text = canonical(value);
   if (Buffer.byteLength(text) > MAX_FRAME_BYTES) throw Error('Protocol frame exceeds its bound.');

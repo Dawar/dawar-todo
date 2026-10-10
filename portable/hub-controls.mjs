@@ -18,6 +18,8 @@ import { HUB_READS,HUB_MUTATIONS,HUB_TOOLS,NODE_LOGICAL_COMMANDS } from './contr
 export { HUB_READS,HUB_MUTATIONS,HUB_TOOLS,NODE_LOGICAL_COMMANDS };
 const now=()=>new Date().toISOString();
 const digest=value=>createHash('sha256').update(value).digest('hex');
+const MAILBOX=Symbol('prepared-mailbox');
+const ownerQueueControls=new Set(['queue.send','queue.resume','work.resume']);
 
 export function hubActivation(config) {
   if(!config.hub?.activationReceipt)return null;
@@ -105,9 +107,16 @@ export class HubControls extends EventEmitter {
     }
     if(!HUB_MUTATIONS.has(method)||!id(operationId))throw Error('Unsupported logical control or missing original operation.');
     this.assertWriter();const binding=fingerprint({owner,method,botId,params,caller});
-    return this.lock(botId,async()=>{
+    const accepted=await this.lock(botId,async()=>{
       this.assertWriter();this.scope(owner,botId);const prior=this.store.operation(operationId);
-      if(prior){if(prior.fingerprint!==binding)throw Error('Original logical operation changed.');if(prior.status==='done')return prior.result;throw Object.assign(Error('Original logical acceptance is unconfirmed.'),{outcome:'uncertain'});}
+      if(ownerQueueControls.has(method)&&caller.kind!=='owner')throw Object.assign(Error('Send and Resume require the authenticated owner.'),{outcome:'rejected'});
+      if(prior){if(prior.fingerprint!==binding)throw Error('Original logical operation changed.');if(prior.status==='done')return prior.result;
+        if(ownerQueueControls.has(method)){const row=this.hub.db.prepare('SELECT * FROM portable_mailbox WHERE operation_id=?').get(operationId);if(!row)throw Object.assign(Error('Original logical delivery record is missing; do not repeat it.'),{outcome:'uncertain'});return {[MAILBOX]:row};}
+        throw Object.assign(Error('Original logical acceptance is unconfirmed.'),{outcome:'uncertain'});}
+      if(ownerQueueControls.has(method)){
+        try{return {[MAILBOX]:this.prepareOwnerQueueControl(owner,botId,method,params,operationId,binding,caller)};}
+        catch(error){error.outcome=this.store.operation(operationId)?'uncertain':'rejected';throw error;}
+      }
       const apply=async()=>{
         const queue=await acceptLocalQueueOperation(this,{method,botId,params,operationId},binding);if(queue)return queue.result;
         return this.store.transaction(()=>{
@@ -125,6 +134,49 @@ export class HubControls extends EventEmitter {
         });
       };
       return apply();
+    });
+    if(accepted?.[MAILBOX]){const value=(await this.router.wait(accepted[MAILBOX])).result;return method==='queue.resume'?{}:value;}
+    return accepted;
+  }
+  queuePayload(bot,q,method='portable.queueDispatch') {
+    const reply=this.store.get('messageReply',q.clientUserMessageId),savedFiles=this.store.get('queuedAttachments',q.clientUserMessageId);
+    if(reply&&(reply.botId!==bot.id||reply.threadId!==bot.threadId)||savedFiles&&savedFiles.botId!==bot.id)throw Error('Original queue receipt belongs to another conversation.');
+    const attachmentIds=q.attachmentIds??savedFiles?.attachmentIds??[];
+    if(!attachmentIds.length&&q.input.some(part=>part.type!=='text'||part.text.startsWith('Attached file: ')))throw Error('Original saved files require recovery; nothing was sent.');
+    const text=reply?.text??q.input.filter(part=>part.type==='text'&&!part.text.startsWith('Attached file: ')).map(part=>part.text).join('\n');
+    const files=attachmentIds.map(id=>{const a=this.owned('attachment',id,bot.id);if(!a.ready||!/^[a-f0-9]{64}$/.test(a.sha256??'')||!Number.isSafeInteger(a.size)||a.size<0)throw Error('Queued file is unconfirmed.');return {id:a.id,sha256:a.sha256,size:a.size};});
+    return {method,params:{item:{...q,attachmentIds},text,files,...(reply?.reply?{reply:reply.reply}:{})}};
+  }
+  prepareOwnerQueueControl(owner,botId,method,params,operationId,binding,caller) {
+    return this.store.transaction(()=>{
+      this.assertWriter();const {p,b}=this.scope(owner,botId);
+      if(b.archived||b.archiving)throw Error('Restore this bot first.');
+      const outstanding=this.hub.db.prepare("SELECT state,receipt,node_id,epoch FROM portable_mailbox WHERE bot_id=? AND state<>'terminal' LIMIT 100").all(botId);
+      if(outstanding.length>=100||outstanding.some(r=>{
+        if(method!=='queue.send'||!['native-accepted','running'].includes(r.state)||!r.receipt||r.node_id!==p.node_id||r.epoch!==p.epoch)return true;
+        const receipt=JSON.parse(r.receipt);return receipt.threadId!==b.threadId||!id(receipt.turnId);
+      }))throw Object.assign(Error('Reconcile the original pending input or Stop before Send or Resume.'),{outcome:'rejected'});
+      let payload,source;
+      if(method==='queue.send'){
+        if(Object.keys(params).some(k=>!['id','expectedRevision'].includes(k)))throw Error('Choose only the original queued message and revision.');
+        source=this.owned('promptQueue',params.id,botId);
+        if(source.threadId!==b.threadId||!Number.isSafeInteger(params.expectedRevision)||params.expectedRevision<1||source.revision!==params.expectedRevision||!['queued','failed'].includes(source.state)||source.nativeQueueId||source.configuration?.confirmation==='pending-unsupported')throw Error('The original queue revision is changed, already starting or awaiting configuration.');
+        payload=this.queuePayload(b,source,'portable.queueSend');
+      }else{
+        if(Object.keys(params).length)throw Error('Resume accepts no replacement input.');
+        if(this.queueList(b).some(q=>q.state!=='queued')||this.plans.blocked(botId))throw Error('Reconcile original queue uncertainty or rejected prompts before resuming.');
+        payload={method:'portable.queueResume',params:{threadId:b.threadId}};
+      }
+      // This is a human release intent, not a native acceptance claim. An
+      // outstanding mailbox fences automatic admission until it is settled.
+      const revision=p.control_revision+1;
+      this.store.db.prepare('UPDATE portable_placements SET stopped=0,control_revision=? WHERE bot_id=?').run(revision,botId);
+      payload.params.controlRevision=revision;
+      const row=this.hub.enqueueOn(this.store.db,owner,botId,operationId,payload);
+      this.store.put('portableQueueControl',{id:operationId,botId,threadId:b.threadId,method,controlRevision:revision,previousStopped:p.stopped,...(source?{source}:{})});
+      if(source)this.store.put('promptQueue',{...source,state:'dispatching',operationId,clientUserMessageId:operationId,dispatchKind:'send-now',attemptedAt:now(),error:null});
+      this.store.saveOperation(operationId,binding,'dispatching',{method,botId,params,caller,createdAt:now(),localOnly:'portable-owner-queue'});
+      this.emitEvent('queue',{},botId);return row;
     });
   }
   async tool(owner,botId,tool,args,caller={kind:'authenticated-node-tool',botId}) {
@@ -169,9 +221,7 @@ export class HubControls extends EventEmitter {
       if(item){
         const q=this.owned('promptQueue',item.id,bot.id);if(fingerprint(q)!==fingerprint(item)||q.state!=='queued'||q.listId)return;
         operationId=`queue-start:${digest(`${bot.id}:${q.id}:${q.revision}`)}`;
-        const reply=this.store.get('messageReply',q.clientUserMessageId),text=reply?.botId===bot.id?reply.text:q.input.filter(p=>p.type==='text'&&!p.text.startsWith('Attached file: ')).map(p=>p.text).join('\n');
-        const files=(q.attachmentIds??[]).map(id=>{const a=this.owned('attachment',id,bot.id);if(!a.ready||!/^[a-f0-9]{64}$/.test(a.sha256??''))throw Error('Queued file is unconfirmed.');return {id:a.id,sha256:a.sha256,size:a.size};});
-        payload={method:'portable.queueDispatch',params:{item:q,text,files,...(reply?.reply?{reply:reply.reply}:{})}};
+        payload=this.queuePayload(bot,q);
       }else{
         const r=this.owned('run',run.id,bot.id);if(fingerprint(r)!==fingerprint(run)||r.status!=='queued')return;
         operationId=r.operationId??`schedule:${r.id}`;if(!id(operationId))throw Error('Retained scheduled operation exceeds protocol identity bounds.');payload={method:'portable.scheduleDispatch',params:{run:{...r,threadId:bot.threadId}}};
@@ -188,13 +238,32 @@ export class HubControls extends EventEmitter {
   reconcileReceipts() {
     // A durable applied hash prevents a busy recent tail from starving older
     // receipts, and catches later terminal evidence for the same operation.
-    const rows=this.hub.db.prepare("SELECT m.* FROM portable_mailbox m LEFT JOIN portable_control_receipts c ON c.operation_id=m.operation_id WHERE m.receipt IS NOT NULL AND (c.receipt_hash IS NULL OR c.receipt_hash<>m.receipt_hash) AND json_extract(m.payload,'$.method') IN ('portable.queueDispatch','portable.scheduleDispatch') ORDER BY m.sequence LIMIT 40").all();
+    const rows=this.hub.db.prepare("SELECT m.* FROM portable_mailbox m LEFT JOIN portable_control_receipts c ON c.operation_id=m.operation_id WHERE m.receipt IS NOT NULL AND (c.receipt_hash IS NULL OR c.receipt_hash<>m.receipt_hash) AND json_extract(m.payload,'$.method') IN ('portable.queueDispatch','portable.scheduleDispatch','portable.queueSend','portable.queueResume') ORDER BY m.sequence LIMIT 40").all();
     for(const row of rows)this.receipt(row);
   }
   receipt(row) {
     const payload=JSON.parse(row.payload),receipt=row.receipt&&JSON.parse(row.receipt);if(!NODE_LOGICAL_COMMANDS.has(payload.method)||!receipt)return;
     this.store.transaction(()=>{
       const mark=()=>this.store.db.prepare('INSERT INTO portable_control_receipts VALUES(?,?) ON CONFLICT(operation_id) DO UPDATE SET receipt_hash=excluded.receipt_hash').run(row.operation_id,row.receipt_hash);
+      const control=this.store.get('portableQueueControl',row.operation_id);
+      if(control){
+        const p=this.hub.placement(row.owner,row.bot_id),op=this.store.operation(row.operation_id);
+        if(control.botId!==row.bot_id||control.threadId!==this.store.bot(row.bot_id).threadId||!op||op.botId!==row.bot_id){mark();return;}
+        if(row.state==='unknown')this.store.saveOperation(op.id,op.fingerprint,'uncertain',{...op,error:receipt.error??'Original node acceptance is unconfirmed.'});
+        else if(receipt.outcome==='rejected'){
+          if(p.control_revision===control.controlRevision&&control.previousStopped)this.store.db.prepare('UPDATE portable_placements SET stopped=1,control_revision=control_revision+1 WHERE bot_id=?').run(row.bot_id);
+          this.store.saveOperation(op.id,op.fingerprint,'failed',{...op,outcome:'rejected',error:receipt.error});
+          if(control.source){const current=this.store.get('promptQueue',control.source.id);if(current?.operationId===op.id&&current.revision===control.source.revision)this.store.put('promptQueue',{...control.source,state:'failed',error:receipt.error,lastRejectedSend:op.id});}
+          this.emitEvent('queue',{},row.bot_id);mark();return;
+        }else if(['native-accepted','running','terminal'].includes(row.state)&&receipt.result!==undefined){
+          this.store.saveOperation(op.id,op.fingerprint,'done',{...op,result:op.method==='queue.resume'?{}:receipt.result,error:null});
+          if(payload.method==='portable.queueResume'){
+            if(p.control_revision===control.controlRevision){const b=this.store.bot(row.bot_id);this.store.saveBot({...b,queuePaused:false,managerPaused:false});this.emitEvent('queue',{},row.bot_id);}
+            mark();return;
+          }
+        }else {mark();return;}
+        if(payload.method==='portable.queueResume'){mark();return;}
+      }
       const q=payload.params.item,r=payload.params.run,key=q?'promptQueue':'run',source=q??r,current=this.store.get(key,source.id);
       if(!current||current.botId!==row.bot_id||current.operationId!==row.operation_id||current.threadId!==source.threadId||q&&(current.revision!==q.revision||fingerprint(current.input)!==fingerprint(q.input)||fingerprint(current.attachmentIds??[])!==fingerprint(q.attachmentIds??[]))){
         this.store.put('portableReceiptConflict',{id:row.operation_id,botId:row.bot_id,receiptHash:row.receipt_hash,reason:'Original logical source differs from its node receipt.',at:now()});mark();return;
