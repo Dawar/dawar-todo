@@ -137,3 +137,9 @@ Linux file reads retain the kernel descriptor-path proof. macOS regular-file rea
 Mac current profile reads use read-only workspace scopes and repeat inode/permission checks. Atomic memory compaction and PDF preview helpers remain unavailable on Mac; no Linux `/proc`, `renameat2`, or `prlimit` fallback is pretended. Their capabilities must stay disabled until a native adapter and genuine Mac behavior are validated. Original profiles, archives and uncertain receipts are retained. This source evidence does not establish physical Mac acceptance.
 
 Agent and full-hub packages include the exact memory atomic helper and bounded artifact preview worker next to their bundled runtime. Inclusion does not enable an unsupported platform capability.
+
+### Assigned-node registered files
+
+The agent's storage adapter uses its authenticated node connection for bounded registration, prepare/finalize, scoped download/preview and read-only task-export metadata. The hub derives bot identity from the canonical registry and checks node/owner/placement epoch before every response and before returning an old success. Paths and legacy machine service credentials are not transmitted. Original metadata operation fingerprints and file catalog identities are durable. Ambiguous replies reconcile the same registered file; they do not recreate a native input.
+
+Upload/download grants are restricted to the same origin, registered object, node/bot/placement epoch and expiry. Revocation, placement changes and the hub write freeze invalidate them; transfers check their grant while streaming. Node uploads additionally bind the original checksum. The existing bounded local publication snapshot and registered-file checksum behavior is retained. General Task Requests and cross-node peer file grants await their canonical addressed authorization adapters; capabilities remain honest. Mac workspace/repositories stay local unless explicitly published.

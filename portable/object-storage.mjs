@@ -23,6 +23,7 @@ export class ObjectStorage {
     if(extra||!proof||proof.length!==signature.length||!timingSafeEqual(Buffer.from(proof),Buffer.from(signature)))throw Error('Invalid object grant.');
     const v=JSON.parse(Buffer.from(body,'base64url'));
     if(v.owner!==this.config.owner.key||v.method!==method||!Number.isSafeInteger(v.expires)||v.expires<=now||v.expires>now+3600000)throw Error('Expired or foreign object grant.');
+    if(v.node){if(!this.authorizeNode)throw Error('Node object grants are unavailable.');this.authorizeNode(v.node);}
     keyId(v.key);return v;
   }
   url(key,query={}){const u=new URL('/storage/object',this.config.publicOrigin);if(key)u.searchParams.set('key',key);for(const [n,v] of Object.entries(query))u.searchParams.set(n,v);return u;}
@@ -31,11 +32,12 @@ export class ObjectStorage {
     try{return await this.files.response(this.config.owner.key,keyId(key),'application',new Request(this.url(key),{method,headers}));}
     catch(e){if(/not found|absent/i.test(e.message))return new Response(null,{status:404});throw e;}
   }
-  async put(key,body,{type,minimum=1,maximum=MAX}){
-    keyId(key);if(!Number.isSafeInteger(minimum)||!Number.isSafeInteger(maximum)||minimum<1||maximum<minimum||maximum>MAX)throw Error('Invalid upload bound.');
+  async put(key,body,{type,minimum=1,maximum=MAX,node=null,expires=null}){
+    keyId(key);if(!Number.isSafeInteger(minimum)||!Number.isSafeInteger(maximum)||minimum<0||maximum<minimum||maximum>MAX)throw Error('Invalid upload bound.');
     if(!(body instanceof Blob)||body.size<minimum||body.size>maximum)throw Error('Upload size is outside the original grant.');
+    const guard=()=>{if(node){if(!this.authorizeNode||expires<=Date.now())throw Error('Node upload grant expired.');this.authorizeNode(node);}};guard();
     const bytes=new Uint8Array(await body.arrayBuffer()),sha256=digest(bytes);
-    return this.files.register({owner:this.config.owner.key,botId:'application',artifactId:keyId(key),name:'Registered attachment',mime:type,hash:sha256,size:bytes.length},Readable.from([bytes]));
+    return this.files.register({owner:this.config.owner.key,botId:'application',artifactId:keyId(key),name:'Registered attachment',mime:type,hash:sha256,size:bytes.length},Readable.from([bytes]),{guard});
   }
   async serve(request){
     const u=new URL(request.url),method=request.method==='HEAD'?'GET':request.method;
@@ -43,6 +45,7 @@ export class ObjectStorage {
     if(method==='GET'){
       const r=await this.response(v.key,request.method,request.headers);
       if(v.download)r.headers.set('content-disposition',`attachment; filename*=UTF-8''${encodeURIComponent(v.download)}`);
+      if(v.node&&r.body){const self=this;return new Response(r.body.pipeThrough(new TransformStream({transform(chunk,controller){self.verify(u.searchParams.get('grant'),method);controller.enqueue(chunk);}})),{status:r.status,headers:r.headers});}
       return r;
     }
     if(method==='POST'){
@@ -50,20 +53,21 @@ export class ObjectStorage {
       // exact original key/content type is signed; it is never a local path.
       const form=await request.formData(),file=form.get('file');
       if(form.get('key')!==v.key||form.get('Content-Type')!==v.type)throw Error('Upload grant changed.');
-      await this.put(v.key,file,v);return new Response(null,{status:204});
+      if(v.hash&&(!(file instanceof Blob)||digest(new Uint8Array(await file.arrayBuffer()))!==v.hash))throw Error('Original node upload checksum differs.');
+      this.verify(u.searchParams.get('grant'),method);await this.put(v.key,file,v);return new Response(null,{status:204});
     }
     throw Error('Unsupported object method.');
   }
   async serveNode(req,url){
     if(req.method!=='POST')return this.serve(new Request(url,{method:req.method,headers:req.headers}));
     const v=this.verify(new URL(url).searchParams.get('grant'),'POST');
-    if(!Number.isSafeInteger(v.maximum)||v.maximum<1||v.maximum>MAX||!Number.isSafeInteger(v.minimum)||v.minimum<1||v.minimum>v.maximum)throw Error('Invalid original upload bounds.');
+    if(!Number.isSafeInteger(v.maximum)||v.maximum<0||v.maximum>MAX||!Number.isSafeInteger(v.minimum)||v.minimum<0||v.minimum>v.maximum)throw Error('Invalid original upload bounds.');
     const length=Number(req.headers['content-length']);
     if(req.headers['content-length']&&(!Number.isSafeInteger(length)||length<1||length>v.maximum+65536))throw Error('Upload exceeds declared bound.');
     await mkdir(this.files.directory,{recursive:true,mode:0o700});
     const temporary=join(this.files.directory,`.upload-${randomUUID()}`),handle=await open(temporary,constants.O_CREAT|constants.O_EXCL|constants.O_WRONLY|constants.O_NOFOLLOW,0o600);
     let fileTask=null,size=0,bodySize=0;const sha=createHash('sha256'),fields=new Map(),abort=new AbortController();
-    const timer=setTimeout(()=>abort.abort(Error('Upload deadline expired.')),15*60*1000);
+    const timer=setTimeout(()=>abort.abort(Error('Upload deadline expired.')),15*60*1000),validateGrant=()=>this.verify(new URL(url).searchParams.get('grant'),'POST');
     const aborted=()=>abort.abort(Error('Upload interrupted.'));req.once('aborted',aborted);
     try{
       const parser=busboy({headers:req.headers,limits:{files:1,fields:2,parts:4,fieldSize:2048,fieldNameSize:32,fileSize:v.maximum+1,headerPairs:20}});
@@ -74,7 +78,7 @@ export class ObjectStorage {
       parser.on('file',(name,file)=>{
         file.on('error',()=>{});
         if(name!=='file'||fileTask||fields.get('key')!==v.key||fields.get('Content-Type')!==v.type){file.resume();parser.destroy(Error('Upload identity changed.'));return;}
-        fileTask=pipeline(file,new Transform({transform(chunk,e,cb){size+=chunk.length;if(size>v.maximum)return cb(Error('File exceeds original grant.'));sha.update(chunk);cb(null,chunk);}}),handle.createWriteStream({autoClose:true}),{signal:abort.signal});
+        fileTask=pipeline(file,new Transform({transform(chunk,e,cb){try{validateGrant();}catch(error){return cb(error);}size+=chunk.length;if(size>v.maximum)return cb(Error('File exceeds original grant.'));sha.update(chunk);cb(null,chunk);}}),handle.createWriteStream({autoClose:true}),{signal:abort.signal});
         // Preserve rejection without leaving an unhandled Promise while the
         // bounded multipart parser is still consuming its final delimiter.
         void fileTask.catch(e=>parser.destroy(e));
@@ -83,8 +87,9 @@ export class ObjectStorage {
       if(!fileTask)throw Error('Upload file missing.');await fileTask;
       if(size<v.minimum||fields.get('key')!==v.key||fields.get('Content-Type')!==v.type)throw Error('Original upload size or fields differ.');
       this.verify(new URL(url).searchParams.get('grant'),'POST');
+      const uploadedHash=sha.digest('hex');if(v.hash&&uploadedHash!==v.hash)throw Error('Original node upload checksum differs.');
       const source=await open(temporary,constants.O_RDONLY|constants.O_NOFOLLOW);
-      try{await this.files.register({owner:this.config.owner.key,botId:'application',artifactId:keyId(v.key),name:'Registered attachment',mime:v.type,hash:sha.digest('hex'),size},source.createReadStream({autoClose:true}));}finally{await source.close();}
+      try{await this.files.register({owner:this.config.owner.key,botId:'application',artifactId:keyId(v.key),name:'Registered attachment',mime:v.type,hash:uploadedHash,size},source.createReadStream({autoClose:true}),{guard:()=>validateGrant()});}finally{await source.close();}
       return new Response(null,{status:204});
     }finally{clearTimeout(timer);req.removeListener('aborted',aborted);abort.abort();await fileTask?.catch(()=>{});await handle.close().catch(()=>{});await rm(temporary,{force:true});}
   }
@@ -101,7 +106,7 @@ export class ObjectStorage {
         const parts=source.split('/');parts.splice(0,2);const sourceKey=parts.map(decodeURIComponent).join('/');
         const r=await this.response(sourceKey);if(!r.ok)return r;
         if(r.headers.get('etag')!==h.get('x-amz-copy-source-if-match'))return new Response(null,{status:412});
-        const row=this.row(sourceKey);await this.put(key,await r.blob(),{type:row.mime,maximum:MAX});
+        const row=this.row(sourceKey);await this.put(key,await r.blob(),{type:row.mime,minimum:0,maximum:MAX});
         return new Response('<CopyObjectResult/>',{headers:{'content-type':'application/xml'}});
       }
       if(method==='DELETE'){this.files.db.prepare('DELETE FROM portable_artifacts WHERE owner=? AND bot_id=? AND id=?').run(this.config.owner.key,'application',keyId(key));return new Response(null,{status:204});}
@@ -112,7 +117,7 @@ export class ObjectStorage {
       storageFetch:async(url,init)=>{const r=await signedStorageResponse(url,init);if(!r.ok)throw await storageResponseError();return r;},
       signedObjectUrl:async(key,download)=>{this.row(key);const u=this.url();u.searchParams.set('grant',this.token({key,download,owner:this.config.owner.key,method:'GET',expires:Date.now()+3600000}));return u.toString();},
       signedPostTarget:async(key,type,maximum,minimum=1)=>{keyId(key);const u=this.url();u.searchParams.set('grant',this.token({key,type,maximum,minimum,owner:this.config.owner.key,method:'POST',expires:Date.now()+900000}));return {url:u.toString(),fields:{key,'Content-Type':type}};},
-      copyObject:async(source,target,etag,signal)=>{signal?.throwIfAborted();const r=await this.response(source);if(!r.ok||r.headers.get('etag')!==etag)throw Error('Original copy source changed.');await this.put(target,await r.blob(),{type:this.row(source).mime,maximum:MAX});signal?.throwIfAborted();},
+      copyObject:async(source,target,etag,signal)=>{signal?.throwIfAborted();const r=await this.response(source);if(!r.ok||r.headers.get('etag')!==etag)throw Error('Original copy source changed.');await this.put(target,await r.blob(),{type:this.row(source).mime,minimum:0,maximum:MAX});signal?.throwIfAborted();},
       deleteKeys:async keys=>{for(const k of new Set(keys))await signedStorageResponse(this.url(k),{method:'DELETE'});},
       readBucketCors:async()=>({http:200,code:null,configured:true,rules:[{allowedOrigins:[this.config.publicOrigin],allowedMethods:['GET','HEAD','POST'],allowedHeaders:['Content-Type'],exposeHeaders:['ETag','Content-Length','Content-Range'],maxAgeSeconds:0}]}) };
   }

@@ -11,9 +11,10 @@ export class RegisteredArtifacts {
     this.db=db;this.directory=directory;
     db.exec('CREATE TABLE IF NOT EXISTS portable_artifacts(id TEXT PRIMARY KEY,owner TEXT NOT NULL,bot_id TEXT,hash TEXT NOT NULL,size INTEGER NOT NULL,name TEXT NOT NULL,mime TEXT NOT NULL,created_at INTEGER NOT NULL)');
   }
-  async register({artifactId,owner,botId=null,hash,size,name,mime},source) {
+  async register({artifactId,owner,botId=null,hash,size,name,mime},source,{guard=()=>{}}={}) {
     if(!id(artifactId)||!owner||botId!==null&&!id(botId)||!/^[a-f0-9]{64}$/.test(hash)||!Number.isSafeInteger(size)||size<0||size>250*1024*1024
       ||typeof name!=='string'||name.length>240||/[\r\n\0]/.test(name)||typeof mime!=='string'||!/^[A-Za-z0-9.+-]+\/[A-Za-z0-9.+-]+$/.test(mime))throw Error('Invalid registered artifact.');
+    guard();
     const old=this.db.prepare('SELECT * FROM portable_artifacts WHERE id=?').get(artifactId);
     if(old){
       if(old.owner!==owner||old.bot_id!==botId||old.hash!==hash||old.size!==size||old.name!==name||old.mime!==mime)throw Error('Artifact identity changed.');
@@ -30,10 +31,10 @@ export class RegisteredArtifacts {
       try{await completed.sync();}finally{await completed.close();}
       // Content addressing supplies filenames; a message-supplied path is
       // never a filesystem read capability. Original public IDs stay intact.
-      await rename(temporary,join(this.directory,hash));
+      guard();await rename(temporary,join(this.directory,hash));
       const directory=await open(this.directory,constants.O_RDONLY|constants.O_NOFOLLOW);
       try{await directory.sync();}finally{await directory.close();}
-      this.db.prepare('INSERT INTO portable_artifacts VALUES(?,?,?,?,?,?,?,?)').run(artifactId,owner,botId,hash,size,name,mime,Date.now());
+      guard();this.db.prepare('INSERT INTO portable_artifacts VALUES(?,?,?,?,?,?,?,?)').run(artifactId,owner,botId,hash,size,name,mime,Date.now());
       return this.db.prepare('SELECT * FROM portable_artifacts WHERE id=?').get(artifactId);
     }catch(error){await handle.close().catch(()=>{});await rm(temporary,{force:true});throw error;}
   }
@@ -55,7 +56,8 @@ export class RegisteredArtifacts {
     const headers=new Headers({'content-type':r.mime,'content-length':String(Math.max(0,end-start+1)),etag:`"${r.hash}"`,'x-content-type-options':'nosniff','cache-control':'private, no-store','accept-ranges':'bytes',
       'content-disposition':`attachment; filename*=UTF-8''${encodeURIComponent(r.name)}`});
     if(status===206)headers.set('content-range',`bytes ${start}-${end}/${r.size}`);
-    if(request.method==='HEAD'||r.size===0){await handle.close();return new Response(null,{status,headers});}
+    if(request.method==='HEAD'){await handle.close();return new Response(null,{status,headers});}
+    if(r.size===0){await handle.close();return new Response(new Uint8Array(),{status,headers});}
     return new Response(Readable.toWeb(handle.createReadStream({start,end,autoClose:true})),{status,headers});
   }
   async snapshot(destination,signal) {

@@ -13,6 +13,7 @@ import { appAccessResponse } from '../worker/access.ts';
 import { signGateway } from './gateway-proof.ts';
 import { ObjectStorage } from './object-storage.mjs';
 import { HubRpc,AGENT_MUTATIONS } from './hub-rpc.mjs';
+import { HubNodeStorage } from './hub-node-storage.mjs';
 import { HubControls,hubActivation } from './hub-controls.mjs';
 import { HUB_TOOLS } from './control-protocol.mjs';
 import { verifyBotTicket } from '../lib/bots-auth.ts';
@@ -32,6 +33,7 @@ export function startGateway(config) {
   const router = new HubRpc(store,connections), browsers=new Set();
   const authority=hubActivation(config),broadcast=(owner,event)=>{for(const b of browsers)if(b.owner===owner&&b.ws.readyState===1)b.ws.send(JSON.stringify({type:'event',event}));};
   const controls=new HubControls({path:join(config.dataDirectory,'control.sqlite'),hub:store,router,authority,broadcast,...(config.schedulerQuietWindow?{quietWindow:config.schedulerQuietWindow}:{})});router.controls=controls;
+  const nodeStorage=new HubNodeStorage({hub:store,controls,application,objects,config});
   const scheduler=authority?setInterval(()=>void controls.tick().catch(error=>controls.emit('fault',error)),5000):null;
   const downloadDirectory=resolve(config.agentDownloadDirectory??fileURLToPath(new URL('../agent-downloads',import.meta.url)));
   const sockets = new WebSocketServer({noServer:true,maxPayload:MAX_FRAME_BYTES,perMessageDeflate:false});
@@ -191,6 +193,12 @@ export function startGateway(config) {
             if(p.node_id!==nodeId||p.epoch!==m.epoch||!HUB_TOOLS.has(m.tool)||typeof m.requestId!=='string')throw Error('Foreign hub tool request.');
             const answer=value=>{const current=store.placement(n.owner,m.botId);if(connections.get(nodeId)===ws&&current.node_id===nodeId&&current.epoch===m.epoch)ws.send(boundedFrame({type:'control-result',requestId:m.requestId,botId:m.botId,epoch:m.epoch,...value}));};
             void controls.tool(n.owner,m.botId,m.tool,m.args,{kind:'authenticated-node-tool',botId:m.botId,nodeId,epoch:m.epoch}).then(result=>answer({result})).catch(error=>answer({error:error.message,outcome:error.outcome??'uncertain'})).catch(()=>ws.close(1008,'Control scope changed'));
+          }
+          else if(m.type==='artifact-request'){
+            const n=store.node(nodeId),p=store.placement(n.owner,m.botId);
+            if(p.node_id!==nodeId||p.epoch!==m.epoch||typeof m.requestId!=='string'||m.requestId.length>180)throw Error('Foreign artifact request.');
+            const answer=value=>{const current=store.placement(n.owner,m.botId);if(connections.get(nodeId)===ws&&current.node_id===nodeId&&current.epoch===m.epoch)ws.send(boundedFrame({type:'artifact-result',requestId:m.requestId,botId:m.botId,epoch:m.epoch,...value}));};
+            void nodeStorage.request(nodeId,m).then(result=>answer({result})).catch(()=>answer({error:'Registered file confirmation unavailable; retain its original ID and local bytes.',outcome:'uncertain'})).catch(()=>ws.close(1008,'Artifact scope changed'));
           }
           else if(m.type==='event') {const before=store.eventCursor(),sequence=store.event(nodeId,m.eventId,m.botId,m.epoch,m.event);if(sequence>before)controls.nativeEvent(m.event);ws.send(JSON.stringify({type:'event-ack',eventId:m.eventId,sequence}));if(sequence>before)broadcast(store.node(nodeId).owner,{...m.event,seq:sequence});}
           else throw Error('Unknown node frame.');

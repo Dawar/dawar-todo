@@ -6,11 +6,13 @@ import { Codex } from '../bot-bridge/codex.mjs';
 import { BotRuntime } from '../bot-bridge/runtime.mjs';
 import { CodexManager } from '../bot-bridge/manager.mjs';
 import { NodeJournal } from './control-store.mjs';
-import { nodeKey, signature, fingerprint,id,PROTOCOL_VERSION, RUNTIME_VERSION } from './protocol.mjs';
+import { nodeKey, signature, fingerprint,id,boundedFrame,PROTOCOL_VERSION, RUNTIME_VERSION } from './protocol.mjs';
 import { AGENT_READS, AGENT_MUTATIONS } from './hub-rpc.mjs';
 import { HUB_TOOLS,NODE_LOGICAL_COMMANDS } from './control-protocol.mjs';
 import { admitLogicalCommand } from './agent-admission.mjs';
 import { queueResumeReceipt } from './agent-queue-resume.mjs';
+import { NodeStorageClient } from './agent-storage.mjs';
+import { artifactInput } from './node-storage-contract.mjs';
 const fingerprintLegacy=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
 export class AgentTransport {
@@ -46,18 +48,26 @@ export class AgentTransport {
     });
   }
   hello(){return {protocol:PROTOCOL_VERSION,runtime:RUNTIME_VERSION,platform:process.platform,arch:process.arch,
-    capabilities:{text:true,localStdio:true,profileReads:true,memoryCompaction:process.platform==='linux',pdfPreview:process.platform==='linux',desktop:false,voice:false,secureTransfer:false,autonomousGoals:false}};}
+    capabilities:{text:true,localStdio:true,registeredArtifacts:true,profileReads:true,memoryCompaction:process.platform==='linux',pdfPreview:process.platform==='linux',desktop:false,voice:false,secureTransfer:false,autonomousGoals:false}};}
   send(value){if(this.socket?.readyState===WebSocket.OPEN)this.socket.send(JSON.stringify(value));}
   controlRequest(botId,tool,args){
+    if(!HUB_TOOLS.has(tool))throw Error('Unsupported hub tool.');
+    const read=tool==='bots_schedule_list'||tool==='bots_queue'&&['lists','read'].includes(args.operation);
+    return this.requestHub(botId,'control',{tool,args},read);
+  }
+  artifactRequest(botId,action,input){
+    return this.requestHub(botId,'artifact',{action,input:artifactInput(action,input)},['download','preview','taskQueueExport'].includes(action));
+  }
+  requestHub(botId,kind,payload,read){
     const c=this.journal.db.prepare('SELECT * FROM node_controls WHERE bot_id=?').get(botId),control=c&&this.journal.currentControl({bot_id:botId,epoch:c.epoch});
-    if(!HUB_TOOLS.has(tool)||!control||this.socket?.readyState!==1)throw Object.assign(Error('Hub logical controls are offline or outside this assigned scope.'),{outcome:'not-sent'});
-    if(this.controlPending.size>=32)throw Object.assign(Error('Bounded hub control requests are busy.'),{outcome:'not-sent'});
-    const requestId=`control:${randomUUID()}`,ws=this.socket,read=tool==='bots_schedule_list'||tool==='bots_queue'&&['lists','read'].includes(args.operation);
+    if(!control||this.socket?.readyState!==1)throw Object.assign(Error('Hub controls are offline or outside this assigned scope.'),{outcome:'not-sent'});
+    if(this.controlPending.size>=32)throw Object.assign(Error('Bounded hub requests are busy.'),{outcome:'not-sent'});
+    const requestId=`${kind}:${randomUUID()}`,ws=this.socket;
     return new Promise((resolve,reject)=>{
       const fail=error=>{clearTimeout(this.controlPending.get(requestId)?.timer);this.controlPending.delete(requestId);reject(Object.assign(error,{outcome:read?'not-sent':'uncertain'}));};
-      const timer=setTimeout(()=>fail(Error('Hub tool acknowledgement is unconfirmed; retain its original operation ID.')),15000);
-      this.controlPending.set(requestId,{ws,botId,epoch:c.epoch,resolve,reject,fail,timer});
-      try{ws.send(JSON.stringify({type:'control-request',requestId,botId,epoch:c.epoch,tool,args}));}catch(error){fail(error);}
+      const timer=setTimeout(()=>fail(Error('Hub acknowledgement is unconfirmed; retain its original identity.')),15000);
+      this.controlPending.set(requestId,{ws,kind,botId,epoch:c.epoch,resolve,reject,fail,timer});
+      try{ws.send(boundedFrame({type:`${kind}-request`,requestId,botId,epoch:c.epoch,...payload}));}catch(error){fail(error);}
     });
   }
   flushEvents(){for(const r of this.journal.pendingEvents()){const e=JSON.parse(r.event);this.send({type:'event',eventId:r.event_id,...e});}}
@@ -146,10 +156,10 @@ export class AgentTransport {
             const frame={type:'rpc-result',rpcId:m.rpcId,botId:m.botId,epoch:m.epoch,result};
             if(Buffer.byteLength(JSON.stringify(frame))>900*1024)throw Error('Read exceeds its bounded transport; use a smaller history page.');sendHere(frame);
           }catch(e){sendHere({type:'rpc-result',rpcId:m.rpcId,botId:m.botId,epoch:m.epoch,error:e.message});}})();
-        } else if(authentication && m.type==='control-result'){
+        } else if(authentication && ['control-result','artifact-result'].includes(m.type)){
           const pending=this.controlPending.get(m.requestId);if(!pending)return;
           const current=this.journal.currentControl({bot_id:pending.botId,epoch:pending.epoch});
-          if(pending.ws!==ws||m.botId!==pending.botId||m.epoch!==pending.epoch||!current)throw Error('Hub tool response scope changed.');
+          if(m.type!==`${pending.kind}-result`||pending.ws!==ws||m.botId!==pending.botId||m.epoch!==pending.epoch||!current)throw Error('Hub tool response scope changed.');
           clearTimeout(pending.timer);this.controlPending.delete(m.requestId);
           if(m.error)pending.reject(Object.assign(Error(m.error),{outcome:m.outcome==='rejected'?'rejected':m.outcome==='not-sent'?'not-sent':'uncertain'}));else pending.resolve(m.result);
         } else if(authentication && m.type==='event-ack')this.journal.acknowledgeEvent(m.eventId);
@@ -209,6 +219,7 @@ export async function runAgent(config){
   const journal=new NodeJournal(join(config.dataDirectory,'node-journal.sqlite'));
   const manager=new CodexManager({runtime,store,directory:join(config.dataDirectory,'manager')});runtime.manager=manager;
   const transport=new AgentTransport({config,runtime,journal,key:nodeKey(join(config.dataDirectory,'node-key.pem')),enrollment});
+  runtime.storage=new NodeStorageClient(runtime,transport,enrollment.hub);
   installHubToolRoutes(runtime,manager,transport);
   await manager.listen();await runtime.start();transport.connect();
   transport.recoveryTimer=setInterval(()=>void transport.recover().catch(error=>runtime.emit('fault',error)),5000);
