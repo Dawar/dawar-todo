@@ -1,6 +1,8 @@
 export type SourceWriterBinding = {sourceId:string;installationId:string;producerSHA256:string};
 export type SourceWriterInput = {db:unknown;expected:SourceWriterBinding};
 export function installSourceWriterAdmission(input:SourceWriterInput):Promise<unknown>;
+export function readSourceWriterAdmission(input:SourceWriterInput):Promise<SourceWriterBinding & {version:1;kind:'dawar-source-writer-installation';scope:'worker-request-and-scheduled-lifetimes';phase:'open'|'draining';generation:number;operationId:string|null;expiresAt:number;activeWriters:number;unknownWriters:number;retainedFinishedWriters:number;observedAt:number;externalWriterCoverageEstablished:false;productionWriterFreezeEstablished:false}>;
+export function readSourceWriterControlReceipt(input:SourceWriterInput & {kind:'install'|'drain'|'release';operationId:string;expiresAt?:number;generation?:number;drainId?:string}):Promise<unknown>;
 export function admitSourceWriter(input:SourceWriterInput & {operationId:string;kind:'worker-http'|'worker-scheduled'}):Promise<unknown>;
 export function settleSourceWriter(input:SourceWriterInput & {operationId:string;kind:'worker-http'|'worker-scheduled';outcome:'finished'|'unknown'}):Promise<unknown>;
 export function beginSourceWriterDrain(input:SourceWriterInput & {operationId:string;expiresAt:number}):Promise<SourceWriterDrainProof>;

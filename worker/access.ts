@@ -85,7 +85,7 @@ export async function appAccessResponse(
   const apiRequest = url.pathname.startsWith("/api/");
   const bearerToken = apiRequest ? apiTokenFromAuthorization(request.headers.get("Authorization")) : null;
   if (apiRequest && bearerToken) {
-    if (url.pathname.startsWith('/api/portable/') || url.pathname === '/api/migration/identity' || url.pathname === '/api/migration/application' || url.pathname === '/api/migration/application/read') {
+    if (url.pathname.startsWith('/api/portable/') || url.pathname.startsWith('/api/migration/')) {
       return Response.json(
         { error: 'Machine installation and migration readouts require the existing owner’s signed-in session.' },
         { status: 403, headers: { 'Cache-Control': 'private, no-store' } },

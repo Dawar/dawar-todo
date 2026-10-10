@@ -106,6 +106,28 @@ export async function installD1WriteFence({db,sourceId,installId,schemaSHA256}) 
   const current=await inspect(db,expected);
   return {installed:true,...expected,guardSHA256:current.guardSHA256,reconciled:false};
 }
+export async function readD1WriteFenceInstallation({db,expected}) {
+  expected=binding(expected);const current=await inspect(db,expected);
+  const fingerprint=await hash({version:1,kind:'install',...expected}),receipt=await prior(db,expected.installId,fingerprint);
+  if(receipt?.kind!=='install'||receipt.outcome!=='installed')throw failure();
+  return {version:1,kind:'dawar-database-fence-installation',scope:'d1-database-writes',...expected,installed:true,
+    guardSHA256:current.guardSHA256,phase:current.state.phase,generation:current.state.generation,
+    operationId:current.state.operation_id,expiresAt:current.state.expires_at,observedAt:Date.now(),
+    externalWriterCoverageEstablished:false,productionWriterFreezeEstablished:false};
+}
+export async function readD1WriteFenceControlReceipt({db,expected,kind,operationId,expiresAt=0,generation=0,freezeId}) {
+  expected=binding(expected);id(operationId);const current=await inspect(db,expected);let fingerprint;
+  if(kind==='install'&&operationId===expected.installId&&expiresAt===0&&generation===0)fingerprint=await hash({version:1,kind,...expected});
+  else if(kind==='freeze'&&Number.isSafeInteger(expiresAt)&&expiresAt>0&&generation===0)fingerprint=await hash({version:1,kind,...expected,operationId,expiresAt});
+  else if(kind==='release'&&expiresAt===0&&Number.isSafeInteger(generation)&&generation>0)fingerprint=await hash({version:1,kind,...expected,freezeId:id(freezeId),releaseId:operationId,generation});
+  else throw failure();
+  const receipt=await prior(db,operationId,fingerprint),outcomes={install:['installed'],freeze:['frozen','released'],release:['released']};
+  if(!receipt||receipt.kind!==kind||!outcomes[kind].includes(receipt.outcome)||receipt.valid!==1||!Number.isSafeInteger(receipt.generation)||receipt.generation<0||
+      receipt.expires_at!==expiresAt||kind==='install'&&receipt.generation!==0||kind==='freeze'&&receipt.generation<1||kind==='release'&&receipt.generation!==generation)throw failure();
+  return {version:1,kind:'dawar-database-fence-control-receipt',...expected,operationId,receiptKind:kind,fingerprint,
+    outcome:receipt.outcome,generation:receipt.generation,expiresAt:receipt.expires_at,receiptConfirmed:true,currentPhase:current.state.phase,
+    productionWriterFreezeEstablished:false};
+}
 export async function freezeD1Writes({db,expected,operationId,expiresAt}) {
   expected=binding(expected);
   id(operationId);const now=Date.now();

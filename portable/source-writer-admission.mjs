@@ -37,6 +37,36 @@ export async function installSourceWriterAdmission({db,expected}) {
   ]);
   await inspect(db,expected);return {installed:true,reconciled:false,...expected};
 }
+export async function readSourceWriterAdmission({db,expected}) {
+  expected=binding(expected);const fingerprint=await hash({version:1,kind:'install',...expected});
+  const value=await inspect(db,expected,[[`SELECT * FROM "${RECEIPTS}" WHERE id=?`,[expected.installationId]],
+    [`SELECT state,COUNT(*) AS n FROM "${WRITERS}" GROUP BY state ORDER BY state`],
+    [`SELECT COUNT(*) AS n FROM "${WRITERS}" WHERE source_id<>? OR installation_id<>? OR producer_hash<>? OR kind NOT IN ('worker-http','worker-scheduled') OR valid<>1`,[expected.sourceId,expected.installationId,expected.producerSHA256]]]);
+  const receipt=value.extra[0];
+  if(receipt.length!==1||receipt[0].kind!=='install'||receipt[0].fingerprint!==fingerprint||receipt[0].outcome!=='installed'||
+      value.extra[2].length!==1||value.extra[2][0].n!==0)throw failure();
+  const counts={active:0,finished:0,unknown:0};
+  for(const row of value.extra[1]){if(!Object.hasOwn(counts,row.state)||!Number.isSafeInteger(row.n)||row.n<0)throw failure();counts[row.state]=row.n;}
+  return {version:1,kind:'dawar-source-writer-installation',scope:'worker-request-and-scheduled-lifetimes',...expected,
+    phase:value.state.phase,generation:value.state.generation,operationId:value.state.operation_id,expiresAt:value.state.expires_at,
+    activeWriters:counts.active,unknownWriters:counts.unknown,retainedFinishedWriters:counts.finished,observedAt:Date.now(),
+    externalWriterCoverageEstablished:false,productionWriterFreezeEstablished:false};
+}
+export async function readSourceWriterControlReceipt({db,expected,kind,operationId,expiresAt=0,generation=0,drainId}) {
+  expected=binding(expected);id(operationId);let fingerprint;
+  if(kind==='install'&&operationId===expected.installationId&&expiresAt===0&&generation===0)fingerprint=await hash({version:1,kind,...expected});
+  else if(kind==='drain'&&Number.isSafeInteger(expiresAt)&&expiresAt>0&&generation===0)fingerprint=await hash({version:1,kind,...expected,operationId,expiresAt});
+  else if(kind==='release'&&expiresAt===0&&Number.isSafeInteger(generation)&&generation>0)fingerprint=await hash({version:1,kind,...expected,drainId:id(drainId),releaseId:operationId,generation});
+  else throw failure();
+  const value=await inspect(db,expected,[[`SELECT * FROM "${RECEIPTS}" WHERE id=?`,[operationId]]]),r=value.extra[0];
+  const outcomes={install:['installed'],drain:['draining','released'],release:['released']};
+  if(r.length!==1||r[0].kind!==kind||r[0].fingerprint!==fingerprint||!outcomes[kind].includes(r[0].outcome)||
+      r[0].valid!==1||!Number.isSafeInteger(r[0].generation)||r[0].generation<0||r[0].expires_at!==expiresAt||
+      kind==='install'&&r[0].generation!==0||kind==='drain'&&r[0].generation<1||kind==='release'&&r[0].generation!==generation)throw failure();
+  return {version:1,kind:'dawar-source-writer-control-receipt',...expected,operationId,receiptKind:kind,fingerprint,
+    outcome:r[0].outcome,generation:r[0].generation,expiresAt:r[0].expires_at,receiptConfirmed:true,currentPhase:value.state.phase,
+    productionWriterFreezeEstablished:false};
+}
 export async function admitSourceWriter({db,expected,operationId,kind}) {
   expected=binding(expected);id(operationId);
   if(!['worker-http','worker-scheduled'].includes(kind))throw failure();

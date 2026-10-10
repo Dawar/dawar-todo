@@ -458,6 +458,52 @@ replay used to manufacture idle. Local D1/workerd observations do not establish
 global production coverage. AsyncLocalStorage support is documented in the
 [Cloudflare runtime API](https://developers.cloudflare.com/workers/runtime-apis/nodejs/asynclocalstorage/).
 
+### Original Worker component-control operations
+
+The exact POST `/api/migration/source/control` path is disabled unless private
+`MIGRATION_SOURCE_CONTROL` configuration is present. The existing signed-in
+owner identity and a separate migration capability are both required. A Todo
+API token, email alone, development identity, cross-origin request, SQL string
+or alternate operation ID cannot authorize it. The actual compiled build must
+match both controller configuration and any enabled admission configuration.
+Keep this configuration in the original deployment's private secret mechanism;
+never include the credential in source, logs, browser storage or an artifact.
+
+The version-1 `dawar-original-source-control` configuration binds the exact
+source origin/build, journal installation and producer hash, database
+installation, cutover operation and two distinct release IDs. Installation and
+cutover operations remain distinct from the native-service activation claim.
+Commands are bounded to 4 KiB/64 chunks and five seconds of input parsing;
+responses are bounded metadata, private/no-store and have no CORS permission.
+
+The ordered preparation is `journal.install`, `journal.read`, `database.plan`,
+then `database.install` with the returned exact schema hash. The plan includes
+the three journal tables. Enabling request/job admission is a separate private
+configuration change; successful journal installation does not establish that
+old Worker lifetimes are tracked. A held original journal is required before
+`database.freeze`; active or unknown lifetimes cannot be waived. The same
+original cutover ID and immutable deadline, at most 900 seconds, bind both
+components. `journal.observe` and `database.observe` remain reachable while
+ordinary request/job admission is held. Expiry invalidates proof and never
+silently reopens either component.
+
+`journal.receipt` and `database.receipt` passively reconcile an original
+installation, drain/freeze or release fingerprint. They do not repeat the
+operation or renew its deadline. A lost write acknowledgment returns `unknown`;
+retain the original ID and reconcile that receipt before considering any next
+operation. Historical `released` receipts prove the original outcome, not a
+currently held fence. Deliberate recovery releases the original database fence
+before the original journal and checks the exact generation. Changed payloads,
+source bindings or identities are refused.
+
+These operations control only Worker request/job lifetimes and D1 database
+writes. Every result explicitly refuses to assert full production-writer
+coverage or native-activation authority. Legacy Worker lifetimes, voice/provider
+callbacks, previously issued uploads and native control/files must each have
+actual separately reviewed coverage before a consistent production capture.
+No production configuration, installation, drain, release or activation is
+performed merely by adding this disabled route.
+
 ### Bounded resumable registered uploads
 
 Portable signed upload targets add `resumable: {version: 1, chunkBytes: 4194304}`. Browser task uploads use their existing JSON prepare/finalize endpoints and original `clientUploadId`, rather than sending a whole multipart file through the public API. Bot, ordinary guest and derived-preview uploads consume the same additive target. Legacy provider targets retain their prior single-attempt or replayable caller policy.

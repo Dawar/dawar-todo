@@ -10,12 +10,14 @@ import {runSourceWriterWork} from "../portable/source-writer-scope.mjs";
 import type {SourceWriterBinding} from "../portable/source-writer-admission.mjs";
 import {originalStorageUploadProxy} from '../lib/storage-upload-proxy';
 import {applicationMigrationReadResponse} from '../lib/application-migration-reader';
+import {applicationMigrationControlResponse} from '../lib/application-migration-control';
 
 interface Env {
   ASSETS: Fetcher;
   MIGRATION_SOURCE_WRITER_ADMISSION?:string;
   MIGRATION_STORAGE_UPLOAD_PROXY?:string;
   MIGRATION_APPLICATION_READ?:string;
+  MIGRATION_SOURCE_CONTROL?:string;
   BOTS_OWNER_EMAIL?: string;
   BOTS_OWNER_USER_ID?: string;
   DB: D1Database;
@@ -116,6 +118,9 @@ function sourceWriterBinding(raw:string):SourceWriterBinding {
 
 const worker = {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    // Component-controller metadata has its own exact owner/capability check.
+    // It must remain reachable before installation and during a held journal.
+    if(new URL(request.url).pathname==='/api/migration/source/control')return applicationMigrationControlResponse(request,env,__DAWAR_BUILD__);
     if (!env.MIGRATION_SOURCE_WRITER_ADMISSION) return sourceFetch(request, env, ctx);
     try {
       const expected = sourceWriterBinding(env.MIGRATION_SOURCE_WRITER_ADMISSION);
