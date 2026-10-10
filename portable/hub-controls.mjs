@@ -21,7 +21,7 @@ import { boundedFrame,fingerprint,id,originalNativeProof } from './protocol.mjs'
 import {foregroundSource,validateForeground} from './foreground-source.mjs';
 import {validatePrimary} from './primary-source.mjs';
 import {operatorSource,validateOperatorSource} from './operator-source.mjs';
-import {capturedRuntimeDefaults} from './runtime-defaults.mjs';
+import {storedRuntimeDefaults} from './runtime-defaults.mjs';
 export { hubActivation } from './hub-authority.mjs';
 import { controlWriteGuard } from './hub-authority.mjs';
 import { HUB_READS,HUB_MUTATIONS,HUB_TOOLS,NODE_LOGICAL_COMMANDS,HUB_BURST_MUTATIONS,HUB_ROOM_READS,HUB_ROOM_MUTATIONS,HUB_PEER_READS,HUB_PEER_MUTATIONS } from './control-protocol.mjs';
@@ -39,7 +39,7 @@ export class HubControls extends EventEmitter {
     super();Object.assign(this,{hub,router,authority,defaultTimeZone,broadcast,quietWindow});
     this.store=new Store(path);this.ready=true;this.locks=new Map();this.closed=false;
     this.store.db.exec('PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS portable_control_receipts(operation_id TEXT PRIMARY KEY,receipt_hash TEXT NOT NULL)');
-    const inherited=this.store.meta('portable-defaults');this.defaults=inherited===undefined?{}:capturedRuntimeDefaults(inherited);
+    const inherited=storedRuntimeDefaults(this.store);this.defaults=inherited===undefined?{}:inherited;
     this.executionConfig=new ExecutionConfiguration(this);this.plans=new PlanLifecycle(this);
     this.primary={store:this.store,runtime:this,single:bot=>PrimaryExecution.prototype.single(bot),accept:PrimaryExecution.prototype.accept,
       list:PrimaryExecution.prototype.list,publicItem:PrimaryExecution.prototype.publicItem,cursor:PrimaryExecution.prototype.cursor,openItems:PrimaryExecution.prototype.openItems,

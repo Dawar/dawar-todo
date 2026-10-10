@@ -30,7 +30,7 @@ import {roomAnswerReceipt} from './room-answer.mjs';
 import {foregroundSource} from './foreground-source.mjs';
 import {validatePrimary} from './primary-source.mjs';
 import {centralAgentCapabilities} from './agent-capabilities.mjs';
-import {capturedRuntimeDefaults} from './runtime-defaults.mjs';
+import {storedRuntimeDefaults} from './runtime-defaults.mjs';
 const fingerprintLegacy=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
 export class AgentTransport {
@@ -305,7 +305,7 @@ export async function runAgent(config){
   process.umask(0o077);
   const store=new Store(join(config.dataDirectory,'native-control.sqlite')),codex=new Codex(config.agent.codexBinary);
   const runtime=new BotRuntime({store,codex,root:config.agent.workspaces,defaultTimeZone:'America/Toronto'});
-  const inherited=store.meta('portable-defaults');if(inherited!==undefined)runtime.defaults=capturedRuntimeDefaults(inherited);
+  const inherited=storedRuntimeDefaults(store);if(inherited!==undefined)runtime.defaults=inherited;
   runtime.maintenance.source=source;
   // Authentication captures hello before runtime.start. Construct the same
   // original volatile service first, so its capability is not permanently
