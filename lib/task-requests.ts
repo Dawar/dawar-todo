@@ -3,6 +3,7 @@ import type { SecureRequest } from './secure-input';
 
 export const TASK_REQUEST_VERSION = 1 as const;
 export const TASK_REQUEST_LIMITS = { fields: 32, groups: 12, files: 12, fileBytes: 100 * 1024 * 1024, ordinaryBytes: 96 * 1024, defaultExpirySeconds: 7 * 86400, maximumExpirySeconds: 30 * 86400 } as const;
+const reservedFieldIds = Object.getOwnPropertyNames(Object.prototype);
 export type TaskRequestField = {
   id: string; label: string; kind: 'text' | 'long-text' | 'choice' | 'image' | 'file' | 'secure-text' | 'secure-image';
   required: boolean; notes?: string; groupId?: string; choices?: { id: string; label: string }[]; questionId?: string;
@@ -56,7 +57,7 @@ export const TASK_REQUEST_SPEC_SCHEMA = {
     version:{type:'integer',enum:[1]},title:{type:'string',maxLength:100},instructions:{type:'string',maxLength:12000},context:{type:'string',maxLength:12000},
     groups:{type:'array',maxItems:12,items:{type:'object',additionalProperties:false,required:['id','label'],properties:{id:{type:'string',maxLength:180},label:{type:'string',maxLength:200},notes:{type:'string',maxLength:2000}}}},
     fields:{type:'array',minItems:1,maxItems:32,items:{type:'object',additionalProperties:false,required:['id','label','kind','required'],properties:{
-      id:{type:'string',pattern:'^[a-zA-Z][a-zA-Z0-9_-]{0,39}$'},label:{type:'string',maxLength:200,description:'Private labels have a 100-character limit.'},required:{type:'boolean'},
+      id:{type:'string',pattern:'^[a-zA-Z][a-zA-Z0-9_-]{0,39}$',not:{enum:reservedFieldIds}},label:{type:'string',maxLength:200,description:'Private labels have a 100-character limit.'},required:{type:'boolean'},
       kind:{type:'string',enum:['text','long-text','choice','image','file','secure-text','secure-image']},notes:{type:'string',maxLength:2000},groupId:{type:'string',maxLength:180},questionId:{type:'string',maxLength:180},
       choices:{type:'array',minItems:1,maxItems:20,items:{type:'object',additionalProperties:false,required:['id','label'],properties:{id:{type:'string',maxLength:180},label:{type:'string',maxLength:200}}}},
     }}},
@@ -89,7 +90,7 @@ export function taskRequestSpec(input: unknown): TaskRequestSpec {
   });
   const fields = input.fields.map(f => {
     if (!plain(f)) throw Error('Invalid field.'); keys(f,['id','kind','label','required','notes','groupId','choices','questionId']);
-    const id=taskRequestId(f.id); if(!/^[a-zA-Z][a-zA-Z0-9_-]{0,39}$/.test(id) || id==='allow-model' || fieldIds.has(id)) throw Error('Invalid or duplicate field identity.'); fieldIds.add(id);
+    const id=taskRequestId(f.id); if(!/^[a-zA-Z][a-zA-Z0-9_-]{0,39}$/.test(id) || id==='allow-model' || reservedFieldIds.includes(id) || fieldIds.has(id)) throw Error('Invalid or duplicate field identity.'); fieldIds.add(id);
     if (!['text','long-text','choice','image','file','secure-text','secure-image'].includes(String(f.kind)) || typeof f.required !== 'boolean') throw Error('Invalid field type.');
     if(f.groupId !== undefined && !groupIds.has(taskRequestId(f.groupId))) throw Error('Unknown field group.');
     let choices: TaskRequestField['choices'];
@@ -137,7 +138,7 @@ export function taskRequestValues(spec: TaskRequestSpec, input: unknown, final =
     if(f.kind==='choice') { if(!Array.isArray(v) || v.length>1 || v.some(x=>typeof x!=='string'||!f.choices?.some(c=>c.id===x))) throw Error('Invalid selected choice.'); values[id]=v as string[]; }
     else values[id]=text(v,f.kind==='text'?4096:16000,true);
   }
-  if(final && spec.fields.some(f=>f.required && ['text','long-text','choice'].includes(f.kind) && !(typeof values[f.id]==='string' ? String(values[f.id]).trim() : values[f.id]?.length))) throw Error('Complete the required answers.');
+  if(final && spec.fields.some(f=>f.required && ['text','long-text','choice'].includes(f.kind) && (!Object.prototype.hasOwnProperty.call(values,f.id) || !(typeof values[f.id]==='string' ? String(values[f.id]).trim() : values[f.id]?.length)))) throw Error('Complete the required answers.');
   if(new TextEncoder().encode(JSON.stringify(values)).length>TASK_REQUEST_LIMITS.ordinaryBytes) throw Error('Ordinary answers too large.');
   return values;
 }
