@@ -2,12 +2,15 @@
 import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } from "vinext/server/image-optimization";
 import handler from "vinext/server/app-router-entry";
 import { syncEventsResponse } from "./sync-events";
+import { agentInstallerResponse } from "./agent-installer";
 import { appAccessResponse } from "./access";
 import { runTodoMinuteMaintenance } from "../db/minute-maintenance";
 import { handleTalkPhoneStream } from "./talk-phone-stream";
 
 interface Env {
   ASSETS: Fetcher;
+  BOTS_OWNER_EMAIL?: string;
+  BOTS_OWNER_USER_ID?: string;
   DB: D1Database;
   S3_ACCESS_KEY: string;
   S3_ACCESS_KEY_ID: string;
@@ -67,6 +70,9 @@ const worker = {
 
     const accessResponse = await appAccessResponse(routedRequest, env, ctx);
     if (accessResponse) return accessResponse;
+
+    const installerResponse = await agentInstallerResponse(routedRequest, env);
+    if (installerResponse) return installerResponse;
 
     if (url.pathname === "/api/sync/events" && request.method === "GET") return syncEventsResponse(routedRequest, env.DB);
 
