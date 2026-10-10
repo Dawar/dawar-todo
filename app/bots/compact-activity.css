@@ -1,0 +1,12 @@
+.bots-compact-activity{position:relative;margin:14px 0;min-width:0}
+.bots-compact-activity>.bots-activity{margin:0}
+.bots-compact-activity summary{align-items:flex-start}
+.bots-activity-summary{display:flex;flex-direction:column;gap:4px;min-width:0;flex:1}
+.bots-activity-summary>span:first-child{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.bots-activity-preview{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;font-weight:400;line-height:1.5;color:#64746a}
+.bots-compact-activity .bots-activity-content{padding:8px 12px}
+.bots-compact-activity>.bots-message-time{margin:5px 0 0}
+.bots-activity-alias{position:absolute;top:0;height:0;pointer-events:none}
+.bots-elapsed{font-variant-numeric:tabular-nums;color:#77857c;font-size:11px;white-space:nowrap}
+.bots-message-time .bots-elapsed{font-size:inherit}
+.bots-activity-count{font-weight:400;color:#728078;font-size:11px}

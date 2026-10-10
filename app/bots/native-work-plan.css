@@ -1,0 +1,11 @@
+.bots-work-plan-summary { display:flex; gap:.6rem; align-items:baseline; flex-wrap:wrap; min-width:0; }
+.bots-work-plan-summary small { color:#6d7771; font-weight:400; }
+.bots-native-work-plan { min-width:0; padding:.5rem 0; }
+.bots-work-plan-steps { margin:.6rem 0; }
+.bots-work-plan-steps [role="listitem"] { display:grid; grid-template-columns:6.5rem minmax(0,1fr); gap:.65rem; padding:.55rem 0; border-top:1px solid #e4e9e5; }
+.bots-work-plan-status { font-size:.75rem; color:#68736c; }
+.bots-work-plan-status[data-status="completed"] { color:#297153; }
+.bots-work-plan-status[data-status="inProgress"] { color:#335e90; }
+.bots-native-work-plan .bots-message-markdown > :first-child { margin-top:0; }
+.bots-native-work-plan .bots-message-markdown { overflow-wrap:anywhere; min-width:0; }
+@media(max-width:400px) { .bots-work-plan-steps [role="listitem"] { grid-template-columns:5rem minmax(0,1fr); gap:.45rem; } }

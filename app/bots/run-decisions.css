@@ -1,0 +1,19 @@
+.bots-run-decisions { border: 1px solid #dce7df; border-radius: 15px; margin: 0 0 24px; padding: 14px; background: #f8fbf9; }
+.bots-run-decisions > header { display: flex; align-items: center; gap: 8px; color: #386b49; }
+.bots-run-decisions h3 { margin: 0; flex: 1; min-width: 0; font-size: 14px; font-weight: 650; }
+.bots-run-decisions h4 { margin: 0; font-size: 14px; line-height: 1.5; font-weight: 600; overflow-wrap: anywhere; }
+.bots-run-decisions article { border-top: 1px solid #e2eae4; margin-top: 10px; padding-top: 14px; }
+.bots-run-decisions p, .bots-run-decision-controls p { margin: 6px 0 10px; font-size: 12px; line-height: 1.6; color: #687c6e; overflow-wrap: anywhere; }
+.bots-run-decisions button, .bots-run-decision-controls button { min-height: 44px; padding: 8px 11px; color: #2e7048; font-size: 12px; font-weight: 600; border: 1px solid #dbe7df; border-radius: 9px; background: #fff; }
+.bots-run-decisions header button { border: 0; background: none; }
+.bots-run-decision-buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+.bots-run-decision-buttons .is-primary { color: #fff; background: #286f49; border-color: #286f49; }
+.bots-run-decision-controls small { display: block; margin-top: 9px; font-size: 11px; line-height: 1.6; color: #7a897f; }
+.bots-run-decision-controls form { display: grid; gap: 9px; margin-top: 14px; }
+.bots-run-decision-controls label { display: grid; gap: 5px; font-size: 12px; color: #4f6657; }
+.bots-run-decision-controls label span { font-size: 11px; color: #7a897f; }
+.bots-run-decision-controls input { width: 100%; min-width: 0; max-width: 100%; min-height: 44px; border: 1px solid #dbe7df; border-radius: 9px; padding: 8px; font-size: 16px; background: #fff; }
+.bots-run-decision-controls .bots-run-decision-error { color: #9a6248; }
+.bots-run-decisions nav { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.bots-run-decision-controls button:disabled, .bots-run-decisions button:disabled { opacity: .5; cursor: not-allowed; }
+:is(.bots-run-decision-controls, .bots-run-decisions) :is(button,input):focus-visible { outline: 2px solid #347b51; outline-offset: 2px; }

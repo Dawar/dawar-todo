@@ -1,0 +1,29 @@
+.bots-goal-panel { display: grid; gap: 14px; min-width: 0; font-size: 14px; }
+.bots-goal-panel header,.bots-goal-panel header>div,.bots-goal-actions { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.bots-goal-panel header { justify-content:space-between; }
+.bots-goal-panel h3,.bots-goal-panel p { margin:0; }
+.bots-goal-panel header>div { color:var(--accent,#287a57); }
+.bots-goal-panel button { display:inline-flex; align-items:center; justify-content:center; gap:6px; min-height:40px; border:1px solid var(--border,#dce3dd); border-radius:10px; padding:8px 12px; background:var(--surface,#fff); color:inherit; cursor:pointer; }
+.bots-goal-panel button:disabled { cursor:default; opacity:.5; }
+.bots-goal-panel button:focus-visible,.bots-goal-panel summary:focus-visible { outline:2px solid var(--accent,#287a57); outline-offset:3px; }
+.bots-goal-state { width:fit-content; border-radius:20px; background:#eef2ef; padding:5px 10px; font-weight:600; }
+.bots-goal-state.is-active,.bots-goal-state.is-complete { color:#246849; background:#e7f3eb; }
+.bots-goal-state.is-blocked,.bots-goal-state.is-budgetLimited,.bots-goal-state.is-usageLimited { color:#79580e; background:#fff2d7; }
+.bots-goal-objective { white-space:pre-wrap; overflow-wrap:anywhere; line-height:1.65; font-size:15px; }
+.bots-goal-panel details { min-width:0; }
+.bots-goal-panel summary { cursor:pointer; padding:8px 0; }
+.bots-goal-accounting { display:grid; grid-template-columns:repeat(auto-fit,minmax(125px,1fr)); gap:14px; padding:14px; margin:0; background:var(--surface-muted,#f4f6f4); border-radius:12px; }
+.bots-goal-accounting dt,.bots-goal-observation,.bots-goal-description { color:var(--muted,#68726c); font-size:12px; }
+.bots-goal-accounting dd { margin:5px 0 0; font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
+.bots-goal-hint,.bots-goal-confirm,.bots-goal-recovery { padding:12px; border:1px solid var(--border,#dce3dd); border-radius:10px; line-height:1.5; }
+.bots-goal-confirm button,.bots-goal-recovery button { margin-top:10px; margin-right:8px; }
+.bots-goal-form { display:grid; gap:10px; }
+.bots-goal-form textarea,.bots-goal-form select,.bots-goal-form input { width:100%; box-sizing:border-box; color:inherit; background:var(--surface,#fff); border:1px solid var(--border,#dce3dd); border-radius:10px; padding:10px; font:inherit; min-width:0; }
+.bots-goal-form textarea { resize:vertical; }
+.bots-goal-error { color:#a5372b; overflow-wrap:anywhere; }
+.bots-goal-indicator { display:inline-flex; align-items:center; justify-content:center; gap:5px; min-width:36px; min-height:40px; color:inherit; border:0; border-radius:8px; background:none; cursor:pointer; flex-shrink:0; }
+.bots-goal-indicator:focus-visible { outline:2px solid var(--accent,#287a57); }
+.bots-goal-dot { width:6px; height:6px; border-radius:50%; background:#88928b; }
+.bots-goal-dot.is-active,.bots-goal-dot.is-complete { background:#287a57; }
+.bots-goal-dot.is-blocked,.bots-goal-dot.is-budgetLimited,.bots-goal-dot.is-usageLimited { background:#ac812c; }
+@media(max-width:400px) { .bots-goal-panel button { min-height:44px; } .bots-goal-accounting { grid-template-columns:1fr 1fr; } }

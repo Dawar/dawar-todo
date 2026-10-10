@@ -1,0 +1,11 @@
+.bots-admin-approvals { min-width: 0; margin-block: 1rem; }
+.bots-admin-approvals header { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
+.bots-admin-approvals article { border: 1px solid var(--border-color, #dce3df); border-radius: 12px; padding: .8rem; margin-top: .7rem; overflow-wrap: anywhere; }
+.bots-admin-approvals h4 { margin: 0 0 .7rem; }
+.bots-admin-approvals p { white-space: pre-wrap; margin-block: .5rem; }
+.bots-admin-approvals ol { padding-left: 1.3rem; }
+.bots-admin-approvals li { margin-bottom: .8rem; }
+.bots-admin-approvals label { display: flex; align-items: flex-start; gap: .5rem; margin-block: .7rem; }
+.bots-admin-approvals input[type=checkbox] { width: 20px; height: 20px; flex: 0 0 20px; }
+.bots-admin-approvals button { min-height: 44px; white-space: normal; }
+.bots-admin-approvals small { display: block; margin-top: .5rem; }

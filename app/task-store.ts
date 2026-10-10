@@ -22,7 +22,7 @@ export function createTaskStore() {
     const record = records.get(key);
     if (!record) views.delete(key);
     else {
-      const next = drafts.has(key) ? { ...record, ...drafts.get(key) } : record;
+      const next = drafts.has(key) ? { ...record, ...drafts.get(key), queueDelegation: null } : record;
       const previous = views.get(key);
       if (previous && equal(previous, next)) return;
       views.set(key, next);
@@ -53,7 +53,7 @@ export function createTaskStore() {
         if (!old || !equal(old, todo)) { records.set(key, todo); changed.add(key); }
         const prior = previousList.get(key);
         const draft = drafts.get(key);
-        const listed = prior && draft ? { ...todo, ...Object.fromEntries(Object.keys(draft).map((field) => [field, prior[field as keyof Todo]])) } : todo;
+        const listed = prior && draft ? { ...todo, ...Object.fromEntries(Object.keys(draft).map((field) => [field, prior[field as keyof Todo]])), queueDelegation: null } : todo;
         return prior && equal(prior, listed) ? prior : listed;
       });
       for (const key of records.keys()) if (!keys.has(key)) { records.delete(key); drafts.delete(key); changed.add(key); }
@@ -66,6 +66,12 @@ export function createTaskStore() {
     setDraft(key: string, patch: Partial<Todo>) {
       version++;
       drafts.set(key, { ...drafts.get(key), ...patch });
+      const record = records.get(key);
+      if (record?.queueDelegation) {
+        records.set(key, { ...record, queueDelegation: null });
+        list = list.map((todo) => taskKey(todo) === key ? { ...todo, queueDelegation: null } : todo);
+        listeners.forEach((listener) => listener());
+      }
       updateView(key);
     },
     clearDraft(key: string, saved: Partial<Todo>) {

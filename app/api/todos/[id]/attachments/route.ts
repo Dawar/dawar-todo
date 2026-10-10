@@ -1,3 +1,4 @@
+import { attachmentErrorDetails } from "../../../../../lib/attachment-errors";
 import {
   finalizeTodoAttachmentUpload,
   finalizeTodoMediaAttachmentUpload,
@@ -115,9 +116,10 @@ export async function POST(
   } catch (error) {
     const message = error instanceof Error ? error.message : "The image upload could not be prepared.";
     const serviceError = /temporarily unavailable|storage request|could not be optimized|could not be prepared/i.test(message);
-    const status = /not found/i.test(message) ? 404 : !serviceError && /choose|image|audio|video|media|voice|file|document|archive|limited|large|duration|match|expected/i.test(message) ? 400 : 500;
-    console.error("[todo-api] task attachment preparation failed", { todoId: id, durationMs: Date.now() - startedAt, error });
-    return Response.json({ error: message }, { status });
+    const details = attachmentErrorDetails(error);
+    const status = details.code === "storage-unavailable" ? 502 : details.code === "image-processing-unavailable" ? 503 : /not found/i.test(message) ? 404 : !serviceError && /choose|image|audio|video|media|voice|file|document|archive|limited|large|duration|match|expected/i.test(message) ? 400 : 500;
+    console.error("[todo-api] task attachment preparation failed", { ...details, status, durationMs: Date.now() - startedAt });
+    return Response.json({ error: status >= 500 ? details.errorMessage : message, code: details.code, phase: details.phase }, { status });
   }
 }
 
@@ -152,8 +154,9 @@ export async function PATCH(
     return Response.json({ attachment });
   } catch (error) {
     const message = error instanceof Error ? error.message : "The image upload could not be finalized.";
-    const status = /not found|available/i.test(message) ? 404 : /image|audio|video|media|voice|file|document|archive|limited|invalid|large|expected|duration|match/i.test(message) ? 400 : 500;
+    const details = attachmentErrorDetails(error, "finalize");
+    const status = details.code === "storage-unavailable" ? 502 : /not found|available/i.test(message) ? 404 : /image|audio|video|media|voice|file|document|archive|limited|invalid|large|expected|duration|match/i.test(message) ? 400 : 500;
     console.error("[todo-api] task attachment finalization failed", { todoId: id, durationMs: Date.now() - startedAt, error });
-    return Response.json({ error: message }, { status });
+    return Response.json({ error: status >= 500 ? details.errorMessage : message, code: details.code, phase: details.phase }, { status });
   }
 }

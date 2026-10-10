@@ -1,10 +1,13 @@
 const CACHE_PREFIX = "dawar-todo-shell-";
-const CACHE_NAME = `${CACHE_PREFIX}v27`;
+const CACHE_NAME = `${CACHE_PREFIX}v101`;
 const SHELL = [
   "/",
+  "/tasks",
+  "/open",
   "/settings",
-  "/talk",
+  "/bots",
   "/manifest.webmanifest",
+  "/pwa-build.json",
   "/icons/icon-192.png",
   "/icons/icon-512.png",
   "/icons/icon-maskable-512.png",
@@ -31,12 +34,32 @@ self.addEventListener("install", (event) => {
 function discoveredAssetUrls(text, sourcePath = "/") {
   const urls = new Set();
   const sourceUrl = new URL(sourcePath, self.location.origin);
+  const hasPackagedPdfWorker = /^\/assets\/pdf-reviewer-[A-Za-z0-9_-]+\.js$/.test(sourceUrl.pathname)
+    && /["'`](?:\/assets\/|assets\/|\.\/)pdf\.worker\.min-[A-Za-z0-9_-]+\.mjs["'`]/.test(text);
   const add = (value) => {
     try {
       if (/[`${}+]/.test(value)) return;
+      // ELK embeds a CommonJS module table in its emitted bundle. These
+      // relative names address modules inside that table, not network files.
+      // Keep caching the real bundle and its other emitted dependencies.
+      if (/^\/assets\/elk-[A-Za-z0-9_-]+\.js$/.test(sourceUrl.pathname)
+        && (value === "./elk-api.js" || value === "./elk-worker.min.js")) return;
+      // PDF.js retains its Node default in the browser bundle. Our reviewer
+      // explicitly sets workerSrc to the emitted, hashed worker above. Skip
+      // only that unused default when the real worker is present in this chunk;
+      // it is still discovered and must cache successfully like every asset.
+      if (hasPackagedPdfWorker && value === "./pdf.worker.mjs") return;
+      // The worker embeds this WebAssembly import-object key and its handlers;
+      // it names no separate JS file. The actual WASM uses our resource factory.
+      if (/^\/assets\/pdf\.worker\.min-[A-Za-z0-9_-]+\.mjs$/.test(sourceUrl.pathname)
+        && value === "./qcms_bg.js") return;
       const normalized = value.startsWith("assets/") ? `/${value}` : value;
       const url = new URL(normalized, sourceUrl);
       if (url.origin !== self.location.origin || url.pathname.startsWith("/api/")) return;
+      // Mermaid's optional entry references every diagram engine. Keep that
+      // graph out of shell installation; requested diagram assets are cached
+      // by the normal asset handler after their first use.
+      if (url.pathname.startsWith("/assets/mermaid.core-")) return;
       const cacheable = url.pathname.startsWith("/assets/")
         || url.pathname.startsWith("/_next/")
         || /\.(?:css|js|mjs|woff2?|png|webp|jpg|jpeg|svg|ico)$/i.test(url.pathname);
@@ -62,7 +85,21 @@ async function cacheResponse(cache, key, response) {
   await cache.put(key, response);
 }
 
+// A generation-local completion index is written only after the entire graph
+// succeeds. Partial installations must still inspect/retry their dependencies.
+const GRAPH_INDEX = "/.pwa-complete-asset-graph";
+let completedGraph;
+let graphIndexWrite = Promise.resolve();
+async function completedAssets(cache) {
+  if (!completedGraph) completedGraph = cache.match(GRAPH_INDEX).then(async (response) => {
+    try { return new Set(response ? await response.json() : []); } catch { return new Set(); }
+  });
+  return completedGraph;
+}
 async function cacheAssetGraph(cache, initialUrls, strict) {
+  const complete = await completedAssets(cache);
+  const discovered = new Set();
+  let failed = false;
   const seen = new Set();
   let pending = [...new Set(initialUrls)];
   while (pending.length) {
@@ -75,12 +112,16 @@ async function cacheAssetGraph(cache, initialUrls, strict) {
         // Content-addressed bundles never change at the same URL. Reuse them
         // across navigations and shell upgrades instead of downloading the graph.
         const immutable = url.startsWith("/assets/") || url.startsWith("/_next/static/");
-        const cached = immutable ? await caches.match(url) : null;
+        if (immutable && complete.has(url)) return [];
+        const current = immutable ? await cache.match(url) : null;
+        const cached = current || (immutable ? await caches.match(url) : null);
         const response = cached || await fetch(new Request(url, { cache: "reload", credentials: "same-origin" }));
         const inspect = /\.(?:css|js|mjs)(?:\?|$)/i.test(url) ? response.clone() : null;
-        await cacheResponse(cache, url, response);
+        if (!current) await cacheResponse(cache, url, response);
+        if (immutable) discovered.add(url);
         return inspect ? discoveredAssetUrls(await inspect.text(), url) : [];
       } catch (error) {
+        failed = true;
         if (strict) throw error;
         return [];
       }
@@ -88,6 +129,13 @@ async function cacheAssetGraph(cache, initialUrls, strict) {
     for (const urls of results) {
       for (const url of urls) if (!seen.has(url)) pending.push(url);
     }
+  }
+  if (!failed && discovered.size) {
+    discovered.forEach((url) => complete.add(url));
+    // Serialize overlapping walks and snapshot the union when the write runs.
+    graphIndexWrite = graphIndexWrite.catch(() => undefined).then(() =>
+      cache.put(GRAPH_INDEX, new Response(JSON.stringify([...complete]), { headers: { "Content-Type": "application/json" } })));
+    await graphIndexWrite;
   }
   return seen.size;
 }
@@ -144,6 +192,14 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(request.url);
   if (url.origin !== self.location.origin || url.pathname.startsWith("/api/") || url.pathname.startsWith("/calendar/")) return;
 
+  if (request.mode === "navigate" && (url.pathname === "/task-request" || url.pathname.startsWith("/task-request/"))) {
+    // Never cache a protected form or substitute the owner Tasks shell.
+    event.respondWith(fetch(request).catch(() => new Response(
+      '<!doctype html><html lang="en"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Protected form offline</title><body><main><h1>Protected form offline</h1><p>Reconnect and reopen the original protected link. Private input is not saved across reloads.</p></main></body></html>',
+      {status:503,headers:{"Content-Type":"text/html; charset=utf-8","Cache-Control":"no-store"}},
+    )));
+    return;
+  }
   if (request.mode === "navigate") {
     event.respondWith(
       (async () => {
@@ -203,6 +259,23 @@ self.addEventListener("fetch", (event) => {
 });
 
 self.addEventListener("message", (event) => {
+  if (event.data?.type === "PWA_VERSION") event.waitUntil((async () => {
+    const cache = await caches.open(CACHE_NAME);
+    const manifest = await cache.match("/pwa-build.json");
+    let build = null; try { build = (await manifest?.json())?.build ?? null; } catch { /* Older shells have no build marker. */ }
+    event.ports?.[0]?.postMessage({ cache: CACHE_NAME, databaseVersion: 11, build });
+  })());
+  if (event.data?.type === "PWA_REFRESH_DOCUMENT") event.waitUntil((async () => {
+    try {
+      const url = new URL(event.data.url);
+      if (url.origin !== self.location.origin) throw Error("Invalid document origin.");
+      const response = await fetch(new Request(url.href, { cache: "reload", credentials: "same-origin" }));
+      if (!response.ok || new URL(response.url).origin !== self.location.origin || !response.headers.get("Content-Type")?.includes("text/html")) throw Error("Document unavailable.");
+      // Required assets must all succeed before replacing any document shell.
+      await refreshDocumentShell(response, url.pathname);
+      event.ports?.[0]?.postMessage({ ok: true });
+    } catch { event.ports?.[0]?.postMessage({ ok: false }); }
+  })());
   if (event.data?.type === "SKIP_WAITING") self.skipWaiting();
 });
 
@@ -224,7 +297,7 @@ self.addEventListener("push", (event) => {
     icon: "/icons/icon-192.png",
     badge: "/icons/icon-192.png",
     data: {
-      url: typeof payload.url === "string" ? payload.url : "/",
+      url: typeof payload.url === "string" ? payload.url : "/tasks",
     },
   };
   event.waitUntil((async () => {
@@ -243,7 +316,11 @@ self.addEventListener("push", (event) => {
 
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
-  const target = new URL(event.notification.data?.url || "/", self.location.origin).href;
+  const destination = new URL(event.notification.data?.url || "/tasks", self.location.origin);
+  // Old task notifications used bare `/`, now also a neutral launch entry.
+  // Keep their Tasks intent; query/hash task links and bot URLs stay exact.
+  if (destination.origin === self.location.origin && destination.pathname === "/" && !destination.search && !destination.hash) destination.pathname = "/tasks";
+  const target = destination.href;
   event.waitUntil((async () => {
     const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
     const existing = windows.find((client) => new URL(client.url).origin === self.location.origin);

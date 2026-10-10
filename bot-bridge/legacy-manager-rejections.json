@@ -1,0 +1,236 @@
+{
+  "version": 1,
+  "authority": "Original restart-now75f and same9a2 correction09c8; no new execution authority",
+  "sourceCommit": "77b4262790b6cffc73d5084f293364a3522f9afd",
+  "managerSourceSha256": "e722a38157798a390d5ef51fba9076f8e4ac68bf7a7f8ca066b90559a64fbc51",
+  "guards": {
+    "delegate": {
+      "name": "codex_tasks",
+      "error": "prompt is required.",
+      "targetKind": null,
+      "targetArgument": null,
+      "argumentTypes": {
+        "operation": "string",
+        "operationId": "string",
+        "name": "string",
+        "projectId": "string",
+        "isolated": "boolean",
+        "role": "string",
+        "purpose": "string",
+        "context": "string",
+        "constraints": "string",
+        "acceptance": "string"
+      },
+      "evidence": "delegate required(prompt) is the first statement, before task/worker/native creation"
+    },
+    "steer": {
+      "name": "codex_threads",
+      "error": "Worker is idle; use message or delegate.",
+      "targetKind": "managerWorker",
+      "targetArgument": "workerId",
+      "argumentTypes": {
+        "operation": "string",
+        "operationId": "string",
+        "workerId": "string",
+        "prompt": "string"
+      },
+      "evidence": "threads verifies owned worker and missing activeTurnId before turn/steer"
+    },
+    "collectResult": {
+      "name": "codex_tasks",
+      "error": "Task is running; inspect status or its pending requests.",
+      "targetKind": "managerTask",
+      "targetArgument": "id",
+      "argumentTypes": {
+        "operation": "string",
+        "operationId": "string",
+        "id": "string"
+      },
+      "evidence": "tasks rejects nonterminal task before thread/read or collectedAt write"
+    },
+    "remove": {
+      "name": "codex_worktrees",
+      "error": "Worktree commits are not integrated into integratedRef; it was retained.",
+      "targetKind": "managerWorktree",
+      "targetArgument": "id",
+      "argumentTypes": {
+        "operation": "string",
+        "operationId": "string",
+        "id": "string",
+        "integratedRef": "string"
+      },
+      "evidence": "removeWorktree integration guard precedes archiveWorker and worktree removal; preceding git operations are read-only"
+    }
+  },
+  "records": [
+    {
+      "id": "bde38a78808de66a9ed19fdb84c71180d789bbf7921f36393cae7a25f26c909f",
+      "botId": "68ec887d-8c07-4183-9e16-773fc77d5219",
+      "name": "codex_tasks",
+      "operation": "delegate",
+      "opId": "delegate-fix-bot-chat-horizontal-overflow-20260926-1",
+      "createdAt": "2026-09-26T02:21:13.936Z",
+      "finishedAt": "2026-09-26T02:21:13.940Z",
+      "error": "prompt is required.",
+      "recordSha256": "1a9c6293412e434275c69d869da20560255f2238817a0874002c0608036a63a2",
+      "fingerprint": "29cfe3e6ab6173e7f81fc62f4dc602666b737b57f12103ebf398397ce70dfe6c",
+      "targetId": null
+    },
+    {
+      "id": "63f9957fb1b8baf7949eebecbe78fd6c0f9b32299288f5f00d02a7c3fedd4af8",
+      "botId": "68ec887d-8c07-4183-9e16-773fc77d5219",
+      "name": "codex_threads",
+      "operation": "steer",
+      "opId": "night-20260928-history-runtime-contract-v1",
+      "createdAt": "2026-09-28T01:41:03.733Z",
+      "finishedAt": "2026-09-28T01:41:03.736Z",
+      "error": "Worker is idle; use message or delegate.",
+      "recordSha256": "ff036af6512e381963e3301feebe688f6b5a6872c74a989440d871c240797e5a",
+      "fingerprint": "9ec53718f984ae4ca01f7607394f1478a3dada939ce2f4bd29ce1e5f5a34a1e7",
+      "targetId": "7c578085c6c40df50dd1f6f34c2babc445bbd1981c9ab6dd060cd1a9a480f697-worker"
+    },
+    {
+      "id": "b729ca98e9d6c0bc830a94550b91efee176b7a8a19491a786306e1889eb3c4c9",
+      "botId": "68ec887d-8c07-4183-9e16-773fc77d5219",
+      "name": "codex_threads",
+      "operation": "steer",
+      "opId": "night-20260928-runtime-main142-info-v1",
+      "createdAt": "2026-09-28T02:25:31.244Z",
+      "finishedAt": "2026-09-28T02:25:31.247Z",
+      "error": "Worker is idle; use message or delegate.",
+      "recordSha256": "c37d78fc2ea6dc5f7414570d0f0f3f79a6a19521001f8b6efda33d8998671ffd",
+      "fingerprint": "e5049f91323e9c66907d94352b2abbc930dec0a482793c761962a7daf06b10fc",
+      "targetId": "3816777c1d8e57d3fabb69c6384d47cf2564ea25362c9af31dc2107c70dd4393-worker"
+    },
+    {
+      "id": "ea8b9ac4a5b35ad669b50e12276efa453b183fac739f9588f411556492b26724",
+      "botId": "6b93f369-f272-420e-9599-0b0fc1afc99c",
+      "name": "codex_tasks",
+      "operation": "collectResult",
+      "opId": "collect-kwcg-reports-final-2026-09-25",
+      "createdAt": "2026-09-25T14:01:54.130Z",
+      "finishedAt": "2026-09-25T14:01:54.134Z",
+      "error": "Task is running; inspect status or its pending requests.",
+      "recordSha256": "caacdda0f9b0e3ca9ff2d15f4d703bf892c590647d9da1d6657e320adcaa0f85",
+      "fingerprint": "106000ab72191727bdcea47bcd9cd6103dbf3f3ac7caa66f132c561b6773a148",
+      "targetId": "797051e342aafe12981d2398eeae5aab9ead22d736fa82c29c964f7fff77f43d"
+    },
+    {
+      "id": "822ddb437901bfd67bd76a238233a70172f6df86a4b330bedca82c80f94dafa7",
+      "botId": "6b93f369-f272-420e-9599-0b0fc1afc99c",
+      "name": "codex_worktrees",
+      "operation": "remove",
+      "opId": "remove-single-dialog-worktree-20260928",
+      "createdAt": "2026-09-28T17:49:59.449Z",
+      "finishedAt": "2026-09-28T17:49:59.564Z",
+      "error": "Worktree commits are not integrated into integratedRef; it was retained.",
+      "recordSha256": "dcc6c14be0419b014220cfa4500eb53efaf1db1a1f9471b65cdf2efa7500e254",
+      "fingerprint": "28c4986caf31946d521639f6bfe6e7cb235587a5694a81568437eaea4cf4b0af",
+      "targetId": "e53390c2e9ed4cd0e69e42c0bcad4996a5b0ff1f249c9fa8ec43299d27527af5-tree"
+    },
+    {
+      "id": "7973684ac3173a6087476d7219cd6c2b413aa112c16eeec9ecd33c8af23ad7fd",
+      "botId": "6b93f369-f272-420e-9599-0b0fc1afc99c",
+      "name": "codex_worktrees",
+      "operation": "remove",
+      "opId": "remove-vendfu-scanner-worktree-20260928",
+      "createdAt": "2026-09-28T18:50:46.102Z",
+      "finishedAt": "2026-09-28T18:50:46.201Z",
+      "error": "Worktree commits are not integrated into integratedRef; it was retained.",
+      "recordSha256": "c96ccab6d8681def325aa16dec9a16d231d394b156a7b702db77aef3e5a9a6bd",
+      "fingerprint": "1ee15951c0e57c212bcd9eb6f895a0674b9d92a3532eaf62f9f6349fb798428e",
+      "targetId": "36a92d28e305580fce4f3071f4bd33b8bca28584a7165c53bcdc33b74e4f0f52-tree"
+    },
+    {
+      "id": "e419514d56877a4679503eace76893cf988c3ac8d80e67ebf744e9832d011d74",
+      "botId": "6b93f369-f272-420e-9599-0b0fc1afc99c",
+      "name": "codex_threads",
+      "operation": "steer",
+      "opId": "cancel-support-evidence-20260928",
+      "createdAt": "2026-09-28T19:19:41.386Z",
+      "finishedAt": "2026-09-28T19:19:41.390Z",
+      "error": "Worker is idle; use message or delegate.",
+      "recordSha256": "b417cc41572dad67b4117396b4a1db88c90e8673afd4f954303c9d765673b419",
+      "fingerprint": "aba1671b9924961aa33a6070587f388a50728081f522306d0fdf5571e4d1d021",
+      "targetId": "e3ba9429a35be5122bd44d3f7c36017769c5f9eaa5952dd140dd5b73e19f5d8f-worker"
+    },
+    {
+      "id": "9b4456fa81883a81ecc44f296b5b93a0e7c5f4338bc34293fcb0cd4959b11e90",
+      "botId": "6b93f369-f272-420e-9599-0b0fc1afc99c",
+      "name": "codex_threads",
+      "operation": "steer",
+      "opId": "add-dawar-codex-test-rollout-20260928",
+      "createdAt": "2026-09-28T22:28:35.082Z",
+      "finishedAt": "2026-09-28T22:28:35.084Z",
+      "error": "Worker is idle; use message or delegate.",
+      "recordSha256": "de9fbf133982b51173c5caec2d4a03f9950d231cce26a3092c4eb1a508e52717",
+      "fingerprint": "89074aa204a7ba92e9b0d20d28546c6f68c85dea177f3715631c5d742a0fde2f",
+      "targetId": "a95533fcf51d7bf3d452380f95a2a5fdd0e19b5ede42b77b0bcbaa6b5aa5aad9-worker"
+    },
+    {
+      "id": "b87a3a872a3d29f243ce6d2a690959d1075ba0be10ced4f19bd4af2c2a5eee7b",
+      "botId": "6b93f369-f272-420e-9599-0b0fc1afc99c",
+      "name": "codex_worktrees",
+      "operation": "remove",
+      "opId": "remove-integrated-im30-worktree-20260929",
+      "createdAt": "2026-09-29T13:55:46.153Z",
+      "finishedAt": "2026-09-29T13:55:46.305Z",
+      "error": "Worktree commits are not integrated into integratedRef; it was retained.",
+      "recordSha256": "121f4b15f5111a001ef19943c998a927d1489bbb1884f1d016e245c1ebeda359",
+      "fingerprint": "d560565cf80051a3e596387c01b7ffa88d7ebb030b90b982a03fee4c9445fbfa",
+      "targetId": "b2955ca4a8f476d9ea12541dc11fd11c357e08c6c0c50ec04f06c4a3216b7c86"
+    },
+    {
+      "id": "eea06408d86eeb763c7ed99d88717d9b6fcebcb4be0d7751aecaac895391181d",
+      "botId": "77904bd1-5cf7-4ade-b6db-86e659e453c6",
+      "name": "codex_threads",
+      "operation": "steer",
+      "opId": "steer-msg-cost-snapshot-question-20260925",
+      "createdAt": "2026-09-25T17:19:19.031Z",
+      "finishedAt": "2026-09-25T17:19:19.034Z",
+      "error": "Worker is idle; use message or delegate.",
+      "recordSha256": "dd1e20bf235370bd4b6ad77e8024f5ab8ac89bee6ce752e628277e8a8cc4702e",
+      "fingerprint": "232cdc45cc288e5e8801bba36e69ededa54aec1e0a7b12f8a427633b74de61cd",
+      "targetId": "833324eaedccd6fff8f7b3e1fcd39887371fd1971855080040d14c1ddf00c5e3-worker"
+    },
+    {
+      "id": "01a00516a5d7788e19ff51e0626357cc412d027f30e630ed5a1f1a86414c7d34",
+      "botId": "77904bd1-5cf7-4ade-b6db-86e659e453c6",
+      "name": "codex_threads",
+      "operation": "steer",
+      "opId": "koolina-query-explain-evidence-20260928",
+      "createdAt": "2026-09-28T14:23:34.618Z",
+      "finishedAt": "2026-09-28T14:23:34.621Z",
+      "error": "Worker is idle; use message or delegate.",
+      "recordSha256": "9c15d73832aeff1f6e70185ffb299e6fb9c4a6e2eb2d787676e7c2f1062400a4",
+      "fingerprint": "80667c1a224b994b652d9a2927fe416c04fe03e93857502f824418ecb0a2c8f1",
+      "targetId": "3b64957253a37317ee9d4a0909af2fbf4a5a3cc72fc06858a959de2f4a0ac24e-worker"
+    },
+    {
+      "id": "d0975fe4040300c8db309aa0e393c7209b538858e96ddd83ae90ed804ff383c4",
+      "botId": "92079ec9-fb7c-4f52-97ca-4c138ccc2038",
+      "name": "codex_worktrees",
+      "operation": "remove",
+      "opId": "erd-public-installer-remove-worktree-20260925",
+      "createdAt": "2026-09-25T18:21:15.921Z",
+      "finishedAt": "2026-09-25T18:21:15.971Z",
+      "error": "Worktree commits are not integrated into integratedRef; it was retained.",
+      "recordSha256": "df4ff763aacd4cba646586d2d264388454fd548ab59bc7f8e06f165c74b9e75d",
+      "fingerprint": "6b010f7fde1cb9c5db6e24a8b5951baa664629b2e620b1c50e48d2c501a91ec4",
+      "targetId": "01491e1130b10998ace4bdd30b35ea0b04e5f9b45004a3a3d15284b792d57de4-tree"
+    }
+  ],
+  "producerSourceReview": {
+    "originalManagerSourceSha256": "1c7ebd9797cafa7d3514a166eb24ad18094c8d09dfa0fb378402a3e66dfcb3f7",
+    "currentCandidateParent": "ef9f0fe0070e1b8b934b8d3925a5e515119ae041",
+    "unchangedGuardSuffixSha256": "c4e2e3f3a6ebb1cac4ebd00aa5e95cf1bb16415ae62a99307819349649a794cb",
+    "fixedGuardsAndRecordsSha256": "c3ffb3092ad081fd6ed30f56e3ecd2140966c544b8cd29e5c5c6e2e07e64091b",
+    "originalRecordCount": 12,
+    "scope": "Collaboration routing/import/resource adapters precede the unchanged legacy guards; only the same original fixed pre-effect refusals remain passive."
+  },
+  "sourceReview": {
+    "base": "9170875d2748280f9829f9bf2ed152f24315fab9",
+    "reason": "TaskRequests catalog/route only; all four original guard methods byte-identical; all twelve original rows/targets rebound without replay",
+    "evidence": "/home/dawar/bots/dwight-lead-developer-dawartodo-copy/task-requests-evidence-20261009/manager-guard-review.json"
+  }
+}

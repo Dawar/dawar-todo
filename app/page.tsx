@@ -14,6 +14,14 @@ import {
   useRef,
   useState,
 } from "react";
+import { TodoForward } from "./todo-forward-picker";
+import { TodoQueue, type QueueRequest } from "./todo-queue-picker";
+import type { TaskQueueSource } from "../lib/task-queue-export";
+import { registerPwaUpdateGuard } from "./pwa-update";
+import { todoCopyText } from "./todo-forward";
+import { TaskCaptureSession, TaskCaptureGate } from "./task-capture";
+import { TaskIntentPanel } from "./task-intent-panel";
+import { scheduleTitleSize, taskRowClock } from "./task-title-layout";
 import { useTaskList, useTask, taskStore } from "./task-store";
 import { taskSync, type TaskSyncEvent } from "./task-sync";
 import { useStableCallback } from "./use-stable-callback";
@@ -43,6 +51,8 @@ import {
 import type { RealtimeVoice } from "../lib/ai-preferences";
 import { snoozeLabel } from "../lib/snooze-label";
 import { zonedDateTimeInputValue, zonedLocalDateTimeToUtc } from "../lib/zoned-date-time";
+import { AttachmentQueuePanel } from "./attachment-queue-panel";
+import { attachmentQueueMessage, hasAttachmentBytes } from "./attachment-queue";
 import { SiteHeader } from "./site-header";
 import { KeyboardShortcutsDialog } from "./keyboard-shortcuts-dialog";
 import { PullGesturePill } from "./pull-to-refresh";
@@ -65,7 +75,6 @@ import {
   deleteOfflineTaskAction,
   getOfflineTodoByLocalId,
   loadCachedServerState,
-  loadOfflineCaptureDraft,
   listOfflineTodos,
   listOfflineTaskActions,
   listOfflineTodoMutations,
@@ -74,12 +83,10 @@ import {
   persistOfflineStorage,
   saveOfflineCaptureDraft,
   saveOfflineTaskAction,
-  saveOfflineTodo,
   saveOfflineTodoMutation,
   saveCachedServerState,
   updateOfflineTodo,
   type OfflineAttachmentKind,
-  type OfflineCaptureDraft,
   type OfflineTaskAction,
   type OfflineTodoRecord,
 } from "./offline-store";
@@ -244,6 +251,7 @@ function patchTodo(todo: Todo, patch: Record<string, unknown>) {
   return {
     ...todo,
     ...(patch as Partial<Todo>),
+    ...(Object.keys(patch).length ? { queueDelegation: null } : {}),
     ...(patch.title !== undefined ? { title: String(patch.title) } : {}),
     ...(patch.notes !== undefined ? { notes: String(patch.notes) } : {}),
     ...(patch.priority !== undefined ? { priority: Number(patch.priority) } : {}),
@@ -646,7 +654,7 @@ function AttachmentPicker({
         {showLabel && <span>Add attachment</span>}
       </button>
 
-      {open && typeof document !== "undefined" && createPortal(
+      {open && !disabled && typeof document !== "undefined" && createPortal(
         <>
           <button type="button" aria-label="Close attachment menu" onClick={() => setOpen(false)} className="fixed inset-0 z-[65] hidden cursor-default sm:block" />
           {desktopPosition && <div role="menu" style={{ left: desktopPosition.left, top: desktopPosition.top }} className="fixed z-[70] hidden w-56 rounded-xl border border-black/[0.08] bg-white p-1.5 shadow-xl sm:block">
@@ -911,8 +919,8 @@ function reorderCanonicalTodos(
 
 function matchesView(todo: Todo, view: View, now: number) {
   const snoozed = isSnoozed(todo, now);
-  if (view === "open") return todo.status === "open" && !snoozed;
-  if (view === "snoozed") return snoozed;
+  if (view === "open") return !todo.queueDelegation && todo.status === "open" && !snoozed;
+  if (view === "snoozed") return !todo.queueDelegation && snoozed;
   if (view === "done") return todo.status === "completed";
   if (view === "all") return todo.status === "open" || todo.status === "completed";
   return false;
@@ -986,6 +994,7 @@ const TaskRow = memo(function TaskRow({
   onSelect,
   onAction,
   onEdit,
+  onQueue,
   onPin,
   onAcknowledgeUrgent,
   onTitleChange,
@@ -1006,6 +1015,7 @@ const TaskRow = memo(function TaskRow({
   onSelect: (todo: Todo) => void;
   onAction: (todo: Todo, action: TodoAction, source: "hover" | "swipe") => void;
   onEdit: (todo: Todo, source: "hover" | "swipe") => void;
+  onQueue: (todo: Todo) => void;
   onPin: (todo: Todo) => void;
   onAcknowledgeUrgent: (todo: Todo) => void;
   onTitleChange: (todo: Todo, title: string) => void;
@@ -1046,13 +1056,13 @@ const TaskRow = memo(function TaskRow({
   const longSwipe = swipeRatio >= SWIPE_LONG_ACTION_THRESHOLD;
   const revealAction = offset < 0
     ? (longSwipe ? leftSecondaryAction.label : primaryAction.label)
-    : (longSwipe ? "Delete" : "Edit");
+    : (longSwipe ? "Queue" : "Edit");
   const revealIcon: ActionIconName = offset < 0
     ? (longSwipe ? leftSecondaryAction.icon : primaryAction.icon)
-    : (longSwipe ? "delete" : "edit");
+    : (longSwipe ? "forward" : "edit");
   const revealClass = offset < 0
     ? longSwipe && (leftSecondaryAction.icon === "snooze" || leftSecondaryAction.icon === "wake") ? "bg-amber-500" : "bg-[#216e4e]"
-    : longSwipe ? "bg-red-600" : "bg-slate-500";
+    : longSwipe ? "bg-[#216e4e]" : "bg-slate-500";
 
   function pointerDown(event: ReactPointerEvent<HTMLDivElement>) {
     if (pending || event.pointerType !== "touch") return;
@@ -1130,7 +1140,7 @@ const TaskRow = memo(function TaskRow({
     }
     const action = direction < 0
       ? (ratio >= SWIPE_LONG_ACTION_THRESHOLD ? leftSecondaryAction.action : primaryAction.action)
-      : (ratio >= SWIPE_LONG_ACTION_THRESHOLD ? "delete" : "edit");
+      : (ratio >= SWIPE_LONG_ACTION_THRESHOLD ? "forward" : "edit");
     const activated = ratio >= SWIPE_ACTION_THRESHOLD && direction !== 0;
     console.info("[todo-gesture] mobile task swipe finished", {
       todoId: todo.id,
@@ -1143,7 +1153,7 @@ const TaskRow = memo(function TaskRow({
     });
     if (!activated) return;
     if (direction < 0) onAction(todo, action as TodoAction, "swipe");
-    else if (action === "delete") onAction(todo, "delete", "swipe");
+    else if (action === "forward") onQueue(todo);
     else onEdit(todo, "swipe");
   }
 
@@ -1171,10 +1181,7 @@ const TaskRow = memo(function TaskRow({
   ];
 
   function resizeTitle() {
-    const textarea = titleRef.current;
-    if (!textarea) return;
-    textarea.style.height = "auto";
-    textarea.style.height = `${textarea.scrollHeight}px`;
+    scheduleTitleSize(titleRef.current);
   }
 
   useLayoutEffect(() => {
@@ -1303,7 +1310,7 @@ const TaskRow = memo(function TaskRow({
             {todo.attachmentCount > 0 && <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-[#eef2ef] px-1.5 py-0.5 text-[10px] font-medium text-[#68716b]"><ActionIcon name="attachment" className="h-3 w-3" />{todo.attachmentCount}</span>}
           </div>
           {todo.notes && <p className="mt-1 line-clamp-2 whitespace-pre-wrap text-xs leading-5 text-[#7c847f]">{todo.notes}</p>}
-          {(todo.project || todo.context || todo.dueDate || todo.priority <= 2 || snoozed || recurring || todo.offline) && (
+          {(todo.project || todo.context || todo.dueDate || todo.priority <= 2 || snoozed || recurring || todo.offline || todo.queueLastTransfer) && (
             <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px] font-medium leading-4">
               {todo.priority <= 2 && <span className={classNames("inline-flex min-h-[22px] items-center rounded-full px-2 py-0.5", todo.priority === 1 ? "bg-red-50 text-red-700 ring-1 ring-inset ring-red-200/70" : "bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-200/70")}>{priorityLabels[todo.priority]}</span>}
               {todo.project && <span className="inline-flex min-h-[22px] items-center gap-1 rounded-full bg-[#eef2ef] px-2 py-0.5 text-[#55615a] ring-1 ring-inset ring-[#dfe5e1]"><ActionIcon name="folder" className="h-3 w-3" />{todo.project}</span>}
@@ -1311,7 +1318,8 @@ const TaskRow = memo(function TaskRow({
               {todo.dueDate && <span className={classNames("inline-flex min-h-[22px] items-center gap-1 rounded-full px-2 py-0.5 ring-1 ring-inset", isDueTodayOrOverdue(todo.dueDate) && todo.status === "open" && !snoozed ? "bg-red-50 text-red-700 ring-red-200/70" : "bg-slate-50 text-slate-600 ring-slate-200/80")}><ActionIcon name="calendar" className="h-3 w-3" />{formatDueDate(todo.dueDate)}</span>}
               {snoozed && todo.snoozedUntil && <SnoozeStatusBadge value={todo.snoozedUntil} now={now} timeZone={timeZone} />}
               {todo.recurrenceCron && <span className="inline-flex min-h-[22px] items-center gap-1 rounded-full bg-violet-50 px-2 py-0.5 text-violet-700 ring-1 ring-inset ring-violet-200/70"><ActionIcon name="repeat" className="h-3 w-3" />{recurrenceLabel(todo.recurrenceCron, todo.status, now, timeZone)}</span>}
-              {todo.offline && <span className="inline-flex min-h-[22px] items-center gap-1 rounded-full bg-orange-50 px-2 py-0.5 text-orange-700 ring-1 ring-inset ring-orange-200/70"><ActionIcon name="retry" className="h-3 w-3" />Waiting to sync</span>}
+              {todo.queueLastTransfer && <span className="inline-flex min-h-[22px] items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-emerald-700">Queued · source retained</span>}
+              {todo.offline && <span className="inline-flex min-h-[22px] items-center gap-1 rounded-full bg-orange-50 px-2 py-0.5 text-orange-700 ring-1 ring-inset ring-orange-200/70"><ActionIcon name="retry" className="h-3 w-3" />Saved on device</span>}
             </div>
           )}
         </div>
@@ -1370,6 +1378,7 @@ const TaskRow = memo(function TaskRow({
                 <span className="sr-only">Acknowledge urgent alert</span>
               </button>
             )}
+            <button type="button" data-row-action onClick={() => onQueue(todo)} aria-label={`Queue to bot: ${todo.title}`} title="Queue to bot" className="grid h-9 w-9 place-items-center rounded-lg text-[#69716c] hover:bg-[#eef0ed] focus-visible:outline-2 focus-visible:outline-[#216e4e]"><ActionIcon name="forward" className="h-[18px] w-[18px]" /><span className="sr-only">Queue to bot</span></button>
             {hoverActions.map(({ action, label, icon }) => (
               <button
                 key={action}
@@ -1399,8 +1408,14 @@ const TaskRow = memo(function TaskRow({
 
 const SubscribedTaskRow = memo(function SubscribedTaskRow(props: React.ComponentProps<typeof TaskRow>) {
   const current = useTask(taskKey(props.todo));
-  return current ? <TaskRow {...props} todo={current} /> : null;
+  return current ? <TaskRow {...props} todo={current} now={taskRowClock(current, props.now)} /> : null;
 });
+
+function resizeCapture(textarea: HTMLTextAreaElement) {
+  textarea.style.overflowY = "hidden";
+  textarea.style.height = "auto";
+  textarea.style.height = `${textarea.scrollHeight}px`;
+}
 
 export default function Home() {
   const [loading, setLoading] = useState(true);
@@ -1420,6 +1435,17 @@ export default function Home() {
   const [captureProject, setCaptureProject] = useState("");
   const [captureDraftToken, setCaptureDraftToken] = useState(() => crypto.randomUUID());
   const [captureAttachments, setCaptureAttachments] = useState<PendingAttachment[]>([]);
+  const captureFilesRef = useRef<PendingAttachment[]>([]);
+  const captureProjectRef = useRef("");
+  const captureTokenRef = useRef(captureDraftToken);
+  const captureSession = useRef<TaskCaptureSession | null>(null);
+  if (!captureSession.current) captureSession.current = new TaskCaptureSession();
+  const [captureReady, setCaptureReady] = useState(false);
+  const [captureSaveState, setCaptureSaveState] = useState("Loading draft…");
+  const captureSaveSequence = useRef(0);
+  const captureGate = useRef(new TaskCaptureGate());
+  const [capturePreparing, setCapturePreparing] = useState(false);
+  const captureMounted = useRef(false);
   const [recognizingCaptureTitle, setRecognizingCaptureTitle] = useState(false);
   const [adding, setAdding] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -1430,6 +1456,7 @@ export default function Home() {
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [pinListEnabled, setPinListEnabled] = useState(true);
   const [editingId, setEditingId] = useState<number | null>(null);
+  const [queueRequest, setQueueRequest] = useState<QueueRequest | null>(null);
   const [editDraft, setEditDraft] = useState<TodoDraft | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
   const [editSaveState, setEditSaveState] = useState<EditSaveState>("saved");
@@ -1473,6 +1500,8 @@ export default function Home() {
   const newTitleRef = useRef("");
   const captureDraftClientIdRef = useRef(crypto.randomUUID());
   const captureDraftRef = useRef<CaptureDraft | null>(null);
+  const prepareUpdateRef = useRef<() => Promise<void>>(async () => {});
+  useEffect(() => registerPwaUpdateGuard("todo-input", () => prepareUpdateRef.current()), []);
   const captureDraftSaveTimerRef = useRef<number | null>(null);
   const captureDraftInFlightRef = useRef(false);
   const queuedCaptureDraftRef = useRef<CaptureDraft | null>(null);
@@ -1510,6 +1539,7 @@ export default function Home() {
   const pendingCompletionIdsRef = useRef<Set<number>>(new Set());
   const optimisticOperationsRef = useRef<Map<string, OptimisticOperation>>(new Map());
   const [uploadCount, setUploadCount] = useState(0);
+  const [uploadStates, setUploadStates] = useState<Record<string, number>>({});
   const lastLiveSnapshotRef = useRef("");
   const syncWakeTimerRef = useRef<number | null>(null);
   const syncWakeAtRef = useRef(0);
@@ -1535,7 +1565,7 @@ export default function Home() {
   const reorderAnimationRestoreFrameRef = useRef<number | null>(null);
   const lastAppBadgeCountRef = useRef<number | null>(null);
   const deepLinkedTaskOpenedRef = useRef(false);
-  const taskDialogNestedOverlayOpen = projectDialog !== null || viewerIndex !== null || voiceTarget !== null || customSnoozeDialog !== null;
+  const taskDialogNestedOverlayOpen = queueRequest !== null || projectDialog !== null || viewerIndex !== null || voiceTarget !== null || customSnoozeDialog !== null;
   const overlayOpen = editingId !== null || projectSelectorOpen || projectDialog !== null || newProjectOpen || projectDeleteDialog !== null || filtersOpen || viewerIndex !== null || voiceTarget !== null || shortcutsOpen || customSnoozeDialog !== null;
 
   useEffect(() => () => {
@@ -1624,7 +1654,7 @@ export default function Home() {
     if (!remoteDraft) return;
     const localDraft = captureDraftRef.current;
     if (localDraft && remoteDraft.version <= localDraft.version) return;
-    if (document.activeElement === captureRef.current) {
+    if (!captureReady || captureFilesRef.current.length || document.activeElement === captureRef.current) {
       pendingRemoteCaptureDraftRef.current = remoteDraft;
       console.info("[todo-sync] remote Quick Add draft deferred during active typing", {
         source,
@@ -1638,6 +1668,7 @@ export default function Home() {
     captureDraftRef.current = remoteDraft;
     newTitleRef.current = remoteDraft.text;
     setNewTitle(remoteDraft.text);
+    void checkpointCapture().catch(() => undefined);
     void saveOfflineCaptureDraft({ key: "quick-add", ...remoteDraft }).catch((error) => {
       console.error("[todo-offline] remote Quick Add draft cache failed", { source, error });
     });
@@ -1665,7 +1696,7 @@ export default function Home() {
     });
   });
 
-  const applyLiveSnapshot = useEffectEvent((remoteTodos: Todo[], source: "initial" | "poll" | "reconnect" | "snooze-wake") => {
+  const applyLiveSnapshot = useStableCallback((remoteTodos: Todo[], source: "initial" | "poll" | "reconnect" | "snooze-wake") => {
     const pendingPatches = pendingTodoPatchesRef.current;
     const missingOrderIds = remoteTodos
       .filter((todo) => !Number.isFinite(todo.sortOrder))
@@ -1680,30 +1711,6 @@ export default function Home() {
     const resolved = remoteTodos
       .filter((todo) => !pendingDeletedIdsRef.current.has(todo.id))
       .map(applyPendingOverlays);
-    setTodos((current) => {
-      const offlineTodos = current.filter((todo) => todo.id < 0 || todo.offline);
-      const localClientIds = new Set(offlineTodos.map((todo) => todo.clientId).filter(Boolean));
-      const next = [...offlineTodos, ...resolved.filter((todo) => !todo.clientId || !localClientIds.has(todo.clientId))];
-      const unchanged = next.length === current.length && next.every((todo, index) => {
-        const previous = current[index];
-        return previous?.id === todo.id
-          && previous.updatedAt === todo.updatedAt
-          && previous.status === todo.status
-          && previous.snoozedUntil === todo.snoozedUntil
-          && previous.attachmentCount === todo.attachmentCount
-          && previous.title === todo.title
-          && previous.notes === todo.notes
-          && previous.priority === todo.priority
-          && previous.dueDate === todo.dueDate
-          && previous.project === todo.project
-          && previous.context === todo.context
-          && previous.recurrenceCron === todo.recurrenceCron
-          && previous.pinned === todo.pinned
-          && previous.sortOrder === todo.sortOrder;
-      });
-      return unchanged ? current : next;
-    });
-
     const activeId = editingIdRef.current;
     const remoteTodo = activeId === null ? null : resolved.find((todo) => todo.id === activeId) ?? null;
     if (remoteTodo) {
@@ -1734,7 +1741,8 @@ export default function Home() {
     }
   });
 
-  const applyLiveDelta = useEffectEvent((remoteTodos: Todo[], deletedIds: number[], source: "poll" | "reconnect" | "snooze-wake") => {
+  const applyLiveDelta = useStableCallback((remoteTodos: Todo[], deletedIds: number[], source: "poll" | "reconnect" | "snooze-wake") => {
+    if (!remoteTodos.length && !deletedIds.length) return;
     const pendingPatches = pendingTodoPatchesRef.current;
     const missingOrderIds = remoteTodos
       .filter((todo) => !Number.isFinite(todo.sortOrder))
@@ -1746,30 +1754,13 @@ export default function Home() {
         ids: missingOrderIds.slice(0, 20),
       });
     }
-    const discardedPendingIds = deletedIds.filter((id) => pendingPatches.delete(id));
-    if (discardedPendingIds.length) {
-      setOfflineEditCount((current) => Math.max(0, current - discardedPendingIds.length));
-      for (const id of discardedPendingIds) {
-        void deleteOfflineTodoMutation(id).catch((error) => {
-          console.error("[todo-sync] deleted task mutation cleanup failed", { todoId: id, error });
-        });
-      }
-      console.warn("[todo-sync] remote deletion superseded queued edits", { ids: discardedPendingIds });
-    }
+    // The store retains rejected edits when a target disappears. Never discard
+    // those operations from a view callback; the recovery panel owns their UI.
     const changed = remoteTodos
       .filter((todo) => !pendingDeletedIdsRef.current.has(todo.id))
       .map(applyPendingOverlays);
     const changedById = new Map(changed.map((todo) => [todo.id, todo]));
     const deleted = new Set(deletedIds);
-    setTodos((current) => {
-      const next = current
-        .filter((todo) => (todo.offline || todo.id < 0 || !deleted.has(todo.id)) && !pendingDeletedIdsRef.current.has(todo.id))
-        .map((todo) => changedById.get(todo.id) ?? todo);
-      const existingIds = new Set(next.map((todo) => todo.id));
-      const inserted = changed.filter((todo) => !existingIds.has(todo.id));
-      return inserted.length ? [...inserted, ...next] : next;
-    });
-
     const activeId = editingIdRef.current;
     const remoteTodo = activeId === null ? null : changedById.get(activeId) ?? null;
     if (remoteTodo) {
@@ -1802,17 +1793,33 @@ export default function Home() {
     });
   });
 
+  const hydrateCapture = useStableCallback(() => {
+    if (captureGate.current.ready) return; // Activity reveal must preserve current unsaved input.
+    setCaptureSaveState("Loading draft…");
+    void captureSession.current!.load().then((stored) => {
+      if (!captureMounted.current || captureGate.current.ready) return;
+      captureTokenRef.current = stored.token;
+      setCaptureDraftToken(stored.token);
+      captureProjectRef.current = stored.project;
+      setCaptureProject(stored.project);
+      const items: PendingAttachment[] = stored.attachments.map((item) => ({
+        localId: item.localId, kind: item.kind, durationMs: item.durationMs,
+        file: new File([item.blob], item.fileName, { type: item.mimeType }),
+        previewUrl: URL.createObjectURL(item.blob), status: "staged", attachment: null, error: "",
+      }));
+      captureFilesRef.current = items; setCaptureAttachments(items);
+      const draft = stored.draft;
+      if (draft) { captureDraftRef.current = draft; newTitleRef.current = draft.text; setNewTitle(draft.text); }
+      captureGate.current.hydrate();
+      setCaptureReady(true); setCaptureSaveState("Draft saved on this device");
+    }).catch(() => { if (captureMounted.current) setCaptureSaveState("Draft could not be loaded. Keep this page open and retry storage."); });
+  });
   useEffect(() => {
-    let active = true;
-    void loadOfflineCaptureDraft().then((draft) => {
-      if (!active || !draft || captureDraftRef.current && captureDraftRef.current.version >= draft.version) return;
-      captureDraftRef.current = draft;
-      newTitleRef.current = draft.text;
-      setNewTitle(draft.text);
-    });
+    captureMounted.current = true;
+    hydrateCapture();
     void persistOfflineStorage();
-    return () => { active = false; };
-  }, []);
+    return () => { captureMounted.current = false; };
+  }, [hydrateCapture]);
 
   const receiveSyncEvent = useStableCallback((event: TaskSyncEvent) => {
     if (event.type === "remote") {
@@ -1889,7 +1896,7 @@ export default function Home() {
     });
     setLoading(state.loading); setOnline(navigator.onLine); setConnectionQuality(state.quality);
     setOfflineCount(state.creates); setOfflineEditCount(state.edits); setOfflineActionCount(state.actions);
-    setUploadCount(state.uploads);
+    setUploadCount(state.uploads); setUploadStates(state.uploadStates);
     pendingTodoPatchesRef.current = new Map(state.mutations.map((mutation) => [mutation.todoId, mutation.patch]));
     rebuildPendingActionState(state.pendingActions);
     setRegisteredProjects((current) => JSON.stringify(current) === JSON.stringify(state.projects) ? current : state.projects);
@@ -2231,6 +2238,7 @@ export default function Home() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if (document.querySelector(".todo-queue-dialog")) return;
       const target = event.target as HTMLElement;
       const typing = Boolean(target.closest("input, textarea, select, [contenteditable='true']"));
       const imageCount = detailAttachments.filter((attachment) => attachment.kind === "image").length;
@@ -2375,7 +2383,7 @@ export default function Home() {
       registeredProjects.map((name) => [name, { open: 0, snoozed: 0, done: 0 }]),
     );
     todos.forEach((todo) => {
-      if (!todo.project) return;
+      if (!todo.project || todo.queueDelegation && todo.status !== "completed") return;
       const counts = projectCounts.get(todo.project) ?? { open: 0, snoozed: 0, done: 0 };
       if (todo.status === "completed") counts.done += 1;
       else if (isSnoozed(todo, now)) counts.snoozed += 1;
@@ -2388,7 +2396,7 @@ export default function Home() {
   const unassignedProjectCounts = useMemo(() => {
     const counts = { open: 0, snoozed: 0, done: 0 };
     todos.forEach((todo) => {
-      if (todo.project) return;
+      if (todo.project || todo.queueDelegation && todo.status !== "completed") return;
       if (todo.status === "completed") counts.done += 1;
       else if (isSnoozed(todo, now)) counts.snoozed += 1;
       else counts.open += 1;
@@ -2411,7 +2419,7 @@ export default function Home() {
     const needle = deferredQuery.trim().toLowerCase();
     const rows = todos.filter((todo) => {
       const searchable = [todo.title, todo.notes, todo.project, todo.context].filter(Boolean).join(" ").toLowerCase();
-      return matchesView(todo, view, now)
+      return (matchesView(todo, view, now) || Boolean(needle && todo.queueDelegation))
         && (!needle || todo.id === inlineEditingId || searchable.includes(needle))
         && (!project || (project === UNASSIGNED_PROJECT ? !todo.project : todo.project === project))
         && (!priority || todo.priority === Number(priority));
@@ -2419,9 +2427,9 @@ export default function Home() {
     return [...rows].sort(compareCanonicalOrder);
   }, [todos, view, deferredQuery, project, priority, now, inlineEditingId]);
 
-  const pinnedTaskCount = todos.filter((todo) => todo.pinned).length;
-  const pinnedOpenTodos = view === "open" && pinListEnabled ? filtered.filter((todo) => todo.pinned) : [];
-  const regularOpenTodos = view === "open" && pinListEnabled ? filtered.filter((todo) => !todo.pinned) : filtered;
+  const pinnedTaskCount = todos.filter((todo) => todo.pinned && !todo.queueDelegation).length;
+  const pinnedOpenTodos = view === "open" && pinListEnabled ? filtered.filter((todo) => todo.pinned && !todo.queueDelegation) : [];
+  const regularOpenTodos = view === "open" && pinListEnabled ? filtered.filter((todo) => !todo.pinned || todo.queueDelegation) : filtered;
   const displayedTodos = view === "open" && pinListEnabled ? [...pinnedOpenTodos, ...regularOpenTodos] : filtered;
 
   const selectedIds = useMemo(() => [...selected], [selected]);
@@ -2456,11 +2464,37 @@ export default function Home() {
     setViewerCopyState("idle");
   }, [viewerAttachment?.id]);
 
-  function resizeCapture(textarea: HTMLTextAreaElement) {
-    textarea.style.height = "auto";
-    textarea.style.height = `${Math.min(textarea.scrollHeight, 120)}px`;
-    textarea.style.overflowY = textarea.scrollHeight > 120 ? "auto" : "hidden";
-  }
+  useLayoutEffect(() => {
+    if (captureRef.current) resizeCapture(captureRef.current);
+  }, [newTitle]);
+
+  useLayoutEffect(() => {
+    const textarea = captureRef.current;
+    if (!textarea) return;
+    let frame: number | null = null;
+    const scheduleResize = () => {
+      if (frame !== null) return;
+      frame = window.requestAnimationFrame(() => {
+        frame = null;
+        resizeCapture(textarea);
+      });
+    };
+    // Ignore height notifications from our own sizing, and resize outside the
+    // observer delivery so width reflow cannot create a feedback loop.
+    let width = 0;
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(([entry]) => {
+      if (entry.contentRect.width === width) return;
+      width = entry.contentRect.width;
+      scheduleResize();
+    });
+    observer?.observe(textarea);
+    if (!observer) window.addEventListener("resize", scheduleResize);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener("resize", scheduleResize);
+      if (frame !== null) window.cancelAnimationFrame(frame);
+    };
+  }, []);
 
   async function persistCaptureDraft(draft: CaptureDraft, source: string) {
     if (!navigator.onLine) {
@@ -2518,6 +2552,30 @@ export default function Home() {
 
   persistCaptureDraftRef.current = persistCaptureDraft;
 
+  async function checkpointCapture() {
+    const sequence = ++captureSaveSequence.current;
+    setCaptureSaveState("Saving draft on this device…");
+    try {
+      await captureSession.current!.save({
+        token: captureTokenRef.current, project: captureProjectRef.current,
+        draft: captureDraftRef.current ? { key: "quick-add", ...captureDraftRef.current } : null,
+        attachments: captureFilesRef.current.map((item) => ({ localId: item.localId, kind: item.kind,
+          fileName: item.file.name, mimeType: item.file.type, durationMs: item.durationMs, blob: item.file,
+          remoteAttachmentId: item.attachment?.id })),
+      });
+      if (sequence === captureSaveSequence.current) setCaptureSaveState("Draft saved on this device");
+    } catch (error) {
+      setCaptureSaveState("Draft not saved. Keep this page open; retry or copy text and save each file.");
+      throw error;
+    }
+  }
+
+  function updateCaptureProject(value: string) {
+    if (!captureGate.current.ready || captureGate.current.adding || captureDraftToken !== captureTokenRef.current) return;
+    captureProjectRef.current = value; setCaptureProject(value);
+    void checkpointCapture().catch(() => undefined);
+  }
+
   function updateCaptureTitle(text: string, source: "typing" | "task-created" | "image-recognition") {
     const nextClock = Math.max(Date.now(), captureDraftClockRef.current + 1);
     captureDraftClockRef.current = nextClock;
@@ -2533,6 +2591,7 @@ export default function Home() {
     captureDraftRef.current = draft;
     pendingRemoteCaptureDraftRef.current = null;
     setNewTitle(text);
+    void checkpointCapture().catch(() => undefined);
     void saveOfflineCaptureDraft({ key: "quick-add", ...draft }).catch((error) => {
       console.error("[todo-offline] Quick Add draft save failed", { source, textLength: text.length, error });
     });
@@ -2684,30 +2743,6 @@ export default function Home() {
     return items;
   }
 
-  async function uploadCaptureAttachment(item: PendingAttachment, draftToken: string) {
-    try {
-      const endpoint = "/api/attachments/drafts";
-      const discard = (uploadId: string) => request(`/api/attachments/drafts/${uploadId}?discard=1`, {
-        method: "DELETE",
-        body: JSON.stringify({ draftToken }),
-      });
-      const { attachment } = item.kind === "image"
-        ? await uploadPrivateImage(item.file, endpoint, { draftToken }, discard)
-        : await uploadPrivateMedia(item.file, item.kind, item.durationMs, endpoint, { draftToken }, discard);
-      setCaptureAttachments((current) => current.map((candidate) => candidate.localId === item.localId
-        ? { ...candidate, status: "ready", attachment, error: "" }
-        : candidate));
-      console.info("[todo-ui] draft attachment uploaded", { attachmentId: attachment.id, kind: item.kind, bytes: attachment.byteSize });
-    } catch (error) {
-      const wentOffline = !navigator.onLine;
-      const message = error instanceof Error ? error.message : "The attachment could not be uploaded.";
-      setCaptureAttachments((current) => current.map((candidate) => candidate.localId === item.localId
-        ? { ...candidate, status: wentOffline ? "offline" : "error", error: wentOffline ? "Waiting for a connection" : message }
-        : candidate));
-      console.error("[todo-ui] draft attachment upload failed", { localId: item.localId, kind: item.kind, bytes: item.file.size, wentOffline, error });
-    }
-  }
-
   async function recognizeCaptureImage(item: PendingAttachment) {
     if (item.kind !== "image" || newTitleRef.current.trim() || !navigator.onLine || captureTitleRecognitionRef.current) return;
     const requestId = ++captureTitleRecognitionSequenceRef.current;
@@ -2766,44 +2801,54 @@ export default function Home() {
   }
 
   async function queueCaptureAttachments(inputFiles: File[]) {
-    const files = validateSelectedAttachments(inputFiles, captureAttachments.length);
-    if (!files.length) return;
-    const items = await pendingAttachments(files);
-    if (!items.length) return;
-    setCaptureAttachments((current) => [...current, ...items]);
-    console.info("[todo-offline] capture attachments staged locally", { count: items.length, browserOnlineHint: navigator.onLine, kinds: items.map((item) => item.kind), totalBytes: files.reduce((sum, file) => sum + file.size, 0) });
-    const recognitionTarget = items.find((item) => item.kind === "image");
-    if (recognitionTarget && !newTitleRef.current.trim()) void recognizeCaptureImage(recognitionTarget);
+    await captureGate.current.prepare(async () => {
+      setCapturePreparing(true);
+      setCaptureSaveState("Preparing files for this device…");
+      try {
+        const files = validateSelectedAttachments(inputFiles, captureAttachments.length);
+        if (!files.length) { setCaptureSaveState("No files added."); return; }
+        const items = await pendingAttachments(files);
+        if (!items.length) { setCaptureSaveState("No files added."); return; }
+        captureFilesRef.current = [...captureFilesRef.current, ...items];
+        setCaptureAttachments(captureFilesRef.current);
+        try { await checkpointCapture(); } catch { return; }
+        console.info("[todo-offline] capture attachments staged locally", { count: items.length, browserOnlineHint: navigator.onLine, kinds: items.map((item) => item.kind), totalBytes: files.reduce((sum, file) => sum + file.size, 0) });
+        const recognitionTarget = items.find((item) => item.kind === "image");
+        if (recognitionTarget && !newTitleRef.current.trim()) void recognizeCaptureImage(recognitionTarget);
+      } finally { setCapturePreparing(captureGate.current.preparing > 1); }
+    });
   }
 
-  function queueCaptureVoice(file: File, durationMs: number) {
-    if (captureAttachments.length >= MAX_ATTACHMENTS) {
-      setNotice({ tone: "error", text: `Tasks are limited to ${MAX_ATTACHMENTS} attachments.` });
-      return;
-    }
-    const item: PendingAttachment = {
-      localId: crypto.randomUUID(),
-      file,
-      previewUrl: URL.createObjectURL(file),
-      kind: "audio",
-      durationMs,
-      status: "staged",
-      attachment: null,
-      error: "",
-    };
-    setCaptureAttachments((current) => [...current, item]);
-    setVoiceTarget(null);
-    console.info("[todo-offline] voice memo staged locally", { destination: "quick-add", bytes: file.size, durationMs, browserOnlineHint: navigator.onLine });
+  async function queueCaptureVoice(file: File, durationMs: number) {
+    await captureGate.current.prepare(async () => {
+      if (captureAttachments.length >= MAX_ATTACHMENTS) {
+        setNotice({ tone: "error", text: `Tasks are limited to ${MAX_ATTACHMENTS} attachments.` });
+        return;
+      }
+      const item: PendingAttachment = {
+        localId: crypto.randomUUID(),
+        file,
+        previewUrl: URL.createObjectURL(file),
+        kind: "audio",
+        durationMs,
+        status: "staged",
+        attachment: null,
+        error: "",
+      };
+      captureFilesRef.current = [...captureFilesRef.current, item];
+      setCaptureAttachments(captureFilesRef.current);
+      setVoiceTarget(null);
+      try { await checkpointCapture(); } catch { return; }
+      console.info("[todo-offline] voice memo staged locally", { destination: "quick-add", bytes: file.size, durationMs, browserOnlineHint: navigator.onLine });
+    });
   }
 
-  function retryCaptureAttachment(item: PendingAttachment) {
-    setCaptureAttachments((current) => current.map((candidate) => candidate.localId === item.localId
-      ? { ...candidate, status: "uploading", error: "" }
-      : candidate));
-    void uploadCaptureAttachment({ ...item, status: "uploading", error: "" }, captureDraftToken);
+  function retryCaptureAttachment() {
+    void checkpointCapture().catch(() => undefined);
   }
 
   async function removeCaptureAttachment(item: PendingAttachment) {
+    if (!captureGate.current.ready || captureGate.current.adding) return;
     if (item.status === "uploading" || item.status === "offline") return;
     if (item.attachment) {
       try {
@@ -2822,21 +2867,27 @@ export default function Home() {
       setRecognizingCaptureTitle(false);
       console.info("[todo-ui] quick add image recognition cancelled", { localId: item.localId });
     }
+    captureFilesRef.current = captureFilesRef.current.filter((candidate) => candidate.localId !== item.localId);
+    setCaptureAttachments(captureFilesRef.current);
+    try { await checkpointCapture(); } catch { return; }
     URL.revokeObjectURL(item.previewUrl);
-    setCaptureAttachments((current) => current.filter((candidate) => candidate.localId !== item.localId));
   }
 
   async function loadTaskAttachments(todoId: number) {
     setLoadingAttachments(true);
     setAttachmentError("");
     try {
-      const queued = (await listQueuedAttachments()).filter((upload) => upload.todoId === todoId && !upload.cancelled);
+      const allQueued = (await listQueuedAttachments()).filter((upload) => upload.todoId === todoId && !upload.cancelled);
+      const queued = allQueued.filter(hasAttachmentBytes);
+      if (allQueued.length !== queued.length) setAttachmentError("Some local file bytes are missing. Open Review attachments to recover them.");
       setDetailUploads((current) => {
         const pending = new Set(queued.map((upload) => upload.localId));
         for (const item of current) if (!pending.has(item.localId)) URL.revokeObjectURL(item.previewUrl);
-        return queued.map((upload) => current.find((item) => item.localId === upload.localId) ?? {
-          localId: upload.localId, file: new File([upload.blob], upload.fileName, { type: upload.mimeType }), previewUrl: URL.createObjectURL(upload.blob), kind: upload.kind, durationMs: upload.durationMs, status: upload.error ? "error" : "offline", attachment: null, error: upload.error ?? "",
-        });
+        return queued.map((upload) => ({
+          ...(current.find((item) => item.localId === upload.localId) ?? {
+            localId: upload.localId, file: new File([upload.blob], upload.fileName, { type: upload.mimeType }), previewUrl: URL.createObjectURL(upload.blob), kind: upload.kind, durationMs: upload.durationMs, attachment: null,
+          }), status: (upload.leaseUntil ?? 0) > Date.now() ? "uploading" : upload.error ? "error" : "offline", error: attachmentQueueMessage(upload),
+        }));
       });
       if (!navigator.onLine) return;
       const { attachments } = await request<{ attachments: TodoAttachment[] }>(`/api/todos/${todoId}/attachments`);
@@ -2901,7 +2952,8 @@ export default function Home() {
   async function uploadDetailAttachment(todoId: number, item: PendingAttachment) {
     try {
       await queueTaskAttachments(todoId, [{ localId: item.localId, kind: item.kind, fileName: item.file.name, mimeType: item.file.type, durationMs: item.durationMs, blob: item.file }]);
-      setDetailUploads((current) => current.map((candidate) => candidate.localId === item.localId ? { ...candidate, status: "offline", error: "" } : candidate));
+      await retryQueuedAttachments(item.localId);
+      setDetailUploads((current) => current.map((candidate) => candidate.localId === item.localId ? { ...candidate, status: "offline", error: "Queued; resumes while the app is open and connected." } : candidate));
     } catch (error) {
       setDetailUploads((current) => current.map((candidate) => candidate.localId === item.localId ? { ...candidate, status: "error", error: error instanceof Error ? error.message : "The attachment could not be saved on this device." } : candidate));
     }
@@ -3025,11 +3077,14 @@ export default function Home() {
     captureTitleRecognitionSequenceRef.current += 1;
     captureTitleRecognitionRef.current = null;
     setRecognizingCaptureTitle(false);
+    captureTokenRef.current = captureSession.current!.snapshot().token;
+    captureFilesRef.current = [];
+    captureProjectRef.current = "";
     updateCaptureTitle("", "task-created");
     setCaptureProject("");
     captureAttachments.forEach((item) => URL.revokeObjectURL(item.previewUrl));
     setCaptureAttachments([]);
-    setCaptureDraftToken(crypto.randomUUID());
+    setCaptureDraftToken(captureTokenRef.current);
     if (captureRef.current) {
       captureRef.current.style.height = "auto";
       captureRef.current.style.overflowY = "hidden";
@@ -3043,7 +3098,10 @@ export default function Home() {
     event.preventDefault();
     const title = newTitle.trim();
     const attachmentsReady = captureAttachments.every((item) => item.status === "staged" || (item.status === "ready" && item.attachment) || item.status === "offline");
-    if (!title || adding || !attachmentsReady) return;
+    if (!title || adding || !captureReady || !attachmentsReady || voiceTarget === "capture" || projectDialog?.captureDraft || !captureGate.current.beginAdd()) return;
+    // A late image-title suggestion must not change intent during consumption.
+    captureTitleRecognitionSequenceRef.current++;
+    captureTitleRecognitionRef.current = null;
     const temporaryId = createLocalTaskId();
     const clientId = crypto.randomUUID();
     const createdAt = new Date().toISOString();
@@ -3075,7 +3133,8 @@ export default function Home() {
     setAdding(true);
     setNotice(null);
     try {
-      await saveOfflineTodo({
+      await checkpointCapture();
+      await captureSession.current!.consume({
         clientId,
         localId: temporaryId,
         title,
@@ -3125,6 +3184,7 @@ export default function Home() {
       console.error("[todo-offline] quick add local commit failed", { clientId, localId: temporaryId, error });
     } finally {
       setAdding(false);
+      captureGate.current.endAdd();
       captureRef.current?.focus();
     }
   }
@@ -3592,13 +3652,16 @@ export default function Home() {
     }
 
     const { ids, openedFromDetails, captureDraft } = projectDialog;
+    if (captureDraft && (!captureGate.current.ready || captureGate.current.adding)) {
+      setProjectDialogError("Wait for the current capture to finish saving, then assign the project."); return;
+    }
     setSavingProject(true);
     setProjectDialogError("");
     setNotice(null);
     try {
       if (captureDraft) {
         const stagedProject = projectName;
-        setCaptureProject(stagedProject ?? "");
+        updateCaptureProject(stagedProject ?? "");
         if (stagedProject) {
           setRegisteredProjects((current) => [...new Set([...current, stagedProject as string])].sort((a, b) => a.localeCompare(b)));
         }
@@ -4278,6 +4341,14 @@ export default function Home() {
   }
 
   persistTaskDraftRef.current = persistTaskDraft;
+  prepareUpdateRef.current = async () => {
+    // Editing values can be intentionally invalid. Keep that editor open,
+    // rather than force a save or discard it during an unrelated app update.
+    if (editingIdRef.current !== null) throw Error("Close the task editor after saving before refreshing.");
+    if (captureGate.current.adding || voiceTarget) throw Error("Finish the current capture before refreshing.");
+    if (captureGate.current.ready) await checkpointCapture();
+    else if (captureDraftRef.current?.text || captureFilesRef.current.length) throw Error("Wait for your capture draft to finish loading before refreshing.");
+  };
   closeTaskDetailsRef.current = closeTaskDetails;
 
   function taskAction(todo: Todo, action: TodoAction, source: "hover" | "swipe" | "details") {
@@ -4402,7 +4473,7 @@ export default function Home() {
 
   async function copyTaskDetails() {
     if (!editDraft) return;
-    const text = [editDraft.title.trim(), editDraft.notes.trim()].filter(Boolean).join("\n\n");
+    const text = todoCopyText(editDraft.title, editDraft.notes);
     try {
       await copyTextToClipboard(text);
       setNotice({ tone: "success", text: "Task title and notes copied." });
@@ -4638,6 +4709,26 @@ export default function Home() {
 
   const stable_toggleSelected = useStableCallback(toggleSelected);
   const stable_taskAction = useStableCallback(taskAction);
+  const stable_queueTask = useStableCallback((todo: Todo) => setQueueRequest({ id: crypto.randomUUID(), todoIds: [todo.id] }));
+  const closeQueue = useStableCallback(() => setQueueRequest(null));
+  const queueGuard = useStableCallback(async (id: number, source?: TaskQueueSource) => {
+    const current = taskStore.getById(id);
+    if (!current || current.id < 1 || current.offline) throw Error("Save and sync this task before queueing.");
+    if (pendingTodoPatchesRef.current.has(id) || pendingActionPatchesRef.current.has(id) || pendingDeletedIdsRef.current.has(id)
+        || Object.keys(taskStore.getDraft(taskKey(current)) ?? {}).length) throw Error("Wait for pending task changes to save before queueing.");
+    if (editingIdRef.current === id && (autosaveInFlightRef.current || editSaveState !== "saved" || loadingAttachments
+      || editDraftRef.current && editBaselineRef.current && Object.keys(changedDraftPatch(editDraftRef.current, editBaselineRef.current)).length
+      || detailUploads.some(file => file.status !== "ready"))) throw Error("Save the task and finish its files before queueing. Your draft is retained.");
+    const [mutations, uploads, actions] = await Promise.all([listOfflineTodoMutations(), listQueuedAttachments(), listOfflineTaskActions()]);
+    if (mutations.some(m => m.todoId === id) || uploads.some(file => file.todoId === id && !file.cancelled)
+      || actions.some(action => action.taskIds.includes(id))) throw Error("Sync pending task changes/files before queueing.");
+    const latest = taskStore.getById(id);
+    if (source && (!latest || latest.title !== source.title || latest.notes !== source.notes || latest.updatedAt !== source.updatedAt || latest.attachmentCount !== source.files.length))
+      throw Error("The saved task differs from your selection. Save/reload it before queueing; retain the original transfer.");
+    if (source && editingIdRef.current === id && (detailAttachments.length !== source.files.length || detailAttachments.some(file => !source.files.some(f => f.id === file.id && f.name === file.fileName && f.size === file.byteSize && f.mimeType === file.mimeType))))
+      throw Error("Task files changed. Reload their confirmed state before queueing.");
+  });
+  const queueChanged = useStableCallback(() => taskSync.wake());
   const stable_editTaskDetails = useStableCallback(editTaskDetails);
   const stable_togglePin = useStableCallback(togglePin);
   const stable_acknowledgeUrgentAlert = useStableCallback(acknowledgeUrgentAlert);
@@ -4651,6 +4742,8 @@ export default function Home() {
 
   return (
     <main className="min-h-screen bg-[#f6f7f5] text-[#1d211f]">
+      <TodoForward request={null} onClose={() => {}} />
+      <TodoQueue request={queueRequest} onClose={closeQueue} guard={queueGuard} onChanged={queueChanged} />
       <SiteHeader
         current="todos"
         projectLabel={project === UNASSIGNED_PROJECT ? "Unassigned" : project || "Dawar Todo"}
@@ -4668,13 +4761,11 @@ export default function Home() {
               ? `Reconnecting${pendingSyncCount ? ` · ${pendingSyncCount} saved on this device` : ""}`
               : connectionQuality === "auth" ? "Sign in again to sync · changes stay on this device"
               : connectionQuality === "unavailable" ? "Sync temporarily unavailable · retrying"
-              : `${pendingSyncCount} waiting to sync`}
+              : `${pendingSyncCount} changes saved on this device`}
         </div>
       )}
-      {uploadCount > 0 && <div className="mx-auto max-w-5xl px-4 pt-2 text-xs text-[#69716c] sm:px-6" role="status">
-        {uploadCount} attachment{uploadCount === 1 ? "" : "s"} saved on this device · {online ? "uploading in the background" : "waiting for a connection"}
-        <button type="button" className="ml-2 underline" onClick={() => void retryQueuedAttachments()}>Retry uploads</button>
-      </div>}
+      <TaskIntentPanel />
+      {uploadCount > 0 && <AttachmentQueuePanel count={uploadCount} states={uploadStates} />}
       {imageDropActive && (
         <div className="pointer-events-none fixed inset-0 z-[100] grid place-items-center bg-[#153d2d]/25 p-5 backdrop-blur-[2px]" role="status" aria-live="polite">
           <div className="flex max-w-sm items-center gap-3 rounded-2xl border border-[#216e4e]/25 bg-white px-5 py-4 text-base font-semibold text-[#216e4e] shadow-2xl">
@@ -4684,19 +4775,26 @@ export default function Home() {
         </div>
       )}
       <div className="mx-auto max-w-5xl px-4 pb-28 pt-5 sm:px-6 sm:pt-7">
+        {(captureSaveState.startsWith("Draft could not be loaded") || captureSaveState.startsWith("Draft not saved")) && <div className="mb-2 text-xs text-red-700" role="alert">{captureSaveState}
+          {captureSaveState.startsWith("Draft could not be loaded") && <button type="button" className="ml-2 underline" onClick={hydrateCapture}>Retry loading draft</button>}
+          {captureSaveState.startsWith("Draft not saved") && <button type="button" className="ml-2 underline" onClick={() => void checkpointCapture().catch(() => undefined)}>Retry saving</button>}
+          {captureAttachments.map((item) => <a key={item.localId} href={item.previewUrl} download={item.file.name} className="ml-2 underline">Save {item.file.name}</a>)}
+        </div>}
         <form onSubmit={addTodo} className="mb-5 rounded-2xl border border-black/[0.07] bg-white p-2 shadow-[0_10px_35px_rgba(30,45,36,0.07)] sm:p-3">
           <div className="flex items-end gap-2">
             <div className="flex min-w-0 flex-1 items-start gap-2 px-1 py-2 sm:px-2">
               <AttachmentPicker
                 label="Add attachment or assign project"
+                disabled={!captureReady || adding}
                 onFiles={(files) => void queueCaptureAttachments(files)}
                 onRecord={() => setVoiceTarget("capture")}
                 onAssignProject={openCaptureProjectAssignment}
               />
               <textarea
                 ref={captureRef}
+                disabled={!captureReady || adding}
                 value={newTitle}
-                onChange={(event) => { updateCaptureTitle(event.target.value, "typing"); resizeCapture(event.currentTarget); }}
+                onChange={(event) => updateCaptureTitle(event.target.value, "typing")}
                 onBlur={flushCaptureDraft}
                 onPaste={(event) => {
                   const files = clipboardAttachments(event);
@@ -4713,14 +4811,14 @@ export default function Home() {
                 aria-label="Add a task"
                 aria-busy={recognizingCaptureTitle}
                 maxLength={2000}
-                className="min-h-10 max-h-[120px] min-w-0 flex-1 resize-none overflow-hidden bg-transparent py-2 text-[16px] leading-6 text-[#151816] outline-none placeholder:text-[#929994]"
+                className="min-h-10 min-w-0 flex-1 resize-none overflow-hidden bg-transparent py-2 text-[16px] leading-6 text-[#151816] outline-none placeholder:text-[#929994]"
               />
             </div>
             <div className="flex shrink-0 items-center gap-2">
               <span className="hidden text-[10px] text-[#929994] sm:block">⌘↵ add</span>
               <button
                 type="submit"
-                disabled={!newTitle.trim() || adding || captureAttachments.some((item) => item.status === "uploading" || item.status === "error")}
+                disabled={!captureReady || capturePreparing || !newTitle.trim() || adding || voiceTarget === "capture" || Boolean(projectDialog?.captureDraft) || captureAttachments.some((item) => item.status === "uploading" || item.status === "error")}
                 className="inline-flex h-11 items-center gap-2 rounded-xl bg-[#216e4e] px-4 text-sm font-semibold text-white transition hover:bg-[#195d41] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#216e4e] disabled:cursor-not-allowed disabled:opacity-40 sm:px-6"
               >
                 <ActionIcon name="add" />
@@ -4734,7 +4832,7 @@ export default function Home() {
               <span className="inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-full bg-[#eaf3ed] px-2.5 py-1 text-xs font-semibold text-[#216e4e]">
                 <ActionIcon name="folder" className="h-4 w-4 shrink-0" />
                 <button type="button" onClick={openCaptureProjectAssignment} className="min-w-0 truncate" title={`Change project from ${captureProject}`}>{captureProject}</button>
-                <button type="button" onClick={() => { setCaptureProject(""); console.info("[todo-ui] quick add project removed"); }} aria-label={`Remove ${captureProject} from new task`} title="Remove project" className="grid h-5 w-5 shrink-0 place-items-center rounded-full hover:bg-[#d8e9de]"><ActionIcon name="close" className="h-3.5 w-3.5" /></button>
+                <button type="button" disabled={!captureReady || adding} onClick={() => { updateCaptureProject(""); console.info("[todo-ui] quick add project removed"); }} aria-label={`Remove ${captureProject} from new task`} title="Remove project" className="grid h-5 w-5 shrink-0 place-items-center rounded-full hover:bg-[#d8e9de]"><ActionIcon name="close" className="h-3.5 w-3.5" /></button>
               </span>
             </div>
           )}
@@ -4747,10 +4845,10 @@ export default function Home() {
                   {item.status === "uploading" && <span className="absolute inset-0 grid place-items-center bg-black/40 text-[10px] font-semibold text-white">Uploading…</span>}
                   {item.status === "offline" && <span className="absolute inset-x-0 bottom-0 bg-amber-700/90 px-1 py-0.5 text-center text-[9px] font-semibold text-white">Saved offline</span>}
                   {item.status === "error" && (
-                    <button type="button" onClick={() => retryCaptureAttachment(item)} aria-label={`Retry ${item.file.name}`} title="Retry upload" className="absolute inset-0 grid place-items-center bg-red-900/65 text-white"><ActionIcon name="retry" /></button>
+                    <button type="button" disabled={!captureReady || adding} onClick={() => retryCaptureAttachment()} aria-label={`Retry ${item.file.name}`} title="Retry saving" className="absolute inset-0 grid place-items-center bg-red-900/65 text-white"><ActionIcon name="retry" /></button>
                   )}
                   {item.status !== "uploading" && (
-                    <button type="button" onClick={() => void removeCaptureAttachment(item)} aria-label={`Remove ${item.file.name}`} title="Remove attachment" className="absolute right-1 top-1 grid h-6 w-6 place-items-center rounded-full bg-black/65 text-white hover:bg-red-700"><ActionIcon name="close" className="h-3.5 w-3.5" /></button>
+                    <button type="button" disabled={!captureReady || adding} onClick={() => void removeCaptureAttachment(item)} aria-label={`Remove ${item.file.name}`} title="Remove attachment" className="absolute right-1 top-1 grid h-6 w-6 place-items-center rounded-full bg-black/65 text-white hover:bg-red-700"><ActionIcon name="close" className="h-3.5 w-3.5" /></button>
                   )}
                 </div>
               ))}
@@ -4899,6 +4997,7 @@ export default function Home() {
                     onSelect={stable_toggleSelected}
                     onAction={stable_taskAction}
                     onEdit={stable_editTaskDetails}
+                    onQueue={stable_queueTask}
                     onPin={stable_togglePin}
                     onAcknowledgeUrgent={stable_acknowledgeUrgentAlert}
                     onTitleChange={stable_updateInlineTitle}
@@ -4929,6 +5028,7 @@ export default function Home() {
                     onSelect={stable_toggleSelected}
                     onAction={stable_taskAction}
                     onEdit={stable_editTaskDetails}
+                    onQueue={stable_queueTask}
                     onPin={stable_togglePin}
                     onAcknowledgeUrgent={stable_acknowledgeUrgentAlert}
                     onTitleChange={stable_updateInlineTitle}
@@ -4964,6 +5064,7 @@ export default function Home() {
         >
           <div className="pointer-events-auto flex items-center gap-1.5 overflow-x-auto rounded-2xl border border-[#216e4e]/20 bg-[#eaf3ed]/95 p-2 shadow-[0_16px_50px_rgba(23,61,42,0.2)] backdrop-blur-xl sm:gap-2">
             <span className="min-w-max px-2 text-sm font-semibold text-[#195d41]">{selectedIds.length} selected</span>
+            <button type="button" onClick={() => setQueueRequest({ id: crypto.randomUUID(), todoIds: displayedTodos.filter(todo => selected.has(todo.id)).map(todo => todo.id) })} className="inline-flex min-w-max items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-[#216e4e] shadow-sm"><ActionIcon name="forward" />Queue to bot</button>
             {selectedTodos.some((todo) => todo.status === "open") && <button type="button" onClick={() => bulkAction("complete")} disabled={syncing} className="inline-flex min-w-max items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-[#216e4e] shadow-sm hover:bg-[#f8fbf9] disabled:opacity-50"><ActionIcon name="done" />Done</button>}
             {view === "snoozed" && selectedTodos.some((todo) => todo.status === "open") ? (
               <button type="button" onClick={() => bulkAction("unsnooze")} disabled={syncing} className="inline-flex min-w-max items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-[#216e4e] shadow-sm hover:bg-[#f8fbf9] disabled:opacity-50"><ActionIcon name="wake" />Wake</button>
@@ -5282,7 +5383,9 @@ export default function Home() {
             <div className="relative flex min-w-0 items-center justify-between border-b border-black/[0.07] px-5 pb-4 pt-5 sm:px-6 sm:py-4">
               <span className="absolute left-1/2 top-2 h-1 w-10 -translate-x-1/2 rounded-full bg-black/15 sm:hidden" aria-hidden="true" />
               <h3 id="task-details-title" className="min-w-0 text-lg font-semibold text-[#202522]">Task details</h3>
-              <div className="flex shrink-0 items-center gap-1">
+              <div className="todo-detail-copy-actions flex shrink-0 items-center gap-1">
+                {editingTodo?.queueLastTransfer && <a className="text-xs text-[#216e4e]" href={`/bots?bot=${encodeURIComponent(editingTodo.queueLastTransfer.botId)}`}>Queued to bot · source retained</a>}
+                <button type="button" onClick={() => { if (editingId !== null) setQueueRequest({ id: crypto.randomUUID(), todoIds: [editingId] }); }} className="grid h-9 w-9 place-items-center rounded-full bg-[#eaf3ed] text-[#216e4e] hover:bg-[#e0ede4]" aria-label="Queue task to a bot" title="Queue to bot"><ActionIcon name="forward" /></button>
                 <button type="button" onClick={() => void copyTaskDetails()} className="grid h-9 w-9 place-items-center rounded-full bg-[#f1f2f0] text-[#4f5752] hover:bg-[#e8eae7]" aria-label="Copy task title and description" title="Copy task"><ActionIcon name="copy" /></button>
                 <button type="button" onClick={closeTaskDetails} className="grid h-9 w-9 place-items-center rounded-full bg-[#f1f2f0] text-[#4f5752] hover:bg-[#e8eae7]" aria-label="Close task details" title="Close"><ActionIcon name="close" /></button>
               </div>

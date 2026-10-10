@@ -3,6 +3,7 @@
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
+import { MarkdownCodeBlock } from "./markdown-code-block";
 
 function safeMarkdownUrl(url: string) {
   const normalized = url.trim();
@@ -59,7 +60,7 @@ export function MarkdownPreview({
           ) : (
             <code className="rounded bg-black/[0.06] px-1 py-0.5 font-mono text-[0.9em]">{children}</code>
           ),
-          pre: ({ children }) => <pre className="my-3 overflow-x-auto rounded-xl bg-[#202522] p-3 text-[#f6f7f5]">{children}</pre>,
+          pre: (props) => <MarkdownCodeBlock {...props} className="my-3 overflow-x-auto rounded-xl bg-[#202522] p-3 text-[#f6f7f5]" />,
           table: ({ children }) => <table className="my-3 min-w-full border-collapse text-left text-xs">{children}</table>,
           th: ({ children }) => <th className="border border-black/[0.1] bg-[#eef0ed] px-2 py-1.5 font-semibold">{children}</th>,
           td: ({ children }) => <td className="border border-black/[0.1] px-2 py-1.5 align-top">{children}</td>,

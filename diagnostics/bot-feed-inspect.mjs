@@ -1,0 +1,34 @@
+import { transform } from 'esbuild';
+import { syntheticConversation } from './bot-feed-data.mjs';
+import { EventEmitter } from 'node:events';
+import { writeFile, mkdtemp, mkdir, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { Store } from '../bot-bridge/store.mjs';
+import { BotRuntime } from '../bot-bridge/runtime.mjs';
+import { execFileSync } from 'node:child_process';
+const baselineCommit = process.env.BOT_FEED_BASE || '6ad69eac3696c04b4f351830025ed57cb59f5b73';
+await mkdir('outputs/bot-typing-recent', { recursive: true });
+const original = (path) => execFileSync('git', ['show', `${baselineCommit}:${path}`], { encoding: 'utf8' });
+await writeFile('outputs/bot-typing-recent/base-history-types.mjs', (await transform(original('lib/bot-history-view.ts'), { loader: 'ts', format: 'esm' })).code);
+await writeFile('outputs/bot-typing-recent/base-history-view.mjs', original('bot-bridge/history-view.mjs')
+  .replace("'../lib/bot-history-view.ts'", "'./base-history-types.mjs'")
+  .replace("'./history-attachments.mjs'", "'../../bot-bridge/history-attachments.mjs'"));
+const { readHistoryView: baseline } = await import('../outputs/bot-typing-recent/base-history-view.mjs');
+const turns=syntheticConversation();
+const dir=await mkdtemp(join(tmpdir(),'conversation-inspection-')),store=new Store(join(dir,'state.sqlite')),codex=new EventEmitter();
+let nativeCalls=0, nativeBytes=0;
+codex.call=async(method,p)=>{if(method==='thread/resume')return {};nativeCalls++;const start=Number(p.cursor||0);const response={data:turns.slice().reverse().slice(start,start+p.limit),nextCursor:start+p.limit<turns.length?String(start+p.limit):null};nativeBytes+=Buffer.byteLength(JSON.stringify(response));return response;};
+const runtime=new BotRuntime({store,codex,root:dir});
+const bot=store.saveBot({id:'synthetic',threadId:'synthetic',name:'Synthetic',cwd:dir,slug:'synthetic',updatedAt:'stable',archived:false});runtime.loaded.add(bot.threadId);
+const measure=async(read)=>{const beforeCalls=nativeCalls,beforeBytes=nativeBytes;let cursor,seen=new Set(),bytes=0,calls=0,first;do{const page=await read(cursor);const length=Buffer.byteLength(JSON.stringify(page));first??={bytes:length,entries:page.entries.length,turns:new Set(page.entries.map(e=>e.turnId)).size,tools:page.entries.filter(e=>!e.item).length};bytes+=length;calls++;page.entries.forEach(e=>seen.add(e.turnId));cursor=page.olderCursor;}while(seen.size<25&&cursor);return {first,bytes,calls,turns:seen.size,nativeCalls:nativeCalls-beforeCalls,nativeBytes:nativeBytes-beforeBytes};};
+const result={baseline:await measure(cursor=>baseline(runtime,bot,{cursor})),after:await measure(cursor=>runtime.handle({method:'history.view',botId:bot.id,params:{projection:'conversation',cursor}})),native25FullBytes:Buffer.byteLength(JSON.stringify(turns.slice(-25)))};
+turns[149].items.splice(2,40,...Array.from({length:1000},(_,i)=>({type:'commandExecution',id:'huge-tool-'+i,command:'synthetic',status:'completed',aggregatedOutput:'x'.repeat(1024)})));
+turns[149].items.at(-1).text='Complete readable answer. '.repeat(10000);
+store.put('attachment',{id:'output-file',botId:bot.id,name:'Plan.txt',mimeType:'text/plain',size:123,ready:true,artifact:true,path:join(dir,'not-read'),createdAt:null,provenance:{threadId:bot.threadId,turnId:'turn-149',itemId:'huge-tool-500'}});
+const page=await runtime.handle({method:'history.view',botId:bot.id,params:{projection:'conversation'}});
+const reasoning=await runtime.handle({method:'history.detail',botId:bot.id,params:{projection:'conversation',turnId:'turn-149',itemId:'r-149'}});
+let offset=0,chars=0,detailCalls=0,version,nativeBefore=nativeCalls;
+do{const p=await runtime.handle({method:'history.detail',botId:bot.id,params:{projection:'conversation',turnId:'turn-149',itemId:'a-149',offset,version}});chars+=p.json.length;offset=p.nextOffset;version=p.version;detailCalls++;}while(offset!==null);
+result.huge={pageBytes:Buffer.byteLength(JSON.stringify(page)),turns:page.turnIds.length,entries:page.entries.length,tools:page.entries.filter(e=>!e.item).length,answerPreviewChars:page.entries.at(-1).item.text.length,answerComplete:page.entries.at(-1).complete,reasoning:JSON.parse(reasoning.json),returnedFiles:page.attachments.map(a=>({id:a.id,name:a.name,path:a.path})),fullAnswerJsonChars:chars,detailChunks:detailCalls,detailNativeReads:nativeCalls-nativeBefore};
+console.log(JSON.stringify(result,null,2));await writeFile('outputs/bot-typing-recent/projection-comparison-exact.json',JSON.stringify(result,null,2));store.close();await rm(dir,{recursive:true,force:true});

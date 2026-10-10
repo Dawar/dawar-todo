@@ -605,7 +605,7 @@ async function completeRecording(recording: RecordingRow, taskId: number, segmen
   ]);
   await appendTalkSystemReceipt({
     userKey: recording.user_key,
-    systemKey: "phone",
+    callSid: recording.call_sid,
     eventId: `phone-recording-${recording.call_sid}`,
     content: `Recorded call saved as “${summary.title}”.`,
     focusedTodoId: taskId,

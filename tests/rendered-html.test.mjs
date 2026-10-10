@@ -93,7 +93,7 @@ test("ships the simplified todo and project surface", async () => {
   assert.doesNotMatch(page, /aria-label="Filter by project"/);
   assert.match(page, /New project/);
   assert.doesNotMatch(page, /setProject\(""\);\s+setView\("open"\)/);
-  assert.match(page, /await saveOfflineTodo\(\{[\s\S]*title,[\s\S]*status: "open",[\s\S]*project: captureProject \|\| null,[\s\S]*draftToken: captureDraftToken/);
+  assert.match(page, /await captureSession\.current!\.consume\(\{[\s\S]*title,[\s\S]*status: "open",[\s\S]*project: captureProject \|\| null,[\s\S]*draftToken: captureDraftToken/);
   assert.match(page, /clientId: record\.clientId/);
   assert.match(page, /promoteOfflineTodo\(record, result\.todo\)/);
   assert.match(page, /onAssignProject=\{openCaptureProjectAssignment\}/);

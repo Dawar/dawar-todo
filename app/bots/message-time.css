@@ -1,0 +1,6 @@
+.bots-message-time { color: #77857c; font-size: 11px; line-height: 18px; min-height: 18px; margin: -16px 0 22px; font-variant-numeric: tabular-nums; }
+.bots-message-time.is-user { text-align: right; padding-right: 3px; }
+.bots-message-time.is-inline { margin: 5px 0 0; }
+.bots-message-time time { cursor: default; }
+.bots-message[data-burst-message] { flex-direction: column; align-items: flex-end; }
+@media (max-width: 640px) { .bots-message-time { font-size: 10px; } }
