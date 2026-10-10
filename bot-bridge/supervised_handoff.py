@@ -91,6 +91,9 @@ def check_attempt(helper, evidence):
     expected = helper.STATE / 'runtime-updates' / f'supervised-d011-{INVOCATION}.json'
     if attempt['path'] != str(expected) or private_file(expected, helper.STATE) != attempt['stamp'] or hashlib.sha256(expected.read_bytes()).hexdigest() != attempt['sha256']:
         raise RuntimeError('Exclusive original invocation attempt changed; no restart')
+    if evidence.get('continuation'):
+        from supervised_continuation import check
+        check(helper, evidence)
 
 
 def process_identity(helper):
@@ -255,6 +258,9 @@ def activate_supervised(helper, args, receipt_dir, receipt, drain, deadline, evi
         source(helper, args)
         bots, busy, fence, lease, sampled, observation = snapshot(helper, drain, deadline, waiting=True)
         if not busy and helper.native_idle(bots, observation):
+            check_attempt(helper, evidence)
+            if time.monotonic() - sampled > 5 or not fresh_native(observation['_receiptProof']):
+                raise RuntimeError('Current proof expired before private backup')
             break
         if deadline - time.monotonic() < 50:
             raise TimeoutError('Current work did not settle within original supervised window')
@@ -264,6 +270,7 @@ def activate_supervised(helper, args, receipt_dir, receipt, drain, deadline, evi
     bots, busy, after, lease, sampled, observation = snapshot(helper, drain, deadline)
     if busy or after != fence or not helper.native_idle(bots, observation):
         raise RuntimeError('Post-backup current proof changed; no restart')
+    check_attempt(helper, evidence)
     # All awaits (including native metadata and source/process reads) precede a
     # final fresh RAM/original/native-store sample. The answer race is UNSEALED.
     source(helper, args)
@@ -273,12 +280,15 @@ def activate_supervised(helper, args, receipt_dir, receipt, drain, deadline, evi
     if min(deadline - time.monotonic(), lease['remainingMs'] / 1000 - (time.monotonic() - sampled)) < 45:
         raise RuntimeError('Original supervised lease leaves no restart window')
     check_attempt(helper, evidence)
+    if time.monotonic() - sampled > 5 or not fresh_native(observation['_receiptProof']):
+        raise RuntimeError('Current proof expired before exclusive restart receipt')
     data = {'commit': args.commit, 'version': args.version, 'status': 'claimed', 'claimedAt': time.time(), 'previousPid': '2321938',
-            'mode': 'supervised-d011-once-UNSEALED', 'installedSealClaim': False,
+            'mode': evidence.get('mode', 'supervised-d011-once-UNSEALED'), 'installedSealClaim': False,
             'residualRace': 'Existing async answers remain admitted until restart; human agreed not to answer during cutover.',
             'authority': evidence, 'drain': drain, 'backup': backup, 'currentProof': final,
             'retainedTerminalProof': observation['_receiptProof']}
     with receipt.open('x') as file:
+        os.chmod(receipt, 0o600)
         json.dump(data, file, indent=2); file.flush(); os.fsync(file.fileno())
     directory = os.open(receipt_dir, os.O_RDONLY | os.O_DIRECTORY)
     try:
@@ -294,6 +304,8 @@ def activate_supervised(helper, args, receipt_dir, receipt, drain, deadline, evi
     if min(deadline - time.monotonic(), lease['remainingMs'] / 1000 - (time.monotonic() - sampled)) < 45:
         raise RuntimeError('Exclusive receipt has no remaining restart window')
     check_attempt(helper, evidence)
+    if time.monotonic() - sampled > 5 or not fresh_native(observation['_receiptProof']):
+        raise RuntimeError('Current proof expired after exclusive receipt; no restart')
     # Same original receipt survives restart/ACK uncertainty. Never call Seal,
     # Claim or a second restart; the next action after failure is inspection.
     helper.subprocess.run(['systemctl', '--user', 'restart', helper.SERVICE], check=True, timeout=min(45, deadline - time.monotonic()))
@@ -315,7 +327,7 @@ def activate_supervised(helper, args, receipt_dir, receipt, drain, deadline, evi
     raise TimeoutError('Restart attempted; health unconfirmed. Inspect retained original claim')
 
 
-def run_supervised(helper, args, receipt_dir, receipt):
+def run_supervised(helper, args, receipt_dir, receipt, *, continuation=False):
     deadline = time.monotonic() + min(args.wait_seconds, 900)
     def elapsed(*_):
         raise TimeoutError('Original supervised deadline elapsed; inspect any retained claim')
@@ -324,6 +336,9 @@ def run_supervised(helper, args, receipt_dir, receipt):
     drain = None
     try:
         evidence = authority()
+        if continuation:
+            from supervised_continuation import authority as continuation_authority
+            evidence = continuation_authority()
         private_paths(helper, receipt_dir)
         installed_receipt(helper)
         identity = process_identity(helper)
@@ -336,7 +351,11 @@ def run_supervised(helper, args, receipt_dir, receipt):
         if not health.get('ready') or not health.get('relayConnected') or health.get('codexVersion') != '0.161.0' or health.get('maintenance', {}).get('invocationId') != INVOCATION:
             raise RuntimeError('Healthy exact original bridge is unconfirmed')
         source(helper, args)
-        evidence = register_attempt(helper, args, evidence)
+        if continuation:
+            from supervised_continuation import register
+            evidence = register(helper, args, evidence)
+        else:
+            evidence = register_attempt(helper, args, evidence)
         # begin writes its original identity before the HTTP effect; on a lost
         # ACK its existing same-ID status recovery remains the only recovery.
         drain = helper.begin_drain(args, receipt_dir)

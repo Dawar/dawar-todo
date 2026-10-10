@@ -162,6 +162,61 @@ Diagnostics contain no input, receipt bodies, question text or timestamp values.
 The failed65b invocation attempt remains retained; a source correction does not
 authorize deleting it, retrying that attempt or launching another restart.
 
+### Prepared continuation, disabled pending new owner approval
+
+`supervised_continuation.py` prepares one explicit exception for that exact
+pre-backup failure. It is **disabled**: `CONTINUATION_AUTHORITY = None` refuses
+the new CLI mode before any receipt-directory write. The original supervised
+approval, migration approval, native Goal, schedule and a supplied config/flag
+cannot substitute for a newly verified native human message. The approval
+locator must be bound in reviewed source, including exact user role, message
+ID, timestamp, rollout offset and full raw/text hashes.
+
+The installed d011 `begin` method retains terminal leases forever. Reusing the
+old operation returns `cancelled`; changing its target/unit returns an input
+fingerprint error. Therefore the proposal explicitly requires a **new child
+maintenance lease**, not a renewed old lease. These are reserved planning
+identities only until the owner approves the exception:
+
+- Original work/operation: `dwight-supervised-d011-65b12bd-20261009-v1`.
+- Child lease: `dwight-supervised-d011-65b12bd-continuation-20261010-v1`.
+- One child helper unit: `dawar-supervised-d011-continuation.service`.
+
+The append-only invocation-wide continuation reservation links the child lease
+and reviewed target to the immutable original attempt, cancelled lease, drain
+and privately archived failure evidence. The reservation uses exclusive create,
+0600 permissions and fsync. A second attempt refuses even if the first child
+never reached Begin. No original receipt, lease, outcome or native input is
+reset, overwritten or replayed. The helper also verifies its actual systemd
+unit/PID/invocation and refuses another observed handoff helper.
+
+Preconditions are fixed to the exact old failed helper invocation/exit1,
+original d011 parent/child/binary/healthy receipt, exact cancelled raw lease,
+and absence of any original backup or restart claim (including broken symlinks).
+The private archived failure is mandatory even if its old live journal rotated;
+the actual unit must still show the exact terminal failed identity. Changed,
+missing, foreign or ambiguous evidence refuses. The one-off private archive
+locator is restricted to this existing migration; it is not a portable runtime
+configuration or a future-node dependency.
+
+The child uses the installed Begin/Status/Cancel endpoint. Lost Begin ACK reads
+only that same child identity. Existing all-context/native/Goal/queue/unknown,
+RAM/tools/calls/desktops/secure, source/process, private backup and strict
+post-backup byte fences remain mandatory. Original evidence and continuation
+reservation are rechecked at cutover boundaries; native proof freshness is
+rechecked after those reads. There remains the explicitly **UNSEALED
+existing-question-answer race**. The human must agree to a renewed avoidance
+window. The active migration Goal remains a genuine blocker; this helper cannot
+pause, clear, resume or exempt it.
+
+After a separate owner decision, exact approval binding and final review, the
+single command uses `--supervised-d011-continuation` with the child lease/unit,
+reviewed SHA, version0.162.1 and a 60–900-second deadline. Do not run it while
+this authority is unbound. No helper, retry timer, claimed-success inference or
+automatic second continuation is created by this source preparation. Failure
+retains both parent and child evidence; a lost restart ACK or health uncertainty
+requires inspection. At most one actual restart is permitted.
+
 Private backup, repeated native/store/RAM/process/source checks, <=900-second
 whole-helper deadline, original lease budget and an exclusive fsynced restart
 receipt precede exactly one restart. An exclusive invocation-wide

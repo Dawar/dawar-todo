@@ -268,6 +268,8 @@ def main():
                         help='First-bootstrap only: prove exact completed original queue receipts read-only')
     parser.add_argument('--supervised-d011-once', action='store_true',
                         help='One human-approved UNSEALED first handoff from the exact retained d011 process')
+    parser.add_argument('--supervised-d011-continuation', action='store_true',
+                        help='Disabled until new exact owner approval: one linked continuation of the pre-claim failure')
     args = parser.parse_args()
     if not re.fullmatch(r'[0-9a-f]{40}', args.commit) or not re.fullmatch(r'\d+\.\d+\.\d+', args.version):
         raise RuntimeError('Exact reviewed SHA and version are required')
@@ -277,6 +279,11 @@ def main():
         raise RuntimeError('Use the installed admission drain separately from first-bootstrap reconciliation')
     if args.supervised_d011_once and (not args.maintenance_operation or args.reconcile_native_queued or not 60 <= args.wait_seconds <= 900):
         raise RuntimeError('Supervised handoff requires original drain/unit, 60..900 seconds, and no legacy bootstrap')
+    if args.supervised_d011_continuation:
+        if args.supervised_d011_once or args.reconcile_native_queued or not args.maintenance_operation or not 60 <= args.wait_seconds <= 900:
+            raise RuntimeError('Continuation cannot combine with another mode and requires one bounded child lease/unit')
+        from supervised_continuation import authority as continuation_authority
+        continuation_authority()  # refuse unapproved operation before any receipt-directory write
     receipt_dir = STATE / 'runtime-updates' / args.commit
     receipt_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     receipt = receipt_dir / 'restart.json'
@@ -287,9 +294,10 @@ def main():
     pin = re.search(r'export const CODEX_VERSION = "(\d+\.\d+\.\d+)";', (ROOT / 'bot-bridge/codex-version.mjs').read_text())
     if not pin or pin.group(1) != args.version:
         raise RuntimeError('Reviewed runtime version changed')
-    if args.supervised_d011_once:
+    if args.supervised_d011_once or args.supervised_d011_continuation:
         from supervised_handoff import run_supervised
-        return run_supervised(sys.modules[__name__], args, receipt_dir, receipt)
+        return run_supervised(sys.modules[__name__], args, receipt_dir, receipt,
+                              continuation=args.supervised_d011_continuation)
     drain = begin_drain(args, receipt_dir) if args.maintenance_operation else None
     try:
         activate(args, receipt_dir, receipt, drain)
