@@ -9,6 +9,7 @@ import { nodeKey, signature, fingerprint,id,boundedFrame,PROTOCOL_VERSION, RUNTI
 import { AGENT_READS, AGENT_MUTATIONS } from './hub-rpc.mjs';
 import { HUB_TOOLS,NODE_LOGICAL_COMMANDS } from './control-protocol.mjs';
 import { admitLogicalCommand } from './agent-admission.mjs';
+import {settleAgentBurst} from './agent-bursts.mjs';
 import { queueResumeReceipt } from './agent-queue-resume.mjs';
 import { NodeStorageClient } from './agent-storage.mjs';
 import { artifactInput } from './node-storage-contract.mjs';
@@ -53,7 +54,7 @@ export class AgentTransport {
     });
   }
   hello(){return {protocol:PROTOCOL_VERSION,runtime:RUNTIME_VERSION,platform:process.platform,arch:process.arch,
-    capabilities:{text:true,localStdio:true,registeredArtifacts:true,profileReads:true,memoryCompaction:process.platform==='linux',pdfPreview:process.platform==='linux',desktop:process.platform==='linux'&&!!this.runtime.desktops,voice:false,secureTransfer:process.platform==='linux'&&!!this.runtime.secure,autonomousGoals:false}};}
+    capabilities:{text:true,localStdio:true,registeredArtifacts:true,profileReads:true,memoryCompaction:process.platform==='linux',pdfPreview:process.platform==='linux',desktop:process.platform==='linux'&&!!this.runtime.desktops,voice:false,secureTransfer:process.platform==='linux'&&!!this.runtime.secure,centralBursts:process.platform==='linux',autonomousGoals:false}};}
   send(value){if(this.socket?.readyState===WebSocket.OPEN)this.socket.send(JSON.stringify(value));}
   controlRequest(botId,tool,args){
     if(!HUB_TOOLS.has(tool))throw Error('Unsupported hub tool.');
@@ -122,6 +123,7 @@ export class AgentTransport {
           const turnId=result.turn?.id??result.turnId;if(!turnId)return;
           const current=this.journal.db.prepare('SELECT * FROM node_commands WHERE operation_id=?').get(op.id);
           if(current?.fingerprint!==row.fingerprint||!['received','dispatching','unknown','native-accepted','running'].includes(current.state))return;
+          if(payload.method==='portable.burstDispatch')settleAgentBurst(this.runtime,command,result);
           const terminal=this.runtime.store.get('planTurnEvidence',turnId),status=['completed','failed','interrupted'].includes(result.turn?.status)?result.turn.status:
             terminal?.botId===bot.id&&['completed','failed','interrupted'].includes(terminal.status)?terminal.status:null;
           const receipt={operationId:op.id,threadId:bot.threadId,turnId,result,evidence:{kind:'original-native-client',operationId:op.id,threadId:bot.threadId,turnId},...(status?{nativeStatus:status}:{})};

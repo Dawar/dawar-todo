@@ -765,3 +765,31 @@ their original IDs/cursors and admitted later from the same `received` record;
 `dispatching` and unknown records are never absence-retried. Disconnect, expiry,
 Stop and placement changes continue to fence the native RPC itself. Normal
 repository bridge startup retains its existing recovery behavior.
+
+### Central human message bursts
+
+Countdowns, typing leases, Pause, Send, Discard and Queue retain their original
+message/batch/control IDs in the hub control SQLite. Pause and Queue use the
+existing synchronous acceptance/transfer closures: a slow current-work read
+cannot delay their durable hold. Typing identity comes from the authenticated
+parent browser. Reads and held Queue transfers remain available while the
+assigned node is offline; there is no node-local countdown or queue scheduler.
+
+When due, the hub reserves one immutable `portable.burstDispatch` mailbox entry
+under the original batch ID, source messages, registered file checksums and
+placement/control revision. This reservation is visibly in flight; a later
+Pause cannot claim to withdraw a possible native send. The Linux agent verifies
+fresh synchronized controls, original thread, local files and quoted references,
+then uses the ordinary send/steer boundary with that same native client ID.
+Duplicate or uncertain acceptance never starts another send. Exact positive
+native reconciliation settles original message parts on both hub and node.
+Only an explicit Send after a definite rejection may use the existing derived
+superseding batch identity. A local payload reservation failure visibly pauses
+the intact input rather than repeatedly retrying it.
+
+Hub snapshots always project authorized placements and implemented capabilities,
+even if a browser supplies a bot ID. Burst preferences follow the existing
+validated native bot event into the hub. `centralBursts` is currently declared
+only by Linux; Mac execution/acceptance remains deferred. This source contract
+does not establish production installation, genuine owner/device adoption or
+the remaining room/peer and cutover controller contracts.

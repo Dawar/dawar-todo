@@ -2,6 +2,7 @@ import { fingerprint,id } from './protocol.mjs';
 import { NODE_LOGICAL_COMMANDS } from './control-protocol.mjs';
 import { ownedReply,prepareReply,rememberReply } from '../bot-bridge/message-replies.mjs';
 import { resumeLogicalQueue } from './agent-queue-resume.mjs';
+import {admitBurstCommand} from './agent-bursts.mjs';
 
 const now=()=>new Date().toISOString();
 const refused=message=>Object.assign(Error(message),{outcome:'rejected'});
@@ -13,6 +14,7 @@ const queueIdentity=q=>({id:q.id,botId:q.botId,threadId:q.threadId,revision:q.re
 // this adapter never calls the native automatic prompt queue.
 export async function admitLogicalCommand(transport,command,payload) {
   if(!NODE_LOGICAL_COMMANDS.has(payload.method))throw refused('Unsupported logical command.');
+  if(payload.method==='portable.burstDispatch')return admitBurstCommand(transport,command,payload);
   if(payload.method==='portable.queueResume')return resumeLogicalQueue(transport,command,payload);
   const {runtime,journal}=transport,store=runtime.store,params=payload.params;
   const explicit=payload.method==='portable.queueSend',queued=explicit||payload.method==='portable.queueDispatch',source=queued?params?.item:params?.run;

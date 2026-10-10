@@ -3,6 +3,10 @@ import { createHash,randomUUID } from 'node:crypto';
 import { Store } from '../bot-bridge/store.mjs';
 import { BotRuntime } from '../bot-bridge/runtime.mjs';
 import { acceptLocalQueueOperation } from '../bot-bridge/local-queue-operation.mjs';
+import {acceptSingleThreadOperation} from '../bot-bridge/single-thread-operations.mjs';
+import {PrimaryExecution} from '../bot-bridge/primary-execution.mjs';
+import {preferencePatch} from '../bot-bridge/bot-preferences.mjs';
+import {HubBursts} from './hub-bursts.mjs';
 import { stagedQueue } from '../bot-bridge/prompt-queue.mjs';
 import { ownedList,publicLists,queueTool,flushDueLists } from '../bot-bridge/queue-lists.mjs';
 import { normalizeSchedule,collectDueRuns } from '../bot-bridge/schedules.mjs';
@@ -14,7 +18,7 @@ import { activityUnresolved } from '../bot-bridge/turn-state.mjs';
 import { boundedFrame,fingerprint,id } from './protocol.mjs';
 export { hubActivation } from './hub-authority.mjs';
 import { controlWriteGuard } from './hub-authority.mjs';
-import { HUB_READS,HUB_MUTATIONS,HUB_TOOLS,NODE_LOGICAL_COMMANDS } from './control-protocol.mjs';
+import { HUB_READS,HUB_MUTATIONS,HUB_TOOLS,NODE_LOGICAL_COMMANDS,HUB_BURST_MUTATIONS } from './control-protocol.mjs';
 
 export { HUB_READS,HUB_MUTATIONS,HUB_TOOLS,NODE_LOGICAL_COMMANDS };
 const now=()=>new Date().toISOString();
@@ -31,6 +35,7 @@ export class HubControls extends EventEmitter {
     this.store.db.exec('PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS portable_control_receipts(operation_id TEXT PRIMARY KEY,receipt_hash TEXT NOT NULL)');
     this.defaults=this.store.meta('portable-defaults')??{};
     this.executionConfig=new ExecutionConfiguration(this);this.plans=new PlanLifecycle(this);
+    this.primary={single:bot=>PrimaryExecution.prototype.single(bot)};this.bursts=HubBursts.create(this);
     const transaction=this.store.transaction.bind(this.store);
     const refresh=controlWriteGuard(this.store.db,{writeScope:()=>this.store.transactionDepth>0,transactionScope:()=>this.controlTransactionDepth>0});
     this.store.transaction=fn=>{
@@ -76,6 +81,7 @@ export class HubControls extends EventEmitter {
       const b=this.store.bot(event.botId),v=event.data;
       if(v?.id!==b.id||v.threadId!==b.threadId)throw Error('Assigned native bot projection changed its original identity.');
       const patch={};for(const key of ['status','activeTurnId','preview','error','updatedAt','model','effort','serviceTier','mode','modeIntentId','managerPaused'])if(Object.hasOwn(v,key))patch[key]=v[key];
+      if(Object.hasOwn(v,'burstQuietSeconds'))Object.assign(patch,preferencePatch(b,{burstQuietSeconds:v.burstQuietSeconds}));
       if(Number.isSafeInteger(v.queuePauseRevision)&&v.queuePauseRevision>=(b.queuePauseRevision??0)){patch.queuePaused=v.queuePaused;patch.queuePauseRevision=v.queuePauseRevision;}
       this.store.saveBot({...b,...patch});
     });
@@ -102,6 +108,11 @@ export class HubControls extends EventEmitter {
   async request(owner,{method,botId,params={},operationId},caller={kind:'owner'}) {
     const {b}=this.scope(owner,botId);
     if(!params||typeof params!=='object'||Array.isArray(params))throw Error('Invalid logical control parameters.');
+    if(method==='bursts.read')return this.bursts.read(b);
+    if(method==='bursts.typing'){
+      if(caller.kind!=='owner')throw Error('Typing belongs to the authenticated owner browser.');
+      this.assertWriter();return this.bursts.typing(b,params);
+    }
     if(method==='queue.list'){const l=ownedList(this,botId,params.listId);return stagedQueue(this.store,botId,l?.id??null).map(i=>this.publicQueued(b,i));}
     if(method==='queueLists.list')return publicLists(this,botId);
     if(method==='schedules.list')return {schedules:this.store.list('schedule',botId),runs:this.store.list('run',botId)};
@@ -113,6 +124,25 @@ export class HubControls extends EventEmitter {
     }
     if(!HUB_MUTATIONS.has(method)||!id(operationId))throw Error('Unsupported logical control or missing original operation.');
     this.assertWriter();const binding=fingerprint({owner,method,botId,params,caller});
+    if(HUB_BURST_MUTATIONS.has(method)){
+      // Synchronous Pause/Queue cannot wait behind an awaited read. The
+      // original acceptance closure commits its source and receipt together.
+      const apply=async()=>{
+        this.assertWriter();const current=this.scope(owner,botId).b;
+        if(caller.kind!=='owner')throw Object.assign(Error('Burst controls require the authenticated owner.'),{outcome:'rejected'});
+        if(current.threadId!==b.threadId)throw Object.assign(Error('Original conversation changed.'),{outcome:'rejected'});
+        const prior=this.store.operation(operationId);
+        if(prior){if(prior.fingerprint!==binding)throw Error('Original burst operation changed.');if(prior.status==='done')return prior.result;throw Object.assign(Error('Original burst acceptance is unconfirmed.'),{outcome:'uncertain'});}
+        const originalTransaction=this.store.transaction.bind(this.store);
+        // prepare() may await. Its later closure must not admit against a
+        // replaced thread or archived bot, even if the preparation succeeded.
+        const facade=Object.assign(Object.create(this),{store:Object.assign(Object.create(this.store),{transaction:fn=>originalTransaction(()=>{
+          const after=this.scope(owner,botId).b;if(after.threadId!==b.threadId||after.archived||after.archiving||after.deletedAt)throw Error('Original burst conversation is unavailable.');return fn();
+        })})});
+        return (await acceptSingleThreadOperation(facade,{method,botId,params,operationId},binding)).result;
+      };
+      return method==='bursts.submit'?this.lock(botId,apply):apply();
+    }
     const accepted=await this.lock(botId,async()=>{
       this.assertWriter();this.scope(owner,botId);const prior=this.store.operation(operationId);
       if(ownerQueueControls.has(method)&&caller.kind!=='owner')throw Object.assign(Error('Send and Resume require the authenticated owner.'),{outcome:'rejected'});
@@ -203,7 +233,7 @@ export class HubControls extends EventEmitter {
   async tick(date=new Date()) {
     if(this.ticking||this.closed)return;this.assertWriter();this.ticking=true;
     try{
-      this.reconcileReceipts();await flushDueLists(this,date);this.assertWriter();
+      this.reconcileReceipts();await this.bursts.tick();await flushDueLists(this,date);this.assertWriter();
       const created=collectDueRuns(this.store,date);
       this.store.transaction(()=>{for(const run of created)if(this.quiet(run,date))this.store.put('run',{...run,decision:{id:`quiet:${run.id}`,version:1,state:'required',reason:'Quiet release window; original occurrence retained, not started.'}});});
       for(const p of this.hub.db.prepare('SELECT * FROM portable_placements ORDER BY bot_id').all()){
@@ -244,11 +274,12 @@ export class HubControls extends EventEmitter {
   reconcileReceipts() {
     // A durable applied hash prevents a busy recent tail from starving older
     // receipts, and catches later terminal evidence for the same operation.
-    const rows=this.hub.db.prepare("SELECT m.* FROM portable_mailbox m LEFT JOIN portable_control_receipts c ON c.operation_id=m.operation_id WHERE m.receipt IS NOT NULL AND (c.receipt_hash IS NULL OR c.receipt_hash<>m.receipt_hash) AND json_extract(m.payload,'$.method') IN ('portable.queueDispatch','portable.scheduleDispatch','portable.queueSend','portable.queueResume') ORDER BY m.sequence LIMIT 40").all();
+    const rows=this.hub.db.prepare("SELECT m.* FROM portable_mailbox m LEFT JOIN portable_control_receipts c ON c.operation_id=m.operation_id WHERE m.receipt IS NOT NULL AND (c.receipt_hash IS NULL OR c.receipt_hash<>m.receipt_hash) AND json_extract(m.payload,'$.method') IN ('portable.queueDispatch','portable.scheduleDispatch','portable.queueSend','portable.queueResume','portable.burstDispatch') ORDER BY m.sequence LIMIT 40").all();
     for(const row of rows)this.receipt(row);
   }
   receipt(row) {
     const payload=JSON.parse(row.payload),receipt=row.receipt&&JSON.parse(row.receipt);if(!NODE_LOGICAL_COMMANDS.has(payload.method)||!receipt)return;
+    if(payload.method==='portable.burstDispatch'){this.bursts.receipt(row);return;}
     this.store.transaction(()=>{
       const mark=()=>this.store.db.prepare('INSERT INTO portable_control_receipts VALUES(?,?) ON CONFLICT(operation_id) DO UPDATE SET receipt_hash=excluded.receipt_hash').run(row.operation_id,row.receipt_hash);
       const control=this.store.get('portableQueueControl',row.operation_id);
@@ -287,5 +318,5 @@ export class HubControls extends EventEmitter {
       mark();
     });
   }
-  close(){this.closed=true;this.store.db.close();}
+  close(){this.closed=true;this.bursts.close();this.store.db.close();}
 }

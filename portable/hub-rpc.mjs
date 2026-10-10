@@ -8,16 +8,19 @@ import {secureCapable} from './secure-transport.mjs';
 // shell/native RPC authority. The real runtime still validates every request.
 export const AGENT_READS=new Set(['snapshot','runtime.info','work.read','goals.read','history','history.page','history.turn','history.view','history.log','history.detail','history.attachments','replies.prepare','replies.resolve','artifacts.list','artifacts.preview','events','usage.bot','usage.account','usage.history','attachments.read','inbox.list','runs.page','runs.turns','runs.receipt','runs.requests','runs.findings','runs.decisions','execution.config','secure.list',...DESKTOP_READS]);
 export const AGENT_MUTATIONS=new Set(['turn.send','turn.interrupt','requests.respond','bots.update','goals.set','goals.clear','artifacts.index',...DESKTOP_MUTATIONS]);
+const NATIVE_SNAPSHOT=Symbol('assigned-native-snapshot');
 export class HubRpc {
   constructor(store,connections){this.store=store;this.connections=connections;this.reads=new Map();this.writes=new Map();}
   connection(placement){const ws=this.connections.get(placement.node_id);return ws?.readyState===1?ws:null;}
-  async request(owner,request,clientId){
+  async request(owner,request,clientId,internal=null){
     if(!id(request.id)||typeof request.method!=='string'||!id(clientId))throw Error('Invalid owner request.');
-    if(request.method==='snapshot'&&!request.botId)return this.snapshot(owner,clientId);
+    // Browser snapshots always use the hub's owner/placement and capability
+    // projection. A supplied bot ID cannot expose a raw node-wide snapshot.
+    if(request.method==='snapshot'&&internal!==NATIVE_SNAPSHOT)return this.snapshot(owner,clientId);
     if(request.method==='events')return {result:this.store.events(owner,request.params?.after??0,request.params?.limit??40).events};
     if(HUB_READS.has(request.method)||HUB_MUTATIONS.has(request.method)){
       if(!this.controls)throw Object.assign(Error('Hub logical controls are unavailable.'),{outcome:'not-sent'});
-      return {result:await this.controls.request(owner,request)};
+      return {result:await this.controls.request(owner,request.method==='bursts.typing'?{...request,params:{...request.params,clientId}}:request)};
     }
     const p=this.store.placement(owner,request.botId),ws=this.connection(p);
     if(request.method==='secure.list'&&!secureCapable(this.store.node(p.node_id),ws))throw Object.assign(Error('Private form state requires the live assigned Linux node.'),{outcome:'not-sent'});
@@ -102,7 +105,7 @@ export class HubRpc {
     let index=0;
     const worker=async()=>{while(index<placements.length){const p=placements[index++];
       try{
-        const response=await this.request(owner,{id:`snapshot:${randomUUID()}`,method:'snapshot',botId:p.bot_id,params:{}},clientId),s=response.result;
+        const response=await this.request(owner,{id:`snapshot:${randomUUID()}`,method:'snapshot',botId:p.bot_id,params:{}},clientId,NATIVE_SNAPSHOT),s=response.result;
         const current=this.store.placement(owner,p.bot_id);
         if(current.node_id!==p.node_id||current.epoch!==p.epoch)continue;
         const b=s.bots?.find(b=>b.id===p.bot_id);if(!b)continue;
@@ -119,6 +122,7 @@ export class HubRpc {
     // A runtime's generic capability is not evidence that the hub transport
     // has implemented its consumer. Keep unfinished portable controls hidden.
     for(const key of ['taskRequests','backgroundRunLanes','scheduleDecisions','peerInbox','peerRootControls','peerBodyPaging','collaborationRooms','operatorCalls','operatorInputQuestions','secureInputs','secureResponseLifecycle','messageBursts','burstDiscard','burstControls','burstQueue','taskQueues','teams','botAdministration'])delete common[key];
+    if(this.controls?.authority)for(const key of ['messageBursts','burstDiscard','burstControls','burstQueue'])common[key]=1;
     if(placements.length&&snapshots.length===placements.length&&placements.every(p=>secureCapable(this.store.node(p.node_id),this.connection(p))))
       for(const key of ['secureInputs','secureResponseLifecycle'])if(snapshots.every(({s})=>s.capabilities?.[key]===1))common[key]=1;
     if(placements.some(p=>!desktopCapable(this.store.node(p.node_id),this.connection(p))))for(const key of ['botDesktops','botBrowserRetention'])delete common[key];
