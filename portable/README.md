@@ -75,6 +75,37 @@ observations are retained in the private migration evidence. This does not
 establish an operational S3 backup, scheduled backup, working Mac node or
 production write freeze. The latest direct human amendment defers backups for now; retain these modules and evidence for later enablement. Genuine Mac/production acceptance remains unfinished.
 
+## Complete application snapshots
+
+`node portable/cli.mjs export-application --source PRIVATE_SQLITE --destination NEW_PRIVATE_JSONL`
+holds one read-only SQLite transaction and streams a versioned snapshot. It
+includes every supported application table, original schema, generated-column
+definitions, indexes, views, triggers, row identities, autoincrement high-water
+marks and database version pragmas. Values are encoded in SQLite before the
+JavaScript boundary; signed 64-bit integers, binary, embedded NUL text and real
+storage classes retain their original values. Pages are bounded by rows and
+estimated bytes, individual records by 4 MiB, and the complete export by 1 GiB.
+Unsupported virtual tables and fully shadowed row identities fail explicitly;
+limits never silently truncate an export.
+
+`node portable/cli.mjs import-application --source PRIVATE_JSONL --destination NEW_PRIVATE_SQLITE --sha256 EXACT_HASH`
+creates a new private database, verifies the complete archive and each restored
+table's content digest, and checks SQLite integrity and foreign keys before
+commit. Original rows load before triggers, avoiding new synthetic history.
+Native SQLite authorization blocks attached databases, temporary stores,
+extension loading and unsafe pragmas. Import requires Node24.10 or later in
+the Node24 line for `setAuthorizer`; an unsupported build fails before importing. Existing destinations are
+never replaced. Neither command changes configured services or starts a
+scheduler, agent, provider operation or native turn.
+
+These commands are not an export of the current Cloudflare database. The
+internal `withSnapshot` adapter requires a real consistent source for its full
+callback. D1 sessions/bookmarks, table counts and paginated dashboard reads do
+not establish that guarantee. The original D1 export, registered-file/control
+snapshot and cross-service writer fence must be established separately before
+production cutover; concurrent local WAL snapshot observations prove only the
+local database behavior. Automatic execution remains disabled during staging.
+
 Node admission supports assigned explicit turns and the hub's internal saved
 queue/schedule commands. Unsupported controls fail closed; there is no agent
 queue/schedule tick or second logical scheduler.

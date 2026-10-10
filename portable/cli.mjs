@@ -24,6 +24,15 @@ if(command==='version') {
   const c=loadConfig(option('config'));if(c.mode==='hub')throw Error('Only an agent can pair.');
   const {pairAgent}=await import('./enrollment-client.mjs');
   json(await pairAgent(c,option('token-file')));
+} else if(command==='export-application' || command==='import-application') {
+  const source=option('source'),destination=option('destination');
+  if(!source||!destination)throw Error('Provide the exact source and a new private destination.');
+  const {exportSQLiteApplication,importApplicationSnapshot}=await import('./application-export.mjs');
+  const signal=AbortSignal.timeout(120000);
+  process.umask(0o077);
+  json(command==='export-application'
+    ? await exportSQLiteApplication({source,destination,signal})
+    : await importApplicationSnapshot({source,destination,signal,expectedSHA256:option('sha256')}));
 } else if(command==='run' && args[0]==='hub') {
   const c=loadConfig(option('config'));if(c.mode==='agent')throw Error('Agent configuration cannot start a hub.');
   process.umask(0o077);
@@ -38,5 +47,5 @@ if(command==='version') {
   const c=loadConfig(option('config'));if(c.mode==='hub')throw Error('Hub configuration cannot start an agent.');
   const {runAgent}=await import('../bot-bridge/portable-agent.mjs');await runAgent(c);
 } else {
-  throw Error('Use version, key --data PATH, pair --config PATH --token-file PATH, install --mode hub|agent|both --config PATH, or run hub|agent --config PATH.');
+  throw Error('Use version, key, pair, install, run hub|agent, export-application --source PATH --destination PATH, or import-application --source PATH --destination PATH --sha256 HASH.');
 }
