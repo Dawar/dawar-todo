@@ -104,6 +104,8 @@ export async function admitLogicalCommand(transport,command,payload) {
       let fresh;try{fresh=await transport.roomState(command);}catch{throw defer('Fresh canonical result admission is unavailable.');}
       assertControl();
       if(!fresh?.canDispatch||fresh.operationId!==command.operation_id||fresh.fingerprint!==command.fingerprint||fresh.controlRevision!==before.revision||validatePrimary(fresh.intake,bot.id,bot.threadId,command.operation_id)!==validatePrimary(source,bot.id,bot.threadId,command.operation_id))throw defer('Canonical result intake or current controls changed before admission.');
+      if(source.kind==='task-request'&&!await runtime.taskRequests.canDispatch(current,store.get('primaryInbox',source.id)))throw defer('Original guest scope or volatile private receipt changed before native admission.');
+      assertControl();
     }
     const attempt={started:false,rejected:false,beforeDispatch:assertControl};
     // All awaited preflight reads precede the durable attempted marker. A

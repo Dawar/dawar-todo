@@ -13,7 +13,16 @@ export class NodeStorageClient extends BotStorageClient {
         throw Error('Artifact transfer requires its exact same-origin registered grant.');
       return globalThis.fetch(u,{...init,redirect:'error'});
     }});
-    this.headers={};this.transport=transport;this.features={taskQueues:true,taskRequests:false,peerShare:false};
+    this.headers={};this.transport=transport;this.features={taskQueues:true,taskRequests:process.platform==='linux',peerShare:false};
+  }
+  taskRequest(action,input={},botId=null){
+    if(!this.features.taskRequests)throw Error('Task Requests are not enabled on this platform.');
+    if(action==='pending'&&!botId)botId=this.runtime.store.bots().find(b=>{
+      const c=this.transport.journal.db.prepare('SELECT * FROM node_controls WHERE bot_id=?').get(b.id);
+      return c&&this.transport.journal.currentControl({bot_id:b.id,epoch:c.epoch});
+    })?.id;
+    if(!id(botId))throw Error('Original assigned Task Request bot scope is required.');
+    return this.transport.requestHub(botId,'task-request',{action,input},['pending','delivery','secure-authorize','intake-status'].includes(action));
   }
   async call(action,input={}){
     if(action==='registerBots')return this.registerBots();
@@ -31,4 +40,3 @@ export class NodeStorageClient extends BotStorageClient {
   }
   async share(){throw Error('Cross-node peer files await their canonical addressed-room grant; original files are retained.');}
 }
-

@@ -283,17 +283,23 @@ export class HubControls extends EventEmitter {
   }
   primaryEligible(owner,intake){
     if(intake.kind==='peer')return this.peers.eligible(owner,intake);
+    if(intake.kind==='task-request')return this.taskRequests?.eligible(intake)===true;
     const r=this.store.get('collaborationResult',intake.sourceId);
     return r?.botId===intake.botId&&r.promotion?.id===intake.id&&!this.store.get('collaborationConsumption',r.id);
   }
   primaryState(row,payload){
     const {p,b}=this.scope(row.owner,row.bot_id),intake=this.store.get('primaryInbox',row.operation_id);
     if(p.node_id!==row.node_id||p.epoch!==row.epoch||!intake||validatePrimary(intake,b.id,b.threadId,row.operation_id)!==validatePrimary(payload.params.intake,b.id,b.threadId,row.operation_id)||intake.operationId!==row.operation_id)throw Error('Canonical original intake source or placement changed.');
+    const project=()=>{
+    const fresh=this.scope(row.owner,row.bot_id);
+    if(fingerprint(fresh.p)!==fingerprint(p)||fresh.b.threadId!==b.threadId||fingerprint(this.store.get('primaryInbox',intake.id))!==fingerprint(intake))throw Error('Original intake changed during scoped admission.');
     return {operationId:row.operation_id,fingerprint:row.fingerprint,controlRevision:p.control_revision,intake,
       canDispatch:!p.stopped&&!b.queuePaused&&!b.archived&&!b.archiving&&intake.state==='dispatching'&&this.primaryEligible(row.owner,intake)&&this.router.connection(p)?.portableHello?.capabilities?.centralPrimaryDispatch===true};
+    };
+    return intake.kind==='task-request'?this.taskRequests.preflight(intake).then(allowed=>allowed?project():{canDispatch:false}):project();
   }
   dispatchPrimary(p,intake){
-    return this.store.transaction(()=>{
+    const dispatch=()=>this.store.transaction(()=>{
       const current=this.hub.placement(p.owner,p.bot_id),bot=this.store.bot(p.bot_id),q=this.owned('primaryInbox',intake.id,bot.id);
       if(fingerprint(current)!==fingerprint(p)||current.stopped||bot.queuePaused||bot.archived||bot.archiving||this.plans.blocked(bot.id)||this.router.connection(current)?.portableHello?.capabilities?.centralPrimaryDispatch!==true||fingerprint(q)!==fingerprint(intake)||q.state!=='queued'||!this.primaryEligible(p.owner,q))return;
       validatePrimary(q,bot.id,bot.threadId,q.id);
@@ -304,6 +310,7 @@ export class HubControls extends EventEmitter {
       this.store.put('primaryInbox',{...q,state:'dispatching',operationId:q.id,attemptedAt:now()});
       this.emitEvent('work',{},bot.id);this.store.afterCommit(()=>this.router.connection(current)?.send(boundedFrame({type:'sync',...this.hub.sync(current.node_id)})));return row;
     });
+    return intake.kind==='task-request'?this.taskRequests.preflight(intake).then(allowed=>allowed?dispatch():undefined):dispatch();
   }
   dispatch(p,item,run) {
     return this.store.transaction(()=>{

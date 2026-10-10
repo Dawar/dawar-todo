@@ -10,7 +10,8 @@ export class HubNodeStorage {
     const assertStorageWriter=objects.assertWriter;
     objects.assertWriter=()=>{if(objects.writer)assertStorageWriter();this.controls.assertWriter();};
     objects.authorizeNode=scope=>{this.controls.assertWriter();return this.scope(scope.nodeId,scope.botId,scope.epoch);};
-    this.environment={...config.applicationEnvironment,DB:application,DAWAR_OBJECT_STORAGE:objects.adapter(),BOTS_MACHINE_ID:config.applicationEnvironment?.BOTS_MACHINE_ID??'dawar-vm'};
+    this.environment={...config.applicationEnvironment,DB:application,DAWAR_OBJECT_STORAGE:objects.adapter(),BOTS_MACHINE_ID:config.applicationEnvironment?.BOTS_MACHINE_ID??'dawar-vm',BOTS_OWNER_EMAIL:config.owner.key,BOTS_TICKET_SECRET:config.gatewaySecret,
+      TASK_REQUEST_SECRET:config.applicationEnvironment?.TASK_REQUEST_SECRET??config.applicationEnvironment?.BOTS_TICKET_SECRET??config.gatewaySecret};
   }
   scope(nodeId,botId,epoch){
     const n=this.hub.node(nodeId),p=this.hub.placement(n.owner,botId);

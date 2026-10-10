@@ -4,7 +4,7 @@ import { BotStorage, StorageError, type BotStorageEnv } from './bot-storage';
 import { taskRequestId, taskRequestSource, taskRequestSpec, taskRequestValues, TASK_REQUEST_LIMITS,
   type TaskRequest, type TaskRequestGuest, type TaskRequestSubmission, type TaskRequestFile } from '../lib/task-requests';
 
-export type TaskRequestEnvironment = BotStorageEnv & { BOTS_OWNER_EMAIL?: string; BOTS_TICKET_SECRET?: string };
+export type TaskRequestEnvironment = BotStorageEnv & { BOTS_OWNER_EMAIL?: string; BOTS_TICKET_SECRET?: string; TASK_REQUEST_SECRET?: string };
 type RequestRow = { owner_key:string; id:string; bot_id:string; thread_id:string; revision:number; body:string };
 type Grant = { id:string; owner_key:string; request_id:string; revision:number; token_hash:string; pin_hash:string|null; expires_at:number; revoked:number };
 type UploadRow = { owner_key:string; request_id:string; grant_id:string; id:string; field_id:string; body:string; state:string };
@@ -36,7 +36,7 @@ export class TaskRequests {
   }
   get db() {return this.environment.DB;}
   async initialize() {await ensureTaskRequests(this.db);}
-  private sign(v:string) {if(!this.environment.BOTS_TICKET_SECRET)throw new StorageError('Protected forms are not configured.',503,'unavailable'); return createHmac('sha256',this.environment.BOTS_TICKET_SECRET).update(v).digest('base64url');}
+  private sign(v:string) {const secret=this.environment.TASK_REQUEST_SECRET??this.environment.BOTS_TICKET_SECRET;if(!secret)throw new StorageError('Protected forms are not configured.',503,'unavailable'); return createHmac('sha256',secret).update(v).digest('base64url');}
   async bot(botId:string) {
     const r=await this.db.prepare('SELECT metadata FROM bot_storage_identities WHERE owner_key=? AND id=? AND machine_id=?').bind(this.owner,taskRequestId(botId),this.environment.BOTS_MACHINE_ID??'dawar-vm').first<{metadata:string}>();
     const bot=r ? JSON.parse(r.metadata):null;

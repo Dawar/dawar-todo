@@ -14,13 +14,15 @@ import { signGateway } from './gateway-proof.ts';
 import { ObjectStorage } from './object-storage.mjs';
 import { HubRpc,AGENT_MUTATIONS } from './hub-rpc.mjs';
 import { HubNodeStorage } from './hub-node-storage.mjs';
+import {HubTaskRequests} from './hub-task-requests.mjs';
 import { HubControls } from './hub-controls.mjs';
 import { HubWriteAuthority,hubActivation } from './hub-authority.mjs';
 import { HUB_TOOLS } from './control-protocol.mjs';
-import { verifyBotTicket } from '../lib/bots-auth.ts';
+import { verifyBotTicket,verifyTaskRequestTicket } from '../lib/bots-auth.ts';
 import {createVoiceRuntime} from './voice-runtime.mjs';
 import {HubDesktopTransport,DESKTOP_MUTATIONS,desktopCapable} from './desktop-transport.mjs';
 import {HubSecureTransport} from './secure-transport.mjs';
+import {fingerprint} from './protocol.mjs';
 
 const json = (response,status,body) => { response.writeHead(status,{'content-type':'application/json','cache-control':'no-store'});response.end(JSON.stringify(body)); };
 async function readBody(req) {
@@ -36,13 +38,15 @@ export function startGateway(config) {
   const identity = new OIDCIdentity(store,config);
   const objects = new ObjectStorage(config,{writer});
   const connections = new Map(), challenges = new Map();
-  const router = new HubRpc(store,connections), browsers=new Set();
+  const router = new HubRpc(store,connections), browsers=new Set(),guests=new Map();
   const desktop=new HubDesktopTransport({store,connections,parent:(owner,id)=>[...browsers].some(b=>b.owner===owner&&b.clientId===id&&!b.desktop&&b.ws.readyState===1&&b.expiresAt>Date.now()&&b.valid())});
   const secure=new HubSecureTransport({store,connections,parent:(owner,id)=>[...browsers].some(b=>b.owner===owner&&b.clientId===id&&!b.desktop&&b.ws.readyState===1&&b.expiresAt>Date.now()&&b.valid())});
+  const taskSecure=new HubSecureTransport({store,connections,parent:(owner,id)=>owner===config.owner.key&&guests.get(id)?.valid()===true});
   const broadcast=(owner,event)=>{for(const b of browsers)if(b.owner===owner&&!b.desktop&&b.expiresAt>Date.now()&&b.valid()&&b.ws.readyState===1)b.ws.send(JSON.stringify({type:'event',event}));};
   const controls=new HubControls({path:join(config.dataDirectory,'control.sqlite'),hub:store,router,authority,broadcast,...(config.schedulerQuietWindow?{quietWindow:config.schedulerQuietWindow}:{})});router.controls=controls;
   const nodeStorage=new HubNodeStorage({hub:store,controls,application,objects,config});
   controls.nodeStorage=nodeStorage;
+  const taskRequests=new HubTaskRequests({hub:store,controls,application,environment:nodeStorage.environment,owner:config.owner.key});controls.taskRequests=taskRequests;
   const voice=config.voice?.enabled===true?createVoiceRuntime(config,{writer,assertWriter:()=>controls.assertWriter()}):null;
   const scheduler=authority?setInterval(()=>void controls.tick().catch(error=>controls.emit('fault',error)),5000):null;
   const downloadDirectory=resolve(config.agentDownloadDirectory??fileURLToPath(new URL('../agent-downloads',import.meta.url)));
@@ -166,17 +170,20 @@ export function startGateway(config) {
     }
     if(u.pathname==='/connect'){
       const session=identity.session(new Request(u,{headers:req.headers}));
-      if(!session||req.headers.origin!==config.publicOrigin||u.searchParams.get('machine')!==(config.applicationEnvironment?.BOTS_MACHINE_ID??'dawar-vm')){socket.destroy();return;}
+      if(req.headers.origin!==config.publicOrigin||u.searchParams.get('machine')!==(config.applicationEnvironment?.BOTS_MACHINE_ID??'dawar-vm')){socket.destroy();return;}
       sockets.handleUpgrade(req,socket,head,ws=>{
-        const clientId=`browser:${randomUUID()}`;let authenticated=false,expiresAt=0,desktopBrowser=false;
-        const valid=()=>{const current=identity.session(new Request(u,{headers:req.headers}));return current?.owner===session.owner&&current?.userId===session.userId;};
+        const clientId=`browser:${randomUUID()}`;let authenticated=false,expiresAt=0,desktopBrowser=false,guest=null;
+        const valid=()=>{
+          if(guest)return ws.readyState===1&&expiresAt>Date.now();
+          const current=identity.session(new Request(u,{headers:req.headers}));return !!session&&current?.owner===session.owner&&current?.userId===session.userId;
+        };
         const timeout=setTimeout(()=>{if(!authenticated)ws.close(1008,'Authentication expired');},10000);
         const send=value=>{if(ws.readyState===1)ws.send(JSON.stringify(value));};
         let frameChain=Promise.resolve();
         ws.on('message',(raw,isBinary)=>{
           frameChain=frameChain.then(async()=>{
             if (ws.readyState!==1) return;
-            if(!valid())throw Error('Owner session expired or changed.');
+            if(authenticated&&!valid())throw Error('Session expired or changed.');
             if(isBinary){
               if(!authenticated||!desktopBrowser||expiresAt<=Date.now()||raw.length>128*1024)throw Error('Invalid desktop binary frame.');
               desktop.frame(clientId,{event:'data',data:raw.toString('base64')});return;
@@ -184,7 +191,20 @@ export function startGateway(config) {
             if(raw.toString()==='ping'){if(authenticated)ws.send('pong');return;}
             const m=JSON.parse(raw.toString());
             if(!authenticated){
-              if(m.type!=='auth'||m.role==='task-request')throw Error('Unsupported portable browser role.');
+              if(m.type!=='auth')throw Error('Unsupported portable browser role.');
+              if(m.role==='task-request'){
+                if(m.desktop)throw Error('Guest cannot open a desktop.');
+                const ticket=await verifyTaskRequestTicket(m.ticket,config.gatewaySecret,config.applicationEnvironment?.BOTS_MACHINE_ID??'dawar-vm');
+                const forms=taskRequests.forms();await forms.initialize();const scope=await forms.secureAuthorize(ticket.binding);
+                if(scope.owner!==ticket.owner||scope.source.botId!==ticket.botId||scope.source.threadId!==ticket.threadId||fingerprint({requestId:scope.requestId,revision:scope.revision,grantId:scope.grantId,submissionId:scope.submissionId})!==fingerprint(ticket.binding))throw Error('Original guest grant changed.');
+                store.transaction(()=>{
+                  if(store.db.prepare('SELECT 1 FROM portable_tickets WHERE jti=?').get(ticket.jti))throw Error('Guest ticket already used.');
+                  store.db.prepare('DELETE FROM portable_tickets WHERE expires_at<=?').run(Date.now());store.db.prepare('INSERT INTO portable_tickets VALUES(?,?)').run(ticket.jti,ticket.exp*1000);
+                });
+                guest=ticket;authenticated=true;expiresAt=ticket.sessionExp*1000;clearTimeout(timeout);guests.set(clientId,{valid});
+                send({type:'authenticated',role:'task-request',owner:ticket.owner,online:!!connections.get(store.placement(config.owner.key,ticket.botId).node_id),expiresAt,clientId});return;
+              }
+              if(!session||!valid())throw Error('Owner session required.');
               const ticket=await verifyBotTicket(m.ticket,config.gatewaySecret,config.applicationEnvironment?.BOTS_MACHINE_ID??'dawar-vm');
               store.transaction(()=>{
                 if(ticket.owner!==session.owner||store.db.prepare('SELECT 1 FROM portable_tickets WHERE jti=?').get(ticket.jti))throw Error('Foreign or reused ticket.');
@@ -197,6 +217,13 @@ export function startGateway(config) {
               if(desktopBrowser)desktop.open({owner:session.owner,clientId,parentId:m.desktop.parentId,botId:m.desktop.botId,token:m.desktop.token,expiresAt,valid,
                 send:value=>{if(ws.readyState!==1||ws.bufferedAmount>8*1024*1024)throw Error('Desktop output unavailable.');ws.send(Buffer.isBuffer(value)?value:JSON.stringify(value));},close:()=>ws.close(1000,'Desktop closed')});
               return;
+            }
+            if(guest){
+              if(m.type!=='task-request')throw Error('Guest transport cannot send owner RPC.');
+              void writer.runWork('secure-transfer',async()=>{
+                try{return await taskSecure.requestGuest(config.owner.key,clientId,m,guest);}catch(error){if(error.sent)writer.unknownWork();throw error;}
+              }).then(result=>send({type:'task-request.response',id:m.id,result}))
+                .catch(()=>send({type:'task-request.response',id:m.id,error:'Original private form transfer is unavailable or unconfirmed; retain its encrypted submission.'}));return;
             }
             if(desktopBrowser){if(expiresAt<=Date.now()||m.type!=='desktop')throw Error('Desktop session invalid.');desktop.frame(clientId,m);return;}
             if(expiresAt>Date.now()&&m.type==='secure'){
@@ -214,7 +241,7 @@ export function startGateway(config) {
               catch(e){send({type:'response',id:m.id,error:e.message,outcome:e.outcome==='rejected'?'rejected':e.outcome==='not-sent'?'not-sent':'uncertain',delivery:e.delivery});}})();
           }).catch(()=>ws.close(1008,'Owner request rejected'));
         });
-        ws.on('close',()=>{clearTimeout(timeout);desktop.end(clientId);desktop.disconnectParent(clientId);secure.disconnectParent(clientId);for(const b of browsers)if(b.ws===ws)browsers.delete(b);});
+        ws.on('close',()=>{clearTimeout(timeout);guests.delete(clientId);taskSecure.disconnectParent(clientId);desktop.end(clientId);desktop.disconnectParent(clientId);secure.disconnectParent(clientId);for(const b of browsers)if(b.ws===ws)browsers.delete(b);});
       });return;
     }
     if(u.pathname!=='/nodes/connect' || req.headers.origin){socket.destroy();return;}
@@ -231,7 +258,7 @@ export function startGateway(config) {
             if(m.type!=='authenticate'||Date.now()-createdAt>10000||!challenges.has(connectionId)
               ||!verifySignature(n.public_key,{nodeId:m.nodeId,challenge,connectionId,hello:m.hello},m.proof))throw Error('Node proof invalid.');
             challenges.delete(connectionId);clearTimeout(timeout);nodeId=n.id;
-            const prior=connections.get(nodeId);if(prior){desktop.disconnectNode(prior);secure.disconnectNode(prior);}prior?.close(1008,'Connection superseded');ws.portableHello=m.hello;connections.set(nodeId,ws);
+            const prior=connections.get(nodeId);if(prior){desktop.disconnectNode(prior);secure.disconnectNode(prior);taskSecure.disconnectNode(prior);}prior?.close(1008,'Connection superseded');ws.portableHello=m.hello;connections.set(nodeId,ws);
             ws.send(JSON.stringify({type:'sync',...store.sync(nodeId,m.cursor??0)}));return;
           }
           store.node(nodeId);if(connections.get(nodeId)!==ws)throw Error('Connection superseded.');
@@ -239,14 +266,12 @@ export function startGateway(config) {
           else if(m.type==='receipt') {const receipt=store.receipt(nodeId,m.operationId,m.fingerprint,m.state,m.receipt);router.receipt(receipt);if(authority)controls.receipt(receipt);ws.send(JSON.stringify({type:'receipt-ack',operationId:m.operationId,state:receipt.state}));}
           else if(m.type==='rpc-result')router.readResult(nodeId,m);
           else if(m.type==='desktop-response')desktop.receive(nodeId,ws,m);
-          else if(m.type==='secure-response')secure.receive(nodeId,ws,m);
+          else if(m.type==='secure-response'){secure.receive(nodeId,ws,m);taskSecure.receive(nodeId,ws,m);}
           else if(m.type==='room-request'){
             const n=store.node(nodeId),p=store.placement(n.owner,m.botId);
             if(p.node_id!==nodeId||p.epoch!==m.epoch||typeof m.requestId!=='string'||m.requestId.length>180)throw Error('Foreign room admission request.');
-            try{
-              const result=controls.collaboration.nodeState(n.owner,nodeId,m.botId,m.epoch,m.operationId,m.fingerprint);
-              ws.send(boundedFrame({type:'room-result',requestId:m.requestId,botId:m.botId,epoch:m.epoch,result}));
-            }catch(error){ws.send(boundedFrame({type:'room-result',requestId:m.requestId,botId:m.botId,epoch:m.epoch,error:error.message,outcome:'not-sent'}));}
+            const answer=value=>{const current=store.placement(n.owner,m.botId);if(connections.get(nodeId)===ws&&current.node_id===nodeId&&current.epoch===m.epoch)ws.send(boundedFrame({type:'room-result',requestId:m.requestId,botId:m.botId,epoch:m.epoch,...value}));};
+            void Promise.resolve().then(()=>controls.collaboration.nodeState(n.owner,nodeId,m.botId,m.epoch,m.operationId,m.fingerprint)).then(result=>answer({result})).catch(error=>answer({error:error.message,outcome:'not-sent'})).catch(()=>ws.close(1008,'Room admission scope changed'));
           }
           else if(m.type==='room-tool-request'){
             const n=store.node(nodeId),p=store.placement(n.owner,m.botId);
@@ -266,6 +291,12 @@ export function startGateway(config) {
             const answer=value=>{const current=store.placement(n.owner,m.botId);if(connections.get(nodeId)===ws&&current.node_id===nodeId&&current.epoch===m.epoch)ws.send(boundedFrame({type:'control-result',requestId:m.requestId,botId:m.botId,epoch:m.epoch,...value}));};
             void controls.tool(n.owner,m.botId,m.tool,m.args,{kind:'authenticated-node-tool',botId:m.botId,nodeId,epoch:m.epoch}).then(result=>answer({result})).catch(error=>answer({error:error.message,outcome:error.outcome??'uncertain'})).catch(()=>ws.close(1008,'Control scope changed'));
           }
+          else if(m.type==='task-request-request'){
+            const n=store.node(nodeId),p=store.placement(n.owner,m.botId);
+            if(p.node_id!==nodeId||p.epoch!==m.epoch||typeof m.requestId!=='string'||m.requestId.length>180)throw Error('Foreign Task Request service scope.');
+            const answer=value=>{const current=store.placement(n.owner,m.botId);if(connections.get(nodeId)===ws&&current.node_id===nodeId&&current.epoch===m.epoch){const frame={type:'task-request-result',requestId:m.requestId,botId:m.botId,epoch:m.epoch,...value};boundedFrame(frame);ws.send(JSON.stringify(frame));}};
+            void taskRequests.request(nodeId,m).then(result=>answer({result})).catch(error=>answer({error:'Original protected form operation is unavailable or unconfirmed; retain its original ID.',outcome:error.outcome??'uncertain',...(Number.isInteger(error.status)?{formStatus:error.status}:{})})).catch(()=>ws.close(1008,'Task Request scope changed'));
+          }
           else if(m.type==='artifact-request'){
             const n=store.node(nodeId),p=store.placement(n.owner,m.botId);
             if(p.node_id!==nodeId||p.epoch!==m.epoch||typeof m.requestId!=='string'||m.requestId.length>180)throw Error('Foreign artifact request.');
@@ -276,10 +307,10 @@ export function startGateway(config) {
           else throw Error('Unknown node frame.');
         } catch {ws.close(1008,'Node frame rejected');}
       });
-      ws.on('close',()=>{clearTimeout(timeout);challenges.delete(connectionId);desktop.disconnectNode(ws);secure.disconnectNode(ws);if(connections.get(nodeId)===ws)connections.delete(nodeId);});
+      ws.on('close',()=>{clearTimeout(timeout);challenges.delete(connectionId);desktop.disconnectNode(ws);secure.disconnectNode(ws);taskSecure.disconnectNode(ws);if(connections.get(nodeId)===ws)connections.delete(nodeId);});
     });
   });
   server.listen(config.gatewayPort??3210,'127.0.0.1');
   let closing;
-  return {server,store,application,objects,router,controls,voice,desktop,secure,close:()=>closing??=(async()=>{if(voice)await voice.close();clearInterval(scheduler);desktop.close();secure.close();router.close();for(const ws of sockets.clients)ws.close();await new Promise(resolve=>server.close(resolve));writer.close();controls.close();objects.close();store.close();application.close();})()};
+  return {server,store,application,objects,router,controls,voice,desktop,secure,taskSecure,taskRequests,close:()=>closing??=(async()=>{if(voice)await voice.close();clearInterval(scheduler);desktop.close();secure.close();taskSecure.close();router.close();for(const ws of sockets.clients)ws.close();await new Promise(resolve=>server.close(resolve));writer.close();controls.close();objects.close();store.close();application.close();})()};
 }
