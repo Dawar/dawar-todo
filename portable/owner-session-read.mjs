@@ -100,6 +100,10 @@ export async function createOwnerSessionApplicationReader({capture,recipient,exp
 }
 
 export async function exportOwnerSessionApplication({capture,recipient,expectedOwner,sessionPath,destination,signal,pageRows}) {
+  destination=resolve(destination);
+  // Refuse an existing destination before any source contact. The exporter's
+  // exclusive final link still guards a competing creation after this check.
+  try{await lstat(destination);throw failure();}catch(error){if(error.code!=='ENOENT')throw failure();}
   const reader=await createOwnerSessionApplicationReader({capture,recipient,expectedOwner,sessionPath,signal});
   try {
     return await exportFrozenD1Application({destination,signal,pageRows,expectedFreeze:capture.freeze,
