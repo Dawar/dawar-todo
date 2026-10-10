@@ -7,7 +7,7 @@ import { CodexManager } from '../bot-bridge/manager.mjs';
 import { NodeJournal } from './control-store.mjs';
 import { nodeKey, signature, fingerprint,id,boundedFrame,PROTOCOL_VERSION, RUNTIME_VERSION } from './protocol.mjs';
 import { AGENT_READS, AGENT_MUTATIONS } from './hub-rpc.mjs';
-import { HUB_TOOLS,NODE_LOGICAL_COMMANDS } from './control-protocol.mjs';
+import { HUB_TOOLS,NODE_LOGICAL_COMMANDS,ROOM_NATIVE_READS } from './control-protocol.mjs';
 import { admitLogicalCommand } from './agent-admission.mjs';
 import {settleAgentBurst} from './agent-bursts.mjs';
 import { queueResumeReceipt } from './agent-queue-resume.mjs';
@@ -42,8 +42,9 @@ export class AgentTransport {
       if(!event.botId)return;
       const c=journal.db.prepare('SELECT * FROM node_controls WHERE bot_id=?').get(event.botId);
       if(!c)return;
-      if(event.type==='codex'&&event.data?.method==='turn/completed'){
-        const p=event.data.params,turn=p?.turn;
+      const native=event.type==='codex'?event.data:event.type==='collaboration.native'&&event.data?.type==='codex'?event.data.data:null;
+      if(native?.method==='turn/completed'){
+        const p=native.params,turn=p?.turn;
         if(p?.threadId&&turn?.id&&['completed','failed','interrupted'].includes(turn.status)){
           this.terminalCandidates.set(turn.id,{threadId:p.threadId,turnId:turn.id,status:turn.status});
           // Native completion may precede its turn/start response. Retain a
@@ -89,7 +90,14 @@ export class AgentTransport {
     if(!['native-accepted','running'].includes(row.state))return;
     const receipt=row.receipt&&JSON.parse(row.receipt),p=receipt&&this.terminalCandidates.get(receipt.turnId);
     if(!p||p.threadId!==receipt.threadId)return;
-    this.journal.settle(row.operation_id,'terminal',{...receipt,nativeStatus:p.status});
+    let result=receipt.result;const command=JSON.parse(row.command);
+    if(command.payload&&JSON.parse(command.payload).method==='portable.roomDispatch'){
+      // Original room completion events have their own context generation;
+      // retain the latest proven local snapshot instead of pairing terminal
+      // status with the older running snapshot from turn/start's ACK.
+      try{result=this.collaboration.result(command);}catch{return;}
+    }
+    this.journal.settle(row.operation_id,'terminal',{...receipt,result,nativeStatus:p.status});
     this.receipt(this.journal.db.prepare('SELECT * FROM node_commands WHERE operation_id=?').get(row.operation_id));
   }
   async recover(){
@@ -192,11 +200,12 @@ export class AgentTransport {
             if(DESKTOP_READS.has(m.method)&&!this.runtime.desktops)throw Error('Linux desktops are not configured.');
             if(DESKTOP_READS.has(m.method)&&!this.journal.currentControl({bot_id:m.botId,epoch:m.epoch}))throw Error('Desktop controls are not synchronized.');
             if(m.method==='desktop.open'&&(!id(m.clientId)||!m.clientId.startsWith('browser:')))throw Error('A live authenticated parent browser is required.');
-            const work=()=>this.runtime.handle({method:m.method,botId:m.botId,params:m.params,clientId:m.method==='desktop.open'?m.clientId:`hub:${this.enrollment.nodeId}`});
+            const roomRead=ROOM_NATIVE_READS.has(m.method)||m.method==='portable.roomQuestion'||m.method==='execution.config'&&m.params?.contextId;
+            const work=()=>roomRead?this.collaboration.readOwner(m.method,m.botId,m.params,m.roomScope):this.runtime.handle({method:m.method,botId:m.botId,params:m.params,clientId:m.method==='desktop.open'?m.clientId:`hub:${this.enrollment.nodeId}`});
             const result=m.method==='desktop.open'?await this.runtime.maintenance.admit(work):await work();
             const after=this.journal.currentControl({bot_id:m.botId,epoch:m.epoch});
             if(!after||this.socket!==ws)return;
-            const frame={type:'rpc-result',rpcId:m.rpcId,botId:m.botId,epoch:m.epoch,result};
+            const frame={type:'rpc-result',rpcId:m.rpcId,botId:m.botId,epoch:m.epoch,result,...(roomRead?{roomScope:m.roomScope}:{})};
             if(Buffer.byteLength(JSON.stringify(frame))>900*1024)throw Error('Read exceeds its bounded transport; use a smaller history page.');sendHere(frame);
           }catch(e){sendHere({type:'rpc-result',rpcId:m.rpcId,botId:m.botId,epoch:m.epoch,error:e.message});}})();
         } else if(authentication && ['control-result','artifact-result','room-result','room-tool-result'].includes(m.type)){

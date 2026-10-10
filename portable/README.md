@@ -852,6 +852,39 @@ Native history/configuration and desktop/workspace/external resource leases
 remain on the assigned machine. Fresh central caller/membership/hold/control
 authorization precedes the original local guarded operation. No cross-machine
 shared-filesystem lock or OS sandbox is implied. Foreground room dispatch,
-await/promotion/consumption and owner question/history transport still await
+await/promotion/consumption and synchronous native question answers still await
 their paired consumers. Unsupported native operations fail explicitly before
 creating local shadow records. Automatic room capability remains disabled.
+
+### Owner room history and asynchronous answers
+
+Owner history, item detail, work log, requested configuration and question
+reads are routed to the assigned agent's original registered native context.
+The hub captures bot, node, placement epoch, room membership revision, context
+and native thread before the read, then rechecks that scope before persistence.
+History remains machine-local; matching offline cached pages explicitly retain
+their observation age. A cached question cannot authorize a new answer.
+
+Public question catalog reads retain the original question/request identity
+and source fingerprint. Secret questions are excluded. An owner answer first
+performs a private, live, exact-key lookup on the assigned agent; that internal
+lookup is unavailable as a public RPC. Changed, unavailable, foreign or stale
+question sources refuse the answer without creating a replacement operation.
+
+For asynchronous questions, the checked source, answer, canonical room post,
+delivery and original owner receipt are persisted in the same transaction.
+The answer uses the original deterministic question delivery/client ID and
+the same registered native producer as ordinary addressed room work. Queueing
+is not native acceptance. The original pending question is removed only after
+positive matching native acceptance; uncertain receipts retain their IDs and
+never retry the input. Owner lost-ACK recovery returns that same original
+delivery and rejects changed answer bytes or a replacement operation ID.
+
+Room native terminal events settle the corresponding node journal command.
+Context snapshots retain their own current native generation and active turn;
+a delayed completion of an older delivery cannot clear a newer active turn.
+Synchronous request answers remain explicitly unsupported pending their paired
+native response/settlement transport. Automatic room capability remains false
+until the remaining foreground, result and other communication consumers are
+complete. Disposable Linux/loopback observations are source evidence, not
+installed native, owner, device or production acceptance.

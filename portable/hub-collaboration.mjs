@@ -1,7 +1,8 @@
 import {AsyncLocalStorage} from 'node:async_hooks';
 import {Collaboration} from '../bot-bridge/collaboration.mjs';
-import {HUB_ROOM_READS,HUB_ROOM_MUTATIONS,HUB_ROOM_TOOL_METHODS,roomDeliverySource} from './control-protocol.mjs';
+import {HUB_ROOM_READS,HUB_ROOM_MUTATIONS,HUB_ROOM_TOOL_METHODS,roomDeliverySource,roomQuestionSource,ROOM_QUESTION_LOOKUP} from './control-protocol.mjs';
 import {fingerprint,boundedFrame,originalNativeProof,id} from './protocol.mjs';
+import {validateResponse} from '../bot-bridge/runtime.mjs';
 
 const now=()=>new Date().toISOString();
 
@@ -13,7 +14,16 @@ export class HubCollaboration extends Collaboration {
     const facade=Object.assign(Object.create(runtime),{maintenance:{holding:()=>{
       try{runtime.assertWriter();return false;}catch{return true;}
     }}});
-    super(facade,[],null,new Set());this.owners=new AsyncLocalStorage();this.callers=new AsyncLocalStorage();
+    super(facade,[],validateResponse,new Set());this.owners=new AsyncLocalStorage();this.callers=new AsyncLocalStorage();this.answerScopes=new AsyncLocalStorage();
+    // Add the exact checked source inside the original answer transaction,
+    // before its ACK. A crash cannot leave an acknowledged answer without the
+    // source required for agent admission. Other Store operations are inherited.
+    this.store=Object.create(runtime.store);
+    this.store.put=(kind,value)=>{
+      const captured=this.answerScopes.getStore();
+      if(kind==='collaborationAnswer'&&captured&&value.id===captured.key&&value.operationId===captured.operationId)value={...value,portableAnswer:captured.value};
+      return runtime.store.put(kind,value);
+    };
   }
   ownedBot(botId){
     const owner=this.owners.getStore();
@@ -76,13 +86,60 @@ export class HubCollaboration extends Collaboration {
     this.runtime.emitEvent('collaboration',{version:1,roomId,...data},room.members[0]);
   }
   request(owner,request,caller){
-    if(!HUB_ROOM_READS.has(request.method)&&!HUB_ROOM_MUTATIONS.has(request.method))throw Error('Unsupported central room control.');
+    if(!HUB_ROOM_READS.has(request.method)&&!HUB_ROOM_MUTATIONS.has(request.method)&&request.method!=='conversations.respond')throw Error('Unsupported central room control.');
     if(caller.kind!=='owner')throw Error('Central room owner controls cannot be granted by node prose.');
     return this.owners.run(owner,()=>{
       this.ownedBot(request.botId);
+      if(request.method==='conversations.respond'){this.runtime.assertWriter();return this.ownerRespond({...request,clientId:'authenticated-hub-owner'});}
       if(HUB_ROOM_MUTATIONS.has(request.method))this.runtime.assertWriter();
       return super.handle({...request,clientId:'authenticated-hub-owner'},null);
     });
+  }
+  nativeScope(owner,botId,contextId){
+    return this.owners.run(owner,()=>{
+      const {p}=this.runtime.scope(owner,botId),c=this.context(botId,contextId),room=this.ownedRoom(c.roomId);
+      if(c.provisioning!=='bound'||!id(c.threadId))throw Error('Original registered native room is not bound.');
+      return {botId,contextId:c.id,roomId:c.roomId,threadId:c.threadId,roomRevision:room.revision,nodeId:p.node_id,placementEpoch:p.epoch};
+    });
+  }
+  captureRead(owner,nodeId,botId,epoch,method,scope,result){
+    this.runtime.assertWriter();
+    return this.owners.run(owner,()=>this.store.transaction(()=>{
+      const current=this.nativeScope(owner,botId,scope.contextId),c=result?.context,prior=this.context(botId,scope.contextId);
+      if(current.nodeId!==nodeId||current.placementEpoch!==epoch||fingerprint(current)!==fingerprint(scope)||
+          !c||c.id!==scope.contextId||c.botId!==botId||c.roomId!==scope.roomId||c.threadId!==scope.threadId||c.provisioning!=='bound'||!Number.isSafeInteger(c.revision)||c.revision<0||!['running','idle','unknown'].includes(c.status))throw Error('Native room read is outside its original current scope.');
+      if(c.revision>prior.generation)this.store.put('collaborationContext',{...prior,...c,generation:c.revision});
+      if(!['conversations.requests','portable.roomQuestion'].includes(method))return;
+      if(typeof result.agentEpoch!=='string'||!id(result.agentEpoch))throw Error('Question source lacks its actual agent lifetime.');
+      const rows=method==='portable.roomQuestion'?(result.pending?[result.pending]:[]):result.items;
+      if(!Array.isArray(rows)||rows.length>40||Buffer.byteLength(JSON.stringify(rows))>96*1024)throw Error('Native question page exceeds its original bound.');
+      for(const pending of rows){
+        const p=pending.request?.params;
+        if(!pending||pending.botId!==botId||pending.contextId!==scope.contextId||pending.roomId!==scope.roomId||pending.threadId!==scope.threadId||pending.id!==pending.key||
+            typeof pending.key!=='string'||pending.key.length>1000||p?.threadId!==scope.threadId||p.turnId!==pending.turnId||!id(pending.turnId)||
+            p.questions?.some(q=>q.isSecret)||pending.async===true&&(pending.request.method!=='item/tool/requestUserInput'||p.isBlocking!==false||pending.key!==`${scope.contextId}:async:${p.itemId}`))throw Error('Question does not belong to this original public room context.');
+        const stable=fingerprint(roomQuestionSource(pending)),old=this.store.get('collaborationPending',pending.key);
+        if(old?.portableQuestionSource&&old.portableQuestionSource.fingerprint!==stable)throw Error('Original question source changed; its records were retained.');
+        if(this.store.get('collaborationAnswer',pending.key)?.state==='accepted')continue;
+        this.store.put('collaborationPending',{...pending,portableQuestionSource:{fingerprint:stable,nodeId,epoch,agentEpoch:result.agentEpoch,original:pending,scope,observedAt:now()}});
+      }
+    }));
+  }
+  async ownerRespond(request){
+    const {botId,params:p}=request;
+    if(!p||typeof p.key!=='string'||Object.keys(p).some(k=>!['key','result'].includes(k))||typeof request.operationId!=='string'||!/^[a-zA-Z0-9:_-]{10,180}$/.test(request.operationId))throw Error('Use the original question key, stable operation ID and bounded answer.');
+    const previous=this.store.get('collaborationAnswer',p.key),retained=this.store.get('collaborationPending',p.key)??previous?.pending;
+    if(!retained?.portableQuestionSource)throw Error('Read this original context question before answering.');
+    const scope=this.nativeScope(this.owners.getStore(),botId,retained.contextId);
+    if(retained.botId!==botId||retained.threadId!==scope.threadId||retained.portableQuestionSource.nodeId!==scope.nodeId||retained.portableQuestionSource.epoch!==scope.placementEpoch)throw Error('Question belongs to a different original placement.');
+    if(!retained.async)throw Object.assign(Error('Synchronous room answers await their original native-response transport; no answer was sent.'),{outcome:'not-sent'});
+    if(previous)return super.respond(request);
+    const response=await this.runtime.router.request(this.owners.getStore(),{id:`room-question:${fingerprint(request.operationId)}`,method:'portable.roomQuestion',botId,params:{contextId:scope.contextId,key:p.key}},'authenticated-hub-owner',ROOM_QUESTION_LOOKUP);
+    const actual=response.result?.pending;
+    if(!actual||actual.unavailable||fingerprint(roomQuestionSource(actual))!==retained.portableQuestionSource.fingerprint||fingerprint(this.nativeScope(this.owners.getStore(),botId,scope.contextId))!==fingerprint(scope))throw Error('Original native question changed or is unavailable. No answer was queued.');
+    const result=await this.answerScopes.run({key:p.key,operationId:request.operationId,value:{result:validateResponse(actual.request,p.result),question:actual}},()=>super.respond(request)),d=this.store.get('collaborationDelivery',result.delivery.id);
+    if(d.answerKey!==p.key)throw Error('Original answer delivery identity changed.');
+    return result;
   }
   nodeState(owner,nodeId,botId,epoch,operationId,hash){
     const {p}=this.runtime.scope(owner,botId),row=this.runtime.hub.db.prepare('SELECT * FROM portable_mailbox WHERE operation_id=?').get(operationId);
@@ -94,6 +151,7 @@ export class HubCollaboration extends Collaboration {
       if(!delivery||delivery.botId!==botId||fingerprint(roomDeliverySource(delivery))!==fingerprint(roomDeliverySource(payload.params.delivery))||fingerprint(post)!==fingerprint(payload.params.post))throw Error('Original canonical room source changed.');
       const room=this.ownedRoom(delivery.roomId);
       return {operationId,fingerprint:hash,botId,epoch,controlRevision:p.control_revision,room,post,delivery,
+        ...(delivery.answerKey?{answer:this.store.get('collaborationAnswer',delivery.answerKey)?.portableAnswer}:{}),
         canDispatch:!p.stopped&&this.runtime.router.connection(p)?.portableHello?.capabilities?.centralRoomDispatch===true&&delivery.state==='queued'&&this.allowed(delivery)};
     });
   }
@@ -143,7 +201,9 @@ export class HubCollaboration extends Collaboration {
         this.ownedBot(d.botId);const room=this.ownedRoom(d.roomId),post=this.store.get('collaborationPost',d.postId);
         if(!post||!['task','question'].includes(post.kind)||!post.recipients.includes(d.botId)||this.store.operation(d.id))return;
         if(this.runtime.hub.db.prepare("SELECT 1 FROM portable_mailbox WHERE bot_id=? AND state IN ('queued','received','unknown') LIMIT 1").get(d.botId))return;
-        const command=this.runtime.hub.enqueueOn(this.store.db,p.owner,d.botId,d.id,{method:'portable.roomDispatch',params:{room,post,delivery:d}});
+        const answer=d.answerKey?this.store.get('collaborationAnswer',d.answerKey)?.portableAnswer:null;
+        if(d.answerKey&&!answer)return;
+        const command=this.runtime.hub.enqueueOn(this.store.db,p.owner,d.botId,d.id,{method:'portable.roomDispatch',params:{room,post,delivery:d,...(answer?{answer}:{})}});
         this.store.saveOperation(d.id,command.fingerprint,'dispatching',{method:'collaboration.dispatch',botId:d.botId,portableFingerprint:command.fingerprint,deliveryId:d.id,contextId:d.contextId,createdAt:now()});
         this.publish(d.roomId,{delivery:this.publicDelivery(d)});
         this.store.afterCommit(()=>this.runtime.router.connection(current)?.send(boundedFrame({type:'sync',...this.runtime.hub.sync(current.node_id)})));
@@ -169,10 +229,18 @@ export class HubCollaboration extends Collaboration {
         // A tool confirmation can precede the transport ACK. A later snapshot
         // of the same original receipt must not regress a newer native context.
         if(!prior||prior.generation<=c.revision){
-          if(prior?.generation===c.revision&&(prior.provisioning!==c.provisioning||prior.status!==(terminal?'idle':c.status)||prior.activeTurnId!==(terminal?null:r.turnId)))throw Error('Original context revision has contradictory native status.');
-          this.store.put('collaborationContext',{...prior,...c,generation:c.revision,status:terminal?'idle':c.status,activeTurnId:terminal?null:r.turnId});
+          // Delivery completion is turn-scoped. A delayed terminal receipt for
+          // an older turn cannot clear a newer active turn in this context.
+          if(!['running','idle','unknown'].includes(c.status)||c.status==='running'&&!id(c.activeTurnId)||terminal&&c.activeTurnId===r.turnId)throw Error('Original context lacks its current native turn state.');
+          if(prior?.generation===c.revision&&(prior.provisioning!==c.provisioning||prior.status!==c.status||prior.activeTurnId!==c.activeTurnId))throw Error('Original context revision has contradictory native status.');
+          this.store.put('collaborationContext',{...prior,...c,generation:c.revision});
         }
         this.store.put('collaborationDelivery',{...d,state:terminal?'completed':'accepted',threadId:r.threadId,turnId:r.turnId,terminalStatus:terminal?status:null,evidence:'assigned-agent-original-client',error:null});
+        if(d.answerKey){
+          const answer=this.store.get('collaborationAnswer',d.answerKey);
+          if(answer?.deliveryId!==d.id)throw Error('Original owner answer receipt changed.');
+          this.store.put('collaborationAnswer',{...answer,state:'accepted',turnId:r.turnId,evidence:'assigned-agent-original-client'});this.store.remove('collaborationPending',d.answerKey);
+        }
         this.store.saveOperation(op.id,op.fingerprint,'done',{...op,result,error:null});
       }else return;
       this.publish(d.roomId,{delivery:this.publicDelivery(this.store.get('collaborationDelivery',d.id))});

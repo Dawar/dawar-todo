@@ -1,12 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { fingerprint, boundedFrame, id } from './protocol.mjs';
-import { HUB_READS,HUB_MUTATIONS } from './control-protocol.mjs';
+import { HUB_READS,HUB_MUTATIONS,ROOM_NATIVE_READS,ROOM_QUESTION_LOOKUP } from './control-protocol.mjs';
 import { DESKTOP_READS, DESKTOP_MUTATIONS, desktopCapable } from './desktop-transport.mjs';
 import {secureCapable} from './secure-transport.mjs';
 
 // Explicit method sets keep an arbitrary browser method from becoming remote
 // shell/native RPC authority. The real runtime still validates every request.
-export const AGENT_READS=new Set(['snapshot','runtime.info','work.read','goals.read','history','history.page','history.turn','history.view','history.log','history.detail','history.attachments','replies.prepare','replies.resolve','artifacts.list','artifacts.preview','events','usage.bot','usage.account','usage.history','attachments.read','inbox.list','runs.page','runs.turns','runs.receipt','runs.requests','runs.findings','runs.decisions','execution.config','secure.list',...DESKTOP_READS]);
+export const AGENT_READS=new Set(['snapshot','runtime.info','work.read','goals.read','history','history.page','history.turn','history.view','history.log','history.detail','history.attachments','replies.prepare','replies.resolve','artifacts.list','artifacts.preview','events','usage.bot','usage.account','usage.history','attachments.read','inbox.list','runs.page','runs.turns','runs.receipt','runs.requests','runs.findings','runs.decisions','execution.config','secure.list','portable.roomQuestion',...ROOM_NATIVE_READS,...DESKTOP_READS]);
 export const AGENT_MUTATIONS=new Set(['turn.send','turn.interrupt','requests.respond','bots.update','goals.set','goals.clear','artifacts.index',...DESKTOP_MUTATIONS]);
 const NATIVE_SNAPSHOT=Symbol('assigned-native-snapshot');
 export class HubRpc {
@@ -18,26 +18,31 @@ export class HubRpc {
     // projection. A supplied bot ID cannot expose a raw node-wide snapshot.
     if(request.method==='snapshot'&&internal!==NATIVE_SNAPSHOT)return this.snapshot(owner,clientId);
     if(request.method==='events')return {result:this.store.events(owner,request.params?.after??0,request.params?.limit??40).events};
+    if(request.method==='portable.roomQuestion'&&internal!==ROOM_QUESTION_LOOKUP)throw Object.assign(Error('Question lookup is an authenticated original-answer preparation only.'),{outcome:'not-sent'});
     if(HUB_READS.has(request.method)||HUB_MUTATIONS.has(request.method)){
       if(!this.controls)throw Object.assign(Error('Hub logical controls are unavailable.'),{outcome:'not-sent'});
       return {result:await this.controls.request(owner,request.method==='bursts.typing'?{...request,params:{...request.params,clientId}}:request)};
     }
     const p=this.store.placement(owner,request.botId),ws=this.connection(p);
+    const roomScope=ROOM_NATIVE_READS.has(request.method)||request.method==='portable.roomQuestion'||request.method==='execution.config'&&request.params?.contextId?
+      this.controls?.collaboration.nativeScope(owner,request.botId,request.params?.contextId):null;
+    if((ROOM_NATIVE_READS.has(request.method)||request.method==='portable.roomQuestion')&&!roomScope)throw Object.assign(Error('Original hub room scope is unavailable.'),{outcome:'not-sent'});
     if(request.method==='secure.list'&&!secureCapable(this.store.node(p.node_id),ws))throw Object.assign(Error('Private form state requires the live assigned Linux node.'),{outcome:'not-sent'});
     if((DESKTOP_READS.has(request.method)||DESKTOP_MUTATIONS.has(request.method))&&!desktopCapable(this.store.node(p.node_id),ws))
       throw Object.assign(Error('The assigned Linux desktop is offline or unavailable.'),{outcome:'not-sent'});
     if(AGENT_READS.has(request.method)){
-      const binding=fingerprint(request.params??{}),cached=this.store.db.prepare('SELECT result,observed_at FROM portable_rpc_cache WHERE owner=? AND bot_id=? AND epoch=? AND method=? AND params_hash=?').get(owner,p.bot_id,p.epoch,request.method,binding);
+      const binding=fingerprint(roomScope?{params:request.params??{},roomScope}:request.params??{}),cached=this.store.db.prepare('SELECT result,observed_at FROM portable_rpc_cache WHERE owner=? AND bot_id=? AND epoch=? AND method=? AND params_hash=?').get(owner,p.bot_id,p.epoch,request.method,binding);
       if(!ws){
+        if(request.method==='portable.roomQuestion')throw Object.assign(Error('Answer preparation requires its live assigned question source.'),{outcome:'not-sent'});
         if(!cached)throw Object.assign(Error('Assigned node is offline; no matching cached history is available.'),{outcome:'not-sent'});
         return {result:JSON.parse(cached.result),cache:{observedAt:cached.observed_at,stale:true,nodeId:p.node_id,epoch:p.epoch}};
       }
       const rpcId=`rpc:${randomUUID()}`;
       const promise=new Promise((resolve,reject)=>{
         const timer=setTimeout(()=>{this.reads.delete(rpcId);reject(Object.assign(Error('Node read timed out; the conversation was not changed.'),{outcome:'not-sent'}));},15000);
-        this.reads.set(rpcId,{nodeId:p.node_id,botId:p.bot_id,epoch:p.epoch,owner,method:request.method,binding,socket:ws,resolve,reject,timer});
+        this.reads.set(rpcId,{nodeId:p.node_id,botId:p.bot_id,epoch:p.epoch,owner,method:request.method,binding,socket:ws,roomScope,resolve,reject,timer});
       });
-      ws.send(boundedFrame({type:'rpc',rpcId,botId:p.bot_id,epoch:p.epoch,method:request.method,params:request.params??{},clientId}));
+      ws.send(boundedFrame({type:'rpc',rpcId,botId:p.bot_id,epoch:p.epoch,method:request.method,params:request.params??{},clientId,...(roomScope?{roomScope}:{})}));
       return promise;
     }
     if(!AGENT_MUTATIONS.has(request.method))throw Object.assign(Error('This portable control has not yet passed compatibility validation.'),{outcome:'not-sent'});
@@ -78,8 +83,14 @@ export class HubRpc {
     if(r.nodeId!==nodeId||p.node_id!==nodeId||p.epoch!==r.epoch||m.epoch!==r.epoch||m.botId!==r.botId||this.connections.get(nodeId)!==r.socket)throw Error('Foreign or stale node response.');
     clearTimeout(r.timer);this.reads.delete(m.rpcId);
     if(m.error)return r.reject(Object.assign(Error(m.error),{outcome:'not-sent'}));
-    try{this.controls?.projectRead(r.botId,r.method,m.result);}catch(error){return r.reject(Object.assign(error,{outcome:'not-sent'}));}
-    const text=boundedFrame(m.result);
+    try{
+      if(r.roomScope){
+        if(fingerprint(m.roomScope)!==fingerprint(r.roomScope)||fingerprint(this.controls.collaboration.nativeScope(r.owner,r.botId,r.roomScope.contextId))!==fingerprint(r.roomScope))throw Error('Room identity or membership changed during native read.');
+        this.controls.collaboration.captureRead(r.owner,r.nodeId,r.botId,r.epoch,r.method,r.roomScope,m.result);
+      }
+      this.controls?.projectRead(r.botId,r.method,m.result);
+    }catch(error){return r.reject(Object.assign(error,{outcome:'not-sent'}));}
+    let text;try{text=boundedFrame(m.result);}catch(error){return r.reject(Object.assign(error,{outcome:'not-sent'}));}
     // RAM tickets and screenshots must not become durable history/cache or
     // remain usable after reconnect. The browser gets this one live response.
     if(DESKTOP_READS.has(r.method)||r.method==='secure.list')return r.resolve({result:m.result});

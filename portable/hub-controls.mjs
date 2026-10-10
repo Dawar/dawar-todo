@@ -110,7 +110,7 @@ export class HubControls extends EventEmitter {
   async request(owner,{method,botId,params={},operationId},caller={kind:'owner'}) {
     const {b}=this.scope(owner,botId);
     if(!params||typeof params!=='object'||Array.isArray(params))throw Error('Invalid logical control parameters.');
-    if(HUB_ROOM_READS.has(method)||HUB_ROOM_MUTATIONS.has(method))return this.collaboration.request(owner,{method,botId,params,operationId},caller);
+    if(HUB_ROOM_READS.has(method)||HUB_ROOM_MUTATIONS.has(method)||method==='conversations.respond')return this.collaboration.request(owner,{method,botId,params,operationId},caller);
     if(method==='bursts.read')return this.bursts.read(b);
     if(method==='bursts.typing'){
       if(caller.kind!=='owner')throw Error('Typing belongs to the authenticated owner browser.');

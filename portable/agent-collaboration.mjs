@@ -2,7 +2,7 @@ import {AsyncLocalStorage} from 'node:async_hooks';
 import {createHash} from 'node:crypto';
 import {fingerprint,id,originalNativeProof} from './protocol.mjs';
 import {nativeAdmissionRefusal} from '../bot-bridge/native-admission-refusal.mjs';
-import {roomDeliverySource,HUB_ROOM_TOOL_METHODS,HUB_ROOM_READS,LOCAL_ROOM_TOOL_METHODS} from './control-protocol.mjs';
+import {roomDeliverySource,roomQuestionSource,HUB_ROOM_TOOL_METHODS,HUB_ROOM_READS,LOCAL_ROOM_TOOL_METHODS} from './control-protocol.mjs';
 
 const now=()=>new Date().toISOString();
 const hash=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -85,6 +85,21 @@ export class AgentCollaboration {
     // actual machine. Reuse their original caller/effect/uncertainty closures.
     return this.localHandle(request,origin);
   }
+  async readOwner(method,botId,params,scope){
+    const {runtime,journal,transport}=this,c=runtime.store.get('collaborationContext',params?.contextId);
+    if(!scope||scope.botId!==botId||scope.contextId!==params?.contextId||scope.nodeId!==transport.enrollment.nodeId||
+        !journal.currentControl({bot_id:botId,epoch:scope.placementEpoch})||!c||c.botId!==botId||c.id!==scope.contextId||c.roomId!==scope.roomId||c.threadId!==scope.threadId||c.provisioning!=='bound')throw defer('Native room read lacks its original assigned context.');
+    let result;
+    if(method==='portable.roomQuestion'){
+      if(Object.keys(params).some(k=>!['contextId','key'].includes(k))||typeof params.key!=='string'||params.key.length>1000)throw defer('Use the bounded original question key.');
+      const pending=runtime.store.get('collaborationPending',params.key);
+      if(pending&&(pending.botId!==botId||pending.contextId!==c.id||pending.threadId!==c.threadId))throw defer('Question belongs to another original context.');
+      result={pending:pending??null};
+    }else result=await this.localHandle({method,botId,params,clientId:`hub:${transport.enrollment.nodeId}`});
+    const after=runtime.store.get('collaborationContext',c.id);
+    if(after?.threadId!==scope.threadId||after.botId!==botId||!journal.currentControl({bot_id:botId,epoch:scope.placementEpoch}))throw defer('Original context or placement changed during native read.');
+    return {...result,context:runtime.collaboration.publicContext(after),...(['portable.roomQuestion','conversations.requests'].includes(method)?{agentEpoch:runtime.epoch}:{})};
+  }
   async refresh(captured){
     const {command,delivery,post}=captured,{runtime,journal,transport}=this;
     const before=journal.currentControl(command);
@@ -97,6 +112,11 @@ export class AgentCollaboration {
         current.controlRevision!==after.revision||!current.canDispatch||
         fingerprint(roomDeliverySource(current.delivery))!==fingerprint(roomDeliverySource(delivery))||
         fingerprint(current.post)!==fingerprint(post))throw nativeAdmissionRefusal('Canonical room/control/source changed before native admission.');
+    if(delivery.answerKey&&fingerprint(current.answer)!==fingerprint(captured.portableAnswer))throw nativeAdmissionRefusal('Original owner answer/question changed before native admission.');
+    if(captured.answer){
+      const pending=runtime.store.get('collaborationPending',delivery.answerKey)??runtime.store.get('collaborationAnswer',delivery.answerKey)?.pending;
+      if(!pending||pending.unavailable||fingerprint(roomQuestionSource(pending))!==fingerprint(roomQuestionSource(captured.answer.pending)))throw nativeAdmissionRefusal('Original native question changed before answer admission.');
+    }
     const local=runtime.store.get('collaborationRoom',delivery.roomId);
     if(local&&local.revision>current.room.revision)throw nativeAdmissionRefusal('An older room projection cannot replace the current owner choice.');
     if(local&&local.revision===current.room.revision&&fingerprint(local)!==fingerprint(current.room))throw nativeAdmissionRefusal('Original room revision has conflicting bytes.');
@@ -105,16 +125,29 @@ export class AgentCollaboration {
   }
   validate(command,payload){
     const {room,post,delivery}=payload.params??{},bot=this.runtime.store.bot(command.bot_id);
+    const answerKey=delivery?.answerKey;
     if(payload.method!=='portable.roomDispatch'||!room||!post||!delivery||delivery.id!==command.operation_id||
         delivery.botId!==bot.id||delivery.roomId!==room.id||delivery.postId!==post.id||post.roomId!==room.id||
-        post.id!==`post:${hash(post.operationId)}`||delivery.id!==`room-input:${hash([post.id,bot.id])}`||
+        post.id!==(answerKey?`post:answer:${hash(answerKey)}`:`post:${hash(post.operationId)}`)||delivery.id!==(answerKey?`room-answer:${hash(answerKey)}`:`room-input:${hash([post.id,bot.id])}`)||
         delivery.contextId!==`context:${hash([room.id,bot.id])}`||delivery.clientId!==delivery.id||delivery.operationId!==post.operationId||
         !['task','question'].includes(post.kind)||typeof post.text!=='string'||!post.text.trim()||Buffer.byteLength(post.text)>16*1024||
         !Array.isArray(room.members)||room.members.length<2||room.members.length>12||new Set(room.members).size!==room.members.length||
         !room.members.includes(bot.id)||!Array.isArray(post.recipients)||!post.recipients.includes(bot.id)||
         delivery.state!=='queued'||!id(room.id)||!id(post.id)||!id(delivery.contextId)||!id(post.operationId))
       throw Object.assign(Error('Room delivery is outside its canonical original source.'),{outcome:'rejected'});
-    return {command,delivery,post,room,prepared:false,nativeStarted:false};
+    let answer;
+    if(answerKey){
+      const portable=payload.params.answer,q=portable?.question,pending=this.runtime.store.get('collaborationPending',answerKey)??this.runtime.store.get('collaborationAnswer',answerKey)?.pending;
+      if(!q||!pending||pending.unavailable||q.async!==true||q.key!==answerKey||q.contextId!==delivery.contextId||q.botId!==bot.id||q.roomId!==room.id||
+          post.requestId!==answerKey||post.author?.kind!=='owner'||post.kind!=='question'||post.expectation!=='none'||post.recipients.length!==1||
+          fingerprint(roomQuestionSource(q))!==fingerprint(roomQuestionSource(pending)))throw Object.assign(Error('Owner answer lacks its unchanged original public native question.'),{outcome:'rejected'});
+      const result=this.runtime.collaboration.validate(q.request,portable.result),body=q.request.params.questions.map(q=>`${q.question}\n${result.answers[q.id].answers.join('\n')}`).join('\n\n');
+      if(body!==post.text)throw Object.assign(Error('Owner answer bytes differ from their original checked question/result.'),{outcome:'rejected'});
+      answer={id:answerKey,botId:bot.id,contextId:q.contextId,fingerprint:hash({key:answerKey,result}),pending,deliveryId:delivery.id,state:'queued',operationId:post.operationId};
+      const old=this.runtime.store.get('collaborationAnswer',answerKey);
+      if(old&&(old.operationId!==answer.operationId||old.fingerprint!==answer.fingerprint||old.deliveryId!==delivery.id))throw unknown('Another original answer receipt owns this question.');
+    }else if(payload.params.answer)throw Object.assign(Error('An ordinary room input cannot borrow answer authority.'),{outcome:'rejected'});
+    return {command,delivery,post,room,answer,portableAnswer:payload.params.answer,prepared:false,nativeStarted:false};
   }
   result(command){
     const {store}=this.runtime,d=store.get('collaborationDelivery',command.operation_id),c=d&&store.get('collaborationContext',d.contextId);
@@ -151,6 +184,7 @@ export class AgentCollaboration {
       store.transaction(()=>{
         store.put('collaborationPost',captured.post);
         if(!local)store.put('collaborationDelivery',{...captured.delivery,portableFingerprint:command.fingerprint});
+        if(captured.answer&&!store.get('collaborationAnswer',captured.answer.id))store.put('collaborationAnswer',captured.answer);
       });
       try{await this.scope.run(captured,()=>collaboration.submit(store.get('collaborationDelivery',captured.delivery.id)));}
       catch(error){if(!captured.prepared)throw defer(error.message);throw error;}
