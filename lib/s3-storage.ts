@@ -1,6 +1,8 @@
 import { replayableStorageFetch } from "./storage-transfer";
+import { originalStorageUploadProxy } from './storage-upload-proxy';
 /** Private SigV4 signing shared by Todo and bot storage. Never send this environment to clients. */
-export type S3Environment = { S3_ACCESS_KEY: string; S3_ACCESS_KEY_ID: string; S3_BUCKET: string; S3_ENDPOINT_URL: string };
+export type S3Environment = { S3_ACCESS_KEY: string; S3_ACCESS_KEY_ID: string; S3_BUCKET: string; S3_ENDPOINT_URL: string;
+  MIGRATION_STORAGE_UPLOAD_PROXY?:string; MIGRATION_SOURCE_WRITER_ADMISSION?:string; MIGRATION_SOURCE_INSTALLATION_LINEAGE?:string };
 type StorageConfig = { bucket: string; endpoint: URL; region: string };
 export class PrivateStorageError extends Error {
   readonly attachmentPhase = "storage";
@@ -272,10 +274,12 @@ async function signedPostTarget(key: string, contentType: string, maximumBytes: 
     ],
   }));
   const signingKey = await signatureKey(date, region);
-  return {
+  const provider = {
     url: new URL(`https://${bucket}.${endpoint.hostname}/`).toString(),
     fields: { ...fields, policy, "x-amz-signature": hex(await hmac(signingKey, policy)) },
   };
+  const proxy=originalStorageUploadProxy(environment);
+  return proxy ? proxy.target(provider,{minimumBytes,maximumBytes}) : provider;
 }
 
 
