@@ -6,7 +6,6 @@ import { artifactInput } from './node-storage-contract.mjs';
 export class HubNodeStorage {
   constructor({hub,controls,application,objects,config}){
     Object.assign(this,{hub,controls,application,objects,config});
-    hub.db.exec('CREATE TABLE IF NOT EXISTS portable_storage_operations(id TEXT PRIMARY KEY,node_id TEXT NOT NULL,bot_id TEXT NOT NULL,epoch INTEGER NOT NULL,action TEXT NOT NULL,fingerprint TEXT NOT NULL,state TEXT NOT NULL)');
     const assertStorageWriter=objects.assertWriter;
     objects.assertWriter=()=>{if(objects.writer)assertStorageWriter();this.controls.assertWriter();};
     objects.authorizeNode=scope=>{this.controls.assertWriter();return this.scope(scope.nodeId,scope.botId,scope.epoch);};
@@ -38,9 +37,11 @@ export class HubNodeStorage {
     const immutable=action==='prepare'?Object.fromEntries(['id','botId','name','size','mimeType','sha256','artifact','source','parentId'].filter(k=>input[k]!==undefined).map(k=>[k,input[k]])):input;
     const hash=fingerprint({scope,action,input:immutable});
     if(mutation){
-      const prior=this.hub.db.prepare('SELECT * FROM portable_storage_operations WHERE id=?').get(operationId);
-      if(prior&&prior.fingerprint!==hash)throw Error('Original artifact operation changed; retain its original file.');
-      this.hub.db.prepare("INSERT OR IGNORE INTO portable_storage_operations VALUES(?,?,?,?,?,?,'pending')").run(operationId,nodeId,botId,epoch,action,hash);
+      this.hub.transaction(()=>{
+        this.scope(nodeId,botId,epoch);const prior=this.hub.db.prepare('SELECT * FROM portable_storage_operations WHERE id=?').get(operationId);
+        if(prior&&prior.fingerprint!==hash)throw Error('Original artifact operation changed; retain its original file.');
+        this.hub.db.prepare("INSERT OR IGNORE INTO portable_storage_operations VALUES(?,?,?,?,?,?,'pending')").run(operationId,nodeId,botId,epoch,action,hash);
+      });
     }
     try{
       const storage=new BotStorage(this.environment,this.config.owner.key,true);await storage.initialize();this.scope(nodeId,botId,epoch);
@@ -52,10 +53,12 @@ export class HubNodeStorage {
       else if(action==='finalize')result=await storage.finalize(input.id,botId);
       else if(action==='taskQueueExport')result=await new TaskQueueExports(this.environment,this.config.owner.key).resolve(input.taskExportId,botId);
       else result=await storage.download(input.id,botId,action==='preview');
-      this.scope(nodeId,botId,epoch);if(mutation){this.controls.assertWriter();this.hub.db.prepare("UPDATE portable_storage_operations SET state='done' WHERE id=? AND fingerprint=?").run(operationId,hash);}
+      this.scope(nodeId,botId,epoch);if(mutation)this.hub.transaction(()=>{
+        this.scope(nodeId,botId,epoch);this.hub.db.prepare("UPDATE portable_storage_operations SET state='done' WHERE id=? AND fingerprint=?").run(operationId,hash);
+      });
       return this.grantResult(result,scope,input);
     }catch(error){
-      if(mutation)this.hub.db.prepare("UPDATE portable_storage_operations SET state='unknown' WHERE id=? AND state<>'done'").run(operationId);
+      if(mutation)try{this.hub.transaction(()=>this.hub.db.prepare("UPDATE portable_storage_operations SET state='unknown' WHERE id=? AND state<>'done' AND fingerprint=?").run(operationId,hash));}catch{/* A frozen writer retains its original pending receipt; never infer completion. */}
       if(error instanceof StorageError)throw error;
       throw Error('Registered file confirmation is unavailable; retain its original ID and local bytes.');
     }

@@ -1,5 +1,20 @@
 import { readPrivate } from './private-file.mjs';
 import { id } from './protocol.mjs';
+import { constants as sql } from 'node:sqlite';
+
+export function controlWriteGuard(db,{writeScope,transactionScope}) {
+  if(typeof db.setAuthorizer!=='function')throw Error('Fenced control SQLite requires Node 24.10+.');
+  const authorize=(action,table)=>{
+    if([sql.SQLITE_SELECT,sql.SQLITE_READ,sql.SQLITE_FUNCTION,sql.SQLITE_RECURSIVE].includes(action))return sql.SQLITE_OK;
+    if([sql.SQLITE_TRANSACTION,sql.SQLITE_SAVEPOINT].includes(action))return transactionScope()?sql.SQLITE_OK:sql.SQLITE_DENY;
+    if(action===sql.SQLITE_PRAGMA&&['table_info','table_xinfo','table_list','index_list','index_info','index_xinfo','foreign_key_list'].includes(String(table).toLowerCase()))return sql.SQLITE_OK;
+    if([sql.SQLITE_INSERT,sql.SQLITE_UPDATE,sql.SQLITE_DELETE].includes(action)&&table!=='portable_authority'&&writeScope())return sql.SQLITE_OK;
+    return sql.SQLITE_DENY;
+  };
+  // SQLite expires retained prepared statements when the authorizer is set.
+  // Refresh at each transaction boundary, including failures and nested work.
+  const refresh=()=>db.setAuthorizer(authorize);refresh();return refresh;
+}
 
 export function hubActivation(config) {
   if(!config.hub?.activationReceipt)return null;
@@ -22,11 +37,13 @@ export class HubWriteAuthority {
   runSync(work) {
     if(this.depth){this.assertWriter();return this.synchronous(work);}
     if(this.closed||this.db.isTransaction)throw Error('Foreign or closed hub authority transaction.');
-    this.db.exec('BEGIN IMMEDIATE');this.depth++;
-    try {this.assertWriter();const result=this.synchronous(work);this.assertWriter();this.db.exec('COMMIT');return result;}
-    catch(error){if(this.db.isTransaction)this.db.exec('ROLLBACK');throw error;}
-    finally {this.depth--;}
+    this.refreshControlGuard?.();
+    this.command('BEGIN IMMEDIATE');this.depth++;
+    try {this.assertWriter();const result=this.synchronous(work);this.assertWriter();this.command('COMMIT');return result;}
+    catch(error){if(this.db.isTransaction)this.command('ROLLBACK');throw error;}
+    finally {this.depth--;this.refreshControlGuard?.();}
   }
+  command(sql) {this.managedTransaction=true;try{this.db.exec(sql);}finally{this.managedTransaction=false;}}
   synchronous(work) {
     const result=work();
     if(result&&typeof result.then==='function')throw Error('Do not await work under the hub writer lock.');

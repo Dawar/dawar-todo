@@ -1,4 +1,5 @@
 import { privateDatabase } from './sqlite.mjs';
+import { controlWriteGuard } from './hub-authority.mjs';
 import { boundedFrame, canonical, compatible, digest, fingerprint, id, originalNativeProof,originalLocalControlProof,publicFingerprint, secret, verifySignature } from './protocol.mjs';
 
 const transitions = {
@@ -23,14 +24,30 @@ export class HubStore {
       CREATE TABLE IF NOT EXISTS portable_authority(id INTEGER PRIMARY KEY CHECK(id=1), writer_id TEXT NOT NULL, epoch INTEGER NOT NULL, frozen INTEGER NOT NULL DEFAULT 1);
       CREATE TABLE IF NOT EXISTS portable_rpc_cache(owner TEXT NOT NULL,bot_id TEXT NOT NULL,epoch INTEGER NOT NULL,method TEXT NOT NULL,params_hash TEXT NOT NULL,result TEXT NOT NULL,observed_at INTEGER NOT NULL,PRIMARY KEY(owner,bot_id,epoch,method,params_hash));
       CREATE TABLE IF NOT EXISTS portable_tickets(jti TEXT PRIMARY KEY,expires_at INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS portable_storage_operations(id TEXT PRIMARY KEY,node_id TEXT NOT NULL,bot_id TEXT NOT NULL,epoch INTEGER NOT NULL,action TEXT NOT NULL,fingerprint TEXT NOT NULL,state TEXT NOT NULL);
     `);
   }
+  bindWriter(writer) {
+    if(this.writer||writer.db!==this.db||typeof this.db.setAuthorizer!=='function')throw Error('Exact control database and Node 24.10+ writer binding required.');
+    this.writer=writer;
+    this.refreshGuard=controlWriteGuard(this.db,{writeScope:()=>writer.depth>0,transactionScope:()=>writer.managedTransaction===true});
+    writer.refreshControlGuard=this.refreshGuard;
+  }
   transaction(fn) {
+    if(this.writer){
+      // Re-authorize retained prepared statements at both boundaries. A write
+      // compiled during an admitted transaction cannot escape its lock later.
+      this.refreshGuard();
+      try{return this.writer.runSync(fn);}finally{this.refreshGuard();}
+    }
     this.db.exec('BEGIN IMMEDIATE');
-    try { const value = fn(); this.db.exec('COMMIT'); return value; }
+    try { const value = fn(); if(value&&typeof value.then==='function')throw Error('Control transactions must be synchronous.');this.db.exec('COMMIT'); return value; }
     catch (error) { this.db.exec('ROLLBACK'); throw error; }
   }
   grantEnrollment(owner, approvedFingerprint, now = Date.now(), operationId = null, retryToken = null) {
+    return this.transaction(()=>this.grantEnrollmentOn(owner,approvedFingerprint,now,operationId,retryToken));
+  }
+  grantEnrollmentOn(owner, approvedFingerprint, now, operationId, retryToken) {
     if (!owner || !/^[a-f0-9]{64}$/.test(approvedFingerprint)) throw Error('Owner and confirmed node fingerprint required.');
     if(operationId && (!id(operationId)||typeof retryToken!=='string'||retryToken.length>100))throw Error('Invalid enrollment operation.');
     const token = retryToken ?? secret(), grantId = operationId ? `enroll:${operationId}` : `enroll:${secret()}`;
@@ -87,8 +104,10 @@ export class HubStore {
     return n;
   }
   revoke(owner, nodeId, now = Date.now()) {
-    const n = this.node(nodeId); if (n.owner !== owner) throw Error('Foreign node.');
-    this.db.prepare('UPDATE portable_nodes SET revoked_at=? WHERE id=?').run(now, nodeId);
+    return this.transaction(()=>{
+      const n = this.node(nodeId); if (n.owner !== owner) throw Error('Foreign node.');
+      this.db.prepare('UPDATE portable_nodes SET revoked_at=? WHERE id=?').run(now, nodeId);
+    });
   }
   place(owner, botId, nodeId, expectedEpoch = null) {
     if (!id(botId)) throw Error('Invalid bot identity.');
@@ -109,10 +128,12 @@ export class HubStore {
     this.node(p.node_id); return p;
   }
   stop(owner, botId, stopped) {
-    this.placement(owner, botId);
-    if (typeof stopped !== 'boolean') throw Error('Explicit Stop state required.');
-    this.db.prepare('UPDATE portable_placements SET stopped=?,control_revision=control_revision+1 WHERE bot_id=?').run(Number(stopped), botId);
-    return this.placement(owner, botId);
+    return this.transaction(()=>{
+      this.placement(owner, botId);
+      if (typeof stopped !== 'boolean') throw Error('Explicit Stop state required.');
+      this.db.prepare('UPDATE portable_placements SET stopped=?,control_revision=control_revision+1 WHERE bot_id=?').run(Number(stopped), botId);
+      return this.placement(owner, botId);
+    });
   }
   enqueue(owner, botId, operationId, payload, now = Date.now()) {
     return this.transaction(()=>this.enqueueOn(this.db,owner,botId,operationId,payload,now));
@@ -163,6 +184,9 @@ export class HubStore {
     });
   }
   event(nodeId, eventId, botId, epoch, event, now = Date.now()) {
+    return this.transaction(()=>this.eventOn(nodeId,eventId,botId,epoch,event,now));
+  }
+  eventOn(nodeId, eventId, botId, epoch, event, now) {
     const n = this.node(nodeId), p = this.placement(n.owner, botId);
     if (!id(eventId) || p.node_id !== nodeId || p.epoch !== epoch) throw Error('Foreign event.');
     if(event?.botId!==botId||typeof event.type!=='string'||!Number.isSafeInteger(event.seq)||event.seq<1)throw Error('Native event scope or sequence invalid.');

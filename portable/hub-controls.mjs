@@ -13,6 +13,7 @@ import { replyInputText } from '../lib/bot-replies.ts';
 import { activityUnresolved } from '../bot-bridge/turn-state.mjs';
 import { boundedFrame,fingerprint,id } from './protocol.mjs';
 export { hubActivation } from './hub-authority.mjs';
+import { controlWriteGuard } from './hub-authority.mjs';
 import { HUB_READS,HUB_MUTATIONS,HUB_TOOLS,NODE_LOGICAL_COMMANDS } from './control-protocol.mjs';
 
 export { HUB_READS,HUB_MUTATIONS,HUB_TOOLS,NODE_LOGICAL_COMMANDS };
@@ -31,7 +32,20 @@ export class HubControls extends EventEmitter {
     this.defaults=this.store.meta('portable-defaults')??{};
     this.executionConfig=new ExecutionConfiguration(this);this.plans=new PlanLifecycle(this);
     const transaction=this.store.transaction.bind(this.store);
-    this.store.transaction=fn=>transaction(()=>{this.assertWriter();const result=fn();this.assertWriter();return result;});
+    const refresh=controlWriteGuard(this.store.db,{writeScope:()=>this.store.transactionDepth>0,transactionScope:()=>this.controlTransactionDepth>0});
+    this.store.transaction=fn=>{
+      refresh();this.controlTransactionDepth=(this.controlTransactionDepth??0)+1;
+      try{return transaction(()=>{this.assertWriter();const result=fn();this.assertWriter();return result;});}
+      finally{this.controlTransactionDepth--;refresh();}
+    };
+    // These original Store helpers also serve callers outside a larger batch.
+    // Preserve nested transactions and after-commit publication semantics.
+    for(const name of ['put','remove','saveBot','saveOperation','event']){
+      const method=this.store[name].bind(this.store);
+      this.store[name]=(...args)=>this.store.transactionDepth?method(...args):this.store.transaction(()=>method(...args));
+    }
+    const meta=this.store.meta.bind(this.store);
+    this.store.meta=(key,value)=>value===undefined||this.store.transactionDepth?meta(key,value):this.store.transaction(()=>meta(key,value));
     // A fault is retained as metadata, without spawning a bot or an ACK loop.
     this.on('fault',error=>{this.lastFault={message:error.message,at:now()};});
   }

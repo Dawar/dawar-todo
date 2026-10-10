@@ -25,8 +25,10 @@ export class OIDCIdentity {
   login(returnTo, now = Date.now()) {
     if (!this.provider.clientId || !this.provider.clientSecret) throw Error('Confidential OIDC application is not configured.');
     const state = secret(), nonce = secret(), verifier = secret();
-    this.store.db.prepare('DELETE FROM portable_login WHERE expires_at<=?').run(now);
-    this.store.db.prepare('INSERT INTO portable_login VALUES(?,?,?,?,?)').run(digest(state),nonce,verifier,returnPath(returnTo),now+300000);
+    this.store.transaction(()=>{
+      this.store.db.prepare('DELETE FROM portable_login WHERE expires_at<=?').run(now);
+      this.store.db.prepare('INSERT INTO portable_login VALUES(?,?,?,?,?)').run(digest(state),nonce,verifier,returnPath(returnTo),now+300000);
+    });
     const u = new URL(this.provider.authorize);
     u.search = new URLSearchParams({ client_id:this.provider.clientId,redirect_uri:`${this.config.publicOrigin}/auth/callback`,
       response_type:'code',scope:'openid email',state,nonce,code_challenge:createHash('sha256').update(verifier).digest('base64url'),code_challenge_method:'S256' }).toString();
@@ -72,8 +74,10 @@ export class OIDCIdentity {
     const body=await boundedJSON(response,64*1024);
     const identity = await this.validateToken(body.id_token,row.nonce,now);
     const session = secret(), csrf = secret();
-    this.store.db.prepare('DELETE FROM portable_sessions WHERE expires_at<=?').run(now);
-    this.store.db.prepare('INSERT INTO portable_sessions VALUES(?,?,?,?,?)').run(digest(session),identity.owner,identity.userId,csrf,now+12*3600000);
+    this.store.transaction(()=>{
+      this.store.db.prepare('DELETE FROM portable_sessions WHERE expires_at<=?').run(now);
+      this.store.db.prepare('INSERT INTO portable_sessions VALUES(?,?,?,?,?)').run(digest(session),identity.owner,identity.userId,csrf,now+12*3600000);
+    });
     return { location:row.return_to,cookies:[cookie(COOKIE,session,12*3600),cookie(LOGIN_COOKIE,'',0),csrfCookie(csrf)] };
   }
   session(request, now = Date.now()) {
@@ -87,7 +91,7 @@ export class OIDCIdentity {
   }
   logout(request) {
     const token = cookies(request.headers.get('cookie'))[COOKIE];
-    if (token) this.store.db.prepare('DELETE FROM portable_sessions WHERE hash=?').run(digest(token));
+    if (token) this.store.transaction(()=>this.store.db.prepare('DELETE FROM portable_sessions WHERE hash=?').run(digest(token)));
     return [cookie(COOKIE,'',0),csrfCookie('',0)];
   }
 }

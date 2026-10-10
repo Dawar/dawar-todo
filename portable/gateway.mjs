@@ -8,7 +8,7 @@ import { randomUUID,createHmac } from 'node:crypto';
 import { HubStore } from './control-store.mjs';
 import { LocalD1 } from './sqlite.mjs';
 import { OIDCIdentity, stripIdentity,csrfCookie } from './identity.mjs';
-import { compatible, MAX_FRAME_BYTES, secret, verifySignature } from './protocol.mjs';
+import { boundedFrame,compatible, MAX_FRAME_BYTES, secret, verifySignature } from './protocol.mjs';
 import { appAccessResponse } from '../worker/access.ts';
 import { signGateway } from './gateway-proof.ts';
 import { ObjectStorage } from './object-storage.mjs';
@@ -29,6 +29,7 @@ async function readBody(req) {
 export function startGateway(config) {
   const store = new HubStore(join(config.dataDirectory,'control.sqlite'));
   const authority=hubActivation(config),writer=new HubWriteAuthority(store.db,authority);
+  store.bindWriter(writer);
   const application = new LocalD1(join(config.dataDirectory,'application.sqlite'),{writer});
   const identity = new OIDCIdentity(store,config);
   const objects = new ObjectStorage(config,{writer});
@@ -174,9 +175,11 @@ export function startGateway(config) {
             if(!authenticated){
               if(m.type!=='auth'||m.desktop||m.role==='task-request')throw Error('Unsupported portable browser role.');
               const ticket=await verifyBotTicket(m.ticket,config.gatewaySecret,config.applicationEnvironment?.BOTS_MACHINE_ID??'dawar-vm');
-              if(ticket.owner!==session.owner||store.db.prepare('SELECT 1 FROM portable_tickets WHERE jti=?').get(ticket.jti))throw Error('Foreign or reused ticket.');
-              store.db.prepare('DELETE FROM portable_tickets WHERE expires_at<=?').run(Date.now());
-              store.db.prepare('INSERT INTO portable_tickets VALUES(?,?)').run(ticket.jti,ticket.exp*1000);
+              store.transaction(()=>{
+                if(ticket.owner!==session.owner||store.db.prepare('SELECT 1 FROM portable_tickets WHERE jti=?').get(ticket.jti))throw Error('Foreign or reused ticket.');
+                store.db.prepare('DELETE FROM portable_tickets WHERE expires_at<=?').run(Date.now());
+                store.db.prepare('INSERT INTO portable_tickets VALUES(?,?)').run(ticket.jti,ticket.exp*1000);
+              });
               authenticated=true;expiresAt=ticket.sessionExp*1000;clearTimeout(timeout);browsers.add({ws,owner:session.owner});
               send({type:'authenticated',role:'browser',online:true,expiresAt,clientId});return;
             }

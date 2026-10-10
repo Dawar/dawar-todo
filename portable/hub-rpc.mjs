@@ -72,9 +72,13 @@ export class HubRpc {
     if(m.error)return r.reject(Object.assign(Error(m.error),{outcome:'not-sent'}));
     try{this.controls?.projectRead(r.botId,r.method,m.result);}catch(error){return r.reject(Object.assign(error,{outcome:'not-sent'}));}
     const text=boundedFrame(m.result);
-    this.store.db.prepare('INSERT INTO portable_rpc_cache VALUES(?,?,?,?,?,?,?) ON CONFLICT(owner,bot_id,epoch,method,params_hash) DO UPDATE SET result=excluded.result,observed_at=excluded.observed_at').run(r.owner,r.botId,r.epoch,r.method,r.binding,text,Date.now());
-    // Bounded cache: history lives on the node, not an unbounded hub duplicate.
-    this.store.db.prepare('DELETE FROM portable_rpc_cache WHERE rowid IN (SELECT rowid FROM portable_rpc_cache ORDER BY observed_at DESC LIMIT -1 OFFSET 256)').run();
+    try{this.store.transaction(()=>{
+      const current=this.store.placement(r.owner,r.botId);
+      if(current.node_id!==nodeId||current.epoch!==r.epoch)throw Error('Native read placement changed before persistence.');
+      this.store.db.prepare('INSERT INTO portable_rpc_cache VALUES(?,?,?,?,?,?,?) ON CONFLICT(owner,bot_id,epoch,method,params_hash) DO UPDATE SET result=excluded.result,observed_at=excluded.observed_at').run(r.owner,r.botId,r.epoch,r.method,r.binding,text,Date.now());
+      // Bounded cache: history lives on the node, not an unbounded hub duplicate.
+      this.store.db.prepare('DELETE FROM portable_rpc_cache WHERE rowid IN (SELECT rowid FROM portable_rpc_cache ORDER BY observed_at DESC LIMIT -1 OFFSET 256)').run();
+    });}catch(error){return r.reject(Object.assign(error,{outcome:'not-sent'}));}
     r.resolve({result:m.result,cache:{observedAt:Date.now(),stale:false,nodeId,epoch:r.epoch}});
   }
   receipt(row){

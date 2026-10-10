@@ -575,8 +575,34 @@ committing, closing the check-before-lock race.
 
 This is a canonical-commit fence, not a complete all-writer cutover receipt.
 Admitted streams, content-file renames, receiving/failed-transfer cleanup and
-private upload journals still need the full filesystem drain. Authentication,
-enrollment and other direct control-store writers also need that complete
+private upload journals still need the full filesystem drain. Authentication
+network exchanges and other awaited work also need that complete
 admission coverage. The four old-production external adapters and native Goal,
 tool/queue/unknown/volatile-state guards remain mandatory. Do not switch routes,
 snapshot live writers, launch a restart or infer idle from these local checks.
+
+### Control and identity commits under the same authority
+
+The actual gateway binds HubStore to its captured writer. Login-state/session
+creation and logout, enrollment/challenges/revocation/placement/Stop, mailbox
+receipts/events, one-use browser tickets, bounded native-read cache writes and
+artifact-operation receipts all use synchronous control transactions under that
+authority. A response arriving after freeze cannot create a session, record a
+false completed artifact operation or receive a positive node receipt ACK.
+Retain the original pending/unknown identity; the failed response is not a retry.
+
+SQLite's authorizer also rejects raw control writes outside their admitted
+transaction and cannot modify the authority row through ordinary controls.
+Prepared statements are expired at transaction boundaries, including failures,
+so a statement compiled under an admitted lock cannot be reused afterward.
+Hub logical Store helpers acquire their guarded transaction even when called
+without an outer batch; existing nested transactions and after-commit callbacks
+are retained. Reads of existing sessions, mailbox state, cached events and
+logical records remain possible while held. A new remote read that requires
+cache/projection persistence may return a held error; it does not mutate cache.
+
+Schema setup is installation/staging work before these guards are bound; it is
+not an authorized live cutover mutation. Runtime guard binding does not create
+an OS sandbox or protect an arbitrary separate SQLite connection. Filesystem
+streams/private upload cleanup, voice/provider effects and the original native
+writer still require their complete admission/drain and cutover evidence.
