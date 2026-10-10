@@ -1,5 +1,15 @@
 # Portable DawarTodo
 
+Canonical room lists, bounded posts/results, membership and hold controls use
+the hub control store and the original collaboration acceptance closures. Pair
+IDs, post IDs, per-recipient delivery IDs and original operation receipts are
+preserved. Every member must belong to the authenticated hub owner, including
+historical rows returned through bounded pages. Informational posts cause no
+model delivery. Addressed posts persist as queued with truthful routing-pending
+metadata; native room dispatch/history/questions and captured bot-tool callers
+remain unfinished, and the rooms capability stays hidden until that integration
+is verified. The hub never runs the local native collaboration scheduler.
+
 The single-owner portable gateway passes its preserved owner key to Todo API
 authentication. A valid token created for another owner is rejected before
 last-used bookkeeping or site forwarding. The existing hosted entrypoint,

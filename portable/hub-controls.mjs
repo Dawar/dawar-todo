@@ -7,6 +7,7 @@ import {acceptSingleThreadOperation} from '../bot-bridge/single-thread-operation
 import {PrimaryExecution} from '../bot-bridge/primary-execution.mjs';
 import {preferencePatch} from '../bot-bridge/bot-preferences.mjs';
 import {HubBursts} from './hub-bursts.mjs';
+import {HubCollaboration} from './hub-collaboration.mjs';
 import { stagedQueue } from '../bot-bridge/prompt-queue.mjs';
 import { ownedList,publicLists,queueTool,flushDueLists } from '../bot-bridge/queue-lists.mjs';
 import { normalizeSchedule,collectDueRuns } from '../bot-bridge/schedules.mjs';
@@ -18,7 +19,7 @@ import { activityUnresolved } from '../bot-bridge/turn-state.mjs';
 import { boundedFrame,fingerprint,id } from './protocol.mjs';
 export { hubActivation } from './hub-authority.mjs';
 import { controlWriteGuard } from './hub-authority.mjs';
-import { HUB_READS,HUB_MUTATIONS,HUB_TOOLS,NODE_LOGICAL_COMMANDS,HUB_BURST_MUTATIONS } from './control-protocol.mjs';
+import { HUB_READS,HUB_MUTATIONS,HUB_TOOLS,NODE_LOGICAL_COMMANDS,HUB_BURST_MUTATIONS,HUB_ROOM_READS,HUB_ROOM_MUTATIONS } from './control-protocol.mjs';
 
 export { HUB_READS,HUB_MUTATIONS,HUB_TOOLS,NODE_LOGICAL_COMMANDS };
 const now=()=>new Date().toISOString();
@@ -36,6 +37,7 @@ export class HubControls extends EventEmitter {
     this.defaults=this.store.meta('portable-defaults')??{};
     this.executionConfig=new ExecutionConfiguration(this);this.plans=new PlanLifecycle(this);
     this.primary={single:bot=>PrimaryExecution.prototype.single(bot)};this.bursts=HubBursts.create(this);
+    this.collaboration=new HubCollaboration(this);
     const transaction=this.store.transaction.bind(this.store);
     const refresh=controlWriteGuard(this.store.db,{writeScope:()=>this.store.transactionDepth>0,transactionScope:()=>this.controlTransactionDepth>0});
     this.store.transaction=fn=>{
@@ -108,6 +110,7 @@ export class HubControls extends EventEmitter {
   async request(owner,{method,botId,params={},operationId},caller={kind:'owner'}) {
     const {b}=this.scope(owner,botId);
     if(!params||typeof params!=='object'||Array.isArray(params))throw Error('Invalid logical control parameters.');
+    if(HUB_ROOM_READS.has(method)||HUB_ROOM_MUTATIONS.has(method))return this.collaboration.request(owner,{method,botId,params,operationId},caller);
     if(method==='bursts.read')return this.bursts.read(b);
     if(method==='bursts.typing'){
       if(caller.kind!=='owner')throw Error('Typing belongs to the authenticated owner browser.');
