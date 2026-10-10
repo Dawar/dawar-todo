@@ -1,16 +1,14 @@
 // Cloudflare-compatible: no filesystem, Node APIs, raw-SQL input or writes.
 // Discovery only constructs a bounded query. The authoritative schema, versions,
-// sequences and ALL selected table data come from one SQLite SELECT statement.
+// sequences and ALL application table data come from one SQLite SELECT statement.
 const encoder = new TextEncoder();
 const bytes = value => encoder.encode(value).byteLength;
 const quoted = value => '"' + value.replaceAll('"', '""') + '"';
 const text = value => "'" + value.replaceAll("'", "''") + "'";
 const TABLE_BYTES = 1024 * 1024;
 const TOTAL_BYTES = 8 * 1024 * 1024;
-const SCHEMA = "type,name,tbl_name,sql FROM sqlite_schema WHERE sql IS NOT NULL AND lower(substr(name,1,7)) <> 'sqlite_' AND name <> '_cf_KV' ORDER BY type,name";
-const XINFO = "SELECT s.name AS table_name,p.cid,p.name,p.pk,p.hidden FROM sqlite_schema s,pragma_table_xinfo(s.name) p WHERE s.type='table' AND lower(substr(s.name,1,7)) <> 'sqlite_' AND s.name <> '_cf_KV' ORDER BY s.name,p.cid";
+const SCHEMA = "type,name,tbl_name,sql FROM sqlite_schema WHERE sql IS NOT NULL AND lower(substr(name,1,7)) <> 'sqlite_' AND lower(name) NOT IN ('_cf_kv','_cf_metadata') ORDER BY type,name";
 const objects = "json_object('type',type,'name',name,'tbl_name',tbl_name,'sql',sql)";
-const columns = "json_object('table_name',table_name,'cid',cid,'name',name,'pk',pk,'hidden',hidden)";
 const bad = (code='snapshot-shape',phase='capture') => Object.assign(
   Error('Complete D1 snapshot unavailable: schema, data or response exceeds the verified bounds.'),{snapshotCode:code,snapshotPhase:phase});
 const line = record => JSON.stringify(record) + '\n';
@@ -25,6 +23,27 @@ function cell(column) {
   // value crosses a JavaScript number/string conversion before this encoding.
   return `CASE typeof(${c})WHEN'null'THEN'N'WHEN'integer'THEN'I'||${c}` +
     ` WHEN'real'THEN'R'||printf('%!.26g',${c})WHEN'text'THEN'T'||hex(${c})ELSE'B'||hex(${c})END`;
+}
+function cells(columns) {
+  // D1 limits SQL functions to 32 arguments. Concatenate bounded JSON arrays
+  // before parsing the final array; each cell is still encoded inside SQLite.
+  const chunks = [];
+  for (let i=0;i<columns.length;i+=32) chunks.push(`json_array(${columns.slice(i,i+32).map(cell).join(',')})`);
+  return chunks.length===1 ? chunks[0] : `json(${chunks.map((chunk,i)=>i===0?`substr(${chunk},1,length(${chunk})-1)`:
+    i===chunks.length-1?`substr(${chunk},2)`:`substr(${chunk},2,length(${chunk})-2)`).join("||','||")})`;
+}
+function compound(prefix,selects) {
+  // The local Cloudflare runtime applies a tighter compound-SELECT ceiling
+  // than native SQLite. Each branch stays at four terms; all branches still
+  // belong to the SAME authoritative SQLite statement/read snapshot.
+  const declarations=[];let level=0,current=selects;
+  while(current.length>1){
+    const next=[];
+    for(let i=0;i<current.length;i+=4){const name=`${prefix}${level}_${i/4}`;
+      declarations.push(`${name} AS MATERIALIZED (${current.slice(i,i+4).join(' UNION ALL ')})`);next.push(`SELECT * FROM ${name}`);}
+    current=next;level++;
+  }
+  return {declarations,select:current[0]};
 }
 async function rows(db, sql, maximum,phase) {
   if (bytes(sql) > 100000) throw bad('query-text-bound',phase);
@@ -47,7 +66,7 @@ function validName(value) {
 export async function probeD1Application(db,signal) {
   const queries={
     schema:"SELECT type FROM sqlite_schema WHERE sql IS NOT NULL LIMIT 1",
-    columns:"SELECT p.cid FROM sqlite_schema s,pragma_table_xinfo(s.name) p WHERE s.type='table' LIMIT 1",
+    columns:'PRAGMA table_xinfo("todos")',
     tables:"SELECT wr FROM pragma_table_list LIMIT 1",
     userVersion:"SELECT user_version FROM pragma_user_version",
     applicationId:"SELECT application_id FROM pragma_application_id",
@@ -58,7 +77,7 @@ export async function probeD1Application(db,signal) {
   const supported={};
   for(const [phase,sql] of Object.entries(queries)) {
     signal?.throwIfAborted();
-    try{const result=await db.prepare(sql).all();supported[phase]=result.success===true&&Array.isArray(result.results)&&result.results.length<=1;}catch{supported[phase]=false;}
+    try{const result=await db.prepare(sql).all();supported[phase]=result.success===true&&Array.isArray(result.results)&&result.results.length<=(phase==='columns'?2000:1);}catch{supported[phase]=false;}
   }
   signal?.throwIfAborted();
   return {version:1,kind:'dawar-snapshot-compatibility',supported,applicationDataReturned:false,writerFreezeEstablished:false};
@@ -67,7 +86,16 @@ export async function probeD1Application(db,signal) {
 export async function captureD1Application(db, signal) {
   signal?.throwIfAborted();
   const plannedSchema = await rows(db, `SELECT ${SCHEMA}`, 1000,'schema');
-  const plannedColumns = await rows(db, XINFO, 4000,'columns');
+  const plannedColumns = [];
+  const plannedTableSchema=plannedSchema.filter(s=>s.type==='table');
+  if(plannedTableSchema.length>100)throw bad();
+  // D1 accepts the documented PRAGMA statement, but its authorizer refuses a
+  // dynamic table_xinfo join. Only validated names from this schema are used.
+  for(const table of plannedTableSchema){
+    signal?.throwIfAborted();validName(table.name);
+    const info=await rows(db,`PRAGMA table_xinfo(${quoted(table.name)})`,2000,'columns');
+    plannedColumns.push(...info.map(({cid,name,pk,hidden})=>({table_name:table.name,cid,name,pk,hidden})));
+  }
   const plannedTables = await rows(db, 'PRAGMA table_list', 1000,'tables');
   const hasSequence = (await rows(db, "SELECT name FROM sqlite_schema WHERE name='sqlite_sequence'", 1,'sequence')).length;
   const tables = plannedSchema.filter(s => s.type === 'table').map(s => {
@@ -98,19 +126,20 @@ export async function captureD1Application(db, signal) {
     const projection=t.columns.map((c,j)=>`${quoted(c)} AS ${quoted(aliases[j])}`).join(',');
     const order=t.order.map(c=>quoted(aliases[t.columns.indexOf(c)])).join(',');
     return `t${i} AS MATERIALIZED (SELECT row_number() OVER (ORDER BY ${order}) AS ord,` +
-      `json_object('kind','row','table',${text(t.name)},'cells',json_array(${aliases.map(cell).join(',')})) AS record FROM (SELECT ${projection} FROM ${quoted(t.name)}))`;
+      `json_object('kind','row','table',${text(t.name)},'cells',${cells(aliases)}) AS record FROM (SELECT ${projection} FROM ${quoted(t.name)}))`;
   });
   const sizes = tables.map((t,i) => `SELECT ${text(t.name)} AS name,count(*) AS n,coalesce(sum(length(CAST(record AS BLOB))+1),0) AS bytes FROM t${i}`);
-  const ctes = [...declarations, `sizes AS (${sizes.length ? sizes.join(' UNION ALL ') : "SELECT '' AS name,0 AS n,0 AS bytes WHERE 0"})`,
+  const sizeBranches=compound('s',sizes.length?sizes:["SELECT '' AS name,0 AS n,0 AS bytes WHERE 0"]);
+  const ctes = [...declarations,...sizeBranches.declarations,`sizes AS (${sizeBranches.select})`,
     `allowed AS (SELECT coalesce(max(bytes),0)<=${TABLE_BYTES} AND coalesce(sum(bytes),0)<=${TOTAL_BYTES} AND coalesce(sum(n),0)<=100000 AS ok FROM sizes)`];
   const sequence = hasSequence ? "SELECT json_group_array(json_object('name',name,'seq','I'||CAST(seq AS TEXT))) FROM (SELECT name,seq FROM sqlite_sequence ORDER BY name)" : "SELECT '[]'";
   const metadata = `json_object('schema',json((SELECT json_group_array(${objects}) FROM (SELECT ${SCHEMA}))),` +
-    `'xinfo',json((SELECT json_group_array(${columns}) FROM (${XINFO}))),` +
     "'tableList',json((SELECT json_group_array(json_object('schema',schema,'name',name,'type',type,'wr',wr)) FROM pragma_table_list))," +
     `'sequence',json((${sequence})),'sizes',json((SELECT json_group_array(json_object('name',name,'rows',n,'bytes',bytes)) FROM sizes)),` +
-    "'userVersion',(SELECT user_version FROM pragma_user_version),'applicationId',(SELECT application_id FROM pragma_application_id),'allowed',(SELECT ok FROM allowed))";
-  const data = tables.map((t,i) => `SELECT 'table' AS kind,${text(t.name)} AS name,json_group_array(json(record)) AS payload FROM (SELECT record FROM t${i} ORDER BY ord) WHERE (SELECT ok FROM allowed)=1`);
-  const query = `WITH ${ctes.join(',')} SELECT 'metadata' AS kind,'' AS name,${metadata} AS payload` + (data.length ? ' UNION ALL ' + data.join(' UNION ALL ') : '');
+    "'allowed',(SELECT ok FROM allowed))";
+  const data = tables.map((t,i) => `SELECT ${i+1} AS position,'table' AS kind,${text(t.name)} AS name,json_group_array(json(record)) AS payload FROM (SELECT record FROM t${i} ORDER BY ord) WHERE (SELECT ok FROM allowed)=1`);
+  const output=compound('d',[`SELECT 0 AS position,'metadata' AS kind,'' AS name,${metadata} AS payload`,...data]);
+  const query = `WITH ${[...ctes,...output.declarations].join(',')} SELECT kind,name,payload FROM (${output.select}) ORDER BY position`;
   signal?.throwIfAborted();
   const captured = await rows(db, query, tables.length+1,'snapshot');
   signal?.throwIfAborted();
@@ -118,12 +147,14 @@ export async function captureD1Application(db, signal) {
   // A schema mutation during discovery cannot silently add/omit/reinterpret data.
   if(meta.allowed!==1)throw bad('application-data-bound','snapshot');
   if (JSON.stringify(meta.schema) !== JSON.stringify(plannedSchema) ||
-      JSON.stringify(meta.xinfo) !== JSON.stringify(plannedColumns) ||
       JSON.stringify(meta.tableList.filter(t => tables.some(p => p.name === t.name)).map(t => [t.name,t.type,t.wr]).sort()) !==
       JSON.stringify(plannedTables.filter(t => tables.some(p => p.name === t.name)).map(t => [t.name,t.type,t.wr]).sort())) throw bad('schema-changed','snapshot');
-  const header = { kind:'header',format:'dawar-application-snapshot',version:1,schema:meta.schema,
+  // These SQLite file-header pragmas are unavailable through the verified D1
+  // binding. Record that fact, never fabricate source zero values. The importer
+  // selects and verifies explicit new local-file defaults independently.
+  const header = { kind:'header',format:'dawar-application-snapshot',version:2,schema:meta.schema,
     tables:tables.map(t => ({...t,rows:meta.sizes.find(s => s.name === t.name)?.rows})), sequence:meta.sequence,
-    userVersion:meta.userVersion,applicationId:meta.applicationId };
+    userVersion:null,applicationId:null,sourceMetadata:{engine:'cloudflare-d1',sqliteHeader:'unavailable'} };
   const lines = [line(header)]; const inventory = [];
   for (let i=0;i<tables.length;i++) {
     const t = header.tables[i], item = captured[i+1];
