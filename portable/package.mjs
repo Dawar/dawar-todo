@@ -19,9 +19,8 @@ try {
   await cp('dist/portable/build.json',join(directory,'dist/portable/build.json'));
   await mkdir(join(directory,'bot-bridge'),{recursive:true});
   await cp('dist/portable/portable-agent.mjs',join(directory,'bot-bridge/portable-agent.mjs'));
-  for(const file of ['manager-mcp.mjs','codex-version.mjs','native_queue_receipts.py','legacy-guard-review.json']){
-    try{await cp(join('bot-bridge',file),join(directory,'bot-bridge',file));}catch(e){if(e.code!=='ENOENT')throw e;}
-  }
+  for(const file of ['manager-mcp.mjs','codex-version.mjs','native_queue_receipts.py','legacy_manager_rejections.py','legacy-manager-rejections.json','manager.mjs'])
+    await cp(join('bot-bridge',file),join(directory,'bot-bridge',file));
   await cp('bot-bridge/desktops',join(directory,'bot-bridge/desktops'),{recursive:true});
   await cp('drizzle',join(directory,'drizzle'),{recursive:true});
   await cp('package-lock.json',join(directory,'package-lock.json'));

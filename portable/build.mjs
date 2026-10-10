@@ -13,6 +13,6 @@ await cp('.next-portable/static','.next-portable/standalone/.next-portable/stati
 // installation directory; strip those diagnostic defaults from the launcher.
 const launcher='.next-portable/standalone/server.js';
 const source=await readFile(launcher,'utf8');
-await writeFile(launcher,source.replace('process.env.__NEXT_PRIVATE_STANDALONE_CONFIG',
+if(!source.includes('nextConfig.outputFileTracingRoot=__dirname;'))await writeFile(launcher,source.replace('process.env.__NEXT_PRIVATE_STANDALONE_CONFIG',
   'nextConfig.outputFileTracingRoot=__dirname; nextConfig.repoRoot=__dirname; if(nextConfig.turbopack)nextConfig.turbopack.root=__dirname;\nprocess.env.__NEXT_PRIVATE_STANDALONE_CONFIG'));
 await writeFile('dist/portable/build.json',JSON.stringify({version:1,source:execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),nodeMajor:24,protocol:1,runtime:'0.161.0'},null,2)+'\n');
