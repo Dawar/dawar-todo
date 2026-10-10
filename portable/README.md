@@ -242,3 +242,25 @@ into a NEW private inactive SQLite database. Source/fixture success is separate
 from actual Cloudflare capture. A point-in-time application copy does not prove
 consistent control/files or establish the combined final writer freeze. The
 existing production remains authoritative until the full cutover is verified.
+
+### Larger D1 copies during the migration freeze
+
+The private Node `exportFrozenD1Application` adapter reuses the streamed exporter
+with D1's explicit version2 header policy. It reads bounded keyset pages rather
+than materializing a whole table; table and full-file SHA256, exact schema,
+sequences, counts, private permissions and exclusive publication are retained.
+The complete copy can exceed the original route's 1MiB/table and 8MiB total
+bounds, subject to the existing 1GiB file/4MiB record/10million-row safety limits.
+An oversized record, schema/count change, read failure, cancellation or lost
+freeze leaves no completed archive and never yields a partial table migration.
+
+Its source connection must supply an authoritative writer-freeze verifier.
+The same source/operation/epoch/generation/absolute deadline is checked before
+and after every awaited D1 read; draining, outstanding/unknown writers, expiry
+or a changed identity are refused. The source adapter must retain the freeze
+through the callback and cover ALL original application/provider/file/job
+writers. A callback or stable row count alone does not establish that coverage.
+The production freeze/owner-authenticated typed transport is not yet connected,
+and this API deliberately reports productionWriterFreezeEstablished:false.
+No arbitrary-SQL HTTP endpoint, new source credential, source database write,
+service activation or CLI production-freeze command is introduced by this module.

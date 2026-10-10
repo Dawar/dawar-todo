@@ -93,9 +93,10 @@ function validateHeader(h) {
     if (object.name.toLowerCase().startsWith('sqlite_') || objects.has(key)) throw failure();
     objects.add(key);
   }
-  const tables = new Set();
+  const tables = new Set(); let totalRows=0;
   for (const t of h.tables) {
     name(t.name); boundedInteger(t.rows);
+    totalRows+=t.rows;boundedInteger(totalRows);
     if (tables.has(t.name) || !Array.isArray(t.columns) || !t.columns.length || t.columns.length > 2000 ||
         !Array.isArray(t.order) || !t.order.length || t.order.some(k => !t.columns.includes(k))) throw failure();
     const columns = new Set(t.columns.map(name));
@@ -109,8 +110,9 @@ function validateHeader(h) {
   return h;
 }
 
-async function describeSnapshot(query) {
-  const schema = (await query("SELECT type,name,tbl_name,sql FROM sqlite_schema WHERE sql IS NOT NULL AND lower(substr(name,1,7)) <> 'sqlite_' ORDER BY type,name"))
+async function describeSnapshot(query, engine='sqlite') {
+  const platform = engine==='cloudflare-d1' ? " AND lower(name) NOT IN ('_cf_kv','_cf_metadata')" : '';
+  const schema = (await query("SELECT type,name,tbl_name,sql FROM sqlite_schema WHERE sql IS NOT NULL AND lower(substr(name,1,7)) <> 'sqlite_'"+platform+" ORDER BY type,name"))
     .map(schemaObject);
   const tableList = await query('PRAGMA table_list');
   const tables = [];
@@ -129,19 +131,21 @@ async function describeSnapshot(query) {
     const count = await query(`SELECT COUNT(*) AS n FROM ${identifier(object.name)}`);
     tables.push({ name: object.name, columns, order, rows: boundedInteger(count[0]?.n) });
   }
-  const userVersion = (await query('PRAGMA user_version'))[0]?.user_version;
-  const applicationId = (await query('PRAGMA application_id'))[0]?.application_id;
+  const userVersion = engine==='cloudflare-d1' ? null : (await query('PRAGMA user_version'))[0]?.user_version;
+  const applicationId = engine==='cloudflare-d1' ? null : (await query('PRAGMA application_id'))[0]?.application_id;
   const hasSequence = (await query("SELECT name FROM sqlite_schema WHERE name='sqlite_sequence'")).length;
   const sequence = hasSequence ? await query("SELECT name,'I'||CAST(seq AS TEXT) AS seq FROM sqlite_sequence ORDER BY name") : [];
-  return validateHeader({ kind: 'header', format: FORMAT, version: 1, schema, tables, sequence, userVersion, applicationId });
+  return validateHeader({ kind: 'header', format: FORMAT, version:engine==='cloudflare-d1'?2:1, schema, tables, sequence, userVersion, applicationId,
+    ...(engine==='cloudflare-d1'?{sourceMetadata:{engine:'cloudflare-d1',sqliteHeader:'unavailable'}}:{}) });
 }
 
 // Internal adapter boundary, not a public arbitrary-SQL endpoint. withSnapshot
 // must hold one REAL database snapshot for its complete callback and each query.
 // A D1 session/bookmark, unchanged counts or an unfenced dashboard read is not
 // such a snapshot. No original Cloudflare writer freeze is implied here.
-export async function exportApplicationSnapshot({ withSnapshot, destination, signal, pageRows = 128 }) {
-  if (typeof withSnapshot !== 'function' || !Number.isInteger(pageRows) || pageRows < 1 || pageRows > 256) throw failure();
+export async function exportApplicationSnapshot({ withSnapshot, destination, signal, pageRows = 128, sourceEngine='sqlite' }) {
+  if (typeof withSnapshot !== 'function' || !Number.isInteger(pageRows) || pageRows < 1 || pageRows > 256 ||
+      !['sqlite','cloudflare-d1'].includes(sourceEngine)) throw failure();
   destination = resolve(destination);
   await privateDirectory(dirname(destination));
   const temporary = `${destination}.${randomUUID()}.partial`;
@@ -158,7 +162,7 @@ export async function exportApplicationSnapshot({ withSnapshot, destination, sig
   try {
     const inventory = await withSnapshot(async query => {
       if (typeof query !== 'function') throw failure();
-      const h = await describeSnapshot(query); await write(h);
+      const h = await describeSnapshot(query,sourceEngine); await write(h);
       const inventory = [];
       for (const t of h.tables) {
         let rows = 0, last = null; const tableHash = digest();
@@ -198,7 +202,7 @@ export async function exportApplicationSnapshot({ withSnapshot, destination, sig
       }
       // Re-read metadata inside the same snapshot. This also detects an adapter
       // which accidentally reconfigured schema or counts while exporting.
-      if (JSON.stringify(await describeSnapshot(query)) !== JSON.stringify(h)) throw failure();
+      if (JSON.stringify(await describeSnapshot(query,sourceEngine)) !== JSON.stringify(h)) throw failure();
       await write({ kind: 'footer', tables: inventory, sha256: content.digest('hex') }, false);
       return inventory;
     });
@@ -208,11 +212,65 @@ export async function exportApplicationSnapshot({ withSnapshot, destination, sig
     await link(temporary, destination); await unlink(temporary);
     const directory = await open(dirname(destination), 'r');
     try { await directory.sync(); } finally { await directory.close(); }
-    return { format: FORMAT, version: 1, bytes, sha256: whole.digest('hex'), tables: inventory,
+    return { format: FORMAT, version:sourceEngine==='cloudflare-d1'?2:1, bytes, sha256: whole.digest('hex'), tables: inventory,
       productionWriterFreezeEstablished: false, automaticExecutionDisabled: true };
   } catch (error) {
     await file.close().catch(() => {}); await unlink(temporary).catch(() => {}); throw error;
   }
+}
+
+// Private Node migration boundary. The configured source adapter must hold the
+// ORIGINAL D1 writer freeze for the complete callback, including other writers,
+// scheduled jobs, provider/file consumers and outstanding requests. A caller's
+// assertion alone is not evidence of production coverage; the result keeps that
+// rollout gate false. No public arbitrary-SQL API or source writes are added.
+export async function exportFrozenD1Application({withFrozenSource,expectedFreeze,...options}) {
+  if(typeof withFrozenSource!=='function'||!expectedFreeze||typeof expectedFreeze.sourceId!=='string'||
+      !expectedFreeze.sourceId||typeof expectedFreeze.operationId!=='string'||!expectedFreeze.operationId||
+      !Number.isSafeInteger(expectedFreeze.epoch)||expectedFreeze.epoch<1)throw failure();
+  const expected={sourceId:expectedFreeze.sourceId,operationId:expectedFreeze.operationId,epoch:expectedFreeze.epoch};
+  return exportApplicationSnapshot({...options,sourceEngine:'cloudflare-d1',withSnapshot:async callback=>{
+    let called=false,completed=false,reading=true,inventory;
+    try {
+      await withFrozenSource(async({db,verifyFreeze})=>{
+        if(called||!reading)throw failure();called=true;
+        if(typeof db?.prepare!=='function'||typeof verifyFreeze!=='function')throw failure();
+        let binding,wall,observed,monotonicDeadline;
+        const verify=async()=>{
+          options.signal?.throwIfAborted();
+          const proof=await verifyFreeze();
+          options.signal?.throwIfAborted();
+          const now=Date.now();
+          if(!reading||!proof||proof.version!==1||proof.kind!=='dawar-application-writer-freeze'||proof.status!=='frozen'||
+              proof.scope!=='all-application-writers'||proof.sourceId!==expected.sourceId||
+              proof.operationId!==expected.operationId||proof.epoch!==expected.epoch||
+              typeof proof.sourceId!=='string'||!proof.sourceId||proof.sourceId.length>1024||
+              typeof proof.operationId!=='string'||!proof.operationId||proof.operationId.length>1024||
+              !Number.isSafeInteger(proof.epoch)||proof.epoch<1||
+              !Number.isSafeInteger(proof.generation)||proof.generation<1||
+              !Number.isSafeInteger(proof.expiresAt)||proof.expiresAt<=now||proof.expiresAt-now>900000||
+              !Number.isSafeInteger(proof.observedAt)||Math.abs(proof.observedAt-now)>5000||
+              wall!==undefined&&now<wall||observed!==undefined&&proof.observedAt<observed||
+              proof.admittedWriters!==0||proof.unknownWriters!==0)throw failure();
+          const current=JSON.stringify([proof.sourceId,proof.operationId,proof.epoch,proof.generation,proof.expiresAt]);
+          if(binding!==undefined&&binding!==current)throw failure();binding=current;
+          monotonicDeadline??=performance.now()+proof.expiresAt-now;
+          if(performance.now()>=monotonicDeadline)throw failure();wall=now;observed=proof.observedAt;
+        };
+        await verify();
+        inventory=await callback(async sql=>{
+          await verify();
+          if(Buffer.byteLength(sql)>100000)throw failure();
+          const result=await db.prepare(sql).all();
+          await verify();
+          if(result.success!==true||!Array.isArray(result.results)||result.results.length>4000)throw failure();
+          return result.results;
+        });
+        await verify();completed=true;return inventory;
+      });
+      if(!called||!completed)throw failure();return inventory;
+    }finally{reading=false;}
+  }});
 }
 
 // The local adapter uses one read-only connection and a SQLite read transaction.
