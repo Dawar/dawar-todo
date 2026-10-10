@@ -1,4 +1,5 @@
 "use client";
+import { portableHeaders } from "../lib/portable-csrf";
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Search, X } from 'lucide-react';
@@ -13,7 +14,7 @@ export type QueueRequest = {
     todoIds: number[];
 };
 async function metadata<T>(url: string, input?: unknown): Promise<T> {
-    const response = await fetch(url, { method: input ? 'POST' : 'GET', headers: input ? { 'Content-Type': 'application/json' } : undefined, body: input ? JSON.stringify(input) : undefined, credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(125000) });
+    const response = await fetch(url, { method: input ? 'POST' : 'GET', headers: portableHeaders(input ? { 'Content-Type': 'application/json' } : undefined), body: input ? JSON.stringify(input) : undefined, credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(125000) });
     const result = await response.json() as T & {
         error?: string;
     };

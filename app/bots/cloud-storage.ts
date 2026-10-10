@@ -1,3 +1,4 @@
+import { portableHeaders } from "../../lib/portable-csrf";
 import { replayableStorageFetch } from "../../lib/storage-transfer";
 import type { BotAttachment, BotArtifactPage } from "../../lib/bots-types";
 import { CloudTransferDeadline, cloudRetryDelay, CLOUD_METADATA_DEADLINE_MS, CLOUD_UPLOAD_DEADLINE_MS, CLOUD_DOWNLOAD_IDLE_MS, CLOUD_DOWNLOAD_DEADLINE_MS } from "./cloud-transfer-deadline";
@@ -42,7 +43,7 @@ export async function cloudRequest<T>(owner:string,currentOwner:CheckOwner,actio
     const deadline = new CloudTransferDeadline(CLOUD_METADATA_DEADLINE_MS, () => requestTimeout(action), signal);
     let response: Response | undefined;
     try {
-      try { response = await deadline.run(() => fetch("/api/bots/storage", { method:"POST", headers:{"Content-Type":"application/json"}, body, credentials:"same-origin", cache:"no-store", signal:deadline.signal })); }
+      try { response = await deadline.run(() => fetch("/api/bots/storage", { method:"POST", headers:portableHeaders({"Content-Type":"application/json"}), body, credentials:"same-origin", cache:"no-store", signal:deadline.signal })); }
       catch (error) { deadline.signal.throwIfAborted(); if (attempt === 2) throw error; }
       if (response && (attempt === 2 || ![429,500,502,503,504].includes(response.status))) {
         let result: Record<string, unknown> | null;

@@ -6,7 +6,7 @@ const xml = s => String(s).replaceAll('&','&amp;').replaceAll('<','&lt;').replac
 const unit = s => `"${String(s).replaceAll('\\','\\\\').replaceAll('"','\\"').replaceAll('%','%%').replaceAll('$','$$')}"`;
 export function serviceDefinition({ role, platform, executable, releaseDirectory, configPath }) {
   if (!['hub','agent'].includes(role) || !['linux','darwin'].includes(platform)) throw Error('Unsupported service role or platform.');
-  const args = [resolve(releaseDirectory,'portable/cli.mjs'),'run',role,'--config',resolve(configPath)];
+  const args = [resolve(releaseDirectory,role==='agent'?'portable/agent-cli.mjs':'portable/cli.mjs'),'run',...(role==='agent'?[]:[role]),'--config',resolve(configPath)];
   const label = `ca.dawar.todo.${role}`;
   if (platform === 'darwin') return { name:`${label}.plist`,contents:`<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict><key>Label</key><string>${label}</string><key>ProgramArguments</key><array>${[executable,...args].map(a=>`<string>${xml(a)}</string>`).join('')}</array><key>WorkingDirectory</key><string>${xml(resolve(releaseDirectory))}</string><key>RunAtLoad</key><false/><key>KeepAlive</key><false/><key>Umask</key><integer>63</integer></dict></plist>\n` };
   return { name:`dawar-portable-${role}.service`,contents:`[Unit]\nDescription=DawarTodo portable ${role}\nAfter=network-online.target\n[Service]\nType=simple\nWorkingDirectory=${unit(resolve(releaseDirectory))}\nExecStart=${[executable,...args].map(unit).join(' ')}\nUMask=0077\nRestart=on-failure\nRestartSec=10\nKillMode=control-group\nTimeoutStopSec=900\n[Install]\nWantedBy=default.target\n` };

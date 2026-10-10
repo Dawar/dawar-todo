@@ -1,5 +1,6 @@
 "use client";
 
+import { ExecutionMachines } from "./execution-machines";
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { ActionIcon } from "../action-icon";
 import {
@@ -909,6 +910,8 @@ export default function SettingsPage() {
           <h1 className="mt-1 text-3xl font-semibold tracking-[-0.04em] text-[#151816]">Preferences</h1>
           <p className="mt-2 text-sm leading-6 text-[#69716c]">Control task timing, AI behavior, and device features.</p>
         </div>
+
+        <ExecutionMachines />
 
         <section aria-labelledby="sync-diagnostics-title" className="mb-6 rounded-2xl border border-black/[0.07] bg-white p-5 shadow-[0_10px_35px_rgba(30,45,36,0.06)] sm:p-7">
           <div className="flex items-start gap-3">

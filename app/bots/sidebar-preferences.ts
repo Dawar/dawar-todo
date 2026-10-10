@@ -1,4 +1,5 @@
 "use client";
+import { portableHeaders } from "../../lib/portable-csrf";
 import { useEffect, useMemo, useSyncExternalStore } from 'react';
 import { MAX_SIDEBAR_TEAMS, sidebarChoice, sidebarMutation, type SidebarChoice, type SidebarChoiceMutation, type SidebarChoicesResponse, type SidebarChoiceReceipt } from '../../lib/bot-sidebar-preferences';
 
@@ -8,7 +9,7 @@ const empty = (): State => ({ choices: {}, pending: {}, error: '' });
 type Transport = (method: 'GET' | 'PATCH', owner: string, request?: SidebarChoiceMutation) => Promise<SidebarChoicesResponse | SidebarChoiceReceipt>;
 const transport: Transport = async (method, owner, request) => {
   const response = await fetch('/api/bots/sidebar-preferences', { method, credentials: 'same-origin', cache: 'no-store',
-    headers: { 'Content-Type': 'application/json', 'X-Dawar-Preference-Owner': owner }, body: request && JSON.stringify(request), signal: AbortSignal.timeout(8000) });
+    headers: portableHeaders({ 'Content-Type': 'application/json', 'X-Dawar-Preference-Owner': owner }), body: request && JSON.stringify(request), signal: AbortSignal.timeout(8000) });
   const value: unknown = await response.json();
   if (!response.ok) {
     const message = value && typeof value === 'object' && 'error' in value && typeof value.error === 'string' ? value.error : 'Team choices could not be saved. Retry.';

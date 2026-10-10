@@ -7,6 +7,7 @@ import { BotRuntime } from '../bot-bridge/runtime.mjs';
 import { CodexManager } from '../bot-bridge/manager.mjs';
 import { NodeJournal } from './control-store.mjs';
 import { nodeKey, signature, PROTOCOL_VERSION, RUNTIME_VERSION } from './protocol.mjs';
+import { AGENT_READS, AGENT_MUTATIONS } from './hub-rpc.mjs';
 
 export class AgentTransport {
   constructor({ config, runtime, journal, key, enrollment, socketFactory=url=>new WebSocket(url) }) {
@@ -76,6 +77,14 @@ export class AgentTransport {
             }
           }
           this.flushEvents();
+        } else if(authentication && m.type==='rpc'){
+          const control=this.journal.db.prepare('SELECT * FROM node_controls WHERE bot_id=?').get(m.botId);
+          if(!AGENT_READS.has(m.method)||control?.epoch!==m.epoch)throw Error('Read is outside assigned scope.');
+          try{
+            const result=await this.runtime.handle({method:m.method,botId:m.botId,params:m.params,clientId:`hub:${this.enrollment.nodeId}`});
+            const frame={type:'rpc-result',rpcId:m.rpcId,botId:m.botId,epoch:m.epoch,result};
+            if(Buffer.byteLength(JSON.stringify(frame))>900*1024)throw Error('Read exceeds its bounded transport; use a smaller history page.');this.send(frame);
+          }catch(e){this.send({type:'rpc-result',rpcId:m.rpcId,botId:m.botId,epoch:m.epoch,error:e.message});}
         } else if(authentication && m.type==='event-ack')this.journal.acknowledgeEvent(m.eventId);
       })().catch(()=>ws.close(1008,'Protocol could not be confirmed'));
     });
@@ -90,7 +99,7 @@ export class AgentTransport {
     if(row.state==='terminal'||row.state==='unknown'||row.state==='native-accepted'||row.state==='running'){this.receipt(row);return;}
     if(!this.journal.canAdmit(command))return;
     const payload=JSON.parse(command.payload);
-    if(payload.method!=='turn.send')throw Error('This staging agent currently admits only an explicit text turn; unsupported controls remain at the hub.');
+    if(!AGENT_MUTATIONS.has(payload.method))throw Error('Unsupported assigned command.');
     const bot=this.runtime.store.bot(command.bot_id);if(!bot || bot.archived || bot.deletedAt)throw Error('Assigned native bot is absent or archived.');
     const request={method:payload.method,botId:command.bot_id,operationId:command.operation_id,params:payload.params,clientId:`hub:${this.enrollment.nodeId}`};
     if(row.state==='dispatching' && !this.runtime.store.operation(command.operation_id)) {
@@ -103,7 +112,7 @@ export class AgentTransport {
     try {
       const result=await this.runtime.handle(request), turnId=result?.turn?.id??result?.turnId;
       const receipt={operationId:command.operation_id,threadId:bot.threadId,turnId,result};
-      this.journal.settle(command.operation_id,turnId?'native-accepted':'unknown',receipt);
+      this.journal.settle(command.operation_id,turnId?'native-accepted':payload.method==='turn.send'?'unknown':'terminal',receipt);
     } catch(error){this.journal.settle(command.operation_id,error.outcome==='rejected'?'terminal':'unknown',{operationId:command.operation_id,outcome:error.outcome??'uncertain',error:error.message});}
     this.receipt(this.journal.db.prepare('SELECT * FROM node_commands WHERE operation_id=?').get(command.operation_id));
     this.terminal(this.journal.db.prepare('SELECT * FROM node_commands WHERE operation_id=?').get(command.operation_id));
@@ -116,10 +125,9 @@ export async function runAgent(config){
   // workspaces. The migration's exact activation proof is required first.
   if(!config.agent?.activationReceipt || !isAbsolute(config.agent.codexBinary)||!isAbsolute(config.agent.workspaces))throw Error('Agent activation receipt, local Codex binary and workspaces are required.');
   const activation=JSON.parse(await readFile(config.agent.activationReceipt,'utf8'));
-  if(activation.kind!=='portable-agent-activation'||activation.executionEnabled!==true||activation.nodeId!==config.agent.nodeId||activation.runtime!==RUNTIME_VERSION)
-    throw Error('Reviewed agent activation is not confirmed.');
   const enrollment=JSON.parse(await readFile(join(config.dataDirectory,'node-enrollment.json'),'utf8'));
-  if(enrollment.nodeId!==config.agent.nodeId)throw Error('Enrollment differs from activated node.');
+  if(activation.kind!=='portable-agent-activation'||activation.executionEnabled!==true||activation.nodeId!==enrollment.nodeId||activation.runtime!==RUNTIME_VERSION
+    ||config.agent.nodeId&&enrollment.nodeId!==config.agent.nodeId)throw Error('Enrollment differs from reviewed agent activation.');
   process.umask(0o077);
   const store=new Store(join(config.dataDirectory,'native-control.sqlite')),codex=new Codex(config.agent.codexBinary);
   const runtime=new BotRuntime({store,codex,root:config.agent.workspaces,defaultTimeZone:'America/Toronto'});

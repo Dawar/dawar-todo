@@ -1,4 +1,6 @@
 "use client";
+import { portableHeaders } from "../../lib/portable-csrf";
+
 import { useEffect, useRef, useState } from "react";
 import { createPortal, flushSync } from "react-dom";
 import {
@@ -340,7 +342,7 @@ export function BotDesktopDialog({
         if (cancelled) return;
         const response = await fetch("/api/bots/session", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: portableHeaders({ "Content-Type": "application/json" }),
           body: "{}",
           signal: controller.signal,
         });
@@ -457,7 +459,7 @@ export function BotDesktopDialog({
                 try {
                   const response = await fetch("/api/bots/session", {
                     method: "POST",
-                    headers: { "Content-Type": "application/json" },
+                    headers: portableHeaders({ "Content-Type": "application/json" }),
                     body: "{}",
                     signal: controller.signal,
                   });

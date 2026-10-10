@@ -1,4 +1,5 @@
 "use client";
+import { portableHeaders } from "../../lib/portable-csrf";
 import { useEffect, useRef, useState } from 'react';
 import { Mic, MicOff, Phone, PhoneOff, Square, VolumeX, X } from 'lucide-react';
 import type { OperatorBot, OperatorContext, OperatorSegment, OperatorView } from '../../lib/operator-types';
@@ -9,7 +10,7 @@ import { registerPwaUpdateGuard } from '../pwa-update';
 import './operator-call.css';
 
 async function api<T>(url: string, input?: Record<string, unknown>, method = 'POST'): Promise<T> {
-  const response = await fetch(url, { method, ...(input ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) } : {}), cache: 'no-store' });
+  const response = await fetch(url, { method, headers: portableHeaders(input?{'Content-Type':'application/json'}:undefined), ...(input?{body:JSON.stringify(input)}:{}), cache: 'no-store' });
   const body = await response.json() as T & { error?: string };
   if (!response.ok) throw new Error(body.error || 'The call action could not be confirmed.');
   return body;

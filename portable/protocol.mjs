@@ -1,6 +1,7 @@
 import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, randomBytes, sign, verify } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { readPrivate,savePrivate } from './private-file.mjs';
 
 export const PROTOCOL_VERSION = 1;
 export const RUNTIME_VERSION = '0.161.0';
@@ -39,10 +40,9 @@ export function nodeKey(path) {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   if (!existsSync(path)) {
     const keys = generateKeyPairSync('ed25519');
-    writeFileSync(path, keys.privateKey.export({ format: 'pem', type: 'pkcs8' }), { mode: 0o600, flag: 'wx' });
+    savePrivate(path, keys.privateKey.export({ format: 'pem', type: 'pkcs8' }), { exclusive:true });
   }
-  chmodSync(path, 0o600);
-  const privateKey = readFileSync(path, 'utf8');
+  const privateKey = readPrivate(path,4096);
   const publicKey = createPublicKey(privateKey).export({ format: 'pem', type: 'spki' }).toString();
   return { privateKey, publicKey, fingerprint: publicFingerprint(publicKey) };
 }

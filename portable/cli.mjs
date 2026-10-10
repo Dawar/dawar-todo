@@ -1,11 +1,10 @@
 #!/usr/bin/env node
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { loadConfig } from './config.mjs';
 import { installDefinitions } from './services.mjs';
-import { nodeKey, signature, digest, PROTOCOL_VERSION, RUNTIME_VERSION } from './protocol.mjs';
+import { nodeKey, PROTOCOL_VERSION, RUNTIME_VERSION } from './protocol.mjs';
 
 const root=resolve(fileURLToPath(new URL('..',import.meta.url)));
 const args=process.argv.slice(2),command=args.shift();
@@ -23,23 +22,8 @@ if(command==='version') {
   const k=nodeKey(join(resolve(directory),'node-key.pem'));json({fingerprint:k.fingerprint,publicKey:k.publicKey});
 } else if(command==='pair') {
   const c=loadConfig(option('config'));if(c.mode==='hub')throw Error('Only an agent can pair.');
-  const u=new URL(option('hub')??c.agent.hubOrigin);
-  if(u.protocol!=='https:'||u.username||u.password||u.pathname!=='/'||u.search||u.hash)throw Error('Pair with a fixed HTTPS hub origin.');
-  // Token is read from a private file, never a process argument or log.
-  const token=(await readFile(option('token-file'),'utf8')).trim(),key=nodeKey(join(c.dataDirectory,'node-key.pem'));
-  const hello={protocol:PROTOCOL_VERSION,runtime:RUNTIME_VERSION,platform:process.platform,arch:process.arch,capabilities:{text:true,localStdio:true,desktop:false,voice:false,secureTransfer:false,autonomousGoals:false}};
-  async function post(path,body){const r=await fetch(new URL(path,u),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body),redirect:'error',signal:AbortSignal.timeout(15000)});if(!r.ok)throw Error('Enrollment was not accepted. Retain the original request; do not create another grant after uncertain acceptance.');return r.json();}
-  await mkdir(c.dataDirectory,{recursive:true,mode:0o700});
-  // Persist original grant/key proof before the remote write. Lost ACK stays
-  // unknown and requires owner reconciliation, rather than a second identity.
-  const pendingPath=join(c.dataDirectory,'enrollment-pending.json');
-  await writeFile(pendingPath,JSON.stringify({tokenHash:digest(token),fingerprint:key.fingerprint,hub:u.origin,createdAt:Date.now()}),{mode:0o600,flag:'wx'});
-  const challenge=await post('/nodes/enroll/challenge',{token,publicKey:key.publicKey});
-  const bound={grantId:challenge.grantId,challenge:challenge.challenge,hello};
-  await writeFile(pendingPath,JSON.stringify({grantId:challenge.grantId,fingerprint:key.fingerprint,hub:u.origin,createdAt:Date.now()}),{mode:0o600});
-  const result=await post('/nodes/enroll/prove',{...bound,proof:signature(key.privateKey,bound)});
-  await writeFile(join(c.dataDirectory,'node-enrollment.json'),JSON.stringify({...result,hub:u.origin}),{mode:0o600,flag:'wx'});
-  json({nodeId:result.nodeId,fingerprint:key.fingerprint,paired:true,executionStarted:false});
+  const {pairAgent}=await import('./enrollment-client.mjs');
+  json(await pairAgent(c,option('token-file')));
 } else if(command==='run' && args[0]==='hub') {
   const c=loadConfig(option('config'));if(c.mode==='agent')throw Error('Agent configuration cannot start a hub.');
   process.umask(0o077);

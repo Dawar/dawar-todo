@@ -13,6 +13,7 @@ await mkdir(directory);
 try {
   await cp('.next-portable/standalone',join(directory,'.next-portable/standalone'),{recursive:true});
   await cp('portable',join(directory,'portable'),{recursive:true});
+  await cp('dist/agent-downloads',join(directory,'dist/agent-downloads'),{recursive:true});
   await mkdir(join(directory,'dist/portable'),{recursive:true});
   await cp('dist/portable/gateway.mjs',join(directory,'dist/portable/gateway.mjs'));
   await cp('dist/portable/build.json',join(directory,'dist/portable/build.json'));

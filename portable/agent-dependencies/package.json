@@ -1,0 +1,13 @@
+{
+  "name": "dawartodo-execution-agent",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "dependencies": {
+    "sharp": "0.35.5",
+    "@openai/codex": "0.161.0"
+  }
+}

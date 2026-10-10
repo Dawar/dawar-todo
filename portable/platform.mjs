@@ -13,7 +13,8 @@ function environment() {
     // have separate paths and no cross-machine shared SQLite filesystem.
     const objects=new ObjectStorage(c);
     bindings = { ...c.applicationEnvironment, DB:new LocalD1(join(c.dataDirectory,'application.sqlite')),IMAGES:images,DAWAR_OBJECT_STORAGE:objects.adapter(),
-      BOTS_OWNER_EMAIL:c.owner.key,BOTS_OWNER_USER_ID:c.owner.userId,TODO_PUBLIC_URL:c.publicOrigin };
+      BOTS_OWNER_EMAIL:c.owner.key,BOTS_OWNER_USER_ID:c.owner.userId,TODO_PUBLIC_URL:c.publicOrigin,
+      BOTS_RELAY_URL:`${c.publicOrigin.replace(/^https:/,'wss:')}/connect`,BOTS_MACHINE_ID:c.applicationEnvironment?.BOTS_MACHINE_ID??'dawar-vm',BOTS_TICKET_SECRET:c.gatewaySecret };
   }
   return bindings;
 }

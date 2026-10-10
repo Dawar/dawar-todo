@@ -1,4 +1,5 @@
 "use client";
+import { portableHeaders } from "../../lib/portable-csrf";
 import { taskSync } from "../task-sync";
 
 import {
@@ -65,10 +66,10 @@ function attachmentKind(file: File): StagedFile["kind"] {
 async function api<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
     ...init,
-    headers: {
+    headers: portableHeaders({
       ...(init?.body instanceof FormData ? {} : { "Content-Type": "application/json" }),
       ...init?.headers,
-    },
+    }),
   });
   const body = await response.json().catch(() => ({})) as T & { error?: string };
   if (!response.ok) throw new Error(body.error || "The request could not be completed.");

@@ -1,3 +1,4 @@
+import { portableHeaders } from "./portable-csrf";
 import { encryptSecureInput, type SecureDescriptor, type SecureEnvelope, type SecurePayload, type SecureRequest } from './secure-input';
 import { transferSecureInput } from '../app/bots/secure-input-transfer';
 import type { TaskRequestGuestAction, TaskRequestOwnerAction, TaskRequestSecureSession } from './task-requests';
@@ -10,7 +11,7 @@ export async function taskRequestGuest<T>(action:TaskRequestGuestAction,token:st
   return formFetch<T>('/api/task-requests/guest',action,{Authorization:`Bearer ${token}`,...(pin===undefined?{}:{'X-Task-Request-PIN':pin})},signal);
 }
 async function formFetch<T>(url:string,action:unknown,headers:Record<string,string>,signal?:AbortSignal):Promise<T> {
-  const response=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json',...headers},body:JSON.stringify(action),redirect:'error',cache:'no-store',credentials:url.endsWith('/guest')?'omit':'same-origin',referrerPolicy:'no-referrer',signal});
+  const response=await fetch(url,{method:'POST',headers:url.endsWith('/guest')?{'Content-Type':'application/json',...headers}:portableHeaders({'Content-Type':'application/json',...headers}),body:JSON.stringify(action),redirect:'error',cache:'no-store',credentials:url.endsWith('/guest')?'omit':'same-origin',referrerPolicy:'no-referrer',signal});
   const value=await response.json() as {error?:string;code?:string};if(!response.ok)throw Object.assign(Error(value.error??'Protected form unavailable. Retain its original operation.'),{code:value.code,status:response.status});return value as T;
 }
 /** A private-only socket. It never initializes BotsClient or receives snapshots/history. */

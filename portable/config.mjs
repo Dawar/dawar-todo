@@ -1,12 +1,9 @@
-import { readFileSync, statSync } from 'node:fs';
 import { isAbsolute, resolve } from 'node:path';
+import { readPrivate } from './private-file.mjs';
 
 export function loadConfig(path = process.env.DAWAR_HUB_CONFIG) {
   if (!path || !isAbsolute(path)) throw Error('DAWAR_HUB_CONFIG must name a private absolute configuration file.');
-  const s = statSync(path);
-  if (!s.isFile() || s.mode & 0o077 || process.getuid && s.uid !== process.getuid()) throw Error('Configuration must be owner-only.');
-  if (s.size > 128 * 1024) throw Error('Configuration exceeds its bound.');
-  const c = JSON.parse(readFileSync(path, 'utf8'));
+  const c = JSON.parse(readPrivate(path));
   if (c.version !== 1 || !['hub','agent','both'].includes(c.mode) || !isAbsolute(c.dataDirectory)) throw Error('Invalid portable configuration.');
   c.dataDirectory = resolve(c.dataDirectory);
   if (c.mode !== 'agent') {
@@ -16,7 +13,17 @@ export function loadConfig(path = process.env.DAWAR_HUB_CONFIG) {
     if (c.gatewayPort === c.sitePort) throw Error('Gateway and site ports must differ.');
     if (!c.owner?.key || !c.owner?.userId || !Array.isArray(c.identityBindings)) throw Error('Explicit original owner mapping is required.');
     if(typeof c.gatewaySecret!=='string'||!/^[A-Za-z0-9_-]{43,128}$/.test(c.gatewaySecret))throw Error('A private random gateway secret is required.');
-    for (const b of c.identityBindings) if (!/^[0-9]{1,128}$/.test(b.sub) || b.owner !== c.owner.key || b.userId !== c.owner.userId) throw Error('Unapproved OIDC owner mapping.');
+    if(c.auth0){
+      const issuer=new URL(c.auth0.issuer);
+      if(issuer.protocol!=='https:'||issuer.pathname!=='/'||issuer.username||issuer.password||issuer.search||issuer.hash||typeof c.auth0.clientId!=='string'||!c.auth0.clientId)throw Error('Invalid Auth0 application configuration.');
+      if(c.auth0.clientSecretFile){
+        const secretPath=c.auth0.clientSecretFile;
+        if(!isAbsolute(secretPath))throw Error('OIDC client secret file must be absolute.');
+        c.auth0.clientSecret=readPrivate(secretPath,4096).trim();
+      }
+    }
+    const issuer=c.auth0?.issuer??'https://accounts.google.com';
+    for (const b of c.identityBindings) if (!/^[A-Za-z0-9_.|@:-]{1,256}$/.test(b.sub) || (b.issuer??(c.auth0?null:'https://accounts.google.com'))!==issuer || b.owner !== c.owner.key || b.userId !== c.owner.userId) throw Error('Unapproved OIDC owner mapping.');
   }
   return c;
 }

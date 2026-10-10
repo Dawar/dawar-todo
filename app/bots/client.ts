@@ -1,3 +1,4 @@
+import { portableHeaders } from "../../lib/portable-csrf";
 import { readBotHistory, queueBotHistory, type CachedBotHistory } from "./history-cache.ts";
 import { cloudStatus, cloudUpload, cloudDownload, cloudRequest, fileSha256, CloudStorageError } from "./cloud-storage";
 import { botFailureOutcome } from "../../lib/bots-response.ts";
@@ -236,7 +237,7 @@ export class BotsClient {
       .catch(() => null);
     const response = await fetch("/api/bots/session", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: portableHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ push: push?.toJSON() }),
       credentials: "same-origin",
       cache: "no-store",

@@ -2,13 +2,15 @@
   "version": 1,
   "mode": "both",
   "dataDirectory": "/OWNER_SELECTED_PRIVATE_DATA_DIRECTORY",
-  "publicOrigin": "https://OWNER_PROVISIONED_HOSTNAME.invalid",
+  "publicOrigin": "https://work.dawar.ca",
   "gatewayPort": 3210,
   "sitePort": 3211,
   "gatewaySecret": "GENERATE_A_PRIVATE_RANDOM_256_BIT_VALUE_LOCALLY",
-  "owner": { "key": "PRESERVED_ORIGINAL_OWNER_KEY", "userId": "PRESERVED_ORIGINAL_OWNER_ID" },
+  "owner": {
+    "key": "PRESERVED_ORIGINAL_OWNER_KEY",
+    "userId": "PRESERVED_ORIGINAL_OWNER_ID"
+  },
   "identityBindings": [],
-  "google": { "clientId": "OWNER_PROVISIONED_CLIENT_ID", "clientSecret": "OWNER_PROVISIONED_PRIVATE_SECRET" },
   "applicationEnvironment": {},
   "agent": {
     "hubOrigin": "https://OWNER_PROVISIONED_HOSTNAME.invalid",
@@ -22,6 +24,12 @@
     "repository": "s3:https://OWNER_SELECTED_S3_ENDPOINT.invalid/DEDICATED_BACKUP_BUCKET",
     "passwordFile": "/SEPARATELY_RETAINED_PRIVATE_RECOVERY_SECRET",
     "accessKeyId": "OWNER_PROVISIONED_BACKUP_KEY",
-    "secretAccessKey": "OWNER_PROVISIONED_PRIVATE_BACKUP_SECRET"
+    "secretAccessKey": "OWNER_PROVISIONED_PRIVATE_BACKUP_SECRET",
+    "deferred": true
+  },
+  "auth0": {
+    "issuer": "https://OWNER_PROVISIONED_TENANT.auth0.com/",
+    "clientId": "OWNER_PROVISIONED_CLIENT_ID",
+    "clientSecretFile": "/PRIVATE_REGULAR_WEB_APPLICATION_SECRET"
   }
 }

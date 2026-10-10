@@ -1,4 +1,5 @@
 "use client";
+import { portableHeaders } from "../lib/portable-csrf";
 
 const DEVICE_ID_KEY = "dawar-todo-device-id-v1";
 const DEVICE_ID_PATTERN = /^[0-9a-f-]{36}$/i;
@@ -21,7 +22,7 @@ export function getOrCreateDeviceId() {
 }
 
 export function headersWithDeviceId(headers?: HeadersInit) {
-  const result = new Headers(headers);
+  const result = portableHeaders(headers);
   const deviceId = getOrCreateDeviceId();
   if (deviceId) result.set("X-Dawar-Device-Id", deviceId);
   return result;

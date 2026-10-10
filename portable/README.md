@@ -44,10 +44,33 @@ The registered-file streaming and restic snapshot/isolated-restore modules are
 implemented. Disposable protocol and real encrypted local-repository restore
 observations are retained in the private migration evidence. This does not
 establish an operational S3 backup, scheduled backup, working Mac node or
-production write freeze. Those remain required outcomes of the active Goal.
+production write freeze. The latest direct human amendment defers backups for now; retain these modules and evidence for later enablement. Genuine Mac/production acceptance remains unfinished.
 
 Node agent admission is deliberately limited to assigned explicit text turns
 until the remaining hub-owned queue/schedule/provisioning adapters are wired.
 Unsupported controls fail closed rather than creating a second scheduler.
 Next.js and Sharp security updates are validated before this Node target may
 be exposed publicly. The Cloudflare production route remains unchanged.
+
+## Authentication and Mac delivery amendment
+
+Use a dedicated Auth0 Regular Web application with server-side authorization code plus PKCE, an exact issuer, and an explicit stable-subject binding to the retained owner. The client secret stays in an owner-only file, never a frontend bundle. `work.dawar.ca` remains the approved public origin. The Settings machine installer downloads only code and integrity manifests; keys and Codex credentials remain local. Pairing grants expire after five minutes. Installer/service setup does not itself start a native turn.
+
+The portable session uses an HttpOnly session cookie and a separate Secure,
+SameSite=Strict CSRF cookie. First-party request factories send that CSRF token;
+the gateway requires both its exact session binding and the approved Origin.
+The original Cloudflare build keeps its existing authentication behavior.
+
+Run `node portable/agent-package.mjs` after the exact clean portable build to
+produce the Settings ZIP download. It includes a platform installer for
+Node24 and a pinned, integrity-locked local Codex runtime. The installer copies
+only manifest-listed files into a new immutable release, verifies an existing
+release without reinstalling dependencies, and never starts a service or bot.
+Local credentials and workspaces are not bundled or copied to the hub.
+
+An enrollment timeout retains the original grant/key identity. The installer
+first queries signed, fresh, read-only status for that SAME grant and key. A
+positive accepted receipt can be recovered even after its grant expires; an
+expired unconsumed grant is not renewed. Revocation, changed keys/hello and
+foreign identities fail closed. Native execution still requires an explicit
+reviewed activation receipt and an approved bot placement.

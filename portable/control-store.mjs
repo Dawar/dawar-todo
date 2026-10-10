@@ -19,6 +19,8 @@ export class HubStore {
       CREATE TABLE IF NOT EXISTS portable_sessions(hash TEXT PRIMARY KEY, owner TEXT NOT NULL, user_id TEXT NOT NULL, csrf TEXT NOT NULL, expires_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS portable_login(state_hash TEXT PRIMARY KEY, nonce TEXT NOT NULL, verifier TEXT NOT NULL, return_to TEXT NOT NULL, expires_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS portable_authority(id INTEGER PRIMARY KEY CHECK(id=1), writer_id TEXT NOT NULL, epoch INTEGER NOT NULL, frozen INTEGER NOT NULL DEFAULT 1);
+      CREATE TABLE IF NOT EXISTS portable_rpc_cache(owner TEXT NOT NULL,bot_id TEXT NOT NULL,epoch INTEGER NOT NULL,method TEXT NOT NULL,params_hash TEXT NOT NULL,result TEXT NOT NULL,observed_at INTEGER NOT NULL,PRIMARY KEY(owner,bot_id,epoch,method,params_hash));
+      CREATE TABLE IF NOT EXISTS portable_tickets(jti TEXT PRIMARY KEY,expires_at INTEGER NOT NULL);
     `);
   }
   transaction(fn) {
@@ -26,9 +28,17 @@ export class HubStore {
     try { const value = fn(); this.db.exec('COMMIT'); return value; }
     catch (error) { this.db.exec('ROLLBACK'); throw error; }
   }
-  grantEnrollment(owner, approvedFingerprint, now = Date.now()) {
+  grantEnrollment(owner, approvedFingerprint, now = Date.now(), operationId = null, retryToken = null) {
     if (!owner || !/^[a-f0-9]{64}$/.test(approvedFingerprint)) throw Error('Owner and confirmed node fingerprint required.');
-    const token = secret(), grantId = `enroll:${secret()}`;
+    if(operationId && (!id(operationId)||typeof retryToken!=='string'||retryToken.length>100))throw Error('Invalid enrollment operation.');
+    const token = retryToken ?? secret(), grantId = operationId ? `enroll:${operationId}` : `enroll:${secret()}`;
+    const old=this.db.prepare('SELECT * FROM portable_enrollment WHERE id=?').get(grantId);
+    if(old){
+      if(old.owner!==owner||old.fingerprint!==approvedFingerprint||old.token_hash!==digest(token))throw Error('Original enrollment identity changed.');
+      if(old.consumed_at)throw Error('Original enrollment was consumed. Refresh the machine list; no new grant was made.');
+      if(old.expires_at<=now)throw Error('Original grant expired. Explicitly start a new pairing attempt.');
+      return {grantId,token,expiresAt:old.expires_at};
+    }
     this.db.prepare('INSERT INTO portable_enrollment(id,owner,token_hash,fingerprint,expires_at) VALUES(?,?,?,?,?)')
       .run(grantId, owner, digest(token), approvedFingerprint, now + 300000);
     return { grantId, token, expiresAt: now + 300000 };
@@ -42,6 +52,19 @@ export class HubStore {
       this.db.prepare('UPDATE portable_enrollment SET challenge=?,public_key=?,challenge_at=? WHERE id=?').run(challenge, publicKey, now, grant.id);
       return { grantId: grant.id, challenge, expiresAt: Math.min(grant.expires_at, now + 60000) };
     });
+  }
+  enrollmentStatus({ token, publicKey, hello, nonce, issuedAt, proof }, now = Date.now()) {
+    compatible(hello);
+    if (typeof token !== 'string' || token.length > 100 || typeof publicKey !== 'string' || publicKey.length > 1000
+      || !/^[A-Za-z0-9_-]{43}$/.test(nonce) || !Number.isSafeInteger(issuedAt) || Math.abs(now-issuedAt)>60000
+      || !verifySignature(publicKey,{purpose:'enrollment-status',tokenHash:digest(token),publicKey,hello,nonce,issuedAt},proof)) throw Error('Invalid original enrollment status proof.');
+    const g=this.db.prepare('SELECT * FROM portable_enrollment WHERE token_hash=?').get(digest(token));
+    if (!g || g.fingerprint!==publicFingerprint(publicKey)) throw Error('Original enrollment identity not found.');
+    if (!g.consumed_at) return {state:g.expires_at>now?'pending':'expired',grantId:g.id,expiresAt:g.expires_at};
+    const n=this.db.prepare('SELECT * FROM portable_nodes WHERE owner=? AND fingerprint=?').get(g.owner,g.fingerprint);
+    if (!n || n.public_key!==publicKey || n.hello!==canonical(hello)) throw Error('Consumed enrollment cannot be reconciled to the same node.');
+    if (n.revoked_at) throw Error('Original node enrollment was revoked.');
+    return {state:'accepted',grantId:g.id,nodeId:n.id,owner:n.owner,fingerprint:n.fingerprint};
   }
   enroll(grantId, hello, proof, now = Date.now()) {
     compatible(hello);
@@ -92,6 +115,7 @@ export class HubStore {
   enqueue(owner, botId, operationId, payload, now = Date.now()) {
     if (!id(operationId)) throw Error('Original operation identity required.');
     const text = boundedFrame(payload);
+    if(Buffer.byteLength(text)>512*1024)throw Error('Command exceeds the bounded transport payload. Use registered attachments.');
     return this.transaction(() => {
       const p = this.placement(owner, botId);
       const binding = { owner, botId, nodeId: p.node_id, epoch: p.epoch, payload };
@@ -105,12 +129,15 @@ export class HubStore {
   sync(nodeId, cursor = 0) {
     this.node(nodeId);
     if (!Number.isSafeInteger(cursor) || cursor < 0) throw Error('Invalid reconnect cursor.');
-    return {
+    const value={
       controls: this.db.prepare('SELECT * FROM portable_placements WHERE node_id=? ORDER BY bot_id').all(nodeId),
       // Pending commands are always included after a lost receipt. A cursor
       // describes observed history; it never silently discards queued work.
       commands: this.db.prepare("SELECT * FROM portable_mailbox WHERE node_id=? AND (sequence>? OR state IN ('queued','received')) ORDER BY sequence LIMIT 40").all(nodeId, cursor),
     };
+    const selected=[];let bytes=Buffer.byteLength(JSON.stringify({...value,commands:[]}));
+    for(const command of value.commands){const size=Buffer.byteLength(JSON.stringify(command))+1;if(bytes+size>900*1024)break;selected.push(command);bytes+=size;}
+    return {...value,commands:selected};
   }
   receipt(nodeId, operationId, hash, state, receipt, now = Date.now()) {
     this.node(nodeId); const text = boundedFrame(receipt);

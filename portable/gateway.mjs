@@ -1,14 +1,19 @@
 import { createServer, request as httpRequest } from 'node:http';
 import { WebSocketServer } from 'ws';
-import { join } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { readFile,stat,realpath } from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
+import { join,resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { randomUUID,createHmac } from 'node:crypto';
 import { HubStore } from './control-store.mjs';
 import { LocalD1 } from './sqlite.mjs';
-import { GoogleIdentity, stripIdentity } from './identity.mjs';
+import { OIDCIdentity, stripIdentity,csrfCookie } from './identity.mjs';
 import { compatible, MAX_FRAME_BYTES, secret, verifySignature } from './protocol.mjs';
 import { appAccessResponse } from '../worker/access.ts';
 import { signGateway } from './gateway-proof.ts';
 import { ObjectStorage } from './object-storage.mjs';
+import { HubRpc } from './hub-rpc.mjs';
+import { verifyBotTicket } from '../lib/bots-auth.ts';
 
 const json = (response,status,body) => { response.writeHead(status,{'content-type':'application/json','cache-control':'no-store'});response.end(JSON.stringify(body)); };
 async function readBody(req) {
@@ -19,9 +24,11 @@ async function readBody(req) {
 export function startGateway(config) {
   const store = new HubStore(join(config.dataDirectory,'control.sqlite'));
   const application = new LocalD1(join(config.dataDirectory,'application.sqlite'));
-  const identity = new GoogleIdentity(store,config);
+  const identity = new OIDCIdentity(store,config);
   const objects = new ObjectStorage(config);
   const connections = new Map(), challenges = new Map();
+  const router = new HubRpc(store,connections), browsers=new Set();
+  const downloadDirectory=resolve(config.agentDownloadDirectory??fileURLToPath(new URL('../agent-downloads',import.meta.url)));
   const sockets = new WebSocketServer({noServer:true,maxPayload:MAX_FRAME_BYTES,perMessageDeflate:false});
   const server = createServer(async (req,res) => {
     try {
@@ -41,7 +48,7 @@ export function startGateway(config) {
       if (u.pathname === '/auth/callback' && req.method === 'GET') {
         const a = await identity.callback(r);res.writeHead(303,{location:a.location,'set-cookie':a.cookies,'cache-control':'no-store'});return res.end();
       }
-      if (u.pathname === '/auth/session' && req.method === 'GET') return json(res,session?200:401,session?{owner:session.owner,userId:session.userId,csrf:session.csrf}:{error:'Sign in required.'});
+      if (u.pathname === '/auth/session' && req.method === 'GET') {if(session)res.setHeader('set-cookie',csrfCookie(session.csrf));return json(res,session?200:401,session?{owner:session.owner,userId:session.userId,csrf:session.csrf}:{error:'Sign in required.'});}
       if (u.pathname === '/auth/logout' && req.method === 'POST') {
         if (!session) return json(res,401,{error:'Sign in required.'});identity.csrf(r,session);
         res.writeHead(204,{'set-cookie':identity.logout(r),'cache-control':'no-store'});return res.end();
@@ -54,12 +61,30 @@ export function startGateway(config) {
       if (u.pathname === '/nodes/enroll/prove' && req.method === 'POST') {
         const b = await readBody(req);return json(res,200,store.enroll(b.grantId,b.hello,b.proof));
       }
+      if (u.pathname === '/nodes/enroll/status' && req.method === 'POST') return json(res,200,store.enrollmentStatus(await readBody(req)));
       if (u.pathname.startsWith('/api/portable/')) {
         if (!session || session.owner!==config.owner.key) return json(res,403,{error:'Owner session required.'});
         if(req.method!=='GET')identity.csrf(r,session);
         const b = req.method==='GET'?{}:await readBody(req);
         if(u.pathname==='/api/portable/nodes' && req.method==='GET') return json(res,200,{nodes:store.db.prepare('SELECT id,fingerprint,hello,revoked_at FROM portable_nodes WHERE owner=?').all(session.owner).map(n=>({...n,online:connections.has(n.id)}))});
-        if(u.pathname==='/api/portable/enrollment' && req.method==='POST')return json(res,200,store.grantEnrollment(session.owner,b.fingerprint));
+        if(u.pathname==='/api/portable/installer'&&req.method==='GET'){
+          const d=JSON.parse(await readFile(join(downloadDirectory,'current.json'),'utf8'));
+          if(!/^dawartodo-agent-[a-f0-9]{12}\.zip$/.test(d.name)||!/^[a-f0-9]{64}$/.test(d.sha256))throw Error('Installer manifest unavailable.');
+          return json(res,200,{source:d.source,sha256:d.sha256,bytes:d.bytes,href:'/api/portable/installer/download'});
+        }
+        if(u.pathname==='/api/portable/installer/download'&&req.method==='GET'){
+          const d=JSON.parse(await readFile(join(downloadDirectory,'current.json'),'utf8'));
+          if(!/^dawartodo-agent-[a-f0-9]{12}\.zip$/.test(d.name))throw Error('Installer name invalid.');
+          const path=join(downloadDirectory,d.name),s=await stat(path);
+          if(!s.isFile()||s.size!==d.bytes||s.size>32*1024*1024||await realpath(path)!==path)throw Error('Installer file invalid.');
+          res.writeHead(200,{'content-type':'application/zip','content-length':s.size,'content-disposition':`attachment; filename="${d.name}"`,'cache-control':'private, no-store','x-content-type-options':'nosniff'});
+          const stream=createReadStream(path);stream.on('error',()=>res.destroy());res.on('close',()=>stream.destroy());return stream.pipe(res);
+        }
+        if(u.pathname==='/api/portable/enrollment' && req.method==='POST'){
+          if(typeof b.operationId!=='string'||b.operationId.length>180)throw Error('Original pairing operation required.');
+          const token=createHmac('sha256',config.gatewaySecret).update(JSON.stringify({owner:session.owner,operationId:b.operationId,fingerprint:b.fingerprint})).digest('base64url');
+          return json(res,200,store.grantEnrollment(session.owner,b.fingerprint,Date.now(),b.operationId,token));
+        }
         if(u.pathname==='/api/portable/revoke' && req.method==='POST'){store.revoke(session.owner,b.nodeId);connections.get(b.nodeId)?.close(1008,'Node revoked');return json(res,200,{revoked:true});}
         if(u.pathname==='/api/portable/placement' && req.method==='POST')return json(res,200,store.place(session.owner,b.botId,b.nodeId,b.expectedEpoch));
         if(u.pathname==='/api/portable/stop' && req.method==='POST'){
@@ -98,6 +123,37 @@ export function startGateway(config) {
   });
   server.on('upgrade',(req,socket,head)=>{
     const u=new URL(req.url,config.publicOrigin);
+    if(u.pathname==='/connect'){
+      const session=identity.session(new Request(u,{headers:req.headers}));
+      if(!session||req.headers.origin!==config.publicOrigin||u.searchParams.get('machine')!==(config.applicationEnvironment?.BOTS_MACHINE_ID??'dawar-vm')){socket.destroy();return;}
+      sockets.handleUpgrade(req,socket,head,ws=>{
+        const clientId=`browser:${randomUUID()}`;let authenticated=false,expiresAt=0;
+        const timeout=setTimeout(()=>{if(!authenticated)ws.close(1008,'Authentication expired');},10000);
+        const send=value=>{if(ws.readyState===1)ws.send(JSON.stringify(value));};
+        let frameChain=Promise.resolve();
+        ws.on('message',raw=>{
+          frameChain=frameChain.then(async()=>{
+            if (ws.readyState!==1) return;
+            if(!identity.session(new Request(u,{headers:req.headers})))throw Error('Owner session expired.');
+            if(raw.toString()==='ping'){if(authenticated)ws.send('pong');return;}
+            const m=JSON.parse(raw.toString());
+            if(!authenticated){
+              if(m.type!=='auth'||m.desktop||m.role==='task-request')throw Error('Unsupported portable browser role.');
+              const ticket=await verifyBotTicket(m.ticket,config.gatewaySecret,config.applicationEnvironment?.BOTS_MACHINE_ID??'dawar-vm');
+              if(ticket.owner!==session.owner||store.db.prepare('SELECT 1 FROM portable_tickets WHERE jti=?').get(ticket.jti))throw Error('Foreign or reused ticket.');
+              store.db.prepare('DELETE FROM portable_tickets WHERE expires_at<=?').run(Date.now());
+              store.db.prepare('INSERT INTO portable_tickets VALUES(?,?)').run(ticket.jti,ticket.exp*1000);
+              authenticated=true;expiresAt=ticket.sessionExp*1000;clearTimeout(timeout);browsers.add({ws,owner:session.owner});
+              send({type:'authenticated',role:'browser',online:true,expiresAt,clientId});return;
+            }
+            if(expiresAt<=Date.now()||m.type!=='request')throw Error('Session or request invalid.');
+            try{const value=await router.request(session.owner,m,clientId);send({type:'response',id:m.id,...value});}
+            catch(e){send({type:'response',id:m.id,error:e.message,outcome:e.outcome==='rejected'?'rejected':'uncertain',delivery:e.delivery});}
+          }).catch(()=>ws.close(1008,'Owner request rejected'));
+        });
+        ws.on('close',()=>{clearTimeout(timeout);for(const b of browsers)if(b.ws===ws)browsers.delete(b);});
+      });return;
+    }
     if(u.pathname!=='/nodes/connect' || req.headers.origin){socket.destroy();return;}
     sockets.handleUpgrade(req,socket,head,ws=>{
       const challenge=secret(),connectionId=randomUUID(),createdAt=Date.now();challenges.set(connectionId,challenge);
@@ -117,8 +173,9 @@ export function startGateway(config) {
           }
           store.node(nodeId);if(connections.get(nodeId)!==ws)throw Error('Connection superseded.');
           if(m.type==='sync')ws.send(JSON.stringify({type:'sync',...store.sync(nodeId,m.cursor??0)}));
-          else if(m.type==='receipt') {const receipt=store.receipt(nodeId,m.operationId,m.fingerprint,m.state,m.receipt);ws.send(JSON.stringify({type:'receipt-ack',operationId:m.operationId,state:receipt.state}));}
-          else if(m.type==='event') {const sequence=store.event(nodeId,m.eventId,m.botId,m.epoch,m.event);ws.send(JSON.stringify({type:'event-ack',eventId:m.eventId,sequence}));}
+          else if(m.type==='receipt') {const receipt=store.receipt(nodeId,m.operationId,m.fingerprint,m.state,m.receipt);router.receipt(receipt);ws.send(JSON.stringify({type:'receipt-ack',operationId:m.operationId,state:receipt.state}));}
+          else if(m.type==='rpc-result')router.readResult(nodeId,m);
+          else if(m.type==='event') {const sequence=store.event(nodeId,m.eventId,m.botId,m.epoch,m.event);ws.send(JSON.stringify({type:'event-ack',eventId:m.eventId,sequence}));const n=store.node(nodeId);for(const b of browsers)if(b.owner===n.owner&&b.ws.readyState===1)b.ws.send(JSON.stringify({type:'event',event:m.event}));}
           else throw Error('Unknown node frame.');
         } catch {ws.close(1008,'Node frame rejected');}
       });
@@ -126,5 +183,5 @@ export function startGateway(config) {
     });
   });
   server.listen(config.gatewayPort??3210,'127.0.0.1');
-  return {server,store,application,objects,close:async()=>{for(const ws of sockets.clients)ws.close();await new Promise(resolve=>server.close(resolve));objects.close();store.close();application.close();}};
+  return {server,store,application,objects,router,close:async()=>{router.close();for(const ws of sockets.clients)ws.close();await new Promise(resolve=>server.close(resolve));objects.close();store.close();application.close();}};
 }
