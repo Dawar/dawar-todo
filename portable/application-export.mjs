@@ -199,7 +199,7 @@ export async function exportFrozenD1Application({withFrozenSource,expectedFreeze
   if(typeof withFrozenSource!=='function'||!expectedFreeze||typeof expectedFreeze.sourceId!=='string'||
       !expectedFreeze.sourceId||typeof expectedFreeze.operationId!=='string'||!expectedFreeze.operationId||
       !Number.isSafeInteger(expectedFreeze.epoch)||expectedFreeze.epoch<1)throw failure();
-  const expected={sourceId:expectedFreeze.sourceId,operationId:expectedFreeze.operationId,epoch:expectedFreeze.epoch};
+  const expected={sourceId:expectedFreeze.sourceId,operationId:expectedFreeze.operationId,epoch:expectedFreeze.epoch,...(Object.hasOwn(expectedFreeze,'scope')?{scope:expectedFreeze.scope}:{})};
   return exportApplicationSnapshot({...options,sourceEngine:'cloudflare-d1',withSnapshot:async callback=>{
     let called=false,completed=false,reading=true,inventory;
     try {

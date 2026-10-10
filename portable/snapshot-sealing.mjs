@@ -69,10 +69,11 @@ export function applicationReadBinding(value) {
       typeof value.sourceOrigin!=='string'||new URL(value.sourceOrigin).origin!==value.sourceOrigin||!value.sourceOrigin.startsWith('https://')||
       !Number.isSafeInteger(value.sequence)||value.sequence<1||value.sequence>1000000||
       typeof value.commandSHA256!=='string'||!/^[a-f0-9]{64}$/.test(value.commandSHA256)||
-      !f||typeof f!=='object'||Object.keys(f).length!==5||Object.keys(f).some(k=>!['sourceId','operationId','epoch','generation','expiresAt'].includes(k))||
+      !f||typeof f!=='object'||Object.keys(f).length!==(Object.hasOwn(f,'scope')?6:5)||Object.keys(f).some(k=>!['sourceId','operationId','epoch','generation','expiresAt','scope'].includes(k))||
+      Object.hasOwn(f,'scope')&&f.scope!=='d1-database-writes'||
       !Number.isSafeInteger(f.epoch)||f.epoch<1||!Number.isSafeInteger(f.generation)||f.generation<1||!Number.isSafeInteger(f.expiresAt))throw Error('Invalid application read binding.');
   return {sourceOrigin:value.sourceOrigin,captureId:pageId(value.captureId),requestId:pageId(value.requestId),sequence:value.sequence,commandSHA256:value.commandSHA256,
-    freeze:{sourceId:pageId(f.sourceId),operationId:pageId(f.operationId),epoch:f.epoch,generation:f.generation,expiresAt:f.expiresAt}};
+    freeze:{sourceId:pageId(f.sourceId),operationId:pageId(f.operationId),epoch:f.epoch,generation:f.generation,expiresAt:f.expiresAt,...(Object.hasOwn(f,'scope')?{scope:f.scope}:{})}};
 }
 export async function sealApplicationRead(payload,recipient,binding) {
   binding=applicationReadBinding(binding);

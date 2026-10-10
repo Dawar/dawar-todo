@@ -36,20 +36,24 @@ export function cellSQL(cell) {
 export function createApplicationFreezeVerifier({expectedFreeze,verifyFreeze,signal,stillReading=()=>true}) {
   if(typeof verifyFreeze!=='function'||!expectedFreeze)throw failure();
   const expected={sourceId:expectedFreeze.sourceId,operationId:expectedFreeze.operationId,epoch:expectedFreeze.epoch};
+  const scope=expectedFreeze.scope??'all-application-writers';
+  if(!['all-application-writers','d1-database-writes'].includes(scope))throw failure();
   if(typeof expected.sourceId!=='string'||!expected.sourceId||typeof expected.operationId!=='string'||
       !expected.operationId||!Number.isSafeInteger(expected.epoch)||expected.epoch<1)throw failure();
   let binding,wall,observed,monotonicDeadline;
   return async()=>{
     signal?.throwIfAborted();const proof=await verifyFreeze();signal?.throwIfAborted();const now=Date.now();
     if(!stillReading()||!proof||proof.version!==1||proof.kind!=='dawar-application-writer-freeze'||proof.status!=='frozen'||
-        proof.scope!=='all-application-writers'||proof.sourceId!==expected.sourceId||
+        proof.scope!==scope||proof.sourceId!==expected.sourceId||
         proof.operationId!==expected.operationId||proof.epoch!==expected.epoch||
         proof.sourceId.length>1024||proof.operationId.length>1024||
         !Number.isSafeInteger(proof.generation)||proof.generation<1||
         !Number.isSafeInteger(proof.expiresAt)||proof.expiresAt<=now||proof.expiresAt-now>900000||
         !Number.isSafeInteger(proof.observedAt)||Math.abs(proof.observedAt-now)>5000||
         wall!==undefined&&now<wall||observed!==undefined&&proof.observedAt<observed||
-        proof.admittedWriters!==0||proof.unknownWriters!==0)throw failure();
+        (scope==='all-application-writers'?(proof.admittedWriters!==0||proof.unknownWriters!==0):
+          (proof.externalWriterCoverageEstablished!==false||proof.automaticExecutionDisabled!==true||
+            !/^[a-f0-9]{64}$/.test(proof.schemaSHA256??'')||!/^[a-f0-9]{64}$/.test(proof.guardSHA256??''))))throw failure();
     const current=JSON.stringify([proof.sourceId,proof.operationId,proof.epoch,proof.generation,proof.expiresAt]);
     if(binding!==undefined&&binding!==current)throw failure();binding=current;
     monotonicDeadline??=performance.now()+proof.expiresAt-now;
