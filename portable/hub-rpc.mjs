@@ -1,11 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { fingerprint, boundedFrame, id } from './protocol.mjs';
 import { HUB_READS,HUB_MUTATIONS } from './control-protocol.mjs';
+import { DESKTOP_READS, DESKTOP_MUTATIONS, desktopCapable } from './desktop-transport.mjs';
 
 // Explicit method sets keep an arbitrary browser method from becoming remote
 // shell/native RPC authority. The real runtime still validates every request.
-export const AGENT_READS=new Set(['snapshot','runtime.info','work.read','goals.read','history','history.page','history.turn','history.view','history.log','history.detail','history.attachments','replies.prepare','replies.resolve','artifacts.list','artifacts.preview','events','usage.bot','usage.account','usage.history','attachments.read','inbox.list','runs.page','runs.turns','runs.receipt','runs.requests','runs.findings','runs.decisions','execution.config']);
-export const AGENT_MUTATIONS=new Set(['turn.send','turn.interrupt','requests.respond','bots.update','goals.set','goals.clear','artifacts.index']);
+export const AGENT_READS=new Set(['snapshot','runtime.info','work.read','goals.read','history','history.page','history.turn','history.view','history.log','history.detail','history.attachments','replies.prepare','replies.resolve','artifacts.list','artifacts.preview','events','usage.bot','usage.account','usage.history','attachments.read','inbox.list','runs.page','runs.turns','runs.receipt','runs.requests','runs.findings','runs.decisions','execution.config',...DESKTOP_READS]);
+export const AGENT_MUTATIONS=new Set(['turn.send','turn.interrupt','requests.respond','bots.update','goals.set','goals.clear','artifacts.index',...DESKTOP_MUTATIONS]);
 export class HubRpc {
   constructor(store,connections){this.store=store;this.connections=connections;this.reads=new Map();this.writes=new Map();}
   connection(placement){const ws=this.connections.get(placement.node_id);return ws?.readyState===1?ws:null;}
@@ -18,6 +19,8 @@ export class HubRpc {
       return {result:await this.controls.request(owner,request)};
     }
     const p=this.store.placement(owner,request.botId),ws=this.connection(p);
+    if((DESKTOP_READS.has(request.method)||DESKTOP_MUTATIONS.has(request.method))&&!desktopCapable(this.store.node(p.node_id),ws))
+      throw Object.assign(Error('The assigned Linux desktop is offline or unavailable.'),{outcome:'not-sent'});
     if(AGENT_READS.has(request.method)){
       const binding=fingerprint(request.params??{}),cached=this.store.db.prepare('SELECT result,observed_at FROM portable_rpc_cache WHERE owner=? AND bot_id=? AND epoch=? AND method=? AND params_hash=?').get(owner,p.bot_id,p.epoch,request.method,binding);
       if(!ws){
@@ -27,7 +30,7 @@ export class HubRpc {
       const rpcId=`rpc:${randomUUID()}`;
       const promise=new Promise((resolve,reject)=>{
         const timer=setTimeout(()=>{this.reads.delete(rpcId);reject(Object.assign(Error('Node read timed out; the conversation was not changed.'),{outcome:'not-sent'}));},15000);
-        this.reads.set(rpcId,{nodeId:p.node_id,botId:p.bot_id,epoch:p.epoch,owner,method:request.method,binding,resolve,reject,timer});
+        this.reads.set(rpcId,{nodeId:p.node_id,botId:p.bot_id,epoch:p.epoch,owner,method:request.method,binding,socket:ws,resolve,reject,timer});
       });
       ws.send(boundedFrame({type:'rpc',rpcId,botId:p.bot_id,epoch:p.epoch,method:request.method,params:request.params??{},clientId}));
       return promise;
@@ -67,11 +70,14 @@ export class HubRpc {
   readResult(nodeId,m){
     const r=this.reads.get(m.rpcId);if(!r)return;
     const n=this.store.node(nodeId),p=this.store.placement(n.owner,r.botId);
-    if(r.nodeId!==nodeId||p.node_id!==nodeId||p.epoch!==r.epoch||m.epoch!==r.epoch||m.botId!==r.botId)throw Error('Foreign or stale node response.');
+    if(r.nodeId!==nodeId||p.node_id!==nodeId||p.epoch!==r.epoch||m.epoch!==r.epoch||m.botId!==r.botId||this.connections.get(nodeId)!==r.socket)throw Error('Foreign or stale node response.');
     clearTimeout(r.timer);this.reads.delete(m.rpcId);
     if(m.error)return r.reject(Object.assign(Error(m.error),{outcome:'not-sent'}));
     try{this.controls?.projectRead(r.botId,r.method,m.result);}catch(error){return r.reject(Object.assign(error,{outcome:'not-sent'}));}
     const text=boundedFrame(m.result);
+    // RAM tickets and screenshots must not become durable history/cache or
+    // remain usable after reconnect. The browser gets this one live response.
+    if(DESKTOP_READS.has(r.method))return r.resolve({result:m.result});
     try{this.store.transaction(()=>{
       const current=this.store.placement(r.owner,r.botId);
       if(current.node_id!==nodeId||current.epoch!==r.epoch)throw Error('Native read placement changed before persistence.');
@@ -110,7 +116,8 @@ export class HubRpc {
     for(const [key,value] of Object.entries(first.capabilities??{}))if(value===1&&snapshots.length===placements.length&&snapshots.every(({s})=>s.capabilities?.[key]===1))common[key]=1;
     // A runtime's generic capability is not evidence that the hub transport
     // has implemented its consumer. Keep unfinished portable controls hidden.
-    for(const key of ['taskRequests','backgroundRunLanes','scheduleDecisions','peerInbox','peerRootControls','peerBodyPaging','collaborationRooms','operatorCalls','operatorInputQuestions','secureInputs','secureResponseLifecycle','messageBursts','burstDiscard','burstControls','burstQueue','taskQueues','teams','botDesktops','botBrowserRetention','botAdministration'])delete common[key];
+    for(const key of ['taskRequests','backgroundRunLanes','scheduleDecisions','peerInbox','peerRootControls','peerBodyPaging','collaborationRooms','operatorCalls','operatorInputQuestions','secureInputs','secureResponseLifecycle','messageBursts','burstDiscard','burstControls','burstQueue','taskQueues','teams','botAdministration'])delete common[key];
+    if(placements.some(p=>!desktopCapable(this.store.node(p.node_id),this.connection(p))))for(const key of ['botDesktops','botBrowserRetention'])delete common[key];
     if(placements.some(p=>JSON.parse(this.store.node(p.node_id).hello).capabilities.autonomousGoals!==true))delete common.nativeGoals;
     const schedules=this.controls?placements.flatMap(p=>this.controls.store.list('schedule',p.bot_id)):[],runs=this.controls?placements.flatMap(p=>this.controls.store.list('run',p.bot_id)).sort((a,b)=>b.scheduledAt.localeCompare(a.scheduledAt)).slice(0,100):scoped('runs');
     return {result:{...first,cursor,bots,workByBot:scoped('workByBot'),pending:scoped('pending'),schedules,runs,activeScheduledTurns:scoped('activeScheduledTurns'),ready:snapshots.length===placements.length&&placements.every(p=>!!this.connection(p)),

@@ -14,6 +14,8 @@ import { queueResumeReceipt } from './agent-queue-resume.mjs';
 import { NodeStorageClient } from './agent-storage.mjs';
 import { artifactInput } from './node-storage-contract.mjs';
 import { AgentContextAdmission } from './context-admission.mjs';
+import { BotDesktops } from '../bot-bridge/desktops.mjs';
+import { AgentDesktopTransport, DESKTOP_READS, DESKTOP_MUTATIONS } from './desktop-transport.mjs';
 const fingerprintLegacy=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
 export class AgentTransport {
@@ -21,6 +23,7 @@ export class AgentTransport {
     Object.assign(this,{config,runtime,journal,key,enrollment,socketFactory});
     this.socket=null;this.retry=0;this.closed=false;this.pending=new Map();this.controlPending=new Map();this.cursor=journal.cursor();
     this.terminalCandidates=new Map();
+    this.desktops=new AgentDesktopTransport({runtime,journal,currentSocket:()=>this.socket});
     const nativeGuard=runtime.codex.admissionGuard;
     const contexts=new AgentContextAdmission(runtime,journal);
     runtime.codex.admissionGuard=(method,params)=>{
@@ -45,7 +48,7 @@ export class AgentTransport {
     });
   }
   hello(){return {protocol:PROTOCOL_VERSION,runtime:RUNTIME_VERSION,platform:process.platform,arch:process.arch,
-    capabilities:{text:true,localStdio:true,registeredArtifacts:true,profileReads:true,memoryCompaction:process.platform==='linux',pdfPreview:process.platform==='linux',desktop:false,voice:false,secureTransfer:false,autonomousGoals:false}};}
+    capabilities:{text:true,localStdio:true,registeredArtifacts:true,profileReads:true,memoryCompaction:process.platform==='linux',pdfPreview:process.platform==='linux',desktop:process.platform==='linux'&&!!this.runtime.desktops,voice:false,secureTransfer:false,autonomousGoals:false}};}
   send(value){if(this.socket?.readyState===WebSocket.OPEN)this.socket.send(JSON.stringify(value));}
   controlRequest(botId,tool,args){
     if(!HUB_TOOLS.has(tool))throw Error('Unsupported hub tool.');
@@ -130,7 +133,7 @@ export class AgentTransport {
         }
         if(m.type==='sync'){
           if(m.controls.some(c=>c.node_id!==this.enrollment.nodeId||c.owner!==this.enrollment.owner))throw Error('Foreign control snapshot.');
-          this.journal.synchronize(m.controls);authentication=true;this.retry=0;this.runtime.relayOnline=true;
+          this.journal.synchronize(m.controls);void this.desktops.reconcile();authentication=true;this.retry=0;this.runtime.relayOnline=true;
           // This synchronized fence blocks new admission. User queuePaused,
           // Goal and current-turn state are not rewritten to infer Stop ACK.
           for(const command of m.commands){
@@ -143,11 +146,17 @@ export class AgentTransport {
             }
           }
           this.flushEvents();
+        } else if(authentication && m.type==='desktop-request'){
+          void this.desktops.message(ws,m)?.catch(()=>ws.close(1008,'Desktop scope changed'));
         } else if(authentication && m.type==='rpc'){
           const control=this.journal.db.prepare('SELECT * FROM node_controls WHERE bot_id=?').get(m.botId);
           if(!AGENT_READS.has(m.method)||control?.epoch!==m.epoch)throw Error('Read is outside assigned scope.');
           void (async()=>{try{
-            const result=await this.runtime.handle({method:m.method,botId:m.botId,params:m.params,clientId:`hub:${this.enrollment.nodeId}`});
+            if(DESKTOP_READS.has(m.method)&&!this.runtime.desktops)throw Error('Linux desktops are not configured.');
+            if(DESKTOP_READS.has(m.method)&&!this.journal.currentControl({bot_id:m.botId,epoch:m.epoch}))throw Error('Desktop controls are not synchronized.');
+            if(m.method==='desktop.open'&&(!id(m.clientId)||!m.clientId.startsWith('browser:')))throw Error('A live authenticated parent browser is required.');
+            const work=()=>this.runtime.handle({method:m.method,botId:m.botId,params:m.params,clientId:m.method==='desktop.open'?m.clientId:`hub:${this.enrollment.nodeId}`});
+            const result=m.method==='desktop.open'?await this.runtime.maintenance.admit(work):await work();
             const after=this.journal.currentControl({bot_id:m.botId,epoch:m.epoch});
             if(!after||this.socket!==ws)return;
             const frame={type:'rpc-result',rpcId:m.rpcId,botId:m.botId,epoch:m.epoch,result};
@@ -164,6 +173,7 @@ export class AgentTransport {
     });
     ws.addEventListener('close',()=>{
       if(this.socket!==ws)return;this.journal.disconnect();this.runtime.relayOnline=false;clearInterval(this.heartbeat);
+      void this.desktops.disconnect(ws);
       for(const request of [...this.controlPending.values()])if(request.ws===ws)request.fail(Error('Connection ended before hub tool confirmation; retain the original operation.'));
       if(!this.closed)this.retryTimer=setTimeout(()=>this.connect(),Math.min(30000,1000*2**Math.min(this.retry++,5)));
     });
@@ -174,9 +184,12 @@ export class AgentTransport {
     if(row.state==='terminal'||row.state==='unknown'||row.state==='native-accepted'||row.state==='running'){this.receipt(row);return;}
     const payload=JSON.parse(command.payload);
     if(!AGENT_MUTATIONS.has(payload.method)&&!NODE_LOGICAL_COMMANDS.has(payload.method))throw Error('Unsupported assigned command.');
+    if(DESKTOP_MUTATIONS.has(payload.method)&&!this.runtime.desktops){
+      this.journal.settle(command.operation_id,'terminal',{operationId:command.operation_id,outcome:'rejected',error:'Linux desktops are not configured.'});this.receipt(this.journal.db.prepare('SELECT * FROM node_commands WHERE operation_id=?').get(command.operation_id));return;
+    }
     // Stop itself remains admissible while the synchronized Stop fence blocks
     // new turns. Offline/foreign/stale controls never grant interruption.
-    if(['turn.interrupt','portable.queueResume','portable.queueSend'].includes(payload.method)?!this.journal.currentControl(command):!this.journal.canAdmit(command))return;
+    if(['turn.interrupt','portable.queueResume','portable.queueSend'].includes(payload.method)||DESKTOP_MUTATIONS.has(payload.method)?!this.journal.currentControl(command):!this.journal.canAdmit(command))return;
     const bot=this.runtime.store.bot(command.bot_id);if(!bot || bot.archived || bot.deletedAt)throw Error('Assigned native bot is absent or archived.');
     const request={method:payload.method,botId:command.bot_id,operationId:command.operation_id,params:payload.params,clientId:`hub:${this.enrollment.nodeId}`};
     if(row.state==='dispatching' && !this.runtime.store.operation(command.operation_id)) {
@@ -188,7 +201,9 @@ export class AgentTransport {
     if(NODE_LOGICAL_COMMANDS.has(payload.method)&&this.runtime.maintenance.holding())return;
     if(row.state==='received'){this.receipt(row);if(!NODE_LOGICAL_COMMANDS.has(payload.method))this.journal.prepare(command.operation_id);}
     try {
-      const result=NODE_LOGICAL_COMMANDS.has(payload.method)?await admitLogicalCommand(this,command,payload):await this.runtime.handle(request), turnId=result?.turn?.id??result?.turnId;
+      const run=()=>this.runtime.handle(request);
+      const result=NODE_LOGICAL_COMMANDS.has(payload.method)?await admitLogicalCommand(this,command,payload):
+        DESKTOP_MUTATIONS.has(payload.method)?await this.runtime.maintenance.admit(run):await run(), turnId=result?.turn?.id??result?.turnId;
       const terminalStatus=['completed','failed','interrupted'].includes(result?.turn?.status)?result.turn.status:null;
       const receipt=payload.method==='portable.queueResume'?queueResumeReceipt(command,result):{operationId:command.operation_id,threadId:bot.threadId,...(turnId?{turnId}:{}),...(terminalStatus?{nativeStatus:terminalStatus}:{}),result};
       this.journal.settle(command.operation_id,payload.method==='portable.queueResume'?'terminal':turnId?(terminalStatus?'terminal':'native-accepted'):payload.method==='turn.send'||NODE_LOGICAL_COMMANDS.has(payload.method)?'unknown':'terminal',receipt);
@@ -199,7 +214,7 @@ export class AgentTransport {
     this.receipt(this.journal.db.prepare('SELECT * FROM node_commands WHERE operation_id=?').get(command.operation_id));
     this.terminal(this.journal.db.prepare('SELECT * FROM node_commands WHERE operation_id=?').get(command.operation_id));
   }
-  close(){this.closed=true;clearInterval(this.recoveryTimer);clearInterval(this.heartbeat);clearTimeout(this.retryTimer);for(const request of [...this.controlPending.values()])request.fail(Error('Agent control connection closed; retain the original operation.'));this.journal.disconnect();this.socket?.close();}
+  close(){this.closed=true;clearInterval(this.recoveryTimer);clearInterval(this.heartbeat);clearTimeout(this.retryTimer);for(const request of [...this.controlPending.values()])request.fail(Error('Agent control connection closed; retain the original operation.'));this.journal.disconnect();void this.desktops.disconnect(this.socket);this.socket?.close();}
 }
 
 export async function runAgent(config){
@@ -213,12 +228,14 @@ export async function runAgent(config){
   process.umask(0o077);
   const store=new Store(join(config.dataDirectory,'native-control.sqlite')),codex=new Codex(config.agent.codexBinary);
   const runtime=new BotRuntime({store,codex,root:config.agent.workspaces,defaultTimeZone:'America/Toronto'});
+  if(process.platform==='linux'&&config.agent.desktops?.enabled===true)runtime.desktops=new BotDesktops({runtime,...config.agent.desktops});
   const journal=new NodeJournal(join(config.dataDirectory,'node-journal.sqlite'));
   const manager=new CodexManager({runtime,store,directory:join(config.dataDirectory,'manager')});runtime.manager=manager;
   const transport=new AgentTransport({config,runtime,journal,key:nodeKey(join(config.dataDirectory,'node-key.pem')),enrollment});
   runtime.storage=new NodeStorageClient(runtime,transport,enrollment.hub);
+  runtime.relayBuffered=()=>transport.socket?.bufferedAmount??0;
   installHubToolRoutes(runtime,manager,transport);
-  await manager.listen();await runtime.start();transport.connect();
+  await manager.listen();await runtime.start();await manager.recover();await runtime.desktops?.recover();transport.connect();
   transport.recoveryTimer=setInterval(()=>void transport.recover().catch(error=>runtime.emit('fault',error)),5000);
   // No runtime.tick: logical queue/schedule authority must live at the hub.
   // Existing admitted native work and tool responses still stream normally.

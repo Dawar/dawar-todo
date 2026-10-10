@@ -696,3 +696,23 @@ work. Production producer installation and native/voice/issued-upload holds
 remain separate required actions. No external authority is configured by
 default; an unconnected controller still makes the route unavailable. This
 source wiring is not a production freeze, exported copy or rollover receipt.
+### Existing Linux desktops
+
+Linux execution can enable the existing desktop controller with private
+`agent.desktops: { enabled: true, base, launcher, adopt }` configuration. The
+paths are absolute node-local paths; `adopt` preserves original slug-to-desktop
+names. Copy the original adoption configuration and persistent desktop state
+at cutover. Enrollment and each authenticated live node handshake must both
+declare this Linux capability. The same agent implements local and remote
+Linux execution; Mac desktop remains unavailable and untested.
+
+The authenticated owner browser obtains a 30-second, single-use RAM ticket
+bound to its parent connection. The separate viewer connection additionally
+binds owner, bot, node, placement epoch and the exact live node socket. Tickets,
+passwords, previews and RFB input never enter mailbox/history/cache records.
+Node, parent, viewer or scope loss closes the stream without replaying input
+or destroying the persistent desktop. Existing browser retention, explicit
+exclusive control and screenshot-before-input tool rules are retained.
+Desktop starts and new viewers participate in maintenance admission; existing
+viewer activity participates in its request/tool accounting. Public adoption
+and actual Linux desktop recovery still require genuine cutover verification.

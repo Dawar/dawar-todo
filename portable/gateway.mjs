@@ -19,6 +19,7 @@ import { HubWriteAuthority,hubActivation } from './hub-authority.mjs';
 import { HUB_TOOLS } from './control-protocol.mjs';
 import { verifyBotTicket } from '../lib/bots-auth.ts';
 import {createVoiceRuntime} from './voice-runtime.mjs';
+import {HubDesktopTransport,DESKTOP_MUTATIONS,desktopCapable} from './desktop-transport.mjs';
 
 const json = (response,status,body) => { response.writeHead(status,{'content-type':'application/json','cache-control':'no-store'});response.end(JSON.stringify(body)); };
 async function readBody(req) {
@@ -35,7 +36,8 @@ export function startGateway(config) {
   const objects = new ObjectStorage(config,{writer});
   const connections = new Map(), challenges = new Map();
   const router = new HubRpc(store,connections), browsers=new Set();
-  const broadcast=(owner,event)=>{for(const b of browsers)if(b.owner===owner&&b.ws.readyState===1)b.ws.send(JSON.stringify({type:'event',event}));};
+  const desktop=new HubDesktopTransport({store,connections,parent:(owner,id)=>[...browsers].some(b=>b.owner===owner&&b.clientId===id&&!b.desktop&&b.ws.readyState===1&&b.expiresAt>Date.now()&&b.valid())});
+  const broadcast=(owner,event)=>{for(const b of browsers)if(b.owner===owner&&!b.desktop&&b.expiresAt>Date.now()&&b.valid()&&b.ws.readyState===1)b.ws.send(JSON.stringify({type:'event',event}));};
   const controls=new HubControls({path:join(config.dataDirectory,'control.sqlite'),hub:store,router,authority,broadcast,...(config.schedulerQuietWindow?{quietWindow:config.schedulerQuietWindow}:{})});router.controls=controls;
   const nodeStorage=new HubNodeStorage({hub:store,controls,application,objects,config});
   const voice=config.voice?.enabled===true?createVoiceRuntime(config,{writer,assertWriter:()=>controls.assertWriter()}):null;
@@ -108,7 +110,7 @@ export function startGateway(config) {
           return json(res,200,store.grantEnrollment(session.owner,b.fingerprint,Date.now(),b.operationId,token));
         }
         if(u.pathname==='/api/portable/revoke' && req.method==='POST'){store.revoke(session.owner,b.nodeId);connections.get(b.nodeId)?.close(1008,'Node revoked');return json(res,200,{revoked:true});}
-        if(u.pathname==='/api/portable/placement' && req.method==='POST')return json(res,200,store.place(session.owner,b.botId,b.nodeId,b.expectedEpoch));
+        if(u.pathname==='/api/portable/placement' && req.method==='POST'){const placement=store.place(session.owner,b.botId,b.nodeId,b.expectedEpoch);desktop.disconnectBot(b.botId);return json(res,200,placement);}
         if(u.pathname==='/api/portable/stop' && req.method==='POST'){
           if(b.stopped!==true)throw Error('Use the original queue or work Resume action to release Stop.');
           const p=store.stop(session.owner,b.botId,b.stopped);connections.get(p.node_id)?.send(JSON.stringify({type:'sync',...store.sync(p.node_id)}));
@@ -116,6 +118,7 @@ export function startGateway(config) {
         }
         if(u.pathname==='/api/portable/commands' && req.method==='POST'){
           if(!AGENT_MUTATIONS.has(b.payload?.method))throw Error('Internal logical dispatch is not a browser command.');
+          if(DESKTOP_MUTATIONS.has(b.payload.method)){const p=store.placement(session.owner,b.botId);if(!desktopCapable(store.node(p.node_id),connections.get(p.node_id)))throw Error('Linux desktop is unavailable.');}
           return json(res,200,store.enqueue(session.owner,b.botId,b.operationId,b.payload));
         }
         return json(res,404,{error:'Unknown portable operation.'});
@@ -162,27 +165,37 @@ export function startGateway(config) {
       const session=identity.session(new Request(u,{headers:req.headers}));
       if(!session||req.headers.origin!==config.publicOrigin||u.searchParams.get('machine')!==(config.applicationEnvironment?.BOTS_MACHINE_ID??'dawar-vm')){socket.destroy();return;}
       sockets.handleUpgrade(req,socket,head,ws=>{
-        const clientId=`browser:${randomUUID()}`;let authenticated=false,expiresAt=0;
+        const clientId=`browser:${randomUUID()}`;let authenticated=false,expiresAt=0,desktopBrowser=false;
+        const valid=()=>{const current=identity.session(new Request(u,{headers:req.headers}));return current?.owner===session.owner&&current?.userId===session.userId;};
         const timeout=setTimeout(()=>{if(!authenticated)ws.close(1008,'Authentication expired');},10000);
         const send=value=>{if(ws.readyState===1)ws.send(JSON.stringify(value));};
         let frameChain=Promise.resolve();
-        ws.on('message',raw=>{
+        ws.on('message',(raw,isBinary)=>{
           frameChain=frameChain.then(async()=>{
             if (ws.readyState!==1) return;
-            if(!identity.session(new Request(u,{headers:req.headers})))throw Error('Owner session expired.');
+            if(!valid())throw Error('Owner session expired or changed.');
+            if(isBinary){
+              if(!authenticated||!desktopBrowser||expiresAt<=Date.now()||raw.length>128*1024)throw Error('Invalid desktop binary frame.');
+              desktop.frame(clientId,{event:'data',data:raw.toString('base64')});return;
+            }
             if(raw.toString()==='ping'){if(authenticated)ws.send('pong');return;}
             const m=JSON.parse(raw.toString());
             if(!authenticated){
-              if(m.type!=='auth'||m.desktop||m.role==='task-request')throw Error('Unsupported portable browser role.');
+              if(m.type!=='auth'||m.role==='task-request')throw Error('Unsupported portable browser role.');
               const ticket=await verifyBotTicket(m.ticket,config.gatewaySecret,config.applicationEnvironment?.BOTS_MACHINE_ID??'dawar-vm');
               store.transaction(()=>{
                 if(ticket.owner!==session.owner||store.db.prepare('SELECT 1 FROM portable_tickets WHERE jti=?').get(ticket.jti))throw Error('Foreign or reused ticket.');
                 store.db.prepare('DELETE FROM portable_tickets WHERE expires_at<=?').run(Date.now());
                 store.db.prepare('INSERT INTO portable_tickets VALUES(?,?)').run(ticket.jti,ticket.exp*1000);
               });
-              authenticated=true;expiresAt=ticket.sessionExp*1000;clearTimeout(timeout);browsers.add({ws,owner:session.owner});
-              send({type:'authenticated',role:'browser',online:true,expiresAt,clientId});return;
+              authenticated=true;expiresAt=ticket.sessionExp*1000;desktopBrowser=!!m.desktop;clearTimeout(timeout);
+              browsers.add({ws,owner:session.owner,clientId,desktop:desktopBrowser,expiresAt,valid});
+              send({type:'authenticated',role:'browser',online:true,expiresAt,clientId});
+              if(desktopBrowser)desktop.open({owner:session.owner,clientId,parentId:m.desktop.parentId,botId:m.desktop.botId,token:m.desktop.token,expiresAt,valid,
+                send:value=>{if(ws.readyState!==1||ws.bufferedAmount>8*1024*1024)throw Error('Desktop output unavailable.');ws.send(Buffer.isBuffer(value)?value:JSON.stringify(value));},close:()=>ws.close(1000,'Desktop closed')});
+              return;
             }
+            if(desktopBrowser){if(expiresAt<=Date.now()||m.type!=='desktop')throw Error('Desktop session invalid.');desktop.frame(clientId,m);return;}
             if(expiresAt<=Date.now()||m.type!=='request')throw Error('Session or request invalid.');
             // Authentication is serialized; independent owner requests are
             // not. Stop cannot wait behind a slow turn-send acknowledgment.
@@ -190,7 +203,7 @@ export function startGateway(config) {
               catch(e){send({type:'response',id:m.id,error:e.message,outcome:e.outcome==='rejected'?'rejected':e.outcome==='not-sent'?'not-sent':'uncertain',delivery:e.delivery});}})();
           }).catch(()=>ws.close(1008,'Owner request rejected'));
         });
-        ws.on('close',()=>{clearTimeout(timeout);for(const b of browsers)if(b.ws===ws)browsers.delete(b);});
+        ws.on('close',()=>{clearTimeout(timeout);desktop.end(clientId);desktop.disconnectParent(clientId);for(const b of browsers)if(b.ws===ws)browsers.delete(b);});
       });return;
     }
     if(u.pathname!=='/nodes/connect' || req.headers.origin){socket.destroy();return;}
@@ -207,13 +220,14 @@ export function startGateway(config) {
             if(m.type!=='authenticate'||Date.now()-createdAt>10000||!challenges.has(connectionId)
               ||!verifySignature(n.public_key,{nodeId:m.nodeId,challenge,connectionId,hello:m.hello},m.proof))throw Error('Node proof invalid.');
             challenges.delete(connectionId);clearTimeout(timeout);nodeId=n.id;
-            connections.get(nodeId)?.close(1008,'Connection superseded');connections.set(nodeId,ws);
+            const prior=connections.get(nodeId);if(prior)desktop.disconnectNode(prior);prior?.close(1008,'Connection superseded');ws.portableHello=m.hello;connections.set(nodeId,ws);
             ws.send(JSON.stringify({type:'sync',...store.sync(nodeId,m.cursor??0)}));return;
           }
           store.node(nodeId);if(connections.get(nodeId)!==ws)throw Error('Connection superseded.');
           if(m.type==='sync')ws.send(JSON.stringify({type:'sync',...store.sync(nodeId,m.cursor??0)}));
           else if(m.type==='receipt') {const receipt=store.receipt(nodeId,m.operationId,m.fingerprint,m.state,m.receipt);router.receipt(receipt);if(authority)controls.receipt(receipt);ws.send(JSON.stringify({type:'receipt-ack',operationId:m.operationId,state:receipt.state}));}
           else if(m.type==='rpc-result')router.readResult(nodeId,m);
+          else if(m.type==='desktop-response')desktop.receive(nodeId,ws,m);
           else if(m.type==='control-request'){
             const n=store.node(nodeId),p=store.placement(n.owner,m.botId);
             if(p.node_id!==nodeId||p.epoch!==m.epoch||!HUB_TOOLS.has(m.tool)||typeof m.requestId!=='string')throw Error('Foreign hub tool request.');
@@ -230,10 +244,10 @@ export function startGateway(config) {
           else throw Error('Unknown node frame.');
         } catch {ws.close(1008,'Node frame rejected');}
       });
-      ws.on('close',()=>{clearTimeout(timeout);challenges.delete(connectionId);if(connections.get(nodeId)===ws)connections.delete(nodeId);});
+      ws.on('close',()=>{clearTimeout(timeout);challenges.delete(connectionId);desktop.disconnectNode(ws);if(connections.get(nodeId)===ws)connections.delete(nodeId);});
     });
   });
   server.listen(config.gatewayPort??3210,'127.0.0.1');
   let closing;
-  return {server,store,application,objects,router,controls,voice,close:()=>closing??=(async()=>{if(voice)await voice.close();clearInterval(scheduler);router.close();for(const ws of sockets.clients)ws.close();await new Promise(resolve=>server.close(resolve));writer.close();controls.close();objects.close();store.close();application.close();})()};
+  return {server,store,application,objects,router,controls,voice,desktop,close:()=>closing??=(async()=>{if(voice)await voice.close();clearInterval(scheduler);desktop.close();router.close();for(const ws of sockets.clients)ws.close();await new Promise(resolve=>server.close(resolve));writer.close();controls.close();objects.close();store.close();application.close();})()};
 }

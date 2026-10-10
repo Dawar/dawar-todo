@@ -18,6 +18,7 @@ await cp('dist/portable/portable-agent.mjs',join(directory,'bot-bridge/portable-
 await cp('portable/agent-download',join(directory,'portable'),{recursive:true});
 for(const file of ['config.mjs','protocol.mjs','private-file.mjs','bounded-json.mjs','enrollment-client.mjs','services.mjs','agent-cli.mjs'])await cp(join('portable',file),join(directory,'portable',file));
 for(const file of RUNTIME_COMPANIONS)await cp(join('bot-bridge',file),join(directory,'bot-bridge',file));
+await cp('bot-bridge/desktops',join(directory,'bot-bridge/desktops'),{recursive:true});
 await cp('portable/agent-dependencies/package.json',join(directory,'package.json'));
 await cp('portable/agent-dependencies/package-lock.json',join(directory,'package-lock.json'));
 await cp('portable/agent-download/Install DawarTodo Agent.command',join(directory,'Install DawarTodo Agent.command'));

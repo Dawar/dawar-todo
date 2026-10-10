@@ -6,6 +6,14 @@ export function loadConfig(path = process.env.DAWAR_HUB_CONFIG) {
   const c = JSON.parse(readPrivate(path));
   if (c.version !== 1 || !['hub','agent','both'].includes(c.mode) || !isAbsolute(c.dataDirectory)) throw Error('Invalid portable configuration.');
   c.dataDirectory = resolve(c.dataDirectory);
+  if(c.agent?.desktops!==undefined){
+    const d=c.agent.desktops;
+    if(!d||typeof d.enabled!=='boolean'||Object.keys(d).some(k=>!['enabled','base','launcher','adopt'].includes(k))||
+      ['base','launcher'].some(k=>d[k]!==undefined&&(!isAbsolute(d[k])||d[k].includes('\0')))||
+      d.adopt!==undefined&&(!d.adopt||Array.isArray(d.adopt)||Object.entries(d.adopt).some(([slug,name])=>
+        !/^[A-Za-z0-9_-]{1,180}$/.test(slug)||typeof name!=='string'||!/^[A-Za-z0-9_-]{1,180}$/.test(name))))
+      throw Error('Invalid scoped Linux desktop configuration.');
+  }
   if (c.mode !== 'agent') {
     const u = new URL(c.publicOrigin);
     if (u.protocol !== 'https:' || u.pathname !== '/' || u.search || u.hash || u.username || u.password) throw Error('A fixed HTTPS public origin is required.');
