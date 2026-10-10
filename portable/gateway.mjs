@@ -147,8 +147,10 @@ export function startGateway(config) {
               send({type:'authenticated',role:'browser',online:true,expiresAt,clientId});return;
             }
             if(expiresAt<=Date.now()||m.type!=='request')throw Error('Session or request invalid.');
-            try{const value=await router.request(session.owner,m,clientId);send({type:'response',id:m.id,...value});}
-            catch(e){send({type:'response',id:m.id,error:e.message,outcome:e.outcome==='rejected'?'rejected':'uncertain',delivery:e.delivery});}
+            // Authentication is serialized; independent owner requests are
+            // not. Stop cannot wait behind a slow turn-send acknowledgment.
+            void (async()=>{try{const value=await router.request(session.owner,m,clientId);send({type:'response',id:m.id,...value});}
+              catch(e){send({type:'response',id:m.id,error:e.message,outcome:e.outcome==='rejected'?'rejected':e.outcome==='not-sent'?'not-sent':'uncertain',delivery:e.delivery});}})();
           }).catch(()=>ws.close(1008,'Owner request rejected'));
         });
         ws.on('close',()=>{clearTimeout(timeout);for(const b of browsers)if(b.ws===ws)browsers.delete(b);});
@@ -175,7 +177,7 @@ export function startGateway(config) {
           if(m.type==='sync')ws.send(JSON.stringify({type:'sync',...store.sync(nodeId,m.cursor??0)}));
           else if(m.type==='receipt') {const receipt=store.receipt(nodeId,m.operationId,m.fingerprint,m.state,m.receipt);router.receipt(receipt);ws.send(JSON.stringify({type:'receipt-ack',operationId:m.operationId,state:receipt.state}));}
           else if(m.type==='rpc-result')router.readResult(nodeId,m);
-          else if(m.type==='event') {const sequence=store.event(nodeId,m.eventId,m.botId,m.epoch,m.event);ws.send(JSON.stringify({type:'event-ack',eventId:m.eventId,sequence}));const n=store.node(nodeId);for(const b of browsers)if(b.owner===n.owner&&b.ws.readyState===1)b.ws.send(JSON.stringify({type:'event',event:m.event}));}
+          else if(m.type==='event') {const before=store.eventCursor(),sequence=store.event(nodeId,m.eventId,m.botId,m.epoch,m.event);ws.send(JSON.stringify({type:'event-ack',eventId:m.eventId,sequence}));if(sequence>before){const n=store.node(nodeId);for(const b of browsers)if(b.owner===n.owner&&b.ws.readyState===1)b.ws.send(JSON.stringify({type:'event',event:{...m.event,seq:sequence}}));}}
           else throw Error('Unknown node frame.');
         } catch {ws.close(1008,'Node frame rejected');}
       });

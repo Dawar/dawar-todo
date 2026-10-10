@@ -32,6 +32,19 @@ bindings include original ID, payload fingerprint, owner, bot, node and
 placement epoch. Unknown native outcomes are retained; transport retries do
 not authorize native replay. Revocation is checked on each live node frame.
 
+The mailbox cursor is persisted on the node. A positive original native
+receipt can recover a lost received ACK without resubmitting its input.
+Stop stores its hub admission fence in the command transaction; its native
+interrupt remains admissible under that fence, while further starts wait.
+Frame processing does not wait for slow native acknowledgment. Offline Stop
+remains pending until the assigned node returns its actual receipt.
+
+Hub events use a global persisted sequence, independent of each node's native
+sequence. Duplicate packets retain the original sequence and are not shown
+again. Owner-scoped replay and bounded concurrent snapshots preserve the
+existing browser representations. Only observed common capabilities are
+advertised; platform capability limits still apply.
+
 ## Current unfinished acceptance
 
 Logical queue/schedule integration, full agent runtime/browser routing, local

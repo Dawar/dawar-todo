@@ -11,6 +11,7 @@ export class HubRpc {
   async request(owner,request,clientId){
     if(!id(request.id)||typeof request.method!=='string'||!id(clientId))throw Error('Invalid owner request.');
     if(request.method==='snapshot'&&!request.botId)return this.snapshot(owner,clientId);
+    if(request.method==='events')return {result:this.store.events(owner,request.params?.after??0,request.params?.limit??40).events};
     const p=this.store.placement(owner,request.botId),ws=this.connection(p);
     if(AGENT_READS.has(request.method)){
       const binding=fingerprint(request.params??{}),cached=this.store.db.prepare('SELECT result,observed_at FROM portable_rpc_cache WHERE owner=? AND bot_id=? AND epoch=? AND method=? AND params_hash=?').get(owner,p.bot_id,p.epoch,request.method,binding);
@@ -65,17 +66,27 @@ export class HubRpc {
     }
   }
   async snapshot(owner,clientId){
-    const placements=this.store.db.prepare('SELECT * FROM portable_placements WHERE owner=? ORDER BY bot_id').all(owner),snapshots=[],bots=[];
-    for(const p of placements){
+    const cursor=this.store.eventCursor(),placements=this.store.db.prepare('SELECT * FROM portable_placements WHERE owner=? ORDER BY bot_id').all(owner),snapshots=[],bots=[];
+    let index=0;
+    const worker=async()=>{while(index<placements.length){const p=placements[index++];
       try{
         const response=await this.request(owner,{id:`snapshot:${randomUUID()}`,method:'snapshot',botId:p.bot_id,params:{}},clientId),s=response.result;
+        const current=this.store.placement(owner,p.bot_id);
+        if(current.node_id!==p.node_id||current.epoch!==p.epoch)continue;
         const b=s.bots?.find(b=>b.id===p.bot_id);if(!b)continue;
         bots.push({...b,nodeId:p.node_id,placementEpoch:p.epoch,nodeOnline:!!this.connection(p),historyObservedAt:response.cache.observedAt});snapshots.push({p,s});
       }catch{/* Unavailable uncached nodes do not become fictitious ready bots. */}
-    }
+    }};
+    await Promise.all(Array.from({length:Math.min(4,placements.length)},worker));
+    bots.sort((a,b)=>a.id.localeCompare(b.id));
     const first=snapshots[0]?.s??{},scoped=field=>snapshots.flatMap(({p,s})=>(s[field]??[]).filter(value=>value.botId===p.bot_id));
-    return {result:{...first,bots,workByBot:scoped('workByBot'),pending:scoped('pending'),schedules:[],runs:scoped('runs'),activeScheduledTurns:scoped('activeScheduledTurns'),ready:placements.every(p=>!!this.connection(p)),
-      capabilities:{nativeConversation:1,messageReplies:1,nativeGoals:1,executionConfiguration:1,historyCursorIndex:1,portableAgents:1}},cache:{observedAt:Date.now(),stale:snapshots.length<placements.length}};
+    const common={};
+    // Advertise only actual shared capabilities. The node platform gate is
+    // independent of the native runtime's generic Goals capability.
+    for(const [key,value] of Object.entries(first.capabilities??{}))if(value===1&&snapshots.length===placements.length&&snapshots.every(({s})=>s.capabilities?.[key]===1))common[key]=1;
+    if(placements.some(p=>JSON.parse(this.store.node(p.node_id).hello).capabilities.autonomousGoals!==true))delete common.nativeGoals;
+    return {result:{...first,cursor,bots,workByBot:scoped('workByBot'),pending:scoped('pending'),schedules:[],runs:scoped('runs'),activeScheduledTurns:scoped('activeScheduledTurns'),ready:snapshots.length===placements.length&&placements.every(p=>!!this.connection(p)),
+      capabilities:{...common,portableAgents:1}},cache:{observedAt:Date.now(),stale:snapshots.length<placements.length}};
   }
   close(){for(const r of this.reads.values()){clearTimeout(r.timer);r.reject(Error('Hub connection ended.'));}for(const values of this.writes.values())for(const w of values){clearTimeout(w.timer);w.reject(Object.assign(Error('Hub connection ended; retain original operation.'),{outcome:'uncertain'}));}this.reads.clear();this.writes.clear();}
 }

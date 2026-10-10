@@ -2,7 +2,9 @@ import { privateDatabase } from './sqlite.mjs';
 import { boundedFrame, canonical, compatible, digest, fingerprint, id, publicFingerprint, secret, verifySignature } from './protocol.mjs';
 
 const transitions = {
-  queued: ['received'], received: ['native-accepted', 'unknown', 'terminal'],
+  // A later immutable receipt proves node receipt even when that earlier ACK
+  // was lost. It never authorizes the hub to re-execute the command.
+  queued: ['received','native-accepted','unknown','terminal'], received: ['native-accepted', 'unknown', 'terminal'],
   'native-accepted': ['running', 'terminal', 'unknown'], running: ['terminal', 'unknown'], terminal: [], unknown: [],
 };
 
@@ -121,6 +123,7 @@ export class HubStore {
       const binding = { owner, botId, nodeId: p.node_id, epoch: p.epoch, payload };
       const hash = fingerprint(binding), old = this.db.prepare('SELECT * FROM portable_mailbox WHERE operation_id=?').get(operationId);
       if (old) { if (old.fingerprint !== hash) throw Error('Operation identity or placement differs.'); return old; }
+      if(payload.method==='turn.interrupt')this.db.prepare('UPDATE portable_placements SET stopped=1,control_revision=control_revision+1 WHERE bot_id=?').run(botId);
       this.db.prepare('INSERT INTO portable_mailbox(operation_id,owner,bot_id,node_id,epoch,fingerprint,payload,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,\'queued\',?,?)')
         .run(operationId, owner, botId, p.node_id, p.epoch, hash, text, now, now);
       return this.db.prepare('SELECT * FROM portable_mailbox WHERE operation_id=?').get(operationId);
@@ -141,6 +144,7 @@ export class HubStore {
   }
   receipt(nodeId, operationId, hash, state, receipt, now = Date.now()) {
     this.node(nodeId); const text = boundedFrame(receipt);
+    if(receipt?.operationId!==operationId)throw Error('Receipt must bind its original operation.');
     return this.transaction(() => {
       const r = this.db.prepare('SELECT * FROM portable_mailbox WHERE operation_id=?').get(operationId);
       if (!r || r.node_id !== nodeId || r.fingerprint !== hash) throw Error('Foreign receipt.');
@@ -157,11 +161,20 @@ export class HubStore {
   event(nodeId, eventId, botId, epoch, event, now = Date.now()) {
     const n = this.node(nodeId), p = this.placement(n.owner, botId);
     if (!id(eventId) || p.node_id !== nodeId || p.epoch !== epoch) throw Error('Foreign event.');
+    if(event?.botId!==botId||typeof event.type!=='string'||!Number.isSafeInteger(event.seq)||event.seq<1)throw Error('Native event scope or sequence invalid.');
     const text = boundedFrame(event), hash = digest(text);
     const old = this.db.prepare('SELECT * FROM portable_events WHERE node_id=? AND event_id=?').get(nodeId, eventId);
     if (old) { if (old.fingerprint !== hash || old.bot_id !== botId || old.epoch !== epoch) throw Error('Event identity changed.'); return old.sequence; }
     return Number(this.db.prepare('INSERT INTO portable_events(node_id,event_id,bot_id,epoch,fingerprint,event,created_at) VALUES(?,?,?,?,?,?,?)')
       .run(nodeId, eventId, botId, epoch, hash, text, now).lastInsertRowid);
+  }
+  eventCursor() { return this.db.prepare('SELECT COALESCE(MAX(sequence),0) AS n FROM portable_events').get().n; }
+  events(owner,cursor,limit=40) {
+    if(!Number.isSafeInteger(cursor)||cursor<0||!Number.isInteger(limit)||limit<1||limit>100)throw Error('Invalid event cursor.');
+    const rows=this.db.prepare('SELECT e.* FROM portable_events e JOIN portable_placements p ON p.bot_id=e.bot_id AND p.node_id=e.node_id AND p.epoch=e.epoch WHERE p.owner=? AND e.sequence>? ORDER BY e.sequence LIMIT ?').all(owner,cursor,limit);
+    const selected=[];let bytes=2;
+    for(const row of rows){const event={...JSON.parse(row.event),seq:row.sequence};const size=Buffer.byteLength(boundedFrame(event))+1;if(bytes+size>900*1024)break;selected.push(event);bytes+=size;}
+    return {events:selected,cursor:selected.at(-1)?.seq??cursor};
   }
   close() { this.db.close(); }
 }
@@ -171,7 +184,8 @@ export class NodeJournal {
     this.db = privateDatabase(path);
     this.db.exec(`CREATE TABLE IF NOT EXISTS node_commands(operation_id TEXT PRIMARY KEY,fingerprint TEXT NOT NULL,command TEXT NOT NULL,state TEXT NOT NULL,receipt TEXT);
       CREATE TABLE IF NOT EXISTS node_events(sequence INTEGER PRIMARY KEY AUTOINCREMENT,event_id TEXT NOT NULL UNIQUE,event TEXT NOT NULL,acked INTEGER NOT NULL DEFAULT 0);
-      CREATE TABLE IF NOT EXISTS node_controls(bot_id TEXT PRIMARY KEY,epoch INTEGER NOT NULL,revision INTEGER NOT NULL,stopped INTEGER NOT NULL);`);
+      CREATE TABLE IF NOT EXISTS node_controls(bot_id TEXT PRIMARY KEY,epoch INTEGER NOT NULL,revision INTEGER NOT NULL,stopped INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS node_metadata(key TEXT PRIMARY KEY,value INTEGER NOT NULL);`);
     this.online = false; this.syncedAt = 0; this.syncedMonotonic = 0;
   }
   synchronize(controls, now = Date.now()) {
@@ -189,8 +203,16 @@ export class NodeJournal {
   }
   disconnect() { this.online = false; this.syncedAt = 0; this.syncedMonotonic = 0; }
   canAdmit(command, now = Date.now()) {
+    return this.currentControl(command,now)?.stopped === 0;
+  }
+  currentControl(command, now = Date.now()) {
     const c = this.db.prepare('SELECT * FROM node_controls WHERE bot_id=?').get(command.bot_id);
-    return this.online && now>=this.syncedAt && now-this.syncedAt<15000 && performance.now()-this.syncedMonotonic<15000 && c?.epoch === command.epoch && c.stopped === 0;
+    return this.online && now>=this.syncedAt && now-this.syncedAt<15000 && performance.now()-this.syncedMonotonic<15000 && c?.epoch === command.epoch ? c : null;
+  }
+  cursor() { return this.db.prepare("SELECT value FROM node_metadata WHERE key='mailbox-cursor'").get()?.value ?? 0; }
+  observe(sequence) {
+    if(!Number.isSafeInteger(sequence)||sequence<1)throw Error('Invalid durable command cursor.');
+    this.db.prepare("INSERT INTO node_metadata VALUES('mailbox-cursor',?) ON CONFLICT(key) DO UPDATE SET value=MAX(value,excluded.value)").run(sequence);
   }
   receive(command) {
     if(!id(command.operation_id)||!id(command.bot_id)||!id(command.node_id)||!Number.isSafeInteger(command.epoch)||command.epoch<1)throw Error('Invalid command identity.');

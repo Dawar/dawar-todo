@@ -12,7 +12,7 @@ import { AGENT_READS, AGENT_MUTATIONS } from './hub-rpc.mjs';
 export class AgentTransport {
   constructor({ config, runtime, journal, key, enrollment, socketFactory=url=>new WebSocket(url) }) {
     Object.assign(this,{config,runtime,journal,key,enrollment,socketFactory});
-    this.socket=null;this.retry=0;this.closed=false;this.pending=new Map();this.cursor=0;
+    this.socket=null;this.retry=0;this.closed=false;this.pending=new Map();this.cursor=journal.cursor();
     this.terminalCandidates=new Map();
     const nativeGuard=runtime.codex.admissionGuard;
     runtime.codex.admissionGuard=(method,params)=>{
@@ -32,6 +32,9 @@ export class AgentTransport {
         const p=event.data.params,turn=p?.turn;
         if(p?.threadId&&turn?.id&&['completed','failed','interrupted'].includes(turn.status)){
           this.terminalCandidates.set(turn.id,{threadId:p.threadId,turnId:turn.id,status:turn.status});
+          // Native completion may precede its turn/start response. Retain a
+          // bounded exact-ID observation until that original receipt arrives.
+          while(this.terminalCandidates.size>256)this.terminalCandidates.delete(this.terminalCandidates.keys().next().value);
           for(const row of journal.db.prepare("SELECT * FROM node_commands WHERE state IN ('native-accepted','running')").all())this.terminal(row);
         }
       }
@@ -48,45 +51,49 @@ export class AgentTransport {
     const receipt=row.receipt&&JSON.parse(row.receipt),p=receipt&&this.terminalCandidates.get(receipt.turnId);
     if(!p||p.threadId!==receipt.threadId)return;
     this.journal.settle(row.operation_id,'terminal',{...receipt,nativeStatus:p.status});
-    this.terminalCandidates.delete(p.turnId);
     this.receipt(this.journal.db.prepare('SELECT * FROM node_commands WHERE operation_id=?').get(row.operation_id));
   }
   connect(){
     if(this.closed)return;
     const url=new URL('/nodes/connect',this.enrollment.hub);if(url.protocol!=='https:')throw Error('Agent connections require TLS.');url.protocol='wss:';
     const ws=this.socketFactory(url);this.socket=ws;
-    let authentication=false;
+    let authentication=false,frames=Promise.resolve();
+    const sendHere=value=>{if(this.socket===ws&&ws.readyState===1)ws.send(JSON.stringify(value));};
     ws.addEventListener('message',event=>{
-      void (async()=>{
+      frames=frames.then(()=>{
         if(this.socket!==ws)return;
         const m=JSON.parse(event.data);
         if(m.type==='challenge'){
           const hello=this.hello(),bound={nodeId:this.enrollment.nodeId,challenge:m.challenge,connectionId:m.connectionId,hello};
-          this.send({type:'authenticate',...bound,proof:signature(this.key.privateKey,bound),cursor:this.cursor});return;
+          sendHere({type:'authenticate',...bound,proof:signature(this.key.privateKey,bound),cursor:this.cursor});return;
         }
         if(m.type==='sync'){
           if(m.controls.some(c=>c.node_id!==this.enrollment.nodeId||c.owner!==this.enrollment.owner))throw Error('Foreign control snapshot.');
-          this.journal.synchronize(m.controls);authentication=true;this.retry=0;
+          this.journal.synchronize(m.controls);authentication=true;this.retry=0;this.runtime.relayOnline=true;
           // This synchronized fence blocks new admission. User queuePaused,
           // Goal and current-turn state are not rewritten to infer Stop ACK.
           for(const command of m.commands){
             if(command.node_id!==this.enrollment.nodeId||command.owner!==this.enrollment.owner)throw Error('Foreign node command.');
-            this.cursor=Math.max(this.cursor,command.sequence);const row=this.journal.receive(command);
+            const row=this.journal.receive(command);this.journal.observe(command.sequence);this.cursor=this.journal.cursor();
             if(!this.pending.has(row.operation_id)){
-              const work=this.execute(command,row).finally(()=>this.pending.delete(row.operation_id));this.pending.set(row.operation_id,work);await work;
+              // Admission runs independently of frame processing: a slow
+              // native request must not delay a newer Stop/control snapshot.
+              const work=Promise.resolve().then(()=>this.execute(command,row)).catch(()=>ws.close(1008,'Command scope could not be confirmed')).finally(()=>this.pending.delete(row.operation_id));this.pending.set(row.operation_id,work);
             }
           }
           this.flushEvents();
         } else if(authentication && m.type==='rpc'){
           const control=this.journal.db.prepare('SELECT * FROM node_controls WHERE bot_id=?').get(m.botId);
           if(!AGENT_READS.has(m.method)||control?.epoch!==m.epoch)throw Error('Read is outside assigned scope.');
-          try{
+          void (async()=>{try{
             const result=await this.runtime.handle({method:m.method,botId:m.botId,params:m.params,clientId:`hub:${this.enrollment.nodeId}`});
+            const after=this.journal.currentControl({bot_id:m.botId,epoch:m.epoch});
+            if(!after||this.socket!==ws)return;
             const frame={type:'rpc-result',rpcId:m.rpcId,botId:m.botId,epoch:m.epoch,result};
-            if(Buffer.byteLength(JSON.stringify(frame))>900*1024)throw Error('Read exceeds its bounded transport; use a smaller history page.');this.send(frame);
-          }catch(e){this.send({type:'rpc-result',rpcId:m.rpcId,botId:m.botId,epoch:m.epoch,error:e.message});}
+            if(Buffer.byteLength(JSON.stringify(frame))>900*1024)throw Error('Read exceeds its bounded transport; use a smaller history page.');sendHere(frame);
+          }catch(e){sendHere({type:'rpc-result',rpcId:m.rpcId,botId:m.botId,epoch:m.epoch,error:e.message});}})();
         } else if(authentication && m.type==='event-ack')this.journal.acknowledgeEvent(m.eventId);
-      })().catch(()=>ws.close(1008,'Protocol could not be confirmed'));
+      }).catch(()=>ws.close(1008,'Protocol could not be confirmed'));
     });
     ws.addEventListener('close',()=>{
       if(this.socket!==ws)return;this.journal.disconnect();this.runtime.relayOnline=false;clearInterval(this.heartbeat);
@@ -97,9 +104,11 @@ export class AgentTransport {
   }
   async execute(command,row){
     if(row.state==='terminal'||row.state==='unknown'||row.state==='native-accepted'||row.state==='running'){this.receipt(row);return;}
-    if(!this.journal.canAdmit(command))return;
     const payload=JSON.parse(command.payload);
     if(!AGENT_MUTATIONS.has(payload.method))throw Error('Unsupported assigned command.');
+    // Stop itself remains admissible while the synchronized Stop fence blocks
+    // new turns. Offline/foreign/stale controls never grant interruption.
+    if(payload.method==='turn.interrupt'?!this.journal.currentControl(command):!this.journal.canAdmit(command))return;
     const bot=this.runtime.store.bot(command.bot_id);if(!bot || bot.archived || bot.deletedAt)throw Error('Assigned native bot is absent or archived.');
     const request={method:payload.method,botId:command.bot_id,operationId:command.operation_id,params:payload.params,clientId:`hub:${this.enrollment.nodeId}`};
     if(row.state==='dispatching' && !this.runtime.store.operation(command.operation_id)) {
@@ -111,7 +120,7 @@ export class AgentTransport {
     if(row.state==='received'){this.receipt(row);this.journal.prepare(command.operation_id);}
     try {
       const result=await this.runtime.handle(request), turnId=result?.turn?.id??result?.turnId;
-      const receipt={operationId:command.operation_id,threadId:bot.threadId,turnId,result};
+      const receipt={operationId:command.operation_id,threadId:bot.threadId,...(turnId?{turnId}:{}),result};
       this.journal.settle(command.operation_id,turnId?'native-accepted':payload.method==='turn.send'?'unknown':'terminal',receipt);
     } catch(error){this.journal.settle(command.operation_id,error.outcome==='rejected'?'terminal':'unknown',{operationId:command.operation_id,outcome:error.outcome??'uncertain',error:error.message});}
     this.receipt(this.journal.db.prepare('SELECT * FROM node_commands WHERE operation_id=?').get(command.operation_id));
