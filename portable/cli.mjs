@@ -10,6 +10,14 @@ const root=resolve(fileURLToPath(new URL('..',import.meta.url)));
 const args=process.argv.slice(2),command=args.shift();
 function option(name){const index=args.indexOf(`--${name}`);return index<0?null:args[index+1];}
 function json(value){console.log(JSON.stringify(value,null,2));}
+async function privateSnapshotDestination(destination) {
+  const {dirname}=await import('node:path');
+  const {mkdir,lstat}=await import('node:fs/promises');
+  const directory=dirname(resolve(destination));
+  await mkdir(directory,{recursive:true,mode:0o700});
+  const state=await lstat(directory);
+  if(!state.isDirectory()||state.isSymbolicLink()||state.mode&0o077||process.getuid&&state.uid!==process.getuid())throw Error('Use an owner-only snapshot directory.');
+}
 if (Number(process.versions.node.split('.')[0])!==24) throw Error('DawarTodo portable requires Node 24.');
 if(command==='version') {
   json({package:'dawartodo',protocol:PROTOCOL_VERSION,runtime:RUNTIME_VERSION,node:process.versions.node});
@@ -33,6 +41,23 @@ if(command==='version') {
   json(command==='export-application'
     ? await exportSQLiteApplication({source,destination,signal})
     : await importApplicationSnapshot({source,destination,signal,expectedSHA256:option('sha256')}));
+} else if(command==='snapshot-key') {
+  const destination=option('destination');if(!destination)throw Error('Provide a new private recipient-key destination.');
+  const {newSnapshotRecipient}=await import('./snapshot-sealing.mjs');
+  const {savePrivate}=await import('./private-file.mjs');
+  await privateSnapshotDestination(destination);
+  const recipient=await newSnapshotRecipient();savePrivate(resolve(destination),JSON.stringify(recipient)+'\n',{exclusive:true});
+  json({publicKey:recipient.publicKey,fingerprint:recipient.fingerprint,privateKeyPrinted:false});
+} else if(command==='unseal-application') {
+  const source=option('source'),key=option('key'),destination=option('destination'),origin=option('origin');
+  if(!source||!key||!destination||!origin)throw Error('Provide exact ciphertext/key paths, original HTTPS origin and a new private destination.');
+  const {unsealApplicationSnapshot}=await import('./snapshot-sealing.mjs');
+  const {readPrivate,savePrivate}=await import('./private-file.mjs');
+  await privateSnapshotDestination(destination);
+  const decoded=await unsealApplicationSnapshot(JSON.parse(readPrivate(resolve(source),20*1024*1024)),JSON.parse(readPrivate(resolve(key))),origin);
+  savePrivate(resolve(destination),decoded.snapshot,{exclusive:true});
+  json({sha256:decoded.sha256,sourceOrigin:decoded.sourceOrigin,sourceAuthenticationEstablished:false,
+    note:'Verify the original owner-authenticated HTTPS download separately before migration.'});
 } else if(command==='run' && args[0]==='hub') {
   const c=loadConfig(option('config'));if(c.mode==='agent')throw Error('Agent configuration cannot start a hub.');
   process.umask(0o077);
@@ -47,5 +72,5 @@ if(command==='version') {
   const c=loadConfig(option('config'));if(c.mode==='hub')throw Error('Hub configuration cannot start an agent.');
   const {runAgent}=await import('../bot-bridge/portable-agent.mjs');await runAgent(c);
 } else {
-  throw Error('Use version, key, pair, install, run hub|agent, export-application --source PATH --destination PATH, or import-application --source PATH --destination PATH --sha256 HASH.');
+  throw Error('Use version, key, pair, install, run hub|agent, export-application, import-application, snapshot-key, or unseal-application.');
 }

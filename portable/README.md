@@ -192,3 +192,37 @@ The agent's storage adapter uses its authenticated node connection for bounded r
 Upload/download grants are restricted to the same origin, registered object, node/bot/placement epoch and expiry. Revocation, placement changes and the hub write freeze invalidate them; transfers check their grant while streaming. Node uploads additionally bind the original checksum. The existing bounded local publication snapshot and registered-file checksum behavior is retained. General Task Requests and cross-node peer file grants await their canonical addressed authorization adapters; capabilities remain honest. Mac workspace/repositories stay local unless explicitly published.
 
 Both packaged bundles retain the same exact adjacent runtime companion list. The hub uses those immutable files for source guard references; copying them does not start a native process or confer execution authority. Package import/health validation uses disposable data with execution disabled.
+
+### Private original-application capture
+
+The original Site exposes `GET /api/migration/application?recipient=PUBLIC_KEY`
+only to its configured original owner through the existing authenticated
+session. Todo tokens, development auth, cross-origin requests and untrusted
+actor parameters cannot capture data. Identity headers still require the
+existing trusted edge; directly exposing the original Worker is not authorized.
+The route does not change schema, freeze writers, or create migration records.
+
+Generate a temporary recipient with `snapshot-key --destination NEW_PRIVATE_KEY`
+inside an owner-only directory. Retain that key locally with mode0600. Only
+its public key is used in the download URL. The downloaded envelope is encrypted
+with ephemeral P-256 ECDH and AES-256-GCM. `unseal-application --source SEALED
+--key PRIVATE_KEY --destination NEW_JSONL --origin ORIGINAL_HTTPS_ORIGIN` checks
+recipient, origin, authenticated ciphertext and full plaintext hash. It never
+overwrites an existing destination. Encryption alone does not authenticate the
+source: independently verify the original owner-authenticated HTTPS download.
+
+Bounded schema discovery constructs one SQLite statement whose authoritative
+schema, column metadata, sequences, pragmas and all application rows share a
+single read snapshot. Original signed64-bit integers and text/blob bytes are
+encoded inside SQLite. `_cf_KV` is explicitly excluded as Cloudflare platform
+storage; no application table is skipped. The capture refuses unsupported
+virtual/shadow tables, unaddressable row identities, schema changes, queries
+over100000bytes, tables over1MiB or total row data over8MiB/100000rows. A refusal
+never returns a partial snapshot. Larger production data requires a separate
+complete export path, not a smaller migration scope.
+
+Use the existing validated `import-application` command to restore the JSONL
+into a NEW private inactive SQLite database. Source/fixture success is separate
+from actual Cloudflare capture. A point-in-time application copy does not prove
+consistent control/files or establish the combined final writer freeze. The
+existing production remains authoritative until the full cutover is verified.
