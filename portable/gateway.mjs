@@ -46,6 +46,7 @@ export function startGateway(config) {
       stripIdentity(headers);
       if(u.pathname.startsWith('/api/voice/')){
         if(!voice)return json(res,503,{error:'Portable voice hosting has not been activated.'});
+        if(u.pathname==='/api/voice/stream')return json(res,426,{error:'Use the actual WebSocket upgrade transport.'});
         const path={'/api/voice/health':'/health','/api/voice/openai/webhook':'/openai/webhook','/api/voice/stream':'/stream'}[u.pathname];
         if(!path||u.search)return json(res,404,{error:'Unknown voice route.'});
         let body;
@@ -150,7 +151,8 @@ export function startGateway(config) {
       const headers=new Headers();for(const [key,value]of Object.entries(req.headers))if(value!==undefined)headers.set(key,Array.isArray(value)?value.join(','):value);stripIdentity(headers);
       void voice.fetch(new Request(new URL('/stream',config.publicOrigin),{headers})).then(result=>{
         if(result.status!==101||socket.destroyed){result.abandon?.();socket.destroy();return;}
-        try{sockets.handleUpgrade(req,socket,head,ws=>result.attach(ws));}catch{result.abandon();socket.destroy();}
+        let attached=false;
+        try{sockets.handleUpgrade(req,socket,head,ws=>{result.attach(ws);attached=true;});if(!attached)result.abandon();}catch{if(!attached)result.abandon();socket.destroy();}
       }).catch(()=>socket.destroy());return;
     }
     if(u.pathname==='/connect'){

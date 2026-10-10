@@ -169,7 +169,7 @@ export function createVoiceRuntime(config,{assertWriter,network={fetch:globalThi
     return run(objectId,async()=>{
       const r=begin('incoming',{path:u.pathname,bodyHash:raw?digest(raw):null});activeRoots.add(r.operationId);
       try{const response=await worker.fetch(raw?new Request(request.url,{method:request.method,headers:request.headers,body:raw}):request,environment,context);
-        if(response.status===101){const client=response.webSocket;if(!client?.server||client.scope!==scope())throw refused();return {status:101,attach:wire=>{client.server.attach(wire,r);activeRoots.delete(r.operationId);},abandon:()=>{client.server.close(1000,'upgrade-abandoned');activeRoots.delete(r.operationId);settle(r,'terminal',{upgradeAbandoned:true});}};}
+        if(response.status===101){const client=response.webSocket;if(!client?.server||client.scope!==scope())throw refused();let attached=false,abandoned=false;return {status:101,attach:wire=>{if(attached||abandoned)throw refused();client.server.attach(wire,r);attached=true;activeRoots.delete(r.operationId);},abandon:()=>{if(attached||abandoned)return;abandoned=true;client.server.close(1000,'upgrade-abandoned');activeRoots.delete(r.operationId);settle(r,'terminal',{upgradeAbandoned:true});}};}
         settle(r,'terminal',{status:response.status});activeRoots.delete(r.operationId);return response;
       }catch{activeRoots.delete(r.operationId);try{settle(r,'unknown');}catch{fault();}throw refused();}
     });
