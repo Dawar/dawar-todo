@@ -15,7 +15,7 @@ export function activityEntry(entry: HistoryEntry): boolean {
 export function compactGroups(groups: ConversationGroup[], gaps: HistoryGap[]): ConversationGroup[] {
   const boundaries = new Set(gaps.map(gap => gap.before)), result: ConversationGroup[] = [];
   for (const group of groups) {
-    if (group.secure) { result.push(group); continue; }
+    if (group.secure || group.taskRequest) { result.push(group); continue; }
     for (const entry of group.entries) {
       const kind = activityEntry(entry) ? `activity:${entry.turnId}` : entry.audience === 'finding' && entry.runId ? `scheduled:${entry.runId}` : 'message';
       const previous = result.at(-1);
