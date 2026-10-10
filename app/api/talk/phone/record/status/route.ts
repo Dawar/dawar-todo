@@ -1,4 +1,5 @@
-import { waitUntil } from "cloudflare:workers";
+import { waitUntil } from "../../../../../../lib/source-writer-work";
+
 import { readTalkPhoneCall } from "../../../../../../db/talk-phone";
 import {
   processTalkPhoneRecordingQueue,
@@ -55,7 +56,7 @@ export async function POST(request: Request) {
       status: params.get("RecordingStatus")?.trim().toLowerCase() ?? "",
       durationSeconds: params.get("RecordingDuration"),
     });
-    waitUntil(processTalkPhoneRecordingQueue(new Date(), callSid).catch((error) => {
+    waitUntil(() => processTalkPhoneRecordingQueue(new Date(), callSid).catch((error) => {
       console.error("[todo-talk-phone-recording-api] status processing handoff failed", { callSid, error });
     }));
     console.info("[todo-talk-phone-recording-api] status callback accepted", {

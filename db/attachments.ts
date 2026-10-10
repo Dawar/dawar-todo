@@ -1,7 +1,8 @@
+import { waitUntil } from "../lib/source-writer-work";
 import { createS3Storage, readStoragePrefix, storageResponseMetadata } from "../lib/s3-storage";
 import { attachmentErrorDetails, type AttachmentPhase } from "../lib/attachment-errors";
 import type { AttachmentRecovery } from "../lib/attachment-recovery";
-import { env, waitUntil } from "cloudflare:workers";
+import { env } from "cloudflare:workers";
 import { attachmentFileExtension, attachmentFileMimeType, detectAttachmentFileFormat } from "../lib/attachment-files";
 
 export const MAX_ATTACHMENTS_PER_TASK = 12;
@@ -1070,7 +1071,7 @@ export async function scheduleAttachmentCleanup() {
     cutoff,
     nextIsolateCheckAt: new Date(nextCleanupCheckAt).toISOString(),
   });
-  waitUntil(cleanupExpiredAttachments().catch((error) => {
+  waitUntil(() => cleanupExpiredAttachments().catch((error) => {
     console.error("[todo-attachments] cleanup failed", error);
   }));
 }

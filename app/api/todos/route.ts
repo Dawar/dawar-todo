@@ -1,4 +1,5 @@
-import { env, waitUntil } from "cloudflare:workers";
+import { waitUntil } from "../../../lib/source-writer-work";
+import { env } from "cloudflare:workers";
 import { createTodo, listTodos } from "../../../db/todos";
 import { runTodoReadMaintenance } from "../../../db/maintenance";
 import { dispatchTodoPushNotifications } from "../../../db/push-notifications";
@@ -95,14 +96,14 @@ export async function POST(request: Request) {
       actorKind: apiActor?.kind ?? "owner",
       urgentAlertId: urgentAlert?.id ?? null,
     });
-    waitUntil(dispatchTodoPushNotifications(env.DB, env, new Date()).catch((pushError) => {
+    waitUntil(() => dispatchTodoPushNotifications(env.DB, env, new Date()).catch((pushError) => {
       console.error("[todo-push] immediate created-task delivery failed; scheduled retry retained", {
         todoId: todo.id,
         error: pushError instanceof Error ? pushError.message : String(pushError),
       });
     }));
     if (urgentAlert) {
-      waitUntil(processUrgentAlertQueue(new Date(), undefined, [urgentAlert.id]).catch((urgentError) => {
+      waitUntil(() => processUrgentAlertQueue(new Date(), undefined, [urgentAlert.id]).catch((urgentError) => {
         console.error("[todo-urgent-alert] immediate dispatch failed; scheduled retry retained", {
           escalationId: urgentAlert.id,
           todoId: todo.id,

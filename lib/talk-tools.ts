@@ -1,5 +1,6 @@
+import { waitUntil } from "./source-writer-work";
 import { dispatchOperatorTool, readOperatorContext } from './operator-server';
-import { env, waitUntil } from "cloudflare:workers";
+import { env } from "cloudflare:workers";
 import { listTodoAttachments } from "../db/attachments";
 import {
   forgetAssistantMemories,
@@ -190,7 +191,7 @@ async function createTask(args: Record<string, unknown>): Promise<TalkToolResult
     recurrenceCron: optionalString(args.recurrence_cron, 100),
     clientId: crypto.randomUUID(),
   });
-  waitUntil(dispatchTodoPushNotifications(env.DB, env, new Date()).catch((error) => {
+  waitUntil(() => dispatchTodoPushNotifications(env.DB, env, new Date()).catch((error) => {
     console.error("[todo-push] Talk-created task delivery failed; minute retry retained", {
       todoId: todo.id,
       error: error instanceof Error ? error.message : String(error),

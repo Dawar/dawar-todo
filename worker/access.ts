@@ -85,7 +85,7 @@ export async function appAccessResponse(
   const apiRequest = url.pathname.startsWith("/api/");
   const bearerToken = apiRequest ? apiTokenFromAuthorization(request.headers.get("Authorization")) : null;
   if (apiRequest && bearerToken) {
-    if (url.pathname === '/api/migration/identity' || url.pathname === '/api/migration/application') {
+    if (url.pathname === '/api/migration/identity' || url.pathname === '/api/migration/application' || url.pathname === '/api/migration/application/read') {
       return Response.json(
         { error: 'The migration identity readout requires the existing owner’s signed-in session.' },
         { status: 403, headers: { 'Cache-Control': 'private, no-store' } },

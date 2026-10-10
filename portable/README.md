@@ -349,3 +349,40 @@ This transport has no connected production route. The real owner callback and
 combined authoritative controller must be connected and validated before use.
 Local D1/crypto/Request/Response fixtures are separate from genuine owner HTTPS,
 global writer exclusion, complete production capture and public rollover proof.
+
+### Original Worker request and job admission
+
+`source-writer-admission.mjs` supplies three retained application/control tables
+for cross-isolate admission. Installation, drain and release use exact original
+IDs and source/installation/producer fingerprints. A D1 transaction persists each
+writer before effects; a concurrent drain rejects new starts atomically, while
+already admitted work can finish. The immutable drain deadline is at most 900
+seconds. Expiry invalidates proof and keeps new starts held until the original
+bound release is confirmed. Lost admission ACK cannot start or replay work;
+unknown/active records never become terminal through age or an idle assertion.
+
+`source-writer-scope.mjs` tracks request bodies and nested background factories
+through AsyncLocalStorage. Background producers register a thunk before work
+begins; a retained closed scope refuses a later factory. Request return alone
+does not terminate a stream or child task. A rejected task, uncertain stream or
+unqualified socket retains an unknown record. The fixed read-only sync watcher
+does not hold a writer solely because its read stream stays open; its prior
+authentication/background effects remain tracked. Ordinary platform background
+behavior is retained when this temporary admission is disabled.
+
+The original Worker entry covers its HTTP/authentication path and native minute
+job before handler effects. Its private `MIGRATION_SOURCE_WRITER_ADMISSION`
+configuration must match the actual compiled source and installed producer
+fingerprint; no request header selects that configuration. Fixed migration read
+handlers keep the real owner authentication boundary and cannot use Todo bearer
+tokens. The prepared encrypted reader is still unconnected. Configuration is
+absent on production, so these original database helpers are not installed.
+
+The proof scope is `worker-request-and-scheduled-lifetimes`, not the complete
+application freeze. Old untracked Worker lifetimes, voice/relay callbacks,
+issued storage uploads, native/control/files and unknown provider effects need
+separate actual coverage and a pinned environment before the combined controller
+may freeze/copy. Helpers remain captured as original rows, with no clearing or
+replay used to manufacture idle. Local D1/workerd observations do not establish
+global production coverage. AsyncLocalStorage support is documented in the
+[Cloudflare runtime API](https://developers.cloudflare.com/workers/runtime-apis/nodejs/asynclocalstorage/).
