@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { resolve, join } from 'node:path';
+import { resolve, join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { loadConfig } from './config.mjs';
@@ -41,6 +41,23 @@ if(command==='version') {
   json(command==='export-application'
     ? await exportSQLiteApplication({source,destination,signal})
     : await importApplicationSnapshot({source,destination,signal,expectedSHA256:option('sha256')}));
+} else if(command==='export-original-application') {
+  const configuration=option('configuration');if(!configuration)throw Error('Provide the reviewed private original-capture configuration path.');
+  process.umask(0o077);
+  try {
+    const {readPrivate}=await import('./private-file.mjs');
+    const {exportOwnerSessionApplication}=await import('./owner-session-read.mjs');
+    const configPath=resolve(configuration),c=JSON.parse(readPrivate(configPath));
+    const fields=['version','kind','capture','ownerIdentityFile','sessionFile','recipientFile','destination'];
+    if(!c||Object.keys(c).length!==fields.length||Object.keys(c).some(k=>!fields.includes(k))||c.version!==1||c.kind!=='dawar-original-application-export')throw Error('Capture configuration differs.');
+    const path=value=>{if(typeof value!=='string'||!value)throw Error('Private path required.');return resolve(dirname(configPath),value);};
+    const identity=JSON.parse(readPrivate(path(c.ownerIdentityFile))),recipient=JSON.parse(readPrivate(path(c.recipientFile)));
+    const result=await exportOwnerSessionApplication({capture:c.capture,recipient,expectedOwner:{ownerUserId:identity.ownerUserId,ownerKey:identity.ownerKey},
+      sessionPath:path(c.sessionFile),destination:path(c.destination),signal:AbortSignal.timeout(900000)});
+    json({format:result.format,version:result.version,bytes:result.bytes,sha256:result.sha256,tableCount:result.tables.length,
+      automaticExecutionDisabled:result.automaticExecutionDisabled,sourceWriterFreeze:result.productionWriterFreezeEstablished,
+      note:'Private application snapshot only; control/files, migration authority and public rollover remain separate.'});
+  }catch{throw Error('Original owner-authenticated capture was not confirmed. Retain its original configuration and receipts; do not retry uncertain operations.');}
 } else if(command==='snapshot-key') {
   const destination=option('destination');if(!destination)throw Error('Provide a new private recipient-key destination.');
   const {newSnapshotRecipient}=await import('./snapshot-sealing.mjs');
@@ -74,5 +91,5 @@ if(command==='version') {
   const c=loadConfig(option('config'));if(c.mode==='hub')throw Error('Hub configuration cannot start an agent.');
   const {runAgent}=await import('../bot-bridge/portable-agent.mjs');await runAgent(c);
 } else {
-  throw Error('Use version, key, pair, install, run hub|agent, export-application, import-application, snapshot-key, or unseal-application.');
+  throw Error('Use version, key, pair, install, run hub|agent, export-application, import-application, export-original-application, snapshot-key, or unseal-application.');
 }

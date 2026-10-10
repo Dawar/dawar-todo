@@ -460,3 +460,30 @@ application/control/native freeze, a Cloudflare old-relay observer, an operating
 system kill guard or proof of genuine provider/device acceptance. Do not send
 service Stop until the complete reviewed handoff is actually satisfied. Source
 rollback must preserve the private voice journal and terminal reader semantics.
+
+### Original-owner HTTPS application export
+
+`node portable/cli.mjs export-original-application --configuration PRIVATE_PATH`
+uses a privately supplied **existing owner's session** and the reviewed typed,
+encrypted page protocol. Its configuration has version `1`, kind
+`dawar-original-application-export`, the original `capture`, and paths named
+`ownerIdentityFile`, `sessionFile`, `recipientFile`, and `destination`. Relative
+paths resolve against the configuration directory. All input files are private;
+the output is a new private snapshot, with automatic execution disabled.
+
+The session file has version `1`, kind `dawar-original-owner-session`, the exact
+`sourceOrigin`, `ownerUserId`, `ownerKey`, `expiresAt`, and a `cookie`. Supply it
+privately through an authorized owner workflow; never put it in a command,
+repository, chat or log. The tool does not extract desktop cookies, log in,
+renew credentials, use Todo tokens or send identity headers. It refuses expired,
+changed, foreign, symlinked or non-private session files. Every page first checks
+the existing owner-identity endpoint. HTTPS requests use only the two fixed
+migration paths, refuse redirects and bound body size, duration and concurrency.
+The reader closes and settles actual outstanding reads before releasing itself.
+
+This command does **not** install or begin a writer freeze, release a guard,
+retry an uncertain operation, import into production or switch a route. The
+original POST read endpoint and all four real external writer adapters still
+must be installed and positively verified before a live export. The existing
+GET capture is not a substitute for that complete fence. A successful isolated
+HTTPS observation is not original-owner authentication or production coverage.
