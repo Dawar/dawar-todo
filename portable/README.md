@@ -212,14 +212,30 @@ overwrites an existing destination. Encryption alone does not authenticate the
 source: independently verify the original owner-authenticated HTTPS download.
 
 Bounded schema discovery constructs one SQLite statement whose authoritative
-schema, column metadata, sequences, pragmas and all application rows share a
+schema, sequences and all application rows share a
 single read snapshot. Original signed64-bit integers and text/blob bytes are
-encoded inside SQLite. `_cf_KV` is explicitly excluded as Cloudflare platform
+encoded inside SQLite. `_cf_KV` and `_cf_METADATA` are explicitly excluded as Cloudflare platform
 storage; no application table is skipped. The capture refuses unsupported
 virtual/shadow tables, unaddressable row identities, schema changes, queries
 over100000bytes, tables over1MiB or total row data over8MiB/100000rows. A refusal
 never returns a partial snapshot. Larger production data requires a separate
 complete export path, not a smaller migration scope.
+
+D1's verified binding does not expose SQLite `user_version` or `application_id`
+file-header readers. Its version2 snapshot records both as null with explicit
+Cloudflare-D1/unavailable evidence; no application table or row is omitted.
+The importer deliberately initializes the NEW local file's two header fields
+to zero, verifies that choice, and independently verifies every restored schema,
+sequence and row digest. It never claims those zero values came from D1.
+Version1 SQLite exports continue to preserve their captured header values.
+JSON cell arrays are chunked to respect D1's 32-argument function ceiling.
+Column discovery uses documented fixed-name `PRAGMA table_xinfo` statements;
+the local Cloudflare authorizer refuses the dynamic table-valued join. The
+authoritative capture compares the complete original schema SQL with discovery,
+so changed columns cannot silently alter the planned row encoding. This path
+uses one discovery request per table plus four fixed requests (up to104 total).
+Compound SELECT branches are materialized in groups of at most four terms, within the same
+statement/read snapshot, for the tighter local Cloudflare runtime limit.
 
 Use the existing validated `import-application` command to restore the JSONL
 into a NEW private inactive SQLite database. Source/fixture success is separate

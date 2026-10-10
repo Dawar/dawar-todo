@@ -79,9 +79,13 @@ async function privateHandle(path) {
 }
 
 function validateHeader(h) {
-  if (!h || h.kind !== 'header' || h.format !== FORMAT || h.version !== 1 ||
+  if (!h || h.kind !== 'header' || h.format !== FORMAT || ![1,2].includes(h.version) ||
       !Array.isArray(h.tables) || h.tables.length > 1000 || !Array.isArray(h.schema) || h.schema.length > 4000) throw failure();
-  signedPragma(h.userVersion); signedPragma(h.applicationId);
+  if (h.version===1) {
+    signedPragma(h.userVersion); signedPragma(h.applicationId);
+    if (h.sourceMetadata!==undefined) throw failure();
+  } else if (h.userVersion!==null || h.applicationId!==null ||
+      JSON.stringify(h.sourceMetadata)!==JSON.stringify({engine:'cloudflare-d1',sqliteHeader:'unavailable'})) throw failure();
   const objects = new Set();
   for (const object of h.schema) {
     schemaObject(object);
@@ -299,12 +303,17 @@ export async function importApplicationSnapshot({ source, destination, expectedS
     }
     // Restore indexes and views, then triggers, only after all original rows.
     for (const type of ['index', 'view', 'trigger']) for (const s of header.schema.filter(s => s.type === type)) db.exec(s.sql);
-    db.exec(`PRAGMA user_version=${header.userVersion}; PRAGMA application_id=${header.applicationId}`);
+    // v2 is specifically D1's unavailable file-header evidence. New SQLite file
+    // defaults are selected here, never attributed to the original database.
+    const localHeader = header.version===2 ? {userVersion:0,applicationId:0} : header;
+    db.exec(`PRAGMA user_version=${localHeader.userVersion}; PRAGMA application_id=${localHeader.applicationId}`);
     if (db.prepare('PRAGMA integrity_check').get().integrity_check !== 'ok' || db.prepare('PRAGMA foreign_key_check').all().length) throw failure();
     // Re-encode the restored database. This catches changed affinity, generated
     // columns/order, incomplete schema and values beyond a mere row-count match.
     const restored = await describeSnapshot(async sql => db.prepare(sql).all());
-    if (JSON.stringify(restored) !== JSON.stringify(header)) throw failure();
+    if (restored.userVersion!==localHeader.userVersion || restored.applicationId!==localHeader.applicationId) throw failure();
+    const comparable = header.version===2 ? {...restored,version:2,userVersion:null,applicationId:null,sourceMetadata:header.sourceMetadata} : restored;
+    if (JSON.stringify(comparable) !== JSON.stringify(header)) throw failure();
     for (const t of restored.tables) {
       const q = db.prepare(`SELECT ${t.columns.map((c, i) => `${cellExpression(c)} AS c${i}`).join(',')} FROM ${identifier(t.name)} ORDER BY ${t.order.map(identifier).join(',')}`);
       const h = digest(); let n = 0;
@@ -317,7 +326,8 @@ export async function importApplicationSnapshot({ source, destination, expectedS
     const directory = await open(dirname(destination), 'r');
     try { await directory.sync(); } finally { await directory.close(); }
     succeeded = true;
-    return { imported: true, tables: inventory, automaticExecutionDisabled: true, productionAuthorityChanged: false };
+    return { imported: true, tables: inventory, automaticExecutionDisabled: true, productionAuthorityChanged: false,
+      sqliteHeader:{source:header.version===2?'unavailable': 'captured',target:{userVersion:localHeader.userVersion,applicationId:localHeader.applicationId}} };
   } finally {
     if (db) { if (!succeeded) { try { db.exec('ROLLBACK'); } catch {} } db.close(); }
     await reservation?.close(); await input.close();
