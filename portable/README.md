@@ -10,6 +10,17 @@ agent migration. Existing Cloudflare production and installed agents continue
 to serve until the exact-source migration and activation gates are satisfied.
 It is not a completed migration or a supported active-turn restart.
 
+## Original owner identity readout
+
+`GET /api/migration/identity` reads the configured owner key and opaque user ID
+only when the existing authenticated user ID matches it. It rejects Todo bearer
+tokens, cross-origin requests and development authentication. Responses are
+private and uncached. It never enrolls an identity or reads/writes application
+records. Capture the result privately from the original production owner's
+session before binding the verified Auth0 subject; a portable staging response
+is not evidence of the original site's owner ID. This route must be published
+in the original site before it can supply that evidence.
+
 ## Roles
 
 The hub owns human authentication, application SQLite, global logical control
