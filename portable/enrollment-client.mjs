@@ -2,13 +2,14 @@ import { join } from 'node:path';
 import { digest,nodeKey,signature,secret,PROTOCOL_VERSION,RUNTIME_VERSION } from './protocol.mjs';
 import { readPrivate,savePrivate } from './private-file.mjs';
 import { boundedJSON } from './bounded-json.mjs';
+import { centralAgentCapabilities } from './agent-capabilities.mjs';
 
 export async function pairAgent(config,tokenFile,{fetcher=fetch,now=()=>Date.now()}={}) {
   const origin=new URL(config.agent.hubOrigin);
   if(origin.protocol!=='https:'||origin.username||origin.password||origin.pathname!=='/'||origin.search||origin.hash)throw Error('Pair only with a fixed HTTPS hub.');
   const key=nodeKey(join(config.dataDirectory,'node-key.pem')),token=readPrivate(tokenFile,1024).trim();
   if(!/^[A-Za-z0-9_-]{20,100}$/.test(token))throw Error('Invalid private pairing token.');
-  const hello={protocol:PROTOCOL_VERSION,runtime:RUNTIME_VERSION,platform:process.platform,arch:process.arch,capabilities:{text:true,localStdio:true,desktop:process.platform==='linux'&&config.agent.desktops?.enabled===true,voice:false,secureTransfer:process.platform==='linux',autonomousGoals:false}};
+  const hello={protocol:PROTOCOL_VERSION,runtime:RUNTIME_VERSION,platform:process.platform,arch:process.arch,capabilities:{text:true,localStdio:true,desktop:process.platform==='linux'&&config.agent.desktops?.enabled===true,voice:false,secureTransfer:process.platform==='linux',...centralAgentCapabilities(config),autonomousGoals:false}};
   const pendingPath=join(config.dataDirectory,'enrollment-pending.json'),binding={tokenHash:digest(token),fingerprint:key.fingerprint,hub:origin.origin,helloHash:digest(JSON.stringify(hello))};
   let pending;
   try{pending=JSON.parse(readPrivate(pendingPath));}catch(e){if(e.code!=='ENOENT')throw e;pending={...binding,createdAt:now()};savePrivate(pendingPath,JSON.stringify(pending),{exclusive:true});}

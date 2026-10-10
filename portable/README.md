@@ -33,6 +33,14 @@ in the original site before it can supply that evidence.
 
 ## Roles
 
+The private Linux agent configuration can select `agent.centralRouting: true`
+for the paired room, foreground intake, peer, Task Requests and Operator
+consumers. Enrollment and the live connection describe the same selection;
+omission keeps these routes disabled. The hub exposes rooms only when all
+assigned nodes have returned actual snapshots and advertise that live route.
+This does not enable autonomous Goals, voice, or an unvalidated platform.
+The release/activation, fresh controls and original receipt checks still apply.
+
 The hub owns human authentication, application SQLite, global logical control
 and durable delivery. Agents own local Codex stdio, native workspaces/history,
 admission and durable native receipts. `both` installs these same two services

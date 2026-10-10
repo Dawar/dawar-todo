@@ -147,6 +147,7 @@ export class HubRpc {
     if(this.controls?.authority)for(const key of ['messageBursts','burstDiscard','burstControls','burstQueue'])common[key]=1;
     if(this.controls?.authority&&placements.length&&snapshots.length===placements.length&&placements.every(p=>this.connection(p)?.portableHello?.capabilities?.centralPeers===true))
       for(const key of ['peerInbox','peerRootControls','peerBodyPaging'])common[key]=1;
+    if(this.controls?.authority&&placements.length&&snapshots.length===placements.length&&placements.every(p=>this.connection(p)?.portableHello?.capabilities?.centralRoomDispatch===true))common.collaborationRooms=1;
     if(this.controls?.authority&&placements.length&&snapshots.length===placements.length&&placements.every(p=>this.connection(p)?.portableHello?.capabilities?.centralTaskRequests===true&&secureCapable(this.store.node(p.node_id),this.connection(p))))common.taskRequests=1;
     if(this.controls?.operator&&placements.length&&snapshots.length===placements.length&&placements.every(p=>operatorCapable(this.store,this.connections,p)))for(const key of ['operatorCalls','operatorInputQuestions'])common[key]=1;
     if(placements.length&&snapshots.length===placements.length&&placements.every(p=>secureCapable(this.store.node(p.node_id),this.connection(p))))

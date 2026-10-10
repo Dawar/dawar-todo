@@ -28,6 +28,7 @@ import {AgentCollaboration} from './agent-collaboration.mjs';
 import {roomAnswerReceipt} from './room-answer.mjs';
 import {foregroundSource} from './foreground-source.mjs';
 import {validatePrimary} from './primary-source.mjs';
+import {centralAgentCapabilities} from './agent-capabilities.mjs';
 const fingerprintLegacy=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
 export class AgentTransport {
@@ -69,9 +70,9 @@ export class AgentTransport {
     });
   }
   hello(){return {protocol:PROTOCOL_VERSION,runtime:RUNTIME_VERSION,platform:process.platform,arch:process.arch,agentEpoch:this.runtime.epoch,
-    // Registered native routing is staged below; keep automatic room starts
-    // disabled until captured hub tool/result/question consumers are paired.
-    capabilities:{text:true,localStdio:true,registeredArtifacts:true,profileReads:true,memoryCompaction:process.platform==='linux',pdfPreview:process.platform==='linux',desktop:process.platform==='linux'&&!!this.runtime.desktops,voice:false,secureTransfer:process.platform==='linux'&&!!this.runtime.secure,centralBursts:process.platform==='linux',centralRoomDispatch:false,centralPrimaryDispatch:false,centralPeers:false,centralTaskRequests:false,centralOperator:false,autonomousGoals:false}};}
+    // Paired consumers are selected explicitly for the reviewed Linux release;
+    // unrelated/native-autonomous capabilities are not implied by this switch.
+    capabilities:{text:true,localStdio:true,registeredArtifacts:true,profileReads:true,memoryCompaction:process.platform==='linux',pdfPreview:process.platform==='linux',desktop:process.platform==='linux'&&!!this.runtime.desktops,voice:false,secureTransfer:process.platform==='linux'&&!!this.runtime.secure,centralBursts:process.platform==='linux',...centralAgentCapabilities(this.config),autonomousGoals:false}};}
   send(value){if(this.socket?.readyState===WebSocket.OPEN)this.socket.send(JSON.stringify(value));}
   controlRequest(botId,tool,args){
     if(!HUB_TOOLS.has(tool))throw Error('Unsupported hub tool.');

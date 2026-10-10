@@ -6,6 +6,7 @@ export function loadConfig(path = process.env.DAWAR_HUB_CONFIG) {
   const c = JSON.parse(readPrivate(path));
   if (c.version !== 1 || !['hub','agent','both'].includes(c.mode) || !isAbsolute(c.dataDirectory)) throw Error('Invalid portable configuration.');
   c.dataDirectory = resolve(c.dataDirectory);
+  if(c.agent?.centralRouting!==undefined&&typeof c.agent.centralRouting!=='boolean')throw Error('Invalid central routing configuration.');
   if(c.agent?.desktops!==undefined){
     const d=c.agent.desktops;
     if(!d||typeof d.enabled!=='boolean'||Object.keys(d).some(k=>!['enabled','base','launcher','adopt'].includes(k))||
