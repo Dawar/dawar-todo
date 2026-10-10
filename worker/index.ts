@@ -8,6 +8,7 @@ import { runTodoMinuteMaintenance } from "../db/minute-maintenance";
 import { handleTalkPhoneStream } from "./talk-phone-stream";
 import {runSourceWriterWork} from "../portable/source-writer-scope.mjs";
 import type {SourceWriterBinding} from "../portable/source-writer-admission.mjs";
+import {sourceInstallationBinding} from "../portable/source-installation-lineage.mjs";
 import {originalStorageUploadProxy} from '../lib/storage-upload-proxy';
 import {applicationMigrationReadResponse} from '../lib/application-migration-reader';
 import {applicationMigrationControlResponse} from '../lib/application-migration-control';
@@ -18,6 +19,7 @@ interface Env {
   MIGRATION_STORAGE_UPLOAD_PROXY?:string;
   MIGRATION_APPLICATION_READ?:string;
   MIGRATION_SOURCE_CONTROL?:string;
+  MIGRATION_SOURCE_INSTALLATION_LINEAGE?:string;
   BOTS_OWNER_EMAIL?: string;
   BOTS_OWNER_USER_ID?: string;
   DB: D1Database;
@@ -110,10 +112,9 @@ async function sourceFetch(request: Request, env: Env, ctx: ExecutionContext): P
 }
 
 declare const __DAWAR_BUILD__:string;
-function sourceWriterBinding(raw:string):SourceWriterBinding {
-  const expected=JSON.parse(raw) as SourceWriterBinding;
-  if(!/^[a-f0-9]{12}$/.test(__DAWAR_BUILD__) || expected.sourceId!==__DAWAR_BUILD__)throw Error('Original producer source differs.');
-  return expected;
+function sourceWriterBinding(raw:string,lineage?:string):SourceWriterBinding {
+  if(new TextEncoder().encode(raw).length>4096)throw Error('Original producer binding differs.');
+  return sourceInstallationBinding({expected:JSON.parse(raw),build:__DAWAR_BUILD__,lineage});
 }
 
 const worker = {
@@ -123,7 +124,7 @@ const worker = {
     if(new URL(request.url).pathname==='/api/migration/source/control')return applicationMigrationControlResponse(request,env,__DAWAR_BUILD__);
     if (!env.MIGRATION_SOURCE_WRITER_ADMISSION) return sourceFetch(request, env, ctx);
     try {
-      const expected = sourceWriterBinding(env.MIGRATION_SOURCE_WRITER_ADMISSION);
+      const expected = sourceWriterBinding(env.MIGRATION_SOURCE_WRITER_ADMISSION,env.MIGRATION_SOURCE_INSTALLATION_LINEAGE);
       const url = new URL(request.url);
       // Fixed read-only migration handlers authenticate the exact owner and do
       // not update API-token use. Controller metadata cannot be journaled as an
@@ -151,7 +152,7 @@ const worker = {
       ctx.waitUntil(runTodoMinuteMaintenance(env, scheduledAt, "native-sites-cron"));
       return;
     }
-    ctx.waitUntil(runSourceWriterWork({db:env.DB,expected:sourceWriterBinding(env.MIGRATION_SOURCE_WRITER_ADMISSION),kind:'worker-scheduled',
+    ctx.waitUntil(runSourceWriterWork({db:env.DB,expected:sourceWriterBinding(env.MIGRATION_SOURCE_WRITER_ADMISSION,env.MIGRATION_SOURCE_INSTALLATION_LINEAGE),kind:'worker-scheduled',
       work:()=>runTodoMinuteMaintenance(env, scheduledAt, "native-sites-cron"),
     }).then(result=>result.settled));
   },

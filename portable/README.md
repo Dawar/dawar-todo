@@ -507,6 +507,24 @@ actual separately reviewed coverage before a consistent production capture.
 No production configuration, installation, drain, release or activation is
 performed merely by adding this disabled route.
 
+An installed journal and database gate retain their original build, producer,
+operation IDs and receipts when a later reviewed deployment adds the remaining
+handlers. Before that deployment, configure the private
+`MIGRATION_SOURCE_INSTALLATION_LINEAGE` value with exactly
+`{version:1,kind:'dawar-original-installation-lineage',original:{sourceId,
+installationId,producerSHA256},deployedBuild}`. The original fields must match
+the actual installed journal; `deployedBuild` must equal that deployment's
+compiled twelve-character build ID. This is an explicit deployment decision
+after source review, not a request parameter or an inferred compatible update.
+An absent link permits only the original build; malformed, foreign or stale
+links refuse before admission, controller writes or provider effects. The link
+does not modify the journal, schema, receipts, pending writers or deadline, and
+does not authorize a future build. The control response header
+`X-Dawar-Migration-Deployed-Build` identifies the current compiled build while
+the result retains the original installation source. The same exact link is
+required by request/job admission, the private paged reader and upload adapter.
+It proves neither that legacy work has ended nor a full production freeze.
+
 ### Bounded resumable registered uploads
 
 Portable signed upload targets add `resumable: {version: 1, chunkBytes: 4194304}`. Browser task uploads use their existing JSON prepare/finalize endpoints and original `clientUploadId`, rather than sending a whole multipart file through the public API. Bot, ordinary guest and derived-preview uploads consume the same additive target. Legacy provider targets retain their prior single-attempt or replayable caller policy.

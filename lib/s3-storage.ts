@@ -3,7 +3,7 @@ import { originalStorageUploadProxy } from './storage-upload-proxy';
 import type { StoragePostTarget } from './storage-upload';
 /** Private SigV4 signing shared by Todo and bot storage. Never send this environment to clients. */
 export type S3Environment = { S3_ACCESS_KEY: string; S3_ACCESS_KEY_ID: string; S3_BUCKET: string; S3_ENDPOINT_URL: string;
-  MIGRATION_STORAGE_UPLOAD_PROXY?:string; MIGRATION_SOURCE_WRITER_ADMISSION?:string;
+  MIGRATION_STORAGE_UPLOAD_PROXY?:string; MIGRATION_SOURCE_WRITER_ADMISSION?:string; MIGRATION_SOURCE_INSTALLATION_LINEAGE?:string;
   DAWAR_OBJECT_STORAGE?: ReturnType<typeof createRemoteS3Storage> };
 type StorageConfig = { bucket: string; endpoint: URL; region: string };
 export class PrivateStorageError extends Error {

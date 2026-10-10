@@ -3,8 +3,9 @@ import {createApplicationFreezeController,type CompleteFreezeBinding,type Extern
 import {createD1ApplicationReadSource} from '../portable/application-read-source.mjs';
 import {createApplicationReadEndpoint} from '../portable/application-read-transport.mjs';
 import {createExternalWriterObserver} from '../portable/external-writer-read.mjs';
+import {sourceInstallationBinding} from '../portable/source-installation-lineage.mjs';
 
-type Environment={DB:D1Database;BOTS_OWNER_EMAIL?:string;BOTS_OWNER_USER_ID?:string;MIGRATION_SOURCE_WRITER_ADMISSION?:string;MIGRATION_APPLICATION_READ?:string};
+type Environment={DB:D1Database;BOTS_OWNER_EMAIL?:string;BOTS_OWNER_USER_ID?:string;MIGRATION_SOURCE_WRITER_ADMISSION?:string;MIGRATION_APPLICATION_READ?:string;MIGRATION_SOURCE_INSTALLATION_LINEAGE?:string};
 type Configuration={version:1;kind:'dawar-original-application-reader';sourceId:string;captureId:string;recipientPublicKey:string;freeze:CompleteFreezeBinding;
   producers:Array<{scope:ExternalWriterScope;endpoint:string;publicKey:string;credential:string}>};
 const scopes:ExternalWriterScope[]=['legacy-worker-lifetimes','voice-provider-effects','issued-storage-uploads','native-control-files'];
@@ -32,10 +33,10 @@ export async function applicationMigrationReadResponse(request:Request,environme
     if(new TextEncoder().encode(raw).length>32*1024||!/^[a-f0-9]{12}$/.test(build))throw Error('Original source differs.');
     const c=JSON.parse(raw) as Configuration;
     exact(c,['version','kind','sourceId','captureId','recipientPublicKey','freeze','producers']);
-    const journal=JSON.parse(environment.MIGRATION_SOURCE_WRITER_ADMISSION??'null') as {sourceId:string;installationId:string;producerSHA256:string};
-    exact(journal,['sourceId','installationId','producerSHA256']);
-    if(c.version!==1||c.kind!=='dawar-original-application-reader'||c.sourceId!==build||c.freeze?.sourceId!==build||
-        journal.sourceId!==build||journal.installationId!==c.freeze?.journal.installationId||journal.producerSHA256!==c.freeze?.journal.producerSHA256||
+    if(new TextEncoder().encode(environment.MIGRATION_SOURCE_WRITER_ADMISSION??'').length>4096)throw Error('Original admission configuration differs.');
+    const journal=sourceInstallationBinding({expected:JSON.parse(environment.MIGRATION_SOURCE_WRITER_ADMISSION??'null'),build,lineage:environment.MIGRATION_SOURCE_INSTALLATION_LINEAGE});
+    if(c.version!==1||c.kind!=='dawar-original-application-reader'||c.sourceId!==journal.sourceId||c.freeze?.sourceId!==journal.sourceId||
+        journal.installationId!==c.freeze?.journal.installationId||journal.producerSHA256!==c.freeze?.journal.producerSHA256||
         typeof c.captureId!=='string'||!c.captureId||c.captureId.length>1024||typeof c.recipientPublicKey!=='string'||
         !Array.isArray(c.producers)||c.producers.length!==scopes.length||new Set(c.producers.map(p=>p.scope)).size!==scopes.length)throw Error('Original binding differs.');
     const producers=Object.fromEntries(scopes.map(scope=>{
