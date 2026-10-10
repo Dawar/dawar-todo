@@ -264,3 +264,55 @@ The production freeze/owner-authenticated typed transport is not yet connected,
 and this API deliberately reports productionWriterFreezeEstablished:false.
 No arbitrary-SQL HTTP endpoint, new source credential, source database write,
 service activation or CLI production-freeze command is introduced by this module.
+
+### Original D1 database write gate
+
+`d1-write-fence.mjs` prepares a schema-bound plan and installs a fixed before-
+INSERT/UPDATE/DELETE trigger for every original user table in one D1 batch.
+That batch checks the original schema inside its transaction and rolls back on
+any failure. Installation remains open: ordinary rows, existing triggers and
+IDs are retained. A deliberate original-ID freeze changes one control row;
+SQLite then refuses DML even from an older Worker which lacks request admission.
+
+Installation, freeze and release have immutable payload fingerprints and durable
+receipts. Lost ACKs are reconciled from those same records; changed payloads,
+replacement operations, concurrent freezes and stale releases fail closed.
+Each proof reads schema, gates, control and original receipt in one primary D1
+batch. Replica sessions are rejected. Missing or changed guards/schema invalidate
+the proof. The deadline is absolute, never renewed under the same operation.
+Expiry invalidates the proof and does not silently reopen source writes.
+
+The controller must stop/await its reader and deliberately release the SAME gate
+after a failed or abandoned copy, with an authenticated original-ID recovery
+path if the controller disappears. An unconfirmed release remains held; it is
+never represented as open. A restored inactive target retains the gate and all
+receipts until a deliberate target-writer rollover releases that original-bound
+copy. No source gate/receipt deletion or prior-data restore is a recovery action.
+
+This gate proves **D1 database writes only**. Its proof scope is
+`d1-database-writes`, and the full streamed exporter rejects that scope. The
+combined controller still must cover HTTP/background work, scheduled jobs,
+voice/provider callbacks, already issued upload policies and native/control/file
+activity. The module is not exposed as a public mutation or SQL endpoint and has
+not been installed on the production database. Source authentication, the typed
+read transport and the combined controller remain required before cutover.
+
+The D1 transaction behavior is documented in the
+[Cloudflare binding API](https://developers.cloudflare.com/d1/worker-api/d1-database/).
+
+### Typed source reader
+
+`application-read-source.mjs` accepts only fixed schema/table/sequence metadata
+and bounded `sizes`/`rows` commands. Page commands carry a table, exact encoded
+order keys and a row limit; SQL and caller-selected column projections are
+rejected. Actual columns, row identity and key order come from the held source
+schema. The same cell codec is used by Node export/import and the Worker-safe
+reader. Int64, text bytes, blobs and native storage classes remain exact.
+
+The Node exporter can use that typed reader instead of a local D1 binding, so a
+subsequent encrypted owner-authenticated transport need not expose caller SQL.
+Both ends verify the same fresh complete freeze before/after reads. A database-
+only gate is insufficient. These are internal modules: no production HTTP
+reader, authorization bypass, credential or automatic source freeze is enabled.
+The original signed-in-owner transport, combined controller and real complete
+copy still require connection and acceptance.

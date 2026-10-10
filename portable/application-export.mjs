@@ -3,6 +3,7 @@ import { open, mkdir, lstat, link, unlink } from 'node:fs/promises';
 import { createReadStream, constants as fileConstants } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
+import {cellExpression,cellSQL,createApplicationFreezeVerifier} from './application-read-source.mjs';
 
 const FORMAT = 'dawar-application-snapshot';
 const MAXIMUM_BYTES = 1024 * 1024 * 1024;
@@ -30,37 +31,6 @@ function schemaObject(value) {
   if (typeof value.sql !== 'string' || Buffer.byteLength(value.sql) > MAXIMUM_LINE / 2 ||
       !new RegExp(`^\\s*CREATE\\s+(?:UNIQUE\\s+)?${value.type}\\b`, 'i').test(value.sql)) throw failure();
   return value;
-}
-
-// Value encoding takes place inside SQLite, before the D1/JavaScript boundary.
-// Text uses its raw UTF-8 bytes: quote() and JS strings alone lose embedded NUL
-// or invalid UTF-8. Integer values never pass through a JS number.
-function cellExpression(column) {
-  const c = identifier(column);
-  return `CASE typeof(${c}) WHEN 'null' THEN 'N' WHEN 'integer' THEN 'I'||CAST(${c} AS TEXT) ` +
-    `WHEN 'real' THEN 'R'||printf('%!.26g',${c}) WHEN 'text' THEN 'T'||hex(CAST(${c} AS BLOB)) ` +
-    `WHEN 'blob' THEN 'B'||hex(${c}) END`;
-}
-function cellSQL(cell) {
-  if (typeof cell !== 'string' || Buffer.byteLength(cell) > MAXIMUM_LINE / 2) throw failure();
-  if (cell === 'N') return 'NULL';
-  const value = cell.slice(1);
-  if (cell[0] === 'I' && /^(?:0|-?[1-9][0-9]{0,18})$/.test(value)) {
-    const n = BigInt(value);
-    if (n < -(1n << 63n) || n >= 1n << 63n) throw failure();
-    return value;
-  }
-  if (cell[0] === 'R') {
-    if (value === 'Inf') return 'CAST(9e999 AS REAL)';
-    if (value === '-Inf') return 'CAST(-9e999 AS REAL)';
-    if (/^-?(?:[0-9]+\.[0-9]*|[0-9]*\.[0-9]+|[0-9]+)(?:e[+-]?[0-9]+)?$/i.test(value) && Number.isFinite(Number(value))) {
-      return `CAST(${value} AS REAL)`;
-    }
-  }
-  if (['T', 'B'].includes(cell[0]) && /^(?:[A-F0-9]{2})*$/.test(value)) {
-    return cell[0] === 'B' ? `X'${value}'` : `CAST(X'${value}' AS TEXT)`;
-  }
-  throw failure();
 }
 
 async function privateDirectory(path) {
@@ -112,14 +82,14 @@ function validateHeader(h) {
 
 async function describeSnapshot(query, engine='sqlite') {
   const platform = engine==='cloudflare-d1' ? " AND lower(name) NOT IN ('_cf_kv','_cf_metadata')" : '';
-  const schema = (await query("SELECT type,name,tbl_name,sql FROM sqlite_schema WHERE sql IS NOT NULL AND lower(substr(name,1,7)) <> 'sqlite_'"+platform+" ORDER BY type,name"))
+  const schema = (await query("SELECT type,name,tbl_name,sql FROM sqlite_schema WHERE sql IS NOT NULL AND lower(substr(name,1,7)) <> 'sqlite_'"+platform+" ORDER BY type,name",{kind:'schema'}))
     .map(schemaObject);
-  const tableList = await query('PRAGMA table_list');
+  const tableList = await query('PRAGMA table_list',{kind:'tables'});
   const tables = [];
   for (const object of schema.filter(s => s.type === 'table')) {
     const t = tableList.find(t => t.schema === 'main' && t.name === object.name);
     if (!t || t.type !== 'table') throw Error('Virtual or shadow tables require an explicit migration adapter.');
-    const xinfo = await query(`PRAGMA table_xinfo(${identifier(object.name)})`);
+    const xinfo = await query(`PRAGMA table_xinfo(${identifier(object.name)})`,{kind:'columns',table:object.name});
     const columns = xinfo.filter(c => c.hidden === 0).map(c => c.name);
     let order;
     if (t.wr) order = xinfo.filter(c => c.pk).sort((a, b) => a.pk - b.pk).map(c => c.name);
@@ -128,13 +98,13 @@ async function describeSnapshot(query, engine='sqlite') {
       if (!rowid) throw Error('A fully shadowed rowid requires an explicit migration adapter.');
       columns.unshift(rowid); order = [rowid];
     }
-    const count = await query(`SELECT COUNT(*) AS n FROM ${identifier(object.name)}`);
+    const count = await query(`SELECT COUNT(*) AS n FROM ${identifier(object.name)}`,{kind:'count',table:object.name});
     tables.push({ name: object.name, columns, order, rows: boundedInteger(count[0]?.n) });
   }
   const userVersion = engine==='cloudflare-d1' ? null : (await query('PRAGMA user_version'))[0]?.user_version;
   const applicationId = engine==='cloudflare-d1' ? null : (await query('PRAGMA application_id'))[0]?.application_id;
-  const hasSequence = (await query("SELECT name FROM sqlite_schema WHERE name='sqlite_sequence'")).length;
-  const sequence = hasSequence ? await query("SELECT name,'I'||CAST(seq AS TEXT) AS seq FROM sqlite_sequence ORDER BY name") : [];
+  const hasSequence = (await query("SELECT name FROM sqlite_schema WHERE name='sqlite_sequence'",{kind:'sequence-present'})).length;
+  const sequence = hasSequence ? await query("SELECT name,'I'||CAST(seq AS TEXT) AS seq FROM sqlite_sequence ORDER BY name",{kind:'sequences'}) : [];
   return validateHeader({ kind: 'header', format: FORMAT, version:engine==='cloudflare-d1'?2:1, schema, tables, sequence, userVersion, applicationId,
     ...(engine==='cloudflare-d1'?{sourceMetadata:{engine:'cloudflare-d1',sqliteHeader:'unavailable'}}:{}) });
 }
@@ -169,13 +139,14 @@ export async function exportApplicationSnapshot({ withSnapshot, destination, sig
         for (;;) {
           signal?.throwIfAborted();
           const keys = t.order.map(identifier).join(',');
+          const lastKeys=last?t.order.map(k=>last[t.columns.indexOf(k)]):null;
           const comparison = last ? ` WHERE (${keys}) > (${t.order.map(k => cellSQL(last[t.columns.indexOf(k)])).join(',')})` : '';
           // Read lengths and bounded order keys first. The next data query is
           // limited by bytes as well as row count; an oversized cell never gets
           // expanded into an unbounded hex payload at the driver boundary.
           const weight = '(' + t.columns.map(c => `max(32,coalesce(length(CAST(${identifier(c)} AS BLOB)),0)*2+32)`).join('+') + `+${8192 + t.columns.length * 16})`;
           const orderCells = t.order.map((c, i) => `CASE WHEN ${weight} <= ${MAXIMUM_LINE} THEN ${cellExpression(c)} END AS k${i}`).join(',');
-          const sizes = await query(`SELECT ${weight} AS bytes,${orderCells} FROM ${identifier(t.name)}${comparison} ORDER BY ${keys} LIMIT ${pageRows}`);
+          const sizes = await query(`SELECT ${weight} AS bytes,${orderCells} FROM ${identifier(t.name)}${comparison} ORDER BY ${keys} LIMIT ${pageRows}`,{kind:'sizes',table:t.name,last:lastKeys,limit:pageRows});
           if (!Array.isArray(sizes) || sizes.length > pageRows) throw failure();
           let limit = 0, total = 0;
           for (const row of sizes) {
@@ -186,7 +157,7 @@ export async function exportApplicationSnapshot({ withSnapshot, destination, sig
           }
           if (!limit) break;
           const projected = t.columns.map((c, i) => `CASE WHEN ${weight} <= ${MAXIMUM_LINE} THEN ${cellExpression(c)} END AS c${i}`).join(',');
-          const page = await query(`SELECT ${projected} FROM ${identifier(t.name)}${comparison} ORDER BY ${keys} LIMIT ${limit}`);
+          const page = await query(`SELECT ${projected} FROM ${identifier(t.name)}${comparison} ORDER BY ${keys} LIMIT ${limit}`,{kind:'rows',table:t.name,last:lastKeys,limit});
           if (!Array.isArray(page) || page.length > pageRows) throw failure();
           if (page.length !== limit) throw failure();
           for (const row of page) {
@@ -232,36 +203,15 @@ export async function exportFrozenD1Application({withFrozenSource,expectedFreeze
   return exportApplicationSnapshot({...options,sourceEngine:'cloudflare-d1',withSnapshot:async callback=>{
     let called=false,completed=false,reading=true,inventory;
     try {
-      await withFrozenSource(async({db,verifyFreeze})=>{
+      await withFrozenSource(async({db,read,verifyFreeze})=>{
         if(called||!reading)throw failure();called=true;
-        if(typeof db?.prepare!=='function'||typeof verifyFreeze!=='function')throw failure();
-        let binding,wall,observed,monotonicDeadline;
-        const verify=async()=>{
-          options.signal?.throwIfAborted();
-          const proof=await verifyFreeze();
-          options.signal?.throwIfAborted();
-          const now=Date.now();
-          if(!reading||!proof||proof.version!==1||proof.kind!=='dawar-application-writer-freeze'||proof.status!=='frozen'||
-              proof.scope!=='all-application-writers'||proof.sourceId!==expected.sourceId||
-              proof.operationId!==expected.operationId||proof.epoch!==expected.epoch||
-              typeof proof.sourceId!=='string'||!proof.sourceId||proof.sourceId.length>1024||
-              typeof proof.operationId!=='string'||!proof.operationId||proof.operationId.length>1024||
-              !Number.isSafeInteger(proof.epoch)||proof.epoch<1||
-              !Number.isSafeInteger(proof.generation)||proof.generation<1||
-              !Number.isSafeInteger(proof.expiresAt)||proof.expiresAt<=now||proof.expiresAt-now>900000||
-              !Number.isSafeInteger(proof.observedAt)||Math.abs(proof.observedAt-now)>5000||
-              wall!==undefined&&now<wall||observed!==undefined&&proof.observedAt<observed||
-              proof.admittedWriters!==0||proof.unknownWriters!==0)throw failure();
-          const current=JSON.stringify([proof.sourceId,proof.operationId,proof.epoch,proof.generation,proof.expiresAt]);
-          if(binding!==undefined&&binding!==current)throw failure();binding=current;
-          monotonicDeadline??=performance.now()+proof.expiresAt-now;
-          if(performance.now()>=monotonicDeadline)throw failure();wall=now;observed=proof.observedAt;
-        };
+        if((typeof read!=='function'&&typeof db?.prepare!=='function')||typeof db?.getBookmark==='function'||typeof verifyFreeze!=='function')throw failure();
+        const verify=createApplicationFreezeVerifier({expectedFreeze:expected,verifyFreeze,signal:options.signal,stillReading:()=>reading});
         await verify();
-        inventory=await callback(async sql=>{
+        inventory=await callback(async(sql,command)=>{
           await verify();
           if(Buffer.byteLength(sql)>100000)throw failure();
-          const result=await db.prepare(sql).all();
+          const result=typeof read==='function'?{success:true,results:await read(command)}:await db.prepare(sql).all();
           await verify();
           if(result.success!==true||!Array.isArray(result.results)||result.results.length>4000)throw failure();
           return result.results;
