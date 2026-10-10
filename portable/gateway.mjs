@@ -247,6 +247,12 @@ export function startGateway(config) {
               ws.send(boundedFrame({type:'room-result',requestId:m.requestId,botId:m.botId,epoch:m.epoch,result}));
             }catch(error){ws.send(boundedFrame({type:'room-result',requestId:m.requestId,botId:m.botId,epoch:m.epoch,error:error.message,outcome:'not-sent'}));}
           }
+          else if(m.type==='room-tool-request'){
+            const n=store.node(nodeId),p=store.placement(n.owner,m.botId);
+            if(p.node_id!==nodeId||p.epoch!==m.epoch||typeof m.requestId!=='string'||m.requestId.length>180)throw Error('Foreign captured room tool request.');
+            const answer=value=>{store.node(nodeId);const current=store.placement(n.owner,m.botId);if(connections.get(nodeId)!==ws||current.node_id!==nodeId||current.epoch!==m.epoch)throw Error('Captured room tool scope changed');ws.send(boundedFrame({type:'room-tool-result',requestId:m.requestId,botId:m.botId,epoch:m.epoch,...value}));};
+            void controls.collaboration.tool(n.owner,nodeId,m.botId,m.epoch,m).then(result=>answer({result})).catch(error=>answer({error:error.message,outcome:error.outcome??'uncertain'})).catch(()=>ws.close(1008,'Captured room tool scope changed'));
+          }
           else if(m.type==='control-request'){
             const n=store.node(nodeId),p=store.placement(n.owner,m.botId);
             if(p.node_id!==nodeId||p.epoch!==m.epoch||!HUB_TOOLS.has(m.tool)||typeof m.requestId!=='string')throw Error('Foreign hub tool request.');

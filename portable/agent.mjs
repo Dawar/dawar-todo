@@ -69,6 +69,7 @@ export class AgentTransport {
     return this.requestHub(botId,'artifact',{action,input:artifactInput(action,input)},['download','preview','taskQueueExport'].includes(action));
   }
   roomState(command){return this.requestHub(command.bot_id,'room',{operationId:command.operation_id,fingerprint:command.fingerprint},true);}
+  roomTool(botId,frame,read){return this.requestHub(botId,'room-tool',frame,read);}
   requestHub(botId,kind,payload,read){
     const c=this.journal.db.prepare('SELECT * FROM node_controls WHERE bot_id=?').get(botId),control=c&&this.journal.currentControl({bot_id:botId,epoch:c.epoch});
     if(!control||this.socket?.readyState!==1)throw Object.assign(Error('Hub controls are offline or outside this assigned scope.'),{outcome:'not-sent'});
@@ -198,7 +199,7 @@ export class AgentTransport {
             const frame={type:'rpc-result',rpcId:m.rpcId,botId:m.botId,epoch:m.epoch,result};
             if(Buffer.byteLength(JSON.stringify(frame))>900*1024)throw Error('Read exceeds its bounded transport; use a smaller history page.');sendHere(frame);
           }catch(e){sendHere({type:'rpc-result',rpcId:m.rpcId,botId:m.botId,epoch:m.epoch,error:e.message});}})();
-        } else if(authentication && ['control-result','artifact-result','room-result'].includes(m.type)){
+        } else if(authentication && ['control-result','artifact-result','room-result','room-tool-result'].includes(m.type)){
           const pending=this.controlPending.get(m.requestId);if(!pending)return;
           const current=this.journal.currentControl({bot_id:pending.botId,epoch:pending.epoch});
           if(m.type!==`${pending.kind}-result`||pending.ws!==ws||m.botId!==pending.botId||m.epoch!==pending.epoch||!current)throw Error('Hub tool response scope changed.');

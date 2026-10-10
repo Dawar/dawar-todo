@@ -2,7 +2,7 @@ import {AsyncLocalStorage} from 'node:async_hooks';
 import {createHash} from 'node:crypto';
 import {fingerprint,id,originalNativeProof} from './protocol.mjs';
 import {nativeAdmissionRefusal} from '../bot-bridge/native-admission-refusal.mjs';
-import {roomDeliverySource} from './control-protocol.mjs';
+import {roomDeliverySource,HUB_ROOM_TOOL_METHODS,HUB_ROOM_READS,LOCAL_ROOM_TOOL_METHODS} from './control-protocol.mjs';
 
 const now=()=>new Date().toISOString();
 const hash=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -35,6 +35,55 @@ export class AgentCollaboration {
         return call(method,params,timeout);
       })();
     };
+    const handle=this.runtime.handle.bind(this.runtime);
+    this.localHandle=handle;
+    this.runtime.handle=(request,origin)=>{
+      if(origin?.authority!=='native-tool'||!request.method?.startsWith('conversations.')&&!request.method?.startsWith('collaboration.')&&!(request.method==='execution.config'&&origin.contextId))return handle(request,origin);
+      return this.tool(request,origin);
+    };
+  }
+  confirmation(origin,deliveryId){
+    const {store,collaboration}=this.runtime;
+    collaboration.author(origin.botId,origin,false);
+    if(!origin.contextId)throw defer('Foreground room tools await their central original-intake routing; no local shadow record was changed.');
+    const deliveries=deliveryId?[store.get('collaborationDelivery',deliveryId)]:store.db.prepare("SELECT json FROM records WHERE kind='collaborationDelivery' AND bot_id=? AND json_extract(json,'$.contextId')=? AND json_extract(json,'$.turnId')=? ORDER BY rowid DESC LIMIT 2").all(origin.botId,origin.contextId,origin.turnId).map(r=>JSON.parse(r.json));
+    for(const d of deliveries){
+      if(!d||d.botId!==origin.botId||d.contextId!==origin.contextId||d.turnId!==origin.turnId||d.state!=='accepted'||d.terminalStatus)continue;
+      const row=this.journal.db.prepare('SELECT * FROM node_commands WHERE operation_id=?').get(d.id);
+      if(!row||!['dispatching','unknown','native-accepted','running'].includes(row.state))continue;
+      const command=JSON.parse(row.command);
+      if(command.bot_id!==origin.botId||JSON.parse(command.payload).method!=='portable.roomDispatch')continue;
+      const result=this.result(command);
+      if(result.threadId!==origin.threadId||result.turnId!==origin.turnId||result.context.activeTurnId!==origin.turnId||result.context.status!=='running')continue;
+      return {operationId:command.operation_id,fingerprint:command.fingerprint,receipt:{operationId:command.operation_id,threadId:result.threadId,turnId:result.turnId,evidence:result.evidence,result}};
+    }
+    throw defer('The actual active native tool lacks its original addressed room receipt. No replacement or replay was made.');
+  }
+  async tool(request,origin){
+    if(!request.params||typeof request.params!=='object'||Array.isArray(request.params)||request.clientId)throw defer('Native room tool parameters cannot assert owner authority.');
+    const local=LOCAL_ROOM_TOOL_METHODS.has(request.method);
+    if(!local&&!HUB_ROOM_TOOL_METHODS.has(request.method))throw defer('This room operation awaits its central consumer; local conversation state was not changed.');
+    const confirmation=this.confirmation(origin,request.method==='collaboration.result'?request.params.deliveryId:null);
+    const before=this.journal.currentControl({bot_id:origin.botId,epoch:JSON.parse(this.journal.db.prepare('SELECT command FROM node_commands WHERE operation_id=?').get(confirmation.operationId).command).epoch});
+    if(!before||before.stopped)throw defer('Current assigned controls are offline or stopped.');
+    // Original read handlers carry an undefined operationId in JavaScript;
+    // omit that optional field rather than sending a noncanonical frame.
+    const centralRequest={method:request.method,botId:request.botId,params:request.params,...(request.operationId===undefined?{}:{operationId:request.operationId})};
+    const framed={request:local?{method:'collaboration.authorize',botId:request.botId,params:{}}:centralRequest,origin,confirmation,controlRevision:before.revision};
+    const result=await this.transport.roomTool(origin.botId,framed,local||HUB_ROOM_READS.has(request.method));
+    const after=this.journal.currentControl({bot_id:origin.botId,epoch:before.epoch});
+    if(!after||after.stopped||after.revision!==before.revision){
+      throw Object.assign(Error('Control changed while the original room tool was awaiting confirmation. Its original ID was retained.'),{outcome:local||HUB_ROOM_READS.has(request.method)?'not-sent':'uncertain'});
+    }
+    this.runtime.collaboration.author(origin.botId,origin,false);
+    if(!local)return result;
+    if(result?.botId!==origin.botId||result.nodeId!==this.transport.enrollment.nodeId||result.epoch!==after.epoch||result.controlRevision!==after.revision||fingerprint(result.origin)!==fingerprint(origin))throw defer('Fresh room resource/body authorization is outside its captured caller.');
+    const c=this.runtime.store.get('collaborationContext',origin.contextId),room=this.runtime.store.get('collaborationRoom',c.roomId);
+    if(result.room?.id!==c.roomId||result.room.held||!result.room.members?.includes(origin.botId)||room?.revision>result.room.revision||room?.revision===result.room.revision&&fingerprint(room)!==fingerprint(result.room))throw defer('Canonical room membership/hold/revision changed before local work.');
+    this.runtime.store.put('collaborationRoom',result.room);
+    // Workspace/desktop/external leases and native history/config remain on the
+    // actual machine. Reuse their original caller/effect/uncertainty closures.
+    return this.localHandle(request,origin);
   }
   async refresh(captured){
     const {command,delivery,post}=captured,{runtime,journal,transport}=this;

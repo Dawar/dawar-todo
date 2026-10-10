@@ -1,7 +1,7 @@
 import {AsyncLocalStorage} from 'node:async_hooks';
 import {Collaboration} from '../bot-bridge/collaboration.mjs';
-import {HUB_ROOM_READS,HUB_ROOM_MUTATIONS,roomDeliverySource} from './control-protocol.mjs';
-import {fingerprint,boundedFrame,originalNativeProof} from './protocol.mjs';
+import {HUB_ROOM_READS,HUB_ROOM_MUTATIONS,HUB_ROOM_TOOL_METHODS,roomDeliverySource} from './control-protocol.mjs';
+import {fingerprint,boundedFrame,originalNativeProof,id} from './protocol.mjs';
 
 const now=()=>new Date().toISOString();
 
@@ -13,7 +13,7 @@ export class HubCollaboration extends Collaboration {
     const facade=Object.assign(Object.create(runtime),{maintenance:{holding:()=>{
       try{runtime.assertWriter();return false;}catch{return true;}
     }}});
-    super(facade,[],null,new Set());this.owners=new AsyncLocalStorage();
+    super(facade,[],null,new Set());this.owners=new AsyncLocalStorage();this.callers=new AsyncLocalStorage();
   }
   ownedBot(botId){
     const owner=this.owners.getStore();
@@ -22,9 +22,12 @@ export class HubCollaboration extends Collaboration {
   }
   author(botId,origin,owner){
     this.ownedBot(botId);
-    // Node identity alone is neither human nor captured native tool authority.
-    if(!owner||origin)throw Error('This room route requires the authenticated owner.');
-    return {kind:'owner'};
+    if(owner&&!origin)return {kind:'owner'};
+    // Only the authenticated node broker can capture a native caller. A model
+    // argument, owner RPC or old successful receipt cannot impersonate it.
+    const captured=this.callers.getStore();
+    if(owner||!captured||fingerprint(captured)!==fingerprint(origin))throw Error('A captured assigned native room caller is required.');
+    return super.author(botId,origin,false);
   }
   members(value){
     const members=super.members(value);
@@ -94,6 +97,40 @@ export class HubCollaboration extends Collaboration {
         canDispatch:!p.stopped&&this.runtime.router.connection(p)?.portableHello?.capabilities?.centralRoomDispatch===true&&delivery.state==='queued'&&this.allowed(delivery)};
     });
   }
+  async tool(owner,nodeId,botId,epoch,frame){
+    const {p}=this.runtime.scope(owner,botId),{request,origin,confirmation,controlRevision}=frame;
+    if(p.node_id!==nodeId||p.epoch!==epoch||p.control_revision!==controlRevision||p.stopped||
+        !request||request.botId!==botId||request.clientId||!request.params||typeof request.params!=='object'||Array.isArray(request.params)||
+        !origin||origin.authority!=='native-tool'||origin.botId!==botId||!id(origin.contextId)||!id(origin.threadId)||!id(origin.turnId)||
+        !confirmation||!originalNativeProof(confirmation.receipt,confirmation.operationId))throw Error('Current assigned native room authority is unconfirmed.');
+    if(request.method!=='collaboration.authorize'&&!HUB_ROOM_TOOL_METHODS.has(request.method))throw Error('This native room operation is not yet supported by the central broker.');
+    this.runtime.assertWriter();
+    return this.owners.run(owner,()=>this.runtime.lock(`room-tool:${botId}`,()=>{
+      const current=this.runtime.hub.placement(owner,botId);
+      if(fingerprint(current)!==fingerprint(p))throw Error('Control changed before the captured room tool.');
+      const row=this.runtime.hub.db.prepare('SELECT * FROM portable_mailbox WHERE operation_id=?').get(confirmation.operationId);
+      if(!row||row.owner!==owner||row.node_id!==nodeId||row.bot_id!==botId||row.epoch!==epoch||row.fingerprint!==confirmation.fingerprint||
+          JSON.parse(row.payload).method!=='portable.roomDispatch'||['terminal'].includes(row.state)||
+          confirmation.receipt.threadId!==origin.threadId||confirmation.receipt.turnId!==origin.turnId||confirmation.receipt.result?.context?.id!==origin.contextId||
+          confirmation.receipt.result?.context?.status!=='running'||confirmation.receipt.result?.nativeStatus)throw Error('Tool proof is outside its original live room delivery.');
+      const d=this.store.get('collaborationDelivery',row.operation_id),c=this.store.get('collaborationContext',origin.contextId);
+      if(!d||d.contextId!==origin.contextId||d.terminalStatus||d.state==='completed'||c?.generation>confirmation.receipt.result.context.revision||
+          this.store.get('collaborationTurn',`${origin.contextId}:${origin.turnId}`))throw Error('The original room turn is no longer current.');
+      // A native tool can precede turn/start's ACK. Positive exact-client
+      // evidence may bind canonical context/result records, but does not rewrite
+      // the mailbox or manufacture its missing transport ACK. No input retry.
+      this.receipt({...row,state:'native-accepted',receipt:JSON.stringify(confirmation.receipt)},{mark:false});
+      return this.callers.run(origin,()=>{
+        this.author(botId,origin,false);
+        if(request.method==='collaboration.authorize'){
+          const context=this.context(botId,origin.contextId),room=this.room(botId,context.roomId);
+          if(room.held)throw Error('The owner held this room. Local effects were not admitted.');
+          return {botId,nodeId,epoch,controlRevision,origin,room};
+        }
+        return super.handle(request,origin);
+      });
+    }));
+  }
   async pump(){
     const rows=this.store.db.prepare("SELECT json FROM records WHERE kind='collaborationDelivery' AND json_extract(json,'$.state')='queued' AND NOT EXISTS (SELECT 1 FROM portable_mailbox WHERE operation_id=records.id) ORDER BY rowid LIMIT 8").all();
     for(const row of rows){
@@ -113,7 +150,7 @@ export class HubCollaboration extends Collaboration {
       })));
     }
   }
-  receipt(row){
+  receipt(row,{mark=true}={}){
     const payload=JSON.parse(row.payload),r=row.receipt&&JSON.parse(row.receipt);
     if(payload.method!=='portable.roomDispatch'||!r)return;
     this.owners.run(row.owner,()=>this.store.transaction(()=>{
@@ -127,14 +164,19 @@ export class HubCollaboration extends Collaboration {
       }else if(['native-accepted','running','terminal'].includes(row.state)&&originalNativeProof(r,row.operation_id)){
         const result=r.result,c=result.context,delivery=result.delivery,prior=this.store.get('collaborationContext',d.contextId);
         if(result.deliveryId!==d.id||delivery?.id!==d.id||delivery.botId!==d.botId||delivery.contextId!==d.contextId||delivery.roomId!==d.roomId||delivery.postId!==d.postId||delivery.turnId!==r.turnId||result.threadId!==r.threadId||!c||c.id!==d.contextId||c.botId!==d.botId||c.roomId!==d.roomId||c.threadId!==r.threadId||c.provisioning!=='bound'||!Number.isSafeInteger(c.revision)||c.revision<0||r.threadId===b.threadId||prior?.threadId&&prior.threadId!==r.threadId||this.store.bots().some(bot=>bot.threadId===r.threadId)||this.store.list('collaborationContext').some(context=>context.id!==c.id&&context.threadId===r.threadId)||d.turnId&&d.turnId!==r.turnId)throw Error('Native receipt lacks its unique original registered room identity.');
-        const status=r.nativeStatus??result.nativeStatus,terminal=['completed','failed','interrupted'].includes(status);
+        const status=r.nativeStatus??result.nativeStatus??d.terminalStatus,terminal=['completed','failed','interrupted'].includes(status);
         if(row.state==='terminal'&&!terminal)throw Error('Terminal room receipt lacks a terminal native outcome.');
-        this.store.put('collaborationContext',{...prior,...c,generation:c.revision,status:terminal?'idle':c.status,activeTurnId:terminal?null:r.turnId});
+        // A tool confirmation can precede the transport ACK. A later snapshot
+        // of the same original receipt must not regress a newer native context.
+        if(!prior||prior.generation<=c.revision){
+          if(prior?.generation===c.revision&&(prior.provisioning!==c.provisioning||prior.status!==(terminal?'idle':c.status)||prior.activeTurnId!==(terminal?null:r.turnId)))throw Error('Original context revision has contradictory native status.');
+          this.store.put('collaborationContext',{...prior,...c,generation:c.revision,status:terminal?'idle':c.status,activeTurnId:terminal?null:r.turnId});
+        }
         this.store.put('collaborationDelivery',{...d,state:terminal?'completed':'accepted',threadId:r.threadId,turnId:r.turnId,terminalStatus:terminal?status:null,evidence:'assigned-agent-original-client',error:null});
         this.store.saveOperation(op.id,op.fingerprint,'done',{...op,result,error:null});
       }else return;
       this.publish(d.roomId,{delivery:this.publicDelivery(this.store.get('collaborationDelivery',d.id))});
-      this.store.db.prepare('INSERT INTO portable_control_receipts VALUES(?,?) ON CONFLICT(operation_id) DO UPDATE SET receipt_hash=excluded.receipt_hash').run(row.operation_id,row.receipt_hash);
+      if(mark)this.store.db.prepare('INSERT INTO portable_control_receipts VALUES(?,?) ON CONFLICT(operation_id) DO UPDATE SET receipt_hash=excluded.receipt_hash').run(row.operation_id,row.receipt_hash);
     }));
   }
 }

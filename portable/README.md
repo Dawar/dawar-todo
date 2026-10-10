@@ -829,3 +829,29 @@ and `collaborationRooms` stays hidden in browser snapshots until captured
 hub tool/result/question/history consumers are paired. Disposable Linux
 route observations use a fixture-only positive capability and inert native
 boundary; they do not establish installed native, device or production proof.
+
+### Captured registered room tools and useful results
+
+The agent intercepts the existing native `bots_conversations` handler with
+its application-captured bot/context/thread/turn. The authenticated
+`room-tool-request` broker confirms the assigned node/placement, fresh Stop
+revision and original addressed delivery proof before the original central
+room acceptance closure. Model arguments cannot assert owner identity.
+Authorization precedes recovery of any old successful operation. Posts and
+useful results persist only in the canonical hub store; they do not create
+a separate local room log or wake the foreground bot.
+
+A tool may arrive before its input ACK. Only positive exact-client evidence
+can bind that original live context for tool use. This does not invent a
+transport ACK, advance the mailbox or repeat the native input. Later receipts
+retain newer context revisions and terminal outcomes. A lost tool ACK retains
+the same logical operation and can recover its exact original result; there
+is no automatic resend or replacement operation.
+
+Native history/configuration and desktop/workspace/external resource leases
+remain on the assigned machine. Fresh central caller/membership/hold/control
+authorization precedes the original local guarded operation. No cross-machine
+shared-filesystem lock or OS sandbox is implied. Foreground room dispatch,
+await/promotion/consumption and owner question/history transport still await
+their paired consumers. Unsupported native operations fail explicitly before
+creating local shadow records. Automatic room capability remains disabled.
