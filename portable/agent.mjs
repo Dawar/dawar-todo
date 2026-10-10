@@ -22,6 +22,8 @@ import {readPrivate} from './private-file.mjs';
 import {AgentSecureTransport} from './secure-transport.mjs';
 import {AgentCollaboration} from './agent-collaboration.mjs';
 import {roomAnswerReceipt} from './room-answer.mjs';
+import {foregroundSource} from './foreground-source.mjs';
+import {validatePrimary} from './primary-source.mjs';
 const fingerprintLegacy=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
 export class AgentTransport {
@@ -54,13 +56,15 @@ export class AgentTransport {
           for(const row of journal.db.prepare("SELECT * FROM node_commands WHERE state IN ('native-accepted','running')").all())this.terminal(row);
         }
       }
-      journal.recordEvent(`event:${randomUUID()}`,{botId:event.botId,epoch:c.epoch,event});this.flushEvents();
+      const activity=event.type==='bot'&&runtime.store.get('botActivity',event.botId);
+      const captured=activity?{...event,portableActivity:{agentEpoch:runtime.epoch,activity:foregroundSource(activity)}}:event;
+      journal.recordEvent(`event:${randomUUID()}`,{botId:event.botId,epoch:c.epoch,event:captured});this.flushEvents();
     });
   }
-  hello(){return {protocol:PROTOCOL_VERSION,runtime:RUNTIME_VERSION,platform:process.platform,arch:process.arch,
+  hello(){return {protocol:PROTOCOL_VERSION,runtime:RUNTIME_VERSION,platform:process.platform,arch:process.arch,agentEpoch:this.runtime.epoch,
     // Registered native routing is staged below; keep automatic room starts
     // disabled until captured hub tool/result/question consumers are paired.
-    capabilities:{text:true,localStdio:true,registeredArtifacts:true,profileReads:true,memoryCompaction:process.platform==='linux',pdfPreview:process.platform==='linux',desktop:process.platform==='linux'&&!!this.runtime.desktops,voice:false,secureTransfer:process.platform==='linux'&&!!this.runtime.secure,centralBursts:process.platform==='linux',centralRoomDispatch:false,autonomousGoals:false}};}
+    capabilities:{text:true,localStdio:true,registeredArtifacts:true,profileReads:true,memoryCompaction:process.platform==='linux',pdfPreview:process.platform==='linux',desktop:process.platform==='linux'&&!!this.runtime.desktops,voice:false,secureTransfer:process.platform==='linux'&&!!this.runtime.secure,centralBursts:process.platform==='linux',centralRoomDispatch:false,centralPrimaryDispatch:false,autonomousGoals:false}};}
   send(value){if(this.socket?.readyState===WebSocket.OPEN)this.socket.send(JSON.stringify(value));}
   controlRequest(botId,tool,args){
     if(!HUB_TOOLS.has(tool))throw Error('Unsupported hub tool.');
@@ -142,6 +146,8 @@ export class AgentTransport {
           const binding=NODE_LOGICAL_COMMANDS.has(payload.method)?op.portableFingerprint===command.fingerprint:
             op.fingerprint===fingerprintLegacy({method:payload.method,botId:bot.id,params:payload.params??{}});
           if(!binding)return;
+          const primary=payload.method==='portable.primaryDispatch',intake=primary&&this.runtime.store.get('primaryInbox',command.operation_id);
+          if(primary&&(!intake||op.intakeId!==command.operation_id||validatePrimary(intake,bot.id,bot.threadId,command.operation_id)!==validatePrimary(payload.params.intake,bot.id,bot.threadId,command.operation_id)))return;
           if(payload.method==='portable.queueResume'){
             if(op.status!=='done'||op.method!=='queue.resume'||op.controlRevision!==payload.params.controlRevision)return;
             const receipt=queueResumeReceipt(command,op.result),current=this.journal.db.prepare('SELECT * FROM node_commands WHERE operation_id=?').get(op.id);
@@ -151,7 +157,9 @@ export class AgentTransport {
           const before={threadId:bot.threadId,method:op.method,botId:op.botId,fingerprint:op.fingerprint,portableFingerprint:op.portableFingerprint??null};
           const result=op.status==='done'?op.result:await this.runtime.reconcileOperation(op),after=this.runtime.store.operation(op.id);
           if(!result||!after||fingerprint(before)!==fingerprint({threadId:this.runtime.store.bot(bot.id).threadId,method:after.method,botId:after.botId,fingerprint:after.fingerprint,portableFingerprint:after.portableFingerprint??null}))return;
+          if(primary&&fingerprint(this.runtime.store.get('primaryInbox',op.id))!==fingerprint(intake))return;
           const turnId=result.turn?.id??result.turnId;if(!turnId)return;
+          if(primary)this.runtime.store.put('primaryInbox',{...intake,state:'accepted',turnId,acceptedAt:new Date().toISOString(),error:null});
           const current=this.journal.db.prepare('SELECT * FROM node_commands WHERE operation_id=?').get(op.id);
           if(current?.fingerprint!==row.fingerprint||!['received','dispatching','unknown','native-accepted','running'].includes(current.state))return;
           if(payload.method==='portable.burstDispatch')settleAgentBurst(this.runtime,command,result);

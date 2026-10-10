@@ -265,7 +265,7 @@ export function startGateway(config) {
             const answer=value=>{const current=store.placement(n.owner,m.botId);if(connections.get(nodeId)===ws&&current.node_id===nodeId&&current.epoch===m.epoch)ws.send(boundedFrame({type:'artifact-result',requestId:m.requestId,botId:m.botId,epoch:m.epoch,...value}));};
             void nodeStorage.request(nodeId,m).then(result=>answer({result})).catch(()=>answer({error:'Registered file confirmation unavailable; retain its original ID and local bytes.',outcome:'uncertain'})).catch(()=>ws.close(1008,'Artifact scope changed'));
           }
-          else if(m.type==='event') {const before=store.eventCursor(),sequence=store.event(nodeId,m.eventId,m.botId,m.epoch,m.event);if(sequence>before)controls.nativeEvent(m.event);ws.send(JSON.stringify({type:'event-ack',eventId:m.eventId,sequence}));if(sequence>before)broadcast(store.node(nodeId).owner,{...m.event,seq:sequence});}
+          else if(m.type==='event') {const before=store.eventCursor(),sequence=store.event(nodeId,m.eventId,m.botId,m.epoch,m.event);const current=sequence>before&&controls.nativeEvent(m.event,nodeId,m.epoch)!==false;ws.send(JSON.stringify({type:'event-ack',eventId:m.eventId,sequence}));if(current)broadcast(store.node(nodeId).owner,{...m.event,seq:sequence});}
           else throw Error('Unknown node frame.');
         } catch {ws.close(1008,'Node frame rejected');}
       });

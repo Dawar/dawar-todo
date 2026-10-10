@@ -16,7 +16,9 @@ import { PlanLifecycle } from '../bot-bridge/plan-lifecycle.mjs';
 import { ownedReply } from '../bot-bridge/message-replies.mjs';
 import { replyInputText } from '../lib/bot-replies.ts';
 import { activityUnresolved } from '../bot-bridge/turn-state.mjs';
-import { boundedFrame,fingerprint,id } from './protocol.mjs';
+import { boundedFrame,fingerprint,id,originalNativeProof } from './protocol.mjs';
+import {foregroundSource,validateForeground} from './foreground-source.mjs';
+import {validatePrimary} from './primary-source.mjs';
 export { hubActivation } from './hub-authority.mjs';
 import { controlWriteGuard } from './hub-authority.mjs';
 import { HUB_READS,HUB_MUTATIONS,HUB_TOOLS,NODE_LOGICAL_COMMANDS,HUB_BURST_MUTATIONS,HUB_ROOM_READS,HUB_ROOM_MUTATIONS } from './control-protocol.mjs';
@@ -36,7 +38,9 @@ export class HubControls extends EventEmitter {
     this.store.db.exec('PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS portable_control_receipts(operation_id TEXT PRIMARY KEY,receipt_hash TEXT NOT NULL)');
     this.defaults=this.store.meta('portable-defaults')??{};
     this.executionConfig=new ExecutionConfiguration(this);this.plans=new PlanLifecycle(this);
-    this.primary={single:bot=>PrimaryExecution.prototype.single(bot)};this.bursts=HubBursts.create(this);
+    this.primary={store:this.store,runtime:this,single:bot=>PrimaryExecution.prototype.single(bot),accept:PrimaryExecution.prototype.accept,
+      list:PrimaryExecution.prototype.list,publicItem:PrimaryExecution.prototype.publicItem,cursor:PrimaryExecution.prototype.cursor,
+      publish:botId=>this.emitEvent('work',{},botId)};this.bursts=HubBursts.create(this);
     this.collaboration=new HubCollaboration(this);
     const transaction=this.store.transaction.bind(this.store);
     const refresh=controlWriteGuard(this.store.db,{writeScope:()=>this.store.transactionDepth>0,transactionScope:()=>this.controlTransactionDepth>0});
@@ -77,15 +81,33 @@ export class HubControls extends EventEmitter {
       if(!prior)this.store.put('replyReference',r);
     });
   }
-  nativeEvent(event) {
-    if(event.type!=='bot'||!this.authority)return;
-    this.store.transaction(()=>{
+  captureForeground(botId,nodeId,epoch,agentEpoch,activity,turnId=null) {
+    const p=this.hub.db.prepare('SELECT * FROM portable_placements WHERE bot_id=?').get(botId),b=this.store.bot(botId);
+    if(!p||p.node_id!==nodeId||p.epoch!==epoch||!id(agentEpoch)||this.router.connection(p)?.portableHello?.agentEpoch!==agentEpoch)throw Error('Foreground proof is outside the live assigned agent lifetime.');
+    validateForeground(activity,botId,b.threadId,turnId);
+    const prior=this.store.get('botActivity',botId);
+    if(prior?.generation>activity.generation)return false;
+    if(prior?.generation===activity.generation&&fingerprint(foregroundSource(prior))!==fingerprint(activity))throw Error('Foreground generation has contradictory native evidence.');
+    this.store.put('botActivity',{...activity,portableSource:{nodeId,epoch,agentEpoch}});
+    if(turnId)this.store.saveBot({...b,activeTurnId:turnId,status:'running'});
+    return true;
+  }
+  nativeEvent(event,nodeId,epoch) {
+    if(event.type!=='bot'||!this.authority)return true;
+    return this.store.transaction(()=>{
       const b=this.store.bot(event.botId),v=event.data;
       if(v?.id!==b.id||v.threadId!==b.threadId)throw Error('Assigned native bot projection changed its original identity.');
+      const source=event.portableActivity,p=this.hub.db.prepare('SELECT * FROM portable_placements WHERE bot_id=?').get(b.id);
+      if(source){
+        if(this.router.connection(p)?.portableHello?.agentEpoch!==source.agentEpoch)return false;
+        if(!this.captureForeground(b.id,nodeId,epoch,source.agentEpoch,source.activity))return false;
+        if((v.activeTurnId??null)!==source.activity.activeTurnId)throw Error('Bot event and captured native activity conflict.');
+      }
       const patch={};for(const key of ['status','activeTurnId','preview','error','updatedAt','model','effort','serviceTier','mode','modeIntentId','managerPaused'])if(Object.hasOwn(v,key))patch[key]=v[key];
       if(Object.hasOwn(v,'burstQuietSeconds'))Object.assign(patch,preferencePatch(b,{burstQuietSeconds:v.burstQuietSeconds}));
       if(Number.isSafeInteger(v.queuePauseRevision)&&v.queuePauseRevision>=(b.queuePauseRevision??0)){patch.queuePaused=v.queuePaused;patch.queuePauseRevision=v.queuePauseRevision;}
       this.store.saveBot({...b,...patch});
+      return true;
     });
   }
   queueList(bot) {return stagedQueue(this.store,bot.id);}
@@ -111,6 +133,7 @@ export class HubControls extends EventEmitter {
     const {b}=this.scope(owner,botId);
     if(!params||typeof params!=='object'||Array.isArray(params))throw Error('Invalid logical control parameters.');
     if(HUB_ROOM_READS.has(method)||HUB_ROOM_MUTATIONS.has(method)||method==='conversations.respond')return this.collaboration.request(owner,{method,botId,params,operationId},caller);
+    if(method==='inbox.list')return this.primary.list(b,params);
     if(method==='bursts.read')return this.bursts.read(b);
     if(method==='bursts.typing'){
       if(caller.kind!=='owner')throw Error('Typing belongs to the authenticated owner browser.');
@@ -244,12 +267,30 @@ export class HubControls extends EventEmitter {
         const bot=this.store.bot(p.bot_id);if(bot.archived||bot.archiving||bot.deletedAt||bot.queuePaused||this.plans.blocked(bot.id))continue;
         if(this.hub.db.prepare("SELECT 1 FROM portable_mailbox WHERE bot_id=? AND state<>'terminal' LIMIT 1").get(bot.id))continue;
         const item=stagedQueue(this.store,bot.id)[0],run=this.store.list('run',bot.id).filter(r=>r.status==='queued'&&!r.laneId&&!r.selectedContext&&(!r.decision||r.decision.state==='start-approved')).sort((a,b)=>a.scheduledAt.localeCompare(b.scheduledAt))[0];
-        if(item&&(item.state!=='queued'||item.configuration?.confirmation==='pending-unsupported')||!item&&!run||this.quiet(item?null:run,date))continue;
+        const intake=!item&&!run&&this.router.connection(p)?.portableHello?.capabilities?.centralPrimaryDispatch===true?this.store.db.prepare("SELECT json FROM records WHERE kind='primaryInbox' AND bot_id=? AND json_extract(json,'$.state')='queued' ORDER BY rowid LIMIT 1").get(bot.id):null;
+        if(item&&(item.state!=='queued'||item.configuration?.confirmation==='pending-unsupported')||!item&&!run&&!intake||this.quiet(item||intake?null:run,date))continue;
         const response=await this.router.request(p.owner,{id:`work:${randomUUID()}`,method:'work.read',botId:bot.id,params:{}},'hub:scheduler');
         const w=response.result;if(response.cache?.stale||w?.botId!==bot.id||w.threadId!==bot.threadId||w.state!=='ready'||w.activeTurnId||w.paused||w.goal?.status==='active')continue;
-        await this.lock(bot.id,()=>this.dispatch(p,item,run));
+        await this.lock(bot.id,()=>intake?this.dispatchPrimary(p,JSON.parse(intake.json)):this.dispatch(p,item,run));
       }
     }finally{this.ticking=false;}
+  }
+  primaryState(row,payload){
+    const {p,b}=this.scope(row.owner,row.bot_id),intake=this.store.get('primaryInbox',row.operation_id),r=intake&&this.store.get('collaborationResult',intake.sourceId);
+    if(p.node_id!==row.node_id||p.epoch!==row.epoch||!intake||validatePrimary(intake,b.id,b.threadId,row.operation_id)!==validatePrimary(payload.params.intake,b.id,b.threadId,row.operation_id)||intake.operationId!==row.operation_id||r?.botId!==b.id||r.promotion?.id!==intake.id)throw Error('Canonical original result source or placement changed.');
+    return {operationId:row.operation_id,fingerprint:row.fingerprint,controlRevision:p.control_revision,intake,
+      canDispatch:!p.stopped&&!b.queuePaused&&!b.archived&&!b.archiving&&intake.state==='dispatching'&&!this.store.get('collaborationConsumption',r.id)&&this.router.connection(p)?.portableHello?.capabilities?.centralPrimaryDispatch===true};
+  }
+  dispatchPrimary(p,intake){
+    return this.store.transaction(()=>{
+      const current=this.hub.placement(p.owner,p.bot_id),bot=this.store.bot(p.bot_id),q=this.owned('primaryInbox',intake.id,bot.id),r=this.store.get('collaborationResult',q.sourceId);
+      if(fingerprint(current)!==fingerprint(p)||current.stopped||bot.queuePaused||bot.archived||bot.archiving||this.plans.blocked(bot.id)||this.router.connection(current)?.portableHello?.capabilities?.centralPrimaryDispatch!==true||fingerprint(q)!==fingerprint(intake)||q.state!=='queued'||r?.botId!==bot.id||r.promotion?.id!==q.id||this.store.get('collaborationConsumption',r.id))return;
+      validatePrimary(q,bot.id,bot.threadId,q.id);
+      if(this.hub.db.prepare("SELECT 1 FROM portable_mailbox WHERE bot_id=? AND state<>'terminal' LIMIT 1").get(bot.id))return;
+      const row=this.hub.enqueueOn(this.store.db,p.owner,bot.id,q.id,{method:'portable.primaryDispatch',params:{intake:q}});
+      this.store.put('primaryInbox',{...q,state:'dispatching',operationId:q.id,attemptedAt:now()});
+      this.emitEvent('work',{},bot.id);this.store.afterCommit(()=>this.router.connection(current)?.send(boundedFrame({type:'sync',...this.hub.sync(current.node_id)})));return row;
+    });
   }
   dispatch(p,item,run) {
     return this.store.transaction(()=>{
@@ -277,7 +318,7 @@ export class HubControls extends EventEmitter {
   reconcileReceipts() {
     // A durable applied hash prevents a busy recent tail from starving older
     // receipts, and catches later terminal evidence for the same operation.
-    const rows=this.hub.db.prepare("SELECT m.* FROM portable_mailbox m LEFT JOIN portable_control_receipts c ON c.operation_id=m.operation_id WHERE m.receipt IS NOT NULL AND (c.receipt_hash IS NULL OR c.receipt_hash<>m.receipt_hash) AND json_extract(m.payload,'$.method') IN ('portable.queueDispatch','portable.scheduleDispatch','portable.queueSend','portable.queueResume','portable.burstDispatch','portable.roomDispatch','portable.roomRespond') ORDER BY m.sequence LIMIT 40").all();
+    const rows=this.hub.db.prepare("SELECT m.* FROM portable_mailbox m LEFT JOIN portable_control_receipts c ON c.operation_id=m.operation_id WHERE m.receipt IS NOT NULL AND (c.receipt_hash IS NULL OR c.receipt_hash<>m.receipt_hash) AND json_extract(m.payload,'$.method') IN ('portable.queueDispatch','portable.scheduleDispatch','portable.queueSend','portable.queueResume','portable.burstDispatch','portable.roomDispatch','portable.roomRespond','portable.primaryDispatch') ORDER BY m.sequence LIMIT 40").all();
     for(const row of rows)this.receipt(row);
   }
   receipt(row) {
@@ -285,6 +326,24 @@ export class HubControls extends EventEmitter {
     if(payload.method==='portable.burstDispatch'){this.bursts.receipt(row);return;}
     if(payload.method==='portable.roomDispatch'){this.collaboration.receipt(row);return;}
     if(payload.method==='portable.roomRespond'){this.collaboration.answerReceipt(row);return;}
+    if(payload.method==='portable.primaryDispatch'){
+      this.store.transaction(()=>{
+        const {p,b}=this.scope(row.owner,row.bot_id),q=this.store.get('primaryInbox',row.operation_id);
+        if(p.node_id!==row.node_id||p.epoch!==row.epoch||!q||q.operationId!==row.operation_id||validatePrimary(q,b.id,b.threadId,row.operation_id)!==validatePrimary(payload.params.intake,b.id,b.threadId,row.operation_id))throw Error('Original result receipt source changed.');
+        let patch;
+        if(row.state==='unknown'||receipt.outcome==='rejected'){
+          if(q.turnId)throw Error('A later uncertainty cannot erase confirmed original result acceptance.');
+          patch={state:row.state==='unknown'?'uncertain':'failed',error:receipt.error??'Original result admission is unconfirmed.'};
+        }else if(['native-accepted','running','terminal'].includes(row.state)&&originalNativeProof(receipt,row.operation_id)&&receipt.threadId===b.threadId){
+          const terminal=receipt.nativeStatus??receipt.result?.turn?.status;
+          if(row.state==='terminal'&&!['completed','failed','interrupted'].includes(terminal))throw Error('Original result terminal receipt lacks native outcome.');
+          if(q.turnId&&q.turnId!==receipt.turnId)throw Error('Original result receipt changed its accepted turn.');
+          patch={state:'accepted',turnId:receipt.turnId,...(row.state==='terminal'?{terminalStatus:terminal}:{}),error:null};
+        }else return;
+        this.store.put('primaryInbox',{...q,...patch});this.emitEvent('work',{},b.id);
+        this.store.db.prepare('INSERT INTO portable_control_receipts VALUES(?,?) ON CONFLICT(operation_id) DO UPDATE SET receipt_hash=excluded.receipt_hash').run(row.operation_id,row.receipt_hash);
+      });return;
+    }
     this.store.transaction(()=>{
       const mark=()=>this.store.db.prepare('INSERT INTO portable_control_receipts VALUES(?,?) ON CONFLICT(operation_id) DO UPDATE SET receipt_hash=excluded.receipt_hash').run(row.operation_id,row.receipt_hash);
       const control=this.store.get('portableQueueControl',row.operation_id);

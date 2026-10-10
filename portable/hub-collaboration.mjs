@@ -178,6 +178,7 @@ export class HubCollaboration extends Collaboration {
     const {p}=this.runtime.scope(owner,botId),row=this.runtime.hub.db.prepare('SELECT * FROM portable_mailbox WHERE operation_id=?').get(operationId);
     if(p.node_id!==nodeId||p.epoch!==epoch||!row||row.owner!==owner||row.bot_id!==botId||row.node_id!==nodeId||row.epoch!==epoch||row.fingerprint!==hash)throw Error('Foreign original room command.');
     const payload=JSON.parse(row.payload);
+    if(payload.method==='portable.primaryDispatch')return this.runtime.primaryState(row,payload);
     if(payload.method==='portable.roomRespond')return this.owners.run(owner,()=>this.answerState(owner,nodeId,botId,epoch,row,payload));
     if(payload.method!=='portable.roomDispatch')throw Error('This command is not a registered room delivery.');
     return this.owners.run(owner,()=>{
@@ -193,13 +194,22 @@ export class HubCollaboration extends Collaboration {
     const {p}=this.runtime.scope(owner,botId),{request,origin,confirmation,controlRevision}=frame;
     if(p.node_id!==nodeId||p.epoch!==epoch||p.control_revision!==controlRevision||p.stopped||
         !request||request.botId!==botId||request.clientId||!request.params||typeof request.params!=='object'||Array.isArray(request.params)||
-        !origin||origin.authority!=='native-tool'||origin.botId!==botId||!id(origin.contextId)||!id(origin.threadId)||!id(origin.turnId)||
-        !confirmation||!originalNativeProof(confirmation.receipt,confirmation.operationId))throw Error('Current assigned native room authority is unconfirmed.');
+        !origin||origin.authority!=='native-tool'||origin.botId!==botId||origin.contextId&&!id(origin.contextId)||!id(origin.threadId)||!id(origin.turnId)||
+        !confirmation)throw Error('Current assigned native room authority is unconfirmed.');
     if(request.method!=='collaboration.authorize'&&!HUB_ROOM_TOOL_METHODS.has(request.method))throw Error('This native room operation is not yet supported by the central broker.');
     this.runtime.assertWriter();
     return this.owners.run(owner,()=>this.runtime.lock(`room-tool:${botId}`,()=>{
       const current=this.runtime.hub.placement(owner,botId);
       if(fingerprint(current)!==fingerprint(p))throw Error('Control changed before the captured room tool.');
+      if(!origin.contextId){
+        if(confirmation.kind!=='assigned-native-foreground'||!this.runtime.captureForeground(botId,nodeId,epoch,confirmation.agentEpoch,confirmation.activity,origin.turnId))throw Error('Foreground activity is late, foreign or superseded.');
+        return this.callers.run(origin,()=>{
+          this.author(botId,origin,false);
+          if(request.method==='collaboration.authorize')return {botId,nodeId,epoch,controlRevision,origin};
+          return super.handle(request,origin);
+        });
+      }
+      if(!originalNativeProof(confirmation.receipt,confirmation.operationId))throw Error('Original room delivery is unconfirmed.');
       const row=this.runtime.hub.db.prepare('SELECT * FROM portable_mailbox WHERE operation_id=?').get(confirmation.operationId);
       if(!row||row.owner!==owner||row.node_id!==nodeId||row.bot_id!==botId||row.epoch!==epoch||row.fingerprint!==confirmation.fingerprint||
           JSON.parse(row.payload).method!=='portable.roomDispatch'||['terminal'].includes(row.state)||

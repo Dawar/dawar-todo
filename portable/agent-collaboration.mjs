@@ -3,6 +3,8 @@ import {createHash} from 'node:crypto';
 import {fingerprint,id,originalNativeProof} from './protocol.mjs';
 import {nativeAdmissionRefusal} from '../bot-bridge/native-admission-refusal.mjs';
 import {roomDeliverySource,roomQuestionSource,HUB_ROOM_TOOL_METHODS,HUB_ROOM_READS,LOCAL_ROOM_TOOL_METHODS} from './control-protocol.mjs';
+import {foregroundSource,validateForeground} from './foreground-source.mjs';
+import {observedActiveTurn} from '../bot-bridge/turn-state.mjs';
 
 const now=()=>new Date().toISOString();
 const hash=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -52,14 +54,18 @@ export class AgentCollaboration {
     const handle=this.runtime.handle.bind(this.runtime);
     this.localHandle=handle;
     this.runtime.handle=(request,origin)=>{
-      if(origin?.authority!=='native-tool'||!request.method?.startsWith('conversations.')&&!request.method?.startsWith('collaboration.')&&!(request.method==='execution.config'&&origin.contextId))return handle(request,origin);
+      if(origin?.authority!=='native-tool'||!request.method?.startsWith('conversations.')&&!request.method?.startsWith('collaboration.')&&request.method!=='execution.config')return handle(request,origin);
       return this.tool(request,origin);
     };
   }
   confirmation(origin,deliveryId){
     const {store,collaboration}=this.runtime;
     collaboration.author(origin.botId,origin,false);
-    if(!origin.contextId)throw defer('Foreground room tools await their central original-intake routing; no local shadow record was changed.');
+    if(!origin.contextId){
+      if(!observedActiveTurn(this.runtime,origin.botId,origin.turnId))throw defer('The native foreground caller lacks current observed turn identity.');
+      const activity=validateForeground(foregroundSource(store.get('botActivity',origin.botId)),origin.botId,origin.threadId,origin.turnId);
+      return {kind:'assigned-native-foreground',agentEpoch:this.runtime.epoch,activity};
+    }
     const deliveries=deliveryId?[store.get('collaborationDelivery',deliveryId)]:store.db.prepare("SELECT json FROM records WHERE kind='collaborationDelivery' AND bot_id=? AND json_extract(json,'$.contextId')=? AND json_extract(json,'$.turnId')=? ORDER BY rowid DESC LIMIT 2").all(origin.botId,origin.contextId,origin.turnId).map(r=>JSON.parse(r.json));
     for(const d of deliveries){
       if(!d||d.botId!==origin.botId||d.contextId!==origin.contextId||d.turnId!==origin.turnId||d.state!=='accepted'||d.terminalStatus)continue;
@@ -78,7 +84,8 @@ export class AgentCollaboration {
     const local=LOCAL_ROOM_TOOL_METHODS.has(request.method);
     if(!local&&!HUB_ROOM_TOOL_METHODS.has(request.method))throw defer('This room operation awaits its central consumer; local conversation state was not changed.');
     const confirmation=this.confirmation(origin,request.method==='collaboration.result'?request.params.deliveryId:null);
-    const before=this.journal.currentControl({bot_id:origin.botId,epoch:JSON.parse(this.journal.db.prepare('SELECT command FROM node_commands WHERE operation_id=?').get(confirmation.operationId).command).epoch});
+    const control=this.journal.db.prepare('SELECT epoch FROM node_controls WHERE bot_id=?').get(origin.botId);
+    const before=control&&this.journal.currentControl({bot_id:origin.botId,epoch:control.epoch});
     if(!before||before.stopped)throw defer('Current assigned controls are offline or stopped.');
     // Original read handlers carry an undefined operationId in JavaScript;
     // omit that optional field rather than sending a noncanonical frame.
@@ -90,8 +97,10 @@ export class AgentCollaboration {
       throw Object.assign(Error('Control changed while the original room tool was awaiting confirmation. Its original ID was retained.'),{outcome:local||HUB_ROOM_READS.has(request.method)?'not-sent':'uncertain'});
     }
     this.runtime.collaboration.author(origin.botId,origin,false);
+    if(!origin.contextId&&fingerprint(this.confirmation(origin))!==fingerprint(confirmation))throw Object.assign(Error('Foreground activity changed during the original hub request; retain its original operation.'),{outcome:local||HUB_ROOM_READS.has(request.method)?'not-sent':'uncertain'});
     if(!local)return result;
     if(result?.botId!==origin.botId||result.nodeId!==this.transport.enrollment.nodeId||result.epoch!==after.epoch||result.controlRevision!==after.revision||fingerprint(result.origin)!==fingerprint(origin))throw defer('Fresh room resource/body authorization is outside its captured caller.');
+    if(!origin.contextId)return this.localHandle(request,origin);
     const c=this.runtime.store.get('collaborationContext',origin.contextId),room=this.runtime.store.get('collaborationRoom',c.roomId);
     if(result.room?.id!==c.roomId||result.room.held||!result.room.members?.includes(origin.botId)||room?.revision>result.room.revision||room?.revision===result.room.revision&&fingerprint(room)!==fingerprint(result.room))throw defer('Canonical room membership/hold/revision changed before local work.');
     this.runtime.store.put('collaborationRoom',result.room);

@@ -3,6 +3,7 @@ import { NODE_LOGICAL_COMMANDS } from './control-protocol.mjs';
 import { ownedReply,prepareReply,rememberReply } from '../bot-bridge/message-replies.mjs';
 import { resumeLogicalQueue } from './agent-queue-resume.mjs';
 import {admitBurstCommand} from './agent-bursts.mjs';
+import {validatePrimary} from './primary-source.mjs';
 
 const now=()=>new Date().toISOString();
 const refused=message=>Object.assign(Error(message),{outcome:'rejected'});
@@ -19,9 +20,11 @@ export async function admitLogicalCommand(transport,command,payload) {
   if(payload.method==='portable.burstDispatch')return admitBurstCommand(transport,command,payload);
   if(payload.method==='portable.queueResume')return resumeLogicalQueue(transport,command,payload);
   const {runtime,journal}=transport,store=runtime.store,params=payload.params;
-  const explicit=payload.method==='portable.queueSend',queued=explicit||payload.method==='portable.queueDispatch',source=queued?params?.item:params?.run;
+  const primary=payload.method==='portable.primaryDispatch',explicit=payload.method==='portable.queueSend',queued=explicit||payload.method==='portable.queueDispatch',source=primary?params?.intake:queued?params?.item:params?.run;
+  const sourceKey=primary?'primaryInbox':queued?'promptQueue':'run',identityKey=primary?'intakeId':queued?'queueId':'runId';
   const bot=store.bot(command.bot_id);
-  if(!source||source.botId!==bot.id||source.threadId!==bot.threadId||!id(source.id)||queued&&(!Number.isSafeInteger(source.revision)||source.revision<1||!(explicit?['queued','failed']:['queued']).includes(source.state)||!explicit&&source.listId||source.nativeQueueId||source.configuration?.confirmation==='pending-unsupported')||!queued&&(source.status!=='queued'||source.selectedContext||source.laneId)||explicit&&(!Number.isSafeInteger(params.controlRevision)||params.controlRevision<1))throw refused('Logical source is outside this assigned primary conversation.');
+  if(!source||source.botId!==bot.id||source.threadId!==bot.threadId||!id(source.id)||queued&&(!Number.isSafeInteger(source.revision)||source.revision<1||!(explicit?['queued','failed']:['queued']).includes(source.state)||!explicit&&source.listId||source.nativeQueueId||source.configuration?.confirmation==='pending-unsupported')||!queued&&!primary&&(source.status!=='queued'||source.selectedContext||source.laneId)||primary&&(source.state!=='queued'||source.nativeQueueId||source.turnId)||explicit&&(!Number.isSafeInteger(params.controlRevision)||params.controlRevision<1))throw refused('Logical source is outside this assigned primary conversation.');
+  if(primary)validatePrimary(source,bot.id,bot.threadId,command.operation_id);
   return runtime.lock(bot.id,()=>runtime.maintenance.admit(async()=>{
     const before=journal.currentControl(command);
     if(explicit&&before&&(before.stopped||before.revision!==params.controlRevision))throw refused('A newer Stop or control supersedes this explicit Send.');
@@ -34,7 +37,7 @@ export async function admitLogicalCommand(transport,command,payload) {
     };
     const prior=store.operation(command.operation_id);
     if(prior){
-      if(prior.portableFingerprint!==command.fingerprint||prior.botId!==bot.id||prior[queued?'queueId':'runId']!==source.id)throw unknown('Original native operation conflicts with this mailbox; it was not replayed.');
+      if(prior.portableFingerprint!==command.fingerprint||prior.botId!==bot.id||prior[identityKey]!==source.id)throw unknown('Original native operation conflicts with this mailbox; it was not replayed.');
       if(prior.status==='done')return prior.result;
       if(prior.outcome==='rejected')throw refused(prior.error??'Original native admission was rejected.');
       const result=await runtime.reconcileOperation(prior);
@@ -76,6 +79,10 @@ export async function admitLogicalCommand(transport,command,payload) {
         ownedReply(runtime,current,params.reply);
       }
       input=await runtime.messageInput(current,{text,attachments,reply:params.reply});
+    }else if(primary){
+      const local=store.get('primaryInbox',source.id);
+      if(local&&(validatePrimary(local,bot.id,bot.threadId,command.operation_id)!==validatePrimary(source,bot.id,bot.threadId,command.operation_id)||local.state!=='queued'))throw unknown('Original local result intake differs or was already attempted.');
+      text=source.text;input=[{type:'text',text,text_elements:[]}];
     }else{
       if(typeof source.title!=='string'||typeof source.prompt!=='string'||source.prompt.length>50000||!Number.isFinite(Date.parse(source.scheduledAt)))throw refused('Invalid original scheduled occurrence.');
       const local=store.get('run',source.id);
@@ -84,6 +91,11 @@ export async function admitLogicalCommand(transport,command,payload) {
       input=[{type:'text',text,text_elements:[]}];
     }
     assertControl();
+    if(primary){
+      let fresh;try{fresh=await transport.roomState(command);}catch{throw defer('Fresh canonical result admission is unavailable.');}
+      assertControl();
+      if(!fresh?.canDispatch||fresh.operationId!==command.operation_id||fresh.fingerprint!==command.fingerprint||fresh.controlRevision!==before.revision||validatePrimary(fresh.intake,bot.id,bot.threadId,command.operation_id)!==validatePrimary(source,bot.id,bot.threadId,command.operation_id))throw defer('Canonical result intake or current controls changed before admission.');
+    }
     const attempt={started:false,rejected:false,beforeDispatch:assertControl};
     // All awaited preflight reads precede the durable attempted marker. A
     // busy/offline/Goal result can retain this received command for later;
@@ -97,8 +109,9 @@ export async function admitLogicalCommand(transport,command,payload) {
         store.put('queuedAttachments',{id:command.operation_id,botId:bot.id,queueId:source.id,revision:source.revision,attachmentIds:attachments,immutable:true});
         rememberReply(runtime,current,command.operation_id,text,params.reply);
         if(explicit)store.put('queueSend',{id:command.operation_id,botId:bot.id,threadId:bot.threadId,queueId:source.id,revision:source.revision,originalClientId:source.clientUserMessageId,createdAt:now()});
-      }else store.put('run',{...source,status:'starting',operationId:command.operation_id,conversation:true,executionLane:'main-single',startedAt:now()});
-      store.saveOperation(command.operation_id,command.fingerprint,'dispatching',{portableFingerprint:command.fingerprint,method:explicit?'queue.send':queued?'queue.dispatch':'schedule.dispatch',botId:bot.id,[queued?'queueId':'runId']:source.id,...(queued?{revision:source.revision,clientId:command.operation_id}:{}),params:{attachments},createdAt:now()});
+      }else if(primary)store.put('primaryInbox',{...source,state:'dispatching',operationId:command.operation_id,attemptedAt:now()});
+      else store.put('run',{...source,status:'starting',operationId:command.operation_id,conversation:true,executionLane:'main-single',startedAt:now()});
+      store.saveOperation(command.operation_id,command.fingerprint,'dispatching',{portableFingerprint:command.fingerprint,method:primary?'turn.send':explicit?'queue.send':queued?'queue.dispatch':'schedule.dispatch',botId:bot.id,[identityKey]:source.id,...(queued?{revision:source.revision,clientId:command.operation_id}:{}),params:{attachments},createdAt:now()});
     });}catch(error){
       // This transaction contains no native call. A rolled-back reservation
       // with no original operation is positive no-effect evidence in this
@@ -109,12 +122,14 @@ export async function admitLogicalCommand(transport,command,payload) {
     try{
       // staged=true refuses steering into a newly busy turn. startTurn uses
       // the original native client ID and captures the current exact settings.
-      const result=await runtime.send(store.bot(bot.id),{text,stagedInput:input},command.operation_id,queued?null:store.get('run',source.id),attempt,!explicit,null,input);
+      const native=await runtime.send(store.bot(bot.id),{text,stagedInput:input},command.operation_id,queued||primary?null:store.get('run',source.id),attempt,!explicit,null,input);
+      const result=primary?{...native,evidence:{kind:'original-native-client',operationId:command.operation_id,threadId:bot.threadId,turnId:native.turn?.id??native.turnId}}:native;
       store.transaction(()=>{
-        const op=store.operation(command.operation_id),row=store.get(queued?'promptQueue':'run',source.id);
+        const op=store.operation(command.operation_id),row=store.get(sourceKey,source.id);
         if(op?.portableFingerprint!==command.fingerprint||row?.operationId!==command.operation_id)throw unknown('Original acceptance receipt changed after native submission.');
         store.saveOperation(op.id,op.fingerprint,'done',{...op,result,error:null});
         if(queued)store.put('promptQueue',{...row,state:'delivered',turnId:result.turn?.id??result.turnId,deliveredAt:now(),error:null});
+        if(primary)store.put('primaryInbox',{...row,state:'accepted',turnId:result.turn?.id??result.turnId,acceptedAt:now(),error:null});
       });
       return result;
     }catch(error){
@@ -123,8 +138,8 @@ export async function admitLogicalCommand(transport,command,payload) {
       store.transaction(()=>{
         if(op?.portableFingerprint!==command.fingerprint)throw unknown('Original native receipt changed; retain its uncertainty.');
         store.saveOperation(op.id,op.fingerprint,uncertain?'uncertain':'failed',{...op,outcome:uncertain?'uncertain':'rejected',error:error.message});
-        const row=store.get(queued?'promptQueue':'run',source.id);
-        if(row?.operationId===command.operation_id)store.put(queued?'promptQueue':'run',{...row,[queued?'state':'status']:uncertain?'uncertain':'failed',error:error.message});
+        const row=store.get(sourceKey,source.id);
+        if(row?.operationId===command.operation_id)store.put(sourceKey,{...row,[queued||primary?'state':'status']:uncertain?'uncertain':'failed',error:error.message});
       });
       error.outcome=uncertain?'uncertain':'rejected';throw error;
     }

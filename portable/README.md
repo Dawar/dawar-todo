@@ -905,3 +905,24 @@ completion remains separate. Automatic room capability remains false
 until the remaining foreground, result and other communication consumers are
 complete. Disposable Linux/loopback observations are source evidence, not
 installed native, owner, device or production acceptance.
+
+Foreground collaboration tools capture the assigned agent's actual observed
+thread, turn, persistent activity generation and live agent lifetime. The hub
+checks that authenticated placement and current controls before consulting a
+prior operation. Native Goal turns can use this same path without inventing a
+mailbox client receipt. Terminal/newer generation evidence rejects late callers;
+an older bot projection cannot replace newer hub activity. Local resources and
+configuration still use the original agent caller/effect guards.
+
+Results remain passive until a declared dependency/milestone or deliberate owner
+selection promotes one into the original `primaryInbox` identity. The hub stores
+that intake and its mailbox command in one transaction; the agent journals the
+attempt before normal native submission. It waits for current work, Stop, Plan,
+Goals and native queued work to settle, and never steers a result into a running
+turn. The same original native client receipt settles acceptance and terminal
+outcome; consumption requires the exact promoted foreground turn. Lost native
+ACKs only reconcile that original input, never create another submission.
+Central inbox reads show canonical metadata with bounded paging. Normal queue
+items and scheduled occurrences keep their existing admission priority.
+`centralPrimaryDispatch` and automatic room routing remain disabled until peer,
+task and Operator consumers are paired and complete Linux staging is accepted.
