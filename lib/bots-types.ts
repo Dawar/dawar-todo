@@ -202,7 +202,7 @@ export type BotQueueList = { id: string; botId: string; name: string; cron: stri
 export type BotSnapshot = {
   secureInputs?: import("./secure-input").SecureRequest[];
   botAdminLeadIds?: string[];
-  capabilities?: { collaborationRooms?: 1; executionConfiguration?: 1; accountUsageHistory?: 1; botAdministration?: 1; botMemoryMaintenance?: 1; botDesktops?: 1; backgroundRunLanes?: 1; scheduleDecisions?: 1; singleThreadExecution?: 1; peerInbox?: 1; peerRootControls?: 1; peerBodyPaging?: 1; nativeGoals?: 1; nativeConversation?: 1; messageReplies?: 1; secureInputs?: 1; secureResponseLifecycle?: 1; operatorCalls?: 1; messageBursts?: 1; burstDiscard?: 1; burstControls?: 1; burstQueue?: 1; queueLists?: 1; queueRelativeMoves?: 1; queueSendNow?: 1; taskQueues?: 1; teams?: 1 };
+  capabilities?: { taskRequests?: 1; collaborationRooms?: 1; executionConfiguration?: 1; accountUsageHistory?: 1; botAdministration?: 1; botMemoryMaintenance?: 1; botDesktops?: 1; backgroundRunLanes?: 1; scheduleDecisions?: 1; singleThreadExecution?: 1; peerInbox?: 1; peerRootControls?: 1; peerBodyPaging?: 1; nativeGoals?: 1; nativeConversation?: 1; messageReplies?: 1; secureInputs?: 1; secureResponseLifecycle?: 1; operatorCalls?: 1; messageBursts?: 1; burstDiscard?: 1; burstControls?: 1; burstQueue?: 1; queueLists?: 1; queueRelativeMoves?: 1; queueSendNow?: 1; taskQueues?: 1; teams?: 1 };
   teams?: BotTeam[];
   workByBot?: BotWorkState[];
   backgroundByBot?: BotBackground[];
@@ -278,7 +278,7 @@ export type BotWorkState = {
   activeTurnId: string | null; paused: boolean; summary: string | null; remaining: string | null; waitingFor: string[];
   goal: import("./codex-protocol/v2/ThreadGoal").ThreadGoal | null; goalObservedAt: string | null; migrationReason: string | null;
 };
-export type BotInboxItem = { id: string; botId: string; kind: "schedule" | "peer" | "secure-input" | "memory-maintenance"; sourceId: string; summary: string;
+export type BotInboxItem = { id: string; botId: string; kind: "schedule" | "peer" | "secure-input" | "memory-maintenance" | "task-request"; sourceId: string; summary: string;
   state: "queued" | "dispatching" | "accepted" | "uncertain" | "cancelled" | "failed"; createdAt: string; turnId: string | null; waitReason: string | null };
 export type BotPeerRoot = {
   id: string; version: 1; revision: number; state: "active" | "paused" | "stopped";

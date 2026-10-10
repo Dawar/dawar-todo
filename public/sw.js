@@ -192,6 +192,14 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(request.url);
   if (url.origin !== self.location.origin || url.pathname.startsWith("/api/") || url.pathname.startsWith("/calendar/")) return;
 
+  if (request.mode === "navigate" && (url.pathname === "/task-request" || url.pathname.startsWith("/task-request/"))) {
+    // Never cache a protected form or substitute the owner Tasks shell.
+    event.respondWith(fetch(request).catch(() => new Response(
+      '<!doctype html><html lang="en"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Protected form offline</title><body><main><h1>Protected form offline</h1><p>Reconnect and reopen the original protected link. Private input is not saved across reloads.</p></main></body></html>',
+      {status:503,headers:{"Content-Type":"text/html; charset=utf-8","Cache-Control":"no-store"}},
+    )));
+    return;
+  }
   if (request.mode === "navigate") {
     event.respondWith(
       (async () => {

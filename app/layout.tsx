@@ -3,6 +3,7 @@ import { headers } from "next/headers";
 import "./globals.css";
 import { AppShell } from "./app-shell";
 import { PwaRegister } from "./pwa-register";
+import { PublicRouteBoundary } from "./public-route-boundary";
 import { PullToRefresh } from "./pull-to-refresh";
 
 export const viewport: Viewport = {
@@ -62,7 +63,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className="overscroll-y-none"><PwaRegister /><PullToRefresh /><AppShell>{children}</AppShell></body>
+      <body className="overscroll-y-none"><PublicRouteBoundary><PwaRegister /><PullToRefresh /><AppShell>{children}</AppShell></PublicRouteBoundary></body>
     </html>
   );
 }

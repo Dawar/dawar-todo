@@ -13,6 +13,7 @@ export type SecureImageSlot = {
     required?: boolean;
 };
 export type SecureRequest = {
+    taskRequest?: import('./task-requests').TaskRequestSecureBinding;
     id: string;
     botId: string;
     threadId: string;

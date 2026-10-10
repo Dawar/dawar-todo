@@ -6,6 +6,10 @@ export type BotTicket = {
   exp: number;
   sessionExp: number;
 };
+export type TaskRequestTicket = Omit<BotTicket,'role'> & {
+  role:'task-request'; botId:string; threadId:string;
+  binding:import('./task-requests').TaskRequestSecureBinding;
+};
 const encoder = new TextEncoder();
 function base64url(bytes: Uint8Array) {
   return btoa(String.fromCharCode(...bytes))
@@ -30,6 +34,20 @@ export async function signBotTicket(payload: BotTicket, secret: string) {
     ["sign"],
   );
   return `${body}.${base64url(new Uint8Array(await crypto.subtle.sign("HMAC", key, encoder.encode(body))))}`;
+}
+export async function signTaskRequestTicket(payload:TaskRequestTicket,secret:string) {
+  // Dedicated role is signed identically, but owner-ticket verification rejects it.
+  return signBotTicket(payload as unknown as BotTicket,secret);
+}
+export async function verifyTaskRequestTicket(token:string,secret:string,machineId:string,current=Math.floor(Date.now()/1000)):Promise<TaskRequestTicket> {
+  if(typeof token!=='string'||token.length>4096)throw Error('Invalid guest ticket.');
+  const [body,signature,extra]=token.split('.');if(!body||!signature||extra)throw Error('Invalid guest ticket.');
+  const key=await crypto.subtle.importKey('raw',encoder.encode(secret),{name:'HMAC',hash:'SHA-256'},false,['verify']);
+  if(!await crypto.subtle.verify('HMAC',key,decode(signature),encoder.encode(body)))throw Error('Invalid guest ticket.');
+  const p=JSON.parse(new TextDecoder().decode(decode(body))) as TaskRequestTicket;
+  const id=(v:unknown)=>typeof v==='string'&&/^[a-zA-Z0-9:_-]{1,180}$/.test(v);
+  if(p.role!=='task-request'||!p.owner||p.machineId!==machineId||!id(p.jti)||!id(p.botId)||!id(p.threadId)||!p.binding||!id(p.binding.requestId)||!id(p.binding.grantId)||!id(p.binding.submissionId)||!Number.isSafeInteger(p.binding.revision)||p.binding.revision<1||!Number.isFinite(p.exp)||p.exp<current||p.exp>current+90||!Number.isFinite(p.sessionExp)||p.sessionExp<current||p.sessionExp>current+960)throw Error('Guest ticket expired or invalid.');
+  return p;
 }
 export async function verifyBotTicket(
   token: string,

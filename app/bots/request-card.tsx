@@ -1,5 +1,6 @@
 "use client";
 import { useRef, useEffect, useState } from "react";
+import { CreateTaskRequest } from "./task-request-ui";
 import type { BotRequest } from "../../lib/bots-types";
 
 type JsonSchema = {
@@ -258,6 +259,7 @@ export function RequestCard({
         <button className="bots-primary" disabled={locked}>
           {accepted ? "Answers sent" : busy ? "Sending answers…" : "Send answers"}
         </button>
+        {!request.params.questions.some(q => q.isSecret) && <CreateTaskRequest params={{threadId: request.params.threadId, questionKey: pending.key}}/>}
       </form>
     );
   else if (request.method === "mcpServer/elicitation/request") {

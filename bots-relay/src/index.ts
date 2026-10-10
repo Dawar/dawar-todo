@@ -1,6 +1,8 @@
 import { secureBrowserFrame } from "../../lib/secure-relay";
+import { taskRequestFrame } from '../../lib/task-request-relay';
+import type { TaskRequestTicket } from '../../lib/bots-auth';
 import { DurableObject } from "cloudflare:workers";
-import { secretMatches, verifyBotTicket } from "../../lib/bots-auth";
+import { secretMatches, verifyBotTicket, verifyTaskRequestTicket } from "../../lib/bots-auth";
 
 interface Env {
   BOT_RELAYS: DurableObjectNamespace;
@@ -12,12 +14,13 @@ interface Env {
 }
 type Connection = {
   id: string;
-  role: "pending" | "browser" | "machine";
+  role: "pending" | "browser" | "machine" | 'task-request';
   expiresAt: number;
   owner?: string;
   desktop?: boolean;
   parentId?: string;
   botId?: string;
+  taskRequest?: TaskRequestTicket;
 };
 const MAX_FRAME = 420_000;
 function encode(bytes: ArrayBuffer) {
@@ -136,7 +139,16 @@ export class BotRelay extends DurableObject<Env> {
           });
           send(socket, { type: "authenticated", role: "machine" });
           this.broadcast({ type: "presence", online: true });
+        } else if(message.role==='task-request') {
+          if(c.role!=='pending'||message.desktop)throw Error('Invalid guest role.');
+          const ticket=await verifyTaskRequestTicket(message.ticket,this.env.BOTS_TICKET_SECRET,this.env.BOTS_MACHINE_ID);
+          const key=`ticket:${ticket.jti}`;if(await this.ctx.storage.get(key))throw Error('Ticket already used.');
+          await this.ctx.storage.put(key,ticket.exp*1000);
+          // Store only signed metadata, not the guest link/PIN or any plaintext.
+          socket.serializeAttachment({...c,role:'task-request',owner:ticket.owner,expiresAt:ticket.sessionExp*1000,taskRequest:ticket});
+          send(socket,{type:'authenticated',role:'task-request',owner:ticket.owner,online:Boolean(this.machine()),expiresAt:ticket.sessionExp*1000,clientId:c.id});
         } else {
+          if(c.role==='task-request')throw Error('Guest role cannot become owner.');
           if (c.role === "machine") throw new Error("Invalid role");
           const ticket = await verifyBotTicket(
             message.ticket,
@@ -208,6 +220,16 @@ export class BotRelay extends DurableObject<Env> {
       }
       if (c.role === "pending" || c.expiresAt <= Date.now())
         throw new Error("Session expired");
+      if(c.role==='task-request') {
+        if(message.type!=='task-request'||!c.taskRequest)throw Error('Guest transport permits only its private form transfer.');
+        const frame=taskRequestFrame(message,c.taskRequest,c.id),machine=this.machine();
+        if(!machine) {send(socket,{type:'task-request.response',id:message.id,error:'Private transfer unavailable. Nothing was stored.'});return;}
+        send(machine,frame);return;
+      }
+      if(message.type==='task-request.response'&&c.role==='machine') {
+        const target=this.ctx.getWebSockets().find(s=>{const p=this.connection(s);return p?.role==='task-request'&&p.id===message.clientId&&p.expiresAt>Date.now();});
+        if(target)send(target,{type:'task-request.response',id:message.id,result:message.result,error:message.error});return;
+      }
       if (c.role === "browser" && c.desktop) {
         if (
           message.type !== "desktop" ||

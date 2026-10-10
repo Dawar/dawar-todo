@@ -57,6 +57,7 @@ import { botsClient as client } from "./client";
 import type { NativeEvent } from "./thread-state";
 import { BotConversation } from "./timeline";
 import { BotSidebarList } from "./sidebar-list";
+import { TaskRequestWorkspace } from "./task-request-ui";
 import { RequestCard } from "./request-card";
 import { MainStopButton, MainStopRecovery } from "./run-controls";
 import { BotWorkControls } from "./bot-work-controls";
@@ -508,7 +509,7 @@ export function BotsWorkspace() {
   const closeProfile = useCallback(() => setProfile(false), []);
   const openActivity = (target: ActivityTarget | null = null) => { setActivityTarget(target); setDetailsSection("history"); setProfile(true); };
   return (
-    <div className="bots-screen" ref={screenRef} data-no-pull-refresh>
+    <TaskRequestWorkspace key={JSON.stringify([owner,bot?.id,bot?.threadId,navigation])} owner={owner} bot={bot} online={online} supported={navigation === "bots" && snapshot?.capabilities?.taskRequests === 1}><div className="bots-screen" ref={screenRef} data-no-pull-refresh>
       <SiteHeader current="bots" />
       <main className={`bots-layout ${navigation === "rooms" ? roomId ? "has-selection" : "" : selected || gallery ? "has-selection" : ""}`}>
         <aside className="bots-sidebar">
@@ -968,7 +969,7 @@ export function BotsWorkspace() {
           }}
         />
       )}
-    </div>
+    </div></TaskRequestWorkspace>
   );
 }
 
