@@ -19,6 +19,7 @@ import { NodeStorageClient } from './agent-storage.mjs';
 import { artifactInput } from './node-storage-contract.mjs';
 import { AgentContextAdmission } from './context-admission.mjs';
 import { BotDesktops } from '../bot-bridge/desktops.mjs';
+import { SecureInputs } from '../bot-bridge/secure-input.mjs';
 import { AgentDesktopTransport, DESKTOP_READS, DESKTOP_MUTATIONS } from './desktop-transport.mjs';
 import {AgentStartup} from './agent-startup.mjs';
 import {verifiedAgentRelease} from './runtime-release.mjs';
@@ -304,6 +305,10 @@ export async function runAgent(config){
   const store=new Store(join(config.dataDirectory,'native-control.sqlite')),codex=new Codex(config.agent.codexBinary);
   const runtime=new BotRuntime({store,codex,root:config.agent.workspaces,defaultTimeZone:'America/Toronto'});
   runtime.maintenance.source=source;
+  // Authentication captures hello before runtime.start. Construct the same
+  // original volatile service first, so its capability is not permanently
+  // advertised as absent. Startup/readiness still fences every form action.
+  runtime.secure ??= new SecureInputs(runtime);
   if(process.platform==='linux'&&config.agent.desktops?.enabled===true)runtime.desktops=new BotDesktops({runtime,...config.agent.desktops});
   const journal=new NodeJournal(join(config.dataDirectory,'node-journal.sqlite'));
   const manager=new CodexManager({runtime,store,directory:join(config.dataDirectory,'manager')});runtime.manager=manager;
