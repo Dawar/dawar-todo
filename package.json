@@ -20,11 +20,13 @@
     "bots:install": "node bot-bridge/install.mjs",
     "bots:protocol": "node bot-bridge/generate-protocol.mjs",
     "portable:build": "DAWAR_PORTABLE_BUILD=1 NEXT_PUBLIC_DAWAR_PORTABLE=1 next build --webpack && node portable/build.mjs",
-    "portable": "node portable/cli.mjs"
+    "portable": "node portable/cli.mjs",
+    "portable:package": "node portable/package.mjs"
   },
   "dependencies": {
     "@formkit/auto-animate": "^0.10.0",
     "@novnc/novnc": "^1.7.0",
+    "busboy": "1.6.0",
     "dompurify": "^3.4.16",
     "drizzle-orm": "0.45.2",
     "lucide-react": "^1.25.0",

@@ -8,6 +8,7 @@ import { GoogleIdentity, stripIdentity } from './identity.mjs';
 import { compatible, MAX_FRAME_BYTES, secret, verifySignature } from './protocol.mjs';
 import { appAccessResponse } from '../worker/access.ts';
 import { signGateway } from './gateway-proof.ts';
+import { ObjectStorage } from './object-storage.mjs';
 
 const json = (response,status,body) => { response.writeHead(status,{'content-type':'application/json','cache-control':'no-store'});response.end(JSON.stringify(body)); };
 async function readBody(req) {
@@ -19,6 +20,7 @@ export function startGateway(config) {
   const store = new HubStore(join(config.dataDirectory,'control.sqlite'));
   const application = new LocalD1(join(config.dataDirectory,'application.sqlite'));
   const identity = new GoogleIdentity(store,config);
+  const objects = new ObjectStorage(config);
   const connections = new Map(), challenges = new Map();
   const sockets = new WebSocketServer({noServer:true,maxPayload:MAX_FRAME_BYTES,perMessageDeflate:false});
   const server = createServer(async (req,res) => {
@@ -27,6 +29,11 @@ export function startGateway(config) {
       for (const [key,value] of Object.entries(req.headers)) if(value!==undefined)headers.set(key,Array.isArray(value)?value.join(','):value);
       stripIdentity(headers);
       const r = new Request(u,{method:req.method,headers}), session = identity.session(r);
+      if(u.pathname==='/storage/object'){
+        const result=await objects.serveNode(req,u);res.writeHead(result.status,Object.fromEntries(result.headers));
+        if(!result.body)return res.end();
+        const {Readable}=await import('node:stream');const stream=Readable.fromWeb(result.body);stream.on('error',()=>res.destroy());res.on('close',()=>stream.destroy());return stream.pipe(res);
+      }
       if (u.pathname === '/healthz') return json(res,200,{ready:true,protocol:1,role:'hub',executionEnabled:false});
       if (u.pathname === '/auth/login' && req.method === 'GET') {
         const a = identity.login(u.searchParams.get('return_to'));res.writeHead(303,{location:a.location,'set-cookie':a.cookie,'cache-control':'no-store'});return res.end();
@@ -66,13 +73,17 @@ export function startGateway(config) {
         if (!['GET','HEAD','OPTIONS'].includes(req.method)) identity.csrf(r,session);
         headers.set('oai-authenticated-user-email',session.owner);headers.set('oai-authenticated-user-id',session.userId);
       }
-      const blocked = u.pathname.startsWith('/portable-assets/') ? null : await appAccessResponse(new Request(u,{method:req.method,headers}),{DB:application});
+      const accessRequest=new Request(u,{method:req.method,headers});
+      const blocked = u.pathname.startsWith('/portable-assets/') ? null : await appAccessResponse(accessRequest,{DB:application});
       if (blocked) {
         if (!u.pathname.startsWith('/api/') && blocked.status===303) {
           res.writeHead(303,{location:`/auth/login?return_to=${encodeURIComponent(u.pathname+u.search)}`});return res.end();
         }
         res.writeHead(blocked.status,Object.fromEntries(blocked.headers));return res.end(Buffer.from(await blocked.arrayBuffer()));
       }
+      // Access validation adds the original token actor to its own mutable
+      // Request. Forward that verified copy; never recreate it from input.
+      for(const [name,value] of accessRequest.headers)headers.set(name,value);
       // Fixed loopback target; never proxy a URL, host or identity from input.
       if(u.pathname==='/signin-with-chatgpt'){res.writeHead(303,{location:'/auth/login'});return res.end();}
       headers.set('host',u.host);headers.set('x-forwarded-host',u.host);headers.set('x-forwarded-proto','https');
@@ -115,5 +126,5 @@ export function startGateway(config) {
     });
   });
   server.listen(config.gatewayPort??3210,'127.0.0.1');
-  return {server,store,application,close:async()=>{for(const ws of sockets.clients)ws.close();await new Promise(resolve=>server.close(resolve));store.close();application.close();}};
+  return {server,store,application,objects,close:async()=>{for(const ws of sockets.clients)ws.close();await new Promise(resolve=>server.close(resolve));objects.close();store.close();application.close();}};
 }

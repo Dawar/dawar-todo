@@ -1,6 +1,7 @@
 import { replayableStorageFetch } from "./storage-transfer";
 /** Private SigV4 signing shared by Todo and bot storage. Never send this environment to clients. */
-export type S3Environment = { S3_ACCESS_KEY: string; S3_ACCESS_KEY_ID: string; S3_BUCKET: string; S3_ENDPOINT_URL: string };
+export type S3Environment = { S3_ACCESS_KEY: string; S3_ACCESS_KEY_ID: string; S3_BUCKET: string; S3_ENDPOINT_URL: string;
+  DAWAR_OBJECT_STORAGE?: ReturnType<typeof createRemoteS3Storage> };
 type StorageConfig = { bucket: string; endpoint: URL; region: string };
 export class PrivateStorageError extends Error {
   readonly attachmentPhase = "storage";
@@ -62,6 +63,11 @@ export async function storageResponseMetadata(response: Response) {
 }
 const SIGNED_URL_SECONDS = 60 * 60;
 export function createS3Storage(environment: S3Environment) {
+  // Supplied only by the portable server environment. Browser/request input
+  // cannot select a storage backend or supply a filesystem path.
+  return environment.DAWAR_OBJECT_STORAGE ?? createRemoteS3Storage(environment);
+}
+function createRemoteS3Storage(environment: S3Environment) {
   let cachedStorageConfig: StorageConfig | null = null;
 function storageConfig() {
   if (cachedStorageConfig) return cachedStorageConfig;

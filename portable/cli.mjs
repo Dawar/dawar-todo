@@ -52,7 +52,7 @@ if(command==='version') {
   for(const signal of ['SIGINT','SIGTERM'])process.once(signal,()=>{void gateway.close().then(()=>{child.kill('SIGTERM');});});
 } else if(command==='run' && args[0]==='agent') {
   const c=loadConfig(option('config'));if(c.mode==='hub')throw Error('Hub configuration cannot start an agent.');
-  const {runAgent}=await import('./agent.mjs');await runAgent(c);
+  const {runAgent}=await import('../bot-bridge/portable-agent.mjs');await runAgent(c);
 } else {
   throw Error('Use version, key --data PATH, pair --config PATH --token-file PATH, install --mode hub|agent|both --config PATH, or run hub|agent --config PATH.');
 }
