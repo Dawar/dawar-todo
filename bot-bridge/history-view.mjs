@@ -165,7 +165,7 @@ export async function readHistoryDetail(runtime, bot, params, authorizedTarget =
       const revision = revisionForDetail(), eventCursor = runtime.store.cursor();
       let timing;
       let cursor = null, item = !target.runId && runtime.historySupplements?.get(`${bot.id}:${params.turnId}:${params.itemId}`);
-      if (!item && ['live-turn-diff', 'live-turn-plan'].includes(params.itemId)) throw new Error('This live aggregate has expired. Individual commands and file changes remain in native history.');
+      if (!item && ['live-turn-diff', 'live-turn-plan'].includes(params.itemId)) throw new Error('This live aggregate is unavailable or has expired. Individual native items remain in history; missing Work plan explanations are not reconstructed.');
       if (!item && runtime.historyReads) {
         const entry = runtime.historyReads.itemEntry ? await runtime.historyReads.itemEntry(target.threadId, params.turnId, params.itemId) : null;
         item = entry?.item ?? await runtime.historyReads.item(target.threadId, params.turnId, params.itemId);

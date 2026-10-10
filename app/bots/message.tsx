@@ -9,6 +9,8 @@ import { MarkdownTable } from "./markdown-table";
 import { MarkdownCodeBlock } from "../markdown-code-block";
 import type { BotAttachment } from "../../lib/bots-types";
 import { proposedPlanParts } from "../../lib/proposed-plan";
+import type { NativeWorkPlan } from '../../lib/native-work-plan';
+import './native-work-plan.css';
 import ReactMarkdown, { defaultUrlTransform, type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
@@ -34,6 +36,25 @@ const MarkdownLink: Components["a"] = ({ href, children }) => {
 };
 // Stable Markdown adapters retain an open viewer when message metadata updates.
 const markdownComponents: Components = { table: renderMarkdownTable, pre: MarkdownCodeBlock, a: MarkdownLink };
+function MessageMarkdown({ text, botId, attachments }: { text: string; botId: string; attachments: BotAttachment[] }) {
+  const files = useMemo(() => ({ botId, attachments }), [botId, attachments]);
+  return <MarkdownFiles.Provider value={files}><ReactMarkdown remarkPlugins={[remarkGfm, remarkVisualizations]}
+    rehypePlugins={[[rehypeSanitize, messageSchema]]}
+    urlTransform={url => url.startsWith('bot-artifact:') || url.startsWith('bot-visualization:') ? url : defaultUrlTransform(url)}
+    components={markdownComponents}>{text}</ReactMarkdown></MarkdownFiles.Provider>;
+}
+export function WorkPlanMessage({ plan, botId, attachments, turnStatus }: { plan: NativeWorkPlan; botId: string; attachments: BotAttachment[]; turnStatus?: string }) {
+  const markdown = (text: string) => <MessageMarkdown text={text} botId={botId} attachments={attachments}/>;
+  return <section className="bots-native-work-plan" aria-label="Native Work plan">
+    {plan.explanation?.trim() && <div className="bots-message-markdown"><TextPages text={plan.explanation} render={markdown}/></div>}
+    {!!plan.steps.length && <div role="list" className="bots-work-plan-steps"><ItemPages items={plan.steps} size={8} render={(step, index) => <div role="listitem" key={index}>
+      <span className="bots-work-plan-status" data-status={step.status}>{step.status === 'completed' ? 'Completed' : step.status === 'inProgress' ? 'In progress' : 'Pending'}</span>
+      <div className="bots-message-markdown"><TextPages text={step.step} render={markdown}/></div>
+    </div>}/></div>}
+    {!plan.complete && <p className="bots-system-note">Partial live snapshot: {plan.steps.length} of {plan.totalSteps} steps shown. Full details may require the retained live update.</p>}
+    {turnStatus && turnStatus !== 'inProgress' && <p className="bots-system-note">Turn {turnStatus}. Steps reflect its last supplied native plan update.</p>}
+  </section>;
+}
 
 function ProposedPlanText({ text, partial, nativePlan = false, render }: {
   text: string; partial: boolean; nativePlan?: boolean; render: (text: string) => ReactNode;
@@ -64,22 +85,8 @@ function BotMessage({
   inWorkLog?: boolean;
   partial?: boolean;
 }) {
-  const markdownFiles = useMemo(() => ({ botId, attachments }), [botId, attachments]);
   function markdownPage(text: string) {
-    return (
-      <MarkdownFiles.Provider value={markdownFiles}>
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkVisualizations]}
-        rehypePlugins={[[rehypeSanitize, messageSchema]]}
-        urlTransform={(url) =>
-          url.startsWith("bot-artifact:") || url.startsWith("bot-visualization:") ? url : defaultUrlTransform(url)
-        }
-        components={markdownComponents}
-      >
-        {text}
-      </ReactMarkdown>
-      </MarkdownFiles.Provider>
-    );
+    return <MessageMarkdown text={text} botId={botId} attachments={attachments}/>;
   }
   function markdown(value: string) { return <TextPages text={value} render={markdownPage} />; }
   // Worker callbacks are internal supervision, not messages authored by Dawar.

@@ -1,4 +1,5 @@
-import { projectHistoryItem } from '../lib/bot-history-view.ts';
+import { projectHistoryItem, projectWorkPlan } from '../lib/bot-history-view.ts';
+import { workPlanSource } from '../lib/native-work-plan.ts';
 export const MAX_LIVE_EVENT_BYTES = 16 * 1024;
 
 /** Native history owns full data. Stored replay and browser wire share this cap. */
@@ -8,7 +9,7 @@ export function boundHistoryEvent(type, data) {
   const turnId = params.turnId ?? params.turn?.id, itemId = params.itemId ?? params.item?.id;
   // A compatible refresh remains meaningful to old clients. New clients can
   // update this descriptor without fetching a page for every closed-tool delta.
-  const compact = { reason: 'large-native-event', method, turnId, itemId };
+  const compact = { reason: 'large-native-event', method, threadId: params.threadId, turnId, itemId };
   if (params.item && turnId) {
     const entry = projectHistoryItem({ id: turnId, startedAt: null, status: 'inProgress' }, params.item,
       params.item.type === 'userMessage' && Boolean(params.item.clientId?.startsWith('schedule:')), params);
@@ -25,8 +26,8 @@ export function boundHistoryEvent(type, data) {
   let supplement;
   if (turnId && (method === 'turn/diff/updated' || method === 'turn/plan/updated')) {
     const diff = method === 'turn/diff/updated';
-    supplement = { id: diff ? 'live-turn-diff' : 'live-turn-plan', type: 'plan', text: diff ? '```diff\n' + (params.diff ?? '') + '\n```' : JSON.stringify(params.plan, null, 2) };
-    compact.entry = { id: supplement.id, turnId, type: 'plan', item: null, label: diff ? 'Turn changes' : 'Work plan', complete: false, scheduled: false, startedAt: null, status: 'inProgress' };
+    supplement = { id: diff ? 'live-turn-diff' : 'live-turn-plan', type: 'plan', text: diff ? '```diff\n' + (params.diff ?? '') + '\n```' : workPlanSource(params.plan, params.explanation) };
+    compact.entry = diff ? { id: supplement.id, turnId, type: 'plan', item: null, label: 'Turn changes', complete: false, scheduled: false, startedAt: null, status: 'inProgress' } : projectWorkPlan({ id: turnId, startedAt: null, status: 'inProgress' }, params.plan, params.explanation);
     compact.itemId = supplement.id;
   }
   if (params.turn) compact.turn = { id: params.turn.id, status: params.turn.status, items: [], startedAt: params.turn.startedAt, completedAt: params.turn.completedAt, durationMs: params.turn.durationMs,
