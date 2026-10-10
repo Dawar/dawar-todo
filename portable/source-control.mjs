@@ -43,7 +43,7 @@ async function sameCredential(actual,expected){
 // Private deployment configuration and the existing authenticated owner are
 // both required. Commands cannot supply SQL, source bindings or writer counts.
 // This endpoint controls two component fences; it never proves a full cutover.
-export function createOriginalSourceControl({db,configuration,build,authorizeOwner,admissionEnabled=false}){
+export function createOriginalSourceControl({db,configuration,build,authorizeOwner,admissionEnabled=false,databaseCopy=null}){
   exact(configuration,['version','kind','sourceOrigin','sourceId','credential','journal','database','cutoverId','databaseReleaseId','journalReleaseId']);
   exact(configuration.journal,['installationId','producerSHA256']);exact(configuration.database,['installId']);
   const c=JSON.parse(JSON.stringify(configuration)),origin=new URL(c.sourceOrigin);
@@ -51,6 +51,11 @@ export function createOriginalSourceControl({db,configuration,build,authorizeOwn
       !/^[a-f0-9]{12}$/.test(build??'')||c.sourceId!==build||typeof c.credential!=='string'||!/^[A-Za-z0-9_-]{32,512}$/.test(c.credential)||typeof authorizeOwner!=='function'||typeof admissionEnabled!=='boolean')throw failure();
   const journal={sourceId:build,installationId:id(c.journal.installationId),producerSHA256:sha(c.journal.producerSHA256)};
   const installId=id(c.database.installId),cutoverId=id(c.cutoverId),dbReleaseId=id(c.databaseReleaseId),journalReleaseId=id(c.journalReleaseId);
+  if(databaseCopy!==null){
+    exact(databaseCopy,['sourceId','operationId','schemaSHA256','recentTailLossAccepted']);
+    if(databaseCopy.sourceId!==build||databaseCopy.operationId!==cutoverId||databaseCopy.recentTailLossAccepted!==true)throw failure();
+    sha(databaseCopy.schemaSHA256);databaseCopy=Object.freeze({...databaseCopy});
+  }
   if(new Set([journal.installationId,installId,cutoverId,dbReleaseId,journalReleaseId]).size!==5)throw failure();
   const originalId=action=>action.startsWith('journal.')?(action==='journal.release'?journalReleaseId:['journal.drain','journal.observe'].includes(action)?cutoverId:journal.installationId):
     action==='database.release'?dbReleaseId:['database.freeze','database.observe'].includes(action)?cutoverId:installId;
@@ -93,8 +98,15 @@ export function createOriginalSourceControl({db,configuration,build,authorizeOwn
         case 'journal.observe':result=await observeSourceWriterDrain({db,expected:journal,operationId:cutoverId});break;
         case 'database.freeze':{
           if(!admissionEnabled)throw failure();
-          const held=await observeSourceWriterDrain({db,expected:journal,operationId:cutoverId});
-          if(held.status!=='idle'||held.activeWriters!==0||held.unknownWriters!==0||held.expiresAt!==command.expiresAt)throw failure();
+          if(databaseCopy!==null){
+            if(command.schemaSHA256!==databaseCopy.schemaSHA256)throw failure();
+            // Owner-approved database-only staging: preserve unfinished
+            // request records, without asserting their external completion.
+            await readSourceWriterAdmission({db,expected:journal});
+          }else{
+            const held=await observeSourceWriterDrain({db,expected:journal,operationId:cutoverId});
+            if(held.status!=='idle'||held.activeWriters!==0||held.unknownWriters!==0||held.expiresAt!==command.expiresAt)throw failure();
+          }
           mayHaveWritten=true;result=await freezeD1Writes({db,expected,operationId:cutoverId,expiresAt:command.expiresAt});break;
         }
         case 'database.observe':result=await readD1WriteFence({db,expected,operationId:cutoverId});break;

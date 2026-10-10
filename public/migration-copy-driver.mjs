@@ -1,4 +1,4 @@
-(()=>{const input=document.createElement('input');input.type='file';input.accept='.json';input.onchange=async()=>{
+(()=>{const input=document.createElement('input');input.type='file';input.accept='.json';document.body.append(input);input.onchange=async()=>{
 let c,expiresAt=0,journalGeneration=0,databaseGeneration=0;const receipts=[];
 try{
  const file=input.files?.[0];if(!file||file.size>32768)throw Error('Private capture input required');
@@ -14,14 +14,8 @@ try{
  };
  const beforeJ=await action({action:'journal.read',operationId:c.journal.installationId});
  const beforeD=await action({action:'database.read',operationId:c.database.installId,schemaSHA256:schema});
- if(beforeJ.phase!=='open'||beforeD.phase!=='open'||beforeJ.generation!==0||beforeD.generation!==0||beforeJ.operationId!==null||beforeD.operationId!==null)throw Error('Original copy already started; reconcile its receipt');
+ if(x.reader.kind!=='dawar-original-database-reader'||x.reader.recentTailLossAccepted!==true||beforeJ.phase!=='open'||beforeD.phase!=='open'||beforeD.generation!==0||beforeJ.operationId!==null||beforeD.operationId!==null)throw Error('Original database copy already started; reconcile its receipt');
  expiresAt=Date.now()+900000;
- let held;
- try{held=await action({action:'journal.drain',operationId:c.cutoverId,schemaSHA256:schema,expiresAt});}
- catch{const r=await action({action:'journal.receipt',operationId:c.cutoverId,receiptKind:'drain',expiresAt,generation:0});if(!r.receiptConfirmed||r.outcome!=='draining')throw Error('Original journal outcome remains unknown');journalGeneration=r.generation;throw Error('Journal send lost ACK; release confirmed original without capture retry');}
- journalGeneration=held.generation;
- for(let n=0;held.status!=='idle'&&n<30;n++){await new Promise(r=>setTimeout(r,1000));held=await action({action:'journal.observe',operationId:c.cutoverId});}
- if(held.status!=='idle'||held.activeWriters!==0||held.unknownWriters!==0)throw Error('Current application writer remains');
  let frozen;
  try{frozen=await action({action:'database.freeze',operationId:c.cutoverId,schemaSHA256:schema,expiresAt});}
  catch{const r=await action({action:'database.receipt',operationId:c.cutoverId,schemaSHA256:schema,receiptKind:'freeze',expiresAt,generation:0});if(!r.receiptConfirmed||r.outcome!=='frozen')throw Error('Original database outcome remains unknown');databaseGeneration=r.generation;throw Error('Database send lost ACK; release confirmed original without capture retry');}
