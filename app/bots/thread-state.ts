@@ -1,7 +1,10 @@
 import type { Turn } from "../../lib/codex-protocol/v2/Turn";
 import type { ThreadItem } from "../../lib/codex-protocol/v2/ThreadItem";
 
-export type ConversationTurn = Turn & {
+// Partial event projections and older cached turns may lack native ancestry.
+// Preserve it when supplied; absence is unknown, never a synthesized root.
+export type ConversationTurn = Omit<Turn, "rootTurnId"> & {
+  rootTurnId?: Turn["rootTurnId"];
   diff?: string;
   planSteps?: { step: string; status: string }[];
   planExplanation?: string | null;

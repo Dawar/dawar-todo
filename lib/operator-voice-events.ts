@@ -11,7 +11,7 @@ type Readback = { id: string; itemId: string; createId: string; segmentId: strin
   responseId?: string; itemSent: boolean; interrupted: boolean; completed: boolean; attempts: number };
 export type OperatorVoiceSnapshot = { version: 1; callId: string; seen: Record<string, string>; pending: Update[]; readback: Readback | null; completedGroups?: string[]; withheld?: Array<[string, string]> };
 const text = (value: unknown, limit: number) => typeof value === 'string' ? value.slice(0, limit) : '';
-const visible = (phase: unknown) => phase == null || phase === 'commentary' || phase === 'final_answer';
+const visible = (phase: unknown) => phase == null || phase === 'commentary' || phase === 'partial_answer' || phase === 'final_answer';
 const uid = () => crypto.randomUUID().replaceAll('-', '');
 const bytes = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).byteLength;
 // Compact attention dedup only, never authentication or a native operation fingerprint.

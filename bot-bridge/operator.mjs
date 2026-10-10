@@ -11,7 +11,7 @@ const identity = (value, label) => {
   return value;
 };
 const bounded = (value, limit) => typeof value === 'string' ? value.slice(0, limit) : '';
-const displayable = item => item.type === 'agentMessage' && (item.phase == null || ['commentary', 'final_answer'].includes(item.phase));
+const displayable = item => item.type === 'agentMessage' && (item.phase == null || ['commentary', 'partial_answer', 'final_answer'].includes(item.phase));
 const botInfo = bot => ({ id: bot.id, name: bot.name, avatar: bot.avatar, extension: bot.extension, purpose: bounded(bot.purpose, 300) });
 
 // Call records are routing/transcript/delivery receipts. They never own bot
@@ -56,7 +56,7 @@ export class OperatorCalls {
       COALESCE(json_extract(json,'$.data.params.turnId'),json_extract(json,'$.data.turnId'))=? AND
       COALESCE(json_extract(json,'$.data.params.item.type'),json_extract(json,'$.data.entry.item.type'))='agentMessage' AND
       (COALESCE(json_extract(json,'$.data.params.item.phase'),json_extract(json,'$.data.entry.item.phase')) IS NULL OR
-       COALESCE(json_extract(json,'$.data.params.item.phase'),json_extract(json,'$.data.entry.item.phase')) IN ('commentary','final_answer'))
+       COALESCE(json_extract(json,'$.data.params.item.phase'),json_extract(json,'$.data.entry.item.phase')) IN ('commentary','partial_answer','final_answer'))
       ORDER BY seq DESC LIMIT 4`).all(botId, turnId);
     return rows.filter((r, index) => r.text?.trim() && rows.findIndex(other => other.id === r.id) === index)
       .slice(0, 2).reverse().map(row => ({ id: row.id, text: row.text, phase: row.phase, turnId, observedSequence: row.seq }));
