@@ -162,21 +162,23 @@ Diagnostics contain no input, receipt bodies, question text or timestamp values.
 The failed65b invocation attempt remains retained; a source correction does not
 authorize deleting it, retrying that attempt or launching another restart.
 
-### Prepared continuation, disabled pending new owner approval
+### One owner-approved linked continuation
 
-`supervised_continuation.py` prepares one explicit exception for that exact
-pre-backup failure. It is **disabled**: `CONTINUATION_AUTHORITY = None` refuses
-the new CLI mode before any receipt-directory write. The original supervised
-approval, migration approval, native Goal, schedule and a supplied config/flag
-cannot substitute for a newly verified native human message. The approval
-locator must be bound in reviewed source, including exact user role, message
-ID, timestamp, rollout offset and full raw/text hashes.
+`supervised_continuation.py` implements one explicit exception for that exact
+pre-backup failure. Dawar approved it in direct native user message
+`msg_01a126ed-a6ed-7f13-bab5-4ccef5374e95` at
+2026-10-10T17:47:51.405Z (full text SHA-256
+`4f61c85447fb1b359b29de2ef4262e1e0a96b4f406fd0c43c211248b97c907ba`).
+The source binds its exact user role, message ID, timestamp, rollout offset and
+full raw/text hashes. Verification precedes any receipt-directory write. The
+original supervised approval, migration approval, Goal, schedule or a supplied
+config/flag cannot substitute for this new decision or waive cutover gates.
 
 The installed d011 `begin` method retains terminal leases forever. Reusing the
 old operation returns `cancelled`; changing its target/unit returns an input
 fingerprint error. Therefore the proposal explicitly requires a **new child
-maintenance lease**, not a renewed old lease. These are reserved planning
-identities only until the owner approves the exception:
+maintenance lease**, not a renewed old lease. The approved linked identities
+remain uncreated until the single reviewed activation:
 
 - Original work/operation: `dwight-supervised-d011-65b12bd-20261009-v1`.
 - Child lease: `dwight-supervised-d011-65b12bd-continuation-20261010-v1`.
@@ -209,10 +211,11 @@ existing-question-answer race**. The human must agree to a renewed avoidance
 window. The active migration Goal remains a genuine blocker; this helper cannot
 pause, clear, resume or exempt it.
 
-After a separate owner decision, exact approval binding and final review, the
+After exact approval binding and final review, the
 single command uses `--supervised-d011-continuation` with the child lease/unit,
 reviewed SHA, version0.162.1 and a 60–900-second deadline. Do not run it while
-this authority is unbound. No helper, retry timer, claimed-success inference or
+active work, Goals, tools or other required proof remain unresolved. No helper,
+retry timer, claimed-success inference or
 automatic second continuation is created by this source preparation. Failure
 retains both parent and child evidence; a lost restart ACK or health uncertainty
 requires inspection. At most one actual restart is permitted.

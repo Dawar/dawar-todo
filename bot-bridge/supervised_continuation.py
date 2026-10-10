@@ -1,4 +1,4 @@
-"""Disabled, exact pre-claim continuation of the retained d011 attempt.
+"""Owner-approved, exact pre-claim continuation of the retained d011 attempt.
 
 The terminal old lease cannot be renewed. A separately approved child lease
 must retain the original operation, invocation and immutable failure receipts.
@@ -27,10 +27,16 @@ CHILD_LEASE = 'dwight-supervised-d011-65b12bd-continuation-20261010-v1'
 CHILD_UNIT = 'dawar-supervised-d011-continuation.service'
 CONTINUATION_NAME = f'supervised-d011-{INVOCATION}-continuation-v1.json'
 
-# Intentionally unbound. A new exact native human approval of this contract
-# must be independently reviewed and bound in source before activation.
-# The prior msg_01a1207c approval and the migration Goal are insufficient.
-CONTINUATION_AUTHORITY = None
+# Independently verified direct owner approval of ONE linked child lease.
+# This does not waive any active-work, Goal, tool, native or cutover gate.
+# The prior msg_01a1207c approval and the migration Goal alone are insufficient.
+CONTINUATION_AUTHORITY = {
+    'id': 'msg_01a126ed-a6ed-7f13-bab5-4ccef5374e95',
+    'offset': 2360619473,
+    'rawLineSha256': '8034b6c0cb92e94e2116e020f6ccbd1c49054bd669400e133b84d7a46dff6ef3',
+    'textSha256': '4f61c85447fb1b359b29de2ef4262e1e0a96b4f406fd0c43c211248b97c907ba',
+    'timestamp': '2026-10-10T17:47:51.405Z',
+}
 
 
 def authority():

@@ -269,7 +269,7 @@ def main():
     parser.add_argument('--supervised-d011-once', action='store_true',
                         help='One human-approved UNSEALED first handoff from the exact retained d011 process')
     parser.add_argument('--supervised-d011-continuation', action='store_true',
-                        help='Disabled until new exact owner approval: one linked continuation of the pre-claim failure')
+                        help='Exact owner-approved one linked continuation of the retained pre-claim failure')
     args = parser.parse_args()
     if not re.fullmatch(r'[0-9a-f]{40}', args.commit) or not re.fullmatch(r'\d+\.\d+\.\d+', args.version):
         raise RuntimeError('Exact reviewed SHA and version are required')
