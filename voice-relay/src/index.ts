@@ -1,5 +1,5 @@
 import {voiceFetch,voiceSocket,voicePair,voiceUpgrade,voiceWaitUntil} from './platform';
-import {voiceAdmit,voiceMigrationControl} from './migration';
+import {voiceAdmit,voiceAdmissionEnabled,voiceMigrationControl} from './migration';
 import { OperatorVoiceEvents } from '../../lib/operator-voice-events';
 import type { OperatorContext } from '../../lib/operator-types';
 import {
@@ -641,9 +641,10 @@ const worker={
   async fetch(request:Request,environment:Env,context:ExecutionContext){
     const url=new URL(request.url);
     if(url.pathname==='/api/migration/voice/control')return voiceMigrationControl(request,environment);
-    if(!environment.VOICE_WRITER_CONTROL||url.pathname==='/health')return sourceWorker.fetch(request,environment,context);
+    if(url.pathname==='/health')return sourceWorker.fetch(request,environment,context);
     let scope:Awaited<ReturnType<typeof voiceAdmit>>=null;
     try{
+      if(!voiceAdmissionEnabled(environment))return sourceWorker.fetch(request,environment,context);
       const stream=url.pathname==='/stream'&&request.headers.get('Upgrade')?.toLowerCase()==='websocket';
       scope=await voiceAdmit(environment,context,stream?'stream':'http');
       const result=await sourceWorker.fetch(request,{...environment,VOICE_EFFECT_SCOPE:scope??undefined},context);
@@ -652,7 +653,7 @@ const worker={
     }catch{scope?.unknown();scope?.end();return Response.json({error:'Voice work is held or unconfirmed.'},{status:503,headers:{'Cache-Control':'private, no-store'}});}
   },
   async scheduled(controller:ScheduledController,environment:Env,context:ExecutionContext){
-    if(!environment.VOICE_WRITER_CONTROL)return sourceWorker.scheduled(controller,environment,context);
+    if(!voiceAdmissionEnabled(environment))return sourceWorker.scheduled(controller,environment,context);
     const scope=await voiceAdmit(environment,context,'scheduled');
     try{await sourceWorker.scheduled(controller,{...environment,VOICE_EFFECT_SCOPE:scope??undefined},context);}
     catch{scope?.unknown();throw Error('Original voice scheduled work is unconfirmed.');}

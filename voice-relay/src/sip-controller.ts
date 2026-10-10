@@ -1,5 +1,5 @@
 import {voiceFetch,voiceWaitUntil,type VoicePlatformEnvironment} from './platform';
-import {voiceAdmit,type VoiceEffectScope} from './migration';
+import {voiceAdmit,voiceAdmissionEnabled,type VoiceEffectScope} from './migration';
 import { OperatorVoiceEvents, type OperatorRealtimeEvent, type OperatorVoiceSnapshot } from '../../lib/operator-voice-events';
 import type { OperatorContext } from '../../lib/operator-types';
 export interface SipRelayEnvironment extends VoicePlatformEnvironment {
@@ -318,7 +318,7 @@ export class SipCallController {
       }
       const existing = await this.readState();
       if (existing?.ended) return Response.json({ connected: false, ended: true });
-      if(this.environment.VOICE_WRITER_CONTROL&&!this.migrationScope){
+      if(voiceAdmissionEnabled(this.environment)&&!this.migrationScope){
         // A new object instance cannot reinterpret an old/admitted call as a
         // fresh start. Leave its original state and receipt for reconciliation.
         if(existing||await this.durableState.storage.get('sip-migration-admission-v1'))return Response.json({error:'Original SIP admission requires reconciliation.'},{status:503});
@@ -362,7 +362,7 @@ export class SipCallController {
   async alarm() {
     const state = await this.readState();
     if (!state || state.ended) return;
-    if(this.environment.VOICE_WRITER_CONTROL&&!this.migrationScope)throw Error('Original SIP admission requires reconciliation.');
+    if(voiceAdmissionEnabled(this.environment)&&!this.migrationScope)throw Error('Original SIP admission requires reconciliation.');
     const work=()=>this.runAlarm(state);
     return this.migrationScope?this.migrationScope.track(work):work();
   }

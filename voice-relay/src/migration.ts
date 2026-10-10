@@ -1,7 +1,7 @@
 import {createVoiceMigrationLedger,type VoiceBinding} from './migration-ledger.mjs';
 
 type Configuration=VoiceBinding & {version:1;credential:string;cutoverId:string;releaseId:string};
-export type VoiceMigrationEnvironment={VOICE_WRITER_CONTROL?:string;VOICE_WRITER_COORDINATOR?:DurableObjectNamespace;VOICE_EFFECT_SCOPE?:VoiceEffectScope;VOICE_RUNTIME?:unknown};
+export type VoiceMigrationEnvironment={VOICE_WRITER_CONTROL?:string;VOICE_WRITER_ADMISSION?:string;VOICE_WRITER_COORDINATOR?:DurableObjectNamespace;VOICE_EFFECT_SCOPE?:VoiceEffectScope;VOICE_RUNTIME?:unknown};
 const bad=()=>Error('Original voice work is held or unconfirmed.');
 const headers={'Cache-Control':'private, no-store','Content-Type':'application/json','X-Content-Type-Options':'nosniff'};
 function exact(v:unknown,fields:string[]){if(!v||typeof v!=='object'||Array.isArray(v)||Object.keys(v).length!==fields.length||Object.keys(v).some(k=>!fields.includes(k)))throw bad();}
@@ -15,6 +15,17 @@ function configuration(env:VoiceMigrationEnvironment){
   return c;
 }
 const binding=(c:Configuration)=>({sourceId:c.sourceId,installationId:c.installationId,producerSHA256:c.producerSHA256});
+// Installing the original controller and enabling its admission are separate
+// deployment actions. The private control remains available with admission off.
+// An enabled binding must match the already installed original exactly.
+export function voiceAdmissionEnabled(env:VoiceMigrationEnvironment){
+  if(env.VOICE_WRITER_ADMISSION===undefined)return false;
+  const raw=env.VOICE_WRITER_ADMISSION,c=configuration(env);
+  if(!c||typeof raw!=='string'||!raw||new TextEncoder().encode(raw).length>2048)throw bad();
+  const expected=JSON.parse(raw);exact(expected,['sourceId','installationId','producerSHA256']);
+  if(Object.entries(binding(c)).some(([key,value])=>expected[key]!==value))throw bad();
+  return true;
+}
 async function body(request:Request){
   const reader=request.body?.getReader();if(!reader)throw bad();let size=0,parts=0;const values:Uint8Array[]=[];
   const deadline=AbortSignal.timeout(4500);
@@ -82,7 +93,8 @@ export class VoiceEffectScope{
   }
 }
 export async function voiceAdmit(env:VoiceMigrationEnvironment,context:ExecutionContext|DurableObjectState,kind:'http'|'scheduled'|'stream'|'sip',parentId:string|null=null){
-  const c=configuration(env);if(!c)return null;const operationId=crypto.randomUUID();const r=await command(env,c,'admit',{operationId,kind,parentId});
+  if(!voiceAdmissionEnabled(env))return null;
+  const c=configuration(env);if(!c)throw bad();const operationId=crypto.randomUUID();const r=await command(env,c,'admit',{operationId,kind,parentId});
   if(r.admitted!==true||r.operationId!==operationId||typeof r.fingerprint!=='string'||!/^[a-f0-9]{64}$/.test(r.fingerprint))throw bad();
   return new VoiceEffectScope(operationId,r.fingerprint,env,c,context);
 }

@@ -78,3 +78,16 @@ from their actual original identities before voice qualifies the combined
 production freeze. Do not deploy/enable this path over active old calls or
 infer their absence from the new empty ledger. Preparing or validating this
 source performs no production installation, provider call or cutover.
+# Original voice controller preparation
+
+Deploy the reviewed coordinator with `VOICE_WRITER_CONTROL` to expose its
+private install/read/receipt operations. Leave `VOICE_WRITER_ADMISSION` absent
+while installing the original ledger; ordinary HTTP, scheduled, stream and SIP
+work retains its existing behavior during this preparation. Enabling admission
+is a separate deployment-owned step: its JSON must contain exactly the original
+`sourceId`, `installationId`, and `producerSHA256` from the installed controller.
+An empty, malformed, foreign or changed binding refuses before provider effects.
+
+Controller installation or an empty new ledger does not establish coverage of
+older calls, sockets or provider work. Those originals must still be reconciled
+before the production cutover; no completed work or receipt is rewritten.
