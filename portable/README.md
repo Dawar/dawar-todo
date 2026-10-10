@@ -109,6 +109,25 @@ local database behavior. Automatic execution remains disabled during staging.
 Node admission supports assigned explicit turns and the hub's internal saved
 queue/schedule commands. Unsupported controls fail closed; there is no agent
 queue/schedule tick or second logical scheduler.
+
+`context-admission.mjs` attaches the same fresh placement/Stop fence to each
+registered named room context. Creating a Linux context requires a captured
+original queued delivery; the guard rechecks its exact bytes, placement epoch,
+control revision, membership and tools after capacity reads. Anonymous starts
+and forks refuse before allocating a native RPC. Bound room turns require the
+original dispatch ID and frozen native parameters. Native resume also requires
+fresh online control because it can activate Goal/queue work. Read-only history
+remains available offline. Synchronized Stop may pause an already admitted Goal
+only with the existing exact automatic pause parameters.
+
+A local guard refusal is recorded by in-process identity, never by supplied
+`definite`/`not-sent` properties. Only this positive pre-write evidence restores
+the same prepared context; native errors/lost creation ACKs retain uncertainty
+and never create a replacement. This is an admission component, not installed
+room parity: central cross-node room routing, automatic native Goal containment,
+consumer wiring and genuine all-context acceptance remain unfinished. No room
+or autonomous-Goal capability is advertised by this component.
+
 Next.js and Sharp security updates are validated before this Node target may
 be exposed publicly. The Cloudflare production route remains unchanged.
 

@@ -7,6 +7,7 @@ import { boundHistoryEvent } from './history-events.mjs';
 import { historyViewPage,readHistoryDetail,readHistoryLog } from './history-view.mjs';
 import { DESKTOP_TOOLS } from './desktops.mjs';
 import { recentCollaborationPage } from './collaboration-page.mjs';
+import { nativeAdmissionNotStarted } from './native-admission-refusal.mjs';
 
 const now = () => new Date().toISOString();
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -414,7 +415,15 @@ export class Collaboration {
       if (typeof result?.thread?.id !== 'string' || !result.thread.id || this.byThread(result.thread.id) || this.store.bots().some(b=>b.threadId===result.thread.id)) throw Error('Native context acknowledgement has no unique registered identity.');
       this.runtime.loaded.add(result.thread.id);
       return this.changed(c,{threadId:result.thread.id,provisioning:'bound',status:'idle',error:null});
-    } catch(error) { this.changed(c,{provisioning:'uncertain',status:'unknown',error:error.message}); throw error; }
+    } catch(error) {
+      // A captured in-process guard rejection precedes the native RPC. Keep
+      // this same prepared context; never treat a remote error/lost ACK as it.
+      const current=this.store.get('collaborationContext',c.id);
+      if(nativeAdmissionNotStarted(error)&&current.creationOperationId===d.id&&current.threadId===null&&current.provisioning==='dispatching')
+        this.changed(c,{provisioning:'prepared',status:'idle',error:error.message});
+      else this.changed(c,{provisioning:'uncertain',status:'unknown',error:error.message});
+      throw error;
+    }
   }
   async current(c, resume = true) {
     let generation=c.generation;

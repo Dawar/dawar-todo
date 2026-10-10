@@ -13,6 +13,7 @@ import { admitLogicalCommand } from './agent-admission.mjs';
 import { queueResumeReceipt } from './agent-queue-resume.mjs';
 import { NodeStorageClient } from './agent-storage.mjs';
 import { artifactInput } from './node-storage-contract.mjs';
+import { AgentContextAdmission } from './context-admission.mjs';
 const fingerprintLegacy=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
 export class AgentTransport {
@@ -21,14 +22,10 @@ export class AgentTransport {
     this.socket=null;this.retry=0;this.closed=false;this.pending=new Map();this.controlPending=new Map();this.cursor=journal.cursor();
     this.terminalCandidates=new Map();
     const nativeGuard=runtime.codex.admissionGuard;
+    const contexts=new AgentContextAdmission(runtime,journal);
     runtime.codex.admissionGuard=(method,params)=>{
       nativeGuard?.(method,params);
-      if(['thread/start','thread/fork'].includes(method))throw Object.assign(Error('New native context provisioning awaits the hub placement adapter.'),{definite:true});
-      if(!['turn/start','turn/steer','thread/queue/add','thread/queue/update','thread/goal/set'].includes(method))return;
-      const bot=runtime.store.bots().find(b=>b.threadId===params.threadId);
-      const control=bot && journal.db.prepare('SELECT * FROM node_controls WHERE bot_id=?').get(bot.id);
-      if(!bot || !journal.canAdmit({bot_id:bot.id,epoch:control?.epoch}))throw Object.assign(Error('Hub control is offline, stale or stopped; no native input was submitted.'),{definite:true});
-      if(process.platform==='darwin' && method==='thread/goal/set')throw Object.assign(Error('Autonomous Goals are unavailable on the Mac pilot.'),{definite:true});
+      contexts.guard(method,params);
     };
     runtime.on('event',event=>{
       if(!event.botId)return;
