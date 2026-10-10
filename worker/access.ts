@@ -9,7 +9,7 @@ import {
 
 const AUTHENTICATED_USER_HEADER = "oai-authenticated-user-email";
 
-type AccessEnvironment = { DB: D1Database };
+type AccessEnvironment = { DB: D1Database; API_TOKEN_OWNER_KEY?: string };
 type AccessContext = { waitUntil(promise: Promise<unknown>): void };
 
 function isLocalHost(hostname: string) {
@@ -117,6 +117,11 @@ export async function appAccessResponse(
     }
     try {
       const identity = await authenticateApiToken(environment.DB, bearerToken);
+      if (identity && environment.API_TOKEN_OWNER_KEY !== undefined
+        && identity.createdByEmail !== environment.API_TOKEN_OWNER_KEY.trim().toLowerCase()) {
+        console.warn("[todo-auth] API token rejected outside configured owner", { path: url.pathname });
+        return unauthorizedApi("This API token is not authorized for this owner.");
+      }
       if (identity) {
         request.headers.set(INTERNAL_ACTOR_KIND_HEADER, "api-token");
         request.headers.set(INTERNAL_ACTOR_ID_HEADER, identity.id);

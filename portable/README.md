@@ -1,5 +1,10 @@
 # Portable DawarTodo
 
+The single-owner portable gateway passes its preserved owner key to Todo API
+authentication. A valid token created for another owner is rejected before
+last-used bookkeeping or site forwarding. The existing hosted entrypoint,
+without this explicit owner policy, keeps its existing authentication contract.
+
 This is the staging implementation of the approved portable hub and unified
 agent migration. Existing Cloudflare production and installed agents continue
 to serve until the exact-source migration and activation gates are satisfied.
