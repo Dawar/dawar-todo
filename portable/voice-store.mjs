@@ -9,21 +9,28 @@ const encode=v=>{const s=JSON.stringify(v);if(typeof s!=='string'||Buffer.byteLe
 const storageKey=v=>{if(!['sip-call','sip-voice-readback-v1'].includes(v))throw failure();return v;};
 
 export class VoiceStore {
-  constructor(path,{source,assertWriter}) {
-    if(!/^[a-f0-9]{40}$/.test(source)||typeof assertWriter!=='function')throw failure();
+  constructor(path,{source,assertWriter,writeSync}) {
+    if(!/^[a-f0-9]{40}$/.test(source)||typeof assertWriter!=='function'||typeof writeSync!=='function')throw failure();
     path=resolve(path);mkdirSync(dirname(path),{recursive:true,mode:0o700});
     const parent=lstatSync(dirname(path));if(!parent.isDirectory()||parent.isSymbolicLink()||parent.mode&0o077||process.getuid&&parent.uid!==process.getuid())throw failure();
     const fd=openSync(path,constants.O_RDWR|constants.O_CREAT|constants.O_NOFOLLOW,0o600);let before;
     try{before=fstatSync(fd);if(!before.isFile()||before.mode&0o077||process.getuid&&before.uid!==process.getuid())throw failure();}finally{closeSync(fd);}
     this.db=privateDatabase(path);const after=lstatSync(path);if(after.isSymbolicLink()||after.ino!==before.ino||after.dev!==before.dev){this.db.close();throw failure();}
-    this.source=source;this.assertWriter=assertWriter;this.current=new Set();this.closed=false;
-    this.db.exec(`CREATE TABLE IF NOT EXISTS voice_objects(id TEXT PRIMARY KEY,alarm_at INTEGER,alarm_generation INTEGER NOT NULL DEFAULT 0);
+    this.source=source;this.assertWriter=assertWriter;this.writeSync=writeSync;this.current=new Set();this.closed=false;
+    this.writeSync(()=>{this.assertWriter();this.db.exec(`CREATE TABLE IF NOT EXISTS voice_objects(id TEXT PRIMARY KEY,alarm_at INTEGER,alarm_generation INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS voice_values(object_id TEXT NOT NULL,key TEXT NOT NULL,value TEXT NOT NULL,PRIMARY KEY(object_id,key));
       CREATE TABLE IF NOT EXISTS voice_effects(id TEXT PRIMARY KEY,object_id TEXT NOT NULL,kind TEXT NOT NULL,fingerprint TEXT NOT NULL,state TEXT NOT NULL CHECK(state IN ('active','terminal','unknown')),response TEXT);
       CREATE INDEX IF NOT EXISTS voice_effect_scope ON voice_effects(object_id,state);
-      CREATE INDEX IF NOT EXISTS voice_due_alarm ON voice_objects(alarm_at,id);`);
+      CREATE INDEX IF NOT EXISTS voice_due_alarm ON voice_objects(alarm_at,id);`);this.assertWriter();});
   }
-  transaction(fn){if(this.closed)throw failure();this.assertWriter();this.db.exec('BEGIN IMMEDIATE');try{const v=fn();this.assertWriter();this.db.exec('COMMIT');return v;}catch(e){this.db.exec('ROLLBACK');throw e;}}
+  transaction(fn){
+    if(this.closed||this.db.isTransaction||typeof fn!=='function')throw failure();
+    // The shared control lock precedes this short voice transaction. Freeze
+    // cannot cross the assertions; no provider call or promise runs under it.
+    return this.writeSync(()=>{this.assertWriter();this.db.exec('BEGIN IMMEDIATE');
+      try{const v=fn();if(v&&typeof v.then==='function')throw failure();this.assertWriter();this.db.exec('COMMIT');return v;}
+      catch(e){if(this.db.isTransaction)this.db.exec('ROLLBACK');throw e;}});
+  }
   object(id){text(id);this.transaction(()=>{if(!this.db.prepare('SELECT 1 FROM voice_objects WHERE id=?').get(id)&&this.db.prepare('SELECT count(*) n FROM voice_objects').get().n>=1024)throw failure();this.db.prepare('INSERT OR IGNORE INTO voice_objects(id)VALUES(?)').run(id);});return id;}
   storage(id){text(id);return {
     get:async key=>{storageKey(key);if(this.closed)throw failure();const r=this.db.prepare('SELECT value FROM voice_values WHERE object_id=? AND key=?').get(id,key);return r?JSON.parse(r.value):undefined;},

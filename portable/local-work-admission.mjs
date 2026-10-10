@@ -4,7 +4,7 @@ import {digest} from './protocol.mjs';
 
 const contexts=new AsyncLocalStorage();
 const failed=()=>Object.assign(Error('The exact local writer admission or drain could not be confirmed.'),{outcome:'not-sent'});
-const kinds=new Set(['artifact-register','object-put','object-request','object-copy','object-upload','object-cleanup']);
+const kinds=new Set(['artifact-register','object-put','object-request','object-copy','object-upload','object-cleanup','voice-request','voice-tick']);
 const binding=a=>({writerId:a?.writerId,epoch:a?.epoch,source:a?.source??''});
 const same=(r,a)=>r&&r.writer_id===a.writerId&&r.epoch===a.epoch&&r.source===a.source;
 const validState=r=>r&&['open','draining','frozen'].includes(r.phase)&&Number.isSafeInteger(r.generation)&&r.generation>=0&&Number.isSafeInteger(r.deadline)&&
@@ -45,13 +45,24 @@ export class LocalWorkAdmission {
     const work=this.db.prepare('SELECT * FROM portable_async_work WHERE id=?').get(scope.id);
     if(!same(work,this.expected)||work.state!=='active'||work.fingerprint!==scope.fingerprint)throw failed();
   }
-  async run(kind,factory){
+  keep(promise){
+    const scope=this.scope();this.writer.assertWriter();
+    if(!scope||scope.closed||!this.live.has(scope)||!promise||typeof promise.then!=='function'||scope.pending.size>=1024)throw failed();
+    const task=Promise.resolve(promise);scope.pending.add(task);
+    void task.then(()=>scope.pending.delete(task),()=>scope.pending.delete(task));return task;
+  }
+  unknown(){
+    const scope=this.scope();this.writer.assertWriter();
+    if(!scope||scope.closed||!this.live.has(scope))throw failed();scope.unknown=true;
+  }
+  async start(kind,factory){
     if(!kinds.has(kind)||typeof factory!=='function')throw failed();
     const parent=this.scope();
     if(parent){
       this.writer.assertWriter();
-      const task=Promise.resolve().then(factory);parent.pending.add(task);
-      void task.then(()=>parent.pending.delete(task),()=>parent.pending.delete(task));return task;
+      const task=this.keep(Promise.resolve().then(factory));
+      try{return {value:await task,failed:false,settled:Promise.resolve()};}
+      catch(error){return {error,failed:true,settled:Promise.resolve()};}
     }
     const id=randomUUID(),fingerprint=digest(JSON.stringify({...this.expected,id,kind,pid:process.pid}));
     this.writer.admitting=true;
@@ -60,20 +71,28 @@ export class LocalWorkAdmission {
       if(this.db.prepare("SELECT count(*) AS n FROM portable_async_work WHERE state<>'settled'").get().n>=1024||this.db.prepare('SELECT count(*) AS n FROM portable_async_work').get().n>=100000)throw failed();
       this.db.prepare("INSERT INTO portable_async_work VALUES(?,?,?,?,?,?,'active',?)").run(id,this.expected.writerId,this.expected.epoch,this.expected.source,kind,fingerprint,process.pid);
     });}finally{this.writer.admitting=false;}
-    const scope={owner:this,id,fingerprint,pending:new Set(),closed:false};this.live.add(scope);
+    const scope={owner:this,id,fingerprint,pending:new Set(),closed:false,unknown:false};this.live.add(scope);
     let result,error,failedWork=false;
     try{result=await contexts.run(scope,factory);}catch(e){error=e;failedWork=true;}
-    // Nested registered work is included even if its caller didn't await it.
-    // Closed contexts can never register late work or commit a late write.
-    while(scope.pending.size){await Promise.allSettled([...scope.pending]);await Promise.resolve();}
-    scope.closed=true;
-    try{this.writer.settleWork(()=>{
+    // Upgrades can return their HTTP response before a socket closes. Their
+    // captured scope stays live, durably active, until all retained work ends.
+    const settled=(async()=>{
+      while(scope.pending.size){await Promise.allSettled([...scope.pending]);await Promise.resolve();}
+      scope.closed=true;
+      try{this.writer.settleWork(()=>{
       const row=this.current(),old=this.db.prepare('SELECT * FROM portable_async_work WHERE id=?').get(id);
       if(!same(row,this.expected)||!same(old,this.expected)||old.state!=='active'||old.fingerprint!==fingerprint||old.pid!==process.pid)throw failed();
-      const changed=this.db.prepare("UPDATE portable_async_work SET state='settled' WHERE id=? AND fingerprint=? AND state='active'").run(id,fingerprint);
+      const changed=this.db.prepare("UPDATE portable_async_work SET state=? WHERE id=? AND fingerprint=? AND state='active'").run(scope.unknown?'unknown':'settled',id,fingerprint);
       if(changed.changes!==1)throw failed();
-    });}finally{this.live.delete(scope);}
-    if(failedWork)throw error;return result;
+      });}finally{this.live.delete(scope);}
+    })();
+    // A caller must observe settlement separately when it publishes an early
+    // response. No asynchronous settlement failure becomes implicit success.
+    return {value:result,error,failed:failedWork,settled};
+  }
+  async run(kind,factory){
+    const result=await this.start(kind,factory);await result.settled;
+    if(result.failed)throw result.error;return result.value;
   }
 }
 
@@ -114,7 +133,7 @@ export class LocalWriterDrain {
   }
   observe(operationId){
     const row=this.original(operationId),counts={active:0,unknown:0,settled:0};
-    const foreign=this.db.prepare("SELECT count(*) AS n FROM portable_async_work WHERE state<>'settled' AND (writer_id<>? OR epoch<>? OR source<>? OR kind NOT IN ('artifact-register','object-put','object-request','object-copy','object-upload','object-cleanup'))").get(this.expected.writerId,this.expected.epoch,this.expected.source).n;
+    const foreign=this.db.prepare("SELECT count(*) AS n FROM portable_async_work WHERE state<>'settled' AND (writer_id<>? OR epoch<>? OR source<>? OR kind NOT IN ('artifact-register','object-put','object-request','object-copy','object-upload','object-cleanup','voice-request','voice-tick'))").get(this.expected.writerId,this.expected.epoch,this.expected.source).n;
     for(const r of this.db.prepare('SELECT state,count(*) AS n FROM portable_async_work GROUP BY state').all()){
       if(!Object.hasOwn(counts,r.state)||!Number.isSafeInteger(r.n))throw failed();counts[r.state]=r.n;
     }

@@ -519,6 +519,22 @@ system kill guard or proof of genuine provider/device acceptance. Do not send
 service Stop until the complete reviewed handoff is actually satisfied. Source
 rollback must preserve the private voice journal and terminal reader semantics.
 
+Voice hosting also requires the actual shared `HubWriteAuthority`. Each short
+voice SQLite transaction holds the control writer lock through commit, without
+awaiting provider work under that lock. Incoming requests and minute work have
+durable local admission records before their effects. An HTTP response or
+WebSocket upgrade may return early; the captured original scope remains live
+until its sockets, background factories, serialized SIP call and cleanup end.
+Existing SIP alarms continue in that exact scope during a hold. Unknown effects
+retain a durable unknown admission and their original voice receipt.
+
+Cold persisted calls and alarms without their original live scope remain
+blockers. A repeated webhook cannot create a replacement call; exact completed
+incoming receipts return their recorded HTTP outcome without redoing provider
+acceptance. Closed captured scopes cannot admit late callbacks. These local
+records complement the voice idle counts; they do not qualify the existing
+Cloudflare relay, old native writer, or the full production handover.
+
 ### Original-owner HTTPS application export
 
 `node portable/cli.mjs export-original-application --configuration PRIVATE_PATH`
@@ -628,9 +644,10 @@ they never reopen automatically. Runtime SQLite authorization cannot rewrite
 the hold or forge a work settlement. Settlement during a hold can change only
 the exact work row, not user data, native receipts or writer authority.
 
-This covers the portable local file lifetimes, not the old production writers,
-arbitrary shell/plugin filesystem effects, native activity, or provider/voice
-effects. Paused resumable upload rows and their private parts must be copied
+This covers the portable local file and admitted voice lifetimes. It does not
+cover old production writers, arbitrary shell/plugin filesystem effects, native
+activity, or unowned persisted voice state; the separate voice idle proof still
+blocks on those calls and uncertain effects. Paused resumable upload rows and their private parts must be copied
 consistently with registered files and the control/artifact databases, retaining
 original grants/keys/receipts. The controller does not start services, retry the
 failed d011 supervised invocation, replace the native handoff, or authorize a
