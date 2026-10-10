@@ -11,7 +11,7 @@ export class RegisteredArtifacts {
     this.db=db;this.directory=directory;
     db.exec('CREATE TABLE IF NOT EXISTS portable_artifacts(id TEXT PRIMARY KEY,owner TEXT NOT NULL,bot_id TEXT,hash TEXT NOT NULL,size INTEGER NOT NULL,name TEXT NOT NULL,mime TEXT NOT NULL,created_at INTEGER NOT NULL)');
   }
-  async register({artifactId,owner,botId=null,hash,size,name,mime},source,{guard=()=>{}}={}) {
+  async register({artifactId,owner,botId=null,hash,size,name,mime},source,{guard=()=>{},commit=work=>work()}={}) {
     if(!id(artifactId)||!owner||botId!==null&&!id(botId)||!/^[a-f0-9]{64}$/.test(hash)||!Number.isSafeInteger(size)||size<0||size>250*1024*1024
       ||typeof name!=='string'||name.length>240||/[\r\n\0]/.test(name)||typeof mime!=='string'||!/^[A-Za-z0-9.+-]+\/[A-Za-z0-9.+-]+$/.test(mime))throw Error('Invalid registered artifact.');
     guard();
@@ -34,8 +34,12 @@ export class RegisteredArtifacts {
       guard();await rename(temporary,join(this.directory,hash));
       const directory=await open(this.directory,constants.O_RDONLY|constants.O_NOFOLLOW);
       try{await directory.sync();}finally{await directory.close();}
-      guard();this.db.prepare('INSERT INTO portable_artifacts VALUES(?,?,?,?,?,?,?,?)').run(artifactId,owner,botId,hash,size,name,mime,Date.now());
-      return this.db.prepare('SELECT * FROM portable_artifacts WHERE id=?').get(artifactId);
+      return commit(()=>{
+        guard();const current=this.db.prepare('SELECT * FROM portable_artifacts WHERE id=?').get(artifactId);
+        if(current){if(current.owner!==owner||current.bot_id!==botId||current.hash!==hash||current.size!==size||current.name!==name||current.mime!==mime)throw Error('Artifact identity changed.');return current;}
+        this.db.prepare('INSERT INTO portable_artifacts VALUES(?,?,?,?,?,?,?,?)').run(artifactId,owner,botId,hash,size,name,mime,Date.now());
+        return this.db.prepare('SELECT * FROM portable_artifacts WHERE id=?').get(artifactId);
+      });
     }catch(error){await handle.close().catch(()=>{});await rm(temporary,{force:true});throw error;}
   }
   record(owner,artifactId,botId=null) {

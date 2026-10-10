@@ -16,7 +16,12 @@ const keyId=key=>{
   return `object:${digest(key)}`;
 };
 export class ObjectStorage {
-  constructor(config){this.config=config;this.db=privateDatabase(join(config.dataDirectory,'artifact-index.sqlite'));this.files=new RegisteredArtifacts(this.db,join(config.dataDirectory,'registered-files'));this.uploads=new ObjectUpload(this,keyId);}
+  constructor(config,{writer=null}={}){this.config=config;this.writer=writer;this.assertWriter=()=>{if(!writer)throw Error('Storage writer authority is unavailable.');writer.assertWriter();};this.db=privateDatabase(join(config.dataDirectory,'artifact-index.sqlite'));this.files=new RegisteredArtifacts(this.db,join(config.dataDirectory,'registered-files'));this.uploads=new ObjectUpload(this,keyId);}
+  writeSync(work){
+    const commit=()=>{this.assertWriter();this.db.exec('BEGIN IMMEDIATE');try{const result=work();this.assertWriter();this.db.exec('COMMIT');return result;}catch(error){if(this.db.isTransaction)this.db.exec('ROLLBACK');throw error;}};
+    return this.writer?this.writer.runSync(commit):commit();
+  }
+  delete(key){return this.writeSync(()=>this.files.db.prepare('DELETE FROM portable_artifacts WHERE owner=? AND bot_id=? AND id=?').run(this.config.owner.key,'application',keyId(key)));}
   token(value){const body=Buffer.from(JSON.stringify(value)).toString('base64url');return body+'.'+createHmac('sha256',this.config.gatewaySecret).update('object:'+body).digest('base64url');}
   verify(token,method,now=Date.now()){
     if(typeof token!=='string'||token.length>6000)throw Error('Invalid object grant.');
@@ -36,9 +41,9 @@ export class ObjectStorage {
   async put(key,body,{type,minimum=1,maximum=MAX,node=null,expires=null}){
     keyId(key);if(!Number.isSafeInteger(minimum)||!Number.isSafeInteger(maximum)||minimum<0||maximum<minimum||maximum>MAX)throw Error('Invalid upload bound.');
     if(!(body instanceof Blob)||body.size<minimum||body.size>maximum)throw Error('Upload size is outside the original grant.');
-    const guard=()=>{if(node){if(!this.authorizeNode||expires<=Date.now())throw Error('Node upload grant expired.');this.authorizeNode(node);}};guard();
+    const guard=()=>{this.assertWriter();if(node){if(!this.authorizeNode||expires<=Date.now())throw Error('Node upload grant expired.');this.authorizeNode(node);}};guard();
     const bytes=new Uint8Array(await body.arrayBuffer()),sha256=digest(bytes);
-    return this.files.register({owner:this.config.owner.key,botId:'application',artifactId:keyId(key),name:'Registered attachment',mime:type,hash:sha256,size:bytes.length},Readable.from([bytes]),{guard});
+    return this.files.register({owner:this.config.owner.key,botId:'application',artifactId:keyId(key),name:'Registered attachment',mime:type,hash:sha256,size:bytes.length},Readable.from([bytes]),{guard,commit:work=>this.writeSync(work)});
   }
   async serve(request){
     const u=new URL(request.url),method=request.method==='HEAD'?'GET':request.method;
@@ -95,7 +100,7 @@ export class ObjectStorage {
       this.verify(new URL(url).searchParams.get('grant'),'POST');
       const uploadedHash=sha.digest('hex');if(v.hash&&uploadedHash!==v.hash)throw Error('Original node upload checksum differs.');
       const source=await open(temporary,constants.O_RDONLY|constants.O_NOFOLLOW);
-      try{await this.files.register({owner:this.config.owner.key,botId:'application',artifactId:keyId(v.key),name:'Registered attachment',mime:v.type,hash:uploadedHash,size},source.createReadStream({autoClose:true}),{guard:()=>validateGrant()});}finally{await source.close();}
+      try{await this.files.register({owner:this.config.owner.key,botId:'application',artifactId:keyId(v.key),name:'Registered attachment',mime:v.type,hash:uploadedHash,size},source.createReadStream({autoClose:true}),{guard:()=>validateGrant(),commit:work=>this.writeSync(work)});}finally{await source.close();}
       return new Response(null,{status:204});
     }finally{clearTimeout(timer);req.removeListener('aborted',aborted);abort.abort();await fileTask?.catch(()=>{});await handle.close().catch(()=>{});await rm(temporary,{force:true});}
   }
@@ -107,6 +112,7 @@ export class ObjectStorage {
       const h=new Headers(init.headers),method=init.method??'GET';
       if(method==='GET'||method==='HEAD')return this.response(key,method,h);
       if(method==='PUT'){
+        this.assertWriter();
         const source=h.get('x-amz-copy-source');
         if(!source)throw Error('Direct object overwrite is unsupported.');
         const parts=source.split('/');parts.splice(0,2);const sourceKey=parts.map(decodeURIComponent).join('/');
@@ -115,15 +121,15 @@ export class ObjectStorage {
         const row=this.row(sourceKey);await this.put(key,await r.blob(),{type:row.mime,minimum:0,maximum:MAX});
         return new Response('<CopyObjectResult/>',{headers:{'content-type':'application/xml'}});
       }
-      if(method==='DELETE'){this.files.db.prepare('DELETE FROM portable_artifacts WHERE owner=? AND bot_id=? AND id=?').run(this.config.owner.key,'application',keyId(key));return new Response(null,{status:204});}
+      if(method==='DELETE'){this.delete(key);return new Response(null,{status:204});}
       throw Error('Unsupported local storage operation.');
     };
     const storageResponseError=async()=>Error('Private registered storage verification failed; retain the original attachment.');
     return {storageUrl,signedStorageResponse,storageResponseError,
       storageFetch:async(url,init)=>{const r=await signedStorageResponse(url,init);if(!r.ok)throw await storageResponseError();return r;},
       signedObjectUrl:async(key,download)=>{this.row(key);const u=this.url();u.searchParams.set('grant',this.token({key,download,owner:this.config.owner.key,method:'GET',expires:Date.now()+3600000}));return u.toString();},
-      signedPostTarget:async(key,type,maximum,minimum=1)=>{keyId(key);const u=this.url();u.searchParams.set('grant',this.token({key,type,maximum,minimum,uploadVersion:1,owner:this.config.owner.key,method:'POST',expires:Date.now()+900000}));return {url:u.toString(),fields:{key,'Content-Type':type},resumable:{version:1,chunkBytes:UPLOAD_CHUNK_BYTES}};},
-      copyObject:async(source,target,etag,signal)=>{signal?.throwIfAborted();const r=await this.response(source);if(!r.ok||r.headers.get('etag')!==etag)throw Error('Original copy source changed.');await this.put(target,await r.blob(),{type:this.row(source).mime,minimum:0,maximum:MAX});signal?.throwIfAborted();},
+      signedPostTarget:async(key,type,maximum,minimum=1)=>{this.assertWriter();keyId(key);const u=this.url();u.searchParams.set('grant',this.token({key,type,maximum,minimum,uploadVersion:1,owner:this.config.owner.key,method:'POST',expires:Date.now()+900000}));return {url:u.toString(),fields:{key,'Content-Type':type},resumable:{version:1,chunkBytes:UPLOAD_CHUNK_BYTES}};},
+      copyObject:async(source,target,etag,signal)=>{this.assertWriter();signal?.throwIfAborted();const r=await this.response(source);if(!r.ok||r.headers.get('etag')!==etag)throw Error('Original copy source changed.');const body=await r.blob();this.assertWriter();signal?.throwIfAborted();await this.put(target,body,{type:this.row(source).mime,minimum:0,maximum:MAX});signal?.throwIfAborted();},
       deleteKeys:async keys=>{for(const k of new Set(keys))await signedStorageResponse(this.url(k),{method:'DELETE'});},
       readBucketCors:async()=>({http:200,code:null,configured:true,rules:[{allowedOrigins:[this.config.publicOrigin],allowedMethods:['GET','HEAD','POST'],allowedHeaders:['Content-Type'],exposeHeaders:['ETag','Content-Length','Content-Range'],maxAgeSeconds:0}]}) };
   }

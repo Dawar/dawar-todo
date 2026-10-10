@@ -12,7 +12,7 @@ import { ownedReply } from '../bot-bridge/message-replies.mjs';
 import { replyInputText } from '../lib/bot-replies.ts';
 import { activityUnresolved } from '../bot-bridge/turn-state.mjs';
 import { boundedFrame,fingerprint,id } from './protocol.mjs';
-import { readPrivate } from './private-file.mjs';
+export { hubActivation } from './hub-authority.mjs';
 import { HUB_READS,HUB_MUTATIONS,HUB_TOOLS,NODE_LOGICAL_COMMANDS } from './control-protocol.mjs';
 
 export { HUB_READS,HUB_MUTATIONS,HUB_TOOLS,NODE_LOGICAL_COMMANDS };
@@ -20,14 +20,6 @@ const now=()=>new Date().toISOString();
 const digest=value=>createHash('sha256').update(value).digest('hex');
 const MAILBOX=Symbol('prepared-mailbox');
 const ownerQueueControls=new Set(['queue.send','queue.resume','work.resume']);
-
-export function hubActivation(config) {
-  if(!config.hub?.activationReceipt)return null;
-  const r=JSON.parse(readPrivate(config.hub.activationReceipt,16384));
-  if(r.kind!=='portable-hub-activation'||r.executionEnabled!==true||!id(r.writerId)||!Number.isSafeInteger(r.epoch)||r.epoch<1
-    ||!/^[a-f0-9]{40}$/.test(r.source)||r.source!==config.hub.source)throw Error('Exact reviewed hub activation receipt required.');
-  return Object.freeze(r);
-}
 
 // The hub reuses the original logical records and local acceptance closures.
 // This facade has no native process: queue mutation cannot become inference.
@@ -39,7 +31,7 @@ export class HubControls extends EventEmitter {
     this.defaults=this.store.meta('portable-defaults')??{};
     this.executionConfig=new ExecutionConfiguration(this);this.plans=new PlanLifecycle(this);
     const transaction=this.store.transaction.bind(this.store);
-    this.store.transaction=fn=>{this.assertWriter();return transaction(fn);};
+    this.store.transaction=fn=>transaction(()=>{this.assertWriter();const result=fn();this.assertWriter();return result;});
     // A fault is retained as metadata, without spawning a bot or an ACK loop.
     this.on('fault',error=>{this.lastFault={message:error.message,at:now()};});
   }

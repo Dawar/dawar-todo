@@ -545,3 +545,38 @@ original POST read endpoint and all four real external writer adapters still
 must be installed and positively verified before a live export. The existing
 GET capture is not a substitute for that complete fence. A successful isolated
 HTTPS observation is not original-owner authentication or production coverage.
+
+### Canonical portable application and file commits
+
+The Node site and gateway bind their application SQLite and object storage to
+the same captured, exact-source hub activation receipt. A missing receipt,
+changed writer ID/epoch, closed authority or frozen control row rejects writes.
+Reads through LocalD1 and registered-file downloads remain available. Application
+schema initialization is a write; prime it before freezing, rather than treating
+an uninitialized route's migration/optimization as a harmless read.
+
+Node 24.10+ supplies the SQLite authorizer used here (validated on 24.21).
+It rejects mutations before their effect, including RETURNING, CTEs and triggers;
+only such a denied write is reprepared under the control DB's BEGIN IMMEDIATE
+lock. Application writes/batches use their own transaction and recheck authority
+before commit. Read-only calls do not acquire the control write lock. ATTACH,
+DETACH, caller transaction control and unsafe connection pragmas are unavailable.
+Offline import/fixture LocalD1 instances without a writer are separate from the
+production site/gateway factories; they confer no deployment authority.
+
+File put/copy/delete and signed-upload issuance check current write authority.
+Canonical file registration, upload acceptance/assembly state commits and
+deletion serialize with control freeze changes. Registration rechecks an
+existing original row inside its commit, preserving immutable IDs and hashes
+when two identical transfers finish. Awaited file reads/copies retain guard
+checks; no control lock spans streaming/network work. Hub logical transactions
+check authority after acquiring their existing SQLite write lock and before
+committing, closing the check-before-lock race.
+
+This is a canonical-commit fence, not a complete all-writer cutover receipt.
+Admitted streams, content-file renames, receiving/failed-transfer cleanup and
+private upload journals still need the full filesystem drain. Authentication,
+enrollment and other direct control-store writers also need that complete
+admission coverage. The four old-production external adapters and native Goal,
+tool/queue/unknown/volatile-state guards remain mandatory. Do not switch routes,
+snapshot live writers, launch a restart or infer idle from these local checks.

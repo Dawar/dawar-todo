@@ -25,7 +25,7 @@ export class ObjectUpload {
       CREATE TABLE IF NOT EXISTS portable_object_parts(upload_id TEXT NOT NULL,part INTEGER NOT NULL,hash TEXT NOT NULL,size INTEGER NOT NULL,PRIMARY KEY(upload_id,part));
       CREATE TABLE IF NOT EXISTS portable_object_receiving(id TEXT PRIMARY KEY,upload_id TEXT NOT NULL,part INTEGER NOT NULL,pid INTEGER NOT NULL,UNIQUE(upload_id,part));`);
   }
-  transaction(work){this.db.exec('BEGIN IMMEDIATE');try{const result=work();this.db.exec('COMMIT');return result;}catch(e){this.db.exec('ROLLBACK');throw e;}}
+  transaction(work){return this.objects.writeSync(work);}
   scope(v){
     if(v.uploadVersion!==1||!Number.isSafeInteger(v.minimum)||!Number.isSafeInteger(v.maximum)||v.minimum<0||v.maximum<v.minimum||v.maximum>MAX||typeof v.type!=='string'||!/^[A-Za-z0-9.+-]+\/[A-Za-z0-9.+-]+$/.test(v.type)||v.hash!==undefined&&!hex(v.hash))throw Error('Invalid original upload scope.');
     return JSON.stringify({owner:v.owner,key:v.key,type:v.type,minimum:v.minimum,maximum:v.maximum,node:v.node??null,hash:v.hash??null});
@@ -135,11 +135,11 @@ export class ObjectUpload {
         if(!hex(row.result_hash)||saved.owner!==v.owner||saved.bot_id!=='application'||saved.hash!==row.result_hash||saved.size!==row.size||saved.mime!==v.type)throw Error('Original completion receipt is unconfirmed.');
         const sha=createHash('sha256');let size=0;for await(const c of this.objects.files.streamHash(saved.hash)){this.guard(token,row);sha.update(c);size+=c.length;}
         if(size!==saved.size||sha.digest('hex')!==saved.hash)throw Error('Registered completion bytes changed.');
-        this.guard(token,row);this.db.prepare("UPDATE portable_object_uploads SET state='done',claim=NULL,pid=NULL WHERE id=? AND state='assembling' AND claim=?").run(row.id,row.claim);
+        this.transaction(()=>{this.guard(token,row);this.db.prepare("UPDATE portable_object_uploads SET state='done',claim=NULL,pid=NULL WHERE id=? AND state='assembling' AND claim=?").run(row.id,row.claim);});
         const result=this.row(v);if(result.state!=='done')throw Error('Original completion changed.');await this.removeParts(result,token);return json(this.status(result));
       }
       if(!stopped(row.pid))throw Error('Original upload completion is still busy; retain its receipt.');
-      this.db.prepare("UPDATE portable_object_uploads SET state='uploading',claim=NULL,pid=NULL WHERE id=? AND state='assembling' AND claim=? AND pid=?").run(row.id,row.claim,row.pid);row=this.row(v);
+      this.transaction(()=>{this.guard(token,row);this.db.prepare("UPDATE portable_object_uploads SET state='uploading',claim=NULL,pid=NULL WHERE id=? AND state='assembling' AND claim=? AND pid=?").run(row.id,row.claim,row.pid);});row=this.row(v);
     }
     const claim=randomUUID(),hashes=JSON.parse(row.manifest);
     this.transaction(()=>{
@@ -152,9 +152,9 @@ export class ObjectUpload {
     try{
       const sha=createHash('sha256');let size=0;for await(const c of this.bytes(row,token)){this.claim(row,claim);sha.update(c);size+=c.length;}const hash=sha.digest('hex');
       if(size!==row.size||row.hash&&hash!==row.hash)throw Error('Original file checksum differs.');
-      this.guard(token,row);this.claim(row,claim);this.db.prepare("UPDATE portable_object_uploads SET result_hash=? WHERE id=? AND claim=? AND state='assembling'").run(hash,row.id,claim);
-      await this.objects.files.register({owner:v.owner,botId:'application',artifactId:row.id,name:'Registered attachment',mime:v.type,hash,size},Readable.from(this.bytes(row,token)),{guard:()=>{this.guard(token,row);this.claim(row,claim);}});
-      this.guard(token,row);this.db.prepare("UPDATE portable_object_uploads SET state='done',claim=NULL,pid=NULL WHERE id=? AND claim=? AND state='assembling'").run(row.id,claim);
+      this.transaction(()=>{this.guard(token,row);this.claim(row,claim);this.db.prepare("UPDATE portable_object_uploads SET result_hash=? WHERE id=? AND claim=? AND state='assembling'").run(hash,row.id,claim);});
+      await this.objects.files.register({owner:v.owner,botId:'application',artifactId:row.id,name:'Registered attachment',mime:v.type,hash,size},Readable.from(this.bytes(row,token)),{guard:()=>{this.guard(token,row);this.claim(row,claim);},commit:work=>this.objects.writeSync(work)});
+      this.transaction(()=>{this.guard(token,row);this.db.prepare("UPDATE portable_object_uploads SET state='done',claim=NULL,pid=NULL WHERE id=? AND claim=? AND state='assembling'").run(row.id,claim);});
       const result=this.row(v);if(result.state!=='done')throw Error('Original file completion is unconfirmed.');
       await this.removeParts(result,token);return json(this.status(result));
     }catch(error){

@@ -14,7 +14,8 @@ import { signGateway } from './gateway-proof.ts';
 import { ObjectStorage } from './object-storage.mjs';
 import { HubRpc,AGENT_MUTATIONS } from './hub-rpc.mjs';
 import { HubNodeStorage } from './hub-node-storage.mjs';
-import { HubControls,hubActivation } from './hub-controls.mjs';
+import { HubControls } from './hub-controls.mjs';
+import { HubWriteAuthority,hubActivation } from './hub-authority.mjs';
 import { HUB_TOOLS } from './control-protocol.mjs';
 import { verifyBotTicket } from '../lib/bots-auth.ts';
 import {createVoiceRuntime} from './voice-runtime.mjs';
@@ -27,12 +28,13 @@ async function readBody(req) {
 }
 export function startGateway(config) {
   const store = new HubStore(join(config.dataDirectory,'control.sqlite'));
-  const application = new LocalD1(join(config.dataDirectory,'application.sqlite'));
+  const authority=hubActivation(config),writer=new HubWriteAuthority(store.db,authority);
+  const application = new LocalD1(join(config.dataDirectory,'application.sqlite'),{writer});
   const identity = new OIDCIdentity(store,config);
-  const objects = new ObjectStorage(config);
+  const objects = new ObjectStorage(config,{writer});
   const connections = new Map(), challenges = new Map();
   const router = new HubRpc(store,connections), browsers=new Set();
-  const authority=hubActivation(config),broadcast=(owner,event)=>{for(const b of browsers)if(b.owner===owner&&b.ws.readyState===1)b.ws.send(JSON.stringify({type:'event',event}));};
+  const broadcast=(owner,event)=>{for(const b of browsers)if(b.owner===owner&&b.ws.readyState===1)b.ws.send(JSON.stringify({type:'event',event}));};
   const controls=new HubControls({path:join(config.dataDirectory,'control.sqlite'),hub:store,router,authority,broadcast,...(config.schedulerQuietWindow?{quietWindow:config.schedulerQuietWindow}:{})});router.controls=controls;
   const nodeStorage=new HubNodeStorage({hub:store,controls,application,objects,config});
   const voice=config.voice?.enabled===true?createVoiceRuntime(config,{assertWriter:()=>controls.assertWriter()}):null;
@@ -230,5 +232,5 @@ export function startGateway(config) {
   });
   server.listen(config.gatewayPort??3210,'127.0.0.1');
   let closing;
-  return {server,store,application,objects,router,controls,voice,close:()=>closing??=(async()=>{if(voice)await voice.close();clearInterval(scheduler);router.close();for(const ws of sockets.clients)ws.close();await new Promise(resolve=>server.close(resolve));controls.close();objects.close();store.close();application.close();})()};
+  return {server,store,application,objects,router,controls,voice,close:()=>closing??=(async()=>{if(voice)await voice.close();clearInterval(scheduler);router.close();for(const ws of sockets.clients)ws.close();await new Promise(resolve=>server.close(resolve));writer.close();controls.close();objects.close();store.close();application.close();})()};
 }
