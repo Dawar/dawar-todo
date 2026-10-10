@@ -11,7 +11,7 @@ await mkdir(join(directory,'bot-bridge'),{recursive:true});
 await cp('dist/portable/portable-agent.mjs',join(directory,'bot-bridge/portable-agent.mjs'));
 await cp('portable/agent-download',join(directory,'portable'),{recursive:true});
 for(const file of ['config.mjs','protocol.mjs','private-file.mjs','bounded-json.mjs','enrollment-client.mjs','services.mjs','agent-cli.mjs'])await cp(join('portable',file),join(directory,'portable',file));
-for(const file of ['manager-mcp.mjs','codex-version.mjs','native_queue_receipts.py','legacy_manager_rejections.py','legacy-manager-rejections.json','manager.mjs'])await cp(join('bot-bridge',file),join(directory,'bot-bridge',file));
+for(const file of ['manager-mcp.mjs','codex-version.mjs','native_queue_receipts.py','legacy_manager_rejections.py','legacy-manager-rejections.json','manager.mjs','memory-atomic.py','artifact-preview-worker.mjs'])await cp(join('bot-bridge',file),join(directory,'bot-bridge',file));
 await cp('portable/agent-dependencies/package.json',join(directory,'package.json'));
 await cp('portable/agent-dependencies/package-lock.json',join(directory,'package-lock.json'));
 await cp('portable/agent-download/Install DawarTodo Agent.command',join(directory,'Install DawarTodo Agent.command'));

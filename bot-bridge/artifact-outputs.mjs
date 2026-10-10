@@ -3,7 +3,7 @@ import { constants } from 'node:fs';
 import { open, mkdir, lstat, link, unlink } from 'node:fs/promises';
 import { basename, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { containedPath } from './profiles.mjs';
+import { containedPath,containedHandle } from './profiles.mjs';
 import { artifactMime } from './artifact-library.mjs';
 import { artifactDate, historicalArtifactDate } from './artifact-dates.mjs';
 import { visualizationReferences } from '../lib/bot-visualization-reference.mjs';
@@ -35,12 +35,12 @@ export async function registerArtifact(runtime, bot, input, context = {}) {
       if (runtime.storage) a = await runtime.storage.publish(bot,a);
       return publicResult(a);
     }
-    let source, sourceInfo, temporary, destination;
+    let source, sourceInfo, sourcePath, temporary, destination;
     try {
       let name = input.name;
       const nativeBytes = context.source === 'native' ? Number(runtime.store.db.prepare("SELECT COALESCE(SUM(json_extract(json,'$.size')),0) AS bytes FROM records WHERE kind='attachment' AND bot_id=? AND json_extract(json,'$.source')='native'").get(bot.id).bytes) : 0;
       if (input.path) {
-        const path = resolve(bot.cwd, input.path);
+        const path = resolve(bot.cwd, input.path);sourcePath=path;
         if (input.visualizationReference) {
           if (context.source !== 'native' || input.visualizationReference !== input.path) throw Error('Invalid visualization output.');
           const outputs = join(bot.cwd, 'outputs'), child = relative(outputs, path);
@@ -54,8 +54,8 @@ export async function registerArtifact(runtime, bot, input, context = {}) {
         await containedPath(bot.cwd, path);
         if (privateName(relative(bot.cwd, path))) throw new Error('Credential and private configuration files cannot be published.');
         source = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
-        await containedPath(bot.cwd, `/proc/self/fd/${source.fd}`);
-        if (input.visualizationReference) await containedPath(join(bot.cwd, 'outputs'), `/proc/self/fd/${source.fd}`);
+        await containedHandle(bot.cwd,path,source);
+        if (input.visualizationReference) await containedHandle(join(bot.cwd,'outputs'),path,source);
         sourceInfo = await source.stat();
         if (!sourceInfo.isFile() || sourceInfo.size > MAX_FILE) throw new Error('Publish a regular file of at most 100 MB.');
         name ??= basename(path);
@@ -67,7 +67,7 @@ export async function registerArtifact(runtime, bot, input, context = {}) {
       await mkdir(root, { recursive: true, mode: 0o700 }); await containedPath(bot.cwd, root);
       temporary = join(root, `.staging-${randomUUID()}`);
       destination = await open(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
-      await containedPath(bot.cwd, `/proc/self/fd/${destination.fd}`);
+      await containedHandle(bot.cwd,temporary,destination);
       const hash = createHash('sha256'); let size = 0;
       if (source) {
         const buffer = Buffer.alloc(256 * 1024);
@@ -79,9 +79,10 @@ export async function registerArtifact(runtime, bot, input, context = {}) {
           const bytes = buffer.subarray(0, bytesRead); hash.update(bytes); await writeAll(destination, bytes);
         }
         const after = await source.stat();
+        await containedHandle(bot.cwd,sourcePath,source);
         if (size !== sourceInfo.size || after.size !== size || after.mtimeMs !== sourceInfo.mtimeMs) throw new Error('Artifact changed while being copied. Retry publishing the finished file.');
       } else { size = input.bytes.length; hash.update(input.bytes); await writeAll(destination, input.bytes); }
-      await destination.sync(); await destination.close(); destination = null;
+      await containedHandle(bot.cwd,temporary,destination);await destination.sync(); await destination.close(); destination = null;
       const sha256 = hash.digest('hex');
       const previousCopy = input.path && runtime.store.db.prepare("SELECT json FROM records WHERE kind='attachment' AND bot_id=? AND json_extract(json,'$.path')=? AND json_extract(json,'$.artifact')=1 AND json_extract(json,'$.ready')=1 LIMIT 1").get(bot.id, resolve(bot.cwd, input.path));
       const existingCopy = previousCopy && JSON.parse(previousCopy.json);
@@ -99,11 +100,12 @@ export async function registerArtifact(runtime, bot, input, context = {}) {
           if (error.code !== 'EEXIST') throw error;
           const existing = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
           try {
-            await containedPath(bot.cwd, `/proc/self/fd/${existing.fd}`);
+            await containedHandle(bot.cwd,path,existing);
             const h = createHash('sha256'), bytes = Buffer.alloc(256 * 1024); let offset = 0;
             if ((await existing.stat()).size !== size) throw new Error('Artifact destination changed; original retained.');
             for (;;) { const { bytesRead } = await existing.read(bytes, 0, bytes.length, offset); if (!bytesRead) break; offset += bytesRead; h.update(bytes.subarray(0, bytesRead)); }
             if (h.digest('hex') !== sha256) throw new Error('Artifact destination changed; original retained.');
+            await containedHandle(bot.cwd,path,existing);
           } finally { await existing.close(); }
         }
         for (const folder of [dir, root, bot.cwd]) {

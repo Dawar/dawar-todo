@@ -1,7 +1,7 @@
 import { constants } from 'node:fs';
 import { open, lstat, realpath, mkdir, rename, unlink } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
-import { join, resolve } from 'node:path';
+import { join, resolve, basename } from 'node:path';
 import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
@@ -22,19 +22,21 @@ const owned = (stat, label, directory = false, privateFile = false) => {
       privateFile && (Number(stat.mode) & 0o777) !== 0o600) fail(`${label} must be an owned, safe ${directory ? 'directory' : 'regular file'}.`);
 };
 
-// Anchored descriptors prevent a replaced workspace/directory from redirecting
-// any read or write. The fixed names below are never caller-provided paths.
-export async function memoryWorkspace(bot) {
+// Linux mutations remain anchored to directory descriptors. Darwin permits
+// read-only scopes with repeated root/file identity checks; no path-based
+// write replaces the atomic helper. Names are fixed application file names.
+export async function memoryWorkspace(bot, { readOnly = false, platform = process.platform } = {}) {
+  if (platform !== 'linux' && (platform !== 'darwin' || !readOnly)) fail('Atomic memory maintenance is unavailable on this platform; current files and receipts are retained.');
   const cwd = resolve(bot.cwd), root = await open(cwd, flags | constants.O_DIRECTORY);
   try {
     const identity = await root.stat({ bigint: true }); owned(identity, 'Bot workspace', true);
-    if (await realpath(cwd) !== cwd || await realpath(`/proc/self/fd/${root.fd}`) !== cwd) fail('Bot workspace changed or contains a symlink.');
-    const path = name => join(`/proc/self/fd/${root.fd}`, name);
+    if (await realpath(cwd) !== cwd || platform === 'linux' && await realpath(`/proc/self/fd/${root.fd}`) !== cwd) fail('Bot workspace changed or contains a symlink.');
+    const path = name => { if (typeof name !== 'string' || !name || basename(name) !== name || ['.', '..'].includes(name)) fail('Use a fixed workspace file name.'); return join(platform === 'linux' ? `/proc/self/fd/${root.fd}` : cwd, name); };
     const check = async () => {
       const current = await lstat(cwd, { bigint: true }); owned(current, 'Bot workspace', true);
       if (current.dev !== identity.dev || current.ino !== identity.ino || await realpath(cwd) !== cwd) fail('Bot workspace was replaced.');
     };
-    return { cwd, root, path, check, sync: () => root.sync(), identity: `${identity.dev}:${identity.ino}:${identity.uid}`, close: () => root.close() };
+    return { cwd, root, path, check, readOnly, platform, sync: () => root.sync(), identity: `${identity.dev}:${identity.ino}:${identity.uid}`, close: () => root.close() };
   } catch (error) { await root.close(); throw error; }
 }
 export async function readOwnedFile(scope, name, limit, privateFile = false, signal = null) {
@@ -44,6 +46,9 @@ export async function readOwnedFile(scope, name, limit, privateFile = false, sig
   catch (error) { if (error.code === 'ENOENT') error.memoryMissingAtOpen = true; throw error; }
   try {
     const before = await handle.stat({ bigint: true }); owned(before, name, false, privateFile);
+    const openedTarget = await lstat(scope.path(name), { bigint: true });
+    if (!sameStat(before, openedTarget)) fail(`${name} changed while opening.`);
+    await scope.check();
     if (before.size > BigInt(limit)) fail(`${name} exceeds the ${limit}-byte safe read limit.`);
     const chunks = []; let size = 0;
     const buffer = Buffer.alloc(64 * 1024);
@@ -63,13 +68,14 @@ export async function readOwnedFile(scope, name, limit, privateFile = false, sig
   } finally { await handle.close(); }
 }
 export async function profileFile(bot, name) {
-  const scope = await memoryWorkspace(bot);
+  const scope = await memoryWorkspace(bot, { readOnly: true });
   try { return { ...await readOwnedFile(scope, name, name === 'MEMORY.md' ? MEMORY_SOURCE_LIMIT : PROFILE_LIMIT), workspaceIdentity: scope.identity }; }
   catch (error) { if (error.memoryMissingAtOpen) error.profileMissing = true; throw error; }
   finally { await scope.close(); }
 }
 async function privateDirectory(parent, name, create = true) {
   await parent.check();
+  if (create && parent.readOnly) fail('This memory directory is read-only.');
   if (create) {
     await mkdir(parent.path(name), { mode: 0o700 }).catch(e => { if (e.code !== 'EEXIST') throw e; });
     await parent.sync();
@@ -78,15 +84,18 @@ async function privateDirectory(parent, name, create = true) {
   try {
     const before = await handle.stat({ bigint: true }); owned(before, name, true);
     if ((Number(before.mode) & 0o777) !== 0o700) fail(`${name} must be private (0700).`);
-    const path = file => join(`/proc/self/fd/${handle.fd}`, file);
+    const directory = parent.path(name);
+    const path = file => { if (typeof file !== 'string' || !file || basename(file) !== file || ['.', '..'].includes(file)) fail('Use a fixed memory file name.'); return join(parent.platform === 'linux' ? `/proc/self/fd/${handle.fd}` : directory, file); };
     const check = async () => {
       await parent.check(); const current = await lstat(parent.path(name), { bigint: true });
       if (!sameStat({ ...before, size: current.size, mtimeNs: current.mtimeNs, ctimeNs: current.ctimeNs }, current)) fail(`${name} was replaced or its permissions changed.`);
     };
-    return { path, check, sync: () => handle.sync(), close: () => handle.close() };
+    await check();
+    return { path, check, readOnly: parent.readOnly, platform: parent.platform, sync: () => handle.sync(), close: () => handle.close() };
   } catch (error) { await handle.close(); throw error; }
 }
 async function putNew(scope, name, bytes) {
+  if (scope.readOnly) fail('This memory directory is read-only.');
   await scope.check();
   const file = await open(scope.path(name), constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
   try { await file.writeFile(bytes); await file.sync(); } finally { await file.close(); }
@@ -131,7 +140,7 @@ const receiptName = id => { if (typeof id !== 'string' || !/^memory-v1-[a-f0-9]{
 // All directories/files remain anchored, private and bounded. A committing
 // receipt still takes the exclusive, original-ID reconciliation path below.
 async function inspectMemoryOperation(bot, id, read, { metadataOnly = false } = {}) {
-  const workspace = await memoryWorkspace(bot); let parent, scope;
+  const workspace = await memoryWorkspace(bot, { readOnly: true }); let parent, scope;
   try {
     parent = await privateDirectory(workspace, '.memory-maintenance', false);
     scope = await privateDirectory(parent, receiptName(id), false);
@@ -303,7 +312,7 @@ export async function maintenanceMemoryContext(bot, id, source) {
   });
 }
 export async function memoryCurrentState(bot, source) {
-  const workspace = await memoryWorkspace(bot); let parent, id;
+  const workspace = await memoryWorkspace(bot, { readOnly: true }); let parent, id;
   try {
     try { await lstat(workspace.path('.memory-maintenance')); }
     catch (error) { if (error.code === 'ENOENT') return null; throw error; }

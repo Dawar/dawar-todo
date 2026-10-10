@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
 import { open, mkdir, link, unlink } from 'node:fs/promises';
 import { basename, join } from 'node:path';
-import { containedPath } from './profiles.mjs';
+import { containedPath,containedHandle } from './profiles.mjs';
 
 // Only selected READY attachment records reach this boundary. Never accept a
 // caller-supplied path, broaden a bot's home, or expose another home's path.
@@ -26,11 +26,11 @@ export async function copyPeerAttachments(runtime, sender, recipient, ids, excha
     let source, destination;
     try {
       source = await open(a.path, constants.O_RDONLY | constants.O_NOFOLLOW);
-      await containedPath(sender.cwd, `/proc/self/fd/${source.fd}`);
+      await containedHandle(sender.cwd,a.path,source);
       const info = await source.stat();
       if (!info.isFile() || info.size !== a.size) throw new Error('Selected attachment changed before peer delivery.');
       destination = await open(temp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
-      await containedPath(recipient.cwd, `/proc/self/fd/${destination.fd}`);
+      await containedHandle(recipient.cwd,temp,destination);
       const buffer = Buffer.alloc(256 * 1024), hash = createHash('sha256'); let total = 0;
       for (;;) {
         const { bytesRead } = await source.read(buffer, 0, buffer.length, total);
@@ -40,6 +40,7 @@ export async function copyPeerAttachments(runtime, sender, recipient, ids, excha
         while (offset < bytesRead) { const wrote = await destination.write(buffer, offset, bytesRead - offset); if (!wrote.bytesWritten) throw new Error('Peer copy stalled.'); offset += wrote.bytesWritten; }
       }
       const after = await source.stat(), sha256 = hash.digest('hex');
+      await containedHandle(sender.cwd,a.path,source);await containedHandle(recipient.cwd,temp,destination);
       if (total !== a.size || after.mtimeMs !== info.mtimeMs || after.size !== info.size || a.sha256 && a.sha256 !== sha256) throw new Error('Selected attachment changed during copying.');
       await destination.sync(); await destination.close(); destination = null;
       try { await link(temp, path); }
@@ -47,11 +48,12 @@ export async function copyPeerAttachments(runtime, sender, recipient, ids, excha
         if (error.code !== 'EEXIST') throw error;
         const existing = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
         try {
-          await containedPath(recipient.cwd, `/proc/self/fd/${existing.fd}`);
+          await containedHandle(recipient.cwd,path,existing);
           if ((await existing.stat()).size !== total) throw new Error('Retained peer copy changed.');
           const savedHash = createHash('sha256'); let offset = 0;
           for (;;) { const { bytesRead } = await existing.read(buffer, 0, buffer.length, offset); if (!bytesRead) break; savedHash.update(buffer.subarray(0, bytesRead)); offset += bytesRead; }
           if (savedHash.digest('hex') !== sha256) throw new Error('Retained peer copy changed.');
+          await containedHandle(recipient.cwd,path,existing);
         } finally { await existing.close(); }
       }
       const dir = await open(root, constants.O_RDONLY); try { await dir.sync(); } finally { await dir.close(); }

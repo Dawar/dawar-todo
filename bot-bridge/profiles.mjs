@@ -3,7 +3,7 @@ import { SECURE_INSTRUCTIONS } from "./secure-input-tools.mjs";
 import { desktopInstructions } from "./desktops.mjs";
 import { mkdir, writeFile, lstat, realpath, open } from "node:fs/promises";
 import { constants } from "node:fs";
-import { join, relative, isAbsolute } from "node:path";
+import { join } from "node:path";
 import { MANAGER_INSTRUCTIONS } from "./manager-tools.mjs";
 import { DIRECT_INSTRUCTIONS } from "./primary-execution.mjs";
 import { TEAM_INSTRUCTIONS } from "./teams.mjs";
@@ -65,6 +65,7 @@ export async function initializeProfile(bot) {
 }
 export async function profileContext(bot, team = null, { onMemoryState = () => {}, onMemoryContent = () => {}, maintenanceId = null } = {}) {
   const parts = [`## Common named collaboration policy\n${COLLABORATION_POLICY}`, `## Secure one-time input\n${SECURE_INSTRUCTIONS}`, `## File memory maintenance\n${MEMORY_INSTRUCTIONS}`];
+  if (process.platform === 'darwin') parts.push('## Mac memory capability\nBounded current profile reads are supported. Atomic file-memory compaction and PDF previews are unavailable on this platform until their native helpers are validated. Keep MEMORY.md concise; never emulate an unsupported atomic compaction, discard its receipt, or substitute a blind rename.');
   for (const file of PROFILE_FILES) {
     try {
       const source = await profileFile(bot, file);
@@ -134,11 +135,4 @@ export async function teamProfileContext(team) {
   }
   return { teamProfile: { kind: "application", value: parts.join("\n\n") } };
 }
-export async function containedPath(root, path) {
-  const realRoot = await realpath(root);
-  const target = await realpath(path);
-  const rel = relative(realRoot, target);
-  if (rel.startsWith("..") || isAbsolute(rel))
-    throw new Error("Path is outside the bot workspace.");
-  return target;
-}
+export { containedPath, containedHandle } from './file-containment.mjs';

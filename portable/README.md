@@ -129,3 +129,11 @@ all room/desktop/voice/browser roles, registered-file transfer or provisioning.
 Generic runtime capabilities for unfinished transport consumers are hidden.
 The application writer freeze, production authority migration, actual native
 activation, genuine Mac enrollment and public rollover remain separate gates.
+
+### Platform file containment
+
+Linux file reads retain the kernel descriptor-path proof. macOS regular-file reads compare the registered canonical path and workspace identity with the already-open descriptor, before and after consuming bounded bytes; changed paths fail without returning or publishing those bytes. These are application guards, not an OS sandbox for existing shell or plugin tools. Source code and workspaces remain local unless explicitly published.
+
+Mac current profile reads use read-only workspace scopes and repeat inode/permission checks. Atomic memory compaction and PDF preview helpers remain unavailable on Mac; no Linux `/proc`, `renameat2`, or `prlimit` fallback is pretended. Their capabilities must stay disabled until a native adapter and genuine Mac behavior are validated. Original profiles, archives and uncertain receipts are retained. This source evidence does not establish physical Mac acceptance.
+
+Agent and full-hub packages include the exact memory atomic helper and bounded artifact preview worker next to their bundled runtime. Inclusion does not enable an unsupported platform capability.

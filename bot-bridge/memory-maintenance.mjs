@@ -81,6 +81,7 @@ export class BotMemoryMaintenance {
     const allowed = { inspect: ['operation', 'operationId'], prepare: ['operation', 'operationId'], verify: ['operation', 'operationId', 'candidateHash', 'review'], commit: ['operation', 'operationId', 'candidateHash'], nightlyCheck: ['operation'] }[args?.operation];
     if (!allowed || !args || Array.isArray(args) || Object.keys(args).some(k => !allowed.includes(k))) throw Error('Use only the declared own-memory operation fields.');
     if (args?.operation === 'inspect') return args.operationId ? this.receipt(bot, args.operationId) : this.inspect(bot);
+    if (process.platform !== 'linux') throw Error('Atomic file-memory maintenance is unavailable on this platform; current files and original receipts are retained.');
     if (args?.operation === 'nightlyCheck') return this.nightlyCheck(bot, origin);
     if (!observedActiveTurn(this.runtime, bot.id, bot.activeTurnId) || this.runtime.activityUnresolved(bot.id)) throw Error('Semantic memory maintenance requires this bot\'s current observed native turn.');
     if (bot.queuePaused || bot.managerPaused || this.store.list('pending', bot.id).length) throw Error('Stop or a current question holds memory maintenance.');
@@ -128,7 +129,7 @@ export class BotMemoryMaintenance {
     this.scanAfter.clear(); return { requested: true, occurrenceId: run.id, idleChecksPending: true };
   }
   async tick() {
-    if (this.running || !this.runtime.ready) return;
+    if (process.platform !== 'linux' || this.running || !this.runtime.ready) return;
     this.running = true;
     try {
       const candidates = this.store.bots().filter(bot => !this.runtime.locks.has(bot.id) && !this.pending.has(bot.id) &&

@@ -64,6 +64,7 @@ import {
   slugify,
   initializeProfile,
   containedPath,
+  containedHandle,
 } from "./profiles.mjs";
 import { normalizeSchedule, collectDueRuns } from "./schedules.mjs";
 import { readHistoryView, readHistoryLog, readHistoryDetail, readHistoryAttachments } from "./history-view.mjs";
@@ -572,7 +573,7 @@ export class BotRuntime extends EventEmitter {
   }
   snapshot() {
     return {
-      capabilities: { taskRequests: this.storage ? 1 : undefined, collaborationRooms: 1, executionConfiguration: 1, accountUsageHistory: 1, runtimeMaintenance: 1, botAdministration: 1, botMemoryMaintenance: 1, backgroundRunLanes: 1, scheduleDecisions: 1, singleThreadExecution: 1, peerInbox: 1, peerRootControls: 1, peerBodyPaging: 1, nativeGoals: 1, nativeConversation: 1, messageReplies: 1, secureInputs: 1, secureResponseLifecycle: 1, operatorCalls: 1, operatorInputQuestions: 1, historyCursorIndex: 1, messageBursts: 1, burstDiscard: 1, burstControls: 1, burstQueue: 1, queueLists: 1, queueRelativeMoves: 1, queueSendNow: 1, ...(this.storage ? { taskQueues: 1 } : {}), teams: 1, ...(this.desktops ? { botDesktops: 1, botBrowserRetention: 1 } : {}) },
+      capabilities: { taskRequests: this.storage ? 1 : undefined, collaborationRooms: 1, executionConfiguration: 1, accountUsageHistory: 1, runtimeMaintenance: 1, botAdministration: 1, botMemoryMaintenance: process.platform === 'linux' ? 1 : undefined, backgroundRunLanes: 1, scheduleDecisions: 1, singleThreadExecution: 1, peerInbox: 1, peerRootControls: 1, peerBodyPaging: 1, nativeGoals: 1, nativeConversation: 1, messageReplies: 1, secureInputs: 1, secureResponseLifecycle: 1, operatorCalls: 1, operatorInputQuestions: 1, historyCursorIndex: 1, messageBursts: 1, burstDiscard: 1, burstControls: 1, burstQueue: 1, queueLists: 1, queueRelativeMoves: 1, queueSendNow: 1, ...(this.storage ? { taskQueues: 1 } : {}), teams: 1, ...(this.desktops ? { botDesktops: 1, botBrowserRetention: 1 } : {}) },
 
       botAdminLeadIds: [...this.botAdmin.leads],
       teams: publicTeams(this),
@@ -2484,11 +2485,12 @@ export class BotRuntime extends EventEmitter {
     await containedPath(bot.cwd, a.path);
     const f = await open(a.path, constants.O_RDONLY | constants.O_NOFOLLOW);
     try {
-      await containedPath(bot.cwd, `/proc/self/fd/${f.fd}`);
+      await containedHandle(bot.cwd,a.path,f);
       const info = await f.stat();
       if (!info.isFile() || info.size !== a.size) throw new Error("Attachment file changed. Its stored metadata was retained.");
       const data = Buffer.alloc(Math.min(CHUNK, a.size - offset));
       const { bytesRead } = await f.read(data, 0, data.length, offset);
+      await containedHandle(bot.cwd,a.path,f);
       return {
         data: data.subarray(0, bytesRead).toString("base64"),
         offset,

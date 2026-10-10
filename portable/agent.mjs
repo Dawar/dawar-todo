@@ -46,7 +46,7 @@ export class AgentTransport {
     });
   }
   hello(){return {protocol:PROTOCOL_VERSION,runtime:RUNTIME_VERSION,platform:process.platform,arch:process.arch,
-    capabilities:{text:true,localStdio:true,desktop:false,voice:false,secureTransfer:false,autonomousGoals:false}};}
+    capabilities:{text:true,localStdio:true,profileReads:true,memoryCompaction:process.platform==='linux',pdfPreview:process.platform==='linux',desktop:false,voice:false,secureTransfer:false,autonomousGoals:false}};}
   send(value){if(this.socket?.readyState===WebSocket.OPEN)this.socket.send(JSON.stringify(value));}
   controlRequest(botId,tool,args){
     const c=this.journal.db.prepare('SELECT * FROM node_controls WHERE bot_id=?').get(botId),control=c&&this.journal.currentControl({bot_id:botId,epoch:c.epoch});

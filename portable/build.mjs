@@ -4,6 +4,7 @@ import { execFileSync } from 'node:child_process';
 await mkdir('dist/portable',{recursive:true});
 await build({ entryPoints:['portable/gateway.mjs'],outfile:'dist/portable/gateway.mjs',bundle:true,platform:'node',target:'node24',format:'esm',packages:'external' });
 await build({ entryPoints:['portable/agent.mjs'],outfile:'dist/portable/portable-agent.mjs',bundle:true,platform:'node',target:'node24',format:'esm',packages:'external' });
+for(const file of ['memory-atomic.py','artifact-preview-worker.mjs'])await cp(`bot-bridge/${file}`,`dist/portable/${file}`);
 await cp('public','.next-portable/standalone/public',{recursive:true});
 await mkdir('.next-portable/standalone/public/portable-assets',{recursive:true});
 await cp('node_modules/pdfjs-dist/build/pdf.worker.min.mjs','.next-portable/standalone/public/portable-assets/pdf.worker.min.mjs');

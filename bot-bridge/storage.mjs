@@ -3,7 +3,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
 import { open, mkdir, link, unlink } from 'node:fs/promises';
 import { join, basename } from 'node:path';
-import { containedPath } from './profiles.mjs';
+import { containedPath,containedHandle } from './profiles.mjs';
 import { readArtifactPreview } from './artifact-previews.mjs';
 import { artifactMime } from '../lib/bot-file-metadata.mjs';
 
@@ -17,12 +17,13 @@ export async function localFileDigest(bot, path, expectedSize) {
   await containedPath(bot.cwd,path);
   const file = await open(path,constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
-    await containedPath(bot.cwd,`/proc/self/fd/${file.fd}`);
+    await containedHandle(bot.cwd,path,file);
     const before = await file.stat();
     if (!before.isFile() || before.size !== expectedSize) throw new Error('Registered file changed; the original record was retained.');
     const hash = createHash('sha256'), buffer = Buffer.alloc(256*1024); let size=0;
     for (;;) { const {bytesRead} = await file.read(buffer,0,buffer.length,size); if (!bytesRead) break; size += bytesRead; if (size > expectedSize) throw new Error('Registered file grew during verification.'); hash.update(buffer.subarray(0,bytesRead)); }
     const after = await file.stat();
+    await containedHandle(bot.cwd,path,file);
     if (size !== expectedSize || before.mtimeMs !== after.mtimeMs || after.size !== before.size) throw new Error('Registered file changed during verification.');
     return hash.digest('hex');
   } finally { await file.close(); }
@@ -98,8 +99,9 @@ export class BotStorageClient {
           // Hash/open through the FD; never upload a swapped symlink/path.
           const file = await open(a.path,constants.O_RDONLY | constants.O_NOFOLLOW);
           try {
-            await containedPath(bot.cwd,`/proc/self/fd/${file.fd}`);
+            await containedHandle(bot.cwd,a.path,file);
             const bytes = await file.readFile();
+            await containedHandle(bot.cwd,a.path,file);
             if (bytes.length !== a.size || createHash('sha256').update(bytes).digest('hex') !== sha256) throw new Error('Publication snapshot changed.');
             const body = new FormData(); for (const [key,value] of Object.entries(prepared.upload.fields)) body.set(key,value);
             body.set('file',new Blob([bytes],{type:a.mimeType}),a.name);
@@ -152,7 +154,7 @@ export class BotStorageClient {
       const temporary = join(parent,`.download-${randomUUID()}`); let file;
       try {
         file = await open(temporary,constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,0o600);
-        await containedPath(bot.cwd,`/proc/self/fd/${file.fd}`);
+        await containedHandle(bot.cwd,temporary,file);
         let response = await replayableStorageFetch(this.fetch,url,{signal:AbortSignal.timeout(120000),redirect:'error'});
         if (response.status === 403) {
           await response.body?.cancel().catch(()=>{});
@@ -165,7 +167,7 @@ export class BotStorageClient {
         try { for (;;) { const next = await reader.read(); if (next.done) break; size += next.value.length; if (size > a.size) throw new Error('Cloud file size mismatch.'); digest.update(next.value); let offset=0; while (offset < next.value.length) { const result = await file.write(next.value,offset,next.value.length-offset); if (!result.bytesWritten) throw new Error('Local download stalled.'); offset += result.bytesWritten; } } }
         finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
         if (size !== a.size || digest.digest('hex') !== a.sha256) throw new Error('Cloud checksum mismatch. Existing local files were not replaced.');
-        await file.sync(); await file.close(); file=null;
+        await containedHandle(bot.cwd,temporary,file);await file.sync(); await file.close(); file=null;
         try { await link(temporary,path); } catch (error) { if (error.code !== 'EEXIST' || await localFileDigest(bot,path,a.size) !== a.sha256) throw error; }
         const directory = await open(parent,constants.O_RDONLY); try { await directory.sync(); } finally { await directory.close(); }
         a = this.runtime.store.put('attachment',{...a,path,received:a.size}); return a;

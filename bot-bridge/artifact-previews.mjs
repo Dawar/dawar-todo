@@ -4,7 +4,7 @@ import { open, access } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { containedPath } from './profiles.mjs';
+import { containedPath,containedHandle } from './profiles.mjs';
 import { artifactKind, artifactVersion } from './artifact-library.mjs';
 
 const caches = new WeakMap();
@@ -28,6 +28,7 @@ function run(executable, args, fd, maxBytes, input) {
 async function render(fd, kind) {
   let input;
   if (kind === 'pdf') {
+    if(process.platform!=='linux')throw new Error('The bounded PDF thumbnail renderer is unavailable on this platform.');
     const conventional = join(homedir(), '.local/share/dawar-todo-bots/tools/poppler/bin/pdftoppm');
     const executable = process.env.BOTS_PDFTOPPM_PATH || (await access(conventional).then(() => conventional, () => 'pdftoppm'));
     // Poppler renders one scaled page without JavaScript or fetching remote
@@ -59,10 +60,11 @@ export async function readArtifactPreview(runtime, bot, p) {
     try {
       await containedPath(bot.cwd, a.path);
       file = await open(a.path, constants.O_RDONLY | constants.O_NOFOLLOW);
-      await containedPath(bot.cwd, `/proc/self/fd/${file.fd}`);
+      await containedHandle(bot.cwd,a.path,file);
       const info = await file.stat();
       if (!info.isFile() || info.size !== a.size || info.size > 20 * 1024 * 1024) throw new Error('File changed.');
       const image = await render(file.fd, kind);
+      await containedHandle(bot.cwd,a.path,file);
       value = { status: 'ready', version, mimeType: 'image/webp', ...image };
     } catch { value = unavailable('A thumbnail could not be generated. The original remains available if its file is intact.'); }
     finally { await file?.close(); }
