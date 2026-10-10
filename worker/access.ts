@@ -85,6 +85,12 @@ export async function appAccessResponse(
   const apiRequest = url.pathname.startsWith("/api/");
   const bearerToken = apiRequest ? apiTokenFromAuthorization(request.headers.get("Authorization")) : null;
   if (apiRequest && bearerToken) {
+    if (url.pathname === '/api/migration/identity') {
+      return Response.json(
+        { error: 'The migration identity readout requires the existing owner’s signed-in session.' },
+        { status: 403, headers: { 'Cache-Control': 'private, no-store' } },
+      );
+    }
     if (url.pathname.startsWith("/api/api-tokens") || url.pathname.startsWith("/api/push")) {
       console.warn("[todo-auth] API token management rejected for bearer authentication", { path: url.pathname });
       return Response.json(
