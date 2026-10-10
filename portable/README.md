@@ -47,7 +47,7 @@ advertised; platform capability limits still apply.
 
 ## Current unfinished acceptance
 
-Logical queue/schedule integration, full agent runtime/browser routing, local
+Remaining logical controls, full agent runtime/browser routing, local
 attachment adapters, voice/provider consolidation, staged data migration,
 owner deployment inputs and genuine Mac/device/native acceptance are tracked
 in the migration checkpoint. A protocol module or successful build does not
@@ -59,9 +59,9 @@ observations are retained in the private migration evidence. This does not
 establish an operational S3 backup, scheduled backup, working Mac node or
 production write freeze. The latest direct human amendment defers backups for now; retain these modules and evidence for later enablement. Genuine Mac/production acceptance remains unfinished.
 
-Node agent admission is deliberately limited to assigned explicit text turns
-until the remaining hub-owned queue/schedule/provisioning adapters are wired.
-Unsupported controls fail closed rather than creating a second scheduler.
+Node admission supports assigned explicit turns and the hub's internal saved
+queue/schedule commands. Unsupported controls fail closed; there is no agent
+queue/schedule tick or second logical scheduler.
 Next.js and Sharp security updates are validated before this Node target may
 be exposed publicly. The Cloudflare production route remains unchanged.
 
@@ -87,3 +87,34 @@ positive accepted receipt can be recovered even after its grant expires; an
 expired unconsumed grant is not renewed. Revocation, changed keys/hello and
 foreign identities fail closed. Native execution still requires an explicit
 reviewed activation receipt and an approved bot placement.
+
+## Hub-owned logical controls
+
+The authoritative hub reuses original queue/list/schedule/run records, IDs,
+revisions and local atomic acceptance closures. Each dispatch commits the
+frozen source record and its mailbox command on one SQLite connection. The
+hub has no Codex child. Browser command methods cannot select internal queue
+or schedule dispatch, and bot tools carry assigned node/bot/epoch provenance;
+they are never labelled as human approval.
+
+The same agent checks fresh native current activity, one bounded empty queue
+page, Goal state, Stop/control freshness and original file/reply bindings
+before it reserves a native attempt. Busy, offline and active-Goal preflight
+results retain the received command without starting it. After reservation,
+uncertainty retains its original operation. Native admission uses turn/start
+with the original client ID and captured settings; it does not install an
+automatic native queued prompt that could advance while the hub is offline.
+
+Primary bot queue and schedule tools use the authenticated hub channel. A
+disconnect or lost mutation ACK is an uncertain original operation, not an
+automatic retry. Bounded read-only node recovery may settle an unknown result
+only from an exact original native receipt; an unknown result without that
+proof remains contained. Quiet-window and notification schedules are not
+inferred from names. The current configured quiet window and explicit
+exception IDs govern scheduler eligibility.
+
+This staging step does not complete queue Send/Resume, task/burst transfer,
+all room/desktop/voice/browser roles, registered-file transfer or provisioning.
+Generic runtime capabilities for unfinished transport consumers are hidden.
+The application writer freeze, production authority migration, actual native
+activation, genuine Mac enrollment and public rollover remain separate gates.

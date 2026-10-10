@@ -1,11 +1,11 @@
 import { privateDatabase } from './sqlite.mjs';
-import { boundedFrame, canonical, compatible, digest, fingerprint, id, publicFingerprint, secret, verifySignature } from './protocol.mjs';
+import { boundedFrame, canonical, compatible, digest, fingerprint, id, originalNativeProof,publicFingerprint, secret, verifySignature } from './protocol.mjs';
 
 const transitions = {
   // A later immutable receipt proves node receipt even when that earlier ACK
   // was lost. It never authorizes the hub to re-execute the command.
   queued: ['received','native-accepted','unknown','terminal'], received: ['native-accepted', 'unknown', 'terminal'],
-  'native-accepted': ['running', 'terminal', 'unknown'], running: ['terminal', 'unknown'], terminal: [], unknown: [],
+  'native-accepted': ['running', 'terminal', 'unknown'], running: ['terminal', 'unknown'], terminal: [], unknown: ['native-accepted','terminal'],
 };
 
 export class HubStore {
@@ -115,19 +115,22 @@ export class HubStore {
     return this.placement(owner, botId);
   }
   enqueue(owner, botId, operationId, payload, now = Date.now()) {
+    return this.transaction(()=>this.enqueueOn(this.db,owner,botId,operationId,payload,now));
+  }
+  enqueueOn(db,owner,botId,operationId,payload,now=Date.now()) {
     if (!id(operationId)) throw Error('Original operation identity required.');
     const text = boundedFrame(payload);
     if(Buffer.byteLength(text)>512*1024)throw Error('Command exceeds the bounded transport payload. Use registered attachments.');
-    return this.transaction(() => {
-      const p = this.placement(owner, botId);
+      const p=db.prepare('SELECT * FROM portable_placements WHERE owner=? AND bot_id=?').get(owner,botId);
+      const n=p&&db.prepare('SELECT owner,revoked_at FROM portable_nodes WHERE id=?').get(p.node_id);
+      if(!p||!n||n.revoked_at||n.owner!==owner)throw Error('Foreign or revoked placement.');
       const binding = { owner, botId, nodeId: p.node_id, epoch: p.epoch, payload };
-      const hash = fingerprint(binding), old = this.db.prepare('SELECT * FROM portable_mailbox WHERE operation_id=?').get(operationId);
+      const hash = fingerprint(binding), old = db.prepare('SELECT * FROM portable_mailbox WHERE operation_id=?').get(operationId);
       if (old) { if (old.fingerprint !== hash) throw Error('Operation identity or placement differs.'); return old; }
-      if(payload.method==='turn.interrupt')this.db.prepare('UPDATE portable_placements SET stopped=1,control_revision=control_revision+1 WHERE bot_id=?').run(botId);
-      this.db.prepare('INSERT INTO portable_mailbox(operation_id,owner,bot_id,node_id,epoch,fingerprint,payload,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,\'queued\',?,?)')
+      if(payload.method==='turn.interrupt')db.prepare('UPDATE portable_placements SET stopped=1,control_revision=control_revision+1 WHERE bot_id=?').run(botId);
+      db.prepare('INSERT INTO portable_mailbox(operation_id,owner,bot_id,node_id,epoch,fingerprint,payload,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,\'queued\',?,?)')
         .run(operationId, owner, botId, p.node_id, p.epoch, hash, text, now, now);
-      return this.db.prepare('SELECT * FROM portable_mailbox WHERE operation_id=?').get(operationId);
-    });
+      return db.prepare('SELECT * FROM portable_mailbox WHERE operation_id=?').get(operationId);
   }
   sync(nodeId, cursor = 0) {
     this.node(nodeId);
@@ -152,6 +155,7 @@ export class HubStore {
       if (p.node_id !== nodeId || p.epoch !== r.epoch) throw Error('Stale placement receipt.');
       if (r.state === state && r.receipt_hash === digest(text)) return r;
       if (!transitions[r.state]?.includes(state)) throw Error('Receipt state regressed or contradicts original outcome.');
+      if(r.state==='unknown'&&!originalNativeProof(receipt,operationId))throw Error('Unknown delivery requires exact original native evidence, never a retry.');
       if (['native-accepted','running'].includes(state) && (!id(receipt?.threadId) || !id(receipt?.turnId) || receipt?.operationId !== operationId)) throw Error('Positive native receipt required.');
       this.db.prepare('UPDATE portable_mailbox SET state=?,receipt=?,receipt_hash=?,updated_at=? WHERE operation_id=?')
         .run(state, text, digest(text), now, operationId);
@@ -229,6 +233,7 @@ export class NodeJournal {
   settle(operationId, state, receipt) {
     const old = this.db.prepare('SELECT * FROM node_commands WHERE operation_id=?').get(operationId);
     if (!old || !(old.state==='dispatching'?['native-accepted','terminal','unknown']:transitions[old.state])?.includes(state)) throw Error('Invalid node settlement.');
+    if(old.state==='unknown'&&!originalNativeProof(receipt,operationId))throw Error('Unknown native outcome requires exact original receipt proof.');
     this.db.prepare('UPDATE node_commands SET state=?,receipt=? WHERE operation_id=?').run(state,boundedFrame(receipt),operationId);
   }
   recordEvent(eventId, event) {

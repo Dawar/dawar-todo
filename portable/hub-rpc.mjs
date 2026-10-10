@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { fingerprint, boundedFrame, id } from './protocol.mjs';
+import { HUB_READS,HUB_MUTATIONS } from './control-protocol.mjs';
 
 // Explicit method sets keep an arbitrary browser method from becoming remote
 // shell/native RPC authority. The real runtime still validates every request.
@@ -12,6 +13,10 @@ export class HubRpc {
     if(!id(request.id)||typeof request.method!=='string'||!id(clientId))throw Error('Invalid owner request.');
     if(request.method==='snapshot'&&!request.botId)return this.snapshot(owner,clientId);
     if(request.method==='events')return {result:this.store.events(owner,request.params?.after??0,request.params?.limit??40).events};
+    if(HUB_READS.has(request.method)||HUB_MUTATIONS.has(request.method)){
+      if(!this.controls)throw Object.assign(Error('Hub logical controls are unavailable.'),{outcome:'not-sent'});
+      return {result:await this.controls.request(owner,request)};
+    }
     const p=this.store.placement(owner,request.botId),ws=this.connection(p);
     if(AGENT_READS.has(request.method)){
       const binding=fingerprint(request.params??{}),cached=this.store.db.prepare('SELECT result,observed_at FROM portable_rpc_cache WHERE owner=? AND bot_id=? AND epoch=? AND method=? AND params_hash=?').get(owner,p.bot_id,p.epoch,request.method,binding);
@@ -51,6 +56,7 @@ export class HubRpc {
     if(r.nodeId!==nodeId||p.node_id!==nodeId||p.epoch!==r.epoch||m.epoch!==r.epoch||m.botId!==r.botId)throw Error('Foreign or stale node response.');
     clearTimeout(r.timer);this.reads.delete(m.rpcId);
     if(m.error)return r.reject(Object.assign(Error(m.error),{outcome:'not-sent'}));
+    try{this.controls?.projectRead(r.botId,r.method,m.result);}catch(error){return r.reject(Object.assign(error,{outcome:'not-sent'}));}
     const text=boundedFrame(m.result);
     this.store.db.prepare('INSERT INTO portable_rpc_cache VALUES(?,?,?,?,?,?,?) ON CONFLICT(owner,bot_id,epoch,method,params_hash) DO UPDATE SET result=excluded.result,observed_at=excluded.observed_at').run(r.owner,r.botId,r.epoch,r.method,r.binding,text,Date.now());
     // Bounded cache: history lives on the node, not an unbounded hub duplicate.
@@ -84,8 +90,12 @@ export class HubRpc {
     // Advertise only actual shared capabilities. The node platform gate is
     // independent of the native runtime's generic Goals capability.
     for(const [key,value] of Object.entries(first.capabilities??{}))if(value===1&&snapshots.length===placements.length&&snapshots.every(({s})=>s.capabilities?.[key]===1))common[key]=1;
+    // A runtime's generic capability is not evidence that the hub transport
+    // has implemented its consumer. Keep unfinished portable controls hidden.
+    for(const key of ['taskRequests','backgroundRunLanes','scheduleDecisions','peerInbox','peerRootControls','peerBodyPaging','collaborationRooms','operatorCalls','operatorInputQuestions','secureInputs','secureResponseLifecycle','messageBursts','burstDiscard','burstControls','burstQueue','queueSendNow','taskQueues','teams','botDesktops','botBrowserRetention','botAdministration'])delete common[key];
     if(placements.some(p=>JSON.parse(this.store.node(p.node_id).hello).capabilities.autonomousGoals!==true))delete common.nativeGoals;
-    return {result:{...first,cursor,bots,workByBot:scoped('workByBot'),pending:scoped('pending'),schedules:[],runs:scoped('runs'),activeScheduledTurns:scoped('activeScheduledTurns'),ready:snapshots.length===placements.length&&placements.every(p=>!!this.connection(p)),
+    const schedules=this.controls?placements.flatMap(p=>this.controls.store.list('schedule',p.bot_id)):[],runs=this.controls?placements.flatMap(p=>this.controls.store.list('run',p.bot_id)).sort((a,b)=>b.scheduledAt.localeCompare(a.scheduledAt)).slice(0,100):scoped('runs');
+    return {result:{...first,cursor,bots,workByBot:scoped('workByBot'),pending:scoped('pending'),schedules,runs,activeScheduledTurns:scoped('activeScheduledTurns'),ready:snapshots.length===placements.length&&placements.every(p=>!!this.connection(p)),
       capabilities:{...common,portableAgents:1}},cache:{observedAt:Date.now(),stale:snapshots.length<placements.length}};
   }
   close(){for(const r of this.reads.values()){clearTimeout(r.timer);r.reject(Error('Hub connection ended.'));}for(const values of this.writes.values())for(const w of values){clearTimeout(w.timer);w.reject(Object.assign(Error('Hub connection ended; retain original operation.'),{outcome:'uncertain'}));}this.reads.clear();this.writes.clear();}

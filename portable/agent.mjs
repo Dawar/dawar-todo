@@ -1,18 +1,21 @@
 import { join, isAbsolute } from 'node:path';
 import { readFile } from 'node:fs/promises';
-import { randomUUID } from 'node:crypto';
+import { randomUUID,createHash } from 'node:crypto';
 import { Store } from '../bot-bridge/store.mjs';
 import { Codex } from '../bot-bridge/codex.mjs';
 import { BotRuntime } from '../bot-bridge/runtime.mjs';
 import { CodexManager } from '../bot-bridge/manager.mjs';
 import { NodeJournal } from './control-store.mjs';
-import { nodeKey, signature, PROTOCOL_VERSION, RUNTIME_VERSION } from './protocol.mjs';
+import { nodeKey, signature, fingerprint,id,PROTOCOL_VERSION, RUNTIME_VERSION } from './protocol.mjs';
 import { AGENT_READS, AGENT_MUTATIONS } from './hub-rpc.mjs';
+import { HUB_TOOLS,NODE_LOGICAL_COMMANDS } from './control-protocol.mjs';
+import { admitLogicalCommand } from './agent-admission.mjs';
+const fingerprintLegacy=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
 export class AgentTransport {
   constructor({ config, runtime, journal, key, enrollment, socketFactory=url=>new WebSocket(url) }) {
     Object.assign(this,{config,runtime,journal,key,enrollment,socketFactory});
-    this.socket=null;this.retry=0;this.closed=false;this.pending=new Map();this.cursor=journal.cursor();
+    this.socket=null;this.retry=0;this.closed=false;this.pending=new Map();this.controlPending=new Map();this.cursor=journal.cursor();
     this.terminalCandidates=new Map();
     const nativeGuard=runtime.codex.admissionGuard;
     runtime.codex.admissionGuard=(method,params)=>{
@@ -44,14 +47,58 @@ export class AgentTransport {
   hello(){return {protocol:PROTOCOL_VERSION,runtime:RUNTIME_VERSION,platform:process.platform,arch:process.arch,
     capabilities:{text:true,localStdio:true,desktop:false,voice:false,secureTransfer:false,autonomousGoals:false}};}
   send(value){if(this.socket?.readyState===WebSocket.OPEN)this.socket.send(JSON.stringify(value));}
+  controlRequest(botId,tool,args){
+    const c=this.journal.db.prepare('SELECT * FROM node_controls WHERE bot_id=?').get(botId),control=c&&this.journal.currentControl({bot_id:botId,epoch:c.epoch});
+    if(!HUB_TOOLS.has(tool)||!control||this.socket?.readyState!==1)throw Object.assign(Error('Hub logical controls are offline or outside this assigned scope.'),{outcome:'not-sent'});
+    if(this.controlPending.size>=32)throw Object.assign(Error('Bounded hub control requests are busy.'),{outcome:'not-sent'});
+    const requestId=`control:${randomUUID()}`,ws=this.socket,read=tool==='bots_schedule_list'||tool==='bots_queue'&&['lists','read'].includes(args.operation);
+    return new Promise((resolve,reject)=>{
+      const fail=error=>{clearTimeout(this.controlPending.get(requestId)?.timer);this.controlPending.delete(requestId);reject(Object.assign(error,{outcome:read?'not-sent':'uncertain'}));};
+      const timer=setTimeout(()=>fail(Error('Hub tool acknowledgement is unconfirmed; retain its original operation ID.')),15000);
+      this.controlPending.set(requestId,{ws,botId,epoch:c.epoch,resolve,reject,fail,timer});
+      try{ws.send(JSON.stringify({type:'control-request',requestId,botId,epoch:c.epoch,tool,args}));}catch(error){fail(error);}
+    });
+  }
   flushEvents(){for(const r of this.journal.pendingEvents()){const e=JSON.parse(r.event);this.send({type:'event',eventId:r.event_id,...e});}}
   receipt(row){this.send({type:'receipt',operationId:row.operation_id,fingerprint:row.fingerprint,state:row.state==='dispatching'?'unknown':row.state,
     receipt:row.receipt?JSON.parse(row.receipt):{operationId:row.operation_id}});}
   terminal(row){
+    if(!['native-accepted','running'].includes(row.state))return;
     const receipt=row.receipt&&JSON.parse(row.receipt),p=receipt&&this.terminalCandidates.get(receipt.turnId);
     if(!p||p.threadId!==receipt.threadId)return;
     this.journal.settle(row.operation_id,'terminal',{...receipt,nativeStatus:p.status});
     this.receipt(this.journal.db.prepare('SELECT * FROM node_commands WHERE operation_id=?').get(row.operation_id));
+  }
+  async recover(){
+    if(this.recovering||this.closed||!this.runtime.ready)return;this.recovering=true;
+    try{
+      let rows=this.journal.db.prepare("SELECT rowid AS rowNumber,* FROM node_commands WHERE rowid>? AND state IN ('unknown','native-accepted','running') ORDER BY rowid LIMIT 2").all(this.recoveryCursor??0);
+      if(!rows.length){this.recoveryCursor=0;return;}
+      for(const row of rows){
+        this.recoveryCursor=row.rowNumber;
+        const command=JSON.parse(row.command),payload=JSON.parse(command.payload),bot=this.runtime.store.bot(command.bot_id);
+        if(this.runtime.locks.has(bot.id))continue;
+        await this.runtime.lock(bot.id,()=>this.runtime.maintenance.track(async()=>{
+          const op=this.runtime.store.operation(command.operation_id);
+          if(!op||op.botId!==bot.id||!['turn.send','queue.dispatch','schedule.dispatch'].includes(op.method))return;
+          const binding=NODE_LOGICAL_COMMANDS.has(payload.method)?op.portableFingerprint===command.fingerprint:
+            op.fingerprint===fingerprintLegacy({method:payload.method,botId:bot.id,params:payload.params??{}});
+          if(!binding)return;
+          const before={threadId:bot.threadId,method:op.method,botId:op.botId,fingerprint:op.fingerprint,portableFingerprint:op.portableFingerprint??null};
+          const result=op.status==='done'?op.result:await this.runtime.reconcileOperation(op),after=this.runtime.store.operation(op.id);
+          if(!result||!after||fingerprint(before)!==fingerprint({threadId:this.runtime.store.bot(bot.id).threadId,method:after.method,botId:after.botId,fingerprint:after.fingerprint,portableFingerprint:after.portableFingerprint??null}))return;
+          const turnId=result.turn?.id??result.turnId;if(!turnId)return;
+          const current=this.journal.db.prepare('SELECT * FROM node_commands WHERE operation_id=?').get(op.id);
+          if(current?.fingerprint!==row.fingerprint||!['unknown','native-accepted','running'].includes(current.state))return;
+          const terminal=this.runtime.store.get('planTurnEvidence',turnId),status=['completed','failed','interrupted'].includes(result.turn?.status)?result.turn.status:
+            terminal?.botId===bot.id&&['completed','failed','interrupted'].includes(terminal.status)?terminal.status:null;
+          const receipt={operationId:op.id,threadId:bot.threadId,turnId,result,evidence:{kind:'original-native-client',operationId:op.id,threadId:bot.threadId,turnId},...(status?{nativeStatus:status}:{})};
+          if(current.state==='unknown')this.journal.settle(op.id,status?'terminal':'native-accepted',receipt);
+          else if(status)this.journal.settle(op.id,'terminal',receipt);else return;
+          this.receipt(this.journal.db.prepare('SELECT * FROM node_commands WHERE operation_id=?').get(op.id));
+        }));
+      }
+    }finally{this.recovering=false;}
   }
   connect(){
     if(this.closed)return;
@@ -92,11 +139,18 @@ export class AgentTransport {
             const frame={type:'rpc-result',rpcId:m.rpcId,botId:m.botId,epoch:m.epoch,result};
             if(Buffer.byteLength(JSON.stringify(frame))>900*1024)throw Error('Read exceeds its bounded transport; use a smaller history page.');sendHere(frame);
           }catch(e){sendHere({type:'rpc-result',rpcId:m.rpcId,botId:m.botId,epoch:m.epoch,error:e.message});}})();
+        } else if(authentication && m.type==='control-result'){
+          const pending=this.controlPending.get(m.requestId);if(!pending)return;
+          const current=this.journal.currentControl({bot_id:pending.botId,epoch:pending.epoch});
+          if(pending.ws!==ws||m.botId!==pending.botId||m.epoch!==pending.epoch||!current)throw Error('Hub tool response scope changed.');
+          clearTimeout(pending.timer);this.controlPending.delete(m.requestId);
+          if(m.error)pending.reject(Object.assign(Error(m.error),{outcome:m.outcome==='rejected'?'rejected':m.outcome==='not-sent'?'not-sent':'uncertain'}));else pending.resolve(m.result);
         } else if(authentication && m.type==='event-ack')this.journal.acknowledgeEvent(m.eventId);
       }).catch(()=>ws.close(1008,'Protocol could not be confirmed'));
     });
     ws.addEventListener('close',()=>{
       if(this.socket!==ws)return;this.journal.disconnect();this.runtime.relayOnline=false;clearInterval(this.heartbeat);
+      for(const request of [...this.controlPending.values()])if(request.ws===ws)request.fail(Error('Connection ended before hub tool confirmation; retain the original operation.'));
       if(!this.closed)this.retryTimer=setTimeout(()=>this.connect(),Math.min(30000,1000*2**Math.min(this.retry++,5)));
     });
     ws.addEventListener('error',()=>ws.close());
@@ -105,7 +159,7 @@ export class AgentTransport {
   async execute(command,row){
     if(row.state==='terminal'||row.state==='unknown'||row.state==='native-accepted'||row.state==='running'){this.receipt(row);return;}
     const payload=JSON.parse(command.payload);
-    if(!AGENT_MUTATIONS.has(payload.method))throw Error('Unsupported assigned command.');
+    if(!AGENT_MUTATIONS.has(payload.method)&&!NODE_LOGICAL_COMMANDS.has(payload.method))throw Error('Unsupported assigned command.');
     // Stop itself remains admissible while the synchronized Stop fence blocks
     // new turns. Offline/foreign/stale controls never grant interruption.
     if(payload.method==='turn.interrupt'?!this.journal.currentControl(command):!this.journal.canAdmit(command))return;
@@ -117,16 +171,21 @@ export class AgentTransport {
       this.journal.settle(command.operation_id,'unknown',{operationId:command.operation_id,reason:'Restart interrupted command admission.'});
       this.receipt(this.journal.db.prepare('SELECT * FROM node_commands WHERE operation_id=?').get(command.operation_id));return;
     }
-    if(row.state==='received'){this.receipt(row);this.journal.prepare(command.operation_id);}
+    if(NODE_LOGICAL_COMMANDS.has(payload.method)&&this.runtime.maintenance.holding())return;
+    if(row.state==='received'){this.receipt(row);if(!NODE_LOGICAL_COMMANDS.has(payload.method))this.journal.prepare(command.operation_id);}
     try {
-      const result=await this.runtime.handle(request), turnId=result?.turn?.id??result?.turnId;
-      const receipt={operationId:command.operation_id,threadId:bot.threadId,...(turnId?{turnId}:{}),result};
-      this.journal.settle(command.operation_id,turnId?'native-accepted':payload.method==='turn.send'?'unknown':'terminal',receipt);
-    } catch(error){this.journal.settle(command.operation_id,error.outcome==='rejected'?'terminal':'unknown',{operationId:command.operation_id,outcome:error.outcome??'uncertain',error:error.message});}
+      const result=NODE_LOGICAL_COMMANDS.has(payload.method)?await admitLogicalCommand(this,command,payload):await this.runtime.handle(request), turnId=result?.turn?.id??result?.turnId;
+      const terminalStatus=['completed','failed','interrupted'].includes(result?.turn?.status)?result.turn.status:null;
+      const receipt={operationId:command.operation_id,threadId:bot.threadId,...(turnId?{turnId}:{}),...(terminalStatus?{nativeStatus:terminalStatus}:{}),result};
+      this.journal.settle(command.operation_id,turnId?(terminalStatus?'terminal':'native-accepted'):payload.method==='turn.send'||NODE_LOGICAL_COMMANDS.has(payload.method)?'unknown':'terminal',receipt);
+    } catch(error){
+      if(error.deferred&&this.journal.db.prepare('SELECT state FROM node_commands WHERE operation_id=?').get(command.operation_id)?.state==='received')return;
+      this.journal.settle(command.operation_id,error.outcome==='rejected'?'terminal':'unknown',{operationId:command.operation_id,outcome:error.outcome??'uncertain',error:error.message});
+    }
     this.receipt(this.journal.db.prepare('SELECT * FROM node_commands WHERE operation_id=?').get(command.operation_id));
     this.terminal(this.journal.db.prepare('SELECT * FROM node_commands WHERE operation_id=?').get(command.operation_id));
   }
-  close(){this.closed=true;clearInterval(this.heartbeat);clearTimeout(this.retryTimer);this.journal.disconnect();this.socket?.close();}
+  close(){this.closed=true;clearInterval(this.recoveryTimer);clearInterval(this.heartbeat);clearTimeout(this.retryTimer);for(const request of [...this.controlPending.values()])request.fail(Error('Agent control connection closed; retain the original operation.'));this.journal.disconnect();this.socket?.close();}
 }
 
 export async function runAgent(config){
@@ -142,15 +201,33 @@ export async function runAgent(config){
   const runtime=new BotRuntime({store,codex,root:config.agent.workspaces,defaultTimeZone:'America/Toronto'});
   const journal=new NodeJournal(join(config.dataDirectory,'node-journal.sqlite'));
   const manager=new CodexManager({runtime,store,directory:join(config.dataDirectory,'manager')});runtime.manager=manager;
-  const originalTool=manager.callTracked.bind(manager);
-  manager.callTracked=(botId,name,args,origin)=>{
-    if(['bots_queue','bots_schedule_save','bots_schedule_delete','bots_schedule_list'].includes(name))throw Error('Global queue/schedule controls await the authorized hub adapter; no local duplicate scheduler is started.');
-    if(process.platform==='darwin' && /desktop|secure|operator/.test(name))throw Error('This Mac capability has not been validated.');
-    return originalTool(botId,name,args,origin);
-  };
   const transport=new AgentTransport({config,runtime,journal,key:nodeKey(join(config.dataDirectory,'node-key.pem')),enrollment});
+  installHubToolRoutes(runtime,manager,transport);
   await manager.listen();await runtime.start();transport.connect();
+  transport.recoveryTimer=setInterval(()=>void transport.recover().catch(error=>runtime.emit('fault',error)),5000);
   // No runtime.tick: logical queue/schedule authority must live at the hub.
   // Existing admitted native work and tool responses still stream normally.
   return {runtime,transport,journal,manager};
+}
+
+export function installHubToolRoutes(runtime,manager,transport,platform=process.platform){
+  const store=runtime.store,originalTool=manager.callTracked.bind(manager);
+  manager.callTracked=(botId,name,args,origin)=>{
+    if(HUB_TOOLS.has(name)){
+      const bot=store.bot(botId);if(origin||bot.archived||bot.archiving||bot.deletedAt)throw Error('Hub controls belong to the authenticated assigned primary bot.');
+      return transport.controlRequest(botId,name,args);
+    }
+    if(platform==='darwin' && /desktop|secure|operator/.test(name))throw Error('This Mac capability has not been validated.');
+    return originalTool(botId,name,args,origin);
+  };
+  const nativeTool=runtime.dynamicToolTracked.bind(runtime);
+  runtime.dynamicToolTracked=(bot,p,origin)=>{
+    if(!HUB_TOOLS.has(p.tool))return nativeTool(bot,p,origin);
+    const current=store.bot(bot.id);
+    if(origin||current.archived||current.archiving||current.deletedAt||p.threadId!==current.threadId||p.turnId!==current.activeTurnId||runtime.activityUnresolved(bot.id))throw Error('Hub controls require this bot’s current native primary tool authority.');
+    const args=typeof p.arguments==='string'?JSON.parse(p.arguments):p.arguments;
+    if(['bots_schedule_save','bots_schedule_delete'].includes(p.tool)&&!id(p.callId))throw Error('Original native tool call identity is required.');
+    const operationId=['bots_schedule_save','bots_schedule_delete'].includes(p.tool)?`tool:${p.callId}`:args.operationId;
+    return transport.controlRequest(bot.id,p.tool,{...args,...(operationId?{operationId}:{})});
+  };
 }

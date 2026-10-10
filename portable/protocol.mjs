@@ -6,7 +6,9 @@ import { readPrivate,savePrivate } from './private-file.mjs';
 export const PROTOCOL_VERSION = 1;
 export const RUNTIME_VERSION = '0.161.0';
 export const MAX_FRAME_BYTES = 1024 * 1024;
-export const id = value => typeof value === 'string' && /^[A-Za-z0-9:_-]{1,180}$/.test(value);
+// ISO occurrence identities contain a fractional-second period. Preserve
+// those original scheduled IDs instead of manufacturing replacement tokens.
+export const id = value => typeof value === 'string' && /^[A-Za-z0-9:_.-]{1,180}$/.test(value);
 export const digest = value => createHash('sha256').update(value).digest('hex');
 export const secret = () => randomBytes(32).toString('base64url');
 
@@ -19,6 +21,12 @@ export function canonical(value) {
   throw Error('Noncanonical protocol value.');
 }
 export const fingerprint = value => digest(canonical(value));
+export function originalNativeProof(receipt,operationId) {
+  const e=receipt?.evidence;
+  return e?.kind==='original-native-client'&&e.operationId===operationId&&receipt.operationId===operationId
+    &&id(receipt.threadId)&&id(receipt.turnId)&&e.threadId===receipt.threadId&&e.turnId===receipt.turnId
+    &&(receipt.result?.turn?.id??receipt.result?.turnId)===receipt.turnId;
+}
 export function boundedFrame(value) {
   const text = canonical(value);
   if (Buffer.byteLength(text) > MAX_FRAME_BYTES) throw Error('Protocol frame exceeds its bound.');

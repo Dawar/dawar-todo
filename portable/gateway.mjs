@@ -12,7 +12,9 @@ import { compatible, MAX_FRAME_BYTES, secret, verifySignature } from './protocol
 import { appAccessResponse } from '../worker/access.ts';
 import { signGateway } from './gateway-proof.ts';
 import { ObjectStorage } from './object-storage.mjs';
-import { HubRpc } from './hub-rpc.mjs';
+import { HubRpc,AGENT_MUTATIONS } from './hub-rpc.mjs';
+import { HubControls,hubActivation } from './hub-controls.mjs';
+import { HUB_TOOLS } from './control-protocol.mjs';
 import { verifyBotTicket } from '../lib/bots-auth.ts';
 
 const json = (response,status,body) => { response.writeHead(status,{'content-type':'application/json','cache-control':'no-store'});response.end(JSON.stringify(body)); };
@@ -28,6 +30,9 @@ export function startGateway(config) {
   const objects = new ObjectStorage(config);
   const connections = new Map(), challenges = new Map();
   const router = new HubRpc(store,connections), browsers=new Set();
+  const authority=hubActivation(config),broadcast=(owner,event)=>{for(const b of browsers)if(b.owner===owner&&b.ws.readyState===1)b.ws.send(JSON.stringify({type:'event',event}));};
+  const controls=new HubControls({path:join(config.dataDirectory,'control.sqlite'),hub:store,router,authority,broadcast,...(config.schedulerQuietWindow?{quietWindow:config.schedulerQuietWindow}:{})});router.controls=controls;
+  const scheduler=authority?setInterval(()=>void controls.tick().catch(error=>controls.emit('fault',error)),5000):null;
   const downloadDirectory=resolve(config.agentDownloadDirectory??fileURLToPath(new URL('../agent-downloads',import.meta.url)));
   const sockets = new WebSocketServer({noServer:true,maxPayload:MAX_FRAME_BYTES,perMessageDeflate:false});
   const server = createServer(async (req,res) => {
@@ -41,7 +46,7 @@ export function startGateway(config) {
         if(!result.body)return res.end();
         const {Readable}=await import('node:stream');const stream=Readable.fromWeb(result.body);stream.on('error',()=>res.destroy());res.on('close',()=>stream.destroy());return stream.pipe(res);
       }
-      if (u.pathname === '/healthz') return json(res,200,{ready:true,protocol:1,role:'hub',executionEnabled:false});
+      if (u.pathname === '/healthz') {let enabled=false;try{controls.assertWriter();enabled=true;}catch{/* Staging has no execution authority. */}return json(res,200,{ready:true,protocol:1,role:'hub',executionEnabled:enabled,source:config.hub?.source??null});}
       if (u.pathname === '/auth/login' && req.method === 'GET') {
         const a = identity.login(u.searchParams.get('return_to'));res.writeHead(303,{location:a.location,'set-cookie':a.cookie,'cache-control':'no-store'});return res.end();
       }
@@ -91,7 +96,10 @@ export function startGateway(config) {
           const p=store.stop(session.owner,b.botId,b.stopped);connections.get(p.node_id)?.send(JSON.stringify({type:'sync',...store.sync(p.node_id)}));
           return json(res,200,{placement:p,confirmation:'pending'});
         }
-        if(u.pathname==='/api/portable/commands' && req.method==='POST')return json(res,200,store.enqueue(session.owner,b.botId,b.operationId,b.payload));
+        if(u.pathname==='/api/portable/commands' && req.method==='POST'){
+          if(!AGENT_MUTATIONS.has(b.payload?.method))throw Error('Internal logical dispatch is not a browser command.');
+          return json(res,200,store.enqueue(session.owner,b.botId,b.operationId,b.payload));
+        }
         return json(res,404,{error:'Unknown portable operation.'});
       }
       if (session && !headers.has('authorization')) {
@@ -175,9 +183,15 @@ export function startGateway(config) {
           }
           store.node(nodeId);if(connections.get(nodeId)!==ws)throw Error('Connection superseded.');
           if(m.type==='sync')ws.send(JSON.stringify({type:'sync',...store.sync(nodeId,m.cursor??0)}));
-          else if(m.type==='receipt') {const receipt=store.receipt(nodeId,m.operationId,m.fingerprint,m.state,m.receipt);router.receipt(receipt);ws.send(JSON.stringify({type:'receipt-ack',operationId:m.operationId,state:receipt.state}));}
+          else if(m.type==='receipt') {const receipt=store.receipt(nodeId,m.operationId,m.fingerprint,m.state,m.receipt);router.receipt(receipt);if(authority)controls.receipt(receipt);ws.send(JSON.stringify({type:'receipt-ack',operationId:m.operationId,state:receipt.state}));}
           else if(m.type==='rpc-result')router.readResult(nodeId,m);
-          else if(m.type==='event') {const before=store.eventCursor(),sequence=store.event(nodeId,m.eventId,m.botId,m.epoch,m.event);ws.send(JSON.stringify({type:'event-ack',eventId:m.eventId,sequence}));if(sequence>before){const n=store.node(nodeId);for(const b of browsers)if(b.owner===n.owner&&b.ws.readyState===1)b.ws.send(JSON.stringify({type:'event',event:{...m.event,seq:sequence}}));}}
+          else if(m.type==='control-request'){
+            const n=store.node(nodeId),p=store.placement(n.owner,m.botId);
+            if(p.node_id!==nodeId||p.epoch!==m.epoch||!HUB_TOOLS.has(m.tool)||typeof m.requestId!=='string')throw Error('Foreign hub tool request.');
+            const answer=value=>{const current=store.placement(n.owner,m.botId);if(connections.get(nodeId)===ws&&current.node_id===nodeId&&current.epoch===m.epoch)ws.send(boundedFrame({type:'control-result',requestId:m.requestId,botId:m.botId,epoch:m.epoch,...value}));};
+            void controls.tool(n.owner,m.botId,m.tool,m.args,{kind:'authenticated-node-tool',botId:m.botId,nodeId,epoch:m.epoch}).then(result=>answer({result})).catch(error=>answer({error:error.message,outcome:error.outcome??'uncertain'})).catch(()=>ws.close(1008,'Control scope changed'));
+          }
+          else if(m.type==='event') {const before=store.eventCursor(),sequence=store.event(nodeId,m.eventId,m.botId,m.epoch,m.event);if(sequence>before)controls.nativeEvent(m.event);ws.send(JSON.stringify({type:'event-ack',eventId:m.eventId,sequence}));if(sequence>before)broadcast(store.node(nodeId).owner,{...m.event,seq:sequence});}
           else throw Error('Unknown node frame.');
         } catch {ws.close(1008,'Node frame rejected');}
       });
@@ -185,5 +199,5 @@ export function startGateway(config) {
     });
   });
   server.listen(config.gatewayPort??3210,'127.0.0.1');
-  return {server,store,application,objects,router,close:async()=>{router.close();for(const ws of sockets.clients)ws.close();await new Promise(resolve=>server.close(resolve));objects.close();store.close();application.close();}};
+  return {server,store,application,objects,router,controls,close:async()=>{clearInterval(scheduler);router.close();for(const ws of sockets.clients)ws.close();await new Promise(resolve=>server.close(resolve));controls.close();objects.close();store.close();application.close();}};
 }
