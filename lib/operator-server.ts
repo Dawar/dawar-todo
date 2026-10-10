@@ -26,6 +26,8 @@ async function operationId(sessionId: string, callId: string) {
 async function rpc<T>(userKey: string, method: string, params: Record<string, unknown>, id?: string): Promise<T> {
   const authenticatedOwner = owner(userKey);
   if (!methods.has(method)) throw new Error('Operator method is unavailable.');
+  const local = (env as unknown as { DAWAR_OPERATOR_RPC?: (owner: string, method: string, params: Record<string, unknown>, id?: string) => Promise<unknown> }).DAWAR_OPERATOR_RPC;
+  if (local) return await local(authenticatedOwner, method, params, id) as T;
   if (!env.BOTS_RELAY_URL || !env.BOTS_TICKET_SECRET) throw new Error('The bot relay is not configured.');
   const current = Math.floor(Date.now() / 1000), machineId = env.BOTS_MACHINE_ID ?? 'dawar-vm';
   const ticket = await signBotTicket({ role: 'browser', owner: authenticatedOwner, machineId, jti: crypto.randomUUID(), exp: current + 60, sessionExp: current + 900 }, env.BOTS_TICKET_SECRET);

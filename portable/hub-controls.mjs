@@ -20,6 +20,7 @@ import { activityUnresolved } from '../bot-bridge/turn-state.mjs';
 import { boundedFrame,fingerprint,id,originalNativeProof } from './protocol.mjs';
 import {foregroundSource,validateForeground} from './foreground-source.mjs';
 import {validatePrimary} from './primary-source.mjs';
+import {operatorSource,validateOperatorSource} from './operator-source.mjs';
 export { hubActivation } from './hub-authority.mjs';
 import { controlWriteGuard } from './hub-authority.mjs';
 import { HUB_READS,HUB_MUTATIONS,HUB_TOOLS,NODE_LOGICAL_COMMANDS,HUB_BURST_MUTATIONS,HUB_ROOM_READS,HUB_ROOM_MUTATIONS,HUB_PEER_READS,HUB_PEER_MUTATIONS } from './control-protocol.mjs';
@@ -213,7 +214,9 @@ export class HubControls extends EventEmitter {
     if(!attachmentIds.length&&q.input.some(part=>part.type!=='text'||part.text.startsWith('Attached file: ')))throw Error('Original saved files require recovery; nothing was sent.');
     const text=reply?.text??q.input.filter(part=>part.type==='text'&&!part.text.startsWith('Attached file: ')).map(part=>part.text).join('\n');
     const files=attachmentIds.map(id=>{const a=this.owned('attachment',id,bot.id);if(!a.ready||!/^[a-f0-9]{64}$/.test(a.sha256??'')||!Number.isSafeInteger(a.size)||a.size<0)throw Error('Queued file is unconfirmed.');return {id:a.id,sha256:a.sha256,size:a.size};});
-    return {method,params:{item:{...q,attachmentIds},text,files,...(reply?.reply?{reply:reply.reply}:{})}};
+    const original=this.store.db.prepare("SELECT json FROM records WHERE kind='operatorRequest' AND bot_id=? AND json_extract(json,'$.nativeOperationId')=? LIMIT 1").get(bot.id,q.id),operator=original&&JSON.parse(original.json);
+    if(operator)validateOperatorSource(operator,bot.id,bot.threadId,q.id);
+    return {method,params:{item:{...q,attachmentIds},text,files,...(operator?{operatorSource:operatorSource(operator)}:{}),...(reply?.reply?{reply:reply.reply}:{})}};
   }
   prepareOwnerQueueControl(owner,botId,method,params,operationId,binding,caller) {
     return this.store.transaction(()=>{

@@ -10,6 +10,8 @@ import { AGENT_READS, AGENT_MUTATIONS } from './hub-rpc.mjs';
 import { HUB_TOOLS,NODE_LOGICAL_COMMANDS,ROOM_NATIVE_READS } from './control-protocol.mjs';
 import {AgentPeers} from './agent-peers.mjs';
 import {AgentTaskRequests} from './agent-task-requests.mjs';
+import {AgentOperator} from './agent-operator.mjs';
+import {OPERATOR_NODE_READS} from './operator-source.mjs';
 import { admitLogicalCommand } from './agent-admission.mjs';
 import {settleAgentBurst} from './agent-bursts.mjs';
 import { queueResumeReceipt } from './agent-queue-resume.mjs';
@@ -45,6 +47,7 @@ export class AgentTransport {
     this.collaboration=new AgentCollaboration(this);
     this.peers=new AgentPeers(this);
     this.taskRequests=new AgentTaskRequests(this);
+    this.operator=new AgentOperator(this);
     runtime.on('event',event=>{
       if(!event.botId)return;
       const c=journal.db.prepare('SELECT * FROM node_controls WHERE bot_id=?').get(event.botId);
@@ -68,7 +71,7 @@ export class AgentTransport {
   hello(){return {protocol:PROTOCOL_VERSION,runtime:RUNTIME_VERSION,platform:process.platform,arch:process.arch,agentEpoch:this.runtime.epoch,
     // Registered native routing is staged below; keep automatic room starts
     // disabled until captured hub tool/result/question consumers are paired.
-    capabilities:{text:true,localStdio:true,registeredArtifacts:true,profileReads:true,memoryCompaction:process.platform==='linux',pdfPreview:process.platform==='linux',desktop:process.platform==='linux'&&!!this.runtime.desktops,voice:false,secureTransfer:process.platform==='linux'&&!!this.runtime.secure,centralBursts:process.platform==='linux',centralRoomDispatch:false,centralPrimaryDispatch:false,centralPeers:false,centralTaskRequests:false,autonomousGoals:false}};}
+    capabilities:{text:true,localStdio:true,registeredArtifacts:true,profileReads:true,memoryCompaction:process.platform==='linux',pdfPreview:process.platform==='linux',desktop:process.platform==='linux'&&!!this.runtime.desktops,voice:false,secureTransfer:process.platform==='linux'&&!!this.runtime.secure,centralBursts:process.platform==='linux',centralRoomDispatch:false,centralPrimaryDispatch:false,centralPeers:false,centralTaskRequests:false,centralOperator:false,autonomousGoals:false}};}
   send(value){if(this.socket?.readyState===WebSocket.OPEN)this.socket.send(JSON.stringify(value));}
   controlRequest(botId,tool,args){
     if(!HUB_TOOLS.has(tool))throw Error('Unsupported hub tool.');
@@ -222,7 +225,7 @@ export class AgentTransport {
             if(DESKTOP_READS.has(m.method)&&!this.journal.currentControl({bot_id:m.botId,epoch:m.epoch}))throw Error('Desktop controls are not synchronized.');
             if(m.method==='desktop.open'&&(!id(m.clientId)||!m.clientId.startsWith('browser:')))throw Error('A live authenticated parent browser is required.');
             const roomRead=ROOM_NATIVE_READS.has(m.method)||m.method==='portable.roomQuestion'||m.method==='execution.config'&&m.params?.contextId;
-            const work=()=>roomRead?this.collaboration.readOwner(m.method,m.botId,m.params,m.roomScope):this.runtime.handle({method:m.method,botId:m.botId,params:m.params,clientId:m.method==='desktop.open'?m.clientId:`hub:${this.enrollment.nodeId}`});
+            const work=()=>roomRead?this.collaboration.readOwner(m.method,m.botId,m.params,m.roomScope):OPERATOR_NODE_READS.has(m.method)?this.operator.read(m.method,m.botId,m.params,m.epoch):this.runtime.handle({method:m.method,botId:m.botId,params:m.params,clientId:m.method==='desktop.open'?m.clientId:`hub:${this.enrollment.nodeId}`});
             const result=m.method==='desktop.open'?await this.runtime.maintenance.admit(work):await work();
             const after=this.journal.currentControl({bot_id:m.botId,epoch:m.epoch});
             if(!after||this.socket!==ws)return;
@@ -270,11 +273,12 @@ export class AgentTransport {
     if(NODE_LOGICAL_COMMANDS.has(payload.method)&&this.runtime.maintenance.holding())return;
     if(row.state==='received'){this.receipt(row);if(!NODE_LOGICAL_COMMANDS.has(payload.method))this.journal.prepare(command.operation_id);}
     try {
+      this.operator.verifyAction(command,payload);
       const run=()=>this.runtime.handle(request);
       const result=NODE_LOGICAL_COMMANDS.has(payload.method)?await admitLogicalCommand(this,command,payload):
         DESKTOP_MUTATIONS.has(payload.method)?await this.runtime.maintenance.admit(run):await run(), turnId=result?.turn?.id??result?.turnId;
       const status=result?.turn?.status??result?.nativeStatus,terminalStatus=['completed','failed','interrupted'].includes(status)?status:null;
-      const receipt=payload.method==='portable.roomRespond'?roomAnswerReceipt(command,result):payload.method==='portable.queueResume'?queueResumeReceipt(command,result):{operationId:command.operation_id,threadId:payload.method==='portable.roomDispatch'?result?.threadId:bot.threadId,...(turnId?{turnId}:{}),...(terminalStatus?{nativeStatus:terminalStatus}:{}),...(result?.evidence?{evidence:result.evidence}:{}),result};
+      const receipt=payload.method==='portable.roomRespond'?roomAnswerReceipt(command,result):payload.method==='portable.queueResume'?queueResumeReceipt(command,result):{operationId:command.operation_id,threadId:payload.method==='portable.roomDispatch'?result?.threadId:bot.threadId,...(turnId?{turnId}:{}),...(terminalStatus?{nativeStatus:terminalStatus}:{}),...(result?.evidence?{evidence:result.evidence}:{}),...(payload.operatorSource?{operatorInputCount:this.operator.inputCount(bot.id)}:{}),result};
       this.journal.settle(command.operation_id,['portable.queueResume','portable.roomRespond'].includes(payload.method)?'terminal':turnId?(terminalStatus?'terminal':'native-accepted'):payload.method==='turn.send'||NODE_LOGICAL_COMMANDS.has(payload.method)?'unknown':'terminal',receipt);
     } catch(error){
       if(error.deferred&&this.journal.db.prepare('SELECT state FROM node_commands WHERE operation_id=?').get(command.operation_id)?.state==='received'&&!(payload.method==='portable.roomRespond'&&this.runtime.store.operation(command.operation_id)))return;

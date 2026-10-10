@@ -4,6 +4,7 @@ import { loadConfig } from './config.mjs';
 import { ObjectStorage } from './object-storage.mjs';
 import { images } from './images.mjs';
 import { HubWriteAuthority,hubActivation } from './hub-authority.mjs';
+import {operatorClient} from './operator-client.mjs';
 
 let bindings;
 function environment() {
@@ -17,7 +18,8 @@ function environment() {
     bindings = { ...c.applicationEnvironment, DB:new LocalD1(join(c.dataDirectory,'application.sqlite'),{writer}),IMAGES:images,DAWAR_OBJECT_STORAGE:objects.adapter(),
       BOTS_OWNER_EMAIL:c.owner.key,BOTS_OWNER_USER_ID:c.owner.userId,TODO_PUBLIC_URL:c.publicOrigin,
       BOTS_RELAY_URL:`${c.publicOrigin.replace(/^https:/,'wss:')}/connect`,BOTS_MACHINE_ID:c.applicationEnvironment?.BOTS_MACHINE_ID??'dawar-vm',BOTS_TICKET_SECRET:c.gatewaySecret,
-      TASK_REQUEST_SECRET:c.applicationEnvironment?.TASK_REQUEST_SECRET??c.applicationEnvironment?.BOTS_TICKET_SECRET??c.gatewaySecret };
+      TASK_REQUEST_SECRET:c.applicationEnvironment?.TASK_REQUEST_SECRET??c.applicationEnvironment?.BOTS_TICKET_SECRET??c.gatewaySecret,
+      DAWAR_OPERATOR_RPC:operatorClient(c) };
   }
   return bindings;
 }

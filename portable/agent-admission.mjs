@@ -116,6 +116,10 @@ export async function admitLogicalCommand(transport,command,payload) {
       assertControl();
       if(store.operation(command.operation_id))throw unknown('Original operation appeared during preparation; no second admission.');
       if(queued){
+        if(params.operatorSource){
+          if(params.operatorSource.nativeMethod!=='queue.add'||params.operatorSource.nativeParams.text!==text)throw refused('Original Operator queue text changed.');
+          transport.operator.capture(params.operatorSource,bot.id,bot.threadId,source.id);
+        }
         store.put('promptQueue',{...source,state:'dispatching',operationId:command.operation_id,clientUserMessageId:command.operation_id,attemptedAt:now()});
         store.put('queuedAttachments',{id:command.operation_id,botId:bot.id,queueId:source.id,revision:source.revision,attachmentIds:attachments,immutable:true});
         rememberReply(runtime,current,command.operation_id,text,params.reply);

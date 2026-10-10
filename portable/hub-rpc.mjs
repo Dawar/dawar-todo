@@ -3,10 +3,11 @@ import { fingerprint, boundedFrame, id } from './protocol.mjs';
 import { HUB_READS,HUB_MUTATIONS,ROOM_NATIVE_READS,ROOM_QUESTION_LOOKUP } from './control-protocol.mjs';
 import { DESKTOP_READS, DESKTOP_MUTATIONS, desktopCapable } from './desktop-transport.mjs';
 import {secureCapable} from './secure-transport.mjs';
+import {OPERATOR_READS,OPERATOR_MUTATIONS,OPERATOR_NATIVE,OPERATOR_NODE_READS,operatorCapable} from './operator-source.mjs';
 
 // Explicit method sets keep an arbitrary browser method from becoming remote
 // shell/native RPC authority. The real runtime still validates every request.
-export const AGENT_READS=new Set(['snapshot','runtime.info','work.read','goals.read','history','history.page','history.turn','history.view','history.log','history.detail','history.attachments','replies.prepare','replies.resolve','artifacts.list','artifacts.preview','events','usage.bot','usage.account','usage.history','attachments.read','inbox.list','runs.page','runs.turns','runs.receipt','runs.requests','runs.findings','runs.decisions','execution.config','secure.list','taskRequests.source','portable.roomQuestion',...ROOM_NATIVE_READS,...DESKTOP_READS]);
+export const AGENT_READS=new Set(['snapshot','runtime.info','work.read','goals.read','history','history.page','history.turn','history.view','history.log','history.detail','history.attachments','replies.prepare','replies.resolve','artifacts.list','artifacts.preview','events','usage.bot','usage.account','usage.history','attachments.read','inbox.list','runs.page','runs.turns','runs.receipt','runs.requests','runs.findings','runs.decisions','execution.config','secure.list','taskRequests.source','portable.roomQuestion',...OPERATOR_NODE_READS,...ROOM_NATIVE_READS,...DESKTOP_READS]);
 export const AGENT_MUTATIONS=new Set(['turn.send','turn.interrupt','requests.respond','bots.update','goals.set','goals.clear','artifacts.index',...DESKTOP_MUTATIONS]);
 const NATIVE_SNAPSHOT=Symbol('assigned-native-snapshot');
 export class HubRpc {
@@ -18,6 +19,11 @@ export class HubRpc {
     // projection. A supplied bot ID cannot expose a raw node-wide snapshot.
     if(request.method==='snapshot'&&internal!==NATIVE_SNAPSHOT)return this.snapshot(owner,clientId);
     if(request.method==='events')return {result:this.store.events(owner,request.params?.after??0,request.params?.limit??40).events};
+    if(OPERATOR_READS.has(request.method)||OPERATOR_MUTATIONS.has(request.method)){
+      if(!this.controls?.operator)throw Object.assign(Error('Canonical Operator routing is unavailable.'),{outcome:'not-sent'});
+      return {result:await this.controls.operator.request(owner,request)};
+    }
+    if(OPERATOR_NODE_READS.has(request.method)&&internal!==OPERATOR_NATIVE)throw Object.assign(Error('Operator native lookup requires a canonical original call.'),{outcome:'not-sent'});
     if(request.method==='portable.roomQuestion'&&internal!==ROOM_QUESTION_LOOKUP)throw Object.assign(Error('Question lookup is an authenticated original-answer preparation only.'),{outcome:'not-sent'});
     // Existing room cards journal requests.respond. Only a canonical original
     // room question/answer selects this alias; other native requests retain
@@ -37,6 +43,7 @@ export class HubRpc {
     if(AGENT_READS.has(request.method)){
       const binding=fingerprint(roomScope?{params:request.params??{},roomScope}:request.params??{}),cached=this.store.db.prepare('SELECT result,observed_at FROM portable_rpc_cache WHERE owner=? AND bot_id=? AND epoch=? AND method=? AND params_hash=?').get(owner,p.bot_id,p.epoch,request.method,binding);
       if(!ws){
+        if(OPERATOR_NODE_READS.has(request.method))throw Object.assign(Error('Operator native context requires its live assigned node.'),{outcome:'not-sent'});
         if(request.method==='portable.roomQuestion')throw Object.assign(Error('Answer preparation requires its live assigned question source.'),{outcome:'not-sent'});
         if(!cached)throw Object.assign(Error('Assigned node is offline; no matching cached history is available.'),{outcome:'not-sent'});
         return {result:JSON.parse(cached.result),cache:{observedAt:cached.observed_at,stale:true,nodeId:p.node_id,epoch:p.epoch}};
@@ -53,7 +60,7 @@ export class HubRpc {
     if(!id(request.operationId))throw Error('Original operation identity required.');
     // Ephemeral socket identity is routing, not an operation fingerprint. A
     // reconnect must reconcile the SAME operation from another socket.
-    const row=this.store.enqueue(owner,p.bot_id,request.operationId,{method:request.method,params:request.params??{}});
+    const row=this.store.enqueue(owner,p.bot_id,request.operationId,{method:request.method,params:request.params??{},...(internal===OPERATOR_NATIVE?{operatorSource:request.operatorSource}:{})});
     if(row.receipt){
       const r=JSON.parse(row.receipt);
       if(r.result!==undefined&&['native-accepted','running','terminal'].includes(row.state))return {result:r.result,delivery:{state:row.state,nodeId:p.node_id,epoch:p.epoch}};
@@ -97,7 +104,7 @@ export class HubRpc {
     let text;try{text=boundedFrame(m.result);}catch(error){return r.reject(Object.assign(error,{outcome:'not-sent'}));}
     // RAM tickets and screenshots must not become durable history/cache or
     // remain usable after reconnect. The browser gets this one live response.
-    if(DESKTOP_READS.has(r.method)||r.method==='secure.list')return r.resolve({result:m.result});
+    if(DESKTOP_READS.has(r.method)||r.method==='secure.list'||OPERATOR_NODE_READS.has(r.method))return r.resolve({result:m.result});
     try{this.store.transaction(()=>{
       const current=this.store.placement(r.owner,r.botId);
       if(current.node_id!==nodeId||current.epoch!==r.epoch)throw Error('Native read placement changed before persistence.');
@@ -141,6 +148,7 @@ export class HubRpc {
     if(this.controls?.authority&&placements.length&&snapshots.length===placements.length&&placements.every(p=>this.connection(p)?.portableHello?.capabilities?.centralPeers===true))
       for(const key of ['peerInbox','peerRootControls','peerBodyPaging'])common[key]=1;
     if(this.controls?.authority&&placements.length&&snapshots.length===placements.length&&placements.every(p=>this.connection(p)?.portableHello?.capabilities?.centralTaskRequests===true&&secureCapable(this.store.node(p.node_id),this.connection(p))))common.taskRequests=1;
+    if(this.controls?.operator&&placements.length&&snapshots.length===placements.length&&placements.every(p=>operatorCapable(this.store,this.connections,p)))for(const key of ['operatorCalls','operatorInputQuestions'])common[key]=1;
     if(placements.length&&snapshots.length===placements.length&&placements.every(p=>secureCapable(this.store.node(p.node_id),this.connection(p))))
       for(const key of ['secureInputs','secureResponseLifecycle'])if(snapshots.every(({s})=>s.capabilities?.[key]===1))common[key]=1;
     if(placements.some(p=>!desktopCapable(this.store.node(p.node_id),this.connection(p))))for(const key of ['botDesktops','botBrowserRetention'])delete common[key];

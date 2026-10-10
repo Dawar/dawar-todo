@@ -20,6 +20,8 @@ import { HubWriteAuthority,hubActivation } from './hub-authority.mjs';
 import { HUB_TOOLS } from './control-protocol.mjs';
 import { verifyBotTicket,verifyTaskRequestTicket } from '../lib/bots-auth.ts';
 import {createVoiceRuntime} from './voice-runtime.mjs';
+import {HubOperator} from './hub-operator.mjs';
+import {verifyOperator} from './operator-client.mjs';
 import {HubDesktopTransport,DESKTOP_MUTATIONS,desktopCapable} from './desktop-transport.mjs';
 import {HubSecureTransport} from './secure-transport.mjs';
 import {fingerprint} from './protocol.mjs';
@@ -47,6 +49,7 @@ export function startGateway(config) {
   const nodeStorage=new HubNodeStorage({hub:store,controls,application,objects,config});
   controls.nodeStorage=nodeStorage;
   const taskRequests=new HubTaskRequests({hub:store,controls,application,environment:nodeStorage.environment,owner:config.owner.key});controls.taskRequests=taskRequests;
+  controls.operator=new HubOperator(controls,config.owner.key);
   const voice=config.voice?.enabled===true?createVoiceRuntime(config,{writer,assertWriter:()=>controls.assertWriter()}):null;
   const scheduler=authority?setInterval(()=>void controls.tick().catch(error=>controls.emit('fault',error)),5000):null;
   const downloadDirectory=resolve(config.agentDownloadDirectory??fileURLToPath(new URL('../agent-downloads',import.meta.url)));
@@ -73,6 +76,13 @@ export function startGateway(config) {
         const {Readable}=await import('node:stream');const stream=Readable.fromWeb(result.body);stream.on('error',()=>res.destroy());res.on('close',()=>stream.destroy());return stream.pipe(res);
       }
       if (u.pathname === '/healthz') {let enabled=false;try{controls.assertWriter();enabled=true;}catch{/* Staging has no execution authority. */}return json(res,200,{ready:true,protocol:1,role:'hub',executionEnabled:enabled,source:config.hub?.source??null});}
+      if(u.pathname==='/internal/operator'){
+        if(req.method!=='POST'||req.headers.origin||u.search)throw Error('Invalid application Operator route.');
+        const body=await readBody(req);
+        if(body.owner!==config.owner.key||Object.keys(body).some(k=>!['owner','request'].includes(k))||!verifyOperator(config.gatewaySecret,body,r.headers))throw Error('Application Operator proof is invalid.');
+        try{return json(res,200,await router.request(body.owner,body.request,'application:operator'));}
+        catch(error){return json(res,409,{error:error.message,outcome:error.outcome??'uncertain'});}
+      }
       if (u.pathname === '/auth/login' && req.method === 'GET') {
         const a = identity.login(u.searchParams.get('return_to'));res.writeHead(303,{location:a.location,'set-cookie':a.cookie,'cache-control':'no-store'});return res.end();
       }
