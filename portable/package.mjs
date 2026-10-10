@@ -33,6 +33,9 @@ try {
   for(const file of RUNTIME_COMPANIONS)await cp(join('dist/portable',file),join(directory,'dist/portable',file));
   await mkdir(join(directory,'bot-bridge'),{recursive:true});
   await cp('dist/portable/portable-agent.mjs',join(directory,'bot-bridge/portable-agent.mjs'));
+  // Offline control staging uses the original SQLite Store constructor.
+  // Keep its exact source in the release; the bundled agent is not a substitute.
+  await cp('bot-bridge/store.mjs',join(directory,'bot-bridge/store.mjs'));
   for(const file of RUNTIME_COMPANIONS)
     await cp(join('bot-bridge',file),join(directory,'bot-bridge',file));
   await cp('bot-bridge/desktops',join(directory,'bot-bridge/desktops'),{recursive:true});
