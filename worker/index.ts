@@ -6,9 +6,14 @@ import { agentInstallerResponse } from "./agent-installer";
 import { appAccessResponse } from "./access";
 import { runTodoMinuteMaintenance } from "../db/minute-maintenance";
 import { handleTalkPhoneStream } from "./talk-phone-stream";
+import {runSourceWriterWork} from "../portable/source-writer-scope.mjs";
+import type {SourceWriterBinding} from "../portable/source-writer-admission.mjs";
+import {applicationMigrationControlResponse} from '../lib/application-migration-control';
 
 interface Env {
   ASSETS: Fetcher;
+  MIGRATION_SOURCE_WRITER_ADMISSION?:string;
+  MIGRATION_SOURCE_CONTROL?:string;
   BOTS_OWNER_EMAIL?: string;
   BOTS_OWNER_USER_ID?: string;
   DB: D1Database;
@@ -53,8 +58,7 @@ interface ExecutionContext {
 // dangerouslyAllowSVG: true in next.config.js and uncomment below:
 // const imageConfig: ImageConfig = { dangerouslyAllowSVG: true };
 
-const worker = {
-  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+async function sourceFetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     // Requests received from the Cloudflare runtime expose immutable headers.
     // Access control strips spoofable actor headers and, for API tokens, adds a
     // trusted actor identity, so give that layer a mutable request copy.
@@ -88,6 +92,39 @@ const worker = {
     }
 
     return handler.fetch(routedRequest, env, ctx);
+
+}
+
+declare const __DAWAR_BUILD__:string;
+function sourceWriterBinding(raw:string):SourceWriterBinding {
+  const expected=JSON.parse(raw) as SourceWriterBinding;
+  if(!/^[a-f0-9]{12}$/.test(__DAWAR_BUILD__) || expected.sourceId!==__DAWAR_BUILD__)throw Error('Original producer source differs.');
+  return expected;
+}
+
+const worker = {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    // Component-controller metadata has its own exact owner/capability check.
+    // It must remain reachable before installation and during a held journal.
+    if(new URL(request.url).pathname==='/api/migration/source/control')return applicationMigrationControlResponse(request,env,__DAWAR_BUILD__);
+    if (!env.MIGRATION_SOURCE_WRITER_ADMISSION) return sourceFetch(request, env, ctx);
+    try {
+      const expected = sourceWriterBinding(env.MIGRATION_SOURCE_WRITER_ADMISSION);
+      const url = new URL(request.url);
+      // Fixed read-only migration handlers authenticate the exact owner and do
+      // not update API-token use. Controller metadata cannot be journaled as an
+      // ordinary writer once this original source is draining.
+      if (request.method === 'GET' && ['/api/migration/identity','/api/migration/application'].includes(url.pathname)) return sourceFetch(request, env, ctx);
+      const result = await runSourceWriterWork({db:env.DB,expected,kind:'worker-http',
+        bodyPolicy:request.method === 'GET' && url.pathname === '/api/sync/events' ? 'read-only' : 'tracked',
+        work:scope => sourceFetch(request, env, {waitUntil:p=>scope.waitUntil(p,task=>ctx.waitUntil(task)),passThroughOnException:()=>ctx.passThroughOnException()}),
+      });
+      ctx.waitUntil(result.settled);
+      return result.value;
+    } catch {
+      return Response.json({error:'The original source is draining or its writer receipt could not be confirmed. Retain the original input.'},
+        {status:503,headers:{'Cache-Control':'private, no-store'}});
+    }
   },
   async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext) {
     const scheduledAt = new Date(controller.scheduledTime);
@@ -95,7 +132,13 @@ const worker = {
       cron: controller.cron,
       scheduledTime: scheduledAt.toISOString(),
     });
-    ctx.waitUntil(runTodoMinuteMaintenance(env, scheduledAt, "native-sites-cron"));
+    if (!env.MIGRATION_SOURCE_WRITER_ADMISSION) {
+      ctx.waitUntil(runTodoMinuteMaintenance(env, scheduledAt, "native-sites-cron"));
+      return;
+    }
+    ctx.waitUntil(runSourceWriterWork({db:env.DB,expected:sourceWriterBinding(env.MIGRATION_SOURCE_WRITER_ADMISSION),kind:'worker-scheduled',
+      work:()=>runTodoMinuteMaintenance(env, scheduledAt, "native-sites-cron"),
+    }).then(result=>result.settled));
   },
 };
 
