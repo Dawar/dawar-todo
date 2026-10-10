@@ -22,6 +22,24 @@ It is not a completed migration or a supported active-turn restart.
 
 ## Original owner identity readout
 
+The temporary `/api/migration/configuration/read` handler transfers only the
+fixed existing application/provider environment allowlist into an encrypted
+envelope. It requires the original authenticated owner, original private
+control capability, reviewed installation lineage and exact current-build
+`MIGRATION_RUNTIME_CONFIGURATION_READ` configuration. The recipient key is
+fixed in private deployment configuration; requests cannot choose a recipient,
+binding name or source. Native Codex credentials and private migration controls
+are excluded. Without configuration the handler is disabled.
+
+The owner's browser receives only ciphertext. Decode it into an owner-only
+file with the existing private migration recipient, verify the originating
+authenticated HTTPS response and all exact owner/source/read bindings, then
+prepare the new host's configuration privately. Decryption alone does not
+authenticate its source, prove a database freeze or authorize activation.
+Remove the temporary read configuration after successful handover. This does
+not renew keys, expand provider scopes, transfer credentials between bots or
+write production application records.
+
 `GET /api/migration/identity` reads the configured owner key and opaque user ID
 only when the existing authenticated user ID matches it. It rejects Todo bearer
 tokens, cross-origin requests and development authentication. Responses are

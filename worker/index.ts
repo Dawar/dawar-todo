@@ -12,6 +12,7 @@ import {sourceInstallationBinding} from "../portable/source-installation-lineage
 import {originalStorageUploadProxy} from '../lib/storage-upload-proxy';
 import {applicationMigrationReadResponse} from '../lib/application-migration-reader';
 import {applicationMigrationControlResponse} from '../lib/application-migration-control';
+import {runtimeConfigurationMigrationResponse} from '../lib/runtime-configuration-migration';
 
 interface Env {
   ASSETS: Fetcher;
@@ -20,6 +21,7 @@ interface Env {
   MIGRATION_APPLICATION_READ?:string;
   MIGRATION_SOURCE_CONTROL?:string;
   MIGRATION_SOURCE_INSTALLATION_LINEAGE?:string;
+  MIGRATION_RUNTIME_CONFIGURATION_READ?:string;
   BOTS_OWNER_EMAIL?: string;
   BOTS_OWNER_USER_ID?: string;
   DB: D1Database;
@@ -122,6 +124,7 @@ const worker = {
     // Component-controller metadata has its own exact owner/capability check.
     // It must remain reachable before installation and during a held journal.
     if(new URL(request.url).pathname==='/api/migration/source/control')return applicationMigrationControlResponse(request,env,__DAWAR_BUILD__);
+    if(new URL(request.url).pathname==='/api/migration/configuration/read')return runtimeConfigurationMigrationResponse(request,env,__DAWAR_BUILD__);
     if (!env.MIGRATION_SOURCE_WRITER_ADMISSION) return sourceFetch(request, env, ctx);
     try {
       const expected = sourceWriterBinding(env.MIGRATION_SOURCE_WRITER_ADMISSION,env.MIGRATION_SOURCE_INSTALLATION_LINEAGE);
