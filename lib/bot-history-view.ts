@@ -8,6 +8,8 @@ import { nativeWorkPlan, type NativeWorkPlan } from './native-work-plan.ts';
 export type HistoryEntry = NativeTiming & {
   /** Native turn/plan/updated display; never a native Plan-mode final item. */
   workPlan?: NativeWorkPlan;
+  /** UI navigation scope captured from an authenticated history page/event. */
+  sourceThreadId?: string;
   /** Display provenance only; never a native message or activity publisher. */
   peer?: import("./bots-types").BotPeerExchangeMeta;
   peerNativeKeys?: string[];

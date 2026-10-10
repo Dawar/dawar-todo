@@ -1,0 +1,27 @@
+.bots-timeline.has-message-ticks > .bots-messages { padding-inline-end: max(42px, calc((100% - var(--chat-width, 860px)) / 2)); }
+.bots-room-tick-timeline { position: relative; display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.bots-room-tick-timeline > .bots-room-feed { padding-inline-end: 42px; overflow-anchor: none; }
+.bots-room-feed-content > nav { display: flex; gap: .5rem; flex-wrap: wrap; }
+.bots-message-tick-rail { position: absolute; top: 12px; z-index: 2; width: 24px; color: #547766; }
+.bots-message-tick-rail button { box-sizing: border-box; background: transparent; border: 0; color: inherit; padding: 0; border-radius: 4px; cursor: pointer; }
+.bots-tick-earlier { display: flex; align-items: center; justify-content: center; width: 24px; height: 28px; }
+.bots-tick-earlier:disabled { opacity: .35; cursor: default; }
+.bots-tick-track { position: relative; width: 24px; border-right: 1px solid #b7c8bf60; }
+.bots-message-tick { position: absolute; display: flex; justify-content: center; align-items: center; width: 24px; height: 24px; }
+.bots-tick-marks { position: absolute; inset: 0; pointer-events: none; }
+.bots-message-tick .bots-tick-density { position: absolute; height: 2px; width: 6px; top: 16px; background: #809b8c; }
+.bots-message-tick:hover, .bots-tick-earlier:hover:not(:disabled) { background: #dceae380; }
+.bots-message-tick-rail button:focus-visible { outline: 2px solid #216e4e; outline-offset: 0; background: #e9f2ec; }
+.bots-tick-coverage { display: block; width: 24px; height: 16px; text-align: center; font-size: 12px; line-height: 16px; }
+.bots-tick-description { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+.bots-tick-choices { box-sizing: border-box; width: min(480px, calc(100% - 32px)); max-height: calc(100dvh - 48px); padding: 18px; color: #273d31; background: #fff; border: 1px solid #d2dfd6; border-radius: 16px; box-shadow: 0 12px 64px #162e2933; overflow: auto; }
+.bots-tick-choices::backdrop { background: #17302355; }
+.bots-tick-choices header, .bots-tick-choices footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.bots-tick-choices h2 { margin: 0; font-size: 18px; }
+.bots-tick-choices p { font-size: 13px; }
+.bots-tick-choices button { border: 1px solid #d8e3db; background: #f8faf8; border-radius: 8px; color: inherit; padding: 10px; }
+.bots-tick-choices button:focus-visible { outline: 2px solid #216e4e; outline-offset: 2px; }
+.bots-tick-choice-list { display: grid; gap: 8px; }
+.bots-tick-choice-list button { width: 100%; text-align: start; overflow-wrap: anywhere; min-height: 44px; }
+.bots-tick-choices footer { margin-top: 12px; font-size: 12px; }
+@media (max-width: 600px) { .bots-timeline.has-message-ticks > .bots-messages { padding-inline-end: 38px; } }
