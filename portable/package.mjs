@@ -1,4 +1,5 @@
 import { RUNTIME_COMPANIONS } from './runtime-companions.mjs';
+import { RUNTIME_VERSION } from './protocol.mjs';
 import { cp, mkdir, readdir, readFile, writeFile, lstat, readlink, rm } from 'node:fs/promises';
 import { resolve, join, relative, isAbsolute } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -7,7 +8,7 @@ import { createHash } from 'node:crypto';
 const source=execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim();
 if(execFileSync('git',['status','--porcelain'],{encoding:'utf8'}).trim())throw Error('Package only an exact clean source.');
 const build=JSON.parse(await readFile('dist/portable/build.json','utf8'));
-if(build.source!==source||build.nodeMajor!==24||build.protocol!==1||build.runtime!=='0.161.0')throw Error('Build the exact current portable source before packaging.');
+if(build.source!==source||build.nodeMajor!==24||build.protocol!==1||build.runtime!==RUNTIME_VERSION)throw Error('Build the exact current portable source before packaging.');
 for(const [file,field] of [['gateway.mjs','gatewaySHA256'],['portable-agent.mjs','agentSHA256']])
   if(!/^[a-f0-9]{64}$/.test(build[field]??'')||createHash('sha256').update(await readFile(join('dist/portable',file))).digest('hex')!==build[field])throw Error('Portable build bytes differ from their original manifest.');
 const download=JSON.parse(await readFile('dist/agent-downloads/current.json','utf8'));
@@ -59,7 +60,7 @@ try {
     }
   }
   await inspect(directory);
-  await writeFile(join(directory,'release-manifest.json'),JSON.stringify({version:1,source,protocol:1,runtime:'0.161.0',nodeMajor:24,platform:process.platform,arch:process.arch,executionEnabled:false,files},null,2)+'\n');
+  await writeFile(join(directory,'release-manifest.json'),JSON.stringify({version:1,source,protocol:1,runtime:RUNTIME_VERSION,nodeMajor:24,platform:process.platform,arch:process.arch,executionEnabled:false,files},null,2)+'\n');
   execFileSync('tar',['-czf',`${directory}.tar.gz`,'-C',resolve('dist/packages'),version]);
   const archive=await readFile(`${directory}.tar.gz`);
   await writeFile(`${directory}.tar.gz.sha256`,`${createHash('sha256').update(archive).digest('hex')}  ${version}.tar.gz\n`);

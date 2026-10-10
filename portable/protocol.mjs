@@ -2,9 +2,10 @@ import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, ran
 import { existsSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { readPrivate,savePrivate } from './private-file.mjs';
+import { CODEX_VERSION } from '../bot-bridge/codex-version.mjs';
 
 export const PROTOCOL_VERSION = 1;
-export const RUNTIME_VERSION = '0.161.0';
+export const RUNTIME_VERSION = CODEX_VERSION;
 export const MAX_FRAME_BYTES = 1024 * 1024;
 // ISO occurrence identities contain a fractional-second period. Preserve
 // those original scheduled IDs instead of manufacturing replacement tokens.

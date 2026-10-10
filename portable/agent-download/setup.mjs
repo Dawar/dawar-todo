@@ -4,7 +4,7 @@ import { join,resolve,dirname } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { createInterface } from 'node:readline/promises';
-import { nodeKey } from './protocol.mjs';
+import { nodeKey,RUNTIME_VERSION } from './protocol.mjs';
 import { prepareRelease } from './install-files.mjs';
 import { randomUUID } from 'node:crypto';
 const args=process.argv.slice(2),option=n=>args[args.indexOf('--'+n)+1];
@@ -25,9 +25,9 @@ async function dependencies(directory,{verifyOnly}) {
  const triple=`${process.arch==='arm64'?'aarch64':'x86_64'}-${process.platform==='darwin'?'apple-darwin':'unknown-linux-musl'}`;
  const binary=join(dirname(require.resolve(platformPackage+'/package.json')),'vendor',triple,'codex','codex');
  const version=spawnSync(binary,['--version'],{encoding:'utf8'});
- if(version.status!==0||!/^codex-cli 0\.161\.0\s*$/.test(version.stdout))throw Error('Required local Codex runtime could not be verified.');
+ if(version.status!==0||version.stdout.trim()!==`codex-cli ${RUNTIME_VERSION}`)throw Error('Required local Codex runtime could not be verified.');
  const lock=await readFile(join(directory,'package-lock.json')),bytes=await readFile(binary);
- const value={source:manifest.source,platform:process.platform,arch:process.arch,runtime:'0.161.0',lockHash:createHash('sha256').update(lock).digest('hex'),binaryHash:createHash('sha256').update(bytes).digest('hex')};
+ const value={source:manifest.source,platform:process.platform,arch:process.arch,runtime:RUNTIME_VERSION,lockHash:createHash('sha256').update(lock).digest('hex'),binaryHash:createHash('sha256').update(bytes).digest('hex')};
  if(verifyOnly){if(JSON.stringify(JSON.parse(await readFile(receiptPath,'utf8')))!==JSON.stringify(value))throw Error('Installed dependency receipt changed.');}
  else await writeFile(receiptPath,JSON.stringify(value)+'\n',{mode:0o600,flag:'wx'});
  return binary;

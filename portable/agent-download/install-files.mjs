@@ -1,9 +1,10 @@
 import { createHash,randomUUID } from 'node:crypto';
 import { readFile,mkdir,writeFile,lstat,realpath,rename,rm } from 'node:fs/promises';
 import { join,resolve,relative,isAbsolute,dirname } from 'node:path';
+import { RUNTIME_VERSION } from './protocol.mjs';
 
 export async function verifyFiles(directory,manifest) {
-  if(!/^[a-f0-9]{40}$/.test(manifest.source)||manifest.nodeMajor!==24||manifest.protocol!==1||manifest.runtime!=='0.161.0'
+  if(!/^[a-f0-9]{40}$/.test(manifest.source)||manifest.nodeMajor!==24||manifest.protocol!==1||manifest.runtime!==RUNTIME_VERSION
     ||!Array.isArray(manifest.files)||!manifest.files.length||manifest.files.length>1000)throw Error('Invalid installer manifest.');
   const seen=new Set();let total=0;
   for(const f of manifest.files){
