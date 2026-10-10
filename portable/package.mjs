@@ -1,3 +1,4 @@
+import { RUNTIME_COMPANIONS } from './runtime-companions.mjs';
 import { cp, mkdir, readdir, readFile, writeFile, lstat, readlink, rm } from 'node:fs/promises';
 import { resolve, join, relative, isAbsolute } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -17,9 +18,10 @@ try {
   await mkdir(join(directory,'dist/portable'),{recursive:true});
   await cp('dist/portable/gateway.mjs',join(directory,'dist/portable/gateway.mjs'));
   await cp('dist/portable/build.json',join(directory,'dist/portable/build.json'));
+  for(const file of RUNTIME_COMPANIONS)await cp(join('dist/portable',file),join(directory,'dist/portable',file));
   await mkdir(join(directory,'bot-bridge'),{recursive:true});
   await cp('dist/portable/portable-agent.mjs',join(directory,'bot-bridge/portable-agent.mjs'));
-  for(const file of ['manager-mcp.mjs','codex-version.mjs','native_queue_receipts.py','legacy_manager_rejections.py','legacy-manager-rejections.json','manager.mjs','memory-atomic.py','artifact-preview-worker.mjs'])
+  for(const file of RUNTIME_COMPANIONS)
     await cp(join('bot-bridge',file),join(directory,'bot-bridge',file));
   await cp('bot-bridge/desktops',join(directory,'bot-bridge/desktops'),{recursive:true});
   await cp('drizzle',join(directory,'drizzle'),{recursive:true});
