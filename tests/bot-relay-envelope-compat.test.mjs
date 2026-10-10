@@ -12,6 +12,7 @@ import { Store } from '../bot-bridge/store.mjs';
 import { BotRuntime } from '../bot-bridge/runtime.mjs';
 import { bridgeResponse } from '../bot-bridge/response.mjs';
 import { runtime as browserRuntime } from './helpers/load-ts.mjs';
+const { taskRequestFrame } = browserRuntime().load('lib/task-request-relay.ts');
 
 // Execute the exact pre-certainty relay published with the v135 baseline, not a
 // hand-written approximation of its allowlist. No Cloudflare/service is started.
@@ -28,6 +29,7 @@ function relayClass(source) {
     if (name === 'cloudflare:workers') return { DurableObject: class { constructor(ctx, env) { this.ctx = ctx; this.env = env; } } };
     if (name === '../../lib/bots-auth') return { secretMatches() { throw new Error('Unexpected authentication path'); }, verifyBotTicket() { throw new Error('Unexpected authentication path'); } };
     if (name === '../../lib/secure-relay') return { secureBrowserFrame };
+    if (name === '../../lib/task-request-relay') return { taskRequestFrame };
     throw new Error(`Unexpected relay import ${name}`);
   } }).BotRelay;
 }
