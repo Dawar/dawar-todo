@@ -316,3 +316,36 @@ only gate is insufficient. These are internal modules: no production HTTP
 reader, authorization bypass, credential or automatic source freeze is enabled.
 The original signed-in-owner transport, combined controller and real complete
 copy still require connection and acceptance.
+
+### Encrypted typed read transport
+
+`application-read-transport.mjs` provides the internal POST endpoint lane and
+Node/browser client for `/api/migration/application/read`. The complete controller
+captures the original owner ID/key, source, capture ID, recipient public key and
+immutable freeze epoch/generation/deadline. Each request carries only bounded
+typed commands, never SQL, projections, credentials or an alternative source.
+Original-owner authorization is supplied by the application's validated session
+callback and repeated across awaited reads and encryption; request headers alone
+never supply authorization to this module. POST requires the captured HTTPS
+origin and rejects cross-site/referer requests, bearer fallback and query inputs.
+
+Every page uses fresh P-256 ECDH/AES-256-GCM. Authenticated data binds the capture,
+request ID/sequence, command hash, origin, recipient, full freeze and plaintext
+hash. A previously encrypted response cannot serve a different request or freeze.
+The existing full-snapshot v1 sealing format is retained. Encryption establishes
+integrity and recipient confidentiality, **not source authentication**; the real
+owner-session HTTPS route remains an independent acceptance requirement.
+
+There is one active read per lane, with request/response byte bounds of 112 KiB and
+6 MiB, thirty-second cancellation signals and fresh complete-freeze checks. Body
+cancellation interrupts stalled stream reads. `stopAndWait()` closes new reader
+admission and waits for an admitted source read to settle before the controller
+may release its gate. A source query that cannot be cancelled must still settle;
+an expired timer or closed client does not prove the server query finished. No
+silent retry, replacement capture, source freeze/release or production mutation
+is performed by the read protocol.
+
+This transport has no connected production route. The real owner callback and
+combined authoritative controller must be connected and validated before use.
+Local D1/crypto/Request/Response fixtures are separate from genuine owner HTTPS,
+global writer exclusion, complete production capture and public rollover proof.
