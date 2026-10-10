@@ -509,6 +509,32 @@ permissions, upload data, routes or production environment have been changed by
 preparing these modules. Ordinary S3 behavior is retained when this feature is
 absent; the source-bound installation and old-permit acceptance remain due.
 
+### Original control snapshot staging
+
+`node portable/cli.mjs stage-control-snapshot --configuration PRIVATE_PATH`
+splits a closed, exact-hash original bot-control SQLite snapshot into a new hub
+`control.sqlite` and agent `native-control.sqlite`. The private configuration
+contains `version:1`, `kind:"dawar-control-role-staging"`, `source`,
+`expectedSHA256`, `hubDirectory`, `agentDirectory` and the original
+`runtimeDefaults` (`model`, `effort`, `serviceTier`). Paths are relative to that
+configuration or absolute; both destination parents must already be private.
+
+Every original table and raw row, including retained receipts and unknown
+outcomes, is verified after the real Store/HubStore schema initialization.
+Constructor repairs that would change original records refuse staging. The hub
+captures the original inherited defaults without changing individual bot
+settings. Its event sequence starts above the original retained cursor floor,
+so existing browser cursors cannot silently miss new events. No historical
+event is injected or replayed to reserve that floor.
+
+Live WAL/SHM/journal sources, changed bytes, existing destinations, overlapping
+roles and unsafe paths refuse. Failed private stages remain for review rather
+than overwriting inputs or deleting directories. Success receipts explicitly
+retain `executionEnabled:false` and `productionWriterFreezeEstablished:false`.
+This command enrolls no node, creates no placement and starts no scheduler or
+native process. The complete original application/control/file freeze and
+exact authorized activation still precede a production handover.
+
 ### Complete freeze observation
 
 `application-freeze-controller.mjs` joins the actual primary-D1 admission journal

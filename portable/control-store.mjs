@@ -199,13 +199,17 @@ export class HubStore {
     return Number(this.db.prepare('INSERT INTO portable_events(node_id,event_id,bot_id,epoch,fingerprint,event,created_at) VALUES(?,?,?,?,?,?,?)')
       .run(nodeId, eventId, botId, epoch, hash, text, now).lastInsertRowid);
   }
-  eventCursor() { return this.db.prepare('SELECT COALESCE(MAX(sequence),0) AS n FROM portable_events').get().n; }
+  eventCursor() {
+    // A role migration can reserve the original cursor floor without emitting
+    // a historical event. Empty snapshots must retain that floor as well.
+    return this.db.prepare("SELECT MAX(COALESCE((SELECT MAX(sequence) FROM portable_events),0),COALESCE((SELECT seq FROM sqlite_sequence WHERE name='portable_events'),0)) AS n").get().n;
+  }
   events(owner,cursor,limit=40) {
     if(!Number.isSafeInteger(cursor)||cursor<0||!Number.isInteger(limit)||limit<1||limit>100)throw Error('Invalid event cursor.');
     const rows=this.db.prepare('SELECT e.* FROM portable_events e JOIN portable_placements p ON p.bot_id=e.bot_id AND p.node_id=e.node_id AND p.epoch=e.epoch WHERE p.owner=? AND e.sequence>? ORDER BY e.sequence LIMIT ?').all(owner,cursor,limit);
     const selected=[];let bytes=2;
     for(const row of rows){const event={...JSON.parse(row.event),seq:row.sequence};const size=Buffer.byteLength(boundedFrame(event))+1;if(bytes+size>900*1024)break;selected.push(event);bytes+=size;}
-    return {events:selected,cursor:selected.at(-1)?.seq??cursor};
+    return {events:selected,cursor:selected.at(-1)?.seq??Math.max(cursor,this.eventCursor())};
   }
   close() { this.db.close(); }
 }

@@ -41,6 +41,19 @@ if(command==='version') {
   json(command==='export-application'
     ? await exportSQLiteApplication({source,destination,signal})
     : await importApplicationSnapshot({source,destination,signal,expectedSHA256:option('sha256')}));
+} else if(command==='stage-control-snapshot') {
+  const configuration=option('configuration');if(!configuration)throw Error('Provide the reviewed private control snapshot configuration.');
+  process.umask(0o077);
+  const {readPrivate}=await import('./private-file.mjs');
+  const {stageControlSnapshot}=await import('./control-snapshot.mjs');
+  const configPath=resolve(configuration),c=JSON.parse(readPrivate(configPath,16384));
+  const fields=['version','kind','source','expectedSHA256','hubDirectory','agentDirectory','runtimeDefaults'];
+  if(!c||Object.keys(c).length!==fields.length||Object.keys(c).some(k=>!fields.includes(k))||c.version!==1||c.kind!=='dawar-control-role-staging')throw Error('Control staging configuration differs.');
+  const path=value=>{if(typeof value!=='string'||!value)throw Error('Private control staging path required.');return resolve(dirname(configPath),value);};
+  const receipt=stageControlSnapshot({source:path(c.source),expectedSHA256:c.expectedSHA256,hubDirectory:path(c.hubDirectory),agentDirectory:path(c.agentDirectory),runtimeDefaults:c.runtimeDefaults});
+  json({staged:true,sourceSHA256:receipt.sourceSHA256,tables:receipt.sourceTables.length,originalRowsPreserved:receipt.originalRowsPreserved,
+    originalEventCursorFloor:receipt.originalEventCursorFloor,hubReceipt:join(path(c.hubDirectory),'control-stage.json'),agentReceipt:join(path(c.agentDirectory),'control-stage.json'),
+    executionEnabled:false,productionWriterFreezeEstablished:false});
 } else if(command==='export-original-application') {
   const configuration=option('configuration');if(!configuration)throw Error('Provide the reviewed private original-capture configuration path.');
   process.umask(0o077);
@@ -91,5 +104,5 @@ if(command==='version') {
   const c=loadConfig(option('config'));if(c.mode==='hub')throw Error('Hub configuration cannot start an agent.');
   const {runAgent}=await import('../bot-bridge/portable-agent.mjs');await runAgent(c);
 } else {
-  throw Error('Use version, key, pair, install, run hub|agent, export-application, import-application, export-original-application, snapshot-key, or unseal-application.');
+  throw Error('Use version, key, pair, install, run hub|agent, export-application, import-application, stage-control-snapshot, export-original-application, snapshot-key, or unseal-application.');
 }
