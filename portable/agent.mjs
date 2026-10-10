@@ -18,6 +18,7 @@ import { AgentDesktopTransport, DESKTOP_READS, DESKTOP_MUTATIONS } from './deskt
 import {AgentStartup} from './agent-startup.mjs';
 import {verifiedAgentRelease} from './runtime-release.mjs';
 import {readPrivate} from './private-file.mjs';
+import {AgentSecureTransport} from './secure-transport.mjs';
 const fingerprintLegacy=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
 export class AgentTransport {
@@ -26,6 +27,7 @@ export class AgentTransport {
     this.socket=null;this.retry=0;this.closed=false;this.pending=new Map();this.controlPending=new Map();this.cursor=journal.cursor();
     this.terminalCandidates=new Map();
     this.desktops=new AgentDesktopTransport({runtime,journal,currentSocket:()=>this.socket});
+    this.secure=new AgentSecureTransport({runtime,journal,owner:enrollment.owner,currentSocket:()=>this.socket,ready:()=>this.startupReady&&this.runtime.ready});
     this.startup=new AgentStartup(runtime,journal);
     const nativeGuard=runtime.codex.admissionGuard;
     const contexts=new AgentContextAdmission(runtime,journal);
@@ -51,7 +53,7 @@ export class AgentTransport {
     });
   }
   hello(){return {protocol:PROTOCOL_VERSION,runtime:RUNTIME_VERSION,platform:process.platform,arch:process.arch,
-    capabilities:{text:true,localStdio:true,registeredArtifacts:true,profileReads:true,memoryCompaction:process.platform==='linux',pdfPreview:process.platform==='linux',desktop:process.platform==='linux'&&!!this.runtime.desktops,voice:false,secureTransfer:false,autonomousGoals:false}};}
+    capabilities:{text:true,localStdio:true,registeredArtifacts:true,profileReads:true,memoryCompaction:process.platform==='linux',pdfPreview:process.platform==='linux',desktop:process.platform==='linux'&&!!this.runtime.desktops,voice:false,secureTransfer:process.platform==='linux'&&!!this.runtime.secure,autonomousGoals:false}};}
   send(value){if(this.socket?.readyState===WebSocket.OPEN)this.socket.send(JSON.stringify(value));}
   controlRequest(botId,tool,args){
     if(!HUB_TOOLS.has(tool))throw Error('Unsupported hub tool.');
@@ -162,6 +164,8 @@ export class AgentTransport {
         } else if(authentication && m.type==='desktop-request'){
           if(!this.startupReady||!this.runtime.ready)throw Error('Agent startup has not completed.');
           void this.desktops.message(ws,m)?.catch(()=>ws.close(1008,'Desktop scope changed'));
+        } else if(authentication && m.type==='secure-request'){
+          void this.secure.message(ws,m).catch(()=>sendHere({type:'secure-response',transportId:m.transportId,botId:m.frame?.botId,epoch:m.epoch,error:'Private form scope is unavailable.'}));
         } else if(authentication && m.type==='rpc'){
           const control=this.journal.db.prepare('SELECT * FROM node_controls WHERE bot_id=?').get(m.botId);
           if(!AGENT_READS.has(m.method)||control?.epoch!==m.epoch)throw Error('Read is outside assigned scope.');
@@ -189,6 +193,7 @@ export class AgentTransport {
     ws.addEventListener('close',()=>{
       if(this.socket!==ws)return;this.journal.disconnect();this.runtime.relayOnline=false;clearInterval(this.heartbeat);
       void this.desktops.disconnect(ws);
+      this.secure.disconnect(ws);
       for(const request of [...this.controlPending.values()])if(request.ws===ws)request.fail(Error('Connection ended before hub tool confirmation; retain the original operation.'));
       if(!this.closed)this.retryTimer=setTimeout(()=>this.connect(),Math.min(30000,1000*2**Math.min(this.retry++,5)));
     });
@@ -230,7 +235,7 @@ export class AgentTransport {
     this.receipt(this.journal.db.prepare('SELECT * FROM node_commands WHERE operation_id=?').get(command.operation_id));
     this.terminal(this.journal.db.prepare('SELECT * FROM node_commands WHERE operation_id=?').get(command.operation_id));
   }
-  close(){this.closed=true;clearInterval(this.recoveryTimer);clearInterval(this.heartbeat);clearTimeout(this.retryTimer);for(const request of [...this.controlPending.values()])request.fail(Error('Agent control connection closed; retain the original operation.'));this.journal.disconnect();void this.desktops.disconnect(this.socket);this.socket?.close();}
+  close(){this.closed=true;clearInterval(this.recoveryTimer);clearInterval(this.heartbeat);clearTimeout(this.retryTimer);for(const request of [...this.controlPending.values()])request.fail(Error('Agent control connection closed; retain the original operation.'));this.journal.disconnect();void this.desktops.disconnect(this.socket);this.secure.disconnect(this.socket);this.socket?.close();}
 }
 
 export async function runAgent(config){

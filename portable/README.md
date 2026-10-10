@@ -61,6 +61,33 @@ again. Owner-scoped replay and bounded concurrent snapshots preserve the
 existing browser representations. Only observed common capabilities are
 advertised; platform capability limits still apply.
 
+### Linux private forms
+
+The existing browser encrypted-form channel routes through the authenticated
+hub directly to the assigned Linux agent's original `SecureInputs` instance.
+Both enrollment and the current node connection must advertise secure transfer.
+Owner, browser session, original form/thread, placement epoch and exact node
+socket are checked before access and again after asynchronous work. The agent
+must have completed startup and received fresh hub controls. Task Request
+guest forms use a separate contract and cannot use this channel.
+
+Ciphertext, form keys and transfer results remain in flight; they do not enter
+the mailbox, RPC cache, history or event journal. The normal snapshot includes
+only scoped form metadata. `secure.list` requires a live capable node and is
+not cached. Original volatile credentials, expiration, explicit model-read
+choice and same-ciphertext receipt verification stay in the existing agent.
+Browser disconnect does not delete a credential or imply submission failure.
+
+Requests have bounded RAM routing (64 hub requests, four per browser, 32 per
+agent) and a 15-second response deadline. Unknown delivery is never replayed.
+A durable hub work record contains only random lifecycle metadata, never the
+form payload. An unconfirmed sent transfer retains an unknown work record and
+blocks a later write freeze; neither age nor a retry clears it. Node maintenance
+also tracks the actual transfer and original volatile form state. Existing Stop
+permits scoped status/deletion while native admission keeps its separate fence.
+This source contract is staged; production and genuine owner acceptance are
+recorded separately in the migration checkpoint.
+
 ## Current unfinished acceptance
 
 Remaining logical controls, full agent runtime/browser routing, local

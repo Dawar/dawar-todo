@@ -4,7 +4,7 @@ import {digest} from './protocol.mjs';
 
 const contexts=new AsyncLocalStorage();
 const failed=()=>Object.assign(Error('The exact local writer admission or drain could not be confirmed.'),{outcome:'not-sent'});
-const kinds=new Set(['artifact-register','object-put','object-request','object-copy','object-upload','object-cleanup','voice-request','voice-tick']);
+const kinds=new Set(['artifact-register','object-put','object-request','object-copy','object-upload','object-cleanup','voice-request','voice-tick','secure-transfer']);
 const binding=a=>({writerId:a?.writerId,epoch:a?.epoch,source:a?.source??''});
 const same=(r,a)=>r&&r.writer_id===a.writerId&&r.epoch===a.epoch&&r.source===a.source;
 const validState=r=>r&&['open','draining','frozen'].includes(r.phase)&&Number.isSafeInteger(r.generation)&&r.generation>=0&&Number.isSafeInteger(r.deadline)&&
@@ -133,7 +133,7 @@ export class LocalWriterDrain {
   }
   observe(operationId){
     const row=this.original(operationId),counts={active:0,unknown:0,settled:0};
-    const foreign=this.db.prepare("SELECT count(*) AS n FROM portable_async_work WHERE state<>'settled' AND (writer_id<>? OR epoch<>? OR source<>? OR kind NOT IN ('artifact-register','object-put','object-request','object-copy','object-upload','object-cleanup','voice-request','voice-tick'))").get(this.expected.writerId,this.expected.epoch,this.expected.source).n;
+    const foreign=this.db.prepare("SELECT count(*) AS n FROM portable_async_work WHERE state<>'settled' AND (writer_id<>? OR epoch<>? OR source<>? OR kind NOT IN ('artifact-register','object-put','object-request','object-copy','object-upload','object-cleanup','voice-request','voice-tick','secure-transfer'))").get(this.expected.writerId,this.expected.epoch,this.expected.source).n;
     for(const r of this.db.prepare('SELECT state,count(*) AS n FROM portable_async_work GROUP BY state').all()){
       if(!Object.hasOwn(counts,r.state)||!Number.isSafeInteger(r.n))throw failed();counts[r.state]=r.n;
     }

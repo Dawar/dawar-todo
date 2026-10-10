@@ -20,6 +20,7 @@ import { HUB_TOOLS } from './control-protocol.mjs';
 import { verifyBotTicket } from '../lib/bots-auth.ts';
 import {createVoiceRuntime} from './voice-runtime.mjs';
 import {HubDesktopTransport,DESKTOP_MUTATIONS,desktopCapable} from './desktop-transport.mjs';
+import {HubSecureTransport} from './secure-transport.mjs';
 
 const json = (response,status,body) => { response.writeHead(status,{'content-type':'application/json','cache-control':'no-store'});response.end(JSON.stringify(body)); };
 async function readBody(req) {
@@ -37,6 +38,7 @@ export function startGateway(config) {
   const connections = new Map(), challenges = new Map();
   const router = new HubRpc(store,connections), browsers=new Set();
   const desktop=new HubDesktopTransport({store,connections,parent:(owner,id)=>[...browsers].some(b=>b.owner===owner&&b.clientId===id&&!b.desktop&&b.ws.readyState===1&&b.expiresAt>Date.now()&&b.valid())});
+  const secure=new HubSecureTransport({store,connections,parent:(owner,id)=>[...browsers].some(b=>b.owner===owner&&b.clientId===id&&!b.desktop&&b.ws.readyState===1&&b.expiresAt>Date.now()&&b.valid())});
   const broadcast=(owner,event)=>{for(const b of browsers)if(b.owner===owner&&!b.desktop&&b.expiresAt>Date.now()&&b.valid()&&b.ws.readyState===1)b.ws.send(JSON.stringify({type:'event',event}));};
   const controls=new HubControls({path:join(config.dataDirectory,'control.sqlite'),hub:store,router,authority,broadcast,...(config.schedulerQuietWindow?{quietWindow:config.schedulerQuietWindow}:{})});router.controls=controls;
   const nodeStorage=new HubNodeStorage({hub:store,controls,application,objects,config});
@@ -196,6 +198,14 @@ export function startGateway(config) {
               return;
             }
             if(desktopBrowser){if(expiresAt<=Date.now()||m.type!=='desktop')throw Error('Desktop session invalid.');desktop.frame(clientId,m);return;}
+            if(expiresAt>Date.now()&&m.type==='secure'){
+              void writer.runWork('secure-transfer',async()=>{
+                try{return await secure.request(session.owner,clientId,m);}
+                catch(error){if(error.sent)writer.unknownWork();throw error;}
+              }).then(result=>send({type:'secure.response',id:m.id,result}))
+                .catch(()=>send({type:'secure.response',id:m.id,error:'Private form transfer unavailable or unconfirmed. Retain the original encrypted submission.'}));
+              return;
+            }
             if(expiresAt<=Date.now()||m.type!=='request')throw Error('Session or request invalid.');
             // Authentication is serialized; independent owner requests are
             // not. Stop cannot wait behind a slow turn-send acknowledgment.
@@ -203,7 +213,7 @@ export function startGateway(config) {
               catch(e){send({type:'response',id:m.id,error:e.message,outcome:e.outcome==='rejected'?'rejected':e.outcome==='not-sent'?'not-sent':'uncertain',delivery:e.delivery});}})();
           }).catch(()=>ws.close(1008,'Owner request rejected'));
         });
-        ws.on('close',()=>{clearTimeout(timeout);desktop.end(clientId);desktop.disconnectParent(clientId);for(const b of browsers)if(b.ws===ws)browsers.delete(b);});
+        ws.on('close',()=>{clearTimeout(timeout);desktop.end(clientId);desktop.disconnectParent(clientId);secure.disconnectParent(clientId);for(const b of browsers)if(b.ws===ws)browsers.delete(b);});
       });return;
     }
     if(u.pathname!=='/nodes/connect' || req.headers.origin){socket.destroy();return;}
@@ -220,7 +230,7 @@ export function startGateway(config) {
             if(m.type!=='authenticate'||Date.now()-createdAt>10000||!challenges.has(connectionId)
               ||!verifySignature(n.public_key,{nodeId:m.nodeId,challenge,connectionId,hello:m.hello},m.proof))throw Error('Node proof invalid.');
             challenges.delete(connectionId);clearTimeout(timeout);nodeId=n.id;
-            const prior=connections.get(nodeId);if(prior)desktop.disconnectNode(prior);prior?.close(1008,'Connection superseded');ws.portableHello=m.hello;connections.set(nodeId,ws);
+            const prior=connections.get(nodeId);if(prior){desktop.disconnectNode(prior);secure.disconnectNode(prior);}prior?.close(1008,'Connection superseded');ws.portableHello=m.hello;connections.set(nodeId,ws);
             ws.send(JSON.stringify({type:'sync',...store.sync(nodeId,m.cursor??0)}));return;
           }
           store.node(nodeId);if(connections.get(nodeId)!==ws)throw Error('Connection superseded.');
@@ -228,6 +238,7 @@ export function startGateway(config) {
           else if(m.type==='receipt') {const receipt=store.receipt(nodeId,m.operationId,m.fingerprint,m.state,m.receipt);router.receipt(receipt);if(authority)controls.receipt(receipt);ws.send(JSON.stringify({type:'receipt-ack',operationId:m.operationId,state:receipt.state}));}
           else if(m.type==='rpc-result')router.readResult(nodeId,m);
           else if(m.type==='desktop-response')desktop.receive(nodeId,ws,m);
+          else if(m.type==='secure-response')secure.receive(nodeId,ws,m);
           else if(m.type==='control-request'){
             const n=store.node(nodeId),p=store.placement(n.owner,m.botId);
             if(p.node_id!==nodeId||p.epoch!==m.epoch||!HUB_TOOLS.has(m.tool)||typeof m.requestId!=='string')throw Error('Foreign hub tool request.');
@@ -244,10 +255,10 @@ export function startGateway(config) {
           else throw Error('Unknown node frame.');
         } catch {ws.close(1008,'Node frame rejected');}
       });
-      ws.on('close',()=>{clearTimeout(timeout);challenges.delete(connectionId);desktop.disconnectNode(ws);if(connections.get(nodeId)===ws)connections.delete(nodeId);});
+      ws.on('close',()=>{clearTimeout(timeout);challenges.delete(connectionId);desktop.disconnectNode(ws);secure.disconnectNode(ws);if(connections.get(nodeId)===ws)connections.delete(nodeId);});
     });
   });
   server.listen(config.gatewayPort??3210,'127.0.0.1');
   let closing;
-  return {server,store,application,objects,router,controls,voice,desktop,close:()=>closing??=(async()=>{if(voice)await voice.close();clearInterval(scheduler);desktop.close();router.close();for(const ws of sockets.clients)ws.close();await new Promise(resolve=>server.close(resolve));writer.close();controls.close();objects.close();store.close();application.close();})()};
+  return {server,store,application,objects,router,controls,voice,desktop,secure,close:()=>closing??=(async()=>{if(voice)await voice.close();clearInterval(scheduler);desktop.close();secure.close();router.close();for(const ws of sockets.clients)ws.close();await new Promise(resolve=>server.close(resolve));writer.close();controls.close();objects.close();store.close();application.close();})()};
 }

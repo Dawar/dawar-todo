@@ -2,10 +2,11 @@ import { randomUUID } from 'node:crypto';
 import { fingerprint, boundedFrame, id } from './protocol.mjs';
 import { HUB_READS,HUB_MUTATIONS } from './control-protocol.mjs';
 import { DESKTOP_READS, DESKTOP_MUTATIONS, desktopCapable } from './desktop-transport.mjs';
+import {secureCapable} from './secure-transport.mjs';
 
 // Explicit method sets keep an arbitrary browser method from becoming remote
 // shell/native RPC authority. The real runtime still validates every request.
-export const AGENT_READS=new Set(['snapshot','runtime.info','work.read','goals.read','history','history.page','history.turn','history.view','history.log','history.detail','history.attachments','replies.prepare','replies.resolve','artifacts.list','artifacts.preview','events','usage.bot','usage.account','usage.history','attachments.read','inbox.list','runs.page','runs.turns','runs.receipt','runs.requests','runs.findings','runs.decisions','execution.config',...DESKTOP_READS]);
+export const AGENT_READS=new Set(['snapshot','runtime.info','work.read','goals.read','history','history.page','history.turn','history.view','history.log','history.detail','history.attachments','replies.prepare','replies.resolve','artifacts.list','artifacts.preview','events','usage.bot','usage.account','usage.history','attachments.read','inbox.list','runs.page','runs.turns','runs.receipt','runs.requests','runs.findings','runs.decisions','execution.config','secure.list',...DESKTOP_READS]);
 export const AGENT_MUTATIONS=new Set(['turn.send','turn.interrupt','requests.respond','bots.update','goals.set','goals.clear','artifacts.index',...DESKTOP_MUTATIONS]);
 export class HubRpc {
   constructor(store,connections){this.store=store;this.connections=connections;this.reads=new Map();this.writes=new Map();}
@@ -19,6 +20,7 @@ export class HubRpc {
       return {result:await this.controls.request(owner,request)};
     }
     const p=this.store.placement(owner,request.botId),ws=this.connection(p);
+    if(request.method==='secure.list'&&!secureCapable(this.store.node(p.node_id),ws))throw Object.assign(Error('Private form state requires the live assigned Linux node.'),{outcome:'not-sent'});
     if((DESKTOP_READS.has(request.method)||DESKTOP_MUTATIONS.has(request.method))&&!desktopCapable(this.store.node(p.node_id),ws))
       throw Object.assign(Error('The assigned Linux desktop is offline or unavailable.'),{outcome:'not-sent'});
     if(AGENT_READS.has(request.method)){
@@ -77,7 +79,7 @@ export class HubRpc {
     const text=boundedFrame(m.result);
     // RAM tickets and screenshots must not become durable history/cache or
     // remain usable after reconnect. The browser gets this one live response.
-    if(DESKTOP_READS.has(r.method))return r.resolve({result:m.result});
+    if(DESKTOP_READS.has(r.method)||r.method==='secure.list')return r.resolve({result:m.result});
     try{this.store.transaction(()=>{
       const current=this.store.placement(r.owner,r.botId);
       if(current.node_id!==nodeId||current.epoch!==r.epoch)throw Error('Native read placement changed before persistence.');
@@ -117,10 +119,12 @@ export class HubRpc {
     // A runtime's generic capability is not evidence that the hub transport
     // has implemented its consumer. Keep unfinished portable controls hidden.
     for(const key of ['taskRequests','backgroundRunLanes','scheduleDecisions','peerInbox','peerRootControls','peerBodyPaging','collaborationRooms','operatorCalls','operatorInputQuestions','secureInputs','secureResponseLifecycle','messageBursts','burstDiscard','burstControls','burstQueue','taskQueues','teams','botAdministration'])delete common[key];
+    if(placements.length&&snapshots.length===placements.length&&placements.every(p=>secureCapable(this.store.node(p.node_id),this.connection(p))))
+      for(const key of ['secureInputs','secureResponseLifecycle'])if(snapshots.every(({s})=>s.capabilities?.[key]===1))common[key]=1;
     if(placements.some(p=>!desktopCapable(this.store.node(p.node_id),this.connection(p))))for(const key of ['botDesktops','botBrowserRetention'])delete common[key];
     if(placements.some(p=>JSON.parse(this.store.node(p.node_id).hello).capabilities.autonomousGoals!==true))delete common.nativeGoals;
     const schedules=this.controls?placements.flatMap(p=>this.controls.store.list('schedule',p.bot_id)):[],runs=this.controls?placements.flatMap(p=>this.controls.store.list('run',p.bot_id)).sort((a,b)=>b.scheduledAt.localeCompare(a.scheduledAt)).slice(0,100):scoped('runs');
-    return {result:{...first,cursor,bots,workByBot:scoped('workByBot'),pending:scoped('pending'),schedules,runs,activeScheduledTurns:scoped('activeScheduledTurns'),ready:snapshots.length===placements.length&&placements.every(p=>!!this.connection(p)),
+    return {result:{...first,cursor,bots,workByBot:scoped('workByBot'),pending:scoped('pending'),secureInputs:scoped('secureInputs'),schedules,runs,activeScheduledTurns:scoped('activeScheduledTurns'),ready:snapshots.length===placements.length&&placements.every(p=>!!this.connection(p)),
       capabilities:{...common,portableAgents:1}},cache:{observedAt:Date.now(),stale:snapshots.length<placements.length}};
   }
   close(){for(const r of this.reads.values()){clearTimeout(r.timer);r.reject(Error('Hub connection ended.'));}for(const values of this.writes.values())for(const w of values){clearTimeout(w.timer);w.reject(Object.assign(Error('Hub connection ended; retain original operation.'),{outcome:'uncertain'}));}this.reads.clear();this.writes.clear();}
