@@ -306,6 +306,18 @@ export class SipCallController {
 
   async fetch(request: Request) {
     const url = new URL(request.url);
+    if(url.pathname==='/migration/status'){
+      if(request.method!=='GET'||url.search||request.body)return new Response('Original controller read unavailable.',{status:400});
+      const before=await this.readState();
+      const identity=before?{callSid:before.callSid,providerCallId:before.providerCallId,ended:before.ended}:null;
+      const alarm=await this.durableState.storage.getAlarm();
+      const after=await this.readState();
+      const current=after?{callSid:after.callSid,providerCallId:after.providerCallId,ended:after.ended}:null;
+      if(JSON.stringify(identity)!==JSON.stringify(current))return new Response('Original controller changed.',{status:409});
+      return Response.json({callSid:current?.callSid??null,providerCallId:current?.providerCallId??null,ended:current?.ended??null,
+        connected:socketOpen(this.socket),connecting:this.connecting!==null,alarmPending:alarm!==null,observedAt:Date.now(),
+        fullEffectSettlementEstablished:false},{headers:{'Cache-Control':'private, no-store'}});
+    }
     if (url.pathname === "/start" && request.method === "POST") {
       const payload = await request.json() as Partial<ControllerState>;
       if (

@@ -36,9 +36,18 @@ file with the existing private migration recipient, verify the originating
 authenticated HTTPS response and all exact owner/source/read bindings, then
 prepare the new host's configuration privately. Decryption alone does not
 authenticate its source, prove a database freeze or authorize activation.
-Remove the temporary read configuration after successful handover. This does
+Remove the temporary read configuration after successful capture. This does
 not renew keys, expand provider scopes, transfer credentials between bots or
 write production application records.
+
+The original voice control supports `controllers.read` with only an `action`
+field. Private `VOICE_LEGACY_CONTROLLER_READ` fixes up to 32 original
+call/provider pairs and the existing source/installation/producer binding.
+Authorization precedes controller reads. Reads are metadata-only, use at most
+two concurrent controller requests, and preserve state and alarms. Current
+ended/connection/alarm metadata can resolve a stale application projection;
+it does not establish settlement of all old HTTP, tool, or media socket work.
+The returned full-effect and full-writer proof flags therefore remain false.
 
 `GET /api/migration/identity` reads the configured owner key and opaque user ID
 only when the existing authenticated user ID matches it. It rejects Todo bearer

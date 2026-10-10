@@ -1,7 +1,8 @@
 import {createVoiceMigrationLedger,type VoiceBinding} from './migration-ledger.mjs';
+import {readLegacySipControllers} from './legacy-controller-read';
 
 type Configuration=VoiceBinding & {version:1;credential:string;cutoverId:string;releaseId:string};
-export type VoiceMigrationEnvironment={VOICE_WRITER_CONTROL?:string;VOICE_WRITER_ADMISSION?:string;VOICE_WRITER_COORDINATOR?:DurableObjectNamespace;VOICE_EFFECT_SCOPE?:VoiceEffectScope;VOICE_RUNTIME?:unknown};
+export type VoiceMigrationEnvironment={VOICE_WRITER_CONTROL?:string;VOICE_WRITER_ADMISSION?:string;VOICE_LEGACY_CONTROLLER_READ?:string;SIP_CONTROLLERS?:DurableObjectNamespace;VOICE_WRITER_COORDINATOR?:DurableObjectNamespace;VOICE_EFFECT_SCOPE?:VoiceEffectScope;VOICE_RUNTIME?:unknown};
 const bad=()=>Error('Original voice work is held or unconfirmed.');
 const headers={'Cache-Control':'private, no-store','Content-Type':'application/json','X-Content-Type-Options':'nosniff'};
 function exact(v:unknown,fields:string[]){if(!v||typeof v!=='object'||Array.isArray(v)||Object.keys(v).length!==fields.length||Object.keys(v).some(k=>!fields.includes(k)))throw bad();}
@@ -57,6 +58,7 @@ export async function voiceMigrationControl(request:Request,env:VoiceMigrationEn
   if(!env.VOICE_WRITER_CONTROL)return Response.json({error:'Voice migration control is not enabled.'},{status:404,headers});
   try{const c=configuration(env);if(!c)throw bad();const u=new URL(request.url);if(u.pathname!=='/api/migration/voice/control'||u.search)throw bad();await authorize(request,c);const input=await body(request);
     if(input.action==='install'||input.action==='read'){exact(input,['action']);return Response.json(await command(env,c,input.action,{}),{headers});}
+    if(input.action==='controllers.read'){exact(input,['action']);return Response.json(await readLegacySipControllers(env,binding(c)),{headers});}
     if(input.action==='drain'){exact(input,['action','expiresAt']);return Response.json(await command(env,c,'drain',{operationId:c.cutoverId,expiresAt:input.expiresAt}),{headers});}
     if(input.action==='release'){exact(input,['action','generation']);return Response.json(await command(env,c,'release',{operationId:c.releaseId,drainId:c.cutoverId,generation:input.generation}),{headers});}
     if(input.action==='receipt'){exact(input,['action','receipt']);const ids={install:c.installationId,drain:c.cutoverId,release:c.releaseId};if(!Object.hasOwn(ids,String(input.receipt)))throw bad();return Response.json(await command(env,c,'receipt',{operationId:ids[input.receipt as keyof typeof ids]}),{headers});}
