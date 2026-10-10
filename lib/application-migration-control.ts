@@ -13,7 +13,7 @@ export async function applicationMigrationControlResponse(request:Request,enviro
       if(!journal||Object.keys(journal).length!==3||Object.keys(journal).some(k=>!['sourceId','installationId','producerSHA256'].includes(k))||
           journal.sourceId!==build||journal.installationId!==configuration.journal?.installationId||journal.producerSHA256!==configuration.journal?.producerSHA256)throw Error('Original admission source differs.');
     }
-    const endpoint=createOriginalSourceControl({db:environment.DB,configuration,build,authorizeOwner:async (r:Request)=>{
+    const endpoint=createOriginalSourceControl({db:environment.DB,configuration,build,admissionEnabled:Boolean(environment.MIGRATION_SOURCE_WRITER_ADMISSION),authorizeOwner:async (r:Request)=>{
       const response=migrationIdentityResponse(new Request(r.url,{method:'GET',headers:r.headers}),environment);
       if(response.status!==200)throw Error('Existing signed-in owner required.');
     }});

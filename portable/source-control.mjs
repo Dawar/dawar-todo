@@ -43,12 +43,12 @@ async function sameCredential(actual,expected){
 // Private deployment configuration and the existing authenticated owner are
 // both required. Commands cannot supply SQL, source bindings or writer counts.
 // This endpoint controls two component fences; it never proves a full cutover.
-export function createOriginalSourceControl({db,configuration,build,authorizeOwner}){
+export function createOriginalSourceControl({db,configuration,build,authorizeOwner,admissionEnabled=false}){
   exact(configuration,['version','kind','sourceOrigin','sourceId','credential','journal','database','cutoverId','databaseReleaseId','journalReleaseId']);
   exact(configuration.journal,['installationId','producerSHA256']);exact(configuration.database,['installId']);
   const c=JSON.parse(JSON.stringify(configuration)),origin=new URL(c.sourceOrigin);
   if(c.version!==1||c.kind!=='dawar-original-source-control'||origin.protocol!=='https:'||origin.origin!==c.sourceOrigin||origin.username||origin.password||
-      !/^[a-f0-9]{12}$/.test(build??'')||c.sourceId!==build||typeof c.credential!=='string'||!/^[A-Za-z0-9_-]{32,512}$/.test(c.credential)||typeof authorizeOwner!=='function')throw failure();
+      !/^[a-f0-9]{12}$/.test(build??'')||c.sourceId!==build||typeof c.credential!=='string'||!/^[A-Za-z0-9_-]{32,512}$/.test(c.credential)||typeof authorizeOwner!=='function'||typeof admissionEnabled!=='boolean')throw failure();
   const journal={sourceId:build,installationId:id(c.journal.installationId),producerSHA256:sha(c.journal.producerSHA256)};
   const installId=id(c.database.installId),cutoverId=id(c.cutoverId),dbReleaseId=id(c.databaseReleaseId),journalReleaseId=id(c.journalReleaseId);
   if(new Set([journal.installationId,installId,cutoverId,dbReleaseId,journalReleaseId]).size!==5)throw failure();
@@ -86,11 +86,13 @@ export function createOriginalSourceControl({db,configuration,build,authorizeOwn
         case 'database.read':result=await readD1WriteFenceInstallation({db,expected});break;
         case 'database.receipt':result=await readD1WriteFenceControlReceipt({db,expected,kind:command.receiptKind,operationId:command.operationId,expiresAt:command.expiresAt,generation:command.generation,freezeId:cutoverId});break;
         case 'journal.drain':{
+          if(!admissionEnabled)throw failure();
           const database=await readD1WriteFenceInstallation({db,expected});
           if(database.phase!=='open')throw failure();mayHaveWritten=true;result=await beginSourceWriterDrain({db,expected:journal,operationId:cutoverId,expiresAt:command.expiresAt});break;
         }
         case 'journal.observe':result=await observeSourceWriterDrain({db,expected:journal,operationId:cutoverId});break;
         case 'database.freeze':{
+          if(!admissionEnabled)throw failure();
           const held=await observeSourceWriterDrain({db,expected:journal,operationId:cutoverId});
           if(held.status!=='idle'||held.activeWriters!==0||held.unknownWriters!==0||held.expiresAt!==command.expiresAt)throw failure();
           mayHaveWritten=true;result=await freezeD1Writes({db,expected,operationId:cutoverId,expiresAt:command.expiresAt});break;
@@ -105,7 +107,7 @@ export function createOriginalSourceControl({db,configuration,build,authorizeOwn
       }
       request.signal.throwIfAborted();
       const text=JSON.stringify({version:1,kind:'dawar-original-source-control-result',sourceId:build,action:command.action,operationId:command.operationId,result,
-        componentScopeOnly:true,fullProductionWriterFreezeEstablished:false,nativeActivationAuthorized:false});
+        componentScopeOnly:true,requestAdmissionEnabled:admissionEnabled,fullProductionWriterFreezeEstablished:false,nativeActivationAuthorized:false});
       if(encoder.encode(text).length>16*1024)throw failure();return new Response(text,{headers:{...headers,'Content-Type':'application/json'}});
     }catch{
       const unknown=mayHaveWritten&&command&&writes.has(command.action);

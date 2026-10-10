@@ -480,7 +480,10 @@ The ordered preparation is `journal.install`, `journal.read`, `database.plan`,
 then `database.install` with the returned exact schema hash. The plan includes
 the three journal tables. Enabling request/job admission is a separate private
 configuration change; successful journal installation does not establish that
-old Worker lifetimes are tracked. A held original journal is required before
+old Worker lifetimes are tracked. Drain and database freeze require the actual
+matching admission configuration to be enabled; a standalone installed journal
+cannot assert request/job admission. Results report `requestAdmissionEnabled`.
+A held original journal is required before
 `database.freeze`; active or unknown lifetimes cannot be waived. The same
 original cutover ID and immutable deadline, at most 900 seconds, bind both
 components. `journal.observe` and `database.observe` remain reachable while
