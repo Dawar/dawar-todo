@@ -1,5 +1,4 @@
 import { join, isAbsolute } from 'node:path';
-import { readFile } from 'node:fs/promises';
 import { randomUUID,createHash } from 'node:crypto';
 import { Store } from '../bot-bridge/store.mjs';
 import { Codex } from '../bot-bridge/codex.mjs';
@@ -16,14 +15,18 @@ import { artifactInput } from './node-storage-contract.mjs';
 import { AgentContextAdmission } from './context-admission.mjs';
 import { BotDesktops } from '../bot-bridge/desktops.mjs';
 import { AgentDesktopTransport, DESKTOP_READS, DESKTOP_MUTATIONS } from './desktop-transport.mjs';
+import {AgentStartup} from './agent-startup.mjs';
+import {verifiedAgentRelease} from './runtime-release.mjs';
+import {readPrivate} from './private-file.mjs';
 const fingerprintLegacy=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
 export class AgentTransport {
-  constructor({ config, runtime, journal, key, enrollment, socketFactory=url=>new WebSocket(url) }) {
-    Object.assign(this,{config,runtime,journal,key,enrollment,socketFactory});
+  constructor({ config, runtime, journal, key, enrollment, startupReady=true, socketFactory=url=>new WebSocket(url) }) {
+    Object.assign(this,{config,runtime,journal,key,enrollment,socketFactory,startupReady});
     this.socket=null;this.retry=0;this.closed=false;this.pending=new Map();this.controlPending=new Map();this.cursor=journal.cursor();
     this.terminalCandidates=new Map();
     this.desktops=new AgentDesktopTransport({runtime,journal,currentSocket:()=>this.socket});
+    this.startup=new AgentStartup(runtime,journal);
     const nativeGuard=runtime.codex.admissionGuard;
     const contexts=new AgentContextAdmission(runtime,journal);
     runtime.codex.admissionGuard=(method,params)=>{
@@ -81,16 +84,26 @@ export class AgentTransport {
     this.receipt(this.journal.db.prepare('SELECT * FROM node_commands WHERE operation_id=?').get(row.operation_id));
   }
   async recover(){
-    if(this.recovering||this.closed||!this.runtime.ready)return;this.recovering=true;
+    if(this.recovering||this.closed||!this.startupReady||!this.runtime.ready)return;this.recovering=true;
     try{
+      await this.startup.recover();
       let rows=this.journal.db.prepare("SELECT rowid AS rowNumber,* FROM node_commands WHERE rowid>? AND state IN ('received','dispatching','unknown','native-accepted','running') ORDER BY rowid LIMIT 2").all(this.recoveryCursor??0);
       if(!rows.length){this.recoveryCursor=0;return;}
       for(const row of rows){
         this.recoveryCursor=row.rowNumber;
         const command=JSON.parse(row.command),payload=JSON.parse(command.payload),bot=this.runtime.store.bot(command.bot_id);
+        if(row.state==='received'){
+          if(this.pending.has(row.operation_id))continue;
+          const work=Promise.resolve().then(()=>this.execute(command,row));this.pending.set(row.operation_id,work);
+          try{await work;}finally{this.pending.delete(row.operation_id);}continue;
+        }
         if(this.runtime.locks.has(bot.id))continue;
         await this.runtime.lock(bot.id,()=>this.runtime.maintenance.track(async()=>{
           const op=this.runtime.store.operation(command.operation_id);
+          if(row.state==='dispatching'&&!op){
+            this.journal.settle(command.operation_id,'unknown',{operationId:command.operation_id,reason:'Restart interrupted command admission.'});
+            this.receipt(this.journal.db.prepare('SELECT * FROM node_commands WHERE operation_id=?').get(command.operation_id));return;
+          }
           if(!op||op.botId!==bot.id||!['turn.send','queue.send','queue.dispatch','schedule.dispatch','queue.resume'].includes(op.method))return;
           const binding=NODE_LOGICAL_COMMANDS.has(payload.method)?op.portableFingerprint===command.fingerprint:
             op.fingerprint===fingerprintLegacy({method:payload.method,botId:bot.id,params:payload.params??{}});
@@ -147,11 +160,13 @@ export class AgentTransport {
           }
           this.flushEvents();
         } else if(authentication && m.type==='desktop-request'){
+          if(!this.startupReady||!this.runtime.ready)throw Error('Agent startup has not completed.');
           void this.desktops.message(ws,m)?.catch(()=>ws.close(1008,'Desktop scope changed'));
         } else if(authentication && m.type==='rpc'){
           const control=this.journal.db.prepare('SELECT * FROM node_controls WHERE bot_id=?').get(m.botId);
           if(!AGENT_READS.has(m.method)||control?.epoch!==m.epoch)throw Error('Read is outside assigned scope.');
           void (async()=>{try{
+            if(!this.startupReady||!this.runtime.ready)throw Error('Agent startup is still recovering; no input was admitted.');
             if(DESKTOP_READS.has(m.method)&&!this.runtime.desktops)throw Error('Linux desktops are not configured.');
             if(DESKTOP_READS.has(m.method)&&!this.journal.currentControl({bot_id:m.botId,epoch:m.epoch}))throw Error('Desktop controls are not synchronized.');
             if(m.method==='desktop.open'&&(!id(m.clientId)||!m.clientId.startsWith('browser:')))throw Error('A live authenticated parent browser is required.');
@@ -181,6 +196,7 @@ export class AgentTransport {
     this.heartbeat=setInterval(()=>{if(authentication){this.runtime.relayOnline=true;this.send({type:'sync',cursor:this.cursor});this.flushEvents();}},5000);
   }
   async execute(command,row){
+    if(!this.startupReady||!this.runtime.ready)return;
     if(row.state==='terminal'||row.state==='unknown'||row.state==='native-accepted'||row.state==='running'){this.receipt(row);return;}
     const payload=JSON.parse(command.payload);
     if(!AGENT_MUTATIONS.has(payload.method)&&!NODE_LOGICAL_COMMANDS.has(payload.method))throw Error('Unsupported assigned command.');
@@ -221,21 +237,27 @@ export async function runAgent(config){
   // Staging cannot accidentally attach a second Codex process to production
   // workspaces. The migration's exact activation proof is required first.
   if(!config.agent?.activationReceipt || !isAbsolute(config.agent.codexBinary)||!isAbsolute(config.agent.workspaces))throw Error('Agent activation receipt, local Codex binary and workspaces are required.');
-  const activation=JSON.parse(await readFile(config.agent.activationReceipt,'utf8'));
-  const enrollment=JSON.parse(await readFile(join(config.dataDirectory,'node-enrollment.json'),'utf8'));
+  const activation=JSON.parse(readPrivate(config.agent.activationReceipt,16384));
+  const enrollment=JSON.parse(readPrivate(join(config.dataDirectory,'node-enrollment.json'),16384));
   if(activation.kind!=='portable-agent-activation'||activation.executionEnabled!==true||activation.nodeId!==enrollment.nodeId||activation.runtime!==RUNTIME_VERSION
     ||config.agent.nodeId&&enrollment.nodeId!==config.agent.nodeId)throw Error('Enrollment differs from reviewed agent activation.');
+  const source=verifiedAgentRelease({activation,entrypoint:import.meta.url,codexBinary:config.agent.codexBinary,runtime:RUNTIME_VERSION});
   process.umask(0o077);
   const store=new Store(join(config.dataDirectory,'native-control.sqlite')),codex=new Codex(config.agent.codexBinary);
   const runtime=new BotRuntime({store,codex,root:config.agent.workspaces,defaultTimeZone:'America/Toronto'});
+  runtime.maintenance.source=source;
   if(process.platform==='linux'&&config.agent.desktops?.enabled===true)runtime.desktops=new BotDesktops({runtime,...config.agent.desktops});
   const journal=new NodeJournal(join(config.dataDirectory,'node-journal.sqlite'));
   const manager=new CodexManager({runtime,store,directory:join(config.dataDirectory,'manager')});runtime.manager=manager;
-  const transport=new AgentTransport({config,runtime,journal,key:nodeKey(join(config.dataDirectory,'node-key.pem')),enrollment});
+  const transport=new AgentTransport({config,runtime,journal,key:nodeKey(join(config.dataDirectory,'node-key.pem')),enrollment,startupReady:false});
   runtime.storage=new NodeStorageClient(runtime,transport,enrollment.hub);
   runtime.relayBuffered=()=>transport.socket?.bufferedAmount??0;
   installHubToolRoutes(runtime,manager,transport);
-  await manager.listen();await runtime.start();await manager.recover();await runtime.desktops?.recover();transport.connect();
+  await manager.listen();transport.connect();
+  try{
+    await runtime.start({deferNativeRecovery:true});await manager.recover();await runtime.desktops?.recover();
+    transport.startupReady=true;await transport.recover();
+  }catch(error){transport.close();throw error;}
   transport.recoveryTimer=setInterval(()=>void transport.recover().catch(error=>runtime.emit('fault',error)),5000);
   // No runtime.tick: logical queue/schedule authority must live at the hub.
   // Existing admitted native work and tool responses still stream normally.

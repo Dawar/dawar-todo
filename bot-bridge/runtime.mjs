@@ -306,7 +306,7 @@ export class BotRuntime extends EventEmitter {
     if (this.activityUnresolved(botId) && !await this.reconcileCurrentActivity(botId))
       throw new Error("Current native activity is unresolved. No conflicting input was sent; recovery will retry automatically. Queue your message or retry after reconciliation.");
   }
-  async start() {
+  async start({ deferNativeRecovery = false } = {}) {
     this.secure ??= new SecureInputs(this);
     await mkdir(this.root, { recursive: true, mode: 0o700 });
     this.runs.start();
@@ -365,6 +365,9 @@ export class BotRuntime extends EventEmitter {
         const defaults = initialPreferences();
         bot = this.saveBot(bot, { avatar: bot.avatar ?? defaults.avatar, burstQuietSeconds: bot.burstQuietSeconds ?? defaults.burstQuietSeconds });
       }
+      // Portable agents first synchronize authoritative hub controls. Resume
+      // can start a native Goal/queue, so it is never an offline startup read.
+      if (deferNativeRecovery) continue;
       const activity = captureActivity(this, bot.id);
       if (!bot.threadId)
         try {
@@ -383,23 +386,25 @@ export class BotRuntime extends EventEmitter {
             this.saveBot(this.store.bot(bot.id), { status: "error", error: e.message });
         }
     }
-    // Recovery establishes current runtime activity separately from historical
-    // acceptance. A failed/stale startup read leaves a durable start barrier.
-    await recoverCurrentActivities(this, 100, true);
-    await this.reconcileOperations();
-    await this.plans.recover(100);
-    await this.answers.recover(100);
-    for (const run of this.store.list("run").filter(run => run.executionLane !== "run-v1" && run.status === "uncertain")) {
-      try { await reconcileScheduled(this, run); } catch { /* Keep uncertain IDs for the next bounded recovery. */ }
-    }
-    await recoverRunTurns(this, 100, true);
-    await recoverCurrentActivities(this, 100, true);
-    // Done send receipts are not in uncertainOperations. Durable turn
-    // attribution must be restored before requests can be accepted anyway.
-    for (const bot of this.store.bots()) {
-      const context = this.scheduledContext(bot.id);
-      if (context && observedActiveTurn(this, bot.id, context.turnId))
-        this.store.put("activeRun", { ...context, id: bot.id });
+    if (!deferNativeRecovery) {
+      // Recovery establishes current runtime activity separately from historical
+      // acceptance. A failed/stale startup read leaves a durable start barrier.
+      await recoverCurrentActivities(this, 100, true);
+      await this.reconcileOperations();
+      await this.plans.recover(100);
+      await this.answers.recover(100);
+      for (const run of this.store.list("run").filter(run => run.executionLane !== "run-v1" && run.status === "uncertain")) {
+        try { await reconcileScheduled(this, run); } catch { /* Keep uncertain IDs for the next bounded recovery. */ }
+      }
+      await recoverRunTurns(this, 100, true);
+      await recoverCurrentActivities(this, 100, true);
+      // Done send receipts are not in uncertainOperations. Durable turn
+      // attribution must be restored before requests can be accepted anyway.
+      for (const bot of this.store.bots()) {
+        const context = this.scheduledContext(bot.id);
+        if (context && observedActiveTurn(this, bot.id, context.turnId))
+          this.store.put("activeRun", { ...context, id: bot.id });
+      }
     }
     this.ready = true;
     this.usage.start();

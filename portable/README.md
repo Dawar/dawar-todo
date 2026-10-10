@@ -716,3 +716,25 @@ exclusive control and screenshot-before-input tool rules are retained.
 Desktop starts and new viewers participate in maintenance admission; existing
 viewer activity participates in its request/tool accounting. Public adoption
 and actual Linux desktop recovery still require genuine cutover verification.
+
+### Installed Linux startup and source identity
+
+The owner-reviewed `portable-agent-activation` receipt must also bind `source`,
+`releaseManifestSHA256` and `codexBinarySHA256`. The agent runs from the original
+`bot-bridge/portable-agent.mjs` in an installed release. Before opening its local
+manager or Codex, it verifies the manifest, every bounded registered release file
+and the local native binary. Maintenance repeats this same exact-source check;
+it does not require a Git checkout or waive the source/backup/claim fences.
+Release and installer manifests remain immutable. Never generate activation
+from a manifest merely because it is present: independent review and the real
+cutover bind its original hash, node and runtime.
+
+Portable startup initializes the native service/catalog without resuming bot
+threads. Original current-state barriers remain. The outbound connection first
+synchronizes owner/node placement and Stop; then bounded reconciliation resumes
+only currently assigned, unstopped bots. New RPCs/commands are held until local
+startup finishes. Commands received during startup are durably retained with
+their original IDs/cursors and admitted later from the same `received` record;
+`dispatching` and unknown records are never absence-retried. Disconnect, expiry,
+Stop and placement changes continue to fence the native RPC itself. Normal
+repository bridge startup retains its existing recovery behavior.
