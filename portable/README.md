@@ -653,3 +653,27 @@ original grants/keys/receipts. The controller does not start services, retry the
 failed d011 supervised invocation, replace the native handoff, or authorize a
 public rollover. Full original external-adapter and native/voice/volatile-state
 proof is still required for migration.
+
+### Original production encrypted-reader routing
+
+The original Worker now routes `/api/migration/application/read` to the real
+owner/session validator and the typed encrypted reader. It is disabled unless
+the private `MIGRATION_APPLICATION_READ` deployment configuration binds the
+exact build, capture, recipient, journal, database gate and all four external
+writer authorities. Browser input cannot install, hold, release or assert any
+of those controllers. The route has no token or development-auth fallback.
+
+Each configured external producer has a fixed HTTPS observation endpoint and
+Ed25519 public key. A fresh nonce, immutable original binding and controller
+operation are signed with its fresh held-writer proof. Redirects, substituted
+keys, stale/saved proofs, changed source/epoch and missing producers refuse the
+capture. These independent reads run together; the D1 journal and database
+gate are then rechecked after all await boundaries. Producer bearer credentials
+stay in private configuration and never enter the read wire or diagnostic.
+
+The producer adapter accepts an already captured real controller's observation
+callback. It does not establish a fence, inspect RAM or infer completed native
+work. Production producer installation and native/voice/issued-upload holds
+remain separate required actions. No external authority is configured by
+default; an unconnected controller still makes the route unavailable. This
+source wiring is not a production freeze, exported copy or rollover receipt.

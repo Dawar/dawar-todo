@@ -73,8 +73,11 @@ export function createApplicationFreezeController({db,expected,externalObservers
         database.operationId!==original.operationId||database.epoch!==original.epoch||database.generation!==original.database.generation||
         database.guardSHA256!==original.database.guardSHA256||database.expiresAt!==original.expiresAt)throw failure();
     const external=[];
+    // These observations are independent reads. Observe them together so a
+    // slow native reader does not age out another producer's fresh proof.
+    const results=await Promise.allSettled(original.external.map((e,i)=>Promise.resolve().then(()=>observers[i]({...e},AbortSignal.any([cancelled.signal,...(signal?[signal]:[])])))));
     for(let i=0;i<scopes.length;i++){
-      current();const e=original.external[i],p=await observers[i]({...e},AbortSignal.any([cancelled.signal,...(signal?[signal]:[])]));
+      current();const e=original.external[i],result=results[i];if(result.status!=='fulfilled')throw failure();const p=result.value;
       fresh(e.scope,p);
       if(p.version!==1||p.kind!=='dawar-external-writer-freeze'||p.status!=='frozen'||Object.keys(e).some(k=>p[k]!==e[k])||
           p.controllerOperationId!==original.operationId||p.releaseAuthority!=='captured-controller'||p.automaticExpiryRelease!==false||

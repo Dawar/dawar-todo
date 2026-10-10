@@ -9,11 +9,13 @@ import { handleTalkPhoneStream } from "./talk-phone-stream";
 import {runSourceWriterWork} from "../portable/source-writer-scope.mjs";
 import type {SourceWriterBinding} from "../portable/source-writer-admission.mjs";
 import {originalStorageUploadProxy} from '../lib/storage-upload-proxy';
+import {applicationMigrationReadResponse} from '../lib/application-migration-reader';
 
 interface Env {
   ASSETS: Fetcher;
   MIGRATION_SOURCE_WRITER_ADMISSION?:string;
   MIGRATION_STORAGE_UPLOAD_PROXY?:string;
+  MIGRATION_APPLICATION_READ?:string;
   BOTS_OWNER_EMAIL?: string;
   BOTS_OWNER_USER_ID?: string;
   DB: D1Database;
@@ -82,6 +84,8 @@ async function sourceFetch(request: Request, env: Env, ctx: ExecutionContext): P
 
     const accessResponse = await appAccessResponse(routedRequest, env, ctx);
     if (accessResponse) return accessResponse;
+
+    if(url.pathname==='/api/migration/application/read')return applicationMigrationReadResponse(routedRequest,env,__DAWAR_BUILD__);
 
     const installerResponse = await agentInstallerResponse(routedRequest, env);
     if (installerResponse) return installerResponse;
