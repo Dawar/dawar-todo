@@ -39,7 +39,9 @@ export function createExternalWriterObserver({endpoint,publicKey,credential,cont
     if(JSON.stringify(expected)!==JSON.stringify(original))throw failure();
     const challenge=crypto.randomUUID(),local=AbortSignal.any([signal,AbortSignal.timeout(4500)]);
     const request={version:1,kind:'dawar-external-writer-observation',challenge,controllerOperationId:operation,binding:original};
-    const response=await fetcher(target,{method:'POST',redirect:'error',cache:'no-store',signal:local,
+    // Workerd supports manual rather than error redirect mode. Refuse every
+    // non-200 response below; credentials never follow a Location header.
+    const response=await fetcher(target,{method:'POST',redirect:'manual',cache:'no-store',signal:local,
       headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json','User-Agent':'DawarTodoMigration/1'},body:JSON.stringify(request)});
     local.throwIfAborted();
     if(!(response instanceof Response)||response.status!==200||response.redirected||response.url!==target||
