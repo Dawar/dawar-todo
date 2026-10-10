@@ -16,7 +16,8 @@ const keyId=key=>{
   return `object:${digest(key)}`;
 };
 export class ObjectStorage {
-  constructor(config,{writer=null}={}){this.config=config;this.writer=writer;this.assertWriter=()=>{if(!writer)throw Error('Storage writer authority is unavailable.');writer.assertWriter();};this.db=privateDatabase(join(config.dataDirectory,'artifact-index.sqlite'));this.files=new RegisteredArtifacts(this.db,join(config.dataDirectory,'registered-files'));this.uploads=new ObjectUpload(this,keyId);}
+  constructor(config,{writer=null}={}){this.config=config;this.writer=writer;this.assertWriter=()=>{if(!writer)throw Error('Storage writer authority is unavailable.');writer.assertWriter();};this.db=privateDatabase(join(config.dataDirectory,'artifact-index.sqlite'));this.files=new RegisteredArtifacts(this.db,join(config.dataDirectory,'registered-files'),{writer});this.uploads=new ObjectUpload(this,keyId);}
+  runWork(kind,factory){if(!this.writer)throw Error('Storage writer authority is unavailable.');return this.writer.runWork(kind,factory);}
   writeSync(work){
     const commit=()=>{this.assertWriter();this.db.exec('BEGIN IMMEDIATE');try{const result=work();this.assertWriter();this.db.exec('COMMIT');return result;}catch(error){if(this.db.isTransaction)this.db.exec('ROLLBACK');throw error;}};
     return this.writer?this.writer.runSync(commit):commit();
@@ -39,6 +40,9 @@ export class ObjectStorage {
     catch(e){if(/not found|absent/i.test(e.message))return new Response(null,{status:404});throw e;}
   }
   async put(key,body,{type,minimum=1,maximum=MAX,node=null,expires=null}){
+    return this.runWork('object-put',()=>this.putAdmitted(key,body,{type,minimum,maximum,node,expires}));
+  }
+  async putAdmitted(key,body,{type,minimum,maximum,node,expires}){
     keyId(key);if(!Number.isSafeInteger(minimum)||!Number.isSafeInteger(maximum)||minimum<0||maximum<minimum||maximum>MAX)throw Error('Invalid upload bound.');
     if(!(body instanceof Blob)||body.size<minimum||body.size>maximum)throw Error('Upload size is outside the original grant.');
     const guard=()=>{this.assertWriter();if(node){if(!this.authorizeNode||expires<=Date.now())throw Error('Node upload grant expired.');this.authorizeNode(node);}};guard();
@@ -46,6 +50,10 @@ export class ObjectStorage {
     return this.files.register({owner:this.config.owner.key,botId:'application',artifactId:keyId(key),name:'Registered attachment',mime:type,hash:sha256,size:bytes.length},Readable.from([bytes]),{guard,commit:work=>this.writeSync(work)});
   }
   async serve(request){
+    if(request.method==='POST')return this.runWork('object-request',()=>this.serveAdmitted(request));
+    return this.serveAdmitted(request);
+  }
+  async serveAdmitted(request){
     const u=new URL(request.url),method=request.method==='HEAD'?'GET':request.method;
     const v=this.verify(u.searchParams.get('grant'),method);
     if(method==='GET'){
@@ -67,6 +75,10 @@ export class ObjectStorage {
     throw Error('Unsupported object method.');
   }
   async serveNode(req,url){
+    if(req.method!=='GET'&&req.method!=='HEAD')return this.runWork('object-request',()=>this.serveNodeAdmitted(req,url));
+    return this.serveNodeAdmitted(req,url);
+  }
+  async serveNodeAdmitted(req,url){
     if(new URL(url).searchParams.has('action'))return this.uploads.serve(req,url);
     if(req.method!=='POST')return this.serve(new Request(url,{method:req.method,headers:req.headers}));
     const v=this.verify(new URL(url).searchParams.get('grant'),'POST');
@@ -116,10 +128,12 @@ export class ObjectStorage {
         const source=h.get('x-amz-copy-source');
         if(!source)throw Error('Direct object overwrite is unsupported.');
         const parts=source.split('/');parts.splice(0,2);const sourceKey=parts.map(decodeURIComponent).join('/');
-        const r=await this.response(sourceKey);if(!r.ok)return r;
-        if(r.headers.get('etag')!==h.get('x-amz-copy-source-if-match'))return new Response(null,{status:412});
-        const row=this.row(sourceKey);await this.put(key,await r.blob(),{type:row.mime,minimum:0,maximum:MAX});
-        return new Response('<CopyObjectResult/>',{headers:{'content-type':'application/xml'}});
+        return this.runWork('object-copy',async()=>{
+          const r=await this.response(sourceKey);if(!r.ok)return r;
+          if(r.headers.get('etag')!==h.get('x-amz-copy-source-if-match')){await r.body?.cancel();return new Response(null,{status:412});}
+          const row=this.row(sourceKey);await this.put(key,await r.blob(),{type:row.mime,minimum:0,maximum:MAX});
+          return new Response('<CopyObjectResult/>',{headers:{'content-type':'application/xml'}});
+        });
       }
       if(method==='DELETE'){this.delete(key);return new Response(null,{status:204});}
       throw Error('Unsupported local storage operation.');

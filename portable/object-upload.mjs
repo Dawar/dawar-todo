@@ -54,20 +54,26 @@ export class ObjectUpload {
   }
   async removeParts(row,token){for(let i=0;i<JSON.parse(row.manifest).length;i++){this.guard(token,row);await rm(this.partPath(row,i),{force:true});}}
   async cleanStopped(){
+    return this.objects.runWork('object-cleanup',()=>this.cleanStoppedAdmitted());
+  }
+  async cleanStoppedAdmitted(){
     // PID reuse or inaccessible process identity remains busy. No time-based
     // takeover of an in-flight receiver/assembler is permitted.
     for(const c of this.db.prepare('SELECT * FROM portable_object_receiving LIMIT 16').all()){
       if(!/^[a-f0-9-]{36}$/.test(c.id))throw Error('Original receiving claim identity changed.');
       if(!stopped(c.pid))continue;await rm(join(this.directory,`.part-${c.id}`),{force:true});
-      this.db.prepare('DELETE FROM portable_object_receiving WHERE id=? AND pid=?').run(c.id,c.pid);
+      this.transaction(()=>this.db.prepare('DELETE FROM portable_object_receiving WHERE id=? AND pid=?').run(c.id,c.pid));
     }
     for(const row of this.db.prepare("SELECT * FROM portable_object_uploads WHERE state='uploading' AND deadline<=? LIMIT 8").all(Date.now())){
       if(this.db.prepare('SELECT 1 FROM portable_object_receiving WHERE upload_id=?').get(row.id))continue;
-      this.db.prepare("UPDATE portable_object_uploads SET state='expired' WHERE id=? AND state='uploading' AND deadline<=?").run(row.id,Date.now());
+      this.transaction(()=>this.db.prepare("UPDATE portable_object_uploads SET state='expired' WHERE id=? AND state='uploading' AND deadline<=?").run(row.id,Date.now()));
       for(let i=0;i<JSON.parse(row.manifest).length;i++)await rm(this.partPath(row,i),{force:true});
     }
   }
   async begin(req,token,v){
+    return this.objects.runWork('object-upload',()=>this.beginAdmitted(req,token,v));
+  }
+  async beginAdmitted(req,token,v){
     const input=await this.metadata(req);this.guard(token);
     if(!input||Array.isArray(input)||Object.keys(input).sort().join(',')!=='chunks,hash,size'||!Number.isSafeInteger(input.size)||input.size<v.minimum||input.size>v.maximum||!Array.isArray(input.chunks)||input.chunks.length!==Math.ceil(input.size/UPLOAD_CHUNK_BYTES)||input.chunks.some(h=>!hex(h))||input.hash!==null&&!hex(input.hash)||v.hash&&v.hash!==input.hash)throw Error('Original upload manifest differs.');
     const identity=this.scope(v),manifest=JSON.stringify(input.chunks),id=this.keyId(v.key);
@@ -81,6 +87,9 @@ export class ObjectUpload {
     });return json(this.status(row));
   }
   async chunk(req,token,row,index){
+    return this.objects.runWork('object-upload',()=>this.chunkAdmitted(req,token,row,index));
+  }
+  async chunkAdmitted(req,token,row,index){
     const hashes=JSON.parse(row.manifest),size=Math.min(UPLOAD_CHUNK_BYTES,row.size-index*UPLOAD_CHUNK_BYTES);
     if(!Number.isSafeInteger(index)||index<0||index>=hashes.length||req.headers['x-dawar-chunk-sha256']!==hashes[index]||!/^\d+$/.test(req.headers['content-length']??'')||Number(req.headers['content-length'])!==size||req.headers['content-type']!=='application/octet-stream')throw Error('Original chunk identity or length differs.');
     const claim=randomUUID();
@@ -112,7 +121,7 @@ export class ObjectUpload {
       });return json(this.status(this.row(this.objects.verify(token,'POST'))));
     }finally{
       clearTimeout(timer);req.removeListener('aborted',interrupted);abort.abort();await handle?.close().catch(()=>{});await rm(path,{force:true});
-      this.db.prepare('DELETE FROM portable_object_receiving WHERE id=? AND pid=?').run(claim,process.pid);
+      this.transaction(()=>this.db.prepare('DELETE FROM portable_object_receiving WHERE id=? AND pid=?').run(claim,process.pid));
     }
   }
   async *bytes(row,token){
@@ -127,6 +136,9 @@ export class ObjectUpload {
     }
   }
   async finish(req,token,row,v){
+    return this.objects.runWork('object-upload',()=>this.finishAdmitted(req,token,row,v));
+  }
+  async finishAdmitted(req,token,row,v){
     const b=await this.metadata(req);if(!b||Array.isArray(b)||Object.keys(b).length)throw Error('Upload completion body changed.');this.guard(token,row);
     if(row.state==='done'){await this.removeParts(row,token);return json(this.status(row));}
     if(row.state==='assembling'){
@@ -160,11 +172,15 @@ export class ObjectUpload {
     }catch(error){
       // Do not reset after a possibly committed registration. Its immutable
       // row and bytes must be read back, never overwritten or blindly replayed.
-      if(!this.db.prepare('SELECT 1 FROM portable_artifacts WHERE id=?').get(row.id))this.db.prepare("UPDATE portable_object_uploads SET state='uploading',claim=NULL,pid=NULL WHERE id=? AND claim=? AND state='assembling'").run(row.id,claim);
+      this.transaction(()=>{if(!this.db.prepare('SELECT 1 FROM portable_artifacts WHERE id=?').get(row.id))this.db.prepare("UPDATE portable_object_uploads SET state='uploading',claim=NULL,pid=NULL WHERE id=? AND claim=? AND state='assembling'").run(row.id,claim);});
       throw error;
     }
   }
   async serve(req,url){
+    if(req.method!=='GET')return this.objects.runWork('object-upload',()=>this.serveAdmitted(req,url));
+    return this.serveAdmitted(req,url);
+  }
+  async serveAdmitted(req,url){
     const u=new URL(url),action=u.searchParams.get('action'),token=u.searchParams.get('grant');
     if([...u.searchParams.keys()].some(k=>!['grant','action','part'].includes(k))||[...new Set(u.searchParams.keys())].some(k=>u.searchParams.getAll(k).length!==1)||req.headers.origin&&req.headers.origin!==this.objects.config.publicOrigin||req.headers['transfer-encoding'])throw Error('Upload request scope changed.');
     const v=this.objects.verify(token,'POST');this.scope(v);

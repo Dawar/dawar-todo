@@ -30,7 +30,7 @@ export class HubStore {
   bindWriter(writer) {
     if(this.writer||writer.db!==this.db||typeof this.db.setAuthorizer!=='function')throw Error('Exact control database and Node 24.10+ writer binding required.');
     this.writer=writer;
-    this.refreshGuard=controlWriteGuard(this.db,{writeScope:()=>writer.depth>0,transactionScope:()=>writer.managedTransaction===true});
+    this.refreshGuard=controlWriteGuard(this.db,{writeScope:()=>writer.depth>0,transactionScope:()=>writer.managedTransaction===true,workScope:action=>writer.workScope(action)});
     writer.refreshControlGuard=this.refreshGuard;
   }
   transaction(fn) {

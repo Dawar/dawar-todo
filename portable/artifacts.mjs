@@ -7,11 +7,16 @@ import { Readable, Transform } from 'node:stream';
 import { id } from './protocol.mjs';
 
 export class RegisteredArtifacts {
-  constructor(db,directory) {
+  constructor(db,directory,{writer=null}={}) {
+    this.writer=writer;
     this.db=db;this.directory=directory;
     db.exec('CREATE TABLE IF NOT EXISTS portable_artifacts(id TEXT PRIMARY KEY,owner TEXT NOT NULL,bot_id TEXT,hash TEXT NOT NULL,size INTEGER NOT NULL,name TEXT NOT NULL,mime TEXT NOT NULL,created_at INTEGER NOT NULL)');
   }
-  async register({artifactId,owner,botId=null,hash,size,name,mime},source,{guard=()=>{},commit=work=>work()}={}) {
+  async register({artifactId,owner,botId=null,hash,size,name,mime},source,{guard=()=>{},commit=work=>this.writer?this.writer.runSync(work):work()}={}) {
+    if(this.writer)return this.writer.runWork('artifact-register',()=>this.registerAdmitted({artifactId,owner,botId,hash,size,name,mime},source,{guard:()=>{this.writer.assertWriter();guard();},commit}));
+    return this.registerAdmitted({artifactId,owner,botId,hash,size,name,mime},source,{guard,commit});
+  }
+  async registerAdmitted({artifactId,owner,botId=null,hash,size,name,mime},source,{guard,commit}) {
     if(!id(artifactId)||!owner||botId!==null&&!id(botId)||!/^[a-f0-9]{64}$/.test(hash)||!Number.isSafeInteger(size)||size<0||size>250*1024*1024
       ||typeof name!=='string'||name.length>240||/[\r\n\0]/.test(name)||typeof mime!=='string'||!/^[A-Za-z0-9.+-]+\/[A-Za-z0-9.+-]+$/.test(mime))throw Error('Invalid registered artifact.');
     guard();

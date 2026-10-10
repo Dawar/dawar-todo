@@ -606,3 +606,33 @@ not an authorized live cutover mutation. Runtime guard binding does not create
 an OS sandbox or protect an arbitrary separate SQLite connection. Filesystem
 streams/private upload cleanup, voice/provider effects and the original native
 writer still require their complete admission/drain and cutover evidence.
+
+### Admitted local file lifetimes
+
+The portable gateway and site storage adapter now persist an asynchronous work
+record in control SQLite before reading upload bodies, allocating private files,
+streaming chunks, assembling/registering files, copying objects or cleaning up.
+Nested registered work shares that exact lifetime and is awaited even when its
+caller did not await it. Settlement follows awaited file/handle cleanup; a
+closed inherited context cannot start another operation or commit a late write.
+`settled` means the local lifetime ended, not that a task or business effect
+succeeded. Original upload, artifact and operation receipts retain their own
+outcomes. A crash retains the active record; no age/PID rule retires it.
+
+The private `LocalWriterDrain` controller binds writer, placement epoch, source
+and one original operation/deadline. It holds new file and ordinary control
+starts while previously admitted local work can finish. It atomically sets the
+canonical frozen flag only after the durable journal has zero active/unknown
+work. Failed holds expire visibly and require explicit same-operation release;
+they never reopen automatically. Runtime SQLite authorization cannot rewrite
+the hold or forge a work settlement. Settlement during a hold can change only
+the exact work row, not user data, native receipts or writer authority.
+
+This covers the portable local file lifetimes, not the old production writers,
+arbitrary shell/plugin filesystem effects, native activity, or provider/voice
+effects. Paused resumable upload rows and their private parts must be copied
+consistently with registered files and the control/artifact databases, retaining
+original grants/keys/receipts. The controller does not start services, retry the
+failed d011 supervised invocation, replace the native handoff, or authorize a
+public rollover. Full original external-adapter and native/voice/volatile-state
+proof is still required for migration.
