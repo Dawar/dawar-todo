@@ -2,6 +2,7 @@ import { RUNTIME_COMPANIONS } from './runtime-companions.mjs';
 import { build } from 'esbuild';
 import { mkdir, cp, writeFile, readFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 await mkdir('dist/portable',{recursive:true});
 await build({ entryPoints:['portable/gateway.mjs'],outfile:'dist/portable/gateway.mjs',bundle:true,platform:'node',target:'node24',format:'esm',packages:'external' });
 await build({ entryPoints:['portable/agent.mjs'],outfile:'dist/portable/portable-agent.mjs',bundle:true,platform:'node',target:'node24',format:'esm',packages:'external' });
@@ -17,4 +18,6 @@ const launcher='.next-portable/standalone/server.js';
 const source=await readFile(launcher,'utf8');
 if(!source.includes('nextConfig.outputFileTracingRoot=__dirname;'))await writeFile(launcher,source.replace('process.env.__NEXT_PRIVATE_STANDALONE_CONFIG',
   'nextConfig.outputFileTracingRoot=__dirname; nextConfig.repoRoot=__dirname; if(nextConfig.turbopack)nextConfig.turbopack.root=__dirname;\nprocess.env.__NEXT_PRIVATE_STANDALONE_CONFIG'));
-await writeFile('dist/portable/build.json',JSON.stringify({version:1,source:execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),nodeMajor:24,protocol:1,runtime:'0.161.0'},null,2)+'\n');
+const checksum=async path=>createHash('sha256').update(await readFile(path)).digest('hex');
+await writeFile('dist/portable/build.json',JSON.stringify({version:1,source:execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),nodeMajor:24,protocol:1,runtime:'0.161.0',
+  gatewaySHA256:await checksum('dist/portable/gateway.mjs'),agentSHA256:await checksum('dist/portable/portable-agent.mjs')},null,2)+'\n');

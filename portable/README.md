@@ -128,6 +128,13 @@ only manifest-listed files into a new immutable release, verifies an existing
 release without reinstalling dependencies, and never starts a service or bot.
 Local credentials and workspaces are not bundled or copied to the hub.
 
+The agent packager checks the current source and compiled agent checksum before
+creating its immutable ZIP. The full hub package checks both compiled roles and
+the ZIP's source, name, size and checksum before creating a release. Only that
+current download is included; earlier release directories and archives remain
+outside the new package. A stale build or download is refused, never relabelled
+or overwritten. Preparation is not installation or native execution proof.
+
 An enrollment timeout retains the original grant/key identity. The installer
 first queries signed, fresh, read-only status for that SAME grant and key. A
 positive accepted receipt can be recovered even after its grant expires; an

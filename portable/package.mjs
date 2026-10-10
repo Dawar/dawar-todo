@@ -6,6 +6,16 @@ import { createHash } from 'node:crypto';
 
 const source=execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim();
 if(execFileSync('git',['status','--porcelain'],{encoding:'utf8'}).trim())throw Error('Package only an exact clean source.');
+const build=JSON.parse(await readFile('dist/portable/build.json','utf8'));
+if(build.source!==source||build.nodeMajor!==24||build.protocol!==1||build.runtime!=='0.161.0')throw Error('Build the exact current portable source before packaging.');
+for(const [file,field] of [['gateway.mjs','gatewaySHA256'],['portable-agent.mjs','agentSHA256']])
+  if(!/^[a-f0-9]{64}$/.test(build[field]??'')||createHash('sha256').update(await readFile(join('dist/portable',file))).digest('hex')!==build[field])throw Error('Portable build bytes differ from their original manifest.');
+const download=JSON.parse(await readFile('dist/agent-downloads/current.json','utf8'));
+if(download.version!==1||download.source!==source||download.name!==`dawartodo-agent-${source.slice(0,12)}.zip`||
+  !Number.isSafeInteger(download.bytes)||download.bytes<1||download.bytes>32*1024*1024||!/^[a-f0-9]{64}$/.test(download.sha256??''))throw Error('Prepare the exact current agent download before packaging.');
+const downloadPath=join('dist/agent-downloads',download.name),downloadStat=await lstat(downloadPath);
+if(!downloadStat.isFile()||downloadStat.isSymbolicLink()||downloadStat.size!==download.bytes||createHash('sha256').update(await readFile(downloadPath)).digest('hex')!==download.sha256)
+  throw Error('Agent download bytes differ from their original manifest.');
 const version=`dawartodo-${source.slice(0,12)}-${process.platform}-${process.arch}`;
 const directory=resolve('dist/packages',version);
 await mkdir(resolve('dist/packages'),{recursive:true});
@@ -14,7 +24,8 @@ await mkdir(directory);
 try {
   await cp('.next-portable/standalone',join(directory,'.next-portable/standalone'),{recursive:true});
   await cp('portable',join(directory,'portable'),{recursive:true});
-  await cp('dist/agent-downloads',join(directory,'dist/agent-downloads'),{recursive:true});
+  await mkdir(join(directory,'dist/agent-downloads'),{recursive:true});
+  for(const file of ['current.json',download.name,download.name+'.sha256'])await cp(join('dist/agent-downloads',file),join(directory,'dist/agent-downloads',file));
   await mkdir(join(directory,'dist/portable'),{recursive:true});
   await cp('dist/portable/gateway.mjs',join(directory,'dist/portable/gateway.mjs'));
   await cp('dist/portable/build.json',join(directory,'dist/portable/build.json'));

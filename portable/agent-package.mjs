@@ -5,6 +5,10 @@ import { join,resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 const source=execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim();
 if(execFileSync('git',['status','--porcelain'],{encoding:'utf8'}).trim())throw Error('Agent downloads require exact clean source.');
+const build=JSON.parse(await readFile('dist/portable/build.json','utf8'));
+if(build.source!==source||build.nodeMajor!==24||build.protocol!==1||build.runtime!=='0.161.0'||
+  !/^[a-f0-9]{64}$/.test(build.agentSHA256??'')||createHash('sha256').update(await readFile('dist/portable/portable-agent.mjs')).digest('hex')!==build.agentSHA256)
+  throw Error('Build the exact current portable agent before packaging its download.');
 const name=`dawartodo-agent-${source.slice(0,12)}`,directory=resolve('dist/agent-downloads',name);
 await mkdir(resolve('dist/agent-downloads'),{recursive:true});
 await mkdir(directory);
