@@ -1,4 +1,5 @@
 import {voiceFetch,voiceSocket,voicePair,voiceUpgrade,voiceWaitUntil} from './platform';
+import {voiceAdmit,voiceMigrationControl} from './migration';
 import { OperatorVoiceEvents } from '../../lib/operator-voice-events';
 import type { OperatorContext } from '../../lib/operator-types';
 import {
@@ -239,6 +240,7 @@ function runPhoneBridge(
       reason,
       durationMs: Date.now() - acceptedAt,
     });
+    environment.VOICE_EFFECT_SCOPE?.end();
   };
 
   const sendToolOutput = (callId: string, result: BridgeResult) => {
@@ -339,7 +341,7 @@ function runPhoneBridge(
     if (event.type === "response.done") {
       const tools = event.response?.output?.filter((item) => item.type === "function_call") ?? [];
       if (tools.length) {
-        toolQueue = toolQueue
+        voiceWaitUntil(environment,context,()=>{toolQueue = toolQueue
           .then(async () => {
             for (const tool of tools) await runTool(tool);
             sendJson(openAI, { type: "response.create" });
@@ -350,7 +352,7 @@ function runPhoneBridge(
               talkSessionId,
               error,
             });
-          });
+          });return toolQueue;});
       }
       return;
     }
@@ -551,7 +553,7 @@ function runPhoneBridge(
   }, START_TIMEOUT_MS);
 }
 
-const worker = {
+const sourceWorker = {
   async fetch(request: Request, environment: Env, context: ExecutionContext) {
     const url = new URL(request.url);
     if (url.pathname === "/health") {
@@ -635,5 +637,28 @@ const worker = {
   },
 };
 
+const worker={
+  async fetch(request:Request,environment:Env,context:ExecutionContext){
+    const url=new URL(request.url);
+    if(url.pathname==='/api/migration/voice/control')return voiceMigrationControl(request,environment);
+    if(!environment.VOICE_WRITER_CONTROL||url.pathname==='/health')return sourceWorker.fetch(request,environment,context);
+    let scope:Awaited<ReturnType<typeof voiceAdmit>>=null;
+    try{
+      const stream=url.pathname==='/stream'&&request.headers.get('Upgrade')?.toLowerCase()==='websocket';
+      scope=await voiceAdmit(environment,context,stream?'stream':'http');
+      const result=await sourceWorker.fetch(request,{...environment,VOICE_EFFECT_SCOPE:scope??undefined},context);
+      if(!stream||result.status!==101)scope?.end();
+      return result;
+    }catch{scope?.unknown();scope?.end();return Response.json({error:'Voice work is held or unconfirmed.'},{status:503,headers:{'Cache-Control':'private, no-store'}});}
+  },
+  async scheduled(controller:ScheduledController,environment:Env,context:ExecutionContext){
+    if(!environment.VOICE_WRITER_CONTROL)return sourceWorker.scheduled(controller,environment,context);
+    const scope=await voiceAdmit(environment,context,'scheduled');
+    try{await sourceWorker.scheduled(controller,{...environment,VOICE_EFFECT_SCOPE:scope??undefined},context);}
+    catch{scope?.unknown();throw Error('Original voice scheduled work is unconfirmed.');}
+    finally{scope?.end();}
+  },
+};
 export { SipCallController };
+export {VoiceMigrationCoordinator} from './migration';
 export default worker;

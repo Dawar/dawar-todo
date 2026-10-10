@@ -1,4 +1,5 @@
 import {voiceFetch,voiceWaitUntil,type VoicePlatformEnvironment} from './platform';
+import {voiceAdmit,type VoiceEffectScope} from './migration';
 import { OperatorVoiceEvents, type OperatorRealtimeEvent, type OperatorVoiceSnapshot } from '../../lib/operator-voice-events';
 import type { OperatorContext } from '../../lib/operator-types';
 export interface SipRelayEnvironment extends VoicePlatformEnvironment {
@@ -240,7 +241,7 @@ export async function handleOpenAISipWebhook(
     const controller = environment.SIP_CONTROLLERS.get(controllerId);
     voiceWaitUntil(environment, context, () => controller.fetch("https://sip-controller/start", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json",...(environment.VOICE_EFFECT_SCOPE?{'X-Dawar-Voice-Parent':environment.VOICE_EFFECT_SCOPE.operationId}:{}) },
       body: JSON.stringify({
         callSid,
         providerCallId,
@@ -295,11 +296,13 @@ export class SipCallController {
   private connecting: Promise<void> | null = null;
   private toolQueue: Promise<void> = Promise.resolve();
   private voice = new OperatorVoiceEvents(event => sendJson(this.socket, event));
+  private readonly environment:SipRelayEnvironment;
+  private migrationScope:VoiceEffectScope|null=null;
 
   constructor(
     private readonly durableState: DurableObjectState,
-    private readonly environment: SipRelayEnvironment,
-  ) {}
+    environment: SipRelayEnvironment,
+  ) {this.environment={...environment};}
 
   async fetch(request: Request) {
     const url = new URL(request.url);
@@ -315,6 +318,16 @@ export class SipCallController {
       }
       const existing = await this.readState();
       if (existing?.ended) return Response.json({ connected: false, ended: true });
+      if(this.environment.VOICE_WRITER_CONTROL&&!this.migrationScope){
+        // A new object instance cannot reinterpret an old/admitted call as a
+        // fresh start. Leave its original state and receipt for reconciliation.
+        if(existing||await this.durableState.storage.get('sip-migration-admission-v1'))return Response.json({error:'Original SIP admission requires reconciliation.'},{status:503});
+        this.migrationScope=await voiceAdmit(this.environment,this.durableState,'sip',request.headers.get('X-Dawar-Voice-Parent'));
+        if(!this.migrationScope)throw Error('SIP admission unavailable.');
+        await this.durableState.storage.put('sip-migration-admission-v1',{operationId:this.migrationScope.operationId});
+        this.environment.VOICE_EFFECT_SCOPE=this.migrationScope;
+      }
+      const start=async()=>{
       this.state = {
         voiceReadback: existing?.voiceReadback, operator: existing?.operator ?? payload.operator ?? null, voiceSeen: existing?.voiceSeen ?? {}, greeted: existing?.greeted ?? false, itemSegments: existing?.itemSegments ?? [], responseSegments: existing?.responseSegments ?? [],
         callSid: String(payload.callSid),
@@ -332,6 +345,8 @@ export class SipCallController {
       await this.connect();
       await this.durableState.storage.setAlarm(Date.now() + HEARTBEAT_INTERVAL_MS);
       return Response.json({ connected: true });
+      };
+      return this.migrationScope?this.migrationScope.track(start):start();
     }
     if (url.pathname === "/status") {
       const state = await this.readState();
@@ -347,6 +362,12 @@ export class SipCallController {
   async alarm() {
     const state = await this.readState();
     if (!state || state.ended) return;
+    if(this.environment.VOICE_WRITER_CONTROL&&!this.migrationScope)throw Error('Original SIP admission requires reconciliation.');
+    const work=()=>this.runAlarm(state);
+    return this.migrationScope?this.migrationScope.track(work):work();
+  }
+
+  private async runAlarm(state:ControllerState){
     if (Date.now() - state.lastAddressedSpeechAt >= PHONE_IDLE_LIMIT_MS) {
       sendJson(this.socket, {
         type: "response.create",
@@ -627,7 +648,7 @@ export class SipCallController {
     if (event.type === "response.done") {
       const tools = event.response?.output?.filter((item) => item.type === "function_call") ?? [];
       if (tools.length) {
-        this.toolQueue = this.toolQueue.then(async () => {
+        voiceWaitUntil(this.environment,this.durableState,()=>{this.toolQueue = this.toolQueue.then(async () => {
           for (const tool of tools) if (!await this.runTool(tool)) return;
           if (!state.ended) this.voice.respond();
           await this.persistState();
@@ -638,7 +659,7 @@ export class SipCallController {
             talkSessionId: state.talkSessionId,
             error,
           });
-        });
+        });return this.toolQueue;});
       }
       return;
     }
@@ -705,5 +726,6 @@ export class SipCallController {
       reason,
       durationMs: Date.now() - state.startedAt,
     });
+    this.migrationScope?.end();
   }
 }
