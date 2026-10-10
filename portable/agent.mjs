@@ -8,6 +8,7 @@ import { NodeJournal } from './control-store.mjs';
 import { nodeKey, signature, fingerprint,id,boundedFrame,PROTOCOL_VERSION, RUNTIME_VERSION } from './protocol.mjs';
 import { AGENT_READS, AGENT_MUTATIONS } from './hub-rpc.mjs';
 import { HUB_TOOLS,NODE_LOGICAL_COMMANDS,ROOM_NATIVE_READS } from './control-protocol.mjs';
+import {AgentPeers} from './agent-peers.mjs';
 import { admitLogicalCommand } from './agent-admission.mjs';
 import {settleAgentBurst} from './agent-bursts.mjs';
 import { queueResumeReceipt } from './agent-queue-resume.mjs';
@@ -41,6 +42,7 @@ export class AgentTransport {
       contexts.guard(method,params);
     };
     this.collaboration=new AgentCollaboration(this);
+    this.peers=new AgentPeers(this);
     runtime.on('event',event=>{
       if(!event.botId)return;
       const c=journal.db.prepare('SELECT * FROM node_controls WHERE bot_id=?').get(event.botId);
@@ -64,7 +66,7 @@ export class AgentTransport {
   hello(){return {protocol:PROTOCOL_VERSION,runtime:RUNTIME_VERSION,platform:process.platform,arch:process.arch,agentEpoch:this.runtime.epoch,
     // Registered native routing is staged below; keep automatic room starts
     // disabled until captured hub tool/result/question consumers are paired.
-    capabilities:{text:true,localStdio:true,registeredArtifacts:true,profileReads:true,memoryCompaction:process.platform==='linux',pdfPreview:process.platform==='linux',desktop:process.platform==='linux'&&!!this.runtime.desktops,voice:false,secureTransfer:process.platform==='linux'&&!!this.runtime.secure,centralBursts:process.platform==='linux',centralRoomDispatch:false,centralPrimaryDispatch:false,autonomousGoals:false}};}
+    capabilities:{text:true,localStdio:true,registeredArtifacts:true,profileReads:true,memoryCompaction:process.platform==='linux',pdfPreview:process.platform==='linux',desktop:process.platform==='linux'&&!!this.runtime.desktops,voice:false,secureTransfer:process.platform==='linux'&&!!this.runtime.secure,centralBursts:process.platform==='linux',centralRoomDispatch:false,centralPrimaryDispatch:false,centralPeers:false,autonomousGoals:false}};}
   send(value){if(this.socket?.readyState===WebSocket.OPEN)this.socket.send(JSON.stringify(value));}
   controlRequest(botId,tool,args){
     if(!HUB_TOOLS.has(tool))throw Error('Unsupported hub tool.');
@@ -76,6 +78,7 @@ export class AgentTransport {
   }
   roomState(command){return this.requestHub(command.bot_id,'room',{operationId:command.operation_id,fingerprint:command.fingerprint},true);}
   roomTool(botId,frame,read){return this.requestHub(botId,'room-tool',frame,read);}
+  peerTool(botId,frame,read){return this.requestHub(botId,'peer-tool',frame,read);}
   requestHub(botId,kind,payload,read){
     const c=this.journal.db.prepare('SELECT * FROM node_controls WHERE bot_id=?').get(botId),control=c&&this.journal.currentControl({bot_id:botId,epoch:c.epoch});
     if(!control||this.socket?.readyState!==1)throw Object.assign(Error('Hub controls are offline or outside this assigned scope.'),{outcome:'not-sent'});
@@ -223,7 +226,7 @@ export class AgentTransport {
             const frame={type:'rpc-result',rpcId:m.rpcId,botId:m.botId,epoch:m.epoch,result,...(roomRead?{roomScope:m.roomScope}:{})};
             if(Buffer.byteLength(JSON.stringify(frame))>900*1024)throw Error('Read exceeds its bounded transport; use a smaller history page.');sendHere(frame);
           }catch(e){sendHere({type:'rpc-result',rpcId:m.rpcId,botId:m.botId,epoch:m.epoch,error:e.message});}})();
-        } else if(authentication && ['control-result','artifact-result','room-result','room-tool-result'].includes(m.type)){
+        } else if(authentication && ['control-result','artifact-result','room-result','room-tool-result','peer-tool-result'].includes(m.type)){
           const pending=this.controlPending.get(m.requestId);if(!pending)return;
           const current=this.journal.currentControl({bot_id:pending.botId,epoch:pending.epoch});
           if(m.type!==`${pending.kind}-result`||pending.ws!==ws||m.botId!==pending.botId||m.epoch!==pending.epoch||!current)throw Error('Hub tool response scope changed.');

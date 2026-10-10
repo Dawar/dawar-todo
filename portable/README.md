@@ -926,3 +926,26 @@ Central inbox reads show canonical metadata with bounded paging. Normal queue
 items and scheduled occurrences keep their existing admission priority.
 `centralPrimaryDispatch` and automatic room routing remain disabled until peer,
 task and Operator consumers are paired and complete Linux staging is accepted.
+
+### Canonical peer transport
+
+The hub reuses `PeerInbox` for original request/root/exchange/operation IDs,
+measured discussion limits, held inputs and reserved first replies. Owner
+Continue/Stop remains owner-only. Agent tools retain actual native caller
+provenance or nullable bot-only MCP provenance; their signed assigned-node
+lifetime and captured foreground generation fence new acceptance and same-ID
+receipt reconciliation. Peer messages grant no human authority. Legacy root
+upgrades do not run during read-only hub construction.
+
+Selected ready files use deterministic original `peer-file` IDs and scoped
+registered-storage grants. The hub has no remote workspace path authority.
+The recipient downloads and verifies original IDs, hashes and sizes before its
+normal primary turn is admitted. A file grant can survive a pre-control-commit
+failure; a same-ID retry reuses it without publishing a second intake.
+
+Peer requests/replies use the same canonical primary mailbox as promoted room
+results. Only an eligible active original root can start a queued peer intake;
+per-bot Stop, native Goals/queue/unknown state and original journal/receipt fences
+still apply. Unknown native acceptance is reconciled without a new submission.
+The shipping `centralPeers`, `centralPrimaryDispatch` and room-start capabilities
+remain disabled pending complete unified Linux staging and accepted activation.

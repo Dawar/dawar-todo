@@ -8,6 +8,7 @@ import {PrimaryExecution} from '../bot-bridge/primary-execution.mjs';
 import {preferencePatch} from '../bot-bridge/bot-preferences.mjs';
 import {HubBursts} from './hub-bursts.mjs';
 import {HubCollaboration} from './hub-collaboration.mjs';
+import {HubPeers} from './hub-peers.mjs';
 import { stagedQueue } from '../bot-bridge/prompt-queue.mjs';
 import { ownedList,publicLists,queueTool,flushDueLists } from '../bot-bridge/queue-lists.mjs';
 import { normalizeSchedule,collectDueRuns } from '../bot-bridge/schedules.mjs';
@@ -21,7 +22,7 @@ import {foregroundSource,validateForeground} from './foreground-source.mjs';
 import {validatePrimary} from './primary-source.mjs';
 export { hubActivation } from './hub-authority.mjs';
 import { controlWriteGuard } from './hub-authority.mjs';
-import { HUB_READS,HUB_MUTATIONS,HUB_TOOLS,NODE_LOGICAL_COMMANDS,HUB_BURST_MUTATIONS,HUB_ROOM_READS,HUB_ROOM_MUTATIONS } from './control-protocol.mjs';
+import { HUB_READS,HUB_MUTATIONS,HUB_TOOLS,NODE_LOGICAL_COMMANDS,HUB_BURST_MUTATIONS,HUB_ROOM_READS,HUB_ROOM_MUTATIONS,HUB_PEER_READS,HUB_PEER_MUTATIONS } from './control-protocol.mjs';
 
 export { HUB_READS,HUB_MUTATIONS,HUB_TOOLS,NODE_LOGICAL_COMMANDS };
 const now=()=>new Date().toISOString();
@@ -39,9 +40,10 @@ export class HubControls extends EventEmitter {
     this.defaults=this.store.meta('portable-defaults')??{};
     this.executionConfig=new ExecutionConfiguration(this);this.plans=new PlanLifecycle(this);
     this.primary={store:this.store,runtime:this,single:bot=>PrimaryExecution.prototype.single(bot),accept:PrimaryExecution.prototype.accept,
-      list:PrimaryExecution.prototype.list,publicItem:PrimaryExecution.prototype.publicItem,cursor:PrimaryExecution.prototype.cursor,
+      list:PrimaryExecution.prototype.list,publicItem:PrimaryExecution.prototype.publicItem,cursor:PrimaryExecution.prototype.cursor,openItems:PrimaryExecution.prototype.openItems,
       publish:botId=>this.emitEvent('work',{},botId)};this.bursts=HubBursts.create(this);
     this.collaboration=new HubCollaboration(this);
+    this.peers=new HubPeers(this);
     const transaction=this.store.transaction.bind(this.store);
     const refresh=controlWriteGuard(this.store.db,{writeScope:()=>this.store.transactionDepth>0,transactionScope:()=>this.controlTransactionDepth>0});
     this.store.transaction=fn=>{
@@ -132,6 +134,10 @@ export class HubControls extends EventEmitter {
   async request(owner,{method,botId,params={},operationId},caller={kind:'owner'}) {
     const {b}=this.scope(owner,botId);
     if(!params||typeof params!=='object'||Array.isArray(params))throw Error('Invalid logical control parameters.');
+    if(HUB_PEER_READS.has(method)||HUB_PEER_MUTATIONS.has(method)){
+      if(caller.kind!=='owner')throw Error('Use the captured assigned peer tool route.');
+      return this.peers.request(owner,{method,botId,params,operationId});
+    }
     if(HUB_ROOM_READS.has(method)||HUB_ROOM_MUTATIONS.has(method)||method==='conversations.respond')return this.collaboration.request(owner,{method,botId,params,operationId},caller);
     if(method==='inbox.list')return this.primary.list(b,params);
     if(method==='bursts.read')return this.bursts.read(b);
@@ -275,19 +281,26 @@ export class HubControls extends EventEmitter {
       }
     }finally{this.ticking=false;}
   }
+  primaryEligible(owner,intake){
+    if(intake.kind==='peer')return this.peers.eligible(owner,intake);
+    const r=this.store.get('collaborationResult',intake.sourceId);
+    return r?.botId===intake.botId&&r.promotion?.id===intake.id&&!this.store.get('collaborationConsumption',r.id);
+  }
   primaryState(row,payload){
-    const {p,b}=this.scope(row.owner,row.bot_id),intake=this.store.get('primaryInbox',row.operation_id),r=intake&&this.store.get('collaborationResult',intake.sourceId);
-    if(p.node_id!==row.node_id||p.epoch!==row.epoch||!intake||validatePrimary(intake,b.id,b.threadId,row.operation_id)!==validatePrimary(payload.params.intake,b.id,b.threadId,row.operation_id)||intake.operationId!==row.operation_id||r?.botId!==b.id||r.promotion?.id!==intake.id)throw Error('Canonical original result source or placement changed.');
+    const {p,b}=this.scope(row.owner,row.bot_id),intake=this.store.get('primaryInbox',row.operation_id);
+    if(p.node_id!==row.node_id||p.epoch!==row.epoch||!intake||validatePrimary(intake,b.id,b.threadId,row.operation_id)!==validatePrimary(payload.params.intake,b.id,b.threadId,row.operation_id)||intake.operationId!==row.operation_id)throw Error('Canonical original intake source or placement changed.');
     return {operationId:row.operation_id,fingerprint:row.fingerprint,controlRevision:p.control_revision,intake,
-      canDispatch:!p.stopped&&!b.queuePaused&&!b.archived&&!b.archiving&&intake.state==='dispatching'&&!this.store.get('collaborationConsumption',r.id)&&this.router.connection(p)?.portableHello?.capabilities?.centralPrimaryDispatch===true};
+      canDispatch:!p.stopped&&!b.queuePaused&&!b.archived&&!b.archiving&&intake.state==='dispatching'&&this.primaryEligible(row.owner,intake)&&this.router.connection(p)?.portableHello?.capabilities?.centralPrimaryDispatch===true};
   }
   dispatchPrimary(p,intake){
     return this.store.transaction(()=>{
-      const current=this.hub.placement(p.owner,p.bot_id),bot=this.store.bot(p.bot_id),q=this.owned('primaryInbox',intake.id,bot.id),r=this.store.get('collaborationResult',q.sourceId);
-      if(fingerprint(current)!==fingerprint(p)||current.stopped||bot.queuePaused||bot.archived||bot.archiving||this.plans.blocked(bot.id)||this.router.connection(current)?.portableHello?.capabilities?.centralPrimaryDispatch!==true||fingerprint(q)!==fingerprint(intake)||q.state!=='queued'||r?.botId!==bot.id||r.promotion?.id!==q.id||this.store.get('collaborationConsumption',r.id))return;
+      const current=this.hub.placement(p.owner,p.bot_id),bot=this.store.bot(p.bot_id),q=this.owned('primaryInbox',intake.id,bot.id);
+      if(fingerprint(current)!==fingerprint(p)||current.stopped||bot.queuePaused||bot.archived||bot.archiving||this.plans.blocked(bot.id)||this.router.connection(current)?.portableHello?.capabilities?.centralPrimaryDispatch!==true||fingerprint(q)!==fingerprint(intake)||q.state!=='queued'||!this.primaryEligible(p.owner,q))return;
       validatePrimary(q,bot.id,bot.threadId,q.id);
       if(this.hub.db.prepare("SELECT 1 FROM portable_mailbox WHERE bot_id=? AND state<>'terminal' LIMIT 1").get(bot.id))return;
-      const row=this.hub.enqueueOn(this.store.db,p.owner,bot.id,q.id,{method:'portable.primaryDispatch',params:{intake:q}});
+      const files=(q.attachmentIds??[]).map(fileId=>this.owned('attachment',fileId,bot.id));
+      if(files.some(f=>!f.ready||!/^[a-f0-9]{64}$/.test(f.sha256??'')||!Number.isSafeInteger(f.size)||f.size<0)||files.reduce((n,f)=>n+f.size,0)>100*1024*1024)return;
+      const row=this.hub.enqueueOn(this.store.db,p.owner,bot.id,q.id,{method:'portable.primaryDispatch',params:{intake:q,files:files.map(({id,sha256,size})=>({id,sha256,size}))}});
       this.store.put('primaryInbox',{...q,state:'dispatching',operationId:q.id,attemptedAt:now()});
       this.emitEvent('work',{},bot.id);this.store.afterCommit(()=>this.router.connection(current)?.send(boundedFrame({type:'sync',...this.hub.sync(current.node_id)})));return row;
     });
@@ -340,7 +353,8 @@ export class HubControls extends EventEmitter {
           if(q.turnId&&q.turnId!==receipt.turnId)throw Error('Original result receipt changed its accepted turn.');
           patch={state:'accepted',turnId:receipt.turnId,...(row.state==='terminal'?{terminalStatus:terminal}:{}),error:null};
         }else return;
-        this.store.put('primaryInbox',{...q,...patch});this.emitEvent('work',{},b.id);
+        const accepted=this.store.put('primaryInbox',{...q,...patch});this.emitEvent('work',{},b.id);
+        if(q.kind==='peer')this.peers.receipt(row.owner,accepted,patch.turnId?{id:patch.turnId,status:patch.terminalStatus??'inProgress'}:null);
         this.store.db.prepare('INSERT INTO portable_control_receipts VALUES(?,?) ON CONFLICT(operation_id) DO UPDATE SET receipt_hash=excluded.receipt_hash').run(row.operation_id,row.receipt_hash);
       });return;
     }

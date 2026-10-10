@@ -11,7 +11,9 @@ export const LOCAL_ROOM_TOOL_METHODS=new Set(['execution.config','conversations.
 export const ROOM_NATIVE_READS=new Set(['conversations.history','conversations.detail','conversations.log','conversations.requests']);
 export const ROOM_QUESTION_LOOKUP=Symbol('original-room-question-lookup');
 export const roomQuestionSource=p=>({id:p.id,key:p.key,botId:p.botId,roomId:p.roomId,contextId:p.contextId,threadId:p.threadId,turnId:p.turnId,async:p.async??false,epoch:p.epoch??null,request:p.request,createdAt:p.createdAt});
-export const HUB_READS=new Set(['queue.list','queueLists.list','schedules.list','runs.page','bursts.read','bursts.typing','inbox.list',...HUB_ROOM_READS]);
-export const HUB_MUTATIONS=new Set(['queue.add','queue.update','queue.delete','queue.reorder','queue.move','queue.merge','queue.send','queue.resume','work.resume','queueLists.save','queueLists.delete','queueLists.flush','schedules.save','schedules.delete','schedules.run','conversations.respond',...HUB_BURST_MUTATIONS,...HUB_ROOM_MUTATIONS]);
+export const HUB_PEER_READS=new Set(['peers.directory','peers.list','peers.read','peers.root','peers.status','peers.feed','peers.exchange','peers.held']);
+export const HUB_PEER_MUTATIONS=new Set(['peers.send','peers.reply','peers.cancel','peers.control']);
+export const HUB_READS=new Set(['queue.list','queueLists.list','schedules.list','runs.page','bursts.read','bursts.typing','inbox.list',...HUB_ROOM_READS,...HUB_PEER_READS]);
+export const HUB_MUTATIONS=new Set(['queue.add','queue.update','queue.delete','queue.reorder','queue.move','queue.merge','queue.send','queue.resume','work.resume','queueLists.save','queueLists.delete','queueLists.flush','schedules.save','schedules.delete','schedules.run','conversations.respond',...HUB_BURST_MUTATIONS,...HUB_ROOM_MUTATIONS,...HUB_PEER_MUTATIONS]);
 export const HUB_TOOLS=new Set(['bots_queue','bots_schedule_list','bots_schedule_save','bots_schedule_delete']);
 export const NODE_LOGICAL_COMMANDS=new Set(['portable.queueDispatch','portable.scheduleDispatch','portable.queueSend','portable.queueResume','portable.burstDispatch','portable.roomDispatch','portable.roomRespond','portable.primaryDispatch']);

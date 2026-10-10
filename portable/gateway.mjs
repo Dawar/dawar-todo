@@ -42,6 +42,7 @@ export function startGateway(config) {
   const broadcast=(owner,event)=>{for(const b of browsers)if(b.owner===owner&&!b.desktop&&b.expiresAt>Date.now()&&b.valid()&&b.ws.readyState===1)b.ws.send(JSON.stringify({type:'event',event}));};
   const controls=new HubControls({path:join(config.dataDirectory,'control.sqlite'),hub:store,router,authority,broadcast,...(config.schedulerQuietWindow?{quietWindow:config.schedulerQuietWindow}:{})});router.controls=controls;
   const nodeStorage=new HubNodeStorage({hub:store,controls,application,objects,config});
+  controls.nodeStorage=nodeStorage;
   const voice=config.voice?.enabled===true?createVoiceRuntime(config,{writer,assertWriter:()=>controls.assertWriter()}):null;
   const scheduler=authority?setInterval(()=>void controls.tick().catch(error=>controls.emit('fault',error)),5000):null;
   const downloadDirectory=resolve(config.agentDownloadDirectory??fileURLToPath(new URL('../agent-downloads',import.meta.url)));
@@ -252,6 +253,12 @@ export function startGateway(config) {
             if(p.node_id!==nodeId||p.epoch!==m.epoch||typeof m.requestId!=='string'||m.requestId.length>180)throw Error('Foreign captured room tool request.');
             const answer=value=>{store.node(nodeId);const current=store.placement(n.owner,m.botId);if(connections.get(nodeId)!==ws||current.node_id!==nodeId||current.epoch!==m.epoch)throw Error('Captured room tool scope changed');ws.send(boundedFrame({type:'room-tool-result',requestId:m.requestId,botId:m.botId,epoch:m.epoch,...value}));};
             void controls.collaboration.tool(n.owner,nodeId,m.botId,m.epoch,m).then(result=>answer({result})).catch(error=>answer({error:error.message,outcome:error.outcome??'uncertain'})).catch(()=>ws.close(1008,'Captured room tool scope changed'));
+          }
+          else if(m.type==='peer-tool-request'){
+            const n=store.node(nodeId),p=store.placement(n.owner,m.botId);
+            if(p.node_id!==nodeId||p.epoch!==m.epoch||typeof m.requestId!=='string'||m.requestId.length>180)throw Error('Foreign captured peer request.');
+            const answer=value=>{store.node(nodeId);const current=store.placement(n.owner,m.botId);if(connections.get(nodeId)!==ws||current.node_id!==nodeId||current.epoch!==m.epoch)throw Error('Captured peer scope changed');ws.send(boundedFrame({type:'peer-tool-result',requestId:m.requestId,botId:m.botId,epoch:m.epoch,...value}));};
+            void controls.peers.tool(n.owner,nodeId,m.botId,m.epoch,m).then(result=>answer({result})).catch(error=>answer({error:error.message,outcome:error.outcome??'uncertain'})).catch(()=>ws.close(1008,'Captured peer scope changed'));
           }
           else if(m.type==='control-request'){
             const n=store.node(nodeId),p=store.placement(n.owner,m.botId);

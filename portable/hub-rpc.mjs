@@ -138,6 +138,8 @@ export class HubRpc {
     // has implemented its consumer. Keep unfinished portable controls hidden.
     for(const key of ['taskRequests','backgroundRunLanes','scheduleDecisions','peerInbox','peerRootControls','peerBodyPaging','collaborationRooms','operatorCalls','operatorInputQuestions','secureInputs','secureResponseLifecycle','messageBursts','burstDiscard','burstControls','burstQueue','taskQueues','teams','botAdministration'])delete common[key];
     if(this.controls?.authority)for(const key of ['messageBursts','burstDiscard','burstControls','burstQueue'])common[key]=1;
+    if(this.controls?.authority&&placements.length&&snapshots.length===placements.length&&placements.every(p=>this.connection(p)?.portableHello?.capabilities?.centralPeers===true))
+      for(const key of ['peerInbox','peerRootControls','peerBodyPaging'])common[key]=1;
     if(placements.length&&snapshots.length===placements.length&&placements.every(p=>secureCapable(this.store.node(p.node_id),this.connection(p))))
       for(const key of ['secureInputs','secureResponseLifecycle'])if(snapshots.every(({s})=>s.capabilities?.[key]===1))common[key]=1;
     if(placements.some(p=>!desktopCapable(this.store.node(p.node_id),this.connection(p))))for(const key of ['botDesktops','botBrowserRetention'])delete common[key];

@@ -15,8 +15,9 @@ export const PEER_TOOL = { name: 'bots_peers', description: `Collaborate with na
     state: { type: 'string', enum: ['waiting', 'completed', 'failed'] }, cursor: { type: 'string' }, after: { type: 'string' }, limit: { type: 'integer', minimum: 1, maximum: 100 } }, required: ['operation'] } };
 
 export class PeerInbox {
-  constructor(runtime) {
+  constructor(runtime, { upgradeRoots = true } = {}) {
     this.runtime = runtime; this.store = runtime.store;
+    if(!upgradeRoots)return; // Portable read-only staging cannot adopt a writer.
     // Metadata-only, idempotent upgrade. Legacy capped roots start HELD, with
     // original IDs/counts/intakes untouched. No dispatch or replay occurs here.
     let after = 0;
@@ -362,7 +363,7 @@ export class PeerInbox {
       if(reason&&!reserved)this.hold(bot,method,p,operationId,fingerprint,origin,root,evidence);
       if (!this.runtime.primary.single(recipient) || recipient.archived || recipient.archiving) throw new Error('Recipient is not available for primary intake.');
       const ids = kind === 'cancel' ? [] : p.attachmentIds ?? [];
-      const copies = await copyPeerAttachments(this.runtime, bot, recipient, ids, exchangeId);
+      const copies = await (this.runtime.copyPeerAttachments ? this.runtime.copyPeerAttachments(bot,recipient,ids,exchangeId) : copyPeerAttachments(this.runtime, bot, recipient, ids, exchangeId));
       try {
         root=this.ensureRoot(this.store.get('peerRoot',root.id) ?? root,false);
         reason=peerPauseReason(root,evidence,Date.now());

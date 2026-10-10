@@ -82,7 +82,16 @@ export async function admitLogicalCommand(transport,command,payload) {
     }else if(primary){
       const local=store.get('primaryInbox',source.id);
       if(local&&(validatePrimary(local,bot.id,bot.threadId,command.operation_id)!==validatePrimary(source,bot.id,bot.threadId,command.operation_id)||local.state!=='queued'))throw unknown('Original local result intake differs or was already attempted.');
-      text=source.text;input=[{type:'text',text,text_elements:[]}];
+      text=source.text;
+      const files=params.files??[];
+      if(!Array.isArray(files)||files.length>12||fingerprint(files.map(f=>f.id))!==fingerprint(source.attachmentIds??[])||files.reduce((n,f)=>n+f.size,0)>100*1024*1024)throw refused('Original intake files exceed their manifest or bound.');
+      for(const f of files){
+        if(!id(f.id)||!/^[a-f0-9]{64}$/.test(f.sha256??'')||!Number.isSafeInteger(f.size)||f.size<0)throw refused('Invalid original intake file manifest.');
+        if(!store.get('attachment',f.id)&&runtime.storage)await runtime.storage.importAttachment(current,f.id);
+        const a=runtime.owned('attachment',f.id,bot.id);
+        if(!a.ready||a.sha256!==f.sha256||a.size!==f.size)throw refused('Original intake file hash or size changed.');attachments.push(f.id);
+      }
+      input=attachments.length?await runtime.messageInput(current,{text,attachments}):[{type:'text',text,text_elements:[]}];
     }else{
       if(typeof source.title!=='string'||typeof source.prompt!=='string'||source.prompt.length>50000||!Number.isFinite(Date.parse(source.scheduledAt)))throw refused('Invalid original scheduled occurrence.');
       const local=store.get('run',source.id);

@@ -2,6 +2,7 @@ import { BotStorage,StorageError } from '../db/bot-storage.ts';
 import { TaskQueueExports } from '../db/task-queue-exports.ts';
 import { fingerprint,id } from './protocol.mjs';
 import { artifactInput } from './node-storage-contract.mjs';
+import {createHash} from 'node:crypto';
 
 export class HubNodeStorage {
   constructor({hub,controls,application,objects,config}){
@@ -15,6 +16,33 @@ export class HubNodeStorage {
     const n=this.hub.node(nodeId),p=this.hub.placement(n.owner,botId);
     if(n.owner!==this.config.owner.key||p.node_id!==nodeId||p.epoch!==epoch)throw Error('Foreign, revoked or stale artifact node scope.');
     return {nodeId,botId,epoch};
+  }
+  async peerCopies(owner,sender,recipient,ids,exchangeId){
+    if(owner!==this.config.owner.key||!id(exchangeId)||!Array.isArray(ids)||ids.length>12||new Set(ids).size!==ids.length||ids.some(value=>!id(value)))throw Error('Invalid scoped registered peer files.');
+    const placements=[sender,recipient].map(b=>this.hub.placement(owner,b.id));
+    const current=()=>{
+      this.controls.assertWriter();
+      for(let i=0;i<placements.length;i++)if(fingerprint(this.hub.placement(owner,[sender,recipient][i].id))!==fingerprint(placements[i]))throw Error('Original peer file placement changed.');
+    };
+    current();const storage=new BotStorage(this.environment,owner,true);await storage.initialize();current();
+    const sources=[];
+    for(const fileId of ids){
+      const {attachment}=await storage.download(fileId,sender.id);current();
+      if(attachment.id!==fileId||attachment.botId!==sender.id||!attachment.ready||attachment.parentId||!Number.isSafeInteger(attachment.size)||attachment.size<0||!/^[a-f0-9]{64}$/.test(attachment.sha256??''))throw Error('Peer file must be its ready registered original.');
+      sources.push(attachment);
+    }
+    if(sources.reduce((n,a)=>n+a.size,0)>100*1024*1024||sources.filter(a=>a.mimeType.startsWith('image/')).length>6)throw Error('Peer files exceed the original 100 MiB/six-image bounds.');
+    const copies=[];
+    for(const source of sources){
+      current();const attachmentId=`peer-file:${createHash('sha256').update(`${exchangeId}:${recipient.id}:${source.id}`).digest('hex')}`;
+      const {attachment}=await storage.share({id:source.id,botId:sender.id,recipientBotId:recipient.id,attachmentId,exchangeId,createdAt:new Date().toISOString()});current();
+      if(attachment.id!==attachmentId||attachment.botId!==recipient.id||attachment.sha256!==source.sha256||attachment.size!==source.size||attachment.peerSource?.exchangeId!==exchangeId||attachment.peerSource?.botId!==sender.id||attachment.peerSource?.attachmentId!==source.id)throw Error('Original registered peer grant changed.');
+      copies.push({...attachment,received:attachment.size});
+    }
+    // Metadata grants may precede the control transaction. They are private,
+    // deterministic and reused under the same exchange/file IDs after a crash;
+    // only PeerInbox commits their visible intake and original receipt.
+    return copies;
   }
   grantResult(result,scope,input){
     const copy=structuredClone(result);
