@@ -852,7 +852,7 @@ Native history/configuration and desktop/workspace/external resource leases
 remain on the assigned machine. Fresh central caller/membership/hold/control
 authorization precedes the original local guarded operation. No cross-machine
 shared-filesystem lock or OS sandbox is implied. Foreground room dispatch,
-await/promotion/consumption and synchronous native question answers still await
+await/promotion/consumption still await
 their paired consumers. Unsupported native operations fail explicitly before
 creating local shadow records. Automatic room capability remains disabled.
 
@@ -883,8 +883,25 @@ delivery and rejects changed answer bytes or a replacement operation ID.
 Room native terminal events settle the corresponding node journal command.
 Context snapshots retain their own current native generation and active turn;
 a delayed completion of an older delivery cannot clear a newer active turn.
-Synchronous request answers remain explicitly unsupported pending their paired
-native response/settlement transport. Automatic room capability remains false
+Synchronous answers use an original owner-operation mailbox command, bound to
+the exact question, native request ID (including its type), agent lifetime,
+bot, node, placement epoch and registered context. Current live source and
+Stop/room/context fences are checked before admission. The original local
+response producer persists its operation, and the node journal persists the
+attempt, before writing the response to existing native stdio. This does not
+start a new model turn or enqueue another answer message.
+Existing room cards' `requests.respond` action routes centrally only for a
+canonical original room question or answer. Other foreground requests keep
+their assigned-agent route; neither alias supplies owner or question authority.
+
+A positive receipt says `written` / `native-stdio-write`; it does not assert
+native acknowledgement or exactly-once external effects. Lost delivery ACKs
+recover the same durable operation. An uncertain write stays unknown and
+cannot resend the response. A new agent lifetime cannot answer an old handle;
+it can only read a positively completed original write receipt. Hub and node
+validate that precise write proof before terminal settlement. Pending source
+records clear only on a matching original write receipt; later native turn
+completion remains separate. Automatic room capability remains false
 until the remaining foreground, result and other communication consumers are
 complete. Disposable Linux/loopback observations are source evidence, not
 installed native, owner, device or production acceptance.

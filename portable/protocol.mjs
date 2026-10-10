@@ -3,6 +3,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { readPrivate,savePrivate } from './private-file.mjs';
 import { CODEX_VERSION } from '../bot-bridge/codex-version.mjs';
+import {roomQuestionSource} from './control-protocol.mjs';
 
 export const PROTOCOL_VERSION = 1;
 export const RUNTIME_VERSION = CODEX_VERSION;
@@ -30,6 +31,14 @@ export function originalNativeProof(receipt,operationId) {
 }
 export function originalLocalControlProof(receipt,operationId,hash,payload) {
   const e=receipt?.evidence,p=payload?.params;
+  if(payload?.method==='portable.roomRespond'){
+    const q=p?.question,r=receipt?.result;
+    if(!q?.request||!p?.agentEpoch||!q.key||!q.contextId)return false;
+    return q.async!==true&&q.epoch===p.agentEpoch&&fingerprint(roomQuestionSource(q))===p.questionFingerprint&&e?.kind==='original-native-response'&&receipt.operationId===operationId&&e.operationId===operationId&&e.fingerprint===hash
+      &&id(q.threadId)&&id(q.turnId)&&receipt.threadId===q.threadId&&receipt.turnId===q.turnId&&e.threadId===q.threadId&&e.turnId===q.turnId&&e.key===q.key&&e.contextId===q.contextId
+      &&e.agentEpoch===p.agentEpoch&&e.nativeRequestId===q.request.id&&e.questionFingerprint===p.questionFingerprint&&e.resultFingerprint===fingerprint(p.result)
+      &&r?.state==='written'&&r.confirmation==='native-stdio-write'&&r.operationId===operationId&&r.key===q.key&&r.contextId===q.contextId&&r.agentEpoch===p.agentEpoch&&r.threadId===q.threadId&&r.turnId===q.turnId;
+  }
   return payload?.method==='portable.queueResume'&&e?.kind==='original-local-control'&&e.method===payload.method
     &&receipt.operationId===operationId&&e.operationId===operationId&&e.fingerprint===hash
     &&id(receipt.threadId)&&receipt.threadId===p.threadId&&e.threadId===p.threadId

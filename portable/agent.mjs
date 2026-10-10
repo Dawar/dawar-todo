@@ -21,6 +21,7 @@ import {verifiedAgentRelease} from './runtime-release.mjs';
 import {readPrivate} from './private-file.mjs';
 import {AgentSecureTransport} from './secure-transport.mjs';
 import {AgentCollaboration} from './agent-collaboration.mjs';
+import {roomAnswerReceipt} from './room-answer.mjs';
 const fingerprintLegacy=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
 export class AgentTransport {
@@ -120,6 +121,12 @@ export class AgentTransport {
           if(row.state==='dispatching'&&!op){
             this.journal.settle(command.operation_id,'unknown',{operationId:command.operation_id,reason:'Restart interrupted command admission.'});
             this.receipt(this.journal.db.prepare('SELECT * FROM node_commands WHERE operation_id=?').get(command.operation_id));return;
+          }
+          if(payload.method==='portable.roomRespond'){
+            let result;try{result=this.collaboration.recoverResponse(command);}catch{return;}
+            const current=this.journal.db.prepare('SELECT * FROM node_commands WHERE operation_id=?').get(command.operation_id);
+            if(current?.fingerprint!==row.fingerprint||!['dispatching','unknown'].includes(current.state))return;
+            this.journal.settle(command.operation_id,'terminal',roomAnswerReceipt(command,result));this.receipt(this.journal.db.prepare('SELECT * FROM node_commands WHERE operation_id=?').get(command.operation_id));return;
           }
           if(payload.method==='portable.roomDispatch'){
             if(!op||op.botId!==bot.id||op.method!=='collaboration.dispatch'||op.portableFingerprint!==command.fingerprint)return;
@@ -253,10 +260,10 @@ export class AgentTransport {
       const result=NODE_LOGICAL_COMMANDS.has(payload.method)?await admitLogicalCommand(this,command,payload):
         DESKTOP_MUTATIONS.has(payload.method)?await this.runtime.maintenance.admit(run):await run(), turnId=result?.turn?.id??result?.turnId;
       const status=result?.turn?.status??result?.nativeStatus,terminalStatus=['completed','failed','interrupted'].includes(status)?status:null;
-      const receipt=payload.method==='portable.queueResume'?queueResumeReceipt(command,result):{operationId:command.operation_id,threadId:payload.method==='portable.roomDispatch'?result?.threadId:bot.threadId,...(turnId?{turnId}:{}),...(terminalStatus?{nativeStatus:terminalStatus}:{}),...(result?.evidence?{evidence:result.evidence}:{}),result};
-      this.journal.settle(command.operation_id,payload.method==='portable.queueResume'?'terminal':turnId?(terminalStatus?'terminal':'native-accepted'):payload.method==='turn.send'||NODE_LOGICAL_COMMANDS.has(payload.method)?'unknown':'terminal',receipt);
+      const receipt=payload.method==='portable.roomRespond'?roomAnswerReceipt(command,result):payload.method==='portable.queueResume'?queueResumeReceipt(command,result):{operationId:command.operation_id,threadId:payload.method==='portable.roomDispatch'?result?.threadId:bot.threadId,...(turnId?{turnId}:{}),...(terminalStatus?{nativeStatus:terminalStatus}:{}),...(result?.evidence?{evidence:result.evidence}:{}),result};
+      this.journal.settle(command.operation_id,['portable.queueResume','portable.roomRespond'].includes(payload.method)?'terminal':turnId?(terminalStatus?'terminal':'native-accepted'):payload.method==='turn.send'||NODE_LOGICAL_COMMANDS.has(payload.method)?'unknown':'terminal',receipt);
     } catch(error){
-      if(error.deferred&&this.journal.db.prepare('SELECT state FROM node_commands WHERE operation_id=?').get(command.operation_id)?.state==='received')return;
+      if(error.deferred&&this.journal.db.prepare('SELECT state FROM node_commands WHERE operation_id=?').get(command.operation_id)?.state==='received'&&!(payload.method==='portable.roomRespond'&&this.runtime.store.operation(command.operation_id)))return;
       this.journal.settle(command.operation_id,error.outcome==='rejected'?'terminal':'unknown',{operationId:command.operation_id,outcome:error.outcome??'uncertain',error:error.message});
     }
     this.receipt(this.journal.db.prepare('SELECT * FROM node_commands WHERE operation_id=?').get(command.operation_id));

@@ -14,4 +14,4 @@ export const roomQuestionSource=p=>({id:p.id,key:p.key,botId:p.botId,roomId:p.ro
 export const HUB_READS=new Set(['queue.list','queueLists.list','schedules.list','runs.page','bursts.read','bursts.typing',...HUB_ROOM_READS]);
 export const HUB_MUTATIONS=new Set(['queue.add','queue.update','queue.delete','queue.reorder','queue.move','queue.merge','queue.send','queue.resume','work.resume','queueLists.save','queueLists.delete','queueLists.flush','schedules.save','schedules.delete','schedules.run','conversations.respond',...HUB_BURST_MUTATIONS,...HUB_ROOM_MUTATIONS]);
 export const HUB_TOOLS=new Set(['bots_queue','bots_schedule_list','bots_schedule_save','bots_schedule_delete']);
-export const NODE_LOGICAL_COMMANDS=new Set(['portable.queueDispatch','portable.scheduleDispatch','portable.queueSend','portable.queueResume','portable.burstDispatch','portable.roomDispatch']);
+export const NODE_LOGICAL_COMMANDS=new Set(['portable.queueDispatch','portable.scheduleDispatch','portable.queueSend','portable.queueResume','portable.burstDispatch','portable.roomDispatch','portable.roomRespond']);

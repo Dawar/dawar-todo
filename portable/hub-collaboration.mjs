@@ -1,10 +1,12 @@
 import {AsyncLocalStorage} from 'node:async_hooks';
+import {createHash} from 'node:crypto';
 import {Collaboration} from '../bot-bridge/collaboration.mjs';
 import {HUB_ROOM_READS,HUB_ROOM_MUTATIONS,HUB_ROOM_TOOL_METHODS,roomDeliverySource,roomQuestionSource,ROOM_QUESTION_LOOKUP} from './control-protocol.mjs';
-import {fingerprint,boundedFrame,originalNativeProof,id} from './protocol.mjs';
+import {fingerprint,boundedFrame,originalNativeProof,originalLocalControlProof,id} from './protocol.mjs';
 import {validateResponse} from '../bot-bridge/runtime.mjs';
 
 const now=()=>new Date().toISOString();
+const legacyHash=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
 // Canonical room/post/delivery identities belong to the hub control store.
 // Native provisioning, questions and acceptance belong to the assigned agent.
@@ -132,7 +134,7 @@ export class HubCollaboration extends Collaboration {
     if(!retained?.portableQuestionSource)throw Error('Read this original context question before answering.');
     const scope=this.nativeScope(this.owners.getStore(),botId,retained.contextId);
     if(retained.botId!==botId||retained.threadId!==scope.threadId||retained.portableQuestionSource.nodeId!==scope.nodeId||retained.portableQuestionSource.epoch!==scope.placementEpoch)throw Error('Question belongs to a different original placement.');
-    if(!retained.async)throw Object.assign(Error('Synchronous room answers await their original native-response transport; no answer was sent.'),{outcome:'not-sent'});
+    if(!retained.async)return this.ownerSyncAnswer(request,retained,scope,previous);
     if(previous)return super.respond(request);
     const response=await this.runtime.router.request(this.owners.getStore(),{id:`room-question:${fingerprint(request.operationId)}`,method:'portable.roomQuestion',botId,params:{contextId:scope.contextId,key:p.key}},'authenticated-hub-owner',ROOM_QUESTION_LOOKUP);
     const actual=response.result?.pending;
@@ -141,10 +143,42 @@ export class HubCollaboration extends Collaboration {
     if(d.answerKey!==p.key)throw Error('Original answer delivery identity changed.');
     return result;
   }
+  async ownerSyncAnswer(request,retained,scope,previous){
+    const owner=this.owners.getStore(),{botId,operationId,params:p}=request,result=validateResponse(retained.request,p.result),hash=legacyHash({method:request.method,botId,key:p.key,result});
+    const old=this.store.operation(operationId);
+    if(previous||old){
+      if(!previous||previous.botId!==botId||previous.operationId!==operationId||previous.fingerprint!==hash||old?.botId!==botId||old.method!==request.method||old.fingerprint!==hash)throw Error('The original answer/input owns this question. No replacement was sent.');
+      const row=this.runtime.hub.db.prepare('SELECT * FROM portable_mailbox WHERE operation_id=?').get(operationId);
+      if(!row||row.owner!==owner||row.bot_id!==botId||row.node_id!==scope.nodeId||row.epoch!==scope.placementEpoch||row.fingerprint!==old.portableFingerprint)throw Error('Original answer transport requires reconciliation.');
+      return (await this.runtime.router.wait(row)).result;
+    }
+    const response=await this.runtime.router.request(owner,{id:`room-question:${fingerprint(operationId)}`,method:'portable.roomQuestion',botId,params:{contextId:scope.contextId,key:p.key}},'authenticated-hub-owner',ROOM_QUESTION_LOOKUP),q=response.result?.pending;
+    if(!q||q.async===true||q.unavailable||q.epoch!==response.result.agentEpoch||q.epoch!==retained.portableQuestionSource.agentEpoch||fingerprint(roomQuestionSource(q))!==retained.portableQuestionSource.fingerprint||fingerprint(this.nativeScope(owner,botId,scope.contextId))!==fingerprint(scope))throw Error('Original synchronous question or agent lifetime changed. No answer was queued.');
+    const row=this.store.transaction(()=>{
+      const {p:placement,b}=this.runtime.scope(owner,botId),c=this.context(botId,q.contextId),room=this.ownedRoom(q.roomId),pending=this.store.get('collaborationPending',p.key);
+      if(this.store.operation(operationId)||this.store.get('collaborationAnswer',p.key)||!pending||pending.unavailable||fingerprint(roomQuestionSource(pending))!==retained.portableQuestionSource.fingerprint||placement.stopped||b.queuePaused||b.archived||b.archiving||c.paused||c.activeTurnId!==q.turnId||room.held||!room.members.includes(botId)||fingerprint(this.nativeScope(owner,botId,scope.contextId))!==fingerprint(scope))throw Error('Original question, room or placement changed before answer persistence.');
+      const immutableScope={botId,nodeId:scope.nodeId,placementEpoch:scope.placementEpoch,contextId:q.contextId,roomId:q.roomId,threadId:q.threadId};
+      const params={question:q,questionFingerprint:retained.portableQuestionSource.fingerprint,agentEpoch:q.epoch,result,scope:immutableScope};
+      const command=this.runtime.hub.enqueueOn(this.store.db,owner,botId,operationId,{method:'portable.roomRespond',params});
+      this.store.put('collaborationAnswer',{id:p.key,botId,contextId:q.contextId,pending,operationId,fingerprint:hash,state:'queued',portableAnswer:{synchronous:true,params}});
+      this.store.saveOperation(operationId,hash,'dispatching',{method:request.method,botId,params:p,contextId:q.contextId,portableFingerprint:command.fingerprint});
+      this.publish(q.roomId,{contextId:q.contextId,questionKey:q.key,operationId});
+      return command;
+    });
+    return (await this.runtime.router.wait(row)).result;
+  }
+  answerState(owner,nodeId,botId,epoch,row,payload){
+    const {p,b}=this.runtime.scope(owner,botId),params=payload.params,q=params?.question,a=q&&this.store.get('collaborationAnswer',q.key),op=this.store.operation(row.operation_id);
+    if(!q||q.async===true||q.botId!==botId||q.epoch!==params.agentEpoch||fingerprint(roomQuestionSource(q))!==params.questionFingerprint||a?.botId!==botId||a.operationId!==row.operation_id||a.fingerprint!==legacyHash({method:'conversations.respond',botId,key:q.key,result:params.result})||fingerprint(a.portableAnswer?.params)!==fingerprint(params)||op?.portableFingerprint!==row.fingerprint||params.scope.nodeId!==nodeId||params.scope.placementEpoch!==epoch||params.scope.botId!==botId||params.scope.contextId!==q.contextId||params.scope.roomId!==q.roomId||params.scope.threadId!==q.threadId)throw Error('Original synchronous answer source changed.');
+    const c=this.context(botId,q.contextId),room=this.ownedRoom(q.roomId),pending=this.store.get('collaborationPending',q.key);
+    return {operationId:row.operation_id,fingerprint:row.fingerprint,botId,epoch,controlRevision:p.control_revision,room,params,
+      canRespond:!p.stopped&&!b.queuePaused&&!b.archived&&!b.archiving&&!c.paused&&c.threadId===q.threadId&&c.activeTurnId===q.turnId&&!room.held&&room.members.includes(botId)&&a.state==='queued'&&!!pending&&!pending.unavailable&&fingerprint(roomQuestionSource(pending))===params.questionFingerprint&&this.runtime.router.connection(p)?.portableHello?.capabilities?.centralRoomDispatch===true};
+  }
   nodeState(owner,nodeId,botId,epoch,operationId,hash){
     const {p}=this.runtime.scope(owner,botId),row=this.runtime.hub.db.prepare('SELECT * FROM portable_mailbox WHERE operation_id=?').get(operationId);
     if(p.node_id!==nodeId||p.epoch!==epoch||!row||row.owner!==owner||row.bot_id!==botId||row.node_id!==nodeId||row.epoch!==epoch||row.fingerprint!==hash)throw Error('Foreign original room command.');
     const payload=JSON.parse(row.payload);
+    if(payload.method==='portable.roomRespond')return this.owners.run(owner,()=>this.answerState(owner,nodeId,botId,epoch,row,payload));
     if(payload.method!=='portable.roomDispatch')throw Error('This command is not a registered room delivery.');
     return this.owners.run(owner,()=>{
       const delivery=this.store.get('collaborationDelivery',operationId),post=delivery&&this.store.get('collaborationPost',delivery.postId);
@@ -209,6 +243,27 @@ export class HubCollaboration extends Collaboration {
         this.store.afterCommit(()=>this.runtime.router.connection(current)?.send(boundedFrame({type:'sync',...this.runtime.hub.sync(current.node_id)})));
       })));
     }
+  }
+  answerReceipt(row,{mark=true}={}){
+    const payload=JSON.parse(row.payload),r=row.receipt&&JSON.parse(row.receipt);if(payload.method!=='portable.roomRespond'||!r)return;
+    this.owners.run(row.owner,()=>this.store.transaction(()=>{
+      const {p}=this.runtime.scope(row.owner,row.bot_id),params=payload.params,q=params.question,a=this.store.get('collaborationAnswer',q.key),op=this.store.operation(row.operation_id),c=this.context(row.bot_id,q.contextId);
+      if(p.node_id!==row.node_id||p.epoch!==row.epoch||q.botId!==row.bot_id||c.threadId!==q.threadId||a?.botId!==row.bot_id||a.operationId!==row.operation_id||op?.portableFingerprint!==row.fingerprint||op.method!=='conversations.respond'||fingerprint(a.portableAnswer?.params)!==fingerprint(params)||fingerprint(roomQuestionSource(a.pending))!==params.questionFingerprint)throw Error('Original response receipt or placement changed.');
+      if(row.state==='unknown'||r.outcome==='rejected'){
+        if(a.state==='accepted')throw Error('An ambiguous later receipt cannot remove a confirmed original write.');
+        const state=row.state==='unknown'?'uncertain':'rejected';
+        this.store.put('collaborationAnswer',{...a,state,error:r.error??'Original response write is unconfirmed.'});
+        this.store.saveOperation(op.id,op.fingerprint,state==='uncertain'?'uncertain':'failed',{...op,error:r.error??'Original response write is unconfirmed.'});
+      }else if(row.state==='terminal'&&originalLocalControlProof(r,row.operation_id,row.fingerprint,payload)){
+        const pending=this.store.get('collaborationPending',q.key);
+        if(pending&&fingerprint(roomQuestionSource(pending))!==params.questionFingerprint)throw Error('Original question source changed before receipt application.');
+        this.store.put('collaborationAnswer',{...a,state:'accepted',responseConfirmation:'written',evidence:'assigned-agent-original-stdio-write',error:null});
+        if(pending)this.store.remove('collaborationPending',q.key);
+        this.store.saveOperation(op.id,op.fingerprint,'done',{...op,result:r.result,error:null});
+      }else return;
+      this.publish(q.roomId,{contextId:q.contextId,questionKey:q.key,operationId:row.operation_id});
+      if(mark)this.store.db.prepare('INSERT INTO portable_control_receipts VALUES(?,?) ON CONFLICT(operation_id) DO UPDATE SET receipt_hash=excluded.receipt_hash').run(row.operation_id,row.receipt_hash);
+    }));
   }
   receipt(row,{mark=true}={}){
     const payload=JSON.parse(row.payload),r=row.receipt&&JSON.parse(row.receipt);

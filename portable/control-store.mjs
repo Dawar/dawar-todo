@@ -174,6 +174,9 @@ export class HubStore {
       if (!r || r.node_id !== nodeId || r.fingerprint !== hash) throw Error('Foreign receipt.');
       const p = this.placement(r.owner, r.bot_id);
       if (p.node_id !== nodeId || p.epoch !== r.epoch) throw Error('Stale placement receipt.');
+      const payload=JSON.parse(r.payload);
+      if(payload.method==='portable.roomRespond'&&['native-accepted','running'].includes(state))throw Error('A response write cannot assert new-turn acceptance.');
+      if(payload.method==='portable.roomRespond'&&state==='terminal'&&receipt.outcome!=='rejected'&&!originalLocalControlProof(receipt,operationId,r.fingerprint,payload))throw Error('Original native response write proof is required.');
       if (r.state === state && r.receipt_hash === digest(text)) return r;
       if (!transitions[r.state]?.includes(state)) throw Error('Receipt state regressed or contradicts original outcome.');
       if(r.state==='unknown'&&!originalNativeProof(receipt,operationId)&&!(state==='terminal'&&originalLocalControlProof(receipt,operationId,r.fingerprint,JSON.parse(r.payload))))throw Error('Unknown delivery requires exact original acceptance evidence, never a retry.');
@@ -258,6 +261,9 @@ export class NodeJournal {
     const old = this.db.prepare('SELECT * FROM node_commands WHERE operation_id=?').get(operationId);
     if (!old || !(old.state==='dispatching'?['native-accepted','terminal','unknown']:transitions[old.state])?.includes(state)) throw Error('Invalid node settlement.');
     const command=JSON.parse(old.command);
+    const payload=JSON.parse(command.payload);
+    if(payload.method==='portable.roomRespond'&&['native-accepted','running'].includes(state))throw Error('A response write cannot assert new-turn acceptance.');
+    if(payload.method==='portable.roomRespond'&&(receipt?.operationId!==operationId||state==='terminal'&&receipt.outcome!=='rejected'&&!originalLocalControlProof(receipt,operationId,old.fingerprint,payload)))throw Error('Original native response write proof is required.');
     if(old.state==='unknown'&&!originalNativeProof(receipt,operationId)&&!(state==='terminal'&&originalLocalControlProof(receipt,operationId,old.fingerprint,JSON.parse(command.payload))))throw Error('Unknown outcome requires exact original receipt proof.');
     this.db.prepare('UPDATE node_commands SET state=?,receipt=? WHERE operation_id=?').run(state,boundedFrame(receipt),operationId);
   }

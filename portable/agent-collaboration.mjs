@@ -14,7 +14,21 @@ const unknown=message=>Object.assign(Error(message),{outcome:'uncertain'});
 // its one-context-per-bot/eight-slot/Stop/resource/current-turn fences.
 export class AgentCollaboration {
   constructor(transport){
-    Object.assign(this,{transport,runtime:transport.runtime,journal:transport.journal});this.scope=new AsyncLocalStorage();
+    Object.assign(this,{transport,runtime:transport.runtime,journal:transport.journal});this.scope=new AsyncLocalStorage();this.responses=new AsyncLocalStorage();
+    const localStore=this.runtime.collaboration.store,facade=Object.create(localStore);
+    facade.saveOperation=(operationId,hash,status,value)=>{
+      const captured=this.responses.getStore();
+      return localStore.saveOperation(operationId,hash,status,captured&&operationId===captured.command.operation_id?{...value,portableFingerprint:captured.command.fingerprint,portableResponseSource:{questionFingerprint:captured.params.questionFingerprint,agentEpoch:captured.params.agentEpoch}}:value);
+    };
+    this.runtime.collaboration.store=facade;
+    const respond=typeof this.runtime.codex.respond==='function'?this.runtime.codex.respond.bind(this.runtime.codex):()=>{throw Error('Native response writer is unavailable.');};
+    this.runtime.codex.respond=(requestId,result)=>{
+      const captured=this.responses.getStore();if(!captured)return respond(requestId,result);
+      this.responseCurrent(captured);
+      if(requestId!==captured.params.question.request.id||fingerprint(result)!==fingerprint(captured.params.result)||captured.prepared)throw unknown('Original native response/source changed or was already attempted.');
+      this.journal.prepare(captured.command.operation_id);captured.prepared=true;
+      return respond(requestId,result);
+    };
     const call=this.runtime.codex.call.bind(this.runtime.codex);
     this.runtime.codex.call=(method,params={},timeout)=>{
       const captured=this.scope.getStore();
@@ -99,6 +113,31 @@ export class AgentCollaboration {
     const after=runtime.store.get('collaborationContext',c.id);
     if(after?.threadId!==scope.threadId||after.botId!==botId||!journal.currentControl({bot_id:botId,epoch:scope.placementEpoch}))throw defer('Original context or placement changed during native read.');
     return {...result,context:runtime.collaboration.publicContext(after),...(['portable.roomQuestion','conversations.requests'].includes(method)?{agentEpoch:runtime.epoch}:{})};
+  }
+  responseCurrent(captured){
+    const {command,params:p}=captured,q=p.question,control=this.journal.currentControl(command),c=this.runtime.store.get('collaborationContext',q.contextId),pending=this.runtime.store.get('collaborationPending',q.key);
+    if(!control||control.stopped||control.revision!==captured.controlRevision||this.runtime.epoch!==p.agentEpoch||!pending||pending.unavailable||fingerprint(roomQuestionSource(pending))!==p.questionFingerprint||!c||c.botId!==command.bot_id||c.threadId!==q.threadId||c.roomId!==q.roomId||c.activeTurnId!==q.turnId||c.paused||this.runtime.store.get('collaborationRoom',q.roomId)?.held)throw defer('Original synchronous question/control is unavailable or changed. No replacement answer was sent.');
+  }
+  recoverResponse(command){
+    const p=JSON.parse(command.payload).params,q=p.question,op=this.runtime.store.operation(command.operation_id),answer=this.runtime.store.get('collaborationAnswer',q.key),c=this.runtime.store.get('collaborationContext',q.contextId);
+    if(!c||c.botId!==command.bot_id||c.threadId!==q.threadId||q.botId!==command.bot_id||op?.botId!==command.bot_id||op.method!=='conversations.respond'||op.portableFingerprint!==command.fingerprint||op.portableResponseSource?.questionFingerprint!==p.questionFingerprint||op.portableResponseSource?.agentEpoch!==p.agentEpoch||op.status!=='done'||answer?.operationId!==command.operation_id||answer.state!=='accepted'||fingerprint(roomQuestionSource(answer.pending))!==p.questionFingerprint||answer.fingerprint!==hash({method:'conversations.respond',botId:command.bot_id,key:q.key,result:p.result}))throw unknown('Original response write is unconfirmed; it was not replayed.');
+    return {state:'written',confirmation:'native-stdio-write',operationId:command.operation_id,key:q.key,contextId:q.contextId,threadId:q.threadId,turnId:q.turnId,agentEpoch:p.agentEpoch};
+  }
+  async respondOwner(command,payload){
+    const p=payload.params,q=p?.question;
+    if(!q||q.async===true||q.botId!==command.bot_id||q.epoch!==p.agentEpoch||fingerprint(roomQuestionSource(q))!==p.questionFingerprint||p.scope?.nodeId!==this.transport.enrollment.nodeId||p.scope.placementEpoch!==command.epoch||p.scope.botId!==command.bot_id||p.scope.contextId!==q.contextId||p.scope.roomId!==q.roomId||p.scope.threadId!==q.threadId||fingerprint(this.runtime.collaboration.validate(q.request,p.result))!==fingerprint(p.result))throw Object.assign(Error('Answer is outside its original native question/placement.'),{outcome:'rejected'});
+    return this.runtime.lock(`portable-room:${command.bot_id}`,()=>this.runtime.maintenance.track(async()=>{
+      if(this.runtime.store.operation(command.operation_id)||['dispatching','unknown'].includes(this.journal.db.prepare('SELECT state FROM node_commands WHERE operation_id=?').get(command.operation_id)?.state))return this.recoverResponse(command);
+      const before=this.journal.currentControl(command);if(!before||before.stopped)throw defer('Original answer requires synchronized live controls.');
+      let state;try{state=await this.transport.roomState(command);}catch{throw defer('Current canonical owner answer confirmation is unavailable.');}
+      const after=this.journal.currentControl(command);
+      if(!after||after.stopped||after.revision!==before.revision||!state?.canRespond||state.operationId!==command.operation_id||state.fingerprint!==command.fingerprint||state.controlRevision!==after.revision||fingerprint(state.params)!==fingerprint(p)||state.room?.id!==q.roomId||state.room.held||!state.room.members.includes(command.bot_id))throw defer('Canonical question/answer or current controls changed.');
+      const room=this.runtime.store.get('collaborationRoom',q.roomId);if(room?.revision>state.room.revision||room?.revision===state.room.revision&&fingerprint(room)!==fingerprint(state.room))throw defer('Canonical room state changed before native response.');
+      this.runtime.store.put('collaborationRoom',state.room);
+      const captured={command,params:p,controlRevision:after.revision,prepared:false};this.responseCurrent(captured);
+      await this.responses.run(captured,()=>this.runtime.collaboration.respond({method:'conversations.respond',botId:command.bot_id,params:{key:q.key,result:p.result},operationId:command.operation_id,clientId:`hub:${this.transport.enrollment.nodeId}`}));
+      return this.recoverResponse(command);
+    }));
   }
   async refresh(captured){
     const {command,delivery,post}=captured,{runtime,journal,transport}=this;

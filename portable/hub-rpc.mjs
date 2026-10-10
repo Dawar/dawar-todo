@@ -19,6 +19,10 @@ export class HubRpc {
     if(request.method==='snapshot'&&internal!==NATIVE_SNAPSHOT)return this.snapshot(owner,clientId);
     if(request.method==='events')return {result:this.store.events(owner,request.params?.after??0,request.params?.limit??40).events};
     if(request.method==='portable.roomQuestion'&&internal!==ROOM_QUESTION_LOOKUP)throw Object.assign(Error('Question lookup is an authenticated original-answer preparation only.'),{outcome:'not-sent'});
+    // Existing room cards journal requests.respond. Only a canonical original
+    // room question/answer selects this alias; other native requests retain
+    // their assigned-agent path. The owner/bot scope is checked by controls.
+    if(request.method==='requests.respond'&&typeof request.params?.key==='string'&&this.controls&&(this.controls.store.get('collaborationPending',request.params.key)||this.controls.store.get('collaborationAnswer',request.params.key)))return {result:await this.controls.request(owner,{...request,method:'conversations.respond'})};
     if(HUB_READS.has(request.method)||HUB_MUTATIONS.has(request.method)){
       if(!this.controls)throw Object.assign(Error('Hub logical controls are unavailable.'),{outcome:'not-sent'});
       return {result:await this.controls.request(owner,request.method==='bursts.typing'?{...request,params:{...request.params,clientId}}:request)};
