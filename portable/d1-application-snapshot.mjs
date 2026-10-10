@@ -11,7 +11,8 @@ const SCHEMA = "type,name,tbl_name,sql FROM sqlite_schema WHERE sql IS NOT NULL 
 const XINFO = "SELECT s.name AS table_name,p.cid,p.name,p.pk,p.hidden FROM sqlite_schema s,pragma_table_xinfo(s.name) p WHERE s.type='table' AND lower(substr(s.name,1,7)) <> 'sqlite_' AND s.name <> '_cf_KV' ORDER BY s.name,p.cid";
 const objects = "json_object('type',type,'name',name,'tbl_name',tbl_name,'sql',sql)";
 const columns = "json_object('table_name',table_name,'cid',cid,'name',name,'pk',pk,'hidden',hidden)";
-const bad = () => Error('Complete D1 snapshot unavailable: schema, data or response exceeds the verified bounds.');
+const bad = (code='snapshot-shape',phase='capture') => Object.assign(
+  Error('Complete D1 snapshot unavailable: schema, data or response exceeds the verified bounds.'),{snapshotCode:code,snapshotPhase:phase});
 const line = record => JSON.stringify(record) + '\n';
 async function sha(value) {
   const hash = new Uint8Array(await crypto.subtle.digest('SHA-256', encoder.encode(value)));
@@ -25,10 +26,11 @@ function cell(column) {
   return `CASE typeof(${c})WHEN'null'THEN'N'WHEN'integer'THEN'I'||${c}` +
     ` WHEN'real'THEN'R'||printf('%!.26g',${c})WHEN'text'THEN'T'||hex(${c})ELSE'B'||hex(${c})END`;
 }
-async function rows(db, sql, maximum) {
-  if (bytes(sql) > 100000) throw bad();
-  const result = await db.prepare(sql).all();
-  if (result.success !== true || !Array.isArray(result.results) || result.results.length > maximum) throw bad();
+async function rows(db, sql, maximum,phase) {
+  if (bytes(sql) > 100000) throw bad('query-text-bound',phase);
+  let result;
+  try {result = await db.prepare(sql).all();} catch {throw bad('d1-query-refused',phase);}
+  if (result.success !== true || !Array.isArray(result.results) || result.results.length > maximum) throw bad('d1-response-bound',phase);
   return result.results;
 }
 function json(value, maximum) {
@@ -42,10 +44,10 @@ function validName(value) {
 
 export async function captureD1Application(db, signal) {
   signal?.throwIfAborted();
-  const plannedSchema = await rows(db, `SELECT ${SCHEMA}`, 1000);
-  const plannedColumns = await rows(db, XINFO, 4000);
-  const plannedTables = await rows(db, 'PRAGMA table_list', 1000);
-  const hasSequence = (await rows(db, "SELECT name FROM sqlite_schema WHERE name='sqlite_sequence'", 1)).length;
+  const plannedSchema = await rows(db, `SELECT ${SCHEMA}`, 1000,'schema');
+  const plannedColumns = await rows(db, XINFO, 4000,'columns');
+  const plannedTables = await rows(db, 'PRAGMA table_list', 1000,'tables');
+  const hasSequence = (await rows(db, "SELECT name FROM sqlite_schema WHERE name='sqlite_sequence'", 1,'sequence')).length;
   const tables = plannedSchema.filter(s => s.type === 'table').map(s => {
     validName(s.name);
     const t = plannedTables.find(t => t.schema === 'main' && t.name === s.name);
@@ -88,14 +90,15 @@ export async function captureD1Application(db, signal) {
   const data = tables.map((t,i) => `SELECT 'table' AS kind,${text(t.name)} AS name,json_group_array(json(record)) AS payload FROM (SELECT record FROM t${i} ORDER BY ord) WHERE (SELECT ok FROM allowed)=1`);
   const query = `WITH ${ctes.join(',')} SELECT 'metadata' AS kind,'' AS name,${metadata} AS payload` + (data.length ? ' UNION ALL ' + data.join(' UNION ALL ') : '');
   signal?.throwIfAborted();
-  const captured = await rows(db, query, tables.length+1);
+  const captured = await rows(db, query, tables.length+1,'snapshot');
   signal?.throwIfAborted();
   const meta = json(captured[0]?.payload, TABLE_BYTES);
   // A schema mutation during discovery cannot silently add/omit/reinterpret data.
-  if (meta.allowed !== 1 || JSON.stringify(meta.schema) !== JSON.stringify(plannedSchema) ||
+  if(meta.allowed!==1)throw bad('application-data-bound','snapshot');
+  if (JSON.stringify(meta.schema) !== JSON.stringify(plannedSchema) ||
       JSON.stringify(meta.xinfo) !== JSON.stringify(plannedColumns) ||
       JSON.stringify(meta.tableList.filter(t => tables.some(p => p.name === t.name)).map(t => [t.name,t.type,t.wr]).sort()) !==
-      JSON.stringify(plannedTables.filter(t => tables.some(p => p.name === t.name)).map(t => [t.name,t.type,t.wr]).sort())) throw bad();
+      JSON.stringify(plannedTables.filter(t => tables.some(p => p.name === t.name)).map(t => [t.name,t.type,t.wr]).sort())) throw bad('schema-changed','snapshot');
   const header = { kind:'header',format:'dawar-application-snapshot',version:1,schema:meta.schema,
     tables:tables.map(t => ({...t,rows:meta.sizes.find(s => s.name === t.name)?.rows})), sequence:meta.sequence,
     userVersion:meta.userVersion,applicationId:meta.applicationId };

@@ -26,8 +26,11 @@ export async function applicationSnapshotResponse(request:Request,environment:En
     const result = await captureD1Application(environment.DB,AbortSignal.timeout(30000));
     const sealed = await sealApplicationSnapshot(result.snapshot,recipient!,url.origin);
     return Response.json(sealed,{headers:{...headers,'Content-Disposition':'attachment; filename="dawar-application.snapshot.sealed.json"'}});
-  } catch {
+  } catch (error) {
     // No data or raw SQLite/provider diagnostics escape an incomplete capture.
-    return Response.json({error:'A complete consistent application snapshot could not be captured. Original data is unchanged.'},{status:503,headers});
+    const failure=error as {snapshotCode?:string;snapshotPhase?:string};
+    const code=['snapshot-shape','query-text-bound','d1-query-refused','d1-response-bound','application-data-bound','schema-changed'].includes(failure?.snapshotCode??'')?failure.snapshotCode:'capture-unavailable';
+    const phase=['capture','schema','columns','tables','sequence','snapshot'].includes(failure?.snapshotPhase??'')?failure.snapshotPhase:'capture';
+    return Response.json({error:'A complete consistent application snapshot could not be captured. Original data is unchanged.',code,phase},{status:503,headers});
   }
 }
