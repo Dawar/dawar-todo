@@ -42,6 +42,28 @@ function validName(value) {
   return value;
 }
 
+// Fixed compatibility probes for this capture only. They expose no table names,
+// counts, values, SQL strings or provider errors; caller supplies no SQL.
+export async function probeD1Application(db,signal) {
+  const queries={
+    schema:"SELECT type FROM sqlite_schema WHERE sql IS NOT NULL LIMIT 1",
+    columns:"SELECT p.cid FROM sqlite_schema s,pragma_table_xinfo(s.name) p WHERE s.type='table' LIMIT 1",
+    tables:"SELECT wr FROM pragma_table_list LIMIT 1",
+    userVersion:"SELECT user_version FROM pragma_user_version",
+    applicationId:"SELECT application_id FROM pragma_application_id",
+    materialized:"WITH d AS MATERIALIZED (SELECT 1 AS n) SELECT row_number() OVER(ORDER BY n) FROM d",
+    json:"SELECT json_group_array(json(record)) FROM (SELECT json_object('kind','row','cells',json_array('I1','N')) AS record)",
+    encoding:"SELECT 'I'||9223372036854775807,printf('%!.26g',1.5),hex(CAST(X'610062FF' AS TEXT))",
+  };
+  const supported={};
+  for(const [phase,sql] of Object.entries(queries)) {
+    signal?.throwIfAborted();
+    try{const result=await db.prepare(sql).all();supported[phase]=result.success===true&&Array.isArray(result.results)&&result.results.length<=1;}catch{supported[phase]=false;}
+  }
+  signal?.throwIfAborted();
+  return {version:1,kind:'dawar-snapshot-compatibility',supported,applicationDataReturned:false,writerFreezeEstablished:false};
+}
+
 export async function captureD1Application(db, signal) {
   signal?.throwIfAborted();
   const plannedSchema = await rows(db, `SELECT ${SCHEMA}`, 1000,'schema');
