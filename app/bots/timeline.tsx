@@ -22,6 +22,8 @@ import { OperatorSegmentBody } from "./operator-call";
 import { ArrowDown, MessageCircle, CloudOff, Clock3, Phone } from "lucide-react";
 import { LazyDetails } from "./lazy-details";
 import { useFeedScroll } from "./use-feed-scroll";
+import { humanMessageTicks, type HumanMessageTick } from "./human-message-ticks";
+import { MessageTickRail } from "./message-tick-rail";
 import { ReturnedArtifacts } from "./returned-artifact";
 import type { ActivityTarget } from "./conversation-activity";
 import { useBurstConversation, BurstControls, BurstBubbles, canonicalBurst } from "./burst-composer";
@@ -165,6 +167,15 @@ function BotConversationFeed({ owner, bot, online, children, onOpenCall, onReply
   const tailBatches = retainedBatches(burst.value).filter(batch => batch.state !== "sent" && !nativeBatchIds.has(batch.operationId ?? batch.id));
   const feed = useFeedScroll(timeline, state, online, projectEntries);
   const { first, last, scroll, content, showJump, paging, latest } = feed;
+  const tickNavigation = useMemo(() => humanMessageTicks(projectEntries(nativeState.entries), nativeState.contextEntries, bot.id, bot.threadId,
+    entry => entry.replyMessages ?? canonicalBurst(entry, burst.value)?.messages), [nativeState.entries, nativeState.contextEntries, projectEntries, bot.id, bot.threadId, burst.value]);
+  const selectTick = (tick: HumanMessageTick) => {
+    if (botsClient.owner !== owner || bot.threadId !== botsClient.snapshot?.bots.find(value => value.id === bot.id)?.threadId) return;
+    // A retained context/chooser preview may sit outside the current body
+    // window. Reuse the same bounded original-source projection as quotes.
+    timeline.revealSource(tick.entry);
+    feed.jumpTo(tick.entry, tick.partId);
+  };
   const secure = useSecureInputRequests({ owner, botId: bot.id, threadId: bot.threadId, online, enabled: botsClient.snapshot?.capabilities?.secureInputs === 1 });
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const revealActivity = (entry: HistoryEntry) => setExpanded(prior => new Set([...prior, timeline.resolveKey(historyKey(entry.turnId, entry.id))!]));
@@ -251,7 +262,7 @@ function BotConversationFeed({ owner, bot, online, children, onOpenCall, onReply
   </section>;
   const rootRows = new Map(state.entries.slice(first, last).flatMap(e => e.peer ? [[e.peer.rootId, e.peer.id] as const] : []));
   const namedBots = botsClient.snapshot?.bots ?? [bot];
-  return <NativeTimingContext.Provider value={{ owner, botId: bot.id, threadId: bot.threadId, entries: nativeState.entries, current: nativeState.currentTiming }}><div className="bots-timeline"><SecureInputAccess key={JSON.stringify([owner, bot.id, bot.threadId])} state={secure}/><div className="bots-messages" ref={scroll} tabIndex={0} {...feed.handlers}><div ref={content}>
+  return <NativeTimingContext.Provider value={{ owner, botId: bot.id, threadId: bot.threadId, entries: nativeState.entries, current: nativeState.currentTiming }}><div className="bots-timeline has-message-ticks"><SecureInputAccess key={JSON.stringify([owner, bot.id, bot.threadId])} state={secure}/><div className="bots-messages" ref={scroll} tabIndex={0} {...feed.handlers}><div ref={content}>
     <TaskRequestAccess capture={feed.capture}/>
     {paging && <div className="bots-feed-loading" role="status">Loading conversation…</div>}
     {(first > 0 || state.olderCursor) && !state.loading && (!online || state.error || !state.entries.length) && <button className="bots-older" disabled={paging || !online && (first === 0 || state.gaps.some((gap) => gap.before === historyKey(state.entries[first].turnId, state.entries[first].id)))} onClick={() => void feed.page(-1, true)}>{state.entries.length ? "Load earlier turns" : "Continue loading history"}</button>}
@@ -294,7 +305,7 @@ function BotConversationFeed({ owner, bot, online, children, onOpenCall, onReply
     {last === state.entries.length && tailBatches.map(batch => <BurstBubbles key={batch.id} batch={batch} messages={batch.messageIds.flatMap(id => { const message = burst.value?.messages.find(message => message.id === id); return message ? [message] : []; })} truncatedIds={burst.value?.preview?.truncatedTextIds} controls={burst} {...batchProps} onOpenReply={openReply} />)}
     {burstsEnabled && <BurstControls burst={burst} online={online} submitting={burstSubmitting} />}
     {children}
-  </div></div>{(showJump || last < state.entries.length || state.error || state.loading && state.cached) && <button className="bots-jump-latest" disabled={!online || state.loading} onClick={() => {
+  </div></div><MessageTickRail {...tickNavigation} scroll={scroll} content={content} earlier={first > 0 || Boolean(state.olderCursor) || state.gaps.some(gap => gap.before === historyKey(state.entries[first]?.turnId ?? '', state.entries[first]?.id ?? ''))} incomplete={!state.complete || Boolean(state.olderCursor) || state.gaps.length > 0} loading={paging || state.loading} online={online} error={state.error} onEarlier={() => feed.page(-1, true)} onSelect={selectTick}/>{(showJump || last < state.entries.length || state.error || state.loading && state.cached) && <button className="bots-jump-latest" disabled={!online || state.loading} onClick={() => {
     latest();
     if (state.error) void timeline.recoverLatest();
     else void timeline.refreshLatest();

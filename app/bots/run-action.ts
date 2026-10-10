@@ -59,7 +59,7 @@ class RunAction {
     catch (error) { this.error = error instanceof Error ? error.message : "Action recovery is unavailable. Retry when browser storage is available."; this.notify(); }
   }
   private notify() { this.revision++; for (const fn of this.listeners) fn(); }
-  private async execute(command: { method: Method; params: Record<string, unknown>; capture?: {draftVersion:string} } | { id: string }) {
+  private async execute(command: { method: Method; params: Record<string, unknown>; capture?: {draftVersion:string} } | { id: string }, beforeBurstQueue?: () => boolean) {
     if (this.busy || client.owner !== this.owner || !client.online) throw Error("Connect as this action's owner before continuing.");
     this.busy = true; this.notify();
     let intent: Intent | undefined;
@@ -94,6 +94,9 @@ class RunAction {
         if (block) throw Error(block);
         if (isGoal && goalFingerprint(bot, client.snapshot?.workByBot?.find(work => work.botId === bot.id)) !== beforeGoal) throw Error('The native goal changed while saving this action. Its identity is retained for review.');
       }
+      // Guard a NEW UI burst placement after its durable IDB admission. Recovery
+      // retains the original frozen operation; the callback is never persisted.
+      if (intent.method === "bursts.queue" && beforeBurstQueue && !beforeBurstQueue()) throw Error("The captured Queue destination changed while saving. The original action remains available for review.");
       const result = await client.rpc(intent.method, intent.targetBotId??this.botId, intent.params, intent.id, { owner: this.owner, managed: true });
       if (!result || typeof result !== "object" || Array.isArray(result)) throw Error("The response did not confirm this action. Check the same saved action again.");
       if (intent.method.startsWith('goals.')) {
@@ -136,6 +139,7 @@ class RunAction {
     } finally { this.busy = false; this.notify(); }
   }
   perform = async (method: Method, params: BotOperations[Method]["params"]) => { await this.execute({ method, params }); };
+  performBurstQueue = async (params: BurstQueueParams, current: () => boolean) => { await this.execute({method: "bursts.queue", params}, current); };
   performResult = (method: Method, params: BotOperations[Method]["params"], capture?: {draftVersion:string}) => this.execute({ method, params, ...(capture ? {capture} : {}) });
   retry = () => this.intent ? this.execute({ id: this.intent.id }) : this.refresh();
 }

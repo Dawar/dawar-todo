@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, Plus, Search, MessageCircle } from 'lucide-react';
 import type { Bot } from '../../lib/bots-types';
 import type { CollaborationRoom,CollaborationPost,CollaborationContext,CollaborationResult,CollaborationPostParams } from '../../lib/bot-collaboration';
@@ -12,6 +12,8 @@ import { useCollaborationRead,roomPage } from './collaboration-read';
 import { ConfigurationEvidence } from './configuration-evidence';
 import { useRoomFeed } from './collaboration-room-feed';
 import { CollaborationContextHistory } from './collaboration-context-history';
+import { MessageTickRail } from './message-tick-rail';
+import { roomHumanMessageTicks, type MessageTick } from './human-message-ticks';
 import './collaboration.css';
 
 const ignore=()=>{};
@@ -141,9 +143,33 @@ export function RoomConversation({owner,botId,roomId,bots,online,onBack}:{owner:
   const valid=!!read.value&&read.value.room.id===roomId;
   const room=valid?read.value!.room:null;
   const contexts=roomPage<CollaborationContext>(contextRead.value,c=>c.roomId===roomId)?contextRead.value!.items:[];
-  const feed=useRef<HTMLDivElement>(null),draft=useRoomDraft(owner,roomId);
+  const feed=useRef<HTMLDivElement>(null),content=useRef<HTMLDivElement>(null),draft=useRoomDraft(owner,roomId);
+  const tickAnchor=useRef<string|null>(null);
+  const ticks=useMemo(()=>roomHumanMessageTicks(read.value?.items??[],roomId),[read.value?.items,roomId]);
+  const selectTick=(tick:MessageTick)=>{
+    if(client.owner!==owner||read.value?.room.id!==roomId||!feed.current)return;
+    const post=read.value.items.find(post=>post.author.kind==='owner'&&JSON.stringify([roomId,post.id])===tick.id);
+    const node=[...feed.current.querySelectorAll<HTMLElement>('[data-post-id]')].find(node=>node.dataset.postId===post?.id);
+    if(!post||!node)return;
+    tickAnchor.current=post.id;
+    read.remember(false,{id:post.id,offset:24});
+    feed.current.scrollTop+=node.getBoundingClientRect().top-feed.current.getBoundingClientRect().top-24;
+  };
+  useLayoutEffect(()=>{
+    tickAnchor.current=null;
+    const element=feed.current,body=content.current;if(!element||!body)return;
+    let frame=0;
+    const restore=()=>{
+      frame=0;if(!tickAnchor.current||client.owner!==owner)return;
+      const node=[...element.querySelectorAll<HTMLElement>('[data-post-id]')].find(node=>node.dataset.postId===tickAnchor.current);
+      if(!node){tickAnchor.current=null;return;}
+      element.scrollTop+=node.getBoundingClientRect().top-element.getBoundingClientRect().top-24;
+    };
+    const resize=new ResizeObserver(()=>{if(!frame)frame=requestAnimationFrame(restore);});resize.observe(element);resize.observe(body);
+    return()=>{resize.disconnect();cancelAnimationFrame(frame);};
+  },[read,owner,roomId]);
   const [quoteError,setQuoteError]=useState('');
-  const quote=(post:CollaborationPost)=>{if(client.owner!==owner||!draft.ready)return;const text=`${draft.value.text}${draft.value.text?'\n\n':''}> Source: room ${roomId} · post ${post.id}\n${post.text.split('\n').map(line=>'> '+line).join('\n')}\n\n`;if(text.length>200000){setQuoteError('This source exceeds the room draft limit. Copy the original or use a smaller explicit excerpt.');return;}setQuoteError('');draft.edit(text);feed.current?.parentElement?.querySelector<HTMLTextAreaElement>('.bots-room-composer textarea')?.focus();};
+  const quote=(post:CollaborationPost)=>{if(client.owner!==owner||!draft.ready)return;const text=`${draft.value.text}${draft.value.text?'\n\n':''}> Source: room ${roomId} · post ${post.id}\n${post.text.split('\n').map(line=>'> '+line).join('\n')}\n\n`;if(text.length>200000){setQuoteError('This source exceeds the room draft limit. Copy the original or use a smaller explicit excerpt.');return;}setQuoteError('');draft.edit(text);feed.current?.closest('.bots-room-conversation')?.querySelector<HTMLTextAreaElement>('.bots-room-composer textarea')?.focus();};
   useLayoutEffect(()=>{
     const e=feed.current;if(!e)return;
     if(read.following)e.scrollTop=e.scrollHeight;
@@ -152,9 +178,16 @@ export function RoomConversation({owner,botId,roomId,bots,online,onBack}:{owner:
   return <section className="bots-conversation bots-room-conversation"><header className="bots-conversation-heading"><button className="bots-icon-button" aria-label="Back to conversations" onClick={onBack}><ArrowLeft size={20}/></button>{room&&<RoomAvatars members={room.members} bots={bots}/>}<strong>{room?roomName(room,bots):'Conversation'}</strong></header>
     {!supported&&<p role="status">The connected service does not support rooms. Cached source remains readable; use legacy bot discussions.</p>}{!online&&<p role="status">Offline · cached room data; delivery controls are disabled.</p>}{read.error&&<p role="alert">{read.error}<button disabled={!online} onClick={read.refresh}>Retry room</button></p>}
     {room&&<RoomControls key={`${room.id}:${room.revision}`} owner={owner} botId={botId} room={room} bots={bots} online={online&&supported} onUpdated={read.refresh}/>}
-    <div className="bots-room-feed" ref={feed} onScroll={()=>{const e=feed.current;if(!e)return;const following=e.scrollHeight-e.scrollTop-e.clientHeight<80;const node=[...e.querySelectorAll<HTMLElement>('[data-post-id]')].find(n=>n.getBoundingClientRect().bottom>e.getBoundingClientRect().top);read.remember(following,node?{id:node.dataset.postId!,offset:node.getBoundingClientRect().top-e.getBoundingClientRect().top}:null);}}>
+    <div className="bots-room-tick-timeline"><div className="bots-room-feed" ref={feed} onWheel={()=>{tickAnchor.current=null;}} onTouchStart={()=>{tickAnchor.current=null;}} onKeyDownCapture={()=>{tickAnchor.current=null;}} onPointerDownCapture={()=>{tickAnchor.current=null;}} onScroll={()=>{
+      const e=feed.current;if(!e)return;
+      if(tickAnchor.current){read.remember(false,{id:tickAnchor.current,offset:24});return;}
+      const following=e.scrollHeight-e.scrollTop-e.clientHeight<80,top=e.getBoundingClientRect().top;
+      const visible=[...e.querySelectorAll<HTMLElement>('[data-post-id]')].filter(node=>node.getBoundingClientRect().bottom>top&&node.getBoundingClientRect().top<top+e.clientHeight);
+      const node=visible.find(node=>node.dataset.postId===read.anchor?.id)??visible[0];
+      read.remember(following,node?{id:node.dataset.postId!,offset:node.getBoundingClientRect().top-top}:null);
+    }}><div ref={content} className="bots-room-feed-content">
       <nav aria-label="Room message pages"><button disabled={!read.value?.olderCursor||read.loading||!online} onClick={()=>void read.browseOlder()}>Earlier messages</button><button disabled={!online||read.loading} onClick={()=>void read.latest()}>Latest messages</button>{read.newerAvailable&&<span role="status">Room updates available · <button disabled={!online||read.loading} onClick={()=>void (read.canCatchUp?read.newer():read.latest())}>{read.canCatchUp?'Load newer messages':'Go to latest messages'}</button></span>}</nav>
-      {read.loading&&<p role="status">Loading room page…</p>}{valid&&read.value!.items.map(post=><article key={post.id} className={`bots-room-post ${post.author.kind==='owner'?'is-owner':''}`} data-post-id={post.id}>
+      {read.loading&&<p role="status">Loading room page…</p>}{valid&&read.value!.items.map(post=><article key={post.id} className={`bots-room-post ${post.author.kind==='owner'?'is-owner':''}`} data-post-id={post.id} data-history-key={JSON.stringify([roomId,post.id])}>
         <header>{post.author.kind==='bot'&&bots.find(b=>b.id===(post.author as {botId:string}).botId)&&<BotAvatar bot={bots.find(b=>b.id===(post.author as {botId:string}).botId)!} small decorative working={false}/>}<strong>{post.author.kind==='owner'?'You':bots.find(b=>b.id===(post.author as {botId:string}).botId)?.name??'Named bot'}</strong><time dateTime={post.createdAt}>{new Date(post.createdAt).toLocaleString()}</time></header>
         <BotMessage item={body(post.id,post.text)} botId={post.author.kind==='bot'?post.author.botId:botId} attachments={[]} download={ignore}/>
         {read.value!.deliveries.filter(d=>d.postId===post.id).map(d=><p className="bots-room-delivery" key={d.id}>{bots.find(b=>b.id===d.botId)?.name??'Named bot'} · {d.state}{d.terminalStatus&&` · ${d.terminalStatus}`}{d.waitReason&&` · ${d.waitReason}`}{d.error&&` · ${d.error}`} · result {d.resultState}</p>)}
@@ -162,7 +195,7 @@ export function RoomConversation({owner,botId,roomId,bots,online,onBack}:{owner:
       </article>)}
       {contexts.map(context=><LazyDetails key={context.id} className="bots-room-context" summary={<><MessageCircle size={14}/>{bots.find(b=>b.id===context.botId)?.name??'Named bot'} · room work {context.status}{context.provisioning!=='bound'&&` · ${context.provisioning}`}</>}>{()=> <><ConfigurationEvidence value={context.config}/><p>Goal: {context.goal.status} · room context, separate from foreground</p><CollaborationContextHistory owner={owner} botId={context.botId} context={context} online={online}/></>}</LazyDetails>)}
       {contextRead.error&&<p role="alert">{contextRead.error}<button disabled={!online} onClick={contextRead.refresh}>Retry contexts</button></p>}
-    </div>
+    </div></div><MessageTickRail key={JSON.stringify([owner,botId,roomId])} {...ticks} scroll={feed} content={content} earlier={!!read.value?.olderCursor} incomplete={!!read.value?.olderCursor||!!read.newerAvailable} loading={read.loading} online={online&&supported} error={read.error} onEarlier={()=>{tickAnchor.current=null;return read.browseOlder();}} onSelect={selectTick}/></div>
     {quoteError&&<p role="alert">{quoteError}</p>}{room&&<RoomComposer draft={draft} key={`${owner}:${roomId}:${botId}`} owner={owner} botId={botId} room={room} bots={bots} contexts={contexts} online={online&&supported} onSent={read.invalidate}/>}
   </section>;
 }

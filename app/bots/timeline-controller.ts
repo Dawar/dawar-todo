@@ -25,6 +25,9 @@ export type TimelineState = {
 const initial = (): TimelineState => ({ entries: [], contextEntries: [], attachments: [], olderCursor: null, revision: "", eventCursor: 0,
   complete: false, loading: false, gaps: [], error: "", cached: false, position: { anchor: null, offset: 0, following: true } });
 type Cache = ReturnType<typeof createTimelineCache>;
+const scopedPage = (page: HistoryResponse, threadId: string | null | undefined): HistoryResponse => page.kind !== 'page' || !threadId ? page : ({ ...page,
+  entries: page.entries.map(entry => ({ ...entry, sourceThreadId: threadId })),
+  contextEntries: page.contextEntries?.map(entry => ({ ...entry, sourceThreadId: threadId })) });
 
 /** One owner/thread store and one refresh in flight, independent of React selection. */
 export class BotTimeline {
@@ -190,13 +193,17 @@ export class BotTimeline {
           if (!this.turnAudiences.has(turnId)) this.turnAudiences.set(turnId, audience);
         for (const { turnId, kind, runId } of cached.metadata.turnAudiences ?? [])
           if (kind === "conversation" && runId) this.normalScheduled.add(turnId);
-        this.merge(cached.entries, true, -1); this.dirty = liveDirty;
+        // Existing revisions encode the original native thread. Older caches
+        // without that evidence remain readable but supply no navigation ticks.
+        const cachedThread = cached.metadata.revision.split(':')[1];
+        const scoped = cached.entries.map(entry => entry.sourceThreadId || !cached.metadata.revision.endsWith(':conversation-v8') ? entry : { ...entry, sourceThreadId: cachedThread });
+        this.merge(scoped, true, -1); this.dirty = liveDirty;
         const m = cached.metadata; this.cachedKeys = new Set(m.order ?? []);
         const boundaries = historyBoundaries(this.state.entries, this.mapGaps(m.gaps ?? []), m.olderCursor, cached.entries);
         const present = new Set(cached.entries.map(entry => historyKey(entry.turnId, entry.id)));
         const intact = m.order.every(key => present.has(key));
         this.publish({ revision: intact && m.revision.endsWith(":conversation-v8") ? m.revision : "", eventCursor: Math.max(live, m.eventCursor), ...boundaries,
-          partialTurn: m.partialTurn, attachments: m.attachments, contextEntries: conversationEntries(m.contextEntries ?? [], this.turnAudiences), complete: m.complete && !boundaries.olderCursor && !boundaries.gaps.length, position: { ...(m.position ?? this.state.position), anchor: this.resolveKey(m.position?.anchor ?? null) }, cached: true }, true);
+          partialTurn: m.partialTurn, attachments: m.attachments, contextEntries: conversationEntries((m.contextEntries ?? []).map(entry => entry.sourceThreadId || !m.revision.endsWith(':conversation-v8') ? entry : { ...entry, sourceThreadId: cachedThread }), this.turnAudiences), complete: m.complete && !boundaries.olderCursor && !boundaries.gaps.length, position: { ...(m.position ?? this.state.position), anchor: this.resolveKey(m.position?.anchor ?? null) }, cached: true }, true);
         this.scheduleWrite();
       } catch (e) { this.publish({ error: `Offline history cache unavailable: ${String(e)}` }, true); }
     })();
@@ -232,8 +239,8 @@ export class BotTimeline {
     this.publish({ loading: true, error: "" }, true);
     this.request = (async () => {
       try {
-        const response = await this.transport.rpc<HistoryResponse>("history.view", this.botId, {
-          projection: "conversation", ...(latestCursor ? { cursor: latestCursor } : { revision: this.state.revision || undefined }), after: this.state.eventCursor });
+        const response = scopedPage(await this.transport.rpc<HistoryResponse>("history.view", this.botId, {
+          projection: "conversation", ...(latestCursor ? { cursor: latestCursor } : { revision: this.state.revision || undefined }), after: this.state.eventCursor }), threadId);
         if (this.disposed || this.transport.owner !== this.owner) return;
         if (threadId !== this.currentThread()) { this.scheduleRefresh(); return; }
         if (threadId && response.context?.threadId && response.context.threadId !== threadId)
@@ -296,18 +303,20 @@ export class BotTimeline {
   async older() {
     if (this.olderRequest) return this.olderRequest;
     const cursor = this.state.olderCursor;
-    if (!cursor || !this.transport.online || this.transport.owner !== this.owner) return;
+    if (!cursor || !this.transport.online || this.transport.owner !== this.owner || this.disposed) return;
+    const threadId = this.currentThread();
     this.publish({ error: "" }, true);
     this.olderRequest = (async () => {
       try {
-        const page = await this.transport.rpc<HistoryResponse>("history.view", this.botId, { projection: "conversation", cursor });
-        if (this.disposed || this.transport.owner !== this.owner || page.kind !== "page") return;
+        const page = scopedPage(await this.transport.rpc<HistoryResponse>("history.view", this.botId, { projection: "conversation", cursor }), threadId);
+        if (this.disposed || this.transport.owner !== this.owner || threadId !== this.currentThread() || page.kind !== "page") return;
+        if (threadId && page.context?.threadId && page.context.threadId !== threadId) throw Error("The conversation changed while loading earlier history.");
         this.rememberPage(page);
         if (!page.entries.length && page.olderCursor === cursor) throw new Error("History pagination made no progress. Retry to reconnect these pages.");
         this.merge(page.entries, true, -1);
         this.publish({ partialTurn: page.partialTurn, ...this.pageBoundaries(page, true), attachments: mergeAttachments(this.state.attachments, page.attachments) }, true);
         this.scheduleWrite();
-      } catch (e) { this.publish({ error: String(e) }, true); }
+      } catch (e) { if (!this.disposed && this.transport.owner === this.owner && threadId === this.currentThread()) this.publish({ error: String(e) }, true); }
       finally { this.olderRequest = undefined; }
     })();
     return this.olderRequest;
@@ -320,10 +329,12 @@ export class BotTimeline {
   }
   private async readGap(gap: HistoryGap, direction: number) {
     if (!this.transport.online || this.transport.owner !== this.owner || this.disposed) return;
+    const threadId = this.currentThread();
     this.publish({ error: "" }, true);
     try {
-      const page = await this.transport.rpc<HistoryResponse>("history.view", this.botId, { projection: "conversation", cursor: direction > 0 ? JSON.stringify({ native: null, before: null, after: gap.stop }) : gap.cursor });
-      if (this.disposed || this.transport.owner !== this.owner || page.kind !== "page") return;
+      const page = scopedPage(await this.transport.rpc<HistoryResponse>("history.view", this.botId, { projection: "conversation", cursor: direction > 0 ? JSON.stringify({ native: null, before: null, after: gap.stop }) : gap.cursor }), threadId);
+      if (this.disposed || this.transport.owner !== this.owner || threadId !== this.currentThread() || page.kind !== "page") return;
+      if (threadId && page.context?.threadId && page.context.threadId !== threadId) throw Error("The conversation changed while loading this history gap.");
       this.rememberPage(page);
       const beforeKey = this.resolveKey(gap.before), stopKey = this.resolveKey(gap.stop);
       const boundary = this.state.entries.findIndex((entry) => historyKey(entry.turnId, entry.id) === beforeKey);
@@ -353,7 +364,7 @@ export class BotTimeline {
       const ownsOldest = direction < 0 && (!page.olderCursor || first && incomingFirst && this.resolveKey(historyKey(incomingFirst.turnId, incomingFirst.id)) === historyKey(first.turnId, first.id));
       const boundaries = historyBoundaries(this.state.entries, this.mapGaps(gaps), ownsOldest ? page.olderCursor : this.state.olderCursor, previous);
       this.publish({ ...boundaries, complete: !boundaries.olderCursor && !boundaries.gaps.length && this.state.entries.every(entry => entry.complete), attachments: mergeAttachments(this.state.attachments, page.attachments) }, true); this.scheduleWrite();
-    } catch (e) { this.publish({ error: String(e) }, true); }
+    } catch (e) { if (!this.disposed && this.transport.owner === this.owner && threadId === this.currentThread()) this.publish({ error: String(e) }, true); }
   }
   private scheduleRefresh() {
     this.latestCursor = null;
@@ -464,7 +475,7 @@ export class BotTimeline {
     const update = (entry: HistoryEntry) => {
       const prior = this.state.entries.find(value => value.turnId === entry.turnId && value.id === entry.id);
       const observed = messageAt ?? (prior?.timeBasis === "received" ? prior.messageAt : null);
-      this.merge([{ ...prior, ...entry, ...(entry.item ? { workPlan: undefined } : {}), ...(entry.item?.type === "userMessage" ? replyByClientId?.[entry.item.clientId ?? ""] : {}), ...(reply ? { reply } : {}), ...(replyMessages ? { replyMessages } : {}), ...(operatorSegmentId ? { operatorSegmentId } : {}), ...(observed ? { messageAt: observed, timeBasis: "received" as const } : {}), updatedSeq: event.seq }]);
+      this.merge([{ ...prior, ...entry, ...(p.threadId ? { sourceThreadId: p.threadId } : {}), ...(entry.item ? { workPlan: undefined } : {}), ...(entry.item?.type === "userMessage" ? replyByClientId?.[entry.item.clientId ?? ""] : {}), ...(reply ? { reply } : {}), ...(replyMessages ? { replyMessages } : {}), ...(operatorSegmentId ? { operatorSegmentId } : {}), ...(observed ? { messageAt: observed, timeBasis: "received" as const } : {}), updatedSeq: event.seq }]);
     };
     if (p.item && /item\/(started|completed)$/.test(method)) {
       const prior = this.state.entries.find((e) => e.turnId === turnId);
