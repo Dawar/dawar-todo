@@ -803,3 +803,29 @@ validated native bot event into the hub. `centralBursts` is currently declared
 only by Linux; Mac execution/acceptance remains deferred. This source contract
 does not establish production installation, genuine owner/device adoption or
 the remaining room/peer and cutover controller contracts.
+
+### Staged registered room delivery
+
+The hub reserves an addressed task/question under its original canonical
+delivery ID on the same control transaction as its mailbox and operation.
+Only the current signed node connection's `centralRoomDispatch` capability
+permits reservation. Quiet posts never reserve a native input. The agent
+persists its original attempt before context creation, resume or input and
+uses the existing registered named-context producer, eight-slot and per-bot
+limits, tool/resource, current Goal, expected-turn and Stop guards.
+
+Immediately before each possible native write, a bounded authenticated
+`room-request` verifies the current hub room, immutable post/delivery,
+membership, hold, control revision and placement. A stale or unavailable
+confirmation prevents admission. Unknown creation/input outcomes retain the
+same operation; recovery reads the original native client and input rather
+than creating a replacement thread or retrying the send. Positive receipts
+project the unique room thread, turn and native terminal outcome back into
+the hub; foreground history is separate. `conversations.contexts` reads this
+captured metadata through the same owner scope and page budget.
+
+Automatic `centralRoomDispatch` remains **false** in the shipping agent hello,
+and `collaborationRooms` stays hidden in browser snapshots until captured
+hub tool/result/question/history consumers are paired. Disposable Linux
+route observations use a fixture-only positive capability and inert native
+boundary; they do not establish installed native, device or production proof.

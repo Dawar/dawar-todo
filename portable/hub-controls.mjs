@@ -236,7 +236,7 @@ export class HubControls extends EventEmitter {
   async tick(date=new Date()) {
     if(this.ticking||this.closed)return;this.assertWriter();this.ticking=true;
     try{
-      this.reconcileReceipts();await this.bursts.tick();await flushDueLists(this,date);this.assertWriter();
+      this.reconcileReceipts();await this.collaboration.pump();await this.bursts.tick();await flushDueLists(this,date);this.assertWriter();
       const created=collectDueRuns(this.store,date);
       this.store.transaction(()=>{for(const run of created)if(this.quiet(run,date))this.store.put('run',{...run,decision:{id:`quiet:${run.id}`,version:1,state:'required',reason:'Quiet release window; original occurrence retained, not started.'}});});
       for(const p of this.hub.db.prepare('SELECT * FROM portable_placements ORDER BY bot_id').all()){
@@ -277,12 +277,13 @@ export class HubControls extends EventEmitter {
   reconcileReceipts() {
     // A durable applied hash prevents a busy recent tail from starving older
     // receipts, and catches later terminal evidence for the same operation.
-    const rows=this.hub.db.prepare("SELECT m.* FROM portable_mailbox m LEFT JOIN portable_control_receipts c ON c.operation_id=m.operation_id WHERE m.receipt IS NOT NULL AND (c.receipt_hash IS NULL OR c.receipt_hash<>m.receipt_hash) AND json_extract(m.payload,'$.method') IN ('portable.queueDispatch','portable.scheduleDispatch','portable.queueSend','portable.queueResume','portable.burstDispatch') ORDER BY m.sequence LIMIT 40").all();
+    const rows=this.hub.db.prepare("SELECT m.* FROM portable_mailbox m LEFT JOIN portable_control_receipts c ON c.operation_id=m.operation_id WHERE m.receipt IS NOT NULL AND (c.receipt_hash IS NULL OR c.receipt_hash<>m.receipt_hash) AND json_extract(m.payload,'$.method') IN ('portable.queueDispatch','portable.scheduleDispatch','portable.queueSend','portable.queueResume','portable.burstDispatch','portable.roomDispatch') ORDER BY m.sequence LIMIT 40").all();
     for(const row of rows)this.receipt(row);
   }
   receipt(row) {
     const payload=JSON.parse(row.payload),receipt=row.receipt&&JSON.parse(row.receipt);if(!NODE_LOGICAL_COMMANDS.has(payload.method)||!receipt)return;
     if(payload.method==='portable.burstDispatch'){this.bursts.receipt(row);return;}
+    if(payload.method==='portable.roomDispatch'){this.collaboration.receipt(row);return;}
     this.store.transaction(()=>{
       const mark=()=>this.store.db.prepare('INSERT INTO portable_control_receipts VALUES(?,?) ON CONFLICT(operation_id) DO UPDATE SET receipt_hash=excluded.receipt_hash').run(row.operation_id,row.receipt_hash);
       const control=this.store.get('portableQueueControl',row.operation_id);

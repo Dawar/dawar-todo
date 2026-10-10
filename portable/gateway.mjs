@@ -239,6 +239,14 @@ export function startGateway(config) {
           else if(m.type==='rpc-result')router.readResult(nodeId,m);
           else if(m.type==='desktop-response')desktop.receive(nodeId,ws,m);
           else if(m.type==='secure-response')secure.receive(nodeId,ws,m);
+          else if(m.type==='room-request'){
+            const n=store.node(nodeId),p=store.placement(n.owner,m.botId);
+            if(p.node_id!==nodeId||p.epoch!==m.epoch||typeof m.requestId!=='string'||m.requestId.length>180)throw Error('Foreign room admission request.');
+            try{
+              const result=controls.collaboration.nodeState(n.owner,nodeId,m.botId,m.epoch,m.operationId,m.fingerprint);
+              ws.send(boundedFrame({type:'room-result',requestId:m.requestId,botId:m.botId,epoch:m.epoch,result}));
+            }catch(error){ws.send(boundedFrame({type:'room-result',requestId:m.requestId,botId:m.botId,epoch:m.epoch,error:error.message,outcome:'not-sent'}));}
+          }
           else if(m.type==='control-request'){
             const n=store.node(nodeId),p=store.placement(n.owner,m.botId);
             if(p.node_id!==nodeId||p.epoch!==m.epoch||!HUB_TOOLS.has(m.tool)||typeof m.requestId!=='string')throw Error('Foreign hub tool request.');
