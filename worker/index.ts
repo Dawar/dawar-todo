@@ -8,10 +8,12 @@ import { runTodoMinuteMaintenance } from "../db/minute-maintenance";
 import { handleTalkPhoneStream } from "./talk-phone-stream";
 import {runSourceWriterWork} from "../portable/source-writer-scope.mjs";
 import type {SourceWriterBinding} from "../portable/source-writer-admission.mjs";
+import {originalStorageUploadProxy} from '../lib/storage-upload-proxy';
 
 interface Env {
   ASSETS: Fetcher;
   MIGRATION_SOURCE_WRITER_ADMISSION?:string;
+  MIGRATION_STORAGE_UPLOAD_PROXY?:string;
   BOTS_OWNER_EMAIL?: string;
   BOTS_OWNER_USER_ID?: string;
   DB: D1Database;
@@ -62,6 +64,14 @@ async function sourceFetch(request: Request, env: Env, ctx: ExecutionContext): P
     // trusted actor identity, so give that layer a mutable request copy.
     const routedRequest = new Request(request, { headers: new Headers(request.headers) });
     const url = new URL(routedRequest.url);
+
+    if(url.pathname==='/api/migration/storage-upload'){
+      const proxy=originalStorageUploadProxy(env);
+      if(!proxy)return Response.json({error:'Original upload transport unavailable.'},{status:404,headers:{'Cache-Control':'private, no-store'}});
+      // This exact opaque upload capability is authenticated by the proxy.
+      // The outer source-writer admission always precedes provider contact.
+      return proxy.handle(routedRequest);
+    }
 
     if (url.pathname === "/talk" || url.pathname === "/talk/") return Response.redirect(new URL("/bots",url).toString(),303);
     if (/^\/api\/talk\/(?:threads(?:\/.*)?|history)\/?$/.test(url.pathname))

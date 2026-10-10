@@ -387,6 +387,42 @@ replay used to manufacture idle. Local D1/workerd observations do not establish
 global production coverage. AsyncLocalStorage support is documented in the
 [Cloudflare runtime API](https://developers.cloudflare.com/workers/runtime-apis/nodejs/asynclocalstorage/).
 
+### Original-source storage upload transition
+
+New direct-to-provider upload permits would escape request lifetime admission.
+The prepared original S3 producer therefore supports a temporary, disabled-by-
+default `MIGRATION_STORAGE_UPLOAD_PROXY` configuration containing only its exact
+compiled `sourceId` and HTTPS `publicOrigin`. It requires the matching installed
+`MIGRATION_SOURCE_WRITER_ADMISSION`; a configured proxy cannot silently fall back
+to an external upload when that binding is missing or invalid. This does not
+change the portable hub's local registered-object adapter.
+
+`storage-upload-proxy.mjs` encrypts the original SigV4 POST fields in a bounded,
+source/origin/provider-bound AES-GCM capability. The client receives the same
+upload target shape, with empty public fields and an opaque same-origin URL.
+Both Todo and bot storage use the actual shared S3 producer. Existing attachment,
+draft and publication IDs remain unchanged; long-lived provider credentials or
+usable direct-provider signing fields are not returned to the browser.
+
+The original Worker admits each upload durably before contacting the fixed
+provider. Multipart file bytes stream without buffering the file; the proxy
+adds the privately captured signing fields, validates the declared/body bound,
+and makes one provider request with no redirects or forwarded cookie, bearer or
+identity headers. A completed request-body and exact provider204 are required.
+An invalid/expired/foreign capability returns403 before provider effects. Lost,
+early or failed provider responses retain an unknown writer through the original
+admission scope, with no automatic provider retry. Draining refuses new uses of
+already-issued proxy capabilities while admitted uploads finish.
+
+This transition is prepared source, not an installed complete storage freeze.
+Previously issued direct-provider policies cannot be revoked by this proxy.
+Their actual admitted/uncertain effects must be reconciled separately before the
+`issued-storage-uploads` authority can qualify the combined freeze. A signature
+expiry or quiet timer alone is insufficient. No current credentials, provider
+permissions, upload data, routes or production environment have been changed by
+preparing these modules. Ordinary S3 behavior is retained when this feature is
+absent; the source-bound installation and old-permit acceptance remain due.
+
 ### Complete freeze observation
 
 `application-freeze-controller.mjs` joins the actual primary-D1 admission journal
