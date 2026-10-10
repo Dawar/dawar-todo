@@ -3,6 +3,7 @@ import { artifactMime } from '../../lib/bot-file-metadata.mjs';
 import { taskRequestSpec, taskRequestValues, type TaskRequestGuest, type TaskRequestGuestAction, type TaskRequestFile, type TaskRequestValues, type TaskRequestSecureSession } from '../../lib/task-requests';
 import { secureBase64, SECURE_IMAGE_BYTES, type SecureEnvelope } from '../../lib/secure-input';
 import { formJournal, type FormIntent } from './journal';
+import { uploadStorageBlob, type StoragePostTarget } from '../../lib/storage-upload';
 export function protectedLink(hash: string) {
     const match = /^#([^/]+)\/([A-Za-z0-9_-]{43})$/.exec(hash);
     if (!match)
@@ -100,10 +101,7 @@ export class GuestFormSession {
         this.action = intent;
         const result = await this.call<{
             file: TaskRequestFile;
-            upload?: {
-                url: string;
-                fields: Record<string, string>;
-            };
+            upload?: StoragePostTarget;
         }>(action);
         const valid = (f: TaskRequestFile) => f.fieldId === fieldId && f.name === file.name && f.size === file.size && f.mimeType === artifactMime(action.name, action.mimeType) && f.sha256 === sha256;
         if (!valid(result.file))
@@ -130,10 +128,7 @@ export class GuestFormSession {
             const url = new URL(result.upload.url);
             if (url.protocol !== 'https:')
                 throw Error('File upload requires TLS.');
-            const body = new FormData();
-            Object.entries(result.upload.fields).forEach(([k, v]) => body.append(k, v));
-            body.append('file', file);
-            const sent = await fetch(url, { method: 'POST', body, credentials: 'omit', redirect: 'error', referrerPolicy: 'no-referrer', signal: AbortSignal.timeout(120000) });
+            const sent = await uploadStorageBlob(fetch,result.upload,file,{sha256,name:file.name,signal:AbortSignal.timeout(120000),legacyCredentials:'omit',legacyReferrerPolicy:'no-referrer',validate:()=>{if(this.action?.action.operationId!==action.operationId)throw Error('Original guest upload action changed.');}});
             if (!sent.ok)
                 throw Error('File transfer unconfirmed. Retain the same file and retry.');
         }

@@ -7,6 +7,7 @@ export class HubNodeStorage {
   constructor({hub,controls,application,objects,config}){
     Object.assign(this,{hub,controls,application,objects,config});
     hub.db.exec('CREATE TABLE IF NOT EXISTS portable_storage_operations(id TEXT PRIMARY KEY,node_id TEXT NOT NULL,bot_id TEXT NOT NULL,epoch INTEGER NOT NULL,action TEXT NOT NULL,fingerprint TEXT NOT NULL,state TEXT NOT NULL)');
+    objects.assertWriter=()=>this.controls.assertWriter();
     objects.authorizeNode=scope=>{this.controls.assertWriter();return this.scope(scope.nodeId,scope.botId,scope.epoch);};
     this.environment={...config.applicationEnvironment,DB:application,DAWAR_OBJECT_STORAGE:objects.adapter(),BOTS_MACHINE_ID:config.applicationEnvironment?.BOTS_MACHINE_ID??'dawar-vm'};
   }

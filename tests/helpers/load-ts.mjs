@@ -9,7 +9,7 @@ export function runtime(extra = {}, mocks = {}) {
   const indexedDB = new IDBFactory();
   const window = Object.assign(new EventTarget(), { indexedDB, setTimeout, clearTimeout });
   const document = Object.assign(new EventTarget(), { visibilityState: 'visible' });
-  const context = { indexedDB, window, document, navigator: { onLine: true }, crypto, Blob, File, Headers, FormData, Response, Request, URL, AbortController, ReadableStream, TextEncoder, TextDecoder, DOMException, Date, Event, setTimeout, clearTimeout, performance, console: { info() {}, warn() {}, error() {} }, ...extra };
+  const context = { indexedDB, window, document, navigator: { onLine: true }, crypto, Blob, File, Headers, FormData, Response, Request, URL, AbortController, AbortSignal, ReadableStream, TextEncoder, TextDecoder, DOMException, Date, Event, setTimeout, clearTimeout, performance, console: { info() {}, warn() {}, error() {} }, ...extra };
   const cache = new Map();
   function load(path) {
     path = resolve(path);

@@ -387,6 +387,16 @@ replay used to manufacture idle. Local D1/workerd observations do not establish
 global production coverage. AsyncLocalStorage support is documented in the
 [Cloudflare runtime API](https://developers.cloudflare.com/workers/runtime-apis/nodejs/asynclocalstorage/).
 
+### Bounded resumable registered uploads
+
+Portable signed upload targets add `resumable: {version: 1, chunkBytes: 4194304}`. Browser task uploads use their existing JSON prepare/finalize endpoints and original `clientUploadId`, rather than sending a whole multipart file through the public API. Bot, ordinary guest and derived-preview uploads consume the same additive target. Legacy provider targets retain their prior single-attempt or replayable caller policy.
+
+The client hashes each four-MiB slice and sends a bounded manifest before transfer; it never materializes a whole large file for this protocol. The manifest, size, optional original whole-file SHA, owner, key, type, bounds and node placement form one immutable session identity. A fresh grant may renew access but cannot change that identity. Every chunk is fsynced before its SQLite receipt; final assembly streams and verifies all chunks before registering the original object ID/hash. One failed response causes a read of the same receipt, not a blind write retry. A changed file, owner, placement, revoked node, held writer, incomplete assembly or unprovable active process remains blocked with local bytes retained.
+
+There are at most eight live sessions, two GiB of reserved original bytes, sixteen receiving chunks and one final assembler. Receivers have a two-minute deadline; grants retain their original fifteen-minute expiry. Staging expires after twenty-four hours. Expired or unprovably busy sessions retain their identity and require original-session reconciliation; never make a replacement attachment merely to escape them. A vanished receiver can be cleaned only after actual process absence; a reused/inaccessible PID stays busy. Completed registration is reconciled from its immutable index and bytes. Completed chunk files are removed, while receipts remain. The journal and private staging directory are hub-local and shared transactionally by local gateway instances.
+
+Four-MiB request bodies preserve the existing 250-MiB video bound without relying on a higher Cloudflare plan. Actual zone overrides and live Tunnel delivery remain deployment acceptance; request size is not a throughput claim. Secure volatile response bodies do not enter this storage path. This prepares final portable hosting, not a complete original-provider write freeze or installed production capability.
+
 ### Original-source storage upload transition
 
 New direct-to-provider upload permits would escape request lifetime admission.
@@ -396,6 +406,11 @@ compiled `sourceId` and HTTPS `publicOrigin`. It requires the matching installed
 `MIGRATION_SOURCE_WRITER_ADMISSION`; a configured proxy cannot silently fall back
 to an external upload when that binding is missing or invalid. This does not
 change the portable hub's local registered-object adapter.
+
+This temporary Worker proxy still carries one whole multipart request. It is
+not the resumable Node protocol and is not approved for activation while large
+file requests could exceed the actual Cloudflare body limit. Legacy provider
+permit coverage and a complete writer freeze remain separate prerequisites.
 
 `storage-upload-proxy.mjs` encrypts the original SigV4 POST fields in a bounded,
 source/origin/provider-bound AES-GCM capability. The client receives the same

@@ -1,12 +1,13 @@
 import { portableHeaders } from "../../lib/portable-csrf";
 import { replayableStorageFetch } from "../../lib/storage-transfer";
+import { uploadStorageBlob, type StoragePostTarget } from '../../lib/storage-upload';
 import type { BotAttachment, BotArtifactPage } from "../../lib/bots-types";
 import { CloudTransferDeadline, cloudRetryDelay, CLOUD_METADATA_DEADLINE_MS, CLOUD_UPLOAD_DEADLINE_MS, CLOUD_DOWNLOAD_IDLE_MS, CLOUD_DOWNLOAD_DEADLINE_MS } from "./cloud-transfer-deadline";
 
 export class CloudStorageError extends Error { constructor(message: string,public code: string,public status: number) { super(message); } }
 type Receipt = BotAttachment & {sha256:string;cloudState:"ready"};
 type SignedDownload = {attachment:Receipt;url:string;expiresAt:string};
-type Preparation = {attachment?:Receipt;upload?:{url:string;fields:Record<string,string>}};
+type Preparation = {attachment?:Receipt;upload?:StoragePostTarget};
 type CheckOwner = () => string;
 const requestTimeout = (action: string) => new CloudStorageError(
   action === "finalize" || action === "copy"
@@ -77,11 +78,10 @@ export async function cloudUpload(owner:string,current:CheckOwner,botId:string,f
     const prepared = await cloudRequest<Preparation>(owner,current,"prepare",metadata);
     if (prepared.attachment) { validateReceipt(prepared.attachment,metadata); progress(100); return prepared.attachment; }
     if (!prepared.upload) throw new Error("Cloud upload preparation is incomplete. Your files are retained.");
-    const body=new FormData(); for (const [key,value] of Object.entries(prepared.upload.fields)) body.set(key,value); body.set("file",file,file.name);
     const deadline = new CloudTransferDeadline(CLOUD_UPLOAD_DEADLINE_MS,
       () => new CloudStorageError("Cloud upload timed out. Your draft and file bytes are retained; retry this upload.", "transfer_timeout", 0));
     let response: Response;
-    try { response = await deadline.run(() => replayableStorageFetch(fetch, prepared.upload!.url, { method:"POST", body, redirect:"error", signal:deadline.signal })); }
+    try { response = await deadline.run(() => uploadStorageBlob(fetch, prepared.upload!, file,{name:file.name,sha256,signal:deadline.signal,validate:()=>{if(current()!==owner)throw Error('The account changed. Your draft is retained.');},progress,legacyReplay:true})); }
     finally { deadline.dispose(); }
     cancelBody(response.body);
     if (current()!==owner) throw new Error("The account changed. Your draft is retained.");

@@ -1,5 +1,6 @@
 import { waitUntil } from "../lib/source-writer-work";
 import { createS3Storage, readStoragePrefix, storageResponseMetadata } from "../lib/s3-storage";
+import { uploadStorageBlob, type StoragePostTarget } from '../lib/storage-upload';
 import { attachmentErrorDetails, type AttachmentPhase } from "../lib/attachment-errors";
 import type { AttachmentRecovery } from "../lib/attachment-recovery";
 import { env } from "cloudflare:workers";
@@ -705,10 +706,7 @@ export async function finalizeTodoMediaAttachmentUpload(
   }
 }
 
-type PreparedStorageTarget = {
-  url: string;
-  fields: Record<string, string>;
-};
+type PreparedStorageTarget = StoragePostTarget;
 
 function directAttachmentKind(input: DirectAttachmentUploadInput) {
   if (input.kind) return input.kind;
@@ -724,10 +722,7 @@ function attachmentBlob(bytes: ArrayBuffer, mimeType: string) {
 }
 
 async function uploadPreparedStorageTarget(target: PreparedStorageTarget, body: Blob) {
-  const form = new FormData();
-  Object.entries(target.fields).forEach(([name, value]) => form.append(name, value));
-  form.append("file", body, "upload");
-  const response = await fetch(target.url, { method: "POST", body: form });
+  const response = await uploadStorageBlob(fetch,target,body);
   if (!response.ok) throw await storageResponseError("Private attachment upload", response);
 }
 

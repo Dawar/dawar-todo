@@ -1,4 +1,5 @@
 import { replayableStorageFetch } from "../lib/storage-transfer.ts";
+import { uploadStorageBlob } from '../lib/storage-upload.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
 import { open, mkdir, link, unlink } from 'node:fs/promises';
@@ -103,9 +104,7 @@ export class BotStorageClient {
             const bytes = await file.readFile();
             await containedHandle(bot.cwd,a.path,file);
             if (bytes.length !== a.size || createHash('sha256').update(bytes).digest('hex') !== sha256) throw new Error('Publication snapshot changed.');
-            const body = new FormData(); for (const [key,value] of Object.entries(prepared.upload.fields)) body.set(key,value);
-            body.set('file',new Blob([bytes],{type:a.mimeType}),a.name);
-            const uploaded = await replayableStorageFetch(this.fetch,prepared.upload.url,{ method:'POST',body,signal:AbortSignal.timeout(120000),redirect:'error' });
+            const uploaded = await uploadStorageBlob(this.fetch,prepared.upload,new Blob([bytes],{type:a.mimeType}),{name:a.name,sha256,signal:AbortSignal.timeout(120000),legacyReplay:true,validate:()=>{const current=this.runtime.owned('attachment',a.id,bot.id);if(current.path!==a.path||current.size!==a.size||current.sha256&&current.sha256!==sha256)throw Error('Original publication identity changed.');}});
             if (!uploaded.ok) throw new Error('Cloud upload failed. Retry the same publication; its local snapshot is retained.');
           } finally { await file.close(); }
         }
@@ -196,8 +195,8 @@ export class BotStorageClient {
       const id = `thumbnail:${createHash('sha256').update(`${a.id}:${preview.version}`).digest('hex')}`;
       const metadata = {id,botId:bot.id,parentId:a.id,name:'thumbnail.webp',mimeType:'image/webp',size:bytes.length,sha256,createdAt:a.createdAt};
       const prepared = await this.call('prepare',metadata);
-      if (!prepared.attachment) { const body = new FormData(); for (const [key,value] of Object.entries(prepared.upload.fields)) body.set(key,value); body.set('file',new Blob([bytes],{type:'image/webp'}),'thumbnail.webp');
-        const response = await replayableStorageFetch(this.fetch,prepared.upload.url,{method:'POST',body,signal:AbortSignal.timeout(60000),redirect:'error'}); if (!response.ok) throw new Error('Thumbnail upload unavailable.');
+      if (!prepared.attachment) {
+        const response = await uploadStorageBlob(this.fetch,prepared.upload,new Blob([bytes],{type:'image/webp'}),{name:'thumbnail.webp',sha256,signal:AbortSignal.timeout(60000),legacyReplay:true}); if (!response.ok) throw new Error('Thumbnail upload unavailable.');
         await this.call('finalize',{id,botId:bot.id}); }
     }).catch(() => { /* Derived previews never block original file publication. */ }).finally(() => this.previews.delete(a.id));
   }

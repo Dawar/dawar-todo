@@ -8,6 +8,7 @@ import { digest } from './protocol.mjs';
 import { RegisteredArtifacts } from './artifacts.mjs';
 import { privateDatabase } from './sqlite.mjs';
 import { join } from 'node:path';
+import { ObjectUpload, UPLOAD_CHUNK_BYTES } from './object-upload.mjs';
 
 const MAX=250*1024*1024;
 const keyId=key=>{
@@ -15,7 +16,7 @@ const keyId=key=>{
   return `object:${digest(key)}`;
 };
 export class ObjectStorage {
-  constructor(config){this.config=config;this.db=privateDatabase(join(config.dataDirectory,'artifact-index.sqlite'));this.files=new RegisteredArtifacts(this.db,join(config.dataDirectory,'registered-files'));}
+  constructor(config){this.config=config;this.db=privateDatabase(join(config.dataDirectory,'artifact-index.sqlite'));this.files=new RegisteredArtifacts(this.db,join(config.dataDirectory,'registered-files'));this.uploads=new ObjectUpload(this,keyId);}
   token(value){const body=Buffer.from(JSON.stringify(value)).toString('base64url');return body+'.'+createHmac('sha256',this.config.gatewaySecret).update('object:'+body).digest('base64url');}
   verify(token,method,now=Date.now()){
     if(typeof token!=='string'||token.length>6000)throw Error('Invalid object grant.');
@@ -45,10 +46,12 @@ export class ObjectStorage {
     if(method==='GET'){
       const r=await this.response(v.key,request.method,request.headers);
       if(v.download)r.headers.set('content-disposition',`attachment; filename*=UTF-8''${encodeURIComponent(v.download)}`);
-      if(v.node&&r.body){const self=this;return new Response(r.body.pipeThrough(new TransformStream({transform(chunk,controller){self.verify(u.searchParams.get('grant'),method);controller.enqueue(chunk);}})),{status:r.status,headers:r.headers});}
+      if(v.node&&r.body){return new Response(r.body.pipeThrough(new TransformStream({transform:(chunk,controller)=>{this.verify(u.searchParams.get('grant'),method);controller.enqueue(chunk);}})),{status:r.status,headers:r.headers});}
       return r;
     }
     if(method==='POST'){
+      if(v.uploadVersion===1)throw Error('Use the original bounded upload protocol.');
+      if(typeof this.assertWriter!=='function')throw Error('Storage writer authority is unavailable.');this.assertWriter();
       // Multipart parsing is bounded by the gateway before allocation. The
       // exact original key/content type is signed; it is never a local path.
       const form=await request.formData(),file=form.get('file');
@@ -59,15 +62,18 @@ export class ObjectStorage {
     throw Error('Unsupported object method.');
   }
   async serveNode(req,url){
+    if(new URL(url).searchParams.has('action'))return this.uploads.serve(req,url);
     if(req.method!=='POST')return this.serve(new Request(url,{method:req.method,headers:req.headers}));
     const v=this.verify(new URL(url).searchParams.get('grant'),'POST');
+    if(v.uploadVersion===1)throw Error('Use the original bounded upload protocol.');
+    if(typeof this.assertWriter!=='function')throw Error('Storage writer authority is unavailable.');this.assertWriter();
     if(!Number.isSafeInteger(v.maximum)||v.maximum<0||v.maximum>MAX||!Number.isSafeInteger(v.minimum)||v.minimum<0||v.minimum>v.maximum)throw Error('Invalid original upload bounds.');
     const length=Number(req.headers['content-length']);
     if(req.headers['content-length']&&(!Number.isSafeInteger(length)||length<1||length>v.maximum+65536))throw Error('Upload exceeds declared bound.');
     await mkdir(this.files.directory,{recursive:true,mode:0o700});
     const temporary=join(this.files.directory,`.upload-${randomUUID()}`),handle=await open(temporary,constants.O_CREAT|constants.O_EXCL|constants.O_WRONLY|constants.O_NOFOLLOW,0o600);
     let fileTask=null,size=0,bodySize=0;const sha=createHash('sha256'),fields=new Map(),abort=new AbortController();
-    const timer=setTimeout(()=>abort.abort(Error('Upload deadline expired.')),15*60*1000),validateGrant=()=>this.verify(new URL(url).searchParams.get('grant'),'POST');
+    const timer=setTimeout(()=>abort.abort(Error('Upload deadline expired.')),15*60*1000),validateGrant=()=>{this.assertWriter();return this.verify(new URL(url).searchParams.get('grant'),'POST');};
     const aborted=()=>abort.abort(Error('Upload interrupted.'));req.once('aborted',aborted);
     try{
       const parser=busboy({headers:req.headers,limits:{files:1,fields:2,parts:4,fieldSize:2048,fieldNameSize:32,fileSize:v.maximum+1,headerPairs:20}});
@@ -116,7 +122,7 @@ export class ObjectStorage {
     return {storageUrl,signedStorageResponse,storageResponseError,
       storageFetch:async(url,init)=>{const r=await signedStorageResponse(url,init);if(!r.ok)throw await storageResponseError();return r;},
       signedObjectUrl:async(key,download)=>{this.row(key);const u=this.url();u.searchParams.set('grant',this.token({key,download,owner:this.config.owner.key,method:'GET',expires:Date.now()+3600000}));return u.toString();},
-      signedPostTarget:async(key,type,maximum,minimum=1)=>{keyId(key);const u=this.url();u.searchParams.set('grant',this.token({key,type,maximum,minimum,owner:this.config.owner.key,method:'POST',expires:Date.now()+900000}));return {url:u.toString(),fields:{key,'Content-Type':type}};},
+      signedPostTarget:async(key,type,maximum,minimum=1)=>{keyId(key);const u=this.url();u.searchParams.set('grant',this.token({key,type,maximum,minimum,uploadVersion:1,owner:this.config.owner.key,method:'POST',expires:Date.now()+900000}));return {url:u.toString(),fields:{key,'Content-Type':type},resumable:{version:1,chunkBytes:UPLOAD_CHUNK_BYTES}};},
       copyObject:async(source,target,etag,signal)=>{signal?.throwIfAborted();const r=await this.response(source);if(!r.ok||r.headers.get('etag')!==etag)throw Error('Original copy source changed.');await this.put(target,await r.blob(),{type:this.row(source).mime,minimum:0,maximum:MAX});signal?.throwIfAborted();},
       deleteKeys:async keys=>{for(const k of new Set(keys))await signedStorageResponse(this.url(k),{method:'DELETE'});},
       readBucketCors:async()=>({http:200,code:null,configured:true,rules:[{allowedOrigins:[this.config.publicOrigin],allowedMethods:['GET','HEAD','POST'],allowedHeaders:['Content-Type'],exposeHeaders:['ETag','Content-Length','Content-Range'],maxAgeSeconds:0}]}) };
