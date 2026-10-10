@@ -1,0 +1,11 @@
+import { build } from 'esbuild';
+import { mkdir, cp, writeFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+await mkdir('dist/portable',{recursive:true});
+await build({ entryPoints:['portable/gateway.mjs'],outfile:'dist/portable/gateway.mjs',bundle:true,platform:'node',target:'node24',format:'esm',packages:'external' });
+await cp('public','.next-portable/standalone/public',{recursive:true});
+await mkdir('.next-portable/standalone/public/portable-assets',{recursive:true});
+await cp('node_modules/pdfjs-dist/build/pdf.worker.min.mjs','.next-portable/standalone/public/portable-assets/pdf.worker.min.mjs');
+for(const folder of ['cmaps','standard_fonts','wasm'])await cp(`node_modules/pdfjs-dist/${folder}`,`.next-portable/standalone/public/portable-assets/pdf/${folder}`,{recursive:true});
+await cp('.next-portable/static','.next-portable/standalone/.next-portable/static',{recursive:true});
+await writeFile('dist/portable/build.json',JSON.stringify({version:1,source:execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),nodeMajor:24,protocol:1,runtime:'0.161.0'},null,2)+'\n');

@@ -1,0 +1,23 @@
+import { join } from 'node:path';
+import { LocalD1 } from './sqlite.mjs';
+import { loadConfig } from './config.mjs';
+
+let bindings;
+function environment() {
+  if (!bindings) {
+    const c = loadConfig();
+    if (c.mode === 'agent') throw Error('The agent has no application database.');
+    // Only this local adapter opens the application DB. Control/native stores
+    // have separate paths and no cross-machine shared SQLite filesystem.
+    bindings = { ...c.applicationEnvironment, DB:new LocalD1(join(c.dataDirectory,'application.sqlite')),
+      BOTS_OWNER_EMAIL:c.owner.key,BOTS_OWNER_USER_ID:c.owner.userId,TODO_PUBLIC_URL:c.publicOrigin };
+  }
+  return bindings;
+}
+export const env = new Proxy({}, { get:(_,key) => environment()[key],has:(_,key) => key in environment() });
+const background = new Set();
+export function waitUntil(promise) {
+  const task = Promise.resolve(promise); background.add(task);
+  void task.catch(() => console.error('[portable] Background operation failed.')).finally(() => background.delete(task));
+}
+export async function settleBackground() { await Promise.allSettled([...background]); }
