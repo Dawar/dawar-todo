@@ -386,3 +386,28 @@ may freeze/copy. Helpers remain captured as original rows, with no clearing or
 replay used to manufacture idle. Local D1/workerd observations do not establish
 global production coverage. AsyncLocalStorage support is documented in the
 [Cloudflare runtime API](https://developers.cloudflare.com/workers/runtime-apis/nodejs/asynclocalstorage/).
+
+### Complete freeze observation
+
+`application-freeze-controller.mjs` joins the actual primary-D1 admission journal
+and database gate with four mandatory, trusted writer adapters: old Worker
+lifetimes, voice/provider effects, issued storage uploads and native/control/files.
+It captures their exact source, installation, producer, original operation,
+generation and common deadline before awaiting any observations. Each adapter
+must positively prove held starts, settled work/tools/volatile state and zero
+unknowns; a quiet timer, environment assertion or caller-supplied proof is
+insufficient. Its hold must remain exclusively releaseable by the captured
+controller, with no automatic expiry reopening. Those semantics belong to the
+actual adapter and its receipt, not an assertion supplied by a request. No
+adapter has a permissive default.
+
+Both database authorities are reread after external awaits. Freshness, original
+bindings, wall/monotonic deadline and retained terminal counts remain fenced.
+Stopping observation waits for an admitted query; it does not release any gate,
+clear history or infer a cancelled query has settled. Original D1/drain releases
+remain separate explicit operations after encrypted reader closure.
+
+The controller performs no installation, hold, release, retry or automatic
+execution. Its external adapters and real owner HTTPS transport are not yet
+connected to production. Fixture observations can validate this composition
+without proving those four actual production writer authorities are frozen.
