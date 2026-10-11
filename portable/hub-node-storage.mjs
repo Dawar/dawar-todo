@@ -13,6 +13,19 @@ export class HubNodeStorage {
     this.environment={...config.applicationEnvironment,DB:application,DAWAR_OBJECT_STORAGE:objects.adapter(),BOTS_MACHINE_ID:config.applicationEnvironment?.BOTS_MACHINE_ID??'dawar-vm',BOTS_OWNER_EMAIL:config.owner.key,BOTS_TICKET_SECRET:config.gatewaySecret,
       TASK_REQUEST_SECRET:config.applicationEnvironment?.TASK_REQUEST_SECRET??config.applicationEnvironment?.BOTS_TICKET_SECRET??config.gatewaySecret};
   }
+  registeredAttachment(fileId,botId){
+    if(!id(fileId)||!id(botId))throw Error('Invalid registered attachment identity.');
+    this.hub.placement(this.config.owner.key,botId);
+    // Synchronous, indexed, owner+bot scoped lookup: safe inside the existing
+    // logical acceptance transaction without a network await or new receipt.
+    const row=this.application.sqlite.prepare('SELECT state,metadata,parent_id FROM bot_storage_files WHERE owner_key=? AND id=? AND bot_id=?').get(this.config.owner.key,fileId,botId);
+    if(!row)throw Error('Registered attachment is unavailable for this bot.');
+    if(row.state!=='ready'||row.parent_id)throw Error('Registered attachment is not ready for sending.');
+    const a=JSON.parse(row.metadata);
+    if(a.id!==fileId||a.botId!==botId||!Number.isSafeInteger(a.size)||a.size<0||a.size>100*1024*1024||!/^[a-f0-9]{64}$/.test(a.sha256??'')||typeof a.name!=='string'||a.name.length>160||typeof a.mimeType!=='string')throw Error('Registered attachment metadata is invalid.');
+    // Do not project paths, grants or private storage keys into logical input.
+    return {id:a.id,botId:a.botId,name:a.name,size:a.size,mimeType:a.mimeType,sha256:a.sha256,createdAt:a.createdAt,ready:true,cloudState:'ready'};
+  }
   scope(nodeId,botId,epoch){
     const n=this.hub.node(nodeId),p=this.hub.placement(n.owner,botId);
     if(n.owner!==this.config.owner.key||p.node_id!==nodeId||p.epoch!==epoch)throw Error('Foreign, revoked or stale artifact node scope.');

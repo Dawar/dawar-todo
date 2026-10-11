@@ -70,7 +70,18 @@ export class HubControls extends EventEmitter {
       throw Object.assign(Error('Logical controls are awaiting the authoritative hub activation or write freeze.'),{outcome:'not-sent'});
   }
   scope(owner,botId) {const p=this.hub.placement(owner,botId),b=this.store.bot(botId);if(b.deletedAt)throw Error('This bot was deleted; its records are retained.');return {p,b};}
-  owned(kind,value,botId) {const r=this.store.get(kind,value);if(!r||r.botId!==botId)throw Error('Record belongs to another bot.');return r;}
+  owned(kind,value,botId) {
+    const r=this.store.get(kind,value);
+    if(r&&r.botId!==botId)throw Error('Record belongs to another bot.');
+    if(r)return r;
+    // Browser uploads finish in the application registry, not the agent's
+    // historical control snapshot. Resolve the same immutable ID at use time.
+    if(kind==='attachment'){
+      if(!this.nodeStorage)throw Error('Registered attachment storage is unavailable.');
+      return this.nodeStorage.registeredAttachment(value,botId);
+    }
+    throw Error('Record is unavailable; refresh before trying again.');
+  }
   activityUnresolved(botId) {return activityUnresolved(this,botId);}
   settings(bot) {return BotRuntime.prototype.settings.call(this,bot);}
   managedPrompt(botId,clientId) {return BotRuntime.prototype.managedPrompt.call(this,botId,clientId);}
