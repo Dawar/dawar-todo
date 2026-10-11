@@ -574,7 +574,7 @@ async function uploadPrivateImage(
   }
 }
 
-function VoiceMemoRecorder({ onClose, onAttach }: { onClose: () => void; onAttach: (file: File, durationMs: number) => void }) {
+function VoiceMemoRecorder({ onClose, onAttach, returnFocus }: { returnFocus: HTMLElement | null; onClose: () => void; onAttach: (file: File, durationMs: number) => void }) {
   const [phase, setPhase] = useState<"idle" | "recording" | "review">("idle");
   const [elapsed, setElapsed] = useState(0);
   const [error, setError] = useState("");
@@ -663,7 +663,7 @@ function VoiceMemoRecorder({ onClose, onAttach }: { onClose: () => void; onAttac
   }
 
   return (
-    <ControlledDialog title="Voice memo" onClose={onClose} className="max-w-md" onKeyDown={(event) => event.stopPropagation()} onEscapeKeyDown={(event) => event.stopPropagation()}>
+    <ControlledDialog title="Voice memo" onClose={onClose} returnFocus={returnFocus} className="max-w-md" onKeyDown={(event) => event.stopPropagation()} onEscapeKeyDown={(event) => event.stopPropagation()}>
         <div className="my-7 text-center">
           <div className={classNames("mx-auto mb-4 grid h-20 w-20 place-items-center rounded-full", phase === "recording" ? "motion-safe:animate-pulse bg-destructive/10 text-destructive" : "bg-accent text-primary")}>
             <ActionIcon name={phase === "recording" ? "stop" : "mic"} className="h-9 w-9" />
@@ -869,6 +869,7 @@ export default function Home() {
   const [descriptionPreview, setDescriptionPreview] = useState(false);
   const [detailAttachments, setDetailAttachments] = useState<TodoAttachment[]>([]);
   const [detailUploads, setDetailUploads] = useState<PendingAttachment[]>([]);
+  const voiceReturnFocusRef = useRef<HTMLButtonElement | null>(null);
   const [voiceTarget, setVoiceTarget] = useState<"capture" | "detail" | null>(null);
   const [online, setOnline] = useState(true);
   const [connectionQuality, setConnectionQuality] = useState<ConnectionQuality>("online");
@@ -4193,7 +4194,7 @@ export default function Home() {
                 label="Add attachment or assign project"
                 disabled={!captureReady || adding}
                 onFiles={(files) => void queueCaptureAttachments(files)}
-                onRecord={() => setVoiceTarget("capture")}
+                onRecord={(opener) => { voiceReturnFocusRef.current = opener; setVoiceTarget("capture"); }}
                 onAssignProject={openCaptureProjectAssignment}
               />
               <Textarea
@@ -4495,7 +4496,7 @@ export default function Home() {
                     onOpenChange={setDetailAttachmentPickerOpen}
                     showLabel
                     onFiles={(files) => void queueDetailAttachments(files)}
-                    onRecord={() => setVoiceTarget("detail")}
+                    onRecord={(opener) => { voiceReturnFocusRef.current = opener; setVoiceTarget("detail"); }}
                     disabled={detailAttachments.length + detailUploads.length >= MAX_ATTACHMENTS}
                   />
                 </div>
@@ -4559,6 +4560,7 @@ export default function Home() {
 
       {voiceTarget && (
         <VoiceMemoRecorder
+          returnFocus={voiceReturnFocusRef.current}
           onClose={() => setVoiceTarget(null)}
           onAttach={(file, durationMs) => voiceTarget === "detail" ? queueDetailVoice(file, durationMs) : queueCaptureVoice(file, durationMs)}
         />

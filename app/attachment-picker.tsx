@@ -11,13 +11,14 @@ const MEDIA_ACCEPT = `${IMAGE_ACCEPT},${VIDEO_ACCEPT}`;
 export function AttachmentPicker({ disabled, onFiles, onRecord, onAssignProject, onOpenChange, label, showLabel = false }: {
   disabled?: boolean;
   onFiles: (files: File[]) => void;
-  onRecord: () => void;
+  onRecord: (opener: HTMLButtonElement | null) => void;
   onAssignProject?: () => void;
   onOpenChange?: (open: boolean) => void;
   label: string;
   showLabel?: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     onOpenChange?.(open && !disabled);
     return () => onOpenChange?.(false);
@@ -31,7 +32,7 @@ export function AttachmentPicker({ disabled, onFiles, onRecord, onAssignProject,
     if (files.length) onFiles(files);
   }
   return <div className="relative shrink-0">
-    <Button type="button" variant="ghost" size={showLabel ? "default" : "icon"} disabled={disabled} onClick={() => setOpen(true)} aria-haspopup="dialog" aria-expanded={open && !disabled} aria-label={label} title={label} className="text-primary">
+    <Button ref={triggerRef} type="button" variant="ghost" size={showLabel ? "default" : "icon"} disabled={disabled} onClick={() => setOpen(true)} aria-haspopup="dialog" aria-expanded={open && !disabled} aria-label={label} title={label} className="text-primary">
       <ActionIcon name={showLabel ? "attachment" : "add"} />
       {showLabel && <span>Add attachment</span>}
     </Button>
@@ -39,7 +40,7 @@ export function AttachmentPicker({ disabled, onFiles, onRecord, onAssignProject,
       <div className="grid gap-1">
         <Button type="button" variant="ghost" onClick={() => libraryRef.current?.click()} className="h-12 justify-start whitespace-normal text-left sm:h-11"><ActionIcon name="image" />Choose photos or videos</Button>
         <Button type="button" variant="ghost" onClick={() => fileRef.current?.click()} className="h-12 justify-start sm:h-11"><ActionIcon name="file" />Choose files</Button>
-        <Button type="button" variant="ghost" onClick={() => { setOpen(false); onRecord(); }} className="h-12 justify-start sm:h-11"><ActionIcon name="mic" />Record voice memo</Button>
+        <Button type="button" variant="ghost" onClick={() => { setOpen(false); onRecord(triggerRef.current); }} className="h-12 justify-start sm:h-11"><ActionIcon name="mic" />Record voice memo</Button>
         {onAssignProject && <Button type="button" variant="ghost" onClick={() => { setOpen(false); onAssignProject(); }} className="h-12 justify-start sm:h-11"><ActionIcon name="move" />Assign project</Button>}
       </div>
       <Button type="button" variant="outline" onClick={() => setOpen(false)}>Cancel</Button>

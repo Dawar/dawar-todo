@@ -4,10 +4,11 @@ import { useState, type ComponentProps, type ReactNode } from "react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "./dialog";
 
 /** For dialogs opened by application state rather than a Radix trigger. */
-export function ControlledDialog({ title, description, onClose, children, ...props }: Omit<ComponentProps<typeof DialogContent>, "title"> & {
+export function ControlledDialog({ title, description, onClose, returnFocus, children, ...props }: Omit<ComponentProps<typeof DialogContent>, "title"> & {
   title: ReactNode;
   description?: ReactNode;
   onClose: () => void;
+  returnFocus?: HTMLElement | null;
 }) {
   const [opener] = useState(() => typeof document === "undefined" ? null : document.activeElement);
   return <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
@@ -15,7 +16,8 @@ export function ControlledDialog({ title, description, onClose, children, ...pro
       props.onCloseAutoFocus?.(event);
       if (event.defaultPrevented) return;
       event.preventDefault();
-      if (opener instanceof HTMLElement && opener.isConnected) opener.focus({ preventScroll: true });
+      const target = returnFocus ?? opener;
+      if (target instanceof HTMLElement && target.isConnected) target.focus({ preventScroll: true });
     }}>
       <DialogHeader>
         <DialogTitle>{title}</DialogTitle>
