@@ -2,6 +2,7 @@
 import { createContext, useContext, Fragment, memo, useEffect, useState, useRef, useMemo, useSyncExternalStore, type ReactNode } from "react";
 import { LazyDetails, TextPages, ItemPages } from "./lazy-details";
 import { botsClient } from "./client";
+import { Button } from "@/components/ui/button";
 import { ReturnedArtifact } from "./returned-artifact";
 import { ReturnedVisualization } from "./returned-visualization";
 import { remarkVisualizations } from "./visualization-markdown";
@@ -226,35 +227,50 @@ export function AttachmentImage({
   botId: string;
   attachment: BotAttachment;
 }) {
-  const [url, setUrl] = useState(""), [visible, setVisible] = useState(false);
+  const [visible, setVisible] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+  const [result, setResult] = useState<{ key: string; url?: string; failed?: boolean } | null>(null);
   const placeholder = useRef<HTMLSpanElement>(null);
+  const owner = useSyncExternalStore(botsClient.subscribe, () => botsClient.owner, () => "");
   const online = useSyncExternalStore(botsClient.subscribe, () => botsClient.online || botsClient.storageCatalogAvailable, () => false);
+  const key = JSON.stringify([owner, botId, attachment.id, online, attempt]);
+  const current = result?.key === key ? result : null;
   useEffect(() => {
     const observer = new IntersectionObserver((entries) => { if (entries.some((entry) => entry.isIntersecting)) setVisible(true); }, { rootMargin: "200px" });
     if (placeholder.current) observer.observe(placeholder.current);
     return () => observer.disconnect();
   }, []);
   useEffect(() => {
-    if (!online || !visible) return;
-    let alive = true,
-      objectUrl = "";
-    void botsClient
-      .download(botId, attachment.id)
+    if (!owner || !online || !visible) return;
+    let alive = true;
+    let objectUrl = "";
+    const controller = new AbortController();
+    void botsClient.download(botId, attachment.id, owner, controller.signal)
       .then(({ blob }) => {
-        if (alive) {
-          objectUrl = URL.createObjectURL(blob);
-          setUrl(objectUrl);
-        }
+        if (!alive || botsClient.owner !== owner) return;
+        objectUrl = URL.createObjectURL(blob);
+        setResult({ key, url: objectUrl });
       })
-      .catch(() => {});
+      .catch(() => {
+        if (alive && botsClient.owner === owner) setResult({ key, failed: true });
+      });
     return () => {
       alive = false;
+      controller.abort();
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [botId, attachment.id, online, visible]);
-  return <span ref={placeholder}>{url ? (
-    <img className="bots-attached-image" src={url} alt={attachment.name} />
+  }, [owner, botId, attachment.id, online, visible, key]);
+  return <span ref={placeholder} className="bots-attachment-image-frame">{current?.url ? (
+    <img className="bots-attached-image" src={current.url} alt={attachment.name}
+      onError={() => setResult({ key, failed: true })} />
   ) : (
-    <span>{attachment.name}{!online ? " · reconnect to view image" : ""}</span>
+    <span className="bots-attachment-image-state">
+      <span>{attachment.name}</span>
+      <span className="text-muted-foreground text-xs" role="status">
+        {!owner || !online ? "Reconnect to view image" : current?.failed ? "Image unavailable" : visible ? "Loading image…" : "Image"}
+      </span>
+      {owner && online && current?.failed && <Button type="button" variant="outline" size="sm"
+        onClick={() => setAttempt(value => value + 1)}>Retry image</Button>}
+    </span>
   )}</span>;
 }

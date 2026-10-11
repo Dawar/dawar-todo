@@ -312,3 +312,7 @@ WorkOverview and AutomaticInbox use shared outline buttons and their own semanti
 ### Message detail, tables and diagrams
 
 Tool disclosures use semantic borders/text and 44px minimum summary targets; output remains bounded monospace text. Status icons reflect recorded running/completed/failed/declined/interrupted states, with no success check for unknown status; explicit nonzero exit or unsuccessful dynamic result is a failure. Message tables retain native semantics and an independently focusable horizontal viewport only when overflowing, with semantic header/border/scroll colors. Diagram source toggles use shared ghost icon buttons; the lazy strict Mermaid renderer reads shared palette tokens at initialization and keeps the existing sanitization and size limits. Actual1280/320 tool outcomes/table overflow/proposed plan and diagram/source toggle observed. Streaming/invalid-diagram/keyboard paging/attachment scope/integrated chat remain pending.
+
+### Inline attachment images
+
+Inline images retain lazy loading and bind download/display state to the current owner, bot, attachment and attempt. Obsolete requests are aborted and object URLs revoked. Loading, offline and failed states use short labels; the shared Retry image button repeats only the attachment read. Decode failures also expose retry. Source checks and rendered state verification are recorded separately; full chat integration remains pending.
