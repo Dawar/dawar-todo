@@ -272,6 +272,13 @@ safe activation rules; expire/cancel only the original unclaimed fence through
 this owner endpoint. Preserve the original records and all newer user data.
 # October11 corrected cutover
 
+The corrected attempt also stopped before backup or restart when deployment
+temporarily dirtied the checkout. Owner `msg_01a128cf-b62b-7423-a8e0-9dcef8b49b50`
+approved the repaired sequence: finish voice deployment in the isolated worktree
+BEFORE starting `--supervised-d011-reordered`. This one new lease links all three
+immutable failures. Run no deployment command during its hold; the exact source,
+private backup, bounded deadline and one actual restart checks still apply.
+
 Direct owner message `msg_01a128be-0da0-7aa0-a416-deed40c03649` approves the
 corrected cutover decision and explicitly accepts the cutover safety risk.
 `--supervised-d011-corrected` binds that exact native record to ONE new linked

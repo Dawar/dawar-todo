@@ -91,7 +91,10 @@ def check_attempt(helper, evidence):
     expected = helper.STATE / 'runtime-updates' / f'supervised-d011-{INVOCATION}.json'
     if attempt['path'] != str(expected) or private_file(expected, helper.STATE) != attempt['stamp'] or hashlib.sha256(expected.read_bytes()).hexdigest() != attempt['sha256']:
         raise RuntimeError('Exclusive original invocation attempt changed; no restart')
-    if evidence.get('correctedCutover'):
+    if evidence.get('reorderedCutover'):
+        from supervised_reordered_cutover import check
+        check(helper, evidence)
+    elif evidence.get('correctedCutover'):
         from supervised_corrected_cutover import check
         check(helper, evidence)
     elif evidence.get('continuation'):
@@ -254,8 +257,10 @@ def snapshot(helper, drain, deadline, waiting=False):
 
 
 def source(helper, args):
-    if helper.command('git', 'rev-parse', 'HEAD') != args.commit or helper.command('git', 'status', '--porcelain'):
-        raise RuntimeError('Reviewed supervised source changed')
+    head = helper.command('git', 'rev-parse', 'HEAD')
+    dirty = helper.command('git', 'status', '--porcelain')
+    if head != args.commit or dirty:
+        raise RuntimeError('Reviewed supervised source changed: ' + json.dumps({'head': head, 'status': dirty[:4096]}))
     pin = (helper.ROOT / 'bot-bridge/codex-version.mjs').read_text()
     if f'CODEX_VERSION = "{args.version}"' not in pin:
         raise RuntimeError('Reviewed runtime pin changed')
@@ -375,7 +380,7 @@ def activate_supervised(helper, args, receipt_dir, receipt, drain, deadline, evi
     raise TimeoutError('Restart attempted; health unconfirmed. Inspect retained original claim')
 
 
-def run_supervised(helper, args, receipt_dir, receipt, *, continuation=False, corrected=False):
+def run_supervised(helper, args, receipt_dir, receipt, *, continuation=False, corrected=False, reordered=False):
     deadline = time.monotonic() + min(args.wait_seconds, 900)
     def elapsed(*_):
         raise TimeoutError('Original supervised deadline elapsed; inspect any retained claim')
@@ -384,7 +389,10 @@ def run_supervised(helper, args, receipt_dir, receipt, *, continuation=False, co
     drain = None
     try:
         evidence = authority()
-        if corrected:
+        if reordered:
+            from supervised_reordered_cutover import authority as reordered_authority
+            evidence = reordered_authority()
+        elif corrected:
             from supervised_corrected_cutover import authority as corrected_authority
             evidence = corrected_authority()
         elif continuation:
@@ -402,7 +410,10 @@ def run_supervised(helper, args, receipt_dir, receipt, *, continuation=False, co
         if not health.get('ready') or not health.get('relayConnected') or health.get('codexVersion') != '0.161.0' or health.get('maintenance', {}).get('invocationId') != INVOCATION:
             raise RuntimeError('Healthy exact original bridge is unconfirmed')
         source(helper, args)
-        if corrected:
+        if reordered:
+            from supervised_reordered_cutover import register
+            evidence = register(helper, args, evidence)
+        elif corrected:
             from supervised_corrected_cutover import register
             evidence = register(helper, args, evidence)
         elif continuation:

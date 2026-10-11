@@ -272,10 +272,12 @@ def main():
                         help='Exact owner-approved one linked continuation of the retained pre-claim failure')
     parser.add_argument('--supervised-d011-corrected', action='store_true',
                         help='Exact Oct11 owner-approved corrected cutover, retaining both pre-claim failures')
+    parser.add_argument('--supervised-d011-reordered', action='store_true',
+                        help='Exact Oct11 owner-approved cutover after deployment commands have finished')
     parser.add_argument('--portable-handoff-configuration')
     parser.add_argument('--portable-handoff-sha256')
     args = parser.parse_args()
-    if bool(args.portable_handoff_configuration) != bool(args.portable_handoff_sha256) or args.portable_handoff_configuration and not (args.supervised_d011_continuation or args.supervised_d011_corrected):
+    if bool(args.portable_handoff_configuration) != bool(args.portable_handoff_sha256) or args.portable_handoff_configuration and not (args.supervised_d011_continuation or args.supervised_d011_corrected or args.supervised_d011_reordered):
         raise RuntimeError('Portable migration is a hook in the original approved linked continuation only')
     if not re.fullmatch(r'[0-9a-f]{40}', args.commit) or not re.fullmatch(r'\d+\.\d+\.\d+', args.version):
         raise RuntimeError('Exact reviewed SHA and version are required')
@@ -283,6 +285,8 @@ def main():
         raise RuntimeError('A maintenance operation and original unit ID are both required')
     if args.reconcile_native_queued and args.maintenance_operation:
         raise RuntimeError('Use the installed admission drain separately from first-bootstrap reconciliation')
+    if sum((args.supervised_d011_once, args.supervised_d011_continuation, args.supervised_d011_corrected, args.supervised_d011_reordered)) > 1:
+        raise RuntimeError('Select exactly one approved handover mode')
     if args.supervised_d011_once and (not args.maintenance_operation or args.reconcile_native_queued or not 60 <= args.wait_seconds <= 900):
         raise RuntimeError('Supervised handoff requires original drain/unit, 60..900 seconds, and no legacy bootstrap')
     if args.supervised_d011_continuation:
@@ -295,6 +299,11 @@ def main():
             raise RuntimeError('Corrected cutover requires its one bounded lease, with no other activation mode')
         from supervised_corrected_cutover import authority as corrected_authority
         corrected_authority()
+    if args.supervised_d011_reordered:
+        if args.reconcile_native_queued or not args.maintenance_operation or not 60 <= args.wait_seconds <= 900:
+            raise RuntimeError('Reordered cutover requires one bounded lease and no legacy bootstrap')
+        from supervised_reordered_cutover import authority as reordered_authority
+        reordered_authority()
     receipt_dir = STATE / 'runtime-updates' / args.commit
     receipt_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     receipt = receipt_dir / 'restart.json'
@@ -305,10 +314,11 @@ def main():
     pin = re.search(r'export const CODEX_VERSION = "(\d+\.\d+\.\d+)";', (ROOT / 'bot-bridge/codex-version.mjs').read_text())
     if not pin or pin.group(1) != args.version:
         raise RuntimeError('Reviewed runtime version changed')
-    if args.supervised_d011_once or args.supervised_d011_continuation or args.supervised_d011_corrected:
+    if args.supervised_d011_once or args.supervised_d011_continuation or args.supervised_d011_corrected or args.supervised_d011_reordered:
         from supervised_handoff import run_supervised
         return run_supervised(sys.modules[__name__], args, receipt_dir, receipt,
-                              continuation=args.supervised_d011_continuation, corrected=args.supervised_d011_corrected)
+                              continuation=args.supervised_d011_continuation, corrected=args.supervised_d011_corrected,
+                              reordered=args.supervised_d011_reordered)
     drain = begin_drain(args, receipt_dir) if args.maintenance_operation else None
     try:
         activate(args, receipt_dir, receipt, drain)
