@@ -37,7 +37,15 @@ export function BotDetailsDrawer({ bot, section, onSection, onClose, children, d
   }, [section]);
   return <Dialog open onOpenChange={open => { if (!open) onClose(); }}>
     <DialogContent ref={dialog} className="bots-details left-auto right-0 top-0 z-[60] max-h-none w-full max-w-[500px] translate-x-0 translate-y-0 gap-0 overflow-hidden rounded-none border-0 p-0 sm:p-0" overlayClassName="z-[60]" aria-describedby={undefined}
-      onOpenAutoFocus={() => { opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; }}
+      onOpenAutoFocus={event => {
+        opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+        const selected = dialog.current?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
+        if (selected) {
+          event.preventDefault();
+          selected.focus({ preventScroll: true });
+          selected.scrollIntoView({ block: "nearest", inline: "nearest" });
+        }
+      }}
       onCloseAutoFocus={event => { event.preventDefault(); if (opener.current?.isConnected) opener.current.focus({ preventScroll: true }); }}>
       <header className="bots-details-heading">
         <div><span>Bot details</span><DialogTitle>{bot.name}</DialogTitle></div>
