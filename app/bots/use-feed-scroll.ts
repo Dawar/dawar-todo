@@ -8,6 +8,7 @@ import type { BotTimeline, TimelineState } from './timeline-controller';
 export function useFeedScroll(timeline: BotTimeline, state: TimelineState, online: boolean, projectEntries: (entries: HistoryEntry[]) => HistoryEntry[] = entries => entries) {
   const scroll = useRef<HTMLDivElement>(null), content = useRef<HTMLDivElement>(null);
   const saved = useRef(state.position), restored = useRef(false), following = useRef(state.position.following);
+  const cacheRestored = useRef(state.cacheReady);
   const [endKey, setEndKey] = useState<string | null>(null), [showJump, setShowJump] = useState(false), [paging, setPaging] = useState(false);
   const busy = useRef(false), inputUntil = useRef(0), direction = useRef(0), previousTop = useRef(0), expectedTop = useRef<number | null>(null);
   const continuedEmpty = useRef(false), intentVersion = useRef(0);
@@ -57,7 +58,7 @@ export function useFeedScroll(timeline: BotTimeline, state: TimelineState, onlin
       && stateRef.current.entries.some(entry => historyKey(entry.turnId, entry.id) === anchor.key && (entry.type === 'agentMessage' || entry.type === 'userMessage'));
     if (anchor && sameContext) anchor.tailContext = true;
     saved.current = { anchor: anchor?.key ?? null, offset: anchor?.offset ?? 0, following: following.current, ...(anchor?.tailContext ? { tailContext: true } : {}) };
-    timeline.position(saved.current);
+    timeline.position(saved.current, false);
   }, [timeline]);
   const restore = useCallback(() => {
     const element = scroll.current; if (!element) return;
@@ -153,6 +154,7 @@ export function useFeedScroll(timeline: BotTimeline, state: TimelineState, onlin
   }, [online, state.loading, state.error, state.entries.length, state.olderCursor, page]);
   const intent = useCallback((toward: number) => {
     intentVersion.current++;
+    timeline.preserveReadingIntent();
     inputUntil.current = performance.now() + 1000; direction.current = toward;
     if (toward < 0) {
       forwardTail.current = null;
@@ -165,7 +167,7 @@ export function useFeedScroll(timeline: BotTimeline, state: TimelineState, onlin
       following.current = true; setEndKey(null); capture(); updateJump();
     }
     if (element && (toward < 0 && element.scrollTop <= 1 || toward > 0 && element.scrollHeight - element.clientHeight - element.scrollTop <= 1)) void page(toward);
-  }, [atLoadedTail, capture, page, updateJump]);
+  }, [atLoadedTail, capture, page, updateJump, timeline]);
   const onScroll = useCallback(() => {
     const element = scroll.current; if (!element) return;
     const top = element.scrollTop, delta = top - previousTop.current; previousTop.current = top;
@@ -188,6 +190,12 @@ export function useFeedScroll(timeline: BotTimeline, state: TimelineState, onlin
   }, [atLoadedTail, capture, page, restore, updateJump]);
   useLayoutEffect(() => {
     if (!state.entries.length) return;
+    // A fast network tail may paint before disk. Restore a late saved anchor
+    // once, only while the human has not scrolled/jumped since opening.
+    if (state.cacheReady && !cacheRestored.current) {
+      cacheRestored.current = true;
+      if (!intentVersion.current) restored.current = false;
+    }
     if (!restored.current) {
       restored.current = true; saved.current = state.position; following.current = state.position.following;
       const anchor = state.entries.findIndex((entry) => historyKey(entry.turnId, entry.id) === timeline.resolveKey(state.position.anchor));
@@ -198,7 +206,7 @@ export function useFeedScroll(timeline: BotTimeline, state: TimelineState, onlin
       }
     }
     restore();
-  }, [state.entries, state.attachments, state.gaps, range.first, range.last, state.position, timeline, restore]);
+  }, [state.entries, state.attachments, state.gaps, range.first, range.last, state.position, state.cacheReady, timeline, restore]);
   useLayoutEffect(() => {
     const observer = new ResizeObserver(restore);
     if (content.current) observer.observe(content.current);

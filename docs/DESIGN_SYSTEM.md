@@ -530,3 +530,24 @@ The main conversation renders native thread/turn/item identities in chronologica
 A locally persisted blast submission is visible before its server acknowledgement. It becomes the existing receipt-backed countdown bubble using the original submission identity. Unconfirmed delivery never implies a successful send or triggers a new identity.
 
 Private-form metadata is event-driven. Reconcile once on mount, reconnect/full-snapshot recovery, return from a hidden page, or explicit Retry. Complete secure-status events update locally; there is no recurring form polling or routine checking indicator. The form opens only at the user’s request; encryption and same-submission recovery remain unchanged.
+
+## Conversation freshness and responsiveness
+
+Opening or returning to a conversation starts a bounded current-history read as
+soon as the authenticated transport is ready. Local cache hydration and legacy
+cache import run alongside that request. Late cache results preserve newer
+message content, metadata and explicit reading intent; saved anchors restore
+once when the reader has not moved. Cache writes wait for original hydration.
+
+A foreground return bypasses accumulated background reconnect backoff. A bounded
+three-second liveness probe detects a half-open socket. Interrupted history reads
+release their callers immediately; mutation identities and their uncertain
+outcomes remain under the existing durable recovery rules. Concurrent full
+snapshot reads coalesce. Push-subscription lookup has a150ms startup budget and
+does not prevent obtaining a session. These are event-driven recovery paths,
+not recurring conversation or private-form polling.
+
+Measure response-to-render and reopen/reconnect catch-up separately from model
+execution. Controlled slow-cache/network fixtures establish ordering and bounds;
+real PWA and phone-network acceptance must be recorded separately. This priority
+is part of the existing whole-application design objective, not its completion.

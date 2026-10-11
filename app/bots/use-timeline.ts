@@ -77,12 +77,14 @@ export function useBotTimeline(owner: string, botId: string, online: boolean) {
     window.addEventListener("pageshow", checkLatest);
     document.addEventListener("visibilitychange", checkLatest);
     void (async () => {
+      // Begin the selected tail read alongside cache hydration/legacy import.
+      // Neither cache is a prerequisite for a bounded current projection.
+      if (current()) { checkedAt = Date.now(); void timeline.refreshLatest(); }
       await timeline.hydrate();
       if (!timeline.getSnapshot().cached) {
         const legacy = await botsClient.cachedHistory(botId);
         if (active && botsClient.owner === owner && legacy) timeline.seed(legacy.turns, legacy.attachments);
       }
-      if (current()) { checkedAt = Date.now(); await timeline.refreshLatest(); }
     })();
     return () => {
       active = false; unsubscribe();

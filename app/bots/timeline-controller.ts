@@ -22,7 +22,7 @@ export type TimelineState = {
   currentTiming?: NativeTiming & { threadId: string; turnId: string; turnStatus?: Turn['status'] };
   partialTurn?: boolean; entries: HistoryEntry[]; contextEntries: HistoryEntry[]; attachments: BotAttachment[]; olderCursor: string | null;
   revision: string; eventCursor: number; complete: boolean; loading: boolean;
-  error: string; cached: boolean; gaps: HistoryGap[]; position: HistoryPosition;
+  error: string; cached: boolean; cacheReady?: boolean; gaps: HistoryGap[]; position: HistoryPosition;
 };
 const initial = (): TimelineState => ({ workLogs: {}, entries: [], contextEntries: [], attachments: [], olderCursor: null, revision: "", eventCursor: 0,
   complete: false, loading: false, gaps: [], error: "", cached: false, position: { anchor: null, offset: 0, following: true } });
@@ -102,6 +102,8 @@ export class BotTimeline {
   private listeners = new Set<() => void>();
   private dirty = new Map<string, HistoryEntry>();
   private hydration?: Promise<void>;
+  private hasLiveProjection = false;
+  private positionChanged = false;
   private request?: Promise<void>;
   private latestRequest?: Promise<void>;
   private latestAgain = false;
@@ -193,6 +195,8 @@ export class BotTimeline {
       try {
         const cached = await this.cache.read(this.owner, this.botId);
         if (!cached || this.disposed || this.transport.owner !== this.owner) return;
+        const cachedThread = cached.metadata.revision.split(':')[1];
+        if (cached.metadata.revision.endsWith(':conversation-v8') && this.currentThread() && cachedThread !== this.currentThread()) return;
         const live = this.state.eventCursor;
         const liveDirty = new Map(this.dirty);
         for (const { turnId, ...audience } of cached.metadata.turnAudiences ?? [])
@@ -201,17 +205,24 @@ export class BotTimeline {
           if (kind === "conversation" && runId) this.normalScheduled.add(turnId);
         // Existing revisions encode the original native thread. Older caches
         // without that evidence remain readable but supply no navigation ticks.
-        const cachedThread = cached.metadata.revision.split(':')[1];
         const scoped = cached.entries.map(entry => entry.sourceThreadId || !cached.metadata.revision.endsWith(':conversation-v8') ? entry : { ...entry, sourceThreadId: cachedThread });
+        const fresh = this.hasLiveProjection || live > 0, latest = this.state;
+        const cachedLast = scoped.at(-1), freshFirst = latest.entries[0];
+        const oldKeys = new Set(scoped.map(entry => historyKey(entry.turnId, entry.id)));
+        const overlap = latest.entries.some(entry => oldKeys.has(historyKey(entry.turnId, entry.id)));
         this.merge(scoped, true, -1); this.dirty = liveDirty;
         const m = cached.metadata; this.cachedKeys = new Set(m.order ?? []);
-        const boundaries = historyBoundaries(this.state.entries, this.mapGaps(m.gaps ?? []), m.olderCursor, cached.entries);
+        const disconnected = fresh && !overlap && cachedLast && freshFirst && latest.olderCursor
+          ? [{ before: historyKey(freshFirst.turnId, freshFirst.id), stop: historyKey(cachedLast.turnId, cachedLast.id), cursor: historyBefore(freshFirst) }] : [];
+        const boundaries = historyBoundaries(this.state.entries, this.mapGaps([...(m.gaps ?? []), ...(fresh ? latest.gaps : []), ...disconnected]), m.olderCursor, cached.entries);
         const present = new Set(cached.entries.map(entry => historyKey(entry.turnId, entry.id)));
         const intact = m.order.every(key => present.has(key));
-        this.publish({ revision: intact && m.revision.endsWith(":conversation-v8") ? m.revision : "", eventCursor: Math.max(live, m.eventCursor), ...boundaries,
-          partialTurn: m.partialTurn, attachments: m.attachments, contextEntries: conversationEntries((m.contextEntries ?? []).map(entry => entry.sourceThreadId || !m.revision.endsWith(':conversation-v8') ? entry : { ...entry, sourceThreadId: cachedThread }), this.turnAudiences), complete: m.complete && !boundaries.olderCursor && !boundaries.gaps.length, position: { ...(m.position ?? this.state.position), anchor: this.resolveKey(m.position?.anchor ?? null) }, cached: true }, true);
+        this.publish({ revision: fresh ? latest.revision : intact && m.revision.endsWith(":conversation-v8") ? m.revision : "", eventCursor: Math.max(live, m.eventCursor), ...boundaries,
+          partialTurn: fresh ? latest.partialTurn : m.partialTurn, attachments: mergeAttachments(m.attachments, latest.attachments), contextEntries: fresh ? latest.contextEntries : conversationEntries((m.contextEntries ?? []).map(entry => entry.sourceThreadId || !m.revision.endsWith(':conversation-v8') ? entry : { ...entry, sourceThreadId: cachedThread }), this.turnAudiences), complete: (fresh ? latest.complete : m.complete) && !boundaries.olderCursor && !boundaries.gaps.length,
+          ...(!this.positionChanged ? { position: { ...(m.position ?? this.state.position), anchor: this.resolveKey(m.position?.anchor ?? null) } } : {}), cached: true }, true);
         this.scheduleWrite();
       } catch (e) { this.publish({ error: `Offline history cache unavailable: ${String(e)}` }, true); }
+      finally { if (!this.disposed && this.transport.owner === this.owner) this.publish({ cacheReady: true }, true); }
     })();
     return this.hydration;
   }
@@ -223,7 +234,7 @@ export class BotTimeline {
     this.latestRequest = (async () => {
       do {
         this.latestAgain = false;
-        await this.hydrate();
+        void this.hydrate();
         // A conditional request already in flight cannot satisfy this check.
         // Coalesce its callers into one subsequent unconditional projection.
         await this.request;
@@ -239,7 +250,9 @@ export class BotTimeline {
   recoverLatest() { return this.latestCursor ? this.refresh() : this.refreshLatest(); }
   private currentThread() { return this.transport.snapshot?.bots.find(bot => bot.id === this.botId)?.threadId; }
   async refresh() {
-    await this.hydrate();
+    // Cache and live tail race independently. A slow/blocked IndexedDB read
+    // must not delay an already-completed answer arriving from the service.
+    void this.hydrate();
     if (!this.transport.online || this.transport.owner !== this.owner || this.disposed) return;
     if (this.request) return this.request;
     const startCursor = this.state.eventCursor;
@@ -254,6 +267,7 @@ export class BotTimeline {
         if (threadId !== this.currentThread()) { this.scheduleRefresh(); return; }
         if (threadId && response.context?.threadId && response.context.threadId !== threadId)
           throw Error("The conversation changed while loading. Reconnect and reload its history.");
+        this.hasLiveProjection = true;
         if (response.kind === "events") for (const event of response.events) this.receive(event);
         if (response.kind === "page") {
           if (!response.entries.length && response.olderCursor === latestCursor && latestCursor)
@@ -597,13 +611,19 @@ export class BotTimeline {
     this.publish({ eventCursor: event.seq }); this.scheduleWrite();
     if (method === "turn/completed" || method === "item/completed") void this.flush();
   }
-  position(position: HistoryPosition) {
+  preserveReadingIntent() { this.positionChanged = true; }
+  position(position: HistoryPosition, userIntent = true) {
+    if (userIntent) this.preserveReadingIntent();
     const old = this.state.position;
     if (old.anchor === position.anchor && old.offset === position.offset && old.following === position.following && Boolean(old.tailContext) === Boolean(position.tailContext)) return;
     this.state = { ...this.state, position }; this.scheduleWrite();
   }
   private scheduleWrite() { this.metadataVersion++; if (!this.disposed) this.writeTimer ??= setTimeout(() => { this.writeTimer = undefined; void this.flush(); }, 250); }
   async flush(): Promise<void> {
+    // A fast network reply can paint before disk hydration, but must not prune
+    // retained older cache entries before that original read has finished.
+    await this.hydrate();
+    if (this.disposed && !this.state.cacheReady) return;
     if (this.writeTimer) clearTimeout(this.writeTimer); this.writeTimer = undefined;
     if (this.write) { const version = this.writeVersion; await this.write; if (version < this.metadataVersion) return this.flush(); return; }
     if (!this.state.cached && !this.state.entries.length) return;

@@ -36,6 +36,9 @@ type Session = {
   timeZone: string;
   owner: string;
 };
+// These reads carry no mutation or delivery receipt. A dead connection cannot
+// satisfy them; release callers so the visible conversation can read afresh.
+const connectionReads = new Set(["snapshot", "events", "history", "history.view", "history.page", "history.turn", "history.log", "history.detail", "history.attachments"]);
 function validComposerResult(method: string, result: Record<string, unknown> | undefined) {
   const identified = (value: unknown) => Boolean(value && typeof value === "object" && typeof (value as { id?: unknown }).id === "string");
   if (method === "bursts.submit") return Boolean(result && identified(result.message) && identified(result.burst));
@@ -139,6 +142,10 @@ export class BotsClient {
   private connectionAttempt = 0;
   private lastSocketMessageAt = 0;
   private handshakeTimer?: ReturnType<typeof setTimeout>;
+  private probeTimer?: ReturnType<typeof setTimeout>;
+  private connecting?: Promise<void>;
+  private snapshotRequest?: Promise<BotSnapshot>;
+  private lastForegroundReconnectAt = 0;
   // A cache or an isolated event is not proof that all earlier events arrived.
   // Only a full server snapshot advances this watermark. Keep the latest patch
   // per entity so a full snapshot can heal gaps without undoing newer events.
@@ -192,6 +199,9 @@ export class BotsClient {
     this.eventChunks.clear();
     if (this.handshakeTimer) clearTimeout(this.handshakeTimer);
     this.handshakeTimer = undefined;
+    if (this.probeTimer) clearTimeout(this.probeTimer);
+    this.probeTimer = undefined;
+    this.snapshotRequest = undefined;
     this.lastSocketMessageAt = 0;
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timer);
@@ -231,13 +241,17 @@ export class BotsClient {
   }
   async session(): Promise<Session> {
     const epoch = this.connectionEpoch;
-    const registration =
-      "serviceWorker" in navigator
-        ? await navigator.serviceWorker.getRegistration()
-        : null;
-    const push = await registration?.pushManager
-      ?.getSubscription()
-      .catch(() => null);
+    // Push ownership is ancillary to opening a conversation. Safari can leave
+    // this browser API pending after suspension; never hold the ticket on it.
+    let pushTimer: ReturnType<typeof setTimeout> | undefined;
+    const subscription = (async () => {
+      const registration = "serviceWorker" in navigator ? await navigator.serviceWorker.getRegistration() : null;
+      return await registration?.pushManager?.getSubscription() ?? null;
+    })().catch(() => null);
+    const push = await Promise.race([subscription, new Promise<null>(resolve => {
+      pushTimer = setTimeout(() => resolve(null), 150);
+    })]);
+    if (pushTimer) clearTimeout(pushTimer);
     const response = await fetch("/api/bots/session", {
       method: "POST",
       headers: portableHeaders({ "Content-Type": "application/json" }),
@@ -267,10 +281,11 @@ export class BotsClient {
       this.authListeners = true;
       window.addEventListener("pagehide", () => this.flushSnapshot());
       document.addEventListener("visibilitychange", () => {
-        if (document.hidden) this.flushSnapshot(); else this.checkConnection();
+        if (document.hidden) this.flushSnapshot(); else this.checkConnection(true);
       });
-      window.addEventListener("focus", () => this.checkConnection());
-      window.addEventListener("online", () => this.checkConnection());
+      window.addEventListener("focus", () => this.checkConnection(true));
+      window.addEventListener("pageshow", () => this.checkConnection(true));
+      window.addEventListener("online", () => this.checkConnection(true));
       document.addEventListener("click", (event) => {
         const target = event.target;
         if (target instanceof Element && target.closest('a[href^="/signout-with-chatgpt"]')) this.clearOwnerCache();
@@ -290,7 +305,14 @@ export class BotsClient {
     this.notify();
     void this.connect();
   }
-  async connect() {
+  connect(): Promise<void> {
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
+    const pending = this.openConnection().finally(() => { if (this.connecting === pending) this.connecting = undefined; });
+    this.connecting = pending;
+    return pending;
+  }
+  private async openConnection() {
     if (this.stopped) return;
     const epoch = this.connectionEpoch;
     const attempt = ++this.connectionAttempt;
@@ -323,6 +345,8 @@ export class BotsClient {
       socket.onmessage = ({ data }) => {
         if (this.socket !== socket || this.owner !== session.owner) return;
         this.lastSocketMessageAt = Date.now();
+        if (this.probeTimer) clearTimeout(this.probeTimer);
+        this.probeTimer = undefined;
         if (data === "pong") return;
         try {
           this.receive(JSON.parse(data));
@@ -353,6 +377,13 @@ export class BotsClient {
     }
   }
   private resetConnectionTransfers() {
+    if (this.probeTimer) clearTimeout(this.probeTimer);
+    this.probeTimer = undefined;
+    this.snapshotRequest = undefined;
+    for (const [id, pending] of this.pending) if (connectionReads.has(pending.request.method)) {
+      this.pending.delete(id); clearTimeout(pending.timer);
+      pending.reject(new BotRpcError("Connection changed. Refreshing conversation…", "not-sent"));
+    }
     for (const p of this.securePending.values()) {
       clearTimeout(p.timer);
       p.reject(Error("Bridge disconnected. Retry the same encrypted submission while the form remains open."));
@@ -367,22 +398,38 @@ export class BotsClient {
   /** Browsers can keep a dead socket OPEN after sleep/network changes. Native
    * execution keeps running; reconnect the transport and reconcile stable
    * operation IDs through the existing snapshot/history path. */
-  checkConnection() {
+  checkConnection(foreground = false) {
     if (this.stopped) return;
     const socket = this.socket;
     if (!socket || socket.readyState === WebSocket.CLOSED) {
-      this.scheduleReconnect();
+      if (foreground) this.reconnectForeground(); else this.scheduleReconnect();
       return;
     }
     if (socket.readyState !== WebSocket.OPEN) return;
     if (Date.now() - this.lastSocketMessageAt > 60000) {
       this.online = false;
       this.error = "Connection lost. Reconnecting…";
+      this.resetConnectionTransfers();
       this.notify();
       socket.close();
+      if (foreground) this.reconnectForeground();
       return;
     }
-    try { socket.send("ping"); } catch { socket.close(); }
+    try {
+      socket.send("ping");
+      if (foreground && !this.probeTimer) this.probeTimer = setTimeout(() => {
+        this.probeTimer = undefined;
+        if (this.socket !== socket || this.stopped) return;
+        this.online = false; this.resetConnectionTransfers(); this.notify();
+        socket.close(); this.reconnectForeground();
+      }, 3000);
+    } catch { socket.close(); if (foreground) this.reconnectForeground(); }
+  }
+  private reconnectForeground() {
+    if (this.connecting || Date.now() - this.lastForegroundReconnectAt < 1000) return;
+    this.lastForegroundReconnectAt = Date.now();
+    this.retry = 0;
+    void this.connect();
   }
   scheduleReconnect() {
     if (this.stopped || this.reconnectTimer) return;
@@ -612,7 +659,13 @@ export class BotsClient {
         });
     }
   }
-  async refresh() {
+  refresh(): Promise<BotSnapshot> {
+    if (this.snapshotRequest) return this.snapshotRequest;
+    const pending = this.readSnapshot().finally(() => { if (this.snapshotRequest === pending) this.snapshotRequest = undefined; });
+    this.snapshotRequest = pending;
+    return pending;
+  }
+  private async readSnapshot() {
     const owner = this.owner;
     const epoch = this.connectionEpoch;
     const snapshot = await this.rpc<BotSnapshot>("snapshot");
