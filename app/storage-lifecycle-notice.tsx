@@ -2,6 +2,7 @@
 import { useState, useSyncExternalStore } from "react";
 import { getPwaLifecycle, subscribePwaLifecycle } from "./pwa-lifecycle";
 import { preparePwaRefresh } from "./pwa-update";
+import { Button } from "@/components/ui/button";
 
 export function StorageLifecycleNotice() {
   const state = useSyncExternalStore(subscribePwaLifecycle, getPwaLifecycle, getPwaLifecycle);
@@ -12,20 +13,17 @@ export function StorageLifecycleNotice() {
     try { await preparePwaRefresh(); location.reload(); }
     catch (cause) { setError(cause instanceof Error ? cause.message : "The update could not be prepared."); setRefreshing(false); }
   }
-  if (state.workerBuild && state.workerBuild !== state.build && ["ready", "opening"].includes(state.storage)) return <aside role="status" className="border-b border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-950">
-    An app update is ready. <button type="button" disabled={refreshing} className="ml-2 underline" onClick={() => void refresh()}>{refreshing ? "Preparing…" : "Refresh when ready"}</button>
-    {error && <p role="alert" className="mt-1">{error}</p>}
+  if (state.workerBuild && state.workerBuild !== state.build && ["ready", "opening"].includes(state.storage)) return <aside role="status" className="border-b border-border bg-accent px-4 py-3 text-sm text-accent-foreground">
+    <div className="flex flex-wrap items-center gap-3"><span>An app update is ready.</span><Button type="button" variant="outline" size="sm" disabled={refreshing} onClick={() => void refresh()}>{refreshing ? "Preparing…" : "Refresh when ready"}</Button></div>
+    {error && <p role="alert" className="mt-2 text-destructive break-words">{error}</p>}
   </aside>;
-  if (state.storage === "ready" && state.upgradedFrom && !dismissedUpgrade) return <aside role="status" className="border-b border-amber-300 bg-amber-50 p-3 text-sm text-amber-950">
-    Offline storage was upgraded. In older open tabs, preserve unsaved text and original files before reopening them. Already queued changes remain on this device.
-    <button type="button" className="ml-2 underline" onClick={() => setDismissedUpgrade(true)}>Dismiss</button>
+  if (state.storage === "ready" && state.upgradedFrom && !dismissedUpgrade) return <aside role="status" className="border-b border-border bg-warning px-4 py-3 text-sm text-warning-foreground">
+    <div className="flex flex-wrap items-start gap-3"><p className="min-w-0 flex-1 basis-64">Offline storage was updated. Save unsaved text and files in older tabs before reopening them. Queued changes stay on this device.</p>
+    <Button type="button" variant="outline" size="sm" onClick={() => setDismissedUpgrade(true)}>Dismiss</Button></div>
   </aside>;
   if (state.storage !== "blocked" && state.storage !== "superseded" && state.storage !== "unavailable") return null;
-  return <aside role="alert" className="sticky top-0 z-[110] border-b border-amber-300 bg-amber-50 p-3 text-sm text-amber-950">
-    <strong>{state.storage === "blocked" ? "Offline storage is waiting for another tab." : state.storage === "superseded" ? "This page needs the newer app version." : "Offline storage is unavailable."}</strong>{" "}
-    Keep this page open while saving or copying any unsaved text and files. {state.storage === "blocked"
-      ? "Close older Dawar Todo tabs after saving their input; this page will continue automatically."
-      : "After preserving unsaved input, open Dawar Todo again to retry. Queued changes remain on this device."}
-    {" "}Do not clear site data.
+  return <aside role="alert" className="sticky top-0 z-[110] border-b border-border bg-warning px-4 py-3 text-sm text-warning-foreground">
+    <p className="font-medium">{state.storage === "blocked" ? "Waiting for another tab" : state.storage === "superseded" ? "A newer app version is required" : "Offline storage is unavailable"}</p>
+    <p className="mt-1">Save unsaved text and files before {state.storage === "blocked" ? "closing older Dawar Todo tabs. This page will continue automatically." : "reopening Dawar Todo. Queued changes stay on this device."} Do not clear site data.</p>
   </aside>;
 }

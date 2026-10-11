@@ -320,3 +320,9 @@ Inline images retain lazy loading and bind download/display state to the current
 ### Message navigation rail
 
 The dense message rail retains 24px non-overlapping keyboard-selectable hit groups, bounded loaded-history geometry and explicit coverage descriptions; it uses semantic palette tokens. Dense groups open ControlledDialog with shared outline buttons and the existing 40-choice pages. Choices wrap at mobile widths; the footer wraps rather than clipping. Actual1280/320 dense choices, Escape returning focus to the rail, Enter reopening, second-page range and exact selected ID were observed with synthetic history. Empty/single-tick/earlier-loading/error/room/integrated geometry still need rendered acceptance.
+
+### Global cascade and storage notices
+
+The semantic palette now also owns page foreground/background and warning colors. Base resets live in the Tailwind base layer so explicit component typography (including monospace inputs) can win; default borders use the shared border token. The mobile16px input rule remains to prevent focus zoom. Root viewport keeps device width and safe-area support without disabling user zoom. Physical pinch-zoom acceptance remains pending.
+
+StorageLifecycleNotice uses shared buttons, semantic warning/accent surfaces and short action-oriented copy. The existing update guard, worker readiness, error handling and human-only refresh remain unchanged. Actual320 blocked/upgrade/dismiss/update/guard-error and1280 update-error layouts checked with local lifecycle state; no worker update, database mutation or navigation occurred. Full app safe-area/zoom/multitab and remaining notice-state checks are unfinished.
