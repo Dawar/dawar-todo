@@ -21,6 +21,7 @@ export class BotRpcError extends Error {
 type Pending = {
   owner: string;
   managed: boolean;
+  threadId?: string | null;
   request: BridgeRequest;
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
@@ -112,7 +113,7 @@ export class BotsClient {
   stopped = false;
   listeners = new Set<() => void>();
   events = new Set<(event: BotEvent) => void>();
-  confirmedInputs = new Set<(botId: string) => void>();
+  confirmedInputs = new Set<(botId: string, confirmation?: { method: string; result: unknown; threadId: string | null }) => void>();
   pending = new Map<string, Pending>();
   retry = 0;
   reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -539,7 +540,7 @@ export class BotsClient {
       else {
         pending.resolve(result);
         if (pending.request.botId && ['turn.send', 'bursts.submit'].includes(pending.request.method))
-          for (const listener of this.confirmedInputs) listener(pending.request.botId);
+          for (const listener of this.confirmedInputs) listener(pending.request.botId, { method: pending.request.method, result, threadId: pending.threadId ?? null });
       }
       return;
     }
@@ -669,6 +670,7 @@ export class BotsClient {
       }, method.startsWith("history") || method.startsWith("replies.") ? 20000 : 125000);
       this.pending.set(id, {
         request, owner: this.owner, managed: options.managed ?? false,
+        threadId: this.snapshot?.bots.find(bot => bot.id === botId)?.threadId ?? null,
         resolve: resolve as (value: unknown) => void,
         reject,
         timer,

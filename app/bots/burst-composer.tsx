@@ -14,13 +14,13 @@ import { botsClient as client } from './client';
 import type { BotEvent } from '../../lib/bots-types';
 import type { BurstState } from './single-thread-contract';
 import { useRunAction } from './run-action';
-import { pendingMessageCount, retainedBatches, savedBurstState, validBurstState, type SavedBurstState } from './burst-state';
+import { acknowledgedBurst, pendingMessageCount, retainedBatches, savedBurstState, validBurstState, type SavedBurstState } from './burst-state';
 import './single-thread.css';
 import { BurstQueueControl } from './burst-queue-control';
 /** Receipt-owned staging shares the conversation feed, never native history. */
-export function useBurstConversation({ owner, botId, online, draft, enabled, quietSeconds }: { owner: string; botId: string; online: boolean; draft: string; enabled: boolean; quietSeconds: number }) {
+export function useBurstConversation({ owner, botId, threadId, online, draft, enabled, quietSeconds }: { owner: string; botId: string; threadId?: string | null; online: boolean; draft: string; enabled: boolean; quietSeconds: number }) {
   const cacheKey = `burst-summary:v1:${botId}`;
-  const [value, setValue] = useState<SavedBurstState | null>(() => { const saved = client.owner === owner ? client.cache<SavedBurstState | null>(cacheKey, null) : null; return saved && validBurstState(saved, botId) ? saved : null; }), [error, setError] = useState(''), [refresh, setRefresh] = useState(0);
+  const [value, setValue] = useState<SavedBurstState | null>(() => { const saved = client.owner === owner ? client.cache<SavedBurstState | null>(cacheKey, null) : null; return saved && validBurstState(saved, botId) && (!saved.threadId || saved.threadId === threadId) ? saved : null; }), [error, setError] = useState(''), [refresh, setRefresh] = useState(0);
   useEffect(() => {
     if (value && client.owner === owner) client.save(cacheKey, savedBurstState(value));
   }, [owner, cacheKey, value]);
@@ -28,27 +28,39 @@ export function useBurstConversation({ owner, botId, online, draft, enabled, qui
   const queueAction = useRunAction(owner, botId, 'burst:queue');
   const [queuePreparing,setQueuePreparing] = useState(false);
   const discard = (messageIds: string[], pendingOnly = false) => discardAction.perform('bursts.discard', { messageIds, ...(pendingOnly ? { pendingOnly: true as const } : {}) }).then(() => setRefresh(value => value + 1));
-  const action = useRunAction(owner, botId, 'burst:control'), sequence = useRef(0), typing = useRef({ id: crypto.randomUUID(), last: 0, value: draft, inputAt: 0, active: false });
+  const action = useRunAction(owner, botId, 'burst:control'), sequence = useRef(0), generation = useRef(0), typing = useRef({ id: crypto.randomUUID(), last: 0, value: draft, inputAt: 0, active: false });
   const [typingUntil, setTypingUntil] = useState(0);
   useEffect(() => {
     const listener = (event: BotEvent) => {
       if (!enabled || client.owner !== owner || event.botId !== botId || event.type !== 'burst' || event.seq <= sequence.current) return;
       sequence.current = event.seq;
       const next = event.data as BurstState;
-      if (validBurstState(next, botId)) { setValue(next); setError(''); }
+      if (validBurstState(next, botId) && (!next.threadId || next.threadId === threadId)) { generation.current++; setValue(next); setError(''); }
     };
     client.events.add(listener); return () => { client.events.delete(listener); };
-  }, [owner, botId, enabled]);
+  }, [owner, botId, threadId, enabled]);
   useEffect(() => {
-    let live = true; const before = sequence.current;
+    let live = true; const before = generation.current;
     if (enabled && online) void client.rpc<BurstState>('bursts.read', botId, {}, undefined, { owner }).then(next => {
-      if (live && client.owner === owner && before === sequence.current) {
-        if (!validBurstState(next, botId)) throw Error('Pending delivery could not be verified. Refresh to try again.');
+      if (live && client.owner === owner && before === generation.current) {
+        if (!validBurstState(next, botId) || next.threadId && next.threadId !== threadId) throw Error('Pending delivery could not be verified. Refresh to try again.');
         setValue(next); setError('');
       }
     }).catch(reason => { if (live) setError(String(reason)); });
     return () => { live = false; };
-  }, [owner, botId, online, refresh, enabled]);
+  }, [owner, botId, threadId, online, refresh, enabled]);
+  useEffect(() => {
+    const confirmed: Parameters<typeof client.confirmedInputs.add>[0] = (target, confirmation) => {
+      if (!enabled || client.owner !== owner || target !== botId || confirmation?.method !== 'bursts.submit'
+        || !threadId || confirmation.threadId !== threadId) return;
+      // Display the exact accepted source even if its socket event was lost.
+      generation.current++;
+      setValue(prior => acknowledgedBurst(prior, confirmation.result, botId, threadId));
+      setRefresh(prior => prior + 1);
+    };
+    client.confirmedInputs.add(confirmed);
+    return () => { client.confirmedInputs.delete(confirmed); };
+  }, [owner, botId, threadId, enabled]);
   const batches = retainedBatches(value).filter(batch => batch.state !== 'sent');
   const hasPending = batches.some(batch => batch.state === 'pending' || batch.state === 'preparing');
   useEffect(() => {

@@ -158,11 +158,9 @@ function BotConversationFeed({ owner, bot, online, children, onOpenCall, onReply
     attachments: [...new Map([...Array.from(logData.pages.values()).flatMap(page => page.attachments), ...nativeState.attachments].map(file => [file.id, file])).values()]
   }), [nativeState, projectEntries, logData.pages]);
   const quietSeconds = bot.burstQuietSeconds ?? 3;
-  const burst = useBurstConversation({ owner, botId: bot.id, online, draft, enabled: burstsEnabled, quietSeconds });
+  const burst = useBurstConversation({ owner, botId: bot.id, threadId: bot.threadId, online, draft, enabled: burstsEnabled, quietSeconds });
   const burstAttachments = useMemo(() => { const files = new Map(state.attachments.map(file => [file.id, file])); for (const file of burst.value?.attachments ?? []) files.set(file.id, file); return [...files.values()]; }, [state.attachments, burst.value]);
   const batchProps = { botId: bot.id, attachments: burstAttachments, quietSeconds, online, typingUntil: burst.typingUntil };
-  const nativeBatchIds = new Set([...state.entries, ...state.contextEntries].flatMap(entry => entry.item?.type === "userMessage" && entry.item.clientId ? [entry.item.clientId] : []));
-  const unprojectedBatches = retainedBatches(burst.value).filter(batch => !nativeBatchIds.has(batch.operationId ?? batch.id));
   const sentIdentity = retainedBatches(burst.value).filter(batch => batch.state === 'sent').map(batch => batch.id).join(':');
   useEffect(() => { if (online && sentIdentity) void timeline.refreshLatest(); }, [timeline, online, sentIdentity]);
   const feed = useFeedScroll(timeline, state, online, projectEntries);
@@ -231,6 +229,21 @@ function BotConversationFeed({ owner, bot, online, children, onOpenCall, onReply
   };
   const replyProps = { onReply, onOpenReply: openReply, threadId: bot.threadId ?? undefined };
   const [downloadError, setDownloadError] = useState("");
+  const pinnedContext = state.position.tailContext && !state.position.following
+    ? [...state.contextEntries, ...state.entries].find(entry => historyKey(entry.turnId, entry.id) === timeline.resolveKey(state.position.anchor)) : undefined;
+  const mountedKeys = new Set(state.entries.slice(first, last).map(entry => timeline.resolveKey(historyKey(entry.turnId, entry.id))));
+  const aliases = new Set(peers.rows.flatMap(peerAliases));
+  const contextEntries = (pinnedContext && !state.contextEntries.some(entry => historyKey(entry.turnId, entry.id) === historyKey(pinnedContext.turnId, pinnedContext.id)) ? [pinnedContext] : state.contextEntries).filter(entry => !mountedKeys.has(timeline.resolveKey(historyKey(entry.turnId, entry.id))) && (!entry.peerAlias || !aliases.has(entry.peerAlias)));
+  const afterContext = contextEntries.filter(entry => {
+    const index = state.entries.findIndex(value => historyKey(value.turnId, value.id) === timeline.resolveKey(historyKey(entry.turnId, entry.id)));
+    return index >= last;
+  });
+  const beforeContext = contextEntries.filter(entry => !afterContext.includes(entry));
+  // A cached native echo outside the rendered window cannot replace a
+  // visible staging bubble. Deduplicate against rows actually displayed.
+  const nativeBatchIds = new Set([...state.entries.slice(first, last), ...(pinnedContext || last === state.entries.length ? contextEntries : [])]
+    .flatMap(entry => entry.item?.type === 'userMessage' && entry.item.clientId ? [entry.item.clientId] : []));
+  const unprojectedBatches = retainedBatches(burst.value).filter(batch => !nativeBatchIds.has(batch.operationId ?? batch.id));
   const groups = useMemo(() => {
     const result: ConversationGroup[] = [];
     for (const entry of state.entries.slice(first, last)) {
@@ -281,16 +294,6 @@ function BotConversationFeed({ owner, bot, online, children, onOpenCall, onReply
   // older cached item. Keep a preview being read when newer output arrives;
   // it must neither recenter the native window nor repeat a mounted item.
   // Other message groups (including peer arrivals) do not replace that reply.
-  const pinnedContext = state.position.tailContext && !state.position.following
-    ? [...state.contextEntries, ...state.entries].find(entry => historyKey(entry.turnId, entry.id) === timeline.resolveKey(state.position.anchor)) : undefined;
-  const mountedKeys = new Set(state.entries.slice(first, last).map(entry => timeline.resolveKey(historyKey(entry.turnId, entry.id))));
-  const aliases = new Set(peers.rows.flatMap(peerAliases));
-  const contextEntries = (pinnedContext && !state.contextEntries.some(entry => historyKey(entry.turnId, entry.id) === historyKey(pinnedContext.turnId, pinnedContext.id)) ? [pinnedContext] : state.contextEntries).filter(entry => !mountedKeys.has(timeline.resolveKey(historyKey(entry.turnId, entry.id))) && (!entry.peerAlias || !aliases.has(entry.peerAlias)));
-  const afterContext = contextEntries.filter(entry => {
-    const index = state.entries.findIndex(value => historyKey(value.turnId, value.id) === timeline.resolveKey(historyKey(entry.turnId, entry.id)));
-    return index >= last;
-  });
-  const beforeContext = contextEntries.filter(entry => !afterContext.includes(entry));
   const readableContext = (entries: HistoryEntry[]) => entries.length > 0 && <section aria-label="Latest readable context" data-history-context>
     <p className="bots-system-note">Latest readable messages. Intervening work remains accessible through earlier history.</p>
     {entries.map(entry => <TimelineEntry {...replyProps} onOpenCall={onOpenCall} key={historyKey(entry.turnId, entry.id)} entry={entry} configurationSupported={botsClient.snapshot?.capabilities?.executionConfiguration === 1} configuration={timeline.configuration(bot.threadId, entry.turnId)} timeline={timeline} attachments={state.attachments} download={download} />)}
