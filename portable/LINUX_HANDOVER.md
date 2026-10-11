@@ -39,6 +39,12 @@ Tunnel only with healthy actual local services. Verify authentication, original
 Todo API scopes, history, registered files and voice/provider routing separately.
 Do not infer their success from the restart receipt.
 
+The standalone package generates its own exact-source `/pwa-build.json` and
+fresh shell generation. The existing update UI can compare loaded and cached
+builds; no forced navigation, private-input clearing or IDB reset is added.
+Original hosted login cookies do not authenticate the new Auth0 gateway: owner
+sign-in and deliberate app adoption remain genuine rollout checks.
+
 The old voice Worker uses `VOICE_PORTABLE_PROXY=portable-rollover-v1` only at
 rollover. It forwards the three existing provider/health paths to fixed
 `https://work.dawar.ca/api/voice/...` endpoints and stops its minute scheduler.

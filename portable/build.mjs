@@ -19,6 +19,23 @@ await build({ entryPoints:['portable/agent.mjs'],outfile:'dist/portable/portable
 for(const file of RUNTIME_COMPANIONS)await cp(`bot-bridge/${file}`,`dist/portable/${file}`);
 await cp('bot-bridge/desktops','dist/portable/desktops',{recursive:true});
 await cp('public','.next-portable/standalone/public',{recursive:true});
+const releaseSource=execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim();
+// The standalone server does not run Vinext's generated build-marker plugin.
+// Give its existing PWA lifecycle the same truthful marker and a fresh shell
+// generation. Activation still keeps the previous shell and never navigates
+// an open client or clears drafts, IDB, questions, calls or private inputs.
+const shellGeneration=Date.now();
+await writeFile('.next-portable/standalone/public/pwa-build.json',JSON.stringify({build:process.env.DAWAR_BUILD_ID??releaseSource.slice(0,12),databaseVersion:11})+'\n');
+const workerPath='.next-portable/standalone/public/sw.js';
+let workerSource=await readFile(workerPath,'utf8');
+if(!workerSource.includes('const CACHE_NAME = `${CACHE_PREFIX}v104`;'))throw Error('Review the changed original PWA generation before portable packaging.');
+const fetchBoundary='if (url.origin !== self.location.origin || url.pathname.startsWith("/api/")) return;';
+const documentBoundary='async function refreshDocumentShell(response, cacheKey) {\n  if (!response.ok) return;';
+if(!workerSource.includes(fetchBoundary)||!workerSource.includes(documentBoundary))throw Error('Review the changed PWA authentication/cache boundaries before portable packaging.');
+workerSource=workerSource.replace(fetchBoundary,'if (url.origin !== self.location.origin || url.pathname.startsWith("/api/") || url.pathname.startsWith("/auth/") || ["/signin-with-chatgpt", "/signout-with-chatgpt", "/callback"].includes(url.pathname)) return;')
+  .replace(documentBoundary,'async function refreshDocumentShell(response, cacheKey) {\n  if (!response.ok || new URL(response.url).origin !== self.location.origin) return;')
+  .replace('if (!page.ok) throw new Error(`Could not cache the app shell (${page.status}).`);','if (!page.ok || new URL(page.url).origin !== self.location.origin) throw new Error(`Could not cache the app shell (${page.status}).`);');
+await writeFile(workerPath,workerSource.replace('const CACHE_NAME = `${CACHE_PREFIX}v104`;',`const CACHE_NAME = \`\${CACHE_PREFIX}v${shellGeneration}\`;`));
 await mkdir('.next-portable/standalone/public/portable-assets',{recursive:true});
 await cp('node_modules/pdfjs-dist/build/pdf.worker.min.mjs','.next-portable/standalone/public/portable-assets/pdf.worker.min.mjs');
 for(const folder of ['cmaps','standard_fonts','wasm'])await cp(`node_modules/pdfjs-dist/${folder}`,`.next-portable/standalone/public/portable-assets/pdf/${folder}`,{recursive:true});
@@ -30,5 +47,5 @@ const source=await readFile(launcher,'utf8');
 if(!source.includes('nextConfig.outputFileTracingRoot=__dirname;'))await writeFile(launcher,source.replace('process.env.__NEXT_PRIVATE_STANDALONE_CONFIG',
   'nextConfig.outputFileTracingRoot=__dirname; nextConfig.repoRoot=__dirname; if(nextConfig.turbopack)nextConfig.turbopack.root=__dirname;\nprocess.env.__NEXT_PRIVATE_STANDALONE_CONFIG'));
 const checksum=async path=>createHash('sha256').update(await readFile(path)).digest('hex');
-await writeFile('dist/portable/build.json',JSON.stringify({version:1,source:execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),nodeMajor:24,protocol:1,runtime:RUNTIME_VERSION,
+await writeFile('dist/portable/build.json',JSON.stringify({version:1,source:releaseSource,nodeMajor:24,protocol:1,runtime:RUNTIME_VERSION,shellGeneration,
   gatewaySHA256:await checksum('dist/portable/gateway.mjs'),agentSHA256:await checksum('dist/portable/portable-agent.mjs')},null,2)+'\n');

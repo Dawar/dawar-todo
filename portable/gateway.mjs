@@ -145,7 +145,8 @@ export function startGateway(config) {
         headers.set('oai-authenticated-user-email',session.owner);headers.set('oai-authenticated-user-id',session.userId);
       }
       const accessRequest=new Request(u,{method:req.method,headers});
-      const blocked = u.pathname.startsWith('/portable-assets/') ? null : await appAccessResponse(accessRequest,{DB:application,API_TOKEN_OWNER_KEY:config.owner.key});
+      const blocked = u.pathname.startsWith('/portable-assets/') || u.pathname==='/pwa-build.json'&&req.method==='GET'&&!u.search
+        ? null : await appAccessResponse(accessRequest,{DB:application,API_TOKEN_OWNER_KEY:config.owner.key});
       if (blocked) {
         if (!u.pathname.startsWith('/api/') && blocked.status===303) {
           res.writeHead(303,{location:`/auth/login?return_to=${encodeURIComponent(u.pathname+u.search)}`});return res.end();
