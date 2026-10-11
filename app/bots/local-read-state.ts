@@ -1,17 +1,18 @@
 "use client";
-import { useMemo, useSyncExternalStore } from 'react';
+import { useSyncExternalStore } from 'react';
 import type { Bot } from '../../lib/bots-types';
 const listeners = new Set<() => void>();
 const values = new Map<string, string>();
 let revision = 0;
-const key = (owner: string, bot: Bot) => `dawar-read:v1:${JSON.stringify([owner, bot.id, bot.threadId])}`;
+type ReadBot = Pick<Bot, 'id' | 'threadId' | 'updatedAt'>;
+const key = (owner: string, bot: ReadBot) => `dawar-read:v1:${JSON.stringify([owner, bot.id, bot.threadId])}`;
 const changed = () => { revision++; for (const listener of listeners) listener(); };
-function read(owner: string, bot: Bot) {
+function read(owner: string, bot: ReadBot) {
   const k = key(owner, bot);
   try { const value = localStorage.getItem(k); if (value && Number.isFinite(Date.parse(value))) return value; } catch { /* Session read position remains usable. */ }
   return values.get(k) ?? '';
 }
-export function markLocallyRead(owner: string, bot: Bot) {
+export function markLocallyRead(owner: string, bot: ReadBot) {
   if (!owner || !bot.threadId || !Number.isFinite(Date.parse(bot.updatedAt)) || read(owner, bot) >= bot.updatedAt) return;
   const k = key(owner, bot); values.set(k, bot.updatedAt);
   try { localStorage.setItem(k, bot.updatedAt); } catch { /* Do not prevent reading when storage is full. */ }
@@ -25,6 +26,6 @@ function subscribe(listener: () => void) {
 }
 /** Browser-observed read position; never a fabricated server acknowledgement. */
 export function useLocallyReadBots(owner: string, bots: Bot[]) {
-  const version = useSyncExternalStore(subscribe, () => revision, () => 0);
-  return useMemo(() => bots.map(bot => { const at = read(owner, bot); return at > bot.lastReadAt ? { ...bot, lastReadAt: at } : bot; }), [owner, bots, version]);
+  useSyncExternalStore(subscribe, () => revision, () => 0);
+  return bots.map(bot => { const at = read(owner, bot); return at > bot.lastReadAt ? { ...bot, lastReadAt: at } : bot; });
 }

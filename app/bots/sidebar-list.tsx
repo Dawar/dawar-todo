@@ -23,7 +23,7 @@ const SidebarRow = memo(function SidebarRow({ bot: b, selected, select, modelNam
   </button>;
 });
 type ListRow = { kind: "heading"; id: string; name: string; color?: string; count: number; offset: number; height: number } | { kind: "bot"; id: string; bot: Bot; offset: number; height: number };
-export const BotSidebarList = memo(function BotSidebarList({ owner, search = '', bots, snapshot, selected, select, empty }: {
+export const BotSidebarList = memo(function BotSidebarList({ owner, search = '', bots: suppliedBots, snapshot, selected, select, empty }: {
   owner: string; search?: string; bots: Bot[]; snapshot: BotSnapshot | null; selected: string | null; select: (id: string) => void; empty: string;
 }) {
   const bots = useLocallyReadBots(owner, suppliedBots);

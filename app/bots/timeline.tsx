@@ -173,7 +173,7 @@ function BotConversationFeed({ owner, bot, online, children, onOpenCall, onReply
       if (document.visibilityState !== 'visible') return;
       const element = scroll.current;
       if (!element || element.scrollHeight - element.scrollTop - element.clientHeight > 120) return;
-      markLocallyRead(owner, bot);
+      markLocallyRead(owner, { id: bot.id, threadId: bot.threadId, updatedAt: bot.updatedAt });
       void botsClient.rpc('bots.read', bot.id, { threadId: bot.threadId, updatedAt: bot.updatedAt }, undefined, { owner }).catch(() => {});
     };
     const timer = setTimeout(mark, 800);
