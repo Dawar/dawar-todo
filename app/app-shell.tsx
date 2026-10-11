@@ -2,6 +2,7 @@
 import { Activity, Component, Suspense, createContext, lazy, useContext, useEffect, useLayoutEffect, useRef, useState, type MouseEvent, type ReactNode, type RefObject } from "react";
 import { usePathname } from "next/navigation";
 import SettingsError from "./settings/error";
+import { ScreenError, ScreenLoading } from "./screen-feedback";
 import { taskSync } from "./task-sync";
 import { cacheOpeningTab, cachedOpeningTab } from "./opening-preference";
 import { initialShellPath } from "./launch-intent";
@@ -41,7 +42,7 @@ class ScreenBoundary extends Component<{ path: ScreenPath; children: ReactNode }
     if (!this.state.error) return this.props.children;
     const reset = () => this.setState({ error: null });
     if (this.props.path === "/settings") return <SettingsError error={this.state.error} reset={reset} />;
-    return <div className="mx-auto max-w-lg p-6"><p>This screen could not open.</p><button type="button" className="mt-3 underline" onClick={reset}>Try again</button></div>;
+    return <ScreenError onRetry={reset} />;
   }
 }
 
@@ -117,10 +118,10 @@ export function AppShell({ children }: { children: ReactNode }) {
     {route ? visited.map((item) => {
       const Page = pages[item];
       return <Activity key={item} mode={route === item ? "visible" : "hidden"}>
-        <ScreenBoundary path={item}><Suspense fallback={<div className="mx-auto max-w-5xl p-6 text-sm text-[#69716c]" role="status">Opening…</div>}>
+        <ScreenBoundary path={item}><Suspense fallback={<ScreenLoading />}>
           <Screen screen={item} positions={scroll}><Page /></Screen>
         </Suspense></ScreenBoundary>
       </Activity>;
-    }) : path === null ? <div className="mx-auto max-w-5xl p-6 text-sm text-[#69716c]" role="status">Opening…</div> : children}
+    }) : path === null ? <ScreenLoading /> : children}
   </Navigation.Provider>;
 }

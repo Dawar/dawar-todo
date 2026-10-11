@@ -338,3 +338,7 @@ Setup approvals use shared buttons, semantic cards, wrapping action summaries an
 ### Earlier-work controls
 
 The retained earlier-work recovery panel uses shared outline buttons and semantic card/status/error colors, readable13px metadata and wrapping44px actions. Wording distinguishes paused, unconfirmed and waiting work without duplicate instructions. Current-work selection, saved-action recovery, Stop scope and Activity navigation are unchanged. Actual320/1280 synthetic running/paused/uncertain rows and offline-disabled Stop observed; the paused Activity button returned its exact original fixture run ID. Connected Stop/recovery, empty/overflow and full history drawer remain pending.
+
+### Screen loading and recovery
+
+`ScreenLoading` and `ScreenError` centralize shell/Settings feedback. Loading has an announced status and a motion-safe spinner; errors use Card/Button with retry and a task destination, without exposing raw exceptions. Settings retains its operational error logging; shell route caching, launch choice and navigation logic are unchanged. Skeleton now uses a neutral muted surface and motion-safe animation. Actual1280/320 error layout and320 Retry-to-loading transition observed. Full router failure/retry/back navigation, keyboard and reduced-motion emulation remain pending.
