@@ -144,6 +144,10 @@ export function BurstControls({ burst, online, submitting = false }: { burst: Bu
   const previewOnly = !!value?.preview || !online, completeBatchMetadata = value?.batches !== undefined;
   const baseBusy = !online || action.busy || !action.ready || !!action.intent || discardAction.busy || !!discardAction.intent;
   const busy = baseBusy || burst.queuePreparing || burst.queueAction.busy || !!burst.queueAction.intent || client.snapshot?.capabilities?.burstQueue === 1 && !burst.queueAction.ready;
+  const deliveryError = action.error || error;
+  const deliveryStatus = deliveryError === 'Reconcile the original send before starting another batch; no message was repeated.'
+    ? 'Delivery unconfirmed.'
+    : deliveryError || (action.intent ? 'Confirmation needed.' : 'Not delivered.');
   return <div className="bots-burst-pending">
     {previewOnly && (!completeBatchMetadata || count > messages.length || truncatedText.size > 0) && <small className="bots-burst-preview">Some saved messages are previews. Reconnect for complete messages and delivery status.</small>}
     <div className="bots-burst-line">
@@ -155,6 +159,6 @@ export function BurstControls({ burst, online, submitting = false }: { burst: Bu
       </>}{heldIds.length > 0 && controlsAvailable && <button type="button" aria-label="Delete all held messages" title="Delete all held messages" disabled={busy || !discardAction.ready || !!action.intent} onClick={() => void discard(heldIds, true).catch(() => {})}><Trash2 size={16}/></button>}</div>
     </div>
     {discardAction.error && <div className="bots-burst-recovery" role="alert">{discardAction.error}{discardAction.intent && <button disabled={!online || discardAction.busy} onClick={() => void discardAction.retry().then(refreshDelivery).catch(() => {})}>Check deletion</button>}</div>}
-    {(error || action.error || failed || action.intent) && <div className="bots-burst-recovery" role="alert">{action.error || error || (action.intent ? 'This saved burst action needs confirmation.' : 'Not delivered. Retry keeps the original messages and files.')}{action.intent ? <button disabled={!online || action.busy} onClick={() => void action.retry().then(refreshDelivery).catch(() => {})}>Check saved action</button> : <button disabled={!online} onClick={refreshDelivery}>Refresh delivery</button>}</div>}
+    {(error || action.error || failed || action.intent) && <div className="bots-burst-recovery" role="alert">{deliveryStatus}{action.intent ? <button disabled={!online || action.busy} onClick={() => void action.retry().then(refreshDelivery).catch(() => {})}>Check delivery</button> : <button disabled={!online} onClick={refreshDelivery}>Check delivery</button>}</div>}
   </div>;
 }

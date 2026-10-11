@@ -1,13 +1,14 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
-import { ArrowRight, Search, X } from 'lucide-react';
+import { ArrowRight, Search } from 'lucide-react';
 import { botsClient as client } from './bots/client';
 import { botComposers } from './bots/composer-service';
 import { BotAvatar } from './bots/bot-avatar';
 import { useShellNavigation } from './app-shell';
 import { pendingTodoForwards, saveTodoForward, type TodoForwardIntent } from './todo-forward';
 import './todo-forward.css';
+import { ControlledDialog } from '@/components/ui/controlled-dialog';
+import { Input } from '@/components/ui/input';
 
 export function TodoForward({ request, onClose }: { request: { id: string; text: string } | null; onClose: () => void }) {
   const [saved, setSaved] = useState<TodoForwardIntent | null>(null), [open, setOpen] = useState(false);
@@ -24,25 +25,11 @@ export function TodoForward({ request, onClose }: { request: { id: string; text:
 }
 function ForwardPicker({ request, saved, onClose }: { request: { id: string; text: string }; saved: TodoForwardIntent | null; onClose: () => void }) {
   const [, redraw] = useState(0), [search, setSearch] = useState(''), [busy, setBusy] = useState(false), [error, setError] = useState(''), [destinationBot, setDestinationBot] = useState(saved?.botId ?? null);
-  const dialog = useRef<HTMLDivElement>(null), link = useRef<HTMLAnchorElement>(null), inFlight = useRef(false), destination = useRef(saved?.botId ?? null);
+  const link = useRef<HTMLAnchorElement>(null), inFlight = useRef(false), destination = useRef(saved?.botId ?? null);
   const navigate = useShellNavigation(), owner = client.owner;
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   useEffect(() => { client.start(); return client.subscribe(() => redraw(value => value + 1)); }, []);
-  useEffect(() => {
-    const previous = document.activeElement as HTMLElement | null;
-    dialog.current?.querySelector<HTMLInputElement>('input')?.focus();
-    const key = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') { event.stopImmediatePropagation(); onClose(); }
-      if (event.key !== 'Tab') return;
-      const items = [...(dialog.current?.querySelectorAll<HTMLElement>('button:not(:disabled),input,a[href]') ?? [])].filter(item => item.getClientRects().length);
-      const first = items[0], last = items.at(-1);
-      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
-      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
-    };
-    document.addEventListener('keydown', key, true);
-    return () => { document.removeEventListener('keydown', key, true); previous?.focus({ preventScroll: true }); };
-  }, [onClose]);
   async function choose(botId: string) {
     if (inFlight.current || !owner || client.owner !== owner) return;
     inFlight.current = true; setBusy(true); setError('');
@@ -61,13 +48,12 @@ function ForwardPicker({ request, saved, onClose }: { request: { id: string; tex
     finally { inFlight.current = false; setBusy(false); }
   }
   const bots = (client.snapshot?.bots ?? []).filter(bot => !bot.archived && (!destinationBot || bot.id === destinationBot) && `${bot.name} ${bot.purpose}`.toLowerCase().includes(search.toLowerCase()));
-  return createPortal(<div className="todo-forward-backdrop" onClick={event => { if (event.target === event.currentTarget) onClose(); }}><div ref={dialog} className="todo-forward-dialog" role="dialog" aria-modal="true" aria-labelledby="todo-forward-title">
-    <header><div><h2 id="todo-forward-title">Forward to a bot</h2><p>Add to a draft. Send when you’re ready.</p></div><button type="button" aria-label="Close Forward" onClick={onClose}><X size={20} /></button></header>
-    <label className="todo-forward-search"><Search size={18} /><input aria-label="Find a bot" placeholder="Find a bot" value={search} onChange={event => setSearch(event.target.value)} /></label>
+  return <ControlledDialog title="Forward to a bot" description="Add to a draft. Send when you’re ready." onClose={onClose} className="todo-forward-dialog z-[120]" overlayClassName="z-[120]">
+    <label className="todo-forward-search"><Search size={18} /><Input aria-label="Find a bot" placeholder="Find a bot" value={search} onChange={event => setSearch(event.target.value)} /></label>
     {!client.online && <p className="todo-forward-note">Offline · saved bots and local drafts are available.</p>}
     <div className="todo-forward-list" aria-busy={busy}>{bots.slice(0, 60).map(bot => <button type="button" key={bot.id} disabled={busy || !owner} onClick={() => void choose(bot.id)}><BotAvatar bot={bot} small /><span><strong>{bot.name}</strong><small>{bot.purpose || 'Conversation'}</small></span><ArrowRight size={18} /></button>)}
       {!bots.length && <p>{client.started && !client.snapshot ? 'Connect once to load your bots.' : 'No matching bots.'}</p>}{bots.length > 60 && <p>Search to narrow {bots.length} bots.</p>}</div>
     <footer>Existing text and files stay in your draft.</footer>{error && <p role="alert" className="todo-forward-error">{error}</p>}
     <a ref={link} hidden onClick={event => navigate(event, event.currentTarget.getAttribute('href')!)}>Open conversation</a>
-  </div></div>, document.body);
+  </ControlledDialog>;
 }

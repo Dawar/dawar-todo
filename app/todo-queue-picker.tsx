@@ -1,14 +1,17 @@
 "use client";
 import { portableHeaders } from "../lib/portable-csrf";
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
-import { Search, X } from 'lucide-react';
+import { Search } from 'lucide-react';
 import { botsClient as client } from './bots/client';
 import { BotAvatar } from './bots/bot-avatar';
 import type { BotQueueList } from '../lib/bots-types';
 import type { TaskQueueSource, TaskQueueExportReceipt } from '../lib/task-queue-export';
 import { createTransfer, readTransfers, runTransfer, saveTransfer, type TaskTransfer } from './todo-queue-transfer';
 import './todo-forward.css';
+import { ControlledDialog } from '@/components/ui/controlled-dialog';
+import { Input } from '@/components/ui/input';
+import { NativeSelect } from '@/components/ui/native-select';
+import { Button } from '@/components/ui/button';
 export type QueueRequest = {
     id: string;
     todoIds: number[];
@@ -53,7 +56,7 @@ export function QueuePicker({ request, saved, onClose, guard, onChanged }: {
     const [view, setView] = useState(saved);
     const [listAttempt, retryLists] = useState(0);
     const [, redraw] = useState(0), [search, setSearch] = useState(''), [botId, setBotId] = useState(saved?.botId ?? ''), [listId, setListId] = useState<string | null>(saved?.listId ?? null), [lists, setLists] = useState<BotQueueList[] | null>(null), [busy, setBusy] = useState(false), [error, setError] = useState('');
-    const intent = useRef(saved), inFlight = useRef(false), mounted = useRef(true), dialog = useRef<HTMLDivElement>(null), owner = client.owner;
+    const intent = useRef(saved), inFlight = useRef(false), mounted = useRef(true), owner = client.owner;
     useEffect(() => { mounted.current = true; client.start(); const un = client.subscribe(() => redraw(v => v + 1)); return () => { mounted.current = false; un(); }; }, []);
     useEffect(() => { let live = true; queueMicrotask(() => { if (!live || saved || !owner)
         return; try {
@@ -69,20 +72,6 @@ export function QueuePicker({ request, saved, onClose, guard, onChanged }: {
         return () => { live = false; }; client.rpc<BotQueueList[]>('queueLists.list', botId, {}, undefined, { owner, managed: true }).then(v => { if (live && client.owner === owner)
         setLists(v); }, e => { if (live)
         setError(e.message); }); return () => { live = false; }; }, [botId, owner, listAttempt]);
-    useEffect(() => { const previous = document.activeElement as HTMLElement | null, overflow = document.body.style.overflow; document.body.style.overflow = 'hidden'; dialog.current?.querySelector<HTMLInputElement>('input')?.focus(); const key = (e: KeyboardEvent) => { if (e.key === 'Escape') {
-        e.stopImmediatePropagation();
-        onClose();
-    } if (e.key === 'Tab') {
-        const list = [...(dialog.current?.querySelectorAll<HTMLElement>('button:not(:disabled),input,select,a[href]') ?? [])].filter(x => x.getClientRects().length);
-        if (e.shiftKey && document.activeElement === list[0]) {
-            e.preventDefault();
-            list.at(-1)?.focus();
-        }
-        else if (!e.shiftKey && document.activeElement === list.at(-1)) {
-            e.preventDefault();
-            list[0]?.focus();
-        }
-    } }; document.addEventListener('keydown', key, true); return () => { document.removeEventListener('keydown', key, true); document.body.style.overflow = overflow; previous?.focus({ preventScroll: true }); }; }, [onClose]);
     async function submit() {
         if (inFlight.current || !owner || client.owner !== owner)
             return;
@@ -135,15 +124,13 @@ export function QueuePicker({ request, saved, onClose, guard, onChanged }: {
     }
     const bots = (client.snapshot?.bots ?? []).filter(b => !b.archived && `${b.name} ${b.purpose}`.toLowerCase().includes(search.toLowerCase()));
     const frozen = Boolean(view), items = view?.items, complete = Boolean(items?.every(i => i.delegation || i.rejected));
-    return createPortal(<div className="todo-forward-backdrop" onClick={e => { if (e.target === e.currentTarget)
-        onClose(); }}><div ref={dialog} className="todo-forward-dialog todo-queue-dialog" role="dialog" aria-modal="true" aria-labelledby="todo-queue-title">
- <header><div><h2 id="todo-queue-title">Queue to bot</h2><p>{saved?.items.length ?? request?.todoIds.length} task{(saved?.items.length ?? request?.todoIds.length) !== 1 ? "s" : ""} · One message per task. Confirmed tasks leave the active list; originals stay in All.</p></div><button type="button" aria-label="Close task queue picker" onClick={onClose}><X size={20}/></button></header>
+    return <ControlledDialog title="Queue to bot" description={<>{saved?.items.length ?? request?.todoIds.length} task{(saved?.items.length ?? request?.todoIds.length) !== 1 ? "s" : ""} · One message per task. Confirmed tasks leave the active list; originals stay in All.</>} onClose={onClose} className="todo-forward-dialog todo-queue-dialog z-[120]" overlayClassName="z-[120]">
  {saved && request && <p className="todo-forward-note">Confirm this selection’s unfinished transfer at its original destination first.</p>}
- <label className="todo-forward-search"><Search size={18}/><input aria-label="Find a bot" placeholder="Find a bot" disabled={frozen || busy} value={search} onChange={e => setSearch(e.target.value)}/></label>
+ <label className="todo-forward-search"><Search size={18}/><Input aria-label="Find a bot" placeholder="Find a bot" disabled={frozen || busy} value={search} onChange={e => setSearch(e.target.value)}/></label>
  <div className="todo-forward-list">{bots.slice(0, 60).map(bot => <button type="button" key={bot.id} aria-pressed={bot.id === botId} disabled={busy || frozen} onClick={() => { setBotId(bot.id); setListId(null); setError(''); }}><BotAvatar bot={bot} small/><span><strong>{bot.name}</strong><small>{bot.purpose || 'Conversation'}</small></span>{bot.id === botId ? 'Selected' : ''}</button>)}{!bots.length && <p>No matching bots.</p>}{bots.length > 60 && <p>Search to narrow {bots.length} bots.</p>}</div>
- {botId && <label className="todo-forward-note">Queue <select aria-label="Destination queue" value={listId ?? ''} disabled={busy || frozen || !lists} onChange={e => setListId(e.target.value || null)}><option value="">Queued next</option>{lists?.map(l => <option key={l.id} value={l.id}>{l.name} · {l.count} · {l.cron ? (l.enabled ? 'scheduled' : 'schedule paused') : 'unscheduled'}</option>)}{listId && !lists?.some(l => l.id === listId) && <option value={listId}>Original list unavailable</option>}</select>{!lists && ' Loading lists…'}</label>}
+ {botId && <label className="todo-forward-note">Queue <NativeSelect aria-label="Destination queue" value={listId ?? ''} disabled={busy || frozen || !lists} onChange={e => setListId(e.target.value || null)}><option value="">Queued next</option>{lists?.map(l => <option key={l.id} value={l.id}>{l.name} · {l.count} · {l.cron ? (l.enabled ? 'scheduled' : 'schedule paused') : 'unscheduled'}</option>)}{listId && !lists?.some(l => l.id === listId) && <option value={listId}>Original list unavailable</option>}</NativeSelect>{!lists && ' Loading lists…'}</label>}
  {!client.online && <p className="todo-forward-note">Offline. Your original transfer is retained.</p>}{!client.snapshot?.capabilities?.taskQueues && <p className="todo-forward-note">Task queueing is not available yet. Your tasks stay active.</p>}
  <div className="todo-queue-progress" aria-live="polite">{items?.map(i => <p key={i.todoId} className="todo-forward-note">Task {i.todoId}: {i.rejected ? 'Not queued · task stays active' : i.delegation ? (i.active ? 'Queued · newer task stays active' : 'Queued · retained in All') : i.accepted ? 'Queued · confirming task list update' : i.queueRequested ? 'Awaiting queue confirmation' : i.queueParams ? 'Files ready · not queued' : 'Not queued'}{i.error && ` — ${i.error}`}</p>)}</div>
- {error && <p role="alert" className="todo-forward-error">{error}</p>}{botId && !lists && error && <button type="button" disabled={busy || !client.online} onClick={() => { setError(''); retryLists(v => v + 1); }}>Retry queue lists</button>}<footer><button type="button" disabled={!complete && (busy || !botId || !client.online || !client.snapshot?.capabilities?.taskQueues || !frozen && (!lists || listId !== null && !lists.some(l => l.id === listId)))} onClick={() => complete ? onClose() : void submit()}>{complete ? "Done" : busy ? 'Confirming…' : frozen ? 'Check original transfer' : 'Queue'}</button></footer>
- </div></div>, document.body);
+ {error && <p role="alert" className="todo-forward-error">{error}</p>}{botId && !lists && error && <button type="button" disabled={busy || !client.online} onClick={() => { setError(''); retryLists(v => v + 1); }}>Retry queue lists</button>}<footer><Button type="button" disabled={!complete && (busy || !botId || !client.online || !client.snapshot?.capabilities?.taskQueues || !frozen && (!lists || listId !== null && !lists.some(l => l.id === listId)))} onClick={() => complete ? onClose() : void submit()}>{complete ? "Done" : busy ? 'Confirming…' : frozen ? 'Check original transfer' : 'Queue'}</Button></footer>
+ </ControlledDialog>;
 }

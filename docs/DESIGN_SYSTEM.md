@@ -92,3 +92,9 @@ NativeSelect preserves browser keyboard and mobile picker behavior. Shared Input
 `components/ui/dialog.tsx` adapts the shadcn new-york Radix Dialog: semantic card surface, 35% backdrop, 16px viewport gutter, bounded dynamic viewport height with internal scrolling, and a 44px mobile close target. Radix owns modality, focus containment and Escape. Controlled dialogs opened without a DialogTrigger explicitly restore their connected opener. Keyboard shortcuts is the first migrated consumer; other dialogs remain tracked for migration. Motion is static until an accessible shared transition is introduced.
 
 Settings error recovery uses the same Card/Button system and removes report-copy diagnostics. Long API-token and calendar names wrap rather than hiding identity behind ellipses. Operational logging remains outside the product UI.
+
+### Task destination pickers and session entry
+
+`ControlledDialog` centralizes programmatic dialog opening and connected-opener focus restoration. Task Forward and Queue now use it with shared Input and NativeSelect controls; their original transfer/append handlers are retained. The 120 overlay layer preserves task-picker priority over task details. Bot labels and descriptions wrap; selection uses the accent surface and primary border. Old bespoke backdrops, header/close styling, native-field duplication and document-level focus loops are removed from these two consumers. Signed-out entry uses the same Card and Button primitives. These migrations remain subject to recorded full state and device verification.
+
+Composer copy amendment: remove the configuration-intent explanatory block and its unsupported queue action. No routine prose below model controls. Unknown send delivery remains a concise “Delivery unconfirmed.” status with “Check delivery”; original recovery operations and uncertainty remain intact. No hidden automatic retry.

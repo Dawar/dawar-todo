@@ -77,8 +77,6 @@ import { SavedDrafts } from "./saved-drafts";
 import { ComposerInput } from "./composer-input";
 import { ComposerSettings } from "./composer-settings";
 import { DiscussionsNavigator, RoomConversation } from "./collaboration-rooms";
-import { useExecutionConfiguration } from "./configuration-evidence";
-import { QueueConfigurationIntent } from "./queue-configuration-intent";
 import { ArtifactGallery, BotAttachmentsEntry, ArtifactNav } from "./artifact-gallery";
 import { PromptQueue } from "./prompt-queue";
 import { TeamsManager, TeamAssignment } from "./teams";
@@ -162,7 +160,6 @@ export function BotsWorkspace() {
     const url=new URL(window.location.href);url.searchParams.delete('view');url.searchParams.set('room',id);url.searchParams.set('roomBot',member);window.history.pushState({},'',url);
   };
   const closeRoom=()=>{setRoomId(null);const url=new URL(window.location.href);url.searchParams.delete('room');url.searchParams.delete('roomBot');window.history.pushState({},'',url);};
-  const configuration = useExecutionConfiguration(owner, bot, online && navigation === "bots");
   const single = snapshot?.capabilities?.singleThreadExecution === 1 && bot?.executionMode === "single-thread";
   const work = single ? snapshot?.workByBot?.find(value => value.botId === selected) : undefined;
   const queueListsSupported = snapshot?.capabilities?.queueLists === 1;
@@ -701,7 +698,6 @@ export function BotsWorkspace() {
                       canEdit={Boolean(composer?.ready && !sending)} onEdit={editQueued} refresh={refreshQueues}
                       supported={queueListsSupported} relativeMoves={snapshot?.capabilities?.queueRelativeMoves===1} lists={queueLists.lists} onOpenLists={queueListsSupported ? () => { setDetailsSection("queues"); setProfile(true); } : undefined} />
                     {snapshot && <ComposerSettings key={`settings:${scope}`} bot={bot} snapshot={snapshot} online={online} />}
-                    {composer && bot.activeTurnId && configuration.value && <QueueConfigurationIntent owner={owner} bot={bot} composer={composer} configuration={configuration.value} online={online} refresh={configuration.refresh}/>}
                   {(lanes || single) && <MainStopRecovery owner={owner} botId={bot.id} online={online} />}
                   <ComposerStatus composer={composer} error={composerError} />
                   {transferError&&<p className="bots-error" role="alert">{transferError}</p>}
