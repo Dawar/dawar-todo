@@ -438,3 +438,5 @@ Input, Textarea and NativeSelect use a destructive border and focus ring when `a
 Quota status uses neutral text when unavailable, destructive text when exhausted, and primary text when capacity remains. The percentage or Unavailable label always communicates the state without color.
 
 Settings uses 13px supporting text, semantic warning surfaces for token/calendar access, and the shared reduced-motion-aware Skeleton. Its static form sections use borders without elevation; floating dialogs and notifications retain shadows.
+
+Settings notifications use the shared card foreground/background, border and floating shadow. Errors add destructive text/border; the dismiss button keeps the shared ghost styling. Existing announcements and dismissal timing are retained.

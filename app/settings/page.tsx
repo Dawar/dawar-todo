@@ -1477,9 +1477,9 @@ export default function SettingsPage() {
 
       {shareNotice && (
         <div className="pointer-events-none fixed inset-x-0 bottom-[max(1rem,env(safe-area-inset-bottom))] z-[60] mx-auto w-[calc(100%-2rem)] max-w-md">
-          <div role={shareNotice.tone === "error" ? "alert" : "status"} className={`pointer-events-auto flex min-h-14 items-center gap-3 rounded-lg px-4 py-3 text-sm text-primary-foreground shadow-[0_16px_50px_rgba(0,0,0,0.24)] ${shareNotice.tone === "error" ? "bg-destructive" : "bg-foreground"}`}>
+          <div role={shareNotice.tone === "error" ? "alert" : "status"} className={`pointer-events-auto flex min-h-14 items-center gap-3 rounded-lg border bg-card px-4 py-3 text-sm shadow-lg ${shareNotice.tone === "error" ? "border-destructive/30 text-destructive" : "border-border text-card-foreground"}`}>
             <span className="min-w-0 flex-1 font-medium">{shareNotice.text}</span>
-            <Button size="icon" variant="ghost" type="button" onClick={() => setShareNotice(null)} aria-label="Dismiss notification" className="shrink-0 text-primary-foreground hover:bg-card/10 hover:text-primary-foreground"><ActionIcon name="close" /></Button>
+            <Button size="icon" variant="ghost" type="button" onClick={() => setShareNotice(null)} aria-label="Dismiss notification" className="shrink-0"><ActionIcon name="close" /></Button>
           </div>
         </div>
       )}
