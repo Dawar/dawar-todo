@@ -73,10 +73,10 @@ silent exclusion. Initial inventory is not a claim of exhaustive live discovery.
 | Batch | State |
 | --- | --- |
 | Initial source inventory and Google Sheet | Created; live discovery still required |
-| Requested chat presentation removals | Source edited; type/lint passed; visual verification pending |
-| shadcn primitives/tokens | Button, Input, Textarea, Card, Badge, Skeleton, Table and semantic palette implemented; Account card migrated; rendered verification pending |
-| Navigation and execution machines | Shared controls and tokens implemented; desktop/320 top sections observed, remaining states pending |
-| Settings page | Buttons, inputs, textarea and native selectors migrated; diagnostic panels removed; type/lint passed, full rendered coverage pending |
+| Requested chat presentation removals | Implemented; representative full-chat/mobile rendering observed; full flow acceptance remains |
+| shadcn primitives/tokens | Shared primitives and semantic palette implemented; multiple field/dialog/card states rendered; inventory tracks remaining composed states |
+| Navigation and execution machines | Shared controls/tokens implemented; shell navigation, project selection and320/390 keyboard focus observed; machine enrollment states remain |
+| Settings page | Shared controls migrated and diagnostic panels removed;320/1280 settings/calendar states observed; remaining flow coverage tracked |
 | Whole-application migration | In progress; most inventory entries remain unfinished |
 
 Upstream reference: https://ui.shadcn.com/docs/installation/manual
@@ -476,3 +476,7 @@ Saved forward and queue-transfer entry points use the shared secondary Button, w
 ### Bot navigator accessibility
 
 Team headings use44px rows, with the same height used by virtualization offsets. Their chevron transition respects reduced motion. Bot avatars inside named row buttons are decorative to avoid repeating the accessible name; working and unread indicators remain announced. Empty search results are status feedback. Keyboard focus and selected-row accents remain distinct.
+
+### Coverage checkpoint
+
+The current347-row inventory contains25Verified,177In progress,19Implemented and126Not started entries at71ac0ec. This includes controller/API dependencies as well as visible surfaces. Components already migrated are not evidence that their full flows are verified. Tasks, Bot details, Operator, Files and Task requests retain explicit end-to-end work. The live Sheet and component sections record per-item evidence. Card titles now default to18px with a readable multi-line height; descriptions use14px/24px.
