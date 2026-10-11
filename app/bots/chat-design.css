@@ -12,7 +12,7 @@
 .bots-message { margin-block: 22px; }
 .bots-message-markdown { line-height: 1.65; }
 .bots-bubble { border-radius: 20px 20px 6px 20px; }
-.bots-jump-latest { position: static; transform: none; display: inline-flex; align-items: center; gap: 7px; min-height: 40px; padding: 8px 14px; margin: 8px auto; white-space: nowrap; border: 1px solid var(--border); border-radius: 24px; background: var(--card); color: var(--foreground); box-shadow: 0 3px 16px color-mix(in srgb, var(--foreground) 10%, transparent); font-size: 13px; font-weight: 600; }
+.bots-jump-latest { position: static; transform: none; display: inline-flex; align-items: center; gap: 7px; min-height: 44px; padding: 8px 14px; margin: 8px auto; white-space: nowrap; border: 1px solid var(--border); border-radius: 24px; background: var(--card); color: var(--foreground); box-shadow: 0 3px 16px color-mix(in srgb, var(--foreground) 10%, transparent); font-size: 13px; font-weight: 600; }
 .bots-jump-latest:hover { background: var(--accent); }
 .bots-activity { border: 1px solid var(--border); border-radius: 12px; background: var(--muted); margin-block: 14px; }
 .bots-activity > summary { min-height: 44px; padding: 10px 13px; color: var(--muted-foreground); font-weight: 500; }
@@ -72,7 +72,6 @@ details[open] > summary > .bots-disclosure-chevron { transform: rotate(90deg); }
 .bots-history-error { display: flex; align-items: flex-start; gap: 13px; padding: 18px; margin-top: 20px; border: 1px solid var(--border); background: var(--warning); border-radius: 16px; color: var(--warning-foreground); font-size: 14px; }
 .bots-history-error svg { flex-shrink: 0; }
 .bots-history-error p { margin: 5px 0 12px; overflow-wrap: anywhere; }
-.bots-history-error button { min-height: 40px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 9px; color: var(--primary); background: var(--card); }
 .bots-keyboard-open .bots-conversation-heading { min-height: 52px; height: auto; padding: 6px 12px; }
 .bots-keyboard-open .bots-header-title strong { -webkit-line-clamp: 1; }
 .bots-keyboard-open .bots-composer { padding: 5px; }

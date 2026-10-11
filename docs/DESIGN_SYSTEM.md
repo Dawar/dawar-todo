@@ -442,3 +442,5 @@ Settings uses 13px supporting text, semantic warning surfaces for token/calendar
 Settings notifications use the shared card foreground/background, border and floating shadow. Errors add destructive text/border; the dismiss button keeps the shared ghost styling. Existing announcements and dismissal timing are retained.
 
 The header brand/project selector has a 44px minimum hit area. Keyboard help uses ControlledDialog for the same focus return, close and containment behavior as other state-opened dialogs.
+
+Chat history, detail, retry and Latest actions use shared outline Buttons. Latest retains its floating pill layout with a44px target. Paging, recovery, disabled conditions and reading anchors are unchanged.

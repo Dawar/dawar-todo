@@ -1,4 +1,5 @@
 "use client";
+import { Button } from "@/components/ui/button";
 import { Fragment, memo, useCallback, useEffect, useRef, useState, useMemo, useSyncExternalStore, type ReactNode } from "react";
 import { ReplyAction, ReplyQuote } from "./message-reply";
 import type { BotReplyReference } from "../../lib/bot-replies";
@@ -70,11 +71,11 @@ const EntryBody = memo(function EntryBody({ entry, timeline, attachments, downlo
   if (workPlan && full?.type === 'plan' && !refreshing && !loading && !detailError && !error) try { workPlan = readWorkPlanSource(full.text) ?? undefined; } catch (reason) { planError = String(reason); }
   return <>{entry.questionNotice && <p className="bots-system-note">{entry.questionNotice}</p>}{refreshing && <small>Updating…</small>}{entry.workPlan ? workPlan && <WorkPlanMessage plan={workPlan} botId={timeline.botId} attachments={attachments} turnStatus={entry.turnStatus ?? entry.status}/> : item && <BotMessage item={item} botId={timeline.botId} attachments={attachments} download={download} inWorkLog partial={entry.status === "inProgress" || !full && !entry.complete} />}
     {!entry.complete && <div className="bots-detail-status">
-      <button disabled={loading} onClick={() => void load()}>{loading ? "Loading…" : full ? "Refresh details" : item ? "Continue · load complete message" : "Open full details"}</button>
+      <Button variant="outline" type="button" disabled={loading} onClick={() => void load()}>{loading ? "Loading…" : full ? "Refresh details" : item ? "Continue · load complete message" : "Open full details"}</Button>
       {full && !botsClient.online && <small>Saved copy. Reconnect to check for changes.</small>}
       {!full && <small>{entry.workPlan ? 'The bounded native snapshot remains readable. Full live updates may expire; missing historical explanations are not reconstructed.' : item ? "A preview of this message. Continue to read it in full." : "Open this work item to see its full details."}</small>}
     </div>}
-    {(planError || (timeline.detailError ? detailError : error)) && <p role="alert" className="bots-error">{planError || (timeline.detailError ? detailError : error)}{timeline.detailError && entry.complete && <button disabled={refreshing || loading} onClick={() => void load()}>Refresh details</button>}</p>}</>;
+    {(planError || (timeline.detailError ? detailError : error)) && <p role="alert" className="bots-error">{planError || (timeline.detailError ? detailError : error)}{timeline.detailError && entry.complete && <Button variant="outline" type="button" disabled={refreshing || loading} onClick={() => void load()}>Refresh details</Button>}</p>}</>;
 });
 type WorkLogPage = { entries: HistoryEntry[]; olderCursor: string | null; attachments: BotAttachment[] };
 function TurnWorkLog({ entry, timeline, download, excluded, onPage, cachedPage }: { entry: HistoryEntry; timeline: HistoryDetailReader; download: (id: string) => void; excluded?: Set<string>; onPage?: (page: WorkLogPage, turnId: string) => void; cachedPage?: WorkLogPage }) {
@@ -99,9 +100,9 @@ function TurnWorkLog({ entry, timeline, download, excluded, onPage, cachedPage }
   useEffect(() => { alive.current = true; queueMicrotask(() => { if (alive.current && !loadedPage.current) void load(); }); return () => { alive.current = false; }; }, [load]);
   return <div className="bots-native-work-log">
     {entry.turnError && <p role="alert" className="bots-error">{entry.turnError}</p>}
-    {page?.olderCursor && <button disabled={busy || !botsClient.online} onClick={() => void load(page.olderCursor)}>Earlier work items</button>}
+    {page?.olderCursor && <Button variant="outline" type="button" disabled={busy || !botsClient.online} onClick={() => void load(page.olderCursor)}>Earlier work items</Button>}
     {busy && <p role="status">Loading work log…</p>}
-    {error && <p role="alert" className="bots-error">{error}<button disabled={busy || !botsClient.online} onClick={() => void load(page?.olderCursor ?? null)}>Retry work log</button></p>}
+    {error && <p role="alert" className="bots-error">{error}<Button variant="outline" type="button" disabled={busy || !botsClient.online} onClick={() => void load(page?.olderCursor ?? null)}>Retry work log</Button></p>}
     {!busy && !error && page && !page.entries.length && !page.olderCursor && <p>No additional native work items.</p>}
     {page?.entries.filter(value => !excluded?.has(historyKey(value.turnId, value.id))).map(value => <TimelineEntry key={historyKey(value.turnId, value.id)} entry={value} timeline={timeline} attachments={page.attachments} download={download} showScheduledMark={false}/>)}
   </div>;
@@ -265,13 +266,13 @@ function BotConversationFeed({ owner, bot, online, children, onOpenCall, onReply
   return <NativeTimingContext.Provider value={{ owner, botId: bot.id, threadId: bot.threadId, entries: nativeState.entries, current: nativeState.currentTiming }}><div className="bots-timeline has-message-ticks"><SecureInputAccess key={JSON.stringify([owner, bot.id, bot.threadId])} state={secure}/><div className="bots-messages" ref={scroll} tabIndex={0} {...feed.handlers}><div ref={content}>
     <TaskRequestAccess capture={feed.capture}/>
     {paging && <div className="bots-feed-loading" role="status">Loading conversation…</div>}
-    {(first > 0 || state.olderCursor) && !state.loading && (!online || state.error || !state.entries.length) && <button className="bots-older" disabled={paging || !online && (first === 0 || state.gaps.some((gap) => gap.before === historyKey(state.entries[first].turnId, state.entries[first].id)))} onClick={() => void feed.page(-1, true)}>{state.entries.length ? "Load earlier turns" : "Continue loading history"}</button>}
+    {(first > 0 || state.olderCursor) && !state.loading && (!online || state.error || !state.entries.length) && <Button variant="outline" type="button" className="bots-older" disabled={paging || !online && (first === 0 || state.gaps.some((gap) => gap.before === historyKey(state.entries[first].turnId, state.entries[first].id)))} onClick={() => void feed.page(-1, true)}>{state.entries.length ? "Load earlier turns" : "Continue loading history"}</Button>}
     {!state.loading && !state.error && !state.entries.length && state.olderCursor && <p className="bots-system-note">This page has no conversational replies. Earlier messages remain available above.</p>}
     {state.partialTurn && first === 0 && <p className="bots-system-note">This large turn continues above. Scroll up for the rest.</p>}
     {!online && state.cached && <div className="bots-system-note">Saved conversation. Reconnect for updates and work details not saved here.</div>}
-    {state.error && <div className="bots-history-error" role="alert"><CloudOff size={22} aria-hidden="true" /><div><strong>Let’s try that again</strong><p>{state.error}</p><button disabled={!online} onClick={() => void timeline.refresh()}>Reload conversation</button></div></div>}
-    {findings.nextCursor && first === 0 && <button className="bots-older" disabled={!online || findings.busy} onClick={() => { feed.capture(); void findings.older(); }}>Earlier scheduled findings</button>}
-    {findings.error && <p className="bots-error" role="alert">{findings.error}<button disabled={!online || findings.busy} onClick={findings.retry}>Retry</button></p>}
+    {state.error && <div className="bots-history-error" role="alert"><CloudOff size={22} aria-hidden="true" /><div><strong>Let’s try that again</strong><p>{state.error}</p><Button variant="outline" type="button" disabled={!online} onClick={() => void timeline.refresh()}>Reload conversation</Button></div></div>}
+    {findings.nextCursor && first === 0 && <Button variant="outline" type="button" className="bots-older" disabled={!online || findings.busy} onClick={() => { feed.capture(); void findings.older(); }}>Earlier scheduled findings</Button>}
+    {findings.error && <p className="bots-error" role="alert">{findings.error}<Button variant="outline" type="button" disabled={!online || findings.busy} onClick={findings.retry}>Retry</Button></p>}
     {peerSupported && <PeerPaging store={peers.store} online={online} capture={feed.capture}/>}
     {state.loading && !state.entries.length && <div className="bots-history-skeleton" role="status" aria-label="Loading conversation"><span /><span /><span /><span /></div>}
     {!state.loading && !state.error && !state.entries.length && !state.olderCursor && <div className="bots-conversation-start"><span className="bots-start-icon"><MessageCircle size={26} strokeWidth={1.4} aria-hidden="true" /></span><h2>{bot.name}</h2><p>{bot.purpose || "What would you like to work on?"}</p></div>}
@@ -292,9 +293,9 @@ function BotConversationFeed({ owner, bot, online, children, onOpenCall, onReply
       const replyBatch = entry.replyMessages;
       return <Fragment key={key}>
         {(!online || state.error) && state.gaps.filter((gap) => group.entries.some((entry) => gap.before === historyKey(entry.turnId, entry.id))).map((gap) => <div className="bots-system-note" key={gap.before}>
-          Some messages between these pages are not loaded. <button disabled={!online || paging} onClick={() => {
+          Some messages between these pages are not loaded. <Button variant="outline" type="button" disabled={!online || paging} onClick={() => {
             feed.capture(); void timeline.fillGap(gap);
-          }}>Load messages in between</button></div>)}
+          }}>Load messages in between</Button></div>)}
         {entry.peer ? <div data-history-key={key}><PeerTimelineMessage owner={owner} botId={bot.id} meta={entry.peer} nativeKeys={[...(entry.peerNativeKeys ?? []), ...nativeState.contextEntries.filter(e => e.peerAlias && peerAliases(entry.peer!).includes(e.peerAlias)).map(e => historyKey(e.turnId,e.id))]} store={peers.store} online={online} bots={namedBots} showRoot={rootRows.get(entry.peer.rootId) === entry.peer.id}/></div> : group.kind.startsWith("scheduled:") ? <section className="bots-scheduled-findings" aria-label="Findings from one scheduled run"><span className="bots-scheduled-message-mark" title="Findings from the same scheduled run"><Clock3 size={13} aria-hidden="true"/>Scheduled work</span>{group.entries.map(value=><TimelineEntry {...replyProps} onOpenCall={onOpenCall} key={historyKey(value.turnId,value.id)} entry={value} configurationSupported={botsClient.snapshot?.capabilities?.executionConfiguration === 1} configuration={timeline.configuration(bot.threadId, value.turnId)} timeline={timeline} attachments={state.attachments} download={download} showScheduledMark={false}/>)}</section> : group.kind === "message" ? replyBatch ? <div data-history-key={key}><BurstBubbles messages={replyBatch} {...batchProps} onOpenReply={openReply} onReply={onReply} threadId={bot.threadId??undefined} replySource={entry} sent /></div> : confirmed ? <div data-history-key={key}><BurstBubbles messages={confirmed.messages} batch={confirmed.batch} {...batchProps} onOpenReply={openReply} onReply={onReply} threadId={bot.threadId??undefined} replySource={entry} /></div> : <TimelineEntry {...replyProps} onOpenCall={onOpenCall} entry={entry} configurationSupported={botsClient.snapshot?.capabilities?.executionConfiguration === 1} configuration={timeline.configuration(bot.threadId, entry.turnId)} timeline={timeline} attachments={state.attachments} download={download} />
           : activity ? <div data-history-key={key} className="bots-compact-activity">{!open && group.entries.slice(1).map(value => <span key={value.id} data-history-key={historyKey(value.turnId, value.id)} aria-hidden="true" className="bots-activity-alias"/>)}<LazyDetails className="bots-activity" summary={summary} open={open} beforeToggle={feed.capture} onOpenChange={next => setExpanded(prior => { const copy = new Set(prior); for (const value of group.entries) { const key = timeline.resolveKey(historyKey(value.turnId, value.id))!; if (next) copy.add(key); else copy.delete(key); } return copy; })}>{body}</LazyDetails><MessageTime seconds={entry.messageAt} basis={entry.timeBasis} inline elapsed={group.entries.map(value => elapsed(value, 'turn')).find(Boolean)}/></div> : null}
         {groups.slice(groups.indexOf(group) + 1).find(next => !next.secure && !next.taskRequest)?.entries[0]?.turnId !== entry.turnId ? <ReturnedArtifacts linked={linkedArtifacts} attachments={state.attachments} turnId={entry.turnId} botId={bot.id} /> : null}
@@ -305,11 +306,11 @@ function BotConversationFeed({ owner, bot, online, children, onOpenCall, onReply
     {last === state.entries.length && tailBatches.map(batch => <BurstBubbles key={batch.id} batch={batch} messages={batch.messageIds.flatMap(id => { const message = burst.value?.messages.find(message => message.id === id); return message ? [message] : []; })} truncatedIds={burst.value?.preview?.truncatedTextIds} controls={burst} {...batchProps} onOpenReply={openReply} />)}
     {burstsEnabled && <BurstControls burst={burst} online={online} submitting={burstSubmitting} />}
     {children}
-  </div></div><MessageTickRail {...tickNavigation} scroll={scroll} content={content} earlier={first > 0 || Boolean(state.olderCursor) || state.gaps.some(gap => gap.before === historyKey(state.entries[first]?.turnId ?? '', state.entries[first]?.id ?? ''))} incomplete={!state.complete || Boolean(state.olderCursor) || state.gaps.length > 0} loading={paging || state.loading} online={online} error={state.error} onEarlier={() => feed.page(-1, true)} onSelect={selectTick}/>{(showJump || last < state.entries.length || state.error || state.loading && state.cached) && <button className="bots-jump-latest" disabled={!online || state.loading} onClick={() => {
+  </div></div><MessageTickRail {...tickNavigation} scroll={scroll} content={content} earlier={first > 0 || Boolean(state.olderCursor) || state.gaps.some(gap => gap.before === historyKey(state.entries[first]?.turnId ?? '', state.entries[first]?.id ?? ''))} incomplete={!state.complete || Boolean(state.olderCursor) || state.gaps.length > 0} loading={paging || state.loading} online={online} error={state.error} onEarlier={() => feed.page(-1, true)} onSelect={selectTick}/>{(showJump || last < state.entries.length || state.error || state.loading && state.cached) && <Button variant="outline" type="button" className="bots-jump-latest" disabled={!online || state.loading} onClick={() => {
     latest();
     if (state.error) void timeline.recoverLatest();
     else void timeline.refreshLatest();
-  }}><ArrowDown size={16} aria-hidden="true" />{state.loading ? "Loading latest…" : state.error ? "Retry latest messages" : "Latest messages"}</button>}</div></NativeTimingContext.Provider>;
+  }}><ArrowDown size={16} aria-hidden="true" />{state.loading ? "Loading latest…" : state.error ? "Retry latest messages" : "Latest messages"}</Button>}</div></NativeTimingContext.Provider>;
 }
 
 export function BotConversation(props: Parameters<typeof BotConversationFeed>[0]) {

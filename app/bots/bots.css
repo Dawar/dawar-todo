@@ -966,7 +966,6 @@ html.bots-viewport-locked body {
 .bots-draft-status select { max-width: 100%; }
 
 .bots-detail-status { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 8px 0; font-size: 13px; color: var(--muted-foreground); }
-.bots-detail-status button, .bots-jump-latest { padding: 6px 10px; border-radius: 8px; background: var(--muted); }
 .bots-jump-latest { align-self: center; flex: 0 0 auto; font-size: 13px; margin: 2px 0; }
 
 /* Support controls share a bounded scroll budget; the editor stays reachable. */
