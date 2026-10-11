@@ -130,11 +130,11 @@
 }
 .bots-desktop-keyboard textarea {
   display: block; box-sizing: border-box; width: 100%; resize: none; font-size: 16px;
-  border: 1px solid #4c566b; border-radius: 6px; padding: 10px;
-  background: #151922; color: #fff;
+  border: 1px solid var(--input); border-radius: var(--radius); padding: 10px;
+  background: var(--background); color: var(--foreground);
 }
 .bots-desktop-type-target textarea { color: transparent; caret-color: transparent; height: 44px; overflow: hidden; }
-.bots-desktop-paste { display: flex; align-items: stretch; gap: 8px; }
+.bots-desktop-paste { display: flex; align-items: stretch; gap: 8px; flex: none; }
 .bots-desktop-paste textarea { min-width: 0; flex: 1; }
 .bots-desktop-paste button { flex: none; }
 .bots-desktop-key-message { font-size: 13px; margin: 0; color: var(--muted-foreground); }
@@ -164,3 +164,8 @@
 .bots-desktop-preview:focus-visible { outline: 2px solid var(--ring); outline-offset: 3px; }
 
 .bots-desktop-card-title > svg, .bots-desktop-heading > svg { flex: none; }
+
+@media (max-width: 480px) {
+  .bots-desktop-paste { flex-direction: column; }
+  .bots-desktop-paste button { align-self: flex-end; }
+}

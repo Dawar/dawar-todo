@@ -346,3 +346,9 @@ The retained earlier-work recovery panel uses shared outline buttons and semanti
 ### Desktop viewer
 
 Desktop toolbar and remote-keyboard buttons use shared outline controls. The full-screen viewer retains a locally scoped dark semantic palette around the remote display, original custom focus/keyboard handling, input/lease/viewport logic and safe-area layout. Names wrap; identity icons do not shrink; toolbar groups wrap on narrow screens. Browser retention uses NativeSelect, whose values now explicitly use normal weight independent of bold labels. Actual320 preview/retention and320/1280 disconnected viewer/More disclosure observed with a missing-relay fixture that prevents session acquisition. Connected input, remote keyboard, retention mutation and physical touch acceptance remain pending; no native desktop/session/control effects were used as checks.
+
+### Retained bot discussion receipts
+
+Peer message cards and owner discussion controls use shared outline buttons, semantic surfaces/borders/text, readable status labels and wrapping44px actions. Mobile cards use the available width. Offline body hints are short and placed below their action. Paging, owner/revision checks, native intake labels and saved-action recovery remain unchanged. Actual1280/320 offline receipt and paused-control layouts observed with a synthetic read-only root; no Continue/Stop effect submitted. Connected body/error/recovery/paging and complete conversation alignment remain pending.
+
+The desktop keyboard's text field now follows its dark semantic scope, and manual paste stacks at narrow widths. Disconnected controls, More keys and keyboard focus were observed; remote input is deliberately absent from the fixture. Connected IME/paste and physical-device acceptance remain pending.
