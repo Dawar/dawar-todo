@@ -3,6 +3,7 @@ import { Activity, useEffect, useId, useRef, useState, type ReactNode } from "re
 import { Clock3, FolderOpen, History, ListOrdered, ListTree, MessageCircle, Monitor, Phone, Settings2, Target, X } from "lucide-react";
 import type { Bot } from "../../lib/bots-types";
 import "./bot-details.css";
+import { Button } from "@/components/ui/button";
 import { HistoryScrollContext } from "./history-scroll-context";
 
 export type BotDetailsSection = "next" | "goals" | "queues" | "schedules" | "files" | "desktop" | "calls" | "discussions" | "history" | "settings";
@@ -45,11 +46,15 @@ export function BotDetailsDrawer({ bot, section, onSection, onClose, children, d
     document.addEventListener("keydown", keydown);
     return () => { document.removeEventListener("keydown", keydown); if (previous?.isConnected) previous.focus({ preventScroll: true }); };
   }, [onClose]);
+  useEffect(() => {
+    dialog.current?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')
+      ?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [section]);
   return <div className="bots-details-backdrop" onClick={onClose}>
     <section ref={dialog} className="bots-details" role="dialog" aria-modal="true" aria-labelledby={`${id}-title`} onClick={event => event.stopPropagation()}>
       <header className="bots-details-heading">
         <div><span>Bot details</span><h2 id={`${id}-title`}>{bot.name}</h2></div>
-        <button className="bots-icon-button" aria-label="Close bot details" onClick={onClose}><X size={20} /></button>
+        <Button type="button" variant="ghost" size="icon" aria-label="Close bot details" onClick={onClose}><X size={20} /></Button>
       </header>
       <div className="bots-details-nav" role="tablist" aria-label="Bot details sections">
         {tabs.map(({ id: value, label, icon: Icon }) => <button key={value} id={`${id}-${value}`} role="tab" aria-selected={section === value} aria-controls={`${id}-${value}-panel`} tabIndex={section === value ? 0 : -1}

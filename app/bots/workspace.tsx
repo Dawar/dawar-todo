@@ -1,4 +1,6 @@
 "use client";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { ReplyQuote } from "./message-reply";
 
 import {
@@ -869,18 +871,18 @@ export function BotsWorkspace() {
               discussions: snapshot?.capabilities?.peerInbox === 1 ? <PeerConversations key={`discussions:${scope}`} owner={owner} botId={bot.id} bots={bots} online={online} historyView targetId={discussionTarget} /> : <p className="bots-details-lead">Discussions are unavailable on this service.</p>,
               history: <>{lanes && <details data-history-key="legacy-controls" className="bots-legacy-controls"><summary>Earlier work · recovery and controls</summary><BotWorkControls owner={owner} bot={bot} runs={recentRuns} online={online} onOpen={openActivity} /></details>}<RunHistory key={`${scope}:${activityTarget?.runId ?? ""}:${activityTarget?.turnId ?? ""}`} embedded bot={bot} schedules={schedules} recentRuns={recentRuns} initialTarget={activityTarget} attachments={[]} online={online} onClose={closeProfile} download={id => void download(id)} /></>,
               settings: <div className="bots-details-settings">
-                <form onSubmit={event => { event.preventDefault(); const input = new FormData(event.currentTarget); void action(() => client.rpc("bots.update", bot.id, { name: String(input.get("name")) })); }}>
-                  <label>Name<input name="name" defaultValue={bot.name} key={bot.id + bot.name} maxLength={80} required /></label><button type="submit" disabled={!online || busy}>Save name</button>
+                <form className="grid gap-3" onSubmit={event => { event.preventDefault(); const input = new FormData(event.currentTarget); void action(() => client.rpc("bots.update", bot.id, { name: String(input.get("name")) })); }}>
+                  <label>Name<Input name="name" defaultValue={bot.name} key={bot.id + bot.name} maxLength={80} required /></label><Button className="justify-self-start" type="submit" disabled={!online || busy}>Save name</Button>
                 </form>
                 <SavedDrafts owner={owner} bots={bots} composer={composer}/><p className="bots-profile-hint">{bot.purpose}</p><p className="bots-profile-hint">Ask {bot.name} to change its personality, instructions, or memory.</p>
                 {snapshot?.capabilities?.singleThreadExecution === 1 && <PersonalitySettings key={scope} bot={bot} snapshot={snapshot} online={online} />}
                 {snapshot?.capabilities?.botAdministration === 1 && bot.executionMode === "single-thread" && <BotAdminApprovals key={`admin:${scope}`} owner={owner} botId={bot.id} botName={bot.name} online={online} />}
                 {teamsSupported && <TeamAssignment key={`team:${scope}`} owner={owner} bot={bot} teams={teams} online={online} onManage={() => setShowTeams(true)} />}
-                <a className="bots-notification-link" href="/settings">Notification settings</a>
-                <div className="bots-profile-actions">
-                  <button disabled={!online || busy || Boolean(bot.activeTurnId)} onClick={() => void action(() => client.rpc("thread.compact", bot.id))}><RotateCcw size={16} />Compact conversation</button>
-                  {bot.archived && snapshot?.capabilities?.botDesktops === 1 && <button disabled={!online || busy} onClick={() => { if (window.confirm(`Delete ${bot.name}? Its desktop data will be removed. Its workspace files and archived conversation are retained.`)) void action(() => client.rpc("bots.delete", bot.id)); }}>Delete bot</button>}
-                  <button disabled={!online || busy || Boolean(bot.activeTurnId)} onClick={() => void action(() => client.rpc(bot.archived ? "bots.restore" : "bots.archive", bot.id))}><Archive size={16} />{bot.archived ? "Restore bot" : "Archive bot"}</button>
+                <Button asChild variant="link" className="px-0"><a href="/settings">Notification settings</a></Button>
+                <div className="bots-profile-actions flex flex-wrap gap-2">
+                  <Button variant="outline" type="button" disabled={!online || busy || Boolean(bot.activeTurnId)} onClick={() => void action(() => client.rpc("thread.compact", bot.id))}><RotateCcw size={16} />Compact conversation</Button>
+                  {bot.archived && snapshot?.capabilities?.botDesktops === 1 && <Button variant="outline" type="button" disabled={!online || busy} onClick={() => { if (window.confirm(`Delete ${bot.name}? Its desktop data will be removed. Its workspace files and archived conversation are retained.`)) void action(() => client.rpc("bots.delete", bot.id)); }}>Delete bot</Button>}
+                  <Button variant="outline" type="button" disabled={!online || busy || Boolean(bot.activeTurnId)} onClick={() => void action(() => client.rpc(bot.archived ? "bots.restore" : "bots.archive", bot.id))}><Archive size={16} />{bot.archived ? "Restore bot" : "Archive bot"}</Button>
                 </div>
               </div>,
             }}
