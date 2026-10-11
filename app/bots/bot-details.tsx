@@ -30,14 +30,15 @@ export function BotDetailsDrawer({ bot, section, onSection, onClose, children, d
   const tabs = sections.filter(tab=>!legacyDiscussionsOnly || tab.id!=="discussions" || section === "discussions");
   const dialog = useRef<HTMLDivElement>(null), id = useId();
   const [historyScroll, setHistoryScroll] = useState<HTMLDivElement | null>(null);
-  const [opener] = useState(() => typeof document === "undefined" ? null : document.activeElement);
+  const opener = useRef<HTMLElement | null>(null);
   useEffect(() => {
     dialog.current?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')
       ?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }, [section]);
   return <Dialog open onOpenChange={open => { if (!open) onClose(); }}>
     <DialogContent ref={dialog} className="bots-details left-auto right-0 top-0 z-[60] max-h-none w-full max-w-[500px] translate-x-0 translate-y-0 gap-0 overflow-hidden rounded-none border-0 p-0 sm:p-0" overlayClassName="z-[60]" aria-describedby={undefined}
-      onCloseAutoFocus={event => { event.preventDefault(); if (opener instanceof HTMLElement && opener.isConnected) opener.focus({ preventScroll: true }); }}>
+      onOpenAutoFocus={() => { opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; }}
+      onCloseAutoFocus={event => { event.preventDefault(); if (opener.current?.isConnected) opener.current.focus({ preventScroll: true }); }}>
       <header className="bots-details-heading">
         <div><span>Bot details</span><DialogTitle>{bot.name}</DialogTitle></div>
       </header>
