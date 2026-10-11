@@ -633,9 +633,9 @@ export function BotsWorkspace() {
               <div className="bots-empty-icon">
                 <BotIcon size={34} strokeWidth={1.4} />
               </div>
-              <h2>A conversation that keeps going.</h2>
-              <p>Give a bot a name, a purpose, and something to do.</p>
-              <button
+              <h2>{bots.length ? "Choose a bot" : "Create your first bot"}</h2>
+              <p>{bots.length ? "Select a conversation to continue." : "Give your bot a name and a purpose."}</p>
+              <Button
                 className="bots-primary"
                 onClick={() => {
                   createOperation.current = crypto.randomUUID();
@@ -644,7 +644,7 @@ export function BotsWorkspace() {
               >
                 <Plus size={17} />
                 Create a bot
-              </button>
+              </Button>
             </div>
           ) : (
             <>

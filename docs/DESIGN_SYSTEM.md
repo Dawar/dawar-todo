@@ -389,3 +389,6 @@ Queue lists and queued-message actions use shared Button, Input and NativeSelect
 
 ### Retained discussion history
 Legacy discussion cards/statuses use shared ghost buttons with semantic surfaces and readable13px metadata. Long names, headings and paging actions wrap; card toggles retain expanded state, and cancellation remains visibly destructive. History receipts, selected body paging and Stop/Continue semantics are unchanged.
+
+### Main chat surfaces
+Chat controls, history feedback, skeletons and focus states use semantic tokens. Secondary chat labels are at least 13px. The unselected workspace prompts selection when bots exist and creation only on first use. Draft, configuration, send and recovery behavior stays unchanged.
