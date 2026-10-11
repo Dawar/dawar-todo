@@ -456,3 +456,7 @@ Room navigation reports searches with no matches on the loaded page. Empty rooms
 Room message-marker jumps account for the current height of the sticky paging controls, including wrapped update actions, so the selected message header stays visible.
 
 Primary navigation labels use13px on mobile and14px on larger screens. Below360px the brand/project trigger keeps its icon and accessible full name while omitting an unreadable truncated text fragment.
+
+### Control boundary contrast
+
+Enabled shared controls use the `input` token for a visible boundary, separate from decorative `border`. Light input `#7c8980` has at least 3.22:1 contrast against background, card, muted and accent surfaces. Desktop dark input `#71859f` has at least 3.41:1 against its background, card and accent surfaces. These are opaque sRGB calculations; translucent composites, custom control overrides and disabled states require their own rendered assessment. Decorative separators retain the quieter border token. Opaque semantic body text and focus-ring pairs are recorded in the contrast evidence; this is not a claim that every composed screen passes accessibility checks.

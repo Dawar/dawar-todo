@@ -60,7 +60,7 @@
 }
 .bots-desktop-dialog {
   --background: #111722; --foreground: #f3f5fa; --card: #1c2533; --muted: #202634; --muted-foreground: #c2ccde;
-  --input: #425168; --border: #344052; --accent: #263247; --accent-foreground: #f3f5fa; --ring: #8bbcff;
+  --input: #71859f; --border: #344052; --accent: #263247; --accent-foreground: #f3f5fa; --ring: #8bbcff;
   --primary: #a7c9ff; --primary-foreground: #111722;
   --secondary: #263247; --secondary-foreground: #f3f5fa; --card-foreground: #f3f5fa;
   --destructive: #ffb4ae; --destructive-foreground: #111722;
