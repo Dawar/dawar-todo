@@ -31,6 +31,7 @@ import {foregroundSource} from './foreground-source.mjs';
 import {validatePrimary} from './primary-source.mjs';
 import {centralAgentCapabilities} from './agent-capabilities.mjs';
 import {storedRuntimeDefaults} from './runtime-defaults.mjs';
+import {agentSnapshot} from './agent-snapshot.mjs';
 import {agentConnectionURL,centralLoopback} from './central-loopback.mjs';
 const fingerprintLegacy=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
@@ -230,7 +231,8 @@ export class AgentTransport {
             if(m.method==='desktop.open'&&(!id(m.clientId)||!m.clientId.startsWith('browser:')))throw Error('A live authenticated parent browser is required.');
             const roomRead=ROOM_NATIVE_READS.has(m.method)||m.method==='portable.roomQuestion'||m.method==='execution.config'&&m.params?.contextId;
             const work=()=>roomRead?this.collaboration.readOwner(m.method,m.botId,m.params,m.roomScope):OPERATOR_NODE_READS.has(m.method)?this.operator.read(m.method,m.botId,m.params,m.epoch):this.runtime.handle({method:m.method,botId:m.botId,params:m.params,clientId:m.method==='desktop.open'?m.clientId:`hub:${this.enrollment.nodeId}`});
-            const result=m.method==='desktop.open'?await this.runtime.maintenance.admit(work):await work();
+            const readResult=m.method==='desktop.open'?await this.runtime.maintenance.admit(work):await work();
+            const result=m.method==='snapshot'?agentSnapshot(readResult,m.botId):readResult;
             const after=this.journal.currentControl({bot_id:m.botId,epoch:m.epoch});
             if(!after||this.socket!==ws)return;
             const frame={type:'rpc-result',rpcId:m.rpcId,botId:m.botId,epoch:m.epoch,result,...(roomRead?{roomScope:m.roomScope}:{})};
