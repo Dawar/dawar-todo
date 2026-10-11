@@ -364,3 +364,7 @@ Scoped room activity uses concise loading/offline/error/empty feedback. Earlier/
 ### Task-list summary
 
 TaskListSummary centralizes the list heading, count/saving status, selection and clear-filter actions. Shared ghost buttons replace small bespoke links; both groups wrap at narrow widths. The task screen passes its existing selection/filter callbacks unchanged. Its sync pill now uses semantic foreground/background colors. Desktop populated/empty/saving states rendered; full task-store/offline and responsive integrated-page acceptance remain separate.
+
+### Activity metadata
+
+Compact activity previews, counts and elapsed labels use13px muted semantic text, preserving the two-line preview clamp and tabular clock digits. The elapsed tooltip is concise. Native timing matching, hidden-page subscription, offline freezing and unknown suppression are unchanged. Actual320 matching live elapsed/unknown suppression, long preview clamp and offline stale state observed in a local timing fixture; full timeline/visibility/terminal transitions remain pending.

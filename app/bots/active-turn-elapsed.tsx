@@ -50,5 +50,5 @@ export function ActiveTurnElapsed({ owner, bot, work, online }: { owner: string;
   const now = useSyncExternalStore(subscribeClock, observer.read, server);
   const value = now && start !== null && now >= start ? now - start : null;
   if (start === null || value === null) return null;
-  return <span className="bots-elapsed" title="Wall time since the confirmed native turn started; includes waiting, not compute time">· {durationLabel(value)} elapsed{!online && ' · stale'}</span>;
+  return <span className="bots-elapsed" title="Elapsed time, including waits">· {durationLabel(value)} elapsed{!online && ' · stale'}</span>;
 }
