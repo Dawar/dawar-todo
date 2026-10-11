@@ -23,7 +23,7 @@ export function SiteHeader({
   const [shortcutGuideOpen, setShortcutGuideOpen] = useState(false);
   const brand = (
     <>
-      <span className="grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-primary text-base font-semibold text-white shadow-sm" aria-hidden="true">✓</span>
+      <span className="grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-primary text-base font-semibold text-primary-foreground" aria-hidden="true">✓</span>
       <span className="min-w-0 truncate text-[15px] font-semibold tracking-[-0.02em]">{projectLabel}</span>
       {onProjectClick && <ActionIcon name="next" className="h-3.5 w-3.5 shrink-0 rotate-90 text-muted-foreground" />}
     </>
@@ -43,7 +43,7 @@ export function SiteHeader({
             onClick={onProjectClick}
             aria-label={`Choose project. Current selection: ${projectLabel}`}
             title="Choose project"
-            className="flex min-w-0 max-w-[38vw] items-center gap-2 rounded-lg text-left transition hover:text-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring sm:max-w-md sm:gap-2.5"
+            className="flex min-h-11 min-w-0 max-w-[38vw] items-center gap-2 rounded-lg text-left transition hover:text-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring sm:max-w-md sm:gap-2.5"
           >
             {brand}
           </button>
@@ -52,7 +52,7 @@ export function SiteHeader({
             href="/tasks"
             prefetch={false}
             onClick={(event) => navigate(event, "/tasks")}
-            className="flex min-w-0 max-w-[38vw] items-center gap-2 rounded-lg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring sm:gap-2.5"
+            className="flex min-h-11 min-w-0 max-w-[38vw] items-center gap-2 rounded-lg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring sm:gap-2.5"
           >
             {brand}
           </Link>
