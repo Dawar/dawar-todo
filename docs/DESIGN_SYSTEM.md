@@ -452,3 +452,5 @@ Chat detail and download failures use concise action-specific messages instead o
 The message navigation rail and its reserved gutter appear only when loaded message marks or earlier paging are available. Empty conversations retain a centered, uncluttered introduction.
 
 Room navigation reports searches with no matches on the loaded page. Empty rooms omit the message rail and gutter, matching foreground chat. Draft-storage failures provide concise recovery guidance without exposing parser exceptions.
+
+Room message-marker jumps account for the current height of the sticky paging controls, including wrapped update actions, so the selected message header stays visible.

@@ -132,6 +132,10 @@ function RoomComposer({owner,botId,room,bots,contexts,online,onSent,draft}:{owne
     {action.intent&&<details><summary>Read original unconfirmed post</summary><p>Saved recipients: {(action.intent.params.recipients as string[]??[]).map(id=>bots.find(b=>b.id===id)?.name??id).join(', ')||'none'}</p><BotMessage item={body(action.intent.id,String(action.intent.params.text??''))} botId={botId} attachments={[]} download={ignore}/></details>}{action.accepted&&<small>Original post accepted; per-bot delivery and completion are shown separately.</small>}
   </form>;
 }
+function roomTickOffset(element:HTMLElement) {
+  const navigation=element.querySelector<HTMLElement>('.bots-room-feed-content > nav');
+  return Math.max(24,(navigation?.getBoundingClientRect().height??0)+12);
+}
 export function RoomConversation({owner,botId,roomId,bots,online,onBack}:{owner:string;botId:string;roomId:string;bots:Bot[];online:boolean;onBack:()=>void}) {
   const supported=client.snapshot?.capabilities?.collaborationRooms===1;
   const read=useRoomFeed(owner,botId,roomId,online,supported);
@@ -149,8 +153,9 @@ export function RoomConversation({owner,botId,roomId,bots,online,onBack}:{owner:
     const node=[...feed.current.querySelectorAll<HTMLElement>('[data-post-id]')].find(node=>node.dataset.postId===post?.id);
     if(!post||!node)return;
     tickAnchor.current=post.id;
-    read.remember(false,{id:post.id,offset:24});
-    feed.current.scrollTop+=node.getBoundingClientRect().top-feed.current.getBoundingClientRect().top-24;
+    const offset=roomTickOffset(feed.current);
+    read.remember(false,{id:post.id,offset});
+    feed.current.scrollTop+=node.getBoundingClientRect().top-feed.current.getBoundingClientRect().top-offset;
   };
   useLayoutEffect(()=>{
     tickAnchor.current=null;
@@ -160,7 +165,7 @@ export function RoomConversation({owner,botId,roomId,bots,online,onBack}:{owner:
       frame=0;if(!tickAnchor.current||client.owner!==owner)return;
       const node=[...element.querySelectorAll<HTMLElement>('[data-post-id]')].find(node=>node.dataset.postId===tickAnchor.current);
       if(!node){tickAnchor.current=null;return;}
-      element.scrollTop+=node.getBoundingClientRect().top-element.getBoundingClientRect().top-24;
+      element.scrollTop+=node.getBoundingClientRect().top-element.getBoundingClientRect().top-roomTickOffset(element);
     };
     const resize=new ResizeObserver(()=>{if(!frame)frame=requestAnimationFrame(restore);});resize.observe(element);resize.observe(body);
     return()=>{resize.disconnect();cancelAnimationFrame(frame);};
@@ -177,7 +182,7 @@ export function RoomConversation({owner,botId,roomId,bots,online,onBack}:{owner:
     {room&&<RoomControls key={`${room.id}:${room.revision}`} owner={owner} botId={botId} room={room} bots={bots} online={online&&supported} onUpdated={read.refresh}/>}
     <div className={`bots-room-tick-timeline${showTicks?' has-message-ticks':''}`}><div className="bots-room-feed" ref={feed} onWheel={()=>{tickAnchor.current=null;}} onTouchStart={()=>{tickAnchor.current=null;}} onKeyDownCapture={()=>{tickAnchor.current=null;}} onPointerDownCapture={()=>{tickAnchor.current=null;}} onScroll={()=>{
       const e=feed.current;if(!e)return;
-      if(tickAnchor.current){read.remember(false,{id:tickAnchor.current,offset:24});return;}
+      if(tickAnchor.current){read.remember(false,{id:tickAnchor.current,offset:roomTickOffset(e)});return;}
       const following=e.scrollHeight-e.scrollTop-e.clientHeight<80,top=e.getBoundingClientRect().top;
       const visible=[...e.querySelectorAll<HTMLElement>('[data-post-id]')].filter(node=>node.getBoundingClientRect().bottom>top&&node.getBoundingClientRect().top<top+e.clientHeight);
       const node=visible.find(node=>node.dataset.postId===read.anchor?.id)??visible[0];
