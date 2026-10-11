@@ -1,0 +1,16 @@
+.bots-upload-entry { display:flex; flex-direction:column; align-items:flex-start; gap:8px; flex:0 0 auto; max-width:100%; }
+.bots-upload-file, .bots-upload-image { position:relative; border:1px solid var(--border); border-radius:var(--radius); background:var(--card); color:var(--foreground); flex-shrink:0; }
+.bots-upload-file { display:flex; align-items:center; gap:4px; padding:4px; width:280px; max-width:100%; }
+.bots-upload-label { display:grid; min-width:0; }
+.bots-upload-name, .bots-upload-file .bots-attachment-open { display:flex; align-items:center; justify-content:flex-start; gap:8px; min-width:0; height:auto; min-height:44px; padding:8px; white-space:normal; text-align:left; font-size:13px; overflow-wrap:anywhere; }
+.bots-upload-name svg { flex-shrink:0; }
+.bots-upload-status { padding:0 8px 6px; color:var(--muted-foreground); font-size:12px; line-height:1.4; }
+.bots-upload-remove { flex-shrink:0; }
+.bots-upload-image { display:block; width:96px; height:96px; overflow:hidden; }
+.bots-upload-image .bots-attachment-open { display:grid; place-items:center; width:100%; height:100%; padding:0; border-radius:0; }
+.bots-upload-image img { width:100%; height:100%; object-fit:cover; }
+.bots-upload-image .bots-upload-remove { position:absolute; top:2px; right:2px; background:var(--card); color:var(--foreground); box-shadow:0 1px 4px #0002; }
+.bots-upload-progress { position:absolute; inset-inline:0; bottom:0; padding:3px 4px; background:var(--card); color:var(--muted-foreground); font-size:12px; text-align:center; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; pointer-events:none; }
+.bots-upload-error { min-width:160px; max-width:280px; color:var(--destructive); font-size:13px; line-height:1.5; overflow-wrap:anywhere; }
+.bots-keyboard-open .bots-upload-image { width:80px; height:80px; }
+.bots-run-reply .bots-upload-list { width:100%; margin:0; }

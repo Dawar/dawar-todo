@@ -1,6 +1,8 @@
 /* eslint-disable @next/next/no-img-element -- Staged local bytes use browser object URLs. */
 import { useCallback, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
+import { Button } from "@/components/ui/button";
+import "./composer-attachments.css";
 import { Paperclip, X } from "lucide-react";
 import type { BotComposer } from "./composer-controller";
 import { UploadThumbnail } from "./upload-thumbnail";
@@ -45,11 +47,15 @@ function ComposerAttachment({ composer, file, index, online }: { composer: BotCo
     setError(""); setOpen(true);
   };
   const thumbnail = composer.files.has(file.id) ? <LocalPreview file={composer.files.get(file.id)} /> : file.remote?.ready ? <UploadThumbnail botId={file.remote.botId} attachmentId={file.remote.id} online={online} /> : <LocalPreview />;
-  return <><span className={image ? "bots-upload-image" : undefined} title={[file.name, file.error || status].filter(Boolean).join(" · ")}>
-    {image || pdf || textDocument ? <button type="button" className="bots-attachment-open" aria-label={`Open ${file.name}`} aria-haspopup="dialog" onClick={view}>{image ? thumbnail : file.name}</button> : file.name}
-    {status && <span className={image ? "bots-upload-progress" : undefined}>{status}</span>}
-    <button type="button" disabled={locked} aria-label={`Remove ${image ? `image ${index + 1}: ` : ""}${file.name}`} onClick={() => composer.removeFile(file.id)}><X size={13} aria-hidden="true" /></button>
-  </span>{error && <span role="alert">{error}</span>}{open && createPortal(<ArtifactViewer item={item} owner={composer.owner} online={online} originalFile={composer.files.get(file.id)} sourceAttachment={file.remote} initialSubmission={initialSubmission} readOnly={!canReview} onClose={close} />, document.body)}</>;
+  const preview = image || pdf || textDocument
+    ? <Button variant="ghost" type="button" className="bots-attachment-open" aria-label={`Open ${file.name}`} aria-haspopup="dialog" onClick={view}>{image ? thumbnail : <><Paperclip aria-hidden="true" /><span>{file.name}</span></>}</Button>
+    : <span className="bots-upload-name"><Paperclip size={16} aria-hidden="true" /><span>{file.name}</span></span>;
+  return <><span className="bots-upload-entry"><span className={image ? "bots-upload-image" : "bots-upload-file"} title={[file.name, file.error || status].filter(Boolean).join(" · ")}>
+    {image ? preview : <span className="bots-upload-label">{preview}{status && <span className="bots-upload-status">{status}</span>}</span>}
+    {image && status && <span className="bots-upload-progress">{status}</span>}
+    <Button variant="ghost" size="icon" className="bots-upload-remove" type="button" disabled={locked} aria-label={`Remove ${image ? `image ${index + 1}: ` : ""}${file.name}`} onClick={() => composer.removeFile(file.id)}><X aria-hidden="true" /></Button>
+  </span>{error && <span className="bots-upload-error" role="alert">{error}</span>}</span>{open && createPortal(<ArtifactViewer item={item} owner={composer.owner} online={online} originalFile={composer.files.get(file.id)} sourceAttachment={file.remote} initialSubmission={initialSubmission} readOnly={!canReview} onClose={close} />, document.body)}</>;
+
 }
 export function ComposerAttachments({ composer }: { composer: BotComposer }) {
   const owner = useSyncExternalStore(botsClient.subscribe, () => botsClient.owner, () => "");
@@ -74,11 +80,11 @@ export function ComposerStatus({ composer, error }: { composer: BotComposer | nu
   const detail = storageError || composer?.actionError || (operation && !composer?.sendingNow ? operation.error : "") || uploadErrors.map(file=>`${file.name}: ${file.error}`).join(" · ");
   if (!detail && !profile) return null;
   return <>{profile && <div className="bots-draft-status" role={profile.state === "blocked" ? "alert" : "status"}>
-    <span>{profile.message}{profile.bytes !== undefined ? ` (${Math.ceil(profile.bytes / 1024)} KiB memory.)` : ""}</span>
+    <span>{profile.message}</span>
   </div>}{detail && <div className="bots-draft-status" role="alert"><span>{detail}</span>
-    <button type="button" disabled={composer?.sendingNow} onClick={()=>{
+    <Button variant="ghost" size="sm" type="button" disabled={composer?.sendingNow} onClick={()=>{
       if (operation) void composer?.send();
       else { void composer?.retry(); void botComposers.recoverOwner(); }
-    }}>Retry</button>
+    }}>Retry</Button>
   </div>}</>;
 }

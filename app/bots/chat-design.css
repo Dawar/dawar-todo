@@ -52,7 +52,9 @@ details[open] > summary > .bots-disclosure-chevron { transform: rotate(90deg); }
 .bots-send:not(:disabled):hover { background: #195d40; }
 .bots-send:not(:disabled):active { transform: scale(.95); }
 .bots-queue-icon { background: transparent; }
-.bots-draft-status { width: min(calc(100% - 32px), var(--chat-width)); margin: 6px auto; padding: 0; border-radius: 12px; border: 1px solid #eadfd0; background: #fffcf7; color: #735d40; font-size: 12px; line-height: 1.5; }
+.bots-draft-status { width:min(calc(100% - 32px),var(--chat-width)); margin:8px auto; padding:8px 12px; border-radius:var(--radius); border:1px solid var(--border); background:var(--muted); color:var(--muted-foreground); font-size:13px; line-height:1.5; }
+.bots-draft-status[role="alert"] { color:var(--destructive); background:color-mix(in srgb,var(--destructive) 5%,var(--background)); }
+.bots-draft-status > span { flex:1; min-width:0; }
 .bots-recovery-details > summary { min-height: 40px; padding: 10px 12px; font-weight: 600; }
 .bots-recovery-content { padding: 0 12px 12px; }
 .bots-recovery-content button { min-height: 36px; }
@@ -101,5 +103,5 @@ details[open] > summary > .bots-disclosure-chevron { transform: rotate(90deg); }
 .bots-scheduled-message-mark { display:flex; align-items:center; width:fit-content; color:#8a978f; margin:10px 0 -7px 0; }
 .bots-extension { display:inline-block;margin-right:7px;padding:1px 5px;border-radius:5px;background:#eaf1ec;color:#607e6b;font-size:11px;font-weight:500;vertical-align:middle; }
 .bots-chat-heading .bots-extension { margin-left:8px; }
-.bots-draft-status { display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-size:12px; }.bots-draft-status button { min-height:36px;text-decoration:underline; }
+.bots-draft-status { display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-size:13px; }
 .bots-conversation-heading .bots-extension { margin-left:8px;margin-right:0; }

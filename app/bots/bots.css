@@ -949,66 +949,7 @@ html.bots-viewport-locked body {
   padding: 7px 0;
   flex-shrink: 0;
 }
-.bots-artifacts button,
-.bots-upload-list > span {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 6px 9px;
-  border: 1px solid #dce6df;
-  border-radius: 8px;
-  font-size: 12px;
-  white-space: nowrap;
-  color: #5c7866;
-}
-.bots-upload-list > .bots-upload-image {
-  position: relative;
-  display: grid;
-  place-items: center;
-  flex: 0 0 64px;
-  width: 64px;
-  height: 64px;
-  padding: 0;
-  overflow: hidden;
-  white-space: normal;
-}
-.bots-upload-image img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-.bots-upload-image > button {
-  position: absolute;
-  top: 2px;
-  right: 2px;
-  display: grid;
-  place-items: center;
-  width: 30px;
-  height: 30px;
-  border-radius: 50%;
-  background: #20392dcc;
-  color: #fff;
-}
-.bots-upload-image > button:hover {
-  background: #a43c38;
-}
-.bots-upload-list > span:not(.bots-upload-image) > button {
-  display: grid;
-  place-items: center;
-  flex-shrink: 0;
-  width: 28px;
-  height: 28px;
-}
-.bots-upload-progress {
-  position: absolute;
-  inset-inline: 0;
-  bottom: 0;
-  padding: 3px;
-  background: #20392dcc;
-  color: #fff;
-  font-size: 10px;
-  text-align: center;
-}
+.bots-artifacts button { display:flex; align-items:center; gap:7px; padding:6px 9px; border:1px solid var(--border); border-radius:var(--radius); font-size:12px; white-space:nowrap; color:var(--muted-foreground); }
 .bots-artifact-link {
   display: inline-flex;
   gap: 5px;
@@ -1093,7 +1034,6 @@ html.bots-viewport-locked body {
   overflow-y: auto;
 }
 .bots-draft-status [role="alert"] { color: #9c342c; }
-.bots-draft-status button { text-decoration: underline; margin-left: 6px; }
 .bots-draft-status select { max-width: 100%; }
 
 .bots-detail-status { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 8px 0; font-size: 12px; color: #537361; }
@@ -1117,9 +1057,7 @@ html.bots-viewport-locked body {
 .bots-keyboard-open .bots-controls { padding-top: 3px; }
 .bots-keyboard-open .bots-controls select, .bots-keyboard-open .bots-controls button { padding-block: 3px; }
 .bots-keyboard-open .bots-upload-list { padding-block: 3px; }
-.bots-keyboard-open .bots-upload-list > .bots-upload-image { width: 48px; height: 48px; flex-basis: 48px; }
 .bots-keyboard-open .bots-prompt-queue { max-height: 70px; margin-top: 3px; padding: 4px 8px; }
-.bots-upload-progress { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-height: 1.4em; }
 
 .bots-feed-loading { position: absolute; z-index: 2; top: 8px; left: 50%; transform: translateX(-50%); padding: 5px 12px; border-radius: 20px; background: var(--surface, #fff); box-shadow: 0 2px 12px #0001; color: #64756b; font-size: 12px; pointer-events: none; white-space: nowrap; }
 
