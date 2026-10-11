@@ -7,6 +7,9 @@ export function loadConfig(path = process.env.DAWAR_HUB_CONFIG) {
   const c = JSON.parse(readPrivate(path));
   if (c.version !== 1 || !['hub','agent','both'].includes(c.mode) || !isAbsolute(c.dataDirectory)) throw Error('Invalid portable configuration.');
   c.dataDirectory = resolve(c.dataDirectory);
+  if(c.externalSite!==undefined&&typeof c.externalSite!=='boolean')throw Error('Invalid external site supervision.');
+  if(c.backendReleaseDirectory!==undefined&&(!isAbsolute(c.backendReleaseDirectory)||c.mode!=='both'||c.externalSite!==true))
+    throw Error('An installed backend override requires an absolute release and separately supervised site.');
   centralLoopback(c);
   if(c.agent?.centralRouting!==undefined&&typeof c.agent.centralRouting!=='boolean')throw Error('Invalid central routing configuration.');
   if(c.agent?.desktops!==undefined){

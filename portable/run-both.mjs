@@ -1,7 +1,7 @@
 import {spawn} from 'node:child_process';
 import {createServer} from 'node:http';
 import {join} from 'node:path';
-import {fileURLToPath} from 'node:url';
+import {fileURLToPath,pathToFileURL} from 'node:url';
 import {loadConfig} from './config.mjs';
 import {RUNTIME_VERSION} from './protocol.mjs';
 
@@ -12,15 +12,19 @@ export async function runBoth(configPath) {
   if(c.mode!=='both'||!c.agentConfigFile)throw Error('Combined installation requires its separate private agent configuration.');
   const a=loadConfig(c.agentConfigFile),root=fileURLToPath(new URL('..',import.meta.url));
   if(a.mode!=='agent'||a.dataDirectory===c.dataDirectory||a.agent.loopbackHubPort!==(c.gatewayPort??3210))throw Error('Combined role storage/transport differs.');
-  const {startGateway}=await import('../dist/portable/gateway.mjs');
-  const {runAgent}=await import('../bot-bridge/portable-agent.mjs');
+  // A web-only release can retain the exact installed backend and its native
+  // process. On later service starts, use that same verified backend release
+  // while systemd owns the independently updated site.
+  const backendRoot=c.backendReleaseDirectory??root;
+  const {startGateway}=await import(pathToFileURL(join(backendRoot,'dist/portable/gateway.mjs')).href);
+  const {runAgent}=await import(pathToFileURL(join(backendRoot,'bot-bridge/portable-agent.mjs')).href);
   const gateway=startGateway(c);
   await new Promise((resolve,reject)=>{if(gateway.server.listening)return resolve();gateway.server.once('listening',resolve);gateway.server.once('error',reject);});
-  const child=spawn(process.execPath,[join(root,'.next-portable/standalone/server.js')],{cwd:join(root,'.next-portable/standalone'),
+  const child=c.externalSite===true?null:spawn(process.execPath,[join(root,'.next-portable/standalone/server.js')],{cwd:join(root,'.next-portable/standalone'),
     env:{...process.env,DAWAR_HUB_CONFIG:configPath,PORT:String(c.sitePort??3211),HOSTNAME:'127.0.0.1'},stdio:'inherit'});
   let agent,stopping=false,siteReady=false;
-  child.on('exit',()=>{siteReady=false;if(!stopping)console.error('Portable site exited; execution health is unavailable. Inspect the original service, never blindly restart.');});
-  try{agent=await runAgent(a);}catch(error){await gateway.close();child.kill('SIGTERM');throw error;}
+  child?.on('exit',()=>{siteReady=false;if(!stopping)console.error('Portable site exited; execution health is unavailable. Inspect the original service, never blindly restart.');});
+  try{agent=await runAgent(a);}catch(error){await gateway.close();child?.kill('SIGTERM');throw error;}
   const checkSite=async()=>{try{const r=await fetch(`http://127.0.0.1:${c.sitePort??3211}/api/health`,{signal:AbortSignal.timeout(2000)});await r.body?.cancel();siteReady=r.status<500;}catch{siteReady=false;}};
   await checkSite();const siteTimer=setInterval(()=>void checkSite(),5000);
   const health=createServer((req,res)=>{
@@ -42,7 +46,7 @@ export async function runBoth(configPath) {
     await gateway.close();stopping=true;clearInterval(siteTimer);health.close();agent.transport.close();
     agent.runtime.usage.stop();agent.runtime.maintenance.close();agent.runtime.secure?.close();
     agent.runtime.codex.close();await agent.runtime.desktops?.close();await agent.manager.close();
-    agent.journal.close();agent.runtime.store.close();child.kill('SIGTERM');
+    agent.journal.close();agent.runtime.store.close();child?.kill('SIGTERM');
   };
   for(const signal of ['SIGINT','SIGTERM'])process.once(signal,()=>{void close().then(()=>process.exit(0)).catch(()=>console.error('Portable shutdown blocked by active or unconfirmed work; preserve the service and original receipts.'));});
   return {gateway,agent,health,close};
