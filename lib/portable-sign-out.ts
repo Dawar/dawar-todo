@@ -2,6 +2,11 @@ export const SIGNED_OUT_KEY = "dawar-portable-signed-out";
 export const SIGNED_OUT_EVENT = "dawar-portable-sign-out";
 export const SIGNED_OUT_PATH = "/signout-with-chatgpt";
 
+export function signOutChannel() {
+  try { return typeof BroadcastChannel === "undefined" ? null : new BroadcastChannel(SIGNED_OUT_EVENT); }
+  catch { return null; }
+}
+
 export function portableSignedOut() {
   try { if (localStorage.getItem(SIGNED_OUT_KEY)) return true; } catch { /* Private storage can be unavailable. */ }
   return !document.cookie.split(";").some((part) => /^__Host-dawar-csrf=[A-Za-z0-9_-]{43}$/.test(part.trim()));
@@ -13,11 +18,9 @@ export function preparePortableSignIn() {
 
 function notifySignedOut() {
   try { localStorage.setItem(SIGNED_OUT_KEY, String(Date.now())); } catch { /* Keep the current tab safe without storage. */ }
-  if (typeof BroadcastChannel !== "undefined") {
-    const channel = new BroadcastChannel(SIGNED_OUT_EVENT);
-    channel.postMessage("signed-out");
-    channel.close();
-  }
+  const channel = signOutChannel();
+  try { channel?.postMessage("signed-out"); } catch { /* Session revocation still protects other tabs. */ }
+  finally { channel?.close(); }
   window.dispatchEvent(new Event(SIGNED_OUT_EVENT));
   window.location.replace(SIGNED_OUT_PATH);
 }
