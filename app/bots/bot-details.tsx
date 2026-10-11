@@ -57,14 +57,14 @@ export function BotDetailsDrawer({ bot, section, onSection, onClose, children, d
         <Button type="button" variant="ghost" size="icon" aria-label="Close bot details" onClick={onClose}><X size={20} /></Button>
       </header>
       <div className="bots-details-nav" role="tablist" aria-label="Bot details sections">
-        {tabs.map(({ id: value, label, icon: Icon }) => <button key={value} id={`${id}-${value}`} role="tab" aria-selected={section === value} aria-controls={`${id}-${value}-panel`} tabIndex={section === value ? 0 : -1}
+        {tabs.map(({ id: value, label, icon: Icon }) => <Button type="button" variant="ghost" size="sm" key={value} id={`${id}-${value}`} role="tab" aria-selected={section === value} aria-controls={`${id}-${value}-panel`} tabIndex={section === value ? 0 : -1}
           onClick={() => onSection(value)} onKeyDown={event => {
             if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
             event.preventDefault();
             const index = tabs.findIndex(item => item.id === section);
             const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : (index + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
             const target = tabs[next].id; onSection(target); document.getElementById(`${id}-${target}`)?.focus();
-          }}><Icon size={17} aria-hidden="true" /><span>{label}{value === "discussions" && discussionAttention > 0 && <small className="bots-discussion-badge" aria-label={`${discussionAttention} discussions need attention`}>{discussionAttention}</small>}</span></button>)}
+          }}><Icon size={17} aria-hidden="true" /><span>{label}{value === "discussions" && discussionAttention > 0 && <small className="bots-discussion-badge" aria-label={`${discussionAttention} discussions need attention`}>{discussionAttention}</small>}</span></Button>)}
       </div>
       {sections.map(({ id: value }) => <Activity key={value} mode={section === value ? "visible" : "hidden"}>
         <div ref={value === "history" ? setHistoryScroll : undefined} className={`bots-details-panel is-${value}`} role="tabpanel" id={`${id}-${value}-panel`} aria-labelledby={`${id}-${value}`} tabIndex={0}>{value === "history" ? <HistoryScrollContext value={historyScroll}>{children[value]}</HistoryScrollContext> : children[value]}</div>
