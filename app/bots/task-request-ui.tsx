@@ -313,14 +313,41 @@ export function TaskRequestCard({ request, capture }: {
     request: TaskRequest;
     capture?: () => void;
 }) {
-    const ui = useTaskRequests(), s = request.submission;
-    return <div data-task-request-id={request.id}><LazyDetails className="task-request-card" beforeToggle={capture} summary={<>Task Request · {request.spec.title} · {requestStatus[s?.submittedAt ? s.status : request.status]}</>}>{() => <><small>{new Date(request.createdAt).toLocaleString()}</small><FormMarkdown text={request.spec.instructions}/><p>Source: {request.source.question ? 'Original question' : request.source.itemId ? 'Original bot response' : 'Bot-authored request draft'} · {request.source.turnId ?? request.source.question?.turnId ?? request.source.threadId}</p>{s?.submittedAt && <><p>Contributor: {s.contributorName || 'Unnamed'} · self-reported</p><dl>{request.spec.fields.filter(f => !f.kind.startsWith('secure-')).map(f => <div key={f.id}><dt>{f.label}</dt><dd>{Array.isArray(s.values[f.id]) ? (s.values[f.id] as string[]).map(id => f.choices?.find(c => c.id === id)?.label ?? id).join(', ') : s.values[f.id]}</dd>{s.files.filter(v => v.fieldId === f.id).map(file => <small key={file.id}>{file.name} · {file.ready ? 'Ready' : 'Unconfirmed'}</small>)}</div>)}</dl>{s.secure && <p>Private receipt · {s.secure.modelRead ? 'Model reading permitted' : 'Private use only'} · expires {new Date(s.secure.expiresAt).toLocaleString()}</p>}{s.delivery?.reason && <p>{s.delivery.reason}</p>}<small>Received input does not prove work completion.</small></>}{ui && <Button className="task-request-control" variant="outline" type="button" disabled={!ui.online} onClick={() => ui.openRequest(request)}>{request.status === 'draft' ? 'Review and publish' : 'Owner details'}</Button>}</>}</LazyDetails></div>;
+    const ui = useTaskRequests(), submission = request.submission;
+    const status = submission?.submittedAt ? submission.status : request.status;
+    return <div data-task-request-id={request.id}>
+      <LazyDetails className="task-request-card" beforeToggle={capture} summary={<span className="task-request-summary"><span>{request.spec.title}</span><span className="task-request-status">{requestStatus[status] ?? status}</span></span>}>
+        {() => <div className="task-request-card-body">
+          <time className="text-xs text-muted-foreground" dateTime={request.createdAt}>{new Date(request.createdAt).toLocaleString()}</time>
+          <FormMarkdown text={request.spec.instructions}/>
+          <details className="task-request-source"><summary>Source</summary><p>{request.source.question ? 'Original question' : request.source.itemId ? 'Original bot response' : 'Bot-authored request draft'}</p><code>{request.source.turnId ?? request.source.question?.turnId ?? request.source.threadId}</code></details>
+          {submission?.submittedAt && <>
+            <p className="text-sm text-muted-foreground">From {submission.contributorName || 'Unnamed contributor'} · self-reported</p>
+            <dl className="task-request-answers">{request.spec.fields.filter(field => !field.kind.startsWith('secure-')).map(field => {
+              const value = submission.values[field.id];
+              const files = submission.files.filter(file => file.fieldId === field.id);
+              const answer = Array.isArray(value) ? value.map(id => field.choices?.find(choice => choice.id === id)?.label ?? id).join(', ') : value;
+              return <div key={field.id}><dt>{field.label}</dt>{(answer || !files.length) && <dd>{answer || 'No answer provided'}</dd>}{files.map(file => <small key={file.id}>{file.name} · {file.ready ? 'Ready' : 'Unconfirmed'}</small>)}</div>;
+            })}</dl>
+            {submission.secure && <p className="text-sm text-muted-foreground">Private receipt · {submission.secure.modelRead ? 'Model reading permitted' : 'Private use only'} · expires {new Date(submission.secure.expiresAt).toLocaleString()}</p>}
+            {submission.delivery?.reason && <p className="task-request-error">{submission.delivery.reason}</p>}
+          </>}
+          {ui && <div><Button className="task-request-control" variant="outline" type="button" disabled={!ui.online} onClick={() => ui.openRequest(request)}>{request.status === 'draft' ? 'Review and publish' : 'Details'}</Button></div>}
+        </div>}
+      </LazyDetails>
+    </div>;
 }
-export function TaskRequestAccess({ capture }: {
-    capture?: () => void;
-} = {}) {
+export function TaskRequestAccess({ capture }: { capture?: () => void } = {}) {
     const ui = useTaskRequests();
-    if (!ui?.supported)
-        return null;
-    return <details className="task-request-card"><summary onClick={capture}>Task Requests{ui.requests.length ? ` · ${ui.requests.length} on this page` : ''}</summary>{ui.loading && <p role="status">Checking requests…</p>}{ui.error && <p role="alert">{ui.error}</p>}{ui.requests.map(r => <Button className="task-request-control" variant="outline" key={r.id} type="button" onClick={() => ui.openRequest(r)}>{r.spec.title} · {requestStatus[r.submission?.submittedAt ? r.submission.status : r.status]}</Button>)}<div className="task-request-actions"><Button className="task-request-control" variant="outline" type="button" disabled={!ui.online || ui.loading} onClick={ui.latest}>Latest requests</Button>{ui.cursor && <Button className="task-request-control" variant="outline" type="button" disabled={!ui.online || ui.loading} onClick={ui.older}>Earlier requests</Button>}</div></details>;
+    if (!ui?.supported) return null;
+    return <details className="task-request-card">
+      <summary onClick={capture}>Task requests{ui.requests.length ? ` · ${ui.requests.length}` : ''}</summary>
+      <div className="task-request-card-body">
+        {ui.loading && <p role="status" className="text-sm text-muted-foreground">Loading requests…</p>}
+        {ui.error && <p role="alert" className="task-request-error">{ui.error}</p>}
+        {!ui.loading && !ui.error && !ui.requests.length && <p className="text-sm text-muted-foreground">{ui.online ? 'No requests on this page.' : 'Connect to load requests.'}</p>}
+        <ul className="task-request-list">{ui.requests.map(request => <li key={request.id}><Button className="task-request-control task-request-list-button" variant="ghost" type="button" disabled={!ui.online} onClick={() => ui.openRequest(request)}><span>{request.spec.title}</span><span className="task-request-status">{requestStatus[request.submission?.submittedAt ? request.submission.status : request.status]}</span></Button></li>)}</ul>
+        <div className="task-request-actions"><Button className="task-request-control" variant="outline" type="button" disabled={!ui.online || ui.loading} onClick={ui.latest}>Latest</Button>{ui.cursor && <Button className="task-request-control" variant="outline" type="button" disabled={!ui.online || ui.loading} onClick={ui.older}>Earlier</Button>}</div>
+      </div>
+    </details>;
 }

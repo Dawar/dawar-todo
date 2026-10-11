@@ -204,3 +204,7 @@ SavedDrafts binds each displayed read result to its owner and rejects a mismatch
 ### Guest field grouping
 
 Request groups retain semantic fieldset/legend markup with 16px spacing between fields and supporting group notes. The private model-read opt-in uses an aligned checkbox row instead of the text-field grid, with an 18px native checkbox and wrapped label. Actual320 and1280 previews confirm grouped spacing and checkbox alignment; the800 responsive input did not change the visible viewport and is not counted. Type/scoped lint pass; controller and consent defaults are unchanged.
+
+### Request cards and list
+
+Request cards separate title, status, timestamp and answers. Long titles and filenames wrap; empty ordinary answers are explicit, while file-only answers avoid a misleading empty-answer label. Technical source identifiers remain available behind Source. Private fields remain excluded from ordinary answer rendering. The lazy card still mounts its body only when opened. Request lists use shared ghost buttons with separate title/status and honest loading/empty/offline states. Actual1280/800/320 card fixture covers long content, multiline answers, private-field omission, uncertainty and nested Source; no real request mutation. List controller integration, all statuses and keyboard/device acceptance remain pending. Type/scoped lint pass.
