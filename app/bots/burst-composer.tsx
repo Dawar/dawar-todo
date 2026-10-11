@@ -1,4 +1,5 @@
 "use client";
+import { Button } from "@/components/ui/button";
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { ArrowUp, Copy, Paperclip, Pause, Play, Trash2 } from 'lucide-react';
 import { ReplyQuote, ReplyAction } from "./message-reply";
@@ -120,12 +121,12 @@ function BurstBubble({ message, batch, botId, attachments, quietSeconds, online,
       </div>
     </div>
     {held && controls && <div className="bots-burst-message-actions">
-      <button type="button" title={truncated ? 'Reconnect for complete message text' : 'Copy message text'} aria-label="Copy held message text" disabled={truncated} onClick={() => {
+      <Button variant="ghost" size="sm" type="button" title={truncated ? 'Reconnect for complete message text' : 'Copy message text'} aria-label="Copy held message text" disabled={truncated} onClick={() => {
         if (!navigator.clipboard) { setCopyStatus('Copy unavailable. Select the text to copy it.'); return; }
         void navigator.clipboard.writeText(message.text).then(() => setCopyStatus('Copied')).catch(() => setCopyStatus('Copy failed. Select the text to copy it.'));
-      }}><Copy size={14}/><span>Copy text</span></button>
-      <button type="button" title="Delete this held message" aria-label="Delete held message" disabled={!online || client.snapshot?.capabilities?.burstControls !== 1 || !controls.discardAction.ready || controls.discardAction.busy || !!controls.discardAction.intent || controls.action.busy || !!controls.action.intent || controls.queuePreparing || controls.queueAction.busy || !!controls.queueAction.intent}
-        onClick={() => void controls.discard([message.id], true).catch(() => {})}><Trash2 size={14}/><span>Delete</span></button>
+      }}><Copy size={14}/><span>Copy text</span></Button>
+      <Button variant="ghost" size="sm" type="button" title="Delete this held message" aria-label="Delete held message" disabled={!online || client.snapshot?.capabilities?.burstControls !== 1 || !controls.discardAction.ready || controls.discardAction.busy || !!controls.discardAction.intent || controls.action.busy || !!controls.action.intent || controls.queuePreparing || controls.queueAction.busy || !!controls.queueAction.intent}
+        onClick={() => void controls.discard([message.id], true).catch(() => {})}><Trash2 size={14}/><span>Delete</span></Button>
       {copyStatus && <small role="status">{copyStatus}</small>}
     </div>}
     {sent && replySource && threadId && onReply && <ReplyAction entry={replySource} botId={botId} threadId={threadId} partId={message.id} onReply={onReply}/>}
@@ -153,12 +154,12 @@ export function BurstControls({ burst, online, submitting = false }: { burst: Bu
     <div className="bots-burst-line">
       <small role="status">{!online ? 'Saved · waiting for connection' : pauseRequested ? 'Confirming pause…' : paused ? dispatching || uncertain ? 'Paused · earlier delivery already began' : 'Paused' : uncertain ? 'Checking delivery' : dispatching ? 'Sending' : batches.some(batch => batch.state === 'preparing') ? 'Preparing to send' : ''}</small>
       <div><BurstQueueControl burst={burst} online={online} disabled={baseBusy || uncertain || dispatching || failed || !count} />{!action.intent && <>
-        {paused && controlsAvailable && !failed && <button type="button" aria-label="Resume entire burst" title="Resume countdown" disabled={busy || uncertain || dispatching} onClick={() => void action.perform('bursts.resume', {}).then(refreshDelivery).catch(() => {})}><Play size={16}/>Resume</button>}
-        {canStart && <button type="button" aria-label={failed ? 'Retry and send retained messages' : 'Send waiting messages now'} title="Send now" disabled={busy} onClick={() => void action.perform('bursts.start', {}).then(refreshDelivery).catch(() => {})}><ArrowUp size={16}/>{failed ? 'Retry' : 'Send now'}</button>}
-        {!paused && (hasPending || dispatching) && <button type="button" aria-label="Pause burst" title="Pause unsent messages" disabled={busy} onClick={() => void action.perform('bursts.stop', {}).then(refreshDelivery).catch(() => {})}><Pause size={16}/>Pause</button>}
-      </>}{heldIds.length > 0 && controlsAvailable && <button type="button" aria-label="Delete all held messages" title="Delete all held messages" disabled={busy || !discardAction.ready || !!action.intent} onClick={() => void discard(heldIds, true).catch(() => {})}><Trash2 size={16}/></button>}</div>
+        {paused && controlsAvailable && !failed && <Button variant="ghost" size="sm" type="button" aria-label="Resume entire burst" title="Resume countdown" disabled={busy || uncertain || dispatching} onClick={() => void action.perform('bursts.resume', {}).then(refreshDelivery).catch(() => {})}><Play size={16}/>Resume</Button>}
+        {canStart && <Button variant="ghost" size="sm" type="button" aria-label={failed ? 'Retry and send retained messages' : 'Send waiting messages now'} title="Send now" disabled={busy} onClick={() => void action.perform('bursts.start', {}).then(refreshDelivery).catch(() => {})}><ArrowUp size={16}/>{failed ? 'Retry' : 'Send now'}</Button>}
+        {!paused && (hasPending || dispatching) && <Button variant="ghost" size="sm" type="button" aria-label="Pause burst" title="Pause unsent messages" disabled={busy} onClick={() => void action.perform('bursts.stop', {}).then(refreshDelivery).catch(() => {})}><Pause size={16}/>Pause</Button>}
+      </>}{heldIds.length > 0 && controlsAvailable && <Button variant="ghost" size="sm" type="button" aria-label="Delete all held messages" title="Delete all held messages" disabled={busy || !discardAction.ready || !!action.intent} onClick={() => void discard(heldIds, true).catch(() => {})}><Trash2 size={16}/></Button>}</div>
     </div>
-    {discardAction.error && <div className="bots-burst-recovery" role="alert">{discardAction.error}{discardAction.intent && <button disabled={!online || discardAction.busy} onClick={() => void discardAction.retry().then(refreshDelivery).catch(() => {})}>Check deletion</button>}</div>}
-    {(error || action.error || failed || action.intent) && <div className="bots-burst-recovery" role="alert">{deliveryStatus}{action.intent ? <button disabled={!online || action.busy} onClick={() => void action.retry().then(refreshDelivery).catch(() => {})}>Check delivery</button> : <button disabled={!online} onClick={refreshDelivery}>Check delivery</button>}</div>}
+    {discardAction.error && <div className="bots-burst-recovery" role="alert">{discardAction.error}{discardAction.intent && <Button variant="ghost" size="sm" type="button" disabled={!online || discardAction.busy} onClick={() => void discardAction.retry().then(refreshDelivery).catch(() => {})}>Check deletion</Button>}</div>}
+    {(error || action.error || failed || action.intent) && <div className="bots-burst-recovery" role="alert">{deliveryStatus}{action.intent ? <Button variant="ghost" size="sm" type="button" disabled={!online || action.busy} onClick={() => void action.retry().then(refreshDelivery).catch(() => {})}>Check delivery</Button> : <Button variant="ghost" size="sm" type="button" disabled={!online} onClick={refreshDelivery}>Check delivery</Button>}</div>}
   </div>;
 }

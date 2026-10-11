@@ -1,4 +1,5 @@
 "use client";
+import { Button } from "@/components/ui/button";
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ListPlus } from 'lucide-react';
 import type { BotQueueList, BotQueuedSubmission } from '../../lib/bots-types';
@@ -86,16 +87,16 @@ export function BurstQueueControl({burst, online, disabled}: {burst:BurstConvers
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [choice,activityKey]);
   const queueAvailable = client.snapshot?.capabilities?.burstQueue === 1;
-  if (!queueAvailable) return queueAction.intent || queueAction.error ? <div className="bots-burst-recovery" role="status">Connect to the updated service to confirm the saved queue placement. Its original transfer ID is retained.</div> : null;
+  if (!queueAvailable) return queueAction.intent || queueAction.error ? <div className="bots-burst-recovery" role="status">Reconnect to confirm queue placement.</div> : null;
   return <>
-    <button type="button" aria-label="Queue waiting burst messages" disabled={disabled || working || !!choice || !queueAction.ready || !!queueAction.intent}
-      onClick={() => void open()}><ListPlus size={16}/>Queue</button>
+    <Button variant="ghost" size="sm" type="button" aria-label="Queue waiting burst messages" disabled={disabled || working || !!choice || !queueAction.ready || !!queueAction.intent}
+      onClick={() => void open()}><ListPlus size={16}/>Queue</Button>
     {choice && choice.activityKey === activityKey && <QueueDestinationPicker lists={choice.lists} returnFocus={choice.opener} disabled={disabled || working || !!queueAction.intent || !online}
-      description="Messages are paused on the server. Queued next starts when this bot is free; a manual list holds them until it is transferred. Cancel leaves the burst paused."
+      description="Messages stay paused until queued. Cancel keeps them paused."
       error={error || queueAction.error} onChoose={id => void choose(choice,id)} onClose={() => {intent.current++;setChoice(null);setQueuePreparing(false);setError('');}} />}
     {(error || queueAction.error) && !choice && <div className="bots-burst-recovery" role="alert">{queueAction.error || error}
-      {queueAction.intent && <button disabled={!online || queueAction.busy} onClick={() => void queueAction.retry().then(refreshDelivery).catch(()=>{})}>Check queue placement</button>}</div>}
-    {queueAction.intent && !queueAction.error && !error && <div className="bots-burst-recovery" role="status">Queue placement needs confirmation. The original transfer is saved.
-      <button disabled={!online || queueAction.busy} onClick={() => void queueAction.retry().then(refreshDelivery).catch(()=>{})}>Check queue placement</button></div>}
+      {queueAction.intent && <Button variant="ghost" size="sm" type="button" disabled={!online || queueAction.busy} onClick={() => void queueAction.retry().then(refreshDelivery).catch(()=>{})}>Check queue placement</Button>}</div>}
+    {queueAction.intent && !queueAction.error && !error && <div className="bots-burst-recovery" role="status">Queue placement unconfirmed.
+      <Button variant="ghost" size="sm" type="button" disabled={!online || queueAction.busy} onClick={() => void queueAction.retry().then(refreshDelivery).catch(()=>{})}>Check queue placement</Button></div>}
   </>;
 }

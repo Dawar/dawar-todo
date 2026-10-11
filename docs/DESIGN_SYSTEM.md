@@ -212,3 +212,7 @@ Request cards separate title, status, timestamp and answers. Long titles and fil
 ### Long-content pagination
 
 TextPages and ItemPages share compact pagination controls with shared outline icon buttons, accessible names, disabled boundaries and a polite page summary. Mobile targets are44px. Original16384-character slices, item page sizes and index offsets are retained; lazy disclosure mounting is unchanged. Actual320 fixture confirms text offsets0/16384/32768, keyboard Last, terminal disabled controls and final item range21–23. Full message/plan/diff integration, changing input, desktop and screen-reader acceptance remain pending. Type/scoped lint pass.
+
+### Burst controls
+
+Burst Copy/Delete/Queue/Resume/Send/Pause/recovery actions use shared ghost buttons, replacing legacy button geometry and focus overrides. Mobile touch targets remain44px and actions wrap; status/recovery text uses semantic colors and13px sizing. Queue guidance is concise while retaining paused/cancel and unconfirmed-state meaning. Actual320 paused and unconfirmed fixtures render with disabled Queue and no overflowing actions. All original event handlers, admission guards, operation identities and retry calls remain unchanged; no live actions were invoked. Type/scoped lint pass; connected countdown/queue/recovery/keyboard/desktop/device checks remain pending.
