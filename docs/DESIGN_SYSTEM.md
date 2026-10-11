@@ -404,3 +404,5 @@ Goal status pills and compact indicators use shared muted, accent and warning to
 Artifact galleries use semantic surfaces, subdued previews, shared focus colors and13px metadata. Viewer overlays and shadows derive from foreground opacity. Document/route borders use shared tokens; native route labels remain textual so color is supplementary. File content, sanitization and download behavior remain unchanged.
 
 PDF review attachments and error feedback use13px metadata. Canvas shadows derive from the shared foreground token; rendered PDF pages intentionally retain a white paper background to preserve document appearance.
+
+Conversation presence, retained recovery and burst metadata use13px semantic text. Pending message bubbles retain an opaque primary surface so white text remains readable; countdown fill uses a restrained primary tint. Timing, reduced-motion and delivery-state behavior are unchanged.
