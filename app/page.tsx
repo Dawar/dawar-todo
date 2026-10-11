@@ -54,6 +54,7 @@ import { zonedDateTimeInputValue, zonedLocalDateTimeToUtc } from "../lib/zoned-d
 import { AttachmentQueuePanel } from "./attachment-queue-panel";
 import { attachmentQueueMessage, hasAttachmentBytes } from "./attachment-queue";
 import { SiteHeader } from "./site-header";
+import { ProjectBrowser } from "./project-browser";
 import { CreateProjectDialog, CustomSnoozeDialog, AssignProjectDialog, DeleteProjectDialog } from "./task-dialogs";
 import { KeyboardShortcutsDialog } from "./keyboard-shortcuts-dialog";
 import { PullGesturePill } from "./pull-to-refresh";
@@ -5088,73 +5089,7 @@ export default function Home() {
         console.info("[todo-shortcuts] shortcut guide closed", { source: "button" });
       }} />}
 
-      {projectSelectorOpen && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center overflow-x-hidden sm:items-center sm:p-5" role="dialog" aria-modal="true" aria-labelledby="project-selector-title">
-          <button type="button" aria-label="Close project selector" onClick={() => closeProjectSelector("backdrop")} className="absolute inset-0 bg-black/35 backdrop-blur-[2px]" />
-          <div className="relative flex max-h-[92dvh] w-full max-w-full flex-col overflow-hidden rounded-t-3xl bg-[#f6f7f5] shadow-2xl sm:max-w-5xl sm:rounded-3xl">
-            <div className="flex min-w-0 items-center justify-between gap-3 border-b border-black/[0.07] bg-white px-5 py-4 sm:px-6">
-              <div className="min-w-0">
-                <h2 id="project-selector-title" className="text-lg font-semibold text-[#202522]">Choose a project</h2>
-                <p className="mt-0.5 text-xs text-[#7c847f]">Select a project or jump directly to one of its task views.</p>
-              </div>
-              <div className="flex shrink-0 items-center gap-2">
-                <button type="button" onClick={openNewProjectDialog} className="inline-flex h-10 items-center gap-2 rounded-xl bg-[#216e4e] px-3 text-sm font-semibold text-white hover:bg-[#195d41] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#216e4e]"><ActionIcon name="create-project" /><span className="hidden sm:inline">New project</span></button>
-                <button type="button" onClick={() => closeProjectSelector("button")} className="grid h-10 w-10 place-items-center rounded-full bg-[#f1f2f0] text-[#4f5752] hover:bg-[#e8eae7]" aria-label="Close project selector" title="Close"><ActionIcon name="close" /></button>
-              </div>
-            </div>
-
-            <div className="overflow-y-auto overscroll-contain p-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:p-6">
-              <div className="mb-4 grid gap-3 sm:grid-cols-2">
-                <button type="button" onClick={() => selectProjectFilter("")} className={classNames("flex items-center gap-3 rounded-2xl border bg-white p-4 text-left shadow-sm transition hover:border-[#216e4e]/25 hover:bg-[#fbfdfb] focus-visible:outline-2 focus-visible:outline-[#216e4e]", !project ? "border-[#216e4e]/35 ring-2 ring-[#216e4e]/10" : "border-black/[0.07]")}>
-                  <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-[#eaf3ed] text-[#216e4e]"><ActionIcon name="view-all" className="h-5 w-5" /></span>
-                  <span className="min-w-0"><span className="block text-sm font-semibold text-[#252a27]">Dawar Todo</span><span className="mt-0.5 block text-xs text-[#7c847f]">All projects · {todos.length} tasks</span></span>
-                </button>
-                <button type="button" onClick={() => selectProjectFilter(UNASSIGNED_PROJECT)} className={classNames("flex items-center gap-3 rounded-2xl border bg-white p-4 text-left shadow-sm transition hover:border-[#216e4e]/25 hover:bg-[#fbfdfb] focus-visible:outline-2 focus-visible:outline-[#216e4e]", project === UNASSIGNED_PROJECT ? "border-[#216e4e]/35 ring-2 ring-[#216e4e]/10" : "border-black/[0.07]")}>
-                  <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-[#f1f2f0] text-[#69716c]"><ActionIcon name="folder" className="h-5 w-5" /></span>
-                  <span className="min-w-0"><span className="block text-sm font-semibold text-[#252a27]">Unassigned</span><span className="mt-0.5 block text-xs text-[#7c847f]">{unassignedProjectCounts.open} open · {unassignedProjectCounts.snoozed} snoozed · {unassignedProjectCounts.done} done</span></span>
-                </button>
-              </div>
-
-              {loading ? (
-                <div role="status" aria-label="Loading projects" className="grid gap-3 sm:grid-cols-2">
-                  {[0, 1, 2, 3].map((item) => <div key={item} className="h-40 animate-pulse rounded-2xl bg-white shadow-sm" />)}
-                </div>
-              ) : projectOptions.length ? (
-                <ul className="grid gap-3 sm:grid-cols-2">
-                  {projectOptions.map(([name, projectCounts]) => {
-                    const count = projectCounts.open + projectCounts.snoozed + projectCounts.done;
-                    return (
-                      <li key={name} className={classNames("overflow-hidden rounded-2xl border bg-white shadow-[0_8px_28px_rgba(30,45,36,0.05)] transition hover:border-[#216e4e]/20 hover:shadow-[0_12px_34px_rgba(30,45,36,0.09)]", project === name ? "border-[#216e4e]/35 ring-2 ring-[#216e4e]/10" : "border-black/[0.07]")}>
-                        <button type="button" onClick={() => selectProjectFilter(name)} className="flex min-h-24 w-full items-start gap-3 p-4 text-left focus-visible:outline-2 focus-visible:outline-inset focus-visible:outline-[#216e4e]" aria-label={`Select ${name}, ${count} ${count === 1 ? "task" : "tasks"}`}>
-                          <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-[#eaf3ed] text-[#216e4e]"><ActionIcon name="folder" className="h-6 w-6" /></span>
-                          <span className="min-w-0 pt-0.5"><span className="block break-words text-[15px] font-semibold text-[#252a27]">{name}</span><span className="mt-1 block text-xs text-[#7c847f]">{projectCounts.open} open · {projectCounts.snoozed} snoozed · {projectCounts.done} done</span></span>
-                        </button>
-                        <div className="grid grid-cols-5 border-t border-black/[0.06] bg-[#fafbf9]" aria-label={`Actions for ${name}`}>
-                          {([
-                            ["open", "view-open", `View open tasks in ${name}`],
-                            ["snoozed", "snooze", `View snoozed tasks in ${name}`],
-                            ["done", "done", `View done tasks in ${name}`],
-                            ["all", "view-all", `View all tasks in ${name}`],
-                          ] as const).map(([destinationView, icon, label]) => (
-                            <button key={destinationView} type="button" onClick={() => openProjectTasks(name, destinationView)} aria-label={label} title={label} className="grid h-11 place-items-center border-r border-black/[0.06] text-[#65706a] transition hover:bg-[#eaf3ed] hover:text-[#216e4e] focus-visible:outline-2 focus-visible:outline-inset focus-visible:outline-[#216e4e]"><ActionIcon name={icon} className="h-[18px] w-[18px]" /></button>
-                          ))}
-                          <button type="button" onClick={() => openProjectDeleteDialog(name)} aria-label={`Delete project: ${name}`} title="Delete project" className="grid h-11 place-items-center text-[#8a918d] transition hover:bg-red-50 hover:text-red-700 focus-visible:outline-2 focus-visible:outline-inset focus-visible:outline-red-600"><ActionIcon name="delete" className="h-[18px] w-[18px]" /></button>
-                        </div>
-                      </li>
-                    );
-                  })}
-                </ul>
-              ) : (
-                <div className="rounded-2xl border border-dashed border-black/[0.12] bg-white px-6 py-10 text-center">
-                  <span className="mx-auto grid h-12 w-12 place-items-center rounded-full bg-[#eaf3ed] text-[#216e4e]"><ActionIcon name="folder" className="h-6 w-6" /></span>
-                  <p className="mt-4 font-medium text-[#303632]">No projects yet.</p>
-                  <p className="mt-1 text-sm text-[#7c847f]">Create a project, then assign tasks whenever useful.</p>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+      {projectSelectorOpen && <ProjectBrowser selected={project} total={todos.length} unassigned={unassignedProjectCounts} unassignedValue={UNASSIGNED_PROJECT} projects={projectOptions} loading={loading} onSelect={selectProjectFilter} onView={openProjectTasks} onCreate={openNewProjectDialog} onDelete={openProjectDeleteDialog} onClose={() => closeProjectSelector("button")} />}
 
       {newProjectOpen && <CreateProjectDialog name={newProjectName} error={newProjectError} busy={creatingProject} onName={value => { setNewProjectName(value); setNewProjectError(""); }} onClose={closeNewProjectDialog} onSubmit={createProject} />}
 
