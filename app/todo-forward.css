@@ -19,4 +19,3 @@
 .todo-queue-dialog select { margin-top:6px; }
 .todo-queue-dialog footer button { width:100%; }
 .todo-queue-progress { max-height:180px; overflow:auto; flex-shrink:0; }
-@media(pointer:coarse) { .todo-detail-copy-actions button { height:44px; width:44px; } }

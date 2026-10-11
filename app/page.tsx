@@ -55,6 +55,7 @@ import { SiteHeader } from "./site-header";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { PendingTaskAttachment } from "./pending-task-attachment";
+import { ControlledDialog } from "@/components/ui/controlled-dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { TaskAttachmentMedia } from "./task-attachment-media";
 import { formatDuration, formatFileSize } from "./attachment-format";
@@ -662,34 +663,27 @@ function VoiceMemoRecorder({ onClose, onAttach }: { onClose: () => void; onAttac
   }
 
   return (
-    <div className="fixed inset-0 z-[90] flex items-end justify-center sm:items-center sm:p-5" role="dialog" aria-modal="true" aria-labelledby="voice-recorder-title">
-      <button type="button" onClick={onClose} aria-label="Close voice recorder" className="absolute inset-0 bg-black/40 backdrop-blur-[2px]" />
-      <div className="relative w-full rounded-t-3xl bg-white p-5 shadow-2xl sm:max-w-md sm:rounded-3xl sm:p-6">
-        <div className="flex items-center justify-between">
-          <h3 id="voice-recorder-title" className="text-lg font-semibold text-[#202522]">Voice memo</h3>
-          <button type="button" onClick={onClose} className="grid h-9 w-9 place-items-center rounded-full bg-[#f1f2f0] text-[#4f5752]" aria-label="Close"><ActionIcon name="close" /></button>
-        </div>
+    <ControlledDialog title="Voice memo" onClose={onClose} className="max-w-md" onKeyDown={(event) => event.stopPropagation()} onEscapeKeyDown={(event) => event.stopPropagation()}>
         <div className="my-7 text-center">
-          <div className={classNames("mx-auto mb-4 grid h-20 w-20 place-items-center rounded-full", phase === "recording" ? "animate-pulse bg-red-100 text-red-700" : "bg-[#eaf3ed] text-[#216e4e]")}>
+          <div className={classNames("mx-auto mb-4 grid h-20 w-20 place-items-center rounded-full", phase === "recording" ? "motion-safe:animate-pulse bg-destructive/10 text-destructive" : "bg-accent text-primary")}>
             <ActionIcon name={phase === "recording" ? "stop" : "mic"} className="h-9 w-9" />
           </div>
-          <p className="font-mono text-3xl font-semibold tabular-nums text-[#202522]">{formatDuration(elapsed)}</p>
-          <p className="mt-2 text-sm text-[#7b837e]">{phase === "idle" ? "Ready when you are" : phase === "recording" ? "Recording…" : "Review before attaching"}</p>
+          <p className="font-mono text-3xl font-semibold tabular-nums text-foreground">{formatDuration(elapsed)}</p>
+          <p className="mt-2 text-sm text-muted-foreground">{phase === "idle" ? "Ready when you are" : phase === "recording" ? "Recording…" : "Review before attaching"}</p>
         </div>
         {recording && <audio controls src={recording.url} className="mb-5 w-full" preload="metadata" />}
-        {error && <p role="alert" className="mb-4 rounded-xl bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
+        {error && <p role="alert" className="mb-4 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>}
         {phase === "idle" ? (
-          <button type="button" onClick={() => void start()} className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-[#216e4e] text-sm font-semibold text-white"><ActionIcon name="mic" />Start recording</button>
+          <Button type="button" onClick={() => void start()} className="h-12 w-full"><ActionIcon name="mic" />Start recording</Button>
         ) : phase === "recording" ? (
-          <button type="button" onClick={stop} className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-red-700 text-sm font-semibold text-white"><ActionIcon name="stop" />Finish recording</button>
+          <Button type="button" onClick={stop} variant="destructive" className="h-12 w-full"><ActionIcon name="stop" />Finish recording</Button>
         ) : (
           <div className="flex gap-2">
-            <button type="button" onClick={rerecord} className="h-12 flex-1 rounded-xl bg-[#f1f2f0] text-sm font-semibold text-[#59615c]">Re-record</button>
-            <button type="button" onClick={() => { if (recording) onAttach(recording.file, recording.durationMs); }} disabled={!recording || recording.file.size > MAX_AUDIO_BYTES || recording.durationMs > MAX_AUDIO_DURATION_MS} className="inline-flex h-12 flex-1 items-center justify-center gap-2 rounded-xl bg-[#216e4e] text-sm font-semibold text-white disabled:opacity-50"><ActionIcon name="attachment" />Attach</button>
+            <Button type="button" onClick={rerecord} variant="outline" className="h-12 flex-1">Re-record</Button>
+            <Button type="button" onClick={() => { if (recording) onAttach(recording.file, recording.durationMs); }} disabled={!recording || recording.file.size > MAX_AUDIO_BYTES || recording.durationMs > MAX_AUDIO_DURATION_MS} className="h-12 flex-1"><ActionIcon name="attachment" />Attach</Button>
           </div>
         )}
-      </div>
-    </div>
+    </ControlledDialog>
   );
 }
 
@@ -4434,7 +4428,7 @@ export default function Home() {
             aria-labelledby="task-details-title"
             onSubmit={(event) => event.preventDefault()}
             className={classNames(
-              "relative flex max-h-[92dvh] w-full max-w-full flex-col overflow-hidden overflow-x-hidden rounded-t-3xl bg-background shadow-2xl outline-none sm:max-w-2xl sm:rounded-3xl",
+              "relative flex max-h-[92dvh] w-full max-w-full flex-col overflow-hidden overflow-x-hidden rounded-t-lg border border-border bg-card shadow-lg outline-none sm:max-w-2xl sm:rounded-lg",
               taskDialogPulling ? "transition-none" : "transition-transform duration-150 ease-out motion-reduce:transition-none",
             )}
             style={{ transform: `translate3d(0, ${taskDialogPullDistance}px, 0)` }}
@@ -4442,7 +4436,7 @@ export default function Home() {
             <div className="relative flex min-w-0 flex-wrap items-center justify-between gap-2 border-b border-border px-4 pb-4 pt-5 sm:px-6 sm:py-4">
               <span className="absolute left-1/2 top-2 h-1 w-10 -translate-x-1/2 rounded-full bg-black/15 sm:hidden" aria-hidden="true" />
               <h3 id="task-details-title" className="min-w-0 text-lg font-semibold text-foreground">Task details</h3>
-              <div className="todo-detail-copy-actions flex shrink-0 items-center gap-1">
+              <div className="flex shrink-0 items-center gap-1">
                 {editingTodo?.queueLastTransfer && <a className="text-xs text-primary" href={`/bots?bot=${encodeURIComponent(editingTodo.queueLastTransfer.botId)}`}>Queued to bot · source retained</a>}
                 <Button variant="ghost" type="button" onClick={() => { if (editingId !== null) setQueueRequest({ id: crypto.randomUUID(), todoIds: [editingId] }); }} size="icon" className="shrink-0 text-muted-foreground" aria-label="Queue task to a bot" title="Queue to bot"><ActionIcon name="forward" /></Button>
                 <Button variant="ghost" type="button" onClick={() => void copyTaskDetails()} size="icon" className="shrink-0 text-muted-foreground" aria-label="Copy task title and description" title="Copy task"><ActionIcon name="copy" /></Button>
