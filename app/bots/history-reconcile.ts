@@ -39,8 +39,9 @@ export function orderedHistory(old: HistoryEntry[], incoming: HistoryEntry[], pr
   });
   return [...result, ...pending, ...tail];
 }
-/** Repair cached turn placement from native start times while preserving every
- * item’s order within its turn. Unknown-time turns retain their existing slot. */
+/** Repair cached placement using recorded timing. Unknown-time rows retain
+ * their native slots; equal timestamps retain native order. Never sort by ID,
+ * message type, text, or the arrival of a history-page response. */
 export function chronologicalTurns(entries: HistoryEntry[]) {
   const groups = new Map<string, HistoryEntry[]>();
   for (const entry of entries) {
@@ -51,7 +52,17 @@ export function chronologicalTurns(entries: HistoryEntry[]) {
   const start = (block: HistoryEntry[]) => block.find(entry => typeof entry.startedAt === 'number' && Number.isFinite(entry.startedAt))?.startedAt;
   const known = blocks.filter(block => start(block) !== undefined).sort((a, b) => start(a)! - start(b)!);
   let index = 0;
-  return blocks.flatMap(block => start(block) === undefined ? block : known[index++]);
+  return blocks.flatMap(block => {
+    const turn = start(block) === undefined ? block : known[index++];
+    const at = (entry: HistoryEntry): number | null => {
+      if (typeof entry.itemStartedAtMs === 'number' && Number.isFinite(entry.itemStartedAtMs)) return entry.itemStartedAtMs;
+      if (entry.timeBasis === 'received' && typeof entry.messageAt === 'number' && Number.isFinite(entry.messageAt)) return entry.messageAt * 1000;
+      return null;
+    };
+    const timed = turn.filter(entry => at(entry) !== null).sort((a, b) => at(a)! - at(b)!);
+    let item = 0;
+    return turn.map(entry => at(entry) === null ? entry : timed[item++]);
+  });
 }
 /** Identity is scoped by the owning BotTimeline. Equal text is never identity. */
 export function reconcileHistory(values: HistoryEntry[]) {

@@ -65,7 +65,10 @@ export class BotTimeline {
     return key;
   };
   private normalize(entries: HistoryEntry[]) {
-    const reconciled = reconcileHistory(chronologicalTurns(conversationEntries(entries, this.turnAudiences)));
+    // Choose the freshest value for each identity before sorting; timing must
+    // not accidentally turn an older duplicate into the winning value.
+    const reconciled = reconcileHistory(conversationEntries(entries, this.turnAudiences));
+    reconciled.entries = chronologicalTurns(reconciled.entries);
     for (const [from, to] of reconciled.aliases) { this.aliases.set(from, to); this.identityAliases.set(from, to); }
     const kept = new Set(reconciled.entries.map((entry) => historyKey(entry.turnId, entry.id)));
     const successors: (HistoryEntry | undefined)[] = new Array(entries.length);
