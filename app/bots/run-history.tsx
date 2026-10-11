@@ -110,7 +110,7 @@ export function RunHistory({ bot, schedules, attachments, online, onClose, downl
         ? selectedMetadata.current : runEvents.current.get(run.id)?.run ?? run));
       setRuns(values); setCursor(page.nextCursor);
       if (!next) { botsClient.save(cacheKey, { runs: values, cursor: page.nextCursor }); setNewActivity(false); }
-    } catch (reason) { if (valid() && request === listEpoch.current && !targetRef.current) setError(reason instanceof Error ? reason.message : "Activity could not be loaded."); }
+    } catch { if (valid() && request === listEpoch.current && !targetRef.current) setError("Activity could not be loaded. Try again."); }
     finally { listRequest.current = false; if (botsClient.owner === owner) setListBusy(false); }
   }, [bot.id, cacheKey, online, owner, valid, lanes]);
   useEffect(() => {
@@ -185,7 +185,7 @@ export function RunHistory({ bot, schedules, attachments, online, onClose, downl
         evidence = new RunPageRead(owner, bot.id, target.runId, target.turnId ?? null, identity, request, !pageCursors[detailPage]);
         pendingRead.current = evidence;
       }
-      const result = await botsClient.rpc<HistoryResponse>("history.view", bot.id, { ...(lanes && target.runId ? { runId: target.runId } : {}), ...(target.turnId ? { turnId: target.turnId } : {}), cursor: pageCursors[detailPage] }, undefined, { owner });
+      const result = await botsClient.rpc<HistoryResponse>("history.view", bot.id, { ...(lanes && target.runId ? { runId: target.runId } : {}), ...(target.turnId ? { turnId: target.turnId } : {}), cursor: pageCursors[detailPage] }, undefined, { owner }).catch(() => { throw Error("This run could not be opened. Try again."); });
       if (canceled || !valid() || request !== generation.current || identity !== selectedRef.current.identity) return;
       if (lanes && target.runId) {
         const page = verifyRunPage(result, target.runId, runEvents.current.get(target.runId)?.run);
@@ -230,7 +230,7 @@ export function RunHistory({ bot, schedules, attachments, online, onClose, downl
     try {
       await botsClient.rpc("runs.acknowledge", bot.id, { id: run.id }, `run-review:${run.id}`, { owner });
       if (valid()) await load(runCursors[runPage]);
-    } catch (reason) { if (botsClient.owner === owner) setReviewError({ run, message: reason instanceof Error ? reason.message : "The review could not be confirmed." }); }
+    } catch { if (botsClient.owner === owner) setReviewError({ run, message: "The review could not be confirmed. Retry to check its status." }); }
     finally { actionRequest.current = false; if (botsClient.owner === owner) setActionBusy(false); }
   };
   const visibleRuns = useMemo(() => runs.filter(run => filter === "all" || runNeedsAttention(run)), [filter, runs]);
