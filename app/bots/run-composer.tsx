@@ -1,4 +1,6 @@
 "use client";
+import { Button } from "@/components/ui/button";
+import { NativeSelect } from "@/components/ui/native-select";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { ArrowUp, Paperclip } from "lucide-react";
 import { botsClient as client } from "./client";
@@ -50,18 +52,18 @@ function ReadyRunComposer({ composer, online, paused, recoveryOnly }: { composer
   if (recoveryOnly && !op && !composer.draft.text && !files.length && !error) return null;
   return <section className="bots-run-reply" aria-label="Reply to this run">
     <header><strong>{recoveryOnly ? "Earlier saved reply" : "Reply to this run"}</strong><span>{recoveryOnly ? "New messages belong in your conversation. This earlier draft stays saved." : paused ? "Paused · replies wait until you resume its queue" : "Your main conversation stays separate"}</span></header>
-    {error && <p role="alert">{error} {composer.storageError && <button onClick={() => void composer.retry()}>Retry saving</button>}</p>}
-    {failedFiles && <p role="alert">Your files are retained. <button onClick={() => void composer.retry()}>Retry file recovery</button><button onClick={() => void composer.restartFailedUploads()}>Restart failed transfers</button></p>}
-    {op && <p role="status">{composer.sendingNow ? "Confirming delivery…" : op.error || (op.runDelivery?.state === "prepared" ? "Saved reply is waiting to send." : "Checking this reply's delivery.")}<button disabled={!online || composer.sendingNow} onClick={() => void composer.reconcile()}>{op.runDelivery?.state === "prepared" ? "Send saved reply" : "Check delivery"}</button></p>}
+    {error && <p role="alert">{error} {composer.storageError && <Button variant="ghost" size="sm" type="button" onClick={() => void composer.retry()}>Retry saving</Button>}</p>}
+    {failedFiles && <p role="alert">Your files are retained. <Button variant="ghost" size="sm" type="button" onClick={() => void composer.retry()}>Retry file recovery</Button><Button variant="ghost" size="sm" type="button" onClick={() => void composer.restartFailedUploads()}>Restart failed transfers</Button></p>}
+    {op && <p role="status">{composer.sendingNow ? "Confirming delivery…" : op.error || (op.runDelivery?.state === "prepared" ? "Saved reply is waiting to send." : "Checking this reply's delivery.")}<Button variant="ghost" size="sm" type="button" disabled={!online || composer.sendingNow} onClick={() => void composer.reconcile()}>{op.runDelivery?.state === "prepared" ? "Send saved reply" : "Check delivery"}</Button></p>}
     <ComposerAttachments composer={composer} />
     {recoveryOnly ? <p className="bots-run-saved-text">{composer.draft.text}</p> : <form onSubmit={event => { event.preventDefault(); void composer.send(); }}>
       <input ref={file} type="file" multiple hidden onChange={event => { if (event.target.files) composer.addFiles([...event.target.files]); event.target.value = ""; }} />
-      <button type="button" className="bots-icon-button" aria-label="Attach files to run reply" disabled={!composer.ready} onClick={() => file.current?.click()}><Paperclip size={18} /></button>
-      <ComposerInput aria-label="Message for this run" placeholder="Add a correction or follow-up…" value={composer.draft.text} disabled={!composer.ready} onChange={event => composer.setText(event.target.value)} onPaste={event => { const pasted = [...event.clipboardData.files]; if (pasted.length) { event.preventDefault(); composer.addFiles(pasted); } }} />
-      <button type="submit" className="bots-send" aria-label="Send reply to this run" disabled={!online || !composer.ready || !!composer.storageError || !!op || (!composer.draft.text.trim() && !files.length) || files.some(value => !value.remote?.ready)}><ArrowUp size={19} /></button>
+      <Button variant="ghost" size="icon" type="button" className="shrink-0" aria-label="Attach files to run reply" disabled={!composer.ready} onClick={() => file.current?.click()}><Paperclip size={18} /></Button>
+      <ComposerInput aria-label="Message for this run" placeholder="Reply…" value={composer.draft.text} disabled={!composer.ready} onChange={event => composer.setText(event.target.value)} onPaste={event => { const pasted = [...event.clipboardData.files]; if (pasted.length) { event.preventDefault(); composer.addFiles(pasted); } }} />
+      <Button size="icon" type="submit" className="shrink-0" aria-label="Send reply to this run" disabled={!online || !composer.ready || !!composer.storageError || !!op || (!composer.draft.text.trim() && !files.length) || files.some(value => !value.remote?.ready)}><ArrowUp size={19} /></Button>
     </form>}
     {!online && <small>Offline · this run’s draft and staged files stay on this device.</small>}
-    {composer.recoveries.length > 0 && <label>Saved draft versions<select value={composer.record.active} onChange={event => composer.select(event.target.value)}><option value="normal">Current draft</option>{composer.recoveries.map((slot, i) => <option key={slot} value={slot}>Saved version {i + 1}</option>)}</select></label>}
+    {composer.recoveries.length > 0 && <label className="grid gap-2 text-sm">Saved draft versions<NativeSelect value={composer.record.active} onChange={event => composer.select(event.target.value)}><option value="normal">Current draft</option>{composer.recoveries.map((slot, i) => <option key={slot} value={slot}>Saved version {i + 1}</option>)}</NativeSelect></label>}
   </section>;
 }
 export function RunComposer({ owner, botId, runId, online, paused, recoveryOnly = false }: { owner: string; botId: string; runId: string; online: boolean; paused: boolean; recoveryOnly?: boolean }) {

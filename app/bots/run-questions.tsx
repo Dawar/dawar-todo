@@ -1,4 +1,5 @@
 "use client";
+import { Button } from "@/components/ui/button";
 import { useEffect, useState } from "react";
 import type { BotEvent, BotRequest } from "../../lib/bots-types";
 import { botsClient as client } from "./client";
@@ -10,7 +11,7 @@ function RunQuestion({ owner, botId, runId, pending, online }: { owner: string; 
   return <div>
     <RequestCard pending={pending} memoryKey={JSON.stringify([owner, botId, runId, pending.key])} disabled={!online || action.busy || !!action.intent || action.accepted} respond={result => action.perform("requests.respond", { key: pending.key, result })} />
     {action.accepted && <p role="status">Answer accepted for this run.</p>}
-    {(action.intent || action.error) && <p className="bots-run-notice" role="alert">{action.error || "Your original answer is awaiting confirmation."}{action.intent && <button disabled={!online || action.busy} onClick={() => void action.retry().catch(() => {})}>Check same answer</button>}</p>}
+    {(action.intent || action.error) && <p className="bots-run-notice" role="alert">{action.error || "Your original answer is awaiting confirmation."}{action.intent && <Button variant="ghost" size="sm" type="button" disabled={!online || action.busy} onClick={() => void action.retry().catch(() => {})}>Check same answer</Button>}</p>}
   </div>;
 }
 export function RunQuestions({ owner, botId, runId, online }: { owner: string; botId: string; runId: string; online: boolean }) {
@@ -37,5 +38,5 @@ export function RunQuestions({ owner, botId, runId, online }: { owner: string; b
     }).catch(reason => { if (!canceled && client.owner === owner) setError(reason instanceof Error ? reason.message : "Questions could not be loaded."); });
     return () => { canceled = true; client.events.delete(event); };
   }, [owner, botId, runId, online, attempt]);
-  return <section className="bots-run-questions" aria-label="Questions for this run">{pending.map(value => <RunQuestion key={value.key} owner={owner} botId={botId} runId={runId} pending={value} online={online} />)}{error && <p role="alert">{error}<button disabled={!online} onClick={() => setAttempt(value => value + 1)}>Retry questions</button></p>}</section>;
+  return <section className="bots-run-questions" aria-label="Questions for this run">{pending.map(value => <RunQuestion key={value.key} owner={owner} botId={botId} runId={runId} pending={value} online={online} />)}{error && <p role="alert">{error}<Button variant="ghost" size="sm" type="button" disabled={!online} onClick={() => setAttempt(value => value + 1)}>Retry questions</Button></p>}</section>;
 }

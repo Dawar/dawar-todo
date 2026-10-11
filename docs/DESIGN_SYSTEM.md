@@ -232,3 +232,7 @@ The nonembedded RunHistory uses ControlledDialog instead of a raw modal backdrop
 ### History controls and follow-up selection
 
 Run controls and follow-up actions use shared buttons; selection returns keyboard focus to the collapsed disclosure heading. Existing action journals, admission and same-ID recovery remain unchanged. Activity/history CSS uses semantic colors, and supporting labels are at least12px. Actual320/1280 offline fixtures cover cached original/follow-up entries, unavailable delivery, disabled paging and paused/Stop controls; Tab/Enter selects a follow-up and restores visible disclosure focus. Connected paging, action recovery, full main-stop placement and device acceptance remain pending. No real Stop/resume or native requests were invoked.
+
+### Run replies and question recovery
+
+Run replies use shared action/icon buttons and NativeSelect for saved versions. The measured ComposerInput retains its draft/resize behavior with a short Reply placeholder and46px minimum height. Saved reply text preserves line breaks inside a bounded reader. Run question retry/recovery buttons use the same shared control. Actual320 offline run composer supports empty and long text, visible focus, bounded growth and retained text after reload in a synthetic local draft. No send occurred. Type/scoped lint/diff pass; attachments, recovery versions, question states, desktop and connected acceptance remain pending.
