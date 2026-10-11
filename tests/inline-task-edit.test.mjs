@@ -5,7 +5,7 @@ import test from "node:test";
 const root = new URL("../", import.meta.url);
 
 test("task titles are seamless autogrowing inline editors", async () => {
-  const page = await Promise.all(["app/page.tsx", "app/task-sync.ts", "app/task-model.ts", "app/sync-request.ts"].map((path) => readFile(new URL(path, root), "utf8"))).then((parts) => parts.join("\n"));
+  const page = await Promise.all(["app/page.tsx", "app/task-row.tsx", "app/task-sync.ts", "app/task-model.ts", "app/sync-request.ts"].map((path) => readFile(new URL(path, root), "utf8"))).then((parts) => parts.join("\n"));
 
   assert.match(page, /<textarea[^]*data-inline-title[^]*value=\{editingTitle \? titleDraft : todo\.title\}/);
   assert.match(page, /setTitleDraft\(event\.target\.value\)/);
@@ -28,7 +28,7 @@ test("task titles are seamless autogrowing inline editors", async () => {
 });
 
 test("row project action is replaced by Edit while assignment remains in details and bulk actions", async () => {
-  const page = await Promise.all(["app/page.tsx", "app/task-sync.ts", "app/task-model.ts", "app/sync-request.ts"].map((path) => readFile(new URL(path, root), "utf8"))).then((parts) => parts.join("\n"));
+  const page = await Promise.all(["app/page.tsx", "app/task-row.tsx", "app/task-sync.ts", "app/task-model.ts", "app/sync-request.ts"].map((path) => readFile(new URL(path, root), "utf8"))).then((parts) => parts.join("\n"));
 
   assert.match(page, /longSwipe \? "Delete" : "Edit"/);
   assert.match(page, /\{ action: "edit", label: "Edit", icon: "edit" \}/);
@@ -39,8 +39,8 @@ test("row project action is replaced by Edit while assignment remains in details
 });
 
 test("mobile task swipes start only from directional rails outside the title textarea", async () => {
-  const page = await Promise.all(["app/page.tsx", "app/task-sync.ts", "app/task-model.ts", "app/sync-request.ts"].map((path) => readFile(new URL(path, root), "utf8"))).then((parts) => parts.join("\n"));
-  const row = page.slice(page.indexOf("function TaskRow("), page.indexOf("export default function Home()"));
+  const page = await Promise.all(["app/page.tsx", "app/task-row.tsx", "app/task-sync.ts", "app/task-model.ts", "app/sync-request.ts"].map((path) => readFile(new URL(path, root), "utf8"))).then((parts) => parts.join("\n"));
+  const row = await readFile(new URL("app/task-row.tsx", root), "utf8");
 
   assert.match(page, /closest<HTMLElement>\("\[data-swipe-rail\]"\)/);
   assert.match(page, /data-swipe-rail="left"/);
@@ -52,7 +52,7 @@ test("mobile task swipes start only from directional rails outside the title tex
   assert.match(page, /mobile task swipe cancelled for vertical movement/);
   assert.match(page, /mobile task swipe finished/);
   assert.doesNotMatch(page, /touch-pan-y items-start/);
-  assert.match(row, /className="relative w-10 shrink-0 self-stretch md:hidden"[^]*data-swipe-rail="left"[^]*className="absolute inset-x-0 -bottom-4 -top-4 touch-pan-y"/);
+  assert.match(row, /className="relative w-6 shrink-0 self-stretch md:hidden"[^]*data-swipe-rail="left"[^]*className="absolute inset-x-0 -bottom-4 -top-4 touch-pan-y"/);
   assert.match(row, /data-swipe-rail="right"[^]*className="-mr-4 flex shrink-0 self-stretch touch-pan-y pr-4 sm:-mr-5 sm:pr-5 md:hidden"/);
   assert.match(row, /data-swipe-rail="right"[^]*data-row-action[^]*suppressTitleClickRef\.current[^]*onPin\(todo\)/);
   assert.match(page, /const SWIPE_ACTION_THRESHOLD = 0\.14/);
@@ -65,7 +65,7 @@ test("mobile task swipes start only from directional rails outside the title tex
 });
 
 test("task details edits description and metadata without a second title textarea", async () => {
-  const page = await Promise.all(["app/page.tsx", "app/task-sync.ts", "app/task-model.ts", "app/sync-request.ts"].map((path) => readFile(new URL(path, root), "utf8"))).then((parts) => parts.join("\n"));
+  const page = await Promise.all(["app/page.tsx", "app/task-row.tsx", "app/task-sync.ts", "app/task-model.ts", "app/sync-request.ts"].map((path) => readFile(new URL(path, root), "utf8"))).then((parts) => parts.join("\n"));
   const details = page.slice(page.indexOf("{editingTodo && editDraft && ("), page.indexOf("{voiceTarget && ("));
 
   assert.doesNotMatch(details, /value=\{editDraft\.title\}/);
@@ -75,7 +75,7 @@ test("task details edits description and metadata without a second title textare
 
 test("sync cleanup preserves a newer edit queued while an older mutation is in flight", async () => {
   const [page, store] = await Promise.all([
-    Promise.all(["app/page.tsx", "app/task-sync.ts", "app/task-model.ts", "app/sync-request.ts"].map((path) => readFile(new URL(path, root), "utf8"))).then((parts) => parts.join("\n")),
+    Promise.all(["app/page.tsx", "app/task-row.tsx", "app/task-sync.ts", "app/task-model.ts", "app/sync-request.ts"].map((path) => readFile(new URL(path, root), "utf8"))).then((parts) => parts.join("\n")),
     readFile(new URL("app/offline-store.ts", root), "utf8"),
   ]);
 
