@@ -7,6 +7,7 @@ import { encryptSecureInput, secureBase64, SECURE_IMAGE_BYTES, type SecureDescri
 import { transferSecureInput } from './secure-input-transfer';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { ControlledDialog } from '@/components/ui/controlled-dialog';
 import './secure-input-card.css';
 function SecureForm({ request, online, onClose, onReceived }: {
     request: SecureRequest;
@@ -114,35 +115,20 @@ export function SecureInputCard({ request, online, supported = true }: {
 export function SecureInputAccess({ state }: { state: ReturnType<typeof useSecureInputRequests> }) {
     const waiting = state.requests.filter(r => r.state === 'waiting');
     const [open, setOpen] = useState(false), [selected, setSelected] = useState<string[]>([]);
-    const dialog = useRef<HTMLDivElement>(null), trigger = useRef<HTMLButtonElement>(null);
-    useEffect(() => {
-        if (!open) return;
-        const target = trigger.current; dialog.current?.querySelector<HTMLButtonElement>('button')?.focus();
-        return () => { if (target?.isConnected) target.focus(); };
-    }, [open]);
+    const [opener, setOpener] = useState<HTMLButtonElement | null>(null);
     if (!waiting.length && !state.error && !state.loading && !open) return null;
     const rows = state.requests.filter(r => r.state === 'waiting' || selected.includes(r.id));
     return <div className="bots-secure-access">
-      {waiting.length > 0 && <Button variant="outline" ref={trigger} type="button" onClick={() => { setSelected(waiting.map(r => r.id)); setOpen(true); }}><LockKeyhole size={15} aria-hidden="true"/>{waiting.length === 1 ? 'Open private form' : `Open ${waiting.length} private forms`}</Button>}
+      {waiting.length > 0 && <Button variant="outline" type="button" onClick={event => { setOpener(event.currentTarget); setSelected(waiting.map(r => r.id)); setOpen(true); }}><LockKeyhole size={15} aria-hidden="true"/>{waiting.length === 1 ? 'Open private form' : `Open ${waiting.length} private forms`}</Button>}
       {state.loading && <small role="status">Checking private forms…</small>}
       {state.error && <span role="alert">{state.error} <Button variant="outline" type="button" disabled={!state.online || !state.enabled || state.loading} onClick={state.retry}>Retry forms</Button></span>}
       {!state.enabled && waiting.length > 0 && <p>This bridge does not support private forms. Update it before submitting.</p>}
-      {open && <div className="bots-secure-dialog-layer"><div ref={dialog} className="bots-secure-dialog shadow-lg" role="dialog" aria-modal="true" aria-label="Private input forms" onKeyDown={event => {
-        if (event.key === 'Escape') { event.stopPropagation(); event.preventDefault(); setOpen(false); }
-        if (event.key === 'Tab') {
-          const nodes = [...dialog.current!.querySelectorAll<HTMLElement>('button:not([disabled]),input:not([disabled]),summary,select:not([disabled]),textarea:not([disabled]),a[href]')].filter(node => node.offsetParent !== null);
-          const first = nodes[0], last = nodes.at(-1);
-          if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
-          else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
-        }
-      }}>
-        <Button type="button" variant="ghost" size="icon" className="bots-secure-close" aria-label="Close private forms" onClick={() => setOpen(false)}><X size={18}/></Button>
-        <h2>Private input forms</h2>
+      {open && <ControlledDialog title="Private input forms" className="bots-secure-dialog" returnFocus={opener} onClose={() => setOpen(false)} onInteractOutside={event => event.preventDefault()}>
         {!state.online && <p>Reconnect to verify and submit these forms. This is their last known status.</p>}
         {!state.enabled && <p>Submission is unavailable in this bridge version.</p>}
         {state.error && <p role="alert">{state.error}</p>}
         {!rows.length && <p>No waiting private forms remain.</p>}
         {rows.map(request => <SecureInputCard key={request.id} request={request} online={state.online} supported={state.enabled}/>)}
-      </div></div>}
+      </ControlledDialog>}
     </div>;
 }

@@ -17,6 +17,11 @@ import {
 import type { Bot, BotTeam, BotTeamDetail } from "../../lib/bots-types";
 import { botsClient as client } from "./client";
 import { useTeamAction } from "./use-team-action";
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
+import { NativeSelect } from '@/components/ui/native-select';
+import { ControlledDialog } from '@/components/ui/controlled-dialog';
 import "./teams.css";
 const refresh = async () => {
   await client.refresh();
@@ -32,19 +37,19 @@ function ChangeState({ action }: { action: Action }) {
       )}
       {action.pending && (
         <div className="bots-teams-error">
-          A team change is awaiting confirmation.
-          <button
+          Awaiting confirmation.
+          <Button variant="outline"
             disabled={action.busy || !client.online}
             onClick={action.retry}
           >
-            Check the same change
-          </button>
+            Check status
+          </Button>
         </div>
       )}
       {action.blocked && !action.pending && (
-        <button className="bots-team-text-button" onClick={action.recover}>
+        <Button variant="outline"  onClick={action.recover}>
           Read saved changes
-        </button>
+        </Button>
       )}
     </>
   );
@@ -67,7 +72,7 @@ export function TeamAssignment({
     <div className="bots-team-assignment">
       <label>
         Team
-        <select
+        <NativeSelect
           value={bot.teamId ?? ""}
           disabled={!online || action.busy || action.blocked}
           onChange={(event) =>
@@ -84,12 +89,12 @@ export function TeamAssignment({
               {t.name}
             </option>
           ))}
-        </select>
+        </NativeSelect>
       </label>
-      <button className="bots-team-text-button" onClick={onManage}>
+      <Button variant="outline"  onClick={onManage}>
         <UsersRound size={15} />
         Manage teams
-      </button>
+      </Button>
       <ChangeState action={action} />
     </div>
   );
@@ -110,45 +115,12 @@ export function TeamsManager({
   const [selected, setSelected] = useState<string | null>(null),
     [creating, setCreating] = useState(false);
   const action = useTeamAction(owner, refresh),
-    ref = useRef<HTMLElement>(null),
     dirty = useRef(false);
   const close = useCallback(() => {
     if (dirty.current && !window.confirm("Discard unsaved team changes?"))
       return;
     onClose();
   }, [onClose]);
-  useEffect(() => {
-    const previous = document.activeElement as HTMLElement | null,
-      root = ref.current;
-    root?.querySelector<HTMLElement>("button")?.focus();
-    const keyboard = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        event.stopPropagation();
-        close();
-      }
-      if (event.key !== "Tab" || !root) return;
-      const items = [
-        ...root.querySelectorAll<HTMLElement>(
-          "button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),a[href]",
-        ),
-      ].filter((n) => n.getClientRects().length);
-      const first = items[0],
-        last = items.at(-1);
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last?.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first?.focus();
-      }
-    };
-    document.addEventListener("keydown", keyboard);
-    return () => {
-      document.removeEventListener("keydown", keyboard);
-      previous?.focus();
-    };
-  }, [close]);
   const back = () => {
     if (dirty.current && !window.confirm("Discard unsaved team changes?"))
       return;
@@ -165,39 +137,15 @@ export function TeamsManager({
     });
   };
   return (
-    <div className="bots-modal-backdrop bots-teams-backdrop" onClick={close}>
-      <section
-        className="bots-teams-modal"
-        role="dialog"
-        aria-modal="true"
-        aria-label="Teams"
-        ref={ref}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <header>
-          <div className="bots-teams-symbol">
-            <UsersRound size={24} />
-          </div>
-          <div>
-            <h2>Teams</h2>
-            <p>A place for bots to belong.</p>
-          </div>
-          <button
-            className="bots-icon-button"
-            aria-label="Close teams"
-            onClick={close}
-          >
-            <X size={20} />
-          </button>
-        </header>
+    <ControlledDialog title="Teams" className="bots-teams-modal" onClose={close}>
         <div className="bots-teams-body">
           <ChangeState action={action} />
           {selected || creating ? (
             <>
-              <button className="bots-team-text-button" onClick={back}>
+              <Button variant="outline"  onClick={back}>
                 <ArrowLeft size={16} />
                 All teams
-              </button>
+              </Button>
               <TeamEditor
                 key={selected ?? "new"}
                 owner={owner}
@@ -220,25 +168,25 @@ export function TeamsManager({
             <>
               <div className="bots-teams-intro">
                 <div>
-                  <h3>Better together</h3>
+                  <h3>Your teams</h3>
                   <p>
                     Organize your bots. Give each team shared memory and a
                     folder for their work.
                   </p>
                 </div>
-                <button
-                  className="bots-primary"
+                <Button
+
                   disabled={!online || action.busy || action.blocked}
                   onClick={() => setCreating(true)}
                 >
                   <Plus size={16} />
                   New team
-                </button>
+                </Button>
               </div>
               <div className="bots-teams-grid">
                 {teams.map((team, index) => (
                   <article className="bots-team-card" key={team.id}>
-                    <button
+                    <Button variant="ghost"
                       className="bots-team-open"
                       onClick={() => setSelected(team.id)}
                     >
@@ -260,10 +208,10 @@ export function TeamsManager({
                         Shared memory & workspace
                         <ArrowUp size={13} className="bots-team-arrow" />
                       </small>
-                    </button>
+                    </Button>
                     <div className="bots-team-order">
                       <span>Team order</span>
-                      <button
+                      <Button variant="outline"
                         title="Move team up"
                         aria-label={`Move ${team.name} up`}
                         disabled={
@@ -275,8 +223,8 @@ export function TeamsManager({
                         onClick={() => reorder(index, -1)}
                       >
                         <ArrowUp size={15} />
-                      </button>
-                      <button
+                      </Button>
+                      <Button variant="outline"
                         title="Move team down"
                         aria-label={`Move ${team.name} down`}
                         disabled={
@@ -288,7 +236,7 @@ export function TeamsManager({
                         onClick={() => reorder(index, 1)}
                       >
                         <ArrowDown size={15} />
-                      </button>
+                      </Button>
                     </div>
                   </article>
                 ))}
@@ -310,8 +258,7 @@ export function TeamsManager({
             </>
           )}
         </div>
-      </section>
-    </div>
+    </ControlledDialog>
   );
 }
 function TeamEditor({
@@ -432,14 +379,14 @@ function TeamEditor({
   return (
     <div className="bots-team-editor">
       {id && !detail && !loading && (
-        <button
-          className="bots-team-text-button"
+        <Button variant="outline"
+
           disabled={!online || action.busy}
           onClick={() => void load()}
         >
           <RefreshCw size={15} />
           Load team
-        </button>
+        </Button>
       )}
       {error && (
         <div role="alert" className="bots-teams-error">
@@ -464,7 +411,7 @@ function TeamEditor({
       >
         <label>
           Team name
-          <input
+          <Input
             autoFocus={!id}
             required
             maxLength={80}
@@ -475,21 +422,21 @@ function TeamEditor({
         </label>
         <label className="bots-team-color">
           Color
-          <input
+          <Input
             type="color"
             value={color}
             onChange={(e) => setColor(e.target.value)}
             disabled={locked}
           />
         </label>
-        <button
-          className="bots-primary"
+        <Button
+
           type="submit"
           disabled={locked || !name.trim() || Boolean(id && !detail)}
         >
           <Save size={16} />
           {id ? "Save team" : "Create team"}
-        </button>
+        </Button>
       </form>
       {detail && (
         <>
@@ -506,21 +453,21 @@ function TeamEditor({
                     <strong>{bot.name}</strong>
                     {bot.archived && <small>Archived</small>}
                   </span>
-                  <button
+                  <Button variant="outline"
                     aria-label={`Move ${bot.name} up`}
                     disabled={locked || dirty || index === 0}
                     onClick={() => order(index, -1)}
                   >
                     <ArrowUp size={16} />
-                  </button>
-                  <button
+                  </Button>
+                  <Button variant="outline"
                     aria-label={`Move ${bot.name} down`}
                     disabled={locked || dirty || index === members.length - 1}
                     onClick={() => order(index, 1)}
                   >
                     <ArrowDown size={16} />
-                  </button>
-                  <button
+                  </Button>
+                  <Button variant="outline"
                     aria-label={`Remove ${bot.name} from team`}
                     title="Unassign bot"
                     disabled={locked || dirty}
@@ -533,7 +480,7 @@ function TeamEditor({
                     }
                   >
                     <X size={16} />
-                  </button>
+                  </Button>
                 </div>
               ))}
             </div>
@@ -550,7 +497,7 @@ function TeamEditor({
                   });
               }}
             >
-              <select
+              <NativeSelect
                 aria-label="Bot to add to team"
                 value={assignBot}
                 disabled={locked || dirty}
@@ -565,9 +512,9 @@ function TeamEditor({
                       {b.teamId ? " · move to this team" : ""}
                     </option>
                   ))}
-              </select>
-              <button
-                className="bots-icon-button"
+              </NativeSelect>
+              <Button variant="outline"
+                size="icon"
                 aria-label="Add selected bot to team"
                 disabled={
                   locked ||
@@ -576,7 +523,7 @@ function TeamEditor({
                 }
               >
                 <Plus size={19} />
-              </button>
+              </Button>
             </form>
           </section>
           <section className="bots-team-section">
@@ -590,7 +537,7 @@ function TeamEditor({
             </p>
             <div className="bots-team-path">
               <code>{detail.workspace}</code>
-              <button
+              <Button variant="outline"
                 disabled={!navigator.clipboard}
                 aria-label="Copy shared workspace path"
                 onClick={() =>
@@ -605,7 +552,7 @@ function TeamEditor({
                 }
               >
                 {copied ? <Check size={17} /> : <Copy size={17} />}
-              </button>
+              </Button>
             </div>
           </section>
           <section className="bots-team-section">
@@ -614,7 +561,7 @@ function TeamEditor({
               Useful knowledge for the whole team. Bots can read and update this
               through their team tool.
             </p>
-            <textarea
+            <Textarea
               aria-label="Shared team memory"
               value={memory}
               disabled={locked}
@@ -624,8 +571,8 @@ function TeamEditor({
               onChange={(e) => setMemory(e.target.value)}
             />
             <div className="bots-team-memory-actions">
-              <button
-                className="bots-primary"
+              <Button
+
                 disabled={
                   locked ||
                   memory === detail.memory ||
@@ -642,9 +589,9 @@ function TeamEditor({
               >
                 <Save size={16} />
                 Save memory
-              </button>
-              <button
-                className="bots-team-text-button"
+              </Button>
+              <Button variant="outline"
+
                 disabled={locked}
                 onClick={() => {
                   if (
@@ -658,12 +605,12 @@ function TeamEditor({
               >
                 <RefreshCw size={15} />
                 Load latest
-              </button>
+              </Button>
               {dirty && <small>Unsaved edits</small>}
             </div>
           </section>
           <div className="bots-team-remove">
-            <button
+            <Button variant="outline"
               disabled={locked || dirty || members.length > 0}
               onClick={() =>
                 void action
@@ -678,7 +625,7 @@ function TeamEditor({
             >
               <Trash2 size={15} />
               Remove empty team
-            </button>
+            </Button>
             <small>Shared files and memory are retained.</small>
           </div>
         </>

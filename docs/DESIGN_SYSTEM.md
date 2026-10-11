@@ -291,4 +291,8 @@ Goal controls and editors use shared Button/Input/Textarea/NativeSelect. Header 
 
 ### Private input forms
 
-Private forms use shared Button and Input controls, semantic surfaces/text/errors, 14px body copy, 12px status and mobile 44px targets. Consent remains an explicit unchecked native checkbox; its privacy explanation stays visible. Existing memory lifetime, encryption, same-submission retry and owner guards are unchanged. The retained modal uses the shared shadow treatment and bounded scrolling; replacing its custom modal mechanism remains tracked. Actual isolated 320px offline form/disclosure/scroll and Escape focus return checked; connected transfer, busy/sealed/error/terminal states and full-workspace integration remain pending.
+Private forms use shared Button and Input controls, semantic surfaces/text/errors, 14px body copy, 12px status and mobile 44px targets. Consent remains an explicit unchecked native checkbox; its privacy explanation stays visible. Existing memory lifetime, encryption, same-submission retry and owner guards are unchanged. The private-input modal now uses ControlledDialog for focus containment, Escape and explicit opener return, with outside dismissal prevented to preserve open input. Actual isolated 320px offline form/disclosure/scroll and Escape focus return checked; connected transfer, busy/sealed/error/terminal states and full-workspace integration remain pending.
+
+### Teams
+
+Teams uses ControlledDialog, shared Button/Input/NativeSelect/Textarea, semantic cards and a two-column desktop/one-column mobile grid. Action rows align across unequal titles; mobile membership controls wrap after the bot name. Existing dirty-discard confirmations, same-operation recovery, owner/revision guards and mutations are retained. Actual offline 320/1280 long-title lists checked; editor/empty/error/pending/keyboard/full workspace checks remain pending.
