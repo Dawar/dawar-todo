@@ -565,3 +565,5 @@ The portable Next site exposes the same authenticated `/api/sync/events` revisio
 Task Request origin validation uses the same configured HTTPS public origin as bot sessions when the gateway forwards to the loopback site. Forwarded headers never choose the trusted origin. Owner identity, session CSRF, guest grants and service credentials retain their independent checks.
 
 PWA update/storage notices float above fixed full-screen views within safe-area bounds. They must remain visible on Bots as well as ordinary pages. Update offers include Later for the current version; dismissing an offer does not refresh, change storage or suppress a future different version. Update adoption retains the existing save/call guards.
+
+Every hidden-to-visible conversation return invalidates the foreground read cooldown. Focus/pageshow bursts coalesce within 500ms; a ten-second suppression must not hide already-finished output after a quick app switch. Hidden, offline, disposed and foreign-owner views perform no new history reads. This is event-driven recovery, without a recurring history poll.

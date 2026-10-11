@@ -59,7 +59,11 @@ export function useBotTimeline(owner: string, botId: string, online: boolean) {
     let observed = observation(), pendingObservation = false;
     const current = () => active && botsClient.owner === owner;
     const checkLatest = () => {
-      if (!current() || !botsClient.online || document.hidden || !pendingObservation && Date.now() - checkedAt < 10_000) return;
+      if (!current()) return;
+      // A real hidden→visible return must always refresh, even immediately
+      // after the last read. Coalesce only duplicate focus/pageshow events.
+      if (document.hidden) { pendingObservation = true; return; }
+      if (!botsClient.online || !pendingObservation && Date.now() - checkedAt < 500) return;
       pendingObservation = false;
       checkedAt = Date.now();
       void timeline.refreshLatest();
