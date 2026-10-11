@@ -208,3 +208,7 @@ Request groups retain semantic fieldset/legend markup with 16px spacing between 
 ### Request cards and list
 
 Request cards separate title, status, timestamp and answers. Long titles and filenames wrap; empty ordinary answers are explicit, while file-only answers avoid a misleading empty-answer label. Technical source identifiers remain available behind Source. Private fields remain excluded from ordinary answer rendering. The lazy card still mounts its body only when opened. Request lists use shared ghost buttons with separate title/status and honest loading/empty/offline states. Actual1280/800/320 card fixture covers long content, multiline answers, private-field omission, uncertainty and nested Source; no real request mutation. List controller integration, all statuses and keyboard/device acceptance remain pending. Type/scoped lint pass.
+
+### Long-content pagination
+
+TextPages and ItemPages share compact pagination controls with shared outline icon buttons, accessible names, disabled boundaries and a polite page summary. Mobile targets are44px. Original16384-character slices, item page sizes and index offsets are retained; lazy disclosure mounting is unchanged. Actual320 fixture confirms text offsets0/16384/32768, keyboard Last, terminal disabled controls and final item range21–23. Full message/plan/diff integration, changing input, desktop and screen-reader acceptance remain pending. Type/scoped lint pass.

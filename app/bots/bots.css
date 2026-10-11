@@ -1149,8 +1149,8 @@ html.bots-viewport-locked body {
 .bots-draft-status button { text-decoration: underline; margin-left: 6px; }
 .bots-draft-status select { max-width: 100%; }
 
-.bots-detail-status, .bots-text-pages { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 8px 0; font-size: 12px; color: #537361; }
-.bots-detail-status button, .bots-text-pages button, .bots-jump-latest { padding: 6px 10px; border-radius: 8px; background: #e9eeea; }
+.bots-detail-status { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 8px 0; font-size: 12px; color: #537361; }
+.bots-detail-status button, .bots-jump-latest { padding: 6px 10px; border-radius: 8px; background: #e9eeea; }
 .bots-jump-latest { align-self: center; flex: 0 0 auto; font-size: 12px; margin: 2px 0; }
 
 /* Support controls share a bounded scroll budget; the editor stays reachable. */
@@ -1175,3 +1175,7 @@ html.bots-viewport-locked body {
 .bots-upload-progress { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-height: 1.4em; }
 
 .bots-feed-loading { position: absolute; z-index: 2; top: 8px; left: 50%; transform: translateX(-50%); padding: 5px 12px; border-radius: 20px; background: var(--surface, #fff); box-shadow: 0 2px 12px #0001; color: #64756b; font-size: 12px; pointer-events: none; white-space: nowrap; }
+
+.bots-content-pagination { display:flex; align-items:center; flex-wrap:wrap; gap:8px 16px; margin:12px 0; min-width:0; }
+.bots-content-page-label { font-size:13px; line-height:1.5; color:var(--muted-foreground); }
+.bots-content-page-actions { display:flex; align-items:center; gap:6px; }
