@@ -1,4 +1,8 @@
 "use client";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { NativeSelect } from "@/components/ui/native-select";
+import { Textarea } from "@/components/ui/textarea";
 import { useRef, useEffect, useState } from "react";
 import { CreateTaskRequest } from "./task-request-ui";
 import type { BotRequest } from "../../lib/bots-types";
@@ -34,7 +38,7 @@ function FormField({
     return (
       <label>
         {schema.title ?? name}
-        <select
+        <NativeSelect
           required={required}
           value={String(value ?? "")}
           onChange={(e) =>
@@ -47,7 +51,7 @@ function FormField({
               {String(v)}
             </option>
           ))}
-        </select>
+        </NativeSelect>
       </label>
     );
   if (schema.type === "boolean")
@@ -86,7 +90,7 @@ function FormField({
     return (
       <label>
         {schema.title ?? name}
-        <textarea
+        <Textarea className="min-h-32 font-mono"
           required={required}
           placeholder="JSON value"
           defaultValue={value === undefined ? "" : JSON.stringify(value)}
@@ -106,7 +110,7 @@ function FormField({
     <label>
       {schema.title ?? name}
       {schema.description && <small>{schema.description}</small>}
-      <input
+      <Input
         required={required}
         type={numeric ? "number" : "text"}
         step={schema.type === "integer" ? 1 : "any"}
@@ -236,7 +240,7 @@ export function RequestCard({
                 </span>
               </label>
             ))}
-            <input
+            <Input
               type={q.isSecret ? "password" : "text"}
               aria-label={`Answer: ${q.header}`}
               placeholder={
@@ -255,10 +259,10 @@ export function RequestCard({
             />
           </fieldset>
         ))}
-        <p>Select an option or type an answer for each question.</p>
-        <button className="bots-primary" disabled={locked}>
+
+        <Button variant="default" disabled={locked}>
           {accepted ? "Answers sent" : busy ? "Sending answers…" : "Send answers"}
-        </button>
+        </Button>
         {!request.params.questions.some(q => q.isSecret) && <CreateTaskRequest params={{threadId: request.params.threadId, questionKey: pending.key}}/>}
       </form>
     );
@@ -268,27 +272,26 @@ export function RequestCard({
       content = (
         <>
           <p>{p.message}</p>
-          <a
-            className="bots-primary"
+          <Button asChild><a
             target="_blank"
             rel="noreferrer"
             href={/^https?:\/\//.test(p.url) ? p.url : undefined}
           >
             Open authorization
-          </a>
+          </a></Button>
           <div className="bots-request-actions">
-            <button
+            <Button variant="outline"
               disabled={locked}
               onClick={() => void submit({ action: "accept", content: null })}
             >
               I’ve completed this
-            </button>
-            <button
+            </Button>
+            <Button variant="outline"
               disabled={locked}
               onClick={() => void submit({ action: "cancel", content: null })}
             >
               Cancel
-            </button>
+            </Button>
           </div>
         </>
       );
@@ -298,12 +301,12 @@ export function RequestCard({
           <p>{p.title}</p>
           <p>{p.description}</p>
           <p>Device verification is unavailable on this Linux VM.</p>
-          <button
+          <Button variant="outline"
             disabled={locked}
             onClick={() => void submit({ action: "cancel", content: null })}
           >
             Cancel request
-          </button>
+          </Button>
         </>
       );
     else {
@@ -338,7 +341,7 @@ export function RequestCard({
           ) : (
             <label>
               Response (JSON)
-              <textarea
+              <Textarea className="min-h-32 font-mono"
                 required
                 value={rawText ?? JSON.stringify(form, null, 2)}
                 onChange={(e) => {
@@ -354,23 +357,23 @@ export function RequestCard({
             </label>
           )}
           <div className="bots-request-actions">
-            <button className="bots-primary" disabled={locked}>
+            <Button variant="default" disabled={locked}>
               Submit
-            </button>
-            <button
+            </Button>
+            <Button variant="outline"
               type="button"
               disabled={locked}
               onClick={() => void submit({ action: "decline", content: null })}
             >
               Decline
-            </button>
-            <button
+            </Button>
+            <Button variant="outline"
               type="button"
               disabled={locked}
               onClick={() => void submit({ action: "cancel", content: null })}
             >
               Cancel
-            </button>
+            </Button>
           </div>
         </form>
       );
@@ -384,8 +387,7 @@ export function RequestCard({
         </p>
         <pre>{JSON.stringify(request.params.permissions, null, 2)}</pre>
         <div className="bots-request-actions">
-          <button
-            className="bots-primary"
+          <Button variant="default"
             disabled={locked}
             onClick={() =>
               void submit({
@@ -395,8 +397,8 @@ export function RequestCard({
             }
           >
             Allow this turn
-          </button>
-          <button
+          </Button>
+          <Button variant="outline"
             disabled={locked}
             onClick={() =>
               void submit({
@@ -406,13 +408,13 @@ export function RequestCard({
             }
           >
             Allow for session
-          </button>
-          <button
+          </Button>
+          <Button variant="outline"
             disabled={locked}
             onClick={() => void submit({ permissions: {}, scope: "turn" })}
           >
             Decline
-          </button>
+          </Button>
         </div>
       </>
     );
@@ -448,21 +450,20 @@ export function RequestCard({
         </details>
         <div className="bots-request-actions">
           {decisions.map((decision, i) => (
-            <button
+            <Button variant={i === 0 ? "default" : "outline"}
               key={i}
-              className={i === 0 ? "bots-primary" : ""}
               disabled={locked}
               onClick={() => void submit({ decision })}
             >
               {decisionLabel(decision)}
-            </button>
+            </Button>
           ))}
         </div>
       </>
     );
   } else content = <p>This request is handled by the bot runtime.</p>;
   return (
-    <section className="bots-request" aria-label="Bot needs your input">
+    <section className="bots-request" aria-label="Bot needs your input" aria-busy={busy && !accepted}>
       <div className="bots-request-title">Your input is needed</div>
       {content}
       {error && (

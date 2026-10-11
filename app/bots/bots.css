@@ -901,82 +901,25 @@ html.bots-viewport-locked body {
   font-size: 13px;
   color: #216e4e;
 }
-.bots-request {
-  min-width: 0;
-  max-width: 100%;
-  overflow-wrap: anywhere;
-  margin: 20px 0;
-  padding: 18px;
-  border: 1px solid #cedfd3;
-  border-radius: 15px;
-  background: #f7fbf8;
-  font-size: 14px;
-}
-.bots-request-title {
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.07em;
-  color: #537a60;
-  margin-bottom: 12px;
-  font-weight: 600;
-}
-.bots-request fieldset {
-  min-width: 0;
-  margin: 12px 0 18px;
-}
-.bots-request legend {
-  font-weight: 550;
-  margin-bottom: 10px;
-}
-.bots-request input:not([type="radio"]):not([type="checkbox"]),
-.bots-request select,
-.bots-request textarea {
-  width: 100%;
-  border: 1px solid #d6e0d8;
-  border-radius: 8px;
-  padding: 9px 11px;
-  margin: 6px 0;
-  background: #fff;
-}
-.bots-request label {
-  display: block;
-  margin: 9px 0;
-}
-.bots-request label small {
-  display: block;
-  font-size: 12px;
-  color: #7a8b80;
-  margin-top: 3px;
-}
-.bots-request .bots-option {
-  display: flex;
-  gap: 10px;
-  align-items: center;
-  padding: 10px;
-  background: #fff;
-  border: 1px solid #dfe8e1;
-  border-radius: 9px;
-  cursor: pointer;
-}
-.bots-request .bots-option > span {
-  min-width: 0;
-}
-.bots-option strong {
-  font-weight: 550;
-}
-.bots-option input {
-  accent-color: #216e4e;
-}
-.bots-request-actions {
-  display: flex;
-  gap: 16px;
-  align-items: center;
-  flex-wrap: wrap;
-  margin-top: 13px;
-}
-.bots-request details {
-  margin: 12px 0;
-}
+.bots-request { min-width:0; max-width:100%; overflow-wrap:anywhere; margin:20px 0; padding:20px; border:1px solid var(--border); border-radius:var(--radius); background:var(--card); font-size:14px; }
+.bots-request-title { font-size:14px; color:var(--foreground); margin-bottom:16px; font-weight:600; }
+.bots-request fieldset { min-width:0; margin:16px 0 20px; }
+.bots-request legend { font-weight:600; padding-bottom:8px; }
+.bots-request label { display:grid; gap:8px; margin:12px 0; }
+.bots-request label small { display:block; font-size:12px; line-height:1.5; color:var(--muted-foreground); }
+.bots-request .bots-checkbox { display:flex; align-items:flex-start; gap:10px; }
+.bots-request :is(input[type=checkbox],input[type=radio]) { width:18px; height:18px; flex:0 0 18px; margin-top:2px; accent-color:var(--primary); }
+.bots-request :is(input[type=checkbox],input[type=radio]):focus-visible { outline:2px solid var(--ring); outline-offset:3px; }
+.bots-request .bots-option { display:flex; gap:12px; align-items:flex-start; min-height:44px; padding:12px; background:var(--background); border:1px solid var(--border); border-radius:var(--radius); cursor:pointer; }
+.bots-request .bots-option:has(input:checked) { border-color:var(--primary); background:var(--accent); }
+.bots-request .bots-option > span { min-width:0; display:grid; gap:4px; }
+.bots-request .bots-option strong { font-weight:600; }
+.bots-request-actions { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:16px; }
+.bots-request details { margin:16px 0; }
+.bots-request summary { cursor:pointer; min-height:44px; padding:10px 0; }
+.bots-request summary:focus-visible { outline:2px solid var(--ring); outline-offset:2px; }
+.bots-request pre { background:var(--muted); color:var(--foreground); border-radius:var(--radius); }
+.bots-request > [role=status], .bots-request form > p { font-size:13px; line-height:1.6; color:var(--muted-foreground); }
 .bots-plan {
   background: #f4f8f5;
   border: 1px solid #dce8df;

@@ -244,3 +244,7 @@ RunDecisions uses shared Button and Input primitives with semantic card/error co
 ### Retired activity navigation
 
 The unused ConversationActivity navigation and its dedicated nav/provenance CSS are removed. A repository consumer search found only four type-only consumers, now importing ActivityTarget from activity-target.ts. Existing history views retain conversation-activity.css. Type checking and scoped lint pass; this deletion changes no rendered navigation.
+
+### Bot input and approval cards
+
+RequestCard uses shared buttons, Input, NativeSelect and Textarea. Native radio/checkbox inputs retain keyboard semantics with18px controls, visible focus and a selected option border/background. Card titles use normal14px hierarchy rather than small uppercase diagnostics. Nested legends have explicit bottom padding; JSON editors use a128px minimum and monospace type. Original validation, response payloads, locks and request-specific callbacks remain. Actual1280 question selection/missing-answer/rejected-response retention and structured fields; actual320 question/approval action wrapping and JSON editor before-height evidence retained. No real permission or answer was sent. Type/scoped lint/diff pass. Final JSON-height observation, secret/URL/verification variants, busy/accepted transitions and full workspace/device proof remain pending.
