@@ -8,7 +8,7 @@ import {
   type SipRelayEnvironment,
 } from "./sip-controller";
 
-type Env = SipRelayEnvironment;
+type Env = SipRelayEnvironment & { VOICE_PORTABLE_PROXY?: string };
 
 type TwilioStart = {
   accountSid?: string;
@@ -640,6 +640,19 @@ const sourceWorker = {
 const worker={
   async fetch(request:Request,environment:Env,context:ExecutionContext){
     const url=new URL(request.url);
+    // Compatibility ingress only: original provider URLs remain usable while
+    // every call, receipt and scheduled job runs in the portable application.
+    // The setting belongs to deployment configuration, never request input.
+    if(environment.VOICE_PORTABLE_PROXY==='portable-rollover-v1'){
+      const path:Record<string,string>={'/health':'/api/voice/health','/openai/webhook':'/api/voice/openai/webhook','/stream':'/api/voice/stream'};
+      const target=path[url.pathname];
+      if(!target||url.search||request.method!==(url.pathname==='/openai/webhook'?'POST':'GET'))
+        return new Response('Not found.',{status:404,headers:{'Cache-Control':'no-store'}});
+      if(url.pathname==='/stream'&&request.headers.get('Upgrade')?.toLowerCase()!=='websocket')
+        return new Response('WebSocket upgrade required.',{status:426,headers:{'Cache-Control':'no-store'}});
+      try{return await fetch(new Request('https://work.dawar.ca'+target,request),{redirect:'manual'});}
+      catch{return new Response('Portable voice ingress is unavailable. Preserve the original call.',{status:503,headers:{'Cache-Control':'no-store'}});}
+    }
     if(url.pathname==='/api/migration/voice/control')return voiceMigrationControl(request,environment);
     if(url.pathname==='/health')return sourceWorker.fetch(request,environment,context);
     let scope:Awaited<ReturnType<typeof voiceAdmit>>=null;
@@ -653,6 +666,7 @@ const worker={
     }catch{scope?.unknown();scope?.end();return Response.json({error:'Voice work is held or unconfirmed.'},{status:503,headers:{'Cache-Control':'private, no-store'}});}
   },
   async scheduled(controller:ScheduledController,environment:Env,context:ExecutionContext){
+    if(environment.VOICE_PORTABLE_PROXY==='portable-rollover-v1')return;
     if(!voiceAdmissionEnabled(environment))return sourceWorker.scheduled(controller,environment,context);
     const scope=await voiceAdmit(environment,context,'scheduled');
     try{await sourceWorker.scheduled(controller,{...environment,VOICE_EFFECT_SCOPE:scope??undefined},context);}

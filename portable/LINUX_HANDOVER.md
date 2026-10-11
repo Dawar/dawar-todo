@@ -39,6 +39,13 @@ Tunnel only with healthy actual local services. Verify authentication, original
 Todo API scopes, history, registered files and voice/provider routing separately.
 Do not infer their success from the restart receipt.
 
+The old voice Worker uses `VOICE_PORTABLE_PROXY=portable-rollover-v1` only at
+rollover. It forwards the three existing provider/health paths to fixed
+`https://work.dawar.ca/api/voice/...` endpoints and stops its minute scheduler.
+It cannot select another host or execute its old call controllers in this mode.
+This compatibility URL preserves existing provider configuration; all voice
+state, provider processing and minute scheduling belong to the portable hub.
+
 Recovery after post-cutover input must preserve the new databases, mailbox,
 journal and uncertain original receipts. Freeze the new authoritative writer
 before any recovery route change. Never overwrite new input with the old backup.
