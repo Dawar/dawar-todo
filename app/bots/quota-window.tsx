@@ -28,7 +28,7 @@ export function QuotaWindow({ window }: { window: BotAccountQuotaWindow }) {
   const label = quotaWindowName(window.windowDurationMins);
   const date = countdown && window.resetsAt !== null ? new Date(window.resetsAt * 1000) : null;
   const percentage = left === null ? null : `${Number(left.toFixed(1))}%`;
-  return <div className="bots-quota-window">
+  return <div className="bots-quota-window" data-state={left === null ? "unavailable" : left === 0 ? "exhausted" : "available"}>
     <div className="bots-quota-title"><span>{label}</span><strong>{percentage ? `${percentage} remaining` : "Unavailable"}</strong></div>
     {left !== null && <div className="bots-usage-meter" role="meter" aria-label={`${label} quota remaining`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={left} aria-valuetext={`${percentage} remaining`}><span style={{ width: `${left}%` }} /></div>}
     <div className="bots-quota-reset">{countdown && <span>{countdown}</span>}{date ? <time dateTime={date.toISOString()} title={date.toLocaleString()}>Resets {date.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</time> : <span>Reset time unavailable</span>}</div>

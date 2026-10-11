@@ -54,3 +54,6 @@
 .bots-usage-heading, .bots-quota-title { flex-wrap: wrap; }
 .bots-usage-history p { margin: 8px 0; overflow-wrap: anywhere; }
 .bots-usage-history p[role=alert] { color: var(--destructive); font-size: 14px; }
+
+.bots-quota-window[data-state="unavailable"] .bots-quota-title > strong { color: var(--muted-foreground); }
+.bots-quota-window[data-state="exhausted"] .bots-quota-title > strong { color: var(--destructive); }

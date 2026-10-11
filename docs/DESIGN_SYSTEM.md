@@ -434,3 +434,5 @@ Team recovery uses one warning for an unconfirmed action, with the existing Chec
 ### Shared field validation
 
 Input, Textarea and NativeSelect use a destructive border and focus ring when `aria-invalid` is true. Consumers supply the associated error text; color is not the only error signal. Default and compact buttons are 36px high on desktop and 44px on mobile; compact changes horizontal padding. Disabled controls retain their native semantics.
+
+Quota status uses neutral text when unavailable, destructive text when exhausted, and primary text when capacity remains. The percentage or Unavailable label always communicates the state without color.
