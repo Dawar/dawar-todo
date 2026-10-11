@@ -54,6 +54,9 @@ import { zonedDateTimeInputValue, zonedLocalDateTimeToUtc } from "../lib/zoned-d
 import { AttachmentQueuePanel } from "./attachment-queue-panel";
 import { attachmentQueueMessage, hasAttachmentBytes } from "./attachment-queue";
 import { SiteHeader } from "./site-header";
+import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
+import { TaskListControls, TaskFiltersDialog } from "./task-list-controls";
 import { ProjectBrowser } from "./project-browser";
 import { CreateProjectDialog, CustomSnoozeDialog, AssignProjectDialog, DeleteProjectDialog } from "./task-dialogs";
 import { KeyboardShortcutsDialog } from "./keyboard-shortcuts-dialog";
@@ -4743,7 +4746,7 @@ export default function Home() {
   const stable_finishTaskReorder = useStableCallback(finishTaskReorder);
 
   return (
-    <main className="min-h-screen bg-[#f6f7f5] text-[#1d211f]">
+    <main className="min-h-screen bg-background text-foreground">
       <TodoForward request={null} onClose={() => {}} />
       <TodoQueue request={queueRequest} onClose={closeQueue} guard={queueGuard} onChanged={queueChanged} />
       <SiteHeader
@@ -4782,7 +4785,7 @@ export default function Home() {
           {captureSaveState.startsWith("Draft not saved") && <button type="button" className="ml-2 underline" onClick={() => void checkpointCapture().catch(() => undefined)}>Retry saving</button>}
           {captureAttachments.map((item) => <a key={item.localId} href={item.previewUrl} download={item.file.name} className="ml-2 underline">Save {item.file.name}</a>)}
         </div>}
-        <form onSubmit={addTodo} className="mb-5 rounded-2xl border border-black/[0.07] bg-white p-2 shadow-[0_10px_35px_rgba(30,45,36,0.07)] sm:p-3">
+        <form onSubmit={addTodo} className="mb-5 rounded-lg border border-border bg-card p-2 shadow-sm sm:p-3">
           <div className="flex items-end gap-2">
             <div className="flex min-w-0 flex-1 items-start gap-2 px-1 py-2 sm:px-2">
               <AttachmentPicker
@@ -4792,7 +4795,7 @@ export default function Home() {
                 onRecord={() => setVoiceTarget("capture")}
                 onAssignProject={openCaptureProjectAssignment}
               />
-              <textarea
+              <Textarea
                 ref={captureRef}
                 disabled={!captureReady || adding}
                 value={newTitle}
@@ -4813,19 +4816,19 @@ export default function Home() {
                 aria-label="Add a task"
                 aria-busy={recognizingCaptureTitle}
                 maxLength={2000}
-                className="min-h-10 min-w-0 flex-1 resize-none overflow-hidden bg-transparent py-2 text-[16px] leading-6 text-[#151816] outline-none placeholder:text-[#929994]"
+                className="min-h-10 min-w-0 flex-1 resize-none overflow-hidden border-0 px-1 py-2 text-base leading-6 shadow-none sm:text-base"
               />
             </div>
             <div className="flex shrink-0 items-center gap-2">
-              <span className="hidden text-[10px] text-[#929994] sm:block">⌘↵ add</span>
-              <button
+              <span className="hidden text-xs text-muted-foreground sm:block">⌘↵ add</span>
+              <Button
                 type="submit"
                 disabled={!captureReady || capturePreparing || !newTitle.trim() || adding || voiceTarget === "capture" || Boolean(projectDialog?.captureDraft) || captureAttachments.some((item) => item.status === "uploading" || item.status === "error")}
-                className="inline-flex h-11 items-center gap-2 rounded-xl bg-[#216e4e] px-4 text-sm font-semibold text-white transition hover:bg-[#195d41] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#216e4e] disabled:cursor-not-allowed disabled:opacity-40 sm:px-6"
+                className="shrink-0"
               >
                 <ActionIcon name="add" />
                 {adding ? "Adding…" : "Add"}
-              </button>
+              </Button>
             </div>
           </div>
 
@@ -4860,107 +4863,8 @@ export default function Home() {
         </form>
 
         <section aria-labelledby="tasks-heading">
-          <div className="mb-3 flex gap-1 overflow-x-auto rounded-xl border border-black/[0.06] bg-white p-1 shadow-sm">
-            {(Object.keys(viewLabels) as View[]).map((item) => (
-              <button
-                key={item}
-                onClick={() => chooseView(item)}
-                className={classNames(
-                  "flex min-w-max flex-1 items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition focus-visible:outline-2 focus-visible:outline-[#216e4e]",
-                  view === item ? "bg-[#eaf3ed] text-[#195d41]" : "text-[#69716c] hover:bg-[#f6f7f5] hover:text-[#252a27]",
-                )}
-              >
-                {viewLabels[item]}
-                <span className={classNames("rounded-full px-1.5 py-0.5 text-[11px]", view === item ? "bg-white/80" : "bg-[#f1f2f0]")}>{counts[item]}</span>
-              </button>
-            ))}
-          </div>
-
-          <div className="mb-3 grid grid-cols-[minmax(0,1fr)_auto_auto] gap-2 sm:grid-cols-[minmax(220px,1fr)_auto_auto]">
-            <label className="flex h-10 items-center gap-2 rounded-xl border border-black/[0.08] bg-white px-3 shadow-sm focus-within:border-[#216e4e]/50 focus-within:ring-3 focus-within:ring-[#216e4e]/10">
-              <ActionIcon name="search" className="h-4 w-4 shrink-0 text-[#7c847f]" />
-              <input
-                ref={searchRef}
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder="Search tasks"
-                aria-label="Search tasks"
-                className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-[#929994]"
-              />
-              <kbd className="hidden rounded border border-black/10 bg-[#f6f7f5] px-1.5 py-0.5 text-[10px] text-[#7c847f] sm:block">/</kbd>
-            </label>
-            {view === "open" && (
-              <button
-                type="button"
-                onClick={togglePinList}
-                aria-pressed={pinListEnabled}
-                aria-label={pinListEnabled ? "Turn off the separate pinned list" : "Turn on the separate pinned list"}
-                title={pinListEnabled ? "Mix pinned tasks into their natural order" : "Show pinned tasks in a separate list"}
-                className={classNames(
-                  "flex h-10 items-center gap-2 rounded-xl border px-3 text-sm font-medium shadow-sm transition focus-visible:outline-2 focus-visible:outline-[#216e4e]",
-                  pinListEnabled ? "border-[#216e4e]/25 bg-[#eaf3ed] text-[#195d41]" : "border-black/[0.08] bg-white text-[#69716c] hover:bg-[#f6f7f5]",
-                )}
-              >
-                <ActionIcon name="pin" className="h-4 w-4" />
-                <span className="hidden sm:inline">Pins</span>
-                <span className={classNames("grid h-5 min-w-5 place-items-center rounded-full px-1 text-[10px]", pinListEnabled ? "bg-white/85 text-[#195d41]" : "bg-[#f1f2f0] text-[#69716c]")}>{pinnedTaskCount}/{MAX_PINNED_TASKS}</span>
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={() => setFiltersOpen(true)}
-              className={classNames(
-                "flex h-10 items-center gap-2 rounded-xl border bg-white px-3 text-sm font-medium shadow-sm transition focus-visible:outline-2 focus-visible:outline-[#216e4e] sm:hidden",
-                mobileFilterCount ? "border-[#216e4e]/30 text-[#195d41]" : "border-black/[0.08] text-[#4f5752]",
-              )}
-              aria-label={`Filters${mobileFilterCount ? `, ${mobileFilterCount} active` : ""}`}
-            >
-              <ActionIcon name="filters" className="h-4 w-4" />
-              <span>Filters</span>
-              {mobileFilterCount > 0 && <span className="grid h-5 min-w-5 place-items-center rounded-full bg-[#216e4e] px-1 text-[10px] text-white">{mobileFilterCount}</span>}
-            </button>
-            <select value={priority} onChange={(event) => setPriority(event.target.value)} aria-label="Filter by priority" className="hidden h-10 rounded-xl border border-black/[0.08] bg-white px-3 text-sm text-[#4f5752] shadow-sm outline-none focus:border-[#216e4e]/50 sm:block">
-              <option value="">All priorities</option>
-              <option value="1">Urgent</option>
-              <option value="2">High</option>
-              <option value="3">Normal</option>
-              <option value="4">Low</option>
-            </select>
-          </div>
-
-          {filtersOpen && (
-            <div className="fixed inset-0 z-50 sm:hidden" role="dialog" aria-modal="true" aria-labelledby="mobile-filters-title">
-              <button type="button" aria-label="Close filters" onClick={() => setFiltersOpen(false)} className="absolute inset-0 bg-black/30 backdrop-blur-[2px]" />
-              <div className="absolute inset-x-0 bottom-0 rounded-t-3xl bg-white px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-4 shadow-2xl">
-                <div className="mx-auto mb-4 h-1 w-10 rounded-full bg-black/15" aria-hidden="true" />
-                <div className="mb-5 flex items-center justify-between">
-                  <div>
-                    <h3 id="mobile-filters-title" className="text-lg font-semibold text-[#202522]">Filters</h3>
-                    <p className="mt-0.5 text-xs text-[#7c847f]">Narrow the list without losing workspace.</p>
-                  </div>
-                  <button type="button" onClick={() => setFiltersOpen(false)} className="grid h-9 w-9 place-items-center rounded-full bg-[#f1f2f0] text-[#4f5752]" aria-label="Close filters" title="Close"><ActionIcon name="close" /></button>
-                </div>
-
-                <div className="space-y-4">
-                  <label className="block">
-                    <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-[#69716c]">Priority</span>
-                    <select value={priority} onChange={(event) => setPriority(event.target.value)} className="h-12 w-full rounded-xl border border-black/[0.1] bg-white px-3 text-sm text-[#303632] outline-none focus:border-[#216e4e]/50">
-                      <option value="">All priorities</option>
-                      <option value="1">Urgent</option>
-                      <option value="2">High</option>
-                      <option value="3">Normal</option>
-                      <option value="4">Low</option>
-                    </select>
-                  </label>
-                </div>
-
-                <div className="mt-6 grid grid-cols-2 gap-2">
-                  <button type="button" onClick={() => setPriority("")} className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-black/[0.08] text-sm font-semibold text-[#4f5752]"><ActionIcon name="restore" />Reset</button>
-                  <button type="button" onClick={() => setFiltersOpen(false)} className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-[#216e4e] text-sm font-semibold text-white"><ActionIcon name="done" />Show {filtered.length} {filtered.length === 1 ? "task" : "tasks"}</button>
-                </div>
-              </div>
-            </div>
-          )}
+          <TaskListControls view={view} counts={counts} onView={chooseView} query={query} onQuery={setQuery} searchRef={searchRef} priority={priority} onPriority={setPriority} pins={pinListEnabled} pinCount={pinnedTaskCount} pinLimit={MAX_PINNED_TASKS} onPins={togglePinList} filterCount={mobileFilterCount} onFilters={() => setFiltersOpen(true)} />
+          {filtersOpen && <TaskFiltersDialog priority={priority} onPriority={setPriority} count={filtered.length} onClose={() => setFiltersOpen(false)} />}
 
           <div className="mb-2 flex items-center justify-between px-1">
             <div className="flex items-center gap-3">
