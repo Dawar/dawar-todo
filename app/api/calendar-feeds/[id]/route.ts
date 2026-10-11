@@ -1,4 +1,6 @@
 import { regenerateCalendarFeed, revokeCalendarFeed } from "../../../../db/calendar-feeds";
+import { env } from "cloudflare:workers";
+import { botsRequestOrigin } from "../../../../lib/bots-auth";
 
 export async function PATCH(
   request: Request,
@@ -7,6 +9,7 @@ export async function PATCH(
   const { id } = await context.params;
   const startedAt = Date.now();
   try {
+    const origin = botsRequestOrigin(request, env as { BOTS_PUBLIC_ORIGIN?: string });
     const feed = await regenerateCalendarFeed(id);
     if (!feed) return Response.json({ error: "Calendar link not found." }, { status: 404 });
     console.info("[todo-api] calendar feed regenerated", { id, durationMs: Date.now() - startedAt });
@@ -14,7 +17,7 @@ export async function PATCH(
       feed: {
         id: feed.id,
         name: feed.name,
-        url: new URL(feed.path, request.url).toString(),
+        url: new URL(feed.path, origin).toString(),
         createdAt: feed.createdAt,
         updatedAt: feed.updatedAt,
       },
