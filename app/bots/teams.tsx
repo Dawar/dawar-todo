@@ -31,14 +31,15 @@ type Action = ReturnType<typeof useTeamAction>;
 function ChangeState({ action }: { action: Action }) {
   return (
     <>
-      {action.error && (
+      {action.error && !action.pending && (
         <div className="bots-teams-error" role="alert">
-          {action.error}
+          <p>{action.error}</p>
+          {action.blocked && <Button variant="outline" onClick={action.recover}>Read saved changes</Button>}
         </div>
       )}
       {action.pending && (
-        <div className="bots-teams-error">
-          Awaiting confirmation.
+        <div className="bots-teams-pending" role="status">
+          <p>{action.error || "Awaiting confirmation."}</p>
           <Button variant="outline"
             disabled={action.busy || !client.online}
             onClick={action.retry}
@@ -46,11 +47,6 @@ function ChangeState({ action }: { action: Action }) {
             Check status
           </Button>
         </div>
-      )}
-      {action.blocked && !action.pending && (
-        <Button variant="outline"  onClick={action.recover}>
-          Read saved changes
-        </Button>
       )}
     </>
   );

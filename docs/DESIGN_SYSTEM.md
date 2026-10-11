@@ -428,3 +428,5 @@ Task editing updates the affected row without refreshing the entire list. Draft 
 The legacy clipboard fallback always removes its temporary text field, including failed copies. If it took focus, it returns focus to the connected original control without scrolling; it does not override focus moved elsewhere by an interaction.
 
 Unreadable saved queue actions and team changes show a concise recovery message instead of parser or browser-storage diagnostics. The warning retains the Retry control and tells the user to preserve site storage; action identity, saved bytes and dispatch guards are unchanged.
+
+Team recovery uses one warning for an unconfirmed action, with the existing Check status control. Definite errors remain alerts. Team metadata uses13px text; compact member-count badges retain12px.
