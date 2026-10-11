@@ -118,7 +118,10 @@ export class HubControls extends EventEmitter {
   async lock(key,fn) {const before=this.locks.get(key)??Promise.resolve(),p=before.catch(()=>{}).then(fn);this.locks.set(key,p);try{return await p;}finally{if(this.locks.get(key)===p)this.locks.delete(key);}}
   emitEvent(type,data,botId) {
     const p=this.hub.db.prepare('SELECT * FROM portable_placements WHERE bot_id=?').get(botId);if(!p)return;
-    const event={botId,type,data,at:now(),seq:1},text=boundedFrame(event);
+    // Legacy presentation records may omit optional fields (for example a
+    // sent burst's revision). Journal their JSON wire shape, as on the agent;
+    // command fingerprints and protocol validation remain strict.
+    const event=JSON.parse(JSON.stringify({botId,type,data,at:now(),seq:1})),text=boundedFrame(event);
     const sequence=Number(this.store.db.prepare('INSERT INTO portable_events(node_id,event_id,bot_id,epoch,fingerprint,event,created_at) VALUES(?,?,?,?,?,?,?)').run(p.node_id,`hub:${randomUUID()}`,botId,p.epoch,digest(text),text,Date.now()).lastInsertRowid);
     this.store.afterCommit(()=>this.broadcast(p.owner,{...event,seq:sequence}));
   }
