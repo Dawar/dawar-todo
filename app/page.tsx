@@ -3904,7 +3904,7 @@ export default function Home() {
         }}
       />
       {(connectionQuality !== "online" || showPendingSyncStatus) && (
-        <div className="pointer-events-none fixed right-3 top-[4.25rem] z-40 rounded-full bg-foreground px-3 py-1.5 text-xs font-semibold text-background shadow-lg" role="status" aria-live="polite">
+        <div className="mx-auto max-w-5xl px-4 py-2 text-[13px] text-muted-foreground sm:px-5" role="status" aria-live="polite">
           {connectionQuality === "offline"
             ? `Offline${pendingSyncCount ? ` · ${pendingSyncCount} queued` : ""}`
             : connectionQuality === "degraded"

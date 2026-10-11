@@ -378,3 +378,8 @@ Task and form Markdown previews use semantic card, foreground, muted and primary
 
 ### Recovery and transient feedback
 Task sync recovery uses a semantic warning surface, a concise retained-change explanation, expandable saved payloads and shared retry/download buttons. Hidden payload details preserve recovery context without dominating the task list. Pull-refresh feedback uses the popover surface and 13px label; the opening route uses shared ScreenLoading. Existing gesture thresholds, persistence, retry and navigation behavior remain unchanged.
+
+### Task-row status and actions
+Task rows use a restrained semantic palette: destructive for urgent/overdue, warning for high priority/snooze/offline, muted for ordinary metadata, and accent for queued status. Context and recurrence share secondary styling rather than unrelated colors. Badge labels remain textual; long metadata wraps within the row. Swipe surfaces pair their foreground/background tokens. Actions, identity, gesture thresholds and persistence are unchanged.
+
+Task sync status occupies normal document flow beneath navigation. It must not float over recovery notices or task controls; long reconnect/auth labels wrap naturally.

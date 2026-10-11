@@ -37,7 +37,7 @@ function recurrenceLabel(expression: string, status: Todo["status"], now: number
 }
 export function SnoozeStatusBadge({ value, now, timeZone }: { value: string; now: number; timeZone: string }) {
   return (
-    <span className="inline-flex min-h-[22px] items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-amber-700 ring-1 ring-inset ring-amber-200/70">
+    <span className="inline-flex min-h-[22px] items-center gap-1 rounded-full bg-warning px-2 py-0.5 text-warning-foreground ring-1 ring-inset ring-warning-foreground/20">
       <ActionIcon name="snooze" className="h-3 w-3" />
       {snoozeLabel(value, now, timeZone)}
     </span>
@@ -119,8 +119,8 @@ export const TaskRow = memo(function TaskRow({
     ? (longSwipe ? leftSecondaryAction.icon : primaryAction.icon)
     : (longSwipe ? "forward" : "edit");
   const revealClass = offset < 0
-    ? longSwipe && (leftSecondaryAction.icon === "snooze" || leftSecondaryAction.icon === "wake") ? "bg-amber-500" : "bg-[#216e4e]"
-    : longSwipe ? "bg-[#216e4e]" : "bg-slate-500";
+    ? longSwipe && (leftSecondaryAction.icon === "snooze" || leftSecondaryAction.icon === "wake") ? "bg-warning0" : "bg-primary text-primary-foreground"
+    : longSwipe ? "bg-primary text-primary-foreground" : "bg-muted0";
 
   function pointerDown(event: ReactPointerEvent<HTMLDivElement>) {
     if (pending || event.pointerType !== "touch") return;
@@ -256,7 +256,7 @@ export const TaskRow = memo(function TaskRow({
         reorderTarget && "ring-2 ring-inset ring-primary/45",
       )}
     >
-      <div className={classNames("absolute inset-0 flex items-center justify-between px-5 text-sm font-semibold text-white md:hidden", revealClass)} aria-hidden="true">
+      <div className={classNames("absolute inset-0 flex items-center justify-between px-5 text-sm font-semibold md:hidden", revealClass)} aria-hidden="true">
         <span className={classNames("inline-flex items-center gap-2 transition-opacity", offset > 0 ? "opacity-100" : "opacity-0")}><ActionIcon name={revealIcon} />{revealAction}</span>
         <span className={classNames("inline-flex items-center gap-2 transition-opacity", offset < 0 ? "opacity-100" : "opacity-0")}><ActionIcon name={revealIcon} />{revealAction}</span>
       </div>
@@ -369,16 +369,16 @@ export const TaskRow = memo(function TaskRow({
           </div>
           {todo.notes && <p className="mt-1 line-clamp-2 whitespace-pre-wrap text-sm leading-5 text-muted-foreground">{todo.notes}</p>}
           {(todo.attachmentCount > 0 || todo.project || todo.context || todo.dueDate || todo.priority <= 2 || snoozed || recurring || todo.offline || todo.queueLastTransfer) && (
-            <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[13px] font-medium leading-4">
-              {todo.attachmentCount > 0 && <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-muted px-1.5 py-0.5 text-xs font-medium text-muted-foreground"><ActionIcon name="attachment" className="h-3 w-3" />{todo.attachmentCount}</span>}
-              {todo.priority <= 2 && <span className={classNames("inline-flex min-h-[22px] items-center rounded-full px-2 py-0.5", todo.priority === 1 ? "bg-red-50 text-red-700 ring-1 ring-inset ring-red-200/70" : "bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-200/70")}>{priorityLabels[todo.priority]}</span>}
+            <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[13px] font-medium leading-4 [&>span]:max-w-full [&>span]:break-words [&_svg]:shrink-0">
+              {todo.attachmentCount > 0 && <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-muted px-1.5 py-0.5 text-[13px] font-medium text-muted-foreground"><ActionIcon name="attachment" className="h-3 w-3" />{todo.attachmentCount}</span>}
+              {todo.priority <= 2 && <span className={classNames("inline-flex min-h-[22px] items-center rounded-full px-2 py-0.5", todo.priority === 1 ? "bg-destructive/10 text-destructive ring-1 ring-inset ring-destructive/20" : "bg-warning text-warning-foreground ring-1 ring-inset ring-warning-foreground/20")}>{priorityLabels[todo.priority]}</span>}
               {todo.project && <span className="inline-flex min-h-[22px] items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-muted-foreground ring-1 ring-inset ring-border"><ActionIcon name="folder" className="h-3 w-3" />{todo.project}</span>}
-              {todo.context && <span className="inline-flex min-h-[22px] items-center rounded-full bg-sky-50 px-2 py-0.5 text-sky-700 ring-1 ring-inset ring-sky-200/70">{todo.context}</span>}
-              {todo.dueDate && <span className={classNames("inline-flex min-h-[22px] items-center gap-1 rounded-full px-2 py-0.5 ring-1 ring-inset", isDueTodayOrOverdue(todo.dueDate) && todo.status === "open" && !snoozed ? "bg-red-50 text-red-700 ring-red-200/70" : "bg-slate-50 text-slate-600 ring-slate-200/80")}><ActionIcon name="calendar" className="h-3 w-3" />{formatDueDate(todo.dueDate)}</span>}
+              {todo.context && <span className="inline-flex min-h-[22px] items-center rounded-full bg-secondary px-2 py-0.5 text-secondary-foreground ring-1 ring-inset ring-border">{todo.context}</span>}
+              {todo.dueDate && <span className={classNames("inline-flex min-h-[22px] items-center gap-1 rounded-full px-2 py-0.5 ring-1 ring-inset", isDueTodayOrOverdue(todo.dueDate) && todo.status === "open" && !snoozed ? "bg-destructive/10 text-destructive ring-destructive/20" : "bg-muted text-muted-foreground ring-border")}><ActionIcon name="calendar" className="h-3 w-3" />{formatDueDate(todo.dueDate)}</span>}
               {snoozed && todo.snoozedUntil && <SnoozeStatusBadge value={todo.snoozedUntil} now={now} timeZone={timeZone} />}
-              {todo.recurrenceCron && <span className="inline-flex min-h-[22px] items-center gap-1 rounded-full bg-violet-50 px-2 py-0.5 text-violet-700 ring-1 ring-inset ring-violet-200/70"><ActionIcon name="repeat" className="h-3 w-3" />{recurrenceLabel(todo.recurrenceCron, todo.status, now, timeZone)}</span>}
-              {todo.queueLastTransfer && <span className="inline-flex min-h-[22px] items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-emerald-700">Queued · source retained</span>}
-              {todo.offline && <span className="inline-flex min-h-[22px] items-center gap-1 rounded-full bg-orange-50 px-2 py-0.5 text-orange-700 ring-1 ring-inset ring-orange-200/70"><ActionIcon name="retry" className="h-3 w-3" />Saved on device</span>}
+              {todo.recurrenceCron && <span className="inline-flex min-h-[22px] items-center gap-1 rounded-full bg-secondary px-2 py-0.5 text-secondary-foreground ring-1 ring-inset ring-border"><ActionIcon name="repeat" className="h-3 w-3" />{recurrenceLabel(todo.recurrenceCron, todo.status, now, timeZone)}</span>}
+              {todo.queueLastTransfer && <span className="inline-flex min-h-[22px] items-center gap-1 rounded-full bg-accent px-2 py-0.5 text-accent-foreground">Queued</span>}
+              {todo.offline && <span className="inline-flex min-h-[22px] items-center gap-1 rounded-full bg-warning px-2 py-0.5 text-warning-foreground ring-1 ring-inset ring-warning-foreground/20"><ActionIcon name="retry" className="h-3 w-3" />Saved on device</span>}
             </div>
           )}
         </div>
@@ -416,7 +416,7 @@ export const TaskRow = memo(function TaskRow({
               onClick={() => onAcknowledgeUrgent(todo)}
               aria-label={`Acknowledge urgent alert: ${todo.title}`}
               title="Acknowledge urgent alert"
-              className="shrink-0 text-destructive transition hover:bg-red-50 focus-visible:outline-2 focus-visible:outline-ring"
+              className="shrink-0 text-destructive transition hover:bg-destructive/10 focus-visible:outline-2 focus-visible:outline-ring"
             >
               <ActionIcon name="phone" className="h-[18px] w-[18px]" />
             </Button>
@@ -431,7 +431,7 @@ export const TaskRow = memo(function TaskRow({
                 onClick={() => onAcknowledgeUrgent(todo)}
                 aria-label={`Acknowledge urgent alert: ${todo.title}`}
                 title="Acknowledge urgent alert"
-                className="grid h-9 w-9 place-items-center rounded-lg text-red-700 transition hover:bg-red-50 focus-visible:outline-2 focus-visible:outline-ring"
+                className="grid h-9 w-9 place-items-center rounded-lg text-destructive transition hover:bg-destructive/10 focus-visible:outline-2 focus-visible:outline-ring"
               >
                 <ActionIcon name="phone" className="h-[18px] w-[18px]" />
                 <span className="sr-only">Acknowledge urgent alert</span>
@@ -448,10 +448,10 @@ export const TaskRow = memo(function TaskRow({
                 title={label}
                 className={classNames(
                   "text-muted-foreground transition hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring",
-                  (action === "complete" || action === "unsnooze") && "hover:bg-emerald-50 hover:text-emerald-700",
-                  action === "snooze" && "hover:bg-amber-50 hover:text-amber-700",
+                  (action === "complete" || action === "unsnooze") && "hover:bg-accent hover:text-accent-foreground",
+                  action === "snooze" && "hover:bg-warning hover:text-warning-foreground",
                   action === "pin" && "hover:bg-accent hover:text-primary",
-                  action === "delete" && "hover:bg-red-50 hover:text-red-700",
+                  action === "delete" && "hover:bg-destructive/10 hover:text-destructive",
                 )}
               >
                 <ActionIcon name={icon} className="h-[18px] w-[18px]" />
