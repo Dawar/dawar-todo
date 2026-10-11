@@ -18,14 +18,12 @@
 .bots-document-state { flex: 1; min-width: 0; padding: 24px; color: var(--muted-foreground); }
 .bots-document-state button { margin-top: 12px; }
 .bots-visualization-reference { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 8px; max-width: 100%; }
-.bots-visualization-reference > button { color: var(--primary); text-decoration: underline; text-align: left; overflow-wrap: anywhere; min-height: 44px; }
-.bots-visualization-reference > button:disabled { opacity: .55; }
+.bots-visualization-reference > button { height: auto; min-height: 44px; white-space: normal; text-align: left; overflow-wrap: anywhere; }
 .bots-visualization-reference small { font-size: 13px; overflow-wrap: anywhere; }
 .bots-route-diagram { flex: 1; min-height: 0; overflow: auto; padding: 24px; color: var(--foreground); font: 16px/1.6 system-ui,sans-serif; overflow-wrap: anywhere; }
-.bots-route-diagram h2 { font-size: 1.5em; margin: 0 0 16px; }
-.bots-route-diagram label { display: block; }
-.bots-route-diagram select { min-height: 44px; width: 100%; max-width: 420px; padding: 8px; border: 1px solid #a8bdaa; border-radius: 6px; background: var(--card); }
-.bots-route-diagram select:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.bots-route-diagram h2 { font-size: 24px; font-weight: 600; line-height: 1.3; margin: 0 0 16px; }
+.bots-route-diagram label { display: block; margin-bottom: 8px; font-size: 14px; font-weight: 500; }
+.bots-route-diagram select { max-width: 420px; }
 .bots-route-legend { font-size: 13px; margin: 16px 0; }
 .bots-route-diagram ol { list-style: none; padding: 0; margin: 0; }
 .bots-route-diagram li { display: grid; grid-template-columns: minmax(90px,.3fr) minmax(0,1fr); gap: 12px; padding: 12px 0 24px; }

@@ -1,4 +1,5 @@
 "use client";
+import { Button } from "@/components/ui/button";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import type { BotArtifactPage, BotAttachment } from "../../lib/bots-types";
@@ -56,11 +57,11 @@ function ScopedVisualization({ botId, reference, attachments, owner }: { botId: 
     finally { if (current()) setBusy(false); }
   }
   return <span className="bots-visualization-reference">
-    <button disabled={!path || !online || busy} onClick={() => void open()}>{busy ? "Opening visualization…" : `Open visualization · ${path.split("/").at(-1) || "unsupported reference"}`}</button>
+    <Button variant="outline" disabled={!path || !online || busy} onClick={() => void open()}>{busy ? "Opening visualization…" : `Open visualization · ${path.split("/").at(-1) || "unsupported reference"}`}</Button>
     {!online && <small>Connect to open this visualization.</small>}
     {error && <small role="alert">{error}</small>}
-    {canIndex && !indexComplete && <button disabled={!online || busy} onClick={() => void open(true)}>{indexCursor ? "Continue indexing shared outputs" : "Index shared outputs"}</button>}
-    {searchCursor && <button disabled={!online || busy} onClick={() => void open()}>Check next file page</button>}
+    {canIndex && !indexComplete && <Button variant="outline" disabled={!online || busy} onClick={() => void open(true)}>{indexCursor ? "Continue indexing shared outputs" : "Index shared outputs"}</Button>}
+    {searchCursor && <Button variant="outline" disabled={!online || busy} onClick={() => void open()}>Check next file page</Button>}
     {item && createPortal(<ArtifactViewer item={item} owner={owner} online={online} onClose={close} />, document.body)}
   </span>;
 }
