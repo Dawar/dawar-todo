@@ -426,3 +426,5 @@ Dialog titles use snug (1.375) line height so multi-line headings remain readabl
 Task editing updates the affected row without refreshing the entire list. Draft projection preserves absent optional delegation metadata; an actual delegation is still cleared while a local draft is pending. Original task identity and acknowledgement handling remain unchanged.
 
 The legacy clipboard fallback always removes its temporary text field, including failed copies. If it took focus, it returns focus to the connected original control without scrolling; it does not override focus moved elsewhere by an interaction.
+
+Unreadable saved queue actions show a concise recovery message instead of parser or browser-storage diagnostics. The warning retains the Retry control and tells the user to preserve site storage; action identity, saved bytes and dispatch guards are unchanged.

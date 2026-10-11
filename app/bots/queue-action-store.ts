@@ -1,7 +1,7 @@
 export const queueActionPrefix = (owner: string, botId: string) => `dawar:bot:queue-action:${JSON.stringify([owner, botId])}:`;
 export type QueueActionMethod = 'queue.send' | 'queue.delete' | 'queue.reorder' | 'queue.resume' | 'queue.move' | 'queue.merge' | 'queue.update' | 'queueLists.save' | 'queueLists.delete' | 'queueLists.flush';
 export type PendingQueueAction = { id: string; method: QueueActionMethod; params: Record<string, unknown>; owner: string; botId: string };
-const message = (error: unknown) => error instanceof Error ? error.message : 'Queue action could not be confirmed.';
+const unreadableAction = 'Could not read the saved queue action. Retry without clearing site storage.';
 export function readQueueAction(owner: string, botId: string): { pending: PendingQueueAction | null; error: string } {
   const prefix = queueActionPrefix(owner, botId);
   try {
@@ -14,9 +14,9 @@ export function readQueueAction(owner: string, botId: string): { pending: Pendin
       const validParams = params && typeof params === 'object' && !Array.isArray(params) && (p.method === 'queue.send' ? typeof params.id === 'string' && params.id.length > 0 && Number.isSafeInteger(params.expectedRevision) && Number(params.expectedRevision) > 0 : p.method === 'queue.delete' ? typeof params.id === 'string' && params.id.length > 0 && (params.expectedRevision === undefined || Number.isSafeInteger(params.expectedRevision) && Number(params.expectedRevision) > 0) :
         p.method === 'queue.reorder' ? (Array.isArray(params.ids) && params.ids.every(id => typeof id === 'string') || typeof params.id === 'string' && (params.beforeId === null || typeof params.beforeId === 'string') && Number.isSafeInteger(params.expectedRevision) && Number(params.expectedRevision)>0) : p.method === 'queue.resume' ? Object.keys(params).length === 0 : p.method === 'queue.move' || p.method === 'queue.merge' ? Array.isArray(params.items) && params.items.length > 0 && params.items.every(item => item && typeof item.id === 'string' && Number.isSafeInteger(item.revision)) : p.method === 'queue.update' ? typeof params.id === 'string' && typeof params.text === 'string' && Array.isArray(params.attachments) : p.method === 'queueLists.save' ? typeof params.name === 'string' && (params.cron === null || typeof params.cron === 'string') && typeof params.timeZone === 'string' && typeof params.enabled === 'boolean' : ['queueLists.delete','queueLists.flush'].includes(p.method) && typeof params.id === 'string' && Number.isSafeInteger(params.expectedRevision));
       if (p.owner !== owner || p.botId !== botId || typeof p.id !== 'string' || !/^[a-zA-Z0-9:_-]{10,180}$/.test(p.id) || key !== prefix+p.id || !validParams)
-        throw Error('Saved queue action cannot be read. Keep this site’s storage and ask for recovery.');
+        throw Error(unreadableAction);
       return { pending: p, error: '' };
     }
     return { pending: null, error: '' };
-  } catch (error) { return { pending: null, error: message(error) }; }
+  } catch { return { pending: null, error: unreadableAction }; }
 }
