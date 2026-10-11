@@ -50,7 +50,7 @@ export function prepareHandover({configuration,configurationSHA256,source,backup
   const native=new Store(join(agentDirectory,'native-control.sqlite')),key=nodeKey(join(agentDirectory,'node-key.pem'));
   const hello={protocol:PROTOCOL_VERSION,runtime:RUNTIME_VERSION,platform:process.platform,arch:process.arch,
     capabilities:{text:true,localStdio:true,registeredArtifacts:true,profileReads:true,memoryCompaction:true,pdfPreview:true,
-      desktop:c.agent.desktops?.enabled===true,secureTransfer:true,centralBursts:true,voice:false,...centralAgentCapabilities({agent:{centralRouting:true}}),autonomousGoals:false}};
+      desktop:c.agent.desktops?.enabled===true,secureTransfer:true,centralBursts:true,voice:false,...centralAgentCapabilities({agent:{centralRouting:true}}),autonomousGoals:true}};
   let enrollment;const writerId=`migration:${source}`,epoch=1;
   try{
     // The original human migration authority approves moving the existing

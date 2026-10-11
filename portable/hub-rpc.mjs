@@ -153,7 +153,9 @@ export class HubRpc {
     if(placements.length&&snapshots.length===placements.length&&placements.every(p=>secureCapable(this.store.node(p.node_id),this.connection(p))))
       for(const key of ['secureInputs','secureResponseLifecycle'])if(snapshots.every(({s})=>s.capabilities?.[key]===1))common[key]=1;
     if(placements.some(p=>!desktopCapable(this.store.node(p.node_id),this.connection(p))))for(const key of ['botDesktops','botBrowserRetention'])delete common[key];
-    if(placements.some(p=>JSON.parse(this.store.node(p.node_id).hello).capabilities.autonomousGoals!==true))delete common.nativeGoals;
+    // Enrollment metadata is historical; use the authenticated current agent
+    // advertisement so an upgraded node need not be re-enrolled.
+    if(!placements.length||placements.some(p=>this.connection(p)?.portableHello?.capabilities?.autonomousGoals!==true))delete common.nativeGoals;
     const schedules=this.controls?placements.flatMap(p=>this.controls.store.list('schedule',p.bot_id)):[],runs=this.controls?placements.flatMap(p=>this.controls.store.list('run',p.bot_id)).sort((a,b)=>b.scheduledAt.localeCompare(a.scheduledAt)).slice(0,100):scoped('runs');
     return {result:{...first,cursor,bots,workByBot:scoped('workByBot'),pending:scoped('pending'),secureInputs:scoped('secureInputs'),schedules,runs,activeScheduledTurns:scoped('activeScheduledTurns'),ready:snapshots.length===placements.length&&placements.every(p=>!!this.connection(p)),
       capabilities:{...common,portableAgents:1}},cache:{observedAt:Date.now(),stale:snapshots.length<placements.length}};

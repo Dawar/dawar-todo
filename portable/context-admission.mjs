@@ -72,7 +72,6 @@ export class AgentContextAdmission {
     const stopPause=method==='thread/goal/set'&&control.stopped===1&&params.origin==='automatic'&&params.status==='paused'&&
       Object.keys(params).every(key=>['threadId','origin','status'].includes(key));
     if(!stopPause&&control.stopped!==0)throw stopped();
-    if(this.platform==='darwin'&&method==='thread/goal/set')throw nativeAdmissionRefusal('Autonomous Goals are unavailable on the unvalidated Mac agent.');
     if(context&&!stopPause){
       const room=this.runtime.store.get('collaborationRoom',context.roomId);
       if(!room||room.held||!room.members.includes(bot.id)||context.paused)throw stopped();

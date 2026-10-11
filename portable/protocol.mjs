@@ -77,7 +77,7 @@ export function compatible(hello) {
     || !['linux', 'darwin'].includes(hello.platform) || !['arm64', 'x64'].includes(hello.arch)
     || !hello.capabilities || hello.capabilities.text !== true || hello.capabilities.localStdio !== true)
     throw Error('Incompatible node protocol, runtime or capabilities.');
-  // The initial Mac pilot has no implied desktop/voice/secure/Goal authority.
-  if (hello.platform === 'darwin' && ['desktop', 'voice', 'secureTransfer', 'autonomousGoals'].some(k => hello.capabilities[k] === true))
+  // Mac Goals use the shared native protocol. Desktop/voice/secure capabilities remain separately gated.
+  if (hello.platform === 'darwin' && ['desktop', 'voice', 'secureTransfer'].some(k => hello.capabilities[k] === true))
     throw Error('Mac capability has not been validated.');
 }

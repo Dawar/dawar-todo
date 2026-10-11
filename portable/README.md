@@ -1077,3 +1077,18 @@ per-bot Stop, native Goals/queue/unknown state and original journal/receipt fenc
 still apply. Unknown native acceptance is reconciled without a new submission.
 The shipping `centralPeers`, `centralPrimaryDispatch` and room-start capabilities
 remain disabled pending complete unified Linux staging and accepted activation.
+
+## Goals on Linux and macOS
+
+Native Goals are enabled on both agent platforms. The hub advertises the UI
+capability only when the assigned connected agents advertise support and their
+native snapshots provide it. This uses the fresh authenticated connection, not
+the historical enrollment advertisement; existing nodes need no re-enrollment.
+The existing owner-scoped goals.read/set/clear route, original operation journal,
+Plan, pending-input, Stop, placement and maintenance checks remain authoritative.
+Enabling this capability does not create, resume or change any existing Goal.
+An offline node cannot receive new controls; Stop remains pending until it
+reconnects. Already admitted native Goal work may continue on that machine;
+this is not a remote kill or immediate offline Stop guarantee.
+Mac desktop, voice and private transfer remain separately gated. Physical Mac
+acceptance remains deferred at the owner's request.
