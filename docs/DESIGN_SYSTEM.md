@@ -420,3 +420,5 @@ The viewer defines foreground pairs for primary, secondary, card and destructive
 Calendar-link replacement/revocation, API-token revocation, phone-access disabling and profile-phone removal use the shared confirmation dialog. Cancel receives initial focus, Escape dismisses without dispatch, and destructive actions retain their specific consequences. The dialog closes before the existing asynchronous handler starts.
 
 Phone-settings notices carry explicit error state from validation/request failure. Message wording never determines success color; errors announce as alerts and successes as status.
+
+Dialog titles use snug (1.375) line height so multi-line headings remain readable on narrow screens. Long dialog bodies scroll internally inside the viewport limit.
