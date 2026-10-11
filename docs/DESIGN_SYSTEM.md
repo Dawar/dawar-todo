@@ -410,3 +410,7 @@ Conversation presence, retained recovery and burst metadata use13px semantic tex
 Bot-details tabs use shared ghost Buttons with retained ARIA tab semantics and arrow/Home/End navigation. Counts remain compact12px exceptions; dates/status text use13px. Drawer overlays/shadows derive from foreground opacity.
 
 Base chat surfaces, dialogs, history, recovery and schedule styles consume the shared semantic palette. Secondary labels/code excerpts have a13px floor. White-on-primary message and action styling uses paired tokens; error and warning distinctions remain semantic. Layout, viewport/keyboard budgets and scroll behavior are unchanged.
+
+### Desktop theme completion
+
+The viewer defines foreground pairs for primary, secondary, card and destructive controls within its dark scope. Selected toolbar and keyboard keys share the same selected tokens; connection states retain text plus colored indicators. The mobile More disclosure has one full-width rule. Unused reasoning-face styles are retired after consumer search.

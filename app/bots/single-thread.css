@@ -36,8 +36,6 @@
 .bots-legacy-controls{margin:18px 0;color:var(--muted-foreground);font-size:13px}
 .bots-legacy-controls>summary{cursor:pointer;padding:12px 0}
 .bots-peer-conversations :focus-visible,.bots-personality :focus-visible,.bots-burst-pending :focus-visible{outline:2px solid var(--ring);outline-offset:3px}
-.bots-reasoning-face{display:flex;align-items:center;gap:8px;color:var(--muted-foreground);font-size:13px;min-height:38px;pointer-events:none}
-.bots-reasoning-face .bot-avatar-engine{width:30px;height:30px}
 @media(pointer:coarse){.bots-peer-conversations button:not(.bots-peer-summary){min-height:44px;min-width:44px}
 }
 @media(prefers-reduced-motion:reduce){.bots-peer-summary>svg{transition:none}

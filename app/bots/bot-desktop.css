@@ -61,7 +61,12 @@
 .bots-desktop-dialog {
   --background: #111722; --foreground: #f3f5fa; --card: #1c2533; --muted: #202634; --muted-foreground: #c2ccde;
   --input: #425168; --border: #344052; --accent: #263247; --accent-foreground: #f3f5fa; --ring: #8bbcff;
-  --primary: #a7c9ff; --destructive: #ffb4ae;
+  --primary: #a7c9ff; --primary-foreground: #111722;
+  --secondary: #263247; --secondary-foreground: #f3f5fa; --card-foreground: #f3f5fa;
+  --destructive: #ffb4ae; --destructive-foreground: #111722;
+  --warning: #3e3323; --warning-foreground: #e5b56c;
+  --desktop-success: #7ce0ab; --desktop-selected: #324e77; --desktop-selected-border: #95b5e5;
+  --desktop-error-surface: #3e252c;
   position: fixed; inset: 0; z-index: 10000;
   background: var(--background); color: var(--foreground); display: flex; flex-direction: column;
   width: 100%; height: 100dvh; overflow: hidden; box-sizing: border-box;
@@ -75,10 +80,10 @@
 .bots-desktop-heading > div { display: grid; gap: 3px; min-width: 0; }
 .bots-desktop-heading strong { font-size: 14px; overflow-wrap: anywhere; }
 .bots-desktop-heading span { font-size: 13px; color: var(--muted-foreground); }
-.bots-desktop-heading span::before { content: ''; display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; background: #e5b56c; }
-.bots-desktop-heading span[data-connected="true"]::before { background: #7ce0ab; }
+.bots-desktop-heading span::before { content: ''; display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; background: var(--warning-foreground); }
+.bots-desktop-heading span[data-connected="true"]::before { background: var(--desktop-success); }
 .bots-desktop-dialog button { min-height: 44px; height: auto; flex: none; }
-.bots-desktop-dialog button[aria-pressed="true"] { background: #324e77; border-color: #95b5e5; }
+.bots-desktop-dialog button[aria-pressed="true"] { background: var(--desktop-selected); border-color: var(--desktop-selected-border); }
 .bots-desktop-dialog button:focus-visible, .bots-desktop-dialog summary:focus-visible,
 .bots-desktop-dialog input:focus-visible, .bots-desktop-dialog textarea:focus-visible {
   outline: 2px solid var(--ring); outline-offset: -2px;
@@ -97,9 +102,9 @@
 .bots-desktop-more p { font-size: 13px; color: var(--muted-foreground); line-height: 1.5; margin: 8px 0 0; }
 .bots-desktop-more button { margin: 0 6px 6px 0; }
 .bots-desktop-screen { position: relative; flex: 1; min-height: 0; overflow: hidden; touch-action: none; user-select: none; }
-.bots-desktop-screen > div { touch-action: none; scrollbar-width: thin; scrollbar-color: #516581 #111722; }
+.bots-desktop-screen > div { touch-action: none; scrollbar-width: thin; scrollbar-color: var(--input) var(--background); }
 .bots-desktop-error { font-size: 13px; padding: 6px 10px; color: var(--destructive); margin: 0; }
-.bots-desktop-dialog .bots-desktop-error { flex: none; color: #ffb4ae; background: #3e252c; max-height: 15%; overflow: auto; }
+.bots-desktop-dialog .bots-desktop-error { flex: none; color: var(--destructive); background: var(--desktop-error-surface); max-height: 15%; overflow: auto; }
 .bots-desktop-keyboard {
   flex: none;
   display: flex;
@@ -120,7 +125,7 @@
 }
 .bots-desktop-key-row button, .bots-desktop-key-row details { flex: none; white-space: nowrap; }
 .bots-desktop-key-row button { min-width: 44px; min-height: 44px; }
-.bots-desktop-key-row button[aria-pressed="true"] { background: #42649a; border-color: #aac8ff; }
+.bots-desktop-key-row button[aria-pressed="true"] { background: var(--desktop-selected); border-color: var(--desktop-selected-border); }
 .bots-desktop-key-row summary { cursor: pointer; padding: 10px; }
 .bots-desktop-key-more { display: flex; flex-wrap: wrap; gap: 6px; flex: none; }
 .bots-desktop-type-target { position: relative; min-height: 44px; flex: none; }
@@ -148,10 +153,9 @@
   .bots-desktop-lease { padding: 7px !important; }
   .bots-desktop-scale { width: 100%; order: 3; }
   .bots-desktop-more { order: 2; }
-  .bots-desktop-more[open] { order: 4; flex-basis: 100%; max-width: 100% !important; }
+  .bots-desktop-more[open] { order: 4; flex-basis: 100%; max-width: 100%; }
   .bots-desktop-scale button:nth-child(2) { min-width: 84px; }
   .bots-desktop-scale button:last-child { margin-left: auto; }
-  .bots-desktop-more[open] { max-width: 54%; }
   .bots-desktop-heading strong { max-width: calc(100vw - 110px); }
   .bots-desktop-keyboard { padding: 6px 10px; gap: 4px; }
 }
