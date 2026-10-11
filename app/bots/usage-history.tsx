@@ -51,7 +51,7 @@ function QuotaChart({ window, range, now }: { window: UsageHistoryWindow; range:
       <text x="44" y="148">{rangeNames[range]} ago</text><text x="490" y="148" textAnchor="end">Latest</text>
     </svg></div> : <p className="bots-muted">No quota samples in this period.</p>}
     <figcaption>Quota used · hourly observations{window.coverage.chartLimited ? " · chart data is limited" : ""}</figcaption>
-    {points.length > 0 && <details><summary>Recent quota observations</summary><div className="bots-usage-data"><Table><TableHeader><TableRow><TableHead>Observed</TableHead><TableHead>Quota used</TableHead></TableRow></TableHeader><TableBody>{points.slice(-12).map(point => <TableRow key={`${point.segment}:${point.at}`}><TableCell>{new Date(point.at).toLocaleString()}</TableCell><TableCell>{percent(point.usedPercent)}%</TableCell></TableRow>)}</TableBody></Table></div></details>}
+    {points.length > 0 && <details><summary>Recent quota observations</summary><div className="bots-usage-data"><Table scrollLabel="Recent quota observations"><TableHeader><TableRow><TableHead>Observed</TableHead><TableHead>Quota used</TableHead></TableRow></TableHeader><TableBody>{points.slice(-12).map(point => <TableRow key={`${point.segment}:${point.at}`}><TableCell>{new Date(point.at).toLocaleString()}</TableCell><TableCell>{percent(point.usedPercent)}%</TableCell></TableRow>)}</TableBody></Table></div></details>}
   </figure>;
 }
 function TokenActivity({ activity }: { activity: UsageHistory["activity"] }) {
@@ -80,7 +80,7 @@ function TokenActivity({ activity }: { activity: UsageHistory["activity"] }) {
         })}
         <text x="44" y="148">{daily[0].date}</text><text x="490" y="148" textAnchor="end">{daily.at(-1)!.date}</text>
       </svg></div><figcaption>{total.toLocaleString()} tokens across {daily.length} reported dates. These are whole daily buckets, not a rolling-hour total. Missing dates remain gaps; labels follow the service.</figcaption>
-      <details><summary>Daily token figures</summary><div className="bots-usage-data"><Table><TableHeader><TableRow><TableHead>Service date</TableHead><TableHead>Tokens</TableHead><TableHead>Observed</TableHead></TableRow></TableHeader><TableBody>{daily.map(day => <TableRow key={day.date}><TableCell>{day.date}</TableCell><TableCell>{BigInt(day.tokens).toLocaleString()}</TableCell><TableCell>{new Date(day.observedAt).toLocaleString()}</TableCell></TableRow>)}</TableBody></Table></div></details>
+      <details><summary>Daily token figures</summary><div className="bots-usage-data"><Table scrollLabel="Daily token figures"><TableHeader><TableRow><TableHead>Service date</TableHead><TableHead>Tokens</TableHead><TableHead>Observed</TableHead></TableRow></TableHeader><TableBody>{daily.map(day => <TableRow key={day.date}><TableCell>{day.date}</TableCell><TableCell>{BigInt(day.tokens).toLocaleString()}</TableCell><TableCell>{new Date(day.observedAt).toLocaleString()}</TableCell></TableRow>)}</TableBody></Table></div></details>
     </figure> : activity.state === "available" && <p>No daily token buckets were reported in this period.</p>}
   </section>;
 }

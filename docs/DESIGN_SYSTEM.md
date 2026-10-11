@@ -506,3 +506,7 @@ Bot Details uses the shared Radix dialog surface as a full-height right drawer. 
 ### API feedback terminology
 
 User-facing API errors use product terms: “Sign in” without naming an obsolete authentication provider, “attachment” for routes accepting multiple file types, and “bot connection” rather than deployment-specific VM/relay details. Status codes, authorization, operation identities and recovery behavior remain unchanged. Service-only routes have no rendered design surface; their source audit is tracked separately from end-to-end feature acceptance.
+
+### Tables and status badges
+
+Shared tables keep horizontal overflow inside a named, keyboard-focusable region. Supply `scrollLabel` to identify each dataset; preserve native table headers and captions. Badges are noninteractive status labels with 13px text and semantic variants, without button-like hover or shadow treatments. Use a Button for an action.
