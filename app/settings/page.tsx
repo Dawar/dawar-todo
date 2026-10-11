@@ -165,6 +165,7 @@ export default function SettingsPage() {
   const [talkPhoneLoading, setTalkPhoneLoading] = useState(true);
   const [talkPhoneSaving, setTalkPhoneSaving] = useState(false);
   const [talkPhoneMessage, setTalkPhoneMessage] = useState("");
+  const [talkPhoneMessageError, setTalkPhoneMessageError] = useState(false);
   const [profilePhone, setProfilePhone] = useState<ProfilePhone | null>(null);
   const [profilePhoneInput, setProfilePhoneInput] = useState("");
   const [profilePhoneChallenge, setProfilePhoneChallenge] = useState<{ challengeId: string; maskedPhoneNumber: string; expiresAt: string } | null>(null);
@@ -173,6 +174,7 @@ export default function SettingsPage() {
   const [profilePhoneSaving, setProfilePhoneSaving] = useState(false);
   const [profilePhoneTesting, setProfilePhoneTesting] = useState(false);
   const [profilePhoneMessage, setProfilePhoneMessage] = useState("");
+  const [profilePhoneMessageError, setProfilePhoneMessageError] = useState(false);
 
   useEffect(() => {
     // Activity can resume during PATCH. Defer the GET until settlement, rather
@@ -249,7 +251,7 @@ export default function SettingsPage() {
           providerConfigured: Boolean(profile.providerConfiguredAt),
         });
       })
-      .catch((error: Error) => setTalkPhoneMessage(error.message))
+      .catch((error: Error) => { setTalkPhoneMessageError(true); setTalkPhoneMessage(error.message); })
       .finally(() => setTalkPhoneLoading(false));
 
     request<{ profilePhone: ProfilePhone }>("/api/talk/phone/profile-number", { cache: "no-store" })
@@ -261,7 +263,7 @@ export default function SettingsPage() {
           providerReady: loadedProfilePhone.providerReady,
         });
       })
-      .catch((error: Error) => setProfilePhoneMessage(error.message))
+      .catch((error: Error) => { setProfilePhoneMessageError(true); setProfilePhoneMessage(error.message); })
       .finally(() => setProfilePhoneLoading(false));
 
     const badgeCheck = window.setTimeout(() => {
@@ -711,11 +713,13 @@ export default function SettingsPage() {
   async function saveTalkPhonePin(event: FormEvent) {
     event.preventDefault();
     if (!/^\d{6,8}$/.test(talkPhonePin)) {
+      setTalkPhoneMessageError(true);
       setTalkPhoneMessage("Choose a 6 to 8 digit PIN.");
       return;
     }
     setTalkPhoneSaving(true);
     setTalkPhoneMessage("");
+    setTalkPhoneMessageError(false);
     try {
       const { profile } = await request<{ profile: TalkPhoneProfile }>("/api/talk/phone/profile", {
         method: "PUT",
@@ -728,6 +732,7 @@ export default function SettingsPage() {
         providerConfigured: Boolean(profile.providerConfiguredAt),
       });
     } catch (error) {
+      setTalkPhoneMessageError(true);
       setTalkPhoneMessage(error instanceof Error ? error.message : "Phone access could not be configured.");
       console.error("[todo-talk-phone-ui] phone setup failed", { error });
     } finally {
@@ -738,6 +743,7 @@ export default function SettingsPage() {
   async function reconnectTalkPhone() {
     setTalkPhoneSaving(true);
     setTalkPhoneMessage("");
+    setTalkPhoneMessageError(false);
     try {
       const { profile } = await request<{ profile: TalkPhoneProfile }>("/api/talk/phone/profile", {
         method: "POST",
@@ -746,6 +752,7 @@ export default function SettingsPage() {
       setTalkPhoneMessage("Twilio number connected.");
       console.info("[todo-talk-phone-ui] provider webhook refreshed");
     } catch (error) {
+      setTalkPhoneMessageError(true);
       setTalkPhoneMessage(error instanceof Error ? error.message : "The Twilio number could not be connected.");
       console.error("[todo-talk-phone-ui] provider refresh failed", { error });
     } finally {
@@ -760,6 +767,7 @@ export default function SettingsPage() {
     }
     setTalkPhoneSaving(true);
     setTalkPhoneMessage("");
+    setTalkPhoneMessageError(false);
     try {
       const { profile } = await request<{ profile: TalkPhoneProfile }>("/api/talk/phone/profile", {
         method: "DELETE",
@@ -769,6 +777,7 @@ export default function SettingsPage() {
       setTalkPhoneMessage("Phone access disabled.");
       console.info("[todo-talk-phone-ui] phone access disabled");
     } catch (error) {
+      setTalkPhoneMessageError(true);
       setTalkPhoneMessage(error instanceof Error ? error.message : "Phone access could not be disabled.");
       console.error("[todo-talk-phone-ui] phone disable failed", { error });
     } finally {
@@ -781,6 +790,7 @@ export default function SettingsPage() {
     if (!profilePhoneInput.trim()) return;
     setProfilePhoneSaving(true);
     setProfilePhoneMessage("");
+    setProfilePhoneMessageError(false);
     try {
       const { verification } = await request<{ verification: { challengeId: string; maskedPhoneNumber: string; expiresAt: string } }>("/api/talk/phone/profile-number/verification", {
         method: "POST",
@@ -794,6 +804,7 @@ export default function SettingsPage() {
         expiresAt: verification.expiresAt,
       });
     } catch (error) {
+      setProfilePhoneMessageError(true);
       setProfilePhoneMessage(error instanceof Error ? error.message : "The verification text could not be sent.");
     } finally {
       setProfilePhoneSaving(false);
@@ -805,6 +816,7 @@ export default function SettingsPage() {
     if (!profilePhoneChallenge || !/^\d{6}$/.test(profilePhoneCode)) return;
     setProfilePhoneSaving(true);
     setProfilePhoneMessage("");
+    setProfilePhoneMessageError(false);
     try {
       const { profilePhone: verified } = await request<{ profilePhone: ProfilePhone }>("/api/talk/phone/profile-number/verification", {
         method: "PUT",
@@ -821,6 +833,7 @@ export default function SettingsPage() {
         callWindowEnd: verified.callWindowEnd,
       });
     } catch (error) {
+      setProfilePhoneMessageError(true);
       setProfilePhoneMessage(error instanceof Error ? error.message : "The profile phone could not be verified.");
     } finally {
       setProfilePhoneSaving(false);
@@ -831,6 +844,7 @@ export default function SettingsPage() {
     if (!profilePhone) return;
     setProfilePhoneSaving(true);
     setProfilePhoneMessage("");
+    setProfilePhoneMessageError(false);
     const desired = { ...profilePhone, ...next };
     try {
       const { profilePhone: persisted } = await request<{ profilePhone: ProfilePhone }>("/api/talk/phone/profile-number", {
@@ -844,6 +858,7 @@ export default function SettingsPage() {
       setProfilePhone(persisted);
       setProfilePhoneMessage(persisted.urgentAlertsEnabled ? "Urgent alert preferences saved." : "Urgent agent calls and texts disabled.");
     } catch (error) {
+      setProfilePhoneMessageError(true);
       setProfilePhoneMessage(error instanceof Error ? error.message : "Profile phone preferences could not be saved.");
     } finally {
       setProfilePhoneSaving(false);
@@ -857,12 +872,14 @@ export default function SettingsPage() {
     }
     setProfilePhoneSaving(true);
     setProfilePhoneMessage("");
+    setProfilePhoneMessageError(false);
     try {
       const { profilePhone: cleared } = await request<{ profilePhone: ProfilePhone }>("/api/talk/phone/profile-number", { method: "DELETE" });
       setProfilePhone(cleared);
       setProfilePhoneChallenge(null);
       setProfilePhoneMessage("Profile phone removed.");
     } catch (error) {
+      setProfilePhoneMessageError(true);
       setProfilePhoneMessage(error instanceof Error ? error.message : "The profile phone could not be removed.");
     } finally {
       setProfilePhoneSaving(false);
@@ -872,10 +889,12 @@ export default function SettingsPage() {
   async function testProfilePhone() {
     setProfilePhoneTesting(true);
     setProfilePhoneMessage("");
+    setProfilePhoneMessageError(false);
     try {
       await request("/api/talk/phone/profile-number/test", { method: "POST" });
       setProfilePhoneMessage("Test call and text sent.");
     } catch (error) {
+      setProfilePhoneMessageError(true);
       setProfilePhoneMessage(error instanceof Error ? error.message : "The test call and text could not be sent.");
     } finally {
       setProfilePhoneTesting(false);
@@ -1117,7 +1136,7 @@ export default function SettingsPage() {
               </div>
             </>
           )}
-          {profilePhoneMessage && <p role="status" className={`mt-3 text-sm ${/could not|invalid|incorrect|expired|too many|not configured|choose/i.test(profilePhoneMessage) ? "text-destructive" : "text-primary"}`}>{profilePhoneMessage}</p>}
+          {profilePhoneMessage && <p role={profilePhoneMessageError ? "alert" : "status"} className={`mt-3 text-sm ${profilePhoneMessageError ? "text-destructive" : "text-primary"}`}>{profilePhoneMessage}</p>}
         </section>
 
         <section aria-labelledby="talk-phone-title" className="mt-6 rounded-lg border border-border bg-card p-5 shadow-sm sm:p-7">
@@ -1196,7 +1215,7 @@ export default function SettingsPage() {
                 </p>
               )}
               {talkPhoneMessage && (
-                <p role="status" className={`mt-3 text-sm ${/could not|not configured|choose/i.test(talkPhoneMessage) ? "text-destructive" : "text-primary"}`}>{talkPhoneMessage}</p>
+                <p role={talkPhoneMessageError ? "alert" : "status"} className={`mt-3 text-sm ${talkPhoneMessageError ? "text-destructive" : "text-primary"}`}>{talkPhoneMessage}</p>
               )}
             </>
           )}
