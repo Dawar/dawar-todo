@@ -902,6 +902,7 @@ html.bots-viewport-locked body {
   color: #216e4e;
 }
 .bots-request { min-width:0; max-width:100%; overflow-wrap:anywhere; margin:20px 0; padding:20px; border:1px solid var(--border); border-radius:var(--radius); background:var(--card); font-size:14px; }
+.bots-request > p { margin:8px 0 12px; line-height:1.6; }
 .bots-request-title { font-size:14px; color:var(--foreground); margin-bottom:16px; font-weight:600; }
 .bots-request fieldset { min-width:0; margin:16px 0 20px; }
 .bots-request legend { font-weight:600; padding-bottom:8px; }
@@ -912,6 +913,8 @@ html.bots-viewport-locked body {
 .bots-request :is(input[type=checkbox],input[type=radio]):focus-visible { outline:2px solid var(--ring); outline-offset:3px; }
 .bots-request .bots-option { display:flex; gap:12px; align-items:flex-start; min-height:44px; padding:12px; background:var(--background); border:1px solid var(--border); border-radius:var(--radius); cursor:pointer; }
 .bots-request .bots-option:has(input:checked) { border-color:var(--primary); background:var(--accent); }
+.bots-request fieldset:disabled .bots-option { cursor:default; opacity:.6; }
+.bots-request input[type=checkbox]:disabled { opacity:.5; }
 .bots-request .bots-option > span { min-width:0; display:grid; gap:4px; }
 .bots-request .bots-option strong { font-weight:600; }
 .bots-request-actions { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:16px; }
