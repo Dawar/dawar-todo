@@ -27,6 +27,8 @@ import { DesktopTrackpad, desktopTouchMode, saveDesktopTouchMode, type DesktopTo
 import { DesktopKeyboard } from "./desktop-keyboard";
 import { DesktopViewport, desktopKeyboardOpen, releaseDesktopInput, type DesktopView } from "./desktop-viewport";
 import "./bot-desktop.css";
+import { Button } from "@/components/ui/button";
+import { NativeSelect } from "@/components/ui/native-select";
 
 export function BotDesktopCard({
   bot,
@@ -145,7 +147,7 @@ export function BotDesktopCard({
         <div className="bots-browser-retention">
           <label>
             Browser retention
-            <select value={desktop.browser.mode} disabled={!online || bot.archived || savingPolicy}
+            <NativeSelect value={desktop.browser.mode} disabled={!online || bot.archived || savingPolicy}
               onChange={async event => {
                 const mode = event.target.value as "preserve" | "idle60" | "keep-task";
                 const expectedRevision = desktop.browser!.revision;
@@ -161,7 +163,7 @@ export function BotDesktopCard({
               <option value="preserve">Preserve browser</option>
               <option value="idle60">Close when safe after 60 minutes</option>
               <option value="keep-task">Keep open for current task</option>
-            </select>
+            </NativeSelect>
           </label>
           <p>{desktop.browser.mode === "idle60"
             ? desktop.browser.protected || !desktop.browser.releasedAt
@@ -561,40 +563,40 @@ export function BotDesktopDialog({
           <Monitor size={20} aria-hidden="true" />
           <div><strong>{bot.name}</strong><span role="status" data-connected={state === "Connected"}>{state}{state === "Disconnected" && exclusive === null ? " · Control unknown" : ""}</span></div>
         </div>
-        <button onClick={onClose} aria-label="Close desktop · apps stay running" title="Close viewer · apps stay running"><X size={22} /></button>
+        <Button variant="outline" type="button" onClick={onClose} aria-label="Close desktop · apps stay running" title="Close viewer · apps stay running"><X size={22} /></Button>
       </header>
       <div className="bots-desktop-controls">
       <div className="bots-desktop-toolbar" aria-label="Desktop controls">
         <div className="bots-desktop-control-group">
-          <button disabled={state !== "Connected"} onClick={() => {
+          <Button variant="outline" type="button" disabled={state !== "Connected"} onClick={() => {
             trackpad.current?.cancel(); releaseDesktopInput(rfb.current);
             flushSync(() => setShowText(v => !v));
             const typing = dialog.current?.querySelector<HTMLTextAreaElement>("[data-desktop-typing]");
             if (typing) typing.focus({ preventScroll: true }); else rfb.current?.focus({ preventScroll: true });
           }} aria-pressed={showText} aria-label={showText ? "Hide remote keyboard" : "Open remote keyboard"}>
             <Keyboard size={18} /><span>Keyboard</span>
-          </button>
-          <button type="button" aria-label={`Touch input: ${touchMode === "trackpad" ? "Trackpad" : "Direct touch"}. Switch touch mode`}
+          </Button>
+          <Button variant="outline" type="button" aria-label={`Touch input: ${touchMode === "trackpad" ? "Trackpad" : "Direct touch"}. Switch touch mode`}
             onClick={() => { releaseDesktopInput(rfb.current); const next = touchMode === "trackpad" ? "direct" : "trackpad"; saveDesktopTouchMode(next); setTouchMode(next); }}>
             {touchMode === "trackpad" ? "Trackpad" : "Direct touch"}
-          </button>
-        <button className="bots-desktop-lease" disabled={changing || (state !== "Connected" && state !== "Disconnected")} onClick={control}
+          </Button>
+        <Button variant="outline" type="button" className="bots-desktop-lease" disabled={changing || (state !== "Connected" && state !== "Disconnected")} onClick={control}
           aria-pressed={exclusive ?? undefined} aria-label={exclusive === null ? "Reconnect desktop control" : exclusive ? "Release exclusive control" : "Take exclusive control"}
           title={exclusive === null ? "Reconnect without replaying input; apps stay running" : exclusive ? "Let the agent use mouse and keyboard too" : "Pause agent mouse and keyboard input"}>
           {exclusive === null ? <RefreshCw size={16} /> : exclusive ? <LockKeyhole size={16} /> : <UsersRound size={16} />}<span>{changing ? "Changing control…" : exclusive === null ? "Reconnect control" : exclusive ? "Exclusive" : "Shared"}</span>
-        </button>
+        </Button>
         </div>
         <div className="bots-desktop-control-group bots-desktop-scale" aria-label="Screen zoom">
-          <button disabled={state !== "Connected" || view.zoom <= 0.5} aria-label="Zoom screen out" onClick={() => viewport.current?.setZoom(view.zoom / 1.25)}><Minus size={17} /></button>
-          <button disabled={state !== "Connected"} aria-label={`Fit screen · ${Math.round(view.zoom * 100)} percent of fit`} onClick={() => viewport.current?.fit()}><Maximize size={16} /><span>{view.zoom === 1 ? "Fit" : `${Math.round(view.zoom * 100)}%`}</span></button>
-          <button disabled={state !== "Connected" || view.zoom >= 4} aria-label="Zoom screen in" onClick={() => viewport.current?.setZoom(view.zoom * 1.25)}><Plus size={17} /></button>
-          <button disabled={state !== "Connected" || view.zoom <= 1} aria-label="Pan enlarged screen" aria-pressed={view.panning} onClick={() => viewport.current?.togglePan()}><Move size={17} /><span>Pan</span></button>
+          <Button variant="outline" type="button" disabled={state !== "Connected" || view.zoom <= 0.5} aria-label="Zoom screen out" onClick={() => viewport.current?.setZoom(view.zoom / 1.25)}><Minus size={17} /></Button>
+          <Button variant="outline" type="button" disabled={state !== "Connected"} aria-label={`Fit screen · ${Math.round(view.zoom * 100)} percent of fit`} onClick={() => viewport.current?.fit()}><Maximize size={16} /><span>{view.zoom === 1 ? "Fit" : `${Math.round(view.zoom * 100)}%`}</span></Button>
+          <Button variant="outline" type="button" disabled={state !== "Connected" || view.zoom >= 4} aria-label="Zoom screen in" onClick={() => viewport.current?.setZoom(view.zoom * 1.25)}><Plus size={17} /></Button>
+          <Button variant="outline" type="button" disabled={state !== "Connected" || view.zoom <= 1} aria-label="Pan enlarged screen" aria-pressed={view.panning} onClick={() => viewport.current?.togglePan()}><Move size={17} /><span>Pan</span></Button>
         </div>
         <details className="bots-desktop-more">
           <summary aria-label="More desktop options"><MoreHorizontal size={20} /></summary>
           <div>
-            <button onClick={() => setRetry(v => v + 1)}><RefreshCw size={17} />Reconnect</button>
-            <button onClick={() => void stop()} disabled={Boolean(bot.activeTurnId)}><Square size={17} />Stop desktop</button>
+            <Button variant="outline" type="button" onClick={() => setRetry(v => v + 1)}><RefreshCw size={17} />Reconnect</Button>
+            <Button variant="outline" type="button" onClick={() => void stop()} disabled={Boolean(bot.activeTurnId)}><Square size={17} />Stop desktop</Button>
             <p>Closing the viewer leaves apps running. Stop closes them.</p>
             <p>{touchMode === "trackpad" ? "Swipe to move · Tap to click · Hold to drag · Two fingers to scroll or right-click." : "Tap to click · Drag to move remote items."} Pinch to zoom; use Pan to move an enlarged screen.</p>
             <p>{exclusive === null ? "Control mode is unknown. Reconnect; an unconfirmed exclusive lease may remain until its release or expiry." : exclusive ? "Agent input is paused while you have exclusive control." : "You and the agent can use this desktop together."}</p>

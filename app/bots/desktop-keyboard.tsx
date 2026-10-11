@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type RFB from "@novnc/novnc";
+import { Button } from "@/components/ui/button";
 
 const anchor = "\u00a0".repeat(32);
 const modifiers = {
@@ -115,22 +116,22 @@ export function DesktopKeyboard({ remote, connected, onClose }: {
   return <section className="bots-desktop-keyboard" aria-label="Remote keyboard">
     <div className="bots-desktop-key-row" aria-label="Remote shortcuts"
       onPointerDown={(e) => { if ((e.target as HTMLElement).closest("button,summary")) e.preventDefault(); }}>
-      <button type="button" disabled={!connected || reading} onClick={() => void readClipboard()}>Paste clipboard</button>
-      {Object.keys(modifiers).map((m) => <button type="button" key={m} disabled={!connected}
+      <Button variant="outline" type="button" disabled={!connected || reading} onClick={() => void readClipboard()}>Paste clipboard</Button>
+      {Object.keys(modifiers).map((m) => <Button variant="outline" type="button" key={m} disabled={!connected}
         aria-pressed={selected.includes(m as Modifier)} title={`${m} for the next key`}
-        onClick={() => setSelected((s) => s.includes(m as Modifier) ? s.filter((v) => v !== m) : [...s, m as Modifier])}>{m}</button>)}
+        onClick={() => setSelected((s) => s.includes(m as Modifier) ? s.filter((v) => v !== m) : [...s, m as Modifier])}>{m}</Button>)}
       {[["Tab", "Tab"], ["Esc", "Escape"], ["←", "ArrowLeft"], ["↑", "ArrowUp"], ["↓", "ArrowDown"], ["→", "ArrowRight"], ["⌫", "Backspace"], ["Enter", "Enter"]].map(([label, key]) =>
-        <button type="button" key={key} aria-label={key} disabled={!connected} onClick={() => chord(...keys[key])}>{label}</button>)}
-      <button type="button" aria-expanded={moreKeys} onClick={() => setMoreKeys((v) => !v)}>More keys</button>
-      <button type="button" onClick={onClose}>Hide</button>
+        <Button variant="outline" type="button" key={key} aria-label={key} disabled={!connected} onClick={() => chord(...keys[key])}>{label}</Button>)}
+      <Button variant="outline" type="button" aria-expanded={moreKeys} onClick={() => setMoreKeys((v) => !v)}>More keys</Button>
+      <Button variant="outline" type="button" onClick={onClose}>Hide</Button>
     </div>
     {moreKeys && <div className="bots-desktop-key-more"
       onPointerDown={(e) => { if ((e.target as HTMLElement).closest("button")) e.preventDefault(); }}>
         {[["Select all", 0x61, "KeyA"], ["Copy", 0x63, "KeyC"], ["Undo", 0x7a, "KeyZ"]].map(([label, key, code]) =>
-          <button type="button" key={label} disabled={!connected} onClick={() => chord(Number(key), String(code), ["Ctrl"])}>{label}</button>)}
-        <button type="button" disabled={!connected} onClick={() => chord(...keys.Tab, ["Alt"])}>Switch app</button>
-        <button type="button" disabled={!connected} onClick={() => { remote()?.sendCtrlAltDel(); setSelected([]); }}>Ctrl Alt Del</button>
-        <button type="button" onClick={() => setManualPaste((v) => !v)}>Paste text…</button>
+          <Button variant="outline" type="button" key={label} disabled={!connected} onClick={() => chord(Number(key), String(code), ["Ctrl"])}>{label}</Button>)}
+        <Button variant="outline" type="button" disabled={!connected} onClick={() => chord(...keys.Tab, ["Alt"])}>Switch app</Button>
+        <Button variant="outline" type="button" disabled={!connected} onClick={() => { remote()?.sendCtrlAltDel(); setSelected([]); }}>Ctrl Alt Del</Button>
+        <Button variant="outline" type="button" onClick={() => setManualPaste((v) => !v)}>Paste text…</Button>
       </div>}
     <label className="bots-desktop-type-target">
       <span>{connected ? "Tap to type directly into the remote app" : "Reconnect to type"}</span>
@@ -160,7 +161,7 @@ export function DesktopKeyboard({ remote, connected, onClose }: {
     {manualPaste && <form className="bots-desktop-paste" onSubmit={(e) => { e.preventDefault(); paste(pasteText); }}>
       <textarea aria-label="Text to paste into remote desktop" rows={2} value={pasteText}
         onChange={(e) => setPasteText(e.target.value)} placeholder="Paste text here" autoComplete="off" spellCheck={false} />
-      <button type="submit" disabled={!connected || !pasteText}>Paste to desktop</button>
+      <Button variant="outline" type="submit" disabled={!connected || !pasteText}>Paste to desktop</Button>
     </form>}
     {message && <p className="bots-desktop-key-message" role="status">{message}</p>}
   </section>;

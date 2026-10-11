@@ -342,3 +342,7 @@ The retained earlier-work recovery panel uses shared outline buttons and semanti
 ### Screen loading and recovery
 
 `ScreenLoading` and `ScreenError` centralize shell/Settings feedback. Loading has an announced status and a motion-safe spinner; errors use Card/Button with retry and a task destination, without exposing raw exceptions. Settings retains its operational error logging; shell route caching, launch choice and navigation logic are unchanged. Skeleton now uses a neutral muted surface and motion-safe animation. Actual1280/320 error layout and320 Retry-to-loading transition observed. Full router failure/retry/back navigation, keyboard and reduced-motion emulation remain pending.
+
+### Desktop viewer
+
+Desktop toolbar and remote-keyboard buttons use shared outline controls. The full-screen viewer retains a locally scoped dark semantic palette around the remote display, original custom focus/keyboard handling, input/lease/viewport logic and safe-area layout. Names wrap; identity icons do not shrink; toolbar groups wrap on narrow screens. Browser retention uses NativeSelect, whose values now explicitly use normal weight independent of bold labels. Actual320 preview/retention and320/1280 disconnected viewer/More disclosure observed with a missing-relay fixture that prevents session acquisition. Connected input, remote keyboard, retention mutation and physical touch acceptance remain pending; no native desktop/session/control effects were used as checks.
