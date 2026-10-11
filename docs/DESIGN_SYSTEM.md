@@ -284,3 +284,7 @@ Document/PDF feedback fields use unique React IDs and reference their error para
 ### PDF reviewer rendered checks
 
 Actual PDF.js plus PdfReviewer rendered a deliberately invalid local PDF (bounded error/Retry and disabled controls at320), then a two-page vector PDF. At320, toolbar wraps, Previous/Next select the expected page, feedback is page-specific, and the Page2 note shortcut returns to its retained in-memory note. At1280, page and notes remain side-by-side with reachable attachment/send controls. Pending fixture state disables page/input/attachment/note controls and retains text. Send remains disabled offline. This uses an inert composer and synthetic local bytes; no upload/send or durable save is claimed. Existing type/lint proof applies to unchanged c143823 source; full persistence/reconnect/attachments/password/fonts/keyboard and integrated workspace acceptance remain pending.
+
+### Goal panel
+
+Goal controls and editors use shared Button/Input/Textarea/NativeSelect. Header and supporting copy use semantic foreground/muted tokens; concise status wording replaces native implementation language. Clear confirmation is destructive; all original freshness, owner/thread, Stop/input, fingerprint and exact-action guards remain unchanged. Actual1280 and320 offline fixtures render a long paused objective, Full objective disclosure, accounting and disabled actions. Type/scoped lint/diff pass. No Goal action was invoked. Connected edit/create/clear confirmations, stale/unknown/recovery variants and integrated drawer/keyboard acceptance remain pending.
