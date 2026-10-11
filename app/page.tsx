@@ -20,6 +20,7 @@ import type { TaskQueueSource } from "../lib/task-queue-export";
 import { registerPwaUpdateGuard } from "./pwa-update";
 import { todoCopyText } from "./todo-forward";
 import { TaskCaptureSession, TaskCaptureGate } from "./task-capture";
+import { TaskNotice, type TaskNoticeState } from "./task-notice";
 import { TaskBulkActions } from "./task-bulk-actions";
 import { TaskIntentPanel } from "./task-intent-panel";
 import { taskRowClock } from "./task-title-layout";
@@ -44,7 +45,6 @@ import {
 import {
   DEFAULT_QUICK_SNOOZE_PRESETS,
   quickSnoozeDurationMs,
-  quickSnoozeLabel,
   type QuickSnoozePreset,
 } from "../lib/snooze-presets";
 import type { RealtimeVoice } from "../lib/ai-preferences";
@@ -109,18 +109,7 @@ type TodoAction = "complete" | "snooze" | "unsnooze" | "delete";
 type ExecutableTodoAction = TodoAction;
 type SnoozePreset = QuickSnoozePreset;
 type SnoozeAdjustment = { preset: SnoozePreset } | { localDateTime: string };
-type Notice = {
-  tone: "success" | "error";
-  text: string;
-  taskPreview?: string;
-  operationId?: string;
-  pendingUndo?: boolean;
-  undoRequested?: boolean;
-  undoToken?: string;
-  snoozeIds?: number[];
-  snoozedUntil?: string;
-  dismissAt?: number;
-} | null;
+type Notice = TaskNoticeState | null;
 
 
 type OptimisticOperation = {
@@ -4596,65 +4585,8 @@ export default function Home() {
         </div>
       )}
 
-      {notice && (
-        <div
-          data-task-notice
-          data-bulk-actions-visible={selectedIds.length > 0}
-          className="task-notice-safe-bottom pointer-events-none fixed inset-x-0 z-[60] mx-auto w-[calc(100%-2rem)] max-w-lg transition-[bottom] duration-200"
-        >
-          <div
-            role={notice.tone === "error" ? "alert" : "status"}
-            className={classNames(
-              "pointer-events-auto min-h-14 rounded-2xl px-4 py-3 text-sm text-white shadow-[0_16px_50px_rgba(0,0,0,0.24)]",
-              notice.tone === "error" ? "bg-red-700" : "bg-[#202522]",
-            )}
-          >
-            <div className="flex items-start gap-3">
-              <div className="min-w-0 flex-1">
-                <p className="font-medium">{notice.text}</p>
-                {notice.taskPreview && <p className="mt-0.5 truncate text-xs text-white/55" title={notice.taskPreview}>{notice.taskPreview}</p>}
-              </div>
-              {(notice.operationId || notice.undoToken) && (
-                <span className="inline-flex min-w-[4.75rem] shrink-0 justify-end">
-                  <button
-                    type="button"
-                    onClick={() => requestNoticeUndo(notice)}
-                    disabled={undoing || notice.undoRequested}
-                    className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1.5 font-semibold text-[#8ee0b5] transition hover:bg-white/10 focus-visible:outline-2 focus-visible:outline-white disabled:opacity-50"
-                  >
-                    <ActionIcon name="undo" />
-                    {undoing || notice.undoRequested ? "Undoing…" : "Undo"}
-                  </button>
-                </span>
-              )}
-              <button type="button" onClick={() => setNotice(null)} aria-label="Dismiss notification" title="Dismiss" className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-white/65 hover:bg-white/10 hover:text-white"><ActionIcon name="close" /></button>
-            </div>
-            {notice.snoozeIds && notice.snoozeIds.length > 0 && (
-              <div className="mt-2 flex gap-1.5 overflow-x-auto pb-0.5" aria-label="Adjust snooze time">
-                {quickSnoozePresets.map((preset) => (
-                  <button
-                    key={preset}
-                    type="button"
-                    onClick={() => void adjustSnooze(notice.snoozeIds as number[], preset, notice.operationId)}
-                    disabled={adjustingSnooze !== null}
-                    className="min-w-max rounded-lg bg-white/10 px-2.5 py-1.5 text-xs font-semibold text-white transition hover:bg-white/20 focus-visible:outline-2 focus-visible:outline-white disabled:opacity-50"
-                  >
-                    {quickSnoozeLabel(preset)}
-                  </button>
-                ))}
-                <button
-                  type="button"
-                  onClick={() => openCustomSnooze(notice.snoozeIds as number[], notice.operationId)}
-                  disabled={adjustingSnooze !== null}
-                  className="inline-flex min-w-max items-center gap-1.5 rounded-lg bg-white/10 px-2.5 py-1.5 text-xs font-semibold text-white transition hover:bg-white/20 focus-visible:outline-2 focus-visible:outline-white disabled:opacity-50"
-                >
-                  <ActionIcon name="calendar" className="h-3.5 w-3.5" />Custom
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
+      {notice && <TaskNotice notice={notice} bulkActionsVisible={selectedIds.length > 0} undoing={undoing} adjusting={adjustingSnooze !== null} presets={quickSnoozePresets} onUndo={() => requestNoticeUndo(notice)} onDismiss={() => setNotice(null)} onSnooze={preset => void adjustSnooze(notice.snoozeIds as number[], preset, notice.operationId)} onCustomSnooze={() => openCustomSnooze(notice.snoozeIds as number[], notice.operationId)} />}
+
     </main>
   );
 }

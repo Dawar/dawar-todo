@@ -152,3 +152,7 @@ State-driven dialogs can accept an explicit `returnFocus` target. Attachment →
 Task bulk actions use shared buttons in a two-row card: selection count and Cancel remain visible while the action group scrolls horizontally. Actions retain their original eligibility, callbacks and disabled conditions. List groups, empty states and loading rows now use semantic surfaces; skeleton motion respects reduced-motion preferences. Bottom content and notification offsets account for the taller action card. Actual 320px populated selection/Cancel observed; full action combinations, desktop, standalone safe-area and notification coexistence remain acceptance work.
 
 Project assignment can receive the retained attachment opener, using the same chained-dialog focus contract as voice capture. Direct assignment captures its own opener; no project-save behavior changed.
+
+### Task notifications
+
+TaskNotice uses a semantic card with a status/error text area, a persistent dismiss button, a separate Undo action, and a horizontally contained snooze group. All actions use shared buttons; notification errors use the destructive border/text tokens. Existing timing, optimistic operation IDs and undo/snooze handlers remain in the page controller. The card respects reduced motion and sits above the bulk bar. Actual 320px success/snooze, error and busy displays are observed with inert callbacks; full-page lifecycle, screen-reader announcements, standalone safe area and genuine device acceptance remain pending.
