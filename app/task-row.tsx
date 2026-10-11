@@ -3,7 +3,7 @@ import { memo, useLayoutEffect, useRef, useState, type PointerEvent as ReactPoin
 import { Button } from "@/components/ui/button";
 import { ActionIcon, type ActionIconName } from "./action-icon";
 import type { Todo } from "./task-model";
-import { scheduleTitleSize } from "./task-title-layout";
+import { observeTitleSize, scheduleTitleSize } from "./task-title-layout";
 import { isActivelySnoozed as isSnoozed } from "../lib/snooze-clock";
 import { nextCronOccurrence } from "../lib/cron";
 import { snoozeLabel } from "../lib/snooze-label";
@@ -245,6 +245,7 @@ export const TaskRow = memo(function TaskRow({
   useLayoutEffect(() => {
     resizeTitle();
   }, [editingTitle, titleDraft, todo.title]);
+  useLayoutEffect(() => observeTitleSize(titleRef.current), []);
 
   return (
     <li
