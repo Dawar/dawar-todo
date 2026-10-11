@@ -468,3 +468,7 @@ Signed-out and failed-sign-in views share the centered Card, semantic text and o
 ### Saved task recovery
 
 Offline rejected changes stay available in an expandable recovery panel. Saved changes use labeled values rather than JSON: priority and status have familiar names, notes retain line breaks, and missing values are explicit. Unknown fields remain visible with readable labels; nested saved values retain their structure. The bounded scroll region prevents a long saved change from overwhelming the page. Original records, attachment recovery and retry ownership are unchanged. Task recurrence errors use the destructive token and an announced alert.
+
+### Task transfer recovery actions
+
+Saved forward and queue-transfer entry points use the shared secondary Button, with a44px minimum target and wrapping text bounded by mobile page margins. Their former custom button/focus selectors are removed. Transfer-storage errors use semantic destructive text and wrap without changing the retained transfer or retry semantics.

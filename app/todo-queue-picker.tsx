@@ -43,7 +43,7 @@ export function TodoQueue({ request, onClose, guard, onChanged }: {
     useEffect(() => { client.start(); queueMicrotask(read); const unsubscribe = client.subscribe(read); window.addEventListener('storage', read); return () => { unsubscribe(); window.removeEventListener('storage', read); }; }, [read]);
     const close = useCallback(() => { setOpen(false); read(); onClose(); }, [onClose, read]);
     const resume = request ? saved.find(v => v.items.some(i => request.todoIds.includes(i.todoId))) : saved[0];
-    return <>{!request && resume && <button type="button" className="todo-forward-recovery" onClick={() => setOpen(true)}>Continue saved task queue transfer</button>}{error && <p role="alert">{error}</p>}
+    return <>{!request && resume && <Button type="button" variant="secondary" className="mx-auto my-3 flex h-auto min-h-11 max-w-[calc(100%-2rem)] whitespace-normal text-left" onClick={() => setOpen(true)}>Continue saved task transfer</Button>}{error && <p role="alert" className="mx-auto my-3 max-w-5xl px-4 text-sm text-destructive [overflow-wrap:anywhere]">{error}</p>}
  {(request || open && resume) && <QueuePicker key={`${client.owner}:${request?.id ?? resume?.id}`} request={request} saved={resume ?? null} onClose={close} guard={guard} onChanged={onChanged}/>}</>;
 }
 export function QueuePicker({ request, saved, onClose, guard, onChanged }: {

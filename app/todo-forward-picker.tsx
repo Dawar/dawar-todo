@@ -9,6 +9,7 @@ import { pendingTodoForwards, saveTodoForward, type TodoForwardIntent } from './
 import './todo-forward.css';
 import { ControlledDialog } from '@/components/ui/controlled-dialog';
 import { Input } from '@/components/ui/input';
+import { Button } from '@/components/ui/button';
 
 export function TodoForward({ request, onClose }: { request: { id: string; text: string } | null; onClose: () => void }) {
   const [saved, setSaved] = useState<TodoForwardIntent | null>(null), [open, setOpen] = useState(false);
@@ -20,7 +21,7 @@ export function TodoForward({ request, onClose }: { request: { id: string; text:
     const unsubscribe = client.subscribe(read);
     return () => { active = false; unsubscribe(); };
   }, []);
-  return <>{!request && saved && <button type="button" className="todo-forward-recovery" onClick={() => setOpen(true)}>Open saved draft <ArrowRight size={15} /></button>}
+  return <>{!request && saved && <Button type="button" variant="secondary" className="mx-auto my-3 flex h-auto min-h-11 max-w-[calc(100%-2rem)] whitespace-normal text-left" onClick={() => setOpen(true)}>Open saved draft <ArrowRight size={15} /></Button>}
     {(request || open && saved) && <ForwardPicker key={request?.id ?? saved!.id} request={request ?? saved!} saved={request ? null : saved} onClose={close} />}</>;
 }
 function ForwardPicker({ request, saved, onClose }: { request: { id: string; text: string }; saved: TodoForwardIntent | null; onClose: () => void }) {
