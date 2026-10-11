@@ -38,7 +38,9 @@ export function useRunMetadata({ owner, botId, runId, cursor, online, enabled, f
       const revision = epoch;
       setStatus({ identity, busy: true, error: "" });
       try {
-        const page = await client.rpc<BotRunPage>("runs.page", botId, { cursor, limit: 25 }, undefined, { owner });
+        const page = await client.rpc<BotRunPage>("runs.page", botId, { cursor, limit: 25 }, undefined, { owner }).catch(() => {
+          throw Error("Run status could not be updated. Try again.");
+        });
         if (!valid() || revision !== epoch) return;
         if (!Array.isArray(page.runs) || page.runs.length > 25 || page.runs.some(run => run.botId !== botId)) throw Error("Run status could not be verified. Refresh its status again.");
         // runs.page has no event cursor. A validated selected-run event that
