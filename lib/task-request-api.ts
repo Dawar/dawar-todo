@@ -12,7 +12,7 @@ export async function taskRequestBody(request:Request):Promise<Record<string,unk
   const bytes=new Uint8Array(size);let at=0;for(const c of chunks){bytes.set(c,at);at+=c.length;}
   try {const p=JSON.parse(new TextDecoder().decode(bytes));if(!p||typeof p!=='object'||Array.isArray(p))throw Error();return p;}catch{throw new StorageError('Invalid form operation.');}
 }
-export async function taskRequestResponse(request:Request,env:TaskRequestEnvironment & Cloudflare.Env,role:'owner'|'guest'|'service') {
+export async function taskRequestResponse(request:Request,env:TaskRequestEnvironment & Cloudflare.Env & { BOTS_PUBLIC_ORIGIN?: string },role:'owner'|'guest'|'service') {
   try {
     if(request.method!=='POST')throw new StorageError('Use POST for form operations.',405,'method');
     const origin=request.headers.get('Origin');if(origin&&origin!==botsRequestOrigin(request,env))throw new StorageError('Invalid form origin.',403,'origin');
