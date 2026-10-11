@@ -20,6 +20,7 @@ import { registerPwaUpdateGuard } from "./pwa-update";
 import { todoCopyText } from "./todo-forward";
 import { TaskCaptureSession, TaskCaptureGate } from "./task-capture";
 import { TaskImageViewer } from "./task-image-viewer";
+import { TaskSaveStatus, type TaskSaveState } from "./task-save-status";
 import { TaskNotice, type TaskNoticeState } from "./task-notice";
 import { TaskBulkActions } from "./task-bulk-actions";
 import { TaskIntentPanel } from "./task-intent-panel";
@@ -129,7 +130,7 @@ type TodoDraft = Pick<Todo, "title" | "notes" | "priority"> & {
 
 type AutosaveField = "title" | "notes" | "priority" | "dueDate" | "context" | "recurrenceCron";
 type AutosavePatch = Partial<Record<AutosaveField, string | number | null>>;
-type EditSaveState = "saved" | "saving" | "offline" | "error";
+type EditSaveState = TaskSaveState;
 type PersistTaskDraft = (
   todoId: number,
   draft: TodoDraft,
@@ -936,19 +937,6 @@ export default function Home() {
     }
   });
 
-  const refreshLiveData = useEffectEvent(async (_source: string) => { taskSync.wake(); });
-
-  const reconcileTaskClock = useEffectEvent((source: "focus" | "visibility" | "online") => {
-    const reconciledAt = Date.now();
-    const expiredIds = expiredSnoozeIds(todos, reconciledAt);
-    setNow(reconciledAt);
-    console.info("[todo-snooze] task clock reconciled", {
-      source,
-      reconciledAt: new Date(reconciledAt).toISOString(),
-      expiredIds,
-    });
-  });
-
   const hydrateCapture = useStableCallback(() => {
     if (captureGate.current.ready) return; // Activity reveal must preserve current unsaved input.
     setCaptureSaveState("Loading draft…");
@@ -1355,7 +1343,7 @@ export default function Home() {
         const firedAt = Date.now();
         const expiredIds = expiredSnoozeIds(todos, firedAt);
         setNow(firedAt);
-        void refreshLiveData("snooze-wake");
+        taskSync.wake();
         console.info("[todo-snooze] live wake fired", {
           scheduledWakeAt: new Date(wakeAt).toISOString(),
           firedAt: new Date(firedAt).toISOString(),
@@ -1392,6 +1380,8 @@ export default function Home() {
     return () => window.clearTimeout(timer);
   }, [customSnoozeDialog, notice]);
 
+  const undoFromShortcut = useEffectEvent((currentNotice: NonNullable<Notice>) => requestNoticeUndo(currentNotice));
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (document.querySelector(".todo-queue-dialog")) return;
@@ -1402,7 +1392,7 @@ export default function Home() {
       if (undoShortcut && !typing) {
         if (notice && (notice.operationId || notice.undoToken) && !undoing && !notice.undoRequested) {
           event.preventDefault();
-          requestNoticeUndo(notice);
+          undoFromShortcut(notice);
           console.info("[todo-shortcuts] undo requested", {
             source: event.metaKey ? "command-z" : "control-z",
             optimistic: Boolean(notice.operationId),
@@ -1595,6 +1585,8 @@ export default function Home() {
   const mobileFilterCount = Number(Boolean(priority));
   const editingTodo = editingId === null ? null : todos.find((todo) => todo.id === editingId) ?? null;
 
+  const openLinkedTask = useEffectEvent((todo: Todo) => openTaskDetails(todo));
+
   useEffect(() => {
     if (deepLinkedTaskOpenedRef.current || todos.length === 0) return;
     const rawTaskId = new URLSearchParams(window.location.search).get("task");
@@ -1606,7 +1598,7 @@ export default function Home() {
     const linkedTask = Number.isInteger(taskId) ? todos.find((todo) => todo.id === taskId) : null;
     if (!linkedTask) return;
     deepLinkedTaskOpenedRef.current = true;
-    openTaskDetails(linkedTask);
+    openLinkedTask(linkedTask);
     const cleanUrl = new URL(window.location.href);
     cleanUrl.searchParams.delete("task");
     window.history.replaceState(window.history.state, "", `${cleanUrl.pathname}${cleanUrl.search}${cleanUrl.hash}`);
@@ -2247,7 +2239,6 @@ export default function Home() {
     }
   }
 
-  function scheduleOfflineQueueSync(_reason: string, delayMs = 0) { taskSync.wake(delayMs); }
   syncOfflineQueueRef.current = taskSync.refresh;
 
   async function addTodo(event: FormEvent) {
@@ -4254,18 +4245,7 @@ export default function Home() {
               </div>
             </div>
 
-            <div className="flex min-h-14 items-center justify-between gap-3 border-t border-border bg-background px-5 py-3 sm:px-6" aria-live="polite">
-              <span className={classNames(
-                "inline-flex min-w-0 items-center gap-2 text-sm font-medium",
-                editSaveState === "error" ? "text-red-700" : editSaveState === "offline" ? "text-amber-700" : "text-muted-foreground",
-              )}>
-                <span className={classNames("h-2 w-2 shrink-0 rounded-full", editSaveState === "saving" ? "animate-pulse bg-[#216e4e]" : editSaveState === "error" ? "bg-red-600" : editSaveState === "offline" ? "bg-amber-500" : "bg-emerald-600")} />
-                <span className="truncate">{editSaveMessage}</span>
-              </span>
-              {editSaveState === "error" && (
-                <Button variant="ghost" type="button" onClick={() => { if (editingIdRef.current && editDraftRef.current && editBaselineRef.current) void persistTaskDraft(editingIdRef.current, editDraftRef.current, "retry", editBaselineRef.current); }} className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg px-3 text-xs font-semibold text-red-700 hover:bg-red-50"><ActionIcon name="retry" />Retry</Button>
-              )}
-            </div>
+            <TaskSaveStatus state={editSaveState} message={editSaveMessage} onRetry={() => { if (editingIdRef.current && editDraftRef.current && editBaselineRef.current) void persistTaskDraft(editingIdRef.current, editDraftRef.current, "retry", editBaselineRef.current); }} />
           </form>
         </div>
       )}

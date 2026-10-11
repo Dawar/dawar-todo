@@ -172,3 +172,7 @@ VoiceMemoRecorder now owns the unchanged recording controller separately from Vo
 ### Tasks page consolidation — October 11
 
 Removed unused page-local private upload entrypoints and their transport types, plus obsolete imports left after extraction. The active attachment-sync → attachment-upload-client path is unchanged; image preparation used by capture and clipboard conversion remains. The existing attachment contract now reads the real shared uploader rather than requiring dead page helpers. TypeScript passes; existing attachment contract checks pass. Page lint is down from 27 to 5 warnings (remaining unused clock/wake helpers and two effect dependencies require separate review). Voice review spacing now fits the 320px preview including its limit error and disabled Attach action. These are isolated source changes, not production acceptance.
+
+### Task save feedback
+
+`TaskSaveStatus` renders saved, saving, offline and error states with labeled text and distinct icons; meaning does not rely on color. Errors wrap instead of truncating. Retry uses the shared button and stacks below the message on mobile. The Tasks page retains the original autosave/retry controller. Actual 320px fixture confirms all four states and an inert Retry callback. Desktop/nested-dialog/device verification remains pending. Task page effects now use effect events for current Undo/deep-link callbacks; unused wake helpers were removed. Exact source type/lint pass with zero page warnings; eight existing snooze/attachment checks pass.
