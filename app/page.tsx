@@ -1,4 +1,3 @@
-/* eslint-disable @next/next/no-img-element */
 "use client";
 
 import {
@@ -28,16 +27,15 @@ import { taskRowClock } from "./task-title-layout";
 import { useTaskList, useTask, taskStore } from "./task-store";
 import { taskSync, type TaskSyncEvent } from "./task-sync";
 import { useStableCallback } from "./use-stable-callback";
-import { taskKey, createLocalTaskId, offlineRecordTodo, type Todo, type TodoSettings, type CaptureDraft, type BootstrapResponse, type SyncResponse } from "./task-model";
+import { taskKey, createLocalTaskId, type Todo, type CaptureDraft } from "./task-model";
 import { useAutoAnimate } from "@formkit/auto-animate/react";
 import { attachmentFileMimeType } from "../lib/attachment-files";
-import { uploadTaskAttachmentMultipart } from "./attachment-upload-client";
 import { ActionIcon, type ActionIconName } from "./action-icon";
 import { currentOpenTaskCount, updateNativeAppBadge } from "./app-badge";
 import { copyTextToClipboard } from "./copy-to-clipboard";
 import { cronValidationError } from "../lib/cron";
 import { headersWithDeviceId } from "./device-id";
-import { request, retryableSyncError, syncFailureKind, syncRetryDelay } from "./sync-request";
+import { request } from "./sync-request";
 import {
   expiredSnoozeIds,
   isActivelySnoozed,
@@ -48,7 +46,6 @@ import {
   quickSnoozeDurationMs,
   type QuickSnoozePreset,
 } from "../lib/snooze-presets";
-import type { RealtimeVoice } from "../lib/ai-preferences";
 import { snoozeLabel } from "../lib/snooze-label";
 import { zonedDateTimeInputValue, zonedLocalDateTimeToUtc } from "../lib/zoned-date-time";
 import { AttachmentQueuePanel } from "./attachment-queue-panel";
@@ -69,39 +66,10 @@ import { CreateProjectDialog, CustomSnoozeDialog, AssignProjectDialog, DeletePro
 import { KeyboardShortcutsDialog } from "./keyboard-shortcuts-dialog";
 import { PullGesturePill } from "./pull-to-refresh";
 import { MarkdownPreview } from "./markdown-preview";
-import { createSyncHealth, liveSyncDelay, type ConnectionQuality } from "./sync-health";
-import { recordSyncDiagnostic } from "./sync-diagnostics";
+import { type ConnectionQuality } from "./sync-health";
 import { MAX_TASK_DESCRIPTION_LENGTH } from "../lib/task-description";
 import { MAX_PINNED_TASKS, PIN_LIST_PREFERENCE_KEY } from "../lib/task-pins";
-import {
-  appendOfflineTodoAttachments,
-  queueTaskAttachments,
-  listQueuedAttachments,
-  retryQueuedAttachments,
-  cancelQueuedAttachment,
-  deferOfflineTaskAction,
-  deleteOfflineTodo,
-  deleteOfflineTodoAttachment,
-  deleteOfflineTodoByLocalId,
-  deleteOfflineTodoMutation,
-  deleteOfflineTaskAction,
-  getOfflineTodoByLocalId,
-  loadCachedServerState,
-  listOfflineTodos,
-  listOfflineTaskActions,
-  listOfflineTodoMutations,
-  markOfflineTodoAttachmentUploaded,
-  markOfflineTaskActionUndo,
-  persistOfflineStorage,
-  saveOfflineCaptureDraft,
-  saveOfflineTaskAction,
-  saveOfflineTodoMutation,
-  saveCachedServerState,
-  updateOfflineTodo,
-  type OfflineAttachmentKind,
-  type OfflineTaskAction,
-  type OfflineTodoRecord,
-} from "./offline-store";
+import { appendOfflineTodoAttachments, queueTaskAttachments, listQueuedAttachments, retryQueuedAttachments, deleteOfflineTodoAttachment, deleteOfflineTodoByLocalId, deleteOfflineTaskAction, getOfflineTodoByLocalId, listOfflineTodos, listOfflineTaskActions, listOfflineTodoMutations, markOfflineTaskActionUndo, persistOfflineStorage, saveOfflineCaptureDraft, saveOfflineTaskAction, saveOfflineTodoMutation, updateOfflineTodo, type OfflineAttachmentKind, type OfflineTaskAction, type OfflineTodoRecord } from "./offline-store";
 
 type View = "open" | "snoozed" | "done" | "all";
 type TaskListView = View;
@@ -268,22 +236,6 @@ const SYNC_STATUS_DELAY_MS = 5_000;
 const TASK_SORT_ORDER_STEP = 1024;
 const TASK_REORDER_EDGE_SCROLL_ZONE_PX = 88;
 const TASK_REORDER_MAX_SCROLL_PX = 18;
-
-type PreparedAttachmentUpload = {
-  uploadId: string;
-  uploads: {
-    original: PrivatePostTarget;
-    display: PrivatePostTarget;
-    thumbnail: PrivatePostTarget;
-  };
-};
-
-type PreparedMediaUpload = {
-  uploadId: string;
-  uploads: { original: PrivatePostTarget };
-};
-
-type PrivatePostTarget = { url: string; fields: Record<string, string> };
 type OptimizedImage = { blob: Blob; mimeType: "image/webp" | "image/jpeg"; format: "webp" | "jpeg" };
 
 function uploadMimeType(file: File) {
@@ -437,14 +389,6 @@ function imageVariants(file: File) {
   return prepared;
 }
 
-async function postPrivateVariant(target: PrivatePostTarget, body: Blob) {
-  const form = new FormData();
-  Object.entries(target.fields).forEach(([name, value]) => form.append(name, value));
-  form.append("file", body, "upload");
-  const response = await fetch(target.url, { method: "POST", mode: "no-cors", body: form });
-  if (response.type !== "opaque" && !response.ok) throw new Error(`Private storage rejected an upload (${response.status}).`);
-}
-
 function normalizedMediaMimeType(file: File, kind: "audio" | "video") {
   const supplied = file.type.toLowerCase().split(";", 1)[0].trim();
   const extension = file.name.toLowerCase().match(/\.([a-z0-9]+)$/)?.[1];
@@ -489,79 +433,6 @@ function mediaDuration(file: File, kind: "audio" | "video") {
     };
     media.src = objectUrl;
   });
-}
-
-async function uploadPrivateMedia(
-  file: File,
-  kind: "audio" | "video" | "file",
-  durationMs: number,
-  endpoint: string,
-  target: Record<string, string>,
-  discard: (uploadId: string) => Promise<unknown>,
-) {
-  const mimeType = kind === "file" ? normalizedFileMimeType(file) : normalizedMediaMimeType(file, kind);
-  const prepared = await request<PreparedMediaUpload>(endpoint, {
-    method: "POST",
-    body: JSON.stringify({
-      ...target,
-      kind,
-      fileName: file.name || (kind === "audio" ? "Voice memo" : kind === "video" ? "Video" : "File"),
-      mimeType,
-      byteSize: file.size,
-    }),
-  });
-  try {
-    await postPrivateVariant(prepared.uploads.original, file);
-    return await request<{ attachment: TodoAttachment }>(endpoint, {
-      method: "PATCH",
-      body: JSON.stringify({ ...target, kind, uploadId: prepared.uploadId, durationMs: kind === "file" ? 0 : durationMs }),
-    });
-  } catch (error) {
-    await discard(prepared.uploadId).catch((discardError) => {
-      console.error("[todo-ui] incomplete media cleanup failed", { uploadId: prepared.uploadId, kind, discardError });
-    });
-    throw error;
-  }
-}
-
-async function uploadPrivateImage(
-  file: File,
-  endpoint: string,
-  target: Record<string, string>,
-  discard: (uploadId: string) => Promise<unknown>,
-) {
-  const mimeType = uploadMimeType(file);
-  if (!mimeType) throw new Error("Choose a JPEG, PNG, WebP, GIF, HEIC, or HEIF image.");
-  const variants = await imageVariants(file);
-  const prepared = await request<PreparedAttachmentUpload>(endpoint, {
-    method: "POST",
-    body: JSON.stringify({
-      ...target,
-      fileName: file.name || "image",
-      mimeType,
-      byteSize: file.size,
-      displayMimeType: variants.display.mimeType,
-      thumbnailMimeType: variants.thumbnail.mimeType,
-    }),
-  });
-  try {
-    const uploads = await Promise.allSettled([
-      postPrivateVariant(prepared.uploads.original, file),
-      postPrivateVariant(prepared.uploads.display, variants.display.blob),
-      postPrivateVariant(prepared.uploads.thumbnail, variants.thumbnail.blob),
-    ]);
-    const failed = uploads.find((result): result is PromiseRejectedResult => result.status === "rejected");
-    if (failed) throw failed.reason;
-    return await request<{ attachment: TodoAttachment }>(endpoint, {
-      method: "PATCH",
-      body: JSON.stringify({ ...target, uploadId: prepared.uploadId, width: variants.width, height: variants.height }),
-    });
-  } catch (error) {
-    await discard(prepared.uploadId).catch((discardError) => {
-      console.error("[todo-ui] incomplete image cleanup failed", { uploadId: prepared.uploadId, discardError });
-    });
-    throw error;
-  }
 }
 
 

@@ -108,7 +108,7 @@ test("stores private task images with optimized variants and recovery metadata",
 
 test("exposes capture, Safari-safe optimization, drop, gallery, and viewer contracts", async () => {
   const [page, actionIcons, draftRoute, taskAttachmentsRoute, attachmentRoute, todosRoute, openApiText] = await Promise.all([
-    Promise.all(["app/page.tsx", "app/attachment-picker.tsx", "app/task-attachment-media.tsx", "app/task-image-viewer.tsx", "app/voice-memo-recorder.tsx", "app/pending-task-attachment.tsx", "app/attachment-format.ts", "app/task-row.tsx", "app/task-sync.ts", "app/attachment-sync.ts", "app/task-model.ts", "app/sync-request.ts"].map((path) => readFile(new URL(path, root), "utf8"))).then((parts) => parts.join("\n")),
+    Promise.all(["app/page.tsx", "app/attachment-picker.tsx", "app/task-attachment-media.tsx", "app/task-image-viewer.tsx", "app/voice-memo-recorder.tsx", "app/pending-task-attachment.tsx", "app/attachment-format.ts", "app/task-row.tsx", "app/task-sync.ts", "app/attachment-sync.ts", "app/attachment-upload-client.ts", "app/task-model.ts", "app/sync-request.ts"].map((path) => readFile(new URL(path, root), "utf8"))).then((parts) => parts.join("\n")),
     readFile(new URL("app/action-icon.tsx", root), "utf8"),
     readFile(new URL("app/api/attachments/drafts/route.ts", root), "utf8"),
     readFile(new URL("app/api/todos/[id]/attachments/route.ts", root), "utf8"),
@@ -142,10 +142,9 @@ test("exposes capture, Safari-safe optimization, drop, gallery, and viewer contr
   assert.match(page, /routeDroppedAttachments = useEffectEvent/);
   assert.match(page, /if \(editingId !== null\) void queueDetailAttachments\(files\)/);
   assert.match(page, /Promise\.allSettled/);
-  assert.match(page, /method: "POST", mode: "no-cors"/);
-  assert.match(page, /postPrivateVariant/);
-  assert.match(page, /uploadPrivateImage/);
-  assert.match(page, /uploadPrivateMedia/);
+  assert.match(page, /uploadStorageBlob\(fetch,target,body,\{legacyMode:'no-cors'/);
+  assert.match(page, /uploadStorageObject/);
+  assert.match(page, /export async function uploadTaskAttachment\(/);
   assert.match(page, /uploadTaskAttachmentMultipart/);
   assert.match(page, /item\.kind === "file"/);
   assert.match(page, /Upload failed\. Try again\./);
@@ -229,7 +228,7 @@ test("accepts common document and archive types through a shared allowlist", asy
 
 test("installs an offline-capable PWA with idempotent queued task syncing", async () => {
   const [page, offlineStore, serviceWorker, manifest, layout, register, schema] = await Promise.all([
-    Promise.all(["app/page.tsx", "app/attachment-picker.tsx", "app/task-attachment-media.tsx", "app/task-image-viewer.tsx", "app/voice-memo-recorder.tsx", "app/pending-task-attachment.tsx", "app/attachment-format.ts", "app/task-row.tsx", "app/task-sync.ts", "app/attachment-sync.ts", "app/task-model.ts", "app/sync-request.ts"].map((path) => readFile(new URL(path, root), "utf8"))).then((parts) => parts.join("\n")),
+    Promise.all(["app/page.tsx", "app/attachment-picker.tsx", "app/task-attachment-media.tsx", "app/task-image-viewer.tsx", "app/voice-memo-recorder.tsx", "app/pending-task-attachment.tsx", "app/attachment-format.ts", "app/task-row.tsx", "app/task-sync.ts", "app/attachment-sync.ts", "app/attachment-upload-client.ts", "app/task-model.ts", "app/sync-request.ts"].map((path) => readFile(new URL(path, root), "utf8"))).then((parts) => parts.join("\n")),
     readFile(new URL("app/offline-store.ts", root), "utf8"),
     readFile(new URL("public/sw.js", root), "utf8"),
     readFile(new URL("public/manifest.webmanifest", root), "utf8"),
@@ -293,7 +292,7 @@ test("installs an offline-capable PWA with idempotent queued task syncing", asyn
 
 test("keeps the installed app badge aligned with the current Open task count", async () => {
   const [page, settings, badgeSource, actionIcons, badgeModule] = await Promise.all([
-    Promise.all(["app/page.tsx", "app/attachment-picker.tsx", "app/task-attachment-media.tsx", "app/task-image-viewer.tsx", "app/voice-memo-recorder.tsx", "app/pending-task-attachment.tsx", "app/attachment-format.ts", "app/task-row.tsx", "app/task-sync.ts", "app/attachment-sync.ts", "app/task-model.ts", "app/sync-request.ts"].map((path) => readFile(new URL(path, root), "utf8"))).then((parts) => parts.join("\n")),
+    Promise.all(["app/page.tsx", "app/attachment-picker.tsx", "app/task-attachment-media.tsx", "app/task-image-viewer.tsx", "app/voice-memo-recorder.tsx", "app/pending-task-attachment.tsx", "app/attachment-format.ts", "app/task-row.tsx", "app/task-sync.ts", "app/attachment-sync.ts", "app/attachment-upload-client.ts", "app/task-model.ts", "app/sync-request.ts"].map((path) => readFile(new URL(path, root), "utf8"))).then((parts) => parts.join("\n")),
     readFile(new URL("app/settings/page.tsx", root), "utf8"),
     readFile(new URL("app/app-badge.ts", root), "utf8"),
     readFile(new URL("app/action-icon.tsx", root), "utf8"),
