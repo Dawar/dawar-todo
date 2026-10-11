@@ -518,3 +518,5 @@ Operator uses the shared dialog and controls. A failed start says “Could not c
 Room disclosure controls use the same semantic focus ring as other controls. Their native keyboard behavior remains intact; expanding recipients or room details stays within the independently scrollable panel on small screens.
 
 Attachment recovery separates storage-read errors from action errors. A successful refresh clears only its read error; a delayed older read cannot overwrite newer state. A failed initial read shows its recovery alert without an indefinite loading label or a false empty result.
+
+Bot settings share one recovery presentation wherever the same saved change is shown. Appearance errors expose Retry saved change, Retry storage or Refresh settings directly in the dialog; they no longer send the user to controls outside it. Original ordered-save and same-operation recovery behavior stays in the settings controller.

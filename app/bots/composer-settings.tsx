@@ -4,7 +4,7 @@ import { useLayoutEffect, useMemo, useSyncExternalStore } from "react";
 import { Check, ListTodo, LoaderCircle, Zap } from "lucide-react";
 import type { Bot, BotSnapshot } from "../../lib/bots-types";
 import { botsClient } from "./client";
-import { getComposerSettings, type Values } from "./composer-settings-controller";
+import { getComposerSettings, type Values, type ComposerSettingsController, type SettingsState } from "./composer-settings-controller";
 import { Button } from "@/components/ui/button";
 import { NativeSelect } from "@/components/ui/native-select";
 import { nextTurnSaveLabel } from "./next-turn-settings";
@@ -70,7 +70,14 @@ export function ComposerSettings({ bot, snapshot, online }: { bot: Bot; snapshot
         </Button>
       </div>
     </div>
-    {(state.error || state.storageError || state.confirmationError || pending?.phase === "storage") && <div className="bots-settings-error" role="alert">
+    <SettingsRecovery state={state} controller={controller} online={online} />
+  </div>;
+}
+
+/** The same saved operation is recoverable wherever its settings are shown. */
+export function SettingsRecovery({ state, controller, online }: { state: SettingsState; controller: ComposerSettingsController; online: boolean }) {
+  const pending = state.pending;
+  return (state.error || state.storageError || state.confirmationError || pending?.phase === "storage") && <div className="bots-settings-error" role="alert">
       <span>{state.storageError || state.error || state.confirmationError || "Saving is paused. Retry storage to continue with the same saved change."}</span>
       {(state.storageError || pending?.phase === "storage") &&
         <Button variant="ghost" type="button" disabled={!online} onClick={() => controller.retryStorage()}>Retry storage</Button>}
@@ -78,6 +85,5 @@ export function ComposerSettings({ bot, snapshot, online }: { bot: Bot; snapshot
         <Button variant="ghost" type="button" disabled={!online || Boolean(state.storageError)} onClick={() => controller.retry()}>Retry saved change</Button>}
       {state.confirmationError && <Button variant="ghost" type="button" disabled={!online || state.refreshingConfirmation}
         onClick={() => controller.refreshConfirmed()}>{state.refreshingConfirmation ? "Refreshing…" : "Refresh settings"}</Button>}
-    </div>}
-  </div>;
+    </div>;
 }

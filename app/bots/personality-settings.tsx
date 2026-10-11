@@ -3,6 +3,7 @@ import { useLayoutEffect, useMemo, useSyncExternalStore } from 'react';
 import type { Bot, BotSnapshot } from './single-thread-contract';
 import { botsClient as client } from './client';
 import { getComposerSettings } from './composer-settings-controller';
+import { SettingsRecovery } from './composer-settings';
 import { PALETTE, SHAPES, identityFromSeed, resolveColor, type BotColor } from './avatar-engine';
 import { BotAvatar } from './bot-avatar';
 import { Check } from 'lucide-react';
@@ -21,6 +22,6 @@ export function PersonalitySettings({ bot, snapshot, online }: { bot: Bot; snaps
     <div className="bots-avatar-colors" role="group" aria-label="Avatar color">{Object.entries(PALETTE).map(([name, color]) => <Button variant="outline" size="icon" type="button" key={name} style={{ background: color }} aria-label={name} aria-pressed={resolveColor(avatar.color as BotColor) === color} disabled={!online} onClick={() => controller.edit({ avatar: { shape: avatar.shape, color: name } })}>{resolveColor(avatar.color as BotColor) === color && <Check aria-hidden="true" className="rounded-full bg-card text-foreground" />}</Button>)}</div>
     <label className="bots-avatar-custom">Custom color<Input className="!h-11 !w-11 !min-h-0 !p-1" type="color" aria-label="Custom avatar color" value={resolveColor(avatar.color as BotColor)} disabled={!online} onChange={event => controller.edit({ avatar: { shape: avatar.shape, color: event.target.value } })} /></label>
   </section>{snapshot.capabilities?.messageBursts === 1 && <label className="bots-burst-preference"><span>Message bursts<small>Wait after typing before sending.</small></span><NativeSelect aria-label="Message burst quiet time" disabled={!online} value={values.burstQuietSeconds ?? 3} onChange={event => controller.edit({ burstQuietSeconds: Number(event.target.value) as 0 | 2.5 | 3 | 8 | 15 })}><option value="0">Off</option><option value="2.5">2.5 seconds</option><option value="3">3 seconds</option><option value="8">8 seconds</option><option value="15">15 seconds</option></NativeSelect></label>}
-    {(state.error || state.storageError || state.confirmationError) && <p className="text-sm text-destructive" role="alert">{state.storageError || state.error || state.confirmationError} Review the saved change below your conversation.</p>}
+    <SettingsRecovery state={state} controller={controller} online={online} />
   </>;
 }
