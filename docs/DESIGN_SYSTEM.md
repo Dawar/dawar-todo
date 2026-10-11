@@ -125,7 +125,7 @@ Project assignment and deletion now share the same dialog/field/action system. A
 
 ProjectBrowser is extracted from Tasks into ControlledDialog with shared Card/Button/Skeleton. All/unassigned selection and per-project view/delete callbacks remain unchanged. Cards use semantic selected borders/surfaces, wrapping14px titles and13px counts. Shared row heights align action bars across different title lengths; mobile actions remain44px targets. Actual320 and1280 layouts observed; loading/empty and complete task navigation/device remain tracked.
 
-Task list navigation/search/pins/priority use shared controls in TaskListControls and TaskFiltersDialog. Four task views remain visible at320px by stacking counts below labels; desktop places them inline. Mobile filters use the shared modal, native priority select and44px actions. Capture uses shared Textarea/Button with original growing textarea ref/handlers and admission conditions. Full capture attachment/growth state verification remains pending. Actual320/1280 toolbar render observed; full Tasks composition and device acceptance remain tracked.
+Task list navigation/search/pins/priority use shared controls in TaskListControls and TaskFiltersDialog. Four task views remain visible at 320px by stacking counts below labels; desktop places them inline. Mobile filters use the shared modal, native priority select and44px actions. Capture uses shared Textarea/Button with original growing textarea ref/handlers and admission conditions. Full capture attachment/growth state verification remains pending. Actual320/1280 toolbar render observed; full Tasks composition and device acceptance remain tracked.
 
 TaskRow is extracted into a memoized component using shared buttons, semantic surfaces and visible inline-editor focus. Metadata uses13px text, notes14px; attachment count sits with metadata instead of compressing the title. Mobile swipe rails are24px wide, retaining directional gesture thresholds and callbacks. Actual320px long-title rendering and editor growth observed; real touch/reorder, complete Tasks composition and persistence remain pending. Existing inline-edit checks pass4/5, with the same inherited old Delete-versus-Queue assertion failing on the baseline. State/gesture logic before JSX is byte-identical.
 
@@ -263,7 +263,7 @@ Actual own Chrome checks for the attachment viewer now cover a synthetic local S
 
 ### Artifact gallery
 
-Gallery search/filter fields and navigation, recovery, paging and file-card actions use shared Input, NativeSelect and Button. File names are14px and metadata at least12px; mobile controls retain44px targets. Ordinary surfaces use semantic colors and empty headings are concise. The PDF badge is above the thumbnail message to avoid overlapping the unavailable-preview text at320px. Existing queries, cursors, debounce, owner cache scopes, lazy previews, discovery and download handlers are unchanged. Actual own Chrome1280 populated and320 populated/PDF filter/empty/error fixtures observed; no real file API/download/upload effect. Type/scoped lint/diff pass. Keyboard/search/selection/paging/reconnect and full workspace coverage remain pending; final semantic error color change has not yet been reobserved. Dedicated fixture RPCs returned only synthetic data.
+Gallery search/filter fields and navigation, recovery, paging and file-card actions use shared Input, NativeSelect and Button. File names are14px and metadata at least12px; mobile controls retain44px targets. Ordinary surfaces use semantic colors and empty headings are concise. The PDF badge is above the thumbnail message to avoid overlapping the unavailable-preview text at 320px. Existing queries, cursors, debounce, owner cache scopes, lazy previews, discovery and download handlers are unchanged. Actual own Chrome1280 populated and320 populated/PDF filter/empty/error fixtures observed; no real file API/download/upload effect. Type/scoped lint/diff pass. Keyboard/search/selection/paging/reconnect and full workspace coverage remain pending; final semantic error color change has not yet been reobserved. Dedicated fixture RPCs returned only synthetic data.
 
 ### Shared files inside chat and search focus
 
@@ -543,7 +543,7 @@ A foreground return bypasses accumulated background reconnect backoff. A bounded
 three-second liveness probe detects a half-open socket. Interrupted history reads
 release their callers immediately; mutation identities and their uncertain
 outcomes remain under the existing durable recovery rules. Concurrent full
-snapshot reads coalesce. Push-subscription lookup has a150ms startup budget and
+snapshot reads coalesce. Push-subscription lookup has a 150ms startup budget and
 does not prevent obtaining a session. These are event-driven recovery paths,
 not recurring conversation or private-form polling.
 
@@ -558,6 +558,8 @@ On application open or foreground return, compare the page with the same-origin 
 
 ### Small-phone conversation identity and portable sync
 
-At480px and below, reserve header space for the bot name, keep44px action targets and use a32px decorative avatar. Desktop/queued-message shortcuts and extension badges yield to identity; Bot details retains Desktop and Up next access. This avoids an empty title at320px without adding a header row.
+At 480px and below, reserve header space for the bot name, keep 44px action targets and use a 32px decorative avatar. Desktop/queued-message shortcuts and extension badges yield to identity; Bot details retains Desktop and Up next access. This avoids an empty title at 320px without adding a header row.
 
-The portable Next site exposes the same authenticated `/api/sync/events` revision stream as the original Worker entrypoint. It reuses bounded lifetime/cancellation and revision-only hints; task contents still arrive through the durable delta API. This restores the existing delivery contract instead of repeated404 requests and client fallback polling.
+The portable Next site exposes the same authenticated `/api/sync/events` revision stream as the original Worker entrypoint. It reuses bounded lifetime/cancellation and revision-only hints; task contents still arrive through the durable delta API. This restores the existing delivery contract instead of repeated 404 requests and client fallback polling.
+
+Task Request origin validation uses the same configured HTTPS public origin as bot sessions when the gateway forwards to the loopback site. Forwarded headers never choose the trusted origin. Owner identity, session CSRF, guest grants and service credentials retain their independent checks.

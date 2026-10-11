@@ -1,5 +1,5 @@
 import { TaskRequests, type TaskRequestEnvironment } from '../db/task-requests';
-import { botsOwner, secretMatches, signTaskRequestTicket } from './bots-auth';
+import { botsOwner, botsRequestOrigin, secretMatches, signTaskRequestTicket } from './bots-auth';
 import { StorageError } from '../db/bot-storage';
 import { taskRequestId } from './task-requests';
 
@@ -15,7 +15,7 @@ export async function taskRequestBody(request:Request):Promise<Record<string,unk
 export async function taskRequestResponse(request:Request,env:TaskRequestEnvironment & Cloudflare.Env,role:'owner'|'guest'|'service') {
   try {
     if(request.method!=='POST')throw new StorageError('Use POST for form operations.',405,'method');
-    const origin=request.headers.get('Origin');if(origin&&origin!==new URL(request.url).origin)throw new StorageError('Invalid form origin.',403,'origin');
+    const origin=request.headers.get('Origin');if(origin&&origin!==botsRequestOrigin(request,env))throw new StorageError('Invalid form origin.',403,'origin');
     let owner:string;
     if(role==='owner') {try{owner=botsOwner(request,env);}catch{throw new StorageError('This form operation requires the authenticated owner.',403,'forbidden');}}
     else {
