@@ -21,6 +21,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { NativeSelect } from '@/components/ui/native-select';
+import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { ControlledDialog } from '@/components/ui/controlled-dialog';
 import "./teams.css";
 const refresh = async () => {
@@ -116,18 +117,17 @@ export function TeamsManager({
     [creating, setCreating] = useState(false);
   const action = useTeamAction(owner, refresh),
     dirty = useRef(false);
-  const close = useCallback(() => {
-    if (dirty.current && !window.confirm("Discard unsaved team changes?"))
-      return;
-    onClose();
-  }, [onClose]);
-  const back = () => {
-    if (dirty.current && !window.confirm("Discard unsaved team changes?"))
-      return;
+  const [discard, setDiscard] = useState<(() => void) | null>(null);
+  const confirmDiscard = useCallback((proceed: () => void) => {
+    if (dirty.current) setDiscard(() => proceed);
+    else proceed();
+  }, []);
+  const close = useCallback(() => confirmDiscard(onClose), [confirmDiscard, onClose]);
+  const back = () => confirmDiscard(() => {
     dirty.current = false;
     setSelected(null);
     setCreating(false);
-  };
+  });
   const reorder = (index: number, offset: number) => {
     const ids = teams.map((t) => t.id);
     [ids[index], ids[index + offset]] = [ids[index + offset], ids[index]];
@@ -138,6 +138,7 @@ export function TeamsManager({
   };
   return (
     <ControlledDialog title="Teams" className="bots-teams-modal" onClose={close}>
+      {discard && <ConfirmDialog title="Discard team changes?" description="Your unsaved edits will be lost." confirmLabel="Discard changes" destructive onCancel={() => setDiscard(null)} onConfirm={() => { const proceed = discard; setDiscard(null); proceed(); }}/> }
         <div className="bots-teams-body">
           <ChangeState action={action} />
           {selected || creating ? (
@@ -157,6 +158,7 @@ export function TeamsManager({
                 onDirty={(value) => {
                   dirty.current = value;
                 }}
+                confirmDiscard={confirmDiscard}
                 onCreated={() => {
                   dirty.current = false;
                   setCreating(false);
@@ -270,6 +272,7 @@ function TeamEditor({
   action,
   onDirty,
   onCreated,
+  confirmDiscard,
 }: {
   owner: string;
   id: string | null;
@@ -279,6 +282,7 @@ function TeamEditor({
   action: Action;
   onDirty: (dirty: boolean) => void;
   onCreated: () => void;
+  confirmDiscard: (proceed: () => void) => void;
 }) {
   const [detail, setDetail] = useState<BotTeamDetail | null>(null),
     [name, setName] = useState(""),
@@ -593,15 +597,7 @@ function TeamEditor({
               <Button variant="outline"
 
                 disabled={locked}
-                onClick={() => {
-                  if (
-                    !dirty ||
-                    window.confirm(
-                      "Load the latest team and replace unsaved edits?",
-                    )
-                  )
-                    void load();
-                }}
+                onClick={() => confirmDiscard(() => { void load(); })}
               >
                 <RefreshCw size={15} />
                 Load latest

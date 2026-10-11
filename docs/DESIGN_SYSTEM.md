@@ -296,3 +296,7 @@ Private forms use shared Button and Input controls, semantic surfaces/text/error
 ### Teams
 
 Teams uses ControlledDialog, shared Button/Input/NativeSelect/Textarea, semantic cards and a two-column desktop/one-column mobile grid. Action rows align across unequal titles; mobile membership controls wrap after the bot name. Existing dirty-discard confirmations, same-operation recovery, owner/revision guards and mutations are retained. Actual offline 320/1280 long-title lists checked; editor/empty/error/pending/keyboard/full workspace checks remain pending.
+
+### Confirmations
+
+`ConfirmDialog` uses the shared dialog and footer, focuses Cancel first, and supports destructive confirmation styling. Teams uses it for dirty editor dismissal, back navigation and replacing edits with the latest data. Cancelling retains the editor and returns focus; no action runs before confirmation. Actual 320px nested creation-editor confirmation and keyboard Cancel retained draft/focus. Existing read-only fixture editor layout checked at desktop/mobile; connected mutation/recovery remains separate.
