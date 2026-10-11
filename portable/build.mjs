@@ -29,10 +29,13 @@ await writeFile('.next-portable/standalone/public/pwa-build.json',JSON.stringify
 const workerPath='.next-portable/standalone/public/sw.js';
 let workerSource=await readFile(workerPath,'utf8');
 if(!workerSource.includes('const CACHE_NAME = `${CACHE_PREFIX}v104`;'))throw Error('Review the changed original PWA generation before portable packaging.');
-const fetchBoundary='if (url.origin !== self.location.origin || url.pathname.startsWith("/api/")) return;';
+const resourceBoundary='if (url.origin !== self.location.origin || url.pathname.startsWith("/api/")) return;';
+const fetchBoundary='if (url.origin !== self.location.origin || url.pathname.startsWith("/api/") || url.pathname.startsWith("/calendar/")) return;';
 const documentBoundary='async function refreshDocumentShell(response, cacheKey) {\n  if (!response.ok) return;';
-if(!workerSource.includes(fetchBoundary)||!workerSource.includes(documentBoundary))throw Error('Review the changed PWA authentication/cache boundaries before portable packaging.');
-workerSource=workerSource.replace(fetchBoundary,'if (url.origin !== self.location.origin || url.pathname.startsWith("/api/") || url.pathname.startsWith("/auth/") || ["/signin-with-chatgpt", "/signout-with-chatgpt", "/callback"].includes(url.pathname)) return;')
+if(!workerSource.includes(resourceBoundary)||!workerSource.includes(fetchBoundary)||!workerSource.includes(documentBoundary))throw Error('Review the changed PWA authentication/cache boundaries before portable packaging.');
+const authBoundary='url.pathname.startsWith("/auth/") || ["/signin-with-chatgpt", "/signout-with-chatgpt", "/callback"].includes(url.pathname)';
+workerSource=workerSource.replace(resourceBoundary,`if (url.origin !== self.location.origin || url.pathname.startsWith("/api/") || ${authBoundary}) return;`)
+  .replace(fetchBoundary,`if (url.origin !== self.location.origin || url.pathname.startsWith("/api/") || url.pathname.startsWith("/calendar/") || ${authBoundary}) return;`)
   .replace(documentBoundary,'async function refreshDocumentShell(response, cacheKey) {\n  if (!response.ok || new URL(response.url).origin !== self.location.origin) return;')
   .replace('if (!page.ok) throw new Error(`Could not cache the app shell (${page.status}).`);','if (!page.ok || new URL(page.url).origin !== self.location.origin) throw new Error(`Could not cache the app shell (${page.status}).`);');
 await writeFile(workerPath,workerSource.replace('const CACHE_NAME = `${CACHE_PREFIX}v104`;',`const CACHE_NAME = \`\${CACHE_PREFIX}v${shellGeneration}\`;`));
