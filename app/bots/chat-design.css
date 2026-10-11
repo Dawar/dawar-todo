@@ -105,3 +105,10 @@ details[open] > summary > .bots-disclosure-chevron { transform: rotate(90deg); }
 .bots-chat-heading .bots-extension { margin-left:8px; }
 .bots-draft-status { display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-size:13px; }
 .bots-conversation-heading .bots-extension { margin-left:8px;margin-right:0; }
+
+/* Keep writing space independent of the number of composer actions. */
+.bots-composer { flex-direction: column; align-items: stretch; }
+.bots-composer textarea { flex: none; width: 100%; padding-inline: 9px; }
+.bots-composer-actions { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.bots-composer-actions .bots-send { margin-left: auto; }
+.bots-composer-actions .bots-icon-button, .bots-composer-actions .bots-send { width: 44px; height: 44px; min-width: 44px; }

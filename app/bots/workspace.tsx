@@ -693,15 +693,6 @@ export function BotsWorkspace() {
                       hidden
                       onChange={(e) => void upload(e.target.files)}
                     />
-                    <button
-                      type="button"
-                      className="bots-icon-button"
-                      aria-label="Attach file"
-                      disabled={!composer?.ready || checkoutLocked}
-                      onClick={() => fileRef.current?.click()}
-                    >
-                      <Paperclip size={20} />
-                    </button>
                     <ComposerInput
                       key={scope}
                       aria-label={`Message ${bot.name}`}
@@ -725,6 +716,16 @@ export function BotsWorkspace() {
                         }
                       }}
                     />
+                    <div className="bots-composer-actions">
+                    <button
+                      type="button"
+                      className="bots-icon-button"
+                      aria-label="Attach file"
+                      disabled={!composer?.ready || checkoutLocked}
+                      onClick={() => fileRef.current?.click()}
+                    >
+                      <Paperclip size={20} />
+                    </button>
                     {(
                       <>
                       <button type="button" className="bots-icon-button" title="Copy composer (text and attachments)" aria-label="Copy composer"
@@ -794,6 +795,7 @@ export function BotsWorkspace() {
                         )}
                       </button>
                     ))}
+                    </div>
                   </form>
                 </>
               )}
