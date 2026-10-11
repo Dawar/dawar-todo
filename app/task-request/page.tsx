@@ -8,6 +8,8 @@ import { GuestFilePreview } from './file-preview';
 import { mergeFormReceipt } from './receipts';
 import { TaskRequestFields, requestStatus } from './form';
 import './task-request.css';
+import { Input } from '@/components/ui/input';
+import { Button } from '@/components/ui/button';
 export default function TaskRequestGuestPage() {
     const link = useRef<ReturnType<typeof protectedLink>>(null), session = useRef<GuestFormSession | null>(null), alive = useRef(false), working = useRef(false);
     const observed = useRef<TaskRequestGuest | null>(null), ordinaryFiles = useRef<Record<string, File>>({});
@@ -165,12 +167,12 @@ export default function TaskRequestGuestPage() {
     return <main className="task-request-page" data-no-pull-refresh><small>Protected Task Request</small><h1>{request?.spec.title ?? 'Open a protected form'}</h1>
     <p>This link permits one contributor to submit this form. Link possession grants access; the contributor name is not verified identity.</p>
     {error && <p role="alert" className="task-request-error">{error}</p>}
-    {!request && needsPin && <form onSubmit={e => { e.preventDefault(); void run(() => open(pin)); }} autoComplete="off"><label>Link PIN<input type="password" inputMode="numeric" pattern="[0-9]{4,12}" minLength={4} maxLength={12} required value={pin} autoComplete="off" onChange={e => setPin(e.target.value)}/></label><button type="submit" disabled={busy}>Open form</button></form>}
-    {!request && !needsPin && <button type="button" disabled={busy || !hasLink} onClick={() => void run(() => open())}>{busy ? 'Opening…' : 'Retry original link'}</button>}
+    {!request && needsPin && <form onSubmit={e => { e.preventDefault(); void run(() => open(pin)); }} autoComplete="off"><label>Link PIN<Input className="task-request-control" type="password" inputMode="numeric" pattern="[0-9]{4,12}" minLength={4} maxLength={12} required value={pin} autoComplete="off" onChange={e => setPin(e.target.value)}/></label><Button className="task-request-control" type="submit" disabled={busy}>Open form</Button></form>}
+    {!request && !needsPin && <Button className="task-request-control" variant="outline" type="button" disabled={busy || !hasLink} onClick={() => void run(() => open())}>{busy ? 'Opening…' : 'Retry original link'}</Button>}
     {request && <><p>For {request.botName} · {requestStatus[request.submission?.submittedAt ? request.submission.status : request.status] ?? request.status}</p>{request.expiresAt && <small>Link expires {new Date(request.expiresAt).toLocaleString()}</small>}
-      {request.submission?.submittedAt ? <section><h2>{requestStatus[request.submission.status]}</h2><p>Your submission has been received. Delivery and completion are separate.</p>{request.submission.delivery?.reason && <p>{request.submission.delivery.reason}</p>}<button type="button" disabled={busy} onClick={() => void run(async () => { receive(await current().read()); })}>Check receipt</button></section>
+      {request.submission?.submittedAt ? <section><h2>{requestStatus[request.submission.status]}</h2><p>Your submission has been received. Delivery and completion are separate.</p>{request.submission.delivery?.reason && <p>{request.submission.delivery.reason}</p>}<Button className="task-request-control" variant="outline" type="button" disabled={busy} onClick={() => void run(async () => { receive(await current().read()); })}>Check receipt</Button></section>
                 : <form className="task-request-form" ref={form} autoComplete="off" onSubmit={e => { e.preventDefault(); void run(submit); }}>
-        <label>Your name · self-reported<input disabled={locked} maxLength={100} value={name} onChange={e => { setName(e.target.value); setSaved(false); }}/></label>
+        <label>Your name · self-reported<Input className="task-request-control" disabled={locked} maxLength={100} value={name} onChange={e => { setName(e.target.value); setSaved(false); }}/></label>
         <TaskRequestFields spec={request.spec} values={values} files={request.submission?.files} disabled={locked} privateFields={privateFields} privateImages={imageNames} onChange={(id, v) => { setValues(old => ({ ...old, [id]: v })); setSaved(false); }} onPrivateImage={(id, file) => {
                         if (file)
                             images.current[id] = file;
@@ -180,13 +182,13 @@ export default function TaskRequestGuestPage() {
                     }} onFile={(id, file) => { ordinaryFiles.current[id] = file; void run(async () => { await current().upload(request, id, file); receive(await current().read()); }); }}/>
         {request.submission?.files.map(file => <GuestFilePreview key={file.id} file={file} download={() => current().call({ action: 'download', id: request.id, fileId: file.id })}/>)}
         {request.spec.secure && <><label><input type="checkbox" checked={modelRead} disabled={locked} onChange={e => setModelRead(e.target.checked)}/> Allow the model to read private fields/images and destination responses</label><p>Unchecked keeps content private. Explicit model/native history copies, website/session/autofill copies survive deletion of the transfer. Private content is held in memory and submitted over the dedicated encrypted channel.</p></>}
-        {pending && <aside><p>Original {pending.action.action} is unconfirmed. Its identity and ordinary input are retained.</p>{pending.action.action === 'upload' ? <><button type="button" disabled={busy} onClick={() => void run(async () => { const p = session.current?.pending?.action; if (p?.action !== 'upload' || !ordinaryFiles.current[p.fieldId])
-                            throw Error('Choose the same original file to continue.'); await current().upload(request, p.fieldId, ordinaryFiles.current[p.fieldId]); receive(await current().read()); })}>Retry original selected file</button><label>Select the same original file to recover<input type="file" disabled={busy} onChange={e => {
+        {pending && <aside><p>Original {pending.action.action} is unconfirmed. Its identity and ordinary input are retained.</p>{pending.action.action === 'upload' ? <><Button className="task-request-control" variant="outline" type="button" disabled={busy} onClick={() => void run(async () => { const p = session.current?.pending?.action; if (p?.action !== 'upload' || !ordinaryFiles.current[p.fieldId])
+                            throw Error('Choose the same original file to continue.'); await current().upload(request, p.fieldId, ordinaryFiles.current[p.fieldId]); receive(await current().read()); })}>Retry original selected file</Button><label>Select the same original file to recover<Input className="task-request-control" type="file" disabled={busy} onChange={e => {
                                 const file = e.target.files?.[0], p = session.current?.pending?.action;
                                 if (file && p?.action === 'upload')
                                     void run(async () => { await current().upload(request, p.fieldId, file); receive(await current().read()); });
-                            }}/></label></> : <button type="button" disabled={busy} onClick={() => void run(async () => receive(await current().retry(request), true))}>Confirm original action</button>}</aside>}
-        <div className="task-request-actions"><button type="button" disabled={locked} onClick={() => void run(save)}>Save ordinary progress</button><button type="submit" disabled={busy || !!pending}>{busy ? 'Confirming…' : sealed ? 'Continue original submission' : 'Submit'}</button></div>{saved && <p role="status">Ordinary progress saved. Private input remains only in this open form.</p>}
+                            }}/></label></> : <Button className="task-request-control" variant="outline" type="button" disabled={busy} onClick={() => void run(async () => receive(await current().retry(request), true))}>Confirm original action</Button>}</aside>}
+        <div className="task-request-actions"><Button className="task-request-control" variant="outline" type="button" disabled={locked} onClick={() => void run(save)}>Save ordinary progress</Button><Button className="task-request-control" type="submit" disabled={busy || !!pending}>{busy ? 'Confirming…' : sealed ? 'Continue original submission' : 'Submit'}</Button></div>{saved && <p role="status">Ordinary progress saved. Private input remains only in this open form.</p>}
       </form>}</>}
   </main>;
 }

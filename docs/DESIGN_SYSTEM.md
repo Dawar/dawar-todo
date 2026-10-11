@@ -184,3 +184,7 @@ Removed unused page-local private upload entrypoints and their transport types, 
 ### Guest request fields — initial migration
 
 TaskRequestFields now uses shared Input/Textarea/NativeSelect, with field notes associated through aria-describedby. Private password inputs remain uncontrolled refs; file acceptance and callbacks are unchanged. Guest/editor styles use semantic palette tokens; shared field controls are excluded from legacy raw-control overrides. Actual320 fixture shows text, long text, choice and private-field layouts without horizontal overflow; note typography reduced to supporting-text scale. Full guest/editor states, file handling, keyboard, desktop and secure lifecycle remain unverified. Type/lint pass; no live request/submission/private data effects.
+
+### Guest request page and file cards
+
+The guest page uses shared action buttons and PIN/name/recovery-file inputs. GuestFilePreviewView separates filename, confirmation/loading/error state, preview and original download actions using shared controls. The full3201-byte preview verification controller and6687-byte guest page controller remain unchanged. Actual320 fixture renders long filenames plus waiting/loading/error states; no private file/network/submission effect. Type/lint pass. Real image/PDF/download, nested editor, desktop/keyboard and guest end-to-end acceptance remain pending.

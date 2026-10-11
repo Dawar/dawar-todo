@@ -1,5 +1,7 @@
 'use client';
 import { useEffect, useEffectEvent, useState } from 'react';
+import { Button } from '@/components/ui/button';
+import { Download, ExternalLink, File, LoaderCircle } from 'lucide-react';
 import type { TaskRequestFile } from '../../lib/task-requests';
 export function GuestFilePreview({ file, download }: {
     file: TaskRequestFile;
@@ -72,11 +74,24 @@ export function GuestFilePreview({ file, download }: {
                 URL.revokeObjectURL(objectUrl);
         };
     }, [open, file]);
-    if (!file.ready)
-        return <small>{file.name} · Awaiting confirmation</small>;
+    return <GuestFilePreviewView file={file} busy={busy} open={open} url={url} error={error} onToggle={() => { setOpen(v => !v); setUrl(''); setError(''); }} />;
+}
+
+export function GuestFilePreviewView({ file, busy, open, url, error, onToggle }: {
+    file: TaskRequestFile; busy: boolean; open: boolean; url: string; error: string; onToggle: () => void;
+}) {
     const image = ['image/png', 'image/jpeg', 'image/webp'].includes(file.mimeType), pdf = file.mimeType === 'application/pdf';
-    return <div><button type="button" disabled={busy} onClick={() => { setOpen(v => !v); setUrl(''); setError(''); }}>{open ? 'Close preview' : 'Preview/download'} · {file.name}</button>{error && <p role="alert">{error}</p>}{url && open && <>{image ?
-                // Viewer-owned verified blob URLs cannot use the Next image proxy.
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={url} alt={file.name} style={{ maxWidth: '100%', maxHeight: 300 }}/> : pdf ? <iframe title={`PDF: ${file.name}`} src={`${url}#view=FitH`} style={{ width: '100%', height: 300 }}/> : null}<a href={url} download={file.name}>Download original file</a>{pdf && <a href={url} target="_blank" rel="noopener noreferrer" style={{ marginLeft: 8 }}>Open PDF</a>}</>}</div>;
+    return <section className="space-y-3 rounded-lg border border-border bg-card p-3" aria-label={`File: ${file.name}`}>
+      <div className="flex min-w-0 items-start gap-2"><File aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" /><span className="min-w-0 break-words text-sm font-medium [overflow-wrap:anywhere]">{file.name}</span></div>
+      {!file.ready ? <p role="status" className="text-sm text-muted-foreground">Awaiting confirmation</p> : <>
+        <Button className="task-request-control" variant="outline" type="button" disabled={busy} aria-expanded={open} onClick={onToggle}>{busy && <LoaderCircle aria-hidden="true" className="motion-safe:animate-spin" />}{busy ? 'Loading preview…' : open ? 'Close preview' : 'Preview file'}</Button>
+        {error && <p role="alert" className="break-words text-sm text-destructive">{error}</p>}
+        {url && open && <>{image ?
+          // Viewer-owned verified blob URLs cannot use the Next image proxy.
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={url} alt={file.name} className="max-h-80 w-full rounded-md object-contain" /> : pdf ? <iframe title={`PDF: ${file.name}`} src={`${url}#view=FitH`} className="h-80 w-full rounded-md border border-border" /> : null}
+          <div className="flex flex-wrap gap-2"><Button className="task-request-control" variant="outline" asChild><a href={url} download={file.name}><Download aria-hidden="true" />Download original</a></Button>{pdf && <Button className="task-request-control" variant="outline" asChild><a href={url} target="_blank" rel="noopener noreferrer"><ExternalLink aria-hidden="true" />Open PDF</a></Button>}</div>
+        </>}
+      </>}
+    </section>;
 }
