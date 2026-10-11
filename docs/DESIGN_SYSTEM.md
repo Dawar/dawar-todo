@@ -488,3 +488,7 @@ Objective and token-budget validation appears next to the affected field, with i
 ### Document preview navigation
 
 Wide Markdown tables and code blocks are named, keyboard-focusable scroll regions with the shared visible focus ring. Document-link disclosures retain a44px minimum target. Preview failures use semantic error text and wrap within the viewport. HTML remains sandboxed and sanitized; these presentation changes do not enable scripts, remote resources or implicit navigation.
+
+### Cached gallery feedback
+
+Cached files stay visible through refresh failures. The saved-view banner says updating only while a request is in progress; a failed refresh reports that refresh is unavailable alongside its retry control. Offline copy remains distinct.
