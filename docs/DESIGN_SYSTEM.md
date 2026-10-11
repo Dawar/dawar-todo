@@ -74,7 +74,11 @@ silent exclusion. Initial inventory is not a claim of exhaustive live discovery.
 | --- | --- |
 | Initial source inventory and Google Sheet | Created; live discovery still required |
 | Requested chat presentation removals | Source edited; type/lint passed; visual verification pending |
-| shadcn primitives/tokens | Not started |
+| shadcn primitives/tokens | Button, Input, Textarea, Card, Badge, Skeleton, Table and semantic palette implemented; Account card migrated; rendered verification pending |
 | Whole-application migration | Not started |
 
 Upstream reference: https://ui.shadcn.com/docs/installation/manual
+
+### Implemented foundations
+
+`app/design-tokens.css` owns semantic colors. `components/ui` contains the vendored shadcn new-york primitives with `lib/utils.ts` class merging. Button touch sizes and focus rings are locally adapted. Account settings uses Card and Button; the rest of the inventory still requires migration. Upstream registry: https://ui.shadcn.com/r/styles/new-york/button.json (retrieved October 11, 2026).

@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, Plus, Search, MessageCircle } from 'lucide-react';
 import type { Bot } from '../../lib/bots-types';
-import type { CollaborationRoom,CollaborationPost,CollaborationContext,CollaborationResult,CollaborationPostParams } from '../../lib/bot-collaboration';
+import type { CollaborationRoom,CollaborationPost,CollaborationContext,CollaborationPostParams } from '../../lib/bot-collaboration';
 import { botsClient as client } from './client';
 import { BotAvatar } from './bot-avatar';
 import { BotMessage } from './message';
@@ -125,16 +125,6 @@ function RoomComposer({owner,botId,room,bots,contexts,online,onSent,draft}:{owne
     {(action.error||action.intent)&&<p role="alert">{action.error||'Post delivery is unconfirmed; the original text and recipients are retained.'}{action.intent&&<button type="button" disabled={!online||action.busy} onClick={()=>void retry().catch(ignore)}>Check same post</button>}</p>}
     {action.intent&&<details><summary>Read original unconfirmed post</summary><p>Saved recipients: {(action.intent.params.recipients as string[]??[]).map(id=>bots.find(b=>b.id===id)?.name??id).join(', ')||'none'}</p><BotMessage item={body(action.intent.id,String(action.intent.params.text??''))} botId={botId} attachments={[]} download={ignore}/></details>}{action.accepted&&<small>Original post accepted; per-bot delivery and completion are shown separately.</small>}
   </form>;
-}
-function ResultPromotion({owner,botId,result,online,refresh}:{owner:string;botId:string;result:CollaborationResult;online:boolean;refresh:()=>void}) {
-  const action=useRunAction(owner,botId,`result:${result.id}:promote`),[confirm,setConfirm]=useState(false);
-  return <div>{result.promotion?<p>Promoted at a related boundary · {result.promotion.state}. Consumption is separate.</p>:result.workId?<><button disabled={!online||action.busy||!!action.intent} onClick={()=>setConfirm(true)}>Bring to related foreground work</button>{confirm&&<div><p>Queue this result once at the next safe foreground boundary for work {result.workId}? It will not interrupt the active turn.</p><button disabled={!action.ready||action.busy||!!action.intent} onClick={()=>void action.perform('collaboration.promote',{resultId:result.id,boundary:'human',relatedWorkId:result.workId!}).then(()=>{setConfirm(false);refresh();}).catch(ignore)}>Confirm promotion</button><button onClick={()=>setConfirm(false)}>Cancel</button></div>}</>:<p>No related work identity; promotion is unavailable.</p>}<ActionNotice action={action} online={online}/></div>;
-}
-export function CollaborationInbox({owner,botId,online,bots,onOpen}:{owner:string;botId:string;online:boolean;bots:Bot[];onOpen:(roomId:string)=>void}) {
-  const [cursors,setCursors]=useState<(string|null)[]>([null]);
-  const read=useCollaborationRead(owner,botId,'collaboration.results',{limit:20,view:cursors.at(-1)?'older':'latest',...(cursors.at(-1)?{cursor:cursors.at(-1)!}:{})},online&&client.snapshot?.capabilities?.collaborationRooms===1);
-  const valid=roomPage<CollaborationResult>(read.value,r=>r.botId===botId&&typeof r.text==='string');
-  return <details className="bots-result-inbox"><summary>Result inbox {valid&&`· ${read.value!.items.filter(r=>!r.promotion).length} ready on this page`}</summary>{valid&&read.value!.items.map(r=><article key={r.id}><strong>{bots.find(b=>b.id===r.sourceBotId)?.name??'Named bot'} · {r.outcome}</strong><BotMessage item={body(r.id,r.text)} botId={r.sourceBotId} attachments={[]} download={ignore}/><button onClick={()=>onOpen(r.roomId)}>Open original room</button><details><summary>Source and references</summary><p>Result {r.id} · turn {r.turnId} · original operation {r.operationId}</p>{r.references.map((ref,i)=><p key={i}>{ref}</p>)}</details><ResultPromotion owner={owner} botId={botId} result={r} online={online} refresh={read.refresh}/></article>)}{read.error&&<p role="alert">{read.error}</p>}<button disabled={!online||read.loading} onClick={read.refresh}>Refresh results</button><button disabled={cursors.length<2||read.loading} onClick={()=>setCursors(v=>v.slice(0,-1))}>Previous results</button><button disabled={!valid||!read.value!.nextCursor||read.loading} onClick={()=>setCursors(v=>[...v,read.value!.nextCursor])}>More results</button></details>;
 }
 export function RoomConversation({owner,botId,roomId,bots,online,onBack}:{owner:string;botId:string;roomId:string;bots:Bot[];online:boolean;onBack:()=>void}) {
   const supported=client.snapshot?.capabilities?.collaborationRooms===1;
