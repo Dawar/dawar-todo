@@ -81,3 +81,5 @@
 .bots-room-reference summary, .bots-config-evidence summary { min-height:44px; align-content:center; cursor:pointer; }
 .bots-config-evidence { overflow-wrap:anywhere; }
 .bots-config-evidence p { margin:8px 0; }
+
+.bots-config-evidence small { font-size:inherit; line-height:inherit; }

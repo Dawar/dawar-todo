@@ -1,9 +1,27 @@
 "use client";
-import type { TurnConfiguration,ExecutionSettings } from '../../lib/bot-collaboration';
 
-export function settingsText(s:ExecutionSettings|null|undefined) {
-  return s ? `${s.model} · ${s.effort ?? 'Unknown effort'} · ${s.mode==='plan'?'Plan':'Automatic'} · Fast ${s.serviceTier==='priority'||s.serviceTier==='fast'?'on':'off'}` : 'Unknown configuration';
+import type { ExecutionSettings, TurnConfiguration } from "../../lib/bot-collaboration";
+
+export function settingsText(settings: ExecutionSettings | null | undefined) {
+  if (!settings) return "Unknown configuration";
+  const mode = settings.mode === "plan" ? "Plan" : settings.mode === "default" ? "Automatic" : "Unknown mode";
+  const tier = settings.serviceTier === "priority" || settings.serviceTier === "fast"
+    ? "Fast on" : settings.serviceTier === "default" ? "Fast off" : "Unknown Fast setting";
+  return `${settings.model || "Unknown model"} · ${settings.effort || "Unknown effort"} · ${mode} · ${tier}`;
 }
-export function ConfigurationEvidence({value,label='Turn configuration'}:{value:TurnConfiguration|null|undefined;label?:string}) {
-  return <details className="bots-config-evidence"><summary>{label}: {settingsText(value?.requested)}{value?.requested && ' · Requested'}</summary><p>{value?.confirmation==='accepted-request'?'Native start acknowledged the requested settings; effective settings are not reported.':value?.requested?'Requested settings; native effective confirmation is unavailable.':'No configuration evidence was captured for this turn.'}</p>{value&&<small>Source: {value.source} {value.capturedAt&&`· Captured ${new Date(value.capturedAt).toLocaleString()}`}</small>}</details>;
+
+export function ConfigurationEvidence({ value, label = "Turn configuration" }: {
+  value: TurnConfiguration | null | undefined;
+  label?: string;
+}) {
+  const captured = value?.capturedAt ? new Date(value.capturedAt) : null;
+  const capturedLabel = captured && Number.isFinite(captured.getTime()) ? captured.toLocaleString() : null;
+  return <details className="bots-config-evidence">
+    <summary>{label}: {settingsText(value?.requested)}{value?.requested && " · Requested"}</summary>
+    <p>{value?.confirmation === "accepted-request"
+      ? "Requested settings accepted. Actual runtime settings are not reported."
+      : value?.requested ? "Requested settings; runtime confirmation is unavailable."
+        : "No settings were recorded for this turn."}</p>
+    {value && <small>Source: {value.source}{capturedLabel && ` · Captured ${capturedLabel}`}</small>}
+  </details>;
 }

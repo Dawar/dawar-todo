@@ -444,3 +444,5 @@ Settings notifications use the shared card foreground/background, border and flo
 The header brand/project selector has a 44px minimum hit area. Keyboard help uses ControlledDialog for the same focus return, close and containment behavior as other state-opened dialogs.
 
 Chat history, detail, retry and Latest actions use shared outline Buttons. Latest retains its floating pill layout with a44px target. Paging, recovery, disabled conditions and reading anchors are unchanged.
+
+Recorded turn settings keep requested and runtime-confirmed evidence distinct. Missing or unfamiliar values stay Unknown; invalid capture dates are omitted. Expanded metadata stays13px instead of browser-small text.
