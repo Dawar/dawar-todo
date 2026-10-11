@@ -210,6 +210,7 @@ html.bots-viewport-locked body {
   flex-shrink: 0;
 }
 .bots-send:disabled {
+  color: var(--muted-foreground);
   background: var(--muted);
 }
 .bots-modal-backdrop {
