@@ -54,6 +54,8 @@ import { attachmentQueueMessage, hasAttachmentBytes } from "./attachment-queue";
 import { SiteHeader } from "./site-header";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { PendingTaskAttachment } from "./pending-task-attachment";
+import { Skeleton } from "@/components/ui/skeleton";
 import { TaskAttachmentMedia } from "./task-attachment-media";
 import { formatDuration, formatFileSize } from "./attachment-format";
 import { AttachmentPicker } from "./attachment-picker";
@@ -4504,32 +4506,17 @@ export default function Home() {
 
                 {loadingAttachments ? (
                   <div role="status" aria-label="Loading attachments" className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-                    {[0, 1, 2].map((item) => <div key={item} className="aspect-square animate-pulse rounded-xl bg-muted" />)}
+                    {[0, 1, 2].map((item) => <Skeleton key={item} className="aspect-square rounded-lg" />)}
                   </div>
                 ) : attachmentError ? (
-                  <div className="flex items-center justify-between gap-3 rounded-xl bg-red-50 px-3 py-2.5 text-sm text-red-700">
-                    <span>{attachmentError}</span>
-                    <button type="button" onClick={() => void loadTaskAttachments(editingTodo.id)} className="inline-flex items-center gap-1.5 font-semibold"><ActionIcon name="retry" />Retry</button>
+                  <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-destructive/10 p-3 text-sm text-destructive">
+                    <span className="min-w-0 break-words">{attachmentError}</span>
+                    <Button type="button" variant="outline" onClick={() => void loadTaskAttachments(editingTodo.id)}><ActionIcon name="retry" />Retry</Button>
                   </div>
                 ) : detailAttachments.length || detailUploads.length ? (
                   <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
                     {detailAttachments.map((attachment) => <TaskAttachmentMedia key={attachment.id} attachment={attachment} disabled={syncing} onDelete={() => void deleteDetailAttachment(attachment)} onView={() => setViewerIndex(imageAttachments.findIndex((image) => image.id === attachment.id))} />)}
-                    {detailUploads.map((item) => (
-                      <div key={item.localId} className={classNames("relative min-w-0 overflow-hidden rounded-xl bg-muted ring-1 ring-black/[0.06]", item.kind === "audio" || item.kind === "file" ? "col-span-full h-16" : "aspect-square")} title={item.error || item.file.name}>
-                        {item.kind === "image" ? <img src={item.previewUrl} alt="" className="h-full w-full object-cover" /> : item.kind === "video" ? <video src={item.previewUrl} muted className="h-full w-full object-cover" /> : item.kind === "file" ? <div className="flex h-full items-center gap-3 px-4 text-sm font-semibold text-[#455049]"><ActionIcon name="file" className="shrink-0 text-primary" /><span className="min-w-0"><span className="block truncate">{item.file.name}</span><span className="text-xs font-normal text-[#7b837e]">{formatFileSize(item.file.size)}</span></span></div> : <div className="flex h-full items-center gap-2 px-4 text-sm font-semibold text-[#455049]"><ActionIcon name="mic" className="text-primary" />Voice memo · {formatDuration(item.durationMs)}</div>}
-                        {item.status === "uploading" ? (
-                          <span className="absolute inset-0 grid place-items-center bg-black/45 text-xs font-semibold text-white">Uploading…</span>
-                        ) : (
-                          <>
-                            <button type="button" onClick={() => retryDetailAttachment(item)} aria-label={`Retry ${item.file.name}: ${item.error}`} className="absolute inset-0 flex flex-col items-center justify-center gap-1 bg-red-900/70 px-10 text-center text-white">
-                              <ActionIcon name="retry" className="h-5 w-5 shrink-0" />
-                              <span className="line-clamp-2 text-[11px] font-medium leading-4">{item.error || "Upload failed. Retry."}</span>
-                            </button>
-                            <button type="button" onClick={() => removeDetailUpload(item)} aria-label={`Remove ${item.file.name}`} title="Remove failed upload" className="absolute right-1.5 top-1.5 grid h-7 w-7 place-items-center rounded-full bg-black/65 text-white hover:bg-red-700"><ActionIcon name="close" className="h-3.5 w-3.5" /></button>
-                          </>
-                        )}
-                      </div>
-                    ))}
+                    {detailUploads.map((item) => <PendingTaskAttachment key={item.localId} item={item} onRetry={() => retryDetailAttachment(item)} onRemove={() => removeDetailUpload(item)} />)}
                   </div>
                 ) : (
                   <div className="rounded-xl border border-dashed border-border px-4 py-5 text-center text-sm text-muted-foreground">No attachments yet.</div>
