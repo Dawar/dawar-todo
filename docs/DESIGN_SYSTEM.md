@@ -496,3 +496,5 @@ Cached files stay visible through refresh failures. The saved-view banner says u
 ### Reduced motion coverage
 
 The shared skeleton already animates only when motion is allowed. Bot spinners, working dots, Activity chevrons, and file-card transitions also respect reduced motion, retaining their static icon/status text. Unused legacy artifact-navigation selectors are removed; the active navigator uses the shared Button. Attachment overlays use the semantic shadow color.
+
+Task Request validation moves keyboard focus to its error summary after an invalid Save, including repeated attempts. This brings offscreen feedback into view in long mobile forms without moving focus for background transport updates.

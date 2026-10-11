@@ -168,6 +168,11 @@ export function TaskRequestEditor({ owner, seed, open, available, onClose, onSav
 }) {
     const [request, setRequest] = useState(seed.request ?? null);
     const scope = JSON.stringify(['owner', owner, seed.source, request?.id ?? 'new']), [spec, setSpec] = useState(seed.spec), [preview, setPreview] = useState(false), [pin, setPin] = useState(''), [expiry, setExpiry] = useState(7), [link, setLink] = useState(''), [busy, setBusy] = useState(false), [error, setError] = useState(''), [pending, setPending] = useState<FormIntent | null>(null), [ready, setReady] = useState(false), [revoke, setRevoke] = useState(false);
+    const errorSummary = useRef<HTMLParagraphElement>(null);
+    const [validationAttempt, setValidationAttempt] = useState(0);
+    useEffect(() => {
+        if (validationAttempt > 0) errorSummary.current?.focus();
+    }, [validationAttempt]);
     const mounted = useRef(false), recoveryGeneration = useRef(0), working = useRef(false), pinInput = useRef<HTMLInputElement>(null), writes = useRef(Promise.resolve());
     const stillHere = useCallback(() => !!(mounted.current && client.owner === owner && client.snapshot?.bots.some(b => b.id === seed.source.botId && b.threadId === seed.source.threadId)), [owner, seed.source.botId, seed.source.threadId]);
     const apply = (next: TaskRequestSpec) => {
@@ -272,11 +277,13 @@ export function TaskRequestEditor({ owner, seed, open, available, onClose, onSav
     };
     const save = () => {
         try {
+            if (!spec.title.trim()) throw Error('Enter a title for this request.');
             const valid = taskRequestSpec(spec);
             void invoke(request ? { action: 'edit', id: request.id, operationId: crypto.randomUUID(), expectedRevision: request.revision, spec: valid } : { action: 'draft', operationId: crypto.randomUUID(), source: seed.source, spec: valid });
         }
         catch (e) {
             setError((e as Error).message);
+            setValidationAttempt(attempt => attempt + 1);
         }
     };
     const changeField = (id: string, change: Partial<TaskRequestField>) => apply({ ...spec, fields: spec.fields.map(f => f.id === id ? { ...f, ...change } : f) });
@@ -286,7 +293,7 @@ export function TaskRequestEditor({ owner, seed, open, available, onClose, onSav
         return null;
     return <ControlledDialog title="Task Request" onClose={close} returnFocus={returnFocus} className="task-request-editor max-w-3xl z-[130]" overlayClassName="z-[130]" onPointerDownOutside={event => event.preventDefault()} onEscapeKeyDown={event => event.stopPropagation()}>
     <p>Only the instructions and fields below are shared. Existing answer drafts and the conversation stay private.</p>
-    {error && <p role="alert" className="task-request-error">{error}</p>}{!available && <p>Reconnect to this supported conversation and resolve Stop before owner actions.</p>}
+    {error && <p ref={errorSummary} tabIndex={-1} role="alert" className="task-request-error">{error}</p>}{!available && <p>Reconnect to this supported conversation and resolve Stop before owner actions.</p>}
     {pending?.state === 'pending' && <aside><p>Original {pending.action.action} is unconfirmed. Recover it before a new action.</p><Button className="task-request-control" variant="outline" type="button" disabled={busy || !available} onClick={() => void invoke(pending.action, true)}>Confirm original action</Button></aside>}
     <Button className="task-request-control" variant="outline" type="button" onClick={() => setPreview(v => !v)}>{preview ? 'Edit fields' : 'Preview entire guest form'}</Button>
     {preview || frozen ? <section className="task-request-preview"><h2>{spec.title}</h2><label>Your name · self-reported<Input className="task-request-control" disabled/></label><TaskRequestFields spec={spec} values={{}} preview/>{spec.secure && <><label className="task-request-check"><input type="checkbox" disabled defaultChecked={false}/>Allow the model to read private fields/images and destination responses</label><p>Unchecked keeps content private. Explicit model/native history copies, website/session/autofill copies survive deletion of the transfer.</p></>}<p>One contributor · one final submission · {frozen ? request.expiresAt ? `Link expires ${new Date(request.expiresAt).toLocaleString()}` : 'Link expiry unavailable' : `${expiry} day link expiry`}{(frozen ? request.pinRequired : !!pin) ? ' · PIN protected' : ''}. Possession of the link permits access.</p></section> : <>
