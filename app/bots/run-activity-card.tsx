@@ -1,3 +1,4 @@
+import { Button } from "@/components/ui/button";
 import { ArrowRight, CheckCircle2, CircleAlert, CircleMinus, Clock3, LoaderCircle } from "lucide-react";
 import type { BotRun } from "../../lib/bots-types";
 import { runPresentation } from "./run-presentation";
@@ -16,8 +17,8 @@ export function RunActivityCard({ run, online, busy, canOpen, stamp, open, ackno
       {view.hint && <p className="bots-run-state-hint">{view.hint}</p>}
       {run.error && <details className="bots-run-error-details"><summary>Recorded details</summary><p>{run.error}</p></details>}
       <div className="bots-run-card-actions">
-        {canOpen ? <button disabled={busy} onClick={() => open(run)}>{view.tone === "attention" ? "Review run" : "Open run"}<ArrowRight size={14} /></button> : <span>No recorded conversation</span>}
-        {run.status === "uncertain" && run.executionLane !== "run-v1" && <button disabled={!online || busy} onClick={() => acknowledge(run)}>I reviewed this run</button>}
+        {canOpen ? <Button variant="ghost" size="sm" type="button" disabled={busy} onClick={() => open(run)}>{view.tone === "attention" ? "Review run" : "Open run"}<ArrowRight size={14} /></Button> : <span>No recorded conversation</span>}
+        {run.status === "uncertain" && run.executionLane !== "run-v1" && <Button variant="ghost" size="sm" type="button" disabled={!online || busy} onClick={() => acknowledge(run)}>I reviewed this run</Button>}
       </div>
     </div>
   </article>;

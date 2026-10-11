@@ -19,6 +19,7 @@ import { RunComposer } from "./run-composer";
 import { RunQuestions } from "./run-questions";
 import { RunControls, StopAll } from "./run-controls";
 import { RunTranscript } from "./run-transcript";
+import { RunHistoryToolbar } from "./run-history-toolbar";
 import { RunActivityCard } from "./run-activity-card";
 import { RunDecisionControls, RunDecisions } from "./run-decisions";
 import { runNeedsAttention, runPresentation } from "./run-presentation";
@@ -285,7 +286,7 @@ export function RunHistory({ bot, schedules, attachments, online, onClose, downl
           {!online && <div className="bots-run-notice"><Clock3 size={18} /><p>Saved history. Reconnect for updates and full run details.</p></div>}
           {!embedded && botsClient.snapshot?.capabilities?.scheduleDecisions === 1 && <RunDecisions owner={owner} botId={bot.id} online={online} />}
           {!embedded && schedules.some(schedule => schedule.enabled && schedule.nextRunAt) && <section className="bots-run-upcoming" aria-label="Coming up"><CalendarDays size={18} /><div><strong>Coming up</strong>{schedules.filter(schedule => schedule.enabled && schedule.nextRunAt).sort((a, b) => a.nextRunAt!.localeCompare(b.nextRunAt!)).slice(0, 3).map(schedule => <p key={schedule.id}><span>{schedule.title}</span><time>{stamp(schedule.nextRunAt)}</time></p>)}</div></section>}
-          <div className="bots-run-tools"><div role="group" aria-label="Filter history"><button aria-pressed={filter === "all"} onClick={() => setFilter("all")}>All runs</button><button aria-pressed={filter === "attention"} onClick={() => setFilter("attention")}>Needs attention</button></div><button className="bots-icon-button" aria-label="Refresh history" disabled={busy || !online} onClick={firstPage}><RefreshCw size={16} /></button></div>
+          <RunHistoryToolbar filter={filter} onFilter={setFilter} busy={busy} online={online} onRefresh={firstPage}/>
           {newActivity && <button className="bots-run-back" onClick={firstPage}>New records · Show recent history<ArrowRight size={15} /></button>}
           {runPage > 0 && <button className="bots-run-back" disabled={!online || busy} onClick={() => runPageTo(runPage - 1, runCursors[runPage - 1])}><ArrowLeft size={15} />Newer history</button>}
           {groups.map(([date, values]) => <section className="bots-run-day" key={date}><h3>{date}</h3>{values.map(run => <RunActivityCard key={run.id} run={run} online={online} busy={busy} canOpen={!!run.turnId || lanes} stamp={stamp} open={open} acknowledge={run => void acknowledge(run)} />)}</section>)}

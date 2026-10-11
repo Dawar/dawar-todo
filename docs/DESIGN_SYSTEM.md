@@ -220,3 +220,7 @@ Burst Copy/Delete/Queue/Resume/Send/Pause/recovery actions use shared ghost butt
 ### Reply quotes and actions
 
 Reply source/open, cancel and quote actions use shared buttons and semantic foreground/muted/error tokens. Preview text remains capped at three lines and preserves whitespace; labels and errors wrap. The original bounded lookup/quote controllers are unchanged. Actual320 fixture covers long excerpts, foreign source, unavailable result, keyboard-triggered error with visible focus, and cancel. No real history lookup or draft mutation occurred. Type/scoped lint pass; full composer/timeline/user-bubble/desktop/connected quote acceptance remains pending.
+
+### History filters, run cards and timestamps
+
+RunHistoryToolbar provides shared pressed-state filter buttons and a labeled refresh button; RunHistory retains its existing filter/read callbacks. RunActivityCard uses shared action buttons with original admission conditions. Card statuses retain text/icons and use semantic tokens; titles wrap, and supporting times are13px. Message timestamps are12px at all widths with the original minute clock and provenance unchanged. Actual320 fixture shows completed/unconfirmed cards, long titles, attention filtering and disabled offline acknowledgment. Full history/modal/paging/connected actions, remaining legacy activity CSS, desktop and device acceptance remain pending. Type/scoped lint pass.
