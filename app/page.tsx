@@ -54,6 +54,8 @@ import { attachmentQueueMessage, hasAttachmentBytes } from "./attachment-queue";
 import { SiteHeader } from "./site-header";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { TaskAttachmentMedia } from "./task-attachment-media";
+import { formatDuration, formatFileSize } from "./attachment-format";
 import { AttachmentPicker } from "./attachment-picker";
 import { TaskDetailFields } from "./task-detail-fields";
 import { TaskRow, SnoozeStatusBadge } from "./task-row";
@@ -567,17 +569,6 @@ async function uploadPrivateImage(
     });
     throw error;
   }
-}
-
-function formatDuration(durationMs: number) {
-  const totalSeconds = Math.max(0, Math.round(durationMs / 1000));
-  return `${Math.floor(totalSeconds / 60)}:${String(totalSeconds % 60).padStart(2, "0")}`;
-}
-
-function formatFileSize(byteSize: number) {
-  if (byteSize < 1024) return `${byteSize} B`;
-  if (byteSize < 1024 * 1024) return `${Math.round(byteSize / 1024)} KB`;
-  return `${(byteSize / (1024 * 1024)).toFixed(byteSize < 10 * 1024 * 1024 ? 1 : 0)} MB`;
 }
 
 function VoiceMemoRecorder({ onClose, onAttach }: { onClose: () => void; onAttach: (file: File, durationMs: number) => void }) {
@@ -4512,7 +4503,7 @@ export default function Home() {
                 </div>
 
                 {loadingAttachments ? (
-                  <div role="status" aria-label="Loading attachments" className="grid grid-cols-3 gap-2 sm:grid-cols-4">
+                  <div role="status" aria-label="Loading attachments" className="grid grid-cols-2 gap-3 sm:grid-cols-3">
                     {[0, 1, 2].map((item) => <div key={item} className="aspect-square animate-pulse rounded-xl bg-muted" />)}
                   </div>
                 ) : attachmentError ? (
@@ -4521,33 +4512,8 @@ export default function Home() {
                     <button type="button" onClick={() => void loadTaskAttachments(editingTodo.id)} className="inline-flex items-center gap-1.5 font-semibold"><ActionIcon name="retry" />Retry</button>
                   </div>
                 ) : detailAttachments.length || detailUploads.length ? (
-                  <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
-                    {detailAttachments.map((attachment) => attachment.kind === "audio" ? (
-                      <div key={attachment.id} className="group/media col-span-full flex min-w-0 items-center gap-3 rounded-xl bg-[#f3f5f2] p-3 ring-1 ring-black/[0.06]">
-                        <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-[#e3efe7] text-primary"><ActionIcon name="mic" className="h-5 w-5" /></span>
-                        <div className="min-w-0 flex-1"><p className="mb-1 truncate text-xs font-semibold text-[#4d5650]">{attachment.fileName} · {formatDuration(attachment.durationMs)}</p><audio controls preload="metadata" src={attachment.audioUrl} className="h-9 w-full" /></div>
-                        <a href={attachment.originalUrl} download={attachment.fileName} className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-muted-foreground hover:bg-background" aria-label={`Download ${attachment.fileName}`}><ActionIcon name="download" /></a>
-                        <button type="button" onClick={() => void deleteDetailAttachment(attachment)} disabled={syncing} className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-muted-foreground hover:bg-red-50 hover:text-red-700" aria-label={`Delete ${attachment.fileName}`}><ActionIcon name="delete" /></button>
-                      </div>
-                    ) : attachment.kind === "file" ? (
-                      <div key={attachment.id} className="group/media col-span-full flex min-w-0 items-center gap-3 rounded-xl bg-[#f3f5f2] p-3 ring-1 ring-black/[0.06]">
-                        <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-[#e3efe7] text-primary"><ActionIcon name="file" className="h-5 w-5" /></span>
-                        <div className="min-w-0 flex-1"><p className="truncate text-sm font-semibold text-[#4d5650]">{attachment.fileName}</p><p className="mt-0.5 text-xs text-[#7b837e]">{formatFileSize(attachment.byteSize)}</p></div>
-                        <a href={attachment.originalUrl} download={attachment.fileName} className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-muted-foreground hover:bg-background" aria-label={`Download ${attachment.fileName}`}><ActionIcon name="download" /></a>
-                        <button type="button" onClick={() => void deleteDetailAttachment(attachment)} disabled={syncing} className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-muted-foreground hover:bg-red-50 hover:text-red-700" aria-label={`Delete ${attachment.fileName}`}><ActionIcon name="delete" /></button>
-                      </div>
-                    ) : (
-                      <div key={attachment.id} className="group/media relative aspect-square min-w-0 overflow-hidden rounded-xl bg-muted ring-1 ring-black/[0.06]">
-                        {attachment.kind === "image" ? (
-                          <button type="button" onClick={() => setViewerIndex(imageAttachments.findIndex((image) => image.id === attachment.id))} className="h-full w-full focus-visible:outline-2 focus-visible:outline-inset focus-visible:outline-[#216e4e]" aria-label={`View image: ${attachment.fileName}`}>
-                            <img src={attachment.thumbnailUrl} alt={attachment.fileName} className="h-full w-full object-cover" />
-                          </button>
-                        ) : <video controls preload="metadata" src={attachment.videoUrl} className="h-full w-full object-cover" />}
-                        <button type="button" onClick={() => void deleteDetailAttachment(attachment)} disabled={syncing} aria-label={`Delete ${attachment.kind}: ${attachment.fileName}`} title={`Delete ${attachment.kind}`} className="absolute right-1.5 top-1.5 grid h-7 w-7 place-items-center rounded-full bg-black/65 text-white opacity-100 hover:bg-red-700 focus-visible:outline-2 focus-visible:outline-white disabled:opacity-50 sm:opacity-0 sm:group-hover/media:opacity-100 sm:group-focus-within/media:opacity-100">
-                          <ActionIcon name="delete" className="h-3.5 w-3.5" />
-                        </button>
-                      </div>
-                    ))}
+                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                    {detailAttachments.map((attachment) => <TaskAttachmentMedia key={attachment.id} attachment={attachment} disabled={syncing} onDelete={() => void deleteDetailAttachment(attachment)} onView={() => setViewerIndex(imageAttachments.findIndex((image) => image.id === attachment.id))} />)}
                     {detailUploads.map((item) => (
                       <div key={item.localId} className={classNames("relative min-w-0 overflow-hidden rounded-xl bg-muted ring-1 ring-black/[0.06]", item.kind === "audio" || item.kind === "file" ? "col-span-full h-16" : "aspect-square")} title={item.error || item.file.name}>
                         {item.kind === "image" ? <img src={item.previewUrl} alt="" className="h-full w-full object-cover" /> : item.kind === "video" ? <video src={item.previewUrl} muted className="h-full w-full object-cover" /> : item.kind === "file" ? <div className="flex h-full items-center gap-3 px-4 text-sm font-semibold text-[#455049]"><ActionIcon name="file" className="shrink-0 text-primary" /><span className="min-w-0"><span className="block truncate">{item.file.name}</span><span className="text-xs font-normal text-[#7b837e]">{formatFileSize(item.file.size)}</span></span></div> : <div className="flex h-full items-center gap-2 px-4 text-sm font-semibold text-[#455049]"><ActionIcon name="mic" className="text-primary" />Voice memo · {formatDuration(item.durationMs)}</div>}
