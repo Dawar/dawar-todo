@@ -86,3 +86,9 @@ Upstream reference: https://ui.shadcn.com/docs/installation/manual
 `app/design-tokens.css` owns semantic colors. `components/ui` contains the vendored shadcn new-york primitives with `lib/utils.ts` class merging. Button touch sizes and focus rings are locally adapted. Account settings uses Card and Button; the rest of the inventory still requires migration. Upstream registry: https://ui.shadcn.com/r/styles/new-york/button.json (retrieved October 11, 2026).
 
 NativeSelect preserves browser keyboard and mobile picker behavior. Shared Input and NativeSelect use 44px mobile targets and 36px desktop heights; text fields and textarea use the same visible two-pixel focus ring. Settings retains original action handlers, confirmations and private-token lifecycle. Diagnostic report copy controls are removed from its product surface.
+
+### Shared dialog foundation
+
+`components/ui/dialog.tsx` adapts the shadcn new-york Radix Dialog: semantic card surface, 35% backdrop, 16px viewport gutter, bounded dynamic viewport height with internal scrolling, and a 44px mobile close target. Radix owns modality, focus containment and Escape. Controlled dialogs opened without a DialogTrigger explicitly restore their connected opener. Keyboard shortcuts is the first migrated consumer; other dialogs remain tracked for migration. Motion is static until an accessible shared transition is introduced.
+
+Settings error recovery uses the same Card/Button system and removes report-copy diagnostics. Long API-token and calendar names wrap rather than hiding identity behind ellipses. Operational logging remains outside the product UI.

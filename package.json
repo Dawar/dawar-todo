@@ -26,6 +26,7 @@
   "dependencies": {
     "@formkit/auto-animate": "^0.10.0",
     "@novnc/novnc": "^1.7.0",
+    "@radix-ui/react-dialog": "^1.2.0",
     "@radix-ui/react-slot": "^1.4.0",
     "busboy": "1.6.0",
     "class-variance-authority": "^0.7.1",

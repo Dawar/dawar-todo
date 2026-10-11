@@ -1352,7 +1352,7 @@ export default function SettingsPage() {
                 {apiTokens.map((apiToken) => (
                   <li key={apiToken.id} className="flex min-w-0 items-start justify-between gap-3 rounded-lg border border-border bg-muted/40 p-3.5">
                     <div className="min-w-0">
-                      <p className="truncate text-sm font-semibold text-foreground">{apiToken.name}</p>
+                      <p className="break-words text-sm font-semibold text-foreground">{apiToken.name}</p>
                       <p className="mt-1 font-mono text-xs text-muted-foreground">{apiToken.tokenPrefix}</p>
                       <p className="mt-1 text-xs leading-5 text-muted-foreground">
                         {apiToken.lastUsedAt ? `Last used ${new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(apiToken.lastUsedAt))}` : "Never used"}
@@ -1411,7 +1411,7 @@ export default function SettingsPage() {
                   <li key={feed.id} className="min-w-0 rounded-lg border border-border bg-muted/40 p-3.5">
                     <div className="flex min-w-0 items-start justify-between gap-3">
                       <div className="min-w-0">
-                        <p className="truncate text-sm font-semibold text-foreground">{feed.name}</p>
+                        <p className="break-words text-sm font-semibold text-foreground">{feed.name}</p>
                         <p className="mt-0.5 text-xs text-muted-foreground">Created {new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(new Date(feed.createdAt))}</p>
                       </div>
                       <Button size="icon" variant="ghost" type="button" onClick={() => void copyFeed(feed)} className="shrink-0" aria-label={`Copy ${feed.name} calendar link`} title="Copy link"><ActionIcon name="copy" /></Button>
