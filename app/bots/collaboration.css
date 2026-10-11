@@ -83,4 +83,4 @@
 .bots-config-evidence p { margin:8px 0; }
 
 .bots-config-evidence small { font-size:inherit; line-height:inherit; }
-.bots-config-evidence summary:focus-visible { outline:2px solid var(--ring); outline-offset:2px; border-radius:var(--radius-sm); }
+.bots-room-conversation summary:focus-visible, .bots-config-evidence summary:focus-visible { outline:2px solid var(--ring); outline-offset:2px; border-radius:var(--radius-sm); }
