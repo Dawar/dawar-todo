@@ -14,8 +14,10 @@
 .bots-usage-forecast .is-sustainable { color: var(--primary); }
 .bots-usage-forecast .is-depleting { color: var(--destructive); }
 .bots-usage-chart { margin: 16px 0 0; min-width: 0; }
-.bots-usage-chart svg { display: block; width: 100%; height: auto; }
-.bots-usage-chart text { font-size: 10px; fill: var(--muted-foreground); }
+.bots-usage-chart-plot { max-width: 100%; overflow-x: auto; }
+.bots-usage-chart-plot:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.bots-usage-chart svg { display: block; width: 100%; min-width: 440px; height: auto; }
+.bots-usage-chart text { font-size: 14px; fill: var(--muted-foreground); }
 .bots-usage-chart-grid { stroke: var(--border); stroke-width: 1; }
 .bots-usage-chart-line { fill: none; stroke: var(--primary); stroke-width: 2; }
 .bots-usage-chart-dot, .bots-usage-chart-bar { fill: var(--primary); }

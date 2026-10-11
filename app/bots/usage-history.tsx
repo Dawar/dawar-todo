@@ -34,7 +34,7 @@ function QuotaChart({ window, range, now }: { window: UsageHistoryWindow; range:
   const paths: string[] = [], points = window.points;
   for (let index = 0; index < points.length; index++) {
     const point = points[index], previous = points[index - 1];
-    const x = 34 + Math.max(0, Math.min(1, (point.at - start) / (now - start))) * 456;
+    const x = 44 + Math.max(0, Math.min(1, (point.at - start) / (now - start))) * 446;
     const y = 124 - Math.max(0, Math.min(100, point.usedPercent)) * 1.1;
     const next = `${x.toFixed(2)},${y.toFixed(2)}`;
     if (!previous || point.segment !== previous.segment || point.at - previous.at > 1.5 * 3_600_000) paths.push(`M${next}`);
@@ -42,14 +42,14 @@ function QuotaChart({ window, range, now }: { window: UsageHistoryWindow; range:
   }
   const last = points.at(-1);
   return <figure className="bots-usage-chart">
-    {points.length ? <svg viewBox="0 0 510 155" role="img" aria-labelledby={`${title} ${description}`}>
+    {points.length ? <div className="bots-usage-chart-plot" tabIndex={0} role="region" aria-label="Quota chart"><svg viewBox="0 0 510 155" role="img" aria-labelledby={`${title} ${description}`}>
       <title id={title}>Quota used over {rangeNames[range]}</title>
       <desc id={description}>{points.length} hourly observations. {last ? `Last observed usage ${percent(last.usedPercent)}%.` : ""} Gaps and resets interrupt the line.</desc>
-      {[0, 50, 100].map(value => <g key={value}><line x1="34" x2="490" y1={124 - value * 1.1} y2={124 - value * 1.1} className="bots-usage-chart-grid" /><text x="29" y={128 - value * 1.1} textAnchor="end">{value}%</text></g>)}
+      {[0, 50, 100].map(value => <g key={value}><line x1="44" x2="490" y1={124 - value * 1.1} y2={124 - value * 1.1} className="bots-usage-chart-grid" /><text x="39" y={128 - value * 1.1} textAnchor="end">{value}%</text></g>)}
       {paths.map((path, index) => <path d={path} key={index} className="bots-usage-chart-line" />)}
-      {points.length === 1 && <circle cx={34 + (points[0].at - start) / (now - start) * 456} cy={124 - points[0].usedPercent * 1.1} r="3" className="bots-usage-chart-dot" />}
-      <text x="34" y="148">{rangeNames[range]} ago</text><text x="490" y="148" textAnchor="end">Latest</text>
-    </svg> : <p className="bots-muted">No quota samples in this period.</p>}
+      {points.length === 1 && <circle cx={44 + (points[0].at - start) / (now - start) * 446} cy={124 - points[0].usedPercent * 1.1} r="3" className="bots-usage-chart-dot" />}
+      <text x="44" y="148">{rangeNames[range]} ago</text><text x="490" y="148" textAnchor="end">Latest</text>
+    </svg></div> : <p className="bots-muted">No quota samples in this period.</p>}
     <figcaption>Quota used · hourly observations{window.coverage.chartLimited ? " · chart data is limited" : ""}</figcaption>
     {points.length > 0 && <details><summary>Recent quota observations</summary><div className="bots-usage-data"><Table><TableHeader><TableRow><TableHead>Observed</TableHead><TableHead>Quota used</TableHead></TableRow></TableHeader><TableBody>{points.slice(-12).map(point => <TableRow key={`${point.segment}:${point.at}`}><TableCell>{new Date(point.at).toLocaleString()}</TableCell><TableCell>{percent(point.usedPercent)}%</TableCell></TableRow>)}</TableBody></Table></div></details>}
   </figure>;
@@ -70,16 +70,16 @@ function TokenActivity({ activity }: { activity: UsageHistory["activity"] }) {
     {activity.state === "stale" && <p>Token history is stale. Reconnect or Refresh to check for updates.</p>}
     <dl className="bots-usage-stats">{fields.filter(([key]) => activity.summary[key].value !== null).map(([key, label]) => <div key={key}><dt>{label}</dt><dd>{BigInt(activity.summary[key].value!).toLocaleString()}</dd><small>Observed {activity.summary[key].observedAt ? new Date(activity.summary[key].observedAt!).toLocaleString() : "unknown"}</small></div>)}</dl>
     {daily.length > 0 ? <figure className="bots-usage-chart">
-      <svg viewBox="0 0 510 155" role="img" aria-labelledby={`${title} ${description}`}>
+      <div className="bots-usage-chart-plot" tabIndex={0} role="region" aria-label="Daily token chart"><svg viewBox="0 0 510 155" role="img" aria-labelledby={`${title} ${description}`}>
         <title id={title}>Reported daily token activity</title><desc id={description}>{daily.length} reported dates, {total.toLocaleString()} tokens in these buckets. Missing dates are not counted as zero.</desc>
-        <line x1="34" x2="490" y1="124" y2="124" className="bots-usage-chart-grid" />
+        <line x1="44" x2="490" y1="124" y2="124" className="bots-usage-chart-grid" />
         {daily.map(day => {
           const height = max ? Number(BigInt(day.tokens) * BigInt(1_000_000) / max) / 1_000_000 * 110 : 0;
-          const width = 456 / dateSpan, offset = (dateAt(day.date) - firstDate) / 86_400_000;
-          return <rect key={day.date} x={34 + offset * width + 1} y={124 - height} width={Math.max(1, width - 2)} height={height} className="bots-usage-chart-bar"><title>{day.date}: {BigInt(day.tokens).toLocaleString()} tokens</title></rect>;
+          const width = 446 / dateSpan, offset = (dateAt(day.date) - firstDate) / 86_400_000;
+          return <rect key={day.date} x={44 + offset * width + 1} y={124 - height} width={Math.max(1, width - 2)} height={height} className="bots-usage-chart-bar"><title>{day.date}: {BigInt(day.tokens).toLocaleString()} tokens</title></rect>;
         })}
-        <text x="34" y="148">{daily[0].date}</text><text x="490" y="148" textAnchor="end">{daily.at(-1)!.date}</text>
-      </svg><figcaption>{total.toLocaleString()} tokens across {daily.length} reported dates. These are whole daily buckets, not a rolling-hour total. Missing dates remain gaps; labels follow the service.</figcaption>
+        <text x="44" y="148">{daily[0].date}</text><text x="490" y="148" textAnchor="end">{daily.at(-1)!.date}</text>
+      </svg></div><figcaption>{total.toLocaleString()} tokens across {daily.length} reported dates. These are whole daily buckets, not a rolling-hour total. Missing dates remain gaps; labels follow the service.</figcaption>
       <details><summary>Daily token figures</summary><div className="bots-usage-data"><Table><TableHeader><TableRow><TableHead>Service date</TableHead><TableHead>Tokens</TableHead><TableHead>Observed</TableHead></TableRow></TableHeader><TableBody>{daily.map(day => <TableRow key={day.date}><TableCell>{day.date}</TableCell><TableCell>{BigInt(day.tokens).toLocaleString()}</TableCell><TableCell>{new Date(day.observedAt).toLocaleString()}</TableCell></TableRow>)}</TableBody></Table></div></details>
     </figure> : activity.state === "available" && <p>No daily token buckets were reported in this period.</p>}
   </section>;
@@ -101,7 +101,7 @@ export function UsageHistoryView({ history, loading, disabled = false, error, ra
         {window.usedPercent.value !== null && <p>{percent(Math.max(0, 100 - window.usedPercent.value))}% quota remaining</p>}
         <small className="bots-muted">Quota observed {window.usedPercent.observedAt ? new Date(window.usedPercent.observedAt).toLocaleString() : "unknown"}{window.resetsAt.observedAt && window.resetsAt.observedAt !== window.usedPercent.observedAt ? ` · Reset last observed ${new Date(window.resetsAt.observedAt).toLocaleString()}` : ""}</small>
         <div className="bots-usage-forecasts">{window.forecasts.map(forecast => <Forecast key={forecast.horizonHours} forecast={forecast} />)}</div>
-        {window.forecasts.every(value => value.state === "estimate") && <p className="bots-muted">Recent pace is {window.forecasts[0].pointsPerDay! > window.forecasts[1].pointsPerDay! * 1.1 ? "higher than" : window.forecasts[0].pointsPerDay! < window.forecasts[1].pointsPerDay! * .9 ? "lower than" : "close to"} your 24-hour pace.</p>}
+        {window.forecasts.length >= 2 && window.forecasts.every(value => value.state === "estimate") && <p className="bots-muted">Recent pace is {window.forecasts[0].pointsPerDay! > window.forecasts[1].pointsPerDay! * 1.1 ? "higher than" : window.forecasts[0].pointsPerDay! < window.forecasts[1].pointsPerDay! * .9 ? "lower than" : "close to"} your 24-hour pace.</p>}
         {window.sustainablePointsPerDay !== null && <p><strong>Sustainable daily pace:</strong> about {percent(window.sustainablePointsPerDay)} percentage points per day until reset.</p>}
         <QuotaChart window={window} range={history.range} now={Date.parse(history.collectedAt)} />
       </section>)}
