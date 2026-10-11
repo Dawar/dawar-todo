@@ -460,3 +460,7 @@ Primary navigation labels use13px on mobile and14px on larger screens. Below360p
 ### Control boundary contrast
 
 Enabled shared controls use the `input` token for a visible boundary, separate from decorative `border`. Light input `#7c8980` has at least 3.22:1 contrast against background, card, muted and accent surfaces. Desktop dark input `#71859f` has at least 3.41:1 against its background, card and accent surfaces. These are opaque sRGB calculations; translucent composites, custom control overrides and disabled states require their own rendered assessment. Decorative separators retain the quieter border token. Opaque semantic body text and focus-ring pairs are recorded in the contrast evidence; this is not a claim that every composed screen passes accessibility checks.
+
+### Authentication recovery
+
+Signed-out and failed-sign-in views share the centered Card, semantic text and one primary action. Browser GET failures at the login/callback endpoints redirect to the fixed public recovery screen with no-store/no-referrer headers. Provider errors, query values and credentials are never rendered. The recovery action starts a new explicit sign-in; it does not automatically retry, log out, clear drafts or weaken subject/session/CSRF validation. Non-browser authentication errors retain their existing JSON response. Other API error routes are unchanged.

@@ -55,8 +55,10 @@ export function startGateway(config) {
   const downloadDirectory=resolve(config.agentDownloadDirectory??fileURLToPath(new URL('../agent-downloads',import.meta.url)));
   const sockets = new WebSocketServer({noServer:true,maxPayload:MAX_FRAME_BYTES,perMessageDeflate:false});
   const server = createServer(async (req,res) => {
+    let browserSignIn = false;
     try {
       const u = new URL(req.url,config.publicOrigin), headers = new Headers();
+      browserSignIn = req.method === 'GET' && ['/auth/login','/auth/callback'].includes(u.pathname) && (req.headers.accept ?? '').includes('text/html');
       for (const [key,value] of Object.entries(req.headers)) if(value!==undefined)headers.set(key,Array.isArray(value)?value.join(','):value);
       stripIdentity(headers);
       if(u.pathname.startsWith('/api/voice/')){
@@ -166,7 +168,16 @@ export function startGateway(config) {
       });
       proxy.on('error',()=>{if(!res.headersSent)json(res,502,{error:'Site temporarily unavailable.'});else res.destroy();});
       req.on('aborted',()=>proxy.destroy());res.on('close',()=>{if(!res.writableEnded)proxy.destroy();});req.pipe(proxy);
-    } catch(error) { if(!res.headersSent)json(res,/large/.test(error.message)?413:403,{error:error.message});else res.destroy(); }
+    } catch(error) {
+      if (res.headersSent) return res.destroy();
+      // Fixed public recovery screen; never reflect OAuth parameters or errors.
+      // API responses and identity/session validation retain their original path.
+      if (browserSignIn) {
+        res.writeHead(303,{location:'/signout-with-chatgpt?reason=sign-in','cache-control':'no-store','referrer-policy':'no-referrer'});
+        return res.end();
+      }
+      json(res,/large/.test(error.message)?413:403,{error:error.message});
+    }
   });
   server.on('upgrade',(req,socket,head)=>{
     const u=new URL(req.url,config.publicOrigin);
