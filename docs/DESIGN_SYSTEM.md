@@ -188,3 +188,7 @@ TaskRequestFields now uses shared Input/Textarea/NativeSelect, with field notes 
 ### Guest request page and file cards
 
 The guest page uses shared action buttons and PIN/name/recovery-file inputs. GuestFilePreviewView separates filename, confirmation/loading/error state, preview and original download actions using shared controls. The full3201-byte preview verification controller and6687-byte guest page controller remain unchanged. Actual320 fixture renders long filenames plus waiting/loading/error states; no private file/network/submission effect. Type/lint pass. Real image/PDF/download, nested editor, desktop/keyboard and guest end-to-end acceptance remain pending.
+
+### Request editor shell
+
+TaskRequestEditor uses the shared controlled dialog/focus trap; backdrop presses remain non-dismissive. Escape/Close retain existing PIN/link clearing and opener return. Owner controls use shared buttons/inputs/selects/textareas, replacing legacy raw overrides and duplicate modal geometry. Native320 fixture opens the actual editor with an unavailable synthetic context, showing bounded scrolling and controls; no journal admission, network publication or private input. Full enabled/recovery/preview/desktop keyboard coverage remains pending. Initial ref-during-render lint issue was corrected by storing the opener in state. Final type/lint pass.
