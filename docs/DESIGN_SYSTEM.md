@@ -414,3 +414,7 @@ Base chat surfaces, dialogs, history, recovery and schedule styles consume the s
 ### Desktop theme completion
 
 The viewer defines foreground pairs for primary, secondary, card and destructive controls within its dark scope. Selected toolbar and keyboard keys share the same selected tokens; connection states retain text plus colored indicators. The mobile More disclosure has one full-width rule. Unused reasoning-face styles are retired after consumer search.
+
+### Settings confirmations
+
+Calendar-link replacement/revocation, API-token revocation, phone-access disabling and profile-phone removal use the shared confirmation dialog. Cancel receives initial focus, Escape dismisses without dispatch, and destructive actions retain their specific consequences. The dialog closes before the existing asynchronous handler starts.

@@ -4,6 +4,7 @@ import { FormEvent, useEffect, useRef, useState } from "react";
 import { ExecutionMachines } from "./execution-machines";
 import { AccountSession } from "./account-session";
 import { Button, buttonVariants } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { NativeSelect } from "@/components/ui/native-select";
@@ -121,6 +122,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 }
 
 export default function SettingsPage() {
+  const [confirmation, setConfirmation] = useState<{ title: string; description: string; confirmLabel: string; action: () => Promise<void> } | null>(null);
   const [settings, setSettings] = useState<Settings>({
     openAppTo: DEFAULT_OPENING_TAB,
     snoozeTimeZone: "America/Toronto",
@@ -435,8 +437,11 @@ export default function SettingsPage() {
     }
   }
 
-  async function regenerateFeed(feed: CalendarFeed) {
-    if (!window.confirm(`Replace the public link for ${feed.name}? The current link will stop working immediately.`)) return;
+  async function regenerateFeed(feed: CalendarFeed, confirmed = false) {
+    if (!confirmed) {
+      setConfirmation({ title: "Replace calendar link?", description: `Replace the public link for ${feed.name}? The current link will stop working immediately.`, confirmLabel: "Replace link", action: () => regenerateFeed(feed, true) });
+      return;
+    }
     setBusyFeedId(feed.id);
     setShareNotice(null);
     try {
@@ -451,8 +456,11 @@ export default function SettingsPage() {
     }
   }
 
-  async function revokeFeed(feed: CalendarFeed) {
-    if (!window.confirm(`Revoke the public link for ${feed.name}? Calendar apps using it will stop receiving updates.`)) return;
+  async function revokeFeed(feed: CalendarFeed, confirmed = false) {
+    if (!confirmed) {
+      setConfirmation({ title: "Revoke calendar link?", description: `Revoke the public link for ${feed.name}? Calendar apps using it will stop receiving updates.`, confirmLabel: "Revoke link", action: () => revokeFeed(feed, true) });
+      return;
+    }
     setBusyFeedId(feed.id);
     setShareNotice(null);
     try {
@@ -525,8 +533,11 @@ export default function SettingsPage() {
     }
   }
 
-  async function revokeToken(apiToken: ApiToken) {
-    if (!window.confirm(`Revoke ${apiToken.name}? Any agent using it will lose access immediately.`)) return;
+  async function revokeToken(apiToken: ApiToken, confirmed = false) {
+    if (!confirmed) {
+      setConfirmation({ title: "Revoke API token?", description: `Revoke ${apiToken.name}? Any agent using it will lose access immediately.`, confirmLabel: "Revoke token", action: () => revokeToken(apiToken, true) });
+      return;
+    }
     setBusyTokenId(apiToken.id);
     setShareNotice(null);
     try {
@@ -742,8 +753,11 @@ export default function SettingsPage() {
     }
   }
 
-  async function disableTalkPhone() {
-    if (!window.confirm("Disable PIN access to the Talk phone number?")) return;
+  async function disableTalkPhone(confirmed = false) {
+    if (!confirmed) {
+      setConfirmation({ title: "Disable phone access?", description: "Disable PIN access to the Talk phone number?", confirmLabel: "Disable access", action: () => disableTalkPhone(true) });
+      return;
+    }
     setTalkPhoneSaving(true);
     setTalkPhoneMessage("");
     try {
@@ -836,8 +850,11 @@ export default function SettingsPage() {
     }
   }
 
-  async function removeProfilePhone() {
-    if (!window.confirm("Remove your verified profile phone? This also stops every active urgent alert.")) return;
+  async function removeProfilePhone(confirmed = false) {
+    if (!confirmed) {
+      setConfirmation({ title: "Remove profile phone?", description: "Remove your verified profile phone? This also stops every active urgent alert.", confirmLabel: "Remove phone", action: () => removeProfilePhone(true) });
+      return;
+    }
     setProfilePhoneSaving(true);
     setProfilePhoneMessage("");
     try {
@@ -1431,6 +1448,12 @@ export default function SettingsPage() {
           </div>
         </section>
       </div>
+
+      {confirmation && <ConfirmDialog title={confirmation.title} description={confirmation.description} confirmLabel={confirmation.confirmLabel} destructive onCancel={() => setConfirmation(null)} onConfirm={() => {
+        const action = confirmation.action;
+        setConfirmation(null);
+        void action();
+      }} />}
 
       {shareNotice && (
         <div className="pointer-events-none fixed inset-x-0 bottom-[max(1rem,env(safe-area-inset-bottom))] z-[60] mx-auto w-[calc(100%-2rem)] max-w-md">
