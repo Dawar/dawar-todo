@@ -61,7 +61,6 @@ details[open] > summary > .bots-disclosure-chevron { transform: rotate(90deg); }
 .bots-upload-list { width: min(calc(100% - 32px), var(--chat-width)); }
 .bots-detail-status { color: var(--muted-foreground); }
 .bots-detail-status small { font-size: 13px; }
-.bots-detail-status button { background: var(--accent); color: var(--accent-foreground); min-height: 36px; }
 .bots-working { margin-top: 16px; }
 .bots-slow-save { width: min(calc(100% - 32px), var(--chat-width)); margin: 5px auto; font-size: 13px; color: var(--warning-foreground); }
 .bots-start-icon { display: inline-grid; place-items: center; width: 58px; height: 58px; margin-bottom: 6px; color: var(--primary); border-radius: 20px; background: var(--muted); }
