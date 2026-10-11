@@ -192,3 +192,7 @@ The guest page uses shared action buttons and PIN/name/recovery-file inputs. Gue
 ### Request editor shell
 
 TaskRequestEditor uses the shared controlled dialog/focus trap; backdrop presses remain non-dismissive. Escape/Close retain existing PIN/link clearing and opener return. Owner controls use shared buttons/inputs/selects/textareas, replacing legacy raw overrides and duplicate modal geometry. Native320 fixture opens the actual editor with an unavailable synthetic context, showing bounded scrolling and controls; no journal admission, network publication or private input. Full enabled/recovery/preview/desktop keyboard coverage remains pending. Initial ref-during-render lint issue was corrected by storing the opener in state. Final type/lint pass.
+
+### Request grouping and draft recovery states
+
+Request editor field legends are direct fieldset children; the remove action follows in its own aligned row. SavedDrafts now distinguishes loading, read failure and a confirmed empty result, and clears stale list/error state when loading a different owner. Existing restoration callbacks and operation guards are unchanged. Type/lint pass; actual delayed-storage/rejection/owner-switch and keyboard coverage remain pending. Editor320 Escape opener restoration was observed on the previous exact shell revision; DevTools issue count is retained as unclassified pending inspection, not claimed resolved.
