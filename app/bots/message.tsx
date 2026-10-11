@@ -20,7 +20,7 @@ import {
   FileDiff,
   Search,
   Wrench,
-  Download,
+  CircleAlert,
   Check,
   LoaderCircle,
 } from "lucide-react";
@@ -72,7 +72,6 @@ function ProposedPlanText({ text, partial, nativePlan = false, render }: {
 
 function BotMessage({
   item,
-  download,
   botId,
   attachments,
   inWorkLog = false,
@@ -191,7 +190,10 @@ function BotMessage({
         <TextPages text={JSON.stringify(item, null, 2)} render={(text) => <pre>{text}</pre>} />
       );
   if (inWorkLog) return <div className="bots-tool">{toolBody()}</div>;
-  const running = "status" in item && item.status === "inProgress";
+  const status = "status" in item ? item.status : null;
+  const running = status === "inProgress";
+  const failed = status === "failed" || status === "declined" || status === "interrupted" ||
+    (command && item.exitCode !== null && item.exitCode !== 0) || (item.type === "dynamicToolCall" && item.success === false);
   return (
     <LazyDetails summary={<>
         {command ? (
@@ -203,12 +205,12 @@ function BotMessage({
         ) : (
           <Wrench size={15} />
         )}
-        <span>{label}</span>
+        <span title={label}>{label}</span>
         {running ? (
-          <LoaderCircle size={14} className="bots-spin" />
-        ) : (
-          <Check size={14} />
-        )}
+          <LoaderCircle size={14} className="bots-spin" aria-label="In progress" />
+        ) : failed ? (
+          <CircleAlert size={14} className="text-destructive" aria-label={status === "declined" ? "Declined" : status === "interrupted" ? "Interrupted" : "Failed"} />
+        ) : status === "completed" ? <Check size={14} aria-label="Completed" /> : null}
       </>}>{toolBody}
     </LazyDetails>
   );

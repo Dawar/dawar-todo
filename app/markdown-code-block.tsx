@@ -3,6 +3,7 @@
 import { memo, useEffect, useRef, useState, type ComponentProps } from "react";
 import { Code2, Network } from "lucide-react";
 import type { ExtraProps } from "react-markdown";
+import { Button } from "@/components/ui/button";
 import "./mermaid-diagram.css";
 
 // Import the renderer only when a diagram approaches the viewport. Ordinary
@@ -11,14 +12,16 @@ let renderer: Promise<typeof import("mermaid")["default"]> | undefined;
 let serial = 0;
 function loadRenderer() {
   return renderer ??= import("mermaid").then(({ default: mermaid }) => {
+    const styles = getComputedStyle(document.documentElement);
+    const color = (token: string, fallback: string) => styles.getPropertyValue(token).trim() || fallback;
     mermaid.initialize({
       startOnLoad: false, securityLevel: "strict", suppressErrorRendering: true,
       maxTextSize: 20000, maxEdges: 300, htmlLabels: false, theme: "base",
       fontFamily: "system-ui, sans-serif",
       themeVariables: {
-        primaryColor: "#edf5ef", primaryTextColor: "#263c30",
-        primaryBorderColor: "#88ad98", lineColor: "#628672",
-        secondaryColor: "#f5f7f4", tertiaryColor: "#fff", fontSize: "14px",
+        primaryColor: color("--muted", "#f1f3f1"), primaryTextColor: color("--foreground", "#1d211f"),
+        primaryBorderColor: color("--input", "#cbd5ce"), lineColor: color("--muted-foreground", "#5e6a62"),
+        secondaryColor: color("--accent", "#eaf3ed"), tertiaryColor: color("--card", "#fff"), fontSize: "14px",
       },
     });
     return mermaid;
@@ -87,11 +90,11 @@ const MermaidDiagram = memo(function MermaidDiagram({ source }: { source: string
   return <div ref={root} className="markdown-diagram">
     <div className="markdown-diagram-heading">
       <span>{current?.failed ? "Diagram source" : "Diagram"}</span>
-      {!current?.failed && <button type="button" onClick={() => setShowSource(value => !value)}
+      {!current?.failed && <Button variant="ghost" size="icon" type="button" onClick={() => setShowSource(value => !value)}
         aria-label={showSource ? "Show diagram" : "Show diagram source"}
         title={showSource ? "Show diagram" : "Show source"} aria-pressed={showSource}>
         {showSource ? <Network size={16} aria-hidden="true" /> : <Code2 size={16} aria-hidden="true" />}
-      </button>}
+      </Button>}
     </div>
     {sourceVisible ? <pre><code>{source}</code></pre> : current?.svg ?
       <div className="markdown-diagram-viewport" role="region" aria-label="Diagram; scroll sideways if needed" tabIndex={0}
