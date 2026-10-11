@@ -75,10 +75,14 @@ silent exclusion. Initial inventory is not a claim of exhaustive live discovery.
 | Initial source inventory and Google Sheet | Created; live discovery still required |
 | Requested chat presentation removals | Source edited; type/lint passed; visual verification pending |
 | shadcn primitives/tokens | Button, Input, Textarea, Card, Badge, Skeleton, Table and semantic palette implemented; Account card migrated; rendered verification pending |
-| Whole-application migration | Not started |
+| Navigation and execution machines | Shared controls and tokens implemented; desktop/320 top sections observed, remaining states pending |
+| Settings page | Buttons, inputs, textarea and native selectors migrated; diagnostic panels removed; type/lint passed, full rendered coverage pending |
+| Whole-application migration | In progress; most inventory entries remain unfinished |
 
 Upstream reference: https://ui.shadcn.com/docs/installation/manual
 
 ### Implemented foundations
 
 `app/design-tokens.css` owns semantic colors. `components/ui` contains the vendored shadcn new-york primitives with `lib/utils.ts` class merging. Button touch sizes and focus rings are locally adapted. Account settings uses Card and Button; the rest of the inventory still requires migration. Upstream registry: https://ui.shadcn.com/r/styles/new-york/button.json (retrieved October 11, 2026).
+
+NativeSelect preserves browser keyboard and mobile picker behavior. Shared Input and NativeSelect use 44px mobile targets and 36px desktop heights; text fields and textarea use the same visible two-pixel focus ring. Settings retains original action handlers, confirmations and private-token lifecycle. Diagnostic report copy controls are removed from its product surface.
