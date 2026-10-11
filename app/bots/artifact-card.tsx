@@ -1,4 +1,5 @@
 "use client";
+import { Button } from "@/components/ui/button";
 import { memo, useEffect, useRef, useState } from "react";
 import { FileText, File, Image as ImageIcon, ArrowUpRight, Download } from "lucide-react";
 import { artifactPreview, fileSize, fileType, galleryType, type GalleryItem } from "./artifact-source";
@@ -36,12 +37,12 @@ export const ArtifactCard = memo(function ArtifactCard({ item, owner, online, at
     <button className="bots-file-open" onClick={() => onOpen(item)} aria-label={`Open ${item.name}`}>
       <ArtifactThumbnail item={item} owner={owner} online={online} />
       <span className="bots-file-copy"><strong title={item.name}>{item.name}</strong><span>{fileType(item)} <i aria-hidden="true">·</i> {fileSize(item.size)} {knownDate && <><i aria-hidden="true">·</i> {date.toLocaleDateString(undefined, { month: "short", day: "numeric" })}</>}</span></span>
-      {item.cloudState === "failed" && <span role="status">Publication failed · original saved</span>}
-      {(item.cloudState === "pending" || item.cloudState === "transferring") && <span role="status">Publication pending</span>}
+      {item.cloudState === "failed" && <span className="bots-file-publication" role="status">Publication failed · original saved</span>}
+      {(item.cloudState === "pending" || item.cloudState === "transferring") && <span className="bots-file-publication" role="status">Publication pending</span>}
     </button>
     <div className="bots-file-card-footer">
       {attribution ? <span className="bots-file-bot" title={item.botName}><i style={{ background: item.botColor ?? "#77a48d" }} />{item.botName}</span> : <span>{item.direction === "input" ? "From you" : "From your bot"}</span>}
-      <div><button onClick={() => onOpen(item)} aria-label={`Preview ${item.name}`} title="Open"><ArrowUpRight size={17} /></button><button onClick={() => onDownload(item)} disabled={!online} aria-label={`Download ${item.name}`} title="Download"><Download size={16} /></button></div>
+      <div><Button variant="ghost" size="icon" onClick={() => onOpen(item)} aria-label={`Preview ${item.name}`} title="Open"><ArrowUpRight size={17} /></Button><Button variant="ghost" size="icon" onClick={() => onDownload(item)} disabled={!online} aria-label={`Download ${item.name}`} title="Download"><Download size={16} /></Button></div>
     </div>
   </article>;
 });
