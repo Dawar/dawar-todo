@@ -510,3 +510,7 @@ User-facing API errors use product terms: “Sign in” without naming an obsole
 ### Tables and status badges
 
 Shared tables keep horizontal overflow inside a named, keyboard-focusable region. Supply `scrollLabel` to identify each dataset; preserve native table headers and captions. Badges are noninteractive status labels with 13px text and semantic variants, without button-like hover or shadow treatments. Use a Button for an action.
+
+### Voice call states
+
+Operator uses the shared dialog and controls. A failed start says “Could not connect”; an ended connected call keeps its distinct end status. The mobile routing selector retains a 44px target in its stacked label layout. Call timestamps and transcript metadata use 13px supporting text.

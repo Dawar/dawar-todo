@@ -216,7 +216,7 @@ export function OperatorCallDialog({ bot, bots, onClose }: { bot: OperatorBot | 
       voice.current!.respond({ instructions: 'Greet exactly: Operator. If a bot is connected, briefly identify it from the confirmed context. Then listen.' });
       peer.onconnectionstatechange = () => { if (peer.connectionState === 'failed' && !ended.current) { setError('The voice connection dropped. Submitted bot work continues; track its original receipt.'); void end(); } };
       await refresh();
-    } catch (cause) { if (alive.current) setError(cause instanceof Error ? cause.message : 'The call could not start.'); await end(); }
+    } catch (cause) { if (alive.current) setError(cause instanceof Error ? cause.message : 'The call could not start.'); await end(); if (alive.current) setStatus('Could not connect'); }
     finally { startingRef.current = false; if (alive.current) setStarting(false); }
   }
   async function select(botId: string | null) {
