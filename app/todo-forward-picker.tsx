@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowRight, Search } from 'lucide-react';
 import { botsClient as client } from './bots/client';
 import { botComposers } from './bots/composer-service';
-import { BotAvatar } from './bots/bot-avatar';
+import { BotDestinationList } from './bot-destination-list';
 import { useShellNavigation } from './app-shell';
 import { pendingTodoForwards, saveTodoForward, type TodoForwardIntent } from './todo-forward';
 import './todo-forward.css';
@@ -51,8 +51,7 @@ function ForwardPicker({ request, saved, onClose }: { request: { id: string; tex
   return <ControlledDialog title="Forward to a bot" description="Add to a draft. Send when you’re ready." onClose={onClose} className="todo-forward-dialog z-[120]" overlayClassName="z-[120]">
     <label className="todo-forward-search"><Search size={18} /><Input aria-label="Find a bot" placeholder="Find a bot" value={search} onChange={event => setSearch(event.target.value)} /></label>
     {!client.online && <p className="todo-forward-note">Offline · saved bots and local drafts are available.</p>}
-    <div className="todo-forward-list" aria-busy={busy}>{bots.slice(0, 60).map(bot => <button type="button" key={bot.id} disabled={busy || !owner} onClick={() => void choose(bot.id)}><BotAvatar bot={bot} small /><span><strong>{bot.name}</strong><small>{bot.purpose || 'Conversation'}</small></span><ArrowRight size={18} /></button>)}
-      {!bots.length && <p>{client.started && !client.snapshot ? 'Connect once to load your bots.' : 'No matching bots.'}</p>}{bots.length > 60 && <p>Search to narrow {bots.length} bots.</p>}</div>
+    <BotDestinationList bots={bots} busy={busy} disabled={busy || !owner} onChoose={id => void choose(id)} emptyMessage={client.started && !client.snapshot ? 'Connect once to load your bots.' : 'No matching bots.'} />
     <footer>Existing text and files stay in your draft.</footer>{error && <p role="alert" className="todo-forward-error">{error}</p>}
     <a ref={link} hidden onClick={event => navigate(event, event.currentTarget.getAttribute('href')!)}>Open conversation</a>
   </ControlledDialog>;

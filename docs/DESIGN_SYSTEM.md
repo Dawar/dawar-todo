@@ -176,3 +176,7 @@ Removed unused page-local private upload entrypoints and their transport types, 
 ### Task save feedback
 
 `TaskSaveStatus` renders saved, saving, offline and error states with labeled text and distinct icons; meaning does not rely on color. Errors wrap instead of truncating. Retry uses the shared button and stacks below the message on mobile. The Tasks page retains the original autosave/retry controller. Actual 320px fixture confirms all four states and an inert Retry callback. Desktop/nested-dialog/device verification remains pending. Task page effects now use effect events for current Undo/deep-link callbacks; unused wake helpers were removed. Exact source type/lint pass with zero page warnings; eight existing snooze/attachment checks pass.
+
+### Bot destinations
+
+`BotDestinationList` is shared by TodoForward and QueuePicker. It uses semantic list markup, shared ghost buttons, decorative avatars, wrapped names/purposes, selected checkmarks/pressed state, bounded scrolling and a status empty state. Existing controller functions choose (1239B), submit (3084B) and metadata (599B) are byte-identical to the prior commit. Actual320 preview confirms long content wrapping and changing the selected bot; no draft/queue mutation was performed. Desktop, keyboard and complete connected-picker states remain pending. Type/scoped lint pass.

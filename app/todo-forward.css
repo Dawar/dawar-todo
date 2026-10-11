@@ -3,19 +3,11 @@
 .todo-forward-search { position:relative; display:flex; align-items:center; }
 .todo-forward-search > svg { position:absolute; left:12px; color:var(--muted-foreground); pointer-events:none; }
 .todo-forward-search input { padding-left:40px; }
-.todo-forward-list { overflow:auto; min-height:80px; }
-.todo-forward-list > button { display:flex; align-items:center; gap:12px; width:100%; min-height:64px; padding:12px; text-align:left; border-radius:var(--radius-md); }
-.todo-forward-list > button:hover { background:var(--accent); }
-.todo-forward-list > button > span:not(.bot-avatar-engine) { flex:1; min-width:0; display:grid; gap:3px; }
-.todo-forward-list strong { font-size:14px; font-weight:600; overflow-wrap:anywhere; }
-.todo-forward-list small { font-size:13px; color:var(--muted-foreground); overflow-wrap:anywhere; }
-.todo-forward-list > p, .todo-forward-note, .todo-forward-dialog footer { font-size:13px; line-height:1.5; color:var(--muted-foreground); }
 .todo-forward-note { padding:12px; border-radius:var(--radius-md); background:var(--muted); }
 .todo-forward-error { font-size:14px; line-height:1.5; color:var(--destructive); }
 .todo-forward-recovery { display:flex; align-items:center; gap:8px; margin:12px auto; min-height:44px; padding:8px 16px; border-radius:var(--radius-md); color:var(--accent-foreground); background:var(--accent); }
-.todo-forward-list > button:focus-visible, .todo-forward-recovery:focus-visible { outline:2px solid var(--ring); outline-offset:2px; }
-.todo-forward-list > button:disabled { opacity:.5; cursor:default; }
-.todo-queue-dialog .todo-forward-list > button[aria-pressed=true] { background:var(--accent); box-shadow:inset 0 0 0 1px var(--primary); }
 .todo-queue-dialog select { margin-top:6px; }
 .todo-queue-dialog footer button { width:100%; }
 .todo-queue-progress { max-height:180px; overflow:auto; flex-shrink:0; }
+.todo-forward-note, .todo-forward-dialog footer { font-size:13px; line-height:1.5; color:var(--muted-foreground); }
+.todo-forward-recovery:focus-visible { outline:2px solid var(--ring); outline-offset:2px; }
