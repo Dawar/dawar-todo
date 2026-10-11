@@ -398,3 +398,5 @@ The main composer places its full-width writing area above a compact action row.
 Workspace navigation, composer, recovery and status actions use the shared Button primitive. Existing accessible names, disabled predicates, submit behavior and original action handlers are retained.
 
 Machine setup prioritizes the download and pairing steps. Integrity metadata lives in a keyboard-accessible Installer details disclosure; fingerprints remain readable and wrap. Confirmation checkboxes align to the first text line. Enrollment and session handlers are unchanged.
+
+Goal status pills and compact indicators use shared muted, accent and warning tokens; visible text carries status independently of color. Objective disclosures retain a44px target and visible keyboard focus.
