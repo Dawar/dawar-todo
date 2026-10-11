@@ -44,9 +44,11 @@ export function UsagePanel({ bot, online }: { bot?: Bot; online: boolean }) {
   return <UsageAccountSource key={owner} bot={bot} online={online} owner={owner} historySupported={historySupported} />;
 }
 function UsageAccountSource({ bot, online, owner, historySupported }: { bot?: Bot; online: boolean; owner: string; historySupported: boolean }) {
-  const [selected, setSelected] = useState<string | null>(null);
   const bots = botsClient.snapshot?.bots.filter(value => !value.deletedAt) ?? [];
-  const sourceId = bot?.id ?? selected ?? bots[0]?.id;
+  const [selected, setSelected] = useState<string | null>(() => bots[0]?.id ?? null);
+  const firstAvailableId = bots[0]?.id;
+  if (!bot && selected === null && firstAvailableId) setSelected(firstAvailableId);
+  const sourceId = bot?.id ?? selected;
   const source = bots.find(value => value.id === sourceId);
   return <div className="min-w-0">
     {!bot && bots.length > 0 && <label className="mb-5 block text-sm font-medium">
