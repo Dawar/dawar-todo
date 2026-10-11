@@ -454,3 +454,5 @@ The message navigation rail and its reserved gutter appear only when loaded mess
 Room navigation reports searches with no matches on the loaded page. Empty rooms omit the message rail and gutter, matching foreground chat. Draft-storage failures provide concise recovery guidance without exposing parser exceptions.
 
 Room message-marker jumps account for the current height of the sticky paging controls, including wrapped update actions, so the selected message header stays visible.
+
+Primary navigation labels use13px on mobile and14px on larger screens. Below360px the brand/project trigger keeps its icon and accessible full name while omitting an unreadable truncated text fragment.

@@ -24,7 +24,7 @@ export function SiteHeader({
   const brand = (
     <>
       <span className="grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-primary text-base font-semibold text-primary-foreground" aria-hidden="true">✓</span>
-      <span className="min-w-0 truncate text-[15px] font-semibold tracking-[-0.02em]">{projectLabel}</span>
+      <span className="hidden min-w-0 truncate min-[360px]:block text-[15px] font-semibold tracking-[-0.02em]">{projectLabel}</span>
       {onProjectClick && <ActionIcon name="next" className="h-3.5 w-3.5 shrink-0 rotate-90 text-muted-foreground" />}
     </>
   );
@@ -50,6 +50,8 @@ export function SiteHeader({
         ) : (
           <Link
             href="/tasks"
+            aria-label={`${projectLabel} · Tasks`}
+            title={projectLabel}
             prefetch={false}
             onClick={(event) => navigate(event, "/tasks")}
             className="flex min-h-11 min-w-0 max-w-[38vw] items-center gap-2 rounded-lg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring sm:gap-2.5"
@@ -80,7 +82,7 @@ export function SiteHeader({
               aria-label={item.label}
               aria-current={item.active ? "page" : undefined}
               title={item.label}
-              className={cn(buttonVariants({ variant: item.active ? "secondary" : "ghost" }), "gap-1 px-2 text-xs sm:gap-1.5 sm:px-3 sm:text-sm", item.active ? "bg-accent text-accent-foreground" : "text-muted-foreground")}
+              className={cn(buttonVariants({ variant: item.active ? "secondary" : "ghost" }), "gap-1 px-2 text-[13px] sm:gap-1.5 sm:px-3 sm:text-sm", item.active ? "bg-accent text-accent-foreground" : "text-muted-foreground")}
             >
               <ActionIcon name={item.icon} className="h-4 w-4 shrink-0" />
               <span>{item.label}</span>
