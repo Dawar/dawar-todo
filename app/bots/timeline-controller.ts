@@ -286,8 +286,14 @@ export class BotTimeline {
             this.state = { ...this.state, gaps: [...this.state.gaps, gap] };
           }
           const terminal = new Map(response.entries.filter((entry) => entry.turnStatus && entry.turnStatus !== "inProgress").map((entry) => [entry.turnId, { status: entry.turnStatus!, error: entry.turnError ? { message: entry.turnError } : null }]));
+          const refreshed = new Set(response.entries.map(entry => historyKey(entry.turnId, entry.id)));
+          const refreshedClients = new Set(response.entries.flatMap(entry => entry.item?.type === 'userMessage' && entry.item.clientId ? [entry.item.clientId] : []));
           this.state = { ...this.state, entries: this.state.entries.map((entry) => {
             if (!terminal.has(entry.turnId) || (entry.updatedSeq ?? 0) > startCursor) return entry;
+            // The incoming page owns these values. Promoting an old preview's
+            // sequence here would make merge() mistake it for a newer live
+            // event and discard the very completed reply we just fetched.
+            if (refreshed.has(historyKey(entry.turnId, entry.id)) || entry.item?.type === 'userMessage' && entry.item.clientId && refreshedClients.has(entry.item.clientId)) return entry;
             const settled = { ...withTurnState(entry, terminal.get(entry.turnId)!), updatedSeq: response.eventCursor };
             this.dirty.set(historyKey(settled.turnId, settled.id), settled);
             return settled;
