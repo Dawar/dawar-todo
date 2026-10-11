@@ -32,7 +32,7 @@ export function ComposerSettings({ bot, snapshot, online }: { bot: Bot; snapshot
     pending.values[field as keyof Values] !== value));
   const status = nextTurnSaveLabel(state, online);
   return <div className="bots-settings-wrap">
-    <div className="bots-settings-next-heading"><strong>Next turn</strong><span role={pending ? "status" : undefined}>{pending && <LoaderCircle size={13} className={pending.phase === "saving" ? "bots-spin" : ""} aria-hidden="true" />}{status}{queued && <span className="sr-only">, latest choice queued</span>}</span></div>
+    <div className={`bots-settings-next-heading${status ? "" : " sr-only"}`}><strong>Next turn</strong><span role={pending ? "status" : undefined}>{pending && <LoaderCircle size={13} className={pending.phase === "saving" ? "bots-spin" : ""} aria-hidden="true" />}{status}{queued && <span className="sr-only">, latest choice queued</span>}</span></div>
     <div className="bots-settings" aria-label="Bot defaults for future turns" aria-busy={pending?.phase === "saving"}>
       <div className="bots-settings-selects">
         <label><span className="sr-only">Model</span><NativeSelect aria-label="Model" disabled={!online}

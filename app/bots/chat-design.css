@@ -12,7 +12,7 @@
 .bots-message { margin-block: 22px; }
 .bots-message-markdown { line-height: 1.65; }
 .bots-bubble { border-radius: 20px 20px 6px 20px; }
-.bots-jump-latest { position: static; transform: none; display: inline-flex; align-items: center; gap: 7px; min-height: 44px; padding: 8px 14px; margin: 8px auto; white-space: nowrap; border: 1px solid var(--border); border-radius: 24px; background: var(--card); color: var(--foreground); box-shadow: 0 3px 16px color-mix(in srgb, var(--foreground) 10%, transparent); font-size: 13px; font-weight: 600; }
+.bots-jump-latest { position: absolute; z-index: 5; bottom: 8px; left: 50%; transform: translateX(-50%); max-width: calc(100% - 32px); display: inline-flex; align-items: center; gap: 7px; min-height: 44px; padding: 8px 14px; margin: 0; white-space: nowrap; border: 1px solid var(--border); border-radius: 24px; background: var(--card); color: var(--foreground); box-shadow: 0 3px 16px color-mix(in srgb, var(--foreground) 10%, transparent); font-size: 13px; font-weight: 600; }
 .bots-jump-latest:hover { background: var(--accent); }
 .bots-activity { border: 1px solid var(--border); border-radius: 12px; background: var(--muted); margin-block: 14px; }
 .bots-activity > summary { min-height: 44px; padding: 10px 13px; color: var(--muted-foreground); font-weight: 500; }
@@ -27,9 +27,9 @@ details[open] > summary > .bots-disclosure-chevron { transform: rotate(90deg); }
 .bots-settings-next-heading { display: flex; align-items: baseline; flex-wrap: wrap; justify-content: space-between; gap: 3px 10px; margin: 0 4px 5px; color: var(--muted-foreground); font-size: 13px; }
 .bots-settings-next-heading strong { font-weight: 600; }
 .bots-settings-next-heading > span { display: inline-flex; align-items: center; gap: 4px; color: var(--muted-foreground); }
-.bots-settings { position:relative; display:flex; align-items:center; flex-wrap:wrap; gap:6px; min-width:0; color:var(--foreground); }
+.bots-settings { position:relative; display:flex; align-items:center; flex-wrap:nowrap; gap:6px; min-width:0; color:var(--foreground); }
 .bots-settings-selects, .bots-settings-toggles { display:flex; align-items:center; min-width:0; gap:4px; }
-.bots-settings-selects { flex:1 1 260px; }
+.bots-settings-selects { flex:1 1 0; }
 .bots-settings-selects label { min-width:0; }
 .bots-settings-selects label:first-child { flex:1 1 160px; }
 .bots-settings-selects label:nth-child(2) { flex:0 1 120px; }
@@ -85,11 +85,14 @@ details[open] > summary > .bots-disclosure-chevron { transform: rotate(90deg); }
   .bots-controls select { max-width: 140px; padding-inline: 5px; }
   .bots-settings-wrap { width: calc(100% - 24px); }
   .bots-settings { gap: 3px; }
-  .bots-settings-wrap .bots-settings { flex-wrap: wrap; }
-  .bots-settings-wrap .bots-settings-selects { flex-basis: 100%; }
+  .bots-settings-wrap .bots-settings { flex-wrap: nowrap; }
+  .bots-settings-wrap .bots-settings-selects { flex-basis: 0; }
   .bots-settings-selects { flex: 1 1 0; gap: 3px; }
   .bots-settings-selects label:first-child { flex: 1 1 0; }
-  .bots-settings-selects label:nth-child(2) { flex: 0 1 112px; }
+  .bots-settings-selects label:nth-child(2) { flex: 0 0 80px; }
+  .bots-settings select { padding-inline: 4px; font-size: 13px; }
+  .bots-settings-toggles button { padding-inline: 6px; min-width: 44px; font-size: 13px; }
+  .bots-settings-toggles button svg { display: none; }
   .bots-settings-toggles { gap: 1px; }
   .bots-composer, .bots-draft-status, .bots-upload-list { width: calc(100% - 24px); }
   .bots-message-markdown { font-size: 16px; line-height: 1.65; }
@@ -105,8 +108,8 @@ details[open] > summary > .bots-disclosure-chevron { transform: rotate(90deg); }
 .bots-conversation-heading .bots-extension { margin-left:8px;margin-right:0; }
 
 /* Keep writing space independent of the number of composer actions. */
-.bots-composer { flex-direction: column; align-items: stretch; }
-.bots-composer textarea { flex: none; width: 100%; padding-inline: 9px; }
+.bots-composer { flex-direction: column; align-items: stretch; gap: 2px; padding: 5px; }
+.bots-composer textarea { flex: none; width: 100%; min-height: 36px; height: 36px; padding: 6px 9px; }
 .bots-composer-actions { display: flex; align-items: center; gap: 4px; min-width: 0; }
 .bots-composer-actions .bots-send { margin-left: auto; }
 .bots-composer-actions .bots-icon-button, .bots-composer-actions .bots-send { width: 44px; height: 44px; min-width: 44px; }

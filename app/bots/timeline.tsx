@@ -35,7 +35,7 @@ import { useSecureInputRequests } from "./secure-input-requests";
 import { secureTimelineGroups, type ConversationGroup } from "./secure-input-timeline";
 import { usePeerTimeline, PeerTimelineMessage, PeerPaging } from "./peer-timeline";
 import { peerConversationEntries, peerAliases } from "./peer-timeline-store";
-import { CreateTaskRequest, TaskRequestAccess, TaskRequestCard, useTaskRequests } from "./task-request-ui";
+import { TaskRequestAccess, TaskRequestCard, useTaskRequests } from "./task-request-ui";
 import { taskRequestGroups } from "./task-request-timeline";
 const noDetailErrors = () => () => {};
 
@@ -120,7 +120,6 @@ export const TimelineEntry = memo(function TimelineEntry(props: Parameters<typeo
     {props.onReply && props.threadId && <ReplyAction entry={entry} botId={props.timeline.botId} threadId={props.threadId} onReply={props.onReply} />}
     {props.configurationSupported && entry.item?.type === "agentMessage" && entry.item.phase === "final_answer" && <ConfigurationEvidence value={props.configuration} label="Turn settings"/>}
     {entry.operatorSegmentId && <LazyDetails className="operator-call-card operator-origin" summary={<><Phone size={13} aria-hidden="true"/>Voice call</>}>{() => <OperatorSegmentBody botId={props.timeline.botId} segmentId={entry.operatorSegmentId!} onOpenCalls={props.onOpenCall}/>}</LazyDetails>}
-    {props.threadId && entry.item?.type === "agentMessage" && entry.item.phase !== "commentary" && !entry.peerAlias && <CreateTaskRequest params={{threadId:props.threadId,turnId:entry.turnId,itemId:entry.id}}/>}
     {entry.type !== "userMessage" && entry.type !== "agentMessage" && <MessageTime seconds={entry.messageAt} basis={entry.timeBasis ?? "turn-start"} inline elapsed={elapsed(entry, "item")} />}
     {(entry.type === "userMessage" || entry.type === "agentMessage") && <MessageTime seconds={entry.messageAt} basis={entry.timeBasis ?? "turn-start"} user={entry.type === "userMessage"} elapsed={entry.type === "agentMessage" && entry.item?.type === "agentMessage" && entry.item.phase === "final_answer" && !entry.peerAlias && entry.audience !== "finding" ? elapsed(entry, "turn") : activityEntry(entry) ? elapsed(entry, "item") : null} />}
   </div>;
