@@ -48,7 +48,7 @@ function UsageAccountSource({ bot, online, owner, historySupported }: { bot?: Bo
   const bots = botsClient.snapshot?.bots.filter(value => !value.deletedAt) ?? [];
   const sourceId = bot?.id ?? selected ?? bots[0]?.id;
   const source = bots.find(value => value.id === sourceId);
-  return <>
+  return <div className="min-w-0">
     {!bot && bots.length > 0 && <label className="mb-5 block text-sm font-medium">
       Account used by
       <NativeSelect className="mt-2" value={source?.id ?? ""} onChange={event => setSelected(event.target.value)}>
@@ -58,7 +58,7 @@ function UsageAccountSource({ bot, online, owner, historySupported }: { bot?: Bo
     </label>}
     {source ? <UsagePanelContents key={JSON.stringify([source.id, source.nodeId, source.placementEpoch])} bot={bot} accountBotId={source.id} online={online} owner={owner} historySupported={historySupported} />
       : <p className="bots-muted" role="status">{bots.length ? "Choose an available bot to view its account usage." : "Account usage will be available when a bot is connected."}</p>}
-  </>;
+  </div>;
 }
 function UsagePanelContents({ bot, accountBotId, online, owner, historySupported }: { bot?: Bot; accountBotId: string; online: boolean; owner: string | null; historySupported: boolean }) {
   const [dataOwner, setDataOwner] = useState(owner);
