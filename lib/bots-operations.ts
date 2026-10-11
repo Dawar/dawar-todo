@@ -129,7 +129,7 @@ export type BotOperations = {
     params: Partial<Pick<Bot, "name" | "model" | "effort" | "serviceTier" | "mode" | "burstQuietSeconds">> & { avatar?: Pick<BotAvatar, "shape" | "color"> };
     result: Bot;
   };
-  "bots.read": { params: Record<string, never>; result: Bot };
+  "bots.read": { params: { threadId?: string | null; updatedAt?: string }; result: Bot };
   "bots.recover": { params: Record<string, never>; result: Bot };
   "bots.archive": { params: Record<string, never>; result: Bot };
   "bots.delete": {params: Record<string, never>; result: Bot};

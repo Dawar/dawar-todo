@@ -131,7 +131,8 @@ export class HubRpc {
         const current=this.store.placement(owner,p.bot_id);
         if(current.node_id!==p.node_id||current.epoch!==p.epoch)continue;
         const b=s.bots?.find(b=>b.id===p.bot_id);if(!b)continue;
-        bots.push({...b,nodeId:p.node_id,placementEpoch:p.epoch,nodeOnline:!!this.connection(p),historyObservedAt:response.cache.observedAt});snapshots.push({p,s});
+        const readAt=this.controls?.store.bot(p.bot_id)?.lastReadAt;
+        bots.push({...b,...(readAt&&readAt>b.lastReadAt?{lastReadAt:readAt}:{}),nodeId:p.node_id,placementEpoch:p.epoch,nodeOnline:!!this.connection(p),historyObservedAt:response.cache.observedAt});snapshots.push({p,s});
       }catch{/* Unavailable uncached nodes do not become fictitious ready bots. */}
     }};
     await Promise.all(Array.from({length:Math.min(4,placements.length)},worker));

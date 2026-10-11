@@ -91,3 +91,23 @@ export function conversationEntries(entries: HistoryEntry[], audiences = new Map
       return { ...entry, item, ...(peerAlias ? { peerAlias } : {}), scheduled, audience: kind, runId: audience?.runId ?? entry.runId, legacyContext: Boolean(legacyContext) };
     });
 }
+
+/** Work-log fetch order must never reorder native conversation turns. */
+export function mergeWorkLogs(entries: HistoryEntry[], logs: HistoryEntry[]): HistoryEntry[] {
+  const byTurn = new Map<string, HistoryEntry[]>();
+  for (const entry of logs) {
+    const values = byTurn.get(entry.turnId) ?? [];
+    values.push(entry); byTurn.set(entry.turnId, values);
+  }
+  const authoritative = new Map(entries.map(entry => [historyKey(entry.turnId, entry.id), entry]));
+  const result: HistoryEntry[] = [];
+  for (let start = 0; start < entries.length;) {
+    let end = start + 1;
+    while (end < entries.length && entries[end].turnId === entries[start].turnId) end++;
+    const turn = entries.slice(start, end), detail = byTurn.get(entries[start].turnId);
+    result.push(...(detail?.length ? reconcileHistory(orderedHistory(turn, detail, false, Infinity)).entries : turn)
+      .map(entry => authoritative.get(historyKey(entry.turnId, entry.id)) ?? entry));
+    start = end;
+  }
+  return result;
+}

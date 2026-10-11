@@ -138,14 +138,19 @@ export function BurstBubbles({ messages, batch, ...props }: { messages: BurstMes
 }
 export function BurstControls({ burst, online, submitting = false }: { burst: BurstConversation; online: boolean; submitting?: boolean }) {
   const { value, batches, messages, count, action, error, hasPending, uncertain, dispatching, failed, paused, canStart, refreshDelivery, discard, discardAction, pauseRequested } = burst;
-  if (!count && !batches.length && !submitting && !paused && !action.error && !discardAction.error && !burst.queueAction.intent && !burst.queueAction.error && !error) return null;
+  // A terminal rejected Start can remain in the action journal after the
+  // original batch was confirmed. Retain the journal, but retire that stale
+  // warning only after a full, fresh delivery snapshot proves nothing awaits.
+  const settledWarning = online && value && !value.preview && !error && !count && !batches.length && !action.intent && action.error === 'Reconcile the original send before starting another batch; no message was repeated.';
+  const actionError = settledWarning ? '' : action.error;
+  if (!count && !batches.length && !submitting && !paused && !actionError && !discardAction.error && !burst.queueAction.intent && !burst.queueAction.error && !error) return null;
   const controlsAvailable = client.snapshot?.capabilities?.burstControls === 1;
   const heldIds = messages.filter(message => !message.dismissed && message.state !== 'discarded' && batches.some(batch => batch.state === 'paused' && batch.messageIds.includes(message.id))).map(message => message.id);
   const truncatedText = new Set(value?.preview?.truncatedTextIds ?? []);
   const previewOnly = !!value?.preview || !online, completeBatchMetadata = value?.batches !== undefined;
   const baseBusy = !online || action.busy || !action.ready || !!action.intent || discardAction.busy || !!discardAction.intent;
   const busy = baseBusy || burst.queuePreparing || burst.queueAction.busy || !!burst.queueAction.intent || client.snapshot?.capabilities?.burstQueue === 1 && !burst.queueAction.ready;
-  const deliveryError = action.error || error;
+  const deliveryError = actionError || error;
   const deliveryStatus = deliveryError === 'Reconcile the original send before starting another batch; no message was repeated.'
     ? 'Delivery unconfirmed.'
     : deliveryError || (action.intent ? 'Confirmation needed.' : 'Not delivered.');
@@ -160,6 +165,6 @@ export function BurstControls({ burst, online, submitting = false }: { burst: Bu
       </>}{heldIds.length > 0 && controlsAvailable && <Button variant="ghost" size="sm" type="button" aria-label="Delete all held messages" title="Delete all held messages" disabled={busy || !discardAction.ready || !!action.intent} onClick={() => void discard(heldIds, true).catch(() => {})}><Trash2 size={16}/></Button>}</div>
     </div>
     {discardAction.error && <div className="bots-burst-recovery" role="alert">{discardAction.error}{discardAction.intent && <Button variant="ghost" size="sm" type="button" disabled={!online || discardAction.busy} onClick={() => void discardAction.retry().then(refreshDelivery).catch(() => {})}>Check deletion</Button>}</div>}
-    {(error || action.error || failed || action.intent) && <div className="bots-burst-recovery" role="alert">{deliveryStatus}{action.intent ? <Button variant="ghost" size="sm" type="button" disabled={!online || action.busy} onClick={() => void action.retry().then(refreshDelivery).catch(() => {})}>Check delivery</Button> : <Button variant="ghost" size="sm" type="button" disabled={!online} onClick={refreshDelivery}>Check delivery</Button>}</div>}
+    {(error || actionError || failed || action.intent) && <div className="bots-burst-recovery" role="alert">{deliveryStatus}{action.intent ? <Button variant="ghost" size="sm" type="button" disabled={!online || action.busy} onClick={() => void action.retry().then(refreshDelivery).catch(() => {})}>Check delivery</Button> : <Button variant="ghost" size="sm" type="button" disabled={!online} onClick={refreshDelivery}>Check delivery</Button>}</div>}
   </div>;
 }

@@ -10,7 +10,7 @@ import type { BotTimeline } from "./timeline-controller";
 export type HistoryDetailReader = Pick<BotTimeline, "botId" | "subscribeDetail" | "detailItem" | "subscribe" | "detailPending" | "detail"> & { detailError?: (entry: HistoryEntry) => string };
 import { useBotTimeline } from "./use-timeline";
 import { botsClient } from "./client";
-import { orderedHistory, reconcileHistory } from "./history-reconcile";
+import { orderedHistory, reconcileHistory, mergeWorkLogs } from "./history-reconcile";
 import { compactGroups, activityPreview, activityEntry } from "./compact-activity";
 import { elapsed } from "../../lib/bot-timing";
 import { NativeTimingContext } from "./active-turn-elapsed";
@@ -146,10 +146,7 @@ function BotConversationFeed({ owner, bot, online, children, onOpenCall, onReply
       const seconds = Date.parse(f.createdAt) / 1000;
       return { id: `finding:${f.id}`, turnId: f.turnId, type: "agentMessage", label: "Scheduled finding", item: { type: "agentMessage", id: `finding:${f.id}`, text: f.summary, phase: "final_answer", memoryCitation: null, delivery: null, questions: null }, complete: true, scheduled: true, status: "completed", startedAt: seconds, messageAt: seconds, timeBasis: "received", audience: "finding", runId: f.runId };
     });
-    const turns = new Set(entries.map(entry => entry.turnId));
-    const logs = logData.entries.filter(entry => turns.has(entry.turnId));
-    const authoritative = new Map(entries.map(entry => [historyKey(entry.turnId, entry.id), entry]));
-    const base = logs.length ? reconcileHistory(orderedHistory(entries, logs, false, Infinity)).entries.map(entry => authoritative.get(historyKey(entry.turnId, entry.id)) ?? entry) : entries;
+    const base = mergeWorkLogs(entries, logData.entries);
     if (!extra.length) return peerConversationEntries(base, peers.rows);
     // Native item order stays authoritative; insert external run findings at their recorded arrival time.
     const result = [...base];
@@ -164,9 +161,30 @@ function BotConversationFeed({ owner, bot, online, children, onOpenCall, onReply
   const burstAttachments = useMemo(() => { const files = new Map(state.attachments.map(file => [file.id, file])); for (const file of burst.value?.attachments ?? []) files.set(file.id, file); return [...files.values()]; }, [state.attachments, burst.value]);
   const batchProps = { botId: bot.id, attachments: burstAttachments, quietSeconds, online, typingUntil: burst.typingUntil };
   const nativeBatchIds = new Set([...state.entries, ...state.contextEntries].flatMap(entry => entry.item?.type === "userMessage" && entry.item.clientId ? [entry.item.clientId] : []));
-  const tailBatches = retainedBatches(burst.value).filter(batch => batch.state !== "sent" && !nativeBatchIds.has(batch.operationId ?? batch.id));
+  // A delivery receipt can arrive before the native history page. Keep its
+  // original bubbles visible until that exact client identity is projected.
+  const firstMessageAt = [...state.entries, ...state.contextEntries].reduce((first, entry) => Math.min(first, entry.messageAt ?? entry.startedAt ?? Infinity), Infinity);
+  const tailBatches = retainedBatches(burst.value).filter(batch => !nativeBatchIds.has(batch.operationId ?? batch.id) && (batch.state !== "sent" || burst.value?.threadId === bot.threadId && batch.messageIds.some(id => {
+    const message = burst.value?.messages.find(value => value.id === id);
+    return message && (!Number.isFinite(firstMessageAt) || Date.parse(message.createdAt) / 1000 >= firstMessageAt);
+  })));
+  const sentIdentity = retainedBatches(burst.value).filter(batch => batch.state === 'sent').map(batch => batch.id).join(':');
+  useEffect(() => { if (online && sentIdentity) void timeline.refreshLatest(); }, [timeline, online, sentIdentity]);
   const feed = useFeedScroll(timeline, state, online, projectEntries);
   const { first, last, scroll, content, showJump, paging, latest } = feed;
+  useEffect(() => {
+    if (!online || state.loading || state.error || !state.revision || !state.position.following || showJump || last !== state.entries.length || bot.lastReadAt >= bot.updatedAt) return;
+    const mark = () => {
+      if (document.visibilityState !== 'visible') return;
+      const element = scroll.current;
+      if (!element || element.scrollHeight - element.scrollTop - element.clientHeight > 120) return;
+      void botsClient.rpc('bots.read', bot.id, { threadId: bot.threadId, updatedAt: bot.updatedAt }, undefined, { owner }).catch(() => {});
+    };
+    const timer = setTimeout(mark, 800);
+    document.addEventListener('visibilitychange', mark);
+    return () => { clearTimeout(timer); document.removeEventListener('visibilitychange', mark); };
+  }, [owner, online, bot.id, bot.threadId, bot.updatedAt, bot.lastReadAt, state.loading, state.error, state.revision, state.position.following, state.entries.length, last, showJump, scroll]);
+
   const tickNavigation = useMemo(() => humanMessageTicks(projectEntries(nativeState.entries), nativeState.contextEntries, bot.id, bot.threadId,
     entry => entry.replyMessages ?? canonicalBurst(entry, burst.value)?.messages), [nativeState.entries, nativeState.contextEntries, projectEntries, bot.id, bot.threadId, burst.value]);
   const selectTick = (tick: HumanMessageTick) => {

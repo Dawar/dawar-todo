@@ -205,7 +205,11 @@ export class HubControls extends EventEmitter {
         const queue=await acceptLocalQueueOperation(this,{method,botId,params,operationId},binding);if(queue)return queue.result;
         return this.store.transaction(()=>{
           this.assertWriter();const bot=this.store.bot(botId);if(bot.archived||bot.archiving)throw Error('Restore this bot first.');let result;
-          if(method==='schedules.save'){
+          if(method==='bots.read'){
+            if(caller.kind!=='owner'||params.threadId!==bot.threadId||typeof params.updatedAt!=='string'||!Number.isFinite(Date.parse(params.updatedAt))||params.updatedAt>bot.updatedAt)throw Error('Read position changed; refresh this conversation.');
+            result=this.store.saveBot({...bot,lastReadAt:bot.lastReadAt>params.updatedAt?bot.lastReadAt:params.updatedAt});
+            this.emitEvent('bot',result,botId);
+          }else if(method==='schedules.save'){
             const old=params.id?this.owned('schedule',params.id,botId):null;
             result=normalizeSchedule({...params,timeZone:params.timeZone??old?.timeZone??this.defaultTimeZone},botId,old);if(!old){result.id=operationId;result.origin={...caller,operationId};}this.store.put('schedule',result);
           }else if(method==='schedules.delete'){
@@ -214,7 +218,7 @@ export class HubControls extends EventEmitter {
           }else if(method==='schedules.run'){
             const s=this.owned('schedule',params.id,botId);result=this.store.put('run',{id:operationId,botId,scheduleId:s.id,title:s.title,prompt:s.prompt,origin:s.origin??null,selectedContext:s.selectedContext??null,status:'queued',scheduledAt:now(),startedAt:null,finishedAt:null,error:null});
           }else throw Error('Unsupported logical control.');
-          this.store.saveOperation(operationId,binding,'done',{method,botId,params,caller,result,localOnly:'portable-hub-controls',createdAt:now()});this.emitEvent('schedules',{},botId);return result;
+          this.store.saveOperation(operationId,binding,'done',{method,botId,params,caller,result,localOnly:'portable-hub-controls',createdAt:now()});if(method!=='bots.read')this.emitEvent('schedules',{},botId);return result;
         });
       };
       return apply();

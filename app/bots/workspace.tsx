@@ -338,21 +338,6 @@ export function BotsWorkspace() {
       client.events.delete(listener);
     };
   }, [loadQueue]);
-  useEffect(() => {
-    if (
-      !selected ||
-      !online ||
-      !bot ||
-      bot.lastReadAt >= bot.updatedAt ||
-      document.visibilityState !== "visible"
-    )
-      return;
-    const timer = setTimeout(
-      () => void client.rpc("bots.read", selected).catch(() => {}),
-      800,
-    );
-    return () => clearTimeout(timer);
-  }, [selected, online, bot]);
   const select = useCallback((id: string | null) => {
     selectedRef.current = id;
     setSelected(id); setGallery(null);setTransferError("");setNavigation("bots");

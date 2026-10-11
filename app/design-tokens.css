@@ -1,6 +1,12 @@
 /* Shared shadcn semantic palette. Page-specific CSS migrates to these tokens. */
 :root {
   --background: #f6f7f5;
+  --toast: #24352d;
+  --toast-foreground: #ffffff;
+  --toast-muted: #d0ddd5;
+  --toast-error: #ffb4ab;
+  --burst-waiting: #50635b;
+  --burst-fill: #183b2b;
   --foreground: #1d211f;
   --warning: #fff8e8;
   --warning-foreground: #704b10;

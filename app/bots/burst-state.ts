@@ -21,7 +21,8 @@ export function pendingMessageCount(value: SavedBurstState | null) {
  * every retained batch survive even when most message bodies are not cached. */
 export function savedBurstState(value: SavedBurstState): SavedBurstState {
   const truncated = new Set(value.preview?.truncatedTextIds ?? []);
-  const messages = value.messages.filter(message => message.state !== 'sent').slice(0, 24).map(message => {
+  const retained = [...value.messages.filter(message => message.state !== 'sent').slice(0, 24), ...value.messages.filter(message => message.state === 'sent').slice(-12)];
+  const messages = retained.map(message => {
     if (message.text.length <= 2000) return message;
     truncated.add(message.id); return { ...message, text: message.text.slice(0, 2000) };
   });

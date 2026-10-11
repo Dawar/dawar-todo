@@ -119,8 +119,8 @@ export const TaskRow = memo(function TaskRow({
     ? (longSwipe ? leftSecondaryAction.icon : primaryAction.icon)
     : (longSwipe ? "forward" : "edit");
   const revealClass = offset < 0
-    ? longSwipe && (leftSecondaryAction.icon === "snooze" || leftSecondaryAction.icon === "wake") ? "bg-warning0" : "bg-primary text-primary-foreground"
-    : longSwipe ? "bg-primary text-primary-foreground" : "bg-muted0";
+    ? longSwipe && (leftSecondaryAction.icon === "snooze" || leftSecondaryAction.icon === "wake") ? "bg-warning text-warning-foreground" : "bg-primary text-primary-foreground"
+    : longSwipe ? "bg-primary text-primary-foreground" : "bg-accent text-accent-foreground";
 
   function pointerDown(event: ReactPointerEvent<HTMLDivElement>) {
     if (pending || event.pointerType !== "touch") return;

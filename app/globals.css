@@ -77,3 +77,9 @@ textarea {
   background: var(--accent);
   color: var(--accent-foreground);
 }
+
+/* Transient notifications contrast with the light page, including actions. */
+.task-notice-surface { background:var(--toast); color:var(--toast-foreground); border-color:var(--toast-muted); }
+.task-notice-surface button { background:transparent; color:var(--toast-foreground); border-color:var(--toast-muted); }
+.task-notice-surface button:hover { background:#ffffff20; color:var(--toast-foreground); }
+.task-notice-surface button:focus-visible { --ring:var(--toast-foreground); --background:var(--toast); }
