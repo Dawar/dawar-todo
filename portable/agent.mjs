@@ -305,7 +305,7 @@ export async function runAgent(config){
   const source=verifiedAgentRelease({activation,entrypoint:import.meta.url,codexBinary:config.agent.codexBinary,runtime:RUNTIME_VERSION});
   process.umask(0o077);
   const store=new Store(join(config.dataDirectory,'native-control.sqlite')),codex=new Codex(config.agent.codexBinary);
-  const runtime=new BotRuntime({store,codex,root:config.agent.workspaces,defaultTimeZone:process.env.BOTS_TIME_ZONE??'America/Toronto',
+  const runtime=new BotRuntime({store,codex,root:config.agent.workspaces,defaultTimeZone:process.env.BOTS_TIME_ZONE??'UTC',
     adminLeadIds:JSON.parse(process.env.BOTS_ADMIN_LEAD_IDS??'[]')});
   const inherited=storedRuntimeDefaults(store);if(inherited!==undefined)runtime.defaults=inherited;
   runtime.maintenance.source=source;
