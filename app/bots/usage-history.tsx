@@ -91,11 +91,11 @@ export function UsageHistoryView({ history, loading, disabled = false, error, ra
 }) {
   return <section className="bots-usage-history" aria-label="Usage history and estimates">
     <div className="bots-usage-history-heading"><h3>Quota forecast</h3><div className="bots-usage-ranges" role="group" aria-label="History period">{(["24h", "7d", "30d"] as const).map(value => <Button variant="outline" type="button" key={value} aria-pressed={range === value} disabled={loading || disabled} onClick={() => onRange(value)}>{rangeNames[value]}</Button>)}</div></div>
-    {loading && <p role="status">Reading usage history…</p>}{error && <p className="text-destructive" role="alert">Usage history couldn’t load. Try Refresh.</p>}
+    {loading && <p role="status">Reading usage history…</p>}{error && <p className="text-destructive" role="alert">Usage history couldn’t load. Refresh to try again.</p>}
     {history && <>
       {history.reason && <p>{history.reason}</p>}
       {history.identity === "connection" && <p className="bots-muted">Codex did not supply a stable account ID. This connection has its own history; continuity across sign-in or restart is unverified.</p>}
-      {!history.windows.length && <p>Collecting quota history. Samples begin when the updated service is running.</p>}
+      {!history.windows.length && <p>No quota history is available yet.</p>}
       {history.windows.map(window => <section className="bots-usage-history-window" key={window.id}>
         <h4>{window.limitName || window.limitId || "Codex quota"} · {quotaWindowName(window.windowDurationMins.value)} <small>({window.slot})</small></h4>
         {window.usedPercent.value !== null && <p>{percent(Math.max(0, 100 - window.usedPercent.value))}% quota remaining</p>}
