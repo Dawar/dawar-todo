@@ -1,5 +1,5 @@
 import { turnTiming, type NativeTiming } from '../../lib/bot-timing';
-import { reconcileHistory, conversationEntries, orderedHistory, chronologicalTurns } from "./history-reconcile";
+import { reconcileHistory, conversationEntries, orderedHistory, chronologicalTurns, mergeWorkLogs } from "./history-reconcile";
 import { turnAudience, scheduleInput, peerInput, humanInput, reportedFinding, projectConversationItem, type TurnAudience } from "../../lib/bot-conversation";
 import { historyBoundaries, retainHistory, retainedAttachments, CACHE_ENTRIES, CACHE_BYTES } from "./history-window";
 import { HISTORY_TEXT_LIMIT, withTurnState, conversationItem, historyTail, historyBefore, historyKey, projectHistoryItem, projectWorkPlan, type HistoryEntry, type HistoryResponse, type HistoryDetail, type HistoryPosition, type HistoryGap } from "../../lib/bot-history-view";
@@ -14,15 +14,17 @@ import { timelineCache, type createTimelineCache, type TimelineMetadata } from "
 export type TimelineTransport = {
   owner: string; online: boolean;
   snapshot?: { bots: { id: string; threadId: string | null; activeTurnId?: string | null }[] } | null;
-  rpc<T>(method: "history.view" | "history.detail", botId: string, params?: Record<string, unknown>): Promise<T>;
+  rpc<T>(method: "history.view" | "history.detail" | "history.log", botId: string, params?: Record<string, unknown>): Promise<T>;
 };
+export type WorkLogState = { loaded: boolean; loading: boolean; olderCursor: string | null; error: string };
 export type TimelineState = {
+  workLogs: Record<string, WorkLogState>;
   currentTiming?: NativeTiming & { threadId: string; turnId: string; turnStatus?: Turn['status'] };
   partialTurn?: boolean; entries: HistoryEntry[]; contextEntries: HistoryEntry[]; attachments: BotAttachment[]; olderCursor: string | null;
   revision: string; eventCursor: number; complete: boolean; loading: boolean;
   error: string; cached: boolean; gaps: HistoryGap[]; position: HistoryPosition;
 };
-const initial = (): TimelineState => ({ entries: [], contextEntries: [], attachments: [], olderCursor: null, revision: "", eventCursor: 0,
+const initial = (): TimelineState => ({ workLogs: {}, entries: [], contextEntries: [], attachments: [], olderCursor: null, revision: "", eventCursor: 0,
   complete: false, loading: false, gaps: [], error: "", cached: false, position: { anchor: null, offset: 0, following: true } });
 type Cache = ReturnType<typeof createTimelineCache>;
 const scopedPage = (page: HistoryResponse, threadId: string | null | undefined): HistoryResponse => page.kind !== 'page' || !threadId ? page : ({ ...page,
@@ -288,6 +290,41 @@ export class BotTimeline {
       finally { this.request = undefined; if (!this.disposed) { this.publish({ loading: false }, true); if (this.refreshAgain) { this.refreshAgain = false; this.scheduleRefresh(); } } }
     })();
     return this.request;
+  }
+  private workRequests = new Map<string, Promise<void>>();
+  /** Disclosure adds native items to this store. It never creates a second transcript. */
+  loadWorkLog(turnId: string): Promise<void> {
+    const pending = this.workRequests.get(turnId);
+    if (pending) return pending;
+    const threadId = this.currentThread(), previous = this.state.workLogs[turnId];
+    if (!threadId || !this.transport.online || this.transport.owner !== this.owner || this.disposed ||
+        !this.state.entries.some(entry => entry.turnId === turnId) || previous?.loaded && !previous.olderCursor) return Promise.resolve();
+    const cursor = previous?.olderCursor ?? null, startCursor = this.state.eventCursor;
+    const valid = () => !this.disposed && this.transport.owner === this.owner && threadId === this.currentThread();
+    const status = (patch: Partial<WorkLogState>) => {
+      const retained = Object.fromEntries(Object.entries(this.state.workLogs).filter(([id]) => this.state.entries.some(entry => entry.turnId === id)));
+      this.publish({ workLogs: { ...retained, [turnId]: { ...(this.state.workLogs[turnId] ?? { loaded: false, loading: false, olderCursor: null, error: '' }), ...patch } } }, true);
+    };
+    status({ loading: true, error: '' });
+    const request = (async () => {
+      try {
+        const page = await this.transport.rpc<{ entries: HistoryEntry[]; attachments: BotAttachment[]; olderCursor: string | null }>('history.log', this.botId, { turnId, cursor });
+        if (!valid()) return;
+        if (!Array.isArray(page.entries) || page.entries.some(entry => entry.turnId !== turnId || entry.sourceThreadId && entry.sourceThreadId !== threadId) ||
+            cursor && page.olderCursor === cursor || page.entries.length > 256 || new TextEncoder().encode(JSON.stringify(page)).length > 512 * 1024)
+          throw Error('Work details could not be verified. Try again.');
+        const current = new Map(this.state.entries.map(entry => [historyKey(entry.turnId, entry.id), entry]));
+        const entries = page.entries.filter(entry => !entry.deferredTurn).map(entry => {
+          const prior = current.get(historyKey(entry.turnId, entry.id));
+          return prior && (prior.updatedSeq ?? 0) > startCursor ? prior : { ...entry, sourceThreadId: threadId };
+        });
+        this.merge(mergeWorkLogs(this.state.entries, entries));
+        this.publish({ attachments: mergeAttachments(this.state.attachments, page.attachments) });
+        status({ loaded: true, loading: false, olderCursor: page.olderCursor });
+        this.scheduleWrite();
+      } catch (error) { if (valid()) status({ loading: false, error: error instanceof Error ? error.message : 'Could not load work details.' }); }
+    })().finally(() => this.workRequests.delete(turnId));
+    this.workRequests.set(turnId, request); return request;
   }
   revealSource(entry: HistoryEntry) {
     const before = this.state.entries, key = historyKey(entry.turnId, entry.id);

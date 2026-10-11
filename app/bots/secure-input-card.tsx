@@ -116,11 +116,10 @@ export function SecureInputAccess({ state }: { state: ReturnType<typeof useSecur
     const waiting = state.requests.filter(r => r.state === 'waiting');
     const [open, setOpen] = useState(false), [selected, setSelected] = useState<string[]>([]);
     const [opener, setOpener] = useState<HTMLButtonElement | null>(null);
-    if (!waiting.length && !state.error && !state.loading && !open) return null;
+    if (!waiting.length && !state.error && !open) return null;
     const rows = state.requests.filter(r => r.state === 'waiting' || selected.includes(r.id));
     return <div className="bots-secure-access">
       {waiting.length > 0 && <Button variant="outline" type="button" onClick={event => { setOpener(event.currentTarget); setSelected(waiting.map(r => r.id)); setOpen(true); }}><LockKeyhole size={15} aria-hidden="true"/>{waiting.length === 1 ? 'Open private form' : `Open ${waiting.length} private forms`}</Button>}
-      {state.loading && <small role="status">Checking private forms…</small>}
       {state.error && <span role="alert">{state.error} <Button variant="outline" type="button" disabled={!state.online || !state.enabled || state.loading} onClick={state.retry}>Retry forms</Button></span>}
       {!state.enabled && waiting.length > 0 && <p>This bridge does not support private forms. Update it before submitting.</p>}
       {open && <ControlledDialog title="Private input forms" className="bots-secure-dialog" returnFocus={opener} onClose={() => setOpen(false)} onInteractOutside={event => event.preventDefault()}>

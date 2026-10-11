@@ -19,13 +19,18 @@ export function useSecureInputRequests({ owner, botId, threadId, online, enabled
   const refreshRef = useRef<() => void>(() => {});
   const retry = useCallback(() => refreshRef.current(), []);
   useEffect(() => {
-    let alive = true, pending = false, dirty = false, version = 0;
+    let alive = true, pending = false, dirty = false, version = 0, lastEvent = -1;
+    let snapshotGeneration = client.snapshotGeneration;
+    let seeded: SecureRequest[] | undefined;
     const valid = () => alive && client.owner === owner;
     const scoped = (rows: SecureRequest[]) => rows.filter(r => r.botId === botId && r.threadId === threadId).slice(0, 100);
     const update = (change: (old: typeof state) => typeof state) => { if (valid()) setState(old => change(old.key === key ? old : { key, requests: [], loading: false, error: '' })); };
     const seed = () => {
       if (!valid()) return;
-      const rows = scoped(client.snapshot?.secureInputs ?? []);
+      const metadata = client.snapshot?.secureInputs;
+      if (metadata === seeded) return;
+      seeded = metadata;
+      const rows = scoped(metadata ?? []);
       if (rows.length) update(old => ({ ...old, requests: mergeSecureMetadata(old.requests, rows) }));
     };
     const refresh = () => {
@@ -43,19 +48,29 @@ export function useSecureInputRequests({ owner, botId, threadId, online, enabled
       });
     };
     const event = (event: BotEvent) => {
-      if (event.type !== 'secure.status' || event.botId !== botId || !valid()) return;
+      if (event.type !== 'secure.status' || event.botId !== botId || !valid() || event.seq <= lastEvent) return;
       const request = event.data as SecureRequest;
       if (request.botId !== botId || request.threadId !== threadId) return;
-      version++;
+      lastEvent = event.seq; version++;
       update(old => ({ ...old, requests: mergeSecureMetadata(old.requests, [request]) }));
-      refresh();
+      // The event contains the complete scoped metadata; no follow-up RPC.
     };
     refreshRef.current = refresh;
-    const unsubscribe = client.subscribe(seed);
+    const unsubscribe = client.subscribe(() => {
+      seed();
+      // A full snapshot follows reconnect/event-gap recovery. Its bounded
+      // catalog may omit this bot, so reconcile that bot once.
+      if (snapshotGeneration !== client.snapshotGeneration) { snapshotGeneration = client.snapshotGeneration; refresh(); }
+    });
     client.events.add(event);
     queueMicrotask(() => { update(old => ({ ...old, loading: false })); seed(); refresh(); });
-    const timer = setInterval(refresh, 10000);
-    return () => { alive = false; refreshRef.current = () => {}; unsubscribe(); client.events.delete(event); clearInterval(timer); };
+    let hidden = document.hidden;
+    const visible = () => {
+      const resumed = hidden && !document.hidden; hidden = document.hidden;
+      if (resumed) refresh();
+    };
+    document.addEventListener('visibilitychange', visible);
+    return () => { alive = false; refreshRef.current = () => {}; unsubscribe(); client.events.delete(event); document.removeEventListener('visibilitychange', visible); };
   }, [key, owner, botId, threadId, online, enabled]);
   return { requests: state.key === key ? state.requests : [], loading: state.key === key && state.loading,
     error: state.key === key ? state.error : '', retry, enabled, online };

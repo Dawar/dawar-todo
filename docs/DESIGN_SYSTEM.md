@@ -522,3 +522,11 @@ Attachment recovery separates storage-read errors from action errors. A successf
 Bot settings share one recovery presentation wherever the same saved change is shown. Appearance errors expose Retry saved change, Retry storage or Refresh settings directly in the dialog; they no longer send the user to controls outside it. Original ordered-save and same-operation recovery behavior stays in the settings controller.
 
 Connection errors describe the observable result, not infrastructure: use “Connection unavailable” rather than VM or bridge. Generic requests must not claim a draft was saved. Distinguish a request that was not sent from an unconfirmed result; recovery copy points to status or the original saved change without implementation jargon.
+
+### Native conversation items
+
+The main conversation renders native thread/turn/item identities in chronological order. Assistant commentary is readable inline; commands, searches, reasoning summaries and other work have individual compact disclosures. Completing a tool does not remove its row. Full tool bodies remain lazy. Explicit older-work reads merge into the same bounded timeline store and preserve newer streamed content, owner/thread scope and reading anchors. Application-only receipts, secure forms and scheduled findings retain their distinct provenance.
+
+A locally persisted blast submission is visible before its server acknowledgement. It becomes the existing receipt-backed countdown bubble using the original submission identity. Unconfirmed delivery never implies a successful send or triggers a new identity.
+
+Private-form metadata is event-driven. Reconcile once on mount, reconnect/full-snapshot recovery, return from a hidden page, or explicit Retry. Complete secure-status events update locally; there is no recurring form polling or routine checking indicator. The form opens only at the user’s request; encryption and same-submission recovery remain unchanged.

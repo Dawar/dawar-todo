@@ -11,12 +11,12 @@ export type HistoryDetailReader = Pick<BotTimeline, "botId" | "subscribeDetail" 
 import { useBotTimeline } from "./use-timeline";
 import { botsClient } from "./client";
 import { markLocallyRead } from "./local-read-state";
-import { orderedHistory, reconcileHistory, mergeWorkLogs } from "./history-reconcile";
-import { compactGroups, activityPreview, activityEntry } from "./compact-activity";
+import { reconcileHistory } from "./history-reconcile";
+import { nativeWorkItem, nativeWorkLabel } from "./native-timeline";
 import { elapsed } from "../../lib/bot-timing";
 import { NativeTimingContext } from "./active-turn-elapsed";
-import "./compact-activity.css";
-import { MessageTime } from "./message-time";
+import "./native-timeline.css";
+import { MessageTime, ElapsedTime } from "./message-time";
 import { ConfigurationEvidence } from "./configuration-evidence";
 import { BotMessage, WorkPlanMessage } from "./message";
 import { readWorkPlanSource } from '../../lib/native-work-plan';
@@ -108,55 +108,57 @@ function TurnWorkLog({ entry, timeline, download, excluded, onPage, cachedPage }
     {page?.entries.filter(value => !excluded?.has(historyKey(value.turnId, value.id))).map(value => <TimelineEntry key={historyKey(value.turnId, value.id)} entry={value} timeline={timeline} attachments={page.attachments} download={download} showScheduledMark={false}/>)}
   </div>;
 }
-export const TimelineEntry = memo(function TimelineEntry(props: Parameters<typeof EntryBody>[0] & { showScheduledMark?:boolean; configuration?: import("../../lib/bot-collaboration").TurnConfiguration | null; configurationSupported?: boolean; onOpenCall?: () => void; threadId?: string; onReply?: (reply: BotReplyReference) => void; onOpenReply?: (reply: BotReplyReference) => Promise<boolean> }) {
+function NativeWorkAccess({ entry, timeline, state, capture, online }: { entry: HistoryEntry; timeline: BotTimeline; state?: import('./timeline-controller').WorkLogState; capture: () => void; online: boolean }) {
+  if (state?.loaded && !state.olderCursor && !state.error) return entry.turnError ? <p role="alert" className="bots-error">{entry.turnError}</p> : null;
+  return <div className="bots-native-history" data-history-key={historyKey(entry.turnId, entry.id)}>
+    <Button variant="ghost" size="sm" type="button" disabled={!online || state?.loading} onClick={() => { capture(); void timeline.loadWorkLog(entry.turnId); }}>
+      {state?.loading ? 'Loading work…' : state?.error ? 'Retry work details' : state?.loaded ? 'Load earlier work' : 'Load work details'}
+    </Button>
+    {state?.error && <span role="alert">{state.error}</span>}
+    {entry.turnError && <p role="alert" className="bots-error">{entry.turnError}</p>}
+  </div>;
+}
+export const TimelineEntry = memo(function TimelineEntry(props: Parameters<typeof EntryBody>[0] & { showScheduledMark?:boolean; configuration?: import("../../lib/bot-collaboration").TurnConfiguration | null; configurationSupported?: boolean; onOpenCall?: () => void; threadId?: string; onReply?: (reply: BotReplyReference) => void; onOpenReply?: (reply: BotReplyReference) => Promise<boolean>; open?: boolean; onOpenChange?: (open: boolean) => void; beforeToggle?: () => void }) {
   const { entry } = props;
-  if (entry.peerAlias) return <div data-history-key={historyKey(entry.turnId, entry.id)} className="bots-peer-original"><p>Original bot input · canonical discussion receipt not loaded</p><LazyDetails className="bots-activity" summary="Read original native input">{() => <EntryBody {...props}/>}</LazyDetails><MessageTime seconds={entry.messageAt} basis={entry.timeBasis ?? "turn-start"} inline/></div>;
+  if (entry.peerAlias) return <div data-history-key={historyKey(entry.turnId, entry.id)} className="bots-peer-original"><LazyDetails className="bots-native-work" summary="Bot discussion">{() => <EntryBody {...props}/>}</LazyDetails></div>;
   if (entry.item?.type === "agentMessage" && !entry.item.text.trim() && !entry.item.questions?.length && !entry.questionNotice) return null;
   if (entry.type === "reasoning" && (entry.item?.type !== "reasoning" || !entry.item.summary.some(text => text.trim()))) return null;
-  return <div data-history-key={historyKey(entry.turnId, entry.id)}>
+  const work = nativeWorkItem(entry), commentary = entry.item?.type === 'agentMessage' && entry.item.phase === 'commentary';
+  const reply = props.onReply && props.threadId ? <ReplyAction entry={entry} botId={props.timeline.botId} threadId={props.threadId} onReply={props.onReply} /> : null;
+  const status = entry.itemStatus ?? entry.turnStatus ?? entry.status;
+  return <div className={`bots-native-entry${work ? ' is-work' : commentary ? ' is-progress' : ' is-message'}`} data-history-key={historyKey(entry.turnId, entry.id)}>
     {props.showScheduledMark !== false && (entry.audience === "finding" || entry.scheduled && entry.type === "agentMessage") && <span className="bots-scheduled-message-mark" role="img" aria-label="From scheduled work" title="From scheduled work"><Clock3 size={13} aria-hidden="true" /></span>}
     {entry.reply && <ReplyQuote key={entry.reply.id} reply={entry.reply} onOpen={props.onOpenReply} />}
-    {entry.workPlan ? <LazyDetails className="bots-activity" summary={<span className="bots-work-plan-summary"><span>Work plan</span><small>{entry.workPlan.completedSteps} of {entry.workPlan.totalSteps} steps completed{!entry.complete ? ' · Partial snapshot' : ''}</small></span>}>{() => <EntryBody {...props}/>}</LazyDetails> : entry.type === "reasoning" ? <LazyDetails className="bots-activity" summary="Thinking">{() => <EntryBody {...props} />}</LazyDetails> : !entry.item ? <LazyDetails className="bots-activity" summary={<><span>Work log · {entry.label}</span><small>{entry.itemStatus ?? entry.status}</small></>}>
-        {() => entry.deferredTurn ? <TurnWorkLog entry={entry} timeline={props.timeline} download={props.download}/> : <EntryBody {...props} />}</LazyDetails> : <EntryBody {...props} />}
-    {props.onReply && props.threadId && <ReplyAction entry={entry} botId={props.timeline.botId} threadId={props.threadId} onReply={props.onReply} />}
+    {work ? <LazyDetails className="bots-native-work" open={props.open} onOpenChange={props.onOpenChange} beforeToggle={props.beforeToggle} summary={<><span className="bots-native-work-title">{nativeWorkLabel(entry)}</span><span className="bots-native-work-state">{entry.workPlan ? `${entry.workPlan.completedSteps}/${entry.workPlan.totalSteps}` : status === 'inProgress' ? 'Working' : ['failed','interrupted','declined'].includes(status) ? status : elapsed(entry, 'item') ? <ElapsedTime value={elapsed(entry, 'item')!}/> : ''}</span></>}>
+      {() => <div className="bots-native-work-body">{entry.deferredTurn ? <TurnWorkLog entry={entry} timeline={props.timeline} download={props.download}/> : <EntryBody {...props}/>} {reply}</div>}
+    </LazyDetails> : <EntryBody {...props}/>}
+    {!work && reply}
     {props.configurationSupported && entry.item?.type === "agentMessage" && entry.item.phase === "final_answer" && <ConfigurationEvidence value={props.configuration} label="Turn settings"/>}
     {entry.operatorSegmentId && <LazyDetails className="operator-call-card operator-origin" summary={<><Phone size={13} aria-hidden="true"/>Voice call</>}>{() => <OperatorSegmentBody botId={props.timeline.botId} segmentId={entry.operatorSegmentId!} onOpenCalls={props.onOpenCall}/>}</LazyDetails>}
-    {entry.type !== "userMessage" && entry.type !== "agentMessage" && <MessageTime seconds={entry.messageAt} basis={entry.timeBasis ?? "turn-start"} inline elapsed={elapsed(entry, "item")} />}
-    {(entry.type === "userMessage" || entry.type === "agentMessage") && <MessageTime seconds={entry.messageAt} basis={entry.timeBasis ?? "turn-start"} user={entry.type === "userMessage"} elapsed={entry.type === "agentMessage" && entry.item?.type === "agentMessage" && entry.item.phase === "final_answer" && !entry.peerAlias && entry.audience !== "finding" ? elapsed(entry, "turn") : activityEntry(entry) ? elapsed(entry, "item") : null} />}
+    {!work && <MessageTime seconds={entry.messageAt} basis={entry.timeBasis ?? "turn-start"} user={entry.type === "userMessage"} elapsed={entry.item?.type === "agentMessage" && entry.item.phase === "final_answer" && entry.audience !== "finding" ? elapsed(entry, "turn") : null}/>}
   </div>;
 });
 
 /** Bounded body window; all preceding entries remain reachable through explicit pages. */
-function BotConversationFeed({ owner, bot, online, children, onOpenCall, onReply, draft = "", burstsEnabled = false, burstSubmitting = false }: { owner: string; bot: Bot; online: boolean; children?: ReactNode; onOpenActivity?: (target: ActivityTarget) => void; onOpenCall?: () => void; onReply?: (reply: BotReplyReference) => void; draft?: string; burstsEnabled?: boolean; burstSubmitting?: boolean }) {
+function BotConversationFeed({ owner, bot, online, children, onOpenCall, onReply, draft = "", submission, burstsEnabled = false, burstSubmitting = false }: { owner: string; bot: Bot; online: boolean; children?: ReactNode; onOpenActivity?: (target: ActivityTarget) => void; onOpenCall?: () => void; onReply?: (reply: BotReplyReference) => void; draft?: string; submission?: import("./draft-store").Submission; burstsEnabled?: boolean; burstSubmitting?: boolean }) {
   const taskRequests = useTaskRequests();
   const { timeline, state: nativeState } = useBotTimeline(owner, bot.id, online);
   const findings = useRunFindings(owner, bot.id, online, botsClient.snapshot?.capabilities?.backgroundRunLanes === 1);
   const peerSupported = botsClient.snapshot?.capabilities?.peerBodyPaging === 1;
   const peers = usePeerTimeline(owner, bot.id, online, peerSupported);
-  const [logData, setLogData] = useState<{ entries: HistoryEntry[]; pages: Map<string, WorkLogPage> }>({ entries: [], pages: new Map() });
-  const logSnapshot = useRef(logData);
-  const onLogPage = useCallback((page: WorkLogPage, turnId: string) => {
-    const next = reconcileHistory(orderedHistory(logSnapshot.current.entries, page.entries, true, Infinity)).entries;
-    const pages = new Map(logSnapshot.current.pages); pages.set(turnId, page);
-    if (next.length > 2000 || new TextEncoder().encode(JSON.stringify({ entries: next, pages: [...pages] })).length > 4 * 1024 * 1024)
-      throw Error('The loaded work window is full. Reopen this conversation to browse another work page.');
-    const data = { entries: next, pages }; logSnapshot.current = data; setLogData(data);
-  }, []);
   const projectEntries = useCallback((entries: HistoryEntry[]) => {
     const extra: HistoryEntry[] = findings.findings.filter(f => f.conversation !== true && !entries.some(e => e.scheduled && e.audience === "conversation" && e.runId === f.runId) && !entries.some(e => e.audience === "finding" && e.runId === f.runId && e.turnId === f.turnId && e.item?.type === "agentMessage" && e.item.text.trim() === f.summary.trim())).map(f => {
       const seconds = Date.parse(f.createdAt) / 1000;
       return { id: `finding:${f.id}`, turnId: f.turnId, type: "agentMessage", label: "Scheduled finding", item: { type: "agentMessage", id: `finding:${f.id}`, text: f.summary, phase: "final_answer", memoryCitation: null, delivery: null, questions: null }, complete: true, scheduled: true, status: "completed", startedAt: seconds, messageAt: seconds, timeBasis: "received", audience: "finding", runId: f.runId };
     });
-    const base = mergeWorkLogs(entries, logData.entries);
+    const base = entries;
     if (!extra.length) return peerConversationEntries(base, peers.rows);
     // Native item order stays authoritative; insert external run findings at their recorded arrival time.
     const result = [...base];
     for (const f of extra) { const index = result.findIndex(e => (e.messageAt ?? e.startedAt ?? Infinity) > f.messageAt!); result.splice(index < 0 ? result.length : index, 0, f); }
     return peerConversationEntries(result, peers.rows);
-  }, [findings.findings, peers.rows, logData.entries]);
-  const state = useMemo(() => ({ ...nativeState, entries: projectEntries(nativeState.entries),
-    attachments: [...new Map([...Array.from(logData.pages.values()).flatMap(page => page.attachments), ...nativeState.attachments].map(file => [file.id, file])).values()]
-  }), [nativeState, projectEntries, logData.pages]);
+  }, [findings.findings, peers.rows]);
+  const state = useMemo(() => ({ ...nativeState, entries: projectEntries(nativeState.entries) }), [nativeState, projectEntries]);
   const quietSeconds = bot.burstQuietSeconds ?? 3;
   const burst = useBurstConversation({ owner, botId: bot.id, threadId: bot.threadId, online, draft, enabled: burstsEnabled, quietSeconds });
   const burstAttachments = useMemo(() => { const files = new Map(state.attachments.map(file => [file.id, file])); for (const file of burst.value?.attachments ?? []) files.set(file.id, file); return [...files.values()]; }, [state.attachments, burst.value]);
@@ -251,7 +253,7 @@ function BotConversationFeed({ owner, bot, online, children, onOpenCall, onReply
       if (entry.type === "reasoning" && (entry.item?.type !== "reasoning" || !entry.item.summary.some(text => text.trim()))) continue;
       result.push({ kind: "message", entries: [entry] });
     }
-    const grouped = compactGroups(taskRequestGroups(secureTimelineGroups(result, secure.requests.filter(r => r.state !== 'waiting'), state.entries, first, last, state.olderCursor), taskRequests?.requests ?? [], state.entries, first, last, state.olderCursor), state.gaps);
+    const grouped = taskRequestGroups(secureTimelineGroups(result, secure.requests.filter(r => r.state !== 'waiting'), state.entries, first, last, state.olderCursor), taskRequests?.requests ?? [], state.entries, first, last, state.olderCursor);
     // Receipt bubbles occupy their chronological position, never an appended
     // replay of all recent human messages after the assistant's latest reply.
     const time = (entry: HistoryEntry | undefined) => entry?.messageAt ?? entry?.startedAt ?? Infinity;
@@ -266,20 +268,17 @@ function BotConversationFeed({ owner, bot, online, children, onOpenCall, onReply
       grouped.splice(index < 0 ? grouped.length : index, 0, { kind: `burst:${batch.id}`, entries: [], burst: batch });
     }
     return grouped;
-  }, [state.entries, state.olderCursor, state.gaps, first, last, secure.requests, taskRequests?.requests, burst.value, bot.threadId, unprojectedBatches]);
+  }, [state.entries, state.olderCursor, first, last, secure.requests, taskRequests?.requests, burst.value, bot.threadId, unprojectedBatches]);
   // Retain open aliases only within this mounted conversation's bounded cache.
   useEffect(() => {
     let alive = true;
     queueMicrotask(() => { if (!alive) return; setExpanded(prior => {
       const kept = new Set(state.entries.map(entry => timeline.resolveKey(historyKey(entry.turnId, entry.id))!));
       const next = new Set([...prior].map(key => timeline.resolveKey(key)!).filter(key => kept.has(key)));
-      for (const group of groups) if (group.kind.startsWith('activity:') && group.entries.some(entry => next.has(timeline.resolveKey(historyKey(entry.turnId, entry.id))!)))
-        for (const entry of group.entries) next.add(timeline.resolveKey(historyKey(entry.turnId, entry.id))!);
       return next.size === prior.size && [...next].every(key => prior.has(key)) ? prior : next;
     }); });
     return () => { alive = false; };
   }, [groups, state.entries, timeline]);
-  const excludedLogKeys = new Set([...state.entries, ...state.contextEntries].filter(entry => !entry.deferredTurn).map(entry => historyKey(entry.turnId, entry.id)));
   const linkedArtifacts = useMemo(() => new Set(state.entries.slice(first, last).flatMap((entry) =>
     entry.item?.type === "agentMessage" ? [...entry.item.text.matchAll(/\]\(<?bot-artifact:([^\s)>]+)/g)].map((match) => match[1]) : [],
   )), [state.entries, first, last]);
@@ -321,14 +320,8 @@ function BotConversationFeed({ owner, bot, online, children, onOpenCall, onReply
       if (group.secure) return <div key={group.secure.id} className="bots-secure-timeline-entry"><SecureInputCard request={group.secure} online={online}/><MessageTime seconds={Date.parse(group.secure.createdAt) / 1000} basis="received" inline/></div>;
       if (group.taskRequest) return <TaskRequestCard key={group.kind} request={group.taskRequest} capture={feed.capture}/>;
       const entry = group.entries[0], key = historyKey(entry.turnId, entry.id);
-      const activity = group.kind.startsWith("activity:");
-      const open = group.entries.some(value => expanded.has(timeline.resolveKey(historyKey(value.turnId, value.id))!));
-      const body = () => <div className="bots-activity-content">{group.entries.map(value => value.deferredTurn
-        ? <TurnWorkLog key={value.id} entry={value} timeline={timeline} download={download} excluded={excludedLogKeys} onPage={onLogPage} cachedPage={logData.pages.get(value.turnId)}/>
-        : value.type === 'reasoning' ? <div key={value.id} data-history-key={historyKey(value.turnId, value.id)}><EntryBody entry={value} timeline={timeline} attachments={state.attachments} download={download}/>{onReply && bot.threadId && <ReplyAction entry={value} botId={bot.id} threadId={bot.threadId} onReply={onReply}/>}<MessageTime seconds={value.messageAt} basis={value.timeBasis} inline elapsed={elapsed(value, 'item')}/></div>
-        : <TimelineEntry {...replyProps} onOpenCall={onOpenCall} key={historyKey(value.turnId, value.id)} entry={{ ...value, scheduled: false }} configurationSupported={botsClient.snapshot?.capabilities?.executionConfiguration === 1} configuration={timeline.configuration(bot.threadId, value.turnId)} timeline={timeline} attachments={state.attachments} download={download}/>)}</div>;
-      const count = group.entries.filter(value => !value.deferredTurn).length;
-      const summary = <span className="bots-activity-summary"><span>Activity <small className="bots-activity-count">{count ? `${count} loaded ${count === 1 ? 'step' : 'steps'}` : 'Work log'}{group.entries.some(value => value.deferredTurn && (!logData.pages.has(value.turnId) || logData.pages.get(value.turnId)?.olderCursor)) && count > 0 ? ' · more available' : ''}</small></span><span className="bots-activity-preview">{activityPreview(group.entries)}</span></span>;
+      const open = expanded.has(timeline.resolveKey(key)!);
+      const workProps = { open, beforeToggle: feed.capture, onOpenChange: (next: boolean) => setExpanded(prior => { const copy = new Set(prior); if (next) copy.add(key); else copy.delete(key); return copy; }) };
       const confirmed = canonicalBurst(entry, burst.value);
       const replyBatch = entry.replyMessages;
       return <Fragment key={key}>
@@ -336,8 +329,8 @@ function BotConversationFeed({ owner, bot, online, children, onOpenCall, onReply
           Some messages between these pages are not loaded. <Button variant="outline" type="button" disabled={!online || paging} onClick={() => {
             feed.capture(); void timeline.fillGap(gap);
           }}>Load messages in between</Button></div>)}
-        {entry.peer ? <div data-history-key={key}><PeerTimelineMessage owner={owner} botId={bot.id} meta={entry.peer} nativeKeys={[...(entry.peerNativeKeys ?? []), ...nativeState.contextEntries.filter(e => e.peerAlias && peerAliases(entry.peer!).includes(e.peerAlias)).map(e => historyKey(e.turnId,e.id))]} store={peers.store} online={online} bots={namedBots} showRoot={rootRows.get(entry.peer.rootId) === entry.peer.id}/></div> : group.kind.startsWith("scheduled:") ? <section className="bots-scheduled-findings" aria-label="Findings from one scheduled run"><span className="bots-scheduled-message-mark" title="Findings from the same scheduled run"><Clock3 size={13} aria-hidden="true"/>Scheduled work</span>{group.entries.map(value=><TimelineEntry {...replyProps} onOpenCall={onOpenCall} key={historyKey(value.turnId,value.id)} entry={value} configurationSupported={botsClient.snapshot?.capabilities?.executionConfiguration === 1} configuration={timeline.configuration(bot.threadId, value.turnId)} timeline={timeline} attachments={state.attachments} download={download} showScheduledMark={false}/>)}</section> : group.kind === "message" ? replyBatch ? <div data-history-key={key}><BurstBubbles messages={replyBatch} {...batchProps} onOpenReply={openReply} onReply={onReply} threadId={bot.threadId??undefined} replySource={entry} sent /></div> : confirmed ? <div data-history-key={key}><BurstBubbles messages={confirmed.messages} batch={confirmed.batch} {...batchProps} onOpenReply={openReply} onReply={onReply} threadId={bot.threadId??undefined} replySource={entry} /></div> : <TimelineEntry {...replyProps} onOpenCall={onOpenCall} entry={entry} configurationSupported={botsClient.snapshot?.capabilities?.executionConfiguration === 1} configuration={timeline.configuration(bot.threadId, entry.turnId)} timeline={timeline} attachments={state.attachments} download={download} />
-          : activity ? <div data-history-key={key} className="bots-compact-activity">{!open && group.entries.slice(1).map(value => <span key={value.id} data-history-key={historyKey(value.turnId, value.id)} aria-hidden="true" className="bots-activity-alias"/>)}<LazyDetails className="bots-activity" summary={summary} open={open} beforeToggle={feed.capture} onOpenChange={next => setExpanded(prior => { const copy = new Set(prior); for (const value of group.entries) { const key = timeline.resolveKey(historyKey(value.turnId, value.id))!; if (next) copy.add(key); else copy.delete(key); } return copy; })}>{body}</LazyDetails><MessageTime seconds={entry.messageAt} basis={entry.timeBasis} inline elapsed={group.entries.map(value => elapsed(value, 'turn')).find(Boolean)}/></div> : null}
+        {entry.peer ? <div data-history-key={key}><PeerTimelineMessage owner={owner} botId={bot.id} meta={entry.peer} nativeKeys={[...(entry.peerNativeKeys ?? []), ...nativeState.contextEntries.filter(e => e.peerAlias && peerAliases(entry.peer!).includes(e.peerAlias)).map(e => historyKey(e.turnId,e.id))]} store={peers.store} online={online} bots={namedBots} showRoot={rootRows.get(entry.peer.rootId) === entry.peer.id}/></div> : entry.deferredTurn ? <NativeWorkAccess entry={entry} timeline={timeline} state={nativeState.workLogs[entry.turnId]} capture={feed.capture} online={online}/> : group.kind === "message" ? replyBatch ? <div data-history-key={key}><BurstBubbles messages={replyBatch} {...batchProps} onOpenReply={openReply} onReply={onReply} threadId={bot.threadId??undefined} replySource={entry} sent /></div> : confirmed ? <div data-history-key={key}><BurstBubbles messages={confirmed.messages} batch={confirmed.batch} {...batchProps} onOpenReply={openReply} onReply={onReply} threadId={bot.threadId??undefined} replySource={entry} /></div> : <TimelineEntry {...replyProps} {...workProps} onOpenCall={onOpenCall} entry={entry} configurationSupported={botsClient.snapshot?.capabilities?.executionConfiguration === 1} configuration={timeline.configuration(bot.threadId, entry.turnId)} timeline={timeline} attachments={state.attachments} download={download} />
+          : null}
         {groups.slice(groups.indexOf(group) + 1).find(next => !next.secure && !next.taskRequest && !next.burst)?.entries[0]?.turnId !== entry.turnId ? <ReturnedArtifacts linked={linkedArtifacts} attachments={state.attachments} turnId={entry.turnId} botId={bot.id} /> : null}
       </Fragment>;
     })}
@@ -350,6 +343,11 @@ function BotConversationFeed({ owner, bot, online, children, onOpenCall, onReply
           truncatedIds={burst.value?.preview?.truncatedTextIds} controls={burst} {...batchProps} onOpenReply={openReply}/>)}
       <BurstControls burst={burst} online={online} submitting={burstSubmitting} />
     </section>}
+    {submission?.method === 'bursts.submit' && submission.botId === bot.id && !burst.value?.messages.some(message => message.id === submission.id) && <div className="bots-native-submission" data-submission-id={submission.id}>
+      <BotMessage item={{ type: 'userMessage', id: `client:${submission.id}`, clientId: submission.id, content: [{ type: 'text', text: String(submission.params.text ?? ''), text_elements: [] }] }} botId={bot.id} attachments={burstAttachments} download={download}/>
+      {Array.isArray(submission.params.attachments) && submission.params.attachments.length > 0 && <small>{submission.params.attachments.length} attached {submission.params.attachments.length === 1 ? 'file' : 'files'}</small>}
+      <small role="status">{submission.state === 'uncertain' ? 'Delivery unconfirmed' : 'Sending…'}</small>
+    </div>}
     {children}
   </div></div>{showTicks && <MessageTickRail {...tickNavigation} scroll={scroll} content={content} earlier={earlierTicks} incomplete={!state.complete || Boolean(state.olderCursor) || state.gaps.length > 0} loading={paging || state.loading} online={online} error={state.error} onEarlier={() => feed.page(-1, true)} onSelect={selectTick}/>} {(showJump || last < state.entries.length || state.error || state.loading && state.cached) && <Button variant="outline" type="button" className="bots-jump-latest" disabled={!online || state.loading} onClick={() => {
     latest();

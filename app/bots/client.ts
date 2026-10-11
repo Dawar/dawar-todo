@@ -103,6 +103,7 @@ export class BotsClient {
   socket: WebSocket | null = null;
   snapshot: BotSnapshot | null = null;
   eventChunks = new Map<number, { bytes: Uint8Array; received: number }>();
+  snapshotGeneration = 0;
   online = false;
   storageAvailable = false;
   storageCatalogAvailable = false;
@@ -626,6 +627,7 @@ export class BotsClient {
       else merged = applySnapshotEvent(merged, event, key);
     }
     this.snapshot = { ...merged, cursor: Math.max(snapshot.cursor, this.latestSnapshotEvent) };
+    this.snapshotGeneration++;
     this.online = snapshot.ready;
     if (this.online)
       void this.rpc(

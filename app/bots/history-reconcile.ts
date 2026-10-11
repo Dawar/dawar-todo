@@ -1,4 +1,4 @@
-import { conversationItem, historyKey, type HistoryEntry } from '../../lib/bot-history-view';
+import { historyKey, type HistoryEntry } from '../../lib/bot-history-view';
 import { humanInput, peerInput, scheduleInput, type TurnAudience } from '../../lib/bot-conversation';
 
 const clientId = (entry: HistoryEntry) => entry.item?.type === 'userMessage' ? entry.item.clientId || null : null;
@@ -90,8 +90,8 @@ export function conversationEntries(entries: HistoryEntry[], audiences = new Map
   return entries.filter(entry => entry.peerAlias || entry.item && peerInput(entry.item) || entry.deferredTurn || entry.audience === 'finding' || audiences.get(entry.turnId)?.kind !== 'activity')
     .filter(entry => !entry.findingId || findings.get(entry.findingId) === entry)
     .filter(entry => !entry.item || !scheduleInput(entry.item))
-    .filter(entry => !(entry.item?.type === 'userMessage' && entry.item.clientId?.startsWith('manager-notice:')))
-    .filter(entry => entry.deferredTurn || conversationItem(entry.type) && entry.id !== 'live-turn-diff' || (entry.turnStatus ?? entry.status) === 'inProgress')
+    .filter(entry => !(entry.item?.type === 'userMessage' && (entry.item.clientId?.startsWith('manager-notice:') || entry.item.clientId?.startsWith('secure-receipt:'))))
+    .filter(entry => entry.id !== 'live-turn-diff' || (entry.turnStatus ?? entry.status) === 'inProgress')
     .filter(entry => entry.item?.type !== 'agentMessage' || entry.item.text.trim() || entry.item.questions?.length || entry.questionNotice)
     .filter(entry => entry.item?.type !== 'reasoning' || (entry.turnStatus ?? entry.status) === 'inProgress' || entry.item.summary.some(text => text.trim()))
     .map(entry => {
@@ -113,14 +113,12 @@ export function mergeWorkLogs(entries: HistoryEntry[], logs: HistoryEntry[]): Hi
     const values = byTurn.get(entry.turnId) ?? [];
     values.push(entry); byTurn.set(entry.turnId, values);
   }
-  const authoritative = new Map(entries.map(entry => [historyKey(entry.turnId, entry.id), entry]));
   const result: HistoryEntry[] = [];
   for (let start = 0; start < entries.length;) {
     let end = start + 1;
     while (end < entries.length && entries[end].turnId === entries[start].turnId) end++;
     const turn = entries.slice(start, end), detail = byTurn.get(entries[start].turnId);
-    result.push(...(detail?.length ? reconcileHistory(orderedHistory(turn, detail, false, Infinity)).entries : turn)
-      .map(entry => authoritative.get(historyKey(entry.turnId, entry.id)) ?? entry));
+    result.push(...(detail?.length ? reconcileHistory(orderedHistory(turn, detail, false, Infinity)).entries : turn));
     start = end;
   }
   return result;

@@ -633,7 +633,7 @@ export function BotsWorkspace() {
             </div>
           ) : (
             <>
-              <BotConversation key={scope} owner={owner} bot={bot} online={online} onOpenActivity={openActivity} onOpenCall={openCalls} draft={draft} burstsEnabled={burstSupported && !bot.archived} onReply={snapshot?.capabilities?.messageReplies === 1 && composer?.ready && !checkoutLocked && !sending ? reply => composer.setReply(reply) : undefined} burstSubmitting={composer?.operation?.method === "bursts.submit"}>
+              <BotConversation key={scope} owner={owner} bot={bot} online={online} onOpenActivity={openActivity} onOpenCall={openCalls} draft={draft} submission={composer?.operation} burstsEnabled={burstSupported && !bot.archived} onReply={snapshot?.capabilities?.messageReplies === 1 && composer?.ready && !checkoutLocked && !sending ? reply => composer.setReply(reply) : undefined} burstSubmitting={composer?.operation?.method === "bursts.submit"}>
 
                 {snapshot?.capabilities?.peerInbox === 1 && <DiscussionStatus status={discussions} bots={bots} botId={bot.id} online={online} onOpen={openDiscussion} attentionOnly />}
                 {pending.map((request) => (
