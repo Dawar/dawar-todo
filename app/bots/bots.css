@@ -36,8 +36,8 @@ html.bots-viewport-locked body {
   flex-direction: column;
   min-width: 0;
   min-height: 0;
-  background: #f6f7f5;
-  border-right: 1px solid #e3e7e4;
+  background: var(--background);
+  border-right: 1px solid var(--border);
 }
 .bots-sidebar-heading {
   padding: 22px 20px 14px;
@@ -46,9 +46,9 @@ html.bots-viewport-locked body {
   justify-content: space-between;
 }
 .bots-sidebar-heading h1 {
-  font-size: 25px;
-  font-weight: 700;
-  letter-spacing: -0.04em;
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.025em;
 }
 .bots-sidebar-tools { display: flex; align-items: center; gap: 2px; }
 .bots-icon-button {
@@ -66,35 +66,6 @@ html.bots-viewport-locked body {
 }
 .bots-icon-button:disabled {
   opacity: 0.35;
-}
-.bots-search {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 0 16px 14px;
-  padding: 9px 11px;
-  background: #e9ece9;
-  border-radius: 10px;
-  color: #6d7770;
-}
-.bots-search input {
-  min-width: 0;
-  outline: none;
-  font-size: 14px;
-  width: 100%;
-  background: none;
-}
-.bots-search button {
-  display: grid;
-  place-items: center;
-  flex-shrink: 0;
-  width: 32px;
-  height: 32px;
-  margin: -5px -6px -5px 0;
-  border-radius: 7px;
-}
-.bots-search button:hover {
-  background: #dce4dd;
 }
 .bots-list {
   flex: 1;
@@ -1204,10 +1175,3 @@ html.bots-viewport-locked body {
 .bots-upload-progress { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-height: 1.4em; }
 
 .bots-feed-loading { position: absolute; z-index: 2; top: 8px; left: 50%; transform: translateX(-50%); padding: 5px 12px; border-radius: 20px; background: var(--surface, #fff); box-shadow: 0 2px 12px #0001; color: #64756b; font-size: 12px; pointer-events: none; white-space: nowrap; }
-
-/* One compact filter row keeps the list in view at narrow sidebar widths. */
-.bots-list-filters { display:flex; gap:5px; margin:0 12px 8px; flex:none; min-width:0; }
-.bots-list-filters select { min-width:0; flex:1 1 0; width:0; min-height:34px; padding:6px 4px; border:1px solid #dde6df; border-radius:8px; background:#edf1ec; color:#536b5b; font-size:11px; text-overflow:ellipsis; }
-.bots-search { margin-bottom:8px; }
-.bots-artifacts-icon.active { background:#e7efe8; color:#286748; }
-.bots-list-filters select:focus-visible { outline:2px solid var(--ring); outline-offset:-2px; }

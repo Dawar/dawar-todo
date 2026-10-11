@@ -18,7 +18,6 @@ import {
 import {
   Bot as BotIcon,
   Plus,
-  Search,
   ArrowLeft,
   MoreHorizontal,
   ArrowUp,
@@ -58,6 +57,7 @@ import { botsClient as client } from "./client";
 import type { NativeEvent } from "./thread-state";
 import { BotConversation } from "./timeline";
 import { BotSidebarList } from "./sidebar-list";
+import { SidebarFilters } from "./sidebar-filters";
 import { TaskRequestWorkspace } from "./task-request-ui";
 import { RequestCard } from "./request-card";
 import { MainStopButton, MainStopRecovery } from "./run-controls";
@@ -145,7 +145,7 @@ export function BotsWorkspace() {
     !checkoutLocked && uploads.every((file) => file.remote?.ready));
   const setDraft = (text: string) => composer?.setText(text);
   const [showCall, setShowCall] = useState(false), [callBotId, setCallBotId] = useState<string | null>(null);
-  const [showTeams, setShowTeams] = useState(false), [teamFilter, setTeamFilter] = useState("all"), [teamSort, setTeamSort] = useState("recent");
+  const [showTeams, setShowTeams] = useState(false), [teamFilter, setTeamFilter] = useState("all"), [teamSort, setTeamSort] = useState<"recent" | "team" | "name">("recent");
   const [navigation,setNavigation] = useState<"bots"|"rooms">("bots"), [roomId,setRoomId]=useState<string|null>(null), [roomMember,setRoomMember]=useState("");
   const snapshot = client.snapshot;
   const teams = snapshot?.teams ?? [];
@@ -514,13 +514,13 @@ export function BotsWorkspace() {
           <div className="bots-sidebar-heading bots-collaboration-heading">
             <h1>{navigation === "rooms" ? "Conversations" : "Bots"}</h1>
             <div className="bots-sidebar-tools">
-            {snapshot?.capabilities?.operatorCalls === 1 && <button className="bots-icon-button" aria-label="Call Operator" onClick={() => { setCallBotId(null); setShowCall(true); }}><Phone size={16} /></button>}
-            <button className="bots-icon-button" title="Discussions" aria-label="Discussions" aria-pressed={navigation === "rooms"} onClick={() => {setNavigation(v=>v === "bots"?"rooms":"bots");setProfile(false);}}><MessagesSquare size={18}/></button>
+            {snapshot?.capabilities?.operatorCalls === 1 && <Button type="button" variant="ghost" size="icon" className="aria-pressed:bg-accent aria-pressed:text-accent-foreground" aria-label="Call Operator" onClick={() => { setCallBotId(null); setShowCall(true); }}><Phone size={16} /></Button>}
+            <Button type="button" variant="ghost" size="icon" className="aria-pressed:bg-accent aria-pressed:text-accent-foreground" title="Discussions" aria-label="Discussions" aria-pressed={navigation === "rooms"} onClick={() => {setNavigation(v=>v === "bots"?"rooms":"bots");setProfile(false);}}><MessagesSquare size={18}/></Button>
             <ArtifactNav active={gallery === "artifacts"} onOpen={() => openGallery("artifacts")} />
-            <button className="bots-icon-button" disabled={!teamsSupported} title={teamsSupported ? "Teams" : "Teams will be available after the service update"} aria-label="Teams" onClick={() => setShowTeams(true)}><UsersRound size={19} /></button>
-            <button className="bots-icon-button" title="Codex account usage" aria-label="Codex account usage" onClick={() => setShowOverallUsage(true)}><BarChart3 size={19} /></button>
-            <button
-              className="bots-icon-button"
+            <Button type="button" variant="ghost" size="icon" className="aria-pressed:bg-accent aria-pressed:text-accent-foreground" disabled={!teamsSupported} title={teamsSupported ? "Teams" : "Teams will be available after the service update"} aria-label="Teams" onClick={() => setShowTeams(true)}><UsersRound size={19} /></Button>
+            <Button type="button" variant="ghost" size="icon" className="aria-pressed:bg-accent aria-pressed:text-accent-foreground" title="Codex account usage" aria-label="Codex account usage" onClick={() => setShowOverallUsage(true)}><BarChart3 size={19} /></Button>
+            <Button type="button" variant="ghost" size="icon"
+              className="aria-pressed:bg-accent aria-pressed:text-accent-foreground"
               aria-label="Create bot"
               onClick={() => {
                 createOperation.current = crypto.randomUUID();
@@ -528,37 +528,11 @@ export function BotsWorkspace() {
               }}
             >
               <Plus size={21} />
-            </button>
+            </Button>
             </div>
           </div>
           <Activity mode={navigation === "bots" ? "visible" : "hidden"}>
-          <div className="bots-search">
-            <Search size={17} aria-hidden="true" />
-            <input
-              ref={searchRef}
-              aria-label="Search bots"
-              placeholder="Search bots"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-            />
-            {search && (
-              <button
-                type="button"
-                aria-label="Clear bot search"
-                onClick={() => {
-                  setSearch("");
-                  searchRef.current?.focus();
-                }}
-              >
-                <X size={16} aria-hidden="true" />
-              </button>
-            )}
-          </div>
-          <div className="bots-list-filters">
-            <select aria-label="Bot visibility" value={archived ? "archived" : "active"} onChange={e => setArchived(e.target.value === "archived")}><option value="active">All bots</option><option value="archived">Archived</option></select>
-            {teamsSupported && <select aria-label="Filter bots by team" value={teamFilter === "all" || teamFilter === "none" || teams.some(t => t.id === teamFilter) ? teamFilter : "all"} onChange={e => setTeamFilter(e.target.value)}><option value="all">All teams</option><option value="none">No team</option>{teams.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}</select>}
-            <select aria-label="Bot list order" value={teamSort} onChange={e => setTeamSort(e.target.value)}><option value="recent">Recent</option><option value="team">Team order</option><option value="name">Name</option></select>
-          </div>
+          <SidebarFilters search={search} onSearch={setSearch} searchRef={searchRef} archived={archived} onArchived={setArchived} teams={teams} teamsSupported={teamsSupported} teamFilter={teamFilter} onTeamFilter={setTeamFilter} sort={teamSort} onSort={setTeamSort} />
           <BotSidebarList owner={owner} search={search} bots={filtered} snapshot={snapshot} selected={selected} select={select}
             empty={teamFilter!=="all" ? "No bots in this team." : search ? "No matching bots." : archived ? "No archived bots." : "Your bots will appear here."} />
           </Activity>

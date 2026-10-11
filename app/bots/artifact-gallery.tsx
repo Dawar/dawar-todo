@@ -1,4 +1,5 @@
 "use client";
+import { Button } from "@/components/ui/button";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { ArrowLeft, ChevronLeft, ChevronRight, Search, X, Images, FolderOpen, CloudOff, RefreshCw, Download, Paperclip } from "lucide-react";
 import type { Bot } from "../../lib/bots-types";
@@ -142,5 +143,5 @@ export function BotAttachmentsEntry({ bot, owner, online:bridgeOnline, onOpen }:
   return <button className="bots-attachments-entry" onClick={onOpen}><span className="bots-attachments-symbol"><Paperclip size={21} /></span><span><strong>Attachments</strong><small>Images, documents & shared files</small></span><span className="bots-attachments-count">{page?.total != null ? page.total : loading ? "…" : page?.items.length ? `${page.items.length}${page.nextCursor ? "+" : ""}` : "—"}</span><ChevronRight size={18} /></button>;
 }
 export function ArtifactNav({ active, onOpen }: { active: boolean; onOpen: () => void }) {
-  return <button className={`bots-icon-button bots-artifacts-icon ${active ? "active" : ""}`} title="Artifacts" aria-label="Artifacts" aria-current={active ? "page" : undefined} onClick={onOpen}><Images size={19} aria-hidden="true" /></button>;
+  return <Button type="button" variant="ghost" size="icon" className="aria-[current=page]:bg-accent aria-[current=page]:text-accent-foreground" title="Artifacts" aria-label="Artifacts" aria-current={active ? "page" : undefined} onClick={onOpen}><Images size={19} aria-hidden="true" /></Button>;
 }

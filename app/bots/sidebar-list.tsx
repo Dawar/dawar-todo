@@ -1,5 +1,5 @@
 "use client";
-import { memo, useId, useMemo, useRef, useState } from "react";
+import { memo, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, LoaderCircle, Zap } from "lucide-react";
 import type { Bot, BotSnapshot, BotTeam } from "../../lib/bots-types";
 import { BotAvatar } from "./bot-avatar";
@@ -12,7 +12,7 @@ const unread = (bot: Bot) => bot.updatedAt > bot.lastReadAt;
 const SidebarRow = memo(function SidebarRow({ bot: b, selected, select, modelName, effort, fast, team }: {
   bot: Bot; selected: boolean; select: (id: string) => void; modelName: string; effort: string; fast: boolean; team?: BotTeam;
 }) {
-  return <button type="button" aria-current={selected ? "true" : undefined} className={`bots-row ${selected ? "selected" : ""}`} style={{ height: HEIGHT - 3 }} onClick={() => select(b.id)}>
+  return <button type="button" data-bot-id={b.id} aria-current={selected ? "true" : undefined} className={`bots-row ${selected ? "selected" : ""}`} style={{ height: HEIGHT - 3 }} onClick={() => select(b.id)}>
     <BotAvatar bot={b} />
     <span className="bots-row-copy"><span className="bots-row-name"><span className="bots-row-title">{b.extension&&<span className="bots-extension" title="Ctrl (or Alt) + extension switches bots; add Shift to move the composer">#{b.extension}</span>}{b.name}</span></span>
       <span className="bots-row-preview">{b.status === "waiting" ? "Needs your input" : b.preview || b.purpose || "Start a conversation"}</span>
@@ -29,6 +29,15 @@ export const BotSidebarList = memo(function BotSidebarList({ owner, search = '',
   const searching = Boolean(search.trim());
   const collapsed = useMemo(() => new Set([...Object.keys(preferences.choices), ...Object.values(preferences.pending).map(p => p.request.teamId)].filter(key => store.collapsed(key))), [preferences, store]);
   const ref = useRef<HTMLDivElement>(null), id = useId();
+  const pendingFocus = useRef<{ id: string; origin: HTMLElement } | null>(null);
+  useLayoutEffect(() => {
+    const pending = pendingFocus.current;
+    if (!pending) return;
+    pendingFocus.current = null;
+    if (document.activeElement !== pending.origin && (pending.origin.isConnected || document.activeElement !== document.body)) return;
+    const target = [...(ref.current?.querySelectorAll<HTMLButtonElement>(".bots-row") ?? [])].find(row => row.dataset.botId === pending.id);
+    target?.focus({ preventScroll: true });
+  });
   const models = useMemo(() => new Map(snapshot?.models.map(model => [model.model, model.displayName])), [snapshot?.models]);
   const teams = useMemo(() => new Map(snapshot?.teams?.map(team => [team.id, team])), [snapshot?.teams]);
   const rows = useMemo(() => {
@@ -59,8 +68,9 @@ export const BotSidebarList = memo(function BotSidebarList({ owner, search = '',
   return <div className="bots-list" ref={ref} onScroll={event => setTop(event.currentTarget.scrollTop)} onKeyDown={event => {
     if ((event.key !== "ArrowDown" && event.key !== "ArrowUp") || !(event.target as HTMLElement).closest(".bots-row")) return;
     const members = rows.filter((row): row is Extract<ListRow, { kind: "bot" }> => row.kind === "bot");
-    const index = members.findIndex(row => row.id === selected), next = members[Math.max(0, Math.min(members.length - 1, index + (event.key === "ArrowDown" ? 1 : -1)))];
-    if (next) { event.preventDefault(); select(next.id); ref.current?.scrollTo(0, next.offset); }
+    const origin = (event.target as HTMLElement).closest<HTMLElement>(".bots-row")!;
+    const index = members.findIndex(row => row.id === origin.dataset.botId), next = members[Math.max(0, Math.min(members.length - 1, index + (event.key === "ArrowDown" ? 1 : -1)))];
+    if (next) { event.preventDefault(); pendingFocus.current = { id: next.id, origin }; select(next.id); ref.current?.scrollTo(0, next.offset); setTop(next.offset); }
   }}>
     <div style={{ height: visible[0]?.offset ?? 0 }} aria-hidden="true" />
     {visible.map(row => row.kind === "heading" ? <button key={`group:${row.id}`} type="button" className="bots-team-heading" style={{ height: row.height }} aria-expanded={searching || !collapsed.has(row.id)} aria-disabled={searching || undefined} aria-label={`${row.name}, ${row.count} ${row.count === 1 ? "bot" : "bots"}`} onClick={() => { if (!searching) store.toggle(row.id); }}>
