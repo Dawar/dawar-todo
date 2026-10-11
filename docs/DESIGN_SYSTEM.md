@@ -316,3 +316,7 @@ Tool disclosures use semantic borders/text and 44px minimum summary targets; out
 ### Inline attachment images
 
 Inline images retain lazy loading and bind download/display state to the current owner, bot, attachment and attempt. Obsolete requests are aborted and object URLs revoked. Loading, offline and failed states use short labels; the shared Retry image button repeats only the attachment read. Decode failures also expose retry. Actual320 error/retry/success/offline and owner-change states plus1280 success observed with local SVG blobs. Connection changes remount scoped display state, preventing a revoked prior URL from reappearing after reconnect. Full chat integration, late-result races and decode-failure verification remain pending.
+
+### Message navigation rail
+
+The dense message rail retains 24px non-overlapping keyboard-selectable hit groups, bounded loaded-history geometry and explicit coverage descriptions; it uses semantic palette tokens. Dense groups open ControlledDialog with shared outline buttons and the existing 40-choice pages. Choices wrap at mobile widths; the footer wraps rather than clipping. Actual1280/320 dense choices, Escape returning focus to the rail, Enter reopening, second-page range and exact selected ID were observed with synthetic history. Empty/single-tick/earlier-loading/error/room/integrated geometry still need rendered acceptance.

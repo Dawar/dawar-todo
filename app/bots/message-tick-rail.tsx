@@ -1,8 +1,10 @@
 "use client";
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react';
-import { ChevronUp, X } from 'lucide-react';
+import { useId, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react';
+import { ChevronUp } from 'lucide-react';
 import { tickBuckets, tickLabel, type MessageTick } from './human-message-ticks';
 import './message-tick-rail.css';
+import { Button } from '@/components/ui/button';
+import { ControlledDialog } from '@/components/ui/controlled-dialog';
 
 type Props<T extends MessageTick> = {
   ticks: T[]; order: Map<string, number>; scroll: RefObject<HTMLDivElement | null>; content: RefObject<HTMLDivElement | null>;
@@ -11,18 +13,11 @@ type Props<T extends MessageTick> = {
 };
 
 function TickChoices<T extends MessageTick>({ ticks, onSelect, onClose, opener }: { ticks: T[]; onSelect: Props<T>['onSelect']; onClose: () => void; opener: HTMLElement | null }) {
-  const dialog = useRef<HTMLDialogElement>(null), title = useId();
   const [page, setPage] = useState(0), start = page * 40;
-  useEffect(() => {
-    const element = dialog.current; element?.showModal();
-    return () => { element?.close(); if (opener?.isConnected) opener.focus({ preventScroll: true }); };
-  }, [opener]);
-  return <dialog ref={dialog} className="bots-tick-choices" role="dialog" aria-labelledby={title} onCancel={event => { event.preventDefault(); onClose(); }}>
-    <header><h2 id={title}>Your messages</h2><button type="button" onClick={onClose} aria-label="Close message navigator"><X size={18}/></button></header>
-    <p>Choose the exact message to jump to.</p>
-    <div className="bots-tick-choice-list">{ticks.slice(start, start + 40).map(tick => <button type="button" key={tick.id} onClick={() => { onSelect(tick); onClose(); }}>{tickLabel(tick)}</button>)}</div>
-    {ticks.length > 40 && <footer><button type="button" disabled={!page} onClick={() => setPage(page - 1)}>Previous</button><span>{start + 1}–{Math.min(start + 40, ticks.length)} of {ticks.length}</span><button type="button" disabled={start + 40 >= ticks.length} onClick={() => setPage(page + 1)}>Next</button></footer>}
-  </dialog>;
+  return <ControlledDialog title="Your messages" description="Choose a message to jump to." className="bots-tick-choices" returnFocus={opener} onClose={onClose}>
+    <div className="bots-tick-choice-list">{ticks.slice(start, start + 40).map(tick => <Button variant="outline" type="button" key={tick.id} onClick={() => { onSelect(tick); onClose(); }}>{tickLabel(tick)}</Button>)}</div>
+    {ticks.length > 40 && <footer><Button variant="outline" type="button" disabled={!page} onClick={() => setPage(page - 1)}>Previous</Button><span aria-live="polite">{start + 1}–{Math.min(start + 40, ticks.length)} of {ticks.length}</span><Button variant="outline" type="button" disabled={start + 40 >= ticks.length} onClick={() => setPage(page + 1)}>Next</Button></footer>}
+  </ControlledDialog>;
 }
 
 /** Passive geometry only: no transcript scan, native read or draft mutation. */
@@ -83,7 +78,7 @@ export function MessageTickRail<T extends MessageTick>({ ticks, order, scroll, c
         const next = event.key === 'Home' ? 0 : event.key === 'End' ? buckets.length - 1 : Math.max(0, Math.min(buckets.length - 1, current + (event.key === 'ArrowUp' ? -1 : 1)));
         setFocus(next); event.currentTarget.querySelectorAll<HTMLButtonElement>('button')[next]?.focus({ preventScroll: true });
       }}>
-        <svg className="bots-tick-marks" width="24" height={geometry.height} aria-hidden="true"><path d={ticks.map(tick => `M7 ${markY(tick)}h10`).join(' ')} fill="none" stroke="#809b8c" strokeWidth="2"/>{ticks.filter(tick => tick.id === geometry.active).map(tick => <path key={tick.id} d={`M4 ${markY(tick)}h16`} fill="none" stroke="#216e4e" strokeWidth="3"/>)}</svg>
+        <svg className="bots-tick-marks" width="24" height={geometry.height} aria-hidden="true"><path d={ticks.map(tick => `M7 ${markY(tick)}h10`).join(' ')} fill="none" stroke="var(--muted-foreground)" strokeWidth="2"/>{ticks.filter(tick => tick.id === geometry.active).map(tick => <path key={tick.id} d={`M4 ${markY(tick)}h16`} fill="none" stroke="var(--primary)" strokeWidth="3"/>)}</svg>
         {buckets.map((bucket, index) => {
           const selected = bucket.ticks.some(tick => tick.id === geometry.active), multiple = bucket.ticks.length > 1;
           const label = multiple ? `Choose from ${bucket.ticks.length} of your messages · ${tickLabel(bucket.ticks[0])}` : `Jump to your message · ${tickLabel(bucket.ticks[0])}`;
