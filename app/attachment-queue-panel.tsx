@@ -1,5 +1,8 @@
 "use client";
-import { useEffect, useState } from "react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Card } from "@/components/ui/card";
+import { useEffect, useId, useState } from "react";
 import { listQueuedAttachments, retryQueuedAttachments, replaceQueuedAttachmentBytes, type QueuedAttachment } from "./offline-store";
 import { subscribeOfflineChanges } from "./offline-events";
 import { attachmentQueueCounts, attachmentLeaseExpiry, attachmentQueueMessage, hasAttachmentBytes } from "./attachment-queue";
@@ -49,29 +52,49 @@ export function AttachmentQueuePanel({ count, states }: { count: number; states:
   const currentStates = loaded ? attachmentQueueCounts(rows, now) : states;
   const active = (currentStates.uploading ?? 0) + (currentStates.claiming ?? 0) + (currentStates.checking ?? 0);
   const blocked = (currentStates.blocked ?? 0) + (currentStates["missing-bytes"] ?? 0) + (currentStates.interrupted ?? 0);
-  return <div className="mx-auto max-w-5xl px-4 pt-2 text-xs text-[#69716c] sm:px-6">
-    <p role="status">{loaded ? rows.length : count} attachment{(loaded ? rows.length : count) === 1 ? "" : "s"} pending · {active} in progress · {blocked} need attention</p>
-    <p>Transfers resume while the app is open and connected.</p>
-    <div className="flex flex-wrap gap-4 py-2">
-      <button type="button" className="underline" onClick={() => void action(() => retryQueuedAttachments())}>Retry uploads</button>
-      <button type="button" className="underline" aria-expanded={open} onClick={() => setOpen(!open)}>{open ? "Close attachment recovery" : "Review attachments"}</button>
-    </div>
-    {error && <p role="alert" className="text-red-700">{error}</p>}
-    {open && <ul aria-label="Pending attachment recovery" className="space-y-3 rounded-xl border p-3">
-      {rows.map((row) => <li key={row.localId} className="min-w-0 break-words border-b pb-3 [overflow-wrap:anywhere] last:border-0">
-        <p className="font-semibold">{row.fileName || "Attachment"}</p>
-        <p>{hasAttachmentBytes(row) ? `${row.blob.size.toLocaleString()} bytes saved on this device` : "No local file bytes available"}</p>
-        <p>{attachmentQueueMessage(row, now)}</p>
-        <div className="mt-2 flex flex-wrap gap-4">
-          <button type="button" className="underline" disabled={attachmentLeaseExpiry(row) > now} onClick={() => void action(() => retryQueuedAttachments(row.localId))}>Retry this attachment</button>
-          {hasAttachmentBytes(row) ? <button type="button" className="underline" onClick={() => saveFile(row)}>Save local file</button>
-            : <label className="min-w-0 w-full max-w-full underline">Choose original file<input type="file" className="block min-w-0 w-full max-w-full" disabled={attachmentLeaseExpiry(row) > now} onChange={(event) => {
-              const file = event.target.files?.[0];
-              if (file) void action(() => replaceQueuedAttachmentBytes(row.localId, file));
-              event.target.value = "";
-            }} /></label>}
+  return <AttachmentQueueView count={loaded ? rows.length : count} active={active} blocked={blocked} open={open} loaded={loaded} rows={rows} error={error} now={now} onToggle={() => setOpen(!open)} onRetry={(id) => void action(() => retryQueuedAttachments(id))} onSave={saveFile} onReplace={(row, file) => void action(() => replaceQueuedAttachmentBytes(row.localId, file))} />;
+}
+
+export function AttachmentQueueView({count, active, blocked, open, loaded, rows, error, now, onToggle, onRetry, onSave, onReplace}: {
+  count: number; active: number; blocked: number; open: boolean; loaded: boolean;
+  rows: QueuedAttachment[]; error: string; now: number;
+  onToggle: () => void; onRetry: (id?: string) => void;
+  onSave: (row: QueuedAttachment) => void;
+  onReplace: (row: QueuedAttachment, file: File) => void;
+}) {
+  const panelId = useId();
+  return <section aria-label="Attachment transfers" className="mx-auto max-w-5xl px-4 pt-3 sm:px-6">
+    <Card className="p-4 text-sm">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p role="status" className="font-medium">{count} attachment{count === 1 ? "" : "s"} pending</p>
+          <p className="mt-1 text-[13px] text-muted-foreground">{active} in progress · {blocked} need attention</p>
         </div>
-      </li>)}
-    </ul>}
-  </div>;
+        <div className="flex flex-wrap gap-2">
+          <Button type="button" variant="outline" onClick={() => onRetry()}>Retry uploads</Button>
+          <Button type="button" variant="ghost" aria-expanded={open} aria-controls={panelId} onClick={onToggle}>{open ? "Hide details" : "Review attachments"}</Button>
+        </div>
+      </div>
+      <p className="mt-2 text-[13px] text-muted-foreground">Transfers resume while the app is open and connected.</p>
+      {error && <p role="alert" className="mt-3 break-words rounded-md bg-destructive/10 p-3 text-destructive">{error}</p>}
+      {open && <div id={panelId} className="mt-4 border-t border-border pt-4">
+        {!loaded ? <p role="status" className="text-muted-foreground">Loading attachments…</p> : rows.length === 0 ? <p className="text-muted-foreground">No pending attachments.</p> : <ul aria-label="Pending attachment recovery" className="space-y-4">
+          {rows.map((row) => <li key={row.localId} className="min-w-0 break-words border-b border-border pb-4 [overflow-wrap:anywhere] last:border-0 last:pb-0">
+            <p className="font-medium">{row.fileName || "Attachment"}</p>
+            <p className="mt-1 text-[13px] text-muted-foreground">{hasAttachmentBytes(row) ? `${row.blob.size.toLocaleString()} bytes saved on this device` : "No local file bytes available"}</p>
+            <p className="mt-1 text-[13px] text-muted-foreground">{attachmentQueueMessage(row, now)}</p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <Button type="button" variant="outline" disabled={attachmentLeaseExpiry(row) > now} onClick={() => onRetry(row.localId)}>Retry attachment</Button>
+              {hasAttachmentBytes(row) ? <Button type="button" variant="ghost" onClick={() => onSave(row)}>Save local file</Button>
+                : <label className="grid w-full min-w-0 gap-2 text-sm font-medium">Choose original file<Input type="file" disabled={attachmentLeaseExpiry(row) > now} onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  if (file) onReplace(row, file);
+                  event.target.value = "";
+                }} /></label>}
+            </div>
+          </li>)}
+        </ul>}
+      </div>}
+    </Card>
+  </section>;
 }
