@@ -53,7 +53,7 @@ export async function POST(request: Request) {
     });
     return Response.json(prepared, { status: 201 });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "The image upload could not be prepared.";
+    const message = error instanceof Error ? error.message : "The attachment upload could not be prepared.";
     const inputError = /choose|image|audio|video|media|voice|file|document|archive|limited|invalid|large|available|duration|match/i.test(message);
     console.error("[todo-api] draft attachment preparation failed", { durationMs: Date.now() - startedAt, error });
     const details = attachmentErrorDetails(error);
@@ -85,7 +85,7 @@ export async function PATCH(request: Request) {
     });
     return Response.json({ attachment });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "The image upload could not be finalized.";
+    const message = error instanceof Error ? error.message : "The attachment upload could not be finalized.";
     const inputError = /image|audio|video|media|voice|file|document|archive|limited|invalid|large|available|expected|duration|match/i.test(message);
     console.error("[todo-api] draft attachment finalization failed", { durationMs: Date.now() - startedAt, error });
     const details = attachmentErrorDetails(error, "finalize");

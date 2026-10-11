@@ -11,7 +11,7 @@ function signedInEmail(request: Request) {
 
 function chatGptOnly() {
   return Response.json(
-    { error: "API tokens can only be managed after signing in with ChatGPT." },
+    { error: "Sign in to manage API tokens." },
     { status: 403, headers: { "Cache-Control": "no-store" } },
   );
 }

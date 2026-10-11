@@ -8,7 +8,7 @@ export async function POST(request: Request) {
     const owner = botsOwner(request, environment);
     if (!environment.BOTS_RELAY_URL || !environment.BOTS_TICKET_SECRET)
       return Response.json(
-        { error: "Bots are waiting for the VM relay to be configured." },
+        { error: "The bot connection is not configured yet." },
         { status: 503 },
       );
     const payload = (await request.json().catch(() => ({}))) as {

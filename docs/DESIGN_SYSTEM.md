@@ -502,3 +502,7 @@ Task Request validation moves keyboard focus to its error summary after an inval
 Protected guest forms share a 16px vertical rhythm with owner dialogs. Submission receipts are separated in a muted bordered panel. Failed guest actions bring their alert into view without changing retained input or retry identities.
 
 Bot Details uses the shared Radix dialog surface as a full-height right drawer. Tabs retain React Activity state; modal focus, Escape, nested dialog handling, and opener restoration use the shared dialog behavior instead of a separate document key handler.
+
+### API feedback terminology
+
+User-facing API errors use product terms: “Sign in” without naming an obsolete authentication provider, “attachment” for routes accepting multiple file types, and “bot connection” rather than deployment-specific VM/relay details. Status codes, authorization, operation identities and recovery behavior remain unchanged. Service-only routes have no rendered design surface; their source audit is tracked separately from end-to-end feature acceptance.
