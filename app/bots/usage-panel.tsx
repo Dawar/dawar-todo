@@ -8,6 +8,7 @@ import { UsageHistoryView } from "./usage-history";
 import type { UsageHistory, UsageHistoryRange } from "../../lib/usage-history";
 import "./usage-history.css";
 import { Button } from "@/components/ui/button";
+import { NativeSelect } from "@/components/ui/native-select";
 
 type TokenField = keyof NonNullable<BotThreadUsage["tokens"]>;
 const tokenFields: { key: TokenField; label: string }[] = [
@@ -37,11 +38,29 @@ function tokenText(metric: BotUsageMetric | undefined, groupCount: number | unde
 }
 
 export function UsagePanel({ bot, online }: { bot?: Bot; online: boolean }) {
-  useSyncExternalStore(botsClient.subscribe, () => `${botsClient.owner}:${botsClient.snapshot?.capabilities?.accountUsageHistory ?? 0}`, () => "");
+  useSyncExternalStore(botsClient.subscribe, () => JSON.stringify([botsClient.owner, botsClient.snapshot?.capabilities?.accountUsageHistory,
+    botsClient.snapshot?.bots.map(value => [value.id, value.name, value.deletedAt, value.nodeId, value.placementEpoch])]), () => "");
   const owner = botsClient.owner, historySupported = botsClient.snapshot?.capabilities?.accountUsageHistory === 1;
-  return <UsagePanelContents key={owner} bot={bot} online={online} owner={owner} historySupported={historySupported} />;
+  return <UsageAccountSource key={owner} bot={bot} online={online} owner={owner} historySupported={historySupported} />;
 }
-function UsagePanelContents({ bot, online, owner, historySupported }: { bot?: Bot; online: boolean; owner: string | null; historySupported: boolean }) {
+function UsageAccountSource({ bot, online, owner, historySupported }: { bot?: Bot; online: boolean; owner: string; historySupported: boolean }) {
+  const [selected, setSelected] = useState<string | null>(null);
+  const bots = botsClient.snapshot?.bots.filter(value => !value.deletedAt) ?? [];
+  const sourceId = bot?.id ?? selected ?? bots[0]?.id;
+  const source = bots.find(value => value.id === sourceId);
+  return <>
+    {!bot && bots.length > 0 && <label className="mb-5 block text-sm font-medium">
+      Account used by
+      <NativeSelect className="mt-2" value={source?.id ?? ""} onChange={event => setSelected(event.target.value)}>
+        {!source && <option value="" disabled>Choose an available bot</option>}
+        {bots.map(value => <option key={value.id} value={value.id}>{value.name}</option>)}
+      </NativeSelect>
+    </label>}
+    {source ? <UsagePanelContents key={JSON.stringify([source.id, source.nodeId, source.placementEpoch])} bot={bot} accountBotId={source.id} online={online} owner={owner} historySupported={historySupported} />
+      : <p className="bots-muted" role="status">{bots.length ? "Choose an available bot to view its account usage." : "Account usage will be available when a bot is connected."}</p>}
+  </>;
+}
+function UsagePanelContents({ bot, accountBotId, online, owner, historySupported }: { bot?: Bot; accountBotId: string; online: boolean; owner: string | null; historySupported: boolean }) {
   const [dataOwner, setDataOwner] = useState(owner);
   const [storedQuota, setQuota] = useState<BotAccountQuota | null>(null);
   const [storedUsage, setUsage] = useState<BotThreadUsage | null>(null);
@@ -76,7 +95,7 @@ function UsagePanelContents({ bot, online, owner, historySupported }: { bot?: Bo
       setDataOwner(owner);
       setLoading(true);
       const [quotaResult, threadResult] = await Promise.all([
-        botsClient.rpc<BotAccountQuota>("usage.account").catch(() => null),
+        botsClient.rpc<BotAccountQuota>("usage.account", accountBotId).catch(() => null),
         botId ? botsClient.rpc<BotThreadUsage>("usage.bot", botId).catch(() => null) : Promise.resolve(null),
       ]);
       if (canceled || botsClient.owner !== owner) return;
@@ -86,7 +105,7 @@ function UsagePanelContents({ bot, online, owner, historySupported }: { bot?: Bo
       setHistoryRefresh(value => value + 1);
     })();
     return () => { canceled = true; };
-  }, [botId, online, refresh, owner]);
+  }, [botId, accountBotId, online, refresh, owner]);
 
   useEffect(() => {
     const receive = (event: { type: string; data: unknown }) => {
@@ -116,8 +135,8 @@ function UsagePanelContents({ bot, online, owner, historySupported }: { bot?: Bo
       setHistoryLoading(true); setHistoryError(null);
       try {
         const [value, cachedQuota] = await Promise.all([
-          botsClient.rpc<UsageHistory>("usage.history", undefined, { range, cursor }),
-          botsClient.rpc<BotAccountQuota>("usage.account", undefined, { refresh: false }),
+          botsClient.rpc<UsageHistory>("usage.history", accountBotId, { range, cursor }),
+          botsClient.rpc<BotAccountQuota>("usage.account", accountBotId, { refresh: false }),
         ]);
         if (canceled || botsClient.owner !== owner || accountGeneration.current !== requestedGeneration) return;
         if (value.version !== 1) throw Error("This service returned an unsupported usage history version.");
@@ -131,7 +150,7 @@ function UsagePanelContents({ bot, online, owner, historySupported }: { bot?: Bo
       }
     })();
     return () => { canceled = true; };
-  }, [owner, online, historySupported, range, cursor, historyRefresh]);
+  }, [owner, accountBotId, online, historySupported, range, cursor, historyRefresh]);
 
   const resetCredits = safeInteger(quota?.availableResetCredits);
   const creditValue = safeInteger(usage?.estimatedCreditsMicros);
@@ -142,10 +161,10 @@ function UsagePanelContents({ bot, online, owner, historySupported }: { bot?: Bo
 
   return <section className="bots-usage">
     <div className="bots-usage-heading">
-      <strong>Account-wide Codex usage</strong>
+      <strong>Codex account usage</strong>
       <Button variant="outline" type="button" onClick={refreshUsage} disabled={!online || loading}>Refresh</Button>
     </div>
-    <p className="bots-muted">This quota is shared with other Codex activity on the same account. It cannot be assigned to individual bots.</p>
+    <p className="bots-muted">This quota is shared with other activity using the same Codex account. It is not a per-bot allowance.</p>
     {!online && <p>Reconnect to view usage.</p>}
     {online && loading && <p role="status">Reading account usage…</p>}
     {online && !loading && !quota && <p>Account usage is unavailable right now. Try refreshing.</p>}

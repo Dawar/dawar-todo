@@ -11,6 +11,9 @@ export type BotProfilePreparation = { botId: string; threadId: string | null; st
 export type BotTeam = { id: string; name: string; color: string; position: number; revision: number; memberCount: number; createdAt: string; updatedAt: string };
 export type BotTeamDetail = Omit<BotTeam, "memberCount"> & { memory: string; workspace: string; members: { id: string; name: string; archived: boolean }[] };
 export type Bot = {
+  /** Assigned execution source supplied by the portable hub, absent on legacy services. */
+  nodeId?: string;
+  placementEpoch?: number;
   profilePreparation?: BotProfilePreparation | null;
   extension?: number;
   deletedAt?: string;
