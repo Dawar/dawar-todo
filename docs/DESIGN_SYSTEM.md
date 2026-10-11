@@ -396,3 +396,5 @@ Chat controls, history feedback, skeletons and focus states use semantic tokens.
 The main composer places its full-width writing area above a compact action row. Attachment, clipboard, queue and Stop/Send controls retain44px targets without squeezing the textarea. DOM and keyboard order follow the visible writing-area-then-actions layout.
 
 Workspace navigation, composer, recovery and status actions use the shared Button primitive. Existing accessible names, disabled predicates, submit behavior and original action handlers are retained.
+
+Machine setup prioritizes the download and pairing steps. Integrity metadata lives in a keyboard-accessible Installer details disclosure; fingerprints remain readable and wrap. Confirmation checkboxes align to the first text line. Enrollment and session handlers are unchanged.
