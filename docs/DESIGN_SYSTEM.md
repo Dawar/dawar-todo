@@ -430,3 +430,7 @@ The legacy clipboard fallback always removes its temporary text field, including
 Unreadable saved queue actions and team changes show a concise recovery message instead of parser or browser-storage diagnostics. The warning retains the Retry control and tells the user to preserve site storage; action identity, saved bytes and dispatch guards are unchanged.
 
 Team recovery uses one warning for an unconfirmed action, with the existing Check status control. Definite errors remain alerts. Team metadata uses13px text; compact member-count badges retain12px.
+
+### Shared field validation
+
+Input, Textarea and NativeSelect use a destructive border and focus ring when `aria-invalid` is true. Consumers supply the associated error text; color is not the only error signal. Default and compact buttons are 36px high on desktop and 44px on mobile; compact changes horizontal padding. Disabled controls retain their native semantics.
