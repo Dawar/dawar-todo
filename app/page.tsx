@@ -54,7 +54,7 @@ import { zonedDateTimeInputValue, zonedLocalDateTimeToUtc } from "../lib/zoned-d
 import { AttachmentQueuePanel } from "./attachment-queue-panel";
 import { attachmentQueueMessage, hasAttachmentBytes } from "./attachment-queue";
 import { SiteHeader } from "./site-header";
-import { CreateProjectDialog, CustomSnoozeDialog } from "./task-dialogs";
+import { CreateProjectDialog, CustomSnoozeDialog, AssignProjectDialog, DeleteProjectDialog } from "./task-dialogs";
 import { KeyboardShortcutsDialog } from "./keyboard-shortcuts-dialog";
 import { PullGesturePill } from "./pull-to-refresh";
 import { MarkdownPreview } from "./markdown-preview";
@@ -5158,136 +5158,9 @@ export default function Home() {
 
       {newProjectOpen && <CreateProjectDialog name={newProjectName} error={newProjectError} busy={creatingProject} onName={value => { setNewProjectName(value); setNewProjectError(""); }} onClose={closeNewProjectDialog} onSubmit={createProject} />}
 
-      {projectDeleteDialog && (() => {
-        const noteCount = todos.filter((todo) => todo.project === projectDeleteDialog.name).length;
-        const alternatives = registeredProjects.filter((name) => name !== projectDeleteDialog.name);
-        return (
-          <div className="fixed inset-0 z-50 flex items-end justify-center overflow-x-hidden sm:items-center sm:p-5" role="dialog" aria-modal="true" aria-labelledby="delete-project-title">
-            <button type="button" aria-label="Close delete project dialog" onClick={closeProjectDeleteDialog} className="absolute inset-0 bg-black/35 backdrop-blur-[2px]" />
-            <form onSubmit={deleteProject} className="relative max-h-[92dvh] w-full max-w-full overflow-x-hidden overflow-y-auto rounded-t-3xl bg-white px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-5 shadow-2xl sm:max-w-md sm:rounded-3xl sm:p-6">
-              <div className="flex min-w-0 items-start justify-between gap-4">
-                <div className="min-w-0">
-                  <span className="mb-3 grid h-11 w-11 place-items-center rounded-xl bg-red-50 text-red-700"><ActionIcon name="delete" className="h-5 w-5" /></span>
-                  <h3 id="delete-project-title" className="break-words text-lg font-semibold text-[#202522]">Delete {projectDeleteDialog.name}?</h3>
-                  <p className="mt-1 text-sm leading-5 text-[#7c847f]">{noteCount ? `This project contains ${noteCount} ${noteCount === 1 ? "task" : "tasks"}. Choose what happens to them.` : "This project is empty and can be safely removed."}</p>
-                </div>
-                <button type="button" onClick={closeProjectDeleteDialog} disabled={deletingProject} className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#f1f2f0] text-[#4f5752] hover:bg-[#e8eae7] disabled:opacity-50" aria-label="Close delete project dialog" title="Close"><ActionIcon name="close" /></button>
-              </div>
+      {projectDeleteDialog && <DeleteProjectDialog name={projectDeleteDialog.name} count={todos.filter(todo => todo.project === projectDeleteDialog.name).length} alternatives={registeredProjects.filter(name => name !== projectDeleteDialog.name)} mode={projectDeleteDialog.mode} target={projectDeleteDialog.targetProject} error={projectDeleteError} busy={deletingProject} onMode={mode => setProjectDeleteDialog(current => current ? { ...current, mode, targetProject: mode === "reassign" ? current.targetProject || registeredProjects.filter(name => name !== current.name)[0] || "" : current.targetProject } : current)} onTarget={targetProject => { setProjectDeleteDialog(current => current ? { ...current, targetProject } : current); setProjectDeleteError(""); }} onClose={closeProjectDeleteDialog} onSubmit={deleteProject} />}
 
-              {noteCount > 0 && (
-                <fieldset className="mt-5 space-y-2">
-                  <legend className="sr-only">Choose what happens to project tasks</legend>
-                  <label className={classNames("block rounded-2xl border p-4 transition", projectDeleteDialog.mode === "reassign" ? "border-[#216e4e]/35 bg-[#f3f8f5]" : "border-black/[0.09]") }>
-                    <span className="flex items-start gap-3">
-                      <input
-                        type="radio"
-                        name="delete-project-mode"
-                        checked={projectDeleteDialog.mode === "reassign"}
-                        disabled={!alternatives.length}
-                        onChange={() => setProjectDeleteDialog((current) => current ? { ...current, mode: "reassign", targetProject: current.targetProject || alternatives[0] || "" } : current)}
-                        className="mt-0.5 h-4 w-4 accent-[#216e4e]"
-                      />
-                      <span className="min-w-0 flex-1">
-                        <span className="block text-sm font-semibold text-[#303632]">Move tasks to another project</span>
-                        <span className="mt-0.5 block text-xs leading-5 text-[#7c847f]">Keep every task and reassign it before removing this project.</span>
-                      </span>
-                    </span>
-                    {projectDeleteDialog.mode === "reassign" && alternatives.length > 0 && (
-                      <select
-                        autoFocus
-                        value={projectDeleteDialog.targetProject}
-                        onChange={(event) => { setProjectDeleteDialog((current) => current ? { ...current, targetProject: event.target.value } : current); setProjectDeleteError(""); }}
-                        className="mt-3 h-11 w-full rounded-xl border border-black/[0.1] bg-white px-3 text-sm text-[#303632] outline-none focus:border-[#216e4e]/50"
-                        aria-label="Destination project"
-                      >
-                        {alternatives.map((name) => <option key={name} value={name}>{name}</option>)}
-                      </select>
-                    )}
-                    {!alternatives.length && <span className="mt-2 block pl-7 text-xs text-[#8a918d]">Create another project first to use this option.</span>}
-                  </label>
-
-                  <label className={classNames("flex items-start gap-3 rounded-2xl border p-4 transition", projectDeleteDialog.mode === "delete" ? "border-red-300 bg-red-50" : "border-black/[0.09]")}>
-                    <input type="radio" name="delete-project-mode" checked={projectDeleteDialog.mode === "delete"} onChange={() => setProjectDeleteDialog((current) => current ? { ...current, mode: "delete" } : current)} className="mt-0.5 h-4 w-4 accent-red-700" />
-                    <span className="min-w-0 flex-1">
-                      <span className="block text-sm font-semibold text-red-800">Delete the tasks too</span>
-                      <span className="mt-0.5 block text-xs leading-5 text-red-700/75">Remove the project and all {noteCount} {noteCount === 1 ? "task" : "tasks"} assigned to it.</span>
-                    </span>
-                  </label>
-                </fieldset>
-              )}
-
-              {projectDeleteError && <p role="alert" className="mt-3 text-sm font-medium text-red-700">{projectDeleteError}</p>}
-              <div className="mt-6 flex items-center justify-end gap-2">
-                <button type="button" onClick={closeProjectDeleteDialog} disabled={deletingProject} className="inline-flex h-11 items-center gap-2 rounded-xl px-4 text-sm font-semibold text-[#69716c] hover:bg-[#f3f4f2] disabled:opacity-50"><ActionIcon name="cancel" />Cancel</button>
-                <button type="submit" disabled={deletingProject || (noteCount > 0 && projectDeleteDialog.mode === "reassign" && !projectDeleteDialog.targetProject)} className="inline-flex h-11 items-center gap-2 rounded-xl bg-red-700 px-5 text-sm font-semibold text-white hover:bg-red-800 disabled:opacity-50"><ActionIcon name="delete" />{deletingProject ? "Deleting…" : projectDeleteDialog.mode === "delete" && noteCount > 0 ? "Delete project & tasks" : "Delete project"}</button>
-              </div>
-            </form>
-          </div>
-        );
-      })()}
-
-      {projectDialog && (
-        <div className="fixed inset-0 z-[60] flex items-end justify-center overflow-x-hidden sm:items-center sm:p-5" role="dialog" aria-modal="true" aria-labelledby="project-dialog-title">
-          <button type="button" aria-label="Close project assignment" onClick={closeProjectAssignment} className="absolute inset-0 bg-black/35 backdrop-blur-[2px]" />
-          <form onSubmit={saveProjectAssignment} className="relative max-h-[92dvh] w-full max-w-full overflow-x-hidden overflow-y-auto rounded-t-3xl bg-white px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-5 shadow-2xl sm:max-w-md sm:rounded-3xl sm:p-6">
-            <div className="flex min-w-0 items-start justify-between gap-4">
-              <div className="min-w-0">
-                <h3 id="project-dialog-title" className="text-lg font-semibold text-[#202522]">Assign project</h3>
-                <p className="mt-1 text-sm leading-5 text-[#7c847f]">
-                  {projectDialog.captureDraft
-                    ? "Choose a project for this new task before adding it, or leave it unassigned."
-                    : <>Assign {projectDialog.ids.length === 1 ? "this task" : `these ${projectDialog.ids.length} tasks`} to an existing or new project, or leave {projectDialog.ids.length === 1 ? "it" : "them"} unassigned.</>}
-                </p>
-              </div>
-              <button type="button" onClick={closeProjectAssignment} disabled={savingProject} className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#f1f2f0] text-[#4f5752] hover:bg-[#e8eae7] disabled:opacity-50" aria-label="Close project assignment" title="Close"><ActionIcon name="close" /></button>
-            </div>
-
-            <label className="mt-5 block min-w-0">
-              <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-[#69716c]">Project</span>
-              <select
-                autoFocus
-                value={projectDialog.selection}
-                onChange={(event) => {
-                  setProjectDialog((current) => current ? { ...current, selection: event.target.value } : current);
-                  setProjectDialogError("");
-                }}
-                className="h-12 w-full min-w-0 max-w-full rounded-xl border border-black/[0.1] bg-white px-3 text-sm text-[#303632] outline-none focus:border-[#216e4e]/50 focus:ring-3 focus:ring-[#216e4e]/10"
-              >
-                <option value="">Choose a project…</option>
-                <option value={UNASSIGNED_PROJECT}>Unassigned</option>
-                {projects.map((name) => <option key={name} value={name}>{name}</option>)}
-                <option value={CREATE_PROJECT}>Create a new project…</option>
-              </select>
-            </label>
-
-            {projectDialog.selection === CREATE_PROJECT && (
-              <label className="mt-3 block min-w-0">
-                <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-[#69716c]">New project name</span>
-                <input
-                  value={projectDialog.newProject}
-                  onChange={(event) => {
-                    setProjectDialog((current) => current ? { ...current, newProject: event.target.value } : current);
-                    setProjectDialogError("");
-                  }}
-                  placeholder="e.g. Reference, Home, Work"
-                  maxLength={120}
-                  className="h-12 w-full min-w-0 max-w-full rounded-xl border border-black/[0.1] px-3 text-[16px] outline-none focus:border-[#216e4e]/50 focus:ring-3 focus:ring-[#216e4e]/10"
-                />
-              </label>
-            )}
-
-            {projectDialogError && <p role="alert" className="mt-3 text-sm font-medium text-red-700">{projectDialogError}</p>}
-
-            <div className="mt-6 flex items-center justify-end gap-2">
-              <button type="button" onClick={closeProjectAssignment} disabled={savingProject} className="inline-flex h-11 items-center gap-2 rounded-xl px-4 text-sm font-semibold text-[#69716c] hover:bg-[#f3f4f2] disabled:opacity-50"><ActionIcon name="cancel" />Cancel</button>
-              <button type="submit" disabled={savingProject || !projectDialog.selection || (projectDialog.selection === CREATE_PROJECT && !projectDialog.newProject.trim())} className="inline-flex h-11 items-center gap-2 rounded-xl bg-[#216e4e] px-5 text-sm font-semibold text-white hover:bg-[#195d41] disabled:opacity-50">
-                <ActionIcon name="move" />
-                {savingProject ? "Saving…" : projectDialog.captureDraft ? "Use project" : "Assign project"}
-              </button>
-            </div>
-          </form>
-        </div>
-      )}
+      {projectDialog && <AssignProjectDialog count={projectDialog.ids.length} capture={Boolean(projectDialog.captureDraft)} selection={projectDialog.selection} newName={projectDialog.newProject} projects={projects} createValue={CREATE_PROJECT} unassignedValue={UNASSIGNED_PROJECT} error={projectDialogError} busy={savingProject} onSelection={selection => { setProjectDialog(current => current ? { ...current, selection } : current); setProjectDialogError(""); }} onName={newProject => { setProjectDialog(current => current ? { ...current, newProject } : current); setProjectDialogError(""); }} onClose={closeProjectAssignment} onSubmit={saveProjectAssignment} />}
 
       {editingTodo && editDraft && (
         <div className="fixed inset-0 z-50 flex items-end justify-center overflow-x-hidden sm:items-center sm:p-5">
