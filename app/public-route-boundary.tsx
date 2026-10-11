@@ -2,6 +2,8 @@
 import { lazy, Suspense, useEffect, useState, type ReactNode } from 'react';
 import { usePathname } from 'next/navigation';
 import { taskRequestRoute } from './task-request-route';
+import { PortableSessionBoundary } from './portable-session-boundary';
+import { SignedOut } from './signed-out';
 const Guest = lazy(() => import('./task-request/page'));
 export function PublicRouteBoundary({ children }: {
     children: ReactNode;
@@ -21,5 +23,6 @@ export function PublicRouteBoundary({ children }: {
         return <p role="status">Opening…</p>;
     if (taskRequestRoute(path))
         return <Suspense fallback={<p role="status">Opening protected form…</p>}><Guest /></Suspense>;
-    return children;
+    if (path === '/signout-with-chatgpt' && process.env.NEXT_PUBLIC_DAWAR_PORTABLE === '1') return <SignedOut />;
+    return <PortableSessionBoundary>{children}</PortableSessionBoundary>;
 }

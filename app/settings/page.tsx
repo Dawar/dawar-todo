@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { ExecutionMachines } from "./execution-machines";
+import { AccountSession } from "./account-session";
 import { ActionIcon } from "../action-icon";
 import {
   appleMobileBadgeRequiresNotificationPermission,
@@ -911,6 +912,7 @@ export default function SettingsPage() {
           <p className="mt-2 text-sm leading-6 text-[#69716c]">Control task timing, AI behavior, and device features.</p>
         </div>
 
+        <AccountSession />
         <ExecutionMachines />
         <section aria-labelledby="sync-diagnostics-title" className="mb-6 rounded-2xl border border-black/[0.07] bg-white p-5 shadow-[0_10px_35px_rgba(30,45,36,0.06)] sm:p-7">
           <div className="flex items-start gap-3">
