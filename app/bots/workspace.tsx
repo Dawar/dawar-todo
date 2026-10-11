@@ -546,7 +546,7 @@ export function BotsWorkspace() {
                   ? client.error
                   : "Connecting…"}
             </span>
-            <button
+            <Button variant="ghost" size="icon"
               className="bots-icon-button"
               aria-label="Reconnect"
               onClick={() => {
@@ -556,43 +556,43 @@ export function BotsWorkspace() {
               }}
             >
               <RefreshCw size={14} />
-            </button>
+            </Button>
           </div>
         </aside>
         <Activity mode={navigation === "rooms" ? "visible" : "hidden"}>{roomId ? <RoomConversation key={`${owner}:${roomBotId}:${roomId}`} owner={owner} botId={roomBotId} roomId={roomId} bots={bots} online={online} onBack={closeRoom}/> : <section className="bots-conversation"><div className="bots-empty"><MessagesSquare size={34}/><h2>Conversations</h2><p>Open or create a room with named bots.</p></div></section>}</Activity>
         <Activity mode={navigation === "bots" ? "visible" : "hidden"}>
         {gallery ? <ArtifactGallery key={`${owner}:${gallery}:${gallery === "attachments" ? bot?.id : "all"}`} owner={owner} online={online} bots={bots} bot={gallery === "attachments" ? bot : undefined} onClose={closeGallery} /> : <section className="bots-conversation">
           <header className="bots-conversation-heading">
-            <button
+            <Button variant="ghost" size="icon"
               className="bots-icon-button bots-back"
               aria-label="Back to bots"
               onClick={() => select(null)}
             >
               <ArrowLeft size={20} />
-            </button>
+            </Button>
             {bot ? (
               <>
                 <Avatar bot={bot} small />
-                {snapshot?.capabilities?.botDesktops === 1 && <button className="bots-icon-button bots-desktop-mobile-open" aria-label="Show bot desktop" onClick={() => { setDetailsSection("desktop"); setProfile(true); }}><span aria-hidden="true">▣</span></button>}
+                {snapshot?.capabilities?.botDesktops === 1 && <Button variant="ghost" size="icon" className="bots-icon-button bots-desktop-mobile-open" aria-label="Show bot desktop" onClick={() => { setDetailsSection("desktop"); setProfile(true); }}><span aria-hidden="true">▣</span></Button>}
                 <div className="bots-header-title">
                   <strong>{bot.name}{bot.extension&&<span className="bots-extension" title="Ctrl (or Alt) + extension switches bots; add Shift to move the composer">#{bot.extension}</span>}</strong>
 
                 </div>
                 {single && snapshot?.capabilities?.nativeGoals === 1 && <GoalIndicator bot={bot} work={work} onOpen={() => { setDetailsSection('goals'); setProfile(true); }} />}
-                {snapshot?.capabilities?.operatorCalls === 1 && !bot.archived && <button className="bots-icon-button" aria-label={`Call ${bot.name}`} onClick={() => { setCallBotId(bot.id); setShowCall(true); }}><Phone size={18} /></button>}
-                {promptQueue.length > 0 && <button className="bots-icon-button bots-up-next-link" aria-label={`Show ${promptQueue.length} queued ${promptQueue.length === 1 ? "message" : "messages"}`} onClick={() => {
+                {snapshot?.capabilities?.operatorCalls === 1 && !bot.archived && <Button variant="ghost" size="icon" className="bots-icon-button" aria-label={`Call ${bot.name}`} onClick={() => { setCallBotId(bot.id); setShowCall(true); }}><Phone size={18} /></Button>}
+                {promptQueue.length > 0 && <Button variant="ghost" size="icon" className="bots-icon-button bots-up-next-link" aria-label={`Show ${promptQueue.length} queued ${promptQueue.length === 1 ? "message" : "messages"}`} onClick={() => {
                   const queue = screenRef.current?.querySelector<HTMLElement>(".bots-prompt-queue");
                   queue?.focus({ preventScroll: true });
                   queue?.scrollIntoView({ block: "nearest" });
-                }}><ListOrdered size={19} aria-hidden="true" /><span>{promptQueue.length}</span></button>}
-                <button
+                }}><ListOrdered size={19} aria-hidden="true" /><span>{promptQueue.length}</span></Button>}
+                <Button variant="ghost" size="icon"
                   className="bots-icon-button"
                   aria-label="Bot details"
                   aria-expanded={profile}
                   onClick={() => setProfile((v) => !v)}
                 >
                   <MoreHorizontal size={22} />
-                </button>
+                </Button>
               </>
             ) : (
               <span>Your bots</span>
@@ -601,7 +601,7 @@ export function BotsWorkspace() {
           {(error || client.error) && (
             <div className="bots-banner" role="alert">
               <span>{error || client.error}</span>
-              <button
+              <Button variant="ghost" size="icon"
                 aria-label="Dismiss error"
                 onClick={() => {
                   setError("");
@@ -610,21 +610,21 @@ export function BotsWorkspace() {
                 }}
               >
                 <X size={15} />
-              </button>
+              </Button>
             </div>
           )}
           {bot?.error && (
             <div className="bots-banner">
               <span>{bot.error}</span>
               {!bot.threadId && (
-                <button
+                <Button variant="ghost" size="sm"
                   disabled={!online || busy}
                   onClick={() =>
                     void action(() => client.rpc("bots.recover", bot.id))
                   }
                 >
                   Retry setup
-                </button>
+                </Button>
               )}
             </div>
           )}
@@ -664,7 +664,7 @@ export function BotsWorkspace() {
                     }
                   />
                 ))}
-                <div className="bots-conversation-presence"><Avatar bot={bot} small /><button type="button" onClick={() => { setDetailsSection("next"); setProfile(true); }} aria-label="Open work details" title={online ? workLabel(work, bot) ?? humanStatus(bot, online) : "Offline"}>{online ? workLabel(work, bot) ?? humanStatus(bot, online) : "Offline"}</button><ActiveTurnElapsed owner={owner} bot={bot} work={work} online={online}/>{snapshot?.capabilities?.peerInbox === 1 && <DiscussionStatus status={discussions} bots={bots} botId={bot.id} online={online} onOpen={openDiscussion} />}</div>
+                <div className="bots-conversation-presence"><Avatar bot={bot} small /><Button variant="ghost" size="sm" type="button" onClick={() => { setDetailsSection("next"); setProfile(true); }} aria-label="Open work details" title={online ? workLabel(work, bot) ?? humanStatus(bot, online) : "Offline"}>{online ? workLabel(work, bot) ?? humanStatus(bot, online) : "Offline"}</Button><ActiveTurnElapsed owner={owner} bot={bot} work={work} online={online}/>{snapshot?.capabilities?.peerInbox === 1 && <DiscussionStatus status={discussions} bots={bots} botId={bot.id} online={online} onOpen={openDiscussion} />}</div>
               </BotConversation>
               {!bot.archived && (
                 <>
@@ -717,7 +717,7 @@ export function BotsWorkspace() {
                       }}
                     />
                     <div className="bots-composer-actions">
-                    <button
+                    <Button variant="ghost" size="icon"
                       type="button"
                       className="bots-icon-button"
                       aria-label="Attach file"
@@ -725,14 +725,14 @@ export function BotsWorkspace() {
                       onClick={() => fileRef.current?.click()}
                     >
                       <Paperclip size={20} />
-                    </button>
+                    </Button>
                     {(
                       <>
-                      <button type="button" className="bots-icon-button" title="Copy composer (text and attachments)" aria-label="Copy composer"
-                        disabled={!composer?.ready||sending||transferBusy||(!draft&&!uploads.length&&!composer?.draft.reply)} onClick={()=>void copyComposer()}><Copy size={19}/></button>
-                      <button type="button" className="bots-icon-button" title="Paste copied composer" aria-label="Paste composer"
-                        disabled={!composer?.ready||sending||transferBusy||!botComposers.clipboard(owner)} onClick={()=>void pasteComposer()}><ClipboardPaste size={19}/></button>
-                      <button type="button" className="bots-icon-button bots-queue-icon"
+                      <Button variant="ghost" size="icon" type="button" className="bots-icon-button" title="Copy composer (text and attachments)" aria-label="Copy composer"
+                        disabled={!composer?.ready||sending||transferBusy||(!draft&&!uploads.length&&!composer?.draft.reply)} onClick={()=>void copyComposer()}><Copy size={19}/></Button>
+                      <Button variant="ghost" size="icon" type="button" className="bots-icon-button" title="Paste copied composer" aria-label="Paste composer"
+                        disabled={!composer?.ready||sending||transferBusy||!botComposers.clipboard(owner)} onClick={()=>void pasteComposer()}><ClipboardPaste size={19}/></Button>
+                      <Button variant="ghost" size="icon" type="button" className="bots-icon-button bots-queue-icon"
                         title="Queue next (Ctrl+Enter)"
                         aria-label="Queue next"
                         aria-keyshortcuts="Control+Enter"
@@ -740,12 +740,12 @@ export function BotsWorkspace() {
                           (!draft.trim() && !uploads.length)}
                         onClick={queueMessage}>
                         <ListPlus size={20} aria-hidden="true" />
-                      </button>
+                      </Button>
                       </>
                     )}
                     {(bot.activeTurnId || !lanes && Boolean(bot.workerTasks?.active)) &&
                       Boolean(draft || uploads.length) && (lanes || single ? <MainStopButton owner={owner} botId={bot.id} online={online} className="bots-icon-button" /> :
-                        <button
+                        <Button variant="ghost" size="icon"
                           type="button"
                           className="bots-icon-button"
                           aria-label="Stop all bot work"
@@ -757,12 +757,12 @@ export function BotsWorkspace() {
                           }
                         >
                           <Square size={14} fill="currentColor" />
-                        </button>
+                        </Button>
                       )}
                     {((bot.activeTurnId || !lanes && Boolean(bot.workerTasks?.active)) &&
                     !draft &&
                     !uploads.length ? (lanes || single ? <MainStopButton owner={owner} botId={bot.id} online={online} className="bots-send" /> :
-                      <button
+                      <Button variant="ghost" size="icon"
                         type="button"
                         className="bots-send"
                         aria-label="Stop all bot work"
@@ -774,9 +774,9 @@ export function BotsWorkspace() {
                         }
                       >
                         <Square size={14} fill="currentColor" />
-                      </button>
+                      </Button>
                     ) : (
-                      <button
+                      <Button variant="ghost" size="icon"
                         className="bots-send"
                         aria-label={
                           bot.activeTurnId ? "Send follow-up" : "Send message"
@@ -793,7 +793,7 @@ export function BotsWorkspace() {
                         ) : (
                           <ArrowUp size={20} />
                         )}
-                      </button>
+                      </Button>
                     ))}
                     </div>
                   </form>
@@ -805,7 +805,7 @@ export function BotsWorkspace() {
               {bot.archived && (
                 <div className="bots-archived-banner">
                   This bot is archived.
-                  <button
+                  <Button variant="ghost" size="sm"
                     className="bots-primary"
                     disabled={!online || busy}
                     onClick={() =>
@@ -813,7 +813,7 @@ export function BotsWorkspace() {
                     }
                   >
                     Restore bot
-                  </button>
+                  </Button>
                 </div>
               )}
             </>

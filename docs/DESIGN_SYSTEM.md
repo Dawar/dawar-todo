@@ -394,3 +394,5 @@ Legacy discussion cards/statuses use shared ghost buttons with semantic surfaces
 Chat controls, history feedback, skeletons and focus states use semantic tokens. Secondary chat labels are at least 13px. The unselected workspace prompts selection when bots exist and creation only on first use. Draft, configuration, send and recovery behavior stays unchanged.
 
 The main composer places its full-width writing area above a compact action row. Attachment, clipboard, queue and Stop/Send controls retain44px targets without squeezing the textarea. DOM and keyboard order follow the visible writing-area-then-actions layout.
+
+Workspace navigation, composer, recovery and status actions use the shared Button primitive. Existing accessible names, disabled predicates, submit behavior and original action handlers are retained.
