@@ -516,3 +516,5 @@ Shared tables keep horizontal overflow inside a named, keyboard-focusable region
 Operator uses the shared dialog and controls. A failed start says “Could not connect”; an ended connected call keeps its distinct end status. The mobile routing selector retains a 44px target in its stacked label layout. Call timestamps and transcript metadata use 13px supporting text.
 
 Room disclosure controls use the same semantic focus ring as other controls. Their native keyboard behavior remains intact; expanding recipients or room details stays within the independently scrollable panel on small screens.
+
+Attachment recovery separates storage-read errors from action errors. A successful refresh clears only its read error; a delayed older read cannot overwrite newer state. A failed initial read shows its recovery alert without an indefinite loading label or a false empty result.

@@ -12,14 +12,15 @@ export function AttachmentQueuePanel({ count, states }: { count: number; states:
   const [rows, setRows] = useState<QueuedAttachment[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState("");
+  const [readError, setReadError] = useState("");
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     let active = true;
     let generation = 0;
     const reload = () => {
       const version = ++generation;
-      void listQueuedAttachments().then((items) => { if (active && version === generation) { setRows(items); setLoaded(true); setNow(Date.now()); } })
-        .catch(() => { if (active) setError("Attachment storage could not be read. Try opening this panel again."); });
+      void listQueuedAttachments().then((items) => { if (active && version === generation) { setRows(items); setLoaded(true); setReadError(""); setNow(Date.now()); } })
+        .catch(() => { if (active && version === generation) setReadError("Attachment storage could not be read. Try opening this panel again."); });
     };
     reload();
     const unsubscribe = subscribeOfflineChanges(reload);
@@ -52,11 +53,12 @@ export function AttachmentQueuePanel({ count, states }: { count: number; states:
   const currentStates = loaded ? attachmentQueueCounts(rows, now) : states;
   const active = (currentStates.uploading ?? 0) + (currentStates.claiming ?? 0) + (currentStates.checking ?? 0);
   const blocked = (currentStates.blocked ?? 0) + (currentStates["missing-bytes"] ?? 0) + (currentStates.interrupted ?? 0);
-  return <AttachmentQueueView count={loaded ? rows.length : count} active={active} blocked={blocked} open={open} loaded={loaded} rows={rows} error={error} now={now} onToggle={() => setOpen(!open)} onRetry={(id) => void action(() => retryQueuedAttachments(id))} onSave={saveFile} onReplace={(row, file) => void action(() => replaceQueuedAttachmentBytes(row.localId, file))} />;
+  return <AttachmentQueueView count={loaded ? rows.length : count} active={active} blocked={blocked} open={open} loaded={loaded} readUnavailable={!!readError} rows={rows} error={error || readError} now={now} onToggle={() => setOpen(!open)} onRetry={(id) => void action(() => retryQueuedAttachments(id))} onSave={saveFile} onReplace={(row, file) => void action(() => replaceQueuedAttachmentBytes(row.localId, file))} />;
 }
 
-export function AttachmentQueueView({count, active, blocked, open, loaded, rows, error, now, onToggle, onRetry, onSave, onReplace}: {
+export function AttachmentQueueView({count, active, blocked, open, loaded, readUnavailable = false, rows, error, now, onToggle, onRetry, onSave, onReplace}: {
   count: number; active: number; blocked: number; open: boolean; loaded: boolean;
+  readUnavailable?: boolean;
   rows: QueuedAttachment[]; error: string; now: number;
   onToggle: () => void; onRetry: (id?: string) => void;
   onSave: (row: QueuedAttachment) => void;
@@ -78,7 +80,7 @@ export function AttachmentQueueView({count, active, blocked, open, loaded, rows,
       <p className="mt-2 text-[13px] text-muted-foreground">Transfers resume while the app is open and connected.</p>
       {error && <p role="alert" className="mt-3 break-words rounded-md bg-destructive/10 p-3 text-destructive">{error}</p>}
       {open && <div id={panelId} className="mt-4 border-t border-border pt-4">
-        {!loaded ? <p role="status" className="text-muted-foreground">Loading attachments…</p> : rows.length === 0 ? <p className="text-muted-foreground">No pending attachments.</p> : <ul aria-label="Pending attachment recovery" className="space-y-4">
+        {!loaded ? !readUnavailable && <p role="status" className="text-muted-foreground">Loading attachments…</p> : rows.length === 0 ? <p className="text-muted-foreground">No pending attachments.</p> : <ul aria-label="Pending attachment recovery" className="space-y-4">
           {rows.map((row) => <li key={row.localId} className="min-w-0 break-words border-b border-border pb-4 [overflow-wrap:anywhere] last:border-0 last:pb-0">
             <p className="font-medium">{row.fileName || "Attachment"}</p>
             <p className="mt-1 text-[13px] text-muted-foreground">{hasAttachmentBytes(row) ? `${row.blob.size.toLocaleString()} bytes saved on this device` : "No local file bytes available"}</p>
