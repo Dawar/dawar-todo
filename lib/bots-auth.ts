@@ -112,6 +112,7 @@ export function botsOwner(
     BOTS_OWNER_EMAIL?: string;
     BOTS_OWNER_USER_ID?: string;
     BOTS_DEV_AUTH?: string;
+    BOTS_PUBLIC_ORIGIN?: string;
   },
 ) {
   const owner = environment.BOTS_OWNER_EMAIL?.trim().toLowerCase();
@@ -121,8 +122,19 @@ export function botsOwner(
   if (request.headers.has("Authorization"))
     throw new Error("Bots require the owner's signed-in session.");
   const url = new URL(request.url);
+  // The portable gateway forwards over loopback, so Next's request URL uses
+  // its internal listener. Compare the browser against the fixed server
+  // configuration, never against client-supplied forwarded headers.
+  let expectedOrigin = url.origin;
+  if (environment.BOTS_PUBLIC_ORIGIN !== undefined) {
+    const configured = new URL(environment.BOTS_PUBLIC_ORIGIN);
+    if (configured.protocol !== "https:" || configured.username || configured.password ||
+      configured.pathname !== "/" || configured.search || configured.hash)
+      throw new Error("Invalid configured bots origin.");
+    expectedOrigin = configured.origin;
+  }
   const origin = request.headers.get("Origin");
-  if (origin && origin !== url.origin)
+  if (origin && origin !== expectedOrigin)
     throw new Error("Invalid request origin.");
   if (
     environment.BOTS_DEV_AUTH === "1" &&

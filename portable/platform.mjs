@@ -16,7 +16,7 @@ function environment() {
     const writer=new HubWriteAuthority(privateDatabase(join(c.dataDirectory,'control.sqlite')),hubActivation(c));
     const objects=new ObjectStorage(c,{writer});
     bindings = { ...c.applicationEnvironment, DB:new LocalD1(join(c.dataDirectory,'application.sqlite'),{writer}),IMAGES:images,DAWAR_OBJECT_STORAGE:objects.adapter(),
-      BOTS_OWNER_EMAIL:c.owner.key,BOTS_OWNER_USER_ID:c.owner.userId,TODO_PUBLIC_URL:c.publicOrigin,
+      BOTS_OWNER_EMAIL:c.owner.key,BOTS_OWNER_USER_ID:c.owner.userId,TODO_PUBLIC_URL:c.publicOrigin,BOTS_PUBLIC_ORIGIN:c.publicOrigin,
       BOTS_RELAY_URL:`${c.publicOrigin.replace(/^https:/,'wss:')}/connect`,BOTS_MACHINE_ID:c.applicationEnvironment?.BOTS_MACHINE_ID??'dawar-vm',BOTS_TICKET_SECRET:c.gatewaySecret,
       TASK_REQUEST_SECRET:c.applicationEnvironment?.TASK_REQUEST_SECRET??c.applicationEnvironment?.BOTS_TICKET_SECRET??c.gatewaySecret,
       DAWAR_OPERATOR_RPC:operatorClient(c) };
