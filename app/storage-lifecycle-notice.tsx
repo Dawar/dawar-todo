@@ -13,8 +13,9 @@ export function StorageLifecycleNotice() {
     try { await preparePwaRefresh(); location.reload(); }
     catch (cause) { setError(cause instanceof Error ? cause.message : "The update could not be prepared."); setRefreshing(false); }
   }
-  if (state.workerBuild && state.workerBuild !== state.build && ["ready", "opening"].includes(state.storage)) return <aside role="status" className="border-b border-border bg-accent px-4 py-3 text-sm text-accent-foreground">
-    <div className="flex flex-wrap items-center gap-3"><span>An app update is ready.</span><Button type="button" variant="outline" size="sm" disabled={refreshing} onClick={() => void refresh()}>{refreshing ? "Preparing…" : "Refresh when ready"}</Button></div>
+  const availableBuild = state.publishedBuild ?? state.workerBuild;
+  if (availableBuild && availableBuild !== state.build && ["ready", "opening"].includes(state.storage)) return <aside role="status" className="border-b border-border bg-accent px-4 py-3 text-sm text-accent-foreground">
+    <div className="flex flex-wrap items-center gap-3"><span>An app update is available.</span><Button type="button" variant="outline" size="sm" disabled={refreshing} onClick={() => void refresh()}>{refreshing ? "Preparing…" : "Refresh when ready"}</Button></div>
     {error && <p role="alert" className="mt-2 text-destructive break-words">{error}</p>}
   </aside>;
   if (state.storage === "ready" && state.upgradedFrom && !dismissedUpgrade) return <aside role="status" className="border-b border-border bg-warning px-4 py-3 text-sm text-warning-foreground">

@@ -551,3 +551,7 @@ Measure response-to-render and reopen/reconnect catch-up separately from model
 execution. Controlled slow-cache/network fixtures establish ordering and bounds;
 real PWA and phone-network acceptance must be recorded separately. This priority
 is part of the existing whole-application design objective, not its completion.
+
+### Published-version discovery
+
+On application open or foreground return, compare the page with the same-origin published build manifest as well as the active worker. Coalesce discovery, skip hidden/offline pages, and bound reads to five seconds/4KiB. An unavailable check is not proof that the page is current. Discovery uses no recurring interval and never blocks conversation connection. Show one compact update notice only when a different build is known; preserve the page, drafts and active calls until the human chooses Refresh when ready and the existing save/asset guards succeed. Publication discovery and actual phone adoption remain separate evidence.
