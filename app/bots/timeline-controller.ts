@@ -1,5 +1,5 @@
 import { turnTiming, type NativeTiming } from '../../lib/bot-timing';
-import { reconcileHistory, conversationEntries, orderedHistory } from "./history-reconcile";
+import { reconcileHistory, conversationEntries, orderedHistory, chronologicalTurns } from "./history-reconcile";
 import { turnAudience, scheduleInput, peerInput, humanInput, reportedFinding, projectConversationItem, type TurnAudience } from "../../lib/bot-conversation";
 import { historyBoundaries, retainHistory, retainedAttachments, CACHE_ENTRIES, CACHE_BYTES } from "./history-window";
 import { HISTORY_TEXT_LIMIT, withTurnState, conversationItem, historyTail, historyBefore, historyKey, projectHistoryItem, projectWorkPlan, type HistoryEntry, type HistoryResponse, type HistoryDetail, type HistoryPosition, type HistoryGap } from "../../lib/bot-history-view";
@@ -63,7 +63,7 @@ export class BotTimeline {
     return key;
   };
   private normalize(entries: HistoryEntry[]) {
-    const reconciled = reconcileHistory(conversationEntries(entries, this.turnAudiences));
+    const reconciled = reconcileHistory(chronologicalTurns(conversationEntries(entries, this.turnAudiences)));
     for (const [from, to] of reconciled.aliases) { this.aliases.set(from, to); this.identityAliases.set(from, to); }
     const kept = new Set(reconciled.entries.map((entry) => historyKey(entry.turnId, entry.id)));
     const successors: (HistoryEntry | undefined)[] = new Array(entries.length);
@@ -99,6 +99,7 @@ export class BotTimeline {
   private hydration?: Promise<void>;
   private request?: Promise<void>;
   private latestRequest?: Promise<void>;
+  private latestAgain = false;
   private latestCursor: string | null = null;
   private olderRequest?: Promise<void>;
   private gapRequests = new Map<string, Promise<void>>();
@@ -213,16 +214,19 @@ export class BotTimeline {
    * tail. Opening/reconnecting/resuming checks one bounded latest page without
    * throwing away older pages or changing the user's reading position. */
   refreshLatest() {
-    if (this.latestRequest) return this.latestRequest;
+    if (this.latestRequest) { this.latestAgain = true; return this.latestRequest; }
     this.latestRequest = (async () => {
-      await this.hydrate();
-      // A conditional request already in flight cannot satisfy this check.
-      // Coalesce its callers into one subsequent unconditional projection.
-      await this.request;
-      if (!this.transport.online || this.transport.owner !== this.owner || this.disposed) return;
-      this.latestCursor = null;
-      this.state = { ...this.state, revision: "" };
-      await this.refresh();
+      do {
+        this.latestAgain = false;
+        await this.hydrate();
+        // A conditional request already in flight cannot satisfy this check.
+        // Coalesce its callers into one subsequent unconditional projection.
+        await this.request;
+        if (!this.transport.online || this.transport.owner !== this.owner || this.disposed) return;
+        this.latestCursor = null;
+        this.state = { ...this.state, revision: "" };
+        await this.refresh();
+      } while (this.latestAgain && !this.disposed && this.transport.online && this.transport.owner === this.owner);
     })().finally(() => { this.latestRequest = undefined; });
     return this.latestRequest;
   }

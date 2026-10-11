@@ -168,6 +168,13 @@ function BotConversationFeed({ owner, bot, online, children, onOpenCall, onReply
   const feed = useFeedScroll(timeline, state, online, projectEntries);
   const { first, last, scroll, content, showJump, paging, latest } = feed;
   useEffect(() => {
+    const confirmed = (botId: string) => {
+      if (botId === bot.id && botsClient.owner === owner) latest();
+    };
+    botsClient.confirmedInputs.add(confirmed);
+    return () => { botsClient.confirmedInputs.delete(confirmed); };
+  }, [bot.id, owner, latest]);
+  useEffect(() => {
     if (!online || state.loading || state.error || !state.revision || !state.position.following || showJump || last !== state.entries.length || bot.lastReadAt >= bot.updatedAt) return;
     const mark = () => {
       if (document.visibilityState !== 'visible') return;

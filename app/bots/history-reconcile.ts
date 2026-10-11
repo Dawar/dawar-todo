@@ -39,6 +39,20 @@ export function orderedHistory(old: HistoryEntry[], incoming: HistoryEntry[], pr
   });
   return [...result, ...pending, ...tail];
 }
+/** Repair cached turn placement from native start times while preserving every
+ * item’s order within its turn. Unknown-time turns retain their existing slot. */
+export function chronologicalTurns(entries: HistoryEntry[]) {
+  const groups = new Map<string, HistoryEntry[]>();
+  for (const entry of entries) {
+    const group = groups.get(entry.turnId) ?? [];
+    group.push(entry); groups.set(entry.turnId, group);
+  }
+  const blocks = [...groups.values()];
+  const start = (block: HistoryEntry[]) => block.find(entry => typeof entry.startedAt === 'number' && Number.isFinite(entry.startedAt))?.startedAt;
+  const known = blocks.filter(block => start(block) !== undefined).sort((a, b) => start(a)! - start(b)!);
+  let index = 0;
+  return blocks.flatMap(block => start(block) === undefined ? block : known[index++]);
+}
 /** Identity is scoped by the owning BotTimeline. Equal text is never identity. */
 export function reconcileHistory(values: HistoryEntry[]) {
   const entries: HistoryEntry[] = [], keys = new Map<string, number>(), clients = new Map<string, number>(), aliases = new Map<string, string>();

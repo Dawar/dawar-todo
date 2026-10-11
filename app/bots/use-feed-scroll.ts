@@ -205,12 +205,12 @@ export function useFeedScroll(timeline: BotTimeline, state: TimelineState, onlin
     if (scroll.current) observer.observe(scroll.current);
     return () => observer.disconnect();
   }, [restore]);
-  const latest = () => {
+  const latest = useCallback(() => {
     forwardTail.current = null;
     intentVersion.current++;
     following.current = true; saved.current = { anchor: null, offset: 0, following: true };
     timeline.position(saved.current); setEndKey(null); setShowJump(false); requestAnimationFrame(restore);
-  };
+  }, [timeline, restore]);
   const jumpTo = (entry: HistoryEntry, partId?: string) => {
     forwardTail.current = null;
     intentVersion.current++;
