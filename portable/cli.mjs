@@ -88,6 +88,9 @@ if(command==='version') {
   savePrivate(resolve(destination),decoded.snapshot,{exclusive:true});
   json({sha256:decoded.sha256,sourceOrigin:decoded.sourceOrigin,sourceAuthenticationEstablished:false,
     note:'Verify the original owner-authenticated HTTPS download separately before migration.'});
+} else if(command==='run' && args[0]==='both') {
+  process.umask(0o077);
+  const {runBoth}=await import('./run-both.mjs');await runBoth(resolve(option('config')));
 } else if(command==='run' && args[0]==='hub') {
   const c=loadConfig(option('config'));if(c.mode==='agent')throw Error('Agent configuration cannot start a hub.');
   process.umask(0o077);

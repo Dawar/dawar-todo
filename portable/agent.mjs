@@ -31,6 +31,7 @@ import {foregroundSource} from './foreground-source.mjs';
 import {validatePrimary} from './primary-source.mjs';
 import {centralAgentCapabilities} from './agent-capabilities.mjs';
 import {storedRuntimeDefaults} from './runtime-defaults.mjs';
+import {agentConnectionURL,centralLoopback} from './central-loopback.mjs';
 const fingerprintLegacy=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
 export class AgentTransport {
@@ -187,7 +188,7 @@ export class AgentTransport {
   }
   connect(){
     if(this.closed)return;
-    const url=new URL('/nodes/connect',this.enrollment.hub);if(url.protocol!=='https:')throw Error('Agent connections require TLS.');url.protocol='wss:';
+    const url=agentConnectionURL(this.config,this.enrollment.hub);
     const ws=this.socketFactory(url);this.socket=ws;
     let authentication=false,frames=Promise.resolve();
     const sendHere=value=>{if(this.socket===ws&&ws.readyState===1)ws.send(JSON.stringify(value));};
@@ -304,7 +305,8 @@ export async function runAgent(config){
   const source=verifiedAgentRelease({activation,entrypoint:import.meta.url,codexBinary:config.agent.codexBinary,runtime:RUNTIME_VERSION});
   process.umask(0o077);
   const store=new Store(join(config.dataDirectory,'native-control.sqlite')),codex=new Codex(config.agent.codexBinary);
-  const runtime=new BotRuntime({store,codex,root:config.agent.workspaces,defaultTimeZone:'America/Toronto'});
+  const runtime=new BotRuntime({store,codex,root:config.agent.workspaces,defaultTimeZone:process.env.BOTS_TIME_ZONE??'America/Toronto',
+    adminLeadIds:JSON.parse(process.env.BOTS_ADMIN_LEAD_IDS??'[]')});
   const inherited=storedRuntimeDefaults(store);if(inherited!==undefined)runtime.defaults=inherited;
   runtime.maintenance.source=source;
   // Authentication captures hello before runtime.start. Construct the same
@@ -314,8 +316,9 @@ export async function runAgent(config){
   if(process.platform==='linux'&&config.agent.desktops?.enabled===true)runtime.desktops=new BotDesktops({runtime,...config.agent.desktops});
   const journal=new NodeJournal(join(config.dataDirectory,'node-journal.sqlite'));
   const manager=new CodexManager({runtime,store,directory:join(config.dataDirectory,'manager')});runtime.manager=manager;
+  manager.maintenanceCredential=process.env.BOTS_MACHINE_SECRET;
   const transport=new AgentTransport({config,runtime,journal,key:nodeKey(join(config.dataDirectory,'node-key.pem')),enrollment,startupReady:false});
-  runtime.storage=new NodeStorageClient(runtime,transport,enrollment.hub);
+  runtime.storage=new NodeStorageClient(runtime,transport,enrollment.hub,{loopback:centralLoopback(config)});
   runtime.relayBuffered=()=>transport.socket?.bufferedAmount??0;
   installHubToolRoutes(runtime,manager,transport);
   await manager.listen();transport.connect();

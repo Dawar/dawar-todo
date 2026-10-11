@@ -6,12 +6,16 @@ import { artifactInput } from './node-storage-contract.mjs';
 // node connection supplies scope; short-lived object grants carry only the
 // exact registered file operation. Repository and workspace paths stay local.
 export class NodeStorageClient extends BotStorageClient {
-  constructor(runtime,transport,hub){
+  constructor(runtime,transport,hub,{loopback=null}={}){
     const origin=new URL(hub).origin;
+    if(loopback!==null&&!/^http:\/\/127\.0\.0\.1:[0-9]{4,5}$/.test(loopback))throw Error('Invalid central artifact transport.');
     super(runtime,{url:origin,credential:'unused-node-transport',fetch:(url,init={})=>{
       const u=new URL(url);if(u.origin!==origin||u.pathname!=='/storage/object'||!u.searchParams.get('grant')||u.username||u.password||u.hash)
         throw Error('Artifact transfer requires its exact same-origin registered grant.');
-      return globalThis.fetch(u,{...init,redirect:'error'});
+      // Validate the signed original public URL before replacing only the
+      // installation-controlled transport origin. No caller URL is proxied.
+      const target=loopback?new URL(u.pathname+u.search,loopback):u;
+      return globalThis.fetch(target,{...init,redirect:'error'});
     }});
     this.headers={};this.transport=transport;this.features={taskQueues:true,taskRequests:process.platform==='linux',peerShare:false};
   }

@@ -267,6 +267,10 @@ def activate_supervised(helper, args, receipt_dir, receipt, drain, deadline, evi
         time.sleep(min(5, deadline - time.monotonic()))
     source(helper, args)
     backup = backup_state(helper, receipt_dir, deadline)
+    portable = None
+    if getattr(args, 'portable_handoff_configuration', None):
+        from portable_handoff import prepare
+        portable = prepare(helper, args, backup, deadline)
     bots, busy, after, lease, sampled, observation = snapshot(helper, drain, deadline)
     if busy or after != fence or not helper.native_idle(bots, observation):
         raise RuntimeError('Post-backup current proof changed; no restart')
@@ -287,6 +291,10 @@ def activate_supervised(helper, args, receipt_dir, receipt, drain, deadline, evi
             'residualRace': 'Existing async answers remain admitted until restart; human agreed not to answer during cutover.',
             'authority': evidence, 'drain': drain, 'backup': backup, 'currentProof': final,
             'retainedTerminalProof': observation['_receiptProof']}
+    if portable:
+        from portable_handoff import check_prepared
+        check_prepared(args, portable)
+        data['portableHandover'] = portable
     with receipt.open('x') as file:
         os.chmod(receipt, 0o600)
         json.dump(data, file, indent=2); file.flush(); os.fsync(file.fileno())
@@ -306,6 +314,19 @@ def activate_supervised(helper, args, receipt_dir, receipt, drain, deadline, evi
     check_attempt(helper, evidence)
     if time.monotonic() - sampled > 5 or not fresh_native(observation['_receiptProof']):
         raise RuntimeError('Current proof expired after exclusive receipt; no restart')
+    if portable:
+        from portable_handoff import install_after_claim
+        data['portableUnit'] = install_after_claim(helper, args, portable)
+        with receipt.open('w') as file:
+            json.dump(data, file, indent=2); file.flush(); os.fsync(file.fileno())
+        # The unit is changed but the old PID/native child still own the live
+        # service. Recheck the same RAM/original/native proof immediately. A
+        # failed check retains the claim/drop-in and NEVER attempts restart.
+        _, safe, after_install = lease_status(helper, drain, deadline)
+        identity = [helper.command('systemctl', '--user', 'show', helper.SERVICE, '-p', f, '--value') for f in ('MainPID', 'InvocationID')]
+        if not safe or identity != ['2321938', INVOCATION] or exact_originals(helper) != final['originalBytes'] or \
+                time.monotonic() - sampled > 5 or time.monotonic() - after_install > 5 or not fresh_native(observation['_receiptProof']):
+            raise RuntimeError('Original idle proof changed during unit handover; no restart')
     # Same original receipt survives restart/ACK uncertainty. Never call Seal,
     # Claim or a second restart; the next action after failure is inspection.
     helper.subprocess.run(['systemctl', '--user', 'restart', helper.SERVICE], check=True, timeout=min(45, deadline - time.monotonic()))
@@ -316,7 +337,8 @@ def activate_supervised(helper, args, receipt_dir, receipt, drain, deadline, evi
             pid = helper.command('systemctl', '--user', 'show', helper.SERVICE, '-p', 'MainPID', '--value')
             invocation = helper.command('systemctl', '--user', 'show', helper.SERVICE, '-p', 'InvocationID', '--value')
             metadata = health.get('maintenance', {})
-            if health.get('ready') and health.get('relayConnected') and health.get('codexVersion') == args.version and pid.isdigit() and int(pid) > 0 and pid != data['previousPid'] and re.fullmatch('[0-9a-f]{32}', invocation) and invocation != INVOCATION and metadata.get('version') == 1 and metadata.get('phase') == 'open' and metadata.get('invocationId') == invocation and isinstance(metadata.get('instanceId'), str) and metadata['instanceId'] and metadata['instanceId'] != drain['instanceId']:
+            portable_health = not portable or health.get('source') == args.commit and health.get('role') == 'both' and health.get('nodeId') == portable['nodeId'] and health.get('siteReady') is True
+            if portable_health and health.get('ready') and health.get('relayConnected') and health.get('codexVersion') == args.version and pid.isdigit() and int(pid) > 0 and pid != data['previousPid'] and re.fullmatch('[0-9a-f]{32}', invocation) and invocation != INVOCATION and metadata.get('version') == 1 and metadata.get('phase') == 'open' and metadata.get('invocationId') == invocation and isinstance(metadata.get('instanceId'), str) and metadata['instanceId'] and metadata['instanceId'] != drain['instanceId']:
                 data.update(status='healthy', verifiedAt=time.time(), pid=pid, invocationId=invocation)
                 receipt.write_text(json.dumps(data, indent=2))
                 print(json.dumps({'commit': args.commit, 'version': args.version, 'status': 'healthy', 'mode': data['mode'], 'installedSealClaim': False}))

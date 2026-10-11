@@ -270,7 +270,11 @@ def main():
                         help='One human-approved UNSEALED first handoff from the exact retained d011 process')
     parser.add_argument('--supervised-d011-continuation', action='store_true',
                         help='Exact owner-approved one linked continuation of the retained pre-claim failure')
+    parser.add_argument('--portable-handoff-configuration')
+    parser.add_argument('--portable-handoff-sha256')
     args = parser.parse_args()
+    if bool(args.portable_handoff_configuration) != bool(args.portable_handoff_sha256) or args.portable_handoff_configuration and not args.supervised_d011_continuation:
+        raise RuntimeError('Portable migration is a hook in the original approved linked continuation only')
     if not re.fullmatch(r'[0-9a-f]{40}', args.commit) or not re.fullmatch(r'\d+\.\d+\.\d+', args.version):
         raise RuntimeError('Exact reviewed SHA and version are required')
     if bool(args.maintenance_operation) != bool(args.unit_id):

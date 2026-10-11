@@ -21,6 +21,7 @@ interface Env {
   MIGRATION_APPLICATION_READ?:string;
   MIGRATION_SOURCE_CONTROL?:string;
   MIGRATION_SOURCE_INSTALLATION_LINEAGE?:string;
+  MIGRATION_SOURCE_RETIRED?:string;
   MIGRATION_RUNTIME_CONFIGURATION_READ?:string;
   BOTS_OWNER_EMAIL?: string;
   BOTS_OWNER_USER_ID?: string;
@@ -121,6 +122,12 @@ function sourceWriterBinding(raw:string,lineage?:string):SourceWriterBinding {
 
 const worker = {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    // Activated only during the owner-approved public rollover. The old
+    // deployment retains its data/receipts for recovery but cannot become a
+    // second writer through its old primary URL or a cached client.
+    if(env.MIGRATION_SOURCE_RETIRED==='portable-rollover-v1')return Response.json(
+      {error:'This deployment has moved. Reopen https://work.dawar.ca; retain any unsent input.'},
+      {status:410,headers:{'Cache-Control':'no-store','X-Dawar-Migration-Retired':'portable-rollover-v1'}});
     // Component-controller metadata has its own exact owner/capability check.
     // It must remain reachable before installation and during a held journal.
     if(new URL(request.url).pathname==='/api/migration/source/control')return applicationMigrationControlResponse(request,env,__DAWAR_BUILD__);
@@ -146,6 +153,7 @@ const worker = {
     }
   },
   async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext) {
+    if(env.MIGRATION_SOURCE_RETIRED==='portable-rollover-v1')return;
     const scheduledAt = new Date(controller.scheduledTime);
     console.info("[todo-maintenance] native scheduled event received", {
       cron: controller.cron,
