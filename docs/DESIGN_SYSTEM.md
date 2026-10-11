@@ -368,3 +368,7 @@ TaskListSummary centralizes the list heading, count/saving status, selection and
 ### Activity metadata
 
 Compact activity previews, counts and elapsed labels use13px muted semantic text, preserving the two-line preview clamp and tabular clock digits. The elapsed tooltip is concise. Native timing matching, hidden-page subscription, offline freezing and unknown suppression are unchanged. Actual320 matching live elapsed/unknown suppression, long preview clamp and offline stale state observed in a local timing fixture; full timeline/visibility/terminal transitions remain pending.
+
+### Route boundaries and sign-out
+
+Portable-session and public-route loading states now reuse ScreenLoading; an optional label supports the protected-form fallback. URL resolution, owner-screen mount guards, cross-tab sign-out and preserved drafts remain unchanged. SignedOut already uses shared Card/Button and semantic typography. Desktop render inspected; responsive/focus and full auth transition verification are separate.

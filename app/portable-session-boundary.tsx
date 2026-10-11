@@ -2,6 +2,7 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import { portableSignedOut, signOutChannel, SIGNED_OUT_EVENT, SIGNED_OUT_KEY, SIGNED_OUT_PATH } from "../lib/portable-sign-out";
+import { ScreenLoading } from "./screen-feedback";
 import { SignedOut } from "./signed-out";
 import { taskSync } from "./task-sync";
 
@@ -37,6 +38,6 @@ export function PortableSessionBoundary({ children }: { children: ReactNode }) {
       window.removeEventListener("focus", check);
     };
   }, [portable]);
-  if (!ready) return <p role="status" className="p-6 text-sm text-[#69716c]">Opening…</p>;
+  if (!ready) return <ScreenLoading />;
   return signedOut ? <SignedOut /> : children;
 }

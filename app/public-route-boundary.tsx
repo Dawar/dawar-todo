@@ -3,6 +3,7 @@ import { lazy, Suspense, useEffect, useState, type ReactNode } from 'react';
 import { usePathname } from 'next/navigation';
 import { taskRequestRoute } from './task-request-route';
 import { PortableSessionBoundary } from './portable-session-boundary';
+import { ScreenLoading } from './screen-feedback';
 import { SignedOut } from './signed-out';
 const Guest = lazy(() => import('./task-request/page'));
 export function PublicRouteBoundary({ children }: {
@@ -20,9 +21,9 @@ export function PublicRouteBoundary({ children }: {
     }, [frameworkPath]);
     // No owner markup or effect mounts before the real browser URL is known.
     if (path === null)
-        return <p role="status">Opening…</p>;
+        return <ScreenLoading />;
     if (taskRequestRoute(path))
-        return <Suspense fallback={<p role="status">Opening protected form…</p>}><Guest /></Suspense>;
+        return <Suspense fallback={<ScreenLoading label="Opening protected form…" />}><Guest /></Suspense>;
     if (path === '/signout-with-chatgpt' && process.env.NEXT_PUBLIC_DAWAR_PORTABLE === '1') return <SignedOut />;
     return <PortableSessionBoundary>{children}</PortableSessionBoundary>;
 }

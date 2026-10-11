@@ -4,9 +4,9 @@ import { LoaderCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
-export function ScreenLoading() {
+export function ScreenLoading({ label = "Opening…" }: { label?: string }) {
   return <div className="mx-auto flex max-w-5xl items-center gap-2 p-6 text-sm text-muted-foreground" role="status">
-    <LoaderCircle className="size-4 motion-safe:animate-spin" aria-hidden="true" />Opening…
+    <LoaderCircle className="size-4 motion-safe:animate-spin" aria-hidden="true" />{label}
   </div>;
 }
 export function ScreenError({ title = "This screen could not open", onRetry }: { title?: string; onRetry: () => void }) {
