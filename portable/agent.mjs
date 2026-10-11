@@ -122,6 +122,10 @@ export class AgentTransport {
     if(this.recovering||this.closed||!this.startupReady||!this.runtime.ready)return;this.recovering=true;
     try{
       await this.startup.recover();
+      // The hub owns scheduling, so runtime.tick is intentionally absent here.
+      // Native receipt/Plan reconciliation still belongs to this agent. It
+      // reads original turns and settles metadata; it never starts new work.
+      if(!this.runtime.maintenance.holding())await this.runtime.maintenance.track(()=>this.runtime.plans.recover()).catch(error=>this.runtime.emit('fault',error));
       if(this.runtime.storage?.taskRequest&&this.runtime.storage.features?.taskRequests!==false&&!this.runtime.maintenance.holding())await this.runtime.taskRequests.tick().catch(error=>this.runtime.emit('fault',error));
       let rows=this.journal.db.prepare("SELECT rowid AS rowNumber,* FROM node_commands WHERE rowid>? AND state IN ('received','dispatching','unknown','native-accepted','running') ORDER BY rowid LIMIT 2").all(this.recoveryCursor??0);
       if(!rows.length){this.recoveryCursor=0;return;}

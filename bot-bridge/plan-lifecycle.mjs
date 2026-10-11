@@ -12,14 +12,15 @@ const proposed = item => (item?.type === "plan" && typeof item.text === "string"
 export class PlanLifecycle {
   constructor(runtime) { this.runtime = runtime; this.store = runtime.store; }
   blocked(botId) {
+    // Only an unconfirmed submission can block admission. A completed turn's
+    // Plan bookkeeping must not hold unrelated human input hostage.
     return this.store.list("planExecution", botId).some(record =>
-      record.state === "dispatching" ||
-      (record.state === "running" && terminal.has(this.store.get("planTurnEvidence", record.turnId)?.status)));
+      record.state === "dispatching");
   }
   async prepare(bot, operationId, run, preparationId) {
     await this.settle(bot.id);
     bot = this.store.bot(bot.id);
-    if (this.blocked(bot.id)) throw new Error("The previous Plan transition needs reconciliation before another turn can start.");
+    if (this.blocked(bot.id)) throw new Error("The previous message's delivery is unconfirmed. Check its delivery before sending again.");
     if (run || operationId.startsWith("manager-notice:") || bot.mode !== "plan") return null;
     if ((await this.runtime.nativeQueueList(bot)).length)
       throw new Error("Let the legacy native queue finish before starting a Plan turn. New Queue next prompts are safely staged.");
@@ -28,8 +29,11 @@ export class PlanLifecycle {
         ["not-submitted", "rejected"].includes(existing.preparationOutcome)))
       throw new Error("This Plan execution already has a retained receipt. Reconcile its original operation instead of submitting it again.");
     return this.store.transaction(() => {
-      const intentId = bot.modeIntentId ?? `legacy:${randomUUID()}`;
-      if (!bot.modeIntentId) this.runtime.saveBot(this.store.bot(bot.id), { modeIntentId: intentId });
+      // Each new submission captures the current choice under its own intent.
+      // Late reconciliation of an older completed Plan cannot reset this turn's
+      // settings, even when its full history was unavailable at admission.
+      const intentId = `execution:${randomUUID()}`;
+      this.runtime.saveBot(this.store.bot(bot.id), { modeIntentId: intentId });
       return this.store.put("planExecution", { ...existing, id: operationId, botId: bot.id, threadId: bot.threadId,
         intentId, preparationId, preparationOutcome: null, dispatchFence: null, state: "dispatching", turnId: null,
         finishedAt: null, reconcileAfter: null, createdAt: now() });
@@ -132,6 +136,11 @@ export class PlanLifecycle {
     let count = 0;
     for (const record of this.store.list("planExecution")) {
       if (!["dispatching", "queued", "running", "resetting", "uncertain", "blocked"].includes(record.state)) continue;
+      // Live output supplies Plan evidence. Do not repeatedly reload a growing
+      // transcript while this exact turn is still known to be running.
+      if (record.state === "running" && record.turnId &&
+          this.store.bot(record.botId).activeTurnId === record.turnId &&
+          !terminal.has(this.store.get("planTurnEvidence", record.turnId)?.status)) continue;
       if (this.runtime.locks.has(record.botId)) continue;
       if (count >= limit || Date.parse(record.reconcileAfter ?? "") > Date.now()) continue;
       count++;
