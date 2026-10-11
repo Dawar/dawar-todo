@@ -258,3 +258,5 @@ Composer attachments use shared preview/remove controls with readable filename/s
 ### Attachment viewer controls
 
 ArtifactViewer uses shared close, retry, zoom, review, PDF-link and download buttons. Header/footer remain fixed while the preview body scrolls; semantic surface/border/text/error colors replace legacy green overrides, supporting labels are at least12px. Native modal, owner/document scope, blob disposal and original read/review/download callbacks remain unchanged. Type/scoped lint/diff pass. Rendered desktop/mobile, focus restoration, PDF/image and unavailable-file checks remain pending; this is source implementation only.
+
+Actual own Chrome checks for the attachment viewer now cover a synthetic local SVG at320/1280, mobile zoom with fixed footer, Escape with visible opener focus restoration, and desktop offline/unavailable original with disabled Download. No real transfer/review or server mutation occurred. PDF/document/reconnect/error and integrated workspace coverage remain pending. Evidence: private artifact-viewer-observation.json.
