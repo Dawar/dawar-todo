@@ -1,5 +1,7 @@
 "use client";
 import { useId } from "react";
+import { Button } from "@/components/ui/button";
+import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
 import type { UsageForecast, UsageHistory, UsageHistoryRange, UsageHistoryWindow } from "../../lib/usage-history";
 import { quotaWindowName } from "./quota-window";
 
@@ -49,7 +51,7 @@ function QuotaChart({ window, range, now }: { window: UsageHistoryWindow; range:
       <text x="34" y="148">{rangeNames[range]} ago</text><text x="490" y="148" textAnchor="end">Latest</text>
     </svg> : <p className="bots-muted">No quota samples in this period.</p>}
     <figcaption>Quota used · hourly observations{window.coverage.chartLimited ? " · chart data is limited" : ""}</figcaption>
-    {points.length > 0 && <details><summary>Recent quota observations</summary><div className="bots-usage-data"><table><thead><tr><th>Observed</th><th>Quota used</th></tr></thead><tbody>{points.slice(-12).map(point => <tr key={`${point.segment}:${point.at}`}><td>{new Date(point.at).toLocaleString()}</td><td>{percent(point.usedPercent)}%</td></tr>)}</tbody></table></div></details>}
+    {points.length > 0 && <details><summary>Recent quota observations</summary><div className="bots-usage-data"><Table><TableHeader><TableRow><TableHead>Observed</TableHead><TableHead>Quota used</TableHead></TableRow></TableHeader><TableBody>{points.slice(-12).map(point => <TableRow key={`${point.segment}:${point.at}`}><TableCell>{new Date(point.at).toLocaleString()}</TableCell><TableCell>{percent(point.usedPercent)}%</TableCell></TableRow>)}</TableBody></Table></div></details>}
   </figure>;
 }
 function TokenActivity({ activity }: { activity: UsageHistory["activity"] }) {
@@ -78,7 +80,7 @@ function TokenActivity({ activity }: { activity: UsageHistory["activity"] }) {
         })}
         <text x="34" y="148">{daily[0].date}</text><text x="490" y="148" textAnchor="end">{daily.at(-1)!.date}</text>
       </svg><figcaption>{total.toLocaleString()} tokens across {daily.length} reported dates. These are whole daily buckets, not a rolling-hour total. Missing dates remain gaps; labels follow the service.</figcaption>
-      <details><summary>Daily token figures</summary><div className="bots-usage-data"><table><thead><tr><th>Service date</th><th>Tokens</th><th>Observed</th></tr></thead><tbody>{daily.map(day => <tr key={day.date}><td>{day.date}</td><td>{BigInt(day.tokens).toLocaleString()}</td><td>{new Date(day.observedAt).toLocaleString()}</td></tr>)}</tbody></table></div></details>
+      <details><summary>Daily token figures</summary><div className="bots-usage-data"><Table><TableHeader><TableRow><TableHead>Service date</TableHead><TableHead>Tokens</TableHead><TableHead>Observed</TableHead></TableRow></TableHeader><TableBody>{daily.map(day => <TableRow key={day.date}><TableCell>{day.date}</TableCell><TableCell>{BigInt(day.tokens).toLocaleString()}</TableCell><TableCell>{new Date(day.observedAt).toLocaleString()}</TableCell></TableRow>)}</TableBody></Table></div></details>
     </figure> : activity.state === "available" && <p>No daily token buckets were reported in this period.</p>}
   </section>;
 }
@@ -88,8 +90,8 @@ export function UsageHistoryView({ history, loading, disabled = false, error, ra
   onRange: (range: UsageHistoryRange) => void; onNext: (cursor: string) => void; onFirst: () => void;
 }) {
   return <section className="bots-usage-history" aria-label="Usage history and estimates">
-    <div className="bots-usage-history-heading"><h3>Will quota last until reset?</h3><div className="bots-usage-ranges" role="group" aria-label="History period">{(["24h", "7d", "30d"] as const).map(value => <button type="button" key={value} aria-pressed={range === value} disabled={loading || disabled} onClick={() => onRange(value)}>{rangeNames[value]}</button>)}</div></div>
-    {loading && <p role="status">Reading usage history…</p>}{error && <p role="status">{error}</p>}
+    <div className="bots-usage-history-heading"><h3>Quota forecast</h3><div className="bots-usage-ranges" role="group" aria-label="History period">{(["24h", "7d", "30d"] as const).map(value => <Button variant="outline" type="button" key={value} aria-pressed={range === value} disabled={loading || disabled} onClick={() => onRange(value)}>{rangeNames[value]}</Button>)}</div></div>
+    {loading && <p role="status">Reading usage history…</p>}{error && <p className="text-destructive" role="alert">Usage history couldn’t load. Try Refresh.</p>}
     {history && <>
       {history.reason && <p>{history.reason}</p>}
       {history.identity === "connection" && <p className="bots-muted">Codex did not supply a stable account ID. This connection has its own history; continuity across sign-in or restart is unverified.</p>}
@@ -103,7 +105,7 @@ export function UsageHistoryView({ history, loading, disabled = false, error, ra
         {window.sustainablePointsPerDay !== null && <p><strong>Sustainable daily pace:</strong> about {percent(window.sustainablePointsPerDay)} percentage points per day until reset.</p>}
         <QuotaChart window={window} range={history.range} now={Date.parse(history.collectedAt)} />
       </section>)}
-      <div className="bots-usage-history-pages"><button type="button" onClick={onFirst} disabled={loading || disabled}>First quota page</button>{history.nextCursor && <button type="button" onClick={() => onNext(history.nextCursor!)} disabled={loading || disabled}>Next quota windows</button>}</div>
+      <div className="bots-usage-history-pages"><Button variant="outline" type="button" onClick={onFirst} disabled={loading || disabled}>First quota page</Button>{history.nextCursor && <Button variant="outline" type="button" onClick={() => onNext(history.nextCursor!)} disabled={loading || disabled}>Next quota windows</Button>}</div>
       <TokenActivity activity={history.activity} />
       <p className="bots-muted">Estimates follow measured usage and can change. Hourly checkpoints and native updates are retained for 90 days; missed observations remain gaps.</p>
     </>}

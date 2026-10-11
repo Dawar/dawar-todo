@@ -7,6 +7,7 @@ import { QuotaWindow } from "./quota-window";
 import { UsageHistoryView } from "./usage-history";
 import type { UsageHistory, UsageHistoryRange } from "../../lib/usage-history";
 import "./usage-history.css";
+import { Button } from "@/components/ui/button";
 
 type TokenField = keyof NonNullable<BotThreadUsage["tokens"]>;
 const tokenFields: { key: TokenField; label: string }[] = [
@@ -142,11 +143,11 @@ function UsagePanelContents({ bot, online, owner, historySupported }: { bot?: Bo
   return <section className="bots-usage">
     <div className="bots-usage-heading">
       <strong>Account-wide Codex usage</strong>
-      <button type="button" onClick={refreshUsage} disabled={!online || loading}>Refresh</button>
+      <Button variant="outline" type="button" onClick={refreshUsage} disabled={!online || loading}>Refresh</Button>
     </div>
     <p className="bots-muted">This quota is shared with other Codex activity on the same account. It cannot be assigned to individual bots.</p>
-    {!online && <p>Connect to your VM to read usage.</p>}
-    {online && loading && <p>Reading account usage…</p>}
+    {!online && <p>Reconnect to view usage.</p>}
+    {online && loading && <p role="status">Reading account usage…</p>}
     {online && !loading && !quota && <p>Account usage is unavailable right now. Try refreshing.</p>}
     {online && !loading && quota && <>
       {quota.accountType === "chatgpt" && <p className="bots-muted">Included ChatGPT plan limits. These percentages are quota, not token counts.</p>}
