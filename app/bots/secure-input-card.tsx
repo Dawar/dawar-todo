@@ -5,6 +5,8 @@ import { LockKeyhole, X, Trash2, ChevronRight } from 'lucide-react';
 import { botsClient as client } from './client';
 import { encryptSecureInput, secureBase64, SECURE_IMAGE_BYTES, type SecureDescriptor, type SecureEnvelope, type SecureRequest } from '../../lib/secure-input';
 import { transferSecureInput } from './secure-input-transfer';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import './secure-input-card.css';
 function SecureForm({ request, online, onClose, onReceived }: {
     request: SecureRequest;
@@ -31,7 +33,7 @@ function SecureForm({ request, online, onClose, onReceived }: {
                     throw Error('This form is unavailable. Ask the bot for a fresh request.');
                 const files = Object.entries(images);
                 if (files.reduce((n, [, file]) => n + file.size, 0) > SECURE_IMAGE_BYTES)
-                    throw Error('Use at most20 MB of images in total.');
+                    throw Error('Use at most 20 MB of images in total.');
                 const payload = { fields: Object.fromEntries(request.fields.map(field => [field.name, String(data!.get(field.name) ?? '')])), modelRead: data!.get('allow-model') === 'on', images: await Promise.all(files.map(async ([slot, file]) => { if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type))
                         throw Error('Choose PNG, JPEG or WebP images.'); const bytes = new Uint8Array(await file.arrayBuffer()); try {
                         return { slot, mimeType: file.type, data: secureBase64(bytes) };
@@ -67,16 +69,16 @@ function SecureForm({ request, online, onClose, onReceived }: {
         }
     };
     return <form ref={form} className="bots-secure-form" autoComplete="off" onSubmit={e => { e.preventDefault(); void submit(); }}>
-  <button type="button" className="bots-icon-button bots-secure-close" aria-label="Close sensitive form" onClick={onClose}><X size={18}/></button>
+  <Button type="button" variant="ghost" size="icon" className="bots-secure-close" aria-label="Close sensitive form" onClick={onClose}><X size={18}/></Button>
   <p>Input stays in this open form’s memory. Closing, switching bots or reloading discards it. The bot bridge must be online.</p>
-  <fieldset disabled={busy || sealed}>{request.fields.map(field => <label key={field.name}>{field.label}<input name={field.name} type={field.secret === false ? 'text' : 'password'} maxLength={4096} required={field.required} autoComplete="off" data-lpignore="true" data-1p-ignore spellCheck={false}/></label>)}
-  {request.images.map(slot => <label key={slot.name}>{slot.label}<input type="file" accept="image/png,image/jpeg,image/webp" onChange={e => { const file = e.target.files?.[0]; setImages(old => { const next = { ...old }; if (file)
+  <fieldset disabled={busy || sealed}>{request.fields.map(field => <label key={field.name}>{field.label}<Input name={field.name} type={field.secret === false ? 'text' : 'password'} maxLength={4096} required={field.required} autoComplete="off" data-lpignore="true" data-1p-ignore spellCheck={false}/></label>)}
+  {request.images.map(slot => <label key={slot.name}>{slot.label}<Input type="file" accept="image/png,image/jpeg,image/webp" onChange={e => { const file = e.target.files?.[0]; setImages(old => { const next = { ...old }; if (file)
         next[slot.name] = file;
     else
         delete next[slot.name]; return next; }); }}/>{images[slot.name] && <small>Image selected</small>}</label>)}
   <label className="bots-secure-opt"><input type="checkbox" name="allow-model" defaultChecked={false}/>Allow the model to read these fields/images and destination responses.</label>
   </fieldset><p className="bots-secure-limit">Unchecked keeps content private. Model/native history copies, and website/session/autofill copies, cannot be removed by deleting this transfer.</p>
-  {error && <p role="alert">{error}</p>}<button type="submit" disabled={busy || !online || !client.online}>{busy ? 'Transferring…' : sealed ? 'Retry same submission' : 'Submit securely'}</button>
+  {error && <p role="alert">{error}</p>}<Button type="submit" disabled={busy || !online || !client.online}>{busy ? 'Transferring…' : sealed ? 'Retry same submission' : 'Submit securely'}</Button>
  </form>;
 }
 export function SecureInputCard({ request, online, supported = true }: {
@@ -95,7 +97,7 @@ export function SecureInputCard({ request, online, supported = true }: {
         setReceipt({ ...current, state: 'deleted' });
     }
     catch {
-        setError('Deletion unconfirmed. Reconnect and retry Delete Now.');
+        setError('Deletion unconfirmed. Reconnect and retry Delete transfer.');
     }
     finally {
         setBusy(false);
@@ -104,7 +106,7 @@ export function SecureInputCard({ request, online, supported = true }: {
   <summary><ChevronRight size={15} className="bots-disclosure-chevron" aria-hidden="true"/><LockKeyhole size={16} aria-hidden="true"/><span className="bots-secure-title">{request.title}</span><span className="bots-secure-state">{stateLabel}</span></summary>
   {open && <div className="bots-secure-body"><p>{request.purpose}</p><p>Destination: {request.destination.label}{request.destination.origin && <> · {request.destination.origin}</>}</p>
   {current.state === 'waiting' ? <>{!online && <p>Reconnect to submit this secure form.</p>}{supported && <SecureForm key={request.id} request={request} online={online} onClose={() => setOpen(false)} onReceived={r => { setReceipt(r); setOpen(false); }}/>}</> : <div className="bots-secure-receipt">{current.state === 'unavailable' && <p>This transfer is unavailable. Ask the bot for a fresh request if it is still needed.</p>}{current.receivedAt && <p>Received: {new Date(current.receivedAt).toLocaleString()}</p>}{current.expiresAt && <p>Expiry: {new Date(current.expiresAt).toLocaleString()}</p>}{current.modelRead && <p>Model reading was explicitly permitted; those copies survive deletion.</p>}</div>}
-  {!['deleted', 'expired'].includes(current.state) && <button disabled={!online || busy} className="bots-secure-delete" onClick={() => void remove()}><Trash2 size={14}/>Delete Now</button>}
+  {!['deleted', 'expired'].includes(current.state) && <Button variant="outline" disabled={!online || busy} className="bots-secure-delete" onClick={() => void remove()}><Trash2 size={14}/>Delete transfer</Button>}
   </div>}{error && <p role="alert">{error}</p>}
  </details>;
 }
@@ -121,11 +123,11 @@ export function SecureInputAccess({ state }: { state: ReturnType<typeof useSecur
     if (!waiting.length && !state.error && !state.loading && !open) return null;
     const rows = state.requests.filter(r => r.state === 'waiting' || selected.includes(r.id));
     return <div className="bots-secure-access">
-      {waiting.length > 0 && <button ref={trigger} type="button" onClick={() => { setSelected(waiting.map(r => r.id)); setOpen(true); }}><LockKeyhole size={15} aria-hidden="true"/>{waiting.length === 1 ? 'Open private form' : `Open ${waiting.length} private forms`}</button>}
+      {waiting.length > 0 && <Button variant="outline" ref={trigger} type="button" onClick={() => { setSelected(waiting.map(r => r.id)); setOpen(true); }}><LockKeyhole size={15} aria-hidden="true"/>{waiting.length === 1 ? 'Open private form' : `Open ${waiting.length} private forms`}</Button>}
       {state.loading && <small role="status">Checking private forms…</small>}
-      {state.error && <span role="alert">{state.error} <button type="button" disabled={!state.online || !state.enabled || state.loading} onClick={state.retry}>Retry forms</button></span>}
+      {state.error && <span role="alert">{state.error} <Button variant="outline" type="button" disabled={!state.online || !state.enabled || state.loading} onClick={state.retry}>Retry forms</Button></span>}
       {!state.enabled && waiting.length > 0 && <p>This bridge does not support private forms. Update it before submitting.</p>}
-      {open && <div className="bots-secure-dialog-layer"><div ref={dialog} className="bots-secure-dialog" role="dialog" aria-modal="true" aria-label="Private input forms" onKeyDown={event => {
+      {open && <div className="bots-secure-dialog-layer"><div ref={dialog} className="bots-secure-dialog shadow-lg" role="dialog" aria-modal="true" aria-label="Private input forms" onKeyDown={event => {
         if (event.key === 'Escape') { event.stopPropagation(); event.preventDefault(); setOpen(false); }
         if (event.key === 'Tab') {
           const nodes = [...dialog.current!.querySelectorAll<HTMLElement>('button:not([disabled]),input:not([disabled]),summary,select:not([disabled]),textarea:not([disabled]),a[href]')].filter(node => node.offsetParent !== null);
@@ -134,7 +136,7 @@ export function SecureInputAccess({ state }: { state: ReturnType<typeof useSecur
           else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
         }
       }}>
-        <button type="button" className="bots-secure-close" aria-label="Close private forms" onClick={() => setOpen(false)}><X size={18}/></button>
+        <Button type="button" variant="ghost" size="icon" className="bots-secure-close" aria-label="Close private forms" onClick={() => setOpen(false)}><X size={18}/></Button>
         <h2>Private input forms</h2>
         {!state.online && <p>Reconnect to verify and submit these forms. This is their last known status.</p>}
         {!state.enabled && <p>Submission is unavailable in this bridge version.</p>}

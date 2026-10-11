@@ -288,3 +288,7 @@ Actual PDF.js plus PdfReviewer rendered a deliberately invalid local PDF (bounde
 ### Goal panel
 
 Goal controls and editors use shared Button/Input/Textarea/NativeSelect. Header and supporting copy use semantic foreground/muted tokens; concise status wording replaces native implementation language. Clear confirmation is destructive; all original freshness, owner/thread, Stop/input, fingerprint and exact-action guards remain unchanged. Actual1280 and320 offline fixtures render a long paused objective, Full objective disclosure, accounting and disabled actions. Type/scoped lint/diff pass. No Goal action was invoked. Connected edit/create/clear confirmations, stale/unknown/recovery variants and integrated drawer/keyboard acceptance remain pending.
+
+### Private input forms
+
+Private forms use shared Button and Input controls, semantic surfaces/text/errors, 14px body copy, 12px status and mobile 44px targets. Consent remains an explicit unchecked native checkbox; its privacy explanation stays visible. Existing memory lifetime, encryption, same-submission retry and owner guards are unchanged. The retained modal uses the shared shadow treatment and bounded scrolling; replacing its custom modal mechanism remains tracked. Actual isolated 320px offline form/disclosure/scroll and Escape focus return checked; connected transfer, busy/sealed/error/terminal states and full-workspace integration remain pending.
