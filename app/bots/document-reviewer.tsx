@@ -1,7 +1,7 @@
 "use client";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { ArrowLeft, LoaderCircle, Send } from "lucide-react";
 import DocumentPreview from "./document-preview";
 import { documentIdentity, type DocumentKind } from "./document-source";
@@ -13,6 +13,7 @@ export default function DocumentReviewer({ file, kind, item, owner, onBack, onSe
   file: Blob; kind: DocumentKind; item: GalleryItem; owner: string; onBack: () => void; onSent: () => void;
   initialSubmission?: { documentFileId: string; documentIdentity?: string };
 }) {
+  const notesId = useId(), errorId = useId();
   useSyncExternalStore(botComposers.subscribe, botComposers.snapshot, () => 0);
   const online = useSyncExternalStore(botsClient.subscribe, () => botsClient.online && botsClient.owner === owner, () => false);
   const composer = useMemo(() => botComposers.reviewComposer(owner, item.botId, item.id), [owner, item.botId, item.id]);
@@ -63,11 +64,11 @@ export default function DocumentReviewer({ file, kind, item, owner, onBack, onSe
   return <div className="bots-document-review">
     <div className="bots-document-review-toolbar"><Button variant="outline" onClick={onBack}><ArrowLeft size={16} />Document</Button></div>
     <div className="bots-document-review-columns"><DocumentPreview file={file} kind={kind} name={item.name} onReady={ready} />
-      <section className="bots-document-notes"><label htmlFor="document-review-notes">Review notes</label>
-        <Textarea id="document-review-notes" placeholder="Your feedback on this document…" value={notes} readOnly={locked} maxLength={200000} onChange={event => {
+      <section className="bots-document-notes"><label htmlFor={notesId}>Review notes</label>
+        <Textarea id={notesId} aria-describedby={errorId} placeholder="Your feedback on this document…" value={notes} readOnly={locked} maxLength={200000} onChange={event => {
           if (review && !locked) composer.setText(JSON.stringify({ ...review, additionId: review.additionId ?? crypto.randomUUID(), pages: { "1": event.target.value } }));
         }} />
-        {(saved.error || error || composer.storageError || composer.actionError || composer.operation?.error) && <p role="alert">{saved.error || error || composer.storageError || composer.actionError || composer.operation?.error}</p>}
+        {(saved.error || error || composer.storageError || composer.actionError || composer.operation?.error) && <p id={errorId} role="alert">{saved.error || error || composer.storageError || composer.actionError || composer.operation?.error}</p>}
         {!online && !initialSubmission && <p role="status">Connect to send feedback. Your notes stay saved on this device.</p>}
         <Button disabled={!composer.ready || !composer.canUseOwner || !initialSubmission && !online || composer.committing || applying || !rendered || !notes.trim() || Boolean(saved.error)} onClick={() => void send()}>
           {applying || composer.sendingNow ? <LoaderCircle className="bots-spin" size={16} /> : <Send size={16} />}{initialSubmission ? review?.additionPending ? "Check addition" : "Add review to message" : composer.operation ? "Check delivery" : "Send feedback"}

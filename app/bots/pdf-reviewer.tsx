@@ -2,7 +2,7 @@
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { ArrowLeft, ChevronLeft, ChevronRight, LoaderCircle, Paperclip, Send, X } from "lucide-react";
 import { getDocument, GlobalWorkerOptions, type PDFDocumentProxy, type PDFDocumentLoadingTask, type RenderTask } from "pdfjs-dist";
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
@@ -17,6 +17,7 @@ GlobalWorkerOptions.workerSrc = workerUrl;
 export default function PdfReviewer({ file, item, owner, onBack, onSent, initialSubmission }: {
   file: Blob; item: GalleryItem; owner: string; onBack: () => void; onSent: () => void; initialSubmission?: { documentFileId: string };
 }) {
+  const notesId = useId(), errorId = useId();
   useSyncExternalStore(botComposers.subscribe, botComposers.snapshot, () => 0);
   useSyncExternalStore(botsClient.subscribe, () => botsClient.online && botsClient.owner === owner, () => false);
   const composer = useMemo(() => botComposers.reviewComposer(owner, item.botId, item.id), [owner, item.botId, item.id]);
@@ -97,8 +98,8 @@ export default function PdfReviewer({ file, item, owner, onBack, onSent, initial
         {(error || renderError) && <div className="bots-pdf-review-loading is-error" role="alert">{error || renderError}<Button variant="outline" onClick={() => error ? setLoadRetry(n => n + 1) : setRetry(n => n + 1)}>{error ? "Retry PDF" : "Retry page"}</Button></div>}
       </section>
       <section className="bots-pdf-review-notes">
-        <label htmlFor="pdf-page-feedback">Feedback for page {page}</label>
-        <Textarea id="pdf-page-feedback" placeholder="Your feedback for this page…" value={review?.pages[page] ?? ""} disabled={locked || !pdf} maxLength={200000}
+        <label htmlFor={notesId}>Feedback for page {page}</label>
+        <Textarea id={notesId} aria-describedby={errorId} placeholder="Your feedback for this page…" value={review?.pages[page] ?? ""} disabled={locked || !pdf} maxLength={200000}
           onChange={event => review && save({ ...review, pages: { ...review.pages, [page]: event.target.value } })} />
         <input ref={picker} type="file" multiple hidden onChange={event => {
           if (!locked && review && event.target.files?.length) { save(review); composer.addFiles([...event.target.files], page); }
@@ -111,7 +112,7 @@ export default function PdfReviewer({ file, item, owner, onBack, onSent, initial
         </li>)}</ul>
         <div className="bots-pdf-review-bottom">
           {notedPages.length > 0 && <div className="bots-pdf-review-noted" aria-label="Pages with feedback">{notedPages.map(number => <Button variant={page === number ? "secondary" : "outline"} size="sm" key={number} disabled={locked} aria-current={page === number ? "page" : undefined} onClick={() => go(number)}>Page {number}</Button>)}</div>}
-          {(saved.error || applyError || composer.storageError || composer.actionError || composer.operation?.error) && <p role="alert">{saved.error || applyError || composer.storageError || composer.actionError || composer.operation?.error}</p>}
+          {(saved.error || applyError || composer.storageError || composer.actionError || composer.operation?.error) && <p id={errorId} role="alert">{saved.error || applyError || composer.storageError || composer.actionError || composer.operation?.error}</p>}
           {files.some(file => file.error && !file.remote?.ready) && <Button variant="outline" disabled={!botsClient.online || locked} onClick={() => void composer.resumeUploads(true)}>Retry uploads</Button>}
           <Button className="bots-pdf-review-send" disabled={!composer.ready || !composer.canUseOwner || !initialSubmission && !botsClient.online || composer.committing || applying || !pdf || !notedPages.length || Boolean(saved.error) || !composer.operation && files.some(file => !file.remote?.ready)} onClick={() => void send()}>
             {composer.sendingNow || composer.committing || applying ? <LoaderCircle className="bots-spin" size={17} /> : <Send size={17} />}{initialSubmission ? "Add review to message" : composer.operation ? "Check delivery" : "Send review"}

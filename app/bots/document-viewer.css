@@ -46,3 +46,6 @@
   .bots-document-notes { flex: none; min-height: 280px; border-left: 0; border-top: 1px solid var(--border); padding: 16px; }
   .bots-document-notes textarea { min-height: 140px; }
 }
+
+.bots-document-notes p[role="alert"] { color: var(--destructive); }
+.bots-document-notes textarea[readonly] { background: var(--muted); }
