@@ -27,7 +27,7 @@ import { RunDecisionControls, RunDecisions } from "./run-decisions";
 import { runNeedsAttention, runPresentation } from "./run-presentation";
 import { savedRunPage, saveRunPage, verifyRunPage } from "./run-history-reader";
 import { getBotTimeline } from "./use-timeline";
-import type { ActivityTarget } from "./conversation-activity";
+import type { ActivityTarget } from "./activity-target";
 
 const validDate = (value: string | null) => value && Number.isFinite(Date.parse(value)) ? new Date(value) : null;
 const stamp = (value: string | null) => validDate(value)?.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) ?? "Date unavailable";

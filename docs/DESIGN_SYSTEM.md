@@ -240,3 +240,7 @@ Run replies use shared action/icon buttons and NativeSelect for saved versions. 
 ### Missed scheduled-run decisions
 
 RunDecisions uses shared Button and Input primitives with semantic card/error colors and readable13px supporting copy. Reschedule exposes its form relationship; invalid local time is associated with the date field. Original revision, eligibility, receipt and choice handlers remain unchanged. Actual320/1280 fixtures show long titles, wrapped actions and reschedule with disabled empty Save; desktop read-loading and read-error states also render. No real start/reschedule/cancel or native call occurred. Type/scoped lint/diff pass; delivery recovery, connected-state transitions and genuine device acceptance remain pending.
+
+### Retired activity navigation
+
+The unused ConversationActivity navigation and its dedicated nav/provenance CSS are removed. A repository consumer search found only four type-only consumers, now importing ActivityTarget from activity-target.ts. Existing history views retain conversation-activity.css. Type checking and scoped lint pass; this deletion changes no rendered navigation.

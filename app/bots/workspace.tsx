@@ -63,7 +63,7 @@ import { RequestCard } from "./request-card";
 import { MainStopButton, MainStopRecovery } from "./run-controls";
 import { BotWorkControls } from "./bot-work-controls";
 import { RunHistory } from "./run-history";
-import type { ActivityTarget } from "./conversation-activity";
+import type { ActivityTarget } from "./activity-target";
 import { OperatorCallDialog, OperatorCallHistory } from "./operator-call";
 import { BotDesktopCard, BotDesktopDialog } from "./bot-desktop";
 import { BotDetailsDrawer, type BotDetailsSection } from "./bot-details";

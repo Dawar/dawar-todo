@@ -2,7 +2,7 @@
 import { useId, useState } from "react";
 import { ArrowUpRight, Clock3, Square } from "lucide-react";
 import type { Bot, BotRun } from "../../lib/bots-types";
-import type { ActivityTarget } from "./conversation-activity";
+import type { ActivityTarget } from "./activity-target";
 import { botsClient as client } from "./client";
 import { StopAll } from "./run-controls";
 import { runNeedsBinding } from "./run-context";

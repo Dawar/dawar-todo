@@ -25,7 +25,7 @@ import { useFeedScroll } from "./use-feed-scroll";
 import { humanMessageTicks, type HumanMessageTick } from "./human-message-ticks";
 import { MessageTickRail } from "./message-tick-rail";
 import { ReturnedArtifacts } from "./returned-artifact";
-import type { ActivityTarget } from "./conversation-activity";
+import type { ActivityTarget } from "./activity-target";
 import { useBurstConversation, BurstControls, BurstBubbles, canonicalBurst } from "./burst-composer";
 import { useRunFindings } from "./run-findings";
 import { retainedBatches } from "./burst-state";
