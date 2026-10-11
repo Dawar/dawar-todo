@@ -1,4 +1,5 @@
 "use client";
+import { Button } from "@/components/ui/button";
 import { useEffect, useRef, useState } from "react";
 import { ArrowLeft, ArrowRight, Clock3, RefreshCw } from "lucide-react";
 import type { BotEvent, BotRun, BotRunTurnPage } from "../../lib/bots-types";
@@ -52,25 +53,30 @@ export function RunTurnPicker({ owner, botId, runId, primary, selected, online, 
     const event = (event: BotEvent) => { if ((event.type === "schedules" || lanes && event.type === "run.state" && (event.data as { runId?: string }).runId === runId) && event.botId === botId && client.owner === owner) setChanged(true); };
     client.events.add(event); return () => { client.events.delete(event); };
   }, [botId, owner, runId, lanes]);
-  const select = (turnId: string) => { onSelect(turnId); if (disclosure.current) disclosure.current.open = false; };
+  const select = (turnId: string) => {
+    onSelect(turnId);
+    if (disclosure.current) {
+      disclosure.current.open = false;
+      disclosure.current.querySelector("summary")?.focus({ preventScroll: true });
+    }
+  };
   const refresh = () => { setIndex(0); setCursors([null]); setAttempt(value => value + 1); };
   return <details className="bots-run-turns" ref={disclosure}>
     <summary><Clock3 size={16} /><span>Original run &amp; follow-ups</span>{changed && <span className="bots-run-turns-updated">Updated</span>}</summary>
     <div className="bots-run-turns-body">
-      <p>Open one part at a time. Each keeps its full recorded detail.</p>
-      {!online && <p>Saved follow-ups. Connect for updates and full detail.</p>}
+      {!online && <p>Saved follow-ups. Reconnect for updates.</p>}
       {error && <p role="alert">{error} The original run and any open detail remain available.</p>}
-      {primary?.turnId ? <button className="bots-run-turn-choice" aria-current={selected === primary.turnId ? "true" : undefined} onClick={() => select(primary.turnId!)}><span><strong>Original run</strong><time>{date(primary.startedAt ?? primary.scheduledAt)}</time></span><span>{status[primary.status] ?? "Recorded"}</span><ArrowRight size={15} /></button> : <p>The original run can be found in All activity.</p>}
+      {primary?.turnId ? <Button variant="ghost" size="sm" type="button" className="bots-run-turn-choice" aria-current={selected === primary.turnId ? "true" : undefined} onClick={() => select(primary.turnId!)}><span><strong>Original run</strong><time>{date(primary.startedAt ?? primary.scheduledAt)}</time></span><span>{status[primary.status] ?? "Recorded"}</span><ArrowRight size={15} /></Button> : <p>The original run can be found in All activity.</p>}
       {page?.turns.map(turn => <div key={turn.id}>
-        <button className="bots-run-turn-choice" disabled={!turn.turnId} aria-current={selected === turn.turnId ? "true" : undefined} onClick={() => turn.turnId && select(turn.turnId)}><span><strong>Follow-up</strong><time>{date(turn.createdAt)}</time></span><span>{status[turn.status] ?? "Recorded"}</span><ArrowRight size={15} /></button>
+        <Button variant="ghost" size="sm" type="button" className="bots-run-turn-choice" disabled={!turn.turnId} aria-current={selected === turn.turnId ? "true" : undefined} onClick={() => turn.turnId && select(turn.turnId)}><span><strong>Follow-up</strong><time>{date(turn.createdAt)}</time></span><span>{status[turn.status] ?? "Recorded"}</span><ArrowRight size={15} /></Button>
         {turn.error && <p className="bots-run-turn-error">{turn.error}</p>}
         {!turn.turnId && <p>Delivery has not been confirmed. Recorded detail will appear when it is available.</p>}
       </div>)}
       {!page?.turns.length && !busy && !error && online && <p>No follow-ups recorded.</p>}
       <nav aria-label="Follow-up pages">
-        <button disabled={!online || busy} onClick={refresh}><RefreshCw size={14} />{error ? "Retry follow-ups" : changed ? "Show updates" : "Refresh"}</button>
-        {index > 0 && <button disabled={!online || busy} onClick={() => setIndex(value => value - 1)}><ArrowLeft size={14} />Previous</button>}
-        {page?.nextCursor && <button disabled={!online || busy || loadedCursor !== cursor} onClick={() => { setCursors(current => [...current.slice(0, index + 1), page.nextCursor]); setIndex(value => value + 1); }}>More follow-ups<ArrowRight size={14} /></button>}
+        <Button variant="ghost" size="sm" type="button" disabled={!online || busy} onClick={refresh}><RefreshCw size={14} />{error ? "Retry follow-ups" : changed ? "Show updates" : "Refresh"}</Button>
+        {index > 0 && <Button variant="ghost" size="sm" type="button" disabled={!online || busy} onClick={() => setIndex(value => value - 1)}><ArrowLeft size={14} />Previous</Button>}
+        {page?.nextCursor && <Button variant="ghost" size="sm" type="button" disabled={!online || busy || loadedCursor !== cursor} onClick={() => { setCursors(current => [...current.slice(0, index + 1), page.nextCursor]); setIndex(value => value + 1); }}>More follow-ups<ArrowRight size={14} /></Button>}
       </nav>
       <p role="status">{busy ? "Loading follow-ups…" : page ? `${page.turns.length} ${page.turns.length === 1 ? "follow-up" : "follow-ups"} on ${loadedCursor === cursor ? "this" : "the last loaded"} page` : ""}</p>
     </div>
