@@ -1,5 +1,8 @@
 'use client';
 import { useId } from 'react';
+import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
+import { NativeSelect } from '@/components/ui/native-select';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeSanitize from 'rehype-sanitize';
@@ -25,15 +28,15 @@ export function TaskRequestFields({ spec, values, files = [], disabled = false, 
     const fields = (groupId: string | undefined) => spec.fields.filter(f => f.groupId === groupId).map(f => {
         const id = `${prefix}-${f.id}`, privateField = f.kind.startsWith('secure-');
         return <div key={f.id} className="task-request-field"><label htmlFor={id}>{f.label}{f.required && <span> · Required</span>}{privateField && <span> · Private</span>}</label>
-      {f.notes && <FormMarkdown text={f.notes}/>}
-      {f.kind === 'text' ? <input id={id} disabled={disabled || preview} required={f.required} maxLength={4096} value={String(values[f.id] ?? '')} onChange={e => onChange?.(f.id, e.target.value)}/>
-                : f.kind === 'long-text' ? <textarea id={id} disabled={disabled || preview} required={f.required} rows={3} maxLength={16000} value={String(values[f.id] ?? '')} onChange={e => onChange?.(f.id, e.target.value)}/>
-                    : f.kind === 'choice' ? <select id={id} disabled={disabled || preview} required={f.required} value={Array.isArray(values[f.id]) ? values[f.id][0] ?? '' : ''} onChange={e => onChange?.(f.id, e.target.value ? [e.target.value] : [])}><option value="">Choose…</option>{f.choices?.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}</select>
-                        : f.kind === 'secure-text' ? <input id={id} type="password" ref={node => {
+      {f.notes && <div id={`${id}-notes`}><FormMarkdown text={f.notes}/></div>}
+      {f.kind === 'text' ? <Input className="task-request-control" aria-describedby={f.notes ? `${id}-notes` : undefined} id={id} disabled={disabled || preview} required={f.required} maxLength={4096} value={String(values[f.id] ?? '')} onChange={e => onChange?.(f.id, e.target.value)}/>
+                : f.kind === 'long-text' ? <Textarea className="task-request-control" aria-describedby={f.notes ? `${id}-notes` : undefined} id={id} disabled={disabled || preview} required={f.required} rows={3} maxLength={16000} value={String(values[f.id] ?? '')} onChange={e => onChange?.(f.id, e.target.value)}/>
+                    : f.kind === 'choice' ? <NativeSelect className="task-request-control" aria-describedby={f.notes ? `${id}-notes` : undefined} id={id} disabled={disabled || preview} required={f.required} value={Array.isArray(values[f.id]) ? values[f.id][0] ?? '' : ''} onChange={e => onChange?.(f.id, e.target.value ? [e.target.value] : [])}><option value="">Choose…</option>{f.choices?.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}</NativeSelect>
+                        : f.kind === 'secure-text' ? <Input className="task-request-control" aria-describedby={f.notes ? `${id}-notes` : undefined} id={id} type="password" ref={node => {
                                 if (privateFields)
                                     privateFields.current[f.id] = node;
                             }} disabled={disabled || preview} required={f.required} maxLength={4096} autoComplete="off" data-lpignore="true" data-1p-ignore spellCheck={false}/>
-                            : <input id={id} type="file" disabled={disabled || preview} accept={f.kind === 'image' || f.kind === 'secure-image' ? 'image/png,image/jpeg,image/webp' : undefined} onChange={e => {
+                            : <Input className="task-request-control" aria-describedby={f.notes ? `${id}-notes` : undefined} id={id} type="file" disabled={disabled || preview} accept={f.kind === 'image' || f.kind === 'secure-image' ? 'image/png,image/jpeg,image/webp' : undefined} onChange={e => {
                                     const file = e.target.files?.[0];
                                     if (f.kind === 'secure-image')
                                         onPrivateImage?.(f.id, file);

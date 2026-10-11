@@ -180,3 +180,7 @@ Removed unused page-local private upload entrypoints and their transport types, 
 ### Bot destinations
 
 `BotDestinationList` is shared by TodoForward and QueuePicker. It uses semantic list markup, shared ghost buttons, decorative avatars, wrapped names/purposes, selected checkmarks/pressed state, bounded scrolling and a status empty state. Existing controller functions choose (1239B), submit (3084B) and metadata (599B) are byte-identical to the prior commit. Actual320 preview confirms long content wrapping and changing the selected bot; no draft/queue mutation was performed. Desktop, keyboard and complete connected-picker states remain pending. Type/scoped lint pass.
+
+### Guest request fields — initial migration
+
+TaskRequestFields now uses shared Input/Textarea/NativeSelect, with field notes associated through aria-describedby. Private password inputs remain uncontrolled refs; file acceptance and callbacks are unchanged. Guest/editor styles use semantic palette tokens; shared field controls are excluded from legacy raw-control overrides. Actual320 fixture shows text, long text, choice and private-field layouts without horizontal overflow; note typography reduced to supporting-text scale. Full guest/editor states, file handling, keyboard, desktop and secure lifecycle remain unverified. Type/lint pass; no live request/submission/private data effects.
