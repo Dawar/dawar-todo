@@ -383,3 +383,6 @@ Task sync recovery uses a semantic warning surface, a concise retained-change ex
 Task rows use a restrained semantic palette: destructive for urgent/overdue, warning for high priority/snooze/offline, muted for ordinary metadata, and accent for queued status. Context and recurrence share secondary styling rather than unrelated colors. Badge labels remain textual; long metadata wraps within the row. Swipe surfaces pair their foreground/background tokens. Actions, identity, gesture thresholds and persistence are unchanged.
 
 Task sync status occupies normal document flow beneath navigation. It must not float over recovery notices or task controls; long reconnect/auth labels wrap naturally.
+
+### Queue management
+Queue lists and queued-message actions use shared Button, Input and NativeSelect primitives. Queue layout CSS supplies wrapping, semantic status colors and readable 13px metadata rather than separate control themes. List names and actions wrap; mobile action targets are at least44px. Native destination-dialog focus restoration and queue receipt/revision/uncertainty behavior remain unchanged. Legacy queue CSS and unused list-card styles are removed.

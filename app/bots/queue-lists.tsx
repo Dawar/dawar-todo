@@ -1,4 +1,7 @@
 "use client";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import { NativeSelect } from "@/components/ui/native-select";
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {  FolderOpen, ListOrdered, Pencil, Plus, Send, Trash2, X } from 'lucide-react';
 import type { Bot, BotQueueList, BotQueuedSubmission } from '../../lib/bots-types';
@@ -49,17 +52,17 @@ export function QueueDestinationPicker({lists, disabled, onChoose, onClose, onMa
     const box = event.currentTarget.getBoundingClientRect();
     if (event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom) onClose();
   }}>
-    <header><div><span>Queue message</span><h2 id="queue-picker-title">Choose a list</h2></div><button type="button" className="bots-icon-button" aria-label="Close queue picker" onClick={onClose}><X size={20}/></button></header>
+    <header><div><span>Queue message</span><h2 id="queue-picker-title">Choose a list</h2></div><Button variant="outline" type="button" className="bots-icon-button" aria-label="Close queue picker" onClick={onClose}><X size={20}/></Button></header>
     {description && <p className="bots-queue-picker-note">{description}</p>}
     {error && <p className="bots-lists-error" role="alert">{error}</p>}
     <div className="bots-queue-destinations">
-      {showDefault && <button type="button" disabled={disabled} onClick={() => onChoose(null)}><ListOrdered size={21}/><span><strong>Queued next</strong><small>Starts when this bot is free</small></span></button>}
-      {lists.map(list => <button type="button" key={list.id} disabled={disabled} onClick={() => onChoose(list.id)}><FolderOpen size={21}/><span><strong>{list.name}</strong><small>{list.count} {list.count === 1 ? 'message' : 'messages'} · {list.cron ? list.enabled ? 'Scheduled' : 'Schedule paused' : 'Manual list'}</small></span></button>)}
-      {onSubmitNow && <button type="button" disabled={disabled} onClick={onSubmitNow}><Send size={21}/><span><strong>Submit now</strong><small>Send this message directly</small></span></button>}
+      {showDefault && <Button variant="outline" type="button" disabled={disabled} onClick={() => onChoose(null)}><ListOrdered size={21}/><span><strong>Queued next</strong><small>Starts when this bot is free</small></span></Button>}
+      {lists.map(list => <Button variant="outline" type="button" key={list.id} disabled={disabled} onClick={() => onChoose(list.id)}><FolderOpen size={21}/><span><strong>{list.name}</strong><small>{list.count} {list.count === 1 ? 'message' : 'messages'} · {list.cron ? list.enabled ? 'Scheduled' : 'Schedule paused' : 'Manual list'}</small></span></Button>)}
+      {onSubmitNow && <Button variant="outline" type="button" disabled={disabled} onClick={onSubmitNow}><Send size={21}/><span><strong>Submit now</strong><small>Send this message directly</small></span></Button>}
     </div>
     {!lists.length && !showDefault && !onSubmitNow && <p className="bots-queue-picker-note">No named lists yet. Cancel keeps these messages paused.</p>}
-    {onManage && <button type="button" className="bots-queue-manage" onClick={onManage}><Plus size={17}/>{lists.length ? 'Manage queue lists' : 'Create a queue list'}</button>}
-    <button type="button" className="bots-queue-manage" onClick={onClose}>Cancel</button>
+    {onManage && <Button variant="outline" type="button" className="bots-queue-manage" onClick={onManage}><Plus size={17}/>{lists.length ? 'Manage queue lists' : 'Create a queue list'}</Button>}
+    <Button variant="outline" type="button" className="bots-queue-manage" onClick={onClose}>Cancel</Button>
   </dialog>;
 }
 export function QueueLists({owner,bot,lists,defaultItems,online,refreshLists,refreshDefault,onEdit}: {
@@ -93,28 +96,28 @@ export function QueueLists({owner,bot,lists,defaultItems,online,refreshLists,ref
   let next:string|null=null;
   if(editor?.cron && !cronError) {try{next=nextCronOccurrence(editor.cron,new Date(),editor.timeZone)?.toISOString()??null;}catch{}}
   return <div className="bots-queue-lists">
-    <header className="bots-lists-heading"><div><h3>Queue lists</h3><p>Collect work now. Send it when it suits you.</p></div><button type="button" title="New queue list" aria-label="New queue list" disabled={locked} onClick={()=>setEditor(blank())}><Plus size={19}/>New list</button></header>
+    <header className="bots-lists-heading"><div><h3>Queue lists</h3></div><Button variant="outline" type="button" title="New queue list" aria-label="New queue list" disabled={locked} onClick={()=>setEditor(blank())}><Plus size={19}/>New list</Button></header>
     {action.error && <p className="bots-lists-error" role="alert">{action.error}</p>}
-    {action.pending && <div className="bots-lists-error" role="status">{action.busy?'Confirming your change…':'This change needs confirmation.'}<button type="button" disabled={!online||action.busy} onClick={action.retry}>Retry</button></div>}
+    {action.pending && <div className="bots-lists-error" role="status">{action.busy?'Confirming your change…':'This change needs confirmation.'}<Button variant="outline" type="button" disabled={!online||action.busy} onClick={action.retry}>Retry</Button></div>}
     {error && <p className="bots-lists-error" role="alert">{error}</p>}
     {editor && <form className="bots-list-editor" onSubmit={async event=>{
       event.preventDefault(); if(cronError)return;
       const {revision,...params}=editor;
       if(await action.run('queueLists.save',{...params,cron:editor.cron.trim()||null,...(revision?{expectedRevision:revision}:{})}))setEditor(null);
-    }}><header><strong>{editor.id?'List settings':'New queue list'}</strong><button type="button" aria-label="Close list editor" onClick={()=>setEditor(null)}><X size={18}/></button></header>
-      <label>Name<input autoFocus value={editor.name} maxLength={80} required placeholder="Morning work" onChange={e=>setEditor({...editor,name:e.target.value})}/></label>
+    }}><header><strong>{editor.id?'List settings':'New queue list'}</strong><Button variant="outline" type="button" aria-label="Close list editor" onClick={()=>setEditor(null)}><X size={18}/></Button></header>
+      <label>Name<Input autoFocus value={editor.name} maxLength={80} required placeholder="Morning work" onChange={e=>setEditor({...editor,name:e.target.value})}/></label>
       <ListSchedule editor={editor} onChange={value=>setEditor({...editor,...value})}/>
       {cronError?<small role="alert">{cronError}</small>:next&&editor.enabled?<small>Next: {when(next,editor.timeZone)}</small>:null}
-      <button className="bots-primary" type="submit" disabled={locked||Boolean(cronError)||Boolean(editor.cron&&!next)}>Save list</button>
+      <Button className="bots-primary" type="submit" disabled={locked||Boolean(cronError)||Boolean(editor.cron&&!next)}>Save list</Button>
     </form>}
     <nav className="bots-list-tabs" aria-label="Queue lists">
-      <button type="button" aria-pressed={!selected||selected==='default'} onClick={()=>setSelected('default')}><ListOrdered size={16}/>Queued next <span>{defaultItems.length}</span></button>
-      {lists.map(list=><button type="button" key={list.id} aria-pressed={selected===list.id} onClick={()=>setSelected(list.id)}><FolderOpen size={16}/>{list.name}<span>{list.count}</span></button>)}
+      <Button variant="outline" type="button" aria-pressed={!selected||selected==='default'} onClick={()=>setSelected('default')}><ListOrdered size={16}/>Queued next <span>{defaultItems.length}</span></Button>
+      {lists.map(list=><Button variant="outline" type="button" key={list.id} aria-pressed={selected===list.id} onClick={()=>setSelected(list.id)}><FolderOpen size={16}/>{list.name}<span>{list.count}</span></Button>)}
     </nav>
     <div className="bots-list-detail-heading"><div><h4>{current?.name ?? 'Queued next'}</h4><small>{current?.cron?current.enabled?`Next ${when(current.nextRunAt,current.timeZone)} · ${current.timeZone}`:'Schedule paused':current?'Manual list':'Starts when this bot is free'}</small></div>{current&&<div>
-      <button disabled={locked||!items.length} onClick={()=>void action.run('queueLists.flush',{id:current.id,expectedRevision:current.revision})}><Send size={17}/>Queue now</button>
-      <button disabled={locked} onClick={()=>setEditor({id:current.id,revision:current.revision,name:current.name,cron:current.cron??'',timeZone:current.timeZone,enabled:current.enabled})}><Pencil size={17}/>Settings</button>
-      <button title="Only empty lists can be removed" disabled={locked||items.length>0||current.count>0} onClick={async()=>{if(await action.run('queueLists.delete',{id:current.id,expectedRevision:current.revision}))setSelected('default');}}><Trash2 size={17}/>Delete list</button>
+      <Button variant="outline" disabled={locked||!items.length} onClick={()=>void action.run('queueLists.flush',{id:current.id,expectedRevision:current.revision})}><Send size={17}/>Queue now</Button>
+      <Button variant="outline" disabled={locked} onClick={()=>setEditor({id:current.id,revision:current.revision,name:current.name,cron:current.cron??'',timeZone:current.timeZone,enabled:current.enabled})}><Pencil size={17}/>Settings</Button>
+      <Button variant="outline" title="Only empty lists can be removed" disabled={locked||items.length>0||current.count>0} onClick={async()=>{if(await action.run('queueLists.delete',{id:current.id,expectedRevision:current.revision}))setSelected('default');}}><Trash2 size={17}/>Delete list</Button>
     </div>}</div>
       <PromptQueue owner={owner} bot={bot} items={selected==='default'?defaultItems:items} online={online} canEdit listId={selected==='default'?null:selected} title={current?.name??'Queued next'} lists={lists} supported relativeMoves={client.snapshot?.capabilities?.queueRelativeMoves===1} onEdit={async item=>{setError('');try{if(!await onEdit(item))setError('Could not confirm removal. Retry in the composer.');}catch(reason){setError(reason instanceof Error?reason.message:'Queue removal could not be confirmed.');}}} refresh={refresh} embedded />
       {!items.length&&<p className="bots-lists-empty-note">Nothing here yet. Queue a message in the conversation, then move it into this list.</p>}
@@ -125,11 +128,11 @@ function ListSchedule({editor,onChange}:{editor:ReturnType<typeof blank>;onChang
   const parts=editor.cron.split(' '), timed=/^\d{1,2} \d{1,2} \* \* (\*|1-5)$/.test(editor.cron);
   const mode=!editor.cron?'manual':timed?parts[4]==='*'?'daily':'weekdays':editor.cron==='0 * * * *'?'hourly':'custom';
   const time=timed?`${parts[1].padStart(2,'0')}:${parts[0].padStart(2,'0')}`:'09:00';
-  return <><label>Schedule<select value={mode} onChange={e=>onChange({cron:e.target.value==='manual'?'':e.target.value==='hourly'?'0 * * * *':e.target.value==='custom'?'0 9 * * 1':`0 9 * * ${e.target.value==='daily'?'*':'1-5'}`})}>
+  return <><label>Schedule<NativeSelect value={mode} onChange={e=>onChange({cron:e.target.value==='manual'?'':e.target.value==='hourly'?'0 * * * *':e.target.value==='custom'?'0 9 * * 1':`0 9 * * ${e.target.value==='daily'?'*':'1-5'}`})}>
     <option value="manual">Manual only</option><option value="daily">Every day</option><option value="weekdays">Weekdays</option><option value="hourly">Every hour</option><option value="custom">Custom schedule</option>
-  </select></label>
-  {(mode==='daily'||mode==='weekdays')&&<label>Time<input type="time" required value={time} onChange={e=>{const [hour,minute]=e.target.value.split(':');if(hour&&minute)onChange({cron:`${Number(minute)} ${Number(hour)} * * ${mode==='daily'?'*':'1-5'}`});}}/></label>}
-  {mode==='custom'&&<label>Cron expression<input value={editor.cron} onChange={e=>onChange({cron:e.target.value})} spellCheck={false}/></label>}
-  {editor.cron&&<><label>Timezone<input value={editor.timeZone} onChange={e=>onChange({timeZone:e.target.value})} required placeholder="America/Toronto"/></label><label className="bots-list-checkbox"><input type="checkbox" checked={editor.enabled} onChange={e=>onChange({enabled:e.target.checked})}/>Schedule enabled</label></>}
+  </NativeSelect></label>
+  {(mode==='daily'||mode==='weekdays')&&<label>Time<Input type="time" required value={time} onChange={e=>{const [hour,minute]=e.target.value.split(':');if(hour&&minute)onChange({cron:`${Number(minute)} ${Number(hour)} * * ${mode==='daily'?'*':'1-5'}`});}}/></label>}
+  {mode==='custom'&&<label>Cron expression<Input value={editor.cron} onChange={e=>onChange({cron:e.target.value})} spellCheck={false}/></label>}
+  {editor.cron&&<><label>Timezone<Input value={editor.timeZone} onChange={e=>onChange({timeZone:e.target.value})} required placeholder="America/Toronto"/></label><label className="bots-list-checkbox"><input type="checkbox" checked={editor.enabled} onChange={e=>onChange({enabled:e.target.checked})}/>Schedule enabled</label></>}
   </>;
 }
