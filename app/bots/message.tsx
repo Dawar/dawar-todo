@@ -227,12 +227,19 @@ export function AttachmentImage({
   botId: string;
   attachment: BotAttachment;
 }) {
+  const owner = useSyncExternalStore(botsClient.subscribe, () => botsClient.owner, () => "");
+  const online = useSyncExternalStore(botsClient.subscribe, () => botsClient.online || botsClient.storageCatalogAvailable, () => false);
+  return <AttachmentImageContent key={JSON.stringify([owner, botId, attachment.id, online])}
+    owner={owner} online={online} botId={botId} attachment={attachment} />;
+}
+
+function AttachmentImageContent({ owner, online, botId, attachment }: {
+  owner: string; online: boolean; botId: string; attachment: BotAttachment;
+}) {
   const [visible, setVisible] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const [result, setResult] = useState<{ key: string; url?: string; failed?: boolean } | null>(null);
   const placeholder = useRef<HTMLSpanElement>(null);
-  const owner = useSyncExternalStore(botsClient.subscribe, () => botsClient.owner, () => "");
-  const online = useSyncExternalStore(botsClient.subscribe, () => botsClient.online || botsClient.storageCatalogAvailable, () => false);
   const key = JSON.stringify([owner, botId, attachment.id, online, attempt]);
   const current = result?.key === key ? result : null;
   useEffect(() => {
