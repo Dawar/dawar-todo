@@ -86,7 +86,8 @@ def install_after_claim(helper, args, prepared):
     s = dropin.parent.lstat()
     if not stat.S_ISDIR(s.st_mode) or s.st_uid != os.getuid() or s.st_mode & 0o077:
         raise RuntimeError('Unsafe original unit drop-in directory')
-    content = '[Service]\nWorkingDirectory=' + quote(row['releaseDirectory']) + '\nExecStart=\nExecStart=' + \
+    working_directory = str(row['releaseDirectory']).replace('\\', '\\\\').replace('%', '%%')
+    content = '[Service]\nWorkingDirectory=' + working_directory + '\nExecStart=\nExecStart=' + \
         ' '.join(map(quote, [node, Path(row['releaseDirectory']) / 'portable/cli.mjs', 'run', 'both', '--config', prepared['hubConfig']])) + \
         '\nRestart=no\nUMask=0077\nKillMode=control-group\nTimeoutStopSec=900\n'
     with dropin.open('x') as file:

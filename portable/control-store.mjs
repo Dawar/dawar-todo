@@ -272,7 +272,11 @@ export class NodeJournal {
     this.db.prepare('UPDATE node_commands SET state=?,receipt=? WHERE operation_id=?').run(state,boundedFrame(receipt),operationId);
   }
   recordEvent(eventId, event) {
-    const text = boundedFrame(event), old = this.db.prepare('SELECT * FROM node_events WHERE event_id=?').get(eventId);
+    // Runtime events use the same JSON representation as Store.event and the
+    // existing browser transport. Optional undefined fields are absent on that
+    // wire; canonicalize the persisted JSON, not the richer in-memory object.
+    // Commands, signatures and receipts retain their strict canonical checks.
+    const text = boundedFrame(JSON.parse(JSON.stringify(event))), old = this.db.prepare('SELECT * FROM node_events WHERE event_id=?').get(eventId);
     if (old) { if (old.event !== text) throw Error('Event identity differs.'); return old.sequence; }
     return Number(this.db.prepare('INSERT INTO node_events(event_id,event) VALUES(?,?)').run(eventId,text).lastInsertRowid);
   }
