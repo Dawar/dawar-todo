@@ -21,7 +21,7 @@ function safeCommand(command) {
   if(typeof text!=='string'||encoder.encode(text).length>100000)throw failure();
   const value=JSON.parse(text);
   if(!value||typeof value!=='object'||Array.isArray(value)||
-      !['schema','tables','sequence-present','sequences','columns','count','sizes','rows'].includes(value.kind)||
+      !['inventory','page','schema','tables','sequence-present','sequences','columns','count','sizes','rows'].includes(value.kind)||
       Object.keys(value).some(k=>!['kind','table','last','limit'].includes(k)))throw failure();
   return value;
 }

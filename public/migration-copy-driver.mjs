@@ -14,13 +14,13 @@ try{
  };
  const beforeJ=await action({action:'journal.read',operationId:c.journal.installationId});
  const beforeD=await action({action:'database.read',operationId:c.database.installId,schemaSHA256:schema});
- if(x.reader.kind!=='dawar-original-database-reader'||x.reader.recentTailLossAccepted!==true||beforeJ.phase!=='open'||beforeD.phase!=='open'||beforeD.generation!==0||beforeJ.operationId!==null||beforeD.operationId!==null)throw Error('Original database copy already started; reconcile its receipt');
+ if(!Number.isSafeInteger(x.expectedDatabaseGeneration)||x.expectedDatabaseGeneration<0||x.reader.kind!=='dawar-original-database-reader'||x.reader.recentTailLossAccepted!==true||beforeJ.phase!=='open'||beforeD.phase!=='open'||beforeD.generation!==x.expectedDatabaseGeneration||beforeJ.operationId!==null||beforeD.operationId!==null)throw Error('Original database copy already started; reconcile its receipt');
  expiresAt=Date.now()+900000;
  let frozen;
  try{frozen=await action({action:'database.freeze',operationId:c.cutoverId,schemaSHA256:schema,expiresAt});}
  catch{const r=await action({action:'database.receipt',operationId:c.cutoverId,schemaSHA256:schema,receiptKind:'freeze',expiresAt,generation:0});if(!r.receiptConfirmed||r.outcome!=='frozen')throw Error('Original database outcome remains unknown');databaseGeneration=r.generation;throw Error('Database send lost ACK; release confirmed original without capture retry');}
  databaseGeneration=frozen.generation;
- if(frozen.scope!=='d1-database-writes'||frozen.status!=='frozen'||frozen.guardSHA256!==x.reader.freeze.database.guardSHA256||databaseGeneration!==1)throw Error('Original database binding differs');
+ if(frozen.scope!=='d1-database-writes'||frozen.status!=='frozen'||frozen.guardSHA256!==x.reader.freeze.database.guardSHA256||databaseGeneration!==x.expectedDatabaseGeneration+1)throw Error('Original database binding differs');
  const capture={sourceOrigin:c.sourceOrigin,captureId:x.reader.captureId,freeze:{sourceId:c.sourceId,operationId:c.cutoverId,epoch:frozen.epoch,generation:frozen.generation,expiresAt:frozen.expiresAt,scope:'d1-database-writes'}};
  const m=await import('/migration-database-capture.mjs');
  const result=await m.captureDatabase({capture,recipient:x.recipient,onProgress:p=>console.info('Private database copy progress',p)});

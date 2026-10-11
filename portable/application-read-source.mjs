@@ -79,14 +79,20 @@ export function createD1ApplicationReadSource({db,expectedFreeze,verifyFreeze,si
     const rows=await query("SELECT type,name,tbl_name,sql FROM sqlite_schema WHERE sql IS NOT NULL AND lower(substr(name,1,7)) <> 'sqlite_' AND lower(name) NOT IN ('_cf_kv','_cf_metadata') ORDER BY type,name");
     schema=rows;tables.clear();return rows;
   }
-  async function descriptor(name) {
-    if(typeof name!=='string'||!name||name.includes('\0')||bytes(name).length>1024)throw failure();
-    if(!schema)await loadSchema();
-    if(!schema.some(r=>r.type==='table'&&r.name===name))throw failure();
-    if(tables.has(name))return tables.get(name);
-    const entry=(await query('PRAGMA table_list')).find(t=>t.schema==='main'&&t.name===name);
-    if(!entry||entry.type!=='table')throw failure();
-    const xinfo=await query(`PRAGMA table_xinfo(${identifier(name)})`),columns=xinfo.filter(c=>c.hidden===0).map(c=>c.name);
+  async function queryMany(statements) {
+    if(!Array.isArray(statements)||statements.length>64||statements.some(sql=>bytes(sql).length>100000))throw failure();
+    if(typeof db.batch!=='function'){const results=[];for(const sql of statements)results.push(await query(sql));return results;}
+    await verify();const results=await db.batch(statements.map(sql=>db.prepare(sql)));await verify();
+    if(!Array.isArray(results)||results.length!==statements.length)throw failure();
+    return results.map(result=>{
+      if(result.success!==true||!Array.isArray(result.results)||result.results.length>4000||
+          bytes(JSON.stringify(result.results)).length>MAXIMUM_LINE)throw failure();
+      return result.results;
+    });
+  }
+  function describe(entry,xinfo,name) {
+    if(!entry||entry.type!=='table'||!Array.isArray(xinfo)||xinfo.length>2000)throw failure();
+    const columns=xinfo.filter(c=>c.hidden===0).map(c=>c.name);
     let order;
     if(entry.wr)order=xinfo.filter(c=>c.pk).sort((a,b)=>a.pk-b.pk).map(c=>c.name);
     else {
@@ -94,27 +100,75 @@ export function createD1ApplicationReadSource({db,expectedFreeze,verifyFreeze,si
       if(!rowid)throw failure();columns.unshift(rowid);order=[rowid];
     }
     if(!columns.length||columns.length>2000||!order.length)throw failure();
-    const value={name,columns,order};tables.set(name,value);return value;
+    return {name,columns,order};
+  }
+  async function inventory() {
+    const current=await loadSchema(),list=await query('PRAGMA table_list');
+    const names=current.filter(s=>s.type==='table').map(s=>s.name);
+    if(names.length>1000)throw failure();
+    const result=[];
+    for(let start=0;start<names.length;start+=32) {
+      const part=names.slice(start,start+32);
+      const infos=await queryMany(part.map(name=>`PRAGMA table_xinfo(${identifier(name)})`));
+      const counts=await queryMany(part.map(name=>`SELECT COUNT(*) AS n FROM ${identifier(name)}`));
+      for(let i=0;i<part.length;i++) {
+        const name=part[i],value=describe(list.find(t=>t.schema==='main'&&t.name===name),infos[i],name),n=counts[i]?.[0]?.n;
+        if(!Number.isSafeInteger(n)||n<0||n>10000000)throw failure();
+        tables.set(name,value);result.push({...value,rows:n});
+      }
+    }
+    if(result.reduce((n,t)=>n+t.rows,0)>10000000)throw failure();
+    const sequence=(await query("SELECT name FROM sqlite_schema WHERE name='sqlite_sequence'")).length?
+      await query("SELECT name,'I'||CAST(seq AS TEXT) AS seq FROM sqlite_sequence ORDER BY name"):[];
+    const value={kind:'header',format:'dawar-application-snapshot',version:2,schema:current,tables:result,sequence,
+      userVersion:null,applicationId:null,sourceMetadata:{engine:'cloudflare-d1',sqliteHeader:'unavailable'}};
+    if(bytes(JSON.stringify(value)).length>MAXIMUM_LINE)throw failure();return [value];
+  }
+  async function descriptor(name) {
+    if(typeof name!=='string'||!name||name.includes('\0')||bytes(name).length>1024)throw failure();
+    if(!schema)await loadSchema();
+    if(!schema.some(r=>r.type==='table'&&r.name===name))throw failure();
+    if(tables.has(name))return tables.get(name);
+    const entry=(await query('PRAGMA table_list')).find(t=>t.schema==='main'&&t.name===name);
+    const xinfo=await query(`PRAGMA table_xinfo(${identifier(name)})`),value=describe(entry,xinfo,name);
+    tables.set(name,value);return value;
   }
   return {async read(command) {
     if(!command||typeof command!=='object'||Array.isArray(command)||bytes(JSON.stringify(command)).length>100000)throw failure();
-    if(!Object.hasOwn(command,'kind')||!['schema','tables','sequence-present','sequences','columns','count','sizes','rows'].includes(command.kind))throw failure();
-    const allowed=['kind',...(['columns','count'].includes(command.kind)?['table']:['sizes','rows'].includes(command.kind)?['table','last','limit']:[])];
+    if(!Object.hasOwn(command,'kind')||!['inventory','page','schema','tables','sequence-present','sequences','columns','count','sizes','rows'].includes(command.kind))throw failure();
+    const allowed=['kind',...(['columns','count'].includes(command.kind)?['table']:['page','sizes','rows'].includes(command.kind)?['table','last','limit']:[])];
     if(Object.keys(command).some(k=>!allowed.includes(k)))throw failure();
     await verify();
     switch(command.kind) {
+      case 'inventory':return inventory();
       case 'schema':return loadSchema();
       case 'tables':return query('PRAGMA table_list');
       case 'sequence-present':return query("SELECT name FROM sqlite_schema WHERE name='sqlite_sequence'");
       case 'sequences':return query("SELECT name,'I'||CAST(seq AS TEXT) AS seq FROM sqlite_sequence ORDER BY name");
       case 'columns':await descriptor(command.table);return query(`PRAGMA table_xinfo(${identifier(command.table)})`);
       case 'count':await descriptor(command.table);return query(`SELECT COUNT(*) AS n FROM ${identifier(command.table)}`);
-      case 'sizes':case 'rows': {
+      case 'page':case 'sizes':case 'rows': {
         const t=await descriptor(command.table);
-        if(!Number.isInteger(command.limit)||command.limit<1||command.limit>256||
+        if(!Number.isInteger(command.limit)||command.limit<1||command.limit>(command.kind==='page'?1024:256)||
             command.last!==null&&(!Array.isArray(command.last)||command.last.length!==t.order.length))throw failure();
         const keys=t.order.map(identifier).join(','),comparison=command.last?
           ` WHERE (${keys}) > (${command.last.map(cellSQL).join(',')})`:'';
+        if(command.kind==='page') {
+          // One HTTP exchange combines bounded length discovery and data. No
+          // raw SQL, projection or page-byte budget can be supplied by callers.
+          const weight='('+t.columns.map(c=>`max(32,coalesce(length(CAST(${identifier(c)} AS BLOB)),0)*2+32)`).join('+')+`+${512+t.columns.length*16})`;
+          const sizes=await query(`SELECT ${weight} AS bytes FROM ${identifier(t.name)}${comparison} ORDER BY ${keys} LIMIT ${command.limit}`);
+          let limit=0,total=0;
+          for(const row of sizes) {
+            if(!Number.isSafeInteger(row.bytes)||row.bytes<0||row.bytes>MAXIMUM_LINE)throw failure();
+            if(limit&&total+row.bytes>1024*1024)break;total+=row.bytes;limit++;
+          }
+          if(!limit)return [];
+          const projected=t.columns.map((c,i)=>`CASE WHEN ${weight} <= ${MAXIMUM_LINE} THEN ${cellExpression(c)} END AS c${i}`).join(',');
+          const page=await query(`SELECT ${projected} FROM ${identifier(t.name)}${comparison} ORDER BY ${keys} LIMIT ${limit}`);
+          if(page.length!==limit)throw failure();for(const row of page)for(let i=0;i<t.columns.length;i++)cellSQL(row['c'+i]);
+          return page;
+        }
         const weight='('+t.columns.map(c=>`max(32,coalesce(length(CAST(${identifier(c)} AS BLOB)),0)*2+32)`).join('+')+`+${8192+t.columns.length*16})`;
         const projected=command.kind==='sizes'?`${weight} AS bytes,`+t.order.map((c,i)=>`CASE WHEN ${weight} <= ${MAXIMUM_LINE} THEN ${cellExpression(c)} END AS k${i}`).join(','):
           t.columns.map((c,i)=>`CASE WHEN ${weight} <= ${MAXIMUM_LINE} THEN ${cellExpression(c)} END AS c${i}`).join(',');

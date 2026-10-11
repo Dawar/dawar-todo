@@ -13,33 +13,17 @@ export async function captureDatabase({capture,recipient,onProgress=()=>{}}){
   const client=createApplicationReadClient({capture,recipient,fetchOwned:(url,init)=>fetch(url,init)});
   let calls=0;const read=async command=>{calls++;return client.read(command);};
   try{
-    const schema=await read({kind:'schema'}),list=await read({kind:'tables'}),tables=[];
-    for(const item of schema.filter(s=>s.type==='table')){
-      const table=list.find(t=>t.schema==='main'&&t.name===item.name);
-      if(!table||table.type!=='table')throw fail();
-      const x=await read({kind:'columns',table:item.name}),columns=x.filter(c=>c.hidden===0).map(c=>c.name);
-      let order;
-      if(table.wr)order=x.filter(c=>c.pk).sort((a,b)=>a.pk-b.pk).map(c=>c.name);
-      else{const k=['_rowid_','rowid','oid'].find(n=>!x.some(c=>c.name.toLowerCase()===n));if(!k)throw fail();columns.unshift(k);order=[k];}
-      const count=await read({kind:'count',table:item.name}),rows=count[0]?.n;
-      if(!Number.isSafeInteger(rows)||rows<0||rows>10000000||!columns.length||!order.length)throw fail();
-      tables.push({name:item.name,columns,order,rows});
-    }
+    const initial=await read({kind:'inventory'});if(initial.length!==1)throw fail();
+    const header=initial[0],{schema,tables}=header;
+    if(header.kind!=='header'||header.format!=='dawar-application-snapshot'||header.version!==2||!Array.isArray(schema)||!Array.isArray(tables)||
+        tables.some(t=>!Number.isSafeInteger(t.rows)||t.rows<0||t.rows>10000000||!Array.isArray(t.columns)||!t.columns.length||!Array.isArray(t.order)||!t.order.length))throw fail();
     if(tables.length>1000||tables.reduce((n,t)=>n+t.rows,0)>10000000)throw fail();
-    const sequence=(await read({kind:'sequence-present'})).length?await read({kind:'sequences'}):[];
-    const header={kind:'header',format:'dawar-application-snapshot',version:2,schema,tables,sequence,userVersion:null,applicationId:null,sourceMetadata:{engine:'cloudflare-d1',sqliteHeader:'unavailable'}};
     const content=[line(header)],inventory=[];let total=encode(content[0]).length;
     for(const t of tables){
       const records=[];let last=null,rows=0;
       for(;;){
-        const sizes=await read({kind:'sizes',table:t.name,last,limit:256});let limit=0,weight=0;
-        for(const s of sizes){
-          if(!Number.isSafeInteger(s.bytes)||s.bytes>4*1024*1024||s.bytes<0)throw fail();
-          t.order.forEach((_,i)=>cellSQL(s['k'+i]));
-          if(limit&&weight+s.bytes>1024*1024)break;weight+=s.bytes;limit++;
-        }
-        if(!limit)break;
-        const data=await read({kind:'rows',table:t.name,last,limit});if(data.length!==limit)throw fail();
+        if(rows===t.rows)break;
+        const data=await read({kind:'page',table:t.name,last,limit:1024});if(!data.length||data.length>1024)throw fail();
         for(const r of data){
           const cells=t.columns.map((_,i)=>r['c'+i]);cells.forEach(cellSQL);if(++rows>t.rows)throw fail();
           const text=line({kind:'row',table:t.name,cells});total+=encode(text).length;
@@ -47,10 +31,10 @@ export async function captureDatabase({capture,recipient,onProgress=()=>{}}){
         }
         onProgress({tables:inventory.length,rows,calls});
       }
-      if(rows!==t.rows||(await read({kind:'count',table:t.name}))[0]?.n!==t.rows)throw fail();
+      if(rows!==t.rows)throw fail();
       const text=records.join('');inventory.push({name:t.name,rows,sha256:await hash(text)});content.push(text);
     }
-    if(JSON.stringify(await read({kind:'schema'}))!==JSON.stringify(schema))throw fail();
+    if(JSON.stringify(await read({kind:'inventory'}))!==JSON.stringify(initial))throw fail();
     const proof=await client.verifyFreeze(),text=content.join(''),footer=line({kind:'footer',tables:inventory,sha256:await hash(text)}),complete=text+footer;
     // Seal bounded chunks, not a plaintext database download. Chunk order and
     // whole SHA are verified again before the inactive local SQLite import.

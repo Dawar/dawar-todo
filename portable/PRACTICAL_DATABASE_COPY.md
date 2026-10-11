@@ -22,3 +22,24 @@ Copy and staging do not activate execution. Authentication, ownership, registere
 files and uncertain external-effect identities remain protected. Handover still
 uses the approved linked continuation, one private backup/restart and current
 native/tool/Goal admission constraints. No pending action is automatically retried.
+# Bounded batched application copy
+
+The first database-only copy expired after 15 minutes and released its exact
+original fence. It produced no completed snapshot. That original freeze and
+release receipt remain intact.
+
+The reviewed reader adds fixed `inventory` and `page` commands. Inventory derives
+schema, columns, ordering, counts and sequences from the actual database, using
+bounded batches of at most 32 tables. Pages combine length discovery and row
+reading within one owner-authenticated encrypted HTTP exchange. A page has at
+most 1024 rows and a conservative 1 MiB byte budget, except one bounded row up to
+the existing 4 MiB line ceiling. SQL and projections remain server-derived.
+
+The private capture binds the positively released prior database generation and
+one new, explicitly recorded copy operation. It never reuses the first operation
+with changed arguments or deadline. All existing owner, source, schema, expiry,
+encryption, receipt and final revalidation checks remain. Metadata is checked
+again before download; inactive import verifies every table and complete hash.
+
+This is application-data staging. It does not restart native execution, renew a
+failed runtime attempt, establish external-effect completion or authorize replay.
