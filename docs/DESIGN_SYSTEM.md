@@ -402,3 +402,5 @@ Machine setup prioritizes the download and pairing steps. Integrity metadata liv
 Goal status pills and compact indicators use shared muted, accent and warning tokens; visible text carries status independently of color. Objective disclosures retain a44px target and visible keyboard focus.
 
 Artifact galleries use semantic surfaces, subdued previews, shared focus colors and13px metadata. Viewer overlays and shadows derive from foreground opacity. Document/route borders use shared tokens; native route labels remain textual so color is supplementary. File content, sanitization and download behavior remain unchanged.
+
+PDF review attachments and error feedback use13px metadata. Canvas shadows derive from the shared foreground token; rendered PDF pages intentionally retain a white paper background to preserve document appearance.
