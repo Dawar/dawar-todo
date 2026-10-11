@@ -66,6 +66,7 @@ export function DiscussionsNavigator({owner,bots,online,botId,onBot,onOpen,selec
   const read=useCollaborationRead(owner,botId,'conversations.list',{limit:40,...(cursors.at(-1)?{cursor:cursors.at(-1)!}:{})},!!botId&&online&&client.snapshot?.capabilities?.collaborationRooms===1);
   const valid=roomPage<CollaborationRoom>(read.value,r=>r.members.includes(botId)&&r.members.length<=12&&typeof r.name==='string');
   const rooms=valid?read.value!.items:[];
+  const matchingRooms=rooms.filter(room=>roomName(room,bots).toLowerCase().includes(search.trim().toLowerCase()));
   useEffect(()=>{
     let seq=-1;
     const known=new Set(read.value?.items.map(r=>r.id)??[]);
@@ -80,7 +81,8 @@ export function DiscussionsNavigator({owner,bots,online,botId,onBot,onOpen,selec
     <Button variant="outline" ref={createButton} disabled={!botId||!online||client.snapshot?.capabilities?.collaborationRooms!==1} onClick={()=>setCreate(v=>!v)}><Plus size={16}/>New conversation</Button>
     {create&&<CreateRoom key={`${owner}:${botId}`} owner={owner} botId={botId} bots={bots} online={online} onClose={()=>{setCreate(false);createButton.current?.focus();}} onCreated={r=>{setCreate(false);read.refresh();onOpen(r);}}/>}
     {client.snapshot?.capabilities?.collaborationRooms!==1?<p>The connected service does not yet support rooms. Existing bot discussions remain available in bot details.</p>:<>
-      {rooms.filter(r=>roomName(r,bots).toLowerCase().includes(search.trim().toLowerCase())).map(room=><Button variant="ghost" aria-current={selected===room.id?'page':undefined} className={`bots-room-row ${selected===room.id?'selected':''}`} key={room.id} onClick={()=>{setAttention(old=>old.filter(id=>id!==room.id));onOpen(room);}}><RoomAvatars members={room.members} bots={bots}/><span>{roomName(room,bots)}{room.held&&<small>Room held</small>}{attention.includes(room.id)&&<small title="Observed new activity in this view; no device-wide unread count is inferred">New activity</small>}</span></Button>)}
+      {matchingRooms.map(room=><Button variant="ghost" aria-current={selected===room.id?'page':undefined} className={`bots-room-row ${selected===room.id?'selected':''}`} key={room.id} onClick={()=>{setAttention(old=>old.filter(id=>id!==room.id));onOpen(room);}}><RoomAvatars members={room.members} bots={bots}/><span>{roomName(room,bots)}{room.held&&<small>Room held</small>}{attention.includes(room.id)&&<small title="Observed new activity in this view; no device-wide unread count is inferred">New activity</small>}</span></Button>)}
+      {!read.loading&&valid&&rooms.length>0&&!matchingRooms.length&&<p role="status">No matching conversations on this page.</p>}
       {read.loading&&<p role="status">Loading conversations…</p>}{read.error&&<p role="alert">{read.error}</p>}{!read.loading&&valid&&!rooms.length&&<p>No conversations on this page.</p>}
       {!read.loading&&read.value&&!valid&&<p role="alert">This room page could not be verified.</p>}
       <nav aria-label="Conversation pages"><Button variant="outline" disabled={cursors.length<2||read.loading} onClick={()=>setCursors(v=>v.slice(0,-1))}>Previous</Button><Button variant="outline" disabled={!valid||!read.value?.nextCursor||read.loading} onClick={()=>setCursors(v=>[...v,read.value!.nextCursor])}>More conversations</Button><Button variant="outline" disabled={!online||read.loading} onClick={read.refresh}>Refresh</Button></nav><small>Search covers this page.</small>
@@ -92,10 +94,10 @@ type RoomDraft={text:string;version:string};
 function useRoomDraft(owner:string,roomId:string) {
   const key=`dawar-room-draft:v1:${JSON.stringify([owner,roomId])}`;
   const [value,setValue]=useState<RoomDraft>({text:'',version:''}),[error,setError]=useState(''),[ready,setReady]=useState(false);
-  const read=useCallback(()=>{try{const raw=localStorage.getItem(key),r=raw?JSON.parse(raw):{text:'',version:crypto.randomUUID()};if(typeof r.text!=='string'||typeof r.version!=='string')throw Error('Saved room draft is unavailable.');setValue(r);setError('');setReady(true);}catch(e){setReady(false);setError(String(e));}},[key]);
+  const read=useCallback(()=>{try{const raw=localStorage.getItem(key),r=raw?JSON.parse(raw):{text:'',version:crypto.randomUUID()};if(typeof r.text!=='string'||typeof r.version!=='string')throw Error('Saved room draft is unavailable.');setValue(r);setError('');setReady(true);}catch{setReady(false);setError('Could not read your saved draft. Retry without clearing site storage.');}},[key]);
   useEffect(()=>{let live=true;queueMicrotask(()=>{if(live)read();});const changed=(e:StorageEvent)=>{if(e.key===key&&client.owner===owner)read();};window.addEventListener('storage',changed);return()=>{live=false;window.removeEventListener('storage',changed);};},[read,key,owner]);
-  const save=useCallback((next:RoomDraft)=>{if(client.owner!==owner)return;try{localStorage.setItem(key,JSON.stringify(next));setValue(next);setError('');}catch(e){setError(`Draft could not be saved: ${String(e)}`);setReady(false);}},[owner,key]);
-  const clear=useCallback((version:string|undefined)=>{if(!version||client.owner!==owner)return;try{const raw=localStorage.getItem(key);if(raw&&JSON.parse(raw).version===version)save({text:'',version:crypto.randomUUID()});}catch(e){setError(String(e));}},[owner,key,save]);
+  const save=useCallback((next:RoomDraft)=>{if(client.owner!==owner)return;try{localStorage.setItem(key,JSON.stringify(next));setValue(next);setError('');}catch{setError('Could not save this draft. Keep this page open and retry.');setReady(false);}},[owner,key]);
+  const clear=useCallback((version:string|undefined)=>{if(!version||client.owner!==owner)return;try{const raw=localStorage.getItem(key);if(raw&&JSON.parse(raw).version===version)save({text:'',version:crypto.randomUUID()});}catch{setError('Could not update your saved draft. Retry without clearing site storage.');}},[owner,key,save]);
   return {value,ready,error,read,edit:(text:string)=>save({text,version:crypto.randomUUID()}),clear};
 }
 function RoomControls({owner,botId,room,bots,online,onUpdated}:{owner:string;botId:string;room:CollaborationRoom;bots:Bot[];online:boolean;onUpdated:()=>void}) {
@@ -140,6 +142,7 @@ export function RoomConversation({owner,botId,roomId,bots,online,onBack}:{owner:
   const feed=useRef<HTMLDivElement>(null),content=useRef<HTMLDivElement>(null),draft=useRoomDraft(owner,roomId);
   const tickAnchor=useRef<string|null>(null);
   const ticks=useMemo(()=>roomHumanMessageTicks(read.value?.items??[],roomId),[read.value?.items,roomId]);
+  const showTicks=ticks.ticks.length>0||!!read.value?.olderCursor;
   const selectTick=(tick:MessageTick)=>{
     if(client.owner!==owner||read.value?.room.id!==roomId||!feed.current)return;
     const post=read.value.items.find(post=>post.author.kind==='owner'&&JSON.stringify([roomId,post.id])===tick.id);
@@ -172,7 +175,7 @@ export function RoomConversation({owner,botId,roomId,bots,online,onBack}:{owner:
   return <section className="bots-conversation bots-room-conversation"><header className="bots-conversation-heading"><Button variant="ghost" size="icon" className="bots-icon-button" aria-label="Back to conversations" onClick={onBack}><ArrowLeft size={20}/></Button>{room&&<RoomAvatars members={room.members} bots={bots}/>}<strong>{room?roomName(room,bots):'Conversation'}</strong></header>
     {!supported&&<p role="status">The connected service does not support rooms. Cached source remains readable; use legacy bot discussions.</p>}{!online&&<p role="status">Offline · cached room data; delivery controls are disabled.</p>}{read.error&&<p role="alert">{read.error}<Button variant="outline" disabled={!online} onClick={read.refresh}>Retry room</Button></p>}
     {room&&<RoomControls key={`${room.id}:${room.revision}`} owner={owner} botId={botId} room={room} bots={bots} online={online&&supported} onUpdated={read.refresh}/>}
-    <div className="bots-room-tick-timeline"><div className="bots-room-feed" ref={feed} onWheel={()=>{tickAnchor.current=null;}} onTouchStart={()=>{tickAnchor.current=null;}} onKeyDownCapture={()=>{tickAnchor.current=null;}} onPointerDownCapture={()=>{tickAnchor.current=null;}} onScroll={()=>{
+    <div className={`bots-room-tick-timeline${showTicks?' has-message-ticks':''}`}><div className="bots-room-feed" ref={feed} onWheel={()=>{tickAnchor.current=null;}} onTouchStart={()=>{tickAnchor.current=null;}} onKeyDownCapture={()=>{tickAnchor.current=null;}} onPointerDownCapture={()=>{tickAnchor.current=null;}} onScroll={()=>{
       const e=feed.current;if(!e)return;
       if(tickAnchor.current){read.remember(false,{id:tickAnchor.current,offset:24});return;}
       const following=e.scrollHeight-e.scrollTop-e.clientHeight<80,top=e.getBoundingClientRect().top;
@@ -189,7 +192,7 @@ export function RoomConversation({owner,botId,roomId,bots,online,onBack}:{owner:
       </article>)}
       {contexts.map(context=><LazyDetails key={context.id} className="bots-room-context" summary={<><MessageCircle size={14}/>{bots.find(b=>b.id===context.botId)?.name??'Named bot'} · room work {context.status}{context.provisioning!=='bound'&&` · ${context.provisioning}`}</>}>{()=> <><ConfigurationEvidence value={context.config}/><p>Goal: {context.goal.status} · room context, separate from foreground</p><CollaborationContextHistory owner={owner} botId={context.botId} context={context} online={online}/></>}</LazyDetails>)}
       {contextRead.error&&<p role="alert">{contextRead.error}<Button variant="outline" disabled={!online} onClick={contextRead.refresh}>Retry contexts</Button></p>}
-    </div></div><MessageTickRail key={JSON.stringify([owner,botId,roomId])} {...ticks} scroll={feed} content={content} earlier={!!read.value?.olderCursor} incomplete={!!read.value?.olderCursor||!!read.newerAvailable} loading={read.loading} online={online&&supported} error={read.error} onEarlier={()=>{tickAnchor.current=null;return read.browseOlder();}} onSelect={selectTick}/></div>
+    </div></div>{showTicks&&<MessageTickRail key={JSON.stringify([owner,botId,roomId])} {...ticks} scroll={feed} content={content} earlier={!!read.value?.olderCursor} incomplete={!!read.value?.olderCursor||!!read.newerAvailable} loading={read.loading} online={online&&supported} error={read.error} onEarlier={()=>{tickAnchor.current=null;return read.browseOlder();}} onSelect={selectTick}/>}</div>
     {quoteError&&<p role="alert">{quoteError}</p>}{room&&<RoomComposer draft={draft} key={`${owner}:${roomId}:${botId}`} owner={owner} botId={botId} room={room} bots={bots} contexts={contexts} online={online&&supported} onSent={read.invalidate}/>}
   </section>;
 }

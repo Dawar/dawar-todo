@@ -1,6 +1,7 @@
 .bots-timeline.has-message-ticks > .bots-messages { padding-inline-end: max(42px, calc((100% - var(--chat-width, 860px)) / 2)); }
 .bots-room-tick-timeline { position: relative; display: flex; flex-direction: column; flex: 1; min-height: 0; }
-.bots-room-tick-timeline > .bots-room-feed { padding-inline-end: 42px; overflow-anchor: none; }
+.bots-room-tick-timeline > .bots-room-feed { overflow-anchor: none; }
+.bots-room-tick-timeline.has-message-ticks > .bots-room-feed { padding-inline-end: 42px; }
 .bots-room-feed-content > nav { display: flex; gap: .5rem; flex-wrap: wrap; }
 .bots-message-tick-rail { position: absolute; top: 12px; z-index: 2; width: 24px; color: var(--muted-foreground); }
 .bots-message-tick-rail button { box-sizing: border-box; background: transparent; border: 0; color: inherit; padding: 0; border-radius: 4px; cursor: pointer; }

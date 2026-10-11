@@ -450,3 +450,5 @@ Recorded turn settings keep requested and runtime-confirmed evidence distinct. M
 Chat detail and download failures use concise action-specific messages instead of raw exception strings. Existing retry controls, saved previews and controller failures remain intact.
 
 The message navigation rail and its reserved gutter appear only when loaded message marks or earlier paging are available. Empty conversations retain a centered, uncluttered introduction.
+
+Room navigation reports searches with no matches on the loaded page. Empty rooms omit the message rail and gutter, matching foreground chat. Draft-storage failures provide concise recovery guidance without exposing parser exceptions.
