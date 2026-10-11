@@ -76,8 +76,8 @@ import { installExtensionShortcuts } from "./extension-shortcuts";
 import { SavedDrafts } from "./saved-drafts";
 import { ComposerInput } from "./composer-input";
 import { ComposerSettings } from "./composer-settings";
-import { DiscussionsNavigator, RoomConversation, CollaborationInbox } from "./collaboration-rooms";
-import { useExecutionConfiguration, WorkingConfiguration } from "./configuration-evidence";
+import { DiscussionsNavigator, RoomConversation } from "./collaboration-rooms";
+import { useExecutionConfiguration } from "./configuration-evidence";
 import { QueueConfigurationIntent } from "./queue-configuration-intent";
 import { ArtifactGallery, BotAttachmentsEntry, ArtifactNav } from "./artifact-gallery";
 import { PromptQueue } from "./prompt-queue";
@@ -676,8 +676,6 @@ export function BotsWorkspace() {
             </div>
           ) : (
             <>
-              {snapshot?.capabilities?.executionConfiguration === 1 && <WorkingConfiguration value={configuration.value} activeTurnId={bot.activeTurnId} online={online}/>}
-              {snapshot?.capabilities?.collaborationRooms === 1 && <CollaborationInbox key={`${owner}:${bot.id}`} owner={owner} botId={bot.id} online={online} bots={bots} onOpen={id=>openRoom(id,bot.id)}/>}
               <BotConversation key={scope} owner={owner} bot={bot} online={online} onOpenActivity={openActivity} onOpenCall={openCalls} draft={draft} burstsEnabled={burstSupported && !bot.archived} onReply={snapshot?.capabilities?.messageReplies === 1 && composer?.ready && !checkoutLocked && !sending ? reply => composer.setReply(reply) : undefined} burstSubmitting={composer?.operation?.method === "bursts.submit"}>
 
                 {snapshot?.capabilities?.peerInbox === 1 && <DiscussionStatus status={discussions} bots={bots} botId={bot.id} online={online} onOpen={openDiscussion} attentionOnly />}

@@ -63,7 +63,7 @@ export function ComposerSettings({ bot, snapshot, online }: { bot: Bot; snapshot
         <button type="button" aria-pressed={effective.mode === "plan"}
           disabled={!online} title="Plan the next human reply; current and background work keep their captured mode"
           onClick={() => controller.edit({ mode: controller.displayed(bot).mode === "plan" ? "default" : "plan" })}>
-          {effective.mode === "plan" ? <Check size={15} aria-hidden="true" /> : <ListTodo size={15} aria-hidden="true" />}Plan next reply
+          {effective.mode === "plan" ? <Check size={15} aria-hidden="true" /> : <ListTodo size={15} aria-hidden="true" />}Plan
         </button>
         <button type="button" aria-pressed={active}
           disabled={!online || !available && !active} title={!available && !active ? "Fast is unavailable for this model" : "Fast uses more Codex credits"}
@@ -75,7 +75,6 @@ export function ComposerSettings({ bot, snapshot, online }: { bot: Bot; snapshot
         </button>
       </div>
     </div>
-    <p className="bots-settings-next-note">Current turns keep their captured settings. Send guidance uses that turn&apos;s configuration.</p>
     {adjustmentText && <p className="bots-settings-next-note" role="status">{adjustmentText} These changes apply after saving.</p>}
     {(state.error || state.storageError || state.confirmationError || pending?.phase === "storage") && <div className="bots-settings-error" role="alert">
       <span>{state.storageError || state.error || state.confirmationError || "Saving is paused. Retry storage to continue with the same saved change."}</span>

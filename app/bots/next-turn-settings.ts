@@ -7,5 +7,5 @@ export function nextTurnSaveLabel(state: SettingsState, online: boolean) {
   if (state.pending?.phase === 'saving') return 'Saving';
   if (Object.keys(state.intent).length) return online ? 'Change waiting to save' : 'Unconfirmed';
   if (state.confirmed) return state.confirmationError || !online ? 'Saved · current defaults unconfirmed' : 'Saved for next turn';
-  return online ? 'Defaults for future turns' : 'Offline · defaults may be stale';
+  return online ? '' : 'Offline · defaults may be stale';
 }
