@@ -20,6 +20,7 @@ import type { TaskQueueSource } from "../lib/task-queue-export";
 import { registerPwaUpdateGuard } from "./pwa-update";
 import { todoCopyText } from "./todo-forward";
 import { TaskCaptureSession, TaskCaptureGate } from "./task-capture";
+import { TaskImageViewer } from "./task-image-viewer";
 import { TaskNotice, type TaskNoticeState } from "./task-notice";
 import { TaskBulkActions } from "./task-bulk-actions";
 import { TaskIntentPanel } from "./task-intent-panel";
@@ -908,7 +909,6 @@ export default function Home() {
   const captureTitleRecognitionSequenceRef = useRef(0);
   const persistCaptureDraftRef = useRef<((draft: CaptureDraft, source: string) => Promise<void>) | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
-  const viewerGesture = useRef<number | null>(null);
   const imageDropDepth = useRef(0);
   const editingIdRef = useRef<number | null>(null);
   const editDraftRef = useRef<TodoDraft | null>(null);
@@ -4520,53 +4520,7 @@ export default function Home() {
         />
       )}
 
-      {viewerAttachment && viewerIndex !== null && (
-        <div
-          className="fixed inset-0 z-[80] flex touch-pan-y items-center justify-center overflow-hidden bg-black/92 p-3 sm:p-8"
-          role="dialog"
-          aria-modal="true"
-          aria-label={`Image viewer: ${viewerAttachment.fileName}`}
-          onPointerDown={(event) => { if (event.pointerType === "touch") viewerGesture.current = event.clientX; }}
-          onPointerUp={(event) => {
-            const start = viewerGesture.current;
-            viewerGesture.current = null;
-            if (start === null || imageAttachments.length < 2) return;
-            const delta = event.clientX - start;
-            if (Math.abs(delta) < 50) return;
-            setViewerIndex((current) => current === null ? null : delta < 0
-              ? (current + 1) % imageAttachments.length
-              : (current - 1 + imageAttachments.length) % imageAttachments.length);
-          }}
-        >
-          <button type="button" onClick={() => setViewerIndex(null)} aria-label="Close image viewer" className="absolute inset-0 cursor-zoom-out" />
-          <div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex items-center justify-between gap-3 bg-gradient-to-b from-black/70 to-transparent px-4 pb-8 pt-[max(1rem,env(safe-area-inset-top))] sm:px-6">
-            <div className="min-w-0">
-              <span className="block truncate text-sm font-medium text-white/85">{viewerAttachment.fileName}</span>
-              {viewerCopyState !== "idle" && (
-                <span className={classNames("mt-0.5 block truncate text-xs", viewerCopyState === "error" ? "text-amber-200" : "text-white/65")} role="status" aria-live="polite">
-                  {viewerCopyState === "copying" ? "Copying image…" : viewerCopyState === "copied" ? "Copied to clipboard" : "Use right-click → Copy Image"}
-                </span>
-              )}
-            </div>
-            <div className="pointer-events-auto flex shrink-0 items-center gap-1">
-              <button type="button" onClick={() => void copyViewerImage()} disabled={viewerCopyState === "copying"} className="grid h-10 w-10 place-items-center rounded-full bg-white/10 text-white hover:bg-white/20 disabled:opacity-50" aria-label="Copy image" title="Copy image"><ActionIcon name="copy" className="h-5 w-5" /></button>
-              <a href={viewerAttachment.originalUrl} download={viewerAttachment.fileName} className="grid h-10 w-10 place-items-center rounded-full bg-white/10 text-white hover:bg-white/20" aria-label="Download original" title="Download original"><ActionIcon name="download" className="h-5 w-5" /></a>
-              <button type="button" onClick={() => void deleteDetailAttachment(viewerAttachment)} className="grid h-10 w-10 place-items-center rounded-full bg-white/10 text-white hover:bg-red-600" aria-label="Delete image" title="Delete image"><ActionIcon name="delete" className="h-5 w-5" /></button>
-              <button type="button" onClick={() => setViewerIndex(null)} className="grid h-10 w-10 place-items-center rounded-full bg-white/10 text-white hover:bg-white/20" aria-label="Close image viewer" title="Close"><ActionIcon name="close" className="h-5 w-5" /></button>
-            </div>
-          </div>
-
-          <img src={viewerAttachment.displayUrl} alt={viewerAttachment.fileName} className="relative max-h-full max-w-full object-contain" />
-
-          {imageAttachments.length > 1 && (
-            <>
-              <button type="button" onClick={() => setViewerIndex((viewerIndex - 1 + imageAttachments.length) % imageAttachments.length)} aria-label="Previous image" className="absolute left-3 top-1/2 hidden h-12 w-12 -translate-y-1/2 place-items-center rounded-full bg-black/45 text-white hover:bg-black/70 sm:grid"><ActionIcon name="previous" className="h-6 w-6" /></button>
-              <button type="button" onClick={() => setViewerIndex((viewerIndex + 1) % imageAttachments.length)} aria-label="Next image" className="absolute right-3 top-1/2 hidden h-12 w-12 -translate-y-1/2 place-items-center rounded-full bg-black/45 text-white hover:bg-black/70 sm:grid"><ActionIcon name="next" className="h-6 w-6" /></button>
-              <span className="absolute bottom-[max(1rem,env(safe-area-inset-bottom))] rounded-full bg-black/55 px-3 py-1.5 text-xs font-semibold text-white/90">{viewerIndex + 1} / {imageAttachments.length}</span>
-            </>
-          )}
-        </div>
-      )}
+      {viewerAttachment && viewerIndex !== null && <TaskImageViewer attachment={viewerAttachment} index={viewerIndex} count={imageAttachments.length} copyState={viewerCopyState} onClose={() => setViewerIndex(null)} onCopy={() => void copyViewerImage()} onDelete={() => void deleteDetailAttachment(viewerAttachment)} onNavigate={delta => setViewerIndex(current => current === null ? null : (current + delta + imageAttachments.length) % imageAttachments.length)} />}
 
       {notice && <TaskNotice notice={notice} bulkActionsVisible={selectedIds.length > 0} undoing={undoing} adjusting={adjustingSnooze !== null} presets={quickSnoozePresets} onUndo={() => requestNoticeUndo(notice)} onDismiss={() => setNotice(null)} onSnooze={preset => void adjustSnooze(notice.snoozeIds as number[], preset, notice.operationId)} onCustomSnooze={() => openCustomSnooze(notice.snoozeIds as number[], notice.operationId)} />}
 

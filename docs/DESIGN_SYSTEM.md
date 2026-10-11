@@ -160,3 +160,7 @@ TaskNotice uses a semantic card with a status/error text area, a persistent dism
 ### Capture attachment recovery
 
 Capture uses the same PendingTaskAttachment card as task details, with caller-controlled retry availability, disabled state and accurate capture status labels. Filenames and errors wrap at readable sizes; capture cards scroll within their own region. Staged/ready cards say Ready to attach, offline capture says Saved on this device, uploading retains no actions, and only failed capture exposes Retry. Capture project controls and draft-recovery/download actions now use shared buttons. Existing upload/save/remove functions and admission conditions remain unchanged. Desktop file-state fixtures and existing attachment contracts pass; full capture persistence/media/phone acceptance remains pending.
+
+### Task image viewer
+
+The task image viewer uses ControlledDialog for focus containment, Escape and opener restoration, with a bounded image area and shared copy/download/delete controls. Previous/next controls are available at every width; arrows and the existing 50px touch threshold navigate without altering copy/download/delete handlers. Loading and unavailable images have explicit feedback. Actual 320px long-name/image/navigation observed; full nested detail, real touch, clipboard/download/deletion and desktop acceptance remain tracked separately.
