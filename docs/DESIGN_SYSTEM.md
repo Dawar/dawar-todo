@@ -200,3 +200,7 @@ Request editor field legends are direct fieldset children; the remove action fol
 ### Owner-scoped draft recovery
 
 SavedDrafts binds each displayed read result to its owner and rejects a mismatched composer. Owner changes hide stale rows immediately; late restore feedback cannot update a different owner result. A compact Retry repeats only the local read. Actual 320px preview covers delayed read, rejection, Retry, a populated row, owner switch and confirmed empty state; no restore/send effect. Type and scoped lint pass. Full storage, late-promise, desktop and keyboard acceptance remains tracked.
+
+### Guest field grouping
+
+Request groups retain semantic fieldset/legend markup with 16px spacing between fields and supporting group notes. The private model-read opt-in uses an aligned checkbox row instead of the text-field grid, with an 18px native checkbox and wrapped label. Actual320 and1280 previews confirm grouped spacing and checkbox alignment; the800 responsive input did not change the visible viewport and is not counted. Type/scoped lint pass; controller and consent defaults are unchanged.
