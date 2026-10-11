@@ -6,6 +6,7 @@ import {
 } from "../../../../../db/talk-phone";
 import { noStoreHeaders, talkErrorResponse, talkUserKey } from "../../../../../lib/talk-http";
 import {
+  twilioRequestUrl,
   configureTwilioVoiceWebhook,
   displayPhoneNumber,
   twilioPhoneConfig,
@@ -26,7 +27,7 @@ function profileResponse(profile: Awaited<ReturnType<typeof readTalkPhoneProfile
 async function configureProvider(request: Request, userKey: string) {
   const profile = await readTalkPhoneProfile(userKey);
   if (!profile.configured) throw new Error("Set a phone PIN before connecting the Twilio number.");
-  const webhookUrl = new URL("/api/talk/phone/incoming", request.url).toString();
+  const webhookUrl = new URL("/api/talk/phone/incoming", twilioRequestUrl(request)).toString();
   const provider = await configureTwilioVoiceWebhook(webhookUrl);
   await markTalkPhoneProviderConfigured(userKey, provider.webhookUrl);
   console.info("[todo-talk-phone-api] phone number connected", {

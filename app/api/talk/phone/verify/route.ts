@@ -5,6 +5,7 @@ import {
   verifyTalkPhoneCallPin,
 } from "../../../../../db/talk-phone";
 import {
+  twilioRequestUrl,
   phoneModePromptTwiml,
   phonePinPromptTwiml,
   phoneRejectedTwiml,
@@ -42,14 +43,14 @@ export async function POST(request: Request) {
       if (!failed.remainingAttempts) {
         return twilioDocumentResponse(phoneRejectedTwiml("PIN not accepted. Call ended."));
       }
-      const actionUrl = new URL("/api/talk/phone/verify", request.url).toString();
+      const actionUrl = new URL("/api/talk/phone/verify", twilioRequestUrl(request)).toString();
       return twilioDocumentResponse(phonePinPromptTwiml({
         actionUrl,
         message: `PIN not accepted. ${failed.remainingAttempts} ${failed.remainingAttempts === 1 ? "try" : "tries"} remaining. Enter your PIN, then press pound.`,
       }));
     }
     await verifyTalkPhoneCallPin(callSid, userKey);
-    const modeUrl = new URL("/api/talk/phone/mode", request.url).toString();
+    const modeUrl = new URL("/api/talk/phone/mode", twilioRequestUrl(request)).toString();
     console.info("[todo-talk-phone-api] PIN accepted and mode prompt returned", {
       callSid,
       userKey,

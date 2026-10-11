@@ -3,7 +3,7 @@ import {
   confirmProfilePhoneVerification,
 } from "../../../../../../db/profile-phone";
 import { noStoreHeaders, talkErrorResponse, talkUserKey } from "../../../../../../lib/talk-http";
-import { configureTwilioMessagingWebhook } from "../../../../../../lib/twilio-phone";
+import { twilioRequestUrl, configureTwilioMessagingWebhook } from "../../../../../../lib/twilio-phone";
 
 export async function POST(request: Request) {
   const startedAt = Date.now();
@@ -11,7 +11,7 @@ export async function POST(request: Request) {
   try {
     userKey = talkUserKey(request);
     const payload = await request.json() as { phoneNumber?: unknown };
-    const webhookUrl = new URL("/api/talk/phone/urgent/provider/sms/incoming", request.url).toString();
+    const webhookUrl = new URL("/api/talk/phone/urgent/provider/sms/incoming", twilioRequestUrl(request)).toString();
     const provider = await configureTwilioMessagingWebhook(webhookUrl);
     const verification = await beginProfilePhoneVerification(userKey, String(payload.phoneNumber ?? ""));
     console.info("[todo-profile-phone-api] verification requested", {

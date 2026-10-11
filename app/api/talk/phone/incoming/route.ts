@@ -3,6 +3,7 @@ import {
   hasEnabledTalkPhoneProfile,
 } from "../../../../../db/talk-phone";
 import {
+  twilioRequestUrl,
   phonePinPromptTwiml,
   phoneRejectedTwiml,
   phoneUnavailableTwiml,
@@ -40,7 +41,7 @@ export async function POST(request: Request) {
     if (call.blocked) {
       return twilioDocumentResponse(phoneRejectedTwiml("Too many failed calls. Try again later."));
     }
-    const verifyUrl = new URL("/api/talk/phone/verify", request.url).toString();
+    const verifyUrl = new URL("/api/talk/phone/verify", twilioRequestUrl(request)).toString();
     console.info("[todo-talk-phone-api] PIN prompt returned", {
       callSid,
       durationMs: Date.now() - startedAt,

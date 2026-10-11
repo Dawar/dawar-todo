@@ -257,7 +257,7 @@ function BotConversationFeed({ owner, bot, online, children, onOpenCall, onReply
     const time = (entry: HistoryEntry | undefined) => entry?.messageAt ?? entry?.startedAt ?? Infinity;
     const lower = first > 0 || state.olderCursor ? time(state.entries[first]) : -Infinity;
     const upper = last < state.entries.length ? time(state.entries[last]) : Infinity;
-    for (const batch of unprojectedBatches) {
+    for (const batch of unprojectedBatches.filter(batch => batch.state === 'sent')) {
       const messages = batch.messageIds.flatMap(id => burst.value?.messages.find(message => message.id === id) ?? []);
       if (!messages.length) continue;
       const at = Math.min(...messages.map(message => Date.parse(message.createdAt) / 1000));
@@ -344,7 +344,12 @@ function BotConversationFeed({ owner, bot, online, children, onOpenCall, onReply
     {(pinnedContext || last === state.entries.length) && readableContext(afterContext)}
     {downloadError && <p className="bots-error" role="alert">{downloadError}</p>}
 
-    {burstsEnabled && <BurstControls burst={burst} online={online} submitting={burstSubmitting} />}
+    {burstsEnabled && <section className="bots-blast-staging" aria-label="Messages waiting to send">
+      {unprojectedBatches.filter(batch => !['sent', 'discarded'].includes(batch.state)).map(batch =>
+        <BurstBubbles key={batch.id} batch={batch} messages={batch.messageIds.flatMap(id => burst.value?.messages.find(message => message.id === id) ?? [])}
+          truncatedIds={burst.value?.preview?.truncatedTextIds} controls={burst} {...batchProps} onOpenReply={openReply}/>)}
+      <BurstControls burst={burst} online={online} submitting={burstSubmitting} />
+    </section>}
     {children}
   </div></div>{showTicks && <MessageTickRail {...tickNavigation} scroll={scroll} content={content} earlier={earlierTicks} incomplete={!state.complete || Boolean(state.olderCursor) || state.gaps.length > 0} loading={paging || state.loading} online={online} error={state.error} onEarlier={() => feed.page(-1, true)} onSelect={selectTick}/>} {(showJump || last < state.entries.length || state.error || state.loading && state.cached) && <Button variant="outline" type="button" className="bots-jump-latest" disabled={!online || state.loading} onClick={() => {
     latest();

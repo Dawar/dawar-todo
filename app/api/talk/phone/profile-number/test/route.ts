@@ -1,6 +1,6 @@
 import { readVerifiedProfilePhone } from "../../../../../../db/profile-phone";
 import { noStoreHeaders, talkErrorResponse, talkUserKey } from "../../../../../../lib/talk-http";
-import { createTwilioOutboundCall, sendTwilioSms } from "../../../../../../lib/twilio-phone";
+import { twilioRequestUrl, createTwilioOutboundCall, sendTwilioSms } from "../../../../../../lib/twilio-phone";
 
 export async function POST(request: Request) {
   const startedAt = Date.now();
@@ -9,8 +9,8 @@ export async function POST(request: Request) {
     userKey = talkUserKey(request);
     const contact = await readVerifiedProfilePhone(userKey);
     if (!contact) throw new Error("Verify a profile phone number first.");
-    const voiceUrl = new URL("/api/talk/phone/urgent/provider/test/voice", request.url).toString();
-    const voiceStatusUrl = new URL("/api/talk/phone/urgent/provider/test/status", request.url).toString();
+    const voiceUrl = new URL("/api/talk/phone/urgent/provider/test/voice", twilioRequestUrl(request)).toString();
+    const voiceStatusUrl = new URL("/api/talk/phone/urgent/provider/test/status", twilioRequestUrl(request)).toString();
     const [sms, voice] = await Promise.all([
       sendTwilioSms({
         to: contact.phoneNumber,

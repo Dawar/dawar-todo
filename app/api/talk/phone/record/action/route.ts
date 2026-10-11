@@ -6,6 +6,7 @@ import {
   recordTalkPhoneSegmentAction,
 } from "../../../../../../db/talk-phone-recordings";
 import {
+  twilioRequestUrl,
   phoneRecordingTwiml,
   phoneRejectedTwiml,
   twilioDocumentResponse,
@@ -90,7 +91,7 @@ export async function POST(request: Request) {
       segmentIndex: result.nextSegmentIndex,
       durationMs: Date.now() - startedAt,
     });
-    return twilioDocumentResponse(nextRecordingTwiml(request.url, result.nextSegmentIndex));
+    return twilioDocumentResponse(nextRecordingTwiml(twilioRequestUrl(request), result.nextSegmentIndex));
   } catch (error) {
     console.error("[todo-talk-phone-recording-api] recording action failed", {
       callSid,

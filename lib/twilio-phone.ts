@@ -304,12 +304,23 @@ export function twilioSignaturePayload(url: string, params?: URLSearchParams | n
   return payload;
 }
 
-function requestUrlCandidates(request: Request) {
+export function twilioRequestUrl(request: Request) {
   const requestUrl = new URL(request.url);
   const forwardedHost = request.headers.get("x-forwarded-host")?.split(",")[0]?.trim();
   const forwardedProto = request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim();
-  if (forwardedHost) requestUrl.host = forwardedHost;
+  if (forwardedHost) {
+    const authority = new URL(`${forwardedProto === "http" ? "http" : "https"}://${forwardedHost}`);
+    requestUrl.hostname = authority.hostname;
+    // URL.host alone retains the loopback port when the public host omits it.
+    // Twilio signs the public URL, so explicitly clear the internal port.
+    requestUrl.port = authority.port;
+  }
   if (forwardedProto === "http" || forwardedProto === "https") requestUrl.protocol = `${forwardedProto}:`;
+  return requestUrl.toString();
+}
+
+function requestUrlCandidates(request: Request) {
+  const requestUrl = new URL(twilioRequestUrl(request));
   const candidates = new Set([requestUrl.toString()]);
   if (requestUrl.protocol === "https:") {
     const websocketUrl = new URL(requestUrl);
