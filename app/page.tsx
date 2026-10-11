@@ -54,6 +54,7 @@ import { zonedDateTimeInputValue, zonedLocalDateTimeToUtc } from "../lib/zoned-d
 import { AttachmentQueuePanel } from "./attachment-queue-panel";
 import { attachmentQueueMessage, hasAttachmentBytes } from "./attachment-queue";
 import { SiteHeader } from "./site-header";
+import { CreateProjectDialog, CustomSnoozeDialog } from "./task-dialogs";
 import { KeyboardShortcutsDialog } from "./keyboard-shortcuts-dialog";
 import { PullGesturePill } from "./pull-to-refresh";
 import { MarkdownPreview } from "./markdown-preview";
@@ -5080,38 +5081,7 @@ export default function Home() {
         </div>
       )}
 
-      {customSnoozeDialog && (
-        <div className="fixed inset-0 z-[70] flex items-end justify-center overflow-x-hidden sm:items-center sm:p-5" role="dialog" aria-modal="true" aria-labelledby="custom-snooze-title">
-          <button type="button" aria-label="Close custom snooze dialog" onClick={() => closeCustomSnooze("backdrop")} className="absolute inset-0 bg-black/35 backdrop-blur-[2px]" />
-          <form onSubmit={saveCustomSnooze} className="relative w-full max-w-full overflow-x-hidden rounded-t-3xl bg-white px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-5 shadow-2xl sm:max-w-md sm:rounded-3xl sm:p-6">
-            <div className="flex min-w-0 items-start justify-between gap-4">
-              <div className="min-w-0">
-                <span className="mb-3 grid h-11 w-11 place-items-center rounded-xl bg-amber-50 text-amber-700"><ActionIcon name="calendar" className="h-5 w-5" /></span>
-                <h2 id="custom-snooze-title" className="text-lg font-semibold text-[#202522]">Custom snooze</h2>
-                <p className="mt-1 text-sm text-[#7c847f]">Choose when {customSnoozeDialog.ids.length === 1 ? "this task" : `these ${customSnoozeDialog.ids.length} tasks`} should return.</p>
-              </div>
-              <button type="button" onClick={() => closeCustomSnooze("button")} className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-[#f1f2f0] text-[#4f5752] hover:bg-[#e8eae7]" aria-label="Close" title="Close"><ActionIcon name="close" /></button>
-            </div>
-            <label className="mt-5 block">
-              <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-[#69716c]">Date and time</span>
-              <input
-                type="datetime-local"
-                value={customSnoozeDialog.localDateTime}
-                onChange={(event) => setCustomSnoozeDialog((current) => current ? { ...current, localDateTime: event.target.value, error: "" } : current)}
-                required
-                aria-invalid={Boolean(customSnoozeDialog.error)}
-                aria-describedby="custom-snooze-help"
-                className={classNames("h-12 w-full rounded-xl border bg-white px-3 text-base outline-none focus:ring-3", customSnoozeDialog.error ? "border-red-400 focus:border-red-500 focus:ring-red-500/10" : "border-black/[0.1] focus:border-[#216e4e]/50 focus:ring-[#216e4e]/10")}
-              />
-            </label>
-            <p id="custom-snooze-help" className={classNames("mt-2 text-xs leading-5", customSnoozeDialog.error ? "font-medium text-red-600" : "text-[#7c847f]")}>{customSnoozeDialog.error || `Time in ${scheduleTimeZone}`}</p>
-            <div className="mt-6 flex gap-2">
-              <button type="button" onClick={() => closeCustomSnooze("cancel")} className="h-11 flex-1 rounded-xl bg-[#f1f2f0] px-4 text-sm font-semibold text-[#59615c] hover:bg-[#e8eae7]">Cancel</button>
-              <button type="submit" disabled={adjustingSnooze !== null || !customSnoozeDialog.localDateTime} className="inline-flex h-11 flex-1 items-center justify-center gap-2 rounded-xl bg-[#216e4e] px-4 text-sm font-semibold text-white hover:bg-[#195d41] disabled:opacity-50"><ActionIcon name="snooze" />Snooze</button>
-            </div>
-          </form>
-        </div>
-      )}
+      {customSnoozeDialog && <CustomSnoozeDialog count={customSnoozeDialog.ids.length} value={customSnoozeDialog.localDateTime} error={customSnoozeDialog.error} timeZone={scheduleTimeZone} busy={adjustingSnooze !== null} onValue={value => setCustomSnoozeDialog(current => current ? { ...current, localDateTime: value, error: "" } : current)} onClose={() => closeCustomSnooze("button")} onSubmit={saveCustomSnooze} />}
 
       {shortcutsOpen && <KeyboardShortcutsDialog onClose={() => {
         setShortcutsOpen(false);
@@ -5186,37 +5156,7 @@ export default function Home() {
         </div>
       )}
 
-      {newProjectOpen && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center overflow-x-hidden sm:items-center sm:p-5" role="dialog" aria-modal="true" aria-labelledby="new-project-title">
-          <button type="button" aria-label="Close new project dialog" onClick={closeNewProjectDialog} className="absolute inset-0 bg-black/35 backdrop-blur-[2px]" />
-          <form onSubmit={createProject} className="relative w-full max-w-full overflow-x-hidden rounded-t-3xl bg-white px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-5 shadow-2xl sm:max-w-md sm:rounded-3xl sm:p-6">
-            <div className="flex min-w-0 items-start justify-between gap-4">
-              <div className="min-w-0">
-                <span className="mb-3 grid h-11 w-11 place-items-center rounded-xl bg-[#eaf3ed] text-[#216e4e]"><ActionIcon name="create-project" className="h-6 w-6" /></span>
-                <h3 id="new-project-title" className="text-lg font-semibold text-[#202522]">Create project</h3>
-                <p className="mt-1 text-sm leading-5 text-[#7c847f]">Add a project you can assign tasks to and filter by.</p>
-              </div>
-              <button type="button" onClick={closeNewProjectDialog} disabled={creatingProject} className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#f1f2f0] text-[#4f5752] hover:bg-[#e8eae7] disabled:opacity-50" aria-label="Close new project dialog" title="Close"><ActionIcon name="close" /></button>
-            </div>
-            <label className="mt-5 block min-w-0">
-              <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-[#69716c]">Project name</span>
-              <input
-                autoFocus
-                value={newProjectName}
-                onChange={(event) => { setNewProjectName(event.target.value); setNewProjectError(""); }}
-                placeholder="e.g. Reference, Home, Work"
-                maxLength={120}
-                className="h-12 w-full min-w-0 max-w-full rounded-xl border border-black/[0.1] px-3 text-[16px] outline-none focus:border-[#216e4e]/50 focus:ring-3 focus:ring-[#216e4e]/10"
-              />
-            </label>
-            {newProjectError && <p role="alert" className="mt-3 text-sm font-medium text-red-700">{newProjectError}</p>}
-            <div className="mt-6 flex items-center justify-end gap-2">
-              <button type="button" onClick={closeNewProjectDialog} disabled={creatingProject} className="inline-flex h-11 items-center gap-2 rounded-xl px-4 text-sm font-semibold text-[#69716c] hover:bg-[#f3f4f2] disabled:opacity-50"><ActionIcon name="cancel" />Cancel</button>
-              <button type="submit" disabled={creatingProject || !newProjectName.trim()} className="inline-flex h-11 items-center gap-2 rounded-xl bg-[#216e4e] px-5 text-sm font-semibold text-white hover:bg-[#195d41] disabled:opacity-50"><ActionIcon name="create-project" />{creatingProject ? "Creating…" : "Create project"}</button>
-            </div>
-          </form>
-        </div>
-      )}
+      {newProjectOpen && <CreateProjectDialog name={newProjectName} error={newProjectError} busy={creatingProject} onName={value => { setNewProjectName(value); setNewProjectError(""); }} onClose={closeNewProjectDialog} onSubmit={createProject} />}
 
       {projectDeleteDialog && (() => {
         const noteCount = todos.filter((todo) => todo.project === projectDeleteDialog.name).length;
