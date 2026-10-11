@@ -34,7 +34,7 @@ export function AccountSession() {
   };
   return <Card role="region" aria-labelledby="account-session-title" className="mb-6 p-5 shadow-none sm:p-6">
     <div className="flex flex-wrap items-center justify-between gap-4">
-      <div className="min-w-0 flex-1">
+      <div className="min-w-0 flex-1 basis-64">
         <h2 id="account-session-title" className="text-lg font-semibold tracking-tight">Account</h2>
         {owner && <p className="mt-1 break-all text-sm text-muted-foreground">{owner}</p>}
         <p className="mt-2 text-sm leading-6 text-muted-foreground">Sign out on this browser. Your saved drafts and data stay available when you return.</p>
