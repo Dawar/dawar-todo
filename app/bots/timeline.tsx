@@ -49,7 +49,7 @@ const EntryBody = memo(function EntryBody({ entry, timeline, attachments, downlo
   const [error, setError] = useState(""), [loading, setLoading] = useState(false);
   const load = useCallback(async () => {
     setLoading(true); setError("");
-    try { await timeline.detail(entry); } catch (e) { setError(String(e)); }
+    try { await timeline.detail(entry); } catch { setError("Could not load message details. Try again."); }
     finally { setLoading(false); }
   }, [entry, timeline]);
   // Deferred entries mount only after disclosure. Later descriptors must not
@@ -60,7 +60,7 @@ const EntryBody = memo(function EntryBody({ entry, timeline, attachments, downlo
     if (!initialEntry.current.item && !(initialEntry.current.workPlan && initialEntry.current.complete)) queueMicrotask(() => {
       if (!active) return;
       setLoading(true);
-      void timeline.detail(initialEntry.current).catch((error) => { if (active) setError(String(error)); }).finally(() => { if (active) setLoading(false); });
+      void timeline.detail(initialEntry.current).catch(() => { if (active) setError("Could not load message details. Try again."); }).finally(() => { if (active) setLoading(false); });
     });
     return () => { active = false; };
   }, [timeline]);
@@ -68,14 +68,14 @@ const EntryBody = memo(function EntryBody({ entry, timeline, attachments, downlo
   let workPlan = entry.workPlan, planError = '';
   // A new native preview stays current while an older opened detail is being
   // reconciled. A failed/expired full read must not cover it with stale steps.
-  if (workPlan && full?.type === 'plan' && !refreshing && !loading && !detailError && !error) try { workPlan = readWorkPlanSource(full.text) ?? undefined; } catch (reason) { planError = String(reason); }
+  if (workPlan && full?.type === 'plan' && !refreshing && !loading && !detailError && !error) try { workPlan = readWorkPlanSource(full.text) ?? undefined; } catch { planError = "Could not update the work plan. The saved preview is shown."; }
   return <>{entry.questionNotice && <p className="bots-system-note">{entry.questionNotice}</p>}{refreshing && <small>Updating…</small>}{entry.workPlan ? workPlan && <WorkPlanMessage plan={workPlan} botId={timeline.botId} attachments={attachments} turnStatus={entry.turnStatus ?? entry.status}/> : item && <BotMessage item={item} botId={timeline.botId} attachments={attachments} download={download} inWorkLog partial={entry.status === "inProgress" || !full && !entry.complete} />}
     {!entry.complete && <div className="bots-detail-status">
       <Button variant="outline" type="button" disabled={loading} onClick={() => void load()}>{loading ? "Loading…" : full ? "Refresh details" : item ? "Continue · load complete message" : "Open full details"}</Button>
       {full && !botsClient.online && <small>Saved copy. Reconnect to check for changes.</small>}
       {!full && <small>{entry.workPlan ? 'The bounded native snapshot remains readable. Full live updates may expire; missing historical explanations are not reconstructed.' : item ? "A preview of this message. Continue to read it in full." : "Open this work item to see its full details."}</small>}
     </div>}
-    {(planError || (timeline.detailError ? detailError : error)) && <p role="alert" className="bots-error">{planError || (timeline.detailError ? detailError : error)}{timeline.detailError && entry.complete && <Button variant="outline" type="button" disabled={refreshing || loading} onClick={() => void load()}>Refresh details</Button>}</p>}</>;
+    {(planError || (timeline.detailError ? detailError : error)) && <p role="alert" className="bots-error">{planError || (timeline.detailError ? "Could not refresh message details. Try again." : error)}{timeline.detailError && entry.complete && <Button variant="outline" type="button" disabled={refreshing || loading} onClick={() => void load()}>Refresh details</Button>}</p>}</>;
 });
 type WorkLogPage = { entries: HistoryEntry[]; olderCursor: string | null; attachments: BotAttachment[] };
 function TurnWorkLog({ entry, timeline, download, excluded, onPage, cachedPage }: { entry: HistoryEntry; timeline: HistoryDetailReader; download: (id: string) => void; excluded?: Set<string>; onPage?: (page: WorkLogPage, turnId: string) => void; cachedPage?: WorkLogPage }) {
@@ -241,7 +241,7 @@ function BotConversationFeed({ owner, bot, online, children, onOpenCall, onReply
     void botsClient.download(bot.id, id).then(({ blob, name }) => {
       const url = URL.createObjectURL(blob), a = document.createElement("a"); a.href = url; a.download = name; a.click();
       setTimeout(() => URL.revokeObjectURL(url), 60_000);
-    }).catch((error) => setDownloadError(String(error)));
+    }).catch(() => setDownloadError("Could not download this file. Try again."));
   }, [bot.id]);
   // A supplementary context preview can share a canonical identity with an
   // older cached item. Keep a preview being read when newer output arrives;

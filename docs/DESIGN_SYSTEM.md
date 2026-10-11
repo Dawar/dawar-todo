@@ -446,3 +446,5 @@ The header brand/project selector has a 44px minimum hit area. Keyboard help use
 Chat history, detail, retry and Latest actions use shared outline Buttons. Latest retains its floating pill layout with a44px target. Paging, recovery, disabled conditions and reading anchors are unchanged.
 
 Recorded turn settings keep requested and runtime-confirmed evidence distinct. Missing or unfamiliar values stay Unknown; invalid capture dates are omitted. Expanded metadata stays13px instead of browser-small text.
+
+Chat detail and download failures use concise action-specific messages instead of raw exception strings. Existing retry controls, saved previews and controller failures remain intact.
