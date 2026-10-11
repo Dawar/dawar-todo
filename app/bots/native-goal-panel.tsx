@@ -23,7 +23,8 @@ export function NativeGoalPanel({ owner, bot, work, online, snapshot }: Props) {
   const action = useRunAction(owner, bot.id, goalScope(bot.threadId)), id = useId();
   const mainStop = useRunAction(owner, bot.id, 'stop:main'), allStop = useRunAction(owner, bot.id, 'stop:all'), intakeResume = useRunAction(owner, bot.id, 'work:resume');
   const [form, setForm] = useState<Form | null>(null), [error, setError] = useState(''), [refreshing, setRefreshing] = useState(false), [clock, setClock] = useState(() => Date.now());
-  const heading = useRef<HTMLHeadingElement>(null);
+  const heading = useRef<HTMLHeadingElement>(null), objectiveInput = useRef<HTMLTextAreaElement>(null), budgetInput = useRef<HTMLInputElement>(null);
+  const [invalidField, setInvalidField] = useState<'objective' | 'budget' | null>(null);
   const scope = JSON.stringify([owner, bot.id, bot.threadId]), currentScope = useRef(scope), refreshGeneration = useRef(0);
   useLayoutEffect(() => { currentScope.current = scope; return () => { currentScope.current = ''; }; }, [scope]);
   useEffect(() => { const timer = setInterval(() => setClock(Date.now()), 60_000); return () => clearInterval(timer); }, []);
@@ -43,7 +44,7 @@ export function NativeGoalPanel({ owner, bot, work, online, snapshot }: Props) {
   };
   const perform = async (method: 'goals.set' | 'goals.clear', params: BotOperations['goals.set']['params'] = {}) => {
     try {
-      fresh(); setError('');
+      fresh(); setError(''); setInvalidField(null);
       await action.perform(method, params);
       if (stillHere()) { setForm(null); heading.current?.focus({ preventScroll: true }); }
     } catch (reason) { if (stillHere()) setError(reason instanceof Error ? reason.message : 'Goal action is unconfirmed.'); }
@@ -62,16 +63,16 @@ export function NativeGoalPanel({ owner, bot, work, online, snapshot }: Props) {
     } catch (reason) { if (generation === refreshGeneration.current && stillHere()) setError(reason instanceof Error ? reason.message : 'The native goal could not be refreshed.'); }
     finally { if (generation === refreshGeneration.current && stillHere()) setRefreshing(false); }
   };
-  const open = (kind: Form['kind']) => { setError(''); setForm({ kind, fingerprint, objective: goal?.objective ?? '', budgetMode: 'keep', budget: goal?.tokenBudget?.toString() ?? '' }); };
-  const cancel = () => { setForm(null); heading.current?.focus({ preventScroll: true }); };
+  const open = (kind: Form['kind']) => { setError(''); setInvalidField(null); setForm({ kind, fingerprint, objective: goal?.objective ?? '', budgetMode: 'keep', budget: goal?.tokenBudget?.toString() ?? '' }); };
+  const cancel = () => { setForm(null); setInvalidField(null); setError(''); heading.current?.focus({ preventScroll: true }); };
   const submit = (event: React.FormEvent) => {
     event.preventDefault(); if (!form || locked) return;
     const objective = form.objective.trim();
-    if (!objective || objective.length > 4000) { setError('Enter an objective of 1–4,000 characters.'); return; }
+    if (!objective || objective.length > 4000) { setError('Enter an objective of 1–4,000 characters.'); setInvalidField('objective'); objectiveInput.current?.focus(); return; }
     const params: BotOperations['goals.set']['params'] = { objective, ...(form.kind === 'create' ? { status: 'active' } : {}) };
     if (form.budgetMode === 'set') {
       const budget = Number(form.budget);
-      if (!/^\d+$/.test(form.budget) || !Number.isSafeInteger(budget) || budget <= 0) { setError('Enter a positive whole-number token budget.'); return; }
+      if (!/^\d+$/.test(form.budget) || !Number.isSafeInteger(budget) || budget <= 0) { setError('Enter a positive whole-number token budget.'); setInvalidField('budget'); budgetInput.current?.focus(); return; }
       params.tokenBudget = budget;
     } else if (form.budgetMode === 'remove') params.tokenBudget = null;
     void perform('goals.set', params);
@@ -99,15 +100,16 @@ export function NativeGoalPanel({ owner, bot, work, online, snapshot }: Props) {
         {goal && <><Button variant="outline" type="button" disabled={locked} onClick={() => open('edit')}><Pencil size={15} />Edit</Button>{goal.status === 'active' && <Button variant="outline" type="button" disabled={locked} onClick={() => void perform('goals.set', { status: 'paused' })}><Pause size={15} />Pause goal</Button>}{resume && <Button variant="outline" type="button" disabled={locked || Boolean(budgetBlocked)} onClick={() => void perform('goals.set', { status: 'active' })}><Play size={15} />Resume goal</Button>}<Button variant="outline" type="button" disabled={locked} onClick={() => open('clear')}><Trash2 size={15} />Clear</Button></>}
       </div>}
       {form?.kind === 'clear' ? <div className="bots-goal-confirm" role="group" aria-label="Confirm clearing goal"><p>Clear this goal? This removes the current objective from the conversation. It does not stop a running turn or change automatic intake.</p><Button variant="destructive" type="button" disabled={locked} onClick={() => void perform('goals.clear')}>Clear goal</Button><Button variant="outline" type="button" autoFocus disabled={action.busy} onClick={cancel}>Cancel</Button></div> : form && <form onSubmit={submit} className="bots-goal-form">
-        <label htmlFor={`${id}-objective`}>Objective</label><Textarea id={`${id}-objective`} value={form.objective} maxLength={4000} rows={5} disabled={action.busy || Boolean(action.intent)} onChange={event => setForm({ ...form, objective: event.target.value })} autoFocus />
-        <label htmlFor={`${id}-budget-mode`}>Token budget</label><NativeSelect id={`${id}-budget-mode`} disabled={action.busy || Boolean(action.intent)} value={form.budgetMode} onChange={event => setForm({ ...form, budgetMode: event.target.value as Form['budgetMode'] })}><option value="keep">{form.kind === 'create' ? 'No token budget' : 'Keep current budget'}</option><option value="set">Set a token budget</option>{form.kind === 'edit' && <option value="remove">Remove token budget</option>}</NativeSelect>
-        {form.budgetMode === 'set' && <><label htmlFor={`${id}-budget`}>Maximum tokens</label><Input id={`${id}-budget`} inputMode="numeric" pattern="[0-9]+" value={form.budget} disabled={action.busy || Boolean(action.intent)} onChange={event => setForm({ ...form, budget: event.target.value })} /></>}
+        <label htmlFor={`${id}-objective`}>Objective</label><Textarea ref={objectiveInput} aria-invalid={invalidField === 'objective' || undefined} aria-describedby={invalidField === 'objective' ? `${id}-error` : undefined} id={`${id}-objective`} value={form.objective} maxLength={4000} rows={5} disabled={action.busy || Boolean(action.intent)} onChange={event => { setForm({ ...form, objective: event.target.value }); if (invalidField === 'objective') { setInvalidField(null); setError(''); } }} autoFocus />
+        {invalidField === 'objective' && <p id={`${id}-error`} className="bots-goal-error" role="alert">{error}</p>}
+        <label htmlFor={`${id}-budget-mode`}>Token budget</label><NativeSelect id={`${id}-budget-mode`} disabled={action.busy || Boolean(action.intent)} value={form.budgetMode} onChange={event => { setForm({ ...form, budgetMode: event.target.value as Form['budgetMode'] }); if (invalidField === 'budget') { setInvalidField(null); setError(''); } }}><option value="keep">{form.kind === 'create' ? 'No token budget' : 'Keep current budget'}</option><option value="set">Set a token budget</option>{form.kind === 'edit' && <option value="remove">Remove token budget</option>}</NativeSelect>
+        {form.budgetMode === 'set' && <><label htmlFor={`${id}-budget`}>Maximum tokens</label><Input ref={budgetInput} aria-invalid={invalidField === 'budget' || undefined} aria-describedby={invalidField === 'budget' ? `${id}-error` : undefined} id={`${id}-budget`} inputMode="numeric" pattern="[0-9]+" value={form.budget} disabled={action.busy || Boolean(action.intent)} onChange={event => { setForm({ ...form, budget: event.target.value }); if (invalidField === 'budget') { setInvalidField(null); setError(''); } }} />{invalidField === 'budget' && <p id={`${id}-error`} className="bots-goal-error" role="alert">{error}</p>}</>}
         {form.kind === 'create' && <p>Creating an active goal allows Codex to continue it when the native thread is eligible.</p>}
         <div className="bots-goal-actions"><Button type="submit" disabled={locked}>{form.kind === 'create' ? 'Create goal' : 'Save changes'}</Button><Button variant="outline" type="button" disabled={action.busy} onClick={cancel}>Cancel</Button></div>
       </form>}
       {!action.intent && action.accepted && <p className="bots-goal-observation" role="status">Goal change confirmed.</p>}
     </>}
     {action.intent && <div className="bots-goal-recovery" role="status"><p>A goal change is awaiting confirmation.</p><Button variant="outline" type="button" disabled={Boolean(block) || !online || action.busy || refreshing || client.owner !== owner} onClick={() => void action.retry().catch(() => {})}>{action.busy ? 'Checking…' : 'Check goal change'}</Button></div>}
-    {(error || action.error) && <p className="bots-goal-error" role="alert">{error || action.error}</p>}
+    {!invalidField && (error || action.error) && <p id={`${id}-error`} className="bots-goal-error" role="alert">{error || action.error}</p>}
   </section>;
 }

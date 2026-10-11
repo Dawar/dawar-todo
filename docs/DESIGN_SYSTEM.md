@@ -480,3 +480,7 @@ Team headings use44px rows, with the same height used by virtualization offsets.
 ### Coverage checkpoint
 
 The current347-row inventory contains25Verified,177In progress,19Implemented and126Not started entries at71ac0ec. This includes controller/API dependencies as well as visible surfaces. Components already migrated are not evidence that their full flows are verified. Tasks, Bot details, Operator, Files and Task requests retain explicit end-to-end work. The live Sheet and component sections record per-item evidence. Card titles now default to18px with a readable multi-line height; descriptions use14px/24px.
+
+### Goal editor validation
+
+Objective and token-budget validation appears next to the affected field, with its error linked through `aria-describedby` and `aria-invalid`. Invalid submission focuses that field; editing it clears its local validation feedback. Cancel restores heading focus and clears editor-only errors. Saved-action recovery and all native goal authorization/identity checks remain unchanged.
