@@ -422,3 +422,5 @@ Calendar-link replacement/revocation, API-token revocation, phone-access disabli
 Phone-settings notices carry explicit error state from validation/request failure. Message wording never determines success color; errors announce as alerts and successes as status.
 
 Dialog titles use snug (1.375) line height so multi-line headings remain readable on narrow screens. Long dialog bodies scroll internally inside the viewport limit.
+
+Task editing updates the affected row without refreshing the entire list. Draft projection preserves absent optional delegation metadata; an actual delegation is still cleared while a local draft is pending. Original task identity and acknowledgement handling remain unchanged.

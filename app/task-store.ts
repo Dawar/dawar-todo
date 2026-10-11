@@ -53,7 +53,7 @@ export function createTaskStore() {
         if (!old || !equal(old, todo)) { records.set(key, todo); changed.add(key); }
         const prior = previousList.get(key);
         const draft = drafts.get(key);
-        const listed = prior && draft ? { ...todo, ...Object.fromEntries(Object.keys(draft).map((field) => [field, prior[field as keyof Todo]])), queueDelegation: null } : todo;
+        const listed = prior && draft ? { ...todo, ...Object.fromEntries(Object.keys(draft).map((field) => [field, prior[field as keyof Todo]])), ...(todo.queueDelegation ? { queueDelegation: null } : {}) } : todo;
         return prior && equal(prior, listed) ? prior : listed;
       });
       for (const key of records.keys()) if (!keys.has(key)) { records.delete(key); drafts.delete(key); changed.add(key); }
