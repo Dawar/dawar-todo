@@ -114,7 +114,7 @@ export async function POST(
     });
     return Response.json(prepared, { status: 201, headers: { "Cache-Control": "no-store" } });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "The image upload could not be prepared.";
+    const message = error instanceof Error ? error.message : "The attachment upload could not be prepared.";
     const serviceError = /temporarily unavailable|storage request|could not be optimized|could not be prepared/i.test(message);
     const details = attachmentErrorDetails(error);
     const status = details.code === "storage-unavailable" ? 502 : details.code === "image-processing-unavailable" ? 503 : /not found/i.test(message) ? 404 : !serviceError && /choose|image|audio|video|media|voice|file|document|archive|limited|large|duration|match|expected/i.test(message) ? 400 : 500;
@@ -153,7 +153,7 @@ export async function PATCH(
     });
     return Response.json({ attachment });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "The image upload could not be finalized.";
+    const message = error instanceof Error ? error.message : "The attachment upload could not be finalized.";
     const details = attachmentErrorDetails(error, "finalize");
     const status = details.code === "storage-unavailable" ? 502 : /not found|available/i.test(message) ? 404 : /image|audio|video|media|voice|file|document|archive|limited|invalid|large|expected|duration|match/i.test(message) ? 400 : 500;
     console.error("[todo-api] task attachment finalization failed", { todoId: id, durationMs: Date.now() - startedAt, error });
