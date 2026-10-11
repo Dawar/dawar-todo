@@ -164,3 +164,7 @@ Capture uses the same PendingTaskAttachment card as task details, with caller-co
 ### Task image viewer
 
 The task image viewer uses ControlledDialog for focus containment, Escape and opener restoration, with a bounded image area and shared copy/download/delete controls. Previous/next controls are available at every width; arrows and the existing 50px touch threshold navigate without altering copy/download/delete handlers. Loading and unavailable images have explicit feedback. Actual 320px long-name/image/navigation observed; full nested detail, real touch, clipboard/download/deletion and desktop acceptance remain tracked separately.
+
+### Voice memo state presentation
+
+VoiceMemoRecorder now owns the unchanged recording controller separately from VoiceMemoView. The view can be reviewed with inert callbacks and a local silent audio fixture; it does not itself request microphone access. Oversize/overlong recordings retain the original disabled Attach rule and now explain the reason. Audio controls have an accessible name. Actual 320px review layout and Escape/opener restoration observed; live microphone/recording lifecycle and desktop/full-detail acceptance remain pending. The initial extraction syntax error was corrected before commit; the full 3802-byte controller body matches the prior source. Current page lint has 27 warnings, not a zero-warning claim.
