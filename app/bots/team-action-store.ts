@@ -1,3 +1,5 @@
+const recoveryError = "Could not read the saved team change. Retry without clearing site storage.";
+
 export const teamActionPrefix = (owner: string, botId = "") =>
   `dawar:bot:team-action:${JSON.stringify([owner, botId])}:`;
 export type TeamActionMethod =
@@ -64,19 +66,14 @@ export function readTeamAction(
         !/^[a-zA-Z0-9:_-]{10,180}$/.test(value.id) ||
         key !== prefix + value.id
       )
-        throw Error(
-          "A saved team change cannot be read. Keep site storage for recovery.",
-        );
+        throw Error(recoveryError);
       return { pending: value, error: "" };
     }
     return { pending: null, error: "" };
-  } catch (error) {
+  } catch {
     return {
       pending: null,
-      error:
-        error instanceof Error
-          ? error.message
-          : "Team change could not be read.",
+      error: recoveryError,
     };
   }
 }
