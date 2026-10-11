@@ -5,6 +5,7 @@ import { ExecutionMachines } from "./execution-machines";
 import { AccountSession } from "./account-session";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { NativeSelect } from "@/components/ui/native-select";
@@ -912,7 +913,7 @@ export default function SettingsPage() {
 
         <AccountSession />
         <ExecutionMachines />
-        <form onSubmit={save} className="rounded-lg border border-border bg-card p-5 shadow-sm sm:p-7">
+        <form onSubmit={save} className="rounded-lg border border-border bg-card p-5 sm:p-7">
           <fieldset disabled={loading || saving} className="space-y-5 disabled:opacity-60">
             <section aria-labelledby="opening-preference-title" className="border-b border-border pb-5">
               <h2 id="opening-preference-title" className="text-lg font-semibold tracking-[-0.02em] text-foreground">App opening</h2>
@@ -930,7 +931,7 @@ export default function SettingsPage() {
                   <option value="bots">Bots</option>
                 </NativeSelect>
               </label>
-              <p id="opening-preference-help" className="mt-1.5 text-xs leading-5 text-muted-foreground">Used for a fresh app launch, including offline after saving on this device. Links and an already-open screen keep their destination.</p>
+              <p id="opening-preference-help" className="mt-1.5 text-[13px] leading-5 text-muted-foreground">Used for a fresh app launch, including offline after saving on this device. Links and an already-open screen keep their destination.</p>
             </section>
             <div>
               <h2 className="text-lg font-semibold tracking-[-0.02em] text-foreground">Daily review</h2>
@@ -965,7 +966,7 @@ export default function SettingsPage() {
               <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
                 {settings.snoozeQuickPresets.map((preset, index) => (
                   <label key={`${index}-${preset}`} className="block">
-                    <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-muted-foreground">Slot {index + 1}</span>
+                    <span className="mb-1.5 block text-[13px] font-semibold uppercase tracking-wide text-muted-foreground">Slot {index + 1}</span>
                     <NativeSelect
                       value={preset}
                       onChange={(event) => updateQuickSnoozePreset(index, event.target.value as QuickSnoozePreset)}
@@ -1015,7 +1016,7 @@ export default function SettingsPage() {
                     </option>
                   ))}
                 </NativeSelect>
-                <p className="mt-1.5 text-xs leading-5 text-muted-foreground">Used for new browser and phone Talk sessions. An active conversation keeps its current voice until the next session.</p>
+                <p className="mt-1.5 text-[13px] leading-5 text-muted-foreground">Used for new browser and phone Talk sessions. An active conversation keeps its current voice until the next session.</p>
               </label>
             </section>
           </fieldset>
@@ -1034,7 +1035,7 @@ export default function SettingsPage() {
           </div>
         </form>
 
-        <section aria-labelledby="profile-phone-title" className="mt-6 rounded-lg border border-border bg-card p-5 shadow-sm sm:p-7">
+        <section aria-labelledby="profile-phone-title" className="mt-6 rounded-lg border border-border bg-card p-5 sm:p-7">
           <div className="flex items-start gap-3">
             <span className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-accent text-primary"><ActionIcon name="phone" className="h-5 w-5" /></span>
             <div className="min-w-0 flex-1">
@@ -1044,7 +1045,7 @@ export default function SettingsPage() {
           </div>
 
           {profilePhoneLoading ? (
-            <div role="status" aria-label="Loading profile phone" className="mt-5 h-32 animate-pulse rounded-lg bg-muted" />
+            <Skeleton role="status" aria-label="Loading profile phone" className="mt-5 h-32 rounded-lg" />
           ) : !profilePhone?.configured ? (
             <>
               <div className="mt-4 rounded-lg bg-muted px-4 py-3 text-sm leading-6 text-muted-foreground">
@@ -1104,7 +1105,7 @@ export default function SettingsPage() {
               <label className="mt-5 flex items-center justify-between gap-4 rounded-lg border border-border bg-muted/40 px-4 py-3">
                 <span>
                   <span className="block text-sm font-semibold text-foreground">Urgent agent calls and texts</span>
-                  <span className="mt-0.5 block text-xs leading-5 text-muted-foreground">Disabling this stops every active campaign. Re-enabling applies to future tasks.</span>
+                  <span className="mt-0.5 block text-[13px] leading-5 text-muted-foreground">Disabling this stops every active campaign. Re-enabling applies to future tasks.</span>
                 </span>
                 <input
                   type="checkbox"
@@ -1116,19 +1117,19 @@ export default function SettingsPage() {
               </label>
               <div className="mt-4 grid gap-3 sm:grid-cols-2">
                 <label>
-                  <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-muted-foreground">Later-call window starts</span>
+                  <span className="mb-1.5 block text-[13px] font-semibold uppercase tracking-wide text-muted-foreground">Later-call window starts</span>
                   <NativeSelect value={profilePhone.callWindowStart} onChange={(event) => setProfilePhone((current) => current ? { ...current, callWindowStart: Number(event.target.value) } : current)}>
                     {Array.from({ length: 22 }, (_, hour) => hour).map((hour) => <option key={hour} value={hour}>{hourLabel(hour)}</option>)}
                   </NativeSelect>
                 </label>
                 <label>
-                  <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-muted-foreground">Later-call window ends</span>
+                  <span className="mb-1.5 block text-[13px] font-semibold uppercase tracking-wide text-muted-foreground">Later-call window ends</span>
                   <NativeSelect value={profilePhone.callWindowEnd} onChange={(event) => setProfilePhone((current) => current ? { ...current, callWindowEnd: Number(event.target.value) } : current)}>
                     {Array.from({ length: 23 }, (_, index) => index + 1).map((hour) => <option key={hour} value={hour}>{hour === 24 ? "12:00 AM" : hourLabel(hour)}</option>)}
                   </NativeSelect>
                 </label>
               </div>
-              <p className="mt-2 text-xs leading-5 text-muted-foreground">The first hour of an urgent campaign bypasses this window. Later calls and texts wait for the window in your task timezone.</p>
+              <p className="mt-2 text-[13px] leading-5 text-muted-foreground">The first hour of an urgent campaign bypasses this window. Later calls and texts wait for the window in your task timezone.</p>
               <div className="mt-4 flex flex-wrap gap-2">
                 <Button variant="default" type="button" onClick={() => void saveProfilePhonePreferences()} disabled={profilePhoneSaving || profilePhone.callWindowStart >= profilePhone.callWindowEnd}><ActionIcon name="done" />Save alert window</Button>
                 <Button variant="outline" type="button" onClick={() => void testProfilePhone()} disabled={profilePhoneTesting || profilePhoneSaving}><ActionIcon name="phone" />{profilePhoneTesting ? "Sending…" : "Send test call + text"}</Button>
@@ -1139,7 +1140,7 @@ export default function SettingsPage() {
           {profilePhoneMessage && <p role={profilePhoneMessageError ? "alert" : "status"} className={`mt-3 text-sm ${profilePhoneMessageError ? "text-destructive" : "text-primary"}`}>{profilePhoneMessage}</p>}
         </section>
 
-        <section aria-labelledby="talk-phone-title" className="mt-6 rounded-lg border border-border bg-card p-5 shadow-sm sm:p-7">
+        <section aria-labelledby="talk-phone-title" className="mt-6 rounded-lg border border-border bg-card p-5 sm:p-7">
           <div className="flex items-start gap-3">
             <span className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-accent text-primary"><ActionIcon name="phone" className="h-5 w-5" /></span>
             <div className="min-w-0 flex-1">
@@ -1149,7 +1150,7 @@ export default function SettingsPage() {
           </div>
 
           {talkPhoneLoading ? (
-            <div role="status" aria-label="Loading phone access" className="mt-5 h-28 animate-pulse rounded-lg bg-muted" />
+            <Skeleton role="status" aria-label="Loading phone access" className="mt-5 h-28 rounded-lg" />
           ) : (
             <>
               <div className="mt-4 rounded-lg bg-muted px-4 py-3 text-sm leading-6 text-muted-foreground">
@@ -1210,7 +1211,7 @@ export default function SettingsPage() {
               )}
 
               {talkPhoneProfile?.lastAuthenticatedAt && (
-                <p className="mt-3 text-xs leading-5 text-muted-foreground">
+                <p className="mt-3 text-[13px] leading-5 text-muted-foreground">
                   Last authenticated call {new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(talkPhoneProfile.lastAuthenticatedAt))}
                 </p>
               )}
@@ -1221,7 +1222,7 @@ export default function SettingsPage() {
           )}
         </section>
 
-        <section aria-labelledby="push-notifications-title" className="mt-6 rounded-lg border border-border bg-card p-5 shadow-sm sm:p-7">
+        <section aria-labelledby="push-notifications-title" className="mt-6 rounded-lg border border-border bg-card p-5 sm:p-7">
           <div className="flex items-start gap-3">
             <span className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-accent text-primary"><ActionIcon name="badge" className="h-5 w-5" /></span>
             <div className="min-w-0 flex-1">
@@ -1278,7 +1279,7 @@ export default function SettingsPage() {
           )}
         </section>
 
-        <section aria-labelledby="app-badge-title" className="mt-6 rounded-lg border border-border bg-card p-5 shadow-sm sm:p-7">
+        <section aria-labelledby="app-badge-title" className="mt-6 rounded-lg border border-border bg-card p-5 sm:p-7">
           <div className="flex items-start gap-3">
             <span className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-accent text-primary"><ActionIcon name="badge" className="h-5 w-5" /></span>
             <div className="min-w-0 flex-1">
@@ -1312,7 +1313,7 @@ export default function SettingsPage() {
           </Button>
         </section>
 
-        <section aria-labelledby="api-access-title" className="mt-6 rounded-lg border border-border bg-card p-5 shadow-sm sm:p-7">
+        <section aria-labelledby="api-access-title" className="mt-6 rounded-lg border border-border bg-card p-5 sm:p-7">
           <div className="flex items-start gap-3">
             <span className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-accent text-primary"><ActionIcon name="link" className="h-5 w-5" /></span>
             <div className="min-w-0">
@@ -1321,7 +1322,7 @@ export default function SettingsPage() {
             </div>
           </div>
 
-          <div className="mt-4 rounded-lg bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900">
+          <div className="mt-4 rounded-lg bg-warning px-4 py-3 text-sm leading-6 text-warning-foreground">
             Tokens have full access to this todo database. Treat them like passwords. The token and its credentialed SKILL.md are available only when created, and every token can be revoked at any time.
           </div>
 
@@ -1356,7 +1357,7 @@ export default function SettingsPage() {
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <p className="text-sm font-semibold text-primary">Copy this token now</p>
-                  <p className="mt-0.5 text-xs leading-5 text-muted-foreground">The raw token and credentialed SKILL.md are available only until you dismiss this panel.</p>
+                  <p className="mt-0.5 text-[13px] leading-5 text-muted-foreground">The raw token and credentialed SKILL.md are available only until you dismiss this panel.</p>
                 </div>
                 <Button size="icon" variant="ghost" type="button" onClick={() => setCreatedToken(null)} aria-label="Dismiss generated token" title="Dismiss" className="shrink-0"><ActionIcon name="close" /></Button>
               </div>
@@ -1370,7 +1371,7 @@ export default function SettingsPage() {
 
           <div className="mt-5 rounded-lg border border-border bg-muted/40 p-3.5">
             <p className="text-sm font-semibold text-foreground">Agent documentation</p>
-            <p className="mt-1 text-xs leading-5 text-muted-foreground">Use the public OpenAPI 3.1 specification to discover request bodies, responses, and Bearer authentication.</p>
+            <p className="mt-1 text-[13px] leading-5 text-muted-foreground">Use the public OpenAPI 3.1 specification to discover request bodies, responses, and Bearer authentication.</p>
             <div className="mt-3 flex flex-wrap gap-2">
               <a href="/openapi.json" target="_blank" rel="noreferrer" className={compactOutlineActionClass}><ActionIcon name="link" />Open specification</a>
               <Button variant="outline" type="button" onClick={() => void copyOpenApiUrl()}><ActionIcon name="copy" />Copy OpenAPI URL</Button>
@@ -1378,10 +1379,10 @@ export default function SettingsPage() {
           </div>
 
           <div className="mt-5 border-t border-border pt-5">
-            <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Active tokens</h3>
+            <h3 className="text-[13px] font-semibold uppercase tracking-wide text-muted-foreground">Active tokens</h3>
             {tokensLoading ? (
               <div role="status" aria-label="Loading API tokens" className="mt-3 space-y-3">
-                {[0, 1].map((item) => <div key={item} className="h-24 animate-pulse rounded-lg bg-muted" />)}
+                {[0, 1].map((item) => <Skeleton key={item} className="h-24 rounded-lg" />)}
               </div>
             ) : apiTokens.length ? (
               <ul className="mt-3 space-y-3">
@@ -1389,8 +1390,8 @@ export default function SettingsPage() {
                   <li key={apiToken.id} className="flex min-w-0 items-start justify-between gap-3 rounded-lg border border-border bg-muted/40 p-3.5">
                     <div className="min-w-0">
                       <p className="break-words text-sm font-semibold text-foreground">{apiToken.name}</p>
-                      <p className="mt-1 font-mono text-xs text-muted-foreground">{apiToken.tokenPrefix}</p>
-                      <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                      <p className="mt-1 font-mono text-[13px] text-muted-foreground">{apiToken.tokenPrefix}</p>
+                      <p className="mt-1 text-[13px] leading-5 text-muted-foreground">
                         {apiToken.lastUsedAt ? `Last used ${new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(apiToken.lastUsedAt))}` : "Never used"}
                         {apiToken.expiresAt ? ` · Expires ${new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(new Date(apiToken.expiresAt))}` : " · Never expires"}
                       </p>
@@ -1405,7 +1406,7 @@ export default function SettingsPage() {
           </div>
         </section>
 
-        <section aria-labelledby="calendar-sharing-title" className="mt-6 rounded-lg border border-border bg-card p-5 shadow-sm sm:p-7">
+        <section aria-labelledby="calendar-sharing-title" className="mt-6 rounded-lg border border-border bg-card p-5 sm:p-7">
           <div className="flex items-start gap-3">
             <span className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-accent text-primary"><ActionIcon name="calendar" className="h-5 w-5" /></span>
             <div className="min-w-0">
@@ -1414,7 +1415,7 @@ export default function SettingsPage() {
             </div>
           </div>
 
-          <div className="mt-4 rounded-lg bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900">
+          <div className="mt-4 rounded-lg bg-warning px-4 py-3 text-sm leading-6 text-warning-foreground">
             Anyone with a link can read the titles, notes, project, context, status, and due dates in that feed. Regenerate or revoke a link whenever access should end.
           </div>
 
@@ -1436,10 +1437,10 @@ export default function SettingsPage() {
           </form>
 
           <div className="mt-5 border-t border-border pt-5">
-            <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Active links</h3>
+            <h3 className="text-[13px] font-semibold uppercase tracking-wide text-muted-foreground">Active links</h3>
             {feedsLoading ? (
               <div role="status" aria-label="Loading calendar links" className="mt-3 space-y-3">
-                {[0, 1].map((item) => <div key={item} className="h-28 animate-pulse rounded-lg bg-muted" />)}
+                {[0, 1].map((item) => <Skeleton key={item} className="h-28 rounded-lg" />)}
               </div>
             ) : calendarFeeds.length ? (
               <ul className="mt-3 space-y-3">
@@ -1448,7 +1449,7 @@ export default function SettingsPage() {
                     <div className="flex min-w-0 items-start justify-between gap-3">
                       <div className="min-w-0">
                         <p className="break-words text-sm font-semibold text-foreground">{feed.name}</p>
-                        <p className="mt-0.5 text-xs text-muted-foreground">Created {new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(new Date(feed.createdAt))}</p>
+                        <p className="mt-0.5 text-[13px] text-muted-foreground">Created {new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(new Date(feed.createdAt))}</p>
                       </div>
                       <Button size="icon" variant="ghost" type="button" onClick={() => void copyFeed(feed)} className="shrink-0" aria-label={`Copy ${feed.name} calendar link`} title="Copy link"><ActionIcon name="copy" /></Button>
                     </div>
