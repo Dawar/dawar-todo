@@ -16,7 +16,7 @@ export function StorageLifecycleNotice() {
   }
   const availableBuild = state.publishedBuild ?? state.workerBuild;
   if (availableBuild && availableBuild !== state.build && availableBuild !== dismissedBuild && ["ready", "opening"].includes(state.storage)) return <aside role="status" className="fixed inset-x-3 top-[max(12px,env(safe-area-inset-top))] z-[150] mx-auto max-w-xl rounded-lg border border-border bg-accent p-3 text-sm text-accent-foreground shadow-lg">
-    <div className="flex flex-wrap items-center gap-3"><span>An app update is available.</span><Button type="button" variant="outline" size="sm" disabled={refreshing} onClick={() => void refresh()}>{refreshing ? "Preparing…" : "Refresh when ready"}</Button><Button type="button" variant="ghost" size="sm" disabled={refreshing} onClick={() => setDismissedBuild(availableBuild)}>Later</Button></div>
+    <div className="flex flex-wrap items-center gap-2"><span className="min-w-0 flex-1 basis-48">An app update is available.</span><div className="flex flex-wrap items-center gap-2"><Button type="button" variant="outline" size="sm" disabled={refreshing} onClick={() => void refresh()}>{refreshing ? "Preparing…" : "Refresh when ready"}</Button><Button type="button" variant="ghost" size="sm" disabled={refreshing} onClick={() => setDismissedBuild(availableBuild)}>Later</Button></div></div>
     {error && <p role="alert" className="mt-2 text-destructive break-words">{error}</p>}
   </aside>;
   if (state.storage === "ready" && state.upgradedFrom && !dismissedUpgrade) return <aside role="status" className="fixed inset-x-3 top-[max(12px,env(safe-area-inset-top))] z-[150] mx-auto max-w-xl rounded-lg border border-border bg-warning p-3 text-sm text-warning-foreground shadow-lg">
