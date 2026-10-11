@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
+import { Button } from "@/components/ui/button";
 import { CornerUpLeft, X } from "lucide-react";
 import type { BotReplyReference } from "../../lib/bot-replies";
 import type { HistoryEntry } from "../../lib/bot-history-view";
@@ -20,8 +21,8 @@ export function ReplyQuote({ reply, onOpen, onClear, foreign = false }: { reply:
   };
   const body = <><strong><CornerUpLeft size={13} aria-hidden="true"/>{reply.role === "user" ? "You" : "Bot"}</strong><span>{reply.text}{reply.truncated && "…"}</span>{(foreign || unavailable) && <small>{foreign ? "Original is in another conversation" : "Original message unavailable"}</small>}{busy && <small>Finding original…</small>}</>;
   return <div className="bots-reply-quote">
-    {onOpen && !foreign ? <button type="button" className="bots-reply-source" aria-label="Open quoted message" disabled={busy} onClick={() => void open()}>{body}</button> : <div className="bots-reply-source">{body}</div>}
-    {onClear && <button type="button" className="bots-icon-button" aria-label="Cancel reply" title="Cancel reply" onClick={onClear}><X size={16}/></button>}
+    {onOpen && !foreign ? <Button variant="ghost" type="button" className="bots-reply-source" aria-label="Open quoted message" disabled={busy} onClick={() => void open()}>{body}</Button> : <div className="bots-reply-source">{body}</div>}
+    {onClear && <Button variant="ghost" size="icon" type="button" className="bots-reply-clear" aria-label="Cancel reply" title="Cancel reply" onClick={onClear}><X size={16} aria-hidden="true"/></Button>}
     {error && <small role="alert">{error}</small>}
   </div>;
 }
@@ -49,5 +50,5 @@ export function ReplyAction({ entry, botId, threadId, onReply, partId }: { entry
     } catch (reason) { if (mounted.current) setError(reason instanceof Error ? reason.message : "Could not prepare this reply. Your draft is unchanged."); }
     finally { if (mounted.current) setBusy(false); }
   };
-  return <div className={`bots-reply-action${entry.type === "userMessage" ? " is-user" : ""}`}><button type="button" disabled={busy || !client.online} onClick={() => void select()} title="Quote this message in your composer; no message is sent" aria-label={cursor ? "Continue finding quote source" : "Quote this message in composer"}><CornerUpLeft size={14} aria-hidden="true"/>{busy ? "Loading quote…" : cursor ? "Continue quote lookup" : "Quote reply"}</button>{cursor && !error && <small>More history remains. Continue to locate the original; your draft is unchanged.</small>}{error && <small role="alert">{error}</small>}</div>;
+  return <div className={`bots-reply-action${entry.type === "userMessage" ? " is-user" : ""}`}><Button variant="ghost" size="sm" type="button" disabled={busy || !client.online} onClick={() => void select()} title="Quote this message in your composer; no message is sent" aria-label={cursor ? "Continue finding quote source" : "Quote this message in composer"}><CornerUpLeft size={14} aria-hidden="true"/>{busy ? "Loading quote…" : cursor ? "Continue quote lookup" : "Quote reply"}</Button>{cursor && !error && <small>Original not found yet. Continue lookup.</small>}{error && <small role="alert">{error}</small>}</div>;
 }

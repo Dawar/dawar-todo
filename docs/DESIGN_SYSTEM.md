@@ -216,3 +216,7 @@ TextPages and ItemPages share compact pagination controls with shared outline ic
 ### Burst controls
 
 Burst Copy/Delete/Queue/Resume/Send/Pause/recovery actions use shared ghost buttons, replacing legacy button geometry and focus overrides. Mobile touch targets remain44px and actions wrap; status/recovery text uses semantic colors and13px sizing. Queue guidance is concise while retaining paused/cancel and unconfirmed-state meaning. Actual320 paused and unconfirmed fixtures render with disabled Queue and no overflowing actions. All original event handlers, admission guards, operation identities and retry calls remain unchanged; no live actions were invoked. Type/scoped lint pass; connected countdown/queue/recovery/keyboard/desktop/device checks remain pending.
+
+### Reply quotes and actions
+
+Reply source/open, cancel and quote actions use shared buttons and semantic foreground/muted/error tokens. Preview text remains capped at three lines and preserves whitespace; labels and errors wrap. The original bounded lookup/quote controllers are unchanged. Actual320 fixture covers long excerpts, foreign source, unavailable result, keyboard-triggered error with visible focus, and cancel. No real history lookup or draft mutation occurred. Type/scoped lint pass; full composer/timeline/user-bubble/desktop/connected quote acceptance remains pending.

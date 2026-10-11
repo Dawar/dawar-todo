@@ -1,14 +1,26 @@
-.bots-reply-quote{display:flex;position:relative;gap:.4rem;border-left:3px solid var(--accent,#287a57);background:color-mix(in srgb,var(--accent,#287a57) 7%,transparent);border-radius:6px;padding:.5rem .65rem;margin:.4rem 0;min-width:0;max-width:100%;flex-wrap:wrap;text-align:left}
-.bots-reply-source{flex:1;min-width:0;display:flex;flex-direction:column;gap:.25rem;padding:0;border:0;background:none;color:inherit;text-align:left;font:inherit}
-button.bots-reply-source{cursor:pointer}
-.bots-reply-source strong{display:flex;align-items:center;gap:.3rem;font-size:.75rem}
-.bots-reply-source>span{white-space:pre-wrap;overflow-wrap:anywhere;font-size:.85rem;line-height:1.4;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
-.bots-reply-source small{font-size:.75rem;opacity:.7}
-.bots-reply-quote>.bots-icon-button{align-self:flex-start}
-.bots-composer-support>.bots-reply-quote{box-sizing:border-box;width:min(calc(100% - 32px),var(--chat-width));margin:.4rem auto}
-@media(max-width:640px){.bots-composer-support>.bots-reply-quote{width:calc(100% - 24px)}}
-.bots-reply-action{display:flex;gap:.5rem;align-items:center;margin:.25rem 0 .6rem}
-.bots-reply-action.is-user{justify-content:flex-end}
-.bots-reply-action button{display:flex;align-items:center;gap:.25rem;background:none;border:0;border-radius:4px;color:var(--muted,#64746c);font:inherit;font-size:.75rem;padding:.2rem .4rem;cursor:pointer}
-.bots-reply-action button:hover,.bots-reply-action button:focus-visible{background:color-mix(in srgb,var(--accent,#287a57) 10%,transparent);color:var(--accent,#287a57)}
-.bots-reply-action small{font-size:.75rem;color:#a02f28}
+.bots-reply-quote {
+  display:flex; position:relative; gap:4px; flex-wrap:wrap;
+  border-left:3px solid var(--primary); background:var(--muted);
+  border-radius:var(--radius); padding:4px; margin:8px 0;
+  min-width:0; max-width:100%; text-align:left;
+}
+.bots-reply-source {
+  flex:1; min-width:0; height:auto; display:flex; flex-direction:column;
+  align-items:flex-start; gap:4px; padding:8px; white-space:normal;
+  color:var(--foreground); text-align:left; font-weight:400;
+}
+.bots-reply-source strong { display:flex; align-items:center; gap:6px; font-size:12px; font-weight:600; }
+.bots-reply-source > span {
+  white-space:pre-wrap; overflow-wrap:anywhere; font-size:14px; line-height:1.5;
+  display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden;
+}
+.bots-reply-source small { font-size:12px; color:var(--muted-foreground); }
+.bots-reply-clear { align-self:flex-start; flex:none; }
+.bots-reply-quote > small { flex-basis:100%; padding:0 8px 4px; font-size:13px; color:var(--destructive); overflow-wrap:anywhere; }
+.bots-composer-support > .bots-reply-quote { box-sizing:border-box; width:min(calc(100% - 32px),var(--chat-width)); margin:8px auto; }
+@media(max-width:640px) { .bots-composer-support > .bots-reply-quote { width:calc(100% - 24px); } }
+.bots-reply-action { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:4px 0 8px; }
+.bots-reply-action.is-user { justify-content:flex-end; }
+.bots-reply-action > button { color:var(--muted-foreground); }
+.bots-reply-action small { font-size:13px; color:var(--muted-foreground); overflow-wrap:anywhere; }
+.bots-reply-action small[role=alert] { color:var(--destructive); }
