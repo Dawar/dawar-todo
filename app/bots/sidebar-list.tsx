@@ -4,18 +4,20 @@ import { ChevronDown, LoaderCircle, Zap } from "lucide-react";
 import type { Bot, BotSnapshot, BotTeam } from "../../lib/bots-types";
 import { BotAvatar } from "./bot-avatar";
 import { useSidebarPreferences } from './sidebar-preferences';
+import { Button } from '@/components/ui/button';
+import './sidebar-list.css';
 const HEIGHT = 96;
 const working = (bot: Bot) => Boolean(bot.activeTurnId || bot.status === "running" || bot.workerTasks?.active);
 const unread = (bot: Bot) => bot.updatedAt > bot.lastReadAt;
 const SidebarRow = memo(function SidebarRow({ bot: b, selected, select, modelName, effort, fast, team }: {
   bot: Bot; selected: boolean; select: (id: string) => void; modelName: string; effort: string; fast: boolean; team?: BotTeam;
 }) {
-  return <button className={`bots-row ${selected ? "selected" : ""}`} style={{ height: HEIGHT - 3 }} onClick={() => select(b.id)}>
+  return <button type="button" aria-current={selected ? "true" : undefined} className={`bots-row ${selected ? "selected" : ""}`} style={{ height: HEIGHT - 3 }} onClick={() => select(b.id)}>
     <BotAvatar bot={b} />
-    <span className="bots-row-copy"><span className="bots-row-name"><span className="bots-row-title">{b.extension&&<span className="bots-extension" title="Ctrl (or Alt) + extension switches bots; add Shift to move the composer">#{b.extension}</span>}{b.name}</span><small>{new Date(b.updatedAt).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}</small></span>
+    <span className="bots-row-copy"><span className="bots-row-name"><span className="bots-row-title">{b.extension&&<span className="bots-extension" title="Ctrl (or Alt) + extension switches bots; add Shift to move the composer">#{b.extension}</span>}{b.name}</span></span>
       <span className="bots-row-preview">{b.status === "waiting" ? "Needs your input" : b.preview || b.purpose || "Start a conversation"}</span>
-      <span className="bots-row-config"><span className="bots-row-model" title={modelName}>{modelName}</span><span aria-hidden="true">·</span><span>{effort}</span>{team&&<span className="bots-row-team" style={{color:team.color}} title={team.name}><i/>{team.name}</span>}{fast && <span className="bots-row-fast" role="img" aria-label="Fast mode"><Zap size={12} /></span>}</span>
-    </span>{working(b) && <span className="bots-row-working" role="img" aria-label="Working"><LoaderCircle size={18} className="bots-spin" aria-hidden="true" /></span>}{unread(b) && <span className="bots-unread" />}
+      <span className="bots-row-config"><span className="bots-row-model" title={modelName}>{modelName}</span><span aria-hidden="true">·</span><span>{effort}</span>{team&&<span className="bots-row-team" style={{color:team.color}} title={team.name}><i/>{team.name}</span>}{fast && <span className="bots-row-fast" role="img" aria-label="Fast mode"><Zap size={12} /></span>}<small className="bots-row-time">{new Date(b.updatedAt).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}</small></span>
+    </span>{working(b) && <span className="bots-row-working" role="img" aria-label="Working"><LoaderCircle size={18} className="bots-spin" aria-hidden="true" /></span>}{unread(b) && <span className="bots-unread" role="img" aria-label="Unread messages" />}
   </button>;
 });
 type ListRow = { kind: "heading"; id: string; name: string; color?: string; count: number; offset: number; height: number } | { kind: "bot"; id: string; bot: Bot; offset: number; height: number };
@@ -62,13 +64,13 @@ export const BotSidebarList = memo(function BotSidebarList({ owner, search = '',
   }}>
     <div style={{ height: visible[0]?.offset ?? 0 }} aria-hidden="true" />
     {visible.map(row => row.kind === "heading" ? <button key={`group:${row.id}`} type="button" className="bots-team-heading" style={{ height: row.height }} aria-expanded={searching || !collapsed.has(row.id)} aria-disabled={searching || undefined} aria-label={`${row.name}, ${row.count} ${row.count === 1 ? "bot" : "bots"}`} onClick={() => { if (!searching) store.toggle(row.id); }}>
-      <ChevronDown size={15} className={!searching && collapsed.has(row.id) ? "is-collapsed" : ""} aria-hidden="true" /><span className="bots-team-dot" style={{ background: row.color ?? "#8a978e" }} aria-hidden="true" /><span id={`${id}-${row.id}`}>{row.name}</span><small>{row.count}</small>
+      <ChevronDown size={15} className={!searching && collapsed.has(row.id) ? "is-collapsed" : ""} aria-hidden="true" /><span className="bots-team-dot" style={{ background: row.color ?? "var(--muted-foreground)" }} aria-hidden="true" /><span id={`${id}-${row.id}`}>{row.name}</span><small>{row.count}</small>
     </button> : <div key={row.id} style={{ height: row.height }}>{(() => {
       const b = row.bot, modelId = b.model ?? snapshot?.defaults.model ?? "Default model", tier = b.serviceTier ?? snapshot?.defaults.serviceTier;
       return <SidebarRow bot={b} selected={b.id === selected} select={select} modelName={models.get(modelId) ?? modelId} effort={b.effort ?? snapshot?.defaults.effort ?? "default"} fast={tier === "priority" || tier === "fast"} />;
     })()}</div>)}
     <div style={{ height: Math.max(0, total - (visible.at(-1) ? visible.at(-1)!.offset + visible.at(-1)!.height : 0)) }} aria-hidden="true" />
     {!bots.length && <div className="bots-sidebar-empty">{empty}</div>}
-    {preferences.error && <p className="bots-system-note" role="status">{preferences.error} <button type="button" onClick={() => void store.sync()}>Retry saving team choices</button></p>}
+    {preferences.error && <p className="bots-system-note" role="status">{preferences.error} <Button type="button" variant="outline" onClick={() => void store.sync()}>Retry</Button></p>}
   </div>;
 });

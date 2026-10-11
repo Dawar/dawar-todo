@@ -17,4 +17,4 @@
 .bots-burst-preference small { color: var(--muted-foreground); font-size: 13px; line-height: 1.5; }
 .bots-burst-preference select { max-width: 144px; flex: none; }
 .bots-avatar-custom { display: flex; align-items: center; gap: 12px; font-size: 13px; color: var(--muted-foreground); }
-.bots-row > .bot-avatar-engine{width:55px;height:55px}.bots-conversation-heading .bot-avatar-engine.small{width:44px;height:44px}.bots-row-working{display:inline-flex;align-items:center;justify-content:center;flex:none;color:var(--muted-foreground)}
+.bots-conversation-heading .bot-avatar-engine.small{width:44px;height:44px}
