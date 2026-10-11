@@ -224,3 +224,7 @@ Reply source/open, cancel and quote actions use shared buttons and semantic fore
 ### History filters, run cards and timestamps
 
 RunHistoryToolbar provides shared pressed-state filter buttons and a labeled refresh button; RunHistory retains its existing filter/read callbacks. RunActivityCard uses shared action buttons with original admission conditions. Card statuses retain text/icons and use semantic tokens; titles wrap, and supporting times are13px. Message timestamps are12px at all widths with the original minute clock and provenance unchanged. Actual320 fixture shows completed/unconfirmed cards, long titles, attention filtering and disabled offline acknowledgment. Full history/modal/paging/connected actions, remaining legacy activity CSS, desktop and device acceptance remain pending. Type/scoped lint pass.
+
+### History dialog and remaining actions
+
+The nonembedded RunHistory uses ControlledDialog instead of a raw modal backdrop. Its duplicate heading/close chrome is removed; embedded history retains its panel and scroll refs. Remaining history actions use shared ghost buttons with explicit non-submit types. Legacy shell/button overrides and redundant footer copy were removed; a duplicate hover pseudo-class found during review was corrected. Existing data/paging/review callbacks are unchanged. Type/scoped lint/diff pass; actual full-dialog focus/scroll, embedded layout and connected-history verification are pending.
