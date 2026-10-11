@@ -47,8 +47,12 @@ try {
   await cp('.next-portable/standalone/node_modules',join(directory,'node_modules'),{recursive:true});
   const dependencies=['ws','busboy','streamsearch','web-push','http_ece','asn1.js','bn.js','safer-buffer','minimalistic-assert','agent-base','https-proxy-agent'];
   for(const name of dependencies){
-    try{await cp(join('node_modules',name),join(directory,'node_modules',name),{recursive:true});}catch(e){if(e.code!=='ENOENT')throw e;}
+    await cp(join('node_modules',name),join(directory,'node_modules',name),{recursive:true});
   }
+  // Resolve every runtime import before publishing an activatable package.
+  // An incomplete dependency tree must fail packaging, not live startup.
+  execFileSync(process.execPath,['--input-type=module','-e',
+    'await import("./dist/portable/gateway.mjs"); await import("./bot-bridge/portable-agent.mjs");'],{cwd:directory,stdio:'inherit'});
   const files=[];
   async function inspect(path){
     for(const name of (await readdir(path)).sort()){
