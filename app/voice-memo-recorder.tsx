@@ -106,15 +106,15 @@ export function VoiceMemoView({ phase, elapsed, error, audioUrl, attachDisabled,
 
   return (
     <ControlledDialog title="Voice memo" onClose={onClose} returnFocus={returnFocus} className="max-w-md" onKeyDown={(event) => event.stopPropagation()} onEscapeKeyDown={(event) => event.stopPropagation()}>
-        <div className="my-7 text-center">
+        <div className="my-3 text-center sm:my-5">
           <div className={cn("mx-auto mb-4 grid h-20 w-20 place-items-center rounded-full", phase === "recording" ? "motion-safe:animate-pulse bg-destructive/10 text-destructive" : "bg-accent text-primary")}>
             <ActionIcon name={phase === "recording" ? "stop" : "mic"} className="h-9 w-9" />
           </div>
           <p className="font-mono text-3xl font-semibold tabular-nums text-foreground">{formatDuration(elapsed)}</p>
           <p className="mt-2 text-sm text-muted-foreground">{phase === "idle" ? "Ready when you are" : phase === "recording" ? "Recording…" : "Review before attaching"}</p>
         </div>
-        {audioUrl && <audio controls aria-label="Recorded voice memo" src={audioUrl} className="mb-5 w-full" preload="metadata" />}
-        {error && <p role="alert" className="mb-4 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>}
+        {audioUrl && <audio controls aria-label="Recorded voice memo" src={audioUrl} className="w-full" preload="metadata" />}
+        {error && <p role="alert" className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>}
         {phase === "idle" ? (
           <Button type="button" onClick={onStart} className="h-12 w-full"><ActionIcon name="mic" />Start recording</Button>
         ) : phase === "recording" ? (
