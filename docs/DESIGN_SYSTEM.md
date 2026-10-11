@@ -400,3 +400,5 @@ Workspace navigation, composer, recovery and status actions use the shared Butto
 Machine setup prioritizes the download and pairing steps. Integrity metadata lives in a keyboard-accessible Installer details disclosure; fingerprints remain readable and wrap. Confirmation checkboxes align to the first text line. Enrollment and session handlers are unchanged.
 
 Goal status pills and compact indicators use shared muted, accent and warning tokens; visible text carries status independently of color. Objective disclosures retain a44px target and visible keyboard focus.
+
+Artifact galleries use semantic surfaces, subdued previews, shared focus colors and13px metadata. Viewer overlays and shadows derive from foreground opacity. Document/route borders use shared tokens; native route labels remain textual so color is supplementary. File content, sanitization and download behavior remain unchanged.

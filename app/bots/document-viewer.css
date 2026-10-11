@@ -7,7 +7,7 @@
 .bots-document-markdown h1 { font-size: 2em; } .bots-document-markdown h2 { font-size: 1.55em; } .bots-document-markdown h3 { font-size: 1.2em; }
 .bots-document-markdown :is(p,ul,ol,pre,blockquote,table) { margin-block: .8em; }
 .bots-document-markdown :is(ul,ol) { padding-left: 1.5em; list-style: revert; }
-.bots-document-markdown blockquote { border-left: 3px solid #9ab8a1; padding-left: 16px; color: var(--muted-foreground); }
+.bots-document-markdown blockquote { border-left: 3px solid var(--border); padding-left: 16px; color: var(--muted-foreground); }
 .bots-document-markdown pre { max-width: 100%; overflow: auto; background: var(--muted); border-radius: 8px; padding: 14px; white-space: pre; }
 .bots-document-markdown code { font: .9em/1.6 ui-monospace,monospace; }
 .bots-document-table { max-width: 100%; overflow: auto; } .bots-document-table table { border-collapse: collapse; min-width: 100%; }
@@ -27,8 +27,8 @@
 .bots-route-legend { font-size: 13px; margin: 16px 0; }
 .bots-route-diagram ol { list-style: none; padding: 0; margin: 0; }
 .bots-route-diagram li { display: grid; grid-template-columns: minmax(90px,.3fr) minmax(0,1fr); gap: 12px; padding: 12px 0 24px; }
-.bots-route-diagram li > div { border-left: 3px solid #388661; padding-left: 12px; }
-.bots-route-diagram li.is-native > div { border-color: #6c67a3; }
+.bots-route-diagram li > div { border-left: 3px solid var(--primary); padding-left: 12px; }
+.bots-route-diagram li.is-native > div { border-color: var(--muted-foreground); }
 .bots-route-diagram li p { margin: 4px 0; }
 .bots-route-diagram li code { font: 13px/1.5 ui-monospace,monospace; white-space: pre-wrap; }
 @media(max-width:500px) { .bots-route-diagram { padding: 16px; } .bots-route-diagram li { grid-template-columns: minmax(0,1fr); gap: 4px; } }
