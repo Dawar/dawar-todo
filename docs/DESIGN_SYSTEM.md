@@ -146,3 +146,9 @@ Voice memo now uses ControlledDialog and shared action buttons, semantic status/
 ### Chained dialog focus
 
 State-driven dialogs can accept an explicit `returnFocus` target. Attachment → voice memo retains the original attachment button because the picker row is removed when the next dialog opens. Actual 320px preview Escape restored the capture attachment button; the prior implementation returned keyboard navigation to the page header. Detail voice and project transitions remain separate acceptance work. Recording and upload behavior is unchanged.
+
+### Task selection and list surfaces
+
+Task bulk actions use shared buttons in a two-row card: selection count and Cancel remain visible while the action group scrolls horizontally. Actions retain their original eligibility, callbacks and disabled conditions. List groups, empty states and loading rows now use semantic surfaces; skeleton motion respects reduced-motion preferences. Bottom content and notification offsets account for the taller action card. Actual 320px populated selection/Cancel observed; full action combinations, desktop, standalone safe-area and notification coexistence remain acceptance work.
+
+Project assignment can receive the retained attachment opener, using the same chained-dialog focus contract as voice capture. Direct assignment captures its own opener; no project-save behavior changed.

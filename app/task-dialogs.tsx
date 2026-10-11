@@ -46,14 +46,15 @@ export function CustomSnoozeDialog({ count, value, error, timeZone, busy, onValu
   </ControlledDialog>;
 }
 
-export function AssignProjectDialog({ count, capture, selection, newName, projects, createValue, unassignedValue, error, busy, onSelection, onName, onClose, onSubmit }: {
+export function AssignProjectDialog({ returnFocus, count, capture, selection, newName, projects, createValue, unassignedValue, error, busy, onSelection, onName, onClose, onSubmit }: {
+  returnFocus?: HTMLElement | null;
   count: number; capture: boolean; selection: string; newName: string; projects: string[];
   createValue: string; unassignedValue: string; error: string; busy: boolean;
   onSelection: (value: string) => void; onName: (value: string) => void;
   onClose: () => void; onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 }) {
   const errorId = useId();
-  return <ControlledDialog title="Assign project" description={capture ? "Choose a project for the new task, or leave it unassigned." : `Choose a project for ${count === 1 ? "this task" : `these ${count} tasks`}.`} onClose={onClose} onEscapeKeyDown={event => event.stopPropagation()} className="max-w-md">
+  return <ControlledDialog returnFocus={returnFocus} title="Assign project" description={capture ? "Choose a project for the new task, or leave it unassigned." : `Choose a project for ${count === 1 ? "this task" : `these ${count} tasks`}.`} onClose={onClose} onEscapeKeyDown={event => event.stopPropagation()} className="max-w-md">
     <form onSubmit={onSubmit} aria-busy={busy} className="space-y-5">
       <label className="grid gap-2 text-sm font-medium">Project
         <NativeSelect autoFocus value={selection} onChange={event => onSelection(event.target.value)} aria-describedby={error ? errorId : undefined}>

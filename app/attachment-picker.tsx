@@ -12,7 +12,7 @@ export function AttachmentPicker({ disabled, onFiles, onRecord, onAssignProject,
   disabled?: boolean;
   onFiles: (files: File[]) => void;
   onRecord: (opener: HTMLButtonElement | null) => void;
-  onAssignProject?: () => void;
+  onAssignProject?: (opener: HTMLButtonElement | null) => void;
   onOpenChange?: (open: boolean) => void;
   label: string;
   showLabel?: boolean;
@@ -41,7 +41,7 @@ export function AttachmentPicker({ disabled, onFiles, onRecord, onAssignProject,
         <Button type="button" variant="ghost" onClick={() => libraryRef.current?.click()} className="h-12 justify-start whitespace-normal text-left sm:h-11"><ActionIcon name="image" />Choose photos or videos</Button>
         <Button type="button" variant="ghost" onClick={() => fileRef.current?.click()} className="h-12 justify-start sm:h-11"><ActionIcon name="file" />Choose files</Button>
         <Button type="button" variant="ghost" onClick={() => { setOpen(false); onRecord(triggerRef.current); }} className="h-12 justify-start sm:h-11"><ActionIcon name="mic" />Record voice memo</Button>
-        {onAssignProject && <Button type="button" variant="ghost" onClick={() => { setOpen(false); onAssignProject(); }} className="h-12 justify-start sm:h-11"><ActionIcon name="move" />Assign project</Button>}
+        {onAssignProject && <Button type="button" variant="ghost" onClick={() => { setOpen(false); onAssignProject(triggerRef.current); }} className="h-12 justify-start sm:h-11"><ActionIcon name="move" />Assign project</Button>}
       </div>
       <Button type="button" variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
     </ControlledDialog>}

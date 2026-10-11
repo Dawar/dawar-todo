@@ -276,7 +276,7 @@ test("shows fully optimistic Undo and snooze controls while preserving concurren
 
 test("keeps fixed action surfaces above the iPhone standalone safe area", async () => {
   const [page, layout, styles] = await Promise.all([
-    Promise.all(["app/page.tsx", "app/task-sync.ts", "app/task-model.ts", "app/sync-request.ts"].map((path) => readFile(new URL(path, root), "utf8"))).then((parts) => parts.join("\n")),
+    Promise.all(["app/page.tsx", "app/task-bulk-actions.tsx", "app/task-sync.ts", "app/task-model.ts", "app/sync-request.ts"].map((path) => readFile(new URL(path, root), "utf8"))).then((parts) => parts.join("\n")),
     readFile(new URL("app/layout.tsx", root), "utf8"),
     readFile(new URL("app/globals.css", root), "utf8"),
   ]);
@@ -286,17 +286,17 @@ test("keeps fixed action surfaces above the iPhone standalone safe area", async 
   assert.match(page, /task-notice-safe-bottom/);
   assert.match(page, /data-bulk-actions-visible=\{selectedIds\.length > 0\}/);
   assert.match(styles, /--mobile-action-bottom:\s*max\(3rem, calc\(env\(safe-area-inset-bottom, 0px\) \+ 1\.5rem\)\)/);
-  assert.match(styles, /--mobile-notice-above-actions:\s*max\(7\.75rem, calc\(env\(safe-area-inset-bottom, 0px\) \+ 6\.25rem\)\)/);
+  assert.match(styles, /--mobile-notice-above-actions:\s*calc\(var\(--mobile-action-bottom\) \+ 8\.5rem\)/);
   assert.match(styles, /@media \(display-mode: standalone\) and \(max-width: 639px\)/);
   assert.match(styles, /--mobile-action-bottom:\s*max\(4rem, calc\(env\(safe-area-inset-bottom, 0px\) \+ 2rem\)\)/);
 });
 
 test("uses an edge-to-edge task list surface on mobile while preserving desktop gutters", async () => {
-  const page = await Promise.all(["app/page.tsx", "app/task-sync.ts", "app/task-model.ts", "app/sync-request.ts"].map((path) => readFile(new URL(path, root), "utf8"))).then((parts) => parts.join("\n"));
+  const page = await Promise.all(["app/page.tsx", "app/task-bulk-actions.tsx", "app/task-sync.ts", "app/task-model.ts", "app/sync-request.ts"].map((path) => readFile(new URL(path, root), "utf8"))).then((parts) => parts.join("\n"));
 
   assert.match(page, /data-task-list-surface/);
   assert.match(page, /-mx-4 overflow-hidden border-y/);
-  assert.match(page, /sm:mx-0 sm:rounded-2xl sm:border/);
+  assert.match(page, /sm:mx-0 sm:rounded-lg sm:border/);
 });
 
 test("moves between inline title editors at text boundaries without row keyboard highlighting", async () => {

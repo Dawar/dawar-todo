@@ -20,6 +20,7 @@ import type { TaskQueueSource } from "../lib/task-queue-export";
 import { registerPwaUpdateGuard } from "./pwa-update";
 import { todoCopyText } from "./todo-forward";
 import { TaskCaptureSession, TaskCaptureGate } from "./task-capture";
+import { TaskBulkActions } from "./task-bulk-actions";
 import { TaskIntentPanel } from "./task-intent-panel";
 import { taskRowClock } from "./task-title-layout";
 import { useTaskList, useTask, taskStore } from "./task-store";
@@ -883,6 +884,7 @@ export default function Home() {
   const [viewerIndex, setViewerIndex] = useState<number | null>(null);
   const [viewerCopyState, setViewerCopyState] = useState<"idle" | "copying" | "copied" | "error">("idle");
   const [projectSelectorOpen, setProjectSelectorOpen] = useState(false);
+  const projectReturnFocusRef = useRef<HTMLElement | null>(null);
   const [projectDialog, setProjectDialog] = useState<ProjectDialogState | null>(null);
   const [projectDialogError, setProjectDialogError] = useState("");
   const [savingProject, setSavingProject] = useState(false);
@@ -3006,6 +3008,7 @@ export default function Home() {
   }
 
   function openProjectAssignment(ids: number[], source: "bulk" | "hover" | "swipe" | "details") {
+    projectReturnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const taskProjects = todos
       .filter((todo) => ids.includes(todo.id))
       .map((todo) => todo.project || UNASSIGNED_PROJECT);
@@ -3015,7 +3018,8 @@ export default function Home() {
     console.info("[todo-ui] project assignment opened", { ids, source, sharedProject: sharedProject || null });
   }
 
-  function openCaptureProjectAssignment() {
+  function openCaptureProjectAssignment(opener?: HTMLButtonElement | null) {
+    projectReturnFocusRef.current = opener ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
     setProjectDialog({
       ids: [],
       selection: captureProject || UNASSIGNED_PROJECT,
@@ -4181,7 +4185,7 @@ export default function Home() {
           </div>
         </div>
       )}
-      <div className="mx-auto max-w-5xl px-4 pb-28 pt-5 sm:px-6 sm:pt-7">
+      <div className="mx-auto max-w-5xl px-4 pb-56 pt-5 sm:px-6 sm:pb-40 sm:pt-7">
         {(captureSaveState.startsWith("Draft could not be loaded") || captureSaveState.startsWith("Draft not saved")) && <div className="mb-2 text-xs text-red-700" role="alert">{captureSaveState}
           {captureSaveState.startsWith("Draft could not be loaded") && <button type="button" className="ml-2 underline" onClick={hydrateCapture}>Retry loading draft</button>}
           {captureSaveState.startsWith("Draft not saved") && <button type="button" className="ml-2 underline" onClick={() => void checkpointCapture().catch(() => undefined)}>Retry saving</button>}
@@ -4238,7 +4242,7 @@ export default function Home() {
             <div className="flex border-t border-black/[0.06] px-2 pb-1 pt-2 sm:px-3">
               <span className="inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-full bg-[#eaf3ed] px-2.5 py-1 text-xs font-semibold text-[#216e4e]">
                 <ActionIcon name="folder" className="h-4 w-4 shrink-0" />
-                <button type="button" onClick={openCaptureProjectAssignment} className="min-w-0 truncate" title={`Change project from ${captureProject}`}>{captureProject}</button>
+                <button type="button" onClick={() => openCaptureProjectAssignment()} className="min-w-0 truncate" title={`Change project from ${captureProject}`}>{captureProject}</button>
                 <button type="button" disabled={!captureReady || adding} onClick={() => { updateCaptureProject(""); console.info("[todo-ui] quick add project removed"); }} aria-label={`Remove ${captureProject} from new task`} title="Remove project" className="grid h-5 w-5 shrink-0 place-items-center rounded-full hover:bg-[#d8e9de]"><ActionIcon name="close" className="h-3.5 w-3.5" /></button>
               </span>
             </div>
@@ -4270,10 +4274,10 @@ export default function Home() {
 
           <div className="mb-2 flex items-center justify-between px-1">
             <div className="flex items-center gap-3">
-              <h2 id="tasks-heading" className="text-sm font-semibold text-[#373d39]">{viewLabels[view]} tasks</h2>
+              <h2 id="tasks-heading" className="text-sm font-semibold text-foreground">{viewLabels[view]} tasks</h2>
               {filtered.length > 0 && <button onClick={toggleVisible} className="inline-flex items-center gap-1.5 text-xs font-medium text-[#216e4e] hover:underline"><ActionIcon name={allVisibleSelected ? "cancel" : "select"} className="h-3.5 w-3.5" />{allVisibleSelected ? "Clear selection" : "Select visible"}</button>}
             </div>
-            <div className="flex items-center gap-3 text-xs text-[#7c847f]">
+            <div className="flex items-center gap-3 text-[13px] text-muted-foreground">
               <span>{syncing ? "Saving…" : `${filtered.length} ${filtered.length === 1 ? "item" : "items"}`}</span>
               {filtersActive && <button onClick={() => { setQuery(""); setPriority(""); }} className="inline-flex items-center gap-1 font-medium text-[#216e4e] hover:underline"><ActionIcon name="cancel" className="h-3.5 w-3.5" />Clear filters</button>}
             </div>
@@ -4281,16 +4285,16 @@ export default function Home() {
 
           <div
             data-task-list-surface
-            className="-mx-4 overflow-hidden border-y border-black/[0.07] bg-white shadow-[0_8px_30px_rgba(30,45,36,0.05)] sm:mx-0 sm:rounded-2xl sm:border"
+            className="-mx-4 overflow-hidden border-y border-border bg-card shadow-sm sm:mx-0 sm:rounded-lg sm:border"
           >
             {loading ? (
               <div role="status" className="space-y-1 p-2" aria-label="Loading tasks">
-                {[0, 1, 2, 3, 4].map((item) => <div key={item} className="h-[72px] animate-pulse rounded-xl bg-[#f3f4f2]" />)}
+                {[0, 1, 2, 3, 4].map((item) => <div key={item} className="h-[72px] motion-safe:animate-pulse rounded-md bg-muted" />)}
               </div>
             ) : filtered.length ? (
-              <ul ref={taskListAnimationRef} className="divide-y divide-black/[0.055]">
+              <ul ref={taskListAnimationRef} className="divide-y divide-border">
                 {pinnedOpenTodos.length > 0 && (
-                  <li className="flex items-center justify-between bg-[#f1f7f3] px-4 py-2 text-[11px] font-semibold uppercase tracking-wide text-[#216e4e] sm:px-5">
+                  <li className="flex items-center justify-between bg-accent px-4 py-2 text-xs font-medium text-accent-foreground sm:px-5">
                     <span className="inline-flex items-center gap-1.5"><ActionIcon name="pin" className="h-3.5 w-3.5" />Pinned</span>
                     <span>{pinnedOpenTodos.length}</span>
                   </li>
@@ -4321,7 +4325,7 @@ export default function Home() {
                   />
                 ))}
                 {pinnedOpenTodos.length > 0 && regularOpenTodos.length > 0 && (
-                  <li className="flex items-center justify-between bg-[#f8f9f7] px-4 py-2 text-[11px] font-semibold uppercase tracking-wide text-[#747c77] sm:px-5">
+                  <li className="flex items-center justify-between bg-muted px-4 py-2 text-xs font-medium text-muted-foreground sm:px-5">
                     <span>Open</span>
                     <span>{regularOpenTodos.length}</span>
                   </li>
@@ -4354,9 +4358,9 @@ export default function Home() {
               </ul>
             ) : (
               <div className="px-6 py-14 text-center">
-                <div className="mx-auto mb-4 grid h-12 w-12 place-items-center rounded-full bg-[#eaf3ed] text-xl text-[#216e4e]">✓</div>
-                <p className="font-medium text-[#303632]">{filtersActive ? "No tasks match those filters." : view === "snoozed" ? "Nothing is snoozed." : view === "done" ? "Nothing is done yet." : "You’re clear."}</p>
-                <p className="mt-1 text-sm text-[#7c847f]">{filtersActive ? "Try clearing a filter or changing the search." : view === "snoozed" ? "Snoozed tasks return here until their wake time." : view === "done" ? "Completed tasks will collect here." : "Add the next thing when it appears."}</p>
+                <div className="mx-auto mb-4 grid h-12 w-12 place-items-center rounded-full bg-accent text-xl text-primary">✓</div>
+                <p className="font-medium text-foreground">{filtersActive ? "No tasks match those filters." : view === "snoozed" ? "Nothing is snoozed." : view === "done" ? "Nothing is done yet." : "You’re clear."}</p>
+                <p className="mt-1 text-sm text-muted-foreground">{filtersActive ? "Try clearing a filter or changing the search." : view === "snoozed" ? "Snoozed tasks return here until their wake time." : view === "done" ? "Completed tasks will collect here." : "Add the next thing when it appears."}</p>
               </div>
             )}
           </div>
@@ -4364,29 +4368,7 @@ export default function Home() {
 
       </div>
 
-      {selectedIds.length > 0 && (
-        <div
-          data-bulk-actions
-          className="bulk-actions-safe-bottom pointer-events-none fixed inset-x-0 z-40 mx-auto w-[calc(100%-1rem)] max-w-4xl sm:w-[calc(100%-2rem)]"
-          aria-label="Bulk task actions"
-        >
-          <div className="pointer-events-auto flex items-center gap-1.5 overflow-x-auto rounded-2xl border border-[#216e4e]/20 bg-[#eaf3ed]/95 p-2 shadow-[0_16px_50px_rgba(23,61,42,0.2)] backdrop-blur-xl sm:gap-2">
-            <span className="min-w-max px-2 text-sm font-semibold text-[#195d41]">{selectedIds.length} selected</span>
-            <button type="button" onClick={() => setQueueRequest({ id: crypto.randomUUID(), todoIds: displayedTodos.filter(todo => selected.has(todo.id)).map(todo => todo.id) })} className="inline-flex min-w-max items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-[#216e4e] shadow-sm"><ActionIcon name="forward" />Queue to bot</button>
-            {selectedTodos.some((todo) => todo.status === "open") && <button type="button" onClick={() => bulkAction("complete")} disabled={syncing} className="inline-flex min-w-max items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-[#216e4e] shadow-sm hover:bg-[#f8fbf9] disabled:opacity-50"><ActionIcon name="done" />Done</button>}
-            {view === "snoozed" && selectedTodos.some((todo) => todo.status === "open") ? (
-              <button type="button" onClick={() => bulkAction("unsnooze")} disabled={syncing} className="inline-flex min-w-max items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-[#216e4e] shadow-sm hover:bg-[#f8fbf9] disabled:opacity-50"><ActionIcon name="wake" />Wake</button>
-            ) : selectedTodos.some((todo) => todo.status === "open" && !todo.recurrenceCron) ? (
-              <button type="button" onClick={() => bulkAction("snooze")} disabled={syncing} className="inline-flex min-w-max items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-amber-700 shadow-sm hover:bg-amber-50 disabled:opacity-50"><ActionIcon name="snooze" />Snooze</button>
-            ) : null}
-            {selectedTodos.some((todo) => todo.status === "completed") && <button type="button" onClick={() => bulkAction("unsnooze")} disabled={syncing} className="inline-flex min-w-max items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-[#4f5752] shadow-sm hover:bg-[#f8f9f8] disabled:opacity-50"><ActionIcon name="open" />Open</button>}
-            <button type="button" onClick={() => bulkAction("assign")} disabled={syncing} className="inline-flex min-w-max items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-slate-600 shadow-sm hover:bg-slate-50 disabled:opacity-50"><ActionIcon name="move" />Assign project</button>
-            <button type="button" onClick={() => bulkAction("merge")} disabled={syncing || selectedIds.length < 2} className="inline-flex min-w-max items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-violet-700 shadow-sm hover:bg-violet-50 disabled:opacity-40"><ActionIcon name="merge" />Merge</button>
-            <button type="button" onClick={() => bulkAction("delete")} disabled={syncing} className="inline-flex min-w-max items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-red-700 shadow-sm hover:bg-red-50 disabled:opacity-50"><ActionIcon name="delete" />Delete</button>
-            <button type="button" onClick={() => setSelected(new Set())} className="ml-auto inline-flex min-w-max items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold text-[#69716c] hover:bg-black/[0.04]"><ActionIcon name="cancel" />Cancel</button>
-          </div>
-        </div>
-      )}
+      {selectedIds.length > 0 && <TaskBulkActions count={selectedIds.length} todos={selectedTodos} snoozedView={view === "snoozed"} busy={syncing} onAction={bulkAction} onQueue={() => setQueueRequest({ id: crypto.randomUUID(), todoIds: displayedTodos.filter(todo => selected.has(todo.id)).map(todo => todo.id) })} onCancel={() => setSelected(new Set())} />}
 
       {customSnoozeDialog && <CustomSnoozeDialog count={customSnoozeDialog.ids.length} value={customSnoozeDialog.localDateTime} error={customSnoozeDialog.error} timeZone={scheduleTimeZone} busy={adjustingSnooze !== null} onValue={value => setCustomSnoozeDialog(current => current ? { ...current, localDateTime: value, error: "" } : current)} onClose={() => closeCustomSnooze("button")} onSubmit={saveCustomSnooze} />}
 
@@ -4401,7 +4383,7 @@ export default function Home() {
 
       {projectDeleteDialog && <DeleteProjectDialog name={projectDeleteDialog.name} count={todos.filter(todo => todo.project === projectDeleteDialog.name).length} alternatives={registeredProjects.filter(name => name !== projectDeleteDialog.name)} mode={projectDeleteDialog.mode} target={projectDeleteDialog.targetProject} error={projectDeleteError} busy={deletingProject} onMode={mode => setProjectDeleteDialog(current => current ? { ...current, mode, targetProject: mode === "reassign" ? current.targetProject || registeredProjects.filter(name => name !== current.name)[0] || "" : current.targetProject } : current)} onTarget={targetProject => { setProjectDeleteDialog(current => current ? { ...current, targetProject } : current); setProjectDeleteError(""); }} onClose={closeProjectDeleteDialog} onSubmit={deleteProject} />}
 
-      {projectDialog && <AssignProjectDialog count={projectDialog.ids.length} capture={Boolean(projectDialog.captureDraft)} selection={projectDialog.selection} newName={projectDialog.newProject} projects={projects} createValue={CREATE_PROJECT} unassignedValue={UNASSIGNED_PROJECT} error={projectDialogError} busy={savingProject} onSelection={selection => { setProjectDialog(current => current ? { ...current, selection } : current); setProjectDialogError(""); }} onName={newProject => { setProjectDialog(current => current ? { ...current, newProject } : current); setProjectDialogError(""); }} onClose={closeProjectAssignment} onSubmit={saveProjectAssignment} />}
+      {projectDialog && <AssignProjectDialog returnFocus={projectReturnFocusRef.current} count={projectDialog.ids.length} capture={Boolean(projectDialog.captureDraft)} selection={projectDialog.selection} newName={projectDialog.newProject} projects={projects} createValue={CREATE_PROJECT} unassignedValue={UNASSIGNED_PROJECT} error={projectDialogError} busy={savingProject} onSelection={selection => { setProjectDialog(current => current ? { ...current, selection } : current); setProjectDialogError(""); }} onName={newProject => { setProjectDialog(current => current ? { ...current, newProject } : current); setProjectDialogError(""); }} onClose={closeProjectAssignment} onSubmit={saveProjectAssignment} />}
 
       {editingTodo && editDraft && (
         <div className="fixed inset-0 z-50 flex items-end justify-center overflow-x-hidden sm:items-center sm:p-5">
