@@ -918,6 +918,7 @@ html.bots-viewport-locked body {
 .bots-request details { margin:16px 0; }
 .bots-request summary { cursor:pointer; min-height:44px; padding:10px 0; }
 .bots-request summary:focus-visible { outline:2px solid var(--ring); outline-offset:2px; }
+.bots-request textarea { font-family:var(--font-mono, ui-monospace, monospace); }
 .bots-request pre { background:var(--muted); color:var(--foreground); border-radius:var(--radius); }
 .bots-request > [role=status], .bots-request form > p { font-size:13px; line-height:1.6; color:var(--muted-foreground); }
 .bots-plan {
