@@ -196,3 +196,7 @@ TaskRequestEditor uses the shared controlled dialog/focus trap; backdrop presses
 ### Request grouping and draft recovery states
 
 Request editor field legends are direct fieldset children; the remove action follows in its own aligned row. SavedDrafts now distinguishes loading, read failure and a confirmed empty result, and clears stale list/error state when loading a different owner. Existing restoration callbacks and operation guards are unchanged. Type/lint pass; actual delayed-storage/rejection/owner-switch and keyboard coverage remain pending. Editor320 Escape opener restoration was observed on the previous exact shell revision; DevTools issue count is retained as unclassified pending inspection, not claimed resolved.
+
+### Owner-scoped draft recovery
+
+SavedDrafts binds each displayed read result to its owner and rejects a mismatched composer. Owner changes hide stale rows immediately; late restore feedback cannot update a different owner result. A compact Retry repeats only the local read. Actual 320px preview covers delayed read, rejection, Retry, a populated row, owner switch and confirmed empty state; no restore/send effect. Type and scoped lint pass. Full storage, late-promise, desktop and keyboard acceptance remains tracked.
