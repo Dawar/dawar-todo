@@ -300,3 +300,7 @@ Teams uses ControlledDialog, shared Button/Input/NativeSelect/Textarea, semantic
 ### Confirmations
 
 `ConfirmDialog` uses the shared dialog and footer, focuses Cancel first, and supports destructive confirmation styling. Teams uses it for dirty editor dismissal, back navigation and replacing edits with the latest data. Cancelling retains the editor and returns focus; no action runs before confirmation. Actual 320px nested creation-editor confirmation and keyboard Cancel retained draft/focus. Existing read-only fixture editor layout checked at desktop/mobile; connected mutation/recovery remains separate.
+
+### Voice / Operator
+
+Voice uses ControlledDialog with initial focus on Close, outside dismissal prevented, and existing end-before-close plus unmount cleanup preserved. Start is primary; other call/history controls use shared outline Button and routing uses NativeSelect. Call cards retain timestamps on mobile, allow full names to wrap, and use semantic typography/surfaces. Actual320 ready dialog and Escape opener focus checked without starting a call. Connected media/control states, desktop/history/paging/error/question states remain pending; no provider or microphone action was exercised.

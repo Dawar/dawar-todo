@@ -1,12 +1,15 @@
 "use client";
 import { portableHeaders } from "../../lib/portable-csrf";
 import { useEffect, useRef, useState } from 'react';
-import { Mic, MicOff, Phone, PhoneOff, Square, VolumeX, X } from 'lucide-react';
+import { Mic, MicOff, Phone, PhoneOff, Square, VolumeX } from 'lucide-react';
 import type { OperatorBot, OperatorContext, OperatorSegment, OperatorView } from '../../lib/operator-types';
 import { OperatorVoiceEvents, type OperatorRealtimeEvent } from '../../lib/operator-voice-events';
 import { BotMessage } from './message';
 import { botsClient } from './client';
 import { registerPwaUpdateGuard } from '../pwa-update';
+import { Button } from '@/components/ui/button';
+import { NativeSelect } from '@/components/ui/native-select';
+import { ControlledDialog } from '@/components/ui/controlled-dialog';
 import './operator-call.css';
 
 async function api<T>(url: string, input?: Record<string, unknown>, method = 'POST'): Promise<T> {
@@ -36,8 +39,8 @@ export function OperatorCallCard({ segment: initial, bodyOnly = false }: { segme
   const latest = initial.requests.at(-1);
   const body = <div className="operator-call-card-body">
       {error && <p role="alert">{error}</p>}
-      {segment.transcript.length > 0 && <details><summary>Voice transcript</summary>{segment.transcriptCursor && <button disabled={loading} onClick={() => void older('transcript')}>Earlier transcript</button>}{segment.transcript.map(message => <p key={message.id} className={message.role === 'user' ? 'operator-human' : ''}><small>{message.role === 'user' ? 'You' : 'Voice'}</small>{message.content}</p>)}</details>}
-      {segment.requestCursor && <button disabled={loading} onClick={() => void older('request')}>Earlier submitted work</button>}
+      {segment.transcript.length > 0 && <details><summary>Voice transcript</summary>{segment.transcriptCursor && <Button variant="outline" disabled={loading} onClick={() => void older('transcript')}>Earlier transcript</Button>}{segment.transcript.map(message => <p key={message.id} className={message.role === 'user' ? 'operator-human' : ''}><small>{message.role === 'user' ? 'You' : 'Voice'}</small>{message.content}</p>)}</details>}
+      {segment.requestCursor && <Button variant="outline" disabled={loading} onClick={() => void older('request')}>Earlier submitted work</Button>}
       {segment.requests.map(request => <section key={request.id} className="operator-request">
         <div className="operator-request-state"><strong>{request.state === 'completed' ? 'Native result' : request.state.replaceAll('-', ' ')}</strong>{request.paused && <span>Automatic intake paused</span>}</div>
         <p>{request.text}</p>
@@ -62,7 +65,7 @@ export function OperatorSegmentBody({ botId, segmentId, onOpenCalls }: { botId: 
     void botsClient.rpc<OperatorSegment>('operator.segment', botId, { segmentId }).then(value => { if (active) setSegment(value); }).catch(cause => { if (active) setError(cause instanceof Error ? cause.message : 'Call segment unavailable.'); });
     return () => { active = false; };
   }, [botId, segmentId]);
-  return <>{error && <p role="alert">{error}</p>}{segment ? <OperatorCallCard segment={segment} bodyOnly /> : !error && <p className="operator-muted">Loading call segment…</p>}{onOpenCalls && <button onClick={onOpenCalls}>All calls for this bot</button>}</>;
+  return <>{error && <p role="alert">{error}</p>}{segment ? <OperatorCallCard segment={segment} bodyOnly /> : !error && <p className="operator-muted">Loading call segment…</p>}{onOpenCalls && <Button variant="outline" onClick={onOpenCalls}>All calls for this bot</Button>}</>;
 }
 
 export function OperatorCallHistory({ owner, botId, online }: { owner: string; botId: string; online: boolean }) {
@@ -78,7 +81,7 @@ export function OperatorCallHistory({ owner, botId, online }: { owner: string; b
     if (online) void botsClient.rpc<{ cards: OperatorSegment[]; nextCursor: string | null }>('operator.cards', botId).then(result => { if (active) { setCards(result.cards); setCursor(result.nextCursor); setError(''); } }).catch(cause => { if (active) setError(cause instanceof Error ? cause.message : 'Call history is unavailable.'); });
     return () => { active = false; };
   }, [owner, botId, online]);
-  return <div className="operator-call-history"><h3>Calls</h3>{error && <p role="alert">{error}</p>}{cards.map(segment => <OperatorCallCard key={segment.id} segment={segment} />)}{cursor && <button disabled={loading || !online} onClick={() => void older()}>Earlier calls</button>}{!cards.length && !error && <p className="operator-muted">Call conversations and submitted bot work appear here.</p>}</div>;
+  return <div className="operator-call-history"><h3>Calls</h3>{error && <p role="alert">{error}</p>}{cards.map(segment => <OperatorCallCard key={segment.id} segment={segment} />)}{cursor && <Button variant="outline" disabled={loading || !online} onClick={() => void older()}>Earlier calls</Button>}{!cards.length && !error && <p className="operator-muted">Call conversations and submitted bot work appear here.</p>}</div>;
 }
 
 type RealtimeEvent = OperatorRealtimeEvent & { transcript?: string };
@@ -99,7 +102,7 @@ export function OperatorCallDialog({ bot, bots, onClose }: { bot: OperatorBot | 
   const [status, setStatus] = useState('Ready to call'), [error, setError] = useState(''), [muted, setMuted] = useState(false), [selected, setSelected] = useState<OperatorContext | null>(null), [view, setView] = useState<OperatorView | null>(null);
   const [connected, setConnected] = useState(false);
   const [starting, setStarting] = useState(false), [changing, setChanging] = useState(false);
-  const dialog = useRef<HTMLElement | null>(null);
+  const dialog = useRef<HTMLDivElement | null>(null);
   const session = useRef<string | null>(null), pc = useRef<RTCPeerConnection | null>(null), stream = useRef<MediaStream | null>(null), channel = useRef<RTCDataChannel | null>(null), audio = useRef<HTMLAudioElement | null>(null);
   const ended = useRef(false), voice = useRef<OperatorVoiceEvents | null>(null), tools = useRef(Promise.resolve()), alive = useRef(true);
   const startingRef = useRef(false);
@@ -235,37 +238,24 @@ export function OperatorCallDialog({ bot, bots, onClose }: { bot: OperatorBot | 
   useEffect(() => {
     alive.current = true;
     const timer = setInterval(() => { if (session.current && Date.now() - lastSpeech.current > 15 * 60000) void cleanup.current?.(); else void refresh(); }, 10000);
-    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    dialog.current?.querySelector<HTMLElement>('button')?.focus({ preventScroll: true });
-    const key = (value: KeyboardEvent) => {
-      if (value.key === 'Escape') { value.preventDefault(); void cleanup.current?.().then(onClose); }
-      if (value.key !== 'Tab') return;
-      const items = [...(dialog.current?.querySelectorAll<HTMLElement>('button:not(:disabled),select:not(:disabled),a[href],summary,[tabindex="0"]') ?? [])].filter(node => node.getClientRects().length);
-      const first = items[0], last = items.at(-1);
-      if (value.shiftKey && document.activeElement === first) { value.preventDefault(); last?.focus(); }
-      else if (!value.shiftKey && document.activeElement === last) { value.preventDefault(); first?.focus(); }
-    };
-    document.addEventListener('keydown', key);
-    return () => { alive.current = false; clearInterval(timer); document.removeEventListener('keydown', key); void cleanup.current?.(); if (previous?.isConnected) previous.focus({ preventScroll: true }); };
+    return () => { alive.current = false; clearInterval(timer); void cleanup.current?.(); };
   // All call lifetime state is held in refs. This effect owns teardown once.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const active = !!selected && connected;
-  return <div className="operator-backdrop"><section ref={dialog} role="dialog" aria-modal="true" aria-labelledby="operator-title" className="operator-dialog">
-    <header><div><span className="operator-muted">Voice</span><h2 id="operator-title">{selected?.bot?.name ?? bot?.name ?? 'Operator'}</h2></div><button className="bots-icon-button" aria-label="Close call" onClick={() => void end().then(onClose)}><X size={20} /></button></header>
+  return <ControlledDialog ref={dialog} title={selected?.bot?.name ?? bot?.name ?? 'Operator'} description="Voice call" className="operator-dialog" onClose={() => void end().then(onClose)} onInteractOutside={event => event.preventDefault()} onOpenAutoFocus={event => { event.preventDefault(); dialog.current?.querySelector<HTMLButtonElement>(':scope > button:last-child')?.focus(); }}>
     <div className="operator-status" role="status"><span className={active ? 'is-connected' : ''} />{status}</div>
-    {error && <div role="alert" className="operator-error">{error}{error.includes("Enable speaker") && <button onClick={() => void audio.current?.play()}>Enable speaker</button>}</div>}
-    {active && <label className="operator-route">Connected to<select value={selected.bot?.id ?? ''} disabled={changing} onChange={value => void select(value.target.value || null)}><option value="">Operator</option>{bots.map(value => <option key={value.id} value={value.id}>{value.name}{value.extension ? ` · #${value.extension}` : ''}</option>)}</select></label>}
+    {error && <div role="alert" className="operator-error">{error}{error.includes("Enable speaker") && <Button variant="outline" onClick={() => void audio.current?.play()}>Enable speaker</Button>}</div>}
+    {active && <label className="operator-route">Connected to<NativeSelect value={selected.bot?.id ?? ''} disabled={changing} onChange={value => void select(value.target.value || null)}><option value="">Operator</option>{bots.map(value => <option key={value.id} value={value.id}>{value.name}{value.extension ? ` · #${value.extension}` : ''}</option>)}</NativeSelect></label>}
     <div className="operator-controls">
-      {!active ? <button disabled={starting} onClick={() => void start()}><Phone size={18} />{starting ? 'Connecting…' : 'Start call'}</button> : <>
-        <button aria-pressed={muted} onClick={() => { const next = !muted; stream.current?.getAudioTracks().forEach(track => { track.enabled = !next; }); setMuted(next); }}>{muted ? <MicOff size={18} /> : <Mic size={18} />}{muted ? 'Unmute' : 'Mute'}</button>
-        <button onClick={() => send({ type: 'response.cancel' })}><VolumeX size={18} />Stop speaking</button>
-        {selected.bot && <button className="operator-stop" onClick={() => void stop()}><Square size={16} />Stop bot</button>}
-        <button onClick={() => void end()}><PhoneOff size={18} />Hang up</button>
+      {!active ? <Button disabled={starting} onClick={() => void start()}><Phone size={18} />{starting ? 'Connecting…' : 'Start call'}</Button> : <>
+        <Button variant="outline" aria-pressed={muted} onClick={() => { const next = !muted; stream.current?.getAudioTracks().forEach(track => { track.enabled = !next; }); setMuted(next); }}>{muted ? <MicOff size={18} /> : <Mic size={18} />}{muted ? 'Unmute' : 'Mute'}</Button>
+        <Button variant="outline" onClick={() => send({ type: 'response.cancel' })}><VolumeX size={18} />Stop speaking</Button>
+        {selected.bot && <Button variant="outline" className="text-destructive" onClick={() => void stop()}><Square size={16} />Stop bot</Button>}
+        <Button variant="outline" onClick={() => void end()}><PhoneOff size={18} />Hang up</Button>
       </>}
     </div>
     <p className="operator-muted operator-call-note">Bot work stays in its conversation and continues after the call. Stop bot pauses automatic intake.</p>
     {selected && <OperatorQuestionContext context={selected} />}
     <div className="operator-segments">{view?.segments.map(segment => <OperatorCallCard key={segment.id} segment={segment} />)}</div>
-  </section></div>;
+  </ControlledDialog>;
 }
