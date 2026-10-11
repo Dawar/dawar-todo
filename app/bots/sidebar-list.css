@@ -87,6 +87,9 @@
 .bots-team-heading>small { margin-left:auto; font-size:12px; font-weight:400; color:var(--muted-foreground); }
 .bots-team-heading>svg { flex:none; transition:transform .15s; }
 .bots-team-heading>svg.is-collapsed { transform:rotate(-90deg); }
+@media (prefers-reduced-motion: reduce) {
+  .bots-team-heading>svg { transition: none; }
+}
 .bots-team-dot { width:6px; height:6px; border-radius:50%; flex:none; }
 
 

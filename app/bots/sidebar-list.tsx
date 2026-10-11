@@ -7,13 +7,14 @@ import { useSidebarPreferences } from './sidebar-preferences';
 import { Button } from '@/components/ui/button';
 import './sidebar-list.css';
 const HEIGHT = 96;
+const TEAM_HEIGHT = 44;
 const working = (bot: Bot) => Boolean(bot.activeTurnId || bot.status === "running" || bot.workerTasks?.active);
 const unread = (bot: Bot) => bot.updatedAt > bot.lastReadAt;
 const SidebarRow = memo(function SidebarRow({ bot: b, selected, select, modelName, effort, fast, team }: {
   bot: Bot; selected: boolean; select: (id: string) => void; modelName: string; effort: string; fast: boolean; team?: BotTeam;
 }) {
   return <button type="button" data-bot-id={b.id} aria-current={selected ? "true" : undefined} className={`bots-row ${selected ? "selected" : ""}`} style={{ height: HEIGHT - 3 }} onClick={() => select(b.id)}>
-    <BotAvatar bot={b} />
+    <BotAvatar bot={b} decorative />
     <span className="bots-row-copy"><span className="bots-row-name"><span className="bots-row-title">{b.extension&&<span className="bots-extension" title="Ctrl (or Alt) + extension switches bots; add Shift to move the composer">#{b.extension}</span>}{b.name}</span></span>
       <span className="bots-row-preview">{b.status === "waiting" ? "Needs your input" : b.preview || b.purpose || "Start a conversation"}</span>
       <span className="bots-row-config"><span className="bots-row-model" title={modelName}>{modelName}</span><span aria-hidden="true">·</span><span>{effort}</span>{team&&<span className="bots-row-team" style={{color:team.color}} title={team.name}><i/>{team.name}</span>}{fast && <span className="bots-row-fast" role="img" aria-label="Fast mode"><Zap size={12} /></span>}<small className="bots-row-time">{new Date(b.updatedAt).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}</small></span>
@@ -56,7 +57,7 @@ export const BotSidebarList = memo(function BotSidebarList({ owner, search = '',
     for (const [key, members] of groups) {
       if (!members.length) continue;
       const team = teams.get(key);
-      result.push({ kind: "heading", id: key, name: team?.name ?? "Bots", color: team?.color, count: members.length, offset, height: 42 }); offset += 42;
+      result.push({ kind: "heading", id: key, name: team?.name ?? "Bots", color: team?.color, count: members.length, offset, height: TEAM_HEIGHT }); offset += TEAM_HEIGHT;
       if (searching || !collapsed.has(key)) for (const bot of members) append(bot);
     }
     return result;
@@ -80,7 +81,7 @@ export const BotSidebarList = memo(function BotSidebarList({ owner, search = '',
       return <SidebarRow bot={b} selected={b.id === selected} select={select} modelName={models.get(modelId) ?? modelId} effort={b.effort ?? snapshot?.defaults.effort ?? "default"} fast={tier === "priority" || tier === "fast"} />;
     })()}</div>)}
     <div style={{ height: Math.max(0, total - (visible.at(-1) ? visible.at(-1)!.offset + visible.at(-1)!.height : 0)) }} aria-hidden="true" />
-    {!bots.length && <div className="bots-sidebar-empty">{empty}</div>}
+    {!bots.length && <div className="bots-sidebar-empty" role="status">{empty}</div>}
     {preferences.error && <p className="bots-system-note" role="status">{preferences.error} <Button type="button" variant="outline" onClick={() => void store.sync()}>Retry</Button></p>}
   </div>;
 });

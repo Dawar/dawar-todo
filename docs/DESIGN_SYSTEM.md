@@ -472,3 +472,7 @@ Offline rejected changes stay available in an expandable recovery panel. Saved c
 ### Task transfer recovery actions
 
 Saved forward and queue-transfer entry points use the shared secondary Button, with a44px minimum target and wrapping text bounded by mobile page margins. Their former custom button/focus selectors are removed. Transfer-storage errors use semantic destructive text and wrap without changing the retained transfer or retry semantics.
+
+### Bot navigator accessibility
+
+Team headings use44px rows, with the same height used by virtualization offsets. Their chevron transition respects reduced motion. Bot avatars inside named row buttons are decorative to avoid repeating the accessible name; working and unread indicators remain announced. Empty search results are status feedback. Keyboard focus and selected-row accents remain distinct.
