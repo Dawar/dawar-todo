@@ -91,7 +91,10 @@ def check_attempt(helper, evidence):
     expected = helper.STATE / 'runtime-updates' / f'supervised-d011-{INVOCATION}.json'
     if attempt['path'] != str(expected) or private_file(expected, helper.STATE) != attempt['stamp'] or hashlib.sha256(expected.read_bytes()).hexdigest() != attempt['sha256']:
         raise RuntimeError('Exclusive original invocation attempt changed; no restart')
-    if evidence.get('continuation'):
+    if evidence.get('correctedCutover'):
+        from supervised_corrected_cutover import check
+        check(helper, evidence)
+    elif evidence.get('continuation'):
         from supervised_continuation import check
         check(helper, evidence)
 
@@ -372,7 +375,7 @@ def activate_supervised(helper, args, receipt_dir, receipt, drain, deadline, evi
     raise TimeoutError('Restart attempted; health unconfirmed. Inspect retained original claim')
 
 
-def run_supervised(helper, args, receipt_dir, receipt, *, continuation=False):
+def run_supervised(helper, args, receipt_dir, receipt, *, continuation=False, corrected=False):
     deadline = time.monotonic() + min(args.wait_seconds, 900)
     def elapsed(*_):
         raise TimeoutError('Original supervised deadline elapsed; inspect any retained claim')
@@ -381,7 +384,10 @@ def run_supervised(helper, args, receipt_dir, receipt, *, continuation=False):
     drain = None
     try:
         evidence = authority()
-        if continuation:
+        if corrected:
+            from supervised_corrected_cutover import authority as corrected_authority
+            evidence = corrected_authority()
+        elif continuation:
             from supervised_continuation import authority as continuation_authority
             evidence = continuation_authority()
         private_paths(helper, receipt_dir)
@@ -396,7 +402,10 @@ def run_supervised(helper, args, receipt_dir, receipt, *, continuation=False):
         if not health.get('ready') or not health.get('relayConnected') or health.get('codexVersion') != '0.161.0' or health.get('maintenance', {}).get('invocationId') != INVOCATION:
             raise RuntimeError('Healthy exact original bridge is unconfirmed')
         source(helper, args)
-        if continuation:
+        if corrected:
+            from supervised_corrected_cutover import register
+            evidence = register(helper, args, evidence)
+        elif continuation:
             from supervised_continuation import register
             evidence = register(helper, args, evidence)
         else:

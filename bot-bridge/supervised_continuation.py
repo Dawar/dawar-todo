@@ -40,7 +40,10 @@ CONTINUATION_AUTHORITY = {
 
 
 def authority():
-    binding = CONTINUATION_AUTHORITY
+    return exact_authority(CONTINUATION_AUTHORITY)
+
+
+def exact_authority(binding):
     keys = {'id', 'offset', 'rawLineSha256', 'textSha256', 'timestamp'}
     if not isinstance(binding, dict) or set(binding) != keys:
         raise RuntimeError('Supervised continuation is disabled: new exact owner approval is unbound')
@@ -127,8 +130,8 @@ def original_failure(helper):
             'terminalLeaseSha256': ORIGINAL_LEASE_SHA, 'unit': unit}
 
 
-def helper_identity(helper):
-    values = [helper.command('systemctl', '--user', 'show', CHILD_UNIT, '-p', key, '--value')
+def helper_identity(helper, unit_id=CHILD_UNIT):
+    values = [helper.command('systemctl', '--user', 'show', unit_id, '-p', key, '--value')
               for key in ('MainPID', 'InvocationID', 'ActiveState', 'SubState')]
     if (values[0] != str(os.getpid()) or not re.fullmatch(r'[0-9a-f]{32}', values[1]) or
             values[1] != os.environ.get('INVOCATION_ID') or values[1] in (INVOCATION, ORIGINAL_HELPER_INVOCATION) or
@@ -154,7 +157,7 @@ def helper_identity(helper):
                 raise RuntimeError('Another runtime handoff helper exists; no continuation')
         except FileNotFoundError:
             continue  # process exited before it could be observed
-    return {'pid': os.getpid(), 'invocationId': values[1], 'unitId': CHILD_UNIT}
+    return {'pid': os.getpid(), 'invocationId': values[1], 'unitId': unit_id}
 
 
 def register(helper, args, approval):

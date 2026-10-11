@@ -270,10 +270,12 @@ def main():
                         help='One human-approved UNSEALED first handoff from the exact retained d011 process')
     parser.add_argument('--supervised-d011-continuation', action='store_true',
                         help='Exact owner-approved one linked continuation of the retained pre-claim failure')
+    parser.add_argument('--supervised-d011-corrected', action='store_true',
+                        help='Exact Oct11 owner-approved corrected cutover, retaining both pre-claim failures')
     parser.add_argument('--portable-handoff-configuration')
     parser.add_argument('--portable-handoff-sha256')
     args = parser.parse_args()
-    if bool(args.portable_handoff_configuration) != bool(args.portable_handoff_sha256) or args.portable_handoff_configuration and not args.supervised_d011_continuation:
+    if bool(args.portable_handoff_configuration) != bool(args.portable_handoff_sha256) or args.portable_handoff_configuration and not (args.supervised_d011_continuation or args.supervised_d011_corrected):
         raise RuntimeError('Portable migration is a hook in the original approved linked continuation only')
     if not re.fullmatch(r'[0-9a-f]{40}', args.commit) or not re.fullmatch(r'\d+\.\d+\.\d+', args.version):
         raise RuntimeError('Exact reviewed SHA and version are required')
@@ -284,10 +286,15 @@ def main():
     if args.supervised_d011_once and (not args.maintenance_operation or args.reconcile_native_queued or not 60 <= args.wait_seconds <= 900):
         raise RuntimeError('Supervised handoff requires original drain/unit, 60..900 seconds, and no legacy bootstrap')
     if args.supervised_d011_continuation:
-        if args.supervised_d011_once or args.reconcile_native_queued or not args.maintenance_operation or not 60 <= args.wait_seconds <= 900:
+        if args.supervised_d011_once or args.supervised_d011_corrected or args.reconcile_native_queued or not args.maintenance_operation or not 60 <= args.wait_seconds <= 900:
             raise RuntimeError('Continuation cannot combine with another mode and requires one bounded child lease/unit')
         from supervised_continuation import authority as continuation_authority
         continuation_authority()  # refuse unapproved operation before any receipt-directory write
+    if args.supervised_d011_corrected:
+        if args.supervised_d011_once or args.supervised_d011_continuation or args.reconcile_native_queued or not args.maintenance_operation or not 60 <= args.wait_seconds <= 900:
+            raise RuntimeError('Corrected cutover requires its one bounded lease, with no other activation mode')
+        from supervised_corrected_cutover import authority as corrected_authority
+        corrected_authority()
     receipt_dir = STATE / 'runtime-updates' / args.commit
     receipt_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     receipt = receipt_dir / 'restart.json'
@@ -298,10 +305,10 @@ def main():
     pin = re.search(r'export const CODEX_VERSION = "(\d+\.\d+\.\d+)";', (ROOT / 'bot-bridge/codex-version.mjs').read_text())
     if not pin or pin.group(1) != args.version:
         raise RuntimeError('Reviewed runtime version changed')
-    if args.supervised_d011_once or args.supervised_d011_continuation:
+    if args.supervised_d011_once or args.supervised_d011_continuation or args.supervised_d011_corrected:
         from supervised_handoff import run_supervised
         return run_supervised(sys.modules[__name__], args, receipt_dir, receipt,
-                              continuation=args.supervised_d011_continuation)
+                              continuation=args.supervised_d011_continuation, corrected=args.supervised_d011_corrected)
     drain = begin_drain(args, receipt_dir) if args.maintenance_operation else None
     try:
         activate(args, receipt_dir, receipt, drain)

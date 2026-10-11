@@ -270,3 +270,15 @@ belongs in the release receipt, not in synthetic source observations.
 Rollback: revert the source delta before release. Once installed, use the same
 safe activation rules; expire/cancel only the original unclaimed fence through
 this owner endpoint. Preserve the original records and all newer user data.
+# October11 corrected cutover
+
+Direct owner message `msg_01a128be-0da0-7aa0-a416-deed40c03649` approves the
+corrected cutover decision and explicitly accepts the cutover safety risk.
+`--supervised-d011-corrected` binds that exact native record to ONE new linked
+lease, at most 900 seconds and ONE actual restart. Both failed reservations,
+cancelled leases and exact pre-backup failures remain immutable parent proof.
+This does not renew either failed lease or permit automatic restart retry.
+The presence-aware passive-notice check, active-work drain, private backup,
+source/process/native fences and UNSEALED question-answer avoidance remain.
+Confirm the helper and drain are live before retiring the old site. Then verify
+the new service and public route; an uncertain claim stops for inspection.
