@@ -9,7 +9,7 @@
 .bots-upload-image { display:block; width:96px; height:96px; overflow:hidden; }
 .bots-upload-image .bots-attachment-open { display:grid; place-items:center; width:100%; height:100%; padding:0; border-radius:0; }
 .bots-upload-image img { width:100%; height:100%; object-fit:cover; }
-.bots-upload-image .bots-upload-remove { position:absolute; top:2px; right:2px; background:var(--card); color:var(--foreground); box-shadow:0 1px 4px #0002; }
+.bots-upload-image .bots-upload-remove { position:absolute; top:2px; right:2px; background:var(--card); color:var(--foreground); box-shadow:0 1px 4px color-mix(in srgb, var(--foreground) 13%, transparent); }
 .bots-upload-progress { position:absolute; inset-inline:0; bottom:0; padding:3px 4px; background:var(--card); color:var(--muted-foreground); font-size:12px; text-align:center; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; pointer-events:none; }
 .bots-upload-error { min-width:160px; max-width:280px; color:var(--destructive); font-size:13px; line-height:1.5; overflow-wrap:anywhere; }
 .bots-keyboard-open .bots-upload-image { width:80px; height:80px; }

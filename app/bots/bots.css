@@ -995,3 +995,8 @@ html.bots-viewport-locked body {
 
 .bots-attachment-image-frame { display: inline-block; max-width: 100%; }
 .bots-attachment-image-state { display: flex; flex-direction: column; align-items: flex-start; gap: .5rem; overflow-wrap: anywhere; padding-block: .5rem; }
+
+@media (prefers-reduced-motion: reduce) {
+  .bots-spin, .bots-working > span { animation: none; }
+  .bots-activity-chevron { transition: none; }
+}

@@ -57,9 +57,6 @@
 .bots-attachments-entry > span:nth-child(2) { flex: 1; min-width: 0; }
 .bots-attachments-count { color: var(--muted-foreground); font-size: 13px; }
 .bots-attachments-entry > svg { color: var(--muted-foreground); flex-shrink: 0; }
-.bots-artifacts-nav { display: flex; align-items: center; gap: 9px; padding: 12px 14px; margin: 0 16px 12px; border: 1px solid var(--border); border-radius: 11px; color: var(--muted-foreground); font-size: 13px; background: var(--card); }
-.bots-artifacts-nav span { flex: 1; text-align: left; }
-.bots-artifacts-nav.active { background: var(--accent); border-color: var(--border); color: var(--accent-foreground); }
 .bots-file-viewer-backdrop { position: fixed; inset: 0; background: color-mix(in srgb, var(--foreground) 80%, transparent); backdrop-filter: blur(5px); z-index: 90; display: grid; place-items: center; padding: 30px; }
 .bots-file-viewer { width: min(100%, 1100px); height: min(90dvh, 950px); min-height: 0; min-width: 0; display: flex; flex-direction: column; border-radius: var(--radius); overflow: hidden; background: var(--muted); box-shadow: 0 25px 90px color-mix(in srgb, var(--foreground) 40%, transparent); }
 dialog.bots-file-viewer { position: fixed; inset: 0; margin: auto; padding: 0; border: 0; max-width: calc(100% - 60px); max-height: 90dvh; color: inherit; }
@@ -142,3 +139,7 @@ dialog.bots-file-viewer::backdrop { background: color-mix(in srgb, var(--foregro
 .bots-file-publication { display: block; padding: 0 12px 8px; font-size: 13px; line-height: 1.5; color: var(--muted-foreground); }
 .bots-file-open:focus-visible { outline: 2px solid var(--ring); outline-offset: -3px; }
 .bots-file-card-footer { min-height: 48px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .bots-file-card { transition: none; }
+}

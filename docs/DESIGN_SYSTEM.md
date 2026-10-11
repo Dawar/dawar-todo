@@ -492,3 +492,7 @@ Wide Markdown tables and code blocks are named, keyboard-focusable scroll region
 ### Cached gallery feedback
 
 Cached files stay visible through refresh failures. The saved-view banner says updating only while a request is in progress; a failed refresh reports that refresh is unavailable alongside its retry control. Offline copy remains distinct.
+
+### Reduced motion coverage
+
+The shared skeleton already animates only when motion is allowed. Bot spinners, working dots, Activity chevrons, and file-card transitions also respect reduced motion, retaining their static icon/status text. Unused legacy artifact-navigation selectors are removed; the active navigator uses the shared Button. Attachment overlays use the semantic shadow color.
