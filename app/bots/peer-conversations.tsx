@@ -1,4 +1,5 @@
 "use client";
+import { Button } from "@/components/ui/button";
 import { Fragment, useEffect, useRef, useState } from 'react';
 import { ChevronRight, MessageCircle, RefreshCw, AlertCircle } from 'lucide-react';
 import { botsClient as client } from './client';
@@ -72,11 +73,11 @@ export function DiscussionStatus({ status, bots, botId, online, onOpen, attentio
   const peerFor = (r: PeerRequest) => bots.find(b => b.id === (r.senderBotId === botId ? r.recipientBotId : r.senderBotId));
   const executions = (r: PeerRequest) => online ? (r.executions ?? []).filter(e => bots.some(b => b.id === e.botId && ["running", "waiting"].includes(b.status) && b.activeTurnId === e.turnId)) : [];
   const blocked = status.requests.find(r => discussionNeedsAttention(r, botId, bots, online));
-  if (attentionOnly) return blocked ? <button type="button" className="bots-discussion-notice" onClick={() => onOpen(blocked.id)}><AlertCircle size={15} aria-hidden="true" /><span>{blocked.state === "delivery-unconfirmed" ? "Discussion needs confirmation" : blocked.state === "failed" ? "Discussion needs attention" : `${peerFor(blocked)?.name.split(":")[0] ?? "A bot"} needs input`}</span><ChevronRight size={15} aria-hidden="true" /></button> : status.error ? <button type="button" className="bots-discussion-notice" onClick={() => onOpen()}><AlertCircle size={15} aria-hidden="true" /><span>Check discussions</span><ChevronRight size={15} aria-hidden="true" /></button> : null;
+  if (attentionOnly) return blocked ? <Button variant="ghost" type="button" className="bots-discussion-notice" onClick={() => onOpen(blocked.id)}><AlertCircle size={15} aria-hidden="true" /><span>{blocked.state === "delivery-unconfirmed" ? "Discussion needs confirmation" : blocked.state === "failed" ? "Discussion needs attention" : `${peerFor(blocked)?.name.split(":")[0] ?? "A bot"} needs input`}</span><ChevronRight size={15} aria-hidden="true" /></Button> : status.error ? <Button variant="ghost" type="button" className="bots-discussion-notice" onClick={() => onOpen()}><AlertCircle size={15} aria-hidden="true" /><span>Check discussions</span><ChevronRight size={15} aria-hidden="true" /></Button> : null;
   const active = online && status.requests.find(r => executions(r).length && !r.cancelRequested);
-  if (!active || blocked) return status.more ? <button type="button" className="bots-discussion-presence" onClick={() => onOpen()}><MessageCircle size={15}/><span>More discussions{status.totals?.pausedRoots ? ` · ${status.totals.pausedRoots} paused` : ""}</span></button> : null;
+  if (!active || blocked) return status.more ? <Button variant="ghost" type="button" className="bots-discussion-presence" onClick={() => onOpen()}><MessageCircle size={15}/><span>More discussions{status.totals?.pausedRoots ? ` · ${status.totals.pausedRoots} paused` : ""}</span></Button> : null;
   const peer = peerFor(active);
-  return <button type="button" className="bots-discussion-presence" onClick={() => onOpen(active.id)} title="Open discussion">{peer && <BotAvatar bot={peer} small decorative working />}<span>Working with {peer?.name.split(":")[0] ?? "a bot"}{status.requests.filter(r => executions(r).length).length > 1 ? " + others" : ""}</span></button>;
+  return <Button variant="ghost" type="button" className="bots-discussion-presence" onClick={() => onOpen(active.id)} title="Open discussion">{peer && <BotAvatar bot={peer} small decorative working />}<span>Working with {peer?.name.split(":")[0] ?? "a bot"}{status.requests.filter(r => executions(r).length).length > 1 ? " + others" : ""}</span></Button>;
 }
 export function PeerConversations({ owner, botId, bots, online, historyView = false, targetId = null }: { owner: string; botId: string; bots: Bot[]; online: boolean; historyView?: boolean; targetId?: string | null }) {
   const key = `peers-metadata:v1:${botId}`;
@@ -109,11 +110,11 @@ export function PeerConversations({ owner, botId, bots, online, historyView = fa
   }, [targetId, online, botId, owner]);
   const requests = targetId && target?.id === targetId && !page.requests.some(r => r.id === targetId) ? [target, ...page.requests] : page.requests;
 
-  return <section className="bots-peer-conversations" aria-label="Bot discussions"><header><MessageCircle size={16} /><span>{historyView ? "Discussions" : "Working together"}</span>{changed && <button disabled={!online || busy} onClick={() => { setCursor(null); setAttempt(value => value + 1); }}>New updates <RefreshCw size={13} /></button>}</header>
+  return <section className="bots-peer-conversations" aria-label="Bot discussions"><header><MessageCircle size={16} /><span>{historyView ? "Discussions" : "Working together"}</span>{changed && <Button variant="ghost" disabled={!online || busy} onClick={() => { setCursor(null); setAttempt(value => value + 1); }}>New updates <RefreshCw size={13} /></Button>}</header>
     {requests.map((request, index) => <Fragment key={request.id}>{historyView && (index === 0 || requests[index - 1].createdAt.slice(0, 10) !== request.createdAt.slice(0, 10)) && <h4 className="bots-peer-date">{new Date(request.createdAt).toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' })}</h4>}<PeerCard request={request} owner={owner} botId={botId} bots={bots} online={online} historyView={historyView} targetId={targetId} /></Fragment>)}
-    {!requests.length && !error && <p className="bots-details-lead">{busy ? "Loading discussions…" : "No discussions yet."}</p>}
-    {error && <p role="alert">{error}<button disabled={!online || busy} onClick={() => setAttempt(value => value + 1)}>Retry</button></p>}
-    {(cursor || page.nextCursor) && <nav>{cursor && <button disabled={!online || busy} onClick={() => setCursor(null)}>Recent discussions</button>}{page.nextCursor && <button disabled={!online || busy} onClick={() => setCursor(page.nextCursor)}>Earlier discussions</button>}</nav>}
+    {!requests.length && !error && <p className="bots-details-lead">{busy ? "Loading discussions…" : !online ? "Connect to load discussions." : "No discussions yet."}</p>}
+    {error && <p role="alert">{error}<Button variant="ghost" disabled={!online || busy} onClick={() => setAttempt(value => value + 1)}>Retry</Button></p>}
+    {(cursor || page.nextCursor) && <nav>{cursor && <Button variant="ghost" disabled={!online || busy} onClick={() => setCursor(null)}>Recent discussions</Button>}{page.nextCursor && <Button variant="ghost" disabled={!online || busy} onClick={() => setCursor(page.nextCursor)}>Earlier discussions</Button>}</nav>}
   </section>;
 }
 function PeerCard({ request, owner, botId, bots, online, historyView, targetId }: { request: PeerRequest; owner: string; botId: string; bots: Bot[]; online: boolean; historyView: boolean; targetId: string | null }) {
@@ -126,9 +127,9 @@ function PeerCard({ request, owner, botId, bots, online, historyView, targetId }
     client.events.add(event); return () => { client.events.delete(event); };
   }, [owner, botId, request.id]);
   const peerId = current.senderBotId === botId ? current.recipientBotId : current.senderBotId, peer = bots.find(bot => bot.id === peerId), name = peer?.name ?? 'Bot';
-  return <article className="bots-peer-card"><button data-history-key={historyView ? `peer:${request.id}` : undefined} className="bots-peer-summary" aria-expanded={open} onClick={() => { setOpen(value => !value); setUnread(false); }}>
+  return <article className="bots-peer-card"><Button variant="ghost" data-history-key={historyView ? `peer:${request.id}` : undefined} className="bots-peer-summary" aria-expanded={open} onClick={() => { setOpen(value => !value); setUnread(false); }}>
     {peer ? <BotAvatar bot={peer} small decorative working={currentExecution(current, bots, online)} /> : <MessageCircle size={20} />}
-    <span><strong>{name}<small>{label(current, bots, online)}</small></strong><span>{current.summary}</span></span><ChevronRight size={17} className={open ? 'is-open' : ''} /></button>
+    <span><strong>{name}<small>{label(current, bots, online)}</small></strong><span>{current.summary}</span></span><ChevronRight size={17} className={open ? 'is-open' : ''} /></Button>
     {open && <PeerDetail owner={owner} botId={botId} request={current} bots={bots} online={online} changed={unread} onRead={() => setUnread(false)} historyView={historyView} />}
   </article>;
 }
@@ -153,14 +154,14 @@ function PeerDetail({ owner, botId, request, bots, online, changed, onRead, hist
     }).catch(reason => { if (live) setError(String(reason)); }).finally(() => { if (live) setBusy(false); });
     return () => { live = false; };
   }, [owner, botId, request.id, online, attempt, paged, cursor]);
-  return <div className="bots-peer-detail"><div className="bots-peer-detail-heading"><span>{paged ? `${request.round} lifetime contributions` : `${request.round} of ${request.roundLimit} discussion rounds used`}</span><button disabled={!online || busy} onClick={() => { setCursor(null); setTrail([]); setAttempt(value => value + 1); }}>{!online ? 'Offline' : busy ? 'Opening…' : changed ? 'Read new replies' : 'Refresh'}</button></div>
+  return <div className="bots-peer-detail"><div className="bots-peer-detail-heading"><span>{paged ? `${request.round} lifetime contributions` : `${request.round} of ${request.roundLimit} discussion rounds used`}</span><Button variant="ghost" disabled={!online || busy} onClick={() => { setCursor(null); setTrail([]); setAttempt(value => value + 1); }}>{!online ? 'Offline' : busy ? 'Opening…' : changed ? 'Read new replies' : 'Refresh'}</Button></div>
     {!online && <p>{data ? 'Saved in this view. Reconnect for new replies.' : 'Connect to read this exchange. Its result stays in your conversation.'}</p>}
     {data?.exchanges.map(exchange => <section key={exchange.id} data-history-key={historyView ? `peer-exchange:${exchange.id}` : undefined} className="bots-peer-exchange"><header><strong>{bots.find(bot => bot.id === exchange.botId)?.name ?? 'Bot'}{exchange.kind === 'cancel' ? ' · Cancellation' : ''}</strong><time dateTime={exchange.createdAt}>{new Date(exchange.createdAt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</time></header><Text text={exchange.text} botId={botId} />{exchange.attachmentIds.map(id => <ReturnedArtifact key={id} botId={botId} id={id} />)}</section>)}
-    {paged && (cursor || data?.nextCursor) && <nav>{trail.length > 0 && <button type="button" disabled={!online || busy} onClick={() => { setCursor(trail.at(-1) ?? null); setTrail(v => v.slice(0,-1)); }}>Previous exchanges</button>}{data?.nextCursor && <button type="button" disabled={!online || busy} onClick={() => { setTrail(v => [...v.slice(-63),cursor]); setCursor(data.nextCursor!); }}>Next exchanges</button>}{cursor && <button type="button" disabled={!online || busy} onClick={() => { setCursor(null); setTrail([]); }}>First exchanges</button>}</nav>}
+    {paged && (cursor || data?.nextCursor) && <nav>{trail.length > 0 && <Button variant="ghost" type="button" disabled={!online || busy} onClick={() => { setCursor(trail.at(-1) ?? null); setTrail(v => v.slice(0,-1)); }}>Previous exchanges</Button>}{data?.nextCursor && <Button variant="ghost" type="button" disabled={!online || busy} onClick={() => { setTrail(v => [...v.slice(-63),cursor]); setCursor(data.nextCursor!); }}>Next exchanges</Button>}{cursor && <Button variant="ghost" type="button" disabled={!online || busy} onClick={() => { setCursor(null); setTrail([]); }}>First exchanges</Button>}</nav>}
     {!paged && request.result && !data?.exchanges.some(e => e.kind === 'reply' && e.text === request.result) && <section className="bots-peer-outcome"><h4>Result</h4><Text text={request.result} botId={botId} /></section>}
     {paged && <PeerRootControls key={`${owner}:${botId}:${request.rootId}`} owner={owner} botId={botId} rootId={request.rootId} online={online}/>}
     {error && <p role="alert">{error}</p>}
-    {!['completed','cancelled','failed'].includes(request.state) && !action.intent && <button className="bots-peer-cancel" disabled={!online || action.busy || !action.ready || request.cancelRequested} onClick={() => void action.perform('peers.cancel', { id: request.id }).catch(() => {})}>{request.cancelRequested ? 'Cancellation requested' : 'Cancel this discussion'}</button>}
-    {(action.intent || action.error) && <p role="status">{action.error || 'Checking cancellation…'}<button disabled={!online || action.busy} onClick={() => void action.retry().catch(() => {})}>Check saved action</button></p>}
+    {!['completed','cancelled','failed'].includes(request.state) && !action.intent && <Button variant="ghost" className="bots-peer-cancel" disabled={!online || action.busy || !action.ready || request.cancelRequested} onClick={() => void action.perform('peers.cancel', { id: request.id }).catch(() => {})}>{request.cancelRequested ? 'Cancellation requested' : 'Cancel this discussion'}</Button>}
+    {(action.intent || action.error) && <p role="status">{action.error || 'Checking cancellation…'}<Button variant="ghost" disabled={!online || action.busy} onClick={() => void action.retry().catch(() => {})}>Check saved action</Button></p>}
   </div>;
 }

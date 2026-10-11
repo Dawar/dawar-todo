@@ -386,3 +386,6 @@ Task sync status occupies normal document flow beneath navigation. It must not f
 
 ### Queue management
 Queue lists and queued-message actions use shared Button, Input and NativeSelect primitives. Queue layout CSS supplies wrapping, semantic status colors and readable 13px metadata rather than separate control themes. List names and actions wrap; mobile action targets are at least44px. Native destination-dialog focus restoration and queue receipt/revision/uncertainty behavior remain unchanged. Legacy queue CSS and unused list-card styles are removed.
+
+### Retained discussion history
+Legacy discussion cards/statuses use shared ghost buttons with semantic surfaces and readable13px metadata. Long names, headings and paging actions wrap; card toggles retain expanded state, and cancellation remains visibly destructive. History receipts, selected body paging and Stop/Continue semantics are unchanged.
