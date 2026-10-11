@@ -55,11 +55,11 @@ import { attachmentQueueMessage, hasAttachmentBytes } from "./attachment-queue";
 import { SiteHeader } from "./site-header";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { PendingTaskAttachment } from "./pending-task-attachment";
+import { PendingTaskAttachment, CaptureAttachments } from "./pending-task-attachment";
 import { ControlledDialog } from "@/components/ui/controlled-dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { TaskAttachmentMedia } from "./task-attachment-media";
-import { formatDuration, formatFileSize } from "./attachment-format";
+import { formatDuration } from "./attachment-format";
 import { AttachmentPicker } from "./attachment-picker";
 import { TaskDetailFields } from "./task-detail-fields";
 import { TaskRow, SnoozeStatusBadge } from "./task-row";
@@ -4167,19 +4167,23 @@ export default function Home() {
       <TaskIntentPanel />
       {uploadCount > 0 && <AttachmentQueuePanel count={uploadCount} states={uploadStates} />}
       {imageDropActive && (
-        <div className="pointer-events-none fixed inset-0 z-[100] grid place-items-center bg-[#153d2d]/25 p-5 backdrop-blur-[2px]" role="status" aria-live="polite">
-          <div className="flex max-w-sm items-center gap-3 rounded-2xl border border-[#216e4e]/25 bg-white px-5 py-4 text-base font-semibold text-[#216e4e] shadow-2xl">
+        <div className="pointer-events-none fixed inset-0 z-[100] grid place-items-center bg-primary/20 p-5 backdrop-blur-[2px]" role="status" aria-live="polite">
+          <div className="flex max-w-sm items-center gap-3 rounded-lg border border-primary/25 bg-card px-5 py-4 text-base font-medium text-primary shadow-lg">
             <ActionIcon name="attachment" className="h-6 w-6" />
             Drop attachments to add to {editingTodo ? "this task" : "the new task"}
           </div>
         </div>
       )}
       <div className="mx-auto max-w-5xl px-4 pb-56 pt-5 sm:px-6 sm:pb-40 sm:pt-7">
-        {(captureSaveState.startsWith("Draft could not be loaded") || captureSaveState.startsWith("Draft not saved")) && <div className="mb-2 text-xs text-red-700" role="alert">{captureSaveState}
-          {captureSaveState.startsWith("Draft could not be loaded") && <button type="button" className="ml-2 underline" onClick={hydrateCapture}>Retry loading draft</button>}
-          {captureSaveState.startsWith("Draft not saved") && <button type="button" className="ml-2 underline" onClick={() => void checkpointCapture().catch(() => undefined)}>Retry saving</button>}
-          {captureAttachments.map((item) => <a key={item.localId} href={item.previewUrl} download={item.file.name} className="ml-2 underline">Save {item.file.name}</a>)}
+        {(captureSaveState.startsWith("Draft could not be loaded") || captureSaveState.startsWith("Draft not saved")) && <div className="mb-3 rounded-lg border border-destructive/30 bg-card p-3">
+          <p role="alert" className="break-words text-sm text-destructive">{captureSaveState}</p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {captureSaveState.startsWith("Draft could not be loaded") && <Button type="button" variant="outline" onClick={hydrateCapture}>Retry loading draft</Button>}
+            {captureSaveState.startsWith("Draft not saved") && <Button type="button" variant="outline" onClick={() => void checkpointCapture().catch(() => undefined)}>Retry saving</Button>}
+            {captureAttachments.map(item => <Button asChild variant="outline" key={item.localId} className="h-auto min-h-11 max-w-full whitespace-normal py-2 text-left"><a href={item.previewUrl} download={item.file.name} className="[overflow-wrap:anywhere]">Save {item.file.name}</a></Button>)}
+          </div>
         </div>}
+
         <form onSubmit={addTodo} className="mb-5 rounded-lg border border-border bg-card p-2 shadow-sm sm:p-3">
           <div className="flex items-end gap-2">
             <div className="flex min-w-0 flex-1 items-start gap-2 px-1 py-2 sm:px-2">
@@ -4227,34 +4231,13 @@ export default function Home() {
             </div>
           </div>
 
-          {captureProject && (
-            <div className="flex border-t border-black/[0.06] px-2 pb-1 pt-2 sm:px-3">
-              <span className="inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-full bg-[#eaf3ed] px-2.5 py-1 text-xs font-semibold text-[#216e4e]">
-                <ActionIcon name="folder" className="h-4 w-4 shrink-0" />
-                <button type="button" onClick={() => openCaptureProjectAssignment()} className="min-w-0 truncate" title={`Change project from ${captureProject}`}>{captureProject}</button>
-                <button type="button" disabled={!captureReady || adding} onClick={() => { updateCaptureProject(""); console.info("[todo-ui] quick add project removed"); }} aria-label={`Remove ${captureProject} from new task`} title="Remove project" className="grid h-5 w-5 shrink-0 place-items-center rounded-full hover:bg-[#d8e9de]"><ActionIcon name="close" className="h-3.5 w-3.5" /></button>
-              </span>
-            </div>
-          )}
+          {captureProject && <div className="mt-2 flex min-w-0 items-center gap-1 border-t border-border px-1 pt-2">
+            <Button type="button" variant="secondary" onClick={() => openCaptureProjectAssignment()} className="min-w-0 max-w-full" title={`Change project from ${captureProject}`}><ActionIcon name="folder" /><span className="truncate">{captureProject}</span></Button>
+            <Button type="button" variant="ghost" size="icon" disabled={!captureReady || adding} onClick={() => { updateCaptureProject(""); console.info("[todo-ui] quick add project removed"); }} aria-label={`Remove ${captureProject} from new task`} className="shrink-0 text-muted-foreground"><ActionIcon name="close" /></Button>
+          </div>}
 
-          {captureAttachments.length > 0 && (
-            <div className="flex gap-2 overflow-x-auto border-t border-black/[0.06] px-2 pb-1 pt-2 sm:px-3" aria-label="Attachments to add">
-              {captureAttachments.map((item) => (
-                <div key={item.localId} className={classNames("relative h-16 shrink-0 overflow-hidden rounded-xl bg-[#eef0ed] ring-1 ring-black/[0.06]", item.kind === "audio" || item.kind === "file" ? "w-44" : "w-16")} title={item.error || item.file.name}>
-                  {item.kind === "image" ? <img src={item.previewUrl} alt="" className="h-full w-full object-cover" /> : item.kind === "video" ? <video src={item.previewUrl} muted className="h-full w-full object-cover" /> : item.kind === "file" ? <div className="flex h-full items-center gap-2 px-3 text-xs font-semibold text-[#455049]"><ActionIcon name="file" className="h-5 w-5 shrink-0 text-[#216e4e]" /><span className="min-w-0"><span className="block truncate">{item.file.name}</span><span className="font-normal text-[#7b837e]">{formatFileSize(item.file.size)}</span></span></div> : <div className="flex h-full items-center gap-2 px-3 text-xs font-semibold text-[#455049]"><ActionIcon name="mic" className="h-5 w-5 text-[#216e4e]" /><span>Voice memo<br /><span className="font-normal text-[#7b837e]">{formatDuration(item.durationMs)}</span></span></div>}
-                  {item.status === "uploading" && <span className="absolute inset-0 grid place-items-center bg-black/40 text-[10px] font-semibold text-white">Uploading…</span>}
-                  {item.status === "offline" && <span className="absolute inset-x-0 bottom-0 bg-amber-700/90 px-1 py-0.5 text-center text-[9px] font-semibold text-white">Saved offline</span>}
-                  {item.status === "error" && (
-                    <button type="button" disabled={!captureReady || adding} onClick={() => retryCaptureAttachment()} aria-label={`Retry ${item.file.name}`} title="Retry saving" className="absolute inset-0 grid place-items-center bg-red-900/65 text-white"><ActionIcon name="retry" /></button>
-                  )}
-                  {item.status !== "uploading" && (
-                    <button type="button" disabled={!captureReady || adding} onClick={() => void removeCaptureAttachment(item)} aria-label={`Remove ${item.file.name}`} title="Remove attachment" className="absolute right-1 top-1 grid h-6 w-6 place-items-center rounded-full bg-black/65 text-white hover:bg-red-700"><ActionIcon name="close" className="h-3.5 w-3.5" /></button>
-                  )}
-                </div>
-              ))}
-              <span className="self-center whitespace-nowrap px-1 text-[11px] text-[#7c847f]">{captureAttachments.length}/{MAX_ATTACHMENTS}</span>
-            </div>
-          )}
+          {captureAttachments.length > 0 && <CaptureAttachments items={captureAttachments} limit={MAX_ATTACHMENTS} disabled={!captureReady || adding} onRetry={retryCaptureAttachment} onRemove={item => void removeCaptureAttachment(item)} />}
+
         </form>
 
         <section aria-labelledby="tasks-heading">

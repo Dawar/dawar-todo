@@ -6,10 +6,10 @@ import { formatDuration, formatFileSize } from "./attachment-format";
 import type { OfflineAttachmentKind } from "./offline-store";
 
 type PendingMedia = {kind: OfflineAttachmentKind; file: File; previewUrl: string; durationMs: number; status: "staged" | "uploading" | "ready" | "error" | "offline"; error: string};
-export function PendingTaskAttachment({item, onRetry, onRemove}: {item: PendingMedia; onRetry: () => void; onRemove: () => void}) {
+export function PendingTaskAttachment({item, onRetry, onRemove, disabled = false, statusLabel}: {item: PendingMedia; onRetry?: () => void; onRemove: () => void; disabled?: boolean; statusLabel?: string}) {
   const uploading = item.status === "uploading";
   const failed = item.status === "error";
-  const message = uploading ? "Uploading…" : item.error || (item.status === "offline" ? "Queued for upload." : failed ? "Upload failed. Try again." : "Waiting to upload.");
+  const message = statusLabel ?? (uploading ? "Uploading…" : item.error || (item.status === "offline" ? "Queued for upload." : failed ? "Upload failed. Try again." : "Waiting to upload."));
   return <div className="col-span-full min-w-0 overflow-hidden rounded-lg border border-border bg-card p-3">
     <div className="flex min-w-0 items-start gap-3">
       {item.kind === "image" ? <img src={item.previewUrl} alt="" className="h-14 w-14 shrink-0 rounded-md object-cover" /> : item.kind === "video" ? <video src={item.previewUrl} muted className="h-14 w-14 shrink-0 rounded-md object-cover" /> : <span className="grid h-10 w-10 shrink-0 place-items-center rounded-md bg-muted text-primary"><ActionIcon name={item.kind === "file" ? "file" : "mic"} /></span>}
@@ -20,8 +20,23 @@ export function PendingTaskAttachment({item, onRetry, onRemove}: {item: PendingM
       </div>
     </div>
     {!uploading && <div className="mt-3 flex flex-wrap justify-end gap-2">
-      <Button type="button" variant="outline" onClick={onRetry} aria-label={`Retry ${item.file.name}`}><ActionIcon name="retry" />Retry</Button>
-      <Button type="button" variant="ghost" onClick={onRemove} aria-label={`Remove ${item.file.name}`} className="text-muted-foreground hover:text-destructive"><ActionIcon name="close" />Remove</Button>
+      {onRetry && <Button type="button" disabled={disabled} variant="outline" onClick={onRetry} aria-label={`Retry ${item.file.name}`}><ActionIcon name="retry" />Retry</Button>}
+      <Button type="button" disabled={disabled} variant="ghost" onClick={onRemove} aria-label={`Remove ${item.file.name}`} className="text-muted-foreground hover:text-destructive"><ActionIcon name="close" />Remove</Button>
     </div>}
+  </div>;
+}
+
+export function CaptureAttachments<T extends PendingMedia & { localId: string }>({ items, limit, disabled, onRetry, onRemove }: {
+  items: T[]; limit: number; disabled: boolean; onRetry: () => void; onRemove: (item: T) => void;
+}) {
+  return <div className="border-t border-border pt-3">
+    <p className="mb-2 px-2 text-[13px] text-muted-foreground">{items.length} of {limit} attachments</p>
+    <div role="group" aria-label="Attachments to add" className="flex gap-3 overflow-x-auto px-1 pb-2">
+      {items.map(item => <div key={item.localId} className="w-64 shrink-0">
+        <PendingTaskAttachment item={item} disabled={disabled}
+          statusLabel={item.status === "staged" || item.status === "ready" ? "Ready to attach." : item.status === "offline" ? "Saved on this device." : undefined}
+          onRetry={item.status === "error" ? onRetry : undefined} onRemove={() => onRemove(item)} />
+      </div>)}
+    </div>
   </div>;
 }

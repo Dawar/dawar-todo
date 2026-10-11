@@ -156,3 +156,7 @@ Project assignment can receive the retained attachment opener, using the same ch
 ### Task notifications
 
 TaskNotice uses a semantic card with a status/error text area, a persistent dismiss button, a separate Undo action, and a horizontally contained snooze group. All actions use shared buttons; notification errors use the destructive border/text tokens. Existing timing, optimistic operation IDs and undo/snooze handlers remain in the page controller. The card respects reduced motion and sits above the bulk bar. Actual 320px success/snooze, error and busy displays are observed with inert callbacks; full-page lifecycle, screen-reader announcements, standalone safe area and genuine device acceptance remain pending.
+
+### Capture attachment recovery
+
+Capture uses the same PendingTaskAttachment card as task details, with caller-controlled retry availability, disabled state and accurate capture status labels. Filenames and errors wrap at readable sizes; capture cards scroll within their own region. Staged/ready cards say Ready to attach, offline capture says Saved on this device, uploading retains no actions, and only failed capture exposes Retry. Capture project controls and draft-recovery/download actions now use shared buttons. Existing upload/save/remove functions and admission conditions remain unchanged. Desktop file-state fixtures and existing attachment contracts pass; full capture persistence/media/phone acceptance remains pending.
