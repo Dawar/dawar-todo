@@ -1,4 +1,6 @@
 "use client";
+import { ControlledDialog } from "@/components/ui/controlled-dialog";
+import { CreateBotDialog } from "./create-bot-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ReplyQuote } from "./message-reply";
@@ -886,19 +888,12 @@ export function BotsWorkspace() {
           </BotDetailsDrawer>
         </Activity>}
       </main>
-      {showTeams && (teamsSupported ? <TeamsManager key={owner} owner={owner} teams={teams} bots={bots} online={online} onClose={() => setShowTeams(false)} /> : <div className="bots-modal-backdrop" onClick={() => setShowTeams(false)}><section className="bots-modal" role="dialog" aria-modal="true" aria-label="Teams" onClick={event => event.stopPropagation()}><h2>Teams</h2><p>Teams will be available when the bot service update finishes.</p><button className="bots-primary" onClick={() => setShowTeams(false)}>Close</button></section></div>)}
-      {showOverallUsage && <div className="bots-modal-backdrop" onClick={() => setShowOverallUsage(false)}><section className="bots-history-modal bots-usage-modal" role="dialog" aria-modal="true" aria-label="Codex account usage" onClick={(event) => event.stopPropagation()}><header><h2>Codex account usage</h2><button className="bots-icon-button" aria-label="Close account usage" onClick={() => setShowOverallUsage(false)}><X size={19} /></button></header><UsagePanel online={online} /></section></div>}
+      {showTeams && (teamsSupported ? <TeamsManager key={owner} owner={owner} teams={teams} bots={bots} online={online} onClose={() => setShowTeams(false)} /> : <ControlledDialog title="Teams" onClose={() => setShowTeams(false)}><p className="text-sm text-muted-foreground">Teams are unavailable on this service.</p><Button className="justify-self-end" onClick={() => setShowTeams(false)}>Close</Button></ControlledDialog>)}
+      {showOverallUsage && <ControlledDialog title="Codex account usage" className="max-w-3xl" onClose={() => setShowOverallUsage(false)}><UsagePanel online={online} /></ControlledDialog>}
       {showCall && <OperatorCallDialog bot={bots.find(value => value.id === callBotId) ?? null} bots={bots.filter(value => !value.archived && value.executionMode === "single-thread")} onClose={() => setShowCall(false)} />}
       {bot && desktopScope === scope && !bot.archived && <BotDesktopDialog key={scope} bot={bot} owner={owner} onClose={() => setDesktopScope(null)} />}
-      {creating && (
-        <div className="bots-modal-backdrop" onClick={() => setCreating(false)}>
-          <form
-            className="bots-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-label="Create a bot"
-            onClick={(e) => e.stopPropagation()}
-            onSubmit={(e) => {
+      {creating && <CreateBotDialog online={online} busy={busy} error={error} onClose={() => setCreating(false)}
+        onSubmit={(e) => {
               e.preventDefault();
               const data = new FormData(e.currentTarget);
               void action(async () => {
@@ -916,40 +911,7 @@ export function BotsWorkspace() {
                 select(created.id);
                 await client.refresh();
               });
-            }}
-          >
-            <h2>Create a bot</h2>
-            <label>
-              Name
-              <input
-                name="name"
-                autoFocus
-                placeholder="e.g. Atlas"
-                required
-                maxLength={80}
-              />
-            </label>
-            <label>
-              Purpose <span className="bots-muted">optional</span>
-              <textarea
-                name="purpose"
-                placeholder="What would you like this bot to help with?"
-                rows={3}
-                maxLength={2000}
-              />
-            </label>
-            {error && <p className="bots-error">{error}</p>}
-            <div className="bots-modal-actions">
-              <button type="button" onClick={() => setCreating(false)}>
-                Cancel
-              </button>
-              <button className="bots-primary" disabled={!online || busy}>
-                {busy ? "Creating…" : online ? "Create bot" : "Waiting for VM…"}
-              </button>
-            </div>
-          </form>
-        </div>
-      )}
+            }} />}
       {editingSchedule && bot && (
         <ScheduleEditor
           schedule={editingSchedule}
