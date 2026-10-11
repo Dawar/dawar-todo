@@ -424,3 +424,5 @@ Phone-settings notices carry explicit error state from validation/request failur
 Dialog titles use snug (1.375) line height so multi-line headings remain readable on narrow screens. Long dialog bodies scroll internally inside the viewport limit.
 
 Task editing updates the affected row without refreshing the entire list. Draft projection preserves absent optional delegation metadata; an actual delegation is still cleared while a local draft is pending. Original task identity and acknowledgement handling remain unchanged.
+
+The legacy clipboard fallback always removes its temporary text field, including failed copies. If it took focus, it returns focus to the connected original control without scrolling; it does not override focus moved elsewhere by an interaction.
