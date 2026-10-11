@@ -372,3 +372,6 @@ Compact activity previews, counts and elapsed labels use13px muted semantic text
 ### Route boundaries and sign-out
 
 Portable-session and public-route loading states now reuse ScreenLoading; an optional label supports the protected-form fallback. URL resolution, owner-screen mount guards, cross-tab sign-out and preserved drafts remain unchanged. SignedOut already uses shared Card/Button and semantic typography. Desktop render inspected; responsive/focus and full auth transition verification are separate.
+
+### Markdown previews
+Task and form Markdown previews use semantic card, foreground, muted and primary tokens. Empty previews retain a dashed boundary. Headings follow the shared hierarchy; code and tables use readable 13px text. Wide tables and code scroll within their own regions, preserving the surrounding mobile layout. Table regions and links have visible keyboard focus. Sanitization and URL handling remain unchanged.
