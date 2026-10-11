@@ -10,6 +10,7 @@ import type { BotTimeline } from "./timeline-controller";
 export type HistoryDetailReader = Pick<BotTimeline, "botId" | "subscribeDetail" | "detailItem" | "subscribe" | "detailPending" | "detail"> & { detailError?: (entry: HistoryEntry) => string };
 import { useBotTimeline } from "./use-timeline";
 import { botsClient } from "./client";
+import { markLocallyRead } from "./local-read-state";
 import { orderedHistory, reconcileHistory, mergeWorkLogs } from "./history-reconcile";
 import { compactGroups, activityPreview, activityEntry } from "./compact-activity";
 import { elapsed } from "../../lib/bot-timing";
@@ -161,13 +162,7 @@ function BotConversationFeed({ owner, bot, online, children, onOpenCall, onReply
   const burstAttachments = useMemo(() => { const files = new Map(state.attachments.map(file => [file.id, file])); for (const file of burst.value?.attachments ?? []) files.set(file.id, file); return [...files.values()]; }, [state.attachments, burst.value]);
   const batchProps = { botId: bot.id, attachments: burstAttachments, quietSeconds, online, typingUntil: burst.typingUntil };
   const nativeBatchIds = new Set([...state.entries, ...state.contextEntries].flatMap(entry => entry.item?.type === "userMessage" && entry.item.clientId ? [entry.item.clientId] : []));
-  // A delivery receipt can arrive before the native history page. Keep its
-  // original bubbles visible until that exact client identity is projected.
-  const firstMessageAt = [...state.entries, ...state.contextEntries].reduce((first, entry) => Math.min(first, entry.messageAt ?? entry.startedAt ?? Infinity), Infinity);
-  const tailBatches = retainedBatches(burst.value).filter(batch => !nativeBatchIds.has(batch.operationId ?? batch.id) && (batch.state !== "sent" || burst.value?.threadId === bot.threadId && batch.messageIds.some(id => {
-    const message = burst.value?.messages.find(value => value.id === id);
-    return message && (!Number.isFinite(firstMessageAt) || Date.parse(message.createdAt) / 1000 >= firstMessageAt);
-  })));
+  const unprojectedBatches = retainedBatches(burst.value).filter(batch => !nativeBatchIds.has(batch.operationId ?? batch.id));
   const sentIdentity = retainedBatches(burst.value).filter(batch => batch.state === 'sent').map(batch => batch.id).join(':');
   useEffect(() => { if (online && sentIdentity) void timeline.refreshLatest(); }, [timeline, online, sentIdentity]);
   const feed = useFeedScroll(timeline, state, online, projectEntries);
@@ -178,6 +173,7 @@ function BotConversationFeed({ owner, bot, online, children, onOpenCall, onReply
       if (document.visibilityState !== 'visible') return;
       const element = scroll.current;
       if (!element || element.scrollHeight - element.scrollTop - element.clientHeight > 120) return;
+      markLocallyRead(owner, bot);
       void botsClient.rpc('bots.read', bot.id, { threadId: bot.threadId, updatedAt: bot.updatedAt }, undefined, { owner }).catch(() => {});
     };
     const timer = setTimeout(mark, 800);
@@ -235,8 +231,22 @@ function BotConversationFeed({ owner, bot, online, children, onOpenCall, onReply
       if (entry.type === "reasoning" && (entry.item?.type !== "reasoning" || !entry.item.summary.some(text => text.trim()))) continue;
       result.push({ kind: "message", entries: [entry] });
     }
-    return compactGroups(taskRequestGroups(secureTimelineGroups(result, secure.requests.filter(r => r.state !== 'waiting'), state.entries, first, last, state.olderCursor), taskRequests?.requests ?? [], state.entries, first, last, state.olderCursor), state.gaps);
-  }, [state.entries, state.olderCursor, state.gaps, first, last, secure.requests, taskRequests?.requests]);
+    const grouped = compactGroups(taskRequestGroups(secureTimelineGroups(result, secure.requests.filter(r => r.state !== 'waiting'), state.entries, first, last, state.olderCursor), taskRequests?.requests ?? [], state.entries, first, last, state.olderCursor), state.gaps);
+    // Receipt bubbles occupy their chronological position, never an appended
+    // replay of all recent human messages after the assistant's latest reply.
+    const time = (entry: HistoryEntry | undefined) => entry?.messageAt ?? entry?.startedAt ?? Infinity;
+    const lower = first > 0 || state.olderCursor ? time(state.entries[first]) : -Infinity;
+    const upper = last < state.entries.length ? time(state.entries[last]) : Infinity;
+    for (const batch of unprojectedBatches) {
+      const messages = batch.messageIds.flatMap(id => burst.value?.messages.find(message => message.id === id) ?? []);
+      if (!messages.length) continue;
+      const at = Math.min(...messages.map(message => Date.parse(message.createdAt) / 1000));
+      if (!Number.isFinite(at) || at < lower || at >= upper || batch.state === 'sent' && burst.value?.threadId !== bot.threadId) continue;
+      const index = grouped.findIndex(group => group.burst ? Date.parse(burst.value?.messages.find(message => group.burst?.messageIds.includes(message.id))?.createdAt ?? '') / 1000 > at : time(group.entries[0]) > at);
+      grouped.splice(index < 0 ? grouped.length : index, 0, { kind: `burst:${batch.id}`, entries: [], burst: batch });
+    }
+    return grouped;
+  }, [state.entries, state.olderCursor, state.gaps, first, last, secure.requests, taskRequests?.requests, burst.value, bot.threadId, unprojectedBatches]);
   // Retain open aliases only within this mounted conversation's bounded cache.
   useEffect(() => {
     let alive = true;
@@ -297,6 +307,7 @@ function BotConversationFeed({ owner, bot, online, children, onOpenCall, onReply
     {!state.loading && !state.error && !state.entries.length && !state.olderCursor && <div className="bots-conversation-start"><span className="bots-start-icon"><MessageCircle size={26} strokeWidth={1.4} aria-hidden="true" /></span><h2>{bot.name}</h2><p>{bot.purpose || "What would you like to work on?"}</p></div>}
     {(pinnedContext || last === state.entries.length) && readableContext(beforeContext)}
     {groups.map((group) => {
+      if (group.burst) return <BurstBubbles key={group.kind} batch={group.burst} messages={group.burst.messageIds.flatMap(id => burst.value?.messages.find(message => message.id === id) ?? [])} truncatedIds={burst.value?.preview?.truncatedTextIds} controls={burst} {...batchProps} onOpenReply={openReply}/>;
       if (group.secure) return <div key={group.secure.id} className="bots-secure-timeline-entry"><SecureInputCard request={group.secure} online={online}/><MessageTime seconds={Date.parse(group.secure.createdAt) / 1000} basis="received" inline/></div>;
       if (group.taskRequest) return <TaskRequestCard key={group.kind} request={group.taskRequest} capture={feed.capture}/>;
       const entry = group.entries[0], key = historyKey(entry.turnId, entry.id);
@@ -317,12 +328,12 @@ function BotConversationFeed({ owner, bot, online, children, onOpenCall, onReply
           }}>Load messages in between</Button></div>)}
         {entry.peer ? <div data-history-key={key}><PeerTimelineMessage owner={owner} botId={bot.id} meta={entry.peer} nativeKeys={[...(entry.peerNativeKeys ?? []), ...nativeState.contextEntries.filter(e => e.peerAlias && peerAliases(entry.peer!).includes(e.peerAlias)).map(e => historyKey(e.turnId,e.id))]} store={peers.store} online={online} bots={namedBots} showRoot={rootRows.get(entry.peer.rootId) === entry.peer.id}/></div> : group.kind.startsWith("scheduled:") ? <section className="bots-scheduled-findings" aria-label="Findings from one scheduled run"><span className="bots-scheduled-message-mark" title="Findings from the same scheduled run"><Clock3 size={13} aria-hidden="true"/>Scheduled work</span>{group.entries.map(value=><TimelineEntry {...replyProps} onOpenCall={onOpenCall} key={historyKey(value.turnId,value.id)} entry={value} configurationSupported={botsClient.snapshot?.capabilities?.executionConfiguration === 1} configuration={timeline.configuration(bot.threadId, value.turnId)} timeline={timeline} attachments={state.attachments} download={download} showScheduledMark={false}/>)}</section> : group.kind === "message" ? replyBatch ? <div data-history-key={key}><BurstBubbles messages={replyBatch} {...batchProps} onOpenReply={openReply} onReply={onReply} threadId={bot.threadId??undefined} replySource={entry} sent /></div> : confirmed ? <div data-history-key={key}><BurstBubbles messages={confirmed.messages} batch={confirmed.batch} {...batchProps} onOpenReply={openReply} onReply={onReply} threadId={bot.threadId??undefined} replySource={entry} /></div> : <TimelineEntry {...replyProps} onOpenCall={onOpenCall} entry={entry} configurationSupported={botsClient.snapshot?.capabilities?.executionConfiguration === 1} configuration={timeline.configuration(bot.threadId, entry.turnId)} timeline={timeline} attachments={state.attachments} download={download} />
           : activity ? <div data-history-key={key} className="bots-compact-activity">{!open && group.entries.slice(1).map(value => <span key={value.id} data-history-key={historyKey(value.turnId, value.id)} aria-hidden="true" className="bots-activity-alias"/>)}<LazyDetails className="bots-activity" summary={summary} open={open} beforeToggle={feed.capture} onOpenChange={next => setExpanded(prior => { const copy = new Set(prior); for (const value of group.entries) { const key = timeline.resolveKey(historyKey(value.turnId, value.id))!; if (next) copy.add(key); else copy.delete(key); } return copy; })}>{body}</LazyDetails><MessageTime seconds={entry.messageAt} basis={entry.timeBasis} inline elapsed={group.entries.map(value => elapsed(value, 'turn')).find(Boolean)}/></div> : null}
-        {groups.slice(groups.indexOf(group) + 1).find(next => !next.secure && !next.taskRequest)?.entries[0]?.turnId !== entry.turnId ? <ReturnedArtifacts linked={linkedArtifacts} attachments={state.attachments} turnId={entry.turnId} botId={bot.id} /> : null}
+        {groups.slice(groups.indexOf(group) + 1).find(next => !next.secure && !next.taskRequest && !next.burst)?.entries[0]?.turnId !== entry.turnId ? <ReturnedArtifacts linked={linkedArtifacts} attachments={state.attachments} turnId={entry.turnId} botId={bot.id} /> : null}
       </Fragment>;
     })}
     {(pinnedContext || last === state.entries.length) && readableContext(afterContext)}
     {downloadError && <p className="bots-error" role="alert">{downloadError}</p>}
-    {last === state.entries.length && tailBatches.map(batch => <BurstBubbles key={batch.id} batch={batch} messages={batch.messageIds.flatMap(id => { const message = burst.value?.messages.find(message => message.id === id); return message ? [message] : []; })} truncatedIds={burst.value?.preview?.truncatedTextIds} controls={burst} {...batchProps} onOpenReply={openReply} />)}
+
     {burstsEnabled && <BurstControls burst={burst} online={online} submitting={burstSubmitting} />}
     {children}
   </div></div>{showTicks && <MessageTickRail {...tickNavigation} scroll={scroll} content={content} earlier={earlierTicks} incomplete={!state.complete || Boolean(state.olderCursor) || state.gaps.length > 0} loading={paging || state.loading} online={online} error={state.error} onEarlier={() => feed.page(-1, true)} onSelect={selectTick}/>} {(showJump || last < state.entries.length || state.error || state.loading && state.cached) && <Button variant="outline" type="button" className="bots-jump-latest" disabled={!online || state.loading} onClick={() => {

@@ -45,7 +45,7 @@
 .bots-config-evidence summary { cursor:pointer; }
 .bots-room-conversation>.bots-conversation-heading { flex-shrink:0; }
 .bots-room-conversation>.bots-conversation-heading strong { min-width:0; overflow-wrap:anywhere; }
-.bots-collaboration-heading { flex-wrap:wrap; gap:8px; padding:16px; }
+.bots-collaboration-heading { flex-wrap:wrap; gap:4px; padding:6px 12px; }
 .bots-collaboration-heading h1 { flex-basis:100%; font-size:20px; font-weight:600; }
 .bots-collaboration-heading .bots-sidebar-tools { flex-wrap:wrap; max-width:100%; }
 @media(max-width:600px) {

@@ -112,6 +112,7 @@ export class BotsClient {
   stopped = false;
   listeners = new Set<() => void>();
   events = new Set<(event: BotEvent) => void>();
+  confirmedInputs = new Set<(botId: string) => void>();
   pending = new Map<string, Pending>();
   retry = 0;
   reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -535,7 +536,11 @@ export class BotsClient {
       if (message.error) pending.reject(new BotRpcError(String(message.error), uncertain ? "uncertain" : "rejected"));
       else if (pending.managed && !validComposerResult(pending.request.method, result))
         pending.reject(new BotRpcError("The response did not confirm the submitted message. Check the same send again.", "uncertain"));
-      else pending.resolve(result);
+      else {
+        pending.resolve(result);
+        if (pending.request.botId && ['turn.send', 'bursts.submit'].includes(pending.request.method))
+          for (const listener of this.confirmedInputs) listener(pending.request.botId);
+      }
       return;
     }
     if (message.type === "event") {

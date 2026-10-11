@@ -98,11 +98,19 @@ export function canonicalBurst(entry: HistoryEntry, value: SavedBurstState | nul
 }
 
 function BurstFill({ dueAt, quietSeconds, animate }: { dueAt: string | null; quietSeconds: number; animate: boolean }) {
-  const [openedAt] = useState(() => Date.now());
+  const [openedAt, setOpenedAt] = useState(() => Date.now());
+  useEffect(() => {
+    const due = Date.parse(dueAt ?? '');
+    if (!animate || !Number.isFinite(due) || due <= Date.now()) return;
+    // Repaint the measured deadline, including reduced-motion mode, rather
+    // than depending on a CSS animation that may be disabled on mobile.
+    const timer = setInterval(() => { setOpenedAt(Date.now()); if (Date.now() >= due) clearInterval(timer); }, 250);
+    return () => clearInterval(timer);
+  }, [animate, dueAt]);
   const due = Date.parse(dueAt ?? ''), remaining = Math.max(0, (due - openedAt) / 1000);
   const progress = Number.isFinite(remaining) && quietSeconds > 0 ? Math.max(0, Math.min(1, 1 - remaining / quietSeconds)) : 0;
   const style = { '--burst-progress': progress, '--burst-remaining': `${Number.isFinite(remaining) ? remaining : 0}s` } as CSSProperties;
-  return <span aria-hidden="true" className={`bots-burst-fill${animate && Number.isFinite(due) ? ' is-counting' : ''}`} style={style} />;
+  return <span aria-hidden="true" className="bots-burst-fill" style={style} />;
 }
 function BurstBubble({ message, batch, botId, attachments, quietSeconds, online, typingUntil, truncated, onOpenReply, sent: delivered, replySource, onReply, threadId, controls }: {
   controls?: BurstConversation; message: BurstMessage; batch: Burst | undefined; botId: string; attachments: BotAttachment[];

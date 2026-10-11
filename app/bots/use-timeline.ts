@@ -13,6 +13,9 @@ function listen() {
     await Promise.all([...timelines.values()].filter(timeline => timeline.owner === botsClient.owner).map(timeline => timeline.flushForUpdate()));
   });
   const flush = () => { for (const timeline of timelines.values()) void timeline.flush(); };
+  botsClient.confirmedInputs.add(botId => {
+    for (const timeline of timelines.values()) if (timeline.owner === botsClient.owner && timeline.botId === botId) void timeline.refreshLatest();
+  });
   botsClient.events.add((event) => {
     for (const timeline of timelines.values()) if (timeline.owner === botsClient.owner) timeline.receive(event);
   });

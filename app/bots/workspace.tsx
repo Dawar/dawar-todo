@@ -497,7 +497,7 @@ export function BotsWorkspace() {
       <main className={`bots-layout ${navigation === "rooms" ? roomId ? "has-selection" : "" : selected || gallery ? "has-selection" : ""}`}>
         <aside className="bots-sidebar">
           <div className="bots-sidebar-heading bots-collaboration-heading">
-            <h1>{navigation === "rooms" ? "Conversations" : "Bots"}</h1>
+            <h1 className="sr-only">{navigation === "rooms" ? "Conversations" : "Bots"}</h1>
             <div className="bots-sidebar-tools">
             {snapshot?.capabilities?.operatorCalls === 1 && <Button type="button" variant="ghost" size="icon" className="aria-pressed:bg-accent aria-pressed:text-accent-foreground" aria-label="Call Operator" onClick={() => { setCallBotId(null); setShowCall(true); }}><Phone size={16} /></Button>}
             <Button type="button" variant="ghost" size="icon" className="aria-pressed:bg-accent aria-pressed:text-accent-foreground" title="Discussions" aria-label="Discussions" aria-pressed={navigation === "rooms"} onClick={() => {setNavigation(v=>v === "bots"?"rooms":"bots");setProfile(false);}}><MessagesSquare size={18}/></Button>

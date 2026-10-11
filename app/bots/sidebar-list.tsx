@@ -6,6 +6,7 @@ import { BotAvatar } from "./bot-avatar";
 import { useSidebarPreferences } from './sidebar-preferences';
 import { Button } from '@/components/ui/button';
 import './sidebar-list.css';
+import { useLocallyReadBots } from './local-read-state';
 const HEIGHT = 96;
 const TEAM_HEIGHT = 44;
 const working = (bot: Bot) => Boolean(bot.activeTurnId || bot.status === "running" || bot.workerTasks?.active);
@@ -25,6 +26,7 @@ type ListRow = { kind: "heading"; id: string; name: string; color?: string; coun
 export const BotSidebarList = memo(function BotSidebarList({ owner, search = '', bots, snapshot, selected, select, empty }: {
   owner: string; search?: string; bots: Bot[]; snapshot: BotSnapshot | null; selected: string | null; select: (id: string) => void; empty: string;
 }) {
+  const bots = useLocallyReadBots(owner, suppliedBots);
   const [top, setTop] = useState(0);
   const { store, state: preferences } = useSidebarPreferences(owner);
   const searching = Boolean(search.trim());

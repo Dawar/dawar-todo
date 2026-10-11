@@ -1,7 +1,7 @@
 import type { HistoryEntry } from '../../lib/bot-history-view';
 import type { SecureRequest } from '../../lib/secure-input';
 
-export type ConversationGroup = { kind: string; entries: HistoryEntry[]; secure?: SecureRequest; taskRequest?: import("../../lib/task-requests").TaskRequest };
+export type ConversationGroup = { kind: string; entries: HistoryEntry[]; burst?: import("../../lib/bots-types").BotBurst; secure?: SecureRequest; taskRequest?: import("../../lib/task-requests").TaskRequest };
 
 /** Insert description-only cards in the loaded timeline range. Native history,
  * cursors, reply targets and persistence remain native-only. An older request
