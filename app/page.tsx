@@ -976,7 +976,8 @@ export default function Home() {
   const reorderAnimationRestoreFrameRef = useRef<number | null>(null);
   const lastAppBadgeCountRef = useRef<number | null>(null);
   const deepLinkedTaskOpenedRef = useRef(false);
-  const taskDialogNestedOverlayOpen = queueRequest !== null || projectDialog !== null || viewerIndex !== null || voiceTarget !== null || customSnoozeDialog !== null;
+  const [detailAttachmentPickerOpen, setDetailAttachmentPickerOpen] = useState(false);
+  const taskDialogNestedOverlayOpen = detailAttachmentPickerOpen || queueRequest !== null || projectDialog !== null || viewerIndex !== null || voiceTarget !== null || customSnoozeDialog !== null;
   const overlayOpen = editingId !== null || projectSelectorOpen || projectDialog !== null || newProjectOpen || projectDeleteDialog !== null || filtersOpen || viewerIndex !== null || voiceTarget !== null || shortcutsOpen || customSnoozeDialog !== null;
 
   useEffect(() => () => {
@@ -4497,6 +4498,7 @@ export default function Home() {
                   </div>
                   <AttachmentPicker
                     label="Add attachment to task"
+                    onOpenChange={setDetailAttachmentPickerOpen}
                     showLabel
                     onFiles={(files) => void queueDetailAttachments(files)}
                     onRecord={() => setVoiceTarget("detail")}

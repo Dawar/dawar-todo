@@ -1,5 +1,5 @@
 "use client";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { ControlledDialog } from "@/components/ui/controlled-dialog";
 import { ActionIcon } from "./action-icon";
@@ -8,15 +8,20 @@ const IMAGE_ACCEPT = "image/jpeg,image/png,image/webp,image/gif,image/heic,image
 const VIDEO_ACCEPT = "video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm";
 const MEDIA_ACCEPT = `${IMAGE_ACCEPT},${VIDEO_ACCEPT}`;
 
-export function AttachmentPicker({ disabled, onFiles, onRecord, onAssignProject, label, showLabel = false }: {
+export function AttachmentPicker({ disabled, onFiles, onRecord, onAssignProject, onOpenChange, label, showLabel = false }: {
   disabled?: boolean;
   onFiles: (files: File[]) => void;
   onRecord: () => void;
   onAssignProject?: () => void;
+  onOpenChange?: (open: boolean) => void;
   label: string;
   showLabel?: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  useEffect(() => {
+    onOpenChange?.(open && !disabled);
+    return () => onOpenChange?.(false);
+  }, [open, disabled, onOpenChange]);
   const libraryRef = useRef<HTMLInputElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   function selected(input: HTMLInputElement) {

@@ -13,7 +13,10 @@ export function TaskDetailFields({taskId, editDraft, savingEdit, recurrenceError
   recurrenceError: string | null;
   scheduleTimeZone: string;
   onAssignProject: () => void;
-  updateEditDraftField: <K extends keyof DetailMetadata>(field: K, value: DetailMetadata[K]) => void;
+  updateEditDraftField: {
+    (field: "priority", value: number): void;
+    (field: "context" | "dueDate" | "recurrenceCron", value: string): void;
+  };
 }) {
   return (
 <div className="mt-4 grid min-w-0 grid-cols-1 gap-4 sm:grid-cols-2">
