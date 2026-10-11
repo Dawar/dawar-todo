@@ -118,7 +118,7 @@ export class RuntimeMaintenance {
     }
     return counts;
   }
-  async qualifyPassive(deadline) {
+  async qualifyPassive(deadline, phase = 'draining') {
     const counts = this.counts(), snapshot = this.terminalProof.snapshot();
     if (!snapshot || Object.entries(counts).some(([key,n]) => !['acceptedOrUnknown','pendingInput'].includes(key) && n !== 0) ||
         counts.acceptedOrUnknown !== snapshot.input.accepted.length || counts.pendingInput !== snapshot.input.questions.length) return;
@@ -128,7 +128,7 @@ export class RuntimeMaintenance {
     try {
       const remaining = deadline - this.monotonic(); if (remaining < 1) return;
       const native = await this.terminalProof.read(snapshot.input, remaining);
-      if (!operationId || this.current?.id !== operationId || this.current.phase !== 'draining' || generation !== this.generation ||
+      if (!operationId || this.current?.id !== operationId || this.current.phase !== phase || generation !== this.generation ||
           this.monotonic() > deadline || this.terminalProof.snapshot()?.fingerprint !== snapshot.fingerprint ||
           !this.terminalProof.matches(snapshot,native) || !this.terminalProof.fresh(native)) return;
       this.passiveProof = { operationId, generation, fingerprint:snapshot.fingerprint, native, at:this.monotonic() };
@@ -160,9 +160,9 @@ export class RuntimeMaintenance {
     if (!row || row.instanceId !== p.instanceId || row.invocationId !== p.invocationId || row.commit !== p.commit || row.version !== p.version || row.unitId !== p.unitId || row.waitSeconds !== p.waitSeconds) throw Error('Maintenance identity changed.');
     return row;
   }
-  async observe(row) {
+  async observe(row, phase = 'draining') {
     const deadline = this.monotonic() + 20_000;
-    await this.qualifyPassive(deadline);
+    await this.qualifyPassive(deadline, phase);
     const counts = this.counts();
     if (Object.values(counts).some(n => n !== 0)) return { safe: false, counts, reason: 'Current work, tools, volatile state or unknown acceptance remains.' };
     const generation = this.generation, collaborationChange=this.store.meta('collaboration-change');
@@ -191,10 +191,27 @@ export class RuntimeMaintenance {
       if (!Array.isArray(page?.data) || !Object.hasOwn(page,'nextCursor') || page.nextCursor !== null && typeof page.nextCursor !== 'string') throw Error('Unknown accepted native queue state.');
       if (page.data.length || page.nextCursor !== null) nativeQueues++;
     }
-    await this.qualifyPassive(deadline);
+    await this.qualifyPassive(deadline, phase);
     const after = this.counts(), safe = this.monotonic() <= deadline && !active && !activeGoals && !nativeQueues && generation === this.generation && collaborationChange===this.store.meta('collaboration-change') && !Object.values(after).some(n => n !== 0);
     if (safe && this.current?.id === row.id && this.current.phase === 'draining') this.proof = { generation, collaborationChange, at: this.clock(), monotonicAt: this.monotonic(), operationId: row.id };
     return { safe, counts: after, native: { loaded: threads.size, active, activeGoals, nativeQueues }, reason: safe ? null : 'Native work/Goal/queue or concurrent activity prevents restart.' };
+  }
+  async prepareShutdown() {
+    // Service-manager handoff can outlive the five-second observation, or
+    // unrelated native metadata writes can invalidate its file stamps. Keep
+    // the original claimed fence and re-prove idle inside the owning process;
+    // never extend the lease, trust stale proof, or exempt a new retained row.
+    this.expire();
+    const row = this.current;
+    if (row?.phase !== 'claimed' || this.public(row).remainingMs < 45_000)
+      throw Error('An unexpired original restart claim is required for shutdown.');
+    this.source(row.commit, row.version);
+    const result = await this.observe(row, 'claimed');
+    this.expire();
+    if (!result.safe || this.current !== row || this.public(row).remainingMs < 25_000 ||
+        Object.values(this.counts()).some(n => n !== 0))
+      throw Error('Fresh all-context idle proof is required for shutdown.');
+    return result;
   }
   async control(p) {
     if (p?.action === 'begin') return this.begin(p);

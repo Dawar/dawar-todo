@@ -4,6 +4,7 @@ import {join} from 'node:path';
 import {fileURLToPath,pathToFileURL} from 'node:url';
 import {loadConfig} from './config.mjs';
 import {RUNTIME_VERSION} from './protocol.mjs';
+import {combinedShutdown} from './combined-shutdown.mjs';
 
 // A single systemd/launchd cgroup owns the site, hub and the very same agent
 // entrypoint used on remote machines. There is exactly one logical scheduler.
@@ -36,18 +37,7 @@ export async function runBoth(configPath) {
       models:r.models.map(m=>m.model),nodeId:agent.transport.enrollment.nodeId,capabilities:agent.transport.hello().capabilities,
       manager:{ready:true}}));
   });health.listen(c.healthPort??47821,'127.0.0.1');
-  const close=async()=>{
-    if(stopping)return;
-    // This path is for a separately proved idle handoff, not an active-turn
-    // stop/resume mechanism. Do not silently kill live work on a signal.
-    const counts=agent.runtime.maintenance.counts();
-    if(Object.values(counts).some(n=>n!==0)||agent.transport.pending.size||agent.transport.controlPending.size)
-      throw Error('Portable shutdown requires reviewed all-context idle proof.');
-    await gateway.close();stopping=true;clearInterval(siteTimer);health.close();agent.transport.close();
-    agent.runtime.usage.stop();agent.runtime.maintenance.close();agent.runtime.secure?.close();
-    agent.runtime.codex.close();await agent.runtime.desktops?.close();await agent.manager.close();
-    agent.journal.close();agent.runtime.store.close();child?.kill('SIGTERM');
-  };
-  for(const signal of ['SIGINT','SIGTERM'])process.once(signal,()=>{void close().then(()=>process.exit(0)).catch(()=>console.error('Portable shutdown blocked by active or unconfirmed work; preserve the service and original receipts.'));});
+  const close=combinedShutdown({agent,gateway,health,child,siteTimer,stopping:()=>{stopping=true;}});
+  for(const signal of ['SIGINT','SIGTERM'])process.on(signal,()=>{void close().then(()=>process.exit(0)).catch(()=>console.error('Portable shutdown blocked by active or unconfirmed work; preserve the service and original receipts.'));});
   return {gateway,agent,health,close};
 }

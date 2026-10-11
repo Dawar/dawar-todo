@@ -79,6 +79,31 @@ Configuration is an absolute owner-only JSON file (version 1). Local services
 listen on loopback. Service definitions are installed disabled; installation
 never bypasses the original production restart or writer-authority gates.
 
+### Combined backend updates
+
+The combined supervisor requires the original unexpired native maintenance
+Claim before shutdown. It rechecks loaded threads, Goals, accepted queues,
+volatile work and the exact retained terminal records inside that same fence.
+The five-second proof from Seal/Claim may expire during systemd handoff; it is
+refreshed rather than treated as permission to kill native work. Concurrent
+signals share one shutdown. Linux combined units use `KillMode=mixed` and no
+forced stop deadline so the supervisor checks idle before closing its child.
+
+Prepare and verify the successor package and private activation receipts before
+draining. Reload the prepared service definition before the final Observe,
+Seal and Claim. Retain the exact operation and process identities. A claimed
+restart that fails or stalls requires inspection, not another automatic attempt.
+
+The independent web service and backend share the hub writer identity. A backend
+release handoff must also drain/freeze `LocalWriterDrain`, back up the databases,
+and stop both writers before advancing `portable_async_admission.source` from
+the exact previous source. Preserve its writer ID, epoch and all work rows.
+Update the web service's `DAWAR_HUB_CONFIG` to the same successor hub config,
+release the original local drain, then start the backend, web service and
+existing tunnel. Changing only the backend unit leaves the web writer on an
+obsolete source. Verify native readiness, relay, public health, login routing
+and authenticated application reads before reporting the update live.
+
 ## Enrollment
 
 Run `node portable/cli.mjs key --data PATH` on the agent. Confirm the displayed
