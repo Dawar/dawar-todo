@@ -1,9 +1,10 @@
 "use client";
 import { Activity, useEffect, useId, useRef, useState, type ReactNode } from "react";
-import { Clock3, FolderOpen, History, ListOrdered, ListTree, MessageCircle, Monitor, Phone, Settings2, Target, X } from "lucide-react";
+import { Clock3, FolderOpen, History, ListOrdered, ListTree, MessageCircle, Monitor, Phone, Settings2, Target } from "lucide-react";
 import type { Bot } from "../../lib/bots-types";
 import "./bot-details.css";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { HistoryScrollContext } from "./history-scroll-context";
 
 export type BotDetailsSection = "next" | "goals" | "queues" | "schedules" | "files" | "desktop" | "calls" | "discussions" | "history" | "settings";
@@ -27,34 +28,18 @@ export function BotDetailsDrawer({ bot, section, onSection, onClose, children, d
   onClose: () => void; children: Record<BotDetailsSection, ReactNode>; discussionAttention?: number; legacyDiscussionsOnly?: boolean;
 }) {
   const tabs = sections.filter(tab=>!legacyDiscussionsOnly || tab.id!=="discussions" || section === "discussions");
-  const dialog = useRef<HTMLElement>(null), id = useId();
+  const dialog = useRef<HTMLDivElement>(null), id = useId();
   const [historyScroll, setHistoryScroll] = useState<HTMLDivElement | null>(null);
-  useEffect(() => {
-    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const element = dialog.current;
-    element?.querySelector<HTMLElement>("button")?.focus({ preventScroll: true });
-    const focusable = () => [...(element?.querySelectorAll<HTMLElement>("button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), a[href], summary, [tabindex='0']") ?? [])].filter(node => node.getClientRects().length);
-    const keydown = (event: KeyboardEvent) => {
-      // A schedule editor or file viewer may sit above this drawer.
-      if ([...document.querySelectorAll('[role="dialog"]')].filter(node => (node as HTMLElement).getClientRects().length).at(-1) !== element) return;
-      if (event.key === "Escape") { event.preventDefault(); onClose(); }
-      if (event.key !== "Tab") return;
-      const items = focusable(), first = items[0], last = items.at(-1);
-      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
-      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
-    };
-    document.addEventListener("keydown", keydown);
-    return () => { document.removeEventListener("keydown", keydown); if (previous?.isConnected) previous.focus({ preventScroll: true }); };
-  }, [onClose]);
+  const [opener] = useState(() => typeof document === "undefined" ? null : document.activeElement);
   useEffect(() => {
     dialog.current?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')
       ?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }, [section]);
-  return <div className="bots-details-backdrop" onClick={onClose}>
-    <section ref={dialog} className="bots-details" role="dialog" aria-modal="true" aria-labelledby={`${id}-title`} onClick={event => event.stopPropagation()}>
+  return <Dialog open onOpenChange={open => { if (!open) onClose(); }}>
+    <DialogContent ref={dialog} className="bots-details left-auto right-0 top-0 z-[60] max-h-none w-full max-w-[500px] translate-x-0 translate-y-0 gap-0 overflow-hidden rounded-none border-0 p-0 sm:p-0" overlayClassName="z-[60]" aria-describedby={undefined}
+      onCloseAutoFocus={event => { event.preventDefault(); if (opener instanceof HTMLElement && opener.isConnected) opener.focus({ preventScroll: true }); }}>
       <header className="bots-details-heading">
-        <div><span>Bot details</span><h2 id={`${id}-title`}>{bot.name}</h2></div>
-        <Button type="button" variant="ghost" size="icon" aria-label="Close bot details" onClick={onClose}><X size={20} /></Button>
+        <div><span>Bot details</span><DialogTitle>{bot.name}</DialogTitle></div>
       </header>
       <div className="bots-details-nav" role="tablist" aria-label="Bot details sections">
         {tabs.map(({ id: value, label, icon: Icon }) => <Button type="button" variant="ghost" size="sm" key={value} id={`${id}-${value}`} role="tab" aria-selected={section === value} aria-controls={`${id}-${value}-panel`} tabIndex={section === value ? 0 : -1}
@@ -69,6 +54,6 @@ export function BotDetailsDrawer({ bot, section, onSection, onClose, children, d
       {sections.map(({ id: value }) => <Activity key={value} mode={section === value ? "visible" : "hidden"}>
         <div ref={value === "history" ? setHistoryScroll : undefined} className={`bots-details-panel is-${value}`} role="tabpanel" id={`${id}-${value}-panel`} aria-labelledby={`${id}-${value}`} tabIndex={0}>{value === "history" ? <HistoryScrollContext value={historyScroll}>{children[value]}</HistoryScrollContext> : children[value]}</div>
       </Activity>)}
-    </section>
-  </div>;
+    </DialogContent>
+  </Dialog>;
 }

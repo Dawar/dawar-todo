@@ -500,3 +500,5 @@ The shared skeleton already animates only when motion is allowed. Bot spinners, 
 Task Request validation moves keyboard focus to its error summary after an invalid Save, including repeated attempts. This brings offscreen feedback into view in long mobile forms without moving focus for background transport updates.
 
 Protected guest forms share a 16px vertical rhythm with owner dialogs. Submission receipts are separated in a muted bordered panel. Failed guest actions bring their alert into view without changing retained input or retry identities.
+
+Bot Details uses the shared Radix dialog surface as a full-height right drawer. Tabs retain React Activity state; modal focus, Escape, nested dialog handling, and opener restoration use the shared dialog behavior instead of a separate document key handler.
