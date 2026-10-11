@@ -1,4 +1,7 @@
 "use client";
+import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { ArrowLeft, ChevronLeft, ChevronRight, LoaderCircle, Paperclip, Send, X } from "lucide-react";
 import { getDocument, GlobalWorkerOptions, type PDFDocumentProxy, type PDFDocumentLoadingTask, type RenderTask } from "pdfjs-dist";
@@ -80,39 +83,39 @@ export default function PdfReviewer({ file, item, owner, onBack, onSent, initial
   };
   return <div className="bots-pdf-review">
     <div className="bots-pdf-review-toolbar">
-      <button onClick={onBack}><ArrowLeft size={16} />PDF</button>
+      <Button variant="outline" onClick={onBack}><ArrowLeft size={16} />PDF</Button>
       <nav aria-label="PDF review pages">
-        <button aria-label="Previous page" disabled={locked || page <= 1 || !pdf} onClick={() => go(page - 1)}><ChevronLeft size={19} /></button>
-        <label>Page <input aria-label="Review page" type="number" min={1} max={pdf?.numPages ?? 1} value={page} disabled={locked || !pdf} onChange={event => go(Number(event.target.value))} /> of {pdf?.numPages ?? "…"}</label>
-        <button aria-label="Next page" disabled={locked || !pdf || page >= pdf.numPages} onClick={() => go(page + 1)}><ChevronRight size={19} /></button>
+        <Button variant="ghost" size="icon" aria-label="Previous page" disabled={locked || page <= 1 || !pdf} onClick={() => go(page - 1)}><ChevronLeft size={19} /></Button>
+        <label>Page <Input aria-label="Review page" type="number" min={1} max={pdf?.numPages ?? 1} value={page} disabled={locked || !pdf} onChange={event => go(Number(event.target.value))} /> of {pdf?.numPages ?? "…"}</label>
+        <Button variant="ghost" size="icon" aria-label="Next page" disabled={locked || !pdf || page >= pdf.numPages} onClick={() => go(page + 1)}><ChevronRight size={19} /></Button>
       </nav>
     </div>
     <div className="bots-pdf-review-layout">
       <section className="bots-pdf-review-page" aria-label={`Document page ${page}`}>
         <div className="bots-pdf-review-canvas" ref={surface} />
         {!error && rendering && <div className="bots-pdf-review-loading" role="status"><LoaderCircle className="bots-spin" size={18} />Opening page…</div>}
-        {(error || renderError) && <div className="bots-pdf-review-loading is-error" role="alert">{error || renderError}<button onClick={() => error ? setLoadRetry(n => n + 1) : setRetry(n => n + 1)}>{error ? "Retry PDF" : "Retry page"}</button></div>}
+        {(error || renderError) && <div className="bots-pdf-review-loading is-error" role="alert">{error || renderError}<Button variant="outline" onClick={() => error ? setLoadRetry(n => n + 1) : setRetry(n => n + 1)}>{error ? "Retry PDF" : "Retry page"}</Button></div>}
       </section>
       <section className="bots-pdf-review-notes">
         <label htmlFor="pdf-page-feedback">Feedback for page {page}</label>
-        <textarea id="pdf-page-feedback" placeholder="Your feedback for this page…" value={review?.pages[page] ?? ""} disabled={locked || !pdf} maxLength={200000}
+        <Textarea id="pdf-page-feedback" placeholder="Your feedback for this page…" value={review?.pages[page] ?? ""} disabled={locked || !pdf} maxLength={200000}
           onChange={event => review && save({ ...review, pages: { ...review.pages, [page]: event.target.value } })} />
         <input ref={picker} type="file" multiple hidden onChange={event => {
           if (!locked && review && event.target.files?.length) { save(review); composer.addFiles([...event.target.files], page); }
           event.target.value = "";
         }} />
-        <button className="bots-pdf-review-attach" disabled={locked || !pdf} onClick={() => picker.current?.click()}><Paperclip size={16} />Attach to page {page}</button>
+        <Button variant="outline" className="bots-pdf-review-attach" disabled={locked || !pdf} onClick={() => picker.current?.click()}><Paperclip size={16} />Attach to page {page}</Button>
         <ul className="bots-pdf-review-files">{files.filter(file => file.reviewPage === page).map(file => <li key={file.id}>
           <span><strong>{file.name}</strong><small>{file.remote?.ready ? fileSize(file.size) : file.error || (composer.progress.has(file.id) ? `Uploading ${Math.round(composer.progress.get(file.id)!)}%` : "Waiting to upload")}</small></span>
-          <button aria-label={`Remove ${file.name} from page ${page}`} disabled={locked} onClick={() => composer.removeFile(file.id)}><X size={16} /></button>
+          <Button variant="ghost" size="icon" aria-label={`Remove ${file.name} from page ${page}`} disabled={locked} onClick={() => composer.removeFile(file.id)}><X size={16} /></Button>
         </li>)}</ul>
         <div className="bots-pdf-review-bottom">
-          {notedPages.length > 0 && <div className="bots-pdf-review-noted" aria-label="Pages with feedback">{notedPages.map(number => <button key={number} disabled={locked} aria-current={page === number ? "page" : undefined} onClick={() => go(number)}>Page {number}</button>)}</div>}
+          {notedPages.length > 0 && <div className="bots-pdf-review-noted" aria-label="Pages with feedback">{notedPages.map(number => <Button variant={page === number ? "secondary" : "outline"} size="sm" key={number} disabled={locked} aria-current={page === number ? "page" : undefined} onClick={() => go(number)}>Page {number}</Button>)}</div>}
           {(saved.error || applyError || composer.storageError || composer.actionError || composer.operation?.error) && <p role="alert">{saved.error || applyError || composer.storageError || composer.actionError || composer.operation?.error}</p>}
-          {files.some(file => file.error && !file.remote?.ready) && <button disabled={!botsClient.online || locked} onClick={() => void composer.resumeUploads(true)}>Retry uploads</button>}
-          <button className="bots-pdf-review-send" disabled={!composer.ready || !composer.canUseOwner || !initialSubmission && !botsClient.online || composer.committing || applying || !pdf || !notedPages.length || Boolean(saved.error) || !composer.operation && files.some(file => !file.remote?.ready)} onClick={() => void send()}>
+          {files.some(file => file.error && !file.remote?.ready) && <Button variant="outline" disabled={!botsClient.online || locked} onClick={() => void composer.resumeUploads(true)}>Retry uploads</Button>}
+          <Button className="bots-pdf-review-send" disabled={!composer.ready || !composer.canUseOwner || !initialSubmission && !botsClient.online || composer.committing || applying || !pdf || !notedPages.length || Boolean(saved.error) || !composer.operation && files.some(file => !file.remote?.ready)} onClick={() => void send()}>
             {composer.sendingNow || composer.committing || applying ? <LoaderCircle className="bots-spin" size={17} /> : <Send size={17} />}{initialSubmission ? "Add review to message" : composer.operation ? "Check delivery" : "Send review"}
-          </button>
+          </Button>
         </div>
       </section>
     </div>

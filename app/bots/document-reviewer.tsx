@@ -1,4 +1,6 @@
 "use client";
+import { Textarea } from "@/components/ui/textarea";
+import { Button } from "@/components/ui/button";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { ArrowLeft, LoaderCircle, Send } from "lucide-react";
 import DocumentPreview from "./document-preview";
@@ -59,17 +61,17 @@ export default function DocumentReviewer({ file, kind, item, owner, onBack, onSe
     }
   };
   return <div className="bots-document-review">
-    <div className="bots-document-review-toolbar"><button onClick={onBack}><ArrowLeft size={16} />Document</button></div>
+    <div className="bots-document-review-toolbar"><Button variant="outline" onClick={onBack}><ArrowLeft size={16} />Document</Button></div>
     <div className="bots-document-review-columns"><DocumentPreview file={file} kind={kind} name={item.name} onReady={ready} />
       <section className="bots-document-notes"><label htmlFor="document-review-notes">Review notes</label>
-        <textarea id="document-review-notes" placeholder="Your feedback on this document…" value={notes} readOnly={locked} maxLength={200000} onChange={event => {
+        <Textarea id="document-review-notes" placeholder="Your feedback on this document…" value={notes} readOnly={locked} maxLength={200000} onChange={event => {
           if (review && !locked) composer.setText(JSON.stringify({ ...review, additionId: review.additionId ?? crypto.randomUUID(), pages: { "1": event.target.value } }));
         }} />
         {(saved.error || error || composer.storageError || composer.actionError || composer.operation?.error) && <p role="alert">{saved.error || error || composer.storageError || composer.actionError || composer.operation?.error}</p>}
         {!online && !initialSubmission && <p role="status">Connect to send feedback. Your notes stay saved on this device.</p>}
-        <button disabled={!composer.ready || !composer.canUseOwner || !initialSubmission && !online || composer.committing || applying || !rendered || !notes.trim() || Boolean(saved.error)} onClick={() => void send()}>
+        <Button disabled={!composer.ready || !composer.canUseOwner || !initialSubmission && !online || composer.committing || applying || !rendered || !notes.trim() || Boolean(saved.error)} onClick={() => void send()}>
           {applying || composer.sendingNow ? <LoaderCircle className="bots-spin" size={16} /> : <Send size={16} />}{initialSubmission ? review?.additionPending ? "Check addition" : "Add review to message" : composer.operation ? "Check delivery" : "Send feedback"}
-        </button>
+        </Button>
       </section>
     </div>
   </div>;

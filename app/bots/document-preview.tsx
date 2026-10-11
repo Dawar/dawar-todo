@@ -1,4 +1,5 @@
 "use client";
+import { Button } from "@/components/ui/button";
 import { Component, useEffect, useMemo, useState, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -15,7 +16,7 @@ class PreviewBoundary extends Component<{ children: ReactNode; onReady?: (ready:
   state = { failed: false };
   static getDerivedStateFromError() { return { failed: true }; }
   componentDidCatch() { this.props.onReady?.(false); }
-  render() { return this.state.failed ? <div className="bots-document-state" role="alert"><p>This document could not render. Download the original to read it.</p><button onClick={() => this.setState({ failed: false })}>Try again</button></div> : this.props.children; }
+  render() { return this.state.failed ? <div className="bots-document-state" role="alert"><p>This document could not render. Download the original to read it.</p><Button variant="outline" onClick={() => this.setState({ failed: false })}>Try again</Button></div> : this.props.children; }
 }
 function TextPreview({ file, kind, name, onReady }: { file: Blob; kind: DocumentKind; name: string; onReady?: (ready: boolean) => void }) {
   const [loaded, setLoaded] = useState<{ text: string; error: string } | null>(null), [retry, setRetry] = useState(0);
@@ -33,7 +34,7 @@ function TextPreview({ file, kind, name, onReady }: { file: Blob; kind: Document
   const error = loaded?.error || rendered?.error;
   useEffect(() => { onReady?.(Boolean(loaded && !error)); }, [loaded, error, onReady]);
   if (!loaded) return <div className="bots-document-state" role="status">Rendering document…</div>;
-  if (error) return <div className="bots-document-state" role="alert"><p>{error}</p><button onClick={() => { setLoaded(null); setRetry(value => value + 1); }}>Try again</button></div>;
+  if (error) return <div className="bots-document-state" role="alert"><p>{error}</p><Button variant="outline" onClick={() => { setLoaded(null); setRetry(value => value + 1); }}>Try again</Button></div>;
   return <div className={`bots-document-preview is-${kind}`}>
     {kind === "html" ? <>{rendered?.diagram ? <RouteVisualization key={loaded.text} diagram={rendered.diagram} /> : <iframe title={`HTML document: ${name}`} sandbox="" referrerPolicy="no-referrer" srcDoc={rendered?.srcDoc} />}
       {Boolean(rendered?.links.length) && <details className="bots-document-links"><summary>Document links ({rendered!.links.length})</summary><ul>{rendered!.links.map(link => <li key={link.href}><a href={link.href} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer">{link.label}</a></li>)}</ul></details>}</> :
