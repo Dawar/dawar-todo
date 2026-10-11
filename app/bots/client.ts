@@ -144,6 +144,8 @@ export class BotsClient {
   private handshakeTimer?: ReturnType<typeof setTimeout>;
   private probeTimer?: ReturnType<typeof setTimeout>;
   private connecting?: Promise<void>;
+  private connectionAbort?: AbortController;
+  private connectionStartedAt = 0;
   private snapshotRequest?: Promise<BotSnapshot>;
   private lastForegroundReconnectAt = 0;
   // A cache or an isolated event is not proof that all earlier events arrived.
@@ -187,6 +189,7 @@ export class BotsClient {
   private detachOwner() {
     this.flushSnapshot();
     this.connectionEpoch++;
+    this.connectionAbort?.abort();
     this.relayClientId = null;
     this.online = false;
     const socket = this.socket;
@@ -239,7 +242,7 @@ export class BotsClient {
       this.storageAvailable=status.enabled; this.storageCatalogAvailable=status.catalogReady; this.notify();
     } catch { if (this.owner===owner) { this.storageAvailable=false; this.storageCatalogAvailable=false; this.notify(); } }
   }
-  async session(): Promise<Session> {
+  async session(signal?: AbortSignal): Promise<Session> {
     const epoch = this.connectionEpoch;
     // Push ownership is ancillary to opening a conversation. Safari can leave
     // this browser API pending after suspension; never hold the ticket on it.
@@ -252,20 +255,33 @@ export class BotsClient {
       pushTimer = setTimeout(() => resolve(null), 150);
     })]);
     if (pushTimer) clearTimeout(pushTimer);
-    const response = await fetch("/api/bots/session", {
-      method: "POST",
-      headers: portableHeaders({ "Content-Type": "application/json" }),
-      body: JSON.stringify({ push: push?.toJSON() }),
-      credentials: "same-origin",
-      cache: "no-store",
-    });
-    if ((response.status === 401 || response.status === 403) && epoch === this.connectionEpoch)
-      this.clearOwnerCache();
-    const body = (await response.json().catch(() => ({}))) as Session & { error?: string };
-    if (!response.ok) {
-      throw new Error(body.error ?? "Bots could not connect.");
+    signal?.throwIfAborted();
+    const controller = new AbortController();
+    const cancel = () => controller.abort(signal?.reason);
+    signal?.addEventListener("abort", cancel, { once: true });
+    const timeout = setTimeout(() => controller.abort(new Error("Connection setup timed out. Retrying…")), 10000);
+    try {
+      const response = await fetch("/api/bots/session", {
+        method: "POST",
+        headers: portableHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ push: push?.toJSON() }),
+        credentials: "same-origin",
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      controller.signal.throwIfAborted();
+      if ((response.status === 401 || response.status === 403) && epoch === this.connectionEpoch)
+        this.clearOwnerCache();
+      const body = (await response.json().catch(() => ({}))) as Session & { error?: string };
+      controller.signal.throwIfAborted();
+      if (!response.ok) {
+        throw new Error(body.error ?? "Bots could not connect.");
+      }
+      return body;
+    } finally {
+      clearTimeout(timeout);
+      signal?.removeEventListener("abort", cancel);
     }
-    return body;
   }
   start() {
     if (this.started && !this.stopped) return;
@@ -308,16 +324,23 @@ export class BotsClient {
   connect(): Promise<void> {
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = null;
-    const pending = this.openConnection().finally(() => { if (this.connecting === pending) this.connecting = undefined; });
+    this.connectionAbort?.abort();
+    const controller = new AbortController();
+    this.connectionAbort = controller;
+    this.connectionStartedAt = Date.now();
+    const pending = this.openConnection(controller.signal).finally(() => {
+      if (this.connecting === pending) this.connecting = undefined;
+      if (this.connectionAbort === controller) this.connectionAbort = undefined;
+    });
     this.connecting = pending;
     return pending;
   }
-  private async openConnection() {
+  private async openConnection(signal: AbortSignal) {
     if (this.stopped) return;
     const epoch = this.connectionEpoch;
     const attempt = ++this.connectionAttempt;
     try {
-      const session = await this.session();
+      const session = await this.session(signal);
       if (this.stopped || epoch !== this.connectionEpoch || attempt !== this.connectionAttempt) return;
       this.useOwner(session.owner);
       this.timeZone = session.timeZone;
@@ -426,7 +449,9 @@ export class BotsClient {
     } catch { socket.close(); if (foreground) this.reconnectForeground(); }
   }
   private reconnectForeground() {
-    if (this.connecting || Date.now() - this.lastForegroundReconnectAt < 1000) return;
+    // A suspended ticket fetch is not a live connection. Keep a recent
+    // attempt, but replace an older one when the person returns to the app.
+    if ((this.connecting && Date.now() - this.connectionStartedAt < 3000) || Date.now() - this.lastForegroundReconnectAt < 1000) return;
     this.lastForegroundReconnectAt = Date.now();
     this.retry = 0;
     void this.connect();
