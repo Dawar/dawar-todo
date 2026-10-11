@@ -1,5 +1,7 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { useEffect, useId, useRef, useState } from "react";
 import { CalendarClock, RefreshCw } from "lucide-react";
 import type { BotEvent, BotRun } from "../../lib/bots-types";
 import { botsClient as client } from "./client";
@@ -17,6 +19,7 @@ export function RunDecisionControls({ owner, botId, run, online, onConfirmed, al
   owner: string; botId: string; run: BotRun; online: boolean; onConfirmed: () => void; allowNewActions?: boolean;
 }) {
   const action = useRunAction(owner, botId, `decision:${run.id}`);
+  const formId = useId(), errorId = useId();
   const [rescheduling, setRescheduling] = useState(false), [at, setAt] = useState(""), [error, setError] = useState("");
   const decision = run.decision;
   const eligible = hasCurrentRunDecision(run);
@@ -36,21 +39,21 @@ export function RunDecisionControls({ owner, botId, run, online, onConfirmed, al
   };
   if (!eligible && !action.intent && !action.error) return null;
   return <div className="bots-run-decision-controls">
-    {action.intent ? <><p>A saved choice is awaiting confirmation. Check it before making another choice.</p><button disabled={!online || action.busy || !action.ready} onClick={() => void action.retry().then(() => { if (client.owner === owner) onConfirmed(); }).catch(() => {})}>{action.busy ? "Confirming…" : "Check saved choice"}</button></> : confirmed && eligible ? <p role="status">Choice saved. Refresh status to see what happens next.<button disabled={!online} onClick={onConfirmed}>Refresh status</button></p> : eligible ? <>
+    {action.intent ? <><p>A saved choice is awaiting confirmation. Check it before making another choice.</p><Button variant="outline" size="sm" type="button" disabled={!online || action.busy || !action.ready} onClick={() => void action.retry().then(() => { if (client.owner === owner) onConfirmed(); }).catch(() => {})}>{action.busy ? "Confirming…" : "Check saved choice"}</Button></> : confirmed && eligible ? <p role="status">Choice saved. Refresh status to see what happens next.<Button variant="outline" size="sm" type="button" disabled={!online} onClick={onConfirmed}>Refresh status</Button></p> : eligible ? <>
       <p>This start time was missed. Choose what happens to this occurrence.</p>
       <div className="bots-run-decision-buttons">
-        <button className="is-primary" disabled={!enabled} onClick={() => void choose("start")}>Start now</button>
-        <button disabled={!enabled} aria-expanded={rescheduling} onClick={() => setRescheduling(value => !value)}>Reschedule</button>
-        <button disabled={!enabled} onClick={() => void choose("cancel")}>Cancel this run</button>
+        <Button size="sm" type="button" disabled={!enabled} onClick={() => void choose("start")}>Start now</Button>
+        <Button variant="outline" size="sm" type="button" disabled={!enabled} aria-expanded={rescheduling} aria-controls={rescheduling ? formId : undefined} onClick={() => setRescheduling(value => !value)}>Reschedule</Button>
+        <Button variant="outline" size="sm" type="button" disabled={!enabled} onClick={() => void choose("cancel")}>Cancel this run</Button>
       </div>
-      {rescheduling && <form onSubmit={event => { event.preventDefault(); void choose("reschedule"); }}>
-        <label>New start time <span>(your local time)</span><input type="datetime-local" aria-label="New start time in your local time" required value={at} disabled={!enabled} onChange={event => { setAt(event.target.value); setError(""); }} /></label>
-        <button disabled={!enabled || !at} type="submit">Save new time</button>
+      {rescheduling && <form id={formId} onSubmit={event => { event.preventDefault(); void choose("reschedule"); }}>
+        <label>New start time <span>(your local time)</span><Input type="datetime-local" aria-invalid={!!error} aria-describedby={error ? errorId : undefined} aria-label="New start time in your local time" required value={at} disabled={!enabled} onChange={event => { setAt(event.target.value); setError(""); }} /></label>
+        <Button size="sm" disabled={!enabled || !at} type="submit">Save new time</Button>
       </form>}
       <small>Start now still waits for capacity and paused-work controls. Reschedule and Cancel apply only to this occurrence.</small>
     </> : null}
-    {(error || action.error) && <p role="alert" className="bots-run-decision-error">{error || action.error}</p>}
-    {!action.ready && action.error && <button onClick={() => void action.refresh()}>Retry saving access</button>}
+    {(error || action.error) && <p id={errorId} role="alert" className="bots-run-decision-error">{error || action.error}</p>}
+    {!action.ready && action.error && <Button variant="outline" size="sm" type="button" onClick={() => void action.refresh()}>Retry saving access</Button>}
   </div>;
 }
 
@@ -97,12 +100,12 @@ export function RunDecisions({ owner, botId, online }: { owner: string; botId: s
   const refresh = () => { setCursor(null); setAttempt(value => value + 1); };
   if (!page.runs.length && !error && !updated && !busy) return null;
   return <section className="bots-run-decisions" aria-label="Scheduled work waiting for your choice">
-    <header><CalendarClock size={18} aria-hidden="true" /><h3>Waiting for your choice</h3><button disabled={!online || busy} onClick={refresh} aria-label="Refresh pending choices"><RefreshCw size={15} /></button></header>
+    <header><CalendarClock size={18} aria-hidden="true" /><h3>Waiting for your choice</h3><Button variant="ghost" size="icon" type="button" disabled={!online || busy} onClick={refresh} aria-label="Refresh pending choices"><RefreshCw size={15} /></Button></header>
     {!online && <p>Saved choices. Reconnect before deciding.</p>}
-    {updated && <p>Scheduled work changed.<button disabled={!online || busy} onClick={refresh}>Refresh choices</button></p>}
+    {updated && <p>Scheduled work changed.<Button variant="outline" size="sm" type="button" disabled={!online || busy} onClick={refresh}>Refresh choices</Button></p>}
     {page.runs.map(run => <article key={run.id}><h4>{run.title}</h4><p>Scheduled {stamp(run.decision!.scheduledAt)}{run.decision?.notBefore && <><br />New time {stamp(run.decision.notBefore)}</>}</p><RunDecisionControls owner={owner} botId={botId} run={run} online={online} allowNewActions={!busy && !updated && !error} onConfirmed={refresh} /></article>)}
-    {error && <p role="alert">{error}<button disabled={!online || busy} onClick={refresh}>Retry</button></p>}
+    {error && <p role="alert">{error}<Button variant="outline" size="sm" type="button" disabled={!online || busy} onClick={refresh}>Retry</Button></p>}
     {online && busy && <p role="status">Updating pending choices…</p>}
-    <nav aria-label="Pending choice pages">{cursor && <button disabled={!online || busy} onClick={refresh}>First choices</button>}{page.nextCursor && <button disabled={!online || busy || cursor !== loadedCursor} onClick={() => setCursor(page.nextCursor)}>More choices</button>}</nav>
+    <nav aria-label="Pending choice pages">{cursor && <Button variant="outline" size="sm" type="button" disabled={!online || busy} onClick={refresh}>First choices</Button>}{page.nextCursor && <Button variant="outline" size="sm" type="button" disabled={!online || busy || cursor !== loadedCursor} onClick={() => setCursor(page.nextCursor)}>More choices</Button>}</nav>
   </section>;
 }

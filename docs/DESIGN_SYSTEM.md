@@ -236,3 +236,7 @@ Run controls and follow-up actions use shared buttons; selection returns keyboar
 ### Run replies and question recovery
 
 Run replies use shared action/icon buttons and NativeSelect for saved versions. The measured ComposerInput retains its draft/resize behavior with a short Reply placeholder and46px minimum height. Saved reply text preserves line breaks inside a bounded reader. Run question retry/recovery buttons use the same shared control. Actual320 offline run composer supports empty and long text, visible focus, bounded growth and retained text after reload in a synthetic local draft. No send occurred. Type/scoped lint/diff pass; attachments, recovery versions, question states, desktop and connected acceptance remain pending.
+
+### Missed scheduled-run decisions
+
+RunDecisions uses shared Button and Input primitives with semantic card/error colors and readable13px supporting copy. Reschedule exposes its form relationship; invalid local time is associated with the date field. Original revision, eligibility, receipt and choice handlers remain unchanged. Actual320/1280 fixtures show long titles, wrapped actions and reschedule with disabled empty Save; desktop read-loading and read-error states also render. No real start/reschedule/cancel or native call occurred. Type/scoped lint/diff pass; delivery recovery, connected-state transitions and genuine device acceptance remain pending.
