@@ -555,3 +555,9 @@ is part of the existing whole-application design objective, not its completion.
 ### Published-version discovery
 
 On application open or foreground return, compare the page with the same-origin published build manifest as well as the active worker. Coalesce discovery, skip hidden/offline pages, and bound reads to five seconds/4KiB. An unavailable check is not proof that the page is current. Discovery uses no recurring interval and never blocks conversation connection. Show one compact update notice only when a different build is known; preserve the page, drafts and active calls until the human chooses Refresh when ready and the existing save/asset guards succeed. Publication discovery and actual phone adoption remain separate evidence.
+
+### Small-phone conversation identity and portable sync
+
+At480px and below, reserve header space for the bot name, keep44px action targets and use a32px decorative avatar. Desktop/queued-message shortcuts and extension badges yield to identity; Bot details retains Desktop and Up next access. This avoids an empty title at320px without adding a header row.
+
+The portable Next site exposes the same authenticated `/api/sync/events` revision stream as the original Worker entrypoint. It reuses bounded lifetime/cancellation and revision-only hints; task contents still arrive through the durable delta API. This restores the existing delivery contract instead of repeated404 requests and client fallback polling.
