@@ -1,9 +1,60 @@
-.bots-room-navigation{display:flex;flex-direction:column;gap:.6rem;padding:.75rem;overflow:auto;min-height:0;flex:1}.bots-room-navigation label{display:flex;flex-direction:column;gap:.3rem;font-size:.8rem}.bots-room-navigation select,.bots-room-navigation input{width:100%;min-width:0}.bots-room-navigation nav{display:flex;gap:.4rem;flex-wrap:wrap}.bots-room-row{display:flex;align-items:center;gap:.5rem;text-align:left;padding:.75rem;border-radius:.6rem}.bots-room-row.selected{background:var(--bots-hover,#e8f0eb)}.bots-room-row small{display:block}.bots-room-avatars{display:inline-flex;align-items:center;flex-shrink:0}.bots-room-avatars>span+span{margin-left:-12px}.bots-room-avatars .bot-avatar-engine{width:30px;height:30px}.bots-room-search{position:relative}.bots-room-search svg{position:absolute;top:10px;left:8px}.bots-room-search input{padding-left:30px}.bots-room-editor{padding:.6rem;background:var(--bots-panel,#fff);border:1px solid #cddbd0;border-radius:.6rem}.bots-room-editor h2{font-size:1rem}.bots-room-members{max-height:220px;overflow:auto}.bots-room-members label,.bots-room-composer fieldset label{display:flex;align-items:center;gap:.4rem}.bots-room-members input{width:auto}.bots-room-feed{flex:1;min-height:0;overflow:auto;padding:1rem;overflow-anchor:auto}.bots-room-feed>nav{display:flex;gap:.5rem;flex-wrap:wrap}.bots-room-post{margin:1rem 0}.bots-room-post header{display:flex;gap:.5rem;align-items:center}.bots-room-post header time{font-size:.7rem;color:#65756a}.bots-room-post.is-owner{margin-left:10%;background:var(--bots-hover,#eff4ef);padding:.7rem;border-radius:.7rem}.bots-room-delivery,.bots-room-post details,.bots-config-evidence{font-size:.75rem;color:#5e7063}.bots-room-controls{padding:.5rem 1rem;border-bottom:1px solid #dfe5df;font-size:.8rem;max-height:35vh;overflow:auto}.bots-room-composer{padding:.7rem;border-top:1px solid #dfe5df;font-size:.8rem;max-height:40vh;overflow:auto}.bots-room-composer fieldset{display:flex;gap:.7rem;flex-wrap:wrap}.bots-room-composer textarea{display:block;width:100%;resize:vertical;min-height:60px;max-height:200px}.bots-room-composer p{margin:.3rem 0}.bots-room-composer button,.bots-room-editor button,.bots-room-controls button{margin:.25rem;padding:.45rem .65rem;border:1px solid #cddbd0;border-radius:.4rem}.bots-room-context{margin:.8rem 0;border:1px solid #e3e8e3;padding:.5rem;border-radius:.5rem}.bots-room-native-history{padding:.4rem}.bots-config-evidence summary{cursor:pointer}.bots-room-conversation>.bots-conversation-heading{flex-shrink:0}@media(max-width:600px){.bots-room-feed{padding:.6rem}.bots-room-post.is-owner{margin-left:4%}.bots-room-post header{flex-wrap:wrap}.bots-room-post header time{flex-basis:100%}.bots-room-composer{max-height:35vh}.bots-room-controls{max-height:25vh}.bots-room-feed nav button{min-height:36px}.bots-room-conversation .bots-message{max-width:100%}.bots-room-members label{min-height:36px}}
-
-/* The existing fixed-width navigator needs two rows for its new long title and
- * six tool icons. The Call/Discussions tools remain adjacent. */
-.bots-collaboration-heading{flex-wrap:wrap;gap:.5rem;padding:16px}.bots-collaboration-heading h1{flex-basis:100%;font-size:20px;font-weight:600}.bots-collaboration-heading .bots-sidebar-tools{flex-wrap:wrap;max-width:100%}.bots-room-navigation button,.bots-room-feed nav button{padding:.5rem .65rem;border-radius:.5rem;border:1px solid #d6dfd8;background:#f8faf8}.bots-room-navigation select,.bots-room-navigation input,.bots-room-editor select,.bots-room-editor input:not([type=checkbox]),.bots-room-composer select,.bots-room-composer textarea{border:1px solid #ccd6ce;border-radius:.4rem;padding:.5rem;background:white;color:inherit}.bots-room-composer label{display:flex;gap:.4rem;align-items:center}.bots-room-composer textarea{margin:.4rem 0}.bots-room-members input,.bots-room-composer input[type=checkbox]{appearance:auto}.bots-room-post{overflow-wrap:anywhere}.bots-room-context summary{cursor:pointer}
-
-.bots-room-feed>nav{position:sticky;top:-1rem;z-index:1;background:#fff;padding:.4rem 0}.bots-room-context>summary{display:flex;align-items:center;gap:.3rem}
-
-.bots-room-composer label{flex-wrap:wrap}.bots-room-composer select{max-width:100%;min-width:0}.bots-room-search input{padding-left:2rem}.bots-room-navigation>button{display:flex;align-items:center;justify-content:center;gap:.4rem}
+.bots-room-navigation { display:flex; flex-direction:column; gap:12px; padding:12px; overflow:auto; min-height:0; flex:1; }
+.bots-room-navigation label { display:flex; flex-direction:column; gap:6px; font-size:13px; font-weight:500; }
+.bots-room-navigation nav, .bots-room-feed-content>nav { display:flex; gap:8px; flex-wrap:wrap; }
+.bots-room-navigation button, .bots-room-feed-content button, .bots-room-editor button, .bots-room-controls button, .bots-room-composer button { min-height:44px; height:auto; max-width:100%; white-space:normal; }
+.bots-room-row { display:flex; align-items:center; justify-content:flex-start; gap:8px; text-align:left; padding:12px; border-radius:var(--radius); width:100%; }
+.bots-room-row.selected { background:var(--accent); color:var(--accent-foreground); }
+.bots-room-row>span:last-child { min-width:0; overflow-wrap:anywhere; }
+.bots-room-row small { display:block; color:var(--muted-foreground); font-size:13px; font-weight:400; }
+.bots-room-avatars { display:inline-flex; align-items:center; flex-shrink:0; }
+.bots-room-avatars>span+span { margin-left:-12px; }
+.bots-room-avatars .bot-avatar-engine { width:30px; height:30px; }
+.bots-room-search { position:relative; }
+.bots-room-search svg { position:absolute; top:14px; left:12px; color:var(--muted-foreground); pointer-events:none; }
+.bots-room-search input { padding-left:36px; }
+.bots-room-editor { display:flex; flex-direction:column; gap:12px; padding:12px; background:var(--card); color:var(--card-foreground); border:1px solid var(--border); border-radius:var(--radius); }
+.bots-room-editor h2 { font-size:16px; font-weight:600; }
+.bots-room-members { max-height:220px; overflow:auto; min-width:0; }
+.bots-room-members label, .bots-room-composer fieldset label { display:flex; flex-direction:row; align-items:center; gap:8px; min-height:44px; font-weight:400; overflow-wrap:anywhere; }
+.bots-room-members input, .bots-room-composer input[type=checkbox] { appearance:auto; width:18px; height:18px; flex:none; accent-color:var(--primary); }
+.bots-room-members input:focus-visible, .bots-room-composer input[type=checkbox]:focus-visible { outline:2px solid var(--ring); outline-offset:3px; }
+.bots-room-members legend, .bots-room-composer legend { font-weight:600; margin-bottom:4px; }
+.bots-room-feed { flex:1; min-height:0; overflow:auto; padding:16px; overflow-anchor:auto; }
+.bots-room-feed-content>nav { position:sticky; top:-16px; z-index:1; background:var(--background); padding:8px 0; }
+.bots-room-post { margin:20px 0; overflow-wrap:anywhere; }
+.bots-room-post header { display:flex; gap:8px; align-items:center; }
+.bots-room-post header strong { font-size:14px; }
+.bots-room-post header time { font-size:13px; color:var(--muted-foreground); }
+.bots-room-post.is-owner { margin-left:10%; background:var(--muted); padding:12px; border-radius:var(--radius); }
+.bots-room-delivery, .bots-room-post details, .bots-config-evidence { font-size:13px; line-height:1.5; color:var(--muted-foreground); }
+.bots-room-controls { padding:8px 16px; border-bottom:1px solid var(--border); font-size:13px; line-height:1.5; max-height:35vh; overflow:auto; }
+.bots-room-controls summary, .bots-room-context>summary, .bots-room-post summary { cursor:pointer; min-height:44px; align-content:center; }
+.bots-room-controls button, .bots-room-post details button { margin:4px 8px 4px 0; }
+.bots-room-composer { padding:12px; border-top:1px solid var(--border); font-size:13px; line-height:1.5; max-height:40vh; overflow:auto; }
+.bots-room-composer fieldset { display:flex; gap:8px 12px; flex-wrap:wrap; min-width:0; }
+.bots-room-composer>label { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:8px 0; }
+.bots-room-composer select { max-width:100%; min-width:0; }
+.bots-room-composer textarea { display:block; width:100%; resize:vertical; min-height:80px; max-height:200px; margin:8px 0; }
+.bots-room-composer p, .bots-room-controls p { margin:8px 0; }
+.bots-room-composer [role=alert], .bots-room-navigation [role=alert], .bots-room-conversation>[role=alert] { color:var(--destructive); }
+.bots-room-composer [role=alert]>button { display:flex; margin-top:8px; }
+.bots-room-navigation small, .bots-room-editor p, .bots-room-composer small { color:var(--muted-foreground); font-size:13px; line-height:1.5; }
+.bots-room-context { margin:12px 0; border:1px solid var(--border); padding:8px 12px; border-radius:var(--radius); }
+.bots-room-context>summary { display:flex; align-items:center; gap:6px; }
+.bots-room-native-history { padding:8px; }
+.bots-config-evidence summary { cursor:pointer; }
+.bots-room-conversation>.bots-conversation-heading { flex-shrink:0; }
+.bots-room-conversation>.bots-conversation-heading strong { min-width:0; overflow-wrap:anywhere; }
+.bots-collaboration-heading { flex-wrap:wrap; gap:8px; padding:16px; }
+.bots-collaboration-heading h1 { flex-basis:100%; font-size:20px; font-weight:600; }
+.bots-collaboration-heading .bots-sidebar-tools { flex-wrap:wrap; max-width:100%; }
+@media(max-width:600px) {
+ .bots-room-feed { padding:12px; }
+ .bots-room-feed-content>nav { top:-12px; }
+ .bots-room-post.is-owner { margin-left:4%; }
+ .bots-room-post header { flex-wrap:wrap; }
+ .bots-room-post header time { flex-basis:100%; }
+ .bots-room-composer { max-height:35vh; }
+ .bots-room-controls { max-height:25vh; }
+ .bots-room-conversation .bots-message { max-width:100%; }
+}
