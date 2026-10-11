@@ -464,3 +464,7 @@ Enabled shared controls use the `input` token for a visible boundary, separate f
 ### Authentication recovery
 
 Signed-out and failed-sign-in views share the centered Card, semantic text and one primary action. Browser GET failures at the login/callback endpoints redirect to the fixed public recovery screen with no-store/no-referrer headers. Provider errors, query values and credentials are never rendered. The recovery action starts a new explicit sign-in; it does not automatically retry, log out, clear drafts or weaken subject/session/CSRF validation. Non-browser authentication errors retain their existing JSON response. Other API error routes are unchanged.
+
+### Saved task recovery
+
+Offline rejected changes stay available in an expandable recovery panel. Saved changes use labeled values rather than JSON: priority and status have familiar names, notes retain line breaks, and missing values are explicit. Unknown fields remain visible with readable labels; nested saved values retain their structure. The bounded scroll region prevents a long saved change from overwhelming the page. Original records, attachment recovery and retry ownership are unchanged. Task recurrence errors use the destructive token and an announced alert.

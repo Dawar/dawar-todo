@@ -30,7 +30,7 @@ export function TaskDetailFields({taskId, editDraft, savingEdit, recurrenceError
                     className="w-full min-w-0 justify-between border border-input px-3 text-base sm:text-sm"
                   >
                     <span className="min-w-0 truncate">{editDraft.project || "Unassigned"}</span>
-                    <span className="inline-flex shrink-0 items-center gap-1.5 text-xs font-semibold text-primary"><ActionIcon name="move" />Change</span>
+                    <span className="inline-flex shrink-0 items-center gap-1.5 text-[13px] font-medium text-primary"><ActionIcon name="move" />Change</span>
                   </Button>
                 </div>
                 <label className="block min-w-0">
@@ -74,7 +74,7 @@ export function TaskDetailFields({taskId, editDraft, savingEdit, recurrenceError
                     aria-describedby={`task-recurrence-help-${taskId}`}
                     className={cn("font-mono", recurrenceError && "border-destructive focus-visible:ring-destructive")}
                   />
-                  <p id={`task-recurrence-help-${taskId}`} className={cn("mt-1.5 text-[13px] leading-5", recurrenceError ? "font-medium text-red-600" : "text-muted-foreground")}>{recurrenceError ?? `Five-field cron in ${scheduleTimeZone}. Recurring tasks cannot be snoozed.`}</p>
+                  <p id={`task-recurrence-help-${taskId}`} role={recurrenceError ? "alert" : undefined} className={cn("mt-1.5 text-[13px] leading-5", recurrenceError ? "font-medium text-destructive" : "text-muted-foreground")}>{recurrenceError ?? `Five-field cron in ${scheduleTimeZone}. Recurring tasks cannot be snoozed.`}</p>
                 </label>
               </div>
   );
