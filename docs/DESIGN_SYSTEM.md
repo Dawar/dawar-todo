@@ -254,3 +254,7 @@ Question fields now inherit the existing response lock while pending/accepted, r
 ### Composer attachments and draft notices
 
 Composer attachments use shared preview/remove controls with readable filename/status tiles. Images are96px (80px with keyboard-open), retaining44px mobile remove targets. File-open errors stay beneath their own tile inside the horizontal tray. Source/staged bytes, owner/queue restrictions, preview contracts and object-URL cleanup are unchanged. Draft Retry is a shared control; notices use semantic colors/padding and omit raw memory-byte diagnostics. Old conflicting attachment button/preview CSS was removed. Actual desktop image/progress/long filename and320 removal plus unavailable-file error checked with synthetic local files; no uploads or real draft changes. Type/scoped lint/diff pass. Locked queue, keyboard-open, successful viewer, upload recovery and full workspace/device checks remain pending.
+
+### Attachment viewer controls
+
+ArtifactViewer uses shared close, retry, zoom, review, PDF-link and download buttons. Header/footer remain fixed while the preview body scrolls; semantic surface/border/text/error colors replace legacy green overrides, supporting labels are at least12px. Native modal, owner/document scope, blob disposal and original read/review/download callbacks remain unchanged. Type/scoped lint/diff pass. Rendered desktop/mobile, focus restoration, PDF/image and unavailable-file checks remain pending; this is source implementation only.

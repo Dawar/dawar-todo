@@ -5,6 +5,7 @@ import { X, Download, ExternalLink, ZoomIn, ZoomOut, FileText, LoaderCircle, Mes
 import { artifactPreview, fileSize, galleryType, readArtifactOriginal, saveArtifact, type GalleryItem } from "./artifact-source";
 import type { BotAttachment } from "../../lib/bots-types";
 import { botsClient } from "./client";
+import { Button } from "../../components/ui/button";
 import { documentKind } from "./document-source";
 type ArtifactViewerProps = {
   item: GalleryItem; owner: string; online: boolean; onClose: () => void;
@@ -82,21 +83,21 @@ function ScopedArtifactViewer({ item, owner, online, onClose, originalFile, sour
       const bounds = event.currentTarget.getBoundingClientRect();
       if (event.target === event.currentTarget && (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom)) onClose();
     }}>
-      <header><div><strong>{filename}</strong><small>{item.botName} · {fileSize(item.size)}</small></div><button className="bots-icon-button" aria-label="Close preview" onClick={onClose}><X size={21} /></button></header>
+      <header><div><strong>{filename}</strong><small>{item.botName} · {fileSize(item.size)}</small></div><Button variant="ghost" size="icon" aria-label="Close preview" onClick={onClose}><X size={21} /></Button></header>
       {review ? <Suspense fallback={<div className="bots-file-viewer-body" role="status">Opening review…</div>}>{kind ? <DocumentReviewer file={review} kind={kind} item={item} owner={owner} initialSubmission={initialSubmission} onBack={() => setReview(null)} onSent={() => initialSubmission ? onClose() : setReview(null)} /> : <PdfReviewer file={review} item={item} owner={owner} initialSubmission={initialSubmission} onBack={() => setReview(null)} onSent={() => initialSubmission ? onClose() : setReview(null)} />}</Suspense> : <div className={`bots-file-viewer-body ${zoom ? "is-zoomed" : ""} ${kind && url ? "has-document" : ""}`}>
         {type === "image" && (url || preview) && <img src={url || preview} alt={filename} />}
         {type === "pdf" && (url ? <iframe src={`${url}#view=FitH`} title={`PDF: ${filename}`} /> : preview && <img src={preview} alt={`First page of ${item.name}`} />)}
         {type === "document" && (kind && url && loadedFile ? <Suspense fallback={<div role="status">Opening document…</div>}><DocumentPreview file={loadedFile} kind={kind} name={filename} onReady={ready} /></Suspense> : <div className="bots-file-viewer-document"><FileText size={44} strokeWidth={1.2} /><strong>{filename}</strong><p>This file is ready to save and open in your preferred app.</p></div>)}
         {loading && <div className="bots-file-viewer-notice" role="status"><LoaderCircle className="bots-spin" size={16} />Opening file…</div>}
         {!online && !url && <div className="bots-file-viewer-notice">{preview ? "Saved preview. Connect to open the original." : "Connect to open this file."}</div>}
-        {error && <div className="bots-file-viewer-notice is-error" role="alert">{error}<button onClick={() => { setLoading(true); setError(""); setRetry((n) => n + 1); }}>Try again</button></div>}
+        {error && <div className="bots-file-viewer-notice is-error" role="alert">{error}<Button variant="outline" size="sm" onClick={() => { setLoading(true); setError(""); setRetry((n) => n + 1); }}>Try again</Button></div>}
       </div>}
       <footer><span>{type === "pdf" ? "PDF document" : type === "image" ? "Image" : "Document"}</span><div>
-        {type === "image" && (url || preview) && <button onClick={() => setZoom((v) => !v)} aria-label={zoom ? "Fit image" : "Zoom image"}>{zoom ? <ZoomOut size={17} /> : <ZoomIn size={17} />}{zoom ? "Fit" : "Zoom"}</button>}
-        {type === "pdf" && url && !review && !readOnly && (initialSubmission || item.ready && !originalFile) && <button onClick={() => setReview(blob.current)}><MessageSquare size={16} />Create review</button>}
-        {kind && documentReady && url && !review && !readOnly && (initialSubmission || item.ready && !originalFile) && <button onClick={() => setReview(blob.current)}><MessageSquare size={16} />Create review</button>}
-        {type === "pdf" && url && <a href={url} target="_blank" rel="noopener noreferrer"><ExternalLink size={16} />Open PDF</a>}
-        <button disabled={!url} onClick={() => { if (blob.current) saveArtifact(blob.current, item.name); }}><Download size={16} />Download</button>
+        {type === "image" && (url || preview) && <Button variant="outline" onClick={() => setZoom((v) => !v)} aria-label={zoom ? "Fit image" : "Zoom image"}>{zoom ? <ZoomOut size={17} /> : <ZoomIn size={17} />}{zoom ? "Fit" : "Zoom"}</Button>}
+        {type === "pdf" && url && !review && !readOnly && (initialSubmission || item.ready && !originalFile) && <Button variant="outline" onClick={() => setReview(blob.current)}><MessageSquare size={16} />Create review</Button>}
+        {kind && documentReady && url && !review && !readOnly && (initialSubmission || item.ready && !originalFile) && <Button variant="outline" onClick={() => setReview(blob.current)}><MessageSquare size={16} />Create review</Button>}
+        {type === "pdf" && url && <Button asChild variant="outline"><a href={url} target="_blank" rel="noopener noreferrer"><ExternalLink size={16} />Open PDF</a></Button>}
+        <Button disabled={!url} onClick={() => { if (blob.current) saveArtifact(blob.current, item.name); }}><Download size={16} />Download</Button>
       </div></footer>
     </dialog>
   </div>;
