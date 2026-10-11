@@ -124,12 +124,24 @@ def exact_originals(helper, metadata=False):
     with closing(sqlite3.connect(f'file:{helper.STATE}/state.sqlite?mode=ro', uri=True, timeout=.25)) as db:
         db.execute('PRAGMA query_only=ON')
         rows = db.execute("SELECT kind,id,CASE WHEN length(CAST(json AS BLOB))<=1048576 THEN json ELSE NULL END FROM records WHERE (kind='primaryInbox' AND id=?) OR (kind='pending' AND id IN (?,?))", (CONNIE, DOC, LINUS)).fetchall()
-    if len(rows) != 3 or any(not r[2] for r in rows):
+    fixed = [('pending', DOC), ('pending', LINUS), ('primaryInbox', CONNIE)]
+    indexed = {(kind, ident): raw for kind, ident, raw in rows}
+    if len(indexed) != len(rows) or ('primaryInbox', CONNIE) not in indexed or any(not r[2] for r in rows):
         raise RuntimeError('Reviewed retained originals unavailable')
     records = []
-    for kind, ident, raw in sorted(rows):
+    fenced_rows = []
+    for kind, ident in sorted(fixed):
+        raw = indexed.get((kind, ident))
+        fenced_rows.append((kind, ident, raw))
+        if raw is None:
+            # A retired pending notice is no longer work. Fence its absence,
+            # never infer how it was resolved or recreate it. Present notices
+            # still require exact reviewed bytes and fresh native proof.
+            records.append({'kind': kind, 'id': ident, 'present': False,
+                            'bytes': 0, 'rawSha256': None, 'fields': {}})
+            continue
         row = json.loads(raw)
-        record = {'kind': kind, 'id': ident, 'bytes': len(raw.encode()),
+        record = {'kind': kind, 'id': ident, 'present': True, 'bytes': len(raw.encode()),
                   'rawSha256': hashlib.sha256(raw.encode()).hexdigest(),
                   'fields': {key: digest(value) for key, value in row.items()}}
         diagnostic = {key: record[key] for key in ('kind', 'id', 'bytes', 'rawSha256')}
@@ -145,7 +157,14 @@ def exact_originals(helper, metadata=False):
         elif record['rawSha256'] != {DOC: DOC_SHA, LINUS: LINUS_SHA}.get(ident):
             raise RuntimeError('Reviewed terminal notice changed: ' + json.dumps(diagnostic, sort_keys=True))
         records.append(record)
-    return {'digest': digest(rows), 'records': records} if metadata else digest(rows)
+    return {'digest': digest(fenced_rows), 'records': records} if metadata else digest(fenced_rows)
+
+
+def original_work_counts(original):
+    # Count only the fixed originals actually present in this exact sample.
+    # These are expected counts, not a subtraction from unknown RAM work.
+    return {key: sum(r['present'] for r in original['records'] if r['kind'] == kind)
+            for key, kind in [('acceptedOrUnknown', 'primaryInbox'), ('pendingInput', 'pending')]}
 
 
 def original_changes(before, after):
@@ -154,6 +173,8 @@ def original_changes(before, after):
         if previous != current:
             keys = sorted(k for k in previous['fields'].keys() | current['fields'].keys()
                           if previous['fields'].get(k) != current['fields'].get(k))
+            if previous['present'] != current['present']:
+                keys = ['presence', *keys]
             changes.append({'kind': current['kind'], 'id': current['id'], 'changedFields': keys,
                             'beforeRawSha256': previous['rawSha256'], 'afterRawSha256': current['rawSha256'],
                             'beforeBytes': previous['bytes'], 'afterBytes': current['bytes']})
@@ -182,7 +203,7 @@ def fresh_native(proof):
             all(private_file(Path(path), root / 'sessions') == stamp for path, stamp in proof.get('rolloutStamps', [])))
 
 
-def lease_status(helper, drain, deadline):
+def lease_status(helper, drain, deadline, original=None):
     left = deadline - time.monotonic()
     if left <= 0:
         raise TimeoutError('Supervised deadline elapsed; no further restart')
@@ -195,7 +216,8 @@ def lease_status(helper, drain, deadline):
     counts = row.get('counts')
     if not isinstance(counts, dict) or set(counts) != COUNT_KEYS or any(type(v) is not int or v < 0 for v in counts.values()):
         raise RuntimeError('Installed RAM/work counter contract is unknown')
-    safe = all(v == ({'acceptedOrUnknown': 1, 'pendingInput': 2}.get(k, 0)) for k, v in counts.items())
+    expected = original_work_counts(original if original is not None else exact_originals(helper, metadata=True))
+    safe = all(v == expected.get(k, 0) for k, v in counts.items())
     return row, safe, time.monotonic()
 
 
@@ -204,11 +226,12 @@ def snapshot(helper, drain, deadline, waiting=False):
     observation = {'phase': 'supervised-unsealed', 'native': {'checked': False}}
     bots, busy, fence = helper.local_state(observation, True)
     proof = observation.get('_receiptProof')
+    notices = {r['id'] for r in original['records'] if r['kind'] == 'pending' and r['present']}
     if not busy and (not proof or proof.get('originals') != [] or
                      {r['id'] for r in proof.get('terminalInputs', [])} != {CONNIE} or
-                     {r['id'] for r in proof.get('passiveQuestions', [])} != {DOC, LINUS}):
-        raise RuntimeError('Supervised proof is not confined to the three exact originals')
-    lease, safe, sampled = lease_status(helper, drain, deadline)
+                     {r['id'] for r in proof.get('passiveQuestions', [])} != notices):
+        raise RuntimeError('Supervised proof is not confined to the present exact originals')
+    lease, safe, sampled = lease_status(helper, drain, deadline, original)
     identity = process_identity(helper)
     after = exact_originals(helper, metadata=True)
     if after != original:

@@ -146,9 +146,13 @@ retained record is rewritten, answered, deleted, replayed or reported successful
 The added Linus notice is only `async:call_d097a830dc35437ab45a37c30692bb4e`,
 bound to its exact raw SHA-256, bot/thread/turn and current canonical completed
 agent-message question proof. The old RAM counters must report exactly one
-accepted original and these two pending notices; new, changed, blocking,
-active, unknown or stale question evidence still blocks. Full current raw
-bytes remain fenced across observation, backup and exclusive restart receipt.
+accepted original and only the reviewed pending notices actually present in
+the captured store. An absent Doc or Linus pending record is fenced as absent;
+it is not recreated or reported answered, resolved or successful. The canonical
+proof must match exactly the present notices. Reappearance, disappearance or
+any byte change during observation or cutover refuses; new, changed, blocking,
+active, unknown or stale question evidence still blocks. Full current bytes and
+absence remain fenced across observation, backup and exclusive restart receipt.
 
 During the bounded **pre-backup wait only**, an observation in which the exact
 Connie record changes only its valid, later `reconcileAfter` scheduling timestamp
@@ -219,6 +223,13 @@ retry timer, claimed-success inference or
 automatic second continuation is created by this source preparation. Failure
 retains both parent and child evidence; a lost restart ACK or health uncertainty
 requires inspection. At most one actual restart is permitted.
+
+The approved child failed on October11 before backup or restart because the
+fixed Linus pending notice was absent. Its exclusive reservation and cancelled
+lease remain consumed. Correcting the stale presence check does not authorize
+another child, renewing its lease, deleting its reservation or choosing another
+helper/target. Any further activation requires a separately reviewed, explicitly
+approved linked decision preserving both failed attempts.
 
 Private backup, repeated native/store/RAM/process/source checks, <=900-second
 whole-helper deadline, original lease budget and an exclusive fsynced restart
