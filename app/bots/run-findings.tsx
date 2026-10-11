@@ -35,14 +35,14 @@ export function useRunFindings(owner: string, botId: string, online: boolean, su
       const loaded = current.current.loaded;
       merge(next); if (!loaded) { const value = { ...current.current, nextCursor: next.nextCursor, loaded: true }; current.current = value; setPage(value); client.save(key, value); }
       setError("");
-    }).catch(reason => { if (live && client.owner === owner) setError(String(reason)); }).finally(() => { if (live) setBusy(false); });
+    }).catch(() => { if (live && client.owner === owner) setError("Could not load results. Try again."); }).finally(() => { if (live) setBusy(false); });
     return () => { live = false; alive.current = false; client.events.delete(event); };
   }, [owner, botId, key, online, supported, attempt, merge, read]);
   const older = async () => {
     if (busy || !online || !page.nextCursor) return;
     setBusy(true); setError("");
     try { const next = await read(page.nextCursor); if (alive.current && client.owner === owner) merge(next, true); }
-    catch (reason) { if (alive.current) setError(String(reason)); } finally { if (alive.current) setBusy(false); }
+    catch { if (alive.current) setError("Could not load older results. Try again."); } finally { if (alive.current) setBusy(false); }
   };
   return { ...page, busy, error, older, retry: () => setAttempt(v => v + 1) };
 }
