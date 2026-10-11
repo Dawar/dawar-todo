@@ -66,7 +66,7 @@ test("mobile task swipes start only from directional rails outside the title tex
 
 test("task details edits description and metadata without a second title textarea", async () => {
   const page = await Promise.all(["app/page.tsx", "app/task-row.tsx", "app/task-sync.ts", "app/task-model.ts", "app/sync-request.ts"].map((path) => readFile(new URL(path, root), "utf8"))).then((parts) => parts.join("\n"));
-  const details = page.slice(page.indexOf("{editingTodo && editDraft && ("), page.indexOf("{voiceTarget && ("));
+  const details = page.slice(page.indexOf("{editingTodo && editDraft && ("), page.indexOf("{voiceTarget && (")) + await readFile(new URL("app/task-detail-fields.tsx", root), "utf8");
 
   assert.doesNotMatch(details, /value=\{editDraft\.title\}/);
   assert.match(details, /aria-label="Description"/);

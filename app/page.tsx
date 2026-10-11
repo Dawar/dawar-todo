@@ -55,6 +55,7 @@ import { attachmentQueueMessage, hasAttachmentBytes } from "./attachment-queue";
 import { SiteHeader } from "./site-header";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { TaskDetailFields } from "./task-detail-fields";
 import { TaskRow, SnoozeStatusBadge } from "./task-row";
 import { TaskListControls, TaskFiltersDialog } from "./task-list-controls";
 import { ProjectBrowser } from "./project-browser";
@@ -4572,23 +4573,23 @@ export default function Home() {
             aria-labelledby="task-details-title"
             onSubmit={(event) => event.preventDefault()}
             className={classNames(
-              "relative flex max-h-[92dvh] w-full max-w-full flex-col overflow-hidden overflow-x-hidden rounded-t-3xl bg-white shadow-2xl outline-none sm:max-w-2xl sm:rounded-3xl",
+              "relative flex max-h-[92dvh] w-full max-w-full flex-col overflow-hidden overflow-x-hidden rounded-t-3xl bg-background shadow-2xl outline-none sm:max-w-2xl sm:rounded-3xl",
               taskDialogPulling ? "transition-none" : "transition-transform duration-150 ease-out motion-reduce:transition-none",
             )}
             style={{ transform: `translate3d(0, ${taskDialogPullDistance}px, 0)` }}
           >
-            <div className="relative flex min-w-0 items-center justify-between border-b border-black/[0.07] px-5 pb-4 pt-5 sm:px-6 sm:py-4">
+            <div className="relative flex min-w-0 flex-wrap items-center justify-between gap-2 border-b border-border px-4 pb-4 pt-5 sm:px-6 sm:py-4">
               <span className="absolute left-1/2 top-2 h-1 w-10 -translate-x-1/2 rounded-full bg-black/15 sm:hidden" aria-hidden="true" />
-              <h3 id="task-details-title" className="min-w-0 text-lg font-semibold text-[#202522]">Task details</h3>
+              <h3 id="task-details-title" className="min-w-0 text-lg font-semibold text-foreground">Task details</h3>
               <div className="todo-detail-copy-actions flex shrink-0 items-center gap-1">
-                {editingTodo?.queueLastTransfer && <a className="text-xs text-[#216e4e]" href={`/bots?bot=${encodeURIComponent(editingTodo.queueLastTransfer.botId)}`}>Queued to bot · source retained</a>}
-                <button type="button" onClick={() => { if (editingId !== null) setQueueRequest({ id: crypto.randomUUID(), todoIds: [editingId] }); }} className="grid h-9 w-9 place-items-center rounded-full bg-[#eaf3ed] text-[#216e4e] hover:bg-[#e0ede4]" aria-label="Queue task to a bot" title="Queue to bot"><ActionIcon name="forward" /></button>
-                <button type="button" onClick={() => void copyTaskDetails()} className="grid h-9 w-9 place-items-center rounded-full bg-[#f1f2f0] text-[#4f5752] hover:bg-[#e8eae7]" aria-label="Copy task title and description" title="Copy task"><ActionIcon name="copy" /></button>
-                <button type="button" onClick={closeTaskDetails} className="grid h-9 w-9 place-items-center rounded-full bg-[#f1f2f0] text-[#4f5752] hover:bg-[#e8eae7]" aria-label="Close task details" title="Close"><ActionIcon name="close" /></button>
+                {editingTodo?.queueLastTransfer && <a className="text-xs text-primary" href={`/bots?bot=${encodeURIComponent(editingTodo.queueLastTransfer.botId)}`}>Queued to bot · source retained</a>}
+                <Button variant="ghost" type="button" onClick={() => { if (editingId !== null) setQueueRequest({ id: crypto.randomUUID(), todoIds: [editingId] }); }} size="icon" className="shrink-0 text-muted-foreground" aria-label="Queue task to a bot" title="Queue to bot"><ActionIcon name="forward" /></Button>
+                <Button variant="ghost" type="button" onClick={() => void copyTaskDetails()} size="icon" className="shrink-0 text-muted-foreground" aria-label="Copy task title and description" title="Copy task"><ActionIcon name="copy" /></Button>
+                <Button variant="ghost" type="button" onClick={closeTaskDetails} size="icon" className="shrink-0 text-muted-foreground" aria-label="Close task details" title="Close"><ActionIcon name="close" /></Button>
               </div>
             </div>
 
-            <div ref={taskDialogScrollRef} className="min-h-0 min-w-0 overflow-x-hidden overflow-y-auto px-5 py-5 sm:px-6">
+            <div ref={taskDialogScrollRef} className="min-h-0 min-w-0 overflow-x-hidden overflow-y-auto px-4 py-5 sm:px-6">
               {isSnoozed(editingTodo, now) && editingTodo.snoozedUntil && (
                 <div className="mb-4">
                   <SnoozeStatusBadge value={editingTodo.snoozedUntil} now={now} timeZone={scheduleTimeZone} />
@@ -4596,21 +4597,21 @@ export default function Home() {
               )}
               <div className="block min-w-0">
                 <div className="mb-1.5 flex items-center justify-between gap-3">
-                  <span className="text-xs font-semibold uppercase tracking-wide text-[#69716c]">Description</span>
-                  <button
+                  <span className="text-sm font-medium text-muted-foreground">Description</span>
+                  <Button variant="ghost"
                     type="button"
                     onClick={() => setDescriptionPreview((current) => !current)}
                     aria-pressed={descriptionPreview}
-                    className="inline-flex h-7 items-center gap-1.5 rounded-lg px-2 text-xs font-semibold text-[#216e4e] hover:bg-[#eaf3ed]"
+                    size="sm" className="text-primary"
                   >
                     <ActionIcon name={descriptionPreview ? "edit" : "preview"} className="h-3.5 w-3.5" />
                     {descriptionPreview ? "Edit" : "Preview"}
-                  </button>
+                  </Button>
                 </div>
                 {descriptionPreview ? (
                   <MarkdownPreview value={editDraft.notes} />
                 ) : (
-                  <textarea
+                  <Textarea
                     aria-label="Description"
                     value={editDraft.notes}
                     onChange={(event) => updateEditDraftField("notes", event.target.value)}
@@ -4623,7 +4624,7 @@ export default function Home() {
                     rows={5}
                     placeholder="Add context, links, next steps, or Markdown…"
                     maxLength={MAX_TASK_DESCRIPTION_LENGTH}
-                    className="min-h-28 w-full min-w-0 max-w-full resize-y rounded-xl border border-black/[0.1] bg-white px-3 py-2.5 text-sm leading-6 text-[#303632] outline-none placeholder:text-[#a0a6a2] focus:border-[#216e4e]/50 focus:ring-3 focus:ring-[#216e4e]/10"
+                    className="min-h-28 resize-y leading-6"
                   />
                 )}
               </div>
@@ -4631,8 +4632,8 @@ export default function Home() {
               <section className="mt-4 min-w-0" aria-labelledby="task-attachments-heading">
                 <div className="mb-2 flex min-w-0 items-center justify-between gap-3">
                   <div className="min-w-0">
-                    <h4 id="task-attachments-heading" className="text-xs font-semibold uppercase tracking-wide text-[#69716c]">Attachments</h4>
-                    <p className="mt-0.5 text-xs text-[#929994]">{detailAttachments.length + detailUploads.length}/{MAX_ATTACHMENTS} attached</p>
+                    <h4 id="task-attachments-heading" className="text-sm font-medium text-muted-foreground">Attachments</h4>
+                    <p className="mt-0.5 text-xs text-muted-foreground">{detailAttachments.length + detailUploads.length}/{MAX_ATTACHMENTS} attached</p>
                   </div>
                   <AttachmentPicker
                     label="Add attachment to task"
@@ -4645,7 +4646,7 @@ export default function Home() {
 
                 {loadingAttachments ? (
                   <div role="status" aria-label="Loading attachments" className="grid grid-cols-3 gap-2 sm:grid-cols-4">
-                    {[0, 1, 2].map((item) => <div key={item} className="aspect-square animate-pulse rounded-xl bg-[#eef0ed]" />)}
+                    {[0, 1, 2].map((item) => <div key={item} className="aspect-square animate-pulse rounded-xl bg-muted" />)}
                   </div>
                 ) : attachmentError ? (
                   <div className="flex items-center justify-between gap-3 rounded-xl bg-red-50 px-3 py-2.5 text-sm text-red-700">
@@ -4656,20 +4657,20 @@ export default function Home() {
                   <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
                     {detailAttachments.map((attachment) => attachment.kind === "audio" ? (
                       <div key={attachment.id} className="group/media col-span-full flex min-w-0 items-center gap-3 rounded-xl bg-[#f3f5f2] p-3 ring-1 ring-black/[0.06]">
-                        <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-[#e3efe7] text-[#216e4e]"><ActionIcon name="mic" className="h-5 w-5" /></span>
+                        <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-[#e3efe7] text-primary"><ActionIcon name="mic" className="h-5 w-5" /></span>
                         <div className="min-w-0 flex-1"><p className="mb-1 truncate text-xs font-semibold text-[#4d5650]">{attachment.fileName} · {formatDuration(attachment.durationMs)}</p><audio controls preload="metadata" src={attachment.audioUrl} className="h-9 w-full" /></div>
-                        <a href={attachment.originalUrl} download={attachment.fileName} className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-[#69716c] hover:bg-white" aria-label={`Download ${attachment.fileName}`}><ActionIcon name="download" /></a>
-                        <button type="button" onClick={() => void deleteDetailAttachment(attachment)} disabled={syncing} className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-[#69716c] hover:bg-red-50 hover:text-red-700" aria-label={`Delete ${attachment.fileName}`}><ActionIcon name="delete" /></button>
+                        <a href={attachment.originalUrl} download={attachment.fileName} className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-muted-foreground hover:bg-background" aria-label={`Download ${attachment.fileName}`}><ActionIcon name="download" /></a>
+                        <button type="button" onClick={() => void deleteDetailAttachment(attachment)} disabled={syncing} className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-muted-foreground hover:bg-red-50 hover:text-red-700" aria-label={`Delete ${attachment.fileName}`}><ActionIcon name="delete" /></button>
                       </div>
                     ) : attachment.kind === "file" ? (
                       <div key={attachment.id} className="group/media col-span-full flex min-w-0 items-center gap-3 rounded-xl bg-[#f3f5f2] p-3 ring-1 ring-black/[0.06]">
-                        <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-[#e3efe7] text-[#216e4e]"><ActionIcon name="file" className="h-5 w-5" /></span>
+                        <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-[#e3efe7] text-primary"><ActionIcon name="file" className="h-5 w-5" /></span>
                         <div className="min-w-0 flex-1"><p className="truncate text-sm font-semibold text-[#4d5650]">{attachment.fileName}</p><p className="mt-0.5 text-xs text-[#7b837e]">{formatFileSize(attachment.byteSize)}</p></div>
-                        <a href={attachment.originalUrl} download={attachment.fileName} className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-[#69716c] hover:bg-white" aria-label={`Download ${attachment.fileName}`}><ActionIcon name="download" /></a>
-                        <button type="button" onClick={() => void deleteDetailAttachment(attachment)} disabled={syncing} className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-[#69716c] hover:bg-red-50 hover:text-red-700" aria-label={`Delete ${attachment.fileName}`}><ActionIcon name="delete" /></button>
+                        <a href={attachment.originalUrl} download={attachment.fileName} className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-muted-foreground hover:bg-background" aria-label={`Download ${attachment.fileName}`}><ActionIcon name="download" /></a>
+                        <button type="button" onClick={() => void deleteDetailAttachment(attachment)} disabled={syncing} className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-muted-foreground hover:bg-red-50 hover:text-red-700" aria-label={`Delete ${attachment.fileName}`}><ActionIcon name="delete" /></button>
                       </div>
                     ) : (
-                      <div key={attachment.id} className="group/media relative aspect-square min-w-0 overflow-hidden rounded-xl bg-[#eef0ed] ring-1 ring-black/[0.06]">
+                      <div key={attachment.id} className="group/media relative aspect-square min-w-0 overflow-hidden rounded-xl bg-muted ring-1 ring-black/[0.06]">
                         {attachment.kind === "image" ? (
                           <button type="button" onClick={() => setViewerIndex(imageAttachments.findIndex((image) => image.id === attachment.id))} className="h-full w-full focus-visible:outline-2 focus-visible:outline-inset focus-visible:outline-[#216e4e]" aria-label={`View image: ${attachment.fileName}`}>
                             <img src={attachment.thumbnailUrl} alt={attachment.fileName} className="h-full w-full object-cover" />
@@ -4681,8 +4682,8 @@ export default function Home() {
                       </div>
                     ))}
                     {detailUploads.map((item) => (
-                      <div key={item.localId} className={classNames("relative min-w-0 overflow-hidden rounded-xl bg-[#eef0ed] ring-1 ring-black/[0.06]", item.kind === "audio" || item.kind === "file" ? "col-span-full h-16" : "aspect-square")} title={item.error || item.file.name}>
-                        {item.kind === "image" ? <img src={item.previewUrl} alt="" className="h-full w-full object-cover" /> : item.kind === "video" ? <video src={item.previewUrl} muted className="h-full w-full object-cover" /> : item.kind === "file" ? <div className="flex h-full items-center gap-3 px-4 text-sm font-semibold text-[#455049]"><ActionIcon name="file" className="shrink-0 text-[#216e4e]" /><span className="min-w-0"><span className="block truncate">{item.file.name}</span><span className="text-xs font-normal text-[#7b837e]">{formatFileSize(item.file.size)}</span></span></div> : <div className="flex h-full items-center gap-2 px-4 text-sm font-semibold text-[#455049]"><ActionIcon name="mic" className="text-[#216e4e]" />Voice memo · {formatDuration(item.durationMs)}</div>}
+                      <div key={item.localId} className={classNames("relative min-w-0 overflow-hidden rounded-xl bg-muted ring-1 ring-black/[0.06]", item.kind === "audio" || item.kind === "file" ? "col-span-full h-16" : "aspect-square")} title={item.error || item.file.name}>
+                        {item.kind === "image" ? <img src={item.previewUrl} alt="" className="h-full w-full object-cover" /> : item.kind === "video" ? <video src={item.previewUrl} muted className="h-full w-full object-cover" /> : item.kind === "file" ? <div className="flex h-full items-center gap-3 px-4 text-sm font-semibold text-[#455049]"><ActionIcon name="file" className="shrink-0 text-primary" /><span className="min-w-0"><span className="block truncate">{item.file.name}</span><span className="text-xs font-normal text-[#7b837e]">{formatFileSize(item.file.size)}</span></span></div> : <div className="flex h-full items-center gap-2 px-4 text-sm font-semibold text-[#455049]"><ActionIcon name="mic" className="text-primary" />Voice memo · {formatDuration(item.durationMs)}</div>}
                         {item.status === "uploading" ? (
                           <span className="absolute inset-0 grid place-items-center bg-black/45 text-xs font-semibold text-white">Uploading…</span>
                         ) : (
@@ -4698,99 +4699,42 @@ export default function Home() {
                     ))}
                   </div>
                 ) : (
-                  <div className="rounded-xl border border-dashed border-black/[0.1] px-4 py-5 text-center text-sm text-[#8a918d]">No attachments yet.</div>
+                  <div className="rounded-xl border border-dashed border-border px-4 py-5 text-center text-sm text-muted-foreground">No attachments yet.</div>
                 )}
               </section>
 
-              <div className="mt-4 grid min-w-0 grid-cols-1 gap-4 sm:grid-cols-2">
-                <div className="block min-w-0">
-                  <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-[#69716c]">Project</span>
-                  <button
-                    type="button"
-                    onClick={() => openProjectAssignment([editingTodo.id], "details")}
-                    disabled={savingEdit}
-                    aria-label={`Assign project. Current project: ${editDraft.project || "Unassigned"}`}
-                    className="flex h-11 w-full min-w-0 max-w-full items-center justify-between gap-3 rounded-xl border border-black/[0.1] bg-white px-3 text-left text-[16px] text-[#303632] outline-none hover:bg-[#fafbf9] focus:border-[#216e4e]/50 focus:ring-3 focus:ring-[#216e4e]/10 disabled:opacity-60"
-                  >
-                    <span className="min-w-0 truncate">{editDraft.project || "Unassigned"}</span>
-                    <span className="inline-flex shrink-0 items-center gap-1.5 text-xs font-semibold text-[#216e4e]"><ActionIcon name="move" />Change</span>
-                  </button>
-                </div>
-                <label className="block min-w-0">
-                  <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-[#69716c]">Context</span>
-                  <input value={editDraft.context} onChange={(event) => updateEditDraftField("context", event.target.value)} placeholder="No context" className="h-11 w-full min-w-0 max-w-full rounded-xl border border-black/[0.1] px-3 text-[16px] outline-none focus:border-[#216e4e]/50 focus:ring-3 focus:ring-[#216e4e]/10" />
-                </label>
-                <label className="block min-w-0">
-                  <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-[#69716c]">Priority</span>
-                  <select value={editDraft.priority} onChange={(event) => updateEditDraftField("priority", Number(event.target.value))} className="h-11 w-full min-w-0 max-w-full rounded-xl border border-black/[0.1] bg-white px-3 text-[16px] outline-none focus:border-[#216e4e]/50 focus:ring-3 focus:ring-[#216e4e]/10">
-                    <option value="1">Urgent</option>
-                    <option value="2">High</option>
-                    <option value="3">Normal</option>
-                    <option value="4">Low</option>
-                  </select>
-                </label>
-                <div className="block min-w-0">
-                  <div className="mb-1.5 flex h-6 items-center justify-between gap-2">
-                    <label htmlFor={`task-due-date-${editingTodo.id}`} className="text-xs font-semibold uppercase tracking-wide text-[#69716c]">Due date</label>
-                    <button
-                      type="button"
-                      onClick={() => updateEditDraftField("dueDate", "")}
-                      disabled={!editDraft.dueDate}
-                      aria-label="Clear due date"
-                      className="inline-flex h-6 items-center gap-1 rounded-md px-1.5 text-xs font-semibold text-[#216e4e] hover:bg-[#eaf3ed] disabled:invisible"
-                    >
-                      <ActionIcon name="close" className="h-3 w-3" />Clear
-                    </button>
-                  </div>
-                  <input id={`task-due-date-${editingTodo.id}`} type="date" value={editDraft.dueDate} onChange={(event) => updateEditDraftField("dueDate", event.target.value)} className="h-11 w-full min-w-0 max-w-full rounded-xl border border-black/[0.1] bg-white px-3 text-[16px] outline-none focus:border-[#216e4e]/50 focus:ring-3 focus:ring-[#216e4e]/10" />
-                </div>
-                <label className="block min-w-0 sm:col-span-2">
-                  <span className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-[#69716c]"><ActionIcon name="repeat" className="h-3.5 w-3.5" />Recurring schedule</span>
-                  <input
-                    value={editDraft.recurrenceCron}
-                    onChange={(event) => updateEditDraftField("recurrenceCron", event.target.value)}
-                    placeholder="0 9 * * 1-5"
-                    autoCapitalize="off"
-                    autoCorrect="off"
-                    spellCheck={false}
-                    aria-invalid={Boolean(recurrenceError)}
-                    aria-describedby={`task-recurrence-help-${editingTodo.id}`}
-                    className={classNames("h-11 w-full min-w-0 max-w-full rounded-xl border bg-white px-3 font-mono text-sm outline-none focus:ring-3", recurrenceError ? "border-red-400 focus:border-red-500 focus:ring-red-500/10" : "border-black/[0.1] focus:border-[#216e4e]/50 focus:ring-[#216e4e]/10")}
-                  />
-                  <p id={`task-recurrence-help-${editingTodo.id}`} className={classNames("mt-1.5 text-xs leading-5", recurrenceError ? "font-medium text-red-600" : "text-[#7c847f]")}>{recurrenceError ?? `Five-field cron in ${scheduleTimeZone}. Recurring tasks cannot be snoozed.`}</p>
-                </label>
-              </div>
+              <TaskDetailFields taskId={editingTodo.id} editDraft={editDraft} savingEdit={savingEdit} recurrenceError={recurrenceError} scheduleTimeZone={scheduleTimeZone} onAssignProject={() => openProjectAssignment([editingTodo.id], "details")} updateEditDraftField={updateEditDraftField} />
 
-              <div className="mt-5 border-t border-black/[0.07] pt-4">
-                <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-[#69716c]">Quick actions</p>
+              <div className="mt-5 border-t border-border pt-4">
+                <p className="mb-2 text-sm font-medium text-muted-foreground">Quick actions</p>
                 <div className="flex min-w-0 flex-wrap gap-2">
                   {editingTodo.status === "completed" ? (
-                    <button type="button" onClick={() => detailAction("unsnooze")} disabled={syncing || savingEdit} className="inline-flex min-w-max items-center gap-2 rounded-xl bg-[#eaf3ed] px-3 py-2.5 text-sm font-semibold text-[#195d41] disabled:opacity-50"><ActionIcon name={todoActionIcon("unsnooze", "Open")} />Open</button>
+                    <Button variant="ghost" type="button" onClick={() => detailAction("unsnooze")} disabled={syncing || savingEdit} className="border border-border"><ActionIcon name={todoActionIcon("unsnooze", "Open")} />Open</Button>
                   ) : (
-                    <button type="button" onClick={() => detailAction("complete")} disabled={syncing || savingEdit} className="inline-flex min-w-max items-center gap-2 rounded-xl bg-[#eaf3ed] px-3 py-2.5 text-sm font-semibold text-[#195d41] disabled:opacity-50"><ActionIcon name={todoActionIcon("complete", "Done")} />Done</button>
+                    <Button variant="ghost" type="button" onClick={() => detailAction("complete")} disabled={syncing || savingEdit} className="border border-border"><ActionIcon name={todoActionIcon("complete", "Done")} />Done</Button>
                   )}
                   {editingTodo.status === "open" && !editDraft.recurrenceCron.trim() && (isSnoozed(editingTodo, now) ? (
-                    <button type="button" onClick={() => detailAction("unsnooze")} disabled={syncing || savingEdit} className="inline-flex min-w-max items-center gap-2 rounded-xl bg-[#eaf3ed] px-3 py-2.5 text-sm font-semibold text-[#195d41] disabled:opacity-50"><ActionIcon name={todoActionIcon("unsnooze", "Wake")} />Wake</button>
+                    <Button variant="ghost" type="button" onClick={() => detailAction("unsnooze")} disabled={syncing || savingEdit} className="border border-border"><ActionIcon name={todoActionIcon("unsnooze", "Wake")} />Wake</Button>
                   ) : (
-                    <button type="button" onClick={() => detailAction("snooze")} disabled={syncing || savingEdit} className="inline-flex min-w-max items-center gap-2 rounded-xl bg-amber-50 px-3 py-2.5 text-sm font-semibold text-amber-700 disabled:opacity-50"><ActionIcon name={todoActionIcon("snooze", "Snooze")} />Snooze</button>
+                    <Button variant="ghost" type="button" onClick={() => detailAction("snooze")} disabled={syncing || savingEdit} className="border border-border"><ActionIcon name={todoActionIcon("snooze", "Snooze")} />Snooze</Button>
                   ))}
-                  {view === "open" && <button type="button" onClick={() => void togglePin(editingTodo)} disabled={syncing || savingEdit} className="inline-flex min-w-max items-center gap-2 rounded-xl bg-[#eef3ff] px-3 py-2.5 text-sm font-semibold text-[#445a8a] disabled:opacity-50"><ActionIcon name={editingTodo.pinned ? "unpin" : "pin"} />{editingTodo.pinned ? "Unpin" : "Pin"}</button>}
-                  <button type="button" onClick={() => openProjectAssignment([editingTodo.id], "details")} disabled={syncing || savingEdit} className="inline-flex min-w-max items-center gap-2 rounded-xl bg-slate-100 px-3 py-2.5 text-sm font-semibold text-slate-700 disabled:opacity-50"><ActionIcon name={todoActionIcon("assign", "Assign project")} />Assign project</button>
-                  <button type="button" onClick={() => detailAction("delete")} disabled={syncing || savingEdit} className="inline-flex min-w-max items-center gap-2 rounded-xl bg-red-50 px-3 py-2.5 text-sm font-semibold text-red-700 disabled:opacity-50"><ActionIcon name={todoActionIcon("delete", "Delete")} />Delete</button>
+                  {view === "open" && <Button variant="ghost" type="button" onClick={() => void togglePin(editingTodo)} disabled={syncing || savingEdit} className="border border-border"><ActionIcon name={editingTodo.pinned ? "unpin" : "pin"} />{editingTodo.pinned ? "Unpin" : "Pin"}</Button>}
+                  <Button variant="ghost" type="button" onClick={() => openProjectAssignment([editingTodo.id], "details")} disabled={syncing || savingEdit} className="border border-border"><ActionIcon name={todoActionIcon("assign", "Assign project")} />Assign project</Button>
+                  <Button variant="ghost" type="button" onClick={() => detailAction("delete")} disabled={syncing || savingEdit} className="border border-border text-destructive hover:text-destructive"><ActionIcon name={todoActionIcon("delete", "Delete")} />Delete</Button>
                 </div>
               </div>
             </div>
 
-            <div className="flex min-h-14 items-center justify-between gap-3 border-t border-black/[0.07] bg-white px-5 py-3 sm:px-6" aria-live="polite">
+            <div className="flex min-h-14 items-center justify-between gap-3 border-t border-border bg-background px-5 py-3 sm:px-6" aria-live="polite">
               <span className={classNames(
                 "inline-flex min-w-0 items-center gap-2 text-sm font-medium",
-                editSaveState === "error" ? "text-red-700" : editSaveState === "offline" ? "text-amber-700" : "text-[#69716c]",
+                editSaveState === "error" ? "text-red-700" : editSaveState === "offline" ? "text-amber-700" : "text-muted-foreground",
               )}>
                 <span className={classNames("h-2 w-2 shrink-0 rounded-full", editSaveState === "saving" ? "animate-pulse bg-[#216e4e]" : editSaveState === "error" ? "bg-red-600" : editSaveState === "offline" ? "bg-amber-500" : "bg-emerald-600")} />
                 <span className="truncate">{editSaveMessage}</span>
               </span>
               {editSaveState === "error" && (
-                <button type="button" onClick={() => { if (editingIdRef.current && editDraftRef.current && editBaselineRef.current) void persistTaskDraft(editingIdRef.current, editDraftRef.current, "retry", editBaselineRef.current); }} className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg px-3 text-xs font-semibold text-red-700 hover:bg-red-50"><ActionIcon name="retry" />Retry</button>
+                <Button variant="ghost" type="button" onClick={() => { if (editingIdRef.current && editDraftRef.current && editBaselineRef.current) void persistTaskDraft(editingIdRef.current, editDraftRef.current, "retry", editBaselineRef.current); }} className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg px-3 text-xs font-semibold text-red-700 hover:bg-red-50"><ActionIcon name="retry" />Retry</Button>
               )}
             </div>
           </form>
