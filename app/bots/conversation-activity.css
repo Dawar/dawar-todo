@@ -124,3 +124,8 @@
 
 .bots-run-card.tone-attention .bots-run-card-icon, .bots-run-status.tone-attention { color:var(--destructive); background:color-mix(in srgb,var(--destructive) 8%,var(--background)); }
 .bots-run-card.tone-working .bots-run-card-icon, .bots-run-status.tone-working { color:var(--primary); background:var(--accent); }
+
+/* The shared dialog owns the outer padding; retain the history body as its scroll container. */
+.bots-run-library.is-dialog { flex:1; }
+.bots-run-library.is-dialog .bots-run-library-body { padding:0; }
+.bots-run-library.is-dialog > footer { padding:12px 0 0; margin-top:12px; border-color:var(--border); background:transparent; }

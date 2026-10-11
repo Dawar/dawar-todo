@@ -247,7 +247,7 @@ export function RunHistory({ bot, schedules, attachments, online, onClose, downl
   // the original conversation keys/answer route; legacy isolated runs retain theirs.
   const isolatedQuestions = bound && selectedRun?.executionLane === "run-v1" && !!selectedRun.laneId && !!selectedRun.threadId;
   const linked = useMemo(() => new Set(transcript?.entries.flatMap(entry => entry.item?.type === "agentMessage" ? [...entry.item.text.matchAll(/\]\(<?bot-artifact:([^\s)>]+)/g)].map(match => match[1]) : []) ?? []), [transcript]);
-  const panel = <section className="bots-run-library" aria-label={`${bot.name} history`}>
+  const panel = <section className={`bots-run-library${embedded ? "" : " is-dialog"}`} aria-label={`${bot.name} history`}>
       <div className="bots-run-library-body" ref={body}>
         {reviewError && <div className="bots-run-notice is-error" role="alert"><CircleAlert size={18} /><div><p>{reviewError.message}</p><Button variant="ghost" size="sm" type="button" disabled={!online || actionBusy} onClick={() => void acknowledge(reviewError.run)}>Retry same review</Button></div></div>}
         {error && <div className="bots-run-notice is-error" role="alert"><CircleAlert size={18} /><div><p>{error}</p><Button variant="ghost" size="sm" type="button" disabled={!online || busy} onClick={() => target ? setPageCursors(current => [...current]) : void load(currentListCursor.current)}>Try again</Button></div></div>}
@@ -279,7 +279,7 @@ export function RunHistory({ bot, schedules, attachments, online, onClose, downl
           </nav>
           {lanes && bound && target.runId && String(selectedRun?.executionLane) !== "main-single" && <RunComposer recoveryOnly={(bot as import("./single-thread-contract").Bot).executionMode === "single-thread"} key={`${owner}:${bot.id}:${target.runId}`} owner={owner} botId={bot.id} runId={target.runId} online={online} paused={selectedRun?.activity?.state === "paused"} />}
         </> : <>
-          <div className="bots-run-intro"><h3>History</h3><p>Scheduled checks and earlier work.</p></div>
+          {embedded && <div className="bots-run-intro"><h3>History</h3><p>Scheduled checks and earlier work.</p></div>}
           {!online && <div className="bots-run-notice"><Clock3 size={18} /><p>Saved history. Reconnect for updates and full run details.</p></div>}
           {!embedded && botsClient.snapshot?.capabilities?.scheduleDecisions === 1 && <RunDecisions owner={owner} botId={bot.id} online={online} />}
           {!embedded && schedules.some(schedule => schedule.enabled && schedule.nextRunAt) && <section className="bots-run-upcoming" aria-label="Coming up"><CalendarDays size={18} /><div><strong>Coming up</strong>{schedules.filter(schedule => schedule.enabled && schedule.nextRunAt).sort((a, b) => a.nextRunAt!.localeCompare(b.nextRunAt!)).slice(0, 3).map(schedule => <p key={schedule.id}><span>{schedule.title}</span><time>{stamp(schedule.nextRunAt)}</time></p>)}</div></section>}
@@ -296,6 +296,6 @@ export function RunHistory({ bot, schedules, attachments, online, onClose, downl
       </div>
       {!embedded && <footer><Button variant="ghost" size="sm" type="button" onClick={onClose}><MessagesLabel />Back to conversation</Button></footer>}
     </section>;
-  return embedded ? panel : <ControlledDialog title="History" description={bot.name} onClose={onClose} className="max-w-4xl">{panel}</ControlledDialog>;
+  return embedded ? panel : <ControlledDialog title="History" description={bot.name} onClose={onClose} className="flex max-w-4xl flex-col overflow-hidden">{panel}</ControlledDialog>;
 }
 function MessagesLabel() { return <ArrowLeft size={15} aria-hidden="true" />; }
