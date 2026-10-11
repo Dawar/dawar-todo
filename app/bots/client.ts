@@ -395,7 +395,7 @@ export class BotsClient {
   }
   private securePending = new Map<string, {owner:string;resolve:(v:unknown)=>void;reject:(e:Error)=>void;timer:ReturnType<typeof setTimeout>}>();
   secure<T>(frame: Record<string, unknown>): Promise<T> {
-    if(!this.online || !this.socket || this.socket.readyState!==WebSocket.OPEN)return Promise.reject(Error("Bot bridge offline. Keep the form open to retain input."));
+    if(!this.online || !this.socket || this.socket.readyState!==WebSocket.OPEN)return Promise.reject(Error("Connection unavailable. Keep this form open to retain your input."));
     const id=crypto.randomUUID(),owner=this.owner;
     return new Promise((resolve,reject)=>{
       const timer=setTimeout(()=>{this.securePending.delete(id);reject(Error("Delivery unconfirmed. Retry the same encrypted submission or check status."));},15000);
@@ -642,7 +642,7 @@ export class BotsClient {
     if (options.owner && options.owner !== this.owner) return Promise.reject(new BotRpcError("The signed-in owner changed.", "not-sent"));
     if (!this.online || this.socket?.readyState !== WebSocket.OPEN)
       return Promise.reject(
-        new BotRpcError("The VM is offline. Your draft has been kept.", "not-sent"),
+        new BotRpcError("Connection unavailable. This request was not sent.", "not-sent"),
       );
     const id = crypto.randomUUID();
     const request: BridgeRequest = {
@@ -658,7 +658,7 @@ export class BotsClient {
         this.pending.delete(id);
         reject(
           new BotRpcError(
-            method.startsWith("history") || method.startsWith("replies.") ? "History lookup took too long. Retry or continue from the last verified page. Your draft is unchanged." : "Still waiting for acknowledgement. Check again to reconcile the same send.", "uncertain",
+            method.startsWith("history") || method.startsWith("replies.") ? "History is taking too long to load. Try again; your draft is unchanged." : "Confirmation is taking longer than expected. Check status before trying again.", "uncertain",
           ),
         );
       }, method.startsWith("history") || method.startsWith("replies.") ? 20000 : 125000);

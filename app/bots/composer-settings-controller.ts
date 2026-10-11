@@ -76,7 +76,7 @@ export class ComposerSettingsController {
       this.serial = Math.max(0, ...Object.values(prior.versions ?? {}).filter((value): value is number =>
         typeof value === "number" && Number.isSafeInteger(value)));
       this.state = { intent, versions: prior.versions ?? {}, pending, confirmed,
-        error: pending ? "A previous save is unconfirmed. Retry the saved change to reconcile it before saving your latest choice." : "",
+        error: pending ? "Previous save unconfirmed. Retry it before saving your latest choice." : "",
         storageError: "", confirmationError: "", refreshingConfirmation: false };
     } catch { /* An invalid cache cannot prevent opening this bot. */ }
   }
@@ -184,7 +184,7 @@ export class ComposerSettingsController {
       if (this.state.pending?.operationId !== pending.operationId) return;
       if (botsClient.owner !== this.owner) {
         this.publish({ ...this.state, pending: { ...pending, phase: "checking" },
-          error: "Connection changed while saving. Reopen this bot and retry the saved change to reconcile it." });
+          error: "Connection changed while saving. Reopen this bot and retry the saved change." });
         return;
       }
       // A retry failing before dispatch says nothing about the earlier
@@ -192,7 +192,7 @@ export class ComposerSettingsController {
       if (!(reason instanceof BotRpcError) || reason.outcome === "uncertain" ||
           reason.outcome === "not-sent" && pending.phase !== "saving") {
         this.publish({ ...this.state, pending: { ...pending, phase: "checking" },
-          error: "The last save is unconfirmed. Retry the saved change to reconcile it; your latest choice will follow only after it finishes." });
+          error: "Save unconfirmed. Retry the saved change; your latest choice will follow." });
         return;
       }
       const intent = { ...this.state.intent }, versions = { ...this.state.versions };
@@ -208,7 +208,7 @@ export class ComposerSettingsController {
     if (this.state.pending?.operationId !== pending.operationId) return;
     if (botsClient.owner !== this.owner) {
       this.publish({ ...this.state, pending: { ...pending, phase: "checking" },
-        error: "The signed-in owner changed while saving. Reopen this bot and retry the saved change to reconcile it." });
+        error: "Account changed while saving. Reopen this bot and retry the saved change." });
       return;
     }
     const submitted: Partial<Values> = {};

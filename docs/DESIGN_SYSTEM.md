@@ -520,3 +520,5 @@ Room disclosure controls use the same semantic focus ring as other controls. The
 Attachment recovery separates storage-read errors from action errors. A successful refresh clears only its read error; a delayed older read cannot overwrite newer state. A failed initial read shows its recovery alert without an indefinite loading label or a false empty result.
 
 Bot settings share one recovery presentation wherever the same saved change is shown. Appearance errors expose Retry saved change, Retry storage or Refresh settings directly in the dialog; they no longer send the user to controls outside it. Original ordered-save and same-operation recovery behavior stays in the settings controller.
+
+Connection errors describe the observable result, not infrastructure: use “Connection unavailable” rather than VM or bridge. Generic requests must not claim a draft was saved. Distinguish a request that was not sent from an unconfirmed result; recovery copy points to status or the original saved change without implementation jargon.
