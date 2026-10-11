@@ -109,9 +109,9 @@ dialog.bots-file-viewer::backdrop { background: #14221acf; backdrop-filter: blur
   .bots-file-viewer-body { padding: 10px; }
 }
 
-.bots-returned-file { display: inline-flex; max-width: 100%; width: 320px; padding: 14px; margin: 8px 8px 8px 0; gap: 12px; align-items: center; text-align: left; border: 1px solid #dfe8da; border-radius: 14px; background: #f8fbf5; vertical-align: top; color: #59825e; }
+.bots-returned-file { display: inline-flex; max-width: 100%; width: 320px; height: auto; white-space: normal; padding: 12px; margin: 8px 8px 8px 0; gap: 12px; align-items: center; text-align: left; vertical-align: top; }
 .bots-returned-file > span:not(.bots-file-preview) { flex: 1; min-width: 0; }
-.bots-returned-file strong { display: block; color: #375b41; font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+.bots-returned-file strong { display: block; color: var(--foreground); font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
 .bots-returned-file small { display: block; margin-top: 4px; font-size: 12px; color: var(--muted-foreground); }
 .bots-returned-file > svg { flex-shrink: 0; }
 .bots-returned-file.has-preview { flex-wrap: wrap; padding: 0 12px 12px; gap: 10px; background: var(--card); overflow: hidden; }

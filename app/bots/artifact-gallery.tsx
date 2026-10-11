@@ -53,6 +53,7 @@ export function ArtifactGallery({ bot, bots, owner, online:bridgeOnline, onClose
   const [search, setSearch] = useState(initial?.search ?? ""), [settledSearch, setSettledSearch] = useState(initial?.search.trim() ?? ""), [type, setType] = useState<GalleryType>(initial?.type ?? "all"), [botFilter, setBotFilter] = useState(initial?.botFilter ?? "");
   const [cursors, setCursors] = useState<(string | null)[]>(initial?.cursors ?? [null]);
   const [selected, setSelected] = useState<GalleryItem | null>(null), [download, setDownload] = useState(""), [downloadError, setDownloadError] = useState("");
+  const searchInput = useRef<HTMLInputElement>(null);
   const scroll = useRef<HTMLDivElement>(null), heading = useRef<HTMLHeadingElement>(null), abort = useRef<AbortController | null>(null);
   const query = useMemo(() => ({ botId: bot?.id || botFilter || undefined, search: settledSearch, type, cursor: cursors.at(-1) ?? null }), [bot?.id, botFilter, settledSearch, type, cursors]);
   const state = useGalleryPage(query, owner, online);
@@ -119,7 +120,7 @@ export function ArtifactGallery({ bot, bots, owner, online:bridgeOnline, onClose
   return <section className="bots-gallery" aria-label={bot ? "Bot attachments" : "Artifacts"}>
     <header className="bots-gallery-heading"><Button variant="ghost" size="icon" onClick={onClose} aria-label={bot ? "Back to bot settings" : "Back to bots"}><ArrowLeft size={21} /></Button><div><span>{bot ? bot.name : "Your workspace"}</span><h1 tabIndex={-1} ref={heading}>{bot ? "Attachments" : "Artifacts"}</h1></div><span className="bots-gallery-total">{countLabel}</span></header>
     <div className="bots-gallery-tools">
-      <label className="bots-gallery-search"><Search size={18} aria-hidden="true" /><Input aria-label="Search files" maxLength={160} placeholder="Search files…" value={search} onChange={(event) => setSearch(event.target.value)} />{search && <Button variant="ghost" size="icon" aria-label="Clear file search" onClick={() => setSearch("")}><X size={16} /></Button>}</label>
+      <div className="bots-gallery-search"><Search size={18} aria-hidden="true" /><Input ref={searchInput} aria-label="Search files" maxLength={160} placeholder="Search files…" value={search} onChange={(event) => setSearch(event.target.value)} />{search && <Button variant="ghost" size="icon" aria-label="Clear file search" onClick={() => { setSearch(""); searchInput.current?.focus(); }}><X size={16} /></Button>}</div>
       {!bot && <label className="bots-gallery-bot-filter"><span>From</span><NativeSelect aria-label="Filter by bot" value={botFilter} onChange={(event) => { setBotFilter(event.target.value); setCursors([null]); scroll.current?.scrollTo(0, 0); }}><option value="">All bots</option><BotChoices bots={bots} /></NativeSelect></label>}
       <div className="bots-gallery-types" role="group" aria-label="File type">{([["all", "All files"], ["image", "Images"], ["pdf", "PDFs"], ["document", "Documents"]] as const).map(([key, label]) => <Button variant={type === key ? "secondary" : "ghost"} size="sm" key={key} aria-pressed={type === key} onClick={() => filter(key)}>{label}</Button>)}</div>
     </div>
