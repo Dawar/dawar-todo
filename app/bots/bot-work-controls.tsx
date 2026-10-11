@@ -8,6 +8,7 @@ import { StopAll } from "./run-controls";
 import { runNeedsBinding } from "./run-context";
 import { useRunAction } from "./run-action";
 import "./bot-work-controls.css";
+import { Button } from "@/components/ui/button";
 
 const working = new Set(["running", "waiting-input", "waiting-workers", "queued", "provisioning", "uncertain"]);
 function currentWork(run: BotRun) {
@@ -49,19 +50,19 @@ function WorkRun({ owner, botId, run, online, hold, release, onOpen }: {
   return <article className="bots-work-run" aria-label={`Scheduled work: ${run.title}`}>
     <header><Clock3 size={15} aria-hidden="true" /><h4>{run.title}</h4></header>
     <p className="bots-work-state">{status(run)}</p>
-    {paused && <p className="bots-work-hint">Open Activity to resume queued work. Interrupted work does not restart automatically.</p>}
-    {run.activity?.state === "uncertain" ? <p className="bots-work-hint">Open Activity to review this run&apos;s unconfirmed action.</p> : !paused && runNeedsBinding(run) && <p className="bots-work-hint">This run is waiting to start. Stop all also holds queued work.</p>}
+    {paused && <p className="bots-work-hint">Resume queued work in Activity. Interrupted work stays stopped.</p>}
+    {run.activity?.state === "uncertain" ? <p className="bots-work-hint">Review the unconfirmed action in Activity.</p> : !paused && runNeedsBinding(run) && <p className="bots-work-hint">Waiting to start. Stop all also holds queued work.</p>}
     <div className="bots-work-run-actions">
-      {(stoppable || action.intent) && <button type="button" className="bots-work-stop" disabled={!online || !action.ready || action.busy}
+      {(stoppable || action.intent) && <Button variant="outline" type="button" className="bots-work-stop" disabled={!online || !action.ready || action.busy}
         aria-label={action.intent ? `Check saved action for ${run.title}` : `Stop this run: ${run.title}`} onClick={() => void stop()}>
         <Square size={13} aria-hidden="true" />{action.busy ? "Confirming…" : action.intent ? "Check saved action" : "Stop this run"}
-      </button>}
-      <button type="button" className="bots-work-open" onClick={() => onOpen({ runId: run.id })} aria-label={`Open ${run.title} in Activity`}>Activity<ArrowUpRight size={14} aria-hidden="true" /></button>
+      </Button>}
+      <Button variant="outline" type="button" className="bots-work-open" onClick={() => onOpen({ runId: run.id })} aria-label={`Open ${run.title} in Activity`}>Activity<ArrowUpRight size={14} aria-hidden="true" /></Button>
     </div>
     {(action.error || action.intent && !action.busy) && <p className="bots-work-error" role="alert">{action.error || "The saved action is awaiting confirmation."}
-      {!action.ready && <button type="button" onClick={() => void action.refresh()}>Retry action storage</button>}
+      {!action.ready && <Button variant="outline" type="button" onClick={() => void action.refresh()}>Retry action storage</Button>}
     </p>}
-    {!current && !action.intent && !action.busy && action.error && <button type="button" className="bots-work-open" onClick={() => release(run.id)}>Dismiss</button>}
+    {!current && !action.intent && !action.busy && action.error && <Button variant="outline" type="button" className="bots-work-open" onClick={() => release(run.id)}>Dismiss</Button>}
   </article>;
 }
 
@@ -77,7 +78,7 @@ export function BotWorkControls({ owner, bot, runs, online, onOpen }: {
   for (const saved of Object.values(held)) displayed.set(saved.id, byId.get(saved.id) ?? saved);
   return <section className="bots-work-controls" aria-labelledby={heading}>
     <h3 id={heading}>Work controls</h3>
-    <p className="bots-work-hint">Stop a scheduled run here. The square in the composer stops the main conversation.</p>
+    <p className="bots-work-hint">Manage scheduled work separately from the main conversation.</p>
     {!online && <p className="bots-work-hint" role="status">Saved status · Connect to control work.</p>}
     <div className="bots-work-runs">
       {[...displayed.values()].map(run => <WorkRun key={run.id} owner={owner} botId={bot.id} run={run} online={online && !bot.archived}
@@ -85,7 +86,7 @@ export function BotWorkControls({ owner, bot, runs, online, onOpen }: {
         release={id => setHeld(previous => { const next = { ...previous }; delete next[id]; return next; })} onOpen={onOpen} />)}
     </div>
     {!displayed.size && <p className="bots-work-empty">No current scheduled work.</p>}
-    {current.length > 6 && <button type="button" className="bots-work-open" onClick={() => onOpen()}>More work in Activity<ArrowUpRight size={14} aria-hidden="true" /></button>}
+    {current.length > 6 && <Button variant="outline" type="button" className="bots-work-open" onClick={() => onOpen()}>More work in Activity<ArrowUpRight size={14} aria-hidden="true" /></Button>}
     <div className="bots-work-all"><StopAll owner={owner} botId={bot.id} online={online && !bot.archived} /></div>
   </section>;
 }

@@ -334,3 +334,7 @@ StorageLifecycleNotice uses shared buttons, semantic warning/accent surfaces and
 ### Bot and team setup approvals
 
 Setup approvals use shared buttons, semantic cards, wrapping action summaries and explicit human-readable states. Original IDs remain available under Request details. Confirmation remains unchecked and scoped to the original request revision; approval/revocation/recovery logic is unchanged. Actual1280/320 long-action layouts, disclosure and keyboard checkbox focus/Space were observed with read-only fixture requests. No approval was submitted. Offline/empty/error/revoke/recovery and full drawer acceptance remain pending.
+
+### Earlier-work controls
+
+The retained earlier-work recovery panel uses shared outline buttons and semantic card/status/error colors, readable13px metadata and wrapping44px actions. Wording distinguishes paused, unconfirmed and waiting work without duplicate instructions. Current-work selection, saved-action recovery, Stop scope and Activity navigation are unchanged. Actual320/1280 synthetic running/paused/uncertain rows and offline-disabled Stop observed; the paused Activity button returned its exact original fixture run ID. Connected Stop/recovery, empty/overflow and full history drawer remain pending.
