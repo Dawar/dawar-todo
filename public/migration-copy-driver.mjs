@@ -22,7 +22,7 @@ try{
  databaseGeneration=frozen.generation;
  if(frozen.scope!=='d1-database-writes'||frozen.status!=='frozen'||frozen.guardSHA256!==x.reader.freeze.database.guardSHA256||databaseGeneration!==x.expectedDatabaseGeneration+1)throw Error('Original database binding differs');
  const capture={sourceOrigin:c.sourceOrigin,captureId:x.reader.captureId,freeze:{sourceId:c.sourceId,operationId:c.cutoverId,epoch:frozen.epoch,generation:frozen.generation,expiresAt:frozen.expiresAt,scope:'d1-database-writes'}};
- const m=await import('/migration-database-capture.mjs');
+ const m=await import('/migration-database-capture.mjs?build='+x.expectedBuild);
  const result=await m.captureDatabase({capture,recipient:x.recipient,onProgress:p=>console.info('Private database copy progress',p)});
  const out={...result,sourceControlReceipts:receipts};
  const link=document.createElement('a'),url=URL.createObjectURL(new Blob([JSON.stringify(out)],{type:'application/json'}));link.href=url;link.download='dawar-application-database-capture.sealed.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),30000);
