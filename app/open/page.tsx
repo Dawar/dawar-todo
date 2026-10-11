@@ -2,6 +2,7 @@
 
 import { useEffect } from "react";
 import Link from "next/link";
+import { ScreenLoading } from "../screen-feedback";
 import { DEFAULT_OPENING_TAB, openingTabPath, parseOpeningTab } from "../../lib/app-preferences";
 import { cacheOpeningTab, cachedOpeningTab } from "../opening-preference";
 import { loadCachedSettings } from "../offline-store";
@@ -39,8 +40,8 @@ export default function OpenAppPage() {
     })();
     return () => { active = false; clearTimeout(timeout); controller.abort(); };
   }, []);
-  return <main className="mx-auto max-w-lg p-6 text-sm text-[#69716c]">
-    <p role="status">Opening Dawar Todo…</p>
-    <noscript><p><Link href="/tasks" prefetch={false}>Open Tasks</Link> · <Link href="/bots" prefetch={false}>Open Bots</Link></p></noscript>
+  return <main className="text-sm text-muted-foreground">
+    <ScreenLoading label="Opening Dawar Todo…" />
+    <noscript><p className="mx-auto max-w-lg p-6"><Link href="/tasks" prefetch={false}>Open Tasks</Link> · <Link href="/bots" prefetch={false}>Open Bots</Link></p></noscript>
   </main>;
 }

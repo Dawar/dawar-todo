@@ -375,3 +375,6 @@ Portable-session and public-route loading states now reuse ScreenLoading; an opt
 
 ### Markdown previews
 Task and form Markdown previews use semantic card, foreground, muted and primary tokens. Empty previews retain a dashed boundary. Headings follow the shared hierarchy; code and tables use readable 13px text. Wide tables and code scroll within their own regions, preserving the surrounding mobile layout. Table regions and links have visible keyboard focus. Sanitization and URL handling remain unchanged.
+
+### Recovery and transient feedback
+Task sync recovery uses a semantic warning surface, a concise retained-change explanation, expandable saved payloads and shared retry/download buttons. Hidden payload details preserve recovery context without dominating the task list. Pull-refresh feedback uses the popover surface and 13px label; the opening route uses shared ScreenLoading. Existing gesture thresholds, persistence, retry and navigation behavior remain unchanged.
