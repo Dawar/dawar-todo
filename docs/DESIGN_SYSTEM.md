@@ -304,3 +304,7 @@ Teams uses ControlledDialog, shared Button/Input/NativeSelect/Textarea, semantic
 ### Voice / Operator
 
 Voice uses ControlledDialog with initial focus on Close, outside dismissal prevented, and existing end-before-close plus unmount cleanup preserved. Start is primary; other call/history controls use shared outline Button and routing uses NativeSelect. Call cards retain timestamps on mobile, allow full names to wrap, and use semantic typography/surfaces. Actual320 ready dialog and Escape opener focus checked without starting a call. Connected media/control states, desktop/history/paging/error/question states remain pending; no provider or microphone action was exercised.
+
+### Upcoming work and native plan snapshots
+
+WorkOverview and AutomaticInbox use shared outline buttons and their own semantic stylesheet; their old branches were removed from the shared single-thread stylesheet. Text distinguishes queued, accepted and uncertain execution without changing admission/read/recovery logic. Pause guidance is concise, with its action below the message at narrow widths. Native plan status uses semantic colors plus explicit text/weight; partial and last-recorded notices remain visible with short copy. Actual synthetic320 upcoming rows/paused-disabled action/long plan checked; connected Resume and native work effects are not part of this fixture.

@@ -51,8 +51,8 @@ export function WorkPlanMessage({ plan, botId, attachments, turnStatus }: { plan
       <span className="bots-work-plan-status" data-status={step.status}>{step.status === 'completed' ? 'Completed' : step.status === 'inProgress' ? 'In progress' : 'Pending'}</span>
       <div className="bots-message-markdown"><TextPages text={step.step} render={markdown}/></div>
     </div>}/></div>}
-    {!plan.complete && <p className="bots-system-note">Partial live snapshot: {plan.steps.length} of {plan.totalSteps} steps shown. Full details may require the retained live update.</p>}
-    {turnStatus && turnStatus !== 'inProgress' && <p className="bots-system-note">Turn {turnStatus}. Steps reflect its last supplied native plan update.</p>}
+    {!plan.complete && <p className="bots-system-note">Partial plan · {plan.steps.length} of {plan.totalSteps} steps shown.</p>}
+    {turnStatus && turnStatus !== 'inProgress' && <p className="bots-system-note">Turn {turnStatus} · last recorded plan.</p>}
   </section>;
 }
 
