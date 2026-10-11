@@ -61,6 +61,7 @@ import { TaskAttachmentMedia } from "./task-attachment-media";
 import { AttachmentPicker } from "./attachment-picker";
 import { TaskDetailFields } from "./task-detail-fields";
 import { TaskRow, SnoozeStatusBadge } from "./task-row";
+import { TaskListSummary } from "./task-list-summary";
 import { TaskListControls, TaskFiltersDialog } from "./task-list-controls";
 import { ProjectBrowser } from "./project-browser";
 import { CreateProjectDialog, CustomSnoozeDialog, AssignProjectDialog, DeleteProjectDialog } from "./task-dialogs";
@@ -3903,7 +3904,7 @@ export default function Home() {
         }}
       />
       {(connectionQuality !== "online" || showPendingSyncStatus) && (
-        <div className="pointer-events-none fixed right-3 top-[4.25rem] z-40 rounded-full bg-[#202522] px-3 py-1.5 text-xs font-semibold text-white shadow-lg" role="status" aria-live="polite">
+        <div className="pointer-events-none fixed right-3 top-[4.25rem] z-40 rounded-full bg-foreground px-3 py-1.5 text-xs font-semibold text-background shadow-lg" role="status" aria-live="polite">
           {connectionQuality === "offline"
             ? `Offline${pendingSyncCount ? ` · ${pendingSyncCount} queued` : ""}`
             : connectionQuality === "degraded"
@@ -3993,16 +3994,7 @@ export default function Home() {
           <TaskListControls view={view} counts={counts} onView={chooseView} query={query} onQuery={setQuery} searchRef={searchRef} priority={priority} onPriority={setPriority} pins={pinListEnabled} pinCount={pinnedTaskCount} pinLimit={MAX_PINNED_TASKS} onPins={togglePinList} filterCount={mobileFilterCount} onFilters={() => setFiltersOpen(true)} />
           {filtersOpen && <TaskFiltersDialog priority={priority} onPriority={setPriority} count={filtered.length} onClose={() => setFiltersOpen(false)} />}
 
-          <div className="mb-2 flex items-center justify-between px-1">
-            <div className="flex items-center gap-3">
-              <h2 id="tasks-heading" className="text-sm font-semibold text-foreground">{viewLabels[view]} tasks</h2>
-              {filtered.length > 0 && <button onClick={toggleVisible} className="inline-flex items-center gap-1.5 text-xs font-medium text-[#216e4e] hover:underline"><ActionIcon name={allVisibleSelected ? "cancel" : "select"} className="h-3.5 w-3.5" />{allVisibleSelected ? "Clear selection" : "Select visible"}</button>}
-            </div>
-            <div className="flex items-center gap-3 text-[13px] text-muted-foreground">
-              <span>{syncing ? "Saving…" : `${filtered.length} ${filtered.length === 1 ? "item" : "items"}`}</span>
-              {filtersActive && <button onClick={() => { setQuery(""); setPriority(""); }} className="inline-flex items-center gap-1 font-medium text-[#216e4e] hover:underline"><ActionIcon name="cancel" className="h-3.5 w-3.5" />Clear filters</button>}
-            </div>
-          </div>
+          <TaskListSummary label={viewLabels[view]} count={filtered.length} syncing={syncing} allSelected={allVisibleSelected} filtersActive={filtersActive} onSelection={toggleVisible} onClearFilters={() => { setQuery(""); setPriority(""); }} />
 
           <div
             data-task-list-surface
