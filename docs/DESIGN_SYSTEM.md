@@ -484,3 +484,7 @@ The current347-row inventory contains25Verified,177In progress,19Implemented and
 ### Goal editor validation
 
 Objective and token-budget validation appears next to the affected field, with its error linked through `aria-describedby` and `aria-invalid`. Invalid submission focuses that field; editing it clears its local validation feedback. Cancel restores heading focus and clears editor-only errors. Saved-action recovery and all native goal authorization/identity checks remain unchanged.
+
+### Document preview navigation
+
+Wide Markdown tables and code blocks are named, keyboard-focusable scroll regions with the shared visible focus ring. Document-link disclosures retain a44px minimum target. Preview failures use semantic error text and wrap within the viewport. HTML remains sandboxed and sanitized; these presentation changes do not enable scripts, remote resources or implicit navigation.

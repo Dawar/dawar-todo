@@ -14,7 +14,7 @@
 .bots-document-table :is(td,th) { min-width: 160px; overflow-wrap: normal; border: 1px solid var(--border); padding: 8px 12px; text-align: left; }
 .bots-document-markdown a,.bots-document-links a { color: var(--primary); text-decoration: underline; }
 .bots-document-links { flex: none; max-height: 30%; overflow: auto; border-top: 1px solid var(--border); font-size: 13px; padding: 10px 16px; overflow-wrap: anywhere; }
-.bots-document-links summary { cursor: pointer; } .bots-document-links ul { padding: 10px 0; }
+.bots-document-links summary { cursor: pointer; min-height: 44px; padding: 12px 0; } .bots-document-links ul { padding: 10px 0; }
 .bots-document-state { flex: 1; min-width: 0; padding: 24px; color: var(--muted-foreground); }
 .bots-document-state button { margin-top: 12px; }
 .bots-visualization-reference { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 8px; max-width: 100%; }
@@ -49,3 +49,7 @@
 
 .bots-document-notes p[role="alert"] { color: var(--destructive); }
 .bots-document-notes textarea[readonly] { background: var(--muted); }
+
+.bots-document-table:focus-visible,.bots-document-markdown pre:focus-visible,.bots-document-links summary:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; border-radius: 4px; }
+.bots-document-state { overflow-wrap: anywhere; }
+.bots-document-state[role="alert"] { color: var(--destructive); }

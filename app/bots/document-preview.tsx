@@ -43,7 +43,8 @@ function TextPreview({ file, kind, name, onReady }: { file: Blob; kind: Document
           a: ({ href, children }) => href ? <a href={href} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer">{children}</a> : <span>{children}</span>,
           // Reports do not fetch image URLs silently; keep readable alt text.
           img: ({ alt }) => <span className="bots-document-image-alt">{alt || "Image (available in original document)"}</span>,
-          table: ({ children }) => <div className="bots-document-table"><table>{children}</table></div>,
+          table: ({ children }) => <div className="bots-document-table" role="region" aria-label="Document table" tabIndex={0}><table>{children}</table></div>,
+          pre: ({ children }) => <pre role="region" aria-label="Code block" tabIndex={0}>{children}</pre>,
         }}>{loaded.text}</ReactMarkdown></article>}
   </div>;
 }
