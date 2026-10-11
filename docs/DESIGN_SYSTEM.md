@@ -408,3 +408,5 @@ PDF review attachments and error feedback use13px metadata. Canvas shadows deriv
 Conversation presence, retained recovery and burst metadata use13px semantic text. Pending message bubbles retain an opaque primary surface so white text remains readable; countdown fill uses a restrained primary tint. Timing, reduced-motion and delivery-state behavior are unchanged.
 
 Bot-details tabs use shared ghost Buttons with retained ARIA tab semantics and arrow/Home/End navigation. Counts remain compact12px exceptions; dates/status text use13px. Drawer overlays/shadows derive from foreground opacity.
+
+Base chat surfaces, dialogs, history, recovery and schedule styles consume the shared semantic palette. Secondary labels/code excerpts have a13px floor. White-on-primary message and action styling uses paired tokens; error and warning distinctions remain semantic. Layout, viewport/keyboard budgets and scroll behavior are unchanged.
