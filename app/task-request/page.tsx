@@ -15,6 +15,11 @@ export default function TaskRequestGuestPage() {
     const observed = useRef<TaskRequestGuest | null>(null), ordinaryFiles = useRef<Record<string, File>>({});
     const privateFields = useRef<Record<string, HTMLInputElement | null>>({}), images = useRef<Record<string, File>>({}), form = useRef<HTMLFormElement>(null);
     const [request, setRequest] = useState<TaskRequestGuest | null>(null), [values, setValues] = useState<TaskRequestValues>({}), [name, setName] = useState(''), [pin, setPin] = useState('');
+    const errorSummary = useRef<HTMLParagraphElement>(null);
+    const [failedAction, setFailedAction] = useState(0);
+    useEffect(() => {
+        if (failedAction > 0) errorSummary.current?.focus();
+    }, [failedAction]);
     const [error, setError] = useState(''), [busy, setBusy] = useState(false), [needsPin, setNeedsPin] = useState(false), [sealed, setSealed] = useState(false), [modelRead, setModelRead] = useState(false), [imageNames, setImageNames] = useState<Record<string, File>>({}), [saved, setSaved] = useState(false), [pending, setPending] = useState<FormIntent | null>(null), [hasLink, setHasLink] = useState(false);
     const run = useCallback(async (action: () => Promise<void>) => {
         if (working.current)
@@ -26,8 +31,10 @@ export default function TaskRequestGuestPage() {
             await action();
         }
         catch (e) {
-            if (alive.current)
+            if (alive.current) {
                 setError(e instanceof Error ? e.message : 'Acknowledgement unavailable. Retain the original form.');
+                setFailedAction(value => value + 1);
+            }
         }
         finally {
             working.current = false;
@@ -166,11 +173,11 @@ export default function TaskRequestGuestPage() {
     const locked = busy || sealed || !!request?.submission?.submittedAt || !!pending;
     return <main className="task-request-page" data-no-pull-refresh><small>Protected Task Request</small><h1>{request?.spec.title ?? 'Open a protected form'}</h1>
     <p>This link permits one contributor to submit this form. Link possession grants access; the contributor name is not verified identity.</p>
-    {error && <p role="alert" className="task-request-error">{error}</p>}
-    {!request && needsPin && <form onSubmit={e => { e.preventDefault(); void run(() => open(pin)); }} autoComplete="off"><label>Link PIN<Input className="task-request-control" type="password" inputMode="numeric" pattern="[0-9]{4,12}" minLength={4} maxLength={12} required value={pin} autoComplete="off" onChange={e => setPin(e.target.value)}/></label><Button className="task-request-control" type="submit" disabled={busy}>Open form</Button></form>}
+    {error && <p ref={errorSummary} tabIndex={-1} role="alert" className="task-request-error">{error}</p>}
+    {!request && needsPin && <form className="task-request-form" onSubmit={e => { e.preventDefault(); void run(() => open(pin)); }} autoComplete="off"><label>Link PIN<Input className="task-request-control" type="password" inputMode="numeric" pattern="[0-9]{4,12}" minLength={4} maxLength={12} required value={pin} autoComplete="off" onChange={e => setPin(e.target.value)}/></label><Button className="task-request-control" type="submit" disabled={busy}>Open form</Button></form>}
     {!request && !needsPin && <Button className="task-request-control" variant="outline" type="button" disabled={busy || !hasLink} onClick={() => void run(() => open())}>{busy ? 'Opening…' : 'Retry original link'}</Button>}
     {request && <><p>For {request.botName} · {requestStatus[request.submission?.submittedAt ? request.submission.status : request.status] ?? request.status}</p>{request.expiresAt && <small>Link expires {new Date(request.expiresAt).toLocaleString()}</small>}
-      {request.submission?.submittedAt ? <section><h2>{requestStatus[request.submission.status]}</h2><p>Your submission has been received. Delivery and completion are separate.</p>{request.submission.delivery?.reason && <p>{request.submission.delivery.reason}</p>}<Button className="task-request-control" variant="outline" type="button" disabled={busy} onClick={() => void run(async () => { receive(await current().read()); })}>Check receipt</Button></section>
+      {request.submission?.submittedAt ? <section className="task-request-receipt" aria-label="Submission receipt"><h2>{requestStatus[request.submission.status]}</h2><p>Your submission has been received. Delivery and completion are separate.</p>{request.submission.delivery?.reason && <p>{request.submission.delivery.reason}</p>}<Button className="task-request-control" variant="outline" type="button" disabled={busy} onClick={() => void run(async () => { receive(await current().read()); })}>Check receipt</Button></section>
                 : <form className="task-request-form" ref={form} autoComplete="off" onSubmit={e => { e.preventDefault(); void run(submit); }}>
         <label>Your name · self-reported<Input className="task-request-control" disabled={locked} maxLength={100} value={name} onChange={e => { setName(e.target.value); setSaved(false); }}/></label>
         <TaskRequestFields spec={request.spec} values={values} files={request.submission?.files} disabled={locked} privateFields={privateFields} privateImages={imageNames} onChange={(id, v) => { setValues(old => ({ ...old, [id]: v })); setSaved(false); }} onPrivateImage={(id, file) => {

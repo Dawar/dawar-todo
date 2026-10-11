@@ -24,3 +24,12 @@
 .task-request-list-button { display:flex; flex-direction:column; align-items:flex-start; justify-content:center; gap:4px; width:100%; height:auto; min-height:44px; white-space:normal; text-align:left; overflow-wrap:anywhere; }
 .task-request-card > summary > .bots-disclosure-chevron { flex:none; margin-top:3px; }
 .task-request-card[open] > summary > .bots-disclosure-chevron { transform:rotate(90deg); }
+
+/* Guest pages use the same readable rhythm as the owner dialog. */
+.task-request-page { display:flex; flex-direction:column; gap:16px; font-size:14px; line-height:1.5; }
+.task-request-page h1 { margin:0; font-size:28px; line-height:1.2; letter-spacing:-.02em; overflow-wrap:anywhere; }
+.task-request-page > p,.task-request-page > small { margin:0; }
+.task-request-page > button { align-self:flex-start; }
+.task-request-receipt { display:grid; gap:12px; padding:16px; border:1px solid var(--border); border-radius:12px; background:var(--muted); }
+.task-request-receipt > button { justify-self:start; }
+.task-request-page .task-request-markdown h3,.task-request-form > section > h3 { font-weight:600; }
