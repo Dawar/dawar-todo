@@ -72,3 +72,12 @@
 .bots-room-send-row>button { flex:none; }
 .bots-room-send-row .bots-room-send-hint { margin:0; }
 @media(max-width:600px) { .bots-room-composer { padding:8px 12px; } }
+
+.bots-room-native-history { font-size:14px; line-height:1.5; overflow-wrap:anywhere; }
+.bots-room-native-history [role=alert] { color:var(--destructive); }
+.bots-room-native-history [role=status], .bots-room-history-empty, .bots-room-reference { color:var(--muted-foreground); }
+.bots-room-history-empty { padding:16px 0; }
+.bots-room-reference { margin-top:12px; font-size:13px; }
+.bots-room-reference summary, .bots-config-evidence summary { min-height:44px; align-content:center; cursor:pointer; }
+.bots-config-evidence { overflow-wrap:anywhere; }
+.bots-config-evidence p { margin:8px 0; }
