@@ -1,11 +1,16 @@
-.bots-admin-approvals { min-width: 0; margin-block: 1rem; }
-.bots-admin-approvals header { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
-.bots-admin-approvals article { border: 1px solid var(--border-color, #dce3df); border-radius: 12px; padding: .8rem; margin-top: .7rem; overflow-wrap: anywhere; }
-.bots-admin-approvals h4 { margin: 0 0 .7rem; }
+.bots-admin-approvals { min-width: 0; margin-block: 1rem; font-size: .875rem; line-height: 1.5; }
+.bots-admin-approvals header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: .75rem; }
+.bots-admin-approvals h3 { font-size: 1rem; font-weight: 600; margin: 0; }
+.bots-admin-approvals article { border: 1px solid var(--border); border-radius: var(--radius); background: var(--card); padding: 1rem; margin-top: .75rem; overflow-wrap: anywhere; }
+.bots-admin-approvals h4 { font-size: .875rem; font-weight: 600; margin: 0 0 .75rem; }
 .bots-admin-approvals p { white-space: pre-wrap; margin-block: .5rem; }
-.bots-admin-approvals ol { padding-left: 1.3rem; }
-.bots-admin-approvals li { margin-bottom: .8rem; }
-.bots-admin-approvals label { display: flex; align-items: flex-start; gap: .5rem; margin-block: .7rem; }
-.bots-admin-approvals input[type=checkbox] { width: 20px; height: 20px; flex: 0 0 20px; }
-.bots-admin-approvals button { min-height: 44px; white-space: normal; }
-.bots-admin-approvals small { display: block; margin-top: .5rem; }
+.bots-admin-approvals p[role=alert] { color: var(--destructive); }
+.bots-admin-approvals ol { padding-left: 1.25rem; list-style: decimal; }
+.bots-admin-approvals li { margin-bottom: .75rem; }
+.bots-admin-approvals label { display: flex; align-items: flex-start; gap: .5rem; margin-block: .75rem; min-height: 44px; cursor: pointer; }
+.bots-admin-approvals input[type=checkbox] { width: 20px; height: 20px; flex: 0 0 20px; accent-color: var(--primary); margin-top: .125rem; }
+.bots-admin-approvals input[type=checkbox]:focus-visible { outline: 2px solid var(--ring); outline-offset: 3px; }
+.bots-admin-approvals button { white-space: normal; height: auto; min-height: 44px; }
+.bots-admin-approvals small { display: block; margin-top: .5rem; color: var(--muted-foreground); font-size: .75rem; }
+.bots-admin-approvals summary { cursor: pointer; color: var(--muted-foreground); padding-block: .5rem; min-height: 36px; }
+.bots-admin-approvals summary:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }

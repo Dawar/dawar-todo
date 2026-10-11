@@ -326,3 +326,11 @@ The dense message rail retains 24px non-overlapping keyboard-selectable hit grou
 The semantic palette now also owns page foreground/background and warning colors. Base resets live in the Tailwind base layer so explicit component typography (including monospace inputs) can win; default borders use the shared border token. The mobile16px input rule remains to prevent focus zoom. Root viewport keeps device width and safe-area support without disabling user zoom. Physical pinch-zoom acceptance remains pending.
 
 StorageLifecycleNotice uses shared buttons, semantic warning/accent surfaces and short action-oriented copy. The existing update guard, worker readiness, error handling and human-only refresh remain unchanged. Actual320 blocked/upgrade/dismiss/update/guard-error and1280 update-error layouts checked with local lifecycle state; no worker update, database mutation or navigation occurred. Full app safe-area/zoom/multitab and remaining notice-state checks are unfinished.
+
+### Legacy Assistant retirement
+
+`/assistant` already redirects to `/bots`. The unreferenced legacy AssistantWorkspace and standalone Assistant attachment/voice controls are removed, eliminating competing inactive UI. Assistant database/API/offline records and existing runtime contracts remain untouched. The existing assistant test now checks retired files/current redirect and the current storage-adapter delegation; both existing cases pass, including bearer-auth rejection. No new route or real model operation was introduced.
+
+### Bot and team setup approvals
+
+Setup approvals use shared buttons, semantic cards, wrapping action summaries and explicit human-readable states. Original IDs remain available under Request details. Confirmation remains unchecked and scoped to the original request revision; approval/revocation/recovery logic is unchanged. Actual1280/320 long-action layouts, disclosure and keyboard checkbox focus/Space were observed with read-only fixture requests. No approval was submitted. Offline/empty/error/revoke/recovery and full drawer acceptance remain pending.

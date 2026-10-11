@@ -1,18 +1,18 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import test from "node:test";
 import { appAccessResponse } from "../worker/access.ts";
 
 const root = new URL("../", import.meta.url);
 
-test("ships a persistent source-aware task assistant workspace", async () => {
+test("preserves assistant data contracts while retiring the legacy workspace", async () => {
   const [
     schema,
     database,
     assistantDb,
     runtime,
-    workspace,
     attachmentClient,
+    storageTransport,
     offline,
     header,
     migration,
@@ -24,8 +24,8 @@ test("ships a persistent source-aware task assistant workspace", async () => {
     readFile(new URL("db/todos.ts", root), "utf8"),
     readFile(new URL("db/assistant.ts", root), "utf8"),
     readFile(new URL("lib/assistant-runtime.ts", root), "utf8"),
-    readFile(new URL("app/assistant/workspace.tsx", root), "utf8"),
     readFile(new URL("app/attachment-upload-client.ts", root), "utf8"),
+    readFile(new URL("lib/storage-upload.ts", root), "utf8"),
     readFile(new URL("app/offline-store.ts", root), "utf8"),
     readFile(new URL("app/site-header.tsx", root), "utf8"),
     readFile(new URL("drizzle/0017_famous_praxagora.sql", root), "utf8"),
@@ -62,25 +62,17 @@ test("ships a persistent source-aware task assistant workspace", async () => {
   assert.match(runtime, /input_image/);
   assert.match(runtime, /input_file/);
 
-  assert.match(workspace, /lg:grid-cols-\[340px_minmax\(0,1fr\)\]/);
-  assert.match(workspace, /Independent/);
-  assert.match(workspace, /Skip · next question/);
-  assert.match(workspace, /Keep task as is/);
-  assert.match(workspace, /Apply to task/);
-  assert.match(workspace, /Record voice memo/);
-  assert.match(workspace, /onPaste/);
-  assert.match(workspace, /onDrop=\{drop\}/);
-  assert.match(workspace, /Tasks can have up to 12 attachments/);
-  assert.match(workspace, /uploadTaskAttachment/);
-  assert.doesNotMatch(workspace, /form\.set\("file", staged\.file\)/);
+  await assert.rejects(access(new URL("app/assistant/workspace.tsx", root)), { code: "ENOENT" });
+  await assert.rejects(access(new URL("app/assistant-attachment-controls.tsx", root)), { code: "ENOENT" });
   assert.match(attachmentClient, /image variants prepared/);
-  assert.match(attachmentClient, /mode: "no-cors"/);
+  assert.match(attachmentClient, /uploadStorageBlob\(fetch,target,body,\{legacyMode:'no-cors'/);
+  assert.match(storageTransport, /mode:options\.legacyMode/);
   assert.match(attachmentClient, /method: "PATCH"/);
   assert.match(attachmentClient, /discard\(prepared\.uploadId\)/);
   assert.match(offline, /assistant-queue/);
   assert.match(offline, /assistant-draft/);
   assert.doesNotMatch(header, /AI task assistant|href="\/assistant"/);
-  assert.match(assistantPage, /redirect\("\/talk"\)/);
+  assert.match(assistantPage, /redirect\("\/bots"\)/);
   assert.doesNotMatch(serviceWorker, /"\/assistant"/);
 });
 
