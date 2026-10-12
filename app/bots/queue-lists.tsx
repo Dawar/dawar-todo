@@ -37,9 +37,9 @@ export function useQueueLists(owner: string, botId: string | null, online: boole
 const when = (date:string|null,zone:string) => date ? new Intl.DateTimeFormat(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit',timeZone:zone}).format(new Date(date)) : null;
 const blank = () => ({name:'',cron:'0 9 * * 1-5',timeZone:Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',enabled:true});
 /** The composer journals the destination with the original text and attachments. */
-export function QueueDestinationPicker({lists, disabled, onChoose, onClose, onManage, onSubmitNow, showDefault = true, description, error, returnFocus}: {
+export function QueueDestinationPicker({lists, disabled, onChoose, onClose, onManage, onSubmitNow, showDefault = true, description, error, returnFocus, submitting = false}: {
   lists: BotQueueList[]; disabled: boolean; onChoose: (id: string | null) => void; onClose: () => void; onManage?: () => void;
-  onSubmitNow?: () => void; showDefault?: boolean; description?: string; error?: string; returnFocus?: HTMLElement | null;
+  onSubmitNow?: () => void; showDefault?: boolean; description?: string; error?: string; returnFocus?: HTMLElement | null; submitting?: boolean;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   useEffect(() => {
@@ -53,7 +53,7 @@ export function QueueDestinationPicker({lists, disabled, onChoose, onClose, onMa
     if (event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom) onClose();
   }}>
     <header><div><span>Queue message</span><h2 id="queue-picker-title">Choose a list</h2></div><Button variant="outline" type="button" className="bots-icon-button" aria-label="Close queue picker" onClick={onClose}><X size={20}/></Button></header>
-    {description && <p className="bots-queue-picker-note">{description}</p>}
+    {(description || submitting) && <p className="bots-queue-picker-note" role={submitting ? 'status' : undefined}>{submitting ? 'Queueing…' : description}</p>}
     {error && <p className="bots-lists-error" role="alert">{error}</p>}
     <div className="bots-queue-destinations">
       {showDefault && <Button variant="outline" type="button" disabled={disabled} onClick={() => onChoose(null)}><ListOrdered size={21}/><span><strong>Queued next</strong><small>Starts when this bot is free</small></span></Button>}
@@ -62,7 +62,7 @@ export function QueueDestinationPicker({lists, disabled, onChoose, onClose, onMa
     </div>
     {!lists.length && !showDefault && !onSubmitNow && <p className="bots-queue-picker-note">No named lists yet. Cancel keeps these messages paused.</p>}
     {onManage && <Button variant="outline" type="button" className="bots-queue-manage" onClick={onManage}><Plus size={17}/>{lists.length ? 'Manage queue lists' : 'Create a queue list'}</Button>}
-    <Button variant="outline" type="button" className="bots-queue-manage" onClick={onClose}>Cancel</Button>
+    <Button variant="outline" type="button" className="bots-queue-manage" onClick={onClose}>{submitting ? 'Close' : 'Cancel'}</Button>
   </dialog>;
 }
 export function QueueLists({owner,bot,lists,defaultItems,online,refreshLists,refreshDefault,onEdit}: {

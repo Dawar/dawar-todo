@@ -18,11 +18,15 @@ export function useQueueActivity(scope: QueueActivityScope) {
 }
 /** A changed snapshot invalidates a read; one bounded reread contains its race. */
 export async function readQueueActivity(scope: QueueActivityScope, current: () => boolean) {
-  for (let attempt = 0; attempt < 2; attempt++) {
+  const assertCurrent = () => {
+    if (!client.online) throw Error("Connection lost. Nothing new was queued.");
     if (!current()) throw Error("The account, conversation or draft changed. Nothing new was queued.");
+  };
+  for (let attempt = 0; attempt < 2; attempt++) {
+    assertCurrent();
     const key = queueActivityKey(scope);
     const work = await client.rpc<BotAdmissionWork>("work.read", scope.botId, {}, undefined, {owner: scope.owner});
-    if (!current()) throw Error("The account, conversation or draft changed. Nothing new was queued.");
+    assertCurrent();
     if (key !== queueActivityKey(scope)) continue;
     const bot = client.snapshot?.bots.find(value => value.id === scope.botId);
     return {activity: queueDestinationWork(work, bot), key};
