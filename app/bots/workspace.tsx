@@ -56,6 +56,7 @@ import type { NativeEvent } from "./thread-state";
 import { BotConversation } from "./timeline";
 import { BotSidebarList } from "./sidebar-list";
 import { SidebarFilters } from "./sidebar-filters";
+import { useSharedReadPositions } from './read-position-sync';
 import { TaskRequestWorkspace } from "./task-request-ui";
 import { RequestCard } from "./request-card";
 import { MainStopButton, MainStopRecovery } from "./run-controls";
@@ -145,6 +146,7 @@ export function BotsWorkspace() {
   const [showCall, setShowCall] = useState(false), [callBotId, setCallBotId] = useState<string | null>(null);
   const [showTeams, setShowTeams] = useState(false), [teamFilter, setTeamFilter] = useState("all"), [teamSort, setTeamSort] = useState<"recent" | "team" | "name">("recent");
   const snapshot = client.snapshot;
+  useSharedReadPositions(owner, snapshot?.bots ?? [], snapshot?.capabilities?.portableAgents === 1);
   const teams = snapshot?.teams ?? [];
   const teamsSupported = snapshot?.capabilities?.teams === 1;
   const lanes = snapshot?.capabilities?.backgroundRunLanes === 1;

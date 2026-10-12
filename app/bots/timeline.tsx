@@ -177,7 +177,10 @@ function BotConversationFeed({ owner, bot, online, children, onOpenCall, onReply
       const element = scroll.current;
       if (!element || element.scrollHeight - element.scrollTop - element.clientHeight > 120) return;
       markLocallyRead(owner, { id: bot.id, threadId: bot.threadId, updatedAt: bot.updatedAt });
-      void botsClient.rpc('bots.read', bot.id, { threadId: bot.threadId, updatedAt: bot.updatedAt }, undefined, { owner }).catch(() => {});
+      // Portable owner read state persists through the application API. The
+      // older installed native router has no bots.read capability.
+      if (botsClient.snapshot?.capabilities?.portableAgents !== 1)
+        void botsClient.rpc('bots.read', bot.id, { threadId: bot.threadId, updatedAt: bot.updatedAt }, undefined, { owner }).catch(() => {});
     };
     const timer = setTimeout(mark, 800);
     document.addEventListener('visibilitychange', mark);

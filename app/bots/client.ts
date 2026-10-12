@@ -3,6 +3,7 @@ import { readBotHistory, queueBotHistory, type CachedBotHistory } from "./histor
 import { cloudStatus, cloudUpload, cloudDownload, cloudRequest, fileSha256, CloudStorageError } from "./cloud-storage";
 import { botFailureOutcome } from "../../lib/bots-response.ts";
 import { validRunState } from "./run-context";
+import { newerReadAt } from '../../lib/bot-read-position';
 import type { BotOperations, BotSnapshot, WorkState } from "./single-thread-contract";
 import type {
   BotEvent,
@@ -95,7 +96,8 @@ function applySnapshotEvent(snapshot: BotSnapshot, event: BotEvent, key?: string
     if (deleted.deletedAt) return { ...snapshot, bots: snapshot.bots.filter(bot => bot.id !== deleted.id) };
     const incoming = event.data as BotSnapshot["bots"][number];
     const current=snapshot.bots.find(value=>value.id===incoming.id);
-    const bot = current&&snapshot.capabilities?.teams===1&&snapshot.capabilities?.portableAgents===1 ? {...incoming,teamId:current.teamId,teamOrder:current.teamOrder} : incoming;
+    const read = preserveReadPosition(incoming, current);
+    const bot = current&&snapshot.capabilities?.teams===1&&snapshot.capabilities?.portableAgents===1 ? {...read,teamId:current.teamId,teamOrder:current.teamOrder} : read;
     return { ...snapshot, bots: [...snapshot.bots.filter(item => item.id !== bot.id), bot]
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)) };
   }
@@ -106,6 +108,10 @@ function applySnapshotEvent(snapshot: BotSnapshot, event: BotEvent, key?: string
   if (event.type === "request.resolved" || event.type === "run.request.resolved")
     return { ...snapshot, pending: snapshot.pending.filter(item => item.key !== (event.data as { key: string }).key) };
   return snapshot;
+}
+function preserveReadPosition(incoming: BotSnapshot['bots'][number], current?: BotSnapshot['bots'][number]) {
+  if (!current || current.id !== incoming.id || !incoming.threadId || current.threadId !== incoming.threadId) return incoming;
+  return { ...incoming, lastReadAt: newerReadAt(incoming.lastReadAt, current.lastReadAt) };
 }
 export class BotsClient {
   get replyAvailable() { return this.snapshot?.capabilities?.messageReplies === 1; }
@@ -712,7 +718,8 @@ export class BotsClient {
       if (event.seq <= snapshot.cursor) this.snapshotPatches.delete(key);
       else merged = applySnapshotEvent(merged, event, key);
     }
-    this.snapshot = { ...merged, cursor: Math.max(snapshot.cursor, this.latestSnapshotEvent) };
+    const prior = new Map(this.snapshot?.bots.map(bot => [bot.id, bot]));
+    this.snapshot = { ...merged, bots: merged.bots.map(bot => preserveReadPosition(bot, prior.get(bot.id))), cursor: Math.max(snapshot.cursor, this.latestSnapshotEvent) };
     this.snapshotGeneration++;
     this.online = snapshot.ready;
     if (this.online)
