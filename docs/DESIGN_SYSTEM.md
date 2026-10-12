@@ -191,6 +191,11 @@ errors or imply an unread queue is empty. The request generation starts before
 all dependent reads, and late results from a previous selection are ignored.
 After an action settles, refresh the currently selected list. A delayed refresh
 error must not replace feedback for a newer action or a different selection.
+Foreground queues and list management share one action notice: neutral progress,
+one confirmation warning with its original Retry, or a definitive error. Never
+stack a transport error and a second warning for the same pending action.
+Message expansion follows actual rendered clipping, including narrow layouts
+and short multiline messages; character count alone cannot decide visibility.
 
 List editors retain values after rejection, show neutral Saving feedback while
 an original action is pending, and associate each invalid schedule field with

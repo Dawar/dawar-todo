@@ -13,10 +13,25 @@ import './prompt-queue.css';
 const textOf = (item:BotQueuedSubmission)=>item.input.flatMap(input=>input.type==='text'&&!input.text.startsWith('Attached file: ')?[input.text]:[]).join('\n')||'Attachments';
 const selectionKey = (item:BotQueuedSubmission)=>`${item.id}:${item.revision}`;
 function QueueText({text}:{text:string}) {
-  const [open,setOpen]=useState(false);
-  return <><p className={`bots-queue-text${open?' is-open':''}`}>{text}</p>{text.length>260&&<Button variant="ghost" className="bots-queue-text-toggle" type="button" onClick={()=>setOpen(!open)}>{open?'Show less':'Read message'}</Button>}</>;
+  const [open,setOpen]=useState(false), [clipped,setClipped]=useState(false);
+  const content=useRef<HTMLParagraphElement>(null);
+  useLayoutEffect(()=>{
+    const node=content.current;if(!node)return;
+    const measure=()=>setClipped(node.scrollHeight>node.clientHeight+1);
+    measure();
+    const observer=new ResizeObserver(measure);observer.observe(node);
+    return ()=>observer.disconnect();
+  },[text,open]);
+  return <><p ref={content} className={`bots-queue-text${open?' is-open':''}`}>{text}</p>{(open||clipped)&&<Button variant="ghost" className="bots-queue-text-toggle" type="button" aria-expanded={open} onClick={()=>setOpen(!open)}>{open?'Show less':'Read message'}</Button>}</>;
 }
 type QueueAction = ReturnType<typeof useQueueAction>;
+/** One notice per original action, shared by the foreground queue and list manager. */
+export function QueueActionNotice({action,online}:{action:QueueAction;online:boolean}) {
+  if(action.pending&&action.busy)return <p className="bots-queue-explanation" role="status">{queueActionProgress(action.pending.method)}</p>;
+  if(action.pending)return <div className="bots-queue-action-note" role="alert"><p>{action.notSaved?'Could not save this change.':'Could not confirm this change.'}</p><Button variant="outline" type="button" disabled={!online} onClick={action.retry}>Retry</Button></div>;
+  if(!action.error)return null;
+  return <div className="bots-queue-action-note is-error" role="alert"><p>{action.error}</p>{action.blocked&&<Button variant="outline" type="button" onClick={action.recover}>Retry</Button>}</div>;
+}
 type PromptQueueProps = {
   owner:string;bot:Bot;items:BotQueuedSubmission[];online:boolean;canEdit:boolean;
   onEdit:(item:BotQueuedSubmission)=>void;refresh:()=>Promise<void>;lists?:BotQueueList[];supported?:boolean;
@@ -70,9 +85,7 @@ function QueueContent({ bot, items, online, canEdit, onEdit, refresh, lists=[], 
     </div></header>
     {!online&&<p className="bots-queue-explanation">Reconnect to change this queue.</p>}
     {!listId&&bot.queuePaused&&items.length>0&&<div className="bots-queue-paused"><span>{queueResumeBlocked(items)?'Review messages before resuming.':'Queue paused'}</span><Button variant="ghost" type="button" disabled={!online||locked||queueResumeBlocked(items)} onClick={()=>void action.run('queue.resume')}>Resume</Button></div>}
-    {showActionStatus&&action.pending&&action.busy&&<p className="bots-queue-explanation" role="status">{queueActionProgress(action.pending.method)}</p>}
-    {showActionStatus&&action.pending&&!action.busy&&<div className="bots-queue-action-note" role="alert"><p>{action.notSaved?'Could not save this change.':'Could not confirm this change.'}</p><Button variant="ghost" type="button" disabled={!online} onClick={action.retry}>Retry</Button></div>}
-    {showActionStatus&&action.error&&<div className="bots-queue-action-note is-error" role="alert"><p>{action.error}</p>{!action.pending&&action.blocked&&<Button variant="ghost" type="button" onClick={action.recover}>Retry</Button>}</div>}
+    {showActionStatus&&<QueueActionNotice action={action} online={online}/>}
     {selecting&&<div className="bots-queue-selection"><label><input type="checkbox" aria-label="Select all queued messages" checked={allSelected} disabled={locked||!online} onChange={()=>setChecked(allSelected?[]:selectable.map(selectionKey))}/><span>{selected.length} selected</span></label>{selected.length>0&&<div><Button variant="ghost" type="button" disabled={locked||!online||selected.length<2} onClick={()=>void action.run('queue.merge',{items:selection})}><Combine size={16}/>Merge</Button>{destinations.length>0&&<label className="bots-queue-move"><FolderInput size={16}/><NativeSelect aria-label="Move selected messages to queue list" value="" disabled={locked||!online} onChange={e=>moveTo(null,e.target.value)}><option value="" disabled>Move to…</option>{destinations.map(list=><option value={list.id} key={list.id}>{list.name}</option>)}</NativeSelect></label>}</div>}</div>}
     {rows.map((item,index)=>{
       const status=queueStatus(item,bot.queuePaused),mutable=queueEditable(item)&&!locked;

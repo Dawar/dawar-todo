@@ -7,8 +7,7 @@ import {  FolderOpen, ListOrdered, Pencil, Plus, Send, Trash2, X } from 'lucide-
 import type { Bot, BotQueueList, BotQueuedSubmission } from '../../lib/bots-types';
 import { botsClient as client } from './client';
 import { useQueueAction } from './use-queue-action';
-import { queueActionProgress } from './queue-action-store';
-import { PromptQueue } from './prompt-queue';
+import { PromptQueue, QueueActionNotice } from './prompt-queue';
 import { cronValidationError, nextCronOccurrence } from '../../lib/cron';
 import './queue-lists.css';
 
@@ -127,8 +126,7 @@ export function QueueLists({owner,bot,lists,defaultItems,online,refreshLists,ref
   const scheduleError=cronError || zoneError || (hasSchedule && !next ? 'This schedule has no upcoming occurrence. Choose another schedule.' : null);
   return <div className="bots-queue-lists">
     <header className="bots-lists-heading"><div><h3>Queue lists</h3></div><Button variant="outline" type="button" title="New queue list" aria-label="New queue list" disabled={locked} onClick={()=>setEditor(blank())}><Plus size={19}/>New list</Button></header>
-    {action.error && <div className="bots-lists-error" role="alert"><p>{action.error}</p>{!action.pending&&action.blocked&&<Button variant="outline" type="button" onClick={action.recover}>Retry</Button>}</div>}
-    {action.pending && <div className={action.busy?'bots-lists-pending':'bots-lists-error'} role="status">{action.busy?queueActionProgress(action.pending.method):action.notSaved?'This change could not be saved.':'This change needs confirmation.'}{!action.busy&&<Button variant="outline" type="button" disabled={!online} onClick={action.retry}>Retry</Button>}</div>}
+    <QueueActionNotice action={action} online={online}/>
     {error && <p className="bots-lists-error" role="alert">{error}</p>}
     {editor && <form className="bots-list-editor" aria-busy={action.busy} onSubmit={async event=>{
       event.preventDefault(); if(locked || scheduleError || !editor.name.trim())return;
