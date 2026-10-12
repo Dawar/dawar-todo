@@ -310,3 +310,9 @@ Invalid stored schedule dates/timezones display a fallback instead of breaking
 the queue screen.
 
 Queue lists and their embedded messages share one action controller and one status region. A successful local-receipt recovery clears the entire view; nested panels must not retain a second stale warning or accept a competing action.
+
+Queue drag and keyboard reordering use the same allowed moves. A queue revision, connection, list, or action-state change cancels an in-progress drag. An older completed request cannot clear a newer pending order; owner/bot/list changes start with fresh local selection and gesture state.
+
+## Current review scope
+
+Dawar excluded Discussions and bot-to-bot messaging UI from this design goal on October 12, 2026, for a separate rebuild. Collaboration rooms, peer-message history, discussion controls and their dedicated UI controllers are not completion requirements. Prior evidence is retained as excluded reference material. Foreground human-to-bot chat, sending, bursts, queues, bot navigation, settings, Goals and PWA sync remain in scope. Shared files are reviewed for those retained surfaces only.

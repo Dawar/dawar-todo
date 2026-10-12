@@ -1,10 +1,10 @@
 "use client";
 import { Button } from "@/components/ui/button";
 import { NativeSelect } from "@/components/ui/native-select";
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ArrowDown, ArrowUp, Combine, FolderInput, FolderOpen, GripVertical, Pencil, RefreshCw, Send, Trash2 } from 'lucide-react';
 import type { Bot, BotQueueList, BotQueuedSubmission } from '../../lib/bots-types';
-import { canMoveQueued, queueEditable, queueResumeBlocked, queueStatus } from './queue-state';
+import { canMoveQueued, queueEditable, queueResumeBlocked, queueStatus, reorderedQueueIds } from './queue-state';
 import { useQueueAction } from './use-queue-action';
 import { queueActionProgress } from './queue-action-store';
 import { botsClient as client } from './client';
@@ -24,7 +24,8 @@ type PromptQueueProps = {
 };
 /** A list and its embedded messages share one original action/receipt controller. */
 export function PromptQueue(props: PromptQueueProps & { action?: QueueAction }) {
-  return props.action ? <QueueContent {...props} action={props.action} showActionStatus={false}/> : <OwnedQueue {...props}/>;
+  const scope=JSON.stringify([props.owner,props.bot.id,props.listId??null]);
+  return props.action ? <QueueContent key={scope} {...props} action={props.action} showActionStatus={false}/> : <OwnedQueue key={scope} {...props}/>;
 }
 function OwnedQueue(props: PromptQueueProps) {
   const action=useQueueAction(props.owner,props.bot.id,props.refresh);
@@ -32,30 +33,31 @@ function OwnedQueue(props: PromptQueueProps) {
 }
 function QueueContent({ bot, items, online, canEdit, onEdit, refresh, lists=[], supported=false, listId=null, title='Queued next', onOpenLists, embedded=false, relativeMoves=false, action, showActionStatus }: PromptQueueProps & { action: QueueAction; showActionStatus: boolean }) {
   const [checked,setChecked]=useState<string[]>([]), [selecting,setSelecting]=useState(false);
-  const [optimistic,setOptimistic]=useState<string[]|null>(null), [drop,setDrop]=useState<string|null|undefined>(undefined), [dragId,setDragId]=useState<string|null>(null);
+  const [optimistic,setOptimistic]=useState<{ids:string[]}|null>(null), [drop,setDrop]=useState<string|null|undefined>(undefined), [dragId,setDragId]=useState<string|null>(null);
   const dragging=useRef<{id:string;beforeId:string|null;pointerId:number}|null>(null), panel=useRef<HTMLElement>(null);
   const stopDrag=useRef<()=>void>(()=>{});
   useEffect(()=>()=>stopDrag.current(),[]);
   const locked=action.busy||action.blocked;
-  const rows=optimistic ? [...items].sort((a,b)=>optimistic.indexOf(a.id)-optimistic.indexOf(b.id)) : items;
+  const dragContext=JSON.stringify([bot.id,listId,online,locked,items.map(item=>[item.id,item.revision,item.state,item.waitReason])]);
+  // A changed queue/connection invalidates a gesture before another input can finish it.
+  useLayoutEffect(()=>{stopDrag.current();},[dragContext]);
+  const rows=optimistic ? [...items].sort((a,b)=>optimistic.ids.indexOf(a.id)-optimistic.ids.indexOf(b.id)) : items;
   const selectable=items.filter(item=>supported&&item.revision!==undefined&&queueEditable(item));
   const selected=selectable.filter(item=>checked.includes(selectionKey(item))), allSelected=selectable.length>0&&selected.length===selectable.length;
   const selection=selected.map(item=>({id:item.id,revision:item.revision!}));
   const reorder=async(id:string,beforeId:string|null)=>{
     if(locked||!online||id===beforeId)return;
-    const item=items.find(item=>item.id===id);
-    if(!item||!queueEditable(item))return;
-    const ordered=items.filter(item=>item.id!==id), index=beforeId===null?ordered.length:ordered.findIndex(item=>item.id===beforeId);
-    if(index<0)return; ordered.splice(index,0,item);
-    const ids=ordered.map(item=>item.id);
-    if(ids.every((id,index)=>id===items[index].id))return;
-    setOptimistic(ids);
+    const ids=reorderedQueueIds(rows,id,beforeId);
+    if(!ids)return;
+    const item=items.find(item=>item.id===id)!;
+    const intent={ids};
+    setOptimistic(intent);
     try { await action.run('queue.reorder',{...(relativeMoves&&item.revision!==undefined?{id,beforeId,expectedRevision:item.revision}:{ids}),...(listId?{listId}:{})}); }
-    finally {setOptimistic(null);}
+    finally {setOptimistic(current=>current===intent?null:current);}
   };
   const move=(index:number,direction:number)=>{
-    if(!canMoveQueued(items,index,direction))return;
-    void reorder(items[index].id,direction<0?items[index-1].id:items[index+2]?.id??null);
+    if(!canMoveQueued(rows,index,direction))return;
+    void reorder(rows[index].id,direction<0?rows[index-1].id:rows[index+2]?.id??null);
   };
   const moveTo=(item:BotQueuedSubmission|null,target:string)=>void action.run('queue.move',{items:item?[{id:item.id,revision:item.revision}]:selection,listId:target==='default'?null:target});
   const destinations=[...(!listId?[]:[{id:'default',name:'Queued next'}]),...lists.filter(list=>list.id!==listId)];
@@ -74,7 +76,7 @@ function QueueContent({ bot, items, online, canEdit, onEdit, refresh, lists=[], 
     {selecting&&<div className="bots-queue-selection"><label><input type="checkbox" aria-label="Select all queued messages" checked={allSelected} disabled={locked||!online} onChange={()=>setChecked(allSelected?[]:selectable.map(selectionKey))}/><span>{selected.length} selected</span></label>{selected.length>0&&<div><Button variant="ghost" type="button" disabled={locked||!online||selected.length<2} onClick={()=>void action.run('queue.merge',{items:selection})}><Combine size={16}/>Merge</Button>{destinations.length>0&&<label className="bots-queue-move"><FolderInput size={16}/><NativeSelect aria-label="Move selected messages to queue list" value="" disabled={locked||!online} onChange={e=>moveTo(null,e.target.value)}><option value="" disabled>Move to…</option>{destinations.map(list=><option value={list.id} key={list.id}>{list.name}</option>)}</NativeSelect></label>}</div>}</div>}
     {rows.map((item,index)=>{
       const status=queueStatus(item,bot.queuePaused),mutable=queueEditable(item)&&!locked;
-      const canDrag=online&&mutable&&items.every(queueEditable);
+      const canDrag=online&&mutable&&(canMoveQueued(rows,index,-1)||canMoveQueued(rows,index,1));
       return <article data-queue-id={item.id} className={`bots-prompt-queue-item${drop===item.id?' is-drop-target':''}${dragId===item.id?' is-dragging':''}`} key={item.id}>
         <div className="bots-queue-index">
           <Button variant="ghost" type="button" className="bots-queue-drag" aria-label={`Drag message ${index+1} to reorder`} title="Drag to reorder" disabled={!canDrag}
@@ -87,8 +89,8 @@ function QueueContent({ bot, items, online, canEdit, onEdit, refresh, lists=[], 
                 const drag=dragging.current;if(!drag||drag.pointerId!==event.pointerId)return;
                 const row=document.elementFromPoint(event.clientX,event.clientY)?.closest<HTMLElement>('[data-queue-id]');
                 if(!row||!panel.current?.contains(row))return;
-                const rowId=row.dataset.queueId!,at=items.findIndex(item=>item.id===rowId);
-                drag.beforeId=event.clientY>row.getBoundingClientRect().top+row.offsetHeight/2?items[at+1]?.id??null:rowId;
+                const rowId=row.dataset.queueId!,at=rows.findIndex(item=>item.id===rowId);
+                drag.beforeId=event.clientY>row.getBoundingClientRect().top+row.offsetHeight/2?rows[at+1]?.id??null:rowId;
                 setDrop(drag.beforeId);
                 const box=panel.current.getBoundingClientRect();if(event.clientY<box.top+40)panel.current.scrollTop-=12;else if(event.clientY>box.bottom-40)panel.current.scrollTop+=12;
               };
@@ -101,7 +103,7 @@ function QueueContent({ bot, items, online, canEdit, onEdit, refresh, lists=[], 
               const cancel=()=>cleanup();stopDrag.current=cleanup;
               document.addEventListener('pointermove',move);document.addEventListener('pointerup',finish);document.addEventListener('pointercancel',cancel);window.addEventListener('blur',cancel);
             }}><GripVertical size={18}/></Button>
-          {selecting?<input type="checkbox" aria-label={`Select queued message ${index+1}`} checked={checked.includes(selectionKey(item))} disabled={!mutable||!online} onChange={e=>setChecked(values=>e.target.checked?[...values,selectionKey(item)]:values.filter(value=>value!==selectionKey(item)))}/>:<span>{index+1}</span>}
+          {selecting?<input type="checkbox" aria-label={`Select queued message ${index+1}`} checked={checked.includes(selectionKey(item))} disabled={!mutable||!online||!supported||item.revision===undefined} onChange={e=>setChecked(values=>e.target.checked?[...values,selectionKey(item)]:values.filter(value=>value!==selectionKey(item)))}/>:<span>{index+1}</span>}
         </div>
         <div className="bots-queue-content"><QueueText text={textOf(item)}/>{status.attention&&<p className="bots-queue-status needs-attention"><strong>{status.label}</strong><span>{status.description}</span></p>}
           {item.configuration && <p className="bots-queue-status needs-attention"><strong>Requested settings · not dispatched</strong><span>{item.configuration.requested.model} · {item.configuration.requested.effort ?? "Unknown effort"} · {item.configuration.requested.mode} · {item.configuration.reason}</span></p>}
@@ -110,8 +112,8 @@ function QueueContent({ bot, items, online, canEdit, onEdit, refresh, lists=[], 
           <div className="bots-queue-actions">
             <Button variant="ghost" type="button" title={client.snapshot?.capabilities?.queueSendNow!==1?'Available after the bot service update':!queueEditable(item)||item.revision===undefined?'Delivery is already in progress; refresh to check it':'Send this message now; adds to the current turn if the bot is working'} disabled={!online||!mutable||bot.archived||client.snapshot?.capabilities?.queueSendNow!==1||item.revision===undefined||item.configuration?.confirmation==='pending-unsupported'} onClick={()=>void action.run('queue.send',{id:item.id,expectedRevision:item.revision})}><Send size={15}/>Send now</Button>
             <Button variant="ghost" type="button" disabled={!online||!canEdit||!mutable} onClick={()=>onEdit(item)}><Pencil size={15}/>Edit</Button>
-            <Button variant="ghost" type="button" aria-label={`Move message ${index+1} up`} title="Move up" disabled={!online||locked||!canMoveQueued(items,index,-1)} onClick={()=>move(index,-1)}><ArrowUp size={16}/></Button>
-            <Button variant="ghost" type="button" aria-label={`Move message ${index+1} down`} title="Move down" disabled={!online||locked||!canMoveQueued(items,index,1)} onClick={()=>move(index,1)}><ArrowDown size={16}/></Button>
+            <Button variant="ghost" type="button" aria-label={`Move message ${index+1} up`} title="Move up" disabled={!online||locked||!canMoveQueued(rows,index,-1)} onClick={()=>move(index,-1)}><ArrowUp size={16}/></Button>
+            <Button variant="ghost" type="button" aria-label={`Move message ${index+1} down`} title="Move down" disabled={!online||locked||!canMoveQueued(rows,index,1)} onClick={()=>move(index,1)}><ArrowDown size={16}/></Button>
             {supported&&item.revision!==undefined&&destinations.length>0&&<label className="bots-queue-move"><FolderInput size={15}/><NativeSelect aria-label={`Move message ${index+1} to queue list`} value="" disabled={!online||!mutable} onChange={e=>moveTo(item,e.target.value)}><option value="" disabled>Move to…</option>{destinations.map(list=><option key={list.id} value={list.id}>{list.name}</option>)}</NativeSelect></label>}
             <Button variant="ghost" type="button" className="is-destructive" disabled={!online||!mutable} onClick={()=>void action.run('queue.delete',{id:item.id,...(item.revision===undefined?{}:{expectedRevision:item.revision})})}><Trash2 size={15}/>Remove</Button>
           </div>

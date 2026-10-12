@@ -12,6 +12,18 @@ export function canMoveQueued(items: BotQueuedSubmission[], index: number, direc
   // items. Old native-only services retain their existing reorder behavior.
   return !items.some(stagedPrompt) || stagedPrompt(items[index]) && stagedPrompt(items[other]);
 }
+/** Drag and keyboard moves must preserve the same native/staged queue boundary. */
+export function reorderedQueueIds(items: BotQueuedSubmission[], id: string, beforeId: string | null): string[] | null {
+  const from=items.findIndex(item=>item.id===id);
+  if(from<0 || id===beforeId || items.some(item=>!queueEditable(item)))return null;
+  const ordered=items.filter(item=>item.id!==id);
+  const to=beforeId===null?ordered.length:ordered.findIndex(item=>item.id===beforeId);
+  if(to<0 || to===from)return null;
+  const direction=to>from?1:-1;
+  for(let at=from;at!==to;at+=direction)if(!canMoveQueued(items,at,direction))return null;
+  ordered.splice(to,0,items[from]);
+  return ordered.map(item=>item.id);
+}
 export function queueStatus(item: BotQueuedSubmission, paused = false) {
   if (item.configuration?.confirmation === "pending-unsupported") return {label: "Intended settings unsupported", description: item.configuration.reason, attention: true};
   if (item.state === 'dispatching') return { label: 'Confirming delivery', description: 'Waiting for confirmation. This message cannot be changed while it may be starting.', attention: true };
