@@ -86,7 +86,7 @@ export class ComposerService {
       composer.subscribe(this.notify);
       this.controllers.set(key, composer);
       if (!portable) this.syncs.set(key, new ComposerDraftSync(composer, this.store, () =>
-        client.owner === owner && client.storageAvailable && (typeof navigator === 'undefined' || navigator.onLine !== false)));
+        client.owner === owner && typeof fetch !== 'undefined' && (typeof navigator === 'undefined' || navigator.onLine !== false)));
     }
     return composer;
   }
