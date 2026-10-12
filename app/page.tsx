@@ -4244,7 +4244,7 @@ export default function Home() {
         />
       )}
 
-      {viewerAttachment && viewerIndex !== null && <TaskImageViewer attachment={viewerAttachment} index={viewerIndex} count={imageAttachments.length} copyState={viewerCopyState} onClose={() => setViewerIndex(null)} onCopy={() => void copyViewerImage()} onDelete={() => void deleteDetailAttachment(viewerAttachment)} onNavigate={delta => setViewerIndex(current => current === null ? null : (current + delta + imageAttachments.length) % imageAttachments.length)} />}
+      {viewerAttachment && viewerIndex !== null && <TaskImageViewer attachment={viewerAttachment} index={viewerIndex} count={imageAttachments.length} copyState={viewerCopyState} disabled={syncing} onClose={() => setViewerIndex(null)} onCopy={() => void copyViewerImage()} onDelete={() => void deleteDetailAttachment(viewerAttachment)} onNavigate={delta => setViewerIndex(current => current === null ? null : (current + delta + imageAttachments.length) % imageAttachments.length)} />}
 
       {notice && <TaskNotice notice={notice} bulkActionsVisible={selectedIds.length > 0} undoing={undoing} adjusting={adjustingSnooze !== null} paused={Boolean(customSnoozeDialog)} presets={quickSnoozePresets} onUndo={() => requestNoticeUndo(notice)} onDismiss={() => setNotice(current => current === notice ? null : current)} onSnooze={preset => void adjustSnooze(notice.snoozeIds as number[], preset, notice.operationId)} onCustomSnooze={() => openCustomSnooze(notice.snoozeIds as number[], notice.operationId)} />}
 

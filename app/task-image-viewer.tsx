@@ -7,9 +7,10 @@ import { Button } from "@/components/ui/button";
 import { ActionIcon } from "./action-icon";
 
 type ViewerImage = {fileName: string; displayUrl: string; originalUrl: string};
-export function TaskImageViewer({ attachment, index, count, copyState, onClose, onCopy, onDelete, onNavigate }: {
+export function TaskImageViewer({ attachment, index, count, copyState, disabled = false, onClose, onCopy, onDelete, onNavigate }: {
   attachment: ViewerImage; index: number; count: number;
   copyState: "idle" | "copying" | "copied" | "error";
+  disabled?: boolean;
   onClose: () => void; onCopy: () => void; onDelete: () => void; onNavigate: (delta: number) => void;
 }) {
   const viewerGesture = useRef<number | null>(null);
@@ -35,7 +36,7 @@ export function TaskImageViewer({ attachment, index, count, copyState, onClose, 
       <div className="flex items-center gap-1">
         <Button type="button" variant="ghost" size="icon" onClick={onCopy} disabled={copyState === "copying"} aria-label="Copy image" title="Copy image"><ActionIcon name="copy" /></Button>
         <Button asChild variant="ghost" size="icon"><a href={attachment.originalUrl} download={attachment.fileName} aria-label="Download original" title="Download original"><ActionIcon name="download" /></a></Button>
-        <Button type="button" variant="ghost" size="icon" onClick={onDelete} className="text-destructive hover:text-destructive" aria-label="Delete image" title="Delete image"><ActionIcon name="delete" /></Button>
+        <Button type="button" variant="ghost" size="icon" onClick={onDelete} disabled={disabled} className="text-destructive hover:text-destructive" aria-label="Delete image" title="Delete image"><ActionIcon name="delete" /></Button>
       </div>
       {count > 1 && <div className="flex items-center gap-1" aria-label="Image navigation">
         <Button type="button" variant="outline" size="icon" onClick={() => onNavigate(-1)} aria-label="Previous image"><ActionIcon name="previous" /></Button>

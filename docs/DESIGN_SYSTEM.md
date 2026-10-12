@@ -229,6 +229,10 @@ and failed states. Only eligible failures offer Retry; existing ownership, byte
 retention and same-operation recovery remain in the controller. Private input
 does not enter ordinary file/history flows, and model-read consent stays explicit.
 
+The task image viewer uses the same disabled deletion state as its gallery while
+a task operation is pending. Read-only navigation, original downloads and closing
+the viewer remain available. Missing-image and clipboard failures stay distinct.
+
 Voice memo presentation uses shared controls without changing MediaRecorder
 ownership or attachment limits. A recording/review fixture is separate from
 genuine microphone, playback, upload and device acceptance.
