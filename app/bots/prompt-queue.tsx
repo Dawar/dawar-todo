@@ -16,12 +16,22 @@ function QueueText({text}:{text:string}) {
   const [open,setOpen]=useState(false);
   return <><p className={`bots-queue-text${open?' is-open':''}`}>{text}</p>{text.length>260&&<Button variant="ghost" className="bots-queue-text-toggle" type="button" onClick={()=>setOpen(!open)}>{open?'Show less':'Read message'}</Button>}</>;
 }
-export function PromptQueue({ owner, bot, items, online, canEdit, onEdit, refresh, lists=[], supported=false, listId=null, title='Queued next', onOpenLists, embedded=false, relativeMoves=false }: {
+type QueueAction = ReturnType<typeof useQueueAction>;
+type PromptQueueProps = {
   owner:string;bot:Bot;items:BotQueuedSubmission[];online:boolean;canEdit:boolean;
   onEdit:(item:BotQueuedSubmission)=>void;refresh:()=>Promise<void>;lists?:BotQueueList[];supported?:boolean;
   listId?:string|null;title?:string;onOpenLists?:()=>void;embedded?:boolean;relativeMoves?:boolean;
-}) {
-  const action=useQueueAction(owner,bot.id,refresh), [checked,setChecked]=useState<string[]>([]), [selecting,setSelecting]=useState(false);
+};
+/** A list and its embedded messages share one original action/receipt controller. */
+export function PromptQueue(props: PromptQueueProps & { action?: QueueAction }) {
+  return props.action ? <QueueContent {...props} action={props.action} showActionStatus={false}/> : <OwnedQueue {...props}/>;
+}
+function OwnedQueue(props: PromptQueueProps) {
+  const action=useQueueAction(props.owner,props.bot.id,props.refresh);
+  return <QueueContent {...props} action={action} showActionStatus/>;
+}
+function QueueContent({ bot, items, online, canEdit, onEdit, refresh, lists=[], supported=false, listId=null, title='Queued next', onOpenLists, embedded=false, relativeMoves=false, action, showActionStatus }: PromptQueueProps & { action: QueueAction; showActionStatus: boolean }) {
+  const [checked,setChecked]=useState<string[]>([]), [selecting,setSelecting]=useState(false);
   const [optimistic,setOptimistic]=useState<string[]|null>(null), [drop,setDrop]=useState<string|null|undefined>(undefined), [dragId,setDragId]=useState<string|null>(null);
   const dragging=useRef<{id:string;beforeId:string|null;pointerId:number}|null>(null), panel=useRef<HTMLElement>(null);
   const stopDrag=useRef<()=>void>(()=>{});
@@ -49,7 +59,7 @@ export function PromptQueue({ owner, bot, items, online, canEdit, onEdit, refres
   };
   const moveTo=(item:BotQueuedSubmission|null,target:string)=>void action.run('queue.move',{items:item?[{id:item.id,revision:item.revision}]:selection,listId:target==='default'?null:target});
   const destinations=[...(!listId?[]:[{id:'default',name:'Queued next'}]),...lists.filter(list=>list.id!==listId)];
-  if(!items.length&&!action.pending&&!action.error)return null;
+  if(!items.length&&(!showActionStatus||!action.pending&&!action.error))return null;
   return <section ref={panel} className={`bots-prompt-queue bots-queue-panel${embedded?' is-embedded':''}`} aria-label="Queued messages" tabIndex={-1}>
     <header><strong>{title}<span>{items.length}</span></strong><div>
       {selectable.length>1&&<Button variant="ghost" type="button" className="bots-queue-select-toggle" onClick={()=>{setSelecting(!selecting);setChecked([]);}}>{selecting?'Done':'Select'}</Button>}
@@ -58,9 +68,9 @@ export function PromptQueue({ owner, bot, items, online, canEdit, onEdit, refres
     </div></header>
     {!online&&<p className="bots-queue-explanation">Reconnect to change this queue.</p>}
     {!listId&&bot.queuePaused&&items.length>0&&<div className="bots-queue-paused"><span>{queueResumeBlocked(items)?'Review messages before resuming.':'Queue paused'}</span><Button variant="ghost" type="button" disabled={!online||locked||queueResumeBlocked(items)} onClick={()=>void action.run('queue.resume')}>Resume</Button></div>}
-    {action.pending&&action.busy&&<p className="bots-queue-explanation" role="status">{queueActionProgress(action.pending.method)}</p>}
-    {action.pending&&!action.busy&&<div className="bots-queue-action-note" role="alert"><p>{action.notSaved?'Could not save this change.':'Could not confirm this change.'}</p><Button variant="ghost" type="button" disabled={!online} onClick={action.retry}>Retry</Button></div>}
-    {action.error&&<div className="bots-queue-action-note is-error" role="alert"><p>{action.error}</p>{!action.pending&&action.blocked&&<Button variant="ghost" type="button" onClick={action.recover}>Retry</Button>}</div>}
+    {showActionStatus&&action.pending&&action.busy&&<p className="bots-queue-explanation" role="status">{queueActionProgress(action.pending.method)}</p>}
+    {showActionStatus&&action.pending&&!action.busy&&<div className="bots-queue-action-note" role="alert"><p>{action.notSaved?'Could not save this change.':'Could not confirm this change.'}</p><Button variant="ghost" type="button" disabled={!online} onClick={action.retry}>Retry</Button></div>}
+    {showActionStatus&&action.error&&<div className="bots-queue-action-note is-error" role="alert"><p>{action.error}</p>{!action.pending&&action.blocked&&<Button variant="ghost" type="button" onClick={action.recover}>Retry</Button>}</div>}
     {selecting&&<div className="bots-queue-selection"><label><input type="checkbox" aria-label="Select all queued messages" checked={allSelected} disabled={locked||!online} onChange={()=>setChecked(allSelected?[]:selectable.map(selectionKey))}/><span>{selected.length} selected</span></label>{selected.length>0&&<div><Button variant="ghost" type="button" disabled={locked||!online||selected.length<2} onClick={()=>void action.run('queue.merge',{items:selection})}><Combine size={16}/>Merge</Button>{destinations.length>0&&<label className="bots-queue-move"><FolderInput size={16}/><NativeSelect aria-label="Move selected messages to queue list" value="" disabled={locked||!online} onChange={e=>moveTo(null,e.target.value)}><option value="" disabled>Move to…</option>{destinations.map(list=><option value={list.id} key={list.id}>{list.name}</option>)}</NativeSelect></label>}</div>}</div>}
     {rows.map((item,index)=>{
       const status=queueStatus(item,bot.queuePaused),mutable=queueEditable(item)&&!locked;

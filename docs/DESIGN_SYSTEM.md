@@ -308,3 +308,5 @@ list save/delete must only close the editor or change the selection it started
 from. A delayed follow-up read never overrides a newer draft or navigation.
 Invalid stored schedule dates/timezones display a fallback instead of breaking
 the queue screen.
+
+Queue lists and their embedded messages share one action controller and one status region. A successful local-receipt recovery clears the entire view; nested panels must not retain a second stale warning or accept a competing action.
