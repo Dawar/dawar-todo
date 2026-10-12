@@ -7,8 +7,7 @@ import { CodexManager } from '../bot-bridge/manager.mjs';
 import { NodeJournal } from './control-store.mjs';
 import { nodeKey, signature, fingerprint,id,boundedFrame,PROTOCOL_VERSION, RUNTIME_VERSION } from './protocol.mjs';
 import { AGENT_READS, AGENT_MUTATIONS } from './hub-rpc.mjs';
-import { HUB_TOOLS,NODE_LOGICAL_COMMANDS,ROOM_NATIVE_READS } from './control-protocol.mjs';
-import {AgentPeers} from './agent-peers.mjs';
+import { HUB_TOOLS,NODE_LOGICAL_COMMANDS } from './control-protocol.mjs';
 import {AgentTaskRequests} from './agent-task-requests.mjs';
 import {AgentOperator} from './agent-operator.mjs';
 import {OPERATOR_NODE_READS} from './operator-source.mjs';
@@ -17,7 +16,6 @@ import {settleAgentBurst} from './agent-bursts.mjs';
 import { queueResumeReceipt } from './agent-queue-resume.mjs';
 import { NodeStorageClient } from './agent-storage.mjs';
 import { artifactInput } from './node-storage-contract.mjs';
-import { AgentContextAdmission } from './context-admission.mjs';
 import { BotDesktops } from '../bot-bridge/desktops.mjs';
 import { SecureInputs } from '../bot-bridge/secure-input.mjs';
 import { AgentDesktopTransport, DESKTOP_READS, DESKTOP_MUTATIONS } from './desktop-transport.mjs';
@@ -25,8 +23,6 @@ import {AgentStartup} from './agent-startup.mjs';
 import {verifiedAgentRelease} from './runtime-release.mjs';
 import {readPrivate} from './private-file.mjs';
 import {AgentSecureTransport} from './secure-transport.mjs';
-import {AgentCollaboration} from './agent-collaboration.mjs';
-import {roomAnswerReceipt} from './room-answer.mjs';
 import {foregroundSource} from './foreground-source.mjs';
 import {validatePrimary} from './primary-source.mjs';
 import {centralAgentCapabilities} from './agent-capabilities.mjs';
@@ -43,21 +39,13 @@ export class AgentTransport {
     this.desktops=new AgentDesktopTransport({runtime,journal,currentSocket:()=>this.socket});
     this.secure=new AgentSecureTransport({runtime,journal,owner:enrollment.owner,currentSocket:()=>this.socket,ready:()=>this.startupReady&&this.runtime.ready});
     this.startup=new AgentStartup(runtime,journal);
-    const nativeGuard=runtime.codex.admissionGuard;
-    const contexts=new AgentContextAdmission(runtime,journal);
-    runtime.codex.admissionGuard=(method,params)=>{
-      nativeGuard?.(method,params);
-      contexts.guard(method,params);
-    };
-    this.collaboration=new AgentCollaboration(this);
-    this.peers=new AgentPeers(this);
     this.taskRequests=new AgentTaskRequests(this);
     this.operator=new AgentOperator(this);
     runtime.on('event',event=>{
       if(!event.botId)return;
       const c=journal.db.prepare('SELECT * FROM node_controls WHERE bot_id=?').get(event.botId);
       if(!c)return;
-      const native=event.type==='codex'?event.data:event.type==='collaboration.native'&&event.data?.type==='codex'?event.data.data:null;
+      const native=event.type==='codex'?event.data:null;
       if(native?.method==='turn/completed'){
         const p=native.params,turn=p?.turn;
         if(p?.threadId&&turn?.id&&['completed','failed','interrupted'].includes(turn.status)){
@@ -86,9 +74,7 @@ export class AgentTransport {
   artifactRequest(botId,action,input){
     return this.requestHub(botId,'artifact',{action,input:artifactInput(action,input)},['download','preview','taskQueueExport'].includes(action));
   }
-  roomState(command){return this.requestHub(command.bot_id,'room',{operationId:command.operation_id,fingerprint:command.fingerprint},true);}
-  roomTool(botId,frame,read){return this.requestHub(botId,'room-tool',frame,read);}
-  peerTool(botId,frame,read){return this.requestHub(botId,'peer-tool',frame,read);}
+  primaryState(command){return this.requestHub(command.bot_id,'primary-admission',{operationId:command.operation_id,fingerprint:command.fingerprint},true);}
   requestHub(botId,kind,payload,read){
     const c=this.journal.db.prepare('SELECT * FROM node_controls WHERE bot_id=?').get(botId),control=c&&this.journal.currentControl({bot_id:botId,epoch:c.epoch});
     if(!control||this.socket?.readyState!==1)throw Object.assign(Error('Hub controls are offline or outside this assigned scope.'),{outcome:'not-sent'});
@@ -108,13 +94,7 @@ export class AgentTransport {
     if(!['native-accepted','running'].includes(row.state))return;
     const receipt=row.receipt&&JSON.parse(row.receipt),p=receipt&&this.terminalCandidates.get(receipt.turnId);
     if(!p||p.threadId!==receipt.threadId)return;
-    let result=receipt.result;const command=JSON.parse(row.command);
-    if(command.payload&&JSON.parse(command.payload).method==='portable.roomDispatch'){
-      // Original room completion events have their own context generation;
-      // retain the latest proven local snapshot instead of pairing terminal
-      // status with the older running snapshot from turn/start's ACK.
-      try{result=this.collaboration.result(command);}catch{return;}
-    }
+    const result=receipt.result;
     this.journal.settle(row.operation_id,'terminal',{...receipt,result,nativeStatus:p.status});
     this.receipt(this.journal.db.prepare('SELECT * FROM node_commands WHERE operation_id=?').get(row.operation_id));
   }
@@ -142,22 +122,6 @@ export class AgentTransport {
           const op=this.runtime.store.operation(command.operation_id);
           if(row.state==='dispatching'&&!op){
             this.journal.settle(command.operation_id,'unknown',{operationId:command.operation_id,reason:'Restart interrupted command admission.'});
-            this.receipt(this.journal.db.prepare('SELECT * FROM node_commands WHERE operation_id=?').get(command.operation_id));return;
-          }
-          if(payload.method==='portable.roomRespond'){
-            let result;try{result=this.collaboration.recoverResponse(command);}catch{return;}
-            const current=this.journal.db.prepare('SELECT * FROM node_commands WHERE operation_id=?').get(command.operation_id);
-            if(current?.fingerprint!==row.fingerprint||!['dispatching','unknown'].includes(current.state))return;
-            this.journal.settle(command.operation_id,'terminal',roomAnswerReceipt(command,result));this.receipt(this.journal.db.prepare('SELECT * FROM node_commands WHERE operation_id=?').get(command.operation_id));return;
-          }
-          if(payload.method==='portable.roomDispatch'){
-            if(!op||op.botId!==bot.id||op.method!=='collaboration.dispatch'||op.portableFingerprint!==command.fingerprint)return;
-            let result;try{result=await this.collaboration.recover(command);}catch{return;}
-            const current=this.journal.db.prepare('SELECT * FROM node_commands WHERE operation_id=?').get(command.operation_id);
-            if(current?.fingerprint!==row.fingerprint||!['dispatching','unknown','native-accepted','running'].includes(current.state))return;
-            const status=result.nativeStatus,terminal=['completed','failed','interrupted'].includes(status);
-            const receipt={operationId:command.operation_id,threadId:result.threadId,turnId:result.turnId,result,evidence:result.evidence,...(terminal?{nativeStatus:status}:{})};
-            if(['dispatching','unknown'].includes(current.state)||terminal)this.journal.settle(command.operation_id,terminal?'terminal':'native-accepted',receipt);else return;
             this.receipt(this.journal.db.prepare('SELECT * FROM node_commands WHERE operation_id=?').get(command.operation_id));return;
           }
           if(!op||op.botId!==bot.id||!['turn.send','queue.send','queue.dispatch','schedule.dispatch','queue.resume'].includes(op.method))return;
@@ -233,16 +197,15 @@ export class AgentTransport {
             if(DESKTOP_READS.has(m.method)&&!this.runtime.desktops)throw Error('Linux desktops are not configured.');
             if(DESKTOP_READS.has(m.method)&&!this.journal.currentControl({bot_id:m.botId,epoch:m.epoch}))throw Error('Desktop controls are not synchronized.');
             if(m.method==='desktop.open'&&(!id(m.clientId)||!m.clientId.startsWith('browser:')))throw Error('A live authenticated parent browser is required.');
-            const roomRead=ROOM_NATIVE_READS.has(m.method)||m.method==='portable.roomQuestion'||m.method==='execution.config'&&m.params?.contextId;
-            const work=()=>roomRead?this.collaboration.readOwner(m.method,m.botId,m.params,m.roomScope):OPERATOR_NODE_READS.has(m.method)?this.operator.read(m.method,m.botId,m.params,m.epoch):this.runtime.handle({method:m.method,botId:m.botId,params:m.params,clientId:m.method==='desktop.open'?m.clientId:`hub:${this.enrollment.nodeId}`});
+            const work=()=>OPERATOR_NODE_READS.has(m.method)?this.operator.read(m.method,m.botId,m.params,m.epoch):this.runtime.handle({method:m.method,botId:m.botId,params:m.params,clientId:m.method==='desktop.open'?m.clientId:`hub:${this.enrollment.nodeId}`});
             const readResult=m.method==='desktop.open'?await this.runtime.maintenance.admit(work):await work();
             const result=m.method==='snapshot'?agentSnapshot(readResult,m.botId):readResult;
             const after=this.journal.currentControl({bot_id:m.botId,epoch:m.epoch});
             if(!after||this.socket!==ws)return;
-            const frame={type:'rpc-result',rpcId:m.rpcId,botId:m.botId,epoch:m.epoch,result,...(roomRead?{roomScope:m.roomScope}:{})};
+            const frame={type:'rpc-result',rpcId:m.rpcId,botId:m.botId,epoch:m.epoch,result};
             if(Buffer.byteLength(JSON.stringify(frame))>900*1024)throw Error('Read exceeds its bounded transport; use a smaller history page.');sendHere(frame);
           }catch(e){sendHere({type:'rpc-result',rpcId:m.rpcId,botId:m.botId,epoch:m.epoch,error:e.message});}})();
-        } else if(authentication && ['control-result','artifact-result','room-result','room-tool-result','peer-tool-result','task-request-result'].includes(m.type)){
+        } else if(authentication && ['control-result','artifact-result','primary-admission-result','task-request-result'].includes(m.type)){
           const pending=this.controlPending.get(m.requestId);if(!pending)return;
           const current=this.journal.currentControl({bot_id:pending.botId,epoch:pending.epoch});
           if(m.type!==`${pending.kind}-result`||pending.ws!==ws||m.botId!==pending.botId||m.epoch!==pending.epoch||!current)throw Error('Hub tool response scope changed.');
@@ -288,10 +251,9 @@ export class AgentTransport {
       const result=NODE_LOGICAL_COMMANDS.has(payload.method)?await admitLogicalCommand(this,command,payload):
         DESKTOP_MUTATIONS.has(payload.method)?await this.runtime.maintenance.admit(run):await run(), turnId=result?.turn?.id??result?.turnId;
       const status=result?.turn?.status??result?.nativeStatus,terminalStatus=['completed','failed','interrupted'].includes(status)?status:null;
-      const receipt=payload.method==='portable.roomRespond'?roomAnswerReceipt(command,result):payload.method==='portable.queueResume'?queueResumeReceipt(command,result):{operationId:command.operation_id,threadId:payload.method==='portable.roomDispatch'?result?.threadId:bot.threadId,...(turnId?{turnId}:{}),...(terminalStatus?{nativeStatus:terminalStatus}:{}),...(result?.evidence?{evidence:result.evidence}:{}),...(payload.operatorSource?{operatorInputCount:this.operator.inputCount(bot.id)}:{}),result};
-      this.journal.settle(command.operation_id,['portable.queueResume','portable.roomRespond'].includes(payload.method)?'terminal':turnId?(terminalStatus?'terminal':'native-accepted'):payload.method==='turn.send'||NODE_LOGICAL_COMMANDS.has(payload.method)?'unknown':'terminal',receipt);
+      const receipt=payload.method==='portable.queueResume'?queueResumeReceipt(command,result):{operationId:command.operation_id,threadId:bot.threadId,...(turnId?{turnId}:{}),...(terminalStatus?{nativeStatus:terminalStatus}:{}),...(result?.evidence?{evidence:result.evidence}:{}),...(payload.operatorSource?{operatorInputCount:this.operator.inputCount(bot.id)}:{}),result};
+      this.journal.settle(command.operation_id,payload.method==='portable.queueResume'?'terminal':turnId?(terminalStatus?'terminal':'native-accepted'):payload.method==='turn.send'||NODE_LOGICAL_COMMANDS.has(payload.method)?'unknown':'terminal',receipt);
     } catch(error){
-      if(error.deferred&&this.journal.db.prepare('SELECT state FROM node_commands WHERE operation_id=?').get(command.operation_id)?.state==='received'&&!(payload.method==='portable.roomRespond'&&this.runtime.store.operation(command.operation_id)))return;
       this.journal.settle(command.operation_id,error.outcome==='rejected'?'terminal':'unknown',{operationId:command.operation_id,outcome:error.outcome??'uncertain',error:error.message});
     }
     this.receipt(this.journal.db.prepare('SELECT * FROM node_commands WHERE operation_id=?').get(command.operation_id));

@@ -42,23 +42,22 @@ export class ExecutionConfiguration {
   read(bot, params = {}) {
     if (Object.keys(params).some(k=>!['contextId','turnId','cursor','limit'].includes(k))) throw Error('Unsupported configuration read input.');
     const { contextId, turnId, cursor, limit = 20 } = params;
-    const context = contextId ? this.runtime.collaboration.context(bot.id, contextId) : null;
-    // A prepared room context has no native thread yet. Do not present the
-    // foreground thread's settings/history as that context's evidence.
-    const threadId = context ? context.threadId : bot.threadId;
-    const activeTurnId = context ? context.activeTurnId : bot.activeTurnId;
-    const after = this.runtime.collaboration.cursor(cursor);
+    if(contextId)throw Error('Named auxiliary contexts are unavailable.');
+    const threadId = bot.threadId;
+    const activeTurnId = bot.activeTurnId;
+    if(cursor!=null&&(typeof cursor!=='string'||!/^\d{1,16}$/.test(cursor)||!Number.isSafeInteger(Number(cursor))))throw Error('Invalid configuration cursor.');
+    const after = cursor == null ? 0 : Number(cursor);
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 40) throw Error('Invalid configuration page size.');
     const rows = this.store.db.prepare(`SELECT rowid,json FROM records WHERE kind='executionConfig' AND bot_id=?
       AND json_extract(json,'$.threadId')=? AND rowid>? ORDER BY rowid LIMIT ?`).all(bot.id, threadId, after, limit + 1);
     const pending=this.store.uncertainOperations().filter(op=>op.botId===bot.id && op.method==='bots.update' && ['model','effort','serviceTier','mode'].some(k=>Object.hasOwn(op.params ?? {},k)));
-    return { version: 1, contextId: context?.id ?? `foreground:${bot.id}`, threadId,
+    return { version: 1, contextId: `foreground:${bot.id}`, threadId,
       active: activeTurnId ? this.turn(bot.id, threadId, activeTurnId) : null,
       selected: turnId ? this.turn(bot.id, threadId, turnId) : null,
       future: { ...(this.store.get('executionSettings', bot.id) ?? { revision: 0, confirmation: 'unknown' }),
-        requested: this.requested(bot, context ? 'default' : bot.mode ?? 'default'), executionMode: context ? 'collaboration' : 'foreground',
+        requested: this.requested(bot, bot.mode ?? 'default'), executionMode: 'foreground',
         ...(pending.length ? {confirmation:pending.some(op=>op.status==='dispatching')?'saving':'unconfirmed',pendingOperationIds:pending.map(op=>op.id)} : {}),
-        planIntent: context ? 'not-applicable' : bot.mode === 'plan' ? 'foreground-next-human-start' : 'default' },
+        planIntent: bot.mode === 'plan' ? 'foreground-next-human-start' : 'default' },
       history: rows.slice(0, limit).map(row => JSON.parse(row.json)),
       nextCursor: rows.length > limit ? String(rows[limit - 1].rowid) : null };
   }

@@ -44,9 +44,7 @@
 @media(max-width:350px) { .bots-details-panel, .bots-details-panel .bots-run-library-body { padding-inline: 16px; } .bots-details-panel.is-history { padding: 0; } .bots-details-heading { padding-left:16px; padding-right:56px; } .bots-details-nav { margin-inline: 8px; } }
 @media(hover:hover) { .bots-details-nav button:hover { color: var(--primary); background: var(--accent); } }
 
-.bots-details-panel.is-history{overflow:auto;overflow-anchor:none;padding:20px 24px}.bots-details-panel.is-history .bots-run-library{height:auto;overflow:visible}.bots-details-panel.is-history .bots-run-library-body{padding:0;overflow:visible}.bots-details-panel.is-history .bots-legacy-controls{margin:4px 0 20px}.bots-peer-date{font-size:13px;color:var(--muted-foreground);font-weight:500;margin:18px 0 8px}@media(max-width:350px){.bots-details-panel.is-history{padding:18px 16px}}
+.bots-details-panel.is-history{overflow:auto;overflow-anchor:none;padding:20px 24px}.bots-details-panel.is-history .bots-run-library{height:auto;overflow:visible}.bots-details-panel.is-history .bots-run-library-body{padding:0;overflow:visible}.bots-details-panel.is-history .bots-legacy-controls{margin:4px 0 20px}@media(max-width:350px){.bots-details-panel.is-history{padding:18px 16px}}
 
 .bots-details-nav>button { flex:1 0 58px; }
 .bots-details-nav>button>span { position:relative; }
-.bots-details-nav>button:has(.bots-discussion-badge) { flex-basis:75px; }
-.bots-discussion-badge { display:inline-block; margin-left:3px; min-width:14px; padding:0 3px; border-radius:8px; background:var(--accent); color:var(--accent-foreground); font-size:12px; line-height:18px; }

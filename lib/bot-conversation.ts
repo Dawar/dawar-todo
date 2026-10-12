@@ -4,16 +4,16 @@ import { conversationItem, projectHistoryItem, type HistoryEntry } from "./bot-h
 
 export type TurnAudience = { kind: "conversation" | "activity" | "mixed"; runId?: string; active?: boolean };
 export const scheduleInput = (item: ThreadItem) => item.type === "userMessage" && Boolean(item.clientId?.startsWith("schedule:"));
-export const peerInput = (item: ThreadItem) => item.type === "userMessage" && Boolean(item.clientId?.startsWith("peer:") || item.clientId?.startsWith("peer-exchange:"));
-export const humanInput = (item: ThreadItem) => item.type === "userMessage" && !scheduleInput(item) && !peerInput(item) && !item.clientId?.startsWith("secure-receipt:") && !item.clientId?.startsWith("manager-notice:");
+export const retiredServiceInput = (item: ThreadItem) => item.type === "userMessage" && Boolean(item.clientId?.startsWith("peer:") || item.clientId?.startsWith("peer-exchange:"));
+export const humanInput = (item: ThreadItem) => item.type === "userMessage" && !scheduleInput(item) && !retiredServiceInput(item) && !item.clientId?.startsWith("secure-receipt:") && !item.clientId?.startsWith("manager-notice:");
 
 /** Inspect a full native turn, not an arbitrary tail of its projected items.
  * Without item-level provenance a mixed turn keeps all surrounding replies. */
 export function turnAudience(items: ThreadItem[], knownRunId?: string, conversation = false): TurnAudience {
   const trigger = items.find(scheduleInput);
   const runId = trigger?.type === "userMessage" ? trigger.clientId!.slice(9) : knownRunId;
-  // Peer-triggered work belongs to this same conversation. Its native input is
-  // retained as a provenance fallback; canonical receipts replace it in the UI.
+  // Stored native replies remain in the durable conversation; retired service
+  // inputs are not presented as new human messages.
   if (!trigger && !knownRunId) return { kind: "conversation" };
   return { kind: items.some(humanInput) ? "mixed" : conversation ? "conversation" : "activity", ...(runId ? { runId } : {}) };
 }
@@ -30,7 +30,7 @@ export function reportedFinding(item: ThreadItem) {
 }
 
 export function projectConversationItem(turn: Pick<Turn, "id" | "startedAt" | "status"> & Partial<Pick<Turn, "completedAt" | "durationMs">>, item: ThreadItem, audience: TurnAudience): HistoryEntry | null {
-  if (peerInput(item)) return { ...projectHistoryItem(turn, item), peerAlias: item.type === "userMessage" ? item.clientId! : undefined, audience: "conversation" };
+  if (retiredServiceInput(item)) return null;
   if (item.type === "agentMessage" && !item.text.trim() && !item.questions?.length) return null;
   if (audience.kind === "activity") {
     if (item.type === "agentMessage" && item.questions?.length)

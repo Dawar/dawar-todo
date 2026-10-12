@@ -1,4 +1,5 @@
-import { Collaboration, COLLABORATION_TOOL, CONTEXT_DESKTOP_TOOL, COLLABORATION_POLICY } from './collaboration.mjs';
+import { assertRetainedResource } from './retained-resource.mjs';
+
 import { TaskRequestBridge, TASK_REQUEST_TOOL } from './task-requests.mjs';
 import { ExecutionConfiguration } from './execution-config.mjs';
 import { RuntimeMaintenance } from './runtime-maintenance.mjs';
@@ -17,7 +18,6 @@ import { DOWNLOAD_ATTACHMENT_TOOL, localFileDigest } from "./storage.mjs";
 import { initialPreferences, preferencePatch } from "./bot-preferences.mjs";
 import { CODEX_VERSION } from "./codex-version.mjs";
 import { MessageBursts } from "./message-bursts.mjs";
-import { PeerInbox, PEER_TOOL } from "./peer-inbox.mjs";
 import { acceptSingleThreadOperation } from "./single-thread-operations.mjs";
 import { PrimaryExecution, DIRECT_INSTRUCTIONS, WORK_TOOL } from "./primary-execution.mjs";
 import { AnswerExecutions } from "./answer-execution.mjs";
@@ -93,8 +93,8 @@ const usageMetric = (groups, field) => {
     reportedGroups: values.length };
 };
 const READ_METHODS = new Set([
-  "secure.list",
-  "work.read", "inbox.list", "goals.read", "bursts.read", "bursts.typing", "peers.directory", "peers.read", "peers.list", "peers.root", "peers.status", "peers.feed", "peers.exchange", "peers.held",
+  "secure.list", "execution.config",
+  "work.read", "inbox.list", "goals.read", "bursts.read", "bursts.typing",
   "snapshot",
   "history",
   "history.page",
@@ -143,14 +143,12 @@ const schema = (properties, required = []) => ({
 const str = { type: "string" };
 export const dynamicTools = [
   { type: 'function', ...TASK_REQUEST_TOOL },
-  { type: "function", ...COLLABORATION_TOOL },
   { type: 'function', ...BOT_ADMIN_TOOL },
   { type: 'function', ...MEMORY_TOOL },
   ...SECURE_TOOLS.map(tool => ({type:"function",...tool})),
   { type: "function", ...TEAM_TOOL },
   { type: "function", ...QUEUE_TOOL },
   { type: "function", ...WORK_TOOL },
-  { type: "function", ...PEER_TOOL },
   { type: "function", ...RUN_MESSAGE_TOOL },
   {
     type: "function",
@@ -219,14 +217,12 @@ export class BotRuntime extends EventEmitter {
     this.historyReads = new HistoryReads(this);
     this.primary = new PrimaryExecution(this);
     this.operator = new OperatorCalls(this);
-    this.peers = new PeerInbox(this);
     this.bursts = new MessageBursts(this);
     this.plans = new PlanLifecycle(this);
     this.answers = new AnswerExecutions(this, validateResponse);
     this.taskRequests = new TaskRequestBridge(this);
     this.runs = new BackgroundRuns(this, dynamicTools, validateResponse, INTERACTIONS);
     this.executionConfig = new ExecutionConfiguration(this);
-    this.collaboration = new Collaboration(this, [{ type: "function", ...CONTEXT_DESKTOP_TOOL }, ...dynamicTools.filter(t => [COLLABORATION_TOOL.name, "bots_publish_artifact", "bots_download_attachment"].includes(t.name))], validateResponse, INTERACTIONS);
     this.scheduleDecisions = new ScheduleDecisions(this);
     this.memoryMaintenance = new BotMemoryMaintenance(this);
     this.locks = new Map();
@@ -310,7 +306,6 @@ export class BotRuntime extends EventEmitter {
     this.secure ??= new SecureInputs(this);
     await mkdir(this.root, { recursive: true, mode: 0o700 });
     this.runs.start();
-    this.collaboration.start();
     // A server request is only answerable in the process that emitted it.
     for (const p of this.store.list("pending"))
       if (!p.async) this.store.remove("pending", p.id);
@@ -578,7 +573,7 @@ export class BotRuntime extends EventEmitter {
   }
   snapshot() {
     return {
-      capabilities: { taskRequests: this.storage && this.storage.features?.taskRequests !== false ? 1 : undefined, collaborationRooms: 1, executionConfiguration: 1, accountUsageHistory: 1, runtimeMaintenance: 1, botAdministration: 1, botMemoryMaintenance: process.platform === 'linux' ? 1 : undefined, backgroundRunLanes: 1, scheduleDecisions: 1, singleThreadExecution: 1, peerInbox: 1, peerRootControls: 1, peerBodyPaging: 1, nativeGoals: 1, nativeConversation: 1, messageReplies: 1, secureInputs: 1, secureResponseLifecycle: 1, operatorCalls: 1, operatorInputQuestions: 1, historyCursorIndex: 1, messageBursts: 1, burstDiscard: 1, burstControls: 1, burstQueue: 1, queueLists: 1, queueRelativeMoves: 1, queueSendNow: 1, ...(this.storage && this.storage.features?.taskQueues !== false ? { taskQueues: 1 } : {}), teams: 1, ...(this.desktops ? { botDesktops: 1, botBrowserRetention: 1 } : {}) },
+      capabilities: { taskRequests: this.storage && this.storage.features?.taskRequests !== false ? 1 : undefined, executionConfiguration: 1, accountUsageHistory: 1, runtimeMaintenance: 1, botAdministration: 1, botMemoryMaintenance: process.platform === 'linux' ? 1 : undefined, backgroundRunLanes: 1, scheduleDecisions: 1, singleThreadExecution: 1, nativeGoals: 1, nativeConversation: 1, messageReplies: 1, secureInputs: 1, secureResponseLifecycle: 1, operatorCalls: 1, operatorInputQuestions: 1, historyCursorIndex: 1, messageBursts: 1, burstDiscard: 1, burstControls: 1, burstQueue: 1, queueLists: 1, queueRelativeMoves: 1, queueSendNow: 1, ...(this.storage && this.storage.features?.taskQueues !== false ? { taskQueues: 1 } : {}), teams: 1, ...(this.desktops ? { botDesktops: 1, botBrowserRetention: 1 } : {}) },
 
       botAdminLeadIds: [...this.botAdmin.leads],
       teams: publicTeams(this),
@@ -637,10 +632,6 @@ export class BotRuntime extends EventEmitter {
       if(!request.clientId||trustedOrigin)throw Error('Task Request source lookup requires the authenticated owner browser.');
       return this.taskRequests.source(this.store.bot(String(botId)),params);
     }
-    if (method.startsWith("conversations.") || method.startsWith("collaboration.") || method === "execution.config")
-      return this.collaboration.handle(request, trustedOrigin);
-    if (method === "requests.respond" && (this.store.get("collaborationPending", params.key) || this.store.get("collaborationAnswer", params.key)))
-      return this.collaboration.respond(request, trustedOrigin);
     if (method.startsWith("botAdmin.")) return this.botAdmin.owner(request, trustedOrigin);
     if ((method === "queue.taskConfirm" || method === "queue.add" && params.taskExportId) && (!request.clientId || trustedOrigin))
       throw new Error("Task queue transfer requires the authenticated owner browser.");
@@ -684,24 +675,6 @@ export class BotRuntime extends EventEmitter {
       }
       const accepted = await acceptSingleThreadOperation(this, request, fingerprint, trustedOrigin);
       return accepted.result;
-    }
-    // Peer control is a short local fence, never queued behind native execution
-    // or attachment preparation. Bot transport provenance cannot grant it.
-    if (["peers.control", "peers.send", "peers.reply", "peers.cancel"].includes(method)) {
-      const bot=this.store.bot(String(botId));
-      this.peers.assertReceiptCaller(bot,method,trustedOrigin);
-      try {
-        return method === "peers.control" ? this.peers.control(bot,params,operationId,fingerprint,trustedOrigin) :
-          await this.peers.mutate(bot,method,params,operationId,fingerprint,trustedOrigin);
-      } catch(error) {
-        const receipt=this.store.operation(operationId);
-        const matching=receipt?.fingerprint===fingerprint&&receipt.method===method&&receipt.botId===bot.id;
-        if(matching&&receipt.status==='done') {
-          this.peers.assertReceiptCaller(this.store.bot(bot.id),method,trustedOrigin);
-          return receipt.result;
-        }
-        error.outcome=matching&&receipt.status!=='held'?'uncertain':'rejected'; throw error;
-      }
     }
     const runRequest = method === "requests.respond" && (this.store.get("runPending", params.key) ?? this.store.get("answerExecution", `answer:${params.key}`));
     const resumeRun = ["runs.resume", "runs.decide"].includes(method) && this.owned("run", params.runId, botId);
@@ -862,6 +835,7 @@ export class BotRuntime extends EventEmitter {
         maintenance: this.maintenance.snapshot(),
       };
     if (method === "events") return this.store.replay(Number(p.after) || 0);
+    if (method === "execution.config") return this.executionConfig.read(this.store.bot(String(botId)), p);
     if (method === "bots.create") return this.create(p, id, authorizeProvisioning);
     if (method === "settings.timeZone") {
       new Intl.DateTimeFormat("en", { timeZone: p.timeZone }).format();
@@ -892,14 +866,6 @@ export class BotRuntime extends EventEmitter {
       case "work.resume": throw new Error("Local acceptance requires handle().");
       case "bursts.read": return this.bursts.read(bot);
       case "bursts.typing": return this.bursts.typing(bot, p);
-      case "peers.directory": return this.peers.directory();
-      case "peers.list": return this.peers.list(bot, p);
-      case "peers.read": return this.peers.read(bot, p);
-      case "peers.root": return this.peers.root(bot,p);
-      case "peers.status": return this.peers.status(bot,p);
-      case "peers.feed": return this.peers.feed(bot,p);
-      case "peers.exchange": return this.peers.exchange(bot,p);
-      case "peers.held": return this.peers.held(bot,p);
       case "goals.read": return this.primary.goal(bot, "get");
       case "goals.set": return this.primary.goal(bot, "set", p, attempt, id);
       case "goals.clear": return this.primary.goal(bot, "clear", {}, attempt, id);
@@ -1358,7 +1324,7 @@ export class BotRuntime extends EventEmitter {
     return {
       threadId: bot.threadId, cwd: bot.cwd, model: this.settings(bot).model,
       serviceTier: this.settings(bot).serviceTier, approvalPolicy: "never", sandbox: "danger-full-access",
-      developerInstructions: this.manager ? `${BOT_INSTRUCTIONS}\n\n${DIRECT_INSTRUCTIONS}\n${COLLABORATION_POLICY}${this.desktops ? `\n\n${desktopInstructions(bot)}` : ""}` : BOT_INSTRUCTIONS,
+      developerInstructions: this.manager ? `${BOT_INSTRUCTIONS}\n\n${DIRECT_INSTRUCTIONS}${this.desktops ? `\n\n${desktopInstructions(bot)}` : ""}` : BOT_INSTRUCTIONS,
       config: { "features.fast_mode": true, ...(executionMode === "single-thread" ? { "features.multi_agent": false } : {}),
         ...(this.manager ? this.manager.config(bot, executionMode) : {}) }, excludeTurns: true,
     };
@@ -1557,7 +1523,7 @@ export class BotRuntime extends EventEmitter {
     if (this.manager)
       additionalContext.managerPolicy = {
         kind: "application",
-        value: `${DIRECT_INSTRUCTIONS}\n${COLLABORATION_POLICY}`,
+        value: `${DIRECT_INSTRUCTIONS}`,
       };
     if (run)
       additionalContext.scheduledTask = {
@@ -1958,8 +1924,6 @@ export class BotRuntime extends EventEmitter {
       return;
     }
     const threadId = message.params.threadId ?? message.params.conversationId;
-    const roomContext = this.collaboration.byThread(threadId);
-    if (roomContext) return this.collaboration.request(roomContext, message);
     if (this.manager?.request(message)) return;
     const lane = this.runs.byThread(threadId);
     if (lane) return this.runs.request(lane, message);
@@ -2013,8 +1977,6 @@ export class BotRuntime extends EventEmitter {
   onNotification(message) {
     message = redactSecureNotification(message);
     if (this.usage.notification(message)) return;
-    const roomContext = this.collaboration.byThread(message.params?.threadId ?? message.params?.thread?.id);
-    if (roomContext) { this.collaboration.notification(roomContext, message); return; }
     if (this.manager?.event(message)) return;
     const p = message.params ?? {};
     const threadId = p.threadId ?? p.thread?.id;
@@ -2035,7 +1997,6 @@ export class BotRuntime extends EventEmitter {
       return;
     }
     if (message.method === "item/completed" && !usableTurnId(p.turnId)) return;
-    this.collaboration.observeTool(bot, message);
     this.primary.notification(bot, message);
     if (message.method === "thread/status/changed") observeThreadStatus(this, bot.id, p.status);
     if (message.method === "thread/closed") observeThreadStatus(this, bot.id, { type: "notLoaded" });
@@ -2157,7 +2118,6 @@ export class BotRuntime extends EventEmitter {
     // shared dispatcher. Semantic work enters the original native thread later.
     if (!this.maintenance.holding()) void this.maintenance.track(() => this.memoryMaintenance.tick()).catch(error => this.emit('fault', error));
     try {
-      void this.maintenance.track(() => this.collaboration.tick()).catch(error => this.emit("fault", error));
       await this.plans.recover();
       await this.answers.recover();
       await recoverRunTurns(this);
@@ -2273,15 +2233,6 @@ export class BotRuntime extends EventEmitter {
       }
     } finally { this.tickRunning = false; }
   }
-  async peerTool(bot, args, origin) {
-    const { operation, operationId, ...params } = args ?? {};
-    if (!["directory", "list", "read", "root", "status", "feed", "exchange", "held", "send", "reply", "cancel"].includes(operation)) throw new Error("Unknown peer operation.");
-    // Private argument from the authenticated transport, never args/params.
-    // Validate only NEW acceptance after exact prior receipts have been read.
-    const trustedOrigin = Object.freeze({ ...origin,
-      ...(["native-tool", "authenticated-bot-mcp"].includes(origin?.authority) ? captureActivity(this, bot.id) : {}) });
-    return this.handle({ method: `peers.${operation}`, botId: bot.id, params, operationId }, trustedOrigin);
-  }
   async dynamicTool(bot, p, origin = null) {
     return this.maintenance.track(() => this.dynamicToolTracked(bot, p, origin));
   }
@@ -2291,13 +2242,6 @@ export class BotRuntime extends EventEmitter {
     if(p.tool===TASK_REQUEST_TOOL.name) {
       if(origin)throw Error('Task Request drafts belong to the primary named bot.');
       return this.taskRequests.draft(bot,args,{authority:'native-tool',botId:bot.id,threadId:p.threadId,turnId:p.turnId});
-    }
-    if (p.tool === COLLABORATION_TOOL.name) {
-      if (origin) throw Error("Use the registered collaboration context adapter.");
-      const { operation, operationId, ...params } = args;
-      const mapping = { results: "collaboration.results", result: "collaboration.result", config: "execution.config", resourceAcquire: "collaboration.resourceAcquire", resourceRelease: "collaboration.resourceRelease", await: "collaboration.await", promote: "collaboration.promote", consume: "collaboration.consume" };
-      return this.handle({ method: mapping[operation] ?? `conversations.${operation}`, botId: bot.id, params, operationId },
-        { authority: "native-tool", botId: bot.id, threadId: p.threadId, turnId: p.turnId });
     }
     if (p.tool === MEMORY_TOOL.name) {
       if (origin) throw Error('Memory maintenance belongs to the primary named bot.');
@@ -2321,10 +2265,6 @@ export class BotRuntime extends EventEmitter {
         return queueTool(this,bot,args);
       }
       case "bots_work": { if (origin) throw new Error("Progress belongs to the primary named bot."); return this.primary.progress(bot, args); }
-      case "bots_peers": {
-        if (origin) throw new Error("Named peer tools belong to the primary thread.");
-        return this.peerTool(bot, args, { authority: "native-tool", botId: bot.id, threadId: p.threadId, turnId: p.turnId, callId: p.callId });
-      }
       case "bots_run_message": {
         if (typeof args.operationId !== "string" || !/^[a-zA-Z0-9:_-]{10,180}$/.test(args.operationId)) throw new Error("A stable run message operationId is required.");
         const source = origin ?? { botId: bot.id, threadId: bot.threadId, turnId: p.turnId, callId: p.callId, authority: "native-tool" };
@@ -2370,10 +2310,10 @@ export class BotRuntime extends EventEmitter {
         });
       }
       case "bots_publish_artifact":
-        this.collaboration.assertFileResource(bot, origin);
+        if (origin) throw Error("Files belong to the primary bot context."); assertRetainedResource(this.store,bot.id,"workspace");
         return this.publishArtifact(bot, args, { key: origin ? `publish:${p.threadId}:${p.callId}` : `publish:${p.callId}`, turnId: p.turnId, itemId: p.callId, ...(origin ?? {}) });
       case "bots_download_attachment":
-        this.collaboration.assertFileResource(bot, origin);
+        if (origin) throw Error("Files belong to the primary bot context."); assertRetainedResource(this.store,bot.id,"workspace");
         return this.downloadAttachment(bot,String(args.attachmentId ?? ''));
       default:
         throw new Error("Unknown bot tool.");

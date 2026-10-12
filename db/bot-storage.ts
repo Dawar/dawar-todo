@@ -43,7 +43,7 @@ function cleanMetadata(input: Record<string, unknown>, service: boolean) {
   const createdAt = service && (input.createdAt === null || typeof input.createdAt === "string" && Number.isFinite(Date.parse(input.createdAt))) ? input.createdAt as string | null : null;
   return { id, botId, size, sha256, name, mimeType: artifactMime(name,mimeType), artifact: service && input.artifact === true,
     source: service && input.source === "native" ? "native" as const : service && input.artifact ? "published" as const : "upload" as const,
-    createdAt, provenance, ...(service && input.peerSource && typeof input.peerSource === "object" ? { peerSource: input.peerSource } : {}) };
+    createdAt, provenance };
 }
 type Metadata = ReturnType<typeof cleanMetadata>;
 export class BotStorage {
@@ -143,26 +143,6 @@ export class BotStorage {
     }
     const metadata: Metadata = JSON.parse(row.metadata);
     return { attachment: this.receipt(row), url: await this.storage.signedObjectUrl(row.object_key,metadata.name), expiresAt: new Date(Date.now()+60*60*1000).toISOString() };
-  }
-  async share(input: { id: string; botId: string; recipientBotId: string; attachmentId: string; exchangeId: string; createdAt?:string }) {
-    if (!this.service) throw new StorageError("Explicit bridge peer grant required.",403);
-    const row = await this.row(input.id,input.botId);
-    if (row.state !== "ready" || row.parent_id) throw new StorageError("Share a ready registered original.");
-    const source: Metadata = JSON.parse(row.metadata);
-    const createdAt=typeof input.createdAt === "string" && Number.isFinite(Date.parse(input.createdAt)) ? input.createdAt : source.createdAt;
-    const metadata = { ...source, id: validId(input.attachmentId), botId: validId(input.recipientBotId), artifact: false, source: "upload",
-      createdAt,dateKey:createdAt === null ? -8640000000000001 : Date.parse(createdAt),
-      provenance: {}, peerSource: { botId: source.botId, attachmentId: source.id, exchangeId: validId(input.exchangeId) } };
-    const bot = await this.environment.DB.prepare("SELECT id FROM bot_storage_identities WHERE owner_key=? AND id=?").bind(this.owner,metadata.botId).first();
-    if (!bot) throw new StorageError("Recipient bot not registered.",404);
-    const fingerprint = hash(JSON.stringify([metadata.botId,metadata.name,metadata.size,metadata.mimeType,metadata.sha256,false,"upload",null]));
-    await this.environment.DB.prepare("INSERT OR IGNORE INTO bot_storage_files(owner_key,id,bot_id,fingerprint,staging_key,object_key,state,metadata) VALUES(?,?,?,?,?,?,'ready',?)")
-      .bind(this.owner,metadata.id,metadata.botId,fingerprint,row.staging_key,row.object_key,JSON.stringify(metadata)).run();
-    const saved = await this.row(metadata.id,metadata.botId);
-    const peer = JSON.parse(saved.metadata).peerSource;
-    if (saved.fingerprint !== fingerprint || peer?.exchangeId !== input.exchangeId || peer?.botId !== input.botId || peer?.attachmentId !== input.id) throw new StorageError("Peer grant identity conflict.",409);
-    await this.environment.DB.prepare("INSERT OR IGNORE INTO bot_storage_ready(owner_key,id) VALUES(?,?)").bind(this.owner,metadata.id).run();
-    return { attachment: this.receipt(saved) };
   }
   async copy(input: { id: string; botId: string; recipientBotId: string; attachmentId: string }) {
     const row = await this.row(input.id,input.botId);

@@ -11,7 +11,6 @@ import { loadTypeScript,d1,provider } from './fixtures/bot-storage-runtime.mjs';
 import { Store } from '../bot-bridge/store.mjs';
 import { BotRuntime } from '../bot-bridge/runtime.mjs';
 import { BotStorageClient } from '../bot-bridge/storage.mjs';
-import { copyPeerAttachments } from '../bot-bridge/peer-attachments.mjs';
 const {BotStorage}=loadTypeScript('db/bot-storage.ts'),{botStorageResponse}=loadTypeScript('lib/bot-storage-api.ts'),browser=loadTypeScript('app/bots/cloud-storage.ts');
 const digest=bytes=>createHash('sha256').update(bytes).digest('hex');
 async function fixture(t) {
@@ -79,21 +78,6 @@ test('wrong size/checksum and changed staging fail, repeated prepare keeps ID an
   s3.objects.set(fresh.upload.fields.key,bytes);await cloud.finalize(a.id,a.botId);
   assert.equal((await cloud.prepare(a)).attachment.id,a.id);
   await assert.rejects(cloud.prepare({...a,sha256:digest('different')}),/different file/);
-});
-test('cross-bot, other owner, arbitrary keys and wrong storage credential are rejected; explicit peer share grants only recipient ID',async t=>{
-  const {owner,env,cloud,upload,runtime,bots,store}=await fixture(t),{a}=await upload(Buffer.from('selected share'));
-  await cloud.finalize(a.id,'alpha');await assert.rejects(cloud.download(a.id,'archived'),/not found/);
-  const other=new BotStorage(env,'different-owner@example.test',true);await other.initialize();await assert.rejects(other.download(a.id,'alpha'),/not found/);
-  await assert.rejects(cloud.download('bots/arbitrary/key','alpha'),/Invalid/);
-  const bad=await botStorageResponse(new Request('https://work.example.test/api/bots/storage/service',{method:'POST',headers:{Authorization:'Bearer wrong','X-Bots-Machine':'test-machine'},body:JSON.stringify({action:'list'})}),env,true);assert.equal(bad.status,401);
-  const cross=await botStorageResponse(new Request('https://work.example.test/api/bots/storage',{method:'POST',headers:{'oai-authenticated-user-id':'someone-else'},body:'{"action":"list"}'}),env);assert.equal(cross.status,401);
-  await runtime.storage.importAttachment(bots[0],a.id);
-  const copies=await copyPeerAttachments(runtime,bots[0],bots[1],[a.id],'peer-exchange-stable');store.put('attachment',copies[0]);
-  assert.notEqual(copies[0].id,a.id);assert.equal(copies[0].cloudState,'ready');
-  await cloud.download(copies[0].id,'archived');await assert.rejects(cloud.download(copies[0].id,'alpha'),/not found/);
-  assert.deepEqual(await readFile((await runtime.downloadAttachment(bots[1],copies[0].id)).path),Buffer.from('selected share'));
-  assert.equal((await cloud.list({botId:'archived'})).items[0].botArchived,true);
-  assert.equal(owner,env.BOTS_OWNER_EMAIL);
 });
 test('corrupt downloads never replace valid local files and failed publication retains original and copied snapshot',async t=>{
   const {cloud,upload,runtime,bots,store,s3}=await fixture(t),bytes=Buffer.from('retained'),{a}=await upload(bytes);await cloud.finalize(a.id,'alpha');

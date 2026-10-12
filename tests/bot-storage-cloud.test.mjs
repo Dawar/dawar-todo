@@ -48,14 +48,6 @@ test('owner and service scopes reject wrong credentials, cross-origin sessions, 
   assert.equal((await botStorageResponse(request({'oai-authenticated-user-id':'owner-id'}, {action:'prepare',...metadata}),env)).status,503);
   assert.equal((await botStorageResponse(request({'oai-authenticated-user-id':'owner-id'}, {action:'list'}),env)).status,200);
 });
-test('explicit grant creates recipient ID and migratable provenance without exposing object keys',async t=>{
-  const {storage,upload}=await fixture(t),{metadata}=await upload();await storage.finalize(metadata.id,'one');
-  const grant={id:metadata.id,botId:'one',recipientBotId:'archived',attachmentId:'peer-file:recipient-copy',exchangeId:'peer:explicit-exchange'};
-  const result=await storage.share(grant);assert.equal(result.attachment.id,grant.attachmentId);assert.equal(result.attachment.peerSource.attachmentId,metadata.id);
-  assert.deepEqual(await storage.share(grant),result);await storage.download(grant.attachmentId,'archived');
-  await assert.rejects(storage.download(grant.attachmentId,'one'),/not found/);
-  const page=await storage.list({botId:'archived'});assert.equal(page.items[0].botArchived,true);assert.equal(Object.hasOwn(page.items[0],'object_key'),false);
-});
 test('zero-byte files, inferred MIME, Unicode names and historical dates preserve filters and stable paging',async t=>{
   const {storage,upload}=await fixture(t);
   for(const [name,date]of [['Été.pdf','2026-01-01T00:00:00Z'],['世界.pdf','2025-01-01T00:00:00Z'],['😀.pdf',null]]){

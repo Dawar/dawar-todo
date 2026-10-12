@@ -288,7 +288,7 @@ export class BotComposer {
     return JSON.stringify([this.owner, this.botId, this.record.active, draft.textVersion, draft.text, draft.reply,
       draft.files.map(file => [file.id,file.remote?.id,file.remote?.botId,file.name,file.size,file.mimeType]), draft.queueId, draft.queueRevision, draft.queueSource]);
   }
-  async send(queueNext = false, burst = false, listId: string | null = null, expectedDraft?: string, currentScope?: () => boolean, configuration?: import("../../lib/bot-collaboration").ExecutionSettings & { settingsRevision: number }) {
+  async send(queueNext = false, burst = false, listId: string | null = null, expectedDraft?: string, currentScope?: () => boolean, configuration?: import("../../lib/bot-execution-configuration").ExecutionSettings & { settingsRevision: number }) {
     if (!this.ready || !this.canUseOwner || !this.transport.online || this.committing) return;
     this.preparing = "send"; this.notify();
     const slot = this.record.active;
@@ -437,7 +437,7 @@ export class BotComposer {
       if (op.method === "queue.delete" && (result as { deleted?: boolean } | null)?.deleted !== true)
         throw Error("Queue removal did not confirm deletion.");
       if (op.params.configuration) {
-        const requested=op.params.configuration as import('../../lib/bot-collaboration').ExecutionSettings & {settingsRevision:number};
+        const requested=op.params.configuration as import('../../lib/bot-execution-configuration').ExecutionSettings & {settingsRevision:number};
         const returned=(result as {queuedSubmission?:BotQueuedSubmission}|null)?.queuedSubmission?.configuration;
         if (!returned || returned.settingsRevision!==requested.settingsRevision || returned.requested.model!==requested.model || returned.requested.effort!==requested.effort || returned.requested.mode!==requested.mode || returned.requested.serviceTier!==requested.serviceTier || returned.confirmation!=='pending-unsupported')
           throw Error('The original queued settings were not confirmed. Keep the saved operation and reconcile the same ID.');

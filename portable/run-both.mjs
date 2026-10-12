@@ -33,7 +33,7 @@ export async function runBoth(configPath) {
     const r=agent.runtime,ready=r.ready&&agent.transport.startupReady&&r.relayOnline&&siteReady;
     res.writeHead(ready?200:503,{'content-type':'application/json','cache-control':'no-store'});
     res.end(JSON.stringify({ready,relayConnected:Boolean(r.relayOnline),codexVersion:RUNTIME_VERSION,source:c.hub.source,role:'both',
-      siteReady,maintenance:r.maintenance.snapshot(),collaboration:r.collaboration.health(),bots:r.store.bots().length,
+      siteReady,maintenance:r.maintenance.snapshot(),bots:r.store.bots().length,
       models:r.models.map(m=>m.model),nodeId:agent.transport.enrollment.nodeId,capabilities:agent.transport.hello().capabilities,
       manager:{ready:true}}));
   });health.listen(c.healthPort??47821,'127.0.0.1');

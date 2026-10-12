@@ -20,7 +20,7 @@ export function humanMessageTicks(entries: HistoryEntry[], context: HistoryEntry
   const loaded = reconcileHistory(orderedHistory(entries, context, false, Infinity)).entries.filter(entry => threadId && entry.sourceThreadId === threadId);
   const result: HumanMessageTick[] = [];
   loaded.forEach((entry, index) => {
-    if (!entry.item || !humanInput(entry.item) || entry.type !== 'userMessage' || entry.peer || entry.peerAlias || entry.status === 'received') return;
+    if (!entry.item || !humanInput(entry.item) || entry.type !== 'userMessage') return;
     const key = historyKey(entry.turnId, entry.id);
     const messages = parts(entry)?.filter(message => message.botId === botId && !message.dismissed && message.state !== 'discarded');
     if (messages?.length) {
@@ -36,15 +36,6 @@ export function humanMessageTicks(entries: HistoryEntry[], context: HistoryEntry
       seconds: time(entry.messageAt ?? entry.startedAt), position: index / Math.max(1, loaded.length) });
   });
   return { ticks: result, order: new Map(loaded.map((entry, index) => [historyKey(entry.turnId, entry.id), index / Math.max(1, loaded.length)])) };
-}
-
-/** Authenticated room post provenance, never native or bot authorship guesses. */
-export function roomHumanMessageTicks(posts: import('../../lib/bot-collaboration').CollaborationPost[], roomId: string) {
-  const loaded = [...new Map(posts.filter(post => post.roomId === roomId).map(post => [post.id, post])).values()];
-  const key = (post: typeof loaded[number]) => JSON.stringify([roomId, post.id]);
-  return { ticks: loaded.flatMap((post, index): MessageTick[] => post.author.kind === 'owner' ? [{ id: key(post), key: key(post),
-    preview: preview(post.text), seconds: time(Date.parse(post.createdAt) / 1000), position: index / Math.max(1, loaded.length) }] : []),
-    order: new Map(loaded.map((post, index) => [key(post), index / Math.max(1, loaded.length)])) };
 }
 
 /** One nonoverlapping hit target per slot; dense messages keep exact choices. */

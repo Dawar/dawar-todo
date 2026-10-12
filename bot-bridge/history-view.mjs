@@ -232,10 +232,9 @@ export async function readHistoryLog(runtime, bot, params) {
   const turn = located.turn;
   const entries = page.data.flatMap(value => {
     const item = value.item;
-    if (item.type === 'userMessage' && /^(schedule:|manager-notice:|secure-receipt:)/.test(item.clientId ?? '') ||
+    if (item.type === 'userMessage' && /^(schedule:|manager-notice:|secure-receipt:|peer:|peer-exchange:)/.test(item.clientId ?? '') ||
         item.type === 'agentMessage' && !item.text.trim() && !item.questions?.length) return [];
     const entry = withMessageTime(runtime, bot, bot.threadId, projectHistoryItem(turn, displayReplyItem(runtime, bot, bot.threadId, item), false, value));
-    if (item.type === 'userMessage' && /^(peer:|peer-exchange:)/.test(item.clientId ?? '')) entry.peerAlias = item.clientId;
     if (value.startedAtMs != null) { entry.messageAt = value.startedAtMs / 1000; entry.timeBasis = 'received'; }
     return [entry];
   }).reverse();

@@ -1,4 +1,4 @@
-export type { CollaborationRoom, CollaborationPost, CollaborationContext, CollaborationDelivery, CollaborationResult, CollaborationPage, CollaborationRecentParams, TurnConfiguration, ExecutionConfiguration } from './bot-collaboration';
+export type { TurnConfiguration, ExecutionConfiguration } from './bot-execution-configuration';
 import type { ServerRequest } from "./codex-protocol/ServerRequest";
 import type { Thread } from "./codex-protocol/v2/Thread";
 import type { Model } from "./codex-protocol/v2/Model";
@@ -205,7 +205,7 @@ export type BotQueueList = { id: string; botId: string; name: string; cron: stri
 export type BotSnapshot = {
   secureInputs?: import("./secure-input").SecureRequest[];
   botAdminLeadIds?: string[];
-  capabilities?: { taskRequests?: 1; collaborationRooms?: 1; executionConfiguration?: 1; accountUsageHistory?: 1; botAdministration?: 1; botMemoryMaintenance?: 1; botDesktops?: 1; backgroundRunLanes?: 1; scheduleDecisions?: 1; singleThreadExecution?: 1; peerInbox?: 1; peerRootControls?: 1; peerBodyPaging?: 1; nativeGoals?: 1; nativeConversation?: 1; messageReplies?: 1; secureInputs?: 1; secureResponseLifecycle?: 1; operatorCalls?: 1; messageBursts?: 1; burstDiscard?: 1; burstControls?: 1; burstQueue?: 1; queueLists?: 1; queueRelativeMoves?: 1; queueSendNow?: 1; taskQueues?: 1; teams?: 1 };
+  capabilities?: { taskRequests?: 1; executionConfiguration?: 1; accountUsageHistory?: 1; botAdministration?: 1; botMemoryMaintenance?: 1; botDesktops?: 1; backgroundRunLanes?: 1; scheduleDecisions?: 1; singleThreadExecution?: 1; nativeGoals?: 1; nativeConversation?: 1; messageReplies?: 1; secureInputs?: 1; secureResponseLifecycle?: 1; operatorCalls?: 1; messageBursts?: 1; burstDiscard?: 1; burstControls?: 1; burstQueue?: 1; queueLists?: 1; queueRelativeMoves?: 1; queueSendNow?: 1; taskQueues?: 1; teams?: 1 };
   teams?: BotTeam[];
   workByBot?: BotWorkState[];
   backgroundByBot?: BotBackground[];
@@ -229,7 +229,7 @@ export type BotHistory = {
   pending: BotRequest[];
 };
 export type BotQueuedSubmission = QueuedSubmission & {
-  configuration?: {requested:import('./bot-collaboration').ExecutionSettings;settingsRevision:number;confirmation:'pending-unsupported';reason:string} | null;
+  configuration?: {requested:import('./bot-execution-configuration').ExecutionSettings;settingsRevision:number;confirmation:'pending-unsupported';reason:string} | null;
   source?: import("./task-queue-delegation").TaskQueueBinding | { kind: string; operationId?: string; members?: unknown[] };
   reply?: import("./bot-replies").BotReplyReference;
   listId?: string | null;
@@ -281,38 +281,8 @@ export type BotWorkState = {
   activeTurnId: string | null; paused: boolean; summary: string | null; remaining: string | null; waitingFor: string[];
   goal: import("./codex-protocol/v2/ThreadGoal").ThreadGoal | null; goalObservedAt: string | null; migrationReason: string | null;
 };
-export type BotInboxItem = { id: string; botId: string; kind: "schedule" | "peer" | "secure-input" | "memory-maintenance" | "task-request"; sourceId: string; summary: string;
+export type BotInboxItem = { id: string; botId: string; kind: "schedule" | "secure-input" | "memory-maintenance" | "task-request"; sourceId: string; summary: string;
   state: "queued" | "dispatching" | "accepted" | "uncertain" | "cancelled" | "failed"; createdAt: string; turnId: string | null; waitReason: string | null };
-export type BotPeerRoot = {
-  id: string; version: 1; revision: number; state: "active" | "paused" | "stopped";
-  reason: "legacy-limit" | "work-budget" | "selected-bytes" | "traffic" | "repeated-context" | "owner-stopped" | null;
-  reasonText: string | null; pausedAt: string | null;
-  allowance: { number: number; contributions: number; selectedBytes: number; exchanges: number; startedAt: string };
-  lifetimeContributions: number; lifetimeExchanges: number; lifetimeSelectedBytes: number;
-  limits: { contributions: number; selectedBytes: number; trafficExchanges: number; trafficWindowMs: number; duplicateOccurrences: number; duplicateWindowExchanges: number };
-  participants: string[]; participantCount: number; participantsComplete: boolean; heldOperations: number; reservedReplies: number; observationSeq: number; ownerControls: { authority: "owner"; canContinue: boolean; canStop: boolean }; queuedIntakes: number; committedIntakes: number;
-  stopScope: "discussion-admission"; nativeInterruption: false;
-};
-export type BotPeerRequest = { id: string; rootId: string; parentId: string | null; senderBotId: string; recipientBotId: string;
-  kind: "message" | "question" | "task"; summary: string; state: "queued" | "working" | "waiting" | "completed" | "cancelled" | "failed" | "delivery-unconfirmed";
-  // Legacy fields retain lifetime count/current allowance ceiling. Use root for controls.
-  round: number; roundLimit: number; root?: BotPeerRoot; hasResult?: boolean;
-  createdAt: string; updatedAt: string; turnId: string | null; result: string | null; cancelRequested: boolean;
-  executions?: { botId: string; turnId: string; needsInput: boolean }[] };
-// Bodies stay request/bot scoped and bounded to 12 rows / 256 KiB per page.
-export type BotPeerExchange = { id: string; requestId: string; botId: string; kind: "request" | "reply" | "cancel"; text: string; attachmentIds: string[]; createdAt: string; round: number; heldAtAcceptance?: boolean };
-export type BotPeerBodyPage = { request: BotPeerRequest; exchanges: BotPeerExchange[]; nextCursor?: string | null; bodyBytes?: number; pageLimit?: number };
-export type BotPeerPage = { requests: BotPeerRequest[]; nextCursor: string | null };
-export type BotPeerStatus = BotPeerPage & { totals: { openRequests: number; visibleRequests: number; pausedRoots: number; stoppedRoots: number } };
-export type BotPeerExchangeMeta = Omit<BotPeerExchange,"text"> & {
-  rootId: string; senderBotId: string; recipientBotId: string; arrivalSequence: string; summary: string; bodyBytes: number; intakeAlias: string;
-  intake: { id: string; botId: string; threadId: string; turnId: string | null; nativeQueueId: string | null; clientUserMessageId: string;
-    state: BotInboxItem["state"]; terminalStatus: string | null; waitReason: string | null } | null;
-};
-export type BotPeerHeldPage = { operations: { operationId: string; rootId: string; method: "peers.send" | "peers.reply" | "peers.cancel";
-  params: Record<string, unknown>; createdAt: string }[]; nextCursor: string | null; bodyBytes: number };
-export type BotPeerFeed = { exchanges: BotPeerExchangeMeta[]; nextCursor: string | null; highWater: string; direction: "older" | "newer"; pageLimit: number; complete: boolean };
-export type BotPeerControl = { root: BotPeerRoot; previous: { revision: number; state: BotPeerRoot["state"]; reason: BotPeerRoot["reason"]; allowance: BotPeerRoot["allowance"] }; control: { operationId: string; rootId: string; botId: string; expectedRevision: number; action: "continue" | "stop"; appliedRevision: number; scope: "discussion-admission"; nativeInterruption: false } };
 export type BotBurstMessage = { reply?: import("./bot-replies").BotReplyReference; id: string; botId: string; text: string; attachmentIds: string[]; createdAt: string;
   state: "pending" | "dispatching" | "sent" | "uncertain" | "failed"; batchId: string | null; turnId: string | null };
 export type BotBurst = { id: string; botId: string; revision?: number; state: "pending" | "preparing" | "paused" | "dispatching" | "sent" | "uncertain" | "failed" | "discarded";

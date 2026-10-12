@@ -289,23 +289,11 @@ export function startGateway(config) {
           else if(m.type==='rpc-result')router.readResult(nodeId,m);
           else if(m.type==='desktop-response')desktop.receive(nodeId,ws,m);
           else if(m.type==='secure-response'){secure.receive(nodeId,ws,m);taskSecure.receive(nodeId,ws,m);}
-          else if(m.type==='room-request'){
+          else if(m.type==='primary-admission-request'){
             const n=store.node(nodeId),p=store.placement(n.owner,m.botId);
-            if(p.node_id!==nodeId||p.epoch!==m.epoch||typeof m.requestId!=='string'||m.requestId.length>180)throw Error('Foreign room admission request.');
-            const answer=value=>{const current=store.placement(n.owner,m.botId);if(connections.get(nodeId)===ws&&current.node_id===nodeId&&current.epoch===m.epoch)ws.send(boundedFrame({type:'room-result',requestId:m.requestId,botId:m.botId,epoch:m.epoch,...value}));};
-            void Promise.resolve().then(()=>controls.collaboration.nodeState(n.owner,nodeId,m.botId,m.epoch,m.operationId,m.fingerprint)).then(result=>answer({result})).catch(error=>answer({error:error.message,outcome:'not-sent'})).catch(()=>ws.close(1008,'Room admission scope changed'));
-          }
-          else if(m.type==='room-tool-request'){
-            const n=store.node(nodeId),p=store.placement(n.owner,m.botId);
-            if(p.node_id!==nodeId||p.epoch!==m.epoch||typeof m.requestId!=='string'||m.requestId.length>180)throw Error('Foreign captured room tool request.');
-            const answer=value=>{store.node(nodeId);const current=store.placement(n.owner,m.botId);if(connections.get(nodeId)!==ws||current.node_id!==nodeId||current.epoch!==m.epoch)throw Error('Captured room tool scope changed');ws.send(boundedFrame({type:'room-tool-result',requestId:m.requestId,botId:m.botId,epoch:m.epoch,...value}));};
-            void controls.collaboration.tool(n.owner,nodeId,m.botId,m.epoch,m).then(result=>answer({result})).catch(error=>answer({error:error.message,outcome:error.outcome??'uncertain'})).catch(()=>ws.close(1008,'Captured room tool scope changed'));
-          }
-          else if(m.type==='peer-tool-request'){
-            const n=store.node(nodeId),p=store.placement(n.owner,m.botId);
-            if(p.node_id!==nodeId||p.epoch!==m.epoch||typeof m.requestId!=='string'||m.requestId.length>180)throw Error('Foreign captured peer request.');
-            const answer=value=>{store.node(nodeId);const current=store.placement(n.owner,m.botId);if(connections.get(nodeId)!==ws||current.node_id!==nodeId||current.epoch!==m.epoch)throw Error('Captured peer scope changed');ws.send(boundedFrame({type:'peer-tool-result',requestId:m.requestId,botId:m.botId,epoch:m.epoch,...value}));};
-            void controls.peers.tool(n.owner,nodeId,m.botId,m.epoch,m).then(result=>answer({result})).catch(error=>answer({error:error.message,outcome:error.outcome??'uncertain'})).catch(()=>ws.close(1008,'Captured peer scope changed'));
+            if(p.node_id!==nodeId||p.epoch!==m.epoch||typeof m.requestId!=='string'||m.requestId.length>180)throw Error('Foreign primary admission request.');
+            const answer=value=>{const current=store.placement(n.owner,m.botId);if(connections.get(nodeId)===ws&&current.node_id===nodeId&&current.epoch===m.epoch)ws.send(boundedFrame({type:'primary-admission-result',requestId:m.requestId,botId:m.botId,epoch:m.epoch,...value}));};
+            void Promise.resolve().then(()=>controls.primaryAdmissionState(n.owner,nodeId,m.botId,m.epoch,m.operationId,m.fingerprint)).then(result=>answer({result})).catch(error=>answer({error:error.message,outcome:'not-sent'})).catch(()=>ws.close(1008,'Primary admission scope changed'));
           }
           else if(m.type==='control-request'){
             const n=store.node(nodeId),p=store.placement(n.owner,m.botId);

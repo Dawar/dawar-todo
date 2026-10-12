@@ -237,7 +237,7 @@ Voice memo presentation uses shared controls without changing MediaRecorder
 ownership or attachment limits. A recording/review fixture is separate from
 genuine microphone, playback, upload and device acceptance.
 
-## Settings, rooms and operational views
+## Settings and operational views
 
 Settings sections use shared fields/cards with 13px supporting text. Tokens,
 calendar links and phone controls retain their exact confirmation consequences.
@@ -254,11 +254,8 @@ selected source through snapshot reordering, fence late owner/placement reads,
 and make no unscoped request when no source is eligible. Charts/table overflow
 stays local to the dialog; unavailable quota is neutral, exhausted destructive.
 
-Room conversations retain canonical scoped history, drafts and addressed
-recipients. Recipients/message kind use a compact disclosure; paging controls
-respect reading anchors. Empty/search/error states are explicit. Goal, queue,
-schedule, team, approval and earlier-work controls retain their distinct native
-authority and uncertainty rather than collapsing them into one generic status.
+Goal, queue, schedule, team, approval and earlier-work controls retain their
+distinct native authority and uncertainty.
 
 The desktop viewer has a scoped dark semantic palette; fields and selected keys
 use matching foreground pairs. Preserve its input, IME, lease and gesture rules.
@@ -332,4 +329,4 @@ Queue drag and keyboard reordering use the same allowed moves. A queue revision,
 
 ## Current review scope
 
-Dawar excluded Discussions and bot-to-bot messaging UI from this design goal on October 12, 2026, for a separate rebuild. Collaboration rooms, peer-message history, discussion controls and their dedicated UI controllers are not completion requirements. Prior evidence is retained as excluded reference material. Foreground human-to-bot chat, sending, bursts, queues, bot navigation, settings, Goals and PWA sync remain in scope. Shared files are reviewed for those retained surfaces only.
+Dawar excluded Discussions and bot-to-bot messaging UI from this design goal on October 12, 2026, for a separate rebuild. Collaboration rooms, peer-message history, discussion controls and their dedicated UI controllers are not completion requirements. The separate removal request deletes the messaging UI, APIs and delivery implementation. Stored historical evidence and unresolved-effect safety fences remain private and intact. Foreground human-to-bot chat, sending, bursts, queues, bot navigation, settings, Goals and PWA sync remain in scope. Shared files are reviewed for those retained surfaces only.

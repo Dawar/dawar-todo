@@ -1,6 +1,6 @@
 import { turnTiming, type NativeTiming } from '../../lib/bot-timing';
 import { reconcileHistory, conversationEntries, orderedHistory, chronologicalTurns, mergeWorkLogs } from "./history-reconcile";
-import { turnAudience, scheduleInput, peerInput, humanInput, reportedFinding, projectConversationItem, type TurnAudience } from "../../lib/bot-conversation";
+import { turnAudience, scheduleInput, retiredServiceInput, humanInput, reportedFinding, projectConversationItem, type TurnAudience } from "../../lib/bot-conversation";
 import { historyBoundaries, retainHistory, retainedAttachments, CACHE_ENTRIES, CACHE_BYTES } from "./history-window";
 import { HISTORY_TEXT_LIMIT, withTurnState, conversationItem, historyTail, historyBefore, historyKey, projectHistoryItem, projectWorkPlan, type HistoryEntry, type HistoryResponse, type HistoryDetail, type HistoryPosition, type HistoryGap } from "../../lib/bot-history-view";
 import { workPlanSource } from '../../lib/native-work-plan';
@@ -55,7 +55,7 @@ export class BotTimeline {
     if (changed) { this.state = { ...this.state, revision: "" }; if (this.hydration) this.scheduleRefresh(); }
   }
   private turnAudiences = new Map<string, TurnAudience>();
-  private configurations = new Map<string, import("../../lib/bot-collaboration").TurnConfiguration | null>();
+  private configurations = new Map<string, import("../../lib/bot-execution-configuration").TurnConfiguration | null>();
   configuration = (threadId: string | null | undefined, turnId: string) => threadId ? this.configurations.get(JSON.stringify([threadId,turnId])) ?? null : null;
   private aliases = new Map<string, string>();
   private identityAliases = new Map<string, string>();
@@ -67,7 +67,7 @@ export class BotTimeline {
   private normalize(entries: HistoryEntry[]) {
     // Choose the freshest value for each identity before sorting; timing must
     // not accidentally turn an older duplicate into the winning value.
-    const reconciled = reconcileHistory(conversationEntries(entries, this.turnAudiences));
+    const reconciled = reconcileHistory(conversationEntries(entries.filter(entry => ["inProgress", "completed", "interrupted", "failed"].includes(entry.status)), this.turnAudiences));
     reconciled.entries = chronologicalTurns(reconciled.entries);
     for (const [from, to] of reconciled.aliases) { this.aliases.set(from, to); this.identityAliases.set(from, to); }
     const kept = new Set(reconciled.entries.map((entry) => historyKey(entry.turnId, entry.id)));
@@ -527,14 +527,14 @@ export class BotTimeline {
       const runId = p.item.type === "userMessage" ? p.item.clientId!.slice(9) : undefined;
       const mixed = this.state.entries.some(entry => entry.turnId === turnId && entry.item && humanInput(entry.item));
       this.turnAudiences.set(turnId, { kind: mixed ? "mixed" : this.normalScheduled.has(turnId) ? "conversation" : "activity", runId, active: true });
-    } else if (p.item && peerInput(p.item) && !this.turnAudiences.get(turnId)?.runId) {
+    } else if (p.item && retiredServiceInput(p.item) && !this.turnAudiences.get(turnId)?.runId) {
       this.turnAudiences.set(turnId, { kind: "conversation", active: true });
       this.scheduleRefresh();
     } else if (p.item && humanInput(p.item) && this.turnAudiences.get(turnId)?.kind === "activity") {
       this.turnAudiences.set(turnId, { ...this.turnAudiences.get(turnId)!, kind: "mixed" });
       this.scheduleRefresh(); // Recover surrounding replies hidden before the human steered in.
     }
-    if (p.turn?.items.some(item => scheduleInput(item) || peerInput(item))) this.turnAudiences.set(turnId, turnAudience(p.turn.items, this.turnAudiences.get(turnId)?.runId, this.normalScheduled.has(turnId)));
+    if (p.turn?.items.some(item => scheduleInput(item) || retiredServiceInput(item))) this.turnAudiences.set(turnId, turnAudience(p.turn.items, this.turnAudiences.get(turnId)?.runId, this.normalScheduled.has(turnId)));
     if (p.turn && this.turnAudiences.has(turnId)) this.turnAudiences.set(turnId, { ...this.turnAudiences.get(turnId)!, active: p.turn.status === "inProgress" });
     const update = (entry: HistoryEntry) => {
       const prior = this.state.entries.find(value => value.turnId === entry.turnId && value.id === entry.id);
@@ -663,7 +663,6 @@ export class BotTimeline {
       throw Error("Your conversation position could not be saved. Keep this page open and retry.");
   }
   detail(entry: HistoryEntry): Promise<ThreadItem> {
-    if (entry.status === "received") return Promise.reject(Error("Peer receipt bodies use their scoped discussion reader."));
     const key = historyKey(entry.turnId, entry.id);
     if (this.transport.owner !== this.owner || this.disposed) return Promise.reject(new Error("Conversation owner changed."));
     const supplement = this.supplements.get(key);
@@ -724,7 +723,6 @@ export class BotTimeline {
       for (const event of this.detailEvents.get(key) ?? []) {
         const native = event.data as NativeEvent;
         if (event.seq <= cursor) continue;
-        if (entry.status === "received") throw Error("Peer receipt bodies use the scoped discussion reader.");
         const reduced = reduceBotTurns([{ id: entry.turnId, items: [item], itemsView: "full", status: entry.status, startedAt: entry.startedAt, completedAt: null, durationMs: null, error: null }], native);
         item = reduced[0]?.items.find((value) => value.id === entry.id) ?? item;
       }

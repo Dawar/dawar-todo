@@ -1,10 +1,10 @@
 /** Critical scoped actions. Operation identity is immutable; only its outcome changes. */
-export type RunActionMethod = "goals.set" | "goals.clear" | "runs.interrupt" | "runs.resume" | "requests.respond" | "turn.interrupt" | "runs.decide" | "work.resume" | "peers.cancel" | "peers.control" | "bursts.start" | "bursts.resume" | "bursts.stop" | "bursts.discard" | "bursts.queue" | "conversations.create" | "conversations.post" | "conversations.membership" | "conversations.hold" | "collaboration.promote";
-export type RunActionIntent = { id: string; method: RunActionMethod; params: Record<string, unknown>; targetBotId?:string; capture?: {draftVersion:string} };
+export type RunActionMethod = "goals.set" | "goals.clear" | "runs.interrupt" | "runs.resume" | "requests.respond" | "turn.interrupt" | "runs.decide" | "work.resume" | "bursts.start" | "bursts.resume" | "bursts.stop" | "bursts.discard" | "bursts.queue";
+export type RunActionIntent = { id: string; method: RunActionMethod; params: Record<string, unknown>; capture?: {draftVersion:string} };
 type Operation = RunActionIntent & { scope: string; state: "pending" | "accepted" | "rejected"; error?: string; result?: unknown };
 type Scope = { key: string; pending: string[]; revision: number; last?: string };
 export type ActionSelection = { revision: number; current: Operation | null; last: Operation | null; selected?: Operation };
-const methods = new Set(["goals.set", "goals.clear", "runs.interrupt", "runs.resume", "requests.respond", "turn.interrupt", "runs.decide", "work.resume", "peers.cancel", "peers.control", "bursts.start", "bursts.resume", "bursts.stop", "bursts.discard", "bursts.queue", "conversations.create", "conversations.post", "conversations.membership", "conversations.hold", "collaboration.promote"]);
+const methods = new Set(["goals.set", "goals.clear", "runs.interrupt", "runs.resume", "requests.respond", "turn.interrupt", "runs.decide", "work.resume", "bursts.start", "bursts.resume", "bursts.stop", "bursts.discard", "bursts.queue"]);
 let connection: Promise<IDBDatabase> | undefined;
 function open() {
   connection ??= new Promise<IDBDatabase>((resolve, reject) => {
@@ -84,7 +84,7 @@ export async function runActionJournal(key: string, command: Command): Promise<A
             finish(pending); return;
           }
           // A stale answer card cannot create a second answer after the exact ACK.
-          if (last?.state === "accepted" && (command.intent.method === "requests.respond" || command.intent.method === "peers.control" && same(last, command.intent))) { finish(last); return; }
+          if (last?.state === "accepted" && (command.intent.method === "requests.respond")) { finish(last); return; }
           const operation: Operation = { ...command.intent, scope: key, state: "pending" };
           operations.add(operation); scope.pending.push(operation.id); scope.revision++; finish(operation);
         }));

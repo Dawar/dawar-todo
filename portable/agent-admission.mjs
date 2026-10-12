@@ -15,8 +15,6 @@ const queueIdentity=q=>({id:q.id,botId:q.botId,threadId:q.threadId,revision:q.re
 // this adapter never calls the native automatic prompt queue.
 export async function admitLogicalCommand(transport,command,payload) {
   if(!NODE_LOGICAL_COMMANDS.has(payload.method))throw refused('Unsupported logical command.');
-  if(payload.method==='portable.roomDispatch')return transport.collaboration.admit(command,payload);
-  if(payload.method==='portable.roomRespond')return transport.collaboration.respondOwner(command,payload);
   if(payload.method==='portable.burstDispatch')return admitBurstCommand(transport,command,payload);
   if(payload.method==='portable.queueResume')return resumeLogicalQueue(transport,command,payload);
   const {runtime,journal}=transport,store=runtime.store,params=payload.params;
@@ -101,7 +99,7 @@ export async function admitLogicalCommand(transport,command,payload) {
     }
     assertControl();
     if(primary){
-      let fresh;try{fresh=await transport.roomState(command);}catch{throw defer('Fresh canonical result admission is unavailable.');}
+      let fresh;try{fresh=await transport.primaryState(command);}catch{throw defer('Fresh canonical result admission is unavailable.');}
       assertControl();
       if(!fresh?.canDispatch||fresh.operationId!==command.operation_id||fresh.fingerprint!==command.fingerprint||fresh.controlRevision!==before.revision||validatePrimary(fresh.intake,bot.id,bot.threadId,command.operation_id)!==validatePrimary(source,bot.id,bot.threadId,command.operation_id))throw defer('Canonical result intake or current controls changed before admission.');
       if(source.kind==='task-request'&&!await runtime.taskRequests.canDispatch(current,store.get('primaryInbox',source.id)))throw defer('Original guest scope or volatile private receipt changed before native admission.');

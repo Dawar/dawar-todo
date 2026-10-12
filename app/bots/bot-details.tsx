@@ -1,13 +1,13 @@
 "use client";
 import { Activity, useEffect, useId, useRef, useState, type ReactNode } from "react";
-import { Clock3, FolderOpen, History, ListOrdered, ListTree, MessageCircle, Monitor, Phone, Settings2, Target } from "lucide-react";
+import { Clock3, FolderOpen, History, ListOrdered, ListTree, Monitor, Phone, Settings2, Target } from "lucide-react";
 import type { Bot } from "../../lib/bots-types";
 import "./bot-details.css";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { HistoryScrollContext } from "./history-scroll-context";
 
-export type BotDetailsSection = "next" | "goals" | "queues" | "schedules" | "files" | "desktop" | "calls" | "discussions" | "history" | "settings";
+export type BotDetailsSection = "next" | "goals" | "queues" | "schedules" | "files" | "desktop" | "calls" | "history" | "settings";
 const sections = [
   { id: "next", label: "Up next", icon: ListOrdered },
   { id: "goals", label: "Goals", icon: Target },
@@ -16,18 +16,17 @@ const sections = [
   { id: "files", label: "Files", icon: FolderOpen },
   { id: "calls", label: "Calls", icon: Phone },
   { id: "desktop", label: "Desktop", icon: Monitor },
-  { id: "discussions", label: "Discussions", icon: MessageCircle },
   { id: "history", label: "History", icon: History },
   { id: "settings", label: "Settings", icon: Settings2 },
 ] as const;
 
 /** Presentation stays separate from the single conversation/composer. Hidden
  * sections retain their reading/form state but React pauses their effects. */
-export function BotDetailsDrawer({ bot, section, onSection, onClose, children, discussionAttention = 0, legacyDiscussionsOnly = false }: {
+export function BotDetailsDrawer({ bot, section, onSection, onClose, children }: {
   bot: Bot; section: BotDetailsSection; onSection: (section: BotDetailsSection) => void;
-  onClose: () => void; children: Record<BotDetailsSection, ReactNode>; discussionAttention?: number; legacyDiscussionsOnly?: boolean;
+  onClose: () => void; children: Record<BotDetailsSection, ReactNode>;
 }) {
-  const tabs = sections.filter(tab=>!legacyDiscussionsOnly || tab.id!=="discussions" || section === "discussions");
+  const tabs = sections;
   const dialog = useRef<HTMLDivElement>(null), id = useId();
   const [historyScroll, setHistoryScroll] = useState<HTMLDivElement | null>(null);
   const opener = useRef<HTMLElement | null>(null);
@@ -58,7 +57,7 @@ export function BotDetailsDrawer({ bot, section, onSection, onClose, children, d
             const index = tabs.findIndex(item => item.id === section);
             const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : (index + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
             const target = tabs[next].id; onSection(target); document.getElementById(`${id}-${target}`)?.focus();
-          }}><Icon size={17} aria-hidden="true" /><span>{label}{value === "discussions" && discussionAttention > 0 && <small className="bots-discussion-badge" aria-label={`${discussionAttention} discussions need attention`}>{discussionAttention}</small>}</span></Button>)}
+          }}><Icon size={17} aria-hidden="true" /><span>{label}</span></Button>)}
       </div>
       {sections.map(({ id: value }) => <Activity key={value} mode={section === value ? "visible" : "hidden"}>
         <div ref={value === "history" ? setHistoryScroll : undefined} className={`bots-details-panel is-${value}`} role="tabpanel" id={`${id}-${value}-panel`} aria-labelledby={`${id}-${value}`} tabIndex={0}>{value === "history" ? <HistoryScrollContext value={historyScroll}>{children[value]}</HistoryScrollContext> : children[value]}</div>

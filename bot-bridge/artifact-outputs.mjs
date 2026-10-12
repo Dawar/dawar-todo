@@ -128,7 +128,6 @@ export async function registerArtifact(runtime, bot, input, context = {}) {
           provenance: provenance(bot, context) });
       });
       if (runtime.storage) a = await runtime.storage.publish(bot,a);
-      if (context.contextId) runtime.emitEvent('collaboration.attachment', {contextId:context.contextId,roomId:context.roomId,attachment:runtime.publicAttachment(a)},bot.id);
       else if (context.laneId && runtime.runs?.isolated(context.runId)) runtime.runs.event(context.laneId, 'attachment', runtime.publicAttachment(a));
       else runtime.emitEvent('attachment', runtime.publicAttachment(a), bot.id);
       return publicResult(a);

@@ -25,7 +25,7 @@ export function WorkOverview({ owner, bot, work, online }: { owner: string; bot:
   const action = useRunAction(owner, bot.id, 'work:resume');
   work = work?.botId === bot.id && (!work.threadId || work.threadId === bot.threadId) ? work : undefined;
   const admission = work?.admission;
-  return <>{work?.paused && <div className="bots-work-pause"><Pause size={17} /><div><strong>Automatic work is paused</strong><p>Resume to continue queued schedules and discussions.</p></div>{!action.intent && <Button variant="outline" disabled={!online || action.busy || !action.ready} onClick={() => void action.perform('work.resume', {}).catch(() => {})}>Resume</Button>}</div>}
+  return <>{work?.paused && <div className="bots-work-pause"><Pause size={17} /><div><strong>Automatic work is paused</strong><p>Resume to continue queued and scheduled work.</p></div>{!action.intent && <Button variant="outline" disabled={!online || action.busy || !action.ready} onClick={() => void action.perform('work.resume', {}).catch(() => {})}>Resume</Button>}</div>}
     {(action.intent || action.error) && <div className="bots-action-recovery" role="status">{action.error || 'Resume is awaiting confirmation.'}<Button variant="outline" disabled={!online || action.busy} onClick={() => void action.retry().catch(() => {})}>{action.busy ? 'Checking…' : 'Check status'}</Button></div>}
     {admission && admission.waitingCount > 0 && <p className="bots-details-lead" role="status">{admission.waitingCount} accepted {admission.waitingCount === 1 ? 'item is' : 'items are'} awaiting a confirmed start. {online ? admission.reason : 'Reconnect to check current execution.'}</p>}
     {work?.goal && <section aria-label="Native objective"><h3>Objective · {work.goal.status}</h3><p className="bots-details-lead">{work.goal.objective}</p></section>}
@@ -52,7 +52,7 @@ export function AutomaticInbox({ owner, bot, work, online }: { owner: string; bo
   const [status, setStatus] = useState<{ scope: string; error: string; busy: boolean } | null>(null), [refresh, setRefresh] = useState(0), [update, setUpdate] = useState<{ scope: string; changed: boolean } | null>(null);
   const generation = useRef(0), page = savedPage?.scope === scope ? savedPage : null, cursor = position?.scope === scope ? position.cursor : null;
   const error = status?.scope === scope ? status.error : '', busy = status?.scope === scope && status.busy, changed = update?.scope === scope && update.changed;
-  useEffect(() => { const listener = (event: { botId?: string; type: string }) => { if (client.owner === owner && event.botId === botId && ['work','peer','schedules','queue'].includes(event.type)) { generation.current++; setUpdate({ scope, changed: true }); } }; client.events.add(listener); return () => { client.events.delete(listener); }; }, [owner, botId, scope]);
+  useEffect(() => { const listener = (event: { botId?: string; type: string }) => { if (client.owner === owner && event.botId === botId && ['work','schedules','queue'].includes(event.type)) { generation.current++; setUpdate({ scope, changed: true }); } }; client.events.add(listener); return () => { client.events.delete(listener); }; }, [owner, botId, scope]);
   useEffect(() => {
     let live = true;
     if (online && client.owner === owner) void Promise.resolve().then(async () => {
@@ -69,7 +69,7 @@ export function AutomaticInbox({ owner, bot, work, online }: { owner: string; bo
   }, [owner, botId, scope, cursor, online, refresh]);
   return <section className="bots-auto-inbox"><header><h3>Scheduled & shared work</h3><Button variant="outline" disabled={!online || busy} onClick={() => { setPosition({ scope, cursor: null }); setRefresh(value => value + 1); }}>{changed ? 'Refresh · updated' : 'Refresh'}</Button></header>
     {page?.items.map(item => { const label = inboxLabel(item, bot, work, online), detail = item.waitReason && !['Working', 'Needs your input', 'Accepted · waiting to start.', 'Accepted · automatic work is paused.', 'Execution needs confirmation.'].includes(item.waitReason) ? item.waitReason : null;
-      return <article key={item.id}><span className="bots-inbox-dot" /><div><strong>{item.summary}</strong><small>{label}{detail && detail.replace(/\.$/, '') !== label.replace(/\.$/, '') ? ` · ${detail}` : ''}</small></div><span>{item.kind === 'peer' ? 'Discussion' : item.kind === 'secure-input' ? 'Input' : 'Schedule'}</span></article>; })}
+      return <article key={item.id}><span className="bots-inbox-dot" /><div><strong>{item.summary}</strong><small>{label}{detail && detail.replace(/\.$/, '') !== label.replace(/\.$/, '') ? ` · ${detail}` : ''}</small></div><span>{item.kind === 'secure-input' ? 'Input' : 'Schedule'}</span></article>; })}
     {!page?.items.length && <p>{!online ? 'Reconnect to see upcoming work.' : error ? 'Upcoming work could not be confirmed.' : busy || !page ? 'Loading upcoming work…' : 'Nothing waiting here.'}</p>}
     {error && <p role="alert">{error}</p>}{page?.nextCursor && <Button variant="outline" disabled={busy || !online} onClick={() => setPosition({ scope, cursor: page.nextCursor })}>More upcoming work <ArrowRight size={14} /></Button>}
   </section>;

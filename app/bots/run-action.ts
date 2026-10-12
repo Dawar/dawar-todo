@@ -67,21 +67,18 @@ class RunAction {
     const beforeBot = isGoal ? client.snapshot?.bots.find(bot => bot.id === this.botId) : undefined;
     const beforeGoal = beforeBot ? goalFingerprint(beforeBot, client.snapshot?.workByBot?.find(work => work.botId === this.botId)) : null;
     try {
-      const selected = await runActionJournal(this.key, "id" in command ? { kind: "exact", id: command.id } : { kind: "admit", intent: { id: crypto.randomUUID(), ...command, ...(command.method.startsWith('conversations.')?{targetBotId:this.botId}:{}) } });
+      const selected = await runActionJournal(this.key, "id" in command ? { kind: "exact", id: command.id } : { kind: "admit", intent: { id: crypto.randomUUID(), ...command } });
       this.apply(selected); changed(this.key);
       const operation = selected.selected;
       if (!operation) throw Error("No saved action was selected. Retry recovery.");
       if (operation.state === "accepted") return (operation as Intent & {result?:unknown}).result;
       if (operation.state === "rejected") throw Error(operation.error || "This exact action was rejected. Review the current state before making a new action.");
       intent = operation;
-      if (intent.method === "peers.control" && this.scope !== `peer-root:${intent.params.rootId}`) throw Error("The saved control belongs to a different discussion. Its original identity is retained; no control was sent.");
       if (intent.method === "runs.decide" && client.snapshot?.capabilities?.scheduleDecisions !== 1) throw Error("Connect to a service that supports scheduled-run choices. The saved choice is retained.");
       if (intent.method === "bursts.discard" && client.snapshot?.capabilities?.burstDiscard !== 1) throw Error("Connect to the updated service to discard these messages. The saved action is retained.");
       if (intent.method === "bursts.queue" && client.snapshot?.capabilities?.burstQueue !== 1) throw Error("Connect to the updated service to queue held messages. The saved action is retained.");
       if ((intent.method === "bursts.resume" || intent.method === "bursts.discard" && intent.params.pendingOnly) && client.snapshot?.capabilities?.burstControls !== 1) throw Error("Connect to the updated service for held-message controls. This saved action is retained.");
-      const roomAction = intent.method.startsWith("conversations.") || intent.method === "collaboration.promote" || intent.method === "requests.respond" && this.scope.startsWith("room-question:");
-      if (roomAction && intent.method !== "conversations.create" && intent.method !== "collaboration.promote" && intent.method !== "requests.respond" && !this.scope.startsWith(`room:${intent.params.roomId}:`)) throw Error("This saved room action belongs to its captured room. Nothing was sent.");
-      const capability = roomAction ? 'collaborationRooms' : intent.method.startsWith('goals.') ? 'nativeGoals' : intent.method === "peers.control" ? "peerRootControls" : intent.method.startsWith("bursts.") ? "messageBursts" : (intent.method === "work.resume" || intent.method === "turn.interrupt" && intent.params.scope === "main" && client.snapshot?.capabilities?.singleThreadExecution === 1) ? "singleThreadExecution" : intent.method === "peers.cancel" ? "peerInbox" : "backgroundRunLanes";
+      const capability = intent.method.startsWith('goals.') ? 'nativeGoals' : intent.method.startsWith("bursts.") ? "messageBursts" : (intent.method === "work.resume" || intent.method === "turn.interrupt" && intent.params.scope === "main" && client.snapshot?.capabilities?.singleThreadExecution === 1) ? "singleThreadExecution" : "backgroundRunLanes";
       if (client.snapshot?.capabilities?.[capability] !== 1) throw Error("This service does not support the saved action. Its identity is retained.");
       if (intent.method.startsWith('goals.')) {
         for (const scope of ['stop:main', 'stop:all', 'work:resume']) {
@@ -97,7 +94,7 @@ class RunAction {
       // Guard a NEW UI burst placement after its durable IDB admission. Recovery
       // retains the original frozen operation; the callback is never persisted.
       if (intent.method === "bursts.queue" && beforeBurstQueue && !beforeBurstQueue()) throw Error("The captured Queue destination changed while saving. The original action remains available for review.");
-      const result = await client.rpc(intent.method, intent.targetBotId??this.botId, intent.params, intent.id, { owner: this.owner, managed: true });
+      const result = await client.rpc(intent.method, this.botId, intent.params, intent.id, { owner: this.owner, managed: true });
       if (!result || typeof result !== "object" || Array.isArray(result)) throw Error("The response did not confirm this action. Check the same saved action again.");
       if (intent.method.startsWith('goals.')) {
         const thread = this.scope.slice('native-goal:'.length);
@@ -121,13 +118,7 @@ class RunAction {
         const receipt = (result as { control?: { operationId?: string; method?: string; botId?: string } }).control;
         if (receipt?.operationId !== intent.id || receipt.method !== intent.method || receipt.botId !== this.botId) throw Error("This burst control was not confirmed. Check the same saved action again.");
       }
-      if (intent.method === "peers.cancel" && (result as { request?: { id?: string } }).request?.id !== intent.params.id) throw Error("The reply did not confirm this discussion. Retry its saved action.");
-      if (intent.method === "peers.control") {
-        const { control, root } = result as import("../../lib/bots-types").BotPeerControl;
-        if (control?.operationId !== intent.id || control.botId !== this.botId || control.rootId !== intent.params.rootId || control.action !== intent.params.action || control.expectedRevision !== intent.params.expectedRevision || control.appliedRevision !== Number(intent.params.expectedRevision) + 1 || control.scope !== "discussion-admission" || control.nativeInterruption !== false || root?.id !== control.rootId || root.revision !== control.appliedRevision || root.version !== 1) throw Error("This discussion control was not confirmed. Check the same saved action again.");
-      }
-      if (roomAction) validateRoomReceipt(intent, result);
-      this.apply(await runActionJournal(this.key, { kind: "settle", id: intent.id, state: "accepted", ...(roomAction ? {result} : {}) })); changed(this.key);
+      this.apply(await runActionJournal(this.key, { kind: "settle", id: intent.id, state: "accepted",  })); changed(this.key);
       return result;
     } catch (reason) {
       const error = reason instanceof Error ? reason.message : "This action is unconfirmed. Check the same saved action again.";
@@ -144,28 +135,11 @@ class RunAction {
   retry = () => this.intent ? this.execute({ id: this.intent.id }) : this.refresh();
 }
 
-function validateRoomReceipt(intent: Intent, result: unknown) {
-  const r = result as Record<string, unknown>, p = intent.params;
-  const sameIds = (a: unknown, b: unknown) => Array.isArray(a) && Array.isArray(b) && a.length === b.length && new Set(a).size === a.length && a.every(id => b.includes(id));
-  if (intent.method === 'conversations.post') {
-    const ack = r as unknown as BotOperations['conversations.post']['result'];
-    if (ack.post?.author?.kind !== 'owner' || ack.post.operationId !== intent.id || ack.post.roomId !== p.roomId || ack.post.text !== p.text || ack.post.kind !== p.kind || ack.post.expectation !== (p.expectation??'none') || ack.post.workId !== (p.workId??null) || ack.post.requestId !== (p.requestId??null) || ack.post.rootId !== (p.rootId??null) || !sameIds(ack.post.recipients, p.recipients ?? []) || !Array.isArray(ack.deliveries) || ack.deliveries.length !== ack.post.recipients.length || new Set(ack.deliveries.map(d=>d.botId)).size !== ack.deliveries.length || ack.deliveries.some(d=>!d.id || d.postId!==ack.post.id || d.roomId!==p.roomId || !ack.post.recipients.includes(d.botId))) throw Error('The original post/delivery acknowledgement is incomplete. Reconcile the same saved action.');
-  } else if (intent.method === 'conversations.create' || intent.method === 'conversations.membership' || intent.method === 'conversations.hold') {
-    if (typeof r.id !== 'string' || !Number.isSafeInteger(r.revision) || intent.method !== 'conversations.create' && r.id !== p.roomId || intent.method !== 'conversations.hold' && !sameIds(r.members, p.members) || intent.method === 'conversations.create' && r.type !== p.type || intent.method === 'conversations.hold' && r.held !== p.held || intent.method !== 'conversations.create' && r.revision !== Number(p.expectedRevision)+1) throw Error('The exact room change was not confirmed. Reconcile its original action.');
-  } else if (intent.method === 'collaboration.promote') {
-    const value = r as unknown as BotOperations['collaboration.promote']['result'];
-    // Already promoted returns the original promotion receipt, never another intake.
-    if (value.id !== p.resultId || value.workId !== p.relatedWorkId || !value.promotion?.id || !value.promotion.operationId) throw Error('Result promotion is unconfirmed. Reconcile its original action.');
-  }
-}
-
 export function useRunAction(owner: string, botId: string, scope: string) {
   const action = useMemo(() => {
-    // Room owner mutations share one journal across navigator member changes.
     // Each immutable operation retains its original API anchor bot.
-    const shared=scope.startsWith('room:')||scope==='rooms:create';
-    const key = `dawar-run-action:v1:${JSON.stringify([owner, shared?'room-owner':botId, scope])}`;
-    const cacheKey=shared?JSON.stringify([key,botId]):key;
+    const key = `dawar-run-action:v1:${JSON.stringify([owner, botId, scope])}`;
+    const cacheKey=key;
     let value = actions.get(cacheKey);
     if (!value) { value = new RunAction(owner, botId, key, scope); actions.set(cacheKey, value); }
     return value;

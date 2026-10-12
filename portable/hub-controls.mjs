@@ -7,8 +7,6 @@ import {acceptSingleThreadOperation} from '../bot-bridge/single-thread-operation
 import {PrimaryExecution} from '../bot-bridge/primary-execution.mjs';
 import {preferencePatch} from '../bot-bridge/bot-preferences.mjs';
 import {HubBursts} from './hub-bursts.mjs';
-import {HubCollaboration} from './hub-collaboration.mjs';
-import {HubPeers} from './hub-peers.mjs';
 import { stagedQueue } from '../bot-bridge/prompt-queue.mjs';
 import { ownedList,publicLists,queueTool,flushDueLists } from '../bot-bridge/queue-lists.mjs';
 import { normalizeSchedule,collectDueRuns } from '../bot-bridge/schedules.mjs';
@@ -24,7 +22,7 @@ import {operatorSource,validateOperatorSource} from './operator-source.mjs';
 import {storedRuntimeDefaults} from './runtime-defaults.mjs';
 export { hubActivation } from './hub-authority.mjs';
 import { controlWriteGuard } from './hub-authority.mjs';
-import { HUB_READS,HUB_MUTATIONS,HUB_TOOLS,NODE_LOGICAL_COMMANDS,HUB_BURST_MUTATIONS,HUB_ROOM_READS,HUB_ROOM_MUTATIONS,HUB_PEER_READS,HUB_PEER_MUTATIONS } from './control-protocol.mjs';
+import { HUB_READS,HUB_MUTATIONS,HUB_TOOLS,NODE_LOGICAL_COMMANDS,HUB_BURST_MUTATIONS } from './control-protocol.mjs';
 
 export { HUB_READS,HUB_MUTATIONS,HUB_TOOLS,NODE_LOGICAL_COMMANDS };
 const now=()=>new Date().toISOString();
@@ -44,8 +42,6 @@ export class HubControls extends EventEmitter {
     this.primary={store:this.store,runtime:this,single:bot=>PrimaryExecution.prototype.single(bot),accept:PrimaryExecution.prototype.accept,
       list:PrimaryExecution.prototype.list,publicItem:PrimaryExecution.prototype.publicItem,cursor:PrimaryExecution.prototype.cursor,openItems:PrimaryExecution.prototype.openItems,
       publish:botId=>this.emitEvent('work',{},botId)};this.bursts=HubBursts.create(this);
-    this.collaboration=new HubCollaboration(this);
-    this.peers=new HubPeers(this);
     const transaction=this.store.transaction.bind(this.store);
     const refresh=controlWriteGuard(this.store.db,{writeScope:()=>this.store.transactionDepth>0,transactionScope:()=>this.controlTransactionDepth>0});
     this.store.transaction=fn=>{
@@ -150,11 +146,6 @@ export class HubControls extends EventEmitter {
   async request(owner,{method,botId,params={},operationId},caller={kind:'owner'}) {
     const {b}=this.scope(owner,botId);
     if(!params||typeof params!=='object'||Array.isArray(params))throw Error('Invalid logical control parameters.');
-    if(HUB_PEER_READS.has(method)||HUB_PEER_MUTATIONS.has(method)){
-      if(caller.kind!=='owner')throw Error('Use the captured assigned peer tool route.');
-      return this.peers.request(owner,{method,botId,params,operationId});
-    }
-    if(HUB_ROOM_READS.has(method)||HUB_ROOM_MUTATIONS.has(method)||method==='conversations.respond')return this.collaboration.request(owner,{method,botId,params,operationId},caller);
     if(method==='inbox.list')return this.primary.list(b,params);
     if(method==='bursts.read')return this.bursts.read(b);
     if(method==='bursts.typing'){
@@ -287,7 +278,7 @@ export class HubControls extends EventEmitter {
   async tick(date=new Date()) {
     if(this.ticking||this.closed)return;this.assertWriter();this.ticking=true;
     try{
-      this.reconcileReceipts();await this.collaboration.pump();await this.bursts.tick();await flushDueLists(this,date);this.assertWriter();
+      this.reconcileReceipts();await this.bursts.tick();await flushDueLists(this,date);this.assertWriter();
       const created=collectDueRuns(this.store,date);
       this.store.transaction(()=>{for(const run of created)if(this.quiet(run,date))this.store.put('run',{...run,decision:{id:`quiet:${run.id}`,version:1,state:'required',reason:'Quiet release window; original occurrence retained, not started.'}});});
       for(const p of this.hub.db.prepare('SELECT * FROM portable_placements ORDER BY bot_id').all()){
@@ -295,7 +286,7 @@ export class HubControls extends EventEmitter {
         const bot=this.store.bot(p.bot_id);if(bot.archived||bot.archiving||bot.deletedAt||bot.queuePaused||this.plans.blocked(bot.id))continue;
         if(this.hub.db.prepare("SELECT 1 FROM portable_mailbox WHERE bot_id=? AND state<>'terminal' LIMIT 1").get(bot.id))continue;
         const item=stagedQueue(this.store,bot.id)[0],run=this.store.list('run',bot.id).filter(r=>r.status==='queued'&&!r.laneId&&!r.selectedContext&&(!r.decision||r.decision.state==='start-approved')).sort((a,b)=>a.scheduledAt.localeCompare(b.scheduledAt))[0];
-        const intake=!item&&!run&&this.router.connection(p)?.portableHello?.capabilities?.centralPrimaryDispatch===true?this.store.db.prepare("SELECT json FROM records WHERE kind='primaryInbox' AND bot_id=? AND json_extract(json,'$.state')='queued' ORDER BY rowid LIMIT 1").get(bot.id):null;
+        const intake=!item&&!run&&this.router.connection(p)?.portableHello?.capabilities?.centralPrimaryDispatch===true?this.store.db.prepare("SELECT json FROM records WHERE kind='primaryInbox' AND bot_id=? AND json_extract(json,'$.state')='queued' AND json_extract(json,'$.kind')='task-request' ORDER BY rowid LIMIT 1").get(bot.id):null;
         if(item&&(item.state!=='queued'||item.configuration?.confirmation==='pending-unsupported')||!item&&!run&&!intake||this.quiet(item||intake?null:run,date))continue;
         const response=await this.router.request(p.owner,{id:`work:${randomUUID()}`,method:'work.read',botId:bot.id,params:{}},'hub:scheduler');
         const w=response.result;if(response.cache?.stale||w?.botId!==bot.id||w.threadId!==bot.threadId||w.state!=='ready'||w.activeTurnId||w.paused||w.goal?.status==='active')continue;
@@ -303,11 +294,12 @@ export class HubControls extends EventEmitter {
       }
     }finally{this.ticking=false;}
   }
-  primaryEligible(owner,intake){
-    if(intake.kind==='peer')return this.peers.eligible(owner,intake);
-    if(intake.kind==='task-request')return this.taskRequests?.eligible(intake)===true;
-    const r=this.store.get('collaborationResult',intake.sourceId);
-    return r?.botId===intake.botId&&r.promotion?.id===intake.id&&!this.store.get('collaborationConsumption',r.id);
+  primaryEligible(owner,intake){return intake.kind==='task-request'&&this.taskRequests?.eligible(intake)===true;}
+  primaryAdmissionState(owner,nodeId,botId,epoch,operationId,hash){
+    const {p}=this.scope(owner,botId),row=this.hub.db.prepare('SELECT * FROM portable_mailbox WHERE operation_id=?').get(operationId);
+    if(p.node_id!==nodeId||p.epoch!==epoch||!row||row.owner!==owner||row.bot_id!==botId||row.node_id!==nodeId||row.epoch!==epoch||row.fingerprint!==hash)throw Error('Foreign original intake command.');
+    const payload=JSON.parse(row.payload);if(payload.method!=='portable.primaryDispatch')throw Error('Unsupported intake command.');
+    return this.primaryState(row,payload);
   }
   primaryState(row,payload){
     const {p,b}=this.scope(row.owner,row.bot_id),intake=this.store.get('primaryInbox',row.operation_id);
@@ -360,14 +352,12 @@ export class HubControls extends EventEmitter {
   reconcileReceipts() {
     // A durable applied hash prevents a busy recent tail from starving older
     // receipts, and catches later terminal evidence for the same operation.
-    const rows=this.hub.db.prepare("SELECT m.* FROM portable_mailbox m LEFT JOIN portable_control_receipts c ON c.operation_id=m.operation_id WHERE m.receipt IS NOT NULL AND (c.receipt_hash IS NULL OR c.receipt_hash<>m.receipt_hash) AND json_extract(m.payload,'$.method') IN ('portable.queueDispatch','portable.scheduleDispatch','portable.queueSend','portable.queueResume','portable.burstDispatch','portable.roomDispatch','portable.roomRespond','portable.primaryDispatch') ORDER BY m.sequence LIMIT 40").all();
+    const rows=this.hub.db.prepare("SELECT m.* FROM portable_mailbox m LEFT JOIN portable_control_receipts c ON c.operation_id=m.operation_id WHERE m.receipt IS NOT NULL AND (c.receipt_hash IS NULL OR c.receipt_hash<>m.receipt_hash) AND json_extract(m.payload,'$.method') IN ('portable.queueDispatch','portable.scheduleDispatch','portable.queueSend','portable.queueResume','portable.burstDispatch','portable.primaryDispatch') ORDER BY m.sequence LIMIT 40").all();
     for(const row of rows)this.receipt(row);
   }
   receipt(row) {
     const payload=JSON.parse(row.payload),receipt=row.receipt&&JSON.parse(row.receipt);if(!NODE_LOGICAL_COMMANDS.has(payload.method)||!receipt)return;
     if(payload.method==='portable.burstDispatch'){this.bursts.receipt(row);return;}
-    if(payload.method==='portable.roomDispatch'){this.collaboration.receipt(row);return;}
-    if(payload.method==='portable.roomRespond'){this.collaboration.answerReceipt(row);return;}
     if(payload.method==='portable.primaryDispatch'){
       this.store.transaction(()=>{
         const {p,b}=this.scope(row.owner,row.bot_id),q=this.store.get('primaryInbox',row.operation_id);
@@ -382,8 +372,7 @@ export class HubControls extends EventEmitter {
           if(q.turnId&&q.turnId!==receipt.turnId)throw Error('Original result receipt changed its accepted turn.');
           patch={state:'accepted',turnId:receipt.turnId,...(row.state==='terminal'?{terminalStatus:terminal}:{}),error:null};
         }else return;
-        const accepted=this.store.put('primaryInbox',{...q,...patch});this.emitEvent('work',{},b.id);
-        if(q.kind==='peer')this.peers.receipt(row.owner,accepted,patch.turnId?{id:patch.turnId,status:patch.terminalStatus??'inProgress'}:null);
+        this.store.put('primaryInbox',{...q,...patch});this.emitEvent('work',{},b.id);
         this.store.db.prepare('INSERT INTO portable_control_receipts VALUES(?,?) ON CONFLICT(operation_id) DO UPDATE SET receipt_hash=excluded.receipt_hash').run(row.operation_id,row.receipt_hash);
       });return;
     }

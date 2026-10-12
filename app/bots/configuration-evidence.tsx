@@ -1,6 +1,6 @@
 "use client";
 
-import type { ExecutionSettings, TurnConfiguration } from "../../lib/bot-collaboration";
+import type { ExecutionSettings, TurnConfiguration } from "../../lib/bot-execution-configuration";
 
 export function settingsText(settings: ExecutionSettings | null | undefined) {
   if (!settings) return "Unknown configuration";

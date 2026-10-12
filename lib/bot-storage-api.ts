@@ -43,7 +43,6 @@ export async function botStorageResponse(request: Request, environment: Environm
       case "finalize": result = await storage.finalize(String(input.id),String(input.botId)); break;
       case "download": case "preview": result = await storage.download(String(input.id),String(input.botId),action === "preview"); break;
       case "list": result = await storage.list(input as Record<string,string>); break;
-      case "share": result = await storage.share(input as Parameters<BotStorage["share"]>[0]); break;
       case "copy": result = await storage.copy(input as Parameters<BotStorage["copy"]>[0]); break;
       default: throw new StorageError("Unknown storage action.");
     }

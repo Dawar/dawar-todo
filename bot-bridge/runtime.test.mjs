@@ -1297,27 +1297,6 @@ test("waiting recovery shares validity and exact question rules with retained la
 });
 
 
-test("waiting recovery fences peer admission by thread without inventing native MCP provenance", async t => {
-  const { runtime, store, create } = await setup(t);
-  const bot = await create();
-  nativeStart(runtime, bot.threadId, "peer-current");
-  const accepted = [];
-  runtime.handle = async (_message, origin) => {
-    runtime.peers.assertOrigin(store.bot(bot.id), origin);
-    accepted.push(origin);
-  };
-  await runtime.peerTool(store.bot(bot.id), { operation: "directory" },
-    { authority: "authenticated-bot-mcp", botId: bot.id, threadId: null, turnId: null, callId: null });
-  await runtime.peerTool(store.bot(bot.id), { operation: "directory" },
-    { authority: "native-tool", botId: bot.id, threadId: bot.threadId, turnId: "peer-current", callId: "native-call" });
-  assert.equal(accepted[0].threadId, null);
-  assert.equal(accepted[0].turnId, null);
-  assert.equal(accepted[0].activityThreadId, bot.threadId);
-  runtime.saveBot(store.bot(bot.id), { threadId: "peer-replacement" });
-  for (const origin of accepted) assert.throws(() => runtime.peers.assertOrigin(store.bot(bot.id), origin), /changed|no longer confirmed/);
-});
-
-
 test("waiting recovery automatically reconciles thread replacement even without a status notification", async t => {
   const { runtime, store, codex, create } = await setup(t);
   const bot = await create();

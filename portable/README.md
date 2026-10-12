@@ -1,15 +1,5 @@
 # Portable DawarTodo
 
-Canonical room lists, bounded posts/results, membership and hold controls use
-the hub control store and the original collaboration acceptance closures. Pair
-IDs, post IDs, per-recipient delivery IDs and original operation receipts are
-preserved. Every member must belong to the authenticated hub owner, including
-historical rows returned through bounded pages. Informational posts cause no
-model delivery. Addressed posts persist as queued with truthful routing-pending
-metadata; native room dispatch/history/questions and captured bot-tool callers
-remain unfinished, and the rooms capability stays hidden until that integration
-is verified. The hub never runs the local native collaboration scheduler.
-
 The single-owner portable gateway passes its preserved owner key to Todo API
 authentication. A valid token created for another owner is rejected before
 last-used bookkeeping or site forwarding. The existing hosted entrypoint,
@@ -60,13 +50,10 @@ in the original site before it can supply that evidence.
 
 ## Roles
 
-The private Linux agent configuration can select `agent.centralRouting: true`
-for the paired room, foreground intake, peer, Task Requests and Operator
-consumers. Enrollment and the live connection describe the same selection;
-omission keeps these routes disabled. The hub exposes rooms only when all
-assigned nodes have returned actual snapshots and advertise that live route.
-This does not enable autonomous Goals, voice, or an unvalidated platform.
-The release/activation, fresh controls and original receipt checks still apply.
+The private Linux agent configuration selects `agent.centralRouting: true`
+for foreground intake, Task Requests and Operator consumers. Enrollment and
+the live connection describe the same selection; omission keeps these routes
+disabled. Release, fresh controls and original receipt checks still apply.
 
 The hub owns human authentication, application SQLite, global logical control
 and durable delivery. Agents own local Codex stdio, native workspaces/history,
@@ -207,23 +194,9 @@ Node admission supports assigned explicit turns and the hub's internal saved
 queue/schedule commands. Unsupported controls fail closed; there is no agent
 queue/schedule tick or second logical scheduler.
 
-`context-admission.mjs` attaches the same fresh placement/Stop fence to each
-registered named room context. Creating a Linux context requires a captured
-original queued delivery; the guard rechecks its exact bytes, placement epoch,
-control revision, membership and tools after capacity reads. Anonymous starts
-and forks refuse before allocating a native RPC. Bound room turns require the
-original dispatch ID and frozen native parameters. Native resume also requires
-fresh online control because it can activate Goal/queue work. Read-only history
-remains available offline. Synchronized Stop may pause an already admitted Goal
-only with the existing exact automatic pause parameters.
-
-A local guard refusal is recorded by in-process identity, never by supplied
-`definite`/`not-sent` properties. Only this positive pre-write evidence restores
-the same prepared context; native errors/lost creation ACKs retain uncertainty
-and never create a replacement. This is an admission component, not installed
-room parity: central cross-node room routing, automatic native Goal containment,
-consumer wiring and genuine all-context acceptance remain unfinished. No room
-or autonomous-Goal capability is advertised by this component.
+Retired auxiliary-context records remain private and unchanged. Pending or
+unknown native work and resource effects still block unsafe maintenance. No
+room or peer tool, API or delivery producer is shipped.
 
 Next.js and Sharp security updates are validated before this Node target may
 be exposed publicly. The Cloudflare production route remains unchanged.
@@ -295,7 +268,7 @@ Resume receipt can reconcile an ambiguous Resume; no native retry is used.
 The low-level Stop endpoint cannot clear Stop and bypass these checks.
 
 This staging step does not complete task/burst transfer,
-all room/desktop/voice/browser roles, registered-file transfer or provisioning.
+all desktop/voice/browser roles, registered-file transfer or provisioning.
 Generic runtime capabilities for unfinished transport consumers are hidden.
 The application writer freeze, production authority migration, actual native
 activation, genuine Mac enrollment and public rollover remain separate gates.
@@ -312,7 +285,7 @@ Agent and full-hub packages include the exact memory atomic helper and bounded a
 
 The agent's storage adapter uses its authenticated node connection for bounded registration, prepare/finalize, scoped download/preview and read-only task-export metadata. The hub derives bot identity from the canonical registry and checks node/owner/placement epoch before every response and before returning an old success. Paths and legacy machine service credentials are not transmitted. Original metadata operation fingerprints and file catalog identities are durable. Ambiguous replies reconcile the same registered file; they do not recreate a native input.
 
-Upload/download grants are restricted to the same origin, registered object, node/bot/placement epoch and expiry. Revocation, placement changes and the hub write freeze invalidate them; transfers check their grant while streaming. Node uploads additionally bind the original checksum. The existing bounded local publication snapshot and registered-file checksum behavior is retained. General Task Requests and cross-node peer file grants await their canonical addressed authorization adapters; capabilities remain honest. Mac workspace/repositories stay local unless explicitly published.
+Upload/download grants are restricted to the same origin, registered object, node/bot/placement epoch and expiry. Revocation, placement changes and the hub write freeze invalidate them; transfers check their grant while streaming. Node uploads additionally bind the original checksum. The existing bounded local publication snapshot and registered-file checksum behavior is retained. General Task Requests retain their scoped attachment authorization adapters. Mac workspace/repositories stay local unless explicitly published.
 
 Both packaged bundles retain the same exact adjacent runtime companion list. The hub uses those immutable files for source guard references; copying them does not start a native process or confer execution authority. Package import/health validation uses disposable data with execution disabled.
 
@@ -955,153 +928,7 @@ even if a browser supplies a bot ID. Burst preferences follow the existing
 validated native bot event into the hub. `centralBursts` is currently declared
 only by Linux; Mac execution/acceptance remains deferred. This source contract
 does not establish production installation, genuine owner/device adoption or
-the remaining room/peer and cutover controller contracts.
-
-### Staged registered room delivery
-
-The hub reserves an addressed task/question under its original canonical
-delivery ID on the same control transaction as its mailbox and operation.
-Only the current signed node connection's `centralRoomDispatch` capability
-permits reservation. Quiet posts never reserve a native input. The agent
-persists its original attempt before context creation, resume or input and
-uses the existing registered named-context producer, eight-slot and per-bot
-limits, tool/resource, current Goal, expected-turn and Stop guards.
-
-Immediately before each possible native write, a bounded authenticated
-`room-request` verifies the current hub room, immutable post/delivery,
-membership, hold, control revision and placement. A stale or unavailable
-confirmation prevents admission. Unknown creation/input outcomes retain the
-same operation; recovery reads the original native client and input rather
-than creating a replacement thread or retrying the send. Positive receipts
-project the unique room thread, turn and native terminal outcome back into
-the hub; foreground history is separate. `conversations.contexts` reads this
-captured metadata through the same owner scope and page budget.
-
-Automatic `centralRoomDispatch` remains **false** in the shipping agent hello,
-and `collaborationRooms` stays hidden in browser snapshots until captured
-hub tool/result/question/history consumers are paired. Disposable Linux
-route observations use a fixture-only positive capability and inert native
-boundary; they do not establish installed native, device or production proof.
-
-### Captured registered room tools and useful results
-
-The agent intercepts the existing native `bots_conversations` handler with
-its application-captured bot/context/thread/turn. The authenticated
-`room-tool-request` broker confirms the assigned node/placement, fresh Stop
-revision and original addressed delivery proof before the original central
-room acceptance closure. Model arguments cannot assert owner identity.
-Authorization precedes recovery of any old successful operation. Posts and
-useful results persist only in the canonical hub store; they do not create
-a separate local room log or wake the foreground bot.
-
-A tool may arrive before its input ACK. Only positive exact-client evidence
-can bind that original live context for tool use. This does not invent a
-transport ACK, advance the mailbox or repeat the native input. Later receipts
-retain newer context revisions and terminal outcomes. A lost tool ACK retains
-the same logical operation and can recover its exact original result; there
-is no automatic resend or replacement operation.
-
-Native history/configuration and desktop/workspace/external resource leases
-remain on the assigned machine. Fresh central caller/membership/hold/control
-authorization precedes the original local guarded operation. No cross-machine
-shared-filesystem lock or OS sandbox is implied. Foreground room dispatch,
-await/promotion/consumption still await
-their paired consumers. Unsupported native operations fail explicitly before
-creating local shadow records. Automatic room capability remains disabled.
-
-### Owner room history and asynchronous answers
-
-Owner history, item detail, work log, requested configuration and question
-reads are routed to the assigned agent's original registered native context.
-The hub captures bot, node, placement epoch, room membership revision, context
-and native thread before the read, then rechecks that scope before persistence.
-History remains machine-local; matching offline cached pages explicitly retain
-their observation age. A cached question cannot authorize a new answer.
-
-Public question catalog reads retain the original question/request identity
-and source fingerprint. Secret questions are excluded. An owner answer first
-performs a private, live, exact-key lookup on the assigned agent; that internal
-lookup is unavailable as a public RPC. Changed, unavailable, foreign or stale
-question sources refuse the answer without creating a replacement operation.
-
-For asynchronous questions, the checked source, answer, canonical room post,
-delivery and original owner receipt are persisted in the same transaction.
-The answer uses the original deterministic question delivery/client ID and
-the same registered native producer as ordinary addressed room work. Queueing
-is not native acceptance. The original pending question is removed only after
-positive matching native acceptance; uncertain receipts retain their IDs and
-never retry the input. Owner lost-ACK recovery returns that same original
-delivery and rejects changed answer bytes or a replacement operation ID.
-
-Room native terminal events settle the corresponding node journal command.
-Context snapshots retain their own current native generation and active turn;
-a delayed completion of an older delivery cannot clear a newer active turn.
-Synchronous answers use an original owner-operation mailbox command, bound to
-the exact question, native request ID (including its type), agent lifetime,
-bot, node, placement epoch and registered context. Current live source and
-Stop/room/context fences are checked before admission. The original local
-response producer persists its operation, and the node journal persists the
-attempt, before writing the response to existing native stdio. This does not
-start a new model turn or enqueue another answer message.
-Existing room cards' `requests.respond` action routes centrally only for a
-canonical original room question or answer. Other foreground requests keep
-their assigned-agent route; neither alias supplies owner or question authority.
-
-A positive receipt says `written` / `native-stdio-write`; it does not assert
-native acknowledgement or exactly-once external effects. Lost delivery ACKs
-recover the same durable operation. An uncertain write stays unknown and
-cannot resend the response. A new agent lifetime cannot answer an old handle;
-it can only read a positively completed original write receipt. Hub and node
-validate that precise write proof before terminal settlement. Pending source
-records clear only on a matching original write receipt; later native turn
-completion remains separate. Automatic room capability remains false
-until the remaining foreground, result and other communication consumers are
-complete. Disposable Linux/loopback observations are source evidence, not
-installed native, owner, device or production acceptance.
-
-Foreground collaboration tools capture the assigned agent's actual observed
-thread, turn, persistent activity generation and live agent lifetime. The hub
-checks that authenticated placement and current controls before consulting a
-prior operation. Native Goal turns can use this same path without inventing a
-mailbox client receipt. Terminal/newer generation evidence rejects late callers;
-an older bot projection cannot replace newer hub activity. Local resources and
-configuration still use the original agent caller/effect guards.
-
-Results remain passive until a declared dependency/milestone or deliberate owner
-selection promotes one into the original `primaryInbox` identity. The hub stores
-that intake and its mailbox command in one transaction; the agent journals the
-attempt before normal native submission. It waits for current work, Stop, Plan,
-Goals and native queued work to settle, and never steers a result into a running
-turn. The same original native client receipt settles acceptance and terminal
-outcome; consumption requires the exact promoted foreground turn. Lost native
-ACKs only reconcile that original input, never create another submission.
-Central inbox reads show canonical metadata with bounded paging. Normal queue
-items and scheduled occurrences keep their existing admission priority.
-`centralPrimaryDispatch` and automatic room routing remain disabled until peer,
-task and Operator consumers are paired and complete Linux staging is accepted.
-
-### Canonical peer transport
-
-The hub reuses `PeerInbox` for original request/root/exchange/operation IDs,
-measured discussion limits, held inputs and reserved first replies. Owner
-Continue/Stop remains owner-only. Agent tools retain actual native caller
-provenance or nullable bot-only MCP provenance; their signed assigned-node
-lifetime and captured foreground generation fence new acceptance and same-ID
-receipt reconciliation. Peer messages grant no human authority. Legacy root
-upgrades do not run during read-only hub construction.
-
-Selected ready files use deterministic original `peer-file` IDs and scoped
-registered-storage grants. The hub has no remote workspace path authority.
-The recipient downloads and verifies original IDs, hashes and sizes before its
-normal primary turn is admitted. A file grant can survive a pre-control-commit
-failure; a same-ID retry reuses it without publishing a second intake.
-
-Peer requests/replies use the same canonical primary mailbox as promoted room
-results. Only an eligible active original root can start a queued peer intake;
-per-bot Stop, native Goals/queue/unknown state and original journal/receipt fences
-still apply. Unknown native acceptance is reconciled without a new submission.
-The shipping `centralPeers`, `centralPrimaryDispatch` and room-start capabilities
-remain disabled pending complete unified Linux staging and accepted activation.
+the remaining cutover controller contracts.
 
 ## Goals on Linux and macOS
 

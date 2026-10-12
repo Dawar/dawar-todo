@@ -26,11 +26,11 @@ Every request binds `operationId`, full `commit`, `version`, current bridge
 the same identity/specification. Metadata and non-secret receipts live in the
 existing `runtimeMaintenance` records. A duplicate begin cannot extend expiry;
 changed input conflicts. An expired/cancelled/dead-process operation cannot
-reopen. This policy does not change peer budgets or previous upgrade receipts.
+reopen. Previous upgrade receipts remain unchanged.
 
 The drain lasts at most 900 seconds, bounded by both wall and monotonic clocks.
 `draining` rejects fresh direct starts before effects; draft contents remain
-client-owned. Already durable queue/peer/burst inputs remain intact. New local
+client-owned. Already durable queued/burst inputs remain intact. New local
 queued input can be positively acknowledged, but its native dispatch waits.
 Due schedules retain the existing occurrence ID once. No automatic retry under
 a new ID, Stop, Goal pause/resume, queue flush or historical replay occurs.
@@ -86,7 +86,7 @@ returns, the original raw rows, all current bot bindings, lease and native
 notification generation must still match. Database/WAL and rollout inode,
 size and nanosecond modification stamps must remain unchanged. Cached proof
 lasts at most five seconds and is revalidated for every count/Seal/Claim.
-Other pending inputs, uncertainty, collaboration contexts/resources and all
+Other pending inputs, uncertainty, retired auxiliary contexts/resources and all
 RAM/tool/work counters still block. This private metadata proof alone never
 proves global idle; the existing native observation and all-thread check are
 still required. No caller can supply a proof override or native file path.

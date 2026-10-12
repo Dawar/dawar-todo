@@ -10,12 +10,6 @@ export class Store {
     this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;
       CREATE TABLE IF NOT EXISTS bots(id TEXT PRIMARY KEY, slug TEXT UNIQUE NOT NULL, thread_id TEXT UNIQUE, json TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS records(kind TEXT NOT NULL, id TEXT NOT NULL, bot_id TEXT, json TEXT NOT NULL, PRIMARY KEY(kind,id));
-      CREATE UNIQUE INDEX IF NOT EXISTS collaboration_native_context ON records(json_extract(json,'$.threadId')) WHERE kind='collaborationContext' AND json_extract(json,'$.threadId') IS NOT NULL;
-      CREATE INDEX IF NOT EXISTS collaboration_room_posts ON records(json_extract(json,'$.roomId'),id) WHERE kind='collaborationPost';
-      CREATE INDEX IF NOT EXISTS collaboration_recent_posts ON records(json_extract(json,'$.roomId')) WHERE kind='collaborationPost';
-      CREATE INDEX IF NOT EXISTS collaboration_recent_results ON records(bot_id) WHERE kind='collaborationResult';
-      CREATE INDEX IF NOT EXISTS collaboration_post_deliveries ON records(json_extract(json,'$.postId')) WHERE kind='collaborationDelivery';
-      CREATE INDEX IF NOT EXISTS collaboration_delivery_context ON records(bot_id,json_extract(json,'$.contextId'),json_extract(json,'$.state')) WHERE kind='collaborationDelivery';
       CREATE INDEX IF NOT EXISTS operator_native_request ON records(bot_id,json_extract(json,'$.nativeOperationId')) WHERE kind='operatorRequest';
       CREATE INDEX IF NOT EXISTS operator_call_records ON records(kind,json_extract(json,'$.callId')) WHERE kind IN ('operatorRequest','operatorSegment','operatorTranscript');
       CREATE INDEX IF NOT EXISTS operator_segment_records ON records(kind,json_extract(json,'$.segmentId')) WHERE kind IN ('operatorRequest','operatorTranscript');
@@ -26,8 +20,6 @@ export class Store {
       CREATE INDEX IF NOT EXISTS primary_intake_source ON records(json_extract(json,'$.sourceId'),json_extract(json,'$.state')) WHERE kind='primaryInbox';
       CREATE INDEX IF NOT EXISTS primary_intake_state ON records(bot_id,json_extract(json,'$.state')) WHERE kind='primaryInbox';
       CREATE INDEX IF NOT EXISTS burst_message_state ON records(bot_id,json_extract(json,'$.state')) WHERE kind='burstMessage';
-      CREATE INDEX IF NOT EXISTS peer_recipient ON records(json_extract(json,'$.recipientBotId'),json_extract(json,'$.rootId')) WHERE kind='peerRequest';
-      CREATE INDEX IF NOT EXISTS peer_exchange_request ON records(json_extract(json,'$.requestId')) WHERE kind='peerExchange';
       CREATE INDEX IF NOT EXISTS run_turn_page ON records(bot_id,json_extract(json,'$.runId'),id) WHERE kind='runTurn';
       CREATE INDEX IF NOT EXISTS run_turn_identity ON records(kind,bot_id,json_extract(json,'$.turnId')) WHERE kind IN ('run','runTurn');
       CREATE UNIQUE INDEX IF NOT EXISTS run_lane_thread ON records(json_extract(json,'$.threadId')) WHERE kind='runLane';

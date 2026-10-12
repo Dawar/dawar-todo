@@ -10,10 +10,6 @@ export type HistoryEntry = NativeTiming & {
   workPlan?: NativeWorkPlan;
   /** UI navigation scope captured from an authenticated history page/event. */
   sourceThreadId?: string;
-  /** Display provenance only; never a native message or activity publisher. */
-  peer?: import("./bots-types").BotPeerExchangeMeta;
-  peerNativeKeys?: string[];
-  peerAlias?: string;
   /** Summary-backed chat: exact commentary and tools load only on disclosure. */
   deferredTurn?: boolean;
   /** Explicit native tool metadata marks files/questions as conversational boundaries. */
@@ -27,11 +23,11 @@ export type HistoryEntry = NativeTiming & {
   item: ThreadItem | null; complete: boolean; scheduled: boolean;
   audience?: "conversation" | "mixed" | "finding"; runId?: string; findingId?: string; legacyContext?: boolean;
   messageAt?: number | null; timeBasis?: "received" | "turn-start" | "turn-end";
-  startedAt: number | null; turnStatus?: Turn["status"]; itemStatus?: string; status: Turn["status"] | "received"; updatedSeq?: number;
+  startedAt: number | null; turnStatus?: Turn["status"]; itemStatus?: string; status: Turn["status"]; updatedSeq?: number;
 };
 export type HistoryContext = { laneId: string; runId: string | null; threadId: string };
 export type HistoryPage = {
-  turnConfigurations?: import("./bot-collaboration").TurnConfiguration[];
+  turnConfigurations?: import("./bot-execution-configuration").TurnConfiguration[];
   context?: HistoryContext;
   /** Routine turns inspected and excluded before filling the conversation page. */
   activityTurns?: { turnId: string; runId?: string; active?: boolean }[];

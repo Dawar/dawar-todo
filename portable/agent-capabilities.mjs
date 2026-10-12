@@ -5,5 +5,5 @@ export function centralAgentCapabilities(config,platform=process.platform) {
   const selected=config.agent?.centralRouting;
   if(selected!==undefined&&typeof selected!=='boolean')throw Error('Invalid central routing configuration.');
   const enabled=platform==='linux'&&selected===true;
-  return {centralRoomDispatch:enabled,centralPrimaryDispatch:enabled,centralPeers:enabled,centralTaskRequests:enabled,centralOperator:enabled};
+  return {centralPrimaryDispatch:enabled,centralTaskRequests:enabled,centralOperator:enabled};
 }
