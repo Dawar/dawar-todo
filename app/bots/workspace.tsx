@@ -504,26 +504,22 @@ export function BotsWorkspace() {
             {bot ? (
               <>
                 <Avatar bot={bot} small />
-                {snapshot?.capabilities?.botDesktops === 1 && <Button variant="ghost" size="icon" className="bots-icon-button bots-desktop-mobile-open" aria-label="Show bot desktop" onClick={() => { setDetailsSection("desktop"); setProfile(true); }}><span aria-hidden="true">▣</span></Button>}
                 <div className="bots-header-title">
                   <strong>{bot.name}{bot.extension&&<span className="bots-extension" title="Ctrl (or Alt) + extension switches bots; add Shift to move the composer">#{bot.extension}</span>}</strong>
 
                 </div>
-                {single && snapshot?.capabilities?.nativeGoals === 1 && <GoalIndicator bot={bot} work={work} onOpen={() => { setDetailsSection('goals'); setProfile(true); }} />}
-                {snapshot?.capabilities?.operatorCalls === 1 && !bot.archived && <Button variant="ghost" size="icon" className="bots-icon-button" aria-label={`Call ${bot.name}`} onClick={() => { setCallBotId(bot.id); setShowCall(true); }}><Phone size={18} /></Button>}
-                {promptQueue.length > 0 && <Button variant="ghost" size="icon" className="bots-icon-button bots-up-next-link" aria-label={`Show ${promptQueue.length} queued ${promptQueue.length === 1 ? "message" : "messages"}`} onClick={() => {
-                  const queue = screenRef.current?.querySelector<HTMLElement>(".bots-prompt-queue");
-                  queue?.focus({ preventScroll: true });
-                  queue?.scrollIntoView({ block: "nearest" });
-                }}><ListOrdered size={19} aria-hidden="true" /><span>{promptQueue.length}</span></Button>}
-                <Button variant="ghost" size="icon"
-                  className="bots-icon-button"
-                  aria-label="Bot details"
-                  aria-expanded={profile}
-                  onClick={() => setProfile((v) => !v)}
-                >
-                  <MoreHorizontal size={22} />
-                </Button>
+                <div className="bots-header-actions">
+                  {single && snapshot?.capabilities?.nativeGoals === 1 && <GoalIndicator bot={bot} work={work} onOpen={() => { setDetailsSection('goals'); setProfile(true); }} />}
+                  {snapshot?.capabilities?.operatorCalls === 1 && !bot.archived && <Button variant="ghost" size="icon" className="bots-icon-button" aria-label={`Call ${bot.name}`} onClick={() => { setCallBotId(bot.id); setShowCall(true); }}><Phone size={18} /></Button>}
+                  <Button variant="ghost" size="icon"
+                    className="bots-icon-button"
+                    aria-label="Bot details"
+                    aria-expanded={profile}
+                    onClick={() => setProfile((v) => !v)}
+                  >
+                    <MoreHorizontal size={22} />
+                  </Button>
+                </div>
               </>
             ) : (
               <span>Your bots</span>

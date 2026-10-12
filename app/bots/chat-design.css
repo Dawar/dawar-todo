@@ -114,12 +114,9 @@ details[open] > summary > .bots-disclosure-chevron { transform: rotate(90deg); }
 .bots-composer-actions .bots-send { margin-left: auto; }
 .bots-composer-actions .bots-icon-button, .bots-composer-actions .bots-send { width: 44px; height: 44px; min-width: 44px; }
 
-/* Keep the conversation identity readable before optional header shortcuts.
-   Desktop and queued messages remain available in Bot details on small phones. */
+/* Keep the conversation identity readable beside the trailing actions. */
 @media (max-width: 480px) {
   .bots-conversation-heading { padding-inline: 8px; gap: 4px; }
-  .bots-conversation-heading .bots-desktop-mobile-open,
-  .bots-conversation-heading .bots-up-next-link,
   .bots-conversation-heading .bots-extension { display: none; }
   .bots-conversation-heading .bot-avatar-engine.small { width: 32px; height: 32px; }
   .bots-conversation-heading .bots-header-title { flex: 1 1 0; }

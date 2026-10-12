@@ -110,8 +110,12 @@ html.bots-viewport-locked body {
   font-weight: 600;
   flex-shrink: 0;
 }
-.bots-conversation-heading > button:last-child {
-  margin-left: auto;
+.bots-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-inline-start: auto;
+  flex-shrink: 0;
 }
 .bots-back {
   display: none;
@@ -351,6 +355,7 @@ html.bots-viewport-locked body {
 }
 .bots-header-title {
   display: flex;
+  flex: 1 1 0;
   flex-direction: column;
   line-height: 1.45;
 }
