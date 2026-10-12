@@ -110,7 +110,10 @@ export class HubControls extends EventEmitter {
     if(!this.authority)return true;
     if(event.type==='codex'&&this.sources.owner?.key){
       return this.store.transaction(()=>{const b=this.store.bot(event.botId),p=this.hub.placement(this.sources.owner.key,b.id),v=event.data?.params;
-        if(p.node_id!==nodeId||p.epoch!==epoch||v?.threadId&&v.threadId!==b.threadId)throw Error('Foreign native source projection.');
+        if(p.node_id!==nodeId||p.epoch!==epoch)throw Error('Foreign native source projection.');
+        // Retained background/older contexts keep their ordinary event route.
+        // Only explicit current-thread evidence can bind a new source record.
+        if(v?.threadId!==b.threadId)return true;
         if(v?.item?.type==='userMessage')this.sources.annotate(b,b.threadId,v.item,v.turnId);
         for(const item of v?.turn?.items??[])if(item.type==='userMessage')this.sources.annotate(b,b.threadId,item,v.turn.id);
         return true;});
