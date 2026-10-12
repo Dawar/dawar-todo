@@ -2,6 +2,7 @@ import type { BotReplyReference } from "../../lib/bot-replies";
 import type { BotAttachment, BridgeRequest } from "../../lib/bots-types";
 import { pdfReviewTarget, pdfReviewMessage } from "./pdf-review";
 import { documentIdentity } from "./document-source";
+import { draftContentFingerprint, type ComposerDraftContent, type ComposerDraftMutation, type SharedComposerDraft } from '../../lib/bot-composer-draft';
 
 // Critical data only. Histories and other disposable caches never enter this DB.
 export const DRAFT_DATABASE = "dawar-bot-drafts";
@@ -41,6 +42,8 @@ export type DraftRecord = {
   receivedTransfers?: Record<string, string>;
   restoredTo?: string;
   restoredFingerprint?: string;
+  /** Separate from native send receipts; only the normal unsent draft syncs. */
+  sync?: { revision: number; base: string; pending?: ComposerDraftMutation; blocked?: string };
 };
 export type RunDeliveryResult = "not-sent" | "uncertain" | "queued" | "success" | "rejected";
 export type DraftChange =
@@ -70,6 +73,14 @@ export const draftFingerprint = (record: DraftRecord) => JSON.stringify([record.
 export const emptyRecord = (owner: string, botId: string): DraftRecord => ({
   owner, botId, revision: "empty", active: "normal", slots: { normal: emptyDraft() }, operations: {}, migrated: false,
 });
+export function sharedDraftContent(record: DraftRecord): ComposerDraftContent {
+  const d = record.slots.normal;
+  return { text: d.text, textVersion: d.textVersion, ...(d.reply ? { reply: d.reply } : {}),
+    files: d.files.filter(f => f.remote?.ready && f.remote.botId === record.botId).map(f => ({
+      id: f.id, name: f.name, mimeType: f.mimeType, size: f.size,
+      remote: { id: f.remote!.id, botId: record.botId, name: f.name, mimeType: f.mimeType, size: f.size, ready: true },
+    })) };
+}
 export function fileReferences(record: DraftRecord) {
   return new Set([
     ...Object.values(record.slots).flatMap((d) => d.files.map((f) => f.id)),
@@ -305,6 +316,63 @@ export class BotDraftStore {
           fail(error);
         }
       };
+    });
+  }
+  private async syncChange(owner: string, botId: string, update: (record: DraftRecord) => DraftRecord) {
+    return this.transaction<DraftRecord>(['drafts'], 'readwrite', (tx, done, fail) => {
+      const store = tx.objectStore('drafts'), read = store.get([owner, botId]);
+      read.onsuccess = () => {
+        try {
+          const original = read.result as DraftRecord | undefined;
+          if (!original?.migrated) throw Error('Open the original draft first.');
+          const record = update(original);
+          if (record !== original) { record.revision = crypto.randomUUID(); store.put(record); }
+          done(record);
+        } catch (error) { fail(error); }
+      };
+    });
+  }
+  async prepareSharedDraft(owner: string, botId: string) {
+    return this.syncChange(owner, botId, record => {
+      const content = sharedDraftContent(record), fingerprint = draftContentFingerprint(content);
+      if (!record.sync || record.sync.pending || record.sync.base === fingerprint || record.sync.blocked === fingerprint ||
+          Object.values(record.operations).some(op => op.slot === 'normal')) return record;
+      return { ...record, sync: { ...record.sync, blocked: undefined, pending: {
+        operationId: crypto.randomUUID(), expectedRevision: record.sync.revision, content,
+      } } };
+    });
+  }
+  async integrateSharedDraft(owner: string, botId: string, remote: SharedComposerDraft, observed?: string,
+    receipt?: { operationId: string; applied: boolean }) {
+    return this.syncChange(owner, botId, source => {
+      const pending = source.sync?.pending;
+      if (receipt && pending?.operationId !== receipt.operationId) return source;
+      if (!receipt && (pending || remote.revision <= (source.sync?.revision ?? -1))) return source;
+      if (Object.values(source.operations).some(op => op.slot === 'normal')) return source;
+      const local = source.slots.normal, fingerprint = draftContentFingerprint(sharedDraftContent(source));
+      const base = draftContentFingerprint(remote.content);
+      const record: DraftRecord = { ...source, slots: { ...source.slots }, sync: { revision: remote.revision, base } };
+      const applyingOwn = receipt?.applied && pending && fingerprint === draftContentFingerprint(pending.content);
+      const initial = !source.sync;
+      const unchanged = initial ? observed === fingerprint : source.sync?.base === fingerprint;
+      const acknowledgedClear = receipt?.applied === false && local.textVersion.startsWith('ack:') && !local.text && !local.files.length && !local.reply;
+      const apply = applyingOwn || unchanged || acknowledgedClear || fingerprint === base;
+      if (!remote.revision && initial) return record;
+      const protectLocalTyping = observed !== undefined && observed !== fingerprint;
+      if (apply && !protectLocalTyping) {
+        if (initial && (local.text || local.files.length || local.reply) && fingerprint !== base)
+          record.slots[`recovered:${local.textVersion}`] = local;
+        const localFiles = new Map(local.files.map(f => [f.id, f]));
+        record.slots.normal = { ...remote.content, files: [
+          ...remote.content.files.map(f => ({ ...f, hasBytes: false, ...(localFiles.get(f.id)?.remote?.id === f.remote.id ? localFiles.get(f.id) : {}) })),
+          ...local.files.filter(f => (!f.remote?.ready || f.remote.botId !== botId) && !remote.content.files.some(r => r.id === f.id)),
+        ] };
+      } else {
+        if (remote.content.text || remote.content.files.length || remote.content.reply)
+          record.slots[`recovered:remote:${remote.revision}`] = { ...remote.content, files: remote.content.files.map(f => ({ ...f, hasBytes: false })) };
+        if (!protectLocalTyping && (!pending || fingerprint === draftContentFingerprint(pending.content))) record.sync!.blocked = fingerprint;
+      }
+      return record;
     });
   }
   /** Adopt the first selected legacy draft atomically; keep all other originals. */

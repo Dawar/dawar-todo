@@ -3,11 +3,13 @@ import { BotDraftStore, PORTABLE_COMPOSER, draftFingerprint } from "./draft-stor
 import { BotComposer } from "./composer-controller";
 import { registerPwaUpdateGuard } from "../pwa-update";
 import { pdfReviewKey, pdfReviewTarget, pdfReviewMessage } from "./pdf-review";
+import { ComposerDraftSync } from './composer-draft-sync';
 
 export type ComposerClipboard = { type:"dawar-composer"; version:1; snapshotId:string; sourceBotId:string; text:string; files:{name:string;size:number;mimeType:string;state:"ready"|"uploading"}[] };
 export type ComposerPaste = { owner:string; snapshotId:string; targetBotId:string; targetFingerprint:string; operationId:string; move:boolean; nonEmpty:boolean };
 export class ComposerService {
   private controllers = new Map<string, BotComposer>();
+  private syncs = new Map<string, ComposerDraftSync>();
   private store?: BotDraftStore;
   private channel?: BroadcastChannel;
   private started = false;
@@ -29,6 +31,7 @@ export class ComposerService {
       await this.store!.restorePortable(owner,botId);
       if(composer.ready) await composer.refresh();
       await composer.open();
+      for (const [key, sync] of this.syncs) sync.select(key === JSON.stringify([owner, botId]));
       void composer.resumeUploads(); void composer.reconcile();
     } catch {
       this.error = "Browser storage is unavailable. Draft recovery is blocked; enable site storage and reopen Bots.";
@@ -78,9 +81,12 @@ export class ComposerService {
     if (!composer) {
       composer = new BotComposer(owner, botId, this.store, client, () => {
         this.channel?.postMessage({ owner, botId: storageKey });
+        this.syncs.get(key)?.schedule();
       }, undefined, portable);
       composer.subscribe(this.notify);
       this.controllers.set(key, composer);
+      if (!portable) this.syncs.set(key, new ComposerDraftSync(composer, this.store, () =>
+        client.owner === owner && client.storageAvailable && (typeof navigator === 'undefined' || navigator.onLine !== false)));
     }
     return composer;
   }
@@ -89,6 +95,7 @@ export class ComposerService {
   };
   private refresh = () => {
     for (const c of this.controllers.values()) if (c.owner === client.owner) void c.refresh();
+    for (const sync of this.syncs.values()) sync.refresh();
   };
   async recoverOwner() {
     const owner = client.owner;
@@ -160,7 +167,9 @@ export class ComposerService {
       const storageConnected = client.storageAvailable && !this.storageAvailable;
       this.storageAvailable = client.storageAvailable;
       this.owner = client.owner; this.online = client.online;
+      if (changedOwner) for (const sync of this.syncs.values()) sync.select(false);
       if (changedOwner || reconnected || storageConnected) void this.recoverOwner();
+      if (reconnected || storageConnected) for (const sync of this.syncs.values()) sync.refresh();
       if (reconnected || storageConnected) for (const c of this.controllers.values()) if (c.owner === client.owner) {
         void c.resumeUploads(true); void c.reconcile();
       }
