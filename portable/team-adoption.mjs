@@ -10,7 +10,7 @@ const kind='portableLegacyTeamReceipt';
 /** First compatible combined startup only, after the reviewed exclusive cutover.
  * No native history, queues or settings are copied. Preserve original rows/IDs. */
 export function adoptLegacyTeams(controls,owner,source){
- if(!source||controls.store.meta('portable-team-authority'))return;
+ if(!source||!controls.authority||controls.store.meta('portable-team-authority'))return;
  controls.assertWriter();
  const node=controls.hub.node(source.nodeId);
  if(node.owner!==owner)throw Error('Legacy teams belong to another node owner.');

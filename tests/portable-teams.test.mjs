@@ -28,6 +28,12 @@ async function fixture(t){
  return {hub,controls,events,request,caller,HubRpc};
 }
 
+test('staging does not read or adopt live legacy teams without writer authority',()=>{
+ let read=false;
+ adoptLegacyTeams({authority:null,store:{meta:()=>{read=true;}},assertWriter:()=>{throw Error('No authority');}},'owner',{path:'/not-a-live-source',nodeId:'node'});
+ assert.equal(read,false);
+});
+
 test('hub teams preserve membership, revisions, original receipts and owner isolation',async t=>{
  const {hub,controls,events,request,caller}=await fixture(t);
  const create={name:'Design',color:'#217050'},created=await request('teams.save',create,'original-create');
