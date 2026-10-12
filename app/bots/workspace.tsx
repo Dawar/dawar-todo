@@ -1,4 +1,5 @@
 "use client";
+import { CodexAuthRecovery } from "./codex-auth-recovery";
 import { ControlledDialog } from "@/components/ui/controlled-dialog";
 import { CreateBotDialog } from "./create-bot-dialog";
 import { Button } from "@/components/ui/button";
@@ -542,21 +543,9 @@ export function BotsWorkspace() {
               </Button>
             </div>
           )}
-          {bot?.error && (
-            <div className="bots-banner">
-              <span>{bot.error}</span>
-              {!bot.threadId && (
-                <Button variant="ghost" size="sm"
-                  disabled={!online || busy}
-                  onClick={() =>
-                    void action(() => client.rpc("bots.recover", bot.id))
-                  }
-                >
-                  Retry setup
-                </Button>
-              )}
-            </div>
-          )}
+          {bot && <CodexAuthRecovery key={JSON.stringify([owner, bot.id, bot.threadId])} owner={owner} bot={bot} online={online} supported={snapshot?.capabilities?.nativeAuthRecovery === 1} setupBusy={busy}
+            onRetrySetup={() => void action(() => client.rpc("bots.recover", bot.id))}
+            onReturn={() => { screenRef.current?.querySelector<HTMLTextAreaElement>('textarea')?.focus({preventScroll:true}); }} />}
           {!bot ? (
             <div className="bots-empty">
               <div className="bots-empty-icon">

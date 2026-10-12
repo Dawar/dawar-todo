@@ -1,3 +1,4 @@
+import { AuthRecovery } from './auth-recovery.mjs';
 import {SubmissionSources,SUBMISSION_TOOL} from './submission-sources.mjs';
 import { assertRetainedResource } from './retained-resource.mjs';
 
@@ -123,6 +124,7 @@ const READ_METHODS = new Set([
   "teams.list",
   "teams.read",
   "runtime.info",
+  "auth.read",
 ]);
 const MAX_FILE = 100 * 1024 * 1024;
 const CHUNK = 256 * 1024;
@@ -211,10 +213,12 @@ export class BotRuntime extends EventEmitter {
     this.botAdmin = new BotAdministration(this, adminLeadIds);
     this.epoch = randomUUID();
     this.maintenance = new RuntimeMaintenance(this);
+    this.authRecovery = new AuthRecovery(this);
+    codex.on("notification", message => this.authRecovery.notification(message));
     this.usage = new AccountUsageCollector({ store, codex,
       allowed: () => this.ready && codex.ready && !this.maintenance.holding(),
       onChange: data => this.emitEvent("usage", data) });
-    codex.admissionGuard = (method, params) => this.maintenance.native(method, params);
+    codex.admissionGuard = (method, params) => { this.maintenance.native(method, params); this.authRecovery.native(method, params); };
     codex.on("notification", () => { this.maintenance.generation++; });
     this.historyReads = new HistoryReads(this);
     this.primary = new PrimaryExecution(this);
@@ -252,6 +256,7 @@ export class BotRuntime extends EventEmitter {
     codex.on("disconnect", () => {
       this.ready = false;
       this.usage.disconnected();
+      this.authRecovery.disconnect();
       this.emitEvent("runtime", { ready: false });
     });
   }
@@ -576,7 +581,7 @@ export class BotRuntime extends EventEmitter {
   }
   snapshot() {
     return {
-      capabilities: { submissionSources: this.sources.owner?.key ? 1 : undefined, taskRequests: this.storage && this.storage.features?.taskRequests !== false ? 1 : undefined, executionConfiguration: 1, accountUsageHistory: 1, runtimeMaintenance: 1, botAdministration: 1, botMemoryMaintenance: process.platform === 'linux' ? 1 : undefined, backgroundRunLanes: 1, scheduleDecisions: 1, singleThreadExecution: 1, nativeGoals: 1, nativeConversation: 1, messageReplies: 1, secureInputs: 1, secureResponseLifecycle: 1, operatorCalls: 1, operatorInputQuestions: 1, historyCursorIndex: 1, messageBursts: 1, burstDiscard: 1, burstControls: 1, burstQueue: 1, queueLists: 1, queueRelativeMoves: 1, queueSendNow: 1, ...(this.storage && this.storage.features?.taskQueues !== false ? { taskQueues: 1 } : {}), teams: 1, ...(this.desktops ? { botDesktops: 1, botBrowserRetention: 1 } : {}) },
+      capabilities: { nativeAuthRecovery: 1, submissionSources: this.sources.owner?.key ? 1 : undefined, taskRequests: this.storage && this.storage.features?.taskRequests !== false ? 1 : undefined, executionConfiguration: 1, accountUsageHistory: 1, runtimeMaintenance: 1, botAdministration: 1, botMemoryMaintenance: process.platform === 'linux' ? 1 : undefined, backgroundRunLanes: 1, scheduleDecisions: 1, singleThreadExecution: 1, nativeGoals: 1, nativeConversation: 1, messageReplies: 1, secureInputs: 1, secureResponseLifecycle: 1, operatorCalls: 1, operatorInputQuestions: 1, historyCursorIndex: 1, messageBursts: 1, burstDiscard: 1, burstControls: 1, burstQueue: 1, queueLists: 1, queueRelativeMoves: 1, queueSendNow: 1, ...(this.storage && this.storage.features?.taskQueues !== false ? { taskQueues: 1 } : {}), teams: 1, ...(this.desktops ? { botDesktops: 1, botBrowserRetention: 1 } : {}) },
 
       botAdminLeadIds: [...this.botAdmin.leads],
       teams: publicTeams(this),
@@ -635,6 +640,7 @@ export class BotRuntime extends EventEmitter {
       if(!request.clientId||trustedOrigin)throw Error('Task Request source lookup requires the authenticated owner browser.');
       return this.taskRequests.source(this.store.bot(String(botId)),params);
     }
+    if (method.startsWith("auth.") && (!request.clientId || trustedOrigin)) throw Error("Codex sign-in recovery requires the authenticated owner browser.");
     if (method.startsWith("botAdmin.")) return this.botAdmin.owner(request, trustedOrigin);
     if ((method === "queue.taskConfirm" || method === "queue.add" && params.taskExportId) && (!request.clientId || trustedOrigin))
       throw new Error("Task queue transfer requires the authenticated owner browser.");
@@ -684,7 +690,7 @@ export class BotRuntime extends EventEmitter {
     const laneKey = resumeRun ? resumeRun.laneId ?? `run-preparation:${resumeRun.id}` :
       method.startsWith("runs.") && params.runId ? this.runs.lane(botId, params.runId).id : runRequest?.laneId;
     return this.lock(method.startsWith("teams.") ? "teams" : laneKey ?? botId ?? "create", async () => {
-      const inputMutation = ["turn.send", "requests.respond", "queue.add", "queue.update", "queue.delete", "queue.reorder", "queue.send", "goals.set", "goals.clear"].includes(method);
+      const inputMutation = ["auth.check", "auth.login.start", "auth.login.cancel", "turn.send", "requests.respond", "queue.add", "queue.update", "queue.delete", "queue.reorder", "queue.send", "goals.set", "goals.clear"].includes(method);
       const lifecycleMutation = ["turn.interrupt", "runs.interrupt", "bots.archive", "bots.restore", "bots.delete"].includes(method);
       const attempt = inputMutation ? { started: false, rejected: false } : null;
       const existing = this.store.operation(operationId);
@@ -809,6 +815,7 @@ export class BotRuntime extends EventEmitter {
   }
   async submitNative(method, params, attempt) {
     this.maintenance.native(method, params); // reject before the effect/uncertainty boundary
+    this.authRecovery.native(method, params);
     if (attempt) attempt.started = true;
     try {
       return await this.codex.call(method, params);
@@ -823,6 +830,10 @@ export class BotRuntime extends EventEmitter {
     }
   }
   async dispatch(method, botId, p, id, attempt = null, authorizeProvisioning = null) {
+    if (method === "auth.read") return this.authRecovery.read(botId, p);
+    if (method === "auth.check") return this.authRecovery.check(botId, p, attempt);
+    if (method === "auth.login.start") return this.authRecovery.start(botId, p, id, attempt);
+    if (method === "auth.login.cancel") return this.authRecovery.cancel(botId, p, attempt);
     if (method === "snapshot") return this.snapshot();
     if (method === "secure.list") return this.secure.list(this.store.bot(String(botId)));
     if (method === "teams.list") return publicTeams(this);

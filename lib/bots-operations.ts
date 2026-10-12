@@ -1,3 +1,4 @@
+import type { CodexAuthRecoveryState } from './codex-auth-recovery';
 import type { ExecutionConfiguration } from './bot-execution-configuration';
 import type { BotReplyReference } from "./bot-replies";
 import type { OperatorSegment } from './operator-types';
@@ -27,6 +28,10 @@ import type { HistoryResponse, HistoryDetail } from "./bot-history-view";
 export type BotBrowserRetention = { mode: "preserve" | "idle60" | "keep-task"; protected: boolean; releasedAt: number | null; closeAfterMinutes: number; revision: number; lastResult: string | null; afterTaskMode: "preserve" | "idle60" | null };
 export type BotDesktopState = { state: "not-created" | "running" | "stopped"; display?: string; rdpPort?: number; rdpBind?: string; shared: boolean; browser?: BotBrowserRetention; image?: string; width?: number; height?: number; capturedAt?: string };
 export type BotOperations = {
+  'auth.read': { params: {threadId:string}; result: CodexAuthRecoveryState };
+  'auth.check': { params: {threadId:string}; result: CodexAuthRecoveryState };
+  'auth.login.start': { params: {threadId:string}; result: CodexAuthRecoveryState };
+  'auth.login.cancel': { params: {threadId:string;loginId?:string}; result: CodexAuthRecoveryState };
   'taskRequests.source': {params:{threadId:string;turnId?:string;itemId?:string;questionKey?:string;cursor?:string|null};result:{source:import('./task-requests').TaskRequestSource|null;spec:import('./task-requests').TaskRequestSpec|null;nextCursor:string|null;unavailable:boolean}};
   "submissions.source": { params: { submissionId: string }; result: import("./submission-source").SubmissionSourceResult };
   "execution.config": {params:{contextId?:string;turnId?:string;cursor?:string|null;limit?:number};result:ExecutionConfiguration};

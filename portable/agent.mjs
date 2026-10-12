@@ -64,7 +64,7 @@ export class AgentTransport {
   hello(){return {protocol:PROTOCOL_VERSION,runtime:RUNTIME_VERSION,platform:process.platform,arch:process.arch,agentEpoch:this.runtime.epoch,
     // Paired consumers are selected explicitly for the reviewed Linux release;
     // unrelated/native-autonomous capabilities are not implied by this switch.
-    capabilities:{text:true,localStdio:true,registeredArtifacts:true,profileReads:true,memoryCompaction:process.platform==='linux',pdfPreview:process.platform==='linux',desktop:process.platform==='linux'&&!!this.runtime.desktops,voice:false,secureTransfer:process.platform==='linux'&&!!this.runtime.secure,centralBursts:process.platform==='linux',submissionSources:Boolean(this.runtime.sources.owner?.key),...centralAgentCapabilities(this.config),autonomousGoals:true}};}
+    capabilities:{text:true,localStdio:true,registeredArtifacts:true,profileReads:true,memoryCompaction:process.platform==='linux',pdfPreview:process.platform==='linux',desktop:process.platform==='linux'&&!!this.runtime.desktops,voice:false,secureTransfer:process.platform==='linux'&&!!this.runtime.secure,centralBursts:process.platform==='linux',submissionSources:Boolean(this.runtime.sources.owner?.key),...centralAgentCapabilities(this.config),autonomousGoals:true,nativeAuthRecovery:true}};}
   send(value){if(this.socket?.readyState===WebSocket.OPEN)this.socket.send(JSON.stringify(value));}
   controlRequest(botId,tool,args){
     if(!HUB_TOOLS.has(tool))throw Error('Unsupported hub tool.');
@@ -234,7 +234,7 @@ export class AgentTransport {
     }
     // Stop itself remains admissible while the synchronized Stop fence blocks
     // new turns. Offline/foreign/stale controls never grant interruption.
-    if(['turn.interrupt','portable.queueResume','portable.queueSend'].includes(payload.method)||DESKTOP_MUTATIONS.has(payload.method)?!this.journal.currentControl(command):!this.journal.canAdmit(command))return;
+    if(['auth.check','auth.login.start','auth.login.cancel','turn.interrupt','portable.queueResume','portable.queueSend'].includes(payload.method)||DESKTOP_MUTATIONS.has(payload.method)?!this.journal.currentControl(command):!this.journal.canAdmit(command))return;
     const bot=this.runtime.store.bot(command.bot_id);if(!bot || bot.archived || bot.deletedAt)throw Error('Assigned native bot is absent or archived.');
     const request={method:payload.method,botId:command.bot_id,operationId:command.operation_id,params:payload.params,clientId:`hub:${this.enrollment.nodeId}`};
     if(row.state==='dispatching' && !this.runtime.store.operation(command.operation_id)) {

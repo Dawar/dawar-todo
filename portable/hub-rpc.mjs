@@ -7,8 +7,8 @@ import {OPERATOR_READS,OPERATOR_MUTATIONS,OPERATOR_NATIVE,OPERATOR_NODE_READS,op
 
 // Explicit method sets keep an arbitrary browser method from becoming remote
 // shell/native RPC authority. The real runtime still validates every request.
-export const AGENT_READS=new Set(['snapshot','runtime.info','work.read','goals.read','history','history.page','history.turn','history.view','history.log','history.detail','history.attachments','replies.prepare','replies.resolve','artifacts.list','artifacts.preview','events','usage.bot','usage.account','usage.history','attachments.read','inbox.list','runs.page','runs.turns','runs.receipt','runs.requests','runs.findings','runs.decisions','execution.config','secure.list','taskRequests.source',...OPERATOR_NODE_READS,...DESKTOP_READS]);
-export const AGENT_MUTATIONS=new Set(['turn.send','turn.interrupt','requests.respond','bots.update','goals.set','goals.clear','artifacts.index',...DESKTOP_MUTATIONS]);
+export const AGENT_READS=new Set(['auth.read','snapshot','runtime.info','work.read','goals.read','history','history.page','history.turn','history.view','history.log','history.detail','history.attachments','replies.prepare','replies.resolve','artifacts.list','artifacts.preview','events','usage.bot','usage.account','usage.history','attachments.read','inbox.list','runs.page','runs.turns','runs.receipt','runs.requests','runs.findings','runs.decisions','execution.config','secure.list','taskRequests.source',...OPERATOR_NODE_READS,...DESKTOP_READS]);
+export const AGENT_MUTATIONS=new Set(['auth.check','auth.login.start','auth.login.cancel','turn.send','turn.interrupt','requests.respond','bots.update','goals.set','goals.clear','artifacts.index',...DESKTOP_MUTATIONS]);
 const NATIVE_SNAPSHOT=Symbol('assigned-native-snapshot');
 export class HubRpc {
   constructor(store,connections){this.store=store;this.connections=connections;this.reads=new Map();this.writes=new Map();}
@@ -29,6 +29,7 @@ export class HubRpc {
       return {result:await this.controls.request(owner,request.method==='bursts.typing'?{...request,params:{...request.params,clientId}}:request)};
     }
     const p=this.store.placement(owner,request.botId),ws=this.connection(p);
+    if(request.method.startsWith('auth.') && (!ws || ws.portableHello?.capabilities?.nativeAuthRecovery!==true))throw Object.assign(Error('Codex recovery requires the live assigned execution machine.'),{outcome:'not-sent'});
     if(request.method==='secure.list'&&!secureCapable(this.store.node(p.node_id),ws))throw Object.assign(Error('Private form state requires the live assigned Linux node.'),{outcome:'not-sent'});
     if((DESKTOP_READS.has(request.method)||DESKTOP_MUTATIONS.has(request.method))&&!desktopCapable(this.store.node(p.node_id),ws))
       throw Object.assign(Error('The assigned Linux desktop is offline or unavailable.'),{outcome:'not-sent'});
@@ -91,7 +92,7 @@ export class HubRpc {
     let text;try{text=boundedFrame(m.result);}catch(error){return r.reject(Object.assign(error,{outcome:'not-sent'}));}
     // RAM tickets and screenshots must not become durable history/cache or
     // remain usable after reconnect. The browser gets this one live response.
-    if(DESKTOP_READS.has(r.method)||r.method==='secure.list'||OPERATOR_NODE_READS.has(r.method))return r.resolve({result:m.result});
+    if(r.method.startsWith('auth.')||DESKTOP_READS.has(r.method)||r.method==='secure.list'||OPERATOR_NODE_READS.has(r.method))return r.resolve({result:m.result});
     try{this.store.transaction(()=>{
       const current=this.store.placement(r.owner,r.botId);
       if(current.node_id!==nodeId||current.epoch!==r.epoch)throw Error('Native read placement changed before persistence.');
@@ -142,6 +143,7 @@ export class HubRpc {
     // Enrollment metadata is historical; use the authenticated current agent
     // advertisement so an upgraded node need not be re-enrolled.
     if(!placements.length||placements.some(p=>this.connection(p)?.portableHello?.capabilities?.autonomousGoals!==true))delete common.nativeGoals;
+    if(!placements.length||placements.some(p=>this.connection(p)?.portableHello?.capabilities?.nativeAuthRecovery!==true))delete common.nativeAuthRecovery;
     const schedules=this.controls?placements.flatMap(p=>this.controls.store.list('schedule',p.bot_id)):[],runs=this.controls?placements.flatMap(p=>this.controls.store.list('run',p.bot_id)).sort((a,b)=>b.scheduledAt.localeCompare(a.scheduledAt)).slice(0,100):scoped('runs');
     return {result:{...first,...(this.controls?.teams?.owner===owner?{teams:this.controls.teams.catalog(owner)}:{}),cursor,bots,workByBot:scoped('workByBot'),pending:scoped('pending'),secureInputs:scoped('secureInputs'),schedules,runs,activeScheduledTurns:scoped('activeScheduledTurns'),ready:snapshots.length===placements.length&&placements.every(p=>!!this.connection(p)),
       capabilities:{...common,portableAgents:1}},cache:{observedAt:Date.now(),stale:snapshots.length<placements.length}};

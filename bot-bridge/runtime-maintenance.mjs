@@ -49,6 +49,7 @@ export class RuntimeMaintenance {
     this.runtime.emitEvent?.('runtime', { maintenance: this.snapshot() });
   }
   async admit(fn) {
+    this.runtime.authRecovery?.guardAdmission();
     const parent = this.scope.getStore();
     if (parent?.open) return fn();
     if (this.holding()) throw denied();
@@ -99,6 +100,7 @@ export class RuntimeMaintenance {
       calls: count("SELECT count(*) n FROM records WHERE kind='operatorCall' AND json_extract(json,'$.endedAt') IS NULL"),
       desktops: this.runtime.desktops?.sessions.size ?? 0,
       volatileSecure: this.runtime.secure?.live.size ?? 0,
+      nativeAuthFlow: Number(Boolean(this.runtime.authRecovery?.active)),
       taskRequestWork: Number(Boolean(this.runtime.taskRequests?.busy)),
       taskRequestUnknown: count("SELECT count(*) n FROM records WHERE kind='taskRequestDelivery' AND json_extract(json,'$.state') IN ('dispatching','uncertain','hub-pending')"),
       secureTransfers: this.runtime.secure?.transfers.size ?? 0,

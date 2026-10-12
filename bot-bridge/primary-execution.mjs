@@ -163,7 +163,7 @@ export class PrimaryExecution {
     }
   }
   async submit(bot, item) {
-    if (this.runtime.maintenance.holding()) return;
+    if ((this.runtime.maintenance.holding() || Boolean(this.runtime.authRecovery?.flow))) return;
     return this.runtime.maintenance.admit(() => this.submitAdmitted(bot, item));
   }
   async submitAdmitted(bot, item) {
@@ -191,7 +191,7 @@ export class PrimaryExecution {
     if (item.kind==='task-request') {
       if(!await this.runtime.taskRequests?.canDispatch(current,latest))return;
       const confirmed=this.store.bot(bot.id);
-      if(confirmed.threadId!==bot.threadId||confirmed.queuePaused||confirmed.archived||confirmed.archiving||this.runtime.maintenance.holding()||this.store.get('primaryInbox',item.id)?.state!=='queued')return;
+      if(confirmed.threadId!==bot.threadId||confirmed.queuePaused||confirmed.archived||confirmed.archiving||(this.runtime.maintenance.holding() || Boolean(this.runtime.authRecovery?.flow))||this.store.get('primaryInbox',item.id)?.state!=='queued')return;
     }
     // Commit immutable identity/input BEFORE native queue/add. No turn/start:
     // native continuation/start races can never turn this intake into steering.
@@ -399,7 +399,7 @@ export class PrimaryExecution {
       return first < 0 ? rows : [...rows.slice(first), ...rows.slice(0, first)];
     };
     const bots = this.store.bots();
-    const dueMigrations = bots.filter(b => !this.runtime.maintenance.holding() && !b.archived && !this.single(b) && !this.runtime.locks.has(b.id) &&
+    const dueMigrations = bots.filter(b => !(this.runtime.maintenance.holding() || Boolean(this.runtime.authRecovery?.flow)) && !b.archived && !this.single(b) && !this.runtime.locks.has(b.id) &&
       !(Date.parse(this.store.get('executionMigration', b.id)?.checkAfter ?? '') > Date.now()));
     for (const bot of rotate(dueMigrations, this.migrationAfter).slice(0, 1)) {
       this.migrationAfter = bot.id;
@@ -436,7 +436,7 @@ export class PrimaryExecution {
             if (op) this.store.saveOperation(op.id, op.fingerprint, 'done', { ...op, result });
           }); return;
         }
-        if (this.runtime.maintenance.holding()) return;
+        if ((this.runtime.maintenance.holding() || Boolean(this.runtime.authRecovery?.flow))) return;
         return this.runtime.maintenance.admit(async () => {
         this.stageSchedules(bot);
         const firstHuman = stagedQueue(this.store, bot.id)[0];
