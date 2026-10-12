@@ -1,6 +1,7 @@
 import test from 'node:test';
 import {runtime as browser} from './helpers/load-ts.mjs';
 import assert from 'node:assert/strict';
+import {boundedFrame} from '../portable/protocol.mjs';
 import {mkdtempSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
@@ -78,3 +79,5 @@ test('human scrollbar ticks include verified human and legacy messages only',()=
  const entries=['user','bot','system','unknown','legacy'].map((kind,i)=>({id:`item-${i}`,turnId:`turn-${i}`,sourceThreadId:'thread',type:'userMessage',item:{type:'userMessage',id:`item-${i}`,clientId:`client-${i}`,content:[{type:'text',text:'Body'}]},complete:true,scheduled:false,status:'completed',startedAt:i+1,...(kind==='legacy'?{}:{submission:{submissionId:`client-${i}`,source:{kind,id:'source',name:'Name'}}})}));
  const {ticks}=humanMessageTicks(entries,[],'bot','thread');assert.deepEqual(Array.from(ticks,t=>t.entry.submission?.source.kind??'legacy'),['user','legacy']);
 });
+
+test('source checksum survives the actual canonical hub wire serialization',t=>{const e=setup(t),r=e.send(),b=e.store.bot('jim'),q=e.store.get('promptQueue',r.submissionId),raw=e.sources.fromQueue(b,'wire-delivery',q),wire=JSON.parse(boundedFrame(raw));assert.equal(e.sources.import(b,wire,'wire-delivery').fingerprint,raw.fingerprint);});

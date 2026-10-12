@@ -1,7 +1,6 @@
-import { createHash } from 'node:crypto';
+import { fingerprint as digest } from '../portable/protocol.mjs';
 
 const identity = value => typeof value === 'string' && /^[A-Za-z0-9:_.-]{1,180}$/.test(value);
-const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const text = value => typeof value === 'string' && value.length <= 200000 && !value.includes('\0');
 const fields = new Set(['kind','id','name','color','avatar']);
 const now = () => new Date().toISOString();
@@ -25,7 +24,7 @@ export function checkedSource(source) {
   if(source.color!==undefined&&!/^#[0-9a-f]{6}$/i.test(source.color))throw Error('Invalid registered bot colour.');
   // Native bot avatar shapes are application-owned strings, not URL grants.
   if(source.avatar!==undefined&&(typeof source.avatar!=='string'||source.avatar.length>80||!/^[a-zA-Z0-9_-]+$/.test(source.avatar)))throw Error('Invalid registered avatar.');
-  return structuredClone(source);
+  return Object.fromEntries(Object.entries(source).filter(([,value])=>value!==undefined));
 }
 
 export function registeredBotSource(bot) {
