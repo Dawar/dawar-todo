@@ -181,6 +181,9 @@ Task notifications use the contrasting dark toast surface, a concise outcome,
 optional task preview and separate Undo/snooze actions. They sit above the bulk
 bar and safe area. Keep errors distinct; announce success as status and errors
 as alerts. Do not let a toast cover the controls needed to recover.
+Pause notification dismissal while it is hovered, focused, or its action is
+pending; resume with the remaining display time. Errors stay until dismissed.
+An older notification's timer or dismissal must not remove a newer result.
 
 Saved-change recovery presents labeled values instead of raw JSON, with bounded
 details for long or unknown fields. File recovery separates storage-read errors

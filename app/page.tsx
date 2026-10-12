@@ -1373,14 +1373,6 @@ export default function Home() {
     });
   }, [loading, now, todos]);
 
-  useEffect(() => {
-    if (!notice || customSnoozeDialog) return;
-    const defaultDuration = notice.snoozeIds?.length ? 15_000 : notice.undoToken ? 8_000 : 5_000;
-    const duration = notice.dismissAt === undefined ? defaultDuration : Math.max(0, notice.dismissAt - Date.now());
-    const timer = window.setTimeout(() => setNotice(null), duration);
-    return () => window.clearTimeout(timer);
-  }, [customSnoozeDialog, notice]);
-
   const undoFromShortcut = useEffectEvent((currentNotice: NonNullable<Notice>) => requestNoticeUndo(currentNotice));
 
   useEffect(() => {
@@ -4254,7 +4246,7 @@ export default function Home() {
 
       {viewerAttachment && viewerIndex !== null && <TaskImageViewer attachment={viewerAttachment} index={viewerIndex} count={imageAttachments.length} copyState={viewerCopyState} onClose={() => setViewerIndex(null)} onCopy={() => void copyViewerImage()} onDelete={() => void deleteDetailAttachment(viewerAttachment)} onNavigate={delta => setViewerIndex(current => current === null ? null : (current + delta + imageAttachments.length) % imageAttachments.length)} />}
 
-      {notice && <TaskNotice notice={notice} bulkActionsVisible={selectedIds.length > 0} undoing={undoing} adjusting={adjustingSnooze !== null} presets={quickSnoozePresets} onUndo={() => requestNoticeUndo(notice)} onDismiss={() => setNotice(null)} onSnooze={preset => void adjustSnooze(notice.snoozeIds as number[], preset, notice.operationId)} onCustomSnooze={() => openCustomSnooze(notice.snoozeIds as number[], notice.operationId)} />}
+      {notice && <TaskNotice notice={notice} bulkActionsVisible={selectedIds.length > 0} undoing={undoing} adjusting={adjustingSnooze !== null} paused={Boolean(customSnoozeDialog)} presets={quickSnoozePresets} onUndo={() => requestNoticeUndo(notice)} onDismiss={() => setNotice(current => current === notice ? null : current)} onSnooze={preset => void adjustSnooze(notice.snoozeIds as number[], preset, notice.operationId)} onCustomSnooze={() => openCustomSnooze(notice.snoozeIds as number[], notice.operationId)} />}
 
     </main>
   );
