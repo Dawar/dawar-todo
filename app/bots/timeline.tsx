@@ -17,7 +17,6 @@ import { elapsed } from "../../lib/bot-timing";
 import { NativeTimingContext } from "./active-turn-elapsed";
 import "./native-timeline.css";
 import { MessageTime, ElapsedTime } from "./message-time";
-import { ConfigurationEvidence } from "./configuration-evidence";
 import { BotMessage, WorkPlanMessage } from "./message";
 import { readWorkPlanSource } from '../../lib/native-work-plan';
 import { OperatorSegmentBody } from "./operator-call";
@@ -117,7 +116,7 @@ function NativeWorkAccess({ entry, timeline, state, capture, online }: { entry: 
     {entry.turnError && <p role="alert" className="bots-error">{entry.turnError}</p>}
   </div>;
 }
-export const TimelineEntry = memo(function TimelineEntry(props: Parameters<typeof EntryBody>[0] & { showScheduledMark?:boolean; configuration?: import("../../lib/bot-execution-configuration").TurnConfiguration | null; configurationSupported?: boolean; onOpenCall?: () => void; threadId?: string; onReply?: (reply: BotReplyReference) => void; onOpenReply?: (reply: BotReplyReference) => Promise<boolean>; open?: boolean; onOpenChange?: (open: boolean) => void; beforeToggle?: () => void }) {
+export const TimelineEntry = memo(function TimelineEntry(props: Parameters<typeof EntryBody>[0] & { showScheduledMark?:boolean; onOpenCall?: () => void; threadId?: string; onReply?: (reply: BotReplyReference) => void; onOpenReply?: (reply: BotReplyReference) => Promise<boolean>; open?: boolean; onOpenChange?: (open: boolean) => void; beforeToggle?: () => void }) {
   const { entry } = props;
   if (entry.item?.type === "agentMessage" && !entry.item.text.trim() && !entry.item.questions?.length && !entry.questionNotice) return null;
   if (entry.type === "reasoning" && (entry.item?.type !== "reasoning" || !entry.item.summary.some(text => text.trim()))) return null;
@@ -131,7 +130,6 @@ export const TimelineEntry = memo(function TimelineEntry(props: Parameters<typeo
       {() => <div className="bots-native-work-body">{entry.deferredTurn ? <TurnWorkLog entry={entry} timeline={props.timeline} download={props.download}/> : <EntryBody {...props}/>} {reply}</div>}
     </LazyDetails> : <EntryBody {...props}/>}
     {!work && reply}
-    {props.configurationSupported && entry.item?.type === "agentMessage" && entry.item.phase === "final_answer" && <ConfigurationEvidence value={props.configuration} label="Turn settings"/>}
     {entry.operatorSegmentId && <LazyDetails className="operator-call-card operator-origin" summary={<><Phone size={13} aria-hidden="true"/>Voice call</>}>{() => <OperatorSegmentBody botId={props.timeline.botId} segmentId={entry.operatorSegmentId!} onOpenCalls={props.onOpenCall}/>}</LazyDetails>}
     {!work && <MessageTime seconds={entry.messageAt} basis={entry.timeBasis ?? "turn-start"} user={entry.type === "userMessage"} elapsed={entry.item?.type === "agentMessage" && entry.item.phase === "final_answer" && entry.audience !== "finding" ? elapsed(entry, "turn") : null}/>}
   </div>;
@@ -293,7 +291,7 @@ function BotConversationFeed({ owner, bot, online, children, onOpenCall, onReply
   // Other message groups do not replace that reply.
   const readableContext = (entries: HistoryEntry[]) => entries.length > 0 && <section aria-label="Latest readable context" data-history-context>
     <p className="bots-system-note">Latest readable messages. Intervening work remains accessible through earlier history.</p>
-    {entries.map(entry => <TimelineEntry {...replyProps} onOpenCall={onOpenCall} key={historyKey(entry.turnId, entry.id)} entry={entry} configurationSupported={botsClient.snapshot?.capabilities?.executionConfiguration === 1} configuration={timeline.configuration(bot.threadId, entry.turnId)} timeline={timeline} attachments={state.attachments} download={download} />)}
+    {entries.map(entry => <TimelineEntry {...replyProps} onOpenCall={onOpenCall} key={historyKey(entry.turnId, entry.id)} entry={entry} timeline={timeline} attachments={state.attachments} download={download} />)}
   </section>;
   const earlierTicks = first > 0 || Boolean(state.olderCursor) || state.gaps.some(gap => gap.before === historyKey(state.entries[first]?.turnId ?? '', state.entries[first]?.id ?? ''));
   const showTicks = tickNavigation.ticks.length > 0 || earlierTicks;
@@ -324,7 +322,7 @@ function BotConversationFeed({ owner, bot, online, children, onOpenCall, onReply
           Some messages between these pages are not loaded. <Button variant="outline" type="button" disabled={!online || paging} onClick={() => {
             feed.capture(); void timeline.fillGap(gap);
           }}>Load messages in between</Button></div>)}
-        {entry.deferredTurn ? <NativeWorkAccess entry={entry} timeline={timeline} state={nativeState.workLogs[entry.turnId]} capture={feed.capture} online={online}/> : group.kind === "message" ? replyBatch ? <div data-history-key={key}><BurstBubbles messages={replyBatch} {...batchProps} onOpenReply={openReply} onReply={onReply} threadId={bot.threadId??undefined} replySource={entry} sent /></div> : confirmed ? <div data-history-key={key}><BurstBubbles messages={confirmed.messages} batch={confirmed.batch} {...batchProps} onOpenReply={openReply} onReply={onReply} threadId={bot.threadId??undefined} replySource={entry} /></div> : <TimelineEntry {...replyProps} {...workProps} onOpenCall={onOpenCall} entry={entry} configurationSupported={botsClient.snapshot?.capabilities?.executionConfiguration === 1} configuration={timeline.configuration(bot.threadId, entry.turnId)} timeline={timeline} attachments={state.attachments} download={download} />
+        {entry.deferredTurn ? <NativeWorkAccess entry={entry} timeline={timeline} state={nativeState.workLogs[entry.turnId]} capture={feed.capture} online={online}/> : group.kind === "message" ? replyBatch ? <div data-history-key={key}><BurstBubbles messages={replyBatch} {...batchProps} onOpenReply={openReply} onReply={onReply} threadId={bot.threadId??undefined} replySource={entry} sent /></div> : confirmed ? <div data-history-key={key}><BurstBubbles messages={confirmed.messages} batch={confirmed.batch} {...batchProps} onOpenReply={openReply} onReply={onReply} threadId={bot.threadId??undefined} replySource={entry} /></div> : <TimelineEntry {...replyProps} {...workProps} onOpenCall={onOpenCall} entry={entry} timeline={timeline} attachments={state.attachments} download={download} />
           : null}
         {groups.slice(groups.indexOf(group) + 1).find(next => !next.secure && !next.taskRequest && !next.burst)?.entries[0]?.turnId !== entry.turnId ? <ReturnedArtifacts linked={linkedArtifacts} attachments={state.attachments} turnId={entry.turnId} botId={bot.id} /> : null}
       </Fragment>;
