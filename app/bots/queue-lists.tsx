@@ -2,7 +2,7 @@
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { NativeSelect } from "@/components/ui/native-select";
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import {  FolderOpen, ListOrdered, Pencil, Plus, Send, Trash2, X } from 'lucide-react';
 import type { Bot, BotQueueList, BotQueuedSubmission } from '../../lib/bots-types';
 import { botsClient as client } from './client';
@@ -92,23 +92,28 @@ export function QueueLists({owner,bot,lists,defaultItems,online,refreshLists,ref
   },[selected,bot.id,refresh]);
   const items=!selected||selected==='default'?defaultItems:loaded.id===selected?loaded.items:[];
   const locked=action.busy || action.blocked || !online;
-  const cronError=editor?cronValidationError(editor.cron):null;
-  let next:string|null=null;
-  if(editor?.cron && !cronError) {try{next=nextCronOccurrence(editor.cron,new Date(),editor.timeZone)?.toISOString()??null;}catch{}}
+  const validationId=useId(), cronError=editor?cronValidationError(editor.cron):null, hasSchedule=Boolean(editor?.cron.trim());
+  let next:string|null=null, zoneError:string|null=null;
+  if(editor && hasSchedule) {
+    try { new Intl.DateTimeFormat(undefined,{timeZone:editor.timeZone}).format(); }
+    catch { zoneError='Enter a valid timezone, such as America/Toronto.'; }
+    if(!cronError && !zoneError) next=nextCronOccurrence(editor.cron,new Date(),editor.timeZone)?.toISOString()??null;
+  }
+  const scheduleError=cronError || zoneError || (hasSchedule && !next ? 'This schedule has no upcoming occurrence. Choose another schedule.' : null);
   return <div className="bots-queue-lists">
     <header className="bots-lists-heading"><div><h3>Queue lists</h3></div><Button variant="outline" type="button" title="New queue list" aria-label="New queue list" disabled={locked} onClick={()=>setEditor(blank())}><Plus size={19}/>New list</Button></header>
     {action.error && <p className="bots-lists-error" role="alert">{action.error}</p>}
-    {action.pending && <div className="bots-lists-error" role="status">{action.busy?'Confirming your change…':'This change needs confirmation.'}<Button variant="outline" type="button" disabled={!online||action.busy} onClick={action.retry}>Retry</Button></div>}
+    {action.pending && <div className={action.busy?'bots-lists-pending':'bots-lists-error'} role="status">{action.busy?'Saving…':'This change needs confirmation.'}{!action.busy&&<Button variant="outline" type="button" disabled={!online} onClick={action.retry}>Retry</Button>}</div>}
     {error && <p className="bots-lists-error" role="alert">{error}</p>}
-    {editor && <form className="bots-list-editor" onSubmit={async event=>{
-      event.preventDefault(); if(cronError)return;
+    {editor && <form className="bots-list-editor" aria-busy={action.busy} onSubmit={async event=>{
+      event.preventDefault(); if(locked || scheduleError || !editor.name.trim())return;
       const {revision,...params}=editor;
       if(await action.run('queueLists.save',{...params,cron:editor.cron.trim()||null,...(revision?{expectedRevision:revision}:{})}))setEditor(null);
     }}><header><strong>{editor.id?'List settings':'New queue list'}</strong><Button variant="outline" type="button" aria-label="Close list editor" onClick={()=>setEditor(null)}><X size={18}/></Button></header>
-      <label>Name<Input autoFocus value={editor.name} maxLength={80} required placeholder="Morning work" onChange={e=>setEditor({...editor,name:e.target.value})}/></label>
-      <ListSchedule editor={editor} onChange={value=>setEditor({...editor,...value})}/>
-      {cronError?<small role="alert">{cronError}</small>:next&&editor.enabled?<small>Next: {when(next,editor.timeZone)}</small>:null}
-      <Button className="bots-primary" type="submit" disabled={locked||Boolean(cronError)||Boolean(editor.cron&&!next)}>Save list</Button>
+      <label>Name<Input autoFocus disabled={locked} value={editor.name} maxLength={80} required placeholder="Morning work" onChange={e=>setEditor({...editor,name:e.target.value})}/></label>
+      <ListSchedule editor={editor} disabled={locked} cronError={Boolean(cronError)} zoneError={Boolean(zoneError)} errorId={validationId} onChange={value=>setEditor({...editor,...value})}/>
+      {scheduleError?<small id={validationId} role="alert">{scheduleError}</small>:next&&editor.enabled?<small>Next: {when(next,editor.timeZone)}</small>:null}
+      <Button className="bots-primary" type="submit" disabled={locked||Boolean(scheduleError)||!editor.name.trim()}>{action.busy?'Saving…':'Save list'}</Button>
     </form>}
     <nav className="bots-list-tabs" aria-label="Queue lists">
       <Button variant="outline" type="button" aria-pressed={!selected||selected==='default'} onClick={()=>setSelected('default')}><ListOrdered size={16}/>Queued next <span>{defaultItems.length}</span></Button>
@@ -120,19 +125,19 @@ export function QueueLists({owner,bot,lists,defaultItems,online,refreshLists,ref
       <Button variant="outline" title="Only empty lists can be removed" disabled={locked||items.length>0||current.count>0} onClick={async()=>{if(await action.run('queueLists.delete',{id:current.id,expectedRevision:current.revision}))setSelected('default');}}><Trash2 size={17}/>Delete list</Button>
     </div>}</div>
       <PromptQueue owner={owner} bot={bot} items={selected==='default'?defaultItems:items} online={online} canEdit listId={selected==='default'?null:selected} title={current?.name??'Queued next'} lists={lists} supported relativeMoves={client.snapshot?.capabilities?.queueRelativeMoves===1} onEdit={async item=>{setError('');try{if(!await onEdit(item))setError('Could not confirm removal. Retry in the composer.');}catch(reason){setError(reason instanceof Error?reason.message:'Queue removal could not be confirmed.');}}} refresh={refresh} embedded />
-      {!items.length&&<p className="bots-lists-empty-note">Nothing here yet. Queue a message in the conversation, then move it into this list.</p>}
+      {!items.length&&<p className="bots-lists-empty-note">No queued messages.</p>}
   </div>;
 }
 
-function ListSchedule({editor,onChange}:{editor:ReturnType<typeof blank>;onChange:(value:Partial<ReturnType<typeof blank>>)=>void}) {
+function ListSchedule({editor,onChange,disabled,cronError,zoneError,errorId}:{editor:ReturnType<typeof blank>;onChange:(value:Partial<ReturnType<typeof blank>>)=>void;disabled:boolean;cronError:boolean;zoneError:boolean;errorId:string}) {
   const parts=editor.cron.split(' '), timed=/^\d{1,2} \d{1,2} \* \* (\*|1-5)$/.test(editor.cron);
   const mode=!editor.cron?'manual':timed?parts[4]==='*'?'daily':'weekdays':editor.cron==='0 * * * *'?'hourly':'custom';
   const time=timed?`${parts[1].padStart(2,'0')}:${parts[0].padStart(2,'0')}`:'09:00';
-  return <><label>Schedule<NativeSelect value={mode} onChange={e=>onChange({cron:e.target.value==='manual'?'':e.target.value==='hourly'?'0 * * * *':e.target.value==='custom'?'0 9 * * 1':`0 9 * * ${e.target.value==='daily'?'*':'1-5'}`})}>
+  return <><label>Schedule<NativeSelect disabled={disabled} value={mode} onChange={e=>onChange({cron:e.target.value==='manual'?'':e.target.value==='hourly'?'0 * * * *':e.target.value==='custom'?'0 9 * * 1':`0 9 * * ${e.target.value==='daily'?'*':'1-5'}`})}>
     <option value="manual">Manual only</option><option value="daily">Every day</option><option value="weekdays">Weekdays</option><option value="hourly">Every hour</option><option value="custom">Custom schedule</option>
   </NativeSelect></label>
-  {(mode==='daily'||mode==='weekdays')&&<label>Time<Input type="time" required value={time} onChange={e=>{const [hour,minute]=e.target.value.split(':');if(hour&&minute)onChange({cron:`${Number(minute)} ${Number(hour)} * * ${mode==='daily'?'*':'1-5'}`});}}/></label>}
-  {mode==='custom'&&<label>Cron expression<Input value={editor.cron} onChange={e=>onChange({cron:e.target.value})} spellCheck={false}/></label>}
-  {editor.cron&&<><label>Timezone<Input value={editor.timeZone} onChange={e=>onChange({timeZone:e.target.value})} required placeholder="America/Toronto"/></label><label className="bots-list-checkbox"><input type="checkbox" checked={editor.enabled} onChange={e=>onChange({enabled:e.target.checked})}/>Schedule enabled</label></>}
+  {(mode==='daily'||mode==='weekdays')&&<label>Time<Input type="time" disabled={disabled} required value={time} onChange={e=>{const [hour,minute]=e.target.value.split(':');if(hour&&minute)onChange({cron:`${Number(minute)} ${Number(hour)} * * ${mode==='daily'?'*':'1-5'}`});}}/></label>}
+  {mode==='custom'&&<label>Cron expression<Input disabled={disabled} aria-invalid={cronError||undefined} aria-describedby={cronError?errorId:undefined} value={editor.cron} onChange={e=>onChange({cron:e.target.value})} spellCheck={false}/></label>}
+  {editor.cron&&<><label>Timezone<Input disabled={disabled} aria-invalid={zoneError||undefined} aria-describedby={zoneError?errorId:undefined} value={editor.timeZone} onChange={e=>onChange({timeZone:e.target.value})} required placeholder="America/Toronto"/></label><label className="bots-list-checkbox"><input type="checkbox" disabled={disabled} checked={editor.enabled} onChange={e=>onChange({enabled:e.target.checked})}/>Schedule enabled</label></>}
   </>;
 }
