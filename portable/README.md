@@ -968,3 +968,13 @@ a standalone hub uses `workspaces` beside its control database. Existing team
 folder identities and files are retained. Remote agents receive a bounded,
 authenticated team profile rather than trying to open hub paths locally. The
 shared folder remains on the hub; this does not add remote filesystem sharing.
+
+The first compatible combined startup adopts the latest local agent team records,
+membership and completed `team-v1` receipts in one hub transaction. The original
+private agent database is read-only, scoped to its enrolled owner/node, and its
+operation bytes/fingerprints remain intact. Conflicts or unconfirmed receipts fail
+without partial adoption. A durable authority marker prevents later startup from
+replacing newer hub decisions with an older native copy. This requires the same
+exclusive cutover and private backup as the backend release; it is not a live
+record migration. Rollback must retain canonical team records and receipts: hide
+the new UI if needed, never restore an older native team copy over newer hub data.

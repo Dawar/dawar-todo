@@ -3,17 +3,19 @@ import { join, dirname } from 'node:path';
 import { publicTeams, readTeam, acceptTeamOperation, teamTool } from '../bot-bridge/teams.mjs';
 import { teamProfileContext } from '../bot-bridge/profiles.mjs';
 import { fingerprint, id } from './protocol.mjs';
+import {adoptLegacyTeams,originalTeamReceipt} from './team-adoption.mjs';
 
 export const TEAM_READS = new Set(['teams.list', 'teams.read']);
 export const TEAM_MUTATIONS = new Set(['teams.save', 'teams.assign', 'teams.reorder', 'teams.orderBots', 'teams.memory', 'teams.delete']);
 
 /** Membership and shared memory belong to the hub, independently of native work. */
 export class HubTeams {
-  constructor(controls, owner, root) {
+  constructor(controls, owner, root, legacySource) {
     this.controls = controls;
     this.owner = owner?.key ?? null;
     this.root = root ?? join(dirname(controls.storePath), 'workspaces');
     mkdirSync(this.root, { recursive: true, mode: 0o700 });
+    adoptLegacyTeams(controls,this.owner,legacySource);
     const store = Object.assign(Object.create(controls.store), {
       bots: () => controls.store.bots().filter(bot => this.owns(bot.id)),
     });
@@ -61,11 +63,14 @@ export class HubTeams {
       const binding = fingerprint({ owner, method, botId: botId ?? null, params, caller });
       const prior = this.controls.store.operation(operationId);
       if (prior) {
-        if (prior.fingerprint !== binding) throw Object.assign(Error('Original team operation changed.'), { outcome: 'rejected' });
+        if (prior.fingerprint !== binding&&!originalTeamReceipt(this.controls,owner,{method,botId,params,operationId},caller,prior)) throw Object.assign(Error('Original team operation changed.'), { outcome: 'rejected' });
         if (prior.status === 'done') return prior.result;
         throw Object.assign(Error('Original team acceptance is unconfirmed; retain its identity.'), { outcome: 'uncertain' });
       }
-      const accepted = await acceptTeamOperation(this.runtime, { method, botId, params, operationId }, binding, () => { this.controls.assertWriter(); validate(); });
+      const accepted = await acceptTeamOperation(this.runtime, { method, botId, params, operationId }, binding, () => {
+        this.controls.assertWriter(); validate();
+        if(this.controls.store.operation(operationId))throw Error('Original team operation was reserved during preparation.');
+      });
       return accepted.result;
     });
   }

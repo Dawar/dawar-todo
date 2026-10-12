@@ -2,6 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {build} from 'esbuild';
 import {cpSync,mkdtempSync,mkdirSync,rmSync} from 'node:fs';
+import {createHash} from 'node:crypto';
+import {Store} from '../bot-bridge/store.mjs';
+import {adoptLegacyTeams} from '../portable/team-adoption.mjs';
 import {join} from 'node:path';
 import {fileURLToPath,pathToFileURL} from 'node:url';
 import {HubStore} from '../portable/control-store.mjs';
@@ -72,4 +75,38 @@ test('snapshot keeps canonical teams over stale native metadata and supports off
  hub.db.prepare('UPDATE portable_authority SET frozen=1').run();
  await assert.rejects(request('teams.save',{name:'Blocked',color:'#223344'},'frozen-create'),/authoritative hub/);
  assert.equal(controls.store.operation('frozen-create'),null);router.close();
+});
+
+test('first adoption preserves newer native memory and exact original team receipts once',async t=>{
+ const {controls,hub,request,caller}=await fixture(t),path=join(controls.teams.root,'legacy-native.sqlite'),legacy=new Store(path);
+ const team={id:'team-'+ 'a'.repeat(32),name:'Existing',color:'#112233',memory:'Latest verified note',revision:7,position:0};
+ legacy.put('team',team);legacy.saveBot({id:'one',slug:'one',threadId:'thread-one',teamId:team.id,teamOrder:2});legacy.saveBot({id:'two',slug:'two',threadId:'thread-two',teamId:null,teamOrder:0});
+ controls.store.put('team',{...team,memory:'Old migration copy',revision:3});
+ const original={method:'teams.memory',botId:'one',params:{id:team.id,memory:team.memory,expectedRevision:6},result:{team},localOnly:'team-v1'};
+ const hash=createHash('sha256').update(JSON.stringify({method:original.method,botId:original.botId,params:original.params})).digest('hex');
+ legacy.saveOperation('original-native-team-memory',hash,'done',original);const raw=legacy.db.prepare('SELECT json FROM operations').get().json;legacy.db.close();
+ adoptLegacyTeams(controls,'owner',{path,nodeId:'node'});
+ assert.equal(controls.store.get('team',team.id).memory,team.memory);assert.equal(controls.store.get('team',team.id).revision,7);
+ assert.equal(controls.store.bot('one').teamId,team.id);assert.equal(controls.store.bot('one').teamOrder,2);
+ assert.equal(controls.store.db.prepare('SELECT json FROM operations WHERE id=?').get('original-native-team-memory').json,raw);
+ assert.equal(controls.store.operation('original-native-team-memory').fingerprint,hash);
+ assert.equal(controls.store.meta('portable-team-authority').receipts,1);
+ const recovered=await controls.request('owner',{method:original.method,botId:'one',params:original.params,operationId:'original-native-team-memory'},caller);assert.equal(recovered.team.revision,7);
+ await assert.rejects(controls.request('owner',{method:original.method,botId:'one',params:{...original.params,memory:'Forged replay'},operationId:'original-native-team-memory'},caller),/operation changed/);
+ await request('teams.memory',{id:team.id,memory:'New hub decision',expectedRevision:7},'new-hub-memory');
+ adoptLegacyTeams(controls,'owner',{path:'/not-an-existing-source',nodeId:'node'});assert.equal(controls.store.get('team',team.id).memory,'New hub decision');
+ assert.equal(hub.db.prepare('SELECT count(*) n FROM portable_mailbox').get().n,0);
+});
+
+test('first adoption rejects a foreign source or conflicting receipts without partial writes',async t=>{
+ const {controls}=await fixture(t),path=join(controls.teams.root,'conflicting-native.sqlite'),legacy=new Store(path);
+ const team={id:'team-'+ 'b'.repeat(32),name:'Original',color:'#112233',memory:'Retain me',revision:2,position:0};
+ legacy.put('team',team);for(const id of ['one','two'])legacy.saveBot({id,slug:id,threadId:'thread-'+id,teamId:null,teamOrder:0});
+ const op={method:'teams.save',params:{name:'Original',color:'#112233'},result:{team},localOnly:'team-v1'};
+ const hash=createHash('sha256').update(JSON.stringify({method:op.method,botId:op.botId,params:op.params})).digest('hex');legacy.saveOperation('conflicting-original',hash,'done',op);legacy.db.close();
+ controls.store.saveOperation('conflicting-original','retained-different-binding','done',{method:'queue.add',result:{id:'retained'}});
+ assert.throws(()=>adoptLegacyTeams(controls,'owner',{path,nodeId:'foreign-node'}),/another node owner/);
+ assert.throws(()=>adoptLegacyTeams(controls,'owner',{path,nodeId:'node'}),/conflicts/);
+ assert.equal(controls.store.get('team',team.id),null);assert.equal(controls.store.meta('portable-team-authority'),null);
+ assert.equal(controls.store.operation('conflicting-original').fingerprint,'retained-different-binding');
 });

@@ -37,7 +37,7 @@ const ownerQueueControls=new Set(['queue.send','queue.resume','work.resume']);
 // The hub reuses the original logical records and local acceptance closures.
 // This facade has no native process: queue mutation cannot become inference.
 export class HubControls extends EventEmitter {
-  constructor({path,hub,router,owner=null,teamWorkspaceRoot,authority=null,defaultTimeZone='America/Toronto',broadcast=()=>{},quietWindow={start:'02:30',end:'04:30',timeZone:'America/Toronto',scheduleIds:[]}}) {
+  constructor({path,hub,router,owner=null,teamWorkspaceRoot,legacyTeamSource,authority=null,defaultTimeZone='America/Toronto',broadcast=()=>{},quietWindow={start:'02:30',end:'04:30',timeZone:'America/Toronto',scheduleIds:[]}}) {
     super();Object.assign(this,{hub,router,authority,defaultTimeZone,broadcast,quietWindow});
     this.storePath=path;this.store=new Store(path);this.ready=true;this.locks=new Map();this.closed=false;
     this.store.db.exec('PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS portable_control_receipts(operation_id TEXT PRIMARY KEY,receipt_hash TEXT NOT NULL)');
@@ -61,7 +61,7 @@ export class HubControls extends EventEmitter {
     }
     const meta=this.store.meta.bind(this.store);
     this.store.meta=(key,value)=>value===undefined||this.store.transactionDepth?meta(key,value):this.store.transaction(()=>meta(key,value));
-    this.teams=new HubTeams(this,owner,teamWorkspaceRoot);
+    this.teams=new HubTeams(this,owner,teamWorkspaceRoot,legacyTeamSource);
     // A fault is retained as metadata, without spawning a bot or an ACK loop.
     this.on('fault',error=>{this.lastFault={message:error.message,at:now()};});
   }

@@ -300,7 +300,7 @@ export async function acceptTeamOperation(runtime, request, fingerprint, beforeC
     return { handled: true, result };
   } catch (error) {
     const receipt = runtime.store.operation(operationId);
-    if (receipt?.status === "done")
+    if (receipt?.status === "done" && receipt.fingerprint === fingerprint && receipt.method === method && receipt.botId === botId)
       return { handled: true, result: receipt.result };
     error.outcome = "rejected";
     throw error;

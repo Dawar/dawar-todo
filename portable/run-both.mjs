@@ -5,6 +5,7 @@ import {fileURLToPath,pathToFileURL} from 'node:url';
 import {loadConfig} from './config.mjs';
 import {RUNTIME_VERSION} from './protocol.mjs';
 import {combinedShutdown} from './combined-shutdown.mjs';
+import {readPrivate} from './private-file.mjs';
 
 // A single systemd/launchd cgroup owns the site, hub and the very same agent
 // entrypoint used on remote machines. There is exactly one logical scheduler.
@@ -19,7 +20,9 @@ export async function runBoth(configPath) {
   const backendRoot=c.backendReleaseDirectory??root;
   const {startGateway}=await import(pathToFileURL(join(backendRoot,'dist/portable/gateway.mjs')).href);
   const {runAgent}=await import(pathToFileURL(join(backendRoot,'bot-bridge/portable-agent.mjs')).href);
-  const gateway=startGateway(c);
+  const enrollment=JSON.parse(readPrivate(join(a.dataDirectory,'node-enrollment.json'),16384));
+  if(enrollment.owner!==c.owner.key||a.agent.nodeId&&a.agent.nodeId!==enrollment.nodeId)throw Error('Combined team adoption requires its original owner/node enrollment.');
+  const gateway=startGateway({...c,teamWorkspaceRoot:c.teamWorkspaceRoot??a.agent.workspaces,legacyTeamSource:{path:join(a.dataDirectory,'native-control.sqlite'),nodeId:enrollment.nodeId}});
   await new Promise((resolve,reject)=>{if(gateway.server.listening)return resolve();gateway.server.once('listening',resolve);gateway.server.once('error',reject);});
   const child=c.externalSite===true?null:spawn(process.execPath,[join(root,'.next-portable/standalone/server.js')],{cwd:join(root,'.next-portable/standalone'),
     env:{...process.env,DAWAR_HUB_CONFIG:configPath,PORT:String(c.sitePort??3211),HOSTNAME:'127.0.0.1'},stdio:'inherit'});
