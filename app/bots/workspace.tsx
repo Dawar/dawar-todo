@@ -123,7 +123,7 @@ export function BotsWorkspace() {
     [activityTarget, setActivityTarget] = useState<ActivityTarget | null>(null),
     [showOverallUsage, setShowOverallUsage] = useState(false),
     [editingSchedule, setEditingSchedule] = useState<
-      BotSchedule | "new" | null
+      { schedule: BotSchedule | "new"; scope: string; botId: string; owner: string } | null
     >(null);
   const [loadedQueue, setPromptQueue] = useState<BotQueuedSubmission[]>([]),
     [queueScope, setQueueScope] = useState(""),
@@ -134,6 +134,7 @@ export function BotsWorkspace() {
   useLayoutEffect(() => { selectedRef.current = selected; }, [selected]);
   const owner = client.owner;
   const scope = JSON.stringify([owner, selected]);
+  if (editingSchedule && editingSchedule.scope !== scope) setEditingSchedule(null);
   const promptQueue = queueScope === scope ? loadedQueue : EMPTY_QUEUE;
   const { composer, error: composerError } = useBotComposer(client.owner, selected);
   const [transferBusy,setTransferBusy]=useState(false),[transferError,setTransferError]=useState("");
@@ -235,41 +236,6 @@ export function BotsWorkspace() {
       screen.style.removeProperty("--bots-keyboard-top");
     };
   }, [selected]);
-  useEffect(() => {
-    if (!creating && !editingSchedule && !showOverallUsage) return;
-    const previous = document.activeElement as HTMLElement | null;
-    const dialog = [...document.querySelectorAll<HTMLElement>('[role="dialog"]')].filter(node => node.getClientRects().length).at(-1);
-    const focusable = () =>
-      Array.from(
-        dialog?.querySelectorAll<HTMLElement>(
-          "button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), a[href]",
-        ) ?? [],
-      );
-    focusable()[0]?.focus();
-    const keydown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setCreating(false);
-        setEditingSchedule(null);
-        setShowOverallUsage(false);
-      }
-      if (event.key !== "Tab") return;
-      const items = focusable(),
-        first = items[0],
-        last = items.at(-1);
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last?.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first?.focus();
-      }
-    };
-    document.addEventListener("keydown", keydown);
-    return () => {
-      document.removeEventListener("keydown", keydown);
-      previous?.focus();
-    };
-  }, [creating, editingSchedule, showOverallUsage]);
   useEffect(() => {
     const unsubscribe = client.subscribe(() => redraw((v) => v + 1));
     client.start();
@@ -817,7 +783,7 @@ export function BotsWorkspace() {
               goals: <NativeGoalPanel key={`goal:${owner}:${bot.id}:${bot.threadId}`} owner={owner} bot={bot} work={work} snapshot={snapshot} online={online} />,
               queues: queueListsSupported ? <QueueLists key={`lists:${scope}`} owner={owner} bot={bot} lists={queueLists.lists} defaultItems={promptQueue} online={online} refreshLists={queueLists.refresh} refreshDefault={refreshDefaultQueue} onEdit={editQueued} /> : <p className="bots-details-lead">Queue lists will be available when the bot service update finishes.</p>,
               schedules: <>
-                <ScheduleList bot={bot} schedules={schedules} online={online} busy={busy} onEdit={setEditingSchedule} action={action} />
+                <ScheduleList bot={bot} schedules={schedules} online={online} busy={busy} onEdit={schedule => setEditingSchedule({ schedule, scope, botId: bot.id, owner })} action={action} />
                 {snapshot?.capabilities?.scheduleDecisions === 1 && <RunDecisions owner={owner} botId={bot.id} online={online} />}
               </>,
               files: <><h3>Files</h3><p className="bots-details-lead">Attachments and returned work, together. Open a preview, find a file, or download the original.</p><BotAttachmentsEntry bot={bot} owner={owner} online={online} onOpen={() => openGallery("attachments")} /></>,
@@ -873,14 +839,17 @@ export function BotsWorkspace() {
                 await client.refresh();
               });
             }} />}
-      {editingSchedule && bot && (
+      {editingSchedule && editingSchedule.scope === scope && bot && (
         <ScheduleEditor
-          schedule={editingSchedule}
+          key={`${editingSchedule.scope}:${editingSchedule.schedule === "new" ? "new" : editingSchedule.schedule.id}`}
+          schedule={editingSchedule.schedule}
+          online={online}
           timeZone={client.timeZone}
           close={() => setEditingSchedule(null)}
           save={async (value) => {
-            await client.rpc("schedules.save", bot.id, value);
-            setEditingSchedule(null);
+            if (client.owner !== editingSchedule.owner || selectedRef.current !== editingSchedule.botId || !client.online) throw new Error("Reconnect to the original bot to save this schedule.");
+            await client.rpc("schedules.save", editingSchedule.botId, value);
+            setEditingSchedule(current => current === editingSchedule ? null : current);
             await client.refresh();
           }}
         />

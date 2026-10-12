@@ -276,3 +276,10 @@ Upstream provenance: [shadcn manual installation](https://ui.shadcn.com/docs/ins
 and the [new-york Button registry](https://ui.shadcn.com/r/styles/new-york/button.json),
 retrieved October 11, 2026. Local accessibility, mobile sizing and domain behavior
 are maintained in this repository.
+
+Schedule editing preserves the existing paused/enabled state. Date/time drafts stay
+visible while editing the timezone or switching recurrence. Invalid timezone, cron
+and daylight-saving inputs use associated field errors; pending saves disable fields
+and repeated submission. Offline editing retains the draft with Save unavailable.
+A bot/owner change dismisses the old editor. Shared Radix dialogs own focus and
+Escape handling; consumers must not add a second document-level focus trap.
