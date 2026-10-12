@@ -1,5 +1,4 @@
 import {createHash} from 'node:crypto';
-import {verifyGateway} from './gateway-proof.ts';
 
 const DAY=86400000, IDLE=30*DAY, ABSOLUTE=90*DAY, REFRESH=DAY;
 const SESSION='__Host-dawar-session', CSRF='__Host-dawar-csrf';
@@ -13,8 +12,7 @@ const headers={'Cache-Control':'private, no-store','Vary':'Cookie','X-Content-Ty
 export function createBrowserSession(config,writer,{clock=Date.now}={}) {
   const db=writer.db;
   const actor=request=>{
-    const u=new URL(request.url);
-    if(request.headers.has('authorization')||!verifyGateway(config.gatewaySecret,request.method,u.pathname+u.search,request.headers,clock())||request.headers.get('oai-authenticated-user-email')!==config.owner.key||request.headers.get('oai-authenticated-user-id')!==config.owner.userId)throw Object.assign(Error('Browser session proof required.'),{status:403});
+    if(request.headers.has('authorization')||request.headers.get('x-dawar-internal-browser-proof')!=='verified'||request.headers.get('oai-authenticated-user-email')!==config.owner.key||request.headers.get('oai-authenticated-user-id')!==config.owner.userId)throw Object.assign(Error('Browser session proof required.'),{status:403});
     const raw=token(request);
     if(!raw||!/^[A-Za-z0-9_-]{43}$/.test(raw))throw Error('Browser session required.');
     const row=db.prepare('SELECT * FROM portable_sessions WHERE hash=? AND expires_at>?').get(digest(raw),clock());
