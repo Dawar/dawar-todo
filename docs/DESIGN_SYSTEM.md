@@ -113,6 +113,10 @@ Show the navigation rail/gutter only when loaded marks or earlier paging exist.
 - A durable local blast is visible before server acknowledgment, then reconciles
   to the receipt-backed countdown using its original identity. Keep progress
   visible and respect reduced motion. An unconfirmed result is never success.
+- Show Sending or Queueing while the corresponding request is in flight. Reserve
+  recovery warnings for a failed or unconfirmed result after the request settles;
+  an older status-read error must not replace a newer delivery event. Keep the
+  original message and action identity available throughout recovery.
 - Private-form metadata updates through events and bounded reconciliation on
   mount, reconnect, foreground return or explicit Retry. There is no recurring
   form poll or routine Checking indicator. Forms open on explicit user action.

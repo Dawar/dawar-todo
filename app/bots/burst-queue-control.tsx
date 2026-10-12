@@ -1,7 +1,7 @@
 "use client";
 import { Button } from "@/components/ui/button";
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { ListPlus } from 'lucide-react';
+import { ListPlus, LoaderCircle } from 'lucide-react';
 import type { BotQueueList, BotQueuedSubmission } from '../../lib/bots-types';
 import type { BurstQueueParams } from '../../lib/burst-queue';
 import type { BurstConversation } from './burst-composer';
@@ -88,15 +88,16 @@ export function BurstQueueControl({burst, online, disabled}: {burst:BurstConvers
   }, [choice,activityKey]);
   const queueAvailable = client.snapshot?.capabilities?.burstQueue === 1;
   if (!queueAvailable) return queueAction.intent || queueAction.error ? <div className="bots-burst-recovery" role="status">Reconnect to confirm queue placement.</div> : null;
+  const saving = working || queueAction.busy;
   return <>
-    <Button variant="ghost" size="sm" type="button" aria-label="Queue waiting burst messages" disabled={disabled || working || !!choice || !queueAction.ready || !!queueAction.intent}
-      onClick={() => void open()}><ListPlus size={16}/>Queue</Button>
+    <Button variant="ghost" size="sm" type="button" aria-label={saving ? 'Queueing messages' : 'Queue waiting burst messages'} aria-busy={saving} disabled={disabled || saving || !!choice || !queueAction.ready || !!queueAction.intent}
+      onClick={() => void open()}>{saving ? <LoaderCircle size={16} className="bots-spin" aria-hidden="true"/> : <ListPlus size={16} aria-hidden="true"/>}{saving ? 'Queueing…' : 'Queue'}</Button>
     {choice && choice.activityKey === activityKey && <QueueDestinationPicker lists={choice.lists} returnFocus={choice.opener} disabled={disabled || working || !!queueAction.intent || !online}
       description="Messages stay paused until queued. Cancel keeps them paused."
       error={error || queueAction.error} onChoose={id => void choose(choice,id)} onClose={() => {intent.current++;setChoice(null);setQueuePreparing(false);setError('');}} />}
-    {(error || queueAction.error) && !choice && <div className="bots-burst-recovery" role="alert">{queueAction.error || error}
+    {(error || queueAction.error) && !choice && !saving && <div className="bots-burst-recovery" role="alert">{queueAction.error || error}
       {queueAction.intent && <Button variant="ghost" size="sm" type="button" disabled={!online || queueAction.busy} onClick={() => void queueAction.retry().then(refreshDelivery).catch(()=>{})}>Check queue placement</Button>}</div>}
-    {queueAction.intent && !queueAction.error && !error && <div className="bots-burst-recovery" role="status">Queue placement unconfirmed.
+    {queueAction.intent && !queueAction.error && !error && !saving && <div className="bots-burst-recovery" role="status">Queue placement unconfirmed.
       <Button variant="ghost" size="sm" type="button" disabled={!online || queueAction.busy} onClick={() => void queueAction.retry().then(refreshDelivery).catch(()=>{})}>Check queue placement</Button></div>}
   </>;
 }
