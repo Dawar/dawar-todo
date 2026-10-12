@@ -1,5 +1,13 @@
 export const queueActionPrefix = (owner: string, botId: string) => `dawar:bot:queue-action:${JSON.stringify([owner, botId])}:`;
 export type QueueActionMethod = 'queue.send' | 'queue.delete' | 'queue.reorder' | 'queue.resume' | 'queue.move' | 'queue.merge' | 'queue.update' | 'queueLists.save' | 'queueLists.delete' | 'queueLists.flush';
+/** Display the original operation; status never grants delivery authority. */
+export const queueActionProgress = (method: QueueActionMethod) => ({
+  'queue.send': 'Sending…', 'queue.delete': 'Removing message…',
+  'queue.reorder': 'Updating order…', 'queue.resume': 'Resuming queue…',
+  'queue.move': 'Moving messages…', 'queue.merge': 'Merging messages…',
+  'queue.update': 'Saving message…', 'queueLists.save': 'Saving list…',
+  'queueLists.delete': 'Deleting list…', 'queueLists.flush': 'Queueing messages…',
+})[method];
 export type PendingQueueAction = { id: string; method: QueueActionMethod; params: Record<string, unknown>; owner: string; botId: string };
 const unreadableAction = 'Could not read the saved queue action. Retry without clearing site storage.';
 export function readQueueAction(owner: string, botId: string): { pending: PendingQueueAction | null; error: string } {

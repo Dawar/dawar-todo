@@ -299,3 +299,12 @@ label finished, failed and interrupted turns and keep native Goal completion
 separate. Never derive overall completion percentages from tokens, time, loaded
 plans or inventory counts. Missing plans get a concise empty state rather than
 an invented checklist. Native Goal controls and their scope checks are unchanged.
+
+
+Queue action status names the original operation (sending, moving, reordering,
+removing, saving or queueing). Keep uncertain receipts and deliberate recovery
+visible; unreadable local receipts offer a read-only retry. An acknowledged
+list save/delete must only close the editor or change the selection it started
+from. A delayed follow-up read never overrides a newer draft or navigation.
+Invalid stored schedule dates/timezones display a fallback instead of breaking
+the queue screen.
