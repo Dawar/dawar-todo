@@ -12,6 +12,7 @@ import { botsClient as client } from './client';
 import { useRunAction } from './run-action';
 import { goalControlBlock, goalFingerprint, goalLabels, goalObservation, goalScope, goalTime } from './native-goal-state';
 import './native-goal.css';
+import { GoalWorkPlans } from './goal-work-plans-view';
 
 type Props = { owner: string; bot: Bot; work?: BotAdmissionWork; online: boolean; snapshot?: BotSnapshot | null };
 type Form = { kind: 'edit' | 'create' | 'clear'; fingerprint: string; objective: string; budgetMode: 'keep' | 'set' | 'remove'; budget: string };
@@ -87,6 +88,7 @@ export function NativeGoalPanel({ owner, bot, work, online, snapshot }: Props) {
         <span className={`bots-goal-state is-${goal.status}`} role="status">{goalLabels[goal.status]}</span>
         <p className="bots-goal-objective">{goal.objective.length <= 360 ? goal.objective : `${goal.objective.slice(0, 360)}…`}</p>
         {goal.objective.length > 360 && <details><summary>Full objective</summary><p className="bots-goal-objective">{goal.objective}</p></details>}
+        <GoalWorkPlans owner={owner} botId={bot.id} goal={goal} activeTurnId={bot.activeTurnId} online={online}/>
         <dl className="bots-goal-accounting"><div><dt>Tokens used</dt><dd>{goal.tokensUsed === undefined ? 'Unavailable' : goal.tokensUsed.toLocaleString()}</dd></div><div><dt>Token budget</dt><dd>{goal.tokenBudget === undefined ? 'Unavailable' : goal.tokenBudget === null ? 'No token budget' : goal.tokenBudget.toLocaleString()}</dd></div><div><dt>Time used</dt><dd>{goalTime(goal.timeUsedSeconds)}</dd></div></dl>
         {goal.status === 'blocked' && <p>Review the conversation before resuming this blocked goal.</p>}
         {goal.status === 'usageLimited' && <p>Codex paused this goal for usage limits. Resume deliberately when usage is available.</p>}

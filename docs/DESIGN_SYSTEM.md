@@ -283,3 +283,19 @@ and daylight-saving inputs use associated field errors; pending saves disable fi
 and repeated submission. Offline editing retains the draft with Save unavailable.
 A bot/owner change dismisses the old editor. Shared Radix dialogs own focus and
 Escape handling; consumers must not add a second document-level focus trap.
+
+
+### Goal progress and native work plans
+
+The Goals panel shows up to five already loaded native conversation work plans,
+oldest to newest, with the most recent expanded. Reuse the chat's native step
+renderer, disclosure controls and bounded pagination. Plans must match the exact
+thread and have a known turn start at or after the Goal's creation. Unknown or
+older provenance is omitted. The panel subscribes to the existing conversation
+store; it adds no polling, history scan or model turn. Offline plans are labeled.
+
+A native plan belongs to a turn, not a Goal. Preserve its recorded step statuses;
+label finished, failed and interrupted turns and keep native Goal completion
+separate. Never derive overall completion percentages from tokens, time, loaded
+plans or inventory counts. Missing plans get a concise empty state rather than
+an invented checklist. Native Goal controls and their scope checks are unchanged.

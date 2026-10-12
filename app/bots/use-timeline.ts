@@ -46,6 +46,11 @@ export function getBotTimeline(owner: string, botId: string) {
   if (owner === botsClient.owner && botsClient.snapshot?.activeScheduledTurns) timeline.scheduled(botsClient.snapshot.activeScheduledTurns);
   return timeline;
 }
+/** Read-only view of the already loaded conversation, with no extra fetch lifecycle. */
+export function useBotTimelineSnapshot(owner: string, botId: string) {
+  const timeline = useMemo(() => getBotTimeline(owner, botId), [owner, botId]);
+  return useSyncExternalStore(timeline.subscribe, timeline.getSnapshot, timeline.getSnapshot);
+}
 export function useBotTimeline(owner: string, botId: string, online: boolean) {
   const timeline = useMemo(() => getBotTimeline(owner, botId), [owner, botId]);
   const state = useSyncExternalStore(timeline.subscribe, timeline.getSnapshot, timeline.getSnapshot);

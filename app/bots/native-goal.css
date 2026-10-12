@@ -24,3 +24,11 @@
 .bots-goal-panel summary:focus-visible { outline: 2px solid var(--ring); outline-offset: 3px; }
 .bots-goal-indicator { flex-shrink: 0; }
 .bots-goal-panel h3 { font-weight: 600; font-size: 16px; }
+
+.bots-goal-progress { display: grid; gap: 10px; min-width: 0; }
+.bots-goal-progress h4 { margin: 0; font-size: 14px; font-weight: 600; }
+.bots-goal-plan { border: 1px solid var(--border); border-radius: var(--radius); padding: 0 12px; overflow-wrap: anywhere; }
+.bots-goal-plan summary { line-height: 1.5; }
+.bots-goal-plan summary span { font-weight: 600; }
+.bots-goal-plan summary small { display: block; color: var(--muted-foreground); font-size: 12px; padding-inline-start: 16px; }
+.bots-goal-plan .bots-native-work-plan { padding-bottom: 12px; }
