@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { botsClient as client } from './client';
 
 import { queueActionPrefix, readQueueAction, type QueueActionMethod as Method, type PendingQueueAction as Pending } from './queue-action-store';
@@ -13,6 +13,8 @@ export function useQueueAction(owner: string, botId: string, refresh: () => Prom
   const [pending, setPending] = useState(initial.pending), [error, setError] = useState(initial.error), [busy, setBusy] = useState(false), [readBlocked, setReadBlocked] = useState(Boolean(initial.error));
   const [notSaved, setNotSaved] = useState(false);
   const pendingRef = useRef(pending), active = useRef(true), inFlight = useRef(false);
+  const currentRefresh = useRef(refresh), refreshVersion = useRef(0), actionVersion = useRef(0);
+  useLayoutEffect(() => { currentRefresh.current = refresh; refreshVersion.current++; }, [refresh]);
   const owned = () => client.owner === owner;
   const valid = () => active.current && owned();
   useEffect(() => {
@@ -39,6 +41,7 @@ export function useQueueAction(owner: string, botId: string, refresh: () => Prom
     // can overwrite the other's uncertain operation or exact parameters.
     try { localStorage.setItem(prefix+next.id, JSON.stringify(next)); }
     catch { setNotSaved(true); setError('This queue action was not sent because it could not be saved on this device. Retry after browser storage is available.'); return false; }
+    const version = ++actionVersion.current;
     inFlight.current = true; setNotSaved(false); setBusy(true); setError('');
     try {
       await client.rpc(next.method, botId, next.params, next.id, { owner, managed: true });
@@ -55,7 +58,16 @@ export function useQueueAction(owner: string, botId: string, refresh: () => Prom
     } finally {
       inFlight.current = false;
       if (owned()) setBusy(false);
-      if (valid()) { try { await refresh(); } catch (reason) { if (valid()) setError(message(reason)); } }
+      if (valid()) {
+        // An ACK belongs to its original action; the follow-up read belongs to
+        // the current view. Navigation while waiting must not reload an old list.
+        const readVersion = refreshVersion.current;
+        try { await currentRefresh.current(); }
+        catch {
+          if (valid() && version === actionVersion.current && readVersion === refreshVersion.current)
+            setError('Could not refresh this queue. Try again.');
+        }
+      }
     }
   };
   return { pending, error, busy, notSaved, blocked: Boolean(pending || readBlocked),

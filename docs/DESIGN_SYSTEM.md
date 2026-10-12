@@ -189,6 +189,8 @@ Keep read recovery separate from action delivery. A failed refresh offers a shor
 Retry action and retains any cached messages; it must not expose raw transport
 errors or imply an unread queue is empty. The request generation starts before
 all dependent reads, and late results from a previous selection are ignored.
+After an action settles, refresh the currently selected list. A delayed refresh
+error must not replace feedback for a newer action or a different selection.
 
 List editors retain values after rejection, show neutral Saving feedback while
 an original action is pending, and associate each invalid schedule field with
