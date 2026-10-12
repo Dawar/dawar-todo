@@ -20,7 +20,7 @@ export function humanMessageTicks(entries: HistoryEntry[], context: HistoryEntry
   const loaded = reconcileHistory(orderedHistory(entries, context, false, Infinity)).entries.filter(entry => threadId && entry.sourceThreadId === threadId);
   const result: HumanMessageTick[] = [];
   loaded.forEach((entry, index) => {
-    if (!entry.item || !humanInput(entry.item) || entry.type !== 'userMessage') return;
+    if (!entry.item || !humanInput(entry.item) || entry.type !== 'userMessage' || entry.submission&&entry.submission.source.kind!=='user') return;
     const key = historyKey(entry.turnId, entry.id);
     const messages = parts(entry)?.filter(message => message.botId === botId && !message.dismissed && message.state !== 'discarded');
     if (messages?.length) {

@@ -26,9 +26,10 @@ export function copyReplyReceipt(runtime, bot, from, to) {
 export function displayReplyItem(runtime, bot, threadId, item) {
   if (item?.type !== "userMessage") return item;
   const row = runtime.store.get("messageReply", item.clientId);
-  if (row?.botId !== bot.id || row.threadId !== threadId || !row.reply && !row.parts) return item;
+  if (row?.botId !== bot.id || row.threadId !== threadId || !row.reply && !row.parts) return runtime.sources?.annotate(bot,threadId,item).item??item;
   const text = row.parts ? row.parts.map(part => part.text).join("\n\n") : row.text;
-  return { ...item, content: [{ type: "text", text, text_elements: [] }, ...item.content.filter(part => part.type !== "text" || part.text.startsWith("Attached file: "))] };
+  const displayed={ ...item, content: [{ type: "text", text, text_elements: [] }, ...item.content.filter(part => part.type !== "text" || part.text.startsWith("Attached file: "))] };
+  return runtime.sources?.annotate(bot,threadId,displayed).item??displayed;
 }
 export function replyMetadata(runtime, bot, threadId, item) {
   if (item?.type !== "userMessage") return {};
@@ -43,7 +44,8 @@ export function replyMetadata(runtime, bot, threadId, item) {
 export function projectReplyEntry(runtime, bot, threadId, turn, item, audience) {
   const source = displayReplyItem(runtime, bot, threadId, item);
   const entry = audience ? projectConversationItem(turn, source, audience) : projectHistoryItem(turn, source);
-  return entry && { ...entry, ...replyMetadata(runtime, bot, threadId, item) };
+  const annotation=runtime.sources?.annotate(bot,threadId,source,turn.id);
+  return entry && { ...entry, ...(annotation?.submission?{submission:annotation.submission}:{}), ...replyMetadata(runtime, bot, threadId, item) };
 }
 async function source(runtime, bot, p) {
   if (p.threadId !== bot.threadId || !identity(p.turnId) || !identity(p.itemId) || p.cursor != null && (typeof p.cursor !== "string" || p.cursor.length > 8192))

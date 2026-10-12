@@ -1,3 +1,6 @@
+import {registeredBotSource} from '../bot-bridge/submission-sources.mjs';
+import {HubSubmissions} from './hub-submissions.mjs';
+import {enqueuePrompt} from '../bot-bridge/prompt-queue.mjs';
 import { EventEmitter } from 'node:events';
 import { createHash,randomUUID } from 'node:crypto';
 import { Store } from '../bot-bridge/store.mjs';
@@ -33,12 +36,12 @@ const ownerQueueControls=new Set(['queue.send','queue.resume','work.resume']);
 // The hub reuses the original logical records and local acceptance closures.
 // This facade has no native process: queue mutation cannot become inference.
 export class HubControls extends EventEmitter {
-  constructor({path,hub,router,authority=null,defaultTimeZone='America/Toronto',broadcast=()=>{},quietWindow={start:'02:30',end:'04:30',timeZone:'America/Toronto',scheduleIds:[]}}) {
+  constructor({path,hub,router,owner=null,authority=null,defaultTimeZone='America/Toronto',broadcast=()=>{},quietWindow={start:'02:30',end:'04:30',timeZone:'America/Toronto',scheduleIds:[]}}) {
     super();Object.assign(this,{hub,router,authority,defaultTimeZone,broadcast,quietWindow});
     this.store=new Store(path);this.ready=true;this.locks=new Map();this.closed=false;
     this.store.db.exec('PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS portable_control_receipts(operation_id TEXT PRIMARY KEY,receipt_hash TEXT NOT NULL)');
     const inherited=storedRuntimeDefaults(this.store);this.defaults=inherited===undefined?{}:inherited;
-    this.executionConfig=new ExecutionConfiguration(this);this.plans=new PlanLifecycle(this);
+    this.executionConfig=new ExecutionConfiguration(this);this.plans=new PlanLifecycle(this);this.sources=new HubSubmissions(this,owner);
     this.primary={store:this.store,runtime:this,single:bot=>PrimaryExecution.prototype.single(bot),accept:PrimaryExecution.prototype.accept,
       list:PrimaryExecution.prototype.list,publicItem:PrimaryExecution.prototype.publicItem,cursor:PrimaryExecution.prototype.cursor,openItems:PrimaryExecution.prototype.openItems,
       publish:botId=>this.emitEvent('work',{},botId)};this.bursts=HubBursts.create(this);
@@ -104,7 +107,15 @@ export class HubControls extends EventEmitter {
     return true;
   }
   nativeEvent(event,nodeId,epoch) {
-    if(event.type!=='bot'||!this.authority)return true;
+    if(!this.authority)return true;
+    if(event.type==='codex'&&this.sources.owner?.key){
+      return this.store.transaction(()=>{const b=this.store.bot(event.botId),p=this.hub.placement(this.sources.owner.key,b.id),v=event.data?.params;
+        if(p.node_id!==nodeId||p.epoch!==epoch||v?.threadId&&v.threadId!==b.threadId)throw Error('Foreign native source projection.');
+        if(v?.item?.type==='userMessage')this.sources.annotate(b,b.threadId,v.item,v.turnId);
+        for(const item of v?.turn?.items??[])if(item.type==='userMessage')this.sources.annotate(b,b.threadId,item,v.turn.id);
+        return true;});
+    }
+    if(event.type!=='bot')return true;
     return this.store.transaction(()=>{
       const b=this.store.bot(event.botId),v=event.data;
       if(v?.id!==b.id||v.threadId!==b.threadId)throw Error('Assigned native bot projection changed its original identity.');
@@ -121,6 +132,7 @@ export class HubControls extends EventEmitter {
       return true;
     });
   }
+  queueSubmission(bot,params,id,input){return enqueuePrompt(this,bot,params,id,input);}
   queueList(bot) {return stagedQueue(this.store,bot.id);}
   async lock(key,fn) {const before=this.locks.get(key)??Promise.resolve(),p=before.catch(()=>{}).then(fn);this.locks.set(key,p);try{return await p;}finally{if(this.locks.get(key)===p)this.locks.delete(key);}}
   emitEvent(type,data,botId) {
@@ -146,6 +158,7 @@ export class HubControls extends EventEmitter {
   async request(owner,{method,botId,params={},operationId},caller={kind:'owner'}) {
     const {b}=this.scope(owner,botId);
     if(!params||typeof params!=='object'||Array.isArray(params))throw Error('Invalid logical control parameters.');
+    if(method==='submissions.source'){if(caller.kind!=='owner'||owner!==this.sources.owner?.key)throw Error('Owner source read required.');return this.sources.read(b,params);}
     if(method==='inbox.list')return this.primary.list(b,params);
     if(method==='bursts.read')return this.bursts.read(b);
     if(method==='bursts.typing'){
@@ -176,7 +189,14 @@ export class HubControls extends EventEmitter {
         // prepare() may await. Its later closure must not admit against a
         // replaced thread or archived bot, even if the preparation succeeded.
         const facade=Object.assign(Object.create(this),{store:Object.assign(Object.create(this.store),{transaction:fn=>originalTransaction(()=>{
-          const after=this.scope(owner,botId).b;if(after.threadId!==b.threadId||after.archived||after.archiving||after.deletedAt)throw Error('Original burst conversation is unavailable.');return fn();
+          const after=this.scope(owner,botId).b;if(after.threadId!==b.threadId||after.archived||after.archiving||after.deletedAt)throw Error('Original burst conversation is unavailable.');
+          const value=fn();
+          if(method==='bursts.submit'&&value?.message&&this.sources.owner?.key){
+            const m=this.owned('burstMessage',value.message.id,botId);
+            const source=this.sources.capture(after,m.id,this.sources.ownerSource(),'',{attachments:m.attachmentIds});
+            this.store.put('burstMessage',{...m,sourceSubmissionId:source.submissionId});
+          }
+          return value;
         })})});
         return (await acceptSingleThreadOperation(facade,{method,botId,params,operationId},binding)).result;
       };
@@ -193,7 +213,7 @@ export class HubControls extends EventEmitter {
         catch(error){error.outcome=this.store.operation(operationId)?'uncertain':'rejected';throw error;}
       }
       const apply=async()=>{
-        const queue=await acceptLocalQueueOperation(this,{method,botId,params,operationId},binding);if(queue)return queue.result;
+        const queue=await acceptLocalQueueOperation(this,{method,botId,params,operationId},binding,this.sources.owner?.key?(caller.kind==='owner'?this.sources.ownerSource():registeredBotSource(this.scope(owner,botId).b)):null);if(queue)return queue.result;
         return this.store.transaction(()=>{
           this.assertWriter();const bot=this.store.bot(botId);if(bot.archived||bot.archiving)throw Error('Restore this bot first.');let result;
           if(method==='bots.read'){
@@ -202,12 +222,18 @@ export class HubControls extends EventEmitter {
             this.emitEvent('bot',result,botId);
           }else if(method==='schedules.save'){
             const old=params.id?this.owned('schedule',params.id,botId):null;
-            result=normalizeSchedule({...params,timeZone:params.timeZone??old?.timeZone??this.defaultTimeZone},botId,old);if(!old){result.id=operationId;result.origin={...caller,operationId};}this.store.put('schedule',result);
+            result=normalizeSchedule({...params,timeZone:params.timeZone??old?.timeZone??this.defaultTimeZone},botId,old);if(!old){result.id=operationId;result.origin={...caller,operationId};}
+            if(this.sources.owner?.key&&(!old||result.prompt!==old.prompt)){
+              const author=caller.kind==='owner'?this.sources.ownerSource():registeredBotSource(bot);
+              const source=this.sources.capture(bot,operationId,author,author.kind==='bot'?result.prompt:'');
+              result.sourceSubmissionId=source.submissionId;
+            }else if(old.sourceSubmissionId)result.sourceSubmissionId=old.sourceSubmissionId;
+            this.store.put('schedule',result);
           }else if(method==='schedules.delete'){
             this.owned('schedule',params.id,botId);this.store.remove('schedule',params.id);
             for(const run of this.store.list('run',botId))if(run.scheduleId===params.id&&run.status==='queued')this.store.put('run',{...run,status:'cancelled',finishedAt:now()});result={};
           }else if(method==='schedules.run'){
-            const s=this.owned('schedule',params.id,botId);result=this.store.put('run',{id:operationId,botId,scheduleId:s.id,title:s.title,prompt:s.prompt,origin:s.origin??null,selectedContext:s.selectedContext??null,status:'queued',scheduledAt:now(),startedAt:null,finishedAt:null,error:null});
+            const s=this.owned('schedule',params.id,botId);result=this.store.put('run',{id:operationId,botId,scheduleId:s.id,title:s.title,prompt:s.prompt,origin:s.origin??null,selectedContext:s.selectedContext??null,...(s.sourceSubmissionId?{sourceSubmissionId:s.sourceSubmissionId}:{}),status:'queued',scheduledAt:now(),startedAt:null,finishedAt:null,error:null});
           }else throw Error('Unsupported logical control.');
           this.store.saveOperation(operationId,binding,'done',{method,botId,params,caller,result,localOnly:'portable-hub-controls',createdAt:now()});if(method!=='bots.read')this.emitEvent('schedules',{},botId);return result;
         });
@@ -253,14 +279,17 @@ export class HubControls extends EventEmitter {
       const revision=p.control_revision+1;
       this.store.db.prepare('UPDATE portable_placements SET stopped=0,control_revision=? WHERE bot_id=?').run(revision,botId);
       payload.params.controlRevision=revision;
+      const submission=source?this.sources.fromQueue(b,operationId,source):null;
+      if(submission){payload={...payload,submission};if(this.router.connection(p)?.portableHello?.capabilities?.submissionSources!==true)throw Object.assign(Error('Assigned source-attribution capability is unavailable.'),{outcome:'not-sent'});}
       const row=this.hub.enqueueOn(this.store.db,owner,botId,operationId,payload);
       this.store.put('portableQueueControl',{id:operationId,botId,threadId:b.threadId,method,controlRevision:revision,previousStopped:p.stopped,...(source?{source}:{})});
-      if(source)this.store.put('promptQueue',{...source,state:'dispatching',operationId,clientUserMessageId:operationId,dispatchKind:'send-now',attemptedAt:now(),error:null});
+      if(source)this.store.put('promptQueue',{...source,state:'dispatching',operationId,clientUserMessageId:submission?.submissionId??operationId,dispatchKind:'send-now',attemptedAt:now(),error:null});
       this.store.saveOperation(operationId,binding,'dispatching',{method,botId,params,caller,createdAt:now(),localOnly:'portable-owner-queue'});
       this.emitEvent('queue',{},botId);return row;
     });
   }
   async tool(owner,botId,tool,args,caller={kind:'authenticated-node-tool',botId}) {
+    if(tool==='bots_message')return this.sources.tool(owner,botId,args,caller);
     this.scope(owner,botId);if(!HUB_TOOLS.has(tool)||!args||typeof args!=='object'||Array.isArray(args))throw Error('Unsupported hub tool.');
     if(tool==='bots_schedule_list')return {...await this.request(owner,{method:'schedules.list',botId}),defaultTimeZone:this.defaultTimeZone};
     if(tool==='bots_queue'){
@@ -320,7 +349,9 @@ export class HubControls extends EventEmitter {
       if(this.hub.db.prepare("SELECT 1 FROM portable_mailbox WHERE bot_id=? AND state<>'terminal' LIMIT 1").get(bot.id))return;
       const files=(q.attachmentIds??[]).map(fileId=>this.owned('attachment',fileId,bot.id));
       if(files.some(f=>!f.ready||!/^[a-f0-9]{64}$/.test(f.sha256??'')||!Number.isSafeInteger(f.size)||f.size<0)||files.reduce((n,f)=>n+f.size,0)>100*1024*1024)return;
-      const row=this.hub.enqueueOn(this.store.db,p.owner,bot.id,q.id,{method:'portable.primaryDispatch',params:{intake:q,files:files.map(({id,sha256,size})=>({id,sha256,size}))}});
+      const source=this.sources.row(bot.id,bot.threadId,q.id),submission=source?this.sources.delivery(bot,q.id,source):null;
+      if(submission&&this.router.connection(current)?.portableHello?.capabilities?.submissionSources!==true)return;
+      const row=this.hub.enqueueOn(this.store.db,p.owner,bot.id,q.id,{...(submission?{submission}:{}),method:'portable.primaryDispatch',params:{intake:q,files:files.map(({id,sha256,size})=>({id,sha256,size}))}});
       this.store.put('primaryInbox',{...q,state:'dispatching',operationId:q.id,attemptedAt:now()});
       this.emitEvent('work',{},bot.id);this.store.afterCommit(()=>this.router.connection(current)?.send(boundedFrame({type:'sync',...this.hub.sync(current.node_id)})));return row;
     });
@@ -342,8 +373,10 @@ export class HubControls extends EventEmitter {
       }
       // Mailbox and parent record commit on ONE connection, not two nested
       // independent writers. Enqueue validates placement/payload unchanged.
+      const submission=item?this.sources.fromQueue(bot,operationId,item):this.sources.scheduled(bot,operationId,run);
+      if(submission){payload={...payload,submission};if(this.router.connection(current)?.portableHello?.capabilities?.submissionSources!==true)return;}
       const row=this.hub.enqueueOn(this.store.db,p.owner,bot.id,operationId,payload);
-      if(item)this.store.put('promptQueue',{...item,state:'dispatching',operationId,clientUserMessageId:operationId,attemptedAt:now()});
+      if(item)this.store.put('promptQueue',{...item,state:'dispatching',operationId,clientUserMessageId:submission?.submissionId??operationId,attemptedAt:now()});
       else this.store.put('run',{...run,status:'starting',operationId,threadId:bot.threadId,startedAt:now()});
       this.emitEvent(item?'queue':'schedules',{},bot.id);
       this.store.afterCommit(()=>this.router.connection(p)?.send(boundedFrame({type:'sync',...this.hub.sync(p.node_id)})));return row;

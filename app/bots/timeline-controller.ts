@@ -505,7 +505,7 @@ export class BotTimeline {
     }
     if (event.type === "attachment") { this.publish({ attachments: mergeAttachments(this.state.attachments, [event.data as BotAttachment]), eventCursor: event.seq }); this.scheduleWrite(); return; }
     if (event.type !== "codex") return;
-    const { method, messageAt, operatorSegmentId, reply, replyMessages, replyByClientId, params: p } = event.data as { method: string; messageAt?: number; operatorSegmentId?: string; reply?: HistoryEntry["reply"]; replyMessages?: HistoryEntry["replyMessages"]; replyByClientId?: Record<string, Pick<HistoryEntry, "reply" | "replyMessages">>; params: { threadId?: string; startedAtMs?: number | null; completedAtMs?: number | null; turnId?: string; itemId?: string; item?: ThreadItem; turn?: Turn; delta?: string; diff?: string; plan?: unknown; explanation?: string | null } };
+    const { method, messageAt, operatorSegmentId, submission, reply, replyMessages, replyByClientId, params: p } = event.data as { method: string; submission?: HistoryEntry["submission"]; messageAt?: number; operatorSegmentId?: string; reply?: HistoryEntry["reply"]; replyMessages?: HistoryEntry["replyMessages"]; replyByClientId?: Record<string, Pick<HistoryEntry, "reply" | "replyMessages" | "submission">>; params: { threadId?: string; startedAtMs?: number | null; completedAtMs?: number | null; turnId?: string; itemId?: string; item?: ThreadItem; turn?: Turn; delta?: string; diff?: string; plan?: unknown; explanation?: string | null } };
     const turnId = p.turnId ?? p.turn?.id;
     if (method === 'turn/plan/updated' && !this.planScope(p.threadId, turnId)) return;
     if (p.turn && p.threadId && p.threadId === this.currentThread() && ['turn/started', 'turn/completed'].includes(method)) {
@@ -539,7 +539,7 @@ export class BotTimeline {
     const update = (entry: HistoryEntry) => {
       const prior = this.state.entries.find(value => value.turnId === entry.turnId && value.id === entry.id);
       const observed = messageAt ?? (prior?.timeBasis === "received" ? prior.messageAt : null);
-      this.merge([{ ...prior, ...entry, ...(p.threadId ? { sourceThreadId: p.threadId } : {}), ...(entry.item ? { workPlan: undefined } : {}), ...(entry.item?.type === "userMessage" ? replyByClientId?.[entry.item.clientId ?? ""] : {}), ...(reply ? { reply } : {}), ...(replyMessages ? { replyMessages } : {}), ...(operatorSegmentId ? { operatorSegmentId } : {}), ...(observed ? { messageAt: observed, timeBasis: "received" as const } : {}), updatedSeq: event.seq }]);
+      this.merge([{ ...prior, ...entry, ...(p.threadId ? { sourceThreadId: p.threadId } : {}), ...(entry.item ? { workPlan: undefined } : {}), ...(entry.item?.type==="userMessage"&&submission?{submission}:{}), ...(entry.item?.type === "userMessage" ? replyByClientId?.[entry.item.clientId ?? ""] : {}), ...(reply ? { reply } : {}), ...(replyMessages ? { replyMessages } : {}), ...(operatorSegmentId ? { operatorSegmentId } : {}), ...(observed ? { messageAt: observed, timeBasis: "received" as const } : {}), updatedSeq: event.seq }]);
     };
     if (p.item && /item\/(started|completed)$/.test(method)) {
       const prior = this.state.entries.find((e) => e.turnId === turnId);

@@ -66,6 +66,7 @@ export async function admitBurstCommand(transport,command,payload){
       assertControl();
     }catch(error){if(!error.deferred&&error.outcome!=='uncertain')error.outcome='rejected';throw error;}
     const params={text:messages.map(m=>m.text).filter(Boolean).join('\n\n'),attachments:messages.flatMap(m=>m.attachmentIds)},attempt={started:false,rejected:false,beforeDispatch:assertControl};
+    if(payload.submission)runtime.sources.import(store.bot(bot.id),payload.submission,command.operation_id);
     journal.prepare(command.operation_id);
     try{store.transaction(()=>{
       assertControl();if(store.operation(command.operation_id))throw uncertain('Original receipt appeared during preparation.');

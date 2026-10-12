@@ -45,7 +45,7 @@ export function startGateway(config) {
   const secure=new HubSecureTransport({store,connections,parent:(owner,id)=>[...browsers].some(b=>b.owner===owner&&b.clientId===id&&!b.desktop&&b.ws.readyState===1&&b.expiresAt>Date.now()&&b.valid())});
   const taskSecure=new HubSecureTransport({store,connections,parent:(owner,id)=>owner===config.owner.key&&guests.get(id)?.valid()===true});
   const broadcast=(owner,event)=>{for(const b of browsers)if(b.owner===owner&&!b.desktop&&b.expiresAt>Date.now()&&b.valid()&&b.ws.readyState===1)b.ws.send(JSON.stringify({type:'event',event}));};
-  const controls=new HubControls({path:join(config.dataDirectory,'control.sqlite'),hub:store,router,authority,broadcast,...(config.schedulerQuietWindow?{quietWindow:config.schedulerQuietWindow}:{})});router.controls=controls;
+  const controls=new HubControls({owner:config.owner,path:join(config.dataDirectory,'control.sqlite'),hub:store,router,authority,broadcast,...(config.schedulerQuietWindow?{quietWindow:config.schedulerQuietWindow}:{})});router.controls=controls;
   const nodeStorage=new HubNodeStorage({hub:store,controls,application,objects,config});
   controls.nodeStorage=nodeStorage;
   const taskRequests=new HubTaskRequests({hub:store,controls,application,environment:nodeStorage.environment,owner:config.owner.key});controls.taskRequests=taskRequests;

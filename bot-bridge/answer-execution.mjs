@@ -148,7 +148,7 @@ export class AnswerExecutions {
     try {
       await this.runtime.load(bot);
       // A turnId alone cannot prove that a steer/answer reached that turn.
-      const found = await findNativeTurn(this.runtime, record.threadId, { clientId: record.id, cursor: record.reconcileCursor ?? null });
+      const found = await findNativeTurn(this.runtime, record.threadId, { clientId: this.runtime.sources?.clientId(this.store.bot(record.botId),record.id)??record.id, cursor: record.reconcileCursor ?? null });
       record = this.store.get("answerExecution", record.id);
       this.store.put("answerExecution", { ...record, reconcileCursor: found.nextCursor });
       if (!found.turn) return;

@@ -77,6 +77,9 @@ export async function admitLogicalCommand(transport,command,payload) {
         ownedReply(runtime,current,params.reply);
       }
       input=await runtime.messageInput(current,{text,attachments,reply:params.reply});
+      // Bot-message source retains the exact authored text. Restore it only
+      // for a plain unquoted queue input; never drop files/reply context.
+      if(payload.submission?.source.kind==='bot'&&!params.reply&&!attachments.length&&input.length===1&&input[0].type==='text')input=[{...input[0],text:payload.submission.body}];
     }else if(primary){
       const local=store.get('primaryInbox',source.id);
       if(local&&(validatePrimary(local,bot.id,bot.threadId,command.operation_id)!==validatePrimary(source,bot.id,bot.threadId,command.operation_id)||local.state!=='queued'))throw unknown('Original local result intake differs or was already attempted.');
@@ -109,6 +112,8 @@ export async function admitLogicalCommand(transport,command,payload) {
     // All awaited preflight reads precede the durable attempted marker. A
     // busy/offline/Goal result can retain this received command for later;
     // after prepare, a crash never authorizes another native submission.
+    if(payload.submission)runtime.sources.import(store.bot(bot.id),payload.submission,command.operation_id);
+    const submissionId=runtime.sources.clientId(store.bot(bot.id),command.operation_id);
     journal.prepare(command.operation_id);
     try{store.transaction(()=>{
       assertControl();
@@ -118,13 +123,13 @@ export async function admitLogicalCommand(transport,command,payload) {
           if(params.operatorSource.nativeMethod!=='queue.add'||params.operatorSource.nativeParams.text!==text)throw refused('Original Operator queue text changed.');
           transport.operator.capture(params.operatorSource,bot.id,bot.threadId,source.id);
         }
-        store.put('promptQueue',{...source,state:'dispatching',operationId:command.operation_id,clientUserMessageId:command.operation_id,attemptedAt:now()});
-        store.put('queuedAttachments',{id:command.operation_id,botId:bot.id,queueId:source.id,revision:source.revision,attachmentIds:attachments,immutable:true});
-        rememberReply(runtime,current,command.operation_id,text,params.reply);
+        store.put('promptQueue',{...source,state:'dispatching',operationId:command.operation_id,clientUserMessageId:submissionId,attemptedAt:now()});
+        store.put('queuedAttachments',{id:submissionId,botId:bot.id,queueId:source.id,revision:source.revision,attachmentIds:attachments,immutable:true});
+        rememberReply(runtime,current,submissionId,text,params.reply);
         if(explicit)store.put('queueSend',{id:command.operation_id,botId:bot.id,threadId:bot.threadId,queueId:source.id,revision:source.revision,originalClientId:source.clientUserMessageId,createdAt:now()});
       }else if(primary)store.put('primaryInbox',{...source,state:'dispatching',operationId:command.operation_id,attemptedAt:now()});
       else store.put('run',{...source,status:'starting',operationId:command.operation_id,conversation:true,executionLane:'main-single',startedAt:now()});
-      store.saveOperation(command.operation_id,command.fingerprint,'dispatching',{portableFingerprint:command.fingerprint,method:primary?'turn.send':explicit?'queue.send':queued?'queue.dispatch':'schedule.dispatch',botId:bot.id,[identityKey]:source.id,...(queued?{revision:source.revision,clientId:command.operation_id}:{}),params:{attachments},createdAt:now()});
+      store.saveOperation(command.operation_id,command.fingerprint,'dispatching',{portableFingerprint:command.fingerprint,method:primary?'turn.send':explicit?'queue.send':queued?'queue.dispatch':'schedule.dispatch',botId:bot.id,[identityKey]:source.id,...(queued?{revision:source.revision,clientId:submissionId}:{}),params:{attachments},createdAt:now()});
     });}catch(error){
       // This transaction contains no native call. A rolled-back reservation
       // with no original operation is positive no-effect evidence in this

@@ -64,11 +64,11 @@ export class AgentTransport {
   hello(){return {protocol:PROTOCOL_VERSION,runtime:RUNTIME_VERSION,platform:process.platform,arch:process.arch,agentEpoch:this.runtime.epoch,
     // Paired consumers are selected explicitly for the reviewed Linux release;
     // unrelated/native-autonomous capabilities are not implied by this switch.
-    capabilities:{text:true,localStdio:true,registeredArtifacts:true,profileReads:true,memoryCompaction:process.platform==='linux',pdfPreview:process.platform==='linux',desktop:process.platform==='linux'&&!!this.runtime.desktops,voice:false,secureTransfer:process.platform==='linux'&&!!this.runtime.secure,centralBursts:process.platform==='linux',...centralAgentCapabilities(this.config),autonomousGoals:true}};}
+    capabilities:{text:true,localStdio:true,registeredArtifacts:true,profileReads:true,memoryCompaction:process.platform==='linux',pdfPreview:process.platform==='linux',desktop:process.platform==='linux'&&!!this.runtime.desktops,voice:false,secureTransfer:process.platform==='linux'&&!!this.runtime.secure,centralBursts:process.platform==='linux',submissionSources:Boolean(this.runtime.sources.owner?.key),...centralAgentCapabilities(this.config),autonomousGoals:true}};}
   send(value){if(this.socket?.readyState===WebSocket.OPEN)this.socket.send(JSON.stringify(value));}
   controlRequest(botId,tool,args){
     if(!HUB_TOOLS.has(tool))throw Error('Unsupported hub tool.');
-    const read=tool==='bots_schedule_list'||tool==='bots_queue'&&['lists','read'].includes(args.operation);
+    const read=tool==='bots_message'&&args.operation==='source'||tool==='bots_schedule_list'||tool==='bots_queue'&&['lists','read'].includes(args.operation);
     return this.requestHub(botId,'control',{tool,args},read);
   }
   artifactRequest(botId,action,input){
@@ -247,6 +247,7 @@ export class AgentTransport {
     if(row.state==='received'){this.receipt(row);if(!NODE_LOGICAL_COMMANDS.has(payload.method))this.journal.prepare(command.operation_id);}
     try {
       this.operator.verifyAction(command,payload);
+      if(payload.submission&&!NODE_LOGICAL_COMMANDS.has(payload.method))this.runtime.sources.import(bot,payload.submission,command.operation_id);
       const run=()=>this.runtime.handle(request);
       const result=NODE_LOGICAL_COMMANDS.has(payload.method)?await admitLogicalCommand(this,command,payload):
         DESKTOP_MUTATIONS.has(payload.method)?await this.runtime.maintenance.admit(run):await run(), turnId=result?.turn?.id??result?.turnId;
@@ -275,6 +276,8 @@ export async function runAgent(config){
   const store=new Store(join(config.dataDirectory,'native-control.sqlite')),codex=new Codex(config.agent.codexBinary);
   const runtime=new BotRuntime({store,codex,root:config.agent.workspaces,defaultTimeZone:process.env.BOTS_TIME_ZONE??'UTC',
     adminLeadIds:JSON.parse(process.env.BOTS_ADMIN_LEAD_IDS??'[]')});
+  if(typeof enrollment.owner!=='string'||!enrollment.owner||config.owner?.key&&config.owner.key!==enrollment.owner)throw Error('Submission owner differs from authenticated enrollment.');
+  runtime.sources.owner={...(config.owner??{}),key:enrollment.owner};
   const inherited=storedRuntimeDefaults(store);if(inherited!==undefined)runtime.defaults=inherited;
   runtime.maintenance.source=source;
   // Authentication captures hello before runtime.start. Construct the same

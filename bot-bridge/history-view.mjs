@@ -179,7 +179,10 @@ export async function readHistoryDetail(runtime, bot, params, authorizedTarget =
       if (!item) throw new Error('This history item is not available from the native thread.');
       // The ordinary chat detail route never transfers private reasoning content.
       if ((target.runId || params.projection === 'conversation') && item.type === 'reasoning') item = { ...item, content: [] };
-      if (params.projection === "conversation") item = displayReplyItem(runtime, bot, target.threadId, item);
+      if (params.projection === "conversation") {
+        item = displayReplyItem(runtime, bot, target.threadId, item);
+      }
+      item=runtime.sources?.annotate(bot,target.threadId,item,params.turnId).item??item;
       const json = JSON.stringify(item), version = createHash('sha256').update(target.runId || target.contextId ? `${target.versionKey}:${params.turnId}:${params.itemId}:${json}` : json).digest('hex');
       const selectors = historyAttachmentSelectors([{ turnId: params.turnId, id: item.id, item }]);
       const value = { json, version, selectors, timing, eventCursor, revision, expires: Date.now() + DETAIL_TTL };

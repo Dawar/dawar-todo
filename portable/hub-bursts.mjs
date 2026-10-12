@@ -57,7 +57,9 @@ export class HubBursts extends MessageBursts {
         return {id:a.id,sha256:a.sha256,size:a.size};
       });
       const params={text:messages.map(m=>m.text).filter(Boolean).join('\n\n'),attachments:messages.flatMap(m=>m.attachmentIds)};
-      const payload={method:'portable.burstDispatch',params:{batch:b,messages:messages.map(burstSource),files,controlRevision:p.control_revision}};
+      const submission=this.runtime.sources.burst(bot,b,messages);
+      if(submission&&this.runtime.router.connection(p)?.portableHello?.capabilities?.submissionSources!==true)return;
+      const payload={...(submission?{submission}:{}),method:'portable.burstDispatch',params:{batch:b,messages:messages.map(burstSource),files,controlRevision:p.control_revision}};
       const row=this.runtime.hub.enqueueOn(this.store.db,p.owner,bot.id,b.id,payload);
       this.store.saveOperation(b.id,legacy({method:'turn.send',botId:bot.id,params}),'dispatching',{method:'turn.send',botId:bot.id,params,portableBurst:true,portableFingerprint:row.fingerprint,createdAt:now()});
       this.store.put('messageBurst',{...b,state:'dispatching',params,dueAt:null});

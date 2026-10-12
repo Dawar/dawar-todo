@@ -1,3 +1,4 @@
+import {SubmissionSources,SUBMISSION_TOOL} from './submission-sources.mjs';
 import { assertRetainedResource } from './retained-resource.mjs';
 
 import { TaskRequestBridge, TASK_REQUEST_TOOL } from './task-requests.mjs';
@@ -93,7 +94,7 @@ const usageMetric = (groups, field) => {
     reportedGroups: values.length };
 };
 const READ_METHODS = new Set([
-  "secure.list", "execution.config",
+  "secure.list", "execution.config", "submissions.source",
   "work.read", "inbox.list", "goals.read", "bursts.read", "bursts.typing",
   "snapshot",
   "history",
@@ -143,6 +144,7 @@ const schema = (properties, required = []) => ({
 const str = { type: "string" };
 export const dynamicTools = [
   { type: 'function', ...TASK_REQUEST_TOOL },
+  { type: 'function', ...SUBMISSION_TOOL },
   { type: 'function', ...BOT_ADMIN_TOOL },
   { type: 'function', ...MEMORY_TOOL },
   ...SECURE_TOOLS.map(tool => ({type:"function",...tool})),
@@ -223,6 +225,7 @@ export class BotRuntime extends EventEmitter {
     this.taskRequests = new TaskRequestBridge(this);
     this.runs = new BackgroundRuns(this, dynamicTools, validateResponse, INTERACTIONS);
     this.executionConfig = new ExecutionConfiguration(this);
+    this.sources = new SubmissionSources(this);
     this.scheduleDecisions = new ScheduleDecisions(this);
     this.memoryMaintenance = new BotMemoryMaintenance(this);
     this.locks = new Map();
@@ -528,7 +531,7 @@ export class BotRuntime extends EventEmitter {
       if (bot && op.method === "queue.add") {
         try {
           const queue = await this.queueList(bot);
-          const item = queue.find((item) => item.clientUserMessageId === op.id);
+          const item = queue.find((item) => item.clientUserMessageId === this.sources.clientId(bot,op.id));
           if (item) result = { queuedSubmission: this.publicQueued(bot, item) };
         } catch {
           /* A consumed item can still be found in the native turn history. */
@@ -537,7 +540,7 @@ export class BotRuntime extends EventEmitter {
       if (bot && !result) {
         try {
           const found = await findNativeTurn(this, bot.threadId, {
-            clientId: op.id, cursor: op.reconcileCursor ?? null,
+            clientId: this.sources.clientId(bot,op.id), cursor: op.reconcileCursor ?? null,
           });
           op = { ...op, reconcileCursor: found.nextCursor };
           if (found.turn) {
@@ -573,7 +576,7 @@ export class BotRuntime extends EventEmitter {
   }
   snapshot() {
     return {
-      capabilities: { taskRequests: this.storage && this.storage.features?.taskRequests !== false ? 1 : undefined, executionConfiguration: 1, accountUsageHistory: 1, runtimeMaintenance: 1, botAdministration: 1, botMemoryMaintenance: process.platform === 'linux' ? 1 : undefined, backgroundRunLanes: 1, scheduleDecisions: 1, singleThreadExecution: 1, nativeGoals: 1, nativeConversation: 1, messageReplies: 1, secureInputs: 1, secureResponseLifecycle: 1, operatorCalls: 1, operatorInputQuestions: 1, historyCursorIndex: 1, messageBursts: 1, burstDiscard: 1, burstControls: 1, burstQueue: 1, queueLists: 1, queueRelativeMoves: 1, queueSendNow: 1, ...(this.storage && this.storage.features?.taskQueues !== false ? { taskQueues: 1 } : {}), teams: 1, ...(this.desktops ? { botDesktops: 1, botBrowserRetention: 1 } : {}) },
+      capabilities: { submissionSources: this.sources.owner?.key ? 1 : undefined, taskRequests: this.storage && this.storage.features?.taskRequests !== false ? 1 : undefined, executionConfiguration: 1, accountUsageHistory: 1, runtimeMaintenance: 1, botAdministration: 1, botMemoryMaintenance: process.platform === 'linux' ? 1 : undefined, backgroundRunLanes: 1, scheduleDecisions: 1, singleThreadExecution: 1, nativeGoals: 1, nativeConversation: 1, messageReplies: 1, secureInputs: 1, secureResponseLifecycle: 1, operatorCalls: 1, operatorInputQuestions: 1, historyCursorIndex: 1, messageBursts: 1, burstDiscard: 1, burstControls: 1, burstQueue: 1, queueLists: 1, queueRelativeMoves: 1, queueSendNow: 1, ...(this.storage && this.storage.features?.taskQueues !== false ? { taskQueues: 1 } : {}), teams: 1, ...(this.desktops ? { botDesktops: 1, botBrowserRetention: 1 } : {}) },
 
       botAdminLeadIds: [...this.botAdmin.leads],
       teams: publicTeams(this),
@@ -836,6 +839,7 @@ export class BotRuntime extends EventEmitter {
       };
     if (method === "events") return this.store.replay(Number(p.after) || 0);
     if (method === "execution.config") return this.executionConfig.read(this.store.bot(String(botId)), p);
+    if (method === "submissions.source") return this.sources.read(this.store.bot(String(botId)), p);
     if (method === "bots.create") return this.create(p, id, authorizeProvisioning);
     if (method === "settings.timeZone") {
       new Intl.DateTimeFormat("en", { timeZone: p.timeZone }).format();
@@ -1515,7 +1519,8 @@ export class BotRuntime extends EventEmitter {
     if (!this.ready) throw new Error("Codex is not ready.");
     if (bot.managerPaused && !attempt?.beforeDispatch && !id.startsWith("manager-notice:"))
       bot = this.saveBot(bot, { managerPaused: false });
-    const input = acceptedInput ?? (staged ? p.stagedInput : await this.messageInput(bot, p));
+    const originalInput = acceptedInput ?? (staged ? p.stagedInput : await this.messageInput(bot, p));
+    const input = this.sources.nativeInput(bot,id,originalInput);
     const text = String(p.text ?? "").trim();
     if (!staged && !acceptedInput) rememberReply(this, bot, id, text, p.reply);
     const additionalContext = await this.memoryMaintenance.context(bot, await teamReference(this, bot));
@@ -1539,7 +1544,7 @@ export class BotRuntime extends EventEmitter {
       if (!this.primary.single(bot) && this.scheduledContext(bot.id, bot.activeTurnId))
         throw new Error("A scheduled run is using this conversation. Use Queue next to keep your message separate; your draft is retained.");
       const params = { threadId: bot.threadId, expectedTurnId: bot.activeTurnId,
-        clientUserMessageId: id, input, additionalContext };
+        clientUserMessageId: this.sources.clientId(bot,id), input, additionalContext };
       attempt?.beforeDispatch?.();
       this.answers.dispatch(bot, id, answer, "turn/steer", params);
       const result = await this.submitNative("turn/steer", params, attempt);
@@ -1672,7 +1677,7 @@ export class BotRuntime extends EventEmitter {
       const { model, effort, serviceTier } = this.settings(bot);
       const params = {
         threadId: bot.threadId,
-        clientUserMessageId: id,
+        clientUserMessageId: this.sources.clientId(bot,id),
         input,
         additionalContext,
         cwd: bot.cwd,
@@ -1682,7 +1687,7 @@ export class BotRuntime extends EventEmitter {
         effort,
         serviceTier,
         collaborationMode: {
-          mode: run || id.startsWith("manager-notice:") ? "default" : bot.mode,
+          mode: run || id.startsWith("manager-notice:") ? "default" : this.sources.mode(bot,id),
           settings: { model, reasoning_effort: effort, developer_instructions: null },
         },
         turnTrigger: run ? "scheduled" : "user",
@@ -1701,10 +1706,10 @@ export class BotRuntime extends EventEmitter {
         }
         return fence;
       });
-      this.executionConfig.capture(bot, id, bot.threadId, params.collaborationMode.mode);
+      this.executionConfig.capture(bot, params.clientUserMessageId, bot.threadId, params.collaborationMode.mode);
       result = await this.submitNative("turn/start", params, boundary);
       requireTurn(result?.turn);
-      this.executionConfig.bind(id, result.turn.id, "turn/start-ack");
+      this.executionConfig.bind(params.clientUserMessageId, result.turn.id, "turn/start-ack");
       this.answers.accept(answer, { turnId: result.turn.id, status: result.turn.status, source: "start-ack" });
       this.plans.bind(plan, result.turn);
       const completed = this.store.get("planTurnEvidence", result.turn.id);
@@ -1852,6 +1857,7 @@ export class BotRuntime extends EventEmitter {
     return this.memoryMaintenance.preparation(bot, item, await teamReference(this, bot));
   }
   emitUserMessage(bot, turnId, clientId, content) {
+    clientId=this.sources.clientId(bot,clientId);
     rememberInputProvenance(this, bot, turnId, { type: "userMessage", id: `client:${clientId}`, clientId, content });
     this.emitEvent(
       "codex",
@@ -2260,6 +2266,7 @@ export class BotRuntime extends EventEmitter {
         if (origin) throw new Error("Team references belong to the primary named bot.");
         return teamTool(this,bot,args);
       }
+      case "bots_message": throw Error("Bot messaging requires the installed canonical hub tool route.");
       case "bots_queue": {
         if (origin) throw new Error("Queue lists belong to the primary named bot.");
         return queueTool(this,bot,args);

@@ -6,6 +6,7 @@ import { nativeWorkPlan, type NativeWorkPlan } from './native-work-plan.ts';
 
 /** A disposable, explicitly partial view. Native history remains authoritative. */
 export type HistoryEntry = NativeTiming & {
+  submission?: import("./submission-source").SubmissionAttribution;
   /** Native turn/plan/updated display; never a native Plan-mode final item. */
   workPlan?: NativeWorkPlan;
   /** UI navigation scope captured from an authenticated history page/event. */

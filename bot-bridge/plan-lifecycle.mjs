@@ -21,7 +21,7 @@ export class PlanLifecycle {
     await this.settle(bot.id);
     bot = this.store.bot(bot.id);
     if (this.blocked(bot.id)) throw new Error("The previous message's delivery is unconfirmed. Check its delivery before sending again.");
-    if (run || operationId.startsWith("manager-notice:") || bot.mode !== "plan") return null;
+    if (run || operationId.startsWith("manager-notice:") || (this.runtime.sources?.mode(bot,operationId) ?? bot.mode) !== "plan") return null;
     if ((await this.runtime.nativeQueueList(bot)).length)
       throw new Error("Let the legacy native queue finish before starting a Plan turn. New Queue next prompts are safely staged.");
     const existing = this.store.get("planExecution", operationId);
@@ -153,7 +153,7 @@ export class PlanLifecycle {
           return;
         }
         const found = await findNativeTurn(this.runtime, record.threadId, { turnId: record.turnId,
-          clientId: record.id, cursor: record.reconcileCursor ?? null });
+          clientId: this.runtime.sources?.clientId(this.store.bot(record.botId),record.id)??record.id, cursor: record.reconcileCursor ?? null });
         const current = this.store.get("planExecution", record.id);
         if (["consumed", "superseded", "finished"].includes(current.state)) return;
         this.store.put("planExecution", { ...current, reconcileCursor: found.nextCursor,

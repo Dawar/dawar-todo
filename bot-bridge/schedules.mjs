@@ -67,6 +67,7 @@ export function normalizeSchedule(
     createdAt: existing?.createdAt ?? now.toISOString(),
     origin: existing?.origin ?? null,
     selectedContext: existing?.selectedContext ?? null,
+    ...(existing?.sourceSubmissionId?{sourceSubmissionId:existing.sourceSubmissionId}:{}),
   };
 }
 export function collectDueRuns(store, now = new Date()) {
@@ -101,6 +102,7 @@ export function collectDueRuns(store, now = new Date()) {
           prompt: schedule.prompt,
           origin: schedule.origin ?? null,
           selectedContext: schedule.selectedContext ?? null,
+          ...(schedule.sourceSubmissionId?{sourceSubmissionId:schedule.sourceSubmissionId}:{}),
           status: "queued",
           scheduledAt: schedule.nextRunAt,
           startedAt: null,

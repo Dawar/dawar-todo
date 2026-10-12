@@ -104,7 +104,7 @@ export async function prepareLocalQueueMutation(runtime, method, botId, params, 
   };
 }
 
-export async function acceptLocalQueueOperation(runtime, request, fingerprint) {
+export async function acceptLocalQueueOperation(runtime, request, fingerprint, authorship = null) {
   const { method, botId, params, operationId } = request;
   let mutation;
   try { mutation = await prepareLocalQueueMutation(runtime, method, botId, params, operationId); }
@@ -115,6 +115,11 @@ export async function acceptLocalQueueOperation(runtime, request, fingerprint) {
       const data = { method, botId, params, localOnly: "queue-v1", createdAt: new Date().toISOString() };
       runtime.store.saveOperation(operationId, fingerprint, "dispatching", data);
       const value = mutation();
+      if(authorship&&value?.queuedSubmission&&['queue.add','queue.update','queue.merge'].includes(method)){
+        const queued=runtime.store.get('promptQueue',value.queuedSubmission.id),body=String(params.text??value.queuedSubmission.text??queued.input.filter(x=>x.type==='text'&&!x.text.startsWith('Attached file: ')).map(x=>x.text).join('\n'));
+        const source=runtime.sources.capture(runtime.store.bot(botId),operationId,authorship,authorship.kind==='bot'?body:'',{attachments:queued.attachmentIds??[]});
+        runtime.store.put('promptQueue',{...queued,sourceSubmissionId:source.submissionId});
+      }
       runtime.store.saveOperation(operationId, fingerprint, "done", { ...data, result: value });
       return value;
     });

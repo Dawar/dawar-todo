@@ -51,7 +51,7 @@ export class HubRpc {
     if(!id(request.operationId))throw Error('Original operation identity required.');
     // Ephemeral socket identity is routing, not an operation fingerprint. A
     // reconnect must reconcile the SAME operation from another socket.
-    const row=this.store.enqueue(owner,p.bot_id,request.operationId,{method:request.method,params:request.params??{},...(internal===OPERATOR_NATIVE?{operatorSource:request.operatorSource}:{})});
+    const row=request.method==='turn.send'&&this.controls?.sources?.owner?.key?this.controls.sources.reserveOwner(owner,request,p,{...(internal===OPERATOR_NATIVE?{operatorSource:request.operatorSource}:{})}):this.store.enqueue(owner,p.bot_id,request.operationId,{method:request.method,params:request.params??{},...(internal===OPERATOR_NATIVE?{operatorSource:request.operatorSource}:{})});
     if(row.receipt){
       const r=JSON.parse(row.receipt);
       if(r.result!==undefined&&['native-accepted','running','terminal'].includes(row.state))return {result:r.result,delivery:{state:row.state,nodeId:p.node_id,epoch:p.epoch}};

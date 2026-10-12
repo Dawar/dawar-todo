@@ -47,6 +47,7 @@ export function queueHeldBurst(runtime, bot, params, operationId) {
     if (runtime.store.get('promptQueue', id)) throw Error('Queue identity already exists without its confirmed transfer receipt. Reconcile the original action.');
     const source = {kind:'burst', operationId, burstMessageId:message.id, batchId:batch.id, sourceRevision:batch.revision};
     enqueuePrompt(queueRuntime, current, {text:message.text, attachments:message.attachmentIds, reply:message.reply, listId}, id, message.input, source, ++position);
+    if(message.sourceSubmissionId)runtime.store.put('promptQueue',{...runtime.store.get('promptQueue',id),sourceSubmissionId:message.sourceSubmissionId});
     runtime.store.put('burstMessage', {...message, state:'queued', queueId:id, queueOperationId:operationId, queuedAt:new Date().toISOString()});
     return {messageId:message.id, queueId:id};
   });

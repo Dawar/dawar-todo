@@ -8,6 +8,9 @@ import { ReturnedVisualization } from "./returned-visualization";
 import { remarkVisualizations } from "./visualization-markdown";
 import { MarkdownTable } from "./markdown-table";
 import { MarkdownCodeBlock } from "../markdown-code-block";
+import { SubmissionAuthor } from "./submission-author";
+import type { SubmissionAttribution } from "../../lib/submission-source";
+import "./submission-author.css";
 import type { BotAttachment } from "../../lib/bots-types";
 import { proposedPlanParts } from "../../lib/proposed-plan";
 import type { NativeWorkPlan } from '../../lib/native-work-plan';
@@ -77,6 +80,7 @@ function BotMessage({
   attachments,
   inWorkLog = false,
   partial = false,
+  submission,
 }: {
   item: ThreadItem;
   botId: string;
@@ -84,6 +88,7 @@ function BotMessage({
   download: (id: string) => void;
   inWorkLog?: boolean;
   partial?: boolean;
+  submission?: SubmissionAttribution;
 }) {
   function markdownPage(text: string) {
     return <MessageMarkdown text={text} botId={botId} attachments={attachments}/>;
@@ -97,8 +102,9 @@ function BotMessage({
     return null;
   if (item.type === "userMessage")
     return (
-      <div className="bots-message bots-user">
+      <div className={`bots-message ${submission&&submission.source.kind!=="user"?"bots-sourced-input":"bots-user"}`} data-source-kind={submission?.source.kind} style={submission?.source.kind==="bot"?{ "--sender-color": /^#[0-9a-f]{6}$/i.test(submission.source.color??"")?submission.source.color:undefined } as import("react").CSSProperties:undefined}>
         <div className="bots-bubble">
+          {submission&&submission.source.kind!=="user"&&<SubmissionAuthor source={submission.source}/>}
           {item.clientId?.startsWith("schedule:") && (
             <small>Scheduled task</small>
           )}
