@@ -15,6 +15,8 @@
 .bots-list-detail-heading>div:last-child:not(:first-of-type) { display:flex;flex-wrap:wrap;gap:8px; }
 .bots-lists-error { color:var(--destructive);background:color-mix(in srgb,var(--destructive) 6%,var(--card));padding:12px;border:1px solid var(--border);border-radius:var(--radius);font-size:14px;line-height:1.5;overflow-wrap:anywhere; }
 .bots-lists-error button { margin-top:8px; }
+.bots-lists-read-error { display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap; }
+.bots-lists-read-error button { margin:0; }
 .bots-lists-pending { color:var(--muted-foreground);font-size:13px;line-height:1.5;margin:12px 0; }
 .bots-queue-lists :focus-visible,.bots-queue-picker :focus-visible { outline:2px solid var(--ring);outline-offset:2px; }
 .bots-queue-picker { position:fixed;inset:0;margin:auto;width:min(420px,calc(100vw - 32px));max-height:calc(100dvh - 32px);padding:20px;border:1px solid var(--border);border-radius:var(--radius);background:var(--popover);color:var(--popover-foreground);box-shadow:0 16px 48px rgb(0 0 0 / .18);overflow-y:auto; }

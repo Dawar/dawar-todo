@@ -71,26 +71,46 @@ export function QueueLists({owner,bot,lists,defaultItems,online,refreshLists,ref
 }) {
   const [selected,setSelected] = useState<string|null>('default'), [editor,setEditor] = useState<ReturnType<typeof blank> & {id?:string;revision?:number}|null>(null);
   const [loaded,setLoaded] = useState<{id:string|null;items:BotQueuedSubmission[]}>({id:null,items:[]}), [error,setError] = useState('');
+  const [read,setRead] = useState<{id:string|null;loading:boolean;error:string}>({id:null,loading:false,error:''});
   const request=useRef(0), current=lists.find(l=>l.id===selected);
   const refresh = useCallback(async()=>{
-    await refreshLists(); await refreshDefault();
-    if (!selected || selected==='default' || !online) return;
+    // Claim this refresh before any await: an older parent read must not become
+    // the newest selected-list request after navigation or a later refresh.
     const n=++request.current;
-    try {const items=await client.rpc<BotQueuedSubmission[]>('queue.list',bot.id,{listId:selected});if(n===request.current && client.owner===owner){setLoaded({id:selected,items});client.save(`queue:${bot.id}:${selected}`,items);setError('');}}
-    catch(e){if(n===request.current)setError(e instanceof Error?e.message:'This list could not load.');}
+    const currentRequest=()=>n===request.current && client.owner===owner;
+    if (!online || !currentRequest()) return;
+    setRead({id:selected,loading:true,error:''});
+    try {
+      await Promise.all([refreshLists(),refreshDefault()]);
+      if (!currentRequest()) return;
+      if (selected && selected!=='default') {
+        const items=await client.rpc<BotQueuedSubmission[]>('queue.list',bot.id,{listId:selected});
+        if (!currentRequest()) return;
+        client.save(`queue:${bot.id}:${selected}`,items);
+        setLoaded({id:selected,items});
+      }
+      setRead({id:selected,loading:false,error:''});
+    } catch {
+      if(currentRequest())setRead({id:selected,loading:false,error:'Could not refresh this queue. Try again.'});
+    }
   },[refreshLists,refreshDefault,selected,online,bot.id,owner]);
   const action=useQueueAction(owner,bot.id,refresh);
   useEffect(()=>{
     let active=true;
-    queueMicrotask(()=>{if(active && selected && selected!=='default'){setLoaded({id:selected,items:client.cache<BotQueuedSubmission[]>(`queue:${bot.id}:${selected}`,[])});void refresh().catch(e => setError(e instanceof Error ? e.message : "Queue lists could not refresh."));}});
-    const listener=(event:{type:string;botId?:string})=>{if(event.type==='queue' && event.botId===bot.id)void refresh().catch(e => setError(e instanceof Error ? e.message : "Queue lists could not refresh."));};
+    queueMicrotask(()=>{
+      if(!active || client.owner!==owner)return;
+      if(selected && selected!=='default')setLoaded({id:selected,items:client.cache<BotQueuedSubmission[]>(`queue:${bot.id}:${selected}`,[])});
+      void refresh();
+    });
+    const listener=(event:{type:string;botId?:string})=>{if(event.type==='queue' && event.botId===bot.id)void refresh();};
     client.events.add(listener);
     return ()=>{active=false;
       // Invalidate this list read; this ref is a request counter, not a DOM node.
       // eslint-disable-next-line react-hooks/exhaustive-deps
       request.current++;client.events.delete(listener);};
-  },[selected,bot.id,refresh]);
+  },[selected,bot.id,owner,refresh]);
   const items=!selected||selected==='default'?defaultItems:loaded.id===selected?loaded.items:[];
+  const loading=online && (read.id!==selected || read.loading), readError=read.id===selected?read.error:'';
   const locked=action.busy || action.blocked || !online;
   const validationId=useId(), cronError=editor?cronValidationError(editor.cron):null, hasSchedule=Boolean(editor?.cron.trim());
   let next:string|null=null, zoneError:string|null=null;
@@ -111,8 +131,8 @@ export function QueueLists({owner,bot,lists,defaultItems,online,refreshLists,ref
       if(await action.run('queueLists.save',{...params,cron:editor.cron.trim()||null,...(revision?{expectedRevision:revision}:{})}))setEditor(null);
     }}><header><strong>{editor.id?'List settings':'New queue list'}</strong><Button variant="outline" type="button" aria-label="Close list editor" onClick={()=>setEditor(null)}><X size={18}/></Button></header>
       <label>Name<Input autoFocus disabled={locked} value={editor.name} maxLength={80} required placeholder="Morning work" onChange={e=>setEditor({...editor,name:e.target.value})}/></label>
-      <ListSchedule editor={editor} disabled={locked} cronError={Boolean(cronError)} zoneError={Boolean(zoneError)} errorId={validationId} onChange={value=>setEditor({...editor,...value})}/>
-      {scheduleError?<small id={validationId} role="alert">{scheduleError}</small>:next&&editor.enabled?<small>Next: {when(next,editor.timeZone)}</small>:null}
+      <ListSchedule editor={editor} disabled={locked} cronError={cronError} zoneError={zoneError} errorId={validationId} onChange={value=>setEditor({...editor,...value})}/>
+      {!cronError && !zoneError && (scheduleError?<small role="alert">{scheduleError}</small>:next&&editor.enabled?<small>Next: {when(next,editor.timeZone)}</small>:null)}
       <Button className="bots-primary" type="submit" disabled={locked||Boolean(scheduleError)||!editor.name.trim()}>{action.busy?'Saving…':'Save list'}</Button>
     </form>}
     <nav className="bots-list-tabs" aria-label="Queue lists">
@@ -124,20 +144,21 @@ export function QueueLists({owner,bot,lists,defaultItems,online,refreshLists,ref
       <Button variant="outline" disabled={locked} onClick={()=>setEditor({id:current.id,revision:current.revision,name:current.name,cron:current.cron??'',timeZone:current.timeZone,enabled:current.enabled})}><Pencil size={17}/>Settings</Button>
       <Button variant="outline" title="Only empty lists can be removed" disabled={locked||items.length>0||current.count>0} onClick={async()=>{if(await action.run('queueLists.delete',{id:current.id,expectedRevision:current.revision}))setSelected('default');}}><Trash2 size={17}/>Delete list</Button>
     </div>}</div>
-      <PromptQueue owner={owner} bot={bot} items={selected==='default'?defaultItems:items} online={online} canEdit listId={selected==='default'?null:selected} title={current?.name??'Queued next'} lists={lists} supported relativeMoves={client.snapshot?.capabilities?.queueRelativeMoves===1} onEdit={async item=>{setError('');try{if(!await onEdit(item))setError('Could not confirm removal. Retry in the composer.');}catch(reason){setError(reason instanceof Error?reason.message:'Queue removal could not be confirmed.');}}} refresh={refresh} embedded />
-      {!items.length&&<p className="bots-lists-empty-note">No queued messages.</p>}
+      {readError && online && <div className="bots-lists-error bots-lists-read-error" role="alert"><span>{readError}</span><Button variant="outline" type="button" onClick={()=>void refresh()}>Retry</Button></div>}
+      <PromptQueue owner={owner} bot={bot} items={selected==='default'?defaultItems:items} online={online} canEdit listId={selected==='default'?null:selected} title={current?.name??'Queued next'} lists={lists} supported relativeMoves={client.snapshot?.capabilities?.queueRelativeMoves===1} onEdit={async item=>{setError('');try{if(!await onEdit(item))setError('Could not confirm removal. Retry in the composer.');}catch{setError('Queue removal could not be confirmed. Check delivery before trying again.');}}} refresh={refresh} embedded />
+      {!items.length && (loading?<p className="bots-lists-empty-note" role="status">Loading messages…</p>:!online?<p className="bots-lists-empty-note">Connect to refresh this queue.</p>:!readError?<p className="bots-lists-empty-note">No queued messages.</p>:null)}
   </div>;
 }
 
-function ListSchedule({editor,onChange,disabled,cronError,zoneError,errorId}:{editor:ReturnType<typeof blank>;onChange:(value:Partial<ReturnType<typeof blank>>)=>void;disabled:boolean;cronError:boolean;zoneError:boolean;errorId:string}) {
+function ListSchedule({editor,onChange,disabled,cronError,zoneError,errorId}:{editor:ReturnType<typeof blank>;onChange:(value:Partial<ReturnType<typeof blank>>)=>void;disabled:boolean;cronError:string|null;zoneError:string|null;errorId:string}) {
   const parts=editor.cron.split(' '), timed=/^\d{1,2} \d{1,2} \* \* (\*|1-5)$/.test(editor.cron);
   const mode=!editor.cron?'manual':timed?parts[4]==='*'?'daily':'weekdays':editor.cron==='0 * * * *'?'hourly':'custom';
   const time=timed?`${parts[1].padStart(2,'0')}:${parts[0].padStart(2,'0')}`:'09:00';
   return <><label>Schedule<NativeSelect disabled={disabled} value={mode} onChange={e=>onChange({cron:e.target.value==='manual'?'':e.target.value==='hourly'?'0 * * * *':e.target.value==='custom'?'0 9 * * 1':`0 9 * * ${e.target.value==='daily'?'*':'1-5'}`})}>
     <option value="manual">Manual only</option><option value="daily">Every day</option><option value="weekdays">Weekdays</option><option value="hourly">Every hour</option><option value="custom">Custom schedule</option>
   </NativeSelect></label>
-  {(mode==='daily'||mode==='weekdays')&&<label>Time<Input type="time" disabled={disabled} required value={time} onChange={e=>{const [hour,minute]=e.target.value.split(':');if(hour&&minute)onChange({cron:`${Number(minute)} ${Number(hour)} * * ${mode==='daily'?'*':'1-5'}`});}}/></label>}
-  {mode==='custom'&&<label>Cron expression<Input disabled={disabled} aria-invalid={cronError||undefined} aria-describedby={cronError?errorId:undefined} value={editor.cron} onChange={e=>onChange({cron:e.target.value})} spellCheck={false}/></label>}
-  {editor.cron&&<><label>Timezone<Input disabled={disabled} aria-invalid={zoneError||undefined} aria-describedby={zoneError?errorId:undefined} value={editor.timeZone} onChange={e=>onChange({timeZone:e.target.value})} required placeholder="America/Toronto"/></label><label className="bots-list-checkbox"><input type="checkbox" disabled={disabled} checked={editor.enabled} onChange={e=>onChange({enabled:e.target.checked})}/>Schedule enabled</label></>}
+  {(mode==='daily'||mode==='weekdays')&&<label>Time<Input type="time" aria-invalid={Boolean(cronError)||undefined} aria-describedby={cronError?`${errorId}-cron`:undefined} disabled={disabled} required value={time} onChange={e=>{const [hour,minute]=e.target.value.split(':');if(hour&&minute)onChange({cron:`${Number(minute)} ${Number(hour)} * * ${mode==='daily'?'*':'1-5'}`});}}/>{cronError&&<small id={`${errorId}-cron`} role="alert">{cronError}</small>}</label>}
+  {mode==='custom'&&<label>Cron expression<Input disabled={disabled} aria-invalid={Boolean(cronError)||undefined} aria-describedby={cronError?`${errorId}-cron`:undefined} value={editor.cron} onChange={e=>onChange({cron:e.target.value})} spellCheck={false}/>{cronError&&<small id={`${errorId}-cron`} role="alert">{cronError}</small>}</label>}
+  {editor.cron&&<><label>Timezone<Input disabled={disabled} aria-invalid={Boolean(zoneError)||undefined} aria-describedby={zoneError?`${errorId}-zone`:undefined} value={editor.timeZone} onChange={e=>onChange({timeZone:e.target.value})} required placeholder="America/Toronto"/>{zoneError&&<small id={`${errorId}-zone`} role="alert">{zoneError}</small>}</label><label className="bots-list-checkbox"><input type="checkbox" disabled={disabled} checked={editor.enabled} onChange={e=>onChange({enabled:e.target.checked})}/>Schedule enabled</label></>}
   </>;
 }

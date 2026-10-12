@@ -183,6 +183,18 @@ Saved-change recovery presents labeled values instead of raw JSON, with bounded
 details for long or unknown fields. File recovery separates storage-read errors
 from action errors; a successful read clears only its own stale error.
 
+### Queue lists
+
+Keep read recovery separate from action delivery. A failed refresh offers a short
+Retry action and retains any cached messages; it must not expose raw transport
+errors or imply an unread queue is empty. The request generation starts before
+all dependent reads, and late results from a previous selection are ignored.
+
+List editors retain values after rejection, show neutral Saving feedback while
+an original action is pending, and associate each invalid schedule field with
+its own error. Manual lists omit scheduling fields. A confirmed empty queue has
+one concise empty state; loading and offline states remain distinct.
+
 ## Files, media and structured content
 
 Galleries preserve cached content during refresh failure and distinguish updating,
