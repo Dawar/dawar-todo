@@ -195,6 +195,11 @@ an original action is pending, and associate each invalid schedule field with
 its own error. Manual lists omit scheduling fields. A confirmed empty queue has
 one concise empty state; loading and offline states remain distinct.
 
+Scheduled work shows the next time in its configured timezone. A past one-time
+schedule is labeled as passed, never completed without execution evidence. Delete
+uses the shared destructive confirmation, initially focuses Cancel, and becomes
+unavailable if connection or action state no longer permits the change.
+
 ## Files, media and structured content
 
 Galleries preserve cached content during refresh failure and distinguish updating,
