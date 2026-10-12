@@ -35,7 +35,7 @@ export function adoptLegacyTeams(controls,owner,source){
    return {id:bot_id,teamId:r.teamId??null,teamOrder:r.teamOrder??0};
   });
   operations=db.prepare("SELECT id,fingerprint,status,json FROM operations WHERE json_extract(json,'$.localOnly')='team-v1' ORDER BY id LIMIT 4097").all();
-  if(operations.length>4096||operations.reduce((n,r)=>n+Buffer.byteLength(r.json),0)>64*1024*1024)throw Error('Original team receipts exceed the migration bound.');
+  if(operations.length>4096||operations.reduce((n,r)=>n+Buffer.byteLength(r.json),0)>128*1024*1024)throw Error('Original team receipts exceed the migration bound.');
   for(const r of operations){
    const op=JSON.parse(r.json);
    if(!methods.has(op.method)||r.status!=='done'||!op.result||typeof op.params!=='object')throw Error('Original team acceptance remains unconfirmed.');
