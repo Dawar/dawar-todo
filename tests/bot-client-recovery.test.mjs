@@ -33,6 +33,21 @@ function setup(seed = {}, extra = {}) {
 const session = (owner) => ({ owner, ticket: 'test-only', timeZone: 'UTC', machineId: 'machine', url: 'wss://example.invalid' });
 const snapshot = (owner) => ({ bots: [{ id: `${owner}-bot` }], pending: [], defaults: {}, ready: true });
 
+test('portable team events retain canonical assignment across native updates and stale team events', () => {
+  const { client } = setup(); client.owner = 'alice';
+  client.snapshot = { ...snapshot('alice'), cursor: 0, teams: [], capabilities: { portableAgents: 1, teams: 1 }, bots: [{ id: 'alice-bot', teamId: null, teamOrder: 0, updatedAt: '2026-10-12T00:00:00Z', status: 'ready' }] };
+  client.receive({ type: 'event', event: { seq: 1, type: 'teams', botId: 'alice-bot', data: { teams: [{ id: 'canonical-team', name: 'Design' }], placements: [{ id: 'alice-bot', teamId: 'canonical-team', teamOrder: 2 }, { id: 'foreign-bot', teamId: 'canonical-team', teamOrder: 0 }] } } });
+  assert.equal(client.snapshot.bots.length, 1); assert.equal(client.snapshot.bots[0].teamId, 'canonical-team');
+  client.receive({ type: 'event', event: { seq: 2, type: 'bot', botId: 'alice-bot', data: { id: 'alice-bot', teamId: 'old-native-team', teamOrder: 99, status: 'running', activeTurnId: 'original-turn', updatedAt: '2026-10-12T00:01:00Z' } } });
+  assert.equal(client.snapshot.bots[0].teamId, 'canonical-team'); assert.equal(client.snapshot.bots[0].teamOrder, 2);
+  assert.equal(client.snapshot.bots[0].activeTurnId, 'original-turn');
+  client.receive({ type: 'event', event: { seq: 3, type: 'teams', data: { teams: [{ id: 'old-native-team' }] } } });
+  assert.equal(client.snapshot.teams[0].id, 'canonical-team');
+  client.receive({ type: 'event', event: { seq: 4, type: 'teams', data: { teams: [{ id: 'canonical-team' }], placements: [{ id: 'alice-bot', teamId: null, teamOrder: 0 }] } } });
+  assert.equal(client.snapshot.bots[0].teamId, null); assert.equal(client.snapshot.bots[0].activeTurnId, 'original-turn');
+  client.clearOwnerCache();
+});
+
 test('established owner restores cached bots synchronously offline; auth denial locks access without deleting drafts', async () => {
   const env = setup({ 'dawar-bots:last-owner': 'alice', 'dawar-bots:alice:snapshot': JSON.stringify(snapshot('alice')), 'dawar-bots:alice:draft:bot-a': '"kept"', 'dawar-bots:alice:uploads:bot-a': '[{"kept":true}]' });
   const { client, localStorage } = env;

@@ -68,7 +68,7 @@ export class AgentTransport {
   send(value){if(this.socket?.readyState===WebSocket.OPEN)this.socket.send(JSON.stringify(value));}
   controlRequest(botId,tool,args){
     if(!HUB_TOOLS.has(tool))throw Error('Unsupported hub tool.');
-    const read=tool==='bots_message'&&args.operation==='source'||tool==='bots_schedule_list'||tool==='bots_queue'&&['lists','read'].includes(args.operation);
+    const read=tool==='bots_team'&&args.operation==='read'||tool==='bots_message'&&args.operation==='source'||tool==='bots_schedule_list'||tool==='bots_queue'&&['lists','read'].includes(args.operation);
     return this.requestHub(botId,'control',{tool,args},read);
   }
   artifactRequest(botId,action,input){
@@ -304,6 +304,12 @@ export async function runAgent(config){
 }
 
 export function installHubToolRoutes(runtime,manager,transport,platform=process.platform){
+  runtime.hubTeamReference=async bot=>{
+    const reference=await transport.controlRequest(bot.id,'bots_team',{operation:'read'});
+    if(reference?.team===null)return null;
+    if(!/^team-[a-f0-9]{32}$/.test(reference?.id??'')||reference.workspaceScope!=='hub'||reference.profile?.kind!=='application'||typeof reference.profile.value!=='string'||Buffer.byteLength(reference.profile.value)>900*1024)throw Error('The authenticated hub team reference is invalid.');
+    return reference;
+  };
   const store=runtime.store,originalTool=manager.callTracked.bind(manager);
   manager.callTracked=(botId,name,args,origin)=>{
     if(HUB_TOOLS.has(name)){

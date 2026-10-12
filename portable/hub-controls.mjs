@@ -23,6 +23,7 @@ import {foregroundSource,validateForeground} from './foreground-source.mjs';
 import {validatePrimary} from './primary-source.mjs';
 import {operatorSource,validateOperatorSource} from './operator-source.mjs';
 import {storedRuntimeDefaults} from './runtime-defaults.mjs';
+import {HubTeams,TEAM_READS,TEAM_MUTATIONS} from './hub-teams.mjs';
 export { hubActivation } from './hub-authority.mjs';
 import { controlWriteGuard } from './hub-authority.mjs';
 import { HUB_READS,HUB_MUTATIONS,HUB_TOOLS,NODE_LOGICAL_COMMANDS,HUB_BURST_MUTATIONS } from './control-protocol.mjs';
@@ -36,9 +37,9 @@ const ownerQueueControls=new Set(['queue.send','queue.resume','work.resume']);
 // The hub reuses the original logical records and local acceptance closures.
 // This facade has no native process: queue mutation cannot become inference.
 export class HubControls extends EventEmitter {
-  constructor({path,hub,router,owner=null,authority=null,defaultTimeZone='America/Toronto',broadcast=()=>{},quietWindow={start:'02:30',end:'04:30',timeZone:'America/Toronto',scheduleIds:[]}}) {
+  constructor({path,hub,router,owner=null,teamWorkspaceRoot,authority=null,defaultTimeZone='America/Toronto',broadcast=()=>{},quietWindow={start:'02:30',end:'04:30',timeZone:'America/Toronto',scheduleIds:[]}}) {
     super();Object.assign(this,{hub,router,authority,defaultTimeZone,broadcast,quietWindow});
-    this.store=new Store(path);this.ready=true;this.locks=new Map();this.closed=false;
+    this.storePath=path;this.store=new Store(path);this.ready=true;this.locks=new Map();this.closed=false;
     this.store.db.exec('PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS portable_control_receipts(operation_id TEXT PRIMARY KEY,receipt_hash TEXT NOT NULL)');
     const inherited=storedRuntimeDefaults(this.store);this.defaults=inherited===undefined?{}:inherited;
     this.executionConfig=new ExecutionConfiguration(this);this.plans=new PlanLifecycle(this);this.sources=new HubSubmissions(this,owner);
@@ -60,6 +61,7 @@ export class HubControls extends EventEmitter {
     }
     const meta=this.store.meta.bind(this.store);
     this.store.meta=(key,value)=>value===undefined||this.store.transactionDepth?meta(key,value):this.store.transaction(()=>meta(key,value));
+    this.teams=new HubTeams(this,owner,teamWorkspaceRoot);
     // A fault is retained as metadata, without spawning a bot or an ACK loop.
     this.on('fault',error=>{this.lastFault={message:error.message,at:now()};});
   }
@@ -159,6 +161,7 @@ export class HubControls extends EventEmitter {
     return input;
   }
   async request(owner,{method,botId,params={},operationId},caller={kind:'owner'}) {
+    if(TEAM_READS.has(method)||TEAM_MUTATIONS.has(method))return this.teams.request(owner,{method,botId,params,operationId},caller);
     const {b}=this.scope(owner,botId);
     if(!params||typeof params!=='object'||Array.isArray(params))throw Error('Invalid logical control parameters.');
     if(method==='submissions.source'){if(caller.kind!=='owner'||owner!==this.sources.owner?.key)throw Error('Owner source read required.');return this.sources.read(b,params);}
@@ -292,6 +295,7 @@ export class HubControls extends EventEmitter {
     });
   }
   async tool(owner,botId,tool,args,caller={kind:'authenticated-node-tool',botId}) {
+    if(tool==='bots_team')return this.teams.tool(owner,botId,args,caller);
     if(tool==='bots_message')return this.sources.tool(owner,botId,args,caller);
     this.scope(owner,botId);if(!HUB_TOOLS.has(tool)||!args||typeof args!=='object'||Array.isArray(args))throw Error('Unsupported hub tool.');
     if(tool==='bots_schedule_list')return {...await this.request(owner,{method:'schedules.list',botId}),defaultTimeZone:this.defaultTimeZone};

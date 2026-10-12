@@ -453,7 +453,7 @@ export function BotsWorkspace() {
             <div className="bots-sidebar-tools">
             {snapshot?.capabilities?.operatorCalls === 1 && <Button type="button" variant="ghost" size="icon" className="aria-pressed:bg-accent aria-pressed:text-accent-foreground" aria-label="Call Operator" onClick={() => { setCallBotId(null); setShowCall(true); }}><Phone size={16} /></Button>}
             <ArtifactNav active={gallery === "artifacts"} onOpen={() => openGallery("artifacts")} />
-            <Button type="button" variant="ghost" size="icon" className="aria-pressed:bg-accent aria-pressed:text-accent-foreground" disabled={!teamsSupported} title={teamsSupported ? "Teams" : "Teams will be available after the service update"} aria-label="Teams" onClick={() => setShowTeams(true)}><UsersRound size={19} /></Button>
+            <Button type="button" variant="ghost" size="icon" className="aria-pressed:bg-accent aria-pressed:text-accent-foreground" title="Teams" aria-label="Teams" onClick={() => setShowTeams(true)}><UsersRound size={19} /></Button>
             <Button type="button" variant="ghost" size="icon" className="aria-pressed:bg-accent aria-pressed:text-accent-foreground" title="Codex account usage" aria-label="Codex account usage" onClick={() => setShowOverallUsage(true)}><BarChart3 size={19} /></Button>
             <Button type="button" variant="ghost" size="icon"
               className="aria-pressed:bg-accent aria-pressed:text-accent-foreground"
@@ -756,6 +756,7 @@ export function BotsWorkspace() {
                 {single && <AutomaticInbox owner={owner} bot={bot} work={work} online={online} />}
               </>,
               goals: <NativeGoalPanel key={`goal:${owner}:${bot.id}:${bot.threadId}`} owner={owner} bot={bot} work={work} snapshot={snapshot} online={online} />,
+              team: <><h3>Team</h3>{teamsSupported ? <TeamAssignment key={`team:${scope}`} owner={owner} bot={bot} teams={teams} online={online} onManage={() => setShowTeams(true)} /> : <p className="bots-details-lead">Team editing is unavailable on the current service.</p>}</>,
               queues: queueListsSupported ? <QueueLists key={`lists:${scope}`} owner={owner} bot={bot} lists={queueLists.lists} defaultItems={promptQueue} online={online} refreshLists={queueLists.refresh} refreshDefault={refreshDefaultQueue} onEdit={editQueued} /> : <p className="bots-details-lead">Queue lists will be available when the bot service update finishes.</p>,
               schedules: <>
                 <ScheduleList bot={bot} schedules={schedules} online={online} busy={busy} onEdit={schedule => setEditingSchedule({ schedule, scope, botId: bot.id, owner })} action={action} />
@@ -777,7 +778,6 @@ export function BotsWorkspace() {
                 <SavedDrafts owner={owner} bots={bots} composer={composer}/><p className="bots-profile-hint">{bot.purpose}</p><p className="bots-profile-hint">Ask {bot.name} to change its personality, instructions, or memory.</p>
                 {snapshot?.capabilities?.singleThreadExecution === 1 && <PersonalitySettings key={scope} bot={bot} snapshot={snapshot} online={online} />}
                 {snapshot?.capabilities?.botAdministration === 1 && bot.executionMode === "single-thread" && <BotAdminApprovals key={`admin:${scope}`} owner={owner} botId={bot.id} botName={bot.name} online={online} />}
-                {teamsSupported && <TeamAssignment key={`team:${scope}`} owner={owner} bot={bot} teams={teams} online={online} onManage={() => setShowTeams(true)} />}
                 <Button asChild variant="link" className="px-0"><a href="/settings">Notification settings</a></Button>
                 <div className="bots-profile-actions flex flex-wrap gap-2">
                   <Button variant="outline" type="button" disabled={!online || busy || Boolean(bot.activeTurnId)} onClick={() => void action(() => client.rpc("thread.compact", bot.id))}><RotateCcw size={16} />Compact conversation</Button>

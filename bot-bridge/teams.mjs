@@ -55,6 +55,7 @@ export function publicTeams(runtime) {
     });
 }
 export async function teamReference(runtime, bot) {
+  if(runtime.hubTeamReference)return runtime.hubTeamReference(bot);
   if (!bot.teamId) return null;
   const value = runtime.store.get("team", bot.teamId);
   return value && !value.deletedAt

@@ -96,7 +96,7 @@ export async function profileContext(bot, team = null, { onMemoryState = () => {
     }
   }
   if (bot.threadId) parts.push(`## Desktop tools\n${desktopInstructions(bot)}`);
-  if (team) parts.push(`## Shared team reference\nTeam: ${team.name}\nShared workspace: ${team.workspace}\nCurrent shared memory and team files are supplied in teamProfile. ${TEAM_INSTRUCTIONS}`);
+  if (team) parts.push(`## Shared team reference\nTeam: ${team.name}\nShared workspace${team.workspaceScope==='hub'?' on the hub':''}: ${team.workspace}\nCurrent shared memory and team files are supplied in teamProfile. ${TEAM_INSTRUCTIONS}`);
   return {
     botProfile: {
       kind: "application",
@@ -108,6 +108,10 @@ export async function profileContext(bot, team = null, { onMemoryState = () => {
 export async function teamProfileContext(team) {
   if (!team) return { teamProfile: { kind: "application", value:
     "No current team is assigned. Any previously supplied team context is historical, not current shared memory or membership." } };
+  if(team.workspaceScope==='hub'){
+    if(team.profile?.kind!=='application'||typeof team.profile.value!=='string'||Buffer.byteLength(team.profile.value)>900*1024)throw Error('Invalid authenticated hub team profile.');
+    return {teamProfile:team.profile};
+  }
   const directory = await lstat(team.workspace);
   if (!directory.isDirectory() || directory.isSymbolicLink() ||
       await realpath(team.workspace) !== team.workspace)

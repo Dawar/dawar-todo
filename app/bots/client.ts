@@ -62,8 +62,14 @@ function snapshotEventKey(event: BotEvent) {
 function applySnapshotEvent(snapshot: BotSnapshot, event: BotEvent, key?: string): BotSnapshot {
   if(event.type === "secure.status"){const request=event.data as import("../../lib/secure-input").SecureRequest;return {...snapshot,secureInputs:[...(snapshot.secureInputs??[]).filter(r=>r.id!==request.id),request].slice(-100)};}
   if (event.type === "teams") {
-    const teams = (event.data as { teams?: BotSnapshot["teams"] }).teams;
-    return Array.isArray(teams) ? { ...snapshot, teams } : snapshot;
+    const { teams, placements } = event.data as { teams?: BotSnapshot["teams"]; placements?: { id: string; teamId: string | null; teamOrder: number }[] };
+    if (!Array.isArray(teams)) return snapshot;
+    if(snapshot.capabilities?.teams===1&&snapshot.capabilities?.portableAgents===1&&!Array.isArray(placements))return snapshot;
+    const assignments = new Map(Array.isArray(placements) ? placements.filter(value => value && typeof value.id === 'string' && (value.teamId === null || typeof value.teamId === 'string') && Number.isSafeInteger(value.teamOrder) && value.teamOrder >= 0).map(value => [value.id, value]) : []);
+    return { ...snapshot, teams, bots: snapshot.bots.map(bot => {
+      const placement = assignments.get(bot.id);
+      return placement ? { ...bot, teamId: placement.teamId, teamOrder: placement.teamOrder } : bot;
+    }) };
   }
   if (event.type === "work" && event.botId) {
     const work = event.data as WorkState;
@@ -87,7 +93,9 @@ function applySnapshotEvent(snapshot: BotSnapshot, event: BotEvent, key?: string
   if (event.type === "bot") {
     const deleted = event.data as BotSnapshot["bots"][number];
     if (deleted.deletedAt) return { ...snapshot, bots: snapshot.bots.filter(bot => bot.id !== deleted.id) };
-    const bot = event.data as BotSnapshot["bots"][number];
+    const incoming = event.data as BotSnapshot["bots"][number];
+    const current=snapshot.bots.find(value=>value.id===incoming.id);
+    const bot = current&&snapshot.capabilities?.teams===1&&snapshot.capabilities?.portableAgents===1 ? {...incoming,teamId:current.teamId,teamOrder:current.teamOrder} : incoming;
     return { ...snapshot, bots: [...snapshot.bots.filter(item => item.id !== bot.id), bot]
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)) };
   }

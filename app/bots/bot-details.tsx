@@ -1,16 +1,17 @@
 "use client";
 import { Activity, useEffect, useId, useRef, useState, type ReactNode } from "react";
-import { Clock3, FolderOpen, History, ListOrdered, ListTree, Monitor, Phone, Settings2, Target } from "lucide-react";
+import { Clock3, FolderOpen, History, ListOrdered, ListTree, Monitor, Phone, Settings2, Target, UsersRound } from "lucide-react";
 import type { Bot } from "../../lib/bots-types";
 import "./bot-details.css";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { HistoryScrollContext } from "./history-scroll-context";
 
-export type BotDetailsSection = "next" | "goals" | "queues" | "schedules" | "files" | "desktop" | "calls" | "history" | "settings";
+export type BotDetailsSection = "next" | "goals" | "team" | "queues" | "schedules" | "files" | "desktop" | "calls" | "history" | "settings";
 const sections = [
   { id: "next", label: "Up next", icon: ListOrdered },
   { id: "goals", label: "Goals", icon: Target },
+  { id: "team", label: "Team", icon: UsersRound },
   { id: "queues", label: "Queues", icon: ListTree },
   { id: "schedules", label: "Schedules", icon: Clock3 },
   { id: "files", label: "Files", icon: FolderOpen },

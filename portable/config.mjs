@@ -7,6 +7,7 @@ export function loadConfig(path = process.env.DAWAR_HUB_CONFIG) {
   const c = JSON.parse(readPrivate(path));
   if (c.version !== 1 || !['hub','agent','both'].includes(c.mode) || !isAbsolute(c.dataDirectory)) throw Error('Invalid portable configuration.');
   c.dataDirectory = resolve(c.dataDirectory);
+  if(c.teamWorkspaceRoot!==undefined&&(typeof c.teamWorkspaceRoot!=='string'||!isAbsolute(c.teamWorkspaceRoot)||c.teamWorkspaceRoot.includes('\0')))throw Error('The hub team workspace root must be an absolute path.');
   if(c.externalSite!==undefined&&typeof c.externalSite!=='boolean')throw Error('Invalid external site supervision.');
   if(c.backendReleaseDirectory!==undefined&&(!isAbsolute(c.backendReleaseDirectory)||c.mode!=='both'||c.externalSite!==true))
     throw Error('An installed backend override requires an absolute release and separately supervised site.');

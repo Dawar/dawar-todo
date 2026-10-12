@@ -944,3 +944,27 @@ reconnects. Already admitted native Goal work may continue on that machine;
 this is not a remote kill or immediate offline Stop guarantee.
 Mac desktop, voice and private transfer remain separately gated. Physical Mac
 acceptance remains deferred at the owner's request.
+
+## Owner team management
+
+The hub owns the existing team catalog, membership, ordering and shared-memory
+records in `control.sqlite`. Teams can be managed while their agents are offline;
+these operations do not start native turns or modify Stop, Goals or queues.
+The owner-facing `teams.*` methods reuse the original validation, revision fences,
+operation IDs and atomic acceptance receipts. A repeated ID with changed input is
+rejected; a lost acknowledgement reads the original result. Only the owner may
+change membership. The authenticated bot tool may read its current team or save
+that team's memory at the observed revision. Revoked, foreign or changed bot/node
+placement is checked before returning an old result and before committing.
+
+Snapshots and team events project canonical membership independently of a node's
+older bot metadata. Bot details has a dedicated Team tab with assignment and
+Manage teams; the Teams button opens the manager. Controls remain unavailable
+until the installed hub advertises the implemented capability.
+
+`teamWorkspaceRoot` optionally names an absolute hub workspace root. A combined
+hub/agent installation reuses its configured agent workspace root by default;
+a standalone hub uses `workspaces` beside its control database. Existing team
+folder identities and files are retained. Remote agents receive a bounded,
+authenticated team profile rather than trying to open hub paths locally. The
+shared folder remains on the hub; this does not add remote filesystem sharing.

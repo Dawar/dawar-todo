@@ -119,7 +119,7 @@ export class HubRpc {
         if(current.node_id!==p.node_id||current.epoch!==p.epoch)continue;
         const b=s.bots?.find(b=>b.id===p.bot_id);if(!b)continue;
         const readAt=this.controls?.store.bot(p.bot_id)?.lastReadAt;
-        bots.push({...b,...(readAt&&readAt>b.lastReadAt?{lastReadAt:readAt}:{}),nodeId:p.node_id,placementEpoch:p.epoch,nodeOnline:!!this.connection(p),historyObservedAt:response.cache.observedAt});snapshots.push({p,s});
+        bots.push({...b,...(this.controls?.teams?.owner===owner?this.controls.store.teamPlacement(p.bot_id):{}),...(readAt&&readAt>b.lastReadAt?{lastReadAt:readAt}:{}),nodeId:p.node_id,placementEpoch:p.epoch,nodeOnline:!!this.connection(p),historyObservedAt:response.cache.observedAt});snapshots.push({p,s});
       }catch{/* Unavailable uncached nodes do not become fictitious ready bots. */}
     }};
     await Promise.all(Array.from({length:Math.min(4,placements.length)},worker));
@@ -133,6 +133,7 @@ export class HubRpc {
     // has implemented its consumer. Keep unfinished portable controls hidden.
     for(const key of ['taskRequests','backgroundRunLanes','scheduleDecisions','peerInbox','peerRootControls','peerBodyPaging','collaborationRooms','operatorCalls','operatorInputQuestions','secureInputs','secureResponseLifecycle','messageBursts','burstDiscard','burstControls','burstQueue','taskQueues','teams','botAdministration'])delete common[key];
     if(this.controls?.authority)for(const key of ['messageBursts','burstDiscard','burstControls','burstQueue'])common[key]=1;
+    if(this.controls?.authority&&this.controls?.teams?.owner===owner)common.teams=1;
     if(this.controls?.authority&&placements.length&&snapshots.length===placements.length&&placements.every(p=>this.connection(p)?.portableHello?.capabilities?.centralTaskRequests===true&&secureCapable(this.store.node(p.node_id),this.connection(p))))common.taskRequests=1;
     if(this.controls?.operator&&placements.length&&snapshots.length===placements.length&&placements.every(p=>operatorCapable(this.store,this.connections,p)))for(const key of ['operatorCalls','operatorInputQuestions'])common[key]=1;
     if(placements.length&&snapshots.length===placements.length&&placements.every(p=>secureCapable(this.store.node(p.node_id),this.connection(p))))
@@ -142,7 +143,7 @@ export class HubRpc {
     // advertisement so an upgraded node need not be re-enrolled.
     if(!placements.length||placements.some(p=>this.connection(p)?.portableHello?.capabilities?.autonomousGoals!==true))delete common.nativeGoals;
     const schedules=this.controls?placements.flatMap(p=>this.controls.store.list('schedule',p.bot_id)):[],runs=this.controls?placements.flatMap(p=>this.controls.store.list('run',p.bot_id)).sort((a,b)=>b.scheduledAt.localeCompare(a.scheduledAt)).slice(0,100):scoped('runs');
-    return {result:{...first,cursor,bots,workByBot:scoped('workByBot'),pending:scoped('pending'),secureInputs:scoped('secureInputs'),schedules,runs,activeScheduledTurns:scoped('activeScheduledTurns'),ready:snapshots.length===placements.length&&placements.every(p=>!!this.connection(p)),
+    return {result:{...first,...(this.controls?.teams?.owner===owner?{teams:this.controls.teams.catalog(owner)}:{}),cursor,bots,workByBot:scoped('workByBot'),pending:scoped('pending'),secureInputs:scoped('secureInputs'),schedules,runs,activeScheduledTurns:scoped('activeScheduledTurns'),ready:snapshots.length===placements.length&&placements.every(p=>!!this.connection(p)),
       capabilities:{...common,portableAgents:1}},cache:{observedAt:Date.now(),stale:snapshots.length<placements.length}};
   }
   close(){for(const r of this.reads.values()){clearTimeout(r.timer);r.reject(Error('Hub connection ended.'));}for(const values of this.writes.values())for(const w of values){clearTimeout(w.timer);w.reject(Object.assign(Error('Hub connection ended; retain original operation.'),{outcome:'uncertain'}));}this.reads.clear();this.writes.clear();}
