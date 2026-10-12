@@ -128,6 +128,23 @@ Show the navigation rail/gutter only when loaded marks or earlier paging exist.
 
 ### Freshness and perceived latency
 
+Conversation read state belongs to the owner, bot and foreground thread. Record
+only observed latest content while the conversation is visible and at its bottom.
+Status events, full snapshots and older tabs never move that watermark backwards.
+New output after it remains unread and brings the bot back above its team.
+Portable clients share these watermarks through the authenticated application
+API and existing fenced SQLite writer. Opening, focus, reconnect and committed
+events reconcile them without a recurring read interval. Local reading still
+works while offline or when device storage is unavailable.
+
+Unsent normal-composer drafts share text, quotes and ready registered file
+references across devices. Save locally before syncing; an ambiguous sync result
+keeps its original ID. A conflict retains both drafts for recovery, and a late
+sync result cannot restore already submitted text. Unfinished file bytes stay on
+their device. Queue edits and original send journals have separate lifecycles.
+Draft and read settings use the same scoped invalidation helper; neither path
+starts a native turn.
+
 Start one bounded current-history read as soon as authenticated transport is
 ready. Cache hydration and legacy import run alongside it. A slow cache must not
 delay completed output; a late cache read must not replace newer content or
