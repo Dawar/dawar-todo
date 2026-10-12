@@ -5,6 +5,7 @@ import { ObjectStorage } from './object-storage.mjs';
 import { images } from './images.mjs';
 import { HubWriteAuthority,hubActivation } from './hub-authority.mjs';
 import {operatorClient} from './operator-client.mjs';
+import {createBrowserSession} from './browser-session.mjs';
 
 let bindings;
 function environment() {
@@ -19,7 +20,7 @@ function environment() {
       BOTS_OWNER_EMAIL:c.owner.key,BOTS_OWNER_USER_ID:c.owner.userId,TODO_PUBLIC_URL:c.publicOrigin,BOTS_PUBLIC_ORIGIN:c.publicOrigin,
       BOTS_RELAY_URL:`${c.publicOrigin.replace(/^https:/,'wss:')}/connect`,BOTS_MACHINE_ID:c.applicationEnvironment?.BOTS_MACHINE_ID??'dawar-vm',BOTS_TICKET_SECRET:c.gatewaySecret,
       TASK_REQUEST_SECRET:c.applicationEnvironment?.TASK_REQUEST_SECRET??c.applicationEnvironment?.BOTS_TICKET_SECRET??c.gatewaySecret,
-      DAWAR_OPERATOR_RPC:operatorClient(c) };
+      DAWAR_OPERATOR_RPC:operatorClient(c),DAWAR_BROWSER_SESSION:createBrowserSession(c,writer) };
   }
   return bindings;
 }

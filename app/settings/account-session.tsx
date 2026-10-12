@@ -5,6 +5,7 @@ import { Button } from "../../components/ui/button";
 import { Card } from "../../components/ui/card";
 import { LogOut } from "lucide-react";
 import { signOutPortableSession } from "../../lib/portable-sign-out";
+import {checkPortableSession,currentPortableSession,SESSION_EVENT} from '../../lib/portable-session';
 
 export function AccountSession() {
   const portable = process.env.NEXT_PUBLIC_DAWAR_PORTABLE === "1";
@@ -14,15 +15,9 @@ export function AccountSession() {
   const inFlight = useRef(false);
   useEffect(() => {
     if (!portable) return;
-    const controller = new AbortController();
-    const timeout = window.setTimeout(() => controller.abort(), 15_000);
-    void fetch("/auth/session", { cache: "no-store", credentials: "same-origin", redirect: "error", signal: controller.signal })
-      .then(async (response) => {
-        if (!response.ok) return;
-        const value = await response.json() as { owner?: string };
-        if (!controller.signal.aborted && typeof value.owner === "string") setOwner(value.owner);
-      }).catch(() => undefined).finally(() => window.clearTimeout(timeout));
-    return () => { controller.abort(); window.clearTimeout(timeout); };
+    const update=()=>setOwner(currentPortableSession().owner??'');
+    window.addEventListener(SESSION_EVENT,update);update();void checkPortableSession();
+    return ()=>window.removeEventListener(SESSION_EVENT,update);
   }, [portable]);
   if (!portable) return null;
   const signOut = async () => {
@@ -42,6 +37,7 @@ export function AccountSession() {
       <Button type="button" variant="outline" onClick={() => void signOut()} disabled={busy} aria-busy={busy} className="shrink-0">
         <LogOut size={18} aria-hidden="true" />{busy ? "Signing out…" : "Sign out"}
       </Button>
+      <Button variant="ghost" asChild><a href="/auth/login?return_to=%2Fsettings">Sign in</a></Button>
     </div>
     {error && <p role="alert" className="mt-3 text-sm text-destructive">{error}</p>}
   </Card>;

@@ -1,4 +1,5 @@
 import { portableHeaders } from "../../lib/portable-csrf";
+import {recheckPortableSession} from '../../lib/portable-session';
 import { readBotHistory, queueBotHistory, type CachedBotHistory } from "./history-cache.ts";
 import { cloudStatus, cloudUpload, cloudDownload, cloudRequest, fileSha256, CloudStorageError } from "./cloud-storage";
 import { botFailureOutcome } from "../../lib/bots-response.ts";
@@ -284,8 +285,10 @@ export class BotsClient {
         signal: controller.signal,
       });
       controller.signal.throwIfAborted();
-      if ((response.status === 401 || response.status === 403) && epoch === this.connectionEpoch)
+      if ((response.status === 401 || response.status === 403) && epoch === this.connectionEpoch) {
+        recheckPortableSession();
         this.clearOwnerCache();
+      }
       const body = (await response.json().catch(() => ({}))) as Session & { error?: string };
       controller.signal.throwIfAborted();
       if (!response.ok) {

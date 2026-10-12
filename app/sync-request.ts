@@ -1,5 +1,6 @@
 "use client";
 import { headersWithDeviceId } from "./device-id";
+import {recheckPortableSession,portableSessionActivity} from '../lib/portable-session';
 
 export type RequestOptions = RequestInit & { timeoutMs?: number };
 
@@ -30,15 +31,17 @@ export function request<T>(path: string, options?: RequestOptions): Promise<T> {
       if (response.ok && !jsonResponse) {
         const error = new Error("Please sign in again to continue syncing.") as Error & { status?: number };
         error.status = response.redirected ? 401 : 502;
+        if(error.status===401)recheckPortableSession();
         throw error;
       }
       if (!response.ok) {
+        if(response.status===401||response.status===403)recheckPortableSession();
         const error = new Error(payload.error || "Something went wrong.") as Error & { status?: number };
         error.status = response.status;
         Object.assign(error, { code: payload.code, phase: payload.phase });
         throw error;
       }
-      return payload;
+      portableSessionActivity();return payload;
     })
     .catch((error) => {
       if (!timedOut) {
