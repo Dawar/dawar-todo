@@ -73,6 +73,9 @@ retain the original opener explicitly; the intermediate menu item disappears.
 Nested dismissal closes the inner dialog first. Destructive confirmation focuses
 Cancel initially. Outside dismissal is prevented where a private or unsaved
 workflow requires it.
+Task dialogs lock the submitted fields and visibly disable close controls while
+their save is pending. Escape and outside clicks follow that same state. A failed
+save restores the controls and retains the original entered values.
 
 Bot Details uses this foundation as a full-height right drawer. Its tabs retain
 local React Activity state and arrow/Home/End navigation. Task detail's existing

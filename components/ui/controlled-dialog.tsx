@@ -11,8 +11,14 @@ export function ControlledDialog({ title, description, onClose, returnFocus, chi
   returnFocus?: HTMLElement | null;
 }) {
   const [opener] = useState(() => typeof document === "undefined" ? null : document.activeElement);
-  return <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
-    <DialogContent {...props} {...(!description ? { "aria-describedby": undefined } : {})} onCloseAutoFocus={(event) => {
+  return <Dialog open onOpenChange={(open) => { if (!open && !props.closeDisabled) onClose(); }}>
+    <DialogContent {...props} {...(!description ? { "aria-describedby": undefined } : {})} onEscapeKeyDown={(event) => {
+      props.onEscapeKeyDown?.(event);
+      if (props.closeDisabled) event.preventDefault();
+    }} onInteractOutside={(event) => {
+      props.onInteractOutside?.(event);
+      if (props.closeDisabled) event.preventDefault();
+    }} onCloseAutoFocus={(event) => {
       props.onCloseAutoFocus?.(event);
       if (event.defaultPrevented) return;
       event.preventDefault();
