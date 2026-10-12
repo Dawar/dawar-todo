@@ -5,6 +5,8 @@ import { botsClient } from "./client";
 import { Button } from "@/components/ui/button";
 import { ReturnedArtifact } from "./returned-artifact";
 import { ReturnedVisualization } from "./returned-visualization";
+import {normalizeFileCitations} from "../../lib/file-citation.mjs";
+import {FileCitation} from "./file-citation";
 import { remarkVisualizations } from "./visualization-markdown";
 import { MarkdownTable } from "./markdown-table";
 import { MarkdownCodeBlock } from "../markdown-code-block";
@@ -18,7 +20,7 @@ import './native-work-plan.css';
 import ReactMarkdown, { defaultUrlTransform, type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
-const messageSchema = { ...defaultSchema, protocols: { ...defaultSchema.protocols, href: [...(defaultSchema.protocols?.href ?? []), "bot-artifact", "bot-visualization"] } };
+const messageSchema = { ...defaultSchema, protocols: { ...defaultSchema.protocols, href: [...(defaultSchema.protocols?.href ?? []), "bot-artifact", "bot-visualization", "bot-file-citation"] } };
 import {
   Terminal,
   FileDiff,
@@ -34,6 +36,7 @@ const renderMarkdownTable: Components["table"] = ({ children }) => <MarkdownTabl
 const MarkdownFiles = createContext<{ botId: string; attachments: BotAttachment[] }>({ botId: "", attachments: [] });
 const MarkdownLink: Components["a"] = ({ href, children }) => {
   const { botId, attachments } = useContext(MarkdownFiles);
+  if (href?.startsWith("bot-file-citation:")) return <FileCitation botId={botId} reference={href.slice(18)} attachments={attachments}/>;
   if (href?.startsWith("bot-visualization:")) return <ReturnedVisualization botId={botId} reference={href.slice(18)} attachments={attachments} />;
   if (href?.startsWith("bot-artifact:")) return <ReturnedArtifact botId={botId} id={href.slice(13)} attachment={attachments.find(file => file.id === href.slice(13))}>{children}</ReturnedArtifact>;
   return <a href={href} target="_blank" rel="noreferrer">{children}</a>;
@@ -44,25 +47,26 @@ function MessageMarkdown({ text, botId, attachments }: { text: string; botId: st
   const files = useMemo(() => ({ botId, attachments }), [botId, attachments]);
   return <MarkdownFiles.Provider value={files}><ReactMarkdown remarkPlugins={[remarkGfm, remarkVisualizations]}
     rehypePlugins={[[rehypeSanitize, messageSchema]]}
-    urlTransform={url => url.startsWith('bot-artifact:') || url.startsWith('bot-visualization:') ? url : defaultUrlTransform(url)}
+    urlTransform={url => url.startsWith('bot-artifact:') || url.startsWith('bot-visualization:') || url.startsWith('bot-file-citation:') ? url : defaultUrlTransform(url)}
     components={markdownComponents}>{text}</ReactMarkdown></MarkdownFiles.Provider>;
 }
 export function WorkPlanMessage({ plan, botId, attachments, turnStatus }: { plan: NativeWorkPlan; botId: string; attachments: BotAttachment[]; turnStatus?: string }) {
   const markdown = (text: string) => <MessageMarkdown text={text} botId={botId} attachments={attachments}/>;
   return <section className="bots-native-work-plan" aria-label="Native Work plan">
-    {plan.explanation?.trim() && <div className="bots-message-markdown"><TextPages text={plan.explanation} render={markdown}/></div>}
+    {plan.explanation?.trim() && <div className="bots-message-markdown"><TextPages text={normalizeFileCitations(plan.explanation)} render={markdown}/></div>}
     {!!plan.steps.length && <div role="list" className="bots-work-plan-steps"><ItemPages items={plan.steps} size={8} render={(step, index) => <div role="listitem" key={index}>
       <span className="bots-work-plan-status" data-status={step.status}>{step.status === 'completed' ? 'Completed' : step.status === 'inProgress' ? 'In progress' : 'Pending'}</span>
-      <div className="bots-message-markdown"><TextPages text={step.step} render={markdown}/></div>
+      <div className="bots-message-markdown"><TextPages text={normalizeFileCitations(step.step)} render={markdown}/></div>
     </div>}/></div>}
     {!plan.complete && <p className="bots-system-note">Partial plan · {plan.steps.length} of {plan.totalSteps} steps shown.</p>}
     {turnStatus && turnStatus !== 'inProgress' && <p className="bots-system-note">Turn {turnStatus} · last recorded plan.</p>}
   </section>;
 }
 
-function ProposedPlanText({ text, partial, nativePlan = false, render }: {
+function ProposedPlanText({ text: rawText, partial, nativePlan = false, render }: {
   text: string; partial: boolean; nativePlan?: boolean; render: (text: string) => ReactNode;
 }) {
+  const text=useMemo(()=>normalizeFileCitations(rawText),[rawText]);
   const parts = useMemo(() => proposedPlanParts(text, partial), [text, partial]);
   return <TextPages text={text} render={(page, offset) => parts.flatMap(part => {
     const start = Math.max(part.start, offset), end = Math.min(part.end, offset + page.length);
@@ -93,7 +97,7 @@ function BotMessage({
   function markdownPage(text: string) {
     return <MessageMarkdown text={text} botId={botId} attachments={attachments}/>;
   }
-  function markdown(value: string) { return <TextPages text={value} render={markdownPage} />; }
+  function markdown(value: string) { return <TextPages text={normalizeFileCitations(value)} render={markdownPage} />; }
   // Worker callbacks are internal supervision, not messages authored by Dawar.
   if (
     item.type === "userMessage" &&

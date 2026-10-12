@@ -1,0 +1,8 @@
+.bots-message-markdown .bots-file-citation{display:inline-flex;align-items:center;gap:10px;max-width:100%;padding:10px 12px;margin:4px 0;vertical-align:middle;border:1px solid var(--border);border-radius:12px;background:var(--card);color:var(--foreground);text-decoration:none;font-size:14px;line-height:1.35}
+.bots-file-citation>svg{flex-shrink:0;color:var(--primary)}
+.bots-file-citation>span{display:flex;flex-direction:column;flex:1 1 auto;min-width:0;gap:2px}
+.bots-file-citation strong{font-weight:600;max-width:30ch;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.bots-file-citation small{font-size:12px;color:var(--muted-foreground);overflow-wrap:anywhere}
+.bots-file-citation:hover:not(.is-unavailable){background:var(--accent);border-color:var(--ring)}
+.bots-file-citation:focus-visible{outline:2px solid var(--ring);outline-offset:3px}
+.bots-file-citation.is-unavailable{color:var(--muted-foreground)}

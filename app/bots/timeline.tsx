@@ -26,6 +26,7 @@ import { LazyDetails } from "./lazy-details";
 import { useFeedScroll } from "./use-feed-scroll";
 import { humanMessageTicks, type HumanMessageTick } from "./human-message-ticks";
 import { MessageTickRail } from "./message-tick-rail";
+import {fileCitationReferences} from "../../lib/file-citation.mjs";
 import { ReturnedArtifacts } from "./returned-artifact";
 import type { ActivityTarget } from "./activity-target";
 import { useBurstConversation, BurstControls, BurstBubbles, canonicalBurst } from "./burst-composer";
@@ -274,8 +275,8 @@ function BotConversationFeed({ owner, bot, online, children, onOpenCall, onReply
     return () => { alive = false; };
   }, [groups, state.entries, timeline]);
   const linkedArtifacts = useMemo(() => new Set(state.entries.slice(first, last).flatMap((entry) =>
-    entry.item?.type === "agentMessage" ? [...entry.item.text.matchAll(/\]\(<?bot-artifact:([^\s)>]+)/g)].map((match) => match[1]) : [],
-  )), [state.entries, first, last]);
+    entry.item?.type === "agentMessage" ? [...[...entry.item.text.matchAll(/\]\(<?bot-artifact:([^\s)>]+)/g)].map((match) => match[1]), ...fileCitationReferences(entry.item.text).flatMap(ref => { const matches=state.attachments.filter(file=>file.botId===bot.id&&file.ready&&(file.artifact||file.direction==="output")&&(file.path===ref.path||file.visualizationReferences?.includes(ref.path))); return matches.length===1?[matches[0].id]:[]; })] : [],
+  )), [state.entries, state.attachments, bot.id, first, last]);
   const download = useCallback((id: string) => {
     setDownloadError("");
     void botsClient.download(bot.id, id).then(({ blob, name }) => {

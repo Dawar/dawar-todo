@@ -1,6 +1,7 @@
 "use client";
-import { useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { ChevronRight, ChevronLeft, ChevronsLeft, ChevronsRight } from "lucide-react";
+import {fileCitationPages} from "../../lib/file-citation.mjs";
 import { Button } from "@/components/ui/button";
 
 /** A closed disclosure does not mount markdown, images, tools, or their effects. */
@@ -29,9 +30,9 @@ function PageControls({ label, summary, page, total, onChange, first = true }: {
 }
 
 export function TextPages({ text, render }: { text: string; render: (text: string, offset: number) => ReactNode }) {
-  const [page, setPage] = useState(0), size = 16384, total = Math.max(1, Math.ceil(text.length / size));
+  const [page, setPage] = useState(0), ranges=useMemo(()=>fileCitationPages(text),[text]), total=ranges.length;
   const current = Math.min(page, total - 1);
-  return <>{total > 1 && <PageControls label="Full message pages" summary={`Part ${current + 1} of ${total}`} page={current} total={total} onChange={setPage}/>}{render(text.slice(current * size, (current + 1) * size), current * size)}</>;
+  return <>{total > 1 && <PageControls label="Full message pages" summary={`Part ${current + 1} of ${total}`} page={current} total={total} onChange={setPage}/>}{render(text.slice(ranges[current][0], ranges[current][1]), ranges[current][0])}</>;
 }
 
 export function ItemPages<T>({ items, render, size = 10 }: { items: T[]; render: (item: T, index: number) => ReactNode; size?: number }) {
