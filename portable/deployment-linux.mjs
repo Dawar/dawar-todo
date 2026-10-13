@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createHash } from 'node:crypto';
 import { readFile, readlink, chmod, mkdir, lstat } from 'node:fs/promises';
+import {existsSync} from 'node:fs';
 import { join, isAbsolute, resolve, relative,dirname } from 'node:path';
 import { request } from 'node:http';
 import { DatabaseSync, backup } from 'node:sqlite';
@@ -21,6 +22,7 @@ export function linuxDeployment(spec) {
      !/^[a-f0-9]{40}$/.test(spec.old?.source??'')||!Number.isSafeInteger(spec.old?.pid)||!spec.old?.start||!spec.old?.invocationId||
      !Array.isArray(spec.databases)||!Array.isArray(spec.files)||!isAbsolute(spec.localWriter?.path??'')||!spec.localWriter.expected||
      spec.controllerDirectory!==join(dirname(spec.localWriter.path),'deployments',spec.unitId)||!isAbsolute(spec.currentHubConfigPath??''))throw failure();
+  if(spec.site&&(!allowedUnit.test(spec.site.unitId??'')||!Number.isSafeInteger(spec.site.oldPid)||!spec.site.oldStart||!spec.site.oldInvocationId))throw failure();
   const systemd=async(...args)=>(await exec('systemctl',['--user',...args],{timeout:10000,maxBuffer:65536})).stdout;
   const unit=async()=>Object.fromEntries((await systemd('show',spec.unitId,'--property=MainPID,InvocationID,ActiveState,SubState,ControlGroup,Job')).trim().split('\n').map(line=>{const i=line.indexOf('=');return [line.slice(0,i),line.slice(i+1)];}));
   const processIdentity=async pid=>{try{const text=await readFile(`/proc/${pid}/stat`,'utf8');return text.slice(text.lastIndexOf(')')+2).split(' ')[19];}catch(error){if(error.code==='ENOENT')return null;throw failure();}};
@@ -28,6 +30,7 @@ export function linuxDeployment(spec) {
   const original=async()=>{
     const u=await unit();if(Number(u.MainPID)!==spec.old.pid||u.InvocationID!==spec.old.invocationId||await processIdentity(spec.old.pid)!==spec.old.start)throw failure();return u;
   };
+  const siteState=async()=>Object.fromEntries((await systemd('show',spec.site.unitId,'--property=MainPID,InvocationID,ActiveState,Job')).trim().split('\n').map(line=>{const i=line.indexOf('=');return [line.slice(0,i),line.slice(i+1)];}));
   const credential=async()=>{
     await original();const env=(await readFile(`/proc/${spec.old.pid}/environ`)).toString().split('\0');
     const value=env.find(v=>v.startsWith('BOTS_MACHINE_SECRET='))?.slice(20);
@@ -104,6 +107,7 @@ export function linuxDeployment(spec) {
       if(c.hub.source!==spec.old.source||join(c.dataDirectory,'control.sqlite')!==spec.localWriter.path||join(a.dataDirectory,'manager','manager.sock')!==spec.managerSocket)throw failure();
       // Service access and network are checked BEFORE a hold or cutover.
       await systemd('show-environment');await credential();
+      if(spec.site){const s=await siteState();if(Number(s.MainPID)!==spec.site.oldPid||s.InvocationID!==spec.site.oldInvocationId||await processIdentity(spec.site.oldPid)!==spec.site.oldStart)throw failure();}
       for(const f of spec.files){await exactFile(f.path,f.beforeSHA256);await exactFile(f.preparedPath,f.afterSHA256);}
       if(!Number.isInteger(spec.healthPort)||spec.healthPort<1024||spec.healthPort>65535)throw failure();
     },reconcile,
@@ -150,7 +154,7 @@ export function linuxDeployment(spec) {
       if(spec.old.controlGroup){try{if((await readFile(join('/sys/fs/cgroup',spec.old.controlGroup,'cgroup.procs'),'utf8')).trim())throw failure();}catch(e){if(e.code!=='ENOENT')throw e;}}
       return {oldExited:true,pid:spec.old.pid,start:spec.old.start};
     });},
-    async prepareStart(){
+    async prepareStart(_,row){
       if(await processIdentity(spec.old.pid)===spec.old.start)throw failure();await target();
       for(const f of spec.files){
         const current=hash(await readFile(f.path));if(current===f.afterSHA256)continue;
@@ -169,6 +173,19 @@ export function linuxDeployment(spec) {
         db.exec('COMMIT');
       }catch(e){if(db.isTransaction)db.exec('ROLLBACK');throw e;}finally{db.close();}
       await systemd('daemon-reload');
+      // The standalone site's in-memory application writer must consume the
+      // new source-bound authority, while the public front/connector stay up.
+      // Preserve its reviewed frontend directory/assets; refresh config once.
+      if(spec.site){
+        const intent=join(spec.receiptDirectory,'site-restart-intent.json');
+        if(!existsSync(intent)){
+          const s=await siteState();if(Number(s.MainPID)!==spec.site.oldPid||s.InvocationID!==spec.site.oldInvocationId||await processIdentity(spec.site.oldPid)!==spec.site.oldStart)throw failure();
+          savePrivate(intent,JSON.stringify({operationId:spec.operationId,unitId:spec.site.unitId,oldPid:spec.site.oldPid,oldStart:spec.site.oldStart,oldInvocationId:spec.site.oldInvocationId,at:new Date().toISOString()})+'\n');
+          await systemd('restart','--no-block',spec.site.unitId);
+        }
+        await wait(row,async()=>{const s=await siteState();return s.ActiveState==='active'&&!s.Job&&Number(s.MainPID)>0&&s.InvocationID!==spec.site.oldInvocationId&&await processIdentity(spec.site.oldPid)!==spec.site.oldStart?s:null;});
+        savePrivate(join(spec.receiptDirectory,'site-restart-result.json'),JSON.stringify({operationId:spec.operationId,source:spec.source,...await siteState(),frontendFilesUnchanged:true,at:new Date().toISOString()})+'\n');
+      }
     },
     async start(){const u=await unit();if(Number(u.MainPID)>0||u.Job)throw failure();await systemd('start','--no-block',spec.unitId);},
     async waitHealthy(_,row){return wait(row,async()=>{const r=await reconcile();if(r.newHealthy)return r;if(r.foreignWriter)throw failure();return null;});},
