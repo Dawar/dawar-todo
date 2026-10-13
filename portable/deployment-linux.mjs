@@ -127,6 +127,7 @@ export function linuxDeployment(spec) {
       return {verified:true,databases:results,configurationFiles:spec.files.length,restoreDatabasesOnRollback:false};
     },
     async seal(_,row){
+      await target();for(const file of spec.files)await exactFile(file.path,file.beforeSHA256);
       const final=await maintenance('observe',row);if(!final.safe)throw failure();
       if(final.phase!=='claimed')throw failure();return {safe:true,installedSealClaim:true,native:final,retainedContract:new RetainedRecords(spec.retainedRecordsPath).fingerprint};
     },
