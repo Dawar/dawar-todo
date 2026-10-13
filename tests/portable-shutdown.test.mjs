@@ -19,6 +19,7 @@ function fixture(t) {
     if(method==='thread/read')return {thread:{id:params.threadId,status:{type:native.status}}};
     if(method==='thread/goal/get')return {goal:native.goal};
     if(method==='thread/queue/list')return {data:native.queue,nextCursor:null};
+    if(method==='thread/backgroundTerminals/list')return {data:[],nextCursor:null};
     throw Error('Unexpected native mutation');
   }}};
   const terminalProof={snapshot:()=>({fingerprint:'unchanged-originals',input:{accepted:[{}],questions:[{}]}}),
@@ -36,7 +37,7 @@ test('delayed claimed shutdown refreshes exact retained proof and all native idl
   f.advance(6000);f.invalidate();assert.equal(f.maintenance.counts().pendingInput,1);
   const reads=f.reads();f.native.calls.length=0;
   assert.equal((await f.maintenance.prepareShutdown()).safe,true);assert.ok(f.reads()>reads);
-  assert.deepEqual(f.native.calls,['thread/loaded/list','thread/read','thread/goal/get','thread/queue/list']);
+  assert.deepEqual(f.native.calls,['thread/loaded/list','thread/read','thread/goal/get','thread/queue/list','thread/backgroundTerminals/list']);
   assert.deepEqual(f.store.get('runtimeMaintenance',row.id),row);
   assert.equal(JSON.stringify([f.store.list('pending'),f.store.list('primaryInbox')]),originals);
 });

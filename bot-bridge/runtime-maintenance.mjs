@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { passiveLegacyManagerRejections } from './legacy-manager-rejections.mjs';
 import { MaintenanceTerminalProof } from './maintenance-terminal-proof.mjs';
+import { inspectNativeIdle } from './native-idle.mjs';
 
 const processStart = pid => { try { const s = readFileSync(`/proc/${pid}/stat`, 'utf8'); return s.slice(s.lastIndexOf(')') + 2).split(' ')[19]; } catch { return null; } };
 const processAlive = identity => Boolean(identity?.start && processStart(identity.pid) === identity.start);
@@ -93,12 +94,15 @@ export class RuntimeMaintenance {
       admissions: this.admissions, requests: this.requests, nativeRpc: this.runtime.codex.pending?.size ?? 0,
       localActive: bots.filter(b => b.activeTurnId || b.status === 'running').length,
       auxiliaryActive: count("SELECT count(*) n FROM records WHERE kind IN ('runLane','managerWorker','collaborationContext') AND (json_extract(json,'$.activeTurnId') IS NOT NULL OR json_extract(json,'$.status')='running')"),
+      externalWriters: bots.filter(b=>{const activity=this.store.get('botActivity',b.id);return activity?.unresolved===true&&activity.recoveryKind==='external-writer';}).length,
+      nativeRecoveries: count("SELECT count(*) n FROM records WHERE kind='nativeThreadRecovery' AND json_extract(json,'$.phase') IN ('dispatching','uncertain')"),
       acceptedOrUnknown: count("SELECT count(*) n FROM records WHERE (kind='primaryInbox' AND json_extract(json,'$.state') IN ('dispatching','uncertain','accepted') AND json_extract(json,'$.terminalStatus') IS NULL) OR (kind IN ('messageBurst','burstBatch') AND json_extract(json,'$.state') IN ('dispatching','uncertain')) OR (kind='promptQueue' AND json_extract(json,'$.state') IN ('dispatching','uncertain','native-queued')) OR (kind IN ('runIntake','answerExecution','managerOperation','managerExecution') AND json_extract(json,'$.state') IN ('dispatching','uncertain')) OR (kind='managerTask' AND json_extract(json,'$.state') IN ('starting','running','uncertain','provisioning')) OR (kind='runLane' AND json_extract(json,'$.provisioning') IN ('dispatching','uncertain'))") + count("SELECT count(*) n FROM operations WHERE status IN ('dispatching','uncertain')") - passiveLegacyManagerRejections(this.store).length,
       collaborationUnknown: count("SELECT count(*) n FROM records WHERE (kind='collaborationContext' AND (json_extract(json,'$.status')='unknown' OR json_extract(json,'$.provisioning') IN ('dispatching','uncertain') OR json_extract(json,'$.releaseState') IN ('dispatching','uncertain'))) OR (kind='collaborationDelivery' AND json_extract(json,'$.state') IN ('dispatching','uncertain','accepted') AND json_extract(json,'$.terminalStatus') IS NULL) OR (kind='collaborationResource' AND json_extract(json,'$.state')<>'released') OR (kind IN ('collaborationEffect','collaborationStopGoal') AND json_extract(json,'$.state') IN ('dispatching','uncertain')) OR (kind='collaborationGoal' AND json_extract(json,'$.goal.status')='active')"),
       pendingInput: count("SELECT count(*) n FROM records WHERE kind IN ('pending','managerRequest','runPending','collaborationPending')"),
       activeGoals: count("SELECT count(*) n FROM records WHERE kind='nativeGoal' AND json_extract(json,'$.goal.status')='active'"),
       calls: count("SELECT count(*) n FROM records WHERE kind='operatorCall' AND json_extract(json,'$.endedAt') IS NULL"),
       desktops: this.runtime.desktops?.sessions.size ?? 0,
+      desktopToolRequests: this.runtime.desktops?.pendingCalls?.() ?? 0,
       volatileSecure: this.runtime.secure?.live.size ?? 0,
       nativeAuthFlow: Number(Boolean(this.runtime.authRecovery?.active)),
       taskRequestWork: Number(Boolean(this.runtime.taskRequests?.busy)),
@@ -172,31 +176,11 @@ export class RuntimeMaintenance {
       const left = deadline - this.monotonic(); if (left <= 0) throw Error('Native maintenance observation exceeded its deadline.');
       return this.runtime.codex.call(method, params, Math.min(left, 5000));
     };
-    let cursor = null; const seen = new Set(), threads = new Set();
-    do {
-      if (seen.has(cursor) || seen.size >= 10 || this.monotonic() >= deadline) throw Error('Native maintenance observation exceeded its bound.');
-      seen.add(cursor);
-      const page = await read('thread/loaded/list', { cursor, limit: 100 });
-      if (!Array.isArray(page?.data) || !Object.hasOwn(page, 'nextCursor') || page.data.some(id => typeof id !== 'string') || page.nextCursor !== null && typeof page.nextCursor !== 'string') throw Error('Incomplete loaded-thread metadata.');
-      page.data.forEach(id => threads.add(id)); cursor = page.nextCursor;
-    } while (cursor !== null);
-    if (threads.size > 100) throw Error('Native maintenance observation exceeds 100 loaded sessions.');
-    let activeGoals = 0, nativeQueues = 0, active = 0;
-    for (const threadId of threads) {
-      if (this.monotonic() >= deadline) throw Error('Native maintenance observation exceeded its deadline.');
-      const { thread } = await read('thread/read', { threadId, includeTurns: false });
-      if (thread?.id !== threadId || !['idle','notLoaded'].includes(thread.status?.type)) { active++; continue; }
-      const goal = await read('thread/goal/get', { threadId });
-      if (!goal || !Object.hasOwn(goal, 'goal') || goal.goal && (goal.goal.threadId !== threadId || !['active','paused','blocked','usageLimited','budgetLimited','complete'].includes(goal.goal.status))) throw Error('Unknown native Goal state.');
-      if (goal.goal?.status === 'active') activeGoals++;
-      const page = await read('thread/queue/list', { threadId, limit: 1, cursor: null });
-      if (!Array.isArray(page?.data) || !Object.hasOwn(page,'nextCursor') || page.nextCursor !== null && typeof page.nextCursor !== 'string') throw Error('Unknown accepted native queue state.');
-      if (page.data.length || page.nextCursor !== null) nativeQueues++;
-    }
+    const native = await inspectNativeIdle(this.runtime, read);
     await this.qualifyPassive(deadline, phase);
-    const after = this.counts(), safe = this.monotonic() <= deadline && !active && !activeGoals && !nativeQueues && generation === this.generation && collaborationChange===this.store.meta('collaboration-change') && !Object.values(after).some(n => n !== 0);
+    const after = this.counts(), safe = this.monotonic() <= deadline && native.safe && generation === this.generation && collaborationChange===this.store.meta('collaboration-change') && !Object.values(after).some(n => n !== 0);
     if (safe && this.current?.id === row.id && this.current.phase === 'draining') this.proof = { generation, collaborationChange, at: this.clock(), monotonicAt: this.monotonic(), operationId: row.id };
-    return { safe, counts: after, native: { loaded: threads.size, active, activeGoals, nativeQueues }, reason: safe ? null : 'Native work/Goal/queue or concurrent activity prevents restart.' };
+    return { safe, counts: after, native: { loaded: native.loaded, active: native.active, activeGoals: native.activeGoals, nativeQueues: native.nativeQueues, backgroundTerminals: native.backgroundTerminals }, reason: safe ? null : 'Native work/Goal/queue or concurrent activity prevents restart.' };
   }
   async prepareShutdown() {
     // Service-manager handoff can outlive the five-second observation, or
@@ -225,15 +209,22 @@ export class RuntimeMaintenance {
       return this.public(this.store.get('runtimeMaintenance', row.id));
     }
     if (p.action === 'observe') {
-      if (this.current?.id !== row.id || row.phase !== 'draining') throw Error('Maintenance is not draining.');
-      return { ...this.public(row), ...await this.observe(row) };
+      if (this.current?.id !== row.id || !['draining','claimed'].includes(row.phase)) throw Error('Maintenance is not draining or claimed.');
+      return { ...this.public(row), ...await this.observe(row,row.phase) };
+    }
+    if (p.action === 'release-before-stop') {
+      if(this.current?.id!==row.id||row.phase!=='claimed'||this.runtime.shutdownStarted)throw Error('An original pre-stop claim cannot be released.');
+      const proof=await this.observe(row,'claimed');
+      if(!proof.safe||this.current!==row||this.runtime.shutdownStarted)throw Error('Pre-stop release requires current idle ownership.');
+      this.end('cancelled','Original controller released its claim before shutdown began.');
+      return this.public(this.store.get('runtimeMaintenance',row.id));
     }
     if (p.action === 'seal' || p.action === 'claim') {
       if (Math.min(row.expiresAtMs - this.clock(), this.currentDeadline - this.monotonic()) < 45_000) throw Error('Maintenance deadline leaves no safe restart handoff window.');
       if (this.current?.id !== row.id || row.phase !== (p.action === 'seal' ? 'draining' : 'sealed') ||
           !this.proof || this.proof.operationId !== row.id || this.proof.generation !== this.generation || this.proof.collaborationChange!==this.store.meta('collaboration-change') || this.monotonic() - this.proof.monotonicAt > 5000 || Object.values(this.counts()).some(n => n !== 0)) throw Error('Fresh drained state is not proven; no restart authorized.');
       this.source(row.commit, row.version);
-      const next = { ...row, phase: p.action === 'seal' ? 'sealed' : 'claimed' };
+      const next = { ...row, phase: p.action === 'seal' ? 'sealed' : 'claimed', ...(p.action==='claim'?{claimedAt:stamp(this.clock())}:{}) };
       this.store.put('runtimeMaintenance', next); this.current = next;
       return this.public(next);
     }

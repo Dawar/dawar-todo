@@ -3,6 +3,7 @@ import { spawn, execFileSync } from "node:child_process";
 import { createInterface } from "node:readline";
 import { CODEX_VERSION } from "./codex-version.mjs";
 import { parseAccountUsageMessage } from "./account-usage-decoder.mjs";
+import { closeIdleChild } from './idle-child-close.mjs';
 
 export { CODEX_VERSION } from "./codex-version.mjs";
 export class Codex extends EventEmitter {
@@ -123,5 +124,8 @@ export class Codex extends EventEmitter {
   }
   close() {
     this.process?.kill("SIGTERM");
+  }
+  closeForShutdown() {
+    return this.shutdownPromise ??= closeIdleChild(this.process, { pending: this.pending.size });
   }
 }

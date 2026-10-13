@@ -1,4 +1,5 @@
 import { usableTurn } from "./native-turn.mjs";
+import { nativeRecoveryKind } from '../lib/native-recovery.ts';
 import { captureActivity, activityUnchanged, activityUnresolved, requireCurrentActivity,
   projectCurrentActive, projectCurrentIdle } from "./turn-state.mjs";
 
@@ -77,9 +78,12 @@ export async function reconcileCurrentActivity(runtime, botId) {
     const state = runtime.store.get("botActivity", botId);
     if (!state?.unresolved) return true;
     const attempts = (state.attempts ?? 0) + 1;
+    const checkedAt = new Date().toISOString();
     runtime.store.put("botActivity", { ...state, attempts, reconciliationError: error.message,
+      recoveryKind: nativeRecoveryKind(error), recoveryCheckedAt: checkedAt,
       reconcileAfter: new Date(Date.now() + (runtime.currentActivityRetryDelay?.(attempts) ??
         (attempts === 1 ? 5000 : attempts === 2 ? 15000 : 30000))).toISOString() });
+    runtime.primary?.publish(botId);
     return false;
   }
 }

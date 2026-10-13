@@ -1,5 +1,7 @@
 "use client";
 import { CodexAuthRecovery } from "./codex-auth-recovery";
+import {ExecutionAccess} from './execution-access';
+import type {BotAdmissionWork} from '../../lib/bot-work-view';
 import { ControlledDialog } from "@/components/ui/controlled-dialog";
 import { CreateBotDialog } from "./create-bot-dialog";
 import { Button } from "@/components/ui/button";
@@ -42,7 +44,7 @@ import { BotAvatar as Avatar } from "./bot-avatar";
 import { BotAdminApprovals } from "./bot-admin-approvals";
 import { PersonalitySettings } from "./personality-settings";
 import { ActiveTurnElapsed } from "./active-turn-elapsed";
-import { WorkOverview, AutomaticInbox, workLabel } from "./work-overview";
+import { WorkOverview, AutomaticInbox, NativeWriterRecovery, workLabel } from "./work-overview";
 import { GoalIndicator, NativeGoalPanel } from "./native-goal-panel";
 import { finishTodoForward } from "../todo-forward";
 import { SiteHeader } from "../site-header";
@@ -156,7 +158,7 @@ export function BotsWorkspace() {
     bot = bots.find((b) => b.id === selected),
     pending = snapshot?.pending.filter((p) => p.botId === selected && !(lanes && p.runId && p.laneId && p.threadId && !(snapshot?.capabilities?.singleThreadExecution === 1 && bot?.executionMode === "single-thread" && p.threadId === bot.threadId))) ?? [];
   const single = snapshot?.capabilities?.singleThreadExecution === 1 && bot?.executionMode === "single-thread";
-  const work = single ? snapshot?.workByBot?.find(value => value.botId === selected) : undefined;
+  const work:BotAdmissionWork|undefined = single ? snapshot?.workByBot?.find(value => value.botId === selected) : undefined;
   const queueListsSupported = snapshot?.capabilities?.queueLists === 1;
   const queueLists = useQueueLists(owner, selected, online, queueListsSupported);
   const burstSupported = snapshot?.capabilities?.messageBursts === 1;
@@ -543,7 +545,9 @@ export function BotsWorkspace() {
               </Button>
             </div>
           )}
+          {bot && <NativeWriterRecovery bot={bot} work={work} online={online} />}
           {bot && <CodexAuthRecovery key={JSON.stringify([owner, bot.id, bot.threadId])} owner={owner} bot={bot} online={online} supported={snapshot?.capabilities?.nativeAuthRecovery === 1} setupBusy={busy}
+            nativeUnavailable={work?.botId === bot.id && work.threadId === bot.threadId && work.state === 'unconfirmed' && ['native-sign-in','native-system-error'].includes(work.recovery?.kind ?? '')}
             onRetrySetup={() => void action(() => client.rpc("bots.recover", bot.id))}
             onReturn={() => { screenRef.current?.querySelector<HTMLTextAreaElement>('textarea')?.focus({preventScroll:true}); }} />}
           {!bot ? (
@@ -763,6 +767,7 @@ export function BotsWorkspace() {
               calls: profile && detailsSection === "calls" && snapshot?.capabilities?.operatorCalls === 1 ? <OperatorCallHistory key={`calls:${scope}`} owner={owner} botId={bot.id} online={online} /> : <p className="bots-details-lead">Named-bot voice calling is unavailable on this service.</p>,
               history: <>{lanes && <details data-history-key="legacy-controls" className="bots-legacy-controls"><summary>Earlier work · recovery and controls</summary><BotWorkControls owner={owner} bot={bot} runs={recentRuns} online={online} onOpen={openActivity} /></details>}<RunHistory key={`${scope}:${activityTarget?.runId ?? ""}:${activityTarget?.turnId ?? ""}`} embedded bot={bot} schedules={schedules} recentRuns={recentRuns} initialTarget={activityTarget} attachments={[]} online={online} onClose={closeProfile} download={id => void download(id)} /></>,
               settings: <div className="bots-details-settings">
+                <ExecutionAccess key={`access:${scope}`} owner={owner} botId={bot.id} online={online}/>
                 <form className="grid gap-3" onSubmit={event => { event.preventDefault(); const input = new FormData(event.currentTarget); void action(() => client.rpc("bots.update", bot.id, { name: String(input.get("name")) })); }}>
                   <label>Name<Input name="name" defaultValue={bot.name} key={bot.id + bot.name} maxLength={80} required /></label><Button className="justify-self-start" type="submit" disabled={!online || busy}>Save name</Button>
                 </form>

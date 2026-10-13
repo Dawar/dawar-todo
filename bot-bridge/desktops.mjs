@@ -1,4 +1,5 @@
 import { spawn, execFile } from "node:child_process";
+import { closeIdleChild } from './idle-child-close.mjs';
 import { promisify } from "node:util";
 import { createInterface } from "node:readline";
 import { createHash, randomBytes } from "node:crypto";
@@ -204,6 +205,9 @@ class ComputerClient {
   }
   close() {
     this.child.kill();
+  }
+  closeForShutdown() {
+    return this.shutdownPromise ??= closeIdleChild(this.child, { pending: this.pending.size });
   }
 }
 
@@ -824,10 +828,13 @@ export class BotDesktops {
     this.tickets.clear();
   }
   async close() {
+    if (this.pendingCalls()) throw Error('Desktop tool calls must finish before transport shutdown.');
     for (const botId of this.browserMaintenance.keys()) this.cancelBrowserMaintenance(botId);
     clearInterval(this.retentionTimer);
     clearInterval(this.sweeper);
     await this.disconnect();
-    for (const c of this.clients.values()) c.close();
+    await Promise.all([...this.clients.values()].map(c => c.closeForShutdown()));
+    this.clients.clear();
   }
+  pendingCalls() { return [...this.clients.values()].reduce((total, client) => total + client.pending.size, 0); }
 }

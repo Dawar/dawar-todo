@@ -205,7 +205,7 @@ export class CodexManager {
     } catch { reply(409, { error: 'Maintenance blocked or identity changed. Inspect metadata and original receipt; no retry with a new ID.' }); }
   }
   async close() {
-    if (this.server) await new Promise((yes) => this.server.close(yes));
+    if (this.server) await new Promise((yes) => { this.server.close(yes); this.server.closeIdleConnections?.(); });
     await unlink(this.socketPath).catch(() => {});
   }
   owned(kind, id, botId) {

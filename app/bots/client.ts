@@ -286,8 +286,8 @@ export class BotsClient {
       });
       controller.signal.throwIfAborted();
       if ((response.status === 401 || response.status === 403) && epoch === this.connectionEpoch) {
-        recheckPortableSession();
         this.clearOwnerCache();
+        recheckPortableSession();
       }
       const body = (await response.json().catch(() => ({}))) as Session & { error?: string };
       controller.signal.throwIfAborted();

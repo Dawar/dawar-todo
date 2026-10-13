@@ -11,7 +11,8 @@ import './work-overview.css';
 export function workLabel(work: BotAdmissionWork | undefined, bot: Bot) {
   if (!work || work.botId !== bot.id || ['provisioning', 'error'].includes(bot.status)) return null;
   if (work.threadId && work.threadId !== bot.threadId) return 'Checking execution';
-  if (work.state === 'unconfirmed') return 'Needs confirmation';
+  if (work.state === 'unconfirmed') return work.recovery?.kind === 'external-writer' ? 'Open in Codex elsewhere' :
+    work.recovery?.kind === 'native-sign-in' ? 'Codex sign-in required' : 'Checking execution';
   if (work.state === 'starting') return 'Starting';
   if (work.state === 'needs-input') return 'Needs your input';
   // Progress summaries persist across turns. They belong in work details,
@@ -20,6 +21,10 @@ export function workLabel(work: BotAdmissionWork | undefined, bot: Bot) {
   if (work.paused || work.state === 'paused') return 'Automatic work paused';
   if (work.state === 'waiting' || (work.admission?.waitingCount ?? 0) > 0) return 'Waiting to start';
   return 'Ready';
+}
+export function NativeWriterRecovery({ bot, work, online }: { bot: Bot; work?: BotAdmissionWork; online: boolean }) {
+  if (!online || work?.botId !== bot.id || work.threadId !== bot.threadId || work.state !== 'unconfirmed' || work.recovery?.kind !== 'external-writer') return null;
+  return <div className="bots-action-recovery" role="status"><span>This conversation is open in another Codex session. Finish there and close that session; your queued messages will continue when it releases the conversation.</span></div>;
 }
 export function WorkOverview({ owner, bot, work, online }: { owner: string; bot: Bot; work?: BotAdmissionWork; online: boolean }) {
   const action = useRunAction(owner, bot.id, 'work:resume');

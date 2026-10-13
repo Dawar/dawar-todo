@@ -1,4 +1,5 @@
 import { AuthRecovery } from './auth-recovery.mjs';
+import { EXECUTION_ACCESS, turnExecutionAccess, executionAccessStatus } from './execution-access.mjs';
 import {SubmissionSources,SUBMISSION_TOOL} from './submission-sources.mjs';
 import { assertRetainedResource } from './retained-resource.mjs';
 
@@ -831,7 +832,7 @@ export class BotRuntime extends EventEmitter {
   }
   async dispatch(method, botId, p, id, attempt = null, authorizeProvisioning = null) {
     if (method === "auth.read") return this.authRecovery.read(botId, p);
-    if (method === "auth.check") return this.authRecovery.check(botId, p, attempt);
+    if (method === "auth.check") return this.authRecovery.check(botId, p, attempt, id);
     if (method === "auth.login.start") return this.authRecovery.start(botId, p, id, attempt);
     if (method === "auth.login.cancel") return this.authRecovery.cancel(botId, p, attempt);
     if (method === "snapshot") return this.snapshot();
@@ -847,6 +848,7 @@ export class BotRuntime extends EventEmitter {
         defaults: this.defaults,
         version: CODEX_VERSION,
         maintenance: this.maintenance.snapshot(),
+        executionAccess: executionAccessStatus(),
       };
     if (method === "events") return this.store.replay(Number(p.after) || 0);
     if (method === "execution.config") return this.executionConfig.read(this.store.bot(String(botId)), p);
@@ -1025,8 +1027,7 @@ export class BotRuntime extends EventEmitter {
         await initializeProfile(recovered);
         const result = await this.codex.call("thread/start", {
           cwd: bot.cwd,
-          approvalPolicy: "never",
-          sandbox: "danger-full-access",
+          ...EXECUTION_ACCESS,
           ephemeral: false,
           developerInstructions: this.manager
             ? `${BOT_INSTRUCTIONS}\n\n${DIRECT_INSTRUCTIONS}${this.desktops ? `\n\n${desktopInstructions(bot)}` : ""}`
@@ -1261,8 +1262,7 @@ export class BotRuntime extends EventEmitter {
       cwd: bot.cwd,
       model: bot.model,
       serviceTier: this.defaults.serviceTier,
-      approvalPolicy: "never",
-      sandbox: "danger-full-access",
+      ...EXECUTION_ACCESS,
       ephemeral: false,
       developerInstructions: this.manager
         ? `${BOT_INSTRUCTIONS}\n\n${DIRECT_INSTRUCTIONS}${this.desktops ? `\n\n${desktopInstructions(bot)}` : ""}`
@@ -1338,7 +1338,7 @@ export class BotRuntime extends EventEmitter {
   resumeParams(bot, executionMode = bot.executionMode) {
     return {
       threadId: bot.threadId, cwd: bot.cwd, model: this.settings(bot).model,
-      serviceTier: this.settings(bot).serviceTier, approvalPolicy: "never", sandbox: "danger-full-access",
+      serviceTier: this.settings(bot).serviceTier, ...EXECUTION_ACCESS,
       developerInstructions: this.manager ? `${BOT_INSTRUCTIONS}\n\n${DIRECT_INSTRUCTIONS}${this.desktops ? `\n\n${desktopInstructions(bot)}` : ""}` : BOT_INSTRUCTIONS,
       config: { "features.fast_mode": true, ...(executionMode === "single-thread" ? { "features.multi_agent": false } : {}),
         ...(this.manager ? this.manager.config(bot, executionMode) : {}) }, excludeTurns: true,
@@ -1692,8 +1692,7 @@ export class BotRuntime extends EventEmitter {
         input,
         additionalContext,
         cwd: bot.cwd,
-        approvalPolicy: "never",
-        sandboxPolicy: { type: "dangerFullAccess" },
+        ...turnExecutionAccess(),
         model,
         effort,
         serviceTier,
@@ -1853,8 +1852,7 @@ export class BotRuntime extends EventEmitter {
     await this.codex.call("thread/settings/update", {
       threadId: bot.threadId,
       cwd: bot.cwd,
-      approvalPolicy: "never",
-      sandboxPolicy: { type: "dangerFullAccess" },
+      ...turnExecutionAccess(),
       model,
       effort,
       serviceTier,

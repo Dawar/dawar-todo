@@ -9,8 +9,8 @@ import { isCodexAuthError, type CodexAuthRecoveryState } from '../../lib/codex-a
 
 type AuthMethod = 'auth.check' | 'auth.login.start' | 'auth.login.cancel';
 type Intent = { method: AuthMethod; operationId: string; params: { threadId: string; loginId?: string } };
-export function CodexAuthRecovery({ owner, bot, online, supported, setupBusy, onRetrySetup, onReturn }: {
-  owner: string; bot: Bot; online: boolean; supported: boolean; setupBusy: boolean; onRetrySetup: () => void; onReturn: () => void;
+export function CodexAuthRecovery({ owner, bot, online, supported, setupBusy, nativeUnavailable = false, onRetrySetup, onReturn }: {
+  owner: string; bot: Bot; online: boolean; supported: boolean; setupBusy: boolean; nativeUnavailable?: boolean; onRetrySetup: () => void; onReturn: () => void;
 }) {
   const [open, setOpen] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState('');
   const [state, setState] = useState<CodexAuthRecoveryState>({ status: 'unknown' });
@@ -58,11 +58,11 @@ export function CodexAuthRecovery({ owner, bot, online, supported, setupBusy, on
       setError(cause instanceof Error ? cause.message : 'The action was not confirmed. Check its result.');
     } finally { inFlight.current = false; if (valid()) setBusy(false); }
   };
-  const needsRecovery = isCodexAuthError(bot.error);
-  if (!bot.error && !open) return null;
+  const needsRecovery = isCodexAuthError(bot.error) || nativeUnavailable;
+  if (!bot.error && !nativeUnavailable && !open) return null;
   return <>
-    {bot.error && <div className="bots-banner">
-      <span>{needsRecovery ? state.status==='connected'?'Codex sign-in verified.':'Codex sign-in needs checking.' : bot.error}</span>
+    {(bot.error || nativeUnavailable) && <div className="bots-banner">
+      <span>{needsRecovery ? state.status==='connected'?state.recovered?'Codex connection recovered.':'Codex sign-in verified; conversation recovery is still pending.':nativeUnavailable?'Codex conversation needs recovery.':'Codex sign-in needs checking.' : bot.error}</span>
       {needsRecovery && bot.threadId ? <Button variant="ghost" size="sm" disabled={!online} onClick={() => { setOpen(true); if (supported) void act('auth.check'); }}>Recover connection</Button>
         : !bot.threadId && <Button variant="ghost" size="sm" disabled={!online || setupBusy} onClick={onRetrySetup}>Retry setup</Button>}
     </div>}

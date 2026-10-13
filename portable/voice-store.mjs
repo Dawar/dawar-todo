@@ -9,14 +9,14 @@ const encode=v=>{const s=JSON.stringify(v);if(typeof s!=='string'||Buffer.byteLe
 const storageKey=v=>{if(!['sip-call','sip-voice-readback-v1'].includes(v))throw failure();return v;};
 
 export class VoiceStore {
-  constructor(path,{source,assertWriter,writeSync}) {
+  constructor(path,{source,assertWriter,writeSync,retained}) {
     if(!/^[a-f0-9]{40}$/.test(source)||typeof assertWriter!=='function'||typeof writeSync!=='function')throw failure();
     path=resolve(path);mkdirSync(dirname(path),{recursive:true,mode:0o700});
     const parent=lstatSync(dirname(path));if(!parent.isDirectory()||parent.isSymbolicLink()||parent.mode&0o077||process.getuid&&parent.uid!==process.getuid())throw failure();
     const fd=openSync(path,constants.O_RDWR|constants.O_CREAT|constants.O_NOFOLLOW,0o600);let before;
     try{before=fstatSync(fd);if(!before.isFile()||before.mode&0o077||process.getuid&&before.uid!==process.getuid())throw failure();}finally{closeSync(fd);}
     this.db=privateDatabase(path);const after=lstatSync(path);if(after.isSymbolicLink()||after.ino!==before.ino||after.dev!==before.dev){this.db.close();throw failure();}
-    this.source=source;this.assertWriter=assertWriter;this.writeSync=writeSync;this.current=new Set();this.closed=false;
+    this.source=source;this.assertWriter=assertWriter;this.writeSync=writeSync;this.retained=retained;this.current=new Set();this.closed=false;
     this.writeSync(()=>{this.assertWriter();this.db.exec(`CREATE TABLE IF NOT EXISTS voice_objects(id TEXT PRIMARY KEY,alarm_at INTEGER,alarm_generation INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS voice_values(object_id TEXT NOT NULL,key TEXT NOT NULL,value TEXT NOT NULL,PRIMARY KEY(object_id,key));
       CREATE TABLE IF NOT EXISTS voice_effects(id TEXT PRIMARY KEY,object_id TEXT NOT NULL,kind TEXT NOT NULL,fingerprint TEXT NOT NULL,state TEXT NOT NULL CHECK(state IN ('active','terminal','unknown')),response TEXT);
@@ -56,6 +56,20 @@ export class VoiceStore {
   due(now=Date.now()){if(this.closed)throw failure();return this.db.prepare('SELECT * FROM voice_objects WHERE alarm_at<=? ORDER BY alarm_at,id LIMIT 64').all(now);}
   admissible(id){text(id);if(this.closed)throw failure();return this.db.prepare("SELECT id,state FROM voice_effects WHERE object_id=? AND state<>'terminal'").all(id).every(r=>r.state==='active'&&this.current.has(r.id));}
   lastMinute(){if(this.closed)throw failure();const r=this.db.prepare("SELECT id FROM voice_effects WHERE kind='minute' ORDER BY id DESC LIMIT 1").get();if(!r)return null;const at=Number(r.id.slice('minute:'.length));if(!/^minute:[0-9]{13}$/.test(r.id)||!Number.isSafeInteger(at))throw failure();return at;}
-  counts(){if(this.closed)throw failure();const counts={activeEffects:0,unknownEffects:0,activeCalls:0,dueAlarms:0};for(const r of this.db.prepare("SELECT state,count(*) n FROM voice_effects WHERE state<>'terminal' GROUP BY state").all())counts[r.state==='active'?'activeEffects':'unknownEffects']=r.n;for(const r of this.db.prepare("SELECT value FROM voice_values WHERE key='sip-call'").all()){const value=JSON.parse(r.value);if(value?.ended!==true)counts.activeCalls++;}counts.dueAlarms=this.db.prepare('SELECT count(*) n FROM voice_objects WHERE alarm_at<=?').get(Date.now()).n;return counts;}
+  counts(){
+    if(this.closed)throw failure();const counts={activeEffects:0,unknownEffects:0,activeCalls:0,dueAlarms:0,retainedRecords:0};
+    const retainedObjects=new Set();
+    for(const r of this.db.prepare("SELECT * FROM voice_values WHERE key='sip-call'").all()){
+      const kept=this.retained?.retained('voice_values',`${r.object_id}:${r.key}`,r);
+      if(kept){retainedObjects.add(r.object_id);counts.retainedRecords++;}
+      else if(JSON.parse(r.value)?.ended!==true)counts.activeCalls++;
+    }
+    for(const r of this.db.prepare("SELECT * FROM voice_effects WHERE state<>'terminal'").all()){
+      if(!this.current.has(r.id)&&this.retained?.retained('voice_effects',r.id,r)){counts.retainedRecords++;continue;}
+      counts[r.state==='active'?'activeEffects':'unknownEffects']++;
+    }
+    for(const r of this.db.prepare('SELECT * FROM voice_objects WHERE alarm_at<=?').all(Date.now()))if(!retainedObjects.has(r.id))counts.dueAlarms++;
+    return counts;
+  }
   close(){const counts=this.counts();if(counts.activeEffects||counts.activeCalls||counts.unknownEffects)throw failure();this.closed=true;this.db.close();}
 }

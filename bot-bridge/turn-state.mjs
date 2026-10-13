@@ -33,6 +33,7 @@ function advanceActivity(runtime, botId, activeTurnId, changes = {}) {
   const token = captureActivity(runtime, botId);
   if (!Number.isSafeInteger(token.generation + 1)) throw new Error("Observed activity generation exhausted.");
   runtime.store.put("botActivity", { ...runtime.store.get("botActivity", botId), ...changes,
+    ...(Object.hasOwn(changes, 'reconciliationError') && changes.reconciliationError === null ? { recoveryKind: null, recoveryCheckedAt: null } : {}),
     id: botId, botId, threadId: runtime.store.bot(botId).threadId, generation: token.generation + 1, activeTurnId });
 }
 

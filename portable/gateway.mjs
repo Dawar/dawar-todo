@@ -25,6 +25,7 @@ import {verifyOperator} from './operator-client.mjs';
 import {HubDesktopTransport,DESKTOP_MUTATIONS,desktopCapable} from './desktop-transport.mjs';
 import {HubSecureTransport} from './secure-transport.mjs';
 import {fingerprint} from './protocol.mjs';
+import {RetainedRecords} from './retained-records.mjs';
 
 const json = (response,status,body) => { response.writeHead(status,{'content-type':'application/json','cache-control':'no-store'});response.end(JSON.stringify(body)); };
 async function readBody(req) {
@@ -34,6 +35,7 @@ async function readBody(req) {
 }
 export function startGateway(config) {
   const store = new HubStore(join(config.dataDirectory,'control.sqlite'));
+  const retained=new RetainedRecords(config.retainedRecordsPath);
   const authority=hubActivation(config),writer=new HubWriteAuthority(store.db,authority);
   store.bindWriter(writer);
   const application = new LocalD1(join(config.dataDirectory,'application.sqlite'),{writer});
@@ -50,7 +52,7 @@ export function startGateway(config) {
   controls.nodeStorage=nodeStorage;
   const taskRequests=new HubTaskRequests({hub:store,controls,application,environment:nodeStorage.environment,owner:config.owner.key});controls.taskRequests=taskRequests;
   controls.operator=new HubOperator(controls,config.owner.key);
-  const voice=config.voice?.enabled===true?createVoiceRuntime(config,{writer,assertWriter:()=>controls.assertWriter()}):null;
+  const voice=config.voice?.enabled===true?createVoiceRuntime(config,{writer,assertWriter:()=>controls.assertWriter(),retained}):null;
   const scheduler=authority?setInterval(()=>void controls.tick().catch(error=>controls.emit('fault',error)),5000):null;
   const downloadDirectory=resolve(config.agentDownloadDirectory??fileURLToPath(new URL('../agent-downloads',import.meta.url)));
   const sockets = new WebSocketServer({noServer:true,maxPayload:MAX_FRAME_BYTES,perMessageDeflate:false});

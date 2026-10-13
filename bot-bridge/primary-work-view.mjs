@@ -32,6 +32,9 @@ export function primaryWorkView(runtime, bot) {
     paused, summary: progress?.summary ?? goal?.goal?.objective ?? null,
     remaining: progress?.remaining ?? null, waitingFor: progress?.waitingFor ?? [], goal: goal?.goal ?? null,
     goalObservedAt: goal?.observedAt ?? null, migrationReason: bot.migrationReason ?? null,
+    ...(activity?.unresolved && activity.threadId === bot.threadId && activity.recoveryCheckedAt &&
+      ['external-writer','native-sign-in','native-system-error','native-state'].includes(activity.recoveryKind)
+      ? { recovery: { kind: activity.recoveryKind, checkedAt: activity.recoveryCheckedAt, retryAt: activity.reconcileAfter ?? null } } : {}),
     admission: { waitingCount: intake.waitingCount, reason: intake.waitingCount ? reason : null } };
 }
 

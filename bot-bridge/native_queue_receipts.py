@@ -71,13 +71,18 @@ def completed_queue_receipts(app, bots, rows, native_root=None, accepted=None, q
     originals, terminal_inputs, passive_questions, rollouts = [], [], [], []
     with ExitStack() as stack:
         history, queue, goals, state = [bounded_database(stack, path, deadline) for path in paths]
-        if queue.execute('SELECT EXISTS(SELECT 1 FROM queued_items)').fetchone()[0]:
-            raise RuntimeError('Current accepted native queue blocks bootstrap')
-        if goals.execute("SELECT EXISTS(SELECT 1 FROM thread_goals WHERE status='active')").fetchone()[0]:
-            raise RuntimeError('Current active native Goal blocks bootstrap')
-        if goals.execute("SELECT EXISTS(SELECT 1 FROM thread_goals WHERE status IS NULL OR status NOT IN "
-                         "('active','paused','blocked','usage_limited','budget_limited','complete'))").fetchone()[0]:
-            raise RuntimeError('Unknown native Goal metadata blocks bootstrap')
+        # Shared native account history is not managed-process liveness. Check
+        # accepted queues and Goals only for registered application contexts;
+        # the caller separately observes the process's actual loaded threads.
+        for bot in bots:
+            thread = bot.get('threadId')
+            if not thread or bot.get('deletedAt') or bot.get('archived'):
+                continue
+            if queue.execute('SELECT EXISTS(SELECT 1 FROM queued_items WHERE thread_id=?)', (thread,)).fetchone()[0]:
+                raise RuntimeError('Current registered native queue blocks maintenance')
+            if goals.execute("SELECT EXISTS(SELECT 1 FROM thread_goals WHERE thread_id=? AND (status IS NULL OR "
+                             "status NOT IN ('paused','blocked','usage_limited','budget_limited','complete')))", (thread,)).fetchone()[0]:
+                raise RuntimeError('Registered native Goal blocks maintenance')
 
         def scope(bot_id, thread_id):
             bot = bot_map.get(bot_id)

@@ -100,9 +100,9 @@ export class LocalWorkAdmission {
 // qualify d011, alter a native claim, or prove any external/native writer idle.
 // Holds have no automatic expiry release. Only this same operation can release.
 export class LocalWriterDrain {
-  constructor(db,expected){
+  constructor(db,expected,{retained,alive=pid=>{try{process.kill(pid,0);return true;}catch(error){return error.code!=='ESRCH';}}}={}){
     if(!expected||Object.keys(expected).sort().join(',')!=='epoch,source,writerId'||typeof expected.writerId!=='string'||!expected.writerId||!Number.isSafeInteger(expected.epoch)||expected.epoch<1||!/^[a-f0-9]{40}$/.test(expected.source))throw failed();
-    this.db=db;this.expected=Object.freeze({...expected});
+    this.db=db;this.expected=Object.freeze({...expected});this.retained=retained;this.alive=alive;
   }
   transaction(factory){
     if(this.db.isTransaction)throw failed();this.db.exec('BEGIN IMMEDIATE');
@@ -132,12 +132,12 @@ export class LocalWriterDrain {
     });return this.observe(operationId);
   }
   observe(operationId){
-    const row=this.original(operationId),counts={active:0,unknown:0,settled:0};
-    const foreign=this.db.prepare("SELECT count(*) AS n FROM portable_async_work WHERE state<>'settled' AND (writer_id<>? OR epoch<>? OR source<>? OR kind NOT IN ('artifact-register','object-put','object-request','object-copy','object-upload','object-cleanup','voice-request','voice-tick','secure-transfer'))").get(this.expected.writerId,this.expected.epoch,this.expected.source).n;
-    for(const r of this.db.prepare('SELECT state,count(*) AS n FROM portable_async_work GROUP BY state').all()){
-      if(!Object.hasOwn(counts,r.state)||!Number.isSafeInteger(r.n))throw failed();counts[r.state]=r.n;
+    const row=this.original(operationId),counts={active:0,unknown:0,settled:0,retainedRecords:0};
+    for(const r of this.db.prepare('SELECT * FROM portable_async_work').all()){
+      if(!Object.hasOwn(counts,r.state))throw failed();
+      if(r.state!=='settled'&&!this.alive(r.pid)&&this.retained?.retained('portable_async_work',r.id,r)){counts.retainedRecords++;continue;}
+      if(r.state!=='settled'&&(!same(r,this.expected)||!kinds.has(r.kind)))throw failed();counts[r.state]++;
     }
-    if(foreign)throw failed();
     return {kind:'portable-local-writer-drain',...this.expected,operationId,generation:row.generation,deadline:row.deadline,observedAt:Date.now(),
       phase:row.phase,status:row.deadline<=Date.now()?'expired':counts.active||counts.unknown?'busy':row.phase==='frozen'?'frozen':'ready',...counts,
       nativeAndExternalCoverage:false};

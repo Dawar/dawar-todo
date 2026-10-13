@@ -19,12 +19,12 @@ async function bytes(response,limit=MAX_BODY) {
 
 // This adapter is installed only by the hub constructor. A request cannot
 // select transports, storage, credentials, an object ID or a release fence.
-export function createVoiceRuntime(config,{assertWriter:assertControlWriter,writer,network={fetch:globalThis.fetch,Socket:WebSocket}}) {
+export function createVoiceRuntime(config,{assertWriter:assertControlWriter,writer,retained,network={fetch:globalThis.fetch,Socket:WebSocket}}) {
   if(config.voice?.enabled!==true||typeof assertControlWriter!=='function'||!writer||['assertWriter','runSync','startWork','runWork','keepWork','bindWork','unknownWork'].some(k=>typeof writer[k]!=='function')||!/^[a-f0-9]{40}$/.test(config.hub?.source))throw refused();
   const assertWriter=()=>{assertControlWriter();writer.assertWriter();};
   const origin=new URL(config.publicOrigin);if(origin.protocol!=='https:'||origin.origin!==config.publicOrigin||origin.username||origin.password)throw refused();
   assertWriter();
-  const store=new VoiceStore(join(config.dataDirectory,'voice.sqlite'),{source:config.hub.source,assertWriter,writeSync:fn=>writer.runSync(fn)});
+  const store=new VoiceStore(join(config.dataDirectory,'voice.sqlite'),{source:config.hub.source,assertWriter,writeSync:fn=>writer.runSync(fn),retained});
   const scopes=new AsyncLocalStorage(),contexts=new WeakMap(),controllers=new Map(),pending=new Map(),sockets=new Set();
   let draining=false,closed=false,tickRunning=false,lastFault=null,minute=null,faults=0;
   const fault=()=>{faults++;lastFault={at:Date.now(),reason:'Original voice effect is not confirmed.'};};
