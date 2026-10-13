@@ -1,4 +1,5 @@
 import { findNativeTurn } from "./native-reconcile.mjs";
+import { readKnownActiveTurn } from "./known-turn-watch.mjs";
 
 import { usableTurn, usableTurnId, requireTurn, terminalTurn } from "./native-turn.mjs";
 export { terminalTurn } from "./native-turn.mjs";
@@ -268,20 +269,36 @@ export async function reconcileActiveTurns(runtime, limit = 2) {
   for (const bot of runtime.store.bots()) {
     if (!bot.activeTurnId || bot.archived || runtime.locks.has(bot.id) || checked >= limit) continue;
     const watch = runtime.store.get("turnWatch", bot.id);
-    const same = watch?.turnId === bot.activeTurnId;
+    const same = watch?.turnId === bot.activeTurnId && watch.threadId === bot.threadId;
     if (same && Date.parse(watch.reconcileAfter ?? "") > Date.now()) continue;
     checked++;
     await runtime.lock(bot.id, async () => {
-      if (runtime.store.bot(bot.id).activeTurnId !== bot.activeTurnId) return;
+      const selected = runtime.store.bot(bot.id);
+      if (selected.activeTurnId !== bot.activeTurnId || selected.threadId !== bot.threadId) return;
+      const known = observedActiveTurn(runtime, bot.id, bot.activeTurnId);
+      const token = runtime.store.get("botActivity", bot.id) ? captureActivity(runtime, bot.id) : null;
+      const epoch = runtime.epoch, native = runtime.codex.process;
       runtime.store.put("turnWatch", { id: bot.id, botId: bot.id, turnId: bot.activeTurnId, state: "checking",
+        threadId: bot.threadId,
         cursor: same ? watch.cursor : null, reconcileAfter: new Date(Date.now() + 60000).toISOString() });
-      const found = await findNativeTurn(runtime, bot.threadId, { turnId: bot.activeTurnId, cursor: same ? watch.cursor : null });
+      const currentScope = () => {
+        const selected = runtime.store.bot(bot.id), current = runtime.store.get("turnWatch", bot.id);
+        const activityMatches = token ? activityUnchanged(runtime, bot.id, token) : !runtime.store.get("botActivity", bot.id);
+        return runtime.epoch === epoch && runtime.codex.process === native && activityMatches &&
+          selected.activeTurnId === bot.activeTurnId && selected.threadId === bot.threadId &&
+          current?.turnId === bot.activeTurnId && current.threadId === bot.threadId && current.state !== "terminal";
+      };
+      const cursor = same ? watch.cursor : null;
+      const found = known
+        ? await readKnownActiveTurn(runtime, bot, cursor, currentScope)
+        : await findNativeTurn(runtime, bot.threadId, { turnId: bot.activeTurnId, cursor });
+      if (!currentScope()) return;
       const current = runtime.store.get("turnWatch", bot.id);
-      if (current?.turnId !== bot.activeTurnId || current.state === "terminal") return;
+      const completeEvidence = found.completeEvidence ?? (found.turn?.itemsView === "full");
       runtime.store.put("turnWatch", { ...current, cursor: found.nextCursor, state: found.turn ? "observed" : "unconfirmed", checkedAt: now() });
-      if (found.turn) {
+      if (found.turn && completeEvidence) {
         runtime.recordScheduledEvidence(bot.id, found.turn);
-        projectTerminalTurn(runtime, bot.id, found.turn, true);
+        projectTerminalTurn(runtime, bot.id, found.turn, completeEvidence);
       }
     }).catch(error => runtime.emit("fault", error));
   }
