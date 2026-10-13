@@ -1,10 +1,11 @@
 import { artifactMime } from '../lib/bot-file-metadata.mjs';
 import { createHash, createHmac } from 'node:crypto';
 import { BotStorage, StorageError, type BotStorageEnv } from './bot-storage';
+import { SHORT_LINK_SCHEMA, shortLinkInsert, readShortLink, shortLinkTarget, shortCodeHash, type ShortLinkTarget } from './short-links';
 import { taskRequestId, taskRequestSource, taskRequestSpec, taskRequestValues, TASK_REQUEST_LIMITS,
   type TaskRequest, type TaskRequestGuest, type TaskRequestSubmission, type TaskRequestFile } from '../lib/task-requests';
 
-export type TaskRequestEnvironment = BotStorageEnv & { BOTS_OWNER_EMAIL?: string; BOTS_TICKET_SECRET?: string; TASK_REQUEST_SECRET?: string };
+export type TaskRequestEnvironment = BotStorageEnv & { BOTS_OWNER_EMAIL?: string; BOTS_TICKET_SECRET?: string; TASK_REQUEST_SECRET?: string; BOTS_PUBLIC_ORIGIN?: string; TODO_PUBLIC_URL?: string };
 type RequestRow = { owner_key:string; id:string; bot_id:string; thread_id:string; revision:number; body:string };
 type Grant = { id:string; owner_key:string; request_id:string; revision:number; token_hash:string; pin_hash:string|null; expires_at:number; revoked:number };
 type UploadRow = { owner_key:string; request_id:string; grant_id:string; id:string; field_id:string; body:string; state:string };
@@ -13,6 +14,7 @@ const json=(v:unknown)=>JSON.stringify(v);
 const now=()=>new Date().toISOString();
 const initialized=new WeakMap<D1Database,Promise<unknown>>();
 export const TASK_REQUEST_SCHEMA=[
+  ...SHORT_LINK_SCHEMA,
   'CREATE TABLE IF NOT EXISTS task_requests(owner_key TEXT NOT NULL,id TEXT NOT NULL,bot_id TEXT NOT NULL,thread_id TEXT NOT NULL,revision INTEGER NOT NULL,body TEXT NOT NULL,PRIMARY KEY(owner_key,id))',
   'CREATE INDEX IF NOT EXISTS task_requests_bot ON task_requests(owner_key,bot_id,thread_id,id)',
   'CREATE TABLE IF NOT EXISTS task_request_grants(id TEXT PRIMARY KEY,owner_key TEXT NOT NULL,request_id TEXT NOT NULL,revision INTEGER NOT NULL,token_hash TEXT NOT NULL,pin_hash TEXT,expires_at INTEGER NOT NULL,revoked INTEGER NOT NULL DEFAULT 0)',
@@ -107,16 +109,42 @@ export class TaskRequests {
     if(p.pin!==undefined && (typeof p.pin!=='string'||!/^\d{4,12}$/.test(p.pin)))throw new StorageError('PIN requires 4–12 digits.');
     const pinHash=p.pin===undefined?null:this.sign(json(['task-request-pin-v1',r.id,p.pin]));
     const fingerprint=hash(json(['publish',r.id,p.expectedRevision,seconds,pinHash]));
-    const token=this.token(r.id,op),url=`/task-request#${encodeURIComponent(r.id)}/${token}`;
-    const old=await this.prior('owner',op,fingerprint);if(old)return {...old,url};
+    const token=this.token(r.id,op),grantId=`grant:${hash(json([this.owner,r.id,r.revision]))}`;
+    const target:ShortLinkTarget={kind:'task-request',requestId:r.id,revision:r.revision,grantId,publicationId:op},code=this.shortCode(target),url=this.shortUrl(code);
+    const old=await this.prior('owner',op,fingerprint);if(old)return {...old,request:r,...await this.ownerLink(r.id)};
     await this.bot(r.source.botId);
     if(r.status!=='draft')throw new StorageError('This revision was already published.',409,'frozen');
-    const expiry=Date.now()+Number(seconds)*1000,grantId=`grant:${hash(json([this.owner,r.id,r.revision]))}`;
+    const expiry=Date.now()+Number(seconds)*1000;
     const next={...r,status:'published' as const,publishedAt:now(),expiresAt:new Date(expiry).toISOString(),pinRequired:pinHash!==null,updatedAt:now()};
     const result=await this.commit('owner',op,fingerprint,"EXISTS(SELECT 1 FROM task_requests WHERE owner_key=? AND id=? AND revision=? AND json_extract(body,'$.status')='draft')",[this.owner,r.id,p.expectedRevision],[
       this.db.prepare('INSERT INTO task_request_grants VALUES(?,?,?,?,?,?,?,0)').bind(grantId,this.owner,r.id,r.revision,hash(token),pinHash,expiry),
+      shortLinkInsert(this.db,this.owner,code,target),
       this.db.prepare('UPDATE task_requests SET body=? WHERE owner_key=? AND id=?').bind(json(next),this.owner,r.id),
     ],{request:next});return {...result,url};
+  }
+  private publicOrigin() {
+    const value=this.environment.BOTS_PUBLIC_ORIGIN??this.environment.TODO_PUBLIC_URL;
+    let url:URL;try{url=new URL(String(value));}catch{throw new StorageError('The public HTTPS form origin is not configured.',503,'unavailable');}
+    if(url.protocol!=='https:'||url.origin!==value||url.username||url.password)throw new StorageError('The public HTTPS form origin is not configured.',503,'unavailable');
+    return url.origin;
+  }
+  private shortCode(target:ShortLinkTarget) {return this.sign(json(['app-short-link-v1',this.owner,shortLinkTarget(target)])).slice(0,22);}
+  private shortUrl(code:string) {shortCodeHash(code);return `${this.publicOrigin()}/f#${code}`;}
+  async ownerLink(id:string) {
+    const r=await this.read(id),g=await this.db.prepare('SELECT * FROM task_request_grants WHERE owner_key=? AND request_id=?').bind(this.owner,id).first<Grant>();
+    if(!g||g.revoked||g.expires_at<=Date.now()||g.revision!==r.revision)return {};
+    const short=await this.db.prepare("SELECT target FROM app_short_links WHERE owner_key=? AND kind='task-request' AND json_extract(target,'$.requestId')=? LIMIT 1").bind(this.owner,id).first<{target:string}>();
+    if(short){const t=shortLinkTarget(JSON.parse(short.target));if(t.grantId!==g.id||t.revision!==g.revision||hash(this.token(id,t.publicationId))!==g.token_hash)throw new StorageError('Original short-link scope changed.',409,'scope_changed');return {url:this.shortUrl(this.shortCode(t))};}
+    // Existing v1 long links keep their original token. Read-only recovery must
+    // not mint another grant or mutate a previously acknowledged publication.
+    const op=await this.db.prepare("SELECT id FROM task_request_operations WHERE owner_key=? AND scope='owner' AND json_extract(result,'$.request.id')=? AND json_extract(result,'$.request.status')='published' ORDER BY rowid DESC LIMIT 1").bind(this.owner,id).first<{id:string}>();
+    if(!op||hash(this.token(id,op.id))!==g.token_hash)return {};
+    return {url:`${this.publicOrigin()}/task-request#${encodeURIComponent(id)}/${this.token(id,op.id)}`};
+  }
+  async resolveShort(code:string,pin?:string) {
+    const t=await readShortLink(this.db,this.owner,code),token=this.token(t.requestId,t.publicationId),g=await this.authorize(t.requestId,token,pin);
+    if(g.id!==t.grantId||g.revision!==t.revision||this.shortCode(t)!==code)throw new StorageError('Original short link changed.',401,'unauthorized');
+    return {id:t.requestId,token,url:this.shortUrl(code)};
   }
   async revoke(p:Record<string,unknown>) {
     const r=await this.read(taskRequestId(p.id)),op=taskRequestId(p.operationId),fp=hash(json(['revoke',r.id,p.expectedRevision]));
@@ -151,7 +179,7 @@ export class TaskRequests {
   async submission(g:Grant):Promise<TaskRequestSubmission> {
     const s=await this.db.prepare('SELECT body FROM task_request_submissions WHERE owner_key=? AND request_id=?').bind(this.owner,g.request_id).first<{body:string}>();
     const body=s?JSON.parse(s.body):{id:this.submissionId(g),revision:0,contributorName:'',values:{},files:[],status:'draft'};
-    const uploads=await this.db.prepare("SELECT body FROM task_request_uploads WHERE owner_key=? AND request_id=? AND grant_id=? AND state='ready' ORDER BY id LIMIT 13").bind(this.owner,g.request_id,g.id).all<{body:string}>();
+    const uploads=await this.db.prepare(`SELECT body FROM task_request_uploads WHERE owner_key=? AND request_id=? AND grant_id=? AND state='ready' ORDER BY id LIMIT ${TASK_REQUEST_LIMITS.files+1}`).bind(this.owner,g.request_id,g.id).all<{body:string}>();
     if(!body.submittedAt)body.files=uploads.results.map(r=>JSON.parse(r.body));return body;
   }
   async guest(g:Grant):Promise<TaskRequestGuest> {
@@ -167,17 +195,40 @@ export class TaskRequests {
       this.db.prepare('INSERT INTO task_request_submissions VALUES(?,?,?,?,?) ON CONFLICT(owner_key,request_id) DO UPDATE SET revision=excluded.revision,body=excluded.body').bind(this.owner,r.id,s.id,next.revision,json(next)),
     ],{request:{...await this.guest(g),submission:next}});return result;
   }
+  async patch(g:Grant,p:Record<string,unknown>) {
+    const r=await this.grantCurrent(g),s=await this.submission(g),changes=taskRequestValues(r.spec,p.changes),base=taskRequestValues(r.spec,p.baseValues);
+    const edited=Object.keys(changes);
+    if(Object.keys(base).some(k=>!edited.includes(k))||!Number.isSafeInteger(p.expectedRevision)||Number(p.expectedRevision)<0||Number(p.expectedRevision)>s.revision)throw new StorageError('Invalid shared-progress base.',409,'revision');
+    const name=p.name as {value:string;base:string}|undefined;
+    if(name!==undefined&&(!name||typeof name!=='object'||Array.isArray(name)||Object.keys(name).some(k=>!['value','base'].includes(k))||[name.value,name.base].some(v=>typeof v!=='string'||v.length>100||/[\x00-\x1f]/.test(v))))throw new StorageError('Invalid contributor name.');
+    const op=taskRequestId(p.operationId),fp=hash(json(['patch',g.id,p.expectedRevision,changes,base,name??null])),scope=`guest:${g.id}`;
+    const prior=await this.prior(scope,op,fp);if(prior)return {...prior,request:await this.guest(g)};
+    if(s.submittedAt)throw new StorageError('Final submission is frozen.',409,'frozen');
+    const same=(a:unknown,b:unknown)=>json(a??null)===json(b??null);
+    const conflicts=edited.filter(k=>!same(s.values[k],base[k])&&!same(s.values[k],changes[k]));
+    if(name&&s.contributorName!==name.base&&s.contributorName!==name.value)conflicts.push('$name');
+    const c=this.grantCondition(g),condition=`${c.sql} AND COALESCE((SELECT revision FROM task_request_submissions WHERE owner_key=? AND request_id=?),0)=? AND NOT EXISTS(SELECT 1 FROM task_request_deliveries WHERE owner_key=? AND request_id=?)`;
+    const args=[...c.args,this.owner,r.id,s.revision,this.owner,r.id];
+    if(conflicts.length){await this.commit(scope,op,fp,condition,args,[],{conflicts});return {conflicts,request:await this.guest(g)};}
+    const values=taskRequestValues(r.spec,{...s.values,...changes}),next={...s,revision:s.revision+1,values,contributorName:name?.value??s.contributorName};
+    await this.commit(scope,op,fp,condition,args,[this.db.prepare('INSERT INTO task_request_submissions VALUES(?,?,?,?,?) ON CONFLICT(owner_key,request_id) DO UPDATE SET revision=excluded.revision,body=excluded.body').bind(this.owner,r.id,s.id,next.revision,json(next))],{accepted:true});
+    return {request:await this.guest(g)};
+  }
   async upload(g:Grant,p:Record<string,unknown>) {
     if(this.environment.BOTS_STORAGE_ENABLED!=='1')throw new StorageError('Ordinary file transfers are not enabled.',503,'disabled');
     const r=await this.grantCurrent(g),s=await this.submission(g);if(s.submittedAt)throw new StorageError('Final submission is frozen.',409,'frozen');
     const f=r.spec.fields.find(f=>f.id===p.fieldId);if(!f||!['file','image'].includes(f.kind))throw new StorageError('This field cannot accept ordinary files.',403,'forbidden');
+    if(!Number.isSafeInteger(p.size)||Number(p.size)<1||Number(p.size)>TASK_REQUEST_LIMITS.fileBytes)throw new StorageError('Ordinary file size must be 1 byte to 100 MiB.',413,'limit');
     if(!Number.isSafeInteger(p.size)||Number(p.size)<1||Number(p.size)>TASK_REQUEST_LIMITS.fileBytes || typeof p.name!=='string'||p.name.length>160||/[\x00-\x1f\\/]/.test(p.name)||typeof p.mimeType!=='string'||! /^[\w.+-]+\/[\w.+-]+$/.test(p.mimeType)||! /^[a-f0-9]{64}$/.test(String(p.sha256)))throw new StorageError('Invalid file metadata.');
     const mimeType=artifactMime(p.name,p.mimeType);
     if((f.kind==='image'||mimeType.startsWith('image/'))&&!['image/png','image/jpeg','image/webp'].includes(mimeType))throw new StorageError('Use a PNG, JPEG or WebP image.');
     const op=taskRequestId(p.operationId),hex=hash(json(['task-request-file',g.id,op])),id=`${hex.slice(0,8)}-${hex.slice(8,12)}-5${hex.slice(13,16)}-a${hex.slice(17,20)}-${hex.slice(20,32)}`;
     const file:TaskRequestFile={id,fieldId:f.id,name:p.name,size:Number(p.size),mimeType,sha256:String(p.sha256),ready:false};
     const fp=hash(json(file)),scope=`upload:${g.id}`,prior=await this.prior(scope,op,fp);
-    if(!prior) {const c=this.grantCondition(g);await this.commit(scope,op,fp,`${c.sql} AND (SELECT count(*) FROM task_request_uploads WHERE owner_key=? AND request_id=?)<12 ${mimeType.startsWith('image/')?"AND (SELECT count(*) FROM task_request_uploads WHERE owner_key=? AND request_id=? AND json_extract(body,'$.mimeType') LIKE 'image/%')<6":''} AND NOT EXISTS(SELECT 1 FROM task_request_deliveries WHERE owner_key=? AND request_id=?)`,[...c.args,this.owner,r.id,...(mimeType.startsWith('image/')?[this.owner,r.id]:[]),this.owner,r.id],[this.db.prepare("INSERT INTO task_request_uploads VALUES(?,?,?,?,?,?,'pending')").bind(this.owner,r.id,g.id,id,f.id,json(file))],{file});}
+    if(!prior) {
+      const bounds=await this.db.prepare("SELECT count(*) AS count,COALESCE(SUM(json_extract(body,'$.size')),0) AS bytes,COALESCE(SUM(CASE WHEN json_extract(body,'$.mimeType') LIKE 'image/%' THEN 1 ELSE 0 END),0) AS images FROM task_request_uploads WHERE owner_key=? AND request_id=?").bind(this.owner,r.id).first<{count:number;bytes:number;images:number}>();
+      if(!bounds||bounds.count>=TASK_REQUEST_LIMITS.files||bounds.bytes+file.size>TASK_REQUEST_LIMITS.totalFileBytes||mimeType.startsWith('image/')&&bounds.images>=TASK_REQUEST_LIMITS.images)throw new StorageError(`Upload limit: ${TASK_REQUEST_LIMITS.files} ordinary files, ${TASK_REQUEST_LIMITS.images} images, 100 MiB per file and 2400 MiB total.`,413,'limit');
+      const c=this.grantCondition(g);await this.commit(scope,op,fp,`${c.sql} AND (SELECT count(*) FROM task_request_uploads WHERE owner_key=? AND request_id=?)<${TASK_REQUEST_LIMITS.files} AND COALESCE((SELECT SUM(json_extract(body,'$.size')) FROM task_request_uploads WHERE owner_key=? AND request_id=?),0)+?<=${TASK_REQUEST_LIMITS.totalFileBytes} ${mimeType.startsWith('image/')?`AND (SELECT count(*) FROM task_request_uploads WHERE owner_key=? AND request_id=? AND json_extract(body,'$.mimeType') LIKE 'image/%')<${TASK_REQUEST_LIMITS.images}`:''} AND NOT EXISTS(SELECT 1 FROM task_request_deliveries WHERE owner_key=? AND request_id=?)`,[...c.args,this.owner,r.id,this.owner,r.id,file.size,...(mimeType.startsWith('image/')?[this.owner,r.id]:[]),this.owner,r.id],[this.db.prepare("INSERT INTO task_request_uploads VALUES(?,?,?,?,?,?,'pending')").bind(this.owner,r.id,g.id,id,f.id,json(file))],{file});}
     const storage=new BotStorage(this.environment,this.owner,true);await storage.initialize();
     const prepared=await storage.prepare({...file,botId:r.source.botId});await this.grantCurrent(g);
     return {file:{...file,ready:!!prepared.attachment},...('upload' in prepared?{upload:prepared.upload}:{})};
@@ -229,7 +280,8 @@ export class TaskRequests {
     const fp=hash(json(['submit',g.id,s.id,p.expectedRevision,p.secureHandle??null]));
     const prior=await this.prior(`guest:${g.id}`,op,fp);if(prior)return prior;
     taskRequestValues(r.spec,s.values,true);
-    if(s.files.length>12||s.files.filter(f=>f.mimeType.startsWith('image/')).length>6||r.spec.fields.some(f=>f.required&&['file','image'].includes(f.kind)&&!s.files.some(x=>x.fieldId===f.id&&x.ready)))throw new StorageError('Complete required file uploads.',409,'not_ready');
+    if(s.files.length>TASK_REQUEST_LIMITS.files||s.files.reduce((sum,f)=>sum+f.size,0)>TASK_REQUEST_LIMITS.totalFileBytes||s.files.filter(f=>f.mimeType.startsWith('image/')).length>TASK_REQUEST_LIMITS.images)throw new StorageError(`Use at most ${TASK_REQUEST_LIMITS.files} ordinary files (${TASK_REQUEST_LIMITS.images} images), each up to100 MiB and all up to2400 MiB.`,413,'limit');
+    if(r.spec.fields.some(f=>f.required&&['file','image'].includes(f.kind)&&!s.files.some(x=>x.fieldId===f.id&&x.ready)))throw new StorageError('Complete required file uploads.',409,'not_ready');
     if(r.spec.fields.some(f=>f.required&&f.kind.startsWith('secure-'))&&!p.secureHandle)throw new StorageError('Complete the private encrypted transfer first.',409,'private_not_ready');
     let secure:TaskRequestSubmission['secure'];
     if(p.secureHandle!==undefined) {
@@ -250,7 +302,13 @@ export class TaskRequests {
   async pending(cursor?:unknown) {
     const after=cursor===undefined?0:this.cursor(cursor);
     const r=await this.db.prepare("SELECT rowid,body FROM task_request_deliveries WHERE owner_key=? AND status IN ('received','awaiting-bot','uncertain') AND rowid>? ORDER BY rowid LIMIT 4").bind(this.owner,after).all<{rowid:number;body:string}>();
-    return {deliveries:r.results.map(x=>JSON.parse(x.body)),nextCursor:r.results.length?String(r.results[r.results.length-1].rowid):null};
+    const included:typeof r.results=[],deliveries:unknown[]=[];let bytes=0;
+    // Portable frames are 512 KiB. Leave room for envelopes and retain the
+    // last included row's cursor so a large page cannot skip pending work.
+    for(const row of r.results){const size=new TextEncoder().encode(row.body).length;
+      if(size>384*1024)throw new StorageError('Original Task Request delivery exceeds its 384 KiB page bound.',413,'limit');
+      if(bytes+size>384*1024)break;bytes+=size;included.push(row);deliveries.push(JSON.parse(row.body));}
+    return {deliveries,nextCursor:included.length?String(included[included.length-1].rowid):null};
   }
   async delivery(id:string) {
     const d=await this.db.prepare('SELECT body FROM task_request_deliveries WHERE owner_key=? AND request_id=?').bind(this.owner,taskRequestId(id)).first<{body:string}>();

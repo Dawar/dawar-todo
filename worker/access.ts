@@ -79,7 +79,7 @@ export async function appAccessResponse(
   if (isPublicInternalTransport(url.pathname)) return null;
   // Exact guest surface only; the API validates a request-scoped bearer/PIN.
   // No owner ticket, general Bots transport or neighboring data is exposed.
-  if (url.pathname === '/task-request' || url.pathname === '/task-request/' || url.pathname === '/api/task-requests/guest') return null;
+  if (url.pathname === '/f' || url.pathname === '/f/' || url.pathname === '/task-request' || url.pathname === '/task-request/' || url.pathname === '/api/task-requests/guest') return null;
   if (request.headers.get(AUTHENTICATED_USER_HEADER)?.trim()) return null;
 
   const apiRequest = url.pathname.startsWith("/api/");

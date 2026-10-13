@@ -1,14 +1,15 @@
 /** Only allowlisted ordinary form data and opaque receipts enter this journal. */
 import { taskRequestSource, taskRequestSpec, taskRequestValues, type TaskRequestOwnerAction, type TaskRequestGuestAction, type TaskRequestSpec } from '../../lib/task-requests';
+import type { OrdinaryProgress } from './progress';
 export type StoredFormAction = Exclude<TaskRequestOwnerAction, {
     action: 'list' | 'read';
 }> | Exclude<TaskRequestGuestAction, {
-    action: 'read' | 'finalize' | 'download' | 'secure-session';
+    action: 'resolve' | 'read' | 'finalize' | 'download' | 'secure-session';
 }>;
 export type FormIntent = {
     action: StoredFormAction;
     pinRequired?: boolean;
-    state: 'pending' | 'accepted';
+    state: 'pending' | 'accepted' | 'conflict';
     requestId?: string;
 };
 let connection: Promise<IDBDatabase> | undefined;
@@ -25,6 +26,12 @@ export function ordinaryAction(a: StoredFormAction, spec?: TaskRequestSpec): Sto
         return { ...base, action: 'publish', id: a.id, expectedRevision: a.expectedRevision, ...(a.expirySeconds === undefined ? {} : { expirySeconds: a.expirySeconds }) };
     if (a.action === 'revoke')
         return { ...base, action: 'revoke', id: a.id, expectedRevision: a.expectedRevision };
+    if (a.action === 'patch') {
+        if (!spec) throw Error('Ordinary answer scope required.');
+        const changes=taskRequestValues(spec,a.changes),baseValues=taskRequestValues(spec,a.baseValues);
+        if(Object.keys(baseValues).some(k=>!Object.prototype.hasOwnProperty.call(changes,k)))throw Error('Invalid progress base.');
+        return {...base,action:'patch',id:a.id,expectedRevision:a.expectedRevision,changes,baseValues,...(a.name?{name:{value:a.name.value,base:a.name.base}}:{})};
+    }
     if (a.action === 'save') {
         if (!spec)
             throw Error('Ordinary answer scope required.');
@@ -42,7 +49,7 @@ export async function formJournal(scope: string, command: {
     spec?: TaskRequestSpec;
     pinRequired?: boolean;
 } | {
-    kind: 'settle';
+    kind: 'settle' | 'conflict';
     operationId: string;
     requestId: string;
 }) {
@@ -61,14 +68,19 @@ export async function formJournal(scope: string, command: {
                     value = old ?? null;
                     return;
                 }
-                if (command.kind === 'settle') {
-                    if (!old || old.action.operationId !== command.operationId)
-                        throw Error('Original action identity changed.');
-                    value = { ...old, state: 'accepted', requestId: command.requestId };
-                    store.put(value, scope);
-                    store.put(value, `operation:${scope}:${value.action.operationId}`);
+                if (command.kind === 'settle' || command.kind === 'conflict') {
+                    const settle=(original:FormIntent|undefined)=>{
+                        if(!original||original.action.operationId!==command.operationId)throw Error('Original action identity changed.');
+                        value={...original,state:command.kind==='conflict'?'conflict':'accepted',requestId:command.requestId};
+                        // A late original receipt must not replace another tab's newer pending intent.
+                        if(old?.action.operationId===command.operationId)store.put(value,scope);
+                        store.put(value,`operation:${scope}:${command.operationId}`);
+                    };
+                    if(old?.action.operationId===command.operationId)settle(old);
+                    else {const original=store.get(`operation:${scope}:${command.operationId}`);original.onsuccess=()=>{try{settle(original.result);}catch(e){error=e;tx.abort();}};}
                     return;
                 }
+                if (command.kind !== 'admit') throw Error('Unknown form journal operation.');
                 const action = ordinaryAction(command.action, command.spec);
                 if (old?.state === 'pending') {
                     if (JSON.stringify(old.action) !== JSON.stringify(action) || !!old.pinRequired !== !!command.pinRequired)
@@ -103,6 +115,21 @@ export async function formDraft(scope: string, spec?: TaskRequestSpec) {
             const r = store.get(`draft:${scope}`);
             r.onsuccess = () => { result = r.result ?? null; };
         }
+    });
+}
+/** Local unsaved ordinary edits only. The caller's per-tab scope contains no bearer or PIN. */
+export async function progressDraft(scope:string,spec:TaskRequestSpec,draft?:OrdinaryProgress):Promise<OrdinaryProgress|null> {
+    const clean=(value:OrdinaryProgress):OrdinaryProgress=>{
+        const changes=taskRequestValues(spec,value.changes),baseValues=taskRequestValues(spec,value.baseValues);
+        if(Object.keys(baseValues).some(k=>!Object.hasOwn(changes,k)))throw Error('Invalid ordinary recovery base.');
+        if(value.name&&[value.name.value,value.name.base].some(v=>typeof v!=='string'||v.length>100||/[\x00-\x1f]/.test(v)))throw Error('Invalid ordinary name recovery.');
+        return {changes,baseValues,...(value.name?{name:{value:value.name.value,base:value.name.base}}:{})};
+    };
+    const validated=draft?clean(draft):undefined,db=await database();
+    return new Promise((resolve,reject)=>{
+        const tx=db.transaction('intents',validated?'readwrite':'readonly',{durability:'strict'}),store=tx.objectStore('intents');let result:OrdinaryProgress|null=null;
+        tx.oncomplete=()=>resolve(result);tx.onabort=()=>reject(tx.error??Error('Local ordinary recovery unavailable.'));tx.onerror=()=>{};
+        if(validated){result=validated;store.put(validated,`progress:${scope}`);}else {const r=store.get(`progress:${scope}`);r.onsuccess=()=>{try{result=r.result?clean(r.result):null;}catch{tx.abort();}};}
     });
 }
 /** Bind a newly acknowledged owner draft to its server ID without replacing recovery. */

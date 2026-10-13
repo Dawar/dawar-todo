@@ -1,10 +1,11 @@
 import { taskRequestGuest, TaskRequestPrivateClient } from '../../lib/task-request-client';
 import { artifactMime } from '../../lib/bot-file-metadata.mjs';
-import { taskRequestSpec, taskRequestValues, type TaskRequestGuest, type TaskRequestGuestAction, type TaskRequestFile, type TaskRequestValues, type TaskRequestSecureSession } from '../../lib/task-requests';
+import { taskRequestSpec, taskRequestValues, type TaskRequestPatch, type TaskRequestGuest, type TaskRequestGuestAction, type TaskRequestFile, type TaskRequestValues, type TaskRequestSecureSession } from '../../lib/task-requests';
 import { secureBase64, SECURE_IMAGE_BYTES, type SecureEnvelope } from '../../lib/secure-input';
 import { formJournal, type FormIntent } from './journal';
 import { uploadStorageBlob, type StoragePostTarget } from '../../lib/storage-upload';
 export function protectedLink(hash: string) {
+    if (/^#[A-Za-z0-9_-]{22}$/.test(hash)) return {code:hash.slice(1)};
     const match = /^#([^/]+)\/([A-Za-z0-9_-]{43})$/.exec(hash);
     if (!match)
         return null;
@@ -35,7 +36,7 @@ export class GuestFormSession {
             throw Error('Protected form closed.');
         return result;
     }
-    async read() {
+    async read(recover=true) {
         const { request } = await this.call<{
             request: TaskRequestGuest;
         }>({ action: 'read', id: this.id });
@@ -46,7 +47,7 @@ export class GuestFormSession {
         if (this.scope && scope !== this.scope)
             throw Error('The published form changed. Reopen its original link.');
         this.scope = scope;
-        this.action = await formJournal(scope, { kind: 'read' });
+        if(recover)this.action = await formJournal(scope, { kind: 'read' });
         return request;
     }
     get pending() { return this.action?.state === 'pending' ? this.action : null; }
@@ -56,17 +57,19 @@ export class GuestFormSession {
     }) {
         if (!this.scope)
             throw Error('Read the original form first.');
-        const intent = await formJournal(this.scope, { ...action, spec: request.spec });
+        let intent:FormIntent|null;
+        try{intent=await formJournal(this.scope,{...action,spec:request.spec});}catch(e){this.action=await formJournal(this.scope,{kind:'read'});throw e;}
         this.action = intent;
         if (!intent)
             throw Error('Original form action unavailable.');
         const result = await this.call<{
-            request: TaskRequestGuest;
+            request: TaskRequestGuest; conflicts?:string[];
         }>(intent.action as TaskRequestGuestAction);
         if (result.request.id !== request.id || result.request.revision !== request.revision || result.request.submission?.id !== request.submission?.id)
             throw Error('Submission receipt scope changed.');
-        await formJournal(this.scope, { kind: 'settle', operationId: intent.action.operationId, requestId: request.id });
-        this.action = null;
+        await formJournal(this.scope, { kind: result.conflicts?.length?'conflict':'settle', operationId: intent.action.operationId, requestId: request.id });
+        this.action = await formJournal(this.scope,{kind:'read'});
+        if(result.conflicts?.length) throw Object.assign(Error('Another visitor changed the same answer. Choose which version to keep.'),{conflicts:result.conflicts,request:result.request});
         return result.request;
     }
     async retry(request: TaskRequestGuest) {
@@ -75,6 +78,9 @@ export class GuestFormSession {
         if (this.pending.action.action === 'upload')
             throw Error('Select the same original file to continue its upload.');
         return this.mutate(request, { kind: 'admit', action: this.pending.action });
+    }
+    async patch(request:TaskRequestGuest,patch:Omit<TaskRequestPatch,'id'|'operationId'>) {
+        return this.mutate(request,{kind:'admit',action:{action:'patch',...patch,id:request.id,operationId:crypto.randomUUID()}});
     }
     async save(request: TaskRequestGuest, contributorName: string, values: TaskRequestValues) {
         if (contributorName.length > 100 || /[\x00-\x1f]/.test(contributorName))

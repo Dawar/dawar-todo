@@ -10,6 +10,11 @@ original delivery status, exact private authorization/receipt and canonical
 intake/readback. It cannot publish or revoke a request, select another owner,
 read another placement, or turn a guest submission into owner approval. Owner
 publication and guest HTTP actions retain the existing application handlers.
+The additive short-link and shared ordinary-progress contract is documented in
+`bot-bridge/TASK_REQUESTS.md`; portable primary validation uses the same24-file
+canonical bounds. Credentials/private values never enter ordinary progress,
+short-link targets, journals or native text. Configured public HTTPS origin and
+original form-signing key are required; absent capability is still unavailable.
 
 ## Delivery
 

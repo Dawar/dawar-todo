@@ -33,3 +33,6 @@
 .task-request-receipt { display:grid; gap:12px; padding:16px; border:1px solid var(--border); border-radius:12px; background:var(--muted); }
 .task-request-receipt > button { justify-self:start; }
 .task-request-page .task-request-markdown h3,.task-request-form > section > h3 { font-weight:600; }
+
+.task-request-share{position:sticky;top:0;z-index:5;display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:8px;border:1px solid var(--border);border-radius:10px;background:var(--card)}
+.task-request-share-panel{display:grid;gap:12px;flex-basis:100%;max-height:65dvh;overflow:auto;min-width:0;padding:8px}.task-request-share-panel svg{max-width:100%;height:auto;justify-self:center}.task-request-open{display:inline-flex;align-items:center;min-height:36px;border:1px solid var(--border);border-radius:8px;padding:8px 12px;text-decoration:underline}.task-request-save-status{color:var(--muted-foreground)}.task-request-receipt pre{white-space:pre-wrap;overflow-wrap:anywhere}

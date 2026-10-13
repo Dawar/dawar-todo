@@ -2,7 +2,7 @@
 import type { SecureRequest } from './secure-input';
 
 export const TASK_REQUEST_VERSION = 1 as const;
-export const TASK_REQUEST_LIMITS = { fields: 32, groups: 12, files: 12, fileBytes: 100 * 1024 * 1024, ordinaryBytes: 96 * 1024, defaultExpirySeconds: 7 * 86400, maximumExpirySeconds: 30 * 86400 } as const;
+export const TASK_REQUEST_LIMITS = { fields: 64, groups: 12, images: 24, files: 24, fileBytes: 100 * 1024 * 1024, totalFileBytes: 2400 * 1024 * 1024, ordinaryBytes: 96 * 1024, defaultExpirySeconds: 7 * 86400, maximumExpirySeconds: 30 * 86400 } as const;
 const reservedFieldIds = Object.getOwnPropertyNames(Object.prototype);
 export type TaskRequestField = {
   id: string; label: string; kind: 'text' | 'long-text' | 'choice' | 'image' | 'file' | 'secure-text' | 'secure-image';
@@ -32,6 +32,8 @@ export type TaskRequest = {
 };
 export type TaskRequestGuest = Omit<TaskRequest, 'source'> & { source: Pick<TaskRequestSource, 'botId' | 'threadId'>; botName: string };
 export type TaskRequestSave = { id: string; operationId: string; expectedRevision: number; contributorName: string; values: TaskRequestValues };
+/** Only edited ordinary fields are sent, with their observed shared base. */
+export type TaskRequestPatch = { id: string; operationId: string; expectedRevision: number; changes: TaskRequestValues; baseValues: TaskRequestValues; name?: { value: string; base: string } };
 export type TaskRequestPublish = { id: string; operationId: string; expectedRevision: number; expirySeconds?: number; pin?: string };
 export type TaskRequestUpload = { id: string; operationId: string; fieldId: string; name: string; size: number; mimeType: string; sha256: string };
 export type TaskRequestSecureBinding = { requestId: string; revision: number; submissionId: string; grantId: string };
@@ -44,8 +46,10 @@ export type TaskRequestOwnerAction =
   | ({ action: 'publish' } & TaskRequestPublish)
   | { action: 'revoke'; id: string; operationId: string; expectedRevision: number };
 export type TaskRequestGuestAction =
+  | { action: 'resolve' }
   | { action: 'read'; id: string }
   | ({ action: 'save' } & TaskRequestSave)
+  | ({ action: 'patch' } & TaskRequestPatch)
   | ({ action: 'upload' } & TaskRequestUpload)
   | { action: 'finalize' | 'download'; id: string; fileId: string }
   | { action: 'secure-session'; id: string; submissionId: string }
@@ -55,8 +59,8 @@ export type TaskRequestGuestAction =
 export const TASK_REQUEST_SPEC_SCHEMA = {
   type:'object',additionalProperties:false,required:['version','title','instructions','context','groups','fields'],properties:{
     version:{type:'integer',enum:[1]},title:{type:'string',maxLength:100},instructions:{type:'string',maxLength:12000},context:{type:'string',maxLength:12000},
-    groups:{type:'array',maxItems:12,items:{type:'object',additionalProperties:false,required:['id','label'],properties:{id:{type:'string',maxLength:180},label:{type:'string',maxLength:200},notes:{type:'string',maxLength:2000}}}},
-    fields:{type:'array',minItems:1,maxItems:32,items:{type:'object',additionalProperties:false,required:['id','label','kind','required'],properties:{
+    groups:{type:'array',maxItems:TASK_REQUEST_LIMITS.groups,items:{type:'object',additionalProperties:false,required:['id','label'],properties:{id:{type:'string',maxLength:180},label:{type:'string',maxLength:200},notes:{type:'string',maxLength:2000}}}},
+    fields:{type:'array',minItems:1,maxItems:TASK_REQUEST_LIMITS.fields,description:'Up to 64 fields and 24 ordinary image/file upload fields; private text/image limits remain 6/2. Each ordinary file is at most 100 MiB, all files at most 2400 MiB.',items:{type:'object',additionalProperties:false,required:['id','label','kind','required'],properties:{
       id:{type:'string',pattern:'^[a-zA-Z][a-zA-Z0-9_-]{0,39}$',not:{enum:reservedFieldIds}},label:{type:'string',maxLength:200,description:'Private labels have a 100-character limit.'},required:{type:'boolean'},
       kind:{type:'string',enum:['text','long-text','choice','image','file','secure-text','secure-image']},notes:{type:'string',maxLength:2000},groupId:{type:'string',maxLength:180},questionId:{type:'string',maxLength:180},
       choices:{type:'array',minItems:1,maxItems:20,items:{type:'object',additionalProperties:false,required:['id','label'],properties:{id:{type:'string',maxLength:180},label:{type:'string',maxLength:200}}}},
@@ -81,7 +85,9 @@ function text(v: unknown, max: number, empty = false): string {
 export function taskRequestSpec(input: unknown): TaskRequestSpec {
   if (!plain(input)) throw Error('Invalid form specification.');
   keys(input, ['version','title','instructions','context','groups','fields','secure']);
-  if (input.version !== 1 || !Array.isArray(input.fields) || !input.fields.length || input.fields.length > 32 || !Array.isArray(input.groups) || input.groups.length > 12) throw Error('Unsupported form version or field count.');
+  if (input.version !== 1) throw Error('Form version must be 1.');
+  if (!Array.isArray(input.fields) || !input.fields.length || input.fields.length > TASK_REQUEST_LIMITS.fields) throw Error(`Use 1–${TASK_REQUEST_LIMITS.fields} form fields.`);
+  if (!Array.isArray(input.groups) || input.groups.length > TASK_REQUEST_LIMITS.groups) throw Error(`Use at most ${TASK_REQUEST_LIMITS.groups} form groups.`);
   const groupIds = new Set<string>(), fieldIds = new Set<string>();
   const groups = input.groups.map(g => {
     if (!plain(g)) throw Error('Invalid group.'); keys(g,['id','label','notes']);
@@ -95,7 +101,7 @@ export function taskRequestSpec(input: unknown): TaskRequestSpec {
     if(f.groupId !== undefined && !groupIds.has(taskRequestId(f.groupId))) throw Error('Unknown field group.');
     let choices: TaskRequestField['choices'];
     if(f.kind === 'choice') {
-      if(!Array.isArray(f.choices) || !f.choices.length || f.choices.length>20) throw Error('Choices required.');
+      if(!Array.isArray(f.choices) || !f.choices.length || f.choices.length>20) throw Error('Use 1–20 choices per choice field.');
       choices=f.choices.map(c=>{if(!plain(c)) throw Error('Invalid choice.');keys(c,['id','label']);return {id:taskRequestId(c.id),label:text(c.label,200)};});
       if(new Set(choices.map(c=>c.id)).size!==choices.length) throw Error('Duplicate choice.');
     } else if(f.choices !== undefined) throw Error('Choices belong to choice fields.');
@@ -103,8 +109,9 @@ export function taskRequestSpec(input: unknown): TaskRequestSpec {
       ...(f.notes === undefined ? {} : {notes:text(f.notes,2000,true)}),...(f.groupId === undefined ? {} : {groupId:String(f.groupId)}),
       ...(choices ? {choices}:{}),...(f.questionId === undefined ? {} : {questionId:taskRequestId(f.questionId)}) };
   });
-  if(fields.filter(f=>f.kind==='image').length>6)throw Error('Ordinary image field bounds exceeded.');
-  if(fields.filter(f=>f.kind==='secure-text').length>6 || fields.filter(f=>f.kind==='secure-image').length>2) throw Error('Private field bounds exceeded.');
+  if(fields.filter(f=>f.kind==='image').length>TASK_REQUEST_LIMITS.images)throw Error(`Use at most ${TASK_REQUEST_LIMITS.images} ordinary image fields.`);
+  if(fields.filter(f=>['image','file'].includes(f.kind)).length>TASK_REQUEST_LIMITS.files)throw Error(`Use at most ${TASK_REQUEST_LIMITS.files} ordinary image/file upload fields in total.`);
+  if(fields.filter(f=>f.kind==='secure-text').length>6 || fields.filter(f=>f.kind==='secure-image').length>2) throw Error('Private fields allow at most 6 text fields and 2 image fields.');
   let secure: TaskRequestSpec['secure'];
   if(fields.some(f=>f.kind.startsWith('secure-'))) {
     if(!plain(input.secure) || !plain(input.secure.destination)) throw Error('Private purpose/destination required.');
@@ -116,7 +123,7 @@ export function taskRequestSpec(input: unknown): TaskRequestSpec {
     secure={purpose:text(input.secure.purpose,500),destination:{kind:d.kind as 'https'|'desktop',label:text(d.label,200),...(origin ? {origin}:{})}};
   } else if(input.secure !== undefined) throw Error('Private destination requires a private field.');
   const spec:TaskRequestSpec={version:1,title:text(input.title,100),instructions:text(input.instructions,12000,true),context:text(input.context,12000,true),groups,fields,...(secure ? {secure}:{})};
-  if(new TextEncoder().encode(JSON.stringify(spec)).length>48*1024) throw Error('Form specification too large.');
+  if(new TextEncoder().encode(JSON.stringify(spec)).length>48*1024) throw Error('Form specification exceeds 48 KiB.');
   return spec;
 }
 export function taskRequestSource(input: unknown): TaskRequestSource {
