@@ -11,6 +11,7 @@ export class Codex extends EventEmitter {
     super();
     this.binary = binary;
     this.pending = new Map();
+    this.lateRecovery = new Map();
     this.counter = 0;
     this.ready = false;
   }
@@ -41,6 +42,15 @@ export class Codex extends EventEmitter {
           message.id !== undefined ? "request" : "notification",
           message,
         );
+      else if (this.lateRecovery.has(message.id)) {
+        const p=this.lateRecovery.get(message.id);clearTimeout(p.timer);this.lateRecovery.delete(message.id);
+        // Private, allowlisted receipt metadata only. No native payload enters
+        // history, model context, or an ordinary app event.
+        this.emit('recoveryReceipt',{requestId:message.id,method:p.method,threadId:p.threadId,
+          ...(message.error ? {rpcCode:Number.isSafeInteger(message.error.code)?message.error.code:null} : p.method==='thread/unsubscribe' ?
+            ['unsubscribed','notSubscribed','notLoaded'].includes(message.result?.status)?{status:message.result.status}:{unconfirmed:true} :
+            message.result?.thread?.id===p.threadId?{resumedThreadId:p.threadId}:{unconfirmed:true})});
+      }
       else if (this.pending.has(message.id)) {
         const p = this.pending.get(message.id);
         this.pending.delete(message.id);
@@ -71,6 +81,8 @@ export class Codex extends EventEmitter {
         );
       }
       this.pending.clear();
+      for(const p of this.lateRecovery.values())clearTimeout(p.timer);
+      this.lateRecovery.clear();
       this.emit("disconnect", code);
     });
     this.process.on("error", (error) => this.emit("fault", error));
@@ -94,24 +106,33 @@ export class Codex extends EventEmitter {
       throw new Error("Codex is disconnected.");
     this.process.stdin.write(JSON.stringify(message) + "\n");
   }
-  call(method, params = {}, timeoutMs = 120000) {
-    this.admissionGuard?.(method, params);
+  call(method, params = {}, timeoutMs = 120000, recovery = null) {
+    const retain=recovery?.retainRecoveryReceipt===true;
+    if(retain && (!['thread/unsubscribe','thread/resume'].includes(method) ||
+      this.lateRecovery.size+[...this.pending.values()].filter(p=>p.retain).length>=32 || !this.process?.stdin.writable))
+      throw Object.assign(Error('Bounded native recovery transport is unavailable before submission.'),{recoveryNotSubmitted:true});
+    try{this.admissionGuard?.(method, params);}catch(e){if(retain)e.recoveryNotSubmitted=true;throw e;}
     const id = ++this.counter;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
+        if(retain){const entry={method,threadId:params.threadId};entry.timer=setTimeout(()=>this.lateRecovery.delete(id),3600000);entry.timer.unref();this.lateRecovery.set(id,entry);}
         reject(
           new Error(
             `Codex ${method} timed out; check the conversation before retrying.`,
           ),
         );
       }, timeoutMs);
-      this.pending.set(id, { resolve, reject, timer, method, threadId: params.threadId });
+      this.pending.set(id, { resolve, reject, timer, method, threadId: params.threadId, retain });
+      try{recovery?.onRequestId?.(id);}catch(e){clearTimeout(timer);this.pending.delete(id);e.recoveryNotSubmitted=true;reject(e);return;}
       try {
         this.write({ id, method, params });
       } catch (e) {
         clearTimeout(timer);
         this.pending.delete(id);
+        // A write can fail after bytes were committed. Retain this exact
+        // recovery receipt too; never manufacture a safe-to-repeat outcome.
+        if(retain){const entry={method,threadId:params.threadId};entry.timer=setTimeout(()=>this.lateRecovery.delete(id),3600000);entry.timer.unref();this.lateRecovery.set(id,entry);}
         reject(e);
       }
     });
