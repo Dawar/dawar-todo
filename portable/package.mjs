@@ -25,6 +25,11 @@ await mkdir(directory);
 try {
   await cp('.next-portable/standalone',join(directory,'.next-portable/standalone'),{recursive:true});
   await cp('portable',join(directory,'portable'),{recursive:true});
+  // The controller's native proof helpers must resolve inside the package,
+  // without importing TypeScript or source files from the build checkout.
+  await cp('dist/portable/deploy-cli.mjs',join(directory,'portable/deploy-cli.mjs'));
+  await cp('bot-bridge/native_queue_receipts.py',join(directory,'portable/native_queue_receipts.py'));
+  execFileSync(process.execPath,['--check',join(directory,'portable/deploy-cli.mjs')]);
   await mkdir(join(directory,'dist/agent-downloads'),{recursive:true});
   for(const file of ['current.json',download.name,download.name+'.sha256'])await cp(join('dist/agent-downloads',file),join(directory,'dist/agent-downloads',file));
   await mkdir(join(directory,'dist/portable'),{recursive:true});
