@@ -81,7 +81,8 @@ export class AuthRecovery {
       let recovered = false;
       if (connected && !this.flow && this.runtime.activityUnresolved(before.id) &&
           (isCodexAuthError(before.error) || this.runtime.store.get('botActivity', before.id)?.recoveryKind === 'native-system-error') && operationId)
-        recovered = await this.restoreConversation(botId, p, operationId, attempt);
+        recovered = this.runtime.nativeErrorRecovery?.verifiedAuthentication(before.id, this.proof)
+          ? false : await this.restoreConversation(botId, p, operationId, attempt);
       // Clear only the bot's current display error, never its failed native
       // turn, input, queue, receipt, Stop, or Goal. Unknown/current work blocks
       // recovery. A fresh native metadata read never resumes a thread.
@@ -106,7 +107,12 @@ export class AuthRecovery {
     const token = captureActivity(r, botId);
     this.restoring = true;
     try {
-      await this.idle();
+      // Checking an already authenticated conversation is scoped to that bot.
+      // Other bots can finish work. Account/login changes still require the
+      // separate machine-wide idle check in start(), below.
+      const proof = await inspectNativeIdle(r, (method, params) => r.codex.call(method, params, 12000),
+        { terminalErrors: true, onlyThreads: [before.threadId] });
+      if (!proof.safe) throw Object.assign(Error('This conversation still has native work, tools, a Goal or an accepted queue.'), { outcome: 'rejected' });
       if (!same(before, this.bot(botId, p)) || !activityUnchanged(r, botId, token)) throw Object.assign(Error('Conversation state changed during recovery. Check again.'), { outcome: 'rejected' });
       const { thread } = await r.codex.call('thread/read', { threadId: before.threadId, includeTurns: false }, 12000);
       if (thread?.id !== before.threadId) throw Object.assign(Error('Original conversation identity changed.'), { outcome: 'rejected' });

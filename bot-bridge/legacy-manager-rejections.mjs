@@ -31,8 +31,9 @@ export function legacyManagerRejection(raw, target, bot, evidence = review, sour
   } catch { return null; }
 }
 
-export function passiveLegacyManagerRejections(store) {
-  const rows = store.db.prepare("SELECT CASE WHEN length(CAST(json AS BLOB))<=1048576 THEN json ELSE NULL END AS json FROM records WHERE kind='managerOperation' AND json_extract(json,'$.state') IN ('dispatching','uncertain') LIMIT 13").all();
+export function passiveLegacyManagerRejections(store, botId = null) {
+  const query=store.db.prepare("SELECT CASE WHEN length(CAST(json AS BLOB))<=1048576 THEN json ELSE NULL END AS json FROM records WHERE kind='managerOperation' AND json_extract(json,'$.state') IN ('dispatching','uncertain')"+(botId===null?'':' AND bot_id=?')+' LIMIT 13');
+  const rows = botId===null?query.all():query.all(botId);
   if (rows.length > review.records.length || rows.some(row => typeof row.json !== 'string')) return [];
   return rows.flatMap(({ json }) => {
     const row = JSON.parse(json), known = review.records.find(r => r.id === row.id);

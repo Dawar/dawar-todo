@@ -4,6 +4,7 @@ import { createInterface } from "node:readline";
 import { CODEX_VERSION } from "./codex-version.mjs";
 import { parseAccountUsageMessage } from "./account-usage-decoder.mjs";
 import { closeIdleChild } from './idle-child-close.mjs';
+import { EXECUTION_ACCESS, managedExecutionParams, PRIVATE_REVIEW } from './execution-access.mjs';
 
 export { CODEX_VERSION } from "./codex-version.mjs";
 export class Codex extends EventEmitter {
@@ -23,7 +24,7 @@ export class Codex extends EventEmitter {
       throw new Error(
         `Expected Codex ${CODEX_VERSION}; found ${version}. Regenerate and validate the protocol bindings before upgrading.`,
       );
-    this.process = spawn(this.binary, ["app-server", "--stdio"], {
+    this.process = spawn(this.binary, ["app-server", "--stdio", '-c', `approval_policy="${EXECUTION_ACCESS.approvalPolicy}"`, '-c', `sandbox_mode="${EXECUTION_ACCESS.sandbox}"`], {
       stdio: ["pipe", "pipe", "pipe"],
     });
     // Protocol stdout must never be mixed with diagnostic logs.
@@ -107,6 +108,7 @@ export class Codex extends EventEmitter {
     this.process.stdin.write(JSON.stringify(message) + "\n");
   }
   call(method, params = {}, timeoutMs = 120000, recovery = null) {
+    params = managedExecutionParams(method, params);
     const retain=recovery?.retainRecoveryReceipt===true;
     if(retain && (!['thread/unsubscribe','thread/resume'].includes(method) ||
       this.lateRecovery.size+[...this.pending.values()].filter(p=>p.retain).length>=32 || !this.process?.stdin.writable))
@@ -137,6 +139,8 @@ export class Codex extends EventEmitter {
       }
     });
   }
+  forkPrivateReview(params) { return this.call('thread/fork', {...params, [PRIVATE_REVIEW]:true}); }
+  startPrivateReviewTurn(params) { return this.call('turn/start', {...params, [PRIVATE_REVIEW]:true}); }
   respond(id, result) {
     this.write({ id, result });
   }

@@ -41,7 +41,7 @@ function projection(runtime, bot) {
     const hasFiles = runtime.store.db.prepare(`SELECT 1 FROM records WHERE kind='artifactPublication' AND bot_id=? AND json_extract(json,'$.provenance.threadId')=? AND json_extract(json,'$.provenance.turnId')=? LIMIT 1`).get(bot.id, bot.threadId, turn.id);
     if (turn.itemsView === 'summary' && turn.status !== 'inProgress' &&
         (legacyFindings.length || audience.kind !== 'activity' && (turn.error?.message || hasFiles || rows.some(({ item }) => item.type === 'agentMessage' && item.text.trim() || item.type === 'userMessage' && !/^(schedule:|peer:|peer-exchange:|manager-notice:|secure-receipt:)/.test(item.clientId ?? ''))))) {
-      const final = rows.findIndex(({ item }) => item.type === 'agentMessage' && item.phase === 'final_answer');
+      const final = rows.findIndex(({ item }) => item.type === 'plan' || item.type === 'agentMessage' && item.phase === 'final_answer');
       rows.splice(final < 0 ? 0 : final + 1, 0, { turn, item: { type: 'contextCompaction', id: 'native-turn-log' }, audience, deferred: true });
     }
     return rows;
@@ -176,6 +176,15 @@ async function readChatPage(runtime, bot, cursor) {
     if (turn.status === 'inProgress') {
       const tail = await runtime.historyReads.items(bot.threadId, turn.id, null, 8, 'desc');
       data.push({ ...turn, itemTimings: Object.fromEntries(tail.data.map(e => [e.item.id, { startedAtMs: e.startedAtMs, completedAtMs: e.completedAtMs }])), items: [...new Map([...turn.items, ...tail.data.map(e => e.item).reverse()].map(i => [i.id, i])).values()] });
+    } else if (turn.status === 'completed' && !turn.items.some(item => item.type === 'plan' || item.type === 'agentMessage' && item.phase === 'final_answer')) {
+      // Native summary omits final plan items. Recover only the bounded final
+      // item tail of plan-only turns; never load a transcript or expose tool or
+      // private reasoning bodies in ordinary conversation history.
+      const tail = await runtime.historyReads.items(bot.threadId, turn.id, null, 8, 'desc');
+      const plans = tail.data.filter(entry => entry.item.type === 'plan');
+      data.push({ ...turn,
+        itemTimings: Object.fromEntries(plans.map(entry => [entry.item.id, { startedAtMs: entry.startedAtMs, completedAtMs: entry.completedAtMs }])),
+        items: [...new Map([...turn.items, ...plans.reverse().map(entry => entry.item)].map(item => [item.id, item])).values()] });
     } else data.push(turn);
   }
   return { ...page, data };

@@ -2,10 +2,13 @@ import { terminalTurn } from './native-turn.mjs';
 
 // Process-owned native state, not an all-account history scan. Extra threads
 // must be registered main conversations when checking account recovery.
-export async function inspectNativeIdle(runtime, read, { terminalErrors = false, extraThreads = [] } = {}) {
+export async function inspectNativeIdle(runtime, read, { terminalErrors = false, extraThreads = [], onlyThreads = null } = {}) {
   const seen = new Set(), threads = new Set();
   let cursor = null;
-  do {
+  if (onlyThreads !== null && (!Array.isArray(onlyThreads) || !onlyThreads.length || onlyThreads.length > 100 ||
+      onlyThreads.some(id => !runtime.store.bots().some(b => b.threadId === id && !b.archived && !b.deletedAt))))
+    throw Error('Scoped recovery requires registered bot conversations.');
+  if (onlyThreads === null) do {
     if (seen.has(cursor) || seen.size >= 10) throw Error('Loaded native session pagination exceeded its bound.');
     seen.add(cursor);
     const page = await read('thread/loaded/list', { cursor, limit: 100 });
@@ -13,6 +16,7 @@ export async function inspectNativeIdle(runtime, read, { terminalErrors = false,
         page.nextCursor !== null && typeof page.nextCursor !== 'string') throw Error('Loaded native session metadata is incomplete.');
     page.data.forEach(id => threads.add(id)); cursor = page.nextCursor;
   } while (cursor !== null);
+  else onlyThreads.forEach(id => threads.add(id));
   for (const id of extraThreads) {
     if (typeof id !== 'string' || !runtime.store.bots().some(b => b.threadId === id && !b.archived && !b.deletedAt))
       throw Error('Native recovery thread is not registered.');

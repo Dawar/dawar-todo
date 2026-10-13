@@ -8,6 +8,8 @@ import { DatabaseSync, backup } from 'node:sqlite';
 import { readPrivate,savePrivate } from './private-file.mjs';
 import { LocalWriterDrain } from './local-work-admission.mjs';
 import { RetainedRecords } from './retained-records.mjs';
+import {bootstrapAuthority,bootstrapIdle} from './bootstrap-idle.mjs';
+import {closeBootstrap} from './bootstrap-close.mjs';
 
 const exec=promisify(execFile),hash=bytes=>createHash('sha256').update(bytes).digest('hex');
 const failure=()=>Error('Deployment prerequisite differs. Inspect the private original transaction; no lifecycle effect was repeated.');
@@ -88,6 +90,7 @@ export function linuxDeployment(spec) {
   const wait=async(row,test)=>{while(Date.now()<row.deadline){const result=await test();if(result)return result;await new Promise(r=>setTimeout(r,1000));}throw failure();};
   return {
     async preflight(){
+      if(spec.compatibilityBootstrap)bootstrapAuthority(spec);
       await target();await original();const h=await health();
       if(h.http!==200||h.source!==spec.old.source||!h.ready||h.maintenance?.phase!=='open')throw failure();
       const env=(await readFile(`/proc/${spec.old.pid}/environ`)).toString().split('\0');
@@ -108,17 +111,18 @@ export function linuxDeployment(spec) {
       const h=await health();
       const native={operationId:spec.operationId,commit:spec.old.source,version:spec.runtime,instanceId:h.maintenance.instanceId,
         invocationId:spec.old.invocationId,unitId:spec.controllerUnitId,waitSeconds:spec.waitSeconds};
-      return {native};
+      return {native,...(spec.compatibilityBootstrap?{nativeProcess:await nativeProof(spec.old.pid)}:{})};
     },
     async begin(_,row){
       const held=await maintenance('begin',row);if(!held.active||held.phase!=='draining'||Date.parse(held.expiresAt)>row.deadline+5000)throw failure();
-      const hub=local('begin',row);return {native:row.hold.native,hub};
+      const hub=local('begin',row);return {...row.hold,native:row.hold.native,hub};
     },
-    async observe(_,row){const n=await maintenance('observe',row),h=local('observe',row);return {safe:n.safe===true&&h.status==='ready',native:n,hub:h};},
+    async observe(_,row){const n=spec.compatibilityBootstrap?await bootstrapIdle(spec,await maintenance('status',row)):await maintenance('observe',row),h=local('observe',row);return {safe:n.safe===true&&h.status==='ready',native:n,hub:h};},
     async freezeBackup(_,row){
-      const final=await maintenance('observe',row);if(!final.safe)throw failure();
-      local('freeze',row);await maintenance('seal',row);await maintenance('claim',row);
-      return {installedSealClaim:true,retainedContract:new RetainedRecords(spec.retainedRecordsPath).fingerprint};
+      const final=spec.compatibilityBootstrap?await bootstrapIdle(spec,await maintenance('status',row)):await maintenance('observe',row);if(!final.safe)throw failure();
+      local('freeze',row);
+      if(!spec.compatibilityBootstrap){await maintenance('seal',row);await maintenance('claim',row);}
+      return {installedSealClaim:!spec.compatibilityBootstrap,compatibilityBootstrap:spec.compatibilityBootstrap?final:null,retainedContract:new RetainedRecords(spec.retainedRecordsPath).fingerprint};
     },
     async backup(){
       const directory=join(spec.receiptDirectory,'backup');await mkdir(directory,{recursive:true,mode:0o700});const results=[];
@@ -133,11 +137,14 @@ export function linuxDeployment(spec) {
     },
     async seal(_,row){
       await target();for(const file of spec.files)await exactFile(file.path,file.beforeSHA256);
-      const final=await maintenance('observe',row);if(!final.safe)throw failure();
-      if(final.phase!=='claimed')throw failure();return {safe:true,installedSealClaim:true,native:final,retainedContract:new RetainedRecords(spec.retainedRecordsPath).fingerprint};
+      const final=spec.compatibilityBootstrap?await bootstrapIdle(spec,await maintenance('status',row)):await maintenance('observe',row);if(!final.safe)throw failure();
+      if(!spec.compatibilityBootstrap&&final.phase!=='claimed')throw failure();return {safe:true,installedSealClaim:!spec.compatibilityBootstrap,native:final,retainedContract:new RetainedRecords(spec.retainedRecordsPath).fingerprint};
     },
     async stop(){await original();await systemd('stop','--no-block',spec.unitId);},
-    async waitOldExit(_,row){return wait(row,async()=>{
+    async waitOldExit(_,row){
+      if(spec.compatibilityBootstrap&&await processIdentity(spec.old.pid)===spec.old.start)
+        await closeBootstrap(spec,row,{original,status:()=>maintenance('status',row),idle:s=>bootstrapIdle(spec,s)});
+      return wait(row,async()=>{
       if(await processIdentity(spec.old.pid)===spec.old.start)return null;
       const u=await unit();if(Number(u.MainPID)>0||u.Job)return null;
       if(spec.old.controlGroup){try{if((await readFile(join('/sys/fs/cgroup',spec.old.controlGroup,'cgroup.procs'),'utf8')).trim())throw failure();}catch(e){if(e.code!=='ENOENT')throw e;}}

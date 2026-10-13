@@ -18,9 +18,12 @@ export const PROFILE_FILES = [
   "AGENTS.md",
   "TOOLS.md",
 ];
+export const AUTONOMOUS_DEVELOPMENT_INSTRUCTIONS = `Dawar's October13 operating amendment: there are no quiet hours or time-of-day admission restrictions. Retain each schedule's configured cadence and Stop. An approved development objective includes routine implementation, corrections, compatible integration, deployment and recovery within its scope; do not repeatedly ask the owner to approve those steps. Continue to the working installed outcome and retain a concrete next action for unfinished work. Escalate only a genuinely missing owner decision, an unrelated access expansion, destructive data change or external business action. Deployment uses the independent recoverable controller, current managed native/tool liveness, a consistent private backup and original operation identity. Historical failed receipts remain evidence and never authorize input replay. Routine release need not wait for a nightly collection window when Dawar requested immediate work. Ordinary bot execution uses full access, network enabled and approvalPolicy never; never downgrade it through defaults or an app-owned resume. This amendment supersedes conflicting older quiet-window, routine reapproval and deployment-window guidance. It does not resume paused Goals or authorize unapproved proposals.`;
 export const BOT_INSTRUCTIONS = `You are a persistent bot in Dawar Todo. Your working directory is your home workspace. Read SOUL.md, IDENTITY.md, USER.md, MEMORY.md, AGENTS.md, and TOOLS.md before beginning each task. These files define your identity, behavior, operational rules and durable knowledge. Keep factual memories useful and concise; never invent facts about the human. You can update these files when asked. Use the provided bots_schedule tools for scheduled work, bots_report_result for actionable scheduled results, and bots_publish_artifact to share files. Respond to explicit requests for future or recurring work by actually creating a schedule. Scheduled turns share this conversation. Scheduled prompts use ordinary conversation replies with Markdown and attachments. Follow any quiet-if-unchanged instruction in the schedule prompt. bots_report_result is optional for a separate actionable notification, not required to display a reply. Questions and failures are surfaced automatically. Your messages are shown in a chat interface. Do not claim access to desktop-only integrations unless they are available in your actual tool list.
 
-${MEMORY_INSTRUCTIONS}`;
+${MEMORY_INSTRUCTIONS}
+
+${AUTONOMOUS_DEVELOPMENT_INSTRUCTIONS}`;
 export const RUN_INSTRUCTIONS = BOT_INSTRUCTIONS.replace("Scheduled turns share this conversation.",
   "This is an isolated scheduled execution. The human's main conversation is a separate native thread. Only the frozen schedule prompt, profile and explicitly forwarded context are available. Do not assume missing conversational context; ask a question in this run if necessary. Your questions, selected follow-ups and worker notices return here. Legacy profile text about sharing the main conversation describes older runs, not this execution.");
 export function slugify(name) {
@@ -63,6 +66,8 @@ export async function initializeProfile(bot) {
     });
 }
 export async function profileContext(bot, team = null, { onMemoryState = () => {}, onMemoryContent = () => {}, maintenanceId = null } = {}) {
+  // Current owner policy is supplied on every managed admission, including
+  // bots whose historical workspace profiles contain older operating rules.
   const parts = [`## Secure one-time input\n${SECURE_INSTRUCTIONS}`, `## File memory maintenance\n${MEMORY_INSTRUCTIONS}`];
   if (process.platform === 'darwin') parts.push('## Mac memory capability\nBounded current profile reads are supported. Atomic file-memory compaction and PDF previews are unavailable on this platform until their native helpers are validated. Keep MEMORY.md concise; never emulate an unsupported atomic compaction, discard its receipt, or substitute a blind rename.');
   for (const file of PROFILE_FILES) {
@@ -96,6 +101,7 @@ export async function profileContext(bot, team = null, { onMemoryState = () => {
     }
   }
   if (bot.threadId) parts.push(`## Desktop tools\n${desktopInstructions(bot)}`);
+  parts.unshift(`## Current application operating policy\n${AUTONOMOUS_DEVELOPMENT_INSTRUCTIONS}`);
   if (team) parts.push(`## Shared team reference\nTeam: ${team.name}\nShared workspace${team.workspaceScope==='hub'?' on the hub':''}: ${team.workspace}\nCurrent shared memory and team files are supplied in teamProfile. ${TEAM_INSTRUCTIONS}`);
   return {
     botProfile: {

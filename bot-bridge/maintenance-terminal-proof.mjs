@@ -26,13 +26,14 @@ export function readTerminalProof(input, timeout) {
 }
 
 export class MaintenanceTerminalProof {
-  constructor(store, { read = readTerminalProof, fresh = nativeProofFresh, originals = null } = {}) {
-    Object.assign(this, { store, read, fresh, originals });
+  constructor(store, { read = readTerminalProof, fresh = nativeProofFresh, originals = null, botId = null } = {}) {
+    Object.assign(this, { store, read, fresh, originals, botId });
   }
   snapshot() {
     const records = [];
     for (const [kind, clause] of [['primaryInbox', "json_extract(json,'$.state')='accepted' AND json_extract(json,'$.terminalStatus') IS NULL"], ['pending', '1']]) {
-      const rows = this.store.db.prepare(`SELECT id,CASE WHEN length(CAST(json AS BLOB))<=1048576 THEN json ELSE NULL END json FROM records WHERE kind=? AND ${clause} LIMIT 9`).all(kind);
+      const query=this.store.db.prepare(`SELECT id,CASE WHEN length(CAST(json AS BLOB))<=1048576 THEN json ELSE NULL END json FROM records WHERE kind=? AND ${clause}${this.botId===null?'':' AND bot_id=?'} LIMIT 9`);
+      const rows = this.botId===null?query.all(kind):query.all(kind,this.botId);
       if (rows.some(r => !r.json)) return null;
       for (const r of rows) {
         const row = JSON.parse(r.json);

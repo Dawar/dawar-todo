@@ -1,6 +1,6 @@
 # DawarTodo deployment and recovery
 
-Routine task approval covers implementation, scoped corrections and reversible preparation. A new permission decision is needed only for an access expansion, destructive action, external business action or missing owner choice. Source-ready and installed remain separate.
+Routine task approval covers implementation, scoped corrections, compatible deployment and recovery through the working installed result. Do not require another approval for each preparation, pre-effect correction or compatible activation. A new owner decision is needed only for unrelated access expansion, destructive data changes, external business actions or a missing owner choice. There are no quiet hours or time-of-day admission restrictions. Source-ready and installed remain separate.
 
 ## One deployment command
 
@@ -35,3 +35,9 @@ The persistent public front and existing Cloudflare connector are separate from 
 Rollback changes reviewed code/configuration after proving current writer ownership and idle. Use a NEW explicit rollback transaction linked to the original healthy deployment and current process, retaining all receipts, epoch/placement claims and post-cutover input. Never restore an earlier SQLite backup over newer data. An old backup is an isolated recovery artifact, not a routine rollback command.
 
 The detailed old contracts, historical one-use attempts and evidence remain in [maintenance-history-20261012.md](maintenance-history-20261012.md) and their original private receipt directories. They are history, not additional current approval gates.
+
+## First installation from an older guard
+
+An explicit `compatibilityBootstrap` in the private deployment plan consumes the owner's standing recovery amendment. It verifies the original native human record, installed process/binary identity, current RAM counters, registered native turn/Goal/queue metadata, terminal inputs and byte-exact pre-effect refusals. It uses the same installed admission hold and hub freeze, and records `installedSealClaim: false`; it never fabricates a native claim or resets an older attempt.
+
+After the consistent private backup and original stop intent, the controller may close the proved-idle native stdio child and registered idle desktop transports. Each signal has a durable original intent. Only after every descendant has exited and the old cgroup contains solely the idle parent may it terminate that legacy parent to finish the pending stop. Active native work, tools and GUI/browser sessions are never killed. The next installed runtime uses its normal shared retention/shutdown contract, so this compatibility path is not a recurring deployment prerequisite.
