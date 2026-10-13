@@ -37,8 +37,8 @@ const ownerQueueControls=new Set(['queue.send','queue.resume','work.resume']);
 // The hub reuses the original logical records and local acceptance closures.
 // This facade has no native process: queue mutation cannot become inference.
 export class HubControls extends EventEmitter {
-  constructor({path,hub,router,owner=null,teamWorkspaceRoot,legacyTeamSource,authority=null,defaultTimeZone='America/Toronto',broadcast=()=>{},quietWindow={start:'02:30',end:'04:30',timeZone:'America/Toronto',scheduleIds:[]}}) {
-    super();Object.assign(this,{hub,router,authority,defaultTimeZone,broadcast,quietWindow});
+  constructor({path,hub,router,owner=null,teamWorkspaceRoot,legacyTeamSource,authority=null,defaultTimeZone='America/Toronto',broadcast=()=>{}}) {
+    super();Object.assign(this,{hub,router,authority,defaultTimeZone,broadcast});
     this.storePath=path;this.store=new Store(path);this.ready=true;this.locks=new Map();this.closed=false;
     this.store.db.exec('PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS portable_control_receipts(operation_id TEXT PRIMARY KEY,receipt_hash TEXT NOT NULL)');
     const inherited=storedRuntimeDefaults(this.store);this.defaults=inherited===undefined?{}:inherited;
@@ -306,24 +306,18 @@ export class HubControls extends EventEmitter {
     const method=tool==='bots_schedule_save'?'schedules.save':'schedules.delete';
     const {operationId,...params}=args;return this.request(owner,{method,botId,params,operationId},caller);
   }
-  quiet(run,date) {
-    if(run&&this.quietWindow.scheduleIds.includes(run.scheduleId))return false;
-    const parts=new Intl.DateTimeFormat('en-GB',{timeZone:this.quietWindow.timeZone,hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(date),value=parts.find(p=>p.type==='hour').value+':'+parts.find(p=>p.type==='minute').value;
-    const {start,end}=this.quietWindow;return start<end?value>=start&&value<end:value>=start||value<end;
-  }
   async tick(date=new Date()) {
     if(this.ticking||this.closed)return;this.assertWriter();this.ticking=true;
     try{
       this.reconcileReceipts();await this.bursts.tick();await flushDueLists(this,date);this.assertWriter();
-      const created=collectDueRuns(this.store,date);
-      this.store.transaction(()=>{for(const run of created)if(this.quiet(run,date))this.store.put('run',{...run,decision:{id:`quiet:${run.id}`,version:1,state:'required',reason:'Quiet release window; original occurrence retained, not started.'}});});
+      collectDueRuns(this.store,date);
       for(const p of this.hub.db.prepare('SELECT * FROM portable_placements ORDER BY bot_id').all()){
         if(this.locks.has(p.bot_id)||p.stopped||!this.router.connection(p))continue;
         const bot=this.store.bot(p.bot_id);if(bot.archived||bot.archiving||bot.deletedAt||bot.queuePaused||this.plans.blocked(bot.id))continue;
         if(this.hub.db.prepare("SELECT 1 FROM portable_mailbox WHERE bot_id=? AND state<>'terminal' LIMIT 1").get(bot.id))continue;
         const item=stagedQueue(this.store,bot.id)[0],run=this.store.list('run',bot.id).filter(r=>r.status==='queued'&&!r.laneId&&!r.selectedContext&&(!r.decision||r.decision.state==='start-approved')).sort((a,b)=>a.scheduledAt.localeCompare(b.scheduledAt))[0];
         const intake=!item&&!run&&this.router.connection(p)?.portableHello?.capabilities?.centralPrimaryDispatch===true?this.store.db.prepare("SELECT json FROM records WHERE kind='primaryInbox' AND bot_id=? AND json_extract(json,'$.state')='queued' AND json_extract(json,'$.kind')='task-request' ORDER BY rowid LIMIT 1").get(bot.id):null;
-        if(item&&(item.state!=='queued'||item.configuration?.confirmation==='pending-unsupported')||!item&&!run&&!intake||this.quiet(item||intake?null:run,date))continue;
+        if(item&&(item.state!=='queued'||item.configuration?.confirmation==='pending-unsupported')||!item&&!run&&!intake)continue;
         const response=await this.router.request(p.owner,{id:`work:${randomUUID()}`,method:'work.read',botId:bot.id,params:{}},'hub:scheduler');
         const w=response.result;if(response.cache?.stale||w?.botId!==bot.id||w.threadId!==bot.threadId||w.state!=='ready'||w.activeTurnId||w.paused||w.goal?.status==='active')continue;
         await this.lock(bot.id,()=>intake?this.dispatchPrimary(p,JSON.parse(intake.json)):this.dispatch(p,item,run));
