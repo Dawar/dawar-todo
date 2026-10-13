@@ -91,7 +91,12 @@ export function linuxDeployment(spec) {
       await target();await original();const h=await health();
       if(h.http!==200||h.source!==spec.old.source||!h.ready||h.maintenance?.phase!=='open')throw failure();
       const env=(await readFile(`/proc/${spec.old.pid}/environ`)).toString().split('\0');
-      if(env.find(v=>v.startsWith('DAWAR_HUB_CONFIG='))?.slice(17)!==spec.currentHubConfigPath)throw failure();
+      const environmentConfig=env.find(v=>v.startsWith('DAWAR_HUB_CONFIG='))?.slice(17);
+      const command=(await readFile(`/proc/${spec.old.pid}/cmdline`)).toString().split('\0').filter(Boolean);
+      const configIndex=command.indexOf('--config'),commandConfig=configIndex>=0?command[configIndex+1]:undefined;
+      if((environmentConfig&&environmentConfig!==spec.currentHubConfigPath)||
+        (commandConfig&&commandConfig!==spec.currentHubConfigPath)||
+        ![environmentConfig,commandConfig].includes(spec.currentHubConfigPath))throw failure();
       const c=JSON.parse(readPrivate(spec.currentHubConfigPath)),a=JSON.parse(readPrivate(c.agentConfigFile));
       if(c.hub.source!==spec.old.source||join(c.dataDirectory,'control.sqlite')!==spec.localWriter.path||join(a.dataDirectory,'manager','manager.sock')!==spec.managerSocket)throw failure();
       // Service access and network are checked BEFORE a hold or cutover.
