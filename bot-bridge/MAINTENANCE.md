@@ -28,6 +28,8 @@ After fresh claimed proof, close the gateway, native stdio and idle desktop MCP 
 
 ## Public service and recovery
 
+Reconnect sync separately requests bounded original journal receipts for native-accepted/running/unknown operations behind the command cursor. This is negotiated by `durableReceiptRecovery`; older nodes retain their existing protocol. Recovery sends receipts, never old inputs or native turns. Original fingerprint, owner, node, bot, placement epoch and synchronized control must match. The rotating receipt cursor prevents an unresolved old operation from starving later receipt recovery. Deployment transactions retain their latest actual idle observation so a timeout reports current work or a concrete uncertainty rather than an unexplained gate.
+
 The persistent public front and existing Cloudflare connector are separate from native execution. The front proxies authentication/data through the one authoritative gateway. Only fixed public assets can fall back to the standalone site. Before origin connection, refusal is definite; after a lost origin response, delivery remains uncertain with its original ID. Website sessions, native Codex sign-in and external thread ownership have different recovery actions. Close the other native client normally; never remove its lock. Effective client permissions are Unknown unless actually observed.
 
 ## Rollback

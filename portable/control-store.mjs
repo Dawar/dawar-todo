@@ -153,11 +153,21 @@ export class HubStore {
         .run(operationId, owner, botId, p.node_id, p.epoch, hash, text, now, now);
       return db.prepare('SELECT * FROM portable_mailbox WHERE operation_id=?').get(operationId);
   }
-  sync(nodeId, cursor = 0) {
+  sync(nodeId, cursor = 0, { recoverReceipts=false, receiptCursor=0 }={}) {
     this.node(nodeId);
     if (!Number.isSafeInteger(cursor) || cursor < 0) throw Error('Invalid reconnect cursor.');
+    if (!Number.isSafeInteger(receiptCursor) || receiptCursor < 0) throw Error('Invalid receipt recovery cursor.');
+    // A command cursor is not a completion ACK. Ask capable nodes for their
+    // original journal receipts without placing old inputs back into admission.
+    let receipts=[];
+    if(recoverReceipts){
+      const query=this.db.prepare("SELECT m.sequence,m.operation_id,m.fingerprint,m.bot_id,m.node_id,m.epoch FROM portable_mailbox m JOIN portable_placements p ON p.bot_id=m.bot_id AND p.node_id=m.node_id AND p.epoch=m.epoch WHERE m.node_id=? AND m.sequence<=? AND m.sequence>? AND m.state IN ('native-accepted','running','unknown') ORDER BY m.sequence LIMIT 8");
+      receipts=query.all(nodeId,cursor,receiptCursor);
+      if(!receipts.length&&receiptCursor>0)receipts=query.all(nodeId,cursor,0);
+    }
     const value={
       controls: this.db.prepare('SELECT * FROM portable_placements WHERE node_id=? ORDER BY bot_id').all(nodeId),
+      ...(recoverReceipts?{receipts,receiptCursor:receipts.at(-1)?.sequence??0}:{}),
       // Pending commands are always included after a lost receipt. A cursor
       // describes observed history; it never silently discards queued work.
       commands: this.db.prepare("SELECT * FROM portable_mailbox WHERE node_id=? AND (sequence>? OR state IN ('queued','received')) ORDER BY sequence LIMIT 40").all(nodeId, cursor),

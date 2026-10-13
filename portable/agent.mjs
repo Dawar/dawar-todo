@@ -29,6 +29,7 @@ import {centralAgentCapabilities} from './agent-capabilities.mjs';
 import {storedRuntimeDefaults} from './runtime-defaults.mjs';
 import {agentSnapshot} from './agent-snapshot.mjs';
 import {agentConnectionURL,centralLoopback} from './central-loopback.mjs';
+import {originalJournalReceipt} from './receipt-recovery.mjs';
 const fingerprintLegacy=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
 export class AgentTransport {
@@ -68,7 +69,7 @@ export class AgentTransport {
   hello(){return {protocol:PROTOCOL_VERSION,runtime:RUNTIME_VERSION,platform:process.platform,arch:process.arch,agentEpoch:this.runtime.epoch,
     // Paired consumers are selected explicitly for the reviewed Linux release;
     // unrelated/native-autonomous capabilities are not implied by this switch.
-    capabilities:{text:true,localStdio:true,registeredArtifacts:true,profileReads:true,memoryCompaction:process.platform==='linux',pdfPreview:process.platform==='linux',desktop:process.platform==='linux'&&!!this.runtime.desktops,voice:false,secureTransfer:process.platform==='linux'&&!!this.runtime.secure,centralBursts:process.platform==='linux',submissionSources:Boolean(this.runtime.sources.owner?.key),...centralAgentCapabilities(this.config),autonomousGoals:true,nativeErrorRecovery:true,nativeAuthRecovery:true}};}
+    capabilities:{text:true,localStdio:true,registeredArtifacts:true,profileReads:true,memoryCompaction:process.platform==='linux',pdfPreview:process.platform==='linux',desktop:process.platform==='linux'&&!!this.runtime.desktops,voice:false,secureTransfer:process.platform==='linux'&&!!this.runtime.secure,centralBursts:process.platform==='linux',submissionSources:Boolean(this.runtime.sources.owner?.key),...centralAgentCapabilities(this.config),autonomousGoals:true,nativeErrorRecovery:true,nativeAuthRecovery:true,durableReceiptRecovery:true}};}
   send(value){if(this.socket?.readyState===WebSocket.OPEN)this.socket.send(JSON.stringify(value));}
   controlRequest(botId,tool,args){
     if(!HUB_TOOLS.has(tool))throw Error('Unsupported hub tool.');
@@ -176,6 +177,10 @@ export class AgentTransport {
         if(m.type==='sync'){
           if(m.controls.some(c=>c.node_id!==this.enrollment.nodeId||c.owner!==this.enrollment.owner))throw Error('Foreign control snapshot.');
           this.journal.synchronize(m.controls);void this.desktops.reconcile();authentication=true;this.retry=0;this.runtime.relayOnline=true;
+          if(m.receipts!==undefined){
+            if(!Array.isArray(m.receipts)||m.receipts.length>8)throw Error('Receipt recovery exceeds its bound.');
+            for(const request of m.receipts)this.receipt(originalJournalReceipt(this.journal,request,this.enrollment));
+          }
           // This synchronized fence blocks new admission. User queuePaused,
           // Goal and current-turn state are not rewritten to infer Stop ACK.
           for(const command of m.commands){

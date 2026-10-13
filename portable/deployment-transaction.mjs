@@ -69,6 +69,7 @@ export async function runDeployment(spec, adapter, { clock=Date.now, sleep=ms=>n
       let idle;
       while(clock()<row.deadline-45000){
         idle=await adapter.observe(spec,row);
+        save({...row,lastObservation:idle,observedAt:stamp()});
         if(idle.safe)break;
         await sleep(Math.min(3000,Math.max(1,row.deadline-45000-clock())));
       }

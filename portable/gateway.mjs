@@ -272,6 +272,11 @@ export function startGateway(config) {
     sockets.handleUpgrade(req,socket,head,ws=>{
       const challenge=secret(),connectionId=randomUUID(),createdAt=Date.now();challenges.set(connectionId,challenge);
       let nodeId=null;
+      const nodeSync=cursor=>{
+        const value=store.sync(nodeId,cursor,{recoverReceipts:ws.portableHello?.capabilities?.durableReceiptRecovery===true,receiptCursor:ws.receiptRecoveryCursor??0});
+        ws.receiptRecoveryCursor=value.receiptCursor??0;
+        return {type:'sync',...value};
+      };
       const timeout=setTimeout(()=>{if(!nodeId)ws.close(1008,'Authentication expired');},10000);
       ws.send(JSON.stringify({type:'challenge',challenge,connectionId,protocol:1}));
       ws.on('message',raw=>{
@@ -283,10 +288,10 @@ export function startGateway(config) {
               ||!verifySignature(n.public_key,{nodeId:m.nodeId,challenge,connectionId,hello:m.hello},m.proof))throw Error('Node proof invalid.');
             challenges.delete(connectionId);clearTimeout(timeout);nodeId=n.id;
             const prior=connections.get(nodeId);if(prior){desktop.disconnectNode(prior);secure.disconnectNode(prior);taskSecure.disconnectNode(prior);}prior?.close(1008,'Connection superseded');ws.portableHello=m.hello;connections.set(nodeId,ws);
-            ws.send(JSON.stringify({type:'sync',...store.sync(nodeId,m.cursor??0)}));return;
+            ws.send(JSON.stringify(nodeSync(m.cursor??0)));return;
           }
           store.node(nodeId);if(connections.get(nodeId)!==ws)throw Error('Connection superseded.');
-          if(m.type==='sync')ws.send(JSON.stringify({type:'sync',...store.sync(nodeId,m.cursor??0)}));
+          if(m.type==='sync')ws.send(JSON.stringify(nodeSync(m.cursor??0)));
           else if(m.type==='receipt') {const receipt=store.receipt(nodeId,m.operationId,m.fingerprint,m.state,m.receipt);router.receipt(receipt);if(authority)controls.receipt(receipt);ws.send(JSON.stringify({type:'receipt-ack',operationId:m.operationId,state:receipt.state}));}
           else if(m.type==='rpc-result')router.readResult(nodeId,m);
           else if(m.type==='desktop-response')desktop.receive(nodeId,ws,m);
