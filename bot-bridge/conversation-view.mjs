@@ -176,11 +176,11 @@ async function readChatPage(runtime, bot, cursor) {
     if (turn.status === 'inProgress') {
       const tail = await runtime.historyReads.items(bot.threadId, turn.id, null, 8, 'desc');
       data.push({ ...turn, itemTimings: Object.fromEntries(tail.data.map(e => [e.item.id, { startedAtMs: e.startedAtMs, completedAtMs: e.completedAtMs }])), items: [...new Map([...turn.items, ...tail.data.map(e => e.item).reverse()].map(i => [i.id, i])).values()] });
-    } else if (turn.status === 'completed' && !turn.items.some(item => item.type === 'plan' || item.type === 'agentMessage' && item.phase === 'final_answer')) {
+    } else if (turn.status === 'completed' && !turn.items.some(item => item.type === 'plan' || item.type === 'agentMessage' && (item.text.trim() || item.questions?.length))) {
       // Native summary omits final plan items. Recover only the bounded final
       // item tail of plan-only turns; never load a transcript or expose tool or
       // private reasoning bodies in ordinary conversation history.
-      const tail = await runtime.historyReads.items(bot.threadId, turn.id, null, 8, 'desc');
+      const tail = await runtime.historyReads.items(bot.threadId, turn.id, null, 1, 'desc');
       const plans = tail.data.filter(entry => entry.item.type === 'plan');
       data.push({ ...turn,
         itemTimings: Object.fromEntries(plans.map(entry => [entry.item.id, { startedAtMs: entry.startedAtMs, completedAtMs: entry.completedAtMs }])),
