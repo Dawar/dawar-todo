@@ -319,8 +319,25 @@ export class SecureInputs {
         let resolve, reject;
         run.promise = new Promise((yes, no) => { resolve = yes; reject = no; });
         value.operations.set(operation, run);
-        void this.use(bot, row, value, p).then(result => { run.blocked = result.state === 'blocked' && result.effect === 'not-started'; resolve(result); }, reject);
+        run.pending = true;
+        void this.use(bot, row, value, p).then(result => { run.pending=false;run.blocked = result.state === 'blocked' && result.effect === 'not-started'; resolve(result); }, error=>{run.pending=false;run.uncertain=true;reject(error);});
         return run.promise;
+    }
+    // Subscription recovery keeps this bridge and its encrypted/RAM inputs
+    // alive. Only in-flight use/transfer blocks that narrow per-thread action;
+    // global runtime shutdown still requires all volatile input to be empty.
+    recoveryBusy(botId) {
+        for(const [handle,value] of this.live) {
+            const row=this.runtime.store.get('secureInput',handle);
+            if(!row)return true;
+            if(row.botId!==botId)continue;
+            if(row.threadId!==this.runtime.store.bot(botId).threadId || value.aborts.size || value.responseReservations.size || [...value.operations.values()].some(run=>run.pending||run.uncertain))return true;
+        }
+        for(const transfer of this.transfers.values()) {
+            const row=this.runtime.store.get('secureInput',transfer.requestId);
+            if(!row || row.botId===botId)return true;
+        }
+        return false;
     }
     replay(value, result) {
         if (result.state === 'used' && result.responseId && value.responses.get(result.responseId)?.bytes === null) return { ...result, response: 'released' };

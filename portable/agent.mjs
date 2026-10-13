@@ -39,6 +39,10 @@ export class AgentTransport {
     this.desktops=new AgentDesktopTransport({runtime,journal,currentSocket:()=>this.socket});
     this.secure=new AgentSecureTransport({runtime,journal,owner:enrollment.owner,currentSocket:()=>this.socket,ready:()=>this.startupReady&&this.runtime.ready});
     this.startup=new AgentStartup(runtime,journal);
+    runtime.nativeRecoveryControl=botId=>{
+      const c=journal.db.prepare('SELECT * FROM node_controls WHERE bot_id=?').get(botId);
+      return runtime.relayOnline && c && journal.canAdmit({bot_id:botId,epoch:c.epoch}) ? {epoch:c.epoch,revision:c.revision,stopped:c.stopped} : null;
+    };
     this.taskRequests=new AgentTaskRequests(this);
     this.operator=new AgentOperator(this);
     runtime.on('event',event=>{
@@ -64,7 +68,7 @@ export class AgentTransport {
   hello(){return {protocol:PROTOCOL_VERSION,runtime:RUNTIME_VERSION,platform:process.platform,arch:process.arch,agentEpoch:this.runtime.epoch,
     // Paired consumers are selected explicitly for the reviewed Linux release;
     // unrelated/native-autonomous capabilities are not implied by this switch.
-    capabilities:{text:true,localStdio:true,registeredArtifacts:true,profileReads:true,memoryCompaction:process.platform==='linux',pdfPreview:process.platform==='linux',desktop:process.platform==='linux'&&!!this.runtime.desktops,voice:false,secureTransfer:process.platform==='linux'&&!!this.runtime.secure,centralBursts:process.platform==='linux',submissionSources:Boolean(this.runtime.sources.owner?.key),...centralAgentCapabilities(this.config),autonomousGoals:true,nativeAuthRecovery:true}};}
+    capabilities:{text:true,localStdio:true,registeredArtifacts:true,profileReads:true,memoryCompaction:process.platform==='linux',pdfPreview:process.platform==='linux',desktop:process.platform==='linux'&&!!this.runtime.desktops,voice:false,secureTransfer:process.platform==='linux'&&!!this.runtime.secure,centralBursts:process.platform==='linux',submissionSources:Boolean(this.runtime.sources.owner?.key),...centralAgentCapabilities(this.config),autonomousGoals:true,nativeErrorRecovery:true,nativeAuthRecovery:true}};}
   send(value){if(this.socket?.readyState===WebSocket.OPEN)this.socket.send(JSON.stringify(value));}
   controlRequest(botId,tool,args){
     if(!HUB_TOOLS.has(tool))throw Error('Unsupported hub tool.');

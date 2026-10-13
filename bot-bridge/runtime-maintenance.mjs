@@ -90,7 +90,7 @@ export class RuntimeMaintenance {
     const count = sql => this.store.db.prepare(sql).get().n;
     const bots = this.store.bots();
     const counts = {
-      admissions: this.admissions, requests: this.requests, nativeRpc: this.runtime.codex.pending?.size ?? 0,
+      nativeRecoveryUncertain: this.runtime.nativeErrorRecovery?.uncertain() ?? 0, admissions: this.admissions, requests: this.requests, nativeRpc: this.runtime.codex.pending?.size ?? 0,
       localActive: bots.filter(b => b.activeTurnId || b.status === 'running').length,
       auxiliaryActive: count("SELECT count(*) n FROM records WHERE kind IN ('runLane','managerWorker','collaborationContext') AND (json_extract(json,'$.activeTurnId') IS NOT NULL OR json_extract(json,'$.status')='running')"),
       acceptedOrUnknown: count("SELECT count(*) n FROM records WHERE (kind='primaryInbox' AND json_extract(json,'$.state') IN ('dispatching','uncertain','accepted') AND json_extract(json,'$.terminalStatus') IS NULL) OR (kind IN ('messageBurst','burstBatch') AND json_extract(json,'$.state') IN ('dispatching','uncertain')) OR (kind='promptQueue' AND json_extract(json,'$.state') IN ('dispatching','uncertain','native-queued')) OR (kind IN ('runIntake','answerExecution','managerOperation','managerExecution') AND json_extract(json,'$.state') IN ('dispatching','uncertain')) OR (kind='managerTask' AND json_extract(json,'$.state') IN ('starting','running','uncertain','provisioning')) OR (kind='runLane' AND json_extract(json,'$.provisioning') IN ('dispatching','uncertain'))") + count("SELECT count(*) n FROM operations WHERE status IN ('dispatching','uncertain')") - passiveLegacyManagerRejections(this.store).length,

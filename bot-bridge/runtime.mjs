@@ -1,4 +1,5 @@
 import { AuthRecovery } from './auth-recovery.mjs';
+import { NativeErrorRecovery } from './native-error-recovery.mjs';
 import {SubmissionSources,SUBMISSION_TOOL} from './submission-sources.mjs';
 import { assertRetainedResource } from './retained-resource.mjs';
 
@@ -214,11 +215,12 @@ export class BotRuntime extends EventEmitter {
     this.epoch = randomUUID();
     this.maintenance = new RuntimeMaintenance(this);
     this.authRecovery = new AuthRecovery(this);
+    this.nativeErrorRecovery = new NativeErrorRecovery(this);
     codex.on("notification", message => this.authRecovery.notification(message));
     this.usage = new AccountUsageCollector({ store, codex,
       allowed: () => this.ready && codex.ready && !this.maintenance.holding(),
       onChange: data => this.emitEvent("usage", data) });
-    codex.admissionGuard = (method, params) => { this.maintenance.native(method, params); this.authRecovery.native(method, params); };
+    codex.admissionGuard = (method, params) => { this.maintenance.native(method, params); this.authRecovery.native(method, params); this.nativeErrorRecovery.native(method,params); };
     codex.on("notification", () => { this.maintenance.generation++; });
     this.historyReads = new HistoryReads(this);
     this.primary = new PrimaryExecution(this);
@@ -581,7 +583,7 @@ export class BotRuntime extends EventEmitter {
   }
   snapshot() {
     return {
-      capabilities: { nativeAuthRecovery: 1, submissionSources: this.sources.owner?.key ? 1 : undefined, taskRequests: this.storage && this.storage.features?.taskRequests !== false ? 1 : undefined, executionConfiguration: 1, accountUsageHistory: 1, runtimeMaintenance: 1, botAdministration: 1, botMemoryMaintenance: process.platform === 'linux' ? 1 : undefined, backgroundRunLanes: 1, scheduleDecisions: 1, singleThreadExecution: 1, nativeGoals: 1, nativeConversation: 1, messageReplies: 1, secureInputs: 1, secureResponseLifecycle: 1, operatorCalls: 1, operatorInputQuestions: 1, historyCursorIndex: 1, messageBursts: 1, burstDiscard: 1, burstControls: 1, burstQueue: 1, queueLists: 1, queueRelativeMoves: 1, queueSendNow: 1, ...(this.storage && this.storage.features?.taskQueues !== false ? { taskQueues: 1 } : {}), teams: 1, ...(this.desktops ? { botDesktops: 1, botBrowserRetention: 1 } : {}) },
+      capabilities: { nativeErrorRecovery: 1, nativeAuthRecovery: 1, submissionSources: this.sources.owner?.key ? 1 : undefined, taskRequests: this.storage && this.storage.features?.taskRequests !== false ? 1 : undefined, executionConfiguration: 1, accountUsageHistory: 1, runtimeMaintenance: 1, botAdministration: 1, botMemoryMaintenance: process.platform === 'linux' ? 1 : undefined, backgroundRunLanes: 1, scheduleDecisions: 1, singleThreadExecution: 1, nativeGoals: 1, nativeConversation: 1, messageReplies: 1, secureInputs: 1, secureResponseLifecycle: 1, operatorCalls: 1, operatorInputQuestions: 1, historyCursorIndex: 1, messageBursts: 1, burstDiscard: 1, burstControls: 1, burstQueue: 1, queueLists: 1, queueRelativeMoves: 1, queueSendNow: 1, ...(this.storage && this.storage.features?.taskQueues !== false ? { taskQueues: 1 } : {}), teams: 1, ...(this.desktops ? { botDesktops: 1, botBrowserRetention: 1 } : {}) },
 
       botAdminLeadIds: [...this.botAdmin.leads],
       teams: publicTeams(this),
@@ -640,7 +642,7 @@ export class BotRuntime extends EventEmitter {
       if(!request.clientId||trustedOrigin)throw Error('Task Request source lookup requires the authenticated owner browser.');
       return this.taskRequests.source(this.store.bot(String(botId)),params);
     }
-    if (method.startsWith("auth.") && (!request.clientId || trustedOrigin)) throw Error("Codex sign-in recovery requires the authenticated owner browser.");
+    if ((method.startsWith("auth.") || method === 'nativeRecovery.retry') && (!request.clientId || trustedOrigin)) throw Error("Codex recovery requires the authenticated owner browser.");
     if (method.startsWith("botAdmin.")) return this.botAdmin.owner(request, trustedOrigin);
     if ((method === "queue.taskConfirm" || method === "queue.add" && params.taskExportId) && (!request.clientId || trustedOrigin))
       throw new Error("Task queue transfer requires the authenticated owner browser.");
@@ -816,6 +818,7 @@ export class BotRuntime extends EventEmitter {
   async submitNative(method, params, attempt) {
     this.maintenance.native(method, params); // reject before the effect/uncertainty boundary
     this.authRecovery.native(method, params);
+    this.nativeErrorRecovery.native(method,params);
     if (attempt) attempt.started = true;
     try {
       return await this.codex.call(method, params);
@@ -830,6 +833,7 @@ export class BotRuntime extends EventEmitter {
     }
   }
   async dispatch(method, botId, p, id, attempt = null, authorizeProvisioning = null) {
+    if (method === 'nativeRecovery.retry') return this.nativeErrorRecovery.retry(botId,p);
     if (method === "auth.read") return this.authRecovery.read(botId, p);
     if (method === "auth.check") return this.authRecovery.check(botId, p, attempt);
     if (method === "auth.login.start") return this.authRecovery.start(botId, p, id, attempt);
@@ -1344,11 +1348,21 @@ export class BotRuntime extends EventEmitter {
         ...(this.manager ? this.manager.config(bot, executionMode) : {}) }, excludeTurns: true,
     };
   }
-  async load(bot) {
+  async load(bot, {nativeRecoveryActionId=null,nativeRecoveryTracking=null,nativeRecoveryCall=null,nativeRecoveryBeforeSubmit=null} = {}) {
     if (!bot.threadId) throw new Error(bot.error ?? "This bot has not finished provisioning.");
     return this.lock(`load:${bot.threadId}`, async () => {
+      const current=this.store.bot(bot.id);
+      if(current.threadId!==bot.threadId || current.archiving || current.deletedAt)
+        throw Object.assign(Error('The original native conversation changed before load.'),{recoveryNotSubmitted:Boolean(nativeRecoveryTracking)});
+      if(this.nativeErrorRecovery.waiting(bot.id)) {
+        const row=this.nativeErrorRecovery.get(bot.id),action=nativeRecoveryActionId && this.store.get('nativeRecoveryAction',nativeRecoveryActionId);
+        if(row.resumeActionId!==nativeRecoveryActionId || action?.state!=='dispatching' || action.epoch!==this.epoch || action.threadId!==bot.threadId)
+          throw Error('The original thread is waiting for safe native recovery; it will not be re-subscribed by a history read.');
+      }
       if (this.loaded.has(bot.threadId)) return;
-      const response = await this.codex.call("thread/resume", this.resumeParams(this.store.bot(bot.id)));
+      try{nativeRecoveryBeforeSubmit?.();}catch(e){e.recoveryNotSubmitted=true;throw e;}
+      const response = nativeRecoveryCall ? await nativeRecoveryCall('thread/resume',this.resumeParams(this.store.bot(bot.id)),nativeRecoveryTracking) :
+        await this.codex.call("thread/resume", this.resumeParams(this.store.bot(bot.id)), nativeRecoveryTracking?12000:120000,nativeRecoveryTracking);
       if (response?.thread?.id !== bot.threadId) throw new Error("Native resume did not confirm this bot's original thread.");
       this.loaded.add(bot.threadId);
     });
@@ -2015,6 +2029,7 @@ export class BotRuntime extends EventEmitter {
     }
     if (message.method === "item/completed" && !usableTurnId(p.turnId)) return;
     this.primary.notification(bot, message);
+    this.nativeErrorRecovery.note(bot.id,message);
     if (message.method === "thread/status/changed") observeThreadStatus(this, bot.id, p.status);
     if (message.method === "thread/closed") observeThreadStatus(this, bot.id, { type: "notLoaded" });
     if (message.method !== "turn/completed") this.plans.note(bot.id, message);
@@ -2102,7 +2117,11 @@ export class BotRuntime extends EventEmitter {
     }
     if (message.method === "turn/completed") {
       this.recordScheduledEvidence(bot.id, p.turn);
-      this.projectTerminalTurn(bot.id, p.turn);
+      const wasCurrent=this.projectTerminalTurn(bot.id, p.turn);
+      if(wasCurrent && p.turn.status==='failed' && this.nativeErrorRecovery.needsRecovery(bot.id,p.turn.id)) {
+        requireCurrentActivity(this,bot.id,p.turn.id,'native-terminal-error-recovery');
+        this.nativeErrorRecovery.publish(bot.id);
+      }
       if (p.turn.status === "failed")
         this.notify(
           bot,

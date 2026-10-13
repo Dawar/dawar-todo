@@ -1,29 +1,53 @@
 import { usableTurn } from "./native-turn.mjs";
 import { captureActivity, activityUnchanged, activityUnresolved, requireCurrentActivity,
   projectCurrentActive, projectCurrentIdle } from "./turn-state.mjs";
+import { recoveryDelay } from './native-error-recovery.mjs';
 
 // Called under the main bot lock (or before startup readiness). Receipt/history
 // lookup cannot release this barrier: only current native status + a fence can.
 export async function reconcileCurrentActivity(runtime, botId) {
   const bot = runtime.store.bot(botId);
+  const before = runtime.store.get('botActivity', botId);
+  const recovery = runtime.nativeErrorRecovery?.get(botId);
+  // Admission, startup and the background reader share the same durable due
+  // time. Repeated queue attempts cannot turn a cooldown into a retry storm.
+  const due = recovery?.threadId === bot.threadId && recovery.nextRetryAt || before?.reconcileAfter;
+  if (activityUnresolved(runtime,botId) && Date.parse(due ?? '') > Date.now()) return false;
   requireCurrentActivity(runtime, botId, null, "checking-current-native-state");
   const token = captureActivity(runtime, botId);
+  const deadline=Date.now()+20000;
+  const call=(method,params,tracking=null)=>{
+    const left=deadline-Date.now();
+    if(left<1)throw Object.assign(Error('The bounded recovery observation expired.'),{recoveryNotSubmitted:true});
+    return runtime.codex.call(method,params,Math.min(12000,left),tracking);
+  };
+  call.remainingMs=()=>Math.max(0,deadline-Date.now());
   try {
     if (!bot.threadId || bot.archived) throw new Error("Restore a provisioned bot before checking native activity.");
     let resumed = false;
-    if (!runtime.loaded.has(bot.threadId)) {
+    if (!runtime.loaded.has(bot.threadId) && !runtime.nativeErrorRecovery?.waiting(botId)) {
       resumed = true;
       await runtime.load(bot);
     }
     const read = async () => {
-      const { thread } = await runtime.codex.call("thread/read", { threadId: bot.threadId, includeTurns: false });
-      if (thread?.id === bot.threadId && thread.status?.type === "systemError")
-        throw new Error("Codex reports a thread system error; input remains contained until native recovery.");
-      if (thread?.id !== bot.threadId || !["idle", "active", "notLoaded"].includes(thread.status?.type))
+      const { thread } = await call("thread/read", { threadId: bot.threadId, includeTurns: false });
+      if (thread?.id !== bot.threadId || !["idle", "active", "notLoaded", "systemError"].includes(thread.status?.type))
         throw new Error("Native current activity is unavailable; no conflicting input was sent.");
       return thread;
     };
+    await runtime.nativeErrorRecovery?.awaitUnload(botId,token,call);
     let initial = await read();
+    if (initial.status.type === 'systemError') {
+      if (runtime.nativeErrorRecovery) await runtime.nativeErrorRecovery.systemError(botId,token,read,call);
+      throw new Error('Codex reports a thread system error; input remains contained until native recovery.');
+    }
+    if(runtime.nativeErrorRecovery?.waiting(botId) && initial.status.type==='active')
+      throw new Error('Native work is active; recovery will wait for a safe same-thread resubscription.');
+    if (runtime.nativeErrorRecovery?.waiting(botId) && ['notLoaded','idle'].includes(initial.status.type)) {
+      await runtime.nativeErrorRecovery.resume(botId,token,read,initial.status.type,call);
+      resumed = true;
+      initial = await read();
+    }
     if (initial.status.type === "notLoaded") {
       // A current notLoaded overrides the cache, but a stale response cannot
       // force a resume after a newer native start. At most one resume per pass.
@@ -44,7 +68,7 @@ export async function reconcileCurrentActivity(runtime, botId) {
     let page = null, pageError = null;
     try {
       // No full history/items hydration. One newest metadata page bounds work.
-      page = await runtime.codex.call("thread/turns/list", {
+      page = await call("thread/turns/list", {
         threadId: bot.threadId, cursor: null, limit: 25, sortDirection: "desc", itemsView: "notLoaded",
       });
     } catch (error) { pageError = error; }
@@ -60,7 +84,11 @@ export async function reconcileCurrentActivity(runtime, botId) {
       throw new Error("Native thread unloaded during reconciliation; current-state recovery will retry.");
     }
     const turns = Array.isArray(page?.data) ? page.data : [];
-    if (current.status.type === "idle") return projectCurrentIdle(runtime, botId, token, turns[0]);
+    if (current.status.type === "idle") {
+      const settled=projectCurrentIdle(runtime, botId, token, turns[0]);
+      if(settled)runtime.nativeErrorRecovery?.complete(botId);
+      return settled;
+    }
     if (initial.status.type !== "active" || pageError || turns[0]?.status !== "inProgress" ||
         !usableTurn(turns[0]) ||
         turns.filter(turn => turn?.status === "inProgress").length !== 1)
@@ -72,14 +100,16 @@ export async function reconcileCurrentActivity(runtime, botId) {
     });
     if (!established && activityUnchanged(runtime, botId, token))
       throw new Error("Current native turn conflicts with retained terminal evidence. Input remains contained pending another read.");
+    if(established && runtime.nativeErrorRecovery?.get(botId)?.failedTurnId!==turns[0].id)
+      runtime.nativeErrorRecovery?.complete(botId);
     return established || !activityUnresolved(runtime, botId);
   } catch (error) {
     const state = runtime.store.get("botActivity", botId);
     if (!state?.unresolved) return true;
     const attempts = (state.attempts ?? 0) + 1;
+    const recovery = runtime.nativeErrorRecovery?.failed(botId,error);
     runtime.store.put("botActivity", { ...state, attempts, reconciliationError: error.message,
-      reconcileAfter: new Date(Date.now() + (runtime.currentActivityRetryDelay?.(attempts) ??
-        (attempts === 1 ? 5000 : attempts === 2 ? 15000 : 30000))).toISOString() });
+      reconcileAfter: recovery?.nextRetryAt ?? new Date(Date.now() + (runtime.currentActivityRetryDelay?.(attempts) ?? recoveryDelay(attempts))).toISOString() });
     return false;
   }
 }
