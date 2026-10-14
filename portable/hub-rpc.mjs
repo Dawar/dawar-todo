@@ -133,8 +133,9 @@ export class HubRpc {
     for(const [key,value] of Object.entries(first.capabilities??{}))if(value===1&&snapshots.length===placements.length&&snapshots.every(({s})=>s.capabilities?.[key]===1))common[key]=1;
     // A runtime's generic capability is not evidence that the hub transport
     // has implemented its consumer. Keep unfinished portable controls hidden.
-    for(const key of ['taskRequests','backgroundRunLanes','scheduleDecisions','peerInbox','peerRootControls','peerBodyPaging','collaborationRooms','operatorCalls','operatorInputQuestions','secureInputs','secureResponseLifecycle','messageBursts','burstDiscard','burstControls','burstQueue','taskQueues','teams','botAdministration'])delete common[key];
+    for(const key of ['taskRequests','backgroundRunLanes','scheduleDecisions','peerInbox','peerRootControls','peerBodyPaging','collaborationRooms','operatorCalls','operatorInputQuestions','secureInputs','secureResponseLifecycle','messageBursts','burstDiscard','burstControls','burstQueue','burstEdit','taskQueues','teams','botAdministration'])delete common[key];
     if(this.controls?.authority)for(const key of ['messageBursts','burstDiscard','burstControls','burstQueue'])common[key]=1;
+    if(this.controls?.authority&&typeof this.controls.bursts?.checkout==='function'&&typeof this.controls.bursts?.checkoutCommit==='function')common.burstEdit=1;
     if(this.controls?.authority&&this.controls?.teams?.owner===owner)common.teams=1;
     if(this.controls?.authority&&placements.length&&snapshots.length===placements.length&&placements.every(p=>this.connection(p)?.portableHello?.capabilities?.centralTaskRequests===true&&secureCapable(this.store.node(p.node_id),this.connection(p))))common.taskRequests=1;
     if(this.controls?.operator&&placements.length&&snapshots.length===placements.length&&placements.every(p=>operatorCapable(this.store,this.connections,p)))for(const key of ['operatorCalls','operatorInputQuestions'])common[key]=1;

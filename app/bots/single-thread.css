@@ -37,6 +37,9 @@
 
 
 .bots-burst-content{position:relative;z-index:1}
+.bots-blast-text{white-space:pre-wrap;overflow-wrap:anywhere}
+.bots-blast-part{display:inline}
+.bots-message[data-blast-aggregate]{flex-direction:column;align-items:flex-end}
 .bots-burst-content .bots-input-file{display:flex;align-items:center;gap:6px;margin-top:8px}
 
 .bots-burst-line{justify-content:flex-end;min-height:0}

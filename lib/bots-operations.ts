@@ -66,6 +66,9 @@ export type BotOperations = {
   "goals.set": { params: { objective?: string; status?: import("./codex-protocol/v2/ThreadGoalStatus").ThreadGoalStatus; tokenBudget?: number | null }; result: { goal: import("./codex-protocol/v2/ThreadGoal").ThreadGoal } };
   "goals.clear": { params: Record<string, never>; result: { cleared: boolean } };
   "bursts.read": { params: Record<string, never>; result: BotBurstState };
+  "bursts.checkout": { params: import("./burst-edit").BurstEditParams; result: {checkout:import("./burst-edit").BurstEditReceipt}|{blocked:import("./burst-edit").BurstEditBlocked} };
+  "bursts.checkoutRead": { params: {operationId:string; threadId:string; destinationId:string}; result: {checkout:import("./burst-edit").BurstEditReceipt} };
+  "bursts.checkoutCommit": { params: {operationId:string; threadId:string; destinationId:string}; result: {operationId:string; botId:string; threadId:string; destinationId:string; committed:true} };
   "bursts.queue": { params: import("./burst-queue").BurstQueueParams; result: BotBurstState & {transfer:import("./burst-queue").BurstQueueReceipt} };
   "bursts.submit": { params: { reply?: BotReplyReference; text: string; attachments?: string[] }; result: { message: BotBurstMessage; burst: BotBurst } };
   "bursts.typing": { params: { clientId: string; typing: boolean }; result: Record<string, never> };

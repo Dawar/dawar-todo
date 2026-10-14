@@ -587,7 +587,15 @@ export function BotsWorkspace() {
           ) : (
             <>
               <FollowupComposerProvider key={JSON.stringify([owner,bot.id,bot.threadId])} owner={owner} botId={bot.id} threadId={bot.threadId} composer={composer ?? null} disabled={!online || Boolean(checkoutLocked) || Boolean(pending.length) || bot.archived} focus={() => screenRef.current?.querySelector<HTMLTextAreaElement>(".bots-composer textarea")?.focus({preventScroll:true})}>
-              <BotConversation key={scope} owner={owner} bot={bot} online={online} onOpenActivity={openActivity} onOpenCall={openCalls} draft={draft} submission={composer?.operation} burstsEnabled={burstSupported && !bot.archived} onReply={snapshot?.capabilities?.messageReplies === 1 && composer?.ready && !checkoutLocked && !sending ? reply => composer.setReply(reply) : undefined} burstSubmitting={composer?.operation?.method === "bursts.submit"}>
+              <BotConversation editPending={!!composer?.blastEdit} onEditBlast={composer?.ready ? async value => {
+                const threadId=bot.threadId;
+                const current=()=>client.owner===owner && selectedRef.current===bot.id && client.snapshot?.bots.find(b=>b.id===bot.id)?.threadId===threadId && botComposers.peek(owner,bot.id)===composer;
+                if(!threadId || value.threadId!==threadId || client.snapshot?.capabilities?.burstEdit!==1 || !current())throw Error('Reconnect to the original conversation before editing the blast.');
+                const batches=(value.batches??(value.burst?[value.burst]:[])).filter(b=>['pending','preparing','paused'].includes(b.state));
+                if(!composer.blastEdit && (value.batches??[]).some(b=>b.state==='editing'))throw Error('This blast is reserved in its original browser draft. Return there to recover Edit.');
+                await composer.editBlast({threadId,controlRevision:value.controlRevision??0,batches:batches.map(b=>({id:b.id,revision:b.revision??0}))},current);
+                if(current())screenRef.current?.querySelector<HTMLTextAreaElement>('.bots-composer textarea')?.focus({preventScroll:true});
+              } : undefined} key={scope} owner={owner} bot={bot} online={online} onOpenActivity={openActivity} onOpenCall={openCalls} draft={draft} submission={composer?.operation} burstsEnabled={burstSupported && !bot.archived} onReply={snapshot?.capabilities?.messageReplies === 1 && composer?.ready && !checkoutLocked && !sending ? reply => composer.setReply(reply) : undefined} burstSubmitting={composer?.operation?.method === "bursts.submit"}>
 
 
                 {pending.map((request) => (

@@ -28,7 +28,7 @@ import { MessageTickRail } from "./message-tick-rail";
 import {fileCitationReferences} from "../../lib/file-citation.mjs";
 import { ReturnedArtifacts } from "./returned-artifact";
 import type { ActivityTarget } from "./activity-target";
-import { useBurstConversation, BurstControls, BurstBubbles, canonicalBurst } from "./burst-composer";
+import { useBurstConversation, BurstControls, BurstBubbles, PendingBlastBubble, canonicalBurst } from "./burst-composer";
 import { useRunFindings } from "./run-findings";
 import { retainedBatches } from "./burst-state";
 import { SecureInputCard, SecureInputAccess } from "./secure-input-card";
@@ -136,7 +136,7 @@ export const TimelineEntry = memo(function TimelineEntry(props: Parameters<typeo
 });
 
 /** Bounded body window; all preceding entries remain reachable through explicit pages. */
-function BotConversationFeed({ owner, bot, online, children, onOpenCall, onReply, draft = "", submission, burstsEnabled = false, burstSubmitting = false }: { owner: string; bot: Bot; online: boolean; children?: ReactNode; onOpenActivity?: (target: ActivityTarget) => void; onOpenCall?: () => void; onReply?: (reply: BotReplyReference) => void; draft?: string; submission?: import("./draft-store").Submission; burstsEnabled?: boolean; burstSubmitting?: boolean }) {
+function BotConversationFeed({ owner, bot, online, children, onOpenCall, onReply, draft = "", submission, burstsEnabled = false, burstSubmitting = false, onEditBlast, editPending }: { owner: string; bot: Bot; online: boolean; children?: ReactNode; onOpenActivity?: (target: ActivityTarget) => void; onOpenCall?: () => void; onReply?: (reply: BotReplyReference) => void; draft?: string; submission?: import("./draft-store").Submission; burstsEnabled?: boolean; burstSubmitting?: boolean; editPending?:boolean; onEditBlast?:(value:import("./burst-state").SavedBurstState)=>Promise<void> }) {
   const taskRequests = useTaskRequests();
   const { timeline, state: nativeState } = useBotTimeline(owner, bot.id, online);
   const findings = useRunFindings(owner, bot.id, online, botsClient.snapshot?.capabilities?.backgroundRunLanes === 1);
@@ -331,12 +331,13 @@ function BotConversationFeed({ owner, bot, online, children, onOpenCall, onReply
     {downloadError && <p className="bots-error" role="alert">{downloadError}</p>}
 
     {burstsEnabled && <section className="bots-blast-staging" aria-label="Messages waiting to send">
-      {unprojectedBatches.filter(batch => !['sent', 'discarded'].includes(batch.state)).map(batch =>
+      <PendingBlastBubble value={burst.value} {...batchProps} onOpenReply={openReply} submission={submission}/>
+      {unprojectedBatches.filter(batch => !['sent', 'discarded','pending','preparing','paused','editing'].includes(batch.state)).map(batch =>
         <BurstBubbles key={batch.id} batch={batch} messages={batch.messageIds.flatMap(id => burst.value?.messages.find(message => message.id === id) ?? [])}
           truncatedIds={burst.value?.preview?.truncatedTextIds} controls={burst} {...batchProps} onOpenReply={openReply}/>)}
-      <BurstControls burst={burst} online={online} submitting={burstSubmitting} />
+      <BurstControls burst={burst} online={online} submitting={burstSubmitting} onEdit={onEditBlast} editPending={editPending} />
     </section>}
-    {submission?.method === 'bursts.submit' && submission.botId === bot.id && !burst.value?.messages.some(message => message.id === submission.id) && <div className="bots-native-submission" data-submission-id={submission.id}>
+    {!burstsEnabled && submission?.method === 'bursts.submit' && submission.botId === bot.id && !burst.value?.messages.some(message => message.id === submission.id) && <div className="bots-native-submission" data-submission-id={submission.id}>
       <BotMessage item={{ type: 'userMessage', id: `client:${submission.id}`, clientId: submission.id, content: [{ type: 'text', text: String(submission.params.text ?? ''), text_elements: [] }] }} botId={bot.id} attachments={burstAttachments} download={download}/>
       {Array.isArray(submission.params.attachments) && submission.params.attachments.length > 0 && <small>{submission.params.attachments.length} attached {submission.params.attachments.length === 1 ? 'file' : 'files'}</small>}
       <small role="status">{submission.state === 'uncertain' ? 'Delivery unconfirmed' : 'Sending…'}</small>

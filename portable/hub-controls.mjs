@@ -166,6 +166,7 @@ export class HubControls extends EventEmitter {
     if(!params||typeof params!=='object'||Array.isArray(params))throw Error('Invalid logical control parameters.');
     if(method==='submissions.source'){if(caller.kind!=='owner'||owner!==this.sources.owner?.key)throw Error('Owner source read required.');return this.sources.read(b,params);}
     if(method==='inbox.list')return this.primary.list(b,params);
+    if(method==='bursts.checkoutRead'){if(caller.kind!=='owner')throw Error('Edit recovery requires the authenticated owner.');return this.bursts.checkoutRead(b,params);}
     if(method==='bursts.read')return this.bursts.read(b);
     if(method==='bursts.typing'){
       if(caller.kind!=='owner')throw Error('Typing belongs to the authenticated owner browser.');
