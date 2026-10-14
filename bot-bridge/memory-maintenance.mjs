@@ -26,12 +26,12 @@ export class BotMemoryMaintenance {
     if (JSON.stringify(previous && { ...previous, observedAt: undefined }) !== JSON.stringify(next))
       this.runtime.saveBot(bot, { profilePreparation: next ? { ...next, observedAt: now() } : null });
   }
-  async context(bot, team = null, maintenanceId = null, onMemoryContent = () => {}) {
+  async context(bot, team = null, maintenanceId = null, onMemoryContent = () => {}, { threadPolicy = false } = {}) {
     let memoryState;
     try {
       const matches = () => { const current = this.store.bot(bot.id); return current.threadId === bot.threadId && current.cwd === bot.cwd && !current.deletedAt; };
       if (!matches()) throw Error('Bot workspace/thread changed before profile preparation.');
-      const context = await profileContext(bot, team, { maintenanceId, onMemoryContent, onMemoryState: state => { memoryState = state; } });
+      const context = await profileContext(bot, team, { maintenanceId, onMemoryContent, threadPolicy, onMemoryState: state => { memoryState = state; } });
       if (!matches()) throw Error('Bot workspace/thread changed during profile preparation.');
       if (memoryState !== undefined) this.setStatus(bot.id, memoryState);
       return context;

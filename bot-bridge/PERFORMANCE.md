@@ -78,3 +78,13 @@ Home `PERFORMANCE_*_MEASUREMENTS.json` contains raw baseline/after measurements.
 Live backend activation, real contention and owner-controlled PWA adoption
 require their recorded release evidence. Dawar already verified prior iPhone
 uploads/burst/queue-edit behavior; this work adds no device acceptance pass.
+
+## Per-message profile context (October 14)
+
+Direct sends (`turn.send`, start or steer) used to attach the standing policy (operating, secure-input, memory, direct-ownership and desktop text) plus all six profile files and the team context to every message. Copies accumulated in the conversation, so every later request re-read all of them.
+
+- Standing policy now lives once in the thread instructions (`threadInstructions` in `profiles.mjs`, used at thread start, recovery and resume; Claude bots get it as the appended system prompt).
+- `context-delivery.mjs` sends the profile files and team context in full once per conversation epoch, then only the sections whose exact text changed, plus one line naming the unchanged ones. A new thread, any `contextCompaction` item (native or Claude) and every 40th send start a new epoch. Hashes are committed only after the native start/steer is acknowledged.
+- Queued and automatic input (`thread/queue/add`) never carried the profile and is unchanged.
+
+Estimate from current workspaces: median bot ≈5.6k → ≈0.1k tokens per steady-state send; a 20-message conversation ≈112k → ≈6k tokens of profile copies. Largest profiles save ≈25k tokens per send.

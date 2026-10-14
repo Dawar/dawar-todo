@@ -18,13 +18,12 @@ import { replyInputText } from "../lib/bot-replies.ts";
 import { OperatorCalls } from './operator.mjs';
 import { validateOperatorQuestion } from './operator-questions.mjs';
 import { HistoryReads } from './history-reads.mjs';
-import { desktopInstructions } from "./desktops.mjs";
 import { DOWNLOAD_ATTACHMENT_TOOL, localFileDigest } from "./storage.mjs";
 import { initialPreferences, preferencePatch } from "./bot-preferences.mjs";
 import { CODEX_VERSION } from "./codex-version.mjs";
 import { MessageBursts } from "./message-bursts.mjs";
 import { acceptSingleThreadOperation } from "./single-thread-operations.mjs";
-import { PrimaryExecution, DIRECT_INSTRUCTIONS, WORK_TOOL } from "./primary-execution.mjs";
+import { PrimaryExecution, WORK_TOOL } from "./primary-execution.mjs";
 import { AnswerExecutions } from "./answer-execution.mjs";
 import { BackgroundRuns } from "./background-runs.mjs";
 import { ScheduleDecisions } from "./schedule-decisions.mjs";
@@ -64,13 +63,12 @@ import { constants } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
 import { RUN_MESSAGE_TOOL } from "./manager-tools.mjs";
 import {
-  BOT_INSTRUCTIONS,
   cleanName,
   slugify,
   initializeProfile,
   containedPath,
-  containedHandle,
-} from "./profiles.mjs";
+  containedHandle, threadInstructions } from "./profiles.mjs";
+import { ContextDelivery } from "./context-delivery.mjs";
 import { normalizeSchedule, collectDueRuns } from "./schedules.mjs";
 import { readHistoryView, readHistoryLog, readHistoryDetail, readHistoryAttachments } from "./history-view.mjs";
 import { AccountUsageCollector } from "./account-usage.mjs";
@@ -237,6 +235,7 @@ export class BotRuntime extends EventEmitter {
     this.sources = new SubmissionSources(this);
     this.scheduleDecisions = new ScheduleDecisions(this);
     this.memoryMaintenance = new BotMemoryMaintenance(this);
+    this.contextDelivery = new ContextDelivery(this);
     this.locks = new Map();
     this.loaded = new Set();
     this.models = [];
@@ -1050,9 +1049,7 @@ export class BotRuntime extends EventEmitter {
           cwd: bot.cwd,
           ...EXECUTION_ACCESS,
           ephemeral: false,
-          developerInstructions: this.manager
-            ? `${BOT_INSTRUCTIONS}\n\n${DIRECT_INSTRUCTIONS}${this.desktops ? `\n\n${desktopInstructions(bot)}` : ""}`
-            : BOT_INSTRUCTIONS,
+          developerInstructions: this.threadInstructions(bot),
           config: { ...(this.manager ? this.manager.config(bot) : {}), ...(this.primary.single(bot) ? { "features.multi_agent": false } : {}) },
           dynamicTools: dynamicTools.filter(t => t.name !== BOT_ADMIN_TOOL.name || this.botAdmin.allowed(bot)),
           serviceName: "dawar-todo-bots",
@@ -1293,9 +1290,7 @@ export class BotRuntime extends EventEmitter {
       ...(provider === "claude" ? { effort: bot.effort } : { serviceTier: this.defaults.serviceTier }),
       ...EXECUTION_ACCESS,
       ephemeral: false,
-      developerInstructions: this.manager
-        ? `${BOT_INSTRUCTIONS}\n\n${DIRECT_INSTRUCTIONS}${this.desktops ? `\n\n${desktopInstructions(bot)}` : ""}`
-        : BOT_INSTRUCTIONS,
+      developerInstructions: this.threadInstructions(bot),
       config: {
         "features.fast_mode": true,
         model_reasoning_effort: bot.effort,
@@ -1364,11 +1359,15 @@ export class BotRuntime extends EventEmitter {
       }
     }
   }
+  /** Standing policy for a bot's own thread; sent at start/resume, not per message. */
+  threadInstructions(bot) {
+    return threadInstructions(bot, { manager: Boolean(this.manager), desktops: Boolean(this.desktops) });
+  }
   resumeParams(bot, executionMode = bot.executionMode) {
     return {
       threadId: bot.threadId, cwd: bot.cwd, model: this.settings(bot).model,
       serviceTier: this.settings(bot).serviceTier, ...EXECUTION_ACCESS,
-      developerInstructions: this.manager ? `${BOT_INSTRUCTIONS}\n\n${DIRECT_INSTRUCTIONS}${this.desktops ? `\n\n${desktopInstructions(bot)}` : ""}` : BOT_INSTRUCTIONS,
+      developerInstructions: this.threadInstructions(bot),
       config: { "features.fast_mode": true, ...(executionMode === "single-thread" ? { "features.multi_agent": false } : {}),
         ...(this.manager ? this.manager.config(bot, executionMode) : {}) }, excludeTurns: true,
     };
@@ -1576,13 +1575,13 @@ export class BotRuntime extends EventEmitter {
     const input = this.sources.nativeInput(bot,id,originalInput);
     const text = String(p.text ?? "").trim();
     if (!staged && !acceptedInput) rememberReply(this, bot, id, text, p.reply);
-    const additionalContext = await this.memoryMaintenance.context(bot, await teamReference(this, bot));
+    // Standing policy (including the direct-ownership policy) is in the
+    // thread instructions; profile files and team context are sent once per
+    // conversation epoch and then only when they change.
+    const profile = await this.memoryMaintenance.context(bot, await teamReference(this, bot), null, undefined, { threadPolicy: true });
     await this.load(bot);
-    if (this.manager)
-      additionalContext.managerPolicy = {
-        kind: "application",
-        value: `${DIRECT_INSTRUCTIONS}`,
-      };
+    const delivery = this.contextDelivery.prepare(this.store.bot(bot.id), profile);
+    const additionalContext = delivery.context;
     if (run)
       additionalContext.scheduledTask = {
         kind: "application",
@@ -1607,6 +1606,7 @@ export class BotRuntime extends EventEmitter {
         throw error;
       }
       this.answers.accept(answer, { turnId: result.turnId, source: "steer-ack" });
+      delivery.commit();
       this.emitUserMessage(bot, bot.activeTurnId, id, input);
       this.saveBot(this.store.bot(bot.id), {
         preview: id.startsWith("manager-notice:")
@@ -1621,6 +1621,7 @@ export class BotRuntime extends EventEmitter {
       return result;
     }
     const result = await this.startTurn(bot, input, text, id, run, additionalContext, attempt, answer);
+    delivery.commit();
     if (!run && bot.queuePaused && this.store.get("planTurnEvidence", result.turn?.id)?.status !== "interrupted" &&
         (this.store.bot(bot.id).queuePauseRevision ?? 0) === (bot.queuePauseRevision ?? 0) &&
         (!this.store.bot(bot.id).activeTurnId || this.store.bot(bot.id).activeTurnId === result.turn?.id))
@@ -2055,6 +2056,8 @@ export class BotRuntime extends EventEmitter {
       return;
     }
     if (message.method === "item/completed" && !usableTurnId(p.turnId)) return;
+    // Compaction replaces earlier context: resend full profile next time.
+    if (message.method === "item/completed" && p.item?.type === "contextCompaction") this.contextDelivery.reset(bot.id);
     this.primary.notification(bot, message);
     // Codex retry/auth recovery does not apply to Claude-owned threads.
     if (botProvider(bot) !== "claude") this.nativeErrorRecovery.note(bot.id,message);

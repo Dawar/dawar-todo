@@ -65,11 +65,26 @@ export async function initializeProfile(bot) {
       if (e.code !== "EEXIST") throw e;
     });
 }
-export async function profileContext(bot, team = null, { onMemoryState = () => {}, onMemoryContent = () => {}, maintenanceId = null } = {}) {
-  // Current owner policy is supplied on every managed admission, including
-  // bots whose historical workspace profiles contain older operating rules.
-  const parts = [`## Secure one-time input\n${SECURE_INSTRUCTIONS}`, `## File memory maintenance\n${MEMORY_INSTRUCTIONS}`];
-  if (process.platform === 'darwin') parts.push('## Mac memory capability\nBounded current profile reads are supported. Atomic file-memory compaction and PDF previews are unavailable on this platform until their native helpers are validated. Keep MEMORY.md concise; never emulate an unsupported atomic compaction, discard its receipt, or substitute a blind rename.');
+/**
+ * Standing instructions for a bot's own conversation, supplied once per thread
+ * start/resume (cached by the model) instead of with every message: the base
+ * bot policy (which already carries the memory and operating policy), secure
+ * input, and the direct-ownership and desktop policies when they apply.
+ */
+export function threadInstructions(bot, { manager = false, desktops = false } = {}) {
+  return [BOT_INSTRUCTIONS, `## Secure one-time input\n${SECURE_INSTRUCTIONS}`, ...(manager ? [DIRECT_INSTRUCTIONS] : []),
+    ...(desktops ? [desktopInstructions(bot)] : [])].join("\n\n");
+}
+// Non-enumerable, so a context object can still be sent as additionalContext.
+export const PROFILE_SECTIONS = Symbol("profileSections");
+
+export async function profileContext(bot, team = null, { onMemoryState = () => {}, onMemoryContent = () => {}, maintenanceId = null, threadPolicy = false } = {}) {
+  // Policy text: with threadPolicy it is already in the thread's standing
+  // instructions; otherwise (isolated run lanes) it is supplied here.
+  const policy = [`## Secure one-time input\n${SECURE_INSTRUCTIONS}`, `## File memory maintenance\n${MEMORY_INSTRUCTIONS}`];
+  const sections = [];
+  const parts = { push: (text, key) => sections.push({ key, text }) };
+  if (process.platform === 'darwin') parts.push('## Mac memory capability\nBounded current profile reads are supported. Atomic file-memory compaction and PDF previews are unavailable on this platform until their native helpers are validated. Keep MEMORY.md concise; never emulate an unsupported atomic compaction, discard its receipt, or substitute a blind rename.', 'platform');
   for (const file of PROFILE_FILES) {
     try {
       const source = await profileFile(bot, file);
@@ -93,23 +108,27 @@ export async function profileContext(bot, team = null, { onMemoryState = () => {
         if (pending) onMemoryState({ ...pending, file, bytes: source.size, sourceHash: source.hash });
         onMemoryContent({ kind: 'application', value: `Current file-memory reference for ${bot.id}, source SHA-256 ${source.hash}. This supersedes stale frozen MEMORY snippets, not the original run's permissions/scope.\n${text}` });
       }
-      parts.push(`## ${file}\n${text.replace(MANAGER_INSTRUCTIONS, DIRECT_INSTRUCTIONS)}`);
+      parts.push(`## ${file}\n${text.replace(MANAGER_INSTRUCTIONS, DIRECT_INSTRUCTIONS)}`, file);
     } catch (e) {
       if (e.code === "ENOENT" && e.profileMissing)
-        parts.push(`## ${file}\nMissing; ask the human before reconstructing personal facts.`);
+        parts.push(`## ${file}\nMissing; ask the human before reconstructing personal facts.`, file);
       else throw e;
     }
   }
-  if (bot.threadId) parts.push(`## Desktop tools\n${desktopInstructions(bot)}`);
-  parts.unshift(`## Current application operating policy\n${AUTONOMOUS_DEVELOPMENT_INSTRUCTIONS}`);
-  if (team) parts.push(`## Shared team reference\nTeam: ${team.name}\nShared workspace${team.workspaceScope==='hub'?' on the hub':''}: ${team.workspace}\nCurrent shared memory and team files are supplied in teamProfile. ${TEAM_INSTRUCTIONS}`);
-  return {
+  if (bot.threadId) policy.push(`## Desktop tools\n${desktopInstructions(bot)}`);
+  policy.unshift(`## Current application operating policy\n${AUTONOMOUS_DEVELOPMENT_INSTRUCTIONS}`);
+  if (team) parts.push(`## Shared team reference\nTeam: ${team.name}\nShared workspace${team.workspaceScope==='hub'?' on the hub':''}: ${team.workspace}\nCurrent shared memory and team files are supplied in teamProfile. ${TEAM_INSTRUCTIONS}`, 'teamReference');
+  const header = `Current bot workspace instructions and memory (${bot.cwd}):`;
+  const text = [...(threadPolicy ? [] : [policy[0], policy[1], policy[2]]), ...sections.filter(s => s.key === 'platform').map(s => s.text),
+    ...sections.filter(s => s.key !== 'platform' && s.key !== 'teamReference').map(s => s.text), ...(threadPolicy ? [] : policy.slice(3)),
+    ...sections.filter(s => s.key === 'teamReference').map(s => s.text)].join("\n\n");
+  return Object.defineProperty({
     botProfile: {
       kind: "application",
-      value: `Current bot workspace instructions and memory (${bot.cwd}):\n\n${parts.join("\n\n")}`,
+      value: `${header}\n\n${text}`,
     },
     ...await teamProfileContext(team),
-  };
+  }, PROFILE_SECTIONS, { value: { header, sections } });
 }
 export async function teamProfileContext(team) {
   if (!team) return { teamProfile: { kind: "application", value:

@@ -536,3 +536,45 @@ test("portable agent: a misconfigured Claude backend never blocks Codex startup"
   assert.match(faults[0], /absolute path/);
   await assert.rejects(router.call("thread/start", { provider: "claude", cwd: "/bots/x" }), (e) => e.definite);
 });
+
+
+test("BotRuntime sends the full profile once per conversation epoch, then only changes", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "claude-runtime-delivery-"));
+  const store = new Store(join(dir, "state.sqlite"));
+  const log = [];
+  const claude = new ClaudeBackend({ store, credential: "test", configDir: join(dir, "claude"), mcp: fakeMcp,
+    query: fakeQuery(async (user) => user.message.content === "/compact"
+      ? [{ type: "system", subtype: "compact_boundary", uuid: `cb-${user.uuid}` }, result(user.uuid)]
+      : [text(`m-${user.uuid}`, "ok"), result(user.uuid)], log) });
+  const runtime = new BotRuntime({ store, codex: new ProviderRouter({ codex: new MinimalCodex(), claude }), root: join(dir, "bots") });
+  t.after(async () => { claude.close(); await settle(); store.close(); await rm(dir, { recursive: true, force: true }); });
+  await runtime.start();
+  const op = (botId, method, params = {}) => runtime.handle({ method, botId, params, operationId: crypto.randomUUID() });
+  const bot = await runtime.handle({ method: "bots.create", params: { name: "Lean", provider: "claude" }, operationId: "create-lean-bot" });
+  const session = () => log.find((ctx) => ctx.options.cwd === bot.cwd);
+  assert.match(session().options.systemPrompt.append, /Secure one-time input/, "standing policy is in the thread instructions");
+  const profileOf = () => session().last.message.content.find((c) => c.text?.startsWith("<botProfile>")).text;
+  const idle = () => until(() => !store.bot(bot.id).activeTurnId && store.list("claudeTurn").every((r) => r.turn.status !== "inProgress"));
+
+  await op(bot.id, "turn.send", { text: "one" }); await idle();
+  const first = profileOf();
+  assert.match(first, /## SOUL\.md/);
+  assert.doesNotMatch(first, /Current application operating policy|## Secure one-time input/, "no per-message policy copy");
+  await op(bot.id, "turn.send", { text: "two" }); await idle();
+  const second = profileOf();
+  assert.doesNotMatch(second, /## SOUL\.md/);
+  assert.match(second, /Unchanged since provided earlier/);
+  assert.ok(second.length < first.length / 3, `${second.length} vs ${first.length}`);
+
+  const { writeFile } = await import("node:fs/promises");
+  await writeFile(join(bot.cwd, "MEMORY.md"), "# Memory\n\nNew fact.\n");
+  await op(bot.id, "turn.send", { text: "three" }); await idle();
+  assert.match(profileOf(), /## MEMORY\.md\n# Memory\n\nNew fact\./);
+  assert.doesNotMatch(profileOf(), /## SOUL\.md/);
+
+  await op(bot.id, "thread.compact", {});
+  await until(() => !store.get("profileDelivery", bot.id));
+  await idle();
+  await op(bot.id, "turn.send", { text: "four" }); await idle();
+  assert.match(profileOf(), /## SOUL\.md/, "a compaction starts a new epoch");
+});
