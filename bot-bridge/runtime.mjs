@@ -1,3 +1,4 @@
+import { BOT_PROVIDERS, botProvider, providerParams } from "./provider-router.mjs";
 import { AuthRecovery } from './auth-recovery.mjs';
 import { EXECUTION_ACCESS, turnExecutionAccess, executionAccessStatus } from './execution-access.mjs';
 import { NativeErrorRecovery } from './native-error-recovery.mjs';
@@ -245,6 +246,8 @@ export class BotRuntime extends EventEmitter {
     };
     // New bots capture this choice; legacy inherited settings remain stable.
     this.newBotDefaults = { model: "gpt-6.1-sol", effort: "medium" };
+    // Claude bots resolve aliases through the Agent SDK; no Fast tier applies.
+    this.claudeDefaults = { model: "opus", effort: "high" };
     this.account = { authenticated: false };
     this.ready = false;
     codex.on("notification", (message) => this.onNotification(message));
@@ -366,6 +369,9 @@ export class BotRuntime extends EventEmitter {
       !preferred.serviceTiers?.some((tier) => tier.id === this.defaults.serviceTier)
     )
       throw new Error("The configured Bots model, effort, or Fast tier is unavailable.");
+    // Claude rows carry provider:"claude" so Codex lookups never match them.
+    if (this.codex.claudeReady)
+      this.models.push(...(await this.codex.call("model/list", { provider: "claude" })).data);
     for (let bot of this.store.bots()) {
       if (!bot.avatar || bot.burstQuietSeconds === undefined) {
         const defaults = initialPreferences();
@@ -422,6 +428,7 @@ export class BotRuntime extends EventEmitter {
     let cursor = null;
     do {
       const page = await this.codex.call("thread/list", {
+        ...providerParams(bot),
         cwd: bot.cwd,
         limit: 100,
         cursor,
@@ -584,7 +591,7 @@ export class BotRuntime extends EventEmitter {
   }
   snapshot() {
     return {
-      capabilities: { nativeErrorRecovery: 1, nativeAuthRecovery: 1, submissionSources: this.sources.owner?.key ? 1 : undefined, taskRequests: this.storage && this.storage.features?.taskRequests !== false ? 1 : undefined, executionConfiguration: 1, accountUsageHistory: 1, runtimeMaintenance: 1, botAdministration: 1, botMemoryMaintenance: process.platform === 'linux' ? 1 : undefined, backgroundRunLanes: 1, scheduleDecisions: 1, singleThreadExecution: 1, nativeGoals: 1, nativeConversation: 1, messageReplies: 1, secureInputs: 1, secureResponseLifecycle: 1, operatorCalls: 1, operatorInputQuestions: 1, historyCursorIndex: 1, messageBursts: 1, burstDiscard: 1, burstControls: 1, burstQueue: 1, queueLists: 1, queueRelativeMoves: 1, queueSendNow: 1, ...(this.storage && this.storage.features?.taskQueues !== false ? { taskQueues: 1 } : {}), teams: 1, ...(this.desktops ? { botDesktops: 1, botBrowserRetention: 1 } : {}) },
+      capabilities: { nativeErrorRecovery: 1, nativeAuthRecovery: 1, submissionSources: this.sources.owner?.key ? 1 : undefined, taskRequests: this.storage && this.storage.features?.taskRequests !== false ? 1 : undefined, executionConfiguration: 1, accountUsageHistory: 1, runtimeMaintenance: 1, botAdministration: 1, botMemoryMaintenance: process.platform === 'linux' ? 1 : undefined, backgroundRunLanes: 1, scheduleDecisions: 1, singleThreadExecution: 1, nativeGoals: 1, nativeConversation: 1, messageReplies: 1, secureInputs: 1, secureResponseLifecycle: 1, operatorCalls: 1, operatorInputQuestions: 1, historyCursorIndex: 1, messageBursts: 1, burstDiscard: 1, burstControls: 1, burstQueue: 1, queueLists: 1, queueRelativeMoves: 1, queueSendNow: 1, ...(this.storage && this.storage.features?.taskQueues !== false ? { taskQueues: 1 } : {}), teams: 1, ...(this.codex.claudeReady ? { claudeBots: 1 } : {}), ...(this.desktops ? { botDesktops: 1, botBrowserRetention: 1 } : {}) },
 
       botAdminLeadIds: [...this.botAdmin.leads],
       teams: publicTeams(this),
@@ -1030,6 +1037,7 @@ export class BotRuntime extends EventEmitter {
         if (recovered.threadId) return recovered;
         await initializeProfile(recovered);
         const result = await this.codex.call("thread/start", {
+          ...providerParams(bot),
           cwd: bot.cwd,
           ...EXECUTION_ACCESS,
           ephemeral: false,
@@ -1218,8 +1226,14 @@ export class BotRuntime extends EventEmitter {
   async create(p, id, authorizeProvisioning = null) {
     authorizeProvisioning?.();
     if (!this.ready) throw new Error("Codex is not ready.");
+    const provider = p.provider ?? "codex";
+    if (!BOT_PROVIDERS.includes(provider))
+      throw Object.assign(new Error("Unknown bot provider."), { definite: true });
+    if (provider === "claude" && !this.codex.claudeReady)
+      throw Object.assign(new Error("Claude bots are not available on this machine."), { definite: true });
+    const defaults = provider === "claude" ? this.claudeDefaults : this.newBotDefaults;
     const preferred = this.models.find(model => model.model === this.newBotDefaults.model);
-    if (!preferred?.supportedReasoningEfforts.some(option => option.reasoningEffort === this.newBotDefaults.effort))
+    if (provider === "codex" && !preferred?.supportedReasoningEfforts.some(option => option.reasoningEffort === this.newBotDefaults.effort))
       throw Object.assign(new Error("The configured new-bot model or reasoning effort is unavailable."), { definite: true });
     const name = cleanName(p.name),
       purpose = String(p.purpose ?? "")
@@ -1247,9 +1261,10 @@ export class BotRuntime extends EventEmitter {
       color: colors[randomInt(colors.length)],
       status: "provisioning",
       archived: false,
-      model: this.newBotDefaults.model,
-      effort: this.newBotDefaults.effort,
+      model: defaults.model,
+      effort: defaults.effort,
       serviceTier: null,
+      ...(provider === "claude" ? { provider } : {}),
       mode: "default",
       executionMode: "single-thread", migrationReason: null, ...initialPreferences(),
       preview: "",
@@ -1263,9 +1278,10 @@ export class BotRuntime extends EventEmitter {
     await initializeProfile(bot);
     authorizeProvisioning?.();
     const result = await this.codex.call("thread/start", {
+      ...providerParams(bot),
       cwd: bot.cwd,
       model: bot.model,
-      serviceTier: this.defaults.serviceTier,
+      ...(provider === "claude" ? { effort: bot.effort } : { serviceTier: this.defaults.serviceTier }),
       ...EXECUTION_ACCESS,
       ephemeral: false,
       developerInstructions: this.manager
@@ -1389,8 +1405,10 @@ export class BotRuntime extends EventEmitter {
       effort = p.effort === undefined ? bot.effort : p.effort || null,
       serviceTier =
         p.serviceTier === undefined ? bot.serviceTier : p.serviceTier || null;
+    const claude = botProvider(bot) === "claude";
     const catalog = this.models.find(
-      (m) => m.model === (model ?? this.defaults.model),
+      (m) => (m.provider === "claude") === claude &&
+        m.model === (model ?? (claude ? this.claudeDefaults.model : this.defaults.model)),
     );
     if (!catalog) throw Object.assign(new Error("That model is not available."), { definite: true });
     if (
@@ -1402,6 +1420,7 @@ export class BotRuntime extends EventEmitter {
       throw Object.assign(new Error("That reasoning effort is not available for this model."), { definite: true });
     const effectiveTier = serviceTier ?? this.defaults.serviceTier;
     if (
+      !claude &&
       effectiveTier !== "default" &&
       !catalog.serviceTiers?.some((tier) => tier.id === effectiveTier)
     )
@@ -2027,7 +2046,8 @@ export class BotRuntime extends EventEmitter {
     }
     if (message.method === "item/completed" && !usableTurnId(p.turnId)) return;
     this.primary.notification(bot, message);
-    this.nativeErrorRecovery.note(bot.id,message);
+    // Codex retry/auth recovery does not apply to Claude-owned threads.
+    if (botProvider(bot) !== "claude") this.nativeErrorRecovery.note(bot.id,message);
     if (message.method === "thread/status/changed") observeThreadStatus(this, bot.id, p.status);
     if (message.method === "thread/closed") observeThreadStatus(this, bot.id, { type: "notLoaded" });
     if (message.method !== "turn/completed") this.plans.note(bot.id, message);

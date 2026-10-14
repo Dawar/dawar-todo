@@ -17,3 +17,7 @@ BOTS_TIME_ZONE=America/Toronto
 # BOTS_DESKTOP_RDP_BIND=100.87.162.94
 # Explicit adoption preserves an existing desktop and its apps:
 # BOTS_DESKTOP_ADOPT={"linus-computer-admin":"linus"}
+# Claude bots (Claude Agent SDK). Off unless BOTS_CLAUDE_ENABLED=1. Generate the
+# subscription token once with `claude setup-token`; ANTHROPIC_API_KEY also works.
+# BOTS_CLAUDE_ENABLED=1
+# CLAUDE_CODE_OAUTH_TOKEN=REPLACE_WITH_CLAUDE_SETUP_TOKEN

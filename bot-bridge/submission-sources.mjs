@@ -63,7 +63,7 @@ export class SubmissionSources {
     if(d.botId!==bot.id||d.threadId!==bot.threadId||!row||row.fingerprint!==d.sourceFingerprint)throw Error('Original delivery source is unavailable.');
     return d.submissionId;
   }
-  row(botId,threadId,id){const r=id&&this.store.get('submissionSource',id);return r?.owner===this.owner?.key&&r.botId===botId&&r.threadId===threadId?r:null;}
+  row(botId,threadId,id){const r=id&&this.store.get('submissionSource',id);return r&&r.owner===this.owner?.key&&r.botId===botId&&r.threadId===threadId?r:null;}
   read(bot,params){
     if(!params||Object.keys(params).some(k=>k!=='submissionId')||!identity(params.submissionId))throw Error('Provide one original submission ID.');
     const r=this.row(bot.id,bot.threadId,params.submissionId);

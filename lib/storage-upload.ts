@@ -1,4 +1,4 @@
-import { replayableStorageFetch } from './storage-transfer';
+import { replayableStorageFetch } from './storage-transfer.ts';
 
 export type StoragePostTarget={url:string;fields:Record<string,string>;resumable?:{version:1;chunkBytes:number}};
 type Status={version:number;uploadId:string;state:string;size:number;sha256:string|null;chunkBytes:number;parts:{part:number;hash:string;size:number}[]};

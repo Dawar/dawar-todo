@@ -102,6 +102,14 @@ npm test           # application production build and existing application tests
 
 Also validate a dedicated bot against the actual app-server: create/retry, streamed messages, native question and two-device resolution, chunked attachment round-trip, Plan/steer/Stop, a harmless one-time schedule, archive/restore, reconnect and service restart. Verify desktop and mobile layouts in the browser. Use an owner device with Web Push enabled for the final real notification delivery check.
 
+## Claude bots
+
+Claude bots run on the Claude Agent SDK (`@anthropic-ai/claude-agent-sdk`, pinned exactly in `package.json`; `CLAUDE_SDK_VERSION` in `claude.mjs`). They are off unless `BOTS_CLAUDE_ENABLED=1` and a credential (`CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token`, or `ANTHROPIC_API_KEY`) are in the environment file. A Claude startup failure is logged as `claude.error` and never blocks Codex bots; `/healthz` reports `claudeReady`.
+
+`provider-router.mjs` sits where the Codex client used to be injected. Claude thread IDs (`claude:<sdk-session-uuid>`) and request IDs carry a `claude:` prefix, so routing is stateless; `thread/start` and `thread/list` for a Claude bot carry an explicit `provider: "claude"` hint that never reaches a backend. `claude.mjs` answers the Codex methods the runtime uses in Codex shapes: one long-lived SDK query per loaded thread, unloaded after `BOTS_CLAUDE_IDLE_MS` (default 10 minutes) idle and resumed from the SDK session. `claude-items.mjs` translates SDK messages into `ThreadItem`s and notifications; `claude-store.mjs` keeps the displayable transcript in the `records` table (`claudeThread`, `claudeTurn`), written before each notification. SDK session files live in `$BOTS_STATE_DIR/claude`, so the existing state-directory backup covers both.
+
+Bot instructions are appended to the `claude_code` system prompt; per-turn profile/team/policy context is prepended to the user message as tagged blocks and is not shown in history. User and project Claude settings are not loaded. Tools run without prompts, matching Codex bots. A restart ends an unfinished Claude turn as interrupted; it is never replayed. Not yet supported for Claude bots: native questions, bridge dynamic tools, the native queue, goals, compaction and manager workers.
+
 ## Runtime updates
 
 The runtime pin and binary resolver live in `codex-version.mjs`. See [UPDATING_CODEX.md](UPDATING_CODEX.md) for authorized on-request/nightly updates and the idle restart handoff.

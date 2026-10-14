@@ -100,7 +100,7 @@ export type BotOperations = {
   };
   "botAdmin.list": { params: Record<string, never>; result: { requests: import("./bot-admin-types").BotAdminRequest[] } };
   "botAdmin.control": { params: { id: string; expectedRevision: number; specHash: string; decision: "approve" | "revoke" }; result: { request: import("./bot-admin-types").BotAdminRequest } };
-  "bots.create": { params: { name: string; purpose?: string }; result: Bot };
+  "bots.create": { params: { name: string; purpose?: string; provider?: import("./bots-types").BotProvider }; result: Bot };
   "bots.update": {
     params: Partial<Pick<Bot, "name" | "model" | "effort" | "serviceTier" | "mode" | "burstQuietSeconds">> & { avatar?: Pick<BotAvatar, "shape" | "color"> };
     result: Bot;

@@ -13,6 +13,7 @@ export type BotNativeRecovery = { threadId:string; failedTurnId:string;
   nextRetryAt:string|null; reason:string|null; errorCode:string; nativeRetry:boolean; updatedAt:string };
 export type BotTeam = { id: string; name: string; color: string; position: number; revision: number; memberCount: number; createdAt: string; updatedAt: string };
 export type BotTeamDetail = Omit<BotTeam, "memberCount"> & { memory: string; workspace: string; members: { id: string; name: string; archived: boolean }[] };
+export type BotProvider = "codex" | "claude";
 export type Bot = {
   /** Assigned execution source supplied by the portable hub, absent on legacy services. */
   nodeId?: string;
@@ -23,6 +24,8 @@ export type Bot = {
   teamId?: string | null;
   teamOrder?: number;
   executionMode?: "legacy" | "single-thread";
+  /** Execution backend; absent means Codex. */
+  provider?: BotProvider;
   migrationReason?: string | null;
   avatar?: BotAvatar;
   burstQuietSeconds?: BotBurstQuietSeconds;
@@ -209,7 +212,7 @@ export type BotQueueList = { id: string; botId: string; name: string; cron: stri
 export type BotSnapshot = {
   secureInputs?: import("./secure-input").SecureRequest[];
   botAdminLeadIds?: string[];
-  capabilities?: { nativeErrorRecovery?: 1; nativeAuthRecovery?: 1; taskRequests?: 1; executionConfiguration?: 1; accountUsageHistory?: 1; submissionSources?: 1; botAdministration?: 1; botMemoryMaintenance?: 1; botDesktops?: 1; backgroundRunLanes?: 1; scheduleDecisions?: 1; singleThreadExecution?: 1; nativeGoals?: 1; nativeConversation?: 1; messageReplies?: 1; secureInputs?: 1; secureResponseLifecycle?: 1; operatorCalls?: 1; messageBursts?: 1; burstDiscard?: 1; burstControls?: 1; burstQueue?: 1; queueLists?: 1; queueRelativeMoves?: 1; queueSendNow?: 1; taskQueues?: 1; teams?: 1 };
+  capabilities?: { nativeErrorRecovery?: 1; nativeAuthRecovery?: 1; taskRequests?: 1; executionConfiguration?: 1; accountUsageHistory?: 1; submissionSources?: 1; botAdministration?: 1; botMemoryMaintenance?: 1; botDesktops?: 1; backgroundRunLanes?: 1; scheduleDecisions?: 1; singleThreadExecution?: 1; nativeGoals?: 1; nativeConversation?: 1; messageReplies?: 1; secureInputs?: 1; secureResponseLifecycle?: 1; operatorCalls?: 1; messageBursts?: 1; burstDiscard?: 1; burstControls?: 1; burstQueue?: 1; queueLists?: 1; queueRelativeMoves?: 1; queueSendNow?: 1; taskQueues?: 1; teams?: 1; claudeBots?: 1 };
   teams?: BotTeam[];
   workByBot?: BotWorkState[];
   backgroundByBot?: BotBackground[];

@@ -1,4 +1,4 @@
-import { replayableStorageFetch } from "./storage-transfer";
+import { replayableStorageFetch } from "./storage-transfer.ts";
 import { originalStorageUploadProxy } from './storage-upload-proxy';
 import type { StoragePostTarget } from './storage-upload';
 /** Private SigV4 signing shared by Todo and bot storage. Never send this environment to clients. */

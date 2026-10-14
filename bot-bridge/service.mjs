@@ -4,6 +4,8 @@ import { join } from "node:path";
 import { createServer } from "node:http";
 import { Store } from "./store.mjs";
 import { Codex } from "./codex.mjs";
+import { ClaudeBackend } from "./claude.mjs";
+import { ProviderRouter } from "./provider-router.mjs";
 import { CODEX_VERSION, codexBinary } from "./codex-version.mjs";
 import { BotRuntime } from "./runtime.mjs";
 import { bridgeResponse } from "./response.mjs";
@@ -26,7 +28,10 @@ const store = new Store(
     "state.sqlite",
   ),
 );
-const codex = new Codex(binary);
+const codex = new ProviderRouter({
+  codex: new Codex(binary),
+  claude: process.env.BOTS_CLAUDE_ENABLED === "1" ? new ClaudeBackend({ store }) : null,
+});
 const runtime = new BotRuntime({
   store,
   codex,
@@ -76,6 +81,7 @@ codex.on("disconnect", () => {
     setTimeout(() => process.exit(1), 500);
   }
 });
+codex.on("claudeFault", (error) => log("claude.error", { message: error.message }));
 codex.on("fault", (error) => {
   log("codex.error", { message: error.message });
   process.exit(1);
@@ -85,7 +91,7 @@ await runtime.start();
 if (runtime.storage) void runtime.storage.recoverMetadata().catch(() => log('storage.catalog-unavailable'));
 await manager.recover();
 await runtime.desktops.recover();
-log("runtime.ready", { version: CODEX_VERSION, bots: store.bots().length });
+log("runtime.ready", { version: CODEX_VERSION, claude: codex.claudeReady, bots: store.bots().length });
 
 function connect() {
   if (stopping) return;
@@ -296,6 +302,7 @@ const health = createServer((request, response) => {
       relayConnected: online,
       bots: store.bots().length,
       codexVersion: CODEX_VERSION,
+      claudeReady: codex.claudeReady,
       newBotDefaults: runtime.newBotDefaults,
       models: runtime.models.map(model => model.model),
       manager: {
