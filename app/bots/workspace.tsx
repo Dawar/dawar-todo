@@ -86,6 +86,7 @@ import { QueueLists, useQueueLists } from "./queue-lists";
 import { useComposerQueueDestination } from "./composer-queue-destination";
 import "./bots.css";
 import "./chat-design.css";
+import { botProvider } from "../../lib/bot-provider";
 
 const EMPTY_BOTS: Bot[] = [];
 const EMPTY_QUEUE: BotQueuedSubmission[] = [];
@@ -459,7 +460,7 @@ export function BotsWorkspace() {
             {snapshot?.capabilities?.operatorCalls === 1 && <Button type="button" variant="ghost" size="icon" className="aria-pressed:bg-accent aria-pressed:text-accent-foreground" aria-label="Call Operator" onClick={() => { setCallBotId(null); setShowCall(true); }}><Phone size={16} /></Button>}
             <ArtifactNav active={gallery === "artifacts"} onOpen={() => openGallery("artifacts")} />
             <Button type="button" variant="ghost" size="icon" className="aria-pressed:bg-accent aria-pressed:text-accent-foreground" title="Teams" aria-label="Teams" onClick={() => setShowTeams(true)}><UsersRound size={19} /></Button>
-            <Button type="button" variant="ghost" size="icon" className="aria-pressed:bg-accent aria-pressed:text-accent-foreground" title="Codex account usage" aria-label="Codex account usage" onClick={() => setShowOverallUsage(true)}><BarChart3 size={19} /></Button>
+            <Button type="button" variant="ghost" size="icon" className="aria-pressed:bg-accent aria-pressed:text-accent-foreground" title="Account usage" aria-label="Account usage" onClick={() => setShowOverallUsage(true)}><BarChart3 size={19} /></Button>
             <Button type="button" variant="ghost" size="icon"
               className="aria-pressed:bg-accent aria-pressed:text-accent-foreground"
               aria-label="Create bot"
@@ -514,7 +515,7 @@ export function BotsWorkspace() {
 
                 </div>
                 <div className="bots-header-actions">
-                  {single && snapshot?.capabilities?.nativeGoals === 1 && <GoalIndicator bot={bot} work={work} onOpen={() => { setDetailsSection('goals'); setProfile(true); }} />}
+                  {single && botProvider(bot) !== "claude" && snapshot?.capabilities?.nativeGoals === 1 && <GoalIndicator bot={bot} work={work} onOpen={() => { setDetailsSection('goals'); setProfile(true); }} />}
                   {snapshot?.capabilities?.operatorCalls === 1 && !bot.archived && <Button variant="ghost" size="icon" className="bots-icon-button" aria-label={`Call ${bot.name}`} onClick={() => { setCallBotId(bot.id); setShowCall(true); }}><Phone size={18} /></Button>}
                   <Button variant="ghost" size="icon"
                     className="bots-icon-button"
@@ -546,7 +547,7 @@ export function BotsWorkspace() {
             </div>
           )}
           {bot && <NativeWriterRecovery bot={bot} work={work} online={online} />}
-          {bot && <CodexAuthRecovery key={JSON.stringify([owner, bot.id, bot.threadId])} owner={owner} bot={bot} online={online} supported={snapshot?.capabilities?.nativeAuthRecovery === 1} setupBusy={busy}
+          {bot && <CodexAuthRecovery key={JSON.stringify([owner, bot.id, bot.threadId])} owner={owner} bot={bot} online={online} supported={botProvider(bot) !== "claude" && snapshot?.capabilities?.nativeAuthRecovery === 1} setupBusy={busy}
             nativeUnavailable={work?.botId === bot.id && work.threadId === bot.threadId && work.state === 'unconfirmed' && ['native-sign-in','native-system-error'].includes(work.recovery?.kind ?? '')}
             onRetrySetup={() => void action(() => client.rpc("bots.recover", bot.id))}
             onReturn={() => { screenRef.current?.querySelector<HTMLTextAreaElement>('textarea')?.focus({preventScroll:true}); }} />}
@@ -786,10 +787,10 @@ export function BotsWorkspace() {
         </Activity>}
       </main>
       {showTeams && (teamsSupported ? <TeamsManager key={owner} owner={owner} teams={teams} bots={bots} online={online} onClose={() => setShowTeams(false)} /> : <ControlledDialog title="Teams" onClose={() => setShowTeams(false)}><p className="text-sm text-muted-foreground">Teams are unavailable on this service.</p><Button className="justify-self-end" onClick={() => setShowTeams(false)}>Close</Button></ControlledDialog>)}
-      {showOverallUsage && <ControlledDialog title="Codex account usage" className="max-w-3xl" onClose={() => setShowOverallUsage(false)}><UsagePanel online={online} /></ControlledDialog>}
+      {showOverallUsage && <ControlledDialog title="Account usage" className="max-w-3xl" onClose={() => setShowOverallUsage(false)}><UsagePanel online={online} /></ControlledDialog>}
       {showCall && <OperatorCallDialog bot={bots.find(value => value.id === callBotId) ?? null} bots={bots.filter(value => !value.archived && value.executionMode === "single-thread")} onClose={() => setShowCall(false)} />}
       {bot && desktopScope === scope && !bot.archived && <BotDesktopDialog key={scope} bot={bot} owner={owner} onClose={() => setDesktopScope(null)} />}
-      {creating && <CreateBotDialog online={online} busy={busy} error={error} onClose={() => setCreating(false)}
+      {creating && <CreateBotDialog online={online} busy={busy} error={error} claudeAvailable={snapshot?.capabilities?.claudeBots === 1} onClose={() => setCreating(false)}
         onSubmit={(e) => {
               e.preventDefault();
               const data = new FormData(e.currentTarget);
@@ -800,6 +801,8 @@ export function BotsWorkspace() {
                   {
                     name: String(data.get("name")),
                     purpose: String(data.get("purpose")),
+                    // Codex requests keep their original shape.
+                    ...(data.get("provider") === "claude" ? { provider: "claude" as const } : {}),
                   },
                   createOperation.current,
                 );

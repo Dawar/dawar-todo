@@ -184,13 +184,15 @@ export class ClaudeTurn {
         this.blockId(messageId);
         if (HIDDEN_TOOLS.has(block.name)) continue;
         this.flush(out, "commentary");
-        if (block.name === "TodoWrite") {
-          const text = (block.input?.todos ?? []).map((t) => `${t.status === "completed" ? "[x]" : "[ ]"} ${t.content}`).join("\n");
-          out.push(this.note("turn/plan/updated", { turnId: this.id, explanation: null,
-            plan: (block.input?.todos ?? []).map((t) => ({ step: t.content, status: t.status === "in_progress" ? "inProgress" : t.status })) }));
-          this.complete({ type: "plan", id: block.id, text }, out);
+        // A Plan-mode proposal is the native plan item the Plan lifecycle reviews.
+        if (block.name === "ExitPlanMode") {
+          this.complete({ type: "plan", id: block.id, text: String(block.input?.plan ?? "") }, out);
           continue;
         }
+        // To-do progress is the live plan panel, never a proposed plan.
+        if (block.name === "TodoWrite")
+          out.push(this.note("turn/plan/updated", { turnId: this.id, explanation: null,
+            plan: (block.input?.todos ?? []).map((t) => ({ step: t.content, status: t.status === "in_progress" ? "inProgress" : t.status })) }));
         this.tools.set(block.id, this.now());
         this.start(toolItem(block, this.cwd), out);
       } else this.blockId(messageId);

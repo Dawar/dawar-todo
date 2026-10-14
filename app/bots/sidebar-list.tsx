@@ -7,6 +7,7 @@ import { useSidebarPreferences } from './sidebar-preferences';
 import { Button } from '@/components/ui/button';
 import './sidebar-list.css';
 import { useLocallyReadBots } from './local-read-state';
+import { botProvider, providerDefaults } from "../../lib/bot-provider";
 const HEIGHT = 96;
 const TEAM_HEIGHT = 44;
 const working = (bot: Bot) => Boolean(bot.activeTurnId || bot.status === "running" || bot.workerTasks?.active);
@@ -79,8 +80,9 @@ export const BotSidebarList = memo(function BotSidebarList({ owner, search = '',
     {visible.map(row => row.kind === "heading" ? <button key={`group:${row.id}`} type="button" className="bots-team-heading" style={{ height: row.height }} aria-expanded={searching || !collapsed.has(row.id)} aria-disabled={searching || undefined} aria-label={`${row.name}, ${row.count} ${row.count === 1 ? "bot" : "bots"}`} onClick={() => { if (!searching) store.toggle(row.id); }}>
       <ChevronDown size={15} className={!searching && collapsed.has(row.id) ? "is-collapsed" : ""} aria-hidden="true" /><span className="bots-team-dot" style={{ background: row.color ?? "var(--muted-foreground)" }} aria-hidden="true" /><span id={`${id}-${row.id}`}>{row.name}</span><small>{row.count}</small>
     </button> : <div key={row.id} style={{ height: row.height }}>{(() => {
-      const b = row.bot, modelId = b.model ?? snapshot?.defaults.model ?? "Default model", tier = b.serviceTier ?? snapshot?.defaults.serviceTier;
-      return <SidebarRow bot={b} selected={b.id === selected} select={select} modelName={models.get(modelId) ?? modelId} effort={b.effort ?? snapshot?.defaults.effort ?? "default"} fast={tier === "priority" || tier === "fast"} />;
+      const b = row.bot, defaults = snapshot ? providerDefaults(snapshot, b) : null;
+      const modelId = b.model ?? defaults?.model ?? "Default model", tier = botProvider(b) === "claude" ? null : b.serviceTier ?? defaults?.serviceTier;
+      return <SidebarRow bot={b} selected={b.id === selected} select={select} modelName={models.get(modelId) ?? modelId} effort={b.effort ?? defaults?.effort ?? "default"} fast={tier === "priority" || tier === "fast"} />;
     })()}</div>)}
     <div style={{ height: Math.max(0, total - (visible.at(-1) ? visible.at(-1)!.offset + visible.at(-1)!.height : 0)) }} aria-hidden="true" />
     {!bots.length && <div className="bots-sidebar-empty" role="status">{empty}</div>}

@@ -27,8 +27,20 @@ export class ClaudeStore {
         seq = thread.nextSeq ?? 1;
         this.saveThread({ ...thread, nextSeq: seq + 1 });
       }
-      return this.store.put(TURN, { id: state.turn.id, botId: threadId, seq, turn: state.turn, times: state.times });
+      return this.store.put(TURN, { id: state.turn.id, botId: threadId, seq, turn: state.turn, times: state.times,
+        ...(state.usage ? { usage: state.usage } : {}) });
     });
+  }
+  /** Cost/token totals of turns that started at or after `sinceMs` (all threads, or one). */
+  usageSince(sinceMs, threadId = null) {
+    const totals = { turns: 0, costUsd: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 };
+    for (const record of threadId ? this.turns(threadId) : this.store.list(TURN)) {
+      if (!record.usage || record.turn.startedAt * 1000 < sinceMs) continue;
+      totals.turns++;
+      for (const key of Object.keys(totals)) if (key !== "turns") totals[key] += Number(record.usage[key] ?? 0);
+    }
+    totals.costUsd = Math.round(totals.costUsd * 10000) / 10000;
+    return totals;
   }
   /** Codex `Thread` for a stored Claude thread. */
   nativeThread(record, status, turns = []) {

@@ -13,6 +13,7 @@ import { useRunAction } from './run-action';
 import { goalControlBlock, goalFingerprint, goalLabels, goalObservation, goalScope, goalTime } from './native-goal-state';
 import './native-goal.css';
 import { GoalWorkPlans } from './goal-work-plans-view';
+import { botProvider } from "../../lib/bot-provider";
 
 type Props = { owner: string; bot: Bot; work?: BotAdmissionWork; online: boolean; snapshot?: BotSnapshot | null };
 type Form = { kind: 'edit' | 'create' | 'clear'; fingerprint: string; objective: string; budgetMode: 'keep' | 'set' | 'remove'; budget: string };
@@ -31,7 +32,8 @@ export function NativeGoalPanel({ owner, bot, work, online, snapshot }: Props) {
   useEffect(() => { const timer = setInterval(() => setClock(Date.now()), 60_000); return () => clearInterval(timer); }, []);
   useEffect(() => () => { refreshGeneration.current++; }, [scope]);
   const observed = goalObservation(bot, work, clock), goal = observed.goal;
-  const supported = snapshot?.capabilities?.nativeGoals === 1 && bot.executionMode === 'single-thread';
+  const claude = botProvider(bot) === 'claude';
+  const supported = !claude && snapshot?.capabilities?.nativeGoals === 1 && bot.executionMode === 'single-thread';
   const savedControl = [mainStop, allStop, intakeResume].some(value => value.intent || value.busy || !value.ready);
   const block = savedControl ? 'Confirm saved Stop or automatic-intake controls before changing the goal.' : goalControlBlock(snapshot, bot, online, clock), locked = Boolean(block || action.intent || action.busy || !action.ready || refreshing || client.owner !== owner);
   const fingerprint = goalFingerprint(bot, work);
@@ -82,7 +84,7 @@ export function NativeGoalPanel({ owner, bot, work, online, snapshot }: Props) {
   const budgetBlocked = goal?.status === 'budgetLimited' && (goal.tokenBudget === undefined || goal.tokensUsed === undefined || goal.tokenBudget !== null && goal.tokenBudget <= goal.tokensUsed);
   return <section className="bots-goal-panel" aria-labelledby={`${id}-title`}>
     <header><div><Target size={20} aria-hidden="true" /><h3 ref={heading} tabIndex={-1} id={`${id}-title`}>Goal</h3></div><Button variant="outline" type="button" disabled={!supported || !online || !bot.threadId || bot.archived || refreshing || action.busy || client.owner !== owner} onClick={() => void refresh()}><RefreshCw size={15} aria-hidden="true" />{refreshing ? 'Refreshing…' : 'Refresh'}</Button></header>
-    {!supported ? <p>Goals are unavailable on this service.</p> : <>
+    {!supported ? <p>{claude ? 'Goals are a Codex feature and are not available for Claude bots.' : 'Goals are unavailable on this service.'}</p> : <>
       <p className="bots-goal-description">An objective for this conversation, carried across turns.</p>
       {goal ? <>
         <span className={`bots-goal-state is-${goal.status}`} role="status">{goalLabels[goal.status]}</span>

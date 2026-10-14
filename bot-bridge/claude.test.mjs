@@ -167,7 +167,7 @@ test("a restart ends unfinished Claude turns as interrupted and resumes the SDK 
 test("unsupported Codex mutations are refused definitively; reads stay empty", async (t) => {
   const { claude } = await setup(t, async () => []);
   const { thread } = await claude.call("thread/start", { cwd: "/bots/u" });
-  for (const method of ["thread/queue/add", "thread/goal/set", "thread/compact/start", "thread/fork"])
+  for (const method of ["thread/goal/set", "thread/goal/clear", "thread/fork", "project/list"])
     await assert.rejects(claude.call(method, { threadId: thread.id }), (e) => e.definite === true);
   assert.deepEqual(await claude.call("thread/queue/list", { threadId: thread.id }), { data: [], nextCursor: null });
   await assert.rejects(claude.call("thread/read", { threadId: "claude:missing" }), (e) => e.definite === true);
@@ -181,6 +181,7 @@ test("pure mappings: tools, results, models and MCP config", () => {
     { type: "tool_use", id: "g", name: "Grep", input: { pattern: "p" } },
     { type: "tool_use", id: "ts", name: "ToolSearch", input: { query: "select:x" } },
     { type: "tool_use", id: "p", name: "TodoWrite", input: { todos: [{ content: "one", status: "in_progress" }] } },
+    { type: "tool_use", id: "x", name: "ExitPlanMode", input: { plan: "1. Do it" } },
   ] } });
   turn.consume({ type: "user", parent_tool_use_id: null, message: { content: [
     { type: "tool_result", tool_use_id: "e", content: "ok" },
@@ -195,7 +196,8 @@ test("pure mappings: tools, results, models and MCP config", () => {
   assert.deepEqual(items.d.contentItems, [{ type: "inputText", text: "saved" }]);
   assert.equal(items.g.type, "mcpToolCall");
   assert.equal(items.g.status, "failed", "a tool still running at turn end is not left inProgress");
-  assert.equal(items.p.type, "plan");
+  assert.equal(items.p.type, "mcpToolCall", "a to-do list is not a proposed plan");
+  assert.deepEqual(items.x, { type: "plan", id: "x", text: "1. Do it" });
   assert.equal(items.ts, undefined, "ToolSearch plumbing is not shown");
   assert.equal(finish.at(-1).method, "turn/completed");
   assert.deepEqual(resultStatus({ subtype: "error_max_turns", errors: [] }, false), { status: "failed", error: "error_max_turns" });
@@ -397,4 +399,141 @@ test("BotRuntime answers a Claude question card and runs a bridge tool for a Cla
   assert.deepEqual(seen.decision.updatedInput.answers, { "Favorite color?": "Red" });
   assert.equal(store.list("pending", bot.id).length, 0);
   assert.notEqual(store.bot(bot.id).status, "waiting");
+});
+
+// --- Phase 4: native queue, compaction, effort ------------------------------
+test("the native queue starts when idle, waits behind a running turn and drains in order", async (t) => {
+  const gates = [];
+  const { claude, notes } = await setup(t, async (user) => {
+    await new Promise((r) => gates.push(r));
+    return [text(`m-${user.uuid}`, `done ${user.message.content.at(-1).text}`), result(user.uuid)];
+  });
+  const { thread } = await claude.call("thread/start", { cwd: "/bots/queue" });
+  const add = (id, t) => claude.call("thread/queue/add", { threadId: thread.id, input: input(t), clientUserMessageId: id });
+  const first = await add("c1", "one");
+  await until(() => gates.length === 1);
+  assert.deepEqual((await claude.call("thread/queue/list", { threadId: thread.id })).data, [], "an idle thread starts the first prompt");
+  const second = await add("c2", "two"), third = await add("c3", "three");
+  assert.deepEqual(await add("c2", "two again"), { queuedSubmission: second.queuedSubmission }, "same client message is idempotent");
+  await claude.call("thread/queue/update", { threadId: thread.id, queuedSubmissionId: third.queuedSubmission.id, input: input("THREE") });
+  await claude.call("thread/queue/reorder", { threadId: thread.id, queuedSubmissionIds: [third.queuedSubmission.id, second.queuedSubmission.id] });
+  await assert.rejects(claude.call("thread/queue/reorder", { threadId: thread.id, queuedSubmissionIds: [second.queuedSubmission.id] }), (e) => e.definite);
+  gates.shift()();
+  await until(() => gates.length === 1);
+  gates.shift()();
+  await until(() => gates.length === 1);
+  gates.shift()();
+  await until(() => notes.filter((n) => n.method === "turn/completed").length === 3);
+  const users = notes.filter((n) => n.method === "turn/completed").map((n) => n.params.turn.items[0]);
+  assert.deepEqual(users.map((u) => [u.clientId, u.content[0].text]), [["c1", "one"], ["c3", "THREE"], ["c2", "two"]]);
+  assert.ok(notes.some((n) => n.method === "thread/queue/changed"));
+  assert.equal(first.queuedSubmission.clientUserMessageId, "c1");
+});
+
+test("a stopped turn holds the queue until it is started explicitly", async (t) => {
+  let gate;
+  const { claude, notes } = await setup(t, async (user, ctx) => {
+    if (user.message.content.at(-1).text === "slow") { await new Promise((r) => { gate = r; ctx.wake = r; }); }
+    return [result(user.uuid)];
+  });
+  const { thread } = await claude.call("thread/start", { cwd: "/bots/hold" });
+  const { turn } = await claude.call("turn/start", { threadId: thread.id, input: input("slow") });
+  const queued = await claude.call("thread/queue/add", { threadId: thread.id, input: input("later"), clientUserMessageId: "c9" });
+  await until(() => gate);
+  await claude.call("turn/interrupt", { threadId: thread.id, turnId: turn.id });
+  await until(() => notes.some((n) => n.method === "turn/completed"));
+  await settle();
+  assert.equal((await claude.call("thread/queue/list", { threadId: thread.id })).data.length, 1);
+  const started = await claude.call("thread/queue/start", { threadId: thread.id, queuedSubmissionId: queued.queuedSubmission.id });
+  assert.equal(started.turn.status, "inProgress");
+  await until(() => notes.filter((n) => n.method === "turn/completed").length === 2);
+  assert.deepEqual((await claude.call("thread/queue/list", { threadId: thread.id })).data, []);
+});
+
+test("compaction runs /compact as its own turn with a contextCompaction item", async (t) => {
+  const { claude, notes, log } = await setup(t, async (user) => user.message.content === "/compact"
+    ? [{ type: "system", subtype: "compact_boundary", uuid: "cb1" }, result(user.uuid)]
+    : [result(user.uuid)]);
+  const { thread } = await claude.call("thread/start", { cwd: "/bots/compact" });
+  assert.deepEqual(await claude.call("thread/compact/start", { threadId: thread.id }), {});
+  await until(() => notes.some((n) => n.method === "turn/completed"));
+  const turn = notes.find((n) => n.method === "turn/completed").params.turn;
+  assert.equal(turn.status, "completed");
+  assert.deepEqual(turn.items, [{ type: "contextCompaction", id: "cb1" }]);
+  assert.equal(log.at(-1).last.message.content, "/compact");
+});
+
+test("a changed effort restarts an idle session on resume with the new effort", async (t) => {
+  const { claude, notes, log } = await setup(t, async (user) => [result(user.uuid)]);
+  const { thread } = await claude.call("thread/start", { cwd: "/bots/effort", effort: "high" });
+  await claude.call("turn/start", { threadId: thread.id, input: input("a"), effort: "high" });
+  await until(() => notes.some((n) => n.method === "turn/completed"));
+  const before = log.length;
+  await claude.call("turn/start", { threadId: thread.id, input: input("b"), effort: "max" });
+  assert.equal(log.length, before + 1);
+  assert.equal(log.at(-1).options.effort, "max");
+  assert.equal(log.at(-1).options.resume, thread.sessionId);
+  assert.ok(!notes.some((n) => n.method === "thread/status/changed" && n.params.status.type === "notLoaded"), "the restart is internal");
+});
+
+test("BotRuntime queue and schedules run on a Claude bot", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "claude-runtime-queue-"));
+  const store = new Store(join(dir, "state.sqlite"));
+  const prompts = [];
+  const claude = new ClaudeBackend({ store, credential: "test", configDir: join(dir, "claude"), mcp: fakeMcp,
+    query: fakeQuery(async (user) => { prompts.push(JSON.stringify(user.message.content)); return [text(`m-${user.uuid}`, "ok"), result(user.uuid)]; }) });
+  const runtime = new BotRuntime({ store, codex: new ProviderRouter({ codex: new MinimalCodex(), claude }), root: join(dir, "bots") });
+  t.after(async () => { claude.close(); await settle(); store.close(); await rm(dir, { recursive: true, force: true }); });
+  await runtime.start();
+  const op = (botId, method, params = {}) => runtime.handle({ method, botId, params, operationId: crypto.randomUUID() });
+  const bot = await runtime.handle({ method: "bots.create", params: { name: "Queue", provider: "claude" }, operationId: "create-queue-bot" });
+  const added = await op(bot.id, "queue.add", { text: "queued hello" });
+  assert.ok(added.queuedSubmission || added.consumedTurnId);
+  // The service ticks the staged queue and scheduler; drive it here.
+  const ticking = async (fn) => { for (let i = 0; i < 100 && !fn(); i++) { await runtime.tick(); await settle(); } assert.ok(fn()); };
+  await ticking(() => prompts.some((p) => p.includes("queued hello")) && !store.bot(bot.id).activeTurnId);
+  const schedule = await op(bot.id, "schedules.save", { title: "Check", prompt: "scheduled check", cron: "0 * * * *", timeZone: "UTC" });
+  await op(bot.id, "schedules.run", { id: schedule.id });
+  await ticking(() => prompts.some((p) => p.includes("scheduled check")));
+  await ticking(() => store.list("run").some((r) => r.status === "completed"));
+  const turns = store.list("claudeTurn").map((r) => r.turn.status);
+  assert.ok(turns.length >= 2 && turns.every((s) => s === "completed"), JSON.stringify(turns));
+});
+
+test("Plan mode switches the SDK permission mode and declines ExitPlanMode for review", async (t) => {
+  const { claude, notes, log } = await setup(t, async (user, ctx) => {
+    ctx.decision = await ctx.options.canUseTool("ExitPlanMode", { plan: "1. Step" }, { signal: new AbortController().signal, toolUseID: "x1" });
+    return [assistant("m1", { type: "tool_use", id: "x1", name: "ExitPlanMode", input: { plan: "1. Step" } }), result(user.uuid)];
+  });
+  const modes = [];
+  const { thread } = await claude.call("thread/start", { cwd: "/bots/plan" });
+  const ctx = log.at(-1);
+  claude.sessions.get(thread.id).query.setPermissionMode = async (m) => modes.push(m);
+  await claude.call("turn/start", { threadId: thread.id, input: input("plan it"), collaborationMode: { mode: "plan" } });
+  await until(() => notes.some((n) => n.method === "turn/completed"));
+  assert.equal(ctx.decision.behavior, "deny");
+  assert.ok(notes.some((n) => n.method === "item/completed" && n.params.item.type === "plan" && n.params.item.text === "1. Step"));
+  await claude.call("turn/start", { threadId: thread.id, input: input("go"), collaborationMode: { mode: "default" } });
+  assert.deepEqual(modes, ["plan", "default"]);
+});
+
+test("usage: real rate-limit events flatten into per-window rows; turn costs are totalled", async (t) => {
+  const { rateLimitWindows, turnUsage } = await import("./claude.mjs");
+  const rows = rateLimitWindows({ five_hour: { status: "allowed_warning", rateLimitType: "five_hour", resetsAt: 100, isUsingOverage: false,
+    unifiedWindows: { five_hour: { utilization: 0.81, resetsAt: 100 }, seven_day: { utilization: 0.2, resetsAt: 900 } }, observedAt: "2026-10-14T20:00:00.000Z" } });
+  assert.deepEqual(rows.map((r) => [r.type, r.status, r.utilization, r.resetsAt]), [["five_hour", "allowed_warning", 0.81, 100], ["seven_day", "allowed", 0.2, 900]]);
+  const usage = turnUsage({ total_cost_usd: 0.5, usage: { input_tokens: 10, output_tokens: 5 } }, turnUsage({ total_cost_usd: 0.25, usage: { input_tokens: 1 } }));
+  assert.deepEqual(usage, { costUsd: 0.75, inputTokens: 11, outputTokens: 5, cacheReadTokens: 0, cacheCreationTokens: 0 });
+
+  const { claude } = await setup(t, async (user, ctx) => [
+    { type: "rate_limit_event", rate_limit_info: { status: "allowed", rateLimitType: "five_hour", unifiedWindows: { five_hour: { utilization: 0.1, resetsAt: 5 } } } },
+    result(user.uuid, { total_cost_usd: 0.02, usage: { input_tokens: 3, output_tokens: 4 } })]);
+  const { thread } = await claude.call("thread/start", { cwd: "/bots/usage" });
+  await claude.call("turn/start", { threadId: thread.id, input: input("hi") });
+  await until(() => claude.data.turns(thread.id)[0]?.turn.status === "completed");
+  const read = await claude.call("claude/usage/read", { threadId: thread.id });
+  assert.deepEqual(read.rateLimits.map((r) => [r.type, r.utilization]), [["five_hour", 0.1]]);
+  assert.equal(read.thread.all.turns, 1);
+  assert.equal(read.account.day.costUsd, 0.02);
+  assert.equal(read.thread.all.outputTokens, 4);
 });

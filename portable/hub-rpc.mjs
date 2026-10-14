@@ -7,7 +7,7 @@ import {OPERATOR_READS,OPERATOR_MUTATIONS,OPERATOR_NATIVE,OPERATOR_NODE_READS,op
 
 // Explicit method sets keep an arbitrary browser method from becoming remote
 // shell/native RPC authority. The real runtime still validates every request.
-export const AGENT_READS=new Set(['auth.read','snapshot','runtime.info','work.read','goals.read','history','history.page','history.turn','history.view','history.log','history.detail','history.attachments','replies.prepare','replies.resolve','artifacts.list','artifacts.preview','events','usage.bot','usage.account','usage.history','attachments.read','inbox.list','runs.page','runs.turns','runs.receipt','runs.requests','runs.findings','runs.decisions','execution.config','secure.list','taskRequests.source',...OPERATOR_NODE_READS,...DESKTOP_READS]);
+export const AGENT_READS=new Set(['auth.read','snapshot','runtime.info','work.read','goals.read','history','history.page','history.turn','history.view','history.log','history.detail','history.attachments','replies.prepare','replies.resolve','artifacts.list','artifacts.preview','events','usage.bot','usage.account','usage.history','usage.claude','attachments.read','inbox.list','runs.page','runs.turns','runs.receipt','runs.requests','runs.findings','runs.decisions','execution.config','secure.list','taskRequests.source',...OPERATOR_NODE_READS,...DESKTOP_READS]);
 export const AGENT_MUTATIONS=new Set(['nativeRecovery.retry','auth.check','auth.login.start','auth.login.cancel','turn.send','turn.interrupt','requests.respond','bots.update','goals.set','goals.clear','artifacts.index',...DESKTOP_MUTATIONS]);
 const NATIVE_SNAPSHOT=Symbol('assigned-native-snapshot');
 export class HubRpc {

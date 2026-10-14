@@ -167,6 +167,7 @@ export type BotOperations = {
   "runs.turns": { params: { runId: string; cursor?: string | null; limit?: number }; result: BotRunTurnPage };
   "usage.bot": { params: Record<string, never>; result: BotThreadUsage };
   "usage.account": { params: { refresh?: boolean }; result: BotAccountQuota };
+  "usage.claude": { params: Record<string, never>; result: import("./bots-types").BotClaudeUsage };
   "usage.history": { params: { range?: import("./usage-history").UsageHistoryRange; cursor?: string | null }; result: import("./usage-history").UsageHistory };
   "runs.acknowledge": { params: { id: string }; result: Record<string, never> };
   "attachments.begin": {

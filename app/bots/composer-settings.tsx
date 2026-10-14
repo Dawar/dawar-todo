@@ -8,10 +8,12 @@ import { getComposerSettings, type Values, type ComposerSettingsController, type
 import { Button } from "@/components/ui/button";
 import { NativeSelect } from "@/components/ui/native-select";
 import { nextTurnSaveLabel } from "./next-turn-settings";
+import { botProvider, providerDefaults, providerModels } from "../../lib/bot-provider";
 
-function fastChoice(values: Values, snapshot: BotSnapshot) {
-  const model = snapshot.models.find(item => item.model === (values.model ?? snapshot.defaults.model));
-  const activeTier = values.serviceTier ?? snapshot.defaults.serviceTier;
+function fastChoice(values: Values, snapshot: BotSnapshot, bot: Bot) {
+  const defaults = providerDefaults(snapshot, bot);
+  const model = providerModels(snapshot, bot).find(item => item.model === (values.model ?? defaults.model));
+  const activeTier = values.serviceTier ?? defaults.serviceTier;
   const active = activeTier === "priority" || activeTier === "fast";
   const available = model?.serviceTiers.find(tier => tier.id === activeTier && active)?.id ??
     model?.serviceTiers.find(tier => tier.id === "priority" || tier.id === "fast")?.id;
@@ -26,7 +28,9 @@ export function ComposerSettings({ bot, snapshot, online }: { bot: Bot; snapshot
   useLayoutEffect(() => controller.observe(bot, snapshot, online), [controller, bot, snapshot, online]);
   useLayoutEffect(() => controller.attach(), [controller]);
   const effective = controller.displayed(bot);
-  const { model, active, available } = fastChoice(effective, snapshot);
+  const { model, active, available } = fastChoice(effective, snapshot, bot);
+  const models = providerModels(snapshot, bot), defaults = providerDefaults(snapshot, bot);
+  const claude = botProvider(bot) === "claude";
   const pending = state.pending;
   const queued = Boolean(pending && Object.entries(state.intent).some(([field, value]) =>
     pending.values[field as keyof Values] !== value));
@@ -37,20 +41,20 @@ export function ComposerSettings({ bot, snapshot, online }: { bot: Bot; snapshot
       <div className="bots-settings-selects">
         <label><span className="sr-only">Model</span><NativeSelect aria-label="Model" disabled={!online}
           value={effective.model ?? ""} onChange={event => {
-            const selected = snapshot.models.find(item => item.model === event.target.value);
-            const currentTier = controller.displayed(bot).serviceTier ?? snapshot.defaults.serviceTier;
-            const usableDefault = selected?.supportedReasoningEfforts.some(item => item.reasoningEffort === snapshot.defaults.effort);
+            const selected = models.find(item => item.model === event.target.value);
+            const currentTier = controller.displayed(bot).serviceTier ?? defaults.serviceTier;
+            const usableDefault = selected?.supportedReasoningEfforts.some(item => item.reasoningEffort === defaults.effort);
             const values = { model: event.target.value || null,
               effort: selected && !usableDefault ? selected.defaultReasoningEffort : null,
-              ...(selected && currentTier !== "default" && !selected.serviceTiers.some(tier => tier.id === currentTier) ? { serviceTier: "default" } : {}) };
+              ...(!claude && selected && currentTier !== "default" && !selected.serviceTiers.some(tier => tier.id === currentTier) ? { serviceTier: "default" } : {}) };
             controller.edit(values);
           }}>
-          <option value="">Default · {snapshot.defaults.model}</option>
-          {snapshot.models.map(item => <option key={item.id} value={item.model}>{item.displayName}</option>)}
+          <option value="">Default · {defaults.model}</option>
+          {models.map(item => <option key={item.id} value={item.model}>{item.displayName}</option>)}
         </NativeSelect></label>
         <label><span className="sr-only">Reasoning effort</span><NativeSelect aria-label="Reasoning effort" disabled={!online}
           value={effective.effort ?? ""} onChange={event => controller.edit({ effort: event.target.value || null })}>
-          <option value="">Default · {snapshot.defaults.effort}</option>
+          <option value="">Default · {defaults.effort}</option>
           {model?.supportedReasoningEfforts.map(item => <option key={item.reasoningEffort} value={item.reasoningEffort}>{item.reasoningEffort}</option>)}
         </NativeSelect></label>
       </div>
@@ -60,14 +64,14 @@ export function ComposerSettings({ bot, snapshot, online }: { bot: Bot; snapshot
           onClick={() => controller.edit({ mode: controller.displayed(bot).mode === "plan" ? "default" : "plan" })}>
           {effective.mode === "plan" ? <Check size={15} aria-hidden="true" /> : <ListTodo size={15} aria-hidden="true" />}Plan
         </Button>
-        <Button variant="ghost" type="button" aria-pressed={active}
+        {!claude && <Button variant="ghost" type="button" aria-pressed={active}
           disabled={!online || !available && !active} title={!available && !active ? "Fast is unavailable for this model" : "Fast uses more Codex credits"}
           onClick={() => {
-            const choice = fastChoice(controller.displayed(bot), snapshot);
+            const choice = fastChoice(controller.displayed(bot), snapshot, bot);
             controller.edit({ serviceTier: choice.active ? "default" : choice.available });
           }}>
           {active ? <Check size={15} aria-hidden="true" /> : <Zap size={15} aria-hidden="true" />}Fast
-        </Button>
+        </Button>}
       </div>
     </div>
     <SettingsRecovery state={state} controller={controller} online={online} />

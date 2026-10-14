@@ -120,6 +120,7 @@ const READ_METHODS = new Set([
   "runs.decisions",
   "usage.bot",
   "usage.account",
+  "usage.claude",
   "usage.history",
   "attachments.read",
   "queue.list",
@@ -606,6 +607,7 @@ export class BotRuntime extends EventEmitter {
       ready: this.ready,
       account: this.account,
       defaults: this.defaults,
+      ...(this.codex.claudeReady ? { claudeDefaults: this.claudeDefaults } : {}),
       models: this.models,
       schedules: this.store.list("schedule"),
       activeScheduledTurns: this.store.bots().map(bot => activeScheduledTurn(this, bot.id)).filter(Boolean),
@@ -852,6 +854,11 @@ export class BotRuntime extends EventEmitter {
     if (method === "teams.read") return readTeam(this,p.id);
     if (method === "usage.account") return p.refresh === false ? this.usage.legacy() : this.usage.refresh("manual");
     if (method === "usage.history") return this.usage.history(p);
+    if (method === "usage.claude") {
+      if (!this.codex.claudeReady) throw new Error("Claude bots are not enabled on this machine.");
+      const bot = botId ? this.store.bot(String(botId)) : null;
+      return this.codex.call("claude/usage/read", { provider: "claude", ...(botProvider(bot) === "claude" && bot.threadId ? { threadId: bot.threadId } : {}) });
+    }
     if (method === "runtime.info")
       return {
         ready: this.ready,
@@ -2025,6 +2032,7 @@ export class BotRuntime extends EventEmitter {
   onNotification(message) {
     message = redactSecureNotification(message);
     if (this.usage.notification(message)) return;
+    if (message.method === "claude/rateLimits/updated") return void this.emitEvent("usage", { provider: "claude" });
     if (this.manager?.event(message)) return;
     const p = message.params ?? {};
     const threadId = p.threadId ?? p.thread?.id;

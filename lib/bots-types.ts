@@ -133,6 +133,15 @@ export type BotThreadUsage = {
   };
   reason?: string;
 };
+export type BotClaudeUsageTotals = { turns: number; costUsd: number; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheCreationTokens: number };
+/** Claude subscription rate-limit state (latest per window) and SDK-estimated turn costs. */
+export type BotClaudeUsage = {
+  readAt: string;
+  rateLimits: { type: string; status: "allowed" | "allowed_warning" | "rejected"; utilization?: number; resetsAt?: number;
+    isUsingOverage?: boolean; observedAt: string }[];
+  account: { day: BotClaudeUsageTotals; week: BotClaudeUsageTotals };
+  thread: { day: BotClaudeUsageTotals; all: BotClaudeUsageTotals } | null;
+};
 export type BotAccountQuotaWindow = {
   usedPercent: number;
   windowDurationMins: number | null;
@@ -224,6 +233,8 @@ export type BotSnapshot = {
   ready: boolean;
   account: { authenticated: boolean };
   defaults: { model: string; effort: string | null; serviceTier: string };
+  /** Present when Claude bots are enabled on the runtime. */
+  claudeDefaults?: { model: string; effort: string };
   models: Model[];
   schedules: BotSchedule[];
   runs: BotRun[];

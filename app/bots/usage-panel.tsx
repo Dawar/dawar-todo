@@ -9,6 +9,8 @@ import type { UsageHistory, UsageHistoryRange } from "../../lib/usage-history";
 import "./usage-history.css";
 import { Button } from "@/components/ui/button";
 import { NativeSelect } from "@/components/ui/native-select";
+import { ClaudeUsagePanel } from "./claude-usage-panel";
+import { botProvider } from "../../lib/bot-provider";
 
 type TokenField = keyof NonNullable<BotThreadUsage["tokens"]>;
 const tokenFields: { key: TokenField; label: string }[] = [
@@ -58,7 +60,8 @@ function UsageAccountSource({ bot, online, owner, historySupported }: { bot?: Bo
         {bots.map(value => <option key={value.id} value={value.id}>{value.name}</option>)}
       </NativeSelect>
     </label>}
-    {source ? <UsagePanelContents key={JSON.stringify([source.id, source.nodeId, source.placementEpoch])} bot={bot} accountBotId={source.id} online={online} owner={owner} historySupported={historySupported} />
+    {source && botProvider(source) === "claude" ? <ClaudeUsagePanel key={source.id} bot={bot} accountBotId={source.id} online={online} owner={owner} />
+      : source ? <UsagePanelContents key={JSON.stringify([source.id, source.nodeId, source.placementEpoch])} bot={bot} accountBotId={source.id} online={online} owner={owner} historySupported={historySupported} />
       : <p className="bots-muted" role="status">{bots.length ? "Choose an available bot to view its account usage." : "Account usage will be available when a bot is connected."}</p>}
   </div>;
 }
