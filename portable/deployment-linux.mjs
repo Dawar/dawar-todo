@@ -119,9 +119,19 @@ export function linuxDeployment(spec) {
     },
     async begin(_,row){
       const held=await maintenance('begin',row);if(!held.active||held.phase!=='draining'||Date.parse(held.expiresAt)>row.deadline+5000)throw failure();
-      const hub=local('begin',row);return {...row.hold,native:row.hold.native,hub};
+      // Native admission owns the wait. Keep the website writer open while
+      // current turns/tools finish: login, session renewal and original
+      // completion acknowledgments must not inherit a minutes-long DB hold.
+      return {...row.hold,native:row.hold.native};
     },
-    async observe(_,row){const n=spec.compatibilityBootstrap?await bootstrapIdle(spec,await maintenance('status',row)):await maintenance('observe',row),h=local('observe',row);return {safe:n.safe===true&&h.status==='ready',native:n,hub:h};},
+    async observe(_,row){
+      const n=spec.compatibilityBootstrap?await bootstrapIdle(spec,await maintenance('status',row)):await maintenance('observe',row);
+      const db=new DatabaseSync(spec.localWriter.path,{readOnly:true});let held;
+      try{held=db.prepare('SELECT * FROM portable_async_drains WHERE id=?').get(spec.operationId);}finally{db.close();}
+      if(!held&&n.safe!==true)return {safe:false,native:n,hub:{phase:'open',status:'waiting-for-native-idle',holdingWrites:false}};
+      if(!held)local('begin',row);
+      const h=local('observe',row);return {safe:n.safe===true&&h.status==='ready',native:n,hub:h};
+    },
     async freezeBackup(_,row){
       const final=spec.compatibilityBootstrap?await bootstrapIdle(spec,await maintenance('status',row)):await maintenance('observe',row);if(!final.safe)throw failure();
       local('freeze',row);
