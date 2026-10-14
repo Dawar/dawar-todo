@@ -7,7 +7,7 @@ const headers={'Cache-Control':'private, no-store','Referrer-Policy':'no-referre
 export async function taskRequestBody(request:Request):Promise<Record<string,unknown>> {
   if(!request.body)throw new StorageError('Missing form operation.');
   const reader=request.body.getReader(),chunks:Uint8Array[]=[];let size=0;
-  try {for(;;){const r=await reader.read();if(r.done)break;size+=r.value.byteLength;if(size>192*1024)throw new StorageError('Form operation too large.',413,'limit');chunks.push(r.value);}}
+  try {for(;;){const r=await reader.read();if(r.done)break;size+=r.value.byteLength;if(size>256*1024)throw new StorageError('Form operation too large.',413,'limit');chunks.push(r.value);}}
   finally {await reader.cancel().catch(()=>{});reader.releaseLock();}
   const bytes=new Uint8Array(size);let at=0;for(const c of chunks){bytes.set(c,at);at+=c.length;}
   try {const p=JSON.parse(new TextDecoder().decode(bytes));if(!p||typeof p!=='object'||Array.isArray(p))throw Error();return p;}catch{throw new StorageError('Invalid form operation.');}
@@ -27,7 +27,7 @@ export async function taskRequestResponse(request:Request,env:TaskRequestEnviron
     if(role==='owner') {
       switch(action) {
         case 'list':result=await forms.list(p);break;
-        case 'read':result={request:await forms.read(taskRequestId(p.id))};break;
+        case 'read':result={request:await forms.read(taskRequestId(p.id)),...await forms.ownerLink(taskRequestId(p.id))};break;
         case 'draft':result=await forms.draft(p);break;
         case 'edit':result=await forms.edit(p);break;
         case 'publish':result=await forms.publish(p);break;
@@ -45,12 +45,19 @@ export async function taskRequestResponse(request:Request,env:TaskRequestEnviron
         default:throw new StorageError('Unknown private form operation.');
       }
     } else {
-      const id=taskRequestId(p.id);await forms.rate(`guest:${request.headers.get('CF-Connecting-IP')??'unknown'}`);await forms.rate(`${id}:${request.headers.get('CF-Connecting-IP')??'unknown'}`);
       const token=request.headers.get('Authorization')?.replace(/^Bearer\s+/i,'')??'',pin=request.headers.get('X-Task-Request-PIN')??undefined;
+      if(action==='resolve'){
+        if(Object.keys(p).some(k=>k!=='action'))throw new StorageError('Invalid short-link resolution.');
+        await forms.rate(`short:${request.headers.get('CF-Connecting-IP')??'unknown'}`);
+        result=await forms.resolveShort(token,pin);
+        return Response.json(result,{headers});
+      }
+      const id=taskRequestId(p.id);await forms.rate(`guest:${request.headers.get('CF-Connecting-IP')??'unknown'}`);await forms.rate(`${id}:${request.headers.get('CF-Connecting-IP')??'unknown'}`);
       const g=await forms.authorize(id,token,pin);
       switch(action) {
         case 'read':result={request:await forms.guest(g)};break;
         case 'save':result=await forms.save(g,p);break;
+        case 'patch':result=await forms.patch(g,p);break;
         case 'upload':result=await forms.upload(g,p);break;
         case 'finalize':result=await forms.file(g,taskRequestId(p.fileId),true);break;
         case 'download':result=await forms.file(g,taskRequestId(p.fileId),false,true);break;

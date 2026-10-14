@@ -12,11 +12,12 @@ export function FormMarkdown({ text }: {
 }) {
     return <div className="task-request-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]} components={{ a: ({ href, children }) => <a href={href} target="_blank" rel="noreferrer">{children}</a> }}>{text}</ReactMarkdown></div>;
 }
-export function TaskRequestFields({ spec, values, files = [], disabled = false, preview = false, onChange, onFile, privateFields, privateImages, onPrivateImage }: {
+export function TaskRequestFields({ spec, values, files = [], disabled = false, filesDisabled = false, preview = false, onChange, onFile, privateFields, privateImages, onPrivateImage }: {
     spec: TaskRequestSpec;
     values: TaskRequestValues;
     files?: TaskRequestFile[];
     disabled?: boolean;
+    filesDisabled?:boolean;
     preview?: boolean;
     onChange?: (id: string, value: string | string[]) => void;
     onFile?: (id: string, file: File) => void;
@@ -36,7 +37,7 @@ export function TaskRequestFields({ spec, values, files = [], disabled = false, 
                                 if (privateFields)
                                     privateFields.current[f.id] = node;
                             }} disabled={disabled || preview} required={f.required} maxLength={4096} autoComplete="off" data-lpignore="true" data-1p-ignore spellCheck={false}/>
-                            : <Input className="task-request-control" aria-describedby={f.notes ? `${id}-notes` : undefined} id={id} type="file" disabled={disabled || preview} accept={f.kind === 'image' || f.kind === 'secure-image' ? 'image/png,image/jpeg,image/webp' : undefined} onChange={e => {
+                            : <Input className="task-request-control" aria-describedby={f.notes ? `${id}-notes` : undefined} id={id} type="file" disabled={disabled || filesDisabled || preview} accept={f.kind === 'image' || f.kind === 'secure-image' ? 'image/png,image/jpeg,image/webp' : undefined} onChange={e => {
                                     const file = e.target.files?.[0];
                                     if (f.kind === 'secure-image')
                                         onPrivateImage?.(f.id, file);
@@ -50,4 +51,4 @@ export function TaskRequestFields({ spec, values, files = [], disabled = false, 
     return <><FormMarkdown text={spec.instructions}/>{spec.context && <section aria-label="Shared context"><h3>Shared context</h3><FormMarkdown text={spec.context}/></section>}{fields(undefined)}{spec.groups.map(g => <fieldset className="task-request-group" key={g.id}><legend>{g.label}</legend>{g.notes && <FormMarkdown text={g.notes}/>} {fields(g.id)}</fieldset>)}
     {spec.secure && <aside><strong>Private input</strong><p>{spec.secure.purpose}</p><p>Permitted destination: {spec.secure.destination.label}{spec.secure.destination.origin && <> · {spec.secure.destination.origin}</>}</p><p>Encrypted transfer lasts at most one hour. Closing or reloading discards private entry. Ordinary saved answers exclude private fields and images. An unconfirmed transfer, expiry or bridge restart needs owner review before fresh private entry.</p></aside>}</>;
 }
-export const requestStatus: Record<string, string> = { draft: 'Draft', published: 'Open for one contributor', revoked: 'Revoked', expired: 'Expired', received: 'Submission received', 'awaiting-bot': 'Awaiting bot', 'native-accepted': 'Native intake accepted', 'response-sent': 'Answer response sent', 'needs-review': 'Needs owner review', uncertain: 'Delivery unconfirmed', 'private-unavailable': 'Private input unavailable' };
+export const requestStatus: Record<string, string> = { draft: 'Draft', published: 'Open · shared progress', revoked: 'Revoked', expired: 'Expired', received: 'Submission received', 'awaiting-bot': 'Awaiting bot', 'native-accepted': 'Native intake accepted', 'response-sent': 'Answer response sent', 'needs-review': 'Needs owner review', uncertain: 'Delivery unconfirmed', 'private-unavailable': 'Private input unavailable' };
