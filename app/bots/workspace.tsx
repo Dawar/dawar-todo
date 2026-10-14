@@ -77,6 +77,7 @@ import { useBotComposer } from "./use-composer";
 import { botComposers, type ComposerPaste } from "./composer-service";
 import { ComposerAttachments, ComposerStatus } from "./composer-state";
 import { installExtensionShortcuts } from "./extension-shortcuts";
+import { useBotSearchShortcut } from "./bot-search-shortcut";
 import { SavedDrafts } from "./saved-drafts";
 import { ComposerInput } from "./composer-input";
 import { ComposerSettings } from "./composer-settings";
@@ -136,6 +137,7 @@ export function BotsWorkspace() {
   useLayoutEffect(() => { selectedRef.current = selected; }, [selected]);
   const owner = client.owner;
   const scope = JSON.stringify([owner, selected]);
+  const { searchOpen, closeSearch } = useBotSearchShortcut(screenRef, searchRef, JSON.stringify([owner, selected, gallery]));
   if (editingSchedule && editingSchedule.scope !== scope) setEditingSchedule(null);
   const promptQueue = queueScope === scope ? loadedQueue : EMPTY_QUEUE;
   const { composer, error: composerError } = useBotComposer(client.owner, selected);
@@ -297,6 +299,7 @@ export function BotsWorkspace() {
     };
   }, [loadQueue]);
   const select = useCallback((id: string | null) => {
+    closeSearch();
     selectedRef.current = id;
     setSelected(id); setGallery(null);setTransferError("");
     const url = new URL(window.location.href);
@@ -304,7 +307,7 @@ export function BotsWorkspace() {
     if (id) url.searchParams.set("bot", id);
     else url.searchParams.delete("bot");
     window.history.pushState({}, "", url);
-  }, []);
+  }, [closeSearch]);
   const finishTransfer=useCallback(async(paste:ComposerPaste)=>{
     const target=bots.find(bot=>bot.id===paste.targetBotId);
     if(paste.nonEmpty&&!window.confirm(`Replace ${target?.name??"this bot"}'s existing draft? Its previous contents will be saved for recovery.`))return false;
@@ -452,10 +455,11 @@ export function BotsWorkspace() {
   return (
     <TaskRequestWorkspace key={JSON.stringify([owner,bot?.id,bot?.threadId])} owner={owner} bot={bot} online={online} supported={snapshot?.capabilities?.taskRequests === 1}><div className="bots-screen" ref={screenRef} data-no-pull-refresh>
       <SiteHeader current="bots" />
-      <main className={`bots-layout ${selected || gallery ? "has-selection" : ""}`}>
-        <aside className="bots-sidebar">
+      <main className={`bots-layout ${selected || gallery ? "has-selection" : ""} ${searchOpen ? "search-open" : ""}`}>
+        <aside className="bots-sidebar" onKeyDown={event => { if (event.key === 'Escape' && searchOpen && !event.defaultPrevented) { event.preventDefault(); closeSearch(true); } }}>
           <div className="bots-sidebar-heading">
             <h1 className="sr-only">Bots</h1>
+            {searchOpen && (selected || gallery) && <Button type="button" variant="ghost" size="icon" className="bots-search-close" aria-label="Close bot search" onClick={() => closeSearch(true)}><X size={20}/></Button>}
             <div className="bots-sidebar-tools">
             {snapshot?.capabilities?.operatorCalls === 1 && <Button type="button" variant="ghost" size="icon" className="aria-pressed:bg-accent aria-pressed:text-accent-foreground" aria-label="Call Operator" onClick={() => { setCallBotId(null); setShowCall(true); }}><Phone size={16} /></Button>}
             <ArtifactNav active={gallery === "artifacts"} onOpen={() => openGallery("artifacts")} />
