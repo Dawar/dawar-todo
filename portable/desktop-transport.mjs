@@ -90,11 +90,15 @@ export class AgentDesktopTransport {
     Object.assign(this, { runtime, journal, currentSocket }); this.channels = new Map(); this.retired = new Set();
   }
   scope(c) {
-    if (!this.runtime.desktops) throw failure('desktop-disabled');
-    if (this.currentSocket() !== c.socket || c.socket.readyState !== 1) throw failure('node-connection-changed');
-    if (!this.journal.currentControl({ bot_id: c.botId, epoch: c.epoch })) throw failure('control-snapshot-unavailable');
+    // A synchronous scope rejection is caught by the outer node handler,
+    // which closes its socket. Retain the first cause on this ephemeral
+    // channel so disconnect() does not mask it as a generic node disconnect.
+    const reject = reason => { c.scopeFailureReason ??= reason; throw failure(reason); };
+    if (!this.runtime.desktops) reject('desktop-disabled');
+    if (this.currentSocket() !== c.socket || c.socket.readyState !== 1) reject('node-connection-changed');
+    if (!this.journal.currentControl({ bot_id: c.botId, epoch: c.epoch })) reject('control-snapshot-unavailable');
     const bot = this.runtime.store.bot(c.botId);
-    try { this.runtime.desktops.assertBot(bot); } catch { throw failure('bot-unavailable'); }
+    try { this.runtime.desktops.assertBot(bot); } catch { reject('bot-unavailable'); }
     return bot;
   }
   message(socket, m) {
@@ -139,6 +143,7 @@ export class AgentDesktopTransport {
   async end(c, reason = 'transport-ended') {
     if (this.channels.get(c.clientId) === c) {
       this.channels.delete(c.clientId);
+      reason = c.scopeFailureReason ?? reason;
       // Fixed categories and numeric counters only: never log tickets,
       // passwords, RFB bytes, page contents, or arbitrary exception text.
       if (reason !== 'viewer-close') try { console.warn('[desktop-transport]', JSON.stringify({
