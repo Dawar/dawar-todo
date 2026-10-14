@@ -778,7 +778,9 @@ export class BotRuntime extends EventEmitter {
         const browserRejected = method.startsWith("desktop.browser") && e.browserNoEffect === true;
         const settingsRejected = method === "bots.update" && params.name === undefined && e.definite === true;
         const lifecycleRejected = lifecycleMutation && !this.store.get("executionStop", operationId) && !this.store.get("executionArchive", operationId);
-        const outcome = attempt ? (uncertain ? "uncertain" : "rejected") : lifecycleRejected ? "rejected" :
+        // Saving the bot record is creation's first effect; before it nothing happened.
+        const createRejected = method === "bots.create" && !this.store.bots({ includeDeleted: true }).some(bot => bot.id === operationId);
+        const outcome = attempt ? (uncertain ? "uncertain" : "rejected") : lifecycleRejected || createRejected ? "rejected" :
           settingsRejected || browserRejected ? "rejected" : "uncertain";
         this.store.saveOperation(
           operationId,

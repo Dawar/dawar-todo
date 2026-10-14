@@ -27,6 +27,7 @@ import {HubTeams,TEAM_READS,TEAM_MUTATIONS} from './hub-teams.mjs';
 export { hubActivation } from './hub-authority.mjs';
 import { controlWriteGuard } from './hub-authority.mjs';
 import { HUB_READS,HUB_MUTATIONS,HUB_TOOLS,NODE_LOGICAL_COMMANDS,HUB_BURST_MUTATIONS } from './control-protocol.mjs';
+import { HubCreation } from './hub-creation.mjs';
 
 export { HUB_READS,HUB_MUTATIONS,HUB_TOOLS,NODE_LOGICAL_COMMANDS };
 const now=()=>new Date().toISOString();
@@ -62,6 +63,7 @@ export class HubControls extends EventEmitter {
     const meta=this.store.meta.bind(this.store);
     this.store.meta=(key,value)=>value===undefined||this.store.transactionDepth?meta(key,value):this.store.transaction(()=>meta(key,value));
     this.teams=new HubTeams(this,owner,teamWorkspaceRoot,legacyTeamSource);
+    this.creation=new HubCreation(this);
     // A fault is retained as metadata, without spawning a bot or an ACK loop.
     this.on('fault',error=>{this.lastFault={message:error.message,at:now()};});
   }
@@ -122,7 +124,9 @@ export class HubControls extends EventEmitter {
     }
     if(event.type!=='bot')return true;
     return this.store.transaction(()=>{
-      const b=this.store.bot(event.botId),v=event.data;
+      let b=this.store.bot(event.botId);const v=event.data;
+      // A hub-created bot learns its native thread from the node exactly once.
+      if(b.portableCreation&&!b.threadId&&v?.id===b.id&&v.threadId)b=this.creation.adopt(b.id,v)??b;
       if(v?.id!==b.id||v.threadId!==b.threadId)throw Error('Assigned native bot projection changed its original identity.');
       const source=event.portableActivity,p=this.hub.db.prepare('SELECT * FROM portable_placements WHERE bot_id=?').get(b.id);
       if(source){
@@ -386,11 +390,13 @@ export class HubControls extends EventEmitter {
   reconcileReceipts() {
     // A durable applied hash prevents a busy recent tail from starving older
     // receipts, and catches later terminal evidence for the same operation.
-    const rows=this.hub.db.prepare("SELECT m.* FROM portable_mailbox m LEFT JOIN portable_control_receipts c ON c.operation_id=m.operation_id WHERE m.receipt IS NOT NULL AND (c.receipt_hash IS NULL OR c.receipt_hash<>m.receipt_hash) AND json_extract(m.payload,'$.method') IN ('portable.queueDispatch','portable.scheduleDispatch','portable.queueSend','portable.queueResume','portable.burstDispatch','portable.primaryDispatch') ORDER BY m.sequence LIMIT 40").all();
+    const rows=this.hub.db.prepare("SELECT m.* FROM portable_mailbox m LEFT JOIN portable_control_receipts c ON c.operation_id=m.operation_id WHERE m.receipt IS NOT NULL AND (c.receipt_hash IS NULL OR c.receipt_hash<>m.receipt_hash) AND json_extract(m.payload,'$.method') IN ('portable.queueDispatch','portable.scheduleDispatch','portable.queueSend','portable.queueResume','portable.burstDispatch','portable.primaryDispatch','bots.create') ORDER BY m.sequence LIMIT 40").all();
     for(const row of rows)this.receipt(row);
   }
   receipt(row) {
-    const payload=JSON.parse(row.payload),receipt=row.receipt&&JSON.parse(row.receipt);if(!NODE_LOGICAL_COMMANDS.has(payload.method)||!receipt)return;
+    const payload=JSON.parse(row.payload),receipt=row.receipt&&JSON.parse(row.receipt);
+    if(payload.method==='bots.create'){this.creation.receipt(row);return;}
+    if(!NODE_LOGICAL_COMMANDS.has(payload.method)||!receipt)return;
     if(payload.method==='portable.burstDispatch'){this.bursts.receipt(row);return;}
     if(payload.method==='portable.primaryDispatch'){
       this.store.transaction(()=>{

@@ -7,46 +7,7 @@ import { Store } from "./store.mjs";
 import { ClaudeBackend, mcpServersFrom, nativeModel } from "./claude.mjs";
 import { ClaudeTurn, resultStatus } from "./claude-items.mjs";
 
-// --- Fake Agent SDK -------------------------------------------------------
-// `script(userMessage, ctx)` returns the SDK messages for one user input.
-export function fakeQuery(script, log = []) {
-  return ({ prompt, options }) => {
-    const ctx = { options, interrupted: false, wake: null };
-    log.push(ctx);
-    const out = [];
-    let waiting = null;
-    const deliver = (m) => { if (waiting) { const w = waiting; waiting = null; w({ value: m, done: false }); } else out.push(m); };
-    let ended = false;
-    (async () => {
-      deliver({ type: "system", subtype: "init", session_id: options.sessionId ?? options.resume });
-      for await (const user of prompt) {
-        ctx.last = user;
-        for (const m of await script(user, ctx)) deliver(m);
-      }
-      ended = true;
-      if (waiting) waiting({ value: undefined, done: true });
-    })();
-    return {
-      [Symbol.asyncIterator]() { return this; },
-      next: () => out.length ? Promise.resolve({ value: out.shift(), done: false })
-        : ended ? Promise.resolve({ value: undefined, done: true }) : new Promise((r) => (waiting = r)),
-      return: async () => ({ value: undefined, done: true }),
-      interrupt: async () => { ctx.interrupted = true; ctx.wake?.(); },
-      setModel: async (m) => { ctx.model = m; },
-      supportedModels: async () => [{ value: "opus", displayName: "Opus", description: "", supportedEffortLevels: ["low", "high", "max"] }],
-      close: () => {},
-    };
-  };
-}
-
-import { fromJSONSchema } from "zod";
-export const fakeMcp = {
-  createSdkMcpServer: ({ name, tools }) => ({ type: "sdk", name, tools }),
-  tool: (name, description, shape, handler) => ({ name, description, shape, handler }),
-  fromJSONSchema,
-};
-const text = (id, t) => ({ type: "assistant", parent_tool_use_id: null, message: { id, content: [{ type: "text", text: t }] } });
-const result = (uuid, extra = {}) => ({ type: "result", subtype: "success", is_error: false, result: "", user_message_uuids: [uuid], ...extra });
+import { fakeQuery, fakeMcp, text, result, MinimalCodex } from "./claude-test-support.mjs";
 
 async function setup(t, script, log = []) {
   const dir = await mkdtemp(join(tmpdir(), "claude-test-"));
@@ -214,23 +175,6 @@ import { EventEmitter } from "node:events";
 import { BotRuntime } from "./runtime.mjs";
 import { ProviderRouter } from "./provider-router.mjs";
 
-class MinimalCodex extends EventEmitter {
-  ready = true;
-  calls = [];
-  async start() {}
-  async call(method, params) {
-    this.calls.push({ method, params });
-    if (method === "account/read") return { account: { type: "chatgpt" } };
-    if (method === "model/list") return { data: [
-      { model: "gpt-6.1-sol", supportedReasoningEfforts: [{ reasoningEffort: "medium" }], serviceTiers: [{ id: "priority" }] },
-      { model: "gpt-6-luna", supportedReasoningEfforts: [{ reasoningEffort: "high" }], serviceTiers: [{ id: "priority" }] },
-    ], nextCursor: null };
-    if (method === "thread/list" || method === "thread/loaded/list") return { data: [], nextCursor: null };
-    return {};
-  }
-  respond() {} reject() {} close() {}
-  async closeForShutdown() {}
-}
 
 test("BotRuntime creates, chats with and reads history of a Claude bot", async (t) => {
   const dir = await mkdtemp(join(tmpdir(), "claude-runtime-"));

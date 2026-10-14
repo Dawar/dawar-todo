@@ -71,7 +71,7 @@ export class AgentTransport {
   hello(){return {protocol:PROTOCOL_VERSION,runtime:RUNTIME_VERSION,platform:process.platform,arch:process.arch,agentEpoch:this.runtime.epoch,
     // Paired consumers are selected explicitly for the reviewed Linux release;
     // unrelated/native-autonomous capabilities are not implied by this switch.
-    capabilities:{text:true,localStdio:true,registeredArtifacts:true,profileReads:true,memoryCompaction:process.platform==='linux',pdfPreview:process.platform==='linux',desktop:process.platform==='linux'&&!!this.runtime.desktops,voice:false,secureTransfer:process.platform==='linux'&&!!this.runtime.secure,centralBursts:process.platform==='linux',submissionSources:Boolean(this.runtime.sources.owner?.key),...centralAgentCapabilities(this.config),autonomousGoals:true,nativeErrorRecovery:true,nativeAuthRecovery:true,durableReceiptRecovery:true}};}
+    capabilities:{text:true,localStdio:true,registeredArtifacts:true,profileReads:true,memoryCompaction:process.platform==='linux',pdfPreview:process.platform==='linux',desktop:process.platform==='linux'&&!!this.runtime.desktops,voice:false,secureTransfer:process.platform==='linux'&&!!this.runtime.secure,centralBursts:process.platform==='linux',submissionSources:Boolean(this.runtime.sources.owner?.key),...centralAgentCapabilities(this.config),autonomousGoals:true,nativeErrorRecovery:true,nativeAuthRecovery:true,durableReceiptRecovery:true,botCreation:true}};}
   send(value){if(this.socket?.readyState===WebSocket.OPEN)this.socket.send(JSON.stringify(value));}
   controlRequest(botId,tool,args){
     if(!HUB_TOOLS.has(tool))throw Error('Unsupported hub tool.');
@@ -118,7 +118,9 @@ export class AgentTransport {
       if(!rows.length){this.recoveryCursor=0;return;}
       for(const row of rows){
         this.recoveryCursor=row.rowNumber;
-        const command=JSON.parse(row.command),payload=JSON.parse(command.payload),bot=this.runtime.store.bot(command.bot_id);
+        const command=JSON.parse(row.command),payload=JSON.parse(command.payload);
+        if(payload.method==='bots.create'){await this.recoverCreation(command,row);continue;}
+        const bot=this.runtime.store.bot(command.bot_id);
         if(row.state==='received'){
           if(this.pending.has(row.operation_id))continue;
           const work=Promise.resolve().then(()=>this.execute(command,row));this.pending.set(row.operation_id,work);
@@ -239,6 +241,7 @@ export class AgentTransport {
     if(!this.startupReady||!this.runtime.ready)return;
     if(row.state==='terminal'||row.state==='unknown'||row.state==='native-accepted'||row.state==='running'){this.receipt(row);return;}
     const payload=JSON.parse(command.payload);
+    if(payload.method==='bots.create')return this.provision(command,row,payload);
     if(!AGENT_MUTATIONS.has(payload.method)&&!NODE_LOGICAL_COMMANDS.has(payload.method))throw Error('Unsupported assigned command.');
     if(DESKTOP_MUTATIONS.has(payload.method)&&!this.runtime.desktops){
       this.journal.settle(command.operation_id,'terminal',{operationId:command.operation_id,outcome:'rejected',error:'Linux desktops are not configured.'});this.receipt(this.journal.db.prepare('SELECT * FROM node_commands WHERE operation_id=?').get(command.operation_id));return;
@@ -281,7 +284,57 @@ export class AgentTransport {
     this.receipt(this.journal.db.prepare('SELECT * FROM node_commands WHERE operation_id=?').get(command.operation_id));
     this.terminal(this.journal.db.prepare('SELECT * FROM node_commands WHERE operation_id=?').get(command.operation_id));
   }
+  /** The reserved creation command: its bot ID is its operation ID and no native bot exists yet. */
+  settleCommand(operationId,state,receipt){
+    this.journal.settle(operationId,state,receipt);
+    this.receipt(this.journal.db.prepare('SELECT * FROM node_commands WHERE operation_id=?').get(operationId));
+  }
+  async provision(command,row,payload){
+    const op=command.operation_id,refuse=error=>this.settleCommand(op,'terminal',{operationId:op,outcome:'rejected',error});
+    if(row.state==='received'&&command.bot_id!==op)return void this.settleCommand(op,'terminal',{operationId:op,outcome:'rejected',error:'A created bot must use its original operation identity.'});
+    // The reserved placement arrives in the same sync; never create unplaced.
+    if(!this.journal.canAdmit(command))return;
+    if(row.state==='dispatching')return this.recoverCreation(command,row);
+    if(this.runtime.store.bots({includeDeleted:true}).some(b=>b.id===op)&&!this.runtime.store.operation(op))
+      return void refuse('A different bot already uses this identity.');
+    if(row.state!=='received'||this.runtime.maintenance.holding())return;
+    this.receipt(row);this.journal.prepare(op);
+    try{
+      const bot=await this.runtime.handle({method:'bots.create',operationId:op,params:payload.params,clientId:`hub:${this.enrollment.nodeId}`});
+      this.settleCommand(op,'terminal',creationReceipt(op,bot));
+    }catch(error){
+      this.settleCommand(op,error.outcome==='rejected'?'terminal':'unknown',{operationId:op,outcome:error.outcome==='rejected'?'rejected':'uncertain',error:error.message});
+    }
+  }
+  /**
+   * An interrupted or unknown creation is settled only by proof: the bot's own
+   * thread, or exactly one native thread in its reserved workspace. It never
+   * starts another thread.
+   */
+  async recoverCreation(command,row){
+    const op=command.operation_id;
+    if(row.state==='received'){if(!this.pending.has(op)){const work=Promise.resolve().then(()=>this.execute(command,row));this.pending.set(op,work);try{await work;}finally{this.pending.delete(op);}}return;}
+    if(!['dispatching','unknown'].includes(row.state)||this.runtime.locks.has('create'))return;
+    await this.runtime.lock('create',()=>this.runtime.maintenance.track(async()=>{
+      const operation=this.runtime.store.operation(op);
+      const current=this.journal.db.prepare('SELECT * FROM node_commands WHERE operation_id=?').get(op);
+      if(current?.fingerprint!==row.fingerprint||!['dispatching','unknown'].includes(current.state))return;
+      if(!operation||operation.method!=='bots.create'){
+        if(current.state==='dispatching')this.settleCommand(op,'unknown',{operationId:op,reason:'Restart interrupted bot creation.'});
+        return;
+      }
+      let bot=this.runtime.store.bots({includeDeleted:true}).find(b=>b.id===op);
+      if(bot&&!bot.threadId)try{await this.runtime.recoverCreation(bot);bot=this.runtime.store.bot(op);}catch{/* Several threads: retain for review. */}
+      if(bot?.threadId)return this.settleCommand(op,'terminal',creationReceipt(op,bot));
+      if(current.state==='dispatching')this.settleCommand(op,'unknown',{operationId:op,reason:'Bot creation is unconfirmed; it was not repeated.'});
+    }));
+  }
   close(){this.closed=true;clearInterval(this.recoveryTimer);clearInterval(this.heartbeat);clearTimeout(this.retryTimer);for(const request of [...this.controlPending.values()])request.fail(Error('Agent control connection closed; retain the original operation.'));this.journal.disconnect();void this.desktops.disconnect(this.socket);this.secure.disconnect(this.socket);this.socket?.close();}
+}
+
+// Proof that a hub-reserved bot exists natively: its identity and thread.
+export function creationReceipt(operationId,bot){
+  return {operationId,threadId:bot.threadId,result:bot,evidence:{kind:'original-native-creation',operationId,botId:bot.id,threadId:bot.threadId}};
 }
 
 export async function runAgent(config){

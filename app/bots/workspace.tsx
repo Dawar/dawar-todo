@@ -150,6 +150,8 @@ export function BotsWorkspace() {
   const [showCall, setShowCall] = useState(false), [callBotId, setCallBotId] = useState<string | null>(null);
   const [showTeams, setShowTeams] = useState(false), [teamFilter, setTeamFilter] = useState("all"), [teamSort, setTeamSort] = useState<"recent" | "team" | "name">("recent");
   const snapshot = client.snapshot;
+  // Portable hubs create bots only through a node that advertises it.
+  const canCreate = snapshot?.capabilities?.portableAgents !== 1 || snapshot.capabilities.botCreation === 1;
   useSharedReadPositions(owner, snapshot?.bots ?? [], snapshot?.capabilities?.portableAgents === 1);
   const teams = snapshot?.teams ?? [];
   const teamsSupported = snapshot?.capabilities?.teams === 1;
@@ -461,7 +463,7 @@ export function BotsWorkspace() {
             <ArtifactNav active={gallery === "artifacts"} onOpen={() => openGallery("artifacts")} />
             <Button type="button" variant="ghost" size="icon" className="aria-pressed:bg-accent aria-pressed:text-accent-foreground" title="Teams" aria-label="Teams" onClick={() => setShowTeams(true)}><UsersRound size={19} /></Button>
             <Button type="button" variant="ghost" size="icon" className="aria-pressed:bg-accent aria-pressed:text-accent-foreground" title="Account usage" aria-label="Account usage" onClick={() => setShowOverallUsage(true)}><BarChart3 size={19} /></Button>
-            <Button type="button" variant="ghost" size="icon"
+            {canCreate && <Button type="button" variant="ghost" size="icon"
               className="aria-pressed:bg-accent aria-pressed:text-accent-foreground"
               aria-label="Create bot"
               onClick={() => {
@@ -470,7 +472,7 @@ export function BotsWorkspace() {
               }}
             >
               <Plus size={21} />
-            </Button>
+            </Button>}
             </div>
           </div>
           <SidebarFilters search={search} onSearch={setSearch} searchRef={searchRef} archived={archived} onArchived={setArchived} teams={teams} teamsSupported={teamsSupported} teamFilter={teamFilter} onTeamFilter={setTeamFilter} sort={teamSort} onSort={setTeamSort} />
@@ -558,7 +560,7 @@ export function BotsWorkspace() {
               </div>
               <h2>{bots.length ? "Choose a bot" : "Create your first bot"}</h2>
               <p>{bots.length ? "Select a conversation to continue." : "Give your bot a name and a purpose."}</p>
-              <Button
+              {canCreate && <Button
                 className="bots-primary"
                 onClick={() => {
                   createOperation.current = crypto.randomUUID();
@@ -567,7 +569,7 @@ export function BotsWorkspace() {
               >
                 <Plus size={17} />
                 Create a bot
-              </Button>
+              </Button>}
             </div>
           ) : (
             <>

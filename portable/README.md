@@ -978,3 +978,31 @@ replacing newer hub decisions with an older native copy. This requires the same
 exclusive cutover and private backup as the backend release; it is not a live
 record migration. Rollback must retain canonical team records and receipts: hide
 the new UI if needed, never restore an older native team copy over newer hub data.
+
+### Owner bot creation
+
+`bots.create {name, purpose?, provider?, nodeId?}` is a hub-owned owner control
+(`hub-creation.mjs`). The new bot's identity is the original operation ID
+(10–180 of `A-Za-z0-9:_-`). Under the hub `create` lock, one control
+transaction reserves the placement (epoch 1), a provisional hub bot record
+(`status: provisioning`, no thread, `portableCreation` marker), the mailbox
+command and a `dispatching` operation. The node is the request's `nodeId`, or
+the only connected unrevoked node whose live hello advertises `botCreation`;
+otherwise nothing is reserved (`not-sent`).
+
+The node admits the command only with its synchronized placement, requires
+`bot_id === operation_id`, and runs native `bots.create` (Codex or Claude).
+Its terminal receipt carries `original-native-creation` proof: the bot's own
+identity and native thread. The hub then completes its record from the native
+bot once (thread, slug, workspace and settings; a hub slug collision gets a
+suffix) and marks the operation done. A first native `bot` event with a
+thread adopts the same identity, so event projection never disconnects the
+node. A refusal before any native effect releases the placement and
+provisional record. An unknown outcome keeps the reservation; retries with
+the same operation re-wait, and node recovery settles it only with proof of
+the bot's thread or exactly one native thread in its reserved workspace. No
+creation is ever resubmitted or given a second thread. The hub advertises
+`botCreation` while an eligible node is connected, and the browser hides
+Create on portable hubs without it. Lead-bot creation through `bots_admin`
+remains unavailable on portable hubs.
+

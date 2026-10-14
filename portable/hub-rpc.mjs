@@ -19,6 +19,11 @@ export class HubRpc {
     // projection. A supplied bot ID cannot expose a raw node-wide snapshot.
     if(request.method==='snapshot'&&internal!==NATIVE_SNAPSHOT)return this.snapshot(owner,clientId);
     if(request.method==='events')return {result:this.store.events(owner,request.params?.after??0,request.params?.limit??40).events};
+    // Creation has no placement yet; the hub reserves one before delivery.
+    if(request.method==='bots.create'){
+      if(!this.controls?.creation)throw Object.assign(Error('Bot creation is unavailable on this hub.'),{outcome:'not-sent'});
+      return {result:await this.controls.creation.request(owner,{params:request.params??{},operationId:request.operationId})};
+    }
     if(OPERATOR_READS.has(request.method)||OPERATOR_MUTATIONS.has(request.method)){
       if(!this.controls?.operator)throw Object.assign(Error('Canonical Operator routing is unavailable.'),{outcome:'not-sent'});
       return {result:await this.controls.operator.request(owner,request)};
@@ -146,6 +151,7 @@ export class HubRpc {
     if(!placements.length||placements.some(p=>this.connection(p)?.portableHello?.capabilities?.autonomousGoals!==true))delete common.nativeGoals;
     if(!placements.length||placements.some(p=>this.connection(p)?.portableHello?.capabilities?.nativeAuthRecovery!==true))delete common.nativeAuthRecovery;
     if(!placements.length||placements.some(p=>this.connection(p)?.portableHello?.capabilities?.nativeErrorRecovery!==true))delete common.nativeErrorRecovery;
+    if(this.controls?.authority&&this.controls.creation?.eligibleNodes(owner).length)common.botCreation=1;
     const schedules=this.controls?placements.flatMap(p=>this.controls.store.list('schedule',p.bot_id)):[],runs=this.controls?placements.flatMap(p=>this.controls.store.list('run',p.bot_id)).sort((a,b)=>b.scheduledAt.localeCompare(a.scheduledAt)).slice(0,100):scoped('runs');
     return {result:{...first,...(this.controls?.teams?.owner===owner?{teams:this.controls.teams.catalog(owner)}:{}),cursor,bots,workByBot:scoped('workByBot'),pending:scoped('pending'),secureInputs:scoped('secureInputs'),schedules,runs,activeScheduledTurns:scoped('activeScheduledTurns'),ready:snapshots.length===placements.length&&placements.every(p=>!!this.connection(p)),
       capabilities:{...common,portableAgents:1}},cache:{observedAt:Date.now(),stale:snapshots.length<placements.length}};

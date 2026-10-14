@@ -28,6 +28,15 @@ export function originalNativeProof(receipt,operationId) {
     &&id(receipt.threadId)&&id(receipt.turnId)&&e.threadId===receipt.threadId&&e.turnId===receipt.turnId
     &&(receipt.result?.turn?.id??receipt.result?.turnId)===receipt.turnId;
 }
+// A created bot is proven by its own identity and native thread, never by a
+// turn. Accepted only for the bots.create command that reserved that identity.
+export const CREATION_OPERATION=/^[a-zA-Z0-9:_-]{10,180}$/;
+export function originalCreationProof(receipt,operationId,payload) {
+  const e=receipt?.evidence,bot=receipt?.result;
+  return payload?.method==='bots.create'&&CREATION_OPERATION.test(operationId)&&e?.kind==='original-native-creation'
+    &&receipt.operationId===operationId&&e.operationId===operationId&&e.botId===operationId&&bot?.id===operationId
+    &&id(receipt.threadId)&&e.threadId===receipt.threadId&&bot.threadId===receipt.threadId&&receipt.outcome===undefined;
+}
 export function originalLocalControlProof(receipt,operationId,hash,payload) {
   const e=receipt?.evidence,p=payload?.params;
   return payload?.method==='portable.queueResume'&&e?.kind==='original-local-control'&&e.method===payload.method
