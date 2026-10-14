@@ -1,14 +1,14 @@
+import {voiceFetch,voiceSocket,voicePair,voiceUpgrade,voiceWaitUntil} from './platform';
+import {voiceAdmit,voiceAdmissionEnabled,voiceMigrationControl} from './migration';
+import { OperatorVoiceEvents } from '../../lib/operator-voice-events';
+import type { OperatorContext } from '../../lib/operator-types';
 import {
   handleOpenAISipWebhook,
   SipCallController,
   type SipRelayEnvironment,
 } from "./sip-controller";
 
-type Env = SipRelayEnvironment;
-
-interface ExecutionContext {
-  waitUntil(promise: Promise<unknown>): void;
-}
+type Env = SipRelayEnvironment & { VOICE_PORTABLE_PROXY?: string };
 
 type TwilioStart = {
   accountSid?: string;
@@ -47,6 +47,7 @@ type RealtimeEvent = {
 };
 
 type BridgeStart = {
+  operator?: OperatorContext | null;
   talkSessionId: string;
   clientSecret: string;
   expiresAt: number;
@@ -56,10 +57,10 @@ type BridgeStart = {
 };
 
 type BridgeResult = Record<string, unknown> & {
+  operator?: unknown; operatorView?: unknown; sessionUpdate?: unknown;
   focusedTodoId?: number | null;
 };
 
-type WorkerResponse = Response & { webSocket?: WebSocket };
 
 const PHONE_IDLE_LIMIT_MS = 15 * 60 * 1_000;
 const REALTIME_ROLLOVER_MS = 50 * 60 * 1_000;
@@ -108,7 +109,7 @@ async function bridgeRequest<T>(
   payload: Record<string, unknown>,
 ) {
   const url = new URL(`/api/talk/phone/bridge/${path}`, baseUrl(environment));
-  const response = await fetch(url, {
+  const response = await voiceFetch(environment, url, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
@@ -125,10 +126,10 @@ async function bridgeRequest<T>(
   return body;
 }
 
-function realtimeSocket(model: string, clientSecret: string) {
+function realtimeSocket(environment:Env, model: string, clientSecret: string) {
   const url = new URL("wss://api.openai.com/v1/realtime");
   url.searchParams.set("model", model);
-  return new WebSocket(url, [
+  return voiceSocket(environment, url, [
     "realtime",
     `openai-insecure-api-key.${clientSecret}`,
   ]);
@@ -156,6 +157,7 @@ function runPhoneBridge(
   let toolQueue = Promise.resolve();
   let startupTimer: ReturnType<typeof setTimeout> | null = null;
   let rolloverTimer: ReturnType<typeof setTimeout> | null = null;
+  const voice = new OperatorVoiceEvents(event => sendJson(openAI, event));
   const acceptedAt = Date.now();
 
   const eventRequest = <T = BridgeResult>(
@@ -179,7 +181,7 @@ function runPhoneBridge(
     }
     heartbeatRunning = true;
     try {
-      await eventRequest("heartbeat");
+      voice.heartbeat(await eventRequest("heartbeat"));
       lastHeartbeatAt = Date.now();
     } finally {
       heartbeatRunning = false;
@@ -192,11 +194,12 @@ function runPhoneBridge(
     content: string,
   ) => {
     if (!content.trim() || ending) return;
-    context.waitUntil(
+    voiceWaitUntil(environment, context, () =>
       eventRequest("message", {
         role,
         realtimeItemId,
         content,
+        metadata: { operatorSegmentId: voice.segment(realtimeItemId) },
       }).catch((error) => {
         console.error("[voice-relay] transcript persistence failed", {
           callSid: callSid || null,
@@ -237,6 +240,7 @@ function runPhoneBridge(
       reason,
       durationMs: Date.now() - acceptedAt,
     });
+    environment.VOICE_EFFECT_SCOPE?.end();
   };
 
   const sendToolOutput = (callId: string, result: BridgeResult) => {
@@ -273,6 +277,7 @@ function runPhoneBridge(
         name,
         arguments: args,
       });
+      voice.apply(result);
       if (typeof result.focusedTodoId === "number" || result.focusedTodoId === null) {
         focusedTodoId = result.focusedTodoId;
       }
@@ -301,6 +306,7 @@ function runPhoneBridge(
   const handleRealtimeEvent = (raw: unknown) => {
     const event = parseJson<RealtimeEvent>(raw);
     if (!event?.type) return;
+    voice.observe(event);
     if (event.type === "response.output_audio.delta" && event.delta) {
       sendJson(twilio, {
         event: "media",
@@ -335,7 +341,7 @@ function runPhoneBridge(
     if (event.type === "response.done") {
       const tools = event.response?.output?.filter((item) => item.type === "function_call") ?? [];
       if (tools.length) {
-        toolQueue = toolQueue
+        voiceWaitUntil(environment,context,()=>{toolQueue = toolQueue
           .then(async () => {
             for (const tool of tools) await runTool(tool);
             sendJson(openAI, { type: "response.create" });
@@ -346,7 +352,7 @@ function runPhoneBridge(
               talkSessionId,
               error,
             });
-          });
+          });return toolQueue;});
       }
       return;
     }
@@ -365,7 +371,7 @@ function runPhoneBridge(
     rollover = false,
   ) => {
     const previous = openAI;
-    const next = realtimeSocket(credentials.model, credentials.clientSecret);
+    const next = realtimeSocket(environment, credentials.model, credentials.clientSecret);
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(
         () => reject(new Error("OpenAI Realtime connection timed out.")),
@@ -383,7 +389,7 @@ function runPhoneBridge(
       }, { once: true });
       next.addEventListener("close", () => {
         if (!ending && next === openAI) {
-          context.waitUntil(finish("failed", "openai-disconnected"));
+          voiceWaitUntil(environment, context, () => finish("failed", "openai-disconnected"));
         }
       });
     });
@@ -404,7 +410,7 @@ function runPhoneBridge(
       sendJson(openAI, {
         type: "response.create",
         response: {
-          instructions: "Start immediately with one terse, useful question about the focused task. No greeting or capability explanation.",
+          instructions: voice.context ? 'Greet exactly: Operator. Then listen.' : "Start immediately with one terse, useful question about the focused task. No greeting or capability explanation.",
         },
       });
       console.info("[voice-relay] OpenAI Realtime connected", {
@@ -417,7 +423,7 @@ function runPhoneBridge(
     }
     if (rolloverTimer) clearTimeout(rolloverTimer);
     rolloverTimer = setTimeout(() => {
-      context.waitUntil((async () => {
+      voiceWaitUntil(environment, context, () => (async () => {
         const credentials = await eventRequest<{
           clientSecret: string;
           model: string;
@@ -459,6 +465,7 @@ function runPhoneBridge(
         },
       );
       talkSessionId = bridge.talkSessionId;
+      voice.context = bridge.operator ?? null;
       focusedTodoId = bridge.focusedTodoId;
       model = bridge.model;
       initialized = true;
@@ -494,11 +501,11 @@ function runPhoneBridge(
     const event = parseJson<TwilioEvent>(message.data);
     if (!event?.event) return;
     if (event.event === "start") {
-      context.waitUntil(initialize(event.start));
+      voiceWaitUntil(environment, context, () => initialize("start" in event ? event.start : undefined));
       return;
     }
     if (event.event === "media") {
-      const audio = event.media?.payload;
+      const audio = "media" in event ? event.media?.payload : undefined;
       if (!audio) return;
       if (Date.now() - lastAddressedSpeechAt >= PHONE_IDLE_LIMIT_MS) {
         sendJson(openAI, {
@@ -507,7 +514,7 @@ function runPhoneBridge(
             instructions: "Say only: Ending the call after fifteen minutes without a response.",
           },
         });
-        setTimeout(() => context.waitUntil(finish("completed", "idle-timeout")), 2_000);
+        setTimeout(() => voiceWaitUntil(environment, context, () => finish("completed", "idle-timeout")), 2_000);
         return;
       }
       if (!initialized || !socketOpen(openAI)) {
@@ -515,7 +522,7 @@ function runPhoneBridge(
         return;
       }
       sendJson(openAI, { type: "input_audio_buffer.append", audio });
-      context.waitUntil(heartbeat().catch((error) => {
+      if (!heartbeatRunning && Date.now() - lastHeartbeatAt >= 10_000) voiceWaitUntil(environment, context, () => heartbeat().catch((error) => {
         console.error("[voice-relay] heartbeat failed", {
           callSid,
           talkSessionId,
@@ -525,13 +532,13 @@ function runPhoneBridge(
       }));
       return;
     }
-    if (event.event === "stop") context.waitUntil(finish("completed", "caller-ended"));
+    if (event.event === "stop") voiceWaitUntil(environment, context, () => finish("completed", "caller-ended"));
   });
   twilio.addEventListener("close", () => {
-    if (!ending) context.waitUntil(finish("completed", "twilio-disconnected"));
+    if (!ending) voiceWaitUntil(environment, context, () => finish("completed", "twilio-disconnected"));
   });
   twilio.addEventListener("error", () => {
-    if (!ending) context.waitUntil(finish("failed", "twilio-connection-error"));
+    if (!ending) voiceWaitUntil(environment, context, () => finish("failed", "twilio-connection-error"));
   });
 
   startupTimer = setTimeout(() => {
@@ -541,12 +548,12 @@ function runPhoneBridge(
         streamSid: streamSid || null,
         durationMs: Date.now() - acceptedAt,
       });
-      context.waitUntil(finish("failed", "twilio-start-timeout"));
+      voiceWaitUntil(environment, context, () => finish("failed", "twilio-start-timeout"));
     }
   }, START_TIMEOUT_MS);
 }
 
-const worker = {
+const sourceWorker = {
   async fetch(request: Request, environment: Env, context: ExecutionContext) {
     const url = new URL(request.url);
     if (url.pathname === "/health") {
@@ -574,7 +581,7 @@ const worker = {
       });
     }
 
-    const pair = new WebSocketPair();
+    const pair = voicePair(environment);
     const client = pair[0];
     const twilio = pair[1];
     twilio.accept();
@@ -583,10 +590,7 @@ const worker = {
       colo: request.cf?.colo ?? null,
       userAgent: request.headers.get("user-agent")?.slice(0, 80) ?? null,
     });
-    return new Response(null, {
-      status: 101,
-      webSocket: client,
-    } as ResponseInit & { webSocket: WebSocket }) as WorkerResponse;
+    return voiceUpgrade(environment, client);
   },
   async scheduled(controller: ScheduledController, environment: Env, context: ExecutionContext) {
     const secret = environment.TODO_MAINTENANCE_SECRET?.trim();
@@ -595,9 +599,9 @@ const worker = {
       return;
     }
     const scheduledAt = new Date(controller.scheduledTime);
-    context.waitUntil((async () => {
+    voiceWaitUntil(environment, context, () => (async () => {
       const url = new URL("/api/internal/minute", baseUrl(environment));
-      const response = await fetch(url, {
+      const response = await voiceFetch(environment, url, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${secret}`,
@@ -633,5 +637,43 @@ const worker = {
   },
 };
 
+const worker={
+  async fetch(request:Request,environment:Env,context:ExecutionContext){
+    const url=new URL(request.url);
+    // Compatibility ingress only: original provider URLs remain usable while
+    // every call, receipt and scheduled job runs in the portable application.
+    // The setting belongs to deployment configuration, never request input.
+    if(environment.VOICE_PORTABLE_PROXY==='portable-rollover-v1'){
+      const path:Record<string,string>={'/health':'/api/voice/health','/openai/webhook':'/api/voice/openai/webhook','/stream':'/api/voice/stream'};
+      const target=path[url.pathname];
+      if(!target||url.search||request.method!==(url.pathname==='/openai/webhook'?'POST':'GET'))
+        return new Response('Not found.',{status:404,headers:{'Cache-Control':'no-store'}});
+      if(url.pathname==='/stream'&&request.headers.get('Upgrade')?.toLowerCase()!=='websocket')
+        return new Response('WebSocket upgrade required.',{status:426,headers:{'Cache-Control':'no-store'}});
+      try{return await fetch(new Request('https://work.dawar.ca'+target,request),{redirect:'manual'});}
+      catch{return new Response('Portable voice ingress is unavailable. Preserve the original call.',{status:503,headers:{'Cache-Control':'no-store'}});}
+    }
+    if(url.pathname==='/api/migration/voice/control')return voiceMigrationControl(request,environment);
+    if(url.pathname==='/health')return sourceWorker.fetch(request,environment,context);
+    let scope:Awaited<ReturnType<typeof voiceAdmit>>=null;
+    try{
+      if(!voiceAdmissionEnabled(environment))return sourceWorker.fetch(request,environment,context);
+      const stream=url.pathname==='/stream'&&request.headers.get('Upgrade')?.toLowerCase()==='websocket';
+      scope=await voiceAdmit(environment,context,stream?'stream':'http');
+      const result=await sourceWorker.fetch(request,{...environment,VOICE_EFFECT_SCOPE:scope??undefined},context);
+      if(!stream||result.status!==101)scope?.end();
+      return result;
+    }catch{scope?.unknown();scope?.end();return Response.json({error:'Voice work is held or unconfirmed.'},{status:503,headers:{'Cache-Control':'private, no-store'}});}
+  },
+  async scheduled(controller:ScheduledController,environment:Env,context:ExecutionContext){
+    if(environment.VOICE_PORTABLE_PROXY==='portable-rollover-v1')return;
+    if(!voiceAdmissionEnabled(environment))return sourceWorker.scheduled(controller,environment,context);
+    const scope=await voiceAdmit(environment,context,'scheduled');
+    try{await sourceWorker.scheduled(controller,{...environment,VOICE_EFFECT_SCOPE:scope??undefined},context);}
+    catch{scope?.unknown();throw Error('Original voice scheduled work is unconfirmed.');}
+    finally{scope?.end();}
+  },
+};
 export { SipCallController };
+export {VoiceMigrationCoordinator} from './migration';
 export default worker;

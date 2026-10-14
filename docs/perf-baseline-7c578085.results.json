@@ -1,0 +1,1774 @@
+{
+  "base": "24bf96976393d37b3ffea6c5be94fb43ce797af3",
+  "testedCommit": "24bf96976393d37b3ffea6c5be94fb43ce797af3",
+  "environment": {
+    "node": "v24.21.0",
+    "platform": "linux x64",
+    "cpu": "DO-Premium-AMD"
+  },
+  "sync": [
+    {
+      "name": "healthy-idle",
+      "durationSeconds": 300,
+      "requests": 17,
+      "bootstrap": 1,
+      "syncFinished": 17,
+      "streamsOpened": 6,
+      "syntheticWorkerRevisionReads": 149,
+      "maxConcurrentRequests": 1,
+      "appTimersFired": 17,
+      "twoSecondTimers": 0,
+      "maxAppTimers": 1,
+      "timersBeforeStop": 1,
+      "timersAfterStop": 0,
+      "hiddenRequests": 0,
+      "offlineRequests": 0,
+      "burstWindowRequests": 0,
+      "resumeWindowRequests": 0,
+      "uploads": 0,
+      "cacheLoads": 53,
+      "createScans": 70,
+      "editScans": 70,
+      "actionScans": 70,
+      "uploadScans": 71,
+      "commits": 17,
+      "lifecycleSamples": [],
+      "requestTimesMs": [
+        0,
+        3195,
+        33390,
+        56490,
+        59685,
+        89880,
+        112980,
+        116175,
+        146370,
+        169470,
+        172665,
+        202860,
+        225960,
+        236155,
+        266350,
+        282450,
+        292645
+      ]
+    },
+    {
+      "name": "healthy-revisions-every-5s",
+      "durationSeconds": 300,
+      "requests": 68,
+      "bootstrap": 1,
+      "syncFinished": 68,
+      "streamsOpened": 6,
+      "syntheticWorkerRevisionReads": 149,
+      "maxConcurrentRequests": 1,
+      "appTimersFired": 68,
+      "twoSecondTimers": 0,
+      "maxAppTimers": 1,
+      "timersBeforeStop": 1,
+      "timersAfterStop": 0,
+      "hiddenRequests": 0,
+      "offlineRequests": 0,
+      "burstWindowRequests": 1,
+      "resumeWindowRequests": 1,
+      "uploads": 0,
+      "cacheLoads": 206,
+      "createScans": 274,
+      "editScans": 274,
+      "actionScans": 274,
+      "uploadScans": 275,
+      "commits": 68,
+      "lifecycleSamples": [],
+      "requestTimesMs": [
+        0,
+        3195,
+        5000,
+        10000,
+        15000,
+        20000,
+        25000,
+        30000,
+        35000,
+        40000,
+        45000,
+        50000,
+        55000,
+        56490,
+        59685,
+        60000,
+        65000,
+        70000,
+        75000,
+        80000,
+        85000,
+        90000,
+        95000,
+        100000,
+        105000,
+        110000,
+        112980,
+        115000,
+        120000,
+        125000,
+        130000,
+        135000,
+        140000,
+        145000,
+        150000,
+        155000,
+        160000,
+        165000,
+        169470,
+        170000,
+        175000,
+        180000,
+        185000,
+        190000,
+        195000,
+        200000,
+        205000,
+        210000,
+        215000,
+        220000,
+        225000,
+        225960,
+        229155,
+        230000,
+        235000,
+        240000,
+        245000,
+        250000,
+        255000,
+        260000,
+        265000,
+        270000,
+        275000,
+        280000,
+        282450,
+        285000,
+        290000,
+        295000
+      ]
+    },
+    {
+      "name": "no-realtime-idle",
+      "durationSeconds": 300,
+      "requests": 37,
+      "bootstrap": 1,
+      "syncFinished": 37,
+      "streamsOpened": 0,
+      "syntheticWorkerRevisionReads": 0,
+      "maxConcurrentRequests": 1,
+      "appTimersFired": 37,
+      "twoSecondTimers": 0,
+      "maxAppTimers": 1,
+      "timersBeforeStop": 1,
+      "timersAfterStop": 0,
+      "hiddenRequests": 0,
+      "offlineRequests": 0,
+      "burstWindowRequests": 0,
+      "resumeWindowRequests": 0,
+      "uploads": 0,
+      "cacheLoads": 113,
+      "createScans": 150,
+      "editScans": 150,
+      "actionScans": 150,
+      "uploadScans": 151,
+      "commits": 37,
+      "lifecycleSamples": [],
+      "requestTimesMs": [
+        0,
+        3195,
+        6390,
+        9585,
+        12780,
+        15975,
+        19170,
+        22365,
+        25560,
+        28755,
+        31950,
+        42145,
+        52340,
+        62535,
+        72730,
+        82925,
+        93120,
+        103315,
+        113510,
+        123705,
+        133900,
+        144095,
+        154290,
+        164485,
+        174680,
+        184875,
+        195070,
+        205265,
+        215460,
+        225655,
+        235850,
+        246045,
+        256240,
+        266435,
+        276630,
+        286825,
+        297020
+      ]
+    },
+    {
+      "name": "no-realtime-active-deltas",
+      "durationSeconds": 300,
+      "requests": 94,
+      "bootstrap": 1,
+      "syncFinished": 94,
+      "streamsOpened": 0,
+      "syntheticWorkerRevisionReads": 0,
+      "maxConcurrentRequests": 1,
+      "appTimersFired": 94,
+      "twoSecondTimers": 0,
+      "maxAppTimers": 1,
+      "timersBeforeStop": 1,
+      "timersAfterStop": 0,
+      "hiddenRequests": 0,
+      "offlineRequests": 0,
+      "burstWindowRequests": 1,
+      "resumeWindowRequests": 0,
+      "uploads": 0,
+      "cacheLoads": 284,
+      "createScans": 378,
+      "editScans": 378,
+      "actionScans": 378,
+      "uploadScans": 379,
+      "commits": 94,
+      "lifecycleSamples": [],
+      "requestTimesMs": [
+        0,
+        3195,
+        6390,
+        9585,
+        12780,
+        15975,
+        19170,
+        22365,
+        25560,
+        28755,
+        31950,
+        35145,
+        38340,
+        41535,
+        44730,
+        47925,
+        51120,
+        54315,
+        57510,
+        60705,
+        63900,
+        67095,
+        70290,
+        73485,
+        76680,
+        79875,
+        83070,
+        86265,
+        89460,
+        92655,
+        95850,
+        99045,
+        102240,
+        105435,
+        108630,
+        111825,
+        115020,
+        118215,
+        121410,
+        124605,
+        127800,
+        130995,
+        134190,
+        137385,
+        140580,
+        143775,
+        146970,
+        150165,
+        153360,
+        156555,
+        159750,
+        162945,
+        166140,
+        169335,
+        172530,
+        175725,
+        178920,
+        182115,
+        185310,
+        188505,
+        191700,
+        194895,
+        198090,
+        201285,
+        204480,
+        207675,
+        210870,
+        214065,
+        217260,
+        220455,
+        223650,
+        226845,
+        230040,
+        233235,
+        236430,
+        239625,
+        242820,
+        246015,
+        249210,
+        252405,
+        255600,
+        258795,
+        261990,
+        265185,
+        268380,
+        271575,
+        274770,
+        277965,
+        281160,
+        284355,
+        287550,
+        290745,
+        293940,
+        297135
+      ]
+    },
+    {
+      "name": "realtime-lost-at-60s",
+      "durationSeconds": 300,
+      "requests": 42,
+      "bootstrap": 1,
+      "syncFinished": 42,
+      "streamsOpened": 13,
+      "syntheticWorkerRevisionReads": 30,
+      "maxConcurrentRequests": 1,
+      "appTimersFired": 42,
+      "twoSecondTimers": 0,
+      "maxAppTimers": 1,
+      "timersBeforeStop": 1,
+      "timersAfterStop": 0,
+      "hiddenRequests": 0,
+      "offlineRequests": 0,
+      "burstWindowRequests": 1,
+      "resumeWindowRequests": 0,
+      "uploads": 0,
+      "cacheLoads": 128,
+      "createScans": 170,
+      "editScans": 170,
+      "actionScans": 170,
+      "uploadScans": 171,
+      "commits": 42,
+      "lifecycleSamples": [],
+      "requestTimesMs": [
+        0,
+        3195,
+        33390,
+        56490,
+        59685,
+        60500,
+        63695,
+        66890,
+        70085,
+        73280,
+        76475,
+        77365,
+        87560,
+        97755,
+        98645,
+        108840,
+        119035,
+        119925,
+        130120,
+        140315,
+        141205,
+        151400,
+        161595,
+        162485,
+        172680,
+        182875,
+        183765,
+        193960,
+        204155,
+        205045,
+        215240,
+        225435,
+        226325,
+        236520,
+        246715,
+        247605,
+        257800,
+        267995,
+        268885,
+        279080,
+        289275,
+        290165
+      ]
+    },
+    {
+      "name": "lifecycle-storm",
+      "durationSeconds": 300,
+      "requests": 19,
+      "bootstrap": 1,
+      "syncFinished": 19,
+      "streamsOpened": 6,
+      "syntheticWorkerRevisionReads": 149,
+      "maxConcurrentRequests": 1,
+      "appTimersFired": 19,
+      "twoSecondTimers": 0,
+      "maxAppTimers": 2,
+      "timersBeforeStop": 1,
+      "timersAfterStop": 0,
+      "hiddenRequests": 0,
+      "offlineRequests": 0,
+      "burstWindowRequests": 2,
+      "resumeWindowRequests": 0,
+      "uploads": 0,
+      "cacheLoads": 61,
+      "createScans": 80,
+      "editScans": 80,
+      "actionScans": 80,
+      "uploadScans": 83,
+      "commits": 19,
+      "lifecycleSamples": [],
+      "requestTimesMs": [
+        0,
+        3195,
+        33390,
+        56490,
+        59685,
+        60000,
+        60345,
+        90540,
+        112980,
+        116175,
+        146370,
+        169470,
+        172665,
+        202860,
+        225960,
+        236155,
+        266350,
+        282450,
+        292645
+      ]
+    },
+    {
+      "name": "hidden-offline-resume",
+      "durationSeconds": 300,
+      "requests": 10,
+      "bootstrap": 1,
+      "syncFinished": 10,
+      "streamsOpened": 4,
+      "syntheticWorkerRevisionReads": 60,
+      "maxConcurrentRequests": 1,
+      "appTimersFired": 11,
+      "twoSecondTimers": 0,
+      "maxAppTimers": 2,
+      "timersBeforeStop": 1,
+      "timersAfterStop": 0,
+      "hiddenRequests": 0,
+      "offlineRequests": 0,
+      "burstWindowRequests": 0,
+      "resumeWindowRequests": 1,
+      "uploads": 0,
+      "cacheLoads": 34,
+      "createScans": 44,
+      "editScans": 44,
+      "actionScans": 44,
+      "uploadScans": 47,
+      "commits": 10,
+      "lifecycleSamples": [
+        {
+          "at": 240000,
+          "appTimers": 0
+        }
+      ],
+      "requestTimesMs": [
+        0,
+        3195,
+        33390,
+        56490,
+        59685,
+        240000,
+        243195,
+        273390,
+        296490,
+        299685
+      ]
+    },
+    {
+      "name": "blocked-upload",
+      "durationSeconds": 300,
+      "requests": 17,
+      "bootstrap": 1,
+      "syncFinished": 17,
+      "streamsOpened": 6,
+      "syntheticWorkerRevisionReads": 149,
+      "maxConcurrentRequests": 1,
+      "appTimersFired": 161,
+      "twoSecondTimers": 144,
+      "maxAppTimers": 2,
+      "timersBeforeStop": 2,
+      "timersAfterStop": 0,
+      "hiddenRequests": 0,
+      "offlineRequests": 0,
+      "burstWindowRequests": 0,
+      "resumeWindowRequests": 0,
+      "uploads": 0,
+      "cacheLoads": 197,
+      "createScans": 214,
+      "editScans": 214,
+      "actionScans": 214,
+      "uploadScans": 359,
+      "commits": 17,
+      "lifecycleSamples": [],
+      "requestTimesMs": [
+        0,
+        3195,
+        33390,
+        56490,
+        59685,
+        89880,
+        112980,
+        116175,
+        146370,
+        169470,
+        172665,
+        202860,
+        225960,
+        236155,
+        266350,
+        282450,
+        292645
+      ]
+    },
+    {
+      "name": "blocked-upload-hidden",
+      "durationSeconds": 300,
+      "requests": 10,
+      "bootstrap": 1,
+      "syncFinished": 10,
+      "streamsOpened": 4,
+      "syntheticWorkerRevisionReads": 60,
+      "maxConcurrentRequests": 1,
+      "appTimersFired": 67,
+      "twoSecondTimers": 56,
+      "maxAppTimers": 2,
+      "timersBeforeStop": 2,
+      "timersAfterStop": 0,
+      "hiddenRequests": 0,
+      "offlineRequests": 0,
+      "burstWindowRequests": 0,
+      "resumeWindowRequests": 1,
+      "uploads": 0,
+      "cacheLoads": 90,
+      "createScans": 100,
+      "editScans": 100,
+      "actionScans": 100,
+      "uploadScans": 159,
+      "commits": 10,
+      "lifecycleSamples": [
+        {
+          "at": 240000,
+          "appTimers": 0
+        }
+      ],
+      "requestTimesMs": [
+        0,
+        3195,
+        33390,
+        56490,
+        59685,
+        240000,
+        243195,
+        273390,
+        296490,
+        299685
+      ]
+    },
+    {
+      "name": "stop-restart",
+      "durationSeconds": 300,
+      "requests": 16,
+      "bootstrap": 1,
+      "syncFinished": 16,
+      "streamsOpened": 6,
+      "syntheticWorkerRevisionReads": 120,
+      "maxConcurrentRequests": 1,
+      "appTimersFired": 16,
+      "twoSecondTimers": 0,
+      "maxAppTimers": 1,
+      "timersBeforeStop": 1,
+      "timersAfterStop": 0,
+      "hiddenRequests": 0,
+      "offlineRequests": 0,
+      "burstWindowRequests": 0,
+      "resumeWindowRequests": 0,
+      "uploads": 0,
+      "cacheLoads": 52,
+      "createScans": 68,
+      "editScans": 68,
+      "actionScans": 68,
+      "uploadScans": 70,
+      "commits": 16,
+      "lifecycleSamples": [],
+      "requestTimesMs": [
+        0,
+        3195,
+        33390,
+        56490,
+        59685,
+        120000,
+        123195,
+        153390,
+        176490,
+        179685,
+        209880,
+        232980,
+        236175,
+        266370,
+        289470,
+        299665
+      ]
+    }
+  ],
+  "cache": [
+    {
+      "tasks": 289,
+      "emptyDeltaCommit": {
+        "n": 30,
+        "medianMs": 3.432,
+        "p95Ms": 4.008,
+        "totalMs": 103.149
+      },
+      "stringifyCallsPerCommit": 578,
+      "stringifyCharsPerCommit": 400130,
+      "idbPer30Commits": {
+        "task-state.getAll": 30,
+        "pending-todos.getAll": 30,
+        "pending-mutations.getAll": 30,
+        "pending-actions.getAll": 30,
+        "attachment-outbox.getAll": 30,
+        "cached-state.put": 30
+      },
+      "unchangedSetAll": {
+        "n": 30,
+        "medianMs": 1.128,
+        "p95Ms": 2.451,
+        "totalMs": 41.169
+      },
+      "unchangedNotifications": {
+        "lists": 0,
+        "rows": 0
+      },
+      "draft50Notifications": {
+        "lists": 0,
+        "rows": 50
+      }
+    },
+    {
+      "tasks": 2890,
+      "emptyDeltaCommit": {
+        "n": 30,
+        "medianMs": 33.431,
+        "p95Ms": 46.348,
+        "totalMs": 1072.67
+      },
+      "stringifyCallsPerCommit": 5780,
+      "stringifyCharsPerCommit": 4018708,
+      "idbPer30Commits": {
+        "task-state.getAll": 30,
+        "pending-todos.getAll": 30,
+        "pending-mutations.getAll": 30,
+        "pending-actions.getAll": 30,
+        "attachment-outbox.getAll": 30,
+        "cached-state.put": 30
+      },
+      "unchangedSetAll": {
+        "n": 30,
+        "medianMs": 13.646,
+        "p95Ms": 16.019,
+        "totalMs": 421.029
+      },
+      "unchangedNotifications": {
+        "lists": 0,
+        "rows": 0
+      },
+      "draft50Notifications": {
+        "lists": 0,
+        "rows": 50
+      }
+    }
+  ],
+  "browser": {
+    "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/154.0.0.0 Safari/537.36",
+    "history": [
+      {
+        "turns": 4,
+        "updates": 120,
+        "deltaChars": 3840,
+        "finalStoredChars": 45633,
+        "writes": 120,
+        "failures": 0,
+        "writtenChars": 5247480,
+        "stringify": {
+          "n": 120,
+          "medianMs": 0.1,
+          "p95Ms": 0.2,
+          "totalMs": 13.2
+        },
+        "clientSave": {
+          "n": 120,
+          "medianMs": 0.2,
+          "p95Ms": 0.3,
+          "totalMs": 23.1
+        },
+        "setItem": {
+          "n": 120,
+          "medianMs": 0.1,
+          "p95Ms": 0.2,
+          "totalMs": 13.8
+        },
+        "persistedFinalDelta": true
+      },
+      {
+        "turns": 400,
+        "updates": 120,
+        "deltaChars": 3840,
+        "finalStoredChars": 4181649,
+        "writes": 120,
+        "failures": 0,
+        "writtenChars": 501569400,
+        "stringify": {
+          "n": 120,
+          "medianMs": 12.2,
+          "p95Ms": 13.6,
+          "totalMs": 1479.9
+        },
+        "clientSave": {
+          "n": 120,
+          "medianMs": 29,
+          "p95Ms": 32.3,
+          "totalMs": 3503.7
+        },
+        "setItem": {
+          "n": 120,
+          "medianMs": 15.3,
+          "p95Ms": 17,
+          "totalMs": 1851.1
+        },
+        "persistedFinalDelta": true
+      }
+    ],
+    "tasks": [
+      {
+        "count": 289,
+        "filter": {
+          "n": 200,
+          "medianMs": 0.2,
+          "p95Ms": 0.3,
+          "totalMs": 32.4
+        },
+        "search": {
+          "n": 200,
+          "medianMs": 0.2,
+          "p95Ms": 0.4,
+          "totalMs": 49.2
+        },
+        "counts": {
+          "n": 200,
+          "medianMs": 0,
+          "p95Ms": 0.1,
+          "totalMs": 11.3
+        },
+        "render": {
+          "mount": {
+            "n": 3,
+            "medianMs": 463.2,
+            "p95Ms": 477.2,
+            "totalMs": 1393.7
+          },
+          "stableParent": {
+            "n": 3,
+            "medianMs": 0.7,
+            "p95Ms": 2.6,
+            "totalMs": 3.9
+          },
+          "changedClock": {
+            "n": 3,
+            "medianMs": 77.1,
+            "p95Ms": 87.1,
+            "totalMs": 230.4
+          },
+          "oneDraft": {
+            "n": 3,
+            "medianMs": 1.8,
+            "p95Ms": 2.3,
+            "totalMs": 5.7
+          },
+          "layout": {
+            "n": 3,
+            "medianMs": 0.4,
+            "p95Ms": 0.6,
+            "totalMs": 1.3
+          }
+        },
+        "rowRenders": {
+          "mount": 289,
+          "stableParent": 0,
+          "changedClock": 289,
+          "oneDraft": 1
+        }
+      },
+      {
+        "count": 2890,
+        "filter": {
+          "n": 200,
+          "medianMs": 1.7,
+          "p95Ms": 2.2,
+          "totalMs": 346.6
+        },
+        "search": {
+          "n": 200,
+          "medianMs": 2.3,
+          "p95Ms": 3.1,
+          "totalMs": 478.6
+        },
+        "counts": {
+          "n": 200,
+          "medianMs": 0.4,
+          "p95Ms": 0.6,
+          "totalMs": 88.4
+        },
+        "render": {
+          "mount": {
+            "n": 1,
+            "medianMs": 11987.3,
+            "p95Ms": 11987.3,
+            "totalMs": 11987.3
+          },
+          "stableParent": {
+            "n": 1,
+            "medianMs": 4.6,
+            "p95Ms": 4.6,
+            "totalMs": 4.6
+          },
+          "changedClock": {
+            "n": 1,
+            "medianMs": 639.5,
+            "p95Ms": 639.5,
+            "totalMs": 639.5
+          },
+          "oneDraft": {
+            "n": 1,
+            "medianMs": 7.7,
+            "p95Ms": 7.7,
+            "totalMs": 7.7
+          },
+          "layout": {
+            "n": 1,
+            "medianMs": 5.6,
+            "p95Ms": 5.6,
+            "totalMs": 5.6
+          }
+        },
+        "rowRenders": {
+          "mount": 2890,
+          "stableParent": 0,
+          "changedClock": 2890,
+          "oneDraft": 1
+        }
+      }
+    ],
+    "quota": {
+      "attemptedHistories": 3,
+      "storedHistories": 1,
+      "failures": 2,
+      "attemptedChars": 12533427
+    },
+    "ownerScope": {
+      "ownerBCanReadA": false,
+      "beforeClear": 2,
+      "afterClear": 0
+    },
+    "chat": {
+      "navigation": [
+        {
+          "name": "small-20-turns",
+          "configured": {
+            "messages": 1,
+            "cachedTurns": 0,
+            "rtt": 195,
+            "bytesPerSecond": null
+          },
+          "first": {
+            "firstLatestPaintMs": 367,
+            "settledMs": 500.40000000596046,
+            "firstRows": 20,
+            "settledRows": 20,
+            "messageRenders": 40,
+            "firstScroll": {
+              "top": 5401,
+              "height": 6089,
+              "viewport": 688,
+              "bottomGap": 0
+            },
+            "settledScroll": {
+              "top": 5372,
+              "height": 6060,
+              "viewport": 688,
+              "bottomGap": 0
+            },
+            "historyRequests": 1,
+            "storage": {
+              "writes": 5,
+              "chars": 61921
+            },
+            "closedToolPreNodes": 0,
+            "closedScheduledMessages": 0,
+            "attachmentDownloads": 0,
+            "historyBytes": 31028
+          },
+          "other": {
+            "firstLatestPaintMs": 383.20000000298023,
+            "settledMs": 599,
+            "firstRows": 20,
+            "settledRows": 20,
+            "messageRenders": 60,
+            "firstScroll": {
+              "top": 5401,
+              "height": 6089,
+              "viewport": 688,
+              "bottomGap": 0
+            },
+            "settledScroll": {
+              "top": 5372,
+              "height": 6060,
+              "viewport": 688,
+              "bottomGap": 0
+            },
+            "historyRequests": 1,
+            "storage": {
+              "writes": 5,
+              "chars": 61921
+            },
+            "closedToolPreNodes": 0,
+            "closedScheduledMessages": 0,
+            "attachmentDownloads": 0,
+            "historyBytes": 31028
+          },
+          "repeat": {
+            "firstLatestPaintMs": 166.29999999701977,
+            "settledMs": 549.7999999970198,
+            "firstRows": 20,
+            "settledRows": 20,
+            "messageRenders": 80,
+            "firstScroll": {
+              "top": 5401,
+              "height": 6089,
+              "viewport": 688,
+              "bottomGap": 0
+            },
+            "settledScroll": {
+              "top": 5372,
+              "height": 6060,
+              "viewport": 688,
+              "bottomGap": 0
+            },
+            "historyRequests": 1,
+            "storage": {
+              "writes": 5,
+              "chars": 92836
+            },
+            "closedToolPreNodes": 0,
+            "closedScheduledMessages": 0,
+            "attachmentDownloads": 0,
+            "historyBytes": 31028
+          },
+          "streaming": {
+            "events": 10,
+            "cost": {
+              "n": 10,
+              "medianMs": 61.4,
+              "p95Ms": 84.8,
+              "totalMs": 626.1
+            },
+            "storage": {
+              "writes": 20,
+              "chars": 384411
+            },
+            "messageRenders": 200,
+            "before": {
+              "top": 2020,
+              "height": 6060,
+              "viewport": 688,
+              "bottomGap": 3352
+            },
+            "after": {
+              "top": 2020,
+              "height": 6086,
+              "viewport": 688,
+              "bottomGap": 3378
+            },
+            "latestDeltaVisible": true
+          },
+          "pagination": {
+            "rowsBefore": 20,
+            "rowsAfter": 40,
+            "anchorShiftPx": -0.296875,
+            "scroll": {
+              "top": 7984,
+              "height": 12050,
+              "viewport": 688,
+              "bottomGap": 3378
+            }
+          },
+          "positionRestoration": {
+            "beforeAway": {
+              "top": 4016,
+              "height": 12050,
+              "viewport": 688,
+              "bottomGap": 7346
+            },
+            "afterReturn": {
+              "top": 5372,
+              "height": 6060,
+              "viewport": 688,
+              "bottomGap": 0
+            }
+          },
+          "offline": {
+            "firstLatestPaintMs": 159.90000000596046,
+            "settledMs": 191.40000000596046,
+            "firstRows": 20,
+            "settledRows": 20,
+            "messageRenders": 40,
+            "firstScroll": {
+              "top": 5372,
+              "height": 6060,
+              "viewport": 688,
+              "bottomGap": 0
+            },
+            "settledScroll": {
+              "top": 5372,
+              "height": 6060,
+              "viewport": 688,
+              "bottomGap": 0
+            },
+            "historyRequests": 0,
+            "storage": {
+              "writes": 2,
+              "chars": 30946
+            },
+            "closedToolPreNodes": 0,
+            "closedScheduledMessages": 0,
+            "attachmentDownloads": 0,
+            "historyBytes": 0
+          },
+          "reconnectHistoryRequests": 1,
+          "maxPendingRPCs": 2,
+          "historyRequestsTotal": 6,
+          "historyBytesTotal": 186168
+        },
+        {
+          "name": "dense-20-turns-weak-link",
+          "configured": {
+            "messages": 20,
+            "cachedTurns": 0,
+            "rtt": 600,
+            "bytesPerSecond": 131072
+          },
+          "first": {
+            "firstLatestPaintMs": 6900.5999999940395,
+            "settledMs": 7117.5999999940395,
+            "firstRows": 20,
+            "settledRows": 20,
+            "messageRenders": 800,
+            "firstScroll": {
+              "top": 103988,
+              "height": 104676,
+              "viewport": 688,
+              "bottomGap": 0
+            },
+            "settledScroll": {
+              "top": 103988,
+              "height": 104676,
+              "viewport": 688,
+              "bottomGap": 0
+            },
+            "historyRequests": 1,
+            "storage": {
+              "writes": 5,
+              "chars": 1138121
+            },
+            "closedToolPreNodes": 0,
+            "closedScheduledMessages": 0,
+            "attachmentDownloads": 0,
+            "historyBytes": 569128
+          },
+          "other": {
+            "firstLatestPaintMs": 7740.0999999940395,
+            "settledMs": 7948.5999999940395,
+            "firstRows": 20,
+            "settledRows": 20,
+            "messageRenders": 1200,
+            "firstScroll": {
+              "top": 103988,
+              "height": 104676,
+              "viewport": 688,
+              "bottomGap": 0
+            },
+            "settledScroll": {
+              "top": 103988,
+              "height": 104676,
+              "viewport": 688,
+              "bottomGap": 0
+            },
+            "historyRequests": 1,
+            "storage": {
+              "writes": 5,
+              "chars": 1138121
+            },
+            "closedToolPreNodes": 0,
+            "closedScheduledMessages": 0,
+            "attachmentDownloads": 0,
+            "historyBytes": 569128
+          },
+          "repeat": {
+            "firstLatestPaintMs": 2928.0999999940395,
+            "settledMs": 7949.20000000298,
+            "firstRows": 20,
+            "settledRows": 20,
+            "messageRenders": 2000,
+            "firstScroll": {
+              "top": 104017,
+              "height": 104705,
+              "viewport": 688,
+              "bottomGap": 0
+            },
+            "settledScroll": {
+              "top": 103988,
+              "height": 104676,
+              "viewport": 688,
+              "bottomGap": 0
+            },
+            "historyRequests": 1,
+            "storage": {
+              "writes": 5,
+              "chars": 1707136
+            },
+            "closedToolPreNodes": 0,
+            "closedScheduledMessages": 0,
+            "attachmentDownloads": 0,
+            "historyBytes": 569128
+          },
+          "streaming": {
+            "events": 10,
+            "cost": {
+              "n": 10,
+              "medianMs": 897.1,
+              "p95Ms": 1029,
+              "totalMs": 9122.2
+            },
+            "storage": {
+              "writes": 20,
+              "chars": 5765411
+            },
+            "messageRenders": 4000,
+            "before": {
+              "top": 34892,
+              "height": 104676,
+              "viewport": 688,
+              "bottomGap": 69096
+            },
+            "after": {
+              "top": 34892,
+              "height": 104702,
+              "viewport": 688,
+              "bottomGap": 69122
+            },
+            "latestDeltaVisible": true
+          },
+          "pagination": {
+            "rowsBefore": 20,
+            "rowsAfter": 40,
+            "anchorShiftPx": -0.296875,
+            "scroll": {
+              "top": 40856,
+              "height": 110666,
+              "viewport": 688,
+              "bottomGap": 69122
+            }
+          },
+          "positionRestoration": {
+            "beforeAway": {
+              "top": 36888,
+              "height": 110666,
+              "viewport": 688,
+              "bottomGap": 73090
+            },
+            "afterReturn": {
+              "top": 103988,
+              "height": 104676,
+              "viewport": 688,
+              "bottomGap": 0
+            }
+          },
+          "offline": {
+            "firstLatestPaintMs": 2045.5,
+            "settledMs": 2072.2999999970198,
+            "firstRows": 20,
+            "settledRows": 20,
+            "messageRenders": 800,
+            "firstScroll": {
+              "top": 103988,
+              "height": 104676,
+              "viewport": 688,
+              "bottomGap": 0
+            },
+            "settledScroll": {
+              "top": 103988,
+              "height": 104676,
+              "viewport": 688,
+              "bottomGap": 0
+            },
+            "historyRequests": 0,
+            "storage": {
+              "writes": 2,
+              "chars": 569046
+            },
+            "closedToolPreNodes": 0,
+            "closedScheduledMessages": 0,
+            "attachmentDownloads": 0,
+            "historyBytes": 0
+          },
+          "reconnectHistoryRequests": 1,
+          "maxPendingRPCs": 2,
+          "historyRequestsTotal": 6,
+          "historyBytesTotal": 3414768
+        },
+        {
+          "name": "accumulated-400-turn-cache",
+          "configured": {
+            "messages": 1,
+            "cachedTurns": 400,
+            "rtt": 600,
+            "bytesPerSecond": 131072
+          },
+          "first": {
+            "firstLatestPaintMs": 1249.6000000089407,
+            "settledMs": 1916.4000000059605,
+            "firstRows": 400,
+            "settledRows": 20,
+            "messageRenders": 440,
+            "firstScroll": {
+              "top": 118436,
+              "height": 119124,
+              "viewport": 688,
+              "bottomGap": 0
+            },
+            "settledScroll": {
+              "top": 5372,
+              "height": 6060,
+              "viewport": 688,
+              "bottomGap": 0
+            },
+            "historyRequests": 1,
+            "storage": {
+              "writes": 5,
+              "chars": 681216
+            },
+            "closedToolPreNodes": 0,
+            "closedScheduledMessages": 0,
+            "attachmentDownloads": 0,
+            "historyBytes": 31028
+          },
+          "other": {
+            "firstLatestPaintMs": 967.7000000029802,
+            "settledMs": 1566.5,
+            "firstRows": 20,
+            "settledRows": 20,
+            "messageRenders": 60,
+            "firstScroll": {
+              "top": 5401,
+              "height": 6089,
+              "viewport": 688,
+              "bottomGap": 0
+            },
+            "settledScroll": {
+              "top": 5372,
+              "height": 6060,
+              "viewport": 688,
+              "bottomGap": 0
+            },
+            "historyRequests": 1,
+            "storage": {
+              "writes": 5,
+              "chars": 61921
+            },
+            "closedToolPreNodes": 0,
+            "closedScheduledMessages": 0,
+            "attachmentDownloads": 0,
+            "historyBytes": 31028
+          },
+          "repeat": {
+            "firstLatestPaintMs": 124.90000000596046,
+            "settledMs": 1566.5,
+            "firstRows": 20,
+            "settledRows": 20,
+            "messageRenders": 100,
+            "firstScroll": {
+              "top": 5401,
+              "height": 6089,
+              "viewport": 688,
+              "bottomGap": 0
+            },
+            "settledScroll": {
+              "top": 5372,
+              "height": 6060,
+              "viewport": 688,
+              "bottomGap": 0
+            },
+            "historyRequests": 1,
+            "storage": {
+              "writes": 5,
+              "chars": 92836
+            },
+            "closedToolPreNodes": 0,
+            "closedScheduledMessages": 0,
+            "attachmentDownloads": 0,
+            "historyBytes": 31028
+          },
+          "streaming": {
+            "events": 10,
+            "cost": {
+              "n": 10,
+              "medianMs": 50.5,
+              "p95Ms": 63.1,
+              "totalMs": 520.6
+            },
+            "storage": {
+              "writes": 20,
+              "chars": 384411
+            },
+            "messageRenders": 200,
+            "before": {
+              "top": 2020,
+              "height": 6060,
+              "viewport": 688,
+              "bottomGap": 3352
+            },
+            "after": {
+              "top": 2020,
+              "height": 6086,
+              "viewport": 688,
+              "bottomGap": 3378
+            },
+            "latestDeltaVisible": true
+          },
+          "pagination": {
+            "rowsBefore": 20,
+            "rowsAfter": 40,
+            "anchorShiftPx": -0.296875,
+            "scroll": {
+              "top": 7984,
+              "height": 12050,
+              "viewport": 688,
+              "bottomGap": 3378
+            }
+          },
+          "positionRestoration": {
+            "beforeAway": {
+              "top": 4016,
+              "height": 12050,
+              "viewport": 688,
+              "bottomGap": 7346
+            },
+            "afterReturn": {
+              "top": 5372,
+              "height": 6060,
+              "viewport": 688,
+              "bottomGap": 0
+            }
+          },
+          "offline": {
+            "firstLatestPaintMs": 134.59999999403954,
+            "settledMs": 167.09999999403954,
+            "firstRows": 20,
+            "settledRows": 20,
+            "messageRenders": 40,
+            "firstScroll": {
+              "top": 5372,
+              "height": 6060,
+              "viewport": 688,
+              "bottomGap": 0
+            },
+            "settledScroll": {
+              "top": 5372,
+              "height": 6060,
+              "viewport": 688,
+              "bottomGap": 0
+            },
+            "historyRequests": 0,
+            "storage": {
+              "writes": 2,
+              "chars": 30946
+            },
+            "closedToolPreNodes": 0,
+            "closedScheduledMessages": 0,
+            "attachmentDownloads": 0,
+            "historyBytes": 0
+          },
+          "reconnectHistoryRequests": 1,
+          "maxPendingRPCs": 2,
+          "historyRequestsTotal": 6,
+          "historyBytesTotal": 186168
+        },
+        {
+          "name": "one-turn-80-tools",
+          "configured": {
+            "messages": 1,
+            "tools": 80,
+            "cachedTurns": 0,
+            "rtt": 195,
+            "bytesPerSecond": null
+          },
+          "first": {
+            "firstLatestPaintMs": 391.70000000298023,
+            "settledMs": 570.2000000029802,
+            "firstRows": 20,
+            "settledRows": 20,
+            "messageRenders": 202,
+            "firstScroll": {
+              "top": 5223,
+              "height": 5911,
+              "viewport": 688,
+              "bottomGap": 0
+            },
+            "settledScroll": {
+              "top": 5190,
+              "height": 5878,
+              "viewport": 688,
+              "bottomGap": 0
+            },
+            "historyRequests": 1,
+            "storage": {
+              "writes": 5,
+              "chars": 5814489
+            },
+            "closedToolPreNodes": 80,
+            "closedScheduledMessages": 2,
+            "attachmentDownloads": 3,
+            "historyBytes": 2907312
+          },
+          "other": {
+            "firstLatestPaintMs": 409.90000000596046,
+            "settledMs": 596.4000000059605,
+            "firstRows": 20,
+            "settledRows": 20,
+            "messageRenders": 303,
+            "firstScroll": {
+              "top": 5223,
+              "height": 5911,
+              "viewport": 688,
+              "bottomGap": 0
+            },
+            "settledScroll": {
+              "top": 5190,
+              "height": 5878,
+              "viewport": 688,
+              "bottomGap": 0
+            },
+            "historyRequests": 1,
+            "storage": {
+              "writes": 5,
+              "chars": 5814489
+            },
+            "closedToolPreNodes": 80,
+            "closedScheduledMessages": 2,
+            "attachmentDownloads": 6,
+            "historyBytes": 2907312
+          },
+          "repeat": {
+            "firstLatestPaintMs": 205.20000000298023,
+            "settledMs": 599.5999999940395,
+            "firstRows": 20,
+            "settledRows": 20,
+            "messageRenders": 404,
+            "firstScroll": {
+              "top": 5223,
+              "height": 5911,
+              "viewport": 688,
+              "bottomGap": 0
+            },
+            "settledScroll": {
+              "top": 5190,
+              "height": 5878,
+              "viewport": 688,
+              "bottomGap": 0
+            },
+            "historyRequests": 1,
+            "storage": {
+              "writes": 5,
+              "chars": 8721688
+            },
+            "closedToolPreNodes": 80,
+            "closedScheduledMessages": 2,
+            "attachmentDownloads": 3,
+            "historyBytes": 2907312
+          },
+          "streaming": {
+            "events": 10,
+            "cost": {
+              "n": 10,
+              "medianMs": 82.2,
+              "p95Ms": 92.6,
+              "totalMs": 828.8
+            },
+            "storage": {
+              "writes": 20,
+              "chars": 29147251
+            },
+            "messageRenders": 1010,
+            "before": {
+              "top": 1959,
+              "height": 5878,
+              "viewport": 688,
+              "bottomGap": 3231
+            },
+            "after": {
+              "top": 1959,
+              "height": 5905,
+              "viewport": 688,
+              "bottomGap": 3258
+            },
+            "latestDeltaVisible": true
+          },
+          "pagination": {
+            "rowsBefore": 20,
+            "rowsAfter": 40,
+            "anchorShiftPx": -0.296875,
+            "scroll": {
+              "top": 7927,
+              "height": 11872,
+              "viewport": 688,
+              "bottomGap": 3257
+            }
+          },
+          "positionRestoration": {
+            "beforeAway": {
+              "top": 3957,
+              "height": 11872,
+              "viewport": 688,
+              "bottomGap": 7227
+            },
+            "afterReturn": {
+              "top": 5190,
+              "height": 5878,
+              "viewport": 688,
+              "bottomGap": 0
+            }
+          },
+          "offline": {
+            "firstLatestPaintMs": 126.20000000298023,
+            "settledMs": 176.30000001192093,
+            "firstRows": 20,
+            "settledRows": 20,
+            "messageRenders": 101,
+            "firstScroll": {
+              "top": 5190,
+              "height": 5878,
+              "viewport": 688,
+              "bottomGap": 0
+            },
+            "settledScroll": {
+              "top": 5190,
+              "height": 5878,
+              "viewport": 688,
+              "bottomGap": 0
+            },
+            "historyRequests": 0,
+            "storage": {
+              "writes": 2,
+              "chars": 2907230
+            },
+            "closedToolPreNodes": 80,
+            "closedScheduledMessages": 2,
+            "attachmentDownloads": 3,
+            "historyBytes": 0
+          },
+          "reconnectHistoryRequests": 1,
+          "maxPendingRPCs": 2,
+          "historyRequestsTotal": 6,
+          "historyBytesTotal": 17443872
+        }
+      ],
+      "botList": [
+        {
+          "bots": 20,
+          "renderedRows": 20,
+          "mountToPaintMs": 40.29999999701977,
+          "unrelatedRedrawMs": 3.4000000059604645
+        },
+        {
+          "bots": 200,
+          "renderedRows": 200,
+          "mountToPaintMs": 99.09999999403954,
+          "unrelatedRedrawMs": 18.600000008940697
+        },
+        {
+          "bots": 1000,
+          "renderedRows": 1000,
+          "mountToPaintMs": 469.90000000596046,
+          "unrelatedRedrawMs": 94.5
+        }
+      ],
+      "requestRace": {
+        "selectionSequence": "A/B/A before responses",
+        "historyRequests": 3,
+        "simultaneousARequests": 2,
+        "staleAOverwroteNewer": true
+      }
+    },
+    "serviceWorker": {
+      "graph": "32 immutable assets, 9 shell resources; synthetic update changes 2 assets",
+      "coldInstall": {
+        "requests": 42,
+        "documents": 4,
+        "graphAssets": 32,
+        "other": 6,
+        "elapsedMs": 733,
+        "counters": {
+          "puts": 41,
+          "matches": 32,
+          "textReads": 33,
+          "textChars": 146788,
+          "generation": 1
+        }
+      },
+      "cachedNavigation": {
+        "requests": 2,
+        "documents": 1,
+        "graphAssets": 0,
+        "other": 1,
+        "responseStartMs": 3.7999999970197678,
+        "domContentLoadedMs": 24,
+        "counters": {
+          "puts": 34,
+          "matches": 33,
+          "textReads": 33,
+          "textChars": 146788,
+          "generation": 1
+        }
+      },
+      "repeatNavigation": {
+        "requests": 2,
+        "documents": 1,
+        "graphAssets": 0,
+        "other": 1,
+        "responseStartMs": 3.699999988079071,
+        "domContentLoadedMs": 11.299999997019768,
+        "counters": {
+          "puts": 34,
+          "matches": 33,
+          "textReads": 33,
+          "textChars": 146788,
+          "generation": 1
+        }
+      },
+      "update": {
+        "requests": 12,
+        "documents": 4,
+        "graphAssets": 2,
+        "other": 6,
+        "counters": {
+          "puts": 41,
+          "matches": 32,
+          "textReads": 33,
+          "textChars": 146788,
+          "generation": 2
+        },
+        "cacheNames": [
+          "dawar-todo-shell-v31",
+          "dawar-todo-shell-v32"
+        ]
+      },
+      "offline": {
+        "serverAttempts": 4,
+        "serverResponses": 0,
+        "shell": "synthetic shell 2",
+        "responseStartMs": 396.20000000298023
+      }
+    },
+    "viewport": {
+      "width": 1280,
+      "height": 900,
+      "deviceScaleFactor": 1
+    }
+  },
+  "nativeHistory": {
+    "native": "synthetic-history-probe/0.157.0 (Debian 13.0.0; x86_64) unknown (synthetic-history-probe; 1)",
+    "fixture": {
+      "userChars": 15000,
+      "assistantChars": 20000,
+      "toolChars": 150000
+    },
+    "views": {
+      "notLoaded": {
+        "bytes": 294,
+        "turns": 1,
+        "items": [],
+        "preservesUser": false,
+        "preservesAssistant": false,
+        "preservesTool": false
+      },
+      "summary": {
+        "bytes": 35527,
+        "turns": 1,
+        "items": [
+          {
+            "type": "userMessage",
+            "serializedChars": 15109,
+            "inputChars": 15000
+          },
+          {
+            "type": "agentMessage",
+            "serializedChars": 20125,
+            "textChars": 20000
+          }
+        ],
+        "preservesUser": true,
+        "preservesAssistant": true,
+        "preservesTool": false
+      },
+      "full": {
+        "bytes": 35524,
+        "turns": 1,
+        "items": [
+          {
+            "type": "userMessage",
+            "serializedChars": 15109,
+            "inputChars": 15000
+          },
+          {
+            "type": "agentMessage",
+            "serializedChars": 20125,
+            "textChars": 20000
+          }
+        ],
+        "preservesUser": true,
+        "preservesAssistant": true,
+        "preservesTool": false
+      }
+    },
+    "toolComparisonConclusive": false,
+    "limit": "Synthetic command item did not hydrate even in full. No conclusion about native tool-summary semantics or payload savings is valid."
+  },
+  "measurementDate": "2026-09-26"
+}

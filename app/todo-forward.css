@@ -1,0 +1,11 @@
+/* Task destination pickers share the Radix dialog, fields and semantic tokens. */
+.todo-forward-dialog { display:flex; flex-direction:column; gap:16px; max-width:440px; }
+.todo-forward-search { position:relative; display:flex; align-items:center; }
+.todo-forward-search > svg { position:absolute; left:12px; color:var(--muted-foreground); pointer-events:none; }
+.todo-forward-search input { padding-left:40px; }
+.todo-forward-note { padding:12px; border-radius:var(--radius-md); background:var(--muted); }
+.todo-forward-error { font-size:14px; line-height:1.5; color:var(--destructive); }
+.todo-queue-dialog select { margin-top:6px; }
+.todo-queue-dialog footer button { width:100%; }
+.todo-queue-progress { max-height:180px; overflow:auto; flex-shrink:0; }
+.todo-forward-note, .todo-forward-dialog footer { font-size:13px; line-height:1.5; color:var(--muted-foreground); }

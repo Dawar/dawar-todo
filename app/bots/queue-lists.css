@@ -1,0 +1,45 @@
+.bots-queue-lists { color:var(--foreground);min-width:0; }
+.bots-lists-heading,.bots-list-editor header,.bots-list-detail-heading { display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px; }
+.bots-lists-heading>div,.bots-list-detail-heading>div:first-of-type { flex:1;min-width:0; }
+.bots-lists-heading h3 { margin:0;font-size:16px;font-weight:600; }
+.bots-lists-heading>button,.bots-list-detail-heading button { height:auto;min-height:44px;white-space:normal; }
+.bots-list-editor { display:grid;gap:16px;background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin:12px 0 20px; }
+.bots-list-editor header { justify-content:space-between;margin:0;font-size:14px; }
+.bots-list-editor label { display:grid;gap:8px;font-size:14px;font-weight:500;min-width:0; }
+.bots-list-editor .bots-list-checkbox { display:flex;align-items:center;gap:8px;min-height:44px; }
+.bots-list-editor input[type=checkbox] { width:18px;height:18px;accent-color:var(--primary); }
+.bots-list-editor small,.bots-list-detail-heading small,.bots-lists-empty-note { color:var(--muted-foreground);line-height:1.5;font-size:13px;overflow-wrap:anywhere; }
+.bots-list-editor [role=alert] { color:var(--destructive); }
+.bots-list-editor>.bots-primary { justify-self:start; }
+.bots-list-detail-heading h4 { margin:0 0 4px;font-size:15px;overflow-wrap:anywhere; }
+.bots-list-detail-heading>div:last-child:not(:first-of-type) { display:flex;flex-wrap:wrap;gap:8px; }
+.bots-lists-error { color:var(--destructive);background:color-mix(in srgb,var(--destructive) 6%,var(--card));padding:12px;border:1px solid var(--border);border-radius:var(--radius);font-size:14px;line-height:1.5;overflow-wrap:anywhere; }
+.bots-lists-error button { margin-top:8px; }
+.bots-lists-read-error { display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap; }
+.bots-lists-read-error button { margin:0; }
+.bots-queue-lists :focus-visible,.bots-queue-picker :focus-visible { outline:2px solid var(--ring);outline-offset:2px; }
+.bots-queue-picker { position:fixed;inset:0;margin:auto;width:min(420px,calc(100vw - 32px));max-height:calc(100dvh - 32px);padding:20px;border:1px solid var(--border);border-radius:var(--radius);background:var(--popover);color:var(--popover-foreground);box-shadow:0 16px 48px rgb(0 0 0 / .18);overflow-y:auto; }
+.bots-queue-picker::backdrop { background:rgb(0 0 0 / .4); }
+.bots-queue-picker header { display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;gap:12px; }
+.bots-queue-picker header span { font-size:13px;color:var(--muted-foreground); }
+.bots-queue-picker h2 { font-size:20px;font-weight:600;margin:4px 0 0; }
+.bots-queue-destinations { display:grid;gap:8px; }
+.bots-queue-destinations button { justify-content:flex-start;height:auto;min-height:64px;gap:12px;text-align:left;white-space:normal;padding:12px;min-width:0; }
+.bots-queue-destinations button>svg { flex:none; }
+.bots-queue-destinations span { min-width:0;display:grid;gap:4px; }
+.bots-queue-destinations strong { font-size:14px;font-weight:500;overflow-wrap:anywhere; }
+.bots-queue-destinations small { font-size:13px;color:var(--muted-foreground);font-weight:400; }
+.bots-queue-manage { margin:12px auto 0;max-width:100%;height:auto;min-height:44px;white-space:normal; }
+.bots-list-tabs { display:flex;gap:8px;flex-wrap:wrap;margin:16px 0; }
+.bots-list-tabs button { height:auto;min-height:44px;white-space:normal;text-align:left;max-width:100%;overflow-wrap:anywhere; }
+.bots-list-tabs button[aria-pressed=true] { background:var(--accent);border-color:var(--primary);color:var(--accent-foreground); }
+.bots-list-tabs span { background:var(--muted);border-radius:4px;padding:1px 5px; }
+.bots-queue-picker-note { margin:0 0 12px;color:var(--muted-foreground);font-size:13px;line-height:1.5;overflow-wrap:anywhere; }
+
+.bots-saved-drafts { margin: 16px 0; font-size: 14px; color: var(--foreground); }
+.bots-saved-drafts summary { cursor: pointer; padding: 12px 0; font-weight: 500; }
+.bots-saved-drafts summary:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; border-radius: var(--radius); }
+.bots-saved-drafts > div { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; justify-content: space-between; padding: 12px 0; border-top: 1px solid var(--border); }
+.bots-saved-drafts > div > span { flex: 1 1 180px; min-width: 0; overflow-wrap: anywhere; }
+.bots-saved-drafts > p { padding: 12px 0; color: var(--muted-foreground); font-size: 13px; }
+.bots-saved-drafts > p[role=alert] { color: var(--destructive); }

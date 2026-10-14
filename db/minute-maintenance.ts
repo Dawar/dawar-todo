@@ -1,4 +1,5 @@
-import { dispatchTodoPushNotifications, type PushEnvironment } from "./push-notifications";
+import { retireLegacyChat } from "./call-storage";
+import { dispatchTodoPushNotifications, dispatchBotPushNotifications, type PushEnvironment } from "./push-notifications";
 import {
   ensureTodoDatabase,
   wakeExpiredSnoozedTodosInDatabase,
@@ -21,6 +22,8 @@ export async function runTodoMinuteMaintenance(
 ) {
   const startedAt = Date.now();
   await ensureTodoDatabase();
+
+  try { await retireLegacyChat(); } catch { console.error("[legacy-chat] scoped retirement deferred; backup/source guard did not commit"); }
 
   const result = {
     recurring: null as Awaited<ReturnType<typeof processRecurringTodos>> | null,
@@ -70,6 +73,9 @@ export async function runTodoMinuteMaintenance(
   } catch (error) {
     console.error("[todo-maintenance] phone recording cleanup failed", { source, error });
   }
+
+  try { await dispatchBotPushNotifications(environment.DB, environment); }
+  catch (error) { console.error("[bots-push] maintenance delivery deferred", { error }); }
 
   console.info("[todo-maintenance] minute completed", {
     source,

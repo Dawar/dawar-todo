@@ -6,7 +6,7 @@ const root = new URL("../", import.meta.url);
 
 test("ships the simplified todo and project surface", async () => {
   const [page, settingsPage, snoozePresets, layout, hosting, database, schema, todosRoute, todoRoute, bulkRoute, projectsRoute, actionIcons, siteHeader, pinMigration] = await Promise.all([
-    Promise.all(["app/page.tsx", "app/task-sync.ts", "app/task-model.ts", "app/sync-request.ts"].map((path) => readFile(new URL(path, root), "utf8"))).then((parts) => parts.join("\n")),
+    Promise.all(["app/page.tsx", "app/task-row.tsx", "app/task-list-controls.tsx", "app/project-browser.tsx", "app/task-dialogs.tsx", "app/task-detail-fields.tsx", "app/task-list-summary.tsx", "app/task-bulk-actions.tsx", "app/task-notice.tsx", "app/task-sync.ts", "app/task-model.ts", "app/sync-request.ts"].map((path) => readFile(new URL(path, root), "utf8"))).then((parts) => parts.join("\n")),
     readFile(new URL("app/settings/page.tsx", root), "utf8"),
     readFile(new URL("lib/snooze-presets.ts", root), "utf8"),
     readFile(new URL("app/layout.tsx", root), "utf8"),
@@ -93,7 +93,7 @@ test("ships the simplified todo and project surface", async () => {
   assert.doesNotMatch(page, /aria-label="Filter by project"/);
   assert.match(page, /New project/);
   assert.doesNotMatch(page, /setProject\(""\);\s+setView\("open"\)/);
-  assert.match(page, /await saveOfflineTodo\(\{[\s\S]*title,[\s\S]*status: "open",[\s\S]*project: captureProject \|\| null,[\s\S]*draftToken: captureDraftToken/);
+  assert.match(page, /await captureSession\.current!\.consume\(\{[\s\S]*title,[\s\S]*status: "open",[\s\S]*project: captureProject \|\| null,[\s\S]*draftToken: captureDraftToken/);
   assert.match(page, /clientId: record\.clientId/);
   assert.match(page, /promoteOfflineTodo\(record, result\.todo\)/);
   assert.match(page, /onAssignProject=\{openCaptureProjectAssignment\}/);
@@ -200,7 +200,7 @@ test("ships the simplified todo and project surface", async () => {
 test("removes starter preview dependencies", async () => {
   const [packageJson, page, layout] = await Promise.all([
     readFile(new URL("package.json", root), "utf8"),
-    Promise.all(["app/page.tsx", "app/task-sync.ts", "app/task-model.ts", "app/sync-request.ts"].map((path) => readFile(new URL(path, root), "utf8"))).then((parts) => parts.join("\n")),
+    Promise.all(["app/page.tsx", "app/task-row.tsx", "app/task-list-controls.tsx", "app/project-browser.tsx", "app/task-dialogs.tsx", "app/task-detail-fields.tsx", "app/task-list-summary.tsx", "app/task-bulk-actions.tsx", "app/task-notice.tsx", "app/task-sync.ts", "app/task-model.ts", "app/sync-request.ts"].map((path) => readFile(new URL(path, root), "utf8"))).then((parts) => parts.join("\n")),
     readFile(new URL("app/layout.tsx", root), "utf8"),
   ]);
   const combined = `${packageJson}\n${page}\n${layout}`;
@@ -234,7 +234,7 @@ test("supports a deliberate mobile pull gesture that fully reloads the app", asy
 
 test("animates task additions, removals, and moves inside the list stacking context", async () => {
   const [page, styles, packageJson] = await Promise.all([
-    Promise.all(["app/page.tsx", "app/task-sync.ts", "app/task-model.ts", "app/sync-request.ts"].map((path) => readFile(new URL(path, root), "utf8"))).then((parts) => parts.join("\n")),
+    Promise.all(["app/page.tsx", "app/task-row.tsx", "app/task-list-controls.tsx", "app/project-browser.tsx", "app/task-dialogs.tsx", "app/task-detail-fields.tsx", "app/task-list-summary.tsx", "app/task-bulk-actions.tsx", "app/task-notice.tsx", "app/task-sync.ts", "app/task-model.ts", "app/sync-request.ts"].map((path) => readFile(new URL(path, root), "utf8"))).then((parts) => parts.join("\n")),
     readFile(new URL("app/globals.css", root), "utf8"),
     readFile(new URL("package.json", root), "utf8"),
   ]);
@@ -247,7 +247,7 @@ test("animates task additions, removals, and moves inside the list stacking cont
 });
 
 test("shows fully optimistic Undo and snooze controls while preserving concurrent Done", async () => {
-  const page = await Promise.all(["app/page.tsx", "app/task-sync.ts", "app/task-model.ts", "app/sync-request.ts"].map((path) => readFile(new URL(path, root), "utf8"))).then((parts) => parts.join("\n"));
+  const page = await Promise.all(["app/page.tsx", "app/task-row.tsx", "app/task-list-controls.tsx", "app/project-browser.tsx", "app/task-dialogs.tsx", "app/task-detail-fields.tsx", "app/task-list-summary.tsx", "app/task-bulk-actions.tsx", "app/task-notice.tsx", "app/task-sync.ts", "app/task-model.ts", "app/sync-request.ts"].map((path) => readFile(new URL(path, root), "utf8"))).then((parts) => parts.join("\n"));
 
   assert.match(page, /taskPreview\?: string/);
   assert.match(page, /dismissAt\?: number/);
@@ -270,13 +270,13 @@ test("shows fully optimistic Undo and snooze controls while preserving concurren
   assert.doesNotMatch(page, /invisible inline-flex items-center/);
   assert.match(page, /const dismissAt = Date\.now\(\) \+ 1_500/);
   assert.match(page, /Math\.max\(0, notice\.dismissAt - Date\.now\(\)\)/);
-  assert.match(page, /notice\.taskPreview && <p className="mt-0\.5 truncate text-xs text-white\/55"/);
+  assert.match(page, /notice\.taskPreview && <p className="mt-1 truncate text-\[13px\] text-muted-foreground"/);
   assert.ok(page.indexOf("notice.taskPreview &&") < page.indexOf("notice.snoozeIds &&"));
 });
 
 test("keeps fixed action surfaces above the iPhone standalone safe area", async () => {
   const [page, layout, styles] = await Promise.all([
-    Promise.all(["app/page.tsx", "app/task-sync.ts", "app/task-model.ts", "app/sync-request.ts"].map((path) => readFile(new URL(path, root), "utf8"))).then((parts) => parts.join("\n")),
+    Promise.all(["app/page.tsx", "app/task-notice.tsx", "app/task-bulk-actions.tsx", "app/task-sync.ts", "app/task-model.ts", "app/sync-request.ts"].map((path) => readFile(new URL(path, root), "utf8"))).then((parts) => parts.join("\n")),
     readFile(new URL("app/layout.tsx", root), "utf8"),
     readFile(new URL("app/globals.css", root), "utf8"),
   ]);
@@ -284,24 +284,24 @@ test("keeps fixed action surfaces above the iPhone standalone safe area", async 
   assert.match(page, /data-bulk-actions/);
   assert.match(page, /bulk-actions-safe-bottom/);
   assert.match(page, /task-notice-safe-bottom/);
-  assert.match(page, /data-bulk-actions-visible=\{selectedIds\.length > 0\}/);
+  assert.match(page, /bulkActionsVisible=\{selectedIds\.length > 0\}/);
   assert.match(styles, /--mobile-action-bottom:\s*max\(3rem, calc\(env\(safe-area-inset-bottom, 0px\) \+ 1\.5rem\)\)/);
-  assert.match(styles, /--mobile-notice-above-actions:\s*max\(7\.75rem, calc\(env\(safe-area-inset-bottom, 0px\) \+ 6\.25rem\)\)/);
+  assert.match(styles, /--mobile-notice-above-actions:\s*calc\(var\(--mobile-action-bottom\) \+ 8\.5rem\)/);
   assert.match(styles, /@media \(display-mode: standalone\) and \(max-width: 639px\)/);
   assert.match(styles, /--mobile-action-bottom:\s*max\(4rem, calc\(env\(safe-area-inset-bottom, 0px\) \+ 2rem\)\)/);
 });
 
 test("uses an edge-to-edge task list surface on mobile while preserving desktop gutters", async () => {
-  const page = await Promise.all(["app/page.tsx", "app/task-sync.ts", "app/task-model.ts", "app/sync-request.ts"].map((path) => readFile(new URL(path, root), "utf8"))).then((parts) => parts.join("\n"));
+  const page = await Promise.all(["app/page.tsx", "app/task-notice.tsx", "app/task-bulk-actions.tsx", "app/task-sync.ts", "app/task-model.ts", "app/sync-request.ts"].map((path) => readFile(new URL(path, root), "utf8"))).then((parts) => parts.join("\n"));
 
   assert.match(page, /data-task-list-surface/);
   assert.match(page, /-mx-4 overflow-hidden border-y/);
-  assert.match(page, /sm:mx-0 sm:rounded-2xl sm:border/);
+  assert.match(page, /sm:mx-0 sm:rounded-lg sm:border/);
 });
 
 test("moves between inline title editors at text boundaries without row keyboard highlighting", async () => {
   const [page, header, icons, shortcutGuide] = await Promise.all([
-    Promise.all(["app/page.tsx", "app/task-sync.ts", "app/task-model.ts", "app/sync-request.ts"].map((path) => readFile(new URL(path, root), "utf8"))).then((parts) => parts.join("\n")),
+    Promise.all(["app/page.tsx", "app/task-row.tsx", "app/task-notice.tsx", "app/task-sync.ts", "app/task-model.ts", "app/sync-request.ts"].map((path) => readFile(new URL(path, root), "utf8"))).then((parts) => parts.join("\n")),
     readFile(new URL("app/site-header.tsx", root), "utf8"),
     readFile(new URL("app/action-icon.tsx", root), "utf8"),
     readFile(new URL("app/keyboard-shortcuts-dialog.tsx", root), "utf8"),
@@ -326,7 +326,9 @@ test("moves between inline title editors at text boundaries without row keyboard
   assert.doesNotMatch(shortcutGuide, /Navigate tasks/);
   assert.doesNotMatch(shortcutGuide, /Act on focused task/);
   assert.match(shortcutGuide, /function KeyboardShortcutsDialog/);
-  assert.match(shortcutGuide, /aria-labelledby="keyboard-shortcuts-title"/);
+  assert.match(shortcutGuide, /<ControlledDialog[^]*title=\{[^]*Keyboard shortcuts/);
+  const dialog = await readFile(new URL("components/ui/controlled-dialog.tsx", root), "utf8");
+  assert.match(dialog, /<DialogTitle>\{title\}<\/DialogTitle>/);
   assert.match(header, /onKeyboardHelp/);
   assert.match(header, /Keyboard shortcuts \(\?\)/);
   assert.match(icons, /keyboard:\s*Keyboard/);

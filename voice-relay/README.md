@@ -37,3 +37,57 @@ https://dawar-todo-voice-relay.dawar.workers.dev/openai/webhook
 Then set `TWILIO_PHONE_TRANSPORT=sip` in Sites. Keep
 `TWILIO_MEDIA_STREAM_URL=wss://dawar-todo-voice-relay.dawar.workers.dev/stream`
 configured so setting `TWILIO_PHONE_TRANSPORT=media` immediately rolls back.
+# Original voice writer admission during migration
+
+The optional private `VOICE_WRITER_CONTROL` contains `version:1`, the exact
+reviewed 40-character `sourceId`, `installationId`, 64-character
+`producerSHA256`, a private base64url `credential`, `cutoverId` and `releaseId`.
+The three operation IDs are distinct and fixed for the installation. With no
+configuration, the existing Cloudflare and portable voice behavior is retained.
+The new `VoiceMigrationCoordinator` binding is a durable serialized ledger;
+declaring it does not enable control or install a journal.
+
+`POST /api/migration/voice/control` accepts only that separate private bearer,
+JSON, no browser Origin, and one fixed action: `install`, `read`, `receipt`,
+`drain` with `expiresAt`, or `release` with the exact generation. Requests are
+bounded to 4 KiB/64 chunks and 4.5 seconds. The control route cannot admit work,
+select another operation ID, clear uncertain rows or run provider calls.
+
+When enabled, the actual Worker admits HTTP, scheduled and streaming work
+persistently before effects. SIP starts receive a child admission from their
+already-admitted webhook, so a drain does not reject the continuation of that
+same accepted call. New independent starts are held. The same scope tracks
+outbound HTTP response consumption, server/provider sockets, nested background
+factories and both tool queues. Calls settle only after their end path, closed
+sockets and all tracked work. Network errors, cancelled bodies and lost
+admission/settlement acknowledgments retain blocking originals; no automatic
+retry or alternative call is created. A new SIP object instance cannot turn a
+retained original call/admission into a new start.
+
+A drain lasts at most 15 minutes and reports `trackedIdle` only before its
+deadline with zero active and unknown rows. Expiry invalidates its proof and
+does not silently reopen admission. Only the original exact release restores
+new starts; receipts and unknown rows remain. At most 1,024 unfinished and
+10,000 total admissions are retained in this temporary ledger.
+
+**This is not complete legacy-call coverage.** Its status always reports
+`legacyCallCoverageEstablished:false` and
+`fullProductionWriterFreezeEstablished:false`. Pre-installation streams,
+provider callbacks, old SIP instances and external effects must be reconciled
+from their actual original identities before voice qualifies the combined
+production freeze. Do not deploy/enable this path over active old calls or
+infer their absence from the new empty ledger. Preparing or validating this
+source performs no production installation, provider call or cutover.
+# Original voice controller preparation
+
+Deploy the reviewed coordinator with `VOICE_WRITER_CONTROL` to expose its
+private install/read/receipt operations. Leave `VOICE_WRITER_ADMISSION` absent
+while installing the original ledger; ordinary HTTP, scheduled, stream and SIP
+work retains its existing behavior during this preparation. Enabling admission
+is a separate deployment-owned step: its JSON must contain exactly the original
+`sourceId`, `installationId`, and `producerSHA256` from the installed controller.
+An empty, malformed, foreign or changed binding refuses before provider effects.
+
+Controller installation or an empty new ledger does not establish coverage of
+older calls, sockets or provider work. Those originals must still be reconciled
+before the production cutover; no completed work or receipt is rewritten.

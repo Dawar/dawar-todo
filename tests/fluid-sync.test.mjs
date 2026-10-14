@@ -105,6 +105,7 @@ test('headless sync creates tasks before files and saves edits while an upload i
   let server = task(); const calls = []; let releaseUpload; let uploads = 0;
   const request = async (path, options) => {
     calls.push(path);
+    if (path === '/api/attachments/recovery') return { targetExists: true, files: [{ id: JSON.parse(options.body).ids[0], state: 'missing', todoId: null }] };
     if (path === '/api/todos') return { todo: server };
     if (path === '/api/todos/7') { server = { ...server, ...JSON.parse(options.body) }; return { todo: server, appliedFields: ['title'] }; }
     if (path === '/api/bootstrap') return { todos: [server], projects: [], revision: 1, captureDraft: null, settings: { snoozeTimeZone: 'UTC', snoozeQuickPresets: [] } };

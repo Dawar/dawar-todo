@@ -1,5 +1,5 @@
 import { applyUrgentAlertAction, readUrgentAlertAttemptContext } from "../../../../../../../../db/urgent-alerts";
-import { twilioPhoneConfig, twilioXmlResponse, validateTwilioRequest, xmlEscape } from "../../../../../../../../lib/twilio-phone";
+import { twilioRequestUrl, twilioPhoneConfig, twilioXmlResponse, validateTwilioRequest, xmlEscape } from "../../../../../../../../lib/twilio-phone";
 
 export async function POST(request: Request) {
   try {
@@ -14,7 +14,7 @@ export async function POST(request: Request) {
     }
     const digit = params.get("Digits")?.trim() ?? "";
     if (digit === "9" || !digit) {
-      const repeatUrl = new URL("/api/talk/phone/urgent/provider/voice", request.url);
+      const repeatUrl = new URL("/api/talk/phone/urgent/provider/voice", twilioRequestUrl(request));
       repeatUrl.searchParams.set("attempt", attemptId);
       return twilioXmlResponse(`<Redirect method="POST">${xmlEscape(repeatUrl.toString())}</Redirect>`);
     }

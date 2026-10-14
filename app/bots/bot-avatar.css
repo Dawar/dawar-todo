@@ -1,0 +1,20 @@
+.bot-avatar-engine { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 48px; height: 48px; vertical-align: middle; isolation: isolate; }
+.bot-avatar-engine.small { width: 38px; height: 38px; }
+.bot-avatar-engine svg { width: 100%; height: 100%; overflow: visible; }
+.bots-personality { padding: 16px 0; }
+.bots-personality h3 { font-size: 16px; font-weight: 600; margin: 0 0 12px; }
+.bots-personality-preview { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+.bots-personality-preview .bot-avatar-engine { height: 64px; width: 64px; }
+.bots-personality-preview p { min-width: 0; overflow-wrap: anywhere; font-size: 14px; color: var(--muted-foreground); line-height: 1.5; }
+.bots-avatar-shapes, .bots-avatar-colors { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+.bots-avatar-shapes button { text-transform: capitalize; }
+.bots-avatar-shapes button[aria-pressed=true] { border-color: var(--primary); color: var(--accent-foreground); background: var(--accent); }
+.bots-avatar-colors button { width: 44px; height: 44px; padding: 8px; border-radius: 50%; border: 3px solid var(--card); box-shadow: 0 0 0 1px var(--border); }
+.bots-avatar-colors button[aria-pressed=true] { box-shadow: 0 0 0 2px var(--primary); }
+.bots-avatar-colors button:focus-visible { outline: 2px solid var(--ring); outline-offset: 4px; }
+.bots-burst-preference { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding: 16px 0; }
+.bots-burst-preference span { display: grid; gap: 4px; font-size: 14px; }
+.bots-burst-preference small { color: var(--muted-foreground); font-size: 13px; line-height: 1.5; }
+.bots-burst-preference select { max-width: 144px; flex: none; }
+.bots-avatar-custom { display: flex; align-items: center; gap: 12px; font-size: 13px; color: var(--muted-foreground); }
+.bots-conversation-heading .bot-avatar-engine.small{width:44px;height:44px}

@@ -18,7 +18,7 @@ test("limits the active pin list to five tasks across app and phone actions", as
   assert.match(page, /pinnedTaskCount >= MAX_PINNED_TASKS/);
   assert.match(page, /You can pin up to \$\{MAX_PINNED_TASKS\} tasks/);
   assert.match(database, /SELECT COUNT\(\*\) AS count FROM todos WHERE pinned = 1/);
-  assert.match(database, /OR \(SELECT COUNT\(\*\) FROM todos WHERE pinned = 1\) < \?/);
+  assert.match(database, /OR \(SELECT COUNT\(\*\) FROM todos WHERE pinned = 1 AND NOT EXISTS \(SELECT 1 FROM todo_queue_state WHERE todo_id=todos\.id AND delegation IS NOT NULL AND generation=delegation_generation\)\) < \?/);
   assert.match(database, /Only active open tasks can be pinned/);
   assert.match(database, /status = 'open' AND snoozed_until IS NULL/);
   assert.match(taskRoute, /snooz\|pin\|sync/);

@@ -1,0 +1,3 @@
+import type {ExternalWriterBinding,ExternalWriterProof} from './application-freeze-controller.mjs';
+export function createExternalWriterObserver(input:{endpoint:string;publicKey:string;credential:string;controllerOperationId:string;binding:ExternalWriterBinding;fetcher?:typeof fetch}):(expected:ExternalWriterBinding,signal:AbortSignal)=>Promise<ExternalWriterProof>;
+export function createExternalWriterObservationEndpoint(input:{binding:ExternalWriterBinding;controllerOperationId:string;credential:string;privateKey:string;observe:(signal:AbortSignal)=>Promise<ExternalWriterProof>}):{fetch(request:Request):Promise<Response>};

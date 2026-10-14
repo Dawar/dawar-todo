@@ -1,3 +1,4 @@
+import { operatorTranscript } from '../../../../../../lib/operator-server';
 import { appendTalkMessage } from "../../../../../../db/talk";
 import { noStoreHeaders, talkErrorResponse, talkUserKey } from "../../../../../../lib/talk-http";
 
@@ -33,6 +34,7 @@ export async function POST(request: Request, context: RouteContext) {
         ? payload.metadata as Record<string, unknown>
         : {},
     });
+    if (role === 'user' || role === 'assistant') await operatorTranscript(userKey, sessionId, { realtimeItemId: String(payload.realtimeItemId ?? ''), role, content: String(payload.content ?? ''), segmentId: (payload.metadata as Record<string, unknown> | undefined)?.operatorSegmentId });
     console.info("[todo-talk-api] transcript event accepted", {
       sessionId,
       role,

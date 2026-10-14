@@ -1,4 +1,5 @@
-import { waitUntil } from "cloudflare:workers";
+import { waitUntil } from "../../../lib/source-writer-work";
+
 import { readTodoSyncDelta } from "../../../db/todos";
 import { runTodoReadMaintenance } from "../../../db/maintenance";
 
@@ -10,7 +11,7 @@ export async function GET(request: Request) {
     return Response.json({ error: "Use a non-negative sync revision." }, { status: 400 });
   }
   try {
-    waitUntil(runTodoReadMaintenance("sync").catch((error) => {
+    waitUntil(() => runTodoReadMaintenance("sync").catch((error) => {
       console.error("[todo-sync] background maintenance deferred", { error });
     }));
     const delta = await readTodoSyncDelta(after);

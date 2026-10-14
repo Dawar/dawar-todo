@@ -47,6 +47,7 @@ export function realtimeSessionConfig(input: {
   instructions: string;
   audioFormat?: "pcmu";
   voice?: RealtimeVoice;
+  tools?: ReadonlyArray<{ type: string; name: string; description: string; parameters: object }>;
 }) {
   const { model, voice } = talkRuntimeConfig(input.voice);
   return {
@@ -75,7 +76,7 @@ export function realtimeSessionConfig(input: {
         voice,
       },
     },
-    tools: talkToolDefinitions,
+    tools: input.tools ?? talkToolDefinitions,
     tool_choice: "auto",
     truncation: "auto",
   };
@@ -406,6 +407,7 @@ export async function mintRealtimeClientSecret(input: {
   instructions: string;
   audioFormat?: "pcmu";
   voice?: RealtimeVoice;
+  tools?: ReadonlyArray<{ type: string; name: string; description: string; parameters: object }>;
 }) {
   const current = runtime();
   const apiKey = current.OPENAI_API_KEY?.trim();
@@ -415,6 +417,7 @@ export async function mintRealtimeClientSecret(input: {
     instructions: input.instructions,
     audioFormat: input.audioFormat,
     voice,
+    tools: input.tools,
   });
   const startedAt = Date.now();
   const response = await fetch("https://api.openai.com/v1/realtime/client_secrets", {

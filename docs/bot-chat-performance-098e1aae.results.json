@@ -1,0 +1,1410 @@
+{
+  "measurementDate": "2026-09-27",
+  "reviewedBase": "2e7ec1e8a67a6cb1bc8579b1ecd7123585956722",
+  "historicalBaseline": "24bf96976393d37b3ffea6c5be94fb43ce797af3",
+  "source": "Production source in this report commit; measurements precede report-only assembly.",
+  "limits": "Same-host desktop synthetic data; no accounts, production service, iPhone or power measurements. See accompanying report.",
+  "browser": {
+    "browser": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/154.0.0.0 Safari/537.36",
+    "navigation": [
+      {
+        "name": "small-20-turns",
+        "first": {
+          "firstLatestPaintMs": 416.19999998807907,
+          "settledMs": 449.8999999910593,
+          "messageRendersToPaint": 20,
+          "loadedEntries": 20,
+          "mountedEntries": 20,
+          "closedToolPreNodes": 0,
+          "closedScheduledMessages": 0,
+          "attachmentDownloads": 0,
+          "historyRequests": 1,
+          "historyBytes": 33003,
+          "scroll": {
+            "top": 4751,
+            "height": 5373,
+            "viewport": 622,
+            "bottomGap": 0
+          }
+        },
+        "other": {
+          "firstLatestPaintMs": 315.70000000298023,
+          "settledMs": 349.40000000596046,
+          "messageRendersToPaint": 20,
+          "loadedEntries": 20,
+          "mountedEntries": 20,
+          "closedToolPreNodes": 0,
+          "closedScheduledMessages": 0,
+          "attachmentDownloads": 0,
+          "historyRequests": 1,
+          "historyBytes": 33003,
+          "scroll": {
+            "top": 4751,
+            "height": 5373,
+            "viewport": 622,
+            "bottomGap": 0
+          }
+        },
+        "repeat": {
+          "firstLatestPaintMs": 132.90000000596046,
+          "settledMs": 299.59999999403954,
+          "messageRendersToPaint": 20,
+          "loadedEntries": 20,
+          "mountedEntries": 20,
+          "closedToolPreNodes": 0,
+          "closedScheduledMessages": 0,
+          "attachmentDownloads": 0,
+          "historyRequests": 1,
+          "historyBytes": 84,
+          "scroll": {
+            "top": 4751,
+            "height": 5373,
+            "viewport": 622,
+            "bottomGap": 0
+          }
+        },
+        "streaming": {
+          "events": 10,
+          "synchronousDispatch": {
+            "medianMs": 0.20000000298023224,
+            "maxMs": 1.0999999940395355
+          },
+          "eventToTwoFrames": {
+            "medianMs": 29.200000002980232,
+            "maxMs": 33.29999999701977
+          },
+          "messageRenders": 10,
+          "unchangedMessageRenders": 0,
+          "storage": {
+            "writes": 6,
+            "itemWrites": 3,
+            "localStorageWrites": 0,
+            "byStore": {
+              "items": 3,
+              "threads": 3
+            },
+            "serializedCharsAfterMeasurement": 8540
+          },
+          "before": {
+            "top": 1791,
+            "height": 5373,
+            "viewport": 622,
+            "bottomGap": 2960
+          },
+          "after": {
+            "top": 1791,
+            "height": 5399,
+            "viewport": 622,
+            "bottomGap": 2986
+          }
+        },
+        "pagination": {
+          "anchorStillMounted": true,
+          "anchorShiftPx": -0.296875,
+          "mountedEntries": 40,
+          "loadedEntries": 40
+        },
+        "restoration": {
+          "anchorFound": true,
+          "offsetErrorPx": 0
+        },
+        "offline": {
+          "firstLatestPaintMs": 168.5,
+          "settledMs": 202.8999999910593,
+          "messageRendersToPaint": 40,
+          "loadedEntries": 40,
+          "mountedEntries": 40,
+          "closedToolPreNodes": 0,
+          "closedScheduledMessages": 0,
+          "attachmentDownloads": 0,
+          "historyRequests": 0,
+          "historyBytes": 0,
+          "scroll": {
+            "top": 9981,
+            "height": 10603,
+            "viewport": 622,
+            "bottomGap": 0
+          }
+        }
+      },
+      {
+        "name": "dense-20-turns-weak-link",
+        "first": {
+          "firstLatestPaintMs": 1283.300000011921,
+          "settledMs": 1316.6000000089407,
+          "messageRendersToPaint": 40,
+          "loadedEntries": 40,
+          "mountedEntries": 40,
+          "closedToolPreNodes": 0,
+          "closedScheduledMessages": 0,
+          "attachmentDownloads": 0,
+          "historyRequests": 1,
+          "historyBytes": 65948,
+          "scroll": {
+            "top": 9941,
+            "height": 10563,
+            "viewport": 622,
+            "bottomGap": 0
+          }
+        },
+        "other": {
+          "firstLatestPaintMs": 1299.2999999970198,
+          "settledMs": 1333.0999999940395,
+          "messageRendersToPaint": 40,
+          "loadedEntries": 40,
+          "mountedEntries": 40,
+          "closedToolPreNodes": 0,
+          "closedScheduledMessages": 0,
+          "attachmentDownloads": 0,
+          "historyRequests": 1,
+          "historyBytes": 65948,
+          "scroll": {
+            "top": 9941,
+            "height": 10563,
+            "viewport": 622,
+            "bottomGap": 0
+          }
+        },
+        "repeat": {
+          "firstLatestPaintMs": 183,
+          "settledMs": 749.5,
+          "messageRendersToPaint": 40,
+          "loadedEntries": 40,
+          "mountedEntries": 40,
+          "closedToolPreNodes": 0,
+          "closedScheduledMessages": 0,
+          "attachmentDownloads": 0,
+          "historyRequests": 1,
+          "historyBytes": 84,
+          "scroll": {
+            "top": 9941,
+            "height": 10563,
+            "viewport": 622,
+            "bottomGap": 0
+          }
+        },
+        "streaming": {
+          "events": 10,
+          "synchronousDispatch": {
+            "medianMs": 0.10000000894069672,
+            "maxMs": 0.30000001192092896
+          },
+          "eventToTwoFrames": {
+            "medianMs": 27.700000002980232,
+            "maxMs": 33.400000005960464
+          },
+          "messageRenders": 10,
+          "unchangedMessageRenders": 0,
+          "storage": {
+            "writes": 4,
+            "itemWrites": 2,
+            "localStorageWrites": 0,
+            "byStore": {
+              "items": 2,
+              "threads": 2
+            },
+            "serializedCharsAfterMeasurement": 7120
+          },
+          "before": {
+            "top": 3521,
+            "height": 10563,
+            "viewport": 622,
+            "bottomGap": 6420
+          },
+          "after": {
+            "top": 3521,
+            "height": 10589,
+            "viewport": 622,
+            "bottomGap": 6446
+          }
+        },
+        "pagination": {
+          "anchorStillMounted": true,
+          "anchorShiftPx": 0.3125,
+          "mountedEntries": 40,
+          "loadedEntries": 80
+        },
+        "restoration": {
+          "anchorFound": true,
+          "offsetErrorPx": 0.203125
+        },
+        "offline": {
+          "firstLatestPaintMs": 150.69999998807907,
+          "settledMs": 182.5,
+          "messageRendersToPaint": 40,
+          "loadedEntries": 80,
+          "mountedEntries": 40,
+          "closedToolPreNodes": 0,
+          "closedScheduledMessages": 0,
+          "attachmentDownloads": 0,
+          "historyRequests": 0,
+          "historyBytes": 0,
+          "scroll": {
+            "top": 9996,
+            "height": 10618,
+            "viewport": 622,
+            "bottomGap": 0
+          }
+        }
+      },
+      {
+        "name": "accumulated-400-turn-cache",
+        "first": {
+          "firstLatestPaintMs": 151.19999998807907,
+          "settledMs": 1000,
+          "messageRendersToPaint": 40,
+          "loadedEntries": 400,
+          "mountedEntries": 40,
+          "closedToolPreNodes": 0,
+          "closedScheduledMessages": 0,
+          "attachmentDownloads": 0,
+          "historyRequests": 1,
+          "historyBytes": 33003,
+          "scroll": {
+            "top": 9941,
+            "height": 10563,
+            "viewport": 622,
+            "bottomGap": 0
+          }
+        },
+        "other": {
+          "firstLatestPaintMs": 987.1000000089407,
+          "settledMs": 1016.4000000059605,
+          "messageRendersToPaint": 20,
+          "loadedEntries": 20,
+          "mountedEntries": 20,
+          "closedToolPreNodes": 0,
+          "closedScheduledMessages": 0,
+          "attachmentDownloads": 0,
+          "historyRequests": 1,
+          "historyBytes": 33003,
+          "scroll": {
+            "top": 4751,
+            "height": 5373,
+            "viewport": 622,
+            "bottomGap": 0
+          }
+        },
+        "repeat": {
+          "firstLatestPaintMs": 266.29999999701977,
+          "settledMs": 832.5999999940395,
+          "messageRendersToPaint": 40,
+          "loadedEntries": 400,
+          "mountedEntries": 40,
+          "closedToolPreNodes": 0,
+          "closedScheduledMessages": 0,
+          "attachmentDownloads": 0,
+          "historyRequests": 1,
+          "historyBytes": 84,
+          "scroll": {
+            "top": 9941,
+            "height": 10563,
+            "viewport": 622,
+            "bottomGap": 0
+          }
+        },
+        "streaming": {
+          "events": 10,
+          "synchronousDispatch": {
+            "medianMs": 0.09999999403953552,
+            "maxMs": 0.20000000298023224
+          },
+          "eventToTwoFrames": {
+            "medianMs": 13,
+            "maxMs": 33.5
+          },
+          "messageRenders": 0,
+          "unchangedMessageRenders": 0,
+          "storage": {
+            "writes": 2,
+            "itemWrites": 0,
+            "localStorageWrites": 0,
+            "byStore": {
+              "threads": 2
+            },
+            "serializedCharsAfterMeasurement": 16175
+          },
+          "before": {
+            "top": 3521,
+            "height": 10563,
+            "viewport": 622,
+            "bottomGap": 6420
+          },
+          "after": {
+            "top": 3521,
+            "height": 10563,
+            "viewport": 622,
+            "bottomGap": 6420
+          }
+        },
+        "pagination": {
+          "anchorStillMounted": true,
+          "anchorShiftPx": 0.3125,
+          "mountedEntries": 40,
+          "loadedEntries": 400
+        },
+        "restoration": {
+          "anchorFound": true,
+          "offsetErrorPx": 0.203125
+        },
+        "offline": {
+          "firstLatestPaintMs": 167,
+          "settledMs": 200.29999999701977,
+          "messageRendersToPaint": 40,
+          "loadedEntries": 400,
+          "mountedEntries": 40,
+          "closedToolPreNodes": 0,
+          "closedScheduledMessages": 0,
+          "attachmentDownloads": 0,
+          "historyRequests": 0,
+          "historyBytes": 0,
+          "scroll": {
+            "top": 9970,
+            "height": 10592,
+            "viewport": 622,
+            "bottomGap": 0
+          }
+        }
+      },
+      {
+        "name": "one-turn-80-tools",
+        "first": {
+          "firstLatestPaintMs": 249.70000000298023,
+          "settledMs": 283.20000000298023,
+          "messageRendersToPaint": 1,
+          "loadedEntries": 40,
+          "mountedEntries": 40,
+          "closedToolPreNodes": 0,
+          "closedScheduledMessages": 0,
+          "attachmentDownloads": 0,
+          "historyRequests": 1,
+          "historyBytes": 9760,
+          "scroll": {
+            "top": 0,
+            "height": 622,
+            "viewport": 622,
+            "bottomGap": 0
+          }
+        },
+        "other": {
+          "firstLatestPaintMs": 249.90000000596046,
+          "settledMs": 283,
+          "messageRendersToPaint": 1,
+          "loadedEntries": 40,
+          "mountedEntries": 40,
+          "closedToolPreNodes": 0,
+          "closedScheduledMessages": 0,
+          "attachmentDownloads": 0,
+          "historyRequests": 1,
+          "historyBytes": 9760,
+          "scroll": {
+            "top": 0,
+            "height": 622,
+            "viewport": 622,
+            "bottomGap": 0
+          }
+        },
+        "repeat": {
+          "firstLatestPaintMs": 33.3999999910593,
+          "settledMs": 216.79999999701977,
+          "messageRendersToPaint": 1,
+          "loadedEntries": 40,
+          "mountedEntries": 40,
+          "closedToolPreNodes": 0,
+          "closedScheduledMessages": 0,
+          "attachmentDownloads": 0,
+          "historyRequests": 1,
+          "historyBytes": 84,
+          "scroll": {
+            "top": 0,
+            "height": 622,
+            "viewport": 622,
+            "bottomGap": 0
+          }
+        },
+        "streaming": {
+          "events": 10,
+          "synchronousDispatch": {
+            "medianMs": 0.09999999403953552,
+            "maxMs": 0.19999998807907104
+          },
+          "eventToTwoFrames": {
+            "medianMs": 29.899999991059303,
+            "maxMs": 32.8999999910593
+          },
+          "messageRenders": 10,
+          "unchangedMessageRenders": 0,
+          "storage": {
+            "writes": 4,
+            "itemWrites": 2,
+            "localStorageWrites": 0,
+            "byStore": {
+              "items": 2,
+              "threads": 2
+            },
+            "serializedCharsAfterMeasurement": 6450
+          },
+          "before": {
+            "top": 0,
+            "height": 622,
+            "viewport": 622,
+            "bottomGap": 0
+          },
+          "after": {
+            "top": 0,
+            "height": 622,
+            "viewport": 622,
+            "bottomGap": 0
+          }
+        },
+        "pagination": {
+          "anchorStillMounted": true,
+          "anchorShiftPx": 0,
+          "mountedEntries": 40,
+          "loadedEntries": 80
+        },
+        "restoration": {
+          "anchorFound": true,
+          "offsetErrorPx": 0
+        },
+        "offline": {
+          "firstLatestPaintMs": 33.5,
+          "settledMs": 66.70000000298023,
+          "messageRendersToPaint": 1,
+          "loadedEntries": 80,
+          "mountedEntries": 40,
+          "closedToolPreNodes": 0,
+          "closedScheduledMessages": 0,
+          "attachmentDownloads": 0,
+          "historyRequests": 0,
+          "historyBytes": 0,
+          "scroll": {
+            "top": 0,
+            "height": 622,
+            "viewport": 622,
+            "bottomGap": 0
+          }
+        }
+      }
+    ],
+    "botList": [
+      {
+        "bots": 20,
+        "renderedRows": 20,
+        "mountToPaintMs": 59.29999999701977,
+        "unrelatedRedrawMs": 1
+      },
+      {
+        "bots": 200,
+        "renderedRows": 20,
+        "mountToPaintMs": 28.5,
+        "unrelatedRedrawMs": 0.7000000029802322
+      },
+      {
+        "bots": 1000,
+        "renderedRows": 20,
+        "mountToPaintMs": 29,
+        "unrelatedRedrawMs": 0.7999999970197678
+      }
+    ],
+    "race": {
+      "requests": 2,
+      "simultaneousARequests": 1,
+      "staleOverwrite": false
+    },
+    "hugeAnswer": {
+      "sourceChars": 340012,
+      "completeTailReachable": true,
+      "detailRequests": 8,
+      "mountedTextChars": 36990
+    },
+    "delayedImage": {
+      "initialBottomGap": 0,
+      "finalBottomGap": 0
+    },
+    "offlineFreshBrowserProcess": {
+      "first": {
+        "firstLatestPaintMs": 88.3999999910593,
+        "settledMs": 121.8999999910593,
+        "messageRendersToPaint": 1,
+        "loadedEntries": 40,
+        "mountedEntries": 40,
+        "closedToolPreNodes": 0,
+        "closedScheduledMessages": 0,
+        "attachmentDownloads": 0,
+        "historyRequests": 0,
+        "historyBytes": 0,
+        "scroll": {
+          "top": 0,
+          "height": 622,
+          "viewport": 622,
+          "bottomGap": 0
+        }
+      },
+      "openedDetailOfflineChars": 34270,
+      "afterNineHistories": true,
+      "coldAnchorRetained": true,
+      "requests": 0,
+      "downloads": 0
+    },
+    "mobileKeyboard": {
+      "inputBottom": 390,
+      "inputHeight": 88,
+      "composerBottom": 396,
+      "statusWidth": 390,
+      "viewportWidth": 390
+    },
+    "keyboardDismissed": {
+      "screenHeight": 844,
+      "viewportHeight": 844
+    },
+    "browserErrors": []
+  },
+  "liveEvents": {
+    "scenario": "large closed-tool item plus 10 output deltas",
+    "nativePayloadBytes": 12451166,
+    "compactWireBytes": 1981,
+    "persistedReplayBytes": 2473,
+    "closedDetailRequests": 0,
+    "initialDetailBytes": 1504557,
+    "openFinalNativeScans": 1,
+    "openFinalDetailBytes": 1504585,
+    "openFinalDetailChunks": 30
+  },
+  "releaseBrowser": {
+    "browser": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/154.0.0.0 Safari/537.36",
+    "reviewBaseline": "9a60cea",
+    "testedHead": "3d9a2f5d5b0aa6a42322391a453949f4a3161e00",
+    "backendUniqueOperations": 2,
+    "sendAttempts": 2,
+    "broadcastMessages": 37,
+    "normalComposerLayouts": [
+      {
+        "width": 390,
+        "height": 844,
+        "visualHeight": 844,
+        "rootWidth": 390,
+        "pageScrollWidth": 390,
+        "screen": {
+          "x": 0,
+          "y": 0,
+          "width": 390,
+          "height": 844,
+          "bottom": 844,
+          "right": 390,
+          "clientHeight": 844,
+          "scrollHeight": 844,
+          "clientWidth": 390,
+          "scrollWidth": 390,
+          "overflowY": "hidden"
+        },
+        "input": {
+          "x": 66,
+          "y": 630,
+          "width": 258,
+          "height": 180,
+          "bottom": 810,
+          "right": 324,
+          "clientHeight": 180,
+          "scrollHeight": 758,
+          "clientWidth": 258,
+          "scrollWidth": 258,
+          "overflowY": "auto"
+        },
+        "composer": {
+          "x": 12,
+          "y": 620,
+          "width": 366,
+          "height": 200,
+          "bottom": 820,
+          "right": 378,
+          "clientHeight": 198,
+          "scrollHeight": 198,
+          "clientWidth": 364,
+          "scrollWidth": 364,
+          "overflowY": "visible"
+        },
+        "status": {
+          "x": 0,
+          "y": 374,
+          "width": 390,
+          "height": 160,
+          "bottom": 534,
+          "right": 390,
+          "clientHeight": 160,
+          "scrollHeight": 3081,
+          "clientWidth": 390,
+          "scrollWidth": 390,
+          "overflowY": "auto"
+        },
+        "files": {
+          "x": 12,
+          "y": 534,
+          "width": 366,
+          "height": 78,
+          "bottom": 612,
+          "right": 378,
+          "clientHeight": 78,
+          "scrollHeight": 78,
+          "clientWidth": 366,
+          "scrollWidth": 2305,
+          "overflowY": "auto"
+        },
+        "panel": null,
+        "overflowControls": [
+          {
+            "tag": "BUTTON",
+            "type": "button",
+            "className": "",
+            "x": 1847.21875,
+            "y": 559,
+            "width": 28,
+            "height": 28,
+            "bottom": 587,
+            "right": 1875.21875,
+            "clientHeight": 28,
+            "scrollHeight": 28,
+            "clientWidth": 28,
+            "scrollWidth": 28,
+            "overflowY": "visible"
+          },
+          {
+            "tag": "BUTTON",
+            "type": "button",
+            "className": "",
+            "x": 1924.21875,
+            "y": 544,
+            "width": 30,
+            "height": 30,
+            "bottom": 574,
+            "right": 1954.21875,
+            "clientHeight": 30,
+            "scrollHeight": 30,
+            "clientWidth": 30,
+            "scrollWidth": 30,
+            "overflowY": "visible"
+          },
+          {
+            "tag": "BUTTON",
+            "type": "button",
+            "className": "",
+            "x": 1996.21875,
+            "y": 544,
+            "width": 30,
+            "height": 30,
+            "bottom": 574,
+            "right": 2026.21875,
+            "clientHeight": 30,
+            "scrollHeight": 30,
+            "clientWidth": 30,
+            "scrollWidth": 30,
+            "overflowY": "visible"
+          },
+          {
+            "tag": "BUTTON",
+            "type": "button",
+            "className": "",
+            "x": 2068.21875,
+            "y": 544,
+            "width": 30,
+            "height": 30,
+            "bottom": 574,
+            "right": 2098.21875,
+            "clientHeight": 30,
+            "scrollHeight": 30,
+            "clientWidth": 30,
+            "scrollWidth": 30,
+            "overflowY": "visible"
+          },
+          {
+            "tag": "BUTTON",
+            "type": "button",
+            "className": "",
+            "x": 2140.21875,
+            "y": 544,
+            "width": 30,
+            "height": 30,
+            "bottom": 574,
+            "right": 2170.21875,
+            "clientHeight": 30,
+            "scrollHeight": 30,
+            "clientWidth": 30,
+            "scrollWidth": 30,
+            "overflowY": "visible"
+          },
+          {
+            "tag": "BUTTON",
+            "type": "button",
+            "className": "",
+            "x": 2212.21875,
+            "y": 544,
+            "width": 30,
+            "height": 30,
+            "bottom": 574,
+            "right": 2242.21875,
+            "clientHeight": 30,
+            "scrollHeight": 30,
+            "clientWidth": 30,
+            "scrollWidth": 30,
+            "overflowY": "visible"
+          },
+          {
+            "tag": "BUTTON",
+            "type": "button",
+            "className": "",
+            "x": 2284.21875,
+            "y": 544,
+            "width": 30,
+            "height": 30,
+            "bottom": 574,
+            "right": 2314.21875,
+            "clientHeight": 30,
+            "scrollHeight": 30,
+            "clientWidth": 30,
+            "scrollWidth": 30,
+            "overflowY": "visible"
+          }
+        ],
+        "keyboardOpen": false
+      },
+      {
+        "width": 320,
+        "height": 640,
+        "visualHeight": 640,
+        "rootWidth": 320,
+        "pageScrollWidth": 320,
+        "screen": {
+          "x": 0,
+          "y": 0,
+          "width": 320,
+          "height": 640,
+          "bottom": 640,
+          "right": 320,
+          "clientHeight": 640,
+          "scrollHeight": 640,
+          "clientWidth": 320,
+          "scrollWidth": 320,
+          "overflowY": "hidden"
+        },
+        "input": {
+          "x": 66,
+          "y": 426,
+          "width": 188,
+          "height": 180,
+          "bottom": 606,
+          "right": 254,
+          "clientHeight": 180,
+          "scrollHeight": 758,
+          "clientWidth": 188,
+          "scrollWidth": 188,
+          "overflowY": "auto"
+        },
+        "composer": {
+          "x": 12,
+          "y": 416,
+          "width": 296,
+          "height": 200,
+          "bottom": 616,
+          "right": 308,
+          "clientHeight": 198,
+          "scrollHeight": 198,
+          "clientWidth": 294,
+          "scrollWidth": 294,
+          "overflowY": "visible"
+        },
+        "status": {
+          "x": 0,
+          "y": 261.5,
+          "width": 320,
+          "height": 128,
+          "bottom": 389.5,
+          "right": 320,
+          "clientHeight": 128,
+          "scrollHeight": 3804,
+          "clientWidth": 320,
+          "scrollWidth": 320,
+          "overflowY": "auto"
+        },
+        "files": {
+          "x": 12,
+          "y": 389.5,
+          "width": 296,
+          "height": 78,
+          "bottom": 467.5,
+          "right": 308,
+          "clientHeight": 78,
+          "scrollHeight": 78,
+          "clientWidth": 296,
+          "scrollWidth": 2305,
+          "overflowY": "auto"
+        },
+        "panel": null,
+        "overflowControls": [
+          {
+            "tag": "BUTTON",
+            "type": "button",
+            "className": "",
+            "x": 283,
+            "y": 233.5,
+            "width": 54.34375,
+            "height": 28,
+            "bottom": 261.5,
+            "right": 337.34375,
+            "clientHeight": 28,
+            "scrollHeight": 28,
+            "clientWidth": 54,
+            "scrollWidth": 54,
+            "overflowY": "visible"
+          },
+          {
+            "tag": "BUTTON",
+            "type": null,
+            "className": "",
+            "x": 344.34375,
+            "y": 233.5,
+            "width": 38.03125,
+            "height": 28,
+            "bottom": 261.5,
+            "right": 382.375,
+            "clientHeight": 28,
+            "scrollHeight": 28,
+            "clientWidth": 38,
+            "scrollWidth": 38,
+            "overflowY": "visible"
+          },
+          {
+            "tag": "BUTTON",
+            "type": "button",
+            "className": "",
+            "x": 297.21875,
+            "y": 399.5,
+            "width": 30,
+            "height": 30,
+            "bottom": 429.5,
+            "right": 327.21875,
+            "clientHeight": 30,
+            "scrollHeight": 30,
+            "clientWidth": 30,
+            "scrollWidth": 30,
+            "overflowY": "visible"
+          },
+          {
+            "tag": "BUTTON",
+            "type": "button",
+            "className": "",
+            "x": 369.21875,
+            "y": 399.5,
+            "width": 30,
+            "height": 30,
+            "bottom": 429.5,
+            "right": 399.21875,
+            "clientHeight": 30,
+            "scrollHeight": 30,
+            "clientWidth": 30,
+            "scrollWidth": 30,
+            "overflowY": "visible"
+          },
+          {
+            "tag": "BUTTON",
+            "type": "button",
+            "className": "",
+            "x": 441.21875,
+            "y": 399.5,
+            "width": 30,
+            "height": 30,
+            "bottom": 429.5,
+            "right": 471.21875,
+            "clientHeight": 30,
+            "scrollHeight": 30,
+            "clientWidth": 30,
+            "scrollWidth": 30,
+            "overflowY": "visible"
+          }
+        ],
+        "keyboardOpen": false
+      }
+    ],
+    "composerLayouts": [
+      {
+        "width": 390,
+        "height": 844,
+        "visualHeight": 400,
+        "rootWidth": 390,
+        "pageScrollWidth": 390,
+        "screen": {
+          "x": 0,
+          "y": 0,
+          "width": 390,
+          "height": 400,
+          "bottom": 400,
+          "right": 390,
+          "clientHeight": 400,
+          "scrollHeight": 400,
+          "clientWidth": 390,
+          "scrollWidth": 390,
+          "overflowY": "hidden"
+        },
+        "input": {
+          "x": 62,
+          "y": 318,
+          "width": 266,
+          "height": 72,
+          "bottom": 390,
+          "right": 328,
+          "clientHeight": 72,
+          "scrollHeight": 758,
+          "clientWidth": 266,
+          "scrollWidth": 266,
+          "overflowY": "auto"
+        },
+        "composer": {
+          "x": 12,
+          "y": 312,
+          "width": 366,
+          "height": 84,
+          "bottom": 396,
+          "right": 378,
+          "clientHeight": 82,
+          "scrollHeight": 82,
+          "clientWidth": 364,
+          "scrollWidth": 364,
+          "overflowY": "visible"
+        },
+        "status": {
+          "x": 0,
+          "y": 190,
+          "width": 390,
+          "height": 64,
+          "bottom": 254,
+          "right": 390,
+          "clientHeight": 64,
+          "scrollHeight": 3081,
+          "clientWidth": 390,
+          "scrollWidth": 390,
+          "overflowY": "auto"
+        },
+        "files": {
+          "x": 12,
+          "y": 254,
+          "width": 366,
+          "height": 54,
+          "bottom": 308,
+          "right": 378,
+          "clientHeight": 54,
+          "scrollHeight": 54,
+          "clientWidth": 366,
+          "scrollWidth": 2209,
+          "overflowY": "auto"
+        },
+        "panel": null,
+        "overflowControls": [
+          {
+            "tag": "BUTTON",
+            "type": "button",
+            "className": "",
+            "x": 1847.21875,
+            "y": 267,
+            "width": 28,
+            "height": 28,
+            "bottom": 295,
+            "right": 1875.21875,
+            "clientHeight": 28,
+            "scrollHeight": 28,
+            "clientWidth": 28,
+            "scrollWidth": 28,
+            "overflowY": "visible"
+          },
+          {
+            "tag": "BUTTON",
+            "type": "button",
+            "className": "",
+            "x": 1908.21875,
+            "y": 260,
+            "width": 30,
+            "height": 30,
+            "bottom": 290,
+            "right": 1938.21875,
+            "clientHeight": 30,
+            "scrollHeight": 30,
+            "clientWidth": 30,
+            "scrollWidth": 30,
+            "overflowY": "visible"
+          },
+          {
+            "tag": "BUTTON",
+            "type": "button",
+            "className": "",
+            "x": 1964.21875,
+            "y": 260,
+            "width": 30,
+            "height": 30,
+            "bottom": 290,
+            "right": 1994.21875,
+            "clientHeight": 30,
+            "scrollHeight": 30,
+            "clientWidth": 30,
+            "scrollWidth": 30,
+            "overflowY": "visible"
+          },
+          {
+            "tag": "BUTTON",
+            "type": "button",
+            "className": "",
+            "x": 2020.21875,
+            "y": 260,
+            "width": 30,
+            "height": 30,
+            "bottom": 290,
+            "right": 2050.21875,
+            "clientHeight": 30,
+            "scrollHeight": 30,
+            "clientWidth": 30,
+            "scrollWidth": 30,
+            "overflowY": "visible"
+          },
+          {
+            "tag": "BUTTON",
+            "type": "button",
+            "className": "",
+            "x": 2076.21875,
+            "y": 260,
+            "width": 30,
+            "height": 30,
+            "bottom": 290,
+            "right": 2106.21875,
+            "clientHeight": 30,
+            "scrollHeight": 30,
+            "clientWidth": 30,
+            "scrollWidth": 30,
+            "overflowY": "visible"
+          },
+          {
+            "tag": "BUTTON",
+            "type": "button",
+            "className": "",
+            "x": 2132.21875,
+            "y": 260,
+            "width": 30,
+            "height": 30,
+            "bottom": 290,
+            "right": 2162.21875,
+            "clientHeight": 30,
+            "scrollHeight": 30,
+            "clientWidth": 30,
+            "scrollWidth": 30,
+            "overflowY": "visible"
+          },
+          {
+            "tag": "BUTTON",
+            "type": "button",
+            "className": "",
+            "x": 2188.21875,
+            "y": 260,
+            "width": 30,
+            "height": 30,
+            "bottom": 290,
+            "right": 2218.21875,
+            "clientHeight": 30,
+            "scrollHeight": 30,
+            "clientWidth": 30,
+            "scrollWidth": 30,
+            "overflowY": "visible"
+          }
+        ],
+        "keyboardOpen": true
+      },
+      {
+        "width": 320,
+        "height": 640,
+        "visualHeight": 330,
+        "rootWidth": 320,
+        "pageScrollWidth": 320,
+        "screen": {
+          "x": 0,
+          "y": 0,
+          "width": 320,
+          "height": 330,
+          "bottom": 330,
+          "right": 320,
+          "clientHeight": 330,
+          "scrollHeight": 330,
+          "clientWidth": 320,
+          "scrollWidth": 320,
+          "overflowY": "hidden"
+        },
+        "input": {
+          "x": 62,
+          "y": 260.609375,
+          "width": 196,
+          "height": 59.390625,
+          "bottom": 320,
+          "right": 258,
+          "clientHeight": 59,
+          "scrollHeight": 758,
+          "clientWidth": 196,
+          "scrollWidth": 196,
+          "overflowY": "auto"
+        },
+        "composer": {
+          "x": 12,
+          "y": 254.609375,
+          "width": 296,
+          "height": 71.390625,
+          "bottom": 326,
+          "right": 308,
+          "clientHeight": 69,
+          "scrollHeight": 69,
+          "clientWidth": 294,
+          "scrollWidth": 294,
+          "overflowY": "visible"
+        },
+        "status": {
+          "x": 0,
+          "y": 155.4375,
+          "width": 320,
+          "height": 64,
+          "bottom": 219.4375,
+          "right": 320,
+          "clientHeight": 64,
+          "scrollHeight": 3804,
+          "clientWidth": 320,
+          "scrollWidth": 320,
+          "overflowY": "auto"
+        },
+        "files": {
+          "x": 12,
+          "y": 219.4375,
+          "width": 296,
+          "height": 54,
+          "bottom": 273.4375,
+          "right": 308,
+          "clientHeight": 54,
+          "scrollHeight": 54,
+          "clientWidth": 296,
+          "scrollWidth": 2209,
+          "overflowY": "auto"
+        },
+        "panel": null,
+        "overflowControls": [
+          {
+            "tag": "BUTTON",
+            "type": "button",
+            "className": "",
+            "x": 283,
+            "y": 131.4375,
+            "width": 54.34375,
+            "height": 24,
+            "bottom": 155.4375,
+            "right": 337.34375,
+            "clientHeight": 24,
+            "scrollHeight": 24,
+            "clientWidth": 54,
+            "scrollWidth": 54,
+            "overflowY": "visible"
+          },
+          {
+            "tag": "BUTTON",
+            "type": null,
+            "className": "",
+            "x": 344.34375,
+            "y": 131.4375,
+            "width": 38.03125,
+            "height": 24,
+            "bottom": 155.4375,
+            "right": 382.375,
+            "clientHeight": 24,
+            "scrollHeight": 24,
+            "clientWidth": 38,
+            "scrollWidth": 38,
+            "overflowY": "visible"
+          },
+          {
+            "tag": "BUTTON",
+            "type": "button",
+            "className": "",
+            "x": 345.21875,
+            "y": 225.4375,
+            "width": 30,
+            "height": 30,
+            "bottom": 255.4375,
+            "right": 375.21875,
+            "clientHeight": 30,
+            "scrollHeight": 30,
+            "clientWidth": 30,
+            "scrollWidth": 30,
+            "overflowY": "visible"
+          }
+        ],
+        "keyboardOpen": true
+      }
+    ],
+    "taskPanelLayouts": [
+      {
+        "width": 320,
+        "height": 640,
+        "visualHeight": 640,
+        "rootWidth": 320,
+        "pageScrollWidth": 320,
+        "screen": null,
+        "input": null,
+        "composer": null,
+        "status": null,
+        "files": null,
+        "panel": {
+          "x": 16,
+          "y": 104,
+          "width": 288,
+          "height": 1125.328125,
+          "bottom": 1229.328125,
+          "right": 304,
+          "clientHeight": 1123,
+          "scrollHeight": 1123,
+          "clientWidth": 286,
+          "scrollWidth": 286,
+          "overflowY": "visible"
+        },
+        "overflowControls": []
+      },
+      {
+        "width": 390,
+        "height": 640,
+        "visualHeight": 640,
+        "rootWidth": 390,
+        "pageScrollWidth": 390,
+        "screen": null,
+        "input": null,
+        "composer": null,
+        "status": null,
+        "files": null,
+        "panel": {
+          "x": 16,
+          "y": -309,
+          "width": 358,
+          "height": 949.328125,
+          "bottom": 640.328125,
+          "right": 374,
+          "clientHeight": 947,
+          "scrollHeight": 947,
+          "clientWidth": 356,
+          "scrollWidth": 356,
+          "overflowY": "visible"
+        },
+        "overflowControls": []
+      },
+      {
+        "width": 320,
+        "height": 330,
+        "visualHeight": 330,
+        "rootWidth": 320,
+        "pageScrollWidth": 320,
+        "screen": null,
+        "input": null,
+        "composer": null,
+        "status": null,
+        "files": null,
+        "panel": {
+          "x": 16,
+          "y": -367,
+          "width": 288,
+          "height": 1125.328125,
+          "bottom": 758.328125,
+          "right": 304,
+          "clientHeight": 1123,
+          "scrollHeight": 1123,
+          "clientWidth": 286,
+          "scrollWidth": 286,
+          "overflowY": "visible"
+        },
+        "overflowControls": []
+      }
+    ],
+    "findings": [],
+    "browserErrors": [],
+    "limits": "Headless Chromium emulation, synthetic backend; no iPhone/Safari, OS kill, real service reconnect or deployed service-worker test."
+  },
+  "workspaceBrowser": {
+    "browser": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/154.0.0.0 Safari/537.36",
+    "activityNavigation": "passed",
+    "browserBack": "passed",
+    "sameBotHistoryRace": "passed",
+    "historyRefreshTyping": "passed",
+    "lateSendAfterSwitch": "passed",
+    "offlineStagedFiles": 2,
+    "previewUsesLocalBytes": true,
+    "offlineReloadText": "passed",
+    "offlineReloadBytes": "passed",
+    "offlineHistory": "passed",
+    "offlineRemoval": "passed",
+    "browserErrors": []
+  },
+  "nativePinnedProbe": {
+    "native": "synthetic-history-probe/0.156.1 (Debian 13.0.0; x86_64) unknown (synthetic-history-probe; 1)",
+    "fixture": {
+      "userChars": 15000,
+      "assistantChars": 20000,
+      "toolChars": 150000
+    },
+    "views": {
+      "notLoaded": {
+        "bytes": 294,
+        "turns": 1,
+        "items": [],
+        "preservesUser": false,
+        "preservesAssistant": false,
+        "preservesTool": false
+      },
+      "summary": {
+        "bytes": 35527,
+        "turns": 1,
+        "items": [
+          {
+            "type": "userMessage",
+            "serializedChars": 15109,
+            "inputChars": 15000
+          },
+          {
+            "type": "agentMessage",
+            "serializedChars": 20125,
+            "textChars": 20000
+          }
+        ],
+        "preservesUser": true,
+        "preservesAssistant": true,
+        "preservesTool": false
+      },
+      "full": {
+        "bytes": 35524,
+        "turns": 1,
+        "items": [
+          {
+            "type": "userMessage",
+            "serializedChars": 15109,
+            "inputChars": 15000
+          },
+          {
+            "type": "agentMessage",
+            "serializedChars": 20125,
+            "textChars": 20000
+          }
+        ],
+        "preservesUser": true,
+        "preservesAssistant": true,
+        "preservesTool": false
+      }
+    },
+    "toolComparisonConclusive": false,
+    "limit": "Synthetic command item did not hydrate even in full. No conclusion about native tool-summary semantics or payload savings is valid.",
+    "itemPagination": {
+      "supported": false,
+      "error": "{\"code\":-32601,\"message\":\"thread/items/list is not supported yet\"}"
+    }
+  },
+  "checks": {
+    "appTests": 186,
+    "bridgeTests": 47,
+    "focusedSubset": 18,
+    "build": "passed",
+    "typescript": "passed",
+    "eslint": "0 errors, 1 existing image-element warning"
+  }
+}

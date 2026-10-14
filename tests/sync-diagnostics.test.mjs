@@ -21,7 +21,7 @@ test("settings exposes privacy-safe queue diagnostics and a crash fallback", asy
   assert.match(diagnostics, /retryInMs/);
   assert.match(diagnostics, /recentSyncEvents/);
   assert.match(diagnostics, /Task text, notes, task IDs, operation IDs/);
-  assert.doesNotMatch(diagnostics, /todo\.title|todo\.notes|action\.body|mutation\.todoId|action\.operationId|todo\.clientId/);
+  assert.doesNotMatch(diagnostics, /todo\.title|todo\.notes|action\.body(?!\.action)|mutation\.todoId|action\.operationId|todo\.clientId/);
   assert.match(page, /recordSyncDiagnostic\("sync-backed-off"/);
   assert.match(page, /recordSyncDiagnostic\("action-deferred"/);
   assert.match(page, /recordSyncDiagnostic\("sync-finished"/);

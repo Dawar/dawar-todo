@@ -1,0 +1,17 @@
+[Unit]
+Description=Dawar Todo persistent Codex bots
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/dawar/ChatGPT/dawar-todo
+EnvironmentFile=%h/.config/dawar-todo-bots/environment
+ExecStart=/usr/bin/env node /home/dawar/ChatGPT/dawar-todo/bot-bridge/service.mjs
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+UMask=0077
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,333 @@
+import { createServer, request as httpRequest } from 'node:http';
+import { WebSocketServer } from 'ws';
+import { readFile,stat,realpath } from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
+import { join,resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { randomUUID,createHmac } from 'node:crypto';
+import { HubStore } from './control-store.mjs';
+import { LocalD1 } from './sqlite.mjs';
+import { OIDCIdentity, stripIdentity,csrfCookie } from './identity.mjs';
+import { boundedFrame,compatible, MAX_FRAME_BYTES, secret, verifySignature } from './protocol.mjs';
+import { appAccessResponse } from '../worker/access.ts';
+import { signGateway } from './gateway-proof.ts';
+import { ObjectStorage } from './object-storage.mjs';
+import { HubRpc,AGENT_MUTATIONS } from './hub-rpc.mjs';
+import { HubNodeStorage } from './hub-node-storage.mjs';
+import {HubTaskRequests} from './hub-task-requests.mjs';
+import { HubControls } from './hub-controls.mjs';
+import { HubWriteAuthority,hubActivation } from './hub-authority.mjs';
+import { HUB_TOOLS } from './control-protocol.mjs';
+import { verifyBotTicket,verifyTaskRequestTicket } from '../lib/bots-auth.ts';
+import {createVoiceRuntime} from './voice-runtime.mjs';
+import {HubOperator} from './hub-operator.mjs';
+import {verifyOperator} from './operator-client.mjs';
+import {HubDesktopTransport,DESKTOP_MUTATIONS,desktopCapable} from './desktop-transport.mjs';
+import {HubSecureTransport} from './secure-transport.mjs';
+import {fingerprint} from './protocol.mjs';
+import {RetainedRecords} from './retained-records.mjs';
+
+const json = (response,status,body) => { response.writeHead(status,{'content-type':'application/json','cache-control':'no-store'});response.end(JSON.stringify(body)); };
+async function readBody(req) {
+  const chunks = []; let size = 0;
+  for await (const c of req) { size += c.length;if(size>128*1024)throw Error('Request too large.');chunks.push(c); }
+  return JSON.parse(Buffer.concat(chunks).toString() || '{}');
+}
+export function startGateway(config) {
+  const store = new HubStore(join(config.dataDirectory,'control.sqlite'));
+  const retained=new RetainedRecords(config.retainedRecordsPath);
+  const authority=hubActivation(config),writer=new HubWriteAuthority(store.db,authority);
+  store.bindWriter(writer);
+  const application = new LocalD1(join(config.dataDirectory,'application.sqlite'),{writer});
+  const identity = new OIDCIdentity(store,config);
+  const objects = new ObjectStorage(config,{writer});
+  const connections = new Map(), challenges = new Map();
+  const router = new HubRpc(store,connections), browsers=new Set(),guests=new Map();
+  const desktop=new HubDesktopTransport({store,connections,parent:(owner,id)=>[...browsers].some(b=>b.owner===owner&&b.clientId===id&&!b.desktop&&b.ws.readyState===1&&b.expiresAt>Date.now()&&b.valid())});
+  const secure=new HubSecureTransport({store,connections,parent:(owner,id)=>[...browsers].some(b=>b.owner===owner&&b.clientId===id&&!b.desktop&&b.ws.readyState===1&&b.expiresAt>Date.now()&&b.valid())});
+  const taskSecure=new HubSecureTransport({store,connections,parent:(owner,id)=>owner===config.owner.key&&guests.get(id)?.valid()===true});
+  const broadcast=(owner,event)=>{for(const b of browsers)if(b.owner===owner&&!b.desktop&&b.expiresAt>Date.now()&&b.valid()&&b.ws.readyState===1)b.ws.send(JSON.stringify({type:'event',event}));};
+  const controls=new HubControls({owner:config.owner,teamWorkspaceRoot:config.teamWorkspaceRoot??config.agent?.workspaces,legacyTeamSource:config.legacyTeamSource,path:join(config.dataDirectory,'control.sqlite'),hub:store,router,authority,broadcast});router.controls=controls;
+  const nodeStorage=new HubNodeStorage({hub:store,controls,application,objects,config});
+  controls.nodeStorage=nodeStorage;
+  const taskRequests=new HubTaskRequests({hub:store,controls,application,environment:nodeStorage.environment,owner:config.owner.key});controls.taskRequests=taskRequests;
+  controls.operator=new HubOperator(controls,config.owner.key);
+  const voice=config.voice?.enabled===true?createVoiceRuntime(config,{writer,assertWriter:()=>controls.assertWriter(),retained}):null;
+  const scheduler=authority?setInterval(()=>void controls.tick().catch(error=>controls.emit('fault',error)),5000):null;
+  const downloadDirectory=resolve(config.agentDownloadDirectory??fileURLToPath(new URL('../agent-downloads',import.meta.url)));
+  const sockets = new WebSocketServer({noServer:true,maxPayload:MAX_FRAME_BYTES,perMessageDeflate:false});
+  const server = createServer(async (req,res) => {
+    let browserSignIn = false;
+    try {
+      const u = new URL(req.url,config.publicOrigin), headers = new Headers();
+      browserSignIn = req.method === 'GET' && ['/auth/login','/auth/callback'].includes(u.pathname) && (req.headers.accept ?? '').includes('text/html');
+      for (const [key,value] of Object.entries(req.headers)) if(value!==undefined)headers.set(key,Array.isArray(value)?value.join(','):value);
+      stripIdentity(headers);
+      if(u.pathname.startsWith('/api/voice/')){
+        if(!voice)return json(res,503,{error:'Portable voice hosting has not been activated.'});
+        if(u.pathname==='/api/voice/stream')return json(res,426,{error:'Use the actual WebSocket upgrade transport.'});
+        const path={'/api/voice/health':'/health','/api/voice/openai/webhook':'/openai/webhook','/api/voice/stream':'/stream'}[u.pathname];
+        if(!path||u.search)return json(res,404,{error:'Unknown voice route.'});
+        let body;
+        if(req.method==='POST'){const parts=[];let size=0;for await(const c of req){size+=c.length;if(size>128*1024)throw Error('Request too large.');parts.push(c);}body=Buffer.concat(parts);}
+        const result=await voice.fetch(new Request(new URL(path,config.publicOrigin),{method:req.method,headers,body}));
+        res.writeHead(result.status,Object.fromEntries(result.headers));return res.end(Buffer.from(await result.arrayBuffer()));
+      }
+      const r = new Request(u,{method:req.method,headers}), session = identity.session(r);
+      if(u.pathname==='/storage/object'){
+        const result=await objects.serveNode(req,u);res.writeHead(result.status,Object.fromEntries(result.headers));
+        if(!result.body)return res.end();
+        const {Readable}=await import('node:stream');const stream=Readable.fromWeb(result.body);stream.on('error',()=>res.destroy());res.on('close',()=>stream.destroy());return stream.pipe(res);
+      }
+      if (u.pathname === '/healthz') {let enabled=false;try{controls.assertWriter();enabled=true;}catch{/* Staging has no execution authority. */}return json(res,200,{ready:true,protocol:1,role:'hub',executionEnabled:enabled,source:config.hub?.source??null});}
+      if(u.pathname==='/internal/operator'){
+        if(req.method!=='POST'||req.headers.origin||u.search)throw Error('Invalid application Operator route.');
+        const body=await readBody(req);
+        if(body.owner!==config.owner.key||Object.keys(body).some(k=>!['owner','request'].includes(k))||!verifyOperator(config.gatewaySecret,body,r.headers))throw Error('Application Operator proof is invalid.');
+        try{return json(res,200,await router.request(body.owner,body.request,'application:operator'));}
+        catch(error){return json(res,409,{error:error.message,outcome:error.outcome??'uncertain'});}
+      }
+      if (u.pathname === '/auth/login' && req.method === 'GET') {
+        const a = identity.login(u.searchParams.get('return_to'));res.writeHead(303,{location:a.location,'set-cookie':a.cookie,'cache-control':'no-store'});return res.end();
+      }
+      if (u.pathname === '/auth/callback' && req.method === 'GET') {
+        const a = await identity.callback(r);res.writeHead(303,{location:a.location,'set-cookie':a.cookies,'cache-control':'no-store'});return res.end();
+      }
+      if (u.pathname === '/auth/session' && req.method === 'GET') {if(session)res.setHeader('set-cookie',csrfCookie(session.csrf));return json(res,session?200:401,session?{owner:session.owner,userId:session.userId,csrf:session.csrf}:{error:'Sign in required.'});}
+      if (u.pathname === '/auth/logout' && req.method === 'POST') {
+        if (!session) return json(res,401,{error:'Sign in required.'});identity.csrf(r,session);
+        res.writeHead(204,{'set-cookie':identity.logout(r),'cache-control':'no-store'});return res.end();
+      }
+      // Enrollment is public only with a five-minute owner-approved token and
+      // matching key; it never authenticates human or Todo API requests.
+      if (u.pathname === '/nodes/enroll/challenge' && req.method === 'POST') {
+        const b = await readBody(req);return json(res,200,store.enrollmentChallenge(b.token,b.publicKey));
+      }
+      if (u.pathname === '/nodes/enroll/prove' && req.method === 'POST') {
+        const b = await readBody(req);return json(res,200,store.enroll(b.grantId,b.hello,b.proof));
+      }
+      if (u.pathname === '/nodes/enroll/status' && req.method === 'POST') return json(res,200,store.enrollmentStatus(await readBody(req)));
+      if (u.pathname.startsWith('/api/portable/')) {
+        if (!session || session.owner!==config.owner.key) return json(res,403,{error:'Owner session required.'});
+        if(req.method!=='GET')identity.csrf(r,session);
+        const b = req.method==='GET'?{}:await readBody(req);
+        if(u.pathname==='/api/portable/nodes' && req.method==='GET') return json(res,200,{nodes:store.db.prepare('SELECT id,fingerprint,hello,revoked_at FROM portable_nodes WHERE owner=?').all(session.owner).map(n=>({...n,online:connections.has(n.id)}))});
+        if(u.pathname==='/api/portable/installer'&&req.method==='GET'){
+          const d=JSON.parse(await readFile(join(downloadDirectory,'current.json'),'utf8'));
+          if(!/^dawartodo-agent-[a-f0-9]{12}\.zip$/.test(d.name)||!/^[a-f0-9]{64}$/.test(d.sha256))throw Error('Installer manifest unavailable.');
+          return json(res,200,{source:d.source,sha256:d.sha256,bytes:d.bytes,href:'/api/portable/installer/download'});
+        }
+        if(u.pathname==='/api/portable/installer/download'&&req.method==='GET'){
+          const d=JSON.parse(await readFile(join(downloadDirectory,'current.json'),'utf8'));
+          if(!/^dawartodo-agent-[a-f0-9]{12}\.zip$/.test(d.name))throw Error('Installer name invalid.');
+          const path=join(downloadDirectory,d.name),s=await stat(path);
+          if(!s.isFile()||s.size!==d.bytes||s.size>32*1024*1024||await realpath(path)!==path)throw Error('Installer file invalid.');
+          res.writeHead(200,{'content-type':'application/zip','content-length':s.size,'content-disposition':`attachment; filename="${d.name}"`,'cache-control':'private, no-store','x-content-type-options':'nosniff'});
+          const stream=createReadStream(path);stream.on('error',()=>res.destroy());res.on('close',()=>stream.destroy());return stream.pipe(res);
+        }
+        if(u.pathname==='/api/portable/enrollment' && req.method==='POST'){
+          if(typeof b.operationId!=='string'||b.operationId.length>180)throw Error('Original pairing operation required.');
+          const token=createHmac('sha256',config.gatewaySecret).update(JSON.stringify({owner:session.owner,operationId:b.operationId,fingerprint:b.fingerprint})).digest('base64url');
+          return json(res,200,store.grantEnrollment(session.owner,b.fingerprint,Date.now(),b.operationId,token));
+        }
+        if(u.pathname==='/api/portable/revoke' && req.method==='POST'){store.revoke(session.owner,b.nodeId);connections.get(b.nodeId)?.close(1008,'Node revoked');return json(res,200,{revoked:true});}
+        if(u.pathname==='/api/portable/placement' && req.method==='POST'){const placement=store.place(session.owner,b.botId,b.nodeId,b.expectedEpoch);desktop.disconnectBot(b.botId);return json(res,200,placement);}
+        if(u.pathname==='/api/portable/stop' && req.method==='POST'){
+          if(b.stopped!==true)throw Error('Use the original queue or work Resume action to release Stop.');
+          const p=store.stop(session.owner,b.botId,b.stopped);connections.get(p.node_id)?.send(JSON.stringify({type:'sync',...store.sync(p.node_id)}));
+          return json(res,200,{placement:p,confirmation:'pending'});
+        }
+        if(u.pathname==='/api/portable/commands' && req.method==='POST'){
+          if(!AGENT_MUTATIONS.has(b.payload?.method))throw Error('Internal logical dispatch is not a browser command.');
+          if(DESKTOP_MUTATIONS.has(b.payload.method)){const p=store.placement(session.owner,b.botId);if(!desktopCapable(store.node(p.node_id),connections.get(p.node_id)))throw Error('Linux desktop is unavailable.');}
+          return json(res,200,store.enqueue(session.owner,b.botId,b.operationId,b.payload));
+        }
+        return json(res,404,{error:'Unknown portable operation.'});
+      }
+      if (session && !headers.has('authorization')) {
+        if (!['GET','HEAD','OPTIONS'].includes(req.method)) identity.csrf(r,session);
+        headers.set('oai-authenticated-user-email',session.owner);headers.set('oai-authenticated-user-id',session.userId);
+      }
+      const accessRequest=new Request(u,{method:req.method,headers});
+      const blocked = u.pathname.startsWith('/portable-assets/') || u.pathname==='/pwa-build.json'&&req.method==='GET'&&!u.search
+        ? null : await appAccessResponse(accessRequest,{DB:application,API_TOKEN_OWNER_KEY:config.owner.key});
+      if (blocked) {
+        if (!u.pathname.startsWith('/api/') && blocked.status===303) {
+          res.writeHead(303,{location:`/auth/login?return_to=${encodeURIComponent(u.pathname+u.search)}`});return res.end();
+        }
+        res.writeHead(blocked.status,Object.fromEntries(blocked.headers));return res.end(Buffer.from(await blocked.arrayBuffer()));
+      }
+      // Access validation adds the original token actor to its own mutable
+      // Request. Forward that verified copy; never recreate it from input.
+      for(const [name,value] of accessRequest.headers)headers.set(name,value);
+      // Fixed loopback target; never proxy a URL, host or identity from input.
+      if(u.pathname==='/signin-with-chatgpt'){res.writeHead(303,{location:'/auth/login'});return res.end();}
+      headers.set('host',u.host);headers.set('x-forwarded-host',u.host);headers.set('x-forwarded-proto','https');
+      const path = u.pathname==='/_vinext/image'?`/_next/image${u.search}`:u.pathname+u.search;
+      signGateway(config.gatewaySecret,req.method,path,headers);
+      const proxy = httpRequest({hostname:'127.0.0.1',port:config.sitePort??3211,path,method:req.method,headers:Object.fromEntries(headers)}, upstream=>{
+        res.writeHead(upstream.statusCode,upstream.headers);upstream.pipe(res);
+      });
+      proxy.on('error',()=>{if(!res.headersSent)json(res,502,{error:'Site temporarily unavailable.'});else res.destroy();});
+      req.on('aborted',()=>proxy.destroy());res.on('close',()=>{if(!res.writableEnded)proxy.destroy();});req.pipe(proxy);
+    } catch(error) {
+      if (res.headersSent) return res.destroy();
+      // Fixed public recovery screen; never reflect OAuth parameters or errors.
+      // API responses and identity/session validation retain their original path.
+      if (browserSignIn) {
+        res.writeHead(303,{location:'/signout-with-chatgpt?reason=sign-in','cache-control':'no-store','referrer-policy':'no-referrer'});
+        return res.end();
+      }
+      json(res,/large/.test(error.message)?413:403,{error:error.message});
+    }
+  });
+  server.on('upgrade',(req,socket,head)=>{
+    const u=new URL(req.url,config.publicOrigin);
+    if(u.pathname==='/api/voice/stream'){
+      if(!voice||req.headers.origin||u.search){socket.destroy();return;}
+      const headers=new Headers();for(const [key,value]of Object.entries(req.headers))if(value!==undefined)headers.set(key,Array.isArray(value)?value.join(','):value);stripIdentity(headers);
+      void voice.fetch(new Request(new URL('/stream',config.publicOrigin),{headers})).then(result=>{
+        if(result.status!==101||socket.destroyed){result.abandon?.();socket.destroy();return;}
+        let attached=false;
+        try{sockets.handleUpgrade(req,socket,head,ws=>{result.attach(ws);attached=true;});if(!attached)result.abandon();}catch{if(!attached)result.abandon();socket.destroy();}
+      }).catch(()=>socket.destroy());return;
+    }
+    if(u.pathname==='/connect'){
+      const session=identity.session(new Request(u,{headers:req.headers}));
+      if(req.headers.origin!==config.publicOrigin||u.searchParams.get('machine')!==(config.applicationEnvironment?.BOTS_MACHINE_ID??'dawar-vm')){socket.destroy();return;}
+      sockets.handleUpgrade(req,socket,head,ws=>{
+        const clientId=`browser:${randomUUID()}`;let authenticated=false,expiresAt=0,desktopBrowser=false,guest=null;
+        const valid=()=>{
+          if(guest)return ws.readyState===1&&expiresAt>Date.now();
+          const current=identity.session(new Request(u,{headers:req.headers}));return !!session&&current?.owner===session.owner&&current?.userId===session.userId;
+        };
+        const timeout=setTimeout(()=>{if(!authenticated)ws.close(1008,'Authentication expired');},10000);
+        const send=value=>{if(ws.readyState===1)ws.send(JSON.stringify(value));};
+        let frameChain=Promise.resolve();
+        ws.on('message',(raw,isBinary)=>{
+          frameChain=frameChain.then(async()=>{
+            if (ws.readyState!==1) return;
+            if(authenticated&&!valid())throw Error('Session expired or changed.');
+            if(isBinary){
+              if(!authenticated||!desktopBrowser||expiresAt<=Date.now()||raw.length>128*1024)throw Error('Invalid desktop binary frame.');
+              desktop.frame(clientId,{event:'data',data:raw.toString('base64')});return;
+            }
+            if(raw.toString()==='ping'){if(authenticated)ws.send('pong');return;}
+            const m=JSON.parse(raw.toString());
+            if(!authenticated){
+              if(m.type!=='auth')throw Error('Unsupported portable browser role.');
+              if(m.role==='task-request'){
+                if(m.desktop)throw Error('Guest cannot open a desktop.');
+                const ticket=await verifyTaskRequestTicket(m.ticket,config.gatewaySecret,config.applicationEnvironment?.BOTS_MACHINE_ID??'dawar-vm');
+                const forms=taskRequests.forms();await forms.initialize();const scope=await forms.secureAuthorize(ticket.binding);
+                if(scope.owner!==ticket.owner||scope.source.botId!==ticket.botId||scope.source.threadId!==ticket.threadId||fingerprint({requestId:scope.requestId,revision:scope.revision,grantId:scope.grantId,submissionId:scope.submissionId})!==fingerprint(ticket.binding))throw Error('Original guest grant changed.');
+                store.transaction(()=>{
+                  if(store.db.prepare('SELECT 1 FROM portable_tickets WHERE jti=?').get(ticket.jti))throw Error('Guest ticket already used.');
+                  store.db.prepare('DELETE FROM portable_tickets WHERE expires_at<=?').run(Date.now());store.db.prepare('INSERT INTO portable_tickets VALUES(?,?)').run(ticket.jti,ticket.exp*1000);
+                });
+                guest=ticket;authenticated=true;expiresAt=ticket.sessionExp*1000;clearTimeout(timeout);guests.set(clientId,{valid});
+                send({type:'authenticated',role:'task-request',owner:ticket.owner,online:!!connections.get(store.placement(config.owner.key,ticket.botId).node_id),expiresAt,clientId});return;
+              }
+              if(!session||!valid())throw Error('Owner session required.');
+              const ticket=await verifyBotTicket(m.ticket,config.gatewaySecret,config.applicationEnvironment?.BOTS_MACHINE_ID??'dawar-vm');
+              store.transaction(()=>{
+                if(ticket.owner!==session.owner||store.db.prepare('SELECT 1 FROM portable_tickets WHERE jti=?').get(ticket.jti))throw Error('Foreign or reused ticket.');
+                store.db.prepare('DELETE FROM portable_tickets WHERE expires_at<=?').run(Date.now());
+                store.db.prepare('INSERT INTO portable_tickets VALUES(?,?)').run(ticket.jti,ticket.exp*1000);
+              });
+              authenticated=true;expiresAt=ticket.sessionExp*1000;desktopBrowser=!!m.desktop;clearTimeout(timeout);
+              browsers.add({ws,owner:session.owner,clientId,desktop:desktopBrowser,expiresAt,valid});
+              send({type:'authenticated',role:'browser',online:true,expiresAt,clientId});
+              if(desktopBrowser)desktop.open({owner:session.owner,clientId,parentId:m.desktop.parentId,botId:m.desktop.botId,token:m.desktop.token,expiresAt,valid,
+                send:value=>{if(ws.readyState!==1||ws.bufferedAmount>8*1024*1024)throw Error('Desktop output unavailable.');ws.send(Buffer.isBuffer(value)?value:JSON.stringify(value));},close:()=>ws.close(1000,'Desktop closed')});
+              return;
+            }
+            if(guest){
+              if(m.type!=='task-request')throw Error('Guest transport cannot send owner RPC.');
+              void writer.runWork('secure-transfer',async()=>{
+                try{return await taskSecure.requestGuest(config.owner.key,clientId,m,guest);}catch(error){if(error.sent)writer.unknownWork();throw error;}
+              }).then(result=>send({type:'task-request.response',id:m.id,result}))
+                .catch(()=>send({type:'task-request.response',id:m.id,error:'Original private form transfer is unavailable or unconfirmed; retain its encrypted submission.'}));return;
+            }
+            if(desktopBrowser){if(expiresAt<=Date.now()||m.type!=='desktop')throw Error('Desktop session invalid.');desktop.frame(clientId,m);return;}
+            if(expiresAt>Date.now()&&m.type==='secure'){
+              void writer.runWork('secure-transfer',async()=>{
+                try{return await secure.request(session.owner,clientId,m);}
+                catch(error){if(error.sent)writer.unknownWork();throw error;}
+              }).then(result=>send({type:'secure.response',id:m.id,result}))
+                .catch(()=>send({type:'secure.response',id:m.id,error:'Private form transfer unavailable or unconfirmed. Retain the original encrypted submission.'}));
+              return;
+            }
+            if(expiresAt<=Date.now()||m.type!=='request')throw Error('Session or request invalid.');
+            // Authentication is serialized; independent owner requests are
+            // not. Stop cannot wait behind a slow turn-send acknowledgment.
+            void (async()=>{try{const value=await router.request(session.owner,m,clientId);send({type:'response',id:m.id,...value});}
+              catch(e){send({type:'response',id:m.id,error:e.message,outcome:e.outcome==='rejected'?'rejected':e.outcome==='not-sent'?'not-sent':'uncertain',delivery:e.delivery});}})();
+          }).catch(()=>ws.close(1008,'Owner request rejected'));
+        });
+        ws.on('close',()=>{clearTimeout(timeout);guests.delete(clientId);taskSecure.disconnectParent(clientId);desktop.end(clientId);desktop.disconnectParent(clientId);secure.disconnectParent(clientId);for(const b of browsers)if(b.ws===ws)browsers.delete(b);});
+      });return;
+    }
+    if(u.pathname!=='/nodes/connect' || req.headers.origin){socket.destroy();return;}
+    sockets.handleUpgrade(req,socket,head,ws=>{
+      const challenge=secret(),connectionId=randomUUID(),createdAt=Date.now();challenges.set(connectionId,challenge);
+      let nodeId=null;
+      const nodeSync=cursor=>{
+        const value=store.sync(nodeId,cursor,{recoverReceipts:ws.portableHello?.capabilities?.durableReceiptRecovery===true,receiptCursor:ws.receiptRecoveryCursor??0});
+        ws.receiptRecoveryCursor=value.receiptCursor??0;
+        return {type:'sync',...value};
+      };
+      const timeout=setTimeout(()=>{if(!nodeId)ws.close(1008,'Authentication expired');},10000);
+      ws.send(JSON.stringify({type:'challenge',challenge,connectionId,protocol:1}));
+      ws.on('message',raw=>{
+        try {
+          const m=JSON.parse(raw.toString());
+          if(!nodeId){
+            const n=store.node(m.nodeId);compatible(m.hello);
+            if(m.type!=='authenticate'||Date.now()-createdAt>10000||!challenges.has(connectionId)
+              ||!verifySignature(n.public_key,{nodeId:m.nodeId,challenge,connectionId,hello:m.hello},m.proof))throw Error('Node proof invalid.');
+            challenges.delete(connectionId);clearTimeout(timeout);nodeId=n.id;
+            const prior=connections.get(nodeId);if(prior){desktop.disconnectNode(prior);secure.disconnectNode(prior);taskSecure.disconnectNode(prior);}prior?.close(1008,'Connection superseded');ws.portableHello=m.hello;connections.set(nodeId,ws);
+            ws.send(JSON.stringify(nodeSync(m.cursor??0)));return;
+          }
+          store.node(nodeId);if(connections.get(nodeId)!==ws)throw Error('Connection superseded.');
+          if(m.type==='sync')ws.send(JSON.stringify(nodeSync(m.cursor??0)));
+          else if(m.type==='receipt') {const receipt=store.receipt(nodeId,m.operationId,m.fingerprint,m.state,m.receipt);router.receipt(receipt);if(authority)controls.receipt(receipt);ws.send(JSON.stringify({type:'receipt-ack',operationId:m.operationId,state:receipt.state}));}
+          else if(m.type==='rpc-result')router.readResult(nodeId,m);
+          else if(m.type==='desktop-response')desktop.receive(nodeId,ws,m);
+          else if(m.type==='secure-response'){secure.receive(nodeId,ws,m);taskSecure.receive(nodeId,ws,m);}
+          else if(m.type==='primary-admission-request'){
+            const n=store.node(nodeId),p=store.placement(n.owner,m.botId);
+            if(p.node_id!==nodeId||p.epoch!==m.epoch||typeof m.requestId!=='string'||m.requestId.length>180)throw Error('Foreign primary admission request.');
+            const answer=value=>{const current=store.placement(n.owner,m.botId);if(connections.get(nodeId)===ws&&current.node_id===nodeId&&current.epoch===m.epoch)ws.send(boundedFrame({type:'primary-admission-result',requestId:m.requestId,botId:m.botId,epoch:m.epoch,...value}));};
+            void Promise.resolve().then(()=>controls.primaryAdmissionState(n.owner,nodeId,m.botId,m.epoch,m.operationId,m.fingerprint)).then(result=>answer({result})).catch(error=>answer({error:error.message,outcome:'not-sent'})).catch(()=>ws.close(1008,'Primary admission scope changed'));
+          }
+          else if(m.type==='control-request'){
+            const n=store.node(nodeId),p=store.placement(n.owner,m.botId);
+            if(p.node_id!==nodeId||p.epoch!==m.epoch||!HUB_TOOLS.has(m.tool)||typeof m.requestId!=='string')throw Error('Foreign hub tool request.');
+            const answer=value=>{const current=store.placement(n.owner,m.botId);if(connections.get(nodeId)===ws&&current.node_id===nodeId&&current.epoch===m.epoch)ws.send(boundedFrame({type:'control-result',requestId:m.requestId,botId:m.botId,epoch:m.epoch,...value}));};
+            void controls.tool(n.owner,m.botId,m.tool,m.args,{kind:'authenticated-node-tool',botId:m.botId,nodeId,epoch:m.epoch}).then(result=>answer({result})).catch(error=>answer({error:error.message,outcome:error.outcome??'uncertain'})).catch(()=>ws.close(1008,'Control scope changed'));
+          }
+          else if(m.type==='task-request-request'){
+            const n=store.node(nodeId),p=store.placement(n.owner,m.botId);
+            if(p.node_id!==nodeId||p.epoch!==m.epoch||typeof m.requestId!=='string'||m.requestId.length>180)throw Error('Foreign Task Request service scope.');
+            const answer=value=>{const current=store.placement(n.owner,m.botId);if(connections.get(nodeId)===ws&&current.node_id===nodeId&&current.epoch===m.epoch){const frame={type:'task-request-result',requestId:m.requestId,botId:m.botId,epoch:m.epoch,...value};boundedFrame(frame);ws.send(JSON.stringify(frame));}};
+            void taskRequests.request(nodeId,m).then(result=>answer({result})).catch(error=>answer({error:'Original protected form operation is unavailable or unconfirmed; retain its original ID.',outcome:error.outcome??'uncertain',...(Number.isInteger(error.status)?{formStatus:error.status}:{})})).catch(()=>ws.close(1008,'Task Request scope changed'));
+          }
+          else if(m.type==='artifact-request'){
+            const n=store.node(nodeId),p=store.placement(n.owner,m.botId);
+            if(p.node_id!==nodeId||p.epoch!==m.epoch||typeof m.requestId!=='string'||m.requestId.length>180)throw Error('Foreign artifact request.');
+            const answer=value=>{const current=store.placement(n.owner,m.botId);if(connections.get(nodeId)===ws&&current.node_id===nodeId&&current.epoch===m.epoch)ws.send(boundedFrame({type:'artifact-result',requestId:m.requestId,botId:m.botId,epoch:m.epoch,...value}));};
+            void nodeStorage.request(nodeId,m).then(result=>answer({result})).catch(()=>answer({error:'Registered file confirmation unavailable; retain its original ID and local bytes.',outcome:'uncertain'})).catch(()=>ws.close(1008,'Artifact scope changed'));
+          }
+          else if(m.type==='event') {const before=store.eventCursor(),sequence=store.event(nodeId,m.eventId,m.botId,m.epoch,m.event);const current=sequence>before&&controls.nativeEvent(m.event,nodeId,m.epoch)!==false;ws.send(JSON.stringify({type:'event-ack',eventId:m.eventId,sequence}));if(current)broadcast(store.node(nodeId).owner,{...m.event,seq:sequence});}
+          else throw Error('Unknown node frame.');
+        } catch {ws.close(1008,'Node frame rejected');}
+      });
+      ws.on('close',()=>{clearTimeout(timeout);challenges.delete(connectionId);desktop.disconnectNode(ws);secure.disconnectNode(ws);taskSecure.disconnectNode(ws);if(connections.get(nodeId)===ws)connections.delete(nodeId);});
+    });
+  });
+  server.listen(config.gatewayPort??3210,'127.0.0.1');
+  let closing;
+  return {server,store,application,objects,router,controls,voice,desktop,secure,taskSecure,taskRequests,close:()=>closing??=(async()=>{if(voice)await voice.close();clearInterval(scheduler);desktop.close();secure.close();taskSecure.close();router.close();for(const ws of sockets.clients)ws.close();await new Promise(resolve=>server.close(resolve));writer.close();controls.close();objects.close();store.close();application.close();})()};
+}

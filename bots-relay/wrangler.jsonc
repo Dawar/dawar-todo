@@ -1,0 +1,12 @@
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "dawar-todo-bots-relay",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-05-22",
+  "workers_dev": true,
+  "preview_urls": false,
+  "vars": { "SITE_ORIGIN": "https://work.dawar.ca", "BOTS_MACHINE_ID": "dawar-vm" },
+  "durable_objects": { "bindings": [{ "name": "BOT_RELAYS", "class_name": "BotRelay" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["BotRelay"] }],
+  "observability": { "enabled": true }
+}

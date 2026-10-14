@@ -1,0 +1,29 @@
+.bots-secure-card{margin:12px 0 0;overflow-wrap:anywhere;color:var(--foreground);font-size:14px}
+.bots-secure-timeline-entry{margin-bottom:24px}
+.bots-secure-card>summary{display:flex;align-items:center;gap:8px;cursor:pointer;list-style:none;padding:8px 0;min-height:44px}
+.bots-secure-card>summary::-webkit-details-marker{display:none}
+.bots-secure-card>summary:focus-visible{outline:2px solid var(--ring);outline-offset:4px;border-radius:var(--radius)}
+.bots-secure-card>summary svg{flex-shrink:0}
+.bots-secure-title{min-width:0;flex:1;line-height:1.5;font-weight:500}
+.bots-secure-state{font-size:12px;color:var(--muted-foreground);flex-shrink:0}
+.bots-secure-history{color:var(--muted-foreground)}
+.bots-secure-card[open]{border:1px solid var(--border);border-radius:var(--radius);padding:4px 12px 12px;background:var(--card)}
+.bots-secure-card p{margin:8px 0;font-size:14px;line-height:1.5}
+.bots-secure-form{position:relative;margin-top:12px;padding-top:44px}
+.bots-secure-close{position:absolute;right:0;top:0}
+.bots-secure-form fieldset{display:flex;flex-direction:column;gap:16px;border:0;padding:8px 0;min-width:0}
+.bots-secure-form label{display:flex;flex-direction:column;gap:8px;font-size:14px}
+.bots-secure-form label.bots-secure-opt{flex-direction:row;align-items:flex-start;line-height:1.5}
+.bots-secure-opt input{margin-top:4px;width:18px;height:18px;flex-shrink:0;accent-color:var(--primary)}
+.bots-secure-opt input:focus-visible{outline:2px solid var(--ring);outline-offset:3px}
+.bots-secure-limit{color:var(--muted-foreground)}
+.bots-secure-delete{margin-top:12px}
+.bots-secure-card [role=alert],.bots-secure-access [role=alert]{color:var(--destructive)}
+.bots-secure-receipt{margin-top:12px}
+.bots-secure-access{flex-shrink:0;display:flex;align-items:center;flex-wrap:wrap;gap:8px;padding:4px 12px;font-size:14px}
+.bots-secure-access small{font-size:12px;color:var(--muted-foreground)}
+.bots-secure-dialog{max-width:540px;overscroll-behavior:contain}
+.bots-secure-dialog .bots-secure-card{margin:12px 0}
+.bots-secure-dialog .bots-secure-card>summary{flex-wrap:wrap}
+.bots-secure-dialog .bots-secure-state{white-space:normal}
+@media(max-width:440px){.bots-secure-card>summary{display:grid;grid-template-columns:15px 16px minmax(0,1fr)}.bots-secure-state{grid-column:3}}

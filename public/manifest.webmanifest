@@ -3,7 +3,7 @@
   "short_name": "Todo",
   "description": "A fast, focused personal task list that works offline.",
   "id": "/",
-  "start_url": "/",
+  "start_url": "/open",
   "scope": "/",
   "display": "standalone",
   "display_override": ["window-controls-overlay", "standalone", "minimal-ui"],
@@ -16,6 +16,6 @@
     { "src": "/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
   ],
   "shortcuts": [
-    { "name": "New task", "short_name": "New task", "url": "/?capture=1", "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }] }
+    { "name": "New task", "short_name": "New task", "url": "/tasks?capture=1", "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }] }
   ]
 }

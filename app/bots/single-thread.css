@@ -1,0 +1,65 @@
+.bots-chat-header .bots-chat-name{min-width:0}
+.bots-chat-header small{max-width:min(52vw,560px);overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.bots-burst-pending{margin:0 4px 5px;min-width:0;color:var(--muted-foreground);font-size:13px}
+.bots-burst-line{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;min-height:32px}
+.bots-burst-line>details{min-width:0;flex:1;padding:7px 0}
+.bots-burst-line summary{cursor:pointer}
+.bots-burst-line summary>span{color:var(--muted-foreground)}
+.bots-burst-line>div{display:flex;align-items:center;flex:none}
+.bots-burst-messages{max-height:150px;overflow:auto;padding:4px 8px 4px 12px}
+.bots-burst-messages p{white-space:pre-wrap;overflow-wrap:anywhere;margin:8px 0;padding-left:9px;border-left:2px solid var(--border);font-size:13px;line-height:1.5}
+.bots-burst-messages small{display:flex;gap:4px;align-items:center;color:var(--muted-foreground)}
+.bots-burst-recovery{padding:6px 0;color:var(--destructive)}
+.bots-legacy-controls{margin:18px 0;color:var(--muted-foreground);font-size:13px}
+.bots-legacy-controls>summary{cursor:pointer;padding:12px 0}
+.bots-personality :focus-visible,.bots-burst-pending :focus-visible{outline:2px solid var(--ring);outline-offset:3px}
+
+.bots-conversation-presence{display:flex;align-items:center;gap:6px;min-height:38px;margin:16px 0 0;color:var(--muted-foreground);font-size:13px}
+.bots-conversation-presence>span:last-child{overflow:hidden;white-space:nowrap;text-overflow:ellipsis;min-width:0}
+.bots-conversation-presence .bot-avatar-engine{width:32px;height:32px}
+
+.bots-burst-time{flex:none;min-width:3ch;text-align:right;font-variant-numeric:tabular-nums;padding-top:8px;color:var(--muted-foreground)}
+.bots-details-settings .bots-avatar-custom{display:flex}
+.bots-details-settings .bots-avatar-custom input{width:44px;padding:3px;min-height:38px}
+.bots-details-settings .bots-burst-preference{display:flex}
+
+.bots-conversation-presence>button{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;padding:8px 0;text-align:left;background:none;color:inherit;font-size:inherit;cursor:pointer}
+.bots-conversation-presence>button:hover{color:var(--primary)}
+
+.bots-burst-preview{display:block;line-height:1.5;margin:4px 0}
+.bots-burst-batch{display:grid;gap:4px;padding:8px 0;border-bottom:1px solid var(--border);line-height:1.5;overflow-wrap:anywhere}
+.bots-burst-batch strong{font-size:13px;font-weight:550}
+.bots-burst-batch>span{color:var(--destructive)}
+
+.bots-bubble.bots-bubble-pending{position:relative;isolation:isolate;overflow:hidden;background:var(--burst-waiting);color:var(--foreground)}
+
+.bots-burst-fill{position:absolute;inset:0;display:block;z-index:0;background:var(--burst-fill);transform:scaleX(var(--burst-progress,0));transform-origin:left;pointer-events:none}
+
+
+.bots-burst-content{position:relative;z-index:1}
+.bots-burst-content .bots-input-file{display:flex;align-items:center;gap:6px;margin-top:8px}
+
+.bots-burst-line{justify-content:flex-end;min-height:0}
+.bots-burst-line:empty{display:none}
+.bots-burst-pending{margin:0 0 8px}
+.bots-burst-line>small{margin-right:auto;align-self:center}
+
+.bots-conversation-presence { flex-wrap:wrap; }
+
+.bots-burst-message-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap;margin:5px 0;color:var(--muted-foreground);font-size:13px}
+.bots-burst-line>div{flex-wrap:wrap;justify-content:flex-end}
+.bots-burst-line{flex-wrap:wrap}
+.bots-burst-line>small{min-width:0;flex:1 0 min-content;line-height:1.5}
+.bots-burst-line>small:empty{display:none}
+
+.bots-burst-pending { color:var(--muted-foreground); font-size:13px; }
+
+.bots-burst-message-actions { color:var(--muted-foreground); font-size:13px; }
+
+.bots-burst-line > div { gap:4px; max-width:100%; }
+
+.bots-burst-recovery { display:flex; align-items:center; flex-wrap:wrap; gap:8px; color:var(--destructive); font-size:13px; line-height:1.5; overflow-wrap:anywhere; }
+
+.bots-burst-line > small { font-size:13px; }
+
+.bots-burst-recovery button { color:var(--foreground); }

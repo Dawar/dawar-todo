@@ -1,10 +1,12 @@
-import { waitUntil } from "cloudflare:workers";
+import { waitUntil } from "../../../../../../lib/source-writer-work";
+
 import { readTalkPhoneCall } from "../../../../../../db/talk-phone";
 import {
   processTalkPhoneRecordingQueue,
   recordTalkPhoneSegmentAction,
 } from "../../../../../../db/talk-phone-recordings";
 import {
+  twilioRequestUrl,
   phoneRecordingTwiml,
   phoneRejectedTwiml,
   twilioDocumentResponse,
@@ -74,7 +76,7 @@ export async function POST(request: Request) {
       reason,
     });
     if (result.finalSegment) {
-      waitUntil(processTalkPhoneRecordingQueue(new Date(), callSid).catch((error) => {
+      waitUntil(() => processTalkPhoneRecordingQueue(new Date(), callSid).catch((error) => {
         console.error("[todo-talk-phone-recording-api] final action processing handoff failed", { callSid, error });
       }));
       console.info("[todo-talk-phone-recording-api] recording finalized", {
@@ -89,7 +91,7 @@ export async function POST(request: Request) {
       segmentIndex: result.nextSegmentIndex,
       durationMs: Date.now() - startedAt,
     });
-    return twilioDocumentResponse(nextRecordingTwiml(request.url, result.nextSegmentIndex));
+    return twilioDocumentResponse(nextRecordingTwiml(twilioRequestUrl(request), result.nextSegmentIndex));
   } catch (error) {
     console.error("[todo-talk-phone-recording-api] recording action failed", {
       callSid,

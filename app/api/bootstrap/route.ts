@@ -1,11 +1,12 @@
-import { waitUntil } from "cloudflare:workers";
+import { waitUntil } from "../../../lib/source-writer-work";
+
 import { readTodoBootstrap } from "../../../db/todos";
 import { runTodoReadMaintenance } from "../../../db/maintenance";
 
 export async function GET() {
   const startedAt = Date.now();
   try {
-    waitUntil(runTodoReadMaintenance("bootstrap").catch((error) => {
+    waitUntil(() => runTodoReadMaintenance("bootstrap").catch((error) => {
       console.error("[todo-sync] background maintenance deferred", { error });
     }));
     const snapshot = await readTodoBootstrap();

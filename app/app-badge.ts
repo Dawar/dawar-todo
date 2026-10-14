@@ -1,6 +1,7 @@
 export type BadgeTodo = {
   status: "open" | "completed";
   snoozedUntil: string | null;
+  queueDelegation?: import("../lib/task-queue-delegation").TaskDelegation | null;
 };
 
 type BadgeNavigator = Navigator & {
@@ -12,7 +13,7 @@ let unsupportedLogged = false;
 
 export function currentOpenTaskCount(todos: BadgeTodo[], now = Date.now()) {
   return todos.filter((todo) => {
-    if (todo.status !== "open") return false;
+    if (todo.status !== "open" || todo.queueDelegation) return false;
     if (!todo.snoozedUntil) return true;
     const wakeAt = new Date(todo.snoozedUntil).valueOf();
     return Number.isNaN(wakeAt) || wakeAt <= now;

@@ -1,0 +1,439 @@
+"""One approved, explicitly UNSEALED first handoff; never a generic bypass.
+
+Ordinary admission uses the installed bounded drain. Existing async answers
+remain possible until restart: the human-agreed window controls that race.
+No record is rewritten, native input replayed, or installed Seal/Claim invoked.
+"""
+from contextlib import closing
+from datetime import datetime
+import hashlib
+import json
+import math
+import os
+from pathlib import Path
+import re
+import signal
+import sqlite3
+import stat
+import time
+import urllib.request
+from native_queue_receipts import private_file, database_stamp, digest
+
+INSTALLED = 'd0113f9a92f9a3bea29a253bef031f60d1a1d098'
+INVOCATION = '7c77d4a4a9074fd294c5eaa1c99dace3'
+RECEIPT_SHA = '28636b265a1d4846e1aa8a2b970ada2b4e6957f4503f6cc5b45486436c9b87d2'
+CHILD_PID = 2321969
+BINARY_SHA = '9a820c17865fa825d04db416818679a9d63bd72e50835c396f496e5684626c9c'
+CONNIE = 'peer:432942828b0fda3ba0dc17b009ea1bc7f0ecb5bde9defb74b86b34ae39b98eb2'
+DOC = 'async:call_lyPF3QB2taTul9nX7DijB2U5'
+LINUS = 'async:call_d097a830dc35437ab45a37c30692bb4e'
+# Exact reviewed original, excluding ONLY the recovery scheduling timestamp.
+# Every byte, including that timestamp, remains in the idle/cutover fence.
+CONNIE_SHA = '0bdd911fbaf08a23aa3196d10d8a99f1518b40441ea4ab28fe83c9c3157368fa'
+DOC_SHA = 'a8f38bb9625ac6aac98c0f0b665c6bf6dd1c7463550bb2cc8bf3b5ff053d14c7'
+LINUS_SHA = 'd973f81caaa47f7eb3cb9c189d020213f3ac44bc239b617269c109d8a418c2b7'
+COUNT_KEYS = set('admissions requests nativeRpc localActive auxiliaryActive acceptedOrUnknown pendingInput activeGoals calls desktops volatileSecure secureTransfers browserMaintenance bufferedRelay runtimeTick localLocks historyReads browserRetention serviceWork'.split())
+
+
+def authority():
+    # Fixed original native approval, not an arbitrary path/flag or supplied prose.
+    root = Path.home() / '.codex'
+    path = root / 'sessions/2026/09/25/rollout-2026-09-25T18-10-12-01a0d9c2-ba00-75d3-ac66-e537c8a1165c.jsonl'
+    private_file(path, root)
+    with path.open('rb') as source:
+        source.seek(1995843691)
+        line = source.readline(1048577)
+    if len(line) > 1048576 or hashlib.sha256(line).hexdigest() != '9a797f2867fd1d5f084ec8256cdf667976132b03c47d4d41ab9952d62b93adbf':
+        raise RuntimeError('Exact supervised human authority unavailable')
+    return {'id': 'msg_01a1207c-7861-7100-938e-92dce1a7d634', 'rawLineSha256': hashlib.sha256(line).hexdigest()}
+
+
+def installed_receipt(helper):
+    path = helper.STATE / 'runtime-updates' / INSTALLED / 'restart.json'
+    private_file(path, helper.STATE)
+    raw = path.read_bytes()
+    if len(raw) > 65536 or path.stat().st_mode & 0o077 or hashlib.sha256(raw).hexdigest() != RECEIPT_SHA:
+        raise RuntimeError('Reviewed installed restart receipt changed')
+    row = json.loads(raw)
+    if row.get('commit') != INSTALLED or row.get('status') != 'healthy' or row.get('version') != '0.161.0' or row.get('pid') != '2321938':
+        raise RuntimeError('Exact installed source/process is unconfirmed')
+    return row
+
+
+def private_paths(helper, receipt_dir):
+    for path in (helper.STATE, helper.STATE / 'runtime-updates', receipt_dir):
+        s = path.lstat()
+        if not stat.S_ISDIR(s.st_mode) or s.st_uid != os.getuid() or s.st_mode & 0o077:
+            raise RuntimeError('Unsafe supervised receipt directory')
+    private_file(helper.STATE / 'state.sqlite', helper.STATE)
+
+
+def register_attempt(helper, args, approval):
+    # Exclusive for this installed invocation, not merely this target commit.
+    # A different source/operation cannot evade an unknown earlier handoff.
+    path = helper.STATE / 'runtime-updates' / f'supervised-d011-{INVOCATION}.json'
+    row = {'installed': INSTALLED, 'invocationId': INVOCATION, 'commit': args.commit,
+           'operationId': args.maintenance_operation, 'unitId': args.unit_id,
+           'waitSeconds': args.wait_seconds, 'authority': approval, 'mode': 'UNSEALED'}
+    with path.open('x') as file:
+        os.chmod(path, 0o600)
+        json.dump(row, file, indent=2); file.flush(); os.fsync(file.fileno())
+    directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+    return {'humanApproval': approval, 'attempt': {'path': str(path), 'stamp': private_file(path, helper.STATE), 'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}}
+
+
+def check_attempt(helper, evidence):
+    attempt = evidence['attempt']
+    expected = helper.STATE / 'runtime-updates' / f'supervised-d011-{INVOCATION}.json'
+    if attempt['path'] != str(expected) or private_file(expected, helper.STATE) != attempt['stamp'] or hashlib.sha256(expected.read_bytes()).hexdigest() != attempt['sha256']:
+        raise RuntimeError('Exclusive original invocation attempt changed; no restart')
+    if evidence.get('reorderedCutover'):
+        from supervised_reordered_cutover import check
+        check(helper, evidence)
+    elif evidence.get('correctedCutover'):
+        from supervised_corrected_cutover import check
+        check(helper, evidence)
+    elif evidence.get('continuation'):
+        from supervised_continuation import check
+        check(helper, evidence)
+
+
+def process_identity(helper):
+    values = [helper.command('systemctl', '--user', 'show', helper.SERVICE, '-p', f, '--value') for f in ('MainPID', 'InvocationID')]
+    if values != ['2321938', INVOCATION]:
+        raise RuntimeError('Original installed service identity changed')
+    service_path = str(helper.ROOT / 'bot-bridge/service.mjs')
+    argv = (Path('/proc') / values[0] / 'cmdline').read_bytes().split(b'\0')
+    unit = helper.command('systemctl', '--user', 'show', helper.SERVICE, '-p', 'ExecStart', '-p', 'KillMode', '--value')
+    if len(argv) < 2 or argv[1].decode() != service_path or service_path not in unit or 'control-group' not in unit:
+        raise RuntimeError('Reviewed source is not the original systemd service path/unit')
+    result = []
+    for pid in (int(values[0]), CHILD_PID):
+        p = Path('/proc') / str(pid)
+        if p.stat().st_uid != os.getuid():
+            raise RuntimeError('Original process ownership changed')
+        fields = (p / 'stat').read_text().rsplit(')', 1)[1].split()
+        if pid == CHILD_PID and fields[1] != values[0]:
+            raise RuntimeError('Original native child parent changed')
+        result.append([pid, fields[19], str((p / 'exe').resolve(strict=True))])
+    return [values, result, hashlib.sha256(unit.encode()).hexdigest()]
+
+
+def exact_originals(helper, metadata=False):
+    # Query-only, fixed IDs, finite rows/bytes. All unknown/new rows also remain
+    # strict blockers in local_state and in the independently sampled RAM counts.
+    private_file(helper.STATE / 'state.sqlite', helper.STATE)
+    with closing(sqlite3.connect(f'file:{helper.STATE}/state.sqlite?mode=ro', uri=True, timeout=.25)) as db:
+        db.execute('PRAGMA query_only=ON')
+        rows = db.execute("SELECT kind,id,CASE WHEN length(CAST(json AS BLOB))<=1048576 THEN json ELSE NULL END FROM records WHERE (kind='primaryInbox' AND id=?) OR (kind='pending' AND id IN (?,?))", (CONNIE, DOC, LINUS)).fetchall()
+    fixed = [('pending', DOC), ('pending', LINUS), ('primaryInbox', CONNIE)]
+    indexed = {(kind, ident): raw for kind, ident, raw in rows}
+    if len(indexed) != len(rows) or ('primaryInbox', CONNIE) not in indexed or any(not r[2] for r in rows):
+        raise RuntimeError('Reviewed retained originals unavailable')
+    records = []
+    fenced_rows = []
+    for kind, ident in sorted(fixed):
+        raw = indexed.get((kind, ident))
+        fenced_rows.append((kind, ident, raw))
+        if raw is None:
+            # A retired pending notice is no longer work. Fence its absence,
+            # never infer how it was resolved or recreate it. Present notices
+            # still require exact reviewed bytes and fresh native proof.
+            records.append({'kind': kind, 'id': ident, 'present': False,
+                            'bytes': 0, 'rawSha256': None, 'fields': {}})
+            continue
+        row = json.loads(raw)
+        record = {'kind': kind, 'id': ident, 'present': True, 'bytes': len(raw.encode()),
+                  'rawSha256': hashlib.sha256(raw.encode()).hexdigest(),
+                  'fields': {key: digest(value) for key, value in row.items()}}
+        diagnostic = {key: record[key] for key in ('kind', 'id', 'bytes', 'rawSha256')}
+        if row.get('id') != ident:
+            raise RuntimeError('Original record identity changed: ' + json.dumps(diagnostic, sort_keys=True))
+        if kind == 'primaryInbox':
+            record['reconcileAfter'] = row.pop('reconcileAfter', None)
+            encoded = json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()
+            record['invariantSha256'] = hashlib.sha256(encoded).hexdigest()
+            if record['invariantSha256'] != CONNIE_SHA:
+                diagnostic['invariantSha256'] = record['invariantSha256']
+                raise RuntimeError('Reviewed Connie original input/receipt changed: ' + json.dumps(diagnostic, sort_keys=True))
+        elif record['rawSha256'] != {DOC: DOC_SHA, LINUS: LINUS_SHA}.get(ident):
+            raise RuntimeError('Reviewed terminal notice changed: ' + json.dumps(diagnostic, sort_keys=True))
+        records.append(record)
+    return {'digest': digest(fenced_rows), 'records': records} if metadata else digest(fenced_rows)
+
+
+def original_work_counts(original):
+    # Count only the fixed originals actually present in this exact sample.
+    # These are expected counts, not a subtraction from unknown RAM work.
+    return {key: sum(r['present'] for r in original['records'] if r['kind'] == kind)
+            for key, kind in [('acceptedOrUnknown', 'primaryInbox'), ('pendingInput', 'pending')]}
+
+
+def original_changes(before, after):
+    changes = []
+    for previous, current in zip(before['records'], after['records'], strict=True):
+        if previous != current:
+            keys = sorted(k for k in previous['fields'].keys() | current['fields'].keys()
+                          if previous['fields'].get(k) != current['fields'].get(k))
+            if previous['present'] != current['present']:
+                keys = ['presence', *keys]
+            changes.append({'kind': current['kind'], 'id': current['id'], 'changedFields': keys,
+                            'beforeRawSha256': previous['rawSha256'], 'afterRawSha256': current['rawSha256'],
+                            'beforeBytes': previous['bytes'], 'afterBytes': current['bytes']})
+    return changes
+
+
+def scheduling_change_only(before, after, changes):
+    # This does not qualify idle: discard the entire observation and retry only
+    # in the bounded pre-backup wait. All subsequent cutover reads stay exact.
+    if len(changes) != 1 or changes[0]['id'] != CONNIE or changes[0]['kind'] != 'primaryInbox' or changes[0]['changedFields'] != ['reconcileAfter']:
+        return False
+    stamps = [next(r for r in sample['records'] if r['id'] == CONNIE)['reconcileAfter'] for sample in (before, after)]
+    if not all(isinstance(value, str) and re.fullmatch(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z', value) for value in stamps):
+        return False
+    try:
+        previous, current = [datetime.strptime(value, '%Y-%m-%dT%H:%M:%S.%fZ') for value in stamps]
+        return current > previous
+    except ValueError:
+        return False
+
+
+def fresh_native(proof):
+    root = Path.home() / '.codex'
+    names = ('thread_history_1.sqlite', 'queue_1.sqlite', 'goals_1.sqlite', 'state_5.sqlite')
+    return (proof.get('databaseStamps') == [database_stamp(root / n, root) for n in names] and
+            all(private_file(Path(path), root / 'sessions') == stamp for path, stamp in proof.get('rolloutStamps', [])))
+
+
+def lease_status(helper, drain, deadline, original=None):
+    left = deadline - time.monotonic()
+    if left <= 0:
+        raise TimeoutError('Supervised deadline elapsed; no further restart')
+    row = helper.owner_maintenance({**drain, 'action': 'status'}, timeout=min(10, left))
+    if any(row.get(k) != drain[k] for k in ('operationId', 'commit', 'version', 'instanceId', 'invocationId', 'unitId')) or row.get('phase') != 'draining' or row.get('active') is not True:
+        raise RuntimeError('Original draining lease is no longer active')
+    remaining = row.get('remainingMs')
+    if type(remaining) not in (float, int) or not math.isfinite(remaining) or remaining <= 0:
+        raise RuntimeError('Original lease has no bounded remaining time')
+    counts = row.get('counts')
+    if not isinstance(counts, dict) or set(counts) != COUNT_KEYS or any(type(v) is not int or v < 0 for v in counts.values()):
+        raise RuntimeError('Installed RAM/work counter contract is unknown')
+    expected = original_work_counts(original if original is not None else exact_originals(helper, metadata=True))
+    safe = all(v == expected.get(k, 0) for k, v in counts.items())
+    return row, safe, time.monotonic()
+
+
+def snapshot(helper, drain, deadline, waiting=False):
+    original = exact_originals(helper, metadata=True)
+    observation = {'phase': 'supervised-unsealed', 'native': {'checked': False}}
+    bots, busy, fence = helper.local_state(observation, True)
+    proof = observation.get('_receiptProof')
+    notices = {r['id'] for r in original['records'] if r['kind'] == 'pending' and r['present']}
+    if not busy and (not proof or proof.get('originals') != [] or
+                     {r['id'] for r in proof.get('terminalInputs', [])} != {CONNIE} or
+                     {r['id'] for r in proof.get('passiveQuestions', [])} != notices):
+        raise RuntimeError('Supervised proof is not confined to the present exact originals')
+    lease, safe, sampled = lease_status(helper, drain, deadline, original)
+    identity = process_identity(helper)
+    after = exact_originals(helper, metadata=True)
+    if after != original:
+        changes = original_changes(original, after)
+        deferred = waiting and scheduling_change_only(original, after, changes)
+        diagnostic = {'phase': 'pre-backup-wait' if waiting else 'strict-cutover',
+                      'action': 'discard-and-wait' if deferred else 'refuse',
+                      'localBusy': busy, 'ramSafe': safe, 'changes': changes}
+        print(json.dumps({'originalObservation': diagnostic}, sort_keys=True), flush=True)
+        if not deferred:
+            raise RuntimeError('Original bytes changed during observation: ' + json.dumps(diagnostic, sort_keys=True))
+        observation['originalObservation'] = diagnostic
+        busy = True
+    if not busy and (time.monotonic() - sampled > 5 or not fresh_native(proof)):
+        raise RuntimeError('Current native/RAM proof became stale during observation')
+    return bots, busy or not safe, {'local': fence, 'originalBytes': after['digest'], 'process': identity, 'expiresAt': lease.get('expiresAt')}, lease, sampled, observation
+
+
+def source(helper, args):
+    head = helper.command('git', 'rev-parse', 'HEAD')
+    dirty = helper.command('git', 'status', '--porcelain')
+    if head != args.commit or dirty:
+        raise RuntimeError('Reviewed supervised source changed: ' + json.dumps({'head': head, 'status': dirty[:4096]}))
+    pin = (helper.ROOT / 'bot-bridge/codex-version.mjs').read_text()
+    if f'CODEX_VERSION = "{args.version}"' not in pin:
+        raise RuntimeError('Reviewed runtime pin changed')
+
+
+def backup_state(helper, receipt_dir, deadline):
+    path = receipt_dir / 'state-before.sqlite'
+    fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    os.close(fd)
+    def progress(*_):
+        if time.monotonic() >= deadline:
+            raise TimeoutError('Private backup exceeded supervised deadline')
+    with closing(sqlite3.connect(f'file:{helper.STATE}/state.sqlite?mode=ro', uri=True, timeout=.25)) as db, closing(sqlite3.connect(path)) as backup:
+        db.backup(backup, pages=128, progress=progress, sleep=.01)
+    with path.open('rb') as file:
+        os.fsync(file.fileno())
+        sha = hashlib.file_digest(file, 'sha256').hexdigest()
+    return {'path': str(path), 'sha256': sha, 'stamp': private_file(path, helper.STATE)}
+
+
+def activate_supervised(helper, args, receipt_dir, receipt, drain, deadline, evidence):
+    # Wait only before backup. Any cutover disagreement aborts, rather than
+    # clearing another operation, replacing a proof, or repeatedly restarting.
+    check_attempt(helper, evidence)
+    while True:
+        source(helper, args)
+        bots, busy, fence, lease, sampled, observation = snapshot(helper, drain, deadline, waiting=True)
+        if not busy and helper.native_idle(bots, observation):
+            check_attempt(helper, evidence)
+            if time.monotonic() - sampled > 5 or not fresh_native(observation['_receiptProof']):
+                raise RuntimeError('Current proof expired before private backup')
+            break
+        if deadline - time.monotonic() < 50:
+            raise TimeoutError('Current work did not settle within original supervised window')
+        time.sleep(min(5, deadline - time.monotonic()))
+    source(helper, args)
+    backup = backup_state(helper, receipt_dir, deadline)
+    portable = None
+    if getattr(args, 'portable_handoff_configuration', None):
+        from portable_handoff import prepare
+        portable = prepare(helper, args, backup, deadline)
+    bots, busy, after, lease, sampled, observation = snapshot(helper, drain, deadline)
+    if busy or after != fence or not helper.native_idle(bots, observation):
+        raise RuntimeError('Post-backup current proof changed; no restart')
+    check_attempt(helper, evidence)
+    # All awaits (including native metadata and source/process reads) precede a
+    # final fresh RAM/original/native-store sample. The answer race is UNSEALED.
+    source(helper, args)
+    bots, busy, final, lease, sampled, observation = snapshot(helper, drain, deadline)
+    if busy or final != after or private_file(Path(backup['path']), helper.STATE) != backup['stamp']:
+        raise RuntimeError('Final current proof or private backup changed; no restart')
+    if min(deadline - time.monotonic(), lease['remainingMs'] / 1000 - (time.monotonic() - sampled)) < 45:
+        raise RuntimeError('Original supervised lease leaves no restart window')
+    check_attempt(helper, evidence)
+    if time.monotonic() - sampled > 5 or not fresh_native(observation['_receiptProof']):
+        raise RuntimeError('Current proof expired before exclusive restart receipt')
+    data = {'commit': args.commit, 'version': args.version, 'status': 'claimed', 'claimedAt': time.time(), 'previousPid': '2321938',
+            'mode': evidence.get('mode', 'supervised-d011-once-UNSEALED'), 'installedSealClaim': False,
+            'residualRace': 'Existing async answers remain admitted until restart; human agreed not to answer during cutover.',
+            'authority': evidence, 'drain': drain, 'backup': backup, 'currentProof': final,
+            'retainedTerminalProof': observation['_receiptProof']}
+    if portable:
+        from portable_handoff import check_prepared
+        check_prepared(args, portable)
+        data['portableHandover'] = portable
+    with receipt.open('x') as file:
+        os.chmod(receipt, 0o600)
+        json.dump(data, file, indent=2); file.flush(); os.fsync(file.fileno())
+    directory = os.open(receipt_dir, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+    # Fsync/claim creation is also an await boundary. Recheck without changing
+    # the original receipt identity; a rejection leaves a non-retryable claim.
+    source(helper, args)
+    _, busy, claimed_fence, lease, sampled, observation = snapshot(helper, drain, deadline)
+    if busy or claimed_fence != final or private_file(Path(backup['path']), helper.STATE) != backup['stamp']:
+        raise RuntimeError('Current proof changed after exclusive receipt; no restart')
+    if min(deadline - time.monotonic(), lease['remainingMs'] / 1000 - (time.monotonic() - sampled)) < 45:
+        raise RuntimeError('Exclusive receipt has no remaining restart window')
+    check_attempt(helper, evidence)
+    if time.monotonic() - sampled > 5 or not fresh_native(observation['_receiptProof']):
+        raise RuntimeError('Current proof expired after exclusive receipt; no restart')
+    if portable:
+        from portable_handoff import install_after_claim
+        data['portableUnit'] = install_after_claim(helper, args, portable)
+        with receipt.open('w') as file:
+            json.dump(data, file, indent=2); file.flush(); os.fsync(file.fileno())
+        # The unit is changed but the old PID/native child still own the live
+        # service. Recheck the same RAM/original/native proof immediately. A
+        # failed check retains the claim/drop-in and NEVER attempts restart.
+        _, safe, after_install = lease_status(helper, drain, deadline)
+        identity = [helper.command('systemctl', '--user', 'show', helper.SERVICE, '-p', f, '--value') for f in ('MainPID', 'InvocationID')]
+        if not safe or identity != ['2321938', INVOCATION] or exact_originals(helper) != final['originalBytes'] or \
+                time.monotonic() - sampled > 5 or time.monotonic() - after_install > 5 or not fresh_native(observation['_receiptProof']):
+            raise RuntimeError('Original idle proof changed during unit handover; no restart')
+    # Same original receipt survives restart/ACK uncertainty. Never call Seal,
+    # Claim or a second restart; the next action after failure is inspection.
+    helper.subprocess.run(['systemctl', '--user', 'restart', helper.SERVICE], check=True, timeout=min(45, deadline - time.monotonic()))
+    while time.monotonic() < deadline:
+        try:
+            with urllib.request.urlopen('http://127.0.0.1:47821/healthz', timeout=min(2, deadline - time.monotonic())) as response:
+                health = json.load(response)
+            pid = helper.command('systemctl', '--user', 'show', helper.SERVICE, '-p', 'MainPID', '--value')
+            invocation = helper.command('systemctl', '--user', 'show', helper.SERVICE, '-p', 'InvocationID', '--value')
+            metadata = health.get('maintenance', {})
+            portable_health = not portable or health.get('source') == args.commit and health.get('role') == 'both' and health.get('nodeId') == portable['nodeId'] and health.get('siteReady') is True
+            if portable_health and health.get('ready') and health.get('relayConnected') and health.get('codexVersion') == args.version and pid.isdigit() and int(pid) > 0 and pid != data['previousPid'] and re.fullmatch('[0-9a-f]{32}', invocation) and invocation != INVOCATION and metadata.get('version') == 1 and metadata.get('phase') == 'open' and metadata.get('invocationId') == invocation and isinstance(metadata.get('instanceId'), str) and metadata['instanceId'] and metadata['instanceId'] != drain['instanceId']:
+                data.update(status='healthy', verifiedAt=time.time(), pid=pid, invocationId=invocation)
+                receipt.write_text(json.dumps(data, indent=2))
+                print(json.dumps({'commit': args.commit, 'version': args.version, 'status': 'healthy', 'mode': data['mode'], 'installedSealClaim': False}))
+                return
+        except (OSError, ValueError):
+            pass
+        time.sleep(min(1, max(0, deadline - time.monotonic())))
+    raise TimeoutError('Restart attempted; health unconfirmed. Inspect retained original claim')
+
+
+def run_supervised(helper, args, receipt_dir, receipt, *, continuation=False, corrected=False, reordered=False):
+    deadline = time.monotonic() + min(args.wait_seconds, 900)
+    def elapsed(*_):
+        raise TimeoutError('Original supervised deadline elapsed; inspect any retained claim')
+    prior = signal.signal(signal.SIGALRM, elapsed)
+    signal.setitimer(signal.ITIMER_REAL, max(.001, deadline - time.monotonic()))
+    drain = None
+    try:
+        evidence = authority()
+        if reordered:
+            from supervised_reordered_cutover import authority as reordered_authority
+            evidence = reordered_authority()
+        elif corrected:
+            from supervised_corrected_cutover import authority as corrected_authority
+            evidence = corrected_authority()
+        elif continuation:
+            from supervised_continuation import authority as continuation_authority
+            evidence = continuation_authority()
+        private_paths(helper, receipt_dir)
+        installed_receipt(helper)
+        identity = process_identity(helper)
+        binary = Path(identity[1][1][2])
+        with binary.open('rb') as file:
+            if hashlib.file_digest(file, 'sha256').hexdigest() != BINARY_SHA:
+                raise RuntimeError('Reviewed original native binary changed')
+        with urllib.request.urlopen('http://127.0.0.1:47821/healthz', timeout=2) as response:
+            health = json.load(response)
+        if not health.get('ready') or not health.get('relayConnected') or health.get('codexVersion') != '0.161.0' or health.get('maintenance', {}).get('invocationId') != INVOCATION:
+            raise RuntimeError('Healthy exact original bridge is unconfirmed')
+        source(helper, args)
+        if reordered:
+            from supervised_reordered_cutover import register
+            evidence = register(helper, args, evidence)
+        elif corrected:
+            from supervised_corrected_cutover import register
+            evidence = register(helper, args, evidence)
+        elif continuation:
+            from supervised_continuation import register
+            evidence = register(helper, args, evidence)
+        else:
+            evidence = register_attempt(helper, args, evidence)
+        # begin writes its original identity before the HTTP effect; on a lost
+        # ACK its existing same-ID status recovery remains the only recovery.
+        drain = helper.begin_drain(args, receipt_dir)
+        if process_identity(helper) != identity:
+            raise RuntimeError('Original process changed during begin')
+        activate_supervised(helper, args, receipt_dir, receipt, drain, deadline, evidence)
+    finally:
+        # Only own unclaimed drain may be cancelled. Unknown/claimed restart
+        # stays retained; process loss/cleanup failure relies on original expiry.
+        if drain and not receipt.exists() and deadline > time.monotonic():
+            try:
+                helper.owner_maintenance({**drain, 'action': 'cancel'}, timeout=min(2, deadline - time.monotonic()))
+            except (OSError, ValueError, RuntimeError):
+                pass
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, prior)

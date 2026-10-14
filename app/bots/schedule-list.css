@@ -1,0 +1,13 @@
+.bots-schedule-row { border-bottom: 1px solid var(--border); }
+.bots-schedule-row summary { display: flex; align-items: center; gap: 12px; padding: 16px 0; min-height: 68px; cursor: pointer; list-style: none; }
+.bots-schedule-row summary::-webkit-details-marker { display: none; }
+.bots-schedule-row summary > span { flex: 1; min-width: 0; }
+.bots-schedule-row strong { display: block; color: var(--foreground); font-size: 14px; font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; }
+.bots-schedule-row small { display: block; margin-top: 4px; color: var(--muted-foreground); font-size: 13px; }
+.bots-schedule-row summary > svg { flex-shrink: 0; color: var(--muted-foreground); }
+.bots-schedule-row[open] summary > svg { transform: rotate(180deg); }
+.bots-schedule-row-body { padding: 0 0 16px; }
+.bots-schedule-row-body > p { margin: 0 0 8px; color: var(--muted-foreground); font-size: 13px; }
+.bots-schedule-row-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+ .bots-schedule-row summary:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; border-radius: var(--radius); }
+.bots-schedule-row-body > p { overflow-wrap: anywhere; }

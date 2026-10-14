@@ -1,0 +1,34 @@
+.bots-goal-panel { display: grid; gap: 16px; min-width: 0; font-size: 14px; }
+.bots-goal-panel header,.bots-goal-panel header>div,.bots-goal-actions { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.bots-goal-panel header { justify-content:space-between; }
+.bots-goal-panel h3,.bots-goal-panel p { margin:0; }
+.bots-goal-panel header>div { color:var(--foreground); }
+.bots-goal-state { width:fit-content; border-radius:20px; background:var(--muted); padding:5px 10px; font-weight:600; }
+.bots-goal-state.is-active,.bots-goal-state.is-complete { color:var(--accent-foreground); background:var(--accent); }
+.bots-goal-state.is-blocked,.bots-goal-state.is-budgetLimited,.bots-goal-state.is-usageLimited { color:var(--warning-foreground); background:var(--warning); }
+.bots-goal-objective { white-space:pre-wrap; overflow-wrap:anywhere; line-height:1.65; font-size:15px; }
+.bots-goal-panel details { min-width:0; }
+.bots-goal-panel summary { cursor:pointer; min-height:44px; padding:12px 0; }
+.bots-goal-accounting { display:grid; grid-template-columns:repeat(auto-fit,minmax(125px,1fr)); gap:14px; padding:14px; margin:0; background:var(--muted); border-radius:12px; }
+.bots-goal-accounting dt,.bots-goal-observation,.bots-goal-description { color:var(--muted-foreground); font-size:13px; }
+.bots-goal-accounting dd { margin:5px 0 0; font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
+.bots-goal-hint,.bots-goal-confirm,.bots-goal-recovery { padding:12px; border:1px solid var(--border); border-radius:10px; line-height:1.5; }
+.bots-goal-confirm button,.bots-goal-recovery button { margin-top:10px; margin-right:8px; }
+.bots-goal-form { display:grid; gap:10px; }
+.bots-goal-form textarea { resize:vertical; }
+.bots-goal-error { color:var(--destructive); overflow-wrap:anywhere; }
+.bots-goal-dot { width:6px; height:6px; border-radius:50%; background:var(--muted-foreground); }
+.bots-goal-dot.is-active,.bots-goal-dot.is-complete { background:var(--primary); }
+.bots-goal-dot.is-blocked,.bots-goal-dot.is-budgetLimited,.bots-goal-dot.is-usageLimited { background:var(--warning-foreground); }
+@media(max-width:400px) { .bots-goal-accounting { grid-template-columns:1fr 1fr; } }
+.bots-goal-panel summary:focus-visible { outline: 2px solid var(--ring); outline-offset: 3px; }
+.bots-goal-indicator { flex-shrink: 0; }
+.bots-goal-panel h3 { font-weight: 600; font-size: 16px; }
+
+.bots-goal-progress { display: grid; gap: 10px; min-width: 0; }
+.bots-goal-progress h4 { margin: 0; font-size: 14px; font-weight: 600; }
+.bots-goal-plan { border: 1px solid var(--border); border-radius: var(--radius); padding: 0 12px; overflow-wrap: anywhere; }
+.bots-goal-plan summary { line-height: 1.5; }
+.bots-goal-plan summary span { font-weight: 600; }
+.bots-goal-plan summary small { display: block; color: var(--muted-foreground); font-size: 12px; padding-inline-start: 16px; }
+.bots-goal-plan .bots-native-work-plan { padding-bottom: 12px; }

@@ -6,6 +6,7 @@ import {
 } from "../../../../../db/talk-phone";
 import { beginTalkPhoneRecording } from "../../../../../db/talk-phone-recordings";
 import {
+  twilioRequestUrl,
   phoneModePromptTwiml,
   phoneRecordingTwiml,
   phoneRejectedTwiml,
@@ -58,7 +59,7 @@ export async function POST(request: Request) {
       if (!failed.remainingAttempts) {
         return twilioDocumentResponse(phoneRejectedTwiml("No mode selected. Call ended."));
       }
-      const actionUrl = new URL("/api/talk/phone/mode", request.url).toString();
+      const actionUrl = new URL("/api/talk/phone/mode", twilioRequestUrl(request)).toString();
       return twilioDocumentResponse(phoneModePromptTwiml({
         actionUrl,
         message: `Press 1 to talk. Press 2 to record. ${failed.remainingAttempts} ${failed.remainingAttempts === 1 ? "try" : "tries"} remaining.`,
@@ -71,7 +72,7 @@ export async function POST(request: Request) {
         userKey: call.user_key,
         durationMs: Date.now() - startedAt,
       });
-      return twilioDocumentResponse(recordingTwiml(request.url, 0));
+      return twilioDocumentResponse(recordingTwiml(twilioRequestUrl(request), 0));
     }
     const token = await authenticateTalkPhoneCall(callSid, call.user_key);
     const transport = talkPhoneTransport();
@@ -89,7 +90,7 @@ export async function POST(request: Request) {
         token: token.rawToken,
       }));
     }
-    const streamUrl = talkPhoneMediaStreamUrl(request.url);
+    const streamUrl = talkPhoneMediaStreamUrl(twilioRequestUrl(request));
     console.info("[todo-talk-phone-api] talk mode stream response returned", {
       callSid,
       userKey: call.user_key,

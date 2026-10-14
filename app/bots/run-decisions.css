@@ -1,0 +1,15 @@
+.bots-run-decisions { border:1px solid var(--border); border-radius:var(--radius); margin:0 0 24px; padding:16px; background:var(--card); }
+.bots-run-decisions > header { display:flex; align-items:center; gap:8px; color:var(--foreground); }
+.bots-run-decisions > header > svg { flex-shrink:0; color:var(--muted-foreground); }
+.bots-run-decisions h3 { margin:0; flex:1; min-width:0; font-size:14px; font-weight:600; }
+.bots-run-decisions h4 { margin:0; font-size:14px; line-height:1.5; font-weight:600; overflow-wrap:anywhere; }
+.bots-run-decisions article { border-top:1px solid var(--border); margin-top:12px; padding-top:16px; }
+.bots-run-decisions p, .bots-run-decision-controls p { margin:8px 0 12px; font-size:13px; line-height:1.6; color:var(--muted-foreground); overflow-wrap:anywhere; }
+.bots-run-decision-buttons { display:flex; flex-wrap:wrap; gap:8px; }
+.bots-run-decision-controls small { display:block; margin-top:12px; font-size:12px; line-height:1.6; color:var(--muted-foreground); }
+.bots-run-decision-controls form { display:grid; gap:12px; margin-top:16px; }
+.bots-run-decision-controls label { display:grid; gap:8px; font-size:14px; color:var(--foreground); }
+.bots-run-decision-controls label span { font-size:12px; color:var(--muted-foreground); }
+.bots-run-decision-controls .bots-run-decision-error, .bots-run-decisions [role=alert] { color:var(--destructive); }
+.bots-run-decisions nav { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; }
+.bots-run-decisions p button, .bots-run-decision-controls p button { margin:4px 0 4px 8px; }

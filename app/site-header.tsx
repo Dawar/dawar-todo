@@ -1,6 +1,8 @@
 "use client";
 
 import Link from "next/link";
+import { Button, buttonVariants } from "../components/ui/button";
+import { cn } from "../lib/utils";
 import { useState } from "react";
 import { useShellNavigation } from "./app-shell";
 import { ActionIcon } from "./action-icon";
@@ -12,7 +14,7 @@ export function SiteHeader({
   onProjectClick,
   onKeyboardHelp,
 }: {
-  current: "todos" | "settings" | "assistant" | "talk";
+  current: "todos" | "settings" | "assistant" | "bots";
   projectLabel?: string;
   onProjectClick?: () => void;
   onKeyboardHelp?: () => void;
@@ -21,42 +23,45 @@ export function SiteHeader({
   const [shortcutGuideOpen, setShortcutGuideOpen] = useState(false);
   const brand = (
     <>
-      <span className="grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-[#216e4e] text-base font-semibold text-white shadow-sm" aria-hidden="true">✓</span>
-      <span className="min-w-0 truncate text-[15px] font-semibold tracking-[-0.02em]">{projectLabel}</span>
-      {onProjectClick && <ActionIcon name="next" className="h-3.5 w-3.5 shrink-0 rotate-90 text-[#7c847f]" />}
+      <span className="grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-primary text-base font-semibold text-primary-foreground" aria-hidden="true">✓</span>
+      <span className="hidden min-w-0 truncate min-[360px]:block text-[15px] font-semibold tracking-[-0.02em]">{projectLabel}</span>
+      {onProjectClick && <ActionIcon name="next" className="h-3.5 w-3.5 shrink-0 rotate-90 text-muted-foreground" />}
     </>
   );
   const navigation = [
-    { href: "/", label: "Tasks", icon: "view-open" as const, active: current === "todos" },
-    { href: "/talk", label: "Chat", icon: "assistant" as const, active: current === "talk" || current === "assistant" },
+    { href: "/tasks", label: "Tasks", icon: "view-open" as const, active: current === "todos" },
+    { href: "/bots", label: "Bots", icon: "assistant" as const, active: current === "bots" },
     { href: "/settings", label: "Settings", icon: "settings" as const, active: current === "settings" },
   ];
 
   return (
-    <header className="sticky top-0 z-30 border-b border-black/[0.06] bg-[#f6f7f5]/92 backdrop-blur-xl">
-      <div className="mx-auto flex h-14 max-w-5xl items-center justify-between gap-2 px-3 sm:px-6">
+    <header className="sticky top-0 z-30 border-b border-border bg-background/95 backdrop-blur-xl">
+      <div className={`mx-auto flex h-14 w-full items-center justify-between gap-2 px-3 sm:px-6 ${current === "bots" ? "max-w-none" : "max-w-5xl"}`}>
         {onProjectClick ? (
           <button
             type="button"
             onClick={onProjectClick}
             aria-label={`Choose project. Current selection: ${projectLabel}`}
             title="Choose project"
-            className="flex min-w-0 max-w-[38vw] items-center gap-2 rounded-lg text-left transition hover:text-[#216e4e] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#216e4e] sm:max-w-md sm:gap-2.5"
+            className="flex min-h-11 min-w-0 max-w-[38vw] items-center gap-2 rounded-lg text-left transition hover:text-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring sm:max-w-md sm:gap-2.5"
           >
             {brand}
           </button>
         ) : (
           <Link
-            href="/"
+            href="/tasks"
+            aria-label={`${projectLabel} · Tasks`}
+            title={projectLabel}
             prefetch={false}
-            onClick={(event) => navigate(event, "/")}
-            className="flex min-w-0 max-w-[38vw] items-center gap-2 rounded-lg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#216e4e] sm:gap-2.5"
+            onClick={(event) => navigate(event, "/tasks")}
+            className="flex min-h-11 min-w-0 max-w-[38vw] items-center gap-2 rounded-lg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring sm:gap-2.5"
           >
             {brand}
           </Link>
         )}
         <nav className="flex shrink-0 items-center gap-0.5 sm:gap-1" aria-label="Primary">
-          <button
+          <Button
+            variant="ghost" size="icon"
             type="button"
             onClick={() => {
               if (onKeyboardHelp) onKeyboardHelp();
@@ -64,10 +69,10 @@ export function SiteHeader({
             }}
             aria-label="Keyboard shortcuts"
             title="Keyboard shortcuts (?)"
-            className="mr-0.5 hidden h-9 w-9 place-items-center rounded-xl text-[#69716c] transition hover:bg-black/[0.04] hover:text-[#252a27] focus-visible:outline-2 focus-visible:outline-[#216e4e] md:grid"
+            className="mr-0.5 hidden text-muted-foreground md:inline-flex"
           >
-            <ActionIcon name="keyboard" className="h-4.5 w-4.5" />
-          </button>
+            <ActionIcon name="keyboard" className="h-4 w-4" />
+          </Button>
           {navigation.map((item) => (
             <Link
               key={item.href}
@@ -77,11 +82,7 @@ export function SiteHeader({
               aria-label={item.label}
               aria-current={item.active ? "page" : undefined}
               title={item.label}
-              className={`inline-flex h-9 items-center gap-1 rounded-xl px-1.5 text-xs font-semibold transition focus-visible:outline-2 focus-visible:outline-[#216e4e] sm:gap-1.5 sm:px-2.5 sm:text-sm ${
-                item.active
-                  ? "bg-[#eaf3ed] text-[#216e4e]"
-                  : "text-[#69716c] hover:bg-[#eaf3ed] hover:text-[#216e4e]"
-              }`}
+              className={cn(buttonVariants({ variant: item.active ? "secondary" : "ghost" }), "gap-1 px-2 text-[13px] sm:gap-1.5 sm:px-3 sm:text-sm", item.active ? "bg-accent text-accent-foreground" : "text-muted-foreground")}
             >
               <ActionIcon name={item.icon} className="h-4 w-4 shrink-0" />
               <span>{item.label}</span>

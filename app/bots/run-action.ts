@@ -1,0 +1,149 @@
+import { useMemo, useSyncExternalStore } from "react";
+import type { BotOperations } from "../../lib/bots-operations";
+import { botsClient as client } from "./client";
+import { runActionJournal, type RunActionMethod as Method, type RunActionIntent as Intent, type ActionSelection } from "./run-action-journal";
+import { goalControlBlock, goalFingerprint, goalScope, validGoal } from "./native-goal-state";
+import { validBurstQueueReceipt, type BurstQueueParams } from "../../lib/burst-queue";
+
+const actions = new Map<string, RunAction>();
+let channel: BroadcastChannel | undefined, listening = false;
+function listen() {
+  if (listening || typeof window === "undefined") return;
+  listening = true;
+  const refresh = (key?: string) => { for (const [scope, action] of actions) if ((!key || key === scope || key === action.storageKey) && action.owner === client.owner && action.mounted) void action.refresh(); };
+  if (typeof BroadcastChannel !== "undefined") {
+    channel = new BroadcastChannel("dawar-run-actions-v2");
+    channel.onmessage = event => { if (typeof event.data === "string") refresh(event.data); };
+  }
+  window.addEventListener("storage", event => {
+    if (event.key === "dawar-run-action-change:v2") refresh();
+    else if (event.key?.startsWith("dawar-run-action:v1:")) refresh(event.key);
+  });
+  window.addEventListener("focus", () => refresh()); window.addEventListener("pageshow", () => refresh());
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
+  let owner = client.owner;
+  client.subscribe(() => { if (owner !== client.owner) { owner = client.owner; refresh(); } });
+}
+function changed(key: string) {
+  try { channel?.postMessage(key); } catch { /* storage/focus also reconciles */ }
+  // Notification only; identity/settlement never depend on this fallible write.
+  try { localStorage.setItem("dawar-run-action-change:v2", crypto.randomUUID()); } catch { /* focus/resume also reconciles */ }
+}
+/** Origin-owned, exact-ID recovery. No automatic uncertain write retry. */
+class RunAction {
+  intent: Intent | null = null;
+  busy = false;
+  ready = false;
+  accepted = false;
+  confirmation: Intent | null = null;
+  error = "";
+  private journalRevision = -1;
+  private revision = 0;
+  private listeners = new Set<() => void>();
+  get storageKey(){return this.key;}
+  get mounted() { return this.listeners.size > 0; }
+  snapshot = () => this.revision;
+  subscribe = (fn: () => void) => { this.listeners.add(fn); listen(); void this.refresh(); return () => { this.listeners.delete(fn); }; };
+  constructor(readonly owner: string, readonly botId: string, private key: string, private scope: string) {}
+  private apply(value: ActionSelection) {
+    if (value.revision < this.journalRevision) return;
+    this.journalRevision = value.revision; this.ready = true;
+    this.intent = value.current;
+    this.accepted = !value.current && value.last?.state === "accepted";
+    this.confirmation = value.last?.state === "accepted" ? value.last : null;
+    this.error = value.current?.error ?? (value.last?.state === "rejected" && !value.current ? value.last.error ?? "The action was rejected." : "");
+    this.notify();
+  }
+  async refresh() {
+    try { this.apply(await runActionJournal(this.key, { kind: "read" })); }
+    catch (error) { this.error = error instanceof Error ? error.message : "Action recovery is unavailable. Retry when browser storage is available."; this.notify(); }
+  }
+  private notify() { this.revision++; for (const fn of this.listeners) fn(); }
+  private async execute(command: { method: Method; params: Record<string, unknown>; capture?: {draftVersion:string} } | { id: string }, beforeBurstQueue?: () => boolean) {
+    if (this.busy || client.owner !== this.owner || !client.online) throw Error("Connect as this action's owner before continuing.");
+    this.busy = true; this.notify();
+    let intent: Intent | undefined;
+    const isGoal = 'method' in command && command.method.startsWith('goals.');
+    const beforeBot = isGoal ? client.snapshot?.bots.find(bot => bot.id === this.botId) : undefined;
+    const beforeGoal = beforeBot ? goalFingerprint(beforeBot, client.snapshot?.workByBot?.find(work => work.botId === this.botId)) : null;
+    try {
+      const selected = await runActionJournal(this.key, "id" in command ? { kind: "exact", id: command.id } : { kind: "admit", intent: { id: crypto.randomUUID(), ...command } });
+      this.apply(selected); changed(this.key);
+      const operation = selected.selected;
+      if (!operation) throw Error("No saved action was selected. Retry recovery.");
+      if (operation.state === "accepted") return (operation as Intent & {result?:unknown}).result;
+      if (operation.state === "rejected") throw Error(operation.error || "This exact action was rejected. Review the current state before making a new action.");
+      intent = operation;
+      if (intent.method === "runs.decide" && client.snapshot?.capabilities?.scheduleDecisions !== 1) throw Error("Connect to a service that supports scheduled-run choices. The saved choice is retained.");
+      if (intent.method === "bursts.discard" && client.snapshot?.capabilities?.burstDiscard !== 1) throw Error("Connect to the updated service to discard these messages. The saved action is retained.");
+      if (intent.method === "bursts.queue" && client.snapshot?.capabilities?.burstQueue !== 1) throw Error("Connect to the updated service to queue held messages. The saved action is retained.");
+      if ((intent.method === "bursts.resume" || intent.method === "bursts.discard" && intent.params.pendingOnly) && client.snapshot?.capabilities?.burstControls !== 1) throw Error("Connect to the updated service for held-message controls. This saved action is retained.");
+      const capability = intent.method.startsWith('goals.') ? 'nativeGoals' : intent.method.startsWith("bursts.") ? "messageBursts" : (intent.method === "work.resume" || intent.method === "turn.interrupt" && intent.params.scope === "main" && client.snapshot?.capabilities?.singleThreadExecution === 1) ? "singleThreadExecution" : "backgroundRunLanes";
+      if (client.snapshot?.capabilities?.[capability] !== 1) throw Error("This service does not support the saved action. Its identity is retained.");
+      if (intent.method.startsWith('goals.')) {
+        for (const scope of ['stop:main', 'stop:all', 'work:resume']) {
+          const key = `dawar-run-action:v1:${JSON.stringify([this.owner, this.botId, scope])}`;
+          if ((await runActionJournal(key, { kind: 'read' })).current) throw Error('Confirm the saved Stop or automatic-intake Resume before changing the goal.');
+        }
+        const bot = client.snapshot?.bots.find(bot => bot.id === this.botId);
+        if (client.owner !== this.owner || !bot?.threadId || this.scope !== goalScope(bot.threadId)) throw Error('This saved goal action belongs to its original conversation. Nothing was sent to a replacement thread.');
+        const block = goalControlBlock(client.snapshot, bot, client.online);
+        if (block) throw Error(block);
+        if (isGoal && goalFingerprint(bot, client.snapshot?.workByBot?.find(work => work.botId === bot.id)) !== beforeGoal) throw Error('The native goal changed while saving this action. Its identity is retained for review.');
+      }
+      // Guard a NEW UI burst placement after its durable IDB admission. Recovery
+      // retains the original frozen operation; the callback is never persisted.
+      if (intent.method === "bursts.queue" && beforeBurstQueue && !beforeBurstQueue()) throw Error("The captured Queue destination changed while saving. The original action remains available for review.");
+      const result = await client.rpc(intent.method, this.botId, intent.params, intent.id, { owner: this.owner, managed: true });
+      if (!result || typeof result !== "object" || Array.isArray(result)) throw Error("The response did not confirm this action. Check the same saved action again.");
+      if (intent.method.startsWith('goals.')) {
+        const thread = this.scope.slice('native-goal:'.length);
+        if (intent.method === 'goals.set' && !validGoal((result as { goal?: unknown }).goal, thread) || intent.method === 'goals.clear' && typeof (result as { cleared?: unknown }).cleared !== 'boolean') throw Error('Native goal acknowledgement is incomplete. Check the same saved action again.');
+        // Settle the original receipt even if the selected owner/thread moved.
+        // Display remains exclusively on sequence-fenced cached work events.
+      }
+      if (intent.method === "runs.decide") {
+        const receipt = result as { operationId?: string; run?: { id?: string; botId?: string } };
+        if (receipt.operationId !== intent.id || receipt.run?.id !== intent.params.runId || receipt.run?.botId !== this.botId) throw Error("The response did not confirm this exact choice. Check the saved choice again.");
+      }
+      if (intent.method === "bursts.discard") {
+        const receipt = result as { discardedIds?: string[]; hiddenIds?: string[] };
+        const ids = intent.params.pendingOnly ? receipt.discardedIds ?? [] : [...(receipt.discardedIds ?? []), ...(receipt.hiddenIds ?? [])];
+        const requested = intent.params.messageIds as string[];
+        if (ids.length !== requested.length || requested.some(id => !ids.includes(id))) throw Error("The reply did not confirm the exact messages. Check the saved discard action again.");
+      }
+      if (intent.method === "bursts.queue" && !validBurstQueueReceipt((result as {transfer?:unknown}).transfer, intent.id, this.botId, intent.params as BurstQueueParams))
+        throw Error("Queue placement was not confirmed for these exact messages. Check the same saved action again.");
+      if (["bursts.stop", "bursts.start", "bursts.resume"].includes(intent.method) && client.snapshot?.capabilities?.burstControls === 1) {
+        const receipt = (result as { control?: { operationId?: string; method?: string; botId?: string } }).control;
+        if (receipt?.operationId !== intent.id || receipt.method !== intent.method || receipt.botId !== this.botId) throw Error("This burst control was not confirmed. Check the same saved action again.");
+      }
+      this.apply(await runActionJournal(this.key, { kind: "settle", id: intent.id, state: "accepted",  })); changed(this.key);
+      return result;
+    } catch (reason) {
+      const error = reason instanceof Error ? reason.message : "This action is unconfirmed. Check the same saved action again.";
+      if (intent) {
+        try { this.apply(await runActionJournal(this.key, { kind: "settle", id: intent.id, state: (reason as { outcome?: string }).outcome === "rejected" ? "rejected" : "pending", error })); changed(this.key); }
+        catch { this.error = `${error} The action journal needs recovery; its saved identity is retained.`; }
+      } else this.error = error;
+      throw reason;
+    } finally { this.busy = false; this.notify(); }
+  }
+  perform = async (method: Method, params: BotOperations[Method]["params"]) => { await this.execute({ method, params }); };
+  performBurstQueue = async (params: BurstQueueParams, current: () => boolean) => { await this.execute({method: "bursts.queue", params}, current); };
+  performResult = (method: Method, params: BotOperations[Method]["params"], capture?: {draftVersion:string}) => this.execute({ method, params, ...(capture ? {capture} : {}) });
+  retry = () => this.intent ? this.execute({ id: this.intent.id }) : this.refresh();
+}
+
+export function useRunAction(owner: string, botId: string, scope: string) {
+  const action = useMemo(() => {
+    // Each immutable operation retains its original API anchor bot.
+    const key = `dawar-run-action:v1:${JSON.stringify([owner, botId, scope])}`;
+    const cacheKey=key;
+    let value = actions.get(cacheKey);
+    if (!value) { value = new RunAction(owner, botId, key, scope); actions.set(cacheKey, value); }
+    return value;
+  }, [owner, botId, scope]);
+  useSyncExternalStore(action.subscribe, action.snapshot, action.snapshot);
+  return action;
+}

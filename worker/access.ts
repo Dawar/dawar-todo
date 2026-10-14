@@ -9,7 +9,7 @@ import {
 
 const AUTHENTICATED_USER_HEADER = "oai-authenticated-user-email";
 
-type AccessEnvironment = { DB: D1Database };
+type AccessEnvironment = { DB: D1Database; API_TOKEN_OWNER_KEY?: string };
 type AccessContext = { waitUntil(promise: Promise<unknown>): void };
 
 function isLocalHost(hostname: string) {
@@ -49,7 +49,7 @@ function isPublicTalkPhoneTransport(pathname: string) {
 }
 
 function isPublicInternalTransport(pathname: string) {
-  return pathname === "/api/internal/minute";
+  return pathname === "/api/internal/minute" || pathname === "/api/bots/notifications" || pathname === "/api/bots/storage/service" || pathname === '/api/task-requests/service';
 }
 
 function unauthorizedApi(message = "Sign in with ChatGPT or use a valid API token to use Dawar Todo.") {
@@ -77,11 +77,20 @@ export async function appAccessResponse(
   if (isPublicStaticPath(url.pathname) || isDispatchAuthPath(url.pathname)) return null;
   if (isPublicTalkPhoneTransport(url.pathname)) return null;
   if (isPublicInternalTransport(url.pathname)) return null;
+  // Exact guest surface only; the API validates a request-scoped bearer/PIN.
+  // No owner ticket, general Bots transport or neighboring data is exposed.
+  if (url.pathname === '/task-request' || url.pathname === '/task-request/' || url.pathname === '/api/task-requests/guest') return null;
   if (request.headers.get(AUTHENTICATED_USER_HEADER)?.trim()) return null;
 
   const apiRequest = url.pathname.startsWith("/api/");
   const bearerToken = apiRequest ? apiTokenFromAuthorization(request.headers.get("Authorization")) : null;
   if (apiRequest && bearerToken) {
+    if (url.pathname.startsWith('/api/portable/') || url.pathname.startsWith('/api/migration/')) {
+      return Response.json(
+        { error: 'Machine installation and migration readouts require the existing owner’s signed-in session.' },
+        { status: 403, headers: { 'Cache-Control': 'private, no-store' } },
+      );
+    }
     if (url.pathname.startsWith("/api/api-tokens") || url.pathname.startsWith("/api/push")) {
       console.warn("[todo-auth] API token management rejected for bearer authentication", { path: url.pathname });
       return Response.json(
@@ -91,7 +100,7 @@ export async function appAccessResponse(
         { status: 403, headers: { "Cache-Control": "no-store" } },
       );
     }
-    if (url.pathname.startsWith("/api/assistant") || url.pathname.startsWith("/api/talk")) {
+    if (url.pathname.startsWith("/api/assistant") || url.pathname.startsWith("/api/talk") || url.pathname.startsWith("/api/bots")) {
       console.warn("[todo-auth] signed-in AI workspace rejected for bearer authentication", { path: url.pathname });
       return Response.json(
         { error: "The AI assistant and Talk are available only in the signed-in Dawar Todo interface." },
@@ -114,6 +123,11 @@ export async function appAccessResponse(
     }
     try {
       const identity = await authenticateApiToken(environment.DB, bearerToken);
+      if (identity && environment.API_TOKEN_OWNER_KEY !== undefined
+        && identity.createdByEmail !== environment.API_TOKEN_OWNER_KEY.trim().toLowerCase()) {
+        console.warn("[todo-auth] API token rejected outside configured owner", { path: url.pathname });
+        return unauthorizedApi("This API token is not authorized for this owner.");
+      }
       if (identity) {
         request.headers.set(INTERNAL_ACTOR_KIND_HEADER, "api-token");
         request.headers.set(INTERNAL_ACTOR_ID_HEADER, identity.id);

@@ -1,0 +1,27 @@
+.operator-dialog{max-width:640px}
+.operator-muted{color:var(--muted-foreground);font-size:14px}
+.operator-status{display:flex;align-items:center;gap:8px;font-size:14px}
+.operator-status>span{width:8px;height:8px;flex:none;border-radius:50%;background:var(--muted-foreground)}
+.operator-status>.is-connected{background:var(--primary)}
+.operator-route{display:flex;align-items:center;gap:12px;font-size:14px}
+.operator-route select{flex:1;min-width:0}
+.operator-controls{display:flex;gap:8px;flex-wrap:wrap}
+.operator-call-note{line-height:1.5;margin:0}
+.operator-call-card{border:1px solid var(--border);border-radius:var(--radius);background:var(--card);margin:12px 0;overflow:hidden}
+.operator-call-card>summary{display:flex;align-items:center;flex-wrap:wrap;gap:8px;padding:12px;cursor:pointer;font-size:14px;min-height:44px}
+.operator-call-card>summary strong{flex:1;min-width:0;overflow-wrap:anywhere}
+.operator-call-card>summary span,.operator-call-card time{font-size:13px;color:var(--muted-foreground)}
+.operator-call-card time{white-space:nowrap}
+.operator-call-card-body{padding:0 12px 12px;font-size:14px;overflow-wrap:anywhere}
+.operator-call-card-body p{white-space:pre-wrap;line-height:1.5}
+.operator-call-card-body small{display:block;color:var(--muted-foreground);font-size:13px;margin-bottom:4px}
+.operator-call-card-body .operator-human{background:var(--muted);padding:12px;border-radius:var(--radius)}
+.operator-request{padding-top:16px;margin-top:12px;border-top:1px solid var(--border)}
+.operator-request-state{display:flex;align-items:center;flex-wrap:wrap;gap:8px;font-size:13px;color:var(--muted-foreground);text-transform:capitalize}
+.operator-error{padding:12px;color:var(--destructive);border:1px solid var(--border);border-radius:var(--radius);line-height:1.5;font-size:14px}
+.operator-error button{margin-top:8px}
+.operator-call-card [role=alert],.operator-call-history [role=alert]{color:var(--destructive)}
+.operator-call-card summary:focus-visible{outline:2px solid var(--ring);outline-offset:-2px}
+.operator-conversation-link{color:var(--primary);text-decoration:underline;text-underline-offset:3px}
+@media(max-width:540px){.operator-controls button{flex:1 1 40%}.operator-route{align-items:flex-start;flex-direction:column;gap:8px}.operator-route select{width:100%;flex:none;min-height:44px}}
+@media(max-width:540px){.operator-call-card>summary strong{flex-basis:calc(100% - 32px)}.operator-call-card>summary>span{margin-left:24px}}

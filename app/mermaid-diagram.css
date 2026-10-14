@@ -1,0 +1,7 @@
+.markdown-diagram{min-width:0;max-width:100%;margin:16px 0;overflow:hidden;border:1px solid var(--border);border-radius:var(--radius);background:var(--card);color:var(--foreground)}
+.markdown-diagram-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:4px 8px 4px 12px;border-bottom:1px solid var(--border);font-size:12px;font-weight:500;line-height:1.5;color:var(--muted-foreground)}
+.markdown-diagram-viewport{display:flex;max-width:100%;overflow:auto;padding:20px;overscroll-behavior-x:contain;scrollbar-width:thin;scrollbar-color:var(--input) var(--muted)}
+.markdown-diagram-viewport:focus-visible{outline:2px solid var(--ring);outline-offset:-3px}
+.markdown-diagram-viewport>svg{display:block;flex:none;max-width:none;margin:auto}
+.markdown-diagram .markdown-diagram-placeholder{display:grid;place-items:center;min-height:120px;padding:20px;font-size:14px;color:var(--muted-foreground)}
+.markdown-diagram>pre{margin:0!important;border:0!important;border-radius:0!important}

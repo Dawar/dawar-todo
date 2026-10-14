@@ -68,7 +68,7 @@ test("ships durable agent-origin escalation, profile phone, callbacks, and owner
   assert.match(schema, /todoProfilePhoneVerifications/);
   assert.match(schema, /todoUrgentEscalations/);
   assert.match(schema, /todoUrgentAttempts/);
-  assert.match(database, /CURRENT_SCHEMA_VERSION = "29"/);
+  assert.match(database, /CURRENT_SCHEMA_VERSION = "30"/);
   assert.match(database, /CREATE TABLE IF NOT EXISTS todo_urgent_escalations/);
   assert.match(database, /todo_urgent_escalations_due_idx/);
   assert.match(database, /task and campaign committed atomically/);

@@ -1,5 +1,6 @@
 import { readUrgentAlertAttemptContext } from "../../../../../../../db/urgent-alerts";
 import {
+  twilioRequestUrl,
   twilioPhoneConfig,
   twilioXmlResponse,
   validateTwilioRequest,
@@ -31,7 +32,7 @@ export async function POST(request: Request) {
     if (answeredBy.startsWith("machine") || answeredBy === "fax") {
       return twilioXmlResponse(`<Say>Dawar Todo urgent alert from ${agent}. ${task}. A text with acknowledgement instructions was also sent.</Say><Hangup/>`);
     }
-    const actionUrl = new URL("/api/talk/phone/urgent/provider/voice/action", request.url);
+    const actionUrl = new URL("/api/talk/phone/urgent/provider/voice/action", twilioRequestUrl(request));
     actionUrl.searchParams.set("attempt", attemptId);
     return twilioXmlResponse(
       `<Gather input="dtmf" action="${xmlEscape(actionUrl.toString())}" method="POST" numDigits="1" timeout="12" actionOnEmptyResult="true">`

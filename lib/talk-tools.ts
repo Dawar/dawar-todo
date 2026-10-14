@@ -1,4 +1,6 @@
-import { env, waitUntil } from "cloudflare:workers";
+import { waitUntil } from "./source-writer-work";
+import { dispatchOperatorTool, readOperatorContext } from './operator-server';
+import { env } from "cloudflare:workers";
 import { listTodoAttachments } from "../db/attachments";
 import {
   forgetAssistantMemories,
@@ -189,7 +191,7 @@ async function createTask(args: Record<string, unknown>): Promise<TalkToolResult
     recurrenceCron: optionalString(args.recurrence_cron, 100),
     clientId: crypto.randomUUID(),
   });
-  waitUntil(dispatchTodoPushNotifications(env.DB, env, new Date()).catch((error) => {
+  waitUntil(() => dispatchTodoPushNotifications(env.DB, env, new Date()).catch((error) => {
     console.error("[todo-push] Talk-created task delivery failed; minute retry retained", {
       todoId: todo.id,
       error: error instanceof Error ? error.message : String(error),
@@ -605,6 +607,8 @@ export async function dispatchTalkTool(input: ToolDispatchInput): Promise<TalkTo
     name: input.name,
     argumentKeys: Object.keys(input.arguments),
   });
+  if (input.name.startsWith('operator_')) return dispatchOperatorTool(input);
+  if ((await readOperatorContext(input.userKey, input.sessionId))?.bot && input.name !== 'wait_for_user') throw new Error('Use the selected bot Operator tools for this work, or switch back to Operator.');
   if (input.name === "search_tasks") return searchTasks(input.arguments);
   if (input.name === "get_task_context") return getTaskContext(input.userKey, input.arguments);
   if (input.name === "focus_task") {

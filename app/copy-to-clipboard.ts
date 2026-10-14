@@ -5,6 +5,7 @@ export async function copyTextToClipboard(text: string) {
     return;
   }
 
+  const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   const textarea = document.createElement("textarea");
   textarea.value = text;
   textarea.setAttribute("readonly", "");
@@ -12,9 +13,13 @@ export async function copyTextToClipboard(text: string) {
   textarea.style.opacity = "0";
   textarea.style.pointerEvents = "none";
   document.body.appendChild(textarea);
-  textarea.select();
-  textarea.setSelectionRange(0, text.length);
-  const copied = document.execCommand("copy");
-  textarea.remove();
-  if (!copied) throw new Error("Copying is not supported in this browser.");
+  try {
+    textarea.select();
+    textarea.setSelectionRange(0, text.length);
+    if (!document.execCommand("copy")) throw new Error("Copying is not supported in this browser.");
+  } finally {
+    const restoreFocus = document.activeElement === textarea;
+    textarea.remove();
+    if (restoreFocus && previousFocus?.isConnected) previousFocus.focus({ preventScroll: true });
+  }
 }

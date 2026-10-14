@@ -15,10 +15,10 @@ export async function DELETE(
       return Response.json({ attachmentId, discarded });
     }
     const result = await deleteTodoAttachment(todoId, attachmentId);
-    if (!result) return Response.json({ error: "Image not found." }, { status: 404 });
+    if (!result) return Response.json({ error: "Attachment not found." }, { status: 404 });
     return Response.json(result);
   } catch (error) {
     console.error("[todo-api] task attachment delete failed", { todoId, attachmentId, error });
-    return Response.json({ error: "The image could not be deleted." }, { status: 500 });
+    return Response.json({ error: "The attachment could not be deleted." }, { status: 500 });
   }
 }

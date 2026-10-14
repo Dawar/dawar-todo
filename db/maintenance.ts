@@ -1,4 +1,5 @@
-import { env, waitUntil } from "cloudflare:workers";
+import { waitUntil } from "../lib/source-writer-work";
+import { env } from "cloudflare:workers";
 import { processRecurringTodos } from "../worker/recurring";
 import { scheduleAttachmentCleanup } from "./attachments";
 import { dispatchTodoPushNotifications } from "./push-notifications";
@@ -20,7 +21,7 @@ export async function runTodoReadMaintenance(source: "bootstrap" | "sync" | "leg
 
   if (source === "sync") {
     if (shouldDispatchPush) {
-      waitUntil(dispatchTodoPushNotifications(env.DB, env, now).catch((error) => {
+      waitUntil(() => dispatchTodoPushNotifications(env.DB, env, now).catch((error) => {
         console.error("[todo-maintenance] background push dispatch failed", {
           recurrenceMinute,
           error,
@@ -28,7 +29,7 @@ export async function runTodoReadMaintenance(source: "bootstrap" | "sync" | "leg
       }));
     }
     if (shouldCheckRecurrence) {
-      waitUntil(processRecurringTodos(env.DB, now, { catchUp: true, source: "todo-list-sync" }).catch((error) => {
+      waitUntil(() => processRecurringTodos(env.DB, now, { catchUp: true, source: "todo-list-sync" }).catch((error) => {
         console.error("[todo-maintenance] background recurrence check failed", {
           recurrenceMinute,
           error,

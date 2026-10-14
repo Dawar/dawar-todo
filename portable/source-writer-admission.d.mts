@@ -1,0 +1,11 @@
+export type SourceWriterBinding = {sourceId:string;installationId:string;producerSHA256:string};
+export type SourceWriterInput = {db:unknown;expected:SourceWriterBinding};
+export function installSourceWriterAdmission(input:SourceWriterInput):Promise<unknown>;
+export function readSourceWriterAdmission(input:SourceWriterInput):Promise<SourceWriterBinding & {version:1;kind:'dawar-source-writer-installation';scope:'worker-request-and-scheduled-lifetimes';phase:'open'|'draining';generation:number;operationId:string|null;expiresAt:number;activeWriters:number;unknownWriters:number;retainedFinishedWriters:number;observedAt:number;externalWriterCoverageEstablished:false;productionWriterFreezeEstablished:false}>;
+export function readSourceWriterControlReceipt(input:SourceWriterInput & {kind:'install'|'drain'|'release';operationId:string;expiresAt?:number;generation?:number;drainId?:string}):Promise<unknown>;
+export function admitSourceWriter(input:SourceWriterInput & {operationId:string;kind:'worker-http'|'worker-scheduled'}):Promise<unknown>;
+export function settleSourceWriter(input:SourceWriterInput & {operationId:string;kind:'worker-http'|'worker-scheduled';outcome:'finished'|'unknown'}):Promise<unknown>;
+export function beginSourceWriterDrain(input:SourceWriterInput & {operationId:string;expiresAt:number}):Promise<SourceWriterDrainProof>;
+export function observeSourceWriterDrain(input:SourceWriterInput & {operationId:string}):Promise<SourceWriterDrainProof>;
+export function releaseSourceWriterDrain(input:SourceWriterInput & {drainId:string;releaseId:string;generation:number}):Promise<unknown>;
+export type SourceWriterDrainProof = SourceWriterBinding & {version:1;kind:'dawar-source-writer-drain';scope:'worker-request-and-scheduled-lifetimes';operationId:string;generation:number;expiresAt:number;observedAt:number;status:'expired'|'draining'|'idle';activeWriters:number;unknownWriters:number;retainedFinishedWriters:number;externalWriterCoverageEstablished:false;productionWriterFreezeEstablished:false};

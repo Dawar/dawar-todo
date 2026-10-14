@@ -1,3 +1,5 @@
+import { ensureTaskDelegationSchema } from "./task-queue-delegation";
+import type { TaskDelegation } from "../lib/task-queue-delegation";
 import { env } from "cloudflare:workers";
 import { importedTodos } from "./imported-todos";
 import {
@@ -23,6 +25,7 @@ import {
 import { zonedLocalDateTimeToUtc } from "../lib/zoned-date-time";
 import { validateTaskDescription } from "../lib/task-description";
 import { MAX_PINNED_TASKS } from "../lib/task-pins";
+import { DEFAULT_OPENING_TAB, parseOpeningTab, type OpeningTab } from "../lib/app-preferences";
 
 type StoredTodoStatus = "open" | "completed" | "archived";
 export type TodoStatus = "open" | "completed";
@@ -51,6 +54,8 @@ type TodoRow = {
   created_at: string;
   updated_at: string;
   attachment_count?: number;
+  queue_delegation?: string | null;
+  queue_last_transfer?: string | null;
 };
 
 type UndoSnapshot = {
@@ -80,6 +85,8 @@ export type Todo = {
   createdAt: string;
   updatedAt: string;
   attachmentCount: number;
+  queueDelegation?: TaskDelegation | null;
+  queueLastTransfer?: TaskDelegation | null;
 };
 
 export type TodoUpdate = Partial<
@@ -93,6 +100,8 @@ export type TodoMutationMetadata = {
 };
 
 export type TodoSettings = {
+  openAppTo: OpeningTab;
+  openAppToUpdatedAt?: string | null;
   snoozeTimeZone: string;
   snoozeWakeHour: number;
   snoozeQuickPresets: QuickSnoozePreset[];
@@ -132,7 +141,7 @@ type TodoSyncChangeRow = {
 };
 
 let initialization: Promise<void> | null = null;
-const CURRENT_SCHEMA_VERSION = "29";
+const CURRENT_SCHEMA_VERSION = "30";
 
 function database() {
   if (!env.DB) throw new Error("The todo database is unavailable.");
@@ -161,6 +170,8 @@ function mapTodo(row: TodoRow): Todo {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     attachmentCount: Number(row.attachment_count ?? 0),
+    queueDelegation: row.queue_delegation ? JSON.parse(row.queue_delegation) : null,
+    queueLastTransfer: row.queue_last_transfer ? JSON.parse(row.queue_last_transfer) : null,
   };
 }
 
@@ -185,7 +196,7 @@ function mapTodoCaptureDraft(value: string | null | undefined): TodoCaptureDraft
   }
 }
 
-function mapTodoSettings(rows: Array<{ key: string; value: string }>): TodoSettings {
+function mapTodoSettings(rows: Array<{ key: string; value: string; updated_at?: string }>): TodoSettings {
   const values = Object.fromEntries(rows.map((row) => [row.key, row.value]));
   let snoozeQuickPresets = DEFAULT_QUICK_SNOOZE_PRESETS;
   try {
@@ -195,6 +206,8 @@ function mapTodoSettings(rows: Array<{ key: string; value: string }>): TodoSetti
     snoozeQuickPresets = DEFAULT_QUICK_SNOOZE_PRESETS;
   }
   return {
+    openAppTo: parseOpeningTab(values.open_app_to) ?? DEFAULT_OPENING_TAB,
+    openAppToUpdatedAt: rows.find((row) => row.key === "open_app_to")?.updated_at ?? null,
     snoozeTimeZone: values.snooze_timezone || "America/Toronto",
     snoozeWakeHour: Number(values.snooze_wake_hour ?? 8),
     snoozeQuickPresets: [...snoozeQuickPresets],
@@ -204,6 +217,8 @@ function mapTodoSettings(rows: Array<{ key: string; value: string }>): TodoSetti
 
 const todoListSql = `
   SELECT todos.*,
+    (SELECT delegation FROM todo_queue_state WHERE todo_id=todos.id) AS queue_last_transfer,
+    (SELECT delegation FROM todo_queue_state WHERE todo_id=todos.id AND generation=delegation_generation) AS queue_delegation,
     (SELECT COUNT(*) FROM todo_attachments
      WHERE todo_attachments.todo_id = todos.id
        AND todo_attachments.upload_state = 'ready'
@@ -310,6 +325,7 @@ export async function ensureTodoDatabase() {
         .prepare("SELECT value FROM app_settings WHERE key = 'schema_version'")
         .first<{ value: string }>();
       if (schemaVersion?.value === CURRENT_SCHEMA_VERSION) {
+        await ensureTaskDelegationSchema(db);
         console.info("[todo-db] production schema fast path", {
           schemaVersion: schemaVersion.value,
           durationMs: Date.now() - fastPathStartedAt,
@@ -431,6 +447,11 @@ export async function ensureTodoDatabase() {
           updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
         )
       `),
+      db.prepare("CREATE TABLE IF NOT EXISTS `todo_bot_notifications` (\n\t`id` text PRIMARY KEY NOT NULL,\n\t`owner_key` text NOT NULL,\n\t`bot_id` text NOT NULL,\n\t`title` text NOT NULL,\n\t`body` text NOT NULL,\n\t`created_at` text NOT NULL,\n\t`delivered_at` text\n);"),
+      db.prepare("CREATE INDEX IF NOT EXISTS `todo_bot_notifications_pending_idx` ON `todo_bot_notifications` (`delivered_at`,`created_at`);"),
+      db.prepare("CREATE TABLE IF NOT EXISTS `todo_bot_push_deliveries` (\n\t`notification_id` text NOT NULL,\n\t`subscription_id` text NOT NULL,\n\t`delivered_at` text NOT NULL,\n\tPRIMARY KEY(`notification_id`, `subscription_id`)\n);"),
+      db.prepare("CREATE TABLE IF NOT EXISTS `todo_bot_push_owners` (\n\t`subscription_id` text PRIMARY KEY NOT NULL,\n\t`owner_key` text NOT NULL\n);"),
+      db.prepare("CREATE INDEX IF NOT EXISTS `todo_bot_push_owners_owner_idx` ON `todo_bot_push_owners` (`owner_key`);"),
       db.prepare(`
         CREATE TABLE IF NOT EXISTS todo_push_subscriptions (
           id TEXT PRIMARY KEY NOT NULL,
@@ -505,6 +526,9 @@ export async function ensureTodoDatabase() {
           client_id TEXT,
           created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
         )
+      `),
+      db.prepare(`
+        CREATE TABLE IF NOT EXISTS todo_operator_sessions (id TEXT PRIMARY KEY, user_key TEXT NOT NULL, context_json TEXT NOT NULL)
       `),
       db.prepare(`
         CREATE TABLE IF NOT EXISTS todo_talk_workspaces (
@@ -1009,6 +1033,7 @@ export async function ensureTodoDatabase() {
     });
 
     await ensureTodoSyncSchema(db);
+    await ensureTaskDelegationSchema(db);
     await db.prepare("PRAGMA optimize").run();
 
     console.info("[todo-db] ready", {
@@ -1091,13 +1116,13 @@ export async function readTodoBootstrap(): Promise<TodoBootstrapSnapshot> {
   const [todoResult, projectResult, settingResult, captureDraftResult, revisionResult] = await db.batch([
     db.prepare(`${todoListSql} ORDER BY sort_order ASC, id DESC`),
     db.prepare("SELECT name FROM todo_projects ORDER BY name COLLATE NOCASE ASC"),
-    db.prepare("SELECT key, value FROM app_settings WHERE key IN ('snooze_timezone', 'snooze_wake_hour', 'snooze_quick_presets', 'ai_realtime_voice')"),
+    db.prepare("SELECT key, value, updated_at FROM app_settings WHERE key IN ('snooze_timezone', 'snooze_wake_hour', 'snooze_quick_presets', 'ai_realtime_voice', 'open_app_to')"),
     db.prepare("SELECT value FROM app_settings WHERE key = 'capture_draft'"),
     db.prepare("SELECT COALESCE(MAX(revision), 0) AS revision FROM todo_sync_changes"),
   ]) as [
     D1Result<TodoRow>,
     D1Result<{ name: string }>,
-    D1Result<{ key: string; value: string }>,
+    D1Result<{ key: string; value: string; updated_at: string }>,
     D1Result<{ value: string }>,
     D1Result<{ revision: number }>,
   ];
@@ -1340,6 +1365,8 @@ export async function createTodo(input: {
   if (clientId) {
     const existing = await db.prepare(`
       SELECT todos.*,
+      (SELECT delegation FROM todo_queue_state WHERE todo_id=todos.id) AS queue_last_transfer,
+    (SELECT delegation FROM todo_queue_state WHERE todo_id=todos.id AND generation=delegation_generation) AS queue_delegation,
         (SELECT COUNT(*) FROM todo_attachments
          WHERE todo_attachments.todo_id = todos.id
            AND todo_attachments.upload_state = 'ready'
@@ -1441,6 +1468,8 @@ export async function createTodo(input: {
   if (!row && clientId) {
     const replay = await db.prepare(`
       SELECT todos.*,
+      (SELECT delegation FROM todo_queue_state WHERE todo_id=todos.id) AS queue_last_transfer,
+    (SELECT delegation FROM todo_queue_state WHERE todo_id=todos.id AND generation=delegation_generation) AS queue_delegation,
         (SELECT COUNT(*) FROM todo_attachments
          WHERE todo_attachments.todo_id = todos.id
            AND todo_attachments.upload_state = 'ready'
@@ -1605,7 +1634,7 @@ export async function updateTodo(
     throw new Error("Only active open tasks can be pinned.");
   }
   if (normalizedUpdate.pinned === true && !before.pinned) {
-    const pinned = await db.prepare("SELECT COUNT(*) AS count FROM todos WHERE pinned = 1")
+    const pinned = await db.prepare("SELECT COUNT(*) AS count FROM todos WHERE pinned = 1 AND NOT EXISTS (SELECT 1 FROM todo_queue_state WHERE todo_id=todos.id AND delegation IS NOT NULL AND generation=delegation_generation)")
       .first<{ count: number }>();
     if (Number(pinned?.count ?? 0) >= MAX_PINNED_TASKS) {
       console.warn("[todo-db] pin limit rejected", {
@@ -1656,7 +1685,7 @@ export async function updateTodo(
           EXISTS (SELECT 1 FROM todos WHERE id = ? AND status = 'open' AND snoozed_until IS NULL)
           AND (
             EXISTS (SELECT 1 FROM todos WHERE id = ? AND pinned = 1)
-            OR (SELECT COUNT(*) FROM todos WHERE pinned = 1) < ?
+            OR (SELECT COUNT(*) FROM todos WHERE pinned = 1 AND NOT EXISTS (SELECT 1 FROM todo_queue_state WHERE todo_id=todos.id AND delegation IS NOT NULL AND generation=delegation_generation)) < ?
           )
         )
         ON CONFLICT(todo_id, field) DO UPDATE SET
@@ -1757,6 +1786,8 @@ export async function getTodo(id: number): Promise<Todo | null> {
   await ensureTodoDatabase();
   const row = await database().prepare(`
     SELECT todos.*,
+      (SELECT delegation FROM todo_queue_state WHERE todo_id=todos.id) AS queue_last_transfer,
+    (SELECT delegation FROM todo_queue_state WHERE todo_id=todos.id AND generation=delegation_generation) AS queue_delegation,
       (SELECT COUNT(*) FROM todo_attachments
        WHERE todo_attachments.todo_id = todos.id
          AND todo_attachments.upload_state = 'ready'
@@ -1846,43 +1877,33 @@ function zonedDateToUtc(year: number, month: number, day: number, hour: number, 
 export async function getTodoSettings(): Promise<TodoSettings> {
   await ensureTodoDatabase();
   const result = await database()
-    .prepare("SELECT key, value FROM app_settings WHERE key IN ('snooze_timezone', 'snooze_wake_hour', 'snooze_quick_presets', 'ai_realtime_voice')")
-    .all<{ key: string; value: string }>();
+    .prepare("SELECT key, value, updated_at FROM app_settings WHERE key IN ('snooze_timezone', 'snooze_wake_hour', 'snooze_quick_presets', 'ai_realtime_voice', 'open_app_to')")
+    .all<{ key: string; value: string; updated_at: string }>();
   return mapTodoSettings(result.results);
 }
 
-export async function updateTodoSettings(settings: TodoSettings): Promise<TodoSettings> {
+export async function updateTodoSettings(settings: Partial<Omit<TodoSettings, "openAppToUpdatedAt">>): Promise<TodoSettings> {
   await ensureTodoDatabase();
   const db = database();
-  await db.batch([
-    db.prepare(`
-      INSERT INTO app_settings (key, value, updated_at)
-      VALUES ('snooze_timezone', ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
-    `).bind(settings.snoozeTimeZone),
-    db.prepare(`
-      INSERT INTO app_settings (key, value, updated_at)
-      VALUES ('snooze_wake_hour', ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
-    `).bind(String(settings.snoozeWakeHour)),
-    db.prepare(`
-      INSERT INTO app_settings (key, value, updated_at)
-      VALUES ('snooze_quick_presets', ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
-    `).bind(JSON.stringify(settings.snoozeQuickPresets)),
-    db.prepare(`
-      INSERT INTO app_settings (key, value, updated_at)
-      VALUES ('ai_realtime_voice', ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
-    `).bind(settings.realtimeVoice),
-  ]);
-  console.info("[todo-db] settings updated", {
-    snoozeTimeZone: settings.snoozeTimeZone,
-    snoozeWakeHour: settings.snoozeWakeHour,
-    quickSnoozeCount: settings.snoozeQuickPresets.length,
-    realtimeVoice: settings.realtimeVoice,
-  });
-  return settings;
+  const fields: Array<[keyof typeof settings, string]> = [
+    ["snoozeTimeZone", "snooze_timezone"], ["snoozeWakeHour", "snooze_wake_hour"],
+    ["snoozeQuickPresets", "snooze_quick_presets"], ["realtimeVoice", "ai_realtime_voice"],
+    ["openAppTo", "open_app_to"],
+  ];
+  const writes = fields.filter(([field]) => settings[field] !== undefined).map(([field, key]) => db.prepare(`
+    INSERT INTO app_settings (key, value, updated_at)
+    VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+    WHERE app_settings.value IS NOT excluded.value
+  `).bind(key, field === "snoozeQuickPresets" ? JSON.stringify(settings[field]) : String(settings[field])));
+  // Older fields have database triggers. These preferences use an atomic
+  // change receipt, avoiding a schema reset/upgrade for a new key/value row.
+  if (settings.openAppTo !== undefined || settings.realtimeVoice !== undefined) writes.push(db.prepare(
+    "INSERT INTO todo_sync_changes (entity_type, entity_key, operation) VALUES ('settings', 'preferences', 'changed')",
+  ));
+  if (writes.length) await db.batch(writes);
+  console.info("[todo-db] settings updated", { fields: Object.keys(settings) });
+  return getTodoSettings();
 }
 
 export async function getTodoCaptureDraft(): Promise<TodoCaptureDraft | null> {
@@ -1996,6 +2017,8 @@ async function adjustSnoozedTodosUntil(
   `).bind(until, ...ids).run();
   const updated = await db.prepare(`
     SELECT todos.*,
+      (SELECT delegation FROM todo_queue_state WHERE todo_id=todos.id) AS queue_last_transfer,
+    (SELECT delegation FROM todo_queue_state WHERE todo_id=todos.id AND generation=delegation_generation) AS queue_delegation,
       (SELECT COUNT(*) FROM todo_attachments
        WHERE todo_attachments.todo_id = todos.id
          AND todo_attachments.upload_state = 'ready'
@@ -2104,6 +2127,8 @@ export async function bulkUpdateTodos(
   }
   const updated = await db.prepare(`
     SELECT todos.*,
+      (SELECT delegation FROM todo_queue_state WHERE todo_id=todos.id) AS queue_last_transfer,
+    (SELECT delegation FROM todo_queue_state WHERE todo_id=todos.id AND generation=delegation_generation) AS queue_delegation,
       (SELECT COUNT(*) FROM todo_attachments
        WHERE todo_attachments.todo_id = todos.id
          AND todo_attachments.upload_state = 'ready'
@@ -2136,7 +2161,7 @@ export async function mergeTodos(inputIds: number[]) {
   const byId = new Map(result.results.map((row) => [row.id, row]));
   const rows = ids.map((id) => byId.get(id)).filter((row): row is TodoRow => Boolean(row));
   if (rows.length < 2) throw new Error("At least two selected tasks must still exist.");
-  const attachmentBefore = await attachmentSnapshotsForTodos(ids);
+  const attachmentBefore = await attachmentSnapshotsForTodos(ids, true);
 
   const shared = (field: "project" | "context") => {
     const first = rows[0][field];
@@ -2245,9 +2270,9 @@ export async function undoTodoAction(undoToken: string) {
   `);
   const restoredIds = snapshot.todos.map((row) => row.id);
   const existingPinned = restoredIds.length
-    ? await db.prepare(`SELECT COUNT(*) AS count FROM todos WHERE pinned = 1 AND id NOT IN (${placeholders(restoredIds.length)})`)
+    ? await db.prepare(`SELECT COUNT(*) AS count FROM todos WHERE pinned = 1 AND NOT EXISTS (SELECT 1 FROM todo_queue_state WHERE todo_id=todos.id AND delegation IS NOT NULL AND generation=delegation_generation) AND id NOT IN (${placeholders(restoredIds.length)})`)
       .bind(...restoredIds).first<{ count: number }>()
-    : await db.prepare("SELECT COUNT(*) AS count FROM todos WHERE pinned = 1").first<{ count: number }>();
+    : await db.prepare("SELECT COUNT(*) AS count FROM todos WHERE pinned = 1 AND NOT EXISTS (SELECT 1 FROM todo_queue_state WHERE todo_id=todos.id AND delegation IS NOT NULL AND generation=delegation_generation)").first<{ count: number }>();
   let remainingPinSlots = Math.max(0, MAX_PINNED_TASKS - Number(existingPinned?.count ?? 0));
   let pinsClearedByPolicy = 0;
   const normalizedTodos = snapshot.todos.map((row) => row.status === "archived"

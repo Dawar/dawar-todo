@@ -1,0 +1,29 @@
+.bots-native-entry{min-width:0;position:relative}
+.bots-native-entry.is-work{margin:4px 0}
+.bots-native-entry.is-progress{margin:16px 0}
+.bots-native-entry.is-progress .bots-agent{margin:0;color:var(--muted-foreground);font-size:14px;line-height:1.65}
+.bots-native-entry.is-progress .bots-agent p{margin:0 0 8px}
+.bots-native-entry.is-progress .bots-message-time{margin-top:4px}
+.bots-native-work{min-width:0;color:var(--muted-foreground);font-size:13px;line-height:1.5;border:0;background:transparent}
+.bots-native-work>summary{display:flex;align-items:center;gap:8px;min-height:36px;padding:6px 2px;cursor:pointer;list-style:none;border-radius:var(--radius-sm)}
+.bots-native-work>summary::-webkit-details-marker{display:none}
+.bots-native-work>summary:hover{color:var(--foreground);background:var(--accent)}
+.bots-native-work>summary:focus-visible{outline:2px solid var(--ring);outline-offset:2px}
+.bots-native-work>summary>.bots-disclosure-chevron{flex-shrink:0;transition:transform 120ms ease}
+.bots-native-work[open]>summary>.bots-disclosure-chevron{transform:rotate(90deg)}
+.bots-native-work-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}
+.bots-native-work-state{margin-left:auto;flex-shrink:0;font-size:12px;font-variant-numeric:tabular-nums}
+.bots-native-work-body{margin:4px 0 12px 9px;padding:8px 14px;border-left:1px solid var(--border);min-width:0;color:var(--foreground);overflow-wrap:anywhere}
+.bots-native-work-body pre{max-width:100%;overflow:auto;font-size:12px;line-height:1.6}
+.bots-native-work-body .bots-tool{margin:0;border:0;background:transparent;padding:0}
+.bots-native-history{margin:6px 0;color:var(--muted-foreground);font-size:12px}
+.bots-native-history>button{color:var(--muted-foreground);font-size:12px;padding-inline:2px}
+.bots-native-history [role=alert]{display:block;color:var(--destructive)}
+.bots-elapsed{font-variant-numeric:tabular-nums;color:var(--muted-foreground);font-size:13px;white-space:nowrap}
+.bots-message-time .bots-elapsed{font-size:inherit}
+@media(max-width:600px){.bots-native-work>summary{min-height:40px}.bots-native-entry.is-progress{margin:12px 0}}
+@media(prefers-reduced-motion:reduce){.bots-native-work>summary>.bots-disclosure-chevron{transition:none}}
+
+.bots-native-submission{margin:12px 0;text-align:right}
+.bots-native-submission .bots-user{margin-bottom:4px}
+.bots-native-submission>small{display:block;color:var(--muted-foreground);font-size:12px;line-height:1.5}

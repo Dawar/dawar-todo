@@ -2,16 +2,15 @@
 
 import type { TodoAttachment } from "../db/attachments";
 import { attachmentFileMimeType } from "../lib/attachment-files";
+import { uploadStorageBlob, type StoragePostTarget } from '../lib/storage-upload';
 
 export type BrowserAttachmentKind = "image" | "audio" | "video" | "file";
 
-type PrivatePostTarget = {
-  url: string;
-  fields: Record<string, string>;
-};
+type PrivatePostTarget = StoragePostTarget;
 
 type PreparedImageUpload = {
   uploadId: string;
+  attachment?: TodoAttachment;
   uploads: {
     original: PrivatePostTarget;
     display: PrivatePostTarget;
@@ -21,6 +20,7 @@ type PreparedImageUpload = {
 
 type PreparedMediaUpload = {
   uploadId: string;
+  attachment?: TodoAttachment;
   uploads: {
     original: PrivatePostTarget;
   };
@@ -159,14 +159,22 @@ async function imageVariants(file: File) {
   }
 }
 
+async function boundedImageVariants(file: File) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([imageVariants(file), new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("Image preparation timed out. Local bytes are retained.")), 30_000);
+    })]);
+  } finally { clearTimeout(timer); }
+}
+
 async function uploadStorageObject(target: PrivatePostTarget, body: Blob) {
-  const form = new FormData();
-  Object.entries(target.fields).forEach(([name, value]) => form.append(name, value));
-  form.append("file", body, "upload");
-  const response = await fetch(target.url, { method: "POST", mode: "no-cors", body: form });
-  if (response.type !== "opaque" && !response.ok) {
-    throw new Error(`Private storage rejected an upload (${response.status}).`);
-  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 60_000);
+  try {
+    const response = await uploadStorageBlob(fetch,target,body,{legacyMode:'no-cors',signal:controller.signal});
+    if (response.type !== "opaque" && !response.ok) throw new Error(`Private storage rejected an upload (${response.status}).`);
+  } finally { clearTimeout(timer); }
 }
 
 function mediaMimeType(file: File, kind: "audio" | "video") {
@@ -214,6 +222,7 @@ function mediaDuration(file: File, kind: "audio" | "video") {
 }
 
 export async function uploadTaskAttachment(input: {
+  clientUploadId?: string;
   file: File;
   kind: BrowserAttachmentKind;
   durationMs?: number;
@@ -233,11 +242,12 @@ export async function uploadTaskAttachment(input: {
     if (kind === "image") {
       const mimeType = imageMimeType(file);
       if (!mimeType) throw new Error("Choose a JPEG, PNG, WebP, GIF, HEIC, or HEIF image.");
-      const variants = await imageVariants(file);
+      const variants = await boundedImageVariants(file);
       const prepared = await request<PreparedImageUpload>(endpoint, {
         method: "POST",
         body: JSON.stringify({
           kind,
+          clientUploadId: input.clientUploadId,
           fileName: file.name || "image",
           mimeType,
           byteSize: file.size,
@@ -245,6 +255,7 @@ export async function uploadTaskAttachment(input: {
           thumbnailMimeType: variants.thumbnail.mimeType,
         }),
       });
+      if (prepared.attachment) return prepared.attachment;
       try {
         const uploads = await Promise.allSettled([
           uploadStorageObject(prepared.uploads.original, file),
@@ -271,7 +282,7 @@ export async function uploadTaskAttachment(input: {
         });
         return payload.attachment;
       } catch (error) {
-        await discard(prepared.uploadId).catch((discardError) => {
+        await (input.clientUploadId ? Promise.resolve() : discard(prepared.uploadId)).catch((discardError) => {
           console.error("[todo-attachment-client] incomplete image cleanup failed", {
             endpoint,
             attachmentId: prepared.uploadId,
@@ -292,11 +303,13 @@ export async function uploadTaskAttachment(input: {
       method: "POST",
       body: JSON.stringify({
         kind,
+        clientUploadId: input.clientUploadId,
         fileName: file.name || (kind === "audio" ? "Voice memo" : kind === "video" ? "Video" : "File"),
         mimeType,
         byteSize: file.size,
       }),
     });
+    if(prepared.attachment)return prepared.attachment;
     try {
       await uploadStorageObject(prepared.uploads.original, file);
       const payload = await request<{ attachment: TodoAttachment }>(endpoint, {
@@ -317,7 +330,7 @@ export async function uploadTaskAttachment(input: {
       });
       return payload.attachment;
     } catch (error) {
-      await discard(prepared.uploadId).catch((discardError) => {
+      await (input.clientUploadId ? Promise.resolve() : discard(prepared.uploadId)).catch((discardError) => {
         console.error("[todo-attachment-client] incomplete media cleanup failed", {
           endpoint,
           attachmentId: prepared.uploadId,
@@ -347,6 +360,12 @@ export async function uploadTaskAttachmentMultipart(input: {
   endpoint: string;
   request: JsonRequest;
 }) {
+  if(process.env.NEXT_PUBLIC_DAWAR_PORTABLE==='1'){
+    // The ordinary durable browser queue supplies this original ID. Never
+    // allocate a replacement after a failed or ambiguous upload.
+    if(!input.clientUploadId)throw Error('The original attachment ID is required. Your local file is retained.');
+    return uploadTaskAttachment({...input,discard:async()=>undefined});
+  }
   const startedAt = performance.now();
   const mimeType = input.kind === "file"
     ? attachmentFileMimeType(input.file.name, input.file.type)

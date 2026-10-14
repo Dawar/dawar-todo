@@ -1,5 +1,7 @@
 import { findCalendarFeedByToken, listDatedCalendarTodos } from "../../../db/calendar-feeds";
 import { renderTaskCalendar } from "../../../db/ical";
+import { env } from "cloudflare:workers";
+import { botsRequestOrigin } from "../../../lib/bots-auth";
 
 export const dynamic = "force-dynamic";
 
@@ -17,7 +19,7 @@ export async function GET(
       return new Response("Calendar not found.\n", { status: 404, headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" } });
     }
     const todos = await listDatedCalendarTodos();
-    const host = new URL(request.url).hostname;
+    const host = new URL(botsRequestOrigin(request, env as { BOTS_PUBLIC_ORIGIN?: string })).hostname;
     const calendar = renderTaskCalendar(feed.name, todos, host);
     console.info("[todo-calendar] public feed rendered", {
       feedId: feed.id,

@@ -15,6 +15,7 @@
 
 # next.js
 /.next/
+/.next-portable/
 /.vinext/
 /out/
 
@@ -42,3 +43,8 @@ next-env.d.ts
 /.wrangler/
 /outputs/
 /work/
+
+# Local Bots relay credentials and build output
+**/.dev.vars*
+/bots-relay/.wrangler/
+/bots-relay/dist/

@@ -1,5 +1,6 @@
-import { getTodoSettings, updateTodoSettings } from "../../../db/todos";
+import { getTodoSettings, updateTodoSettings, type TodoSettings } from "../../../db/todos";
 import { normalizeRealtimeVoice } from "../../../lib/ai-preferences";
+import { parseOpeningTab } from "../../../lib/app-preferences";
 import { parseQuickSnoozePresets } from "../../../lib/snooze-presets";
 
 export async function GET() {
@@ -10,54 +11,53 @@ export async function GET() {
     return Response.json({ settings });
   } catch (error) {
     console.error("[todo-api] settings load failed", error);
-    return Response.json({ error: "Your daily review settings could not be loaded." }, { status: 500 });
+    return Response.json({ error: "Your preferences could not be loaded." }, { status: 500 });
   }
 }
 
 export async function PATCH(request: Request) {
   try {
-    const payload = (await request.json()) as {
-      snoozeTimeZone?: string;
-      snoozeWakeHour?: number;
-      snoozeQuickPresets?: unknown;
-      realtimeVoice?: unknown;
-    };
-    const snoozeTimeZone = String(payload.snoozeTimeZone ?? "");
-    const snoozeWakeHour = Number(payload.snoozeWakeHour);
-    try {
-      new Intl.DateTimeFormat("en", { timeZone: snoozeTimeZone }).format();
-    } catch {
-      return Response.json({ error: "Choose a valid time zone." }, { status: 400 });
+    const payload: unknown = await request.json().catch(() => null);
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      return Response.json({ error: "Send a preferences object." }, { status: 400 });
     }
-    if (!Number.isInteger(snoozeWakeHour) || snoozeWakeHour < 0 || snoozeWakeHour > 23) {
-      return Response.json({ error: "Choose a wake-up hour between 12 AM and 11 PM." }, { status: 400 });
+    const patch: Partial<Omit<TodoSettings, "openAppToUpdatedAt">> = {};
+    if ("snoozeTimeZone" in payload) {
+      try {
+        if (typeof payload.snoozeTimeZone !== "string" || !payload.snoozeTimeZone) throw new Error();
+        new Intl.DateTimeFormat("en", { timeZone: payload.snoozeTimeZone }).format();
+        patch.snoozeTimeZone = payload.snoozeTimeZone;
+      } catch {
+        return Response.json({ error: "Choose a valid time zone." }, { status: 400 });
+      }
     }
-    const existing = payload.snoozeQuickPresets === undefined || payload.realtimeVoice === undefined
-      ? await getTodoSettings()
-      : null;
-    const snoozeQuickPresets = existing?.snoozeQuickPresets ?? parseQuickSnoozePresets(payload.snoozeQuickPresets);
-    if (!snoozeQuickPresets) {
-      return Response.json({ error: "Choose four different Quick Snooze times between 15 minutes and 6 months." }, { status: 400 });
+    if ("snoozeWakeHour" in payload) {
+      const hour = Number(payload.snoozeWakeHour);
+      if (!Number.isInteger(hour) || hour < 0 || hour > 23) {
+        return Response.json({ error: "Choose a wake-up hour between 12 AM and 11 PM." }, { status: 400 });
+      }
+      patch.snoozeWakeHour = hour;
     }
-    const realtimeVoice = existing?.realtimeVoice ?? normalizeRealtimeVoice(payload.realtimeVoice);
-    if (!realtimeVoice) {
-      return Response.json({ error: "Choose a supported Realtime voice." }, { status: 400 });
+    if ("snoozeQuickPresets" in payload) {
+      const presets = parseQuickSnoozePresets(payload.snoozeQuickPresets);
+      if (!presets) return Response.json({ error: "Choose four different Quick Snooze times between 15 minutes and 6 months." }, { status: 400 });
+      patch.snoozeQuickPresets = presets;
     }
-    const settings = await updateTodoSettings({
-      snoozeTimeZone,
-      snoozeWakeHour,
-      snoozeQuickPresets,
-      realtimeVoice,
-    });
-    console.info("[todo-api] settings saved", {
-      snoozeTimeZone: settings.snoozeTimeZone,
-      snoozeWakeHour: settings.snoozeWakeHour,
-      quickSnoozeCount: settings.snoozeQuickPresets.length,
-      realtimeVoice: settings.realtimeVoice,
-    });
+    if ("realtimeVoice" in payload) {
+      const voice = normalizeRealtimeVoice(payload.realtimeVoice);
+      if (!voice) return Response.json({ error: "Choose a supported Realtime voice." }, { status: 400 });
+      patch.realtimeVoice = voice;
+    }
+    if ("openAppTo" in payload) {
+      const tab = parseOpeningTab(payload.openAppTo);
+      if (!tab) return Response.json({ error: "Choose Tasks or Bots for Open app to." }, { status: 400 });
+      patch.openAppTo = tab;
+    }
+    const settings = await updateTodoSettings(patch);
+    console.info("[todo-api] settings saved", { fields: Object.keys(patch) });
     return Response.json({ settings });
   } catch (error) {
     console.error("[todo-api] settings save failed", error);
-    return Response.json({ error: "Your daily review settings could not be saved." }, { status: 500 });
+    return Response.json({ error: "Your preferences could not be saved." }, { status: 500 });
   }
 }

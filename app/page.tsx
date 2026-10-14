@@ -1,4 +1,3 @@
-/* eslint-disable @next/next/no-img-element */
 "use client";
 
 import {
@@ -14,21 +13,30 @@ import {
   useRef,
   useState,
 } from "react";
+import { TodoForward } from "./todo-forward-picker";
+import { TodoQueue, type QueueRequest } from "./todo-queue-picker";
+import type { TaskQueueSource } from "../lib/task-queue-export";
+import { registerPwaUpdateGuard } from "./pwa-update";
+import { todoCopyText } from "./todo-forward";
+import { TaskCaptureSession, TaskCaptureGate } from "./task-capture";
+import { TaskImageViewer } from "./task-image-viewer";
+import { TaskSaveStatus, type TaskSaveState } from "./task-save-status";
+import { TaskNotice, type TaskNoticeState } from "./task-notice";
+import { TaskBulkActions } from "./task-bulk-actions";
+import { TaskIntentPanel } from "./task-intent-panel";
+import { taskRowClock } from "./task-title-layout";
 import { useTaskList, useTask, taskStore } from "./task-store";
 import { taskSync, type TaskSyncEvent } from "./task-sync";
 import { useStableCallback } from "./use-stable-callback";
-import { taskKey, createLocalTaskId, offlineRecordTodo, type Todo, type TodoSettings, type CaptureDraft, type BootstrapResponse, type SyncResponse } from "./task-model";
-import { createPortal } from "react-dom";
+import { taskKey, createLocalTaskId, type Todo, type CaptureDraft } from "./task-model";
 import { useAutoAnimate } from "@formkit/auto-animate/react";
-import { attachmentFileMimeType, GENERIC_FILE_ACCEPT } from "../lib/attachment-files";
-import { uploadTaskAttachmentMultipart } from "./attachment-upload-client";
+import { attachmentFileMimeType } from "../lib/attachment-files";
 import { ActionIcon, type ActionIconName } from "./action-icon";
 import { currentOpenTaskCount, updateNativeAppBadge } from "./app-badge";
 import { copyTextToClipboard } from "./copy-to-clipboard";
-import { formatDueDate, isDueTodayOrOverdue } from "./date-only";
-import { cronValidationError, nextCronOccurrence } from "../lib/cron";
+import { cronValidationError } from "../lib/cron";
 import { headersWithDeviceId } from "./device-id";
-import { request, retryableSyncError, syncFailureKind, syncRetryDelay } from "./sync-request";
+import { request } from "./sync-request";
 import {
   expiredSnoozeIds,
   isActivelySnoozed,
@@ -37,72 +45,41 @@ import {
 import {
   DEFAULT_QUICK_SNOOZE_PRESETS,
   quickSnoozeDurationMs,
-  quickSnoozeLabel,
   type QuickSnoozePreset,
 } from "../lib/snooze-presets";
-import type { RealtimeVoice } from "../lib/ai-preferences";
 import { snoozeLabel } from "../lib/snooze-label";
 import { zonedDateTimeInputValue, zonedLocalDateTimeToUtc } from "../lib/zoned-date-time";
+import { AttachmentQueuePanel } from "./attachment-queue-panel";
+import { attachmentQueueMessage, hasAttachmentBytes } from "./attachment-queue";
 import { SiteHeader } from "./site-header";
+import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
+import { PendingTaskAttachment, CaptureAttachments } from "./pending-task-attachment";
+import { VoiceMemoRecorder } from "./voice-memo-recorder";
+import { Skeleton } from "@/components/ui/skeleton";
+import { TaskAttachmentMedia } from "./task-attachment-media";
+import { AttachmentPicker } from "./attachment-picker";
+import { TaskDetailFields } from "./task-detail-fields";
+import { TaskRow, SnoozeStatusBadge } from "./task-row";
+import { TaskListSummary } from "./task-list-summary";
+import { TaskListControls, TaskFiltersDialog } from "./task-list-controls";
+import { ProjectBrowser } from "./project-browser";
+import { CreateProjectDialog, CustomSnoozeDialog, AssignProjectDialog, DeleteProjectDialog } from "./task-dialogs";
 import { KeyboardShortcutsDialog } from "./keyboard-shortcuts-dialog";
 import { PullGesturePill } from "./pull-to-refresh";
 import { MarkdownPreview } from "./markdown-preview";
-import { createSyncHealth, liveSyncDelay, type ConnectionQuality } from "./sync-health";
-import { recordSyncDiagnostic } from "./sync-diagnostics";
+import { type ConnectionQuality } from "./sync-health";
 import { MAX_TASK_DESCRIPTION_LENGTH } from "../lib/task-description";
 import { MAX_PINNED_TASKS, PIN_LIST_PREFERENCE_KEY } from "../lib/task-pins";
-import {
-  appendOfflineTodoAttachments,
-  queueTaskAttachments,
-  listQueuedAttachments,
-  retryQueuedAttachments,
-  cancelQueuedAttachment,
-  deferOfflineTaskAction,
-  deleteOfflineTodo,
-  deleteOfflineTodoAttachment,
-  deleteOfflineTodoByLocalId,
-  deleteOfflineTodoMutation,
-  deleteOfflineTaskAction,
-  getOfflineTodoByLocalId,
-  loadCachedServerState,
-  loadOfflineCaptureDraft,
-  listOfflineTodos,
-  listOfflineTaskActions,
-  listOfflineTodoMutations,
-  markOfflineTodoAttachmentUploaded,
-  markOfflineTaskActionUndo,
-  persistOfflineStorage,
-  saveOfflineCaptureDraft,
-  saveOfflineTaskAction,
-  saveOfflineTodo,
-  saveOfflineTodoMutation,
-  saveCachedServerState,
-  updateOfflineTodo,
-  type OfflineAttachmentKind,
-  type OfflineCaptureDraft,
-  type OfflineTaskAction,
-  type OfflineTodoRecord,
-} from "./offline-store";
+import { appendOfflineTodoAttachments, queueTaskAttachments, listQueuedAttachments, retryQueuedAttachments, deleteOfflineTodoAttachment, deleteOfflineTodoByLocalId, deleteOfflineTaskAction, getOfflineTodoByLocalId, listOfflineTodos, listOfflineTaskActions, listOfflineTodoMutations, markOfflineTaskActionUndo, persistOfflineStorage, saveOfflineCaptureDraft, saveOfflineTaskAction, saveOfflineTodoMutation, updateOfflineTodo, type OfflineAttachmentKind, type OfflineTaskAction, type OfflineTodoRecord } from "./offline-store";
 
-type TodoStatus = "open" | "completed";
 type View = "open" | "snoozed" | "done" | "all";
 type TaskListView = View;
 type TodoAction = "complete" | "snooze" | "unsnooze" | "delete";
 type ExecutableTodoAction = TodoAction;
 type SnoozePreset = QuickSnoozePreset;
 type SnoozeAdjustment = { preset: SnoozePreset } | { localDateTime: string };
-type Notice = {
-  tone: "success" | "error";
-  text: string;
-  taskPreview?: string;
-  operationId?: string;
-  pendingUndo?: boolean;
-  undoRequested?: boolean;
-  undoToken?: string;
-  snoozeIds?: number[];
-  snoozedUntil?: string;
-  dismissAt?: number;
-} | null;
+type Notice = TaskNoticeState | null;
 
 
 type OptimisticOperation = {
@@ -154,7 +131,7 @@ type TodoDraft = Pick<Todo, "title" | "notes" | "priority"> & {
 
 type AutosaveField = "title" | "notes" | "priority" | "dueDate" | "context" | "recurrenceCron";
 type AutosavePatch = Partial<Record<AutosaveField, string | number | null>>;
-type EditSaveState = "saved" | "saving" | "offline" | "error";
+type EditSaveState = TaskSaveState;
 type PersistTaskDraft = (
   todoId: number,
   draft: TodoDraft,
@@ -200,12 +177,6 @@ const viewLabels: Record<View, string> = {
   all: "All",
 };
 
-const priorityLabels: Record<number, string> = {
-  1: "Urgent",
-  2: "High",
-  3: "Normal",
-  4: "Low",
-};
 
 const AUTOSAVE_FIELDS: AutosaveField[] = ["title", "notes", "priority", "dueDate", "context", "recurrenceCron"];
 
@@ -244,6 +215,7 @@ function patchTodo(todo: Todo, patch: Record<string, unknown>) {
   return {
     ...todo,
     ...(patch as Partial<Todo>),
+    ...(Object.keys(patch).length ? { queueDelegation: null } : {}),
     ...(patch.title !== undefined ? { title: String(patch.title) } : {}),
     ...(patch.notes !== undefined ? { notes: String(patch.notes) } : {}),
     ...(patch.priority !== undefined ? { priority: Number(patch.priority) } : {}),
@@ -254,9 +226,6 @@ function patchTodo(todo: Todo, patch: Record<string, unknown>) {
   };
 }
 
-const IMAGE_ACCEPT = "image/jpeg,image/png,image/webp,image/gif,image/heic,image/heif,.heic,.heif";
-const VIDEO_ACCEPT = "video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm";
-const MEDIA_ACCEPT = `${IMAGE_ACCEPT},${VIDEO_ACCEPT}`;
 const MAX_ATTACHMENTS = 12;
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 const MAX_AUDIO_BYTES = 50 * 1024 * 1024;
@@ -269,24 +238,6 @@ const SYNC_STATUS_DELAY_MS = 5_000;
 const TASK_SORT_ORDER_STEP = 1024;
 const TASK_REORDER_EDGE_SCROLL_ZONE_PX = 88;
 const TASK_REORDER_MAX_SCROLL_PX = 18;
-const SWIPE_ACTION_THRESHOLD = 0.14;
-const SWIPE_LONG_ACTION_THRESHOLD = 0.5;
-
-type PreparedAttachmentUpload = {
-  uploadId: string;
-  uploads: {
-    original: PrivatePostTarget;
-    display: PrivatePostTarget;
-    thumbnail: PrivatePostTarget;
-  };
-};
-
-type PreparedMediaUpload = {
-  uploadId: string;
-  uploads: { original: PrivatePostTarget };
-};
-
-type PrivatePostTarget = { url: string; fields: Record<string, string> };
 type OptimizedImage = { blob: Blob; mimeType: "image/webp" | "image/jpeg"; format: "webp" | "jpeg" };
 
 function uploadMimeType(file: File) {
@@ -440,14 +391,6 @@ function imageVariants(file: File) {
   return prepared;
 }
 
-async function postPrivateVariant(target: PrivatePostTarget, body: Blob) {
-  const form = new FormData();
-  Object.entries(target.fields).forEach(([name, value]) => form.append(name, value));
-  form.append("file", body, "upload");
-  const response = await fetch(target.url, { method: "POST", mode: "no-cors", body: form });
-  if (response.type !== "opaque" && !response.ok) throw new Error(`Private storage rejected an upload (${response.status}).`);
-}
-
 function normalizedMediaMimeType(file: File, kind: "audio" | "video") {
   const supplied = file.type.toLowerCase().split(";", 1)[0].trim();
   const extension = file.name.toLowerCase().match(/\.([a-z0-9]+)$/)?.[1];
@@ -494,361 +437,11 @@ function mediaDuration(file: File, kind: "audio" | "video") {
   });
 }
 
-async function uploadPrivateMedia(
-  file: File,
-  kind: "audio" | "video" | "file",
-  durationMs: number,
-  endpoint: string,
-  target: Record<string, string>,
-  discard: (uploadId: string) => Promise<unknown>,
-) {
-  const mimeType = kind === "file" ? normalizedFileMimeType(file) : normalizedMediaMimeType(file, kind);
-  const prepared = await request<PreparedMediaUpload>(endpoint, {
-    method: "POST",
-    body: JSON.stringify({
-      ...target,
-      kind,
-      fileName: file.name || (kind === "audio" ? "Voice memo" : kind === "video" ? "Video" : "File"),
-      mimeType,
-      byteSize: file.size,
-    }),
-  });
-  try {
-    await postPrivateVariant(prepared.uploads.original, file);
-    return await request<{ attachment: TodoAttachment }>(endpoint, {
-      method: "PATCH",
-      body: JSON.stringify({ ...target, kind, uploadId: prepared.uploadId, durationMs: kind === "file" ? 0 : durationMs }),
-    });
-  } catch (error) {
-    await discard(prepared.uploadId).catch((discardError) => {
-      console.error("[todo-ui] incomplete media cleanup failed", { uploadId: prepared.uploadId, kind, discardError });
-    });
-    throw error;
-  }
-}
-
-async function uploadPrivateImage(
-  file: File,
-  endpoint: string,
-  target: Record<string, string>,
-  discard: (uploadId: string) => Promise<unknown>,
-) {
-  const mimeType = uploadMimeType(file);
-  if (!mimeType) throw new Error("Choose a JPEG, PNG, WebP, GIF, HEIC, or HEIF image.");
-  const variants = await imageVariants(file);
-  const prepared = await request<PreparedAttachmentUpload>(endpoint, {
-    method: "POST",
-    body: JSON.stringify({
-      ...target,
-      fileName: file.name || "image",
-      mimeType,
-      byteSize: file.size,
-      displayMimeType: variants.display.mimeType,
-      thumbnailMimeType: variants.thumbnail.mimeType,
-    }),
-  });
-  try {
-    const uploads = await Promise.allSettled([
-      postPrivateVariant(prepared.uploads.original, file),
-      postPrivateVariant(prepared.uploads.display, variants.display.blob),
-      postPrivateVariant(prepared.uploads.thumbnail, variants.thumbnail.blob),
-    ]);
-    const failed = uploads.find((result): result is PromiseRejectedResult => result.status === "rejected");
-    if (failed) throw failed.reason;
-    return await request<{ attachment: TodoAttachment }>(endpoint, {
-      method: "PATCH",
-      body: JSON.stringify({ ...target, uploadId: prepared.uploadId, width: variants.width, height: variants.height }),
-    });
-  } catch (error) {
-    await discard(prepared.uploadId).catch((discardError) => {
-      console.error("[todo-ui] incomplete image cleanup failed", { uploadId: prepared.uploadId, discardError });
-    });
-    throw error;
-  }
-}
-
-function AttachmentPicker({
-  disabled,
-  onFiles,
-  onRecord,
-  onAssignProject,
-  label,
-  showLabel = false,
-}: {
-  disabled?: boolean;
-  onFiles: (files: File[]) => void;
-  onRecord: () => void;
-  onAssignProject?: () => void;
-  label: string;
-  showLabel?: boolean;
-}) {
-  const [open, setOpen] = useState(false);
-  const libraryRef = useRef<HTMLInputElement>(null);
-  const fileRef = useRef<HTMLInputElement>(null);
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const [desktopPosition, setDesktopPosition] = useState<{ left: number; top: number } | null>(null);
-  const hasProjectAction = Boolean(onAssignProject);
-
-  useEffect(() => {
-    if (!open) return;
-    const positionMenu = () => {
-      const trigger = triggerRef.current;
-      if (!trigger) return;
-      const bounds = trigger.getBoundingClientRect();
-      const menuWidth = 224;
-      const menuHeight = hasProjectAction ? 204 : 160;
-      const gutter = 12;
-      const left = Math.max(gutter, Math.min(bounds.left, window.innerWidth - menuWidth - gutter));
-      const below = bounds.bottom + 8;
-      const top = below + menuHeight <= window.innerHeight - gutter
-        ? below
-        : Math.max(gutter, bounds.top - menuHeight - 8);
-      setDesktopPosition({ left, top });
-    };
-    const keyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
-    };
-    positionMenu();
-    window.addEventListener("keydown", keyDown);
-    window.addEventListener("resize", positionMenu);
-    window.addEventListener("scroll", positionMenu, true);
-    return () => {
-      window.removeEventListener("keydown", keyDown);
-      window.removeEventListener("resize", positionMenu);
-      window.removeEventListener("scroll", positionMenu, true);
-    };
-  }, [hasProjectAction, open]);
-
-  function selected(input: HTMLInputElement) {
-    const files = [...(input.files ?? [])];
-    input.value = "";
-    setOpen(false);
-    if (files.length) onFiles(files);
-  }
-
-  return (
-    <div className="relative shrink-0">
-      <button
-        ref={triggerRef}
-        type="button"
-        disabled={disabled}
-        onClick={() => setOpen((current) => !current)}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        aria-label={label}
-        title={label}
-        className={classNames(
-          "inline-flex h-10 items-center justify-center gap-2 rounded-xl text-[#216e4e] transition hover:bg-[#eaf3ed] focus-visible:outline-2 focus-visible:outline-[#216e4e] disabled:opacity-40",
-          showLabel ? "px-3 text-sm font-semibold" : "w-10",
-        )}
-      >
-        <ActionIcon name={showLabel ? "attachment" : "add"} className="h-5 w-5" />
-        {showLabel && <span>Add attachment</span>}
-      </button>
-
-      {open && typeof document !== "undefined" && createPortal(
-        <>
-          <button type="button" aria-label="Close attachment menu" onClick={() => setOpen(false)} className="fixed inset-0 z-[65] hidden cursor-default sm:block" />
-          {desktopPosition && <div role="menu" style={{ left: desktopPosition.left, top: desktopPosition.top }} className="fixed z-[70] hidden w-56 rounded-xl border border-black/[0.08] bg-white p-1.5 shadow-xl sm:block">
-            <button type="button" role="menuitem" onClick={() => libraryRef.current?.click()} className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left text-sm font-semibold text-[#303632] hover:bg-[#f2f5f2]">
-              <ActionIcon name="image" />Choose photos or videos
-            </button>
-            <button type="button" role="menuitem" onClick={() => fileRef.current?.click()} className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left text-sm font-semibold text-[#303632] hover:bg-[#f2f5f2]">
-              <ActionIcon name="file" />Choose files
-            </button>
-            <button type="button" role="menuitem" onClick={() => { setOpen(false); onRecord(); }} className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left text-sm font-semibold text-[#303632] hover:bg-[#f2f5f2]">
-              <ActionIcon name="mic" />Record voice memo
-            </button>
-            {onAssignProject && (
-              <button type="button" role="menuitem" onClick={() => { setOpen(false); onAssignProject(); }} className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left text-sm font-semibold text-[#303632] hover:bg-[#f2f5f2]">
-                <ActionIcon name="move" />Assign project
-              </button>
-            )}
-          </div>}
-
-          <div className="fixed inset-0 z-[70] flex items-end sm:hidden">
-            <button type="button" aria-label="Close attachment menu" onClick={() => setOpen(false)} className="absolute inset-0 bg-black/35" />
-            <div role="menu" className="relative w-full rounded-t-3xl bg-white px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-4 shadow-2xl">
-              <p className="mb-3 px-1 text-sm font-semibold text-[#303632]">Add an attachment</p>
-              <button type="button" role="menuitem" onClick={() => libraryRef.current?.click()} className="flex h-12 w-full items-center gap-3 rounded-xl px-3 text-left text-[16px] font-semibold text-[#303632] hover:bg-[#f2f5f2]">
-                <ActionIcon name="image" className="h-5 w-5 text-[#216e4e]" />Choose photos or videos
-              </button>
-              <button type="button" role="menuitem" onClick={() => fileRef.current?.click()} className="flex h-12 w-full items-center gap-3 rounded-xl px-3 text-left text-[16px] font-semibold text-[#303632] hover:bg-[#f2f5f2]">
-                <ActionIcon name="file" className="h-5 w-5 text-[#216e4e]" />Choose files
-              </button>
-              <button type="button" role="menuitem" onClick={() => { setOpen(false); onRecord(); }} className="flex h-12 w-full items-center gap-3 rounded-xl px-3 text-left text-[16px] font-semibold text-[#303632] hover:bg-[#f2f5f2]">
-                <ActionIcon name="mic" className="h-5 w-5 text-[#216e4e]" />Record voice memo
-              </button>
-              {onAssignProject && (
-                <button type="button" role="menuitem" onClick={() => { setOpen(false); onAssignProject(); }} className="flex h-12 w-full items-center gap-3 rounded-xl px-3 text-left text-[16px] font-semibold text-[#303632] hover:bg-[#f2f5f2]">
-                  <ActionIcon name="move" className="h-5 w-5 text-[#216e4e]" />Assign project
-                </button>
-              )}
-              <button type="button" onClick={() => setOpen(false)} className="mt-2 h-12 w-full rounded-xl bg-[#f1f2f0] text-[16px] font-semibold text-[#59615c]">Cancel</button>
-            </div>
-          </div>
-        </>,
-        document.body,
-      )}
-
-      <input ref={libraryRef} type="file" accept={MEDIA_ACCEPT} multiple className="sr-only" tabIndex={-1} onChange={(event) => selected(event.currentTarget)} />
-      <input ref={fileRef} type="file" accept={GENERIC_FILE_ACCEPT} multiple className="sr-only" tabIndex={-1} onChange={(event) => selected(event.currentTarget)} />
-    </div>
-  );
-}
-
-function formatDuration(durationMs: number) {
-  const totalSeconds = Math.max(0, Math.round(durationMs / 1000));
-  return `${Math.floor(totalSeconds / 60)}:${String(totalSeconds % 60).padStart(2, "0")}`;
-}
-
-function formatFileSize(byteSize: number) {
-  if (byteSize < 1024) return `${byteSize} B`;
-  if (byteSize < 1024 * 1024) return `${Math.round(byteSize / 1024)} KB`;
-  return `${(byteSize / (1024 * 1024)).toFixed(byteSize < 10 * 1024 * 1024 ? 1 : 0)} MB`;
-}
-
-function VoiceMemoRecorder({ onClose, onAttach }: { onClose: () => void; onAttach: (file: File, durationMs: number) => void }) {
-  const [phase, setPhase] = useState<"idle" | "recording" | "review">("idle");
-  const [elapsed, setElapsed] = useState(0);
-  const [error, setError] = useState("");
-  const [recording, setRecording] = useState<{ file: File; url: string; durationMs: number } | null>(null);
-  const recorderRef = useRef<MediaRecorder | null>(null);
-  const streamRef = useRef<MediaStream | null>(null);
-  const chunksRef = useRef<Blob[]>([]);
-  const startedAtRef = useRef(0);
-  const cancelledRef = useRef(false);
-  const recordingUrlRef = useRef<string | null>(null);
-
-  function releaseStream() {
-    streamRef.current?.getTracks().forEach((track) => track.stop());
-    streamRef.current = null;
-  }
-
-  useEffect(() => {
-    if (phase !== "recording") return;
-    const timer = window.setInterval(() => setElapsed(Date.now() - startedAtRef.current), 250);
-    return () => window.clearInterval(timer);
-  }, [phase]);
-
-  useEffect(() => () => {
-    cancelledRef.current = true;
-    if (recorderRef.current?.state === "recording") recorderRef.current.stop();
-    streamRef.current?.getTracks().forEach((track) => track.stop());
-    if (recordingUrlRef.current) URL.revokeObjectURL(recordingUrlRef.current);
-  }, []);
-
-  async function start() {
-    setError("");
-    if (!("MediaRecorder" in window) || !navigator.mediaDevices?.getUserMedia) {
-      setError("Voice recording is not supported by this browser.");
-      return;
-    }
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
-      const candidates = ["audio/mp4", "audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus"];
-      const mimeType = candidates.find((candidate) => MediaRecorder.isTypeSupported(candidate));
-      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
-      chunksRef.current = [];
-      streamRef.current = stream;
-      recorderRef.current = recorder;
-      recorder.ondataavailable = (event) => { if (event.data.size) chunksRef.current.push(event.data); };
-      recorder.onstop = () => {
-        if (cancelledRef.current) {
-          releaseStream();
-          return;
-        }
-        const durationMs = Math.max(1, Date.now() - startedAtRef.current);
-        const recordedType = recorder.mimeType.split(";", 1)[0] || "audio/webm";
-        const extension = recordedType === "audio/mp4" ? "m4a" : recordedType === "audio/ogg" ? "ogg" : "webm";
-        const blob = new Blob(chunksRef.current, { type: recordedType });
-        const file = new File([blob], `Voice memo ${new Date().toISOString().replace(/[:.]/g, "-")}.${extension}`, { type: recordedType });
-        const url = URL.createObjectURL(file);
-        recordingUrlRef.current = url;
-        setRecording({ file, url, durationMs });
-        setElapsed(durationMs);
-        setPhase("review");
-        releaseStream();
-        console.info("[todo-ui] voice memo recorded", { bytes: file.size, mimeType: recordedType, durationMs });
-      };
-      recorder.start(1000);
-      startedAtRef.current = Date.now();
-      setElapsed(0);
-      setPhase("recording");
-      console.info("[todo-ui] voice recording started", { mimeType: recorder.mimeType });
-    } catch (cause) {
-      releaseStream();
-      setError(cause instanceof DOMException && cause.name === "NotAllowedError" ? "Microphone access was not allowed." : "The microphone could not be started.");
-      console.error("[todo-ui] voice recording start failed", cause);
-    }
-  }
-
-  function stop() {
-    if (recorderRef.current?.state === "recording") recorderRef.current.stop();
-  }
-
-  function rerecord() {
-    if (recording) URL.revokeObjectURL(recording.url);
-    recordingUrlRef.current = null;
-    setRecording(null);
-    setElapsed(0);
-    setPhase("idle");
-    void start();
-  }
-
-  return (
-    <div className="fixed inset-0 z-[90] flex items-end justify-center sm:items-center sm:p-5" role="dialog" aria-modal="true" aria-labelledby="voice-recorder-title">
-      <button type="button" onClick={onClose} aria-label="Close voice recorder" className="absolute inset-0 bg-black/40 backdrop-blur-[2px]" />
-      <div className="relative w-full rounded-t-3xl bg-white p-5 shadow-2xl sm:max-w-md sm:rounded-3xl sm:p-6">
-        <div className="flex items-center justify-between">
-          <h3 id="voice-recorder-title" className="text-lg font-semibold text-[#202522]">Voice memo</h3>
-          <button type="button" onClick={onClose} className="grid h-9 w-9 place-items-center rounded-full bg-[#f1f2f0] text-[#4f5752]" aria-label="Close"><ActionIcon name="close" /></button>
-        </div>
-        <div className="my-7 text-center">
-          <div className={classNames("mx-auto mb-4 grid h-20 w-20 place-items-center rounded-full", phase === "recording" ? "animate-pulse bg-red-100 text-red-700" : "bg-[#eaf3ed] text-[#216e4e]")}>
-            <ActionIcon name={phase === "recording" ? "stop" : "mic"} className="h-9 w-9" />
-          </div>
-          <p className="font-mono text-3xl font-semibold tabular-nums text-[#202522]">{formatDuration(elapsed)}</p>
-          <p className="mt-2 text-sm text-[#7b837e]">{phase === "idle" ? "Ready when you are" : phase === "recording" ? "Recording…" : "Review before attaching"}</p>
-        </div>
-        {recording && <audio controls src={recording.url} className="mb-5 w-full" preload="metadata" />}
-        {error && <p role="alert" className="mb-4 rounded-xl bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
-        {phase === "idle" ? (
-          <button type="button" onClick={() => void start()} className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-[#216e4e] text-sm font-semibold text-white"><ActionIcon name="mic" />Start recording</button>
-        ) : phase === "recording" ? (
-          <button type="button" onClick={stop} className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-red-700 text-sm font-semibold text-white"><ActionIcon name="stop" />Finish recording</button>
-        ) : (
-          <div className="flex gap-2">
-            <button type="button" onClick={rerecord} className="h-12 flex-1 rounded-xl bg-[#f1f2f0] text-sm font-semibold text-[#59615c]">Re-record</button>
-            <button type="button" onClick={() => { if (recording) onAttach(recording.file, recording.durationMs); }} disabled={!recording || recording.file.size > MAX_AUDIO_BYTES || recording.durationMs > MAX_AUDIO_DURATION_MS} className="inline-flex h-12 flex-1 items-center justify-center gap-2 rounded-xl bg-[#216e4e] text-sm font-semibold text-white disabled:opacity-50"><ActionIcon name="attachment" />Attach</button>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
 
 function isSnoozed(todo: Todo, now: number) {
   return isActivelySnoozed(todo, now);
 }
 
-function recurrenceLabel(expression: string, status: TodoStatus, now: number, timeZone: string) {
-  try {
-    const next = nextCronOccurrence(expression, new Date(now), timeZone);
-    if (!next) return status === "completed" ? "Scheduled to return" : "Recurring";
-    const formatted = new Intl.DateTimeFormat(undefined, {
-      timeZone,
-      weekday: "short",
-      month: "short",
-      day: "numeric",
-      hour: "numeric",
-      minute: "2-digit",
-    }).format(next);
-    return `${status === "completed" ? "Returns" : "Next"} ${formatted}`;
-  } catch {
-    return status === "completed" ? "Scheduled to return" : "Recurring";
-  }
-}
 
 function optimisticSnoozeUntil(preset: SnoozePreset, now = new Date()) {
   return new Date(now.valueOf() + quickSnoozeDurationMs(preset)).toISOString();
@@ -911,8 +504,8 @@ function reorderCanonicalTodos(
 
 function matchesView(todo: Todo, view: View, now: number) {
   const snoozed = isSnoozed(todo, now);
-  if (view === "open") return todo.status === "open" && !snoozed;
-  if (view === "snoozed") return snoozed;
+  if (view === "open") return !todo.queueDelegation && todo.status === "open" && !snoozed;
+  if (view === "snoozed") return !todo.queueDelegation && snoozed;
   if (view === "done") return todo.status === "completed";
   if (view === "all") return todo.status === "open" || todo.status === "completed";
   return false;
@@ -936,15 +529,6 @@ const DIALOG_FOCUSABLE_SELECTOR = [
 function dialogFocusableElements(container: HTMLElement) {
   return [...container.querySelectorAll<HTMLElement>(DIALOG_FOCUSABLE_SELECTOR)]
     .filter((element) => element.getAttribute("aria-hidden") !== "true" && element.getClientRects().length > 0);
-}
-
-function SnoozeStatusBadge({ value, now, timeZone }: { value: string; now: number; timeZone: string }) {
-  return (
-    <span className="inline-flex min-h-[22px] items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-amber-700 ring-1 ring-inset ring-amber-200/70">
-      <ActionIcon name="snooze" className="h-3 w-3" />
-      {snoozeLabel(value, now, timeZone)}
-    </span>
-  );
 }
 
 
@@ -978,429 +562,16 @@ function todoActionIcon(action: TodoAction | "assign", label: string): ActionIco
   return "restore";
 }
 
-const TaskRow = memo(function TaskRow({
-  todo,
-  selected,
-  now,
-  timeZone,
-  onSelect,
-  onAction,
-  onEdit,
-  onPin,
-  onAcknowledgeUrgent,
-  onTitleChange,
-  onTitleBlur,
-  onTitleFocus,
-  onTitleArrowNavigate,
-  onReorderStart,
-  onReorderMove,
-  onReorderEnd,
-  showPin,
-  reordering,
-  reorderTarget,
-}: {
-  todo: Todo;
-  selected: boolean;
-  now: number;
-  timeZone: string;
-  onSelect: (todo: Todo) => void;
-  onAction: (todo: Todo, action: TodoAction, source: "hover" | "swipe") => void;
-  onEdit: (todo: Todo, source: "hover" | "swipe") => void;
-  onPin: (todo: Todo) => void;
-  onAcknowledgeUrgent: (todo: Todo) => void;
-  onTitleChange: (todo: Todo, title: string) => void;
-  onTitleBlur: (todo: Todo, title: string) => void;
-  onTitleFocus: (todo: Todo) => void;
-  onTitleArrowNavigate: (todo: Todo, direction: "previous" | "next") => boolean;
-  onReorderStart: (todo: Todo, event: ReactPointerEvent<HTMLButtonElement>) => void;
-  onReorderMove: (event: ReactPointerEvent<HTMLButtonElement>) => void;
-  onReorderEnd: (event: ReactPointerEvent<HTMLButtonElement>, cancelled: boolean) => void;
-  showPin: boolean;
-  reordering: boolean;
-  reorderTarget: boolean;
-}) {
-  const [offset, setOffset] = useState(0);
-  const [swipeWidth, setSwipeWidth] = useState(1);
-  const [dragging, setDragging] = useState(false);
-  const [editingTitle, setEditingTitle] = useState(false);
-  const [titleDraft, setTitleDraft] = useState(todo.title);
-  const gesture = useRef<{ startX: number; startY: number; width: number; rail: "left" | "right" } | null>(null);
-  const offsetRef = useRef(0);
-  const suppressTitleClickRef = useRef(false);
-  const titleRef = useRef<HTMLTextAreaElement | null>(null);
-  const pending = todo.id < 0;
-  const snoozed = isSnoozed(todo, now);
-  const recurring = Boolean(todo.recurrenceCron);
-  const agentUrgent = todo.status === "open" && todo.priority === 1 && todo.sourceKind === "api-token";
-  const primaryAction: { action: TodoAction; label: string; icon: ActionIconName } = todo.status === "open"
-    ? { action: "complete", label: "Done", icon: "done" }
-    : { action: "unsnooze", label: "Open", icon: "open" };
-  const leftSecondaryAction: { action: TodoAction; label: string; icon: ActionIconName } = todo.status === "completed"
-    ? primaryAction
-    : snoozed
-      ? { action: "unsnooze", label: "Wake", icon: "wake" }
-      : recurring
-        ? primaryAction
-        : { action: "snooze", label: "Snooze", icon: "snooze" };
-  const swipeRatio = Math.abs(offset) / swipeWidth;
-  const longSwipe = swipeRatio >= SWIPE_LONG_ACTION_THRESHOLD;
-  const revealAction = offset < 0
-    ? (longSwipe ? leftSecondaryAction.label : primaryAction.label)
-    : (longSwipe ? "Delete" : "Edit");
-  const revealIcon: ActionIconName = offset < 0
-    ? (longSwipe ? leftSecondaryAction.icon : primaryAction.icon)
-    : (longSwipe ? "delete" : "edit");
-  const revealClass = offset < 0
-    ? longSwipe && (leftSecondaryAction.icon === "snooze" || leftSecondaryAction.icon === "wake") ? "bg-amber-500" : "bg-[#216e4e]"
-    : longSwipe ? "bg-red-600" : "bg-slate-500";
-
-  function pointerDown(event: ReactPointerEvent<HTMLDivElement>) {
-    if (pending || event.pointerType !== "touch") return;
-    const rail = (event.target as HTMLElement).closest<HTMLElement>("[data-swipe-rail]");
-    const railSide = rail?.dataset.swipeRail;
-    if (railSide !== "left" && railSide !== "right") return;
-    suppressTitleClickRef.current = false;
-    const width = event.currentTarget.getBoundingClientRect().width;
-    gesture.current = {
-      startX: event.clientX,
-      startY: event.clientY,
-      width,
-      rail: railSide,
-    };
-    setSwipeWidth(width);
-    setDragging(true);
-    console.info("[todo-gesture] mobile task swipe started from side rail", {
-      todoId: todo.id,
-      rail: railSide,
-      source: (event.target as HTMLElement).closest("[data-row-action]") ? "control" : "rail",
-      width,
-    });
-  }
-
-  function pointerMove(event: ReactPointerEvent<HTMLDivElement>) {
-    const active = gesture.current;
-    if (!active) return;
-    const deltaX = event.clientX - active.startX;
-    const deltaY = event.clientY - active.startY;
-    if (Math.abs(deltaY) > Math.abs(deltaX) && Math.abs(deltaY) > 10) {
-      console.info("[todo-gesture] mobile task swipe cancelled for vertical movement", {
-        todoId: todo.id,
-        rail: active.rail,
-        deltaX: Math.round(deltaX),
-        deltaY: Math.round(deltaY),
-      });
-      gesture.current = null;
-      setDragging(false);
-      offsetRef.current = 0;
-      setOffset(0);
-      return;
-    }
-    const allowedDeltaX = active.rail === "left"
-      ? Math.max(0, deltaX)
-      : Math.min(0, deltaX);
-    const limit = active.width * 0.62;
-    if (Math.abs(allowedDeltaX) > 8) {
-      suppressTitleClickRef.current = true;
-      if (!event.currentTarget.hasPointerCapture(event.pointerId)) {
-        event.currentTarget.setPointerCapture(event.pointerId);
-      }
-    }
-    const nextOffset = Math.max(-limit, Math.min(limit, allowedDeltaX));
-    offsetRef.current = nextOffset;
-    setOffset(nextOffset);
-  }
-
-  function finishSwipe() {
-    const active = gesture.current;
-    gesture.current = null;
-    setDragging(false);
-    if (!active) {
-      setOffset(0);
-      return;
-    }
-    const completedOffset = offsetRef.current;
-    const ratio = Math.abs(completedOffset) / active.width;
-    const direction = Math.sign(completedOffset);
-    offsetRef.current = 0;
-    setOffset(0);
-    if (suppressTitleClickRef.current) {
-      window.setTimeout(() => {
-        suppressTitleClickRef.current = false;
-      }, 0);
-    }
-    const action = direction < 0
-      ? (ratio >= SWIPE_LONG_ACTION_THRESHOLD ? leftSecondaryAction.action : primaryAction.action)
-      : (ratio >= SWIPE_LONG_ACTION_THRESHOLD ? "delete" : "edit");
-    const activated = ratio >= SWIPE_ACTION_THRESHOLD && direction !== 0;
-    console.info("[todo-gesture] mobile task swipe finished", {
-      todoId: todo.id,
-      rail: active.rail,
-      direction: direction < 0 ? "left" : direction > 0 ? "right" : "none",
-      distance: Math.round(Math.abs(completedOffset)),
-      ratio: Number(ratio.toFixed(3)),
-      activated,
-      action: activated ? action : null,
-    });
-    if (!activated) return;
-    if (direction < 0) onAction(todo, action as TodoAction, "swipe");
-    else if (action === "delete") onAction(todo, "delete", "swipe");
-    else onEdit(todo, "swipe");
-  }
-
-  function cancelSwipe() {
-    const active = gesture.current;
-    if (active) {
-      console.info("[todo-gesture] mobile task swipe cancelled by pointer", {
-        todoId: todo.id,
-        rail: active.rail,
-        distance: Math.round(Math.abs(offsetRef.current)),
-      });
-    }
-    gesture.current = null;
-    offsetRef.current = 0;
-    setDragging(false);
-    setOffset(0);
-  }
-
-  const hoverActions: Array<{ action: TodoAction | "edit" | "pin"; label: string; icon: ActionIconName }> = [
-    ...(showPin ? [{ action: "pin" as const, label: todo.pinned ? "Unpin" : "Pin", icon: todo.pinned ? "unpin" as const : "pin" as const }] : []),
-    primaryAction,
-    ...(todo.status === "open" && leftSecondaryAction.action !== primaryAction.action ? [leftSecondaryAction] : []),
-    { action: "edit", label: "Edit", icon: "edit" },
-    { action: "delete", label: "Delete", icon: "delete" },
-  ];
-
-  function resizeTitle() {
-    const textarea = titleRef.current;
-    if (!textarea) return;
-    textarea.style.height = "auto";
-    textarea.style.height = `${textarea.scrollHeight}px`;
-  }
-
-  useLayoutEffect(() => {
-    resizeTitle();
-  }, [editingTitle, titleDraft, todo.title]);
-
-  return (
-    <li
-      data-task-row-id={todo.id}
-      className={classNames(
-        "group relative scroll-m-24 overflow-hidden",
-        selected && !editingTitle && "ring-1 ring-inset ring-[#216e4e]/30",
-        reordering && "z-20 opacity-70 shadow-lg",
-        reorderTarget && "ring-2 ring-inset ring-[#216e4e]/45",
-      )}
-    >
-      <div className={classNames("absolute inset-0 flex items-center justify-between px-5 text-sm font-semibold text-white md:hidden", revealClass)} aria-hidden="true">
-        <span className={classNames("inline-flex items-center gap-2 transition-opacity", offset > 0 ? "opacity-100" : "opacity-0")}><ActionIcon name={revealIcon} />{revealAction}</span>
-        <span className={classNames("inline-flex items-center gap-2 transition-opacity", offset < 0 ? "opacity-100" : "opacity-0")}><ActionIcon name={revealIcon} />{revealAction}</span>
-      </div>
-      <div
-        onPointerDown={pointerDown}
-        onPointerMove={pointerMove}
-        onPointerUp={finishSwipe}
-        onPointerCancel={cancelSwipe}
-        style={{ transform: `translateX(${offset}px)` }}
-        className={classNames(
-          "relative flex min-h-[72px] items-start gap-0 bg-white px-4 py-4 hover:bg-[#fafbf9] sm:px-5",
-          !dragging && "transition-transform duration-200 ease-out",
-          selected && !editingTitle && "bg-[#f3f8f5] hover:bg-[#f3f8f5]",
-        )}
-      >
-        <div className="flex w-5 shrink-0 flex-col items-center gap-1 md:mr-3">
-          <input
-            type="checkbox"
-            checked={selected}
-            onChange={() => onSelect(todo)}
-            aria-label={`Select: ${todo.title}`}
-            className={classNames("mt-0.5 h-5 w-5 shrink-0 cursor-pointer rounded border-[#9da6a0] accent-[#216e4e] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#216e4e]", pending && "animate-pulse")}
-          />
-          <button
-            type="button"
-            data-row-action
-            aria-label={`Drag to reorder: ${todo.title}`}
-            title="Drag to reorder"
-            disabled={pending || todo.offline || editingTitle}
-            onPointerDown={(event) => onReorderStart(todo, event)}
-            onPointerMove={onReorderMove}
-            onPointerUp={(event) => onReorderEnd(event, false)}
-            onPointerCancel={(event) => onReorderEnd(event, true)}
-            className="grid h-6 w-6 touch-none select-none place-items-center rounded-md text-[#9aa19d] transition hover:bg-[#eef0ed] hover:text-[#4f5752] active:scale-95 active:cursor-grabbing focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[#216e4e] disabled:cursor-not-allowed disabled:opacity-25 md:cursor-grab"
-          >
-            <ActionIcon name="reorder" className="h-4 w-4" />
-          </button>
-        </div>
-        <div aria-hidden="true" className="relative w-10 shrink-0 self-stretch md:hidden">
-          <div
-            data-swipe-rail="left"
-            className="absolute inset-x-0 -bottom-4 -top-4 touch-pan-y"
-          />
-        </div>
-        <div
-          onClick={(event) => {
-            if (suppressTitleClickRef.current) {
-              suppressTitleClickRef.current = false;
-              event.preventDefault();
-              titleRef.current?.blur();
-              return;
-            }
-            if (event.target !== titleRef.current) {
-              titleRef.current?.focus();
-              titleRef.current?.setSelectionRange(todo.title.length, todo.title.length);
-            }
-          }}
-          className="min-w-0 flex-1 rounded-lg text-left transition-colors"
-        >
-          <div className="flex min-w-0 items-start gap-2">
-            <textarea
-              ref={titleRef}
-              data-inline-title
-              value={editingTitle ? titleDraft : todo.title}
-              onChange={(event) => {
-                setTitleDraft(event.target.value);
-                onTitleChange(todo, event.target.value);
-                resizeTitle();
-              }}
-              onFocus={() => {
-                setTitleDraft(todo.title);
-                setEditingTitle(true);
-                onTitleFocus(todo);
-              }}
-              onBlur={(event) => {
-                setEditingTitle(false);
-                onTitleBlur(todo, event.target.value);
-              }}
-              onKeyDown={(event) => {
-                if (event.key === "Escape") {
-                  event.preventDefault();
-                  event.currentTarget.blur();
-                } else if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
-                  event.preventDefault();
-                  event.currentTarget.blur();
-                } else if (
-                  !event.shiftKey
-                  && !event.metaKey
-                  && !event.ctrlKey
-                  && !event.altKey
-                  && event.currentTarget.selectionStart === event.currentTarget.selectionEnd
-                  && (
-                    (event.key === "ArrowDown" && event.currentTarget.selectionEnd === event.currentTarget.value.length)
-                    || (event.key === "ArrowUp" && event.currentTarget.selectionStart === 0)
-                  )
-                ) {
-                  const direction = event.key === "ArrowDown" ? "next" : "previous";
-                  if (onTitleArrowNavigate(todo, direction)) event.preventDefault();
-                }
-              }}
-              rows={1}
-              maxLength={2000}
-              aria-label={`Edit title: ${todo.title}`}
-              className={classNames(
-                "block min-h-5 min-w-0 flex-1 resize-none overflow-hidden border-0 bg-transparent p-0 text-[16px] leading-5 text-[#202522] outline-none placeholder:text-[#929994] focus:ring-0 sm:text-[15px]",
-                todo.status === "completed" && "text-[#8b928e] line-through",
-              )}
-            />
-            {todo.attachmentCount > 0 && <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-[#eef2ef] px-1.5 py-0.5 text-[10px] font-medium text-[#68716b]"><ActionIcon name="attachment" className="h-3 w-3" />{todo.attachmentCount}</span>}
-          </div>
-          {todo.notes && <p className="mt-1 line-clamp-2 whitespace-pre-wrap text-xs leading-5 text-[#7c847f]">{todo.notes}</p>}
-          {(todo.project || todo.context || todo.dueDate || todo.priority <= 2 || snoozed || recurring || todo.offline) && (
-            <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px] font-medium leading-4">
-              {todo.priority <= 2 && <span className={classNames("inline-flex min-h-[22px] items-center rounded-full px-2 py-0.5", todo.priority === 1 ? "bg-red-50 text-red-700 ring-1 ring-inset ring-red-200/70" : "bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-200/70")}>{priorityLabels[todo.priority]}</span>}
-              {todo.project && <span className="inline-flex min-h-[22px] items-center gap-1 rounded-full bg-[#eef2ef] px-2 py-0.5 text-[#55615a] ring-1 ring-inset ring-[#dfe5e1]"><ActionIcon name="folder" className="h-3 w-3" />{todo.project}</span>}
-              {todo.context && <span className="inline-flex min-h-[22px] items-center rounded-full bg-sky-50 px-2 py-0.5 text-sky-700 ring-1 ring-inset ring-sky-200/70">{todo.context}</span>}
-              {todo.dueDate && <span className={classNames("inline-flex min-h-[22px] items-center gap-1 rounded-full px-2 py-0.5 ring-1 ring-inset", isDueTodayOrOverdue(todo.dueDate) && todo.status === "open" && !snoozed ? "bg-red-50 text-red-700 ring-red-200/70" : "bg-slate-50 text-slate-600 ring-slate-200/80")}><ActionIcon name="calendar" className="h-3 w-3" />{formatDueDate(todo.dueDate)}</span>}
-              {snoozed && todo.snoozedUntil && <SnoozeStatusBadge value={todo.snoozedUntil} now={now} timeZone={timeZone} />}
-              {todo.recurrenceCron && <span className="inline-flex min-h-[22px] items-center gap-1 rounded-full bg-violet-50 px-2 py-0.5 text-violet-700 ring-1 ring-inset ring-violet-200/70"><ActionIcon name="repeat" className="h-3 w-3" />{recurrenceLabel(todo.recurrenceCron, todo.status, now, timeZone)}</span>}
-              {todo.offline && <span className="inline-flex min-h-[22px] items-center gap-1 rounded-full bg-orange-50 px-2 py-0.5 text-orange-700 ring-1 ring-inset ring-orange-200/70"><ActionIcon name="retry" className="h-3 w-3" />Waiting to sync</span>}
-            </div>
-          )}
-        </div>
-        <div
-          data-swipe-rail="right"
-          className="-mr-4 flex shrink-0 self-stretch touch-pan-y pr-4 sm:-mr-5 sm:pr-5 md:hidden"
-        >
-          <div aria-hidden="true" className="relative w-10 shrink-0 self-stretch">
-            <div className="absolute inset-x-0 -bottom-4 -top-4" />
-          </div>
-          {showPin && !pending && !todo.offline && (
-            <button
-              type="button"
-              data-row-action
-              onClick={(event) => {
-                if (suppressTitleClickRef.current) {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  return;
-                }
-                onPin(todo);
-              }}
-              aria-label={`${todo.pinned ? "Unpin" : "Pin"}: ${todo.title}`}
-              title={todo.pinned ? "Unpin" : "Pin"}
-              className={classNames("grid h-9 w-9 shrink-0 place-items-center rounded-lg transition focus-visible:outline-2 focus-visible:outline-[#216e4e]", todo.pinned ? "bg-[#eaf3ed] text-[#216e4e]" : "text-[#69716c] hover:bg-[#eef0ed]")}
-            >
-              <ActionIcon name={todo.pinned ? "unpin" : "pin"} className="h-[18px] w-[18px]" />
-            </button>
-          )}
-          {agentUrgent && !pending && !todo.offline && (
-            <button
-              type="button"
-              data-row-action
-              onPointerDown={(event) => event.stopPropagation()}
-              onClick={() => onAcknowledgeUrgent(todo)}
-              aria-label={`Acknowledge urgent alert: ${todo.title}`}
-              title="Acknowledge urgent alert"
-              className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-red-700 transition hover:bg-red-50 focus-visible:outline-2 focus-visible:outline-[#216e4e]"
-            >
-              <ActionIcon name="phone" className="h-[18px] w-[18px]" />
-            </button>
-          )}
-        </div>
-        {!pending && !todo.offline && (
-          <div className="hidden shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 md:ml-3 md:flex">
-            {agentUrgent && (
-              <button
-                type="button"
-                data-row-action
-                onClick={() => onAcknowledgeUrgent(todo)}
-                aria-label={`Acknowledge urgent alert: ${todo.title}`}
-                title="Acknowledge urgent alert"
-                className="grid h-9 w-9 place-items-center rounded-lg text-red-700 transition hover:bg-red-50 focus-visible:outline-2 focus-visible:outline-[#216e4e]"
-              >
-                <ActionIcon name="phone" className="h-[18px] w-[18px]" />
-                <span className="sr-only">Acknowledge urgent alert</span>
-              </button>
-            )}
-            {hoverActions.map(({ action, label, icon }) => (
-              <button
-                key={action}
-                type="button"
-                data-row-action
-                onClick={() => action === "edit" ? onEdit(todo, "hover") : action === "pin" ? onPin(todo) : onAction(todo, action, "hover")}
-                aria-label={`${label}: ${todo.title}`}
-                title={label}
-                className={classNames(
-                  "grid h-9 w-9 place-items-center rounded-lg text-[#69716c] transition hover:bg-[#eef0ed] hover:text-[#252a27] focus-visible:outline-2 focus-visible:outline-[#216e4e]",
-                  (action === "complete" || action === "unsnooze") && "hover:bg-emerald-50 hover:text-emerald-700",
-                  action === "snooze" && "hover:bg-amber-50 hover:text-amber-700",
-                  action === "pin" && "hover:bg-[#eaf3ed] hover:text-[#216e4e]",
-                  action === "delete" && "hover:bg-red-50 hover:text-red-700",
-                )}
-              >
-                <ActionIcon name={icon} className="h-[18px] w-[18px]" />
-                <span className="sr-only">{label}</span>
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
-    </li>
-  );
-});
-
 const SubscribedTaskRow = memo(function SubscribedTaskRow(props: React.ComponentProps<typeof TaskRow>) {
   const current = useTask(taskKey(props.todo));
-  return current ? <TaskRow {...props} todo={current} /> : null;
+  return current ? <TaskRow {...props} todo={current} now={taskRowClock(current, props.now)} /> : null;
 });
+
+function resizeCapture(textarea: HTMLTextAreaElement) {
+  textarea.style.overflowY = "hidden";
+  textarea.style.height = "auto";
+  textarea.style.height = `${textarea.scrollHeight}px`;
+}
 
 export default function Home() {
   const [loading, setLoading] = useState(true);
@@ -1420,6 +591,17 @@ export default function Home() {
   const [captureProject, setCaptureProject] = useState("");
   const [captureDraftToken, setCaptureDraftToken] = useState(() => crypto.randomUUID());
   const [captureAttachments, setCaptureAttachments] = useState<PendingAttachment[]>([]);
+  const captureFilesRef = useRef<PendingAttachment[]>([]);
+  const captureProjectRef = useRef("");
+  const captureTokenRef = useRef(captureDraftToken);
+  const captureSession = useRef<TaskCaptureSession | null>(null);
+  if (!captureSession.current) captureSession.current = new TaskCaptureSession();
+  const [captureReady, setCaptureReady] = useState(false);
+  const [captureSaveState, setCaptureSaveState] = useState("Loading draft…");
+  const captureSaveSequence = useRef(0);
+  const captureGate = useRef(new TaskCaptureGate());
+  const [capturePreparing, setCapturePreparing] = useState(false);
+  const captureMounted = useRef(false);
   const [recognizingCaptureTitle, setRecognizingCaptureTitle] = useState(false);
   const [adding, setAdding] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -1430,6 +612,7 @@ export default function Home() {
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [pinListEnabled, setPinListEnabled] = useState(true);
   const [editingId, setEditingId] = useState<number | null>(null);
+  const [queueRequest, setQueueRequest] = useState<QueueRequest | null>(null);
   const [editDraft, setEditDraft] = useState<TodoDraft | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
   const [editSaveState, setEditSaveState] = useState<EditSaveState>("saved");
@@ -1437,6 +620,7 @@ export default function Home() {
   const [descriptionPreview, setDescriptionPreview] = useState(false);
   const [detailAttachments, setDetailAttachments] = useState<TodoAttachment[]>([]);
   const [detailUploads, setDetailUploads] = useState<PendingAttachment[]>([]);
+  const voiceReturnFocusRef = useRef<HTMLButtonElement | null>(null);
   const [voiceTarget, setVoiceTarget] = useState<"capture" | "detail" | null>(null);
   const [online, setOnline] = useState(true);
   const [connectionQuality, setConnectionQuality] = useState<ConnectionQuality>("online");
@@ -1450,6 +634,7 @@ export default function Home() {
   const [viewerIndex, setViewerIndex] = useState<number | null>(null);
   const [viewerCopyState, setViewerCopyState] = useState<"idle" | "copying" | "copied" | "error">("idle");
   const [projectSelectorOpen, setProjectSelectorOpen] = useState(false);
+  const projectReturnFocusRef = useRef<HTMLElement | null>(null);
   const [projectDialog, setProjectDialog] = useState<ProjectDialogState | null>(null);
   const [projectDialogError, setProjectDialogError] = useState("");
   const [savingProject, setSavingProject] = useState(false);
@@ -1473,6 +658,8 @@ export default function Home() {
   const newTitleRef = useRef("");
   const captureDraftClientIdRef = useRef(crypto.randomUUID());
   const captureDraftRef = useRef<CaptureDraft | null>(null);
+  const prepareUpdateRef = useRef<() => Promise<void>>(async () => {});
+  useEffect(() => registerPwaUpdateGuard("todo-input", () => prepareUpdateRef.current()), []);
   const captureDraftSaveTimerRef = useRef<number | null>(null);
   const captureDraftInFlightRef = useRef(false);
   const queuedCaptureDraftRef = useRef<CaptureDraft | null>(null);
@@ -1482,7 +669,6 @@ export default function Home() {
   const captureTitleRecognitionSequenceRef = useRef(0);
   const persistCaptureDraftRef = useRef<((draft: CaptureDraft, source: string) => Promise<void>) | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
-  const viewerGesture = useRef<number | null>(null);
   const imageDropDepth = useRef(0);
   const editingIdRef = useRef<number | null>(null);
   const editDraftRef = useRef<TodoDraft | null>(null);
@@ -1510,6 +696,7 @@ export default function Home() {
   const pendingCompletionIdsRef = useRef<Set<number>>(new Set());
   const optimisticOperationsRef = useRef<Map<string, OptimisticOperation>>(new Map());
   const [uploadCount, setUploadCount] = useState(0);
+  const [uploadStates, setUploadStates] = useState<Record<string, number>>({});
   const lastLiveSnapshotRef = useRef("");
   const syncWakeTimerRef = useRef<number | null>(null);
   const syncWakeAtRef = useRef(0);
@@ -1535,7 +722,8 @@ export default function Home() {
   const reorderAnimationRestoreFrameRef = useRef<number | null>(null);
   const lastAppBadgeCountRef = useRef<number | null>(null);
   const deepLinkedTaskOpenedRef = useRef(false);
-  const taskDialogNestedOverlayOpen = projectDialog !== null || viewerIndex !== null || voiceTarget !== null || customSnoozeDialog !== null;
+  const [detailAttachmentPickerOpen, setDetailAttachmentPickerOpen] = useState(false);
+  const taskDialogNestedOverlayOpen = detailAttachmentPickerOpen || queueRequest !== null || projectDialog !== null || viewerIndex !== null || voiceTarget !== null || customSnoozeDialog !== null;
   const overlayOpen = editingId !== null || projectSelectorOpen || projectDialog !== null || newProjectOpen || projectDeleteDialog !== null || filtersOpen || viewerIndex !== null || voiceTarget !== null || shortcutsOpen || customSnoozeDialog !== null;
 
   useEffect(() => () => {
@@ -1624,7 +812,7 @@ export default function Home() {
     if (!remoteDraft) return;
     const localDraft = captureDraftRef.current;
     if (localDraft && remoteDraft.version <= localDraft.version) return;
-    if (document.activeElement === captureRef.current) {
+    if (!captureReady || captureFilesRef.current.length || document.activeElement === captureRef.current) {
       pendingRemoteCaptureDraftRef.current = remoteDraft;
       console.info("[todo-sync] remote Quick Add draft deferred during active typing", {
         source,
@@ -1638,6 +826,7 @@ export default function Home() {
     captureDraftRef.current = remoteDraft;
     newTitleRef.current = remoteDraft.text;
     setNewTitle(remoteDraft.text);
+    void checkpointCapture().catch(() => undefined);
     void saveOfflineCaptureDraft({ key: "quick-add", ...remoteDraft }).catch((error) => {
       console.error("[todo-offline] remote Quick Add draft cache failed", { source, error });
     });
@@ -1665,7 +854,7 @@ export default function Home() {
     });
   });
 
-  const applyLiveSnapshot = useEffectEvent((remoteTodos: Todo[], source: "initial" | "poll" | "reconnect" | "snooze-wake") => {
+  const applyLiveSnapshot = useStableCallback((remoteTodos: Todo[], source: "initial" | "poll" | "reconnect" | "snooze-wake") => {
     const pendingPatches = pendingTodoPatchesRef.current;
     const missingOrderIds = remoteTodos
       .filter((todo) => !Number.isFinite(todo.sortOrder))
@@ -1680,30 +869,6 @@ export default function Home() {
     const resolved = remoteTodos
       .filter((todo) => !pendingDeletedIdsRef.current.has(todo.id))
       .map(applyPendingOverlays);
-    setTodos((current) => {
-      const offlineTodos = current.filter((todo) => todo.id < 0 || todo.offline);
-      const localClientIds = new Set(offlineTodos.map((todo) => todo.clientId).filter(Boolean));
-      const next = [...offlineTodos, ...resolved.filter((todo) => !todo.clientId || !localClientIds.has(todo.clientId))];
-      const unchanged = next.length === current.length && next.every((todo, index) => {
-        const previous = current[index];
-        return previous?.id === todo.id
-          && previous.updatedAt === todo.updatedAt
-          && previous.status === todo.status
-          && previous.snoozedUntil === todo.snoozedUntil
-          && previous.attachmentCount === todo.attachmentCount
-          && previous.title === todo.title
-          && previous.notes === todo.notes
-          && previous.priority === todo.priority
-          && previous.dueDate === todo.dueDate
-          && previous.project === todo.project
-          && previous.context === todo.context
-          && previous.recurrenceCron === todo.recurrenceCron
-          && previous.pinned === todo.pinned
-          && previous.sortOrder === todo.sortOrder;
-      });
-      return unchanged ? current : next;
-    });
-
     const activeId = editingIdRef.current;
     const remoteTodo = activeId === null ? null : resolved.find((todo) => todo.id === activeId) ?? null;
     if (remoteTodo) {
@@ -1734,7 +899,8 @@ export default function Home() {
     }
   });
 
-  const applyLiveDelta = useEffectEvent((remoteTodos: Todo[], deletedIds: number[], source: "poll" | "reconnect" | "snooze-wake") => {
+  const applyLiveDelta = useStableCallback((remoteTodos: Todo[], deletedIds: number[], source: "poll" | "reconnect" | "snooze-wake") => {
+    if (!remoteTodos.length && !deletedIds.length) return;
     const pendingPatches = pendingTodoPatchesRef.current;
     const missingOrderIds = remoteTodos
       .filter((todo) => !Number.isFinite(todo.sortOrder))
@@ -1746,30 +912,13 @@ export default function Home() {
         ids: missingOrderIds.slice(0, 20),
       });
     }
-    const discardedPendingIds = deletedIds.filter((id) => pendingPatches.delete(id));
-    if (discardedPendingIds.length) {
-      setOfflineEditCount((current) => Math.max(0, current - discardedPendingIds.length));
-      for (const id of discardedPendingIds) {
-        void deleteOfflineTodoMutation(id).catch((error) => {
-          console.error("[todo-sync] deleted task mutation cleanup failed", { todoId: id, error });
-        });
-      }
-      console.warn("[todo-sync] remote deletion superseded queued edits", { ids: discardedPendingIds });
-    }
+    // The store retains rejected edits when a target disappears. Never discard
+    // those operations from a view callback; the recovery panel owns their UI.
     const changed = remoteTodos
       .filter((todo) => !pendingDeletedIdsRef.current.has(todo.id))
       .map(applyPendingOverlays);
     const changedById = new Map(changed.map((todo) => [todo.id, todo]));
     const deleted = new Set(deletedIds);
-    setTodos((current) => {
-      const next = current
-        .filter((todo) => (todo.offline || todo.id < 0 || !deleted.has(todo.id)) && !pendingDeletedIdsRef.current.has(todo.id))
-        .map((todo) => changedById.get(todo.id) ?? todo);
-      const existingIds = new Set(next.map((todo) => todo.id));
-      const inserted = changed.filter((todo) => !existingIds.has(todo.id));
-      return inserted.length ? [...inserted, ...next] : next;
-    });
-
     const activeId = editingIdRef.current;
     const remoteTodo = activeId === null ? null : changedById.get(activeId) ?? null;
     if (remoteTodo) {
@@ -1789,30 +938,33 @@ export default function Home() {
     }
   });
 
-  const refreshLiveData = useEffectEvent(async (_source: string) => { taskSync.wake(); });
-
-  const reconcileTaskClock = useEffectEvent((source: "focus" | "visibility" | "online") => {
-    const reconciledAt = Date.now();
-    const expiredIds = expiredSnoozeIds(todos, reconciledAt);
-    setNow(reconciledAt);
-    console.info("[todo-snooze] task clock reconciled", {
-      source,
-      reconciledAt: new Date(reconciledAt).toISOString(),
-      expiredIds,
-    });
+  const hydrateCapture = useStableCallback(() => {
+    if (captureGate.current.ready) return; // Activity reveal must preserve current unsaved input.
+    setCaptureSaveState("Loading draft…");
+    void captureSession.current!.load().then((stored) => {
+      if (!captureMounted.current || captureGate.current.ready) return;
+      captureTokenRef.current = stored.token;
+      setCaptureDraftToken(stored.token);
+      captureProjectRef.current = stored.project;
+      setCaptureProject(stored.project);
+      const items: PendingAttachment[] = stored.attachments.map((item) => ({
+        localId: item.localId, kind: item.kind, durationMs: item.durationMs,
+        file: new File([item.blob], item.fileName, { type: item.mimeType }),
+        previewUrl: URL.createObjectURL(item.blob), status: "staged", attachment: null, error: "",
+      }));
+      captureFilesRef.current = items; setCaptureAttachments(items);
+      const draft = stored.draft;
+      if (draft) { captureDraftRef.current = draft; newTitleRef.current = draft.text; setNewTitle(draft.text); }
+      captureGate.current.hydrate();
+      setCaptureReady(true); setCaptureSaveState("Draft saved on this device");
+    }).catch(() => { if (captureMounted.current) setCaptureSaveState("Draft could not be loaded. Keep this page open and retry storage."); });
   });
-
   useEffect(() => {
-    let active = true;
-    void loadOfflineCaptureDraft().then((draft) => {
-      if (!active || !draft || captureDraftRef.current && captureDraftRef.current.version >= draft.version) return;
-      captureDraftRef.current = draft;
-      newTitleRef.current = draft.text;
-      setNewTitle(draft.text);
-    });
+    captureMounted.current = true;
+    hydrateCapture();
     void persistOfflineStorage();
-    return () => { active = false; };
-  }, []);
+    return () => { captureMounted.current = false; };
+  }, [hydrateCapture]);
 
   const receiveSyncEvent = useStableCallback((event: TaskSyncEvent) => {
     if (event.type === "remote") {
@@ -1889,7 +1041,7 @@ export default function Home() {
     });
     setLoading(state.loading); setOnline(navigator.onLine); setConnectionQuality(state.quality);
     setOfflineCount(state.creates); setOfflineEditCount(state.edits); setOfflineActionCount(state.actions);
-    setUploadCount(state.uploads);
+    setUploadCount(state.uploads); setUploadStates(state.uploadStates);
     pendingTodoPatchesRef.current = new Map(state.mutations.map((mutation) => [mutation.todoId, mutation.patch]));
     rebuildPendingActionState(state.pendingActions);
     setRegisteredProjects((current) => JSON.stringify(current) === JSON.stringify(state.projects) ? current : state.projects);
@@ -2192,7 +1344,7 @@ export default function Home() {
         const firedAt = Date.now();
         const expiredIds = expiredSnoozeIds(todos, firedAt);
         setNow(firedAt);
-        void refreshLiveData("snooze-wake");
+        taskSync.wake();
         console.info("[todo-snooze] live wake fired", {
           scheduledWakeAt: new Date(wakeAt).toISOString(),
           firedAt: new Date(firedAt).toISOString(),
@@ -2221,16 +1373,11 @@ export default function Home() {
     });
   }, [loading, now, todos]);
 
-  useEffect(() => {
-    if (!notice || customSnoozeDialog) return;
-    const defaultDuration = notice.snoozeIds?.length ? 15_000 : notice.undoToken ? 8_000 : 5_000;
-    const duration = notice.dismissAt === undefined ? defaultDuration : Math.max(0, notice.dismissAt - Date.now());
-    const timer = window.setTimeout(() => setNotice(null), duration);
-    return () => window.clearTimeout(timer);
-  }, [customSnoozeDialog, notice]);
+  const undoFromShortcut = useEffectEvent((currentNotice: NonNullable<Notice>) => requestNoticeUndo(currentNotice));
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if (document.querySelector(".todo-queue-dialog")) return;
       const target = event.target as HTMLElement;
       const typing = Boolean(target.closest("input, textarea, select, [contenteditable='true']"));
       const imageCount = detailAttachments.filter((attachment) => attachment.kind === "image").length;
@@ -2238,7 +1385,7 @@ export default function Home() {
       if (undoShortcut && !typing) {
         if (notice && (notice.operationId || notice.undoToken) && !undoing && !notice.undoRequested) {
           event.preventDefault();
-          requestNoticeUndo(notice);
+          undoFromShortcut(notice);
           console.info("[todo-shortcuts] undo requested", {
             source: event.metaKey ? "command-z" : "control-z",
             optimistic: Boolean(notice.operationId),
@@ -2375,7 +1522,7 @@ export default function Home() {
       registeredProjects.map((name) => [name, { open: 0, snoozed: 0, done: 0 }]),
     );
     todos.forEach((todo) => {
-      if (!todo.project) return;
+      if (!todo.project || todo.queueDelegation && todo.status !== "completed") return;
       const counts = projectCounts.get(todo.project) ?? { open: 0, snoozed: 0, done: 0 };
       if (todo.status === "completed") counts.done += 1;
       else if (isSnoozed(todo, now)) counts.snoozed += 1;
@@ -2388,7 +1535,7 @@ export default function Home() {
   const unassignedProjectCounts = useMemo(() => {
     const counts = { open: 0, snoozed: 0, done: 0 };
     todos.forEach((todo) => {
-      if (todo.project) return;
+      if (todo.project || todo.queueDelegation && todo.status !== "completed") return;
       if (todo.status === "completed") counts.done += 1;
       else if (isSnoozed(todo, now)) counts.snoozed += 1;
       else counts.open += 1;
@@ -2411,7 +1558,7 @@ export default function Home() {
     const needle = deferredQuery.trim().toLowerCase();
     const rows = todos.filter((todo) => {
       const searchable = [todo.title, todo.notes, todo.project, todo.context].filter(Boolean).join(" ").toLowerCase();
-      return matchesView(todo, view, now)
+      return (matchesView(todo, view, now) || Boolean(needle && todo.queueDelegation))
         && (!needle || todo.id === inlineEditingId || searchable.includes(needle))
         && (!project || (project === UNASSIGNED_PROJECT ? !todo.project : todo.project === project))
         && (!priority || todo.priority === Number(priority));
@@ -2419,9 +1566,9 @@ export default function Home() {
     return [...rows].sort(compareCanonicalOrder);
   }, [todos, view, deferredQuery, project, priority, now, inlineEditingId]);
 
-  const pinnedTaskCount = todos.filter((todo) => todo.pinned).length;
-  const pinnedOpenTodos = view === "open" && pinListEnabled ? filtered.filter((todo) => todo.pinned) : [];
-  const regularOpenTodos = view === "open" && pinListEnabled ? filtered.filter((todo) => !todo.pinned) : filtered;
+  const pinnedTaskCount = todos.filter((todo) => todo.pinned && !todo.queueDelegation).length;
+  const pinnedOpenTodos = view === "open" && pinListEnabled ? filtered.filter((todo) => todo.pinned && !todo.queueDelegation) : [];
+  const regularOpenTodos = view === "open" && pinListEnabled ? filtered.filter((todo) => !todo.pinned || todo.queueDelegation) : filtered;
   const displayedTodos = view === "open" && pinListEnabled ? [...pinnedOpenTodos, ...regularOpenTodos] : filtered;
 
   const selectedIds = useMemo(() => [...selected], [selected]);
@@ -2430,6 +1577,8 @@ export default function Home() {
   const filtersActive = Boolean(query || priority);
   const mobileFilterCount = Number(Boolean(priority));
   const editingTodo = editingId === null ? null : todos.find((todo) => todo.id === editingId) ?? null;
+
+  const openLinkedTask = useEffectEvent((todo: Todo) => openTaskDetails(todo));
 
   useEffect(() => {
     if (deepLinkedTaskOpenedRef.current || todos.length === 0) return;
@@ -2442,7 +1591,7 @@ export default function Home() {
     const linkedTask = Number.isInteger(taskId) ? todos.find((todo) => todo.id === taskId) : null;
     if (!linkedTask) return;
     deepLinkedTaskOpenedRef.current = true;
-    openTaskDetails(linkedTask);
+    openLinkedTask(linkedTask);
     const cleanUrl = new URL(window.location.href);
     cleanUrl.searchParams.delete("task");
     window.history.replaceState(window.history.state, "", `${cleanUrl.pathname}${cleanUrl.search}${cleanUrl.hash}`);
@@ -2456,11 +1605,37 @@ export default function Home() {
     setViewerCopyState("idle");
   }, [viewerAttachment?.id]);
 
-  function resizeCapture(textarea: HTMLTextAreaElement) {
-    textarea.style.height = "auto";
-    textarea.style.height = `${Math.min(textarea.scrollHeight, 120)}px`;
-    textarea.style.overflowY = textarea.scrollHeight > 120 ? "auto" : "hidden";
-  }
+  useLayoutEffect(() => {
+    if (captureRef.current) resizeCapture(captureRef.current);
+  }, [newTitle]);
+
+  useLayoutEffect(() => {
+    const textarea = captureRef.current;
+    if (!textarea) return;
+    let frame: number | null = null;
+    const scheduleResize = () => {
+      if (frame !== null) return;
+      frame = window.requestAnimationFrame(() => {
+        frame = null;
+        resizeCapture(textarea);
+      });
+    };
+    // Ignore height notifications from our own sizing, and resize outside the
+    // observer delivery so width reflow cannot create a feedback loop.
+    let width = 0;
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(([entry]) => {
+      if (entry.contentRect.width === width) return;
+      width = entry.contentRect.width;
+      scheduleResize();
+    });
+    observer?.observe(textarea);
+    if (!observer) window.addEventListener("resize", scheduleResize);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener("resize", scheduleResize);
+      if (frame !== null) window.cancelAnimationFrame(frame);
+    };
+  }, []);
 
   async function persistCaptureDraft(draft: CaptureDraft, source: string) {
     if (!navigator.onLine) {
@@ -2518,6 +1693,30 @@ export default function Home() {
 
   persistCaptureDraftRef.current = persistCaptureDraft;
 
+  async function checkpointCapture() {
+    const sequence = ++captureSaveSequence.current;
+    setCaptureSaveState("Saving draft on this device…");
+    try {
+      await captureSession.current!.save({
+        token: captureTokenRef.current, project: captureProjectRef.current,
+        draft: captureDraftRef.current ? { key: "quick-add", ...captureDraftRef.current } : null,
+        attachments: captureFilesRef.current.map((item) => ({ localId: item.localId, kind: item.kind,
+          fileName: item.file.name, mimeType: item.file.type, durationMs: item.durationMs, blob: item.file,
+          remoteAttachmentId: item.attachment?.id })),
+      });
+      if (sequence === captureSaveSequence.current) setCaptureSaveState("Draft saved on this device");
+    } catch (error) {
+      setCaptureSaveState("Draft not saved. Keep this page open; retry or copy text and save each file.");
+      throw error;
+    }
+  }
+
+  function updateCaptureProject(value: string) {
+    if (!captureGate.current.ready || captureGate.current.adding || captureDraftToken !== captureTokenRef.current) return;
+    captureProjectRef.current = value; setCaptureProject(value);
+    void checkpointCapture().catch(() => undefined);
+  }
+
   function updateCaptureTitle(text: string, source: "typing" | "task-created" | "image-recognition") {
     const nextClock = Math.max(Date.now(), captureDraftClockRef.current + 1);
     captureDraftClockRef.current = nextClock;
@@ -2533,6 +1732,7 @@ export default function Home() {
     captureDraftRef.current = draft;
     pendingRemoteCaptureDraftRef.current = null;
     setNewTitle(text);
+    void checkpointCapture().catch(() => undefined);
     void saveOfflineCaptureDraft({ key: "quick-add", ...draft }).catch((error) => {
       console.error("[todo-offline] Quick Add draft save failed", { source, textLength: text.length, error });
     });
@@ -2684,30 +1884,6 @@ export default function Home() {
     return items;
   }
 
-  async function uploadCaptureAttachment(item: PendingAttachment, draftToken: string) {
-    try {
-      const endpoint = "/api/attachments/drafts";
-      const discard = (uploadId: string) => request(`/api/attachments/drafts/${uploadId}?discard=1`, {
-        method: "DELETE",
-        body: JSON.stringify({ draftToken }),
-      });
-      const { attachment } = item.kind === "image"
-        ? await uploadPrivateImage(item.file, endpoint, { draftToken }, discard)
-        : await uploadPrivateMedia(item.file, item.kind, item.durationMs, endpoint, { draftToken }, discard);
-      setCaptureAttachments((current) => current.map((candidate) => candidate.localId === item.localId
-        ? { ...candidate, status: "ready", attachment, error: "" }
-        : candidate));
-      console.info("[todo-ui] draft attachment uploaded", { attachmentId: attachment.id, kind: item.kind, bytes: attachment.byteSize });
-    } catch (error) {
-      const wentOffline = !navigator.onLine;
-      const message = error instanceof Error ? error.message : "The attachment could not be uploaded.";
-      setCaptureAttachments((current) => current.map((candidate) => candidate.localId === item.localId
-        ? { ...candidate, status: wentOffline ? "offline" : "error", error: wentOffline ? "Waiting for a connection" : message }
-        : candidate));
-      console.error("[todo-ui] draft attachment upload failed", { localId: item.localId, kind: item.kind, bytes: item.file.size, wentOffline, error });
-    }
-  }
-
   async function recognizeCaptureImage(item: PendingAttachment) {
     if (item.kind !== "image" || newTitleRef.current.trim() || !navigator.onLine || captureTitleRecognitionRef.current) return;
     const requestId = ++captureTitleRecognitionSequenceRef.current;
@@ -2766,44 +1942,54 @@ export default function Home() {
   }
 
   async function queueCaptureAttachments(inputFiles: File[]) {
-    const files = validateSelectedAttachments(inputFiles, captureAttachments.length);
-    if (!files.length) return;
-    const items = await pendingAttachments(files);
-    if (!items.length) return;
-    setCaptureAttachments((current) => [...current, ...items]);
-    console.info("[todo-offline] capture attachments staged locally", { count: items.length, browserOnlineHint: navigator.onLine, kinds: items.map((item) => item.kind), totalBytes: files.reduce((sum, file) => sum + file.size, 0) });
-    const recognitionTarget = items.find((item) => item.kind === "image");
-    if (recognitionTarget && !newTitleRef.current.trim()) void recognizeCaptureImage(recognitionTarget);
+    await captureGate.current.prepare(async () => {
+      setCapturePreparing(true);
+      setCaptureSaveState("Preparing files for this device…");
+      try {
+        const files = validateSelectedAttachments(inputFiles, captureAttachments.length);
+        if (!files.length) { setCaptureSaveState("No files added."); return; }
+        const items = await pendingAttachments(files);
+        if (!items.length) { setCaptureSaveState("No files added."); return; }
+        captureFilesRef.current = [...captureFilesRef.current, ...items];
+        setCaptureAttachments(captureFilesRef.current);
+        try { await checkpointCapture(); } catch { return; }
+        console.info("[todo-offline] capture attachments staged locally", { count: items.length, browserOnlineHint: navigator.onLine, kinds: items.map((item) => item.kind), totalBytes: files.reduce((sum, file) => sum + file.size, 0) });
+        const recognitionTarget = items.find((item) => item.kind === "image");
+        if (recognitionTarget && !newTitleRef.current.trim()) void recognizeCaptureImage(recognitionTarget);
+      } finally { setCapturePreparing(captureGate.current.preparing > 1); }
+    });
   }
 
-  function queueCaptureVoice(file: File, durationMs: number) {
-    if (captureAttachments.length >= MAX_ATTACHMENTS) {
-      setNotice({ tone: "error", text: `Tasks are limited to ${MAX_ATTACHMENTS} attachments.` });
-      return;
-    }
-    const item: PendingAttachment = {
-      localId: crypto.randomUUID(),
-      file,
-      previewUrl: URL.createObjectURL(file),
-      kind: "audio",
-      durationMs,
-      status: "staged",
-      attachment: null,
-      error: "",
-    };
-    setCaptureAttachments((current) => [...current, item]);
-    setVoiceTarget(null);
-    console.info("[todo-offline] voice memo staged locally", { destination: "quick-add", bytes: file.size, durationMs, browserOnlineHint: navigator.onLine });
+  async function queueCaptureVoice(file: File, durationMs: number) {
+    await captureGate.current.prepare(async () => {
+      if (captureAttachments.length >= MAX_ATTACHMENTS) {
+        setNotice({ tone: "error", text: `Tasks are limited to ${MAX_ATTACHMENTS} attachments.` });
+        return;
+      }
+      const item: PendingAttachment = {
+        localId: crypto.randomUUID(),
+        file,
+        previewUrl: URL.createObjectURL(file),
+        kind: "audio",
+        durationMs,
+        status: "staged",
+        attachment: null,
+        error: "",
+      };
+      captureFilesRef.current = [...captureFilesRef.current, item];
+      setCaptureAttachments(captureFilesRef.current);
+      setVoiceTarget(null);
+      try { await checkpointCapture(); } catch { return; }
+      console.info("[todo-offline] voice memo staged locally", { destination: "quick-add", bytes: file.size, durationMs, browserOnlineHint: navigator.onLine });
+    });
   }
 
-  function retryCaptureAttachment(item: PendingAttachment) {
-    setCaptureAttachments((current) => current.map((candidate) => candidate.localId === item.localId
-      ? { ...candidate, status: "uploading", error: "" }
-      : candidate));
-    void uploadCaptureAttachment({ ...item, status: "uploading", error: "" }, captureDraftToken);
+  function retryCaptureAttachment() {
+    void checkpointCapture().catch(() => undefined);
   }
 
   async function removeCaptureAttachment(item: PendingAttachment) {
+    if (!captureGate.current.ready || captureGate.current.adding) return;
     if (item.status === "uploading" || item.status === "offline") return;
     if (item.attachment) {
       try {
@@ -2822,21 +2008,27 @@ export default function Home() {
       setRecognizingCaptureTitle(false);
       console.info("[todo-ui] quick add image recognition cancelled", { localId: item.localId });
     }
+    captureFilesRef.current = captureFilesRef.current.filter((candidate) => candidate.localId !== item.localId);
+    setCaptureAttachments(captureFilesRef.current);
+    try { await checkpointCapture(); } catch { return; }
     URL.revokeObjectURL(item.previewUrl);
-    setCaptureAttachments((current) => current.filter((candidate) => candidate.localId !== item.localId));
   }
 
   async function loadTaskAttachments(todoId: number) {
     setLoadingAttachments(true);
     setAttachmentError("");
     try {
-      const queued = (await listQueuedAttachments()).filter((upload) => upload.todoId === todoId && !upload.cancelled);
+      const allQueued = (await listQueuedAttachments()).filter((upload) => upload.todoId === todoId && !upload.cancelled);
+      const queued = allQueued.filter(hasAttachmentBytes);
+      if (allQueued.length !== queued.length) setAttachmentError("Some local file bytes are missing. Open Review attachments to recover them.");
       setDetailUploads((current) => {
         const pending = new Set(queued.map((upload) => upload.localId));
         for (const item of current) if (!pending.has(item.localId)) URL.revokeObjectURL(item.previewUrl);
-        return queued.map((upload) => current.find((item) => item.localId === upload.localId) ?? {
-          localId: upload.localId, file: new File([upload.blob], upload.fileName, { type: upload.mimeType }), previewUrl: URL.createObjectURL(upload.blob), kind: upload.kind, durationMs: upload.durationMs, status: upload.error ? "error" : "offline", attachment: null, error: upload.error ?? "",
-        });
+        return queued.map((upload) => ({
+          ...(current.find((item) => item.localId === upload.localId) ?? {
+            localId: upload.localId, file: new File([upload.blob], upload.fileName, { type: upload.mimeType }), previewUrl: URL.createObjectURL(upload.blob), kind: upload.kind, durationMs: upload.durationMs, attachment: null,
+          }), status: (upload.leaseUntil ?? 0) > Date.now() ? "uploading" : upload.error ? "error" : "offline", error: attachmentQueueMessage(upload),
+        }));
       });
       if (!navigator.onLine) return;
       const { attachments } = await request<{ attachments: TodoAttachment[] }>(`/api/todos/${todoId}/attachments`);
@@ -2901,7 +2093,8 @@ export default function Home() {
   async function uploadDetailAttachment(todoId: number, item: PendingAttachment) {
     try {
       await queueTaskAttachments(todoId, [{ localId: item.localId, kind: item.kind, fileName: item.file.name, mimeType: item.file.type, durationMs: item.durationMs, blob: item.file }]);
-      setDetailUploads((current) => current.map((candidate) => candidate.localId === item.localId ? { ...candidate, status: "offline", error: "" } : candidate));
+      await retryQueuedAttachments(item.localId);
+      setDetailUploads((current) => current.map((candidate) => candidate.localId === item.localId ? { ...candidate, status: "offline", error: "Queued; resumes while the app is open and connected." } : candidate));
     } catch (error) {
       setDetailUploads((current) => current.map((candidate) => candidate.localId === item.localId ? { ...candidate, status: "error", error: error instanceof Error ? error.message : "The attachment could not be saved on this device." } : candidate));
     }
@@ -3025,25 +2218,30 @@ export default function Home() {
     captureTitleRecognitionSequenceRef.current += 1;
     captureTitleRecognitionRef.current = null;
     setRecognizingCaptureTitle(false);
+    captureTokenRef.current = captureSession.current!.snapshot().token;
+    captureFilesRef.current = [];
+    captureProjectRef.current = "";
     updateCaptureTitle("", "task-created");
     setCaptureProject("");
     captureAttachments.forEach((item) => URL.revokeObjectURL(item.previewUrl));
     setCaptureAttachments([]);
-    setCaptureDraftToken(crypto.randomUUID());
+    setCaptureDraftToken(captureTokenRef.current);
     if (captureRef.current) {
       captureRef.current.style.height = "auto";
       captureRef.current.style.overflowY = "hidden";
     }
   }
 
-  function scheduleOfflineQueueSync(_reason: string, delayMs = 0) { taskSync.wake(delayMs); }
   syncOfflineQueueRef.current = taskSync.refresh;
 
   async function addTodo(event: FormEvent) {
     event.preventDefault();
     const title = newTitle.trim();
     const attachmentsReady = captureAttachments.every((item) => item.status === "staged" || (item.status === "ready" && item.attachment) || item.status === "offline");
-    if (!title || adding || !attachmentsReady) return;
+    if (!title || adding || !captureReady || !attachmentsReady || voiceTarget === "capture" || projectDialog?.captureDraft || !captureGate.current.beginAdd()) return;
+    // A late image-title suggestion must not change intent during consumption.
+    captureTitleRecognitionSequenceRef.current++;
+    captureTitleRecognitionRef.current = null;
     const temporaryId = createLocalTaskId();
     const clientId = crypto.randomUUID();
     const createdAt = new Date().toISOString();
@@ -3075,7 +2273,8 @@ export default function Home() {
     setAdding(true);
     setNotice(null);
     try {
-      await saveOfflineTodo({
+      await checkpointCapture();
+      await captureSession.current!.consume({
         clientId,
         localId: temporaryId,
         title,
@@ -3125,6 +2324,7 @@ export default function Home() {
       console.error("[todo-offline] quick add local commit failed", { clientId, localId: temporaryId, error });
     } finally {
       setAdding(false);
+      captureGate.current.endAdd();
       captureRef.current?.focus();
     }
   }
@@ -3539,6 +2739,7 @@ export default function Home() {
   }
 
   function openProjectAssignment(ids: number[], source: "bulk" | "hover" | "swipe" | "details") {
+    projectReturnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const taskProjects = todos
       .filter((todo) => ids.includes(todo.id))
       .map((todo) => todo.project || UNASSIGNED_PROJECT);
@@ -3548,7 +2749,8 @@ export default function Home() {
     console.info("[todo-ui] project assignment opened", { ids, source, sharedProject: sharedProject || null });
   }
 
-  function openCaptureProjectAssignment() {
+  function openCaptureProjectAssignment(opener?: HTMLButtonElement | null) {
+    projectReturnFocusRef.current = opener ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
     setProjectDialog({
       ids: [],
       selection: captureProject || UNASSIGNED_PROJECT,
@@ -3592,13 +2794,16 @@ export default function Home() {
     }
 
     const { ids, openedFromDetails, captureDraft } = projectDialog;
+    if (captureDraft && (!captureGate.current.ready || captureGate.current.adding)) {
+      setProjectDialogError("Wait for the current capture to finish saving, then assign the project."); return;
+    }
     setSavingProject(true);
     setProjectDialogError("");
     setNotice(null);
     try {
       if (captureDraft) {
         const stagedProject = projectName;
-        setCaptureProject(stagedProject ?? "");
+        updateCaptureProject(stagedProject ?? "");
         if (stagedProject) {
           setRegisteredProjects((current) => [...new Set([...current, stagedProject as string])].sort((a, b) => a.localeCompare(b)));
         }
@@ -4278,6 +3483,14 @@ export default function Home() {
   }
 
   persistTaskDraftRef.current = persistTaskDraft;
+  prepareUpdateRef.current = async () => {
+    // Editing values can be intentionally invalid. Keep that editor open,
+    // rather than force a save or discard it during an unrelated app update.
+    if (editingIdRef.current !== null) throw Error("Close the task editor after saving before refreshing.");
+    if (captureGate.current.adding || voiceTarget) throw Error("Finish the current capture before refreshing.");
+    if (captureGate.current.ready) await checkpointCapture();
+    else if (captureDraftRef.current?.text || captureFilesRef.current.length) throw Error("Wait for your capture draft to finish loading before refreshing.");
+  };
   closeTaskDetailsRef.current = closeTaskDetails;
 
   function taskAction(todo: Todo, action: TodoAction, source: "hover" | "swipe" | "details") {
@@ -4402,7 +3615,7 @@ export default function Home() {
 
   async function copyTaskDetails() {
     if (!editDraft) return;
-    const text = [editDraft.title.trim(), editDraft.notes.trim()].filter(Boolean).join("\n\n");
+    const text = todoCopyText(editDraft.title, editDraft.notes);
     try {
       await copyTextToClipboard(text);
       setNotice({ tone: "success", text: "Task title and notes copied." });
@@ -4638,6 +3851,26 @@ export default function Home() {
 
   const stable_toggleSelected = useStableCallback(toggleSelected);
   const stable_taskAction = useStableCallback(taskAction);
+  const stable_queueTask = useStableCallback((todo: Todo) => setQueueRequest({ id: crypto.randomUUID(), todoIds: [todo.id] }));
+  const closeQueue = useStableCallback(() => setQueueRequest(null));
+  const queueGuard = useStableCallback(async (id: number, source?: TaskQueueSource) => {
+    const current = taskStore.getById(id);
+    if (!current || current.id < 1 || current.offline) throw Error("Save and sync this task before queueing.");
+    if (pendingTodoPatchesRef.current.has(id) || pendingActionPatchesRef.current.has(id) || pendingDeletedIdsRef.current.has(id)
+        || Object.keys(taskStore.getDraft(taskKey(current)) ?? {}).length) throw Error("Wait for pending task changes to save before queueing.");
+    if (editingIdRef.current === id && (autosaveInFlightRef.current || editSaveState !== "saved" || loadingAttachments
+      || editDraftRef.current && editBaselineRef.current && Object.keys(changedDraftPatch(editDraftRef.current, editBaselineRef.current)).length
+      || detailUploads.some(file => file.status !== "ready"))) throw Error("Save the task and finish its files before queueing. Your draft is retained.");
+    const [mutations, uploads, actions] = await Promise.all([listOfflineTodoMutations(), listQueuedAttachments(), listOfflineTaskActions()]);
+    if (mutations.some(m => m.todoId === id) || uploads.some(file => file.todoId === id && !file.cancelled)
+      || actions.some(action => action.taskIds.includes(id))) throw Error("Sync pending task changes/files before queueing.");
+    const latest = taskStore.getById(id);
+    if (source && (!latest || latest.title !== source.title || latest.notes !== source.notes || latest.updatedAt !== source.updatedAt || latest.attachmentCount !== source.files.length))
+      throw Error("The saved task differs from your selection. Save/reload it before queueing; retain the original transfer.");
+    if (source && editingIdRef.current === id && (detailAttachments.length !== source.files.length || detailAttachments.some(file => !source.files.some(f => f.id === file.id && f.name === file.fileName && f.size === file.byteSize && f.mimeType === file.mimeType))))
+      throw Error("Task files changed. Reload their confirmed state before queueing.");
+  });
+  const queueChanged = useStableCallback(() => taskSync.wake());
   const stable_editTaskDetails = useStableCallback(editTaskDetails);
   const stable_togglePin = useStableCallback(togglePin);
   const stable_acknowledgeUrgentAlert = useStableCallback(acknowledgeUrgentAlert);
@@ -4650,7 +3883,9 @@ export default function Home() {
   const stable_finishTaskReorder = useStableCallback(finishTaskReorder);
 
   return (
-    <main className="min-h-screen bg-[#f6f7f5] text-[#1d211f]">
+    <main className="min-h-screen bg-background text-foreground">
+      <TodoForward request={null} onClose={() => {}} />
+      <TodoQueue request={queueRequest} onClose={closeQueue} guard={queueGuard} onChanged={queueChanged} />
       <SiteHeader
         current="todos"
         projectLabel={project === UNASSIGNED_PROJECT ? "Unassigned" : project || "Dawar Todo"}
@@ -4661,42 +3896,51 @@ export default function Home() {
         }}
       />
       {(connectionQuality !== "online" || showPendingSyncStatus) && (
-        <div className="pointer-events-none fixed right-3 top-[4.25rem] z-40 rounded-full bg-[#202522] px-3 py-1.5 text-xs font-semibold text-white shadow-lg" role="status" aria-live="polite">
+        <div className="mx-auto max-w-5xl px-4 py-2 text-[13px] text-muted-foreground sm:px-5" role="status" aria-live="polite">
           {connectionQuality === "offline"
             ? `Offline${pendingSyncCount ? ` · ${pendingSyncCount} queued` : ""}`
             : connectionQuality === "degraded"
               ? `Reconnecting${pendingSyncCount ? ` · ${pendingSyncCount} saved on this device` : ""}`
               : connectionQuality === "auth" ? "Sign in again to sync · changes stay on this device"
               : connectionQuality === "unavailable" ? "Sync temporarily unavailable · retrying"
-              : `${pendingSyncCount} waiting to sync`}
+              : `${pendingSyncCount} changes saved on this device`}
         </div>
       )}
-      {uploadCount > 0 && <div className="mx-auto max-w-5xl px-4 pt-2 text-xs text-[#69716c] sm:px-6" role="status">
-        {uploadCount} attachment{uploadCount === 1 ? "" : "s"} saved on this device · {online ? "uploading in the background" : "waiting for a connection"}
-        <button type="button" className="ml-2 underline" onClick={() => void retryQueuedAttachments()}>Retry uploads</button>
-      </div>}
+      <TaskIntentPanel />
+      {uploadCount > 0 && <AttachmentQueuePanel count={uploadCount} states={uploadStates} />}
       {imageDropActive && (
-        <div className="pointer-events-none fixed inset-0 z-[100] grid place-items-center bg-[#153d2d]/25 p-5 backdrop-blur-[2px]" role="status" aria-live="polite">
-          <div className="flex max-w-sm items-center gap-3 rounded-2xl border border-[#216e4e]/25 bg-white px-5 py-4 text-base font-semibold text-[#216e4e] shadow-2xl">
+        <div className="pointer-events-none fixed inset-0 z-[100] grid place-items-center bg-primary/20 p-5 backdrop-blur-[2px]" role="status" aria-live="polite">
+          <div className="flex max-w-sm items-center gap-3 rounded-lg border border-primary/25 bg-card px-5 py-4 text-base font-medium text-primary shadow-lg">
             <ActionIcon name="attachment" className="h-6 w-6" />
             Drop attachments to add to {editingTodo ? "this task" : "the new task"}
           </div>
         </div>
       )}
-      <div className="mx-auto max-w-5xl px-4 pb-28 pt-5 sm:px-6 sm:pt-7">
-        <form onSubmit={addTodo} className="mb-5 rounded-2xl border border-black/[0.07] bg-white p-2 shadow-[0_10px_35px_rgba(30,45,36,0.07)] sm:p-3">
+      <div className="mx-auto max-w-5xl px-4 pb-56 pt-5 sm:px-6 sm:pb-40 sm:pt-7">
+        {(captureSaveState.startsWith("Draft could not be loaded") || captureSaveState.startsWith("Draft not saved")) && <div className="mb-3 rounded-lg border border-destructive/30 bg-card p-3">
+          <p role="alert" className="break-words text-sm text-destructive">{captureSaveState}</p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {captureSaveState.startsWith("Draft could not be loaded") && <Button type="button" variant="outline" onClick={hydrateCapture}>Retry loading draft</Button>}
+            {captureSaveState.startsWith("Draft not saved") && <Button type="button" variant="outline" onClick={() => void checkpointCapture().catch(() => undefined)}>Retry saving</Button>}
+            {captureAttachments.map(item => <Button asChild variant="outline" key={item.localId} className="h-auto min-h-11 max-w-full whitespace-normal py-2 text-left"><a href={item.previewUrl} download={item.file.name} className="[overflow-wrap:anywhere]">Save {item.file.name}</a></Button>)}
+          </div>
+        </div>}
+
+        <form onSubmit={addTodo} className="mb-5 rounded-lg border border-border bg-card p-2 shadow-sm sm:p-3">
           <div className="flex items-end gap-2">
             <div className="flex min-w-0 flex-1 items-start gap-2 px-1 py-2 sm:px-2">
               <AttachmentPicker
                 label="Add attachment or assign project"
+                disabled={!captureReady || adding}
                 onFiles={(files) => void queueCaptureAttachments(files)}
-                onRecord={() => setVoiceTarget("capture")}
+                onRecord={(opener) => { voiceReturnFocusRef.current = opener; setVoiceTarget("capture"); }}
                 onAssignProject={openCaptureProjectAssignment}
               />
-              <textarea
+              <Textarea
                 ref={captureRef}
+                disabled={!captureReady || adding}
                 value={newTitle}
-                onChange={(event) => { updateCaptureTitle(event.target.value, "typing"); resizeCapture(event.currentTarget); }}
+                onChange={(event) => updateCaptureTitle(event.target.value, "typing")}
                 onBlur={flushCaptureDraft}
                 onPaste={(event) => {
                   const files = clipboardAttachments(event);
@@ -4713,178 +3957,49 @@ export default function Home() {
                 aria-label="Add a task"
                 aria-busy={recognizingCaptureTitle}
                 maxLength={2000}
-                className="min-h-10 max-h-[120px] min-w-0 flex-1 resize-none overflow-hidden bg-transparent py-2 text-[16px] leading-6 text-[#151816] outline-none placeholder:text-[#929994]"
+                className="min-h-10 min-w-0 flex-1 resize-none overflow-hidden border-0 px-1 py-2 text-base leading-6 shadow-none sm:text-base"
               />
             </div>
             <div className="flex shrink-0 items-center gap-2">
-              <span className="hidden text-[10px] text-[#929994] sm:block">⌘↵ add</span>
-              <button
+              <span className="hidden text-xs text-muted-foreground sm:block">⌘↵ add</span>
+              <Button
                 type="submit"
-                disabled={!newTitle.trim() || adding || captureAttachments.some((item) => item.status === "uploading" || item.status === "error")}
-                className="inline-flex h-11 items-center gap-2 rounded-xl bg-[#216e4e] px-4 text-sm font-semibold text-white transition hover:bg-[#195d41] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#216e4e] disabled:cursor-not-allowed disabled:opacity-40 sm:px-6"
+                disabled={!captureReady || capturePreparing || !newTitle.trim() || adding || voiceTarget === "capture" || Boolean(projectDialog?.captureDraft) || captureAttachments.some((item) => item.status === "uploading" || item.status === "error")}
+                className="shrink-0"
               >
                 <ActionIcon name="add" />
                 {adding ? "Adding…" : "Add"}
-              </button>
+              </Button>
             </div>
           </div>
 
-          {captureProject && (
-            <div className="flex border-t border-black/[0.06] px-2 pb-1 pt-2 sm:px-3">
-              <span className="inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-full bg-[#eaf3ed] px-2.5 py-1 text-xs font-semibold text-[#216e4e]">
-                <ActionIcon name="folder" className="h-4 w-4 shrink-0" />
-                <button type="button" onClick={openCaptureProjectAssignment} className="min-w-0 truncate" title={`Change project from ${captureProject}`}>{captureProject}</button>
-                <button type="button" onClick={() => { setCaptureProject(""); console.info("[todo-ui] quick add project removed"); }} aria-label={`Remove ${captureProject} from new task`} title="Remove project" className="grid h-5 w-5 shrink-0 place-items-center rounded-full hover:bg-[#d8e9de]"><ActionIcon name="close" className="h-3.5 w-3.5" /></button>
-              </span>
-            </div>
-          )}
+          {captureProject && <div className="mt-2 flex min-w-0 items-center gap-1 border-t border-border px-1 pt-2">
+            <Button type="button" variant="secondary" onClick={() => openCaptureProjectAssignment()} className="min-w-0 max-w-full" title={`Change project from ${captureProject}`}><ActionIcon name="folder" /><span className="truncate">{captureProject}</span></Button>
+            <Button type="button" variant="ghost" size="icon" disabled={!captureReady || adding} onClick={() => { updateCaptureProject(""); console.info("[todo-ui] quick add project removed"); }} aria-label={`Remove ${captureProject} from new task`} className="shrink-0 text-muted-foreground"><ActionIcon name="close" /></Button>
+          </div>}
 
-          {captureAttachments.length > 0 && (
-            <div className="flex gap-2 overflow-x-auto border-t border-black/[0.06] px-2 pb-1 pt-2 sm:px-3" aria-label="Attachments to add">
-              {captureAttachments.map((item) => (
-                <div key={item.localId} className={classNames("relative h-16 shrink-0 overflow-hidden rounded-xl bg-[#eef0ed] ring-1 ring-black/[0.06]", item.kind === "audio" || item.kind === "file" ? "w-44" : "w-16")} title={item.error || item.file.name}>
-                  {item.kind === "image" ? <img src={item.previewUrl} alt="" className="h-full w-full object-cover" /> : item.kind === "video" ? <video src={item.previewUrl} muted className="h-full w-full object-cover" /> : item.kind === "file" ? <div className="flex h-full items-center gap-2 px-3 text-xs font-semibold text-[#455049]"><ActionIcon name="file" className="h-5 w-5 shrink-0 text-[#216e4e]" /><span className="min-w-0"><span className="block truncate">{item.file.name}</span><span className="font-normal text-[#7b837e]">{formatFileSize(item.file.size)}</span></span></div> : <div className="flex h-full items-center gap-2 px-3 text-xs font-semibold text-[#455049]"><ActionIcon name="mic" className="h-5 w-5 text-[#216e4e]" /><span>Voice memo<br /><span className="font-normal text-[#7b837e]">{formatDuration(item.durationMs)}</span></span></div>}
-                  {item.status === "uploading" && <span className="absolute inset-0 grid place-items-center bg-black/40 text-[10px] font-semibold text-white">Uploading…</span>}
-                  {item.status === "offline" && <span className="absolute inset-x-0 bottom-0 bg-amber-700/90 px-1 py-0.5 text-center text-[9px] font-semibold text-white">Saved offline</span>}
-                  {item.status === "error" && (
-                    <button type="button" onClick={() => retryCaptureAttachment(item)} aria-label={`Retry ${item.file.name}`} title="Retry upload" className="absolute inset-0 grid place-items-center bg-red-900/65 text-white"><ActionIcon name="retry" /></button>
-                  )}
-                  {item.status !== "uploading" && (
-                    <button type="button" onClick={() => void removeCaptureAttachment(item)} aria-label={`Remove ${item.file.name}`} title="Remove attachment" className="absolute right-1 top-1 grid h-6 w-6 place-items-center rounded-full bg-black/65 text-white hover:bg-red-700"><ActionIcon name="close" className="h-3.5 w-3.5" /></button>
-                  )}
-                </div>
-              ))}
-              <span className="self-center whitespace-nowrap px-1 text-[11px] text-[#7c847f]">{captureAttachments.length}/{MAX_ATTACHMENTS}</span>
-            </div>
-          )}
+          {captureAttachments.length > 0 && <CaptureAttachments items={captureAttachments} limit={MAX_ATTACHMENTS} disabled={!captureReady || adding} onRetry={retryCaptureAttachment} onRemove={item => void removeCaptureAttachment(item)} />}
+
         </form>
 
         <section aria-labelledby="tasks-heading">
-          <div className="mb-3 flex gap-1 overflow-x-auto rounded-xl border border-black/[0.06] bg-white p-1 shadow-sm">
-            {(Object.keys(viewLabels) as View[]).map((item) => (
-              <button
-                key={item}
-                onClick={() => chooseView(item)}
-                className={classNames(
-                  "flex min-w-max flex-1 items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition focus-visible:outline-2 focus-visible:outline-[#216e4e]",
-                  view === item ? "bg-[#eaf3ed] text-[#195d41]" : "text-[#69716c] hover:bg-[#f6f7f5] hover:text-[#252a27]",
-                )}
-              >
-                {viewLabels[item]}
-                <span className={classNames("rounded-full px-1.5 py-0.5 text-[11px]", view === item ? "bg-white/80" : "bg-[#f1f2f0]")}>{counts[item]}</span>
-              </button>
-            ))}
-          </div>
+          <TaskListControls view={view} counts={counts} onView={chooseView} query={query} onQuery={setQuery} searchRef={searchRef} priority={priority} onPriority={setPriority} pins={pinListEnabled} pinCount={pinnedTaskCount} pinLimit={MAX_PINNED_TASKS} onPins={togglePinList} filterCount={mobileFilterCount} onFilters={() => setFiltersOpen(true)} />
+          {filtersOpen && <TaskFiltersDialog priority={priority} onPriority={setPriority} count={filtered.length} onClose={() => setFiltersOpen(false)} />}
 
-          <div className="mb-3 grid grid-cols-[minmax(0,1fr)_auto_auto] gap-2 sm:grid-cols-[minmax(220px,1fr)_auto_auto]">
-            <label className="flex h-10 items-center gap-2 rounded-xl border border-black/[0.08] bg-white px-3 shadow-sm focus-within:border-[#216e4e]/50 focus-within:ring-3 focus-within:ring-[#216e4e]/10">
-              <ActionIcon name="search" className="h-4 w-4 shrink-0 text-[#7c847f]" />
-              <input
-                ref={searchRef}
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder="Search tasks"
-                aria-label="Search tasks"
-                className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-[#929994]"
-              />
-              <kbd className="hidden rounded border border-black/10 bg-[#f6f7f5] px-1.5 py-0.5 text-[10px] text-[#7c847f] sm:block">/</kbd>
-            </label>
-            {view === "open" && (
-              <button
-                type="button"
-                onClick={togglePinList}
-                aria-pressed={pinListEnabled}
-                aria-label={pinListEnabled ? "Turn off the separate pinned list" : "Turn on the separate pinned list"}
-                title={pinListEnabled ? "Mix pinned tasks into their natural order" : "Show pinned tasks in a separate list"}
-                className={classNames(
-                  "flex h-10 items-center gap-2 rounded-xl border px-3 text-sm font-medium shadow-sm transition focus-visible:outline-2 focus-visible:outline-[#216e4e]",
-                  pinListEnabled ? "border-[#216e4e]/25 bg-[#eaf3ed] text-[#195d41]" : "border-black/[0.08] bg-white text-[#69716c] hover:bg-[#f6f7f5]",
-                )}
-              >
-                <ActionIcon name="pin" className="h-4 w-4" />
-                <span className="hidden sm:inline">Pins</span>
-                <span className={classNames("grid h-5 min-w-5 place-items-center rounded-full px-1 text-[10px]", pinListEnabled ? "bg-white/85 text-[#195d41]" : "bg-[#f1f2f0] text-[#69716c]")}>{pinnedTaskCount}/{MAX_PINNED_TASKS}</span>
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={() => setFiltersOpen(true)}
-              className={classNames(
-                "flex h-10 items-center gap-2 rounded-xl border bg-white px-3 text-sm font-medium shadow-sm transition focus-visible:outline-2 focus-visible:outline-[#216e4e] sm:hidden",
-                mobileFilterCount ? "border-[#216e4e]/30 text-[#195d41]" : "border-black/[0.08] text-[#4f5752]",
-              )}
-              aria-label={`Filters${mobileFilterCount ? `, ${mobileFilterCount} active` : ""}`}
-            >
-              <ActionIcon name="filters" className="h-4 w-4" />
-              <span>Filters</span>
-              {mobileFilterCount > 0 && <span className="grid h-5 min-w-5 place-items-center rounded-full bg-[#216e4e] px-1 text-[10px] text-white">{mobileFilterCount}</span>}
-            </button>
-            <select value={priority} onChange={(event) => setPriority(event.target.value)} aria-label="Filter by priority" className="hidden h-10 rounded-xl border border-black/[0.08] bg-white px-3 text-sm text-[#4f5752] shadow-sm outline-none focus:border-[#216e4e]/50 sm:block">
-              <option value="">All priorities</option>
-              <option value="1">Urgent</option>
-              <option value="2">High</option>
-              <option value="3">Normal</option>
-              <option value="4">Low</option>
-            </select>
-          </div>
-
-          {filtersOpen && (
-            <div className="fixed inset-0 z-50 sm:hidden" role="dialog" aria-modal="true" aria-labelledby="mobile-filters-title">
-              <button type="button" aria-label="Close filters" onClick={() => setFiltersOpen(false)} className="absolute inset-0 bg-black/30 backdrop-blur-[2px]" />
-              <div className="absolute inset-x-0 bottom-0 rounded-t-3xl bg-white px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-4 shadow-2xl">
-                <div className="mx-auto mb-4 h-1 w-10 rounded-full bg-black/15" aria-hidden="true" />
-                <div className="mb-5 flex items-center justify-between">
-                  <div>
-                    <h3 id="mobile-filters-title" className="text-lg font-semibold text-[#202522]">Filters</h3>
-                    <p className="mt-0.5 text-xs text-[#7c847f]">Narrow the list without losing workspace.</p>
-                  </div>
-                  <button type="button" onClick={() => setFiltersOpen(false)} className="grid h-9 w-9 place-items-center rounded-full bg-[#f1f2f0] text-[#4f5752]" aria-label="Close filters" title="Close"><ActionIcon name="close" /></button>
-                </div>
-
-                <div className="space-y-4">
-                  <label className="block">
-                    <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-[#69716c]">Priority</span>
-                    <select value={priority} onChange={(event) => setPriority(event.target.value)} className="h-12 w-full rounded-xl border border-black/[0.1] bg-white px-3 text-sm text-[#303632] outline-none focus:border-[#216e4e]/50">
-                      <option value="">All priorities</option>
-                      <option value="1">Urgent</option>
-                      <option value="2">High</option>
-                      <option value="3">Normal</option>
-                      <option value="4">Low</option>
-                    </select>
-                  </label>
-                </div>
-
-                <div className="mt-6 grid grid-cols-2 gap-2">
-                  <button type="button" onClick={() => setPriority("")} className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-black/[0.08] text-sm font-semibold text-[#4f5752]"><ActionIcon name="restore" />Reset</button>
-                  <button type="button" onClick={() => setFiltersOpen(false)} className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-[#216e4e] text-sm font-semibold text-white"><ActionIcon name="done" />Show {filtered.length} {filtered.length === 1 ? "task" : "tasks"}</button>
-                </div>
-              </div>
-            </div>
-          )}
-
-          <div className="mb-2 flex items-center justify-between px-1">
-            <div className="flex items-center gap-3">
-              <h2 id="tasks-heading" className="text-sm font-semibold text-[#373d39]">{viewLabels[view]} tasks</h2>
-              {filtered.length > 0 && <button onClick={toggleVisible} className="inline-flex items-center gap-1.5 text-xs font-medium text-[#216e4e] hover:underline"><ActionIcon name={allVisibleSelected ? "cancel" : "select"} className="h-3.5 w-3.5" />{allVisibleSelected ? "Clear selection" : "Select visible"}</button>}
-            </div>
-            <div className="flex items-center gap-3 text-xs text-[#7c847f]">
-              <span>{syncing ? "Saving…" : `${filtered.length} ${filtered.length === 1 ? "item" : "items"}`}</span>
-              {filtersActive && <button onClick={() => { setQuery(""); setPriority(""); }} className="inline-flex items-center gap-1 font-medium text-[#216e4e] hover:underline"><ActionIcon name="cancel" className="h-3.5 w-3.5" />Clear filters</button>}
-            </div>
-          </div>
+          <TaskListSummary label={viewLabels[view]} count={filtered.length} syncing={syncing} allSelected={allVisibleSelected} filtersActive={filtersActive} onSelection={toggleVisible} onClearFilters={() => { setQuery(""); setPriority(""); }} />
 
           <div
             data-task-list-surface
-            className="-mx-4 overflow-hidden border-y border-black/[0.07] bg-white shadow-[0_8px_30px_rgba(30,45,36,0.05)] sm:mx-0 sm:rounded-2xl sm:border"
+            className="-mx-4 overflow-hidden border-y border-border bg-card shadow-sm sm:mx-0 sm:rounded-lg sm:border"
           >
             {loading ? (
               <div role="status" className="space-y-1 p-2" aria-label="Loading tasks">
-                {[0, 1, 2, 3, 4].map((item) => <div key={item} className="h-[72px] animate-pulse rounded-xl bg-[#f3f4f2]" />)}
+                {[0, 1, 2, 3, 4].map((item) => <div key={item} className="h-[72px] motion-safe:animate-pulse rounded-md bg-muted" />)}
               </div>
             ) : filtered.length ? (
-              <ul ref={taskListAnimationRef} className="divide-y divide-black/[0.055]">
+              <ul ref={taskListAnimationRef} className="divide-y divide-border">
                 {pinnedOpenTodos.length > 0 && (
-                  <li className="flex items-center justify-between bg-[#f1f7f3] px-4 py-2 text-[11px] font-semibold uppercase tracking-wide text-[#216e4e] sm:px-5">
+                  <li className="flex items-center justify-between bg-accent px-4 py-2 text-xs font-medium text-accent-foreground sm:px-5">
                     <span className="inline-flex items-center gap-1.5"><ActionIcon name="pin" className="h-3.5 w-3.5" />Pinned</span>
                     <span>{pinnedOpenTodos.length}</span>
                   </li>
@@ -4899,6 +4014,7 @@ export default function Home() {
                     onSelect={stable_toggleSelected}
                     onAction={stable_taskAction}
                     onEdit={stable_editTaskDetails}
+                    onQueue={stable_queueTask}
                     onPin={stable_togglePin}
                     onAcknowledgeUrgent={stable_acknowledgeUrgentAlert}
                     onTitleChange={stable_updateInlineTitle}
@@ -4914,7 +4030,7 @@ export default function Home() {
                   />
                 ))}
                 {pinnedOpenTodos.length > 0 && regularOpenTodos.length > 0 && (
-                  <li className="flex items-center justify-between bg-[#f8f9f7] px-4 py-2 text-[11px] font-semibold uppercase tracking-wide text-[#747c77] sm:px-5">
+                  <li className="flex items-center justify-between bg-muted px-4 py-2 text-xs font-medium text-muted-foreground sm:px-5">
                     <span>Open</span>
                     <span>{regularOpenTodos.length}</span>
                   </li>
@@ -4929,6 +4045,7 @@ export default function Home() {
                     onSelect={stable_toggleSelected}
                     onAction={stable_taskAction}
                     onEdit={stable_editTaskDetails}
+                    onQueue={stable_queueTask}
                     onPin={stable_togglePin}
                     onAcknowledgeUrgent={stable_acknowledgeUrgentAlert}
                     onTitleChange={stable_updateInlineTitle}
@@ -4946,9 +4063,9 @@ export default function Home() {
               </ul>
             ) : (
               <div className="px-6 py-14 text-center">
-                <div className="mx-auto mb-4 grid h-12 w-12 place-items-center rounded-full bg-[#eaf3ed] text-xl text-[#216e4e]">✓</div>
-                <p className="font-medium text-[#303632]">{filtersActive ? "No tasks match those filters." : view === "snoozed" ? "Nothing is snoozed." : view === "done" ? "Nothing is done yet." : "You’re clear."}</p>
-                <p className="mt-1 text-sm text-[#7c847f]">{filtersActive ? "Try clearing a filter or changing the search." : view === "snoozed" ? "Snoozed tasks return here until their wake time." : view === "done" ? "Completed tasks will collect here." : "Add the next thing when it appears."}</p>
+                <div className="mx-auto mb-4 grid h-12 w-12 place-items-center rounded-full bg-accent text-xl text-primary">✓</div>
+                <p className="font-medium text-foreground">{filtersActive ? "No tasks match those filters." : view === "snoozed" ? "Nothing is snoozed." : view === "done" ? "Nothing is done yet." : "You’re clear."}</p>
+                <p className="mt-1 text-sm text-muted-foreground">{filtersActive ? "Try clearing a filter or changing the search." : view === "snoozed" ? "Snoozed tasks return here until their wake time." : view === "done" ? "Completed tasks will collect here." : "Add the next thing when it appears."}</p>
               </div>
             )}
           </div>
@@ -4956,297 +4073,22 @@ export default function Home() {
 
       </div>
 
-      {selectedIds.length > 0 && (
-        <div
-          data-bulk-actions
-          className="bulk-actions-safe-bottom pointer-events-none fixed inset-x-0 z-40 mx-auto w-[calc(100%-1rem)] max-w-4xl sm:w-[calc(100%-2rem)]"
-          aria-label="Bulk task actions"
-        >
-          <div className="pointer-events-auto flex items-center gap-1.5 overflow-x-auto rounded-2xl border border-[#216e4e]/20 bg-[#eaf3ed]/95 p-2 shadow-[0_16px_50px_rgba(23,61,42,0.2)] backdrop-blur-xl sm:gap-2">
-            <span className="min-w-max px-2 text-sm font-semibold text-[#195d41]">{selectedIds.length} selected</span>
-            {selectedTodos.some((todo) => todo.status === "open") && <button type="button" onClick={() => bulkAction("complete")} disabled={syncing} className="inline-flex min-w-max items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-[#216e4e] shadow-sm hover:bg-[#f8fbf9] disabled:opacity-50"><ActionIcon name="done" />Done</button>}
-            {view === "snoozed" && selectedTodos.some((todo) => todo.status === "open") ? (
-              <button type="button" onClick={() => bulkAction("unsnooze")} disabled={syncing} className="inline-flex min-w-max items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-[#216e4e] shadow-sm hover:bg-[#f8fbf9] disabled:opacity-50"><ActionIcon name="wake" />Wake</button>
-            ) : selectedTodos.some((todo) => todo.status === "open" && !todo.recurrenceCron) ? (
-              <button type="button" onClick={() => bulkAction("snooze")} disabled={syncing} className="inline-flex min-w-max items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-amber-700 shadow-sm hover:bg-amber-50 disabled:opacity-50"><ActionIcon name="snooze" />Snooze</button>
-            ) : null}
-            {selectedTodos.some((todo) => todo.status === "completed") && <button type="button" onClick={() => bulkAction("unsnooze")} disabled={syncing} className="inline-flex min-w-max items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-[#4f5752] shadow-sm hover:bg-[#f8f9f8] disabled:opacity-50"><ActionIcon name="open" />Open</button>}
-            <button type="button" onClick={() => bulkAction("assign")} disabled={syncing} className="inline-flex min-w-max items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-slate-600 shadow-sm hover:bg-slate-50 disabled:opacity-50"><ActionIcon name="move" />Assign project</button>
-            <button type="button" onClick={() => bulkAction("merge")} disabled={syncing || selectedIds.length < 2} className="inline-flex min-w-max items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-violet-700 shadow-sm hover:bg-violet-50 disabled:opacity-40"><ActionIcon name="merge" />Merge</button>
-            <button type="button" onClick={() => bulkAction("delete")} disabled={syncing} className="inline-flex min-w-max items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-red-700 shadow-sm hover:bg-red-50 disabled:opacity-50"><ActionIcon name="delete" />Delete</button>
-            <button type="button" onClick={() => setSelected(new Set())} className="ml-auto inline-flex min-w-max items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold text-[#69716c] hover:bg-black/[0.04]"><ActionIcon name="cancel" />Cancel</button>
-          </div>
-        </div>
-      )}
+      {selectedIds.length > 0 && <TaskBulkActions count={selectedIds.length} todos={selectedTodos} snoozedView={view === "snoozed"} busy={syncing} onAction={bulkAction} onQueue={() => setQueueRequest({ id: crypto.randomUUID(), todoIds: displayedTodos.filter(todo => selected.has(todo.id)).map(todo => todo.id) })} onCancel={() => setSelected(new Set())} />}
 
-      {customSnoozeDialog && (
-        <div className="fixed inset-0 z-[70] flex items-end justify-center overflow-x-hidden sm:items-center sm:p-5" role="dialog" aria-modal="true" aria-labelledby="custom-snooze-title">
-          <button type="button" aria-label="Close custom snooze dialog" onClick={() => closeCustomSnooze("backdrop")} className="absolute inset-0 bg-black/35 backdrop-blur-[2px]" />
-          <form onSubmit={saveCustomSnooze} className="relative w-full max-w-full overflow-x-hidden rounded-t-3xl bg-white px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-5 shadow-2xl sm:max-w-md sm:rounded-3xl sm:p-6">
-            <div className="flex min-w-0 items-start justify-between gap-4">
-              <div className="min-w-0">
-                <span className="mb-3 grid h-11 w-11 place-items-center rounded-xl bg-amber-50 text-amber-700"><ActionIcon name="calendar" className="h-5 w-5" /></span>
-                <h2 id="custom-snooze-title" className="text-lg font-semibold text-[#202522]">Custom snooze</h2>
-                <p className="mt-1 text-sm text-[#7c847f]">Choose when {customSnoozeDialog.ids.length === 1 ? "this task" : `these ${customSnoozeDialog.ids.length} tasks`} should return.</p>
-              </div>
-              <button type="button" onClick={() => closeCustomSnooze("button")} className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-[#f1f2f0] text-[#4f5752] hover:bg-[#e8eae7]" aria-label="Close" title="Close"><ActionIcon name="close" /></button>
-            </div>
-            <label className="mt-5 block">
-              <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-[#69716c]">Date and time</span>
-              <input
-                type="datetime-local"
-                value={customSnoozeDialog.localDateTime}
-                onChange={(event) => setCustomSnoozeDialog((current) => current ? { ...current, localDateTime: event.target.value, error: "" } : current)}
-                required
-                aria-invalid={Boolean(customSnoozeDialog.error)}
-                aria-describedby="custom-snooze-help"
-                className={classNames("h-12 w-full rounded-xl border bg-white px-3 text-base outline-none focus:ring-3", customSnoozeDialog.error ? "border-red-400 focus:border-red-500 focus:ring-red-500/10" : "border-black/[0.1] focus:border-[#216e4e]/50 focus:ring-[#216e4e]/10")}
-              />
-            </label>
-            <p id="custom-snooze-help" className={classNames("mt-2 text-xs leading-5", customSnoozeDialog.error ? "font-medium text-red-600" : "text-[#7c847f]")}>{customSnoozeDialog.error || `Time in ${scheduleTimeZone}`}</p>
-            <div className="mt-6 flex gap-2">
-              <button type="button" onClick={() => closeCustomSnooze("cancel")} className="h-11 flex-1 rounded-xl bg-[#f1f2f0] px-4 text-sm font-semibold text-[#59615c] hover:bg-[#e8eae7]">Cancel</button>
-              <button type="submit" disabled={adjustingSnooze !== null || !customSnoozeDialog.localDateTime} className="inline-flex h-11 flex-1 items-center justify-center gap-2 rounded-xl bg-[#216e4e] px-4 text-sm font-semibold text-white hover:bg-[#195d41] disabled:opacity-50"><ActionIcon name="snooze" />Snooze</button>
-            </div>
-          </form>
-        </div>
-      )}
+      {customSnoozeDialog && <CustomSnoozeDialog count={customSnoozeDialog.ids.length} value={customSnoozeDialog.localDateTime} error={customSnoozeDialog.error} timeZone={scheduleTimeZone} busy={adjustingSnooze !== null} onValue={value => setCustomSnoozeDialog(current => current ? { ...current, localDateTime: value, error: "" } : current)} onClose={() => closeCustomSnooze("button")} onSubmit={saveCustomSnooze} />}
 
       {shortcutsOpen && <KeyboardShortcutsDialog onClose={() => {
         setShortcutsOpen(false);
         console.info("[todo-shortcuts] shortcut guide closed", { source: "button" });
       }} />}
 
-      {projectSelectorOpen && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center overflow-x-hidden sm:items-center sm:p-5" role="dialog" aria-modal="true" aria-labelledby="project-selector-title">
-          <button type="button" aria-label="Close project selector" onClick={() => closeProjectSelector("backdrop")} className="absolute inset-0 bg-black/35 backdrop-blur-[2px]" />
-          <div className="relative flex max-h-[92dvh] w-full max-w-full flex-col overflow-hidden rounded-t-3xl bg-[#f6f7f5] shadow-2xl sm:max-w-5xl sm:rounded-3xl">
-            <div className="flex min-w-0 items-center justify-between gap-3 border-b border-black/[0.07] bg-white px-5 py-4 sm:px-6">
-              <div className="min-w-0">
-                <h2 id="project-selector-title" className="text-lg font-semibold text-[#202522]">Choose a project</h2>
-                <p className="mt-0.5 text-xs text-[#7c847f]">Select a project or jump directly to one of its task views.</p>
-              </div>
-              <div className="flex shrink-0 items-center gap-2">
-                <button type="button" onClick={openNewProjectDialog} className="inline-flex h-10 items-center gap-2 rounded-xl bg-[#216e4e] px-3 text-sm font-semibold text-white hover:bg-[#195d41] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#216e4e]"><ActionIcon name="create-project" /><span className="hidden sm:inline">New project</span></button>
-                <button type="button" onClick={() => closeProjectSelector("button")} className="grid h-10 w-10 place-items-center rounded-full bg-[#f1f2f0] text-[#4f5752] hover:bg-[#e8eae7]" aria-label="Close project selector" title="Close"><ActionIcon name="close" /></button>
-              </div>
-            </div>
+      {projectSelectorOpen && <ProjectBrowser selected={project} total={todos.length} unassigned={unassignedProjectCounts} unassignedValue={UNASSIGNED_PROJECT} projects={projectOptions} loading={loading} onSelect={selectProjectFilter} onView={openProjectTasks} onCreate={openNewProjectDialog} onDelete={openProjectDeleteDialog} onClose={() => closeProjectSelector("button")} />}
 
-            <div className="overflow-y-auto overscroll-contain p-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:p-6">
-              <div className="mb-4 grid gap-3 sm:grid-cols-2">
-                <button type="button" onClick={() => selectProjectFilter("")} className={classNames("flex items-center gap-3 rounded-2xl border bg-white p-4 text-left shadow-sm transition hover:border-[#216e4e]/25 hover:bg-[#fbfdfb] focus-visible:outline-2 focus-visible:outline-[#216e4e]", !project ? "border-[#216e4e]/35 ring-2 ring-[#216e4e]/10" : "border-black/[0.07]")}>
-                  <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-[#eaf3ed] text-[#216e4e]"><ActionIcon name="view-all" className="h-5 w-5" /></span>
-                  <span className="min-w-0"><span className="block text-sm font-semibold text-[#252a27]">Dawar Todo</span><span className="mt-0.5 block text-xs text-[#7c847f]">All projects · {todos.length} tasks</span></span>
-                </button>
-                <button type="button" onClick={() => selectProjectFilter(UNASSIGNED_PROJECT)} className={classNames("flex items-center gap-3 rounded-2xl border bg-white p-4 text-left shadow-sm transition hover:border-[#216e4e]/25 hover:bg-[#fbfdfb] focus-visible:outline-2 focus-visible:outline-[#216e4e]", project === UNASSIGNED_PROJECT ? "border-[#216e4e]/35 ring-2 ring-[#216e4e]/10" : "border-black/[0.07]")}>
-                  <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-[#f1f2f0] text-[#69716c]"><ActionIcon name="folder" className="h-5 w-5" /></span>
-                  <span className="min-w-0"><span className="block text-sm font-semibold text-[#252a27]">Unassigned</span><span className="mt-0.5 block text-xs text-[#7c847f]">{unassignedProjectCounts.open} open · {unassignedProjectCounts.snoozed} snoozed · {unassignedProjectCounts.done} done</span></span>
-                </button>
-              </div>
+      {newProjectOpen && <CreateProjectDialog name={newProjectName} error={newProjectError} busy={creatingProject} onName={value => { setNewProjectName(value); setNewProjectError(""); }} onClose={closeNewProjectDialog} onSubmit={createProject} />}
 
-              {loading ? (
-                <div role="status" aria-label="Loading projects" className="grid gap-3 sm:grid-cols-2">
-                  {[0, 1, 2, 3].map((item) => <div key={item} className="h-40 animate-pulse rounded-2xl bg-white shadow-sm" />)}
-                </div>
-              ) : projectOptions.length ? (
-                <ul className="grid gap-3 sm:grid-cols-2">
-                  {projectOptions.map(([name, projectCounts]) => {
-                    const count = projectCounts.open + projectCounts.snoozed + projectCounts.done;
-                    return (
-                      <li key={name} className={classNames("overflow-hidden rounded-2xl border bg-white shadow-[0_8px_28px_rgba(30,45,36,0.05)] transition hover:border-[#216e4e]/20 hover:shadow-[0_12px_34px_rgba(30,45,36,0.09)]", project === name ? "border-[#216e4e]/35 ring-2 ring-[#216e4e]/10" : "border-black/[0.07]")}>
-                        <button type="button" onClick={() => selectProjectFilter(name)} className="flex min-h-24 w-full items-start gap-3 p-4 text-left focus-visible:outline-2 focus-visible:outline-inset focus-visible:outline-[#216e4e]" aria-label={`Select ${name}, ${count} ${count === 1 ? "task" : "tasks"}`}>
-                          <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-[#eaf3ed] text-[#216e4e]"><ActionIcon name="folder" className="h-6 w-6" /></span>
-                          <span className="min-w-0 pt-0.5"><span className="block break-words text-[15px] font-semibold text-[#252a27]">{name}</span><span className="mt-1 block text-xs text-[#7c847f]">{projectCounts.open} open · {projectCounts.snoozed} snoozed · {projectCounts.done} done</span></span>
-                        </button>
-                        <div className="grid grid-cols-5 border-t border-black/[0.06] bg-[#fafbf9]" aria-label={`Actions for ${name}`}>
-                          {([
-                            ["open", "view-open", `View open tasks in ${name}`],
-                            ["snoozed", "snooze", `View snoozed tasks in ${name}`],
-                            ["done", "done", `View done tasks in ${name}`],
-                            ["all", "view-all", `View all tasks in ${name}`],
-                          ] as const).map(([destinationView, icon, label]) => (
-                            <button key={destinationView} type="button" onClick={() => openProjectTasks(name, destinationView)} aria-label={label} title={label} className="grid h-11 place-items-center border-r border-black/[0.06] text-[#65706a] transition hover:bg-[#eaf3ed] hover:text-[#216e4e] focus-visible:outline-2 focus-visible:outline-inset focus-visible:outline-[#216e4e]"><ActionIcon name={icon} className="h-[18px] w-[18px]" /></button>
-                          ))}
-                          <button type="button" onClick={() => openProjectDeleteDialog(name)} aria-label={`Delete project: ${name}`} title="Delete project" className="grid h-11 place-items-center text-[#8a918d] transition hover:bg-red-50 hover:text-red-700 focus-visible:outline-2 focus-visible:outline-inset focus-visible:outline-red-600"><ActionIcon name="delete" className="h-[18px] w-[18px]" /></button>
-                        </div>
-                      </li>
-                    );
-                  })}
-                </ul>
-              ) : (
-                <div className="rounded-2xl border border-dashed border-black/[0.12] bg-white px-6 py-10 text-center">
-                  <span className="mx-auto grid h-12 w-12 place-items-center rounded-full bg-[#eaf3ed] text-[#216e4e]"><ActionIcon name="folder" className="h-6 w-6" /></span>
-                  <p className="mt-4 font-medium text-[#303632]">No projects yet.</p>
-                  <p className="mt-1 text-sm text-[#7c847f]">Create a project, then assign tasks whenever useful.</p>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+      {projectDeleteDialog && <DeleteProjectDialog name={projectDeleteDialog.name} count={todos.filter(todo => todo.project === projectDeleteDialog.name).length} alternatives={registeredProjects.filter(name => name !== projectDeleteDialog.name)} mode={projectDeleteDialog.mode} target={projectDeleteDialog.targetProject} error={projectDeleteError} busy={deletingProject} onMode={mode => setProjectDeleteDialog(current => current ? { ...current, mode, targetProject: mode === "reassign" ? current.targetProject || registeredProjects.filter(name => name !== current.name)[0] || "" : current.targetProject } : current)} onTarget={targetProject => { setProjectDeleteDialog(current => current ? { ...current, targetProject } : current); setProjectDeleteError(""); }} onClose={closeProjectDeleteDialog} onSubmit={deleteProject} />}
 
-      {newProjectOpen && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center overflow-x-hidden sm:items-center sm:p-5" role="dialog" aria-modal="true" aria-labelledby="new-project-title">
-          <button type="button" aria-label="Close new project dialog" onClick={closeNewProjectDialog} className="absolute inset-0 bg-black/35 backdrop-blur-[2px]" />
-          <form onSubmit={createProject} className="relative w-full max-w-full overflow-x-hidden rounded-t-3xl bg-white px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-5 shadow-2xl sm:max-w-md sm:rounded-3xl sm:p-6">
-            <div className="flex min-w-0 items-start justify-between gap-4">
-              <div className="min-w-0">
-                <span className="mb-3 grid h-11 w-11 place-items-center rounded-xl bg-[#eaf3ed] text-[#216e4e]"><ActionIcon name="create-project" className="h-6 w-6" /></span>
-                <h3 id="new-project-title" className="text-lg font-semibold text-[#202522]">Create project</h3>
-                <p className="mt-1 text-sm leading-5 text-[#7c847f]">Add a project you can assign tasks to and filter by.</p>
-              </div>
-              <button type="button" onClick={closeNewProjectDialog} disabled={creatingProject} className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#f1f2f0] text-[#4f5752] hover:bg-[#e8eae7] disabled:opacity-50" aria-label="Close new project dialog" title="Close"><ActionIcon name="close" /></button>
-            </div>
-            <label className="mt-5 block min-w-0">
-              <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-[#69716c]">Project name</span>
-              <input
-                autoFocus
-                value={newProjectName}
-                onChange={(event) => { setNewProjectName(event.target.value); setNewProjectError(""); }}
-                placeholder="e.g. Reference, Home, Work"
-                maxLength={120}
-                className="h-12 w-full min-w-0 max-w-full rounded-xl border border-black/[0.1] px-3 text-[16px] outline-none focus:border-[#216e4e]/50 focus:ring-3 focus:ring-[#216e4e]/10"
-              />
-            </label>
-            {newProjectError && <p role="alert" className="mt-3 text-sm font-medium text-red-700">{newProjectError}</p>}
-            <div className="mt-6 flex items-center justify-end gap-2">
-              <button type="button" onClick={closeNewProjectDialog} disabled={creatingProject} className="inline-flex h-11 items-center gap-2 rounded-xl px-4 text-sm font-semibold text-[#69716c] hover:bg-[#f3f4f2] disabled:opacity-50"><ActionIcon name="cancel" />Cancel</button>
-              <button type="submit" disabled={creatingProject || !newProjectName.trim()} className="inline-flex h-11 items-center gap-2 rounded-xl bg-[#216e4e] px-5 text-sm font-semibold text-white hover:bg-[#195d41] disabled:opacity-50"><ActionIcon name="create-project" />{creatingProject ? "Creating…" : "Create project"}</button>
-            </div>
-          </form>
-        </div>
-      )}
-
-      {projectDeleteDialog && (() => {
-        const noteCount = todos.filter((todo) => todo.project === projectDeleteDialog.name).length;
-        const alternatives = registeredProjects.filter((name) => name !== projectDeleteDialog.name);
-        return (
-          <div className="fixed inset-0 z-50 flex items-end justify-center overflow-x-hidden sm:items-center sm:p-5" role="dialog" aria-modal="true" aria-labelledby="delete-project-title">
-            <button type="button" aria-label="Close delete project dialog" onClick={closeProjectDeleteDialog} className="absolute inset-0 bg-black/35 backdrop-blur-[2px]" />
-            <form onSubmit={deleteProject} className="relative max-h-[92dvh] w-full max-w-full overflow-x-hidden overflow-y-auto rounded-t-3xl bg-white px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-5 shadow-2xl sm:max-w-md sm:rounded-3xl sm:p-6">
-              <div className="flex min-w-0 items-start justify-between gap-4">
-                <div className="min-w-0">
-                  <span className="mb-3 grid h-11 w-11 place-items-center rounded-xl bg-red-50 text-red-700"><ActionIcon name="delete" className="h-5 w-5" /></span>
-                  <h3 id="delete-project-title" className="break-words text-lg font-semibold text-[#202522]">Delete {projectDeleteDialog.name}?</h3>
-                  <p className="mt-1 text-sm leading-5 text-[#7c847f]">{noteCount ? `This project contains ${noteCount} ${noteCount === 1 ? "task" : "tasks"}. Choose what happens to them.` : "This project is empty and can be safely removed."}</p>
-                </div>
-                <button type="button" onClick={closeProjectDeleteDialog} disabled={deletingProject} className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#f1f2f0] text-[#4f5752] hover:bg-[#e8eae7] disabled:opacity-50" aria-label="Close delete project dialog" title="Close"><ActionIcon name="close" /></button>
-              </div>
-
-              {noteCount > 0 && (
-                <fieldset className="mt-5 space-y-2">
-                  <legend className="sr-only">Choose what happens to project tasks</legend>
-                  <label className={classNames("block rounded-2xl border p-4 transition", projectDeleteDialog.mode === "reassign" ? "border-[#216e4e]/35 bg-[#f3f8f5]" : "border-black/[0.09]") }>
-                    <span className="flex items-start gap-3">
-                      <input
-                        type="radio"
-                        name="delete-project-mode"
-                        checked={projectDeleteDialog.mode === "reassign"}
-                        disabled={!alternatives.length}
-                        onChange={() => setProjectDeleteDialog((current) => current ? { ...current, mode: "reassign", targetProject: current.targetProject || alternatives[0] || "" } : current)}
-                        className="mt-0.5 h-4 w-4 accent-[#216e4e]"
-                      />
-                      <span className="min-w-0 flex-1">
-                        <span className="block text-sm font-semibold text-[#303632]">Move tasks to another project</span>
-                        <span className="mt-0.5 block text-xs leading-5 text-[#7c847f]">Keep every task and reassign it before removing this project.</span>
-                      </span>
-                    </span>
-                    {projectDeleteDialog.mode === "reassign" && alternatives.length > 0 && (
-                      <select
-                        autoFocus
-                        value={projectDeleteDialog.targetProject}
-                        onChange={(event) => { setProjectDeleteDialog((current) => current ? { ...current, targetProject: event.target.value } : current); setProjectDeleteError(""); }}
-                        className="mt-3 h-11 w-full rounded-xl border border-black/[0.1] bg-white px-3 text-sm text-[#303632] outline-none focus:border-[#216e4e]/50"
-                        aria-label="Destination project"
-                      >
-                        {alternatives.map((name) => <option key={name} value={name}>{name}</option>)}
-                      </select>
-                    )}
-                    {!alternatives.length && <span className="mt-2 block pl-7 text-xs text-[#8a918d]">Create another project first to use this option.</span>}
-                  </label>
-
-                  <label className={classNames("flex items-start gap-3 rounded-2xl border p-4 transition", projectDeleteDialog.mode === "delete" ? "border-red-300 bg-red-50" : "border-black/[0.09]")}>
-                    <input type="radio" name="delete-project-mode" checked={projectDeleteDialog.mode === "delete"} onChange={() => setProjectDeleteDialog((current) => current ? { ...current, mode: "delete" } : current)} className="mt-0.5 h-4 w-4 accent-red-700" />
-                    <span className="min-w-0 flex-1">
-                      <span className="block text-sm font-semibold text-red-800">Delete the tasks too</span>
-                      <span className="mt-0.5 block text-xs leading-5 text-red-700/75">Remove the project and all {noteCount} {noteCount === 1 ? "task" : "tasks"} assigned to it.</span>
-                    </span>
-                  </label>
-                </fieldset>
-              )}
-
-              {projectDeleteError && <p role="alert" className="mt-3 text-sm font-medium text-red-700">{projectDeleteError}</p>}
-              <div className="mt-6 flex items-center justify-end gap-2">
-                <button type="button" onClick={closeProjectDeleteDialog} disabled={deletingProject} className="inline-flex h-11 items-center gap-2 rounded-xl px-4 text-sm font-semibold text-[#69716c] hover:bg-[#f3f4f2] disabled:opacity-50"><ActionIcon name="cancel" />Cancel</button>
-                <button type="submit" disabled={deletingProject || (noteCount > 0 && projectDeleteDialog.mode === "reassign" && !projectDeleteDialog.targetProject)} className="inline-flex h-11 items-center gap-2 rounded-xl bg-red-700 px-5 text-sm font-semibold text-white hover:bg-red-800 disabled:opacity-50"><ActionIcon name="delete" />{deletingProject ? "Deleting…" : projectDeleteDialog.mode === "delete" && noteCount > 0 ? "Delete project & tasks" : "Delete project"}</button>
-              </div>
-            </form>
-          </div>
-        );
-      })()}
-
-      {projectDialog && (
-        <div className="fixed inset-0 z-[60] flex items-end justify-center overflow-x-hidden sm:items-center sm:p-5" role="dialog" aria-modal="true" aria-labelledby="project-dialog-title">
-          <button type="button" aria-label="Close project assignment" onClick={closeProjectAssignment} className="absolute inset-0 bg-black/35 backdrop-blur-[2px]" />
-          <form onSubmit={saveProjectAssignment} className="relative max-h-[92dvh] w-full max-w-full overflow-x-hidden overflow-y-auto rounded-t-3xl bg-white px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-5 shadow-2xl sm:max-w-md sm:rounded-3xl sm:p-6">
-            <div className="flex min-w-0 items-start justify-between gap-4">
-              <div className="min-w-0">
-                <h3 id="project-dialog-title" className="text-lg font-semibold text-[#202522]">Assign project</h3>
-                <p className="mt-1 text-sm leading-5 text-[#7c847f]">
-                  {projectDialog.captureDraft
-                    ? "Choose a project for this new task before adding it, or leave it unassigned."
-                    : <>Assign {projectDialog.ids.length === 1 ? "this task" : `these ${projectDialog.ids.length} tasks`} to an existing or new project, or leave {projectDialog.ids.length === 1 ? "it" : "them"} unassigned.</>}
-                </p>
-              </div>
-              <button type="button" onClick={closeProjectAssignment} disabled={savingProject} className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#f1f2f0] text-[#4f5752] hover:bg-[#e8eae7] disabled:opacity-50" aria-label="Close project assignment" title="Close"><ActionIcon name="close" /></button>
-            </div>
-
-            <label className="mt-5 block min-w-0">
-              <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-[#69716c]">Project</span>
-              <select
-                autoFocus
-                value={projectDialog.selection}
-                onChange={(event) => {
-                  setProjectDialog((current) => current ? { ...current, selection: event.target.value } : current);
-                  setProjectDialogError("");
-                }}
-                className="h-12 w-full min-w-0 max-w-full rounded-xl border border-black/[0.1] bg-white px-3 text-sm text-[#303632] outline-none focus:border-[#216e4e]/50 focus:ring-3 focus:ring-[#216e4e]/10"
-              >
-                <option value="">Choose a project…</option>
-                <option value={UNASSIGNED_PROJECT}>Unassigned</option>
-                {projects.map((name) => <option key={name} value={name}>{name}</option>)}
-                <option value={CREATE_PROJECT}>Create a new project…</option>
-              </select>
-            </label>
-
-            {projectDialog.selection === CREATE_PROJECT && (
-              <label className="mt-3 block min-w-0">
-                <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-[#69716c]">New project name</span>
-                <input
-                  value={projectDialog.newProject}
-                  onChange={(event) => {
-                    setProjectDialog((current) => current ? { ...current, newProject: event.target.value } : current);
-                    setProjectDialogError("");
-                  }}
-                  placeholder="e.g. Reference, Home, Work"
-                  maxLength={120}
-                  className="h-12 w-full min-w-0 max-w-full rounded-xl border border-black/[0.1] px-3 text-[16px] outline-none focus:border-[#216e4e]/50 focus:ring-3 focus:ring-[#216e4e]/10"
-                />
-              </label>
-            )}
-
-            {projectDialogError && <p role="alert" className="mt-3 text-sm font-medium text-red-700">{projectDialogError}</p>}
-
-            <div className="mt-6 flex items-center justify-end gap-2">
-              <button type="button" onClick={closeProjectAssignment} disabled={savingProject} className="inline-flex h-11 items-center gap-2 rounded-xl px-4 text-sm font-semibold text-[#69716c] hover:bg-[#f3f4f2] disabled:opacity-50"><ActionIcon name="cancel" />Cancel</button>
-              <button type="submit" disabled={savingProject || !projectDialog.selection || (projectDialog.selection === CREATE_PROJECT && !projectDialog.newProject.trim())} className="inline-flex h-11 items-center gap-2 rounded-xl bg-[#216e4e] px-5 text-sm font-semibold text-white hover:bg-[#195d41] disabled:opacity-50">
-                <ActionIcon name="move" />
-                {savingProject ? "Saving…" : projectDialog.captureDraft ? "Use project" : "Assign project"}
-              </button>
-            </div>
-          </form>
-        </div>
-      )}
+      {projectDialog && <AssignProjectDialog returnFocus={projectReturnFocusRef.current} count={projectDialog.ids.length} capture={Boolean(projectDialog.captureDraft)} selection={projectDialog.selection} newName={projectDialog.newProject} projects={projects} createValue={CREATE_PROJECT} unassignedValue={UNASSIGNED_PROJECT} error={projectDialogError} busy={savingProject} onSelection={selection => { setProjectDialog(current => current ? { ...current, selection } : current); setProjectDialogError(""); }} onName={newProject => { setProjectDialog(current => current ? { ...current, newProject } : current); setProjectDialogError(""); }} onClose={closeProjectAssignment} onSubmit={saveProjectAssignment} />}
 
       {editingTodo && editDraft && (
         <div className="fixed inset-0 z-50 flex items-end justify-center overflow-x-hidden sm:items-center sm:p-5">
@@ -5274,21 +4116,23 @@ export default function Home() {
             aria-labelledby="task-details-title"
             onSubmit={(event) => event.preventDefault()}
             className={classNames(
-              "relative flex max-h-[92dvh] w-full max-w-full flex-col overflow-hidden overflow-x-hidden rounded-t-3xl bg-white shadow-2xl outline-none sm:max-w-2xl sm:rounded-3xl",
+              "relative flex max-h-[92dvh] w-full max-w-full flex-col overflow-hidden overflow-x-hidden rounded-t-lg border border-border bg-card shadow-lg outline-none sm:max-w-2xl sm:rounded-lg",
               taskDialogPulling ? "transition-none" : "transition-transform duration-150 ease-out motion-reduce:transition-none",
             )}
             style={{ transform: `translate3d(0, ${taskDialogPullDistance}px, 0)` }}
           >
-            <div className="relative flex min-w-0 items-center justify-between border-b border-black/[0.07] px-5 pb-4 pt-5 sm:px-6 sm:py-4">
+            <div className="relative flex min-w-0 flex-wrap items-center justify-between gap-2 border-b border-border px-4 pb-4 pt-5 sm:px-6 sm:py-4">
               <span className="absolute left-1/2 top-2 h-1 w-10 -translate-x-1/2 rounded-full bg-black/15 sm:hidden" aria-hidden="true" />
-              <h3 id="task-details-title" className="min-w-0 text-lg font-semibold text-[#202522]">Task details</h3>
+              <h3 id="task-details-title" className="min-w-0 text-lg font-semibold text-foreground">Task details</h3>
               <div className="flex shrink-0 items-center gap-1">
-                <button type="button" onClick={() => void copyTaskDetails()} className="grid h-9 w-9 place-items-center rounded-full bg-[#f1f2f0] text-[#4f5752] hover:bg-[#e8eae7]" aria-label="Copy task title and description" title="Copy task"><ActionIcon name="copy" /></button>
-                <button type="button" onClick={closeTaskDetails} className="grid h-9 w-9 place-items-center rounded-full bg-[#f1f2f0] text-[#4f5752] hover:bg-[#e8eae7]" aria-label="Close task details" title="Close"><ActionIcon name="close" /></button>
+                {editingTodo?.queueLastTransfer && <a className="text-xs text-primary" href={`/bots?bot=${encodeURIComponent(editingTodo.queueLastTransfer.botId)}`}>Queued to bot · source retained</a>}
+                <Button variant="ghost" type="button" onClick={() => { if (editingId !== null) setQueueRequest({ id: crypto.randomUUID(), todoIds: [editingId] }); }} size="icon" className="shrink-0 text-muted-foreground" aria-label="Queue task to a bot" title="Queue to bot"><ActionIcon name="forward" /></Button>
+                <Button variant="ghost" type="button" onClick={() => void copyTaskDetails()} size="icon" className="shrink-0 text-muted-foreground" aria-label="Copy task title and description" title="Copy task"><ActionIcon name="copy" /></Button>
+                <Button variant="ghost" type="button" onClick={closeTaskDetails} size="icon" className="shrink-0 text-muted-foreground" aria-label="Close task details" title="Close"><ActionIcon name="close" /></Button>
               </div>
             </div>
 
-            <div ref={taskDialogScrollRef} className="min-h-0 min-w-0 overflow-x-hidden overflow-y-auto px-5 py-5 sm:px-6">
+            <div ref={taskDialogScrollRef} className="min-h-0 min-w-0 overflow-x-hidden overflow-y-auto px-4 py-5 sm:px-6">
               {isSnoozed(editingTodo, now) && editingTodo.snoozedUntil && (
                 <div className="mb-4">
                   <SnoozeStatusBadge value={editingTodo.snoozedUntil} now={now} timeZone={scheduleTimeZone} />
@@ -5296,21 +4140,21 @@ export default function Home() {
               )}
               <div className="block min-w-0">
                 <div className="mb-1.5 flex items-center justify-between gap-3">
-                  <span className="text-xs font-semibold uppercase tracking-wide text-[#69716c]">Description</span>
-                  <button
+                  <span className="text-sm font-medium text-muted-foreground">Description</span>
+                  <Button variant="ghost"
                     type="button"
                     onClick={() => setDescriptionPreview((current) => !current)}
                     aria-pressed={descriptionPreview}
-                    className="inline-flex h-7 items-center gap-1.5 rounded-lg px-2 text-xs font-semibold text-[#216e4e] hover:bg-[#eaf3ed]"
+                    size="sm" className="text-primary"
                   >
                     <ActionIcon name={descriptionPreview ? "edit" : "preview"} className="h-3.5 w-3.5" />
                     {descriptionPreview ? "Edit" : "Preview"}
-                  </button>
+                  </Button>
                 </div>
                 {descriptionPreview ? (
                   <MarkdownPreview value={editDraft.notes} />
                 ) : (
-                  <textarea
+                  <Textarea
                     aria-label="Description"
                     value={editDraft.notes}
                     onChange={(event) => updateEditDraftField("notes", event.target.value)}
@@ -5323,7 +4167,7 @@ export default function Home() {
                     rows={5}
                     placeholder="Add context, links, next steps, or Markdown…"
                     maxLength={MAX_TASK_DESCRIPTION_LENGTH}
-                    className="min-h-28 w-full min-w-0 max-w-full resize-y rounded-xl border border-black/[0.1] bg-white px-3 py-2.5 text-sm leading-6 text-[#303632] outline-none placeholder:text-[#a0a6a2] focus:border-[#216e4e]/50 focus:ring-3 focus:ring-[#216e4e]/10"
+                    className="min-h-28 resize-y leading-6"
                   />
                 )}
               </div>
@@ -5331,286 +4175,79 @@ export default function Home() {
               <section className="mt-4 min-w-0" aria-labelledby="task-attachments-heading">
                 <div className="mb-2 flex min-w-0 items-center justify-between gap-3">
                   <div className="min-w-0">
-                    <h4 id="task-attachments-heading" className="text-xs font-semibold uppercase tracking-wide text-[#69716c]">Attachments</h4>
-                    <p className="mt-0.5 text-xs text-[#929994]">{detailAttachments.length + detailUploads.length}/{MAX_ATTACHMENTS} attached</p>
+                    <h4 id="task-attachments-heading" className="text-sm font-medium text-muted-foreground">Attachments</h4>
+                    <p className="mt-0.5 text-xs text-muted-foreground">{detailAttachments.length + detailUploads.length}/{MAX_ATTACHMENTS} attached</p>
                   </div>
                   <AttachmentPicker
                     label="Add attachment to task"
+                    onOpenChange={setDetailAttachmentPickerOpen}
                     showLabel
                     onFiles={(files) => void queueDetailAttachments(files)}
-                    onRecord={() => setVoiceTarget("detail")}
+                    onRecord={(opener) => { voiceReturnFocusRef.current = opener; setVoiceTarget("detail"); }}
                     disabled={detailAttachments.length + detailUploads.length >= MAX_ATTACHMENTS}
                   />
                 </div>
 
                 {loadingAttachments ? (
-                  <div role="status" aria-label="Loading attachments" className="grid grid-cols-3 gap-2 sm:grid-cols-4">
-                    {[0, 1, 2].map((item) => <div key={item} className="aspect-square animate-pulse rounded-xl bg-[#eef0ed]" />)}
+                  <div role="status" aria-label="Loading attachments" className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                    {[0, 1, 2].map((item) => <Skeleton key={item} className="aspect-square rounded-lg" />)}
                   </div>
                 ) : attachmentError ? (
-                  <div className="flex items-center justify-between gap-3 rounded-xl bg-red-50 px-3 py-2.5 text-sm text-red-700">
-                    <span>{attachmentError}</span>
-                    <button type="button" onClick={() => void loadTaskAttachments(editingTodo.id)} className="inline-flex items-center gap-1.5 font-semibold"><ActionIcon name="retry" />Retry</button>
+                  <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-destructive/10 p-3 text-sm text-destructive">
+                    <span className="min-w-0 break-words">{attachmentError}</span>
+                    <Button type="button" variant="outline" onClick={() => void loadTaskAttachments(editingTodo.id)}><ActionIcon name="retry" />Retry</Button>
                   </div>
                 ) : detailAttachments.length || detailUploads.length ? (
-                  <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
-                    {detailAttachments.map((attachment) => attachment.kind === "audio" ? (
-                      <div key={attachment.id} className="group/media col-span-full flex min-w-0 items-center gap-3 rounded-xl bg-[#f3f5f2] p-3 ring-1 ring-black/[0.06]">
-                        <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-[#e3efe7] text-[#216e4e]"><ActionIcon name="mic" className="h-5 w-5" /></span>
-                        <div className="min-w-0 flex-1"><p className="mb-1 truncate text-xs font-semibold text-[#4d5650]">{attachment.fileName} · {formatDuration(attachment.durationMs)}</p><audio controls preload="metadata" src={attachment.audioUrl} className="h-9 w-full" /></div>
-                        <a href={attachment.originalUrl} download={attachment.fileName} className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-[#69716c] hover:bg-white" aria-label={`Download ${attachment.fileName}`}><ActionIcon name="download" /></a>
-                        <button type="button" onClick={() => void deleteDetailAttachment(attachment)} disabled={syncing} className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-[#69716c] hover:bg-red-50 hover:text-red-700" aria-label={`Delete ${attachment.fileName}`}><ActionIcon name="delete" /></button>
-                      </div>
-                    ) : attachment.kind === "file" ? (
-                      <div key={attachment.id} className="group/media col-span-full flex min-w-0 items-center gap-3 rounded-xl bg-[#f3f5f2] p-3 ring-1 ring-black/[0.06]">
-                        <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-[#e3efe7] text-[#216e4e]"><ActionIcon name="file" className="h-5 w-5" /></span>
-                        <div className="min-w-0 flex-1"><p className="truncate text-sm font-semibold text-[#4d5650]">{attachment.fileName}</p><p className="mt-0.5 text-xs text-[#7b837e]">{formatFileSize(attachment.byteSize)}</p></div>
-                        <a href={attachment.originalUrl} download={attachment.fileName} className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-[#69716c] hover:bg-white" aria-label={`Download ${attachment.fileName}`}><ActionIcon name="download" /></a>
-                        <button type="button" onClick={() => void deleteDetailAttachment(attachment)} disabled={syncing} className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-[#69716c] hover:bg-red-50 hover:text-red-700" aria-label={`Delete ${attachment.fileName}`}><ActionIcon name="delete" /></button>
-                      </div>
-                    ) : (
-                      <div key={attachment.id} className="group/media relative aspect-square min-w-0 overflow-hidden rounded-xl bg-[#eef0ed] ring-1 ring-black/[0.06]">
-                        {attachment.kind === "image" ? (
-                          <button type="button" onClick={() => setViewerIndex(imageAttachments.findIndex((image) => image.id === attachment.id))} className="h-full w-full focus-visible:outline-2 focus-visible:outline-inset focus-visible:outline-[#216e4e]" aria-label={`View image: ${attachment.fileName}`}>
-                            <img src={attachment.thumbnailUrl} alt={attachment.fileName} className="h-full w-full object-cover" />
-                          </button>
-                        ) : <video controls preload="metadata" src={attachment.videoUrl} className="h-full w-full object-cover" />}
-                        <button type="button" onClick={() => void deleteDetailAttachment(attachment)} disabled={syncing} aria-label={`Delete ${attachment.kind}: ${attachment.fileName}`} title={`Delete ${attachment.kind}`} className="absolute right-1.5 top-1.5 grid h-7 w-7 place-items-center rounded-full bg-black/65 text-white opacity-100 hover:bg-red-700 focus-visible:outline-2 focus-visible:outline-white disabled:opacity-50 sm:opacity-0 sm:group-hover/media:opacity-100 sm:group-focus-within/media:opacity-100">
-                          <ActionIcon name="delete" className="h-3.5 w-3.5" />
-                        </button>
-                      </div>
-                    ))}
-                    {detailUploads.map((item) => (
-                      <div key={item.localId} className={classNames("relative min-w-0 overflow-hidden rounded-xl bg-[#eef0ed] ring-1 ring-black/[0.06]", item.kind === "audio" || item.kind === "file" ? "col-span-full h-16" : "aspect-square")} title={item.error || item.file.name}>
-                        {item.kind === "image" ? <img src={item.previewUrl} alt="" className="h-full w-full object-cover" /> : item.kind === "video" ? <video src={item.previewUrl} muted className="h-full w-full object-cover" /> : item.kind === "file" ? <div className="flex h-full items-center gap-3 px-4 text-sm font-semibold text-[#455049]"><ActionIcon name="file" className="shrink-0 text-[#216e4e]" /><span className="min-w-0"><span className="block truncate">{item.file.name}</span><span className="text-xs font-normal text-[#7b837e]">{formatFileSize(item.file.size)}</span></span></div> : <div className="flex h-full items-center gap-2 px-4 text-sm font-semibold text-[#455049]"><ActionIcon name="mic" className="text-[#216e4e]" />Voice memo · {formatDuration(item.durationMs)}</div>}
-                        {item.status === "uploading" ? (
-                          <span className="absolute inset-0 grid place-items-center bg-black/45 text-xs font-semibold text-white">Uploading…</span>
-                        ) : (
-                          <>
-                            <button type="button" onClick={() => retryDetailAttachment(item)} aria-label={`Retry ${item.file.name}: ${item.error}`} className="absolute inset-0 flex flex-col items-center justify-center gap-1 bg-red-900/70 px-10 text-center text-white">
-                              <ActionIcon name="retry" className="h-5 w-5 shrink-0" />
-                              <span className="line-clamp-2 text-[11px] font-medium leading-4">{item.error || "Upload failed. Retry."}</span>
-                            </button>
-                            <button type="button" onClick={() => removeDetailUpload(item)} aria-label={`Remove ${item.file.name}`} title="Remove failed upload" className="absolute right-1.5 top-1.5 grid h-7 w-7 place-items-center rounded-full bg-black/65 text-white hover:bg-red-700"><ActionIcon name="close" className="h-3.5 w-3.5" /></button>
-                          </>
-                        )}
-                      </div>
-                    ))}
+                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                    {detailAttachments.map((attachment) => <TaskAttachmentMedia key={attachment.id} attachment={attachment} disabled={syncing} onDelete={() => void deleteDetailAttachment(attachment)} onView={() => setViewerIndex(imageAttachments.findIndex((image) => image.id === attachment.id))} />)}
+                    {detailUploads.map((item) => <PendingTaskAttachment key={item.localId} item={item} onRetry={() => retryDetailAttachment(item)} onRemove={() => removeDetailUpload(item)} />)}
                   </div>
                 ) : (
-                  <div className="rounded-xl border border-dashed border-black/[0.1] px-4 py-5 text-center text-sm text-[#8a918d]">No attachments yet.</div>
+                  <div className="rounded-xl border border-dashed border-border px-4 py-5 text-center text-sm text-muted-foreground">No attachments yet.</div>
                 )}
               </section>
 
-              <div className="mt-4 grid min-w-0 grid-cols-1 gap-4 sm:grid-cols-2">
-                <div className="block min-w-0">
-                  <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-[#69716c]">Project</span>
-                  <button
-                    type="button"
-                    onClick={() => openProjectAssignment([editingTodo.id], "details")}
-                    disabled={savingEdit}
-                    aria-label={`Assign project. Current project: ${editDraft.project || "Unassigned"}`}
-                    className="flex h-11 w-full min-w-0 max-w-full items-center justify-between gap-3 rounded-xl border border-black/[0.1] bg-white px-3 text-left text-[16px] text-[#303632] outline-none hover:bg-[#fafbf9] focus:border-[#216e4e]/50 focus:ring-3 focus:ring-[#216e4e]/10 disabled:opacity-60"
-                  >
-                    <span className="min-w-0 truncate">{editDraft.project || "Unassigned"}</span>
-                    <span className="inline-flex shrink-0 items-center gap-1.5 text-xs font-semibold text-[#216e4e]"><ActionIcon name="move" />Change</span>
-                  </button>
-                </div>
-                <label className="block min-w-0">
-                  <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-[#69716c]">Context</span>
-                  <input value={editDraft.context} onChange={(event) => updateEditDraftField("context", event.target.value)} placeholder="No context" className="h-11 w-full min-w-0 max-w-full rounded-xl border border-black/[0.1] px-3 text-[16px] outline-none focus:border-[#216e4e]/50 focus:ring-3 focus:ring-[#216e4e]/10" />
-                </label>
-                <label className="block min-w-0">
-                  <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-[#69716c]">Priority</span>
-                  <select value={editDraft.priority} onChange={(event) => updateEditDraftField("priority", Number(event.target.value))} className="h-11 w-full min-w-0 max-w-full rounded-xl border border-black/[0.1] bg-white px-3 text-[16px] outline-none focus:border-[#216e4e]/50 focus:ring-3 focus:ring-[#216e4e]/10">
-                    <option value="1">Urgent</option>
-                    <option value="2">High</option>
-                    <option value="3">Normal</option>
-                    <option value="4">Low</option>
-                  </select>
-                </label>
-                <div className="block min-w-0">
-                  <div className="mb-1.5 flex h-6 items-center justify-between gap-2">
-                    <label htmlFor={`task-due-date-${editingTodo.id}`} className="text-xs font-semibold uppercase tracking-wide text-[#69716c]">Due date</label>
-                    <button
-                      type="button"
-                      onClick={() => updateEditDraftField("dueDate", "")}
-                      disabled={!editDraft.dueDate}
-                      aria-label="Clear due date"
-                      className="inline-flex h-6 items-center gap-1 rounded-md px-1.5 text-xs font-semibold text-[#216e4e] hover:bg-[#eaf3ed] disabled:invisible"
-                    >
-                      <ActionIcon name="close" className="h-3 w-3" />Clear
-                    </button>
-                  </div>
-                  <input id={`task-due-date-${editingTodo.id}`} type="date" value={editDraft.dueDate} onChange={(event) => updateEditDraftField("dueDate", event.target.value)} className="h-11 w-full min-w-0 max-w-full rounded-xl border border-black/[0.1] bg-white px-3 text-[16px] outline-none focus:border-[#216e4e]/50 focus:ring-3 focus:ring-[#216e4e]/10" />
-                </div>
-                <label className="block min-w-0 sm:col-span-2">
-                  <span className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-[#69716c]"><ActionIcon name="repeat" className="h-3.5 w-3.5" />Recurring schedule</span>
-                  <input
-                    value={editDraft.recurrenceCron}
-                    onChange={(event) => updateEditDraftField("recurrenceCron", event.target.value)}
-                    placeholder="0 9 * * 1-5"
-                    autoCapitalize="off"
-                    autoCorrect="off"
-                    spellCheck={false}
-                    aria-invalid={Boolean(recurrenceError)}
-                    aria-describedby={`task-recurrence-help-${editingTodo.id}`}
-                    className={classNames("h-11 w-full min-w-0 max-w-full rounded-xl border bg-white px-3 font-mono text-sm outline-none focus:ring-3", recurrenceError ? "border-red-400 focus:border-red-500 focus:ring-red-500/10" : "border-black/[0.1] focus:border-[#216e4e]/50 focus:ring-[#216e4e]/10")}
-                  />
-                  <p id={`task-recurrence-help-${editingTodo.id}`} className={classNames("mt-1.5 text-xs leading-5", recurrenceError ? "font-medium text-red-600" : "text-[#7c847f]")}>{recurrenceError ?? `Five-field cron in ${scheduleTimeZone}. Recurring tasks cannot be snoozed.`}</p>
-                </label>
-              </div>
+              <TaskDetailFields taskId={editingTodo.id} editDraft={editDraft} savingEdit={savingEdit} recurrenceError={recurrenceError} scheduleTimeZone={scheduleTimeZone} onAssignProject={() => openProjectAssignment([editingTodo.id], "details")} updateEditDraftField={updateEditDraftField} />
 
-              <div className="mt-5 border-t border-black/[0.07] pt-4">
-                <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-[#69716c]">Quick actions</p>
+              <div className="mt-5 border-t border-border pt-4">
+                <p className="mb-2 text-sm font-medium text-muted-foreground">Quick actions</p>
                 <div className="flex min-w-0 flex-wrap gap-2">
                   {editingTodo.status === "completed" ? (
-                    <button type="button" onClick={() => detailAction("unsnooze")} disabled={syncing || savingEdit} className="inline-flex min-w-max items-center gap-2 rounded-xl bg-[#eaf3ed] px-3 py-2.5 text-sm font-semibold text-[#195d41] disabled:opacity-50"><ActionIcon name={todoActionIcon("unsnooze", "Open")} />Open</button>
+                    <Button variant="ghost" type="button" onClick={() => detailAction("unsnooze")} disabled={syncing || savingEdit} className="border border-border"><ActionIcon name={todoActionIcon("unsnooze", "Open")} />Open</Button>
                   ) : (
-                    <button type="button" onClick={() => detailAction("complete")} disabled={syncing || savingEdit} className="inline-flex min-w-max items-center gap-2 rounded-xl bg-[#eaf3ed] px-3 py-2.5 text-sm font-semibold text-[#195d41] disabled:opacity-50"><ActionIcon name={todoActionIcon("complete", "Done")} />Done</button>
+                    <Button variant="ghost" type="button" onClick={() => detailAction("complete")} disabled={syncing || savingEdit} className="border border-border"><ActionIcon name={todoActionIcon("complete", "Done")} />Done</Button>
                   )}
                   {editingTodo.status === "open" && !editDraft.recurrenceCron.trim() && (isSnoozed(editingTodo, now) ? (
-                    <button type="button" onClick={() => detailAction("unsnooze")} disabled={syncing || savingEdit} className="inline-flex min-w-max items-center gap-2 rounded-xl bg-[#eaf3ed] px-3 py-2.5 text-sm font-semibold text-[#195d41] disabled:opacity-50"><ActionIcon name={todoActionIcon("unsnooze", "Wake")} />Wake</button>
+                    <Button variant="ghost" type="button" onClick={() => detailAction("unsnooze")} disabled={syncing || savingEdit} className="border border-border"><ActionIcon name={todoActionIcon("unsnooze", "Wake")} />Wake</Button>
                   ) : (
-                    <button type="button" onClick={() => detailAction("snooze")} disabled={syncing || savingEdit} className="inline-flex min-w-max items-center gap-2 rounded-xl bg-amber-50 px-3 py-2.5 text-sm font-semibold text-amber-700 disabled:opacity-50"><ActionIcon name={todoActionIcon("snooze", "Snooze")} />Snooze</button>
+                    <Button variant="ghost" type="button" onClick={() => detailAction("snooze")} disabled={syncing || savingEdit} className="border border-border"><ActionIcon name={todoActionIcon("snooze", "Snooze")} />Snooze</Button>
                   ))}
-                  {view === "open" && <button type="button" onClick={() => void togglePin(editingTodo)} disabled={syncing || savingEdit} className="inline-flex min-w-max items-center gap-2 rounded-xl bg-[#eef3ff] px-3 py-2.5 text-sm font-semibold text-[#445a8a] disabled:opacity-50"><ActionIcon name={editingTodo.pinned ? "unpin" : "pin"} />{editingTodo.pinned ? "Unpin" : "Pin"}</button>}
-                  <button type="button" onClick={() => openProjectAssignment([editingTodo.id], "details")} disabled={syncing || savingEdit} className="inline-flex min-w-max items-center gap-2 rounded-xl bg-slate-100 px-3 py-2.5 text-sm font-semibold text-slate-700 disabled:opacity-50"><ActionIcon name={todoActionIcon("assign", "Assign project")} />Assign project</button>
-                  <button type="button" onClick={() => detailAction("delete")} disabled={syncing || savingEdit} className="inline-flex min-w-max items-center gap-2 rounded-xl bg-red-50 px-3 py-2.5 text-sm font-semibold text-red-700 disabled:opacity-50"><ActionIcon name={todoActionIcon("delete", "Delete")} />Delete</button>
+                  {view === "open" && <Button variant="ghost" type="button" onClick={() => void togglePin(editingTodo)} disabled={syncing || savingEdit} className="border border-border"><ActionIcon name={editingTodo.pinned ? "unpin" : "pin"} />{editingTodo.pinned ? "Unpin" : "Pin"}</Button>}
+                  <Button variant="ghost" type="button" onClick={() => openProjectAssignment([editingTodo.id], "details")} disabled={syncing || savingEdit} className="border border-border"><ActionIcon name={todoActionIcon("assign", "Assign project")} />Assign project</Button>
+                  <Button variant="ghost" type="button" onClick={() => detailAction("delete")} disabled={syncing || savingEdit} className="border border-border text-destructive hover:text-destructive"><ActionIcon name={todoActionIcon("delete", "Delete")} />Delete</Button>
                 </div>
               </div>
             </div>
 
-            <div className="flex min-h-14 items-center justify-between gap-3 border-t border-black/[0.07] bg-white px-5 py-3 sm:px-6" aria-live="polite">
-              <span className={classNames(
-                "inline-flex min-w-0 items-center gap-2 text-sm font-medium",
-                editSaveState === "error" ? "text-red-700" : editSaveState === "offline" ? "text-amber-700" : "text-[#69716c]",
-              )}>
-                <span className={classNames("h-2 w-2 shrink-0 rounded-full", editSaveState === "saving" ? "animate-pulse bg-[#216e4e]" : editSaveState === "error" ? "bg-red-600" : editSaveState === "offline" ? "bg-amber-500" : "bg-emerald-600")} />
-                <span className="truncate">{editSaveMessage}</span>
-              </span>
-              {editSaveState === "error" && (
-                <button type="button" onClick={() => { if (editingIdRef.current && editDraftRef.current && editBaselineRef.current) void persistTaskDraft(editingIdRef.current, editDraftRef.current, "retry", editBaselineRef.current); }} className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg px-3 text-xs font-semibold text-red-700 hover:bg-red-50"><ActionIcon name="retry" />Retry</button>
-              )}
-            </div>
+            <TaskSaveStatus state={editSaveState} message={editSaveMessage} onRetry={() => { if (editingIdRef.current && editDraftRef.current && editBaselineRef.current) void persistTaskDraft(editingIdRef.current, editDraftRef.current, "retry", editBaselineRef.current); }} />
           </form>
         </div>
       )}
 
       {voiceTarget && (
         <VoiceMemoRecorder
+          maxBytes={MAX_AUDIO_BYTES}
+          maxDurationMs={MAX_AUDIO_DURATION_MS}
+          returnFocus={voiceReturnFocusRef.current}
           onClose={() => setVoiceTarget(null)}
           onAttach={(file, durationMs) => voiceTarget === "detail" ? queueDetailVoice(file, durationMs) : queueCaptureVoice(file, durationMs)}
         />
       )}
 
-      {viewerAttachment && viewerIndex !== null && (
-        <div
-          className="fixed inset-0 z-[80] flex touch-pan-y items-center justify-center overflow-hidden bg-black/92 p-3 sm:p-8"
-          role="dialog"
-          aria-modal="true"
-          aria-label={`Image viewer: ${viewerAttachment.fileName}`}
-          onPointerDown={(event) => { if (event.pointerType === "touch") viewerGesture.current = event.clientX; }}
-          onPointerUp={(event) => {
-            const start = viewerGesture.current;
-            viewerGesture.current = null;
-            if (start === null || imageAttachments.length < 2) return;
-            const delta = event.clientX - start;
-            if (Math.abs(delta) < 50) return;
-            setViewerIndex((current) => current === null ? null : delta < 0
-              ? (current + 1) % imageAttachments.length
-              : (current - 1 + imageAttachments.length) % imageAttachments.length);
-          }}
-        >
-          <button type="button" onClick={() => setViewerIndex(null)} aria-label="Close image viewer" className="absolute inset-0 cursor-zoom-out" />
-          <div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex items-center justify-between gap-3 bg-gradient-to-b from-black/70 to-transparent px-4 pb-8 pt-[max(1rem,env(safe-area-inset-top))] sm:px-6">
-            <div className="min-w-0">
-              <span className="block truncate text-sm font-medium text-white/85">{viewerAttachment.fileName}</span>
-              {viewerCopyState !== "idle" && (
-                <span className={classNames("mt-0.5 block truncate text-xs", viewerCopyState === "error" ? "text-amber-200" : "text-white/65")} role="status" aria-live="polite">
-                  {viewerCopyState === "copying" ? "Copying image…" : viewerCopyState === "copied" ? "Copied to clipboard" : "Use right-click → Copy Image"}
-                </span>
-              )}
-            </div>
-            <div className="pointer-events-auto flex shrink-0 items-center gap-1">
-              <button type="button" onClick={() => void copyViewerImage()} disabled={viewerCopyState === "copying"} className="grid h-10 w-10 place-items-center rounded-full bg-white/10 text-white hover:bg-white/20 disabled:opacity-50" aria-label="Copy image" title="Copy image"><ActionIcon name="copy" className="h-5 w-5" /></button>
-              <a href={viewerAttachment.originalUrl} download={viewerAttachment.fileName} className="grid h-10 w-10 place-items-center rounded-full bg-white/10 text-white hover:bg-white/20" aria-label="Download original" title="Download original"><ActionIcon name="download" className="h-5 w-5" /></a>
-              <button type="button" onClick={() => void deleteDetailAttachment(viewerAttachment)} className="grid h-10 w-10 place-items-center rounded-full bg-white/10 text-white hover:bg-red-600" aria-label="Delete image" title="Delete image"><ActionIcon name="delete" className="h-5 w-5" /></button>
-              <button type="button" onClick={() => setViewerIndex(null)} className="grid h-10 w-10 place-items-center rounded-full bg-white/10 text-white hover:bg-white/20" aria-label="Close image viewer" title="Close"><ActionIcon name="close" className="h-5 w-5" /></button>
-            </div>
-          </div>
+      {viewerAttachment && viewerIndex !== null && <TaskImageViewer attachment={viewerAttachment} index={viewerIndex} count={imageAttachments.length} copyState={viewerCopyState} disabled={syncing} onClose={() => setViewerIndex(null)} onCopy={() => void copyViewerImage()} onDelete={() => void deleteDetailAttachment(viewerAttachment)} onNavigate={delta => setViewerIndex(current => current === null ? null : (current + delta + imageAttachments.length) % imageAttachments.length)} />}
 
-          <img src={viewerAttachment.displayUrl} alt={viewerAttachment.fileName} className="relative max-h-full max-w-full object-contain" />
+      {notice && <TaskNotice notice={notice} bulkActionsVisible={selectedIds.length > 0} undoing={undoing} adjusting={adjustingSnooze !== null} paused={Boolean(customSnoozeDialog)} presets={quickSnoozePresets} onUndo={() => requestNoticeUndo(notice)} onDismiss={() => setNotice(current => current === notice ? null : current)} onSnooze={preset => void adjustSnooze(notice.snoozeIds as number[], preset, notice.operationId)} onCustomSnooze={() => openCustomSnooze(notice.snoozeIds as number[], notice.operationId)} />}
 
-          {imageAttachments.length > 1 && (
-            <>
-              <button type="button" onClick={() => setViewerIndex((viewerIndex - 1 + imageAttachments.length) % imageAttachments.length)} aria-label="Previous image" className="absolute left-3 top-1/2 hidden h-12 w-12 -translate-y-1/2 place-items-center rounded-full bg-black/45 text-white hover:bg-black/70 sm:grid"><ActionIcon name="previous" className="h-6 w-6" /></button>
-              <button type="button" onClick={() => setViewerIndex((viewerIndex + 1) % imageAttachments.length)} aria-label="Next image" className="absolute right-3 top-1/2 hidden h-12 w-12 -translate-y-1/2 place-items-center rounded-full bg-black/45 text-white hover:bg-black/70 sm:grid"><ActionIcon name="next" className="h-6 w-6" /></button>
-              <span className="absolute bottom-[max(1rem,env(safe-area-inset-bottom))] rounded-full bg-black/55 px-3 py-1.5 text-xs font-semibold text-white/90">{viewerIndex + 1} / {imageAttachments.length}</span>
-            </>
-          )}
-        </div>
-      )}
-
-      {notice && (
-        <div
-          data-task-notice
-          data-bulk-actions-visible={selectedIds.length > 0}
-          className="task-notice-safe-bottom pointer-events-none fixed inset-x-0 z-[60] mx-auto w-[calc(100%-2rem)] max-w-lg transition-[bottom] duration-200"
-        >
-          <div
-            role={notice.tone === "error" ? "alert" : "status"}
-            className={classNames(
-              "pointer-events-auto min-h-14 rounded-2xl px-4 py-3 text-sm text-white shadow-[0_16px_50px_rgba(0,0,0,0.24)]",
-              notice.tone === "error" ? "bg-red-700" : "bg-[#202522]",
-            )}
-          >
-            <div className="flex items-start gap-3">
-              <div className="min-w-0 flex-1">
-                <p className="font-medium">{notice.text}</p>
-                {notice.taskPreview && <p className="mt-0.5 truncate text-xs text-white/55" title={notice.taskPreview}>{notice.taskPreview}</p>}
-              </div>
-              {(notice.operationId || notice.undoToken) && (
-                <span className="inline-flex min-w-[4.75rem] shrink-0 justify-end">
-                  <button
-                    type="button"
-                    onClick={() => requestNoticeUndo(notice)}
-                    disabled={undoing || notice.undoRequested}
-                    className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1.5 font-semibold text-[#8ee0b5] transition hover:bg-white/10 focus-visible:outline-2 focus-visible:outline-white disabled:opacity-50"
-                  >
-                    <ActionIcon name="undo" />
-                    {undoing || notice.undoRequested ? "Undoing…" : "Undo"}
-                  </button>
-                </span>
-              )}
-              <button type="button" onClick={() => setNotice(null)} aria-label="Dismiss notification" title="Dismiss" className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-white/65 hover:bg-white/10 hover:text-white"><ActionIcon name="close" /></button>
-            </div>
-            {notice.snoozeIds && notice.snoozeIds.length > 0 && (
-              <div className="mt-2 flex gap-1.5 overflow-x-auto pb-0.5" aria-label="Adjust snooze time">
-                {quickSnoozePresets.map((preset) => (
-                  <button
-                    key={preset}
-                    type="button"
-                    onClick={() => void adjustSnooze(notice.snoozeIds as number[], preset, notice.operationId)}
-                    disabled={adjustingSnooze !== null}
-                    className="min-w-max rounded-lg bg-white/10 px-2.5 py-1.5 text-xs font-semibold text-white transition hover:bg-white/20 focus-visible:outline-2 focus-visible:outline-white disabled:opacity-50"
-                  >
-                    {quickSnoozeLabel(preset)}
-                  </button>
-                ))}
-                <button
-                  type="button"
-                  onClick={() => openCustomSnooze(notice.snoozeIds as number[], notice.operationId)}
-                  disabled={adjustingSnooze !== null}
-                  className="inline-flex min-w-max items-center gap-1.5 rounded-lg bg-white/10 px-2.5 py-1.5 text-xs font-semibold text-white transition hover:bg-white/20 focus-visible:outline-2 focus-visible:outline-white disabled:opacity-50"
-                >
-                  <ActionIcon name="calendar" className="h-3.5 w-3.5" />Custom
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
     </main>
   );
 }

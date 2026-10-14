@@ -1,4 +1,8 @@
-export interface SipRelayEnvironment {
+import {voiceFetch,voiceWaitUntil,type VoicePlatformEnvironment} from './platform';
+import {voiceAdmit,voiceAdmissionEnabled,type VoiceEffectScope} from './migration';
+import { OperatorVoiceEvents, type OperatorRealtimeEvent, type OperatorVoiceSnapshot } from '../../lib/operator-voice-events';
+import type { OperatorContext } from '../../lib/operator-types';
+export interface SipRelayEnvironment extends VoicePlatformEnvironment {
   SITE_BASE_URL: string;
   TODO_MAINTENANCE_SECRET?: string;
   OPENAI_API_KEY?: string;
@@ -16,6 +20,7 @@ type OpenAIWebhook = {
 };
 
 type SipBridgeStart = {
+  operator?: OperatorContext | null;
   talkSessionId: string;
   providerCallId: string;
   focusedTodoId: number | null;
@@ -24,26 +29,15 @@ type SipBridgeStart = {
 };
 
 type BridgeResult = Record<string, unknown> & {
+  operator?: unknown; operatorView?: unknown; sessionUpdate?: unknown;
   focusedTodoId?: number | null;
 };
 
-type RealtimeEvent = {
-  type?: string;
-  item_id?: string;
-  transcript?: string;
-  error?: { message?: string; code?: string };
-  response?: {
-    id?: string;
-    output?: Array<{
-      type?: string;
-      call_id?: string;
-      name?: string;
-      arguments?: string;
-    }>;
-  };
-};
+type RealtimeEvent = OperatorRealtimeEvent & { transcript?: string };
 
 type ControllerState = {
+  voiceReadback?: OperatorVoiceSnapshot | null;
+  operator?: OperatorContext | null; voiceSeen?: Record<string, string>; greeted?: boolean; itemSegments?: Array<[string, string]>; responseSegments?: Array<[string, string]>;
   callSid: string;
   providerCallId: string;
   token: string;
@@ -58,10 +52,11 @@ type ControllerState = {
 type WorkerResponse = Response & { webSocket?: WebSocket };
 
 const PHONE_IDLE_LIMIT_MS = 15 * 60 * 1_000;
-const HEARTBEAT_INTERVAL_MS = 60_000;
+const HEARTBEAT_INTERVAL_MS = 10_000;
 const OPENAI_CONNECT_TIMEOUT_MS = 15_000;
 const MAX_RECONNECT_ATTEMPTS = 4;
 const STATE_KEY = "sip-call";
+const VOICE_STATE_KEY = "sip-voice-readback-v1";
 
 function siteBaseUrl(environment: SipRelayEnvironment) {
   const url = new URL(environment.SITE_BASE_URL);
@@ -109,7 +104,7 @@ async function bridgeRequest<T>(
   payload: Record<string, unknown>,
 ) {
   const url = new URL(`/api/talk/phone/bridge/${path}`, siteBaseUrl(environment));
-  const response = await fetch(url, {
+  const response = await voiceFetch(environment, url, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
@@ -137,7 +132,7 @@ async function acceptOpenAICall(
   bridge: SipBridgeStart,
 ) {
   const startedAt = Date.now();
-  const response = await fetch(
+  const response = await voiceFetch(environment,
     `https://api.openai.com/v1/realtime/calls/${encodeURIComponent(bridge.providerCallId)}/accept`,
     {
       method: "POST",
@@ -176,7 +171,7 @@ async function rejectOpenAICall(
   statusCode = 603,
 ) {
   if (!providerCallId) return;
-  await fetch(
+  await voiceFetch(environment,
     `https://api.openai.com/v1/realtime/calls/${encodeURIComponent(providerCallId)}/reject`,
     {
       method: "POST",
@@ -244,15 +239,16 @@ export async function handleOpenAISipWebhook(
 
     const controllerId = environment.SIP_CONTROLLERS.idFromName(providerCallId);
     const controller = environment.SIP_CONTROLLERS.get(controllerId);
-    context.waitUntil(controller.fetch("https://sip-controller/start", {
+    voiceWaitUntil(environment, context, () => controller.fetch("https://sip-controller/start", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json",...(environment.VOICE_EFFECT_SCOPE?{'X-Dawar-Voice-Parent':environment.VOICE_EFFECT_SCOPE.operationId}:{}) },
       body: JSON.stringify({
         callSid,
         providerCallId,
         token,
         talkSessionId: bridge.talkSessionId,
         focusedTodoId: bridge.focusedTodoId,
+        operator: bridge.operator,
       }),
     }).then(async (response) => {
       if (!response.ok) {
@@ -265,7 +261,7 @@ export async function handleOpenAISipWebhook(
         talkSessionId: bridge.talkSessionId,
         error,
       });
-      await fetch(
+      await voiceFetch(environment,
         `https://api.openai.com/v1/realtime/calls/${encodeURIComponent(providerCallId)}/hangup`,
         {
           method: "POST",
@@ -299,14 +295,29 @@ export class SipCallController {
   private state: ControllerState | null = null;
   private connecting: Promise<void> | null = null;
   private toolQueue: Promise<void> = Promise.resolve();
+  private voice = new OperatorVoiceEvents(event => sendJson(this.socket, event));
+  private readonly environment:SipRelayEnvironment;
+  private migrationScope:VoiceEffectScope|null=null;
 
   constructor(
     private readonly durableState: DurableObjectState,
-    private readonly environment: SipRelayEnvironment,
-  ) {}
+    environment: SipRelayEnvironment,
+  ) {this.environment={...environment};}
 
   async fetch(request: Request) {
     const url = new URL(request.url);
+    if(url.pathname==='/migration/status'){
+      if(request.method!=='GET'||url.search||request.body)return new Response('Original controller read unavailable.',{status:400});
+      const before=await this.readState();
+      const identity=before?{callSid:before.callSid,providerCallId:before.providerCallId,ended:before.ended}:null;
+      const alarm=await this.durableState.storage.getAlarm();
+      const after=await this.readState();
+      const current=after?{callSid:after.callSid,providerCallId:after.providerCallId,ended:after.ended}:null;
+      if(JSON.stringify(identity)!==JSON.stringify(current))return new Response('Original controller changed.',{status:409});
+      return Response.json({callSid:current?.callSid??null,providerCallId:current?.providerCallId??null,ended:current?.ended??null,
+        connected:socketOpen(this.socket),connecting:this.connecting!==null,alarmPending:alarm!==null,observedAt:Date.now(),
+        fullEffectSettlementEstablished:false},{headers:{'Cache-Control':'private, no-store'}});
+    }
     if (url.pathname === "/start" && request.method === "POST") {
       const payload = await request.json() as Partial<ControllerState>;
       if (
@@ -318,7 +329,19 @@ export class SipCallController {
         return new Response("Invalid controller metadata.", { status: 400 });
       }
       const existing = await this.readState();
+      if (existing?.ended) return Response.json({ connected: false, ended: true });
+      if(voiceAdmissionEnabled(this.environment)&&!this.migrationScope){
+        // A new object instance cannot reinterpret an old/admitted call as a
+        // fresh start. Leave its original state and receipt for reconciliation.
+        if(existing||await this.durableState.storage.get('sip-migration-admission-v1'))return Response.json({error:'Original SIP admission requires reconciliation.'},{status:503});
+        this.migrationScope=await voiceAdmit(this.environment,this.durableState,'sip',request.headers.get('X-Dawar-Voice-Parent'));
+        if(!this.migrationScope)throw Error('SIP admission unavailable.');
+        await this.durableState.storage.put('sip-migration-admission-v1',{operationId:this.migrationScope.operationId});
+        this.environment.VOICE_EFFECT_SCOPE=this.migrationScope;
+      }
+      const start=async()=>{
       this.state = {
+        voiceReadback: existing?.voiceReadback, operator: existing?.operator ?? payload.operator ?? null, voiceSeen: existing?.voiceSeen ?? {}, greeted: existing?.greeted ?? false, itemSegments: existing?.itemSegments ?? [], responseSegments: existing?.responseSegments ?? [],
         callSid: String(payload.callSid),
         providerCallId: String(payload.providerCallId),
         token: String(payload.token),
@@ -329,10 +352,13 @@ export class SipCallController {
         ended: false,
         reconnectAttempts: 0,
       };
+      this.voice.context = this.state.operator ?? null; this.voice.seen = this.state.voiceSeen ?? {}; this.voice.itemSegments = new Map(this.state.itemSegments ?? []); this.voice.responseSegments = new Map(this.state.responseSegments ?? []);
       await this.persistState();
       await this.connect();
       await this.durableState.storage.setAlarm(Date.now() + HEARTBEAT_INTERVAL_MS);
       return Response.json({ connected: true });
+      };
+      return this.migrationScope?this.migrationScope.track(start):start();
     }
     if (url.pathname === "/status") {
       const state = await this.readState();
@@ -348,6 +374,12 @@ export class SipCallController {
   async alarm() {
     const state = await this.readState();
     if (!state || state.ended) return;
+    if(voiceAdmissionEnabled(this.environment)&&!this.migrationScope)throw Error('Original SIP admission requires reconciliation.');
+    const work=()=>this.runAlarm(state);
+    return this.migrationScope?this.migrationScope.track(work):work();
+  }
+
+  private async runAlarm(state:ControllerState){
     if (Date.now() - state.lastAddressedSpeechAt >= PHONE_IDLE_LIMIT_MS) {
       sendJson(this.socket, {
         type: "response.create",
@@ -369,7 +401,7 @@ export class SipCallController {
         });
       });
     }
-    await this.eventRequest("heartbeat").catch((error) => {
+    const update = await this.eventRequest('heartbeat').catch((error) => {
       console.error("[voice-relay-sip] Sites heartbeat failed", {
         providerCallId: state.providerCallId,
         callSid: state.callSid,
@@ -377,6 +409,7 @@ export class SipCallController {
         error,
       });
     });
+    if (update && this.state) { this.voice.heartbeat(update); this.state.operator = this.voice.context; this.state.voiceSeen = this.voice.seen; await this.persistState(); }
     if (this.state && !this.state.ended) {
       await this.durableState.storage.setAlarm(Date.now() + HEARTBEAT_INTERVAL_MS);
     }
@@ -385,11 +418,18 @@ export class SipCallController {
   private async readState() {
     if (this.state) return this.state;
     this.state = await this.durableState.storage.get<ControllerState>(STATE_KEY) ?? null;
+    if (this.state) { this.voice.context = this.state.operator ?? null; this.voice.seen = this.state.voiceSeen ?? {}; this.voice.itemSegments = new Map(this.state.itemSegments ?? []); this.voice.responseSegments = new Map(this.state.responseSegments ?? []); this.voice.restore(this.state.voiceReadback ?? await this.durableState.storage.get<OperatorVoiceSnapshot>(VOICE_STATE_KEY)); }
     return this.state;
   }
 
   private async persistState() {
-    if (this.state) await this.durableState.storage.put(STATE_KEY, this.state);
+    if (this.state) {
+      this.state.voiceReadback = this.voice.snapshot();
+      this.state.voiceSeen = this.voice.seen;
+      // Separate bounded visible attention metadata from the existing call value.
+      // Original native request/operation receipts remain in their existing store.
+      await this.durableState.storage.put({ [STATE_KEY]: { ...this.state, voiceReadback: undefined }, [VOICE_STATE_KEY]: this.state.voiceReadback });
+    }
   }
 
   private async eventRequest<T = BridgeResult>(
@@ -410,7 +450,7 @@ export class SipCallController {
   private async openRealtimeSocket(providerCallId: string) {
     const url = new URL("https://api.openai.com/v1/realtime");
     url.searchParams.set("call_id", providerCallId);
-    const response = await fetch(url, {
+    const response = await voiceFetch(this.environment, url, {
       headers: {
         ...openAIHeaders(this.environment),
         Upgrade: "websocket",
@@ -439,15 +479,17 @@ export class SipCallController {
         );
       });
       const socket = await Promise.race([socketPromise, timeout]);
-      this.socket = socket;
+      if (state.ended) { socket.close(1000, "call-ended"); return; }
+      this.socket = socket; this.voice.transportReset();
       state.reconnectAttempts = 0;
       await this.persistState();
       socket.addEventListener("message", (message) => {
-        this.durableState.waitUntil(this.handleRealtimeEvent(message.data));
+        if (this.socket === socket) voiceWaitUntil(this.environment, this.durableState, () => this.handleRealtimeEvent(message.data));
       });
       socket.addEventListener("close", (event) => {
-        if (this.socket === socket) this.socket = null;
-        this.durableState.waitUntil(this.handleSocketClose(event.code, event.reason));
+        if (this.socket !== socket) return;
+        this.socket = null;
+        voiceWaitUntil(this.environment, this.durableState, () => this.handleSocketClose(event.code, event.reason));
       });
       socket.addEventListener("error", () => {
         console.error("[voice-relay-sip] OpenAI sideband socket error", {
@@ -456,12 +498,10 @@ export class SipCallController {
           talkSessionId: state.talkSessionId,
         });
       });
-      sendJson(socket, {
-        type: "response.create",
-        response: {
-          instructions: "Start immediately with one terse, useful question about the focused task. No greeting or capability explanation.",
-        },
+      if (!state.operator || !state.greeted) this.voice.respond({
+        instructions: state.operator ? 'Greet exactly: Operator. Briefly identify the confirmed bot, then listen.' : "Start immediately with one terse, useful question about the focused task. No greeting or capability explanation.",
       });
+      state.greeted = true; await this.persistState();
       console.info("[voice-relay-sip] OpenAI SIP sideband connected", {
         providerCallId: state.providerCallId,
         callSid: state.callSid,
@@ -507,11 +547,12 @@ export class SipCallController {
     content: string,
   ) {
     if (!content.trim()) return;
-    this.durableState.waitUntil(
+    voiceWaitUntil(this.environment, this.durableState, () =>
       this.eventRequest("message", {
         role,
         realtimeItemId,
         content,
+        metadata: { operatorSegmentId: this.voice.segment(realtimeItemId) },
       }).catch(async (error) => {
         const state = await this.readState();
         console.error("[voice-relay-sip] transcript persistence failed", {
@@ -532,10 +573,10 @@ export class SipCallController {
     arguments?: string;
   }) {
     const state = await this.readState();
-    if (!state || state.ended) return;
+    if (!state || state.ended) return false;
     const callId = String(tool.call_id ?? "").trim();
     const name = String(tool.name ?? "").trim();
-    if (!callId || !name) return;
+    if (!callId || !name) return false;
     let args: Record<string, unknown> = {};
     try {
       const parsed = JSON.parse(tool.arguments || "{}") as unknown;
@@ -552,6 +593,7 @@ export class SipCallController {
         name,
         arguments: args,
       });
+      this.voice.apply(result); state.operator = this.voice.context; await this.persistState();
       if (typeof result.focusedTodoId === "number" || result.focusedTodoId === null) {
         state.focusedTodoId = result.focusedTodoId;
         await this.persistState();
@@ -577,7 +619,8 @@ export class SipCallController {
         error,
       });
     }
-    sendJson(this.socket, {
+    if (state.ended) return false;
+    return sendJson(this.socket, {
       type: "conversation.item.create",
       item: {
         type: "function_call_output",
@@ -592,6 +635,8 @@ export class SipCallController {
     if (!event?.type) return;
     const state = await this.readState();
     if (!state || state.ended) return;
+    if (!this.voice.observe(event)) return; state.itemSegments = [...this.voice.itemSegments]; state.responseSegments = [...this.voice.responseSegments];
+    if (event.type === 'conversation.item.added' || event.type === 'response.output_item.added' || event.type === 'input_audio_buffer.committed' || event.type === 'response.created' || event.type === 'response.done' || event.type === 'error' || event.type?.startsWith('output_audio_buffer.')) await this.persistState();
     if (event.type.includes("input_audio_transcription.completed")) {
       const transcript = String(event.transcript ?? "").trim();
       if (transcript) {
@@ -615,9 +660,10 @@ export class SipCallController {
     if (event.type === "response.done") {
       const tools = event.response?.output?.filter((item) => item.type === "function_call") ?? [];
       if (tools.length) {
-        this.toolQueue = this.toolQueue.then(async () => {
-          for (const tool of tools) await this.runTool(tool);
-          sendJson(this.socket, { type: "response.create" });
+        voiceWaitUntil(this.environment,this.durableState,()=>{this.toolQueue = this.toolQueue.then(async () => {
+          for (const tool of tools) if (!await this.runTool(tool)) return;
+          if (!state.ended) this.voice.respond();
+          await this.persistState();
         }).catch((error) => {
           console.error("[voice-relay-sip] tool queue failed", {
             providerCallId: state.providerCallId,
@@ -625,7 +671,7 @@ export class SipCallController {
             talkSessionId: state.talkSessionId,
             error,
           });
-        });
+        });return this.toolQueue;});
       }
       return;
     }
@@ -647,7 +693,7 @@ export class SipCallController {
   ) {
     const state = await this.readState();
     if (!state || state.ended) return;
-    state.ended = true;
+    state.ended = true; this.voice.close();
     await this.persistState();
     if (this.socket && this.socket.readyState < WebSocket.CLOSING) {
       try {
@@ -668,7 +714,7 @@ export class SipCallController {
       });
     });
     if (hangup) {
-      await fetch(
+      await voiceFetch(this.environment,
         `https://api.openai.com/v1/realtime/calls/${encodeURIComponent(state.providerCallId)}/hangup`,
         {
           method: "POST",
@@ -692,5 +738,6 @@ export class SipCallController {
       reason,
       durationMs: Date.now() - state.startedAt,
     });
+    this.migrationScope?.end();
   }
 }

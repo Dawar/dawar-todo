@@ -1,0 +1,18 @@
+.bots-work-controls { margin: 22px 0; min-width: 0; }
+.bots-work-controls > h3 { margin: 0 0 7px; font-size: 15px; font-weight: 600; color: var(--foreground); }
+.bots-work-hint, .bots-work-empty { margin: 0 0 12px; color: var(--muted-foreground); font-size: 13px; line-height: 1.55; overflow-wrap: anywhere; }
+.bots-work-empty { padding: 12px; border: 1px dashed var(--border); border-radius: 12px; }
+.bots-work-runs { display: grid; gap: 10px; }
+.bots-work-run { min-width: 0; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--card); }
+.bots-work-run header { display: flex; align-items: flex-start; gap: 7px; color: var(--foreground); }
+.bots-work-run header svg { flex-shrink: 0; margin-top: 3px; }
+.bots-work-run h4 { margin: 0; font-size: 13px; line-height: 1.5; font-weight: 600; overflow-wrap: anywhere; }
+.bots-work-state { margin: 4px 0 9px 22px; font-size: 13px; color: var(--muted-foreground); }
+.bots-work-run .bots-work-hint { margin-bottom: 8px; }
+.bots-work-run-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 5px 9px; }
+.bots-work-controls .bots-work-stop, .bots-work-controls .bots-work-open { white-space: normal; height: auto; min-height: 44px; text-align: start; }
+.bots-work-error { margin: 10px 0 0; padding: 8px; background: var(--muted); border-radius: 8px; color: var(--destructive); font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+.bots-work-error button { display: block; min-height: 44px; color: inherit; text-decoration: underline; }
+.bots-work-all { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
+.bots-work-all .bots-run-controls { margin: 0; padding: 0; border: 0; }
+.bots-work-all .bots-run-controls button { min-height: 44px; }

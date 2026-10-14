@@ -1,0 +1,175 @@
+.bots-desktop-card {
+  flex: none;
+  margin: 0;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--card);
+}
+.bots-desktop-card-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  margin-bottom: 8px;
+  overflow: hidden;
+}
+.bots-desktop-card-title strong {
+  overflow-wrap: anywhere;
+}
+.bots-desktop-preview {
+  display: block;
+  position: relative;
+  width: 100%;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: 7px;
+  background: #202633;
+  color: #fff;
+  cursor: pointer;
+  aspect-ratio: 16/10;
+}
+.bots-desktop-preview:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.bots-desktop-preview img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.bots-desktop-placeholder {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 13px;
+}
+.bots-desktop-preview-label {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  padding: 7px;
+  background: #0009;
+  font-size: 13px;
+}
+.bots-desktop-dialog {
+  --background: #111722; --foreground: #f3f5fa; --card: #1c2533; --muted: #202634; --muted-foreground: #c2ccde;
+  --input: #71859f; --border: #344052; --accent: #263247; --accent-foreground: #f3f5fa; --ring: #8bbcff;
+  --primary: #a7c9ff; --primary-foreground: #111722;
+  --secondary: #263247; --secondary-foreground: #f3f5fa; --card-foreground: #f3f5fa;
+  --destructive: #ffb4ae; --destructive-foreground: #111722;
+  --warning: #3e3323; --warning-foreground: #e5b56c;
+  --desktop-success: #7ce0ab; --desktop-selected: #324e77; --desktop-selected-border: #95b5e5;
+  --desktop-error-surface: #3e252c;
+  position: fixed; inset: 0; z-index: 10000;
+  background: var(--background); color: var(--foreground); display: flex; flex-direction: column;
+  width: 100%; height: 100dvh; overflow: hidden; box-sizing: border-box;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+.bots-desktop-dialog header {
+  flex: none; display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 16px; gap: 12px; background: var(--card); border-bottom: 1px solid var(--border);
+}
+.bots-desktop-heading { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.bots-desktop-heading > div { display: grid; gap: 3px; min-width: 0; }
+.bots-desktop-heading strong { font-size: 14px; overflow-wrap: anywhere; }
+.bots-desktop-heading span { font-size: 13px; color: var(--muted-foreground); }
+.bots-desktop-heading span::before { content: ''; display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; background: var(--warning-foreground); }
+.bots-desktop-heading span[data-connected="true"]::before { background: var(--desktop-success); }
+.bots-desktop-dialog button { min-height: 44px; height: auto; flex: none; }
+.bots-desktop-dialog button[aria-pressed="true"] { background: var(--desktop-selected); border-color: var(--desktop-selected-border); }
+.bots-desktop-dialog button:focus-visible, .bots-desktop-dialog summary:focus-visible,
+.bots-desktop-dialog input:focus-visible, .bots-desktop-dialog textarea:focus-visible {
+  outline: 2px solid var(--ring); outline-offset: -2px;
+}
+.bots-desktop-controls { flex: none; max-height: 40%; overflow: auto; background: var(--card); }
+.bots-desktop-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; padding: 8px 16px 4px; }
+.bots-desktop-control-group { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.bots-desktop-scale button { min-width: 44px; padding: 7px; }
+.bots-desktop-session-bar { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; padding: 4px 16px 8px; }
+.bots-desktop-lease { border-color: transparent; background: transparent; color: var(--muted-foreground); }
+.bots-desktop-more { margin-left: auto; max-width: 440px; min-width: 44px; }
+.bots-desktop-more summary { list-style: none; cursor: pointer; min-height: 44px; display: flex; justify-content: flex-end; align-items: center; padding: 0 10px; border-radius: 8px; }
+.bots-desktop-more summary::-webkit-details-marker { display: none; }
+.bots-desktop-more[open] { flex: 1; }
+.bots-desktop-more > div { padding: 8px; border: 1px solid var(--input); border-radius: 8px; }
+.bots-desktop-more p { font-size: 13px; color: var(--muted-foreground); line-height: 1.5; margin: 8px 0 0; }
+.bots-desktop-more button { margin: 0 6px 6px 0; }
+.bots-desktop-screen { position: relative; flex: 1; min-height: 0; overflow: hidden; touch-action: none; user-select: none; }
+.bots-desktop-screen > div { touch-action: none; scrollbar-width: thin; scrollbar-color: var(--input) var(--background); }
+.bots-desktop-error { font-size: 13px; padding: 6px 10px; color: var(--destructive); margin: 0; }
+.bots-desktop-dialog .bots-desktop-error { flex: none; color: var(--destructive); background: var(--desktop-error-surface); max-height: 15%; overflow: auto; }
+.bots-desktop-keyboard {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--muted);
+  max-height: 35%;
+  overflow-y: auto;
+}
+.bots-desktop-key-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow-x: auto;
+  flex: none;
+  padding: 3px 1px;
+}
+.bots-desktop-key-row button, .bots-desktop-key-row details { flex: none; white-space: nowrap; }
+.bots-desktop-key-row button { min-width: 44px; min-height: 44px; }
+.bots-desktop-key-row button[aria-pressed="true"] { background: var(--desktop-selected); border-color: var(--desktop-selected-border); }
+.bots-desktop-key-row summary { cursor: pointer; padding: 10px; }
+.bots-desktop-key-more { display: flex; flex-wrap: wrap; gap: 6px; flex: none; }
+.bots-desktop-type-target { position: relative; min-height: 44px; flex: none; }
+.bots-desktop-type-target span {
+  position: absolute; inset: 0; display: flex; align-items: center; padding: 10px;
+  pointer-events: none; color: var(--muted-foreground); font-size: 13px;
+}
+.bots-desktop-keyboard textarea {
+  display: block; box-sizing: border-box; width: 100%; resize: none; font-size: 16px;
+  border: 1px solid var(--input); border-radius: var(--radius); padding: 10px;
+  background: var(--background); color: var(--foreground);
+}
+.bots-desktop-type-target textarea { color: transparent; caret-color: transparent; height: 44px; overflow: hidden; }
+.bots-desktop-paste { display: flex; align-items: stretch; gap: 8px; flex: none; }
+.bots-desktop-paste textarea { min-width: 0; flex: 1; }
+.bots-desktop-paste button { flex: none; }
+.bots-desktop-key-message { font-size: 13px; margin: 0; color: var(--muted-foreground); }
+@media (max-width: 700px) {
+  .bots-desktop-dialog header { padding: 8px 10px; }
+  .bots-desktop-toolbar { padding: 6px 10px 2px; }
+  .bots-desktop-session-bar { padding: 2px 10px 6px; }
+  .bots-desktop-toolbar > .bots-desktop-control-group:first-child { order: 1; }
+  .bots-desktop-toolbar > .bots-desktop-control-group:first-child button:first-child span { display: none; }
+  .bots-desktop-toolbar > .bots-desktop-control-group:first-child button:first-child { width: 44px; padding: 7px; }
+  .bots-desktop-lease { padding: 7px !important; }
+  .bots-desktop-scale { width: 100%; order: 3; }
+  .bots-desktop-more { order: 2; }
+  .bots-desktop-more[open] { order: 4; flex-basis: 100%; max-width: 100%; }
+  .bots-desktop-scale button:nth-child(2) { min-width: 84px; }
+  .bots-desktop-scale button:last-child { margin-left: auto; }
+  .bots-desktop-heading strong { max-width: calc(100vw - 110px); }
+  .bots-desktop-keyboard { padding: 6px 10px; gap: 4px; }
+}
+
+.bots-browser-retention { padding: .5rem 0; font-size: .8rem; }
+.bots-browser-retention label { display: grid; gap: .35rem; font-weight: 600; }
+
+.bots-browser-retention p { margin: .4rem 0 0; line-height: 1.4; opacity: .8; }
+
+.bots-desktop-preview:focus-visible { outline: 2px solid var(--ring); outline-offset: 3px; }
+
+.bots-desktop-card-title > svg, .bots-desktop-heading > svg { flex: none; }
+
+@media (max-width: 480px) {
+  .bots-desktop-paste { flex-direction: column; }
+  .bots-desktop-paste button { align-self: flex-end; }
+}

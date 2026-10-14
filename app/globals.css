@@ -1,20 +1,15 @@
 @import "tailwindcss";
+@import "./design-tokens.css";
 
 :root {
-  --background: #f6f7f5;
-  --foreground: #1d211f;
   --mobile-action-bottom: max(3rem, calc(env(safe-area-inset-bottom, 0px) + 1.5rem));
-  --mobile-notice-above-actions: max(7.75rem, calc(env(safe-area-inset-bottom, 0px) + 6.25rem));
+  --mobile-notice-above-actions: calc(var(--mobile-action-bottom) + 8.5rem);
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-}
-
+@layer base {
 * {
   box-sizing: border-box;
+  border-color: var(--border);
 }
 
 html {
@@ -38,6 +33,8 @@ textarea {
   font-family: inherit;
 }
 
+}
+
 /* iOS zooms the entire viewport when a focused form control is below 16px. */
 @media (max-width: 767px) {
   input,
@@ -59,7 +56,6 @@ textarea {
 @media (display-mode: standalone) and (max-width: 639px) {
   :root {
     --mobile-action-bottom: max(4rem, calc(env(safe-area-inset-bottom, 0px) + 2rem));
-    --mobile-notice-above-actions: max(8.75rem, calc(env(safe-area-inset-bottom, 0px) + 6.75rem));
   }
 }
 
@@ -73,11 +69,17 @@ textarea {
   }
 
   .task-notice-safe-bottom[data-bulk-actions-visible="true"] {
-    bottom: 5.25rem;
+    bottom: 8rem;
   }
 }
 
 ::selection {
-  background: #cfe6d8;
-  color: #123d2b;
+  background: var(--accent);
+  color: var(--accent-foreground);
 }
+
+/* Transient notifications contrast with the light page, including actions. */
+.task-notice-surface { background:var(--toast); color:var(--toast-foreground); border-color:var(--toast-muted); }
+.task-notice-surface button { background:transparent; color:var(--toast-foreground); border-color:var(--toast-muted); }
+.task-notice-surface button:hover { background:#ffffff20; color:var(--toast-foreground); }
+.task-notice-surface button:focus-visible { --ring:var(--toast-foreground); --background:var(--toast); }

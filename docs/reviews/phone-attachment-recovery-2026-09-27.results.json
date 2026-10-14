@@ -1,0 +1,283 @@
+{
+  "base": "a5f68a92dc45a4de1c1c8083e7e053d8a4759694",
+  "dateUTC": "2026-09-27",
+  "productionReadOnly": {
+    "version": 136,
+    "recoveryProbe": {
+      "target": "nonexistent synthetic target",
+      "httpStatus": 200,
+      "imageProcessingAvailable": false,
+      "capabilityType": "boolean",
+      "targetExists": false,
+      "fileStates": [
+        "missing"
+      ]
+    },
+    "multipartFailures": [
+      {
+        "at": "2026-09-27T01:37:39.888Z",
+        "bytes": 482869,
+        "status": 503,
+        "code": "image-processing-unavailable",
+        "phase": "image-binding",
+        "imageBindingAvailable": false
+      },
+      {
+        "at": "2026-09-27T01:37:53.575Z",
+        "bytes": 375769,
+        "status": 503,
+        "code": "image-processing-unavailable",
+        "phase": "image-binding",
+        "imageBindingAvailable": false
+      },
+      {
+        "at": "2026-09-27T01:37:54.034Z",
+        "bytes": 438790,
+        "status": 503,
+        "code": "image-processing-unavailable",
+        "phase": "image-binding",
+        "imageBindingAvailable": false
+      },
+      {
+        "at": "2026-09-27T01:37:54.475Z",
+        "bytes": 308961,
+        "status": 503,
+        "code": "image-processing-unavailable",
+        "phase": "image-binding",
+        "imageBindingAvailable": false
+      },
+      {
+        "at": "2026-09-27T01:37:54.831Z",
+        "bytes": 292932,
+        "status": 503,
+        "code": "image-processing-unavailable",
+        "phase": "image-binding",
+        "imageBindingAvailable": false
+      }
+    ],
+    "publicAssetsMatchCleanA5Build": [
+      {
+        "asset": "error-DsC041LY.js",
+        "sha256": "7bea848099f4095df3ccad2aad367f5c961da0f6f57147a7d96696d3039f74f9",
+        "bytes": 40757
+      },
+      {
+        "asset": "app-shell-BDyQDU58.js",
+        "sha256": "0f79160358bceb2577909efe0ab6bad15bcb76a28b28c981fda77c43a9391a41",
+        "bytes": 29578
+      }
+    ]
+  },
+  "browserBefore": {
+    "source": "a5f68a92dc45a4de1c1c8083e7e053d8a4759694",
+    "environment": "fresh Linux Chrome, native IndexedDB/canvas; real routes + synthetic SQLite/object storage; no iPhone or deployed mutation",
+    "migration": {
+      "rows": 5,
+      "bytes": [
+        482869,
+        375769,
+        438790,
+        308961,
+        292932
+      ],
+      "database": 11
+    },
+    "lostFinalize": {
+      "remaining": 1,
+      "rows": [
+        {
+          "state": "retry",
+          "phase": "uploading",
+          "lease": false,
+          "transport": "browser",
+          "bytes": 482869
+        }
+      ]
+    },
+    "retry": {
+      "remaining": 0,
+      "rows": []
+    },
+    "calls": {
+      "recovery": 6,
+      "multipart": 0,
+      "prepare": 5,
+      "storage": 15,
+      "finalize": 5
+    },
+    "ready": 5,
+    "staleCapability": {
+      "retained": true,
+      "state": "retry",
+      "lease": false,
+      "bytes": 482869,
+      "transport": "multipart"
+    },
+    "updater": {
+      "returnedPhase": "uploading",
+      "persistedState": "retry",
+      "bytes": 482869
+    },
+    "panel": {
+      "before": "5 attachments pending \u00b7 5 in progress \u00b7 0 need attention",
+      "afterClosed": "5 attachments pending \u00b7 5 in progress \u00b7 0 need attention",
+      "retryEnabled": false
+    }
+  },
+  "browserAfter": {
+    "source": "working tree",
+    "environment": "fresh Linux Chrome, native IndexedDB/canvas; real routes + synthetic SQLite/object storage; no iPhone or deployed mutation",
+    "migration": {
+      "rows": 5,
+      "bytes": [
+        482869,
+        375769,
+        438790,
+        308961,
+        292932
+      ],
+      "database": 11
+    },
+    "lostFinalize": {
+      "remaining": 1,
+      "rows": [
+        {
+          "state": "retry",
+          "phase": null,
+          "lease": false,
+          "transport": "browser",
+          "bytes": 482869
+        }
+      ]
+    },
+    "retry": {
+      "remaining": 0,
+      "rows": []
+    },
+    "calls": {
+      "recovery": 6,
+      "multipart": 0,
+      "prepare": 5,
+      "storage": 15,
+      "finalize": 5
+    },
+    "ready": 5,
+    "staleCapability": {
+      "retained": false
+    },
+    "updater": {
+      "returnedPhase": "uploading",
+      "persistedState": "retry",
+      "bytes": 482869
+    },
+    "panel": {
+      "before": "2 attachments pending \u00b7 1 in progress \u00b7 0 need attention",
+      "afterClosed": "2 attachments pending \u00b7 0 in progress \u00b7 1 need attention",
+      "retryEnabled": true,
+      "width": 390,
+      "viewport": 390
+    }
+  },
+  "scheduler": [
+    {
+      "name": "healthy-idle",
+      "requests": 11,
+      "maxConcurrentRequests": 1,
+      "twoSecondTimers": 0,
+      "timersAfterStop": 0,
+      "hiddenRequests": 0,
+      "offlineRequests": 0,
+      "uploadScans": 5
+    },
+    {
+      "name": "healthy-revisions-every-5s",
+      "requests": 65,
+      "maxConcurrentRequests": 1,
+      "twoSecondTimers": 0,
+      "timersAfterStop": 0,
+      "hiddenRequests": 0,
+      "offlineRequests": 0,
+      "uploadScans": 69
+    },
+    {
+      "name": "no-realtime-idle",
+      "requests": 37,
+      "maxConcurrentRequests": 1,
+      "twoSecondTimers": 0,
+      "timersAfterStop": 0,
+      "hiddenRequests": 0,
+      "offlineRequests": 0,
+      "uploadScans": 5
+    },
+    {
+      "name": "no-realtime-active-deltas",
+      "requests": 94,
+      "maxConcurrentRequests": 1,
+      "twoSecondTimers": 0,
+      "timersAfterStop": 0,
+      "hiddenRequests": 0,
+      "offlineRequests": 0,
+      "uploadScans": 98
+    },
+    {
+      "name": "realtime-lost-at-60s",
+      "requests": 41,
+      "maxConcurrentRequests": 1,
+      "twoSecondTimers": 0,
+      "timersAfterStop": 0,
+      "hiddenRequests": 0,
+      "offlineRequests": 0,
+      "uploadScans": 5
+    },
+    {
+      "name": "lifecycle-storm",
+      "requests": 12,
+      "maxConcurrentRequests": 1,
+      "twoSecondTimers": 0,
+      "timersAfterStop": 0,
+      "hiddenRequests": 0,
+      "offlineRequests": 0,
+      "uploadScans": 8
+    },
+    {
+      "name": "hidden-offline-resume",
+      "requests": 6,
+      "maxConcurrentRequests": 1,
+      "twoSecondTimers": 0,
+      "timersAfterStop": 0,
+      "hiddenRequests": 0,
+      "offlineRequests": 0,
+      "uploadScans": 8
+    },
+    {
+      "name": "blocked-upload",
+      "requests": 11,
+      "maxConcurrentRequests": 1,
+      "twoSecondTimers": 0,
+      "timersAfterStop": 0,
+      "hiddenRequests": 0,
+      "offlineRequests": 0,
+      "uploadScans": 5
+    },
+    {
+      "name": "blocked-upload-hidden",
+      "requests": 6,
+      "maxConcurrentRequests": 1,
+      "twoSecondTimers": 0,
+      "timersAfterStop": 0,
+      "hiddenRequests": 0,
+      "offlineRequests": 0,
+      "uploadScans": 8
+    },
+    {
+      "name": "stop-restart",
+      "requests": 10,
+      "maxConcurrentRequests": 1,
+      "twoSecondTimers": 0,
+      "timersAfterStop": 0,
+      "hiddenRequests": 0,
+      "offlineRequests": 0,
+      "uploadScans": 9
+    }
+  ]
+}

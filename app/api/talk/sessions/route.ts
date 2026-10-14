@@ -1,8 +1,10 @@
+import { botsOwner } from '../../../../lib/bots-auth';
+import { env } from 'cloudflare:workers';
+import { openOperator, operatorInstructions, operatorToolDefinitions, endOperator } from '../../../../lib/operator-server';
 import {
   chooseTalkFocus,
   endTalkSession,
   listTalkHistory,
-  readTalkThread,
   readTalkWorkspace,
   startTalkSession,
 } from "../../../../db/talk";
@@ -14,6 +16,7 @@ import {
   mintRealtimeClientSecret,
   talkInstructions,
   talkRuntimeConfig,
+  talkToolDefinitions,
   withRecentTalkHistory,
 } from "../../../../lib/talk-runtime";
 
@@ -23,40 +26,40 @@ export async function POST(request: Request) {
   let sessionId: string | null = null;
   try {
     userKey = talkUserKey(request);
-    const payload = await request.json().catch(() => ({})) as { threadId?: unknown };
-    const requestedThreadId = String(payload.threadId ?? "").trim();
+    const payload = await request.json().catch(() => ({})) as { threadId?: unknown; operator?: unknown; botId?: unknown };
+    const useOperator = payload.operator === true;
+    if (useOperator) botsOwner(request, env);
+    if (payload.threadId !== undefined) return Response.json({ error: "Legacy Chat threads are retired. Start Operator from Bots." }, { status: 410, headers: noStoreHeaders });
+    if (!useOperator) return Response.json({ error: "Start Operator from Bots." }, { status: 410, headers: noStoreHeaders });
     const [todos, workspace, settings] = await Promise.all([
       listTodos(),
       readTalkWorkspace(userKey),
       getTodoSettings(),
     ]);
-    const thread = requestedThreadId ? await readTalkThread(userKey, requestedThreadId) : null;
-    const focusedTodoId = thread
-      ? thread.focusedTodoId
-      : chooseTalkFocus(todos, workspace.lastFocusedTodoId);
+    const focusedTodoId = chooseTalkFocus(todos, workspace.lastFocusedTodoId);
     const { model, voice } = talkRuntimeConfig(settings.realtimeVoice);
     const session = await startTalkSession({
       userKey,
       model,
       voice,
       focusedTodoId,
-      threadId: thread?.id ?? null,
-      transport: "browser",
+      transport: "browser-operator",
     });
     sessionId = session.id;
     const [context, history, safetyIdentifier] = await Promise.all([
-      buildSharedAssistantContext(userKey, focusedTodoId, thread?.summary),
-      listTalkHistory(userKey, { limit: 100, threadId: session.threadId }),
+      buildSharedAssistantContext(userKey, focusedTodoId, workspace.summary),
+      listTalkHistory(userKey, { limit: 100, sessionId: session.id }),
       hashedSafetyIdentifier(userKey),
     ]);
+    const operator = useOperator ? await openOperator(userKey, sessionId, typeof payload.botId === "string" ? payload.botId : null) : null;
     const secret = await mintRealtimeClientSecret({
       safetyIdentifier,
-      instructions: withRecentTalkHistory(talkInstructions(context), history.messages),
+      instructions: operator ? operatorInstructions(operator) : withRecentTalkHistory(talkInstructions(context), history.messages),
+      tools: operator ? operator.bot ? operatorToolDefinitions : [...operatorToolDefinitions, ...talkToolDefinitions] : undefined,
       voice,
     });
     console.info("[todo-talk-api] session started", {
       sessionId,
-      threadId: session.threadId,
       focusedTodoId,
       model: secret.model,
       voice: secret.voice,
@@ -68,7 +71,7 @@ export async function POST(request: Request) {
     });
     return Response.json({
       sessionId,
-      threadId: session.threadId,
+      operator,
       clientSecret: secret.value,
       expiresAt: secret.expiresAt,
       model: secret.model,
@@ -81,6 +84,7 @@ export async function POST(request: Request) {
     }, { headers: noStoreHeaders });
   } catch (error) {
     if (sessionId && userKey) {
+      await endOperator(userKey, sessionId).catch(() => undefined);
       await endTalkSession(userKey, sessionId, "startup-failed").catch(() => undefined);
     }
     console.error("[todo-talk-api] session start failed", {

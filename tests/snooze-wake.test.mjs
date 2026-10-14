@@ -83,8 +83,7 @@ test("normal sync clears expired snoozes and the app schedules their exact retur
   assert.match(databaseSource, /snoozed_until <= \?/);
   assert.match(maintenance, /await wakeExpiredSnoozedTodos\(now\)/);
   assert.match(page, /next live wake scheduled/);
-  assert.match(page, /refreshLiveData\("snooze-wake"\)/);
-  assert.match(page, /reconcileTaskClock/);
+  assert.match(page, /setNow\(firedAt\);\s*taskSync\.wake\(\)/);
   assert.match(page, /isSnoozed\(editingTodo, now\)[\s\S]*SnoozeStatusBadge/);
   assert.match(openApi.components.schemas.Todo.properties.snoozedUntil.description, /clear an expired timestamp/);
   assert.match(skill, /automatically clear the snooze/);
