@@ -58,6 +58,7 @@ import { botsClient as client } from "./client";
 import type { NativeEvent } from "./thread-state";
 import { BotConversation } from "./timeline";
 import { BotSidebarList } from "./sidebar-list";
+import { FollowupComposerProvider } from "./codex-followup";
 import { SidebarFilters } from "./sidebar-filters";
 import { useSharedReadPositions } from './read-position-sync';
 import { TaskRequestWorkspace } from "./task-request-ui";
@@ -570,6 +571,7 @@ export function BotsWorkspace() {
             </div>
           ) : (
             <>
+              <FollowupComposerProvider key={JSON.stringify([owner,bot.id,bot.threadId])} owner={owner} botId={bot.id} threadId={bot.threadId} composer={composer ?? null} disabled={!online || Boolean(checkoutLocked) || Boolean(pending.length) || bot.archived} focus={() => screenRef.current?.querySelector<HTMLTextAreaElement>(".bots-composer textarea")?.focus({preventScroll:true})}>
               <BotConversation key={scope} owner={owner} bot={bot} online={online} onOpenActivity={openActivity} onOpenCall={openCalls} draft={draft} submission={composer?.operation} burstsEnabled={burstSupported && !bot.archived} onReply={snapshot?.capabilities?.messageReplies === 1 && composer?.ready && !checkoutLocked && !sending ? reply => composer.setReply(reply) : undefined} burstSubmitting={composer?.operation?.method === "bursts.submit"}>
 
 
@@ -588,6 +590,7 @@ export function BotsWorkspace() {
                 ))}
                 <div className="bots-conversation-presence"><Avatar bot={bot} small /><Button variant="ghost" size="sm" type="button" onClick={() => { setDetailsSection("next"); setProfile(true); }} aria-label="Open work details" title={online ? workLabel(work, bot) ?? humanStatus(bot, online) : "Offline"}>{online ? workLabel(work, bot) ?? humanStatus(bot, online) : "Offline"}</Button><ActiveTurnElapsed owner={owner} bot={bot} work={work} online={online}/></div>
               </BotConversation>
+              </FollowupComposerProvider>
               {!bot.archived && (
                 <>
                   <div className="bots-composer-support">

@@ -14,7 +14,7 @@ export function FileCitation({botId,reference,attachments}:{botId:string;referen
       <FileText size={22} strokeWidth={1.5} aria-hidden="true"/><span><strong>{title}</strong><small>{url.hostname}</small></span><ArrowUpRight size={16} aria-hidden="true"/>
     </a>;
   }
-  const matches=attachments.filter(file=>file.botId===botId&&file.ready&&(purpose==='input'||file.artifact||file.direction==='output')&&(file.path===path||file.visualizationReferences?.includes(path)));
-  if(matches.length===1)return <ReturnedArtifact botId={botId} id={matches[0].id} attachment={matches[0]}/>;
+  const matches=attachments.filter(file=>file.botId===botId&&file.ready&&(purpose==='input'||purpose==='source'||file.artifact||file.direction==='output')&&(file.path===path||file.visualizationReferences?.includes(path)));
+  if(matches.length===1)return <ReturnedArtifact botId={botId} id={matches[0].id} attachment={matches[0]} preview={purpose!=='source'}/>;
   return <span className="bots-file-citation is-unavailable"><FileQuestion size={22} strokeWidth={1.5} aria-hidden="true"/><span><strong>{path.split('/').at(-1)||'File'}</strong><small>File unavailable</small></span></span>;
 }

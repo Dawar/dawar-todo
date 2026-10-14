@@ -3,7 +3,7 @@ import type { BotAttachment, BotQueuedSubmission, BotRunReceipt } from "../../li
 import { queueEditable } from "./queue-state";
 import { readQueueAction } from "./queue-action-store";
 import {
-  BotDraftStore, changeDraft, emptyDraft, emptyRecord, fileLimit, fileReferences, PORTABLE_COMPOSER,
+  BotDraftStore, changeDraft, draftReviewFingerprint, emptyDraft, emptyRecord, fileLimit, fileReferences, PORTABLE_COMPOSER,
   type Draft, type DraftChange, type DraftRecord, type StagedFile, type Submission, type RunDeliveryResult,
 } from "./draft-store";
 
@@ -14,7 +14,7 @@ export type ComposerTransport = {
   download: (botId: string, id: string, owner?: string) => Promise<{ blob: Blob }>;
   copyAttachment?: (source: BotAttachment, botId: string, id: string, owner: string) => Promise<BotAttachment>;
 };
-type QueuedChange = { change: DraftChange; bytes?: Map<string, Blob> };
+type QueuedChange = { change: DraftChange; bytes?: Map<string, Blob>; current?: () => boolean };
 const message = (error: unknown) => error instanceof Error ? error.message : "Draft recovery failed.";
 
 // A service-owned controller survives React Activity teardown, navigation and
@@ -34,7 +34,7 @@ export class BotComposer {
   private sending = new Set<string>();
   private listeners = new Set<() => void>();
   private recovering = 0;
-  private preparing: "send" | "checkout" | null = null;
+  private preparing: "send" | "checkout" | "prefill" | null = null;
   get committing() { return this.preparing !== null; }
   get checkingOut() { return this.preparing === "checkout"; }
   constructor(readonly owner: string, private targetBotId: string, private store: BotDraftStore,
@@ -106,14 +106,14 @@ export class BotComposer {
       this.notify();
     } catch (error) { this.storageError = message(error); this.notify(); }
   }
-  private enqueue(change: DraftChange, bytes?: Map<string, Blob>) {
+  private enqueue(change: DraftChange, bytes?: Map<string, Blob>, current?: () => boolean) {
     if (!this.ready || !this.canUseOwner) return;
     this.record = changeDraft(this.record, change);
     // Coalesce only text that has not started a transaction, retaining its base.
     const last = this.changes.at(-1);
     if (change.kind === "text" && last?.change.kind === "text" && last.change.slot === change.slot && this.changes.length > 1) {
       last.change = { ...change, base: last.change.base };
-    } else this.changes.push({ change, bytes });
+    } else this.changes.push({ change, bytes, current });
     this.notify();
     void this.flush().catch(() => {});
   }
@@ -124,13 +124,13 @@ export class BotComposer {
       while (this.changes.length) {
         const item = this.changes[0];
         try {
-          this.persisted = await this.store.change(this.owner, this.storageKey, item.change, item.bytes);
+          this.persisted = await this.store.change(this.owner, this.storageKey, item.change, item.bytes, item.current);
           this.changes.shift();
           this.storageError = "";
           this.renderPending();
           this.committed();
         } catch (error) {
-          if (item.change.kind === "submit" && (error as Error).name === "DraftChangedError") {
+          if ((item.change.kind === "submit" || item.change.kind === "prefill") && (error as Error).name === "DraftChangedError") {
             this.changes.shift();
             this.persisted = await this.store.get(this.owner, this.storageKey) ?? this.persisted;
             this.renderPending();
@@ -145,6 +145,21 @@ export class BotComposer {
   setText(text: string) {
     if (text === this.draft.text) return;
     this.enqueue({ kind: "text", slot: this.record.active, text, version: crypto.randomUUID(), base: this.draft.textVersion });
+  }
+  /** Explicit review-only edit, fenced against a different draft/tab/context. */
+  async prefillText(text: string, expected: string, current: () => boolean) {
+    if (!this.ready || !this.canUseOwner || this.committing || this.operation || this.draft.queueId || !current())
+      throw Object.assign(new Error("The composer changed. Choose the follow-up again."), { name: "DraftChangedError" });
+    this.preparing = "prefill"; this.notify();
+    try {
+      await this.flush(); await this.refresh();
+      if (!this.canUseOwner || !current() || this.storageError || Object.keys(this.record.operations).length ||
+          draftReviewFingerprint(this.record) !== expected)
+        throw Object.assign(new Error("The draft changed. Review it before choosing the follow-up again."), { name: "DraftChangedError" });
+      this.actionError = "";
+      this.enqueue({ kind: "prefill", slot: this.record.active, text, version: crypto.randomUUID(), expected }, undefined, current);
+      await this.flush();
+    } finally { this.preparing = null; this.notify(); }
   }
   setReply(reply?: BotReplyReference) {
     if (this.committing || this.operation?.method === "queue.delete" || this.draft.queueSource && !this.draft.queueSource.removed) return;

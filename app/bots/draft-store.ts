@@ -48,6 +48,7 @@ export type DraftRecord = {
 export type RunDeliveryResult = "not-sent" | "uncertain" | "queued" | "success" | "rejected";
 export type DraftChange =
   | { kind: "text"; slot: string; text: string; version: string; base: string }
+  | { kind: "prefill"; slot: string; text: string; version: string; expected: string }
   | { kind: "reply"; slot: string; reply?: BotReplyReference; version: string; base: string }
   | { kind: "add"; slot: string; files: StagedFile[] }
   | { kind: "remove"; slot: string; id: string }
@@ -70,6 +71,12 @@ export type DraftChange =
 export const emptyDraft = (): Draft => ({ text: "", textVersion: "empty", files: [] });
 // No-reply drafts retain172's fingerprint, including legacy restore receipts.
 export const draftFingerprint = (record: DraftRecord) => JSON.stringify([record.active, record.slots[record.active].textVersion, record.slots[record.active].files.map(file => file.id), ...(record.slots[record.active].reply ? [record.slots[record.active].reply] : [])]);
+/** Review identity excludes upload progress/readiness, which does not edit the draft. */
+export const draftReviewFingerprint = (record: DraftRecord) => {
+  const draft = record.slots[record.active];
+  return JSON.stringify([record.active, draft.textVersion, draft.text, draft.reply, draft.queueId, draft.queueSource,
+    draft.files.map(file => [file.id, file.name, file.mimeType, file.size, file.uploadBotId, file.reviewPage])]);
+};
 export const emptyRecord = (owner: string, botId: string): DraftRecord => ({
   owner, botId, revision: "empty", active: "normal", slots: { normal: emptyDraft() }, operations: {}, migrated: false,
 });
@@ -116,6 +123,14 @@ export function changeDraft(source: DraftRecord, change: DraftChange): DraftReco
       promoteNormal(record.slots[record.active], record.active);
     for (const draft of Object.values(record.slots)) for (const file of draft.files)
       if (file.remote?.ready) delete file.error;
+  } else if (change.kind === "prefill") {
+    const draft = record.slots[change.slot];
+    if (draft?.textVersion === change.version && draft.text === change.text) return source;
+    if (!draft || Object.keys(record.operations).length || draft.queueId ||
+        draftReviewFingerprint(record) !== change.expected)
+      throw Object.assign(new Error("The draft changed. Review it before choosing the follow-up again."), { name: "DraftChangedError" });
+    draft.text = change.text;
+    draft.textVersion = change.version;
   } else if (change.kind === "text" || change.kind === "reply") {
     const draft = record.slots[change.slot];
     if (!draft) throw new Error("Draft is no longer available. Reopen it before editing.");
@@ -296,13 +311,15 @@ export class BotDraftStore {
       request.onsuccess = () => done((request.result as FileRow | undefined)?.blob);
     });
   }
-  async change(owner: string, botId: string, change: DraftChange, bytes: Map<string, Blob> = new Map()): Promise<DraftRecord> {
+  async change(owner: string, botId: string, change: DraftChange, bytes: Map<string, Blob> = new Map(), current?: () => boolean): Promise<DraftRecord> {
     if (!owner || !botId) throw new Error("Sign in as the bot owner before saving a draft.");
     return this.transaction(["drafts", "files"], "readwrite", (tx, done, fail) => {
       const drafts = tx.objectStore("drafts"), files = tx.objectStore("files");
       const request = drafts.get([owner, botId]);
       request.onsuccess = () => {
         try {
+          if (change.kind === "prefill" && current && !current())
+            throw Object.assign(new Error("The conversation changed. Choose the follow-up again."), { name: "DraftChangedError" });
           const previous = request.result as DraftRecord | undefined;
           if (!previous?.migrated) throw new Error("Recover the existing draft before changing it.");
           const record = changeDraft(previous, change);
