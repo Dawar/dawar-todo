@@ -6,6 +6,8 @@ const OUTPUT_LIMIT = 64 * 1024;
 const clip = (text) => (text.length > OUTPUT_LIMIT ? `${text.slice(0, OUTPUT_LIMIT)}\n… output truncated` : text);
 const seconds = (ms) => Math.floor(ms / 1000);
 const FILE_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
+// Claude Code plumbing (loading deferred tool schemas) with nothing to show.
+const HIDDEN_TOOLS = new Set(["ToolSearch"]);
 // SDK tools that are bridge dynamic tools (in-process `bots` MCP server).
 export const DYNAMIC_SERVER = "bots";
 
@@ -180,6 +182,7 @@ export class ClaudeTurn {
         this.complete({ type: "reasoning", id, summary: [thinking], content: [] }, out);
       } else if (block.type === "tool_use") {
         this.blockId(messageId);
+        if (HIDDEN_TOOLS.has(block.name)) continue;
         this.flush(out, "commentary");
         if (block.name === "TodoWrite") {
           const text = (block.input?.todos ?? []).map((t) => `${t.status === "completed" ? "[x]" : "[ ]"} ${t.content}`).join("\n");

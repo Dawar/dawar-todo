@@ -39,13 +39,19 @@ export function fakeQuery(script, log = []) {
   };
 }
 
+import { fromJSONSchema } from "zod";
+export const fakeMcp = {
+  createSdkMcpServer: ({ name, tools }) => ({ type: "sdk", name, tools }),
+  tool: (name, description, shape, handler) => ({ name, description, shape, handler }),
+  fromJSONSchema,
+};
 const text = (id, t) => ({ type: "assistant", parent_tool_use_id: null, message: { id, content: [{ type: "text", text: t }] } });
 const result = (uuid, extra = {}) => ({ type: "result", subtype: "success", is_error: false, result: "", user_message_uuids: [uuid], ...extra });
 
 async function setup(t, script, log = []) {
   const dir = await mkdtemp(join(tmpdir(), "claude-test-"));
   const store = new Store(join(dir, "state.sqlite"));
-  const claude = new ClaudeBackend({ store, query: fakeQuery(script, log), credential: "test", configDir: join(dir, "claude") });
+  const claude = new ClaudeBackend({ store, query: fakeQuery(script, log), mcp: fakeMcp, credential: "test", configDir: join(dir, "claude") });
   await claude.start();
   const notes = [];
   claude.on("notification", (n) => notes.push(n));
@@ -77,6 +83,7 @@ test("a Claude turn streams Codex items and is served back from the bridge trans
   assert.equal(log[0].options.systemPrompt.append, "Read SOUL.md");
   assert.deepEqual(log[0].options.settingSources, []);
   assert.deepEqual(log[0].options.mcpServers, { codex_manager: { type: "stdio", command: "node", args: ["m.mjs"], env: { T: "1" } } });
+  assert.doesNotMatch(JSON.stringify(log[0].options.mcpServers) && JSON.stringify(claude.data.thread(threadId)), /"T":"1"/, "MCP launch secrets are not persisted");
 
   const { turn } = await claude.call("turn/start", { threadId, clientUserMessageId: "op-1", input: input("hi"),
     additionalContext: { botProfile: { kind: "application", value: "I am Atlas" } } });
@@ -172,6 +179,7 @@ test("pure mappings: tools, results, models and MCP config", () => {
     { type: "tool_use", id: "e", name: "Edit", input: { file_path: "/w/a", old_string: "x", new_string: "y" } },
     { type: "tool_use", id: "d", name: "mcp__bots__bots_report_result", input: { summary: "s" } },
     { type: "tool_use", id: "g", name: "Grep", input: { pattern: "p" } },
+    { type: "tool_use", id: "ts", name: "ToolSearch", input: { query: "select:x" } },
     { type: "tool_use", id: "p", name: "TodoWrite", input: { todos: [{ content: "one", status: "in_progress" }] } },
   ] } });
   turn.consume({ type: "user", parent_tool_use_id: null, message: { content: [
@@ -188,6 +196,7 @@ test("pure mappings: tools, results, models and MCP config", () => {
   assert.equal(items.g.type, "mcpToolCall");
   assert.equal(items.g.status, "failed", "a tool still running at turn end is not left inProgress");
   assert.equal(items.p.type, "plan");
+  assert.equal(items.ts, undefined, "ToolSearch plumbing is not shown");
   assert.equal(finish.at(-1).method, "turn/completed");
   assert.deepEqual(resultStatus({ subtype: "error_max_turns", errors: [] }, false), { status: "failed", error: "error_max_turns" });
   assert.deepEqual(resultStatus({ subtype: "success", is_error: false }, true), { status: "interrupted", error: null });
@@ -226,7 +235,7 @@ test("BotRuntime creates, chats with and reads history of a Claude bot", async (
   const store = new Store(join(dir, "state.sqlite"));
   const log = [];
   const codex = new MinimalCodex();
-  const claude = new ClaudeBackend({ store, credential: "test", configDir: join(dir, "claude"),
+  const claude = new ClaudeBackend({ store, credential: "test", configDir: join(dir, "claude"), mcp: fakeMcp,
     query: fakeQuery((user) => [text("m1", `You said: ${user.message.content.at(-1).text}`), result(user.uuid)], log) });
   const router = new ProviderRouter({ codex, claude });
   const runtime = new BotRuntime({ store, codex: router, root: join(dir, "bots") });
@@ -272,4 +281,120 @@ test("streamed thinking becomes a reasoning row only when it has text", () => {
   ];
   assert.deepEqual(notes.filter((n) => n.method === "item/started").map((n) => n.params.item.id), ["m:1"]);
   assert.deepEqual(turn.turn.items, [{ type: "reasoning", id: "m:1", summary: ["plan"], content: [] }]);
+});
+
+// --- Phase 3: questions and bridge tools ------------------------------------
+const askBlock = { type: "tool_use", id: "ask1", name: "AskUserQuestion",
+  input: { questions: [{ question: "Favorite color?", header: "Color", multiSelect: false,
+    options: [{ label: "Blue", description: "calm" }, { label: "Red", description: "bold" }] }] } };
+const assistant = (id, block) => ({ type: "assistant", parent_tool_use_id: null, message: { id, content: [block] } });
+
+test("AskUserQuestion becomes a native user-input request and its answer returns to the SDK", async (t) => {
+  let decision;
+  const { claude, notes } = await setup(t, async (user, ctx) => {
+    const ac = new AbortController();
+    decision = await ctx.options.canUseTool("AskUserQuestion", askBlock.input, { signal: ac.signal, toolUseID: "ask1" });
+    return [text("m2", `Picked ${decision.updatedInput?.answers?.["Favorite color?"]}`), result(user.uuid)];
+  });
+  const requests = [];
+  claude.on("request", (r) => requests.push(r));
+  const { thread } = await claude.call("thread/start", { cwd: "/bots/q" });
+  const { turn } = await claude.call("turn/start", { threadId: thread.id, input: input("ask me") });
+  await until(() => requests.length);
+  const [request] = requests;
+  assert.equal(request.method, "item/tool/requestUserInput");
+  assert.match(request.id, /^claude:/);
+  assert.deepEqual(request.params, { threadId: thread.id, turnId: turn.id, itemId: "ask1", isBlocking: true, autoResolutionMs: null,
+    questions: [{ id: "q1", header: "Color", question: "Favorite color?", isOther: true, isSecret: false,
+      options: [{ label: "Blue", description: "calm" }, { label: "Red", description: "bold" }] }] });
+  assert.deepEqual((await claude.call("thread/read", { threadId: thread.id })).thread.status, { type: "active", activeFlags: ["waitingOnUserInput"] });
+  claude.respond(request.id, { answers: { q1: { answers: ["Blue"] } } });
+  claude.respond(request.id, { answers: { q1: { answers: ["Red"] } } }); // A late duplicate is ignored.
+  await until(() => notes.some((n) => n.method === "turn/completed"));
+  assert.equal(decision.behavior, "allow");
+  assert.deepEqual(decision.updatedInput.answers, { "Favorite color?": "Blue" });
+  assert.ok(notes.some((n) => n.method === "serverRequest/resolved" && n.params.requestId === request.id));
+  assert.equal(notes.find((n) => n.method === "turn/completed").params.turn.items.at(-1).text, "Picked Blue");
+});
+
+test("an unanswered question is settled when its turn is interrupted", async (t) => {
+  let decision;
+  const { claude, notes } = await setup(t, async (user, ctx) => {
+    const ac = new AbortController();
+    ctx.wake = () => ac.abort();
+    decision = await ctx.options.canUseTool("AskUserQuestion", askBlock.input, { signal: ac.signal, toolUseID: "ask1" });
+    return [result(user.uuid, { subtype: "error_during_execution", is_error: true, errors: ["interrupted"] })];
+  });
+  const requests = [];
+  claude.on("request", (r) => requests.push(r));
+  const { thread } = await claude.call("thread/start", { cwd: "/bots/qi" });
+  const { turn } = await claude.call("turn/start", { threadId: thread.id, input: input("ask") });
+  await until(() => requests.length);
+  await claude.call("turn/interrupt", { threadId: thread.id, turnId: turn.id });
+  await until(() => notes.some((n) => n.method === "turn/completed"));
+  assert.equal(decision.behavior, "deny");
+  assert.ok(notes.some((n) => n.method === "serverRequest/resolved"));
+  assert.equal(claude.requests.size, 0);
+});
+
+test("bridge dynamic tools run through an in-process MCP server as native tool calls", async (t) => {
+  let toolResult, server;
+  const { claude, log } = await setup(t, async (user, ctx) => {
+    server = ctx.options.mcpServers.bots;
+    toolResult = await server.tools.find((x) => x.name === "bots_report_result").handler({ summary: "found it" });
+    return [result(user.uuid)];
+  });
+  const requests = [];
+  claude.on("request", (r) => requests.push(r));
+  const { thread } = await claude.call("thread/start", { cwd: "/bots/d", dynamicTools: [
+    { type: "function", name: "bots_report_result", description: "Report", inputSchema: { type: "object", properties: { summary: { type: "string" } }, required: ["summary"] } },
+    { type: "function", name: "bots_schedule_list", description: "List", inputSchema: { type: "object", properties: {} } },
+  ] });
+  assert.deepEqual(log.at(-1).options.mcpServers.bots.tools.map((x) => x.name), ["bots_report_result", "bots_schedule_list"]);
+  const { turn } = await claude.call("turn/start", { threadId: thread.id, input: input("report") });
+  await until(() => requests.length);
+  assert.equal(requests[0].method, "item/tool/call");
+  assert.deepEqual(requests[0].params, { threadId: thread.id, turnId: turn.id, callId: requests[0].id, namespace: null,
+    tool: "bots_report_result", arguments: { summary: "found it" } });
+  assert.ok(server.tools[0].shape.summary, "the JSON schema becomes the tool's input shape");
+  claude.respond(requests[0].id, { success: true, contentItems: [{ type: "inputText", text: "{\"ok\":true}" }] });
+  await until(() => toolResult);
+  assert.deepEqual(toolResult, { isError: false, content: [{ type: "text", text: "{\"ok\":true}" }] });
+  // A tool called outside a turn is refused without a request.
+  assert.equal((await server.tools[1].handler({})).isError, true);
+  assert.equal(requests.length, 1);
+});
+
+test("BotRuntime answers a Claude question card and runs a bridge tool for a Claude bot", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "claude-runtime-q-"));
+  const store = new Store(join(dir, "state.sqlite"));
+  const codex = new MinimalCodex();
+  const seen = {};
+  const claude = new ClaudeBackend({ store, credential: "test", configDir: join(dir, "claude"), mcp: fakeMcp,
+    query: fakeQuery(async (user, ctx) => {
+      seen.tool = await ctx.options.mcpServers.bots.tools.find((x) => x.name === "bots_schedule_list").handler({});
+      seen.decision = await ctx.options.canUseTool("AskUserQuestion", askBlock.input, { signal: new AbortController().signal, toolUseID: "ask1" });
+      return [text("m1", "thanks"), result(user.uuid)];
+    }) });
+  const runtime = new BotRuntime({ store, codex: new ProviderRouter({ codex, claude }), root: join(dir, "bots") });
+  t.after(async () => { claude.close(); await settle(); store.close(); await rm(dir, { recursive: true, force: true }); });
+  await runtime.start();
+  const events = [];
+  runtime.on("event", (e) => events.push(e));
+  const op = (botId, method, params = {}) => runtime.handle({ method, botId, params, operationId: crypto.randomUUID() });
+  const bot = await runtime.handle({ method: "bots.create", params: { name: "Quill", provider: "claude" }, operationId: "create-quill" });
+  await op(bot.id, "turn.send", { text: "go" });
+  await until(() => store.list("pending", bot.id).length);
+  const [pending] = store.list("pending", bot.id);
+  assert.equal(pending.request.method, "item/tool/requestUserInput");
+  assert.equal(store.bot(bot.id).status, "waiting");
+  assert.ok(events.some((e) => e.type === "request" && e.data.key === pending.key));
+  // The bridge tool ran in the runtime and its JSON result reached the SDK.
+  assert.equal(seen.tool.isError, false);
+  assert.ok(Array.isArray(JSON.parse(seen.tool.content[0].text).schedules));
+  await op(bot.id, "requests.respond", { key: pending.key, result: { answers: { q1: { answers: ["Red"] } } } });
+  await until(() => seen.decision && !store.bot(bot.id).activeTurnId);
+  assert.deepEqual(seen.decision.updatedInput.answers, { "Favorite color?": "Red" });
+  assert.equal(store.list("pending", bot.id).length, 0);
+  assert.notEqual(store.bot(bot.id).status, "waiting");
 });

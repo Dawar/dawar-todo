@@ -4,7 +4,7 @@
 // from here in Codex `Thread` / `Turn` / `ThreadItemEntry` shapes.
 //
 // claudeThread: { id, sessionId, cwd, name, model, effort, instructions,
-//   mcpServers, archived, preview, sessionStarted, nextSeq, createdAt, updatedAt }
+//   dynamicTools, archived, preview, sessionStarted, nextSeq, createdAt, updatedAt }
 // claudeTurn:   { id, botId: threadId, seq, turn, times }
 
 const THREAD = "claudeThread", TURN = "claudeTurn";

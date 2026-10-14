@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { extname, join } from "node:path";
 import { homedir } from "node:os";
-import { ClaudeTurn, resultStatus } from "./claude-items.mjs";
+import { ClaudeTurn, resultStatus, DYNAMIC_SERVER } from "./claude-items.mjs";
 import { ClaudeStore, view } from "./claude-store.mjs";
 import { CLAUDE_PREFIX } from "./provider-router.mjs";
 
@@ -71,6 +71,12 @@ export function mcpServersFrom(config = {}) {
   return servers;
 }
 
+/** Codex `dynamicTools` → the stored subset the in-process MCP server needs. */
+export function dynamicToolSpecs(tools = []) {
+  return (Array.isArray(tools) ? tools : []).filter((t) => typeof t?.name === "string")
+    .map(({ name, description, inputSchema }) => ({ name, description: description ?? "", inputSchema: inputSchema ?? { type: "object" } }));
+}
+
 /** Codex `Model` row for an SDK `ModelInfo`. */
 export function nativeModel(info, isDefault = false) {
   const levels = (info.supportedEffortLevels ?? []).filter((e) => EFFORTS.includes(e));
@@ -105,11 +111,16 @@ async function sdkContent(input = [], additionalContext = {}) {
 }
 
 export class ClaudeBackend extends EventEmitter {
-  constructor({ store = null, query = null, credential = process.env.CLAUDE_CODE_OAUTH_TOKEN ?? process.env.ANTHROPIC_API_KEY,
+  constructor({ store = null, query = null, mcp = null, credential = process.env.CLAUDE_CODE_OAUTH_TOKEN ?? process.env.ANTHROPIC_API_KEY,
     configDir = process.env.BOTS_CLAUDE_CONFIG_DIR ?? join(process.env.BOTS_STATE_DIR ?? join(homedir(), ".local/share/dawar-todo-bots"), "claude"),
     now = Date.now } = {}) {
     super();
-    Object.assign(this, { credential, configDir, now, query });
+    Object.assign(this, { credential, configDir, now, query, mcp });
+    // Open server requests (questions, bridge tool calls) by request ID.
+    this.requests = new Map();
+    // MCP launch config per thread. It carries the manager's process-lifetime
+    // token, so it is held in memory only; the runtime re-sends it on resume.
+    this.mcpConfig = new Map();
     this.data = store ? new ClaudeStore(store) : null;
     this.sessions = new Map();
     this.outbox = [];
@@ -122,7 +133,11 @@ export class ClaudeBackend extends EventEmitter {
     if (!this.credential)
       throw new Error("Claude bots need CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY in the bots environment.");
     if (!this.data) throw new Error("Claude bots need the bridge state store.");
-    this.query ??= (await import("@anthropic-ai/claude-agent-sdk")).query;
+    if (!this.query || !this.mcp) {
+      const sdk = await import("@anthropic-ai/claude-agent-sdk");
+      this.query ??= sdk.query;
+      this.mcp ??= { createSdkMcpServer: sdk.createSdkMcpServer, tool: sdk.tool, fromJSONSchema: (await import("zod")).fromJSONSchema };
+    }
     this.recoverInterruptedTurns();
     this.models = await this.readModels().catch(() => FALLBACK_MODELS.map((m, i) => nativeModel(m, i === 0)));
     this.ready = true;
@@ -164,7 +179,8 @@ export class ClaudeBackend extends EventEmitter {
   status(threadId) {
     const session = this.sessions.get(threadId);
     if (!session) return { type: "notLoaded" };
-    if (session.turn) return { type: "active", activeFlags: [] };
+    if (session.turn) return { type: "active",
+      activeFlags: [...this.requests.values()].some((r) => r.threadId === threadId && r.kind === "question") ? ["waitingOnUserInput"] : [] };
     return { type: "idle" };
   }
   /**
@@ -172,14 +188,14 @@ export class ClaudeBackend extends EventEmitter {
    * call returns: callers see a response before its notifications (as with
    * Codex), and SDK events can never overtake an earlier turn/started.
    */
-  send(notes) {
+  send(notes, event = "notification") {
     if (!notes.length) return;
-    this.outbox.push(...notes);
+    this.outbox.push(...notes.map((message) => ({ event, message })));
     if (this.flushing) return;
     this.flushing = true;
     setImmediate(() => {
       this.flushing = false;
-      for (const note of this.outbox.splice(0)) this.emit("notification", note);
+      for (const { event, message } of this.outbox.splice(0)) this.emit(event, message);
     });
   }
   persistAndSend(session, notes) {
@@ -205,8 +221,8 @@ export class ClaudeBackend extends EventEmitter {
       settingSources: [],
       includePartialMessages: true,
       permissionMode: "default",
-      canUseTool: (toolName, toolInput) => this.canUseTool(record.id, toolName, toolInput),
-      mcpServers: record.mcpServers ?? {},
+      canUseTool: (toolName, toolInput, context) => this.canUseTool(record.id, toolName, toolInput, context),
+      mcpServers: { ...(this.mcpConfig.get(record.id) ?? {}), ...this.dynamicServer(record) },
       env: this.env(),
       stderr: (data) => { if (process.env.BOTS_DEBUG === "1") process.stderr.write(data); },
     };
@@ -216,12 +232,77 @@ export class ClaudeBackend extends EventEmitter {
     session.pump = this.pump(session);
     return session;
   }
-  async canUseTool(threadId, toolName, input) {
-    // Mirrors the Codex bots' never-ask / full-access execution policy. Native
-    // questions are answered through bridge request cards in a later phase.
-    if (toolName === "AskUserQuestion")
-      return { behavior: "deny", message: "Questions are not available in this conversation yet. Ask in your reply instead and end your turn." };
+  async canUseTool(threadId, toolName, input, context = {}) {
+    // Mirrors the Codex bots' never-ask / full-access execution policy; only
+    // questions reach the owner, as native request cards.
+    if (toolName === "AskUserQuestion") return this.ask(threadId, input, context);
     return { behavior: "allow", updatedInput: input };
+  }
+  /**
+   * Opens a server request the runtime handles exactly like a Codex one. It
+   * settles once: by respond/reject, by SDK abort, or when its turn ends.
+   */
+  open(threadId, kind, message, settle) {
+    return new Promise((resolve) => {
+      const finish = (value) => {
+        if (!this.requests.delete(message.id)) return;
+        resolve(value);
+        if (kind === "question") this.send([{ method: "serverRequest/resolved", params: { threadId, requestId: message.id } }]);
+      };
+      this.requests.set(message.id, { threadId, kind, finish, ...settle });
+      this.send([message], "request");
+    });
+  }
+  ask(threadId, input, { signal, toolUseID } = {}) {
+    const turn = this.sessions.get(threadId)?.turn;
+    const asked = Array.isArray(input?.questions) ? input.questions : [];
+    if (!turn || !asked.length) return { behavior: "deny", message: "There is no active conversation turn to ask in." };
+    const questions = asked.map((q, i) => ({ id: `q${i + 1}`, header: String(q.header ?? ""), question: String(q.question ?? ""),
+      isOther: true, isSecret: false, options: (q.options ?? []).map((o) => ({ label: String(o.label), description: String(o.description ?? "") })) }));
+    const id = this.nextRequestId();
+    const pending = this.open(threadId, "question",
+      { id, method: "item/tool/requestUserInput", params: { threadId, turnId: turn.id, itemId: toolUseID ?? id, questions, isBlocking: true, autoResolutionMs: null } },
+      {
+        answer: (result) => {
+          // SDK answers are keyed by question text; several picks join with ", ".
+          const answers = {};
+          questions.forEach((q, i) => { answers[asked[i].question] = (result?.answers?.[q.id]?.answers ?? []).join(", "); });
+          return { behavior: "allow", updatedInput: { ...input, answers } };
+        },
+        refuse: (message) => ({ behavior: "deny", message }),
+      });
+    signal?.addEventListener("abort", () => this.requests.get(id)?.finish({ behavior: "deny", message: "The question was cancelled." }), { once: true });
+    return pending;
+  }
+  /** In-process MCP server exposing the bridge dynamic tools as mcp__bots__<name>. */
+  dynamicServer(record) {
+    const tools = record.dynamicTools ?? [];
+    if (!tools.length || !this.mcp) return {};
+    const definitions = tools.map((spec) => {
+      let shape = {};
+      try { shape = this.mcp.fromJSONSchema(spec.inputSchema ?? { type: "object" }).shape ?? {}; } catch { /* Accept any arguments. */ }
+      return this.mcp.tool(spec.name, spec.description ?? "", shape, (args, extra) => this.callTool(record.id, spec.name, args, extra));
+    });
+    return { [DYNAMIC_SERVER]: this.mcp.createSdkMcpServer({ name: DYNAMIC_SERVER, version: "1.0.0", tools: definitions }) };
+  }
+  callTool(threadId, tool, args) {
+    const turn = this.sessions.get(threadId)?.turn;
+    if (!turn) return Promise.resolve({ content: [{ type: "text", text: "There is no active conversation turn." }], isError: true });
+    const id = this.nextRequestId();
+    return this.open(threadId, "tool",
+      { id, method: "item/tool/call", params: { threadId, turnId: turn.id, callId: id, namespace: null, tool, arguments: args ?? {} } },
+      {
+        answer: (result) => ({ isError: result?.success === false, content: (result?.contentItems ?? []).map((c) =>
+          c.type === "inputImage" && /^data:([^;]+);base64,/.test(c.imageUrl ?? "")
+            ? { type: "image", mimeType: /^data:([^;]+);/.exec(c.imageUrl)[1], data: c.imageUrl.slice(c.imageUrl.indexOf(",") + 1) }
+            : { type: "text", text: c.text ?? c.imageUrl ?? c.audioUrl ?? "" }) }),
+        refuse: (message) => ({ content: [{ type: "text", text: message }], isError: true }),
+      });
+  }
+  /** Settle every open request of a thread whose turn ended or session closed. */
+  cancelRequests(threadId, reason) {
+    for (const request of [...this.requests.values()])
+      if (request.threadId === threadId) request.finish(request.refuse(reason));
   }
   async pump(session) {
     let failure = null;
@@ -256,6 +337,7 @@ export class ClaudeBackend extends EventEmitter {
     const turn = session.turn;
     if (!turn) return;
     clearTimeout(session.interruptTimer);
+    this.cancelRequests(session.threadId, "The turn ended before this was answered.");
     const notes = turn.finish(status, error);
     this.data.saveTurn(session.threadId, turn.state);
     session.turn = null;
@@ -342,10 +424,11 @@ export class ClaudeBackend extends EventEmitter {
   }
   threadStart(params) {
     const sessionId = randomUUID();
+    this.mcpConfig.set(`${CLAUDE_PREFIX}${sessionId}`, mcpServersFrom(params.config));
     const record = this.data.saveThread({
       id: `${CLAUDE_PREFIX}${sessionId}`, sessionId, cwd: params.cwd, name: null, model: params.model ?? null,
       effort: params.effort ?? params.config?.model_reasoning_effort ?? null, instructions: params.developerInstructions ?? null,
-      mcpServers: mcpServersFrom(params.config), archived: false, preview: "", sessionStarted: false, nextSeq: 1,
+      dynamicTools: dynamicToolSpecs(params.dynamicTools), archived: false, preview: "", sessionStarted: false, nextSeq: 1,
       createdAt: this.now(),
     });
     this.load(record);
@@ -355,11 +438,12 @@ export class ClaudeBackend extends EventEmitter {
     let record = this.record(params.threadId);
     if (record.archived) throw definite("Restore this Claude thread before resuming it.");
     const loaded = this.sessions.has(record.id);
+    if (!loaded && params.config) this.mcpConfig.set(record.id, mcpServersFrom(params.config));
     // Settings captured at resume apply when the SDK session is (re)started.
     if (!loaded) record = this.data.saveThread({ ...record,
       ...(params.model ? { model: params.model } : {}),
       ...(params.developerInstructions ? { instructions: params.developerInstructions } : {}),
-      ...(params.config ? { mcpServers: mcpServersFrom(params.config) } : {}) });
+      ...(params.dynamicTools ? { dynamicTools: dynamicToolSpecs(params.dynamicTools) } : {}) });
     this.load(record);
     return this.startResponse(this.data.thread(record.id));
   }
@@ -413,9 +497,15 @@ export class ClaudeBackend extends EventEmitter {
     await session.query.interrupt?.();
     return {};
   }
-  nextRequestId() { return `${CLAUDE_PREFIX}${++this.counter}`; }
-  respond() {}
-  reject() {}
+  nextRequestId() { return `${CLAUDE_PREFIX}${this.epoch ??= randomUUID().slice(0, 8)}:${++this.counter}`; }
+  respond(id, result) {
+    const request = this.requests.get(id);
+    request?.finish(request.answer(result));
+  }
+  reject(id, message) {
+    const request = this.requests.get(id);
+    request?.finish(request.refuse(String(message ?? "Declined.")));
+  }
   forkPrivateReview() { return Promise.reject(definite("Claude bots do not support private reviews yet.")); }
   startPrivateReviewTurn() { return Promise.reject(definite("Claude bots do not support private reviews yet.")); }
   close(threadId) {
