@@ -50,14 +50,19 @@ try {
   // External gateway/agent dependencies come from the traced portable site.
   // All modules resolve within this release rather than the build repository.
   await cp('.next-portable/standalone/node_modules',join(directory,'node_modules'),{recursive:true});
-  const dependencies=['ws','busboy','streamsearch','web-push','http_ece','asn1.js','bn.js','safer-buffer','minimalistic-assert','agent-base','https-proxy-agent'];
+  // Claude bots: the SDK and zod only. Its native Claude Code binary (~230 MB)
+  // stays a pinned local executable outside the 256 MB release bound.
+  const dependencies=['ws','busboy','streamsearch','web-push','http_ece','asn1.js','bn.js','safer-buffer','minimalistic-assert','agent-base','https-proxy-agent','@anthropic-ai/claude-agent-sdk','zod'];
   for(const name of dependencies){
     await cp(join('node_modules',name),join(directory,'node_modules',name),{recursive:true});
   }
   // Resolve every runtime import before publishing an activatable package.
   // An incomplete dependency tree must fail packaging, not live startup.
   execFileSync(process.execPath,['--input-type=module','-e',
-    'await import("./dist/portable/gateway.mjs"); await import("./bot-bridge/portable-agent.mjs");'],{cwd:directory,stdio:'inherit'});
+    'await import("./dist/portable/gateway.mjs"); await import("./bot-bridge/portable-agent.mjs");'+
+    // The Claude backend loads these lazily; prove they resolve and work here.
+    'const sdk=await import("@anthropic-ai/claude-agent-sdk"),{fromJSONSchema}=await import("zod");'+
+    'sdk.createSdkMcpServer({name:"bots",version:"1.0.0",tools:[sdk.tool("t","",fromJSONSchema({type:"object",properties:{}}).shape,async()=>({content:[]}))]});'],{cwd:directory,stdio:'inherit'});
   const files=[];
   async function inspect(path){
     for(const name of (await readdir(path)).sort()){

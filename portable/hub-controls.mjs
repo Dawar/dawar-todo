@@ -130,7 +130,7 @@ export class HubControls extends EventEmitter {
         if(!this.captureForeground(b.id,nodeId,epoch,source.agentEpoch,source.activity))return false;
         if((v.activeTurnId??null)!==source.activity.activeTurnId)throw Error('Bot event and captured native activity conflict.');
       }
-      const patch={};for(const key of ['nativeRecovery','status','activeTurnId','preview','error','updatedAt','model','effort','serviceTier','mode','modeIntentId','managerPaused'])if(Object.hasOwn(v,key))patch[key]=v[key];
+      const patch={};for(const key of ['nativeRecovery','status','activeTurnId','preview','error','updatedAt','model','effort','serviceTier','mode','modeIntentId','managerPaused','provider'])if(Object.hasOwn(v,key))patch[key]=v[key];
       if(Object.hasOwn(v,'burstQuietSeconds'))Object.assign(patch,preferencePatch(b,{burstQuietSeconds:v.burstQuietSeconds}));
       if(Number.isSafeInteger(v.queuePauseRevision)&&v.queuePauseRevision>=(b.queuePauseRevision??0)){patch.queuePaused=v.queuePaused;patch.queuePauseRevision=v.queuePauseRevision;}
       this.store.saveBot({...b,...patch});

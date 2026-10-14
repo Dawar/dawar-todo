@@ -1,7 +1,8 @@
 import { EventEmitter } from "node:events";
 import { randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
-import { extname, join } from "node:path";
+import { readFile, lstat, realpath } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { extname, join, isAbsolute } from "node:path";
 import { homedir } from "node:os";
 import { ClaudeTurn, resultStatus, DYNAMIC_SERVER } from "./claude-items.mjs";
 import { ClaudeStore, view } from "./claude-store.mjs";
@@ -140,11 +141,11 @@ async function sdkContent(input = [], additionalContext = {}) {
 }
 
 export class ClaudeBackend extends EventEmitter {
-  constructor({ store = null, query = null, mcp = null, credential = process.env.CLAUDE_CODE_OAUTH_TOKEN ?? process.env.ANTHROPIC_API_KEY,
+  constructor({ store = null, query = null, mcp = null, executable = null, executableSHA256 = null, credential = process.env.CLAUDE_CODE_OAUTH_TOKEN ?? process.env.ANTHROPIC_API_KEY,
     configDir = process.env.BOTS_CLAUDE_CONFIG_DIR ?? join(process.env.BOTS_STATE_DIR ?? join(homedir(), ".local/share/dawar-todo-bots"), "claude"),
     now = Date.now } = {}) {
     super();
-    Object.assign(this, { credential, configDir, now, query, mcp });
+    Object.assign(this, { credential, configDir, now, query, mcp, executable, executableSHA256 });
     // Open server requests (questions, bridge tool calls) by request ID.
     this.requests = new Map();
     // MCP launch config per thread. It carries the manager's process-lifetime
@@ -162,6 +163,8 @@ export class ClaudeBackend extends EventEmitter {
     if (!this.credential)
       throw new Error("Claude bots need CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY in the bots environment.");
     if (!this.data) throw new Error("Claude bots need the bridge state store.");
+    // null uses the SDK's bundled binary; any configured value (even empty) must verify.
+    if (this.executable !== null) await this.verifyExecutable();
     if (!this.query || !this.mcp) {
       const sdk = await import("@anthropic-ai/claude-agent-sdk");
       this.query ??= sdk.query;
@@ -171,6 +174,20 @@ export class ClaudeBackend extends EventEmitter {
     this.models = await this.readModels().catch(() => FALLBACK_MODELS.map((m, i) => nativeModel(m, i === 0)));
     this.ready = true;
   }
+  /** An external Claude Code binary must be the exact reviewed bytes, like the pinned Codex binary. */
+  async verifyExecutable() {
+    const path = this.executable;
+    const stat = isAbsolute(path) ? await lstat(path).catch(() => null) : null;
+    if (!stat?.isFile() || stat.isSymbolicLink() || (await realpath(path)) !== path)
+      throw new Error("The Claude executable must be an absolute path to a regular file.");
+    if (stat.mode & 0o022 || (process.getuid && stat.uid !== process.getuid()))
+      throw new Error("The Claude executable must be owned by this user and not group- or world-writable.");
+    if (!/^[a-f0-9]{64}$/.test(this.executableSHA256 ?? ""))
+      throw new Error("The Claude executable needs its reviewed SHA-256.");
+    if (createHash("sha256").update(await readFile(path)).digest("hex") !== this.executableSHA256)
+      throw new Error("The Claude executable differs from its reviewed SHA-256.");
+  }
+  sdkOptions() { return this.executable !== null ? { pathToClaudeCodeExecutable: this.executable } : {}; }
   env() {
     const env = { ...process.env, CLAUDE_CONFIG_DIR: this.configDir };
     // Only the configured credential reaches the child, never both kinds.
@@ -190,7 +207,7 @@ export class ClaudeBackend extends EventEmitter {
   }
   async readModels() {
     const input = new InputQueue();
-    const q = this.query({ prompt: input, options: { cwd: homedir(), settingSources: [], env: this.env(), persistSession: false } });
+    const q = this.query({ prompt: input, options: { ...this.sdkOptions(), cwd: homedir(), settingSources: [], env: this.env(), persistSession: false } });
     try {
       const infos = await Promise.race([q.supportedModels(), new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 30000).unref())]);
       if (!infos?.length) throw new Error("Empty Claude model catalog.");
@@ -257,6 +274,7 @@ export class ClaudeBackend extends EventEmitter {
     if (existing) return existing;
     const input = new InputQueue();
     const options = {
+      ...this.sdkOptions(),
       cwd: record.cwd,
       model: record.model ?? undefined,
       ...(EFFORTS.includes(record.effort) ? { effort: record.effort } : {}),

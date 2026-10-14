@@ -537,3 +537,58 @@ test("usage: real rate-limit events flatten into per-window rows; turn costs are
   assert.equal(read.account.day.costUsd, 0.02);
   assert.equal(read.thread.all.outputTokens, 4);
 });
+
+// --- Portable agent wiring ---------------------------------------------------
+import { writeFile as writeFileAsync } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { portableClaude } from "../portable/agent-claude.mjs";
+
+test("portable agent: Claude is off by default and its executable is pinned by SHA-256", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "claude-portable-"));
+  const store = new Store(join(dir, "state.sqlite"));
+  t.after(async () => { store.close(); await rm(dir, { recursive: true, force: true }); });
+  assert.equal(portableClaude(store, dir, {}), null);
+  assert.equal(portableClaude(store, dir, { BOTS_CLAUDE_ENABLED: "0" }), null);
+  const binary = join(dir, "claude-bin");
+  await writeFileAsync(binary, "#!/bin/sh\n", { mode: 0o700 });
+  const sha = createHash("sha256").update("#!/bin/sh\n").digest("hex");
+  const make = (env) => {
+    const backend = portableClaude(store, dir, { BOTS_CLAUDE_ENABLED: "1", ...env });
+    Object.assign(backend, { credential: "test", query: fakeQuery(async () => []), mcp: fakeMcp });
+    return backend;
+  };
+  await assert.rejects(make({}).start(), /absolute path/);
+  const { chmod } = await import("node:fs/promises");
+  await chmod(binary, 0o775);
+  await assert.rejects(make({ BOTS_CLAUDE_BINARY: binary, BOTS_CLAUDE_BINARY_SHA256: sha }).start(), /writable/);
+  await chmod(binary, 0o700);
+  await assert.rejects(make({ BOTS_CLAUDE_BINARY: binary }).start(), /reviewed SHA-256/);
+  await assert.rejects(make({ BOTS_CLAUDE_BINARY: binary, BOTS_CLAUDE_BINARY_SHA256: "0".repeat(64) }).start(), /differs/);
+  const ok = make({ BOTS_CLAUDE_BINARY: binary, BOTS_CLAUDE_BINARY_SHA256: sha });
+  const log = [];
+  ok.query = fakeQuery(async () => [], log);
+  await ok.start();
+  t.after(() => ok.close());
+  assert.equal(ok.configDir, join(dir, "claude"));
+  assert.equal(log[0].options.pathToClaudeCodeExecutable, binary, "the model catalog read uses the pinned binary");
+  const { thread } = await ok.call("thread/start", { cwd: "/bots/p" });
+  assert.equal(log.at(-1).options.pathToClaudeCodeExecutable, binary);
+  assert.match(thread.id, /^claude:/);
+});
+
+test("portable agent: a misconfigured Claude backend never blocks Codex startup", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "claude-portable-fault-"));
+  const store = new Store(join(dir, "state.sqlite"));
+  t.after(async () => { store.close(); await rm(dir, { recursive: true, force: true }); });
+  const codex = new MinimalCodex();
+  const claude = portableClaude(store, dir, { BOTS_CLAUDE_ENABLED: "1", BOTS_CLAUDE_BINARY: "relative/claude" });
+  claude.credential = "test";
+  const router = new ProviderRouter({ codex, claude });
+  const faults = [];
+  router.on("claudeFault", (e) => faults.push(e.message));
+  await router.start();
+  assert.equal(router.ready, true);
+  assert.equal(router.claudeReady, false);
+  assert.match(faults[0], /absolute path/);
+  await assert.rejects(router.call("thread/start", { provider: "claude", cwd: "/bots/x" }), (e) => e.definite);
+});

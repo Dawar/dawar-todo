@@ -2,6 +2,8 @@ import { join, isAbsolute } from 'node:path';
 import { randomUUID,createHash } from 'node:crypto';
 import { Store } from '../bot-bridge/store.mjs';
 import { Codex } from '../bot-bridge/codex.mjs';
+import { ProviderRouter } from '../bot-bridge/provider-router.mjs';
+import { portableClaude } from './agent-claude.mjs';
 import { BotRuntime } from '../bot-bridge/runtime.mjs';
 import { CodexManager } from '../bot-bridge/manager.mjs';
 import { NodeJournal } from './control-store.mjs';
@@ -292,7 +294,11 @@ export async function runAgent(config){
     ||config.agent.nodeId&&enrollment.nodeId!==config.agent.nodeId)throw Error('Enrollment differs from reviewed agent activation.');
   const source=verifiedAgentRelease({activation,entrypoint:import.meta.url,codexBinary:config.agent.codexBinary,runtime:RUNTIME_VERSION});
   process.umask(0o077);
-  const store=new Store(join(config.dataDirectory,'native-control.sqlite')),codex=new Codex(config.agent.codexBinary);
+  const store=new Store(join(config.dataDirectory,'native-control.sqlite'));
+  // Codex stays the authoritative native child; Claude-owned threads route to
+  // the Agent SDK backend only when BOTS_CLAUDE_ENABLED=1.
+  const codex=new ProviderRouter({codex:new Codex(config.agent.codexBinary),claude:portableClaude(store,config.dataDirectory)});
+  codex.on('claudeFault',error=>console.error(JSON.stringify({at:new Date().toISOString(),event:'claude.error',message:error.message})));
   const runtime=new BotRuntime({store,codex,root:config.agent.workspaces,defaultTimeZone:process.env.BOTS_TIME_ZONE??'UTC',
     adminLeadIds:JSON.parse(process.env.BOTS_ADMIN_LEAD_IDS??'[]')});
   if(typeof enrollment.owner!=='string'||!enrollment.owner||config.owner?.key&&config.owner.key!==enrollment.owner)throw Error('Submission owner differs from authenticated enrollment.');
