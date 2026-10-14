@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Provision and supervise named, persistent XFCE desktops for the dawar user."""
 import argparse
+import errno
 import fcntl
 import ipaddress
 import shutil
@@ -18,6 +19,8 @@ import time
 
 BASE = Path(os.environ.get('BOTS_DESKTOP_DIR', str(Path.home() / '.local/share/codex-bot-desktops')))
 UNIT_DIR = Path.home() / '.config/systemd/user'
+MANAGED_VNC_BASE = 25900
+MANAGED_RDP_PORTS = range(23900, 24000)
 NAME_RE = re.compile(r'[a-z][a-z0-9-]{0,39}\Z')
 
 
@@ -54,15 +57,16 @@ def provision(args):
     name = args.name
     dest = directory(name)
     display, rdp = args.display, args.rdp_port
-    vnc = 5900 + display
+    # Persist ports in each new profile; existing profiles keep their assigned ports.
+    vnc = MANAGED_VNC_BASE + display
     if not (20 <= display <= 99 and 1024 <= rdp <= 65535 and 1024 <= vnc <= 65535):
         raise ValueError('Display must be 20..99; RDP port must be 1024..65535.')
     if dest.exists():
         raise ValueError('Desktop already exists. Use start, stop, status or recover.')
     for candidate in BASE.glob('*/config.json'):
         other = json.loads(candidate.read_text())
-        if display == other['display'] or rdp == other['rdp_port']:
-            raise ValueError(f'Display or RDP port already assigned to {candidate.parent.name}.')
+        if display == other['display'] or rdp == other['rdp_port'] or vnc == other['vnc_port']:
+            raise ValueError(f'Display, VNC or RDP port already assigned to {candidate.parent.name}.')
     if Path(f'/tmp/.X11-unix/X{display}').exists():
         raise ValueError(f'X11 display :{display} is already in use.')
     for port in (vnc, rdp):
@@ -239,24 +243,37 @@ def managed(args):
             for display in range(20, 100):
                 if any(c['display'] == display for c in used) or Path(f'/tmp/.X11-unix/X{display}').exists():
                     continue
-                for port in range(3391, 3491):
+                vnc = MANAGED_VNC_BASE + display
+                if any(c['vnc_port'] == vnc for c in used):
+                    continue
+                # A busy VNC endpoint disqualifies this display, not every RDP port.
+                try:
+                    with socket.socket() as probe:
+                        probe.bind(('127.0.0.1', vnc))
+                    with socket.socket(socket.AF_INET6) as probe:
+                        probe.bind(('::1', vnc))
+                except OSError as exc:
+                    if exc.errno == errno.EADDRINUSE:
+                        continue
+                    raise ValueError(f'Cannot reserve managed VNC port {vnc}: {exc}') from exc
+                for port in MANAGED_RDP_PORTS:
                     if any(c['rdp_port'] == port for c in used):
                         continue
                     try:
                         with socket.socket() as probe:
                             probe.bind((bind, port))
-                        with socket.socket() as probe:
-                            probe.bind(('127.0.0.1', 5900 + display))
-                    except OSError:
-                        continue
+                    except OSError as exc:
+                        if exc.errno == errno.EADDRINUSE:
+                            continue
+                        raise ValueError(f'Cannot bind managed RDP at {bind}:{port}: {exc}') from exc
                     provision(SimpleNamespace(name=args.name, owner=args.owner, display=display,
                               rdp_port=port, rdp_bind=bind, width=1280, height=800))
                     break
                 else:
-                    raise ValueError('No free managed RDP ports.')
+                    raise ValueError('No free managed RDP ports (23900..23999).')
                 break
             else:
-                raise ValueError('No free bot displays (20..99). Stop/delete an unused desktop.')
+                raise ValueError('No free managed display/VNC slots (displays 20..99, VNC 25920..25999).')
         if not dest.exists() and args.action == 'remove':
             return
         if dest.is_symlink():

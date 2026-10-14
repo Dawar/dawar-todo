@@ -15,6 +15,7 @@ The default bot role still uses its assigned desktop only. Setting service envir
 ## Ownership and lifecycle
 
 - Names are derived from the bot ID. Allocation is protected by an interprocess lock; the private `config.json` records the owner, X11 display and ports.
+- New desktops use VNC ports **25920..25999** (loopback IPv4/IPv6, display 20..99) and managed RDP ports **23900..23999** (loopback or the configured Tailscale address). Existing profiles retain their saved ports and sessions. These ranges are below Linux's usual ephemeral port range; availability is still checked at allocation time. An occupied VNC endpoint skips that display, while an occupied RDP endpoint skips that RDP port. Address/permission errors report their actual cause instead of masquerading as exhausted ports. No firewall expansion or public VNC listener is added.
 - Each desktop has separate Xauthority, D-Bus, XFCE configuration/cache/data, credentials and user services. The home and filesystem are shared; this is session separation, not a security sandbox.
 - Idle bots and closed browser viewers preserve open apps. Enabled desktops also start after reboot when user lingering is enabled.
 - Stop closes apps and disables both user units. First use starts them again.
