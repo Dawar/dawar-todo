@@ -57,7 +57,7 @@ import { ScheduleEditor } from "./schedule-editor";
 import { botsClient as client } from "./client";
 import type { NativeEvent } from "./thread-state";
 import { BotConversation } from "./timeline";
-import { BotSidebarList } from "./sidebar-list";
+import { BotSidebarList, type SidebarFocusIntent } from "./sidebar-list";
 import { FollowupComposerProvider } from "./codex-followup";
 import { SidebarFilters } from "./sidebar-filters";
 import { useSharedReadPositions } from './read-position-sync';
@@ -77,7 +77,7 @@ import { useBotComposer } from "./use-composer";
 import { botComposers, type ComposerPaste } from "./composer-service";
 import { ComposerAttachments, ComposerStatus } from "./composer-state";
 import { installExtensionShortcuts } from "./extension-shortcuts";
-import { useBotSearchShortcut } from "./bot-search-shortcut";
+import { useBotSearchShortcut, botKeyboardAvailable } from "./bot-search-shortcut";
 import { SavedDrafts } from "./saved-drafts";
 import { ComposerInput } from "./composer-input";
 import { ComposerSettings } from "./composer-settings";
@@ -134,10 +134,11 @@ export function BotsWorkspace() {
   const selectedRef = useRef(selected), screenRef = useRef<HTMLDivElement>(null),
     fileRef = useRef<HTMLInputElement>(null), searchRef = useRef<HTMLInputElement>(null),
     queueRequest = useRef(0), createOperation = useRef(crypto.randomUUID());
+  const sidebarFocus = useRef<SidebarFocusIntent | null>(null);
   useLayoutEffect(() => { selectedRef.current = selected; }, [selected]);
   const owner = client.owner;
   const scope = JSON.stringify([owner, selected]);
-  const { searchOpen, closeSearch } = useBotSearchShortcut(screenRef, searchRef, JSON.stringify([owner, selected, gallery]));
+  const { searchOpen, closeSearch, keepOpenForNavigation } = useBotSearchShortcut(screenRef, searchRef, JSON.stringify([owner, selected, gallery, client.snapshot?.bots.find(value => value.id === selected)?.threadId ?? null]));
   if (editingSchedule && editingSchedule.scope !== scope) setEditingSchedule(null);
   const promptQueue = queueScope === scope ? loadedQueue : EMPTY_QUEUE;
   const { composer, error: composerError } = useBotComposer(client.owner, selected);
@@ -298,7 +299,8 @@ export function BotsWorkspace() {
       client.events.delete(listener);
     };
   }, [loadQueue]);
-  const select = useCallback((id: string | null) => {
+  const select = useCallback((id: string | null, keyboard = false) => {
+    if (!keyboard) sidebarFocus.current = null;
     closeSearch();
     selectedRef.current = id;
     setSelected(id); setGallery(null);setTransferError("");
@@ -308,6 +310,11 @@ export function BotsWorkspace() {
     else url.searchParams.delete("bot");
     window.history.pushState({}, "", url);
   }, [closeSearch]);
+  const navigateBot = useCallback((id: string) => {
+    if (client.owner !== owner) return;
+    select(id, true);
+    if (window.matchMedia('(max-width: 700px)').matches) keepOpenForNavigation(JSON.stringify([owner, id, null, client.snapshot?.bots.find(value => value.id === id)?.threadId ?? null]));
+  }, [owner, select, keepOpenForNavigation]);
   const finishTransfer=useCallback(async(paste:ComposerPaste)=>{
     const target=bots.find(bot=>bot.id===paste.targetBotId);
     if(paste.nonEmpty&&!window.confirm(`Replace ${target?.name??"this bot"}'s existing draft? Its previous contents will be saved for recovery.`))return false;
@@ -477,8 +484,12 @@ export function BotsWorkspace() {
             </Button>
             </div>
           </div>
-          <SidebarFilters search={search} onSearch={setSearch} searchRef={searchRef} archived={archived} onArchived={setArchived} teams={teams} teamsSupported={teamsSupported} teamFilter={teamFilter} onTeamFilter={setTeamFilter} sort={teamSort} onSort={setTeamSort} />
-          <BotSidebarList owner={owner} search={search} bots={filtered} snapshot={snapshot} selected={selected} select={select}
+          <SidebarFilters search={search} onSearch={setSearch} searchRef={searchRef} onFocusResults={() => {
+            const list = screenRef.current?.querySelector<HTMLElement>('.bots-list');
+            if (client.owner !== owner || !list || !botKeyboardAvailable(list)) return false;
+            list.focus({ preventScroll: true }); return true;
+          }} archived={archived} onArchived={setArchived} teams={teams} teamsSupported={teamsSupported} teamFilter={teamFilter} onTeamFilter={setTeamFilter} sort={teamSort} onSort={setTeamSort} />
+          <BotSidebarList owner={owner} search={search} bots={filtered} snapshot={snapshot} selected={selected} select={select} navigate={navigateBot} focusIntent={sidebarFocus}
             empty={teamFilter!=="all" ? "No bots in this team." : search ? "No matching bots." : archived ? "No archived bots." : "Your bots will appear here."} />
           <div className="bots-machine">
             <span className={`bots-status-dot ${online ? "online" : ""}`} />

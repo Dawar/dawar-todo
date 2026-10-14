@@ -7,8 +7,9 @@ import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
 import type { BotTeam } from "@/lib/bots-types";
 
-export function SidebarFilters({ search, onSearch, searchRef, archived, onArchived, teams, teamsSupported, teamFilter, onTeamFilter, sort, onSort }: {
+export function SidebarFilters({ search, onSearch, searchRef, onFocusResults, archived, onArchived, teams, teamsSupported, teamFilter, onTeamFilter, sort, onSort }: {
   search: string; onSearch: (value: string) => void; searchRef: RefObject<HTMLInputElement | null>;
+  onFocusResults?: () => boolean;
   archived: boolean; onArchived: (value: boolean) => void;
   teams: BotTeam[]; teamsSupported: boolean; teamFilter: string; onTeamFilter: (value: string) => void;
   sort: "recent" | "team" | "name"; onSort: (value: "recent" | "team" | "name") => void;
@@ -17,7 +18,9 @@ export function SidebarFilters({ search, onSearch, searchRef, archived, onArchiv
   return <div className="space-y-2 px-3 pb-3">
     <div className="relative">
       <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
-      <Input ref={searchRef} aria-label="Search bots" aria-keyshortcuts="Meta+K Control+K" title="Search bots (⌘K / Ctrl+K)" placeholder="Search bots" value={search} onChange={event => onSearch(event.target.value)} className="pl-9 pr-11" />
+      <Input ref={searchRef} aria-label="Search bots" aria-keyshortcuts="Meta+K Control+K ArrowDown" title="Search bots (⌘K / Ctrl+K); Down enters the bot list" placeholder="Search bots" value={search} onChange={event => onSearch(event.target.value)} onKeyDown={event => {
+        if (event.key === 'ArrowDown' && !event.defaultPrevented && !event.nativeEvent.isComposing && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && onFocusResults?.()) event.preventDefault();
+      }} className="pl-9 pr-11" />
       {search && <Button type="button" variant="ghost" size="icon" className="absolute right-0 top-0" aria-label="Clear bot search" onClick={() => { onSearch(""); searchRef.current?.focus(); }}><X aria-hidden="true" /></Button>}
     </div>
     <div className="grid grid-cols-2 gap-2">

@@ -96,6 +96,7 @@
 .bots-row { color: var(--foreground); }
 .bots-row.selected { box-shadow: inset 3px 0 0 var(--primary); }
 .bots-row:focus-visible, .bots-team-heading:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }
+.bots-list:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }
 .bots-row > .bot-avatar-engine { width: 44px; height: 44px; flex: none; }
 .bots-row-working { display: inline-flex; align-items: center; justify-content: center; flex: none; color: var(--muted-foreground); }
 .bots-team-heading:hover { background: var(--muted); border-radius: var(--radius); }
