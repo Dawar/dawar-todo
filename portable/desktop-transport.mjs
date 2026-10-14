@@ -1,7 +1,10 @@
 import { boundedFrame, id } from './protocol.mjs';
 
 const LIMIT = 128 * 1024;
-const failure = () => Object.assign(Error('Linux desktop scope is unavailable or changed.'), { outcome: 'not-sent' });
+const END_REASONS = new Set(['desktop-disabled', 'node-connection-changed', 'control-snapshot-unavailable', 'bot-unavailable',
+  'viewer-close', 'input-byte-limit', 'input-frame-limit', 'node-output-buffer-limit', 'output-send-failed',
+  'runtime-message-failed', 'runtime-maintenance', 'node-disconnected', 'scope-reconcile-failed', 'transport-ended']);
+const failure = (desktopReason) => Object.assign(Error('Linux desktop scope is unavailable or changed.'), { outcome: 'not-sent', ...(desktopReason ? { desktopReason } : {}) });
 export const DESKTOP_READS = new Set(['desktop.status', 'desktop.preview', 'desktop.open']);
 export const DESKTOP_MUTATIONS = new Set(['desktop.start', 'desktop.stop', 'desktop.delete', 'desktop.browserPolicy', 'desktop.browserRelease', 'desktop.browserProtect', 'desktop.browserReopen']);
 export function desktopCapable(node, socket) {
@@ -87,9 +90,12 @@ export class AgentDesktopTransport {
     Object.assign(this, { runtime, journal, currentSocket }); this.channels = new Map(); this.retired = new Set();
   }
   scope(c) {
-    if (!this.runtime.desktops || this.currentSocket() !== c.socket || c.socket.readyState !== 1 ||
-      !this.journal.currentControl({ bot_id: c.botId, epoch: c.epoch })) throw failure();
-    const bot = this.runtime.store.bot(c.botId); this.runtime.desktops.assertBot(bot); return bot;
+    if (!this.runtime.desktops) throw failure('desktop-disabled');
+    if (this.currentSocket() !== c.socket || c.socket.readyState !== 1) throw failure('node-connection-changed');
+    if (!this.journal.currentControl({ bot_id: c.botId, epoch: c.epoch })) throw failure('control-snapshot-unavailable');
+    const bot = this.runtime.store.bot(c.botId);
+    try { this.runtime.desktops.assertBot(bot); } catch { throw failure('bot-unavailable'); }
+    return bot;
   }
   message(socket, m) {
     if (!id(m.clientId) || !id(m.botId) || !Number.isSafeInteger(m.epoch) || !['open', 'close', 'ping', 'control', 'data'].includes(m.event)) throw failure();
@@ -97,17 +103,18 @@ export class AgentDesktopTransport {
     if (m.event === 'open') {
       if (c || [...this.retired].some(old=>old.clientId===m.clientId) || this.channels.size+this.retired.size >= 8 ||
         !id(m.parentId) || m.parentId === m.clientId || !/^[a-f0-9]{64}$/.test(m.token ?? '')) throw failure();
-      c = { socket, botId: m.botId, epoch: m.epoch, clientId: m.clientId, chain: Promise.resolve(), bytes: 0, pending: 0 };
+      c = { socket, botId: m.botId, epoch: m.epoch, clientId: m.clientId, chain: Promise.resolve(), bytes: 0, pending: 0, openedAt: performance.now() };
       this.scope(c); this.channels.set(m.clientId, c);
     }
     if (!c) return;
     if (c.socket !== socket || c.botId !== m.botId || c.epoch !== m.epoch) throw failure();
     // Closing is always allowed to dispose this exact old channel after an
     // epoch/connection change; it never grants access to another session.
-    if (m.event === 'close') return this.end(c);
+    if (m.event === 'close') return this.end(c, 'viewer-close');
     this.scope(c);
     const bytes = m.event === 'data' ? dataBytes(m.data).length : 0;
-    if (c.bytes + bytes > 2 * 1024 * 1024 || c.pending >= 64) return this.end(c);
+    if (c.bytes + bytes > 2 * 1024 * 1024) return this.end(c, 'input-byte-limit');
+    if (c.pending >= 64) return this.end(c, 'input-frame-limit');
     c.bytes += bytes; c.pending++;
     const run = async () => {
       if (this.channels.get(c.clientId) !== c) return;
@@ -116,22 +123,29 @@ export class AgentDesktopTransport {
         try {
           if (this.channels.get(c.clientId) !== c) return;
           this.scope(c);
-          if (socket.bufferedAmount > 8 * 1024 * 1024) throw failure();
+          if (socket.bufferedAmount > 8 * 1024 * 1024) throw failure('node-output-buffer-limit');
           socket.send(boundedFrame({ ...value, type: 'desktop-response', botId: c.botId, epoch: c.epoch }));
           if (value.event === 'closed') this.channels.delete(c.clientId);
-        } catch { void this.end(c); }
+        } catch (error) { void this.end(c, error?.desktopReason ?? 'output-send-failed'); }
       };
       const work = () => this.runtime.maintenance.track(() => this.runtime.desktops.message({ ...m, type: 'desktop' }, send));
       if (m.event === 'open') await this.runtime.maintenance.admit(work); else await work();
       if (this.channels.get(c.clientId) === c) this.scope(c);
       else await this.runtime.desktops.end(c.clientId, 'Desktop connection ended during open.');
     };
-    c.chain = c.chain.then(run).catch(() => this.end(c)).finally(() => { c.bytes -= bytes; c.pending--; if(!c.pending)this.retired.delete(c); });
+    c.chain = c.chain.then(run).catch(error => this.end(c, error?.desktopReason ?? (error?.maintenance ? 'runtime-maintenance' : 'runtime-message-failed'))).finally(() => { c.bytes -= bytes; c.pending--; if(!c.pending)this.retired.delete(c); });
     return c.chain;
   }
-  async end(c) {
+  async end(c, reason = 'transport-ended') {
     if (this.channels.get(c.clientId) === c) {
       this.channels.delete(c.clientId);
+      // Fixed categories and numeric counters only: never log tickets,
+      // passwords, RFB bytes, page contents, or arbitrary exception text.
+      if (reason !== 'viewer-close') try { console.warn('[desktop-transport]', JSON.stringify({
+        reason: END_REASONS.has(reason) ? reason : 'transport-ended', botId: c.botId, epoch: c.epoch,
+        elapsedMs: Math.round(performance.now() - c.openedAt), pendingFrames: c.pending,
+        pendingBytes: c.bytes, bufferedBytes: c.socket.bufferedAmount,
+      })); } catch { /* Diagnostic failure must not prevent channel disposal. */ }
       if(c.pending)this.retired.add(c);
       if (this.currentSocket() === c.socket && c.socket.readyState === 1) {
         try { c.socket.send(boundedFrame({ type: 'desktop-response', event: 'closed', clientId: c.clientId, botId: c.botId, epoch: c.epoch, error: 'Desktop transport ended.' })); } catch { /* no replay */ }
@@ -140,9 +154,9 @@ export class AgentDesktopTransport {
     await this.runtime.desktops?.end(c.clientId, 'Desktop transport ended.');
   }
   async disconnect(socket) {
-    await Promise.all([...this.channels.values()].filter(c => c.socket === socket).map(c => this.end(c)));
+    await Promise.all([...this.channels.values()].filter(c => c.socket === socket).map(c => this.end(c, 'node-disconnected')));
   }
   async reconcile() {
-    await Promise.all([...this.channels.values()].map(c => { try { this.scope(c); } catch { return this.end(c); } }));
+    await Promise.all([...this.channels.values()].map(c => { try { this.scope(c); } catch (error) { return this.end(c, error?.desktopReason ?? 'scope-reconcile-failed'); } }));
   }
 }
