@@ -75,7 +75,7 @@ export class AgentTransport {
   send(value){if(this.socket?.readyState===WebSocket.OPEN)this.socket.send(JSON.stringify(value));}
   controlRequest(botId,tool,args){
     if(!HUB_TOOLS.has(tool))throw Error('Unsupported hub tool.');
-    const read=tool==='bots_team'&&args.operation==='read'||tool==='bots_message'&&args.operation==='source'||tool==='bots_schedule_list'||tool==='bots_queue'&&['lists','read'].includes(args.operation);
+    const read=tool==='bots_team'&&args.operation==='read'||tool==='bots_message'&&['source','directory'].includes(args.operation)||tool==='bots_schedule_list'||tool==='bots_queue'&&['lists','read'].includes(args.operation);
     return this.requestHub(botId,'control',{tool,args},read);
   }
   artifactRequest(botId,action,input){

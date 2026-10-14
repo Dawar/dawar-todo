@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { SubmissionSources,registeredBotSource } from '../bot-bridge/submission-sources.mjs';
 import { fingerprint,id } from './protocol.mjs';
+import { messageDirectory, resolveRecipient } from '../bot-bridge/bot-directory.mjs';
 
 const binding = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const own = (value,keys) => value&&typeof value==='object'&&!Array.isArray(value)&&Object.keys(value).every(k=>keys.includes(k));
@@ -15,14 +16,30 @@ export class HubSubmissions extends SubmissionSources {
     this.runtime.hub.node(caller.nodeId);
     return {p,b};
   }
+  /** This owner's placed bots on the hub: the only bots a sender can reach. */
+  messageable(owner){
+    const placed=new Set(this.runtime.hub.db.prepare('SELECT bot_id FROM portable_placements WHERE owner=?').all(owner).map(p=>p.bot_id));
+    return this.store.bots().filter(b=>placed.has(b.id));
+  }
   tool(owner,botId,args,caller){
-    if(!own(args,['operation','recipientBotId','text','operationId','submissionId','replyToSubmissionId']))throw Error('Sender identity and custom metadata are not tool arguments.');
+    if(!own(args,['operation','recipient','recipientBotId','text','operationId','submissionId','replyToSubmissionId']))throw Error('Sender identity and custom metadata are not tool arguments.');
     const sender=this.caller(owner,botId,caller);
     if(args.operation==='source'){
       if(!own(args,['operation','submissionId']))throw Error('Source reads accept only a submission ID.');
       return this.read(sender.b,{submissionId:args.submissionId});
     }
-    if(args.operation!=='send'||!own(args,['operation','recipientBotId','text','operationId','replyToSubmissionId'])||!id(args.recipientBotId)||!id(args.operationId)||args.operationId.length<10||typeof args.text!=='string'||!args.text.trim()||Buffer.byteLength(args.text)>16384||args.text.includes('\0'))throw Error('Provide recipientBotId, bounded text and one stable operationId.');
+    if(args.operation==='directory'){
+      if(!own(args,['operation']))throw Error('The directory takes no arguments.');
+      return {bots:messageDirectory(this.messageable(owner),botId)};
+    }
+    if(args.operation!=='send'||!own(args,['operation','recipient','recipientBotId','text','operationId','replyToSubmissionId'])||!id(args.operationId)||args.operationId.length<10||typeof args.text!=='string'||!args.text.trim()||Buffer.byteLength(args.text)>16384||args.text.includes('\0'))throw Error('Provide a recipient, bounded text and one stable operationId.');
+    // A general reference ("Claudia", "#21", a slug) resolves to one exact
+    // bot here; the ID then binds the submission exactly as before.
+    if(args.recipientBotId===undefined&&args.recipient===undefined)throw Error('Name the recipient bot, for example "Claudia" or "#21".');
+    const resolved=args.recipient!==undefined?resolveRecipient(this.messageable(owner),args.recipient,botId).id:null;
+    if(resolved&&args.recipientBotId!==undefined&&args.recipientBotId!==resolved)throw Error('recipient and recipientBotId name different bots.');
+    args={...args,recipientBotId:args.recipientBotId??resolved};delete args.recipient;
+    if(!id(args.recipientBotId))throw Error('Invalid recipient bot.');
     if(args.recipientBotId===botId)throw Error('Select another bot.');
     if(sender.p.stopped||sender.b.queuePaused)throw Error('Sender Stop is active.');
     const recipient=this.runtime.scope(owner,args.recipientBotId);

@@ -8,7 +8,7 @@ import { CREATION_OPERATION, fingerprint, id, originalCreationProof } from './pr
 const now = () => new Date().toISOString();
 const PARAMS = new Set(['name', 'purpose', 'provider', 'nodeId']);
 // Fields a created native bot contributes to the hub record once.
-const IDENTITY = ['name', 'purpose', 'cwd', 'color', 'threadId', 'model', 'effort', 'serviceTier', 'mode', 'executionMode',
+const IDENTITY = ['name', 'purpose', 'cwd', 'color', 'extension', 'threadId', 'model', 'effort', 'serviceTier', 'mode', 'executionMode',
   'provider', 'avatar', 'burstQuietSeconds', 'status', 'preview', 'updatedAt', 'error'];
 const fail = (message, outcome) => Object.assign(Error(message), { outcome });
 

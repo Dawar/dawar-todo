@@ -7,9 +7,9 @@ Use the installed `bots_message` tool. If it is unavailable, retain the message 
 
 ## Send
 
-Choose an existing recipient bot ID from authorized team/registry information. Send useful requested results, necessary questions or concrete handoffs under existing authority. Avoid courtesy acknowledgements and status loops.
+Address the recipient the way the human does: put its name or first name (for example `"Claudia"`), full display name, slug, or sidebar `#extension` in `recipient`. Any active bot of the same owner can be messaged, on any team or none. An ambiguous or unknown name is refused with the candidates; never guess between them. To see who is available, call `bots_message` with `operation: "directory"`. An exact `recipientBotId` also works when you already have one. Send useful requested results, necessary questions or concrete handoffs under existing authority. Avoid courtesy acknowledgements and status loops.
 
-Call `bots_message` with `operation: "send"`, `recipientBotId`, `text` (at most 16 KiB UTF-8), and one stable `operationId`. The application supplies the authenticated sender. Do not include a source, owner, role, name or arbitrary metadata.
+Call `bots_message` with `operation: "send"`, `recipient` (or `recipientBotId`), `text` (at most 16 KiB UTF-8), and one stable `operationId`. The application supplies the authenticated sender. Do not include a source, owner, role or arbitrary metadata.
 
 For a reply, also supply `replyToSubmissionId`: the submission ID of the bot message received in this conversation. The recipient must be that message's original bot sender. A new message omits the field. This link retains the chain; it does not forward a transcript or grant permission.
 
