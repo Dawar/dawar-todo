@@ -264,6 +264,16 @@ export class AgentTransport {
       const receipt=payload.method==='portable.queueResume'?queueResumeReceipt(command,result):{operationId:command.operation_id,threadId:bot.threadId,...(turnId?{turnId}:{}),...(terminalStatus?{nativeStatus:terminalStatus}:{}),...(result?.evidence?{evidence:result.evidence}:{}),...(payload.operatorSource?{operatorInputCount:this.operator.inputCount(bot.id)}:{}),result};
       this.journal.settle(command.operation_id,payload.method==='portable.queueResume'?'terminal':turnId?(terminalStatus?'terminal':'native-accepted'):payload.method==='turn.send'||NODE_LOGICAL_COMMANDS.has(payload.method)?'unknown':'terminal',receipt);
     } catch(error){
+      const current=this.journal.db.prepare('SELECT * FROM node_commands WHERE operation_id=?').get(command.operation_id);
+      // Logical admission deliberately defers before journal.prepare. Keep the
+      // original received command for the existing reconnect/recovery loop;
+      // no native submission happened and there is no uncertain effect to lock.
+      // Never apply this to a prepared command, a prior operation, or a restart
+      // with an ambiguous outcome, even if an inner error says "not-sent".
+      if(NODE_LOGICAL_COMMANDS.has(payload.method)&&error.outcome==='not-sent'&&
+        current?.state==='received'&&current.fingerprint===command.fingerprint&&!this.runtime.store.operation(command.operation_id)){
+        this.receipt(current);return;
+      }
       this.journal.settle(command.operation_id,error.outcome==='rejected'?'terminal':'unknown',{operationId:command.operation_id,outcome:error.outcome??'uncertain',error:error.message});
     }
     this.receipt(this.journal.db.prepare('SELECT * FROM node_commands WHERE operation_id=?').get(command.operation_id));
