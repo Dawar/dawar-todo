@@ -13,6 +13,7 @@ import { remarkVisualizations } from "./visualization-markdown";
 import { MarkdownTable } from "./markdown-table";
 import { MarkdownCodeBlock } from "../markdown-code-block";
 import { SubmissionAuthor } from "./submission-author";
+import { BotMessageDisclosure } from "./bot-message-disclosure";
 import type { SubmissionAttribution } from "../../lib/submission-source";
 import "./submission-author.css";
 import type { BotAttachment } from "../../lib/bots-types";
@@ -96,6 +97,8 @@ function BotMessage({
   partial = false,
   submission,
   source,
+  beforeToggle,
+  beforeBubbleToggle,
 }: {
   item: ThreadItem;
   botId: string;
@@ -105,6 +108,8 @@ function BotMessage({
   partial?: boolean;
   submission?: SubmissionAttribution;
   source?: FollowupSource;
+  beforeToggle?: () => void;
+  beforeBubbleToggle?: (open: boolean, target: HTMLElement) => void;
 }) {
   function markdownPage(text: string) {
     return <MessageMarkdown text={text} botId={botId} attachments={attachments}/>;
@@ -124,26 +129,7 @@ function BotMessage({
           {item.clientId?.startsWith("schedule:") && (
             <small>Scheduled task</small>
           )}
-          {<ItemPages items={item.content} render={(c, i) =>
-            c.type === "text" ? (
-              <TextPages key={i} text={c.text} render={(text) => <p>{text}</p>} />
-            ) : c.type === "localImage" &&
-              attachments.find((a) => a.path === c.path) ? (
-              <AttachmentImage
-                key={i}
-                botId={botId}
-                attachment={attachments.find((a) => a.path === c.path)!}
-              />
-            ) : (
-              <p key={i} className="bots-input-file">
-                {c.type === "localImage" || c.type === "image"
-                  ? "Image attached"
-                  : c.type === "skill"
-                    ? `$${c.name}`
-                    : "File attached"}
-              </p>
-            )
-          } />}
+          <UserMessageBody item={item} botId={botId} attachments={attachments} submission={submission} source={source} beforeToggle={beforeToggle} beforeBubbleToggle={beforeBubbleToggle}/>
         </div>
       </div>
     );
@@ -241,6 +227,24 @@ function BotMessage({
 
 const MemoBotMessage = memo(BotMessage);
 export { MemoBotMessage as BotMessage };
+
+function UserMessageBody({ item, botId, attachments, submission, source, beforeToggle, beforeBubbleToggle }: {
+  item: Extract<ThreadItem, { type: 'userMessage' }>; botId: string; attachments: BotAttachment[];
+  submission?: SubmissionAttribution; source?: FollowupSource; beforeToggle?: () => void; beforeBubbleToggle?: (open: boolean, target: HTMLElement) => void;
+}) {
+  const owner = useSyncExternalStore(botsClient.subscribe, () => botsClient.owner, () => '');
+  const body = () => <ItemPages items={item.content} render={(c, i) => c.type === 'text'
+    ? <TextPages key={i} text={c.text} render={text => <p>{text}</p>}/>
+    : c.type === 'localImage' && attachments.find(a => a.path === c.path)
+      ? <AttachmentImage key={i} botId={botId} attachment={attachments.find(a => a.path === c.path)!}/>
+      : <p key={i} className="bots-input-file">{c.type === 'localImage' || c.type === 'image' ? 'Image attached' : c.type === 'skill' ? `$${c.name}` : 'File attached'}</p>}/>;
+  // Unbound historic inputs retain their existing readable fallback. Prose is
+  // never used to classify authorship or borrow a current conversation ID.
+  if (submission?.source.kind !== 'bot' || !submission.submissionId || !submission.source.id || !owner ||
+      source?.botId !== botId || !source.threadId || !source.turnId || source.itemId !== item.id) return body();
+  const scope = JSON.stringify([owner, botId, source.threadId, source.turnId, item.id, submission.submissionId, submission.source.id]);
+  return <BotMessageDisclosure key={scope} scope={scope} content={item.content} beforeToggle={beforeBubbleToggle ?? beforeToggle}>{body}</BotMessageDisclosure>;
+}
 
 export function AttachmentImage({
   botId,

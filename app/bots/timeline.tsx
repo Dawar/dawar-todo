@@ -38,8 +38,8 @@ import { TaskRequestAccess, TaskRequestCard, useTaskRequests } from "./task-requ
 import { taskRequestGroups } from "./task-request-timeline";
 const noDetailErrors = () => () => {};
 
-const EntryBody = memo(function EntryBody({ entry, timeline, attachments, download }: {
-  entry: HistoryEntry; timeline: HistoryDetailReader; attachments: BotAttachment[]; download: (id: string) => void;
+const EntryBody = memo(function EntryBody({ entry, timeline, attachments, download, beforeToggle, beforeBubbleToggle }: {
+  entry: HistoryEntry; timeline: HistoryDetailReader; attachments: BotAttachment[]; download: (id: string) => void; beforeToggle?: () => void; beforeBubbleToggle?: (open: boolean, target: HTMLElement) => void;
 }) {
   const { turnId, id } = entry;
   const full = useSyncExternalStore(useCallback((fn) => timeline.subscribeDetail({ turnId, id }, fn), [timeline, turnId, id]), () => timeline.detailItem(entry), () => null);
@@ -68,7 +68,7 @@ const EntryBody = memo(function EntryBody({ entry, timeline, attachments, downlo
   // A new native preview stays current while an older opened detail is being
   // reconciled. A failed/expired full read must not cover it with stale steps.
   if (workPlan && full?.type === 'plan' && !refreshing && !loading && !detailError && !error) try { workPlan = readWorkPlanSource(full.text) ?? undefined; } catch { planError = "Could not update the work plan. The saved preview is shown."; }
-  return <>{entry.questionNotice && <p className="bots-system-note">{entry.questionNotice}</p>}{refreshing && <small>Updating…</small>}{entry.workPlan ? workPlan && <WorkPlanMessage plan={workPlan} botId={timeline.botId} attachments={attachments} turnStatus={entry.turnStatus ?? entry.status}/> : item && <BotMessage item={item} source={{botId:timeline.botId,threadId:entry.sourceThreadId ?? "",turnId:entry.turnId,itemId:entry.id}} submission={entry.submission} botId={timeline.botId} attachments={attachments} download={download} inWorkLog partial={entry.status === "inProgress" || !full && !entry.complete} />}
+  return <>{entry.questionNotice && <p className="bots-system-note">{entry.questionNotice}</p>}{refreshing && <small>Updating…</small>}{entry.workPlan ? workPlan && <WorkPlanMessage plan={workPlan} botId={timeline.botId} attachments={attachments} turnStatus={entry.turnStatus ?? entry.status}/> : item && <BotMessage item={item} beforeToggle={beforeToggle} beforeBubbleToggle={beforeBubbleToggle} source={{botId:timeline.botId,threadId:entry.sourceThreadId ?? "",turnId:entry.turnId,itemId:entry.id}} submission={entry.submission} botId={timeline.botId} attachments={attachments} download={download} inWorkLog partial={entry.status === "inProgress" || !full && !entry.complete} />}
     {!entry.complete && <div className="bots-detail-status">
       <Button variant="outline" type="button" disabled={loading} onClick={() => void load()}>{loading ? "Loading…" : full ? "Refresh details" : item ? "Continue · load complete message" : "Open full details"}</Button>
       {full && !botsClient.online && <small>Saved copy. Reconnect to check for changes.</small>}
@@ -291,7 +291,7 @@ function BotConversationFeed({ owner, bot, online, children, onOpenCall, onReply
   // Other message groups do not replace that reply.
   const readableContext = (entries: HistoryEntry[]) => entries.length > 0 && <section aria-label="Latest readable context" data-history-context>
     <p className="bots-system-note">Latest readable messages. Intervening work remains accessible through earlier history.</p>
-    {entries.map(entry => <TimelineEntry {...replyProps} onOpenCall={onOpenCall} key={historyKey(entry.turnId, entry.id)} entry={entry} timeline={timeline} attachments={state.attachments} download={download} />)}
+    {entries.map(entry => <TimelineEntry {...replyProps} beforeToggle={feed.capture} beforeBubbleToggle={feed.disclose} onOpenCall={onOpenCall} key={historyKey(entry.turnId, entry.id)} entry={entry} timeline={timeline} attachments={state.attachments} download={download} />)}
   </section>;
   const earlierTicks = first > 0 || Boolean(state.olderCursor) || state.gaps.some(gap => gap.before === historyKey(state.entries[first]?.turnId ?? '', state.entries[first]?.id ?? ''));
   const showTicks = tickNavigation.ticks.length > 0 || earlierTicks;
@@ -314,7 +314,7 @@ function BotConversationFeed({ owner, bot, online, children, onOpenCall, onReply
       if (group.taskRequest) return <TaskRequestCard key={group.kind} request={group.taskRequest} capture={feed.capture}/>;
       const entry = group.entries[0], key = historyKey(entry.turnId, entry.id);
       const open = expanded.has(timeline.resolveKey(key)!);
-      const workProps = { open, beforeToggle: feed.capture, onOpenChange: (next: boolean) => setExpanded(prior => { const copy = new Set(prior); if (next) copy.add(key); else copy.delete(key); return copy; }) };
+      const workProps = { open, beforeToggle: feed.capture, beforeBubbleToggle: feed.disclose, onOpenChange: (next: boolean) => setExpanded(prior => { const copy = new Set(prior); if (next) copy.add(key); else copy.delete(key); return copy; }) };
       const confirmed = canonicalBurst(entry, burst.value);
       const replyBatch = entry.replyMessages;
       return <Fragment key={key}>
