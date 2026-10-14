@@ -38,6 +38,7 @@ import {
   ListPlus,
   UsersRound,
   Phone,
+  Megaphone,
   } from "lucide-react";
 import type { Bot } from "./single-thread-contract";
 import { BotAvatar as Avatar } from "./bot-avatar";
@@ -60,6 +61,8 @@ import { BotConversation } from "./timeline";
 import { BotSidebarList, type SidebarFocusIntent } from "./sidebar-list";
 import { FollowupComposerProvider } from "./codex-followup";
 import { SidebarFilters } from "./sidebar-filters";
+import { AnnouncementDialog } from "./announcements";
+import { searchSidebarBots } from "./announcement-state";
 import { useSharedReadPositions } from './read-position-sync';
 import { TaskRequestWorkspace } from "./task-request-ui";
 import { RequestCard } from "./request-card";
@@ -117,7 +120,6 @@ export function BotsWorkspace() {
   const [, redraw] = useState(0),
     [selected, setSelected] = useState<string | null>(null),
     [search, setSearch] = useState(""),
-    [archived, setArchived] = useState(false),
     [creating, setCreating] = useState(false),
     [profile, setProfile] = useState(false),
     [desktopScope, setDesktopScope] = useState<string | null>(null),
@@ -151,7 +153,7 @@ export function BotsWorkspace() {
     !checkoutLocked && uploads.every((file) => file.remote?.ready));
   const setDraft = (text: string) => composer?.setText(text);
   const [showCall, setShowCall] = useState(false), [callBotId, setCallBotId] = useState<string | null>(null);
-  const [showTeams, setShowTeams] = useState(false), [teamFilter, setTeamFilter] = useState("all"), [teamSort, setTeamSort] = useState<"recent" | "team" | "name">("recent");
+  const [showTeams, setShowTeams] = useState(false), [announcementOwner, setAnnouncementOwner] = useState<string | null>(null);
   const snapshot = client.snapshot;
   useSharedReadPositions(owner, snapshot?.bots ?? [], snapshot?.capabilities?.portableAgents === 1);
   const teams = snapshot?.teams ?? [];
@@ -440,19 +442,7 @@ export function BotsWorkspace() {
     if (!images.length) return;
     void upload(images);
   }
-  const filtered = useMemo(() => {
-    const teams = snapshot?.teams ?? [];
-    const filter = teamFilter === "all" || teamFilter === "none" || teams.some(t=>t.id===teamFilter) ? teamFilter : "all";
-    const matching = bots.filter(b=>b.archived===archived && `${b.name} ${b.purpose} #${b.extension ?? ""}`.toLowerCase().includes(search.toLowerCase()) &&
-      (filter==="all"||filter==="none"&&!b.teamId||b.teamId===filter));
-    if (teamSort==="name") matching.sort((a,b)=>a.name.localeCompare(b.name)||a.id.localeCompare(b.id));
-    if (teamSort==="team") {
-      const order = new Map(teams.map((t,index)=>[t.id,index]));
-      matching.sort((a,b)=>(order.get(a.teamId??"")??teams.length)-(order.get(b.teamId??"")??teams.length) ||
-        (a.teamId===b.teamId?(a.teamOrder??0)-(b.teamOrder??0):0)||a.name.localeCompare(b.name)||a.id.localeCompare(b.id));
-    }
-    return matching;
-  }, [bots, archived, search, teamFilter, teamSort, snapshot?.teams]);
+  const filtered = useMemo(() => searchSidebarBots(bots, snapshot?.teams ?? [], search), [bots, search, snapshot?.teams]);
   const schedules = snapshot?.schedules.filter((s) => s.botId === selected) ?? [];
   const recentRuns = [...new Map([...(lanes ? snapshot?.backgroundRuns ?? [] : []), ...(snapshot?.runs ?? [])]
     .filter(run => run.botId === selected).map(run => [run.id, run])).values()];
@@ -460,7 +450,7 @@ export function BotsWorkspace() {
   const closeProfile = useCallback(() => setProfile(false), []);
   const openActivity = (target: ActivityTarget | null = null) => { setActivityTarget(target); setDetailsSection("history"); setProfile(true); };
   return (
-    <TaskRequestWorkspace key={JSON.stringify([owner,bot?.id,bot?.threadId])} owner={owner} bot={bot} online={online} supported={snapshot?.capabilities?.taskRequests === 1}><div className="bots-screen" ref={screenRef} data-no-pull-refresh>
+    <><TaskRequestWorkspace key={JSON.stringify([owner,bot?.id,bot?.threadId])} owner={owner} bot={bot} online={online} supported={snapshot?.capabilities?.taskRequests === 1}><div className="bots-screen" ref={screenRef} data-no-pull-refresh>
       <SiteHeader current="bots" />
       <main className={`bots-layout ${selected || gallery ? "has-selection" : ""} ${searchOpen ? "search-open" : ""}`}>
         <aside className="bots-sidebar" onKeyDown={event => { if (event.key === 'Escape' && searchOpen && !event.defaultPrevented) { event.preventDefault(); closeSearch(true); } }}>
@@ -468,6 +458,7 @@ export function BotsWorkspace() {
             <h1 className="sr-only">Bots</h1>
             {searchOpen && (selected || gallery) && <Button type="button" variant="ghost" size="icon" className="bots-search-close" aria-label="Close bot search" onClick={() => closeSearch(true)}><X size={20}/></Button>}
             <div className="bots-sidebar-tools">
+            <Button type="button" variant="ghost" size="icon" aria-label="Announcement" title="Announcement" disabled={!owner} onClick={() => setAnnouncementOwner(owner)}><Megaphone size={19} /></Button>
             {snapshot?.capabilities?.operatorCalls === 1 && <Button type="button" variant="ghost" size="icon" className="aria-pressed:bg-accent aria-pressed:text-accent-foreground" aria-label="Call Operator" onClick={() => { setCallBotId(null); setShowCall(true); }}><Phone size={16} /></Button>}
             <ArtifactNav active={gallery === "artifacts"} onOpen={() => openGallery("artifacts")} />
             <Button type="button" variant="ghost" size="icon" className="aria-pressed:bg-accent aria-pressed:text-accent-foreground" title="Teams" aria-label="Teams" onClick={() => setShowTeams(true)}><UsersRound size={19} /></Button>
@@ -488,9 +479,9 @@ export function BotsWorkspace() {
             const list = screenRef.current?.querySelector<HTMLElement>('.bots-list');
             if (client.owner !== owner || !list || !botKeyboardAvailable(list)) return false;
             list.focus({ preventScroll: true }); return true;
-          }} archived={archived} onArchived={setArchived} teams={teams} teamsSupported={teamsSupported} teamFilter={teamFilter} onTeamFilter={setTeamFilter} sort={teamSort} onSort={setTeamSort} />
+          }} />
           <BotSidebarList owner={owner} search={search} bots={filtered} snapshot={snapshot} selected={selected} select={select} navigate={navigateBot} focusIntent={sidebarFocus}
-            empty={teamFilter!=="all" ? "No bots in this team." : search ? "No matching bots." : archived ? "No archived bots." : "Your bots will appear here."} />
+            empty={search ? "No matching bots." : "Your bots will appear here."} />
           <div className="bots-machine">
             <span className={`bots-status-dot ${online ? "online" : ""}`} />
             <span>
@@ -830,7 +821,6 @@ export function BotsWorkspace() {
                   createOperation.current,
                 );
                 setCreating(false);
-                setArchived(false);
                 select(created.id);
                 await client.refresh();
               });
@@ -851,5 +841,6 @@ export function BotsWorkspace() {
         />
       )}
     </div></TaskRequestWorkspace>
+    {announcementOwner && announcementOwner === owner && <AnnouncementDialog key={owner} owner={owner} onClose={() => setAnnouncementOwner(null)} />}</>
   );
 }
