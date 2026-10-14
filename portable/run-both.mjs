@@ -37,7 +37,11 @@ export async function runBoth(configPath) {
     res.writeHead(ready?200:503,{'content-type':'application/json','cache-control':'no-store'});
     res.end(JSON.stringify({ready,relayConnected:Boolean(r.relayOnline),codexVersion:RUNTIME_VERSION,source:c.hub.source,role:'both',
       siteReady,maintenance:r.maintenance.snapshot(),bots:r.store.bots().length,
-      models:r.models.map(m=>m.model),nodeId:agent.transport.enrollment.nodeId,capabilities:agent.transport.hello().capabilities,
+      // `models` stays the exact Codex catalog that deployment health compares;
+      // Claude's account-dependent catalog is reported beside it.
+      models:r.models.filter(m=>m.provider!=='claude').map(m=>m.model),
+      claude:{ready:Boolean(r.codex.claudeReady),models:r.models.filter(m=>m.provider==='claude').map(m=>m.model)},
+      nodeId:agent.transport.enrollment.nodeId,capabilities:agent.transport.hello().capabilities,
       manager:{ready:true}}));
   });health.listen(c.healthPort??47821,'127.0.0.1');
   const close=combinedShutdown({agent,gateway,health,child,siteTimer,stopping:()=>{stopping=true;}});
