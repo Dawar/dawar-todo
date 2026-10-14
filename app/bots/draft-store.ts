@@ -2,6 +2,7 @@ import type { BotReplyReference } from "../../lib/bot-replies";
 import type { BotAttachment, BridgeRequest } from "../../lib/bots-types";
 import { pdfReviewTarget, pdfReviewMessage } from "./pdf-review";
 import { documentIdentity } from "./document-source";
+import { blastText, type BlastEditIntent, type BurstEditReceipt } from '../../lib/burst-edit';
 import { draftContentFingerprint, type ComposerDraftContent, type ComposerDraftMutation, type SharedComposerDraft } from '../../lib/bot-composer-draft';
 
 // Critical data only. Histories and other disposable caches never enter this DB.
@@ -31,6 +32,8 @@ export type Submission = {
   runDelivery?: { state: "prepared" | "possible"; token: string };
 };
 export type DraftRecord = {
+  blastDestinationId?: string;
+  blastEdits?: Record<string, BlastEditIntent>;
   owner: string; botId: string; revision: string; active: string;
   slots: Record<string, Draft>; operations: Record<string, Submission>;
   /** Local Forward acceptance tombstones. Never resent or pruned with caches. */
@@ -47,7 +50,12 @@ export type DraftRecord = {
 };
 export type RunDeliveryResult = "not-sent" | "uncertain" | "queued" | "success" | "rejected";
 export type DraftChange =
+  | { kind: 'blast-begin'; intent: BlastEditIntent }
+  | { kind: 'blast-receipt'; id: string; receipt: BurstEditReceipt }
+  | { kind: 'blast-merge' | 'blast-complete'; id: string }
+  | { kind: 'blast-rejected'; id: string; error: string }
   | { kind: "text"; slot: string; text: string; version: string; base: string }
+  | { kind: "prefill"; slot: string; text: string; version: string; expected: string }
   | { kind: "reply"; slot: string; reply?: BotReplyReference; version: string; base: string }
   | { kind: "add"; slot: string; files: StagedFile[] }
   | { kind: "remove"; slot: string; id: string }
@@ -70,6 +78,12 @@ export type DraftChange =
 export const emptyDraft = (): Draft => ({ text: "", textVersion: "empty", files: [] });
 // No-reply drafts retain172's fingerprint, including legacy restore receipts.
 export const draftFingerprint = (record: DraftRecord) => JSON.stringify([record.active, record.slots[record.active].textVersion, record.slots[record.active].files.map(file => file.id), ...(record.slots[record.active].reply ? [record.slots[record.active].reply] : [])]);
+/** Review identity excludes upload progress/readiness, which does not edit the draft. */
+export const draftReviewFingerprint = (record: DraftRecord) => {
+  const draft = record.slots[record.active];
+  return JSON.stringify([record.active, draft.textVersion, draft.text, draft.reply, draft.queueId, draft.queueSource,
+    draft.files.map(file => [file.id, file.name, file.mimeType, file.size, file.uploadBotId, file.reviewPage])]);
+};
 export const emptyRecord = (owner: string, botId: string): DraftRecord => ({
   owner, botId, revision: "empty", active: "normal", slots: { normal: emptyDraft() }, operations: {}, migrated: false,
 });
@@ -98,7 +112,7 @@ export function fileLimit(files: Pick<StagedFile, "mimeType" | "size">[]) {
 // writers retain the displaced version as a recoverable draft, never discard it.
 export function changeDraft(source: DraftRecord, change: DraftChange): DraftRecord {
   const record: DraftRecord = {
-    ...source, slots: Object.fromEntries(Object.entries(source.slots).map(([key, d]) => [key, { ...d, files: d.files.map((f) => ({ ...f })) }])),
+    ...source, blastEdits: source.blastEdits ? {...source.blastEdits} : undefined, slots: Object.fromEntries(Object.entries(source.slots).map(([key, d]) => [key, { ...d, files: d.files.map((f) => ({ ...f })) }])),
     operations: { ...source.operations },
   };
   const promoteNormal = (draft: Draft, slot: string) => {
@@ -111,11 +125,65 @@ export function changeDraft(source: DraftRecord, change: DraftChange): DraftReco
     if (slot !== "normal") delete record.slots[slot];
     record.active = "normal";
   };
-  if (change.kind === "normalize") {
+  if (change.kind === 'blast-begin') {
+    if (Object.values(record.blastEdits ?? {}).some(edit => !edit.complete)) return source;
+    if (record.active !== 'normal' || Object.keys(record.operations).length) throw Error('Finish the current draft action before editing the blast.');
+    // First strict IDB writer chooses one browser destination and operation.
+    record.blastDestinationId ??= change.intent.params.destinationId;
+    const intent = {...change.intent, params:{...change.intent.params,destinationId:record.blastDestinationId}};
+    record.blastEdits = {...record.blastEdits,[intent.id]:intent};
+  } else if (change.kind === 'blast-receipt') {
+    const edit = record.blastEdits?.[change.id];
+    if (!edit || edit.complete) return source;
+    record.blastEdits![change.id] = {...edit,receipt:change.receipt};
+    // Keep exact originals and every quote/file in established Saved drafts.
+    // These copies never authorize a send or acknowledge the server transfer.
+    for (const m of change.receipt.messages) {
+      const key = `recovered:blast:${change.id}:${m.id}`;
+      record.slots[key] ??= {...emptyDraft(),text:m.text,textVersion:key,reply:m.reply,
+        files:m.attachmentIds.map(id => {const f=change.receipt.attachments.find(file=>file.id===id)!;return {id:f.id,name:f.name,mimeType:f.mimeType,size:f.size,hasBytes:false,remote:f};})};
+    }
+  } else if (change.kind === 'blast-merge') {
+    const edit = record.blastEdits?.[change.id];
+    if (!edit || edit.saved || edit.complete) return source;
+    if (!edit.receipt || record.active !== 'normal' || Object.keys(record.operations).length) throw Error('Return to the ordinary draft to finish this exact Edit. Original messages remain reserved.');
+    const draft=record.slots.normal, key=(f:StagedFile)=>f.remote?.id??f.id;
+    const sourceFiles=edit.receipt.attachments.map(f=>({id:f.id,name:f.name,mimeType:f.mimeType,size:f.size,hasBytes:false,remote:f}));
+    const files=[...sourceFiles.filter(f=>!draft.files.some(saved=>key(saved)===key(f))),...draft.files];
+    const limit=fileLimit(files);
+    const text=blastText(edit.receipt.messages), combined=text && draft.text ? `${text}\n${draft.text}` : text || draft.text;
+    if(limit || combined.length>200000) {
+      record.blastEdits![change.id]={...edit,saved:true,recoveryOnly:limit||'The combined editor exceeds its existing text limit.'};
+      return record; // Exact source drafts committed first; current draft intact.
+    }
+    const replies=[draft.reply,...edit.receipt.messages.map(m=>m.reply)].filter((r):r is BotReplyReference=>!!r);
+    const unique=new Map(replies.map(r=>[r.id,r]));
+    draft.text=combined;draft.textVersion=`blast-edit:${change.id}`;draft.files=files;
+    // Distinct native quotes are preserved as separate source drafts, with an
+    // explicit UI notice; no unsupported native multi-quote field is invented.
+    draft.reply=draft.reply??(unique.size===1?[...unique.values()][0]:undefined);
+    record.blastEdits![change.id]={...edit,saved:true,quoteConflict:unique.size>1};
+  } else if (change.kind === 'blast-rejected') {
+    const edit=record.blastEdits?.[change.id];
+    if (!edit || edit.receipt || edit.saved) return source;
+    record.blastEdits![change.id]={...edit,complete:true,rejected:change.error};
+  } else if (change.kind === 'blast-complete') {
+    const edit=record.blastEdits?.[change.id];
+    if (!edit?.saved) throw Error('The exact blast draft has not been saved.');
+    record.blastEdits![change.id]={...edit,complete:true};
+  } else if (change.kind === "normalize") {
     if (!Object.keys(record.operations).length && record.slots[record.active]?.queueSource?.removed)
       promoteNormal(record.slots[record.active], record.active);
     for (const draft of Object.values(record.slots)) for (const file of draft.files)
       if (file.remote?.ready) delete file.error;
+  } else if (change.kind === "prefill") {
+    const draft = record.slots[change.slot];
+    if (draft?.textVersion === change.version && draft.text === change.text) return source;
+    if (!draft || Object.keys(record.operations).length || draft.queueId ||
+        draftReviewFingerprint(record) !== change.expected)
+      throw Object.assign(new Error("The draft changed. Review it before choosing the follow-up again."), { name: "DraftChangedError" });
+    draft.text = change.text;
+    draft.textVersion = change.version;
   } else if (change.kind === "text" || change.kind === "reply") {
     const draft = record.slots[change.slot];
     if (!draft) throw new Error("Draft is no longer available. Reopen it before editing.");
@@ -173,6 +241,7 @@ export function changeDraft(source: DraftRecord, change: DraftChange): DraftReco
     record.forwarded = { ...record.forwarded, [change.id]: "normal" };
     record.active = "normal";
   } else if (change.kind === "submit") {
+    if (Object.values(record.blastEdits??{}).some(edit=>!edit.complete)) throw Object.assign(Error('Confirm the original blast Edit before sending this draft.'),{name:'DraftChangedError'});
     const op = change.operation;
     // Two tabs submitting the same slot share the first durable operation.
     if (!Object.values(record.operations).some((p) => p.slot === op.slot)) {
@@ -296,13 +365,15 @@ export class BotDraftStore {
       request.onsuccess = () => done((request.result as FileRow | undefined)?.blob);
     });
   }
-  async change(owner: string, botId: string, change: DraftChange, bytes: Map<string, Blob> = new Map()): Promise<DraftRecord> {
+  async change(owner: string, botId: string, change: DraftChange, bytes: Map<string, Blob> = new Map(), current?: () => boolean): Promise<DraftRecord> {
     if (!owner || !botId) throw new Error("Sign in as the bot owner before saving a draft.");
     return this.transaction(["drafts", "files"], "readwrite", (tx, done, fail) => {
       const drafts = tx.objectStore("drafts"), files = tx.objectStore("files");
       const request = drafts.get([owner, botId]);
       request.onsuccess = () => {
         try {
+          if (['prefill','blast-begin','blast-merge'].includes(change.kind) && current && !current())
+            throw Object.assign(new Error("The conversation changed. Choose the follow-up again."), { name: "DraftChangedError" });
           const previous = request.result as DraftRecord | undefined;
           if (!previous?.migrated) throw new Error("Recover the existing draft before changing it.");
           const record = changeDraft(previous, change);
@@ -336,7 +407,7 @@ export class BotDraftStore {
     return this.syncChange(owner, botId, record => {
       const content = sharedDraftContent(record), fingerprint = draftContentFingerprint(content);
       if (!record.sync || record.sync.pending || record.sync.base === fingerprint || record.sync.blocked === fingerprint ||
-          Object.values(record.operations).some(op => op.slot === 'normal')) return record;
+          Object.values(record.operations).some(op => op.slot === 'normal') || Object.values(record.blastEdits??{}).some(edit=>!edit.complete)) return record;
       return { ...record, sync: { ...record.sync, blocked: undefined, pending: {
         operationId: crypto.randomUUID(), expectedRevision: record.sync.revision, content,
       } } };
@@ -348,7 +419,7 @@ export class BotDraftStore {
       const pending = source.sync?.pending;
       if (receipt && pending?.operationId !== receipt.operationId) return source;
       if (!receipt && (pending || remote.revision <= (source.sync?.revision ?? -1))) return source;
-      if (Object.values(source.operations).some(op => op.slot === 'normal')) return source;
+      if (Object.values(source.operations).some(op => op.slot === 'normal') || Object.values(source.blastEdits??{}).some(edit=>!edit.complete)) return source;
       const local = source.slots.normal, fingerprint = draftContentFingerprint(sharedDraftContent(source));
       const base = draftContentFingerprint(remote.content);
       const record: DraftRecord = { ...source, slots: { ...source.slots }, sync: { revision: remote.revision, base } };

@@ -24,6 +24,7 @@ html.bots-viewport-locked body {
   flex-shrink: 0;
 }
 .bots-layout {
+  position: relative;
   display: grid;
   grid-template-columns: 300px minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr);
@@ -51,6 +52,7 @@ html.bots-viewport-locked body {
   letter-spacing: -0.025em;
 }
 .bots-sidebar-tools { display: flex; align-items: center; gap: 2px; }
+.bots-search-close { display: none; }
 .bots-icon-button {
   display: inline-flex;
   align-items: center;
@@ -295,6 +297,16 @@ html.bots-viewport-locked body {
   .bots-layout.has-selection .bots-conversation {
     display: flex;
   }
+  .bots-layout.has-selection.search-open .bots-sidebar {
+    display: flex;
+    position: absolute;
+    inset: 0;
+    z-index: 10;
+  }
+  .bots-layout.has-selection.search-open > :not(.bots-sidebar) {
+    visibility: hidden;
+  }
+  .bots-search-close { display: inline-flex; }
   .bots-back {
     display: inline-flex;
   }

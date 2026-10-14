@@ -221,7 +221,7 @@ export type BotQueueList = { id: string; botId: string; name: string; cron: stri
 export type BotSnapshot = {
   secureInputs?: import("./secure-input").SecureRequest[];
   botAdminLeadIds?: string[];
-  capabilities?: { nativeErrorRecovery?: 1; nativeAuthRecovery?: 1; taskRequests?: 1; executionConfiguration?: 1; accountUsageHistory?: 1; submissionSources?: 1; botAdministration?: 1; botMemoryMaintenance?: 1; botDesktops?: 1; backgroundRunLanes?: 1; scheduleDecisions?: 1; singleThreadExecution?: 1; nativeGoals?: 1; nativeConversation?: 1; messageReplies?: 1; secureInputs?: 1; secureResponseLifecycle?: 1; operatorCalls?: 1; messageBursts?: 1; burstDiscard?: 1; burstControls?: 1; burstQueue?: 1; queueLists?: 1; queueRelativeMoves?: 1; queueSendNow?: 1; taskQueues?: 1; teams?: 1; claudeBots?: 1; portableAgents?: 1; botCreation?: 1 };
+  capabilities?: { nativeErrorRecovery?: 1; nativeAuthRecovery?: 1; taskRequests?: 1; executionConfiguration?: 1; accountUsageHistory?: 1; submissionSources?: 1; botAdministration?: 1; botMemoryMaintenance?: 1; botDesktops?: 1; backgroundRunLanes?: 1; scheduleDecisions?: 1; singleThreadExecution?: 1; nativeGoals?: 1; nativeConversation?: 1; messageReplies?: 1; secureInputs?: 1; secureResponseLifecycle?: 1; operatorCalls?: 1; messageBursts?: 1; burstDiscard?: 1; burstControls?: 1; burstQueue?: 1; burstEdit?: 1; queueLists?: 1; queueRelativeMoves?: 1; queueSendNow?: 1; taskQueues?: 1; teams?: 1; claudeBots?: 1; portableAgents?: 1; botCreation?: 1 };
   teams?: BotTeam[];
   workByBot?: BotWorkState[];
   backgroundByBot?: BotBackground[];
@@ -302,7 +302,7 @@ export type BotWorkState = {
 export type BotInboxItem = { id: string; botId: string; kind: "schedule" | "secure-input" | "memory-maintenance" | "task-request"; sourceId: string; summary: string;
   state: "queued" | "dispatching" | "accepted" | "uncertain" | "cancelled" | "failed"; createdAt: string; turnId: string | null; waitReason: string | null };
 export type BotBurstMessage = { reply?: import("./bot-replies").BotReplyReference; id: string; botId: string; text: string; attachmentIds: string[]; createdAt: string;
-  state: "pending" | "dispatching" | "sent" | "uncertain" | "failed"; batchId: string | null; turnId: string | null };
-export type BotBurst = { id: string; botId: string; revision?: number; state: "pending" | "preparing" | "paused" | "dispatching" | "sent" | "uncertain" | "failed" | "discarded";
+  state: "pending" | "dispatching" | "sent" | "uncertain" | "failed" | "editing"; batchId: string | null; turnId: string | null };
+export type BotBurst = { editOperationId?: string; editDestinationId?: string; id: string; botId: string; revision?: number; state: "pending" | "preparing" | "paused" | "dispatching" | "sent" | "uncertain" | "failed" | "discarded" | "editing";
   messageIds: string[]; dueAt: string | null; operationId: string | null; turnId: string | null; error: string | null };
 export type BotBurstState = { threadId?: string | null; controlRevision?: number; paused?: boolean; control?: { operationId: string; method: string; botId: string }; heldIds?: string[]; inFlightIds?: string[]; messages: BotBurstMessage[]; burst: BotBurst | null; batches?: BotBurst[]; attachments?: BotAttachment[] };

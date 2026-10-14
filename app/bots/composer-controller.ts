@@ -2,19 +2,20 @@ import type { BotReplyReference } from "../../lib/bot-replies";
 import type { BotAttachment, BotQueuedSubmission, BotRunReceipt } from "../../lib/bots-types";
 import { queueEditable } from "./queue-state";
 import { readQueueAction } from "./queue-action-store";
+import { validBurstEditBlocked, validBurstEditReceipt, type BurstEditParams, type BurstEditReceipt } from '../../lib/burst-edit';
 import {
-  BotDraftStore, changeDraft, emptyDraft, emptyRecord, fileLimit, fileReferences, PORTABLE_COMPOSER,
+  BotDraftStore, changeDraft, draftReviewFingerprint, emptyDraft, emptyRecord, fileLimit, fileReferences, PORTABLE_COMPOSER,
   type Draft, type DraftChange, type DraftRecord, type StagedFile, type Submission, type RunDeliveryResult,
 } from "./draft-store";
 
 export type ComposerTransport = {
   owner: string; online: boolean; storageAvailable?: boolean; replyAvailable?: boolean;
-  rpc: (method: Submission["method"] | "queue.list" | "runs.receipt", botId: string, params: Record<string, unknown>, id: string | undefined, options: { owner: string; managed: boolean }) => Promise<unknown>;
+  rpc: (method: Submission["method"] | "queue.list" | "runs.receipt" | "bursts.checkout" | "bursts.checkoutCommit", botId: string, params: Record<string, unknown>, id: string | undefined, options: { owner: string; managed: boolean }) => Promise<unknown>;
   upload: (botId: string, file: File, progress: (value: number) => void, id: string, owner: string, mode?:"cloud"|"legacy") => Promise<BotAttachment>;
   download: (botId: string, id: string, owner?: string) => Promise<{ blob: Blob }>;
   copyAttachment?: (source: BotAttachment, botId: string, id: string, owner: string) => Promise<BotAttachment>;
 };
-type QueuedChange = { change: DraftChange; bytes?: Map<string, Blob> };
+type QueuedChange = { change: DraftChange; bytes?: Map<string, Blob>; current?: () => boolean };
 const message = (error: unknown) => error instanceof Error ? error.message : "Draft recovery failed.";
 
 // A service-owned controller survives React Activity teardown, navigation and
@@ -34,8 +35,9 @@ export class BotComposer {
   private sending = new Set<string>();
   private listeners = new Set<() => void>();
   private recovering = 0;
-  private preparing: "send" | "checkout" | null = null;
-  get committing() { return this.preparing !== null; }
+  private preparing: "send" | "checkout" | "prefill" | null = null;
+  get blastEdit() { return Object.values(this.record.blastEdits ?? {}).find(edit=>!edit.complete); }
+  get committing() { return this.preparing !== null || !!this.blastEdit; }
   get checkingOut() { return this.preparing === "checkout"; }
   constructor(readonly owner: string, private targetBotId: string, private store: BotDraftStore,
     private transport: ComposerTransport, private committed: () => void = () => {}, private destination?: { runId: string; storageKey: string }, private portable = false,
@@ -106,14 +108,14 @@ export class BotComposer {
       this.notify();
     } catch (error) { this.storageError = message(error); this.notify(); }
   }
-  private enqueue(change: DraftChange, bytes?: Map<string, Blob>) {
+  private enqueue(change: DraftChange, bytes?: Map<string, Blob>, current?: () => boolean) {
     if (!this.ready || !this.canUseOwner) return;
     this.record = changeDraft(this.record, change);
     // Coalesce only text that has not started a transaction, retaining its base.
     const last = this.changes.at(-1);
     if (change.kind === "text" && last?.change.kind === "text" && last.change.slot === change.slot && this.changes.length > 1) {
       last.change = { ...change, base: last.change.base };
-    } else this.changes.push({ change, bytes });
+    } else this.changes.push({ change, bytes, current });
     this.notify();
     void this.flush().catch(() => {});
   }
@@ -124,13 +126,13 @@ export class BotComposer {
       while (this.changes.length) {
         const item = this.changes[0];
         try {
-          this.persisted = await this.store.change(this.owner, this.storageKey, item.change, item.bytes);
+          this.persisted = await this.store.change(this.owner, this.storageKey, item.change, item.bytes, item.current);
           this.changes.shift();
           this.storageError = "";
           this.renderPending();
           this.committed();
         } catch (error) {
-          if (item.change.kind === "submit" && (error as Error).name === "DraftChangedError") {
+          if (["submit","prefill","blast-begin","blast-merge"].includes(item.change.kind) && (error as Error).name === "DraftChangedError") {
             this.changes.shift();
             this.persisted = await this.store.get(this.owner, this.storageKey) ?? this.persisted;
             this.renderPending();
@@ -145,6 +147,72 @@ export class BotComposer {
   setText(text: string) {
     if (text === this.draft.text) return;
     this.enqueue({ kind: "text", slot: this.record.active, text, version: crypto.randomUUID(), base: this.draft.textVersion });
+  }
+  /** Explicit review-only edit, fenced against a different draft/tab/context. */
+  async prefillText(text: string, expected: string, current: () => boolean) {
+    if (!this.ready || !this.canUseOwner || this.committing || this.operation || this.draft.queueId || !current())
+      throw Object.assign(new Error("The composer changed. Choose the follow-up again."), { name: "DraftChangedError" });
+    this.preparing = "prefill"; this.notify();
+    try {
+      await this.flush(); await this.refresh();
+      if (!this.canUseOwner || !current() || this.storageError || Object.keys(this.record.operations).length ||
+          draftReviewFingerprint(this.record) !== expected)
+        throw Object.assign(new Error("The draft changed. Review it before choosing the follow-up again."), { name: "DraftChangedError" });
+      this.actionError = "";
+      this.enqueue({ kind: "prefill", slot: this.record.active, text, version: crypto.randomUUID(), expected }, undefined, current);
+      await this.flush();
+    } finally { this.preparing = null; this.notify(); }
+  }
+  /** Server reservation and browser draft commit are separate durable receipts.
+   * Repeated explicit recovery uses the same IDs; no automatic uncertain retry. */
+  async editBlast(params: Omit<BurstEditParams,'destinationId'>, current: () => boolean) {
+    if (!this.ready || !this.canUseOwner || this.preparing || this.operation || this.destination || this.separateDraft || !this.transport.online || !current())
+      throw Error('Reconnect to this original conversation and ordinary draft before editing.');
+    this.preparing='checkout';this.notify();
+    try {
+      await this.flush();await this.refresh();
+      if (!current() || !this.canUseOwner || this.storageError) throw Error('The editor changed. Original messages are retained.');
+      if (!this.blastEdit) {
+        this.enqueue({kind:'blast-begin',intent:{id:crypto.randomUUID(),params:{...params,destinationId:this.record.blastDestinationId??crypto.randomUUID()}}},undefined,current);
+        await this.flush();
+      }
+      let edit=Object.values(this.persisted.blastEdits??{}).find(edit=>!edit.complete);
+      if (!edit || edit.params.threadId!==params.threadId || !current()) throw Error('This Edit belongs to its original conversation.');
+      if (!edit.receipt) {
+        const result=await this.transport.rpc('bursts.checkout',this.botId,edit.params,edit.id,{owner:this.owner,managed:true}) as {checkout?:BurstEditReceipt;blocked?:unknown};
+        if(validBurstEditBlocked(result?.blocked,edit.id,this.botId,edit.params)) {
+          this.changes.push({change:{kind:'blast-rejected',id:edit.id,error:result.blocked.reason}});this.renderPending();await this.flush();
+          throw Error(result.blocked.reason);
+        }
+        if (!validBurstEditReceipt(result?.checkout,edit.id,this.botId,edit.params)) throw Error('The original Edit receipt is unconfirmed. Recover the same Edit before sending.');
+        // Preserve the originating receipt even after UI navigation; only the
+        // subsequent merge may target the still-captured current editor.
+        this.changes.push({change:{kind:'blast-receipt',id:edit.id,receipt:result.checkout}});this.renderPending();await this.flush();
+        edit=this.persisted.blastEdits![edit.id];
+      }
+      if (!edit.saved) {
+        if (!current() || !this.canUseOwner) throw Error('Return to the original conversation to finish Edit. Its source is reserved.');
+        this.enqueue({kind:'blast-merge',id:edit.id},undefined,current);await this.flush();
+        edit=this.persisted.blastEdits![edit.id];
+      }
+      // A positive strict draft transaction permits only confirmation of this
+      // source checkout, never another send. It cannot consume a newer blast.
+      if (!this.canUseOwner || !current()) throw Error('The draft is saved; return to its original conversation to confirm Edit.');
+      const p={operationId:edit.id,threadId:edit.params.threadId,destinationId:edit.params.destinationId};
+      const result=await this.transport.rpc('bursts.checkoutCommit',this.botId,p,`blast-edit-commit:${edit.id}`,{owner:this.owner,managed:true}) as typeof p & {botId?:string;committed?:boolean};
+      if (result?.operationId!==edit.id || result.botId!==this.botId || result.threadId!==p.threadId || result.destinationId!==p.destinationId || result.committed!==true)
+        throw Error('Edit confirmation is unconfirmed. The saved draft will not be prepended again; recover this same Edit.');
+      this.changes.push({change:{kind:'blast-complete',id:edit.id}});this.renderPending();await this.flush();
+      this.actionError=edit.recoveryOnly?`${edit.recoveryOnly} The blast is saved as separate drafts; your current editor is unchanged.`:edit.quoteConflict?'Blast prepended. Different quote sources remain in Saved drafts; review those originals before sending.':'';
+      return true;
+    } catch(error) {
+      const edit=this.blastEdit;
+      if(edit && !edit.receipt && !edit.saved && (error as {outcome?:string}).outcome==='rejected') {
+        this.changes.push({change:{kind:'blast-rejected',id:edit.id,error:message(error)}});this.renderPending();await this.flush();
+      }
+      this.actionError=message(error);throw error;
+    }
+    finally {this.preparing=null;this.notify();}
   }
   setReply(reply?: BotReplyReference) {
     if (this.committing || this.operation?.method === "queue.delete" || this.draft.queueSource && !this.draft.queueSource.removed) return;

@@ -97,7 +97,7 @@ const usageMetric = (groups, field) => {
 };
 const READ_METHODS = new Set([
   "secure.list", "execution.config", "submissions.source",
-  "work.read", "inbox.list", "goals.read", "bursts.read", "bursts.typing",
+  "work.read", "inbox.list", "goals.read", "bursts.read", "bursts.typing", "bursts.checkoutRead",
   "snapshot",
   "history",
   "history.page",
@@ -591,7 +591,7 @@ export class BotRuntime extends EventEmitter {
   }
   snapshot() {
     return {
-      capabilities: { nativeErrorRecovery: 1, nativeAuthRecovery: 1, submissionSources: this.sources.owner?.key ? 1 : undefined, taskRequests: this.storage && this.storage.features?.taskRequests !== false ? 1 : undefined, executionConfiguration: 1, accountUsageHistory: 1, runtimeMaintenance: 1, botAdministration: 1, botMemoryMaintenance: process.platform === 'linux' ? 1 : undefined, backgroundRunLanes: 1, scheduleDecisions: 1, singleThreadExecution: 1, nativeGoals: 1, nativeConversation: 1, messageReplies: 1, secureInputs: 1, secureResponseLifecycle: 1, operatorCalls: 1, operatorInputQuestions: 1, historyCursorIndex: 1, messageBursts: 1, burstDiscard: 1, burstControls: 1, burstQueue: 1, queueLists: 1, queueRelativeMoves: 1, queueSendNow: 1, ...(this.storage && this.storage.features?.taskQueues !== false ? { taskQueues: 1 } : {}), teams: 1, ...(this.codex.claudeReady ? { claudeBots: 1 } : {}), ...(this.desktops ? { botDesktops: 1, botBrowserRetention: 1 } : {}) },
+      capabilities: { nativeErrorRecovery: 1, nativeAuthRecovery: 1, submissionSources: this.sources.owner?.key ? 1 : undefined, taskRequests: this.storage && this.storage.features?.taskRequests !== false ? 1 : undefined, executionConfiguration: 1, accountUsageHistory: 1, runtimeMaintenance: 1, botAdministration: 1, botMemoryMaintenance: process.platform === 'linux' ? 1 : undefined, backgroundRunLanes: 1, scheduleDecisions: 1, singleThreadExecution: 1, nativeGoals: 1, nativeConversation: 1, messageReplies: 1, secureInputs: 1, secureResponseLifecycle: 1, operatorCalls: 1, operatorInputQuestions: 1, historyCursorIndex: 1, messageBursts: 1, burstDiscard: 1, burstControls: 1, burstQueue: 1, burstEdit: 1, queueLists: 1, queueRelativeMoves: 1, queueSendNow: 1, ...(this.storage && this.storage.features?.taskQueues !== false ? { taskQueues: 1 } : {}), teams: 1, ...(this.codex.claudeReady ? { claudeBots: 1 } : {}), ...(this.desktops ? { botDesktops: 1, botBrowserRetention: 1 } : {}) },
 
       botAdminLeadIds: [...this.botAdmin.leads],
       teams: publicTeams(this),
@@ -655,7 +655,7 @@ export class BotRuntime extends EventEmitter {
     if (method.startsWith("botAdmin.")) return this.botAdmin.owner(request, trustedOrigin);
     if ((method === "queue.taskConfirm" || method === "queue.add" && params.taskExportId) && (!request.clientId || trustedOrigin))
       throw new Error("Task queue transfer requires the authenticated owner browser.");
-    if (method === "bursts.queue" && (!request.clientId || trustedOrigin))
+    if (["bursts.queue", "bursts.checkout", "bursts.checkoutRead", "bursts.checkoutCommit"].includes(method) && (!request.clientId || trustedOrigin))
       throw Object.assign(Error("Burst queue transfer requires the authenticated owner browser."), {outcome:"rejected"});
     if(method.startsWith("secure.") && method!=="secure.list")throw Error("Sensitive input requires the dedicated encrypted channel; ordinary RPC is rejected.");
     if (method === "usage.history" && (!request.clientId || trustedOrigin))
@@ -685,11 +685,11 @@ export class BotRuntime extends EventEmitter {
       .digest("hex");
     // Pause is a synchronous local fence, independent of the long execution
     // lock. It cannot cancel a native reservation, but can stop preparation.
-    if (["bursts.stop", "bursts.resume", "bursts.start", "bursts.queue"].includes(method) || method === "bursts.discard" && params.pendingOnly === true) {
+    if (["bursts.stop", "bursts.resume", "bursts.start", "bursts.queue", "bursts.checkout", "bursts.checkoutCommit"].includes(method) || method === "bursts.discard" && params.pendingOnly === true) {
       const existing = this.store.operation(operationId);
       if (existing) {
         if (existing.fingerprint !== fingerprint) throw Error("Operation ID was reused with different input.");
-        if (existing.status === "done") return ["bursts.discard","bursts.queue"].includes(method) ? existing.result :
+        if (existing.status === "done") return ["bursts.discard","bursts.queue","bursts.checkout","bursts.checkoutCommit"].includes(method) ? existing.result :
           { ...existing.result, control: { operationId, method, botId } };
         throw Object.assign(Error("The original burst action needs reconciliation."), { outcome: "uncertain" });
       }
@@ -900,6 +900,7 @@ export class BotRuntime extends EventEmitter {
       case "work.read": return this.primary.work(bot);
       case "inbox.list": return this.primary.list(bot, p);
       case "work.resume": throw new Error("Local acceptance requires handle().");
+      case "bursts.checkoutRead": return this.bursts.checkoutRead(bot, p);
       case "bursts.read": return this.bursts.read(bot);
       case "bursts.typing": return this.bursts.typing(bot, p);
       case "goals.read": return this.primary.goal(bot, "get");

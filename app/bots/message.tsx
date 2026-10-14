@@ -1,5 +1,5 @@
 "use client";
-import { createContext, useContext, Fragment, memo, useEffect, useState, useRef, useMemo, useSyncExternalStore, type ReactNode } from "react";
+import { createContext, useContext, Fragment, memo, useEffect, useState, useRef, useMemo, useSyncExternalStore } from "react";
 import { LazyDetails, TextPages, ItemPages } from "./lazy-details";
 import { botsClient } from "./client";
 import { Button } from "@/components/ui/button";
@@ -7,10 +7,13 @@ import { ReturnedArtifact } from "./returned-artifact";
 import { ReturnedVisualization } from "./returned-visualization";
 import {normalizeFileCitations} from "../../lib/file-citation.mjs";
 import {FileCitation} from "./file-citation";
+import {codexFollowupProjection, type CodexFollowup} from '../../lib/codex-followup';
+import {CodexFollowupButton, type FollowupSource} from './codex-followup';
 import { remarkVisualizations } from "./visualization-markdown";
 import { MarkdownTable } from "./markdown-table";
 import { MarkdownCodeBlock } from "../markdown-code-block";
 import { SubmissionAuthor } from "./submission-author";
+import { BotMessageDisclosure } from "./bot-message-disclosure";
 import type { SubmissionAttribution } from "../../lib/submission-source";
 import "./submission-author.css";
 import type { BotAttachment } from "../../lib/bots-types";
@@ -20,7 +23,7 @@ import './native-work-plan.css';
 import ReactMarkdown, { defaultUrlTransform, type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
-const messageSchema = { ...defaultSchema, protocols: { ...defaultSchema.protocols, href: [...(defaultSchema.protocols?.href ?? []), "bot-artifact", "bot-visualization", "bot-file-citation"] } };
+const messageSchema = { ...defaultSchema, protocols: { ...defaultSchema.protocols, href: [...(defaultSchema.protocols?.href ?? []), "bot-artifact", "bot-visualization", "bot-file-citation", "bot-followup"] } };
 import {
   Terminal,
   FileDiff,
@@ -34,8 +37,15 @@ import type { ThreadItem } from "../../lib/codex-protocol/v2/ThreadItem";
 
 const renderMarkdownTable: Components["table"] = ({ children }) => <MarkdownTable>{children}</MarkdownTable>;
 const MarkdownFiles = createContext<{ botId: string; attachments: BotAttachment[] }>({ botId: "", attachments: [] });
-const MarkdownLink: Components["a"] = ({ href, children }) => {
+const MarkdownFollowups = createContext<{ references: CodexFollowup[]; offset: number; source?: FollowupSource; partial: boolean }>({ references: [], offset: 0, partial: false });
+const MarkdownLink: Components["a"] = ({ href, children, node }) => {
   const { botId, attachments } = useContext(MarkdownFiles);
+  const followups = useContext(MarkdownFollowups);
+  if (href?.startsWith('bot-followup:')) {
+    const position = node?.position?.start.offset;
+    const shortcut = typeof position === 'number' ? followups.references.find(ref => ref.href === href && ref.displayStart === position + followups.offset) : undefined;
+    return shortcut ? <CodexFollowupButton shortcut={shortcut} source={followups.source} partial={followups.partial}/> : <span>{children}</span>;
+  }
   if (href?.startsWith("bot-file-citation:")) return <FileCitation botId={botId} reference={href.slice(18)} attachments={attachments}/>;
   if (href?.startsWith("bot-visualization:")) return <ReturnedVisualization botId={botId} reference={href.slice(18)} attachments={attachments} />;
   if (href?.startsWith("bot-artifact:")) return <ReturnedArtifact botId={botId} id={href.slice(13)} attachment={attachments.find(file => file.id === href.slice(13))}>{children}</ReturnedArtifact>;
@@ -43,12 +53,13 @@ const MarkdownLink: Components["a"] = ({ href, children }) => {
 };
 // Stable Markdown adapters retain an open viewer when message metadata updates.
 const markdownComponents: Components = { table: renderMarkdownTable, pre: MarkdownCodeBlock, a: MarkdownLink };
-function MessageMarkdown({ text, botId, attachments }: { text: string; botId: string; attachments: BotAttachment[] }) {
+function MessageMarkdown({ text, botId, attachments, followups = [], offset = 0, source, partial = false }: { text: string; botId: string; attachments: BotAttachment[]; followups?: CodexFollowup[]; offset?: number; source?: FollowupSource; partial?: boolean }) {
   const files = useMemo(() => ({ botId, attachments }), [botId, attachments]);
-  return <MarkdownFiles.Provider value={files}><ReactMarkdown remarkPlugins={[remarkGfm, remarkVisualizations]}
+  const formats = useMemo(() => ({ references: followups, offset, source, partial }), [followups, offset, source, partial]);
+  return <MarkdownFollowups.Provider value={formats}><MarkdownFiles.Provider value={files}><ReactMarkdown remarkPlugins={[remarkGfm, remarkVisualizations]}
     rehypePlugins={[[rehypeSanitize, messageSchema]]}
-    urlTransform={url => url.startsWith('bot-artifact:') || url.startsWith('bot-visualization:') || url.startsWith('bot-file-citation:') ? url : defaultUrlTransform(url)}
-    components={markdownComponents}>{text}</ReactMarkdown></MarkdownFiles.Provider>;
+    urlTransform={url => url.startsWith('bot-artifact:') || url.startsWith('bot-visualization:') || url.startsWith('bot-file-citation:') || url.startsWith('bot-followup:') ? url : defaultUrlTransform(url)}
+    components={markdownComponents}>{text}</ReactMarkdown></MarkdownFiles.Provider></MarkdownFollowups.Provider>;
 }
 export function WorkPlanMessage({ plan, botId, attachments, turnStatus }: { plan: NativeWorkPlan; botId: string; attachments: BotAttachment[]; turnStatus?: string }) {
   const markdown = (text: string) => <MessageMarkdown text={text} botId={botId} attachments={attachments}/>;
@@ -63,15 +74,15 @@ export function WorkPlanMessage({ plan, botId, attachments, turnStatus }: { plan
   </section>;
 }
 
-function ProposedPlanText({ text: rawText, partial, nativePlan = false, render }: {
-  text: string; partial: boolean; nativePlan?: boolean; render: (text: string) => ReactNode;
+function ProposedPlanText({ text: rawText, partial, nativePlan = false, botId, attachments, source }: {
+  text: string; partial: boolean; nativePlan?: boolean; botId: string; attachments: BotAttachment[]; source?: FollowupSource;
 }) {
-  const text=useMemo(()=>normalizeFileCitations(rawText),[rawText]);
+  const projection=useMemo(()=>codexFollowupProjection(normalizeFileCitations(rawText)),[rawText]), text=projection.text;
   const parts = useMemo(() => proposedPlanParts(text, partial), [text, partial]);
   return <TextPages text={text} render={(page, offset) => parts.flatMap(part => {
     const start = Math.max(part.start, offset), end = Math.min(part.end, offset + page.length);
     if (start >= end && !(part.kind === "plan" && part.start === part.end && part.start >= offset && part.start <= offset + page.length)) return [];
-    const body = render(text.slice(start, Math.max(start, end)));
+    const body = <MessageMarkdown text={text.slice(start, Math.max(start, end))} botId={botId} attachments={attachments} followups={projection.references} offset={start} source={source} partial={partial}/>;
     return [part.kind === "plan" && !nativePlan ? <div key={part.key} className="bots-plan">
       <span>Proposed plan</span><div className="bots-message-markdown">{body}</div>
     </div> : <Fragment key={part.key}>{body}</Fragment>];
@@ -85,6 +96,9 @@ function BotMessage({
   inWorkLog = false,
   partial = false,
   submission,
+  source,
+  beforeToggle,
+  beforeBubbleToggle,
 }: {
   item: ThreadItem;
   botId: string;
@@ -93,6 +107,9 @@ function BotMessage({
   inWorkLog?: boolean;
   partial?: boolean;
   submission?: SubmissionAttribution;
+  source?: FollowupSource;
+  beforeToggle?: () => void;
+  beforeBubbleToggle?: (open: boolean, target: HTMLElement) => void;
 }) {
   function markdownPage(text: string) {
     return <MessageMarkdown text={text} botId={botId} attachments={attachments}/>;
@@ -112,26 +129,7 @@ function BotMessage({
           {item.clientId?.startsWith("schedule:") && (
             <small>Scheduled task</small>
           )}
-          {<ItemPages items={item.content} render={(c, i) =>
-            c.type === "text" ? (
-              <TextPages key={i} text={c.text} render={(text) => <p>{text}</p>} />
-            ) : c.type === "localImage" &&
-              attachments.find((a) => a.path === c.path) ? (
-              <AttachmentImage
-                key={i}
-                botId={botId}
-                attachment={attachments.find((a) => a.path === c.path)!}
-              />
-            ) : (
-              <p key={i} className="bots-input-file">
-                {c.type === "localImage" || c.type === "image"
-                  ? "Image attached"
-                  : c.type === "skill"
-                    ? `$${c.name}`
-                    : "File attached"}
-              </p>
-            )
-          } />}
+          <UserMessageBody item={item} botId={botId} attachments={attachments} submission={submission} source={source} beforeToggle={beforeToggle} beforeBubbleToggle={beforeBubbleToggle}/>
         </div>
       </div>
     );
@@ -140,14 +138,14 @@ function BotMessage({
       <div
         className={`bots-message bots-agent ${item.phase === "commentary" ? "is-commentary" : ""}`}
       >
-        <div className="bots-message-markdown"><ProposedPlanText text={item.text} partial={partial} render={markdownPage} /></div>
+        <div className="bots-message-markdown"><ProposedPlanText text={item.text} partial={partial} botId={botId} attachments={attachments} source={source}/></div>
       </div>
     );
   if (item.type === "plan")
     return (
       <div className="bots-plan">
         <span>Proposed plan</span>
-        <div className="bots-message-markdown"><ProposedPlanText text={item.text} partial={partial} nativePlan render={markdownPage} /></div>
+        <div className="bots-message-markdown"><ProposedPlanText text={item.text} partial={partial} nativePlan botId={botId} attachments={attachments} source={source}/></div>
       </div>
     );
   if (item.type === "reasoning")
@@ -229,6 +227,24 @@ function BotMessage({
 
 const MemoBotMessage = memo(BotMessage);
 export { MemoBotMessage as BotMessage };
+
+function UserMessageBody({ item, botId, attachments, submission, source, beforeToggle, beforeBubbleToggle }: {
+  item: Extract<ThreadItem, { type: 'userMessage' }>; botId: string; attachments: BotAttachment[];
+  submission?: SubmissionAttribution; source?: FollowupSource; beforeToggle?: () => void; beforeBubbleToggle?: (open: boolean, target: HTMLElement) => void;
+}) {
+  const owner = useSyncExternalStore(botsClient.subscribe, () => botsClient.owner, () => '');
+  const body = () => <ItemPages items={item.content} render={(c, i) => c.type === 'text'
+    ? <TextPages key={i} text={c.text} render={text => <p>{text}</p>}/>
+    : c.type === 'localImage' && attachments.find(a => a.path === c.path)
+      ? <AttachmentImage key={i} botId={botId} attachment={attachments.find(a => a.path === c.path)!}/>
+      : <p key={i} className="bots-input-file">{c.type === 'localImage' || c.type === 'image' ? 'Image attached' : c.type === 'skill' ? `$${c.name}` : 'File attached'}</p>}/>;
+  // Unbound historic inputs retain their existing readable fallback. Prose is
+  // never used to classify authorship or borrow a current conversation ID.
+  if (submission?.source.kind !== 'bot' || !submission.submissionId || !submission.source.id || !owner ||
+      source?.botId !== botId || !source.threadId || !source.turnId || source.itemId !== item.id) return body();
+  const scope = JSON.stringify([owner, botId, source.threadId, source.turnId, item.id, submission.submissionId, submission.source.id]);
+  return <BotMessageDisclosure key={scope} scope={scope} content={item.content} beforeToggle={beforeBubbleToggle ?? beforeToggle}>{body}</BotMessageDisclosure>;
+}
 
 export function AttachmentImage({
   botId,

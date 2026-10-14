@@ -13,6 +13,7 @@ export function useFeedScroll(timeline: BotTimeline, state: TimelineState, onlin
   const busy = useRef(false), inputUntil = useRef(0), direction = useRef(0), previousTop = useRef(0), expectedTop = useRef<number | null>(null);
   const continuedEmpty = useRef(false), intentVersion = useRef(0);
   const forwardTail = useRef<string | null>(null);
+  const disclosureReading = useRef(false);
   const visibleAnchors = useRef<{ key: string; offset: number; tailContext?: boolean }[]>([]), stateRef = useRef(state);
   const endIndex = !state.position.following && endKey ? state.entries.findIndex((entry) => historyKey(entry.turnId, entry.id) === timeline.resolveKey(endKey)) : -1;
   let range = historyWindow(state.entries, endIndex < 0 ? state.entries.length : endIndex + 1, state.gaps);
@@ -62,6 +63,9 @@ export function useFeedScroll(timeline: BotTimeline, state: TimelineState, onlin
   }, [timeline]);
   const restore = useCallback(() => {
     const element = scroll.current; if (!element) return;
+    if (disclosureReading.current && !element.clientHeight) return;
+    if (disclosureReading.current && saved.current.offset > Math.max(0, element.clientHeight - 44))
+      saved.current = { ...saved.current, offset: 0 };
     if (following.current) element.scrollTop = element.scrollHeight;
     else {
       const nodes = [...element.querySelectorAll<HTMLElement>('[data-history-key]')];
@@ -84,6 +88,21 @@ export function useFeedScroll(timeline: BotTimeline, state: TimelineState, onlin
     // Keep the alias/removed-tool fallback as the next durable reading anchor.
     capture(); updateJump();
   }, [capture, timeline, updateJump]);
+  const disclose = useCallback((open: boolean, target: HTMLElement) => {
+    const element = scroll.current, row = target.closest<HTMLElement>('[data-history-key]');
+    if (!element || !row || !element.contains(row)) return;
+    // Opening a message is deliberate reading, even when Latest was following.
+    // A collapsed body cannot retain an offset deep inside its removed text.
+    intentVersion.current++; forwardTail.current = null; disclosureReading.current = true;
+    following.current = false; timeline.preserveReadingIntent(); capture();
+    const offset = row.getBoundingClientRect().top - element.getBoundingClientRect().top;
+    saved.current = { anchor: row.dataset.historyKey!, offset: open ? offset : Math.max(0, offset), following: false,
+      ...(row.closest('[data-history-context]') ? { tailContext: true } : {}) };
+    visibleAnchors.current = [{ key: saved.current.anchor!, offset: saved.current.offset }];
+    const tail = stateRef.current.entries[rangeRef.current.last - 1];
+    if (tail) setEndKey(historyKey(tail.turnId, tail.id));
+    timeline.position(saved.current);
+  }, [capture, timeline]);
   const page = useCallback(async (toward: number, retry = false) => {
     if (busy.current) return;
     const current = stateRef.current, range = rangeRef.current;
@@ -153,6 +172,7 @@ export function useFeedScroll(timeline: BotTimeline, state: TimelineState, onlin
     continuedEmpty.current = true; void page(-1);
   }, [online, state.loading, state.error, state.entries.length, state.olderCursor, page]);
   const intent = useCallback((toward: number) => {
+    disclosureReading.current = false;
     intentVersion.current++;
     timeline.preserveReadingIntent();
     inputUntil.current = performance.now() + 1000; direction.current = toward;
@@ -214,12 +234,14 @@ export function useFeedScroll(timeline: BotTimeline, state: TimelineState, onlin
     return () => observer.disconnect();
   }, [restore]);
   const latest = useCallback(() => {
+    disclosureReading.current = false;
     forwardTail.current = null;
     intentVersion.current++;
     following.current = true; saved.current = { anchor: null, offset: 0, following: true };
     timeline.position(saved.current); setEndKey(null); setShowJump(false); requestAnimationFrame(restore);
   }, [timeline, restore]);
   const jumpTo = (entry: HistoryEntry, partId?: string) => {
+    disclosureReading.current = false;
     forwardTail.current = null;
     intentVersion.current++;
     const key = historyKey(entry.turnId, entry.id);
@@ -241,11 +263,11 @@ export function useFeedScroll(timeline: BotTimeline, state: TimelineState, onlin
     });
   };
   const touch = useRef(0);
-  return { scroll, content, ...range, showJump, paging, latest, page, capture, jumpTo, readingIntent: () => intentVersion.current,
+  return { scroll, content, ...range, showJump, paging, latest, page, capture, disclose, jumpTo, readingIntent: () => intentVersion.current,
     handlers: { onScroll, onWheel: (event: React.WheelEvent) => intent(Math.sign(event.deltaY)),
       onTouchStart: (event: React.TouchEvent) => { touch.current = event.touches[0]?.clientY ?? 0; },
       onTouchMove: (event: React.TouchEvent) => { const y = event.touches[0]?.clientY ?? touch.current; intent(Math.sign(touch.current - y)); touch.current = y; },
       onKeyDown: (event: React.KeyboardEvent) => { if (['ArrowUp', 'PageUp', 'Home'].includes(event.key)) intent(-1); else if (['ArrowDown', 'PageDown', 'End', ' '].includes(event.key)) intent(1); },
-      onPointerDown: (event: React.PointerEvent) => { if (event.target === event.currentTarget) { intentVersion.current++; inputUntil.current = performance.now() + 10_000; } },
+      onPointerDown: (event: React.PointerEvent) => { if (event.target === event.currentTarget) { disclosureReading.current = false; intentVersion.current++; inputUntil.current = performance.now() + 10_000; } },
     } };
 }

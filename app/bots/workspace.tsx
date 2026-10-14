@@ -38,6 +38,7 @@ import {
   ListPlus,
   UsersRound,
   Phone,
+  Megaphone,
   } from "lucide-react";
 import type { Bot } from "./single-thread-contract";
 import { BotAvatar as Avatar } from "./bot-avatar";
@@ -57,8 +58,11 @@ import { ScheduleEditor } from "./schedule-editor";
 import { botsClient as client } from "./client";
 import type { NativeEvent } from "./thread-state";
 import { BotConversation } from "./timeline";
-import { BotSidebarList } from "./sidebar-list";
+import { BotSidebarList, type SidebarFocusIntent } from "./sidebar-list";
+import { FollowupComposerProvider } from "./codex-followup";
 import { SidebarFilters } from "./sidebar-filters";
+import { AnnouncementDialog } from "./announcements";
+import { searchSidebarBots } from "./announcement-state";
 import { useSharedReadPositions } from './read-position-sync';
 import { TaskRequestWorkspace } from "./task-request-ui";
 import { RequestCard } from "./request-card";
@@ -76,6 +80,7 @@ import { useBotComposer } from "./use-composer";
 import { botComposers, type ComposerPaste } from "./composer-service";
 import { ComposerAttachments, ComposerStatus } from "./composer-state";
 import { installExtensionShortcuts } from "./extension-shortcuts";
+import { useBotSearchShortcut, botKeyboardAvailable } from "./bot-search-shortcut";
 import { SavedDrafts } from "./saved-drafts";
 import { ComposerInput } from "./composer-input";
 import { ComposerSettings } from "./composer-settings";
@@ -116,7 +121,6 @@ export function BotsWorkspace() {
   const [, redraw] = useState(0),
     [selected, setSelected] = useState<string | null>(null),
     [search, setSearch] = useState(""),
-    [archived, setArchived] = useState(false),
     [creating, setCreating] = useState(false),
     [profile, setProfile] = useState(false),
     [desktopScope, setDesktopScope] = useState<string | null>(null),
@@ -133,9 +137,11 @@ export function BotsWorkspace() {
   const selectedRef = useRef(selected), screenRef = useRef<HTMLDivElement>(null),
     fileRef = useRef<HTMLInputElement>(null), searchRef = useRef<HTMLInputElement>(null),
     queueRequest = useRef(0), createOperation = useRef(crypto.randomUUID());
+  const sidebarFocus = useRef<SidebarFocusIntent | null>(null);
   useLayoutEffect(() => { selectedRef.current = selected; }, [selected]);
   const owner = client.owner;
   const scope = JSON.stringify([owner, selected]);
+  const { searchOpen, closeSearch, keepOpenForNavigation } = useBotSearchShortcut(screenRef, searchRef, JSON.stringify([owner, selected, gallery, client.snapshot?.bots.find(value => value.id === selected)?.threadId ?? null]));
   if (editingSchedule && editingSchedule.scope !== scope) setEditingSchedule(null);
   const promptQueue = queueScope === scope ? loadedQueue : EMPTY_QUEUE;
   const { composer, error: composerError } = useBotComposer(client.owner, selected);
@@ -148,7 +154,7 @@ export function BotsWorkspace() {
     !checkoutLocked && uploads.every((file) => file.remote?.ready));
   const setDraft = (text: string) => composer?.setText(text);
   const [showCall, setShowCall] = useState(false), [callBotId, setCallBotId] = useState<string | null>(null);
-  const [showTeams, setShowTeams] = useState(false), [teamFilter, setTeamFilter] = useState("all"), [teamSort, setTeamSort] = useState<"recent" | "team" | "name">("recent");
+  const [showTeams, setShowTeams] = useState(false), [announcementOwner, setAnnouncementOwner] = useState<string | null>(null);
   const snapshot = client.snapshot;
   // Portable hubs create bots only through a node that advertises it.
   const canCreate = snapshot?.capabilities?.portableAgents !== 1 || snapshot.capabilities.botCreation === 1;
@@ -298,7 +304,9 @@ export function BotsWorkspace() {
       client.events.delete(listener);
     };
   }, [loadQueue]);
-  const select = useCallback((id: string | null) => {
+  const select = useCallback((id: string | null, keyboard = false) => {
+    if (!keyboard) sidebarFocus.current = null;
+    closeSearch();
     selectedRef.current = id;
     setSelected(id); setGallery(null);setTransferError("");
     const url = new URL(window.location.href);
@@ -306,7 +314,12 @@ export function BotsWorkspace() {
     if (id) url.searchParams.set("bot", id);
     else url.searchParams.delete("bot");
     window.history.pushState({}, "", url);
-  }, []);
+  }, [closeSearch]);
+  const navigateBot = useCallback((id: string) => {
+    if (client.owner !== owner) return;
+    select(id, true);
+    if (window.matchMedia('(max-width: 700px)').matches) keepOpenForNavigation(JSON.stringify([owner, id, null, client.snapshot?.bots.find(value => value.id === id)?.threadId ?? null]));
+  }, [owner, select, keepOpenForNavigation]);
   const finishTransfer=useCallback(async(paste:ComposerPaste)=>{
     const target=bots.find(bot=>bot.id===paste.targetBotId);
     if(paste.nonEmpty&&!window.confirm(`Replace ${target?.name??"this bot"}'s existing draft? Its previous contents will be saved for recovery.`))return false;
@@ -432,19 +445,7 @@ export function BotsWorkspace() {
     if (!images.length) return;
     void upload(images);
   }
-  const filtered = useMemo(() => {
-    const teams = snapshot?.teams ?? [];
-    const filter = teamFilter === "all" || teamFilter === "none" || teams.some(t=>t.id===teamFilter) ? teamFilter : "all";
-    const matching = bots.filter(b=>b.archived===archived && `${b.name} ${b.purpose} #${b.extension ?? ""}`.toLowerCase().includes(search.toLowerCase()) &&
-      (filter==="all"||filter==="none"&&!b.teamId||b.teamId===filter));
-    if (teamSort==="name") matching.sort((a,b)=>a.name.localeCompare(b.name)||a.id.localeCompare(b.id));
-    if (teamSort==="team") {
-      const order = new Map(teams.map((t,index)=>[t.id,index]));
-      matching.sort((a,b)=>(order.get(a.teamId??"")??teams.length)-(order.get(b.teamId??"")??teams.length) ||
-        (a.teamId===b.teamId?(a.teamOrder??0)-(b.teamOrder??0):0)||a.name.localeCompare(b.name)||a.id.localeCompare(b.id));
-    }
-    return matching;
-  }, [bots, archived, search, teamFilter, teamSort, snapshot?.teams]);
+  const filtered = useMemo(() => searchSidebarBots(bots, snapshot?.teams ?? [], search), [bots, search, snapshot?.teams]);
   const schedules = snapshot?.schedules.filter((s) => s.botId === selected) ?? [];
   const recentRuns = [...new Map([...(lanes ? snapshot?.backgroundRuns ?? [] : []), ...(snapshot?.runs ?? [])]
     .filter(run => run.botId === selected).map(run => [run.id, run])).values()];
@@ -452,13 +453,15 @@ export function BotsWorkspace() {
   const closeProfile = useCallback(() => setProfile(false), []);
   const openActivity = (target: ActivityTarget | null = null) => { setActivityTarget(target); setDetailsSection("history"); setProfile(true); };
   return (
-    <TaskRequestWorkspace key={JSON.stringify([owner,bot?.id,bot?.threadId])} owner={owner} bot={bot} online={online} supported={snapshot?.capabilities?.taskRequests === 1}><div className="bots-screen" ref={screenRef} data-no-pull-refresh>
+    <><TaskRequestWorkspace key={JSON.stringify([owner,bot?.id,bot?.threadId])} owner={owner} bot={bot} online={online} supported={snapshot?.capabilities?.taskRequests === 1}><div className="bots-screen" ref={screenRef} data-no-pull-refresh>
       <SiteHeader current="bots" />
-      <main className={`bots-layout ${selected || gallery ? "has-selection" : ""}`}>
-        <aside className="bots-sidebar">
+      <main className={`bots-layout ${selected || gallery ? "has-selection" : ""} ${searchOpen ? "search-open" : ""}`}>
+        <aside className="bots-sidebar" onKeyDown={event => { if (event.key === 'Escape' && searchOpen && !event.defaultPrevented) { event.preventDefault(); closeSearch(true); } }}>
           <div className="bots-sidebar-heading">
             <h1 className="sr-only">Bots</h1>
+            {searchOpen && (selected || gallery) && <Button type="button" variant="ghost" size="icon" className="bots-search-close" aria-label="Close bot search" onClick={() => closeSearch(true)}><X size={20}/></Button>}
             <div className="bots-sidebar-tools">
+            <Button type="button" variant="ghost" size="icon" aria-label="Announcement" title="Announcement" disabled={!owner} onClick={() => setAnnouncementOwner(owner)}><Megaphone size={19} /></Button>
             {snapshot?.capabilities?.operatorCalls === 1 && <Button type="button" variant="ghost" size="icon" className="aria-pressed:bg-accent aria-pressed:text-accent-foreground" aria-label="Call Operator" onClick={() => { setCallBotId(null); setShowCall(true); }}><Phone size={16} /></Button>}
             <ArtifactNav active={gallery === "artifacts"} onOpen={() => openGallery("artifacts")} />
             <Button type="button" variant="ghost" size="icon" className="aria-pressed:bg-accent aria-pressed:text-accent-foreground" title="Teams" aria-label="Teams" onClick={() => setShowTeams(true)}><UsersRound size={19} /></Button>
@@ -475,9 +478,13 @@ export function BotsWorkspace() {
             </Button>}
             </div>
           </div>
-          <SidebarFilters search={search} onSearch={setSearch} searchRef={searchRef} archived={archived} onArchived={setArchived} teams={teams} teamsSupported={teamsSupported} teamFilter={teamFilter} onTeamFilter={setTeamFilter} sort={teamSort} onSort={setTeamSort} />
-          <BotSidebarList owner={owner} search={search} bots={filtered} snapshot={snapshot} selected={selected} select={select}
-            empty={teamFilter!=="all" ? "No bots in this team." : search ? "No matching bots." : archived ? "No archived bots." : "Your bots will appear here."} />
+          <SidebarFilters search={search} onSearch={setSearch} searchRef={searchRef} onFocusResults={() => {
+            const list = screenRef.current?.querySelector<HTMLElement>('.bots-list');
+            if (client.owner !== owner || !list || !botKeyboardAvailable(list)) return false;
+            list.focus({ preventScroll: true }); return true;
+          }} />
+          <BotSidebarList owner={owner} search={search} bots={filtered} snapshot={snapshot} selected={selected} select={select} navigate={navigateBot} focusIntent={sidebarFocus}
+            empty={search ? "No matching bots." : "Your bots will appear here."} />
           <div className="bots-machine">
             <span className={`bots-status-dot ${online ? "online" : ""}`} />
             <span>
@@ -573,7 +580,16 @@ export function BotsWorkspace() {
             </div>
           ) : (
             <>
-              <BotConversation key={scope} owner={owner} bot={bot} online={online} onOpenActivity={openActivity} onOpenCall={openCalls} draft={draft} submission={composer?.operation} burstsEnabled={burstSupported && !bot.archived} onReply={snapshot?.capabilities?.messageReplies === 1 && composer?.ready && !checkoutLocked && !sending ? reply => composer.setReply(reply) : undefined} burstSubmitting={composer?.operation?.method === "bursts.submit"}>
+              <FollowupComposerProvider key={JSON.stringify([owner,bot.id,bot.threadId])} owner={owner} botId={bot.id} threadId={bot.threadId} composer={composer ?? null} disabled={!online || Boolean(checkoutLocked) || Boolean(pending.length) || bot.archived} focus={() => screenRef.current?.querySelector<HTMLTextAreaElement>(".bots-composer textarea")?.focus({preventScroll:true})}>
+              <BotConversation editPending={!!composer?.blastEdit} onEditBlast={composer?.ready ? async value => {
+                const threadId=bot.threadId;
+                const current=()=>client.owner===owner && selectedRef.current===bot.id && client.snapshot?.bots.find(b=>b.id===bot.id)?.threadId===threadId && botComposers.peek(owner,bot.id)===composer;
+                if(!threadId || value.threadId!==threadId || client.snapshot?.capabilities?.burstEdit!==1 || !current())throw Error('Reconnect to the original conversation before editing the blast.');
+                const batches=(value.batches??(value.burst?[value.burst]:[])).filter(b=>['pending','preparing','paused'].includes(b.state));
+                if(!composer.blastEdit && (value.batches??[]).some(b=>b.state==='editing'))throw Error('This blast is reserved in its original browser draft. Return there to recover Edit.');
+                await composer.editBlast({threadId,controlRevision:value.controlRevision??0,batches:batches.map(b=>({id:b.id,revision:b.revision??0}))},current);
+                if(current())screenRef.current?.querySelector<HTMLTextAreaElement>('.bots-composer textarea')?.focus({preventScroll:true});
+              } : undefined} key={scope} owner={owner} bot={bot} online={online} onOpenActivity={openActivity} onOpenCall={openCalls} draft={draft} submission={composer?.operation} burstsEnabled={burstSupported && !bot.archived} onReply={snapshot?.capabilities?.messageReplies === 1 && composer?.ready && !checkoutLocked && !sending ? reply => composer.setReply(reply) : undefined} burstSubmitting={composer?.operation?.method === "bursts.submit"}>
 
 
                 {pending.map((request) => (
@@ -591,6 +607,7 @@ export function BotsWorkspace() {
                 ))}
                 <div className="bots-conversation-presence"><Avatar bot={bot} small /><Button variant="ghost" size="sm" type="button" onClick={() => { setDetailsSection("next"); setProfile(true); }} aria-label="Open work details" title={online ? workLabel(work, bot) ?? humanStatus(bot, online) : "Offline"}>{online ? workLabel(work, bot) ?? humanStatus(bot, online) : "Offline"}</Button><ActiveTurnElapsed owner={owner} bot={bot} work={work} online={online}/></div>
               </BotConversation>
+              </FollowupComposerProvider>
               {!bot.archived && (
                 <>
                   <div className="bots-composer-support">
@@ -809,7 +826,6 @@ export function BotsWorkspace() {
                   createOperation.current,
                 );
                 setCreating(false);
-                setArchived(false);
                 select(created.id);
                 await client.refresh();
               });
@@ -830,5 +846,6 @@ export function BotsWorkspace() {
         />
       )}
     </div></TaskRequestWorkspace>
+    {announcementOwner && announcementOwner === owner && <AnnouncementDialog key={owner} owner={owner} onClose={() => setAnnouncementOwner(null)} />}</>
   );
 }
