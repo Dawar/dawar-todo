@@ -243,3 +243,92 @@ test('socket replacement discards partial transfer bytes and settles only the re
   assert.equal((await result).turn.id, 'native-turn');
   client.clearOwnerCache();
 });
+
+test('a slow foreground pong is not a disconnect: reads survive and the socket is kept', async () => {
+  let clock = 1000;
+  class ClockDate extends Date { static now() { return clock; } }
+  const { client, sockets, timers } = setup({}, { Date: ClockDate });
+  client.session = async () => session('alice');
+  client.refresh = async () => snapshot('alice');
+  await client.connect();
+  const socket = sockets[0];
+  client.receive({ type: 'authenticated', online: true });
+  const history = client.rpc('history.page', 'bot-a', {}, 'history-read');
+  let settled = false; history.then(() => { settled = true; }, () => { settled = true; });
+  clock += 30000;
+  client.checkConnection(true);
+  assert.equal(socket.sent.at(-1), 'ping');
+  // The gateway is busy for more than three seconds (a measured stall).
+  clock += 3000; timers.get(client.probeTimer)();
+  await Promise.resolve();
+  assert.equal(socket.readyState, 1, 'an established socket is not closed at the first deadline');
+  assert.equal(client.online, true);
+  assert.equal(settled, false, 'in-flight conversation reads are not reset');
+  assert.equal(sockets.length, 1, 'no replacement connection yet');
+  socket.onmessage({ data: 'pong' });
+  assert.equal(client.probeTimer, undefined);
+  assert.equal(socket.readyState, 1);
+  assert.equal(client.error, '', 'the slow-check notice clears when the socket answers');
+  client.clearOwnerCache();
+});
+
+test('a dead foreground socket still reconnects within a bounded deadline', async () => {
+  let clock = 1000;
+  class ClockDate extends Date { static now() { return clock; } }
+  const { client, sockets, timers } = setup({}, { Date: ClockDate });
+  client.session = async () => session('alice');
+  client.refresh = async () => snapshot('alice');
+  await client.connect();
+  const socket = sockets[0];
+  client.receive({ type: 'authenticated', online: true });
+  clock += 30000;
+  client.checkConnection(true);
+  let waited = 0;
+  for (let i = 0; i < 4 && socket.readyState === 1 && client.probeTimer; i++) {
+    const timer = timers.get(client.probeTimer); clock += 3000; waited += 3000; timer();
+  }
+  assert.equal(socket.readyState, 3, 'no answer at all closes the half-open socket');
+  assert.ok(waited <= 12000, `bounded recovery (${waited}ms)`);
+  for (let i = 0; i < 10; i++) await Promise.resolve();
+  assert.equal(sockets.length, 2, 'a replacement connection starts');
+  client.clearOwnerCache();
+});
+
+test('a read bot stays read through replayed old events, stale bot events and a cold reopen snapshot', async () => {
+  const read = '2026-10-14T16:00:00.000Z', older = '2026-10-14T15:00:00.000Z';
+  const bot = { id: 'alice-bot', threadId: 'thread', updatedAt: read, lastReadAt: read, status: 'idle' };
+  const cached = { bots: [bot], pending: [], defaults: {}, ready: true, cursor: 20 };
+  const { client } = setup({ 'dawar-bots:last-owner': 'alice', 'dawar-bots:alice:snapshot': JSON.stringify(cached) });
+  client.useOwner('alice'); client.snapshot = client.cache('snapshot', null); client.fullSnapshotCursor = 20; client.online = true;
+  const unread = () => { const b = client.snapshot.bots.find(x => x.id === 'alice-bot'); return b.updatedAt > b.lastReadAt; };
+  // A replay at or below the confirmed cursor is ignored entirely.
+  client.receive({ type: 'event', event: { seq: 12, type: 'bot', botId: 'alice-bot', data: { ...bot, updatedAt: read, lastReadAt: older } } });
+  assert.equal(unread(), false);
+  // A newer-sequence projection carrying an older server read marker cannot move it back.
+  client.receive({ type: 'event', event: { seq: 21, type: 'bot', botId: 'alice-bot', data: { ...bot, status: 'running', lastReadAt: older } } });
+  assert.equal(client.snapshot.bots[0].lastReadAt, read); assert.equal(unread(), false);
+  // Cold reopen: the server snapshot still has the old marker; the cached read wins.
+  client.rpc = async () => ({ bots: [{ ...bot, lastReadAt: older }], pending: [], defaults: {}, ready: true, cursor: 22 });
+  await client.refresh();
+  assert.equal(client.snapshot.bots[0].lastReadAt, read); assert.equal(unread(), false);
+  // Genuine new output after the read is still unread.
+  client.receive({ type: 'event', event: { seq: 23, type: 'bot', botId: 'alice-bot', data: { ...bot, updatedAt: '2026-10-14T16:05:00.000Z', lastReadAt: older } } });
+  assert.equal(unread(), true);
+  client.clearOwnerCache();
+});
+
+test('a gateway or session-store outage is a connectivity failure, not a sign-out; drafts and uploads stay', async () => {
+  for (const status of [502, 503, 504]) {
+    const { client, localStorage } = setup({ 'dawar-bots:last-owner': 'alice', 'dawar-bots:alice:snapshot': JSON.stringify(snapshot('alice')), 'dawar-bots:alice:draft:bot-a': '"kept"', 'dawar-bots:alice:uploads:bot-a': '[{"kept":true}]' },
+      { fetch: async () => Response.json({ error: 'Session check unavailable. Connect and try again.', code: 'SESSION_UNAVAILABLE' }, { status }) });
+    client.useOwner('alice'); client.snapshot = snapshot('alice');
+    await client.connect();
+    assert.equal(client.owner, 'alice', `${status} keeps the signed-in owner`);
+    assert.equal(client.snapshot.bots[0].id, 'alice-bot');
+    assert.equal(localStorage.getItem('dawar-bots:last-owner'), 'alice');
+    assert.equal(localStorage.getItem('dawar-bots:alice:draft:bot-a'), '"kept"');
+    assert.ok(localStorage.getItem('dawar-bots:alice:uploads:bot-a'));
+    assert.ok(client.reconnectTimer, 'bounded reconnect is scheduled');
+    client.stopped = true;
+  }
+});

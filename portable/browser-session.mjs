@@ -14,13 +14,16 @@ export function createBrowserSession(config,writer,{clock=Date.now}={}) {
   const actor=request=>{
     if(request.headers.has('authorization')||request.headers.get('x-dawar-internal-browser-proof')!=='verified'||request.headers.get('oai-authenticated-user-email')!==config.owner.key||request.headers.get('oai-authenticated-user-id')!==config.owner.userId)throw Object.assign(Error('Browser session proof required.'),{status:403});
     const raw=token(request);
-    if(!raw||!/^[A-Za-z0-9_-]{43}$/.test(raw))throw Error('Browser session required.');
-    const row=db.prepare('SELECT * FROM portable_sessions WHERE hash=? AND expires_at>?').get(digest(raw),clock());
-    if(!row||row.owner!==config.owner.key||row.user_id!==config.owner.userId||!/^[A-Za-z0-9_-]{43}$/.test(row.csrf))throw Error('Browser session expired.');
+    if(!raw||!/^[A-Za-z0-9_-]{43}$/.test(raw))throw Object.assign(Error('Browser session required.'),{status:401});
+    // A storage failure proves nothing about the cookie: answer unavailable
+    // (503), never a sign-in prompt. Only a completed lookup can expire it.
+    let row;try{row=db.prepare('SELECT * FROM portable_sessions WHERE hash=? AND expires_at>?').get(digest(raw),clock());}
+    catch{throw Object.assign(Error('Browser session storage unavailable.'),{status:503});}
+    if(!row||row.owner!==config.owner.key||row.user_id!==config.owner.userId||!/^[A-Za-z0-9_-]{43}$/.test(row.csrf))throw Object.assign(Error('Browser session expired.'),{status:401});
     return {raw,row};
   };
   return {read(request){
-    let original;try{original=actor(request);}catch(error){const status=error.status??401;return Response.json({error:status===401?'Sign in required.':'Browser session check unavailable.',code:status===401?'AUTHENTICATION_REQUIRED':'SESSION_UNAVAILABLE'},{status,headers});}
+    let original;try{original=actor(request);}catch(error){const status=error.status??503;return Response.json({error:status===401?'Sign in required.':'Browser session check unavailable.',code:status===401?'AUTHENTICATION_REQUIRED':'SESSION_UNAVAILABLE'},{status,headers});}
     if(request.method!=='GET'||new URL(request.url).search)return Response.json({error:'Invalid session request.'},{status:400,headers});
     try {
       const now=clock(),result=writer.runSync(()=>{

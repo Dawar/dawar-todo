@@ -41,11 +41,17 @@ export async function admitBurstCommand(transport,command,payload){
     };
     assertControl();let input=[],localMessages=[];
     try{
-      if(!await runtime.reconcileCurrentActivity(bot.id))throw defer('Current native activity must reconcile before this burst.');
+      // Native evidence reads precede the durable attempt marker. A failed
+      // read proves nothing was submitted: keep the original command for the
+      // automatic retry rather than failing the saved burst.
+      const evidence=async read=>{try{return await read();}catch(error){throw error.deferred||error.outcome==='rejected'?error:defer(`Current native admission evidence is unavailable: ${error.message}`);}};
+      if(!await evidence(()=>runtime.reconcileCurrentActivity(bot.id)))throw defer('Current native activity must reconcile before this burst.');
       const current=store.bot(bot.id),work=runtime.primary.work(current);
       if(!['ready','working'].includes(work.state))throw defer('Current native work or questions require attention first.');
-      const queue=await runtime.codex.call('thread/queue/list',{threadId:bot.threadId,cursor:null,limit:100});
+      const queue=await evidence(()=>runtime.codex.call('thread/queue/list',{threadId:bot.threadId,cursor:null,limit:100}));
       if(!Array.isArray(queue?.data)||queue.data.length||queue.nextCursor)throw defer('Original native queued input must settle before this burst.');
+      // Hub team metadata before the durable attempt (see agent-admission).
+      if(runtime.hubTeamReference)try{await runtime.hubTeamReference(current,{prefetch:true});}catch(error){throw defer(`Hub team context is unavailable: ${error.message}`);}
       for(const f of files){
         if(!id(f.id)||!/^[a-f0-9]{64}$/.test(f.sha256??'')||!Number.isSafeInteger(f.size)||f.size<0)throw rejected('Invalid original registered file manifest.');
         if(!store.get('attachment',f.id)&&runtime.storage)await runtime.storage.importAttachment(current,f.id);
