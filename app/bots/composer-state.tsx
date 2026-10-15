@@ -3,7 +3,9 @@ import { useCallback, useLayoutEffect, useMemo, useRef, useState, useSyncExterna
 import { createPortal } from "react-dom";
 import { Button } from "@/components/ui/button";
 import "./composer-attachments.css";
-import { Paperclip, X } from "lucide-react";
+import { File as FileIcon, FileArchive, FileAudio, FileCode, FileImage, FileText, FileVideo, Paperclip, X, type LucideIcon } from "lucide-react";
+import { attachmentKind, formatBytes, type AttachmentKind } from "../../lib/ai-elements";
+const KIND_ICONS: Record<AttachmentKind, LucideIcon> = { image: FileImage, pdf: FileText, text: FileText, code: FileCode, archive: FileArchive, audio: FileAudio, video: FileVideo, file: FileIcon };
 import type { BotComposer } from "./composer-controller";
 import { UploadThumbnail } from "./upload-thumbnail";
 import { botComposers } from "./composer-service";
@@ -47,9 +49,12 @@ function ComposerAttachment({ composer, file, index, online }: { composer: BotCo
     setError(""); setOpen(true);
   };
   const thumbnail = composer.files.has(file.id) ? <LocalPreview file={composer.files.get(file.id)} /> : file.remote?.ready ? <UploadThumbnail botId={file.remote.botId} attachmentId={file.remote.id} online={online} /> : <LocalPreview />;
+  // Attachment chip: type icon, name and size from the staged metadata only.
+  const KindIcon = KIND_ICONS[attachmentKind(file.mimeType, file.name)], size = formatBytes(file.size);
+  const name = <span className="bots-upload-text"><span>{file.name}</span>{size && <small>{size}</small>}</span>;
   const preview = image || pdf || textDocument
-    ? <Button variant="ghost" type="button" className="bots-attachment-open" aria-label={`Open ${file.name}`} aria-haspopup="dialog" onClick={view}>{image ? thumbnail : <><Paperclip aria-hidden="true" /><span>{file.name}</span></>}</Button>
-    : <span className="bots-upload-name"><Paperclip size={16} aria-hidden="true" /><span>{file.name}</span></span>;
+    ? <Button variant="ghost" type="button" className="bots-attachment-open" aria-label={`Open ${file.name}`} aria-haspopup="dialog" onClick={view}>{image ? thumbnail : <><KindIcon aria-hidden="true" />{name}</>}</Button>
+    : <span className="bots-upload-name"><KindIcon size={16} aria-hidden="true" />{name}</span>;
   return <><span className="bots-upload-entry"><span className={image ? "bots-upload-image" : "bots-upload-file"} title={[file.name, file.error || status].filter(Boolean).join(" · ")}>
     {image ? preview : <span className="bots-upload-label">{preview}{status && <span className="bots-upload-status">{status}</span>}</span>}
     {image && status && <span className="bots-upload-progress">{status}</span>}

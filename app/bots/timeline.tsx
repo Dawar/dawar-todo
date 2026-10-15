@@ -20,7 +20,8 @@ import { MessageTime, ElapsedTime } from "./message-time";
 import { BotMessage, WorkPlanMessage } from "./message";
 import { readWorkPlanSource } from '../../lib/native-work-plan';
 import { OperatorSegmentBody } from "./operator-call";
-import { ArrowDown, MessageCircle, CloudOff, Clock3, Phone } from "lucide-react";
+import { ArrowDown, MessageCircle, CloudOff, Clock3, Phone, Minimize2 } from "lucide-react";
+import { Marker } from "@/components/ai-elements/marker";
 import { LazyDetails } from "./lazy-details";
 import { TraceIcon, TraceStatus } from "@/components/ai-elements/trace";
 import { traceState } from "../../lib/trace-state";
@@ -124,6 +125,9 @@ export const TimelineEntry = memo(function TimelineEntry(props: Parameters<typeo
   const { entry } = props;
   if (entry.item?.type === "agentMessage" && !entry.item.text.trim() && !entry.item.questions?.length && !entry.questionNotice) return null;
   if (entry.type === "reasoning" && (entry.item?.type !== "reasoning" || !entry.item.summary.some(text => text.trim()))) return null;
+  // Native compaction is a conversation event, not expandable work: a Marker.
+  if (entry.type === "contextCompaction" && !entry.deferredTurn && !entry.workPlan && !entry.operatorSegmentId)
+    return <div className="bots-native-entry is-marker" data-history-key={historyKey(entry.turnId, entry.id)}><Marker icon={<Minimize2 size={13} aria-hidden="true"/>}>Context compacted</Marker></div>;
   const work = nativeWorkItem(entry), commentary = entry.item?.type === 'agentMessage' && entry.item.phase === 'commentary';
   const reply = props.onReply && props.threadId ? <ReplyAction entry={entry} botId={props.timeline.botId} threadId={props.threadId} onReply={props.onReply} /> : null;
   const status = entry.itemStatus ?? entry.turnStatus ?? entry.status;

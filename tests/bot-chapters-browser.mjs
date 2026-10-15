@@ -38,5 +38,9 @@ try {
   await shot('mobile-390-drawer', '390,844', 'drawer');
   await shot('mobile-390-chat', '390,844', 'expand');
   await shot('mobile-320-chat', '320,640', '');
+  // AI Elements: native activity, terminal/stack trace, tool, subagent,
+  // marker, sources/citations, suggestions, questionnaire and context meter.
+  await shot('elements-desktop-1440', '1440,1400', 'elements&dock&expand');
+  await shot('elements-mobile-390', '390,1700', 'elements&expand');
   console.log(out);
 } finally { server.close(); }
