@@ -1,4 +1,5 @@
 import { observedActiveTurn, nativeWaiting, pendingQuestions } from './turn-state.mjs';
+import { heldView } from './held-states.mjs';
 
 // Display metadata only. Native execution and the original intake ledger remain
 // authoritative; these reads never load a thread or submit/replay its input.
@@ -44,6 +45,9 @@ export function primaryWorkView(runtime, bot) {
     ...(activity?.unresolved && activity.threadId === bot.threadId && activity.recoveryCheckedAt &&
       ['external-writer','native-sign-in','native-system-error','native-state'].includes(activity.recoveryKind)
       ? { recovery: { kind: activity.recoveryKind, checkedAt: activity.recoveryCheckedAt, retryAt: activity.reconcileAfter ?? null } } : {}),
+    // Holds past their budget (held-states.mjs), named instead of a generic
+    // "Checking execution".
+    held: heldView(runtime, bot),
     admission: { waitingCount: intake.waitingCount, reason: intake.waitingCount ? reason : null } };
 }
 

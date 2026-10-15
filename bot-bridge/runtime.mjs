@@ -1,6 +1,7 @@
 import { BOT_PROVIDERS, botProvider, providerParams } from "./provider-router.mjs";
 import { AuthRecovery } from './auth-recovery.mjs';
 import { EXECUTION_ACCESS, turnExecutionAccess, executionAccessStatus } from './execution-access.mjs';
+import { HeldStateWatch, recoverHeld } from "./held-states.mjs";
 import { NativeErrorRecovery } from './native-error-recovery.mjs';
 import {SubmissionSources,SUBMISSION_TOOL} from './submission-sources.mjs';
 import { assertRetainedResource } from './retained-resource.mjs';
@@ -219,6 +220,7 @@ export class BotRuntime extends EventEmitter {
     this.maintenance = new RuntimeMaintenance(this);
     this.authRecovery = new AuthRecovery(this);
     this.nativeErrorRecovery = new NativeErrorRecovery(this);
+    this.held = new HeldStateWatch(this);
     codex.on("notification", message => this.authRecovery.notification(message));
     this.usage = new AccountUsageCollector({ store, codex,
       allowed: () => this.ready && codex.ready && !this.maintenance.holding(),
@@ -659,7 +661,7 @@ export class BotRuntime extends EventEmitter {
       if(!request.clientId||trustedOrigin)throw Error('Task Request source lookup requires the authenticated owner browser.');
       return this.taskRequests.source(this.store.bot(String(botId)),params);
     }
-    if ((method.startsWith("auth.") || method === 'nativeRecovery.retry') && (!request.clientId || trustedOrigin)) throw Error("Codex recovery requires the authenticated owner browser.");
+    if ((method.startsWith("auth.") || method === 'nativeRecovery.retry' || method === 'held.recover') && (!request.clientId || trustedOrigin)) throw Error("Codex recovery requires the authenticated owner browser.");
     if (method.startsWith("botAdmin.")) return this.botAdmin.owner(request, trustedOrigin);
     if ((method === "queue.taskConfirm" || method === "queue.add" && params.taskExportId) && (!request.clientId || trustedOrigin))
       throw new Error("Task queue transfer requires the authenticated owner browser.");
@@ -789,7 +791,9 @@ export class BotRuntime extends EventEmitter {
         const createRejected = method === "bots.create" && !this.store.bots({ includeDeleted: true }).some(bot => bot.id === operationId);
         // Compaction refuses before submission, or gets an explicit native error.
         const compactRejected = method === "thread.compact" && e.compactionNotSubmitted === true;
-        const outcome = attempt ? (uncertain ? "uncertain" : "rejected") : lifecycleRejected || createRejected || compactRejected ? "rejected" :
+        // Recover refuses before any read when the hold changed or is not recoverable.
+        const heldRejected = method === "held.recover" && e.outcome === "rejected";
+        const outcome = attempt ? (uncertain ? "uncertain" : "rejected") : lifecycleRejected || createRejected || compactRejected || heldRejected ? "rejected" :
           settingsRejected || browserRejected ? "rejected" : "uncertain";
         this.store.saveOperation(
           operationId,
@@ -855,6 +859,7 @@ export class BotRuntime extends EventEmitter {
   }
   async dispatch(method, botId, p, id, attempt = null, authorizeProvisioning = null) {
     if (method === 'nativeRecovery.retry') return this.nativeErrorRecovery.retry(botId,p);
+    if (method === 'held.recover') return recoverHeld(this, botId, p);
     if (method === "auth.read") return this.authRecovery.read(botId, p);
     if (method === "auth.check") return this.authRecovery.check(botId, p, attempt, id);
     if (method === "auth.login.start") return this.authRecovery.start(botId, p, id, attempt);
@@ -2228,6 +2233,7 @@ export class BotRuntime extends EventEmitter {
         });
       }
       await recoverCurrentActivities(this);
+      this.held.tick();
       if (this.manager)
         void this.manager.tick().catch((error) => this.emit("fault", error));
       this.scheduleDecisions.refresh();
@@ -2414,6 +2420,10 @@ export class BotRuntime extends EventEmitter {
         createdAt: now(),
         deliveredAt: null,
       });
+    // The portable runner hands notices to its hub (portable/agent.mjs); the
+    // legacy service flushes them over HTTP instead.
+    const notice = this.store.get("notice", id);
+    if (notice && !notice.deliveredAt && this.noticeSink?.(notice)) this.store.put("notice", { ...notice, deliveredAt: now() });
   }
   publicAttachment(a) {
     if (a.ready && a.artifact) return { ...artifactMetadata(a, this.store.bot(a.botId)), artifact: true };

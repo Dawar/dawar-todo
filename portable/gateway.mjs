@@ -1,3 +1,4 @@
+import {isNodeNotice,acceptNodeNotice} from './hub-notices.mjs';
 import { createServer, request as httpRequest } from 'node:http';
 import { WebSocketServer } from 'ws';
 import { closeHttpServer } from './close-http.mjs';
@@ -337,6 +338,9 @@ export function startGateway(config) {
             const answer=value=>{const current=store.placement(n.owner,m.botId);if(connections.get(nodeId)===ws&&current.node_id===nodeId&&current.epoch===m.epoch)ws.send(boundedFrame({type:'artifact-result',requestId:m.requestId,botId:m.botId,epoch:m.epoch,...value}));};
             void nodeStorage.request(nodeId,m).then(result=>answer({result})).catch(()=>answer({error:'Registered file confirmation unavailable; retain its original ID and local bytes.',outcome:'uncertain'})).catch(()=>ws.close(1008,'Artifact scope changed'));
           }
+          // Owner notices go to the push outbox, not to browsers. No ACK
+          // until stored, so a write-frozen hub gets it again on reconnect.
+          else if(m.type==='event'&&isNodeNotice(m.event)) {store.event(nodeId,m.eventId,m.botId,m.epoch,m.event);void acceptNodeNotice(application,store.node(nodeId).owner,m.botId,m.event.data).then(()=>{if(connections.get(nodeId)===ws)ws.send(JSON.stringify({type:'event-ack',eventId:m.eventId}));}).catch(()=>{});}
           else if(m.type==='event') {const before=store.eventCursor(),sequence=store.event(nodeId,m.eventId,m.botId,m.epoch,m.event);const current=sequence>before&&controls.nativeEvent(m.event,nodeId,m.epoch)!==false;ws.send(JSON.stringify({type:'event-ack',eventId:m.eventId,sequence}));if(current)broadcast(store.node(nodeId).owner,{...m.event,seq:sequence});}
           else throw Error('Unknown node frame.');
         } catch {ws.close(1008,'Node frame rejected');}

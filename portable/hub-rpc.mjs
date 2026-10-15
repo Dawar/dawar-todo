@@ -8,7 +8,7 @@ import {OPERATOR_READS,OPERATOR_MUTATIONS,OPERATOR_NATIVE,OPERATOR_NODE_READS,op
 // Explicit method sets keep an arbitrary browser method from becoming remote
 // shell/native RPC authority. The real runtime still validates every request.
 export const AGENT_READS=new Set(['auth.read','snapshot','runtime.info','work.read','goals.read','history','history.page','history.turn','history.view','history.log','history.detail','history.attachments','replies.prepare','replies.resolve','artifacts.list','artifacts.preview','events','usage.bot','usage.account','usage.history','usage.claude','attachments.read','inbox.list','runs.page','runs.turns','runs.receipt','runs.requests','runs.findings','runs.decisions','execution.config','secure.list','taskRequests.source',...OPERATOR_NODE_READS,...DESKTOP_READS]);
-export const AGENT_MUTATIONS=new Set(['nativeRecovery.retry','auth.check','auth.login.start','auth.login.cancel','turn.send','turn.interrupt','requests.respond','bots.update','goals.set','goals.clear','artifacts.index','thread.compact',...DESKTOP_MUTATIONS]);
+export const AGENT_MUTATIONS=new Set(['nativeRecovery.retry','held.recover','auth.check','auth.login.start','auth.login.cancel','turn.send','turn.interrupt','requests.respond','bots.update','goals.set','goals.clear','artifacts.index','thread.compact',...DESKTOP_MUTATIONS]);
 const NATIVE_SNAPSHOT=Symbol('assigned-native-snapshot');
 // A connected node that stops answering must not hold every bots-screen read
 // for the 15 s read timeout per bot. After this deadline the bot is answered
@@ -44,6 +44,7 @@ export class HubRpc {
     }
     const p=this.store.placement(owner,request.botId),ws=this.connection(p);
     if(request.method==='nativeRecovery.retry' && (!ws || ws.portableHello?.capabilities?.nativeErrorRecovery!==true))throw Object.assign(Error('Conversation recovery requires the live compatible assigned node.'),{outcome:'not-sent'});
+    if(request.method==='held.recover' && (!ws || ws.portableHello?.capabilities?.heldRecovery!==true))throw Object.assign(Error('Recover requires the live updated assigned node. Nothing was sent.'),{outcome:'not-sent'});
     // Typed, capability-gated: an older node never receives compaction.
     if(request.method==='thread.compact' && (!ws || ws.portableHello?.capabilities?.nativeCompaction!==true))throw Object.assign(Error('Compaction requires the live updated assigned node. Nothing was sent.'),{outcome:'not-sent'});
     if(request.method.startsWith('auth.') && (!ws || ws.portableHello?.capabilities?.nativeAuthRecovery!==true))throw Object.assign(Error('Codex recovery requires the live assigned execution machine.'),{outcome:'not-sent'});
