@@ -75,3 +75,75 @@ These checks used a loopback development bridge to exercise the actual UI and VM
 ## Browser memory and retention
 
 Bot-only balanced Memory Saver, safe opt-in retention, agent release/protection tools, guarded graceful close and tab restoration are documented in [desktops/BROWSER_MEMORY.md](desktops/BROWSER_MEMORY.md). Preserve remains the default. Screenshots/preview polling are not actual input activity. Installed helpers and public/bridge activation evidence must be recorded separately.
+
+## Viewer disconnects and failure isolation (October 15, 2026)
+
+Bert's and Finley's viewers reported "Desktop transport ended." a few seconds
+after opening, along with intermittent "connection unavailable".
+
+**Evidence.** Linus's close-cause diagnostics (854ad51) were live from the
+22:56 UTC October 14 release onward. From then until 11:25 UTC October 15 the
+journal holds no `[desktop-transport]` closure record at all, and journald
+reported no suppression. So there was no live closure category to read: the
+owner's reports came before those diagnostics were deployed, and no viewer
+failed afterwards. The agent-side log also could not see hub-initiated
+closures, because they reach the agent as `viewer-close`, which it does not
+log. The cause was established by reproducing it against the production code
+in `tests/desktop-isolation.test.mjs`:
+
+- **Root cause: the input bound counted promise turns instead of slow work.**
+  Exactly that message comes only from `AgentDesktopTransport.end`. Every
+  frame waited several promise turns behind the frame before it, but the
+  agent's socket handler queued a new frame on every turn. When one network
+  read held many frames (the `ws` library emits all of them at once), the
+  64-frame bound was exceeded even though each frame took microseconds. A
+  burst of 100 small pointer frames ended the viewer with `input-frame-limit`;
+  80 frames survived. Such bursts happen when the viewer moves the mouse during
+  a pause in the shared event loop: the October 15 gateway profile measured
+  pauses of up to 2.6 s (`PERFORMANCE.md`). Data frames now reach the desktop's
+  TCP stream as soon as they are taken, in order. Only open, control and ping
+  hold the frames behind them, and the unchanged 64-frame and 2 MiB bounds now
+  apply only to input that is really waiting. No buffer limit was raised.
+- **A viewer failure tore down every bot's traffic.** On the agent, any
+  desktop scope rejection (stale control snapshot, archived bot, desktops
+  disabled, startup not finished) ran `ws.close(1008)` on the shared node
+  socket. On the hub, a viewer whose browser socket was backed up past 8 MiB
+  made `receive` throw, and the gateway answered with "Node frame rejected",
+  which closed the node. Both now end only that viewer and send it a `closed`
+  frame. Frames from a foreign node or scope are still protocol faults.
+- **Hub closures are now categorised** (`side: "hub"`): session-expired,
+  session-invalid, parent-disconnected, placement-changed, node-unavailable,
+  viewer-frame-rejected, viewer-output-unavailable, node-frame-rejected,
+  node-disconnected and hub-closing. These are fixed categories and timings
+  only. Deliberate viewer closes stay unlogged.
+
+**Viewer recovery.** After a transient loss (the socket closing or erroring,
+a lost-stream `closed` reason, an RFB disconnect, DawarTodo going offline or
+its parent connection being replaced), the dialog reopens up to three times,
+waiting 1, 2 and 4 s (`app/bots/desktop-reconnect.ts`). Each attempt starts
+from scratch: a new `desktop.open` ticket, a new signed-in session ticket, a
+new stream and a new RFB client. Held input is released when the stream
+fails, and nothing is replayed. Control restarts shared, and a viewer that
+held exclusive control is never reopened automatically. A stopped desktop,
+exclusive control held elsewhere, an expired or foreign ticket, an archived
+bot, failed authentication, uncertain control or sign-out all wait for a
+person. A connection that stays up for 60 s earns a fresh set of attempts.
+Pressing Reconnect, closing the viewer or switching bots resets or cancels
+the attempts. Desktop applications keep running throughout.
+
+**Voice and memory.** The earlier failed Dwight call (`005caabc…`) left its
+provider socket `unknown` (close code 1006) and one `voice-request` lifetime
+`active`. That is the deliberate no-replay outcome. Hub admission is still
+`open` with 2 unsettled lifetimes (the cap is 1024), and no operator call is
+open, so the failed call does not block sending, uploads or sign-in. Live
+voice acceptance still needs a real call. Memory maintenance did block
+conversation: whenever `MEMORY.md` exceeded 128 KiB without a reviewed
+summary, every ordinary send was rejected with "MEMORY.md needs recovery
+before delivery". Ernie's file is at 89 KiB and growing. The send now goes
+through with a pointer to the exact current file and its hash, the oversized
+body is not inlined, and the memory status still reports `blocked` until
+background recovery finishes.
+
+**Not verified here.** Sustained live viewing of a real bot desktop, real
+phone/relay behaviour and live voice acceptance were not exercised. No bot
+desktop was opened and nothing was deployed.

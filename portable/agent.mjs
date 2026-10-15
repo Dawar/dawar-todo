@@ -198,8 +198,13 @@ export class AgentTransport {
           }
           this.flushEvents();
         } else if(authentication && m.type==='desktop-request'){
-          if(!this.startupReady||!this.runtime.ready)throw Error('Agent startup has not completed.');
-          void this.desktops.message(ws,m)?.catch(()=>ws.close(1008,'Desktop scope changed'));
+          // A viewer failure ends that viewer only. Closing this socket would
+          // drop every bot's sends, receipts and events with it.
+          if(!this.startupReady||!this.runtime.ready){
+            if(m.event==='open'&&id(m.clientId)&&id(m.botId)&&Number.isSafeInteger(m.epoch))sendHere({type:'desktop-response',event:'closed',clientId:m.clientId,botId:m.botId,epoch:m.epoch,error:'Desktop is starting. Reconnect in a moment.'});
+            return;
+          }
+          void this.desktops.message(ws,m)?.catch(error=>this.runtime.emit('fault',error));
         } else if(authentication && m.type==='secure-request'){
           void this.secure.message(ws,m).catch(()=>sendHere({type:'secure-response',transportId:m.transportId,botId:m.frame?.botId,epoch:m.epoch,error:'Private form scope is unavailable.'}));
         } else if(authentication && m.type==='rpc'){
