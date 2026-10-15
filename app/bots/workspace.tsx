@@ -80,6 +80,8 @@ import { useBotSearchShortcut, botKeyboardAvailable } from "./bot-search-shortcu
 import { SavedDrafts } from "./saved-drafts";
 import { ComposerInput } from "./composer-input";
 import { ComposerSettings } from "./composer-settings";
+import { ContextMeter } from "@/components/ai-elements/context";
+import { contextMeter } from "../../lib/ai-elements";
 import { ArtifactGallery, BotAttachmentsEntry, ArtifactNav } from "./artifact-gallery";
 import { PromptQueue } from "./prompt-queue";
 import { QueueLists, useQueueLists } from "./queue-lists";
@@ -188,6 +190,8 @@ export function BotsWorkspace() {
     bot = bots.find((b) => b.id === selected),
     pending = snapshot?.pending.filter((p) => p.botId === selected && !(lanes && p.runId && p.laneId && p.threadId && !(snapshot?.capabilities?.singleThreadExecution === 1 && bot?.executionMode === "single-thread" && p.threadId === bot.threadId))) ?? [];
   const single = snapshot?.capabilities?.singleThreadExecution === 1 && bot?.executionMode === "single-thread";
+  // Context meter: native current context with a known window only; otherwise hidden.
+  const contextUsage = contextMeter(bot?.contextCompaction?.context);
   const work:BotAdmissionWork|undefined = single ? snapshot?.workByBot?.find(value => value.botId === selected) : undefined;
   const queueListsSupported = snapshot?.capabilities?.queueLists === 1;
   const queueLists = useQueueLists(owner, selected, online, queueListsSupported);
@@ -636,7 +640,7 @@ export function BotsWorkspace() {
                     <PromptQueue key={`queue:${scope}`} owner={owner} bot={bot} items={promptQueue} online={online}
                       canEdit={Boolean(composer?.ready && !sending)} onEdit={editQueued} refresh={refreshQueues}
                       supported={queueListsSupported} relativeMoves={snapshot?.capabilities?.queueRelativeMoves===1} lists={queueLists.lists} onOpenLists={queueListsSupported ? () => openDetails("queues") : undefined} />
-                    {snapshot && <ComposerSettings key={`settings:${scope}`} bot={bot} snapshot={snapshot} online={online} />}
+                    {snapshot && <ComposerSettings key={`settings:${scope}`} bot={bot} snapshot={snapshot} online={online} context={contextUsage && <ContextMeter meter={contextUsage} onOpen={() => openDetails("settings")}/>} />}
                   {(lanes || single) && <MainStopRecovery owner={owner} botId={bot.id} online={online} />}
                   <ComposerStatus composer={composer} error={composerError} />
                   {transferError&&<p className="bots-error" role="alert">{transferError}</p>}

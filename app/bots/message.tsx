@@ -17,6 +17,15 @@ import { MarkdownCodeBlock } from "../markdown-code-block";
 import { CodeBlock } from "@/components/ai-elements/code-block";
 import { TraceIcon, TraceStatus } from "@/components/ai-elements/trace";
 import { codeLanguage, traceState } from "../../lib/trace-state";
+import { ToolDetails } from "@/components/ai-elements/tool";
+import { StackTrace } from "@/components/ai-elements/stack-trace";
+import { PlanProgress, PlanStepStatus } from "@/components/ai-elements/plan";
+import { InlineCitation, Sources } from "@/components/ai-elements/sources";
+import { Marker } from "@/components/ai-elements/marker";
+import { Subagent } from "@/components/ai-elements/subagent";
+import { formatDuration, inlineCitation, messageSources, parseStackTrace, planStepState, stripAnsi, subagentView, toolView } from "../../lib/ai-elements";
+import { markdownLinkDestinations } from "../../lib/local-file-link.mjs";
+import { ListChecks, Minimize2 } from "lucide-react";
 import type { ExtraProps } from "react-markdown";
 import { SubmissionAuthor } from "./submission-author";
 import { BotMessageDisclosure } from "./bot-message-disclosure";
@@ -50,8 +59,13 @@ const MarkdownLink: Components["a"] = ({ href, children, node }) => {
   const local = href?.startsWith("bot-local-file:") ? localFileLink(safeDecode(href.slice(15)), botCwd(botId)) : href ? localFileLink(href, botCwd(botId)) : null;
   if (local) return <LocalFileLink botId={botId} link={local} attachments={attachments}>{children}</LocalFileLink>;
   if (href?.startsWith("bot-local-file:")) return <span>{children}</span>;
+  // A numbered reference or bare URL label becomes an Inline Citation pill.
+  const citation = inlineCitation(hastText(node), href);
+  if (citation && href) return <InlineCitation href={href} index={citation.index} host={citation.host}/>;
   return <a href={href} target="_blank" rel="noreferrer">{children}</a>;
 };
+type HastNode = { type: string; value?: string; children?: HastNode[] };
+const hastText = (node: HastNode | undefined): string => !node ? "" : node.type === "text" ? node.value ?? "" : (node.children ?? []).map(hastText).join("");
 const botCwd = (botId: string) => botsClient.snapshot?.bots.find(bot => bot.id === botId)?.cwd ?? "";
 const safeDecode = (value: string) => { try { return decodeURIComponent(value); } catch { return ""; } };
 // file:/sandbox: links are otherwise dropped by the default transform; keep them
@@ -80,9 +94,10 @@ function MessageMarkdown({ text, botId, attachments, followups = [], offset = 0,
 export function WorkPlanMessage({ plan, botId, attachments, turnStatus }: { plan: NativeWorkPlan; botId: string; attachments: BotAttachment[]; turnStatus?: string }) {
   const markdown = (text: string) => <MessageMarkdown text={text} botId={botId} attachments={attachments}/>;
   return <section className="bots-native-work-plan" aria-label="Native Work plan">
+    <PlanProgress completed={plan.steps.filter(step => step.status === 'completed').length} total={plan.complete ? plan.steps.length : plan.totalSteps}/>
     {plan.explanation?.trim() && <div className="bots-message-markdown"><TextPages text={normalizeFileCitations(plan.explanation)} render={markdown}/></div>}
     {!!plan.steps.length && <div role="list" className="bots-work-plan-steps"><ItemPages items={plan.steps} size={8} render={(step, index) => <div role="listitem" key={index}>
-      <span className="bots-work-plan-status" data-status={step.status}>{step.status === 'completed' ? 'Completed' : step.status === 'inProgress' ? 'In progress' : 'Pending'}</span>
+      <span className="bots-work-plan-status" data-status={step.status}><PlanStepStatus state={planStepState(step.status)}/></span>
       <div className="bots-message-markdown"><TextPages text={normalizeFileCitations(step.step)} render={markdown}/></div>
     </div>}/></div>}
     {!plan.complete && <p className="bots-system-note">Partial plan · {plan.steps.length} of {plan.totalSteps} steps shown.</p>}
@@ -100,7 +115,7 @@ function ProposedPlanText({ text: rawText, partial, nativePlan = false, botId, a
     if (start >= end && !(part.kind === "plan" && part.start === part.end && part.start >= offset && part.start <= offset + page.length)) return [];
     const body = <MessageMarkdown text={text.slice(start, Math.max(start, end))} botId={botId} attachments={attachments} followups={projection.references} offset={start} source={source} partial={partial}/>;
     return [part.kind === "plan" && !nativePlan ? <div key={part.key} className="bots-plan">
-      <span>Proposed plan</span><div className="bots-message-markdown">{body}</div>
+      <span><ListChecks size={14} aria-hidden="true"/>Proposed plan</span><div className="bots-message-markdown">{body}</div>
     </div> : <Fragment key={part.key}>{body}</Fragment>];
   })} />;
 }
@@ -155,12 +170,13 @@ function BotMessage({
         className={`bots-message bots-agent ${item.phase === "commentary" ? "is-commentary" : ""}`}
       >
         <div className="bots-message-markdown"><ProposedPlanText text={item.text} partial={partial} botId={botId} attachments={attachments} source={source}/></div>
+        {!partial && item.phase !== "commentary" && <MessageSources text={item.text}/>}
       </div>
     );
   if (item.type === "plan")
     return (
       <div className="bots-plan">
-        <span>Proposed plan</span>
+        <span><ListChecks size={14} aria-hidden="true"/>Proposed plan</span>
         <div className="bots-message-markdown"><ProposedPlanText text={item.text} partial={partial} nativePlan botId={botId} attachments={attachments} source={source}/></div>
       </div>
     );
@@ -168,13 +184,12 @@ function BotMessage({
     return item.summary.some(text => text.trim()) ? (
       inWorkLog ? (
         <div className="bots-reasoning">
-          <span>Thinking</span>
           <div className="bots-message-markdown">
             {markdown(item.summary.join("\n\n"))}
           </div>
         </div>
       ) : (
-        <LazyDetails summary="Thinking">{() => <>
+        <LazyDetails className="bots-tool ai-reasoning" summary={<><TraceIcon kind="reasoning"/><span>Thinking</span></>}>{() => <>
           <div className="bots-message-markdown">
             {markdown(item.summary.join("\n\n"))}
           </div>
@@ -183,7 +198,7 @@ function BotMessage({
     ) : null;
   if (item.type === "contextCompaction")
     return (
-      <div className="bots-system-note">Conversation context compacted</div>
+      <Marker icon={<Minimize2 size={13} aria-hidden="true"/>}>Conversation context compacted</Marker>
     );
   const command = item.type === "commandExecution",
     diff = item.type === "fileChange",
@@ -200,28 +215,53 @@ function BotMessage({
             ? item.tool
             : item.type.replace(/([a-z])([A-Z])/g, "$1 $2");
   // Terminal/diff/raw evidence stays exact text in bounded pages. A missing
-  // exit code is shown as unknown, never as success.
-  const toolBody = () => command ? (
-        <TextPages text={item.aggregatedOutput || "Waiting for output…"} render={(text) => <CodeBlock variant="terminal" label={item.command} code={text} copyText={item.aggregatedOutput ?? ""}
-          footer={item.exitCode !== null ? `Exit code ${item.exitCode}` : item.status === "inProgress" ? "Running" : undefined}/>} />
-      ) : diff ? (
+  // exit code is shown as unknown, never as success. Escape sequences are
+  // removed for display only; Copy returns the exact output.
+  const tool = toolView(item), subagent = subagentView(item);
+  const page = (text: string, render: (text: string) => import("react").ReactNode) => <TextPages text={text} render={render}/>;
+  const toolBody = () => command ? <>
+        <TextPages text={item.aggregatedOutput ? stripAnsi(item.aggregatedOutput) : "Waiting for output…"} render={(text) => <CodeBlock variant="terminal" label={item.command} code={text} copyText={item.aggregatedOutput ?? ""}
+          footer={<TerminalMeta item={item}/>}/>} />
+        {item.status !== "inProgress" && item.exitCode !== 0 && <CommandStackTrace output={item.aggregatedOutput}/>}
+      </> : diff ? (
         <ItemPages items={item.changes} size={5} render={(change, i) => (
           <TextPages key={i} text={change.diff} render={(text) => <CodeBlock variant="diff" label={change.path} code={text} copyText={change.diff}/>} />
         )} />
-      ) : (
+      ) : tool ? <ToolDetails view={tool} page={page}/>
+      : subagent ? <Subagent view={subagent} prompt={markdown}/>
+      : (
         <TextPages text={JSON.stringify(item, null, 2)} render={(text) => <CodeBlock language="json" label={label} code={text}/>} />
       );
   if (inWorkLog) return <div className="bots-tool">{toolBody()}</div>;
   const status = "status" in item ? String(item.status) : null;
   const state = traceState(status, { exitCode: command ? item.exitCode : undefined, success: item.type === "dynamicToolCall" ? item.success : undefined });
+  const duration = formatDuration("durationMs" in item ? item.durationMs : null);
   return (
     <LazyDetails summary={<>
         <TraceIcon kind={item.type} />
-        <span title={label}>{label}</span>
-        {status !== null && <TraceStatus state={state} />}
+        <span title={label}>{subagent?.title ?? label}</span>
+        {status !== null && <TraceStatus state={state}>{state !== "running" && duration ? <span className="ai-trace-meta">{duration}</span> : null}</TraceStatus>}
       </>}>{toolBody}
     </LazyDetails>
   );
+}
+
+/** Terminal footer: producer status, exit code, duration and cwd only. */
+function TerminalMeta({ item }: { item: Extract<ThreadItem, { type: "commandExecution" }> }) {
+  const state = traceState(item.status, { exitCode: item.exitCode }), duration = formatDuration(item.durationMs);
+  return <span className="ai-terminal-meta">
+    <TraceStatus state={state}>{item.exitCode !== null ? `Exit code ${item.exitCode}` : item.status === "inProgress" ? "Running" : "Exit code unknown"}</TraceStatus>
+    {duration && <span>{duration}</span>}
+    {item.cwd && <span className="ai-terminal-cwd" title={String(item.cwd)}>{String(item.cwd)}</span>}
+  </span>;
+}
+function CommandStackTrace({ output }: { output: string | null }) {
+  const trace = useMemo(() => parseStackTrace(output), [output]);
+  return trace ? <StackTrace trace={trace}/> : null;
+}
+function MessageSources({ text }: { text: string }) {
+  const sources = useMemo(() => messageSources(markdownLinkDestinations(text)), [text]);
+  return <Sources sources={sources}/>;
 }
 
 const MemoBotMessage = memo(BotMessage);

@@ -1,6 +1,6 @@
 "use client";
 
-import { useLayoutEffect, useMemo, useSyncExternalStore } from "react";
+import { useLayoutEffect, useMemo, useSyncExternalStore, type ReactNode } from "react";
 import { Check, ListTodo, LoaderCircle, Zap } from "lucide-react";
 import type { Bot, BotSnapshot } from "../../lib/bots-types";
 import { botsClient } from "./client";
@@ -21,7 +21,7 @@ function fastChoice(values: Values, snapshot: BotSnapshot, bot: Bot) {
 }
 
 /** The controller keeps rapid intent and ordered saves across bot navigation. */
-export function ComposerSettings({ bot, snapshot, online }: { bot: Bot; snapshot: BotSnapshot; online: boolean }) {
+export function ComposerSettings({ bot, snapshot, online, context }: { bot: Bot; snapshot: BotSnapshot; online: boolean; context?: ReactNode }) {
   const owner = botsClient.owner;
   const controller = useMemo(() => getComposerSettings(owner, bot.id), [owner, bot.id]);
   const state = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
@@ -39,7 +39,7 @@ export function ComposerSettings({ bot, snapshot, online }: { bot: Bot; snapshot
     <div className={`bots-settings-next-heading${status ? "" : " sr-only"}`}><strong>Next turn</strong><span role={pending ? "status" : undefined}>{pending && <LoaderCircle size={13} className={pending.phase === "saving" ? "bots-spin" : ""} aria-hidden="true" />}{status}{queued && <span className="sr-only">, latest choice queued</span>}</span></div>
     <div className="bots-settings" aria-label="Bot defaults for future turns" aria-busy={pending?.phase === "saving"}>
       <div className="bots-settings-selects">
-        <label><span className="sr-only">Model</span><NativeSelect aria-label="Model" disabled={!online}
+        <label title="Model for future turns. A running turn keeps its own settings."><span className="sr-only">Model</span><NativeSelect aria-label="Model" disabled={!online}
           value={effective.model ?? ""} onChange={event => {
             const selected = models.find(item => item.model === event.target.value);
             const currentTier = controller.displayed(bot).serviceTier ?? defaults.serviceTier;
@@ -52,7 +52,7 @@ export function ComposerSettings({ bot, snapshot, online }: { bot: Bot; snapshot
           <option value="">Default · {defaults.model}</option>
           {models.map(item => <option key={item.id} value={item.model}>{item.displayName}</option>)}
         </NativeSelect></label>
-        <label><span className="sr-only">Reasoning effort</span><NativeSelect aria-label="Reasoning effort" disabled={!online}
+        <label title="Reasoning effort for future turns. A running turn keeps its own settings."><span className="sr-only">Reasoning effort</span><NativeSelect aria-label="Reasoning effort" disabled={!online}
           value={effective.effort ?? ""} onChange={event => controller.edit({ effort: event.target.value || null })}>
           <option value="">Default · {defaults.effort}</option>
           {model?.supportedReasoningEfforts.map(item => <option key={item.reasoningEffort} value={item.reasoningEffort}>{item.reasoningEffort}</option>)}
@@ -73,6 +73,7 @@ export function ComposerSettings({ bot, snapshot, online }: { bot: Bot; snapshot
           {active ? <Check size={15} aria-hidden="true" /> : <Zap size={15} aria-hidden="true" />}Fast
         </Button>}
       </div>
+      {context}
     </div>
     <SettingsRecovery state={state} controller={controller} online={online} />
   </div>;

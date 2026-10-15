@@ -5,6 +5,9 @@ import { NativeSelect } from "@/components/ui/native-select";
 import { Textarea } from "@/components/ui/textarea";
 import { useRef, useEffect, useId, useState } from "react";
 import { CreateTaskRequest } from "./task-request-ui";
+import { KeyRound, ListChecks, MessageSquareText, ShieldQuestion } from "lucide-react";
+import { requestPattern } from "../../lib/ai-elements";
+import { CodeBlock } from "@/components/ai-elements/code-block";
 import type { BotRequest } from "../../lib/bots-types";
 
 type JsonSchema = {
@@ -21,6 +24,8 @@ type JsonSchema = {
   minimum?: number;
   maximum?: number;
 };
+const PATTERN_ICONS = { questionnaire: ListChecks, confirmation: ShieldQuestion, authorization: KeyRound, form: MessageSquareText, other: MessageSquareText };
+const PATTERN_TITLES = { questionnaire: "Your input is needed", confirmation: "Approval needed", authorization: "Authorization needed", form: "Your input is needed", other: "Your input is needed" };
 function FormField({
   name,
   schema,
@@ -190,6 +195,10 @@ export function RequestCard({
     }
   }
   const locked = disabled || busy;
+  // Confirmation/Questionnaire presentation only; keys, choices and answers are unchanged.
+  const pattern = requestPattern(request.method, request.params as { mode?: unknown });
+  const PatternIcon = PATTERN_ICONS[pattern];
+  const questionCount = request.method === "item/tool/requestUserInput" ? request.params.questions.length : 0;
   let content;
   if (request.method === "item/tool/requestUserInput")
     content = (
@@ -223,7 +232,7 @@ export function RequestCard({
       >
         {request.params.questions.map((q) => (
           <fieldset key={q.id} disabled={locked}>
-            <legend>{q.question}</legend>
+            <legend>{q.header && <span className="ai-question-chip">{q.header}</span>}{q.question}</legend>
             {q.options?.map((option) => (
               <label key={option.label} className="bots-option">
                 <input
@@ -444,11 +453,9 @@ export function RequestCard({
       <>
         <p>{p.reason ?? "This action needs your approval."}</p>
         {"command" in p && (
-          <pre>
-            {typeof p.command === "string"
+          <CodeBlock label="Command" code={typeof p.command === "string"
               ? p.command
-              : JSON.stringify(p.command, null, 2)}
-          </pre>
+              : JSON.stringify(p.command, null, 2)}/>
         )}
         <details>
           <summary>Action details</summary>
@@ -469,8 +476,8 @@ export function RequestCard({
     );
   } else content = <p>This request is handled by the bot runtime.</p>;
   return (
-    <section className="bots-request" aria-label="Bot needs your input" aria-busy={busy && !accepted} aria-describedby={error ? errorId : undefined}>
-      <div className="bots-request-title">Your input is needed</div>
+    <section className="bots-request" data-pattern={pattern} aria-label="Bot needs your input" aria-busy={busy && !accepted} aria-describedby={error ? errorId : undefined}>
+      <div className="bots-request-title ai-request-heading"><PatternIcon size={16} aria-hidden="true"/>{PATTERN_TITLES[pattern]}{questionCount > 1 && <small>{questionCount} questions</small>}</div>
       {content}
       {error && (
         <p id={errorId} role="alert" className="bots-error">
