@@ -72,7 +72,8 @@ import { RunHistory } from "./run-history";
 import type { ActivityTarget } from "./activity-target";
 import { OperatorCallDialog, OperatorCallHistory } from "./operator-call";
 import { BotDesktopCard, BotDesktopDialog } from "./bot-desktop";
-import { BotDetailsDrawer, type BotDetailsSection } from "./bot-details";
+import { BotDetailsPanel, DEFAULT_DETAILS_SECTION, useDockedDetails, useDockedPreference, type BotDetailsSection } from "./bot-details";
+import { ChapterNavigation } from "./chapter-panel";
 import { ScheduleList } from "./schedule-list";
 import { RunDecisions } from "./run-decisions";
 import { UsagePanel } from "./usage-panel";
@@ -125,7 +126,7 @@ export function BotsWorkspace() {
     [profile, setProfile] = useState(false),
     [desktopScope, setDesktopScope] = useState<string | null>(null),
     [gallery, setGallery] = useState<"artifacts" | "attachments" | null>(null),
-    [detailsSection, setDetailsSection] = useState<BotDetailsSection>("next"),
+    [detailsSection, setDetailsSection] = useState<BotDetailsSection>(DEFAULT_DETAILS_SECTION),
     [activityTarget, setActivityTarget] = useState<ActivityTarget | null>(null),
     [showOverallUsage, setShowOverallUsage] = useState(false),
     [editingSchedule, setEditingSchedule] = useState<
@@ -141,6 +142,16 @@ export function BotsWorkspace() {
   useLayoutEffect(() => { selectedRef.current = selected; }, [selected]);
   const owner = client.owner;
   const scope = JSON.stringify([owner, selected]);
+  // Wide desktops dock Bot details beside the chat with a remembered
+  // owner-scoped choice; narrower layouts use the transient modal drawer.
+  const docked = useDockedDetails();
+  const [dockOpen, setDockOpen] = useDockedPreference(owner);
+  // Widening while the drawer is open hands it over to the docked column.
+  useEffect(() => { if (!docked || !profile) return; let active = true; queueMicrotask(() => { if (active) { setProfile(false); setDockOpen(true); } }); return () => { active = false; }; }, [docked, profile, setDockOpen]);
+  const detailsOpen = docked ? dockOpen : profile;
+  const detailsToggle = useRef<HTMLButtonElement>(null);
+  const returnDetailsFocus = useCallback(() => detailsToggle.current, []);
+  const openDetails = useCallback((section?: BotDetailsSection) => { if (section) setDetailsSection(section); if (docked) setDockOpen(true); else setProfile(true); }, [docked, setDockOpen]);
   const { searchOpen, closeSearch, keepOpenForNavigation } = useBotSearchShortcut(screenRef, searchRef, JSON.stringify([owner, selected, gallery, client.snapshot?.bots.find(value => value.id === selected)?.threadId ?? null]));
   if (editingSchedule && editingSchedule.scope !== scope) setEditingSchedule(null);
   const promptQueue = queueScope === scope ? loadedQueue : EMPTY_QUEUE;
@@ -371,7 +382,7 @@ export function BotsWorkspace() {
   }
   function closeGallery() {
     const url = new URL(window.location.href); url.searchParams.delete("view"); window.history.pushState({}, "", url);
-    if (gallery === "attachments") setProfile(true); setGallery(null);
+    if (gallery === "attachments") openDetails(); setGallery(null);
   }
   async function action(fn: () => Promise<unknown>) {
     setError("");
@@ -449,13 +460,13 @@ export function BotsWorkspace() {
   const schedules = snapshot?.schedules.filter((s) => s.botId === selected) ?? [];
   const recentRuns = [...new Map([...(lanes ? snapshot?.backgroundRuns ?? [] : []), ...(snapshot?.runs ?? [])]
     .filter(run => run.botId === selected).map(run => [run.id, run])).values()];
-  const openCalls = useCallback(() => { setDetailsSection("calls"); setProfile(true); }, []);
-  const closeProfile = useCallback(() => setProfile(false), []);
-  const openActivity = (target: ActivityTarget | null = null) => { setActivityTarget(target); setDetailsSection("history"); setProfile(true); };
+  const openCalls = useCallback(() => openDetails("calls"), [openDetails]);
+  const closeProfile = useCallback(() => { if (docked) setDockOpen(false); else setProfile(false); }, [docked, setDockOpen]);
+  const openActivity = (target: ActivityTarget | null = null) => { setActivityTarget(target); openDetails("history"); };
   return (
     <><TaskRequestWorkspace key={JSON.stringify([owner,bot?.id,bot?.threadId])} owner={owner} bot={bot} online={online} supported={snapshot?.capabilities?.taskRequests === 1}><div className="bots-screen" ref={screenRef} data-no-pull-refresh>
       <SiteHeader current="bots" />
-      <main className={`bots-layout ${selected || gallery ? "has-selection" : ""} ${searchOpen ? "search-open" : ""}`}>
+      <main className={`bots-layout ${selected || gallery ? "has-selection" : ""} ${searchOpen ? "search-open" : ""} ${docked && dockOpen && bot && !gallery && desktopScope !== scope ? "has-details-docked" : ""}`}>
         <aside className="bots-sidebar" onKeyDown={event => { if (event.key === 'Escape' && searchOpen && !event.defaultPrevented) { event.preventDefault(); closeSearch(true); } }}>
           <div className="bots-sidebar-heading">
             <h1 className="sr-only">Bots</h1>
@@ -524,13 +535,14 @@ export function BotsWorkspace() {
 
                 </div>
                 <div className="bots-header-actions">
-                  {single && botProvider(bot) !== "claude" && snapshot?.capabilities?.nativeGoals === 1 && <GoalIndicator bot={bot} work={work} onOpen={() => { setDetailsSection('goals'); setProfile(true); }} />}
+                  {single && botProvider(bot) !== "claude" && snapshot?.capabilities?.nativeGoals === 1 && <GoalIndicator bot={bot} work={work} onOpen={() => openDetails('goals')} />}
                   {snapshot?.capabilities?.operatorCalls === 1 && !bot.archived && <Button variant="ghost" size="icon" className="bots-icon-button" aria-label={`Call ${bot.name}`} onClick={() => { setCallBotId(bot.id); setShowCall(true); }}><Phone size={18} /></Button>}
                   <Button variant="ghost" size="icon"
                     className="bots-icon-button"
-                    aria-label="Bot details"
-                    aria-expanded={profile}
-                    onClick={() => setProfile((v) => !v)}
+                    ref={detailsToggle}
+                    aria-label={docked ? (detailsOpen ? "Hide bot details" : "Show bot details") : "Bot details"}
+                    aria-expanded={detailsOpen}
+                    onClick={() => { if (docked) setDockOpen(!dockOpen); else setProfile((v) => !v); }}
                   >
                     <MoreHorizontal size={22} />
                   </Button>
@@ -605,7 +617,7 @@ export function BotsWorkspace() {
                     }
                   />
                 ))}
-                <div className="bots-conversation-presence"><Avatar bot={bot} small /><Button variant="ghost" size="sm" type="button" onClick={() => { setDetailsSection("next"); setProfile(true); }} aria-label="Open work details" title={online ? workLabel(work, bot) ?? humanStatus(bot, online) : "Offline"}>{online ? workLabel(work, bot) ?? humanStatus(bot, online) : "Offline"}</Button><ActiveTurnElapsed owner={owner} bot={bot} work={work} online={online}/></div>
+                <div className="bots-conversation-presence"><Avatar bot={bot} small /><Button variant="ghost" size="sm" type="button" onClick={() => openDetails("next")} aria-label="Open work details" title={online ? workLabel(work, bot) ?? humanStatus(bot, online) : "Offline"}>{online ? workLabel(work, bot) ?? humanStatus(bot, online) : "Offline"}</Button><ActiveTurnElapsed owner={owner} bot={bot} work={work} online={online}/></div>
               </BotConversation>
               </FollowupComposerProvider>
               {!bot.archived && (
@@ -613,7 +625,7 @@ export function BotsWorkspace() {
                   <div className="bots-composer-support">
                     <PromptQueue key={`queue:${scope}`} owner={owner} bot={bot} items={promptQueue} online={online}
                       canEdit={Boolean(composer?.ready && !sending)} onEdit={editQueued} refresh={refreshQueues}
-                      supported={queueListsSupported} relativeMoves={snapshot?.capabilities?.queueRelativeMoves===1} lists={queueLists.lists} onOpenLists={queueListsSupported ? () => { setDetailsSection("queues"); setProfile(true); } : undefined} />
+                      supported={queueListsSupported} relativeMoves={snapshot?.capabilities?.queueRelativeMoves===1} lists={queueLists.lists} onOpenLists={queueListsSupported ? () => openDetails("queues") : undefined} />
                     {snapshot && <ComposerSettings key={`settings:${scope}`} bot={bot} snapshot={snapshot} online={online} />}
                   {(lanes || single) && <MainStopRecovery owner={owner} botId={bot.id} online={online} />}
                   <ComposerStatus composer={composer} error={composerError} />
@@ -761,9 +773,10 @@ export function BotsWorkspace() {
             </>
           )}
         </section>}
-        {bot && !gallery && <Activity mode={profile && desktopScope !== scope ? "visible" : "hidden"}>
-          <BotDetailsDrawer key={scope} bot={bot} section={detailsSection} onSection={setDetailsSection} onClose={closeProfile}>
+        {bot && !gallery && <Activity mode={detailsOpen && desktopScope !== scope ? "visible" : "hidden"}>
+          <BotDetailsPanel key={scope} bot={bot} section={detailsSection} onSection={setDetailsSection} onClose={closeProfile} docked={docked} returnFocus={returnDetailsFocus}>
             {{
+              navigation: <ChapterNavigation key={`chapters:${scope}:${bot.threadId ?? ""}`} owner={owner} bot={bot} online={online} onJumped={docked ? undefined : closeProfile} />,
               next: <>
                 <h3>Up next</h3><p className="bots-details-lead">Scheduled and queued work.</p>
                 {single && <WorkOverview owner={owner} bot={bot} work={work} online={online} />}
@@ -782,9 +795,9 @@ export function BotsWorkspace() {
                 <p className="bots-details-lead">Open the preview to use the fullscreen controller.</p>
                 {/* Mount only in the open Desktop tab; no background captures
                     from the bot list, other tabs, or behind the controller. */}
-                {profile && detailsSection === "desktop" && desktopScope !== scope && <BotDesktopCard key={`desktop:${scope}`} bot={bot} owner={owner} online={online} onOpen={() => setDesktopScope(scope)} />}
+                {detailsOpen && detailsSection === "desktop" && desktopScope !== scope && <BotDesktopCard key={`desktop:${scope}`} bot={bot} owner={owner} online={online} onOpen={() => setDesktopScope(scope)} />}
               </> : <p className="bots-details-lead">Desktop is unavailable on this service.</p>}</>,
-              calls: profile && detailsSection === "calls" && snapshot?.capabilities?.operatorCalls === 1 ? <OperatorCallHistory key={`calls:${scope}`} owner={owner} botId={bot.id} online={online} /> : <p className="bots-details-lead">Named-bot voice calling is unavailable on this service.</p>,
+              calls: detailsOpen && detailsSection === "calls" && snapshot?.capabilities?.operatorCalls === 1 ? <OperatorCallHistory key={`calls:${scope}`} owner={owner} botId={bot.id} online={online} /> : <p className="bots-details-lead">Named-bot voice calling is unavailable on this service.</p>,
               history: <>{lanes && <details data-history-key="legacy-controls" className="bots-legacy-controls"><summary>Earlier work · recovery and controls</summary><BotWorkControls owner={owner} bot={bot} runs={recentRuns} online={online} onOpen={openActivity} /></details>}<RunHistory key={`${scope}:${activityTarget?.runId ?? ""}:${activityTarget?.turnId ?? ""}`} embedded bot={bot} schedules={schedules} recentRuns={recentRuns} initialTarget={activityTarget} attachments={[]} online={online} onClose={closeProfile} download={id => void download(id)} /></>,
               settings: <div className="bots-details-settings">
                 <ExecutionAccess key={`access:${scope}`} owner={owner} botId={bot.id} online={online}/>
@@ -802,7 +815,7 @@ export function BotsWorkspace() {
                 </div>
               </div>,
             }}
-          </BotDetailsDrawer>
+          </BotDetailsPanel>
         </Activity>}
       </main>
       {showTeams && (teamsSupported ? <TeamsManager key={owner} owner={owner} teams={teams} bots={bots} online={online} onClose={() => setShowTeams(false)} /> : <ControlledDialog title="Teams" onClose={() => setShowTeams(false)}><p className="text-sm text-muted-foreground">Teams are unavailable on this service.</p><Button className="justify-self-end" onClick={() => setShowTeams(false)}>Close</Button></ControlledDialog>)}

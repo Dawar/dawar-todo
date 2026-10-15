@@ -25,8 +25,6 @@ import { LazyDetails } from "./lazy-details";
 import { TraceIcon, TraceStatus } from "@/components/ai-elements/trace";
 import { traceState } from "../../lib/trace-state";
 import { useFeedScroll } from "./use-feed-scroll";
-import { humanMessageTicks, type HumanMessageTick } from "./human-message-ticks";
-import { MessageTickRail } from "./message-tick-rail";
 import {fileCitationReferences} from "../../lib/file-citation.mjs";
 import { ReturnedArtifacts } from "./returned-artifact";
 import type { ActivityTarget } from "./activity-target";
@@ -38,6 +36,9 @@ import { useSecureInputRequests } from "./secure-input-requests";
 import { secureTimelineGroups, type ConversationGroup } from "./secure-input-timeline";
 import { TaskRequestAccess, TaskRequestCard, useTaskRequests } from "./task-request-ui";
 import { taskRequestGroups } from "./task-request-timeline";
+import { ChapterContext, PinChapterAction, registerChapterJumper, type ChapterJumpResult } from "./chapter-navigation";
+import { chapterKey, type BotChapter } from "../../lib/bot-chapters";
+import "./chapters.css";
 const noDetailErrors = () => () => {};
 
 const EntryBody = memo(function EntryBody({ entry, timeline, attachments, download, beforeToggle, beforeBubbleToggle }: {
@@ -132,7 +133,7 @@ export const TimelineEntry = memo(function TimelineEntry(props: Parameters<typeo
     {work ? <LazyDetails className="bots-native-work" open={props.open} onOpenChange={props.onOpenChange} beforeToggle={props.beforeToggle} summary={<><TraceIcon kind={entry.workPlan ? 'workPlan' : entry.type}/><span className="bots-native-work-title">{nativeWorkLabel(entry)}</span><TraceStatus state={workState}>{entry.workPlan ? `${entry.workPlan.completedSteps}/${entry.workPlan.totalSteps}` : workState !== 'running' && elapsed(entry, 'item') ? <ElapsedTime value={elapsed(entry, 'item')!}/> : null}</TraceStatus></>}>
       {() => <div className="bots-native-work-body">{entry.deferredTurn ? <TurnWorkLog entry={entry} timeline={props.timeline} download={props.download}/> : <EntryBody {...props}/>} {reply}</div>}
     </LazyDetails> : <EntryBody {...props}/>}
-    {!work && reply}
+    {!work && <div className="bots-message-actions">{reply}<PinChapterAction entry={entry}/></div>}
     {entry.operatorSegmentId && <LazyDetails className="operator-call-card operator-origin" summary={<><Phone size={13} aria-hidden="true"/>Voice call</>}>{() => <OperatorSegmentBody botId={props.timeline.botId} segmentId={entry.operatorSegmentId!} onOpenCalls={props.onOpenCall}/>}</LazyDetails>}
     {!work && <MessageTime seconds={entry.messageAt} basis={entry.timeBasis ?? "turn-start"} user={entry.type === "userMessage"} elapsed={entry.item?.type === "agentMessage" && entry.item.phase === "final_answer" && entry.audience !== "finding" ? elapsed(entry, "turn") : null}/>}
   </div>;
@@ -188,15 +189,6 @@ function BotConversationFeed({ owner, bot, online, children, onOpenCall, onReply
     return () => { clearTimeout(timer); document.removeEventListener('visibilitychange', mark); };
   }, [owner, online, bot.id, bot.threadId, bot.updatedAt, bot.lastReadAt, state.loading, state.error, state.revision, state.position.following, state.entries.length, last, showJump, scroll]);
 
-  const tickNavigation = useMemo(() => humanMessageTicks(projectEntries(nativeState.entries), nativeState.contextEntries, bot.id, bot.threadId,
-    entry => entry.replyMessages ?? canonicalBurst(entry, burst.value)?.messages), [nativeState.entries, nativeState.contextEntries, projectEntries, bot.id, bot.threadId, burst.value]);
-  const selectTick = (tick: HumanMessageTick) => {
-    if (botsClient.owner !== owner || bot.threadId !== botsClient.snapshot?.bots.find(value => value.id === bot.id)?.threadId) return;
-    // A retained context/chooser preview may sit outside the current body
-    // window. Reuse the same bounded original-source projection as quotes.
-    timeline.revealSource(tick.entry);
-    feed.jumpTo(tick.entry, tick.partId);
-  };
   const secure = useSecureInputRequests({ owner, botId: bot.id, threadId: bot.threadId, online, enabled: botsClient.snapshot?.capabilities?.secureInputs === 1 });
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const revealActivity = (entry: HistoryEntry) => setExpanded(prior => new Set([...prior, timeline.resolveKey(historyKey(entry.turnId, entry.id))!]));
@@ -230,6 +222,33 @@ function BotConversationFeed({ owner, bot, online, children, onOpenCall, onReply
     } finally { resolving.current = false; }
   };
   const replyProps = { onReply, onOpenReply: openReply, threadId: bot.threadId ?? undefined };
+  // Chapters reuse the quote source resolver: a loaded response scrolls in
+  // place; an older one is located by one bounded read per request, with a
+  // visible continuation. Reading intent and owner/thread fences apply.
+  const chapterCursor = useRef(new Map<string, string>());
+  const jumpChapter = async (chapter: BotChapter): Promise<ChapterJumpResult> => {
+    if (!mounted.current || botsClient.owner !== owner || chapter.botId !== bot.id || chapter.threadId !== bot.threadId) return "unmounted";
+    const key = timeline.resolveKey(historyKey(chapter.turnId, chapter.itemId));
+    const loaded = state.entries.find(entry => historyKey(entry.turnId, entry.id) === key);
+    if (loaded) { feed.jumpTo(loaded); return "shown"; }
+    if (!online) throw Error("Reconnect to open this chapter.");
+    const value = await botsClient.rpc<{ reply: BotReplyReference | null; nextCursor: string | null; unavailable: boolean }>("replies.prepare", bot.id,
+      { threadId: bot.threadId, turnId: chapter.turnId, itemId: chapter.itemId, cursor: chapterCursor.current.get(chapterKey(chapter)) ?? null }, undefined, { owner });
+    if (!mounted.current || botsClient.owner !== owner) return "unmounted";
+    if (value.reply) {
+      chapterCursor.current.delete(chapterKey(chapter));
+      // A stale bookmark is never rebound to a different message.
+      if (value.reply.turnId !== chapter.turnId || value.reply.itemId !== chapter.itemId || value.reply.role !== "assistant") return "unavailable";
+      return await openReply(value.reply) ? "shown" : "unavailable";
+    }
+    if (value.unavailable || !value.nextCursor) { chapterCursor.current.delete(chapterKey(chapter)); return "unavailable"; }
+    chapterCursor.current.set(chapterKey(chapter), value.nextCursor);
+    return "continue";
+  };
+  const jumpRef = useRef(jumpChapter);
+  useEffect(() => { jumpRef.current = jumpChapter; });
+  useEffect(() => bot.threadId ? registerChapterJumper(owner, bot.id, bot.threadId, chapter => jumpRef.current(chapter)) : undefined, [owner, bot.id, bot.threadId]);
+  const chapterScope = useMemo(() => bot.threadId ? { owner, botId: bot.id, threadId: bot.threadId, resolve: (turnId: string, itemId: string) => timeline.resolveKey(historyKey(turnId, itemId)) } : null, [owner, bot.id, bot.threadId, timeline]);
   const [downloadError, setDownloadError] = useState("");
   const pinnedContext = state.position.tailContext && !state.position.following
     ? [...state.contextEntries, ...state.entries].find(entry => historyKey(entry.turnId, entry.id) === timeline.resolveKey(state.position.anchor)) : undefined;
@@ -296,9 +315,7 @@ function BotConversationFeed({ owner, bot, online, children, onOpenCall, onReply
     <p className="bots-system-note">Latest readable messages. Intervening work remains accessible through earlier history.</p>
     {entries.map(entry => <TimelineEntry {...replyProps} beforeToggle={feed.capture} beforeBubbleToggle={feed.disclose} onOpenCall={onOpenCall} key={historyKey(entry.turnId, entry.id)} entry={entry} timeline={timeline} attachments={state.attachments} download={download} />)}
   </section>;
-  const earlierTicks = first > 0 || Boolean(state.olderCursor) || state.gaps.some(gap => gap.before === historyKey(state.entries[first]?.turnId ?? '', state.entries[first]?.id ?? ''));
-  const showTicks = tickNavigation.ticks.length > 0 || earlierTicks;
-  return <NativeTimingContext.Provider value={{ owner, botId: bot.id, threadId: bot.threadId, entries: nativeState.entries, current: nativeState.currentTiming }}><div className={`bots-timeline${showTicks ? ' has-message-ticks' : ''}`}><SecureInputAccess key={JSON.stringify([owner, bot.id, bot.threadId])} state={secure}/><div className="bots-messages" ref={scroll} tabIndex={0} {...feed.handlers}><div ref={content}>
+  return <NativeTimingContext.Provider value={{ owner, botId: bot.id, threadId: bot.threadId, entries: nativeState.entries, current: nativeState.currentTiming }}><ChapterContext.Provider value={chapterScope}><div className="bots-timeline"><SecureInputAccess key={JSON.stringify([owner, bot.id, bot.threadId])} state={secure}/><div className="bots-messages" ref={scroll} tabIndex={0} {...feed.handlers}><div ref={content}>
     <TaskRequestAccess capture={feed.capture}/>
     {paging && <div className="bots-feed-loading" role="status">Loading conversation…</div>}
     {(first > 0 || state.olderCursor) && !state.loading && (!online || state.error || !state.entries.length) && <Button variant="outline" type="button" className="bots-older" disabled={paging || !online && (first === 0 || state.gaps.some((gap) => gap.before === historyKey(state.entries[first].turnId, state.entries[first].id)))} onClick={() => void feed.page(-1, true)}>{state.entries.length ? "Load earlier turns" : "Continue loading history"}</Button>}
@@ -346,11 +363,11 @@ function BotConversationFeed({ owner, bot, online, children, onOpenCall, onReply
       <small role="status">{submission.state === 'uncertain' ? 'Delivery unconfirmed' : 'Sending…'}</small>
     </div>}
     {children}
-  </div></div>{showTicks && <MessageTickRail {...tickNavigation} scroll={scroll} content={content} earlier={earlierTicks} incomplete={!state.complete || Boolean(state.olderCursor) || state.gaps.length > 0} loading={paging || state.loading} online={online} error={state.error} onEarlier={() => feed.page(-1, true)} onSelect={selectTick}/>} {(showJump || last < state.entries.length || state.error || state.loading && state.cached) && <Button variant="outline" type="button" className="bots-jump-latest" disabled={!online || state.loading} onClick={() => {
+  </div></div>{(showJump || last < state.entries.length || state.error || state.loading && state.cached) && <Button variant="outline" type="button" className="bots-jump-latest" disabled={!online || state.loading} onClick={() => {
     latest();
     if (state.error) void timeline.recoverLatest();
     else void timeline.refreshLatest();
-  }}><ArrowDown size={16} aria-hidden="true" />{state.loading ? "Loading latest…" : state.error ? "Retry latest messages" : "Latest messages"}</Button>}</div></NativeTimingContext.Provider>;
+  }}><ArrowDown size={16} aria-hidden="true" />{state.loading ? "Loading latest…" : state.error ? "Retry latest messages" : "Latest messages"}</Button>}</div></ChapterContext.Provider></NativeTimingContext.Provider>;
 }
 
 export function BotConversation(props: Parameters<typeof BotConversationFeed>[0]) {

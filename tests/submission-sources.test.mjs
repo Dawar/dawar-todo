@@ -74,10 +74,5 @@ test('live event and cold history use identical source join without an extra bub
 test('owner direct reservation creates a signed original submission envelope',t=>{const e=setup(t),p=e.placements.get('jim'),r=e.sources.reserveOwner(owner.key,{method:'turn.send',botId:'jim',operationId:'direct-owner-op',params:{text:'body'}},p);assert.equal(r.payload.submission.deliveryOperationId,'direct-owner-op');assert.equal(r.payload.submission.source.kind,'user');assert.equal(e.sources.import(e.store.bot('jim'),r.payload.submission,'direct-owner-op').id,'direct-owner-op');});
 test('reserved external agent identity and malformed presentation are unavailable',()=>{for(const source of [{kind:'agent',id:'x',name:'X'},{kind:'unknown',id:'x'},{kind:'bot',id:'x',name:'X',color:'red'},{kind:'bot',id:'x',name:'X',avatar:'https://evil'},{kind:'user',id:'x',name:'X',metadata:{}}])assert.throws(()=>checkedSource(source));});
 
-test('human scrollbar ticks include verified human and legacy messages only',()=>{
- const env=browser(),{humanMessageTicks}=env.load('app/bots/human-message-ticks.ts');
- const entries=['user','bot','system','unknown','legacy'].map((kind,i)=>({id:`item-${i}`,turnId:`turn-${i}`,sourceThreadId:'thread',type:'userMessage',item:{type:'userMessage',id:`item-${i}`,clientId:`client-${i}`,content:[{type:'text',text:'Body'}]},complete:true,scheduled:false,status:'completed',startedAt:i+1,...(kind==='legacy'?{}:{submission:{submissionId:`client-${i}`,source:{kind,id:'source',name:'Name'}}})}));
- const {ticks}=humanMessageTicks(entries,[],'bot','thread');assert.deepEqual(Array.from(ticks,t=>t.entry.submission?.source.kind??'legacy'),['user','legacy']);
-});
 
 test('source checksum survives the actual canonical hub wire serialization',t=>{const e=setup(t),r=e.send(),b=e.store.bot('jim'),q=e.store.get('promptQueue',r.submissionId),raw=e.sources.fromQueue(b,'wire-delivery',q),wire=JSON.parse(boundedFrame(raw));assert.equal(e.sources.import(b,wire,'wire-delivery').fingerprint,raw.fingerprint);});
