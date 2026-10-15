@@ -154,6 +154,7 @@ test('rejected-entity barriers propagate through overlapping actions without per
 
 test('first healthy heartbeat replaces only fallback polling, never an immediate pending edit wake', async () => {
   let stream; let lastDelay;
+  // eslint-disable-next-line @typescript-eslint/no-this-alias -- the test captures the instance the engine creates
   class Stream extends EventTarget { constructor() { super(); stream = this; } close() {} }
   const env = runtime({ EventSource: Stream, setTimeout: (fn, delay) => { lastDelay = delay; return setTimeout(fn, delay); } }, {
     './sync-request': { request: async () => ({ todos: [], projects: [], deletedIds: [], revision: 1 }), retryableSyncError: () => true, syncRetryDelay: () => 100 },
