@@ -185,7 +185,7 @@ export function linuxDeployment(spec,{systemctl=async(...args)=>(await exec('sys
       try{held=db.prepare('SELECT * FROM portable_async_drains WHERE id=?').get(spec.operationId);}finally{db.close();}
       // Name the non-zero drain counters so an expiry explains itself.
       const busy=Object.entries(n.counts??{}).filter(([,v])=>v).map(([k,v])=>`${k}=${v}`).join(', ');
-      const nativeReason=`${n.reason??'Native work is not idle.'}${busy?` Busy: ${busy}.`:''}`;
+      const nativeReason=`${n.reason??'Native work is not idle.'}${busy?` Busy: ${busy}.`:''}${n.blockers?.length?` Blocking: ${n.blockers.join('; ')}.`:''}`;
       if(!held&&n.safe!==true)return {safe:false,native:n,hub:{phase:'open',status:'waiting-for-native-idle',holdingWrites:false},reason:nativeReason};
       if(!held)local('begin',row);
       const h=local('observe',row);return {safe:n.safe===true&&h.status==='ready',native:n,hub:h,reason:n.safe!==true?nativeReason:h.status!=='ready'?`Hub writer drain is ${h.status}.`:null};

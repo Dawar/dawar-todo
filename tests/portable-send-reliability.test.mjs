@@ -233,3 +233,31 @@ test('a failed current-activity read before queue admission is a deferral, not a
   await background(h,6);
   await until(()=>h.codex.starts().length===1,'original queue item delivered after recovery',100);
 });
+
+// An Oct 5 production row: accepted for an OLDER turn whose completion was
+// missed while the bot moved on. The current-turn watchdog never reads it.
+test('an accepted inbox row for an older terminal turn settles from native facts without a resend',async t=>{
+  const h=await portableHarness(t);
+  const bot=await h.createBot();
+  const thread=h.codex.thread(bot.threadId);
+  const old=(id,status,clientId)=>thread.turns.push({id,status,startedAt:1,items:[{type:'userMessage',id:`user-${id}`,clientId,content:[]}]});
+  old('old-interrupted','interrupted','peer:old-interrupted');old('still-running','inProgress','peer:still-running');
+  const accepted=(id,turnId)=>h.nodeStore.put('primaryInbox',{id,botId:bot.id,threadId:bot.threadId,kind:'peer',sourceId:id,state:'accepted',turnId,
+    createdAt:'2026-10-05T21:33:00.054Z',acceptedAt:'2026-10-05T21:33:01.492Z',error:null});
+  accepted('peer:old-interrupted','old-interrupted');accepted('peer:still-running','still-running');accepted('peer:unknown','never-listed');
+  assert.equal(h.runtime.maintenance.counts().acceptedOrUnknown,3);
+  await background(h,3);
+  assert.equal(h.nodeStore.get('primaryInbox','peer:old-interrupted').terminalStatus,'interrupted','exact terminal native fact settles the row');
+  assert.equal(h.nodeStore.get('primaryInbox','peer:old-interrupted').state,'accepted');
+  for(const id of ['peer:still-running','peer:unknown']){
+    const row=h.nodeStore.get('primaryInbox',id);
+    assert.equal(row.state,'accepted');assert.equal(row.terminalStatus,undefined,`${id} stays accepted-or-unknown`);
+  }
+  assert.equal(h.runtime.maintenance.counts().acceptedOrUnknown,2);
+  assert.equal(h.codex.starts().length,0,'nothing resubmitted');
+  assert.ok(!h.codex.calls.some(c=>c.method==='thread/queue/add'),'nothing re-queued');
+  // Read-only and bounded: a row is not read again inside its backoff.
+  const reads=h.codex.calls.filter(c=>c.method==='thread/turns/list').length;
+  await background(h,2);
+  assert.equal(h.codex.calls.filter(c=>c.method==='thread/turns/list').length,reads);
+});

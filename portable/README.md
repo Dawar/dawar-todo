@@ -62,6 +62,10 @@ on the central machine; it does not create a special local-only agent path.
 
 Node 24 is required. `npm run portable:build` builds a separate Next.js standalone
 target and gateway. `npm run build` retains the existing Vinext/Cloudflare target.
+The portable webpack build keeps no persistent cache (`next.config.ts`): a
+release is built from source, never by validating an earlier build's snapshot of
+the shared checkout (the 2026-10-15 `WasmHash` `length` crash). Moving
+`.next-portable/cache` aside before a build is no longer needed.
 Configuration is an absolute owner-only JSON file (version 1). Local services
 listen on loopback. Service definitions are installed disabled; installation
 never bypasses the original production restart or writer-authority gates.

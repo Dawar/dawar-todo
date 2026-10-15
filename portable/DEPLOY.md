@@ -48,9 +48,15 @@ node portable/deploy-cli.mjs launch   --plan <same plan>
    - **Simulated:** native thread idleness, relay readiness and site readiness.
 
    The copies hold whatever work was in flight when they were taken, and the
-   stand-in cannot finish it. Rehearse while the bots are idle. Otherwise the
-   rehearsal ends `expired-before-stop`, and its `lastFailure` names the busy
-   counters.
+   stand-in cannot finish it. In the copy only, it settles a bot's active turn
+   or an accepted inbox row whose exact native turn (same thread and turn ID) is
+   already terminal in `~/.codex/thread_history_1.sqlite`, opened read-only
+   (`portable/rehearsal-settle.mjs`; `rehearse(…, { nativeHistory })` overrides
+   the path). The result lists these as `settledCopies`. Anything else still
+   blocks: the rehearsal ends `expired-before-stop`, and its `lastFailure` names
+   the busy counters plus the exact blocking rows (`Blocking: primaryInbox
+   peer:… (bot name) accepted turn …`, also in `lastFailure.blockers`).
+   Rehearse while the bots are idle.
    `run` and `launch` refuse a plan that has no healthy rehearsal unless you
    pass `--skip-rehearsal`.
 4. **launch** starts `run` in its own transient unit (`controllerUnitId`), so

@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, chmodSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { savePrivate } from '../../portable/private-file.mjs';
@@ -32,7 +32,7 @@ function release(root, source, { healthy = true } = {}) {
  * SIGTERM shutdown) from the OLD release directory with TimeoutStopSec=infinity,
  * exactly like the 2026-10-14 drop-in.
  */
-export async function installation(t, { targetHealthy = true, activatingMs = 0, busyBot = false, standIn = STAND_IN } = {}) {
+export async function installation(t, { targetHealthy = true, activatingMs = 0, busyBot = false, standIn = STAND_IN, staleInbox = false, nativeTurns = [] } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'dpl-'));
   chmodSync(root, 0o700);
   const units = join(root, 'units'), hubDir = join(root, 'live/hub'), agentDir = join(root, 'live/agent'), configDir = join(root, 'config');
@@ -54,7 +54,18 @@ export async function installation(t, { targetHealthy = true, activatingMs = 0, 
   const application = new DatabaseSync(join(hubDir, 'application.sqlite')); application.exec('CREATE TABLE todos(id TEXT PRIMARY KEY); INSERT INTO todos VALUES(\'kept\')'); application.close();
   const store = new Store(join(agentDir, 'native-control.sqlite'));
   if (busyBot) store.saveBot({ id: 'busy-bot', slug: 'busy', name: 'Busy', threadId: 'thread-busy', status: 'running', activeTurnId: 'turn-1' });
+  // The Oct 5 production shape: accepted for an older turn, no terminalStatus.
+  if (staleInbox) {
+    store.saveBot({ id: 'connie', slug: 'connie', name: 'Connie: Communications Manager', threadId: 'thread-connie', status: 'idle', activeTurnId: null });
+    store.put('primaryInbox', { id: 'peer:4329428-stale', botId: 'connie', threadId: 'thread-connie', kind: 'peer', state: 'accepted', turnId: 'turn-old', createdAt: '2026-10-05T21:33:00.054Z' });
+  }
   store.close();
+  // Read-only native history the rehearsal stand-in consults (Codex schema subset).
+  const nativeHistory = join(root, 'native-home/thread_history_1.sqlite'); mkdirSync(dirname(nativeHistory), { recursive: true, mode: 0o700 });
+  const history = new DatabaseSync(nativeHistory);
+  history.exec('CREATE TABLE thread_turns(thread_id TEXT NOT NULL, turn_id TEXT NOT NULL, rollout_ordinal INTEGER NOT NULL, status TEXT NOT NULL, PRIMARY KEY(thread_id, turn_id))');
+  for (const [i, turn] of nativeTurns.entries()) history.prepare('INSERT INTO thread_turns VALUES(?,?,?,?)').run(turn.threadId, turn.turnId, i, turn.status);
+  history.close();
   const ports = { gatewayPort: await freePort(), sitePort: await freePort(), healthPort: await freePort() };
   const hubConfig = join(configDir, 'hub.json'), agentConfig = join(configDir, 'agent.json');
   savePrivate(hubConfig, JSON.stringify({ version: 1, mode: 'both', dataDirectory: hubDir, agentConfigFile: agentConfig, ...ports, externalSite: true,
@@ -73,7 +84,7 @@ export async function installation(t, { targetHealthy = true, activatingMs = 0, 
   const probe = linuxProbe({ systemctl: systemd.systemctl });
   await until(async () => (await probe.health(ports.healthPort).catch(() => ({}))).ready === true, 15000, () => readFileSync(join(root, 'services.log'), 'utf8'));
   systemd.activatingMs = activatingMs;
-  return { root, units, hubDir, agentDir, hubConfig, agentConfig, dropIn, ports, systemd, probe, oldRelease, newRelease, nativeSHA,
+  return { root, units, hubDir, agentDir, hubConfig, agentConfig, dropIn, ports, systemd, probe, oldRelease, newRelease, nativeSHA, nativeHistory,
     log: () => existsSync(join(root, 'services.log')) ? readFileSync(join(root, 'services.log'), 'utf8') : '',
     writer: () => { const db = new DatabaseSync(join(hubDir, 'control.sqlite'), { readOnly: true }); try { return db.prepare('SELECT * FROM portable_async_admission').get(); } finally { db.close(); } },
     hash: path => sha256(readFileSync(path)) };

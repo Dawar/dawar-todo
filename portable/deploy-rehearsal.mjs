@@ -23,7 +23,8 @@ const pause = ms => new Promise(r => setTimeout(r, ms));
  * prepare step, so prepare, preflight, drain, backup, stop, start, health and
  * (when the release is unhealthy) rollback are all exercised.
  */
-export async function rehearse(plan, { systemctl, unitDirectory = join(homedir(), '.config/systemd/user'), root: rootBase = join(homedir(), '.cache/dawar-rehearsal'), keep = false, verifyProduction = true, now = new Date(), standIn = STAND_IN } = {}) {
+export async function rehearse(plan, { systemctl, unitDirectory = join(homedir(), '.config/systemd/user'), root: rootBase = join(homedir(), '.cache/dawar-rehearsal'), keep = false, verifyProduction = true, now = new Date(), standIn = STAND_IN,
+  nativeHistory = join(homedir(), '.codex/thread_history_1.sqlite') } = {}) {
   const probe = linuxProbe(systemctl ? { systemctl } : {});
   if (verifyProduction) await verifyPlan(plan, probe);
   mkdirSync(rootBase, { recursive: true, mode: 0o700 });
@@ -60,13 +61,17 @@ export async function rehearse(plan, { systemctl, unitDirectory = join(homedir()
   const timeout = liveDropIn.split('\n').find(line => /^\s*TimeoutStopSec\s*=/.test(line)) ?? 'TimeoutStopSec=infinity';
   savePrivate(join(unitDirectory, unitId), `[Unit]\nDescription=DawarTodo deploy rehearsal ${plan.operationId} (temporary)\n\n[Service]\nType=simple\nUMask=0077\nKillMode=mixed\nEnvironment=BOTS_MACHINE_SECRET=${randomBytes(32).toString('hex')}\n`);
   const dropIn = join(unitDirectory, `${unitId}.d`, '90-portable-migration.conf');
-  savePrivate(dropIn, `[Service]\nWorkingDirectory=${oldRelease}\nExecStart=\nExecStart=${process.execPath} ${standIn} --release ${oldRelease} --config ${join(config, 'hub.json')}\n${timeout}\n`);
+  savePrivate(dropIn, `[Service]\nWorkingDirectory=${oldRelease}\nExecStart=\nExecStart=${process.execPath} ${standIn} --release ${oldRelease} --config ${join(config, 'hub.json')} --native-history ${nativeHistory}\n${timeout}\n`);
   const systemd = systemctl ?? probe.systemctl;
   const result = { version: 1, kind: 'portable-deployment-rehearsal', productionOperationId: plan.operationId, source: plan.source, root, unitId, startedAt: now.toISOString() };
   try {
     await systemd('daemon-reload'); await systemd('start', '--no-block', unitId);
     let ready = false;
-    for (let i = 0; i < 120 && !ready; i++) { await pause(250); try { ready = (await probe.health(ports.healthPort)).ready === true; } catch { /* starting */ } }
+    for (let i = 0; i < 120 && !ready; i++) {
+      await pause(250);
+      // Copied work the stand-in settled at start from read-only native terminal facts.
+      try { const h = await probe.health(ports.healthPort); ready = h.ready === true; if (ready) result.settledCopies = h.settled ?? []; } catch { /* starting */ }
+    }
     if (!ready) throw Error('The rehearsal stand-in for the current release did not become ready.');
     const prepared = await preparePlan(probe, { source: plan.source, unitId, siteUnitId: null, site: false, receiptRoot: join(root, 'deployments'),
       waitSeconds: Math.min(plan.waitSeconds, 300), timeoutStopSec: plan.timeoutStopSec, convergence: plan.convergence, rehearsal: true, now });
