@@ -7,6 +7,8 @@ import type { BotAttachment } from "../../lib/bots-types";
 import { botsClient } from "./client";
 import { Button } from "../../components/ui/button";
 import { documentKind } from "./document-source";
+import { filePreviewKind } from "../../lib/file-preview.mjs";
+import type { FileViewer } from "./file-preview";
 type ArtifactViewerProps = {
   item: GalleryItem; owner: string; online: boolean; onClose: () => void;
   originalFile?: Blob; sourceAttachment?: BotAttachment; initialSubmission?: { documentFileId: string; documentIdentity?: string }; readOnly?: boolean;
@@ -33,6 +35,8 @@ function ScopedArtifactViewer({ item, owner, online, onClose, originalFile, sour
   const [review, setReview] = useState<Blob | null>(null);
   const [loadedFile, setLoadedFile] = useState<Blob | null>(null);
   const kind = type === "document" ? documentKind({ name: filename, mimeType: loadedFile?.type || item.mimeType }) : null;
+  // Read-only viewers for other text/media formats; HTML/Markdown keep `kind`.
+  const viewer = type === "document" && !kind ? filePreviewKind({ name: filename, mimeType: loadedFile?.type || item.mimeType }) : null;
   const [documentReady, setDocumentReady] = useState(false);
   const ready = useCallback((value: boolean) => setDocumentReady(value), []);
   const closeDialog = useEffectEvent(onClose);
@@ -84,15 +88,16 @@ function ScopedArtifactViewer({ item, owner, online, onClose, originalFile, sour
       if (event.target === event.currentTarget && (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom)) onClose();
     }}>
       <header><div><strong>{filename}</strong><small>{item.botName} · {fileSize(item.size)}</small></div><Button variant="ghost" size="icon" aria-label="Close preview" onClick={onClose}><X size={21} /></Button></header>
-      {review ? <Suspense fallback={<div className="bots-file-viewer-body" role="status">Opening review…</div>}>{kind ? <DocumentReviewer file={review} kind={kind} item={item} owner={owner} initialSubmission={initialSubmission} onBack={() => setReview(null)} onSent={() => initialSubmission ? onClose() : setReview(null)} /> : <PdfReviewer file={review} item={item} owner={owner} initialSubmission={initialSubmission} onBack={() => setReview(null)} onSent={() => initialSubmission ? onClose() : setReview(null)} />}</Suspense> : <div className={`bots-file-viewer-body ${zoom ? "is-zoomed" : ""} ${kind && url ? "has-document" : ""}`}>
+      {review ? <Suspense fallback={<div className="bots-file-viewer-body" role="status">Opening review…</div>}>{kind ? <DocumentReviewer file={review} kind={kind} item={item} owner={owner} initialSubmission={initialSubmission} onBack={() => setReview(null)} onSent={() => initialSubmission ? onClose() : setReview(null)} /> : <PdfReviewer file={review} item={item} owner={owner} initialSubmission={initialSubmission} onBack={() => setReview(null)} onSent={() => initialSubmission ? onClose() : setReview(null)} />}</Suspense> : <div className={`bots-file-viewer-body ${zoom ? "is-zoomed" : ""} ${(kind || viewer) && url ? "has-document" : ""}`}>
         {type === "image" && (url || preview) && <img src={url || preview} alt={filename} />}
         {type === "pdf" && (url ? <iframe src={`${url}#view=FitH`} title={`PDF: ${filename}`} /> : preview && <img src={preview} alt={`First page of ${item.name}`} />)}
-        {type === "document" && (kind && url && loadedFile ? <Suspense fallback={<div role="status">Opening document…</div>}><DocumentPreview file={loadedFile} kind={kind} name={filename} onReady={ready} /></Suspense> : <div className="bots-file-viewer-document"><FileText size={44} strokeWidth={1.2} /><strong>{filename}</strong>{url && <p>Download to open in another app.</p>}</div>)}
+        {type === "document" && (kind && url && loadedFile ? <Suspense fallback={<div role="status">Opening document…</div>}><DocumentPreview file={loadedFile} kind={kind} name={filename} onReady={ready} /></Suspense>
+          : viewer && url && loadedFile ? <Suspense fallback={<div role="status">Opening file…</div>}><FilePreview file={loadedFile} url={url} viewer={viewer} name={filename} /></Suspense> : <div className="bots-file-viewer-document"><FileText size={44} strokeWidth={1.2} /><strong>{filename}</strong>{url && <p>Download to open in another app.</p>}</div>)}
         {loading && <div className="bots-file-viewer-notice" role="status"><LoaderCircle className="bots-spin" size={16} />Opening file…</div>}
         {!online && !url && <div className="bots-file-viewer-notice">{preview ? "Saved preview. Connect to open the original." : "Connect to open this file."}</div>}
         {error && <div className="bots-file-viewer-notice is-error" role="alert">{error}<Button variant="outline" size="sm" onClick={() => { setLoading(true); setError(""); setRetry((n) => n + 1); }}>Try again</Button></div>}
       </div>}
-      <footer><span>{type === "pdf" ? "PDF document" : type === "image" ? "Image" : "Document"}</span><div>
+      <footer><span>{type === "pdf" ? "PDF document" : type === "image" ? "Image" : viewer ? viewerLabel(viewer) : "Document"}</span><div>
         {type === "image" && (url || preview) && <Button variant="outline" onClick={() => setZoom((v) => !v)} aria-label={zoom ? "Fit image" : "Zoom image"}>{zoom ? <ZoomOut size={17} /> : <ZoomIn size={17} />}{zoom ? "Fit" : "Zoom"}</Button>}
         {type === "pdf" && url && !review && !readOnly && (initialSubmission || item.ready && !originalFile) && <Button variant="outline" onClick={() => setReview(blob.current)}><MessageSquare size={16} />Create review</Button>}
         {kind && documentReady && url && !review && !readOnly && (initialSubmission || item.ready && !originalFile) && <Button variant="outline" onClick={() => setReview(blob.current)}><MessageSquare size={16} />Create review</Button>}
@@ -105,3 +110,10 @@ function ScopedArtifactViewer({ item, owner, online, onClose, originalFile, sour
 const PdfReviewer = lazy(() => import("./pdf-reviewer"));
 const DocumentPreview = lazy(() => import("./document-preview"));
 const DocumentReviewer = lazy(() => import("./document-reviewer"));
+const FilePreview = lazy(() => import("./file-preview"));
+const languages: Record<string, string> = { js: "JavaScript", ts: "TypeScript", py: "Python", css: "CSS", sql: "SQL", sh: "Shell script", yaml: "YAML", toml: "TOML", ini: "INI", xml: "XML" };
+function viewerLabel(viewer: FileViewer) {
+  return viewer.kind === "code" || viewer.kind === "config" ? `${languages[viewer.language] ?? "Text"} · read-only` : viewer.kind === "json" ? "JSON · read-only"
+    : viewer.kind === "csv" || viewer.kind === "tsv" ? `${viewer.kind.toUpperCase()} table · read-only` : viewer.kind === "log" ? "Log · read-only"
+      : viewer.kind === "audio" ? "Audio" : viewer.kind === "video" ? "Video" : "Text · read-only";
+}

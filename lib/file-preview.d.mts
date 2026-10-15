@@ -1,0 +1,13 @@
+export type PreviewLimits = { bytes: number; lines: number; lineChars: number; highlightBytes: number; tableRows: number; tableColumns: number; cellChars: number; jsonDepth: number; searchResults: number };
+export const TEXT_PREVIEW_LIMITS: Readonly<PreviewLimits>;
+export type FilePreviewKind = "text" | "json" | "csv" | "tsv" | "log" | "config" | "code" | "audio" | "video";
+export function filePreviewKind(file: { name: string; mimeType: string }): { kind: FilePreviewKind; language: string } | null;
+export function decodePreviewText(bytes: Uint8Array | ArrayBuffer, limits?: PreviewLimits): { status: "ok"; text: string } | { status: "large" | "encoding" | "binary" };
+export function previewLines(text: string, limits?: PreviewLimits): { lines: string[]; total: number; hiddenLines: number; clippedLines: number };
+export function searchLines(lines: string[], query: string, limit?: number): { matches: number[]; clipped: boolean };
+export function parseDelimited(text: string, delimiter?: string, limits?: PreviewLimits): { rows: string[][]; columns: number; hiddenColumns: number; hiddenRows: boolean; unterminated: boolean; ragged: boolean };
+export function clipCell(value: string, limits?: PreviewLimits): string;
+export function formatJson(text: string, limits?: PreviewLimits): { formatted: string } | { error: string; line: number; column: number };
+export type Token = [type: "plain" | "comment" | "string" | "number" | "keyword" | "key" | "tag" | "meta", text: string];
+export function highlightTokens(text: string, language: string, limits?: PreviewLimits): Token[];
+export function tokenLines(tokens: Token[], limits?: PreviewLimits): Token[][];

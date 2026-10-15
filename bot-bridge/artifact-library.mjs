@@ -17,6 +17,7 @@ export function artifactMetadata(a, bot) {
     direction: a.artifact ? 'output' : 'input', source: a.source === 'native' ? 'native' : a.artifact ? 'published' : 'upload',
     kind, provenance, sha256:a.sha256, cloudState:a.cloudState,
     ...(Array.isArray(a.visualizationReferences) ? { visualizationReferences: a.visualizationReferences.slice(0, 6) } : {}),
+    localReferences: [...new Set([a.path, ...(Array.isArray(a.localReferences) ? a.localReferences.slice(-6) : [])])].filter(path => typeof path === 'string' && path.startsWith('/') && path.length <= 2048),
     preview: { kind: ['image', 'pdf'].includes(kind) ? kind : 'none', version: artifactVersion(a) } };
 }
 const initialized = new WeakSet();
