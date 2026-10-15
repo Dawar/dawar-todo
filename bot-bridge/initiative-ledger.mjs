@@ -5,11 +5,21 @@ import { createHash, randomUUID } from "node:crypto";
 // Everything here is plain records in an existing Store (the hub's logical
 // control store in portable deployments). No native authority is held here.
 
-export const INITIATIVE_KINDS = ["follow-up", "opportunity", "update"];
+export const INITIATIVE_KINDS = ["follow-up", "opportunity", "update", "loose-thread"];
+// Kinds a review may create. Loose threads come only from Dawar's own words
+// (mention extraction); a review can propose, update or resolve them.
+const REVIEW_CREATABLE = new Set(["follow-up", "opportunity", "update"]);
+export const LOOSE_THREAD = "loose-thread";
+export const MENTION_CATEGORIES = ["client", "person", "company", "idea", "intention", "question", "commitment", "decision"];
+export const IMPORTANCE = ["high", "medium", "low"];
+export const RESOLUTION_KINDS = ["todo", "task-completed", "decision", "message-sent", "meeting-scheduled", "artifact", "owner-done", "owner-dropped", "concluded"];
+export const PROPOSED_ACTIONS = ["todo", "draft-message", "schedule", "research", "drop", "other"];
 // Statuses an owner decision sets. A private review can never set these.
 export const OWNER_OUTCOMES = ["approved", "snoozed", "dismissed", "resolved"];
 const REVIEW_STATUSES = new Set(["candidate", "resolved"]);
 const OPEN = new Set(["candidate", "held", "published"]);
+// Loose threads not yet concluded (approved work is in progress, not lost).
+const UNCONCLUDED = new Set(["candidate", "held", "published", "approved", "snoozed"]);
 
 /** Approved defaults (October 13 plan, quiet hours removed by amendment). */
 export const DEFAULT_SETTINGS = Object.freeze({
@@ -18,9 +28,26 @@ export const DEFAULT_SETTINGS = Object.freeze({
   scanMinutes: 25,
   baselineMinutes: 120,
   concurrency: 1,
-  model: "gpt-6.1-sol",
+  // Review model per provider; empty = the bot's own model.
+  model: "",
+  claudeModel: "",
   effort: "medium",
   fast: false,
+  // Loose threads: cheap extraction of Dawar's own mentions, then resurfacing.
+  looseThreads: true,
+  extractionModel: "gpt-6-luna",
+  claudeExtractionModel: "haiku",
+  extractionEffort: "low",
+  extractionBatch: 40,
+  extractionChars: 24000,
+  mentionLookbackHours: 72,
+  // One global daily slot is kept for due loose threads.
+  looseThreadReserve: 1,
+  // Review packet bound (estimated tokens).
+  packetTokens: 12000,
+  // Optional zero-token triage: review only bots with signals, at most N per scan.
+  triage: false,
+  triageMaxReviews: 4,
   reviewTimeoutSeconds: 180,
   spacingMinMinutes: 3,
   spacingMaxMinutes: 5,
@@ -39,7 +66,11 @@ export const DEFAULT_SETTINGS = Object.freeze({
 const BOUNDS = {
   scanMinutes: [5, 24 * 60], baselineMinutes: [30, 7 * 24 * 60], concurrency: [1, 4], reviewTimeoutSeconds: [30, 600],
   spacingMinMinutes: [0, 120], spacingMaxMinutes: [0, 240], perBotDaily: [0, 20], globalDaily: [0, 100], reminderHours: [1, 24 * 30],
+  extractionBatch: [5, 100], extractionChars: [2000, 60000], mentionLookbackHours: [1, 14 * 24], looseThreadReserve: [0, 5],
+  packetTokens: [3000, 20000], triageMaxReviews: [1, 32],
 };
+const INTEGER_SETTINGS = new Set(["concurrency", "extractionBatch", "extractionChars", "looseThreadReserve", "packetTokens", "triageMaxReviews"]);
+const MODEL = /^[a-zA-Z0-9._:[\]-]{0,80}$/;
 const EFFORTS = new Set(["low", "medium", "high", "xhigh"]);
 const now = () => new Date().toISOString();
 const hash = value => createHash("sha256").update(value).digest("hex");
@@ -57,7 +88,7 @@ export function limitDay(at, timeZone = DEFAULT_SETTINGS.limitTimeZone) {
 function boundedNumber(key, value) {
   const [min, max] = BOUNDS[key];
   if (!Number.isFinite(value) || value < min || value > max) throw Error(`${key} must be between ${min} and ${max}.`);
-  return key === "concurrency" || key.endsWith("Daily") ? Math.round(value) : value;
+  return INTEGER_SETTINGS.has(key) || key.endsWith("Daily") ? Math.round(value) : value;
 }
 function botOverride(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw Error("Bot overrides must be objects.");
@@ -91,9 +122,10 @@ export class InitiativeLedger {
         throw Object.assign(Error("Initiative settings changed elsewhere; reload them before saving."), { outcome: "rejected" });
       const next = { ...current, bots: { ...current.bots } };
       for (const [key, value] of Object.entries(patch)) {
-        if (key === "enabled" || key === "fast") { if (typeof value !== "boolean") throw Error(`${key} must be true or false.`); next[key] = value; }
+        if (["enabled", "fast", "looseThreads", "triage"].includes(key)) { if (typeof value !== "boolean") throw Error(`${key} must be true or false.`); next[key] = value; }
         else if (key in BOUNDS) next[key] = boundedNumber(key, value);
-        else if (key === "model") { if (typeof value !== "string" || !/^[a-zA-Z0-9._:-]{1,80}$/.test(value)) throw Error("Invalid review model."); next.model = value; }
+        else if (["model", "claudeModel", "extractionModel", "claudeExtractionModel"].includes(key)) { if (typeof value !== "string" || !MODEL.test(value)) throw Error(`Invalid ${key}.`); next[key] = value; }
+        else if (key === "extractionEffort") { if (!EFFORTS.has(value)) throw Error("Invalid extraction reasoning effort."); next.extractionEffort = value; }
         else if (key === "coverage") { if (!["all", "selected"].includes(value)) throw Error("Coverage must be all or selected."); next.coverage = value; }
         else if (key === "effort") { if (!EFFORTS.has(value)) throw Error("Invalid review reasoning effort."); next.effort = value; }
         else if (key === "priorities") { if (typeof value !== "string" || value.length > 8000) throw Error("Priorities exceed 8000 characters."); next.priorities = value.trim(); }
@@ -127,14 +159,123 @@ export class InitiativeLedger {
     const k = normalizeKey(key);
     return k ? this.items().find(item => item.key === k || item.aliases?.includes(k)) ?? null : null;
   }
-  /** Ledger slice supplied to a review: the bot's own items and open cross-bot items. */
-  forReview(botId, limit = 40) {
-    const rows = this.items().filter(item => item.responsibleBotId === botId || item.contributors?.some(c => c.botId === botId) || OPEN.has(item.status));
-    return rows.sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? "")).slice(0, limit).map(item => ({
+  /**
+   * Ledger slice supplied to a review: the bot's own items and open cross-bot
+   * items, plus every unconcluded loose thread this bot is responsible for or
+   * contributed to, with the quotes of Dawar's original mentions.
+   */
+  forReview(botId, limit = 20, { names = {}, settings = this.settings() } = {}) {
+    const mine = item => item.responsibleBotId === botId || item.contributors?.some(c => c.botId === botId);
+    const threads = this.looseThreads().filter(item => UNCONCLUDED.has(item.status) && mine(item))
+      .map(item => ({ item, priority: looseThreadPriority(item, this.clock()) }))
+      .sort((a, b) => b.priority - a.priority).slice(0, 25)
+      .map(({ item, priority }) => this.threadView(item, botId, { names, priority, settings }));
+    const rows = this.items().filter(item => item.kind !== LOOSE_THREAD && (mine(item) || OPEN.has(item.status)));
+    return [...threads, ...rows.sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? "")).slice(0, limit).map(item => ({
       id: item.id, key: item.key, title: item.title, kind: item.kind, status: item.status, responsibleBot: item.responsibleBotId,
       yours: item.responsibleBotId === botId, lastPublishedAt: item.lastPublishedAt ?? null, reminderCount: item.reminderCount ?? 0,
       snoozedUntil: item.snoozedUntil ?? null, outcome: item.decision?.outcome ?? null, sources: (item.sources ?? []).slice(0, 6),
-      nextReviewAt: item.nextReviewAt ?? null }));
+      nextReviewAt: item.nextReviewAt ?? null }))];
+  }
+  /** Compact review/Settings view of one loose thread. */
+  threadView(item, botId = null, { names = {}, priority = looseThreadPriority(item, this.clock()), settings = this.settings() } = {}) {
+    const t = this.clock(), due = this.threadDue(item, settings);
+    return { id: item.id, key: item.key, title: item.title, kind: LOOSE_THREAD, category: item.category, entity: item.entity ?? null,
+      importance: item.importance, timeSensitive: item.timeSensitive === true, status: item.status, responsibleBot: item.responsibleBotId,
+      yours: botId ? item.responsibleBotId === botId : undefined, due, priority: Math.round(priority * 100) / 100,
+      firstMentionedAt: item.firstMentionedAt, lastTouchedAt: item.lastTouchedAt, resurfaceAt: item.resurfaceAt ?? null,
+      ageHours: Math.round((t - Date.parse(item.firstMentionedAt ?? item.createdAt)) / 36e5),
+      lastPublishedAt: item.lastPublishedAt ?? null, reminderCount: item.reminderCount ?? 0, snoozedUntil: item.snoozedUntil ?? null,
+      summary: item.summary ?? null,
+      mentions: (item.mentions ?? []).slice(-3).map(m => ({ bot: names[m.botId] ?? m.botId, botId: m.botId, at: m.at, quote: m.quote, ref: mentionRef(m) })) };
+  }
+
+  // ---- loose threads -------------------------------------------------------
+  looseThreads() { return this.items().filter(item => item.kind === LOOSE_THREAD); }
+  /** Due to be raised now: open, past its resurfacing time, or a 72-hour reminder. */
+  threadDue(item, settings = this.settings()) {
+    const t = this.clock();
+    if (item.kind !== LOOSE_THREAD) return false;
+    if (item.status === "candidate") return Date.parse(item.resurfaceAt ?? "") <= t;
+    if (item.status === "published") return (item.reminderCount ?? 0) < 1 && Date.parse(item.lastPublishedAt ?? "") + settings.reminderHours * 36e5 <= t;
+    return false;
+  }
+  dueThreads(botId = null, settings = this.settings()) {
+    return this.looseThreads().filter(item => (!botId || item.responsibleBotId === botId) && this.threadDue(item, settings))
+      .sort((a, b) => looseThreadPriority(b, this.clock()) - looseThreadPriority(a, this.clock()));
+  }
+  /** The open loose thread a mention refers to (id, key/alias, then same entity and similar title). */
+  matchThread(m) {
+    const threads = this.looseThreads();
+    if (m.itemId) { const byId = threads.find(i => i.id === m.itemId); if (byId) return byId; }
+    const key = normalizeKey(m.key || m.title);
+    const byKey = key && threads.find(i => i.key === key || i.aliases?.includes(key));
+    if (byKey) return byKey;
+    const entity = normalizeKey(m.entity);
+    if (!entity) return null;
+    const words = tokens(m.title);
+    return threads.filter(i => normalizeKey(i.entity) === entity && UNCONCLUDED.has(i.status))
+      .map(i => ({ i, score: jaccard(words, tokens(i.title)) })).filter(x => x.score >= 0.4).sort((a, b) => b.score - a.score)[0]?.i ?? null;
+  }
+  /**
+   * Apply one validated extraction batch from `botId`. Mentions open or touch
+   * loose threads (deduplicated across bots: one item, every source kept);
+   * resolutions conclude them unless a newer owner decision exists.
+   * `responsible(mention)` returns a better-fitting bot id or null.
+   */
+  applyMentions(botId, extraction, { responsible = () => null } = {}) {
+    return this.store.transaction(() => {
+      const touched = new Map(), ignored = [], at = this.at();
+      for (const m of extraction.mentions) {
+        const mention = { botId, threadId: m.threadId, turnId: m.turnId, itemId: m.messageId, at: m.messageAt, quote: m.quote };
+        const existing = this.matchThread(m);
+        if (!existing) {
+          const key = normalizeKey(m.key || m.title);
+          if (!key) continue;
+          const owner = responsible(m) ?? botId;
+          const item = { id: `initiative-${randomUUID()}`, key, aliases: [], title: text(m.title, 200) || key, kind: LOOSE_THREAD, category: m.category,
+            entity: text(m.entity, 120) || null, importance: m.importance, timeSensitive: m.timeSensitive, summary: text(m.summary, 600) || null,
+            dueAt: m.dueAt ?? null, responsibleBotId: owner, mentionedBotId: botId,
+            contributors: owner === botId ? [] : [{ botId, at, note: "mentioned here" }],
+            sources: [mentionRef(mention)], mentions: [mention], notes: [], status: "candidate",
+            firstMentionedAt: m.messageAt, lastTouchedAt: m.messageAt, createdAt: at, updatedAt: at, reminderCount: 0, publicationCount: 0 };
+          item.resurfaceAt = resurfaceAt(item);
+          this.store.put("initiativeItem", { ...item, botId: owner });
+          touched.set(item.id, item);
+          continue;
+        }
+        const item = { ...existing };
+        if ((item.mentions ?? []).some(x => x.itemId === mention.itemId && x.botId === botId)) { touched.set(item.id, item); continue; }
+        item.mentions = [...(item.mentions ?? []), mention].sort((a, b) => a.at.localeCompare(b.at)).slice(-12);
+        item.sources = [...new Set([...(item.sources ?? []), mentionRef(mention)])].slice(-24);
+        if (item.responsibleBotId !== botId && !(item.contributors ?? []).some(c => c.botId === botId))
+          item.contributors = [...(item.contributors ?? []), { botId, at, note: "mentioned here" }].slice(-12);
+        const alias = normalizeKey(m.key);
+        if (alias && alias !== item.key && !(item.aliases ?? []).includes(alias)) item.aliases = [...(item.aliases ?? []), alias].slice(-12);
+        if (IMPORTANCE.indexOf(m.importance) < IMPORTANCE.indexOf(item.importance)) item.importance = m.importance;
+        item.timeSensitive = item.timeSensitive || m.timeSensitive;
+        if (m.dueAt && (!item.dueAt || m.dueAt < item.dueAt)) item.dueAt = m.dueAt;
+        if (m.messageAt > (item.lastTouchedAt ?? "")) item.lastTouchedAt = m.messageAt;
+        // Dawar raised a concluded or dropped thread again himself: it is live again.
+        const closedAt = item.status === "resolved" ? item.resolvedAt ?? item.updatedAt : item.status === "dismissed" ? item.decision?.at : null;
+        if (closedAt && m.messageAt > closedAt) Object.assign(item, { status: "candidate", reopenedAt: at, resolution: null });
+        if (item.status === "candidate") item.resurfaceAt = resurfaceAt(item);
+        item.updatedAt = at;
+        this.store.put("initiativeItem", { ...item, botId: item.responsibleBotId });
+        touched.set(item.id, item);
+      }
+      for (const r of extraction.resolutions) {
+        const item = this.item(r.itemId);
+        if (!item || item.kind !== LOOSE_THREAD || !UNCONCLUDED.has(item.status)) { ignored.push({ itemId: r.itemId, reason: "not-open" }); continue; }
+        if (item.decision && item.decision.at > r.at) { ignored.push({ itemId: item.id, reason: "newer-owner-decision" }); continue; }
+        const next = { ...item, status: "resolved", resolvedAt: at, updatedAt: at, lastTouchedAt: r.at > (item.lastTouchedAt ?? "") ? r.at : item.lastTouchedAt,
+          resolution: { kind: r.kind, evidence: r.evidence, at: r.at, source: r.source ?? `bot:${botId}` } };
+        this.store.put("initiativeItem", { ...next, botId: next.responsibleBotId });
+        touched.set(item.id, next);
+      }
+      if (touched.size) this.bump();
+      return { items: [...touched.values()], ignored };
+    });
   }
 
   /**
@@ -150,6 +291,8 @@ export class InitiativeLedger {
         const at = this.at();
         if (!existing) {
           if (update.status === "resolved") return null; // nothing to resolve
+          // Loose threads only come from Dawar's own mentions.
+          if (!REVIEW_CREATABLE.has(contributionKind ?? update.kind ?? "opportunity")) { ignored.push({ key: update.key, reason: "unknown-loose-thread" }); return null; }
           const key = normalizeKey(update.key || update.title);
           if (!key) return null;
           const item = { id: `initiative-${randomUUID()}`, key, aliases: [], title: text(update.title, 200) || key, kind: contributionKind ?? update.kind ?? "opportunity",
@@ -173,7 +316,10 @@ export class InitiativeLedger {
         const decidedAfterCapture = item.decision && (item.decision.ledgerVersion > capture.ledgerVersion || item.decision.at > capture.startedAt);
         if (update.status === "resolved" && item.responsibleBotId === botId) {
           if (decidedAfterCapture) ignored.push({ itemId: item.id, reason: "newer-owner-decision" });
-          else if (OPEN.has(item.status) || item.status === "approved") item.status = "resolved", item.resolvedAt = at;
+          else if (OPEN.has(item.status) || item.status === "approved") {
+            item.status = "resolved"; item.resolvedAt = at;
+            if (item.kind === LOOSE_THREAD) item.resolution = { kind: "concluded", evidence: text(update.note, 1000) || update.sources.join("; ").slice(0, 1000) || null, at, source: `review:${capture.reviewId}` };
+          }
         }
         if (update.nextReviewAt && item.responsibleBotId === botId) item.nextReviewAt = update.nextReviewAt;
         item.updatedAt = at;
@@ -208,6 +354,7 @@ export class InitiativeLedger {
       }
       const ledgerVersion = this.bump();
       const next = { ...item, status: outcome, snoozedUntil, updatedAt: at,
+        ...(outcome === "resolved" ? { resolvedAt: at, ...(item.kind === LOOSE_THREAD ? { resolution: { kind: "owner-done", evidence: note ? text(note, 1000) : null, at, source: source ?? by } } : {}) } : {}),
         decision: { outcome, at, by, note: note ? text(note, 1000) : null, source, ledgerVersion, revision: (item.decision?.revision ?? 0) + 1 },
         outcomes: [...(item.outcomes ?? []), { outcome, at, by, source }].slice(-20) };
       this.store.put("initiativeItem", { ...next, botId: next.responsibleBotId });
@@ -222,7 +369,9 @@ export class InitiativeLedger {
     const due = this.items().filter(item => item.status === "snoozed" && Date.parse(item.snoozedUntil ?? "") <= this.clock());
     if (!due.length) return 0;
     this.store.transaction(() => {
-      for (const item of due) this.store.put("initiativeItem", { ...item, botId: item.responsibleBotId, status: "candidate", snoozedUntil: null, updatedAt: this.at() });
+      // A woken loose thread is due again now, then follows its usual cadence.
+      for (const item of due) this.store.put("initiativeItem", { ...item, botId: item.responsibleBotId, status: "candidate", snoozedUntil: null, updatedAt: this.at(),
+        ...(item.kind === LOOSE_THREAD ? { resurfaceAt: this.at() } : {}) });
       this.bump();
     });
     return due.length;
@@ -245,6 +394,10 @@ export class InitiativeLedger {
     }
     if (sameDay.length >= settings.globalDaily) return "global-daily-limit";
     if (sameDay.filter(p => p.botId === botId).length >= settings.perBotDaily) return "bot-daily-limit";
+    // Loose threads get priority within the limits: the last global slots are
+    // kept for them while any is due.
+    if (item.kind !== LOOSE_THREAD && settings.globalDaily - sameDay.length <= settings.looseThreadReserve && this.dueThreads(null, settings).length)
+      return "reserved-for-loose-threads";
     const spacing = this.store.meta("initiative-next-delivery");
     if (spacing && Date.parse(spacing) > this.clock()) return "spacing";
     return null;
@@ -272,7 +425,10 @@ export class InitiativeLedger {
   metrics(settings = this.settings()) {
     const today = limitDay(this.clock(), settings.limitTimeZone), items = this.items(), publications = this.store.list("initiativePublication");
     const confirmed = publications.filter(p => p.state === "published");
-    const reviews = this.store.list("initiativeReview");
+    const runs = this.store.list("initiativeReview"), reviews = runs.filter(r => (r.kind ?? "review") === "review"), extractions = runs.filter(r => r.kind === "extract");
+    const tokens = rows => rows.reduce((sum, r) => sum + (Number(r.usage?.totalTokens) || 0), 0);
+    const ofToday = rows => rows.filter(r => limitDay(r.createdAt, settings.limitTimeZone) === today);
+    const threads = items.filter(i => i.kind === LOOSE_THREAD);
     return {
       publishedToday: confirmed.filter(p => limitDay(p.publishedAt, settings.limitTimeZone) === today).length,
       published: confirmed.length,
@@ -284,6 +440,14 @@ export class InitiativeLedger {
       reviews: reviews.length,
       reviewTokens: reviews.reduce((sum, r) => sum + (Number(r.usage?.totalTokens) || 0), 0),
       cachedTokens: reviews.reduce((sum, r) => sum + (Number(r.usage?.cachedInputTokens) || 0), 0),
+      reviewTokensToday: tokens(ofToday(reviews)),
+      extractions: extractions.length,
+      extractionTokens: tokens(extractions),
+      extractionTokensToday: tokens(ofToday(extractions)),
+      costUsd: Math.round(runs.reduce((sum, r) => sum + (Number(r.usage?.costUsd) || 0), 0) * 1e4) / 1e4,
+      openLooseThreads: threads.filter(i => UNCONCLUDED.has(i.status)).length,
+      dueLooseThreads: threads.filter(i => this.threadDue(i, settings)).length,
+      resolvedLooseThreads: threads.filter(i => i.status === "resolved").length,
       meanDeliveryLatencySeconds: confirmed.length ? Math.round(confirmed.reduce((sum, p) => sum + Math.max(0, Date.parse(p.publishedAt) - Date.parse(p.createdAt)), 0) / confirmed.length / 1000) : null,
       nextDeliveryNotBefore: this.store.meta("initiative-next-delivery") ?? null,
     };
@@ -304,9 +468,12 @@ export const REVIEW_OUTPUT_SCHEMA = { type: "object", additionalProperties: fals
   properties: {
     decision: { type: "string", enum: ["publish", "hold", "none"] },
     contribution: nullable({ type: "object", additionalProperties: false,
-      required: ["kind", "item_id", "key", "title", "why_now", "message", "evidence", "expected_value", "effort_estimate", "first_step", "changed_circumstances"],
+      required: ["kind", "item_id", "key", "title", "why_now", "message", "evidence", "expected_value", "effort_estimate", "first_step", "proposed_action", "changed_circumstances"],
       properties: { kind: { type: "string", enum: INITIATIVE_KINDS }, item_id: nullable(str), key: str, title: str, why_now: str, message: str,
-        evidence: { type: "array", items: str }, expected_value: str, effort_estimate: str, first_step: str, changed_circumstances: { type: "boolean" } } }),
+        evidence: { type: "array", items: str }, expected_value: str, effort_estimate: str, first_step: str,
+        proposed_action: nullable({ type: "object", additionalProperties: false, required: ["type", "detail"],
+          properties: { type: { type: "string", enum: PROPOSED_ACTIONS }, detail: str } }),
+        changed_circumstances: { type: "boolean" } } }),
     ledger_updates: { type: "array", items: UPDATE_SCHEMA },
     next_review_hours: nullable({ type: "number" }),
   } };
@@ -345,17 +512,71 @@ export function validateReviewResult(raw, clock = Date.now()) {
     const evidence = sources(c.evidence);
     if (!evidence.length) throw Error("Contribution needs supporting evidence.");
     for (const field of ["why_now", "expected_value", "effort_estimate", "first_step"]) if (!text(c[field], 2000)) throw Error(`Contribution ${field} is required.`);
+    const action = c.proposed_action && typeof c.proposed_action === "object" && PROPOSED_ACTIONS.includes(c.proposed_action.type) && text(c.proposed_action.detail, 1000)
+      ? { type: c.proposed_action.type, detail: text(c.proposed_action.detail, 1000) } : null;
+    // A resurfaced loose thread names its existing item and one concrete action.
+    if (c.kind === LOOSE_THREAD && (typeof c.item_id !== "string" || !action)) throw Error("A loose-thread proposal needs its item_id and a concrete proposed_action.");
     contribution = { kind: c.kind, itemId: typeof c.item_id === "string" ? c.item_id.slice(0, 120) : null, key, title, whyNow: text(c.why_now, 2000), message,
       evidence, expectedValue: text(c.expected_value, 1000), effortEstimate: text(c.effort_estimate, 500), firstStep: text(c.first_step, 1000),
-      changedCircumstances: c.changed_circumstances === true };
+      proposedAction: action, changedCircumstances: c.changed_circumstances === true };
   }
   return { decision: value.decision, contribution, ledgerUpdates, nextReviewAt: hoursFrom(clock, value.next_review_hours) };
 }
 
-/** The finished, ordinary bot message, with a short reference for later replies. */
-export function publicationText(contribution, itemId) {
-  return `${contribution.message.trim()}\n\n_Ref ${itemId}: reply “yes, proceed”, “next week” or “leave it”._`;
+/**
+ * The finished, ordinary bot message, with a short reference for later replies.
+ * A loose thread always opens with Dawar's original words, where and when he
+ * said them, and closes with the one concrete next step it proposes.
+ */
+export function publicationText(contribution, itemId, { item = null, publisherBotId = null, names = {}, clock = Date.now(), timeZone = DEFAULT_SETTINGS.limitTimeZone } = {}) {
+  if (contribution.kind !== LOOSE_THREAD || !item?.mentions?.length)
+    return `${contribution.message.trim()}\n\n_Ref ${itemId}: reply “yes, proceed”, “next week” or “leave it”._`;
+  const mention = item.mentions.find(m => m.botId === publisherBotId) ?? item.mentions[0];
+  const where = mention.botId === publisherBotId ? "" : ` to ${names[mention.botId] ?? "another bot"}`;
+  const action = contribution.proposedAction;
+  return [`${mentionWhen(mention.at, clock, timeZone)} you mentioned${where}: “${mention.quote}”`, contribution.message.trim(),
+    ...(action ? [`**Proposed next step (${ACTION_LABELS[action.type]}):** ${action.detail}`] : []),
+    `_Ref ${itemId}: reply “yes, proceed”, “next week”, “leave it” or “done”._`].join("\n\n");
 }
+const ACTION_LABELS = { todo: "create a todo", "draft-message": "draft a message", schedule: "schedule it", research: "research it", drop: "drop it", other: "next step" };
+/** "Earlier today", "Yesterday", "On Tuesday" or "On Oct 3", in the limit time zone. */
+export function mentionWhen(at, clock = Date.now(), timeZone = DEFAULT_SETTINGS.limitTimeZone) {
+  const day = value => limitDay(value, timeZone), then = Date.parse(at);
+  const days = Math.round((Date.parse(`${day(clock)}T12:00:00Z`) - Date.parse(`${day(then)}T12:00:00Z`)) / 864e5);
+  if (days <= 0) return "Earlier today";
+  if (days === 1) return "Yesterday";
+  const format = options => new Intl.DateTimeFormat("en-US", { timeZone, ...options }).format(new Date(then));
+  return days < 7 ? `On ${format({ weekday: "long" })}` : `On ${format({ month: "short", day: "numeric" })}`;
+}
+export const mentionRef = m => `mention:${m.botId}:${m.turnId ?? "?"}:${m.itemId}`;
+
+// ---- loose-thread timing ----------------------------------------------------
+// Hours from the last touch until a loose thread is raised: [high, medium, low].
+// A client can come back within hours; an idea after a day or two.
+const RESURFACE_HOURS = {
+  client: [2, 6, 24], commitment: [2, 6, 24], person: [3, 8, 24], company: [3, 8, 24],
+  question: [4, 12, 36], intention: [4, 12, 36], decision: [4, 12, 36], idea: [12, 36, 72],
+};
+const CATEGORY_WEIGHT = { client: 1.5, commitment: 1.5, person: 1.3, company: 1.3, question: 1.1, intention: 1.1, decision: 1.1, idea: 1 };
+export function resurfaceDelayHours(item) {
+  const hours = (RESURFACE_HOURS[item.category] ?? RESURFACE_HOURS.idea)[Math.max(0, IMPORTANCE.indexOf(item.importance))] ?? 24;
+  return item.timeSensitive ? Math.min(hours, 2) : hours;
+}
+export function resurfaceAt(item) {
+  let at = Date.parse(item.lastTouchedAt ?? item.firstMentionedAt) + resurfaceDelayHours(item) * 36e5;
+  // Something due soon comes back a few hours before it is due.
+  const due = Date.parse(item.dueAt ?? "");
+  if (Number.isFinite(due)) at = Math.min(at, Math.max(Date.parse(item.lastTouchedAt ?? item.firstMentionedAt) + 36e5, due - 6 * 36e5));
+  return new Date(at).toISOString();
+}
+/** Ordering among loose threads (and bots): importance × category, rising once overdue. */
+export function looseThreadPriority(item, clock = Date.now()) {
+  const importance = { high: 3, medium: 2, low: 1 }[item.importance] ?? 1;
+  const overdueHours = Math.max(0, (clock - Date.parse(item.resurfaceAt ?? "")) / 36e5) || 0;
+  return importance * (CATEGORY_WEIGHT[item.category] ?? 1) * (1 + Math.min(overdueHours, 72) / 24) + (item.timeSensitive ? 2 : 0);
+}
+const tokens = value => new Set(normalizeKey(value).split("-").filter(w => w.length > 2));
+const jaccard = (a, b) => { const union = new Set([...a, ...b]).size; return union ? [...a].filter(w => b.has(w)).length / union : 0; };
 export const publicationMarker = publicationId => `initiative-publication:${publicationId}`;
 
 // ---- owner replies ----------------------------------------------------------
@@ -380,6 +601,8 @@ export function classifyReply(value, clock = Date.now()) {
     return { outcome: "snoozed", until: new Date(clock + (((target - today + 7) % 7) || 7) * day).toISOString() };
   }
   if (/^(later|not now|remind me later|maybe later)\b/.test(raw)) return { outcome: "snoozed", until: new Date(clock + 3 * day).toISOString() };
+  if (/^(make (it|this) a todo|add (it )?(as )?a todo|create a todo|todo it|draft (it|the message|a message)|schedule it|research it|look into it)\b/.test(raw))
+    return { outcome: "approved" };
   if (/^(yes|yep|yeah|yup|sure|ok|okay|go ahead|go for it|proceed|do it|approved?|sounds good|please do)\b/.test(raw)) return { outcome: "approved" };
   return null;
 }

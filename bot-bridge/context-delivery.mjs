@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { PROFILE_SECTIONS } from "./profiles.mjs";
+import { proposalContext } from "./initiative-node.mjs";
 
 // Per-message profile context, sent once per conversation epoch.
 //
@@ -30,6 +31,16 @@ export class ContextDelivery {
    * Contexts without section metadata pass through unchanged.
    */
   prepare(bot, context) {
+    // Initiative proposals the bridge delivered while the bot was idle were
+    // never part of a model turn: the next send tells the bot what "it" said.
+    const proposals = this.runtime.privateReviews?.unseen?.(bot) ?? [];
+    const prepared = this.profile(bot, context);
+    if (!proposals.length) return prepared;
+    return { ...prepared, context: { ...prepared.context, initiativeProposals: { kind: "application", value: proposalContext(proposals) } },
+      proposals: proposals.map((p) => p.id),
+      commit: () => { prepared.commit(); this.runtime.privateReviews.markSeen(proposals.map((p) => p.id)); } };
+  }
+  profile(bot, context) {
     const meta = context?.[PROFILE_SECTIONS];
     if (!meta) return { context, commit: () => {} };
     const row = this.current(bot), seen = row?.hashes ?? {}, hashes = {};

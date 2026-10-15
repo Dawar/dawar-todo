@@ -37,8 +37,8 @@ function projection(runtime, bot) {
     // formerly hidden final answers. Their native work remains in disclosure.
     const legacyFindings = audience.kind === 'activity' ? runtime.store.db.prepare(`SELECT json FROM records WHERE kind='runFinding' AND bot_id=? AND json_extract(json,'$.turnId')=? LIMIT 25`).all(bot.id, turn.id).map(row => JSON.parse(row.json)) : [];
     const legacyItems = legacyFindings.map(f => ({ type: 'dynamicToolCall', id: `finding:${f.id}`, tool: 'bots_report_result', status: 'completed', success: true, arguments: { key: f.key, summary: f.summary } }));
-    // Confirmed initiative publications follow the native turn they were
-    // injected after, unless native history already shows the same message.
+    // Delivered initiative proposals are bridge projections that follow the
+    // native turn they were anchored after (deduplicated by exact text).
     const initiative = (runtime.privateReviews?.projected(bot.id, turn.id) ?? []).filter(item =>
       !page.data.some(t => t.items.some(native => native.type === 'agentMessage' && native.text?.trim() === item.text.trim())));
     const rows = [...turn.items, ...legacyItems, ...initiative].reverse().map(item => ({ turn, item, audience }));

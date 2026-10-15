@@ -203,6 +203,7 @@ export type BotOperations = {
   "runtime.info": { params: Record<string, never>; result: unknown };
   "initiative.read": { params: Record<string, never>; result: unknown };
   "initiative.configure": { params: { patch: Record<string, unknown>; expectedRevision: number | null }; result: unknown };
+  "initiative.thread": { params: { itemId: string; action: "dismiss" | "snooze" | "resolve"; until?: string | null }; result: unknown };
 };
 export type BotOperation = {
   [Method in keyof BotOperations]: {

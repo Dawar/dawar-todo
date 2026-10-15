@@ -6,18 +6,25 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 
 type Settings = { enabled: boolean; scanMinutes: number; baselineMinutes: number; perBotDaily: number; globalDaily: number; spacingMinMinutes: number;
-  spacingMaxMinutes: number; reminderHours: number; priorities: string; coverage: 'all' | 'selected'; revision: number; model: string; effort: string; bots: Record<string, { enabled?: boolean; priorities?: string }> };
-type Status = { settings: Settings; lastScanAt: string | null;
-  metrics: { publishedToday: number; published: number; accepted: number; dismissed: number; held: number; uncertain: number; reviews: number; reviewTokens: number };
+  spacingMaxMinutes: number; reminderHours: number; priorities: string; coverage: 'all' | 'selected'; revision: number; model: string; effort: string;
+  looseThreads: boolean; triage: boolean; bots: Record<string, { enabled?: boolean; priorities?: string }> };
+type LooseThread = { id: string; title: string; category: string; importance: string; status: string; due: boolean; ageHours: number; lastTouchedAt: string;
+  responsibleName: string; snoozedUntil: string | null; resolution: { kind: string; evidence: string | null } | null;
+  mentions: { bot: string; at: string; quote: string }[] };
+type Status = { settings: Settings; lastScanAt: string | null; looseThreads: LooseThread[];
+  metrics: { publishedToday: number; published: number; accepted: number; dismissed: number; held: number; uncertain: number; reviews: number; reviewTokens: number;
+    reviewTokensToday: number; extractions: number; extractionTokens: number; extractionTokensToday: number; openLooseThreads: number; dueLooseThreads: number };
   bot: { enabled: boolean; supported: boolean; lastReviewAt: string | null; nextReviewAt: string | null; lastOutcome: string | null; failures: number;
-    lastError: string | null; lastErrorAt: string | null; backoffUntil: string | null; items: { id: string; title: string; kind: string; status: string }[] } };
+    lastError: string | null; lastErrorAt: string | null; backoffUntil: string | null; lastExtractionAt: string | null; items: { id: string; title: string; kind: string; status: string }[] } };
 const when = (value: string | null) => value ? new Date(value).toLocaleString() : 'Not yet';
+const age = (hours: number) => hours < 1 ? 'just now' : hours < 48 ? `${hours} h ago` : `${Math.round(hours / 24)} days ago`;
+const tokens = (n: number) => n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(n);
 
 /** Owner controls and concise operational state for private initiative reviews.
  * Review traces stay private; only counts, times and failures appear here. */
 export function InitiativeSettings({ owner, botId, botName, online }: { owner: string; botId: string; botName: string; online: boolean }) {
   const sequence = useRef(0), [status, setStatus] = useState<Status | null>(null), [busy, setBusy] = useState(false), [error, setError] = useState('');
-  async function run(method: 'initiative.read' | 'initiative.configure', params: Record<string, unknown> = {}) {
+  async function run(method: 'initiative.read' | 'initiative.configure' | 'initiative.thread', params: Record<string, unknown> = {}) {
     if (!online || busy) return;
     const current = ++sequence.current; setBusy(true); setError('');
     try {
@@ -27,14 +34,17 @@ export function InitiativeSettings({ owner, botId, botName, online }: { owner: s
     finally { if (sequence.current === current) setBusy(false); }
   }
   const save = (patch: Record<string, unknown>) => run('initiative.configure', { patch, expectedRevision: status?.settings.revision ?? null });
+  const act = (itemId: string, action: 'dismiss' | 'snooze' | 'resolve') => run('initiative.thread', { itemId, action, until: action === 'snooze' ? new Date(Date.now() + 7 * 864e5).toISOString() : null });
   const s = status?.settings, b = status?.bot, override = s?.bots[botId] ?? {};
   return <details className="bots-details-section" onToggle={event => { if (event.currentTarget.open) void run('initiative.read'); }}>
     <summary>Proactive initiative</summary>
     {!status ? <p className="bots-details-lead">{busy ? 'Reading initiative settings…' : error || 'Open to read initiative settings.'}</p> : <div className="grid gap-3">
-      <p className="bots-details-lead">Idle bots privately review their work and may send a proposal as an ordinary message. Reviews are read-only; approved work follows the normal path.</p>
+      <p className="bots-details-lead">Idle bots remember what you mention and privately review their work, then may send a proposal as an ordinary message. Reviews are tool-free and never touch the conversation; approved work follows the normal path.</p>
       <label className="flex items-center gap-2"><input type="checkbox" checked={s!.enabled} disabled={!online || busy} onChange={event => void save({ enabled: event.target.checked })} />Enable for all bots</label>
       <label className="flex items-center gap-2"><input type="checkbox" checked={s!.coverage === 'selected'} disabled={!online || busy} onChange={event => void save({ coverage: event.target.checked ? 'selected' : 'all' })} />Pilot: only bots selected below</label>
-      <label className="flex items-center gap-2"><input type="checkbox" checked={s!.coverage === 'selected' ? override.enabled === true : override.enabled !== false} disabled={!online || busy || !b!.supported} onChange={event => void save({ bots: { [botId]: { enabled: s!.coverage === 'selected' ? (event.target.checked ? true : null) : (event.target.checked ? null : false) } } })} />Review {botName}{!b!.supported && ' (not supported for this provider)'}</label>
+      <label className="flex items-center gap-2"><input type="checkbox" checked={s!.coverage === 'selected' ? override.enabled === true : override.enabled !== false} disabled={!online || busy} onChange={event => void save({ bots: { [botId]: { enabled: s!.coverage === 'selected' ? (event.target.checked ? true : null) : (event.target.checked ? null : false) } } })} />Review {botName}</label>
+      <label className="flex items-center gap-2"><input type="checkbox" checked={s!.looseThreads} disabled={!online || busy} onChange={event => void save({ looseThreads: event.target.checked })} />Track loose threads (what you mention that never reached a conclusion)</label>
+      <label className="flex items-center gap-2"><input type="checkbox" checked={s!.triage} disabled={!online || busy} onChange={event => void save({ triage: event.target.checked })} />Triage: review only bots with something to raise</label>
       <form className="grid gap-3" onSubmit={event => {
         event.preventDefault(); const f = new FormData(event.currentTarget), n = (k: string) => Number(f.get(k));
         void save({ priorities: String(f.get('priorities') ?? ''), baselineMinutes: n('baselineHours') * 60, scanMinutes: n('scanMinutes'), perBotDaily: n('perBotDaily'), globalDaily: n('globalDaily'),
@@ -56,7 +66,24 @@ export function InitiativeSettings({ owner, botId, botName, online }: { owner: s
         <dt>Failures</dt><dd>{b!.failures}{b!.lastError ? ` · ${b!.lastError} (${when(b!.lastErrorAt)})` : ''}{b!.backoffUntil ? ` · retry after ${when(b!.backoffUntil)}` : ''}</dd>
         <dt>Today</dt><dd>{status.metrics.publishedToday} of {s!.globalDaily} proposals sent · {status.metrics.held} held</dd>
         <dt>Outcomes</dt><dd>{status.metrics.accepted} accepted · {status.metrics.dismissed} dismissed · {status.metrics.reviews} reviews</dd>
+        <dt>Tokens</dt><dd>Reviews {tokens(status.metrics.reviewTokensToday)} today ({tokens(status.metrics.reviewTokens)} total) · mention capture {tokens(status.metrics.extractionTokensToday)} today ({tokens(status.metrics.extractionTokens)} total, {status.metrics.extractions} runs)</dd>
       </dl>
+      <div className="grid gap-2">
+        <p className="bots-details-lead">Loose threads: {status.metrics.openLooseThreads} open · {status.metrics.dueLooseThreads} due to come back</p>
+        {status.looseThreads.length === 0 ? <p className="bots-details-lead">Nothing tracked yet.</p> : <ul className="grid gap-2">{status.looseThreads.map(thread => {
+          const open = !['resolved', 'dismissed'].includes(thread.status), first = thread.mentions[0];
+          return <li key={thread.id} className="bots-details-lead grid gap-1">
+            <span><strong>{thread.title}</strong> · {thread.category} · {thread.importance} · {thread.status}{thread.due ? ' · due' : ''}{thread.snoozedUntil ? ` until ${when(thread.snoozedUntil)}` : ''}</span>
+            {first && <span>“{first.quote}” — to {first.bot}, {age(thread.ageHours)}{thread.mentions.length > 1 ? ` · mentioned ${thread.mentions.length}×` : ''} · {thread.responsibleName} follows up</span>}
+            {thread.resolution && <span>Concluded: {thread.resolution.kind}{thread.resolution.evidence ? ` — ${thread.resolution.evidence}` : ''}</span>}
+            {open && <span className="flex gap-2">
+              <Button type="button" size="sm" variant="outline" disabled={!online || busy} onClick={() => void act(thread.id, 'resolve')}>Done</Button>
+              <Button type="button" size="sm" variant="outline" disabled={!online || busy} onClick={() => void act(thread.id, 'snooze')}>Next week</Button>
+              <Button type="button" size="sm" variant="outline" disabled={!online || busy} onClick={() => void act(thread.id, 'dismiss')}>Leave it</Button>
+            </span>}
+          </li>;
+        })}</ul>}
+      </div>
       {b!.items.length > 0 && <ul className="bots-details-lead">{b!.items.map(item => <li key={item.id}>{item.title} · {item.kind} · {item.status}</li>)}</ul>}
     </div>}
     {status && error && <p role="status" className="bots-details-lead">{error}</p>}
