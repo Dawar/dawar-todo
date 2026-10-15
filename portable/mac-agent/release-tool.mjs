@@ -2,7 +2,7 @@ import { readFileSync,writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { createHash,generateKeyPairSync,createPublicKey } from 'node:crypto';
 import { readPrivate,savePrivate } from '../private-file.mjs';
-import { stageResources,readBundle } from './bundle.mjs';
+import { stageResources,sealResources,readBundle } from './bundle.mjs';
 import { signRelease,verifyRelease,validateRelease,RELEASE_KIND } from '../mac-releases.mjs';
 
 // Owner/build-host tooling for Agent.app releases (not shipped in the app).
@@ -19,7 +19,8 @@ if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
   const [command,...args]=process.argv.slice(2),option=n=>{const i=args.indexOf('--'+n);return i<0?undefined:args[i+1];};
   const out=value=>process.stdout.write(JSON.stringify(value,null,2)+'\n');
   if(command==='stage')out(stageResources({agentDownload:option('agent-download'),nodeModules:option('node-modules'),nodeTarball:option('node-tarball'),
-    out:option('out'),appVersion:option('app-version'),build:Number(option('build')),arch:option('arch')??'arm64'}));
+    out:option('out'),appVersion:option('app-version'),build:Number(option('build')),arch:option('arch')??'arm64',releasePublicKey:option('release-public-key')}));
+  else if(command==='seal')out(sealResources(option('resources')));
   else if(command==='record')out(releaseRecord({resources:option('resources'),archive:option('archive'),edSignature:option('ed-signature'),minimumMacOS:option('minimum-macos')}));
   else if(command==='sign')out(signRelease(readPrivate(option('key'),8192),JSON.parse(readFileSync(option('record'),'utf8'))));
   else if(command==='verify')out(verifyRelease(readFileSync(option('public-key'),'utf8'),JSON.parse(readFileSync(option('envelope'),'utf8'))));
@@ -28,5 +29,5 @@ if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
     savePrivate(option('private'),privateKey.export({format:'pem',type:'pkcs8'}).toString(),{exclusive:true});
     writeFileSync(option('public'),createPublicKey(privateKey).export({format:'pem',type:'spki'}).toString(),{flag:'wx'});
     out({private:option('private'),public:option('public')});
-  }else{console.error('Use stage, record, sign, verify or keygen.');process.exitCode=2;}
+  }else{console.error('Use stage, seal, record, sign, verify or keygen.');process.exitCode=2;}
 }

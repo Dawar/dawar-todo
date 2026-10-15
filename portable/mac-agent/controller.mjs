@@ -8,8 +8,8 @@ import { pipeline } from 'node:stream/promises';
 import { Readable } from 'node:stream';
 import { readPrivate,savePrivate } from '../private-file.mjs';
 import { nodeKey,RUNTIME_VERSION } from '../protocol.mjs';
-import { resolveCodexLaunch,verifyCodexVersion,redact } from '../agent-download/codex-runtime.mjs';
-import { pairWithFile,HUB_ORIGIN } from '../agent-download/pairing.mjs';
+import { resolveCodexLaunch,verifyCodexVersion,redact } from '../codex-runtime.mjs';
+import { pairWithFile,HUB_ORIGIN } from '../pairing.mjs';
 import { checkForRelease,nodeHello,signedRequest,DOWNLOAD_PURPOSE,ARCHIVE_NAME } from '../mac-releases.mjs';
 import { readBundle,installTree,verifyTree } from './bundle.mjs';
 
@@ -64,6 +64,12 @@ export class MacAgentController {
     if(sha(readFileSync(join(agent.destination,'manifest.json')))!==release.agentManifestSHA256)throw Error('Installed agent manifest differs from the app release receipt.');
     if(!existsSync(p.config))savePrivate(p.config,JSON.stringify({version:1,mode:'agent',dataDirectory:p.data,agent:{hubOrigin:HUB_ORIGIN,codexBinary:launch.binary,
       workspaces:p.workspaces,activationReceipt:p.activation,statusFile:p.status}},null,2)+'\n');
+    else{
+      // An existing owner config keeps every value; only the status feed the
+      // menu bar needs is added when absent.
+      const config=readJSON(p.config,null);
+      if(config.agent&&config.agent.statusFile===undefined){config.agent.statusFile=p.status;savePrivate(p.config,JSON.stringify(config,null,2)+'\n');}
+    }
     const state=this.state;
     if(!state.current)state.current=release.agentSource;
     else if(state.current!==release.agentSource&&!state.failed.includes(release.agentSource))state.staged={source:release.agentSource,runtime:release.runtime,codexBinary:launch.binary,stagedAt:this.now()};

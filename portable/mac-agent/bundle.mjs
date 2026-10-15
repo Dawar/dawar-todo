@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync,writeFileSync,mkdirSync,mkdtempSync,readdirSync,lstatSync,copyFileSync,chmodSync,rmSync,openSync,readSync,closeSync,existsSync,renameSync,cpSync } from 'node:fs';
 import { join,dirname,relative,resolve,isAbsolute } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { machOArchitectures,codexTarget,resolveCodexLaunch } from '../agent-download/codex-runtime.mjs';
+import { machOArchitectures,codexTarget,resolveCodexLaunch } from '../codex-runtime.mjs';
 
 // Pinned Node runtime. These hashes are the same nodejs.org v24.21.0 archives
 // the existing installer verifies (tests keep the two in step).
@@ -76,7 +76,8 @@ function packages(nodeModules) {
 //  agentDownload: the exact dist/agent-downloads/dawartodo-agent-<sha>/ tree
 //  nodeModules:   `npm ci --ignore-scripts --no-bin-links` of its lock for this arch
 //  nodeTarball:   nodejs.org node-v24.21.0-darwin-<arch>.tar.gz (pinned hash)
-export function stageResources({agentDownload,nodeModules,nodeTarball,out,appVersion,build,arch='arm64',nodeSHA256=NODE_SHA256[`darwin-${arch}`],now=new Date()}) {
+//  releasePublicKey: optional PEM verifying signed update records
+export function stageResources({agentDownload,nodeModules,nodeTarball,out,appVersion,build,releasePublicKey,arch='arm64',nodeSHA256=NODE_SHA256[`darwin-${arch}`],now=new Date()}) {
   if(!/^\d{1,4}\.\d{1,4}\.\d{1,4}$/.test(appVersion)||!Number.isSafeInteger(build)||build<1)throw Error('App version x.y.z and a positive build number are required.');
   if(existsSync(out))throw Error('Resources output must not exist yet.');
   const agentManifestBytes=readFileSync(join(agentDownload,'manifest.json')),agentManifest=JSON.parse(agentManifestBytes);
@@ -106,17 +107,26 @@ export function stageResources({agentDownload,nodeModules,nodeTarball,out,appVer
     const third=[{name:'node',version:NODE_VERSION,license:'MIT AND others (node/LICENSE)',directory:'node'},
       {name:'@openai/codex',version:agentManifest.runtime,license:licenseOf(codexPackage)?.license??null,directory:`codex/vendor/${target}`},...packages(join(out,'agent/node_modules'))];
     mkdirSync(join(out,'licenses'));writeFileSync(join(out,'licenses/third-party.json'),JSON.stringify(third,null,2)+'\n');
-    const codexEntry=join(out,'codex/vendor',target,'bin/codex');
     const release={kind:'dawartodo-mac-agent-bundle',version:1,appVersion,build,arch,agentSource:agentManifest.source,protocol:agentManifest.protocol,
-      runtime:agentManifest.runtime,nodeVersion:NODE_VERSION,codexTarget:target,codexBinarySHA256:sha(readFileSync(codexEntry)),
+      runtime:agentManifest.runtime,nodeVersion:NODE_VERSION,codexTarget:target,codexBinarySHA256:null,
       agentManifestSHA256:sha(agentManifestBytes),stagedAt:now.toISOString()};
     writeFileSync(join(out,APP_RELEASE),JSON.stringify(release,null,2)+'\n');
-    const entries=walkTree(out,{skip:rel=>rel===BUNDLE_MANIFEST});
-    verifyArchitecture(entries,arch);
-    const manifestBytes=Buffer.from(JSON.stringify({kind:'dawartodo-mac-agent-files',version:1,agentSource:agentManifest.source,arch,files:entries},null,1)+'\n');
-    writeFileSync(join(out,BUNDLE_MANIFEST),manifestBytes);
-    return {release,files:entries.length,bundleManifestSHA256:sha(manifestBytes)};
+    // Public half of the owner's offline release key; verifies update records.
+    if(releasePublicKey)copyFileSync(releasePublicKey,join(out,'release-public-key.pem'));
+    return sealResources(out);
   }catch(error){rmSync(out,{recursive:true,force:true});throw error;}
+}
+// Record final hashes. Run again after code signing, which rewrites Mach-O
+// bytes; the installed copies are verified against these sealed values.
+export function sealResources(out) {
+  const release=JSON.parse(readFileSync(join(out,APP_RELEASE),'utf8'));
+  release.codexBinarySHA256=sha(readFileSync(join(out,'codex/vendor',release.codexTarget,'bin/codex')));
+  writeFileSync(join(out,APP_RELEASE),JSON.stringify(release,null,2)+'\n');
+  const entries=walkTree(out,{skip:rel=>rel===BUNDLE_MANIFEST});
+  verifyArchitecture(entries,release.arch);
+  const manifestBytes=Buffer.from(JSON.stringify({kind:'dawartodo-mac-agent-files',version:1,agentSource:release.agentSource,arch:release.arch,files:entries},null,1)+'\n');
+  writeFileSync(join(out,BUNDLE_MANIFEST),manifestBytes);
+  return {release,files:entries.length,bundleManifestSHA256:sha(manifestBytes)};
 }
 export function readBundle(resources) {
   const manifestBytes=readFileSync(join(resources,BUNDLE_MANIFEST)),manifest=JSON.parse(manifestBytes);

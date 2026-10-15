@@ -81,8 +81,8 @@ export function nodeHello(platform=process.platform,arch=process.arch) {
   return {protocol:PROTOCOL_VERSION,runtime:RUNTIME_VERSION,platform,arch,capabilities:{text:true,localStdio:true,desktop:false,voice:false,secureTransfer:false}};
 }
 export function signedRequest(key,nodeId,purpose,fields,now=Date.now()) {
-  const value={purpose,nodeId,nonce:secret(),issuedAt:now,...fields};
-  const {purpose:_,...body}=value;return {...body,proof:signature(key.privateKey,value)};
+  const body={nodeId,nonce:secret(),issuedAt:now,...fields};
+  return {...body,proof:signature(key.privateKey,{purpose,...body})};
 }
 export async function checkForRelease({hub,key,nodeId,client,publicKey,hello=nodeHello(),fetcher=fetch,now=Date.now()}) {
   const origin=new URL(hub);if(origin.protocol!=='https:'||origin.pathname!=='/'||origin.username||origin.search)throw Error('Release checks use the fixed HTTPS hub only.');

@@ -62,6 +62,10 @@ test('install copies node, codex and the agent release outside the app and write
   writeFileSync(p.config,JSON.stringify({...config,agent:{...config.agent,ownerSetting:true}}),{mode:0o600});
   r.c.install();
   assert.equal(JSON.parse(readPrivate(p.config)).agent.ownerSetting,true,'existing owner config is never replaced');
+  const {statusFile,...withoutStatus}=JSON.parse(readPrivate(p.config)).agent;
+  writeFileSync(p.config,JSON.stringify({...config,agent:withoutStatus}),{mode:0o600});
+  r.c.install();
+  assert.deepEqual(JSON.parse(readPrivate(p.config)).agent,{...withoutStatus,statusFile},'only the missing status feed is added');
   assert.equal(r.c.status().phase,'needs-pairing');
 });
 

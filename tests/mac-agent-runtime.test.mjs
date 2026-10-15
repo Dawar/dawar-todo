@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { codexTarget,resolveCodexLaunch,verifyCodexVersion,machOArchitectures,RuntimeLaunchError,redact } from '../portable/agent-download/codex-runtime.mjs';
+import { codexTarget,resolveCodexLaunch,verifyCodexVersion,machOArchitectures,RuntimeLaunchError,redact } from '../portable/codex-runtime.mjs';
 
 const VERSION='0.162.1';
 function vendor(target,{layout={},script=`#!/bin/sh\necho "codex-cli ${VERSION}"\n`,mode=0o755}={}) {
