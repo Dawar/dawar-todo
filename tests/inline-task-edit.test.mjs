@@ -30,12 +30,17 @@ test("task titles are seamless autogrowing inline editors", async () => {
 test("row project action is replaced by Edit while assignment remains in details and bulk actions", async () => {
   const page = await Promise.all(["app/page.tsx", "app/task-row.tsx", "app/task-sync.ts", "app/task-model.ts", "app/sync-request.ts"].map((path) => readFile(new URL(path, root), "utf8"))).then((parts) => parts.join("\n"));
 
-  assert.match(page, /longSwipe \? "Delete" : "Edit"/);
+  // 3d42051 replaced the long right-swipe Delete with Queue (Todo Forward); short swipe stays Edit.
+  assert.match(page, /longSwipe \? "Queue" : "Edit"/);
   assert.match(page, /\{ action: "edit", label: "Edit", icon: "edit" \}/);
   assert.match(page, /else onEdit\(todo, "swipe"\)/);
   assert.match(page, /action === "edit" \? onEdit\(todo, "hover"\)/);
   assert.match(page, /openProjectAssignment\(\[editingTodo\.id\], "details"\)/);
-  assert.match(page, /bulkAction\("assign"\)/);
+  // cd7a088 moved bulk buttons into TaskBulkActions, which dispatches through onAction={bulkAction}.
+  const bulkBar = await readFile(new URL("app/task-bulk-actions.tsx", root), "utf8");
+  assert.match(bulkBar, /\{ action: "assign", label: "Assign project", icon: "move" \}/);
+  assert.match(page, /<TaskBulkActions [^\n]*onAction=\{bulkAction\}/);
+  assert.match(page, /function bulkAction\(action: TodoAction \| "merge" \| "assign"\)[^]*if \(action === "assign"\)/);
 });
 
 test("mobile task swipes start only from directional rails outside the title textarea", async () => {

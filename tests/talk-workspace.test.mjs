@@ -6,7 +6,7 @@ import { appAccessResponse } from "../worker/access.ts";
 
 const root = new URL("../", import.meta.url);
 
-test("ships the signed-in WebRTC Talk chief-of-staff workspace", async () => {
+test("ships the signed-in Talk realtime runtime, storage, and tools", async () => {
   const [
     schema,
     database,
@@ -14,15 +14,10 @@ test("ships the signed-in WebRTC Talk chief-of-staff workspace", async () => {
     runtime,
     aiPreferences,
     tools,
-    workspace,
-    header,
     access,
     environment,
-    serviceWorker,
     migration,
     threadMigration,
-    threadApi,
-    assistantPage,
   ] = await Promise.all([
     readFile(new URL("db/schema.ts", root), "utf8"),
     readFile(new URL("db/todos.ts", root), "utf8"),
@@ -30,15 +25,10 @@ test("ships the signed-in WebRTC Talk chief-of-staff workspace", async () => {
     readFile(new URL("lib/talk-runtime.ts", root), "utf8"),
     readFile(new URL("lib/ai-preferences.ts", root), "utf8"),
     readFile(new URL("lib/talk-tools.ts", root), "utf8"),
-    readFile(new URL("app/talk/workspace.tsx", root), "utf8"),
-    readFile(new URL("app/site-header.tsx", root), "utf8"),
     readFile(new URL("worker/access.ts", root), "utf8"),
     readFile(new URL(".env.example", root), "utf8"),
-    readFile(new URL("public/sw.js", root), "utf8"),
     readFile(new URL("drizzle/0019_modern_hydra.sql", root), "utf8"),
     readFile(new URL("drizzle/0025_aberrant_red_skull.sql", root), "utf8"),
-    readFile(new URL("app/api/talk/threads/route.ts", root), "utf8"),
-    readFile(new URL("app/assistant/page.tsx", root), "utf8"),
   ]);
 
   assert.match(schema, /todoTalkWorkspaces/);
@@ -55,20 +45,12 @@ test("ships the signed-in WebRTC Talk chief-of-staff workspace", async () => {
   assert.match(threadMigration, /CREATE TABLE `todo_talk_threads`/);
   assert.match(threadMigration, /ALTER TABLE `todo_talk_messages` ADD `thread_id`/);
   assert.match(threadMigration, /ALTER TABLE `todo_talk_sessions` ADD `transport`/);
-
   assert.match(talkDb, /session lease acquired/);
   assert.match(talkDb, /status = 'replaced'/);
   assert.match(talkDb, /idempotent|INSERT OR IGNORE INTO todo_talk_tool_calls/);
   assert.match(talkDb, /replayed: !Number\(inserted\.meta\.changes/);
   assert.match(talkDb, /forgotten_at IS NULL/);
   assert.match(talkDb, /finalized transcript stored/);
-  assert.match(talkDb, /Phone Calls/);
-  assert.match(talkDb, /assistant-migration/);
-  assert.match(talkDb, /custom thread soft deleted/);
-  assert.match(talkDb, /\+7 days/);
-  assert.match(threadApi, /listTalkThreads/);
-  assert.match(threadApi, /restoreTalkThread/);
-
   assert.match(runtime, /gpt-realtime-2\.1-mini/);
   assert.match(aiPreferences, /DEFAULT_REALTIME_VOICE: RealtimeVoice = "marin"/);
   assert.match(runtime, /preferredVoice \?\? environmentVoice \?\? DEFAULT_REALTIME_VOICE/);
@@ -96,7 +78,6 @@ test("ships the signed-in WebRTC Talk chief-of-staff workspace", async () => {
   assert.match(runtime, /prepare_destructive_action/);
   assert.match(runtime, /execute_destructive_action/);
   assert.match(runtime, /Never send messages, submit forms, purchase, book, publish/);
-
   assert.match(tools, /https:\/\/s\.jina\.ai/);
   assert.match(tools, /https:\/\/r\.jina\.ai/);
   assert.match(tools, /https:\/\/google\.serper\.dev\/search/);
@@ -112,7 +93,29 @@ test("ships the signed-in WebRTC Talk chief-of-staff workspace", async () => {
   assert.match(tools, /input_image/);
   assert.match(tools, /input_file/);
   assert.doesNotMatch(tools, /web_search_preview|type: "web_search"/);
+  assert.match(access, /url\.pathname\.startsWith\("\/api\/talk"\)/);
+  assert.match(environment, /OPENAI_REALTIME_MODEL=gpt-realtime-2\.1-mini/);
+  assert.match(environment, /OPENAI_REALTIME_VOICE=marin/);
+  assert.match(environment, /SERPER_API_KEY=/);
+  assert.match(environment, /JINA_AI_READER=/);
+});
 
+test("ships the browser Talk chat workspace, threads API, and Chat navigation", { skip: "browser Talk/Chat workspace, threads API and /talk nav deliberately retired; see c05843f" }, async () => {
+  const [talkDb, workspace, header, threadApi, assistantPage, serviceWorker] = await Promise.all([
+    readFile(new URL("db/talk.ts", root), "utf8"),
+    readFile(new URL("app/talk/workspace.tsx", root), "utf8"),
+    readFile(new URL("app/site-header.tsx", root), "utf8"),
+    readFile(new URL("app/api/talk/threads/route.ts", root), "utf8"),
+    readFile(new URL("app/assistant/page.tsx", root), "utf8"),
+    readFile(new URL("public/sw.js", root), "utf8"),
+  ]);
+
+  assert.match(talkDb, /Phone Calls/);
+  assert.match(talkDb, /assistant-migration/);
+  assert.match(talkDb, /custom thread soft deleted/);
+  assert.match(talkDb, /\+7 days/);
+  assert.match(threadApi, /listTalkThreads/);
+  assert.match(threadApi, /restoreTalkThread/);
   assert.match(workspace, /RTCPeerConnection/);
   assert.match(workspace, /addTransceiver\("audio", \{ direction: "sendrecv" \}\)/);
   assert.match(workspace, /conversation\.item\.create/);
@@ -157,18 +160,12 @@ test("ships the signed-in WebRTC Talk chief-of-staff workspace", async () => {
   assert.doesNotMatch(workspace, /Realtime chief of staff|Hands-free controls|A continuous working conversation/);
   assert.doesNotMatch(workspace, /OPENAI_API_KEY|JINA_AI_READER/);
   assert.doesNotMatch(workspace, /SERPER_API_KEY/);
-
   assert.match(header, /href: "\/talk", label: "Chat", icon: "assistant"/);
   assert.match(header, /href: "\/", label: "Tasks", icon: "view-open"/);
   assert.match(header, /href: "\/settings", label: "Settings", icon: "settings"/);
   assert.match(header, /aria-label="Primary"/);
   assert.doesNotMatch(header, /href="\/assistant"/);
   assert.match(assistantPage, /redirect\("\/talk"\)/);
-  assert.match(access, /url\.pathname\.startsWith\("\/api\/talk"\)/);
-  assert.match(environment, /OPENAI_REALTIME_MODEL=gpt-realtime-2\.1-mini/);
-  assert.match(environment, /OPENAI_REALTIME_VOICE=marin/);
-  assert.match(environment, /SERPER_API_KEY=/);
-  assert.match(environment, /JINA_AI_READER=/);
   assert.match(serviceWorker, /"\/talk"/);
   assert.doesNotMatch(serviceWorker, /"\/assistant"/);
 });

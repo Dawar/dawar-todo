@@ -22,7 +22,8 @@ function fixture() {
     vm.createContext(context); vm.runInContext(source, context);
     return { walk: (strict) => { context.testCache = cache; return vm.runInContext(`cacheAssetGraph(testCache, ["/assets/a.js"], ${strict})`, context); }, install: () => { let work; events.get('install')({ waitUntil: p => work = p }); return work; },
       navigate: async () => { let response; const work = []; events.get('fetch')({ request: { url: origin + '/', method: 'GET', mode: 'navigate' }, respondWith: p => response = p, waitUntil: p => work.push(p) }); await response; await Promise.all(work); },
-      version: () => { let result; events.get('message')({ data: { type: 'PWA_VERSION' }, ports: [{ postMessage: value => result = value }] }); return result; },
+      // c0e7643 answers PWA_VERSION asynchronously inside event.waitUntil (ExtendableMessageEvent), so the mock must supply it.
+      version: async () => { let result, work; events.get('message')({ data: { type: 'PWA_VERSION' }, ports: [{ postMessage: value => result = value }], waitUntil: p => work = p }); await work; return result; },
     };
   }
   return { worker, stored, puts, fetched, fail: value => missing = value };
@@ -33,7 +34,7 @@ test('completed immutable graph survives worker restart without re-putting/re-fe
   assert.equal(f.puts.filter(p => p.startsWith('/assets/')).length, 0);
   assert.equal(f.fetched.filter(p => p.startsWith('/assets/')).length, 0);
   assert.ok(f.stored.has('/assets/a.js') && f.stored.has('/assets/b.js'));
-  assert.equal(f.worker().version().databaseVersion, 11);
+  assert.equal((await f.worker().version()).databaseVersion, 11);
 });
 test('failed partial graph is never marked complete; retry fetches missing child before caching document', async () => {
   const f = fixture(); f.fail(true);

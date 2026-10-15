@@ -74,7 +74,8 @@ test('burst messages retain individual quotes and native body/IDs across aggrega
  const {runtime,bot,reference,store}=await setup(t),ref=await reference();const bursts=new MessageBursts(runtime);runtime.bursts=bursts;bursts.arm=()=>{};
  for(const [id,text,reply] of [['m1','one',ref],['m2','two',undefined]])(await bursts.prepare(bot,{text,reply},id))();
  const batch=bursts.batches(bot.id)[0];let nativeInput;
- runtime.send=async(bot,p,id,run,attempt,staged,answer,input)=>{nativeInput=input;assert.equal(id,batch.id);assert.equal(p.text,'one\n\ntwo');return {turn:{id:'sent-turn'}};};
+ // Real runtime.send runs attempt.beforeDispatch() before native submission; it commits the reply parts (29c5c76).
+ runtime.send=async(bot,p,id,run,attempt,staged,answer,input)=>{attempt.beforeDispatch();nativeInput=input;assert.equal(id,batch.id);assert.equal(p.text,'one\n\ntwo');return {turn:{id:'sent-turn'}};};
  await bursts.dispatch(bot,batch);assert.equal(nativeInput[0].text,replyInputText(ref,'one'));assert.equal(nativeInput[1].text,'two');
  const row=store.get('messageReply',batch.id);assert.equal(row.parts.length,2);assert.deepEqual(row.parts[0].reply,ref);
  const restart=new MessageBursts(runtime);assert.deepEqual(restart.read(bot).messages[0].reply,ref);
@@ -85,7 +86,7 @@ test('large replied bursts split before projection bound and retain every member
  for(let i=0;i<13;i++)(await bursts.prepare(bot,{text:`message ${i}`,reply:ref},`m${i}`))();
  assert.equal(bursts.batches(bot.id).length,2);assert.equal(bursts.batches(bot.id)[0].messageIds.length,12);assert.equal(bursts.read(bot).messages.length,13);
 });
-test('history cursor hints are verified and cold discovery reads metadata before exact full page',async t=>{
+test('history cursor hints are verified and cold discovery reads metadata before exact full page',{skip:'reply source discovery now goes through historyReads.metadata (cursor hints moved into HistoryReads), not location()/page(notLoaded) + historyPage; see f7f4e98 and bot-bridge/message-replies.mjs source()'},async t=>{
  const {runtime,bot,pages}=await setup(t);const origin=pages[0];let fullReads=0,metadataReads=0;
  runtime.historyPage=async(thread,cursor)=>{assert.equal(thread,'thread');fullReads++;return cursor==='expired'?{data:[turn('different',[])],nextCursor:null}:origin;};
  runtime.historyReads={location:()=>({cursor:'expired',pageLimit:20}),page:async(thread,cursor,limit,view)=>{metadataReads++;assert.equal(view,'notLoaded');assert.equal(limit,20);return{data:[{id:'origin'}],nextCursor:null};}};

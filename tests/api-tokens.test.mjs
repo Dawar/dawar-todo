@@ -92,8 +92,9 @@ test("ships hashed revocable API tokens and a public agent specification", async
   assert.match(settings, /API access/);
   assert.match(settings, /Generate token/);
   assert.match(settings, /Copy OpenAPI URL/);
-  assert.match(settings, /const compactOutlineActionClass/);
-  assert.match(settings, /className=\{compactOutlineActionClass\}[^]*className=\{compactOutlineActionClass\}/);
+  // 8609a85 migrated Settings to shadcn Button: the anchor reuses outline buttonVariants, buttons use variant="outline".
+  assert.match(settings, /const compactOutlineActionClass = buttonVariants\(\{ variant: "outline" \}\)/);
+  assert.match(settings, /className=\{compactOutlineActionClass\}><ActionIcon name="link" \/>Open specification<\/a>\s*<Button variant="outline" type="button" onClick=\{\(\) => void copyOpenApiUrl\(\)\}><ActionIcon name="copy" \/>Copy OpenAPI URL/);
   assert.match(globals, /font-family: inherit/);
   assert.doesNotMatch(globals, /font:\s*inherit/);
   assert.match(settings, /Copy Skill/);

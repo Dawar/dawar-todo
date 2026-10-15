@@ -175,7 +175,8 @@ test("ships recurrence storage, snooze protection, and a once-per-minute Worker 
   const [schema, database, page, worker, todoRoute, maintenance, recurring, generatedConfig, openApiText, skillSource, migration] = await Promise.all([
     readFile(new URL("db/schema.ts", root), "utf8"),
     readFile(new URL("db/todos.ts", root), "utf8"),
-    readFile(new URL("app/page.tsx", root), "utf8"),
+    // 57fcade moved the row (and its recurrence chip) into app/task-row.tsx.
+    Promise.all(["app/page.tsx", "app/task-row.tsx"].map((path) => readFile(new URL(path, root), "utf8"))).then((parts) => parts.join("\n")),
     readFile(new URL("worker/index.ts", root), "utf8"),
     readFile(new URL("app/api/todos/route.ts", root), "utf8"),
     readFile(new URL("db/maintenance.ts", root), "utf8"),

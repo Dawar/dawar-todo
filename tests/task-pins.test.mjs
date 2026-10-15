@@ -28,7 +28,8 @@ test("limits the active pin list to five tasks across app and phone actions", as
 
 test("snoozing clears pins and the pin-list toggle restores canonical mixing", async () => {
   const [page, database, urgentAlerts] = await Promise.all([
-    Promise.all(["app/page.tsx", "app/task-sync.ts", "app/task-model.ts", "app/sync-request.ts"].map((path) => readFile(new URL(path, root), "utf8"))).then((parts) => parts.join("\n")),
+    // 95a2393 moved the pin-list toggle into app/task-list-controls.tsx.
+    Promise.all(["app/page.tsx", "app/task-list-controls.tsx", "app/task-sync.ts", "app/task-model.ts", "app/sync-request.ts"].map((path) => readFile(new URL(path, root), "utf8"))).then((parts) => parts.join("\n")),
     readFile(new URL("db/todos.ts", root), "utf8"),
     readFile(new URL("db/urgent-alerts.ts", root), "utf8"),
   ]);
@@ -42,7 +43,8 @@ test("snoozing clears pins and the pin-list toggle restores canonical mixing", a
 
   assert.match(page, /window\.localStorage\.getItem\(PIN_LIST_PREFERENCE_KEY\)/);
   assert.match(page, /window\.localStorage\.setItem\(PIN_LIST_PREFERENCE_KEY/);
-  assert.match(page, /aria-pressed=\{pinListEnabled\}/);
+  assert.match(page, /pins=\{pinListEnabled\}[^\n]*onPins=\{togglePinList\}/);
+  assert.match(page, /onClick=\{onPins\} aria-pressed=\{pins\}/);
   assert.match(page, /view === "open" && pinListEnabled \? \[\.\.\.pinnedOpenTodos, \.\.\.regularOpenTodos\] : filtered/);
   assert.match(page, /behavior: enabled \? "dedicated-section" : "canonical-order"/);
 });

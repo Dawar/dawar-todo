@@ -7,7 +7,8 @@ const root = new URL("../", import.meta.url);
 
 test("canonical task ordering is persistent and replaces client sort modes", async () => {
   const [page, database, schema, route, store, migration] = await Promise.all([
-    Promise.all(["app/page.tsx", "app/task-sync.ts", "app/task-model.ts", "app/sync-request.ts"].map((path) => readFile(new URL(path, root), "utf8"))).then((parts) => parts.join("\n")),
+    // 57fcade moved the row (and its drag handle) into app/task-row.tsx.
+    Promise.all(["app/page.tsx", "app/task-row.tsx", "app/task-sync.ts", "app/task-model.ts", "app/sync-request.ts"].map((path) => readFile(new URL(path, root), "utf8"))).then((parts) => parts.join("\n")),
     readFile(new URL("db/todos.ts", root), "utf8"),
     readFile(new URL("db/schema.ts", root), "utf8"),
     readFile(new URL("app/api/todos/reorder/route.ts", root), "utf8"),

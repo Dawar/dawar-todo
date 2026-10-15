@@ -323,7 +323,7 @@ test("BotRuntime answers a Claude question card and runs a bridge tool for a Cla
       return [text("m1", "thanks"), result(user.uuid)];
     }) });
   const runtime = new BotRuntime({ store, codex: new ProviderRouter({ codex, claude }), root: join(dir, "bots") });
-  t.after(async () => { claude.close(); await settle(); store.close(); await rm(dir, { recursive: true, force: true }); });
+  t.after(async () => { claude.close(); await settle(); runtime.usage?.stop?.(); store.close(); await rm(dir, { recursive: true, force: true }); });
   await runtime.start();
   const events = [];
   runtime.on("event", (e) => events.push(e));
@@ -427,7 +427,7 @@ test("BotRuntime queue and schedules run on a Claude bot", async (t) => {
   const claude = new ClaudeBackend({ store, credential: "test", configDir: join(dir, "claude"), mcp: fakeMcp,
     query: fakeQuery(async (user) => { prompts.push(JSON.stringify(user.message.content)); return [text(`m-${user.uuid}`, "ok"), result(user.uuid)]; }) });
   const runtime = new BotRuntime({ store, codex: new ProviderRouter({ codex: new MinimalCodex(), claude }), root: join(dir, "bots") });
-  t.after(async () => { claude.close(); await settle(); store.close(); await rm(dir, { recursive: true, force: true }); });
+  t.after(async () => { claude.close(); await settle(); runtime.usage?.stop?.(); store.close(); await rm(dir, { recursive: true, force: true }); });
   await runtime.start();
   const op = (botId, method, params = {}) => runtime.handle({ method, botId, params, operationId: crypto.randomUUID() });
   const bot = await runtime.handle({ method: "bots.create", params: { name: "Queue", provider: "claude" }, operationId: "create-queue-bot" });
@@ -547,7 +547,7 @@ test("BotRuntime sends the full profile once per conversation epoch, then only c
       ? [{ type: "system", subtype: "compact_boundary", uuid: `cb-${user.uuid}` }, result(user.uuid)]
       : [text(`m-${user.uuid}`, "ok"), result(user.uuid)], log) });
   const runtime = new BotRuntime({ store, codex: new ProviderRouter({ codex: new MinimalCodex(), claude }), root: join(dir, "bots") });
-  t.after(async () => { claude.close(); await settle(); store.close(); await rm(dir, { recursive: true, force: true }); });
+  t.after(async () => { claude.close(); await settle(); runtime.usage?.stop?.(); store.close(); await rm(dir, { recursive: true, force: true }); });
   await runtime.start();
   const op = (botId, method, params = {}) => runtime.handle({ method, botId, params, operationId: crypto.randomUUID() });
   const bot = await runtime.handle({ method: "bots.create", params: { name: "Lean", provider: "claude" }, operationId: "create-lean-bot" });

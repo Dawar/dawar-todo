@@ -7,15 +7,17 @@ const root = new URL("../", import.meta.url);
 const origin = "https://offline.test";
 
 test("cold install recursively precaches every generated client bundle", async () => {
-  const [workerSource, manifest, assetNames] = await Promise.all([
+  const [workerSource, manifest, assetNames, serverAssets] = await Promise.all([
     readFile(new URL("public/sw.js", root), "utf8"),
     readFile(new URL("dist/client/.vite/manifest.json", root), "utf8").then(JSON.parse),
     readdir(new URL("dist/client/assets/", root)),
+    import(new URL("dist/server/__vite_rsc_assets_manifest.js", root).href).then((module) => module.default),
   ]);
   const entry = manifest["virtual:vinext-app-browser-entry"].file;
-  const css = assetNames.find((name) => name.endsWith(".css"));
+  // The document links the root layout stylesheet; the build now emits many per-route CSS files, so pick that one explicitly.
+  const css = serverAssets.serverResources["app/layout.tsx"].css[0];
   assert.ok(entry && css);
-  const html = `<!doctype html><link rel="stylesheet" href="/assets/${css}"><script type="module">import("/${entry}")</script>`;
+  const html = `<!doctype html><link rel="stylesheet" href="${css}"><script type="module">import("/${entry}")</script>`;
   const cached = new Set();
   const listeners = new Map();
   let installPromise;
@@ -27,7 +29,8 @@ test("cold install recursively precaches every generated client bundle", async (
   };
   const fetchLocal = async (input) => {
     const url = requestUrl(input);
-    if (url.pathname === "/" || url.pathname === "/assistant" || url.pathname === "/settings" || url.pathname === "/talk" || url.pathname === "/bots") return new Response(html, { status: 200, headers: { "Content-Type": "text/html" } });
+    // 618f59f/619d572 added /open and /tasks shell documents; c05843f retired /talk.
+    if (url.pathname === "/" || url.pathname === "/tasks" || url.pathname === "/open" || url.pathname === "/assistant" || url.pathname === "/settings" || url.pathname === "/talk" || url.pathname === "/bots") return new Response(html, { status: 200, headers: { "Content-Type": "text/html" } });
     try {
       const body = await readFile(new URL(`dist/client${url.pathname}`, root));
       return new Response(body, { status: 200 });
@@ -67,11 +70,25 @@ test("cold install recursively precaches every generated client bundle", async (
 
   const expectedBundles = assetNames.filter((name) => name.endsWith(".js") || name.endsWith(".css"));
   const missing = expectedBundles.filter((name) => !cached.has(`/assets/${name}`));
-  assert.deepEqual(missing, []);
+  // ace6699 deliberately keeps Mermaid's optional diagram-engine graph out of shell
+  // installation (cached on first use). Every bundle not precached must be reachable
+  // only through mermaid.core; everything else must still be precached.
+  const mermaidCore = assetNames.find((name) => /^mermaid\.core-.*\.js$/.test(name));
+  assert.ok(mermaidCore);
+  const mermaidGraph = new Set([mermaidCore]);
+  for (let queue = [mermaidCore]; queue.length;) {
+    const text = await readFile(new URL(`dist/client/assets/${queue.pop()}`, root), "utf8");
+    for (const name of expectedBundles) if (!mermaidGraph.has(name) && text.includes(name)) { mermaidGraph.add(name); queue.push(name); }
+  }
+  assert.ok(missing.includes(mermaidCore));
+  assert.deepEqual(missing.filter((name) => !mermaidGraph.has(name)), []);
   assert.ok(cached.has("/"));
   assert.equal(cached.has("/assistant"), false);
+  assert.ok(cached.has("/tasks"));
+  assert.ok(cached.has("/open"));
   assert.ok(cached.has("/settings"));
-  assert.ok(cached.has("/talk"));
+  // Legacy Chat (/talk) is no longer a precached shell route; see c05843f.
+  assert.equal(cached.has("/talk"), false);
   assert.ok(cached.has("/bots"));
   assert.ok(cached.has("/manifest.webmanifest"));
   assert.ok(cached.has("/icons/apple-touch-icon.png"));

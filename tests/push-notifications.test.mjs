@@ -88,7 +88,8 @@ test("wires device push subscriptions, minute batching, origin suppression, and 
   assert.match(pushRoute, /export async function POST/);
   assert.match(pushRoute, /export async function DELETE/);
   assert.match(todoRoute, /request\.headers\.get\("X-Dawar-Device-Id"\)/);
-  assert.match(todoRoute, /waitUntil\(dispatchTodoPushNotifications/);
+  // 6959042 made waitUntil take a lazy task factory for lifetime tracking.
+  assert.match(todoRoute, /waitUntil\(\(\) => dispatchTodoPushNotifications/);
   assert.match(page, /headersWithDeviceId/);
   assert.match(pwaRegistration, /refreshExistingPushSubscription/);
   assert.match(pwaRegistration, /active device subscription refreshed on app launch/);
@@ -193,9 +194,10 @@ test("service worker displays push alerts, updates the app badge, and reopens th
     waitUntil: (promise) => { clickPromise = promise; },
   });
   await clickPromise;
+  // 619d572: legacy bare "/" notification URLs keep their Tasks intent and open /tasks.
   assert.deepEqual(focused, [
     ["close"],
-    ["navigate", "https://push.test/"],
+    ["navigate", "https://push.test/tasks"],
     ["focus"],
   ]);
 });
