@@ -33,7 +33,7 @@ import {storedRuntimeDefaults} from './runtime-defaults.mjs';
 import {agentSnapshot} from './agent-snapshot.mjs';
 import {agentConnectionURL,centralLoopback} from './central-loopback.mjs';
 import {originalJournalReceipt} from './receipt-recovery.mjs';
-import {reconcileActiveTurns} from '../bot-bridge/turn-state.mjs';
+import {reconcileActiveTurns,reconcileAcceptedInbox} from '../bot-bridge/turn-state.mjs';
 const fingerprintLegacy=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
 export class AgentTransport {
@@ -119,9 +119,11 @@ export class AgentTransport {
       // notification must not leave the original receipt native-accepted
       // (and the hub queue fenced) until someone sends another message.
       // Read-only native turn facts; scoped to currently assigned controls.
-      if(!this.runtime.maintenance.holding())await this.runtime.maintenance.track(()=>reconcileActiveTurns(this.runtime,2,botId=>{
-        const c=this.journal.db.prepare('SELECT * FROM node_controls WHERE bot_id=?').get(botId);return Boolean(c&&this.journal.currentControl({bot_id:botId,epoch:c.epoch}));
-      })).catch(error=>this.runtime.emit('fault',error));
+      const assigned=botId=>{const c=this.journal.db.prepare('SELECT * FROM node_controls WHERE bot_id=?').get(botId);return Boolean(c&&this.journal.currentControl({bot_id:botId,epoch:c.epoch}));};
+      if(!this.runtime.maintenance.holding())await this.runtime.maintenance.track(()=>reconcileActiveTurns(this.runtime,2,assigned)).catch(error=>this.runtime.emit('fault',error));
+      // Accepted inbox rows whose original turn is no longer current (an older
+      // missed completion) settle from that exact turn's terminal native fact.
+      if(!this.runtime.maintenance.holding())await this.runtime.maintenance.track(()=>reconcileAcceptedInbox(this.runtime,2,assigned)).catch(error=>this.runtime.emit('fault',error));
       // Idle compaction uses this existing loop (no runtime.tick here) and the
       // synchronized Stop/placement fence; offline controls admit nothing.
       // Not awaited: a slow native ACK must not stall receipt recovery.

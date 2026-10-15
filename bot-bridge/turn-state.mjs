@@ -304,3 +304,38 @@ export async function reconcileActiveTurns(runtime, limit = 2, eligible = () => 
     }).catch(error => runtime.emit("fault", error));
   }
 }
+
+// An accepted inbox record names its ORIGINAL native turn. When that turn's
+// completion was missed and the bot has since moved on, it is no longer the
+// bot's activeTurnId, so the watchdog above never reads it again and the
+// record counts as accepted-or-unknown work forever. Read that exact turn
+// (bounded, read-only, summary view) and settle only a terminal native fact.
+// Absence or inProgress leaves the record accepted; nothing is resubmitted.
+export async function reconcileAcceptedInbox(runtime, limit = 2, eligible = () => true) {
+  const rows = runtime.store.db.prepare(`SELECT json_remove(json,'$.text','$.input') AS json FROM records WHERE kind='primaryInbox'
+    AND json_extract(json,'$.state')='accepted' AND json_extract(json,'$.terminalStatus') IS NULL AND json_extract(json,'$.turnId') IS NOT NULL ORDER BY rowid`).all();
+  const due = item => {
+    const bot = runtime.store.bots().find(b => b.id === item?.botId);
+    return Boolean(bot && !bot.archived && item.state === "accepted" && !item.terminalStatus && usableTurnId(item.turnId) &&
+      item.threadId === bot.threadId && bot.activeTurnId !== item.turnId &&
+      runtime.store.get("botActivity", bot.id)?.activeTurnId !== item.turnId && !(Date.parse(item.reconcileAfter ?? "") > Date.now()));
+  };
+  let checked = 0;
+  for (const { json } of rows) {
+    const item = JSON.parse(json);
+    if (checked >= limit) break;
+    if (!due(item) || runtime.locks.has(item.botId) || !eligible(item.botId)) continue;
+    checked++;
+    await runtime.lock(item.botId, async () => {
+      const current = runtime.store.get("primaryInbox", item.id);
+      if (!due(current) || current.turnId !== item.turnId) return;
+      runtime.store.put("primaryInbox", { ...current, reconcileAfter: new Date(Date.now() + 60000).toISOString() });
+      const found = await findNativeTurn(runtime, current.threadId, { turnId: current.turnId, cursor: current.reconcileCursor ?? null, itemsView: "summary" });
+      const latest = runtime.store.get("primaryInbox", item.id);
+      if (!latest || latest.state !== "accepted" || latest.terminalStatus || latest.turnId !== current.turnId || latest.threadId !== current.threadId) return;
+      if (terminalTurn(found.turn)) runtime.primary.bind(latest, found.turn);
+      else runtime.store.put("primaryInbox", { ...latest, reconcileCursor: found.nextCursor });
+    }).catch(error => runtime.emit("fault", error));
+  }
+  return checked;
+}

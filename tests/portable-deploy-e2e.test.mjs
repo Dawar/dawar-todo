@@ -108,6 +108,34 @@ test('rehearse: the full transaction runs on copies under a temporary unit; prod
   assert.equal(existsSync(result.root), false, 'rehearsal copies removed');
 });
 
+// 2026-10-15: the rehearsal before 3d0277a expired on a busy copy and the Oct 5
+// accepted inbox row ("localActive=1, acceptedOrUnknown=1") and was skipped.
+test('rehearse settles copied work whose exact native turn is terminal; production keeps its rows', { timeout: 120000 }, async t => {
+  const f = await installation(t, { busyBot: true, staleInbox: true, nativeTurns: [
+    { threadId: 'thread-connie', turnId: 'turn-old', status: 'interrupted' }, { threadId: 'thread-busy', turnId: 'turn-1', status: 'completed' }] });
+  const { plan } = await prepare(f);
+  const result = await rehearse(plan, { systemctl: f.systemd.systemctl, unitDirectory: f.units, root: join(f.root, 'r'), nativeHistory: f.nativeHistory });
+  assert.equal(result.outcome, 'healthy', JSON.stringify(result) + f.log());
+  assert.deepEqual(result.settledCopies.map(s => [s.kind, s.id, s.status]).sort(),
+    [['activeTurn', 'busy-bot', 'completed'], ['primaryInbox', 'peer:4329428-stale', 'interrupted']]);
+  const { Store } = await import('../bot-bridge/store.mjs');
+  const live = new Store(join(f.agentDir, 'native-control.sqlite'));
+  try {
+    assert.equal(live.get('primaryInbox', 'peer:4329428-stale').terminalStatus, undefined, 'production row untouched');
+    assert.equal(live.bot('busy-bot').activeTurnId, 'turn-1');
+  } finally { live.close(); }
+});
+
+test('rehearse names the exact copied record that blocks the drain when its native turn is unknown', { timeout: 120000 }, async t => {
+  const f = await installation(t, { staleInbox: true, nativeTurns: [{ threadId: 'thread-connie', turnId: 'turn-old', status: 'inProgress' }] });
+  const { plan } = await prepare(f, { waitSeconds: 60 });
+  const result = await rehearse(plan, { systemctl: f.systemd.systemctl, unitDirectory: f.units, root: join(f.root, 'r'), nativeHistory: f.nativeHistory });
+  assert.equal(result.outcome, 'expired-before-stop', JSON.stringify(result) + f.log());
+  assert.deepEqual(result.settledCopies, []);
+  assert.match(result.lastFailure.message, /acceptedOrUnknown=1\. Blocking: primaryInbox peer:4329428-stale \(Connie: Communications Manager\) accepted turn turn-old/);
+  assert.deepEqual(result.lastFailure.blockers, ['primaryInbox peer:4329428-stale (Connie: Communications Manager) accepted turn turn-old']);
+});
+
 test('rehearse reports a broken release as rolled back without touching production', { timeout: 150000 }, async t => {
   const f = await installation(t, { targetHealthy: false });
   const { plan } = await prepare(f);
@@ -125,7 +153,7 @@ test('a drain that never becomes idle expires before stop and names the busy cou
   const row = await deploy(f, plan);
   assert.equal(row.outcome, 'expired-before-stop');
   assert.equal(row.lastFailure.step, 'observe-drain');
-  assert.match(row.lastFailure.message, /localActive=1/);
+  assert.match(row.lastFailure.message, /localActive=1\. Blocking: bot Busy running turn turn-1/);
   assert.equal(f.writer().phase, 'open', 'hold released');
   assert.ok(!f.systemd.commands.some(c => c.startsWith('stop')));
   assert.equal((await f.probe.health(f.ports.healthPort)).maintenance.phase, 'open');

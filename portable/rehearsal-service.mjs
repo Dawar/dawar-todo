@@ -9,7 +9,9 @@
 // drain counts over the copied native-control store, the claimed-shutdown
 // proof, closing keep-alive connections, and loading the release's gateway
 // and agent modules. What is simulated: native thread idleness (no Codex is
-// started) and relay/site readiness.
+// started) and relay/site readiness. Copied in-flight work whose exact native
+// turn is already terminal in read-only native history is settled in the copy
+// (portable/rehearsal-settle.mjs); anything else keeps blocking the drain.
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
@@ -23,12 +25,13 @@ import { closeHttpServer } from './close-http.mjs';
 import { Store } from '../bot-bridge/store.mjs';
 import { RuntimeMaintenance } from '../bot-bridge/runtime-maintenance.mjs';
 import { maintenanceReason } from '../bot-bridge/maintenance-reason.mjs';
+import { settleProvenTerminal } from './rehearsal-settle.mjs';
 
 // Static imports resolve before this line: `--help` proves a packaged
 // release can load the stand-in (portable/package.mjs runs it).
-if (process.argv.includes('--help')) { console.log('rehearsal-service.mjs --release RELEASE_DIRECTORY --config REHEARSAL_HUB_CONFIG [--native-child]'); process.exit(0); }
+if (process.argv.includes('--help')) { console.log('rehearsal-service.mjs --release RELEASE_DIRECTORY --config REHEARSAL_HUB_CONFIG [--native-history THREAD_HISTORY_SQLITE] [--native-child]'); process.exit(0); }
 const args = process.argv.slice(2), option = name => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : undefined; };
-const configPath = option('--config'), release = option('--release') ?? process.cwd();
+const configPath = option('--config'), release = option('--release') ?? process.cwd(), nativeHistory = option('--native-history');
 const c = JSON.parse(readPrivate(configPath)), a = JSON.parse(readPrivate(c.agentConfigFile));
 const rehearsal = JSON.parse(readPrivate(join(dirname(configPath), 'rehearsal.json')));
 const manifest = JSON.parse(readFileSync(join(release, 'release-manifest.json'), 'utf8'));
@@ -66,6 +69,13 @@ const runtime = { store, epoch: randomUUID(), emitEvent() {}, codex: { pending: 
 } } };
 runtime.maintenance = new RuntimeMaintenance(runtime, { source: () => {}, invocation: process.env.INVOCATION_ID ?? null });
 const secret = process.env.BOTS_MACHINE_SECRET ?? '';
+// Read-only native facts; writes go to the copied store only.
+const settled = [];
+const settle = () => {
+  try { for (const row of settleProvenTerminal(store, nativeHistory)) { settled.push(row); console.log(`Rehearsal copy settled ${row.kind} ${row.id} turn ${row.turnId} ${row.status}`); } }
+  catch (error) { console.error(`Rehearsal settlement skipped: ${error.message}`); }
+};
+settle();
 
 const socketPath = join(a.dataDirectory, 'manager', 'manager.sock');
 mkdirSync(dirname(socketPath), { recursive: true, mode: 0o700 });
@@ -77,6 +87,7 @@ const manager = createServer(async (req, res) => {
     return reply(403, { error: 'Owner maintenance authentication required.' });
   try {
     const chunks = []; for await (const chunk of req) chunks.push(chunk);
+    if (!runtime.maintenance.current || runtime.maintenance.current.phase === 'draining') settle();
     reply(200, { result: await runtime.maintenance.control(JSON.parse(Buffer.concat(chunks))) });
   } catch (error) { reply(409, { error: 'Maintenance blocked or identity changed.', reason: maintenanceReason(error) }); }
 });
@@ -88,7 +99,7 @@ const health = createServer((req, res) => {
   const ready = current.length === 0;
   res.writeHead(ready ? 200 : 503, { 'content-type': 'application/json', 'cache-control': 'no-store' });
   res.end(JSON.stringify({ ready, relayConnected: true, siteReady: true, source: c.hub.source, codexVersion: manifest.runtime, role: 'both', rehearsal: true,
-    models: rehearsal.models, maintenance: runtime.maintenance.snapshot(), problems: current }));
+    models: rehearsal.models, maintenance: runtime.maintenance.snapshot(), problems: current, settled: settled.slice(-20) }));
 });
 health.listen(c.healthPort, '127.0.0.1');
 
