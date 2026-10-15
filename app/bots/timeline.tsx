@@ -22,6 +22,8 @@ import { readWorkPlanSource } from '../../lib/native-work-plan';
 import { OperatorSegmentBody } from "./operator-call";
 import { ArrowDown, MessageCircle, CloudOff, Clock3, Phone } from "lucide-react";
 import { LazyDetails } from "./lazy-details";
+import { TraceIcon, TraceStatus } from "@/components/ai-elements/trace";
+import { traceState } from "../../lib/trace-state";
 import { useFeedScroll } from "./use-feed-scroll";
 import { humanMessageTicks, type HumanMessageTick } from "./human-message-ticks";
 import { MessageTickRail } from "./message-tick-rail";
@@ -123,10 +125,11 @@ export const TimelineEntry = memo(function TimelineEntry(props: Parameters<typeo
   const work = nativeWorkItem(entry), commentary = entry.item?.type === 'agentMessage' && entry.item.phase === 'commentary';
   const reply = props.onReply && props.threadId ? <ReplyAction entry={entry} botId={props.timeline.botId} threadId={props.threadId} onReply={props.onReply} /> : null;
   const status = entry.itemStatus ?? entry.turnStatus ?? entry.status;
+  const workState = traceState(status, { exitCode: entry.item?.type === 'commandExecution' ? entry.item.exitCode : undefined, success: entry.item?.type === 'dynamicToolCall' ? entry.item.success : undefined });
   return <div className={`bots-native-entry${work ? ' is-work' : commentary ? ' is-progress' : ' is-message'}`} data-history-key={historyKey(entry.turnId, entry.id)}>
     {props.showScheduledMark !== false && (entry.audience === "finding" || entry.scheduled && entry.type === "agentMessage") && <span className="bots-scheduled-message-mark" role="img" aria-label="From scheduled work" title="From scheduled work"><Clock3 size={13} aria-hidden="true" /></span>}
     {entry.reply && <ReplyQuote key={entry.reply.id} reply={entry.reply} onOpen={props.onOpenReply} />}
-    {work ? <LazyDetails className="bots-native-work" open={props.open} onOpenChange={props.onOpenChange} beforeToggle={props.beforeToggle} summary={<><span className="bots-native-work-title">{nativeWorkLabel(entry)}</span><span className="bots-native-work-state">{entry.workPlan ? `${entry.workPlan.completedSteps}/${entry.workPlan.totalSteps}` : status === 'inProgress' ? 'Working' : ['failed','interrupted','declined'].includes(status) ? status : elapsed(entry, 'item') ? <ElapsedTime value={elapsed(entry, 'item')!}/> : ''}</span></>}>
+    {work ? <LazyDetails className="bots-native-work" open={props.open} onOpenChange={props.onOpenChange} beforeToggle={props.beforeToggle} summary={<><TraceIcon kind={entry.workPlan ? 'workPlan' : entry.type}/><span className="bots-native-work-title">{nativeWorkLabel(entry)}</span><TraceStatus state={workState}>{entry.workPlan ? `${entry.workPlan.completedSteps}/${entry.workPlan.totalSteps}` : workState !== 'running' && elapsed(entry, 'item') ? <ElapsedTime value={elapsed(entry, 'item')!}/> : null}</TraceStatus></>}>
       {() => <div className="bots-native-work-body">{entry.deferredTurn ? <TurnWorkLog entry={entry} timeline={props.timeline} download={props.download}/> : <EntryBody {...props}/>} {reply}</div>}
     </LazyDetails> : <EntryBody {...props}/>}
     {!work && reply}

@@ -1,0 +1,24 @@
+/* shadcn AI Elements adaptations: compact, green-identity, bounded output. */
+.ai-trace-icon{flex-shrink:0;color:var(--muted-foreground)}
+.ai-trace-status{display:inline-flex;align-items:center;gap:6px;flex-shrink:0;margin-left:auto;font-size:12px;font-variant-numeric:tabular-nums;color:var(--muted-foreground)}
+.ai-trace-status[data-state=completed] svg{color:var(--primary)}
+.ai-trace-status:is([data-state=failed],[data-state=declined],[data-state=interrupted]) svg{color:var(--destructive)}
+.ai-trace-status[data-state=unknown] svg{opacity:.7}
+
+.ai-code-block{margin:10px 0;min-width:0;border:1px solid var(--border);border-radius:var(--radius,10px);background:var(--muted);overflow:hidden;color:var(--foreground)}
+.ai-code-heading{display:flex;align-items:center;gap:8px;min-height:36px;padding:2px 4px 2px 12px;border-bottom:1px solid var(--border);color:var(--muted-foreground);font-size:12px;font-family:var(--font-mono,ui-monospace,monospace)}
+.ai-code-label{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ai-code-copy{flex-shrink:0;color:var(--muted-foreground)}
+.ai-code-block .ai-code-body{margin:0;padding:12px;max-height:420px;overflow:auto;background:transparent;border:0;border-radius:0;font-size:13px;line-height:1.6;font-family:var(--font-mono,ui-monospace,monospace);white-space:pre-wrap;overflow-wrap:anywhere;tab-size:2}
+.ai-code-block .ai-code-body code{background:none;padding:0;font:inherit;white-space:inherit}
+.ai-code-block[data-variant=terminal]{background:color-mix(in srgb,var(--foreground) 92%,var(--primary));color:var(--background)}
+.ai-code-block[data-variant=terminal] .ai-code-heading{border-color:color-mix(in srgb,var(--background) 18%,transparent);color:color-mix(in srgb,var(--background) 78%,transparent)}
+.ai-code-block[data-variant=terminal] .ai-code-copy{color:inherit}
+.ai-code-footer{padding:6px 12px;border-top:1px solid var(--border);font-size:12px;color:var(--muted-foreground)}
+.ai-code-block[data-variant=terminal] .ai-code-footer{border-color:color-mix(in srgb,var(--background) 18%,transparent);color:color-mix(in srgb,var(--background) 78%,transparent)}
+.ai-diff-line{display:block}
+.ai-diff-line[data-kind=add]{background:color-mix(in srgb,var(--primary) 14%,transparent)}
+.ai-diff-line[data-kind=remove]{background:color-mix(in srgb,var(--destructive) 13%,transparent)}
+.ai-diff-line[data-kind=hunk]{color:var(--muted-foreground)}
+.ai-diff-line[data-kind=meta]{color:var(--muted-foreground);font-weight:600}
+@media(max-width:600px){.ai-code-block .ai-code-body{font-size:12px;max-height:340px}}

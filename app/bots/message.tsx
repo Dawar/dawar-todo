@@ -12,6 +12,10 @@ import {CodexFollowupButton, type FollowupSource} from './codex-followup';
 import { remarkVisualizations } from "./visualization-markdown";
 import { MarkdownTable } from "./markdown-table";
 import { MarkdownCodeBlock } from "../markdown-code-block";
+import { CodeBlock } from "@/components/ai-elements/code-block";
+import { TraceIcon, TraceStatus } from "@/components/ai-elements/trace";
+import { codeLanguage, traceState } from "../../lib/trace-state";
+import type { ExtraProps } from "react-markdown";
 import { SubmissionAuthor } from "./submission-author";
 import { BotMessageDisclosure } from "./bot-message-disclosure";
 import type { SubmissionAttribution } from "../../lib/submission-source";
@@ -24,15 +28,6 @@ import ReactMarkdown, { defaultUrlTransform, type Components } from "react-markd
 import remarkGfm from "remark-gfm";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 const messageSchema = { ...defaultSchema, protocols: { ...defaultSchema.protocols, href: [...(defaultSchema.protocols?.href ?? []), "bot-artifact", "bot-visualization", "bot-file-citation", "bot-followup"] } };
-import {
-  Terminal,
-  FileDiff,
-  Search,
-  Wrench,
-  CircleAlert,
-  Check,
-  LoaderCircle,
-} from "lucide-react";
 import type { ThreadItem } from "../../lib/codex-protocol/v2/ThreadItem";
 
 const renderMarkdownTable: Components["table"] = ({ children }) => <MarkdownTable>{children}</MarkdownTable>;
@@ -51,8 +46,17 @@ const MarkdownLink: Components["a"] = ({ href, children, node }) => {
   if (href?.startsWith("bot-artifact:")) return <ReturnedArtifact botId={botId} id={href.slice(13)} attachment={attachments.find(file => file.id === href.slice(13))}>{children}</ReturnedArtifact>;
   return <a href={href} target="_blank" rel="noreferrer">{children}</a>;
 };
+/** Fenced code becomes an AI Elements Code Block; diagrams keep their renderer. */
+function MessageCodeBlock(props: import("react").ComponentProps<"pre"> & ExtraProps) {
+  const code = props.node?.children.find(child => child.type === "element" && child.tagName === "code");
+  if (code?.type !== "element") return <MarkdownCodeBlock {...props}/>;
+  const source = code.children.map(child => child.type === "text" ? child.value : "").join("").replace(/\n$/, "");
+  const language = codeLanguage(code.properties.className);
+  if (language === "mermaid" || !language && /^\s*(?:flowchart|graph)\s+(?:TB|TD|BT|RL|LR)\b/.test(source)) return <MarkdownCodeBlock {...props}/>;
+  return <CodeBlock code={source} language={language} variant={language === "diff" || language === "patch" ? "diff" : "code"}/>;
+}
 // Stable Markdown adapters retain an open viewer when message metadata updates.
-const markdownComponents: Components = { table: renderMarkdownTable, pre: MarkdownCodeBlock, a: MarkdownLink };
+const markdownComponents: Components = { table: renderMarkdownTable, pre: MessageCodeBlock, a: MarkdownLink };
 function MessageMarkdown({ text, botId, attachments, followups = [], offset = 0, source, partial = false }: { text: string; botId: string; attachments: BotAttachment[]; followups?: CodexFollowup[]; offset?: number; source?: FollowupSource; partial?: boolean }) {
   const files = useMemo(() => ({ botId, attachments }), [botId, attachments]);
   const formats = useMemo(() => ({ references: followups, offset, source, partial }), [followups, offset, source, partial]);
@@ -183,43 +187,26 @@ function BotMessage({
           : item.type === "dynamicToolCall"
             ? item.tool
             : item.type.replace(/([a-z])([A-Z])/g, "$1 $2");
+  // Terminal/diff/raw evidence stays exact text in bounded pages. A missing
+  // exit code is shown as unknown, never as success.
   const toolBody = () => command ? (
-        <>
-          <TextPages text={item.aggregatedOutput || "Waiting for output…"} render={(text) => <pre>{text}</pre>} />
-          {item.exitCode !== null && <small>Exit code {item.exitCode}</small>}
-        </>
+        <TextPages text={item.aggregatedOutput || "Waiting for output…"} render={(text) => <CodeBlock variant="terminal" label={item.command} code={text} copyText={item.aggregatedOutput ?? ""}
+          footer={item.exitCode !== null ? `Exit code ${item.exitCode}` : item.status === "inProgress" ? "Running" : undefined}/>} />
       ) : diff ? (
         <ItemPages items={item.changes} size={5} render={(change, i) => (
-          <div key={i}>
-            <strong>{change.path}</strong>
-            <TextPages text={change.diff} render={(text) => <pre>{text}</pre>} />
-          </div>
+          <TextPages key={i} text={change.diff} render={(text) => <CodeBlock variant="diff" label={change.path} code={text} copyText={change.diff}/>} />
         )} />
       ) : (
-        <TextPages text={JSON.stringify(item, null, 2)} render={(text) => <pre>{text}</pre>} />
+        <TextPages text={JSON.stringify(item, null, 2)} render={(text) => <CodeBlock language="json" label={label} code={text}/>} />
       );
   if (inWorkLog) return <div className="bots-tool">{toolBody()}</div>;
-  const status = "status" in item ? item.status : null;
-  const running = status === "inProgress";
-  const failed = status === "failed" || status === "declined" || status === "interrupted" ||
-    (command && item.exitCode !== null && item.exitCode !== 0) || (item.type === "dynamicToolCall" && item.success === false);
+  const status = "status" in item ? String(item.status) : null;
+  const state = traceState(status, { exitCode: command ? item.exitCode : undefined, success: item.type === "dynamicToolCall" ? item.success : undefined });
   return (
     <LazyDetails summary={<>
-        {command ? (
-          <Terminal size={15} />
-        ) : diff ? (
-          <FileDiff size={15} />
-        ) : search ? (
-          <Search size={15} />
-        ) : (
-          <Wrench size={15} />
-        )}
+        <TraceIcon kind={item.type} />
         <span title={label}>{label}</span>
-        {running ? (
-          <LoaderCircle size={14} className="bots-spin" aria-label="In progress" />
-        ) : failed ? (
-          <CircleAlert size={14} className="text-destructive" aria-label={status === "declined" ? "Declined" : status === "interrupted" ? "Interrupted" : "Failed"} />
-        ) : status === "completed" ? <Check size={14} aria-label="Completed" /> : null}
+        {status !== null && <TraceStatus state={state} />}
       </>}>{toolBody}
     </LazyDetails>
   );
