@@ -148,16 +148,16 @@ release after cutover (see the runbook's verification).
 
 ### Roles in the deploy controller
 
-| | `both` (today) | `hub` | `runner` | `cutover` |
-| --- | --- | --- | --- | --- |
-| Unit | `dawar-todo-bots` | `dawar-portable-hub` | `dawar-todo-bots` | `dawar-todo-bots`, installs `dawar-portable-hub` |
-| Live config | hub.json (`both`) | hub.json (`hub`) | agent.json (from `--config`) | hub.json (`both`) |
-| Drain | native, then hub writer | hub writer and voice only | native only | native, then hub writer |
-| Writer freeze/flip | yes | yes | **no** | yes |
-| Site restart | yes | yes | **no** | yes |
-| Files | hub, agent, release drop-in | hub, hub release drop-in | agent, release drop-in | hub → `mode:hub`, agent (+`healthPort`), drop-in → `run agent`; **new** hub unit and its release drop-in |
-| Healthy | combined `/healthz` | hub `/healthz`: ready, site, source, every node connected before is connected again | runner `/healthz`: ready, `relayConnected`, source, runtime, models, native child | both, hub started first |
-| Controller lock | `<hub data>/deployments/<unit>` | `<portable root>/deployments/controller` (shared) | same shared lock | as `both` |
+| | `both` (today) | `hub` | `runner` | `cutover` | `combine` |
+| --- | --- | --- | --- | --- | --- |
+| Unit | `dawar-todo-bots` | `dawar-portable-hub` | `dawar-todo-bots` | `dawar-todo-bots`, installs `dawar-portable-hub` | `dawar-todo-bots`, removes `dawar-portable-hub` |
+| Live config | hub.json (`both`) | hub.json (`hub`) | agent.json (from `--config`) | hub.json (`both`) | hub.json (`hub`) and agent.json |
+| Drain | native, then hub writer | hub writer and voice only | native only | native, then hub writer | native (runner), then hub writer and voice |
+| Writer freeze/flip | yes | yes | **no** | yes | yes |
+| Site restart | yes | yes | **no** | yes | yes |
+| Files | hub, agent, release drop-in | hub, hub release drop-in | agent, release drop-in | hub → `mode:hub`, agent (+`healthPort`), drop-in → `run agent`; **new** hub unit and its release drop-in | hub → `mode:both`, agent (−`healthPort`), drop-in → `run both`; hub unit and drop-in **removed** (kept in backup) |
+| Healthy | combined `/healthz` | hub `/healthz`: ready, site, source, every node connected before is connected again | runner `/healthz`: ready, `relayConnected`, source, runtime, models, native child | both, hub started first | combined `/healthz` on the hub port, hub unit gone |
+| Controller lock | `<hub data>/deployments/<unit>` | `<portable root>/deployments/controller` (shared) | same shared lock | as `both` | shared lock |
 
 A hub and a runner release share one controller lock, so they never overlap.
 A plan refuses a unit whose live config or health is the other role.
@@ -192,8 +192,9 @@ not healthy in its window.
 
 ## Not done
 
-- **Reversing a healthy cutover** (split back to combined) has no controller
-  role. The runbook describes the manual, drained path; a `--role combine`
-  transaction is a follow-up.
+- ~~Reversing a healthy cutover~~: done as `--role combine` (a controller
+  transaction with rehearsal, tested with the fake systemd including a
+  cutover → combine round trip). `deploy-cli.mjs preview` renders any role's
+  generated units and drop-ins read-only.
 - No live restart of the real gateway with a real runner was run (stage 2 is
   protocol-level); the runbook's first hub release is that proof.

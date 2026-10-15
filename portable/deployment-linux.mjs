@@ -22,10 +22,11 @@ export function linuxDeployment(spec,{systemctl=async(...args)=>(await exec('sys
   if(process.platform!=='linux'||Number(process.versions.node.split('.')[0])!==24)throw failure('Deployment requires Linux and Node 24.');
   // Roles (SPLIT_HUB_RUNNER.md): `both` is the combined process; `hub` owns
   // the hub writer and site, never the native runtime; `runner` owns the
-  // native runtime, never the hub writer; `cutover` turns `both` into the two.
+  // native runtime, never the hub writer; `cutover` turns `both` into the two
+  // and `combine` turns the two back into `both`.
   const role=spec.role??'both';
   if(!ROLES.includes(role))throw failure('Plan role is invalid.');
-  const native=role!=='hub',hubWriter=role!=='runner',cutover=role==='cutover';
+  const native=role!=='hub',hubWriter=role!=='runner',cutover=role==='cutover',combine=role==='combine',split=cutover||combine;
   if(!allowedUnit.test(spec.unitId??'')||!allowedUnit.test(spec.controllerUnitId??''))throw failure('Plan unit names are invalid.');
   if(!isAbsolute(spec.releaseDirectory??'')||!isAbsolute(spec.receiptDirectory??''))throw failure('Plan release and receipt paths must be absolute.');
   if(native&&(!isAbsolute(spec.managerSocket??'')||!isAbsolute(spec.nativeBinaryPath??'')||!/^[a-f0-9]{64}$/.test(spec.nativeBinarySHA256??'')||!Array.isArray(spec.expectedModels)||!spec.expectedModels.length))throw failure('Plan manager socket, native binary or expected models are invalid.');
@@ -33,7 +34,8 @@ export function linuxDeployment(spec,{systemctl=async(...args)=>(await exec('sys
   if(!Array.isArray(spec.databases)||!Array.isArray(spec.files)||hubWriter&&(!isAbsolute(spec.localWriter?.path??'')||!spec.localWriter.expected))throw failure('Plan databases, files or local writer are incomplete.');
   if(!isAbsolute(hubWriter?spec.currentHubConfigPath??'':spec.currentAgentConfigPath??''))throw failure('Plan config path is invalid.');
   if(['both','cutover'].includes(role)?spec.controllerDirectory!==join(dirname(spec.localWriter.path),'deployments',spec.unitId):!isAbsolute(spec.controllerDirectory??'')||!spec.controllerDirectory.endsWith('/deployments/controller'))throw failure('Plan controller directory is invalid.');
-  if(cutover&&(!allowedUnit.test(spec.split?.hubUnitId??'')||spec.split.hubUnitId===spec.unitId||!isAbsolute(spec.split.hubUnitPath??'')||!Number.isInteger(spec.split.runnerHealthPort)))throw failure('Plan split topology is incomplete.');
+  if(split&&(!allowedUnit.test(spec.split?.hubUnitId??'')||spec.split.hubUnitId===spec.unitId||!isAbsolute(spec.split.hubUnitPath??'')||!isAbsolute(spec.split.hubDropInPath??'')||!Number.isInteger(spec.split.runnerHealthPort)))throw failure('Plan split topology is incomplete.');
+  if(combine&&(!Number.isSafeInteger(spec.split.hubOld?.pid)||!spec.split.hubOld.start||!spec.split.hubOld.invocationId||!/^[a-f0-9]{40}$/.test(spec.split.runnerSource??'')))throw failure('Plan hub process identity is incomplete.');
   if(role==='hub'&&!Array.isArray(spec.expectedNodes))throw failure('Plan expected nodes are invalid.');
   if(spec.site&&(!allowedUnit.test(spec.site.unitId??'')||!Number.isSafeInteger(spec.site.oldPid)||!spec.site.oldStart||!spec.site.oldInvocationId))throw failure('Plan site identity is incomplete.');
   const systemd=(...args)=>systemctl(...args);
@@ -48,6 +50,15 @@ export function linuxDeployment(spec,{systemctl=async(...args)=>(await exec('sys
       throw failure(`Live ${spec.unitId} is MainPID ${u.MainPID} invocation ${u.InvocationID}, not the planned old process ${spec.old.pid}.`);
     return u;
   };
+  // Combine stops the separate hub too: it must still be the planned process.
+  const hubOriginal=async()=>{
+    const u=await unit(spec.split.hubUnitId),o=spec.split.hubOld;
+    if(Number(u.MainPID)!==o.pid||u.InvocationID!==o.invocationId||await processIdentity(o.pid)!==o.start)
+      throw failure(`Live ${spec.split.hubUnitId} is MainPID ${u.MainPID} invocation ${u.InvocationID}, not the planned hub process ${o.pid}.`);
+    return u;
+  };
+  // The runner's maintenance socket identity comes from the runner's /healthz.
+  const nativeHealthPort=combine?spec.split.runnerHealthPort:spec.healthPort;
   const siteState=async()=>props(await systemd('show',spec.site.unitId,'--property=MainPID,InvocationID,ActiveState,Job'));
   const credential=async(pid=null)=>{
     if(pid===null)await original();const env=(await readFile(`/proc/${pid??spec.old.pid}/environ`)).toString().split('\0');
@@ -120,12 +131,14 @@ export function linuxDeployment(spec,{systemctl=async(...args)=>(await exec('sys
     let h;try{h=await health();}catch{/* Public front stays alive while execution is absent. */}
     // The cutover's runner reports on its own port; the hub keeps the old one.
     let r=null,hubUnit=null,hubTarget=false;
-    if(cutover){try{r=await health(spec.split.runnerHealthPort);}catch{/* Runner not up yet. */}
-      hubUnit=await unit(spec.split.hubUnitId);hubTarget=Number(hubUnit.MainPID)>0&&await inTarget(Number(hubUnit.MainPID));}
+    if(cutover){try{r=await health(spec.split.runnerHealthPort);}catch{/* Runner not up yet. */}}
+    if(split){hubUnit=await unit(spec.split.hubUnitId);hubTarget=Number(hubUnit.MainPID)>0&&await inTarget(Number(hubUnit.MainPID));}
     const starting=['activating','reloading'].includes(u.ActiveState)||Boolean(u.Job)||Boolean(hubUnit?.Job)||hubUnit?.ActiveState==='activating'||Date.now()<graceUntil;
     const fresh=!oldAlive&&pid>0&&targetProcess&&u.ActiveState==='active'&&u.InvocationID!==spec.old.invocationId;
     const newHealthy=Boolean(fresh&&(
       role==='both'?h?.http===200&&h.ready&&h.relayConnected&&h.siteReady&&h.source===spec.source&&h.codexVersion===spec.runtime&&sameModels(h):
+      // Combined again: one process, and the separate hub is gone.
+      combine?h?.http===200&&h.ready&&(h.role??'both')==='both'&&h.relayConnected&&h.siteReady&&h.source===spec.source&&h.codexVersion===spec.runtime&&sameModels(h)&&!(Number(hubUnit.MainPID)>0)&&!hubUnit.Job:
       role==='hub'?hubHealthy(h):
       role==='runner'?runnerHealthy(h):
       runnerHealthy(r)&&hubHealthy(h)&&hubTarget&&hubUnit.ActiveState==='active'));
@@ -137,11 +150,13 @@ export function linuxDeployment(spec,{systemctl=async(...args)=>(await exec('sys
       proof:{pid,invocationId:u.InvocationID,native,source:h?.source??null,ready:h?.ready??false,relayConnected:(runnerView??h)?.relayConnected??false,siteReady:h?.siteReady??false,
         codexVersion:(runnerView??h)?.codexVersion??null,models:(runnerView??h)?.models??[],
         ...(role==='hub'?{nodes:h?.nodes??[]}:{}),
-        ...(cutover?{runner:{source:r?.source??null,ready:r?.ready??false,role:r?.role??null},hub:{pid:Number(hubUnit.MainPID),activeState:hubUnit.ActiveState,inTarget:hubTarget,role:h?.role??null}}:{})}};
+        ...(cutover?{runner:{source:r?.source??null,ready:r?.ready??false,role:r?.role??null},hub:{pid:Number(hubUnit.MainPID),activeState:hubUnit.ActiveState,inTarget:hubTarget,role:h?.role??null}}:{}),
+        ...(combine?{role:h?.role??null,hubUnit:{pid:Number(hubUnit.MainPID),activeState:hubUnit.ActiveState}}:{})}};
   };
   const describe=r=>r.foreignWriter?`a foreign writer holds ${spec.unitId} (pid ${r.proof.pid}, source ${r.proof.source??'unknown'})`:
     `target not healthy: state ${r.activeState}, source ${r.proof.source??'none'}, ready ${r.proof.ready}, relay ${r.proof.relayConnected}, site ${r.proof.siteReady}, runtime ${r.proof.codexVersion??'none'}`+
     (r.proof.runner?`, runner ${r.proof.runner.source??'none'}/${r.proof.runner.ready}, hub unit ${r.proof.hub.activeState}`:'')+
+    (r.proof.hubUnit?`, role ${r.proof.role??'none'}, separate hub ${r.proof.hubUnit.activeState}`:'')+
     (role==='hub'?`, nodes ${r.proof.nodes.length}/${spec.expectedNodes.length}`:'');
   const wait=async(until,test)=>{while(Date.now()<until){const result=await test();if(result)return result;await pause(poll);}return null;};
   const restoreFiles=async()=>{
@@ -184,6 +199,16 @@ export function linuxDeployment(spec,{systemctl=async(...args)=>(await exec('sys
     if(!s)throw failure(`${spec.site.unitId} did not become active after restart.`);
     savePrivate(join(spec.receiptDirectory,`${name}-result.json`),JSON.stringify({operationId:spec.operationId,source:spec.source,...await siteState(),frontendFilesUnchanged:true,at:new Date().toISOString()})+'\n');
   };
+  const exactPrepared=async(f,i)=>{if(f.afterSHA256!==null)await exactFile(f.preparedPath,f.afterSHA256,`files[${i}].preparedPath`);};
+  // Both halves of a split installation, the hub first, so the runner
+  // connects to the hub it is meant for.
+  const startSplit=async until=>{
+    const hub=await unit(spec.split.hubUnitId);
+    if(!(Number(hub.MainPID)>0)&&!hub.Job){if(hub.ActiveState==='failed')await systemd('reset-failed',spec.split.hubUnitId);await systemd('start','--no-block',spec.split.hubUnitId);}
+    await wait(until,async()=>{try{const h=await health();return h.http===200&&h.ready&&h.role==='hub'?h:null;}catch{return null;}});
+    const s=await unit();
+    if(!(Number(s.MainPID)>0)&&!s.Job){if(s.ActiveState==='failed')await systemd('reset-failed',spec.unitId);await systemd('start','--no-block',spec.unitId);}
+  };
   const exactBefore=async(f,label)=>{if(f.beforeSHA256!==null)return exactFile(f.path,f.beforeSHA256,label);if(existsSync(f.path))throw failure(`${label} already exists; this operation only creates it.`);};
   // Hub voice/provider work has its own drain: a hub stop waits for it.
   const voiceIdle=async()=>{const h=await health();if(h.voice?.idle===false)return {idle:false,reason:'Hub voice work is active.'};return {idle:true};};
@@ -220,16 +245,16 @@ export function linuxDeployment(spec,{systemctl=async(...args)=>(await exec('sys
       // Every plan field is re-derived from live state; any drift (a stale
       // hub writer source, a changed config, models) refuses before a hold.
       await verifyPlan(spec,probe);
-      await target();await original();
+      await target();await original();if(combine)await hubOriginal();
       // Service access and network are checked BEFORE a hold or cutover.
       await systemd('show-environment');if(native)await credential();
       if(spec.site){const s=await siteState();if(Number(s.MainPID)!==spec.site.oldPid||s.InvocationID!==spec.site.oldInvocationId||await processIdentity(spec.site.oldPid)!==spec.site.oldStart)throw failure(`${spec.site.unitId} is no longer the planned site process.`);}
-      for(const [i,f] of spec.files.entries()){await exactBefore(f,`files[${i}].path`);await exactFile(f.preparedPath,f.afterSHA256,`files[${i}].preparedPath`);}
+      for(const [i,f] of spec.files.entries()){await exactBefore(f,`files[${i}].path`);await exactPrepared(f,i);}
       if(!Number.isInteger(spec.healthPort)||spec.healthPort<1024||spec.healthPort>65535)throw failure('Plan health port is invalid.');
     },reconcile,
     async prepareHold(){
       if(!native)return {hub:{operationId:spec.operationId,unitId:spec.controllerUnitId}};
-      const h=await health();
+      const h=await health(nativeHealthPort);
       const hold={operationId:spec.operationId,commit:spec.old.source,version:spec.runtime,instanceId:h.maintenance.instanceId,
         invocationId:spec.old.invocationId,unitId:spec.controllerUnitId,waitSeconds:spec.waitSeconds};
       return {native:hold,...(spec.compatibilityBootstrap?{nativeProcess:await nativeProof(spec.old.pid)}:{})};
@@ -259,7 +284,9 @@ export function linuxDeployment(spec,{systemctl=async(...args)=>(await exec('sys
       try{held=db.prepare('SELECT * FROM portable_async_drains WHERE id=?').get(spec.operationId);}finally{db.close();}
       if(!held&&n.safe!==true)return {safe:false,native:n,hub:{phase:'open',status:'waiting-for-native-idle',holdingWrites:false},reason:nativeReason};
       if(!held)local('begin',row);
-      const h=local('observe',row);return {safe:n.safe===true&&h.status==='ready',native:n,hub:h,reason:n.safe!==true?nativeReason:h.status!=='ready'?`Hub writer drain is ${h.status}.`:null};
+      // Combine also stops the separate hub, which waits for its voice work.
+      const h=local('observe',row),v=combine?await voiceIdle():{idle:true};
+      return {safe:n.safe===true&&h.status==='ready'&&v.idle,native:n,hub:h,reason:n.safe!==true?nativeReason:h.status!=='ready'?`Hub writer drain is ${h.status}.`:v.idle?null:v.reason};
     },
     async freezeBackup(_,row){
       if(!native){
@@ -267,6 +294,7 @@ export function linuxDeployment(spec,{systemctl=async(...args)=>(await exec('sys
         local('freeze',row);return {hubWriterFrozen:true,retainedContract:new RetainedRecords(spec.retainedRecordsPath).fingerprint};
       }
       const final=await nativeObserve(row);if(!final.safe)throw failure(`Final idle observation failed: ${final.reason??'work resumed'}.`);
+      if(combine){const v=await voiceIdle();if(!v.idle)throw failure(`Final idle observation failed: ${v.reason}`);}
       if(hubWriter)local('freeze',row);
       if(!spec.compatibilityBootstrap){await maintenance('seal',row);await maintenance('claim',row);}
       return {installedSealClaim:!spec.compatibilityBootstrap,compatibilityBootstrap:spec.compatibilityBootstrap?final:null,...(hubWriter?{retainedContract:new RetainedRecords(spec.retainedRecordsPath).fingerprint}:{})};
@@ -290,9 +318,11 @@ export function linuxDeployment(spec,{systemctl=async(...args)=>(await exec('sys
         return {safe:true,hub:h,retainedContract:new RetainedRecords(spec.retainedRecordsPath).fingerprint};
       }
       const final=await nativeObserve(row);if(!final.safe)throw failure(`Sealed idle observation failed: ${final.reason??'work resumed'}.`);
+      if(combine){await hubOriginal();const v=await voiceIdle();if(!v.idle)throw failure(`Sealed idle observation failed: ${v.reason}`);}
       if(!spec.compatibilityBootstrap&&final.phase!=='claimed')throw failure(`Maintenance phase is ${final.phase}, not claimed.`);return {safe:true,installedSealClaim:!spec.compatibilityBootstrap,native:final,...(hubWriter?{retainedContract:new RetainedRecords(spec.retainedRecordsPath).fingerprint}:{})};
     },
-    async stop(){await original();await systemd('stop','--no-block',spec.unitId);},
+    // Combine: the claimed runner first, then the hub (its own shutdown drains voice).
+    async stop(){await original();if(combine)await hubOriginal();await systemd('stop','--no-block',spec.unitId);if(combine)await systemd('stop','--no-block',spec.split.hubUnitId);},
     async waitOldExit(_,row,{until}){
       if(spec.compatibilityBootstrap&&await processIdentity(spec.old.pid)===spec.old.start)
         await closeBootstrap(spec,row,{original,status:()=>maintenance('status',row),idle:s=>bootstrapIdle(spec,s)});
@@ -305,21 +335,38 @@ export function linuxDeployment(spec,{systemctl=async(...args)=>(await exec('sys
           return {oldExited:true,pid:spec.old.pid,start:spec.old.start,unplannedStart:{pid:Number(u.MainPID),invocationId:u.InvocationID,activeState:u.ActiveState}};
         if(Number(u.MainPID)>0||u.Job)return null;
         if(spec.old.controlGroup){try{if((await readFile(join('/sys/fs/cgroup',spec.old.controlGroup,'cgroup.procs'),'utf8')).trim())return null;}catch(e){if(e.code!=='ENOENT')throw e;}}
+        if(combine){
+          const o=spec.split.hubOld;if(await processIdentity(o.pid)===o.start)return null;
+          const hub=await unit(spec.split.hubUnitId);
+          if(Number(hub.MainPID)>0&&hub.InvocationID!==o.invocationId&&['active','activating'].includes(hub.ActiveState))
+            return {oldExited:true,pid:spec.old.pid,start:spec.old.start,unplannedStart:{unitId:spec.split.hubUnitId,pid:Number(hub.MainPID),invocationId:hub.InvocationID,activeState:hub.ActiveState}};
+          if(Number(hub.MainPID)>0||hub.Job)return null;
+        }
         return {oldExited:true,pid:spec.old.pid,start:spec.old.start};
       })??{oldExited:false,reason:`Process ${spec.old.pid} had not exited.`};
     },
     // The stop request may never have been issued (ambiguous failure); issue
     // it if no stop job exists, otherwise SIGKILL the proven-idle old process.
     async escalateStop(){
-      if(await processIdentity(spec.old.pid)!==spec.old.start)return;
-      const u=await unit();
-      if(u.ActiveState==='active'&&!u.Job)await systemd('stop','--no-block',spec.unitId);
-      else await systemd('kill','--signal=SIGKILL',spec.unitId);
+      const units=[[spec.unitId,spec.old],...(combine?[[spec.split.hubUnitId,spec.split.hubOld]]:[])];
+      for(const [id,old] of units){
+        if(await processIdentity(old.pid)!==old.start)continue;
+        const u=await unit(id);
+        if(u.ActiveState==='active'&&!u.Job)await systemd('stop','--no-block',id);
+        else await systemd('kill','--signal=SIGKILL',id);
+      }
     },
     async prepareStart(_,row,{until}){
       if(await processIdentity(spec.old.pid)===spec.old.start)throw failure('The old process is still alive.');await target();
+      if(combine){
+        const hub=await unit(spec.split.hubUnitId);
+        if(await processIdentity(spec.split.hubOld.pid)===spec.split.hubOld.start||Number(hub.MainPID)>0||hub.Job)throw failure(`${spec.split.hubUnitId} is still running; the combined process needs its ports.`);
+        // Disable while the unit file still exists, then remove it.
+        if(!spec.rehearsal&&existsSync(spec.split.hubUnitPath))await systemd('disable',spec.split.hubUnitId);
+      }
       for(const [i,f] of spec.files.entries()){
         const current=existsSync(f.path)?hash(await readFile(f.path)):null;if(current===f.afterSHA256)continue;
+        if(f.afterSHA256===null){if(current!==f.beforeSHA256)throw failure(`files[${i}].path changed after the plan was prepared.`);await rm(f.path);continue;}
         if(current!==f.beforeSHA256)throw failure(`files[${i}].path changed after the plan was prepared.`);await exactFile(f.preparedPath,f.afterSHA256,`files[${i}].preparedPath`);savePrivate(f.path,(await readFile(f.preparedPath)).toString());
       }
       if(hubWriter){
@@ -336,6 +383,7 @@ export function linuxDeployment(spec,{systemctl=async(...args)=>(await exec('sys
           db.exec('COMMIT');
         }catch(e){if(db.isTransaction)db.exec('ROLLBACK');throw e;}finally{db.close();}
       }
+      if(combine)try{await rmdir(dirname(spec.split.hubDropInPath));}catch{/* Not empty or already gone. */}
       await systemd('daemon-reload');
       // The installed hub must come back after a reboot like the runner.
       if(cutover&&!spec.rehearsal)await systemd('enable',spec.split.hubUnitId);
@@ -378,13 +426,20 @@ export function linuxDeployment(spec,{systemctl=async(...args)=>(await exec('sys
       if(cutover)try{await rmdir(dirname(spec.split.hubDropInPath));}catch{/* Not empty or already gone: left for inspection. */}
       if(hubWriter)rollbackWriter();
       await systemd('daemon-reload');
+      // Combine rollback: the hub unit is back (restored from backup) and
+      // starts at boot again.
+      if(combine&&!spec.rehearsal&&existsSync(spec.split.hubUnitPath))await systemd('enable',spec.split.hubUnitId);
       if(existsSync(join(spec.receiptDirectory,'site-restart-intent.json')))await restartSite('site-rollback-restart',until,{requireOld:false});
+      if(combine&&existsSync(spec.split.hubUnitPath))return startSplit(until);
       const s=await unit();
       if(!(Number(s.MainPID)>0)&&!s.Job){if(s.ActiveState==='failed')await systemd('reset-failed',spec.unitId);await systemd('start','--no-block',spec.unitId);}
     },
     async waitPreviousHealthy(_,row,{until}){
       let last;
-      const ok=await wait(until,async()=>{let h;try{h=await health();}catch{return null;}last=h;return h.http===200&&h.ready&&h.source===spec.old.source?h:null;});
+      const ok=await wait(until,async()=>{let h;try{h=await health();}catch{return null;}last=h;if(!(h.http===200&&h.ready&&h.source===spec.old.source))return null;
+        // Combine rollback: the split is back only when the runner is too.
+        if(combine){let r;try{r=await health(spec.split.runnerHealthPort);}catch{return null;}last={...h,relayConnected:r.relayConnected};if(!(r.http===200&&r.ready&&r.relayConnected&&r.source===spec.split.runnerSource))return null;}
+        return h;});
       return {healthy:Boolean(ok),proof:last?{source:last.source??null,ready:Boolean(last.ready),relayConnected:Boolean(last.relayConnected),siteReady:Boolean(last.siteReady)}:null};
     },
     // Whatever happened, the unit is left running (or queued to start).
@@ -394,10 +449,13 @@ export function linuxDeployment(spec,{systemctl=async(...args)=>(await exec('sys
     async yieldToUnplannedStart(){
       for(const [i,f] of spec.files.entries()){const current=existsSync(f.path)?hash(await readFile(f.path)):null;if(current!==f.beforeSHA256)throw failure(`files[${i}].path is not the before-config; the unplanned process needs inspection.`);}
       if(hubWriter)rollbackWriter();
+      // Combine: both halves were stopped; whichever was not restarted by
+      // the unplanned job is started on its before-config.
+      if(combine)await startSplit(Date.now()+(spec.convergence?.healthWindowSeconds??300)*1000);
     },
     async ensureRunning(){
       // A cutover that already installed the hub keeps both halves running.
-      const ids=cutover&&existsSync(spec.split.hubUnitPath)?[spec.split.hubUnitId,spec.unitId]:[spec.unitId];
+      const ids=split&&existsSync(spec.split.hubUnitPath)?[spec.split.hubUnitId,spec.unitId]:[spec.unitId];
       for(const id of ids){
         const u=await unit(id);
         if(Number(u.MainPID)>0||u.Job||u.ActiveState==='active')continue;

@@ -1,7 +1,9 @@
 "use client";
 
 import { StorageLifecycleNotice } from "./storage-lifecycle-notice";
-import { inspectPublishedVersion, inspectWorkerVersion } from "./pwa-lifecycle";
+import { getPwaLifecycle, inspectPublishedVersion, inspectWorkerVersion, subscribePwaLifecycle } from "./pwa-lifecycle";
+import { preparePwaRefresh } from "./pwa-update";
+import { setActiveBuildReload, startBuildReload } from "./build-reload";
 import { useEffect } from "react";
 import { getOrCreateDeviceId, headersWithDeviceId } from "./device-id";
 import { ensureCurrentPushSubscription } from "./push-client";
@@ -91,10 +93,16 @@ export function PwaRegister() {
       .catch((error) => console.error("[todo-pwa] service worker registration failed", error));
     if (document.readyState === "complete") void register();
     else window.addEventListener("load", register, { once: true });
+    // A new published build reloads this page at a safe moment, drafts saved.
+    let session: Storage | null = null;
+    try { session = window.sessionStorage; } catch { /* Storage disabled: no loop guard, banner only after one reload. */ }
+    const buildReload = startBuildReload({ getLifecycle: getPwaLifecycle, subscribe: subscribePwaLifecycle, prepare: preparePwaRefresh, reload: () => location.reload(),
+      inspect: inspectPublishedVersion, window, document, session });
+    setActiveBuildReload(buildReload);
     window.addEventListener("online", discover); window.addEventListener("focus", discover);
     window.addEventListener("pageshow", discover);
     document.addEventListener("visibilitychange", discover);
-    return () => { disposed = true; window.removeEventListener("online", discover); window.removeEventListener("focus", discover); window.removeEventListener("pageshow", discover); document.removeEventListener("visibilitychange", discover); window.removeEventListener("load", register); navigator.serviceWorker.removeEventListener("controllerchange", inspect); };
+    return () => { disposed = true; buildReload.stop(); setActiveBuildReload(null); window.removeEventListener("online", discover); window.removeEventListener("focus", discover); window.removeEventListener("pageshow", discover); document.removeEventListener("visibilitychange", discover); window.removeEventListener("load", register); navigator.serviceWorker.removeEventListener("controllerchange", inspect); };
   }, []);
   return <StorageLifecycleNotice />;
 }

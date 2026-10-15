@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync, existsSync, readdirSync, readlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { installation, release, OLD, NEW, UNIT, HUB_UNIT } from './helpers/deploy-fixture.mjs';
-import { preparePlan, PlanMismatch } from '../portable/deploy-plan.mjs';
+import { preparePlan, previewPlan, PlanMismatch } from '../portable/deploy-plan.mjs';
 import { runDeployment } from '../portable/deployment-transaction.mjs';
 import { linuxDeployment } from '../portable/deployment-linux.mjs';
 import { rehearse, rehearsalPassed } from '../portable/deploy-rehearsal.mjs';
@@ -13,7 +13,8 @@ import { rehearse, rehearsalPassed } from '../portable/deploy-rehearsal.mjs';
 // split installation, and the one-time `cutover` from the combined process.
 const prepare = (f, role, options = {}) => preparePlan(f.probe, { source: NEW, role, siteUnitId: null, site: false, receiptRoot: join(f.root, 'deployments'),
   waitSeconds: 120, timeoutStopSec: 10, convergence: { healthWindowSeconds: 20, startupGraceSeconds: 5 },
-  ...(role === 'hub' ? { unitId: HUB_UNIT } : { unitId: UNIT }), ...(role === 'cutover' ? { hubUnitId: HUB_UNIT, runnerHealthPort: f.ports.runnerHealthPort } : {}), ...options });
+  ...(role === 'hub' ? { unitId: HUB_UNIT } : { unitId: UNIT }), ...(role === 'cutover' ? { hubUnitId: HUB_UNIT, runnerHealthPort: f.ports.runnerHealthPort } : {}),
+  ...(role === 'combine' ? { hubUnitId: HUB_UNIT } : {}), ...options });
 const deploy = (f, plan) => runDeployment(plan, linuxDeployment(plan, { systemctl: f.systemd.systemctl, poll: 200 }));
 const show = async (f, id) => Object.fromEntries((await f.systemd.systemctl('show', id)).trim().split('\n').map(l => l.split(/=(.*)/s).slice(0, 2)));
 const identity = async (f, id) => { const u = await show(f, id); return { pid: Number(u.MainPID), invocation: u.InvocationID }; };
@@ -158,11 +159,109 @@ test('cutover rollback removes the hub unit, restores the combined configs and s
   await prepare(f, 'cutover', { now: new Date(Date.now() + 1000) });
 });
 
-for (const role of ['hub', 'runner', 'cutover']) {
+test('preview renders the cutover units and drop-ins read-only: no receipt, no activation, no secret', { timeout: 60000 }, async t => {
+  const f = await installation(t);
+  const tree = () => { const walk = d => readdirSync(d, { withFileTypes: true }).flatMap(e => e.isDirectory() ? walk(join(d, e.name)) : [join(d, e.name)]); return walk(f.root).filter(p => !p.endsWith('services.log')).sort(); };
+  const before = tree(), out = join(f.root, 'preview-out');
+  const summary = await previewPlan(f.probe, { out, source: NEW, role: 'cutover', unitId: UNIT, hubUnitId: HUB_UNIT, runnerHealthPort: f.ports.runnerHealthPort, siteUnitId: null, site: false, waitSeconds: 120, timeoutStopSec: 10 });
+  assert.deepEqual(tree().filter(p => !p.startsWith(out)), before, 'nothing outside the output directory was written');
+  assert.deepEqual(summary.files.map(x => x.action), ['change', 'change', 'change', 'create', 'create']);
+  assert.deepEqual(summary.files[0].changes.map(c => c.key), ['mode', 'agentConfigFile', 'backendReleaseDirectory', 'teamWorkspaceRoot', 'hub.source', 'hub.activationReceipt']);
+  assert.deepEqual(summary.activations.hub.create, true, 'reported, not created');
+  assert.equal(existsSync(summary.activations.hub.path), false);
+  assert.match(readFileSync(join(out, `${HUB_UNIT}.prepared`), 'utf8'), /WantedBy=default\.target/);
+  assert.match(readFileSync(join(out, '90-portable-release.conf.prepared'), 'utf8'), /run hub --native-child/);
+  assert.match(readFileSync(join(out, '90-portable-migration.conf.live'), 'utf8'), /run both/);
+  const all = readdirSync(out).map(n => readFileSync(join(out, n), 'utf8')).join('\n');
+  assert.doesNotMatch(all, /BOTS_MACHINE_SECRET|"owner"/, 'no secret or config body in the preview');
+  await assert.rejects(previewPlan(f.probe, { source: NEW, role: 'cutover', unitId: UNIT, hubUnitId: HUB_UNIT, runnerHealthPort: f.ports.runnerHealthPort, out }), /already exists/);
+});
+
+const assertCombined = async (f, plan, source) => {
+  assert.equal(existsSync(join(f.units, HUB_UNIT)), false, 'hub unit file removed');
+  assert.equal(existsSync(join(f.units, `${HUB_UNIT}.d`)), false, 'hub drop-in directory removed');
+  assert.ok(!f.systemd.enabled.has(HUB_UNIT), 'hub unit disabled');
+  assert.equal((await show(f, HUB_UNIT)).MainPID, '0');
+  const hub = json(f.hubConfig), agent = json(f.agentConfig);
+  assert.equal(hub.mode, 'both');
+  assert.equal(hub.agentConfigFile, f.agentConfig);
+  assert.equal(hub.backendReleaseDirectory, plan.releaseDirectory);
+  assert.equal(agent.agent.healthPort, undefined, 'the combined process serves one /healthz');
+  assert.match(readFileSync(f.dropIn, 'utf8'), new RegExp(`run both --native-child --release ${plan.releaseDirectory} --config ${f.hubConfig}`));
+  const runner = await identity(f, UNIT);
+  assert.equal(cwd(runner.pid), plan.releaseDirectory);
+  const health = await f.probe.health(f.ports.healthPort);
+  assert.deepEqual({ role: health.role, source: health.source, ready: health.ready }, { role: 'both', source, ready: true });
+  assert.deepEqual({ source: f.writer().source, phase: f.writer().phase }, { source, phase: 'open' });
+};
+
+test('combine: one drained transaction turns the separate hub and runner back into the combined process', { timeout: 120000 }, async t => {
+  const f = await installation(t, { topology: 'split' });
+  const hubUnitText = readFileSync(join(f.units, HUB_UNIT), 'utf8');
+  const { plan } = await prepare(f, 'combine');
+  assert.equal(plan.role, 'combine');
+  assert.equal(plan.healthPort, f.ports.healthPort, 'the combined process keeps the hub /healthz port');
+  assert.equal(plan.split.runnerHealthPort, f.ports.runnerHealthPort);
+  assert.ok(plan.controllerDirectory.endsWith('/deployments/controller'), 'shares the split lock with hub and runner releases');
+  assert.deepEqual(plan.files.map(x => [x.path, x.afterSHA256 === null]), [[f.hubConfig, false], [f.agentConfig, false], [f.dropIn, false], [join(f.units, HUB_UNIT), true], [f.hubDropIn, true]]);
+  assert.deepEqual(plan.files.filter(x => x.afterSHA256 === null).map(x => x.preparedPath), [undefined, undefined], 'removed files have no prepared content');
+  assert.deepEqual(Object.keys(plan.activations).sort(), ['agent', 'hub']);
+  const row = await deploy(f, plan);
+  assert.equal(row.outcome, 'healthy', JSON.stringify(row.lastFailure) + f.log());
+  assert.equal(stops(f, UNIT).length, 1, 'the runner was stopped once, drained');
+  assert.equal(stops(f, HUB_UNIT).length, 1, 'the hub was stopped once');
+  await assertCombined(f, plan, NEW);
+  assert.ok(row.events.find(e => e.phase === 'healthy').proof.native.pid > 0, 'native child proven');
+  // The backup holds the removed hub unit for a later cutover or inspection.
+  assert.equal(readFileSync(join(plan.receiptDirectory, 'backup', 'configuration-3'), 'utf8'), hubUnitText);
+});
+
+test('combine rollback restores the hub unit, re-enables it and starts hub then runner on their releases', { timeout: 150000 }, async t => {
+  const f = await installation(t, { topology: 'split', targetHealthy: false });
+  const { plan } = await prepare(f, 'combine');
+  const row = await deploy(f, plan);
+  assert.equal(row.outcome, 'rolled-back', JSON.stringify(row.lastFailure) + f.log());
+  assert.deepEqual(plan.files.map(x => existsSync(x.path) && f.hash(x.path)), plan.files.map(x => x.beforeSHA256), 'every file, removed ones included, is back');
+  assert.ok(f.systemd.enabled.has(HUB_UNIT), 'the hub starts at boot again');
+  assert.equal(json(f.hubConfig).mode, 'hub');
+  const hub = await f.probe.health(f.ports.healthPort), runner = await f.probe.health(f.ports.runnerHealthPort);
+  assert.deepEqual({ role: hub.role, source: hub.source, ready: hub.ready }, { role: 'hub', source: OLD, ready: true });
+  assert.deepEqual({ role: runner.role, source: runner.source, ready: runner.ready }, { role: 'runner', source: OLD, ready: true });
+  assert.deepEqual({ source: f.writer().source, phase: f.writer().phase }, { source: OLD, phase: 'open' });
+  const order = f.systemd.commands.filter(c => c.startsWith('start --no-block'));
+  assert.deepEqual(order.slice(-2), [`start --no-block ${HUB_UNIT}`, `start --no-block ${UNIT}`], 'hub first, then the runner');
+});
+
+test('combine refuses a hub unit carrying more than its release drop-in', { timeout: 60000 }, async t => {
+  const f = await installation(t, { topology: 'split' });
+  const { savePrivate } = await import('../portable/private-file.mjs');
+  savePrivate(join(f.units, `${HUB_UNIT}.d`, '50-extra.conf'), '[Service]\nEnvironment=EXTRA=1\n');
+  const refused = await prepare(f, 'combine').catch(e => e);
+  assert.ok(refused instanceof PlanMismatch);
+  assert.match(refused.message, /split\.hubDropInPath.*50-extra\.conf/);
+});
+
+test('cutover then combine: the round trip returns to the combined topology on a third release', { timeout: 180000 }, async t => {
+  const f = await installation(t);
+  const { plan } = await prepare(f, 'cutover');
+  assert.equal((await deploy(f, plan)).outcome, 'healthy', f.log());
+  const third = 'c'.repeat(39) + '3'; release(f.root, third);
+  const back = await prepare(f, 'combine', { source: third, now: new Date(Date.now() + 1000) });
+  assert.equal(back.plan.old.source, NEW);
+  const row = await deploy(f, back.plan);
+  assert.equal(row.outcome, 'healthy', JSON.stringify(row.lastFailure) + f.log());
+  await assertCombined(f, back.plan, third);
+  // The generated hub environment was the combined unit's own, so nothing was lost.
+  const env = readFileSync(`/proc/${(await identity(f, UNIT)).pid}/environ`, 'utf8').split('\0');
+  assert.ok(env.includes('BOTS_PRIMARY_DESKTOP_BOT_ID=bot-primary'));
+});
+
+for (const role of ['hub', 'runner', 'cutover', 'combine']) {
   test(`rehearse a ${role} plan on copies; production is untouched`, { timeout: 120000 }, async t => {
     const f = await installation(t, role === 'cutover' ? {} : { topology: 'split' });
     const { plan } = await prepare(f, role);
     const units = [UNIT, ...(role === 'cutover' ? [] : [HUB_UNIT])];
+    // The removed files (combine) are read, never touched.
     const before = { ids: await Promise.all(units.map(id => identity(f, id))), files: plan.files.map(x => existsSync(x.path) && f.hash(x.path)), writer: f.writer(), units: readdirSync(f.units).sort() };
     const result = await rehearse(plan, { systemctl: f.systemd.systemctl, unitDirectory: f.units, root: join(f.root, 'r') });
     assert.equal(result.outcome, 'healthy', JSON.stringify(result) + f.log());

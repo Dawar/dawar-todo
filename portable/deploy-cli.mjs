@@ -5,16 +5,17 @@ import { fileURLToPath } from 'node:url';
 import { readPrivate } from './private-file.mjs';
 import { runDeployment, failureReason } from './deployment-transaction.mjs';
 import { linuxDeployment } from './deployment-linux.mjs';
-import { linuxProbe, preparePlan, verifyPlan, defaultUnit, DEFAULT_SITE_UNIT, DEFAULT_TIMEOUT_STOP_SEC, DEFAULT_HUB_UNIT, DEFAULT_RUNNER_HEALTH_PORT, ROLES } from './deploy-plan.mjs';
+import { linuxProbe, preparePlan, previewPlan, verifyPlan, defaultUnit, DEFAULT_SITE_UNIT, DEFAULT_TIMEOUT_STOP_SEC, DEFAULT_HUB_UNIT, DEFAULT_RUNNER_HEALTH_PORT, ROLES } from './deploy-plan.mjs';
 import { rehearse, rehearsalPassed } from './deploy-rehearsal.mjs';
 
-// deploy-cli.mjs prepare <sha> [--role both|hub|runner|cutover] [--unit U] [--site U | --no-site] [--receipts DIR] [--wait-seconds N] [--timeout-stop-sec N] [--health-window-seconds N]
-//                              cutover only: [--hub-unit U] [--runner-health-port N]   (see SPLIT_HUB_RUNNER.md)
+// deploy-cli.mjs prepare <sha> [--role both|hub|runner|cutover|combine] [--unit U] [--site U | --no-site] [--receipts DIR] [--wait-seconds N] [--timeout-stop-sec N] [--health-window-seconds N]
+//                              cutover: [--hub-unit U] [--runner-health-port N]; combine: [--hub-unit U]   (see SPLIT_HUB_RUNNER.md)
+// deploy-cli.mjs preview <sha> --out DIR [prepare options]   (read-only: what prepare would generate; no receipt, no activation)
 // deploy-cli.mjs preflight --plan PLAN
 // deploy-cli.mjs rehearse  --plan PLAN [--keep]
 // deploy-cli.mjs launch    --plan PLAN [--skip-rehearsal]   (runs `run` in its own transient unit)
 // deploy-cli.mjs run       --plan PLAN [--skip-rehearsal]   (legacy: --plan PLAN)
-const usage = 'Use deploy-cli.mjs prepare <sha> [--role both|hub|runner|cutover] | preflight|rehearse|launch|run --plan PRIVATE_ABSOLUTE_PLAN. See portable/DEPLOY.md and portable/SPLIT_HUB_RUNNER.md.';
+const usage = 'Use deploy-cli.mjs prepare <sha> [--role both|hub|runner|cutover|combine] | preflight|rehearse|launch|run --plan PRIVATE_ABSOLUTE_PLAN. See portable/DEPLOY.md and portable/SPLIT_HUB_RUNNER.md.';
 const argv = process.argv.slice(2), command = argv[0] === '--help' ? 'help' : argv[0]?.startsWith('--') ? 'run' : argv.shift();
 const flag = name => argv.includes(name), value = name => { const i = argv.indexOf(name); return i >= 0 ? argv[i + 1] : undefined; };
 const number = (name, fallback) => { const v = value(name); if (v === undefined) return fallback; const n = Number(v); if (!Number.isSafeInteger(n)) throw Error(`${name} must be an integer.`); return n; };
@@ -25,20 +26,28 @@ const loadPlan = () => { const path = value('--plan'); if (!isAbsolute(path ?? '
 try {
   if (command === 'help') {
     console.log(usage);
-  } else if (command === 'prepare') {
+  } else if (command === 'prepare' || command === 'preview') {
     const source = argv[0];
     if (!/^[a-f0-9]{40}$/.test(source ?? '')) throw Error('prepare needs the full 40-character release SHA.');
     const role = value('--role') ?? 'both';
     if (!ROLES.includes(role)) throw Error(`--role must be one of ${ROLES.join(', ')}.`);
-    if (role !== 'cutover' && (value('--hub-unit') || value('--runner-health-port'))) throw Error('--hub-unit and --runner-health-port belong to --role cutover.');
-    const { planPath, plan } = await preparePlan(linuxProbe(), { source, role, unitId: value('--unit') ?? defaultUnit(role),
+    if (role !== 'cutover' && value('--runner-health-port')) throw Error('--runner-health-port belongs to --role cutover.');
+    if (!['cutover', 'combine'].includes(role) && value('--hub-unit')) throw Error('--hub-unit belongs to --role cutover or combine.');
+    const options = { source, role, unitId: value('--unit') ?? defaultUnit(role),
       // A runner release never restarts the site: it holds no hub writer.
       siteUnitId: flag('--no-site') || role === 'runner' ? null : value('--site') ?? DEFAULT_SITE_UNIT, site: flag('--no-site') || role === 'runner' ? false : value('--site') ? true : undefined,
       ...(role === 'cutover' ? { hubUnitId: value('--hub-unit') ?? DEFAULT_HUB_UNIT, runnerHealthPort: number('--runner-health-port', DEFAULT_RUNNER_HEALTH_PORT) } : {}),
+      ...(role === 'combine' ? { hubUnitId: value('--hub-unit') ?? DEFAULT_HUB_UNIT } : {}),
       receiptRoot: value('--receipts'), waitSeconds: number('--wait-seconds', 900), timeoutStopSec: number('--timeout-stop-sec', DEFAULT_TIMEOUT_STOP_SEC),
-      convergence: value('--health-window-seconds') ? { healthWindowSeconds: number('--health-window-seconds') } : {} });
-    print({ planPath, operationId: plan.operationId, role, unitId: plan.unitId, source: plan.source, old: { source: plan.old.source, pid: plan.old.pid }, localWriter: plan.localWriter?.expected ?? null,
-      expectedModels: plan.expectedModels ?? null, ...(plan.expectedNodes ? { expectedNodes: plan.expectedNodes } : {}), ...(plan.split ? { split: plan.split } : {}), site: plan.site?.unitId ?? null, preflight: 'passed', next: `node ${fileURLToPath(import.meta.url)} rehearse --plan ${planPath}` });
+      convergence: value('--health-window-seconds') ? { healthWindowSeconds: number('--health-window-seconds') } : {} };
+    if (command === 'preview') {
+      const summary = await previewPlan(linuxProbe(), { ...options, out: value('--out') });
+      print({ preview: value('--out'), role, source, files: summary.files.map(f => ({ path: f.path, action: f.action, ...(f.prepared ? { prepared: f.prepared } : {}), ...(f.changes ? { changes: f.changes.map(c => c.key) } : {}) })) });
+    } else {
+      const { planPath, plan } = await preparePlan(linuxProbe(), options);
+      print({ planPath, operationId: plan.operationId, role, unitId: plan.unitId, source: plan.source, old: { source: plan.old.source, pid: plan.old.pid }, localWriter: plan.localWriter?.expected ?? null,
+        expectedModels: plan.expectedModels ?? null, ...(plan.expectedNodes ? { expectedNodes: plan.expectedNodes } : {}), ...(plan.split ? { split: plan.split } : {}), site: plan.site?.unitId ?? null, preflight: 'passed', next: `node ${fileURLToPath(import.meta.url)} rehearse --plan ${planPath}` });
+    }
   } else if (command === 'preflight') {
     print({ preflight: 'passed', ...await verifyPlan(loadPlan(), linuxProbe()) });
   } else if (command === 'rehearse') {

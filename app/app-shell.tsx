@@ -7,6 +7,7 @@ import { ScreenError, ScreenLoading } from "./screen-feedback";
 import { taskSync } from "./task-sync";
 import { cacheOpeningTab, cachedOpeningTab } from "./opening-preference";
 import { initialShellPath } from "./launch-intent";
+import { reportClientFailure } from "./build-reload";
 
 const loaders = { "/tasks": () => import("./tasks/page"), "/open": () => import("./open/page"), "/bots": () => import("./bots/page"), "/settings": () => import("./settings/page") };
 type ScreenPath = keyof typeof loaders;
@@ -39,6 +40,8 @@ function Screen({ children, screen, positions }: { children: ReactNode; screen: 
 class ScreenBoundary extends Component<{ path: ScreenPath; children: ReactNode }, { error: Error | null }> {
   state = { error: null as Error | null };
   static getDerivedStateFromError(error: Error) { return { error }; }
+  // On a stale build the crash is likely old code against new data: reload.
+  componentDidCatch(error: Error) { reportClientFailure(error); }
   render() {
     if (!this.state.error) return this.props.children;
     const reset = () => this.setState({ error: null });
