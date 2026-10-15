@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useState } from "react";
 
 /**
  * A new Stop waits for explicit confirmation; Cancel, Escape and backdrop
@@ -23,9 +23,7 @@ export class StopConfirmation {
 
 export function useStopConfirmation() {
   const [, redraw] = useState(0);
-  const ref = useRef<StopConfirmation | null>(null);
-  ref.current ??= new StopConfirmation(() => redraw(value => value + 1));
-  const gate = ref.current;
+  const [gate] = useState(() => new StopConfirmation(() => redraw(value => value + 1)));
   return { open: gate.open, request: useCallback((value: Parameters<StopConfirmation["request"]>[0]) => gate.request(value), [gate]),
     cancel: useCallback(() => gate.cancel(), [gate]), confirm: useCallback((submit: () => void) => gate.confirm(submit), [gate]) };
 }
