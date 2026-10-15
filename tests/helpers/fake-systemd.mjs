@@ -10,7 +10,8 @@ import { join } from 'node:path';
 // helper outside the release directory (like ExecStartPre).
 export class FakeSystemd {
   constructor({ unitDirectory, log, activatingMs = 0 }) {
-    Object.assign(this, { unitDirectory, log, activatingMs, units: new Map(), commands: [] });
+    // `reverse` simulates units that pull a unit in: { 'x.service': { WantedBy: 'front.service' } }.
+    Object.assign(this, { unitDirectory, log, activatingMs, units: new Map(), commands: [], reverse: {}, afterCommand: null });
     this.systemctl = (...args) => this.run(args);
   }
   unit(id) { if (!this.units.has(id)) this.units.set(id, { ActiveState: 'inactive', MainPID: 0, InvocationID: '', Job: '' }); return this.units.get(id); }
@@ -62,13 +63,18 @@ export class FakeSystemd {
     return exited;
   }
   async run(args) {
+    const output = await this.execute(args);
+    await this.afterCommand?.(args);
+    return output;
+  }
+  async execute(args) {
     this.commands.push(args.join(' '));
     const [command, ...rest] = args, id = rest.find(a => a.endsWith('.service')), u = id && this.unit(id), wait = !rest.includes('--no-block');
     if (command === 'show') {
       return [`MainPID=${u.MainPID}`, `InvocationID=${u.InvocationID}`, `ActiveState=${u.ActiveState}`, `SubState=${u.ActiveState === 'active' ? 'running' : 'dead'}`,
-        'ControlGroup=', `Job=${u.Job}`, `LoadState=${existsSync(join(this.unitDirectory, id)) ? 'loaded' : 'not-found'}`, `DropInPaths=${this.dropIns(id).join(' ')}`].join('\n') + '\n';
+        'ControlGroup=', `Job=${u.Job}`, `LoadState=${existsSync(join(this.unitDirectory, id)) ? 'loaded' : 'not-found'}`, `DropInPaths=${this.dropIns(id).join(' ')}`, ...Object.entries(this.reverse[id] ?? {}).map(([k, v]) => `${k}=${v}`)].join('\n') + '\n';
     }
-    if (command === 'start') { if (u.child || u.ActiveState === 'activating') return ''; if (u.stopping) { u.startAfterStop = true; return ''; } this.launch(id); return ''; }
+    if (command === 'start') { if (u.stopping) { u.startAfterStop = true; return ''; } if (u.child || u.ActiveState === 'activating') return ''; this.launch(id); return ''; }
     if (command === 'stop') { const done = this.stop(id); if (wait) await done; return ''; }
     if (command === 'restart') { if (u.child) { u.startAfterStop = true; const done = this.stop(id); if (wait) await done; } else this.launch(id); return ''; }
     if (command === 'kill') { u.child?.kill('SIGKILL'); return ''; }

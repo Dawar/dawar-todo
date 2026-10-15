@@ -81,7 +81,7 @@ export function linuxProbe({ systemctl = async (...args) => (await exec('systemc
   return {
     systemctl,
     async unit(id) {
-      const text = await systemctl('show', id, '--property=MainPID,InvocationID,ActiveState,SubState,ControlGroup,Job,LoadState,DropInPaths');
+      const text = await systemctl('show', id, '--property=MainPID,InvocationID,ActiveState,SubState,ControlGroup,Job,LoadState,DropInPaths,WantedBy,RequiredBy,BoundBy,RequisiteOf,ConsistsOf');
       return Object.fromEntries(text.trim().split('\n').filter(Boolean).map(line => { const i = line.indexOf('='); return [line.slice(0, i), line.slice(i + 1)]; }));
     },
     processStart(pid) { try { const text = proc(pid, 'stat').toString(); return text.slice(text.lastIndexOf(')') + 2).split(' ')[19]; } catch { return null; } },
@@ -118,6 +118,11 @@ export async function discover(probe, { source, unitId = DEFAULT_UNIT, siteUnitI
   if (convergence.stopWindowSeconds < timeoutStopSec + 30) refuse('convergence.stopWindowSeconds', `must exceed TimeoutStopSec ${timeoutStopSec} by 30 seconds`);
   const u = await probe.unit(unitId), pid = Number(u.MainPID);
   if (u.ActiveState !== 'active' || !(pid > 0)) refuse('unitId', `${unitId} is ${u.ActiveState ?? 'unknown'} with MainPID ${u.MainPID ?? 'absent'}`);
+  // A unit that pulls the backend in (e.g. the front with Wants=) can start
+  // the previous release while the controller waits for the old exit.
+  const pullers = ['WantedBy', 'RequiredBy', 'BoundBy', 'RequisiteOf', 'ConsistsOf'].flatMap(key => String(u[key] ?? '').split(/\s+/).filter(Boolean).map(name => `${key}=${name}`))
+    .filter(entry => !entry.endsWith('.target'));
+  if (pullers.length) refuse('unitId', `${unitId} is pulled in by ${pullers.join(', ')}; restarting those units would start it outside the controller`);
   const start = probe.processStart(pid);
   if (!start) refuse('old.start', `process ${pid} identity unavailable`);
   const { environment, command } = probe.processConfig(pid);

@@ -218,7 +218,12 @@ export function linuxDeployment(spec,{systemctl=async(...args)=>(await exec('sys
         await closeBootstrap(spec,row,{original,status:()=>maintenance('status',row),idle:s=>bootstrapIdle(spec,s)});
       return await wait(until,async()=>{
         if(await processIdentity(spec.old.pid)===spec.old.start)return null;
-        const u=await unit();if(Number(u.MainPID)>0||u.Job)return null;
+        const u=await unit();
+        // Something else started the unit after the old exit (a dependency or
+        // a manual start) before the controller's own start.
+        if(Number(u.MainPID)>0&&u.InvocationID!==spec.old.invocationId&&['active','activating'].includes(u.ActiveState))
+          return {oldExited:true,pid:spec.old.pid,start:spec.old.start,unplannedStart:{pid:Number(u.MainPID),invocationId:u.InvocationID,activeState:u.ActiveState}};
+        if(Number(u.MainPID)>0||u.Job)return null;
         if(spec.old.controlGroup){try{if((await readFile(join('/sys/fs/cgroup',spec.old.controlGroup,'cgroup.procs'),'utf8')).trim())return null;}catch(e){if(e.code!=='ENOENT')throw e;}}
         return {oldExited:true,pid:spec.old.pid,start:spec.old.start};
       })??{oldExited:false,reason:`Process ${spec.old.pid} had not exited.`};
@@ -287,6 +292,13 @@ export function linuxDeployment(spec,{systemctl=async(...args)=>(await exec('sys
       return {healthy:Boolean(ok),proof:last?{source:last.source??null,ready:Boolean(last.ready),relayConnected:Boolean(last.relayConnected),siteReady:Boolean(last.siteReady)}:null};
     },
     // Whatever happened, the unit is left running (or queued to start).
+    // The unplanned process runs the previous release with the before-configs
+    // (prepareStart has not run). Reopen the writer this operation froze so it
+    // can serve; never stop it: it may already have admitted new work.
+    async yieldToUnplannedStart(){
+      for(const [i,f] of spec.files.entries())if(hash(await readFile(f.path))!==f.beforeSHA256)throw failure(`files[${i}].path is not the before-config; the unplanned process needs inspection.`);
+      rollbackWriter();
+    },
     async ensureRunning(){
       const u=await unit();
       if(Number(u.MainPID)>0||u.Job||u.ActiveState==='active')return;

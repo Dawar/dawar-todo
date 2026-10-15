@@ -130,3 +130,29 @@ test('a drain that never becomes idle expires before stop and names the busy cou
   assert.ok(!f.systemd.commands.some(c => c.startsWith('stop')));
   assert.equal((await f.probe.health(f.ports.healthPort)).maintenance.phase, 'open');
 });
+
+test('preflight refuses a backend unit that another unit pulls in (the front restart race)', { timeout: 60000 }, async t => {
+  const f = await installation(t);
+  f.systemd.reverse[UNIT] = { WantedBy: 'default.target dawar-portable-front.service' };
+  const error = await prepare(f).catch(e => e);
+  assert.ok(error instanceof PlanMismatch);
+  assert.match(error.message, /pulled in by WantedBy=dawar-portable-front\.service/);
+});
+
+test('an unplanned start after the old exit makes the controller yield and reopen the writer', { timeout: 90000 }, async t => {
+  const f = await installation(t);
+  const { plan } = await prepare(f);
+  // A dependency (e.g. restarting the front) queues a start of the backend
+  // behind the controller's stop job.
+  f.systemd.afterCommand = async args => { if (args[0] === 'stop' && args.includes(UNIT)) { f.systemd.afterCommand = null; await f.systemd.systemctl('start', UNIT); } };
+  const issued = f.systemd.commands.length;
+  const row = await deploy(f, plan);
+  assert.equal(row.outcome, 'yielded-to-unplanned-start', JSON.stringify(row.lastFailure) + f.log());
+  assert.equal(row.lastFailure.step, 'unplanned-start');
+  assert.match(row.lastFailure.message, /started by another job/);
+  assert.ok(!f.systemd.commands.slice(issued).some(c => c.startsWith('start --no-block')), 'the controller never started the target');
+  assert.deepEqual(plan.files.map(x => f.hash(x.path)), plan.files.map(x => x.beforeSHA256));
+  assert.deepEqual({ source: f.writer().source, phase: f.writer().phase }, { source: OLD, phase: 'open' });
+  const { until } = await import('./helpers/deploy-fixture.mjs');
+  await until(async () => (await f.probe.health(f.ports.healthPort).catch(() => ({}))).ready === true, 15000, f.log);
+});

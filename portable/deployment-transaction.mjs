@@ -6,7 +6,7 @@ import {privateDatabase} from './sqlite.mjs';
 
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const blocked = message => Object.assign(Error(message), { deploymentBlocked: true });
-export const phases = ['prepared','draining','backup-verified','stop-intent','old-process-exited','start-intent','healthy','rollback-intent','rolled-back','finalized'];
+export const phases = ['prepared','draining','backup-verified','stop-intent','old-process-exited','start-intent','healthy','rollback-intent','rolled-back','yielded','finalized'];
 const afterStop = phase => phases.indexOf(phase) >= phases.indexOf('stop-intent');
 const stamp = () => new Date().toISOString();
 const processStart = pid => { try { const text=readFileSync(`/proc/${pid}/stat`,'utf8'); return text.slice(text.lastIndexOf(')')+2).split(' ')[19]; } catch { return null; } };
@@ -96,6 +96,14 @@ export async function runDeployment(spec, adapter, { clock=Date.now, sleep=ms=>n
       }
       if(result.oldExited!==true)throw blocked('The original process did not exit after stop and one escalation; nothing else was started while it runs.');
       event('old-process-exited',{proof:result});
+      if(result.unplannedStart){
+        step='unplanned-start';
+        note(Object.assign(Error(`${spec.unitId} was started by another job (pid ${result.unplannedStart.pid}) before the controller's start; the deployment yielded and reopened the hub writer. Find what pulls the unit in (systemctl --user show -p WantedBy,RequiredBy,BoundBy) before retrying.`),{deploymentBlocked:true}));
+        try{await adapter.yieldToUnplannedStart(spec,row);}catch(error){note(error);}
+        event('yielded',{unplannedStart:result.unplannedStart});
+        save({...row,outcome:'yielded-to-unplanned-start'});
+        return row;
+      }
     }
     if(row.phase==='old-process-exited'){
       // prepareStart is reversible config/code staging. The old process must
@@ -134,7 +142,7 @@ export async function runDeployment(spec, adapter, { clock=Date.now, sleep=ms=>n
       save({version:1,operationId:spec.operationId,fingerprint,source:spec.source,phase:'prepared',
         createdAt:stamp(),deadline:clock()+spec.waitSeconds*1000,convergence,events:[{phase:'prepared',at:stamp(),controller:identity}]});
     }
-    if(['finalized','rolled-back'].includes(row.phase))return row;
+    if(['finalized','rolled-back','yielded'].includes(row.phase))return row;
     step='reconcile';
     const state=await adapter.reconcile(spec,row);
     if(state.newHealthy&&!row.events.some(e=>e.phase==='start-intent'))throw blocked('A new writer appeared without the original start intent.');

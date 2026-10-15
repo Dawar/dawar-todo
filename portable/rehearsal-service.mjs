@@ -31,17 +31,22 @@ const rehearsal = JSON.parse(readPrivate(join(dirname(configPath), 'rehearsal.js
 const manifest = JSON.parse(readFileSync(join(release, 'release-manifest.json'), 'utf8'));
 process.umask(0o077);
 
-const problems = [];
-try {
-  const activation = hubActivation(c);
-  const db = new DatabaseSync(join(c.dataDirectory, 'control.sqlite'), { readOnly: true });
+// The hub reads its writer row on every write, so readiness re-checks it.
+const writerProblems = () => {
+  const found = [];
   try {
-    const row = db.prepare('SELECT * FROM portable_async_admission WHERE id=1').get(), authority = db.prepare('SELECT * FROM portable_authority WHERE id=1').get();
-    if (row?.source !== c.hub.source) problems.push(`hub writer source is ${row?.source}, config is ${c.hub.source}`);
-    if (row?.phase !== 'open' || authority?.frozen !== 0) problems.push(`hub writer is ${row?.phase} frozen=${authority?.frozen}`);
-    if (authority?.writer_id !== activation?.writerId || authority?.epoch !== activation?.epoch) problems.push('hub writer differs from activation');
-  } finally { db.close(); }
-} catch (error) { problems.push(`hub activation: ${error.message}`); }
+    const activation = hubActivation(c);
+    const db = new DatabaseSync(join(c.dataDirectory, 'control.sqlite'), { readOnly: true });
+    try {
+      const row = db.prepare('SELECT * FROM portable_async_admission WHERE id=1').get(), authority = db.prepare('SELECT * FROM portable_authority WHERE id=1').get();
+      if (row?.source !== c.hub.source) found.push(`hub writer source is ${row?.source}, config is ${c.hub.source}`);
+      if (row?.phase !== 'open' || authority?.frozen !== 0) found.push(`hub writer is ${row?.phase} frozen=${authority?.frozen}`);
+      if (authority?.writer_id !== activation?.writerId || authority?.epoch !== activation?.epoch) found.push('hub writer differs from activation');
+    } finally { db.close(); }
+  } catch (error) { found.push(`hub activation: ${error.message}`); }
+  return found;
+};
+const problems = [];
 for (const entry of ['dist/portable/gateway.mjs', 'bot-bridge/portable-agent.mjs']) {
   const path = join(release, entry);
   if (!existsSync(path)) { if (entry.startsWith('dist/')) problems.push(`release lacks ${entry}`); continue; }
@@ -76,10 +81,11 @@ manager.listen(socketPath);
 
 const health = createServer((req, res) => {
   if (req.url !== '/healthz') return void res.writeHead(404).end();
-  const ready = problems.length === 0;
+  const current = [...problems, ...(runtime.maintenance.current ? [] : writerProblems())];
+  const ready = current.length === 0;
   res.writeHead(ready ? 200 : 503, { 'content-type': 'application/json', 'cache-control': 'no-store' });
   res.end(JSON.stringify({ ready, relayConnected: true, siteReady: true, source: c.hub.source, codexVersion: manifest.runtime, role: 'both', rehearsal: true,
-    models: rehearsal.models, maintenance: runtime.maintenance.snapshot(), problems }));
+    models: rehearsal.models, maintenance: runtime.maintenance.snapshot(), problems: current }));
 });
 health.listen(c.healthPort, '127.0.0.1');
 

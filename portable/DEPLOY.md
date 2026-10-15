@@ -28,7 +28,9 @@ node portable/deploy-cli.mjs launch   --plan <same plan>
    again and requires every plan field to match it. It also checks that each
    prepared file is exactly the live config with the release substituted. A
    stale writer source, a changed config, a different PID or a different model
-   list are each refused by field name. `deploy-cli.mjs preflight --plan …`
+   list are each refused by field name. A backend unit that another unit pulls in
+   (`Wants=`/`Requires=`/`BindsTo=` from e.g. the front) is refused, because
+   restarting that unit would start the backend outside the controller. `deploy-cli.mjs preflight --plan …`
    runs it on its own.
 3. **rehearse** copies the databases (SQLite online backup; production is only
    read) and the configs to `~/.cache/dawar-rehearsal/r-*`. It starts a
@@ -74,6 +76,8 @@ under `backup/` is there for a human decision.
 
 Outcomes: `healthy`, `rolled-back`, `rollback-unhealthy` (previous release
 started but not healthy in its window; systemd keeps it running),
+`yielded-to-unplanned-start` (another job started the unit after the old exit; the
+controller reopened the hub writer for that process and did not stop it),
 `expired-before-stop`, `blocked-before-stop`, and `reconciliation-required`
 (only if the old process survived stop and SIGKILL, or the controller itself
 failed).
@@ -108,3 +112,5 @@ that refuses shutdown) is also killed after `TimeoutStopSec`.
 The drain's `nativeRpc` count includes in-flight Claude backend requests.
 `ProviderRouter.pending` merges Codex and Claude calls, so per-thread work
 views see both.
+
+The hub/runner split is designed and staged in `SPLIT_HUB_RUNNER.md`.
