@@ -71,6 +71,10 @@ export class BotTimeline {
     reconciled.entries = chronologicalTurns(reconciled.entries);
     for (const [from, to] of reconciled.aliases) { this.aliases.set(from, to); this.identityAliases.set(from, to); }
     const kept = new Set(reconciled.entries.map((entry) => historyKey(entry.turnId, entry.id)));
+    // A displayed entry is its own identity. A reading fallback recorded while
+    // it was absent (a streamed answer starts empty) would otherwise resolve
+    // it to its neighbour, so a window ending at it would omit it.
+    for (const key of kept) { this.aliases.delete(key); this.identityAliases.delete(key); }
     const successors: (HistoryEntry | undefined)[] = new Array(entries.length);
     let next: HistoryEntry | undefined, previous: HistoryEntry | undefined;
     for (let index = entries.length - 1; index >= 0; index--) {
