@@ -1,5 +1,5 @@
 "use client";
-import { memo, useId, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { ChevronDown, LoaderCircle, Zap } from "lucide-react";
 import type { Bot, BotSnapshot, BotTeam } from "../../lib/bots-types";
 import { BotAvatar } from "./bot-avatar";
@@ -25,6 +25,35 @@ const SidebarRow = memo(function SidebarRow({ bot: b, selected, select, modelNam
       <span className="bots-row-config"><span className="bots-row-model" title={modelName}>{modelName}</span><span aria-hidden="true">·</span><span>{effort}</span>{team&&<span className="bots-row-team" style={{color:team.color}} title={team.name}><i/>{team.name}</span>}{fast && <span className="bots-row-fast" role="img" aria-label="Fast mode"><Zap size={12} /></span>}<small className="bots-row-time">{new Date(b.updatedAt).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}</small></span>
     </span>{working(b) ? <span className="bots-row-working" role="img" aria-label="Working"><LoaderCircle size={18} className="bots-spin" aria-hidden="true" /></span> : botStopped(b) && <StoppedMark />}{unread(b) && <span className="bots-unread" role="img" aria-label="Unread messages" />}
   </button>;
+});
+function rowSettings(b: Bot, snapshot: BotSnapshot | null, models: Map<string, string>) {
+  const defaults = snapshot ? providerDefaults(snapshot, b) : null;
+  const modelId = b.model ?? defaults?.model ?? "Default model", tier = botProvider(b) === "claude" ? null : b.serviceTier ?? defaults?.serviceTier;
+  return { modelName: models.get(modelId) ?? modelId, effort: b.effort ?? defaults?.effort ?? "default", fast: tier === "priority" || tier === "fast" };
+}
+/**
+ * Archived bots live in their own list under the sidebar, closed by default
+ * (remembered per device) and never part of search results.
+ */
+export const ArchivedBots = memo(function ArchivedBots({ owner, bots, snapshot, selected, select }: {
+  owner: string; bots: Bot[]; snapshot: BotSnapshot | null; selected: string | null; select: (id: string) => void;
+}) {
+  const key = `dawar-bots-archived-open:${owner}`;
+  const [open, setOpen] = useState(false);
+  useEffect(() => { try { setOpen(localStorage.getItem(key) === "1"); } catch { /* storage unavailable: stays closed */ } }, [key]);
+  const models = useMemo(() => new Map(snapshot?.models?.map(model => [model.model, model.displayName])), [snapshot?.models]);
+  if (!bots.length) return null;
+  return <details className="bots-archived" open={open} onToggle={event => {
+    const next = event.currentTarget.open; setOpen(next);
+    try { localStorage.setItem(key, next ? "1" : "0"); } catch { /* per-device convenience only */ }
+  }}>
+    <summary className="bots-team-heading" aria-label={`Archived bots, ${bots.length}`}>
+      <ChevronDown size={15} className={open ? "" : "is-collapsed"} aria-hidden="true" /><span>Archived</span><small>{bots.length}</small>
+    </summary>
+    {open && <div className="bots-archived-list">{bots.map(b => <div key={b.id} style={{ height: HEIGHT }}>
+      <SidebarRow {...rowSettings(b, snapshot, models)} bot={b} selected={b.id === selected} select={select} />
+    </div>)}</div>}
+  </details>;
 });
 type ListRow = { kind: "heading"; id: string; name: string; color?: string; count: number; offset: number; height: number } | { kind: "bot"; id: string; bot: Bot; offset: number; height: number };
 export type SidebarFocusIntent = { id: string; owner: string; origin: HTMLElement; top?: number };
@@ -106,11 +135,7 @@ export const BotSidebarList = memo(function BotSidebarList({ owner, search = '',
     <div style={{ height: visible[0]?.offset ?? 0 }} aria-hidden="true" />
     {visible.map(row => row.kind === "heading" ? <button key={`group:${row.id}`} type="button" data-team-id={row.id} className="bots-team-heading" style={{ height: row.height }} aria-expanded={searching || !collapsed.has(row.id)} aria-disabled={searching || undefined} aria-label={`${row.name}, ${row.count} ${row.count === 1 ? "bot" : "bots"}`} onClick={() => { if (!searching) store.toggle(row.id); }}>
       <ChevronDown size={15} className={!searching && collapsed.has(row.id) ? "is-collapsed" : ""} aria-hidden="true" /><span className="bots-team-dot" style={{ background: row.color ?? "var(--muted-foreground)" }} aria-hidden="true" /><span id={`${id}-${row.id}`}>{row.name}</span><small>{row.count}</small>
-    </button> : <div key={row.id} style={{ height: row.height }}>{(() => {
-      const b = row.bot, defaults = snapshot ? providerDefaults(snapshot, b) : null;
-      const modelId = b.model ?? defaults?.model ?? "Default model", tier = botProvider(b) === "claude" ? null : b.serviceTier ?? defaults?.serviceTier;
-      return <SidebarRow bot={b} selected={b.id === selected} select={select} modelName={models.get(modelId) ?? modelId} effort={b.effort ?? defaults?.effort ?? "default"} fast={tier === "priority" || tier === "fast"} />;
-    })()}</div>)}
+    </button> : <div key={row.id} style={{ height: row.height }}><SidebarRow {...rowSettings(row.bot, snapshot, models)} bot={row.bot} selected={row.bot.id === selected} select={select} /></div>)}
     <div style={{ height: Math.max(0, total - (visible.at(-1) ? visible.at(-1)!.offset + visible.at(-1)!.height : 0)) }} aria-hidden="true" />
     {!bots.length && <div className="bots-sidebar-empty" role="status">{empty}</div>}
     {preferences.error && <p className="bots-system-note" role="status">{preferences.error} <Button type="button" variant="outline" onClick={() => void store.sync()}>Retry</Button></p>}

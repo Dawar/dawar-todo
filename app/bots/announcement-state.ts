@@ -15,10 +15,10 @@ export function announcementGroups(bots: Bot[], teams: BotTeam[]) {
   return [...teams.map(team => ({ id: team.id, name: team.name, bots: bots.filter(bot => bot.teamId === team.id && announcementEligible(bot)) })),
     { id: '', name: 'Unassigned', bots: bots.filter(bot => (!bot.teamId || !known.has(bot.teamId)) && announcementEligible(bot)) }].filter(group => group.bots.length);
 }
-/** Search is additive; archived conversations remain discoverable by explicit search. */
+/** Active bots matching the search. Archived bots have their own list and never match. */
 export function searchSidebarBots(bots: Bot[], teams: BotTeam[], search: string) {
   const query = search.trim().toLocaleLowerCase(), names = new Map(teams.map(team => [team.id, team.name]));
-  return bots.filter(bot => !bot.deletedAt && (!bot.archived || Boolean(query)) &&
+  return bots.filter(bot => !bot.deletedAt && !bot.archived &&
     `${bot.name} ${bot.purpose} #${bot.extension ?? ''} ${names.get(bot.teamId ?? '') ?? ''}`.toLocaleLowerCase().includes(query));
 }
 export function freezeAnnouncement(owner: string, text: string, selected: string[], bots: Bot[], id: string): AnnouncementIntent {

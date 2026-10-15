@@ -56,7 +56,7 @@ import type {
 import { botsClient as client } from "./client";
 import type { NativeEvent } from "./thread-state";
 import { BotConversation } from "./timeline";
-import { BotSidebarList, type SidebarFocusIntent } from "./sidebar-list";
+import { ArchivedBots, BotSidebarList, type SidebarFocusIntent } from "./sidebar-list";
 import { FollowupComposerProvider } from "./codex-followup";
 import { SidebarFilters } from "./sidebar-filters";
 import { searchSidebarBots } from "./announcement-state";
@@ -471,6 +471,7 @@ export function BotsWorkspace() {
     void upload(images);
   }
   const filtered = useMemo(() => searchSidebarBots(bots, snapshot?.teams ?? [], search), [bots, search, snapshot?.teams]);
+  const archivedBots = useMemo(() => bots.filter(bot => bot.archived && !bot.deletedAt).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)), [bots]);
   const schedules = snapshot?.schedules.filter((s) => s.botId === selected) ?? [];
   const recentRuns = [...new Map([...(lanes ? snapshot?.backgroundRuns ?? [] : []), ...(snapshot?.runs ?? [])]
     .filter(run => run.botId === selected).map(run => [run.id, run])).values()];
@@ -510,6 +511,7 @@ export function BotsWorkspace() {
           }} />
           <BotSidebarList owner={owner} search={search} bots={filtered} snapshot={snapshot} selected={selected} select={select} navigate={navigateBot} focusIntent={sidebarFocus}
             empty={search ? "No matching bots." : "Your bots will appear here."} />
+          {!search.trim() && <ArchivedBots owner={owner} bots={archivedBots} snapshot={snapshot} selected={selected} select={select} />}
           <div className="bots-machine">
             <span className={`bots-status-dot ${online ? "online" : ""}`} />
             <span>

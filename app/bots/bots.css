@@ -76,6 +76,16 @@ html.bots-viewport-locked body {
   overflow-y: auto;
   padding: 0 8px;
 }
+/* Archived bots: a closed list under the main list with its own scroll. */
+.bots-archived {
+  flex: none;
+  padding: 0 8px;
+  border-top: 1px solid var(--border);
+}
+.bots-archived > summary { list-style: none; cursor: pointer; }
+.bots-archived > summary::-webkit-details-marker { display: none; }
+.bots-archived-list { max-height: 40vh; overflow-y: auto; }
+.bots-archived .bots-row { opacity: 0.8; }
 .bots-machine {
   padding: 16px 16px calc(16px + var(--bots-safe-bottom));
   font-size: 13px;
