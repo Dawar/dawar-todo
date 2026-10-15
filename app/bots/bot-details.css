@@ -64,4 +64,4 @@
 .bots-details-host.is-docked .bots-details-close { top: 10px; }
 .bots-layout.has-details-docked { grid-template-columns: 300px minmax(0, 1fr) clamp(300px, 26vw, 420px); }
 @media (max-width: 1180px) { .bots-layout.has-details-docked { grid-template-columns: 300px minmax(0, 1fr) 300px; } }
-@media (max-width: 1180px) { .bots-details-host.is-docked .bots-details-nav > button { flex-basis: 52px; font-size: 12px; } }
+.bots-details-nav > button { flex: 1 0 auto; padding-inline: 8px; }
