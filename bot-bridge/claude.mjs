@@ -706,8 +706,44 @@ export class ClaudeBackend extends EventEmitter {
     const request = this.requests.get(id);
     request?.finish(request.refuse(String(message ?? "Declined.")));
   }
-  forkPrivateReview() { return Promise.reject(definite("Claude bots do not support private reviews yet.")); }
-  startPrivateReviewTurn() { return Promise.reject(definite("Claude bots do not support private reviews yet.")); }
+  /**
+   * One private initiative job: a standalone SDK query with no session file,
+   * no built-in or MCP tools, and schema-validated JSON output. It is not a
+   * loaded session, writes no ClaudeStore turn and emits no notification, so
+   * it never reaches chat, unread, notifications or idle proofs.
+   * Resolves { output, usage }; rejects on failure or abort (`signal`).
+   */
+  async privateRun({ model = null, effort = null, prompt, schema, instructions, cwd, signal = null }) {
+    if (!this.ready) throw definite("Claude is not ready.");
+    const input = new InputQueue(), abortController = new AbortController();
+    const onAbort = () => abortController.abort();
+    signal?.addEventListener("abort", onAbort, { once: true });
+    const q = this.query({ prompt: input, options: { ...this.sdkOptions(), cwd, ...(model ? { model } : {}), ...(EFFORTS.includes(effort) ? { effort } : {}),
+      persistSession: false, settingSources: [], tools: [], allowedTools: [], mcpServers: {}, maxTurns: 3, systemPrompt: instructions,
+      outputFormat: { type: "json_schema", schema }, env: this.env(), abortController,
+      // Only the SDK's own structured-output step may run; everything else is refused.
+      canUseTool: async (toolName, toolInput) => toolName === "StructuredOutput" ? { behavior: "allow", updatedInput: toolInput }
+        : { behavior: "deny", message: "This private review has no tools." } } });
+    input.push({ type: "user", message: { role: "user", content: [{ type: "text", text: prompt }] }, parent_tool_use_id: null, uuid: randomUUID(), session_id: "" });
+    let outcome = null, toolUse = false;
+    try {
+      for await (const message of q) {
+        if (signal?.aborted) throw definite("The private review was cancelled.");
+        if (message.type === "assistant" && message.message?.content?.some((part) => part.type === "tool_use" && part.name !== "StructuredOutput")) toolUse = true;
+        if (message.type === "result") { outcome = message; break; }
+      }
+    } finally {
+      signal?.removeEventListener("abort", onAbort);
+      input.end();
+      q.close?.();
+    }
+    if (signal?.aborted) throw definite("The private review was cancelled.");
+    if (toolUse) throw Object.assign(new Error("Tool-free violation: the private review attempted a tool."), { invalid: true });
+    if (!outcome) throw new Error("The private review ended without a result.");
+    const usage = turnUsage(outcome);
+    if (outcome.subtype !== "success" || outcome.is_error) throw Object.assign(new Error(`Private review ${outcome.subtype ?? "failed"}.`), { usage });
+    return { output: outcome.structured_output ?? outcome.result, usage };
+  }
   close(threadId) {
     if (threadId !== undefined) return this.closeSession(threadId);
     for (const id of [...this.sessions.keys()]) this.closeSession(id);

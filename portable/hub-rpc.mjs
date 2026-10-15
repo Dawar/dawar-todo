@@ -92,7 +92,7 @@ export class HubRpc {
   // and never cached: review output and publication text stay private.
   nodeCall(owner,botId,method,params={},timeoutMs=20000){
     const p=this.store.placement(owner,botId),ws=this.connection(p);
-    if(!ws||ws.portableHello?.capabilities?.privateReviews!==true)return Promise.reject(Object.assign(Error('The assigned node does not support private reviews or is offline.'),{outcome:'not-sent',unsupported:!!ws}));
+    if(!ws||ws.portableHello?.capabilities?.privateReviews!==2)return Promise.reject(Object.assign(Error('The assigned node does not support private reviews or is offline.'),{outcome:'not-sent',unsupported:!!ws}));
     const rpcId=`rpc:${randomUUID()}`;
     const promise=new Promise((resolve,reject)=>{
       const timer=setTimeout(()=>{this.reads.delete(rpcId);reject(Object.assign(Error('Private review node call timed out.'),{outcome:'uncertain'}));},timeoutMs);

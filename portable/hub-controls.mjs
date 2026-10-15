@@ -188,6 +188,16 @@ export class HubControls extends EventEmitter {
       this.store.saveOperation(operationId,binding,'done',{method,botId,params,caller,result:{},localOnly:'portable-hub-initiative',createdAt:now()});
       return this.initiative.status(b.id);
     }
+    if(method==='initiative.thread'){
+      // Owner action on one loose thread from Settings: dismiss, snooze or resolve.
+      if(!this.initiative)throw Object.assign(Error('Proactive initiative is unavailable on this hub.'),{outcome:'rejected'});
+      if(caller.kind!=='owner'||!id(operationId))throw Object.assign(Error('Loose-thread actions belong to the authenticated owner.'),{outcome:'rejected'});
+      this.assertWriter();const binding=fingerprint({owner,method,botId,params}),prior=this.store.operation(operationId);
+      if(prior){if(prior.fingerprint!==binding)throw Error('Original loose-thread operation changed.');return this.initiative.status(b.id);}
+      try{this.initiative.threadAction(params.itemId,params.action,{until:params.until??null});}catch(error){error.outcome='rejected';throw error;}
+      this.store.saveOperation(operationId,binding,'done',{method,botId,params,caller,result:{},localOnly:'portable-hub-initiative',createdAt:now()});
+      return this.initiative.status(b.id);
+    }
     if(method==='bursts.typing'){
       if(caller.kind!=='owner')throw Error('Typing belongs to the authenticated owner browser.');
       this.assertWriter();return this.bursts.typing(b,params);

@@ -80,8 +80,14 @@ export class ProviderRouter extends EventEmitter {
   }
   respond(id, result) { return (isClaudeId(id) ? this.claude : this.codex).respond(id, result); }
   reject(id, message) { return (isClaudeId(id) ? this.claude : this.codex).reject(id, message); }
-  forkPrivateReview(params) { return this.backend("thread/fork", params).forkPrivateReview(params); }
-  startPrivateReviewTurn(params) { return this.backend("turn/start", params).startPrivateReviewTurn(params); }
+  // Private initiative jobs: a Codex ephemeral thread, or a standalone Claude query.
+  startPrivateThread(params) { return this.codex.startPrivateThread(params); }
+  startPrivateReviewTurn(params) { return this.codex.startPrivateReviewTurn(params); }
+  privateRun(params) {
+    if (!this.claude?.ready) return Promise.reject(Object.assign(new Error("Claude bots are not enabled on this machine."), { definite: true }));
+    const { provider, ...rest } = params;
+    return this.claude.privateRun(rest);
+  }
   close() {
     this.claude?.close();
     this.codex.close();

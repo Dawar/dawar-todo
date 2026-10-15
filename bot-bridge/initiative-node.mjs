@@ -1,25 +1,44 @@
+import { mkdir } from "node:fs/promises";
+import { join } from "node:path";
 import { botProvider } from "./provider-router.mjs";
 import { REVIEW_OUTPUT_SCHEMA } from "./initiative-ledger.mjs";
+import { buildReviewPacket } from "./initiative-packet.mjs";
+import { readOwnerMessages, extractionPrompt, validateExtraction, EXTRACTION_OUTPUT_SCHEMA, EXTRACTION_INSTRUCTIONS } from "./initiative-mentions.mjs";
 
 // Node side of the proactive initiative. The hub coordinator decides WHEN a
-// bot is reviewed and WHAT is published; this executor owns the native work:
-// a disposable read-only fork of the idle main conversation, and the later
-// injection of a finished assistant message without starting a main turn.
+// bot is reviewed and WHAT is published; this executor owns the native work.
 //
-// Private review threads are never bot threads, so the runtime's ordinary
-// routing already drops their events from chat, typing, unread and
-// notifications. This class claims them first, only to collect the result
-// and to refuse every tool or approval the fork asks for.
+// Two kinds of private job, the same for Codex and Claude bots:
+//   extract — read Dawar's new messages since a cursor and turn them into
+//             loose threads (small model);
+//   review  — judge a bounded packet of bridge-owned data and maybe propose.
+// Each runs once, tool-free and read-only, in a fresh disposable session on
+// the bot's own provider: Codex an ephemeral thread/start + one turn with an
+// outputSchema and no MCP or dynamic tools; Claude an Agent SDK query with
+// persistSession false, no tools and schema-validated JSON. The bot's main
+// conversation is never forked, read into the model whole, or written to.
+//
+// A Codex job thread is never a bot thread, so ordinary routing would drop
+// its events from chat, typing, unread and notifications anyway; this class
+// claims them first to collect the result and refuse every request. While it
+// runs (at most the time bound) it counts as a loaded active thread for
+// restart-maintenance idle proofs, which then wait for it. A Claude job has
+// no thread at all: no ClaudeStore turn, notification or loaded session.
+//
+// Publication is a bridge projection, not a native write: the confirmed
+// message appears live, in reconnect history and in preview/unread, and the
+// bot is told about its own proposal in the next turn's context.
 
 export const INITIATIVE_NODE_METHODS = new Set(["initiative.node.probe", "initiative.node.start", "initiative.node.poll",
   "initiative.node.cancel", "initiative.node.publish", "initiative.node.reconcile"]);
 const ID = /^[a-zA-Z0-9:_-]{8,180}$/;
 const TERMINAL = new Set(["completed", "failed", "cancelled", "interrupted", "invalid"]);
+// Native items that would be tool use: a tool-free job aborts on any of them.
+const TOOL_ITEMS = new Set(["mcpToolCall", "fileChange", "commandExecution", "dynamicToolCall", "webSearch", "collabAgentToolCall", "imageGeneration"]);
+const DELIVERY = "initiativeDelivery";
 const now = () => new Date().toISOString();
 const disabledServer = { command: process.execPath, args: [], enabled: false };
-// Read-only enforcement for external tools: every MCP server the bridge
-// configures is disabled in the fork. Native dynamic tools and approval
-// requests are refused below; an MCP call that still starts aborts the review.
+// Every MCP server the bridge configures is disabled in a Codex job thread.
 export const PRIVATE_REVIEW_CONFIG = Object.freeze({
   "features.fast_mode": false,
   "features.multi_agent": false,
@@ -28,47 +47,55 @@ export const PRIVATE_REVIEW_CONFIG = Object.freeze({
   "mcp_servers.linux_computer_use": disabledServer,
   "mcp_servers.bot_desktop_linus": disabledServer,
 });
-const REVIEW_INSTRUCTIONS = `This is a private, read-only initiative review of your own conversation. Nothing you write here is shown to anyone.
-You cannot send messages, change tasks, queue work, modify files or act on external systems; those tools are disabled and attempts are refused.
-Bounded read-only investigation (reading files, read-only commands, searching) is allowed when it grounds a proposal.
-Answer with the requested JSON only.`;
+export const REVIEW_INSTRUCTIONS = `This is a private initiative review for one of Dawar's persistent bots. Nothing you write here is shown to anyone; only a validated proposal may later be sent, as that bot's ordinary message.
+You have no tools: you cannot send messages, change tasks, read files or act on external systems. Judge only the packet below. Answer with the requested JSON only.`;
 
-export function reviewPrompt(brief) {
+export function reviewPrompt(brief, packet) {
   return `${REVIEW_INSTRUCTIONS}
 
-# Your role and Dawar's priorities
-${brief.role || "(Use your existing role from this conversation.)"}
-${brief.priorities ? `\nOwner priorities:\n${brief.priorities}` : ""}
-
-# Your initiative ledger (existing follow-ups and opportunities across bots)
-${brief.ledger.length ? JSON.stringify(brief.ledger, null, 1) : "(empty)"}
+${packet}
 
 # Review
-Ask yourself:
-1. What existing work or decision needs attention?
-2. What changed in the relevant systems or environment?
-3. What worthwhile opportunity could advance Dawar's priorities?
-4. What concrete proposal or update would help now?
+First, loose threads — things Dawar mentioned that never reached anything conclusive:
+1. What did Dawar mention in the last hours or days that has not led to anything conclusive? (See "Loose threads"; "due": true marks ones whose time to come back has arrived.)
+2. Which one is most valuable or time-sensitive to raise now?
+3. What is the concrete next step to propose: create a todo, draft a message, schedule it, research it, or drop it?
+If the recent conversation shows a loose thread was concluded (todo created, decision made, message sent, meeting scheduled, artifact delivered, or Dawar said done/dropped), mark it "resolved" in ledger_updates with the evidence in note.
 
-There is no quota. Choose "publish" only for one concrete, grounded contribution that is useful now: it must name the opportunity, its supporting evidence, expected value, a clearly labelled effort estimate and a useful first step. Substantial research, implementation and external actions start only after Dawar approves.
-Reuse an existing ledger item_id/key when your contribution concerns the same underlying opportunity, even if another bot owns it. Do not repeat an item that is awaiting Dawar's reply, snoozed or dismissed unless circumstances materially changed (then set changed_circumstances true).
-Write "message" as the finished, ordinary message you would send Dawar in this conversation, in your normal voice. Use ledger_updates to track candidates you are still considering, and mark items "resolved" when the work is evidently done.`;
+Then, other initiative:
+4. What existing work or decision needs attention?
+5. What worthwhile opportunity could advance Dawar's priorities?
+
+There is no quota. Choose "publish" only for one concrete, grounded contribution that is useful now, with its evidence, expected value, a clearly labelled effort estimate and a useful first step. Prefer a due loose thread over a new opportunity.
+For a loose thread use kind "loose-thread", its item_id and key, and a proposed_action; the bridge itself opens the message with Dawar's original words and when he said them, so write "message" as what follows: why it matters now and what you suggest, in your normal voice, without repeating the quote. Never invent a loose thread; only Dawar's own mentions create them.
+Reuse an existing item_id/key when your contribution concerns the same underlying thing, even if another bot owns it. Do not repeat an item that is awaiting Dawar's reply, snoozed or dismissed unless circumstances materially changed (then set changed_circumstances true).
+Substantial research, implementation and external actions start only after Dawar approves.`;
+}
+
+/** Normalized usage across providers: { totalTokens, inputTokens, cachedInputTokens, outputTokens, costUsd }. */
+export function normalizeUsage(usage) {
+  if (!usage) return null;
+  if ("totalTokens" in usage) return { totalTokens: usage.totalTokens ?? 0, inputTokens: usage.inputTokens ?? 0, cachedInputTokens: usage.cachedInputTokens ?? 0,
+    outputTokens: usage.outputTokens ?? 0, costUsd: null };
+  const input = (usage.inputTokens ?? 0) + (usage.cacheReadTokens ?? 0) + (usage.cacheCreationTokens ?? 0);
+  return { totalTokens: input + (usage.outputTokens ?? 0), inputTokens: input, cachedInputTokens: usage.cacheReadTokens ?? 0,
+    outputTokens: usage.outputTokens ?? 0, costUsd: usage.costUsd ?? null };
 }
 
 export class PrivateReviews {
   constructor(runtime, { clock = Date.now } = {}) {
     Object.assign(this, { runtime, store: runtime.store, clock });
-    this.byThread = new Map(); // forkThreadId -> reviewId
+    this.byThread = new Map(); // Codex job threadId -> reviewId
+    this.aborts = new Map();   // Claude job reviewId -> AbortController
     this.timers = new Map();
-    // A process restart ends every native fork it owned; nothing is replayed.
+    // A process restart ends every job it owned; nothing is replayed.
     for (const r of this.store.list("privateReview")) if (!TERMINAL.has(r.state))
       this.store.put("privateReview", { ...r, state: "interrupted", error: "The bridge restarted during the private review.", finishedAt: now() });
-    for (const p of this.store.list("initiativeInjection")) if (p.state === "injecting")
-      this.store.put("initiativeInjection", { ...p, state: "uncertain", error: "The bridge restarted during injection." });
   }
+  get codex() { return this.runtime.codex; }
   supported(bot) {
-    // Claude bots have no native fork or injection yet: gated explicitly.
-    return botProvider(bot) === "codex" && typeof this.runtime.codex.forkPrivateReview === "function";
+    return botProvider(bot) === "claude" ? typeof this.codex.privateRun === "function" && this.codex.claudeReady !== false
+      : typeof this.codex.startPrivateThread === "function";
   }
   handle(method, botId, params = {}) {
     if (!INITIATIVE_NODE_METHODS.has(method)) throw Error("Unsupported private review method.");
@@ -95,17 +122,16 @@ export class PrivateReviews {
     if (!locked && r.locks.has(bot.id)) return { idle: false, reason: "busy" };
     if (this.active(bot.id)) return { idle: false, reason: "review-active" };
     if (r.memoryMaintenance && !r.memoryMaintenance.idle(bot)) return { idle: false, reason: "not-idle" };
-    if (r.store.list("initiativeInjection", bot.id).some(p => ["injecting", "uncertain"].includes(p.state))) return { idle: false, reason: "publication-uncertain" };
     return { idle: true, reason: null };
   }
-  /** Native current-state proof plus a revision of the visible conversation. */
+  /** Native current-state proof plus a revision of the visible conversation (both providers). */
   async nativeState(bot) {
-    const { thread } = await this.runtime.codex.call("thread/read", { threadId: bot.threadId, includeTurns: false });
+    const { thread } = await this.codex.call("thread/read", { threadId: bot.threadId, includeTurns: false });
     if (thread?.id !== bot.threadId) throw Error("Native conversation identity changed.");
-    const page = await this.runtime.codex.call("thread/turns/list", { threadId: bot.threadId, cursor: null, limit: 1, sortDirection: "desc", itemsView: "notLoaded" });
+    const page = await this.codex.call("thread/turns/list", { threadId: bot.threadId, cursor: null, limit: 1, sortDirection: "desc", itemsView: "notLoaded" });
     const last = Array.isArray(page?.data) ? page.data[0] ?? null : null;
-    const queue = await this.runtime.codex.call("thread/queue/list", { threadId: bot.threadId, cursor: null, limit: 1 });
-    const goal = await this.runtime.codex.call("thread/goal/get", { threadId: bot.threadId }).catch(() => ({ goal: null }));
+    const queue = await this.codex.call("thread/queue/list", { threadId: bot.threadId, cursor: null, limit: 1 });
+    const goal = await this.codex.call("thread/goal/get", { threadId: bot.threadId }).catch(() => ({ goal: null }));
     const generation = this.store.get("botActivity", bot.id)?.generation ?? 0;
     return { status: thread.status?.type ?? null, lastTurnId: last?.id ?? null, lastTurnStatus: last?.status ?? null,
       queued: Boolean(queue?.data?.length || queue?.nextCursor), goalActive: goal?.goal?.status === "active",
@@ -119,38 +145,43 @@ export class PrivateReviews {
     return { ...base, idle, reason: idle ? null : local.reason ?? "native-busy", revision: state.revision, lastTurnId: state.lastTurnId };
   }
 
-  // ---- private review ---------------------------------------------------------
-  async start(bot, { reviewId, brief, settings = {}, expectedRevision } = {}) {
+  // ---- private jobs -----------------------------------------------------------
+  async start(bot, { reviewId, kind = "review", brief, settings = {}, expectedRevision, cursor = null } = {}) {
     if (!ID.test(reviewId ?? "")) throw Error("A stable review identity is required.");
+    if (!["review", "extract"].includes(kind)) throw Error("Unknown private job kind.");
     const prior = this.store.get("privateReview", reviewId);
     if (prior) { if (prior.botId !== bot.id) throw Error("Review belongs to another bot."); return this.view(prior); }
     if (!brief || typeof brief !== "object" || !Array.isArray(brief.ledger)) throw Error("A review brief is required.");
     // The bot's ordinary admission lock is held only for the admission check
-    // and fork creation, never for the review: user input is not delayed.
+    // and job creation, never for the run: user input is not delayed.
     return this.runtime.lock(bot.id, async () => {
       const local = this.localIdle(this.store.bot(bot.id), { locked: true });
       if (!local.idle) return { id: reviewId, state: "refused", reason: local.reason };
       const state = await this.nativeState(bot);
-      if (state.revision !== expectedRevision || !["idle", "notLoaded"].includes(state.status) || state.queued || state.goalActive)
+      if (!["idle", "notLoaded"].includes(state.status) || state.queued || state.goalActive || kind === "review" && state.revision !== expectedRevision)
         return { id: reviewId, state: "refused", reason: "revision-changed" };
-      const record = { id: reviewId, botId: bot.id, threadId: bot.threadId, state: "starting", revision: state.revision,
+      const record = { id: reviewId, botId: bot.id, threadId: bot.threadId, kind, provider: botProvider(bot), state: "starting", revision: state.revision,
         baseTurnId: state.lastTurnId, startedAt: now(), deadlineAt: new Date(this.clock() + (settings.timeoutSeconds ?? 180) * 1000).toISOString() };
       this.store.put("privateReview", record);
       try {
-        const fork = await this.runtime.codex.forkPrivateReview({ threadId: bot.threadId, ...(state.lastTurnId ? { lastTurnId: state.lastTurnId } : {}),
-          model: settings.model ?? null, cwd: bot.cwd ?? null, excludeTurns: true, deferGoalContinuation: true, config: PRIVATE_REVIEW_CONFIG,
-          ...(settings.fast ? {} : { serviceTier: null }) });
-        const forkThreadId = fork?.thread?.id;
-        if (typeof forkThreadId !== "string" || forkThreadId === bot.threadId) throw Error("Native fork did not return a distinct private thread.");
-        this.byThread.set(forkThreadId, reviewId);
-        this.store.put("privateReview", { ...this.store.get("privateReview", reviewId), forkThreadId, state: "running" });
-        // User activity may have arrived while the fork was created.
-        if (this.store.get("privateReview", reviewId).state !== "running") return this.view(this.store.get("privateReview", reviewId));
-        const turn = await this.runtime.codex.startPrivateReviewTurn({ threadId: forkThreadId, input: [{ type: "text", text: reviewPrompt(brief), text_elements: [] }],
-          outputSchema: REVIEW_OUTPUT_SCHEMA, ...(settings.model ? { model: settings.model } : {}), ...(settings.effort ? { effort: settings.effort } : {}) });
-        const current = this.store.get("privateReview", reviewId);
-        this.store.put("privateReview", { ...current, turnId: turn?.turn?.id ?? current.turnId ?? null });
-        if (current.state !== "running") await this.interrupt(this.store.get("privateReview", reviewId));
+        let prompt, schema, instructions;
+        if (kind === "extract") {
+          const batch = await readOwnerMessages(this.runtime, bot, cursor, { limit: settings.batch ?? 40, chars: settings.chars ?? 24000,
+            lookbackMs: (settings.lookbackHours ?? 72) * 36e5, clock: this.clock });
+          this.store.put("privateReview", { ...this.store.get("privateReview", reviewId), batch, cursor: batch.cursor, more: batch.more, knownItems: brief.ledger.map(t => t.id) });
+          // Nothing new from Dawar: advance the cursor without a model call.
+          if (!batch.messages.length && !(batch.actions.length && brief.ledger.length))
+            return this.view(await this.finish(reviewId, "completed", { output: { mentions: [], resolutions: [] }, usage: null, skippedModel: true }));
+          prompt = extractionPrompt({ bot, messages: batch.messages, actions: batch.actions, threads: brief.ledger, bots: brief.bots ?? [] });
+          schema = EXTRACTION_OUTPUT_SCHEMA; instructions = EXTRACTION_INSTRUCTIONS;
+        } else {
+          const packet = await buildReviewPacket(this.runtime, bot, brief, { maxTokens: settings.packetTokens ?? 12000 });
+          this.store.put("privateReview", { ...this.store.get("privateReview", reviewId), packetTokens: packet.tokens, packetSections: packet.sections });
+          prompt = reviewPrompt(brief, packet.text); schema = REVIEW_OUTPUT_SCHEMA; instructions = REVIEW_INSTRUCTIONS;
+        }
+        const model = settings.model || bot.model || null, effort = settings.effort ?? null;
+        if (botProvider(bot) === "claude") this.runClaude(bot, reviewId, { model, effort, prompt, schema, instructions });
+        else await this.runCodex(bot, reviewId, { model, effort, fast: settings.fast === true, prompt, schema, instructions });
         const timer = setTimeout(() => void this.cancel(this.store.bot(bot.id), reviewId, "The private review exceeded its time bound.", "failed").catch(() => {}),
           Math.max(1000, Date.parse(record.deadlineAt) - this.clock()));
         timer.unref?.(); this.timers.set(reviewId, timer);
@@ -160,9 +191,45 @@ export class PrivateReviews {
       return this.view(this.store.get("privateReview", reviewId));
     });
   }
+  async privateDirectory() {
+    const dir = join(this.runtime.root ?? process.cwd(), ".initiative-private");
+    await mkdir(dir, { recursive: true, mode: 0o700 });
+    return dir;
+  }
+  /** Codex: ephemeral read-only thread, one structured turn, no tools. */
+  async runCodex(bot, reviewId, { model, effort, fast, prompt, schema, instructions }) {
+    const started = await this.codex.startPrivateThread({ cwd: await this.privateDirectory(), ...(model ? { model } : {}), config: PRIVATE_REVIEW_CONFIG,
+      developerInstructions: instructions, ...(fast ? {} : { serviceTier: null }) });
+    const threadId = started?.thread?.id;
+    if (typeof threadId !== "string" || threadId === bot.threadId) throw Error("Codex did not return a distinct private thread.");
+    this.byThread.set(threadId, reviewId);
+    this.store.put("privateReview", { ...this.store.get("privateReview", reviewId), jobThreadId: threadId, state: "running" });
+    const turn = await this.codex.startPrivateReviewTurn({ threadId, input: [{ type: "text", text: prompt, text_elements: [] }], outputSchema: schema,
+      ...(model ? { model } : {}), ...(effort ? { effort } : {}) });
+    const current = this.store.get("privateReview", reviewId);
+    this.store.put("privateReview", { ...current, turnId: turn?.turn?.id ?? current.turnId ?? null });
+    if (current.state !== "running") await this.interrupt(this.store.get("privateReview", reviewId));
+  }
+  /** Claude: a standalone SDK query (no session file, no tools), settled in the background. */
+  runClaude(bot, reviewId, { model, effort, prompt, schema, instructions }) {
+    const abort = new AbortController();
+    this.aborts.set(reviewId, abort);
+    this.store.put("privateReview", { ...this.store.get("privateReview", reviewId), state: "running" });
+    void this.privateDirectory().then(cwd => this.codex.privateRun({ provider: "claude", model, effort, prompt, schema, instructions, cwd, signal: abort.signal }))
+      .then(({ output, usage }) => this.finish(reviewId, "completed", { output, usage: normalizeUsage(usage) }),
+        error => this.finish(reviewId, abort.signal.aborted ? "cancelled" : error.invalid ? "invalid" : "failed", { error: error.message }))
+      .catch(error => this.runtime.emit?.("fault", error));
+  }
   view(r) {
-    return { id: r.id, botId: r.botId, state: r.state, reason: r.reason ?? null, revision: r.revision, startedAt: r.startedAt,
-      finishedAt: r.finishedAt ?? null, error: r.error ?? null, output: TERMINAL.has(r.state) ? r.output ?? null : null, usage: r.usage ?? null };
+    let output = TERMINAL.has(r.state) ? r.output ?? null : null, state = r.state, error = r.error ?? null;
+    // Extraction is validated here, against the exact batch it came from.
+    if (r.kind === "extract" && state === "completed") {
+      try { output = { extraction: validateExtraction(r.output, r.batch ?? { messages: [], actions: [] }, { clock: this.clock(), knownItems: new Set(r.knownItems ?? []) }) }; }
+      catch (e) { output = null; state = "invalid"; error = e.message; }
+    }
+    return { id: r.id, botId: r.botId, kind: r.kind ?? "review", state, reason: r.reason ?? null, revision: r.revision, startedAt: r.startedAt,
+      finishedAt: r.finishedAt ?? null, error, output, usage: r.usage ?? null, packetTokens: r.packetTokens ?? null,
+      ...(r.kind === "extract" ? { cursor: r.cursor ?? null, more: r.more === true, messages: r.batch?.messages?.length ?? 0 } : {}) };
   }
   poll(bot, reviewId) {
     const r = this.store.get("privateReview", String(reviewId ?? ""));
@@ -170,12 +237,14 @@ export class PrivateReviews {
     return this.view(r);
   }
   async interrupt(r) {
-    if (r?.forkThreadId && r.turnId) await this.runtime.codex.call("turn/interrupt", { threadId: r.forkThreadId, turnId: r.turnId }, 15000).catch(() => {});
+    if (r?.jobThreadId && r.turnId) await this.codex.call("turn/interrupt", { threadId: r.jobThreadId, turnId: r.turnId }, 15000).catch(() => {});
+    this.aborts.get(r?.id)?.abort();
   }
   async release(r) {
-    if (!r?.forkThreadId) return;
-    this.byThread.delete(r.forkThreadId);
-    await this.runtime.codex.call("thread/unsubscribe", { threadId: r.forkThreadId }, 15000).catch(() => {});
+    this.aborts.delete(r?.id);
+    if (!r?.jobThreadId) return;
+    this.byThread.delete(r.jobThreadId);
+    await this.codex.call("thread/unsubscribe", { threadId: r.jobThreadId }, 15000).catch(() => {});
   }
   async finish(reviewId, state, fields = {}) {
     const r = this.store.get("privateReview", reviewId);
@@ -192,117 +261,112 @@ export class PrivateReviews {
     if (!r || r.botId !== bot.id) return { id: reviewId, state: "missing" };
     return this.view(await this.finish(r.id, state, { error: reason }) ?? r);
   }
-  /** User activity always wins: cancel without touching the main conversation. */
+  /** User activity always wins over a review; extraction of past messages may finish. */
   userActivity(botId) {
     const r = this.active(botId);
-    if (r) void this.finish(r.id, "cancelled", { error: "Cancelled by user activity." }).catch(error => this.runtime.emit?.("fault", error));
+    if (r && (r.kind ?? "review") === "review") void this.finish(r.id, "cancelled", { error: "Cancelled by user activity." }).catch(error => this.runtime.emit?.("fault", error));
   }
 
-  // ---- hidden fork routing ------------------------------------------------------
+  // ---- hidden Codex job routing ---------------------------------------------------
   reviewFor(threadId) {
     const id = typeof threadId === "string" ? this.byThread.get(threadId) : null;
     return id ? this.store.get("privateReview", id) : null;
   }
-  /** Returns true when the notification belongs to a private review. */
+  /** Returns true when the notification belongs to a private job. */
   notification(message) {
     const p = message.params ?? {}, r = this.reviewFor(p.threadId ?? p.thread?.id);
     if (!r) return false;
-    if (message.method === "item/started" && ["mcpToolCall", "fileChange"].includes(p.item?.type)) {
-      void this.finish(r.id, "invalid", { error: `Read-only violation: ${p.item.type} attempted.` });
+    if (message.method === "item/started" && TOOL_ITEMS.has(p.item?.type)) {
+      void this.finish(r.id, "invalid", { error: `Tool-free violation: ${p.item.type} attempted.` });
       return true;
     }
     if (message.method === "item/completed" && p.item?.type === "agentMessage" && typeof p.item.text === "string")
       this.store.put("privateReview", { ...this.store.get("privateReview", r.id), output: p.item.text.slice(0, 64 * 1024) });
     if (message.method === "thread/tokenUsage/updated" && p.tokenUsage?.total)
-      this.store.put("privateReview", { ...this.store.get("privateReview", r.id), usage: p.tokenUsage.total });
+      this.store.put("privateReview", { ...this.store.get("privateReview", r.id), usage: normalizeUsage(p.tokenUsage.total) });
     if (message.method === "turn/completed") {
       const status = p.turn?.status;
       void this.finish(r.id, status === "completed" ? "completed" : "failed", status === "completed" ? {} : { error: p.turn?.error?.message ?? `Review turn ${status}.` });
     }
     return true;
   }
-  /** Every server request from a private review is refused: no tools, no approvals. */
+  /** Every server request from a private job is refused: no tools, no approvals. */
   request(message) {
     const r = this.reviewFor(message.params?.threadId ?? message.params?.conversationId);
     if (!r) return false;
     if (message.method === "item/tool/call")
-      this.runtime.codex.respond(message.id, { success: false, contentItems: [{ type: "inputText", text: "This private review is read-only; tools are unavailable." }] });
-    else this.runtime.codex.reject(message.id, "This private review is read-only; approvals and input requests are refused.");
+      this.codex.respond(message.id, { success: false, contentItems: [{ type: "inputText", text: "This private review has no tools." }] });
+    else this.codex.reject(message.id, "This private review is read-only; approvals and input requests are refused.");
     return true;
   }
 
-  // ---- publication --------------------------------------------------------------
+  // ---- publication ----------------------------------------------------------------
   /**
-   * Inject one finished assistant message into the main conversation without a
-   * model turn. Idempotent by publicationId; ambiguous outcomes stay
-   * uncertain until reconciled against native history.
+   * Deliver one finished proposal as the bot's ordinary message, by bridge
+   * projection only (no native write, no model turn). Idempotent by
+   * publicationId; serialized with the bot's admission lock, so a reconcile
+   * after an ambiguous RPC sees the final answer.
    */
-  async publish(bot, { publicationId, text, expectedRevision }) {
+  async publish(bot, { publicationId, text, expectedRevision, itemId = null }) {
     if (!ID.test(publicationId ?? "") || typeof text !== "string" || !text.trim() || text.length > 8000) throw Error("Invalid publication.");
-    const prior = this.store.get("initiativeInjection", publicationId);
+    const prior = this.store.get(DELIVERY, publicationId);
     if (prior) {
       if (prior.botId !== bot.id || prior.text !== text) throw Error("Publication identity was reused with different content.");
-      // Only a reconciled absence may be attempted again.
-      if (prior.state !== "absent") return this.injectionView(prior);
+      return this.deliveryView(prior);
     }
     return this.runtime.lock(bot.id, async () => {
-      const current = this.store.get("initiativeInjection", publicationId);
-      if (current && current.state !== "absent") return this.injectionView(current);
+      const current = this.store.get(DELIVERY, publicationId);
+      if (current) return this.deliveryView(current);
       const local = this.localIdle(this.store.bot(bot.id), { locked: true });
       if (!local.idle) return { id: publicationId, state: "refused", reason: local.reason };
       const state = await this.nativeState(bot);
       if (state.revision !== expectedRevision || !["idle", "notLoaded"].includes(state.status) || state.queued || state.goalActive)
         return { id: publicationId, state: "refused", reason: "revision-changed" };
-      const record = { id: publicationId, botId: bot.id, threadId: bot.threadId, text, anchorTurnId: state.lastTurnId, state: "injecting", attemptedAt: now() };
-      this.store.put("initiativeInjection", record);
-      try {
-        await this.runtime.load?.(bot);
-        await this.runtime.codex.call("thread/inject_items", { threadId: bot.threadId,
-          items: [{ type: "message", role: "assistant", content: [{ type: "output_text", text }] }] }, 30000);
-      } catch (error) {
-        const definite = error.definite === true;
-        this.store.put("initiativeInjection", { ...record, state: definite ? "rejected" : "uncertain", error: error.message });
-        return this.injectionView(this.store.get("initiativeInjection", publicationId));
-      }
-      return this.injectionView(this.project(this.store.get("initiativeInjection", publicationId)));
+      if (!state.lastTurnId) return { id: publicationId, state: "refused", reason: "empty-conversation" };
+      const at = now(), record = { id: publicationId, botId: bot.id, threadId: bot.threadId, itemId: typeof itemId === "string" ? itemId : null, text,
+        anchorTurnId: state.lastTurnId, state: "delivered", deliveredAt: at, contextDeliveredAt: null };
+      this.store.put(DELIVERY, record);
+      this.project(record);
+      return this.deliveryView(record);
     });
   }
   /** Confirmed publication becomes visible: live chat, reconnect history, unread. */
   project(record) {
-    const at = now(), next = { ...record, state: "injected", injectedAt: record.injectedAt ?? at };
-    this.store.put("initiativeInjection", next);
     const bot = this.store.bot(record.botId);
-    if (next.anchorTurnId) this.runtime.emitEvent?.("codex", { method: "item/completed", params: { threadId: bot.threadId, turnId: next.anchorTurnId,
-      item: initiativeItem(next) } }, bot.id);
-    this.runtime.saveBot?.(this.store.bot(bot.id), { preview: next.text.slice(0, 160), updatedAt: at });
-    this.runtime.notify?.(bot, `initiative:${next.id}`, `${bot.name ?? "A bot"} has a proposal for you.`);
-    return next;
+    this.runtime.emitEvent?.("codex", { method: "item/completed", params: { threadId: bot.threadId, turnId: record.anchorTurnId, item: initiativeItem(record) } }, bot.id);
+    this.runtime.saveBot?.(this.store.bot(bot.id), { preview: record.text.slice(0, 160), updatedAt: record.deliveredAt });
+    this.runtime.notify?.(bot, `initiative:${record.id}`, `${bot.name ?? "A bot"} has a proposal for you.`);
   }
-  injectionView(r) { return { id: r.id, state: r.state, reason: r.reason ?? null, error: r.error ?? null, injectedAt: r.injectedAt ?? null, anchorTurnId: r.anchorTurnId ?? null }; }
-  /** Settle an ambiguous injection against native history before any retry. */
-  async reconcile(bot, publicationId) {
-    const r = this.store.get("initiativeInjection", String(publicationId ?? ""));
-    if (!r || r.botId !== bot.id) return { id: publicationId, state: "missing" };
-    if (r.state !== "uncertain") return this.injectionView(r);
-    let cursor = null;
-    for (let page = 0; page < 3; page++) {
-      const turns = await this.runtime.codex.call("thread/turns/list", { threadId: bot.threadId, cursor, limit: 10, sortDirection: "desc", itemsView: "full" });
-      for (const turn of turns?.data ?? []) for (const item of turn.items ?? [])
-        if (item.type === "agentMessage" && item.text?.trim() === r.text.trim()) return this.injectionView(this.project({ ...r, nativeTurnId: turn.id }));
-      if (!turns?.nextCursor) break;
-      cursor = turns.nextCursor;
-    }
-    // Native history does not contain the message. Only once the original call
-    // can no longer complete is it safe to report "not injected" for a retry.
-    const settled = this.clock() - Date.parse(r.attemptedAt) > 120000;
-    if (!settled) return this.injectionView(r);
-    this.store.put("initiativeInjection", { ...r, state: "absent", reconciledAt: now() });
-    return this.injectionView(this.store.get("initiativeInjection", r.id));
+  deliveryView(r) { return { id: r.id, state: r.state, reason: r.reason ?? null, error: r.error ?? null, deliveredAt: r.deliveredAt ?? null, anchorTurnId: r.anchorTurnId ?? null }; }
+  /** Settle an ambiguous publish RPC: the local record is the whole truth. */
+  reconcile(bot, publicationId) {
+    return this.runtime.lock(bot.id, async () => {
+      const r = this.store.get(DELIVERY, String(publicationId ?? ""));
+      if (r && r.botId !== bot.id) return { id: publicationId, state: "missing" };
+      return r ? this.deliveryView(r) : { id: publicationId, state: "absent" };
+    });
   }
   /** Projected rows for reconnect history, anchored after their native turn. */
   projected(botId, turnId) {
-    return this.store.db.prepare(`SELECT json FROM records WHERE kind='initiativeInjection' AND bot_id=? AND json_extract(json,'$.anchorTurnId')=?
-      AND json_extract(json,'$.state')='injected' LIMIT 10`).all(botId, turnId).map(row => initiativeItem(JSON.parse(row.json)));
+    return this.store.db.prepare(`SELECT json FROM records WHERE kind='${DELIVERY}' AND bot_id=? AND json_extract(json,'$.anchorTurnId')=?
+      AND json_extract(json,'$.state')='delivered' LIMIT 10`).all(botId, turnId).map(row => initiativeItem(JSON.parse(row.json)));
+  }
+
+  // ---- next-turn awareness ------------------------------------------------------------
+  /** Proposals the bot's model has not yet been told about, in this conversation. */
+  unseen(bot) {
+    return this.store.list(DELIVERY, bot.id).filter(r => r.state === "delivered" && !r.contextDeliveredAt && r.threadId === bot.threadId)
+      .sort((a, b) => a.deliveredAt.localeCompare(b.deliveredAt)).slice(-5);
+  }
+  markSeen(ids) {
+    const at = now();
+    for (const id of ids) { const r = this.store.get(DELIVERY, id); if (r && !r.contextDeliveredAt) this.store.put(DELIVERY, { ...r, contextDeliveredAt: at }); }
   }
 }
 export const initiativeItem = r => ({ type: "agentMessage", id: `initiative:${r.id}`, text: r.text, phase: "final_answer", memoryCitation: null, delivery: null, questions: null });
+
+/** Context the next turn carries so the bot knows what "it" sent while idle. */
+export function proposalContext(records) {
+  return records.map(r => `At ${r.deliveredAt}, while you were idle, the bridge sent Dawar this proposal in this conversation as your message${r.itemId ? ` (initiative item ${r.itemId})` : ""}:\n<<<\n${r.text}\n>>>`).join("\n\n")
+    + `\n\nIt is part of this conversation even though you did not write it in a turn. Dawar's message may answer it; when he decides (yes, later, leave it, done), record that with bots_initiative operation=record and the item id, then follow your normal path for approved work.`;
+}
