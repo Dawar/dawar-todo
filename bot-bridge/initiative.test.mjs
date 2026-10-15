@@ -565,6 +565,8 @@ test("Settings lists open loose threads with source and age, and dismiss/snooze/
   assert.equal(status.metrics.extractionTokens, 1200);
   assert.ok(status.metrics.extractions >= 1);
   assert.equal(status.bot.supported, true);
+  assert.deepEqual(status.bots.map(b => [b.botId, b.name, b.included]), [["atlas", "Atlas", true]], "every bot's state for the global status table");
+  assert.ok(status.bots[0].lastReviewAt);
   const snoozed = coordinator.threadAction(row.id, "snooze", { until: new Date(clock.t + 864e5).toISOString() });
   assert.equal(snoozed.status, "snoozed");
   assert.equal(coordinator.threadAction(row.id, "resolve").status, "resolved");
