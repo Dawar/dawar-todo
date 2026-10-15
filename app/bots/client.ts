@@ -740,7 +740,10 @@ export class BotsClient {
       else merged = applySnapshotEvent(merged, event, key);
     }
     const prior = new Map(this.snapshot?.bots.map(bot => [bot.id, bot]));
-    this.snapshot = { ...merged, bots: merged.bots.map(bot => preserveReadPosition(bot, prior.get(bot.id))), cursor: Math.max(snapshot.cursor, this.latestSnapshotEvent) };
+    // A hub snapshot taken while no node answers has no catalog or defaults;
+    // keep the last known ones rather than blanking the composer.
+    const catalog = { models: merged.models ?? this.snapshot?.models ?? [], defaults: merged.defaults ?? this.snapshot?.defaults };
+    this.snapshot = { ...merged, ...catalog, bots: merged.bots.map(bot => preserveReadPosition(bot, prior.get(bot.id))), cursor: Math.max(snapshot.cursor, this.latestSnapshotEvent) };
     this.snapshotGeneration++;
     this.online = snapshot.ready;
     if (this.online)
