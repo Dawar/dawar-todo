@@ -6,9 +6,10 @@ import React from 'react';
 import { createRoot } from 'react-dom/client';
 import { botsClient as client } from '../../app/bots/client';
 import { BotsWorkspace } from '../../app/bots/workspace';
+import { getBotTimeline } from '../../app/bots/use-timeline';
 
 const params = new URLSearchParams(location.search);
-const owner = 'synthetic-chapters-owner';
+const owner = params.get('owner') ?? 'synthetic-chapters-owner';
 const bots = [['A', 'Cody'], ['B', 'Dwight']].map(([id, name]) => ({ id, name, purpose: 'Codex UI steward', slug: id, cwd: '/synthetic', threadId: `thread-${id}`, color: '#216e4e', status: 'idle', archived: false,
   model: null, effort: null, mode: 'default', preview: '', updatedAt: '2026-10-14T00:00:00Z', lastReadAt: '2026-10-14T00:00:00Z', activeTurnId: null }));
 client.start = () => {};
@@ -20,7 +21,9 @@ const answer = (n, text) => ({ id: `turn-${n}`, status: 'completed', startedAt: 
   { id: `user-${n}`, type: 'userMessage', clientId: `c-${n}`, content: [{ type: 'text', text: n === 1 ? 'Can you plan the chapters sidebar?' : n === 2 ? 'Show me the diff for the panel.' : 'Run the focused tests.', text_elements: [] }] },
   { id: `answer-${n}`, type: 'agentMessage', text, phase: 'final_answer' },
 ] });
-const turns = [
+const filler = n => Array.from({ length: 6 }, (_, i) => `Paragraph ${i + 1} of answer ${n}. ` + 'Steady detail about the change and its checks. '.repeat(4)).join('\n\n');
+const extra = params.has('long') ? Array.from({ length: Number(params.get('long')) || 10 }, (_, i) => answer(10 + i, `## Answer ${10 + i}\n\n${filler(10 + i)}`)) : [];
+const turns = [...extra,
   answer(1, '## Decision: dock the details panel\n\nOn wide desktops the panel stays open beside the chat. Navigation is the default tab.\n\n```ts\nexport const DOCKED_DETAILS_QUERY = "(min-width: 1000px)";\nexport function useDockedDetails() {\n  return useSyncExternalStore(subscribeDock, matches, () => false);\n}\n```'),
   answer(2, 'Here is the change to the layout grid:\n\n```diff\n--- a/app/bots/bot-details.css\n+++ b/app/bots/bot-details.css\n@@ -64,1 +64,2 @@\n-.bots-details { width: min(500px, 100%); }\n+.bots-layout.has-details-docked { grid-template-columns: 300px minmax(0, 1fr) clamp(300px, 26vw, 420px); }\n+.bots-details-host.is-docked { border-left: 1px solid var(--border); }\n```'),
   { id: 'turn-3', status: 'inProgress', startedAt: 1760482000, itemsView: 'full', items: [
@@ -54,7 +57,38 @@ try { localStorage.setItem(`dawar-bots:${owner}:details-docked:v1`, params.has('
 history.replaceState({}, '', `/harness?bot=A&${params.toString()}`);
 createRoot(document.getElementById('root')).render(<BotsWorkspace />);
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-window.harness = { sends };
+let seq = 0;
+const live = (method, params) => client.receive({ type: 'event', event: { type: 'codex', botId: 'A', seq: ++seq, data: { method, params: { threadId: 'thread-A', ...params } } } });
+window.harness = { sends,
+  entries: () => getBotTimeline(owner, 'A').getSnapshot().entries.slice(-6).map(e => [e.turnId, e.id, e.type, e.status, e.itemStatus, e.messageAt, e.startedAt, e.item?.type === 'agentMessage' ? e.item.text.length : null]),
+  // One live native turn arriving after the conversation has loaded.
+  append(n, text = `## Live answer ${n}\n\n${filler(n)}`) {
+    const turnId = `live-${n}`, startedAt = 1770000000 + n * 60;
+    live('turn/started', { turnId, turn: { id: turnId, status: 'inProgress', startedAt, items: [], itemsView: 'full' } });
+    live('item/completed', { turnId, item: { id: `live-user-${n}`, type: 'userMessage', clientId: `live-c-${n}`, content: [{ type: 'text', text: `Live question ${n}`, text_elements: [] }] } });
+    const answerItem = { id: `live-answer-${n}`, type: 'agentMessage', text, phase: 'final_answer' };
+    live('item/completed', { turnId, item: answerItem });
+    live('turn/completed', { turnId, turn: { id: turnId, status: 'completed', startedAt, completedAt: startedAt + 30, items: [answerItem], itemsView: 'summary' } });
+  },
+  // Streamed: started, deltas, completed. Returns a function per phase.
+  stream(n) {
+    const turnId = `live-${n}`, startedAt = 1770000000 + n * 60, id = `live-answer-${n}`, text = `## Live answer ${n}\n\n${filler(n)}`;
+    const parts = text.match(/[\s\S]{1,120}/g);
+    return {
+      start() {
+        live('turn/started', { turnId, turn: { id: turnId, status: 'inProgress', startedAt, items: [], itemsView: 'full' } });
+        live('item/completed', { turnId, item: { id: `live-user-${n}`, type: 'userMessage', clientId: `live-c-${n}`, content: [{ type: 'text', text: `Live question ${n}`, text_elements: [] }] } });
+        live('item/started', { turnId, item: { id, type: 'agentMessage', text: '', phase: 'final_answer' } });
+      },
+      delta(i) { if (parts[i]) live('item/agentMessage/delta', { turnId, itemId: id, delta: parts[i] }); return i + 1 < parts.length; },
+      finish() {
+        const item = { id, type: 'agentMessage', text, phase: 'final_answer' };
+        live('item/completed', { turnId, item });
+        live('turn/completed', { turnId, turn: { id: turnId, status: 'completed', startedAt, completedAt: startedAt + 30, items: [item], itemsView: 'summary' } });
+      },
+    };
+  },
+};
 (async () => {
   for (let i = 0; i < 200 && !document.querySelector('.bots-native-entry'); i++) await wait(20);
   if (params.has('expand')) document.querySelectorAll('.bots-native-work > summary, .bots-tool > summary').forEach(node => node.click());
