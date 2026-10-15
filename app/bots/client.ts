@@ -40,6 +40,9 @@ type Session = {
 };
 // These reads carry no mutation or delivery receipt. A dead connection cannot
 // satisfy them; release callers so the visible conversation can read afresh.
+// First answer deadline, then one bounded re-probe before replacement.
+const FOREGROUND_PROBE_DEADLINES = [3000, 7000];
+const SLOW_CONNECTION_NOTICE = "Connection is slow. Checking…";
 const connectionReads = new Set(["snapshot", "events", "history", "history.view", "history.page", "history.turn", "history.log", "history.detail", "history.attachments"]);
 function validComposerResult(method: string, result: Record<string, unknown> | undefined) {
   const identified = (value: unknown) => Boolean(value && typeof value === "object" && typeof (value as { id?: unknown }).id === "string");
@@ -387,6 +390,7 @@ export class BotsClient {
         this.lastSocketMessageAt = Date.now();
         if (this.probeTimer) clearTimeout(this.probeTimer);
         this.probeTimer = undefined;
+        if (this.error === SLOW_CONNECTION_NOTICE) { this.error = ""; this.notify(); }
         if (data === "pong") return;
         try {
           this.receive(JSON.parse(data));
@@ -457,13 +461,27 @@ export class BotsClient {
     }
     try {
       socket.send("ping");
-      if (foreground && !this.probeTimer) this.probeTimer = setTimeout(() => {
-        this.probeTimer = undefined;
-        if (this.socket !== socket || this.stopped) return;
-        this.online = false; this.resetConnectionTransfers(); this.notify();
-        socket.close(); this.reconnectForeground();
-      }, 3000);
+      if (foreground && !this.probeTimer) this.armForegroundProbe(socket, 0);
     } catch { socket.close(); if (foreground) this.reconnectForeground(); }
+  }
+  /** Returning to the app probes the socket. A busy gateway can take longer
+   * than the first deadline to answer (measured multi-second stalls), so the
+   * first miss only reports a slow check and probes again; a socket that
+   * stays silent through the bounded second deadline is replaced. In-flight
+   * reads and the established socket survive a merely slow answer. */
+  private armForegroundProbe(socket: WebSocket, stage: number) {
+    this.probeTimer = setTimeout(() => {
+      this.probeTimer = undefined;
+      if (this.socket !== socket || this.stopped || socket.readyState !== WebSocket.OPEN) return;
+      if (stage < FOREGROUND_PROBE_DEADLINES.length - 1) {
+        this.error = SLOW_CONNECTION_NOTICE; this.notify();
+        try { socket.send("ping"); } catch { socket.close(); this.reconnectForeground(); return; }
+        this.armForegroundProbe(socket, stage + 1);
+        return;
+      }
+      this.online = false; this.error = "Connection lost. Reconnecting…"; this.resetConnectionTransfers(); this.notify();
+      socket.close(); this.reconnectForeground();
+    }, FOREGROUND_PROBE_DEADLINES[stage]);
   }
   private reconnectForeground() {
     // A suspended ticket fetch is not a live connection. Keep a recent

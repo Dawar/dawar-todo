@@ -39,9 +39,21 @@ export function orderedHistory(old: HistoryEntry[], incoming: HistoryEntry[], pr
   });
   return [...result, ...pending, ...tail];
 }
-/** Repair cached placement using recorded timing. Unknown-time rows retain
- * their native slots; equal timestamps retain native order. Never sort by ID,
- * message type, text, or the arrival of a history-page response. */
+/** Native Codex turn IDs are UUIDv7: the leading 48 bits are the native turn
+ * start in milliseconds. This is a native fact (it equals the recorded
+ * started_at), available even when a live turn/started event was missed. */
+export function nativeTurnStartMs(turnId: string): number | null {
+  const match = /^([0-9a-f]{8})-([0-9a-f]{4})-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.exec(turnId);
+  if (!match) return null;
+  const ms = parseInt(match[1] + match[2], 16);
+  return Number.isSafeInteger(ms) && ms > 0 ? ms : null;
+}
+/** Repair cached placement using native timing: the turn's UUIDv7 start, else
+ * its recorded start. Unknown-time turns retain their slots; equal times keep
+ * native order. Within a turn, native item starts order native-timed rows;
+ * received times (a different, non-native clock) are used only when no row of
+ * that turn has a native item start. Never sort by text, type, or the arrival
+ * of a history-page response. */
 export function chronologicalTurns(entries: HistoryEntry[]) {
   const groups = new Map<string, HistoryEntry[]>();
   for (const entry of entries) {
@@ -49,14 +61,17 @@ export function chronologicalTurns(entries: HistoryEntry[]) {
     group.push(entry); groups.set(entry.turnId, group);
   }
   const blocks = [...groups.values()];
-  const start = (block: HistoryEntry[]) => block.find(entry => typeof entry.startedAt === 'number' && Number.isFinite(entry.startedAt))?.startedAt;
-  const known = blocks.filter(block => start(block) !== undefined).sort((a, b) => start(a)! - start(b)!);
+  const start = (block: HistoryEntry[]) => nativeTurnStartMs(block[0].turnId) ??
+    (block.find(entry => typeof entry.startedAt === 'number' && Number.isFinite(entry.startedAt))?.startedAt ?? NaN) * 1000;
+  const known = blocks.filter(block => Number.isFinite(start(block))).sort((a, b) => start(a) - start(b));
   let index = 0;
   return blocks.flatMap(block => {
-    const turn = start(block) === undefined ? block : known[index++];
+    const turn = Number.isFinite(start(block)) ? known[index++] : block;
+    const native = (entry: HistoryEntry) => typeof entry.itemStartedAtMs === 'number' && Number.isFinite(entry.itemStartedAtMs);
+    const nativeTimed = turn.some(native);
     const at = (entry: HistoryEntry): number | null => {
-      if (typeof entry.itemStartedAtMs === 'number' && Number.isFinite(entry.itemStartedAtMs)) return entry.itemStartedAtMs;
-      if (entry.timeBasis === 'received' && typeof entry.messageAt === 'number' && Number.isFinite(entry.messageAt)) return entry.messageAt * 1000;
+      if (native(entry)) return entry.itemStartedAtMs!;
+      if (!nativeTimed && entry.timeBasis === 'received' && typeof entry.messageAt === 'number' && Number.isFinite(entry.messageAt)) return entry.messageAt * 1000;
       return null;
     };
     const timed = turn.filter(entry => at(entry) !== null).sort((a, b) => at(a)! - at(b)!);
