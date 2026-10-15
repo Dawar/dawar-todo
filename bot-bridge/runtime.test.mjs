@@ -14,7 +14,7 @@ const liveRuntimes = new Set();
 class BotRuntime extends ProductionBotRuntime {
   constructor(...args) { super(...args); liveRuntimes.add(this); }
 }
-import { nativeWaiting, requireCurrentActivity, beginTurnDispatch, captureActivity, projectCurrentActive } from "./turn-state.mjs";
+import { nativeWaiting, pendingQuestions, requireCurrentActivity, beginTurnDispatch, captureActivity, projectCurrentActive } from "./turn-state.mjs";
 import { recoverCurrentActivities } from "./current-activity.mjs";
 import { slugify, cleanName, PROFILE_FILES } from "./profiles.mjs";
 import { readTeam } from "./teams.mjs";
@@ -1262,7 +1262,10 @@ test("waiting recovery keeps exact async and blocking questions separate from un
   const asyncKey = "async:old-question";
   store.put("pending", { id: asyncKey, botId: bot.id, async: true, request: { params: { threadId: bot.threadId, turnId: "prior-turn", isBlocking: false } } });
   store.put("pending", { id: "foreign-question", botId: bot.id, async: true, request: { params: { threadId: "other-thread", turnId: "other-turn", isBlocking: false } } });
-  assert.equal(runtime.primary.work(store.bot(bot.id)).state, "needs-input", "retained async question outlives its turn");
+  // The retained question stays visible, but a nonblocking question from a
+  // finished turn no longer holds automatic work (Oct 14 freeze audit: Doc).
+  assert.deepEqual(pendingQuestions(runtime, bot.id).map(p => p.id), [asyncKey], "retained async question outlives its turn");
+  assert.equal(runtime.primary.work(store.bot(bot.id)).state, "unconfirmed", "a nonblocking old question is not needs-input");
   runtime.answers.finish({ id: asyncKey, key: asyncKey, botId: bot.id, state: "accepted" });
   assert.equal(store.bot(bot.id).status, "interrupted", "answer settlement cannot invent confirmed running from retained turn ID");
   assert.equal(runtime.primary.work(store.bot(bot.id)).state, "unconfirmed", "foreign-thread question cannot count as current input");
