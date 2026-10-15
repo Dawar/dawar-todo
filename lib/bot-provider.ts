@@ -12,9 +12,13 @@ export function providerModels(snapshot: BotSnapshot, bot: Pick<Bot, "provider">
   return (snapshot.models ?? []).filter(model => ((model as CatalogModel).provider === "claude") === claude);
 }
 
+// While the bot service restarts the hub can answer with no reachable node, so
+// the snapshot carries neither `models` nor `defaults`.
+const UNKNOWN_DEFAULTS: BotSnapshot["defaults"] = { model: "", effort: null, serviceTier: "default" };
+
 /** Defaults a bot falls back to; Claude has no Fast/service tier. */
 export function providerDefaults(snapshot: BotSnapshot, bot: Pick<Bot, "provider">): BotSnapshot["defaults"] {
   return botProvider(bot) === "claude"
     ? { model: snapshot.claudeDefaults?.model ?? "opus", effort: snapshot.claudeDefaults?.effort ?? "high", serviceTier: "default" }
-    : snapshot.defaults;
+    : snapshot.defaults ?? UNKNOWN_DEFAULTS;
 }

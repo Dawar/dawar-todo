@@ -68,7 +68,11 @@ export async function installation(t, { targetHealthy = true, activatingMs = 0, 
   history.exec('CREATE TABLE thread_turns(thread_id TEXT NOT NULL, turn_id TEXT NOT NULL, rollout_ordinal INTEGER NOT NULL, status TEXT NOT NULL, PRIMARY KEY(thread_id, turn_id))');
   for (const [i, turn] of nativeTurns.entries()) history.prepare('INSERT INTO thread_turns VALUES(?,?,?,?)').run(turn.threadId, turn.turnId, i, turn.status);
   history.close();
-  const ports = { gatewayPort: await freePort(), sitePort: await freePort(), healthPort: await freePort(), runnerHealthPort: await freePort() };
+  // Each freePort() closes its probe socket, so the OS can hand out the same
+  // port twice; the plan then (rightly) refuses colliding ports.
+  const picked = new Set();
+  const distinctPort = async () => { for (;;) { const port = await freePort(); if (!picked.has(port)) { picked.add(port); return port; } } };
+  const ports = { gatewayPort: await distinctPort(), sitePort: await distinctPort(), healthPort: await distinctPort(), runnerHealthPort: await distinctPort() };
   const { runnerHealthPort, ...hubPorts } = ports;
   const hubConfig = join(configDir, 'hub.json'), agentConfig = join(configDir, 'agent.json');
   const split = topology === 'split';

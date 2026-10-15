@@ -1,11 +1,12 @@
 'use client';
-import { lazy, Suspense, useEffect, useState, type ReactNode } from 'react';
+import { Suspense, useEffect, useState, type ReactNode } from 'react';
+import { retryingLazy } from '../lib/retrying-lazy';
 import { usePathname } from 'next/navigation';
 import { taskRequestRoute } from './task-request-route';
 import { PortableSessionBoundary } from './portable-session-boundary';
 import { ScreenLoading } from './screen-feedback';
 import { SignedOut } from './signed-out';
-const Guest = lazy(() => import('./task-request/page'));
+const Guest = retryingLazy(() => import('./task-request/page'));
 export function PublicRouteBoundary({ children }: {
     children: ReactNode;
 }) {

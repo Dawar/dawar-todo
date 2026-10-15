@@ -17,7 +17,7 @@ function quiet(t) {
   return reasons;
 }
 
-function agentFixture({ control = () => ({}), slowPing = null } = {}) {
+function agentFixture({ control = () => ({}), slowPing = null, hangOpen = () => false } = {}) {
   const frames = [], written = [];
   const socket = { readyState: 1, bufferedAmount: 0, send: value => frames.push(JSON.parse(value)) };
   const runtime = {
@@ -26,6 +26,7 @@ function agentFixture({ control = () => ({}), slowPing = null } = {}) {
     desktops: {
       assertBot() {},
       async message(m, send) {
+        if (m.event === 'open' && hangOpen(m)) await new Promise(() => {});
         if (m.event === 'open') send({ type: 'desktop', event: 'ready', clientId: m.clientId, password: 'p' });
         if (m.event === 'ping' && slowPing) await slowPing;
         if (m.event === 'data') written.push(m.data);
@@ -39,6 +40,7 @@ function agentFixture({ control = () => ({}), slowPing = null } = {}) {
   let chain = Promise.resolve(), nodeClosed = false;
   const deliver = m => {
     chain = chain.then(() => { void transport.message(socket, { clientId, botId, epoch: 1, ...m })?.catch(() => {}); }).catch(() => { nodeClosed = true; });
+    return chain;
   };
   return { transport, frames, written, deliver, nodeClosed: () => nodeClosed };
 }
@@ -197,4 +199,20 @@ test('oversized memory awaiting recovery does not block an ordinary send', async
   assert.match(context.botProfile.value, new RegExp(join(bot.cwd, 'MEMORY.md').replaceAll('/', '\\/')));
   assert.doesNotMatch(context.botProfile.value, /fact\nfact\nfact/, 'the oversized body is not inlined');
   assert.equal(states.at(-1).state, 'blocked', 'memory status still reports the pending recovery');
+});
+
+test('a viewer closed while its open is still pending does not let a later open close the shared node connection', async t => {
+  quiet(t);
+  const viewer = i => `11111111-1111-4111-8111-${String(i).padStart(12, '0')}`;
+  const f = agentFixture({ hangOpen: m => m.clientId === viewer(0) });
+  // Viewer 0 is closed while its desktop connect is still running: the hub forgets it, the node retires it.
+  f.deliver({ clientId: viewer(0), event: 'open', parentId, token });
+  f.deliver({ clientId: viewer(0), event: 'close' });
+  await settle();
+  // The hub admits up to 8 live viewers.
+  for (let i = 1; i <= 8; i++) f.deliver({ clientId: viewer(i), event: 'open', parentId, token });
+  await settle();
+  assert.equal(f.nodeClosed(), false);
+  const refused = f.frames.filter(frame => frame.event === 'closed' && frame.clientId === viewer(8));
+  assert.equal(refused.length, 1, 'the viewer over the cap is refused on its own');
 });

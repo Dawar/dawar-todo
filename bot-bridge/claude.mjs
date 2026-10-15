@@ -143,9 +143,9 @@ async function sdkContent(input = [], additionalContext = {}) {
 export class ClaudeBackend extends EventEmitter {
   constructor({ store = null, query = null, mcp = null, executable = null, executableSHA256 = null, credential = process.env.CLAUDE_CODE_OAUTH_TOKEN ?? process.env.ANTHROPIC_API_KEY,
     configDir = process.env.BOTS_CLAUDE_CONFIG_DIR ?? join(process.env.BOTS_STATE_DIR ?? join(homedir(), ".local/share/dawar-todo-bots"), "claude"),
-    now = Date.now } = {}) {
+    now = Date.now, interruptGraceMs = INTERRUPT_GRACE_MS } = {}) {
     super();
-    Object.assign(this, { credential, configDir, now, query, mcp, executable, executableSHA256 });
+    Object.assign(this, { credential, configDir, now, query, mcp, executable, executableSHA256, interruptGraceMs });
     // Open server requests (questions, bridge tool calls) by request ID.
     this.requests = new Map();
     // MCP launch config per thread. It carries the manager's process-lifetime
@@ -189,9 +189,12 @@ export class ClaudeBackend extends EventEmitter {
   }
   sdkOptions() { return this.executable !== null ? { pathToClaudeCodeExecutable: this.executable } : {}; }
   env() {
-    const env = { ...process.env, CLAUDE_CONFIG_DIR: this.configDir };
+    // Claude bots run tools with full access, so the service's own secrets
+    // (BOTS_MACHINE_SECRET, storage and notification secrets, other API keys)
+    // must not reach their shells. Same names Codex's default shell policy drops.
+    const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/KEY|SECRET|TOKEN/i.test(name)));
+    env.CLAUDE_CONFIG_DIR = this.configDir;
     // Only the configured credential reaches the child, never both kinds.
-    delete env.ANTHROPIC_API_KEY; delete env.CLAUDE_CODE_OAUTH_TOKEN;
     env[this.credential === process.env.ANTHROPIC_API_KEY && !process.env.CLAUDE_CODE_OAUTH_TOKEN ? "ANTHROPIC_API_KEY" : "CLAUDE_CODE_OAUTH_TOKEN"] = this.credential;
     return env;
   }
@@ -374,7 +377,8 @@ export class ClaudeBackend extends EventEmitter {
   async pump(session) {
     let failure = null;
     try {
-      for await (const message of session.query) this.handle(session, message);
+      // A closed session's late output must not land in a later turn.
+      for await (const message of session.query) { if (session.closed) break; this.handle(session, message); }
     } catch (error) {
       failure = error;
     }
@@ -589,6 +593,9 @@ export class ClaudeBackend extends EventEmitter {
         await session.query.setPermissionMode?.(mode);
         session.permissionMode = mode;
       }
+      // The SDK child can die during the awaits above; its input queue then
+      // accepts the prompt silently and no turn would ever complete.
+      if (session.closed) throw definite("The Claude session ended before this turn started. Nothing was sent.");
       const turn = new ClaudeTurn({ threadId: record.id, turnId: randomUUID(), cwd: record.cwd, now: this.now });
       session.turn = turn;
       session.pending = new Set([uuid]);
@@ -691,8 +698,13 @@ export class ClaudeBackend extends EventEmitter {
     if (!session?.turn || (params.turnId && session.turn.id !== params.turnId)) return {};
     session.interrupted = true;
     clearTimeout(session.interruptTimer);
-    // If the SDK never reports the interrupted result, settle the turn anyway.
-    session.interruptTimer = setTimeout(() => this.complete(session, "interrupted", null), INTERRUPT_GRACE_MS);
+    // If the SDK never reports the interrupted result, close the SDK session:
+    // only marking the turn interrupted would leave the run working with
+    // every tool allowed and its output landing in the next turn.
+    session.interruptTimer = setTimeout(() => {
+      if (session.turn && this.sessions.get(session.threadId) === session) this.closeSession(session.threadId);
+      else this.complete(session, "interrupted", null);
+    }, this.interruptGraceMs);
     session.interruptTimer.unref?.();
     await session.query.interrupt?.();
     return {};

@@ -1,6 +1,7 @@
 /* eslint-disable @next/next/no-img-element -- Explicit authenticated blob image/PDF viewer. */
 "use client";
-import { lazy, Suspense, useCallback, useEffect, useEffectEvent, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { Suspense, useCallback, useEffect, useEffectEvent, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { retryingLazy } from "../../lib/retrying-lazy";
 import { X, Download, ExternalLink, ZoomIn, ZoomOut, FileText, LoaderCircle, MessageSquare } from "lucide-react";
 import { artifactPreview, fileSize, galleryType, readArtifactOriginal, saveArtifact, type GalleryItem } from "./artifact-source";
 import type { BotAttachment } from "../../lib/bots-types";
@@ -107,10 +108,10 @@ function ScopedArtifactViewer({ item, owner, online, onClose, originalFile, sour
     </dialog>
   </div>;
 }
-const PdfReviewer = lazy(() => import("./pdf-reviewer"));
-const DocumentPreview = lazy(() => import("./document-preview"));
-const DocumentReviewer = lazy(() => import("./document-reviewer"));
-const FilePreview = lazy(() => import("./file-preview"));
+const PdfReviewer = retryingLazy(() => import("./pdf-reviewer"));
+const DocumentPreview = retryingLazy(() => import("./document-preview"));
+const DocumentReviewer = retryingLazy(() => import("./document-reviewer"));
+const FilePreview = retryingLazy(() => import("./file-preview"));
 const languages: Record<string, string> = { js: "JavaScript", ts: "TypeScript", py: "Python", css: "CSS", sql: "SQL", sh: "Shell script", yaml: "YAML", toml: "TOML", ini: "INI", xml: "XML" };
 function viewerLabel(viewer: FileViewer) {
   return viewer.kind === "code" || viewer.kind === "config" ? `${languages[viewer.language] ?? "Text"} · read-only` : viewer.kind === "json" ? "JSON · read-only"

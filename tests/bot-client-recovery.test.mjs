@@ -332,3 +332,27 @@ test('a gateway or session-store outage is a connectivity failure, not a sign-ou
     client.stopped = true;
   }
 });
+
+test('a snapshot taken while no node answers keeps the composer catalog and defaults usable', async () => {
+  const { client, load } = setup();
+  const { providerDefaults, providerModels } = load('lib/bot-provider.ts');
+  client.useOwner('alice'); client.online = true;
+  const known = { bots: [{ id: 'alice-bot', provider: 'codex', status: 'idle' }], pending: [], ready: true, cursor: 5,
+    defaults: { model: 'gpt-6-sol', effort: 'high', serviceTier: 'fast' }, models: [{ model: 'gpt-6-sol', displayName: 'Sol' }] };
+  client.rpc = async () => known;
+  await client.refresh();
+  // The hub's shape when no placement answers: no models, defaults or account (portable/hub-rpc.mjs).
+  const empty = { activeScheduledTurns: [], bots: [], capabilities: { portableAgents: 1 }, cursor: 7, pending: [], ready: false, runs: [], schedules: [], secureInputs: [], workByBot: [] };
+  client.rpc = async () => empty;
+  await client.refresh();
+  assert.equal(client.snapshot.defaults.model, 'gpt-6-sol');
+  assert.equal(client.snapshot.models.length, 1);
+  // A journaled bot event flushed on reconnect re-adds the bot before the next full snapshot.
+  client.receive({ type: 'event', event: { seq: 8, type: 'bot', botId: 'alice-bot', data: { id: 'alice-bot', provider: 'codex', status: 'idle', updatedAt: '2026-10-15T00:00:00Z' } } });
+  const bot = client.snapshot.bots.find(b => b.id === 'alice-bot');
+  assert.equal(providerDefaults(client.snapshot, bot).model, 'gpt-6-sol');
+  // A cold client that never saw a catalog still gets usable values instead of a crash.
+  assert.equal(typeof providerDefaults(empty, { provider: 'codex' }).model, 'string');
+  assert.equal(providerModels(empty, { provider: 'codex' }).length, 0);
+  client.clearOwnerCache();
+});

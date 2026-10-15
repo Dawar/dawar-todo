@@ -1,5 +1,6 @@
 "use client";
-import { Activity, Component, Suspense, createContext, lazy, useContext, useEffect, useLayoutEffect, useRef, useState, type MouseEvent, type ReactNode, type RefObject } from "react";
+import { Activity, Component, Suspense, createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type MouseEvent, type ReactNode, type RefObject } from "react";
+import { retryingLazy } from "../lib/retrying-lazy";
 import { usePathname } from "next/navigation";
 import SettingsError from "./settings/error";
 import { ScreenError, ScreenLoading } from "./screen-feedback";
@@ -9,7 +10,7 @@ import { initialShellPath } from "./launch-intent";
 
 const loaders = { "/tasks": () => import("./tasks/page"), "/open": () => import("./open/page"), "/bots": () => import("./bots/page"), "/settings": () => import("./settings/page") };
 type ScreenPath = keyof typeof loaders;
-const pages = { "/tasks": lazy(loaders["/tasks"]), "/open": lazy(loaders["/open"]), "/bots": lazy(loaders["/bots"]), "/settings": lazy(loaders["/settings"]) };
+const pages = { "/tasks": retryingLazy(loaders["/tasks"]), "/open": retryingLazy(loaders["/open"]), "/bots": retryingLazy(loaders["/bots"]), "/settings": retryingLazy(loaders["/settings"]) };
 const Navigation = createContext<((href: string) => boolean) | null>(null);
 function screenPath(path: string | null): ScreenPath | null {
   if (path === "/") return "/tasks";

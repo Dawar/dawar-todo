@@ -133,6 +133,11 @@ test('syntax highlighting is lexical, lossless and bounded; unknown languages st
     assert.ok(tokens.some(([type]) => type !== 'plain'), language);
     assert.equal(tokenLines(tokens).length, text.split('\n').length, language);
   }
+  // CRLF files: a line comment ending in \r must not split one line break into two.
+  for (const [language, text] of [['js', '// header\r\nconst a = 1;\r\nconst b = 2;\r\n'], ['py', '# header\r\na = 1\r\nb = 2'], ['sql', '-- c\r\nselect 1']]) {
+    const rendered = tokenLines(highlightTokens(text, language)).map(line => line.map(([, value]) => value).join(''));
+    assert.deepEqual(rendered, previewLines(text).lines, language);
+  }
   assert.ok(highlightTokens('SELECT 1', 'sql').some(([type, value]) => type === 'keyword' && value === 'SELECT'));
   assert.ok(highlightTokens('select 1', 'sql').some(([type, value]) => type === 'keyword' && value === 'select'));
   assert.deepEqual(highlightTokens('plain words', 'cobol'), [['plain', 'plain words']]);

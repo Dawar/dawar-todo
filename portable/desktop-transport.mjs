@@ -3,7 +3,7 @@ import { boundedFrame, id } from './protocol.mjs';
 const LIMIT = 128 * 1024;
 const END_REASONS = new Set(['desktop-disabled', 'node-connection-changed', 'control-snapshot-unavailable', 'bot-unavailable',
   'viewer-close', 'input-byte-limit', 'input-frame-limit', 'node-output-buffer-limit', 'output-send-failed',
-  'runtime-message-failed', 'runtime-maintenance', 'node-disconnected', 'scope-reconcile-failed', 'transport-ended']);
+  'runtime-message-failed', 'runtime-maintenance', 'node-disconnected', 'scope-reconcile-failed', 'viewer-limit', 'transport-ended']);
 const failure = (desktopReason) => Object.assign(Error('Linux desktop scope is unavailable or changed.'), { outcome: 'not-sent', ...(desktopReason ? { desktopReason } : {}) });
 export const DESKTOP_READS = new Set(['desktop.status', 'desktop.preview', 'desktop.open']);
 export const DESKTOP_MUTATIONS = new Set(['desktop.start', 'desktop.stop', 'desktop.delete', 'desktop.browserPolicy', 'desktop.browserRelease', 'desktop.browserProtect', 'desktop.browserReopen']);
@@ -124,10 +124,15 @@ export class AgentDesktopTransport {
     if (!id(m.clientId) || !id(m.botId) || !Number.isSafeInteger(m.epoch) || !['open', 'close', 'ping', 'control', 'data'].includes(m.event)) throw failure();
     let c = this.channels.get(m.clientId);
     if (m.event === 'open') {
-      if (c || [...this.retired].some(old=>old.clientId===m.clientId) || this.channels.size+this.retired.size >= 8 ||
+      if (c || [...this.retired].some(old=>old.clientId===m.clientId) ||
         !id(m.parentId) || m.parentId === m.clientId || !/^[a-f0-9]{64}$/.test(m.token ?? '')) throw failure();
       c = { socket, botId: m.botId, epoch: m.epoch, clientId: m.clientId, queue: [], draining: false, bytes: 0, pending: 0, openedAt: performance.now() };
+      // The hub counts only live viewers; this side also counts retired ones
+      // whose work is still settling. Over the cap, refuse this viewer only:
+      // a throw here would close the shared node connection.
+      const full = this.channels.size + this.retired.size >= 8;
       this.channels.set(m.clientId, c);
+      if (full) { void this.end(c, 'viewer-limit').catch(() => {}); return; }
       if (!this.admitted(c)) return;
     }
     if (!c) return;
