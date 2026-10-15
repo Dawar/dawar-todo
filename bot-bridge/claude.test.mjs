@@ -578,3 +578,15 @@ test("BotRuntime sends the full profile once per conversation epoch, then only c
   await op(bot.id, "turn.send", { text: "four" }); await idle();
   assert.match(profileOf(), /## SOUL\.md/, "a compaction starts a new epoch");
 });
+
+test("the Claude child environment carries only its own credential, never the service secrets", async (t) => {
+  const saved = { ...process.env };
+  t.after(() => { for (const name of Object.keys(process.env)) if (!(name in saved)) delete process.env[name]; Object.assign(process.env, saved); });
+  Object.assign(process.env, { BOTS_MACHINE_SECRET: "m", BOTS_STORAGE_SERVICE_SECRET: "s", BOTS_NOTIFICATION_SECRET: "n", OPENAI_API_KEY: "o", CLAUDE_CODE_OAUTH_TOKEN: "oauth", BOTS_SITE_URL: "https://example.invalid" });
+  const env = new ClaudeBackend({ credential: "oauth", configDir: "/tmp/claude-config" }).env();
+  for (const name of ["BOTS_MACHINE_SECRET", "BOTS_STORAGE_SERVICE_SECRET", "BOTS_NOTIFICATION_SECRET", "OPENAI_API_KEY", "ANTHROPIC_API_KEY"]) assert.equal(env[name], undefined, name);
+  assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN, "oauth");
+  assert.equal(env.CLAUDE_CONFIG_DIR, "/tmp/claude-config");
+  assert.equal(env.BOTS_SITE_URL, "https://example.invalid");
+  assert.equal(env.PATH, process.env.PATH);
+});

@@ -189,9 +189,12 @@ export class ClaudeBackend extends EventEmitter {
   }
   sdkOptions() { return this.executable !== null ? { pathToClaudeCodeExecutable: this.executable } : {}; }
   env() {
-    const env = { ...process.env, CLAUDE_CONFIG_DIR: this.configDir };
+    // Claude bots run tools with full access, so the service's own secrets
+    // (BOTS_MACHINE_SECRET, storage and notification secrets, other API keys)
+    // must not reach their shells. Same names Codex's default shell policy drops.
+    const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/KEY|SECRET|TOKEN/i.test(name)));
+    env.CLAUDE_CONFIG_DIR = this.configDir;
     // Only the configured credential reaches the child, never both kinds.
-    delete env.ANTHROPIC_API_KEY; delete env.CLAUDE_CODE_OAUTH_TOKEN;
     env[this.credential === process.env.ANTHROPIC_API_KEY && !process.env.CLAUDE_CODE_OAUTH_TOKEN ? "ANTHROPIC_API_KEY" : "CLAUDE_CODE_OAUTH_TOKEN"] = this.credential;
     return env;
   }
