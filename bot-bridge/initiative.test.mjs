@@ -599,6 +599,8 @@ test("replies update the ledger; older reviews cannot overwrite newer decisions"
   await drive(7);
   const [item] = store.list("initiativeItem");
   assert.equal(item.status, "published");
+  // publishedAt is the runtime's real deliveredAt; a reply is only counted after it.
+  clock.t = Math.max(clock.t, Date.now());
   coordinator.observeUserMessage("atlas", { type: "userMessage", id: "reply-1", content: [{ type: "text", text: "Next week" }] });
   let current = store.get("initiativeItem", item.id);
   assert.equal(current.status, "snoozed");
