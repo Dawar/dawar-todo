@@ -23,37 +23,51 @@ const UNCONCLUDED = new Set(["candidate", "held", "published", "approved", "snoo
 
 /** Approved defaults (October 13 plan, quiet hours removed by amendment). */
 export const DEFAULT_SETTINGS = Object.freeze({
-  version: 1,
+  version: 2,
   enabled: false,
   scanMinutes: 25,
-  baselineMinutes: 120,
+  // Reviews run when something changed; this is the longest a bot goes
+  // without a fresh look for new opportunities anyway.
+  baselineMinutes: 360,
   concurrency: 1,
-  // Review model per provider; empty = the bot's own model.
-  model: "",
-  claudeModel: "",
+  // Review model per provider (empty = the bot's own model). Cheap pinned
+  // models keep always-on reviews affordable.
+  model: "gpt-6-luna",
+  claudeModel: "haiku",
   effort: "medium",
   fast: false,
   // Loose threads: cheap extraction of Dawar's own mentions, then resurfacing.
   looseThreads: true,
   extractionModel: "gpt-6-luna",
   claudeExtractionModel: "haiku",
-  extractionEffort: "low",
+  extractionEffort: "medium",
   extractionBatch: 40,
   extractionChars: 24000,
   mentionLookbackHours: 72,
   // One global daily slot is kept for due loose threads.
   looseThreadReserve: 1,
-  // Review packet bound (estimated tokens).
+  // Review packet bound (estimated tokens) and the conversation window it reads:
+  // high-level messages only; MEMORY.md and the ledger carry anything older.
   packetTokens: 12000,
+  conversationHours: 72,
+  // Reviews run while a bot is busy (they are read-only); delivery still waits.
+  reviewWhileBusy: true,
+  // A time-sensitive item whose bot stays busy this long moves to a bot that can deliver it.
+  handoffHours: 12,
+  // Claude reviews pause while any subscription window is at or above this utilization.
+  claudeHeadroomPercent: 80,
   // Optional zero-token triage: review only bots with signals, at most N per scan.
   triage: false,
   triageMaxReviews: 4,
   reviewTimeoutSeconds: 180,
-  spacingMinMinutes: 3,
-  spacingMaxMinutes: 5,
-  perBotDaily: 2,
-  globalDaily: 5,
-  reminderHours: 72,
+  spacingMinMinutes: 2,
+  spacingMaxMinutes: 4,
+  perBotDaily: 4,
+  globalDaily: 20,
+  // Unanswered proposals are re-sent as short reminders every reminderHours
+  // (no model call) until Dawar answers; 0 = no cap on the number of reminders.
+  reminderHours: 12,
+  maxReminders: 0,
   // Calendar day used for notification limits only; no delivery hold.
   limitTimeZone: "America/Toronto",
   priorities: "",
@@ -67,9 +81,20 @@ const BOUNDS = {
   scanMinutes: [5, 24 * 60], baselineMinutes: [30, 7 * 24 * 60], concurrency: [1, 4], reviewTimeoutSeconds: [30, 600],
   spacingMinMinutes: [0, 120], spacingMaxMinutes: [0, 240], perBotDaily: [0, 20], globalDaily: [0, 100], reminderHours: [1, 24 * 30],
   extractionBatch: [5, 100], extractionChars: [2000, 60000], mentionLookbackHours: [1, 14 * 24], looseThreadReserve: [0, 5],
-  packetTokens: [3000, 20000], triageMaxReviews: [1, 32],
+  packetTokens: [3000, 20000], triageMaxReviews: [1, 32], maxReminders: [0, 50], conversationHours: [6, 14 * 24], handoffHours: [1, 7 * 24],
+  claudeHeadroomPercent: [10, 100],
 };
-const INTEGER_SETTINGS = new Set(["concurrency", "extractionBatch", "extractionChars", "looseThreadReserve", "packetTokens", "triageMaxReviews"]);
+const INTEGER_SETTINGS = new Set(["concurrency", "extractionBatch", "extractionChars", "looseThreadReserve", "packetTokens", "triageMaxReviews", "maxReminders"]);
+// Version 1 defaults: a saved value still equal to one of these was never chosen
+// by Dawar, so it follows the version 2 default instead.
+const V1_DEFAULTS = { model: "", claudeModel: "", extractionEffort: "low", baselineMinutes: 120, reminderHours: 72, perBotDaily: 2, globalDaily: 5,
+  spacingMinMinutes: 3, spacingMaxMinutes: 5 };
+function upgradeSettings(saved) {
+  if ((saved.version ?? 1) >= 2) return saved;
+  const out = { ...saved, version: 2 };
+  for (const [key, old] of Object.entries(V1_DEFAULTS)) if (out[key] === old) delete out[key];
+  return out;
+}
 const MODEL = /^[a-zA-Z0-9._:[\]-]{0,80}$/;
 const EFFORTS = new Set(["low", "medium", "high", "xhigh"]);
 const now = () => new Date().toISOString();
@@ -111,7 +136,7 @@ export class InitiativeLedger {
   // ---- settings -------------------------------------------------------------
   settings() {
     const saved = this.store.meta("initiative-settings");
-    return { ...DEFAULT_SETTINGS, ...(saved && typeof saved === "object" ? saved : {}), bots: { ...(saved?.bots ?? {}) } };
+    return { ...DEFAULT_SETTINGS, ...(saved && typeof saved === "object" ? upgradeSettings(saved) : {}), bots: { ...(saved?.bots ?? {}) } };
   }
   /** Owner patch. `expectedRevision` makes concurrent Settings edits explicit. */
   configure(patch, expectedRevision = null) {
@@ -122,7 +147,7 @@ export class InitiativeLedger {
         throw Object.assign(Error("Initiative settings changed elsewhere; reload them before saving."), { outcome: "rejected" });
       const next = { ...current, bots: { ...current.bots } };
       for (const [key, value] of Object.entries(patch)) {
-        if (["enabled", "fast", "looseThreads", "triage"].includes(key)) { if (typeof value !== "boolean") throw Error(`${key} must be true or false.`); next[key] = value; }
+        if (["enabled", "fast", "looseThreads", "triage", "reviewWhileBusy"].includes(key)) { if (typeof value !== "boolean") throw Error(`${key} must be true or false.`); next[key] = value; }
         else if (key in BOUNDS) next[key] = boundedNumber(key, value);
         else if (["model", "claudeModel", "extractionModel", "claudeExtractionModel"].includes(key)) { if (typeof value !== "string" || !MODEL.test(value)) throw Error(`Invalid ${key}.`); next[key] = value; }
         else if (key === "extractionEffort") { if (!EFFORTS.has(value)) throw Error("Invalid extraction reasoning effort."); next.extractionEffort = value; }
@@ -192,13 +217,34 @@ export class InitiativeLedger {
 
   // ---- loose threads -------------------------------------------------------
   looseThreads() { return this.items().filter(item => item.kind === LOOSE_THREAD); }
-  /** Due to be raised now: open, past its resurfacing time, or a 72-hour reminder. */
+  /** Due to be raised now: open and past its resurfacing time, or an unanswered proposal due a reminder. */
   threadDue(item, settings = this.settings()) {
     const t = this.clock();
     if (item.kind !== LOOSE_THREAD) return false;
     if (item.status === "candidate") return Date.parse(item.resurfaceAt ?? "") <= t;
-    if (item.status === "published") return (item.reminderCount ?? 0) < 1 && Date.parse(item.lastPublishedAt ?? "") + settings.reminderHours * 36e5 <= t;
+    if (item.status === "published") return this.reminderAllowed(item, settings) && Date.parse(item.lastPublishedAt ?? "") + settings.reminderHours * 36e5 <= t;
     return false;
+  }
+  reminderAllowed(item, settings = this.settings()) { return settings.maxReminders === 0 || (item.reminderCount ?? 0) < settings.maxReminders; }
+  /** Unanswered proposals (any kind) whose reminder interval has passed. */
+  remindersDue(settings = this.settings()) {
+    const t = this.clock();
+    return this.items().filter(item => item.status === "published" && this.reminderAllowed(item, settings) &&
+      Date.parse(item.lastPublishedAt ?? "") + settings.reminderHours * 36e5 <= t)
+      .sort((a, b) => (a.lastPublishedAt ?? "").localeCompare(b.lastPublishedAt ?? ""));
+  }
+  /** Moves an open item to another bot that can deliver it; the original bot stays a contributor. */
+  handOff(itemId, toBotId, note) {
+    return this.store.transaction(() => {
+      const item = this.item(itemId);
+      if (!item || item.responsibleBotId === toBotId || !OPEN.has(item.status)) return null;
+      const contributors = [...new Set([...(item.contributors ?? []), item.responsibleBotId])].filter(id => id && id !== toBotId);
+      const next = { ...item, botId: toBotId, responsibleBotId: toBotId, contributors, handedOffAt: this.at(), handedOffFrom: item.responsibleBotId,
+        notes: [...(item.notes ?? []), { botId: item.responsibleBotId, at: this.at(), text: note }].slice(-20), updatedAt: this.at() };
+      this.store.put("initiativeItem", next);
+      this.bump();
+      return next;
+    });
   }
   dueThreads(botId = null, settings = this.settings()) {
     return this.looseThreads().filter(item => (!botId || item.responsibleBotId === botId) && this.threadDue(item, settings))
@@ -390,7 +436,7 @@ export class InitiativeLedger {
     if (item.lastPublishedAt) {
       const hours = (this.clock() - Date.parse(item.lastPublishedAt)) / 36e5;
       if (hours < settings.reminderHours) return "awaiting-reply";
-      if ((item.reminderCount ?? 0) >= 1 && !changedCircumstances) return "reminder-used";
+      if (!this.reminderAllowed(item, settings) && !changedCircumstances) return "reminder-used";
     }
     if (sameDay.length >= settings.globalDaily) return "global-daily-limit";
     if (sameDay.filter(p => p.botId === botId).length >= settings.perBotDaily) return "bot-daily-limit";
@@ -480,7 +526,7 @@ export const REVIEW_OUTPUT_SCHEMA = { type: "object", additionalProperties: fals
 
 const hoursFrom = (clock, hours) => Number.isFinite(hours) && hours > 0 ? new Date(clock + Math.min(hours, 24 * 30) * 36e5).toISOString() : null;
 /** Strict validation of model output. Throws on anything malformed. */
-export function validateReviewResult(raw, clock = Date.now()) {
+export function validateReviewResult(raw, clock = Date.now(), { looseThreadIds = [] } = {}) {
   let value = raw;
   if (typeof raw === "string") {
     const body = raw.trim().replace(/^```(?:json)?\s*|\s*```$/g, "");
@@ -512,11 +558,18 @@ export function validateReviewResult(raw, clock = Date.now()) {
     const evidence = sources(c.evidence);
     if (!evidence.length) throw Error("Contribution needs supporting evidence.");
     for (const field of ["why_now", "expected_value", "effort_estimate", "first_step"]) if (!text(c[field], 2000)) throw Error(`Contribution ${field} is required.`);
-    const action = c.proposed_action && typeof c.proposed_action === "object" && PROPOSED_ACTIONS.includes(c.proposed_action.type) && text(c.proposed_action.detail, 1000)
+    let action = c.proposed_action && typeof c.proposed_action === "object" && PROPOSED_ACTIONS.includes(c.proposed_action.type) && text(c.proposed_action.detail, 1000)
       ? { type: c.proposed_action.type, detail: text(c.proposed_action.detail, 1000) } : null;
+    let itemId = typeof c.item_id === "string" ? c.item_id.slice(0, 120) : null;
     // A resurfaced loose thread names its existing item and one concrete action.
-    if (c.kind === LOOSE_THREAD && (typeof c.item_id !== "string" || !action)) throw Error("A loose-thread proposal needs its item_id and a concrete proposed_action.");
-    contribution = { kind: c.kind, itemId: typeof c.item_id === "string" ? c.item_id.slice(0, 120) : null, key, title, whyNow: text(c.why_now, 2000), message,
+    // Repair instead of discarding: the required first step is the action, and
+    // the bot's only open loose thread is the item. Otherwise hold, not fail.
+    if (c.kind === LOOSE_THREAD) {
+      if (!action) action = { type: "other", detail: text(c.first_step, 1000) };
+      if (!itemId && looseThreadIds.length === 1) itemId = looseThreadIds[0];
+      if (!itemId) return { decision: "hold", contribution: null, ledgerUpdates, nextReviewAt: hoursFrom(clock, value.next_review_hours), repaired: "loose-thread-without-item" };
+    }
+    contribution = { kind: c.kind, itemId, key, title, whyNow: text(c.why_now, 2000), message,
       evidence, expectedValue: text(c.expected_value, 1000), effortEstimate: text(c.effort_estimate, 500), firstStep: text(c.first_step, 1000),
       proposedAction: action, changedCircumstances: c.changed_circumstances === true };
   }
@@ -537,6 +590,13 @@ export function publicationText(contribution, itemId, { item = null, publisherBo
   return [`${mentionWhen(mention.at, clock, timeZone)} you mentioned${where}: “${mention.quote}”`, contribution.message.trim(),
     ...(action ? [`**Proposed next step (${ACTION_LABELS[action.type]}):** ${action.detail}`] : []),
     `_Ref ${itemId}: reply “yes, proceed”, “next week”, “leave it” or “done”._`].join("\n\n");
+}
+/** A nag for an unanswered proposal: no model call, the item's own title and quote. */
+export function reminderText(item, { clock = Date.now(), timeZone = DEFAULT_SETTINGS.limitTimeZone } = {}) {
+  const n = (item.reminderCount ?? 0) + 1, when = mentionWhen(item.lastPublishedAt, clock, timeZone);
+  const quote = item.kind === LOOSE_THREAD && item.mentions?.length ? [`You said: “${item.mentions[0].quote}”`] : [];
+  return [`**Reminder${n > 1 ? ` ${n}` : ""}:** ${when.charAt(0).toLowerCase()}${when.slice(1)} I raised **${item.title}**, and it's still waiting on you.`,
+    ...quote, ...(item.summary ? [item.summary] : []), `_Ref ${item.id}: reply “yes, proceed”, “next week”, “leave it” or “done”._`].join("\n\n");
 }
 const ACTION_LABELS = { todo: "create a todo", "draft-message": "draft a message", schedule: "schedule it", research: "research it", drop: "drop it", other: "next step" };
 /** "Earlier today", "Yesterday", "On Tuesday" or "On Oct 3", in the limit time zone. */

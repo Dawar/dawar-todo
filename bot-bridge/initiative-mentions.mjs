@@ -48,7 +48,9 @@ export async function readOwnerMessages(runtime, bot, cursor, { limit = 40, char
   const turns = [];
   let page = null, reached = false;
   for (let n = 0; n < MAX_PAGES && !reached; n++) {
-    page = await runtime.codex.call("thread/turns/list", { threadId: bot.threadId, cursor: page?.nextCursor ?? null, limit: PAGE, sortDirection: "desc", itemsView: "full" });
+    // Summary view: Dawar's messages and each turn's final reply, without tool
+    // payloads, which made long histories time out.
+    page = await runtime.codex.call("thread/turns/list", { threadId: bot.threadId, cursor: page?.nextCursor ?? null, limit: PAGE, sortDirection: "desc", itemsView: "summary" });
     for (const turn of page?.data ?? []) {
       if (own && turn.id === own.turnId) { turns.push(turn); reached = true; break; }
       if (Number.isFinite(turn.startedAt) && turn.startedAt * 1000 < floor - 6e4) { reached = true; break; }
@@ -73,6 +75,9 @@ export async function readOwnerMessages(runtime, bot, cursor, { limit = 40, char
         messages.push({ id: item.id, turnId: turn.id, threadId: bot.threadId, at, text: piece });
       } else if ((item.type === "dynamicToolCall" || item.type === "mcpToolCall") && EVIDENCE_TOOL.test(`${item.server ?? ""} ${item.tool}`) && item.status !== "failed" && item.success !== false) {
         if (actions.length < 30) actions.push({ turnId: turn.id, at, tool: item.server ? `${item.server}.${item.tool}` : item.tool, arguments: compact(item.arguments, 240) });
+      } else if (item.type === "agentMessage" && item.phase !== "commentary" && item.text?.trim()) {
+        // The bot's final reply says what was done ("Created the todo", "Sent…"): resolution evidence.
+        if (actions.length < 30) actions.push({ turnId: turn.id, at, tool: "bot reply", arguments: compact(item.text, 400) });
       }
       if (turn.status !== "inProgress") next = { threadId: bot.threadId, turnId: turn.id, itemId: item.id, at };
       else if (item.type === "userMessage") next = { threadId: bot.threadId, turnId: turn.id, itemId: item.id, at };

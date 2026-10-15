@@ -297,3 +297,16 @@ The legacy standalone bridge (`service.mjs`) has the node executor but no coordi
 - triage
 - delivery reconciliation and idempotency
 - replies, spacing, daily limits, the 72-hour reminder, the Toronto day, and validation
+
+## Always-on pass (October 15)
+
+Settings version 2 (saved version 1 values equal to the old defaults follow the new ones; chosen values are kept):
+
+- **Models:** reviews and mention capture use GPT-6 Luna (Codex) and Haiku (Claude) at medium effort, not each bot's own model. Haiku has no effort levels, so none is passed to it.
+- **Input:** the last `conversationHours` (72) of high-level exchange, read with the summary view (Dawar's messages and each turn's final reply; no reasoning, tool calls or tool output), plus `MEMORY.md` and the ledger. Mention capture also reads the summary view and treats the bot's final replies as resolution evidence.
+- **On change:** extraction runs only on new activity; reviews run on activity, due items, or at most every `baselineMinutes` (6 hours) as a look for new opportunities.
+- **Review while busy** (`reviewWhileBusy`, default on): reviews are private and read-only, so a working bot is reviewed; delivery still waits for idle, spacing and limits. A result is stale only if Dawar wrote to the bot after the review started (`owner-spoke`); the bot's own work does not invalidate it. The node still refuses delivery if a turn starts between the delivery probe and the write.
+- **Nagging:** an unanswered proposal comes back as a short reminder every `reminderHours` (12) with no model call, until Dawar answers, snoozes, dismisses or resolves it (`maxReminders` 0 = no cap). Defaults: 4 messages per bot and 20 per day, 2–4 minutes apart.
+- **Hand-off:** a time-sensitive item due for `handoffHours` (12) whose bot stays unreachable moves to the most recently reviewed reachable bot; the original bot stays a contributor.
+- **Claude headroom:** Claude jobs are refused (`claude-limit`) while any subscription window is at or above `claudeHeadroomPercent` (80%).
+- **Repair, not discard:** a loose-thread proposal missing its action uses the required first step; a missing item ID uses the bot's only open loose thread, otherwise the decision becomes `hold` (no failure or backoff).

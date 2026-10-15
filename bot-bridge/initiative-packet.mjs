@@ -14,13 +14,18 @@ const PROFILE_KEYS = { identity: ["IDENTITY.md", "SOUL.md", "USER.md"], memory: 
 const clip = (value, max) => { const s = String(value ?? ""); return s.length > max ? `${s.slice(0, Math.max(0, max - 40))}\n… (${s.length - max + 40} characters omitted)` : s; };
 const one = (value, max) => clip(String(value ?? "").replace(/\s+/g, " ").trim(), max);
 
-/** Recent turns, newest last: Dawar, peers and the bot's final answers; tool use by name only. */
-export async function recentConversation(runtime, bot, budget) {
-  const rows = [];
-  let used = 0, page = null;
-  for (let n = 0; n < 3 && used < budget; n++) {
-    page = await runtime.codex.call("thread/turns/list", { threadId: bot.threadId, cursor: page?.nextCursor ?? null, limit: 8, sortDirection: "desc", itemsView: "full" });
+/**
+ * The last `hours` of high-level exchange, newest last: Dawar's and peers'
+ * messages and the bot's final answers (summary view: no reasoning, tool
+ * calls or tool output). MEMORY.md and the ledger carry anything older.
+ */
+export async function recentConversation(runtime, bot, budget, { hours = 72, clock = Date.now } = {}) {
+  const rows = [], floor = clock() - hours * 36e5;
+  let used = 0, page = null, reached = false;
+  for (let n = 0; n < 6 && used < budget && !reached; n++) {
+    page = await runtime.codex.call("thread/turns/list", { threadId: bot.threadId, cursor: page?.nextCursor ?? null, limit: 25, sortDirection: "desc", itemsView: "summary" });
     for (const turn of page?.data ?? []) {
+      if (Number.isFinite(turn.startedAt) && turn.startedAt * 1000 < floor) { reached = true; break; }
       const at = Number.isFinite(turn.startedAt) ? new Date(turn.startedAt * 1000).toISOString() : "";
       const lines = [], tools = new Map();
       for (const item of turn.items ?? []) {
@@ -59,7 +64,7 @@ function recentArtifacts(runtime, bot, limit = 8) {
  * loose threads and their quotes, schedules, queue, bots, priorities).
  * Returns { text, tokens, sections } with tokens <= maxTokens.
  */
-export async function buildReviewPacket(runtime, bot, brief, { maxTokens = 12000 } = {}) {
+export async function buildReviewPacket(runtime, bot, brief, { maxTokens = 12000, conversationHours = 72 } = {}) {
   const total = maxTokens * 4;
   const budget = key => Math.floor(total * SHARES[key]);
   const threads = (brief.ledger ?? []).filter(i => i.kind === "loose-thread"), other = (brief.ledger ?? []).filter(i => i.kind !== "loose-thread");
@@ -83,7 +88,7 @@ export async function buildReviewPacket(runtime, bot, brief, { maxTokens = 12000
   ];
   const used = sections.reduce((sum, [, v]) => sum + v.length, 0);
   // The conversation takes its share plus whatever earlier sections left unused.
-  sections.push(["Recent conversation (oldest first)", await recentConversation(runtime, bot, Math.max(2000, total - used - 2000)) || "(no turns)"]);
+  sections.push([`Last ${conversationHours} hours of conversation (oldest first)`, await recentConversation(runtime, bot, Math.max(2000, total - used - 2000), { hours: conversationHours }) || "(no turns)"]);
   let text = sections.map(([title, body]) => `## ${title}\n${body}`).join("\n\n");
   if (estimateTokens(text) > maxTokens) text = clip(text, total);
   return { text, tokens: estimateTokens(text), sections: sections.map(([title, body]) => ({ title, tokens: estimateTokens(body) })) };

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { InitiativeLedger, validateReviewResult, publicationText, classifyReply, OWNER_OUTCOMES, LOOSE_THREAD, ledgerDigest, looseThreadPriority } from "./initiative-ledger.mjs";
+import { InitiativeLedger, validateReviewResult, publicationText, reminderText, classifyReply, OWNER_OUTCOMES, LOOSE_THREAD, ledgerDigest, looseThreadPriority } from "./initiative-ledger.mjs";
 import { stagedQueue } from "./prompt-queue.mjs";
 
 // Global review coordinator (hub). Decides which bot runs which private job,
@@ -19,6 +19,9 @@ const ACTIVE = new Set(["starting", "running", "uncertain"]);
 const DELIVERABLE = new Set(["pending", "held", "absent"]);
 const LIMIT_BLOCKS = new Set(["spacing", "global-daily-limit", "bot-daily-limit", "reserved-for-loose-threads"]);
 const STALE_PUBLICATION_MS = 24 * 36e5;
+// A bot that is merely working can still be reviewed (read-only); stopped,
+// maintenance and unsupported states cannot.
+const BUSY_REASONS = new Set(["not-idle", "busy", "native-busy"]);
 const backoffMs = failures => Math.min(6 * 36e5, 5 * 6e4 * 2 ** Math.max(0, failures - 1));
 const TRIGGER_ORDER = { extract: 0, "loose-thread": 1, "follow-up": 2, activity: 3, baseline: 4 };
 /** Held-state budget for skipped reviews (bot-bridge/HELD_STATES.md). */
@@ -91,6 +94,7 @@ export class InitiativeCoordinator {
   // ---- admission --------------------------------------------------------------
   /** Eligibility scan: due jobs form the backlog, extraction and loose threads first. */
   scan(settings) {
+    this.handOffStalled(settings);
     const t = this.clock(), items = this.ledger.items();
     const due = [];
     for (const bot of this.eligibleBots(settings)) {
@@ -128,6 +132,28 @@ export class InitiativeCoordinator {
       .sort((a, b) => TRIGGER_ORDER[a.trigger] - TRIGGER_ORDER[b.trigger] || b.score - a.score || a.dueAt - b.dueAt);
     this.lastScanAt = this.at();
   }
+  /**
+   * A time-sensitive item due for handoffHours whose bot stays unreachable
+   * (skipped, or its proposal held because the bot is busy) moves to the most
+   * recently reviewed reachable bot; the original bot remains a contributor.
+   */
+  handOffStalled(settings) {
+    const t = this.clock(), limit = settings.handoffHours * 36e5, eligible = this.eligibleBots(settings), names = this.names();
+    const reachable = eligible.filter(b => { const st = this.botState(b.id); return !st.skippedSince && Date.parse(st.lastReviewAt ?? "") > t - limit; })
+      .sort((a, b) => (this.botState(b.id).lastReviewAt ?? "").localeCompare(this.botState(a.id).lastReviewAt ?? ""));
+    const publications = this.store.list("initiativePublication");
+    for (const item of this.ledger.items()) {
+      if (!item.timeSensitive || item.status !== "candidate" || Date.parse(item.resurfaceAt ?? "") > t - limit) continue;
+      const owner = this.botState(item.responsibleBotId);
+      const held = publications.filter(p => p.itemId === item.id && p.state === "held" && BUSY_REASONS.has(p.reason) && Date.parse(p.createdAt) <= t - limit);
+      const stalled = !eligible.some(b => b.id === item.responsibleBotId) || Date.parse(owner.skippedSince ?? "") <= t - limit || held.length > 0;
+      const target = stalled && reachable.find(b => b.id !== item.responsibleBotId);
+      if (!target) continue;
+      for (const p of held) this.setPublication(p, "abandoned", { reason: "handed-off" });
+      this.ledger.handOff(item.id, target.id, `Handed to ${target.name ?? names[target.id] ?? "another bot"} after ${settings.handoffHours}h: ${names[item.responsibleBotId] ?? "the original bot"} could not deliver it.`);
+      this.saveBotState(target.id, { nextReviewAt: this.at() });
+    }
+  }
   async admit(settings) {
     if (this.reviews(new Set(["uncertain", "starting"])).length) return; // reconcile first
     while (this.backlog.length && this.reviews(ACTIVE).length < settings.concurrency) {
@@ -141,8 +167,9 @@ export class InitiativeCoordinator {
       }
       if (!probe.supported) { this.saveBotState(bot.id, { lastError: `Private reviews are unavailable for ${probe.provider} bots on this node.`, lastErrorAt: this.at() }); continue; }
       // Busy, stopped or unavailable bots keep their due job for a later scan.
-      if (!probe.idle) { this.skip(bot.id, probe.reason); continue; }
-      await this.startJob(bot, probe, settings, entry);
+      const busyReview = !probe.idle && settings.reviewWhileBusy && BUSY_REASONS.has(probe.reason);
+      if (!probe.idle && !busyReview) { this.skip(bot.id, probe.reason); continue; }
+      await this.startJob(bot, probe, settings, entry, { busy: busyReview });
     }
   }
   /** Hub-side review input: role, priorities, ledger (with loose-thread quotes), schedules, queue, bots. */
@@ -166,17 +193,20 @@ export class InitiativeCoordinator {
   sliceDigest(ids) {
     return ledgerDigest(ids.map(id => { const i = this.ledger.item(id); return i ? [i.id, i.status, i.decision?.revision ?? 0, i.lastPublishedAt ?? null] : [id, "missing"]; }));
   }
-  async startJob(bot, probe, settings, entry) {
+  async startJob(bot, probe, settings, entry, { busy = false } = {}) {
     const placement = this.executor.placement(bot.id), id = `initiative-review:${randomUUID()}`, claude = bot.provider === "claude";
     const extract = entry.kind === "extract";
     const brief = extract ? { ledger: this.catalog(), bots: this.directory(settings) } : this.brief(bot, settings);
-    const capture = { revision: probe.revision, ledgerVersion: this.ledger.version(), ledgerDigest: extract ? null : this.sliceDigest(brief.ledger.map(i => i.id)),
+    const capture = { revision: probe.revision, busy, ledgerVersion: this.ledger.version(), ledgerDigest: extract ? null : this.sliceDigest(brief.ledger.map(i => i.id)),
       itemIds: extract ? [] : brief.ledger.map(i => i.id), nodeId: placement?.nodeId ?? null, epoch: placement?.epoch ?? null, startedAt: this.at() };
     const review = this.store.put("initiativeReview", { id, botId: bot.id, kind: entry.kind, provider: claude ? "claude" : "codex", state: "starting", trigger: entry.trigger, capture, createdAt: this.at() });
     const jobSettings = extract
       ? { model: claude ? settings.claudeExtractionModel : settings.extractionModel, effort: settings.extractionEffort, timeoutSeconds: Math.min(settings.reviewTimeoutSeconds, 120),
           batch: settings.extractionBatch, chars: settings.extractionChars, lookbackHours: settings.mentionLookbackHours }
-      : { model: claude ? settings.claudeModel : settings.model, effort: settings.effort, fast: settings.fast, timeoutSeconds: settings.reviewTimeoutSeconds, packetTokens: settings.packetTokens };
+      : { model: claude ? settings.claudeModel : settings.model, effort: settings.effort, fast: settings.fast, timeoutSeconds: settings.reviewTimeoutSeconds, packetTokens: settings.packetTokens,
+          conversationHours: settings.conversationHours };
+    jobSettings.allowBusy = busy;
+    if (claude) jobSettings.claudeHeadroomPercent = settings.claudeHeadroomPercent;
     try {
       const v = await this.executor.start(bot.id, { reviewId: id, kind: entry.kind, brief, expectedRevision: probe.revision, settings: jobSettings,
         ...(extract ? { cursor: this.botState(bot.id).mentionCursor ?? null } : {}) });
@@ -246,7 +276,7 @@ export class InitiativeCoordinator {
     try { probe = await this.executor.probe(review.botId); } catch { /* treated as stale below */ }
     const placement = this.executor.placement(review.botId);
     const stale = !probe ? "node-unavailable" : placement?.nodeId !== capture.nodeId || placement?.epoch !== capture.epoch ? "placement-changed" :
-      probe.revision !== capture.revision ? "conversation-changed" :
+      this.ownerSpokeSince(review.botId, capture.startedAt) ? "owner-spoke" :
       (capture.ledgerDigest ? this.sliceDigest(capture.itemIds ?? []) !== capture.ledgerDigest : this.ledger.version() !== capture.ledgerVersion) ? "ledger-changed" : null;
     const usage = v.usage ?? null;
     if (stale) {
@@ -255,7 +285,8 @@ export class InitiativeCoordinator {
       return this.endReview(review, "rejected", { reason: stale, usage, packetTokens: v.packetTokens ?? null });
     }
     let result;
-    try { result = validateReviewResult(v.output, this.clock()); }
+    const looseThreadIds = (capture.itemIds ?? []).filter(id => { const i = this.ledger.item(id); return i?.kind === LOOSE_THREAD && i.responsibleBotId === review.botId && ["candidate", "held", "published"].includes(i.status); });
+    try { result = validateReviewResult(v.output, this.clock(), { looseThreadIds }); }
     catch (error) { return this.failReview({ ...review, usage }, `Invalid review result: ${error.message}`, "invalid"); }
     const applied = this.ledger.applyReview(review.botId, result, { ...capture, reviewId: review.id });
     let publication = null, publicationBlock = null;
@@ -282,11 +313,27 @@ export class InitiativeCoordinator {
     this.saveBotState(review.botId, { lastReviewAt: this.at(), nextReviewAt: new Date(next).toISOString(), failures: 0, backoffUntil: null, skippedSince: null, skippingSince: null,
       lastOutcome: result.decision, lastError: null, lastRevision: capture.revision });
     return this.endReview(review, "accepted", { usage, packetTokens: v.packetTokens ?? null, decision: result.decision, itemIds: applied.items.map(i => i.id),
-      publicationId: publication?.id ?? null, publicationBlock, ignored: applied.ignored });
+      publicationId: publication?.id ?? null, publicationBlock, ignored: applied.ignored, ...(result.repaired ? { repaired: result.repaired } : {}) });
   }
 
   // ---- publication --------------------------------------------------------------
+  /**
+   * Nag: an unanswered proposal is re-sent as a short reminder every
+   * reminderHours (no model call) until Dawar answers, snoozes or drops it.
+   */
+  queueReminders(settings) {
+    const pending = new Set(this.store.list("initiativePublication").filter(p => DELIVERABLE.has(p.state) || p.state === "delivering" || p.state === "uncertain").map(p => p.itemId));
+    for (const item of this.ledger.remindersDue(settings)) {
+      if (pending.has(item.id) || !this.eligibleBots(settings).some(b => b.id === item.responsibleBotId)) continue;
+      this.store.put("initiativePublication", { id: `initiative-publication:${randomUUID()}`, botId: item.responsibleBotId, itemId: item.id, reviewId: null,
+        kind: item.kind, reminder: true, text: reminderText(item, { clock: this.clock(), timeZone: settings.limitTimeZone }), revision: null,
+        changedCircumstances: false, state: "pending", attempts: 0, createdAt: this.at() });
+    }
+  }
+  /** Dawar wrote to this bot after `at` (recorded from the hub's own message stream). */
+  ownerSpokeSince(botId, at) { return Date.parse(this.botState(botId).lastOwnerMessageAt ?? "") > Date.parse(at ?? ""); }
   async deliver(settings) {
+    this.queueReminders(settings);
     // Loose threads first, then oldest.
     const rows = this.store.list("initiativePublication").filter(p => DELIVERABLE.has(p.state))
       .sort((a, b) => (b.kind === LOOSE_THREAD) - (a.kind === LOOSE_THREAD) || a.createdAt.localeCompare(b.createdAt));
@@ -301,8 +348,9 @@ export class InitiativeCoordinator {
       let probe;
       try { probe = await this.executor.probe(p.botId); } catch { this.setPublication(p, "held", { reason: "node-unavailable" }); continue; }
       if (!probe.idle) { this.setPublication(p, "held", { reason: probe.reason ?? "busy" }); continue; }
-      if (probe.revision !== p.revision) { this.stale(p, "conversation-changed"); continue; }
-      await this.publishOne(p);
+      if (this.ownerSpokeSince(p.botId, p.createdAt)) { this.stale(p, "owner-spoke"); continue; }
+      // The node still refuses if a turn starts between this probe and delivery.
+      await this.publishOne(p, probe.revision);
       return; // one delivery attempt per tick; spacing follows confirmation
     }
   }
@@ -314,11 +362,11 @@ export class InitiativeCoordinator {
     this.setPublication(p, "abandoned", { reason: `stale-${reason}` });
     this.saveBotState(p.botId, { nextReviewAt: this.at() });
   }
-  async publishOne(p) {
+  async publishOne(p, expectedRevision = p.revision) {
     // The durable record precedes the node's projection.
     const row = this.setPublication(p, "delivering", { attempts: (p.attempts ?? 0) + 1, attemptedAt: this.at() });
     let v;
-    try { v = await this.executor.publish(p.botId, { publicationId: p.id, text: p.text, expectedRevision: p.revision, itemId: p.itemId }); }
+    try { v = await this.executor.publish(p.botId, { publicationId: p.id, text: p.text, expectedRevision, itemId: p.itemId }); }
     catch (error) { return this.setPublication(row, "uncertain", { error: error.message, reconcileAfter: this.at() }); }
     return this.settlePublication(row, v);
   }
@@ -350,6 +398,7 @@ export class InitiativeCoordinator {
   /** First owner reply after a proposal; short clear replies update the ledger. */
   observeUserMessage(botId, item) {
     if (!item || item.type !== "userMessage" || /^(schedule:|peer:|peer-exchange:|manager-notice:|secure-receipt:|initiative)/.test(item.clientId ?? "")) return null;
+    this.saveBotState(botId, { lastOwnerMessageAt: this.at() });
     const p = this.ledger.awaitingReply(botId);
     if (!p || p.replyObservedAt || Date.parse(p.publishedAt) > this.clock()) return null;
     this.store.put("initiativePublication", { ...p, replyObservedAt: this.at() });

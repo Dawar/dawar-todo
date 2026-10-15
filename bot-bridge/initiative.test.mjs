@@ -7,11 +7,11 @@ import { join } from "node:path";
 import { Store } from "./store.mjs";
 import { BotRuntime } from "./runtime.mjs";
 import { managedExecutionParams, PRIVATE_REVIEW } from "./execution-access.mjs";
-import { InitiativeLedger, validateReviewResult, classifyReply, limitDay, publicationText, mentionWhen, resurfaceAt, looseThreadPriority } from "./initiative-ledger.mjs";
+import { InitiativeLedger, validateReviewResult, classifyReply, limitDay, publicationText, mentionWhen, resurfaceAt, looseThreadPriority, LOOSE_THREAD } from "./initiative-ledger.mjs";
 import { InitiativeCoordinator, localExecutor, ownerReplyText } from "./initiative-coordinator.mjs";
-import { PRIVATE_REVIEW_CONFIG } from "./initiative-node.mjs";
+import { PRIVATE_REVIEW_CONFIG, claudeNearLimit } from "./initiative-node.mjs";
 import { readOwnerMessages, validateExtraction, ownerAuthored } from "./initiative-mentions.mjs";
-import { buildReviewPacket, estimateTokens } from "./initiative-packet.mjs";
+import { buildReviewPacket, estimateTokens, recentConversation } from "./initiative-packet.mjs";
 import { conversationViewPage } from "./conversation-view.mjs";
 import { ClaudeBackend } from "./claude.mjs";
 import { ProviderRouter } from "./provider-router.mjs";
@@ -138,7 +138,11 @@ test("disabled by default: no job, thread or message", async t => {
   t.after(async () => { store.close(); await rm(dir, { recursive: true, force: true }); });
   const ledger = new InitiativeLedger(store);
   assert.equal(ledger.settings().enabled, false);
-  assert.equal(ledger.settings().baselineMinutes, 120);
+  assert.equal(ledger.settings().baselineMinutes, 360);
+  // Version 2 defaults: cheap pinned review models at medium effort, always-on pacing.
+  const d = ledger.settings();
+  assert.deepEqual([d.model, d.claudeModel, d.effort, d.extractionModel, d.claudeExtractionModel, d.extractionEffort], ["gpt-6-luna", "haiku", "medium", "gpt-6-luna", "haiku", "medium"]);
+  assert.deepEqual([d.reminderHours, d.maxReminders, d.perBotDaily, d.globalDaily, d.reviewWhileBusy, d.conversationHours], [12, 0, 4, 20, true, 72]);
   assert.equal(ledger.settings().looseThreads, true);
   assert.equal(ledger.settings().triage, false);
   assert.equal("quietHours" in ledger.settings(), false);
@@ -154,9 +158,10 @@ test("disabled by default: no job, thread or message", async t => {
 
 test("Codex: idle-only admission, tool-free ephemeral jobs, and delivery by projection without any native write", async t => {
   const { store, codex, runtime, coordinator, drive } = await setup(t, { reply: kind => kind === "extract" ? NO_MENTIONS : review() });
+  coordinator.ledger.configure({ reviewWhileBusy: false });
   runtime.saveBot(store.bot("atlas"), { activeTurnId: "turn-live", status: "running" });
   await drive(1);
-  assert.equal(jobStarts(codex).length, 0, "a busy bot is not admitted");
+  assert.equal(jobStarts(codex).length, 0, "with reviewWhileBusy off, a busy bot is not admitted");
   assert.equal(store.get("initiativeBot", "atlas").lastSkip, "not-idle");
   runtime.saveBot(store.bot("atlas"), { activeTurnId: null, status: "idle" });
   coordinator.nextScanAt = 0;
@@ -174,7 +179,7 @@ test("Codex: idle-only admission, tool-free ephemeral jobs, and delivery by proj
     assert.notEqual(job.params.cwd, store.bot("atlas").cwd, "jobs run outside the bot workspace");
   }
   assert.equal(extract.params.model, "gpt-6-luna", "mention capture uses the small model");
-  assert.equal(reviewJob.params.model, "gpt-6.1-sol", "the review runs on the bot's own model");
+  assert.equal(reviewJob.params.model, "gpt-6-luna", "reviews run on the pinned review model, not the bot's own");
   assert.equal(codex.calls.filter(c => c.method === "thread/fork").length, 0, "the main conversation is never forked");
   const turns = codex.calls.filter(c => c.method === "turn/start" && c.params.threadId.startsWith("job-"));
   assert.deepEqual(turns.map(c => c.params.sandboxPolicy), [{ type: "readOnly" }, { type: "readOnly" }]);
@@ -237,12 +242,15 @@ test("user activity cancels a review; stale results are rejected without a messa
   await drive(2);
   const running = store.list("privateReview").find(r => r.state === "running" && r.kind === "review");
   assert.ok(running);
+  // The bot's own work does not make a review stale; Dawar writing to it does.
   codex.threads.get("thread-main").turns.push({ id: "turn-2", status: "completed", items: [] });
+  clock.t += 1000;
+  coordinator.observeUserMessage("atlas", { type: "userMessage", id: "u-late", clientId: "owner-late", content: [{ type: "text", text: "actually, one more thing" }] });
   codex.finishJob(running.jobThreadId, running.turnId, output());
   await settle();
   await coordinator.tick();
   const rejected = store.list("initiativeReview").find(r => r.state === "rejected");
-  assert.equal(rejected.reason, "conversation-changed");
+  assert.equal(rejected.reason, "owner-spoke");
   assert.equal(store.list("initiativePublication").length, 0);
   assert.equal(store.list("initiativeItem").length, 0, "stale result changes no ledger state");
 });
@@ -385,7 +393,7 @@ test("resurfacing timing scales with category and importance; due threads lead a
   now = Date.parse("2026-10-15T14:30:00Z");
   assert.equal(ledger.threadDue(ledger.item(thread.id)), true);
   // Global limit 5 with one slot reserved: other kinds stop at 4 while a loose thread is due.
-  ledger.configure({ spacingMinMinutes: 0, spacingMaxMinutes: 0 });
+  ledger.configure({ spacingMinMinutes: 0, spacingMaxMinutes: 0, globalDaily: 5, perBotDaily: 2 });
   const capture = { ledgerVersion: 0, startedAt: new Date(now).toISOString(), reviewId: "r" };
   for (const bot of ["a", "b", "c", "d"]) {
     const id = ledger.applyReview(bot, validateReviewResult(output({ contribution: { key: `${bot}-x`, title: `${bot}-x` } })), capture).contribution.itemId;
@@ -440,8 +448,14 @@ test("a due loose thread triggers a review whose proposal quotes the original me
   assert.equal(mentionWhen("2026-10-15T13:00:00Z", clock.t), "Earlier today");
   assert.equal(mentionWhen("2026-10-14T13:00:00Z", Date.parse("2026-10-15T14:00:00Z")), "Yesterday");
   assert.equal(mentionWhen("2026-10-01T13:00:00Z", Date.parse("2026-10-15T14:00:00Z")), "On Oct 1");
-  // A loose-thread proposal must name its item and an action.
-  assert.throws(() => validateReviewResult(threadProposal(item.id, { proposed_action: null })), /proposed_action/);
+  // An incomplete loose-thread proposal is repaired, not discarded: the
+  // required first step becomes the action, the only open thread the item.
+  const repaired = validateReviewResult(threadProposal(item.id, { proposed_action: null }));
+  assert.equal(repaired.contribution.proposedAction.type, "other");
+  assert.ok(repaired.contribution.proposedAction.detail);
+  assert.equal(validateReviewResult(threadProposal(null), Date.now(), { looseThreadIds: [item.id] }).contribution.itemId, item.id);
+  const held = validateReviewResult(threadProposal(null), Date.now(), { looseThreadIds: [] });
+  assert.deepEqual([held.decision, held.contribution, held.repaired], ["hold", null, "loose-thread-without-item"]);
 });
 
 test("the review packet stays within its token bound and carries bridge-owned sections", async t => {
@@ -512,6 +526,7 @@ test("Claude: extraction and review run as standalone tool-free SDK queries and 
   }
   assert.equal(runs[0].options.model, "haiku", "mention capture uses the small model");
   assert.equal(runs[1].options.model, "opus", "the review uses the bot's own model");
+  assert.equal(runs[0].options.effort, undefined, "Haiku has no reasoning-effort levels, so none is passed");
   assert.equal(claude.data.turns(bot.threadId).length, turnsBefore, "no Claude turn was written");
   assert.equal(claude.sessions.size, sessionsBefore, "no session was loaded");
   const extraction = store.list("initiativeReview").find(r => r.kind === "extract" && r.usage);
@@ -634,7 +649,7 @@ test("replies update the ledger; older reviews cannot overwrite newer decisions"
   assert.equal(coordinator.ledger.deliveryBlock("atlas", item.id), "item-dismissed");
 });
 
-test("delivery spacing, daily limits and one 72-hour reminder", async t => {
+test("delivery spacing, daily limits and a reminder cap when one is configured", async t => {
   const dir = await mkdtemp(join(tmpdir(), "initiative-limits-"));
   const store = new Store(join(dir, "s.sqlite"));
   t.after(async () => { store.close(); await rm(dir, { recursive: true, force: true }); });
@@ -643,6 +658,7 @@ test("delivery spacing, daily limits and one 72-hour reminder", async t => {
   const capture = { ledgerVersion: 0, startedAt: new Date(now).toISOString(), reviewId: "r" };
   const make = (botId, key) => ledger.applyReview(botId, validateReviewResult(output({ contribution: { key, title: key } })), capture).contribution.itemId;
   const publish = (botId, itemId) => ledger.markPublished({ id: `p-${itemId}-${now}`, botId, itemId, createdAt: new Date(now).toISOString() });
+  ledger.configure({ perBotDaily: 2, globalDaily: 5, reminderHours: 72, maxReminders: 1, spacingMinMinutes: 3, spacingMaxMinutes: 5 });
   const a = make("a", "one"), b = make("a", "two"), c = make("a", "three");
   publish("a", a);
   assert.equal(ledger.deliveryBlock("a", b), "spacing");
@@ -678,4 +694,97 @@ test("result validation and reply classification", () => {
   assert.equal(classifyReply("Can you explain the second point in more detail before I decide?"), null);
   assert.equal(ownerReplyText({ content: [{ type: "text", text: "Quoted...\nNew user message:\nyes, proceed" }] }), "yes, proceed");
   assert.equal(PRIVATE_REVIEW_CONFIG["features.multi_agent"], false);
+});
+
+// ---- Oct 15 efficiency pass: always-on, review on change, nag until answered ----
+
+test("version 1 settings follow the new defaults unless Dawar chose a value", async t => {
+  const dir = await mkdtemp(join(tmpdir(), "initiative-v1-"));
+  const store = new Store(join(dir, "s.sqlite"));
+  t.after(async () => { store.close(); await rm(dir, { recursive: true, force: true }); });
+  store.meta("initiative-settings", { version: 1, enabled: true, coverage: "all", model: "", claudeModel: "", extractionEffort: "low", baselineMinutes: 120,
+    reminderHours: 72, perBotDaily: 7, globalDaily: 5, spacingMinMinutes: 3, spacingMaxMinutes: 5, priorities: "Clients first", revision: 3 });
+  const s = new InitiativeLedger(store).settings();
+  assert.deepEqual([s.model, s.claudeModel, s.extractionEffort, s.baselineMinutes, s.reminderHours, s.globalDaily], ["gpt-6-luna", "haiku", "medium", 360, 12, 20]);
+  assert.deepEqual([s.enabled, s.perBotDaily, s.priorities, s.revision, s.version], [true, 7, "Clients first", 3, 2], "chosen values are kept");
+});
+
+test("a busy bot is reviewed privately; its proposal waits until the bot is idle", async t => {
+  const { store, codex, runtime, drive } = await setup(t, { reply: kind => kind === "extract" ? NO_MENTIONS : review() });
+  runtime.saveBot(store.bot("atlas"), { activeTurnId: "turn-live", status: "running" });
+  await drive(6);
+  assert.ok(kinds(store).includes("review:accepted"), "the review ran while the bot was working");
+  assert.equal(mainTurns(codex).length, 0, "the main conversation is not touched");
+  const p = store.list("initiativePublication")[0];
+  assert.ok(p && p.state === "held", "delivery waits for idle");
+  runtime.saveBot(store.bot("atlas"), { activeTurnId: null, status: "idle" });
+  await drive(4);
+  assert.equal(store.get("initiativePublication", p.id).state, "published");
+});
+
+test("unanswered proposals are re-sent as reminders without a model call until answered", async t => {
+  const { store, codex, coordinator, clock } = await setup(t);
+  const ledger = coordinator.ledger, settings = () => ledger.settings();
+  const capture = { ledgerVersion: 0, startedAt: new Date(clock.t).toISOString(), reviewId: "r" };
+  const itemId = ledger.applyReview("atlas", validateReviewResult(output({ contribution: { key: "vendor-quote", title: "Chase the vendor quote" } })), capture).contribution.itemId;
+  ledger.markPublished({ id: "p-first", botId: "atlas", itemId, createdAt: new Date(clock.t).toISOString() });
+  const startsBefore = jobStarts(codex).length;
+  clock.t += 11 * 36e5;
+  coordinator.queueReminders(settings());
+  assert.equal(store.list("initiativePublication").filter(p => p.reminder).length, 0, "not before the interval");
+  clock.t += 2 * 36e5;
+  coordinator.queueReminders(settings()); coordinator.queueReminders(settings());
+  const reminders = () => store.list("initiativePublication").filter(p => p.reminder);
+  assert.equal(reminders().length, 1, "one pending reminder per item");
+  assert.match(reminders()[0].text, /^\*\*Reminder:\*\* .*Chase the vendor quote.*still waiting on you/);
+  assert.equal(ledger.deliveryBlock("atlas", itemId), null);
+  // Delivered, then due again: no cap by default.
+  ledger.markPublished({ ...reminders()[0], publishedAt: new Date(clock.t).toISOString() });
+  clock.t += 13 * 36e5;
+  coordinator.queueReminders(settings());
+  assert.match(reminders().find(p => p.state === "pending").text, /^\*\*Reminder 2:\*\*/);
+  assert.equal(jobStarts(codex).length, startsBefore, "reminders need no review");
+  // An answer stops the nagging.
+  for (const p of reminders()) store.put("initiativePublication", { ...p, state: "abandoned" });
+  ledger.recordOutcome(itemId, "dismissed");
+  clock.t += 13 * 36e5;
+  coordinator.queueReminders(settings());
+  assert.equal(reminders().filter(p => p.state === "pending").length, 0);
+});
+
+test("a stalled time-sensitive item moves to a bot that is being reviewed", async t => {
+  const { store, coordinator, clock } = await setup(t, { bots: ["atlas", "bea"] });
+  const at = iso => new Date(iso).toISOString();
+  store.put("initiativeItem", { id: "initiative-due", botId: "atlas", responsibleBotId: "atlas", kind: LOOSE_THREAD, status: "candidate", title: "Confirm the Musco due date",
+    key: "musco-due", timeSensitive: true, resurfaceAt: at(clock.t - 20 * 36e5), contributors: [], notes: [], createdAt: at(clock.t - 30 * 36e5) });
+  coordinator.saveBotState("atlas", { skippedSince: at(clock.t - 14 * 36e5) });
+  coordinator.saveBotState("bea", { lastReviewAt: at(clock.t - 36e5) });
+  coordinator.handOffStalled(coordinator.ledger.settings());
+  const item = coordinator.ledger.item("initiative-due");
+  assert.equal(item.responsibleBotId, "bea");
+  assert.deepEqual(item.contributors, ["atlas"]);
+  assert.match(item.notes.at(-1).text, /Handed to Bea after 12h/);
+});
+
+test("reviews read only the last 72 hours of high-level exchange", async t => {
+  const { store, codex, runtime, clock } = await setup(t, { enable: false });
+  codex.threads.get("thread-main").turns.unshift({ id: "turn-old", status: "completed", startedAt: (clock.t - 5 * 864e5) / 1000, items: [owner("u-old", "an ancient request"), answer("a-old", "ok")] });
+  codex.threads.get("thread-main").turns.push({ id: "turn-new", status: "completed", startedAt: (clock.t - 36e5) / 1000, items: [owner("u-new", "a fresh request"), answer("a-new", "on it")] });
+  const before = codex.calls.length;
+  const text = await recentConversation(runtime, store.bot("atlas"), 20000, { hours: 72, clock: () => clock.t });
+  assert.match(text, /a fresh request/);
+  assert.doesNotMatch(text, /ancient request/);
+  const reads = codex.calls.slice(before).filter(c => c.method === "thread/turns/list");
+  assert.ok(reads.length && reads.every(c => c.params.itemsView === "summary"), "summary view: no tool payloads");
+  const mark = codex.calls.length;
+  await readOwnerMessages(runtime, store.bot("atlas"), null, { clock: () => clock.t });
+  assert.ok(codex.calls.slice(mark).filter(c => c.method === "thread/turns/list").every(c => c.params.itemsView === "summary"));
+});
+
+test("Claude reviews pause near the subscription limit", () => {
+  const router = rateLimits => ({ claude: { usage: () => ({ rateLimits }) } });
+  assert.equal(claudeNearLimit(router([{ status: "allowed", utilization: 0.85 }]), 80), true);
+  assert.equal(claudeNearLimit(router([{ status: "allowed", utilization: 0.5 }]), 80), false);
+  assert.equal(claudeNearLimit(router([{ status: "rejected" }]), 80), true);
+  assert.equal(claudeNearLimit({}, 80), false, "no Claude backend: nothing to guard");
 });

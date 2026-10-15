@@ -12,7 +12,7 @@ import { MODE_COPY, PROACTIVE_VIEW_HREF, botIncluded, botPatch, botSwitchCopy, m
 // proactive-settings.tsx so these render the same in tests and the app.
 
 export type ProactiveSettings = ModeSettings & { scanMinutes: number; baselineMinutes: number; perBotDaily: number; globalDaily: number; priorities: string;
-  looseThreads: boolean; triage: boolean; revision: number };
+  looseThreads: boolean; triage: boolean; reminderHours: number; reviewWhileBusy: boolean; revision: number };
 export type LooseThread = { id: string; title: string; status: string; due: boolean; ageHours: number; responsibleBot: string; responsibleName: string;
   snoozedUntil: string | null; mentions: { bot: string; botId: string; at: string; quote: string }[] };
 export type BotStatusRow = { botId: string; name: string; included: boolean; lastReviewAt: string | null; nextReviewAt: string | null; failures: number;
@@ -116,12 +116,14 @@ export function ProactiveGlobalView({ status, bots, state, disabled, onConfigure
 
     <Section id="proactive-pace" title="Pace" description="How often bots look for something to raise, and how many messages you get at most.">
       <form className="grid gap-3" key={`pace:${s.revision}`} onSubmit={event => { event.preventDefault(); const n = numbers(event);
-        onConfigure({ baselineMinutes: Math.round(n("hours") * 60), perBotDaily: n("perBot"), globalDaily: n("total") }, "pace"); }}>
-        <div className="grid gap-3 sm:grid-cols-3">
+        onConfigure({ baselineMinutes: Math.round(n("hours") * 60), perBotDaily: n("perBot"), globalDaily: n("total"), reminderHours: n("remind") }, "pace"); }}>
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <label className="grid gap-1 text-sm font-medium text-foreground">Look again every (hours)<Input name="hours" type="number" inputMode="decimal" min={0.5} max={168} step={0.5} defaultValue={s.baselineMinutes / 60} disabled={busy} /></label>
           <label className="grid gap-1 text-sm font-medium text-foreground">Messages per bot per day<Input name="perBot" type="number" inputMode="numeric" min={0} max={20} defaultValue={s.perBotDaily} disabled={busy} /></label>
           <label className="grid gap-1 text-sm font-medium text-foreground">Messages per day in total<Input name="total" type="number" inputMode="numeric" min={0} max={100} defaultValue={s.globalDaily} disabled={busy} /></label>
+          <label className="grid gap-1 text-sm font-medium text-foreground">Remind me every (hours)<Input name="remind" type="number" inputMode="decimal" min={1} max={720} step={1} defaultValue={s.reminderHours} disabled={busy} /></label>
         </div>
+        <p className="text-sm text-muted-foreground">Unanswered proposals come back as short reminders until you reply “yes, proceed”, “next week”, “leave it” or “done”.</p>
         <div className="flex items-center gap-3"><Button type="submit" variant="outline" disabled={busy}>Save pace</Button><SaveStatus state={state} section="pace" /></div>
       </form>
       <details className="rounded-lg border border-border px-3">
@@ -136,6 +138,10 @@ export function ProactiveGlobalView({ status, bots, state, disabled, onConfigure
             onChange={event => onConfigure({ triage: event.target.checked }, "triage")} />
             <span><span className="font-medium text-foreground">Skip quiet bots</span><br /><span className="text-muted-foreground">Only look at bots with something new or due, which saves AI use.</span></span></label>
           <SaveStatus state={state} section="triage" />
+          <label className="flex items-start gap-3 text-sm leading-6"><input type="checkbox" className="mt-1 size-4 shrink-0 accent-primary" disabled={busy} checked={s.reviewWhileBusy}
+            onChange={event => onConfigure({ reviewWhileBusy: event.target.checked }, "busy")} />
+            <span><span className="font-medium text-foreground">Review busy bots too</span><br /><span className="text-muted-foreground">Reviews are private and read-only, so they can run while a bot works. Messages still wait until it is free.</span></span></label>
+          <SaveStatus state={state} section="busy" />
         </div>
       </details>
     </Section>

@@ -730,7 +730,11 @@ export class ClaudeBackend extends EventEmitter {
     const input = new InputQueue(), abortController = new AbortController();
     const onAbort = () => abortController.abort();
     signal?.addEventListener("abort", onAbort, { once: true });
-    const q = this.query({ prompt: input, options: { ...this.sdkOptions(), cwd, ...(model ? { model } : {}), ...(EFFORTS.includes(effort) ? { effort } : {}),
+    // Haiku has no reasoning-effort levels: only pass an effort the model supports.
+    const fallback = FALLBACK_MODELS.find(m => m.value === model);
+    const known = this.models.find(m => m.model === model) ?? (fallback ? nativeModel(fallback) : null);
+    const supported = !known || known.supportedReasoningEfforts.some(e => e.reasoningEffort === effort);
+    const q = this.query({ prompt: input, options: { ...this.sdkOptions(), cwd, ...(model ? { model } : {}), ...(EFFORTS.includes(effort) && supported ? { effort } : {}),
       persistSession: false, settingSources: [], tools: [], allowedTools: [], mcpServers: {}, maxTurns: 3, systemPrompt: instructions,
       outputFormat: { type: "json_schema", schema }, env: this.env(), abortController,
       // Only the SDK's own structured-output step may run; everything else is refused.

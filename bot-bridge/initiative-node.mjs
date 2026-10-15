@@ -79,6 +79,13 @@ Substantial research, implementation and external actions start only after Dawar
 }
 
 /** Normalized usage across providers: { totalTokens, inputTokens, cachedInputTokens, outputTokens, costUsd }. */
+/** A Claude subscription window is rejected or at/above `percent` utilization: Claude reviews wait. */
+export function claudeNearLimit(router, percent = 80) {
+  try {
+    const windows = router?.claude?.usage?.().rateLimits ?? [];
+    return windows.some(w => w.status === "rejected" || (typeof w.utilization === "number" && w.utilization * 100 >= percent));
+  } catch { return false; }
+}
 export function normalizeUsage(usage) {
   if (!usage) return null;
   if ("totalTokens" in usage) return { totalTokens: usage.totalTokens ?? 0, inputTokens: usage.inputTokens ?? 0, cachedInputTokens: usage.cachedInputTokens ?? 0,
@@ -173,10 +180,15 @@ export class PrivateReviews {
     // The bot's ordinary admission lock is held only for the admission check
     // and job creation, never for the run: user input is not delayed.
     return this.runtime.lock(bot.id, async () => {
+      // A busy bot may still be reviewed (read-only, private): only stopped,
+      // maintenance, unsupported and already-reviewing states refuse it.
+      const busyOk = settings.allowBusy === true;
       const local = this.localIdle(this.store.bot(bot.id), { locked: true });
-      if (!local.idle) return { id: reviewId, state: "refused", reason: local.reason };
+      if (!local.idle && !(busyOk && local.reason === "not-idle")) return { id: reviewId, state: "refused", reason: local.reason };
+      if (botProvider(bot) === "claude" && claudeNearLimit(this.codex, settings.claudeHeadroomPercent))
+        return { id: reviewId, state: "refused", reason: "claude-limit" };
       const state = await this.nativeState(bot);
-      if (!["idle", "notLoaded"].includes(state.status) || state.queued || state.goalActive || kind === "review" && state.revision !== expectedRevision)
+      if (!busyOk && (!["idle", "notLoaded"].includes(state.status) || state.queued || state.goalActive || kind === "review" && state.revision !== expectedRevision))
         return { id: reviewId, state: "refused", reason: "revision-changed" };
       const record = { id: reviewId, botId: bot.id, threadId: bot.threadId, kind, provider: botProvider(bot), state: "starting", revision: state.revision,
         baseTurnId: state.lastTurnId, startedAt: this.at(), deadlineAt: new Date(this.clock() + (settings.timeoutSeconds ?? 180) * 1000).toISOString() };
@@ -193,7 +205,7 @@ export class PrivateReviews {
           prompt = extractionPrompt({ bot, messages: batch.messages, actions: batch.actions, threads: brief.ledger, bots: brief.bots ?? [] });
           schema = EXTRACTION_OUTPUT_SCHEMA; instructions = EXTRACTION_INSTRUCTIONS;
         } else {
-          const packet = await buildReviewPacket(this.runtime, bot, brief, { maxTokens: settings.packetTokens ?? 12000 });
+          const packet = await buildReviewPacket(this.runtime, bot, brief, { maxTokens: settings.packetTokens ?? 12000, conversationHours: settings.conversationHours ?? 72 });
           this.store.put("privateReview", { ...this.store.get("privateReview", reviewId), packetTokens: packet.tokens, packetSections: packet.sections });
           prompt = reviewPrompt(brief, packet.text); schema = REVIEW_OUTPUT_SCHEMA; instructions = REVIEW_INSTRUCTIONS;
         }
