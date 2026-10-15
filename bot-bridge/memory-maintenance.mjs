@@ -1,3 +1,4 @@
+// @ts-check
 import { lstat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { profileContext } from './profiles.mjs';
@@ -22,6 +23,7 @@ export const MEMORY_TOOL = {
 };
 const now = () => new Date().toISOString();
 export class BotMemoryMaintenance {
+  /** @param {import('./store.mjs').StateRuntime} runtime */
   constructor(runtime) { this.runtime = runtime; this.store = runtime.store; this.pending = new Map(); this.running = false; this.after = null; this.scanAfter = new Map(); }
   setStatus(botId, status) {
     const bot = this.store.bot(botId), previous = bot.profilePreparation ?? null;
@@ -31,7 +33,7 @@ export class BotMemoryMaintenance {
       this.runtime.saveBot(bot, { profilePreparation: next ? { ...next, observedAt: now() } : null });
   }
   async context(bot, team = null, maintenanceId = null, onMemoryContent = () => {}, { threadPolicy = false } = {}) {
-    let memoryState;
+    /** @type {{state?: string, file?: string, message?: string}|null|undefined} */ let memoryState;
     try {
       const matches = () => { const current = this.store.bot(bot.id); return current.threadId === bot.threadId && current.cwd === bot.cwd && !current.deletedAt; };
       if (!matches()) throw Error('Bot workspace/thread changed before profile preparation.');
@@ -173,7 +175,7 @@ export class BotMemoryMaintenance {
               sourceHash: receipt.sourceHash, operationId: receipt.operationId, message: 'Memory maintenance needs a current semantic review. The original archive, candidate and receipt are retained.' });
             return;
           }
-          if (previous?.operationId === receipt.operationId && previous.state === 'done') return;
+          if (previous && previous.operationId === receipt.operationId && previous.state === 'done') return;
           this.runtime.primary.accept(bot, intakeId, { kind: 'memory-maintenance', sourceId: receipt.operationId, summary: 'File memory maintenance',
             text: `Approved file-memory maintenance for this bot only. Original operation ${receipt.operationId}; source SHA-256 ${receipt.sourceHash}; ${receipt.sourceBytes} UTF-8 bytes. Read current mandatory profiles and the FULL private archive ${receipt.archive}. Write a smaller, focused # Memory candidate at ${receipt.candidate} (0600), with the exact archive reference. Preserve current constraints/preferences, approvals, unfinished scopes, uncertain action IDs and evidence pointers. Verify with bots_memory_maintenance using candidateHash and the five explicit review categories, then commit the SAME operation/hash. Do not overwrite MEMORY.md directly, compact native history, resume Goals, change settings or perform unrelated work. Human Send/Stop/questions take priority; if steered, retain the candidate and return to the human's work. Quiet unchanged; after confirmed compaction report before/after bytes and archive only. Source mismatch or uncertain ACK requires original-ID reconciliation, not another intake.` });
           this.store.put('botMemory', { id: bot.id, botId: bot.id, operationId: receipt.operationId, sourceHash: receipt.sourceHash, state: 'queued', intakeId });

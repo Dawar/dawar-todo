@@ -1,3 +1,4 @@
+// @ts-check
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { AsyncLocalStorage } from 'node:async_hooks';
@@ -52,8 +53,9 @@ export class NativeErrorRecovery {
     this.save(row,{authVerifiedEpoch:this.runtime.epoch,authVerifiedAt:iso(this.clock()),phase:row.releaseActionId?row.phase:'pending',nextRetryAt:iso(this.clock())});
     return true;
   }
+  /** @param {import('./store.mjs').StateRuntime} runtime @param {{clock?: () => number, random?: () => number}} [options] */
   constructor(runtime, { clock = Date.now, random = Math.random } = {}) {
-    Object.assign(this, { runtime, clock, random });
+    this.runtime = runtime; this.clock = clock; this.random = random;
     this.eventVersions = new Map();
     this.terminalCache = new Map();
     this.scope = new AsyncLocalStorage();
@@ -91,13 +93,13 @@ export class NativeErrorRecovery {
   note(botId, message, currentMetadata = false) {
     if(!currentMetadata)this.eventVersions.set(botId,(this.eventVersions.get(botId)??0)+1);
     const b = this.runtime.store.bot(botId), p = message.params ?? {}, row = this.get(botId);
-    if(row?.threadId===b.threadId && !['recovered','superseded'].includes(row.phase) && row.releaseActionId && (message.method==='thread/closed' || message.method==='thread/status/changed' && p.status?.type==='notLoaded')) {
+    if(!!row&&row.threadId===b.threadId && !['recovered','superseded'].includes(row.phase) && row.releaseActionId && (message.method==='thread/closed' || message.method==='thread/status/changed' && p.status?.type==='notLoaded')) {
       this.save(row,{nextRetryAt:iso(this.clock()),reason:'Native unloading was observed; checking the original thread before reopening.',lastNativeStatus:'notLoaded',lastObservedAt:iso(this.clock())});return;
     }
-    if (message.method === 'turn/started' && row?.threadId === b.threadId && usableTurn(p.turn) && p.turn.status === 'inProgress' && p.turn.id!==row.failedTurnId) {
+    if (message.method === 'turn/started' && !!row && row.threadId === b.threadId && usableTurn(p.turn) && p.turn.status === 'inProgress' && p.turn.id!==row.failedTurnId) {
       this.save(row, {phase:'superseded',nextRetryAt:null,reason:null,nativeRetry:false,nativeRetryEpoch:null}); return;
     }
-    if (message.method === 'thread/started' && row?.threadId === b.threadId && p.thread?.id === b.threadId && row.resumeActionId) {
+    if (message.method === 'thread/started' && !!row && row.threadId === b.threadId && p.thread?.id === b.threadId && row.resumeActionId) {
       const a = this.runtime.store.get('nativeRecoveryAction',row.resumeActionId);
       if (a?.epoch === this.runtime.epoch && ['dispatching','uncertain'].includes(a.state))
         this.runtime.store.put('nativeRecoveryAction',{...a,state:'acknowledged',evidence:'same-connection-thread-started'});
@@ -107,9 +109,9 @@ export class NativeErrorRecovery {
     const turnId = terminal ? p.turn.id : p.turnId;
     if ((!terminal && message.method !== 'error') || !usableTurnId(turnId) || p.threadId && p.threadId !== b.threadId || b.activeTurnId && b.activeTurnId !== turnId) return;
     if (!currentMetadata && !b.activeTurnId && row?.failedTurnId !== turnId) return;
-    if (!currentMetadata && row?.failedTurnId === turnId && ['recovered','superseded'].includes(row.phase)) return;
+    if (!currentMetadata && !!row && row.failedTurnId === turnId && ['recovered','superseded'].includes(row.phase)) return;
     const error = terminal ? p.turn.error : p.error;
-    const errorCode = code(error), same = row?.threadId === b.threadId && row.failedTurnId === turnId;
+    const errorCode = code(error), same = !!row && row.threadId === b.threadId && row.failedTurnId === turnId;
     this.save(same ? row : { id:botId, botId, threadId:b.threadId, failedTurnId:turnId,
       attempts:0, createdAt:iso(this.clock()), originalOperationId:this.runtime.store.get('botActivity',botId)?.dispatchOperationId ?? null }, {
       errorCode:errorCode === 'other' && same ? row.errorCode : errorCode,
@@ -124,14 +126,14 @@ export class NativeErrorRecovery {
     });
   }
   recoverable(row) { return transient.has(row?.errorCode)||row?.authenticationFailure===true&&row.authVerifiedEpoch===this.runtime.epoch&&this.runtime.account?.authenticated===true; }
-  waiting(botId) { const r=this.get(botId); return r?.threadId===this.runtime.store.bot(botId).threadId && !(r.nativeRetry && r.nativeRetryEpoch===this.runtime.epoch) && this.recoverable(r) && !['recovered','superseded'].includes(r.phase) &&
+  waiting(botId) { const r=this.get(botId); return !!r&&r.threadId===this.runtime.store.bot(botId).threadId && !(r.nativeRetry && r.nativeRetryEpoch===this.runtime.epoch) && this.recoverable(r) && !['recovered','superseded'].includes(r.phase) &&
     (Boolean(r.releaseActionId) || !this.runtime.loaded.has(r.threadId)); }
-  needsRecovery(botId,turnId) {const r=this.get(botId);return r?.failedTurnId===turnId && this.recoverable(r) && !r.nativeRetry;}
+  needsRecovery(botId,turnId) {const r=this.get(botId);return !!r&&r.failedTurnId===turnId && this.recoverable(r) && !r.nativeRetry;}
   publish(botId) {const row=this.get(botId);if(row)this.save(row);}
   async qualifyRetained(botId,token) {
     const r=this.runtime,b=r.store.bot(botId);
     if(!activityUnchanged(r,botId,token)||stopped(b)||r.maintenance.holding()||r.authRecovery?.active)throw failure('Recovery state changed before retained-record observation.');
-    const proof=new MaintenanceTerminalProof({db:r.store.db,bots:()=>[r.store.bot(botId)]},{botId}),before=proof.snapshot();
+    const proof=new MaintenanceTerminalProof({db:r.store.db,bots:()=>[r.store.bot(botId)]},{botId}),before=/** @type {any} */ (proof.snapshot());
     this.terminalCache.delete(botId);
     if(!before)return;
     const native=await proof.read(before.input,6000),after=proof.snapshot();
@@ -142,9 +144,9 @@ export class NativeErrorRecovery {
   }
   async awaitUnload(botId,token,call) {
     const row=this.get(botId),r=this.runtime;
-    if(row?.threadId!==r.store.bot(botId).threadId || !this.waiting(botId) || !row.releaseActionId)return;
+    if(!row || row.threadId!==r.store.bot(botId).threadId || !this.waiting(botId) || !row.releaseActionId)return;
     await this.qualifyRetained(botId,token);
-    const resumed=row.resumeActionId && r.store.get('nativeRecoveryAction',row.resumeActionId);
+    const resumed=row.resumeActionId ? r.store.get('nativeRecoveryAction',row.resumeActionId) : null;
     if(resumed?.epoch===r.epoch && ['dispatching','uncertain','acknowledged'].includes(resumed.state))return;
     const action=r.store.get('nativeRecoveryAction',row.releaseActionId);
     if(!action || ['not-submitted','unsupported','connection-ended'].includes(action.state))return;
@@ -169,7 +171,7 @@ export class NativeErrorRecovery {
     const bot=this.runtime.store.bots().find(b=>b.threadId===p.threadId);
     if(!bot || !this.waiting(bot.id))return;
     const permit=this.scope.getStore(),row=this.get(bot.id),a=permit && this.runtime.store.get('nativeRecoveryAction',permit.actionId);
-    if(method==='thread/resume' && permit?.actionId===row.resumeActionId && a?.epoch===this.runtime.epoch && a.state==='dispatching' && a.threadId===p.threadId)return;
+    if(method==='thread/resume' && !!row && permit?.actionId===row.resumeActionId && a?.epoch===this.runtime.epoch && a.state==='dispatching' && a.threadId===p.threadId)return;
     throw Object.assign(failure('The original conversation is recovering. Your new input was not submitted; retain it until recovery finishes.'),{outcome:'rejected',recoveryNotSubmitted:true});
   }
   localFence(botId, token) {
@@ -178,16 +180,16 @@ export class NativeErrorRecovery {
       throw failure('Stop, maintenance, sign-in or changed native activity prevents recovery.');
     const control = r.nativeRecoveryControl?.(botId);
     if (r.nativeRecoveryControl && !control) throw failure('The assigned node control is offline or stopped.');
-    let barrier = r.store.db.prepare(`SELECT count(*) n FROM records WHERE bot_id=? AND (
+    let barrier = Number(r.store.db.prepare(`SELECT count(*) n FROM records WHERE bot_id=? AND (
       kind IN ('pending','managerRequest','runPending') OR
       (kind IN ('primaryInbox','promptQueue','runIntake','answerExecution','managerOperation','managerExecution','burstBatch','messageBurst') AND json_extract(json,'$.state') IN ('dispatching','uncertain','native-queued','accepted') AND json_extract(json,'$.terminalStatus') IS NULL) OR
       (kind IN ('managerTask','runLane') AND (json_extract(json,'$.activeTurnId') IS NOT NULL OR json_extract(json,'$.state') IN ('running','starting','uncertain','provisioning'))) OR
-      (kind='operatorCall' AND json_extract(json,'$.endedAt') IS NULL))`).get(botId).n;
+      (kind='operatorCall' AND json_extract(json,'$.endedAt') IS NULL))`).get(botId)?.n);
     barrier-=passiveLegacyManagerRejections(r.store,botId).length;
     const retained=this.terminalCache.get(botId);
     if(retained?.threadId===b.threadId&&retained.generation===token.generation&&this.clock()-retained.at<10000&&
         retained.records.every(row=>JSON.stringify(r.store.get(row.kind,row.id))===row.raw))barrier-=retained.records.length;
-    const uncertain=r.store.db.prepare("SELECT count(*) n FROM operations WHERE status IN ('dispatching','uncertain') AND json_extract(json,'$.botId')=?").get(botId).n;
+    const uncertain=Number(r.store.db.prepare("SELECT count(*) n FROM operations WHERE status IN ('dispatching','uncertain') AND json_extract(json,'$.botId')=?").get(botId)?.n);
     if (barrier!==0 || uncertain || b.activeTurnId || [...(r.codex.pending?.values() ?? [])].some(p=>p.threadId===b.threadId)) throw failure('Original pending work, tools or unknown acceptance must settle first.');
     if(r.secure?.live.size && (!r.secure.recoveryBusy || r.secure.recoveryBusy(botId)))throw failure('An in-flight private use or transfer must settle before thread recovery.');
     const privateHandles=[...(r.secure?.live.keys()??[])].filter(id=>r.store.get('secureInput',id)?.botId===botId).sort();
@@ -222,10 +224,10 @@ export class NativeErrorRecovery {
     try {
       const tracking={retainRecoveryReceipt:true,onRequestId:requestId=>r.store.put('nativeRecoveryAction',{...record,requestId})};
       const result=await this.scope.run({actionId:id},()=>fn(id,tracking));
-      r.store.put('nativeRecoveryAction',{...r.store.get('nativeRecoveryAction',id),state:'acknowledged',result,finishedAt:iso(this.clock())});return result;
+      r.store.put('nativeRecoveryAction',{...record,...r.store.get('nativeRecoveryAction',id),state:'acknowledged',result,finishedAt:iso(this.clock())});return result;
     } catch(error) {
       const observed=r.store.get('nativeRecoveryAction',id);
-      if(observed?.state!=='acknowledged')r.store.put('nativeRecoveryAction',{...observed,state:error.recoveryNotSubmitted?'not-submitted':error.rpcCode===-32601?'unsupported':'uncertain',finishedAt:iso(this.clock())});
+      if(observed?.state!=='acknowledged')r.store.put('nativeRecoveryAction',{...record,...observed,state:error.recoveryNotSubmitted?'not-submitted':error.rpcCode===-32601?'unsupported':'uncertain',finishedAt:iso(this.clock())});
       throw failure(error.rpcCode===-32601?'The pinned native recovery operation is unsupported.':'Original recovery acknowledgement is unconfirmed; checking its original state without repeating it.');
     }
   }
@@ -240,13 +242,15 @@ export class NativeErrorRecovery {
     if(!row || row.threadId!==b.threadId || row.failedTurnId!==last.id || !row.terminalConfirmed) {
       this.note(botId,{method:'turn/completed',params:{threadId:b.threadId,turn:last}},true);row=this.get(botId);
     }
+    // note() records nothing when the bot has since started another turn.
+    if(!row)throw failure('The failed native turn is no longer the current one; checking again.');
     this.runtime.store.put('nativeErrorRecovery',{...row,lastNativeStatus:'systemError',lastObservedAt:iso(this.clock())});
     const verifiedAuth=row.authVerifiedEpoch===r.epoch&&r.account?.authenticated===true&&row.authenticationFailure===true;
     if(row.nativeRetry || !transient.has(row.errorCode)&&!verifiedAuth)throw failure('This failure needs owner attention; safe current-state checks will continue.');
     if(row.releaseActionId) {
       const action=r.store.get('nativeRecoveryAction',row.releaseActionId);
       if(action?.state==='unsupported' && action.epoch===r.epoch)throw failure('The pinned recovery operation is unsupported; a compatible runtime update is required.');
-      if(!['not-submitted','connection-ended'].includes(action?.state) && !(action?.state==='unsupported' && action.epoch!==r.epoch))throw failure('Waiting for the original native thread to unload; no input is being replayed.');
+      if(!['not-submitted','connection-ended'].includes(action?.state ?? '') && !(action?.state==='unsupported' && action.epoch!==r.epoch))throw failure('Waiting for the original native thread to unload; no input is being replayed.');
     }
     const control=await this.guards(botId,token,read,'systemError',call);
     await this.action(row,'unsubscribe',async(_id,tracking)=>{
@@ -259,16 +263,17 @@ export class NativeErrorRecovery {
     // activity change while it is awaiting its acknowledgement.
     if(this.localFence(botId,token)!==control)throw failure('Recovery state changed after unsubscribe; the original acknowledgement is retained.');
     const current=this.get(botId);
-    if(current.threadId===b.threadId && current.failedTurnId===row.failedTurnId && current.phase!=='superseded')this.save(current,{phase:'waiting-unload',reason:'Native unloading may require its 30-minute inactivity grace period.'});
+    if(current && current.threadId===b.threadId && current.failedTurnId===row.failedTurnId && current.phase!=='superseded')this.save(current,{phase:'waiting-unload',reason:'Native unloading may require its 30-minute inactivity grace period.'});
     throw failure('Waiting for native unloading before reopening the same conversation.');
   }
   async resume(botId, token, read, expectedStatus='notLoaded',call=(m,p,t)=>this.runtime.codex.call(m,p,12000,t)) {
-    const row=this.get(botId),r=this.runtime,b=r.store.bot(botId);
+    const row=this.get(botId),r=this.runtime,b=r.store.bot(botId),threadId=b.threadId;
+    if(!row || !threadId)throw failure('No native recovery is recorded for this conversation.');
     await this.qualifyRetained(botId,token);
     const released=row.releaseActionId?r.store.get('nativeRecoveryAction',row.releaseActionId):null;
     // Current-state metadata is not the missing action ACK. A live-process
     // unknown request could still complete after a reload, so never race it.
-    if(['dispatching','uncertain'].includes(released?.state))throw failure('The original unsubscribe acknowledgement must settle before reopening this thread.');
+    if(['dispatching','uncertain'].includes(released?.state ?? ''))throw failure('The original unsubscribe acknowledgement must settle before reopening this thread.');
     const control=await this.guards(botId,token,read,expectedStatus,call);
     if(row.authenticationFailure){
       const account=await call('account/read',{refreshToken:true});
@@ -276,18 +281,18 @@ export class NativeErrorRecovery {
       if(!r.account.authenticated)throw failure('Codex sign-in is required before reopening this conversation.');
       if(this.localFence(botId,token)!==control)throw failure('Recovery control changed during authentication verification.');
     }
-    r.loaded.delete(b.threadId);
+    r.loaded.delete(threadId);
     await this.action(row,'resume',async(id,tracking)=>{await r.load(b,{nativeRecoveryActionId:id,nativeRecoveryTracking:tracking,nativeRecoveryCall:call,
       nativeRecoveryBeforeSubmit:()=>{if(this.localFence(botId,token)!==control)throw failure('Recovery control changed before resume.');}});return {threadId:b.threadId};});
     if(this.localFence(botId,token)!==control)throw failure('Recovery state changed after resume; the original acknowledgement is retained.');
     // A same-connection thread/started notification may confirm a lost ACK.
-    const latest=this.get(botId),a=latest.resumeActionId?r.store.get('nativeRecoveryAction',latest.resumeActionId):null;
-    if(a?.epoch===r.epoch && a.state==='acknowledged' && r.store.bot(botId).threadId===b.threadId)r.loaded.add(b.threadId);
+    const latest=this.get(botId),a=latest?.resumeActionId?r.store.get('nativeRecoveryAction',latest.resumeActionId):null;
+    if(a?.epoch===r.epoch && a.state==='acknowledged' && r.store.bot(botId).threadId===threadId)r.loaded.add(threadId);
   }
   failed(botId, error) {
     const row=this.get(botId);if(!row || ['superseded','recovered'].includes(row.phase))return null;
     const attempts=(row.attempts??0)+1,next=iso(this.clock()+recoveryDelay(attempts,this.random,row.retryAfterMs??0));
-    const unsupported=error.rpcCode===-32601 || [row.releaseActionId,row.resumeActionId].filter(Boolean).some(id=>{const a=this.runtime.store.get('nativeRecoveryAction',id);return a?.state==='unsupported'&&a.epoch===this.runtime.epoch;});
+    const unsupported=error.rpcCode===-32601 || [row.releaseActionId,row.resumeActionId].filter(/** @returns {id is string} */ id=>Boolean(id)).some(id=>{const a=this.runtime.store.get('nativeRecoveryAction',id);return a?.state==='unsupported'&&a.epoch===this.runtime.epoch;});
     return this.save(row,{attempts,nextRetryAt:next,...(unsupported?{phase:'action-required'}:{}),reason:unsupported ? 'A required native recovery operation is unsupported; a compatible runtime is needed.' : error.nativeRecoverySafe ? error.message : 'Native current-state recovery is unavailable; checking again without replaying input.'});
   }
   complete(botId) {

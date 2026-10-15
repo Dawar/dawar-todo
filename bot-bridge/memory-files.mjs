@@ -190,6 +190,7 @@ export function memoryReceipt(receipt) {
     archive: `${receipt.cwd}/.memory-maintenance/${receipt.id}/source.md`, candidate: `${receipt.cwd}/.memory-maintenance/${receipt.id}/candidate.md`,
     reviewedAt: receipt.review?.at ?? null, completedAt: receipt.completedAt ?? null };
 }
+/** @param {Record<string, any>} bot @param {AbortSignal|null} [signal] */
 export async function prepareMemory(bot, signal = null) {
   const workspace = await memoryWorkspace(bot);
   let source, id;
@@ -242,6 +243,7 @@ export async function verifyMemory(bot, id, expectedHash, review, provenance) {
     await save(receipt); await markCurrent(workspace, id); return memoryReceipt(receipt);
   });
 }
+/** @param {Record<string, any>} bot @param {string} id @param {string} expectedHash @param {() => boolean} [guard] @param {AbortSignal|null} [signal] */
 export async function commitMemory(bot, id, expectedHash, guard = () => true, signal = null) {
   return memoryOperation(bot, id, async ({ workspace, scope, receipt, save, put }) => {
     if (!receipt) fail('Original memory operation is missing.');

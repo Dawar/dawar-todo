@@ -61,7 +61,7 @@ export class InitiativeCoordinator {
   saveBotState(botId, patch) { return this.store.put("initiativeBot", { ...this.botState(botId), ...patch, id: botId, botId }); }
   // A due review the node refused (busy, stopped) keeps its job; skippedSince
   // makes a long run of such skips visible (initiativeSkipHold), not silent.
-  skip(botId, reason) { const at = this.at(); this.saveBotState(botId, { lastSkip: reason ?? "busy", lastSkipAt: at, skippedSince: this.botState(botId).skippedSince ?? at }); }
+  skip(botId, reason) { const at = this.at(); this.saveBotState(botId, { lastSkip: reason ?? "busy", lastSkipAt: at, skippedSince: this.botState(botId).skippedSince ?? at, skippingSince: this.botState(botId).skippingSince ?? at }); }
   reviews(states) { return this.store.list("initiativeReview").filter(r => states.has(r.state)); }
   names() { return Object.fromEntries(this.bots().map(b => [b.id, b.name ?? b.slug ?? b.id])); }
   /** Both providers are eligible; the node reports what it can actually run. */
@@ -121,7 +121,7 @@ export class InitiativeCoordinator {
     if (settings.triage) {
       const kept = reviews.filter(e => e.score > 1).sort((a, b) => b.score - a.score).slice(0, settings.triageMaxReviews);
       // Triage is a deliberate choice, not a hold; it does not start skippedSince.
-      for (const e of reviews) if (!kept.includes(e)) this.saveBotState(e.botId, { lastSkip: "triage", lastSkipAt: this.at() });
+      for (const e of reviews) if (!kept.includes(e)) this.saveBotState(e.botId, { lastSkip: "triage", lastSkipAt: this.at(), skippingSince: this.botState(e.botId).skippingSince ?? this.at() });
       reviews = kept;
     }
     this.backlog = [...due.filter(e => e.kind === "extract"), ...reviews]
@@ -279,7 +279,7 @@ export class InitiativeCoordinator {
     const hinted = Date.parse(result.nextReviewAt ?? "") || 0;
     // Every completed review schedules another; the baseline is the earliest.
     const next = Math.min(this.clock() + 7 * 864e5, Math.max(this.clock() + baseline, hinted));
-    this.saveBotState(review.botId, { lastReviewAt: this.at(), nextReviewAt: new Date(next).toISOString(), failures: 0, backoffUntil: null, skippedSince: null,
+    this.saveBotState(review.botId, { lastReviewAt: this.at(), nextReviewAt: new Date(next).toISOString(), failures: 0, backoffUntil: null, skippedSince: null, skippingSince: null,
       lastOutcome: result.decision, lastError: null, lastRevision: capture.revision });
     return this.endReview(review, "accepted", { usage, packetTokens: v.packetTokens ?? null, decision: result.decision, itemIds: applied.items.map(i => i.id),
       publicationId: publication?.id ?? null, publicationBlock, ignored: applied.ignored });

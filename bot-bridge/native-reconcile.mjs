@@ -1,6 +1,10 @@
 import { requireTurn } from "./native-turn.mjs";
 
 // Read-only, bounded reconciliation. Absence from a page is never rejection.
+/**
+ * @param {any} runtime @param {string} threadId
+ * @param {{turnId?: string|null, clientId?: string|null, cursor?: string|null, itemsView?: "full"|"summary"}} options
+ */
 export async function findNativeTurn(runtime, threadId, { turnId, clientId, cursor = null, itemsView = "full" }) {
   if (!["full", "summary"].includes(itemsView)) throw new Error("Invalid native reconciliation view.");
   const seen = new Set();

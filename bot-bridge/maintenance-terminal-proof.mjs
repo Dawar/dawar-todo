@@ -27,7 +27,7 @@ export function readTerminalProof(input, timeout) {
 
 export class MaintenanceTerminalProof {
   constructor(store, { read = readTerminalProof, fresh = nativeProofFresh, originals = null, botId = null } = {}) {
-    Object.assign(this, { store, read, fresh, originals, botId });
+    this.store = store; this.read = read; this.fresh = fresh; this.originals = originals; this.botId = botId;
   }
   snapshot() {
     const records = [];
