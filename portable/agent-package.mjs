@@ -16,7 +16,9 @@ await mkdir(directory);
 await mkdir(join(directory,'bot-bridge'),{recursive:true});
 await cp('dist/portable/portable-agent.mjs',join(directory,'bot-bridge/portable-agent.mjs'));
 await cp('portable/agent-download',join(directory,'portable'),{recursive:true});
-for(const file of ['config.mjs','central-loopback.mjs','protocol.mjs','control-protocol.mjs','private-file.mjs','bounded-json.mjs','enrollment-client.mjs','agent-capabilities.mjs','services.mjs','agent-cli.mjs'])await cp(join('portable',file),join(directory,'portable',file));
+for(const file of ['config.mjs','central-loopback.mjs','protocol.mjs','control-protocol.mjs','private-file.mjs','bounded-json.mjs','enrollment-client.mjs','agent-capabilities.mjs','services.mjs','agent-cli.mjs','mac-releases.mjs','codex-runtime.mjs','pairing.mjs'])await cp(join('portable',file),join(directory,'portable',file));
+// The Mac menu bar app runs this controller from its bundled agent release.
+for(const file of ['bundle.mjs','controller.mjs','cli.mjs'])await cp(join('portable/mac-agent',file),join(directory,'portable/mac-agent',file));
 for(const file of RUNTIME_COMPANIONS)await cp(join('bot-bridge',file),join(directory,'bot-bridge',file));
 await cp('bot-bridge/desktops',join(directory,'bot-bridge/desktops'),{recursive:true});
 await cp('portable/agent-dependencies/package.json',join(directory,'package.json'));
