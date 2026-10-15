@@ -3,13 +3,14 @@ import { CodexAuthRecovery } from "./codex-auth-recovery";
 import {ExecutionAccess} from './execution-access';
 import type {BotAdmissionWork} from '../../lib/bot-work-view';
 import { ControlledDialog } from "@/components/ui/controlled-dialog";
-import { CreateBotDialog } from "./create-bot-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ReplyQuote } from "./message-reply";
 
 import {
   Activity,
+  lazy,
+  Suspense,
   type ClipboardEvent,
   useCallback,
   useEffect,
@@ -42,8 +43,6 @@ import {
   } from "lucide-react";
 import type { Bot } from "./single-thread-contract";
 import { BotAvatar as Avatar } from "./bot-avatar";
-import { BotAdminApprovals } from "./bot-admin-approvals";
-import { PersonalitySettings } from "./personality-settings";
 import { ActiveTurnElapsed } from "./active-turn-elapsed";
 import { WorkOverview, AutomaticInbox, NativeWriterRecovery, workLabel } from "./work-overview";
 import { GoalIndicator, NativeGoalPanel } from "./native-goal-panel";
@@ -54,29 +53,23 @@ import type {
   BotSchedule,
   BotQueuedSubmission,
 } from "../../lib/bots-types";
-import { ScheduleEditor } from "./schedule-editor";
 import { botsClient as client } from "./client";
 import type { NativeEvent } from "./thread-state";
 import { BotConversation } from "./timeline";
 import { BotSidebarList, type SidebarFocusIntent } from "./sidebar-list";
 import { FollowupComposerProvider } from "./codex-followup";
 import { SidebarFilters } from "./sidebar-filters";
-import { AnnouncementDialog } from "./announcements";
 import { searchSidebarBots } from "./announcement-state";
 import { useSharedReadPositions } from './read-position-sync';
 import { TaskRequestWorkspace } from "./task-request-ui";
 import { RequestCard } from "./request-card";
 import { MainStopButton, MainStopRecovery } from "./run-controls";
 import { BotWorkControls } from "./bot-work-controls";
-import { RunHistory } from "./run-history";
 import type { ActivityTarget } from "./activity-target";
 import { OperatorCallDialog, OperatorCallHistory } from "./operator-call";
-import { BotDesktopCard, BotDesktopDialog } from "./bot-desktop";
 import { BotDetailsPanel, DEFAULT_DETAILS_SECTION, useDockedDetails, useDockedPreference, type BotDetailsSection } from "./bot-details";
 import { ChapterNavigation } from "./chapter-panel";
-import { ScheduleList } from "./schedule-list";
 import { RunDecisions } from "./run-decisions";
-import { UsagePanel } from "./usage-panel";
 import { useBotComposer } from "./use-composer";
 import { botComposers, type ComposerPaste } from "./composer-service";
 import { ComposerAttachments, ComposerStatus } from "./composer-state";
@@ -87,12 +80,26 @@ import { ComposerInput } from "./composer-input";
 import { ComposerSettings } from "./composer-settings";
 import { ArtifactGallery, BotAttachmentsEntry, ArtifactNav } from "./artifact-gallery";
 import { PromptQueue } from "./prompt-queue";
-import { TeamsManager, TeamAssignment } from "./teams";
 import { QueueLists, useQueueLists } from "./queue-lists";
 import { useComposerQueueDestination } from "./composer-queue-destination";
 import "./bots.css";
 import "./chat-design.css";
 import { botProvider } from "../../lib/bot-provider";
+
+// Panels and dialogs that open on demand load on first use instead of with
+// the bots page, so opening the app parses only what the chat needs.
+const CreateBotDialog = lazy(() => import("./create-bot-dialog").then(m => ({ default: m.CreateBotDialog })));
+const BotAdminApprovals = lazy(() => import("./bot-admin-approvals").then(m => ({ default: m.BotAdminApprovals })));
+const PersonalitySettings = lazy(() => import("./personality-settings").then(m => ({ default: m.PersonalitySettings })));
+const ScheduleEditor = lazy(() => import("./schedule-editor").then(m => ({ default: m.ScheduleEditor })));
+const ScheduleList = lazy(() => import("./schedule-list").then(m => ({ default: m.ScheduleList })));
+const AnnouncementDialog = lazy(() => import("./announcements").then(m => ({ default: m.AnnouncementDialog })));
+const RunHistory = lazy(() => import("./run-history").then(m => ({ default: m.RunHistory })));
+const BotDesktopCard = lazy(() => import("./bot-desktop").then(m => ({ default: m.BotDesktopCard })));
+const BotDesktopDialog = lazy(() => import("./bot-desktop").then(m => ({ default: m.BotDesktopDialog })));
+const UsagePanel = lazy(() => import("./usage-panel").then(m => ({ default: m.UsagePanel })));
+const TeamsManager = lazy(() => import("./teams").then(m => ({ default: m.TeamsManager })));
+const TeamAssignment = lazy(() => import("./teams").then(m => ({ default: m.TeamAssignment })));
 
 const EMPTY_BOTS: Bot[] = [];
 const EMPTY_QUEUE: BotQueuedSubmission[] = [];
@@ -784,10 +791,10 @@ export function BotsWorkspace() {
                 {single && <AutomaticInbox owner={owner} bot={bot} work={work} online={online} />}
               </>,
               goals: <NativeGoalPanel key={`goal:${owner}:${bot.id}:${bot.threadId}`} owner={owner} bot={bot} work={work} snapshot={snapshot} online={online} />,
-              team: <><h3>Team</h3>{teamsSupported ? <TeamAssignment key={`team:${scope}`} owner={owner} bot={bot} teams={teams} online={online} onManage={() => setShowTeams(true)} /> : <p className="bots-details-lead">Team editing is unavailable on the current service.</p>}</>,
+              team: <><h3>Team</h3>{teamsSupported ? <Suspense fallback={null}><TeamAssignment key={`team:${scope}`} owner={owner} bot={bot} teams={teams} online={online} onManage={() => setShowTeams(true)} /></Suspense> : <p className="bots-details-lead">Team editing is unavailable on the current service.</p>}</>,
               queues: queueListsSupported ? <QueueLists key={`lists:${scope}`} owner={owner} bot={bot} lists={queueLists.lists} defaultItems={promptQueue} online={online} refreshLists={queueLists.refresh} refreshDefault={refreshDefaultQueue} onEdit={editQueued} /> : <p className="bots-details-lead">Queue lists will be available when the bot service update finishes.</p>,
               schedules: <>
-                <ScheduleList bot={bot} schedules={schedules} online={online} busy={busy} onEdit={schedule => setEditingSchedule({ schedule, scope, botId: bot.id, owner })} action={action} />
+                <Suspense fallback={null}><ScheduleList bot={bot} schedules={schedules} online={online} busy={busy} onEdit={schedule => setEditingSchedule({ schedule, scope, botId: bot.id, owner })} action={action} /></Suspense>
                 {snapshot?.capabilities?.scheduleDecisions === 1 && <RunDecisions owner={owner} botId={bot.id} online={online} />}
               </>,
               files: <><h3>Files</h3><p className="bots-details-lead">Attachments and returned work, together. Open a preview, find a file, or download the original.</p><BotAttachmentsEntry bot={bot} owner={owner} online={online} onOpen={() => openGallery("attachments")} /></>,
@@ -795,18 +802,18 @@ export function BotsWorkspace() {
                 <p className="bots-details-lead">Open the preview to use the fullscreen controller.</p>
                 {/* Mount only in the open Desktop tab; no background captures
                     from the bot list, other tabs, or behind the controller. */}
-                {detailsOpen && detailsSection === "desktop" && desktopScope !== scope && <BotDesktopCard key={`desktop:${scope}`} bot={bot} owner={owner} online={online} onOpen={() => setDesktopScope(scope)} />}
+                {detailsOpen && detailsSection === "desktop" && desktopScope !== scope && <Suspense fallback={null}><BotDesktopCard key={`desktop:${scope}`} bot={bot} owner={owner} online={online} onOpen={() => setDesktopScope(scope)} /></Suspense>}
               </> : <p className="bots-details-lead">Desktop is unavailable on this service.</p>}</>,
               calls: detailsOpen && detailsSection === "calls" && snapshot?.capabilities?.operatorCalls === 1 ? <OperatorCallHistory key={`calls:${scope}`} owner={owner} botId={bot.id} online={online} /> : <p className="bots-details-lead">Named-bot voice calling is unavailable on this service.</p>,
-              history: <>{lanes && <details data-history-key="legacy-controls" className="bots-legacy-controls"><summary>Earlier work · recovery and controls</summary><BotWorkControls owner={owner} bot={bot} runs={recentRuns} online={online} onOpen={openActivity} /></details>}<RunHistory key={`${scope}:${activityTarget?.runId ?? ""}:${activityTarget?.turnId ?? ""}`} embedded bot={bot} schedules={schedules} recentRuns={recentRuns} initialTarget={activityTarget} attachments={[]} online={online} onClose={closeProfile} download={id => void download(id)} /></>,
+              history: <>{lanes && <details data-history-key="legacy-controls" className="bots-legacy-controls"><summary>Earlier work · recovery and controls</summary><BotWorkControls owner={owner} bot={bot} runs={recentRuns} online={online} onOpen={openActivity} /></details>}<Suspense fallback={null}><RunHistory key={`${scope}:${activityTarget?.runId ?? ""}:${activityTarget?.turnId ?? ""}`} embedded bot={bot} schedules={schedules} recentRuns={recentRuns} initialTarget={activityTarget} attachments={[]} online={online} onClose={closeProfile} download={id => void download(id)} /></Suspense></>,
               settings: <div className="bots-details-settings">
                 <ExecutionAccess key={`access:${scope}`} owner={owner} botId={bot.id} online={online}/>
                 <form className="grid gap-3" onSubmit={event => { event.preventDefault(); const input = new FormData(event.currentTarget); void action(() => client.rpc("bots.update", bot.id, { name: String(input.get("name")) })); }}>
                   <label>Name<Input name="name" defaultValue={bot.name} key={bot.id + bot.name} maxLength={80} required /></label><Button className="justify-self-start" type="submit" disabled={!online || busy}>Save name</Button>
                 </form>
                 <SavedDrafts owner={owner} bots={bots} composer={composer}/><p className="bots-profile-hint">{bot.purpose}</p><p className="bots-profile-hint">Ask {bot.name} to change its personality, instructions, or memory.</p>
-                {snapshot?.capabilities?.singleThreadExecution === 1 && <PersonalitySettings key={scope} bot={bot} snapshot={snapshot} online={online} />}
-                {snapshot?.capabilities?.botAdministration === 1 && bot.executionMode === "single-thread" && <BotAdminApprovals key={`admin:${scope}`} owner={owner} botId={bot.id} botName={bot.name} online={online} />}
+                {snapshot?.capabilities?.singleThreadExecution === 1 && <Suspense fallback={null}><PersonalitySettings key={scope} bot={bot} snapshot={snapshot} online={online} /></Suspense>}
+                {snapshot?.capabilities?.botAdministration === 1 && bot.executionMode === "single-thread" && <Suspense fallback={null}><BotAdminApprovals key={`admin:${scope}`} owner={owner} botId={bot.id} botName={bot.name} online={online} /></Suspense>}
                 <Button asChild variant="link" className="px-0"><a href="/settings">Notification settings</a></Button>
                 <div className="bots-profile-actions flex flex-wrap gap-2">
                   <Button variant="outline" type="button" disabled={!online || busy || Boolean(bot.activeTurnId)} onClick={() => void action(() => client.rpc("thread.compact", bot.id))}><RotateCcw size={16} />Compact conversation</Button>
@@ -818,11 +825,11 @@ export function BotsWorkspace() {
           </BotDetailsPanel>
         </Activity>}
       </main>
-      {showTeams && (teamsSupported ? <TeamsManager key={owner} owner={owner} teams={teams} bots={bots} online={online} onClose={() => setShowTeams(false)} /> : <ControlledDialog title="Teams" onClose={() => setShowTeams(false)}><p className="text-sm text-muted-foreground">Teams are unavailable on this service.</p><Button className="justify-self-end" onClick={() => setShowTeams(false)}>Close</Button></ControlledDialog>)}
-      {showOverallUsage && <ControlledDialog title="Account usage" className="max-w-3xl" onClose={() => setShowOverallUsage(false)}><UsagePanel online={online} /></ControlledDialog>}
+      {showTeams && (teamsSupported ? <Suspense fallback={null}><TeamsManager key={owner} owner={owner} teams={teams} bots={bots} online={online} onClose={() => setShowTeams(false)} /></Suspense> : <ControlledDialog title="Teams" onClose={() => setShowTeams(false)}><p className="text-sm text-muted-foreground">Teams are unavailable on this service.</p><Button className="justify-self-end" onClick={() => setShowTeams(false)}>Close</Button></ControlledDialog>)}
+      {showOverallUsage && <ControlledDialog title="Account usage" className="max-w-3xl" onClose={() => setShowOverallUsage(false)}><Suspense fallback={null}><UsagePanel online={online} /></Suspense></ControlledDialog>}
       {showCall && <OperatorCallDialog bot={bots.find(value => value.id === callBotId) ?? null} bots={bots.filter(value => !value.archived && value.executionMode === "single-thread")} onClose={() => setShowCall(false)} />}
-      {bot && desktopScope === scope && !bot.archived && <BotDesktopDialog key={scope} bot={bot} owner={owner} onClose={() => setDesktopScope(null)} />}
-      {creating && <CreateBotDialog online={online} busy={busy} error={error} claudeAvailable={snapshot?.capabilities?.claudeBots === 1} onClose={() => setCreating(false)}
+      {bot && desktopScope === scope && !bot.archived && <Suspense fallback={null}><BotDesktopDialog key={scope} bot={bot} owner={owner} onClose={() => setDesktopScope(null)} /></Suspense>}
+      {creating && <Suspense fallback={null}><CreateBotDialog online={online} busy={busy} error={error} claudeAvailable={snapshot?.capabilities?.claudeBots === 1} onClose={() => setCreating(false)}
         onSubmit={(e) => {
               e.preventDefault();
               const data = new FormData(e.currentTarget);
@@ -842,9 +849,9 @@ export function BotsWorkspace() {
                 select(created.id);
                 await client.refresh();
               });
-            }} />}
+            }} /></Suspense>}
       {editingSchedule && editingSchedule.scope === scope && bot && (
-        <ScheduleEditor
+        <Suspense fallback={null}><ScheduleEditor
           key={`${editingSchedule.scope}:${editingSchedule.schedule === "new" ? "new" : editingSchedule.schedule.id}`}
           schedule={editingSchedule.schedule}
           online={online}
@@ -856,9 +863,9 @@ export function BotsWorkspace() {
             setEditingSchedule(current => current === editingSchedule ? null : current);
             await client.refresh();
           }}
-        />
+        /></Suspense>
       )}
     </div></TaskRequestWorkspace>
-    {announcementOwner && announcementOwner === owner && <AnnouncementDialog key={owner} owner={owner} onClose={() => setAnnouncementOwner(null)} />}</>
+    {announcementOwner && announcementOwner === owner && <Suspense fallback={null}><AnnouncementDialog key={owner} owner={owner} onClose={() => setAnnouncementOwner(null)} /></Suspense>}</>
   );
 }

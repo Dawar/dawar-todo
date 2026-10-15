@@ -1,7 +1,6 @@
 'use client';
-import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
+import { createContext, lazy, Suspense, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { botsClient as client } from './client';
-import { FormShare } from '../task-request/share';
 import { LazyDetails } from './lazy-details';
 import type { BotOperations } from '../../lib/bots-operations';
 import type { Bot, BotEvent } from '../../lib/bots-types';
@@ -16,6 +15,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { NativeSelect } from '@/components/ui/native-select';
+// The share card (and its QR encoder) loads only when a form is shared.
+const FormShare = lazy(() => import('../task-request/share').then(m => ({ default: m.FormShare })));
 type SourceParams = {
     threadId: string;
     turnId?: string;
@@ -294,7 +295,7 @@ export function TaskRequestEditor({ owner, seed, open, available, onClose, onSav
     if (!open)
         return null;
     return <ControlledDialog title="Task Request" onClose={close} returnFocus={returnFocus} className="task-request-editor max-w-3xl z-[130]" overlayClassName="z-[130]" onPointerDownOutside={event => event.preventDefault()} onEscapeKeyDown={event => event.stopPropagation()}>
-    <FormShare url={link} disabled={request?.status==='revoked'||request?.status==='expired'}/><p>Only the instructions and fields below are shared. Existing answer drafts and the conversation stay private.</p>
+    <Suspense fallback={null}><FormShare url={link} disabled={request?.status==='revoked'||request?.status==='expired'}/></Suspense><p>Only the instructions and fields below are shared. Existing answer drafts and the conversation stay private.</p>
     {error && <p ref={errorSummary} tabIndex={-1} role="alert" className="task-request-error">{error}</p>}{!available && <p>Reconnect to this supported conversation and resolve Stop before owner actions.</p>}
     {pending?.state === 'pending' && <aside><p>Original {pending.action.action} is unconfirmed. Recover it before a new action.</p><Button className="task-request-control" variant="outline" type="button" disabled={busy || !available} onClick={() => void invoke(pending.action, true)}>Confirm original action</Button></aside>}
     <Button className="task-request-control" variant="outline" type="button" onClick={() => setPreview(v => !v)}>{preview ? 'Edit fields' : 'Preview entire guest form'}</Button>

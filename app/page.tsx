@@ -4,7 +4,9 @@ import {
   ClipboardEvent as ReactClipboardEvent,
   FormEvent,
   PointerEvent as ReactPointerEvent,
+  lazy,
   memo,
+  Suspense,
   useDeferredValue,
   useEffect,
   useEffectEvent,
@@ -13,8 +15,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { TodoForward } from "./todo-forward-picker";
-import { TodoQueue, type QueueRequest } from "./todo-queue-picker";
+import type { QueueRequest } from "./todo-queue-picker";
 import type { TaskQueueSource } from "../lib/task-queue-export";
 import { registerPwaUpdateGuard } from "./pwa-update";
 import { todoCopyText } from "./todo-forward";
@@ -67,11 +68,21 @@ import { ProjectBrowser } from "./project-browser";
 import { CreateProjectDialog, CustomSnoozeDialog, AssignProjectDialog, DeleteProjectDialog } from "./task-dialogs";
 import { KeyboardShortcutsDialog } from "./keyboard-shortcuts-dialog";
 import { PullGesturePill } from "./pull-to-refresh";
-import { MarkdownPreview } from "./markdown-preview";
 import { type ConnectionQuality } from "./sync-health";
 import { MAX_TASK_DESCRIPTION_LENGTH } from "../lib/task-description";
 import { MAX_PINNED_TASKS, PIN_LIST_PREFERENCE_KEY } from "../lib/task-pins";
 import { appendOfflineTodoAttachments, queueTaskAttachments, listQueuedAttachments, retryQueuedAttachments, deleteOfflineTodoAttachment, deleteOfflineTodoByLocalId, deleteOfflineTaskAction, getOfflineTodoByLocalId, listOfflineTodos, listOfflineTaskActions, listOfflineTodoMutations, markOfflineTaskActionUndo, persistOfflineStorage, saveOfflineCaptureDraft, saveOfflineTaskAction, saveOfflineTodoMutation, updateOfflineTodo, type OfflineAttachmentKind, type OfflineTaskAction, type OfflineTodoRecord } from "./offline-store";
+
+// Bot pickers (and the bots client they start) load only when a queue request
+// is made or a saved forward/transfer is waiting to be resumed.
+const TodoForward = lazy(() => import("./todo-forward-picker").then(m => ({ default: m.TodoForward })));
+const TodoQueue = lazy(() => import("./todo-queue-picker").then(m => ({ default: m.TodoQueue })));
+// Markdown renders only in the description preview.
+const MarkdownPreview = lazy(() => import("./markdown-preview").then(m => ({ default: m.MarkdownPreview })));
+function savedBotWork() {
+  try { return Object.keys(localStorage).some(key => key.startsWith("dawar-todo-forward:v1:") || key.startsWith("dawar-todo-queue:v1:")); }
+  catch { return false; }
+}
 
 type View = "open" | "snoozed" | "done" | "all";
 type TaskListView = View;
@@ -613,6 +624,9 @@ export default function Home() {
   const [pinListEnabled, setPinListEnabled] = useState(true);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [queueRequest, setQueueRequest] = useState<QueueRequest | null>(null);
+  // Once mounted the pickers stay, so a transfer saved during a request can resume.
+  const [botPickers, setBotPickers] = useState(false);
+  useEffect(() => { if (queueRequest || savedBotWork()) setBotPickers(true); }, [queueRequest]);
   const [editDraft, setEditDraft] = useState<TodoDraft | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
   const [editSaveState, setEditSaveState] = useState<EditSaveState>("saved");
@@ -3884,8 +3898,10 @@ export default function Home() {
 
   return (
     <main className="min-h-screen bg-background text-foreground">
-      <TodoForward request={null} onClose={() => {}} />
-      <TodoQueue request={queueRequest} onClose={closeQueue} guard={queueGuard} onChanged={queueChanged} />
+      {(botPickers || queueRequest) && <Suspense fallback={null}>
+        <TodoForward request={null} onClose={() => {}} />
+        <TodoQueue request={queueRequest} onClose={closeQueue} guard={queueGuard} onChanged={queueChanged} />
+      </Suspense>}
       <SiteHeader
         current="todos"
         projectLabel={project === UNASSIGNED_PROJECT ? "Unassigned" : project || "Dawar Todo"}
@@ -4152,7 +4168,7 @@ export default function Home() {
                   </Button>
                 </div>
                 {descriptionPreview ? (
-                  <MarkdownPreview value={editDraft.notes} />
+                  <Suspense fallback={null}><MarkdownPreview value={editDraft.notes} /></Suspense>
                 ) : (
                   <Textarea
                     aria-label="Description"
