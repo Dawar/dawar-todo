@@ -78,7 +78,7 @@ node portable/deploy-cli.mjs launch   --plan <same plan>
 | --- | --- |
 | hold → observe until idle → freeze writer → backup → seal/claim | wait for old exit (stop window = TimeoutStopSec + 60 s, then **one** SIGKILL escalation) |
 | any doubt or the deadline → release the hold, `expired-before-stop` / `blocked-before-stop` | prepare configs + writer source → start → wait healthy (health window, default 300 s) |
-| | not healthy, or prepare/start failed → `rollback-intent`: stop the target, restore the before-configs from this operation's backup, return the writer to the old source, restart the site if it was restarted, start the previous release → `rolled-back` |
+| | not healthy, or prepare/start failed → `rollback-intent`: drain a started target through its own maintenance hold and claim (bounded, recorded in `rollback-drain.json`), stop it, restore the before-configs from this operation's backup, return the writer to the old source, restart the site if it was restarted, start the previous release → `rolled-back` |
 
 After stop-intent the controller does not exit while the service is down. A
 failed observation is retried within its window. Any unexpected error still

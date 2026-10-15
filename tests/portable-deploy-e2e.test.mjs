@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, existsSync, readdirSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { installation, OLD, NEW, MODELS, UNIT } from './helpers/deploy-fixture.mjs';
 import { preparePlan, verifyPlan, PlanMismatch } from '../portable/deploy-plan.mjs';
@@ -183,4 +183,28 @@ test('an unplanned start after the old exit makes the controller yield and reope
   assert.deepEqual({ source: f.writer().source, phase: f.writer().phase }, { source: OLD, phase: 'open' });
   const { until } = await import('./helpers/deploy-fixture.mjs');
   await until(async () => (await f.probe.health(f.ports.healthPort).catch(() => ({}))).ready === true, 15000, f.log);
+});
+
+// Adversarial review R-3 (ADVERSARIAL_REVIEW_20261015.md).
+const rehearsalModels = (f, models) => writeFileSync(join(f.root, 'config', 'rehearsal.json'), JSON.stringify({ models, nodes: ['node:test'] }) + '\n', { mode: 0o600 });
+
+test('a target whose native catalog gained a model is healthy, not rolled back', { timeout: 90000 }, async t => {
+  const f = await installation(t);
+  const { plan } = await prepare(f);
+  assert.deepEqual(plan.expectedModels, MODELS);
+  rehearsalModels(f, [...MODELS, 'gpt-test-new']); // only the new process reads it
+  const row = await deploy(f, plan);
+  assert.equal(row.outcome, 'healthy', JSON.stringify(row.lastFailure) + f.log());
+});
+
+test('rollback drains the started target through its own maintenance claim before stopping it', { timeout: 120000 }, async t => {
+  const f = await installation(t);
+  const { plan } = await prepare(f);
+  rehearsalModels(f, MODELS.slice(0, 1)); // a planned model is missing: the target stays unhealthy
+  const row = await deploy(f, plan);
+  assert.equal(row.outcome, 'rolled-back', JSON.stringify(row.lastFailure) + f.log());
+  const drain = JSON.parse(readFileSync(join(plan.receiptDirectory, 'rollback-drain.json'), 'utf8'));
+  assert.equal(drain.drained, true, drain.reason);
+  assert.doesNotMatch(f.log(), /Rehearsal shutdown refused/, 'the target was not stopped without a claimed drain');
+  assert.equal(f.systemd.commands.filter(c => c.startsWith('kill')).length, 0, 'no SIGKILL escalation');
 });
