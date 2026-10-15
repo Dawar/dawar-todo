@@ -116,6 +116,10 @@ window.harness = { sends,
   for (let i = 0; i < 200 && !document.querySelector('.bots-native-entry'); i++) await wait(20);
   if (params.has('expand')) document.querySelectorAll('.bots-native-work > summary, .bots-tool > summary').forEach(node => node.click());
   if (params.has('drawer')) document.querySelector('button[aria-label="Bot details"]')?.click();
+  // Deep link through the real presence button (opens Work → Up next).
+  if (params.has('presence')) document.querySelector('button[aria-label="Open work details"]')?.click();
+  if (params.get('tab')) { await wait(100); const tab = [...document.querySelectorAll('.bots-details-nav [role=tab]')].find(node => node.textContent === params.get('tab')); if (tab) { tab.focus(); tab.click(); } }
+  if (params.get('sub')) { await wait(100); const sub = [...document.querySelectorAll('.bots-details-subnav [role=tab]')].find(node => node.textContent === params.get('sub')); if (sub) { sub.focus(); sub.click(); } }
   if (params.has('pin')) [...document.querySelectorAll('.bots-chapter-pin')].at(-1)?.click();
   await wait(300);
   document.body.dataset.ready = '1';

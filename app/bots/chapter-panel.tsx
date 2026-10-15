@@ -53,7 +53,7 @@ export function ChapterNavigation({ owner, bot, online, onJumped }: { owner: str
     setEditing(null);
   };
   return <>
-    <h3>Navigation</h3>
+    <h3>Chapters</h3>
     <p className="bots-details-lead">Chapters bookmark important AI responses in this conversation. Pinning never sends a message, starts a thread or changes the AI&apos;s context.</p>
     {view.pending > 0 ? <p className="bots-chapters-status" role="status">{view.pending === 1 ? "1 change is" : `${view.pending} changes are`} saved on this device and not synced yet.{" "}
       <Button variant="link" size="sm" type="button" className="h-auto px-0" disabled={!online} onClick={() => void store.flush()}>Retry sync</Button></p>

@@ -46,7 +46,6 @@
 
 .bots-details-panel.is-history{overflow:auto;overflow-anchor:none;padding:20px 24px}.bots-details-panel.is-history .bots-run-library{height:auto;overflow:visible}.bots-details-panel.is-history .bots-run-library-body{padding:0;overflow:visible}.bots-details-panel.is-history .bots-legacy-controls{margin:4px 0 20px}@media(max-width:350px){.bots-details-panel.is-history{padding:18px 16px}}
 
-.bots-details-nav>button { flex:1 0 58px; }
 .bots-details-nav>button>span { position:relative; }
 
 /* One panel, two layouts: docked column on wide desktops, modal drawer otherwise. */
@@ -64,4 +63,39 @@
 .bots-details-host.is-docked .bots-details-close { top: 10px; }
 .bots-layout.has-details-docked { grid-template-columns: 300px minmax(0, 1fr) clamp(300px, 26vw, 420px); }
 @media (max-width: 1180px) { .bots-layout.has-details-docked { grid-template-columns: 300px minmax(0, 1fr) 300px; } }
-.bots-details-nav > button { flex: 1 0 auto; padding-inline: 8px; }
+
+/* Five top-level tabs fit any width; no horizontal scrolling. */
+.bots-details-nav { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); overflow: visible; gap: 0; }
+.bots-details-nav > button { flex: none; min-width: 0; padding-inline: 2px; }
+.bots-details-nav > button > span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bots-details-tab { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+/* Subsections inside Work and Tools: wrapping pills, never a scroller. */
+.bots-details-subnav { display: flex; flex-wrap: wrap; gap: 6px; flex-shrink: 0; padding: 14px 24px 0; }
+.bots-details-subnav > button { height: auto; min-height: 36px; padding: 4px 12px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted-foreground); font-size: 13px; }
+.bots-details-subnav > button[aria-selected=true] { background: var(--accent); color: var(--accent-foreground); border-color: transparent; font-weight: 600; }
+.bots-details-host.is-docked .bots-details-subnav { padding: 12px 20px 0; }
+@media (max-width: 600px) { .bots-details-subnav { padding: 12px 20px 0; } .bots-details-subnav > button { min-height: 40px; } }
+@media (max-width: 350px) { .bots-details-subnav { padding-inline: 16px; } }
+/* Overview status rows. */
+.bots-details-status { display: grid; gap: 2px; margin: 0 0 24px; padding: 4px; border: 1px solid var(--border); border-radius: var(--radius, 10px); }
+.bots-details-status-row { height: auto; min-height: 44px; display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 8px 10px; text-align: left; font-weight: 400; white-space: normal; color: var(--foreground); }
+.bots-details-status-row > svg { color: var(--muted-foreground); }
+.bots-details-status-label { color: var(--muted-foreground); font-size: 13px; }
+.bots-details-status-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; text-align: right; }
+/* Settings groups. */
+.bots-details-settings { display: grid; gap: 28px; }
+.bots-settings-group { display: grid; gap: 4px; padding-top: 20px; border-top: 1px solid var(--border); scroll-margin-top: 12px; }
+.bots-settings-group:first-child { padding-top: 0; border-top: 0; }
+.bots-details-settings .bots-settings-group > h3 { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -.2px; }
+.bots-settings-group > .bots-details-lead { margin-bottom: 12px; }
+.bots-settings-group-body { display: grid; gap: 16px; min-width: 0; }
+.bots-settings-group-body > * { margin-top: 0; margin-bottom: 0; }
+.bots-settings-subgroup { display: grid; gap: 8px; scroll-margin-top: 12px; }
+.bots-settings-subgroup > h4 { margin: 0; font-size: 14px; font-weight: 600; }
+.bots-settings-group-body .bots-profile-actions { margin-top: 4px; }
+/* Selection is shown by colour and underline, so labels keep one width. */
+.bots-details-nav > button, .bots-details-nav > button[aria-selected=true] { font-weight: 500; font-size: 12.5px; gap: 6px; }
+.bots-details-host.is-docked .bots-details-nav { margin-inline: 8px; }
+.bots-details-host.is-docked .bots-details-nav > button { font-size: 12px; letter-spacing: -.1px; }
+.bots-details-host.is-docked .bots-details-nav > button { padding-inline: 0; }
+@media (max-width: 1180px) { .bots-details-host.is-docked .bots-details-nav > button { font-size: 11.5px; letter-spacing: -.2px; } }

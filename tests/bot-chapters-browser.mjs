@@ -23,7 +23,7 @@ const server = createServer((req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   if (path === '/harness.js') { res.setHeader('Content-Type', 'application/javascript'); res.end(js); }
   else if (path === '/harness.css') { res.setHeader('Content-Type', 'text/css'); res.end(`${appCss}\n${css}`); }
-  else res.end('<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/harness.css"><body style="margin:0;font-family:system-ui,sans-serif"><div id="root"></div><script type="module" src="/harness.js"></script>');
+  else res.end('<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/harness.css"><style>/* Headless virtual time does not advance CSS transitions. */*,*::before,*::after{transition:none!important;animation-duration:0s!important}</style><body style="margin:0;font-family:system-ui,sans-serif"><div id="root"></div><script type="module" src="/harness.js"></script>');
 });
 await new Promise(done => server.listen(0, '127.0.0.1', done));
 const origin = `http://127.0.0.1:${server.address().port}`;
@@ -31,8 +31,28 @@ const shot = (name, size, query) => new Promise((done, fail) => {
   const chrome = spawn(process.env.BOT_TEST_CHROME ?? 'google-chrome', ['--headless=new', '--no-sandbox', '--disable-gpu', '--hide-scrollbars', `--window-size=${size}`, '--virtual-time-budget=4000', `--screenshot=${out}/${name}.png`, `${origin}/harness?${query}`], { stdio: 'ignore' });
   chrome.on('exit', code => code === 0 ? done() : fail(Error(`${name}: chrome ${code}`)));
 });
+const dom = (size, query) => new Promise((done, fail) => {
+  let html = '';
+  const chrome = spawn(process.env.BOT_TEST_CHROME ?? 'google-chrome', ['--headless=new', '--no-sandbox', '--disable-gpu', `--window-size=${size}`, '--virtual-time-budget=4000', '--dump-dom', `${origin}/harness?${query}`], { stdio: ['ignore', 'pipe', 'ignore'] });
+  chrome.stdout.on('data', data => { html += data; });
+  chrome.on('exit', code => code === 0 ? done(html) : fail(Error(`dom: chrome ${code}`)));
+});
+const selected = (html, list) => [...html.matchAll(new RegExp(`<div class="${list}"[^>]*>([\\s\\S]*?)</div>`, 'g'))].flatMap(match => [...match[1].matchAll(/aria-selected="true"[^>]*>(?:<svg[\s\S]*?<\/svg>)?(?:<span>)?([^<]+)/g)].map(tab => tab[1]));
 try {
+  // Deep links land on their new location in the real workspace.
+  const deep = await dom('1440,900', 'dock&presence');
+  const tabs = selected(deep, 'bots-details-nav'), subs = selected(deep, 'bots-details-subnav');
+  if (!tabs.includes('Work') || !subs.includes('Up next')) throw Error(`presence deep link: tabs ${tabs} subs ${subs}`);
+  const generic = selected(await dom('390,844', 'drawer'), 'bots-details-nav');
+  if (!generic.includes('Overview')) throw Error(`generic opening: ${generic}`);
+  if (/bots-details-nav[^>]*style="[^"]*overflow-x/.test(deep)) throw Error('tab strip scrolls');
+  console.log('deep links ok');
   await shot('desktop-1440-docked', '1440,900', 'dock&expand');
+  await shot('desktop-1440-docked-work', '1440,900', 'dock&presence');
+  await shot('desktop-1024-docked-settings', '1024,900', 'dock&tab=Settings');
+  await shot('mobile-390-drawer-work', '390,844', 'drawer&tab=Work&sub=Schedules');
+  await shot('mobile-390-drawer-settings', '390,844', 'drawer&tab=Settings');
+  await shot('mobile-390-drawer-tools', '390,844', 'drawer&tab=Tools');
   await shot('desktop-1024-docked', '1024,768', 'dock&pin');
   await shot('desktop-800-drawer', '800,800', 'drawer');
   await shot('mobile-390-drawer', '390,844', 'drawer');
