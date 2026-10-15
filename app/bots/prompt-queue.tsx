@@ -1,7 +1,7 @@
 "use client";
 import { Button } from "@/components/ui/button";
 import { NativeSelect } from "@/components/ui/native-select";
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import { ArrowDown, ArrowUp, Combine, FolderInput, FolderOpen, GripVertical, Pencil, RefreshCw, Send, Trash2 } from 'lucide-react';
 import type { Bot, BotQueueList, BotQueuedSubmission } from '../../lib/bots-types';
 import { canMoveQueued, queueEditable, queueResumeBlocked, queueStatus, reorderedQueueIds } from './queue-state';
@@ -9,6 +9,9 @@ import { useQueueAction } from './use-queue-action';
 import { queueActionProgress } from './queue-action-store';
 import { botsClient as client } from './client';
 import { UploadThumbnail } from './upload-thumbnail';
+import './submission-author.css';
+import { SubmissionAuthor } from './submission-author';
+import { queuedSender } from './queued-sender';
 import './prompt-queue.css';
 const textOf = (item:BotQueuedSubmission)=>item.input.flatMap(input=>input.type==='text'&&!input.text.startsWith('Attached file: ')?[input.text]:[]).join('\n')||'Attachments';
 const selectionKey = (item:BotQueuedSubmission)=>`${item.id}:${item.revision}`;
@@ -90,7 +93,8 @@ function QueueContent({ bot, items, online, canEdit, onEdit, refresh, lists=[], 
     {rows.map((item,index)=>{
       const status=queueStatus(item,bot.queuePaused),mutable=queueEditable(item)&&!locked;
       const canDrag=online&&mutable&&(canMoveQueued(rows,index,-1)||canMoveQueued(rows,index,1));
-      return <article data-queue-id={item.id} className={`bots-prompt-queue-item${drop===item.id?' is-drop-target':''}${dragId===item.id?' is-dragging':''}`} key={item.id}>
+      const sender=queuedSender(item);
+      return <article data-queue-id={item.id} data-source-kind={sender?.kind} style={sender?.kind==='bot'&&sender.color?{'--sender-color':sender.color} as CSSProperties:undefined} className={`bots-prompt-queue-item${sender?' is-sourced':''}${drop===item.id?' is-drop-target':''}${dragId===item.id?' is-dragging':''}`} key={item.id}>
         <div className="bots-queue-index">
           <Button variant="ghost" type="button" className="bots-queue-drag" aria-label={`Drag message ${index+1} to reorder`} title="Drag to reorder" disabled={!canDrag}
             onPointerDown={event=>{
@@ -118,7 +122,7 @@ function QueueContent({ bot, items, online, canEdit, onEdit, refresh, lists=[], 
             }}><GripVertical size={18}/></Button>
           {selecting?<input type="checkbox" aria-label={`Select queued message ${index+1}`} checked={checked.includes(selectionKey(item))} disabled={!mutable||!online||!supported||item.revision===undefined} onChange={e=>setChecked(values=>e.target.checked?[...values,selectionKey(item)]:values.filter(value=>value!==selectionKey(item)))}/>:<span>{index+1}</span>}
         </div>
-        <div className="bots-queue-content"><QueueText text={textOf(item)}/>{status.attention&&<p className="bots-queue-status needs-attention"><strong>{status.label}</strong><span>{status.description}</span></p>}
+        <div className="bots-queue-content">{sender&&<div className="bots-queue-sender"><span className="sr-only">From </span><SubmissionAuthor source={sender}/></div>}<QueueText text={textOf(item)}/>{status.attention&&<p className="bots-queue-status needs-attention"><strong>{status.label}</strong><span>{status.description}</span></p>}
           {item.configuration && <p className="bots-queue-status needs-attention"><strong>Requested settings · not dispatched</strong><span>{item.configuration.requested.model} · {item.configuration.requested.effort ?? "Unknown effort"} · {item.configuration.requested.mode} · {item.configuration.reason}</span></p>}
           {item.error&&<p className="bots-queue-item-error">{item.error}</p>}
           {item.attachments.length>0&&<div className="bots-queue-attachments">{item.attachments.map(file=><span key={file.id} title={file.name}>{file.mimeType.startsWith('image/')&&<UploadThumbnail botId={bot.id} attachmentId={file.id} online={online}/>}<span>{file.name}</span></span>)}</div>}

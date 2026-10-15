@@ -63,7 +63,9 @@ import { searchSidebarBots } from "./announcement-state";
 import { useSharedReadPositions } from './read-position-sync';
 import { TaskRequestWorkspace } from "./task-request-ui";
 import { RequestCard } from "./request-card";
-import { MainStopButton, MainStopRecovery } from "./run-controls";
+import { LegacyStopButton, MainStopButton, MainStopRecovery } from "./run-controls";
+import { botStopped } from "./bot-stop-state";
+import { StoppedMark } from "./stopped-mark";
 import { BotWorkControls } from "./bot-work-controls";
 import type { ActivityTarget } from "./activity-target";
 import { OperatorCallDialog, OperatorCallHistory } from "./operator-call";
@@ -539,7 +541,7 @@ export function BotsWorkspace() {
                 <Avatar bot={bot} small />
                 <div className="bots-header-title">
                   <strong>{bot.name}{bot.extension&&<span className="bots-extension" title="Ctrl (or Alt) + extension switches bots; add Shift to move the composer">#{bot.extension}</span>}</strong>
-
+                  {botStopped(bot) && <StoppedMark label />}
                 </div>
                 <div className="bots-header-actions">
                   {single && botProvider(bot) !== "claude" && snapshot?.capabilities?.nativeGoals === 1 && <GoalIndicator bot={bot} work={work} onOpen={() => openDetails('goals')} />}
@@ -705,37 +707,13 @@ export function BotsWorkspace() {
                       </>
                     )}
                     {(bot.activeTurnId || !lanes && Boolean(bot.workerTasks?.active)) &&
-                      Boolean(draft || uploads.length) && (lanes || single ? <MainStopButton owner={owner} botId={bot.id} online={online} className="bots-icon-button" /> :
-                        <Button variant="ghost" size="icon"
-                          type="button"
-                          className="bots-icon-button"
-                          aria-label="Stop all bot work"
-                          disabled={!online}
-                          onClick={() =>
-                            void action(() =>
-                              client.rpc("turn.interrupt", bot.id),
-                            )
-                          }
-                        >
-                          <Square size={14} fill="currentColor" />
-                        </Button>
+                      Boolean(draft || uploads.length) && (lanes || single ? <MainStopButton owner={owner} botId={bot.id} botName={bot.name} online={online} className="bots-icon-button" /> :
+                        <LegacyStopButton botName={bot.name} online={online} className="bots-icon-button" stop={() => void action(() => client.rpc("turn.interrupt", bot.id))} />
                       )}
                     {((bot.activeTurnId || !lanes && Boolean(bot.workerTasks?.active)) &&
                     !draft &&
-                    !uploads.length ? (lanes || single ? <MainStopButton owner={owner} botId={bot.id} online={online} className="bots-send" /> :
-                      <Button variant="ghost" size="icon"
-                        type="button"
-                        className="bots-send"
-                        aria-label="Stop all bot work"
-                        disabled={!online}
-                        onClick={() =>
-                          void action(() =>
-                            client.rpc("turn.interrupt", bot.id),
-                          )
-                        }
-                      >
-                        <Square size={14} fill="currentColor" />
-                      </Button>
+                    !uploads.length ? (lanes || single ? <MainStopButton owner={owner} botId={bot.id} botName={bot.name} online={online} className="bots-send" /> :
+                      <LegacyStopButton botName={bot.name} online={online} className="bots-send" stop={() => void action(() => client.rpc("turn.interrupt", bot.id))} />
                     ) : (
                       <Button variant="ghost" size="icon"
                         className="bots-send"

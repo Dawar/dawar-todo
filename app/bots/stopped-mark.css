@@ -1,0 +1,8 @@
+.bots-stopped-mark { display:inline-flex; align-items:center; gap:5px; flex:none; color:var(--muted-foreground); font-size:12px; font-weight:500; line-height:1; }
+.bots-stopped-icon { display:inline-grid; place-items:center; width:18px; height:18px; border-radius:50%; border:1.5px solid currentColor; }
+/* Subtle fade for a stopped bot: avatar and secondary lines only; the name and unread marker keep full contrast. */
+.bots-row.is-stopped > .bot-avatar-engine { opacity:.5; filter:grayscale(.6); }
+.bots-row.is-stopped .bots-row-preview, .bots-row.is-stopped .bots-row-config { opacity:.72; }
+.bots-row.is-stopped:is(:hover, :focus-visible, .selected) .bots-row-preview, .bots-row.is-stopped:is(:hover, :focus-visible, .selected) .bots-row-config { opacity:1; }
+.bots-header-title .bots-stopped-mark { margin-top:3px; }
+.bots-header-title .bots-stopped-icon { width:14px; height:14px; border-width:1.25px; }

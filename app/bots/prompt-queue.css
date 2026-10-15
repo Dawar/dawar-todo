@@ -42,3 +42,7 @@
 .bots-queue-attachments img { width:28px;height:28px;border-radius:4px;object-fit:cover; }
 .bots-queue-paused { flex-wrap:wrap;gap:8px;color:var(--warning-foreground); }
 .bots-queue-panel input:focus-visible { outline:2px solid var(--ring);outline-offset:2px; }
+
+/* Verified bot sender: compact badge and a subtle tint from the bot's colour. Humans/legacy stay neutral. */
+.bots-queue-sender .bots-submission-author { justify-content:flex-start; margin-bottom:4px; }
+.bots-queue-panel .bots-prompt-queue-item.is-sourced[data-source-kind="bot"] { background:color-mix(in srgb,var(--sender-color,var(--primary)) 7%,transparent); box-shadow:inset 3px 0 0 color-mix(in srgb,var(--sender-color,var(--primary)) 55%,transparent); border-radius:0 var(--radius) var(--radius) 0; padding-right:6px; }
