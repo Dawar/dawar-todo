@@ -21,7 +21,12 @@ export function primaryWorkView(runtime, bot) {
   const unconfirmed = runtime.activityUnresolved(bot.id) && !inflight || Boolean(intake.bindingUnconfirmed || intake.uncertain || intake.dispatching && !inflight);
   const active = observedActiveTurn(runtime, bot.id, bot.activeTurnId);
   const nativeInput = nativeWaiting(runtime, bot.id), questions = pendingQuestions(runtime, bot.id);
-  const needsInput = nativeInput || questions.length > 0;
+  // One activity definition for dispatcher, chat and list: a blocking
+  // question, or any question of the current turn, needs input. A retained
+  // nonblocking question from a finished turn stays visible in `pending`
+  // but never holds later automatic work.
+  const needsInput = nativeInput || questions.some(p => p.request.params.isBlocking !== false ||
+    (active && p.request.params.turnId === bot.activeTurnId));
   const paused = Boolean(bot.queuePaused);
   const state = needsInput ? 'needs-input' : active ? 'working' : unconfirmed ? 'unconfirmed' : inflight ? 'starting' : paused ? 'paused' : intake.waitingCount ? 'waiting' : 'ready';
   const reason = needsInput ? 'Waiting for input before automatic work can start.' : unconfirmed ? 'Execution or original delivery needs confirmation.' :

@@ -32,6 +32,7 @@ import {storedRuntimeDefaults} from './runtime-defaults.mjs';
 import {agentSnapshot} from './agent-snapshot.mjs';
 import {agentConnectionURL,centralLoopback} from './central-loopback.mjs';
 import {originalJournalReceipt} from './receipt-recovery.mjs';
+import {reconcileActiveTurns} from '../bot-bridge/turn-state.mjs';
 const fingerprintLegacy=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
 export class AgentTransport {
@@ -113,6 +114,13 @@ export class AgentTransport {
       // Native receipt/Plan reconciliation still belongs to this agent. It
       // reads original turns and settles metadata; it never starts new work.
       if(!this.runtime.maintenance.holding())await this.runtime.maintenance.track(()=>this.runtime.plans.recover()).catch(error=>this.runtime.emit('fault',error));
+      // The same bounded watchdog as runtime.tick: a lost turn/completed
+      // notification must not leave the original receipt native-accepted
+      // (and the hub queue fenced) until someone sends another message.
+      // Read-only native turn facts; scoped to currently assigned controls.
+      if(!this.runtime.maintenance.holding())await this.runtime.maintenance.track(()=>reconcileActiveTurns(this.runtime,2,botId=>{
+        const c=this.journal.db.prepare('SELECT * FROM node_controls WHERE bot_id=?').get(botId);return Boolean(c&&this.journal.currentControl({bot_id:botId,epoch:c.epoch}));
+      })).catch(error=>this.runtime.emit('fault',error));
       if(this.runtime.storage?.taskRequest&&this.runtime.storage.features?.taskRequests!==false&&!this.runtime.maintenance.holding())await this.runtime.taskRequests.tick().catch(error=>this.runtime.emit('fault',error));
       let rows=this.journal.db.prepare("SELECT rowid AS rowNumber,* FROM node_commands WHERE rowid>? AND state IN ('received','dispatching','unknown','native-accepted','running') ORDER BY rowid LIMIT 2").all(this.recoveryCursor??0);
       if(!rows.length){this.recoveryCursor=0;return;}
@@ -381,11 +389,19 @@ export async function runAgent(config){
   return {runtime,transport,journal,manager};
 }
 
+export const HUB_TEAM_REFERENCE_REUSE_MS=60000;
 export function installHubToolRoutes(runtime,manager,transport,platform=process.platform){
-  runtime.hubTeamReference=async bot=>{
-    const reference=await transport.controlRequest(bot.id,'bots_team',{operation:'read'});
-    if(reference?.team===null)return null;
-    if(!/^team-[a-f0-9]{32}$/.test(reference?.id??'')||reference.workspaceScope!=='hub'||reference.profile?.kind!=='application'||typeof reference.profile.value!=='string'||Buffer.byteLength(reference.profile.value)>900*1024)throw Error('The authenticated hub team reference is invalid.');
+  // A reference fetched during admission preflight is reused by that send
+  // (bounded age, same bot/thread), keeping hub metadata off the path between
+  // the durable attempt marker and the native write.
+  const teamReferences=new Map();
+  runtime.hubTeamReference=async(bot,{prefetch=false}={})=>{
+    const cached=teamReferences.get(bot.id);
+    if(!prefetch&&cached?.threadId===bot.threadId&&Date.now()-cached.at<HUB_TEAM_REFERENCE_REUSE_MS)return cached.reference;
+    let reference=await transport.controlRequest(bot.id,'bots_team',{operation:'read'});
+    if(reference?.team===null)reference=null;
+    else if(!/^team-[a-f0-9]{32}$/.test(reference?.id??'')||reference.workspaceScope!=='hub'||reference.profile?.kind!=='application'||typeof reference.profile.value!=='string'||Buffer.byteLength(reference.profile.value)>900*1024)throw Error('The authenticated hub team reference is invalid.');
+    teamReferences.set(bot.id,{threadId:bot.threadId,at:Date.now(),reference});
     return reference;
   };
   const store=runtime.store,originalTool=manager.callTracked.bind(manager);

@@ -55,6 +55,11 @@ export async function admitLogicalCommand(transport,command,payload) {
       ({goal}=await runtime.primary.goal(current,'get'));
     }catch(error){throw defer(`Current native admission evidence is unavailable: ${error.message}`);}
     if(!Array.isArray(nativeQueue?.data)||nativeQueue.data.length||nativeQueue.nextCursor)throw defer('Retained native queued input must settle before hub admission.');
+    // Team context is metadata read from the hub. Fetch it here, before the
+    // durable attempt: a missing acknowledgement keeps this original command
+    // received for automatic retry instead of failing it after prepare. The
+    // send path reuses this fresh reference without another round trip.
+    if(runtime.hubTeamReference)try{await runtime.hubTeamReference(current,{prefetch:true});}catch(error){throw defer(`Hub team context is unavailable: ${error.message}`);}
     if(!explicit&&goal?.status==='active')throw defer('An active native Goal owns this conversation.');
     assertControl();
     let text,input,attachments=[];

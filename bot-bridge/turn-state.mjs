@@ -264,10 +264,10 @@ export function projectCurrentIdle(runtime, botId, token, latest = null) {
 
 // Receipt success means accepted, not finished. Supervise active main turns
 // even after a queue/send operation has a done receipt and left its retry list.
-export async function reconcileActiveTurns(runtime, limit = 2) {
+export async function reconcileActiveTurns(runtime, limit = 2, eligible = () => true) {
   let checked = 0;
   for (const bot of runtime.store.bots()) {
-    if (!bot.activeTurnId || bot.archived || runtime.locks.has(bot.id) || checked >= limit) continue;
+    if (!bot.activeTurnId || bot.archived || runtime.locks.has(bot.id) || checked >= limit || !eligible(bot.id)) continue;
     const watch = runtime.store.get("turnWatch", bot.id);
     const same = watch?.turnId === bot.activeTurnId && watch.threadId === bot.threadId;
     if (same && Date.parse(watch.reconcileAfter ?? "") > Date.now()) continue;
