@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { InitiativeLedger, validateReviewResult, publicationText, classifyReply, OWNER_OUTCOMES, LOOSE_THREAD, ledgerDigest, looseThreadPriority } from "./initiative-ledger.mjs";
 import { stagedQueue } from "./prompt-queue.mjs";
-import { InitiativeRoom, roomSettings } from "./initiative-room.mjs";
 
 // Global review coordinator (hub). Decides which bot runs which private job,
 // accepts or rejects finished jobs, and delivers proposals within spacing and
@@ -25,9 +24,9 @@ const TRIGGER_ORDER = { extract: 0, "loose-thread": 1, "follow-up": 2, activity:
 
 export const INITIATIVE_TOOL = {
   name: "bots_initiative",
-  description: "Your proactive initiative ledger, including loose threads: things Dawar mentioned (clients, ideas, intentions, open questions) that have not reached a conclusion yet, with his original words. operation=list shows items you are responsible for or contributed to. operation=contribute (itemId, note) records your help executing an approved item you contribute to. operation=record saves Dawar's decision on one of them (approved, snoozed with an optional until date, dismissed, resolved) — call it when Dawar answers a proposal (for example “yes, proceed”, “next week”, “leave it”, “done”) or when you conclude a loose thread (resolved, with a note naming the evidence). Approved work then follows your normal path.",
+  description: "Your proactive initiative ledger, including loose threads: things Dawar mentioned (clients, ideas, intentions, open questions) that have not reached a conclusion yet, with his original words. operation=list shows items you are responsible for or contributed to. operation=record saves Dawar's decision on one of them (approved, snoozed with an optional until date, dismissed, resolved) — call it when Dawar answers a proposal (for example “yes, proceed”, “next week”, “leave it”, “done”) or when you conclude a loose thread (resolved, with a note naming the evidence). Approved work then follows your normal path.",
   inputSchema: { type: "object", additionalProperties: false, required: ["operation"], properties: {
-    operation: { type: "string", enum: ["list", "record", "contribute"] }, itemId: { type: "string" },
+    operation: { type: "string", enum: ["list", "record"] }, itemId: { type: "string" },
     outcome: { type: "string", enum: OWNER_OUTCOMES }, until: { type: "string" }, note: { type: "string" } } },
 };
 /** Settings actions on one loose thread. */
@@ -44,8 +43,7 @@ const inputText = input => (Array.isArray(input) ? input : []).filter(p => p?.ty
 export class InitiativeCoordinator {
   constructor({ store, executor, bots, clock = Date.now, random = Math.random, emit = () => {}, fault = () => {} }) {
     Object.assign(this, { store, executor, bots, clock, emit, fault });
-    this.ledger = new InitiativeLedger(store, { clock, random, validateRoom: roomSettings });
-    this.room = new InitiativeRoom(this);
+    this.ledger = new InitiativeLedger(store, { clock, random });
     this.backlog = [];
     this.nextScanAt = 0;
   }
@@ -53,8 +51,6 @@ export class InitiativeCoordinator {
   botState(botId) { return this.store.get("initiativeBot", botId) ?? { id: botId, botId, failures: 0 }; }
   saveBotState(botId, patch) { return this.store.put("initiativeBot", { ...this.botState(botId), ...patch, id: botId, botId }); }
   reviews(states) { return this.store.list("initiativeReview").filter(r => states.has(r.state)); }
-  /** Review and extraction jobs; room steps run in parallel outside the review concurrency. */
-  soloReviews(states) { return this.reviews(states).filter(r => r.kind !== "room"); }
   names() { return Object.fromEntries(this.bots().map(b => [b.id, b.name ?? b.slug ?? b.id])); }
   /** Both providers are eligible; the node reports what it can actually run. */
   eligibleBots(settings) {
@@ -115,27 +111,15 @@ export class InitiativeCoordinator {
       for (const e of reviews) if (!kept.includes(e)) this.saveBotState(e.botId, { lastSkip: "triage", lastSkipAt: this.at() });
       reviews = kept;
     }
-    // The room takes the single most valuable due loose thread (triage for the
-    // room); that bot's ordinary review waits while the room works it.
-    const roomItem = this.room.candidate(settings);
-    if (roomItem) reviews = [{ botId: roomItem.responsibleBotId, kind: "room", itemId: roomItem.id, trigger: "loose-thread", dueAt: t, score: 1e6 },
-      ...reviews.filter(e => e.botId !== roomItem.responsibleBotId)];
-    reviews = reviews.filter(e => e.kind === "room" || !this.ledger.dueThreads(e.botId, settings).some(i => this.room.activeFor(i.id)));
     this.backlog = [...due.filter(e => e.kind === "extract"), ...reviews]
       .sort((a, b) => TRIGGER_ORDER[a.trigger] - TRIGGER_ORDER[b.trigger] || b.score - a.score || a.dueAt - b.dueAt);
     this.lastScanAt = this.at();
   }
   async admit(settings) {
-    if (this.soloReviews(new Set(["uncertain", "starting"])).length) return; // reconcile first
-    while (this.backlog.length && this.soloReviews(ACTIVE).length < settings.concurrency) {
+    if (this.reviews(new Set(["uncertain", "starting"])).length) return; // reconcile first
+    while (this.backlog.length && this.reviews(ACTIVE).length < settings.concurrency) {
       const entry = this.backlog.shift(), bot = this.bots().find(b => b.id === entry.botId);
       if (!bot || !this.eligibleBots(settings).some(b => b.id === bot.id)) continue;
-      if (entry.kind === "room") {
-        // The room's panel members are probed per step; one room at a time.
-        const item = this.ledger.item(entry.itemId);
-        if (item && !this.room.active()) await this.room.start(item, settings);
-        continue;
-      }
       let probe;
       try { probe = await this.executor.probe(bot.id); }
       catch (error) {
@@ -152,9 +136,9 @@ export class InitiativeCoordinator {
   brief(bot, settings) {
     const s = this.ledger.botSettings(bot.id, settings);
     const schedules = this.store.list("schedule", bot.id).filter(x => x.enabled !== false).slice(0, 12)
-      .map(x => ({ id: x.id, text: `${x.title ?? (inputText(x.input) || x.prompt) ?? x.id} · ${x.cron ?? x.scheduledAt ?? ""}${x.nextRunAt ? ` · next ${x.nextRunAt}` : ""}` }));
+      .map(x => `${x.title ?? inputText(x.input) ?? x.prompt ?? x.id} · ${x.cron ?? x.scheduledAt ?? ""}${x.nextRunAt ? ` · next ${x.nextRunAt}` : ""}`);
     let queue = [];
-    try { queue = stagedQueue(this.store, bot.id).slice(0, 10).map(q => ({ id: q.id, text: inputText(q.input) || q.text || q.id })); } catch { queue = []; }
+    try { queue = stagedQueue(this.store, bot.id).slice(0, 10).map(q => inputText(q.input) || q.text || q.id); } catch { queue = []; }
     return { role: `You are ${bot.name ?? "this bot"}; keep to your existing role and responsibilities.`, priorities: s.priorities,
       ledger: this.ledger.forReview(bot.id, 20, { names: this.names(), settings }), schedules, queue,
       bots: this.directory(settings).filter(b => b.id !== bot.id) };
@@ -205,14 +189,6 @@ export class InitiativeCoordinator {
     for (const review of this.reviews(ACTIVE)) {
       let v;
       try { v = await this.executor.poll(review.botId, { reviewId: review.id }); } catch { continue; }
-      if (review.kind === "room") {
-        // Room steps never back off a bot; a failed step just leaves the stage without it.
-        const deadline = Date.parse(review.capture.startedAt) + (settings.reviewTimeoutSeconds + 60) * 1000;
-        if (["starting", "running"].includes(v.state) && this.clock() > deadline) { await this.executor.cancel(review.botId, { reviewId: review.id }).catch(() => {}); v = { state: "failed", error: "Room step exceeded its time bound." }; }
-        if (["starting", "running"].includes(v.state)) { if (review.state !== "running") this.store.put("initiativeReview", { ...review, state: "running" }); continue; }
-        await this.room.onJob(review, v.state === "missing" ? { state: "cancelled" } : v, settings);
-        continue;
-      }
       if (v.state === "missing") { this.endReview(review, "cancelled", { reason: "not-started" }); continue; }
       if (["starting", "running"].includes(v.state)) {
         if (review.state !== "running") this.store.put("initiativeReview", { ...review, state: "running" });
@@ -233,8 +209,6 @@ export class InitiativeCoordinator {
       await this.executor.cancel(review.botId, { reviewId: review.id }).catch(() => {});
       this.endReview(review, "cancelled", { reason });
     }
-    const room = this.room.active();
-    if (room) this.room.finish(room, "failed", { reason });
   }
 
   // ---- result acceptance -------------------------------------------------------
@@ -275,17 +249,17 @@ export class InitiativeCoordinator {
     if (result.decision === "publish" && !applied.contribution) publicationBlock = "unknown-item";
     if (result.decision === "publish" && applied.contribution) {
       const c = applied.contribution, item = this.ledger.item(c.itemId);
-      publicationBlock = !c.responsible ? "not-responsible" : c.kind === LOOSE_THREAD && item?.kind !== LOOSE_THREAD ? "unknown-loose-thread" :
-        this.room.activeFor(c.itemId) ? "room-active" : null;
+      publicationBlock = !c.responsible ? "not-responsible" : c.kind === LOOSE_THREAD && item?.kind !== LOOSE_THREAD ? "unknown-loose-thread" : null;
       if (!publicationBlock) {
         const block = this.ledger.deliveryBlock(review.botId, c.itemId, { changedCircumstances: c.changedCircumstances }, settings);
         if (block && !LIMIT_BLOCKS.has(block)) publicationBlock = block;
       }
       if (!publicationBlock) {
-        const { responsible, ...content } = c;
-        const proposal = this.ledger.saveProposal({ itemId: c.itemId, content: { ...content, kind: item?.kind ?? c.kind },
-          authorship: { botId: review.botId, reviewId: review.id, provider: review.provider ?? null }, source: "review" });
-        publication = this.publish(proposal, { botId: review.botId, revision: capture.revision, reviewId: review.id }, settings);
+        const id = `initiative-publication:${randomUUID()}`;
+        publication = this.store.put("initiativePublication", { id, botId: review.botId, itemId: c.itemId, reviewId: review.id, kind: item?.kind ?? c.kind,
+          text: publicationText({ ...c, kind: item?.kind ?? c.kind }, c.itemId, { item, publisherBotId: review.botId, names: this.names(), clock: this.clock(), timeZone: settings.limitTimeZone }),
+          revision: capture.revision, changedCircumstances: c.changedCircumstances, whyNow: c.whyNow, proposedAction: c.proposedAction ?? null,
+          state: "pending", attempts: 0, createdAt: this.at() });
       }
     }
     const baseline = this.ledger.botSettings(review.botId, settings).baselineMinutes * 6e4;
@@ -318,15 +292,6 @@ export class InitiativeCoordinator {
       await this.publishOne(p);
       return; // one delivery attempt per tick; spacing follows confirmation
     }
-  }
-  /** A pending publication of one proposal by `botId` (the delivering bot). */
-  publish(proposal, { botId, revision, reviewId = null, roomId = null }, settings = this.ledger.settings()) {
-    const c = proposal.content, item = this.ledger.item(proposal.itemId);
-    return this.store.put("initiativePublication", { id: `initiative-publication:${randomUUID()}`, botId, itemId: proposal.itemId, proposalId: proposal.id,
-      reviewId, roomId, kind: item?.kind ?? c.kind,
-      text: publicationText(c, proposal.itemId, { item, publisherBotId: botId, names: this.names(), clock: this.clock(), timeZone: settings.limitTimeZone, room: Boolean(roomId) }),
-      revision, changedCircumstances: c.changedCircumstances === true, whyNow: c.whyNow ?? null, proposedAction: c.proposedAction ?? null,
-      state: "pending", attempts: 0, createdAt: this.at() });
   }
   setPublication(p, state, fields = {}) {
     return this.store.put("initiativePublication", { ...this.store.get("initiativePublication", p.id), ...fields, state, updatedAt: this.at() });
@@ -394,15 +359,7 @@ export class InitiativeCoordinator {
       const next = this.ledger.recordOutcome(item.id, args.outcome, { until: args.until ?? null, note: args.note ?? null, by: "bot-tool", source: botId });
       return { id: next.id, status: next.status, snoozedUntil: next.snoozedUntil ?? null };
     }
-    if (args.operation === "contribute") {
-      // Helping execute an approved item, as its responsible bot or a contributor.
-      const item = this.ledger.item(String(args.itemId ?? ""));
-      if (!item || !mine(item)) throw Error("That initiative item is not yours.");
-      if (!["approved", "resolved"].includes(item.status)) throw Error("Only approved work can be contributed to.");
-      const row = this.ledger.credit(botId, "executed", { itemId: item.id, note: args.note ?? null, key: `executed:${item.id}:${botId}` });
-      return { id: item.id, points: row.points };
-    }
-    throw Error("Use operation list, record or contribute.");
+    throw Error("Use operation list or record.");
   }
   /** Owner action from Settings on one loose thread: dismiss, snooze (until) or resolve. */
   threadAction(itemId, action, { until = null } = {}) {
@@ -426,12 +383,7 @@ export class InitiativeCoordinator {
   status(botId) {
     const settings = this.ledger.settings(), s = this.botState(botId);
     const reviews = this.store.list("initiativeReview", botId).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-    const names = this.names();
     return { settings, metrics: this.ledger.metrics(settings), lastScanAt: this.lastScanAt ?? null, looseThreads: this.looseThreadList(settings),
-      room: { settings: this.room.settings(settings), ...this.room.metrics(settings),
-        recent: this.room.rooms().sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 5).map(r => ({ id: r.id, itemId: r.itemId, arm: r.arm, stage: r.stage,
-          reason: r.reason ?? null, tokens: r.tokens ?? null, createdAt: r.createdAt, panel: (r.panel ?? []).map(p => ({ name: names[p.botId] ?? p.botId, role: p.role, style: p.style ?? null })) })),
-        contributions: this.ledger.contributions().sort((a, b) => b.points - a.points).slice(0, 12).map(c => ({ name: names[c.botId] ?? c.botId, points: c.points, counts: c.counts })) },
       bot: { botId, enabled: this.ledger.botSettings(botId, settings).enabled, override: settings.bots[botId] ?? {},
         supported: true, lastReviewAt: s.lastReviewAt ?? null, nextReviewAt: s.nextReviewAt ?? null, lastExtractionAt: s.lastExtractionAt ?? null,
         lastOutcome: s.lastOutcome ?? null, failures: s.failures ?? 0, lastError: s.lastError ?? null, lastErrorAt: s.lastErrorAt ?? null,
@@ -454,7 +406,6 @@ export function localExecutor(runtime) {
     cancel: (botId, p) => call("initiative.node.cancel", botId, p),
     publish: (botId, p) => call("initiative.node.publish", botId, p),
     reconcile: (botId, p) => call("initiative.node.reconcile", botId, p),
-    packet: (botId, p) => call("initiative.node.packet", botId, p),
   };
 }
 /** Executor over the hub's assigned-node RPC (portable). */
@@ -464,6 +415,5 @@ export function hubExecutor(hub, router, owner) {
     placement: botId => { try { const p = hub.placement(owner, botId); return p && !p.stopped && router.connection(p) ? { nodeId: p.node_id, epoch: p.epoch } : null; } catch { return null; } },
     probe: call("initiative.node.probe", 20000), start: call("initiative.node.start", 60000), poll: call("initiative.node.poll", 10000),
     cancel: call("initiative.node.cancel", 20000), publish: call("initiative.node.publish", 60000), reconcile: call("initiative.node.reconcile", 30000),
-    packet: call("initiative.node.packet", 30000),
   };
 }

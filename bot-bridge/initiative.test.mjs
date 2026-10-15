@@ -1,10 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Store } from "./store.mjs";
 import { BotRuntime } from "./runtime.mjs";
+import { managedExecutionParams, PRIVATE_REVIEW } from "./execution-access.mjs";
 import { InitiativeLedger, validateReviewResult, classifyReply, limitDay, publicationText, mentionWhen, resurfaceAt, looseThreadPriority } from "./initiative-ledger.mjs";
 import { InitiativeCoordinator, localExecutor, ownerReplyText } from "./initiative-coordinator.mjs";
 import { PRIVATE_REVIEW_CONFIG } from "./initiative-node.mjs";
@@ -14,9 +16,64 @@ import { conversationViewPage } from "./conversation-view.mjs";
 import { ClaudeBackend } from "./claude.mjs";
 import { ProviderRouter } from "./provider-router.mjs";
 import { fakeQuery, fakeMcp, text as sdkText, result as sdkResult, MinimalCodex } from "./claude-test-support.mjs";
-import { InitiativeCodex, owner, answer, sec } from "./initiative-test-support.mjs";
 
 const settle = async (n = 3) => { for (let i = 0; i < n; i++) await new Promise(resolve => setImmediate(resolve)); };
+const sec = iso => Date.parse(iso) / 1000;
+const owner = (id, text, extra = {}) => ({ type: "userMessage", id, clientId: `owner-${id}`, content: [{ type: "text", text, text_elements: [] }], ...extra });
+const answer = (id, text) => ({ type: "agentMessage", id, text, phase: "final_answer" });
+
+/** Codex fake: main conversations plus private job threads that answer from `reply(kind, params)`. */
+class InitiativeCodex extends EventEmitter {
+  calls = []; answers = []; ready = true; jobs = 0;
+  reply = () => null; // (kind, params) => output object/string, or null to finish manually
+  usage = { totalTokens: 1200, inputTokens: 1000, cachedInputTokens: 0, cacheWriteInputTokens: 0, outputTokens: 200, reasoningOutputTokens: 50 };
+  threads = new Map([["thread-main", { id: "thread-main", status: { type: "idle" }, turns: [
+    { id: "turn-1", status: "completed", startedAt: sec("2026-10-13T15:00:00Z"), itemsView: "full", items: [
+      owner("u1", "We should call Acme about their renewal before Friday."),
+      answer("a1", "Noted.")] }] }]]);
+  async start() {}
+  startPrivateThread(params) { return this.call("thread/start", { ...params, [PRIVATE_REVIEW]: true }); }
+  startPrivateReviewTurn(params) { return this.call("turn/start", { ...params, [PRIVATE_REVIEW]: true }); }
+  async call(method, params = {}) {
+    params = managedExecutionParams(method, params);
+    this.calls.push({ method, params });
+    const thread = this.threads.get(params.threadId);
+    if (method === "account/read") return { account: { type: "chatgpt" } };
+    if (method === "model/list") return { data: [
+      { model: "gpt-6.1-sol", supportedReasoningEfforts: [{ reasoningEffort: "medium" }, { reasoningEffort: "high" }], serviceTiers: [{ id: "priority", name: "Fast" }] },
+      { model: "gpt-6-luna", isDefault: true, supportedReasoningEfforts: [{ reasoningEffort: "low" }, { reasoningEffort: "high" }], serviceTiers: [{ id: "priority", name: "Fast" }] }], nextCursor: null };
+    if (method === "thread/read") return { thread };
+    if (method === "thread/resume") return { thread };
+    if (method === "thread/turns/list") return { data: [...thread.turns].reverse().slice(0, params.limit ?? 50), nextCursor: null };
+    if (method === "thread/queue/list") return { data: [], nextCursor: null };
+    if (method === "thread/goal/get") return { goal: null };
+    if (method === "thread/loaded/list") return { data: [...this.threads.keys()], nextCursor: null };
+    if (method === "thread/start") {
+      const job = { id: `job-${++this.jobs}`, status: { type: "idle" }, turns: [], private: params.ephemeral === true };
+      this.threads.set(job.id, job);
+      return { thread: job };
+    }
+    if (method === "turn/start") {
+      const turn = { id: `turn-${this.calls.length}`, status: "inProgress", items: [] };
+      thread.turns.push(turn);
+      if (thread.private) {
+        const kind = params.outputSchema?.properties?.mentions ? "extract" : "review";
+        const out = this.reply(kind, params);
+        if (out !== null) setImmediate(() => this.finishJob(thread.id, turn.id, typeof out === "string" ? out : JSON.stringify(out)));
+      }
+      return { turn };
+    }
+    return {};
+  }
+  finishJob(threadId, turnId, text, status = "completed") {
+    this.emit("notification", { method: "item/completed", params: { threadId, turnId, item: { type: "agentMessage", id: "r", text, phase: "final_answer" } } });
+    this.emit("notification", { method: "thread/tokenUsage/updated", params: { threadId, turnId, tokenUsage: { total: this.usage } } });
+    this.emit("notification", { method: "turn/completed", params: { threadId, turn: { id: turnId, status, items: [] } } });
+  }
+  respond(id, result) { this.answers.push({ id, result }); }
+  reject(id, message) { this.answers.push({ id, error: message }); }
+}
+
 const NO_MENTIONS = { mentions: [], resolutions: [] };
 const ACME = { mentions: [{ message_id: "u1", quote: "call Acme about their renewal", item_id: null, key: "client-acme-renewal", title: "Call Acme about the renewal",
   category: "client", entity: "Acme", importance: "high", time_sensitive: false, due_in_hours: null, summary: "Renewal call before Friday.", better_bot_id: null }], resolutions: [] };
@@ -417,9 +474,7 @@ test("Claude: extraction and review run as standalone tool-free SDK queries and 
   const turnsBefore = claude.data.turns(bot.threadId).length;
   const sessionsBefore = claude.sessions.size;
   const drive = async n => { for (let i = 0; i < n; i++) { await coordinator.tick(); await settle(5); } };
-  // Condition-based: the SDK fake settles asynchronously, slower under load.
-  const until = async (done, max = 60) => { for (let i = 0; i < max && !done(); i++) await drive(1); };
-  await until(() => log.filter(ctx => ctx.options.outputFormat).length >= 2 && store.list("initiativeReview").every(r => !["starting", "running"].includes(r.state)));
+  await drive(4);
   const [item] = store.list("initiativeItem");
   assert.equal(item?.kind, "loose-thread");
   assert.equal(item.mentions[0].quote, "call Acme about their renewal");
@@ -443,7 +498,7 @@ test("Claude: extraction and review run as standalone tool-free SDK queries and 
   assert.deepEqual(extraction.usage, { totalTokens: 1320, inputTokens: 1200, cachedInputTokens: 300, outputTokens: 120, costUsd: 0.004 });
   // Make the thread due and let the review raise it.
   clock.t += 3 * 36e5; coordinator.nextScanAt = 0;
-  await until(() => store.list("initiativePublication").some(p => p.itemId === item.id && p.state === "published"));
+  await drive(4);
   const publication = store.list("initiativePublication").find(p => p.itemId === item.id);
   assert.equal(publication?.state, "published");
   assert.match(publication.text, /you mentioned: “call Acme about their renewal”/);
@@ -599,20 +654,4 @@ test("result validation and reply classification", () => {
   assert.equal(classifyReply("Can you explain the second point in more detail before I decide?"), null);
   assert.equal(ownerReplyText({ content: [{ type: "text", text: "Quoted...\nNew user message:\nyes, proceed" }] }), "yes, proceed");
   assert.equal(PRIVATE_REVIEW_CONFIG["features.multi_agent"], false);
-});
-
-test("proposals have stable ids with authorship kept apart from content; outcomes and execution credit the bots behind them", async t => {
-  const { store, coordinator, drive } = await setup(t, { reply: kind => kind === "extract" ? NO_MENTIONS : review() });
-  await drive(7);
-  const [publication] = store.list("initiativePublication");
-  const proposal = coordinator.ledger.proposal(publication.proposalId);
-  assert.match(proposal.id, /^initiative-proposal:/);
-  assert.deepEqual(proposal.authorship, { botId: "atlas", reviewId: publication.reviewId, provider: "codex" });
-  assert.equal(JSON.stringify(proposal.content).includes("atlas"), false, "content carries no authorship");
-  assert.deepEqual(proposal.credits, [{ botId: "atlas", share: 1 }]);
-  coordinator.observeUserMessage("atlas", { type: "userMessage", id: "reply-yes", content: [{ type: "text", text: "yes, proceed" }] });
-  assert.equal(coordinator.ledger.contribution("atlas").points, 6);
-  assert.equal(coordinator.tool("atlas", { operation: "contribute", itemId: publication.itemId, note: "drafted the template" }).points, 9);
-  coordinator.tool("atlas", { operation: "contribute", itemId: publication.itemId });
-  assert.equal(coordinator.ledger.contribution("atlas").counts.executed, 1, "execution help is credited once per item");
 });
