@@ -1,6 +1,7 @@
 import { RUNTIME_COMPANIONS } from './runtime-companions.mjs';
 import { RUNTIME_VERSION } from './protocol.mjs';
 import { build } from 'esbuild';
+import { buildDeployBundles } from './deploy-bundles.mjs';
 import { mkdir, cp, writeFile, readFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -16,7 +17,7 @@ if(dependencies.dependencies?.['@openai/codex']!==RUNTIME_VERSION||lock.packages
 await mkdir('dist/portable',{recursive:true});
 await build({ entryPoints:['portable/gateway.mjs'],outfile:'dist/portable/gateway.mjs',bundle:true,platform:'node',target:'node24',format:'esm',packages:'external' });
 await build({ entryPoints:['portable/agent.mjs'],outfile:'dist/portable/portable-agent.mjs',bundle:true,platform:'node',target:'node24',format:'esm',packages:'external' });
-await build({ entryPoints:['portable/deploy-cli.mjs'],outfile:'dist/portable/deploy-cli.mjs',bundle:true,platform:'node',target:'node24',format:'esm',packages:'external' });
+await buildDeployBundles('dist/portable');
 for(const file of RUNTIME_COMPANIONS)await cp(`bot-bridge/${file}`,`dist/portable/${file}`);
 await cp('bot-bridge/desktops','dist/portable/desktops',{recursive:true});
 await cp('public','.next-portable/standalone/public',{recursive:true});

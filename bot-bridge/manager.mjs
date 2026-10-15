@@ -30,11 +30,10 @@ import { validateResponse } from "./runtime.mjs";
 import { slugify, cleanName } from "./profiles.mjs";
 import { finishTask, ensureNotice, repairTerminalNotices, deliverNotices } from "./manager-outbox.mjs";
 import { findNativeTurn } from "./native-reconcile.mjs";
+import { maintenanceReason } from "./maintenance-reason.mjs";
 
-// Maintenance refusals are fixed RuntimeMaintenance messages; bound them and
-// strip anything credential-shaped before they leave the owner socket.
-export const maintenanceReason = error => String(error?.message ?? 'Unknown maintenance refusal.')
-  .replace(/Bearer\s+\S+/gi, 'Bearer [redacted]').replace(/[A-Za-z0-9+/_=-]{48,}/g, '[redacted]').slice(0, 300);
+export { maintenanceReason };
+
 
 const exec = promisify(execFile);
 const now = () => new Date().toISOString();

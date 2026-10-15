@@ -22,8 +22,11 @@ import { hubActivation } from './hub-authority.mjs';
 import { closeHttpServer } from './close-http.mjs';
 import { Store } from '../bot-bridge/store.mjs';
 import { RuntimeMaintenance } from '../bot-bridge/runtime-maintenance.mjs';
-import { maintenanceReason } from '../bot-bridge/manager.mjs';
+import { maintenanceReason } from '../bot-bridge/maintenance-reason.mjs';
 
+// Static imports resolve before this line: `--help` proves a packaged
+// release can load the stand-in (portable/package.mjs runs it).
+if (process.argv.includes('--help')) { console.log('rehearsal-service.mjs --release RELEASE_DIRECTORY --config REHEARSAL_HUB_CONFIG [--native-child]'); process.exit(0); }
 const args = process.argv.slice(2), option = name => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : undefined; };
 const configPath = option('--config'), release = option('--release') ?? process.cwd();
 const c = JSON.parse(readPrivate(configPath)), a = JSON.parse(readPrivate(c.agentConfigFile));

@@ -114,3 +114,5 @@ The drain's `nativeRpc` count includes in-flight Claude backend requests.
 views see both.
 
 The hub/runner split is designed and staged in `SPLIT_HUB_RUNNER.md`.
+
+Packaged releases ship `portable/deploy-cli.mjs` and `portable/rehearsal-service.mjs` as bundles (`portable/deploy-bundles.mjs`), because a release does not contain the individual bot-bridge source modules. `package.mjs` runs both bundles' help paths inside the package before publishing it.

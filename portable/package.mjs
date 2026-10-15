@@ -1,5 +1,6 @@
 import { RUNTIME_COMPANIONS } from './runtime-companions.mjs';
 import { RUNTIME_VERSION } from './protocol.mjs';
+import { DEPLOY_BUNDLES } from './deploy-bundles.mjs';
 import { cp, mkdir, readdir, readFile, writeFile, lstat, readlink, rm } from 'node:fs/promises';
 import { resolve, join, relative, isAbsolute } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -27,9 +28,8 @@ try {
   await cp('portable',join(directory,'portable'),{recursive:true});
   // The controller's native proof helpers must resolve inside the package,
   // without importing TypeScript or source files from the build checkout.
-  await cp('dist/portable/deploy-cli.mjs',join(directory,'portable/deploy-cli.mjs'));
+  for(const bundle of DEPLOY_BUNDLES)await cp(join('dist/portable',bundle.file),join(directory,'portable',bundle.file));
   await cp('bot-bridge/native_queue_receipts.py',join(directory,'portable/native_queue_receipts.py'));
-  execFileSync(process.execPath,['--check',join(directory,'portable/deploy-cli.mjs')]);
   await mkdir(join(directory,'dist/agent-downloads'),{recursive:true});
   for(const file of ['current.json',download.name,download.name+'.sha256'])await cp(join('dist/agent-downloads',file),join(directory,'dist/agent-downloads',file));
   await mkdir(join(directory,'dist/portable'),{recursive:true});
@@ -56,6 +56,9 @@ try {
   for(const name of dependencies){
     await cp(join('node_modules',name),join(directory,'node_modules',name),{recursive:true});
   }
+  // The deploy CLI and rehearsal stand-in must load from the package alone
+  // (no bot-bridge source modules): their help paths run after every import.
+  for(const bundle of DEPLOY_BUNDLES)execFileSync(process.execPath,[join(directory,'portable',bundle.file),...bundle.check],{cwd:directory,stdio:'ignore'});
   // Resolve every runtime import before publishing an activatable package.
   // An incomplete dependency tree must fail packaging, not live startup.
   execFileSync(process.execPath,['--input-type=module','-e',

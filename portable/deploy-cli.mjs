@@ -14,7 +14,7 @@ import { rehearse, rehearsalPassed } from './deploy-rehearsal.mjs';
 // deploy-cli.mjs launch    --plan PLAN [--skip-rehearsal]   (runs `run` in its own transient unit)
 // deploy-cli.mjs run       --plan PLAN [--skip-rehearsal]   (legacy: --plan PLAN)
 const usage = 'Use deploy-cli.mjs prepare <sha> | preflight|rehearse|launch|run --plan PRIVATE_ABSOLUTE_PLAN. See portable/DEPLOY.md.';
-const argv = process.argv.slice(2), command = argv[0]?.startsWith('--') ? 'run' : argv.shift();
+const argv = process.argv.slice(2), command = argv[0] === '--help' ? 'help' : argv[0]?.startsWith('--') ? 'run' : argv.shift();
 const flag = name => argv.includes(name), value = name => { const i = argv.indexOf(name); return i >= 0 ? argv[i + 1] : undefined; };
 const number = (name, fallback) => { const v = value(name); if (v === undefined) return fallback; const n = Number(v); if (!Number.isSafeInteger(n)) throw Error(`${name} must be an integer.`); return n; };
 process.umask(0o077);
@@ -22,7 +22,9 @@ const print = value => console.log(JSON.stringify(value, null, 2));
 const loadPlan = () => { const path = value('--plan'); if (!isAbsolute(path ?? '')) throw Error(usage); return JSON.parse(readPrivate(path)); };
 
 try {
-  if (command === 'prepare') {
+  if (command === 'help') {
+    console.log(usage);
+  } else if (command === 'prepare') {
     const source = argv[0];
     if (!/^[a-f0-9]{40}$/.test(source ?? '')) throw Error('prepare needs the full 40-character release SHA.');
     const { planPath, plan } = await preparePlan(linuxProbe(), { source, unitId: value('--unit') ?? DEFAULT_UNIT,

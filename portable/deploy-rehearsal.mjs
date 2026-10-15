@@ -23,7 +23,7 @@ const pause = ms => new Promise(r => setTimeout(r, ms));
  * prepare step, so prepare, preflight, drain, backup, stop, start, health and
  * (when the release is unhealthy) rollback are all exercised.
  */
-export async function rehearse(plan, { systemctl, unitDirectory = join(homedir(), '.config/systemd/user'), root: rootBase = join(homedir(), '.cache/dawar-rehearsal'), keep = false, verifyProduction = true, now = new Date() } = {}) {
+export async function rehearse(plan, { systemctl, unitDirectory = join(homedir(), '.config/systemd/user'), root: rootBase = join(homedir(), '.cache/dawar-rehearsal'), keep = false, verifyProduction = true, now = new Date(), standIn = STAND_IN } = {}) {
   const probe = linuxProbe(systemctl ? { systemctl } : {});
   if (verifyProduction) await verifyPlan(plan, probe);
   mkdirSync(rootBase, { recursive: true, mode: 0o700 });
@@ -60,7 +60,7 @@ export async function rehearse(plan, { systemctl, unitDirectory = join(homedir()
   const timeout = liveDropIn.split('\n').find(line => /^\s*TimeoutStopSec\s*=/.test(line)) ?? 'TimeoutStopSec=infinity';
   savePrivate(join(unitDirectory, unitId), `[Unit]\nDescription=DawarTodo deploy rehearsal ${plan.operationId} (temporary)\n\n[Service]\nType=simple\nUMask=0077\nKillMode=mixed\nEnvironment=BOTS_MACHINE_SECRET=${randomBytes(32).toString('hex')}\n`);
   const dropIn = join(unitDirectory, `${unitId}.d`, '90-portable-migration.conf');
-  savePrivate(dropIn, `[Service]\nWorkingDirectory=${oldRelease}\nExecStart=\nExecStart=${process.execPath} ${STAND_IN} --release ${oldRelease} --config ${join(config, 'hub.json')}\n${timeout}\n`);
+  savePrivate(dropIn, `[Service]\nWorkingDirectory=${oldRelease}\nExecStart=\nExecStart=${process.execPath} ${standIn} --release ${oldRelease} --config ${join(config, 'hub.json')}\n${timeout}\n`);
   const systemd = systemctl ?? probe.systemctl;
   const result = { version: 1, kind: 'portable-deployment-rehearsal', productionOperationId: plan.operationId, source: plan.source, root, unitId, startedAt: now.toISOString() };
   try {

@@ -32,7 +32,7 @@ function release(root, source, { healthy = true } = {}) {
  * SIGTERM shutdown) from the OLD release directory with TimeoutStopSec=infinity,
  * exactly like the 2026-10-14 drop-in.
  */
-export async function installation(t, { targetHealthy = true, activatingMs = 0, busyBot = false } = {}) {
+export async function installation(t, { targetHealthy = true, activatingMs = 0, busyBot = false, standIn = STAND_IN } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'dpl-'));
   chmodSync(root, 0o700);
   const units = join(root, 'units'), hubDir = join(root, 'live/hub'), agentDir = join(root, 'live/agent'), configDir = join(root, 'config');
@@ -66,7 +66,7 @@ export async function installation(t, { targetHealthy = true, activatingMs = 0, 
   savePrivate(join(configDir, 'rehearsal.json'), JSON.stringify({ models: MODELS }) + '\n');
   savePrivate(join(units, UNIT), `[Unit]\nDescription=test backend\n\n[Service]\nType=simple\nEnvironment=BOTS_MACHINE_SECRET=${randomBytes(32).toString('hex')}\nEnvironment=DAWAR_HUB_CONFIG=${hubConfig}\nKillMode=mixed\n`);
   const dropIn = join(units, `${UNIT}.d`, '90-portable-migration.conf');
-  savePrivate(dropIn, `[Unit]\n[Service]\nWorkingDirectory=${oldRelease}\nExecStart=\nExecStart=${process.execPath} ${STAND_IN} --native-child --release ${oldRelease} --config ${hubConfig}\nRestart=on-failure\nUMask=0077\nKillMode=mixed\nTimeoutStopSec=infinity\n`);
+  savePrivate(dropIn, `[Unit]\n[Service]\nWorkingDirectory=${oldRelease}\nExecStart=\nExecStart=${process.execPath} ${standIn} --native-child --release ${oldRelease} --config ${hubConfig}\nRestart=on-failure\nUMask=0077\nKillMode=mixed\nTimeoutStopSec=infinity\n`);
   const systemd = new FakeSystemd({ unitDirectory: units, log: join(root, 'services.log') });
   t.after(() => { systemd.close(); if (!process.env.KEEP_DEPLOY_FIXTURE) rmSync(root, { recursive: true, force: true }); });
   await systemd.systemctl('start', '--no-block', UNIT);
