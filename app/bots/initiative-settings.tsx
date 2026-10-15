@@ -4,6 +4,8 @@ import { botsClient } from './client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
+/** A snoozed loose thread comes back in a week. */
+const snoozeUntil = () => new Date(Date.now() + 7 * 864e5).toISOString();
 
 type Settings = { enabled: boolean; scanMinutes: number; baselineMinutes: number; perBotDaily: number; globalDaily: number; spacingMinMinutes: number;
   spacingMaxMinutes: number; reminderHours: number; priorities: string; coverage: 'all' | 'selected'; revision: number; model: string; effort: string;
@@ -34,7 +36,7 @@ export function InitiativeSettings({ owner, botId, botName, online }: { owner: s
     finally { if (sequence.current === current) setBusy(false); }
   }
   const save = (patch: Record<string, unknown>) => run('initiative.configure', { patch, expectedRevision: status?.settings.revision ?? null });
-  const act = (itemId: string, action: 'dismiss' | 'snooze' | 'resolve') => run('initiative.thread', { itemId, action, until: action === 'snooze' ? new Date(Date.now() + 7 * 864e5).toISOString() : null });
+  const act = (itemId: string, action: 'dismiss' | 'snooze' | 'resolve') => run('initiative.thread', { itemId, action, until: action === 'snooze' ? snoozeUntil() : null });
   const s = status?.settings, b = status?.bot, override = s?.bots[botId] ?? {};
   return <details className="bots-details-section" onToggle={event => { if (event.currentTarget.open) void run('initiative.read'); }}>
     <summary>Proactive initiative</summary>
