@@ -1696,7 +1696,10 @@ export class BotRuntime extends EventEmitter {
     const managed = this.managedPrompt(bot.id, item.clientUserMessageId);
     const reply = this.store.get("messageReply", item.clientUserMessageId);
     const publicInput = reply?.botId === bot.id && reply.threadId === bot.threadId && reply.reply ? displayReplyItem(this, bot, bot.threadId, { type: "userMessage", clientId: item.clientUserMessageId, content: input }).content : input;
-    return { ...item, input: publicInput, ...(reply?.botId === bot.id && reply.reply ? { reply: reply.reply } : {}), waitReason,
+    // Display-only authorship from the application-owned source row; never the body, owner key or routing source.
+    const author = item.sourceSubmissionId ? this.sources?.row?.(bot.id, bot.threadId, item.sourceSubmissionId) : null;
+    const submission = author?.source && author.source.kind !== "user" && author.source.kind !== "unknown" ? { submissionId: author.submissionId, source: author.source } : null;
+    return { ...item, input: publicInput, ...(reply?.botId === bot.id && reply.reply ? { reply: reply.reply } : {}), ...(submission ? { submission } : {}), waitReason,
       ...(managed && item.id !== managed.id ? { state: "dispatching", revision: managed.revision, operationId: managed.operationId,
         error: "Accepted by the native queue; input is frozen. Stop retains unstarted input for editing." } : {}),
       attachments: attachments.map((a) => this.publicAttachment(a)) };

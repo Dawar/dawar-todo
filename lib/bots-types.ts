@@ -254,6 +254,9 @@ export type BotQueuedSubmission = QueuedSubmission & {
   reply?: import("./bot-replies").BotReplyReference;
   listId?: string | null;
   attachments: BotAttachment[];
+  /** Application-owned authorship linked by sourceSubmissionId; legacy items omit it. */
+  sourceSubmissionId?: string;
+  submission?: Pick<import("./submission-source").SubmissionAttribution, "submissionId" | "source">;
   /** Optional bridge-staged fields; legacy native queues omit these. */
   state?: "queued" | "dispatching" | "uncertain" | "failed";
   revision?: number;

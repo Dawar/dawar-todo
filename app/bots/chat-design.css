@@ -113,6 +113,11 @@ details[open] > summary > .bots-disclosure-chevron { transform: rotate(90deg); }
 .bots-composer-actions { display: flex; align-items: center; gap: 4px; min-width: 0; }
 .bots-composer-actions .bots-send { margin-left: auto; }
 .bots-composer-actions .bots-icon-button, .bots-composer-actions .bots-send { width: 44px; height: 44px; min-width: 44px; }
+/* Hard gap between the editor and its actions: caret/selection touch targets
+   never meet Stop, Send or Queue at any draft height or with the keyboard open. */
+.bots-composer textarea { margin: 0; }
+.bots-composer-actions { flex: none; margin-top: 8px; }
+.bots-keyboard-open .bots-composer-actions { margin-top: 6px; }
 
 /* Keep the conversation identity readable beside the trailing actions. */
 @media (max-width: 480px) {
