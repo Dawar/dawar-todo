@@ -261,3 +261,35 @@ test('an accepted inbox row for an older terminal turn settles from native facts
   await background(h,2);
   assert.equal(h.codex.calls.filter(c=>c.method==='thread/turns/list').length,reads);
 });
+
+// Adversarial review 2026-10-15 (ADVERSARIAL_REVIEW_20261015.md). These reproduce
+// open defects; they are `todo` until the owner picks the admission fix.
+test('Stop during a pre-native deferral leaves the queue resumable',{todo:'R-2: a received-but-deferred row blocks Resume, Send and Delete forever after Stop'},async t=>{
+  const h=await portableHarness(t);
+  const bot=await h.createBot();
+  await h.request('queue.add',{text:'deferred then stopped'},'queue-add-review-c-0001',bot.id);
+  h.codex.failNext.set('thread/queue/list',Error('native read timed out'));
+  await h.controls.tick();
+  const op=h.mailboxes(bot.id).find(m=>m.method==='portable.queueDispatch').operation_id;
+  await until(()=>h.node(op));for(let i=0;i<4;i++)await settle();
+  assert.equal(h.node(op).state,'received','the transient read defers before submission');
+  await h.request('turn.interrupt',{scope:'main'},'stop-main-review-c-0001',bot.id).catch(()=>{});
+  await background(h,6);
+  await h.request('queue.resume',{},'queue-resume-review-c-0001',bot.id);
+  await background(h,8);
+  assert.equal(h.codex.starts().length,1,'the resumed queue item starts exactly once');
+});
+
+test('a transient failure while preparing queued input defers instead of becoming unknown',{todo:'R-3: importAttachment/prepareReply/messageInput errors before journal.prepare settle as unknown'},async t=>{
+  const h=await portableHarness(t);
+  const bot=await h.createBot();
+  await h.request('queue.add',{text:'with attachment'},'queue-add-review-a-0001',bot.id);
+  const original=h.runtime.messageInput.bind(h.runtime);let failed=false;
+  h.runtime.messageInput=async(...args)=>{if(!failed){failed=true;throw new Error('Cloud download failed. Retry the same attachment ID.');}return original(...args);};
+  await h.controls.tick();
+  const op=h.mailboxes(bot.id).find(m=>m.method==='portable.queueDispatch').operation_id;
+  await until(()=>h.node(op));for(let i=0;i<6;i++)await settle();
+  assert.equal(h.node(op).state,'received','nothing was submitted, so the original command stays received');
+  await background(h,6);
+  assert.equal(h.codex.starts().length,1);
+});

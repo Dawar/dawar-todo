@@ -211,3 +211,19 @@ test("policy saves through bots.update and a restart leaves in-flight compaction
   assert.equal(codex.compactions(), 2, "a new explicit request may compact again");
   assert.ok(COMPACTION_LIFECYCLE_LIMIT_MS >= 10 * MINUTE);
 });
+
+test("hub admission sees an in-flight idle compaction as work, so dispatched input defers instead of failing", async (t) => {
+  const { store, codex, runtime, bot, notify, lifecycle } = await setup(t);
+  let now = Date.parse("2026-10-15T01:00:00Z");
+  runtime.compaction.clock = () => now;
+  notify(usageNote(bot.threadId, 205_000));
+  now += 55 * MINUTE;
+  await runtime.compaction.tick();
+  assert.equal(codex.compactions(), 1);
+  // The compaction is ACKed but its turn/started has not arrived: portable
+  // admission (agent-admission.mjs) defers only when this is not "ready".
+  assert.equal(runtime.primary.work(store.bot(bot.id)).state, "working");
+  lifecycle();
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(runtime.primary.work(store.bot(bot.id)).state, "ready");
+});

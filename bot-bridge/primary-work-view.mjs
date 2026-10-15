@@ -20,6 +20,10 @@ export function primaryWorkView(runtime, bot) {
       AND json_extract(json,'$.terminalStatus') IS NULL`).get(bot.threadId, bot.id);
   const unconfirmed = runtime.activityUnresolved(bot.id) && !inflight || Boolean(intake.bindingUnconfirmed || intake.uncertain || intake.dispatching && !inflight);
   const active = observedActiveTurn(runtime, bot.id, bot.activeTurnId);
+  // Compaction is ACKed and releases the bot lock before its turn/started
+  // arrives; until then the admission guard refuses turn/start definitively.
+  // Report it as work so automatic admission defers instead of failing input.
+  const compacting = !active && Boolean(runtime.compaction?.inFlight(bot.id));
   const nativeInput = nativeWaiting(runtime, bot.id), questions = pendingQuestions(runtime, bot.id);
   // One activity definition for dispatcher, chat and list: a blocking
   // question, or any question of the current turn, needs input. A retained
@@ -28,9 +32,9 @@ export function primaryWorkView(runtime, bot) {
   const needsInput = nativeInput || questions.some(p => p.request.params.isBlocking !== false ||
     (active && p.request.params.turnId === bot.activeTurnId));
   const paused = Boolean(bot.queuePaused);
-  const state = needsInput ? 'needs-input' : active ? 'working' : unconfirmed ? 'unconfirmed' : inflight ? 'starting' : paused ? 'paused' : intake.waitingCount ? 'waiting' : 'ready';
+  const state = needsInput ? 'needs-input' : active || compacting ? 'working' : unconfirmed ? 'unconfirmed' : inflight ? 'starting' : paused ? 'paused' : intake.waitingCount ? 'waiting' : 'ready';
   const reason = needsInput ? 'Waiting for input before automatic work can start.' : unconfirmed ? 'Execution or original delivery needs confirmation.' :
-    paused ? 'Automatic work is paused.' : active ? 'Waiting for the current turn to finish.' : inflight ? 'A native submission is awaiting confirmation.' :
+    paused ? 'Automatic work is paused.' : active ? 'Waiting for the current turn to finish.' : compacting ? 'Waiting for context compaction to finish.' : inflight ? 'A native submission is awaiting confirmation.' :
       'Native turn start is not yet confirmed.';
   return { botId: bot.id, threadId: bot.threadId, executionMode: bot.executionMode ?? 'legacy', state,
     activeTurnId: bot.activeTurnId, activeNeedsInput: Boolean(active && (nativeInput || questions.some(p => p.request.params.turnId === bot.activeTurnId))),
