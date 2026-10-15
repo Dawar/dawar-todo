@@ -1,6 +1,6 @@
 // The native owner refreshes its original claimed idle proof immediately before
 // closing. Concurrent signals share one shutdown and cannot skip its proof.
-export function combinedShutdown({ agent, gateway, health, child, siteTimer, stopping }) {
+export function combinedShutdown({ agent, gateway, health, child, siteTimer, stopping, effectsStarted: started = () => {} }) {
   let closing, effectsStarted = false;
   const close = async () => {
     await agent.runtime.maintenance.prepareShutdown();
@@ -10,8 +10,11 @@ export function combinedShutdown({ agent, gateway, health, child, siteTimer, sto
     if(agent.runtime.maintenance.current&&agent.runtime.maintenance.current.phase!=='claimed')throw Error('The original restart claim was released.');
     agent.runtime.shutdownStarted=true;
     effectsStarted = true;
+    // Idle is proven: from here the process must exit even if a peer (the
+    // public front's keep-alive pool) never hangs up. See close-http.mjs.
+    started();
     await gateway.close();
-    stopping();clearInterval(siteTimer);health.close();agent.transport.close();
+    stopping();clearInterval(siteTimer);health.close();health.closeAllConnections?.();agent.transport.close();
     agent.runtime.usage.stop();agent.runtime.maintenance.close();agent.runtime.secure?.close();
     if (agent.runtime.codex.closeForShutdown) await agent.runtime.codex.closeForShutdown(); else agent.runtime.codex.close();
     await agent.runtime.desktops?.close();await agent.manager.close();

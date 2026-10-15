@@ -9,6 +9,7 @@ import { WORK_TOOL } from "./primary-execution.mjs";
 import { TEAM_TOOL, teamTool } from "./teams.mjs";
 import { QUEUE_TOOL, queueTool } from "./queue-lists.mjs";
 import { createServer } from "node:http";
+import { closeHttpServer } from "../portable/close-http.mjs";
 import { requireTurn, usableTurn } from "./native-turn.mjs";
 import {
   randomUUID,
@@ -28,6 +29,11 @@ import { validateResponse } from "./runtime.mjs";
 import { slugify, cleanName } from "./profiles.mjs";
 import { finishTask, ensureNotice, repairTerminalNotices, deliverNotices } from "./manager-outbox.mjs";
 import { findNativeTurn } from "./native-reconcile.mjs";
+
+// Maintenance refusals are fixed RuntimeMaintenance messages; bound them and
+// strip anything credential-shaped before they leave the owner socket.
+export const maintenanceReason = error => String(error?.message ?? 'Unknown maintenance refusal.')
+  .replace(/Bearer\s+\S+/gi, 'Bearer [redacted]').replace(/[A-Za-z0-9+/_=-]{48,}/g, '[redacted]').slice(0, 300);
 
 const exec = promisify(execFile);
 const now = () => new Date().toISOString();
@@ -202,10 +208,11 @@ export class CodexManager {
       const params = JSON.parse(Buffer.concat(chunks));
       // Local credential gives this one fixed operation, never arbitrary RPC.
       reply(200, { result: await this.runtime.maintenance.control(params) });
-    } catch { reply(409, { error: 'Maintenance blocked or identity changed. Inspect metadata and original receipt; no retry with a new ID.' }); }
+    } catch (error) { reply(409, { error: 'Maintenance blocked or identity changed. Inspect metadata and original receipt; no retry with a new ID.', reason: maintenanceReason(error) }); }
   }
   async close() {
-    if (this.server) await new Promise((yes) => { this.server.close(yes); this.server.closeIdleConnections?.(); });
+    // Bot MCP clients may hold keep-alive sockets; close them, never wait on them.
+    if (this.server) await closeHttpServer(this.server);
     await unlink(this.socketPath).catch(() => {});
   }
   owned(kind, id, botId) {

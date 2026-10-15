@@ -1,5 +1,6 @@
 import { createServer, request as httpRequest } from 'node:http';
 import { WebSocketServer } from 'ws';
+import { closeHttpServer } from './close-http.mjs';
 import { readFile,stat,realpath } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import { join,resolve } from 'node:path';
@@ -329,5 +330,5 @@ export function startGateway(config) {
   });
   server.listen(config.gatewayPort??3210,'127.0.0.1');
   let closing;
-  return {server,store,application,objects,router,controls,voice,desktop,secure,taskSecure,taskRequests,close:()=>closing??=(async()=>{if(voice)await voice.close();clearInterval(scheduler);desktop.close();secure.close();taskSecure.close();router.close();for(const ws of sockets.clients)ws.close();await new Promise(resolve=>server.close(resolve));writer.close();controls.close();objects.close();store.close();application.close();})()};
+  return {server,store,application,objects,router,controls,voice,desktop,secure,taskSecure,taskRequests,close:()=>closing??=(async()=>{if(voice)await voice.close();clearInterval(scheduler);desktop.close();secure.close();taskSecure.close();router.close();await closeHttpServer(server,{sockets:()=>sockets.clients});writer.close();controls.close();objects.close();store.close();application.close();})()};
 }
