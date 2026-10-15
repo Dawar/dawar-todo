@@ -1,5 +1,6 @@
 'use client';
-import { createContext, lazy, Suspense, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
+import { createContext, Suspense, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
+import { retryingLazy } from '../../lib/retrying-lazy';
 import { botsClient as client } from './client';
 import { LazyDetails } from './lazy-details';
 import type { BotOperations } from '../../lib/bots-operations';
@@ -16,7 +17,7 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { NativeSelect } from '@/components/ui/native-select';
 // The share card (and its QR encoder) loads only when a form is shared.
-const FormShare = lazy(() => import('../task-request/share').then(m => ({ default: m.FormShare })));
+const FormShare = retryingLazy(() => import('../task-request/share').then(m => ({ default: m.FormShare })));
 type SourceParams = {
     threadId: string;
     turnId?: string;

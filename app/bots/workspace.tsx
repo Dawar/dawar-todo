@@ -10,7 +10,6 @@ import { ReplyQuote } from "./message-reply";
 
 import {
   Activity,
-  lazy,
   Suspense,
   type ClipboardEvent,
   useCallback,
@@ -20,6 +19,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { retryingLazy } from "../../lib/retrying-lazy";
 import {
   Bot as BotIcon,
   Plus,
@@ -92,19 +92,19 @@ import { botProvider } from "../../lib/bot-provider";
 
 // Panels and dialogs that open on demand load on first use instead of with
 // the bots page, so opening the app parses only what the chat needs.
-const CreateBotDialog = lazy(() => import("./create-bot-dialog").then(m => ({ default: m.CreateBotDialog })));
-const BotAdminApprovals = lazy(() => import("./bot-admin-approvals").then(m => ({ default: m.BotAdminApprovals })));
-const InitiativeSettings = lazy(() => import("./initiative-settings").then(m => ({ default: m.InitiativeSettings })));
-const PersonalitySettings = lazy(() => import("./personality-settings").then(m => ({ default: m.PersonalitySettings })));
-const ScheduleEditor = lazy(() => import("./schedule-editor").then(m => ({ default: m.ScheduleEditor })));
-const ScheduleList = lazy(() => import("./schedule-list").then(m => ({ default: m.ScheduleList })));
-const AnnouncementDialog = lazy(() => import("./announcements").then(m => ({ default: m.AnnouncementDialog })));
-const RunHistory = lazy(() => import("./run-history").then(m => ({ default: m.RunHistory })));
-const BotDesktopCard = lazy(() => import("./bot-desktop").then(m => ({ default: m.BotDesktopCard })));
-const BotDesktopDialog = lazy(() => import("./bot-desktop").then(m => ({ default: m.BotDesktopDialog })));
-const UsagePanel = lazy(() => import("./usage-panel").then(m => ({ default: m.UsagePanel })));
-const TeamsManager = lazy(() => import("./teams").then(m => ({ default: m.TeamsManager })));
-const TeamAssignment = lazy(() => import("./teams").then(m => ({ default: m.TeamAssignment })));
+const CreateBotDialog = retryingLazy(() => import("./create-bot-dialog").then(m => ({ default: m.CreateBotDialog })));
+const BotAdminApprovals = retryingLazy(() => import("./bot-admin-approvals").then(m => ({ default: m.BotAdminApprovals })));
+const InitiativeSettings = retryingLazy(() => import("./initiative-settings").then(m => ({ default: m.InitiativeSettings })));
+const PersonalitySettings = retryingLazy(() => import("./personality-settings").then(m => ({ default: m.PersonalitySettings })));
+const ScheduleEditor = retryingLazy(() => import("./schedule-editor").then(m => ({ default: m.ScheduleEditor })));
+const ScheduleList = retryingLazy(() => import("./schedule-list").then(m => ({ default: m.ScheduleList })));
+const AnnouncementDialog = retryingLazy(() => import("./announcements").then(m => ({ default: m.AnnouncementDialog })));
+const RunHistory = retryingLazy(() => import("./run-history").then(m => ({ default: m.RunHistory })));
+const BotDesktopCard = retryingLazy(() => import("./bot-desktop").then(m => ({ default: m.BotDesktopCard })));
+const BotDesktopDialog = retryingLazy(() => import("./bot-desktop").then(m => ({ default: m.BotDesktopDialog })));
+const UsagePanel = retryingLazy(() => import("./usage-panel").then(m => ({ default: m.UsagePanel })));
+const TeamsManager = retryingLazy(() => import("./teams").then(m => ({ default: m.TeamsManager })));
+const TeamAssignment = retryingLazy(() => import("./teams").then(m => ({ default: m.TeamAssignment })));
 
 const EMPTY_BOTS: Bot[] = [];
 const EMPTY_QUEUE: BotQueuedSubmission[] = [];

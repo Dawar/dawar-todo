@@ -4,7 +4,6 @@ import {
   ClipboardEvent as ReactClipboardEvent,
   FormEvent,
   PointerEvent as ReactPointerEvent,
-  lazy,
   memo,
   Suspense,
   useDeferredValue,
@@ -15,6 +14,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { retryingLazy } from "../lib/retrying-lazy";
 import type { QueueRequest } from "./todo-queue-picker";
 import type { TaskQueueSource } from "../lib/task-queue-export";
 import { registerPwaUpdateGuard } from "./pwa-update";
@@ -75,10 +75,10 @@ import { appendOfflineTodoAttachments, queueTaskAttachments, listQueuedAttachmen
 
 // Bot pickers (and the bots client they start) load only when a queue request
 // is made or a saved forward/transfer is waiting to be resumed.
-const TodoForward = lazy(() => import("./todo-forward-picker").then(m => ({ default: m.TodoForward })));
-const TodoQueue = lazy(() => import("./todo-queue-picker").then(m => ({ default: m.TodoQueue })));
+const TodoForward = retryingLazy(() => import("./todo-forward-picker").then(m => ({ default: m.TodoForward })));
+const TodoQueue = retryingLazy(() => import("./todo-queue-picker").then(m => ({ default: m.TodoQueue })));
 // Markdown renders only in the description preview.
-const MarkdownPreview = lazy(() => import("./markdown-preview").then(m => ({ default: m.MarkdownPreview })));
+const MarkdownPreview = retryingLazy(() => import("./markdown-preview").then(m => ({ default: m.MarkdownPreview })));
 function savedBotWork() {
   try { return Object.keys(localStorage).some(key => key.startsWith("dawar-todo-forward:v1:") || key.startsWith("dawar-todo-queue:v1:")); }
   catch { return false; }
