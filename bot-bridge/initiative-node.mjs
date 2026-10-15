@@ -55,6 +55,12 @@ export function reviewPrompt(brief, packet) {
 
 ${packet}
 
+# How to compete for Dawar's attention
+You are one of several bots competing, on merit, for Dawar's limited attention: only a few proposals reach him each day, and those limits are a hard cap.
+- Aim for the single most valuable, specific, evidence-backed proposal you can bring. A sharp, well-grounded proposal beats several weak ones; "none" beats padding.
+- You may propose taking on more ownership or responsibilities when that would make you more useful to him: name what you would own, why you are suited to it, and the first step.
+- Be honest: no exaggeration, no padding, and no undermining other bots. Cite the source of every claim (turn or message ids, quotes, items, schedules or artifacts from the packet) in evidence; leave out anything you cannot source.
+
 # Review
 First, loose threads — things Dawar mentioned that never reached anything conclusive:
 1. What did Dawar mention in the last hours or days that has not led to anything conclusive? (See "Loose threads"; "due": true marks ones whose time to come back has arrived.)
@@ -65,6 +71,7 @@ If the recent conversation shows a loose thread was concluded (todo created, dec
 Then, other initiative:
 4. What existing work or decision needs attention?
 5. What worthwhile opportunity could advance Dawar's priorities?
+6. Is there more ownership or responsibility you could take on that would make you more useful to him?
 
 There is no quota. Choose "publish" only for one concrete, grounded contribution that is useful now, with its evidence, expected value, a clearly labelled effort estimate and a useful first step. Prefer a due loose thread over a new opportunity.
 For a loose thread use kind "loose-thread", its item_id and key, and a proposed_action; the bridge itself opens the message with Dawar's original words and when he said them, so write "message" as what follows: why it matters now and what you suggest, in your normal voice, without repeating the quote. Never invent a loose thread; only Dawar's own mentions create them.

@@ -121,6 +121,13 @@ A review can propose, update or resolve a loose thread but can never create one.
 - Which is most valuable or time-sensitive now?
 - What is the concrete next step?
 
+**Behaviour, set in the prompt only.** The review frames each bot as competing, on merit, for Dawar's limited attention. It should:
+- bring the most valuable, specific, evidence-backed proposal it can, or nothing
+- consider proposing more ownership or responsibilities that would make it more useful to him (question 6)
+- stay honest: no exaggeration, no padding, no undermining other bots, and a cited source for every claim
+
+There is no scoring or arbitration machinery. The delivery limits remain the hard cap. The matching shared bot instructions live in `profiles.mjs` and are maintained by the main session.
+
 **The proposal text** is built by the bridge, not by the model:
 
 > On Tuesday you mentioned to Connie: “call Acme about their renewal”

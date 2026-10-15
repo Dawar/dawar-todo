@@ -405,6 +405,11 @@ test("a due loose thread triggers a review whose proposal quotes the original me
   // Mentioned on Tuesday as a high-importance client: overdue by Thursday, so the first review raises it.
   const packet = codex.calls.filter(c => c.method === "turn/start" && c.params.outputSchema?.properties?.decision && c.params.input[0].text.includes("You are Atlas")).at(-1).params.input[0].text;
   assert.match(packet, /What did Dawar mention in the last hours or days/);
+  // Merit, ownership and honesty are prompt-level behaviour; limits stay the hard cap.
+  assert.match(packet, /competing, on merit, for Dawar's limited attention/);
+  assert.match(packet, /most valuable, specific, evidence-backed proposal/);
+  assert.match(packet, /taking on more ownership or responsibilities/);
+  assert.match(packet, /no exaggeration, no padding, and no undermining other bots\. Cite the source of every claim/);
   assert.match(packet, /"quote": "call Acme about their renewal"/);
   await drive(2);
   const publication = store.list("initiativePublication").find(p => p.itemId === item.id);
