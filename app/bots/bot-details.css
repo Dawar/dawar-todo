@@ -1,4 +1,4 @@
-.bots-details { width: min(500px, 100%); height: 100%; min-width: 0; display: flex; flex-direction: column; color: var(--foreground); background: var(--card); box-shadow: -12px 0 64px color-mix(in srgb,var(--foreground) 10%,transparent); }
+.bots-details { width: min(500px, 100%); height: 100%; position: relative; min-width: 0; display: flex; flex-direction: column; color: var(--foreground); background: var(--card); box-shadow: -12px 0 64px color-mix(in srgb,var(--foreground) 10%,transparent); }
 .bots-details-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: max(24px, env(safe-area-inset-top)) 56px 20px 24px; }
 .bots-details-heading > div { min-width: 0; }
 .bots-details-heading span { display: block; color: var(--muted-foreground); font-size: 13px; margin-bottom: 4px; }
@@ -48,3 +48,20 @@
 
 .bots-details-nav>button { flex:1 0 58px; }
 .bots-details-nav>button>span { position:relative; }
+
+/* One panel, two layouts: docked column on wide desktops, modal drawer otherwise. */
+.bots-details-host.is-drawer { position: fixed; inset: 0; z-index: 60; }
+.bots-details-backdrop { position: absolute; inset: 0; background: rgb(0 0 0 / .35); }
+.bots-details-host.is-drawer > .bots-details { position: absolute; top: 0; right: 0; bottom: 0; }
+.bots-details-host.is-docked { min-width: 0; min-height: 0; border-left: 1px solid var(--border); }
+.bots-details-host.is-docked > .bots-details { width: 100%; box-shadow: none; }
+.bots-details-host.is-docked .bots-details-heading { padding: 16px 52px 12px 20px; }
+.bots-details-host.is-docked .bots-details-heading h2 { font-size: 17px; }
+.bots-details-host.is-docked .bots-details-nav { margin: 0 12px; }
+.bots-details-host.is-docked .bots-details-panel { padding: 20px 20px 24px; }
+.bots-details-host.is-docked .bots-details-panel.is-history { padding: 16px 20px; }
+.bots-details-close { position: absolute; top: max(12px, env(safe-area-inset-top)); right: 8px; color: var(--muted-foreground); }
+.bots-details-host.is-docked .bots-details-close { top: 10px; }
+.bots-layout.has-details-docked { grid-template-columns: 300px minmax(0, 1fr) clamp(300px, 26vw, 420px); }
+@media (max-width: 1180px) { .bots-layout.has-details-docked { grid-template-columns: 300px minmax(0, 1fr) 300px; } }
+.bots-details-nav > button { flex: 1 0 auto; padding-inline: 8px; }

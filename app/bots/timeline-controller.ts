@@ -204,7 +204,7 @@ export class BotTimeline {
         for (const { turnId, kind, runId } of cached.metadata.turnAudiences ?? [])
           if (kind === "conversation" && runId) this.normalScheduled.add(turnId);
         // Existing revisions encode the original native thread. Older caches
-        // without that evidence remain readable but supply no navigation ticks.
+        // without that evidence remain readable but supply no scoped navigation.
         const scoped = cached.entries.map(entry => entry.sourceThreadId || !cached.metadata.revision.endsWith(':conversation-v8') ? entry : { ...entry, sourceThreadId: cachedThread });
         const fresh = this.hasLiveProjection || live > 0, latest = this.state;
         const cachedLast = scoped.at(-1), freshFirst = latest.entries[0];
