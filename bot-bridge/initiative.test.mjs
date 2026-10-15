@@ -9,7 +9,7 @@ import { BotRuntime } from "./runtime.mjs";
 import { managedExecutionParams, PRIVATE_REVIEW } from "./execution-access.mjs";
 import { InitiativeLedger, validateReviewResult, classifyReply, limitDay, publicationText, mentionWhen, resurfaceAt, looseThreadPriority, LOOSE_THREAD } from "./initiative-ledger.mjs";
 import { InitiativeCoordinator, localExecutor, ownerReplyText } from "./initiative-coordinator.mjs";
-import { PRIVATE_REVIEW_CONFIG, claudeNearLimit } from "./initiative-node.mjs";
+import { PRIVATE_REVIEW_CONFIG, claudeNearLimit, pushPreview } from "./initiative-node.mjs";
 import { readOwnerMessages, validateExtraction, ownerAuthored } from "./initiative-mentions.mjs";
 import { buildReviewPacket, estimateTokens, recentConversation } from "./initiative-packet.mjs";
 import { conversationViewPage } from "./conversation-view.mjs";
@@ -187,7 +187,9 @@ test("Codex: idle-only admission, tool-free ephemeral jobs, and delivery by proj
   assert.match(turns[1].params.input[0].text, /We should call Acme/, "the packet carries recent conversation");
   // Job events never reach chat, unread or notifications.
   assert.equal(store.replay(eventsBefore).filter(e => JSON.stringify(e).includes("job-")).length, 0);
-  assert.ok(store.list("notice").every(n => /has a proposal for you/.test(n.body)), "the only notice is the delivered proposal");
+  const notices = store.list("notice");
+  assert.ok(notices.length > 0 && notices.every(n => n.title === "Atlas"), "the only notice is the delivered proposal, titled with the bot's name");
+  assert.ok(notices.every(n => !/has a proposal for you/.test(n.body) && n.body.length > 10), "the push carries the message itself");
   await drive(1);
   const [publication] = store.list("initiativePublication");
   assert.equal(publication.state, "published");
@@ -722,34 +724,54 @@ test("a busy bot is reviewed privately; its proposal waits until the bot is idle
   assert.equal(store.get("initiativePublication", p.id).state, "published");
 });
 
-test("unanswered proposals are re-sent as reminders without a model call until answered", async t => {
+test("a bot nudges about one open proposal at a time, rotating, without a model call", async t => {
   const { store, codex, coordinator, clock } = await setup(t);
   const ledger = coordinator.ledger, settings = () => ledger.settings();
   const capture = { ledgerVersion: 0, startedAt: new Date(clock.t).toISOString(), reviewId: "r" };
-  const itemId = ledger.applyReview("atlas", validateReviewResult(output({ contribution: { key: "vendor-quote", title: "Chase the vendor quote" } })), capture).contribution.itemId;
-  ledger.markPublished({ id: "p-first", botId: "atlas", itemId, createdAt: new Date(clock.t).toISOString() });
+  const raise = (key, title) => ledger.applyReview("atlas", validateReviewResult(output({ contribution: { key, title } })), capture).contribution.itemId;
+  const quote = raise("vendor-quote", "Chase the vendor quote");
+  ledger.markPublished({ id: "p-quote", botId: "atlas", itemId: quote, createdAt: new Date(clock.t).toISOString() });
+  clock.t += 60e3;
+  const deck = raise("pitch-deck", "Refresh the pitch deck");
+  ledger.markPublished({ id: "p-deck", botId: "atlas", itemId: deck, createdAt: new Date(clock.t).toISOString() });
   const startsBefore = jobStarts(codex).length;
+  const nudges = () => store.list("initiativePublication").filter(p => p.reminder);
+  const deliver = () => { for (const p of nudges().filter(p => p.state === "pending")) { ledger.markPublished({ ...p, publishedAt: new Date(clock.t).toISOString() }); store.put("initiativePublication", { ...p, state: "published" }); } };
   clock.t += 11 * 36e5;
   coordinator.queueReminders(settings());
-  assert.equal(store.list("initiativePublication").filter(p => p.reminder).length, 0, "not before the interval");
+  assert.equal(nudges().length, 0, "not before the interval");
   clock.t += 2 * 36e5;
   coordinator.queueReminders(settings()); coordinator.queueReminders(settings());
-  const reminders = () => store.list("initiativePublication").filter(p => p.reminder);
-  assert.equal(reminders().length, 1, "one pending reminder per item");
-  assert.match(reminders()[0].text, /^\*\*Reminder:\*\* .*Chase the vendor quote.*still waiting on you/);
-  assert.equal(ledger.deliveryBlock("atlas", itemId), null);
-  // Delivered, then due again: no cap by default.
-  ledger.markPublished({ ...reminders()[0], publishedAt: new Date(clock.t).toISOString() });
+  assert.equal(nudges().length, 1, "one nudge per bot, not one per item");
+  assert.equal(nudges()[0].itemId, quote, "the one raised longest ago goes first");
+  assert.match(nudges()[0].text, /Chase the vendor quote/);
+  assert.match(nudges()[0].text, /one other thing waiting on you/);
+  assert.doesNotMatch(nudges()[0].text, /pitch deck/, "the others are mentioned, not listed");
+  deliver();
   clock.t += 13 * 36e5;
   coordinator.queueReminders(settings());
-  assert.match(reminders().find(p => p.state === "pending").text, /^\*\*Reminder 2:\*\*/);
-  assert.equal(jobStarts(codex).length, startsBefore, "reminders need no review");
-  // An answer stops the nagging.
-  for (const p of reminders()) store.put("initiativePublication", { ...p, state: "abandoned" });
-  ledger.recordOutcome(itemId, "dismissed");
+  assert.equal(nudges().find(p => p.state === "pending").itemId, deck, "then the next one");
+  deliver();
+  assert.equal(jobStarts(codex).length, startsBefore, "nudges need no review");
+  // Answering takes an item out of rotation; the rest keep coming, alone.
+  ledger.recordOutcome(deck, "dismissed");
   clock.t += 13 * 36e5;
   coordinator.queueReminders(settings());
-  assert.equal(reminders().filter(p => p.state === "pending").length, 0);
+  const next = nudges().find(p => p.state === "pending");
+  assert.equal(next.itemId, quote);
+  assert.doesNotMatch(next.text, /other thing/);
+  ledger.recordOutcome(quote, "dismissed");
+  store.put("initiativePublication", { ...next, state: "abandoned" });
+  clock.t += 13 * 36e5;
+  coordinator.queueReminders(settings());
+  assert.equal(nudges().filter(p => p.state === "pending").length, 0);
+});
+
+test("proactive pushes carry the message itself", () => {
+  assert.equal(pushPreview("**Quick nudge** on **Chase the vendor quote** — they owe us pricing.\n\n_Ref initiative-1: reply …_"),
+    "Quick nudge on Chase the vendor quote — they owe us pricing.");
+  assert.equal(pushPreview("x".repeat(400)).length, 180);
+  assert.equal(pushPreview(""), "");
 });
 
 test("a stalled time-sensitive item moves to a bot that is being reviewed", async t => {

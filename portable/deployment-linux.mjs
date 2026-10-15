@@ -301,7 +301,10 @@ export function linuxDeployment(spec,{systemctl=async(...args)=>(await exec('sys
     },
     async backup(){
       const directory=join(spec.receiptDirectory,'backup');await mkdir(directory,{recursive:true,mode:0o700});const results=[];
-      for(const [i,path] of spec.databases.entries()){
+      // Database copies on the same disk are opt-in (backupDatabases: true):
+      // rollback never restores them, and off-box backups belong elsewhere.
+      // The before-configs below are what rollback actually needs.
+      for(const [i,path] of (spec.backupDatabases===true?spec.databases:[]).entries()){
         if(!isAbsolute(path))throw failure(`databases[${i}] is not absolute.`);const db=new DatabaseSync(path,{readOnly:true}),destination=join(directory,`database-${i}.sqlite`);
         try{await backup(db,destination);}finally{db.close();}await chmod(destination,0o600);
         const check=new DatabaseSync(destination,{readOnly:true});try{if(check.prepare('PRAGMA integrity_check').get().integrity_check!=='ok')throw failure(`Backup of databases[${i}] failed integrity_check.`);}finally{check.close();}

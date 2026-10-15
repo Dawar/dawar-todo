@@ -79,6 +79,11 @@ Substantial research, implementation and external actions start only after Dawar
 }
 
 /** Normalized usage across providers: { totalTokens, inputTokens, cachedInputTokens, outputTokens, costUsd }. */
+/** First line of a proposal for a push body: markdown and the reply reference removed. */
+export function pushPreview(text, max = 180) {
+  const line = String(text ?? "").split("\n\n").map(part => part.replace(/[*_`>#]/g, "").replace(/\s+/g, " ").trim()).find(part => part && !/^Ref initiative-/.test(part)) ?? "";
+  return line.length > max ? `${line.slice(0, max - 1)}…` : line;
+}
 /** A Claude subscription window is rejected or at/above `percent` utilization: Claude reviews wait. */
 export function claudeNearLimit(router, percent = 80) {
   try {
@@ -364,7 +369,8 @@ export class PrivateReviews {
     const bot = this.store.bot(record.botId);
     this.runtime.emitEvent?.("codex", { method: "item/completed", params: { threadId: bot.threadId, turnId: record.anchorTurnId, item: initiativeItem(record) } }, bot.id);
     this.runtime.saveBot?.(this.store.bot(bot.id), { preview: record.text.slice(0, 160), updatedAt: record.deliveredAt });
-    this.runtime.notify?.(bot, `initiative:${record.id}`, `${bot.name ?? "A bot"} has a proposal for you.`);
+    // A push that reads like a message from a person: the bot's name and its opening line.
+    this.runtime.notify?.(bot, `initiative:${record.id}`, pushPreview(record.text) || `${bot.name ?? "A bot"} has something for you.`);
   }
   deliveryView(r) { return { id: r.id, state: r.state, reason: r.reason ?? null, error: r.error ?? null, deliveredAt: r.deliveredAt ?? null, anchorTurnId: r.anchorTurnId ?? null }; }
   /** Settle an ambiguous publish RPC: the local record is the whole truth. */

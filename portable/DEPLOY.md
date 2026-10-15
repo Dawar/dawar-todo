@@ -91,8 +91,9 @@ runs `ensure-running` (start, or queue a start behind the stop job). A writer
 that does not look like the target while the unit is activating, or during the
 first `startupGraceSeconds` (default 30), is treated as pending, not foreign.
 Re-running the same plan resumes from the receipt's phase, including an
-interrupted rollback. Databases are never restored automatically. The backup
-under `backup/` is there for a human decision.
+interrupted rollback. Databases are never restored automatically, so a deploy
+copies only the before-configs into `backup/`; set `backupDatabases: true` in
+the plan to also keep same-disk SQLite copies there for a human decision.
 
 Outcomes: `healthy`, `rolled-back`, `rollback-unhealthy` (previous release
 started but not healthy in its window; systemd keeps it running),

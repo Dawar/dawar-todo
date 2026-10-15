@@ -60,12 +60,14 @@ export const DEFAULT_SETTINGS = Object.freeze({
   triage: false,
   triageMaxReviews: 4,
   reviewTimeoutSeconds: 180,
-  spacingMinMinutes: 2,
-  spacingMaxMinutes: 4,
+  // Messages from any bot arrive at a human pace: a random 5–20 minutes apart.
+  spacingMinMinutes: 5,
+  spacingMaxMinutes: 20,
   perBotDaily: 4,
   globalDaily: 20,
-  // Unanswered proposals are re-sent as short reminders every reminderHours
-  // (no model call) until Dawar answers; 0 = no cap on the number of reminders.
+  // Each bot nudges about one unanswered proposal at most every reminderHours
+  // (no model call), rotating through its open items until Dawar answers;
+  // 0 = no cap on how often one item comes back.
   reminderHours: 12,
   maxReminders: 0,
   // Calendar day used for notification limits only; no delivery hold.
@@ -591,12 +593,24 @@ export function publicationText(contribution, itemId, { item = null, publisherBo
     ...(action ? [`**Proposed next step (${ACTION_LABELS[action.type]}):** ${action.detail}`] : []),
     `_Ref ${itemId}: reply “yes, proceed”, “next week”, “leave it” or “done”._`].join("\n\n");
 }
-/** A nag for an unanswered proposal: no model call, the item's own title and quote. */
-export function reminderText(item, { clock = Date.now(), timeZone = DEFAULT_SETTINGS.limitTimeZone } = {}) {
-  const n = (item.reminderCount ?? 0) + 1, when = mentionWhen(item.lastPublishedAt, clock, timeZone);
-  const quote = item.kind === LOOSE_THREAD && item.mentions?.length ? [`You said: “${item.mentions[0].quote}”`] : [];
-  return [`**Reminder${n > 1 ? ` ${n}` : ""}:** ${when.charAt(0).toLowerCase()}${when.slice(1)} I raised **${item.title}**, and it's still waiting on you.`,
-    ...quote, ...(item.summary ? [item.summary] : []), `_Ref ${item.id}: reply “yes, proceed”, “next week”, “leave it” or “done”._`].join("\n\n");
+/**
+ * A natural nudge about one unanswered proposal, in the bot's voice: no model
+ * call, varied wording, the item's own words, and a mention (not a list) of
+ * anything else still waiting.
+ */
+export function nudgeText(item, others = 0, { clock = Date.now(), timeZone = DEFAULT_SETTINGS.limitTimeZone } = {}) {
+  const title = item.title, summary = (item.summary ?? "").trim().replace(/\s+/g, " ");
+  const said = item.kind === LOOSE_THREAD && item.mentions?.length ? item.mentions[0] : null;
+  const when = said ? mentionWhen(said.at, clock, timeZone) : null;
+  const variants = [
+    () => `Quick nudge on **${title}**${summary ? ` — ${summary}` : ""}. Want me to go ahead?`,
+    () => `Circling back on **${title}**.${summary ? ` ${summary}` : ""} Should I take care of it?`,
+    () => `Still on my list: **${title}**.${summary ? ` ${summary}` : ""} Happy to handle it whenever you say.`,
+    () => said ? `${when} you mentioned “${said.quote}”. Still want me to move on **${title}**?` : `Checking in on **${title}** — still worth doing?${summary ? ` ${summary}` : ""}`,
+  ];
+  const pick = [...`${item.id}:${item.reminderCount ?? 0}`].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7) % variants.length;
+  const more = others > 0 ? [`There ${others === 1 ? "is one other thing" : `are ${others} other things`} waiting on you too; I'll bring ${others === 1 ? "it" : "them"} up separately.`] : [];
+  return [variants[pick](), ...more, `_Ref ${item.id}: reply “yes, proceed”, “next week”, “leave it” or “done”._`].join("\n\n");
 }
 const ACTION_LABELS = { todo: "create a todo", "draft-message": "draft a message", schedule: "schedule it", research: "research it", drop: "drop it", other: "next step" };
 /** "Earlier today", "Yesterday", "On Tuesday" or "On Oct 3", in the limit time zone. */

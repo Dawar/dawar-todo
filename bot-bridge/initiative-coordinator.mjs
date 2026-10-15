@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { InitiativeLedger, validateReviewResult, publicationText, reminderText, classifyReply, OWNER_OUTCOMES, LOOSE_THREAD, ledgerDigest, looseThreadPriority } from "./initiative-ledger.mjs";
+import { InitiativeLedger, validateReviewResult, publicationText, nudgeText, classifyReply, OWNER_OUTCOMES, LOOSE_THREAD, ledgerDigest, looseThreadPriority } from "./initiative-ledger.mjs";
 import { stagedQueue } from "./prompt-queue.mjs";
 
 // Global review coordinator (hub). Decides which bot runs which private job,
@@ -318,16 +318,29 @@ export class InitiativeCoordinator {
 
   // ---- publication --------------------------------------------------------------
   /**
-   * Nag: an unanswered proposal is re-sent as a short reminder every
-   * reminderHours (no model call) until Dawar answers, snoozes or drops it.
+   * Nag, naturally: each bot nudges about one unanswered proposal at most every
+   * reminderHours (no model call), most important first and otherwise the one
+   * raised longest ago, mentioning how many others wait instead of listing
+   * them. Answering, snoozing or dropping an item takes it out of rotation.
    */
   queueReminders(settings) {
-    const pending = new Set(this.store.list("initiativePublication").filter(p => DELIVERABLE.has(p.state) || p.state === "delivering" || p.state === "uncertain").map(p => p.itemId));
+    const active = this.store.list("initiativePublication").filter(p => DELIVERABLE.has(p.state) || p.state === "delivering" || p.state === "uncertain");
+    const busyBots = new Set(active.filter(p => p.reminder).map(p => p.botId)), busyItems = new Set(active.map(p => p.itemId));
+    const byBot = new Map();
     for (const item of this.ledger.remindersDue(settings)) {
-      if (pending.has(item.id) || !this.eligibleBots(settings).some(b => b.id === item.responsibleBotId)) continue;
-      this.store.put("initiativePublication", { id: `initiative-publication:${randomUUID()}`, botId: item.responsibleBotId, itemId: item.id, reviewId: null,
-        kind: item.kind, reminder: true, text: reminderText(item, { clock: this.clock(), timeZone: settings.limitTimeZone }), revision: null,
-        changedCircumstances: false, state: "pending", attempts: 0, createdAt: this.at() });
+      if (busyItems.has(item.id)) continue;
+      if (!byBot.has(item.responsibleBotId)) byBot.set(item.responsibleBotId, []);
+      byBot.get(item.responsibleBotId).push(item);
+    }
+    const rank = { high: 0, medium: 1, low: 2 }, t = this.clock();
+    for (const [botId, items] of byBot) {
+      if (busyBots.has(botId) || !this.eligibleBots(settings).some(b => b.id === botId)) continue;
+      if (Date.parse(this.botState(botId).lastNudgeAt ?? "") + settings.reminderHours * 36e5 > t) continue;
+      items.sort((a, b) => (rank[a.importance] ?? 1) - (rank[b.importance] ?? 1) || (a.lastPublishedAt ?? "").localeCompare(b.lastPublishedAt ?? ""));
+      const item = items[0];
+      this.store.put("initiativePublication", { id: `initiative-publication:${randomUUID()}`, botId, itemId: item.id, reviewId: null, kind: item.kind, reminder: true,
+        text: nudgeText(item, items.length - 1, { clock: t, timeZone: settings.limitTimeZone }), revision: null, changedCircumstances: false, state: "pending", attempts: 0, createdAt: this.at() });
+      this.saveBotState(botId, { lastNudgeAt: this.at() });
     }
   }
   /** Dawar wrote to this bot after `at` (recorded from the hub's own message stream). */

@@ -310,3 +310,15 @@ Settings version 2 (saved version 1 values equal to the old defaults follow the 
 - **Hand-off:** a time-sensitive item due for `handoffHours` (12) whose bot stays unreachable moves to the most recently reviewed reachable bot; the original bot stays a contributor.
 - **Claude headroom:** Claude jobs are refused (`claude-limit`) while any subscription window is at or above `claudeHeadroomPercent` (80%).
 - **Repair, not discard:** a loose-thread proposal missing its action uses the required first step; a missing item ID uses the bot's only open loose thread, otherwise the decision becomes `hold` (no failure or backoff).
+
+### Natural nudges and pushes
+
+- A bot nudges about **one** unanswered proposal at most every `reminderHours`:
+  high importance first, otherwise the one raised longest ago. It mentions how
+  many others are waiting instead of listing them, so open items rotate across
+  nudges. Wording varies and quotes Dawar's own words when the item came from
+  something he said. No model call.
+- Every delivered proposal or nudge raises a push notification titled with the
+  bot's name, with the message's opening line as the body.
+- Messages from all bots are spaced a random 5–20 minutes apart, so they arrive
+  like people messaging rather than in a burst.

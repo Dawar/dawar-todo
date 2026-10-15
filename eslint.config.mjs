@@ -12,6 +12,10 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Local build output and agent worktrees (full repo copies).
+    ".next-portable/**",
+    "dist/**",
+    ".claude/**",
   ]),
 ]);
 
