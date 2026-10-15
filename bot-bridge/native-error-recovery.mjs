@@ -265,7 +265,7 @@ export class NativeErrorRecovery {
   async resume(botId, token, read, expectedStatus='notLoaded',call=(m,p,t)=>this.runtime.codex.call(m,p,12000,t)) {
     const row=this.get(botId),r=this.runtime,b=r.store.bot(botId);
     await this.qualifyRetained(botId,token);
-    const released=r.store.get('nativeRecoveryAction',row.releaseActionId);
+    const released=row.releaseActionId?r.store.get('nativeRecoveryAction',row.releaseActionId):null;
     // Current-state metadata is not the missing action ACK. A live-process
     // unknown request could still complete after a reload, so never race it.
     if(['dispatching','uncertain'].includes(released?.state))throw failure('The original unsubscribe acknowledgement must settle before reopening this thread.');
@@ -281,7 +281,7 @@ export class NativeErrorRecovery {
       nativeRecoveryBeforeSubmit:()=>{if(this.localFence(botId,token)!==control)throw failure('Recovery control changed before resume.');}});return {threadId:b.threadId};});
     if(this.localFence(botId,token)!==control)throw failure('Recovery state changed after resume; the original acknowledgement is retained.');
     // A same-connection thread/started notification may confirm a lost ACK.
-    const latest=this.get(botId),a=r.store.get('nativeRecoveryAction',latest.resumeActionId);
+    const latest=this.get(botId),a=latest.resumeActionId?r.store.get('nativeRecoveryAction',latest.resumeActionId):null;
     if(a?.epoch===r.epoch && a.state==='acknowledged' && r.store.bot(botId).threadId===b.threadId)r.loaded.add(b.threadId);
   }
   failed(botId, error) {

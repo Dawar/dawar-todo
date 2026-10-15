@@ -97,6 +97,8 @@ export class Store {
     });
   }
   get(kind, id) {
+    // A record that was never created (an absent optional ID) is not a query error.
+    if (id === undefined || id === null) return null;
     const row = this.db
       .prepare("SELECT json FROM records WHERE kind=? AND id=?")
       .get(kind, id);

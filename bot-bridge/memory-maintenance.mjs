@@ -3,6 +3,10 @@ import { join } from 'node:path';
 import { profileContext } from './profiles.mjs';
 import { MEMORY_TRIGGER, MEMORY_VERSION, profileFile, prepareMemory, verifyMemory, commitMemory, memoryOperation, memoryReceipt, memoryId } from './memory-files.mjs';
 import { observedActiveTurn } from './turn-state.mjs';
+// Queue items that are finished history. Delivered and merged items already
+// reached the bot (or were folded into another item) and must not keep a bot
+// with any past queue use permanently busy.
+const FINISHED_QUEUE_STATES = new Set(['consumed', 'deleted', 'failed', 'cancelled', 'delivered', 'merged']);
 
 // Reconcile this already-staged owner schedule; no extra timer/nightly schedule.
 export const MEMORY_NIGHTLY_SCHEDULE_ID = 'tool:exec-fe42a6bd-08e8-4717-8836-194c9d51e5a1';
@@ -46,7 +50,7 @@ export class BotMemoryMaintenance {
     return !bot.archived && !bot.archiving && !bot.deletedAt && !!bot.threadId && runtime.primary.single(bot) &&
       !bot.queuePaused && !bot.managerPaused && !bot.activeTurnId && !runtime.activityUnresolved(bot.id) &&
       !this.store.list('pending', bot.id).length && !runtime.scheduledUncertain(bot.id) && !runtime.plans.blocked(bot.id) &&
-      !this.store.list('promptQueue', bot.id).some(row => !['consumed', 'deleted', 'failed', 'cancelled'].includes(row.state)) &&
+      !this.store.list('promptQueue', bot.id).some(row => !FINISHED_QUEUE_STATES.has(row.state)) &&
       !this.store.list('primaryInbox', bot.id).some(row => row.id !== except && !row.terminalStatus && !['cancelled', 'failed'].includes(row.state)) &&
       !this.store.list('run', bot.id).some(row => ['queued', 'starting', 'running', 'uncertain'].includes(row.status)) &&
       !this.store.list('executionStop', bot.id).some(row => row.state !== 'done') &&
