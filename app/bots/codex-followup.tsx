@@ -1,6 +1,8 @@
 "use client";
 import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { Button } from '@/components/ui/button';
+import { CornerDownRight } from 'lucide-react';
+import '@/components/ai-elements/ai-elements.css';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import type { BotComposer } from './composer-controller';
 import { draftReviewFingerprint } from './draft-store';
@@ -77,6 +79,7 @@ export function FollowupComposerProvider({ owner, botId, threadId, composer, dis
 export function CodexFollowupButton({ shortcut, source, partial }: { shortcut: CodexFollowup; source?: FollowupSource; partial: boolean }) {
   const actions = useContext(ActionsContext);
   const reason = partial ? 'Available when this reply finishes.' : actions?.reason(source) ?? 'Open this conversation with its composer to prepare the follow-up.';
-  return <Button type="button" variant="outline" className="bots-codex-followup" disabled={Boolean(reason)} title={reason || 'Fill the composer for review'}
-    aria-label={`Prepare follow-up: ${shortcut.label}`} onClick={() => { if (source && !reason) actions?.select(shortcut.prompt, source); }}>{shortcut.label}</Button>;
+  return <Button type="button" variant="outline" className="bots-codex-followup ai-suggestion" disabled={Boolean(reason)} title={reason || 'Fill the composer for review'}
+    aria-label={`Prepare follow-up: ${shortcut.label}`} onClick={() => { if (source && !reason) actions?.select(shortcut.prompt, source); }}>
+    <CornerDownRight size={14} aria-hidden="true"/>{shortcut.label}</Button>;
 }

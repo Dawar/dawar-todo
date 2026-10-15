@@ -23,6 +23,20 @@ const answer = (n, text) => ({ id: `turn-${n}`, status: 'completed', startedAt: 
 ] });
 const filler = n => Array.from({ length: 6 }, (_, i) => `Paragraph ${i + 1} of answer ${n}. ` + 'Steady detail about the change and its checks. '.repeat(4)).join('\n\n');
 const extra = params.has('long') ? Array.from({ length: Number(params.get('long')) || 10 }, (_, i) => answer(10 + i, `## Answer ${10 + i}\n\n${filler(10 + i)}`)) : [];
+// Opt-in AI Elements evidence: native shapes only (Codex/Claude item contracts).
+const stack = 'FAIL tests/panel.test.mjs\nTypeError: Cannot read properties of undefined (reading \'id\')\n    at renderPanel (/synthetic/app/bots/chapter-panel.tsx:42:17)\n    at TestContext.<anonymous> (/synthetic/tests/panel.test.mjs:12:3)\n    at Test.run (node:internal/test_runner/test:1402:25)\n';
+const elements = params.has('elements') ? [{ id: 'turn-4', status: 'inProgress', startedAt: 1760483000, itemsView: 'full', items: [
+  { id: 'user-4', type: 'userMessage', clientId: 'c-4', content: [{ type: 'text', text: 'Check the panel test and look up the docs.', text_elements: [] }] },
+  { id: 'reason-4', type: 'reasoning', summary: ['Reading the failing test before changing the panel.'], content: [] },
+  { id: 'cmd-5', type: 'commandExecution', command: 'node --test tests/panel.test.mjs', aggregatedOutput: `\u001b[31m${stack}\u001b[0m`, status: 'failed', exitCode: 1, durationMs: 2140, cwd: '/synthetic', commandActions: [] },
+  { id: 'mcp-4', type: 'mcpToolCall', server: 'docs', tool: 'search', status: 'completed', arguments: { query: 'AI Elements Trace' }, appContext: null, mcpAppUi: null, pluginId: null, readOnlyHint: true,
+    result: { content: [{ type: 'text', text: 'Trace: compact expandable activity rows.' }], structuredContent: null, _meta: null }, error: null, durationMs: 830 },
+  { id: 'sub-4', type: 'subAgentActivity', kind: 'completed', agentThreadId: 'thread-reviewer-7f3a', agentPath: 'agents/reviewer', model: 'synthetic-mini', reasoningEffort: 'low' },
+  { id: 'compact-4', type: 'contextCompaction' },
+] }, { id: 'turn-5', status: 'completed', startedAt: 1760483300, completedAt: 1760483400, itemsView: 'full', items: [
+  { id: 'user-5', type: 'userMessage', clientId: 'c-5', content: [{ type: 'text', text: 'What did you find?', text_elements: [] }] },
+  { id: 'answer-4', type: 'agentMessage', phase: 'final_answer', text: 'The panel test fails because the chapter row is read before it loads. The Trace docs [1](https://ui.shadcn.com/docs/ai-elements) and the [changelog](https://ui.shadcn.com/docs/changelog/2026-10-ai-elements) describe the row pattern.\n\nNext: :codex-followup[Fix the panel guard]{prompt=\"Add a guard for the unloaded chapter row.\"} :codex-followup[Explain the trace]{prompt=\"Explain the stack trace frames.\"}' },
+] }] : [];
 const turns = [...extra,
   answer(1, '## Decision: dock the details panel\n\nOn wide desktops the panel stays open beside the chat. Navigation is the default tab.\n\n```ts\nexport const DOCKED_DETAILS_QUERY = "(min-width: 1000px)";\nexport function useDockedDetails() {\n  return useSyncExternalStore(subscribeDock, matches, () => false);\n}\n```'),
   answer(2, 'Here is the change to the layout grid:\n\n```diff\n--- a/app/bots/bot-details.css\n+++ b/app/bots/bot-details.css\n@@ -64,1 +64,2 @@\n-.bots-details { width: min(500px, 100%); }\n+.bots-layout.has-details-docked { grid-template-columns: 300px minmax(0, 1fr) clamp(300px, 26vw, 420px); }\n+.bots-details-host.is-docked { border-left: 1px solid var(--border); }\n```'),
@@ -31,7 +45,14 @@ const turns = [...extra,
     { id: 'cmd-3', type: 'commandExecution', command: 'node --test tests/bot-chapters.test.mjs', aggregatedOutput: '✔ chapter titles come from the first heading\n✔ pin is idempotent\nℹ pass 7\nℹ fail 0\n', status: 'completed', exitCode: 0, cwd: '/synthetic', commandActions: [] },
     { id: 'cmd-4', type: 'commandExecution', command: 'npx tsc --noEmit', aggregatedOutput: '', status: 'inProgress', exitCode: null, cwd: '/synthetic', commandActions: [] },
   ] },
+  ...elements,
 ];
+if (params.has('elements')) {
+  bots[0].contextCompaction = { state: null, context: { tokens: 151_000, window: 200_000, observedAt: '2026-10-14T19:00:00Z', lastActivityAt: '2026-10-14T19:00:00Z', compacted: false } };
+  client.snapshot.pending = [{ key: 'question-1', botId: 'A', threadId: 'thread-A', createdAt: '2026-10-14T19:00:00Z', request: { method: 'item/tool/requestUserInput', id: 1, params: { threadId: 'thread-A', turnId: 'turn-4', itemId: 'q-1', questions: [
+    { id: 'scope', header: 'Scope', question: 'Which fix should go first?', isOther: true, isSecret: false, options: [{ label: 'Panel guard', description: 'Smallest change' }, { label: 'Loader rewrite', description: 'Larger refactor' }] },
+    { id: 'tests', header: 'Tests', question: 'Run the full suite afterwards?', isOther: true, isSecret: false, options: [{ label: 'Yes', description: '' }, { label: 'Focused only', description: '' }] }] } } }];
+}
 client.rpc = async (method, botId, params = {}) => {
   if (method === 'history.view') return { kind: 'page', entries: botId === 'A' ? historyTail(turns) : [], attachments: [], olderCursor: null, revision: 'synthetic', eventCursor: 0, complete: true };
   if (method === 'history.detail') { const item = turns.flatMap(turn => turn.items).find(value => value.id === params.itemId); const json = JSON.stringify(item ?? null); return { json, nextOffset: null, totalLength: json.length, version: 'v1' }; }
@@ -60,6 +81,8 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 let seq = 0;
 const live = (method, params) => client.receive({ type: 'event', event: { type: 'codex', botId: 'A', seq: ++seq, data: { method, params: { threadId: 'thread-A', ...params } } } });
 window.harness = { sends,
+  // Resolves the synthetic pending question locally (no answer is sent).
+  clearPending() { client.snapshot = { ...client.snapshot, pending: [] }; client.notify(); },
   entries: () => getBotTimeline(owner, 'A').getSnapshot().entries.slice(-6).map(e => [e.turnId, e.id, e.type, e.status, e.itemStatus, e.messageAt, e.startedAt, e.item?.type === 'agentMessage' ? e.item.text.length : null]),
   // One live native turn arriving after the conversation has loaded.
   append(n, text = `## Live answer ${n}\n\n${filler(n)}`) {

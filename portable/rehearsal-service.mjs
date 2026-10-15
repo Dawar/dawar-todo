@@ -14,7 +14,9 @@
 // drain counts over the copied native-control store, the claimed-shutdown
 // proof, closing keep-alive connections, and loading the release's gateway
 // and agent modules. What is simulated: native thread idleness (no Codex is
-// started) and relay/site readiness.
+// started) and relay/site readiness. Copied in-flight work whose exact native
+// turn is already terminal in read-only native history is settled in the copy
+// (portable/rehearsal-settle.mjs); anything else keeps blocking the drain.
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
@@ -28,14 +30,15 @@ import { closeHttpServer } from './close-http.mjs';
 import { Store } from '../bot-bridge/store.mjs';
 import { RuntimeMaintenance } from '../bot-bridge/runtime-maintenance.mjs';
 import { maintenanceReason } from '../bot-bridge/maintenance-reason.mjs';
+import { settleProvenTerminal } from './rehearsal-settle.mjs';
 
 // Static imports resolve before this line: `--help` proves a packaged
 // release can load the stand-in (portable/package.mjs runs it).
-if (process.argv.includes('--help')) { console.log('rehearsal-service.mjs [run both|hub|agent] --release RELEASE_DIRECTORY --config REHEARSAL_CONFIG [--native-child]'); process.exit(0); }
+if (process.argv.includes('--help')) { console.log('rehearsal-service.mjs [run both|hub|agent] --release RELEASE_DIRECTORY --config REHEARSAL_CONFIG [--native-history THREAD_HISTORY_SQLITE] [--native-child]'); process.exit(0); }
 const args = process.argv.slice(2), option = name => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : undefined; };
 const role = args[0] === 'run' ? args[1] : 'both';
 if (!['both', 'hub', 'agent'].includes(role)) throw Error(`Unknown rehearsal role ${role}.`);
-const configPath = option('--config'), release = option('--release') ?? process.cwd();
+const configPath = option('--config'), release = option('--release') ?? process.cwd(), nativeHistory = option('--native-history');
 const own = JSON.parse(readPrivate(configPath));
 const c = role === 'agent' ? null : own, a = role === 'agent' ? own : role === 'both' ? JSON.parse(readPrivate(c.agentConfigFile)) : null;
 const rehearsal = JSON.parse(readPrivate(join(dirname(configPath), 'rehearsal.json')));
@@ -80,6 +83,10 @@ for (const entry of modules) {
 // configured binary so the controller's native-process proof is exercised.
 const native = a && args.includes('--native-child') ? spawn(a.agent.codexBinary, ['3600'], { stdio: 'ignore' }) : null;
 let store = null, runtime = null, manager = null;
+// Read-only native facts; writes go to the copied store only. The hub has no
+// native store, so it settles nothing.
+const settled = [];
+let settle = () => {};
 if (a) {
   store = new Store(join(a.dataDirectory, 'native-control.sqlite'));
   runtime = { store, epoch: randomUUID(), emitEvent() {}, codex: { pending: new Map(), async call(method) {
@@ -88,6 +95,11 @@ if (a) {
   } } };
   runtime.maintenance = new RuntimeMaintenance(runtime, { source: () => {}, invocation: process.env.INVOCATION_ID ?? null });
   const secret = process.env.BOTS_MACHINE_SECRET ?? '';
+  settle = () => {
+    try { for (const row of settleProvenTerminal(store, nativeHistory)) { settled.push(row); console.log(`Rehearsal copy settled ${row.kind} ${row.id} turn ${row.turnId} ${row.status}`); } }
+    catch (error) { console.error(`Rehearsal settlement skipped: ${error.message}`); }
+  };
+  settle();
   const socketPath = join(a.dataDirectory, 'manager', 'manager.sock');
   mkdirSync(dirname(socketPath), { recursive: true, mode: 0o700 });
   try { unlinkSync(socketPath); } catch { /* absent */ }
@@ -98,6 +110,7 @@ if (a) {
       return reply(403, { error: 'Owner maintenance authentication required.' });
     try {
       const chunks = []; for await (const chunk of req) chunks.push(chunk);
+      if (!runtime.maintenance.current || runtime.maintenance.current.phase === 'draining') settle();
       reply(200, { result: await runtime.maintenance.control(JSON.parse(Buffer.concat(chunks))) });
     } catch (error) { reply(409, { error: 'Maintenance blocked or identity changed.', reason: maintenanceReason(error) }); }
   });
@@ -114,7 +127,7 @@ const health = createServer((req, res) => {
     : { ready, relayConnected: true, ...(role === 'both' ? { siteReady: true } : {}), source: role === 'agent' ? agentSource : c.hub.source, codexVersion: manifest.runtime,
       role: role === 'agent' ? 'runner' : 'both', models: rehearsal.models, maintenance: runtime.maintenance.snapshot() };
   res.writeHead(ready ? 200 : 503, { 'content-type': 'application/json', 'cache-control': 'no-store' });
-  res.end(JSON.stringify({ ...body, rehearsal: true, problems: current }));
+  res.end(JSON.stringify({ ...body, rehearsal: true, problems: current, ...(runtime ? { settled: settled.slice(-20) } : {}) }));
 });
 health.listen(role === 'agent' ? a.agent.healthPort : c.healthPort, '127.0.0.1');
 

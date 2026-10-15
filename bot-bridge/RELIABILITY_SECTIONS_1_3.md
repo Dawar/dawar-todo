@@ -16,6 +16,7 @@ device-accepted. Tests: `tests/portable-send-reliability.test.mjs` (hub + bundle
 | One submission path, original identity | already present | queue/schedule/burst client IDs stable across a deferral retry |
 | Proved pre-native refusal = not started | fixed | burst native-read failure and hub team-read timeout now defer, not fail (Sian) |
 | Reconcile lost completion | fixed | agent recovery runs the active-turn watchdog; queue progresses with no new message |
+| Accepted rows for older turns | fixed | `reconcileAcceptedInbox` settles an accepted inbox row from its exact native turn once terminal (Oct 5 Connie row: native `interrupted`); absent/inProgress stays accepted, nothing resent |
 | Lost acknowledgement / reconnect | already present | dropped receipt reconciled on reconnect, one turn/start |
 | Duplicate events | already present | duplicate turn/completed + receipts dispatch next message once |
 | One activity definition | fixed | old nonblocking question no longer blocks admission (Doc) |

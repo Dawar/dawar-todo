@@ -168,7 +168,8 @@ export async function runDeployment(spec, adapter, { clock=Date.now, sleep=ms=>n
         step='release-hold';
         await adapter.release(spec,row);
         save({...row,outcome:'expired-before-stop',reason:'Work remained active or uncertain; only this operation\'s hold was released.',
-          lastFailure:{at:stamp(),step:'observe-drain',category:'expired',message:failureReason({message:idle?.reason??'Drain was not idle before its deadline.'}),beforeStop:true,released:true}});return row;
+          lastFailure:{at:stamp(),step:'observe-drain',category:'expired',message:failureReason({message:idle?.reason??'Drain was not idle before its deadline.'}),
+            ...(Array.isArray(idle?.native?.blockers)?{blockers:idle.native.blockers.slice(0,8).map(b=>failureReason({message:b}))}:{}),beforeStop:true,released:true}});return row;
       }
       save({...row,idle});
       step='freeze-backup';

@@ -8,7 +8,7 @@ import "./ai-elements.css";
 
 const kindIcons: Record<string, LucideIcon> = {
   commandExecution: Terminal, fileChange: FileDiff, webSearch: Search, reasoning: Brain,
-  plan: ListChecks, workPlan: ListChecks, collabAgentToolCall: Users,
+  plan: ListChecks, workPlan: ListChecks, collabAgentToolCall: Users, subAgentActivity: Users, mcpToolCall: Wrench, dynamicToolCall: Wrench,
 };
 export function TraceIcon({ kind, size = 15 }: { kind: string; size?: number }) {
   const Icon = kindIcons[kind] ?? Wrench;

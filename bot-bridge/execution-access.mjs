@@ -9,11 +9,13 @@ export const PRIVATE_REVIEW = Symbol('application-private-read-only-review');
 // owner's full-access policy at every ordinary native execution boundary.
 // Read APIs and steering preserve their native schemas and current turn.
 export function managedExecutionParams(method, params) {
-  if(['thread/fork','turn/start'].includes(method)&&params[PRIVATE_REVIEW]===true){
+  if(['thread/start','turn/start'].includes(method)&&params[PRIVATE_REVIEW]===true){
     const review={...params};delete review[PRIVATE_REVIEW];
     if(method==='turn/start')return {...review,approvalPolicy:'never',sandboxPolicy:{type:'readOnly'}};
-    return {...review,ephemeral:true,approvalPolicy:'never',sandbox:'read-only',
-      config:{...review.config,approval_policy:'never',sandbox_mode:'read-only','features.multi_agent':false}};
+    // A private initiative job: a disposable, read-only thread with no
+    // dynamic tools; it is never a bot conversation.
+    if(method==='thread/start'){delete review.dynamicTools;return {...review,ephemeral:true,approvalPolicy:'never',sandbox:'read-only',
+      config:{...review.config,approval_policy:'never',sandbox_mode:'read-only','features.multi_agent':false}};}
   }
   if (['thread/start', 'thread/resume', 'thread/fork'].includes(method))
     return { ...params, ...EXECUTION_ACCESS,

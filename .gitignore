@@ -48,3 +48,8 @@ next-env.d.ts
 **/.dev.vars*
 /bots-relay/.wrangler/
 /bots-relay/dist/
+
+# Mac agent app builds
+/build/
+/mac-agent/AgentApp/.build/
+/mac-agent/AgentApp/.swiftpm/

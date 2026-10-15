@@ -10,6 +10,6 @@ export function nativeWorkLabel(entry: HistoryEntry): string {
   if (entry.type === 'reasoning') return 'Thinking';
   if (entry.type === 'contextCompaction') return 'Context compacted';
   if (entry.type === 'commandExecution') return entry.label || 'Command';
-  const names: Record<string, string> = { fileChange: 'File changes', webSearch: 'Search', imageView: 'View image', imageGeneration: 'Generate image', collabAgentToolCall: 'Agent work', functionCallOutput: 'Tool result' };
+  const names: Record<string, string> = { fileChange: 'File changes', webSearch: 'Search', imageView: 'View image', imageGeneration: 'Generate image', collabAgentToolCall: 'Agent work', subAgentActivity: 'Subagent', functionCallOutput: 'Tool result' };
   return names[entry.type] ? `${names[entry.type]}${['fileChange','webSearch'].includes(entry.type) && entry.label ? ` · ${entry.label}` : ''}` : entry.label;
 }

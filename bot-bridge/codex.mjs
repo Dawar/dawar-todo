@@ -139,7 +139,7 @@ export class Codex extends EventEmitter {
       }
     });
   }
-  forkPrivateReview(params) { return this.call('thread/fork', {...params, [PRIVATE_REVIEW]:true}); }
+  startPrivateThread(params) { return this.call('thread/start', {...params, [PRIVATE_REVIEW]:true}); }
   startPrivateReviewTurn(params) { return this.call('turn/start', {...params, [PRIVATE_REVIEW]:true}); }
   respond(id, result) {
     this.write({ id, result });

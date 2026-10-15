@@ -124,6 +124,17 @@ export class RuntimeMaintenance {
     }
     return counts;
   }
+  // Name the exact rows behind the two counters an operator can act on, so a
+  // drain expiry says which record blocks it. Identity metadata only.
+  blockers(limit = 4) {
+    const bots = this.store.bots(), name = id => String(bots.find(b => b.id === id)?.name ?? id).slice(0, 40), short = id => String(id).slice(0, 20);
+    const found = bots.filter(b => b.activeTurnId || b.status === 'running').slice(0, limit)
+      .map(b => `bot ${name(b.id)} ${b.status}${b.activeTurnId ? ` turn ${b.activeTurnId}` : ''}`);
+    for (const row of this.store.db.prepare(`SELECT bot_id,json_extract(json,'$.id') id,json_extract(json,'$.state') state,json_extract(json,'$.turnId') turnId FROM records
+        WHERE kind='primaryInbox' AND json_extract(json,'$.state') IN ('dispatching','uncertain','accepted') AND json_extract(json,'$.terminalStatus') IS NULL ORDER BY rowid LIMIT ?`).all(limit))
+      found.push(`primaryInbox ${short(row.id)} (${name(row.bot_id)}) ${row.state}${row.turnId ? ` turn ${row.turnId}` : ''}`);
+    return found.slice(0, limit);
+  }
   async qualifyPassive(deadline, phase = 'draining') {
     const counts = this.counts(), snapshot = this.terminalProof.snapshot();
     if (!snapshot || Object.entries(counts).some(([key,n]) => !['acceptedOrUnknown','pendingInput'].includes(key) && n !== 0) ||
@@ -170,7 +181,7 @@ export class RuntimeMaintenance {
     const deadline = this.monotonic() + 20_000;
     await this.qualifyPassive(deadline, phase);
     const counts = this.counts();
-    if (Object.values(counts).some(n => n !== 0)) return { safe: false, counts, reason: 'Current work, tools, volatile state or unknown acceptance remains.' };
+    if (Object.values(counts).some(n => n !== 0)) return { safe: false, counts, blockers: this.blockers(), reason: 'Current work, tools, volatile state or unknown acceptance remains.' };
     const generation = this.generation, collaborationChange=this.store.meta('collaboration-change');
     const read = (method, params) => {
       const left = deadline - this.monotonic(); if (left <= 0) throw Error('Native maintenance observation exceeded its deadline.');

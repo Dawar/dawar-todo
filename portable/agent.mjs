@@ -1,3 +1,4 @@
+import { startStatusReporter } from './agent-status.mjs';
 import { join, isAbsolute } from 'node:path';
 import { randomUUID,createHash } from 'node:crypto';
 import { Store } from '../bot-bridge/store.mjs';
@@ -33,7 +34,7 @@ import {storedRuntimeDefaults} from './runtime-defaults.mjs';
 import {agentSnapshot} from './agent-snapshot.mjs';
 import {agentConnectionURL,centralLoopback} from './central-loopback.mjs';
 import {originalJournalReceipt} from './receipt-recovery.mjs';
-import {reconcileActiveTurns} from '../bot-bridge/turn-state.mjs';
+import {reconcileActiveTurns,reconcileAcceptedInbox} from '../bot-bridge/turn-state.mjs';
 const fingerprintLegacy=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
 export class AgentTransport {
@@ -73,7 +74,7 @@ export class AgentTransport {
   hello(){return {protocol:PROTOCOL_VERSION,runtime:RUNTIME_VERSION,platform:process.platform,arch:process.arch,agentEpoch:this.runtime.epoch,
     // Paired consumers are selected explicitly for the reviewed Linux release;
     // unrelated/native-autonomous capabilities are not implied by this switch.
-    capabilities:{text:true,localStdio:true,registeredArtifacts:true,profileReads:true,memoryCompaction:process.platform==='linux',pdfPreview:process.platform==='linux',desktop:process.platform==='linux'&&!!this.runtime.desktops,voice:false,secureTransfer:process.platform==='linux'&&!!this.runtime.secure,centralBursts:process.platform==='linux',submissionSources:Boolean(this.runtime.sources.owner?.key),...centralAgentCapabilities(this.config),autonomousGoals:true,nativeErrorRecovery:true,nativeAuthRecovery:true,durableReceiptRecovery:true,botCreation:true,nativeCompaction:true,privateReviews:Boolean(this.runtime.privateReviews)}};}
+    capabilities:{text:true,localStdio:true,registeredArtifacts:true,profileReads:true,memoryCompaction:process.platform==='linux',pdfPreview:process.platform==='linux',desktop:process.platform==='linux'&&!!this.runtime.desktops,voice:false,secureTransfer:process.platform==='linux'&&!!this.runtime.secure,centralBursts:process.platform==='linux',submissionSources:Boolean(this.runtime.sources.owner?.key),...centralAgentCapabilities(this.config),autonomousGoals:true,nativeErrorRecovery:true,nativeAuthRecovery:true,durableReceiptRecovery:true,botCreation:true,nativeCompaction:true,privateReviews:this.runtime.privateReviews?2:false}};}
   send(value){if(this.socket?.readyState===WebSocket.OPEN)this.socket.send(JSON.stringify(value));}
   controlRequest(botId,tool,args){
     if(!HUB_TOOLS.has(tool))throw Error('Unsupported hub tool.');
@@ -119,9 +120,11 @@ export class AgentTransport {
       // notification must not leave the original receipt native-accepted
       // (and the hub queue fenced) until someone sends another message.
       // Read-only native turn facts; scoped to currently assigned controls.
-      if(!this.runtime.maintenance.holding())await this.runtime.maintenance.track(()=>reconcileActiveTurns(this.runtime,2,botId=>{
-        const c=this.journal.db.prepare('SELECT * FROM node_controls WHERE bot_id=?').get(botId);return Boolean(c&&this.journal.currentControl({bot_id:botId,epoch:c.epoch}));
-      })).catch(error=>this.runtime.emit('fault',error));
+      const assigned=botId=>{const c=this.journal.db.prepare('SELECT * FROM node_controls WHERE bot_id=?').get(botId);return Boolean(c&&this.journal.currentControl({bot_id:botId,epoch:c.epoch}));};
+      if(!this.runtime.maintenance.holding())await this.runtime.maintenance.track(()=>reconcileActiveTurns(this.runtime,2,assigned)).catch(error=>this.runtime.emit('fault',error));
+      // Accepted inbox rows whose original turn is no longer current (an older
+      // missed completion) settle from that exact turn's terminal native fact.
+      if(!this.runtime.maintenance.holding())await this.runtime.maintenance.track(()=>reconcileAcceptedInbox(this.runtime,2,assigned)).catch(error=>this.runtime.emit('fault',error));
       // Idle compaction uses this existing loop (no runtime.tick here) and the
       // synchronized Stop/placement fence; offline controls admit nothing.
       // Not awaited: a slow native ACK must not stall receipt recovery.
@@ -398,9 +401,12 @@ export async function runAgent(config){
     transport.startupReady=true;await transport.recover();
   }catch(error){transport.close();throw error;}
   transport.recoveryTimer=setInterval(()=>void transport.recover().catch(error=>runtime.emit('fault',error)),5000);
+  // Optional native status feed (Mac menu bar). Absent by default on Linux.
+  const status=config.agent.statusFile?startStatusReporter({runtime,source,path:config.agent.statusFile,
+    onError:error=>console.error(JSON.stringify({at:new Date().toISOString(),event:'status.error',message:error.message}))}):null;
   // No runtime.tick: logical queue/schedule authority must live at the hub.
   // Existing admitted native work and tool responses still stream normally.
-  return {runtime,transport,journal,manager,source:activation.source};
+  return {runtime,transport,journal,manager,status,source:activation.source};
 }
 
 export const HUB_TEAM_REFERENCE_REUSE_MS=60000;

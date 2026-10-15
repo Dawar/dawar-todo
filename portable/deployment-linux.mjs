@@ -232,7 +232,7 @@ export function linuxDeployment(spec,{systemctl=async(...args)=>(await exec('sys
       const n=await nativeObserve(row);
       // Name the non-zero drain counters so an expiry explains itself.
       const busy=Object.entries(n.counts??{}).filter(([,v])=>v).map(([k,v])=>`${k}=${v}`).join(', ');
-      const nativeReason=`${n.reason??'Native work is not idle.'}${busy?` Busy: ${busy}.`:''}`;
+      const nativeReason=`${n.reason??'Native work is not idle.'}${busy?` Busy: ${busy}.`:''}${n.blockers?.length?` Blocking: ${n.blockers.join('; ')}.`:''}`;
       // A runner release never touches the hub writer.
       if(!hubWriter)return {safe:n.safe===true,native:n,reason:n.safe===true?null:nativeReason};
       const db=new DatabaseSync(spec.localWriter.path,{readOnly:true});let held;
