@@ -276,7 +276,7 @@ function BotConversationFeed({ owner, bot, online, children, onOpenCall, onReply
       if (entry.type === "reasoning" && (entry.item?.type !== "reasoning" || !entry.item.summary.some(text => text.trim()))) continue;
       result.push({ kind: "message", entries: [entry] });
     }
-    const grouped = taskRequestGroups(secureTimelineGroups(result, secure.requests.filter(r => r.state !== 'waiting'), state.entries, first, last, state.olderCursor), taskRequests?.requests ?? [], state.entries, first, last, state.olderCursor);
+    const grouped = taskRequestGroups(secureTimelineGroups(result, secure.requests, state.entries, first, last, state.olderCursor), taskRequests?.requests ?? [], state.entries, first, last, state.olderCursor);
     // Receipt bubbles occupy their chronological position, never an appended
     // replay of all recent human messages after the assistant's latest reply.
     const time = (entry: HistoryEntry | undefined) => entry?.messageAt ?? entry?.startedAt ?? Infinity;
@@ -292,6 +292,7 @@ function BotConversationFeed({ owner, bot, online, children, onOpenCall, onReply
     }
     return grouped;
   }, [state.entries, state.olderCursor, first, last, secure.requests, taskRequests?.requests, burst.value, bot.threadId, unprojectedBatches]);
+  const inlineSecure = useMemo(() => groups.flatMap(group => group.secure ? [group.secure.id] : []), [groups]);
   // Retain open aliases only within this mounted conversation's bounded cache.
   useEffect(() => {
     let alive = true;
@@ -320,7 +321,7 @@ function BotConversationFeed({ owner, bot, online, children, onOpenCall, onReply
     <p className="bots-system-note">Latest readable messages. Intervening work remains accessible through earlier history.</p>
     {entries.map(entry => <TimelineEntry {...replyProps} beforeToggle={feed.capture} beforeBubbleToggle={feed.disclose} onOpenCall={onOpenCall} key={historyKey(entry.turnId, entry.id)} entry={entry} timeline={timeline} attachments={state.attachments} download={download} />)}
   </section>;
-  return <NativeTimingContext.Provider value={{ owner, botId: bot.id, threadId: bot.threadId, entries: nativeState.entries, current: nativeState.currentTiming }}><ChapterContext.Provider value={chapterScope}><div className="bots-timeline"><SecureInputAccess key={JSON.stringify([owner, bot.id, bot.threadId])} state={secure}/><div className="bots-messages" ref={scroll} tabIndex={0} {...feed.handlers}><div ref={content}>
+  return <NativeTimingContext.Provider value={{ owner, botId: bot.id, threadId: bot.threadId, entries: nativeState.entries, current: nativeState.currentTiming }}><ChapterContext.Provider value={chapterScope}><div className="bots-timeline"><SecureInputAccess key={JSON.stringify([owner, bot.id, bot.threadId])} state={secure} inline={inlineSecure}/><div className="bots-messages" ref={scroll} tabIndex={0} {...feed.handlers}><div ref={content}>
     <TaskRequestAccess capture={feed.capture}/>
     {paging && <div className="bots-feed-loading" role="status">Loading conversation…</div>}
     {(first > 0 || state.olderCursor) && !state.loading && (!online || state.error || !state.entries.length) && <Button variant="outline" type="button" className="bots-older" disabled={paging || !online && (first === 0 || state.gaps.some((gap) => gap.before === historyKey(state.entries[first].turnId, state.entries[first].id)))} onClick={() => void feed.page(-1, true)}>{state.entries.length ? "Load earlier turns" : "Continue loading history"}</Button>}
@@ -335,7 +336,7 @@ function BotConversationFeed({ owner, bot, online, children, onOpenCall, onReply
     {(pinnedContext || last === state.entries.length) && readableContext(beforeContext)}
     {groups.map((group) => {
       if (group.burst) return <BurstBubbles key={group.kind} batch={group.burst} messages={group.burst.messageIds.flatMap(id => burst.value?.messages.find(message => message.id === id) ?? [])} truncatedIds={burst.value?.preview?.truncatedTextIds} controls={burst} {...batchProps} onOpenReply={openReply}/>;
-      if (group.secure) return <div key={group.secure.id} className="bots-secure-timeline-entry"><SecureInputCard request={group.secure} online={online}/><MessageTime seconds={Date.parse(group.secure.createdAt) / 1000} basis="received" inline/></div>;
+      if (group.secure) return <div key={group.secure.id} className="bots-secure-timeline-entry"><SecureInputCard request={group.secure} online={online} supported={secure.enabled} defaultOpen/><MessageTime seconds={Date.parse(group.secure.createdAt) / 1000} basis="received" inline/></div>;
       if (group.taskRequest) return <TaskRequestCard key={group.kind} request={group.taskRequest} capture={feed.capture}/>;
       const entry = group.entries[0], key = historyKey(entry.turnId, entry.id);
       const open = expanded.has(timeline.resolveKey(key)!);
