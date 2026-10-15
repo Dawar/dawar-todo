@@ -88,3 +88,32 @@ Direct sends (`turn.send`, start or steer) used to attach the standing policy (o
 - Queued and automatic input (`thread/queue/add`) never carried the profile and is unchanged.
 
 Estimate from current workspaces: median bot ≈5.6k → ≈0.1k tokens per steady-state send; a 20-message conversation ≈112k → ≈6k tokens of profile copies. Largest profiles save ≈25k tokens per send.
+
+## Gateway stalls from snapshots and event scans (October 15, 2026)
+
+The portable gateway (port 3210) runs in the same process as the bot
+runtime, so any synchronous work there delays every page, API and static
+request. A live profile showed two causes:
+
+- `/api/bots/read` made the hub request one snapshot per placed bot, and
+  the node built the full all-bot snapshot for each (decoding every `run`
+  record several times) before `agentSnapshot()` kept one bot. Portable
+  reads now build only that bot (`snapshot(botId)` via `botScope`), run
+  counts read queued runs through `run_state_bot`, and recent runs come
+  from one ordered query (`Store.recentRuns`).
+- `NodeJournal.pendingEvents()` ran on every event as a full scan of
+  `node_events` (376k rows). A partial index on unacknowledged rows makes
+  it constant time.
+
+| Measure | Before | After |
+| --- | --- | --- |
+| 32 per-bot snapshot reads (production copy) | 2,670 ms | 121 ms |
+| Pending-event query | 33 ms | 0.01 ms |
+| Gateway probe, 60 s live: requests over 100 ms / max | 13 / 2,620 ms | 1 / 163 ms |
+| Bot-service main-thread CPU per minute (live) | ~20 s | 2.1 s |
+| `/api/bootstrap`, `/api/bots/read` on a live reload | 2,197 ms, 1,113 ms | 32 ms, 17 ms |
+
+Live numbers depend on bot activity at the time; the per-read and query
+benchmarks are deterministic. Reproduce with `tests/portable-snapshot-cost.test.mjs`
+(equivalence and index use) and a 50 ms `curl` probe of
+`http://127.0.0.1:3210/pwa-build.json` against `:3211` (the site directly).
