@@ -5,7 +5,7 @@ import { preferencePatch } from './bot-preferences.mjs';
 export async function acceptSingleThreadOperation(runtime, request, fingerprint) {
   const { method, botId, params, operationId } = request;
   if (!['bursts.submit', 'bursts.start', 'bursts.resume', 'bursts.stop', 'bursts.discard', 'bursts.queue', 'bursts.checkout', 'bursts.checkoutCommit', 'work.resume', 'bots.update'].includes(method)) return null;
-  if (method === 'bots.update' && (!Object.keys(params).length || Object.keys(params).some(k => !['avatar', 'burstQuietSeconds'].includes(k)))) return null;
+  if (method === 'bots.update' && (!Object.keys(params).length || Object.keys(params).some(k => !['avatar', 'burstQuietSeconds', 'idleCompaction'].includes(k)))) return null;
   const bot = runtime.store.bot(botId);
   try {
     if (['bursts.stop', 'bursts.start', 'bursts.resume'].includes(method) && Object.keys(params).length) throw Error('Invalid burst control.');

@@ -33,7 +33,7 @@ async function bundles(directory){
  * mirrors gateway.mjs: authenticate → sync, receipt → store/router/controls,
  * event → store/controls, rpc-result → router.
  */
-async function harness(t,{claude=true,botCreation=true}={}){
+async function harness(t,{claude=true,botCreation=true,compaction=true}={}){
   mkdirSync(join(root,'dist'),{recursive:true});
   const directory=mkdtempSync(join(root,'dist','bot-creation-test-'));
   const {HubControls,AgentTransport,HubRpc}=await bundles(directory);
@@ -44,7 +44,8 @@ async function harness(t,{claude=true,botCreation=true}={}){
   const nodeStore=new Store(join(directory,'native-control.sqlite')),journal=new NodeJournal(join(directory,'node-journal.sqlite'));
   const codex=new MinimalCodex(),prompts=[];
   const backend=claude?new ClaudeBackend({store:nodeStore,credential:'test',configDir:join(directory,'claude'),mcp:fakeMcp,
-    query:fakeQuery(async user=>{prompts.push(user.message.content.at(-1).text);return [text(`m-${user.uuid}`,'hello from claude'),result(user.uuid)];})}):null;
+    query:fakeQuery(async user=>{if(user.message.content==='/compact'){prompts.push('/compact');return [{type:'system',subtype:'compact_boundary',uuid:`cb-${user.uuid}`},result(user.uuid)];}
+    prompts.push(user.message.content.at(-1).text);return [text(`m-${user.uuid}`,'hello from claude'),result(user.uuid)];})}):null;
   const runtime=new BotRuntime({store:nodeStore,codex:new ProviderRouter({codex,claude:backend}),root:join(directory,'bots')});
   runtime.sources.owner={key:OWNER};
   await runtime.start({deferNativeRecovery:true});
@@ -56,7 +57,7 @@ async function harness(t,{claude=true,botCreation=true}={}){
     frames.push(m.type);
     try{
       if(m.type==='authenticate'){
-        hubSide.portableHello={...m.hello,capabilities:{...m.hello.capabilities,botCreation:botCreation&&m.hello.capabilities.botCreation}};
+        hubSide.portableHello={...m.hello,capabilities:{...m.hello.capabilities,botCreation:botCreation&&m.hello.capabilities.botCreation,nativeCompaction:compaction&&m.hello.capabilities.nativeCompaction}};
         connections.set(NODE,hubSide);hubSide.send(JSON.stringify({type:'sync',...hub.sync(NODE,m.cursor??0)}));
       }else if(m.type==='sync')hubSide.send(JSON.stringify({type:'sync',...hub.sync(NODE,m.cursor??0)}));
       else if(m.type==='receipt'){const row=hub.receipt(NODE,m.operationId,m.fingerprint,m.state,m.receipt);router.receipt(row);controls.receipt(row);}
@@ -200,4 +201,31 @@ test('the hub adopts a provisional bot thread from the first native event, once'
   h.controls.store.transaction(()=>h.controls.creation.reserve(OWNER,op2,'binding-2',{name:'Ada'},{name:'Ada',purpose:''},{id:NODE},{kind:'owner'}));
   h.controls.nativeEvent({type:'bot',botId:op2,data:{id:op2,threadId:'codex-thread-10',slug:'ada'}},NODE,1);
   assert.equal(h.controls.store.bot(op2).slug,'ada-create-a');
+});
+
+test('owner compaction reaches the assigned node once and completes only from the native compaction item',async t=>{
+  const h=await harness(t);
+  const op='create-compact-001';
+  await h.request('bots.create',{name:'Dense',provider:'claude'},op);
+  await h.request('turn.send',{text:'hi'},'turn-send-c001',op);
+  await until(()=>h.prompts.includes('hi')&&!h.nodeStore.bot(op).activeTurnId,'first turn settled');
+  const {result:snapshot}=await h.request('snapshot',{},undefined);
+  assert.equal(snapshot.capabilities.nativeCompaction,1);
+  const {result}=await h.request('thread.compact',{},'compact-portable-001',op);
+  assert.ok(['compacting','completed'].includes(result.compaction.state),'the ACK is never treated as completion by itself');
+  await until(()=>h.nodeStore.bot(op).contextCompaction?.state==='completed','native compaction item observed');
+  assert.equal(h.nodeStore.bot(op).contextCompaction.trigger,'manual');
+  assert.deepEqual((await h.request('thread.compact',{},'compact-portable-001',op)).result,result,'original receipt, no resubmission');
+  assert.equal(h.prompts.filter(p=>p==='/compact').length,1);
+  assert.ok(!h.frames.some(f=>f.startsWith('rejected:')),h.frames.filter(f=>f.startsWith('rejected:')).join('\n'));
+});
+
+test('compaction is not sent to a node without the installed capability',async t=>{
+  const h=await harness(t,{compaction:false});
+  const op='create-compact-002';
+  await h.request('bots.create',{name:'Older',provider:'claude'},op);
+  await assert.rejects(h.request('thread.compact',{},'compact-portable-002',op),e=>e.outcome==='not-sent');
+  const {result:snapshot}=await h.request('snapshot',{},undefined);
+  assert.equal(snapshot.capabilities.nativeCompaction,undefined);
+  assert.equal(h.prompts.filter(p=>p==='/compact').length,0);
 });

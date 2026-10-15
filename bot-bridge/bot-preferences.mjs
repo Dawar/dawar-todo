@@ -1,4 +1,5 @@
 import { randomInt, randomUUID } from 'node:crypto';
+import { idlePolicyPatch } from './context-compaction.mjs';
 
 // bot-avatar-engine 6ee5b14cad35bf45c16042b25a2aec88c924af81/config.ts.
 export const AVATAR_SHAPES = ['circle', 'square', 'triangle', 'cloud', 'star', 'hexagon'];
@@ -13,6 +14,7 @@ export function preferencePatch(bot, params) {
     if (![0, 2.5, 3, 8, 15].includes(params.burstQuietSeconds)) throw new Error('Choose Off, 2.5, 3, 8 or 15 seconds.');
     patch.burstQuietSeconds = params.burstQuietSeconds;
   }
+  if (params.idleCompaction !== undefined) patch.idleCompaction = idlePolicyPatch(bot, params.idleCompaction);
   if (params.avatar !== undefined) {
     const a = params.avatar;
     if (!a || typeof a !== 'object' || Array.isArray(a) || Object.keys(a).some(k => !['shape', 'color'].includes(k)) ||

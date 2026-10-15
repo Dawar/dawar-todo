@@ -25,6 +25,17 @@ function fileChanges(name, input) {
   return [{ path, kind: { type: "update", move_path: null }, diff: clip(diff) }];
 }
 
+/**
+ * Codex `TokenUsageBreakdown` from one Anthropic API message's usage. Input
+ * includes cache reads/writes, so input + output is the current context size.
+ */
+export function usageBreakdown(u) {
+  const read = u.cache_read_input_tokens ?? 0, write = u.cache_creation_input_tokens ?? 0;
+  const input = (u.input_tokens ?? 0) + read + write, output = u.output_tokens ?? 0;
+  return { totalTokens: input + output, inputTokens: input, cachedInputTokens: read, cacheWriteInputTokens: write,
+    outputTokens: output, reasoningOutputTokens: 0 };
+}
+
 /** Map a `tool_use` block to an in-progress Codex item. */
 export function toolItem(block, cwd) {
   const { id, name, input = {} } = block;
@@ -165,8 +176,34 @@ export class ClaudeTurn {
         out.push(this.note("item/reasoning/summaryTextDelta", { turnId: this.id, itemId: id, delta: event.delta.thinking, summaryIndex: 0 }));
     }
   }
+  /**
+   * `thread/tokenUsage/updated`, as Codex emits it: `last` is the latest API
+   * message (current context), `total` sums this turn's distinct messages.
+   */
+  contextUsage(messageId, usage, out) {
+    if (!usage || typeof usage.input_tokens !== "number") return;
+    const last = usageBreakdown(usage);
+    this.counted ??= new Set();
+    const total = this.state.contextTotal ?? usageBreakdown({});
+    if (!this.counted.has(messageId)) {
+      this.counted.add(messageId);
+      for (const key of Object.keys(total)) total[key] += last[key];
+    }
+    Object.assign(this.state, { contextTotal: total, contextLast: last });
+    out.push(this.note("thread/tokenUsage/updated", { turnId: this.id,
+      tokenUsage: { total: { ...total }, last, modelContextWindow: this.state.contextWindow ?? null } }));
+  }
+  /** The SDK result names each model's context window; re-emit with it. */
+  contextWindow(modelUsage) {
+    const windows = Object.values(modelUsage ?? {}).map((m) => m?.contextWindow).filter((w) => Number.isSafeInteger(w) && w > 0);
+    if (!windows.length || !this.state.contextLast) return [];
+    this.state.contextWindow = Math.max(...windows);
+    return [this.note("thread/tokenUsage/updated", { turnId: this.id,
+      tokenUsage: { total: { ...this.state.contextTotal }, last: this.state.contextLast, modelContextWindow: this.state.contextWindow } })];
+  }
   assistant(message, out) {
     const messageId = message.message?.id ?? message.uuid;
+    this.contextUsage(messageId, message.message?.usage, out);
     for (const block of message.message?.content ?? []) {
       if (block.type === "text") {
         if (!block.text) { this.blockId(messageId); continue; }

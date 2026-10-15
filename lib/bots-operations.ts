@@ -105,7 +105,7 @@ export type BotOperations = {
   "botAdmin.control": { params: { id: string; expectedRevision: number; specHash: string; decision: "approve" | "revoke" }; result: { request: import("./bot-admin-types").BotAdminRequest } };
   "bots.create": { params: { name: string; purpose?: string; provider?: import("./bots-types").BotProvider }; result: Bot };
   "bots.update": {
-    params: Partial<Pick<Bot, "name" | "model" | "effort" | "serviceTier" | "mode" | "burstQuietSeconds">> & { avatar?: Pick<BotAvatar, "shape" | "color"> };
+    params: Partial<Pick<Bot, "name" | "model" | "effort" | "serviceTier" | "mode" | "burstQuietSeconds">> & { avatar?: Pick<BotAvatar, "shape" | "color">; idleCompaction?: Partial<NonNullable<Bot["idleCompaction"]>> };
     result: Bot;
   };
   "bots.read": { params: { threadId?: string | null; updatedAt?: string }; result: Bot };
@@ -144,7 +144,7 @@ export type BotOperations = {
   "queue.resume": { params: Record<string, never>; result: Record<string, never> };
   "thread.compact": {
     params: Record<string, never>;
-    result: Record<string, never>;
+    result: { compaction: NonNullable<Bot["contextCompaction"]>; coalesced?: boolean };
   };
   "requests.respond": {
     params: { key: string; result: unknown };

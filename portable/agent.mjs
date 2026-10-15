@@ -71,7 +71,7 @@ export class AgentTransport {
   hello(){return {protocol:PROTOCOL_VERSION,runtime:RUNTIME_VERSION,platform:process.platform,arch:process.arch,agentEpoch:this.runtime.epoch,
     // Paired consumers are selected explicitly for the reviewed Linux release;
     // unrelated/native-autonomous capabilities are not implied by this switch.
-    capabilities:{text:true,localStdio:true,registeredArtifacts:true,profileReads:true,memoryCompaction:process.platform==='linux',pdfPreview:process.platform==='linux',desktop:process.platform==='linux'&&!!this.runtime.desktops,voice:false,secureTransfer:process.platform==='linux'&&!!this.runtime.secure,centralBursts:process.platform==='linux',submissionSources:Boolean(this.runtime.sources.owner?.key),...centralAgentCapabilities(this.config),autonomousGoals:true,nativeErrorRecovery:true,nativeAuthRecovery:true,durableReceiptRecovery:true,botCreation:true}};}
+    capabilities:{text:true,localStdio:true,registeredArtifacts:true,profileReads:true,memoryCompaction:process.platform==='linux',pdfPreview:process.platform==='linux',desktop:process.platform==='linux'&&!!this.runtime.desktops,voice:false,secureTransfer:process.platform==='linux'&&!!this.runtime.secure,centralBursts:process.platform==='linux',submissionSources:Boolean(this.runtime.sources.owner?.key),...centralAgentCapabilities(this.config),autonomousGoals:true,nativeErrorRecovery:true,nativeAuthRecovery:true,durableReceiptRecovery:true,botCreation:true,nativeCompaction:true}};}
   send(value){if(this.socket?.readyState===WebSocket.OPEN)this.socket.send(JSON.stringify(value));}
   controlRequest(botId,tool,args){
     if(!HUB_TOOLS.has(tool))throw Error('Unsupported hub tool.');
@@ -113,6 +113,13 @@ export class AgentTransport {
       // Native receipt/Plan reconciliation still belongs to this agent. It
       // reads original turns and settles metadata; it never starts new work.
       if(!this.runtime.maintenance.holding())await this.runtime.maintenance.track(()=>this.runtime.plans.recover()).catch(error=>this.runtime.emit('fault',error));
+      // Idle compaction uses this existing loop (no runtime.tick here) and the
+      // synchronized Stop/placement fence; offline controls admit nothing.
+      // Not awaited: a slow native ACK must not stall receipt recovery.
+      if(!this.runtime.maintenance.holding())void this.runtime.compaction.tick({admit:bot=>{
+        const c=this.journal.db.prepare('SELECT * FROM node_controls WHERE bot_id=?').get(bot.id);
+        return this.runtime.relayOnline&&Boolean(c)&&this.journal.canAdmit({bot_id:bot.id,epoch:c.epoch});
+      }}).catch(error=>this.runtime.emit('fault',error));
       if(this.runtime.storage?.taskRequest&&this.runtime.storage.features?.taskRequests!==false&&!this.runtime.maintenance.holding())await this.runtime.taskRequests.tick().catch(error=>this.runtime.emit('fault',error));
       let rows=this.journal.db.prepare("SELECT rowid AS rowNumber,* FROM node_commands WHERE rowid>? AND state IN ('received','dispatching','unknown','native-accepted','running') ORDER BY rowid LIMIT 2").all(this.recoveryCursor??0);
       if(!rows.length){this.recoveryCursor=0;return;}
@@ -247,8 +254,9 @@ export class AgentTransport {
       this.journal.settle(command.operation_id,'terminal',{operationId:command.operation_id,outcome:'rejected',error:'Linux desktops are not configured.'});this.receipt(this.journal.db.prepare('SELECT * FROM node_commands WHERE operation_id=?').get(command.operation_id));return;
     }
     // Stop itself remains admissible while the synchronized Stop fence blocks
-    // new turns. Offline/foreign/stale controls never grant interruption.
-    if(['auth.check','auth.login.start','auth.login.cancel','turn.interrupt','portable.queueResume','portable.queueSend'].includes(payload.method)||DESKTOP_MUTATIONS.has(payload.method)?!this.journal.currentControl(command):!this.journal.canAdmit(command))return;
+    // new turns. Offline/foreign/stale controls never grant interruption. An
+    // owner's manual compaction changes no Stop flag and starts no input.
+    if(['auth.check','auth.login.start','auth.login.cancel','turn.interrupt','portable.queueResume','portable.queueSend','thread.compact'].includes(payload.method)||DESKTOP_MUTATIONS.has(payload.method)?!this.journal.currentControl(command):!this.journal.canAdmit(command))return;
     const bot=this.runtime.store.bot(command.bot_id);if(!bot || bot.archived || bot.deletedAt)throw Error('Assigned native bot is absent or archived.');
     const request={method:payload.method,botId:command.bot_id,operationId:command.operation_id,params:payload.params,clientId:`hub:${this.enrollment.nodeId}`};
     if(row.state==='dispatching' && !this.runtime.store.operation(command.operation_id)) {
