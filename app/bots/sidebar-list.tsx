@@ -39,7 +39,7 @@ export const BotSidebarList = memo(function BotSidebarList({ owner, search = '',
   const ref = useRef<HTMLDivElement>(null), id = useId();
   const localFocus = useRef<SidebarFocusIntent | null>(null), pendingFocus = focusIntent ?? localFocus;
 
-  const models = useMemo(() => new Map(snapshot?.models.map(model => [model.model, model.displayName])), [snapshot?.models]);
+  const models = useMemo(() => new Map(snapshot?.models?.map(model => [model.model, model.displayName])), [snapshot?.models]);
   const teams = useMemo(() => new Map(snapshot?.teams?.map(team => [team.id, team])), [snapshot?.teams]);
   const rows = useMemo(() => {
     const assigned = (bot: Bot) => Boolean(bot.teamId && teams.has(bot.teamId));

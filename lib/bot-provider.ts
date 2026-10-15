@@ -9,7 +9,7 @@ export const providerName = (provider: BotProvider) => (provider === "claude" ? 
 /** The model catalog a bot can choose from: Claude rows carry `provider: "claude"`. */
 export function providerModels(snapshot: BotSnapshot, bot: Pick<Bot, "provider">) {
   const claude = botProvider(bot) === "claude";
-  return snapshot.models.filter(model => ((model as CatalogModel).provider === "claude") === claude);
+  return (snapshot.models ?? []).filter(model => ((model as CatalogModel).provider === "claude") === claude);
 }
 
 /** Defaults a bot falls back to; Claude has no Fast/service tier. */
