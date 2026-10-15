@@ -26,6 +26,7 @@ import { acceptSingleThreadOperation } from "./single-thread-operations.mjs";
 import { PrimaryExecution, WORK_TOOL } from "./primary-execution.mjs";
 import { AnswerExecutions } from "./answer-execution.mjs";
 import { BackgroundRuns } from "./background-runs.mjs";
+import { PrivateReviews } from "./initiative-node.mjs";
 import { ScheduleDecisions } from "./schedule-decisions.mjs";
 import { stopExecutions, reconcileStop } from "./execution-stop.mjs";
 import { requireTurn, requireSteer, usableTurn, usableTurnId, terminalTurn } from "./native-turn.mjs";
@@ -238,6 +239,7 @@ export class BotRuntime extends EventEmitter {
     this.memoryMaintenance = new BotMemoryMaintenance(this);
     this.contextDelivery = new ContextDelivery(this);
     this.compaction = new ContextCompaction(this);
+    this.privateReviews = new PrivateReviews(this);
     this.locks = new Map();
     this.loaded = new Set();
     this.models = [];
@@ -642,8 +644,10 @@ export class BotRuntime extends EventEmitter {
   }
   async handleRequest(request, trustedOrigin = null) {
     const { method, botId, params = {}, operationId } = request;
-    if (botId && ['turn.send', 'turn.interrupt', 'queue.add', 'queue.send', 'questions.respond', 'bots.archive', 'bots.delete', 'bursts.add', 'bursts.stop'].includes(method))
+    if (botId && ['turn.send', 'turn.interrupt', 'queue.add', 'queue.send', 'questions.respond', 'bots.archive', 'bots.delete', 'bursts.add', 'bursts.stop'].includes(method)) {
       this.memoryMaintenance.cancelPreparation(botId);
+      this.privateReviews?.userActivity(String(botId));
+    }
     if (
       typeof method !== "string" ||
       !params ||
@@ -1988,6 +1992,7 @@ export class BotRuntime extends EventEmitter {
     }
     const threadId = message.params.threadId ?? message.params.conversationId;
     if (this.manager?.request(message)) return;
+    if (this.privateReviews?.request(message)) return;
     const lane = this.runs.byThread(threadId);
     if (lane) return this.runs.request(lane, message);
     const bot = this.store.bots().find((b) => b.threadId === threadId);
@@ -2042,6 +2047,8 @@ export class BotRuntime extends EventEmitter {
     if (this.usage.notification(message)) return;
     if (message.method === "claude/rateLimits/updated") return void this.emitEvent("usage", { provider: "claude" });
     if (this.manager?.event(message)) return;
+    // Private initiative reviews are hidden: never chat, unread or notices.
+    if (this.privateReviews?.notification(message)) return;
     const p = message.params ?? {};
     const threadId = p.threadId ?? p.thread?.id;
     if (["thread/archived", "thread/unarchived"].includes(message.method)) {

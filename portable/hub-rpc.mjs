@@ -88,12 +88,26 @@ export class HubRpc {
     catch(error){clearTimeout(item.timer);const values=this.writes.get(row.operation_id);values?.delete(item);if(!values?.size)this.writes.delete(row.operation_id);item.reject(Object.assign(error,{outcome:'uncertain'}));}
     return waiting;
   }
+  // Hub-internal private review calls. Never reachable from a browser method
+  // and never cached: review output and publication text stay private.
+  nodeCall(owner,botId,method,params={},timeoutMs=20000){
+    const p=this.store.placement(owner,botId),ws=this.connection(p);
+    if(!ws||ws.portableHello?.capabilities?.privateReviews!==true)return Promise.reject(Object.assign(Error('The assigned node does not support private reviews or is offline.'),{outcome:'not-sent',unsupported:!!ws}));
+    const rpcId=`rpc:${randomUUID()}`;
+    const promise=new Promise((resolve,reject)=>{
+      const timer=setTimeout(()=>{this.reads.delete(rpcId);reject(Object.assign(Error('Private review node call timed out.'),{outcome:'uncertain'}));},timeoutMs);
+      this.reads.set(rpcId,{nodeId:p.node_id,botId:p.bot_id,epoch:p.epoch,owner,method,private:true,socket:ws,resolve,reject,timer});
+    });
+    ws.send(boundedFrame({type:'rpc',rpcId,botId:p.bot_id,epoch:p.epoch,method,params,clientId:'hub:initiative'}));
+    return promise.then(value=>({...value.result,placement:{nodeId:p.node_id,epoch:p.epoch}}));
+  }
   readResult(nodeId,m){
     const r=this.reads.get(m.rpcId);if(!r)return;
     const n=this.store.node(nodeId),p=this.store.placement(n.owner,r.botId);
     if(r.nodeId!==nodeId||p.node_id!==nodeId||p.epoch!==r.epoch||m.epoch!==r.epoch||m.botId!==r.botId||this.connections.get(nodeId)!==r.socket)throw Error('Foreign or stale node response.');
     clearTimeout(r.timer);this.reads.delete(m.rpcId);
     if(m.error)return r.reject(Object.assign(Error(m.error),{outcome:'not-sent'}));
+    if(r.private)return r.resolve({result:m.result});
     try{
       this.controls?.projectRead(r.botId,r.method,m.result);
     }catch(error){return r.reject(Object.assign(error,{outcome:'not-sent'}));}
@@ -144,6 +158,7 @@ export class HubRpc {
     if(this.controls?.authority)for(const key of ['messageBursts','burstDiscard','burstControls','burstQueue'])common[key]=1;
     if(this.controls?.authority&&typeof this.controls.bursts?.checkout==='function'&&typeof this.controls.bursts?.checkoutCommit==='function')common.burstEdit=1;
     if(this.controls?.authority&&this.controls?.teams?.owner===owner)common.teams=1;
+    if(this.controls?.authority&&this.controls.initiative)common.proactiveInitiative=1;
     if(this.controls?.authority&&placements.length&&snapshots.length===placements.length&&placements.every(p=>this.connection(p)?.portableHello?.capabilities?.centralTaskRequests===true&&secureCapable(this.store.node(p.node_id),this.connection(p))))common.taskRequests=1;
     if(this.controls?.operator&&placements.length&&snapshots.length===placements.length&&placements.every(p=>operatorCapable(this.store,this.connections,p)))for(const key of ['operatorCalls','operatorInputQuestions'])common[key]=1;
     if(placements.length&&snapshots.length===placements.length&&placements.every(p=>secureCapable(this.store.node(p.node_id),this.connection(p))))

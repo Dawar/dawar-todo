@@ -24,6 +24,7 @@ import { join, resolve, dirname, isAbsolute } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { MANAGER_TOOLS, WORKER_INSTRUCTIONS, RUN_MESSAGE_TOOL } from "./manager-tools.mjs";
+import { INITIATIVE_TOOL } from "./initiative-coordinator.mjs";
 import { DOWNLOAD_ATTACHMENT_TOOL } from "./storage.mjs";
 import { validateResponse } from "./runtime.mjs";
 import { slugify, cleanName } from "./profiles.mjs";
@@ -276,13 +277,13 @@ export class CodexManager {
   }
   tools(bot) {
     const admin = this.runtime.botAdmin.allowed(bot) ? [BOT_ADMIN_TOOL] : [];
-    if (!this.runtime.primary.single(bot)) return [TASK_REQUEST_TOOL, SUBMISSION_TOOL, ...admin, MEMORY_TOOL, ...SECURE_TOOLS, ...MANAGER_TOOLS, RUN_MESSAGE_TOOL, WORK_TOOL, QUEUE_TOOL, TEAM_TOOL, DOWNLOAD_ATTACHMENT_TOOL];
+    if (!this.runtime.primary.single(bot)) return [TASK_REQUEST_TOOL, SUBMISSION_TOOL, ...admin, MEMORY_TOOL, ...SECURE_TOOLS, ...MANAGER_TOOLS, RUN_MESSAGE_TOOL, WORK_TOOL, QUEUE_TOOL, TEAM_TOOL, DOWNLOAD_ATTACHMENT_TOOL, INITIATIVE_TOOL];
     const retained = MANAGER_TOOLS.map(tool => {
       const operations = tool.inputSchema.properties.operation.enum.filter(op => ["list", "read", "status", "requests", "review"].includes(op) || tool.name === "codex_tasks" && op === "collectResult");
       return operations.length ? { ...tool, description: `Retained legacy history/collection only. ${tool.description}`, inputSchema: { ...tool.inputSchema,
         properties: { ...tool.inputSchema.properties, operation: { ...tool.inputSchema.properties.operation, enum: operations } } } } : null;
     }).filter(Boolean);
-    return [TASK_REQUEST_TOOL, SUBMISSION_TOOL, ...admin, MEMORY_TOOL, ...SECURE_TOOLS, ...retained, WORK_TOOL, QUEUE_TOOL, TEAM_TOOL, DOWNLOAD_ATTACHMENT_TOOL];
+    return [TASK_REQUEST_TOOL, SUBMISSION_TOOL, ...admin, MEMORY_TOOL, ...SECURE_TOOLS, ...retained, WORK_TOOL, QUEUE_TOOL, TEAM_TOOL, DOWNLOAD_ATTACHMENT_TOOL, INITIATIVE_TOOL];
   }
   async call(botId, name, args, origin = null) {
     const run = () => this.callTracked(botId, name, args, origin);
@@ -320,6 +321,12 @@ export class CodexManager {
     if (name === "bots_queue") {
       if (origin) throw new Error("Queue lists belong to the primary named bot.");
       return queueTool(this.runtime,bot,args);
+    }
+    if (name === INITIATIVE_TOOL.name) {
+      if (origin) throw new Error("Initiative outcomes belong to the primary named bot.");
+      // Portable nodes forward this tool to the hub coordinator before here.
+      if (!this.runtime.initiative) throw new Error("Proactive initiative is coordinated by the hub and is unavailable here.");
+      return this.runtime.initiative.tool(bot.id, args ?? {});
     }
     if (name === "bots_work") {
       if (origin) throw new Error("Progress belongs to the primary named bot.");

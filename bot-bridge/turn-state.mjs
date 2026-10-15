@@ -29,6 +29,7 @@ function protectBrowser(runtime, botId) {
 }
 function advanceActivity(runtime, botId, activeTurnId, changes = {}) {
   runtime.memoryMaintenance?.cancelPreparation(botId);
+  runtime.privateReviews?.userActivity(botId);
   runtime.desktops?.cancelBrowserMaintenance(botId);
   if (activeTurnId && runtime.store.get("botActivity", botId)?.activeTurnId !== activeTurnId) protectBrowser(runtime, botId);
   const token = captureActivity(runtime, botId);

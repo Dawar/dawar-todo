@@ -92,6 +92,7 @@ import { botProvider } from "../../lib/bot-provider";
 // the bots page, so opening the app parses only what the chat needs.
 const CreateBotDialog = lazy(() => import("./create-bot-dialog").then(m => ({ default: m.CreateBotDialog })));
 const BotAdminApprovals = lazy(() => import("./bot-admin-approvals").then(m => ({ default: m.BotAdminApprovals })));
+const InitiativeSettings = lazy(() => import("./initiative-settings").then(m => ({ default: m.InitiativeSettings })));
 const PersonalitySettings = lazy(() => import("./personality-settings").then(m => ({ default: m.PersonalitySettings })));
 const ScheduleEditor = lazy(() => import("./schedule-editor").then(m => ({ default: m.ScheduleEditor })));
 const ScheduleList = lazy(() => import("./schedule-list").then(m => ({ default: m.ScheduleList })));
@@ -786,6 +787,7 @@ export function BotsWorkspace() {
               history: <>{lanes && <details data-history-key="legacy-controls" className="bots-legacy-controls"><summary>Earlier work · recovery and controls</summary><BotWorkControls owner={owner} bot={bot} runs={recentRuns} online={online} onOpen={openActivity} /></details>}<Suspense fallback={null}><RunHistory key={`${scope}:${activityTarget?.runId ?? ""}:${activityTarget?.turnId ?? ""}`} embedded bot={bot} schedules={schedules} recentRuns={recentRuns} initialTarget={activityTarget} attachments={[]} online={online} onClose={closeProfile} download={id => void download(id)} /></Suspense></>,
               settings: <div className="bots-details-settings">
                 <ExecutionAccess key={`access:${scope}`} owner={owner} botId={bot.id} online={online}/>
+                {snapshot?.capabilities?.proactiveInitiative === 1 && <Suspense fallback={null}><InitiativeSettings key={`initiative:${scope}`} owner={owner} botId={bot.id} botName={bot.name} online={online} /></Suspense>}
                 <form className="grid gap-3" onSubmit={event => { event.preventDefault(); const input = new FormData(event.currentTarget); void action(() => client.rpc("bots.update", bot.id, { name: String(input.get("name")) })); }}>
                   <label>Name<Input name="name" defaultValue={bot.name} key={bot.id + bot.name} maxLength={80} required /></label><Button className="justify-self-start" type="submit" disabled={!online || busy}>Save name</Button>
                 </form>

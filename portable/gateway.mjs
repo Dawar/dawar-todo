@@ -19,6 +19,7 @@ import {HubTaskRequests} from './hub-task-requests.mjs';
 import { HubControls } from './hub-controls.mjs';
 import { HubWriteAuthority,hubActivation } from './hub-authority.mjs';
 import { HUB_TOOLS } from './control-protocol.mjs';
+import { InitiativeCoordinator, hubExecutor } from '../bot-bridge/initiative-coordinator.mjs';
 import { verifyBotTicket,verifyTaskRequestTicket } from '../lib/bots-auth.ts';
 import {createVoiceRuntime} from './voice-runtime.mjs';
 import {HubOperator} from './hub-operator.mjs';
@@ -53,6 +54,11 @@ export function startGateway(config) {
   controls.nodeStorage=nodeStorage;
   const taskRequests=new HubTaskRequests({hub:store,controls,application,environment:nodeStorage.environment,owner:config.owner.key});controls.taskRequests=taskRequests;
   controls.operator=new HubOperator(controls,config.owner.key);
+  // Proactive initiative: hub coordinator over the assigned nodes. It is
+  // inert until the owner enables it in Settings (disabled by default).
+  controls.initiativeOwner=config.owner.key;
+  controls.initiative=authority?new InitiativeCoordinator({store:controls.store,executor:hubExecutor(store,router,config.owner.key),
+    bots:()=>controls.store.bots().filter(bot=>{try{return store.placement(config.owner.key,bot.id).owner===config.owner.key;}catch{return false;}}),fault:error=>controls.emit('fault',error)}):null;
   const voice=config.voice?.enabled===true?createVoiceRuntime(config,{writer,assertWriter:()=>controls.assertWriter(),retained}):null;
   const scheduler=authority?setInterval(()=>void controls.tick().catch(error=>controls.emit('fault',error)),5000):null;
   const downloadDirectory=resolve(config.agentDownloadDirectory??fileURLToPath(new URL('../agent-downloads',import.meta.url)));
