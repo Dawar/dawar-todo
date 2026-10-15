@@ -37,7 +37,11 @@ function projection(runtime, bot) {
     // formerly hidden final answers. Their native work remains in disclosure.
     const legacyFindings = audience.kind === 'activity' ? runtime.store.db.prepare(`SELECT json FROM records WHERE kind='runFinding' AND bot_id=? AND json_extract(json,'$.turnId')=? LIMIT 25`).all(bot.id, turn.id).map(row => JSON.parse(row.json)) : [];
     const legacyItems = legacyFindings.map(f => ({ type: 'dynamicToolCall', id: `finding:${f.id}`, tool: 'bots_report_result', status: 'completed', success: true, arguments: { key: f.key, summary: f.summary } }));
-    const rows = [...turn.items, ...legacyItems].reverse().map(item => ({ turn, item, audience }));
+    // Confirmed initiative publications follow the native turn they were
+    // injected after, unless native history already shows the same message.
+    const initiative = (runtime.privateReviews?.projected(bot.id, turn.id) ?? []).filter(item =>
+      !page.data.some(t => t.items.some(native => native.type === 'agentMessage' && native.text?.trim() === item.text.trim())));
+    const rows = [...turn.items, ...legacyItems, ...initiative].reverse().map(item => ({ turn, item, audience }));
     const hasFiles = runtime.store.db.prepare(`SELECT 1 FROM records WHERE kind='artifactPublication' AND bot_id=? AND json_extract(json,'$.provenance.threadId')=? AND json_extract(json,'$.provenance.turnId')=? LIMIT 1`).get(bot.id, bot.threadId, turn.id);
     if (turn.itemsView === 'summary' && turn.status !== 'inProgress' &&
         (legacyFindings.length || audience.kind !== 'activity' && (turn.error?.message || hasFiles || rows.some(({ item }) => item.type === 'agentMessage' && item.text.trim() || item.type === 'userMessage' && !/^(schedule:|peer:|peer-exchange:|manager-notice:|secure-receipt:)/.test(item.clientId ?? ''))))) {

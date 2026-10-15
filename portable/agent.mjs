@@ -9,6 +9,7 @@ import { CodexManager } from '../bot-bridge/manager.mjs';
 import { NodeJournal } from './control-store.mjs';
 import { nodeKey, signature, fingerprint,id,boundedFrame,PROTOCOL_VERSION, RUNTIME_VERSION } from './protocol.mjs';
 import { AGENT_READS, AGENT_MUTATIONS } from './hub-rpc.mjs';
+import { INITIATIVE_NODE_METHODS } from '../bot-bridge/initiative-node.mjs';
 import { HUB_TOOLS,NODE_LOGICAL_COMMANDS } from './control-protocol.mjs';
 import {AgentTaskRequests} from './agent-task-requests.mjs';
 import {AgentOperator} from './agent-operator.mjs';
@@ -71,11 +72,11 @@ export class AgentTransport {
   hello(){return {protocol:PROTOCOL_VERSION,runtime:RUNTIME_VERSION,platform:process.platform,arch:process.arch,agentEpoch:this.runtime.epoch,
     // Paired consumers are selected explicitly for the reviewed Linux release;
     // unrelated/native-autonomous capabilities are not implied by this switch.
-    capabilities:{text:true,localStdio:true,registeredArtifacts:true,profileReads:true,memoryCompaction:process.platform==='linux',pdfPreview:process.platform==='linux',desktop:process.platform==='linux'&&!!this.runtime.desktops,voice:false,secureTransfer:process.platform==='linux'&&!!this.runtime.secure,centralBursts:process.platform==='linux',submissionSources:Boolean(this.runtime.sources.owner?.key),...centralAgentCapabilities(this.config),autonomousGoals:true,nativeErrorRecovery:true,nativeAuthRecovery:true,durableReceiptRecovery:true,botCreation:true}};}
+    capabilities:{text:true,localStdio:true,registeredArtifacts:true,profileReads:true,memoryCompaction:process.platform==='linux',pdfPreview:process.platform==='linux',desktop:process.platform==='linux'&&!!this.runtime.desktops,voice:false,secureTransfer:process.platform==='linux'&&!!this.runtime.secure,centralBursts:process.platform==='linux',submissionSources:Boolean(this.runtime.sources.owner?.key),...centralAgentCapabilities(this.config),autonomousGoals:true,nativeErrorRecovery:true,nativeAuthRecovery:true,durableReceiptRecovery:true,botCreation:true,privateReviews:Boolean(this.runtime.privateReviews)}};}
   send(value){if(this.socket?.readyState===WebSocket.OPEN)this.socket.send(JSON.stringify(value));}
   controlRequest(botId,tool,args){
     if(!HUB_TOOLS.has(tool))throw Error('Unsupported hub tool.');
-    const read=tool==='bots_team'&&args.operation==='read'||tool==='bots_message'&&['source','directory'].includes(args.operation)||tool==='bots_schedule_list'||tool==='bots_queue'&&['lists','read'].includes(args.operation);
+    const read=tool==='bots_team'&&args.operation==='read'||tool==='bots_message'&&['source','directory'].includes(args.operation)||tool==='bots_schedule_list'||tool==='bots_queue'&&['lists','read'].includes(args.operation)||tool==='bots_initiative'&&args.operation==='list';
     return this.requestHub(botId,'control',{tool,args},read);
   }
   artifactRequest(botId,action,input){
@@ -204,13 +205,13 @@ export class AgentTransport {
           void this.secure.message(ws,m).catch(()=>sendHere({type:'secure-response',transportId:m.transportId,botId:m.frame?.botId,epoch:m.epoch,error:'Private form scope is unavailable.'}));
         } else if(authentication && m.type==='rpc'){
           const control=this.journal.db.prepare('SELECT * FROM node_controls WHERE bot_id=?').get(m.botId);
-          if(!AGENT_READS.has(m.method)||control?.epoch!==m.epoch)throw Error('Read is outside assigned scope.');
+          if(!AGENT_READS.has(m.method)&&!INITIATIVE_NODE_METHODS.has(m.method)||control?.epoch!==m.epoch)throw Error('Read is outside assigned scope.');
           void (async()=>{try{
             if(!this.startupReady||!this.runtime.ready)throw Error('Agent startup is still recovering; no input was admitted.');
             if(DESKTOP_READS.has(m.method)&&!this.runtime.desktops)throw Error('Linux desktops are not configured.');
             if(DESKTOP_READS.has(m.method)&&!this.journal.currentControl({bot_id:m.botId,epoch:m.epoch}))throw Error('Desktop controls are not synchronized.');
             if(m.method==='desktop.open'&&(!id(m.clientId)||!m.clientId.startsWith('browser:')))throw Error('A live authenticated parent browser is required.');
-            const work=()=>OPERATOR_NODE_READS.has(m.method)?this.operator.read(m.method,m.botId,m.params,m.epoch):this.runtime.handle({method:m.method,botId:m.botId,params:m.method==='snapshot'?{...m.params,botScope:true}:m.params,clientId:m.method==='desktop.open'?m.clientId:`hub:${this.enrollment.nodeId}`});
+            const work=()=>INITIATIVE_NODE_METHODS.has(m.method)?this.runtime.privateReviews.handle(m.method,m.botId,m.params):OPERATOR_NODE_READS.has(m.method)?this.operator.read(m.method,m.botId,m.params,m.epoch):this.runtime.handle({method:m.method,botId:m.botId,params:m.method==='snapshot'?{...m.params,botScope:true}:m.params,clientId:m.method==='desktop.open'?m.clientId:`hub:${this.enrollment.nodeId}`});
             const readResult=m.method==='desktop.open'?await this.runtime.maintenance.admit(work):await work();
             const result=m.method==='snapshot'?agentSnapshot(readResult,m.botId):readResult;
             const after=this.journal.currentControl({bot_id:m.botId,epoch:m.epoch});

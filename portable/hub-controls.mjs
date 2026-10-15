@@ -112,6 +112,12 @@ export class HubControls extends EventEmitter {
   }
   nativeEvent(event,nodeId,epoch) {
     if(!this.authority)return true;
+    // The first owner reply after a proposal can record its outcome.
+    if(event.type==='codex'&&this.initiative&&event.data?.method==='item/completed'&&event.data.params?.item?.type==='userMessage'){
+      try{const b=this.store.bot(event.botId),p=this.hub.placement(this.sources.owner?.key??this.initiativeOwner,b.id);
+        if(p.node_id===nodeId&&p.epoch===epoch&&event.data.params.threadId===b.threadId)this.initiative.observeUserMessage(b.id,event.data.params.item);}
+      catch(error){this.emit('fault',error);}
+    }
     if(event.type==='codex'&&this.sources.owner?.key){
       return this.store.transaction(()=>{const b=this.store.bot(event.botId),p=this.hub.placement(this.sources.owner.key,b.id),v=event.data?.params;
         if(p.node_id!==nodeId||p.epoch!==epoch)throw Error('Foreign native source projection.');
@@ -172,6 +178,16 @@ export class HubControls extends EventEmitter {
     if(method==='inbox.list')return this.primary.list(b,params);
     if(method==='bursts.checkoutRead'){if(caller.kind!=='owner')throw Error('Edit recovery requires the authenticated owner.');return this.bursts.checkoutRead(b,params);}
     if(method==='bursts.read')return this.bursts.read(b);
+    if(method==='initiative.read'){if(!this.initiative)throw Error('Proactive initiative is unavailable on this hub.');return this.initiative.status(b.id);}
+    if(method==='initiative.configure'){
+      if(!this.initiative)throw Object.assign(Error('Proactive initiative is unavailable on this hub.'),{outcome:'rejected'});
+      if(caller.kind!=='owner'||!id(operationId))throw Object.assign(Error('Initiative settings belong to the authenticated owner.'),{outcome:'rejected'});
+      this.assertWriter();const binding=fingerprint({owner,method,botId,params}),prior=this.store.operation(operationId);
+      if(prior){if(prior.fingerprint!==binding)throw Error('Original settings operation changed.');return this.initiative.status(b.id);}
+      try{this.initiative.ledger.configure(params.patch,params.expectedRevision??null);}catch(error){error.outcome='rejected';throw error;}
+      this.store.saveOperation(operationId,binding,'done',{method,botId,params,caller,result:{},localOnly:'portable-hub-initiative',createdAt:now()});
+      return this.initiative.status(b.id);
+    }
     if(method==='bursts.typing'){
       if(caller.kind!=='owner')throw Error('Typing belongs to the authenticated owner browser.');
       this.assertWriter();return this.bursts.typing(b,params);
@@ -302,6 +318,7 @@ export class HubControls extends EventEmitter {
   async tool(owner,botId,tool,args,caller={kind:'authenticated-node-tool',botId}) {
     if(tool==='bots_team')return this.teams.tool(owner,botId,args,caller);
     if(tool==='bots_message')return this.sources.tool(owner,botId,args,caller);
+    if(tool==='bots_initiative'){if(!this.initiative)throw Error('Proactive initiative is unavailable on this hub.');this.scope(owner,botId);return this.initiative.tool(botId,args);}
     this.scope(owner,botId);if(!HUB_TOOLS.has(tool)||!args||typeof args!=='object'||Array.isArray(args))throw Error('Unsupported hub tool.');
     if(tool==='bots_schedule_list')return {...await this.request(owner,{method:'schedules.list',botId}),defaultTimeZone:this.defaultTimeZone};
     if(tool==='bots_queue'){
@@ -314,6 +331,7 @@ export class HubControls extends EventEmitter {
   async tick(date=new Date()) {
     if(this.ticking||this.closed)return;this.assertWriter();this.ticking=true;
     try{
+      if(this.initiative&&!this.initiativeTick)this.initiativeTick=this.initiative.tick().catch(error=>this.emit('fault',error)).finally(()=>{this.initiativeTick=null;});
       this.reconcileReceipts();await this.bursts.tick();await flushDueLists(this,date);this.assertWriter();
       collectDueRuns(this.store,date);
       for(const p of this.hub.db.prepare('SELECT * FROM portable_placements ORDER BY bot_id').all()){
