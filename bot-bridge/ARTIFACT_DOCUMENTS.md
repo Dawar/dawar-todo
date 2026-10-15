@@ -27,3 +27,20 @@ The app renders these strings and the route selector itself. It never executes d
 Prefer the registered link returned by `bots_publish_artifact`. A supported standalone visualize reference in a native final response is also an intended output, only for finished `.html`/`.htm` files under that same bot's real `outputs` directory. Existing explicit **Index shared outputs** can register a bounded historical page through the normal immutable artifact-copy pipeline. The viewer resolves only registered same-bot aliases; it never reads a path supplied in a chat link. Missing/foreign/private files stay unavailable, with indexing or explicit publication guidance. Index continuation is a reader action, not an automatic transcript scan. Original native text, bytes, source identities and feedback delivery remain unchanged.
 
 References: [DOMPurify](https://github.com/cure53/DOMPurify), [MDN iframe sandbox/srcdoc](https://developer.mozilla.org/en-US/docs/Web/HTML/Reference/Elements/iframe). Sandbox alone does not block network resources; srcdoc relative URLs can inherit the embedding document's base.
+
+## File delivery and local-path links
+
+Every bot's standing policy (`FILE_DELIVERY_INSTRUCTIONS` in `profiles.mjs`) says to deliver user-facing files with `bots_publish_artifact` and include its returned link. A saved file or a local path is not a delivery. For an authorized shared/team document, the bot copies it into its own `outputs/`, publishes the copy and names the source. The publisher stays limited to the bot's workspace.
+
+Publishing records the exact contained source path as `localReferences` on the registered attachment (most recent 6). Artifact metadata exposes those paths plus the registered copy path, only as display identities. They never grant a read. In chat, a link destination that is an absolute POSIX path under a filesystem root or the bot's workspace, a `file:`/`sandbox:` URL, or `outputs/…`-style relative path opens the preview/download card only for an exact same-bot, ready, registered output. Several registered copies of one source open the newest one when their dates differ. Otherwise the message shows an honest "not shared here" or "several versions" state instead of a broken link. Code examples and plain paths stay literal. Web, Google Docs and app links are unchanged.
+
+## Read-only viewers
+
+`lib/file-preview.mjs` picks a viewer by extension, then MIME. An explicit conflicting image/PDF/media/text type keeps Download only. Viewers read the original registered/staged Blob. Download always saves that same Blob.
+
+- TXT, LOG (line numbers, search), YAML/TOML/INI/XML and JS/TS/PY/CSS/SQL/SH (line numbers, lexical highlighting) render as inert text nodes. XML is source only, so entities are never expanded.
+- JSON offers Formatted (exact source tokens re-indented, so numbers/strings keep their spelling) and Raw. Invalid JSON shows the raw text and a positioned parse error.
+- CSV/TSV is a table with RFC 4180 quoting, multiline cells, ragged rows marked, and cells as plain data (no formulas, no fetches), plus a Raw view.
+- MP3/WAV and MP4/WebM use native controls with `preload="metadata"` and no autoplay. Unsupported codecs show a Download fallback. Closing or switching files pauses playback and the viewer revokes its Blob URLs.
+
+Limits: 2 MiB text read, 20,000 rendered lines, 20,000 characters per line, highlighting up to 512 KiB, 2,000 table records × 100 columns, 2,000 characters per cell, JSON depth 256, 1,000 search results. Larger, binary or invalid UTF-8 files show a notice and keep Download. Media uses the existing 100 MB file bound.

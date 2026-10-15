@@ -7,6 +7,8 @@ import { ReturnedArtifact } from "./returned-artifact";
 import { ReturnedVisualization } from "./returned-visualization";
 import {normalizeFileCitations} from "../../lib/file-citation.mjs";
 import {FileCitation} from "./file-citation";
+import {localFileLink} from "../../lib/local-file-link.mjs";
+import {LocalFileLink} from "./local-file-link";
 import {codexFollowupProjection, type CodexFollowup} from '../../lib/codex-followup';
 import {CodexFollowupButton, type FollowupSource} from './codex-followup';
 import { remarkVisualizations } from "./visualization-markdown";
@@ -27,7 +29,7 @@ import './native-work-plan.css';
 import ReactMarkdown, { defaultUrlTransform, type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
-const messageSchema = { ...defaultSchema, protocols: { ...defaultSchema.protocols, href: [...(defaultSchema.protocols?.href ?? []), "bot-artifact", "bot-visualization", "bot-file-citation", "bot-followup"] } };
+const messageSchema = { ...defaultSchema, protocols: { ...defaultSchema.protocols, href: [...(defaultSchema.protocols?.href ?? []), "bot-artifact", "bot-visualization", "bot-file-citation", "bot-followup", "bot-local-file"] } };
 import type { ThreadItem } from "../../lib/codex-protocol/v2/ThreadItem";
 
 const renderMarkdownTable: Components["table"] = ({ children }) => <MarkdownTable>{children}</MarkdownTable>;
@@ -44,8 +46,18 @@ const MarkdownLink: Components["a"] = ({ href, children, node }) => {
   if (href?.startsWith("bot-file-citation:")) return <FileCitation botId={botId} reference={href.slice(18)} attachments={attachments}/>;
   if (href?.startsWith("bot-visualization:")) return <ReturnedVisualization botId={botId} reference={href.slice(18)} attachments={attachments} />;
   if (href?.startsWith("bot-artifact:")) return <ReturnedArtifact botId={botId} id={href.slice(13)} attachment={attachments.find(file => file.id === href.slice(13))}>{children}</ReturnedArtifact>;
+  // Local filesystem destinations never become ordinary web links.
+  const local = href?.startsWith("bot-local-file:") ? localFileLink(safeDecode(href.slice(15)), botCwd(botId)) : href ? localFileLink(href, botCwd(botId)) : null;
+  if (local) return <LocalFileLink botId={botId} link={local} attachments={attachments}>{children}</LocalFileLink>;
+  if (href?.startsWith("bot-local-file:")) return <span>{children}</span>;
   return <a href={href} target="_blank" rel="noreferrer">{children}</a>;
 };
+const botCwd = (botId: string) => botsClient.snapshot?.bots.find(bot => bot.id === botId)?.cwd ?? "";
+const safeDecode = (value: string) => { try { return decodeURIComponent(value); } catch { return ""; } };
+// file:/sandbox: links are otherwise dropped by the default transform; keep them
+// as an inert marker so the link renderer can state their availability.
+const messageUrlTransform = (url: string) => url.startsWith('bot-artifact:') || url.startsWith('bot-visualization:') || url.startsWith('bot-file-citation:') || url.startsWith('bot-followup:') ? url
+  : /^(?:file|sandbox):/i.test(url) ? `bot-local-file:${encodeURIComponent(url)}` : defaultUrlTransform(url);
 /** Fenced code becomes an AI Elements Code Block; diagrams keep their renderer. */
 function MessageCodeBlock(props: import("react").ComponentProps<"pre"> & ExtraProps) {
   const code = props.node?.children.find(child => child.type === "element" && child.tagName === "code");
@@ -62,7 +74,7 @@ function MessageMarkdown({ text, botId, attachments, followups = [], offset = 0,
   const formats = useMemo(() => ({ references: followups, offset, source, partial }), [followups, offset, source, partial]);
   return <MarkdownFollowups.Provider value={formats}><MarkdownFiles.Provider value={files}><ReactMarkdown remarkPlugins={[remarkGfm, remarkVisualizations]}
     rehypePlugins={[[rehypeSanitize, messageSchema]]}
-    urlTransform={url => url.startsWith('bot-artifact:') || url.startsWith('bot-visualization:') || url.startsWith('bot-file-citation:') || url.startsWith('bot-followup:') ? url : defaultUrlTransform(url)}
+    urlTransform={messageUrlTransform}
     components={markdownComponents}>{text}</ReactMarkdown></MarkdownFiles.Provider></MarkdownFollowups.Provider>;
 }
 export function WorkPlanMessage({ plan, botId, attachments, turnStatus }: { plan: NativeWorkPlan; botId: string; attachments: BotAttachment[]; turnStatus?: string }) {

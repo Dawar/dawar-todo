@@ -117,6 +117,9 @@ export async function registerArtifact(runtime, bot, input, context = {}) {
           // preserves an unknown historical time, including across retries.
           createdAt: context.createdAt === undefined ? new Date().toISOString() : artifactDate(context.createdAt), provenance: provenance(bot, context) };
       }
+      // Exact contained source paths let the app match a bot's local-path link
+      // to this registered copy. They are display identities, never a read grant.
+      if (sourcePath) a = { ...a, localReferences: [...new Set([...(a.localReferences ?? []).filter(path => path !== sourcePath), sourcePath])].slice(-6) };
       if (input.visualizationReference) {
         const references = [...new Set([...(a.visualizationReferences ?? []), input.visualizationReference])];
         if (references.length > 6) throw Error('Visualization alias limit; publish the original explicitly.');

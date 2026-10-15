@@ -173,6 +173,8 @@ export type BotAttachment = {
   path?: string;
   /** Verified native output aliases; these never authorize arbitrary path reads. */
   visualizationReferences?: string[];
+  /** Exact registered source/copy paths for matching local-path links; never a read grant. */
+  localReferences?: string[];
   sha256?: string;
   cloudState?: "pending" | "transferring" | "ready" | "failed";
   /** Present on delivered history/output metadata; previews remain lazy. */
