@@ -655,3 +655,19 @@ test("result validation and reply classification", () => {
   assert.equal(ownerReplyText({ content: [{ type: "text", text: "Quoted...\nNew user message:\nyes, proceed" }] }), "yes, proceed");
   assert.equal(PRIVATE_REVIEW_CONFIG["features.multi_agent"], false);
 });
+
+test("proposals have stable ids with authorship kept apart from content; outcomes and execution credit the bots behind them", async t => {
+  const { store, coordinator, drive } = await setup(t, { reply: kind => kind === "extract" ? NO_MENTIONS : review() });
+  await drive(7);
+  const [publication] = store.list("initiativePublication");
+  const proposal = coordinator.ledger.proposal(publication.proposalId);
+  assert.match(proposal.id, /^initiative-proposal:/);
+  assert.deepEqual(proposal.authorship, { botId: "atlas", reviewId: publication.reviewId, provider: "codex" });
+  assert.equal(JSON.stringify(proposal.content).includes("atlas"), false, "content carries no authorship");
+  assert.deepEqual(proposal.credits, [{ botId: "atlas", share: 1 }]);
+  coordinator.observeUserMessage("atlas", { type: "userMessage", id: "reply-yes", content: [{ type: "text", text: "yes, proceed" }] });
+  assert.equal(coordinator.ledger.contribution("atlas").points, 6);
+  assert.equal(coordinator.tool("atlas", { operation: "contribute", itemId: publication.itemId, note: "drafted the template" }).points, 9);
+  coordinator.tool("atlas", { operation: "contribute", itemId: publication.itemId });
+  assert.equal(coordinator.ledger.contribution("atlas").counts.executed, 1, "execution help is credited once per item");
+});

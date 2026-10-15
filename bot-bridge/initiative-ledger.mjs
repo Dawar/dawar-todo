@@ -14,6 +14,11 @@ export const MENTION_CATEGORIES = ["client", "person", "company", "idea", "inten
 export const IMPORTANCE = ["high", "medium", "low"];
 export const RESOLUTION_KINDS = ["todo", "task-completed", "decision", "message-sent", "meeting-scheduled", "artifact", "owner-done", "owner-dropped", "concluded"];
 export const PROPOSED_ACTIONS = ["todo", "draft-message", "schedule", "research", "drop", "other"];
+// Per-bot contribution points. Dawar's real outcomes weigh most, so a judged
+// win he dismisses ends up below one he never saw.
+export const CONTRIBUTION_POINTS = Object.freeze({ selected: 5, improved: 4, flaw: 3, executed: 3, repitch: -2, misrepresentation: -6,
+  approved: 6, resolved: 8, dismissed: -6 });
+const OUTCOME_CREDITS = new Set(["approved", "resolved", "dismissed"]);
 // Statuses an owner decision sets. A private review can never set these.
 export const OWNER_OUTCOMES = ["approved", "snoozed", "dismissed", "resolved"];
 const REVIEW_STATUSES = new Set(["candidate", "resolved"]);
@@ -361,6 +366,7 @@ export class InitiativeLedger {
       // A held message about a decided item is never delivered later.
       for (const p of this.store.list("initiativePublication")) if (p.itemId === itemId && ["pending", "held"].includes(p.state))
         this.store.put("initiativePublication", { ...p, state: "abandoned", reason: `owner-${outcome}`, updatedAt: at });
+      this.creditOutcome(next, outcome);
       return next;
     });
   }
@@ -375,6 +381,41 @@ export class InitiativeLedger {
       this.bump();
     });
     return due.length;
+  }
+
+  // ---- proposals and contributions ------------------------------------------
+  /**
+   * A proposal has a stable id; its content never carries its authorship,
+   * which is kept beside it (`authorship`) so a room can anonymize content
+   * and still credit the right bots. `credits` are the bots Dawar's outcome
+   * on the delivered proposal is credited to, with shares.
+   */
+  saveProposal({ itemId, content, authorship, source = "review", roomId = null, credits = null }) {
+    const id = `initiative-proposal:${randomUUID()}`, at = this.at();
+    return this.store.put("initiativeProposal", { id, botId: authorship.botId, itemId, source, roomId, content, authorship,
+      credits: credits ?? [{ botId: authorship.botId, share: 1 }], createdAt: at });
+  }
+  proposal(id) { return id ? this.store.get("initiativeProposal", id) : null; }
+  contribution(botId) {
+    return this.store.get("initiativeContribution", botId) ?? { id: botId, botId, points: 0, counts: {}, events: [] };
+  }
+  contributions() { return this.store.list("initiativeContribution"); }
+  /** Record one scored contribution event for a bot. `key` makes it idempotent. */
+  credit(botId, kind, { itemId = null, roomId = null, proposalId = null, note = null, share = 1, key = null } = {}) {
+    if (!(kind in CONTRIBUTION_POINTS)) throw Error(`Unknown contribution ${kind}.`);
+    const row = this.contribution(botId), id = key ?? `${kind}:${roomId ?? ""}:${itemId ?? ""}:${proposalId ?? ""}:${row.events.length}`;
+    if (row.events.some(e => e.key === id)) return row;
+    const points = Math.round(CONTRIBUTION_POINTS[kind] * share * 100) / 100;
+    const event = { key: id, kind, points, itemId, roomId, proposalId, note: note ? text(note, 300) : null, at: this.at() };
+    return this.store.put("initiativeContribution", { ...row, points: Math.round((row.points + points) * 100) / 100,
+      counts: { ...row.counts, [kind]: (row.counts[kind] ?? 0) + 1 }, events: [...row.events, event].slice(-60), updatedAt: event.at });
+  }
+  /** Dawar's outcome on a delivered proposal credits (or debits) the bots behind it. */
+  creditOutcome(item, outcome) {
+    if (!OUTCOME_CREDITS.has(outcome) || !item.lastPublicationId) return;
+    const publication = this.store.get("initiativePublication", item.lastPublicationId), proposal = this.proposal(publication?.proposalId);
+    for (const c of proposal?.credits ?? []) this.credit(c.botId, outcome, { itemId: item.id, roomId: proposal.roomId, proposalId: proposal.id, share: c.share,
+      key: `${outcome}:${proposal.id}:${c.botId}` });
   }
 
   // ---- delivery policy ------------------------------------------------------
@@ -528,15 +569,16 @@ export function validateReviewResult(raw, clock = Date.now()) {
  * A loose thread always opens with Dawar's original words, where and when he
  * said them, and closes with the one concrete next step it proposes.
  */
-export function publicationText(contribution, itemId, { item = null, publisherBotId = null, names = {}, clock = Date.now(), timeZone = DEFAULT_SETTINGS.limitTimeZone } = {}) {
+export function publicationText(contribution, itemId, { item = null, publisherBotId = null, names = {}, clock = Date.now(), timeZone = DEFAULT_SETTINGS.limitTimeZone, room = false } = {}) {
+  const credit = room ? "_From the room: several bots drafted, criticised and refined this together._\n\n" : "";
   if (contribution.kind !== LOOSE_THREAD || !item?.mentions?.length)
-    return `${contribution.message.trim()}\n\n_Ref ${itemId}: reply “yes, proceed”, “next week” or “leave it”._`;
+    return `${contribution.message.trim()}\n\n${credit}_Ref ${itemId}: reply “yes, proceed”, “next week” or “leave it”._`;
   const mention = item.mentions.find(m => m.botId === publisherBotId) ?? item.mentions[0];
   const where = mention.botId === publisherBotId ? "" : ` to ${names[mention.botId] ?? "another bot"}`;
   const action = contribution.proposedAction;
   return [`${mentionWhen(mention.at, clock, timeZone)} you mentioned${where}: “${mention.quote}”`, contribution.message.trim(),
     ...(action ? [`**Proposed next step (${ACTION_LABELS[action.type]}):** ${action.detail}`] : []),
-    `_Ref ${itemId}: reply “yes, proceed”, “next week”, “leave it” or “done”._`].join("\n\n");
+    `${credit}_Ref ${itemId}: reply “yes, proceed”, “next week”, “leave it” or “done”._`].join("\n\n");
 }
 const ACTION_LABELS = { todo: "create a todo", "draft-message": "draft a message", schedule: "schedule it", research: "research it", drop: "drop it", other: "next step" };
 /** "Earlier today", "Yesterday", "On Tuesday" or "On Oct 3", in the limit time zone. */

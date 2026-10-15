@@ -24,9 +24,9 @@ const TRIGGER_ORDER = { extract: 0, "loose-thread": 1, "follow-up": 2, activity:
 
 export const INITIATIVE_TOOL = {
   name: "bots_initiative",
-  description: "Your proactive initiative ledger, including loose threads: things Dawar mentioned (clients, ideas, intentions, open questions) that have not reached a conclusion yet, with his original words. operation=list shows items you are responsible for or contributed to. operation=record saves Dawar's decision on one of them (approved, snoozed with an optional until date, dismissed, resolved) — call it when Dawar answers a proposal (for example “yes, proceed”, “next week”, “leave it”, “done”) or when you conclude a loose thread (resolved, with a note naming the evidence). Approved work then follows your normal path.",
+  description: "Your proactive initiative ledger, including loose threads: things Dawar mentioned (clients, ideas, intentions, open questions) that have not reached a conclusion yet, with his original words. operation=list shows items you are responsible for or contributed to. operation=contribute (itemId, note) records your help executing an approved item you contribute to. operation=record saves Dawar's decision on one of them (approved, snoozed with an optional until date, dismissed, resolved) — call it when Dawar answers a proposal (for example “yes, proceed”, “next week”, “leave it”, “done”) or when you conclude a loose thread (resolved, with a note naming the evidence). Approved work then follows your normal path.",
   inputSchema: { type: "object", additionalProperties: false, required: ["operation"], properties: {
-    operation: { type: "string", enum: ["list", "record"] }, itemId: { type: "string" },
+    operation: { type: "string", enum: ["list", "record", "contribute"] }, itemId: { type: "string" },
     outcome: { type: "string", enum: OWNER_OUTCOMES }, until: { type: "string" }, note: { type: "string" } } },
 };
 /** Settings actions on one loose thread. */
@@ -255,11 +255,10 @@ export class InitiativeCoordinator {
         if (block && !LIMIT_BLOCKS.has(block)) publicationBlock = block;
       }
       if (!publicationBlock) {
-        const id = `initiative-publication:${randomUUID()}`;
-        publication = this.store.put("initiativePublication", { id, botId: review.botId, itemId: c.itemId, reviewId: review.id, kind: item?.kind ?? c.kind,
-          text: publicationText({ ...c, kind: item?.kind ?? c.kind }, c.itemId, { item, publisherBotId: review.botId, names: this.names(), clock: this.clock(), timeZone: settings.limitTimeZone }),
-          revision: capture.revision, changedCircumstances: c.changedCircumstances, whyNow: c.whyNow, proposedAction: c.proposedAction ?? null,
-          state: "pending", attempts: 0, createdAt: this.at() });
+        const { responsible, ...content } = c;
+        const proposal = this.ledger.saveProposal({ itemId: c.itemId, content: { ...content, kind: item?.kind ?? c.kind },
+          authorship: { botId: review.botId, reviewId: review.id, provider: review.provider ?? null }, source: "review" });
+        publication = this.publish(proposal, { botId: review.botId, revision: capture.revision, reviewId: review.id }, settings);
       }
     }
     const baseline = this.ledger.botSettings(review.botId, settings).baselineMinutes * 6e4;
@@ -292,6 +291,15 @@ export class InitiativeCoordinator {
       await this.publishOne(p);
       return; // one delivery attempt per tick; spacing follows confirmation
     }
+  }
+  /** A pending publication of one proposal by `botId` (the delivering bot). */
+  publish(proposal, { botId, revision, reviewId = null, roomId = null }, settings = this.ledger.settings()) {
+    const c = proposal.content, item = this.ledger.item(proposal.itemId);
+    return this.store.put("initiativePublication", { id: `initiative-publication:${randomUUID()}`, botId, itemId: proposal.itemId, proposalId: proposal.id,
+      reviewId, roomId, kind: item?.kind ?? c.kind,
+      text: publicationText(c, proposal.itemId, { item, publisherBotId: botId, names: this.names(), clock: this.clock(), timeZone: settings.limitTimeZone, room: Boolean(roomId) }),
+      revision, changedCircumstances: c.changedCircumstances === true, whyNow: c.whyNow ?? null, proposedAction: c.proposedAction ?? null,
+      state: "pending", attempts: 0, createdAt: this.at() });
   }
   setPublication(p, state, fields = {}) {
     return this.store.put("initiativePublication", { ...this.store.get("initiativePublication", p.id), ...fields, state, updatedAt: this.at() });
@@ -359,7 +367,15 @@ export class InitiativeCoordinator {
       const next = this.ledger.recordOutcome(item.id, args.outcome, { until: args.until ?? null, note: args.note ?? null, by: "bot-tool", source: botId });
       return { id: next.id, status: next.status, snoozedUntil: next.snoozedUntil ?? null };
     }
-    throw Error("Use operation list or record.");
+    if (args.operation === "contribute") {
+      // Helping execute an approved item, as its responsible bot or a contributor.
+      const item = this.ledger.item(String(args.itemId ?? ""));
+      if (!item || !mine(item)) throw Error("That initiative item is not yours.");
+      if (!["approved", "resolved"].includes(item.status)) throw Error("Only approved work can be contributed to.");
+      const row = this.ledger.credit(botId, "executed", { itemId: item.id, note: args.note ?? null, key: `executed:${item.id}:${botId}` });
+      return { id: item.id, points: row.points };
+    }
+    throw Error("Use operation list, record or contribute.");
   }
   /** Owner action from Settings on one loose thread: dismiss, snooze (until) or resolve. */
   threadAction(itemId, action, { until = null } = {}) {
