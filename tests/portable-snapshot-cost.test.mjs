@@ -71,3 +71,58 @@ test('pending node events are read through their partial index', async t => {
   journal.acknowledgeEvent('event-1');
   assert.deepEqual(journal.pendingEvents().map(row => row.event_id), ['event-2']);
 });
+
+// Adversarial review R-4 (ADVERSARIAL_REVIEW_20261015.md): a connected node
+// that stops answering must not hold every bots-screen read for 15 s per bot.
+test('a silent connected node answers from its cached snapshot after a short deadline; concurrent snapshots share one read', async t => {
+  // Bundled like the shipped hub so its TypeScript companions resolve.
+  const { build } = await import('esbuild');
+  const { mkdirSync, mkdtempSync, rmSync } = await import('node:fs');
+  const { fileURLToPath, pathToFileURL } = await import('node:url');
+  const root = fileURLToPath(new URL('../', import.meta.url));
+  mkdirSync(join(root, 'dist'), { recursive: true });
+  const directory = mkdtempSync(join(root, 'dist', 'snapshot-deadline-test-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  await build({ entryPoints: [join(root, 'portable/hub-rpc.mjs')], outfile: join(directory, 'rpc.mjs'), bundle: true, platform: 'node', target: 'node24', format: 'esm', packages: 'external', logLevel: 'error' });
+  const { HubRpc } = await import(pathToFileURL(join(directory, 'rpc.mjs')).href);
+  const placements = [...Array.from({ length: 8 }, (_, i) => ({ owner: 'o', bot_id: `stuck-${i}`, node_id: 'node-stuck', epoch: 1 })),
+    { owner: 'o', bot_id: 'live-0', node_id: 'node-live', epoch: 1 }];
+  const snap = id => ({ bots: [{ id, lastReadAt: '' }], pending: [], models: [{ model: 'gpt-test' }], defaults: { model: 'gpt-test', effort: null, serviceTier: 'default' }, capabilities: {} });
+  const cache = new Map(placements.filter(p => p.node_id === 'node-stuck').map(p => [p.bot_id, { result: JSON.stringify(snap(p.bot_id)), observed_at: 1 }]));
+  let rpc, stuckSends = 0;
+  const hello = { platform: 'linux', capabilities: {} };
+  const stuck = { readyState: 1, bufferedAmount: 0, portableHello: hello, send() { stuckSends++; } };
+  const live = { readyState: 1, bufferedAmount: 0, portableHello: hello, send(text) {
+    const m = JSON.parse(text); if (m.type === 'rpc') queueMicrotask(() => rpc.readResult('node-live', { rpcId: m.rpcId, botId: m.botId, epoch: m.epoch, result: snap(m.botId) }));
+  } };
+  const store = {
+    eventCursor: () => 0,
+    placement: (owner, botId) => placements.find(p => p.bot_id === botId),
+    node: nodeId => ({ id: nodeId, owner: 'o', hello: JSON.stringify(hello) }),
+    transaction: fn => fn(),
+    db: { prepare: sql => ({
+      all: () => (/portable_placements/.test(sql) ? placements : []),
+      get: (owner, botId) => (/portable_rpc_cache/.test(sql) ? cache.get(botId) : undefined),
+      run() {},
+    }) },
+  };
+  rpc = new HubRpc(store, new Map([['node-stuck', stuck], ['node-live', live]]), { snapshotDeadlineMs: 50 });
+  t.after(() => rpc.close());
+  const started = Date.now();
+  const [first, second] = await Promise.all([rpc.snapshot('o', 'browser:a'), rpc.snapshot('o', 'browser:b')]);
+  assert.ok(Date.now() - started < 2000, `answered in ${Date.now() - started} ms, not 15 s per bot`);
+  assert.equal(stuckSends, 8, 'two concurrent snapshots sent one read per bot, not two');
+  assert.deepEqual(first.result.bots.map(b => b.id).sort(), placements.map(p => p.bot_id).sort(), 'cached bots are kept, not dropped');
+  assert.equal(first.cache.stale, true);
+  assert.equal(first.result.ready, false, 'a stale answer is not presented as ready');
+  assert.equal(first.result.models.length, 1);
+  assert.deepEqual(first.result.bots.filter(b => b.nodeOnline).map(b => b.id), ['live-0'], 'only the answering node is shown online');
+  assert.notEqual(first.result, second.result, 'each caller gets its own result object');
+  // The stalled node is now known: the next snapshot answers from cache at once
+  // and adds no read while the earlier ones are still in flight.
+  const again = Date.now();
+  const third = await rpc.snapshot('o', 'browser:c');
+  assert.ok(Date.now() - again < 40, 'no second deadline wait for a known-stalled node');
+  assert.equal(stuckSends, 8);
+  assert.equal(third.result.bots.length, 9);
+});
