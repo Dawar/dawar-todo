@@ -6,18 +6,21 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Store } from './store.mjs';
 import { BotRuntime } from './runtime.mjs';
+import { nativeItemsPage } from './test-helpers/native-items.mjs';
 
 test('runtime history reads are scoped, nonmutating, conditional and recover full native details', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'bot-history-view-'));
   const store = new Store(join(root, 'state.sqlite')), codex = new EventEmitter(), calls = [];
   const item = { type: 'commandExecution', id: 'tool', command: 'synthetic', aggregatedOutput: 'x'.repeat(100000), status: 'completed' };
-  codex.call = async (method, params) => { calls.push({ method, params }); if (method === 'thread/resume') return {}; return { data: [{ id: 'turn', items: [item], status: 'completed', startedAt: 1 }], nextCursor: null }; };
+  const turns = [{ id: 'turn', items: [item], status: 'completed', startedAt: 1 }];
+  codex.call = async (method, params) => { calls.push({ method, params }); if (method === 'thread/resume') return {}; if (method === 'thread/items/list') return nativeItemsPage(turns, params); return { data: turns, nextCursor: null }; };
   const runtime = new BotRuntime({ store, codex, root });
   t.after(async () => { store.close(); await rm(root, { recursive: true, force: true }); });
   const bot = store.saveBot({ id: 'bot', threadId: 'thread', name: 'Synthetic', cwd: root, slug: 'synthetic', archived: false, updatedAt: 'stable' });
   const read = (method, params = {}, botId = bot.id) => runtime.handle({ method, botId, params });
   const page = await read('history.view'); assert.equal(page.entries[0].item, null);
-  assert.ok(calls.some((call) => call.method === 'thread/resume'), 'ensure stream subscription follows existing history behavior');
+  // history.view is a read-only path; it must not thread/resume (runtime.mjs case "history.view").
+  assert.ok(!calls.some((call) => call.method === 'thread/resume'), 'loading chat never wakes or reconfigures a bot');
   const before = calls.length; assert.equal((await read('history.view', { revision: page.revision })).kind, 'unchanged'); assert.equal(calls.length, before);
   const event = runtime.emitEvent('codex', { method: 'item/commandExecution/outputDelta', params: { turnId: 'turn', itemId: 'tool', delta: 'new' } }, bot.id);
   const replay = await read('history.view', { revision: page.revision, after: page.eventCursor }); assert.equal(replay.kind, 'events'); assert.equal(replay.events[0].seq, event.seq);
@@ -25,7 +28,7 @@ test('runtime history reads are scoped, nonmutating, conditional and recover ful
   await read('history.detail', { turnId: 'turn', itemId: 'tool', offset: detail.nextOffset, version: detail.version }); assert.equal(calls.length, scans);
   const unchanged = await read('history.detail', { turnId: 'turn', itemId: 'tool', knownVersion: detail.version }); assert.equal(unchanged.notModified, true);
   await assert.rejects(read('history.view', {}, 'missing-bot'), /found|Unknown|exist/i);
-  assert.ok(calls.every((call) => ['thread/resume', 'thread/turns/list'].includes(call.method)));
+  assert.ok(calls.every((call) => ['thread/turns/list', 'thread/items/list'].includes(call.method)));
 });
 
 test('large native events are compact before storage/wire; real client refreshes only open detail and settles completion', async (t) => {
@@ -33,7 +36,9 @@ test('large native events are compact before storage/wire; real client refreshes
   const { IDBKeyRange } = await import('fake-indexeddb');
   const root = await mkdtemp(join(tmpdir(), 'bot-live-bound-')), store = new Store(join(root, 'state.sqlite')), codex = new EventEmitter();
   let nativeItem = { type: 'commandExecution', id: 'tool', command: 'synthetic', aggregatedOutput: 'initial', status: 'inProgress' }, scans = 0;
-  codex.call = async () => { scans++; return { data: [{ id: 'turn', items: [nativeItem], status: nativeItem.status === 'inProgress' ? 'inProgress' : 'completed', startedAt: 1 }], nextCursor: null }; };
+  const turns = () => [{ id: 'turn', items: [nativeItem], status: nativeItem.status === 'inProgress' ? 'inProgress' : 'completed', startedAt: 1 }];
+  const methods = [];
+  codex.call = async (method, params) => { scans++; methods.push(method); if (method === 'thread/items/list') return nativeItemsPage(turns(), params); return { data: turns(), nextCursor: null }; };
   const runtime = new BotRuntime({ store, codex, root });
   t.after(async () => { store.close(); await rm(root, { recursive: true, force: true }); });
   store.saveBot({ id: 'bot', threadId: 'thread', name: 'Synthetic', cwd: root, slug: 'synthetic', archived: false, updatedAt: 'stable' }); runtime.loaded.add('thread');
@@ -65,7 +70,9 @@ test('large native events are compact before storage/wire; real client refreshes
   await new Promise((r) => setTimeout(r, 1300));
   assert.match(timeline.detailItem(descriptor).aggregatedOutput, /FINAL AUTHORITATIVE OUTPUT$/);
   assert.equal(timeline.detailItem(descriptor).status, 'completed'); assert.equal(timeline.getSnapshot().entries[0].status, 'completed');
-  assert.equal(scans - before, 1, 'one coalesced full native lookup for open final detail');
+  // Since f7f4e98: completion refreshes the page (summary turns/list + one bounded tail items/list for a
+  // turn without final text), and the open detail is one coalesced exact lookup made of two anchored items/list reads.
+  assert.deepEqual(methods.slice(before).sort(), ['thread/items/list', 'thread/items/list', 'thread/items/list', 'thread/turns/list'], 'one coalesced full native lookup for open final detail');
   const rawBytes = Buffer.byteLength(JSON.stringify(rawItem)) + 10 * Buffer.byteLength(JSON.stringify(rawDelta));
   const wireBytes = events.slice(0, 11).reduce((n, event) => n + Buffer.byteLength(JSON.stringify(event)), 0);
   const finalDetail = responses.slice(beforeResponses).filter((response) => response.method === 'history.detail');

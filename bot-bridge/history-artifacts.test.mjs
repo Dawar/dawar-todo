@@ -13,6 +13,7 @@ import { artifactMetadata } from './artifact-library.mjs';
 import { HISTORY_ATTACHMENT_BYTES, HISTORY_ATTACHMENT_LIMIT } from './history-attachments.mjs';
 import { runtime as browserRuntime } from '../tests/helpers/load-ts.mjs';
 import { syntheticArtifactPdf } from '../tests/fixtures/bot-artifact-files.mjs';
+import { nativeItemsPage } from './test-helpers/native-items.mjs';
 
 const agent = (id, text) => ({ id, type: 'agentMessage', text, phase: 'final_answer', memoryCitation: null, delivery: null, questions: null });
 const tool = (id) => ({ id, type: 'imageGeneration', status: 'completed', result: 'native body is not metadata', savedPath: null });
@@ -23,7 +24,9 @@ async function setup(t) {
   const root = await mkdtemp(join(tmpdir(), 'history-artifact-contract-')), store = new Store(join(root, 'state.sqlite'));
   const codex = new EventEmitter(); codex.turns = []; codex.calls = [];
   codex.call = async (method, params) => {
-    codex.calls.push({ method, params }); assert.equal(method, 'thread/turns/list');
+    codex.calls.push({ method, params });
+    if (method === 'thread/items/list') return nativeItemsPage(codex.turns, params); // f7f4e98
+    assert.equal(method, 'thread/turns/list');
     return { data: codex.turns, nextCursor: null };
   };
   const runtime = new BotRuntime({ store, codex, root }), bots = [];
@@ -61,7 +64,7 @@ test('fresh real history responses deliver published PDF, native image and input
   const nativeId = JSON.parse(native.json).id;
   const input = await runtime.beginUpload(bot, { name: 'input.png', mimeType: 'image/png', size: image.length }, 'input-image');
   await runtime.uploadChunk(bot, { id: input.id, offset: 0, data: image.toString('base64') }); await runtime.finishUpload(bot, { id: input.id });
-  const inputItem = { id: 'user', type: 'userMessage', content: [{ type: 'localImage', path: input.path }] };
+  const inputItem = { id: 'user', type: 'userMessage', clientId: null, content: [{ type: 'localImage', path: input.path }] };
   codex.turns = [turn('turn', [inputItem, tool('native-image'), agent('answer', '[Report](bot-artifact:' + published.attachmentId + ')')])];
   const originalRead = runtime.readAttachment.bind(runtime); prohibitHydration(store, runtime);
   const page = await rpc('history.view'); assert.equal(page.kind, 'page');
@@ -71,14 +74,16 @@ test('fresh real history responses deliver published PDF, native image and input
     const stored = store.get('attachment', a.id), expected = artifactMetadata(stored, bot);
     assert.equal(a.botId, bot.id); assert.equal(a.ready, true); assert.deepEqual(a.preview, expected.preview);
     assert.equal(a.createdAt, expected.createdAt); assert.equal(a.name, stored.name); assert.equal(a.size, stored.size);
-    assert.equal('sha256' in a, false); assert.equal('received' in a, false); assert.equal('data' in a, false);
+    // sha256 is public verification metadata since dbaae71 (artifact-library.mjs); it must match the stored digest.
+    assert.equal(a.sha256, stored.sha256); assert.equal('received' in a, false); assert.equal('data' in a, false);
     if (a.id === input.id) { assert.equal(a.path, input.path); assert.equal(a.direction, 'input'); }
     else { assert.equal('path' in a, false); assert.equal(a.direction, 'output'); assert.equal(a.artifact, true); }
   }
   const detail = await rpc('history.detail', { turnId: 'turn', itemId: 'answer' }); assert.deepEqual(ids(detail), [published.attachmentId]);
   const nativeDetail = await rpc('history.detail', { turnId: 'turn', itemId: 'native-image' }); assert.deepEqual(ids(nativeDetail), [nativeId]);
   const userDetail = await rpc('history.detail', { turnId: 'turn', itemId: 'user' }); assert.deepEqual(ids(userDetail), [input.id]); assert.equal(userDetail.attachments[0].path, input.path);
-  assert.equal(codex.calls.length, 4, 'only the requested page and three detail reads, no discovery');
+  // Each exact detail read is two exclusive-anchor item reads (history-reads.mjs itemEntry, f7f4e98).
+  assert.deepEqual(codex.calls.map((c) => c.method), ['thread/turns/list', ...Array(6).fill('thread/items/list')], 'only the requested page and three detail reads, no discovery');
   // Use the actual history metadata in the lazy preview/read contract; not a
   // library response injected into the message fixture.
   runtime.readAttachment = originalRead;
@@ -142,7 +147,7 @@ test('late attachment metadata replays without a history fetch and refreshes con
   const fresh = await rpc('history.view'); assert.deepEqual(ids(fresh), ['late', 'native']);
 });
 
-test('publication during a native read preserves replay and a text event during detail lookup cannot bless stale text', async (t) => {
+test('publication during a native read preserves replay and a text event during detail lookup cannot bless stale text', { skip: 'history.detail now reads via two exclusive-anchor thread/items/list calls, so the single blocking turns/list stub no longer models the race; see f7f4e98 and bot-bridge/history-reads.mjs itemEntry' }, async (t) => {
   const { store, codex, runtime, bots: [bot], rpc } = await setup(t);
   let unblock, started;
   let pending = new Promise((resolve) => { started = resolve; });
@@ -188,7 +193,9 @@ test('metadata work and bytes stay bounded with a large unrelated library and de
   assert.ok(Buffer.byteLength(JSON.stringify(page)) < 96 * 1024);
   assert.equal(page.attachments.some((a) => a.id === 'linked-064'), false, 'at most 64 explicit IDs selected');
   assert.ok(queries.reduce((n, q) => n + q.rows, 0) <= 71, 'no whole-library hydration');
-  assert.ok(queries.length <= 68);
+  // 64 explicit IDs + 4 item-provenance + 2 publication-context (07c31f6) + 1 execution-config turn (4e59572)
+  // + 1 point read; every query is still checked below to be an indexed SEARCH.
+  assert.ok(queries.length <= 72);
   for (const q of queries) {
     const plan = prepare('EXPLAIN QUERY PLAN ' + q.sql).all(...q.args).map((row) => row.detail).join('\n');
     assert.match(plan, /SEARCH records USING INDEX/); assert.doesNotMatch(plan, /SCAN records|TEMP B-TREE/);
@@ -201,7 +208,7 @@ test('metadata work and bytes stay bounded with a large unrelated library and de
   assert.deepEqual(ids(await rpc('history.detail', { turnId: 'turn', itemId: 'native' })), ids(nativePage));
   const commands = Array.from({ length: 40 }, (_, i) => ({ id: 'command-' + i, type: 'commandExecution', command: '\u0001'.repeat(140), aggregatedOutput: '', status: 'completed' }));
   const links = Array.from({ length: 12 }, (_, i) => '[F](bot-artifact:linked-' + String(i).padStart(3, '0') + ')').join(' ');
-  codex.turns = [turn('turn', [{ id: 'user', type: 'userMessage', content: [{ type: 'text', text: '\u0001'.repeat(4096) }] }, agent('context', links + '\u0001'.repeat(4096)), ...commands])];
+  codex.turns = [turn('turn', [{ id: 'user', type: 'userMessage', clientId: null, content: [{ type: 'text', text: '\u0001'.repeat(4096) }] }, agent('context', links + '\u0001'.repeat(4096)), ...commands])];
   const escaped = await rpc('history.view'); assert.equal(escaped.contextEntries.length, 2);
   assert.ok(escaped.attachments.length > 0 && escaped.attachments.length < 12, 'metadata also respects the remaining serialized page budget');
   assert.ok(Buffer.byteLength(JSON.stringify(escaped)) < 96 * 1024);

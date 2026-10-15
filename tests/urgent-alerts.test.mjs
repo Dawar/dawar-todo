@@ -107,7 +107,6 @@ test("ships durable agent-origin escalation, profile phone, callbacks, and owner
   assert.match(twilio, /StatusCallbackEvent/);
   assert.match(settings, /Profile phone/);
   assert.match(settings, /Send test call \+ text/);
-  assert.match(settings, /Copy alert diagnostics/);
   assert.match(environment, /TODO_PROFILE_PHONE_KEY/);
   assert.match(environment, /TODO_PUBLIC_URL/);
 
@@ -125,4 +124,9 @@ test("ships durable agent-origin escalation, profile phone, callbacks, and owner
     const source = await readFile(new URL(path, root), "utf8");
     assert.match(source, /validateTwilioRequest/);
   }
+});
+
+test("settings offers copyable urgent alert diagnostics", { skip: "alert diagnostics copy control deliberately removed from Settings; see 8609a85" }, async () => {
+  const settings = await readFile(new URL("app/settings/page.tsx", root), "utf8");
+  assert.match(settings, /Copy alert diagnostics/);
 });

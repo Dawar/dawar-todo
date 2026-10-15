@@ -42,9 +42,12 @@ test("ships the simplified todo and project surface", async () => {
   assert.doesNotMatch(page, /Swipe left:|Swipe right:/);
   assert.match(page, /leftSecondaryAction.*snoozed/s);
   assert.match(page, /\? \{ action: "unsnooze", label: "Wake", icon: "wake" \}/);
-  assert.match(page, /view === "snoozed".*bulkAction\("unsnooze"\)/s);
+  // cd7a088 moved bulk buttons into TaskBulkActions; the snoozed view still offers bulk Wake via onAction={bulkAction}.
+  assert.match(page, /snoozedView=\{view === "snoozed"\}[^\n]*onAction=\{bulkAction\}/);
+  assert.match(page, /snoozedView && hasOpen\s*\? \[\{ action: "unsnooze" as const, label: "Wake", icon: "wake" as const \}\]/);
   assert.match(page, /wokeSnoozed/);
-  assert.match(page, />Filters</);
+  // 95a2393 moved the mobile filters sheet into TaskFiltersDialog (shared ControlledDialog).
+  assert.match(page, /<ControlledDialog title="Filters"/);
   assert.match(page, /"Undoing…" : "Undo"/);
   assert.match(page, /\/api\/todos\/undo/);
   assert.match(page, /Task details/);
@@ -62,18 +65,23 @@ test("ships the simplified todo and project surface", async () => {
   assert.match(page, /updateEditDraftField\("dueDate", ""\)/);
   assert.match(page, /disabled:invisible/);
   assert.match(page, /\/api\/todos\/\$\{editingTodo\.id\}/);
-  assert.match(page, /const pinnedOpenTodos = view === "open" && pinListEnabled \? filtered\.filter\(\(todo\) => todo\.pinned\) : \[\]/);
-  assert.match(page, /const regularOpenTodos = view === "open" && pinListEnabled \? filtered\.filter\(\(todo\) => !todo\.pinned\) : filtered/);
-  assert.match(page, /aria-pressed=\{pinListEnabled\}/);
+  // 70498b6 keeps bot-queued (queueDelegation) tasks out of the pinned list; 95a2393 moved the pin toggle into TaskListControls.
+  assert.match(page, /const pinnedOpenTodos = view === "open" && pinListEnabled \? filtered\.filter\(\(todo\) => todo\.pinned && !todo\.queueDelegation\) : \[\]/);
+  assert.match(page, /const regularOpenTodos = view === "open" && pinListEnabled \? filtered\.filter\(\(todo\) => !todo\.pinned \|\| todo\.queueDelegation\) : filtered/);
+  assert.match(page, /pins=\{pinListEnabled\}/);
+  assert.match(page, /onClick=\{onPins\} aria-pressed=\{pins\}/);
   assert.match(page, />Pinned</);
   assert.match(page, /showPin=\{view === "open"\}/);
-  assert.match(page, /view === "open" && <button/);
+  // 701563f migrated the details Pin control to the shared Button.
+  assert.match(page, /view === "open" && <Button variant="ghost" type="button" onClick=\{\(\) => void togglePin\(editingTodo\)\}/);
   assert.match(page, /onClick=\{\(\) => void togglePin\(editingTodo\)\}/);
-  assert.match(page, /gap-1\.5 text-\[11px\] font-medium leading-4/);
+  // 57fcade raised row metadata to the 13px design-system size.
+  assert.match(page, /gap-1\.5 text-\[13px\] font-medium leading-4/);
   assert.match(page, /todo\.project && <span className="inline-flex min-h-\[22px\].*name="folder"/);
-  assert.match(page, /todo\.context && <span className="inline-flex min-h-\[22px\].*bg-sky-50/);
+  // 0f3f812 replaced per-chip palette colors (sky/violet) with semantic secondary tokens.
+  assert.match(page, /todo\.context && <span className="inline-flex min-h-\[22px\][^"]*bg-secondary[^"]*text-secondary-foreground/);
   assert.match(page, /todo\.dueDate && <span className=\{classNames\("inline-flex min-h-\[22px\]/);
-  assert.match(page, /todo\.recurrenceCron && <span className="inline-flex min-h-\[22px\].*bg-violet-50/);
+  assert.match(page, /todo\.recurrenceCron && <span className="inline-flex min-h-\[22px\][^"]*bg-secondary[^"]*text-secondary-foreground/);
   assert.match(page, /body: \{ pinned \}/);
   assert.match(page, /optimisticPatches: \{ \[String\(todo\.id\)\]: \{ pinned \} \}/);
   assert.match(page, /Task pinned\./);
@@ -106,10 +114,9 @@ test("ships the simplified todo and project surface", async () => {
   assert.match(page, /Delete the tasks too/);
   assert.match(page, /openProjectTasks/);
   assert.match(page, /setProject\(name\);\s+setView\(destinationView\)/);
-  assert.match(page, /View open tasks in \$\{name\}/);
-  assert.match(page, /View snoozed tasks in \$\{name\}/);
-  assert.match(page, /View done tasks in \$\{name\}/);
-  assert.match(page, /View all tasks in \$\{name\}/);
+  // cc39f10 generates the per-view project buttons from one tuple list.
+  assert.match(page, /\[\['open','view-open','Open'\],\['snoozed','snooze','Snoozed'\],\['done','done','Done'\],\['all','view-all','All'\]\]/);
+  assert.match(page, /aria-label=\{`View \$\{label\.toLowerCase\(\)\} tasks in \$\{name\}`\}/);
   assert.match(page, /grid grid-cols-5 border-t/);
   assert.doesNotMatch(page, /archiveProject|archiveNoteState|restore_archive/);
   assert.match(page, /reproject/);
@@ -146,7 +153,9 @@ test("ships the simplified todo and project surface", async () => {
   assert.match(snoozePresets, /1 week/);
   assert.match(snoozePresets, /6 months/);
   assert.match(snoozePresets, /parseQuickSnoozePresets/);
-  assert.match(page, /quickSnoozePresets\.map/);
+  // e4e4ed2 moved the snooze buttons into TaskNotice, fed presets={quickSnoozePresets}.
+  assert.match(page, /presets=\{quickSnoozePresets\}/);
+  assert.match(page, /presets\.map\(preset => <Button/);
   assert.match(page, /quickSnoozeLabel\(preset\)/);
   assert.match(settingsPage, /Quick Snooze buttons/);
   assert.match(settingsPage, /QUICK_SNOOZE_OPTIONS\.map/);
@@ -182,7 +191,7 @@ test("ships the simplified todo and project surface", async () => {
   assert.match(siteHeader, /<ActionIcon name=\{item\.icon\}/);
   assert.match(siteHeader, /aria-label="Primary"/);
   assert.match(siteHeader, /label: "Tasks"/);
-  assert.match(siteHeader, /label: "Chat"/);
+  assert.match(siteHeader, /label: "Bots"/);
   assert.match(siteHeader, /label: "Settings"/);
   assert.match(siteHeader, /Choose project\. Current selection:/);
   assert.match(siteHeader, /projectLabel/);
@@ -195,6 +204,11 @@ test("ships the simplified todo and project surface", async () => {
   assert.match(pinMigration, /ALTER TABLE `todos` ADD `pinned` integer DEFAULT false NOT NULL/);
   assert.match(pinMigration, /CREATE INDEX `todos_pinned_idx`/);
   await access(new URL("public/og.png", root));
+});
+
+test("primary navigation links Chat", { skip: "legacy Chat nav item deliberately retired (Bots replaced it); see c05843f" }, async () => {
+  const siteHeader = await readFile(new URL("app/site-header.tsx", root), "utf8");
+  assert.match(siteHeader, /label: "Chat"/);
 });
 
 test("removes starter preview dependencies", async () => {
@@ -270,7 +284,8 @@ test("shows fully optimistic Undo and snooze controls while preserving concurren
   assert.doesNotMatch(page, /invisible inline-flex items-center/);
   assert.match(page, /const dismissAt = Date\.now\(\) \+ 1_500/);
   assert.match(page, /Math\.max\(0, notice\.dismissAt - Date\.now\(\)\)/);
-  assert.match(page, /notice\.taskPreview && <p className="mt-1 truncate text-\[13px\] text-muted-foreground"/);
+  // 5c76006 moved notice text onto the contrasting toast surface tokens.
+  assert.match(page, /notice\.taskPreview && <p className="mt-1 truncate text-\[13px\] text-\[var\(--toast-muted\)\]"/);
   assert.ok(page.indexOf("notice.taskPreview &&") < page.indexOf("notice.snoozeIds &&"));
 });
 

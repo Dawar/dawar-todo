@@ -7,7 +7,8 @@ function fixture() {
   const server = attachmentRouteRuntime();
   const png = new Uint8Array(68); png.set([137,80,78,71,13,10,26,10]); png[19] = png[23] = 1;
   const webp = new Uint8Array(30); webp.set(new TextEncoder().encode('RIFFxxxxWEBPVP8X'));
-  const env = runtime({ fetch: server.fetch, createImageBitmap: async () => ({ width: 1, height: 1, close() {} }) }, {
+  // process.env stands in for Next's build-time NEXT_PUBLIC_* inlining (sync-request -> lib/portable-session since cae0b59).
+  const env = runtime({ fetch: server.fetch, createImageBitmap: async () => ({ width: 1, height: 1, close() {} }), process: { env: {} } }, {
     './sync-diagnostics': { recordSyncDiagnostic() {} },
   });
   env.document.createElement = () => ({ getContext: () => ({ drawImage() {} }), toBlob: done => done(new Blob([webp], { type: 'image/webp' })) });

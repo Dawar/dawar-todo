@@ -45,12 +45,17 @@ const entries = () => {
 };
 class Native extends EventEmitter {
   calls = []; threads = []; queue = []; commits = 0; fault = '';
+  pending = new Map(); // CodexClient's in-flight call map, read by primary-work-view.mjs since f7f4e98.
   async start() {}
   async call(method, params) {
     this.calls.push({ method, params });
     if (method === 'model/list') return { data: [{ model: 'gpt-6-luna', isDefault: true, supportedReasoningEfforts: [{reasoningEffort: 'high'}], serviceTiers: [{id: 'priority', name: 'Fast'}] }], nextCursor: null };
     if (method === 'thread/start') { const thread = { id: `thread-${this.threads.length}`, cwd: params.cwd, turns: [] }; this.threads.push(thread); return { thread }; }
-    if (method === 'thread/read') return { thread: this.threads.find((t) => t.id === params.threadId) };
+    if (method === 'thread/read') {
+      // current-activity.mjs reconciles from the native thread status (idle/active) before admitting another Send.
+      const thread = this.threads.find((t) => t.id === params.threadId);
+      return { thread: thread && { ...thread, status: { type: thread.turns.some((turn) => turn.status === 'inProgress') ? 'active' : 'idle' } } };
+    }
     if (method === 'thread/turns/list') return { data: [...this.threads.find((t) => t.id === params.threadId).turns].reverse(), nextCursor: null };
     if (method === 'thread/queue/list') return { data: this.queue, nextCursor: null };
     if (method === 'thread/queue/add') {
@@ -79,8 +84,9 @@ class Native extends EventEmitter {
 async function setup(t, { relay = OldRelay, transform = (r) => r } = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'bots-envelope-'));
   const journal = new Store(join(dir, 'state.sqlite')), native = new Native();
-  t.after(async () => { journal.close(); await rm(dir, { recursive: true, force: true }); });
   const runtime = new BotRuntime({ store: journal, codex: native, root: join(dir, 'bots') });
+  // Stop the usage collector's debounced change timer before closing its store, as service.mjs shutdown does.
+  t.after(async () => { runtime.usage.stop(); journal.close(); await rm(dir, { recursive: true, force: true }); });
   await runtime.start();
   runtime.newBotDefaults = { model: 'gpt-6-luna', effort: 'high' }; // Match this synthetic catalog, not production defaults.
   t.after(() => runtime.secure?.close());
@@ -214,7 +220,7 @@ test('success payload remains unchanged through chunking and cannot be interpret
 });
 
 
-test('queue add/update retain native certainty and same-ID behavior through old relay', async (t) => {
+test('queue add/update retain native certainty and same-ID behavior through old relay', { skip: 'queue.add/update are now atomic local staged-queue mutations (local-queue-operation.mjs) that never call native thread/queue/add|update; see 27e4611' }, async (t) => {
   const h = await setup(t); const { composer, native } = h;
   native.fault = 'queue-add-EPIPE'; composer.setText('queue once'); await composer.flush(); await composer.send(true);
   const addId = composer.operation.id; native.fault = ''; await composer.reconcile();

@@ -55,7 +55,7 @@ test("AI preferences persist centrally and apply to browser and phone Talk", asy
   ]);
   const openApi = JSON.parse(openApiText);
 
-  assert.match(settingsPage, />Preferences</);
+  assert.match(settingsPage, /<h1[^>]*>Settings<\/h1>/);
   assert.match(settingsPage, />AI preferences</);
   assert.match(settingsPage, />Realtime voice</);
   assert.match(settingsPage, /REALTIME_VOICE_OPTIONS/);

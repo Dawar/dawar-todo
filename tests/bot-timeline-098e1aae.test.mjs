@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { Store } from '../bot-bridge/store.mjs';
+import { BotRuntime } from '../bot-bridge/runtime.mjs';
 import { IDBKeyRange } from 'fake-indexeddb';
 import { runtime } from './helpers/load-ts.mjs';
 import { historyViewPage, readHistoryView, readHistoryDetail } from '../bot-bridge/history-view.mjs';
@@ -15,7 +16,10 @@ const bot = { id: 'bot-a', threadId: 'native-thread', updatedAt: 'stable' };
 // Real empty metadata indexes support the adapter's bounded attachment queries.
 const metadataRoot = mkdtempSync(join(tmpdir(), 'bot-timeline-metadata-')), metadataStore = new Store(join(metadataRoot, 'state.sqlite'));
 after(() => { metadataStore.close(); rmSync(metadataRoot, { recursive: true, force: true }); });
-const fakeRuntime = (turns) => ({ epoch: 'epoch', store: { db: metadataStore.db, cursor: () => 1, replay: () => [], list: () => [] },
+// Record reads (message times, bots) and the main-lane target resolver come from the real Store/BotRuntime.
+const fakeRuntime = (turns) => ({ epoch: 'epoch', store: { db: metadataStore.db, cursor: () => 1, replay: () => [], list: () => [],
+    get: (kind, id) => metadataStore.get(kind, id), bot: (id) => metadataStore.bot(id) },
+  resolveHistoryTarget: BotRuntime.prototype.resolveHistoryTarget,
   historyPage: async () => ({ data: turns, nextCursor: null }) });
 const entry = (id, text) => projectHistoryItem(turn('turn-a', []), message(id, text));
 const page = (entries, extra = {}) => ({ kind: 'page', entries, olderCursor: null, revision: 'v1', eventCursor: 0, attachments: [], complete: true, ...extra });
@@ -114,14 +118,15 @@ test('same-thread requests deduplicate and a delayed page cannot erase newer liv
 test('100 ordered deltas coalesce into one dirty-item write and keep other item identity', async () => {
   const env = runtime({ IDBKeyRange }); const { BotTimeline } = env.load('app/bots/timeline-controller.ts');
   const writes = []; const cache = { read: async () => null, write: async (meta, dirty) => writes.push({ meta, dirty }) };
-  const controller = new BotTimeline('owner', 'bot-a', { owner: 'owner', online: true, rpc: async () => page([entry('unchanged'), entry('live', '')]) }, cache);
+  // Empty agent messages are hidden from the timeline (history-reconcile.ts), so the live item starts non-empty.
+  const controller = new BotTimeline('owner', 'bot-a', { owner: 'owner', online: true, rpc: async () => page([entry('unchanged'), entry('live', '0,')]) }, cache);
   await controller.refresh(); await controller.flush(); writes.length = 0;
   const unchanged = controller.getSnapshot().entries[0]; let publishes = 0; controller.subscribe(() => publishes++);
   for (let i = 1; i <= 100; i++) controller.receive({ type: 'codex', botId: 'bot-a', seq: i, data: { method: 'item/agentMessage/delta', params: { turnId: 'turn-a', itemId: 'live', delta: `${i},` } } });
   await pause(25); assert.equal(publishes, 1); await controller.flush();
   assert.equal(writes.length, 1); assert.equal(writes[0].dirty.length, 1);
   assert.equal(controller.getSnapshot().entries[0], unchanged);
-  assert.equal(controller.getSnapshot().entries[1].item.text, Array.from({ length: 100 }, (_, i) => `${i + 1},`).join(''));
+  assert.equal(controller.getSnapshot().entries[1].item.text, Array.from({ length: 101 }, (_, i) => `${i},`).join(''));
   await controller.dispose();
 });
 
@@ -133,7 +138,8 @@ test('disjoint cached/new tails retain a durable gap until every intervening ite
   await cache.write({ owner: 'owner', botId: bot.id, order: old.map((e) => historyKey(e.turnId, e.id)), revision: 'old', eventCursor: 0, olderCursor: null, complete: true, attachments: [], touched: 1 }, old);
   const transport = { owner: 'owner', online: true, rpc: async (_, id, params) => ({ kind: 'page', ...await historyViewPage(native, bot, params.cursor), revision: 'v2', eventCursor: 0 }) };
   let controller = new BotTimeline('owner', bot.id, transport, cache);
-  await controller.refresh(); assert.equal(controller.getSnapshot().gaps.length, 1); await controller.dispose(); await cache.close();
+  // refresh() no longer awaits the IndexedDB read (cache and live tail race); hydrate the cached tail first.
+  await controller.hydrate(); await controller.refresh(); assert.equal(controller.getSnapshot().gaps.length, 1); await controller.dispose(); await cache.close();
   controller = new BotTimeline('owner', bot.id, transport, createTimelineCache(env.indexedDB));
   await controller.hydrate(); assert.equal(controller.getSnapshot().gaps.length, 1);
   let count = 0;
@@ -167,7 +173,7 @@ test('long streaming flushes periodically, and owner revocation masks a late rep
 });
 
 test('a tools-only newest window keeps useful readable context without losing native access', async () => {
-  const user = { id: 'user', type: 'userMessage', content: [{ type: 'text', text: 'Useful user request', text_elements: [] }] };
+  const user = { id: 'user', type: 'userMessage', clientId: null, content: [{ type: 'text', text: 'Useful user request', text_elements: [] }] };
   const items = [user, message('answer', 'Useful earlier explanation'), ...Array.from({ length: 90 }, (_, i) => ({ type: 'commandExecution', id: `tool-${i}`, command: 'synthetic', status: 'inProgress', aggregatedOutput: 'tool output '.repeat(100000) }))];
   const page = await historyViewPage(fakeRuntime([turn('turn-a', items)]), bot);
   assert.equal(page.entries.length, 40); assert.equal(page.contextEntries.length, 2);
@@ -175,7 +181,7 @@ test('a tools-only newest window keeps useful readable context without losing na
   assert.ok(Buffer.byteLength(JSON.stringify(page)) < 96 * 1024); assert.ok(page.olderCursor);
 });
 
-test('opened tool detail applies ordered deltas, persists completed detail, and validates unchanged versions cheaply', async () => {
+test('opened tool detail applies ordered deltas, persists completed detail, and validates unchanged versions cheaply', { skip: 'opened details are now persisted/revalidated (knownVersion) only for conversation item types, never tool items; see conversationItem() guard in app/bots/timeline-controller.ts, f9850af' }, async () => {
   const env = runtime({ IDBKeyRange }), { BotTimeline } = env.load('app/bots/timeline-controller.ts');
   const tool = { type: 'commandExecution', id: 'tool', command: 'synthetic', status: 'completed', aggregatedOutput: 'initial' };
   const projected = projectHistoryItem(turn('turn-a', []), tool), native = fakeRuntime([turn('turn-a', [tool])]);
@@ -194,25 +200,30 @@ test('opened tool detail applies ordered deltas, persists completed detail, and 
 
 test('live work plans and turn diffs remain explicitly available without putting large diffs into the timeline cache', async () => {
   const env = runtime({ IDBKeyRange }), { BotTimeline } = env.load('app/bots/timeline-controller.ts');
-  const controller = new BotTimeline('owner', bot.id, { owner: 'owner', online: true, rpc: async () => page([]) }, { read: async () => null, write: async () => {} });
+  // Native plan/diff notifications carry threadId; since 4a0c1d1 plans are accepted only for the bot's current thread.
+  const controller = new BotTimeline('owner', bot.id, { owner: 'owner', online: true, snapshot: { bots: [{ id: bot.id, threadId: bot.threadId }] }, rpc: async () => page([]) }, { read: async () => null, write: async () => {} });
   const diff = 'large complete diff\n'.repeat(10000);
-  controller.receive({ seq: 1, botId: bot.id, type: 'codex', data: { method: 'turn/diff/updated', params: { turnId: 'turn-a', diff } } });
+  controller.receive({ seq: 1, botId: bot.id, type: 'codex', data: { method: 'turn/diff/updated', params: { threadId: bot.threadId, turnId: 'turn-a', diff } } });
   const entry = controller.getSnapshot().entries[0]; assert.equal(entry.item, null);
   assert.equal((await controller.detail(entry)).text, '```diff\n' + diff + '\n```');
-  controller.receive({ seq: 2, botId: bot.id, type: 'codex', data: { method: 'turn/plan/updated', params: { turnId: 'turn-a', plan: [{ step: 'Preserved work step', status: 'inProgress' }] } } });
+  controller.receive({ seq: 2, botId: bot.id, type: 'codex', data: { method: 'turn/plan/updated', params: { threadId: bot.threadId, turnId: 'turn-a', explanation: null, plan: [{ step: 'Preserved work step', status: 'inProgress' }] } } });
   assert.match((await controller.detail(controller.getSnapshot().entries[1])).text, /Preserved work step/); await controller.dispose();
 });
 
 test('cache keeps a distant reading anchor plus latest messages and an explicit eviction gap', async () => {
   const env = runtime({ IDBKeyRange }), { BotTimeline } = env.load('app/bots/timeline-controller.ts');
   const { createTimelineCache } = env.load('app/bots/timeline-cache.ts'), cache = createTimelineCache(env.indexedDB);
-  const entries = Array.from({ length: 500 }, (_, i) => entry(`item-${i}`));
+  // f9850af raised the retained window from 240 to CACHE_ENTRIES (2000); exceed it so eviction still occurs, and
+  // anchor far enough from item-0 that the anchor's reading window does not reach the start of history.
+  const { CACHE_ENTRIES } = env.load('app/bots/history-window.ts'), total = CACHE_ENTRIES + 1000;
+  const entries = Array.from({ length: total }, (_, i) => entry(`item-${i}`));
   const controller = new BotTimeline('owner', bot.id, { owner: 'owner', online: true, rpc: async () => page(entries) }, cache);
-  await controller.refresh(); await controller.flush();
-  controller.position({ anchor: historyKey('turn-a', 'item-50'), offset: 15, following: false }); await controller.flush(); await controller.dispose();
+  // Since f9850af flush() also prunes the in-memory window, so the reader anchors before the first flush.
+  await controller.refresh();
+  controller.position({ anchor: historyKey('turn-a', 'item-500'), offset: 15, following: false }); await controller.flush(); await controller.dispose();
   const stored = await cache.read('owner', bot.id);
-  assert.ok(stored.entries.some((e) => e.id === 'item-50')); assert.equal(stored.entries.at(-1).id, 'item-499');
-  assert.ok(stored.entries.length <= 240); assert.equal(stored.metadata.gaps.length, 1); assert.ok(stored.metadata.olderCursor);
+  assert.ok(stored.entries.some((e) => e.id === 'item-500')); assert.equal(stored.entries.at(-1).id, `item-${total - 1}`);
+  assert.ok(stored.entries.length <= CACHE_ENTRIES); assert.equal(stored.metadata.gaps.length, 1); assert.ok(stored.metadata.olderCursor);
   await cache.close();
 });
 

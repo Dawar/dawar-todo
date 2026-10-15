@@ -209,7 +209,9 @@ test('received files gain known provenance without letting metadata failures aff
   assert.equal(rememberInputProvenance(runtime, bot, 'received-turn', item), true);
   const result = (await rpc('artifacts.list', bot)).items[0];
   assert.equal(result.direction, 'input'); assert.equal(result.source, 'upload'); assert.equal(result.provenance.turnId, 'received-turn');
-  const put = store.put.bind(store); store.put = () => { throw new Error('Synthetic metadata failure'); };
+  // Fail only attachment metadata writes: message arrival times (977a604) are
+  // also stored through store.put and are not the metadata under test.
+  const put = store.put.bind(store); store.put = (kind, ...rest) => { if (kind === 'attachment') throw new Error('Synthetic metadata failure'); return put(kind, ...rest); };
   assert.doesNotThrow(() => runtime.emitUserMessage(bot, 'received-turn', 'client-id', []));
   store.put = put; assert.equal(store.get('attachment', a.id).id, a.id);
 });

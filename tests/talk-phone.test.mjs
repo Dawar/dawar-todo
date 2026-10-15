@@ -185,9 +185,10 @@ test("ships a PIN-gated Twilio bridge into the shared Talk runtime", async () =>
   assert.match(relayConfig, /new_sqlite_classes/);
   assert.doesNotMatch(relayConfig, /OPENAI_API_KEY|TWILIO_AUTH_TOKEN|DB/);
   assert.match(relayConfig, /SITE_BASE_URL/);
-  assert.match(settings, /Call Talk/);
+  // c05843f renamed the browser Talk surface to Operator when legacy Chat was retired.
+  assert.match(settings, />Call Operator</);
   assert.match(settings, /6 to 8 digit PIN/);
-  assert.match(settings, /Starting a phone call takes over any active browser Talk session/);
+  assert.match(settings, /Starting a phone call takes over any active browser Operator call/);
   assert.doesNotMatch(settings, /TWILIO_AUTH_TOKEN|OPENAI_API_KEY/);
   assert.match(environment, /OPENAI_PROJECT_ID=/);
   assert.match(environment, /TWILIO_ACCOUNT_SID=/);

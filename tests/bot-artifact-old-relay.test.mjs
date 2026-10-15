@@ -21,7 +21,11 @@ test('gallery metadata, previews and original multi-chunk download traverse actu
   const runtime = new BotRuntime({ store, codex: new EventEmitter(), root: dir });
   const bytes = Buffer.alloc(600_000, 73); await writeFile(join(bot.cwd, 'original.bin'), bytes);
   const { attachmentId } = await runtime.publishArtifact(bot, { path: 'original.bin' });
-  const env = browserRuntime({ Blob, Error, btoa, atob, WebSocket: { OPEN: 1 }, setTimeout, clearTimeout });
+  // Since f87c792 client.download tries cloud storage first and falls back to the relay on 404; this
+  // test covers the relay path, so the browser's /api/bots/storage reports no cloud copy.
+  const cloudCalls = [];
+  const fetch = async (url, init) => { cloudCalls.push([String(url), JSON.parse(init.body).action]); return Response.json({ error: 'Not found', code: 'not_found' }, { status: 404 }); };
+  const env = browserRuntime({ Blob, Error, btoa, atob, WebSocket: { OPEN: 1 }, setTimeout, clearTimeout, fetch });
   const client = new (env.load('app/bots/client.ts').BotsClient)(); client.owner = 'synthetic-owner'; client.online = true;
   const oldSource = execFileSync('git', ['show', '80a3826e3617a2fa39ba6a7a051d82d95d0e304d:bots-relay/src/index.ts'], { encoding: 'utf8' });
   const exports = {};
@@ -62,4 +66,5 @@ test('gallery metadata, previews and original multi-chunk download traverse actu
   assert.equal(originalPdf.blob.type, 'application/pdf'); assert.deepEqual(Buffer.from(await originalPdf.blob.arrayBuffer()), pdf);
   await assert.rejects(client.download(bot.id, attachmentId, 'different-owner'), /owner|account|identity|changed/i);
   assert.deepEqual(failures, []);
+  assert.deepEqual(cloudCalls, [['/api/bots/storage', 'download'], ['/api/bots/storage', 'download']]);
 });

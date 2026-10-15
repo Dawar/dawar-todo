@@ -147,7 +147,7 @@ test('real browser client uses only volatile secure pending state and rejects it
  const {BotsClient}=env.load('app/bots/client.ts'),client=new BotsClient();client.owner=owner;client.online=true;client.socket={readyState:1,send:v=>sent.push(JSON.parse(v)),close:()=>{}};
  const promise=client.secure({action:'chunk',botId:'A',ciphertext:'opaque-encrypted-bytes'});assert.equal(client.pending.size,0);assert.equal(writes.length,0);assert.equal(sent[0].type,'secure');
  client.receive({type:'secure.response',id:sent[0].id,result:{received:true}});assert.equal((await promise).received,true);assert.equal(client.securePending.size,0);
- const revoked=client.secure({action:'key',botId:'A'});client.clearOwnerCache();await assert.rejects(revoked,/owner changed/);assert.equal(client.securePending.size,0);assert.equal(writes.length,0);await assert.rejects(client.secure({action:'key'}),/offline/);
+ const revoked=client.secure({action:'key',botId:'A'});client.clearOwnerCache();await assert.rejects(revoked,/owner changed/);assert.equal(client.securePending.size,0);assert.equal(writes.length,0);await assert.rejects(client.secure({action:'key'}),/^Error: Connection unavailable\. Keep this form open/);
 });
 test('lost metadata writes recover the original receipt; deletion still wipes RAM during catalog failure',async t=>{
  const s=await setup(t),r=await s.request(),e=await s.seal(r.request),put=s.store.put.bind(s.store);let failWrite=true;

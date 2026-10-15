@@ -78,7 +78,8 @@ test("persists Quick Snooze settings, emits live-sync revisions, and documents t
   assert.equal(database.prepare("SELECT value FROM app_settings WHERE key = 'schema_version'").get().value, "16");
 
   assert.match(databaseSource, /snoozeQuickPresets/);
-  assert.match(databaseSource, /JSON\.stringify\(settings\.snoozeQuickPresets\)/);
+  // 618f59f writes settings per changed field; Quick Snooze presets are still JSON-encoded.
+  assert.match(databaseSource, /field === "snoozeQuickPresets" \? JSON\.stringify\(settings\[field\]\)/);
   assert.match(settingsRoute, /Choose four different Quick Snooze times/);
   assert.match(settingsPage, /Quick Snooze slot/);
   assert.equal(openApi.components.schemas.Settings.properties.snoozeQuickPresets.minItems, 4);
