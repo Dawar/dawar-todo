@@ -63,6 +63,8 @@ try {
   // An incomplete dependency tree must fail packaging, not live startup.
   execFileSync(process.execPath,['--input-type=module','-e',
     'await import("./dist/portable/gateway.mjs"); await import("./bot-bridge/portable-agent.mjs");'+
+    // The separate hub and runner entrypoints (SPLIT_HUB_RUNNER.md).
+    'await import("./portable/run-hub.mjs"); await import("./portable/run-runner.mjs");'+
     // The Claude backend loads these lazily; prove they resolve and work here.
     'const sdk=await import("@anthropic-ai/claude-agent-sdk"),{fromJSONSchema}=await import("zod");'+
     'sdk.createSdkMcpServer({name:"bots",version:"1.0.0",tools:[sdk.tool("t","",fromJSONSchema({type:"object",properties:{}}).shape,async()=>({content:[]}))]});'],{cwd:directory,stdio:'inherit'});

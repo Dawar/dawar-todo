@@ -1,8 +1,10 @@
 # Separate the hub from the bot runner: design and staged plan
 
-Status: design only, plus the start-race guards in the deploy controller (see
-"Done now"). Nothing here is activated. Source: inventory section 2, "Keep the
-website and execution independently available".
+Status: stages 1–4 are implemented and tested behind the existing combined
+mode; nothing is activated. Production still runs `run both`, and `--role both`
+(the default) is the unchanged transaction. The cutover (stage 4) runs only
+with Dawar's go, following `CUTOVER_RUNBOOK.md`. Source: inventory section 2,
+"Keep the website and execution independently available".
 
 ## Today
 
@@ -105,12 +107,80 @@ launch) and can be rolled back on its own.
    Runner changes use `--role runner`. Codex upgrades stay runner releases with
    a full drain, and no turn is moved between processes.
 
-## Done now (this branch)
+## Implemented
+
+| Stage | Code | Tests |
+| --- | --- | --- |
+| 1. Hub runner parity | `run-hub.mjs` (`cli.mjs run hub`): mode `hub` only, honours `externalSite`, no `legacyTeamSource`, hub `/healthz` (writer, voice, site, connected nodes), voice drain then `close-http` shutdown with a bounded backstop. `run-runner.mjs` (`cli.mjs run agent`): the same `runAgent`, runner `/healthz` on `agent.healthPort` (`ready` is the runner's own; `relayConnected` is reported separately, so a hub restart does not make the runner look broken), and the combined claimed-drain shutdown (`combined-shutdown.mjs`, now gateway-optional). `agent-cli.mjs` (remote agents) is unchanged. | `portable-split-entrypoints.test.mjs` |
+| 2. Acceptance off production | The hub is replaced (closed and reopened over the same `control.sqlite`) while a native turn runs and its hub tool call is in flight. | `portable-hub-replacement.test.mjs` |
+| 3. Role-aware deploy plans | `prepare --role hub\|runner\|both\|cutover`. Per-role discovery, drain, health, rollback and rehearsal (`deploy-plan.mjs`, `deployment-linux.mjs`, `deploy-rehearsal.mjs`, stand-in `run hub\|agent`). | `portable-deploy-roles.test.mjs` (fake systemd, real processes) |
+| 4. Cutover | `--role cutover`: one drained transaction from the combined unit to the split topology, with automatic rollback. | same file; procedure in `CUTOVER_RUNBOOK.md` |
+
+### Stage 2 result: in-flight hub requests stay `uncertain`
+
+The test shows, with the shipped `AgentTransport`, journal and native store:
+
+- the native turn keeps running while no hub exists (no interrupt, the runner
+  keeps its turn), and it finishes during the outage;
+- its completion is journaled on the runner and reaches the new hub from the
+  journal cursor (the hub asks for original receipts on reconnect,
+  `durableReceiptRecovery`), so the original Send settles `terminal`;
+- a hub tool call the old hub committed but never answered ends `uncertain`
+  on the runner and is **not** re-sent; a native retry with the same call ID
+  (`tool:<callId>`) returns the one committed schedule, and no second one
+  exists;
+- a dispatch whose native-acceptance receipt died with the old hub reconciles
+  by its original operation ID; Codex sees exactly one `turn/start`;
+- new input is durably accepted by the new hub and delivered once.
+
+Decision: failing in-flight hub requests as `uncertain` (reads as `not-sent`)
+is acceptable; request re-attachment by original ID is not needed. Writes that
+carry an operation ID are idempotent at the hub. Residual risk: a hub write
+tool called **without** an `operationId` (some `bots_queue`/`bots_message`
+operations accept one optionally) that the hub committed just before it was
+replaced is reported `uncertain`, and a model that retries it may repeat it.
+That is the same behaviour as a network drop today.
+
+The test's node link is in-memory (`tests/helpers/portable-harness.mjs`,
+which now mirrors the gateway's receipt-recovery sync); it is protocol-level
+proof, not a live restart. The first live proof is the first `--role hub`
+release after cutover (see the runbook's verification).
+
+### Roles in the deploy controller
+
+| | `both` (today) | `hub` | `runner` | `cutover` |
+| --- | --- | --- | --- | --- |
+| Unit | `dawar-todo-bots` | `dawar-portable-hub` | `dawar-todo-bots` | `dawar-todo-bots`, installs `dawar-portable-hub` |
+| Live config | hub.json (`both`) | hub.json (`hub`) | agent.json (from `--config`) | hub.json (`both`) |
+| Drain | native, then hub writer | hub writer and voice only | native only | native, then hub writer |
+| Writer freeze/flip | yes | yes | **no** | yes |
+| Site restart | yes | yes | **no** | yes |
+| Files | hub, agent, release drop-in | hub, hub release drop-in | agent, release drop-in | hub → `mode:hub`, agent (+`healthPort`), drop-in → `run agent`; **new** hub unit and its release drop-in |
+| Healthy | combined `/healthz` | hub `/healthz`: ready, site, source, every node connected before is connected again | runner `/healthz`: ready, `relayConnected`, source, runtime, models, native child | both, hub started first |
+| Controller lock | `<hub data>/deployments/<unit>` | `<portable root>/deployments/controller` (shared) | same shared lock | as `both` |
+
+A hub and a runner release share one controller lock, so they never overlap.
+A plan refuses a unit whose live config or health is the other role.
+
+The cutover's hub unit is generated, not copied: no bot or storage secrets.
+It carries the live values of the non-secret variables the gateway bundle
+reads (`BOTS_PRIMARY_DESKTOP_BOT_ID`, `BOTS_OPERATOR_ALIASES`,
+`BOTS_PDFTOPPM_PATH`, `NODE_OPTIONS`; `HUB_ENVIRONMENT` in `deploy-plan.mjs`).
+It is enabled (`WantedBy=default.target`) so it starts at boot; rollback
+disables and removes it. Files the cutover creates have `beforeSHA256: null`
+in the plan; rollback deletes them instead of restoring them.
+
+No SQLite data moves or changes shape. The only migration is configuration
+and units, and it is the cutover transaction itself: reviewable as a plan,
+rehearsed on copies, and rolled back automatically if the split topology is
+not healthy in its window.
+
+## Earlier guards (deploy redesign)
 
 - **Start race.** If restarting another unit (for example the front, if it ever
   again has `Wants=`/`Requires=` on the backend) starts the backend before the
   controller does, the previous release starts with the writer still frozen.
-  This is now handled in two places:
+  This is handled in two places:
   - **preflight** refuses a backend unit that any non-target unit pulls in
     (`WantedBy`, `RequiredBy`, `BoundBy`, `RequisiteOf`, `ConsistsOf`), and
     names those units;
@@ -120,7 +190,10 @@ launch) and can be rolled back on its own.
     (it may already have admitted work), and records why.
 - **Stop hang.** `close-http.mjs` and a finite `TimeoutStopSec` (`DEPLOY.md`).
 
-The live units currently show no such dependency: the bots drop-in
-`40-reliability-independent.conf` resets `Requires=`/`After=`. The user journal
-was not readable from this session, so the reported race was not re-observed;
-the guards cover it either way.
+## Not done
+
+- **Reversing a healthy cutover** (split back to combined) has no controller
+  role. The runbook describes the manual, drained path; a `--role combine`
+  transaction is a follow-up.
+- No live restart of the real gateway with a real runner was run (stage 2 is
+  protocol-level); the runbook's first hub release is that proof.

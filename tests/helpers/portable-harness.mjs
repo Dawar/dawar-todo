@@ -69,16 +69,19 @@ export async function portableHarness(t){
   mkdirSync(join(root,'dist'),{recursive:true});
   const directory=mkdtempSync(join(root,'dist','send-reliability-test-'));
   const {HubControls,AgentTransport,HubRpc,installHubToolRoutes}=await bundles(directory);
-  const hub=new HubStore(join(directory,'control.sqlite'));
+  let hub=new HubStore(join(directory,'control.sqlite'));
   hub.db.exec(`INSERT INTO portable_nodes VALUES('${NODE}','${OWNER}','unused','node-fingerprint','{"capabilities":{"centralBursts":true}}',NULL,1); INSERT INTO portable_authority VALUES(1,'test-writer',1,0)`);
-  const connections=new Map(),router=new HubRpc(hub,connections);
-  const controls=new HubControls({path:join(directory,'control.sqlite'),hub,router,owner:{key:OWNER},authority:{writerId:'test-writer',epoch:1}});router.controls=controls;
+  const connections=new Map();let router,controls;
+  // The hub half as one gateway process would hold it: replaceHub() discards
+  // it and opens a new one over the same control.sqlite.
+  const openHub=()=>{router=new HubRpc(hub,connections);controls=new HubControls({path:join(directory,'control.sqlite'),hub,router,owner:{key:OWNER},authority:{writerId:'test-writer',epoch:1}});router.controls=controls;};
+  openHub();
   const nodeStore=new Store(join(directory,'native-control.sqlite')),journal=new NodeJournal(join(directory,'node-journal.sqlite'));
   const codex=new TurnCodex();
   const runtime=new BotRuntime({store:nodeStore,codex,root:join(directory,'bots')});
   runtime.sources.owner={key:OWNER};
   await runtime.start({deferNativeRecovery:true});
-  const frames=[],drop={receipt:false,control:false};
+  const frames=[],drop={receipt:false,control:false,controlResult:false};
   let agentSide,hubSide,transport;
   const link=()=>{
     hubSide={readyState:1,send:text=>queueMicrotask(()=>agentSide.listeners.message?.({data:text})),close(){this.readyState=3;}};
@@ -92,9 +95,13 @@ export async function portableHarness(t){
     if(side.readyState!==1)return;
     frames.push(m.type);
     try{
+      // As gateway.mjs nodeSync: capable nodes are asked for the original
+      // receipts of commands the hub still sees as accepted or unknown.
+      const sync=cursor=>{const value=hub.sync(NODE,cursor,{recoverReceipts:side.portableHello?.capabilities?.durableReceiptRecovery===true,receiptCursor:side.receiptRecoveryCursor??0});
+        side.receiptRecoveryCursor=value.receiptCursor??0;return JSON.stringify({type:'sync',...value});};
       if(m.type==='authenticate'){
-        side.portableHello=m.hello;connections.set(NODE,side);side.send(JSON.stringify({type:'sync',...hub.sync(NODE,m.cursor??0)}));
-      }else if(m.type==='sync')side.send(JSON.stringify({type:'sync',...hub.sync(NODE,m.cursor??0)}));
+        side.portableHello=m.hello;connections.set(NODE,side);side.send(sync(m.cursor??0));
+      }else if(m.type==='sync')side.send(sync(m.cursor??0));
       else if(m.type==='receipt'){
         if(drop.receipt){frames.push('dropped:receipt');return;}
         const row=hub.receipt(NODE,m.operationId,m.fingerprint,m.state,m.receipt);router.receipt(row);controls.receipt(row);
@@ -102,8 +109,10 @@ export async function portableHarness(t){
         if(sequence>before)controls.nativeEvent(m.event,NODE,m.epoch);side.send(JSON.stringify({type:'event-ack',eventId:m.eventId,sequence}));}
       else if(m.type==='rpc-result')router.readResult(NODE,m);
       else if(m.type==='control-request'){
+        frames.push(`tool:${m.tool}`);
         if(drop.control){frames.push('dropped:control');return;}
-        const answer=value=>side.send(JSON.stringify({type:'control-result',requestId:m.requestId,botId:m.botId,epoch:m.epoch,...value}));
+        // controlResult: the hub commits the tool effect, then its answer is lost.
+        const answer=value=>{if(drop.controlResult){frames.push('dropped:control-result');return;}side.send(JSON.stringify({type:'control-result',requestId:m.requestId,botId:m.botId,epoch:m.epoch,...value}));};
         void controls.tool(OWNER,m.botId,m.tool,m.args,{kind:'authenticated-node-tool',botId:m.botId,nodeId:NODE,epoch:m.epoch}).then(result=>answer({result})).catch(error=>answer({error:error.message,outcome:error.outcome??'uncertain'}));
       }
     }catch(error){frames.push(`rejected:${m.type}:${error.message}`);}
@@ -121,9 +130,17 @@ export async function portableHarness(t){
   /** Drop the node link the way a network loss would, then reconnect. */
   const disconnect=async()=>{const side=agentSide;clearTimeout(transport.retryTimer);side.close();await settle();clearTimeout(transport.retryTimer);};
   const reconnect=async()=>{clearTimeout(transport.retryTimer);transport.connect();await handshake();};
+  /** The gateway process is replaced: its node socket drops, its memory is gone, a new one opens the same database. */
+  const replaceHub=async({beforeStart=async()=>{}}={})=>{
+    const side=agentSide;clearTimeout(transport.retryTimer);side.close();hubSide.send=()=>{};connections.clear();
+    controls.close();hub.close();await settle();clearTimeout(transport.retryTimer);
+    await beforeStart();
+    hub=new HubStore(join(directory,'control.sqlite'));openHub();
+    await reconnect();
+  };
   const mailbox=operationId=>hub.db.prepare('SELECT * FROM portable_mailbox WHERE operation_id=?').get(operationId);
   const mailboxes=botId=>hub.db.prepare('SELECT operation_id,state,json_extract(payload,\'$.method\') method FROM portable_mailbox WHERE bot_id=? ORDER BY sequence').all(botId);
   const node=operationId=>journal.db.prepare('SELECT * FROM node_commands WHERE operation_id=?').get(operationId);
   const createBot=async(name='Atlas',op=`create-${name.toLowerCase()}-0001`)=>(await request('bots.create',{name},op)).result;
-  return {hub,controls,router,runtime,nodeStore,journal,get transport(){return transport;},codex,frames,drop,request,disconnect,reconnect,mailbox,mailboxes,node,createBot,connections};
+  return {get hub(){return hub;},get controls(){return controls;},get router(){return router;},runtime,nodeStore,journal,get transport(){return transport;},codex,frames,drop,request,disconnect,reconnect,replaceHub,mailbox,mailboxes,node,createBot,connections};
 }

@@ -406,7 +406,7 @@ export async function runAgent(config){
     onError:error=>console.error(JSON.stringify({at:new Date().toISOString(),event:'status.error',message:error.message}))}):null;
   // No runtime.tick: logical queue/schedule authority must live at the hub.
   // Existing admitted native work and tool responses still stream normally.
-  return {runtime,transport,journal,manager,status};
+  return {runtime,transport,journal,manager,status,source:activation.source};
 }
 
 export const HUB_TEAM_REFERENCE_REUSE_MS=60000;

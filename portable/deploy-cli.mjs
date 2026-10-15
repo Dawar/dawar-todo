@@ -5,15 +5,16 @@ import { fileURLToPath } from 'node:url';
 import { readPrivate } from './private-file.mjs';
 import { runDeployment, failureReason } from './deployment-transaction.mjs';
 import { linuxDeployment } from './deployment-linux.mjs';
-import { linuxProbe, preparePlan, verifyPlan, DEFAULT_UNIT, DEFAULT_SITE_UNIT, DEFAULT_TIMEOUT_STOP_SEC } from './deploy-plan.mjs';
+import { linuxProbe, preparePlan, verifyPlan, defaultUnit, DEFAULT_SITE_UNIT, DEFAULT_TIMEOUT_STOP_SEC, DEFAULT_HUB_UNIT, DEFAULT_RUNNER_HEALTH_PORT, ROLES } from './deploy-plan.mjs';
 import { rehearse, rehearsalPassed } from './deploy-rehearsal.mjs';
 
-// deploy-cli.mjs prepare <sha> [--unit U] [--site U | --no-site] [--receipts DIR] [--wait-seconds N] [--timeout-stop-sec N] [--health-window-seconds N]
+// deploy-cli.mjs prepare <sha> [--role both|hub|runner|cutover] [--unit U] [--site U | --no-site] [--receipts DIR] [--wait-seconds N] [--timeout-stop-sec N] [--health-window-seconds N]
+//                              cutover only: [--hub-unit U] [--runner-health-port N]   (see SPLIT_HUB_RUNNER.md)
 // deploy-cli.mjs preflight --plan PLAN
 // deploy-cli.mjs rehearse  --plan PLAN [--keep]
 // deploy-cli.mjs launch    --plan PLAN [--skip-rehearsal]   (runs `run` in its own transient unit)
 // deploy-cli.mjs run       --plan PLAN [--skip-rehearsal]   (legacy: --plan PLAN)
-const usage = 'Use deploy-cli.mjs prepare <sha> | preflight|rehearse|launch|run --plan PRIVATE_ABSOLUTE_PLAN. See portable/DEPLOY.md.';
+const usage = 'Use deploy-cli.mjs prepare <sha> [--role both|hub|runner|cutover] | preflight|rehearse|launch|run --plan PRIVATE_ABSOLUTE_PLAN. See portable/DEPLOY.md and portable/SPLIT_HUB_RUNNER.md.';
 const argv = process.argv.slice(2), command = argv[0] === '--help' ? 'help' : argv[0]?.startsWith('--') ? 'run' : argv.shift();
 const flag = name => argv.includes(name), value = name => { const i = argv.indexOf(name); return i >= 0 ? argv[i + 1] : undefined; };
 const number = (name, fallback) => { const v = value(name); if (v === undefined) return fallback; const n = Number(v); if (!Number.isSafeInteger(n)) throw Error(`${name} must be an integer.`); return n; };
@@ -27,12 +28,17 @@ try {
   } else if (command === 'prepare') {
     const source = argv[0];
     if (!/^[a-f0-9]{40}$/.test(source ?? '')) throw Error('prepare needs the full 40-character release SHA.');
-    const { planPath, plan } = await preparePlan(linuxProbe(), { source, unitId: value('--unit') ?? DEFAULT_UNIT,
-      siteUnitId: flag('--no-site') ? null : value('--site') ?? DEFAULT_SITE_UNIT, site: flag('--no-site') ? false : value('--site') ? true : undefined,
+    const role = value('--role') ?? 'both';
+    if (!ROLES.includes(role)) throw Error(`--role must be one of ${ROLES.join(', ')}.`);
+    if (role !== 'cutover' && (value('--hub-unit') || value('--runner-health-port'))) throw Error('--hub-unit and --runner-health-port belong to --role cutover.');
+    const { planPath, plan } = await preparePlan(linuxProbe(), { source, role, unitId: value('--unit') ?? defaultUnit(role),
+      // A runner release never restarts the site: it holds no hub writer.
+      siteUnitId: flag('--no-site') || role === 'runner' ? null : value('--site') ?? DEFAULT_SITE_UNIT, site: flag('--no-site') || role === 'runner' ? false : value('--site') ? true : undefined,
+      ...(role === 'cutover' ? { hubUnitId: value('--hub-unit') ?? DEFAULT_HUB_UNIT, runnerHealthPort: number('--runner-health-port', DEFAULT_RUNNER_HEALTH_PORT) } : {}),
       receiptRoot: value('--receipts'), waitSeconds: number('--wait-seconds', 900), timeoutStopSec: number('--timeout-stop-sec', DEFAULT_TIMEOUT_STOP_SEC),
       convergence: value('--health-window-seconds') ? { healthWindowSeconds: number('--health-window-seconds') } : {} });
-    print({ planPath, operationId: plan.operationId, source: plan.source, old: { source: plan.old.source, pid: plan.old.pid }, localWriter: plan.localWriter.expected,
-      expectedModels: plan.expectedModels, site: plan.site?.unitId ?? null, preflight: 'passed', next: `node ${fileURLToPath(import.meta.url)} rehearse --plan ${planPath}` });
+    print({ planPath, operationId: plan.operationId, role, unitId: plan.unitId, source: plan.source, old: { source: plan.old.source, pid: plan.old.pid }, localWriter: plan.localWriter?.expected ?? null,
+      expectedModels: plan.expectedModels ?? null, ...(plan.expectedNodes ? { expectedNodes: plan.expectedNodes } : {}), ...(plan.split ? { split: plan.split } : {}), site: plan.site?.unitId ?? null, preflight: 'passed', next: `node ${fileURLToPath(import.meta.url)} rehearse --plan ${planPath}` });
   } else if (command === 'preflight') {
     print({ preflight: 'passed', ...await verifyPlan(loadPlan(), linuxProbe()) });
   } else if (command === 'rehearse') {
@@ -50,7 +56,7 @@ try {
       let receipt, error;
       try { receipt = await runDeployment(plan, linuxDeployment(plan)); } catch (e) { error = e; }
       try { receipt ??= JSON.parse(readPrivate(join(plan.receiptDirectory, 'transaction.json'), 4 * 1024 * 1024)); } catch { /* no receipt yet: preflight refused */ }
-      print({ operationId: plan.operationId, source: plan.source, phase: receipt?.phase ?? null, outcome: receipt?.outcome ?? 'refused',
+      print({ operationId: plan.operationId, role: plan.role ?? 'both', source: plan.source, phase: receipt?.phase ?? null, outcome: receipt?.outcome ?? 'refused',
         lastFailure: receipt?.lastFailure ?? (error ? { step: 'preflight', message: failureReason(error) } : null) });
       if (receipt?.outcome !== 'healthy') process.exitCode = 1;
     }

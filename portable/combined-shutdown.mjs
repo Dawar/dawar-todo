@@ -1,3 +1,4 @@
+// Shared by `run both` and the separate runner (`run agent`, no gateway).
 // The native owner refreshes its original claimed idle proof immediately before
 // closing. Concurrent signals share one shutdown and cannot skip its proof.
 export function combinedShutdown({ agent, gateway, health, child, siteTimer, stopping, effectsStarted: started = () => {} }) {
@@ -13,8 +14,8 @@ export function combinedShutdown({ agent, gateway, health, child, siteTimer, sto
     // Idle is proven: from here the process must exit even if a peer (the
     // public front's keep-alive pool) never hangs up. See close-http.mjs.
     started();
-    await gateway.close();
-    stopping();clearInterval(siteTimer);health.close();health.closeAllConnections?.();agent.transport.close();
+    await gateway?.close();
+    stopping();clearInterval(siteTimer);health?.close();health?.closeAllConnections?.();agent.transport.close();
     agent.runtime.usage.stop();agent.runtime.maintenance.close();agent.runtime.secure?.close();
     if (agent.runtime.codex.closeForShutdown) await agent.runtime.codex.closeForShutdown(); else agent.runtime.codex.close();
     await agent.runtime.desktops?.close();await agent.manager.close();
