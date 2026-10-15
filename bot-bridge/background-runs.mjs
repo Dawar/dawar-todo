@@ -98,14 +98,17 @@ export class BackgroundRuns {
   occupies(lane) { return lane.admitted !== false && this.unfinished(lane); }
   counts(botId) {
     const lanes = this.store.executionMetadata("runLane", botId);
-    const unreserved = this.store.list("run", botId).filter(r => this.unreservedMetadata(r));
+    // Unreserved and decision-waiting runs are queued by definition; read
+    // only those instead of decoding every historical run.
+    const queued = this.store.runsWithStatus("queued", botId);
+    const unreserved = queued.filter(r => this.unreservedMetadata(r));
     const laneThreads = new Map(lanes.map(l => [l.id, l.threadId]));
     const pending = this.store.list("runPending", botId).filter(p => laneThreads.has(p.laneId) &&
       p.request?.params?.threadId === laneThreads.get(p.laneId) && usableTurnId(p.request?.params?.turnId));
     const pendingLanes = new Set(pending.map(p => p.laneId));
     return { botId, unfinished: lanes.filter(l => this.unfinished(l)).length + unreserved.length,
       running: lanes.filter(l => l.activeTurnId).length,
-      needsInput: pending.length + lanes.filter(l => !pendingLanes.has(l.id) && nativeWaiting(this.port(l.id), botId)).length + this.store.list("run", botId).filter(r => r.decision?.state === "required" && r.status === "queued").length,
+      needsInput: pending.length + lanes.filter(l => !pendingLanes.has(l.id) && nativeWaiting(this.port(l.id), botId)).length + queued.filter(r => r.decision?.state === "required").length,
       unconfirmed: lanes.filter(l => l.provisioning === "uncertain" || activityUnresolved(this.port(l.id), botId)).length };
   }
   publish(id) {
@@ -127,14 +130,15 @@ export class BackgroundRuns {
       return this.runtime.emitEvent(type === "request" ? "run.request" : "run.request.resolved", { ...data, ...context }, lane.botId);
     this.publish(id);
   }
-  snapshot() {
+  /** botId scopes the per-bot counts; the background list stays global. */
+  snapshot(botId = null) {
     const metadata = this.store.executionMetadata("runLane").map(l => ({
       unfinished: this.unfinished(l), date: l.createdAt, lane: l }));
-    for (const run of this.store.list("run")) {
+    for (const run of this.store.runsWithStatus("queued")) {
       const publicRun = this.unreservedMetadata(run);
       if (publicRun) metadata.push({ unfinished: true, date: run.scheduledAt, run: publicRun });
     }
-    return { backgroundByBot: this.store.bots().map(bot => this.counts(bot.id)),
+    return { backgroundByBot: this.store.bots().filter(bot => botId === null || bot.id === botId).map(bot => this.counts(bot.id)),
       // Raw requests may contain secrets. Older clients persist unknown
       // snapshot fields; selected runs.requests/live events are the only reads.
       backgroundRuns: metadata.sort((a, b) => Number(b.unfinished) - Number(a.unfinished) || b.date.localeCompare(a.date))

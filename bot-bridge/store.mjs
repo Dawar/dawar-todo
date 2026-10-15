@@ -111,6 +111,21 @@ export class Store {
         : this.db.prepare("SELECT json FROM records WHERE kind=?").all(kind)
     ).map((r) => JSON.parse(r.json));
   }
+  /** Runs in one status (run_state_bot index), without decoding the history. */
+  runsWithStatus(status, botId = null) {
+    return this.db.prepare(`SELECT json FROM records WHERE kind='run' AND json_extract(json,'$.status')=? AND (? IS NULL OR bot_id=?)`)
+      .all(status, botId, botId).map(row => JSON.parse(row.json));
+  }
+  /**
+   * The newest runs of the given bots (null: all), in the order list() + a stable
+   * scheduledAt sort produced: newest first, then bot ID, then insertion.
+   */
+  recentRuns(botIds, limit) {
+    if (botIds && !botIds.length) return [];
+    return this.db.prepare(`SELECT json FROM records WHERE kind='run' AND (? IS NULL OR bot_id IN (SELECT value FROM json_each(?)))
+      ORDER BY json_extract(json,'$.scheduledAt') DESC, bot_id, rowid LIMIT ?`)
+      .all(botIds && JSON.stringify(botIds), botIds && JSON.stringify(botIds), limit).map(row => JSON.parse(row.json));
+  }
   queuedPrompts(botId, listId = null) {
     // Read pending messages only; merged/delivered originals remain durable
     // without being decoded on every queue or scheduler refresh.

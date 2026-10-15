@@ -153,7 +153,7 @@ export class HubRpc {
     if(!placements.length||placements.some(p=>this.connection(p)?.portableHello?.capabilities?.nativeAuthRecovery!==true))delete common.nativeAuthRecovery;
     if(!placements.length||placements.some(p=>this.connection(p)?.portableHello?.capabilities?.nativeErrorRecovery!==true))delete common.nativeErrorRecovery;
     if(this.controls?.authority&&this.controls.creation?.eligibleNodes(owner).length)common.botCreation=1;
-    const schedules=this.controls?placements.flatMap(p=>this.controls.store.list('schedule',p.bot_id)):[],runs=this.controls?placements.flatMap(p=>this.controls.store.list('run',p.bot_id)).sort((a,b)=>b.scheduledAt.localeCompare(a.scheduledAt)).slice(0,100):scoped('runs');
+    const schedules=this.controls?placements.flatMap(p=>this.controls.store.list('schedule',p.bot_id)):[],runs=this.controls?this.controls.store.recentRuns(placements.map(p=>p.bot_id),100):scoped('runs');
     return {result:{...first,...(this.controls?.teams?.owner===owner?{teams:this.controls.teams.catalog(owner)}:{}),cursor,bots,workByBot:scoped('workByBot'),pending:scoped('pending'),secureInputs:scoped('secureInputs'),schedules,runs,activeScheduledTurns:scoped('activeScheduledTurns'),ready:snapshots.length===placements.length&&placements.every(p=>!!this.connection(p)),
       capabilities:{...common,portableAgents:1}},cache:{observedAt:Date.now(),stale:snapshots.length<placements.length}};
   }

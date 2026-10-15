@@ -228,6 +228,8 @@ export class NodeJournal {
     this.db = privateDatabase(path);
     this.db.exec(`CREATE TABLE IF NOT EXISTS node_commands(operation_id TEXT PRIMARY KEY,fingerprint TEXT NOT NULL,command TEXT NOT NULL,state TEXT NOT NULL,receipt TEXT);
       CREATE TABLE IF NOT EXISTS node_events(sequence INTEGER PRIMARY KEY AUTOINCREMENT,event_id TEXT NOT NULL UNIQUE,event TEXT NOT NULL,acked INTEGER NOT NULL DEFAULT 0);
+      -- pendingEvents() runs on every event; acknowledged history is never scanned.
+      CREATE INDEX IF NOT EXISTS node_events_pending ON node_events(sequence) WHERE acked=0;
       CREATE TABLE IF NOT EXISTS node_controls(bot_id TEXT PRIMARY KEY,epoch INTEGER NOT NULL,revision INTEGER NOT NULL,stopped INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS node_metadata(key TEXT PRIMARY KEY,value INTEGER NOT NULL);`);
     this.online = false; this.syncedAt = 0; this.syncedMonotonic = 0;

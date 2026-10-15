@@ -589,31 +589,32 @@ export class BotRuntime extends EventEmitter {
     const id=`secure-receipt:${createHash("sha256").update(row.id).digest("hex")}`;
     return this.primary.accept(bot,id,{kind:"secure-input",sourceId:row.id,summary:"Secure input received",text:`Secure one-time input received. Handle: ${row.id}. Expires: ${row.expiresAt}. Check live status before use. Private tools can use the submission; model reading ${row.modelRead ? "was explicitly permitted" : "was not permitted"}. Never echo secrets. Delete when the workflow finishes.`});
   }
-  snapshot() {
+  /**
+   * The bridge snapshot. A portable node read names one bot (botId): only
+   * that bot's rows are built, and the hub-owned schedules/runs catalogs are
+   * left empty, matching agentSnapshot() without building the other bots.
+   */
+  snapshot(botId = null) {
+    const allBots = this.store.bots(), scoped = botId === null ? allBots : allBots.filter(bot => bot.id === botId);
     return {
       capabilities: { nativeErrorRecovery: 1, nativeAuthRecovery: 1, submissionSources: this.sources.owner?.key ? 1 : undefined, taskRequests: this.storage && this.storage.features?.taskRequests !== false ? 1 : undefined, executionConfiguration: 1, accountUsageHistory: 1, runtimeMaintenance: 1, botAdministration: 1, botMemoryMaintenance: process.platform === 'linux' ? 1 : undefined, backgroundRunLanes: 1, scheduleDecisions: 1, singleThreadExecution: 1, nativeGoals: 1, nativeConversation: 1, messageReplies: 1, secureInputs: 1, secureResponseLifecycle: 1, operatorCalls: 1, operatorInputQuestions: 1, historyCursorIndex: 1, messageBursts: 1, burstDiscard: 1, burstControls: 1, burstQueue: 1, burstEdit: 1, queueLists: 1, queueRelativeMoves: 1, queueSendNow: 1, ...(this.storage && this.storage.features?.taskQueues !== false ? { taskQueues: 1 } : {}), teams: 1, ...(this.codex.claudeReady ? { claudeBots: 1 } : {}), ...(this.desktops ? { botDesktops: 1, botBrowserRetention: 1 } : {}) },
 
       botAdminLeadIds: [...this.botAdmin.leads],
       teams: publicTeams(this),
-      workByBot: this.store.bots().map(bot => this.primary.work(bot)),
-      ...this.runs.snapshot(),
-      bots: this.store
-        .bots()
-        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
-      pending: this.store.list("pending"),
-      secureInputs: this.secure?.catalog() ?? [],
+      workByBot: scoped.map(bot => this.primary.work(bot)),
+      ...this.runs.snapshot(botId),
+      bots: scoped.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
+      pending: botId === null ? this.store.list("pending") : this.store.list("pending").filter(row => row.botId === botId),
+      secureInputs: (this.secure?.catalog() ?? []).filter(row => botId === null || row.botId === botId),
       cursor: this.store.cursor(),
       ready: this.ready,
       account: this.account,
       defaults: this.defaults,
       ...(this.codex.claudeReady ? { claudeDefaults: this.claudeDefaults } : {}),
       models: this.models,
-      schedules: this.store.list("schedule"),
-      activeScheduledTurns: this.store.bots().map(bot => activeScheduledTurn(this, bot.id)).filter(Boolean),
-      runs: this.store
-        .list("run")
-        .sort((a, b) => b.scheduledAt.localeCompare(a.scheduledAt))
-        .slice(0, 100).map(run => this.publicRun(run)),
+      schedules: botId === null ? this.store.list("schedule") : [],
+      activeScheduledTurns: scoped.map(bot => activeScheduledTurn(this, bot.id)).filter(Boolean),
+      runs: botId === null ? this.store.recentRuns(null, 100).map(run => this.publicRun(run)) : [],
     };
   }
   publicRun(run) {
@@ -849,7 +850,7 @@ export class BotRuntime extends EventEmitter {
     if (method === "auth.check") return this.authRecovery.check(botId, p, attempt, id);
     if (method === "auth.login.start") return this.authRecovery.start(botId, p, id, attempt);
     if (method === "auth.login.cancel") return this.authRecovery.cancel(botId, p, attempt);
-    if (method === "snapshot") return this.snapshot();
+    if (method === "snapshot") return this.snapshot(p?.botScope === true ? String(botId) : null);
     if (method === "secure.list") return this.secure.list(this.store.bot(String(botId)));
     if (method === "teams.list") return publicTeams(this);
     if (method === "teams.read") return readTeam(this,p.id);

@@ -210,7 +210,7 @@ export class AgentTransport {
             if(DESKTOP_READS.has(m.method)&&!this.runtime.desktops)throw Error('Linux desktops are not configured.');
             if(DESKTOP_READS.has(m.method)&&!this.journal.currentControl({bot_id:m.botId,epoch:m.epoch}))throw Error('Desktop controls are not synchronized.');
             if(m.method==='desktop.open'&&(!id(m.clientId)||!m.clientId.startsWith('browser:')))throw Error('A live authenticated parent browser is required.');
-            const work=()=>OPERATOR_NODE_READS.has(m.method)?this.operator.read(m.method,m.botId,m.params,m.epoch):this.runtime.handle({method:m.method,botId:m.botId,params:m.params,clientId:m.method==='desktop.open'?m.clientId:`hub:${this.enrollment.nodeId}`});
+            const work=()=>OPERATOR_NODE_READS.has(m.method)?this.operator.read(m.method,m.botId,m.params,m.epoch):this.runtime.handle({method:m.method,botId:m.botId,params:m.method==='snapshot'?{...m.params,botScope:true}:m.params,clientId:m.method==='desktop.open'?m.clientId:`hub:${this.enrollment.nodeId}`});
             const readResult=m.method==='desktop.open'?await this.runtime.maintenance.admit(work):await work();
             const result=m.method==='snapshot'?agentSnapshot(readResult,m.botId):readResult;
             const after=this.journal.currentControl({bot_id:m.botId,epoch:m.epoch});
