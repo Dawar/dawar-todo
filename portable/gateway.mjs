@@ -28,6 +28,7 @@ import {HubDesktopTransport,DESKTOP_MUTATIONS,desktopCapable} from './desktop-tr
 import {HubSecureTransport} from './secure-transport.mjs';
 import {fingerprint} from './protocol.mjs';
 import {RetainedRecords} from './retained-records.mjs';
+import {MacReleaseService} from './mac-releases.mjs';
 
 const json = (response,status,body) => { response.writeHead(status,{'content-type':'application/json','cache-control':'no-store'});response.end(JSON.stringify(body)); };
 async function readBody(req) {
@@ -62,6 +63,7 @@ export function startGateway(config) {
   const voice=config.voice?.enabled===true?createVoiceRuntime(config,{writer,assertWriter:()=>controls.assertWriter(),retained}):null;
   const scheduler=authority?setInterval(()=>void controls.tick().catch(error=>controls.emit('fault',error)),5000):null;
   const downloadDirectory=resolve(config.agentDownloadDirectory??fileURLToPath(new URL('../agent-downloads',import.meta.url)));
+  const macReleases=new MacReleaseService({directory:downloadDirectory,nodeLookup:id=>store.db.prepare('SELECT public_key,revoked_at FROM portable_nodes WHERE id=?').get(id)});
   const sockets = new WebSocketServer({noServer:true,maxPayload:MAX_FRAME_BYTES,perMessageDeflate:false});
   const server = createServer(async (req,res) => {
     let browserSignIn = false;
@@ -114,6 +116,14 @@ export function startGateway(config) {
         const b = await readBody(req);return json(res,200,store.enroll(b.grantId,b.hello,b.proof));
       }
       if (u.pathname === '/nodes/enroll/status' && req.method === 'POST') return json(res,200,store.enrollmentStatus(await readBody(req)));
+      // Enrolled nodes fetch owner-signed Mac app releases. Each request is
+      // signed by the node key; the hub serves only listed archives.
+      if (u.pathname === '/nodes/releases/mac' && req.method === 'POST') return json(res,200,await macReleases.check(await readBody(req)));
+      if (u.pathname === '/nodes/releases/mac/download' && req.method === 'POST') {
+        const a=await macReleases.archive(await readBody(req));
+        res.writeHead(200,{'content-type':'application/zip','content-length':a.bytes,'cache-control':'private, no-store','x-content-type-options':'nosniff'});
+        const stream=createReadStream(a.path);stream.on('error',()=>res.destroy());res.on('close',()=>stream.destroy());return stream.pipe(res);
+      }
       if (u.pathname.startsWith('/api/portable/')) {
         if (!session || session.owner!==config.owner.key) return json(res,403,{error:'Owner session required.'});
         if(req.method!=='GET')identity.csrf(r,session);

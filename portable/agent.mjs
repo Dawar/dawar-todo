@@ -1,3 +1,4 @@
+import { startStatusReporter } from './agent-status.mjs';
 import { join, isAbsolute } from 'node:path';
 import { randomUUID,createHash } from 'node:crypto';
 import { Store } from '../bot-bridge/store.mjs';
@@ -398,9 +399,12 @@ export async function runAgent(config){
     transport.startupReady=true;await transport.recover();
   }catch(error){transport.close();throw error;}
   transport.recoveryTimer=setInterval(()=>void transport.recover().catch(error=>runtime.emit('fault',error)),5000);
+  // Optional native status feed (Mac menu bar). Absent by default on Linux.
+  const status=config.agent.statusFile?startStatusReporter({runtime,source,path:config.agent.statusFile,
+    onError:error=>console.error(JSON.stringify({at:new Date().toISOString(),event:'status.error',message:error.message}))}):null;
   // No runtime.tick: logical queue/schedule authority must live at the hub.
   // Existing admitted native work and tool responses still stream normally.
-  return {runtime,transport,journal,manager};
+  return {runtime,transport,journal,manager,status};
 }
 
 export const HUB_TEAM_REFERENCE_REUSE_MS=60000;
