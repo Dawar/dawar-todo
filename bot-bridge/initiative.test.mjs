@@ -18,6 +18,11 @@ import { ProviderRouter } from "./provider-router.mjs";
 import { fakeQuery, fakeMcp, text as sdkText, result as sdkResult, MinimalCodex } from "./claude-test-support.mjs";
 
 const settle = async (n = 3) => { for (let i = 0; i < n; i++) await new Promise(resolve => setImmediate(resolve)); };
+/** Wait for a state the code under test reaches through promises only (no timers); fails loudly instead of guessing. */
+async function until(done, what) {
+  for (let i = 0; i < 5000; i++) { if (done()) return; await settle(1); }
+  throw Error(`Never reached: ${what}`);
+}
 const sec = iso => Date.parse(iso) / 1000;
 const owner = (id, text, extra = {}) => ({ type: "userMessage", id, clientId: `owner-${id}`, content: [{ type: "text", text, text_elements: [] }], ...extra });
 const answer = (id, text) => ({ type: "agentMessage", id, text, phase: "final_answer" });
@@ -31,7 +36,10 @@ class InitiativeCodex extends EventEmitter {
     { id: "turn-1", status: "completed", startedAt: sec("2026-10-13T15:00:00Z"), itemsView: "full", items: [
       owner("u1", "We should call Acme about their renewal before Friday."),
       answer("a1", "Noted.")] }] }]]);
+  inflight = new Set();
   async start() {}
+  /** Resolves once every scripted job reply has been emitted. */
+  async settled() { while (this.inflight.size) await Promise.all([...this.inflight]); }
   startPrivateThread(params) { return this.call("thread/start", { ...params, [PRIVATE_REVIEW]: true }); }
   startPrivateReviewTurn(params) { return this.call("turn/start", { ...params, [PRIVATE_REVIEW]: true }); }
   async call(method, params = {}) {
@@ -59,7 +67,12 @@ class InitiativeCodex extends EventEmitter {
       if (thread.private) {
         const kind = params.outputSchema?.properties?.mentions ? "extract" : "review";
         const out = this.reply(kind, params);
-        if (out !== null) setImmediate(() => this.finishJob(thread.id, turn.id, typeof out === "string" ? out : JSON.stringify(out)));
+        if (out !== null) {
+          // Emitted after this call returns, like the app-server; awaitable through settled().
+          const done = new Promise(resolve => setImmediate(() => { this.finishJob(thread.id, turn.id, typeof out === "string" ? out : JSON.stringify(out)); resolve(); }))
+            .finally(() => this.inflight.delete(done));
+          this.inflight.add(done);
+        }
       }
       return { turn };
     }
@@ -111,7 +124,8 @@ async function setup(t, { bots = ["atlas"], reply = () => null, enable = true } 
   runtime.privateReviews.clock = () => clock.t;
   const coordinator = new InitiativeCoordinator({ store, executor: localExecutor(runtime), bots: () => store.bots(), clock: () => clock.t, random: () => 0 });
   if (enable) coordinator.ledger.configure({ enabled: true });
-  const drive = async (n = 4) => { for (let i = 0; i < n; i++) { await coordinator.tick(); await settle(); } };
+  // One coordinator tick, then every job reply and node finish it caused.
+  const drive = async (n = 4) => { for (let i = 0; i < n; i++) { await coordinator.tick(); await codex.settled(); await runtime.privateReviews.settled(); } };
   return { dir, store, codex, runtime, coordinator, clock, drive };
 }
 const jobStarts = codex => codex.calls.filter(c => c.method === "thread/start" && c.params.ephemeral);
@@ -471,14 +485,15 @@ test("Claude: extraction and review run as standalone tool-free SDK queries and 
   await runtime.start();
   const bot = await runtime.handle({ method: "bots.create", params: { name: "Claudia", provider: "claude" }, operationId: "create-claudia" });
   await runtime.handle({ method: "turn.send", botId: bot.id, params: { text: "We should call Acme about their renewal before Friday." }, operationId: crypto.randomUUID() });
-  for (let i = 0; i < 50 && store.bot(bot.id).activeTurnId; i++) await settle();
+  await until(() => !store.bot(bot.id).activeTurnId, "the Claude turn finished");
   const clock = { t: Date.now() };
   runtime.privateReviews.clock = () => clock.t;
   const coordinator = new InitiativeCoordinator({ store, executor: localExecutor(runtime), bots: () => store.bots(), clock: () => clock.t, random: () => 0 });
   coordinator.ledger.configure({ enabled: true, claudeModel: "", claudeExtractionModel: "haiku" });
   const turnsBefore = claude.data.turns(bot.threadId).length;
   const sessionsBefore = claude.sessions.size;
-  const drive = async n => { for (let i = 0; i < n; i++) { await coordinator.tick(); await settle(5); } };
+  // One coordinator tick, then the standalone Claude runs it started.
+  const drive = async n => { for (let i = 0; i < n; i++) { await coordinator.tick(); await runtime.privateReviews.settled(); } };
   await drive(4);
   const [item] = store.list("initiativeItem");
   assert.equal(item?.kind, "loose-thread");
@@ -512,7 +527,7 @@ test("Claude: extraction and review run as standalone tool-free SDK queries and 
   // The next turn tells the bot about its own proposal.
   const before = log.find(ctx => !ctx.options.outputFormat && ctx.options.cwd === bot.cwd);
   await runtime.handle({ method: "turn.send", botId: bot.id, params: { text: "yes, proceed" }, operationId: crypto.randomUUID() });
-  for (let i = 0; i < 50 && store.bot(bot.id).activeTurnId; i++) await settle();
+  await until(() => !store.bot(bot.id).activeTurnId, "the Claude turn finished");
   assert.ok(before.last.message.content.some(c => c.text?.startsWith("<initiativeProposals>") && c.text.includes("call Acme about their renewal")));
 });
 

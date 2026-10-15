@@ -36,7 +36,6 @@ const TERMINAL = new Set(["completed", "failed", "cancelled", "interrupted", "in
 // Native items that would be tool use: a tool-free job aborts on any of them.
 const TOOL_ITEMS = new Set(["mcpToolCall", "fileChange", "commandExecution", "dynamicToolCall", "webSearch", "collabAgentToolCall", "imageGeneration"]);
 const DELIVERY = "initiativeDelivery";
-const now = () => new Date().toISOString();
 const disabledServer = { command: process.execPath, args: [], enabled: false };
 // Every MCP server the bridge configures is disabled in a Codex job thread.
 export const PRIVATE_REVIEW_CONFIG = Object.freeze({
@@ -95,11 +94,23 @@ export class PrivateReviews {
     this.byThread = new Map(); // Codex job threadId -> reviewId
     this.aborts = new Map();   // Claude job reviewId -> AbortController
     this.timers = new Map();
+    // Background work (Claude runs, finishes triggered by notifications), so
+    // callers and tests can await a settled state instead of guessing.
+    this.inflight = new Set();
     // A process restart ends every job it owned; nothing is replayed.
     for (const r of this.store.list("privateReview")) if (!TERMINAL.has(r.state))
-      this.store.put("privateReview", { ...r, state: "interrupted", error: "The bridge restarted during the private review.", finishedAt: now() });
+      this.store.put("privateReview", { ...r, state: "interrupted", error: "The bridge restarted during the private review.", finishedAt: this.at() });
   }
   get codex() { return this.runtime.codex; }
+  /** Every timestamp comes from the injected clock, like the hub's. */
+  at() { return new Date(this.clock()).toISOString(); }
+  track(work) {
+    const promise = Promise.resolve(work).catch(error => this.runtime.emit?.("fault", error)).finally(() => this.inflight.delete(promise));
+    this.inflight.add(promise);
+    return promise;
+  }
+  /** Resolves once no background job work is pending. */
+  async settled() { while (this.inflight.size) await Promise.allSettled([...this.inflight]); }
   supported(bot) {
     return botProvider(bot) === "claude" ? typeof this.codex.privateRun === "function" && this.codex.claudeReady !== false
       : typeof this.codex.startPrivateThread === "function";
@@ -168,7 +179,7 @@ export class PrivateReviews {
       if (!["idle", "notLoaded"].includes(state.status) || state.queued || state.goalActive || kind === "review" && state.revision !== expectedRevision)
         return { id: reviewId, state: "refused", reason: "revision-changed" };
       const record = { id: reviewId, botId: bot.id, threadId: bot.threadId, kind, provider: botProvider(bot), state: "starting", revision: state.revision,
-        baseTurnId: state.lastTurnId, startedAt: now(), deadlineAt: new Date(this.clock() + (settings.timeoutSeconds ?? 180) * 1000).toISOString() };
+        baseTurnId: state.lastTurnId, startedAt: this.at(), deadlineAt: new Date(this.clock() + (settings.timeoutSeconds ?? 180) * 1000).toISOString() };
       this.store.put("privateReview", record);
       try {
         let prompt, schema, instructions;
@@ -222,10 +233,9 @@ export class PrivateReviews {
     const abort = new AbortController();
     this.aborts.set(reviewId, abort);
     this.store.put("privateReview", { ...this.store.get("privateReview", reviewId), state: "running" });
-    void this.privateDirectory().then(cwd => this.codex.privateRun({ provider: "claude", model, effort, prompt, schema, instructions, cwd, signal: abort.signal }))
+    this.track(this.privateDirectory().then(cwd => this.codex.privateRun({ provider: "claude", model, effort, prompt, schema, instructions, cwd, signal: abort.signal }))
       .then(({ output, usage }) => this.finish(reviewId, "completed", { output, usage: normalizeUsage(usage) }),
-        error => this.finish(reviewId, abort.signal.aborted ? "cancelled" : error.invalid ? "invalid" : "failed", { error: error.message }))
-      .catch(error => this.runtime.emit?.("fault", error));
+        error => this.finish(reviewId, abort.signal.aborted ? "cancelled" : error.invalid ? "invalid" : "failed", { error: error.message })));
   }
   view(r) {
     let output = TERMINAL.has(r.state) ? r.output ?? null : null, state = r.state, error = r.error ?? null;
@@ -257,7 +267,7 @@ export class PrivateReviews {
     const r = this.store.get("privateReview", reviewId);
     if (!r || TERMINAL.has(r.state)) return r;
     clearTimeout(this.timers.get(reviewId)); this.timers.delete(reviewId);
-    const next = { ...r, ...fields, state, finishedAt: now() };
+    const next = { ...r, ...fields, state, finishedAt: this.at() };
     this.store.put("privateReview", next);
     if (state !== "completed") await this.interrupt(next);
     await this.release(next);
@@ -271,7 +281,7 @@ export class PrivateReviews {
   /** User activity always wins over a review; extraction of past messages may finish. */
   userActivity(botId) {
     const r = this.active(botId);
-    if (r && (r.kind ?? "review") === "review") void this.finish(r.id, "cancelled", { error: "Cancelled by user activity." }).catch(error => this.runtime.emit?.("fault", error));
+    if (r && (r.kind ?? "review") === "review") this.track(this.finish(r.id, "cancelled", { error: "Cancelled by user activity." }));
   }
 
   // ---- hidden Codex job routing ---------------------------------------------------
@@ -284,7 +294,7 @@ export class PrivateReviews {
     const p = message.params ?? {}, r = this.reviewFor(p.threadId ?? p.thread?.id);
     if (!r) return false;
     if (message.method === "item/started" && TOOL_ITEMS.has(p.item?.type)) {
-      void this.finish(r.id, "invalid", { error: `Tool-free violation: ${p.item.type} attempted.` });
+      this.track(this.finish(r.id, "invalid", { error: `Tool-free violation: ${p.item.type} attempted.` }));
       return true;
     }
     if (message.method === "item/completed" && p.item?.type === "agentMessage" && typeof p.item.text === "string")
@@ -293,7 +303,7 @@ export class PrivateReviews {
       this.store.put("privateReview", { ...this.store.get("privateReview", r.id), usage: normalizeUsage(p.tokenUsage.total) });
     if (message.method === "turn/completed") {
       const status = p.turn?.status;
-      void this.finish(r.id, status === "completed" ? "completed" : "failed", status === "completed" ? {} : { error: p.turn?.error?.message ?? `Review turn ${status}.` });
+      this.track(this.finish(r.id, status === "completed" ? "completed" : "failed", status === "completed" ? {} : { error: p.turn?.error?.message ?? `Review turn ${status}.` }));
     }
     return true;
   }
@@ -330,7 +340,7 @@ export class PrivateReviews {
       if (state.revision !== expectedRevision || !["idle", "notLoaded"].includes(state.status) || state.queued || state.goalActive)
         return { id: publicationId, state: "refused", reason: "revision-changed" };
       if (!state.lastTurnId) return { id: publicationId, state: "refused", reason: "empty-conversation" };
-      const at = now(), record = { id: publicationId, botId: bot.id, threadId: bot.threadId, itemId: typeof itemId === "string" ? itemId : null, text,
+      const at = this.at(), record = { id: publicationId, botId: bot.id, threadId: bot.threadId, itemId: typeof itemId === "string" ? itemId : null, text,
         anchorTurnId: state.lastTurnId, state: "delivered", deliveredAt: at, contextDeliveredAt: null };
       this.store.put(DELIVERY, record);
       this.project(record);
@@ -366,7 +376,7 @@ export class PrivateReviews {
       .sort((a, b) => a.deliveredAt.localeCompare(b.deliveredAt)).slice(-5);
   }
   markSeen(ids) {
-    const at = now();
+    const at = this.at();
     for (const id of ids) { const r = this.store.get(DELIVERY, id); if (r && !r.contextDeliveredAt) this.store.put(DELIVERY, { ...r, contextDeliveredAt: at }); }
   }
 }
