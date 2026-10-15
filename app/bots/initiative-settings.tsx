@@ -11,13 +11,18 @@ type Settings = { enabled: boolean; scanMinutes: number; baselineMinutes: number
 type LooseThread = { id: string; title: string; category: string; importance: string; status: string; due: boolean; ageHours: number; lastTouchedAt: string;
   responsibleName: string; snoozedUntil: string | null; resolution: { kind: string; evidence: string | null } | null;
   mentions: { bot: string; at: string; quote: string }[] };
-type Status = { settings: Settings; lastScanAt: string | null; looseThreads: LooseThread[];
+type RoomArm = { arm: string; rooms: number; delivered: number; nothing: number; tokens: number; approvalRate: number | null; completionRate: number | null; tokensPerUseful: number | null };
+type Room = { settings: { enabled: boolean; panelSize: number; dailyTokens: number; experiment: { enabled: boolean } }; budget: { dailyTokens: number; usedToday: number }; arms: RoomArm[];
+  recent: { id: string; arm: string; stage: string; reason: string | null; tokens: number | null; panel: { name: string; role: string; style: string | null }[] }[];
+  contributions: { name: string; points: number }[] };
+type Status = { settings: Settings; lastScanAt: string | null; looseThreads: LooseThread[]; room: Room;
   metrics: { publishedToday: number; published: number; accepted: number; dismissed: number; held: number; uncertain: number; reviews: number; reviewTokens: number;
     reviewTokensToday: number; extractions: number; extractionTokens: number; extractionTokensToday: number; openLooseThreads: number; dueLooseThreads: number };
   bot: { enabled: boolean; supported: boolean; lastReviewAt: string | null; nextReviewAt: string | null; lastOutcome: string | null; failures: number;
     lastError: string | null; lastErrorAt: string | null; backoffUntil: string | null; lastExtractionAt: string | null; items: { id: string; title: string; kind: string; status: string }[] } };
 const when = (value: string | null) => value ? new Date(value).toLocaleString() : 'Not yet';
 const age = (hours: number) => hours < 1 ? 'just now' : hours < 48 ? `${hours} h ago` : `${Math.round(hours / 24)} days ago`;
+const percent = (n: number | null) => n === null ? '—' : `${Math.round(n * 100)}%`;
 const tokens = (n: number) => n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(n);
 
 /** Owner controls and concise operational state for private initiative reviews.
@@ -68,6 +73,13 @@ export function InitiativeSettings({ owner, botId, botName, online }: { owner: s
         <dt>Outcomes</dt><dd>{status.metrics.accepted} accepted · {status.metrics.dismissed} dismissed · {status.metrics.reviews} reviews</dd>
         <dt>Tokens</dt><dd>Reviews {tokens(status.metrics.reviewTokensToday)} today ({tokens(status.metrics.reviewTokens)} total) · mention capture {tokens(status.metrics.extractionTokensToday)} today ({tokens(status.metrics.extractionTokens)} total, {status.metrics.extractions} runs)</dd>
       </dl>
+      <div className="grid gap-2">
+        <label className="flex items-center gap-2"><input type="checkbox" checked={status.room.settings.enabled} disabled={!online || busy} onChange={event => void save({ room: { enabled: event.target.checked } })} />Writers&apos; room for high-value loose threads ({status.room.settings.panelSize} bots draft, critique and refine; a blind judge picks one or nothing)</label>
+        <p className="bots-details-lead">Room budget today: {tokens(status.room.budget.usedToday)} of {tokens(status.room.budget.dailyTokens)} tokens{status.room.settings.experiment.enabled ? ' · experiment running' : ''}</p>
+        {status.room.arms.length > 0 && <ul className="bots-details-lead">{status.room.arms.map(a => <li key={a.arm}>{a.arm}: {a.rooms} rooms · {a.delivered} sent · {a.nothing} nothing · approved {percent(a.approvalRate)} · completed {percent(a.completionRate)} · {a.tokensPerUseful === null ? 'no useful proposal yet' : `${tokens(a.tokensPerUseful)} tokens per useful proposal`}</li>)}</ul>}
+        {status.room.recent.length > 0 && <ul className="bots-details-lead">{status.room.recent.map(r => <li key={r.id}>{r.stage}{r.reason ? ` (${r.reason})` : ''} · {r.arm} · {r.panel.map(p => `${p.name} ${p.role}`).join(', ')}{r.tokens ? ` · ${tokens(r.tokens)} tokens` : ''}</li>)}</ul>}
+        {status.room.contributions.length > 0 && <p className="bots-details-lead">Contribution record: {status.room.contributions.map(c => `${c.name} ${c.points}`).join(' · ')}</p>}
+      </div>
       <div className="grid gap-2">
         <p className="bots-details-lead">Loose threads: {status.metrics.openLooseThreads} open · {status.metrics.dueLooseThreads} due to come back</p>
         {status.looseThreads.length === 0 ? <p className="bots-details-lead">Nothing tracked yet.</p> : <ul className="grid gap-2">{status.looseThreads.map(thread => {

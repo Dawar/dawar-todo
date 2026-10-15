@@ -2,7 +2,8 @@ import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { botProvider } from "./provider-router.mjs";
 import { REVIEW_OUTPUT_SCHEMA } from "./initiative-ledger.mjs";
-import { buildReviewPacket } from "./initiative-packet.mjs";
+import { buildReviewPacket, ownProfile } from "./initiative-packet.mjs";
+import { ROOM_SCHEMAS } from "./initiative-room.mjs";
 import { readOwnerMessages, extractionPrompt, validateExtraction, EXTRACTION_OUTPUT_SCHEMA, EXTRACTION_INSTRUCTIONS } from "./initiative-mentions.mjs";
 
 // Node side of the proactive initiative. The hub coordinator decides WHEN a
@@ -30,7 +31,7 @@ import { readOwnerMessages, extractionPrompt, validateExtraction, EXTRACTION_OUT
 // bot is told about its own proposal in the next turn's context.
 
 export const INITIATIVE_NODE_METHODS = new Set(["initiative.node.probe", "initiative.node.start", "initiative.node.poll",
-  "initiative.node.cancel", "initiative.node.publish", "initiative.node.reconcile"]);
+  "initiative.node.cancel", "initiative.node.publish", "initiative.node.reconcile", "initiative.node.packet"]);
 const ID = /^[a-zA-Z0-9:_-]{8,180}$/;
 const TERMINAL = new Set(["completed", "failed", "cancelled", "interrupted", "invalid"]);
 // Native items that would be tool use: a tool-free job aborts on any of them.
@@ -108,6 +109,7 @@ export class PrivateReviews {
       case "initiative.node.cancel": return this.cancel(bot, params.reviewId, "Cancelled by the coordinator.");
       case "initiative.node.publish": return this.publish(bot, params);
       case "initiative.node.reconcile": return this.reconcile(bot, params.publicationId);
+      case "initiative.node.packet": return this.packet(bot, params);
     }
   }
   active(botId) { return this.store.list("privateReview", botId).find(r => !TERMINAL.has(r.state)) ?? null; }
@@ -146,9 +148,17 @@ export class PrivateReviews {
   }
 
   // ---- private jobs -----------------------------------------------------------
-  async start(bot, { reviewId, kind = "review", brief, settings = {}, expectedRevision, cursor = null } = {}) {
+  /** A room's shared packet, built from this bot's bridge-owned data (no model call). */
+  async packet(bot, { brief, maxTokens = 12000 } = {}) {
+    if (!brief || typeof brief !== "object" || !Array.isArray(brief.ledger)) throw Error("A packet brief is required.");
+    const packet = await buildReviewPacket(this.runtime, bot, brief, { maxTokens: Math.min(20000, Math.max(3000, Number(maxTokens) || 12000)) });
+    return { text: packet.text, tokens: packet.tokens, refs: packet.refs };
+  }
+  async start(bot, { reviewId, kind = "review", brief, settings = {}, expectedRevision, cursor = null, room = null } = {}) {
     if (!ID.test(reviewId ?? "")) throw Error("A stable review identity is required.");
-    if (!["review", "extract"].includes(kind)) throw Error("Unknown private job kind.");
+    if (!["review", "extract", "room"].includes(kind)) throw Error("Unknown private job kind.");
+    if (kind === "room" && (!room || !ROOM_SCHEMAS[room.stage] || [room.instructions, room.packet, room.task].some(v => typeof v !== "string" || v.length > 160000)))
+      throw Error("Invalid room step.");
     const prior = this.store.get("privateReview", reviewId);
     if (prior) { if (prior.botId !== bot.id) throw Error("Review belongs to another bot."); return this.view(prior); }
     if (!brief || typeof brief !== "object" || !Array.isArray(brief.ledger)) throw Error("A review brief is required.");
@@ -165,7 +175,13 @@ export class PrivateReviews {
       this.store.put("privateReview", record);
       try {
         let prompt, schema, instructions;
-        if (kind === "extract") {
+        if (kind === "room") {
+          // One room step: the shared packet, this member's own role and memory, the stage task.
+          const own = settings.withProfile ? await ownProfile(bot).catch(() => "") : "";
+          prompt = [room.instructions, room.packet, own ? `## Your own role and memory\n${own}` : "", room.task].filter(Boolean).join("\n\n");
+          schema = ROOM_SCHEMAS[room.stage]; instructions = room.instructions;
+          this.store.put("privateReview", { ...this.store.get("privateReview", reviewId), stage: room.stage, promptChars: prompt.length });
+        } else if (kind === "extract") {
           const batch = await readOwnerMessages(this.runtime, bot, cursor, { limit: settings.batch ?? 40, chars: settings.chars ?? 24000,
             lookbackMs: (settings.lookbackHours ?? 72) * 36e5, clock: this.clock });
           this.store.put("privateReview", { ...this.store.get("privateReview", reviewId), batch, cursor: batch.cursor, more: batch.more, knownItems: brief.ledger.map(t => t.id) });

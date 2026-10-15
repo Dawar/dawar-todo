@@ -53,6 +53,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
   // Optional zero-token triage: review only bots with signals, at most N per scan.
   triage: false,
   triageMaxReviews: 4,
+  // Writers' room (initiative-room.mjs); null = its defaults, all off.
+  room: null,
   reviewTimeoutSeconds: 180,
   spacingMinMinutes: 3,
   spacingMaxMinutes: 5,
@@ -108,8 +110,8 @@ function botOverride(value) {
 }
 
 export class InitiativeLedger {
-  constructor(store, { clock = Date.now, random = Math.random } = {}) {
-    Object.assign(this, { store, clock, random });
+  constructor(store, { clock = Date.now, random = Math.random, validateRoom = null } = {}) {
+    Object.assign(this, { store, clock, random, validateRoom });
   }
   at() { return new Date(this.clock()).toISOString(); }
 
@@ -130,6 +132,7 @@ export class InitiativeLedger {
         if (["enabled", "fast", "looseThreads", "triage"].includes(key)) { if (typeof value !== "boolean") throw Error(`${key} must be true or false.`); next[key] = value; }
         else if (key in BOUNDS) next[key] = boundedNumber(key, value);
         else if (["model", "claudeModel", "extractionModel", "claudeExtractionModel"].includes(key)) { if (typeof value !== "string" || !MODEL.test(value)) throw Error(`Invalid ${key}.`); next[key] = value; }
+        else if (key === "room") { if (!this.validateRoom) throw Error("Room settings are unavailable here."); next.room = this.validateRoom(value, current.room ?? undefined); }
         else if (key === "extractionEffort") { if (!EFFORTS.has(value)) throw Error("Invalid extraction reasoning effort."); next.extractionEffort = value; }
         else if (key === "coverage") { if (!["all", "selected"].includes(value)) throw Error("Coverage must be all or selected."); next.coverage = value; }
         else if (key === "effort") { if (!EFFORTS.has(value)) throw Error("Invalid review reasoning effort."); next.effort = value; }
@@ -396,6 +399,14 @@ export class InitiativeLedger {
       credits: credits ?? [{ botId: authorship.botId, share: 1 }], createdAt: at });
   }
   proposal(id) { return id ? this.store.get("initiativeProposal", id) : null; }
+  /** Link bots as contributors to an item (for example a room panel). */
+  addContributors(itemId, botIds, note = null) {
+    const item = this.item(itemId);
+    if (!item) return null;
+    const at = this.at(), contributors = [...(item.contributors ?? [])];
+    for (const botId of botIds) if (botId !== item.responsibleBotId && !contributors.some(c => c.botId === botId)) contributors.push({ botId, at, note });
+    return this.store.put("initiativeItem", { ...item, botId: item.responsibleBotId, contributors: contributors.slice(-12), updatedAt: at });
+  }
   contribution(botId) {
     return this.store.get("initiativeContribution", botId) ?? { id: botId, botId, points: 0, counts: {}, events: [] };
   }
