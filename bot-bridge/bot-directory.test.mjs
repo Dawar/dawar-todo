@@ -34,3 +34,10 @@ test("the directory lists every active bot except the sender, by name", () => {
   assert.deepEqual(messageDirectory(bots, "connie-id").map((b) => [b.name, b.extension]),
     [["Claudia: Lead Developer DawarTodo", 33], ["Dwight: Lead Developer (copy)", 30], ["Dwight: Lead Developer DawarTodo", 2]]);
 });
+
+test("a sender naming itself is refused even when a looser tier would match another bot", () => {
+  const team = [{ id: "a", name: "Atlas", slug: "atlas", threadId: "t1" }, { id: "b", name: "Atlas Prime", slug: "atlas-prime", threadId: "t2" }];
+  assert.throws(() => resolveRecipient(team, "Atlas", "a"), /That is this bot/);
+  assert.equal(resolveRecipient(team, "Atlas", "b").id, "a");
+  assert.equal(resolveRecipient(team, "Atlas Prime", "a").id, "b");
+});

@@ -24,7 +24,9 @@ export function messageDirectory(bots, senderId) {
 export function resolveRecipient(bots, reference, senderId) {
   const raw = typeof reference === 'string' ? reference.trim() : '';
   if (!raw || raw.length > 160 || /[\x00-\x1f\x7f]/.test(raw)) throw fail('Name the recipient bot, for example "Claudia" or "#21".');
-  const candidates = bots.filter((bot) => usable(bot) && bot.id !== senderId);
+  // The sender takes part in tier matching so naming itself is refused, not
+  // resolved to a looser match on another bot ("Atlas" -> "Atlas Prime").
+  const candidates = bots.filter((bot) => usable(bot) || bot.id === senderId);
   const ref = norm(raw), extension = /^#?(\d{1,6})$/.exec(raw)?.[1];
   const tiers = [
     (bot) => bot.id === raw,
@@ -34,12 +36,11 @@ export function resolveRecipient(bots, reference, senderId) {
     (bot) => ref.length >= 2 && (shortName(bot.name).startsWith(ref) || norm(bot.name).split(' ').includes(ref) || norm(bot.slug).startsWith(ref)),
   ];
   for (const tier of tiers) {
-    const matches = candidates.filter(tier);
+    const all = candidates.filter(tier), matches = all.filter((bot) => bot.id !== senderId);
     if (matches.length === 1) return matches[0];
     if (matches.length > 1)
       throw fail(`"${raw}" matches several bots: ${matches.slice(0, 8).map(label).join(', ')}. Use a fuller name or the #extension.`);
+    if (all.length) throw fail('That is this bot; message another bot.');
   }
-  if (bots.some((bot) => bot.id === senderId && (bot.id === raw || norm(bot.name) === ref || shortName(bot.name) === ref)))
-    throw fail('That is this bot; message another bot.');
   throw fail(`No active bot matches "${raw}". Call bots_message with operation "directory" to list the bots you can message.`);
 }
