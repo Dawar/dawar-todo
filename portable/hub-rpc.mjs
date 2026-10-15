@@ -8,7 +8,7 @@ import {OPERATOR_READS,OPERATOR_MUTATIONS,OPERATOR_NATIVE,OPERATOR_NODE_READS,op
 // Explicit method sets keep an arbitrary browser method from becoming remote
 // shell/native RPC authority. The real runtime still validates every request.
 export const AGENT_READS=new Set(['auth.read','snapshot','runtime.info','work.read','goals.read','history','history.page','history.turn','history.view','history.log','history.detail','history.attachments','replies.prepare','replies.resolve','artifacts.list','artifacts.preview','events','usage.bot','usage.account','usage.history','usage.claude','attachments.read','inbox.list','runs.page','runs.turns','runs.receipt','runs.requests','runs.findings','runs.decisions','execution.config','secure.list','taskRequests.source',...OPERATOR_NODE_READS,...DESKTOP_READS]);
-export const AGENT_MUTATIONS=new Set(['nativeRecovery.retry','auth.check','auth.login.start','auth.login.cancel','turn.send','turn.interrupt','requests.respond','bots.update','goals.set','goals.clear','artifacts.index',...DESKTOP_MUTATIONS]);
+export const AGENT_MUTATIONS=new Set(['nativeRecovery.retry','auth.check','auth.login.start','auth.login.cancel','turn.send','turn.interrupt','requests.respond','bots.update','goals.set','goals.clear','artifacts.index','thread.compact',...DESKTOP_MUTATIONS]);
 const NATIVE_SNAPSHOT=Symbol('assigned-native-snapshot');
 export class HubRpc {
   constructor(store,connections){this.store=store;this.connections=connections;this.reads=new Map();this.writes=new Map();}
@@ -35,6 +35,8 @@ export class HubRpc {
     }
     const p=this.store.placement(owner,request.botId),ws=this.connection(p);
     if(request.method==='nativeRecovery.retry' && (!ws || ws.portableHello?.capabilities?.nativeErrorRecovery!==true))throw Object.assign(Error('Conversation recovery requires the live compatible assigned node.'),{outcome:'not-sent'});
+    // Typed, capability-gated: an older node never receives compaction.
+    if(request.method==='thread.compact' && (!ws || ws.portableHello?.capabilities?.nativeCompaction!==true))throw Object.assign(Error('Compaction requires the live updated assigned node. Nothing was sent.'),{outcome:'not-sent'});
     if(request.method.startsWith('auth.') && (!ws || ws.portableHello?.capabilities?.nativeAuthRecovery!==true))throw Object.assign(Error('Codex recovery requires the live assigned execution machine.'),{outcome:'not-sent'});
     if(request.method==='secure.list'&&!secureCapable(this.store.node(p.node_id),ws))throw Object.assign(Error('Private form state requires the live assigned Linux node.'),{outcome:'not-sent'});
     if((DESKTOP_READS.has(request.method)||DESKTOP_MUTATIONS.has(request.method))&&!desktopCapable(this.store.node(p.node_id),ws))
@@ -152,6 +154,7 @@ export class HubRpc {
     if(!placements.length||placements.some(p=>this.connection(p)?.portableHello?.capabilities?.autonomousGoals!==true))delete common.nativeGoals;
     if(!placements.length||placements.some(p=>this.connection(p)?.portableHello?.capabilities?.nativeAuthRecovery!==true))delete common.nativeAuthRecovery;
     if(!placements.length||placements.some(p=>this.connection(p)?.portableHello?.capabilities?.nativeErrorRecovery!==true))delete common.nativeErrorRecovery;
+    if(!placements.length||placements.some(p=>this.connection(p)?.portableHello?.capabilities?.nativeCompaction!==true))delete common.nativeCompaction;
     if(this.controls?.authority&&this.controls.creation?.eligibleNodes(owner).length)common.botCreation=1;
     const schedules=this.controls?placements.flatMap(p=>this.controls.store.list('schedule',p.bot_id)):[],runs=this.controls?this.controls.store.recentRuns(placements.map(p=>p.bot_id),100):scoped('runs');
     return {result:{...first,...(this.controls?.teams?.owner===owner?{teams:this.controls.teams.catalog(owner)}:{}),cursor,bots,workByBot:scoped('workByBot'),pending:scoped('pending'),secureInputs:scoped('secureInputs'),schedules,runs,activeScheduledTurns:scoped('activeScheduledTurns'),ready:snapshots.length===placements.length&&placements.every(p=>!!this.connection(p)),

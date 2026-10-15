@@ -394,6 +394,8 @@ export class ClaudeBackend extends EventEmitter {
         session.pending.delete(uuid);
       // Every result is billed, including one a later steer continues.
       turn.state.usage = turnUsage(message, turn.state.usage);
+      const windowNotes = turn.contextWindow(message.modelUsage);
+      if (windowNotes.length) this.persistAndSend(session, windowNotes);
       // A steer that was not folded into this run produces its own result.
       if (session.pending.size && !session.interrupted) return;
       const { status, error } = resultStatus(message, session.interrupted);

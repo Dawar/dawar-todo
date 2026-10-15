@@ -41,7 +41,7 @@ export class BotMemoryMaintenance {
       throw Object.assign(error, { outcome: 'rejected' });
     }
   }
-  idle(bot, except = null) {
+  idle(bot, except = null, exceptOperation = null) {
     const runtime = this.runtime;
     return !bot.archived && !bot.archiving && !bot.deletedAt && !!bot.threadId && runtime.primary.single(bot) &&
       !bot.queuePaused && !bot.managerPaused && !bot.activeTurnId && !runtime.activityUnresolved(bot.id) &&
@@ -59,7 +59,7 @@ export class BotMemoryMaintenance {
       !this.store.list('runLane', bot.id).some(row => runtime.runs.unfinished(row)) &&
       !this.store.list('managerTask', bot.id).some(row => !['completed', 'failed', 'cancelled'].includes(row.state)) &&
       this.store.get('nativeGoal', bot.id)?.goal?.status !== 'active' &&
-      !this.store.uncertainOperations().some(row => row.botId === bot.id && ['dispatching', 'uncertain'].includes(row.status)) &&
+      !this.store.uncertainOperations().some(row => row.botId === bot.id && row.id !== exceptOperation && ['dispatching', 'uncertain'].includes(row.status)) &&
       !runtime.bursts.batches(bot.id).length;
   }
   owned(bot, origin) {

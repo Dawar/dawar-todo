@@ -69,6 +69,7 @@ import {
   containedPath,
   containedHandle, threadInstructions } from "./profiles.mjs";
 import { ContextDelivery } from "./context-delivery.mjs";
+import { ContextCompaction } from "./context-compaction.mjs";
 import { normalizeSchedule, collectDueRuns } from "./schedules.mjs";
 import { readHistoryView, readHistoryLog, readHistoryDetail, readHistoryAttachments } from "./history-view.mjs";
 import { AccountUsageCollector } from "./account-usage.mjs";
@@ -221,7 +222,7 @@ export class BotRuntime extends EventEmitter {
     this.usage = new AccountUsageCollector({ store, codex,
       allowed: () => this.ready && codex.ready && !this.maintenance.holding(),
       onChange: data => this.emitEvent("usage", data) });
-    codex.admissionGuard = (method, params) => { this.maintenance.native(method, params); this.authRecovery.native(method, params); this.nativeErrorRecovery.native(method,params); };
+    codex.admissionGuard = (method, params) => { this.maintenance.native(method, params); this.authRecovery.native(method, params); this.nativeErrorRecovery.native(method,params); this.compaction?.native(method, params); };
     codex.on("notification", () => { this.maintenance.generation++; });
     this.historyReads = new HistoryReads(this);
     this.primary = new PrimaryExecution(this);
@@ -236,6 +237,7 @@ export class BotRuntime extends EventEmitter {
     this.scheduleDecisions = new ScheduleDecisions(this);
     this.memoryMaintenance = new BotMemoryMaintenance(this);
     this.contextDelivery = new ContextDelivery(this);
+    this.compaction = new ContextCompaction(this);
     this.locks = new Map();
     this.loaded = new Set();
     this.models = [];
@@ -337,6 +339,7 @@ export class BotRuntime extends EventEmitter {
           error: "The runtime restarted. Checking the native conversation.",
         });
     }
+    this.compaction.recover();
     for (const active of this.store.list("activeRun"))
       this.store.remove("activeRun", active.id);
     for (const receipt of this.store.list("runTurn"))
@@ -597,7 +600,7 @@ export class BotRuntime extends EventEmitter {
   snapshot(botId = null) {
     const allBots = this.store.bots(), scoped = botId === null ? allBots : allBots.filter(bot => bot.id === botId);
     return {
-      capabilities: { nativeErrorRecovery: 1, nativeAuthRecovery: 1, submissionSources: this.sources.owner?.key ? 1 : undefined, taskRequests: this.storage && this.storage.features?.taskRequests !== false ? 1 : undefined, executionConfiguration: 1, accountUsageHistory: 1, runtimeMaintenance: 1, botAdministration: 1, botMemoryMaintenance: process.platform === 'linux' ? 1 : undefined, backgroundRunLanes: 1, scheduleDecisions: 1, singleThreadExecution: 1, nativeGoals: 1, nativeConversation: 1, messageReplies: 1, secureInputs: 1, secureResponseLifecycle: 1, operatorCalls: 1, operatorInputQuestions: 1, historyCursorIndex: 1, messageBursts: 1, burstDiscard: 1, burstControls: 1, burstQueue: 1, burstEdit: 1, queueLists: 1, queueRelativeMoves: 1, queueSendNow: 1, ...(this.storage && this.storage.features?.taskQueues !== false ? { taskQueues: 1 } : {}), teams: 1, ...(this.codex.claudeReady ? { claudeBots: 1 } : {}), ...(this.desktops ? { botDesktops: 1, botBrowserRetention: 1 } : {}) },
+      capabilities: { nativeErrorRecovery: 1, nativeAuthRecovery: 1, submissionSources: this.sources.owner?.key ? 1 : undefined, taskRequests: this.storage && this.storage.features?.taskRequests !== false ? 1 : undefined, executionConfiguration: 1, accountUsageHistory: 1, runtimeMaintenance: 1, botAdministration: 1, botMemoryMaintenance: process.platform === 'linux' ? 1 : undefined, backgroundRunLanes: 1, scheduleDecisions: 1, singleThreadExecution: 1, nativeGoals: 1, nativeCompaction: 1, nativeConversation: 1, messageReplies: 1, secureInputs: 1, secureResponseLifecycle: 1, operatorCalls: 1, operatorInputQuestions: 1, historyCursorIndex: 1, messageBursts: 1, burstDiscard: 1, burstControls: 1, burstQueue: 1, burstEdit: 1, queueLists: 1, queueRelativeMoves: 1, queueSendNow: 1, ...(this.storage && this.storage.features?.taskQueues !== false ? { taskQueues: 1 } : {}), teams: 1, ...(this.codex.claudeReady ? { claudeBots: 1 } : {}), ...(this.desktops ? { botDesktops: 1, botBrowserRetention: 1 } : {}) },
 
       botAdminLeadIds: [...this.botAdmin.leads],
       teams: publicTeams(this),
@@ -780,7 +783,9 @@ export class BotRuntime extends EventEmitter {
         const lifecycleRejected = lifecycleMutation && !this.store.get("executionStop", operationId) && !this.store.get("executionArchive", operationId);
         // Saving the bot record is creation's first effect; before it nothing happened.
         const createRejected = method === "bots.create" && !this.store.bots({ includeDeleted: true }).some(bot => bot.id === operationId);
-        const outcome = attempt ? (uncertain ? "uncertain" : "rejected") : lifecycleRejected || createRejected ? "rejected" :
+        // Compaction refuses before submission, or gets an explicit native error.
+        const compactRejected = method === "thread.compact" && e.compactionNotSubmitted === true;
+        const outcome = attempt ? (uncertain ? "uncertain" : "rejected") : lifecycleRejected || createRejected || compactRejected ? "rejected" :
           settingsRejected || browserRejected ? "rejected" : "uncertain";
         this.store.saveOperation(
           operationId,
@@ -1095,15 +1100,10 @@ export class BotRuntime extends EventEmitter {
           return stopExecutions(this, this.store.bot(bot.id), id, p.scope ?? (this.primary.single(bot) ? "main" : "all"));
         });
       }
-      case "thread.compact": {
-        await this.load(bot);
-        await this.ensureCurrentActivity(bot.id);
-        if (this.store.bot(bot.id).activeTurnId || this.scheduledUncertain(bot.id))
-          throw new Error("Wait for this turn to finish before compacting.");
-        return this.codex.call("thread/compact/start", {
-          threadId: bot.threadId,
-        });
-      }
+      case "thread.compact":
+        // Already under this bot's request lock; completion is reported by
+        // the native lifecycle on bot.contextCompaction, never by this ACK.
+        return this.compaction.manual(bot, id);
       case "requests.respond":
         if (this.store.get("runPending", p.key) || this.store.get("answerExecution", `answer:${p.key}`)?.laneId)
           return this.runs.respond(bot, p, id, attempt);
@@ -2063,6 +2063,7 @@ export class BotRuntime extends EventEmitter {
     if (message.method === "item/completed" && !usableTurnId(p.turnId)) return;
     // Compaction replaces earlier context: resend full profile next time.
     if (message.method === "item/completed" && p.item?.type === "contextCompaction") this.contextDelivery.reset(bot.id);
+    this.compaction.note(bot, message);
     this.primary.notification(bot, message);
     // Codex retry/auth recovery does not apply to Claude-owned threads.
     if (botProvider(bot) !== "claude") this.nativeErrorRecovery.note(bot.id,message);
@@ -2189,6 +2190,7 @@ export class BotRuntime extends EventEmitter {
     // Metadata/backup work cannot occupy a bot admission lock or stall the
     // shared dispatcher. Semantic work enters the original native thread later.
     if (!this.maintenance.holding()) void this.maintenance.track(() => this.memoryMaintenance.tick()).catch(error => this.emit('fault', error));
+    if (!this.maintenance.holding()) void this.compaction.tick().catch(error => this.emit('fault', error));
     try {
       await this.plans.recover();
       await this.answers.recover();

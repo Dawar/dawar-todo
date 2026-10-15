@@ -1,6 +1,7 @@
 "use client";
 import { CodexAuthRecovery } from "./codex-auth-recovery";
 import {ExecutionAccess} from './execution-access';
+import { ContextCompactionSettings } from "./context-compaction";
 import type {BotAdmissionWork} from '../../lib/bot-work-view';
 import { ControlledDialog } from "@/components/ui/controlled-dialog";
 import { Button } from "@/components/ui/button";
@@ -31,7 +32,6 @@ import {
   X,
   Square,
   Archive,
-  RotateCcw,
   LoaderCircle,
   RefreshCw,
   BarChart3,
@@ -792,9 +792,9 @@ export function BotsWorkspace() {
                 <SavedDrafts owner={owner} bots={bots} composer={composer}/><p className="bots-profile-hint">{bot.purpose}</p><p className="bots-profile-hint">Ask {bot.name} to change its personality, instructions, or memory.</p>
                 {snapshot?.capabilities?.singleThreadExecution === 1 && <Suspense fallback={null}><PersonalitySettings key={scope} bot={bot} snapshot={snapshot} online={online} /></Suspense>}
                 {snapshot?.capabilities?.botAdministration === 1 && bot.executionMode === "single-thread" && <Suspense fallback={null}><BotAdminApprovals key={`admin:${scope}`} owner={owner} botId={bot.id} botName={bot.name} online={online} /></Suspense>}
+                {!bot.archived && <ContextCompactionSettings key={`compaction:${scope}`} bot={bot} online={online} busy={busy} supported={snapshot?.capabilities?.nativeCompaction === 1} action={action} />}
                 <Button asChild variant="link" className="px-0"><a href="/settings">Notification settings</a></Button>
                 <div className="bots-profile-actions flex flex-wrap gap-2">
-                  <Button variant="outline" type="button" disabled={!online || busy || Boolean(bot.activeTurnId)} onClick={() => void action(() => client.rpc("thread.compact", bot.id))}><RotateCcw size={16} />Compact conversation</Button>
                   {bot.archived && snapshot?.capabilities?.botDesktops === 1 && <Button variant="outline" type="button" disabled={!online || busy} onClick={() => { if (window.confirm(`Delete ${bot.name}? Its desktop data will be removed. Its workspace files and archived conversation are retained.`)) void action(() => client.rpc("bots.delete", bot.id)); }}>Delete bot</Button>}
                   <Button variant="outline" type="button" disabled={!online || busy || Boolean(bot.activeTurnId)} onClick={() => void action(() => client.rpc(bot.archived ? "bots.restore" : "bots.archive", bot.id))}><Archive size={16} />{bot.archived ? "Restore bot" : "Archive bot"}</Button>
                 </div>
