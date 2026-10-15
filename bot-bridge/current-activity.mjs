@@ -128,8 +128,13 @@ function dueAt(runtime, state) {
   return recovery?.threadId === runtime.store.bot(state.botId).threadId && recovery.nextRetryAt || state.reconcileAfter;
 }
 
-/** @param {Runtime} runtime */
-export async function recoverCurrentActivities(runtime, limit = 2, startup = false, eligible = () => true) {
+/**
+ * @param {Runtime} runtime
+ * @param {number} [limit]
+ * @param {boolean} [startup]
+ * @param {(botId: string) => boolean} [eligible] limits checks to currently assigned bots
+ */
+export async function recoverCurrentActivities(runtime, limit = 2, startup = false, eligible = (_botId) => true) {
   let checked = 0;
   const due = runtime.store.list("botActivity").filter(state => activityUnresolved(runtime, state.botId))
     .sort((a, b) => (dueAt(runtime, a) ?? "").localeCompare(dueAt(runtime, b) ?? "") || a.id.localeCompare(b.id));
