@@ -24,6 +24,10 @@ export class ProviderRouter extends EventEmitter {
     super();
     this.codex = codex;
     this.claude = claude;
+    // In-flight Claude RPCs, shaped like Codex pending entries so maintenance
+    // drains and per-thread work views see both providers.
+    this.claudePending = new Map();
+    this.claudeSequence = 0;
     for (const event of [...EVENTS, "disconnect", "fault"])
       codex.on(event, (...args) => this.emit(event, ...args));
     if (claude) {
@@ -34,7 +38,16 @@ export class ProviderRouter extends EventEmitter {
   get ready() { return this.codex.ready; }
   get claudeReady() { return Boolean(this.claude?.ready); }
   get process() { return this.codex.process; }
-  get pending() { return this.codex.pending; }
+  get pending() {
+    if (!this.claudePending.size) return this.codex.pending;
+    return new Map([...(this.codex.pending ?? new Map()), ...this.claudePending]);
+  }
+  trackClaude(method, params, promise) {
+    const key = `${CLAUDE_PREFIX}call:${++this.claudeSequence}`;
+    this.claudePending.set(key, { method, threadId: params.threadId ?? null });
+    const settle = () => { this.claudePending.delete(key); };
+    return Promise.resolve(promise).finally(settle);
+  }
   get admissionGuard() { return this.codex.admissionGuard; }
   set admissionGuard(guard) { this.codex.admissionGuard = guard; }
   async start() {
@@ -57,7 +70,12 @@ export class ProviderRouter extends EventEmitter {
     // Idle/maintenance checks must see loaded Claude sessions too.
     if (method === "thread/loaded/list" && backend === this.codex && this.claudeReady && !native.cursor)
       return backend.call(method, native, ...rest).then(async (page) =>
-        ({ ...page, data: [...page.data, ...(await this.claude.call(method, {})).data] }));
+        ({ ...page, data: [...page.data, ...(await this.trackClaude(method, {}, this.claude.call(method, {}))).data] }));
+    if (backend === this.claude) {
+      let promise;
+      try { promise = backend.call(method, native, ...rest); } catch (error) { promise = Promise.reject(error); }
+      return this.trackClaude(method, native, promise);
+    }
     return backend.call(method, native, ...rest);
   }
   respond(id, result) { return (isClaudeId(id) ? this.claude : this.codex).respond(id, result); }

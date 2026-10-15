@@ -44,7 +44,10 @@ export async function runBoth(configPath) {
       nodeId:agent.transport.enrollment.nodeId,capabilities:agent.transport.hello().capabilities,
       manager:{ready:true}}));
   });health.listen(c.healthPort??47821,'127.0.0.1');
-  const close=combinedShutdown({agent,gateway,health,child,siteTimer,stopping:()=>{stopping=true;}});
+  // Backstop only after the drain proof: a resource that still refuses to
+  // close cannot keep the unit in stop-sigterm until TimeoutStopSec.
+  const effectsStarted=()=>setTimeout(()=>{console.error('Portable shutdown exceeded its bounded close after proven idle; exiting.');process.exit(0);},Number(process.env.DAWAR_SHUTDOWN_CLOSE_MS??20000)).unref();
+  const close=combinedShutdown({agent,gateway,health,child,siteTimer,stopping:()=>{stopping=true;},effectsStarted});
   for(const signal of ['SIGINT','SIGTERM'])process.on(signal,()=>{void close().then(()=>process.exit(0)).catch(()=>console.error('Portable shutdown blocked by active or unconfirmed work; preserve the service and original receipts.'));});
   return {gateway,agent,health,close};
 }
