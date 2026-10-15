@@ -9,10 +9,10 @@ import { ClaudeTurn, resultStatus } from "./claude-items.mjs";
 
 import { fakeQuery, fakeMcp, text, result, MinimalCodex } from "./claude-test-support.mjs";
 
-async function setup(t, script, log = []) {
+async function setup(t, script, log = [], options = {}) {
   const dir = await mkdtemp(join(tmpdir(), "claude-test-"));
   const store = new Store(join(dir, "state.sqlite"));
-  const claude = new ClaudeBackend({ store, query: fakeQuery(script, log), mcp: fakeMcp, credential: "test", configDir: join(dir, "claude") });
+  const claude = new ClaudeBackend({ store, query: options.query ?? fakeQuery(script, log), mcp: fakeMcp, credential: "test", configDir: join(dir, "claude"), ...options.backend });
   await claude.start();
   const notes = [];
   claude.on("notification", (n) => notes.push(n));
@@ -589,4 +589,55 @@ test("the Claude child environment carries only its own credential, never the se
   assert.equal(env.CLAUDE_CONFIG_DIR, "/tmp/claude-config");
   assert.equal(env.BOTS_SITE_URL, "https://example.invalid");
   assert.equal(env.PATH, process.env.PATH);
+});
+
+test("Stop on a Claude run that ignores interrupt closes the SDK session; its late output never reaches the next turn", async (t) => {
+  const closed = [];
+  let releaseOld;
+  const script = async (user) => {
+    if (user.message.content.some?.((p) => p.text === "stuck") || user.message.content === "stuck") {
+      await new Promise((r) => { releaseOld = r; }); // ignores ctx.interrupted
+      return [text("old", "OLD RUN STILL WRITING FILES"), result(user.uuid)];
+    }
+    return [text("new", "new answer"), result(user.uuid)];
+  };
+  const base = fakeQuery(script);
+  const query = (args) => { const q = base(args); const close = q.close; q.close = () => { closed.push(true); close(); }; return q; };
+  const { claude, notes, store } = await setup(t, script, [], { query, backend: { interruptGraceMs: 20 } });
+  const { thread } = await claude.call("thread/start", { cwd: "/bots/stuck" });
+  const first = await claude.call("turn/start", { threadId: thread.id, input: input("stuck") });
+  await until(() => releaseOld);
+  const closesBefore = closed.length;
+  await claude.call("turn/interrupt", { threadId: thread.id, turnId: first.turn.id });
+  await until(() => notes.some((n) => n.method === "turn/completed" && n.params.turn.id === first.turn.id));
+  assert.ok(closed.length > closesBefore, "the SDK run was closed, not just relabelled");
+  const second = await claude.call("turn/start", { threadId: thread.id, input: input("next") });
+  releaseOld();
+  await until(() => notes.some((n) => n.method === "turn/completed" && n.params.turn.id === second.turn.id));
+  const done = notes.find((n) => n.method === "turn/completed" && n.params.turn.id === second.turn.id).params.turn;
+  const texts = done.items.filter((i) => i.type === "agentMessage").map((i) => i.text);
+  assert.deepEqual(texts, ["new answer"]);
+  void store;
+});
+
+test("an SDK child that dies while a turn is starting rejects the start instead of leaving it in progress", async (t) => {
+  let kill;
+  const base = fakeQuery(async (user) => [text("a", "never"), result(user.uuid)]);
+  const query = (args) => {
+    const q = base(args);
+    let fail;
+    const dead = new Promise((_, reject) => { fail = reject; });
+    const next = q.next;
+    q.next = () => Promise.race([next(), dead]);
+    kill = () => fail(new Error("Claude Code process exited"));
+    q.setModel = async () => { kill(); await new Promise((r) => setTimeout(r, 10)); };
+    return q;
+  };
+  const { claude, notes } = await setup(t, null, [], { query });
+  const { thread } = await claude.call("thread/start", { cwd: "/bots/dies", model: "opus" });
+  await assert.rejects(claude.call("turn/start", { threadId: thread.id, input: input("hello"), model: "sonnet" }), (e) => e.definite);
+  await settle();
+  assert.equal(notes.some((n) => n.method === "turn/started"), false);
+  const page = await claude.call("thread/turns/list", { threadId: thread.id }).catch(() => ({ data: [] }));
+  assert.equal((page.data ?? []).some((turn) => turn.status === "inProgress"), false);
 });
