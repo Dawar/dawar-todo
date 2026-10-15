@@ -5,7 +5,8 @@ to a separate hub (`dawar-portable-hub.service`, `run hub`) and runner
 (`dawar-todo-bots.service`, `run agent`). Design and role table:
 `SPLIT_HUB_RUNNER.md`. Deploy mechanics: `DEPLOY.md`.
 
-**Run this only with Dawar's go.** Nothing in this branch changes a live unit,
+**Run this only with Dawar's go.** The steps he approves, with downtime and
+rollback, are in `CUTOVER_APPROVAL.md`. Nothing in this branch changes a live unit,
 config or database until `launch` is run.
 
 ## What changes, what does not
@@ -57,6 +58,13 @@ config or database until `launch` is run.
 
 ## Steps
 
+0. Preview (read-only: no receipt, no activation receipt, nothing outside
+   `--out`). It writes the generated hub unit, both drop-ins (prepared, plus
+   the live one for diffing) and the config key changes, without secret
+   values:
+   ```bash
+   node $R/portable/deploy-cli.mjs preview <sha> --role cutover --out /tmp/cutover-preview
+   ```
 1. Prepare. The plan is generated from live state and preflighted:
    ```bash
    node $R/portable/deploy-cli.mjs prepare <sha> --role cutover
@@ -131,23 +139,43 @@ after the hub came back was delivered once.
 
 ## Reversing a healthy cutover
 
-There is no controller role for this yet (`--role combine` is a follow-up).
-Prefer a forward fix with a `hub` or `runner` release. If the combined process
-is truly needed again, do it only when the bots are idle, and expect a few
-minutes of downtime:
+`--role combine` is the controller transaction for this. It is tested with
+the fake systemd, including a cutover-then-combine round trip and a combine
+rollback.
 
-1. Stop the hub (`systemctl --user stop dawar-portable-hub`); its shutdown
-   drains voice and exits.
-2. Stop the runner. Without a controller claim it refuses SIGTERM and is
-   killed after `TimeoutStopSec`, so confirm idleness first
-   (`curl -s 127.0.0.1:47822/healthz | jq .maintenance`).
-3. Restore `hub.json`, `agent.json` and the bots drop-in from the cutover
-   receipt's `backup/configuration-0..2`. Apply the current release to them
-   (hub `source`/`activationReceipt`/`backendReleaseDirectory`, agent
-   `activationReceipt`, drop-in release path), because the hub writer row now
-   names the cutover's target source.
-4. `systemctl --user disable dawar-portable-hub`, remove its unit file and
-   `.d` directory, `systemctl --user daemon-reload`, restart
-   `dawar-portable-site`, start `dawar-todo-bots`.
+```bash
+node $R2/portable/deploy-cli.mjs prepare <R2> --role combine   # R2 differs from both live halves
+node $R2/portable/deploy-cli.mjs rehearse --plan <plan>
+node $R2/portable/deploy-cli.mjs launch   --plan <plan>
+```
 
-This path has not been rehearsed.
+The transaction:
+
+- **Drain.** Native work on the runner, and the hub writer and voice on the
+  hub, all before stop-intent.
+- **Stop.** Runner first, then hub.
+- **Files.**
+  - Disable `dawar-portable-hub`, then remove its unit file and release
+    drop-in. They are listed with `afterSHA256: null` and kept in the
+    receipt's `backup/`.
+  - The bots drop-in becomes `run both --config hub.json`.
+  - `hub.json` becomes `mode: both` with `agentConfigFile` and
+    `backendReleaseDirectory`.
+  - `agent.json` loses `healthPort`.
+- **Start.** Flip the writer, restart the site, start the combined unit.
+- **Health.** Combined `/healthz` on the hub's port, with the separate hub
+  unit gone.
+
+Rollback restores every file (recreating the hub unit), re-enables the hub, and
+starts the hub and then the runner on their previous releases.
+
+Prepare refuses when:
+
+- the hub unit has any drop-in besides `90-portable-release.conf` (the combined
+  unit would lose it);
+- the hub process has a gateway variable (`HUB_ENVIRONMENT`) that differs from
+  the runner's;
+- either half is not healthy, or the runner is not connected.
+
+Combine and the per-role releases share the controller lock in
+`<portable root>/deployments/controller`.

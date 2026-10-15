@@ -12,12 +12,17 @@ released on their own: `--role hub` (website, login, mailbox, gateway:
 `dawar-portable-hub.service`) restarts only the hub and never drains or stops
 bots; `--role runner` (`dawar-todo-bots.service`, `run agent`) drains and
 restarts only the runner and never freezes the hub writer or restarts the
-site. The role table is in `SPLIT_HUB_RUNNER.md`.
+site. `--role combine` reverses the cutover. The role table is in
+`SPLIT_HUB_RUNNER.md`.
+`deploy-cli.mjs preview <sha> --role R --out DIR` shows what `prepare` would
+generate. It writes no receipt, no activation and nothing outside `DIR`, and it
+shows JSON configs only as their changed keys.
 
 ## Flow
 
 ```bash
-node portable/deploy-cli.mjs prepare <40-char-sha> [--role both|hub|runner|cutover]
+node portable/deploy-cli.mjs preview <40-char-sha> [--role …] --out DIR   # optional, read-only
+node portable/deploy-cli.mjs prepare <40-char-sha> [--role both|hub|runner|cutover|combine]
 node portable/deploy-cli.mjs rehearse --plan <receipts>/<sha12>-<time>/plan.private.json
 node portable/deploy-cli.mjs launch   --plan <same plan>
 ```
@@ -132,3 +137,15 @@ The hub/runner split is staged in `SPLIT_HUB_RUNNER.md`; stages 1–4 are
 implemented, and the cutover procedure is `CUTOVER_RUNBOOK.md`.
 
 Packaged releases ship `portable/deploy-cli.mjs` and `portable/rehearsal-service.mjs` as bundles (`portable/deploy-bundles.mjs`), because a release does not contain the individual bot-bridge source modules. `package.mjs` runs both bundles' help paths inside the package before publishing it.
+
+## Web releases and open browser tabs
+
+A backend release (any role) restarts `dawar-portable-site` but never repoints
+it. The site unit names its own `web-releases/<sha>`, and switching it is a
+separate step. Browsers learn about a new client from `/pwa-build.json`. When
+it differs from the page's build, the page reloads itself at a safe moment:
+the tab is hidden, or the person has been idle for 60 s and is not typing. It
+always goes through `preparePwaRefresh()` (drafts flushed, unsafe drafts and
+live calls refuse), and reloads at most once per build per tab session. A
+chunk-load failure or a screen crash on a stale build reloads right away
+(`app/build-reload.ts`, `tests/build-reload.test.mjs`).

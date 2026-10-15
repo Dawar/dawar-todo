@@ -6,7 +6,7 @@ import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync, backup } from 'node:sqlite';
 import { readPrivate, savePrivate } from './private-file.mjs';
-import { linuxProbe, preparePlan, verifyPlan } from './deploy-plan.mjs';
+import { linuxProbe, preparePlan, verifyPlan, HUB_RELEASE_DROP_IN } from './deploy-plan.mjs';
 import { runDeployment } from './deployment-transaction.mjs';
 import { linuxDeployment } from './deployment-linux.mjs';
 
@@ -50,16 +50,19 @@ export async function rehearse(plan, { systemctl, unitDirectory = join(homedir()
   const copyActivation = (path, kind) => { const to = join(activations, basename(dirname(path)), `${kind}-activation.json`); savePrivate(to, readPrivate(path, 16384)); return to; };
   const ports = { gatewayPort: await freePort(), sitePort: await freePort(), healthPort: await freePort() };
   const config = join(root, 'config');
-  const configPath = join(config, role === 'runner' ? 'agent.json' : 'hub.json');
+  // Combine starts from the split: the temporary unit is the runner and a
+  // second temporary unit is the separate hub.
+  const combine = role === 'combine', runnerHealthPort = combine ? await freePort() : null;
+  const configPath = join(config, role === 'runner' || combine ? 'agent.json' : 'hub.json');
   if (hubBefore) {
-    const hub = { ...hubBefore, ...ports, dataDirectory: data.hub, ...(agentBefore ? { agentConfigFile: join(config, 'agent.json') } : { teamWorkspaceRoot: join(root, 'workspaces') }),
+    const hub = { ...hubBefore, ...ports, dataDirectory: data.hub, ...(agentBefore && !combine ? { agentConfigFile: join(config, 'agent.json') } : { teamWorkspaceRoot: join(root, 'workspaces') }),
       hub: { ...hubBefore.hub, activationReceipt: copyActivation(hubBefore.hub.activationReceipt, 'hub') }, voice: { enabled: false } };
     savePrivate(join(config, 'hub.json'), JSON.stringify(hub, null, 2) + '\n');
   }
   if (agentBefore) {
     const agent = { ...agentBefore, dataDirectory: data.agent,
       agent: { ...agentBefore.agent, loopbackHubPort: ports.gatewayPort, workspaces: join(root, 'workspaces'), desktops: { enabled: false },
-        activationReceipt: copyActivation(agentBefore.agent.activationReceipt, 'agent'), ...(role === 'runner' ? { healthPort: ports.healthPort } : {}) } };
+        activationReceipt: copyActivation(agentBefore.agent.activationReceipt, 'agent'), ...(role === 'runner' ? { healthPort: ports.healthPort } : combine ? { healthPort: runnerHealthPort } : {}) } };
     savePrivate(join(config, 'agent.json'), JSON.stringify(agent, null, 2) + '\n');
   }
   // Relay readiness is simulated: the hub stand-in reports the plan's nodes.
@@ -67,28 +70,41 @@ export async function rehearse(plan, { systemctl, unitDirectory = join(homedir()
   // The temporary unit runs the stand-in from the OLD release directory, with
   // the live drop-in's own TimeoutStopSec so the derivation is exercised.
   const releasesRoot = dirname(plan.releaseDirectory), oldRelease = join(releasesRoot, plan.old.source);
+  // A combine plan's runner may be on its own release.
+  const runnerRelease = combine ? join(releasesRoot, plan.split.runnerSource) : oldRelease;
   const liveDropIn = readFileSync(plan.files.find(f => f.path.endsWith('.conf')).path, 'utf8');
   const timeout = liveDropIn.split('\n').find(line => /^\s*TimeoutStopSec\s*=/.test(line)) ?? 'TimeoutStopSec=infinity';
   savePrivate(join(unitDirectory, unitId), `[Unit]\nDescription=DawarTodo deploy rehearsal ${plan.operationId} (temporary)\n\n[Service]\nType=simple\nUMask=0077\nKillMode=mixed\nEnvironment=BOTS_MACHINE_SECRET=${randomBytes(32).toString('hex')}\n`);
   const dropIn = join(unitDirectory, `${unitId}.d`, '90-portable-migration.conf');
-  const standInRole = { both: 'both', cutover: 'both', hub: 'hub', runner: 'agent' }[role];
-  savePrivate(dropIn, `[Service]\nWorkingDirectory=${oldRelease}\nExecStart=\nExecStart=${process.execPath} ${standIn} run ${standInRole} --release ${oldRelease} --config ${configPath} --native-history ${nativeHistory}\n${timeout}\n`);
-  // A cutover rehearsal installs its own temporary hub unit beside this one.
-  const hubUnitId = role === 'cutover' ? unitId.replace(/\.service$/, '-hub.service') : null;
+  const standInRole = { both: 'both', cutover: 'both', hub: 'hub', runner: 'agent', combine: 'agent' }[role];
+  savePrivate(dropIn, `[Service]\nWorkingDirectory=${runnerRelease}\nExecStart=\nExecStart=${process.execPath} ${standIn} run ${standInRole} --release ${runnerRelease} --config ${configPath} --native-history ${nativeHistory}\n${timeout}\n`);
+  // A cutover rehearsal installs its own temporary hub unit beside this one;
+  // a combine rehearsal starts from one (shaped like the cutover's) and removes it.
+  const hubUnitId = role === 'cutover' || combine ? unitId.replace(/\.service$/, '-hub.service') : null;
+  if (combine) {
+    savePrivate(join(unitDirectory, hubUnitId), `[Unit]\nDescription=DawarTodo deploy rehearsal hub ${plan.operationId} (temporary)\n\n[Service]\nType=simple\nUMask=0077\nKillMode=mixed\nEnvironment=DAWAR_HUB_CONFIG=${join(config, 'hub.json')}\n`);
+    savePrivate(join(unitDirectory, `${hubUnitId}.d`, HUB_RELEASE_DROP_IN), `[Service]\nWorkingDirectory=${oldRelease}\nExecStart=\nExecStart=${process.execPath} ${standIn} run hub --release ${oldRelease} --config ${join(config, 'hub.json')}\n${timeout}\n`);
+  }
   const systemd = systemctl ?? probe.systemctl;
   const result = { version: 1, kind: 'portable-deployment-rehearsal', productionOperationId: plan.operationId, source: plan.source, root, unitId, startedAt: now.toISOString() };
   try {
-    await systemd('daemon-reload'); await systemd('start', '--no-block', unitId);
+    await systemd('daemon-reload');
+    if (combine) await systemd('start', '--no-block', hubUnitId);
+    await systemd('start', '--no-block', unitId);
     let ready = false;
     for (let i = 0; i < 120 && !ready; i++) {
       await pause(250);
       // Copied work the stand-in settled at start from read-only native terminal facts.
-      try { const h = await probe.health(ports.healthPort); ready = h.ready === true; if (ready) result.settledCopies = h.settled ?? []; } catch { /* starting */ }
+      try {
+        const h = await probe.health(combine ? runnerHealthPort : ports.healthPort); ready = h.ready === true;
+        if (ready && combine) ready = (await probe.health(ports.healthPort)).ready === true;
+        if (ready) result.settledCopies = h.settled ?? [];
+      } catch { /* starting */ }
     }
     if (!ready) throw Error('The rehearsal stand-in for the current release did not become ready.');
     const prepared = await preparePlan(probe, { source: plan.source, role, unitId, siteUnitId: null, site: false, receiptRoot: join(root, 'deployments'),
       waitSeconds: Math.min(plan.waitSeconds, 300), timeoutStopSec: plan.timeoutStopSec, convergence: plan.convergence, rehearsal: true, now,
-      ...(hubUnitId ? { hubUnitId, runnerHealthPort: await freePort() } : {}) });
+      ...(hubUnitId ? { hubUnitId, ...(combine ? {} : { runnerHealthPort: await freePort() }) } : {}) });
     result.planPath = prepared.planPath;
     let receipt;
     try { receipt = await runDeployment(prepared.plan, linuxDeployment(prepared.plan, systemctl ? { systemctl, poll: 250 } : {})); }

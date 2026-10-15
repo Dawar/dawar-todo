@@ -20,7 +20,7 @@ export const DEFAULT_TIMEOUT_STOP_SEC = 120;
 export const DEFAULT_HUB_UNIT = 'dawar-portable-hub.service';
 export const DEFAULT_RUNNER_HEALTH_PORT = 47822;
 export const HUB_RELEASE_DROP_IN = '90-portable-release.conf';
-export const ROLES = ['both', 'hub', 'runner', 'cutover'];
+export const ROLES = ['both', 'hub', 'runner', 'cutover', 'combine'];
 export const defaultUnit = role => role === 'hub' ? DEFAULT_HUB_UNIT : DEFAULT_UNIT;
 // Non-secret variables the gateway reads (bundle-checked): the cutover carries
 // their live values from the combined process into the hub unit. Bot and
@@ -49,9 +49,12 @@ export function deriveHubConfig(before, { source, releasesRoot, activationsRoot 
   onlyChanged(before, after, ['backendReleaseDirectory', 'hub.source', 'hub.activationReceipt'], 'hub config');
   return after;
 }
+// healthPort: a number sets the runner's own /healthz port (cutover), null
+// removes it (combine: the combined process serves one /healthz).
 export function deriveAgentConfig(before, { source, activationsRoot, healthPort }) {
   const after = structuredClone(before);
-  after.agent = { ...after.agent, activationReceipt: join(activationsRoot, source, 'agent-activation.json'), ...(healthPort === undefined ? {} : { healthPort }) };
+  after.agent = { ...after.agent, activationReceipt: join(activationsRoot, source, 'agent-activation.json'), ...(healthPort === undefined || healthPort === null ? {} : { healthPort }) };
+  if (healthPort === null) delete after.agent.healthPort;
   onlyChanged(before, after, ['agent.activationReceipt', ...(healthPort === undefined ? [] : ['agent.healthPort'])], 'agent config');
   return after;
 }
@@ -67,21 +70,36 @@ export function deriveSplitHubConfig(before, agent, { source, activationsRoot })
   onlyChanged(before, after, ['mode', 'agentConfigFile', 'backendReleaseDirectory', 'teamWorkspaceRoot', 'hub.source', 'hub.activationReceipt'], 'hub config');
   return after;
 }
+// Combine: the separate hub becomes the combined process again. It names its
+// agent config and backend release, as the pre-cutover config did.
+export function deriveCombinedHubConfig(before, { source, releasesRoot, activationsRoot, agentConfigPath }) {
+  const after = structuredClone(before);
+  if (before.mode !== 'hub') refuse('files', `the live hub config is mode ${short(before.mode)}, not hub`);
+  if (!isAbsolute(agentConfigPath ?? '')) refuse('files', 'no agent config for the combined process');
+  after.mode = 'both'; after.agentConfigFile = agentConfigPath;
+  if (before.externalSite === true) after.backendReleaseDirectory = join(releasesRoot, source);
+  after.hub = { ...after.hub, source, activationReceipt: join(activationsRoot, source, 'hub-activation.json') };
+  onlyChanged(before, after, ['mode', 'agentConfigFile', 'backendReleaseDirectory', 'hub.source', 'hub.activationReceipt'], 'hub config');
+  return after;
+}
 const unquote = token => token.replace(/^"(.*)"$/, '$1');
-// Cutover ExecStart: the same node and entrypoint, `run both` becomes `run
-// <role>`, and the runner names its own agent config.
-export function deriveRoleExecStart(line, { role, hubConfigPath, agentConfigPath }) {
+// Role ExecStart: the same node and entrypoint, `run <from>` becomes `run
+// <role>`. The runner (`agent`) names the agent config, the hub and the
+// combined process name the hub config.
+export function deriveRoleExecStart(line, { role, hubConfigPath, agentConfigPath, from = 'both' }) {
   const tokens = line.slice(line.indexOf('=') + 1).trim().split(/\s+/);
-  const run = tokens.findIndex((t, i) => unquote(t) === 'run' && unquote(tokens[i + 1] ?? '') === 'both');
-  const config = tokens.findIndex((t, i) => unquote(t) === '--config' && unquote(tokens[i + 1] ?? '') === hubConfigPath);
-  if (run < 0 || config < 0) refuse('dropIn', 'the live ExecStart is not `run both --config <hub config>`');
+  const fromConfig = from === 'agent' ? agentConfigPath : hubConfigPath;
+  const run = tokens.findIndex((t, i) => unquote(t) === 'run' && unquote(tokens[i + 1] ?? '') === from);
+  const config = tokens.findIndex((t, i) => unquote(t) === '--config' && unquote(tokens[i + 1] ?? '') === fromConfig);
+  if (run < 0 || config < 0) refuse('dropIn', `the live ExecStart is not \`run ${from} --config <${from === 'agent' ? 'agent' : 'hub'} config>\``);
   tokens[run + 1] = role;
-  if (role === 'agent') tokens[config + 1] = agentConfigPath;
+  tokens[config + 1] = role === 'agent' ? agentConfigPath : hubConfigPath;
   return `ExecStart=${tokens.join(' ')}`;
 }
-export function deriveCutoverDropIn(text, { source, releasesRoot, timeoutStopSec, hubConfigPath, agentConfigPath }) {
+// Cutover: the combined unit's drop-in runs the runner. Combine reverses it.
+export function deriveCutoverDropIn(text, { source, releasesRoot, timeoutStopSec, hubConfigPath, agentConfigPath, from = 'both', role = 'agent' }) {
   const released = deriveDropIn(text, { source, releasesRoot, timeoutStopSec });
-  const out = released.split('\n').map(line => /^\s*ExecStart\s*=\s*\S/.test(line) ? deriveRoleExecStart(line, { role: 'agent', hubConfigPath, agentConfigPath }) : line);
+  const out = released.split('\n').map(line => /^\s*ExecStart\s*=\s*\S/.test(line) ? deriveRoleExecStart(line, { role, from, hubConfigPath, agentConfigPath }) : line);
   if (out.filter(line => /^\s*ExecStart\s*=\s*\S/.test(line)).length !== 1) refuse('dropIn', 'the release drop-in must have exactly one ExecStart command');
   return out.join('\n');
 }
@@ -168,6 +186,58 @@ export function liveWriter(path) {
   } finally { db.close(); }
 }
 
+// --- Shared discovery pieces ---------------------------------------------
+const pullersOf = u => ['WantedBy', 'RequiredBy', 'BoundBy', 'RequisiteOf', 'ConsistsOf'].flatMap(key => String(u[key] ?? '').split(/\s+/).filter(Boolean).map(name => `${key}=${name}`))
+  .filter(entry => !entry.endsWith('.target'));
+function checkedWriter(hub, liveSource) {
+  const path = join(hub.dataDirectory, 'control.sqlite'), w = liveWriter(path);
+  if (!w.admission || w.admission.phase !== 'open' || w.admission.operation_id !== null) refuse('localWriter.expected', `live writer admission is ${w.admission?.phase ?? 'absent'}`);
+  if (!w.authority || w.authority.writer_id !== w.admission.writer_id || w.authority.epoch !== w.admission.epoch || w.authority.frozen !== 0) refuse('localWriter.expected', 'live writer authority differs from its admission row or is frozen');
+  if (w.admission.source !== liveSource) refuse('localWriter.expected.source', `live writer row ${short(w.admission.source)} differs from live health ${short(liveSource)}`);
+  return { path, w };
+}
+function targetManifest(releasesRoot, source) {
+  const releaseDirectory = join(releasesRoot, source), manifestPath = join(releaseDirectory, 'release-manifest.json');
+  if (!existsSync(manifestPath)) refuse('releaseDirectory', `${releaseDirectory} has no release-manifest.json`);
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+  if (manifest.source !== source || manifest.nodeMajor !== 24 || !/^\d+\.\d+\.\d+$/.test(manifest.runtime ?? '')) refuse('manifestSHA256', 'target manifest source/runtime/node differs');
+  return { releaseDirectory, manifest, manifestSHA256: fileHash(manifestPath) };
+}
+function nativeBinary(agent) {
+  const path = agent.agent?.codexBinary;
+  if (!isAbsolute(path ?? '') || !existsSync(path)) refuse('nativeBinaryPath', 'agent config names no native binary');
+  const digest = fileHash(path);
+  if (agent.agent.codexBinarySHA256 && agent.agent.codexBinarySHA256 !== digest) refuse('nativeBinarySHA256', 'native binary differs from the agent config hash');
+  return { nativeBinaryPath: path, nativeBinarySHA256: digest };
+}
+// Target activation receipts derived from the live ones. An existing receipt
+// must already say exactly that; a missing one is created by prepare.
+function targetActivations(activationContent, activationsRoot, source) {
+  const activations = {};
+  for (const kind of Object.keys(activationContent)) {
+    const path = join(activationsRoot, source, `${kind}-activation.json`), text = JSON.stringify(activationContent[kind]) + '\n';
+    if (existsSync(path)) {
+      const actual = JSON.parse(readPrivate(path, 16384));
+      for (const [key, value] of Object.entries(activationContent[kind])) if (actual[key] !== value) refuse(`activations.${kind}.${key}`, `existing ${short(actual[key])}, live-derived ${short(value)}`);
+      activations[kind] = { path, sha256: fileHash(path) };
+    } else activations[kind] = { path, sha256: sha256(text), create: text };
+  }
+  return activations;
+}
+// The release drop-in is the one naming a backend release.
+function releaseDropIn(u, unitId, releasesRoot) {
+  const dropIns = String(u.DropInPaths ?? '').split(/\s+/).filter(Boolean).filter(path => existsSync(path) && readFileSync(path, 'utf8').includes(`${releasesRoot}/`));
+  if (dropIns.length !== 1) refuse('files', `expected exactly one release drop-in for ${unitId}, found ${dropIns.length}`);
+  return dropIns[0];
+}
+async function siteIdentity(probe, siteUnitId, wantSite) {
+  const s = siteUnitId ? await probe.unit(siteUnitId) : null;
+  if (wantSite === true && s?.ActiveState !== 'active') refuse('site', `${siteUnitId} is not active`);
+  if (wantSite !== false && s?.LoadState === 'loaded' && s.ActiveState === 'active' && Number(s.MainPID) > 0)
+    return { unitId: siteUnitId, oldPid: Number(s.MainPID), oldStart: probe.processStart(Number(s.MainPID)), oldInvocationId: s.InvocationID };
+  return undefined;
+}
+
 /**
  * Everything a plan says about the world, read from the world. prepare writes
  * it; preflight reads it again and requires every field to be identical.
@@ -180,12 +250,12 @@ export async function discover(probe, { source, role = 'both', unitId = defaultU
   // outlast the unit's finite TimeoutStopSec.
   const convergence = { ...convergenceDefaults, stopWindowSeconds: timeoutStopSec + 60, ...chosen };
   if (convergence.stopWindowSeconds < timeoutStopSec + 30) refuse('convergence.stopWindowSeconds', `must exceed TimeoutStopSec ${timeoutStopSec} by 30 seconds`);
+  if (role === 'combine') return discoverCombine(probe, { source, unitId, hubUnitId, siteUnitId, wantSite, waitSeconds, timeoutStopSec, convergence, rehearsal });
   const u = await probe.unit(unitId), pid = Number(u.MainPID);
   if (u.ActiveState !== 'active' || !(pid > 0)) refuse('unitId', `${unitId} is ${u.ActiveState ?? 'unknown'} with MainPID ${u.MainPID ?? 'absent'}`);
   // A unit that pulls the backend in (e.g. the front with Wants=) can start
   // the previous release while the controller waits for the old exit.
-  const pullers = ['WantedBy', 'RequiredBy', 'BoundBy', 'RequisiteOf', 'ConsistsOf'].flatMap(key => String(u[key] ?? '').split(/\s+/).filter(Boolean).map(name => `${key}=${name}`))
-    .filter(entry => !entry.endsWith('.target'));
+  const pullers = pullersOf(u);
   if (pullers.length) refuse('unitId', `${unitId} is pulled in by ${pullers.join(', ')}; restarting those units would start it outside the controller`);
   const start = probe.processStart(pid);
   if (!start) refuse('old.start', `process ${pid} identity unavailable`);
@@ -214,28 +284,16 @@ export async function discover(probe, { source, role = 'both', unitId = defaultU
   if (h.source === source) refuse('source', 'target is already the live release');
   // The hub writer is the hub's: a runner release never drains or flips it.
   let writerPath, w;
-  if (hub) {
-    writerPath = join(hub.dataDirectory, 'control.sqlite'); w = liveWriter(writerPath);
-    if (!w.admission || w.admission.phase !== 'open' || w.admission.operation_id !== null) refuse('localWriter.expected', `live writer admission is ${w.admission?.phase ?? 'absent'}`);
-    if (!w.authority || w.authority.writer_id !== w.admission.writer_id || w.authority.epoch !== w.admission.epoch || w.authority.frozen !== 0) refuse('localWriter.expected', 'live writer authority differs from its admission row or is frozen');
-    if (w.admission.source !== h.source) refuse('localWriter.expected.source', `live writer row ${short(w.admission.source)} differs from live health ${short(h.source)}`);
-  }
+  if (hub) ({ path: writerPath, w } = checkedWriter(hub, h.source));
   const cwd = probe.processCwd(pid);
   if (!cwd) refuse('releaseDirectory', 'live process release directory unavailable');
-  const releasesRoot = dirname(cwd), releaseDirectory = join(releasesRoot, source), manifestPath = join(releaseDirectory, 'release-manifest.json');
-  if (!existsSync(manifestPath)) refuse('releaseDirectory', `${releaseDirectory} has no release-manifest.json`);
-  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
-  if (manifest.source !== source || manifest.nodeMajor !== 24 || !/^\d+\.\d+\.\d+$/.test(manifest.runtime ?? '')) refuse('manifestSHA256', 'target manifest source/runtime/node differs');
-  const manifestSHA256 = fileHash(manifestPath);
+  const releasesRoot = dirname(cwd), { releaseDirectory, manifest, manifestSHA256 } = targetManifest(releasesRoot, source);
   // Activations: target receipts derived from the live ones. Each role
   // activates only its own half.
   const activationsRoot = dirname(dirname((hub ? hub.hub.activationReceipt : agent.agent.activationReceipt) ?? '/'));
   let nativeBinaryPath, nativeBinarySHA256, liveAgentActivation;
   if (agent) {
-    nativeBinaryPath = agent.agent?.codexBinary;
-    if (!isAbsolute(nativeBinaryPath ?? '') || !existsSync(nativeBinaryPath)) refuse('nativeBinaryPath', 'agent config names no native binary');
-    nativeBinarySHA256 = fileHash(nativeBinaryPath);
-    if (agent.agent.codexBinarySHA256 && agent.agent.codexBinarySHA256 !== nativeBinarySHA256) refuse('nativeBinarySHA256', 'native binary differs from the agent config hash');
+    ({ nativeBinaryPath, nativeBinarySHA256 } = nativeBinary(agent));
     liveAgentActivation = JSON.parse(readPrivate(agent.agent.activationReceipt, 16384));
     if (role === 'runner' && liveAgentActivation.source !== h.source) refuse('old.source', `live runner health ${short(h.source)} differs from its activation ${short(liveAgentActivation.source)}`);
   }
@@ -243,18 +301,8 @@ export async function discover(probe, { source, role = 'both', unitId = defaultU
     ...(hub ? { hub: { kind: 'portable-hub-activation', executionEnabled: true, writerId: w.admission.writer_id, epoch: w.admission.epoch, source } } : {}),
     ...(agent ? { agent: { kind: 'portable-agent-activation', executionEnabled: true, nodeId: liveAgentActivation.nodeId, runtime: manifest.runtime, source, releaseManifestSHA256: manifestSHA256, codexBinarySHA256: nativeBinarySHA256 } } : {}),
   };
-  const activations = {};
-  for (const kind of Object.keys(activationContent)) {
-    const path = join(activationsRoot, source, `${kind}-activation.json`), text = JSON.stringify(activationContent[kind]) + '\n';
-    if (existsSync(path)) {
-      const actual = JSON.parse(readPrivate(path, 16384));
-      for (const [key, value] of Object.entries(activationContent[kind])) if (actual[key] !== value) refuse(`activations.${kind}.${key}`, `existing ${short(actual[key])}, live-derived ${short(value)}`);
-      activations[kind] = { path, sha256: fileHash(path) };
-    } else activations[kind] = { path, sha256: sha256(text), create: text };
-  }
-  // The release drop-in is the one naming a backend release.
-  const dropIns = String(u.DropInPaths ?? '').split(/\s+/).filter(Boolean).filter(path => existsSync(path) && readFileSync(path, 'utf8').includes(`${releasesRoot}/`));
-  if (dropIns.length !== 1) refuse('files', `expected exactly one release drop-in for ${unitId}, found ${dropIns.length}`);
+  const activations = targetActivations(activationContent, activationsRoot, source);
+  const dropIns = [releaseDropIn(u, unitId, releasesRoot)];
   const liveDropIn = readFileSync(dropIns[0], 'utf8');
   const changes = [];
   if (role === 'both') changes.push([currentConfigPath, jsonText(deriveHubConfig(hub, { source, releasesRoot, activationsRoot }))], [agentPath, jsonText(deriveAgentConfig(agent, { source, activationsRoot }))]);
@@ -280,11 +328,7 @@ export async function discover(probe, { source, role = 'both', unitId = defaultU
     ...(split?.created ?? []).map(([path, text]) => ({ path, beforeSHA256: null, afterSHA256: sha256(text), prepared: text }))];
   const dataDirectories = role === 'hub' ? [hub.dataDirectory] : role === 'runner' ? [agent.dataDirectory] : [hub.dataDirectory, agent.dataDirectory];
   const databases = dataDirectories.flatMap(d => readdirSync(d).filter(n => n.endsWith('.sqlite')).sort().map(n => join(d, n)));
-  let site;
-  const s = role !== 'runner' && siteUnitId ? await probe.unit(siteUnitId) : null;
-  if (role !== 'runner' && wantSite === true && s?.ActiveState !== 'active') refuse('site', `${siteUnitId} is not active`);
-  if (wantSite !== false && s?.LoadState === 'loaded' && s.ActiveState === 'active' && Number(s.MainPID) > 0)
-    site = { unitId: siteUnitId, oldPid: Number(s.MainPID), oldStart: probe.processStart(Number(s.MainPID)), oldInvocationId: s.InvocationID };
+  const site = role === 'runner' ? undefined : await siteIdentity(probe, siteUnitId, wantSite);
   const models = [...(h.models ?? [])];
   if (role !== 'hub' && !models.length) refuse('expectedModels', 'live health reports no models');
   const portableRoot = dirname(releasesRoot);
@@ -305,6 +349,96 @@ export async function discover(probe, { source, role = 'both', unitId = defaultU
     ...(split ? { split: { hubUnitId: split.hubUnitId, hubUnitPath: split.hubUnitPath, hubDropInPath: split.hubDropInPath, runnerHealthPort: split.runnerHealthPort } } : {}),
     databases, files, activations, timeoutStopSec,
     convergence,
+    ...(site ? { site } : {}), ...(rehearsal ? { rehearsal: true } : {}),
+  };
+}
+
+/**
+ * Combine (the reverse of cutover): the separate hub and runner become one
+ * combined process again, on a release that is neither live half's. Both are
+ * drained (native work on the runner, writer and voice on the hub) and stopped;
+ * the hub unit is disabled and its two files removed (afterSHA256 null);
+ * the runner unit's drop-in runs `run both` again. Rollback restores the split.
+ */
+async function discoverCombine(probe, { source, unitId, hubUnitId, siteUnitId, wantSite, waitSeconds, timeoutStopSec, convergence, rehearsal }) {
+  if (!allowedUnitName.test(hubUnitId ?? '') || hubUnitId === unitId) refuse('hubUnitId', 'must be a distinct .service name');
+  const u = await probe.unit(unitId), hu = await probe.unit(hubUnitId);
+  for (const [field, unit, id] of [['unitId', u, unitId], ['hubUnitId', hu, hubUnitId]]) {
+    if (unit.ActiveState !== 'active' || !(Number(unit.MainPID) > 0)) refuse(field, `${id} is ${unit.ActiveState ?? 'unknown'} with MainPID ${unit.MainPID ?? 'absent'}`);
+    const pullers = pullersOf(unit);
+    if (pullers.length) refuse(field, `${id} is pulled in by ${pullers.join(', ')}; restarting those units would start it outside the controller`);
+  }
+  const pid = Number(u.MainPID), hubPid = Number(hu.MainPID), start = probe.processStart(pid), hubStart = probe.processStart(hubPid);
+  if (!start) refuse('old.start', `process ${pid} identity unavailable`);
+  if (!hubStart) refuse('split.hubOld.start', `process ${hubPid} identity unavailable`);
+  const agentPath = probe.processConfig(pid).command, { environment, command } = probe.processConfig(hubPid);
+  if (!isAbsolute(agentPath ?? '')) refuse('currentAgentConfigPath', 'the live runner names no absolute config');
+  if (environment && command && environment !== command) refuse('currentHubConfigPath', 'hub environment and command name different hub configs');
+  const hubPath = environment ?? command;
+  if (!isAbsolute(hubPath ?? '')) refuse('currentHubConfigPath', 'the live hub names no absolute config');
+  const agent = JSON.parse(readPrivate(agentPath)), hub = JSON.parse(readPrivate(hubPath));
+  if (agent.mode !== 'agent') refuse('role', `${unitId} runs a mode ${short(agent.mode)} config; combine needs the runner (mode agent)`);
+  if (hub.mode !== 'hub') refuse('role', `${hubUnitId} runs a mode ${short(hub.mode)} config; combine needs the separate hub (mode hub)`);
+  const runnerHealthPort = agent.agent?.healthPort, healthPort = hub.healthPort ?? 47821;
+  if (!Number.isInteger(runnerHealthPort)) refuse('split.runnerHealthPort', 'the runner config names no agent.healthPort');
+  const r = await probe.health(runnerHealthPort), h = await probe.health(healthPort);
+  if (r.http !== 200 || !r.ready || r.role !== 'runner') refuse('old.health', `live runner health is ${r.http} ready=${Boolean(r.ready)} role ${short(r.role)}`);
+  if (r.maintenance?.phase !== 'open') refuse('old.maintenance', `live maintenance is ${r.maintenance?.phase ?? 'unknown'}`);
+  if (!r.relayConnected) refuse('old.health', 'the live runner is not connected to its hub');
+  if (h.http !== 200 || !h.ready || h.role !== 'hub') refuse('split.hubOld.health', `live hub health is ${h.http} ready=${Boolean(h.ready)} role ${short(h.role)}`);
+  if (h.source !== hub.hub?.source) refuse('old.source', `live hub health ${short(h.source)} differs from hub config ${short(hub.hub?.source)}`);
+  if ([h.source, r.source].includes(source)) refuse('source', 'target is a live release; combine onto a different release');
+  const { path: writerPath, w } = checkedWriter(hub, h.source);
+  // The combined process runs with the runner unit's environment. A gateway
+  // variable only the hub unit sets would silently disappear.
+  const hubEnvironment = probe.processEnvironment(hubPid, HUB_ENVIRONMENT), runnerEnvironment = probe.processEnvironment(pid, HUB_ENVIRONMENT);
+  const lost = HUB_ENVIRONMENT.filter(name => hubEnvironment[name] !== undefined && hubEnvironment[name] !== runnerEnvironment[name]);
+  if (lost.length) refuse('split.environment', `${hubUnitId} sets ${lost.join(', ')} differently from ${unitId}; set them on ${unitId} first`);
+  const cwd = probe.processCwd(pid), hubCwd = probe.processCwd(hubPid);
+  if (!cwd || !hubCwd) refuse('releaseDirectory', 'live process release directory unavailable');
+  const releasesRoot = dirname(cwd);
+  if (dirname(hubCwd) !== releasesRoot) refuse('releaseDirectory', 'the hub and the runner run from different release roots');
+  const { releaseDirectory, manifest, manifestSHA256 } = targetManifest(releasesRoot, source);
+  const { nativeBinaryPath, nativeBinarySHA256 } = nativeBinary(agent);
+  const liveAgentActivation = JSON.parse(readPrivate(agent.agent.activationReceipt, 16384));
+  if (liveAgentActivation.source !== r.source) refuse('split.runnerSource', `live runner health ${short(r.source)} differs from its activation ${short(liveAgentActivation.source)}`);
+  const activationsRoot = dirname(dirname(hub.hub.activationReceipt ?? '/'));
+  const activations = targetActivations({
+    hub: { kind: 'portable-hub-activation', executionEnabled: true, writerId: w.admission.writer_id, epoch: w.admission.epoch, source },
+    agent: { kind: 'portable-agent-activation', executionEnabled: true, nodeId: liveAgentActivation.nodeId, runtime: manifest.runtime, source, releaseManifestSHA256: manifestSHA256, codexBinarySHA256: nativeBinarySHA256 },
+  }, activationsRoot, source);
+  const runnerDropIn = releaseDropIn(u, unitId, releasesRoot);
+  // The hub unit is removed whole: it may carry nothing but the cutover's
+  // generated unit file and its release drop-in.
+  const hubUnitPath = hu.FragmentPath, hubDropInPath = join(`${hubUnitPath}.d`, HUB_RELEASE_DROP_IN);
+  if (!isAbsolute(hubUnitPath ?? '') || !existsSync(hubUnitPath)) refuse('split.hubUnitPath', `${hubUnitId} has no unit file path`);
+  const hubDropIns = String(hu.DropInPaths ?? '').split(/\s+/).filter(Boolean);
+  if (hubDropIns.length !== 1 || hubDropIns[0] !== hubDropInPath) refuse('split.hubDropInPath', `${hubUnitId} must have exactly its release drop-in ${HUB_RELEASE_DROP_IN}; found ${hubDropIns.length ? hubDropIns.map(p => basename(p)).join(', ') : 'none'}`);
+  const changes = [[hubPath, jsonText(deriveCombinedHubConfig(hub, { source, releasesRoot, activationsRoot, agentConfigPath: agentPath }))],
+    [agentPath, jsonText(deriveAgentConfig(agent, { source, activationsRoot, healthPort: null }))],
+    [runnerDropIn, deriveCutoverDropIn(readFileSync(runnerDropIn, 'utf8'), { source, releasesRoot, timeoutStopSec, hubConfigPath: hubPath, agentConfigPath: agentPath, from: 'agent', role: 'both' })]];
+  // Removed files have a null afterSHA256: rollback restores them from backup.
+  const files = [...changes.map(([path, text]) => ({ path, beforeSHA256: fileHash(path), afterSHA256: sha256(text), prepared: text })),
+    ...[hubUnitPath, hubDropInPath].map(path => ({ path, beforeSHA256: fileHash(path), afterSHA256: null }))];
+  const databases = [hub.dataDirectory, agent.dataDirectory].flatMap(d => readdirSync(d).filter(n => n.endsWith('.sqlite')).sort().map(n => join(d, n)));
+  const site = await siteIdentity(probe, siteUnitId, wantSite);
+  const models = [...(r.models ?? [])];
+  if (!models.length) refuse('expectedModels', 'live runner health reports no models');
+  return {
+    version: 1, kind: 'portable-deployment', role: 'combine', source, runtime: manifest.runtime, waitSeconds,
+    unitId, releaseDirectory, manifestSHA256,
+    managerSocket: join(agent.dataDirectory, 'manager', 'manager.sock'), nativeBinaryPath, nativeBinarySHA256, expectedModels: models,
+    // The combined process serves the hub's /healthz port.
+    healthPort,
+    old: { pid, start, invocationId: u.InvocationID, source: h.source, controlGroup: u.ControlGroup || undefined },
+    currentHubConfigPath: hubPath, currentAgentConfigPath: agentPath,
+    // Split topology: the lock hub and runner releases share.
+    controllerDirectory: join(dirname(releasesRoot), 'deployments', 'controller'),
+    localWriter: { path: writerPath, expected: { writerId: w.admission.writer_id, epoch: w.admission.epoch, source: w.admission.source } },
+    ...(hub.retainedRecordsPath ? { retainedRecordsPath: hub.retainedRecordsPath } : {}),
+    split: { hubUnitId, hubUnitPath, hubDropInPath, runnerHealthPort, runnerSource: r.source,
+      hubOld: { pid: hubPid, start: hubStart, invocationId: hu.InvocationID, controlGroup: hu.ControlGroup || undefined } },
+    databases, files, activations, timeoutStopSec, convergence,
     ...(site ? { site } : {}), ...(rehearsal ? { rehearsal: true } : {}),
   };
 }
@@ -344,13 +478,14 @@ export async function verifyPlan(spec, probe) {
   try {
     live = await discover(probe, { source: spec.source, role: spec.role ?? 'both', unitId: spec.unitId, siteUnitId: spec.site?.unitId ?? null, site: Boolean(spec.site),
       waitSeconds: spec.waitSeconds, timeoutStopSec: spec.timeoutStopSec, convergence: spec.convergence, rehearsal: spec.rehearsal === true,
-      ...(spec.split ? { hubUnitId: spec.split.hubUnitId, runnerHealthPort: spec.split.runnerHealthPort } : {}) });
+      ...(spec.split ? { hubUnitId: spec.split.hubUnitId, ...(spec.role === 'cutover' ? { runnerHealthPort: spec.split.runnerHealthPort } : {}) } : {}) });
   } catch (error) {
     if (error instanceof PlanMismatch) throw new PlanMismatch([...mismatches, ...error.mismatches]);
     throw new PlanMismatch([...mismatches, { field: 'live', message: String(error.message).slice(0, 200) }]);
   }
   mismatches.push(...differences(comparable(spec), comparable(live)));
   for (const [i, file] of (spec.files ?? []).entries()) {
+    if (file.afterSHA256 === null) { if (file.preparedPath !== undefined) mismatches.push({ field: `files[${i}].preparedPath`, message: 'a removed file has no prepared content' }); continue; }
     if (!isAbsolute(file.preparedPath ?? '') || !existsSync(file.preparedPath)) { mismatches.push({ field: `files[${i}].preparedPath`, message: 'missing' }); continue; }
     if (fileHash(file.preparedPath) !== file.afterSHA256) mismatches.push({ field: `files[${i}].preparedPath`, message: 'content differs from afterSHA256' });
     if (live.files[i] && live.files[i].prepared !== readFileSync(file.preparedPath, 'utf8')) mismatches.push({ field: `files[${i}].preparedPath`, message: 'not the live config with only the release substituted' });
@@ -363,6 +498,40 @@ export async function verifyPlan(spec, probe) {
   return { verified: true, fields: Object.keys(comparable(spec)).length };
 }
 
+// Config keys a role derivation may change; nothing else (and no secret) is
+// ever shown by a preview.
+const PREVIEW_KEYS = ['mode', 'agentConfigFile', 'backendReleaseDirectory', 'teamWorkspaceRoot', 'hub.source', 'hub.activationReceipt', 'agent.activationReceipt', 'agent.healthPort'];
+const at = (value, path) => path.split('.').reduce((v, k) => v?.[k], value);
+/**
+ * `deploy preview <sha> --role R --out DIR`: what prepare would generate, read
+ * from live state, without a receipt, a target activation or any write outside
+ * DIR. Unit files and drop-ins are written whole; JSON configs (which hold
+ * secrets) only as the changed keys.
+ */
+export async function previewPlan(probe, { out, ...options }) {
+  if (!isAbsolute(out ?? '')) refuse('out', 'an absolute output directory is required');
+  if (existsSync(out)) refuse('out', `${out} already exists`);
+  const live = await discover(probe, options);
+  const files = live.files.map(f => {
+    const entry = { path: f.path, beforeSHA256: f.beforeSHA256, afterSHA256: f.afterSHA256, action: f.beforeSHA256 === null ? 'create' : f.afterSHA256 === null ? 'remove' : 'change' };
+    if (f.afterSHA256 === null) return entry;
+    if (f.path.endsWith('.json')) {
+      const before = JSON.parse(readPrivate(f.path)), after = JSON.parse(f.prepared);
+      return { ...entry, changes: PREVIEW_KEYS.filter(k => JSON.stringify(at(before, k)) !== JSON.stringify(at(after, k))).map(k => ({ key: k, before: at(before, k) ?? null, after: at(after, k) ?? null })) };
+    }
+    const name = `${basename(f.path)}.prepared`;
+    savePrivate(join(out, name), f.prepared);
+    if (f.beforeSHA256 !== null) savePrivate(join(out, `${basename(f.path)}.live`), readFileSync(f.path, 'utf8'));
+    return { ...entry, prepared: name };
+  });
+  const summary = { kind: 'portable-deployment-preview', generatedAt: new Date().toISOString(), role: live.role ?? 'both', source: live.source, unitId: live.unitId,
+    healthPort: live.healthPort, old: live.old, ...(live.split ? { split: live.split } : {}), site: live.site ?? null, expectedModels: live.expectedModels ?? null,
+    localWriter: live.localWriter?.expected ?? null, controllerDirectory: live.controllerDirectory, databases: live.databases,
+    activations: Object.fromEntries(Object.entries(live.activations).map(([k, a]) => [k, { path: a.path, create: Boolean(a.create) }])), files };
+  savePrivate(join(out, 'preview.json'), JSON.stringify(summary, null, 2) + '\n');
+  return summary;
+}
+
 const timestamp = date => date.toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, '').replace('T', '');
 /** `deploy prepare <sha>`: the whole private plan, generated from live state, then preflighted. */
 export async function preparePlan(probe, { source, receiptRoot, now = new Date(), ...options }) {
@@ -371,9 +540,9 @@ export async function preparePlan(probe, { source, receiptRoot, now = new Date()
   const receiptDirectory = join(receiptRoot ?? join(dirname(dirname(live.releaseDirectory)), 'deployments'), id);
   if (existsSync(receiptDirectory)) refuse('receiptDirectory', `${receiptDirectory} already exists`);
   const plan = { ...live, operationId: `deploy-${id}`, controllerUnitId: `dawar-deploy-${id}.service`, receiptDirectory,
-    files: live.files.map(({ path, beforeSHA256, afterSHA256 }) => ({ path, beforeSHA256, afterSHA256, preparedPath: join(receiptDirectory, `${basename(path)}.prepared`) })),
+    files: live.files.map(({ path, beforeSHA256, afterSHA256 }) => ({ path, beforeSHA256, afterSHA256, ...(afterSHA256 === null ? {} : { preparedPath: join(receiptDirectory, `${basename(path)}.prepared`) }) })),
     activations: Object.fromEntries(Object.entries(live.activations).map(([kind, { path, sha256: digest }]) => [kind, { path, sha256: digest }])) };
-  for (const [i, file] of live.files.entries()) savePrivate(plan.files[i].preparedPath, file.prepared, { exclusive: true });
+  for (const [i, file] of live.files.entries()) if (file.afterSHA256 !== null) savePrivate(plan.files[i].preparedPath, file.prepared, { exclusive: true });
   // Target activations are new files beside the live ones; existing ones were
   // validated field by field in discover().
   for (const a of Object.values(live.activations)) if (a.create) savePrivate(a.path, a.create, { exclusive: true });
