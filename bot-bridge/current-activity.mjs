@@ -1,11 +1,14 @@
+// @ts-check
 import { usableTurn } from "./native-turn.mjs";
 import { nativeRecoveryKind } from '../lib/native-recovery.ts';
 import { captureActivity, activityUnchanged, activityUnresolved, requireCurrentActivity,
   projectCurrentActive, projectCurrentIdle } from "./turn-state.mjs";
 import { recoveryDelay } from './native-error-recovery.mjs';
+/** @typedef {import('./store.mjs').StateRuntime} Runtime */
 
 // Called under the main bot lock (or before startup readiness). Receipt/history
 // lookup cannot release this barrier: only current native status + a fence can.
+/** @param {Runtime} runtime */
 export async function reconcileCurrentActivity(runtime, botId) {
   const bot = runtime.store.bot(botId);
   const before = runtime.store.get('botActivity', botId);
@@ -118,6 +121,7 @@ export async function reconcileCurrentActivity(runtime, botId) {
   }
 }
 
+/** @param {Runtime} runtime */
 export async function recoverCurrentActivities(runtime, limit = 2, startup = false) {
   let checked = 0;
   const due = runtime.store.list("botActivity").filter(state => activityUnresolved(runtime, state.botId))

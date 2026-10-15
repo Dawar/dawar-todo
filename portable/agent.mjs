@@ -35,6 +35,7 @@ import {agentSnapshot} from './agent-snapshot.mjs';
 import {agentConnectionURL,centralLoopback} from './central-loopback.mjs';
 import {originalJournalReceipt} from './receipt-recovery.mjs';
 import {reconcileActiveTurns,reconcileAcceptedInbox} from '../bot-bridge/turn-state.mjs';
+import {InvariantMonitor,compactReport} from './invariant-monitor.mjs';
 const fingerprintLegacy=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
 export class AgentTransport {
@@ -76,6 +77,8 @@ export class AgentTransport {
     // unrelated/native-autonomous capabilities are not implied by this switch.
     capabilities:{text:true,localStdio:true,registeredArtifacts:true,profileReads:true,memoryCompaction:process.platform==='linux',pdfPreview:process.platform==='linux',desktop:process.platform==='linux'&&!!this.runtime.desktops,voice:false,secureTransfer:process.platform==='linux'&&!!this.runtime.secure,centralBursts:process.platform==='linux',submissionSources:Boolean(this.runtime.sources.owner?.key),...centralAgentCapabilities(this.config),autonomousGoals:true,nativeErrorRecovery:true,nativeAuthRecovery:true,durableReceiptRecovery:true,botCreation:true,nativeCompaction:true,privateReviews:this.runtime.privateReviews?2:false}};}
   send(value){if(this.socket?.readyState===WebSocket.OPEN)this.socket.send(JSON.stringify(value));}
+  /** The latest invariant report, for the hub's System health view. */
+  sendHealth(){const report=this.health?.last;if(report&&this.hubHealth)try{const frame={type:'health',report:compactReport(report)};boundedFrame(frame);this.send(frame);}catch(error){this.runtime.emit('fault',error);}}
   controlRequest(botId,tool,args){
     if(!HUB_TOOLS.has(tool))throw Error('Unsupported hub tool.');
     const read=tool==='bots_team'&&args.operation==='read'||tool==='bots_message'&&['source','directory'].includes(args.operation)||tool==='bots_schedule_list'||tool==='bots_queue'&&['lists','read'].includes(args.operation)||tool==='bots_initiative'&&args.operation==='list';
@@ -194,12 +197,14 @@ export class AgentTransport {
         if(this.socket!==ws)return;
         const m=JSON.parse(event.data);
         if(m.type==='challenge'){
+          // A hub that accepts System health frames says so; older hubs close on unknown frames.
+          this.hubHealth=m.capabilities?.nodeHealth===1;
           const hello=this.hello(),bound={nodeId:this.enrollment.nodeId,challenge:m.challenge,connectionId:m.connectionId,hello};
           sendHere({type:'authenticate',...bound,proof:signature(this.key.privateKey,bound),cursor:this.cursor});return;
         }
         if(m.type==='sync'){
           if(m.controls.some(c=>c.node_id!==this.enrollment.nodeId||c.owner!==this.enrollment.owner))throw Error('Foreign control snapshot.');
-          this.journal.synchronize(m.controls);void this.desktops.reconcile();authentication=true;this.retry=0;this.runtime.relayOnline=true;
+          this.journal.synchronize(m.controls);void this.desktops.reconcile();if(!authentication)this.sendHealth();authentication=true;this.retry=0;this.runtime.relayOnline=true;
           if(m.receipts!==undefined){
             if(!Array.isArray(m.receipts)||m.receipts.length>8)throw Error('Receipt recovery exceeds its bound.');
             for(const request of m.receipts)this.receipt(originalJournalReceipt(this.journal,request,this.enrollment));
@@ -354,7 +359,7 @@ export class AgentTransport {
       if(current.state==='dispatching')this.settleCommand(op,'unknown',{operationId:op,reason:'Bot creation is unconfirmed; it was not repeated.'});
     }));
   }
-  close(){this.closed=true;clearInterval(this.recoveryTimer);clearInterval(this.heartbeat);clearTimeout(this.retryTimer);for(const request of [...this.controlPending.values()])request.fail(Error('Agent control connection closed; retain the original operation.'));this.journal.disconnect();void this.desktops.disconnect(this.socket);this.secure.disconnect(this.socket);this.socket?.close();}
+  close(){this.closed=true;this.health?.stop();clearInterval(this.recoveryTimer);clearInterval(this.heartbeat);clearTimeout(this.retryTimer);for(const request of [...this.controlPending.values()])request.fail(Error('Agent control connection closed; retain the original operation.'));this.journal.disconnect();void this.desktops.disconnect(this.socket);this.secure.disconnect(this.socket);this.socket?.close();}
 }
 
 // Proof that a hub-reserved bot exists natively: its identity and thread.
@@ -401,6 +406,13 @@ export async function runAgent(config){
     transport.startupReady=true;await transport.recover();
   }catch(error){transport.close();throw error;}
   transport.recoveryTimer=setInterval(()=>void transport.recover().catch(error=>runtime.emit('fault',error)),5000);
+  // Read-only state invariants on separate connections, every 10 minutes.
+  // Findings go to the hub's System health view, which also sends the
+  // high-severity ones as notifications.
+  transport.health=new InvariantMonitor({
+    paths:()=>({node:join(config.dataDirectory,'native-control.sqlite'),journal:join(config.dataDirectory,'node-journal.sqlite')}),
+    options:()=>({currentEpoch:runtime.epoch,idleProbe:botId=>{try{return runtime.memoryMaintenance.idle(store.bot(botId));}catch{return null;}}}),
+    onReport:()=>transport.sendHealth(),fault:error=>runtime.emit('fault',error)}).start();
   // Optional native status feed (Mac menu bar). Absent by default on Linux.
   const status=config.agent.statusFile?startStatusReporter({runtime,source,path:config.agent.statusFile,
     onError:error=>console.error(JSON.stringify({at:new Date().toISOString(),event:'status.error',message:error.message}))}):null;

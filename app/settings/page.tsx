@@ -4,6 +4,7 @@ import { FormEvent, useEffect, useRef, useState } from "react";
 import { ExecutionMachines } from "./execution-machines";
 import { AccountSession } from "./account-session";
 import { ProactiveBots } from "./proactive-bots";
+import { SystemHealth } from "./system-health";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -915,6 +916,7 @@ export default function SettingsPage() {
         <AccountSession />
         <ExecutionMachines />
         <ProactiveBots />
+        <SystemHealth />
         <form onSubmit={save} className="rounded-lg border border-border bg-card p-5 sm:p-7">
           <fieldset disabled={loading || saving} className="space-y-5 disabled:opacity-60">
             <section aria-labelledby="opening-preference-title" className="border-b border-border pb-5">

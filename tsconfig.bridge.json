@@ -1,0 +1,32 @@
+{
+  // JSDoc type checking for the bridge's state modules and the invariant
+  // checker. Only files that start with // @ts-check are checked; modules they
+  // import are inferred but not reported.
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023", "dom", "dom.iterable"],
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "allowJs": true,
+    "checkJs": false,
+    "noEmit": true,
+    "strict": true,
+    "noImplicitAny": false,
+    "useUnknownInCatchVariables": false,
+    "skipLibCheck": true,
+    "allowImportingTsExtensions": true,
+    "types": ["node"]
+  },
+  "files": [
+    "bot-bridge/store.mjs",
+    "bot-bridge/turn-state.mjs",
+    "bot-bridge/current-activity.mjs",
+    "bot-bridge/native-error-recovery.mjs",
+    "bot-bridge/memory-maintenance.mjs",
+    "bot-bridge/state-invariants.mjs",
+    "portable/invariant-monitor.mjs",
+    "portable/replay-simulations.mjs",
+    "portable/nightly-invariants.mjs",
+    "tests/types/store-ids.check.mjs"
+  ]
+}

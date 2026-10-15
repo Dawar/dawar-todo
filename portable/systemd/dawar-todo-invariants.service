@@ -1,0 +1,22 @@
+# TEMPLATE: not installed by any deploy step. Replace the placeholders, copy
+# both files to ~/.config/systemd/user/, then run
+#   systemctl --user daemon-reload && systemctl --user enable --now dawar-todo-invariants.timer
+# The job opens production databases read-only (SQLite online backup into a
+# private temporary directory), checks the copies and deletes them.
+[Unit]
+Description=Dawar Todo nightly state invariant replay (production copies)
+
+[Service]
+Type=oneshot
+# The installed backend release that matches the running service.
+WorkingDirectory=/BACKEND_RELEASE_DIRECTORY
+ExecStart=/usr/bin/env node portable/nightly-invariants.mjs --config /PORTABLE_CONFIG_JSON --out %S/dawar-todo/invariants
+# Background priority: never compete with live bots for CPU or disk.
+Nice=15
+IOSchedulingClass=idle
+CPUQuota=50%
+MemoryMax=1G
+TimeoutStartSec=30min
+UMask=0077
+# No secrets are needed: no EnvironmentFile, no network.
+RestrictAddressFamilies=AF_UNIX

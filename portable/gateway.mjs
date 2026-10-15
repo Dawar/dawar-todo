@@ -29,6 +29,7 @@ import {HubSecureTransport} from './secure-transport.mjs';
 import {fingerprint} from './protocol.mjs';
 import {RetainedRecords} from './retained-records.mjs';
 import {MacReleaseService} from './mac-releases.mjs';
+import {HubHealth,acceptNodeReport} from './invariant-monitor.mjs';
 
 const json = (response,status,body) => { response.writeHead(status,{'content-type':'application/json','cache-control':'no-store'});response.end(JSON.stringify(body)); };
 async function readBody(req) {
@@ -61,6 +62,10 @@ export function startGateway(config) {
   controls.initiative=authority?new InitiativeCoordinator({store:controls.store,executor:hubExecutor(store,router,config.owner.key),
     bots:()=>controls.store.bots().filter(bot=>{try{return store.placement(config.owner.key,bot.id).owner===config.owner.key;}catch{return false;}}),fault:error=>controls.emit('fault',error)}):null;
   const voice=config.voice?.enabled===true?createVoiceRuntime(config,{writer,assertWriter:()=>controls.assertWriter(),retained}):null;
+  // Settings → System health: read-only invariant scans of this hub's control
+  // store plus each node's latest report; high findings become notifications.
+  const health=new HubHealth({controlPath:join(config.dataDirectory,'control.sqlite'),owner:config.owner.key,application:authority?application:null,
+    online:nodeId=>connections.has(nodeId),fault:error=>controls.emit('fault',error)}).start();
   const scheduler=authority?setInterval(()=>void controls.tick().catch(error=>controls.emit('fault',error)),5000):null;
   const downloadDirectory=resolve(config.agentDownloadDirectory??fileURLToPath(new URL('../agent-downloads',import.meta.url)));
   const macReleases=new MacReleaseService({directory:downloadDirectory,nodeLookup:id=>store.db.prepare('SELECT public_key,revoked_at FROM portable_nodes WHERE id=?').get(id)});
@@ -128,6 +133,7 @@ export function startGateway(config) {
         if (!session || session.owner!==config.owner.key) return json(res,403,{error:'Owner session required.'});
         if(req.method!=='GET')identity.csrf(r,session);
         const b = req.method==='GET'?{}:await readBody(req);
+        if(u.pathname==='/api/portable/health' && req.method==='GET') return json(res,200,health.view());
         if(u.pathname==='/api/portable/nodes' && req.method==='GET') return json(res,200,{nodes:store.db.prepare('SELECT id,fingerprint,hello,revoked_at FROM portable_nodes WHERE owner=?').all(session.owner).map(n=>({...n,online:connections.has(n.id)}))});
         if(u.pathname==='/api/portable/installer'&&req.method==='GET'){
           const d=JSON.parse(await readFile(join(downloadDirectory,'current.json'),'utf8'));
@@ -295,7 +301,7 @@ export function startGateway(config) {
         return {type:'sync',...value};
       };
       const timeout=setTimeout(()=>{if(!nodeId)ws.close(1008,'Authentication expired');},10000);
-      ws.send(JSON.stringify({type:'challenge',challenge,connectionId,protocol:1}));
+      ws.send(JSON.stringify({type:'challenge',challenge,connectionId,protocol:1,capabilities:{nodeHealth:1}}));
       ws.on('message',raw=>{
         try {
           const m=JSON.parse(raw.toString());
@@ -337,6 +343,10 @@ export function startGateway(config) {
             const answer=value=>{const current=store.placement(n.owner,m.botId);if(connections.get(nodeId)===ws&&current.node_id===nodeId&&current.epoch===m.epoch)ws.send(boundedFrame({type:'artifact-result',requestId:m.requestId,botId:m.botId,epoch:m.epoch,...value}));};
             void nodeStorage.request(nodeId,m).then(result=>answer({result})).catch(()=>answer({error:'Registered file confirmation unavailable; retain its original ID and local bytes.',outcome:'uncertain'})).catch(()=>ws.close(1008,'Artifact scope changed'));
           }
+          else if(m.type==='health'){
+            const n=store.node(nodeId),report=acceptNodeReport(m.report,botId=>{try{return store.placement(n.owner,botId).node_id===nodeId;}catch{return false;}});
+            void health.receive(nodeId,report).catch(error=>controls.emit('fault',error));
+          }
           else if(m.type==='event') {const before=store.eventCursor(),sequence=store.event(nodeId,m.eventId,m.botId,m.epoch,m.event);const current=sequence>before&&controls.nativeEvent(m.event,nodeId,m.epoch)!==false;ws.send(JSON.stringify({type:'event-ack',eventId:m.eventId,sequence}));if(current)broadcast(store.node(nodeId).owner,{...m.event,seq:sequence});}
           else throw Error('Unknown node frame.');
         } catch {ws.close(1008,'Node frame rejected');}
@@ -346,5 +356,5 @@ export function startGateway(config) {
   });
   server.listen(config.gatewayPort??3210,'127.0.0.1');
   let closing;
-  return {server,store,application,objects,router,controls,voice,desktop,secure,taskSecure,taskRequests,close:()=>closing??=(async()=>{if(voice)await voice.close();clearInterval(scheduler);desktop.close();secure.close();taskSecure.close();router.close();await closeHttpServer(server,{sockets:()=>sockets.clients});writer.close();controls.close();objects.close();store.close();application.close();})()};
+  return {server,store,application,objects,router,controls,health,voice,desktop,secure,taskSecure,taskRequests,close:()=>closing??=(async()=>{if(voice)await voice.close();clearInterval(scheduler);health.stop();desktop.close();secure.close();taskSecure.close();router.close();await closeHttpServer(server,{sockets:()=>sockets.clients});writer.close();controls.close();objects.close();store.close();application.close();})()};
 }

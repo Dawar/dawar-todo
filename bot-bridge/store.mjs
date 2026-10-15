@@ -1,9 +1,52 @@
+// @ts-check
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync, chmodSync } from "node:fs";
 import { dirname } from "node:path";
 
+// Record shapes for the kinds the state modules read and write. Only identity
+// and optional reference fields are typed; everything else stays open. An
+// optional ID (string|null|undefined) passed where an ID is required is a type
+// error, so a lookup by a missing reference has to be guarded.
+/** @typedef {{ id: string, botId?: string|null, [field: string]: any }} StoredRecord */
+/**
+ * @typedef {{ id: string, slug: string, name?: string, threadId?: string|null, activeTurnId?: string|null, executionMode?: string,
+ *   archived?: boolean, archiving?: boolean, deletedAt?: string|null, queuePaused?: boolean, managerPaused?: boolean, extension?: number,
+ *   [field: string]: any }} Bot
+ */
+/**
+ * @typedef {{ id: string, botId: string, threadId?: string|null, generation: number, activeTurnId?: string|null, unresolved?: boolean,
+ *   unresolvedTurnId?: string|null, dispatchOperationId?: string|null, attempts?: number, reconcileAfter?: string|null, [field: string]: any }} BotActivity
+ */
+/**
+ * @typedef {{ id: string, botId: string, threadId: string, failedTurnId: string, phase: string, attempts: number,
+ *   releaseActionId?: string|null, resumeActionId?: string|null, nativeRetry?: boolean, nativeRetryEpoch?: string|null,
+ *   originalOperationId?: string|null, [field: string]: any }} NativeErrorRecoveryRecord
+ */
+/** @typedef {{ id: string, botId: string, threadId: string, kind: string, epoch: string, state: string, [field: string]: any }} NativeRecoveryAction */
+/** @typedef {{ id: string, botId: string, state: string, turnId?: string|null, terminalStatus?: string|null, nativeQueueId?: string|null, [field: string]: any }} PrimaryInboxRecord */
+/** @typedef {{ id: string, botId: string, state: string, operationId?: string|null, turnId?: string|null, listId?: string|null, [field: string]: any }} PromptQueueRecord */
+/**
+ * @typedef {{ botActivity: BotActivity, nativeErrorRecovery: NativeErrorRecoveryRecord, nativeRecoveryAction: NativeRecoveryAction,
+ *   primaryInbox: PrimaryInboxRecord, promptQueue: PromptQueueRecord }} StateRecords
+ */
+/** @template {string} K @typedef {K extends keyof StateRecords ? StateRecords[K] : StoredRecord} RecordOf */
+/** @typedef {{ id: string, fingerprint: string, status: string, [field: string]: any }} Operation */
+/**
+ * The runtime surface the state modules use. The store is typed; the rest of
+ * the (large, untyped) BotRuntime stays open.
+ * @typedef {{ store: Store, epoch: string, codex: any, loaded: Set<string>, locks: Map<string, any>, [member: string]: any }} StateRuntime
+ */
+
+/** @param {unknown} row @returns {any} */
+const decode = row => JSON.parse(String(/** @type {{json: unknown}} */ (row).json));
+
 export class Store {
+  /** @param {string} path */
   constructor(path) {
+    /** Nesting depth of the open transaction (0: none). */
+    this.transactionDepth = 0;
+    /** @type {Array<() => void>} Publications that run after the outermost commit. */
+    this.commitCallbacks = [];
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
     this.db = new DatabaseSync(path);
     chmodSync(path, 0o600);
@@ -52,7 +95,7 @@ export class Store {
       thread_id TEXT NOT NULL, turn_id TEXT NOT NULL, cursor TEXT, page_limit INTEGER NOT NULL,
       PRIMARY KEY(thread_id,turn_id))`);
     this.transaction(() => {
-      const bots = this.db.prepare("SELECT json FROM bots ORDER BY rowid").all().map(row => JSON.parse(row.json));
+      const bots = this.db.prepare("SELECT json FROM bots ORDER BY rowid").all().map(decode);
       let next = Math.max(2, Number(this.meta("next-bot-extension")) || 2,
         ...bots.filter(bot => Number.isSafeInteger(bot.extension) && bot.extension >= 2).map(bot => bot.extension + 1));
       const used = new Set();
@@ -67,43 +110,54 @@ export class Store {
     });
     this.db.exec("CREATE UNIQUE INDEX IF NOT EXISTS bot_extension ON bots(json_extract(json,'$.extension')) WHERE json_extract(json,'$.extension') IS NOT NULL");
   }
+  /** @returns {Bot[]} */
   bots({ includeDeleted = false } = {}) {
     return this.db
       .prepare("SELECT json FROM bots")
       .all()
-      .map((r) => JSON.parse(r.json)).filter(bot => includeDeleted || !bot.deletedAt);
+      .map(decode).filter(bot => includeDeleted || !bot.deletedAt);
   }
+  /** @param {string} id @returns {Bot} */
   bot(id) {
     const row = this.db.prepare("SELECT json FROM bots WHERE id=?").get(id);
     if (!row) throw new Error("Bot not found.");
-    return JSON.parse(row.json);
+    return decode(row);
   }
+  /** @param {string} id */
   teamPlacement(id) {
     const row = this.db.prepare("SELECT json_extract(json,'$.teamId') AS teamId, json_extract(json,'$.teamOrder') AS teamOrder FROM bots WHERE id=?").get(id);
     return row ? { teamId: row.teamId ?? null, teamOrder: row.teamOrder ?? 0 } : {};
   }
+  /** @param {Bot} bot @returns {Bot} */
   saveBot(bot) {
     return this.transaction(() => {
       const prior = this.db.prepare("SELECT json_extract(json,'$.extension') AS extension FROM bots WHERE id=?").get(bot.id);
-      const extension = prior?.extension ?? this.meta("next-bot-extension") ?? 2;
+      const extension = Number(prior?.extension ?? this.meta("next-bot-extension") ?? 2);
       if (!prior) this.meta("next-bot-extension", extension + 1);
       bot = { ...bot, extension };
       this.db
         .prepare(
           "INSERT INTO bots VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET slug=excluded.slug,thread_id=excluded.thread_id,json=excluded.json",
         )
-        .run(bot.id, bot.slug, bot.threadId, JSON.stringify(bot));
+        // A bot that is not provisioned yet has no thread; SQLite cannot bind undefined.
+        .run(bot.id, bot.slug, bot.threadId ?? null, JSON.stringify(bot));
       return bot;
     });
   }
+  /**
+   * The ID is required by type: guard an optional reference before looking it
+   * up. At run time a missing ID still returns null rather than throwing.
+   * @template {string} K @param {K} kind @param {string} id @returns {RecordOf<K> | null}
+   */
   get(kind, id) {
     // A record that was never created (an absent optional ID) is not a query error.
     if (id === undefined || id === null) return null;
     const row = this.db
       .prepare("SELECT json FROM records WHERE kind=? AND id=?")
       .get(kind, id);
-    return row ? JSON.parse(row.json) : null;
+    return row ? decode(row) : null;
   }
+  /** @template {string} K @param {K} kind @param {string|null} [botId] @returns {RecordOf<K>[]} */
   list(kind, botId) {
     return (
       botId
@@ -111,38 +165,44 @@ export class Store {
             .prepare("SELECT json FROM records WHERE kind=? AND bot_id=?")
             .all(kind, botId)
         : this.db.prepare("SELECT json FROM records WHERE kind=?").all(kind)
-    ).map((r) => JSON.parse(r.json));
+    ).map(decode);
   }
   /** Runs in one status (run_state_bot index), without decoding the history. */
+  /** @param {string} status @param {string|null} [botId] @returns {StoredRecord[]} */
   runsWithStatus(status, botId = null) {
     return this.db.prepare(`SELECT json FROM records WHERE kind='run' AND json_extract(json,'$.status')=? AND (? IS NULL OR bot_id=?)`)
-      .all(status, botId, botId).map(row => JSON.parse(row.json));
+      .all(status, botId, botId).map(decode);
   }
   /**
    * The newest runs of the given bots (null: all), in the order list() + a stable
    * scheduledAt sort produced: newest first, then bot ID, then insertion.
    */
+  /** @param {string[]|null} botIds @param {number} limit @returns {StoredRecord[]} */
   recentRuns(botIds, limit) {
     if (botIds && !botIds.length) return [];
+    const ids = botIds && JSON.stringify(botIds);
     return this.db.prepare(`SELECT json FROM records WHERE kind='run' AND (? IS NULL OR bot_id IN (SELECT value FROM json_each(?)))
       ORDER BY json_extract(json,'$.scheduledAt') DESC, bot_id, rowid LIMIT ?`)
-      .all(botIds && JSON.stringify(botIds), botIds && JSON.stringify(botIds), limit).map(row => JSON.parse(row.json));
+      .all(ids, ids, limit).map(decode);
   }
+  /** @param {string} botId @param {string|null} [listId] @returns {PromptQueueRecord[]} */
   queuedPrompts(botId, listId = null) {
     // Read pending messages only; merged/delivered originals remain durable
     // without being decoded on every queue or scheduler refresh.
     return this.db.prepare(`SELECT json FROM records WHERE kind='promptQueue' AND bot_id=?
       AND COALESCE(json_extract(json,'$.listId'),'')=?
       AND json_extract(json,'$.state') IN ('queued','dispatching','uncertain','failed')`)
-      .all(botId, listId ?? '').map(row => JSON.parse(row.json));
+      .all(botId, listId ?? '').map(decode);
   }
+  /** @param {string} kind @param {string|null} [botId] @returns {StoredRecord[]} */
   executionMetadata(kind, botId = null) {
     if (!["runLane", "runIntake", "managerExecution"].includes(kind)) throw new Error("Unknown execution metadata kind.");
     // Admission/snapshots inspect metadata without hydrating frozen profiles,
     // full submitted input or native parameters for the historical library.
     return this.db.prepare(`SELECT json_remove(json,'$.profile','$.nativeParams','$.input','$.text','$.selectedContext') AS json
-      FROM records WHERE kind=? AND (? IS NULL OR bot_id=?)`).all(kind, botId, botId).map(row => JSON.parse(row.json));
+      FROM records WHERE kind=? AND (? IS NULL OR bot_id=?)`).all(kind, botId, botId).map(decode);
   }
+  /** @template {string} K @template {RecordOf<K>} R @param {K} kind @param {R} record @returns {R} */
   put(kind, record) {
     this.db
       .prepare(
@@ -151,28 +211,32 @@ export class Store {
       .run(kind, record.id, record.botId ?? null, JSON.stringify(record));
     return record;
   }
+  /** @param {string} kind @param {string} id */
   remove(kind, id) {
     this.db.prepare("DELETE FROM records WHERE kind=? AND id=?").run(kind, id);
   }
+  /** @param {string} key @param {unknown} [value] @returns {any} */
   meta(key, value) {
     if (value !== undefined)
       this.db
         .prepare("INSERT OR REPLACE INTO meta VALUES(?,?)")
         .run(key, JSON.stringify(value));
     const row = this.db.prepare("SELECT json FROM meta WHERE key=?").get(key);
-    return row ? JSON.parse(row.json) : null;
+    return row ? decode(row) : null;
   }
+  /** @param {string} id @returns {Operation|null} */
   operation(id) {
     const r = this.db.prepare("SELECT * FROM operations WHERE id=?").get(id);
     return r
       ? {
-          ...JSON.parse(r.json),
-          id: r.id,
-          fingerprint: r.fingerprint,
-          status: r.status,
+          ...decode(r),
+          id: String(r.id),
+          fingerprint: String(r.fingerprint),
+          status: String(r.status),
         }
       : null;
   }
+  /** @param {string} id @param {string} fingerprint @param {string} status @param {object} data */
   saveOperation(id, fingerprint, status, data) {
     this.db
       .prepare(
@@ -180,6 +244,7 @@ export class Store {
       )
       .run(id, fingerprint, status, JSON.stringify(data));
   }
+  /** @returns {Operation[]} */
   uncertainOperations() {
     return this.db
       .prepare(
@@ -187,12 +252,13 @@ export class Store {
       )
       .all()
       .map((r) => ({
-        ...JSON.parse(r.json),
-        id: r.id,
-        fingerprint: r.fingerprint,
-        status: r.status,
+        ...decode(r),
+        id: String(r.id),
+        fingerprint: String(r.fingerprint),
+        status: String(r.status),
       }));
   }
+  /** @param {string} botId @param {string} key @param {string|null} [excludeId] */
   retainedAnswerOperation(botId, key, excludeId = null) {
     // Earliest retained attempt, never the new retry's payload. Indexed by the
     // bot/question key; rowid is insertion order, not a wall-clock authority.
@@ -202,8 +268,9 @@ export class Store {
       AND (? IS NULL OR id<>?)
       AND COALESCE(json_extract(json,'$.outcome'),'uncertain')<>'rejected'
       ORDER BY rowid LIMIT 1`).get(botId, key, excludeId, excludeId);
-    return row ? this.operation(row.id) : null;
+    return row ? this.operation(String(row.id)) : null;
   }
+  /** @param {string} botId @param {string} since */
   unconfirmedModeIntent(botId, since) {
     // Older bridges used status=failed for some transport/local exceptions;
     // only a proven rejected outcome makes those settings safe to supersede.
@@ -214,6 +281,7 @@ export class Store {
       AND json_type(json,'$.params.mode') IS NOT NULL
       LIMIT 1`).get(botId, since));
   }
+  /** @param {object} event */
   event(event) {
     const result = this.db
       .prepare("INSERT INTO events(json) VALUES(?)")
@@ -226,27 +294,28 @@ export class Store {
   cursor() {
     return Number(
       this.db.prepare("SELECT COALESCE(MAX(seq),0) AS seq FROM events").get()
-        .seq,
+        ?.seq ?? 0,
     );
   }
+  /** @param {number} after */
   replay(after) {
     return this.db
       .prepare(
         "SELECT seq,json FROM events WHERE seq>? ORDER BY seq LIMIT 10000",
       )
       .all(after)
-      .map((r) => ({ seq: Number(r.seq), ...JSON.parse(r.json) }));
+      .map((r) => ({ seq: Number(r.seq), ...decode(r) }));
   }
+  /** @template T @param {() => T} fn @returns {T} */
   transaction(fn) {
     const depth = this.transactionDepth ?? 0;
-    const mark = this.commitCallbacks?.length ?? 0;
-    this.commitCallbacks ??= [];
+    const mark = this.commitCallbacks.length;
     this.db.exec(depth ? `SAVEPOINT nested_${depth}` : "BEGIN IMMEDIATE");
     this.transactionDepth = depth + 1;
-    let result;
+    /** @type {T} */ let result;
     try {
       result = fn();
-      if (result && typeof result.then === "function")
+      if (result && typeof (/** @type {any} */ (result)).then === "function")
         throw new Error("Store transactions must be synchronous.");
       this.db.exec(depth ? `RELEASE nested_${depth}` : "COMMIT");
     } catch (e) {
@@ -266,6 +335,7 @@ export class Store {
     }
     return result;
   }
+  /** @param {() => void} callback */
   afterCommit(callback) {
     if (this.transactionDepth) this.commitCallbacks.push(callback);
     else callback();

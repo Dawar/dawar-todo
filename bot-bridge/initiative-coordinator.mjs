@@ -108,7 +108,7 @@ export class InitiativeCoordinator {
     // baseline timer, at most `triageMaxReviews` per scan, best first.
     if (settings.triage) {
       const kept = reviews.filter(e => e.score > 1).sort((a, b) => b.score - a.score).slice(0, settings.triageMaxReviews);
-      for (const e of reviews) if (!kept.includes(e)) this.saveBotState(e.botId, { lastSkip: "triage", lastSkipAt: this.at() });
+      for (const e of reviews) if (!kept.includes(e)) this.saveBotState(e.botId, { lastSkip: "triage", lastSkipAt: this.at(), skippingSince: this.botState(e.botId).skippingSince ?? this.at() });
       reviews = kept;
     }
     this.backlog = [...due.filter(e => e.kind === "extract"), ...reviews]
@@ -128,7 +128,7 @@ export class InitiativeCoordinator {
       }
       if (!probe.supported) { this.saveBotState(bot.id, { lastError: `Private reviews are unavailable for ${probe.provider} bots on this node.`, lastErrorAt: this.at() }); continue; }
       // Busy, stopped or unavailable bots keep their due job for a later scan.
-      if (!probe.idle) { this.saveBotState(bot.id, { lastSkip: probe.reason, lastSkipAt: this.at() }); continue; }
+      if (!probe.idle) { this.saveBotState(bot.id, { lastSkip: probe.reason, lastSkipAt: this.at(), skippingSince: this.botState(bot.id).skippingSince ?? this.at() }); continue; }
       await this.startJob(bot, probe, settings, entry);
     }
   }
@@ -266,7 +266,7 @@ export class InitiativeCoordinator {
     const hinted = Date.parse(result.nextReviewAt ?? "") || 0;
     // Every completed review schedules another; the baseline is the earliest.
     const next = Math.min(this.clock() + 7 * 864e5, Math.max(this.clock() + baseline, hinted));
-    this.saveBotState(review.botId, { lastReviewAt: this.at(), nextReviewAt: new Date(next).toISOString(), failures: 0, backoffUntil: null,
+    this.saveBotState(review.botId, { lastReviewAt: this.at(), skippingSince: null, nextReviewAt: new Date(next).toISOString(), failures: 0, backoffUntil: null,
       lastOutcome: result.decision, lastError: null, lastRevision: capture.revision });
     return this.endReview(review, "accepted", { usage, packetTokens: v.packetTokens ?? null, decision: result.decision, itemIds: applied.items.map(i => i.id),
       publicationId: publication?.id ?? null, publicationBlock, ignored: applied.ignored });
