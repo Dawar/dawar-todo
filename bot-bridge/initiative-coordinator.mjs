@@ -384,6 +384,12 @@ export class InitiativeCoordinator {
     const settings = this.ledger.settings(), s = this.botState(botId);
     const reviews = this.store.list("initiativeReview", botId).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
     return { settings, metrics: this.ledger.metrics(settings), lastScanAt: this.lastScanAt ?? null, looseThreads: this.looseThreadList(settings),
+      // Every bot's state, for the global Proactive bots status table.
+      bots: this.bots().filter(b => !b.archived && !b.archiving && !b.deletedAt).map(b => {
+        const state = this.botState(b.id);
+        return { botId: b.id, name: b.name ?? b.slug ?? b.id, included: this.ledger.botSettings(b.id, settings).enabled, lastReviewAt: state.lastReviewAt ?? null,
+          nextReviewAt: state.nextReviewAt ?? null, failures: state.failures ?? 0, lastError: state.lastError ?? null, lastErrorAt: state.lastErrorAt ?? null };
+      }),
       bot: { botId, enabled: this.ledger.botSettings(botId, settings).enabled, override: settings.bots[botId] ?? {},
         supported: true, lastReviewAt: s.lastReviewAt ?? null, nextReviewAt: s.nextReviewAt ?? null, lastExtractionAt: s.lastExtractionAt ?? null,
         lastOutcome: s.lastOutcome ?? null, failures: s.failures ?? 0, lastError: s.lastError ?? null, lastErrorAt: s.lastErrorAt ?? null,

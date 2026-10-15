@@ -40,6 +40,7 @@ import {
   UsersRound,
   Phone,
   Megaphone,
+  Lightbulb,
   } from "lucide-react";
 import type { Bot } from "./single-thread-contract";
 import { BotAvatar as Avatar } from "./bot-avatar";
@@ -95,6 +96,7 @@ import { botProvider } from "../../lib/bot-provider";
 const CreateBotDialog = retryingLazy(() => import("./create-bot-dialog").then(m => ({ default: m.CreateBotDialog })));
 const BotAdminApprovals = retryingLazy(() => import("./bot-admin-approvals").then(m => ({ default: m.BotAdminApprovals })));
 const InitiativeSettings = retryingLazy(() => import("./initiative-settings").then(m => ({ default: m.InitiativeSettings })));
+const ProactiveSettingsPage = retryingLazy(() => import("./proactive-settings").then(m => ({ default: m.ProactiveSettingsPage })));
 const PersonalitySettings = retryingLazy(() => import("./personality-settings").then(m => ({ default: m.PersonalitySettings })));
 const ScheduleEditor = retryingLazy(() => import("./schedule-editor").then(m => ({ default: m.ScheduleEditor })));
 const ScheduleList = retryingLazy(() => import("./schedule-list").then(m => ({ default: m.ScheduleList })));
@@ -137,7 +139,7 @@ export function BotsWorkspace() {
     [creating, setCreating] = useState(false),
     [profile, setProfile] = useState(false),
     [desktopScope, setDesktopScope] = useState<string | null>(null),
-    [gallery, setGallery] = useState<"artifacts" | "attachments" | null>(null),
+    [gallery, setGallery] = useState<"artifacts" | "attachments" | "proactive" | null>(null),
     [detailsSection, setDetailsSection] = useState<BotDetailsSection>(DEFAULT_DETAILS_SECTION),
     [activityTarget, setActivityTarget] = useState<ActivityTarget | null>(null),
     [showOverallUsage, setShowOverallUsage] = useState(false),
@@ -267,7 +269,7 @@ export function BotsWorkspace() {
     client.start();
     const pop = () => {
       const params = new URLSearchParams(window.location.search), id = params.get("bot"), view = params.get("view");
-      setGallery(view === "artifacts" || view === "attachments" && id ? view : null);
+      setGallery(view === "artifacts" || view === "proactive" || view === "attachments" && id ? view : null);
       selectedRef.current = id;
       setSelected(id);
     };
@@ -389,9 +391,9 @@ export function BotsWorkspace() {
     }catch(error){setTransferError(error instanceof Error?error.message:"Could not paste this composer. Original drafts are retained.");}
     finally{setTransferBusy(false);}
   }
-  function openGallery(view: "artifacts" | "attachments") {
+  function openGallery(view: "artifacts" | "attachments" | "proactive") {
     const url = new URL(window.location.href); url.searchParams.set("view", view);
-    if (view === "artifacts") { url.searchParams.delete("bot"); setSelected(null); selectedRef.current = null; }
+    if (view !== "attachments") { url.searchParams.delete("bot"); setSelected(null); selectedRef.current = null; }
     setGallery(view); window.history.pushState({}, "", url);
   }
   function closeGallery() {
@@ -490,6 +492,7 @@ export function BotsWorkspace() {
             <Button type="button" variant="ghost" size="icon" aria-label="Announcement" title="Announcement" disabled={!owner} onClick={() => setAnnouncementOwner(owner)}><Megaphone size={19} /></Button>
             {snapshot?.capabilities?.operatorCalls === 1 && <Button type="button" variant="ghost" size="icon" className="aria-pressed:bg-accent aria-pressed:text-accent-foreground" aria-label="Call Operator" onClick={() => { setCallBotId(null); setShowCall(true); }}><Phone size={16} /></Button>}
             <ArtifactNav active={gallery === "artifacts"} onOpen={() => openGallery("artifacts")} />
+            {snapshot?.capabilities?.proactiveInitiative === 1 && <Button type="button" variant="ghost" size="icon" className="aria-[current=page]:bg-accent aria-[current=page]:text-accent-foreground" title="Proactive bots" aria-label="Proactive bots" aria-current={gallery === "proactive" ? "page" : undefined} onClick={() => openGallery("proactive")}><Lightbulb size={19} aria-hidden="true" /></Button>}
             <Button type="button" variant="ghost" size="icon" className="aria-pressed:bg-accent aria-pressed:text-accent-foreground" title="Teams" aria-label="Teams" onClick={() => setShowTeams(true)}><UsersRound size={19} /></Button>
             <Button type="button" variant="ghost" size="icon" className="aria-pressed:bg-accent aria-pressed:text-accent-foreground" title="Account usage" aria-label="Account usage" onClick={() => setShowOverallUsage(true)}><BarChart3 size={19} /></Button>
             {canCreate && <Button type="button" variant="ghost" size="icon"
@@ -534,7 +537,8 @@ export function BotsWorkspace() {
             </Button>
           </div>
         </aside>
-        {gallery ? <ArtifactGallery key={`${owner}:${gallery}:${gallery === "attachments" ? bot?.id : "all"}`} owner={owner} online={online} bots={bots} bot={gallery === "attachments" ? bot : undefined} onClose={closeGallery} /> : <section className="bots-conversation">
+        {gallery === "proactive" ? <Suspense fallback={null}><ProactiveSettingsPage key={`${owner}:proactive`} owner={owner} online={online} bots={bots} onClose={closeGallery} /></Suspense>
+          : gallery ? <ArtifactGallery key={`${owner}:${gallery}:${gallery === "attachments" ? bot?.id : "all"}`} owner={owner} online={online} bots={bots} bot={gallery === "attachments" ? bot : undefined} onClose={closeGallery} /> : <section className="bots-conversation">
           <header className="bots-conversation-heading">
             <Button variant="ghost" size="icon"
               className="bots-icon-button bots-back"
@@ -793,7 +797,7 @@ export function BotsWorkspace() {
               history: <>{lanes && <details data-history-key="legacy-controls" className="bots-legacy-controls"><summary>Earlier work · recovery and controls</summary><BotWorkControls owner={owner} bot={bot} runs={recentRuns} online={online} onOpen={openActivity} /></details>}<Suspense fallback={null}><RunHistory key={`${scope}:${activityTarget?.runId ?? ""}:${activityTarget?.turnId ?? ""}`} embedded bot={bot} schedules={schedules} recentRuns={recentRuns} initialTarget={activityTarget} attachments={[]} online={online} onClose={closeProfile} download={id => void download(id)} /></Suspense></>,
               settings: <div className="bots-details-settings">
                 <ExecutionAccess key={`access:${scope}`} owner={owner} botId={bot.id} online={online}/>
-                {snapshot?.capabilities?.proactiveInitiative === 1 && <Suspense fallback={null}><InitiativeSettings key={`initiative:${scope}`} owner={owner} botId={bot.id} botName={bot.name} online={online} /></Suspense>}
+                {snapshot?.capabilities?.proactiveInitiative === 1 && <Suspense fallback={null}><InitiativeSettings key={`initiative:${scope}`} owner={owner} botId={bot.id} botName={bot.name} online={online} onManage={() => openGallery("proactive")} /></Suspense>}
                 <form className="grid gap-3" onSubmit={event => { event.preventDefault(); const input = new FormData(event.currentTarget); void action(() => client.rpc("bots.update", bot.id, { name: String(input.get("name")) })); }}>
                   <label>Name<Input name="name" defaultValue={bot.name} key={bot.id + bot.name} maxLength={80} required /></label><Button className="justify-self-start" type="submit" disabled={!online || busy}>Save name</Button>
                 </form>
