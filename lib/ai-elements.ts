@@ -134,10 +134,10 @@ export function subagentView(item: ThreadItem): SubagentView | null {
       prompt: null, model: item.model ?? null, effort: item.reasoningEffort ?? null, activity: item.kind };
   }
   if (item.type === "collabAgentToolCall") {
-    const ids = item.receiverThreadIds.filter(id => typeof id === "string" && id);
+    const ids = (item.receiverThreadIds ?? []).filter(id => typeof id === "string" && id);
     if (!ids.length || !item.senderThreadId) return null;
     return { title: COLLAB_LABELS[item.tool] ?? "Subagent work", agents: ids.slice(0, 12).map(threadId => ({ threadId, name: `Agent ${threadId.slice(0, 8)}`,
-      status: item.agentsStates[threadId]?.status ?? null, message: item.agentsStates[threadId]?.message?.slice(0, 2000) ?? null })),
+      status: item.agentsStates?.[threadId]?.status ?? null, message: item.agentsStates?.[threadId]?.message?.slice(0, 2000) ?? null })),
       prompt: item.prompt?.slice(0, MAX_TEXT) ?? null, model: item.model ?? null, effort: item.reasoningEffort ?? null, activity: null };
   }
   return null;

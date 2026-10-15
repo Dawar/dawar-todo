@@ -101,6 +101,9 @@ test('Subagent display requires native agent thread provenance', () => {
   assert.equal(ai.subagentView(collab).title, 'Started subagent');
   assert.equal(ai.subagentView(collab).agents[0].status, 'running');
   assert.equal(ai.subagentView({ ...collab, receiverThreadIds: [] }), null, 'no receiver identity keeps the Tool fallback');
+  // Cached history from an older native build can lack the agent maps; rendering must not throw.
+  assert.equal(ai.subagentView({ ...collab, agentsStates: undefined }).agents[0].status, null);
+  assert.equal(ai.subagentView({ ...collab, receiverThreadIds: undefined }), null);
   // Claude Task calls arrive as ordinary tool items without agent identities.
   assert.equal(ai.subagentView({ type: 'mcpToolCall', server: 'claude', tool: 'Task' }), null);
 });
