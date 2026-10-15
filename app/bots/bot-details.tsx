@@ -1,27 +1,14 @@
 "use client";
-import { Activity, useCallback, useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
-import { Clock3, Compass, FolderOpen, History, ListOrdered, ListTree, Monitor, Phone, Settings2, Target, UsersRound, X } from "lucide-react";
+import { Activity, useCallback, useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent, type ReactNode } from "react";
+import { Compass, FolderOpen, ListTodo, Settings2, Wrench, X } from "lucide-react";
+import { DETAILS_TABS, SECTION_LABELS, detailsLocation, tabSection, type BotDetailsLeaf, type BotDetailsSection, type BotDetailsTab } from "./bot-details-sections";
 import type { Bot } from "../../lib/bots-types";
 import "./bot-details.css";
 import { Button } from "@/components/ui/button";
 import { HistoryScrollContext } from "./history-scroll-context";
 
-export type BotDetailsSection = "navigation" | "next" | "goals" | "team" | "queues" | "schedules" | "files" | "desktop" | "calls" | "history" | "settings";
-/** Generic opening shows Navigation; targeted shortcuts keep their section. */
-export const DEFAULT_DETAILS_SECTION: BotDetailsSection = "navigation";
-const sections = [
-  { id: "navigation", label: "Navigation", icon: Compass },
-  { id: "next", label: "Up next", icon: ListOrdered },
-  { id: "goals", label: "Goals", icon: Target },
-  { id: "team", label: "Team", icon: UsersRound },
-  { id: "queues", label: "Queues", icon: ListTree },
-  { id: "schedules", label: "Schedules", icon: Clock3 },
-  { id: "files", label: "Files", icon: FolderOpen },
-  { id: "calls", label: "Calls", icon: Phone },
-  { id: "desktop", label: "Desktop", icon: Monitor },
-  { id: "history", label: "History", icon: History },
-  { id: "settings", label: "Settings", icon: Settings2 },
-] as const;
+export { DEFAULT_DETAILS_SECTION, type BotDetailsSection } from "./bot-details-sections";
+const tabIcons: Record<BotDetailsTab, typeof Compass> = { overview: Compass, work: ListTodo, files: FolderOpen, tools: Wrench, settings: Settings2 };
 
 /** Wide desktops dock the panel beside the conversation. Narrower layouts
  * keep the modal drawer. */
@@ -68,16 +55,22 @@ const focusable = 'button:not([disabled]), [href], input:not([disabled]), select
  * cycle and focus restoration. */
 export function BotDetailsPanel({ bot, section, onSection, onClose, docked, returnFocus, children }: {
   bot: Bot; section: BotDetailsSection; onSection: (section: BotDetailsSection) => void;
-  onClose: () => void; docked: boolean; returnFocus?: () => HTMLElement | null; children: Record<BotDetailsSection, ReactNode>;
+  onClose: () => void; docked: boolean; returnFocus?: () => HTMLElement | null; children: Record<BotDetailsLeaf, ReactNode>;
 }) {
-  const tabs = sections;
+  const location = detailsLocation(section);
+  // Each tab reopens on the subsection last used in it during this panel's life.
+  const remembered = useRef<Partial<Record<BotDetailsTab, BotDetailsLeaf>>>({});
+  useEffect(() => { remembered.current[location.tab] = location.leaf; }, [location.tab, location.leaf]);
   const panel = useRef<HTMLElement>(null), id = useId();
   const [historyScroll, setHistoryScroll] = useState<HTMLDivElement | null>(null);
   const opener = useRef<HTMLElement | null>(null);
+  // A deep link to a Settings group (for example the old Team section)
+  // scrolls that group into view once its tab is visible.
   useEffect(() => {
-    panel.current?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')
-      ?.scrollIntoView({ block: "nearest", inline: "nearest" });
-  }, [section]);
+    if (!location.anchor) return;
+    const frame = requestAnimationFrame(() => panel.current?.querySelector<HTMLElement>(`[data-details-anchor="${location.anchor}"]`)?.scrollIntoView({ block: "start" }));
+    return () => cancelAnimationFrame(frame);
+  }, [section, location.anchor]);
   // The modal drawer takes focus when it becomes visible and returns it when
   // hidden. The docked column leaves focus where the person put it.
   useLayoutEffect(() => {
@@ -113,19 +106,35 @@ export function BotDetailsPanel({ bot, section, onSection, onClose, docked, retu
         <div><span>Bot details</span><h2 id={`${id}-title`}>{bot.name}</h2></div>
         <Button type="button" variant="ghost" size="icon" className="bots-details-close" aria-label={docked ? "Hide bot details" : "Close bot details"} onClick={close}><X aria-hidden="true" /></Button>
       </header>
-      <div className="bots-details-nav" role="tablist" aria-label="Bot details sections">
-        {tabs.map(({ id: value, label, icon: Icon }) => <Button type="button" variant="ghost" size="sm" key={value} id={`${id}-${value}`} role="tab" aria-selected={section === value} aria-controls={`${id}-${value}-panel`} tabIndex={section === value ? 0 : -1}
-          onClick={() => onSection(value)} onKeyDown={event => {
-            if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
-            event.preventDefault();
-            const index = tabs.findIndex(item => item.id === section);
-            const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : (index + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
-            const target = tabs[next].id; onSection(target); document.getElementById(`${id}-${target}`)?.focus();
-          }}><Icon size={17} aria-hidden="true" /><span>{label}</span></Button>)}
+      <div className="bots-details-nav" role="tablist" aria-label="Bot details">
+        {DETAILS_TABS.map(({ id: value, label }) => { const Icon = tabIcons[value]; return <Button type="button" variant="ghost" size="sm" key={value} id={`${id}-${value}`} role="tab" aria-selected={location.tab === value} aria-controls={`${id}-${value}-panel`} tabIndex={location.tab === value ? 0 : -1}
+          onClick={() => { if (location.tab !== value) onSection(tabSection(value, remembered.current)); }}
+          onKeyDown={event => roving(event, DETAILS_TABS.map(tab => tab.id), location.tab, next => { onSection(tabSection(next, remembered.current)); document.getElementById(`${id}-${next}`)?.focus(); })}>
+          <Icon size={17} aria-hidden="true" /><span>{label}</span></Button>; })}
       </div>
-      {sections.map(({ id: value }) => <Activity key={value} mode={section === value ? "visible" : "hidden"}>
-        <div ref={value === "history" ? setHistoryScroll : undefined} className={`bots-details-panel is-${value}`} role="tabpanel" id={`${id}-${value}-panel`} aria-labelledby={`${id}-${value}`} tabIndex={0}>{value === "history" ? <HistoryScrollContext value={historyScroll}>{children[value]}</HistoryScrollContext> : children[value]}</div>
+      {DETAILS_TABS.map(({ id: value, label, sections }) => <Activity key={value} mode={location.tab === value ? "visible" : "hidden"}>
+        <div className="bots-details-tab" role="tabpanel" id={`${id}-${value}-panel`} aria-labelledby={`${id}-${value}`}>
+          {sections.length > 1 && <div className="bots-details-subnav" role="tablist" aria-label={`${label} sections`}>
+            {sections.map(leaf => <Button type="button" variant="ghost" size="sm" key={leaf} id={`${id}-${leaf}`} role="tab" aria-selected={location.leaf === leaf} aria-controls={`${id}-${leaf}-panel`} tabIndex={location.leaf === leaf ? 0 : -1}
+              onClick={() => onSection(leaf)} onKeyDown={event => roving(event, sections, location.leaf, next => { onSection(next); document.getElementById(`${id}-${next}`)?.focus(); })}>{SECTION_LABELS[leaf]}</Button>)}
+          </div>}
+          {sections.map(leaf => <Activity key={leaf} mode={location.leaf === leaf ? "visible" : "hidden"}>
+            <div ref={leaf === "history" ? setHistoryScroll : undefined} className={`bots-details-panel is-${leaf}`} tabIndex={0}
+              {...(sections.length > 1 ? { role: "tabpanel", id: `${id}-${leaf}-panel`, "aria-labelledby": `${id}-${leaf}` } : { "aria-label": label })}>
+              {leaf === "history" ? <HistoryScrollContext value={historyScroll}>{children[leaf]}</HistoryScrollContext> : children[leaf]}
+            </div>
+          </Activity>)}
+        </div>
       </Activity>)}
     </section>
   </div>;
+}
+
+/** Arrow/Home/End roving focus for a tablist; the caller moves selection. */
+function roving<T extends string>(event: KeyboardEvent, items: readonly T[], current: T, move: (next: T) => void) {
+  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+  event.preventDefault();
+  const index = items.indexOf(current);
+  const next = event.key === "Home" ? 0 : event.key === "End" ? items.length - 1 : (index + (event.key === "ArrowRight" ? 1 : -1) + items.length) % items.length;
+  move(items[next]);
 }

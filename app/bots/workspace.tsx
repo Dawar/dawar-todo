@@ -30,7 +30,6 @@ import {
   Copy,
   ClipboardPaste,
   X,
-  Square,
   Archive,
   LoaderCircle,
   RefreshCw,
@@ -46,6 +45,8 @@ import { BotAvatar as Avatar } from "./bot-avatar";
 import { ActiveTurnElapsed } from "./active-turn-elapsed";
 import { WorkOverview, AutomaticInbox, NativeWriterRecovery, workLabel } from "./work-overview";
 import { GoalIndicator, NativeGoalPanel } from "./native-goal-panel";
+import { goalLabels, goalObservation } from "./native-goal-state";
+import { DetailsGroup, DetailsOverviewStatus } from "./bot-details-parts";
 import { finishTodoForward } from "../todo-forward";
 import { SiteHeader } from "../site-header";
 import type {
@@ -768,7 +769,13 @@ export function BotsWorkspace() {
         {bot && !gallery && <Activity mode={detailsOpen && desktopScope !== scope ? "visible" : "hidden"}>
           <BotDetailsPanel key={scope} bot={bot} section={detailsSection} onSection={setDetailsSection} onClose={closeProfile} docked={docked} returnFocus={returnDetailsFocus}>
             {{
-              navigation: <ChapterNavigation key={`chapters:${scope}:${bot.threadId ?? ""}`} owner={owner} bot={bot} online={online} onJumped={docked ? undefined : closeProfile} />,
+              navigation: <>
+                <DetailsOverviewStatus status={online ? workLabel(work, bot) ?? humanStatus(bot, online) : "Offline"}
+                  queued={single ? work ? work.admission?.waitingCount ?? 0 : null : promptQueue.length}
+                  goal={(() => { const goal = goalObservation(bot, work).goal; return goal ? { objective: goal.objective, status: goalLabels[goal.status] } : null; })()}
+                  goalsSupported={single && botProvider(bot) !== "claude" && snapshot?.capabilities?.nativeGoals === 1} onOpen={openDetails} />
+                <ChapterNavigation key={`chapters:${scope}:${bot.threadId ?? ""}`} owner={owner} bot={bot} online={online} onJumped={docked ? undefined : closeProfile} />
+              </>,
               next: <>
                 <h3>Up next</h3><p className="bots-details-lead">Scheduled and queued work.</p>
                 {single && <WorkOverview owner={owner} bot={bot} work={work} online={online} />}
@@ -776,7 +783,6 @@ export function BotsWorkspace() {
                 {single && <AutomaticInbox owner={owner} bot={bot} work={work} online={online} />}
               </>,
               goals: <NativeGoalPanel key={`goal:${owner}:${bot.id}:${bot.threadId}`} owner={owner} bot={bot} work={work} snapshot={snapshot} online={online} />,
-              team: <><h3>Team</h3>{teamsSupported ? <Suspense fallback={null}><TeamAssignment key={`team:${scope}`} owner={owner} bot={bot} teams={teams} online={online} onManage={() => setShowTeams(true)} /></Suspense> : <p className="bots-details-lead">Team editing is unavailable on the current service.</p>}</>,
               queues: queueListsSupported ? <QueueLists key={`lists:${scope}`} owner={owner} bot={bot} lists={queueLists.lists} defaultItems={promptQueue} online={online} refreshLists={queueLists.refresh} refreshDefault={refreshDefaultQueue} onEdit={editQueued} /> : <p className="bots-details-lead">Queue lists will be available when the bot service update finishes.</p>,
               schedules: <>
                 <Suspense fallback={null}><ScheduleList bot={bot} schedules={schedules} online={online} busy={busy} onEdit={schedule => setEditingSchedule({ schedule, scope, botId: bot.id, owner })} action={action} /></Suspense>
@@ -792,20 +798,30 @@ export function BotsWorkspace() {
               calls: detailsOpen && detailsSection === "calls" && snapshot?.capabilities?.operatorCalls === 1 ? <OperatorCallHistory key={`calls:${scope}`} owner={owner} botId={bot.id} online={online} /> : <p className="bots-details-lead">Named-bot voice calling is unavailable on this service.</p>,
               history: <>{lanes && <details data-history-key="legacy-controls" className="bots-legacy-controls"><summary>Earlier work · recovery and controls</summary><BotWorkControls owner={owner} bot={bot} runs={recentRuns} online={online} onOpen={openActivity} /></details>}<Suspense fallback={null}><RunHistory key={`${scope}:${activityTarget?.runId ?? ""}:${activityTarget?.turnId ?? ""}`} embedded bot={bot} schedules={schedules} recentRuns={recentRuns} initialTarget={activityTarget} attachments={[]} online={online} onClose={closeProfile} download={id => void download(id)} /></Suspense></>,
               settings: <div className="bots-details-settings">
-                <ExecutionAccess key={`access:${scope}`} owner={owner} botId={bot.id} online={online}/>
-                {snapshot?.capabilities?.proactiveInitiative === 1 && <Suspense fallback={null}><InitiativeSettings key={`initiative:${scope}`} owner={owner} botId={bot.id} botName={bot.name} online={online} /></Suspense>}
-                <form className="grid gap-3" onSubmit={event => { event.preventDefault(); const input = new FormData(event.currentTarget); void action(() => client.rpc("bots.update", bot.id, { name: String(input.get("name")) })); }}>
-                  <label>Name<Input name="name" defaultValue={bot.name} key={bot.id + bot.name} maxLength={80} required /></label><Button className="justify-self-start" type="submit" disabled={!online || busy}>Save name</Button>
-                </form>
-                <SavedDrafts owner={owner} bots={bots} composer={composer}/><p className="bots-profile-hint">{bot.purpose}</p><p className="bots-profile-hint">Ask {bot.name} to change its personality, instructions, or memory.</p>
-                {snapshot?.capabilities?.singleThreadExecution === 1 && <Suspense fallback={null}><PersonalitySettings key={scope} bot={bot} snapshot={snapshot} online={online} /></Suspense>}
-                {snapshot?.capabilities?.botAdministration === 1 && bot.executionMode === "single-thread" && <Suspense fallback={null}><BotAdminApprovals key={`admin:${scope}`} owner={owner} botId={bot.id} botName={bot.name} online={online} /></Suspense>}
-                {!bot.archived && <ContextCompactionSettings key={`compaction:${scope}`} bot={bot} online={online} busy={busy} supported={snapshot?.capabilities?.nativeCompaction === 1} action={action} />}
-                <Button asChild variant="link" className="px-0"><a href="/settings">Notification settings</a></Button>
-                <div className="bots-profile-actions flex flex-wrap gap-2">
-                  {bot.archived && snapshot?.capabilities?.botDesktops === 1 && <Button variant="outline" type="button" disabled={!online || busy} onClick={() => { if (window.confirm(`Delete ${bot.name}? Its desktop data will be removed. Its workspace files and archived conversation are retained.`)) void action(() => client.rpc("bots.delete", bot.id)); }}>Delete bot</Button>}
-                  <Button variant="outline" type="button" disabled={!online || busy || Boolean(bot.activeTurnId)} onClick={() => void action(() => client.rpc(bot.archived ? "bots.restore" : "bots.archive", bot.id))}><Archive size={16} />{bot.archived ? "Restore bot" : "Archive bot"}</Button>
-                </div>
+                <DetailsGroup anchor="conversation" title="Conversation" description="How this conversation keeps its context, and drafts you saved for later.">
+                  {!bot.archived && <ContextCompactionSettings key={`compaction:${scope}`} bot={bot} online={online} busy={busy} supported={snapshot?.capabilities?.nativeCompaction === 1} action={action} />}
+                  <SavedDrafts owner={owner} bots={bots} composer={composer}/>
+                </DetailsGroup>
+                <DetailsGroup anchor="behaviour" title="Behaviour" description={`Ask ${bot.name} in the conversation to change its instructions or memory.`}>
+                  {bot.purpose && <p className="bots-profile-hint"><strong>Purpose</strong> · {bot.purpose}</p>}
+                  {snapshot?.capabilities?.singleThreadExecution === 1 && <Suspense fallback={null}><PersonalitySettings key={scope} bot={bot} snapshot={snapshot} online={online} /></Suspense>}
+                  {snapshot?.capabilities?.proactiveInitiative === 1 && <Suspense fallback={null}><InitiativeSettings key={`initiative:${scope}`} owner={owner} botId={bot.id} botName={bot.name} online={online} /></Suspense>}
+                </DetailsGroup>
+                <DetailsGroup anchor="access" title="Access" description="What this bot may run on your machines, and requests waiting for your approval.">
+                  <ExecutionAccess key={`access:${scope}`} owner={owner} botId={bot.id} online={online}/>
+                  {snapshot?.capabilities?.botAdministration === 1 && bot.executionMode === "single-thread" && <Suspense fallback={null}><BotAdminApprovals key={`admin:${scope}`} owner={owner} botId={bot.id} botName={bot.name} online={online} /></Suspense>}
+                </DetailsGroup>
+                <DetailsGroup anchor="manage" title="Manage" description="Name, team and lifecycle.">
+                  <form className="grid gap-3" onSubmit={event => { event.preventDefault(); const input = new FormData(event.currentTarget); void action(() => client.rpc("bots.update", bot.id, { name: String(input.get("name")) })); }}>
+                    <label>Name<Input name="name" defaultValue={bot.name} key={bot.id + bot.name} maxLength={80} required /></label><Button className="justify-self-start" type="submit" disabled={!online || busy}>Save name</Button>
+                  </form>
+                  <div className="bots-settings-subgroup" data-details-anchor="team"><h4>Team</h4>{teamsSupported ? <Suspense fallback={null}><TeamAssignment key={`team:${scope}`} owner={owner} bot={bot} teams={teams} online={online} onManage={() => setShowTeams(true)} /></Suspense> : <p className="bots-details-lead">Team editing is unavailable on the current service.</p>}</div>
+                  <Button asChild variant="link" className="justify-self-start px-0"><a href="/settings">Notification settings</a></Button>
+                  <div className="bots-profile-actions flex flex-wrap gap-2">
+                    {bot.archived && snapshot?.capabilities?.botDesktops === 1 && <Button variant="outline" type="button" disabled={!online || busy} onClick={() => { if (window.confirm(`Delete ${bot.name}? Its desktop data will be removed. Its workspace files and archived conversation are retained.`)) void action(() => client.rpc("bots.delete", bot.id)); }}>Delete bot</Button>}
+                    <Button variant="outline" type="button" disabled={!online || busy || Boolean(bot.activeTurnId)} onClick={() => void action(() => client.rpc(bot.archived ? "bots.restore" : "bots.archive", bot.id))}><Archive size={16} />{bot.archived ? "Restore bot" : "Archive bot"}</Button>
+                  </div>
+                </DetailsGroup>
               </div>,
             }}
           </BotDetailsPanel>
