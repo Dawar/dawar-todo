@@ -295,8 +295,15 @@ export class HubControls extends EventEmitter {
     return this.store.transaction(()=>{
       this.assertWriter();const {p,b}=this.scope(owner,botId);
       if(b.archived||b.archiving)throw Error('Restore this bot first.');
-      const outstanding=this.hub.db.prepare("SELECT state,receipt,node_id,epoch FROM portable_mailbox WHERE bot_id=? AND state<>'terminal' LIMIT 100").all(botId);
+      const outstanding=this.hub.db.prepare("SELECT operation_id,state,receipt,node_id,epoch,payload FROM portable_mailbox WHERE bot_id=? AND state<>'terminal' LIMIT 100").all(botId);
+      // An automatic dispatch the node deferred before submission stays
+      // received with nothing sent. Stop then held it with no way out; Resume
+      // re-admits that same original command instead of refusing forever.
+      const deferred=r=>method==='queue.resume'&&['queued','received'].includes(r.state)&&!JSON.parse(r.receipt??'{}').turnId&&r.node_id===p.node_id&&r.epoch===p.epoch&&
+        ['portable.queueDispatch','portable.scheduleDispatch','portable.primaryDispatch'].includes(JSON.parse(r.payload).method);
+      const readmitted=new Set(outstanding.filter(deferred).map(r=>r.operation_id));
       if(outstanding.length>=100||outstanding.some(r=>{
+        if(readmitted.has(r.operation_id))return false;
         if(method!=='queue.send'||!['native-accepted','running'].includes(r.state)||!r.receipt||r.node_id!==p.node_id||r.epoch!==p.epoch)return true;
         const receipt=JSON.parse(r.receipt);return receipt.threadId!==b.threadId||!id(receipt.turnId);
       }))throw Object.assign(Error('Reconcile the original pending input or Stop before Send or Resume.'),{outcome:'rejected'});
@@ -308,7 +315,7 @@ export class HubControls extends EventEmitter {
         payload=this.queuePayload(b,source,'portable.queueSend');
       }else{
         if(Object.keys(params).length)throw Error('Resume accepts no replacement input.');
-        if(this.queueList(b).some(q=>q.state!=='queued')||this.plans.blocked(botId))throw Error('Reconcile original queue uncertainty or rejected prompts before resuming.');
+        if(this.queueList(b).some(q=>q.state!=='queued'&&!(q.state==='dispatching'&&readmitted.has(q.operationId)))||this.plans.blocked(botId))throw Error('Reconcile original queue uncertainty or rejected prompts before resuming.');
         payload={method:'portable.queueResume',params:{threadId:b.threadId}};
       }
       // This is a human release intent, not a native acceptance claim. An

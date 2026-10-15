@@ -47,11 +47,24 @@ Before any change, the suites gave 734 tests: 710 pass, 0 fail, 24 skipped. tsc 
 | — | — | Tests | `initiative.test.mjs` "replies update the ledger…" started failing at **14:00 UTC today**, on untouched 9707091 too. The fixture pins its clock at 2026-10-15T14:00Z, but `publishedAt` is the runtime's real `deliveredAt`. Hardening note: the coordinator compares a node-supplied `deliveredAt` against its own clock (`initiative-coordinator.mjs:314,341`), so after the split a node whose clock runs ahead would make replies be ignored. | 9dd61d9 |
 | — | — | Tests | The deploy fixture's sequential `freePort()` calls could return the same port twice, which made `portable-deploy-roles` "cutover rollback" fail intermittently. | 2457dec |
 
-## Open findings, ranked (not fixed here)
+## Status of open findings (Oct 15 evening, branch `claude/review-r2-r4`)
+
+The first branch was merged into `codex/bots` and deployed as 141fe1c. Dawar asked for R-2, R-3 and R-4 to be fixed tonight.
+
+| ID | Status |
+|---|---|
+| R-1 | **Intended behaviour, won't fix.** Dawar's policy is full access and full trust, so no tools or MCP servers are restricted anywhere, private reviews included. |
+| R-2 | **Fixed** in bd2366b. Resume re-admits an automatic dispatch (queue, schedule or primary) that the node deferred before submission. The dispatch must still be `received` with no turn and on the current placement. Its original operation is kept, and the node's recovery loop submits it once Stop is released. The former `todo` test is now a real test, which asserts one start, the original operation ID and delivery. |
+| R-3 | **Fixed** in 1fe7ba4. Deploy health requires every planned model to still be offered (superset), not an exact match. Before rollback stops a target that started, it drains the target through the target's own maintenance hold, seal and claim. The drain is bounded, always leaves the stop its own window, and is recorded in `rollback-drain.json`. The before-fix behaviour was confirmed with two end-to-end tests in `tests/portable-deploy-e2e.test.mjs`. |
+| R-4 | **Fixed** in 504683b. Each bot's native snapshot read has a 4 s deadline. After it, the bot is answered from `portable_rpc_cache`, marked stale and not `nodeOnline`, and the whole snapshot reports `ready:false`. A node that missed the deadline is answered from cache at once, on that socket, until a read succeeds. Only one native snapshot read per bot is in flight, and concurrent snapshots for an owner share one build. Test: `tests/portable-snapshot-cost.test.mjs`. |
+| R-5 to R-9 | Open. Out of scope tonight by Dawar's decision. R-5 keeps its reproducing `todo` test. |
+| R-10 to R-26 | Open, unchanged. |
+
+## Open findings, ranked (as found; see the status table above)
 
 ### High
 
-**R-1. Codex "read-only" private initiative reviews still have the user's own MCP servers.** This is latent: initiative is disabled in production. **Fix it before enabling initiative.**
+**R-1. Codex "read-only" private initiative reviews still have the user's own MCP servers.** *Status: intended behaviour under Dawar's full-trust policy; won't fix.* This was latent anyway, because initiative is disabled in production.
 - **Where:**
   - `bot-bridge/initiative-node.mjs:42-49`: `PRIVATE_REVIEW_CONFIG` disables only the four bridge-configured servers.
   - `bot-bridge/codex.mjs:27`: the app-server loads `~/.codex/config.toml`.
@@ -61,14 +74,14 @@ Before any change, the suites gave 734 tests: 710 pass, 0 fail, 24 skipped. tsc 
 - **Fix:** run private reviews on a dedicated app-server with an empty `CODEX_HOME` (or an explicit override that replaces the whole `mcp_servers` table). Add `strictMcpConfig: true` to Claude reviews as hardening.
 - **Test:** `initiative.test.mjs` with a temporary `CODEX_HOME/config.toml` that defines an extra server. Assert that none are enabled.
 
-**R-2. Stop during a pre-native deferral wedges a bot's queue permanently.** Reproduced by a `todo` test in `tests/portable-send-reliability.test.mjs`.
+**R-2. Stop during a pre-native deferral wedges a bot's queue permanently.** *Status: fixed in bd2366b (Resume re-admits the deferred dispatch).*
 - **Where:**
   - `portable/agent.mjs:276,300-306`: a deferred logical command stays `received`, and `execute` returns silently while `canAdmit` is false.
   - `portable/hub-controls.mjs:298-301`: Resume, `work.resume` and Send are refused while a mailbox row is non-terminal, and `queue.delete` is refused while the row is `dispatching`.
 - **Failure:** any transient pre-submission deferral (queue-list read failure, missing team ack, active Goal) followed by Stop needs manual database repair.
 - **Fix:** when a logical command is still `received` with no local operation and the control is stopped, the node sends a terminal "withdrawn before submission" receipt so the hub re-queues the item. An alternative is to let Resume re-admit an outstanding `received` row.
 
-**R-3. A rollback after a healthy-but-"unhealthy" deploy SIGKILLs in-flight turns with no drain.**
+**R-3. A rollback after a healthy-but-"unhealthy" deploy SIGKILLs in-flight turns with no drain.** *Status: fixed in 1fe7ba4.*
 - **Where:** `portable/deployment-linux.mjs:109,126,347-351,190-195`.
 - **Failure:** `newHealthy` requires exact equality with the old process's model list. Any Codex catalog change between `prepare` and start therefore fails health for the full 300 s window, even though the target is admitting turns. `rollback` → `stopAndWait` then issues `systemctl stop`, followed by SIGKILL.
 - **Fix:**
@@ -76,7 +89,7 @@ Before any change, the suites gave 734 tests: 710 pass, 0 fail, 24 skipped. tsc 
   - Have rollback take the maintenance hold and drain claim before stopping, as the forward path does.
 - **Test:** `tests/portable-deploy-roles.test.mjs`. The new stand-in reports one extra model and has one active turn.
 
-**R-4. A connected but unresponsive node holds every bots-screen snapshot for 15 s per bot, and the cache is ignored.**
+**R-4. A connected but unresponsive node holds every bots-screen snapshot for 15 s per bot, and the cache is ignored.** *Status: fixed in 504683b.*
 - **Where:** `portable/hub-rpc.mjs:44-56,136-145`.
 - **Failure:**
   - The cache is used only when there is no socket.
@@ -195,9 +208,14 @@ Before any change, the suites gave 734 tests: 710 pass, 0 fail, 24 skipped. tsc 
 - **Voice and memory isolation (8b097dd)**: not reviewed in depth.
 - **The plan's 25-point implemented/retained ledger**: remains with Dwight and the main session. This review covers the Oct 14–15 deliverables only.
 
-## Verification (branch head)
+## Verification
 
-- `npm run test:all` (build plus both suites): 744 tests, **718 pass, 0 fail**, 24 skipped (pre-existing, documented in TESTING.md), and 2 `todo`. The two `todo` tests reproduce R-2 and R-5 and fail today by design.
+**First branch (`claude/adversarial-review-20261015`, merged as 141fe1c)**
+- `npm run test:all`: 744 tests, 718 pass, 0 fail, 24 skipped, 2 `todo`.
+- tsc clean. Lint: 0 errors.
+
+**Branch `claude/review-r2-r4`, the R-2, R-3 and R-4 fixes**
+- `npm run test:all` (`npm run build` plus both suites): 748 tests, **723 pass, 0 fail**, 24 skipped (pre-existing, documented in TESTING.md), 1 `todo` (R-5, reproducing an open defect).
 - `npx tsc --noEmit`: clean.
 - `npm run lint`: 0 errors (27 pre-existing warnings).
 - Every fix's test was confirmed to fail with the fix reverted.

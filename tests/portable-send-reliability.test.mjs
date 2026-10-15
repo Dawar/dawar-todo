@@ -264,7 +264,7 @@ test('an accepted inbox row for an older terminal turn settles from native facts
 
 // Adversarial review 2026-10-15 (ADVERSARIAL_REVIEW_20261015.md). These reproduce
 // open defects; they are `todo` until the owner picks the admission fix.
-test('Stop during a pre-native deferral leaves the queue resumable',{todo:'R-2: a received-but-deferred row blocks Resume, Send and Delete forever after Stop'},async t=>{
+test('Stop during a pre-native deferral leaves the queue resumable',async t=>{
   const h=await portableHarness(t);
   const bot=await h.createBot();
   await h.request('queue.add',{text:'deferred then stopped'},'queue-add-review-c-0001',bot.id);
@@ -278,9 +278,14 @@ test('Stop during a pre-native deferral leaves the queue resumable',{todo:'R-2: 
   await h.request('queue.resume',{},'queue-resume-review-c-0001',bot.id);
   await background(h,8);
   assert.equal(h.codex.starts().length,1,'the resumed queue item starts exactly once');
+  const [item]=queued(h,bot.id);
+  assert.equal(item.operationId,op,'the original dispatch identity is kept, not replaced');
+  assert.equal(item.state,'delivered');
+  await background(h,4);
+  assert.equal(h.codex.starts().length,1,'no second start after more recovery rounds');
 });
 
-test('a transient failure while preparing queued input defers instead of becoming unknown',{todo:'R-3: importAttachment/prepareReply/messageInput errors before journal.prepare settle as unknown'},async t=>{
+test('a transient failure while preparing queued input defers instead of becoming unknown',{todo:'R-5: importAttachment/prepareReply/messageInput errors before journal.prepare settle as unknown'},async t=>{
   const h=await portableHarness(t);
   const bot=await h.createBot();
   await h.request('queue.add',{text:'with attachment'},'queue-add-review-a-0001',bot.id);

@@ -49,13 +49,13 @@ export function linuxDeployment(spec,{systemctl=async(...args)=>(await exec('sys
     return u;
   };
   const siteState=async()=>props(await systemd('show',spec.site.unitId,'--property=MainPID,InvocationID,ActiveState,Job'));
-  const credential=async()=>{
-    await original();const env=(await readFile(`/proc/${spec.old.pid}/environ`)).toString().split('\0');
+  const credential=async(pid=null)=>{
+    if(pid===null)await original();const env=(await readFile(`/proc/${pid??spec.old.pid}/environ`)).toString().split('\0');
     const value=env.find(v=>v.startsWith('BOTS_MACHINE_SECRET='))?.slice(20);
     if(!value||value.length<32||value.length>512)throw failure('The old process has no usable maintenance credential.');return value;
   };
-  const maintenance=async(action,row)=>{
-    const token=await credential(),p={...row.hold.native,action};
+  const maintenance=async(action,row,{hold=row.hold.native,pid=null}={})=>{
+    const token=await credential(pid),p={...hold,action};
     return new Promise((yes,no)=>{
       const req=request({socketPath:spec.managerSocket,path:'/runtime/maintenance',method:'POST',headers:{authorization:`Bearer ${token}`,'content-type':'application/json'}},res=>{
         let text='';res.on('data',chunk=>{text+=chunk;if(text.length>65536)req.destroy();});res.on('end',()=>{
@@ -106,7 +106,9 @@ export function linuxDeployment(spec,{systemctl=async(...args)=>(await exec('sys
       else throw failure(`Release entry ${entry.path} has no hash.`);
     }
   };
-  const sameModels=h=>JSON.stringify([...(h?.models??[])].sort())===JSON.stringify([...spec.expectedModels].sort());
+  // The native catalog is server-side and can grow between prepare and start;
+  // a release is healthy when every planned model is still offered.
+  const sameModels=h=>Array.isArray(h?.models)&&spec.expectedModels.every(model=>h.models.includes(model));
   const runnerHealthy=h=>Boolean(h?.http===200&&h.ready&&h.role==='runner'&&h.relayConnected&&h.source===spec.source&&h.codexVersion===spec.runtime&&sameModels(h));
   const hubHealthy=h=>Boolean(h?.http===200&&h.ready&&h.role==='hub'&&h.siteReady&&h.source===spec.source&&(spec.expectedNodes??[]).every(n=>(h.nodes??[]).includes(n)));
   const inTarget=async pid=>{try{return await readlink(`/proc/${pid}/cwd`)===resolve(spec.releaseDirectory);}catch{return false;/* Incomplete process observation remains pending. */}};
@@ -187,6 +189,24 @@ export function linuxDeployment(spec,{systemctl=async(...args)=>(await exec('sys
   const voiceIdle=async()=>{const h=await health();if(h.voice?.idle===false)return {idle:false,reason:'Hub voice work is active.'};return {idle:true};};
   const nativeObserve=row=>spec.compatibilityBootstrap?maintenance('status',row).then(s=>bootstrapIdle(spec,s)):maintenance('observe',row);
   const startUnit=async id=>{const u=await unit(id);if(Number(u.MainPID)>0||u.Job)throw failure(`${id} already has MainPID ${u.MainPID} or job ${u.Job}.`);if(u.ActiveState==='failed')await systemd('reset-failed',id);await systemd('start','--no-block',id);};
+  // A target that started is admitting turns. Before a rollback stops it,
+  // drain it through its own maintenance hold and claim, as the forward path
+  // drains the old process; a drain that cannot finish in time still stops.
+  const drainTarget=async(pid,u,until)=>{
+    let h;try{h=await health(cutover?spec.split.runnerHealthPort:spec.healthPort);}catch{return {drained:false,reason:'Target health is unavailable.'};}
+    if(!h?.maintenance?.instanceId)return {drained:false,reason:'Target reports no maintenance identity.'};
+    // Leave the stop its own window after the drain.
+    const deadline=Math.min(until-((spec.timeoutStopSec??120)*1000+30000),Date.now()+spec.waitSeconds*1000);
+    if(deadline<=Date.now())return {drained:false,reason:'No time remains to drain before the rollback stop.'};
+    const hold={operationId:`${spec.operationId}:rollback`,commit:spec.source,version:spec.runtime,instanceId:h.maintenance.instanceId,invocationId:u.InvocationID,
+      unitId:spec.controllerUnitId,waitSeconds:Math.max(1,Math.min(900,Math.ceil((deadline-Date.now())/1000)))},call=action=>maintenance(action,null,{hold,pid});
+    try{
+      const held=await call('begin');if(!held.active)return {drained:false,reason:`Target maintenance begin returned phase ${held.phase}.`};
+      const idle=await wait(deadline,async()=>(await call('observe')).safe===true);
+      if(!idle){await call('cancel').catch(()=>{});return {drained:false,reason:'Target work did not drain before the rollback deadline.'};}
+      await call('seal');await call('claim');return {drained:true};
+    }catch(error){return {drained:false,reason:error.message};}
+  };
   const stopAndWait=async(id,until)=>{
     let u=await unit(id);if(!(Number(u.MainPID)>0)&&!u.Job)return;
     if(!u.Job||u.ActiveState!=='deactivating')await systemd('stop','--no-block',id);
@@ -346,7 +366,11 @@ export function linuxDeployment(spec,{systemctl=async(...args)=>(await exec('sys
     // to the old source and start the previous release.
     async rollback(_,row,{until}){
       const u=await unit();
-      if(Number(u.MainPID)>0&&await processIdentity(spec.old.pid)!==spec.old.start)await stopAndWait(spec.unitId,until);
+      if(Number(u.MainPID)>0&&await processIdentity(spec.old.pid)!==spec.old.start){
+        const drain=native&&await inTarget(Number(u.MainPID))?await drainTarget(Number(u.MainPID),u,until):null;
+        if(drain)savePrivate(join(spec.receiptDirectory,'rollback-drain.json'),JSON.stringify({operationId:spec.operationId,...drain,at:new Date().toISOString()})+'\n');
+        await stopAndWait(spec.unitId,until);
+      }
       // The cutover's hub holds the combined ports; it goes before the
       // combined release starts again.
       if(cutover){await stopAndWait(spec.split.hubUnitId,until);if(!spec.rehearsal&&existsSync(spec.split.hubUnitPath))await systemd('disable',spec.split.hubUnitId);}
